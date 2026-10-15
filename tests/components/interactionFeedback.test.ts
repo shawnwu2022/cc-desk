@@ -12,8 +12,8 @@ import { useSessionStore } from '@/stores/session'
 import { useProjectManagementStore } from '@/stores/projectManagement'
 import { useCliProfilesStore } from '@/stores/cliProfiles'
 import en from '@/i18n/locales/en'
-const io = vi.hoisted(() => ({ stop: vi.fn(), recover: vi.fn(), archive: vi.fn(), profiles: vi.fn(), patch: vi.fn(), state: vi.fn(), write: vi.fn(), remove: vi.fn(), projects: vi.fn(), registered: vi.fn(), pin: vi.fn(), sessions: vi.fn(), availability: vi.fn(), discovery: vi.fn(), scope: vi.fn() }))
-vi.mock('@/api/tauri', async original => ({ ...await original<object>(), getProjectsState: io.state, getProjects: io.projects, getSessions: io.sessions,
+const io = vi.hoisted(() => ({ stop: vi.fn(), recover: vi.fn(), archive: vi.fn(), profiles: vi.fn(), patch: vi.fn(), state: vi.fn(), record: vi.fn(), write: vi.fn(), remove: vi.fn(), projects: vi.fn(), registered: vi.fn(), pin: vi.fn(), sessions: vi.fn(), availability: vi.fn(), discovery: vi.fn(), scope: vi.fn() }))
+vi.mock('@/api/tauri', async original => ({ ...await original<object>(), getProjectsState: io.state, upsertSessionUiRecord: io.record, getProjects: io.projects, getSessions: io.sessions,
   getAppConfig: async () => ({ language: 'en', theme: 'light', terminalTheme: 'cc-box-light' }), updateAppConfig: async () => {}, onHookEvent: async () => () => {}, archiveSession: io.archive, pinProject: io.pin,
   createNativeProjectionClient: () => ({ scope: io.scope, read: async () => ({ state: 'ready', items: [{ type: 'session', sessionKey: 'source', nativeSessionId: 'saved', title: 'Saved', cwd: '/repo' }], hasMore: false }) }) }))
 vi.mock('@/api/cli', () => ({ cliListProfiles: io.profiles, cliPatchProfile: io.patch }))
@@ -33,6 +33,7 @@ beforeEach(() => {
   io.sessions.mockResolvedValue([])
   io.registered.mockResolvedValue({ revision: '1', projects: [{ projectId: 'project', hostId: 'host', sourcePathKey: 'source', selectedPath: '/repo', canonicalPath: '/repo', alias: { mode: 'inherit' }, pinned: { mode: 'inherit' }, hidden: { mode: 'inherit' } }] })
   io.state.mockResolvedValue({ pinnedProjects: [], archivedSessions: {} })
+  io.record.mockImplementation(async (key, record) => ({ pinnedProjects: [], archivedSessions: {}, sessionRecords: { [key]: record } }))
   io.profiles.mockResolvedValue({ revision: '7', profiles: [{ id: 'cx', revision: '7', cli: 'codex', name: 'Work', launcher: { kind: 'native' }, programPath: { mode: 'set', value: '/tools/codex' }, defaultArgs: { mode: 'inherit' }, skipPermissions: { mode: 'inherit' }, observer: { mode: 'inherit' }, env: {} }] })
   io.availability.mockImplementation(async (profileId, profileRevision) => ({ profileId, profileRevision, cli: 'codex', state: 'available-unverified', hostStatus: 'available', certified: false }))
   io.discovery.mockImplementation(async (profileId, profileRevision, projectId) => ({ profileId, profileRevision, projectId, cli: 'codex', workspaceRevision: '7', candidates: [] }))
@@ -74,7 +75,10 @@ it('WorkspaceClose_LastSession_001', async () => {
 // 关闭当前会话后选中仍打开的会话，保持其终端实例并同步工作区标题。
 it('WorkspaceClose_SelectRemaining_002', async () => {
   const wrapper = render(); await flushPromises(); const remaining = await running()
-  useNativeTabsStore().tab(remaining.tabId)!.title = 'Remaining work'; await flushPromises()
+  // 显示名走实际 GUI metadata 写入；tab.title 本身只是可被 CLI 历史更新的占位名。
+  const catalog = useUnifiedSessionsStore()
+  catalog.beginRename('native-tab:' + remaining.tabId)
+  await catalog.renameSession('native-tab:' + remaining.tabId, 'Remaining work', true); await flushPromises()
   const existingTerminal = wrapper.get(`[data-live-terminal="${remaining.tabId}"]`).element
   const closing = await running()
   useShellStore().requestWorkspaceAction({ kind: 'menu-action', sessionId: 'native-tab:' + closing.tabId, action: 'close' }); await flushPromises()

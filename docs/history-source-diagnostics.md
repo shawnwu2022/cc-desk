@@ -28,7 +28,7 @@ Codex injects context as `role=user` records, so title selection skips the obser
 
 Only sessions the user created are listed, decided by three rules. First, Codex marks the thread's origin in `session_meta`: `thread_source` is `user`, `subagent`, `guardian_review`, `security_scan`, `code_review` or `realtime_voice`; rollouts written before that field existed still carry a structured `source.subagent` for subagent threads. Rows with `subagent`, `guardian_review`, `security_scan` or `code_review`, or with a `source.subagent` marker, are skipped. Second, `source == "exec"` (the `codex exec` / SDK non-interactive entry) is skipped outright: CC Desk only ever launches interactive codex, so an exec rollout is never a session a user opened in Desk, even when it contains a messageable user text — those were the `Untitled` rows that accumulated whenever a codex-driven review ran. Third, the review and security plugins write their whole task as `role=user` records while the thread is still marked `user` when it was driven through `codex exec` or the SDK, so a session whose only user records are recognized automation wrappers is skipped as well; a session that also contains a genuine user message is kept and titled by it. Ordinary file-reference headings, manual review requests and reading restrictions are not automation-wrapper markers and remain visible, including CLI-named sessions. Wrappers are recognized by measured prefix, so an unrecognized one degrades to being shown as a name rather than causing a session to be hidden. The wrapper-only exclusion behaves differently by observation completeness: when the whole file was observed, such a session is skipped like any other automated thread; when only the bounded head window was observed, the row is omitted from the list but disclosed — the source is marked incomplete and the omission counted as that entry's read failure — instead of either pretending the session does not exist or occupying the list with a titleless row. A partially observed file without wrapper records is still listed with an unknown title, because a genuine user message beyond the window cannot be ruled out and hiding it would lose a real user session.
 
-Claude applies its own version of the third rule to **envelope-only** transcripts: a Claude file whose observed user records are all slash-command envelopes (`<command-name>`/`<command-message>`) or injected noise, with no genuine user message and no explicit/AI title, is a session the user never actually used — the measured case is a transcript containing only `/exit`. Such a row is skipped. The decision requires a **complete** observation, so a bounded header that has not yet reached a real message is always listed (fail-open); a transcription that carries an explicit or AI title stays visible regardless of its input records.
+Claude only skips completely observed **exit-only** transcripts: the command envelopes must be exactly `/exit` or `/quit`, with no other user task, substantive assistant text/tool blocks, or explicit/AI title. Other slash commands can initiate real work and remain visible with their compact fallback title even without a plain-text user message. Unknown XML user input also prevents exclusion. A bounded observation cannot prove that the whole session was exit-only and always remains listed.
 
 A session whose observed user records are all injected context (`AGENTS.md`, `<...>` blocks, `# Environment`) rather than a prompt still reaches `Untitled` when it is neither auto-marked nor an exec/vscode thread; those come from the Codex Desktop/vscode app driving a wrapper, and are left listed with an unknown title rather than hidden, because the bounded window cannot prove no genuine user message exists beyond it.
 
@@ -49,7 +49,12 @@ The official `ai-title` / `aiTitle` / `sessionId` record is recognized with exac
 
 Finite `titleSource` and `titleUnknown` observations let exact-context/root/session display metadata preserve a prior known title when a later bounded observation is unknown or lower-priority. Fresh equal/higher-priority observations and complete observations can replace that display fallback. New opening-order checkpoints do not persist an automatic title as a manual override. Existing nonempty saved names are preserved because older records do not distinguish automatic names from user renames; no destructive migration guesses from their text.
 
-Full Messages/Search keep their original complete read/parser behavior and per-file limits; their aggregate budget is the same per-request default as listing (now 512 MiB / 16,384 entries). Small completely read histories retain native timestamps and full validation.
+Complete Claude reads, including small EOF transcripts and Messages/Search, now
+use the same first supported-record cwd rule as bounded observations. A later
+assistant subdirectory or an unknown record's cwd cannot change project ownership.
+Full Messages/Search retain complete bodies, validation and per-file limits; their
+aggregate budget is the same per-request default as listing (now 512 MiB / 16,384
+entries). Small completely read histories retain native timestamps and full validation.
 
 Previously known activity may be retained only as display metadata for the exact source/context/session identity. Local cached observations do not populate source `updatedAt`; persisted display records remain identity-checked. Unknown/partial source state, fresh verification and absence rules are unchanged. A new source/root/key never inherits another source's last-known activity.
 
@@ -66,6 +71,28 @@ A 200-row IPC page no longer triggers another whole-root scan for every offset. 
 An expired/evicted continuation emits fixed SOURCE_SNAPSHOT_EXPIRED. The history store may restart that entire owned observation once with a new request epoch, discarding all older pages and diagnostics from the abandoned attempt. It never stitches pages from different observations, retries a root/authority error, or falls back to stale cached presence. A second expiration is explicit and retryable. Paginated reads remain positive discovery only and do not acquire extra absence authority.
 
 ## Verified coverage and remaining diagnosis
+
+### 2026-10-15 isolated observation and refresh measurements
+
+`cargo test --locked --offline --manifest-path tests/native-cli/scope-core/Cargo.toml HistoryScan_ColdWarmBytes_045 -- --nocapture`
+creates 64 synthetic Claude transcripts, each with a short user record, a 96 KiB
+assistant record and a tail AI title. On WSK-MSI the first/repeated observations
+each returned 64 rows and charged **4,718,592 bytes**, taking **93/92 ms** in that
+run. These are fresh production-reader observations; application metadata is not
+reused, OS caches are not flushed, and the generated files may already be in the
+OS page cache. This is not a physical cold-disk benchmark or a real-user-root
+acceptance result. It disproves a zero-read Claude warm-cache claim; 64 KiB/95%
+remains title-placement coverage evidence, not a speedup measurement.
+
+`History_ReplyRefreshCoalesces_061` drives real Native stores, catalog and runtime
+with two registered projects under one profile. Twenty reply-end receipts in one
+250 ms burst produce **one grouped history read**. Ten subsequent ordinary activity
+changes produce **zero reads**; identity confirmation produces one read, while ACK
+does not. A slow in-flight observation retains just one successor batch. Revoked
+attempts/configurations and unmounted owners cannot start queued reads, including
+groups waiting for an earlier batch. Automatic failure retains previous display
+rows with its error visible and absence evidence revoked. These IPC-fixture counts
+bound redundant scans but do not certify actual CLI delivery or installed latency.
 
 Synthetic fixtures cover 1,251 Claude transcripts with valid large bodies, leading permission-mode/snapshot records and long first-user identity records. Fixed-window aggregate exhaustion and actual missing-positive-row regressions are reproduced separately from any installed user's fault. Strict bridge + real history-store tests cover three concurrent project scopes, bounded restart and unchanged absence protection.
 

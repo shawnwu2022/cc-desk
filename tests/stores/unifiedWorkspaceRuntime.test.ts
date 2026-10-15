@@ -52,7 +52,7 @@ beforeEach(() => {
   io.register.mockImplementation(async path => ({ revision: '2', projectId: 'registered-new', projects: [{ projectId: 'registered-new', hostId: 'host', sourcePathKey: 'source-new', selectedPath: path, canonicalPath: path, alias: { mode: 'inherit' }, pinned: { mode: 'inherit' }, hidden: { mode: 'inherit' } }] }))
   io.scope.mockResolvedValue({ cli: 'codex' }); io.read.mockReset().mockResolvedValue({ state: 'ready', items: [{ type: 'session', projectId: 'project', sessionKey: 'root-key', nativeSessionId: 'history-id', title: 'History', cwd: '/repo' }] })
 })
-afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.unstubAllGlobals() })
+afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.useRealTimers(); vi.unstubAllGlobals() })
 function render() {
   const port = { startLegacy: vi.fn(), stopLegacy: vi.fn(), restartLegacy: vi.fn(), renameLegacy: vi.fn(), stopNative: vi.fn().mockResolvedValue(undefined), recoverNative: vi.fn().mockResolvedValue(undefined), renameNative: vi.fn().mockResolvedValue(undefined), focus: vi.fn() }
   let runtime!: ReturnType<typeof useUnifiedWorkspaceRuntime>
@@ -1355,9 +1355,8 @@ it('HistorySupport_ColdEnableReloadsHistory_059', async () => {
   await vi.waitFor(() => expect(catalog.sessions.some(row => row.cli === 'codex' && row.nativeSessionId === 'history-id')).toBe(true))
 })
 
-// 存量 desk-safe claude 模板把观察器硬编码为关闭；刷新时必须一次性翻转为开启，
-// 否则会话状态、改名跟随与行认领长期残缺。用户自定义 profile 与非 claude 模板不动。
-it('Observer_StaleTemplateMigrated_060', async () => {
+// 模板 ID 不能证明 false 是旧默认值：用户关闭后刷新不得覆写，也不应增加 revision。
+it('Observer_ExplicitOffSurvivesRefresh_060', async () => {
   const claudeTemplate = { id: 'desk-safe-claude', revision: '2', cli: 'claude', name: 'Claude Code', launcher: { kind: 'native' },
     programPath: { mode: 'set', value: '/tools/claude' }, defaultArgs: { mode: 'set', value: [] },
     skipPermissions: { mode: 'set', value: false }, observer: { mode: 'set', value: false }, env: {} }
@@ -1369,11 +1368,162 @@ it('Observer_StaleTemplateMigrated_060', async () => {
   io.patchProfile.mockImplementation(async (expectedRevision, patch) => {
     patches.push({ expectedRevision, patch })
     revision += 1
-    return { revision: String(revision), profiles: [] }
+    return { revision: String(revision), profiles: [structuredClone(claudeTemplate), structuredClone(codexTemplate), structuredClone(custom)] }
   })
   const { runtime } = render(); await runtime.refresh()
-  // 只有 claude desk-safe 模板被翻转；codex 无观察通道，用户自定义 profile 不动。
+  await runtime.refresh()
   const observerPatches = patches.filter(entry => entry.patch.op === 'update' && entry.patch.changes?.observer)
-  expect(observerPatches.map(entry => entry.patch.id)).toEqual(['desk-safe-claude'])
-  expect(observerPatches[0].patch.changes.observer).toEqual({ mode: 'set', value: true })
+  expect(observerPatches).toEqual([])
+  expect(useCliProfilesStore().profile('desk-safe-claude')?.observer).toEqual({ mode: 'set', value: false })
+  expect(useCliProfilesStore().revision).toBe('2')
+})
+
+// 同 profile 两个项目的回复结束合并为一次读取；普通 owner 状态变化不得扫描历史。
+it('History_ReplyRefreshCoalesces_061', async () => {
+  io.profiles.mockResolvedValue({ revision: '7', profiles: [{ id: 'cl', revision: '7', cli: 'claude', name: 'Claude', launcher: { kind: 'native' },
+    programPath: { mode: 'set', value: '/tools/claude' }, defaultArgs: { mode: 'inherit' }, skipPermissions: { mode: 'inherit' }, observer: { mode: 'set', value: true }, env: {} }] })
+  const project = { projectId: 'project', hostId: 'host', sourcePathKey: 'source', selectedPath: '/repo', canonicalPath: '/repo', alias: { mode: 'inherit' }, pinned: { mode: 'inherit' }, hidden: { mode: 'inherit' } }
+  io.registered.mockResolvedValue({ revision: '1', projects: [project, { ...project, projectId: 'other', selectedPath: '/other', canonicalPath: '/other' }] })
+  io.scope.mockResolvedValue({ cli: 'claude' })
+  let title = 'Initial CLI title'
+  io.read.mockImplementation(async () => ({ state: 'ready', items: [
+    { type: 'session', projectId: 'project', sessionKey: 'root-key', nativeSessionId: 'history-id', title, cwd: '/repo' },
+    { type: 'session', projectId: 'other', sessionKey: 'other-key', nativeSessionId: 'other-id', title, cwd: '/other' },
+  ], hasMore: false }))
+  const { runtime } = render(); await flushPromises(); await runtime.refresh()
+  const tabs = useNativeTabsStore()
+  const one = tabs.create({ cli: 'claude', projectId: 'project', projectPath: '/repo', profileId: 'cl', profileRevision: '7', sourceSessionKey: 'root-key', action: { kind: 'resume-id', nativeSessionId: 'history-id' } })
+  const two = tabs.create({ cli: 'claude', projectId: 'other', projectPath: '/other', profileId: 'cl', profileRevision: '7', sourceSessionKey: 'other-key', action: { kind: 'resume-id', nativeSessionId: 'other-id' } })
+  for (const tab of [one, two]) tabs.applyLaunchStatus(tab.tabId, { instanceId: 'i', requestId: tab.requestId, run: { runId: tab.runId, generation: tab.generation }, revision: '1', phase: 'running', failure: null })
+  await flushPromises()
+  vi.useFakeTimers()
+  const reads = io.read.mock.calls.length
+  title = 'Fresh CLI title'
+  for (let index = 0; index < 10; index++) {
+    for (const tab of [one, two]) {
+      const attempt = { requestId: tab.requestId, runId: tab.runId, generation: tab.generation }
+      tabs.applyObservation(tab.tabId, attempt, { observation: 'active', activity: index % 2 ? 'idle' : 'working' })
+      tabs.applyObservationNotice(tab.tabId, attempt, { kind: 'reply-ended', eventId: 'reply-' + index, receivedAt: index, runId: tab.runId, generation: tab.generation })
+    }
+    await flushPromises()
+  }
+  await vi.advanceTimersByTimeAsync(249)
+  expect(io.read).toHaveBeenCalledTimes(reads)
+  await vi.advanceTimersByTimeAsync(1); await flushPromises()
+  expect(useUnifiedSessionsStore().sessions.find(row => row.adapterSessionId === one.tabId)?.title).toBe(title)
+  expect(io.read.mock.calls.length - reads).toBe(1)
+  expect(io.scope.mock.calls[io.scope.mock.calls.length - 1]?.[0].projectIds.sort()).toEqual(['other', 'project'])
+  const afterReply = io.read.mock.calls.length
+  for (let index = 0; index < 10; index++) {
+    tabs.applyObservation(one.tabId, { requestId: one.requestId, runId: one.runId, generation: one.generation }, { observation: 'active', activity: index % 2 ? 'idle' : 'working' })
+    await flushPromises()
+  }
+  await vi.advanceTimersByTimeAsync(350)
+  expect(io.read).toHaveBeenCalledTimes(afterReply)
+  // 身份确认可以重读一次；确认回执、选择和焦点随后不能再触发 IO。
+  tabs.applyObservationIdentity(one.tabId, one, 'history-id')
+  await flushPromises(); await vi.advanceTimersByTimeAsync(250); await flushPromises()
+  expect(io.read).toHaveBeenCalledTimes(afterReply + 1)
+  tabs.ackReplyEndNotice(one.tabId, one, 'reply-9')
+  await flushPromises(); await vi.advanceTimersByTimeAsync(350)
+  expect(io.read).toHaveBeenCalledTimes(afterReply + 1)
+})
+
+// 去抖期间失去原 attempt、配置或组件 owner 的事件，不能发起新的历史读取。
+it.each(['restart', 'close', 'profile', 'unmount'] as const)('History_QueuedOwnerRevoked_062 %s', async invalidation => {
+  io.profiles.mockResolvedValue({ revision: '7', profiles: [{ id: 'cl', revision: '7', cli: 'claude', name: 'Claude', launcher: { kind: 'native' }, programPath: { mode: 'set', value: '/tools/claude' }, defaultArgs: { mode: 'inherit' }, skipPermissions: { mode: 'inherit' }, observer: { mode: 'set', value: true }, env: {} }] })
+  io.scope.mockResolvedValue({ cli: 'claude' })
+  const { runtime } = render(); await flushPromises(); await runtime.refresh()
+  vi.useFakeTimers()
+  const tabs = useNativeTabsStore(), tab = tabs.create({ cli: 'claude', projectId: 'project', projectPath: '/repo', profileId: 'cl', profileRevision: '7', action: { kind: 'new' } })
+  tabs.applyLaunchStatus(tab.tabId, { instanceId: 'i', requestId: tab.requestId, run: { runId: tab.runId, generation: tab.generation }, revision: '1', phase: 'running', failure: null })
+  tabs.applyObservation(tab.tabId, tab, { observation: 'active', activity: 'idle' })
+  tabs.applyObservationNotice(tab.tabId, tab, { kind: 'reply-ended', eventId: 'queued', receivedAt: 1, runId: tab.runId, generation: tab.generation })
+  await flushPromises()
+  const reads = io.read.mock.calls.length
+  if (invalidation === 'restart' || invalidation === 'close') tabs.applyLaunchStatus(tab.tabId,
+    { instanceId: 'i', requestId: tab.requestId, run: { runId: tab.runId, generation: tab.generation }, revision: '2', phase: 'exited', failure: null })
+  if (invalidation === 'restart') tabs.restart(tab.tabId, { profileId: 'cl', profileRevision: '7' })
+  if (invalidation === 'close') tabs.close(tab.tabId)
+  if (invalidation === 'profile') useCliProfilesStore().profiles[0].revision = '8'
+  if (invalidation === 'unmount') wrappers.pop()!.unmount()
+  await flushPromises(); await vi.advanceTimersByTimeAsync(350)
+  expect(io.read).toHaveBeenCalledTimes(reads)
+})
+
+// 读取未结束时的新事件只保留一次后继读取，完成后显示最新 CLI 标题。
+it('History_InFlightKeepsLatest_063', async () => {
+  io.profiles.mockResolvedValue({ revision: '7', profiles: [{ id: 'cl', revision: '7', cli: 'claude', name: 'Claude', launcher: { kind: 'native' }, programPath: { mode: 'set', value: '/tools/claude' }, defaultArgs: { mode: 'inherit' }, skipPermissions: { mode: 'inherit' }, observer: { mode: 'set', value: true }, env: {} }] })
+  io.scope.mockResolvedValue({ cli: 'claude' })
+  const result = (title: string) => ({ state: 'ready', items: [{ type: 'session', projectId: 'project', sessionKey: 'root-key', nativeSessionId: 'history-id', title, cwd: '/repo' }], hasMore: false })
+  io.read.mockResolvedValue(result('Initial'))
+  const { runtime } = render(); await flushPromises(); await runtime.refresh()
+  vi.useFakeTimers()
+  const tabs = useNativeTabsStore(), tab = tabs.create({ cli: 'claude', projectId: 'project', projectPath: '/repo', profileId: 'cl', profileRevision: '7', action: { kind: 'new' } })
+  tabs.applyLaunchStatus(tab.tabId, { instanceId: 'i', requestId: tab.requestId, run: { runId: tab.runId, generation: tab.generation }, revision: '1', phase: 'running', failure: null })
+  tabs.applyObservation(tab.tabId, tab, { observation: 'active', activity: 'idle' })
+  let finish!: (value: unknown) => void
+  io.read.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+  const reads = io.read.mock.calls.length
+  tabs.applyObservationIdentity(tab.tabId, tab, 'history-id')
+  await flushPromises(); await vi.advanceTimersByTimeAsync(250); await flushPromises()
+  expect(io.read).toHaveBeenCalledTimes(reads + 1)
+  for (let index = 0; index < 10; index++) {
+    tabs.applyObservationNotice(tab.tabId, tab, { kind: 'reply-ended', eventId: 'later-' + index, receivedAt: index, runId: tab.runId, generation: tab.generation })
+    await flushPromises()
+  }
+  await vi.advanceTimersByTimeAsync(350)
+  expect(io.read).toHaveBeenCalledTimes(reads + 1)
+  io.read.mockResolvedValue(result('Latest')); finish(result('Earlier'))
+  await flushPromises(); await vi.advanceTimersByTimeAsync(250); await flushPromises()
+  expect(useUnifiedSessionsStore().sessions.find(row => row.adapterSessionId === tab.tabId)?.title).toBe('Latest')
+  expect(io.read).toHaveBeenCalledTimes(reads + 2)
+})
+
+// 第三组等待前两组结束时被关闭，下一批不得扫描已经撤销的 owner。
+it('History_BatchRechecksOwner_064', async () => {
+  const profile = { revision: '7', cli: 'claude', name: 'Claude', launcher: { kind: 'native' }, programPath: { mode: 'set', value: '/tools/claude' }, defaultArgs: { mode: 'inherit' }, skipPermissions: { mode: 'inherit' }, observer: { mode: 'set', value: true }, env: {} }
+  io.profiles.mockResolvedValue({ revision: '7', profiles: ['a', 'b', 'c'].map(id => ({ ...profile, id })) })
+  io.scope.mockImplementation(async input => ({ cli: 'claude', scopeId: input.profileId }))
+  io.read.mockResolvedValue({ state: 'ready', items: [], hasMore: false })
+  const { runtime } = render(); await flushPromises(); await runtime.refresh()
+  vi.useFakeTimers()
+  const tabs = useNativeTabsStore()
+  const owners = ['a', 'b', 'c'].map(profileId => tabs.create({ cli: 'claude', projectId: 'project', projectPath: '/repo', profileId, profileRevision: '7', action: { kind: 'new' } }))
+  const finish: (() => void)[] = []
+  io.read.mockImplementation(() => new Promise(resolve => { finish.push(() => resolve({ state: 'ready', items: [], hasMore: false })) }))
+  const reads = io.read.mock.calls.length
+  for (const tab of owners) {
+    tabs.applyLaunchStatus(tab.tabId, { instanceId: 'i', requestId: tab.requestId, run: { runId: tab.runId, generation: tab.generation }, revision: '1', phase: 'running', failure: null })
+    tabs.applyObservation(tab.tabId, tab, { observation: 'active', activity: 'idle' })
+    tabs.applyObservationIdentity(tab.tabId, tab, 'history-id')
+  }
+  await flushPromises(); await vi.advanceTimersByTimeAsync(250); await flushPromises()
+  expect(io.read).toHaveBeenCalledTimes(reads + 2)
+  const third = owners[2]
+  tabs.applyLaunchStatus(third.tabId, { instanceId: 'i', requestId: third.requestId, run: { runId: third.runId, generation: third.generation }, revision: '2', phase: 'exited', failure: null })
+  tabs.close(third.tabId); await flushPromises()
+  io.read.mockResolvedValue({ state: 'ready', items: [], hasMore: false })
+  finish.forEach(resolve => resolve()); await flushPromises()
+  await vi.advanceTimersByTimeAsync(350)
+  expect(io.read).toHaveBeenCalledTimes(reads + 2)
+})
+
+// 自动刷新遇到临时读取失败时保留已知显示行，但保持错误与缺失证明失效。
+it.each(['SOURCE_BUSY', 'SOURCE_CHANGED'])('History_AutoFailureKeepsRows_065 %s', async code => {
+  io.profiles.mockResolvedValue({ revision: '7', profiles: [{ id: 'cl', revision: '7', cli: 'claude', name: 'Claude', launcher: { kind: 'native' }, programPath: { mode: 'set', value: '/tools/claude' }, defaultArgs: { mode: 'inherit' }, skipPermissions: { mode: 'inherit' }, observer: { mode: 'set', value: true }, env: {} }] })
+  io.scope.mockResolvedValue({ cli: 'claude', sourceRootKey: 'held-root' })
+  io.read.mockResolvedValue({ state: 'ready', items: [{ type: 'session', projectId: 'project', sessionKey: 'root-key', nativeSessionId: 'history-id', title: 'Known title', cwd: '/repo' }], hasMore: false })
+  const { runtime } = render(); await flushPromises(); await runtime.refresh()
+  vi.useFakeTimers()
+  const tabs = useNativeTabsStore(), tab = tabs.create({ cli: 'claude', projectId: 'project', projectPath: '/repo', profileId: 'cl', profileRevision: '7', action: { kind: 'new' } })
+  tabs.applyLaunchStatus(tab.tabId, { instanceId: 'i', requestId: tab.requestId, run: { runId: tab.runId, generation: tab.generation }, revision: '1', phase: 'running', failure: null })
+  tabs.applyObservation(tab.tabId, tab, { observation: 'active', activity: 'idle' })
+  io.read.mockResolvedValue({ state: 'unavailable', reason: code, items: [], hasMore: false })
+  tabs.applyObservationIdentity(tab.tabId, tab, 'history-id')
+  await flushPromises(); await vi.advanceTimersByTimeAsync(250); await flushPromises()
+  expect(useNativeHistoryStore().all()[0].error).toBe(code)
+  expect(useNativeHistoryStore().all()[0].absenceEvidence).toBeUndefined()
+  expect(runtime.sourceDiagnosticsWarnings.value.some(warning => warning.code === code)).toBe(true)
+  expect(useUnifiedSessionsStore().sessions.find(row => row.adapterSessionId === tab.tabId)?.title).toBe('Known title')
 })

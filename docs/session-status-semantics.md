@@ -126,8 +126,8 @@ completed`, permission or error reasons, and it does not touch authority,
 ownership or authorization. Restoring authoritative turn state still requires
 a certified producer with authenticated exact-run identity, source-owned
 monotone sequence and explicit turn/reason evidence (see follow-up choices).
-Native profiles still default observation off, and Codex/raw/Shell launches
-receive no Claude overlay.
+New safe Claude templates enable observation; saved choices remain authoritative.
+Codex/raw/Shell launches receive no Claude overlay.
 
 The Native row now shows a separate localized event marker. An unread `Stop`
 receipt is described as “Reply-end notice received (unread); current activity
@@ -136,12 +136,12 @@ activity icon. Other allowlisted hooks show recent prompt, tool, permission,
 input, subagent or compaction events. These are receipt observations in host
 arrival order, not proof of provider event order or present activity. The five
 existing optional observer capabilities remain `partial`; profile fields, CLI
-launch arguments and permissions are unchanged. New Claude profiles now default
-the observer on (it backs session status, rename follow-through and row
+launch arguments and permissions are unchanged. Newly auto-created safe Claude
+templates default the observer on (it backs session status, rename follow-through and row
 claiming); Codex profiles never receive the Claude overlay, an explicit user
-`observer: false` is respected, and only auto-created `desk-safe-claude`
-templates still carrying the legacy hardcoded `false` are migrated once at
-refresh. Sessions without an observation channel (observer off, Codex,
+`observer: false` is respected, including existing `desk-safe-claude` templates.
+Their old default cannot be distinguished from an explicit user choice, so refresh
+never rewrites them or bumps their revision. Sessions without an observation channel (observer off, Codex,
 connecting) now project a neutral running state instead of “Activity unknown”;
 an observed `unknown` remains genuinely unknown.
 

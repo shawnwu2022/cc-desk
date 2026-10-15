@@ -252,11 +252,12 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
   }
   function tabDisplayIdentity(tab: NativeCliTab): UnifiedSession {
     const row = projectTab(tab)
+    const matches = historyForTab(tab)
+    if (matches.length === 1) return projectHistory(matches[0].entry, matches[0].item)
     if (tab.sourceSessionKey && row.nativeSessionId) {
       return { ...row, id: historyId({ context: row.nativeOrigin! }, tab.sourceSessionKey, row.nativeSessionId), adapterSessionId: tab.sourceSessionKey }
     }
-    const matches = historyForTab(tab)
-    return matches.length === 1 ? projectHistory(matches[0].entry, matches[0].item) : row
+    return row
   }
   function projectActive(tab: NativeCliTab) {
     const row = projectTab(tab, deps.tabs)

@@ -16,7 +16,7 @@ const CODEX_HEAD_WINDOW: usize = 192 * 1024;
 /// Claude 有界标题尾窗。CLI 把 `ai-title`/`custom-title` 写在转录末尾附近；
 /// 实测本机 627 个转录中 37 个带 ai-title，距 EOF 中位 20KiB、p90 33KiB。
 /// 64KiB 覆盖其中 35 个（95%）。窗口越大越准，但冷扫描 IO 随之上升；首次
-/// 可接受，其后由元数据缓存按 (size, mtime) 命中而不重读。
+/// 该比例是标题覆盖证据，不是扫描耗时收益；Claude 每次读取仍观察头部和尾部。
 const CLAUDE_TITLE_TAIL: usize = 64 * 1024;
 #[derive(Clone, Copy)]
 pub(crate) struct Limits {
@@ -30,8 +30,8 @@ impl Default for Limits {
             file_bytes: 2 * 1024 * 1024,
             // 真实 Codex 根（约 2130 个 rollout，含 archived_sessions）一次完整
             // 元数据采样：头窗口最深 192KiB，跳过注入上下文后多数文件需读到窗口
-            // 上限附近，实测约 340–366MiB。512MiB 留出余量；稳定根经元数据缓存
-            // 命中后不再重读，预算只在冷扫描/文件变化时消耗。120 秒协作截止与
+            // 上限附近，实测约 340–366MiB。512MiB 留出余量；Codex 缓存命中后
+            // 仍需重读当前身份，Claude 没有这层显示缓存。120 秒协作截止与
             // entries 上限仍是硬护栏。
             total_bytes: 512 * 1024 * 1024,
             entries: 16384,
@@ -61,8 +61,8 @@ impl Budget {
     pub(crate) fn checkpoint(&self) -> ReadResult<()> {
         // Cooperative deadline between operations; not a promise to interrupt OS filesystem I/O.
         // 首次冷扫描（真实 ~/.codex，2130 个 rollout，含 192KiB 头窗口富化）实测约
-        // 40 秒；其结果写入元数据缓存后，后续扫描与手动刷新只重读变化文件。120 秒
-        // 相对冷扫描留约 3 倍余量，256 MiB / 16384 entries 仍是硬护栏。
+        // 40 秒，属于旧实现的历史记录；当前缓存身份重读策略不能复用该计时。
+        // 512 MiB / 16384 entries 与 120 秒仍是独立硬护栏。
         if self.started.elapsed() > Duration::from_secs(120) {
             return Err("SOURCE_BUDGET_EXCEEDED");
         }

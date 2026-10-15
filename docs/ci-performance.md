@@ -1,5 +1,84 @@
 # CI runtime work
 
+## Session-list repair follow-up (2026-10-15, local evidence)
+
+The review started from `aed8abbf4594925bc547fe7dcef6efe2836f3752` on
+`fix/session-list-title-status`. At this local measurement checkpoint, changes were
+uncommitted and no hosted CI had been triggered.
+The pre-optimization full Vitest run used installed dependencies and existing OS/
+Vite caches: **179 files, 2,590 tests, 2,587 passed, one failed, two existing skips;
+40.00 seconds**. The failed `WorkspaceClose_SelectRemaining_002` directly changed
+`tab.title`; it now exercises the real catalog rename/metadata writer while retaining
+the same expected saved display name and terminal ownership assertions.
+
+Two bounded optimizations preserve verification rather than cache its outcome:
+
+- The ordinary `frontend` job no longer runs an independent `npm run build` before
+  `npm run test:production`. `tests/production/serve.mjs` still unconditionally awaits
+  a fresh normal Vite build before preview, with the actual production CSP; the
+  Playwright configuration still refuses to reuse an existing server. This removes
+  **one of two explicit normal-entry builds** in that job. Other fixture builds,
+  typechecking, all Vitest/Node policies and production browser assertions remain.
+  A standalone local build measured **4.49 seconds** of Vite build time; removing
+  it is a graph saving, not a measured hosted-run wall-time reduction. No `dist`
+  reuse option or cross-source build cache was added.
+- Nine new debounce/revocation/failure cases (`History_061`–`065`) keep the same
+  real stores/runtime, 20-event burst, busy reads and assertions, using a local
+  fake clock to advance 249/1/350 ms rather than sleep. The recorded case sum was
+  **5,192.38 ms before, 190.15 ms after** within the two full-suite runs; an isolated
+  after sample was 86.51 ms. All nine passed. Whole-suite wall time was 40.00 seconds
+  before and 42.87 seconds after while other checks also ran; this does not establish
+  an end-to-end CI speedup. Full inventory remains
+  the verification gate. Real process, HTTP, pressure and CLI tests keep real time.
+
+Cleanup inventory: only the redundant ordinary-CI build step was removed; its
+replacement coverage is the existing mandatory production startup server/build
+and CSP browser suite, protected by `FrontendBuild_ProductionOwnsBuild_006` in
+`tests/scripts/ciRustWorkflow.node.mjs`. No tests, workflows, required checks,
+release dependencies, original assertions, ignored classifications or evidence
+archives were deleted. No other old item was proven obsolete.
+
+The unmerged `perf/ci-duration-balanced-p1` branch has two unique commits
+`189650d`/`5656959`. Its old-inventory weighted model estimated 7.3% lower maximum
+shard load, but its original calibration artifacts/current-inventory comparison
+were not available here. No merge, checkout or activation of those weights was
+performed. Exact same-source/run/attempt receipts and target-runner cold/warm CI
+timings remain prerequisites; the old model cannot certify this working tree.
+
+Final local checks: full Vitest **179 files / 2,588 passed / two existing skips**;
+the ordinary frontend job's Node policy inventory **243 passed / six existing
+Windows skips**; typecheck and standalone build passed; production startup/CSP
+passed both language cases using installed Chrome through the existing
+`PLAYWRIGHT_CHROMIUM_EXECUTABLE` option. The default bundled Playwright browser
+was absent. Preview children from these runs required explicit owned-PID cleanup
+after assertions completed; no unrelated process was stopped. Scope-core compiled
+the production Rust source and passed **140 tests**, format checking and strict
+all-target Clippy with Rust **1.95.0**.
+
+Follow-up verification compiled the complete Tauri library harness with
+`cargo test --locked --offline --lib --no-run --message-format=json` in 40.61
+seconds. The executable identified by that compilation listed **1,532 tests**,
+including all original eighteen Job-free tests. The repository's read-only
+`windows-rust-tests.ps1 -Action Probe` observed **inJob=True / elevated=False**;
+the unfiltered library suite remains unverified on this host. No Job/token
+settings, exclusions or test contracts were changed. The library's actual
+`cli::native_projection::` subset passed **138 tests / 1,394 filtered out**,
+and complete-crate format checking passed.
+
+Complete-crate `cargo clippy --locked --offline --all-targets -- -D warnings`
+failed on Rust 1.95.0 with three `nonminimal_bool` diagnostics in
+`updater_http.rs:104`, `version_history/windows/context.rs:2170` and
+`version_history/windows/manager_process.rs:205`. Those three files match both
+HEAD and local main; no independent main-baseline lint run was performed. The
+already-installed CI toolchain **Rust 1.98.1 / Clippy 0.1.98** passed the same
+complete-crate command (using `cargo +1.98.1`) in **41.70 seconds**, exit zero.
+`cargo +1.98.1 test --locked --offline --lib cli::native_projection::` then
+compiled the complete library harness and passed the same **138 tests / 1,394
+filtered out**, exit zero, in **88.15 seconds** including compilation.
+No toolchain was installed or default changed, and no production code was altered
+for this expanded verification. Hosted CI, the unfiltered full library suite,
+actual CLI and installed WebView acceptance remain separate evidence gaps.
+
 This change is prepared on `perf/ci-runtime`, based on main
 `db517757eefd323b3eaa4c69224bdd8f74b7feb6`. The target is an actual ordinary
 daily CI completion within ten minutes on the existing GitHub-hosted runners.

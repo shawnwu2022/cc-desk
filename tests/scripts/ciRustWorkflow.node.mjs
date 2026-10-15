@@ -8,6 +8,23 @@ const workflow = fs.readFileSync(new URL('../../.github/workflows/ci.yml', impor
 const job = id => workflow.match(new RegExp(`^  ${id}:\\n([\\s\\S]*?)(?=^  [a-z][a-z-]*:|$(?![\\s\\S]))`, 'm'))?.[1];
 const gateUrl = new URL('../../scripts/ci-rust-job-gate.mjs', import.meta.url);
 
+// 生产首屏门禁始终重建正常入口；普通 CI 不得在它之前再构建同一份前端。
+test('FrontendBuild_ProductionOwnsBuild_006', () => {
+  const frontend = job('frontend');
+  assert.ok(frontend);
+  assert.doesNotMatch(frontend, /run: npm run build(?:\n|$)/);
+  assert.match(frontend, /run: npm run test:ci/);
+  assert.match(frontend, /run: npm run typecheck/);
+  assert.match(frontend, /run: npm run test:production/);
+  const config = fs.readFileSync(new URL('../../playwright.production.config.ts', import.meta.url), 'utf8');
+  assert.match(config, /command: 'node tests\/production\/serve\.mjs'/);
+  assert.match(config, /reuseExistingServer: false/);
+  const server = fs.readFileSync(new URL('../../tests/production/serve.mjs', import.meta.url), 'utf8');
+  assert.match(server, /await build\(\{ root \}\)/);
+  assert.ok(server.indexOf('await build({ root })') < server.indexOf('await preview('), 'build failure must reject before serving');
+  assert.match(server, /Content-Security-Policy/);
+});
+
 test('RustDag_Producer_001: shards depend only on the complete source-bound producer', () => {
   const producer = job('rust-compile'), shards = job('rust-tests');
   assert.ok(producer && shards);

@@ -54,10 +54,10 @@ admits/dispatches requests through runtime-owned adapters; paths in these
 requests do not authorize Native filesystem access. The Legacy adapter reads `getCatalogHistoryFor`, an unfiltered cached history
 projection. Ordinary `getHistoryFor` keeps its existing archived/claimed filtering,
 while the unified catalog retains archived rows so the archive drawer can restore them.
-The catalog collapses a Legacy and Native row that project the same session from the same
-default CLI source into the Native row; opened terminals never collapse, so live rows stay
-selectable and closable. See the Legacy/Native folding contract in
-[docs/project-contracts.md](project-contracts.md) for the accepted display trade-off.
+Legacy and Native rows retain their own source, archive, display-name and restore owner.
+A matching UUID/project path does not prove the configuration roots are identical;
+the Legacy projection cannot provide that proof, so it is not folded into Native.
+The Native adapter claims history only for its unique exact profile/project/source key.
 Live close/archive requests go through `SessionConfirmDialog` and the Task 16 exact-owner confirmation layer.
 Admission reads current runtime state, rather than trusting an older catalog row.
 Queued operations capture adapter ownership before awaiting; an ended close/archive
@@ -422,12 +422,17 @@ failure and completion from older filters.
 History search defaults to the request's current project. Title and Session ID text,
 CLI, current/all project scope, and 24-hour/7-day/30-day activity filters combine.
 Unavailable sources produce a partial-history notice without hiding readable sources.
-Workspace Refresh explicitly rereads sources, and a single-project catalog refresh
-(owner state/attention changes) also forces that project's history reread, so a CLI
-rename or AI title written after the last full refresh is picked up without restarting;
-whole-workspace catalog refreshes keep reading the cache that `refresh()` already
-reloaded. Claude's bounded header observation stops at `cwd`, keeping the reread cost
-proportional to identity rather than transcript size.
+Workspace Refresh and project restore search explicitly reread sources. Ordinary
+owner state/attention changes only refresh the catalog projection. Authenticated
+Native Claude identity and reply-end receipts queue a 250ms debounced history reread,
+grouped by profile/revision across affected registered projects, with two readers
+and at most one pending batch while reading. Queued owners are rechecked before
+each group starts; restart, close, configuration change and unmount revoke them.
+Reply acknowledgment/focus/output never request a read. Resumed tabs also use the
+latest uniquely matched CLI title, below any explicit Desk display-name override.
+Claude still reads its bounded header and optional tail on each observation; there
+is no zero-read warm metadata cache. See the reproducible measurements in
+[history-source-diagnostics.md](history-source-diagnostics.md).
 Native history consumes all supported pages through the authenticated projection
 client, rejecting partial/error reads as absence evidence.
 

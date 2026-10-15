@@ -147,7 +147,7 @@ fn HistoryParse_ValidateBodies_003() {
     }
 }
 
-// Claude 完整历史保留末尾标题、末尾时间和既有 cwd 规则，消息详情继续保留正文。
+// Claude 完整历史保留末尾标题和时间，cwd 固定为首个受支持记录，消息详情继续保留正文。
 #[test]
 #[allow(non_snake_case)]
 fn HistoryParse_ClaudeMetadata_004() {
@@ -164,7 +164,7 @@ fn HistoryParse_ClaudeMetadata_004() {
     assert_eq!(metadata.title, full.title);
     assert_eq!(metadata.title, "latest title");
     assert_eq!(metadata.cwd, full.cwd);
-    assert_eq!(metadata.cwd.as_deref(), Some("/last"));
+    assert_eq!(metadata.cwd.as_deref(), Some("/first"));
     assert_eq!(metadata.updated, full.updated);
     assert_eq!(full.messages.len(), 3);
     assert!(metadata.messages.is_empty());
@@ -1671,6 +1671,74 @@ fn HistoryClaude_EnvelopeOnlySessionIsHidden_042() {
     );
 }
 
+// 任务 slash、工具调用和手写 XML 输入不能被当作无工作的 /exit 会话丢弃。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_KeepSlashWork_044() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("projects/p")).unwrap();
+    for (id, command, followup) in [
+        (
+            "task",
+            "/diagnosing-bugs",
+            json!({"type":"assistant","message":{"content":"Diagnosed the regression"}}),
+        ),
+        (
+            "tool",
+            "/exit",
+            json!({"type":"assistant","message":{"content":[{"type":"tool_use","id":"tool-1","name":"Read","input":{}}]}}),
+        ),
+        (
+            "xml",
+            "/exit",
+            json!({"type":"user","message":{"content":"<task>Fix the regression</task>"}}),
+        ),
+        ("custom", "/build-project", json!({"type":"system"})),
+    ] {
+        let input = format!(
+            "{}\n{}\n",
+            json!({"type":"user","cwd":temp.path().to_str().unwrap(),"sessionId":id,"message":{"content":format!("<command-name>{command}</command-name>")}}),
+            followup
+        );
+        std::fs::write(temp.path().join(format!("projects/p/{id}.jsonl")), input).unwrap();
+    }
+    let root = Root::open(temp.path()).unwrap();
+    let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
+    let items = read_claude_history_fixture(&root, &[temp.path().to_owned()], &mut budget).unwrap();
+    assert_eq!(
+        items.len(),
+        4,
+        "slash tasks and substantive replies must remain discoverable"
+    );
+}
+
+// 完整短文件与有界文件使用相同的首个受支持 cwd，未知记录不能抢走项目归属。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_CompleteCwdFirst_046() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("projects/p")).unwrap();
+    let input = [
+        json!({"type":"future-record","cwd":"/untrusted"}),
+        json!({"type":"user","cwd":temp.path().to_str().unwrap(),"message":{"content":"real task"}}),
+        json!({"type":"assistant","cwd":temp.path().join("sub"),"message":{"content":"done"}}),
+        json!({"type":"future-record","cwd":"/other"}),
+    ].iter().map(|record| format!("{record}\n")).collect::<String>();
+    std::fs::write(temp.path().join("projects/p/short.jsonl"), input).unwrap();
+    let root = Root::open(temp.path()).unwrap();
+    let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
+    let items = read_claude_history_fixture(&root, &[temp.path().to_owned()], &mut budget).unwrap();
+    assert_eq!(
+        items.len(),
+        1,
+        "complete transcripts keep the first supported project cwd"
+    );
+    let ResourceItem::Session { cwd, .. } = &items[0] else {
+        panic!("session metadata")
+    };
+    assert_eq!(cwd.as_deref(), temp.path().to_str());
+}
+
 #[test]
 #[allow(non_snake_case)]
 fn HistoryClaude_ObservedTitleAndTime_020() {
@@ -2339,7 +2407,9 @@ fn HistoryClaude_OptionalTailRefreshesObservedTime_039() {
     let root = Root::open(temp.path()).unwrap();
     let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
     let items = read_claude_history_fixture(&root, &[temp.path().to_owned()], &mut budget).unwrap();
-    let ResourceItem::Session { updated_at, .. } = &items[0] else { panic!("session metadata") };
+    let ResourceItem::Session { updated_at, .. } = &items[0] else {
+        panic!("session metadata")
+    };
     // 尾读观察到的更新时间纠正头窗口的偏旧时间；两者都是真实记录证据。
     assert_eq!(updated_at.as_deref(), Some("2026-10-10T18:00:00Z"));
 }
@@ -2443,7 +2513,7 @@ fn HistoryCodex_CacheHeaderKeepsUtf8Seam_055() {
         "x".repeat(padding),
         "x".repeat(8192)
     );
-    assert!(!std::str::from_utf8(&body.as_bytes()[..4096]).is_ok());
+    assert!(std::str::from_utf8(&body.as_bytes()[..4096]).is_err());
     std::fs::write(temp.path().join(relative), body).unwrap();
     let root = Root::open(temp.path()).unwrap();
     let (len, modified) = root.stat(relative).unwrap().unwrap();
