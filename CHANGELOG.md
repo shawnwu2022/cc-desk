@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- Default new Claude profiles to enable the observer (the side channel backing session status, rename follow-through and row claiming), and migrate existing auto-created `desk-safe-claude` templates that still carried the legacy hardcoded `false`
+- Collapse the duplicate Claude history row that Legacy and Native each projected from the same default CLI source; opened terminals never collapse
+- Show observed record timestamps for bounded Claude history reads so closed rows keep a display time instead of “—”
+- Project sessions without an observation channel (observer off, Codex, connecting) as a neutral running state instead of “Activity unknown”
+
 ## [0.20.0] - 2026-10-14
 
 - Keep session rows in stable first-seen order, cluster Claude and Codex sessions without headings, move Settings to the bottom navigation anchor, and exclude exec-only Codex history

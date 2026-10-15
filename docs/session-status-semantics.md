@@ -135,8 +135,15 @@ unverified”. It never becomes `attentionKind: completed` or changes the curren
 activity icon. Other allowlisted hooks show recent prompt, tool, permission,
 input, subagent or compaction events. These are receipt observations in host
 arrival order, not proof of provider event order or present activity. The five
-existing optional observer capabilities remain `partial`; observation defaults,
-profile fields, CLI launch arguments and permissions are unchanged.
+existing optional observer capabilities remain `partial`; profile fields, CLI
+launch arguments and permissions are unchanged. New Claude profiles now default
+the observer on (it backs session status, rename follow-through and row
+claiming); Codex profiles never receive the Claude overlay, an explicit user
+`observer: false` is respected, and only auto-created `desk-safe-claude`
+templates still carrying the legacy hardcoded `false` are migrated once at
+refresh. Sessions without an observation channel (observer off, Codex,
+connecting) now project a neutral running state instead of “Activity unknown”;
+an observed `unknown` remains genuinely unknown.
 
 ## Smallest follow-up choices
 
@@ -151,8 +158,8 @@ Shell have no Claude source and must keep their own capability boundary.
    turn identity and working/permission/error/completion facts. Carry that proof
    through the backend observer DTO and the existing strict reducer before
    projecting it. Parallel hook processes and server arrival counters cannot
-   supply this contract. Certify the actual selected CLI before enabling it; do
-   not change CLI flags or optional observer defaults as a UI repair.
+   supply this contract. Certify the actual selected CLI before claiming accurate
+   turn state; enabling the observer channel by default is not itself proof of it.
 2. **Implemented bounded compromise: occurrence notices:** use the existing
    authenticated hook envelope and subscription to keep independent recent and
    unread reply-end receipts, with exact request/run/generation ownership and

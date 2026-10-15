@@ -54,6 +54,10 @@ admits/dispatches requests through runtime-owned adapters; paths in these
 requests do not authorize Native filesystem access. The Legacy adapter reads `getCatalogHistoryFor`, an unfiltered cached history
 projection. Ordinary `getHistoryFor` keeps its existing archived/claimed filtering,
 while the unified catalog retains archived rows so the archive drawer can restore them.
+The catalog collapses a Legacy and Native row that project the same session from the same
+default CLI source into the Native row; opened terminals never collapse, so live rows stay
+selectable and closable. See the Legacy/Native folding contract in
+[docs/project-contracts.md](project-contracts.md) for the accepted display trade-off.
 Live close/archive requests go through `SessionConfirmDialog` and the Task 16 exact-owner confirmation layer.
 Admission reads current runtime state, rather than trusting an older catalog row.
 Queued operations capture adapter ownership before awaiting; an ended close/archive
@@ -418,7 +422,12 @@ failure and completion from older filters.
 History search defaults to the request's current project. Title and Session ID text,
 CLI, current/all project scope, and 24-hour/7-day/30-day activity filters combine.
 Unavailable sources produce a partial-history notice without hiding readable sources.
-History remains cached for filtering; workspace Refresh explicitly rereads sources.
+Workspace Refresh explicitly rereads sources, and a single-project catalog refresh
+(owner state/attention changes) also forces that project's history reread, so a CLI
+rename or AI title written after the last full refresh is picked up without restarting;
+whole-workspace catalog refreshes keep reading the cache that `refresh()` already
+reloaded. Claude's bounded header observation stops at `cwd`, keeping the reread cost
+proportional to identity rather than transcript size.
 Native history consumes all supported pages through the authenticated projection
 client, rejecting partial/error reads as absence evidence.
 
