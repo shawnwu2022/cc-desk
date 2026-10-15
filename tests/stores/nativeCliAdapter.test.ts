@@ -178,6 +178,16 @@ describe('native CLI adapter', () => {
     const matched = (await adapter.listSessions()).filter(row => row.nativeSessionId === 'session-1')
     expect(matched).toHaveLength(1)
     expect(matched[0]).toMatchObject({ opened: true })
+    // 认领后活动行标题跟随 CLI 记录标题，不停留在本地占位名。
+    expect(matched[0].title).toBe('claude-/root')
+  })
+
+  // 无观察身份时不猜测，活动行保持本地名（无唯一历史对应可跟随）。
+  it('NativeObservedIdentity_WithoutIdentityKeepsLocalTitle_031b', async () => {
+    const active = tab({ cli: 'claude', profileId: 'claude-main', action: { kind: 'new' }, title: 'Claude Code' })
+    const { adapter } = setup([active], [])
+    const rows = await adapter.listSessions('/repo')
+    expect(rows[0].title).toBe('Claude Code')
   })
 
   // 无观察身份时维持不猜测立场：历史行照常投出，与活动行并存。

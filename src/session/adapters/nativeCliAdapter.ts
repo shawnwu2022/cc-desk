@@ -258,7 +258,15 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
     const matches = historyForTab(tab)
     return matches.length === 1 ? projectHistory(matches[0].entry, matches[0].item) : row
   }
-  function projectActive(tab: NativeCliTab) { return withSessionDisplayName(projectTab(tab, deps.tabs), deps.metadata, tabDisplayIdentity(tab)) }
+  function projectActive(tab: NativeCliTab) {
+    const row = projectTab(tab, deps.tabs)
+    const identity = tabDisplayIdentity(tab)
+    // 唯一历史对应存在时（观察器回填身份后），活动行跟随 CLI 记录的标题
+    // （首条消息 / AI 摘要 / 手动改名），而不是停留在本地占位名 "Claude Code"。
+    // 保存的 Desk 显示名在 withSessionDisplayName 内仍优先于 CLI 标题。
+    const titled = identity.id.startsWith(HISTORY_PREFIX) ? { ...row, title: identity.title } : row
+    return withSessionDisplayName(titled, deps.metadata, identity)
+  }
   const acceptedOpens = new Map<string, { at: number; savedIdentities: Set<string> }>()
   async function transferOpen(tab: NativeCliTab) {
     const accepted = acceptedOpens.get(tab.tabId)
