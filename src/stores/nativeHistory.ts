@@ -166,10 +166,13 @@ export const useNativeHistoryStore = defineStore('native-history', () => {
             const previous = target.previousSessions.get(item.sessionKey)
             const observed = item.updatedAt ? Date.parse(item.updatedAt) : NaN
             const priorUpdated = previous?.updatedAt ? Date.parse(previous.updatedAt) : NaN
-            const prior = Number.isFinite(priorUpdated) ? priorUpdated : previous?.lastKnownActivityAt ?? NaN
+            const priorKnown = previous?.lastKnownActivityAt ?? NaN
+            const prior = Math.max(Number.isFinite(priorUpdated) ? priorUpdated : -1, Number.isFinite(priorKnown) ? priorKnown : -1)
             // Same canonical context + backend root/session key only. No new row,
             // source timestamp, completeness or absence evidence is inferred.
-            const known = previous?.nativeSessionId === item.nativeSessionId && Number.isFinite(prior) && prior >= 0 && !Number.isFinite(observed)
+            // 部分读取的旧时间只是下界；完整新观察可以纠正旧显示值。
+            const known = previous?.nativeSessionId === item.nativeSessionId && prior >= 0
+              && (!Number.isFinite(observed) || item.metadataIncomplete === true && prior > observed)
               ? prior : undefined
             const priorTitle = previous?.lastKnownTitle ?? previous?.title
             const priorSource = previous?.lastKnownTitleSource ?? previous?.titleSource

@@ -430,6 +430,12 @@ and at most one pending batch while reading. Queued owners are rechecked before
 each group starts; restart, close, configuration change and unmount revoke them.
 Reply acknowledgment/focus/output never request a read. Resumed tabs also use the
 latest uniquely matched CLI title, below any explicit Desk display-name override.
+Names saved under the same tab before history association remain visible on that
+tab; exact history names take priority, and tab metadata is not migrated to an
+independently discovered history row. Automatic title refresh shares the existing
+1024-event observer budget: exhaustion rejects new receipts, so later automatic
+reply-triggered refreshes stop until a new attempt. Explicit Refresh, project
+queries and closing still read history; no replay protection is relaxed.
 Claude still reads its bounded header and optional tail on each observation; there
 is no zero-read warm metadata cache. See the reproducible measurements in
 [history-source-diagnostics.md](history-source-diagnostics.md).

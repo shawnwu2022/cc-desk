@@ -40,7 +40,7 @@ function setup(tabs: NativeCliTab[], entries: NativeHistoryEntry[]) {
   const archive = { getArchivedSessions: (path: string) => archived.get(path) ?? [], archiveSession: vi.fn(async (path: string, id: string) => { archived.set(path, [...(archived.get(path) ?? []), id]) }), restoreSession: vi.fn(async (path: string, id: string) => { archived.set(path, (archived.get(path) ?? []).filter(value => value !== id)) }) }
   const cliUnarchive = { unarchive: vi.fn().mockResolvedValue(undefined) }
   const historyLoad = vi.fn(async () => entries[0])
-  const metadata = { sessionRecords: new Map(), recordSessionOpened: vi.fn(async () => undefined), upsertSessionRecord: vi.fn(async () => undefined) }
+  const metadata = { sessionRecords: new Map(), recordSessionOpened: vi.fn(async () => undefined), upsertSessionRecord: vi.fn(async (_key: string, _record: any, _beforeMutation?: () => void) => undefined) }
   const adapter = createNativeCliAdapter({ tabs: { tabs: map, activeTabId: null, setActive, close, rename }, history: { all: () => entries, load: historyLoad }, runtime, archive, cliUnarchive, metadata })
   return { adapter, map, runtime, archive, cliUnarchive, setActive, archived, historyLoad, metadata }
 }
@@ -74,6 +74,29 @@ it('History_ResumeFollowsCliTitle_038', async () => {
   const state = setup([active], [entry])
   entry.sessions[0].title = 'New CLI title'
   expect((await state.adapter.listSessions())[0].title).toBe('New CLI title')
+})
+
+// 认证身份稍后出现时，已保存的 tab 显示名不能被新发现的 CLI 标题覆盖。
+it.each([false, true])('History_PreserveEarlyTabRename_039 identity known: %s', async identityKnown => {
+  const active = tab({ cli: 'claude', profileId: 'claude-main', action: { kind: 'new' }, title: 'Claude Code',
+    ...(identityKnown ? { observedSessionId: 'session-1' } : {}) })
+  const entries: NativeHistoryEntry[] = []
+  const state = setup([active], entries)
+  state.metadata.upsertSessionRecord.mockImplementation(async (key: string, record: any, beforeMutation?: () => void) => {
+    beforeMutation?.(); state.metadata.sessionRecords.set(key, record)
+  })
+  await state.adapter.renameSession('native-tab:tab-1', 'Saved before identity')
+  active.observedSessionId = 'session-1'
+  entries.push(history('claude', 'root', 'session-1'))
+  expect((await state.adapter.listSessions())[0].title).toBe('Saved before identity')
+  entries[0].sessions[0].title = 'Later CLI title'
+  expect((await state.adapter.listSessions())[0].title).toBe('Saved before identity')
+  state.map.delete(active.tabId)
+  const closed = (await state.adapter.listSessions())[0]
+  expect(closed.title).toBe('Later CLI title')
+  await state.adapter.renameSession(closed.id, 'Exact history name')
+  state.map.set(active.tabId, active)
+  expect((await state.adapter.listSessions())[0].title).toBe('Exact history name')
 })
 
 describe('native CLI adapter', () => {

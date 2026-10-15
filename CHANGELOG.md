@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Preserve XML-leading user prompts as Claude history titles, retain early tab display names when authenticated history identity arrives, and keep newer known display timestamps across partial reads of the same exact source
 - Enable the observer for newly auto-created safe Claude templates; preserve all saved observer choices, including existing templates, without refresh-time profile writes
 - Preserve separate Legacy/Native history and archive/restore owners when their source roots cannot be proven identical; a matching session UUID is insufficient to fold them
 - Show observed record timestamps for bounded Claude history reads so closed rows keep a display time instead of “—”

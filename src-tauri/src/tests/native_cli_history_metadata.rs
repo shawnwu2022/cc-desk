@@ -1670,6 +1670,23 @@ fn HistoryClaude_CommandEnvelopeSkipsToRealPrompt_041() {
     assert_eq!(bounded.title, "真正的诊断请求");
 }
 
+// 手写 XML 是正文；只有已知 CLI 注入封套不能抢占首条用户标题。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_XmlPromptTitle_048() {
+    let input = [
+        json!({"type":"user","cwd":"/synthetic/project","sessionId":"fixture","message":{"content":"<command-name>/exit</command-name>"}}),
+        json!({"type":"user","message":{"content":"<local-command-caveat>injected</local-command-caveat>"}}),
+        json!({"type":"user","message":{"content":"<task>Fix the regression</task>"}}),
+    ].iter().map(|record| format!("{record}\n")).collect::<String>();
+    let complete = parse("fixture.jsonl", CliKind::Claude, &input).unwrap();
+    let bounded = parse_metadata("fixture.jsonl", CliKind::Claude, &input).unwrap();
+    assert_eq!(complete.title, "<task>Fix the regression</task>");
+    assert_eq!(bounded.title, complete.title);
+    let mut probe = claude_metadata_probe();
+    assert!(probe(input.as_bytes()).unwrap());
+}
+
 // 只有 slash 命令封套、从无真实用户消息的转录是「空会话」（如只运行 `/exit`）。
 // 这类行不占列表（用户从未真正使用过），且只在完整观察下判定，避免把
 // 尚未读到真实消息的完整文件误隐藏。有显式标题的空会话照常保留。

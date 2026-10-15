@@ -78,6 +78,9 @@ Its localized accessible description remains outside the decorative icon glyph.
   visible, selected and focused ownership acknowledges its exact event ID. Each
   hook owner and tab attempt retains at most 1024 accepted IDs; exhaustion rejects
   further events without evicting IDs and allowing replay.
+  Automatic history-title refresh uses those same accepted receipts and stops
+  receiving reply triggers when this existing budget is exhausted. Explicit
+  Refresh, project history queries and closing remain separate read entry points.
 
 ## Current native evidence gap
 

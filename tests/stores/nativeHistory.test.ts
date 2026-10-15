@@ -21,6 +21,35 @@ function source(cli: 'claude' | 'codex', profileId: string, revision: string, pr
 
 beforeEach(() => { setActivePinia(createPinia()); clients.length = 0 })
 
+// 部分时间是下界；保留同一来源的最新显示时间，完整观察仍可纠正。
+it('History_PartialTimestampKeepsLatestKnown_025', async () => {
+  const context = { cli: 'claude' as const, profileId: 'p', profileRevision: '1', projectId: 'x', projectPath: '/repo' }
+  const item = { type: 'session', sessionKey: 'key', nativeSessionId: 'id', title: 'Task', archived: false, truncated: false }
+  for (const [updatedAt, metadataIncomplete] of [
+    ['2026-10-15T12:00:00Z', false], ['2026-10-15T09:00:00Z', true],
+    [null, true], ['2026-10-15T08:00:00Z', false],
+  ]) clients.push({ scope: vi.fn().mockResolvedValue(source('claude', 'p', '1', 'x')),
+    read: vi.fn().mockResolvedValue({ state: 'ready', items: [{ ...item, updatedAt, metadataIncomplete }], hasMore: false, historyMetadataIncomplete: metadataIncomplete }) })
+  const store = useNativeHistoryStore()
+  await store.load(context)
+  const partial = (await store.load({ ...context, force: true })).sessions[0]
+  expect(partial.updatedAt).toBe('2026-10-15T09:00:00Z')
+  expect(partial.lastKnownActivityAt).toBe(Date.parse('2026-10-15T12:00:00Z'))
+  expect((await store.load({ ...context, force: true })).sessions[0].lastKnownActivityAt).toBe(Date.parse('2026-10-15T12:00:00Z'))
+  expect((await store.load({ ...context, force: true })).sessions[0].lastKnownActivityAt).toBeUndefined()
+})
+
+it.each(['root', 'session'])('History_PartialTimestampKeepsExactIdentity_026 %s', async changed => {
+  const context = { cli: 'claude' as const, profileId: 'p', profileRevision: '1', projectId: 'x', projectPath: '/repo' }
+  const original = { type: 'session', sessionKey: 'key', nativeSessionId: 'id', title: 'Task', archived: false, updatedAt: '2026-10-15T12:00:00Z' }
+  clients.push({ scope: vi.fn().mockResolvedValue(source('claude', 'p', '1', 'x')), read: vi.fn().mockResolvedValue({ state: 'ready', items: [original], hasMore: false }) })
+  clients.push({ scope: vi.fn().mockResolvedValue(source('claude', 'p', '1', 'x', changed === 'root' ? '/other' : '/root')),
+    read: vi.fn().mockResolvedValue({ state: 'ready', items: [{ ...original, nativeSessionId: changed === 'session' ? 'other' : 'id', updatedAt: '2026-10-15T09:00:00Z', metadataIncomplete: true }], hasMore: false, historyMetadataIncomplete: true }) })
+  const store = useNativeHistoryStore()
+  await store.load(context)
+  expect((await store.load({ ...context, force: true })).sessions[0].lastKnownActivityAt).toBeUndefined()
+})
+
 describe('native history cache', () => {
   // 同一上下文加载未完成时普通读取共享它，不再重复提交扫描。
   it('History_SharePendingContext_001', async () => {

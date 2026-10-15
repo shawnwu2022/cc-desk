@@ -723,6 +723,11 @@ fn parse(path: &str, cli: CliKind, input: &str) -> ReadResult<Transcript> {
     parse_complete(path, cli, input, false)
 }
 
+fn claude_injected_user_message(message: &str) -> bool {
+    let head = message.trim_start();
+    head.starts_with("<local-command-caveat>") || head.starts_with("<local-command-stdout>")
+}
+
 fn claude_observed_session_id(value: &Value, session_id: &str) -> ReadResult<()> {
     if matches!(
         value["type"].as_str(),
@@ -902,10 +907,9 @@ pub(super) fn claude_metadata_probe() -> impl FnMut(&[u8]) -> ReadResult<bool> {
             titled |= matches!(record, Some("ai-title" | "custom-title"));
             if !titled && record == Some("user") && value["isMeta"] != true {
                 let message = content(&value["message"]["content"]);
-                let head = message.trim_start();
                 if !message.trim().is_empty()
                     && claude_envelope_title(&message).is_none()
-                    && !head.starts_with('<')
+                    && !claude_injected_user_message(&message)
                 {
                     titled = true;
                 }
@@ -1007,10 +1011,8 @@ fn parse_complete(
                             } else if !message.is_empty() {
                                 // 注入噪声（<local-command-caveat> 等）不占标题槽位，
                                 // 让后续真实用户消息成为标题。
-                                let head = message.trim_start();
-                                real_user |= !head.starts_with("<local-command-caveat>")
-                                    && !head.starts_with("<local-command-stdout>");
-                                if !head.starts_with('<') {
+                                if !claude_injected_user_message(&message) {
+                                    real_user = true;
                                     t.messages.push((role.into(), message));
                                 }
                             }
@@ -1198,7 +1200,7 @@ fn parse_metadata(path: &str, cli: CliKind, input: &str) -> ReadResult<Transcrip
                         if envelope_title.is_none() {
                             envelope_title = Some(envelope);
                         }
-                    } else if !candidate.is_empty() && !candidate.trim_start().starts_with('<') {
+                    } else if !candidate.is_empty() && !claude_injected_user_message(&candidate) {
                         title = Some(candidate);
                     }
                 }

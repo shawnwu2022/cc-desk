@@ -266,7 +266,11 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
     // （首条消息 / AI 摘要 / 手动改名），而不是停留在本地占位名 "Claude Code"。
     // 保存的 Desk 显示名在 withSessionDisplayName 内仍优先于 CLI 标题。
     const titled = identity.id.startsWith(HISTORY_PREFIX) ? { ...row, title: identity.title } : row
-    return withSessionDisplayName(titled, deps.metadata, identity)
+    // 首次认证身份晚于用户改名时，未知身份下保存的名称仍属于这个 tab。
+    // 仅用于当前终端显示；不猜测或迁移独立历史的 metadata key。
+    const earlyNamed = withSessionDisplayName(titled, deps.metadata, { ...row, nativeSessionId: null })
+    const tabNamed = withSessionDisplayName(earlyNamed, deps.metadata, row)
+    return withSessionDisplayName(tabNamed, deps.metadata, identity)
   }
   const acceptedOpens = new Map<string, { at: number; savedIdentities: Set<string> }>()
   async function transferOpen(tab: NativeCliTab) {
