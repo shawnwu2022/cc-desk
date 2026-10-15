@@ -21,9 +21,12 @@ const unifiedFocus = inject(UNIFIED_WINDOW_FOCUS, null)
 const isFocused = unifiedFocus ?? useWindowAttention().isFocused
 useStatusMonitor({ isFocused, isTerminalVisible: computed(() => props.visible), requestWindowAttention: !unifiedFocus })
 
-function handlePtyStarted(tabId: string, ptyId: string) {
+function handlePtyStarted(tabId: string, ptyId: string, usesDefaultClaudeRoot: boolean) {
   const tab = sessions.tabs.get(tabId)
   if (!tab || tab.ptyId !== ptyId) return
+  // 本次启动冻结的根证明：随后由 catalog 读取，用于判断该终端能否作为
+  // 默认根同 UUID 历史的「同源孪生」。
+  sessions.setTabRootProof(tabId, ptyId, usesDefaultClaudeRoot)
   app.ensureProjectInList(tab.projectPath)
   if (!tab.isResume) void sessions.loadHistorySessions(tab.projectPath, true)
 }

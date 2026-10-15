@@ -33,11 +33,14 @@ pub struct PtySpawnOptions {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PtySpawnResult {
     id: String,
     #[serde(rename = "type")]
     pty_type: String,
     cwd: String,
+    /// 本次启动冻结的根身份证明；前端据此决定该终端能否作为默认根历史的同源孪生。
+    uses_default_claude_root: bool,
 }
 
 /// 启动 PTY。ID 由前端预分配，使事件路由在子进程启动前就绪。
@@ -71,6 +74,7 @@ pub async fn pty_spawn(
                 id: info.id,
                 pty_type: info.pty_type,
                 cwd: info.cwd,
+                uses_default_claude_root: info.uses_default_claude_root,
             })
         })
         .map_err(|error| error.to_string())
@@ -535,16 +539,14 @@ pub(crate) async fn native_list_resources(
     runtime.projection_read(&webview, &request).await
 }
 
-/// legacy Claude 折叠证明。`rootKey` 是固定历史根 `~/.claude` 的 native 目录身份
-/// key（与 SourceRef.sourceRootKey 同源同格式）；`tabsUseDefaultRoot` 表示 legacy
-/// PTY spawn 的有效环境（进程环境 + 应用配置 claudeEnvVars）没有覆盖
-/// CLAUDE_CONFIG_DIR，即打开的 legacy 终端也在默认根上运行。两者缺一，前端就
-/// 不得折叠对应方向的重复行，保持两端独立投影。
+/// legacy Claude 折叠证明：固定历史根 `~/.claude` 的 native 目录身份 key
+/// （与 SourceRef.sourceRootKey 同源同格式）。legacy 终端自身的根身份不在这里
+/// 一次性判定——它随每次 PTY 启动冻结（`PtySpawnResult.usesDefaultClaudeRoot`），
+/// 配置在运行期改变后旧证明不再适用。
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LegacyClaudeRootProof {
     pub root_key: String,
-    pub tabs_use_default_root: bool,
 }
 
 #[tauri::command]
@@ -553,16 +555,7 @@ pub async fn legacy_claude_root_key() -> Result<LegacyClaudeRootProof, String> {
     let root_key = crate::cli::native_projection::scoped_fs::Root::open(&dir)
         .map(|root| root.key().to_owned())
         .map_err(|e| e.to_string())?;
-    let configured = crate::store::get_app_config()
-        .ok()
-        .and_then(|config| config.claude_env_vars)
-        .map(|vars| vars.keys().any(|name| name.eq_ignore_ascii_case("CLAUDE_CONFIG_DIR")))
-        .unwrap_or(false);
-    // Windows 环境变量名大小写不敏感，配置里写成小写同样会覆盖到子进程。
-    let inherited = std::env::vars_os()
-        .any(|(name, _)| name.to_string_lossy().eq_ignore_ascii_case("CLAUDE_CONFIG_DIR"));
-    let tabs_use_default_root = !inherited && !configured;
-    Ok(LegacyClaudeRootProof { root_key, tabs_use_default_root })
+    Ok(LegacyClaudeRootProof { root_key })
 }
 
 /// 恢复 CLI 自身归档的会话（当前仅 codex 有该子命令）。归档状态归 CLI 所有，

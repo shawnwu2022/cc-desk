@@ -42,8 +42,6 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   const legacyPaths = ref<string[]>([])
   /** legacy 固定根（~/.claude）的 native 身份 key；取到后才允许折叠同 ID 的 native 行。 */
   let legacyClaudeRoot: string | undefined
-  /** legacy 终端自身是否跑在该默认根上；未知或为 false 时反向折叠关闭。 */
-  let legacyTabsUseDefaultRoot = false
   const error = ref<string | null>(null)
   const sourceWarnings = ref<WorkspaceSourceWarning[]>([])
   const sourceWarningsTruncated = ref(false)
@@ -235,8 +233,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     void legacyClaudeRootKey().then(proof => {
       if (disposed || !proof?.rootKey) return
       legacyClaudeRoot = proof.rootKey
-      legacyTabsUseDefaultRoot = proof.tabsUseDefaultRoot === true
-      catalog.configureAdapters(sessionAdapters, { legacyClaudeRootKey: legacyClaudeRoot, legacyTabsUseDefaultRoot })
+      catalog.configureAdapters(sessionAdapters, { legacyClaudeRootKey: legacyClaudeRoot })
       // 该 IPC 晚于首次历史加载完成时，仅更新非响应式状态不会改动已投影的行。
       void refreshCatalog().catch(() => undefined)
     }).catch(() => undefined)
@@ -307,7 +304,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
           stopTab: tab => requireHost().stopNative(tab.tabId, captureNativeAttempt(tab)),
           renameTab: (tabId, title, admission) => requireHost().renameNative(tabId, title, admission) } }),
     ]
-    catalog.configureAdapters(sessionAdapters, { legacyClaudeRootKey: legacyClaudeRoot, legacyTabsUseDefaultRoot })
+    catalog.configureAdapters(sessionAdapters, { legacyClaudeRootKey: legacyClaudeRoot })
   }
 
   async function refresh() {

@@ -220,10 +220,10 @@ export const restoreSession = (projectPath: string, sessionId: string): Promise<
 export const deleteSessions = (projectPath: string, sessionIds: string[]): Promise<ProjectsState> =>
   invoke<ProjectsState>('delete_sessions', { projectPath, sessionIds });
 
-/** legacy Claude 根证明：固定历史根的 native key + legacy 终端是否也在该根上运行。 */
+/** legacy Claude 折叠证明：固定历史根（`~/.claude`）的 native 目录身份 key。
+ *  legacy 终端自身的根证明随每次 PTY 启动冻结（`PtySpawnResult.usesDefaultClaudeRoot`）。 */
 export interface LegacyClaudeRootProof {
   rootKey: string;
-  tabsUseDefaultRoot: boolean;
 }
 
 /** legacy 折叠证明；取不到时调用方必须保持未知（不折叠）。 */

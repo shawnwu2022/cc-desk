@@ -206,7 +206,7 @@ describe('unified sessions store', () => {
     const projects = useProjectsStateStore()
     projects.pinnedProjects = ['/repo']
     const store = useUnifiedSessionsStore()
-    store.configureAdapters([legacy.adapter, native.adapter], { legacyClaudeRootKey: LEGACY_ROOT, legacyTabsUseDefaultRoot: true })
+    store.configureAdapters([legacy.adapter, native.adapter], { legacyClaudeRootKey: LEGACY_ROOT })
 
     await store.refresh()
 
@@ -230,7 +230,7 @@ describe('unified sessions store', () => {
       }),
     ])
     const store = useUnifiedSessionsStore()
-    store.configureAdapters([legacy.adapter, native.adapter], { legacyClaudeRootKey: LEGACY_ROOT, legacyTabsUseDefaultRoot: true })
+    store.configureAdapters([legacy.adapter, native.adapter], { legacyClaudeRootKey: LEGACY_ROOT })
 
     await store.refresh()
 
@@ -248,7 +248,7 @@ describe('unified sessions store', () => {
     ])
     ;(legacy.adapter.activateSession as ReturnType<typeof vi.fn>).mockReturnValueOnce(first.promise)
     const store = useUnifiedSessionsStore()
-    store.configureAdapters([legacy.adapter, native.adapter], { legacyClaudeRootKey: LEGACY_ROOT, legacyTabsUseDefaultRoot: true })
+    store.configureAdapters([legacy.adapter, native.adapter], { legacyClaudeRootKey: LEGACY_ROOT })
     await store.refresh()
 
     const oldActivation = store.activateSession('legacy')
@@ -315,7 +315,7 @@ describe('unified sessions store', () => {
     const legacy = fakeAdapter('legacy-claude', [session({ id: 'old', adapterSessionId: 'history-1', nativeSessionId: 'history-1' })])
     const native = fakeAdapter('native-cli', [session({ id: 'native-old', runtime: 'native-cli', adapterSessionId: 'native-history', nativeSessionId: 'native-history' })])
     const store = useUnifiedSessionsStore()
-    store.configureAdapters([legacy.adapter, native.adapter], { legacyClaudeRootKey: LEGACY_ROOT, legacyTabsUseDefaultRoot: true })
+    store.configureAdapters([legacy.adapter, native.adapter], { legacyClaudeRootKey: LEGACY_ROOT })
 
     const created = await store.createSession({
       projectKey: '/repo',
@@ -596,7 +596,7 @@ it('Unified_UnknownRootsKeepClosedRows_023', async () => {
   const legacy = fakeAdapter('legacy-claude', [legacyRow])
   const native = fakeAdapter('native-cli', [nativeRow])
   const store = useUnifiedSessionsStore()
-  store.configureAdapters([legacy.adapter, native.adapter], { legacyClaudeRootKey: LEGACY_ROOT, legacyTabsUseDefaultRoot: true })
+  store.configureAdapters([legacy.adapter, native.adapter], { legacyClaudeRootKey: LEGACY_ROOT })
   await store.refresh()
   const rows = store.sessions.filter(row => row.projectKey === '/repo')
   expect(rows).toHaveLength(1)
@@ -612,6 +612,7 @@ it('Unified_UnknownRootsKeepLiveRow_024', async () => {
     runtime: 'legacy-claude',
     processState: 'running',
     opened: true,
+    usesDefaultClaudeRoot: true,
     adapterSessionId: 't1',
     nativeSessionId: 'sess-1',
     lastActivityAt: 300,
@@ -628,7 +629,7 @@ it('Unified_UnknownRootsKeepLiveRow_024', async () => {
   const legacy = fakeAdapter('legacy-claude', [liveLegacyTab])
   const native = fakeAdapter('native-cli', [nativeRow])
   const store = useUnifiedSessionsStore()
-  store.configureAdapters([legacy.adapter, native.adapter], { legacyClaudeRootKey: LEGACY_ROOT, legacyTabsUseDefaultRoot: true })
+  store.configureAdapters([legacy.adapter, native.adapter], { legacyClaudeRootKey: LEGACY_ROOT })
   await store.refresh()
   const rows = store.sessions.filter(row => row.projectKey === '/repo')
   expect(rows).toHaveLength(1)
@@ -643,6 +644,7 @@ it('Unified_OpenLegacyTabHidesNativeTwin_023b', async () => {
     runtime: 'legacy-claude',
     processState: 'running',
     opened: true,
+    usesDefaultClaudeRoot: true,
     adapterSessionId: 't1',
     nativeSessionId: 'sess-1',
     lastActivityAt: 300,
@@ -659,7 +661,7 @@ it('Unified_OpenLegacyTabHidesNativeTwin_023b', async () => {
   const legacy = fakeAdapter('legacy-claude', [liveLegacyTab])
   const native = fakeAdapter('native-cli', [nativeRow])
   const store = useUnifiedSessionsStore()
-  store.configureAdapters([legacy.adapter, native.adapter], { legacyClaudeRootKey: LEGACY_ROOT, legacyTabsUseDefaultRoot: true })
+  store.configureAdapters([legacy.adapter, native.adapter], { legacyClaudeRootKey: LEGACY_ROOT })
   await store.refresh()
   const rows = store.sessions.filter(row => row.projectKey === '/repo')
   expect(rows).toHaveLength(1)
@@ -668,6 +670,9 @@ it('Unified_OpenLegacyTabHidesNativeTwin_023b', async () => {
 
 // 折叠必须接管 legacy 行独占的证据：归档保存的是裸 session ID（native 侧不识别），
 // 已保存的 Desk 显示名与最近打开时间也只挂在 legacy 记录上。
+// 折叠必须接管 legacy 行独占的证据：归档（存裸 session ID）、显式保存的 Desk
+// 覆盖名与最近打开时间（键是 legacy 历史键）。显式覆盖名优先于 CLI 记录的标题，
+// 但没有保存记录时保持 native 的标题，不把 legacy 的普通标题当覆盖名。
 it('Unified_FoldingAdoptsLegacyArchiveAndMetadata_041', async () => {
   const legacyRow = session({
     id: 'legacy-history:/repo:sess-1',
@@ -693,16 +698,50 @@ it('Unified_FoldingAdoptsLegacyArchiveAndMetadata_041', async () => {
   const legacy = fakeAdapter('legacy-claude', [legacyRow])
   const native = fakeAdapter('native-cli', [nativeRow])
   const store = useUnifiedSessionsStore()
-  store.configureAdapters([legacy.adapter, native.adapter], { legacyClaudeRootKey: LEGACY_ROOT, legacyTabsUseDefaultRoot: true })
+  // legacy 键上有一条显式保存的 Desk 覆盖名。
+  useProjectsStateStore().sessionRecords.set(legacyRow.id, {
+    runtime: 'legacy-claude', cli: 'claude', projectPath: '/repo',
+    adapterSessionId: 'sess-1', nativeSessionId: 'sess-1',
+    title: '我改的名字', lastActivityAt: 100, lastOpenedAt: 700,
+  })
+  store.configureAdapters([legacy.adapter, native.adapter], { legacyClaudeRootKey: LEGACY_ROOT })
   await store.refresh()
   const rows = store.sessions.filter(row => row.projectKey === '/repo')
   expect(rows).toHaveLength(1)
   expect(rows[0]).toMatchObject({ runtime: 'native-cli', archived: true, lastOpenedAt: 900 })
-  // 接管只在 native 行没有更强的名字时兜底；CLI 记录标题优先。
+  expect(rows[0].title).toBe('我改的名字')
+})
+
+// 没有显式保存的覆盖名时，接管不得把 legacy 的普通标题当成 Desk 名。
+it('Unified_FoldingWithoutSavedNameKeepsNativeTitle_043', async () => {
+  const legacyRow = session({
+    id: 'legacy-history:/repo:sess-2',
+    runtime: 'legacy-claude',
+    processState: 'stopped',
+    title: '首条消息摘要',
+    adapterSessionId: 'sess-2',
+    nativeSessionId: 'sess-2',
+  })
+  const nativeRow = session({
+    id: 'native-history:/repo:sess-2',
+    runtime: 'native-cli',
+    processState: 'stopped',
+    nativeRootKey: LEGACY_ROOT,
+    title: 'CLI 记录的标题',
+    adapterSessionId: 'native-history-key-2',
+    nativeSessionId: 'sess-2',
+  })
+  const legacy = fakeAdapter('legacy-claude', [legacyRow])
+  const native = fakeAdapter('native-cli', [nativeRow])
+  const store = useUnifiedSessionsStore()
+  store.configureAdapters([legacy.adapter, native.adapter], { legacyClaudeRootKey: LEGACY_ROOT })
+  await store.refresh()
+  const rows = store.sessions.filter(row => row.projectKey === '/repo')
+  expect(rows).toHaveLength(1)
   expect(rows[0].title).toBe('CLI 记录的标题')
 })
 
-// legacy 终端自身跑在非默认根（CLAUDE_CONFIG_DIR 覆盖）时，同 UUID 的默认根
+// legacy 终端本次启动跑在非默认根（CLAUDE_CONFIG_DIR 覆盖）时，同 UUID 的默认根
 // native 历史不是同一来源，不得被隐藏。
 it('Unified_LegacyTabOnCustomRootKeepsNativeRow_042', async () => {
   const liveLegacyTab = session({
@@ -724,7 +763,7 @@ it('Unified_LegacyTabOnCustomRootKeepsNativeRow_042', async () => {
   const legacy = fakeAdapter('legacy-claude', [liveLegacyTab])
   const native = fakeAdapter('native-cli', [nativeRow])
   const store = useUnifiedSessionsStore()
-  store.configureAdapters([legacy.adapter, native.adapter], { legacyClaudeRootKey: LEGACY_ROOT, legacyTabsUseDefaultRoot: false })
+  store.configureAdapters([legacy.adapter, native.adapter], { legacyClaudeRootKey: LEGACY_ROOT })
   await store.refresh()
   expect(store.sessions.filter(row => row.projectKey === '/repo').map(row => row.runtime).sort())
     .toEqual(['legacy-claude', 'native-cli'])
@@ -753,7 +792,7 @@ it('Unified_UnknownRootsKeepArchiveState_025', async () => {
   const legacy = fakeAdapter('legacy-claude', [legacyRow])
   const native = fakeAdapter('native-cli', [nativeRow])
   const store = useUnifiedSessionsStore()
-  store.configureAdapters([legacy.adapter, native.adapter], { legacyClaudeRootKey: LEGACY_ROOT, legacyTabsUseDefaultRoot: true })
+  store.configureAdapters([legacy.adapter, native.adapter], { legacyClaudeRootKey: LEGACY_ROOT })
   await store.refresh()
   const rows = store.sessions.filter(row => row.projectKey === '/repo')
   expect(rows).toHaveLength(1)
@@ -769,6 +808,7 @@ it('Unified_UnknownRootsKeepOpenedTerminal_026', async () => {
     runtime: 'legacy-claude',
     processState: 'stopped',
     opened: true,
+    usesDefaultClaudeRoot: true,
     adapterSessionId: 't1',
     nativeSessionId: 'sess-1',
     lastActivityAt: 300,
@@ -786,7 +826,7 @@ it('Unified_UnknownRootsKeepOpenedTerminal_026', async () => {
   const legacy = fakeAdapter('legacy-claude', [legacyRow])
   const native = fakeAdapter('native-cli', [nativeRow])
   const store = useUnifiedSessionsStore()
-  store.configureAdapters([legacy.adapter, native.adapter], { legacyClaudeRootKey: LEGACY_ROOT, legacyTabsUseDefaultRoot: true })
+  store.configureAdapters([legacy.adapter, native.adapter], { legacyClaudeRootKey: LEGACY_ROOT })
   await store.refresh()
   store.activeSessionId = 'legacy-tab:t1'
   await store.refresh()
@@ -844,7 +884,7 @@ it('Unified_UnknownRootsKeepRestoreOwner_028', async () => {
   const legacy = fakeAdapter('legacy-claude', [legacyRow])
   const native = fakeAdapter('native-cli', [nativeRow])
   const store = useUnifiedSessionsStore()
-  store.configureAdapters([legacy.adapter, native.adapter], { legacyClaudeRootKey: LEGACY_ROOT, legacyTabsUseDefaultRoot: true })
+  store.configureAdapters([legacy.adapter, native.adapter], { legacyClaudeRootKey: LEGACY_ROOT })
   await store.refresh()
   const rows = store.sessions.filter(row => row.projectKey === '/repo')
   expect(rows).toHaveLength(1)
@@ -887,7 +927,7 @@ it('Unified_MixedOriginsStayDistinct_029', async () => {
   const legacy = fakeAdapter('legacy-claude', [legacyRow])
   const native = fakeAdapter('native-cli', [first, second])
   const store = useUnifiedSessionsStore()
-  store.configureAdapters([legacy.adapter, native.adapter], { legacyClaudeRootKey: LEGACY_ROOT, legacyTabsUseDefaultRoot: true })
+  store.configureAdapters([legacy.adapter, native.adapter], { legacyClaudeRootKey: LEGACY_ROOT })
   await store.refresh()
   expect(store.sessions.map(row => row.id).sort()).toEqual([
     'native-history:profile-a', 'native-history:profile-b',
@@ -922,7 +962,7 @@ it('Unified_BothArchivesKeepOwners_030', async () => {
   const legacy = fakeAdapter('legacy-claude', [legacyRow])
   const native = fakeAdapter('native-cli', [nativeRow])
   const store = useUnifiedSessionsStore()
-  store.configureAdapters([legacy.adapter, native.adapter], { legacyClaudeRootKey: LEGACY_ROOT, legacyTabsUseDefaultRoot: true })
+  store.configureAdapters([legacy.adapter, native.adapter], { legacyClaudeRootKey: LEGACY_ROOT })
   await store.refresh()
   expect(store.sessions.filter(row => row.archived).map(row => row.id)).toEqual(['native-history:profile-a'])
   expect(store.projectGroups).toEqual([])
@@ -951,7 +991,7 @@ it('UnifiedSessions_DisabledCliHidesHistoryKeepsOpenTabs_029', async () => {
     const native = fakeAdapter('native-cli', [codexHistory, codexTab])
     const legacy = fakeAdapter('legacy-claude', [claudeRow])
     const store = useUnifiedSessionsStore()
-    store.configureAdapters([legacy.adapter, native.adapter], { legacyClaudeRootKey: LEGACY_ROOT, legacyTabsUseDefaultRoot: true })
+    store.configureAdapters([legacy.adapter, native.adapter], { legacyClaudeRootKey: LEGACY_ROOT })
     await store.refresh()
     const ids = store.sessions.map(value => value.id).sort()
     expect(ids).toEqual(['claude-history', 'native-tab:t1'])
@@ -1012,7 +1052,7 @@ it('Unified_OneEachRootKeepsRestoreOrigins_040', async () => {
   const legacy = fakeAdapter('legacy-claude', [legacyRow])
   const native = fakeAdapter('native-cli', [nativeRow])
   const store = useUnifiedSessionsStore()
-  store.configureAdapters([legacy.adapter, native.adapter], { legacyClaudeRootKey: LEGACY_ROOT, legacyTabsUseDefaultRoot: true })
+  store.configureAdapters([legacy.adapter, native.adapter], { legacyClaudeRootKey: LEGACY_ROOT })
   await store.refresh()
   expect(store.sessions.map(row => row.id).sort()).toEqual(['legacy-origin', 'native-origin'])
   await store.restoreArchivedSession('legacy-origin')

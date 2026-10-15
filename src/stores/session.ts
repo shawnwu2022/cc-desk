@@ -75,6 +75,8 @@ export interface TerminalTab {
   ptyId: string | null
   /** Monotone local Legacy PTY ownership; natural exit never rewinds it. */
   ptyGeneration?: number
+  /** 本次 Legacy PTY 启动冻结的根身份证明（有效环境未覆盖 CLAUDE_CONFIG_DIR）。 */
+  usesDefaultClaudeRoot?: boolean
   sessionId: string | null
   name: string
   status: 'starting' | 'running' | 'stopped'
@@ -269,6 +271,13 @@ export const useSessionStore = defineStore('session', () => {
     tab.ptyId = ptyId
     tab.status = 'running'
     tab.lastActiveAt = Date.now()
+  }
+
+  /** 记录本次启动冻结的根证明；仅在流量仍属于该 PTY 时写入。 */
+  function setTabRootProof(tabId: string, ptyId: string, usesDefaultClaudeRoot: boolean) {
+    const tab = tabs.get(tabId)
+    if (!tab || tab.ptyId !== ptyId) return
+    tab.usesDefaultClaudeRoot = usesDefaultClaudeRoot
   }
 
   /**
@@ -924,6 +933,7 @@ export const useSessionStore = defineStore('session', () => {
 
     // Tab lifecycle
     createTab,
+    setTabRootProof,
     setTabPty,
     handlePtyExit,
     closeTab,

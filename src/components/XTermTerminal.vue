@@ -60,7 +60,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  ptyStarted: [tabId: string, ptyId: string]
+  ptyStarted: [tabId: string, ptyId: string, usesDefaultClaudeRoot: boolean]
   // PTY 退出通知（供 TerminalView settle sessionStart waiter）
   ptyExited: [tabId: string, ptyId: string]
 }>()
@@ -763,7 +763,7 @@ async function startTab(tabId: string): Promise<{ ok: true } | { ok: false; erro
       return { ok: false, error: 'PTY exited during startup' }
     }
 
-    emit('ptyStarted', tabId, ptyId)
+    emit('ptyStarted', tabId, ptyId, info.usesDefaultClaudeRoot === true)
     return { ok: true }
   } catch (err) {
     discardUnstartedTab(tabId, startingPtyId, startingGeneration)

@@ -576,24 +576,28 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
   async function restoreArchivedSession(id: string): Promise<void> {
     const history = parseHistoryId(id)
     const match = deps.history.all().flatMap(entry => entry.sessions.filter(item => historyId(entry, item.sessionKey, item.nativeSessionId) === id).map(item => ({ entry, item })))[0]
+    const keys = deps.archive.getArchivedSessions(history.projectPath)
+    // 所有来源歧义必须在第一次写操作之前判定完毕：先删掉一个 key 再报歧义会让
+    // 归档元数据部分改变，达不到「歧义时保留」的语义。
+    const pending: string[] = []
     if (match) {
       const old = oldHistoryId(match.entry, match.item.sessionKey, match.item.nativeSessionId)
-      if (deps.archive.getArchivedSessions(history.projectPath).includes(old)) {
+      if (keys.includes(old)) {
         if (oldKeyMatches(old).length !== 1) throw new Error('SESSION_ORIGIN_AMBIGUOUS')
-        await deps.archive.restoreSession(history.projectPath, old)
+        pending.push(old)
       }
       // legacy 注册的裸 session ID 归档同样要解除，否则折叠后的行仍显示归档。
       // 与 archiveState 同一门槛：只在根身份证明为 legacy 固定根且唯一匹配时清除，
       // 否则保留并如实报歧义，不猜测归属。
       const bare = match.item.nativeSessionId
       const legacyRoot = deps.legacyClaudeRootKey?.()
-      const sameLegacyRoot = legacyRoot !== undefined && match.entry.sourceRootKey === legacyRoot
-      if (sameLegacyRoot && deps.archive.getArchivedSessions(history.projectPath).includes(bare)) {
+      if (legacyRoot !== undefined && match.entry.sourceRootKey === legacyRoot && keys.includes(bare)) {
         if (bareIdMatches(bare).length !== 1) throw new Error('SESSION_ORIGIN_AMBIGUOUS')
-        await deps.archive.restoreSession(history.projectPath, bare)
+        pending.push(bare)
       }
     }
-    if (deps.archive.getArchivedSessions(history.projectPath).includes(id)) await deps.archive.restoreSession(history.projectPath, id)
+    if (keys.includes(id)) pending.push(id)
+    for (const key of pending) await deps.archive.restoreSession(history.projectPath, key)
     if (match) {
       // CLI 自身归档（codex archived_sessions）不在 Desk 注册表内：它的恢复就是
       // 让 CLI 取消归档。codex 明确拒绝 resume 已归档会话（要求先 unarchive），

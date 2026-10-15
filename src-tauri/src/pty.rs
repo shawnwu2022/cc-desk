@@ -89,11 +89,15 @@ pub(crate) fn is_pty_stream_end(error: &io::Error) -> bool {
 
 /// PTY 实例信息
 #[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PtyInfo {
     pub id: String,
     #[serde(rename = "type")]
     pub pty_type: String,
     pub cwd: String,
+    /// 本次启动冻结的根身份证明：有效环境（进程环境 + 配置 env）未覆盖
+    /// `CLAUDE_CONFIG_DIR`，即该终端跑在 `~/.claude` 上。
+    pub uses_default_claude_root: bool,
 }
 
 /// PTY 输出事件 payload
@@ -421,7 +425,9 @@ impl PtyManager {
         crate::platform::find_executable("claude")
     }
 
-    fn apply_common_environment(cmd: &mut CommandBuilder, truecolor: bool) {
+    /// 写入有效环境后返回它是否仍指向默认 Claude 根：只有这两步（继承进程环境、
+    /// 叠加配置 env）能引入 `CLAUDE_CONFIG_DIR`，因此判定与真实子进程环境同源。
+    fn apply_common_environment(cmd: &mut CommandBuilder, truecolor: bool) -> bool {
         for (key, value) in env::vars() {
             cmd.env(key, value);
         }
@@ -443,6 +449,22 @@ impl PtyManager {
         for name in crate::cli::environment::OBSERVER_ENV_NAMES {
             cmd.env_remove(name);
         }
+        Self::environment_uses_default_claude_root()
+    }
+
+    /// 进程环境与配置 env 是否都未覆盖 `CLAUDE_CONFIG_DIR`。
+    /// Windows 环境变量名大小写不敏感，比较时忽略大小写。
+    fn environment_uses_default_claude_root() -> bool {
+        let inherited = env::vars_os()
+            .any(|(name, _)| name.to_string_lossy().eq_ignore_ascii_case("CLAUDE_CONFIG_DIR"));
+        let configured = crate::store::get_app_config()
+            .ok()
+            .and_then(|config| config.claude_env_vars)
+            .is_some_and(|vars| {
+                vars.keys()
+                    .any(|name| name.eq_ignore_ascii_case("CLAUDE_CONFIG_DIR"))
+            });
+        !inherited && !configured
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -457,6 +479,7 @@ impl PtyManager {
         cmd: CommandBuilder,
         description: &str,
         observer: Option<crate::observer_registry::ObserverLease>,
+        uses_default_claude_root: bool,
     ) -> Result<PtyInfo> {
         let pty_system = native_pty_system();
         let PtyPair { master, slave } = pty_system
@@ -519,6 +542,7 @@ impl PtyManager {
             id,
             pty_type: pty_type.to_string(),
             cwd: cwd.to_string(),
+            uses_default_claude_root,
         })
     }
 
@@ -605,7 +629,7 @@ impl PtyManager {
             cmd.arg(arg);
         }
         cmd.cwd(cwd);
-        Self::apply_common_environment(&mut cmd, true);
+        let uses_default_claude_root = Self::apply_common_environment(&mut cmd, true);
 
         if let Some(observer) = &prepared {
             for (name, value) in &observer.environment.values {
@@ -629,6 +653,7 @@ impl PtyManager {
             cmd,
             "Claude shell command",
             prepared.map(|prepared| prepared.lease),
+            uses_default_claude_root,
         )
     }
 
@@ -663,7 +688,7 @@ impl PtyManager {
             cmd.arg(*arg);
         }
         cmd.cwd(cwd);
-        Self::apply_common_environment(&mut cmd, false);
+        let _ = Self::apply_common_environment(&mut cmd, false);
 
         self.spawn_command(
             admission,
@@ -675,6 +700,7 @@ impl PtyManager {
             cmd,
             &format!("shell '{program}'"),
             None,
+            true,
         )
     }
 
