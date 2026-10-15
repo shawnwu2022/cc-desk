@@ -230,7 +230,7 @@ it('LaunchConfig_LastDefaultFallback_009', async () => {
   useProjectsStateStore().loaded = true
   await expect(defaults.prepareInput({ projectKey: '/repo', projectPath: '/repo', cli: 'claude' })).rejects.toThrow('LAUNCH_CONFIGURATION_REQUIRED')
   expect(profiles.profile('desk-safe-claude')?.programPath).toEqual({ mode: 'inherit' }); expect(patches).toHaveLength(2)
-  expect(patches[1]).toMatchObject({ op: 'create', profile: { cli: 'claude', observer: { mode: 'set', value: false }, defaultArgs: { mode: 'set', value: [] }, skipPermissions: { mode: 'set', value: false } } })
+  expect(patches[1]).toMatchObject({ op: 'create', profile: { cli: 'claude', observer: { mode: 'set', value: true }, defaultArgs: { mode: 'set', value: [] }, skipPermissions: { mode: 'set', value: false } } })
 })
 
 // 尚未分配 Native Tab 的新建准备也阻止删除它可能使用的配置。

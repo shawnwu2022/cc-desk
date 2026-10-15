@@ -65,7 +65,11 @@ export function deriveSessionVisualState(session: UnifiedSession, selected = fal
   if (session.attentionKind === 'permission' || activity === 'waiting_permission') return 'permission'
   if (session.attentionKind === 'completed') return 'completed'
   if (session.attentionState === 'needs-user' || activity === 'waiting' || activity === 'waiting_input') return 'needs-user'
-  return activity === 'idle' ? 'running' : 'unknown'
+  if (activity === 'idle') return 'running'
+  // 无观察通道（观察器关闭、codex、连接期）时无从得知 turn 状态；进程仍在
+  // 运行,显示中性运行态而不是看似异常的"活动未知"。
+  if (activity === 'unknown' && session.observationState !== 'active') return 'running'
+  return 'unknown'
 }
 
 export function sessionVisualLabelKey(state: SessionVisualState, activity?: UnifiedSession['activityState'], archived = false): string {

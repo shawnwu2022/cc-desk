@@ -21,7 +21,7 @@
       },
       "observer": {
         "mode": "set",
-        "value": false
+        "value": true
       },
       "env": {}
     },
@@ -59,7 +59,7 @@
       },
       "observer": {
         "mode": "set",
-        "value": false
+        "value": true
       },
       "env": {}
     },

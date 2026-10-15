@@ -1354,3 +1354,26 @@ it('HistorySupport_ColdEnableReloadsHistory_059', async () => {
   useCliSupportStore().setCliEnabled('codex', true)
   await vi.waitFor(() => expect(catalog.sessions.some(row => row.cli === 'codex' && row.nativeSessionId === 'history-id')).toBe(true))
 })
+
+// 存量 desk-safe claude 模板把观察器硬编码为关闭；刷新时必须一次性翻转为开启，
+// 否则会话状态、改名跟随与行认领长期残缺。用户自定义 profile 与非 claude 模板不动。
+it('Observer_StaleTemplateMigrated_060', async () => {
+  const claudeTemplate = { id: 'desk-safe-claude', revision: '2', cli: 'claude', name: 'Claude Code', launcher: { kind: 'native' },
+    programPath: { mode: 'set', value: '/tools/claude' }, defaultArgs: { mode: 'set', value: [] },
+    skipPermissions: { mode: 'set', value: false }, observer: { mode: 'set', value: false }, env: {} }
+  const codexTemplate = { ...claudeTemplate, id: 'desk-safe-codex', cli: 'codex', observer: { mode: 'set', value: false } }
+  const custom = { ...claudeTemplate, id: 'my-claude', observer: { mode: 'set', value: false } }
+  let revision = 2
+  io.profiles.mockImplementation(async () => ({ revision: String(revision), profiles: [structuredClone(claudeTemplate), structuredClone(codexTemplate), structuredClone(custom)] }))
+  const patches: any[] = []
+  io.patchProfile.mockImplementation(async (expectedRevision, patch) => {
+    patches.push({ expectedRevision, patch })
+    revision += 1
+    return { revision: String(revision), profiles: [] }
+  })
+  const { runtime } = render(); await runtime.refresh()
+  // 只有 claude desk-safe 模板被翻转；codex 无观察通道，用户自定义 profile 不动。
+  const observerPatches = patches.filter(entry => entry.patch.op === 'update' && entry.patch.changes?.observer)
+  expect(observerPatches.map(entry => entry.patch.id)).toEqual(['desk-safe-claude'])
+  expect(observerPatches[0].patch.changes.observer).toEqual({ mode: 'set', value: true })
+})

@@ -26,13 +26,18 @@ beforeEach(() => { setActivePinia(createPinia()) })
 
 describe('Unified historical status semantics', () => {
   // 删除活动/关注原因投影会使这些边界断言失败，进程运行不能代替回合活动。
+  // 无观察通道（observationState 未激活）的 unknown 是"无从得知"，显示中性
+  // 运行态；观察已激活时的 unknown 仍是真实未知。
   it.each([
     ['working', 'working'], ['thinking', 'working'], ['tool_executing', 'working'],
     ['subagent_running', 'working'], ['compacting', 'working'], ['idle', 'running'],
     ['waiting_permission', 'permission'], ['waiting_input', 'needs-user'], ['waiting', 'needs-user'],
-    ['error', 'error'], ['unknown', 'unknown'],
+    ['error', 'error'], ['unknown', 'running'],
   ])('Activity_DetailMapping_001 %s', (activityState, expected) => {
     expect(deriveSessionVisualState(row({ activityState }))).toBe(expected)
+    if (activityState === 'unknown') {
+      expect(deriveSessionVisualState(row({ activityState, observationState: 'active' }))).toBe('unknown')
+    }
   })
   it.each(['error', 'permission', 'completed'])('Attention_ExplicitReason_002 %s', attentionKind => {
     expect(deriveSessionVisualState(row({ activityState: 'unknown', attentionKind, attentionState: 'needs-user' }))).toBe(attentionKind)
@@ -45,7 +50,8 @@ describe('Unified historical status semantics', () => {
     expect(deriveSessionVisualState(row({ processState: 'stopped', attentionKind: 'completed' }), true)).toBe('stopped')
     expect(deriveSessionVisualState(row({ processState: 'stopped' }))).toBe('closed')
     expect(deriveSessionVisualState(row({ processState: 'stopped', opened: false }), true)).toBe('closed')
-    expect(deriveSessionVisualState(row())).toBe('unknown')
+    expect(deriveSessionVisualState(row())).toBe('running')
+    expect(deriveSessionVisualState(row({ observationState: 'active' }))).toBe('unknown')
   })
   // 所有已知运行态活动/关注原因保持同一显示，不从选择推断运行中。
   it.each([
@@ -55,10 +61,13 @@ describe('Unified historical status semantics', () => {
     [{ attentionState: 'needs-user' }, 'needs-user'],
     [{ attentionKind: 'completed' }, 'completed'],
     [{ activityState: 'subagent_running' }, 'working'],
-    [{ activityState: 'unknown' }, 'unknown'],
+    [{ activityState: 'unknown' }, 'running'],
   ])('Activity_FocusInvariant_009 %j', (extra, expected) => {
     expect(deriveSessionVisualState(row(extra), true)).toBe(expected)
     expect(deriveSessionVisualState(row(extra), false)).toBe(expected)
+  })
+  it('Activity_ObservedUnknownStaysUnknown_011', () => {
+    expect(deriveSessionVisualState(row({ activityState: 'unknown', observationState: 'active' }))).toBe('unknown')
   })
   // 子代理生命周期提示不能盖过真实权限请求或粘性错误。
   it.each(['permission', 'error'] as const)('Subagent_AttentionWins_010 %s', attentionKind => {

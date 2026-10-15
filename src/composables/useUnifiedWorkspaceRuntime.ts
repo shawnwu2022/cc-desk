@@ -260,7 +260,10 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
           cli: profile.cli as UnifiedCliKind, profileId: profile.id, profileRevision: profile.revision, projectId: project.projectId, projectPath: project.selectedPath,
         })))
       for (let i = 0; i < contexts.length && !disposed; i += 2) await Promise.all(contexts.slice(i, i + 2).map(async context => {
-        try { const entry = await history.load(context); if (entry.error || entry.metadataIncomplete) partial = true } catch { partial = true }
+        // 单项目刷新由 owner 状态/关注变化驱动；CLI 会话每轮对话后写入新标题,
+        // 缓存命中会让列表停在旧名。CLI 头窗口观察在 cwd 后早停,重读成本有界。
+        // 全量查询仍走缓存:完整工作区刷新已在 refresh() 里强制重读。
+        try { const entry = await history.load({ ...context, force: query.scope !== 'all' }); if (entry.error || entry.metadataIncomplete) partial = true } catch { partial = true }
       }))
       return partial
     })
@@ -330,6 +333,19 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
         if (results[0].status === 'rejected') warnings.add('configurations', results[0].reason)
         if (results[1].status === 'rejected') warnings.add('registrations', results[1].reason)
         if (results.some(result => result.status === 'rejected')) return
+        // desk-safe 模板曾把观察器硬编码为关闭，而观察器支撑会话状态、改名跟随
+        // 与行认领；存量 claude 模板 profile 一次性翻转为开启（codex 无观察通道，
+        // 不改其配置）。翻转后不再匹配条件，失败留待下次启动重试。
+        const staleObservers = profiles.profiles.filter(profile => profile.cli === 'claude' && profile.id.startsWith('desk-safe-')
+          && profile.observer.mode === 'set' && profile.observer.value === false)
+        let casRevision = profiles.revision
+        for (const profile of staleObservers) {
+          if (disposed || !current()) break
+          const next = await profiles.patch(casRevision, { op: 'update', id: profile.id,
+            changes: { observer: { mode: 'set', value: true } } }).catch(() => null)
+          if (!next) break
+          casRevision = next.revision
+        }
         await draft.refreshAvailability()
         // 同 profile 的全部项目合并为一次后端观察；逐项目加载会让同一棵历史树被完整扫描 N 次。
         const groups = new Map<string, { cli: UnifiedCliKind; profileId: string; profileRevision: string; projects: { projectId: string; projectPath: string }[] }>()
