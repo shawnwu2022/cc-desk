@@ -1323,3 +1323,7 @@ fn content(v: &Value) -> String {
 #[cfg(test)]
 #[path = "../../tests/native_cli_history_metadata.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../tests/diag_real_rows.rs"]
+mod diag_real_rows;

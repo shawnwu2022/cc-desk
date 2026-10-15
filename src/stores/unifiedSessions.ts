@@ -20,7 +20,7 @@ import { makeSessionCatalogKey, makeSessionRenameOwnerKey } from '@/utils/sessio
 import { matchesSessionMetadata } from '@/session/sessionMetadata'
 import type { SessionUiRecord } from '@/types/app'
 import { nativeHistoryContextKey } from '@/stores/nativeHistory'
-import { normalizePath } from '@/utils/path'
+import { normalizePath, sameProjectPath } from '@/utils/path'
 import { compareProjectGroups } from '@/utils/projectGroupOrder'
 import { compareSessionOpenOrder } from '@/utils/sessionOpenOrder'
 import { LaunchConfigurationRequiredError } from '@/utils/launchPreparation'
@@ -38,9 +38,25 @@ function projectName(path: string): string {
  * 投影**：它由运行所有权决定，继承归档会让普通树隐藏该终端，而归档抽屉对活动
  * ID 调恢复会因不是历史 ID 直接失败。
  *
- * 显示名只在**显式保存**时接管：native 自己的保存记录优先，其次 legacy 的；
- * 两者都没有时保持 native 投影的 CLI 标题，不把 legacy 的普通标题当覆盖名。
+ * 显示名只在**显式保存**时接管，且 native 自己的保存名优先：已打开的 native
+ * 终端以 `native-tab:` ID 投影，它的保存名却记在 native 历史键（native-history-v2）
+ * 下，因此不能只查 `native.id`；按会话身份扫描保存记录，找不到才用 legacy 的。
  */
+function savedNativeTitle(
+  records: ReadonlyMap<string, SessionUiRecord>,
+  identity: UnifiedSession,
+): string | undefined {
+  const direct = records.get(identity.id)
+  if (matchesSessionMetadata(direct, identity) && direct.title) return direct.title
+  for (const record of records.values()) {
+    if (record.runtime !== 'native-cli' || record.cli !== identity.cli || !record.title) continue
+    if (!sameProjectPath(record.projectPath, identity.projectPath)) continue
+    if ((record.nativeSessionId ?? null) !== (identity.nativeSessionId ?? null)) continue
+    return record.title
+  }
+  return undefined
+}
+
 function adoptLegacyRow(
   native: UnifiedSession,
   legacy: UnifiedSession,
@@ -48,12 +64,10 @@ function adoptLegacyRow(
 ): UnifiedSession {
   const legacySaved = records.get(legacy.id)
   const saved = matchesSessionMetadata(legacySaved, legacy) ? legacySaved : undefined
-  const nativeSaved = records.get(native.id)
-  const nativeSavedMatches = matchesSessionMetadata(nativeSaved, native) ? nativeSaved : undefined
   return {
     ...native,
     archived: native.opened === true ? native.archived : native.archived || legacy.archived,
-    title: nativeSavedMatches?.title || saved?.title || native.title,
+    title: savedNativeTitle(records, native) || saved?.title || native.title,
     lastActivityAt: Math.max(native.lastActivityAt, legacy.lastActivityAt),
     lastOpenedAt: Math.max(native.lastOpenedAt ?? 0, legacy.lastOpenedAt ?? 0),
   }

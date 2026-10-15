@@ -670,6 +670,48 @@ it('Unified_OpenLegacyTabHidesNativeTwin_023b', async () => {
 
 // 折叠必须接管 legacy 行独占的证据：归档保存的是裸 session ID（native 侧不识别），
 // 已保存的 Desk 显示名与最近打开时间也只挂在 legacy 记录上。
+// 已打开的 native 终端以 native-tab ID 投影，它的保存名却记在 native 历史键下；
+// 折叠不得因此改用 legacy 的保存名。
+it('Unified_FoldingKeepsNativeTabSavedName_044', async () => {
+  const legacyRow = session({
+    id: 'legacy-history:/repo:sess-3',
+    runtime: 'legacy-claude',
+    processState: 'stopped',
+    title: 'legacy 保存名',
+    adapterSessionId: 'sess-3',
+    nativeSessionId: 'sess-3',
+  })
+  const nativeTab: UnifiedSession = {
+    id: 'native-tab:tab-1', projectKey: '/repo', projectPath: '/repo',
+    cli: 'claude', runtime: 'native-cli', title: 'CLI 标题',
+    processState: 'running', attentionState: 'none', lastActivityAt: 500,
+    archived: false, opened: true, resumable: true,
+    adapterSessionId: 'tab-1', nativeSessionId: 'sess-3',
+    nativeRootKey: LEGACY_ROOT, launchConfigId: 'profile-a',
+    nativeOrigin: { cli: 'claude', profileId: 'profile-a', profileRevision: '7', projectId: 'project-1', projectPath: '/repo' },
+  }
+  const records = useProjectsStateStore().sessionRecords
+  // native 历史键上的保存名（活动终端由它显示）
+  records.set('native-history:v2:sess-3', {
+    runtime: 'native-cli', cli: 'claude', projectPath: '/repo',
+    adapterSessionId: 'native-history-key-3', nativeSessionId: 'sess-3',
+    title: 'native 保存名', lastActivityAt: 400,
+  })
+  records.set(legacyRow.id, {
+    runtime: 'legacy-claude', cli: 'claude', projectPath: '/repo',
+    adapterSessionId: 'sess-3', nativeSessionId: 'sess-3',
+    title: 'legacy 保存名', lastActivityAt: 100,
+  })
+  const legacy = fakeAdapter('legacy-claude', [legacyRow])
+  const native = fakeAdapter('native-cli', [nativeTab])
+  const store = useUnifiedSessionsStore()
+  store.configureAdapters([legacy.adapter, native.adapter], { legacyClaudeRootKey: LEGACY_ROOT })
+  await store.refresh()
+  const rows = store.sessions.filter(row => row.projectKey === '/repo')
+  expect(rows).toHaveLength(1)
+  expect(rows[0].title).toBe('native 保存名')
+})
+
 // 折叠必须接管 legacy 行独占的证据：归档（存裸 session ID）、显式保存的 Desk
 // 覆盖名与最近打开时间（键是 legacy 历史键）。显式覆盖名优先于 CLI 记录的标题，
 // 但没有保存记录时保持 native 的标题，不把 legacy 的普通标题当覆盖名。

@@ -425,10 +425,24 @@ impl PtyManager {
         crate::platform::find_executable("claude")
     }
 
-    /// 写入有效环境后返回它是否仍指向默认 Claude 根：只有这两步（继承进程环境、
-    /// 叠加配置 env）能引入 `CLAUDE_CONFIG_DIR`，因此判定与真实子进程环境同源。
+    /// 写入有效环境，并返回**同一份快照**推导出的根身份证明：只有这两步（继承进程
+    /// 环境、叠加配置 env）能引入 `CLAUDE_CONFIG_DIR`，证明因此与真实子进程环境同源，
+    /// 不会因配置在两个时刻之间变化而与命令不一致。
+    ///
+    /// 出现 `BASH_ENV` 时返回 false（根未知）：Windows 的 Git Bash 启动路径使用
+    /// `bash -c`，会执行该脚本，脚本可以自行设置 `CLAUDE_CONFIG_DIR`；父进程环境里
+    /// 看不到这个改写，因此不能声称本次终端跑在默认根上。这与
+    /// `version_history/windows/scope.rs` 把 `BASH_ENV` 视为根未知的既有判定一致。
     fn apply_common_environment(cmd: &mut CommandBuilder, truecolor: bool) -> bool {
-        for (key, value) in env::vars() {
+        let mut inherited_redirect = false;
+        let mut bash_env = false;
+        for (key, value) in env::vars_os() {
+            if key.to_string_lossy().eq_ignore_ascii_case("CLAUDE_CONFIG_DIR") {
+                inherited_redirect = true;
+            }
+            if key.to_string_lossy().eq_ignore_ascii_case("BASH_ENV") && !value.is_empty() {
+                bash_env = true;
+            }
             cmd.env(key, value);
         }
 
@@ -437,9 +451,17 @@ impl PtyManager {
             cmd.env("COLORTERM", "truecolor");
         }
 
+        let mut configured_redirect = false;
+        let mut configured_bash_env = false;
         if let Ok(config) = crate::store::get_app_config() {
             if let Some(env_vars) = config.claude_env_vars {
                 for (key, value) in &env_vars {
+                    if key.eq_ignore_ascii_case("CLAUDE_CONFIG_DIR") {
+                        configured_redirect = true;
+                    }
+                    if key.eq_ignore_ascii_case("BASH_ENV") && !value.is_empty() {
+                        configured_bash_env = true;
+                    }
                     cmd.env(key, value);
                 }
             }
@@ -449,22 +471,10 @@ impl PtyManager {
         for name in crate::cli::environment::OBSERVER_ENV_NAMES {
             cmd.env_remove(name);
         }
-        Self::environment_uses_default_claude_root()
-    }
-
-    /// 进程环境与配置 env 是否都未覆盖 `CLAUDE_CONFIG_DIR`。
-    /// Windows 环境变量名大小写不敏感，比较时忽略大小写。
-    fn environment_uses_default_claude_root() -> bool {
-        let inherited = env::vars_os()
-            .any(|(name, _)| name.to_string_lossy().eq_ignore_ascii_case("CLAUDE_CONFIG_DIR"));
-        let configured = crate::store::get_app_config()
-            .ok()
-            .and_then(|config| config.claude_env_vars)
-            .is_some_and(|vars| {
-                vars.keys()
-                    .any(|name| name.eq_ignore_ascii_case("CLAUDE_CONFIG_DIR"))
-            });
-        !inherited && !configured
+        !inherited_redirect
+            && !configured_redirect
+            && !bash_env
+            && !configured_bash_env
     }
 
     #[allow(clippy::too_many_arguments)]
