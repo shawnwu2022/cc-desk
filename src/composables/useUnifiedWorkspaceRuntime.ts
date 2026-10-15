@@ -42,6 +42,8 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   const legacyPaths = ref<string[]>([])
   /** legacy 固定根（~/.claude）的 native 身份 key；取到后才允许折叠同 ID 的 native 行。 */
   let legacyClaudeRoot: string | undefined
+  /** legacy 终端自身是否跑在该默认根上；未知或为 false 时反向折叠关闭。 */
+  let legacyTabsUseDefaultRoot = false
   const error = ref<string | null>(null)
   const sourceWarnings = ref<WorkspaceSourceWarning[]>([])
   const sourceWarningsTruncated = ref(false)
@@ -227,12 +229,16 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     // Subscribe attention before child TerminalView status consumers mount.
     attention.init()
     // 折叠 legacy/native 重复历史行的前提是根身份已证明：后端给出 legacy 固定根
-    // （~/.claude）的 native key，与每个 native 行的来源根比较。取不到时保持
-    // 未知，store 端不折叠（v0.20.1 的 fail-closed 立场）。
-    void legacyClaudeRootKey().then(key => {
-      if (disposed || !key) return
-      legacyClaudeRoot = key
-      catalog.configureAdapters(sessionAdapters, { legacyClaudeRootKey: legacyClaudeRoot })
+    // （~/.claude）的 native key，以及 legacy 终端自身是否也跑在该根上。取不到时
+    // 保持未知，store 端不折叠（v0.20.1 的 fail-closed 立场）。该 IPC 晚于首次
+    // 历史加载完成时，仅更新非响应式状态不会改动已投影的行，必须重投影一次。
+    void legacyClaudeRootKey().then(proof => {
+      if (disposed || !proof?.rootKey) return
+      legacyClaudeRoot = proof.rootKey
+      legacyTabsUseDefaultRoot = proof.tabsUseDefaultRoot === true
+      catalog.configureAdapters(sessionAdapters, { legacyClaudeRootKey: legacyClaudeRoot, legacyTabsUseDefaultRoot })
+      // 该 IPC 晚于首次历史加载完成时，仅更新非响应式状态不会改动已投影的行。
+      void refreshCatalog().catch(() => undefined)
     }).catch(() => undefined)
     catalog.configureUnknownRestartRecovery(async (id, canContinue) => {
       const row = catalog.sessions.find(row => row.id === id)
@@ -289,7 +295,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
           }, stopTab: id => requireHost().stopLegacy(id),
           restartTab: id => requireHost().restartLegacy(id), renameTab: (id, title, admission) => requireHost().renameLegacy(id, title, admission),
         } }),
-      createNativeCliAdapter({ tabs: native, history, metadata: projects, archive: { getArchivedSessions: legacy.getArchivedSessions, archiveSession: projects.archiveSession, restoreSession: projects.restoreSession },
+      createNativeCliAdapter({ tabs: native, history, metadata: projects, legacyClaudeRootKey: () => legacyClaudeRoot, archive: { getArchivedSessions: legacy.getArchivedSessions, archiveSession: projects.archiveSession, restoreSession: projects.restoreSession },
         cliUnarchive: { unarchive: (context, nativeSessionId) => {
           if (app.isProjectAdmissionBlocked(context.projectPath)) throw new Error('PROJECT_REMOVAL_IN_PROGRESS')
           // 只有 codex 有 CLI 侧归档；claude 行不进入此路径。
@@ -301,7 +307,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
           stopTab: tab => requireHost().stopNative(tab.tabId, captureNativeAttempt(tab)),
           renameTab: (tabId, title, admission) => requireHost().renameNative(tabId, title, admission) } }),
     ]
-    catalog.configureAdapters(sessionAdapters)
+    catalog.configureAdapters(sessionAdapters, { legacyClaudeRootKey: legacyClaudeRoot, legacyTabsUseDefaultRoot })
   }
 
   async function refresh() {

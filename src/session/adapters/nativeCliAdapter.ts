@@ -63,6 +63,9 @@ export interface NativeCliAdapterDeps {
   archive: NativeArchivePort
   cliUnarchive?: NativeCliUnarchivePort
   metadata?: SessionMetadataPort
+  /** legacy 固定根（`~/.claude`）的目录身份 key；仅在该根被证明时才接管 legacy 的裸 ID 归档。
+   *  用取值函数而非字符串：根证明 IPC 晚于适配器创建返回。 */
+  legacyClaudeRootKey?: () => string | undefined
 }
 
 function processState(status: NativeCliTab['status']): UnifiedSession['processState'] {
@@ -313,14 +316,27 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
     return deps.history.all().flatMap(entry => entry.sessions.filter(item => oldHistoryId(entry, item.sessionKey, item.nativeSessionId) === key)
       .map(item => ({ entry, item })))
   }
+  // legacy 适配器归档时写入的是裸 session ID（`legacyClaudeAdapter` 的
+  // `store.archiveSession(projectPath, session.sessionId)`），既不是完整 Native
+  // key 也不是旧 Native key。折叠掉 legacy 行后若仍不识别它，已归档会话会重新
+  // 出现在普通列表，恢复动作也不会清除该条目。裸 ID 只有在**根身份已证明为
+  // legacy 固定根**、且本适配器内唯一匹配时才归属到该行；否则保持不识别。
+  function bareIdMatches(nativeSessionId: string) {
+    return deps.history.all().flatMap(entry => entry.sessions.filter(item => item.nativeSessionId === nativeSessionId)
+      .map(item => ({ entry, item })))
+  }
   function archiveState(entry: NativeHistoryEntry, item: NativeHistoryEntry['sessions'][number]) {
     const keys = deps.archive.getArchivedSessions(entry.context.projectPath)
     const old = oldHistoryId(entry, item.sessionKey, item.nativeSessionId)
     const legacy = keys.includes(old)
+    const legacyRoot = deps.legacyClaudeRootKey?.()
+    const sameLegacyRoot = legacyRoot !== undefined && entry.sourceRootKey === legacyRoot
+    const bare = sameLegacyRoot && keys.includes(item.nativeSessionId)
+    const bareAmbiguous = bare && bareIdMatches(item.nativeSessionId).length !== 1
     // archived=true 也来自 CLI 自身的归档容器（codex 会把会话移进
     // archived_sessions/，与 sessions/ 零重叠），不只来自 Desk 的归档注册表。
-    return { archived: item.archived === true || keys.includes(historyId(entry, item.sessionKey, item.nativeSessionId)) || legacy,
-      safeErrorCode: legacy && oldKeyMatches(old).length !== 1 ? 'SESSION_ORIGIN_AMBIGUOUS' : null }
+    return { archived: item.archived === true || keys.includes(historyId(entry, item.sessionKey, item.nativeSessionId)) || legacy || bare,
+      safeErrorCode: (legacy && oldKeyMatches(old).length !== 1) || bareAmbiguous ? 'SESSION_ORIGIN_AMBIGUOUS' : null }
   }
 
   function requireTab(id: string): NativeCliTab {
@@ -565,6 +581,16 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
       if (deps.archive.getArchivedSessions(history.projectPath).includes(old)) {
         if (oldKeyMatches(old).length !== 1) throw new Error('SESSION_ORIGIN_AMBIGUOUS')
         await deps.archive.restoreSession(history.projectPath, old)
+      }
+      // legacy 注册的裸 session ID 归档同样要解除，否则折叠后的行仍显示归档。
+      // 与 archiveState 同一门槛：只在根身份证明为 legacy 固定根且唯一匹配时清除，
+      // 否则保留并如实报歧义，不猜测归属。
+      const bare = match.item.nativeSessionId
+      const legacyRoot = deps.legacyClaudeRootKey?.()
+      const sameLegacyRoot = legacyRoot !== undefined && match.entry.sourceRootKey === legacyRoot
+      if (sameLegacyRoot && deps.archive.getArchivedSessions(history.projectPath).includes(bare)) {
+        if (bareIdMatches(bare).length !== 1) throw new Error('SESSION_ORIGIN_AMBIGUOUS')
+        await deps.archive.restoreSession(history.projectPath, bare)
       }
     }
     if (deps.archive.getArchivedSessions(history.projectPath).includes(id)) await deps.archive.restoreSession(history.projectPath, id)

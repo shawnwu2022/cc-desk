@@ -29,6 +29,21 @@ function projectName(path: string): string {
   return parts.length ? parts[parts.length - 1] : path
 }
 
+/**
+ * 折叠 legacy 行前，把它独占的、属于同一会话的证据交给接替的 native 行：
+ * 归档状态（legacy 归档保存裸 session ID，native 侧不识别）、已保存的 Desk
+ * 显示名与最近打开时间（只挂在 legacy 记录上）。其余字段仍以 native 投影为准。
+ */
+function adoptLegacyRow(native: UnifiedSession, legacy: UnifiedSession): UnifiedSession {
+  return {
+    ...native,
+    archived: native.archived || legacy.archived,
+    title: native.title || legacy.title,
+    lastActivityAt: Math.max(native.lastActivityAt, legacy.lastActivityAt),
+    lastOpenedAt: Math.max(native.lastOpenedAt ?? 0, legacy.lastOpenedAt ?? 0),
+  }
+}
+
 function mergeDuplicateSession(existing: UnifiedSession | undefined, candidate: UnifiedSession): UnifiedSession {
   const normalized: UnifiedSession = {
     ...candidate,
@@ -359,8 +374,10 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
 
   /** legacy Claude 历史固定读 `~/.claude`；只有它的 native 根身份被证明后，同 ID 的 native 行才可折叠它。 */
   let legacyClaudeRoot: string | undefined
+  /** legacy 终端自身是否跑在默认根上；CLAUDE_CONFIG_DIR 被覆盖时为 false，反向折叠随之关闭。 */
+  let legacyTabsUseDefaultRoot = false
 
-  function configureAdapters(next: SessionAdapter[], roots?: { legacyClaudeRootKey?: string }): void {
+  function configureAdapters(next: SessionAdapter[], roots?: { legacyClaudeRootKey?: string; legacyTabsUseDefaultRoot?: boolean }): void {
     const seen = new Set<SessionRuntimeKind>()
     for (const adapter of next) {
       if (seen.has(adapter.runtime)) throw new Error('DUPLICATE_SESSION_ADAPTER')
@@ -368,6 +385,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     }
     adapters = [...next]
     legacyClaudeRoot = roots?.legacyClaudeRootKey
+    legacyTabsUseDefaultRoot = roots?.legacyTabsUseDefaultRoot === true
   }
 
   function captureSessionOwnership(id: string) {
@@ -438,28 +456,37 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
       // 不折叠，保留两端各自投影（v0.20.1 的 fail-closed 立场）。
       const sameLegacyRoot = (row: UnifiedSession) =>
         legacyClaudeRoot !== undefined && row.nativeRootKey === legacyClaudeRoot
-      const nativeHistoryKeys = new Set<string>()
+      const nativeHistoryKeys = new Map<string, UnifiedSession>()
       for (const row of byId.values()) {
         if (row.runtime === 'native-cli' && row.nativeSessionId && sameLegacyRoot(row)) {
-          nativeHistoryKeys.add(`${row.cli}\u0000${normalizePath(row.projectPath)}\u0000${row.nativeSessionId}`)
+          nativeHistoryKeys.set(`${row.cli}\u0000${normalizePath(row.projectPath)}\u0000${row.nativeSessionId}`, row)
         }
       }
       if (nativeHistoryKeys.size) {
         for (const [id, row] of byId) {
-          if (row.runtime === 'legacy-claude' && row.opened !== true
-            && nativeHistoryKeys.has(`${row.cli}\u0000${normalizePath(row.projectPath)}\u0000${row.adapterSessionId}`)) {
-            byId.delete(id)
-          }
+          if (row.runtime !== 'legacy-claude' || row.opened === true) continue
+          const native = nativeHistoryKeys.get(`${row.cli}\u0000${normalizePath(row.projectPath)}\u0000${row.adapterSessionId}`)
+          if (!native) continue
+          // 折叠前先接管 legacy 行独占的证据：归档保存的是裸 session ID，而
+          // nativeCliAdapter.archiveState 只识别完整 Native key 与旧 Native key，
+          // 直接删除会让已归档会话重新出现在普通列表；已保存的 Desk 显示名与
+          // 最近打开时间同样只挂在 legacy 记录上。
+          byId.set(native.id, adoptLegacyRow(native, row))
+          byId.delete(id)
         }
       }
       // 反向同理：同一会话已在 legacy 运行时打开时，其 native 历史行是同一
       // 内容的第二行（标题与时间来源各不相同）。隐藏关闭的 native 行，保留
       // 可选中、可关闭的打开行；关闭该 tab 后的下一次刷新会让 native 行
-      // （AI 标题与记录时间）回到列表。
+      // （AI 标题与记录时间）回到列表。但打开的 legacy 终端只有在它自己确实
+      // 跑在默认根上时才是「同源孪生」：legacy PTY 继承进程环境与
+      // claudeEnvVars，CLAUDE_CONFIG_DIR 指向其它根时不得隐藏默认根历史。
       const openLegacyKeys = new Set<string>()
-      for (const row of byId.values()) {
-        if (row.runtime === 'legacy-claude' && row.opened === true && row.nativeSessionId) {
-          openLegacyKeys.add(`${row.cli}\u0000${normalizePath(row.projectPath)}\u0000${row.nativeSessionId}`)
+      if (legacyTabsUseDefaultRoot) {
+        for (const row of byId.values()) {
+          if (row.runtime === 'legacy-claude' && row.opened === true && row.nativeSessionId) {
+            openLegacyKeys.add(`${row.cli}\u0000${normalizePath(row.projectPath)}\u0000${row.nativeSessionId}`)
+          }
         }
       }
       if (openLegacyKeys.size) {

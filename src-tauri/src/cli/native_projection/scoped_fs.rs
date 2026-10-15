@@ -71,9 +71,6 @@ impl Budget {
     pub(crate) fn history_metadata_incomplete(&self) -> bool {
         self.history_metadata_incomplete
     }
-    pub(crate) fn unobserved_history_association(&mut self) {
-        self.history_metadata_incomplete = true;
-    }
     /// 缓存命中不打开文件；行内恢复的「观察不完整」事实由此回到来源级标记。
     pub(crate) fn retain_history_metadata_incomplete(&mut self) {
         self.history_metadata_incomplete = true;

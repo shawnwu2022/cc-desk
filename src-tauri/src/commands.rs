@@ -535,15 +535,34 @@ pub(crate) async fn native_list_resources(
     runtime.projection_read(&webview, &request).await
 }
 
-/// legacy Claude 历史固定读取 `~/.claude`。返回该目录的 native 根身份 key
-/// （与 SourceRef.sourceRootKey 同源同格式），前端只在 native 来源根与之相等时
-/// 才折叠重复历史行；无法证明同根时不折叠，保持两端独立投影。
+/// legacy Claude 折叠证明。`rootKey` 是固定历史根 `~/.claude` 的 native 目录身份
+/// key（与 SourceRef.sourceRootKey 同源同格式）；`tabsUseDefaultRoot` 表示 legacy
+/// PTY spawn 的有效环境（进程环境 + 应用配置 claudeEnvVars）没有覆盖
+/// CLAUDE_CONFIG_DIR，即打开的 legacy 终端也在默认根上运行。两者缺一，前端就
+/// 不得折叠对应方向的重复行，保持两端独立投影。
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LegacyClaudeRootProof {
+    pub root_key: String,
+    pub tabs_use_default_root: bool,
+}
+
 #[tauri::command]
-pub async fn legacy_claude_root_key() -> Result<String, String> {
+pub async fn legacy_claude_root_key() -> Result<LegacyClaudeRootProof, String> {
     let dir = crate::store::get_claude_dir().map_err(|e| e.to_string())?;
-    crate::cli::native_projection::scoped_fs::Root::open(&dir)
+    let root_key = crate::cli::native_projection::scoped_fs::Root::open(&dir)
         .map(|root| root.key().to_owned())
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    let configured = crate::store::get_app_config()
+        .ok()
+        .and_then(|config| config.claude_env_vars)
+        .map(|vars| vars.keys().any(|name| name.eq_ignore_ascii_case("CLAUDE_CONFIG_DIR")))
+        .unwrap_or(false);
+    // Windows 环境变量名大小写不敏感，配置里写成小写同样会覆盖到子进程。
+    let inherited = std::env::vars_os()
+        .any(|(name, _)| name.to_string_lossy().eq_ignore_ascii_case("CLAUDE_CONFIG_DIR"));
+    let tabs_use_default_root = !inherited && !configured;
+    Ok(LegacyClaudeRootProof { root_key, tabs_use_default_root })
 }
 
 /// 恢复 CLI 自身归档的会话（当前仅 codex 有该子命令）。归档状态归 CLI 所有，

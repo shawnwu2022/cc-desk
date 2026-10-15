@@ -24,8 +24,8 @@ import { useProjectManagementStore } from '@/stores/projectManagement'
 import { useShellStore } from '@/stores/shell'
 import { useAttentionStore } from '@/stores/attention'
 
-const io = vi.hoisted(() => ({ projects: vi.fn(), sessions: vi.fn(), profiles: vi.fn(), registered: vi.fn(), register: vi.fn(), patchProfile: vi.fn(), getState: vi.fn(), upsertRecord: vi.fn(), setPreference: vi.fn(), scope: vi.fn(), read: vi.fn(), writeText: vi.fn(), archive: vi.fn(), restore: vi.fn(), open: vi.fn(), remove: vi.fn(), runChecks: vi.fn(), ptySpawn: vi.fn(), ptyInput: vi.fn(), ptyKill: vi.fn() }))
-vi.mock('@/api/tauri', async original => ({ ...await original<object>(), runChecks: io.runChecks, ptySpawn: io.ptySpawn, ptyInput: io.ptyInput, ptyKill: io.ptyKill, getProjectsState: io.getState, upsertSessionUiRecord: io.upsertRecord, setProjectLaunchPreference: io.setPreference, updateAppConfig: vi.fn().mockResolvedValue(undefined), getAppConfig: vi.fn().mockResolvedValue({ theme: 'light', terminalTheme: 'cc-box-light', language: 'en' }), archiveSession: io.archive, restoreSession: io.restore, getProjects: io.projects, getSessions: io.sessions, openInFileManager: io.open, createNativeProjectionClient: () => ({ scope: io.scope, read: io.read }), onHookEvent: async () => () => {} }))
+const io = vi.hoisted(() => ({ projects: vi.fn(), sessions: vi.fn(), profiles: vi.fn(), registered: vi.fn(), register: vi.fn(), patchProfile: vi.fn(), getState: vi.fn(), upsertRecord: vi.fn(), setPreference: vi.fn(), scope: vi.fn(), read: vi.fn(), writeText: vi.fn(), archive: vi.fn(), restore: vi.fn(), open: vi.fn(), remove: vi.fn(), runChecks: vi.fn(), ptySpawn: vi.fn(), ptyInput: vi.fn(), ptyKill: vi.fn(), legacyRoot: vi.fn() }))
+vi.mock('@/api/tauri', async original => ({ ...await original<object>(), runChecks: io.runChecks, ptySpawn: io.ptySpawn, ptyInput: io.ptyInput, ptyKill: io.ptyKill, getProjectsState: io.getState, upsertSessionUiRecord: io.upsertRecord, setProjectLaunchPreference: io.setPreference, updateAppConfig: vi.fn().mockResolvedValue(undefined), getAppConfig: vi.fn().mockResolvedValue({ theme: 'light', terminalTheme: 'cc-box-light', language: 'en' }), archiveSession: io.archive, restoreSession: io.restore, getProjects: io.projects, getSessions: io.sessions, openInFileManager: io.open, createNativeProjectionClient: () => ({ scope: io.scope, read: io.read }), legacyClaudeRootKey: io.legacyRoot, onHookEvent: async () => () => {} }))
 vi.mock('@/api/cli', () => ({ cliListProfiles: io.profiles, cliPatchProfile: io.patchProfile }))
 vi.mock('@/api/cliAvailability', () => ({ cliGetAvailability: async (profileId: string, profileRevision: string) => {
   const profile = useCliProfilesStore().profile(profileId)!
@@ -50,6 +50,7 @@ beforeEach(() => {
   io.profiles.mockResolvedValue({ revision: '7', profiles: [{ id: 'cx', revision: '7', cli: 'codex', name: 'CX', launcher: { kind: 'native' }, programPath: { mode: 'set', value: '/tools/codex' }, defaultArgs: { mode: 'inherit' }, skipPermissions: { mode: 'inherit' }, observer: { mode: 'inherit' }, env: {} }] })
   io.registered.mockResolvedValue({ revision: '1', projects: [{ projectId: 'project', hostId: 'host', sourcePathKey: 'source', selectedPath: '/repo', canonicalPath: '/repo', alias: { mode: 'inherit' }, pinned: { mode: 'inherit' }, hidden: { mode: 'inherit' } }] })
   io.register.mockImplementation(async path => ({ revision: '2', projectId: 'registered-new', projects: [{ projectId: 'registered-new', hostId: 'host', sourcePathKey: 'source-new', selectedPath: path, canonicalPath: path, alias: { mode: 'inherit' }, pinned: { mode: 'inherit' }, hidden: { mode: 'inherit' } }] }))
+  io.legacyRoot.mockResolvedValue({ rootKey: '', tabsUseDefaultRoot: false })
   io.scope.mockResolvedValue({ cli: 'codex' }); io.read.mockReset().mockResolvedValue({ state: 'ready', items: [{ type: 'session', projectId: 'project', sessionKey: 'root-key', nativeSessionId: 'history-id', title: 'History', cwd: '/repo' }] })
 })
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.useRealTimers(); vi.unstubAllGlobals() })
@@ -449,6 +450,22 @@ describe('Workspace source warning diagnostics', () => {
     await flushPromises()
     expect(history.all().map(entry => entry.context.profileRevision)).toEqual(change === 'profile-revision' ? ['8'] : [])
     expect(useUnifiedSessionsStore().sessions.some(row => row.nativeSessionId === 'late-history')).toBe(false)
+  })
+
+  it('reprojects the catalog when the legacy root proof arrives late', async () => {
+    // 根证明 IPC 晚于首次历史加载完成时，仅更新非响应式状态不会改动已投影的行；
+    // 必须在证明到达后重投影，否则重复行会一直保留到下一次无关刷新。
+    let resolveProof: ((value: unknown) => void) | undefined
+    io.legacyRoot.mockImplementation(() => new Promise(resolve => { resolveProof = resolve }))
+    const { runtime } = render(); await flushPromises()
+    const catalog = useUnifiedSessionsStore()
+    const refresh = vi.spyOn(catalog, 'refresh')
+    expect(resolveProof).toBeTypeOf('function')
+    expect(refresh).not.toHaveBeenCalled()
+    resolveProof!({ rootKey: 'admitted-root-key', tabsUseDefaultRoot: true })
+    await flushPromises(); await flushPromises()
+    expect(runtime.error.value).toBeNull()
+    expect(refresh).toHaveBeenCalled()
   })
 
   it('keeps incomplete empty metadata visible without turning positive history into a failed source', async () => {

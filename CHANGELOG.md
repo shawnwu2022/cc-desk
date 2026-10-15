@@ -2,8 +2,10 @@
 
 ## [Unreleased]
 
-- Fold duplicate Claude history rows again, but only when the backend proves the native source root is the legacy fixed root (`~/.claude`); a hidden native twin while the same session is open as a legacy terminal follows the same proof. Unknown or different roots keep both projections with their own archive/restore owners
-- Show the "history may be incomplete" notice only when entries were actually omitted (read failures), not for every normally bounded Claude observation; absence-evidence suppression is unchanged
+- Fold duplicate Claude history rows again, but only when the backend proves the native source root is the legacy fixed root (`~/.claude`); a hidden native twin while the same session is open as a legacy terminal requires the same proof, plus evidence that the legacy terminal itself runs on that root (a `CLAUDE_CONFIG_DIR` override disables it). Unknown or different roots keep both projections with their own archive/restore owners
+- Carry a folded-away legacy row's own evidence onto the surviving native row: Desk archive entries (legacy stores the bare session id, which the native adapter now recognizes under the same root proof) and saved display name/opened time
+- Reproject the session catalog when the legacy root proof arrives after the first history load, so duplicate rows do not persist until an unrelated refresh
+- Show the "history may be incomplete" notice only when entries were actually omitted (read failures), not for every normally bounded Claude observation; entries skipped because no project association could be observed now count as omissions instead of only raising the completeness flag
 - Expose the legacy Claude root identity to the frontend via a new read-only command used for the folding proof
 
 ## [0.20.1] - 2026-10-15

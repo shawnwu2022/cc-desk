@@ -1517,8 +1517,9 @@ fn HistoryClaude_UnknownAndMetadataOnlySemantics_017() {
             Some("SOURCE_UNSUPPORTED"),
         ),
         (
+            // 有标题但无 cwd：无法归属任何注册项目，属真实省略（计一次读失败）。
             "{\"type\":\"custom-title\",\"customTitle\":\"known\"}\n",
-            None,
+            Some("SOURCE_UNSUPPORTED"),
         ),
     ] {
         let temp = tempfile::tempdir().unwrap();
@@ -1887,6 +1888,8 @@ fn HistoryClaude_RejectMainTranscriptLink_022() {
 
 // A complete recognized metadata file without cwd is globally observable, but
 // cannot prove absence under a particular registered project. No directory-name inference.
+// The unattributable row is omitted and disclosed as a counted read failure, so the
+// "list may be incomplete" notice stays honest after it was narrowed to real omissions.
 #[test]
 #[allow(non_snake_case)]
 fn HistoryClaude_UnassociatedMetadataIsPartial_023() {
@@ -1906,7 +1909,11 @@ fn HistoryClaude_UnassociatedMetadataIsPartial_023() {
         budget.history_metadata_incomplete(),
         "missing association cannot establish complete project absence"
     );
-    assert!(budget.history_read_failures().is_empty());
+    assert_eq!(
+        budget.history_read_failures(),
+        ["SOURCE_UNSUPPORTED"],
+        "unattributable omission must be disclosed as a counted failure"
+    );
 
     let mut global_budget = Budget::new(super::super::super::scoped_fs::Limits::default());
     let global = read(
