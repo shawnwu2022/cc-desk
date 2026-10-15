@@ -18,6 +18,8 @@ impl TitlePriority {
         }
     }
 }
+/// 有界标题尾读的结果：优先标题候选，以及尾段观察到的最新记录时间。
+type BoundedTitleResult = (Option<(String, TitlePriority)>, Option<String>);
 struct Transcript {
     id: String,
     cwd: Option<String>,
@@ -162,13 +164,20 @@ pub(super) fn read(
             }
             let enriched = enrich_claude_title(c, transcript, b);
             match enriched {
-                Ok(Some((title, priority)))
-                    if transcript.title_priority.is_none_or(|old| priority >= old) =>
-                {
-                    transcript.title = title;
-                    transcript.title_priority = Some(priority);
+                Ok((candidate, tail_updated)) => {
+                    // 尾读观察到的更新时间总是可采用的证据，与标题候选无关。
+                    if let Some(newer) = tail_updated {
+                        if transcript.updated.as_ref().is_none_or(|old| newer > *old) {
+                            transcript.updated = Some(newer);
+                        }
+                    }
+                    if let Some((title, priority)) = candidate {
+                        if transcript.title_priority.is_none_or(|old| priority >= old) {
+                            transcript.title = title;
+                            transcript.title_priority = Some(priority);
+                        }
+                    }
                 }
-                Ok(_) => {}
                 Err(code) if b.omit_history_entry(code) => {}
                 Err(code) => return Err(code),
             }
@@ -733,14 +742,14 @@ fn enrich_claude_title(
     catalog: &Catalog<'_>,
     transcript: &Transcript,
     budget: &mut Budget,
-) -> ReadResult<Option<(String, TitlePriority)>> {
+) -> ReadResult<BoundedTitleResult> {
     let Some((header, tail, cut_first)) = catalog.history_title_tail(
         &transcript.source_path,
         transcript.observation_bytes,
         budget,
     )?
     else {
-        return Ok(None);
+        return Ok((None, None));
     };
     let end = header
         .iter()
@@ -768,6 +777,7 @@ fn enrich_claude_title(
         0
     };
     let mut candidate = None;
+    let mut tail_updated: Option<String> = None;
     for line in text(&tail[start..])?
         .lines()
         .filter(|line| !line.trim().is_empty())
@@ -781,6 +791,9 @@ fn enrich_claude_title(
         // 同一转录内的 cwd 会随会话进入子目录而变化（例如 root/web、root/mobile/android），
         // 首段观察到的只是其中一个取值。这里不再比对 cwd：行归属已由首段观察决定，
         // 尾段只用于提取标题，其身份约束由上面的 sessionId 校验承担。
+        if let Some(stamp) = value["timestamp"].as_str().filter(|stamp| stamp.len() <= 64) {
+            tail_updated = std::cmp::max(tail_updated, Some(stamp.to_owned()));
+        }
         let title = match value["type"].as_str() {
             Some("ai-title") => Some((claude_ai_title(&value, &transcript.id)?, TitlePriority::Ai)),
             Some("custom-title") => value["customTitle"]
@@ -794,7 +807,7 @@ fn enrich_claude_title(
             }
         }
     }
-    Ok(candidate)
+    Ok((candidate, tail_updated))
 }
 
 // Official SDK 0.2.165 (bundled CLI 2.1.296) demonstrates permission-mode
@@ -1025,6 +1038,7 @@ fn parse_metadata(path: &str, cli: CliKind, input: &str) -> ReadResult<Transcrip
     let mut title = None;
     let mut explicit_title = None;
     let mut ai_title = None;
+    let mut observed_updated: Option<String> = None;
     let mut recognized = false;
     for line in input.lines().filter(|line| !line.trim().is_empty()) {
         let value: Value = serde_json::from_str(line).map_err(|_| "SOURCE_INVALID")?;
@@ -1111,6 +1125,10 @@ fn parse_metadata(path: &str, cli: CliKind, input: &str) -> ReadResult<Transcrip
             }
             cwd = Some(observed.to_owned());
         }
+        // 与 codex 尾部时间同语义：已观察记录的时间是最新部分证据（ISO 字典序即时间序）。
+        if let Some(stamp) = value["timestamp"].as_str().filter(|stamp| stamp.len() <= 64) {
+            observed_updated = std::cmp::max(observed_updated, Some(stamp.to_owned()));
+        }
     }
     if !recognized {
         return Err("SOURCE_UNSUPPORTED");
@@ -1144,7 +1162,7 @@ fn parse_metadata(path: &str, cli: CliKind, input: &str) -> ReadResult<Transcrip
             .or(ai_title)
             .or(title)
             .unwrap_or_else(|| "Untitled".into()),
-        updated: None,
+        updated: observed_updated,
         messages: Vec::new(),
         metadata_incomplete: true,
         title_priority,

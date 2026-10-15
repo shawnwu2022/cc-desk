@@ -1633,14 +1633,8 @@ fn HistoryClaude_ObservedTitleAndTime_020() {
         };
         assert_eq!(title, "observed latest title");
         assert_eq!(*truncated, partial);
-        assert_eq!(
-            updated_at.as_deref(),
-            if partial {
-                None
-            } else {
-                Some("2026-10-10T07:00:00Z")
-            }
-        );
+        // 有界观察携带已观察记录的最新时间；partial 的 08:00 大记录被窗口截断不计入。
+        assert_eq!(updated_at.as_deref(), Some("2026-10-10T07:00:00Z"));
     }
 }
 
@@ -1816,7 +1810,8 @@ fn HistoryClaude_AiTitleSchemaAndPrecedence_024() {
 fn claude_tail_input(cwd: &Path, tail: &str) -> String {
     format!(
         "{}\n{}\n{tail}",
-        json!({"type":"user","cwd":cwd.to_str().unwrap(),"sessionId":"fixture","message":{"content":"first prompt"}}),
+        // cwd 行必然落在自适应头窗口内；它携带的时间是观察到的部分证据。
+        json!({"type":"user","cwd":cwd.to_str().unwrap(),"sessionId":"fixture","timestamp":"2026-10-10T09:00:00Z","message":{"content":"first prompt"}}),
         json!({"type":"assistant","timestamp":"2026-10-10T09:00:00Z","message":{"content":"a".repeat(150 * 1024)}}),
     )
 }
@@ -1836,7 +1831,8 @@ fn HistoryClaude_BoundedTailTitle_025() {
         let items = read_claude_history_fixture(&root, &[temp.path().to_owned()], &mut budget).unwrap();
         let ResourceItem::Session { title, updated_at, truncated, .. } = &items[0] else { panic!("session metadata") };
         assert_eq!(title, expected);
-        assert!(updated_at.is_none(), "tail display enrichment is not complete activity evidence");
+        // 头窗口观察到的记录时间是真实证据；尾读只能在更完整时纠正它。
+        assert_eq!(updated_at.as_deref(), Some("2026-10-10T09:00:00Z"));
         assert!(*truncated);
         assert!(budget.history_metadata_incomplete());
     }
@@ -2199,6 +2195,44 @@ fn HistoryClaude_TailCwdVariationKeepsRow_037() {
         assert_eq!(title, "generated title");
         assert_eq!(cwd.as_deref(), Some(temp.path().to_str().unwrap()));
     }
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_BoundedObservationKeepsObservedTimestamp_038() {
+    let input = format!(
+        "{}\n{}\n",
+        json!({"type":"user","cwd":"/synthetic/project","sessionId":"fixture","timestamp":"2026-10-10T01:00:00Z","message":{"content":"task"}}),
+        json!({"type":"assistant","timestamp":"2026-10-10T02:00:00Z"}),
+    );
+    let transcript = parse_metadata("fixture.jsonl", CliKind::Claude, &input).unwrap();
+    // 有界观察不宣称完整流，但已观察到的记录时间仍是最新的部分证据，
+    // 不得退回 None 让会话行丢失排序与显示时间。
+    assert_eq!(transcript.updated.as_deref(), Some("2026-10-10T02:00:00Z"));
+    assert!(transcript.metadata_incomplete);
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_OptionalTailRefreshesObservedTime_039() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("projects/p")).unwrap();
+    let cwd = temp.path().to_str().unwrap().to_string();
+    let tail = format!(
+        "{}\n",
+        json!({"type":"user","cwd":cwd,"sessionId":"fixture","timestamp":"2026-10-10T18:00:00Z","message":{"content":"later turn"}}),
+    );
+    std::fs::write(
+        temp.path().join("projects/p/fixture.jsonl"),
+        claude_tail_input(temp.path(), &tail),
+    )
+    .unwrap();
+    let root = Root::open(temp.path()).unwrap();
+    let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
+    let items = read_claude_history_fixture(&root, &[temp.path().to_owned()], &mut budget).unwrap();
+    let ResourceItem::Session { updated_at, .. } = &items[0] else { panic!("session metadata") };
+    // 尾读观察到的更新时间纠正头窗口的偏旧时间；两者都是真实记录证据。
+    assert_eq!(updated_at.as_deref(), Some("2026-10-10T18:00:00Z"));
 }
 
 // 文件引用头和人工评审/限制说明不能仅因正文前缀就使用户会话消失。
