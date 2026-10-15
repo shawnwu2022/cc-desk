@@ -30,6 +30,10 @@ Only sessions the user created are listed, decided by three rules. First, Codex 
 
 Claude only skips completely observed **exit-only** transcripts: the command envelopes must be exactly `/exit` or `/quit`, with no other user task, substantive assistant text/tool blocks, or explicit/AI title. Other slash commands can initiate real work and remain visible with their compact fallback title even without a plain-text user message. Unknown XML user input also prevents exclusion. A bounded observation cannot prove that the whole session was exit-only and always remains listed.
 
+Exit-only exclusion is a display filter after whole-source Claude ID uniqueness
+checks. An omitted exit transcript still conflicts with another file of the same
+ID, so History and Messages consistently reject that source as `SOURCE_AMBIGUOUS`.
+
 A session whose observed user records are all injected context (`AGENTS.md`, `<...>` blocks, `# Environment`) rather than a prompt still reaches `Untitled` when it is neither auto-marked nor an exec/vscode thread; those come from the Codex Desktop/vscode app driving a wrapper, and are left listed with an unknown title rather than hidden, because the bounded window cannot prove no genuine user message exists beyond it.
 
 Skipped rows are not charged as a failure, and messages/search still read them by explicit session id. Unknown or missing origin markers count as user-created: hiding a real session costs more than listing one extra row. `realtime_voice` is user-initiated and stays listed. On the measured root the first rule drops 1,766 of 2,131 rollouts, and because the observer stops as soon as the identity record declares a non-user origin, the cold head-window IO falls from 375 MiB to 108 MiB — those rollouts have no genuine user record and would otherwise each read the full 192 KiB window. The original eight-prefix characterization dropped a further 76 of the 365 remaining; that count is not a verified measurement after excluding ordinary file-reference, review and restriction prefixes.

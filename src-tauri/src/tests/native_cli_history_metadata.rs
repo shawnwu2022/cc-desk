@@ -1596,6 +1596,49 @@ fn HistoryClaude_DuplicateBeforeProjectFilter_019() {
     );
 }
 
+// 不显示退出行也必须核对其身份；列表和消息读取不能对同源重复 ID 得出不同结论。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_ExitOnlyDuplicate_047() {
+    for exit_first in [true, false] {
+        let temp = tempfile::tempdir().unwrap();
+        for (directory, exit_only) in [("a", exit_first), ("b", !exit_first)] {
+            std::fs::create_dir_all(temp.path().join(format!("projects/{directory}"))).unwrap();
+            let input = format!(
+                "{}\n",
+                json!({"type":"user","sessionId":"same-id",
+                    "cwd":if exit_only { "/synthetic/foreign" } else { temp.path().to_str().unwrap() },
+                    "message":{"content":if exit_only { "<command-name>/exit</command-name>" } else { "real task" }}}),
+            );
+            std::fs::write(
+                temp.path()
+                    .join(format!("projects/{directory}/same-id.jsonl")),
+                input,
+            )
+            .unwrap();
+        }
+        let root = Root::open(temp.path()).unwrap();
+        for kind in [ResourceKind::History, ResourceKind::Messages] {
+            let result = read(
+                &Catalog {
+                    cli: CliKind::Claude,
+                    root: &root,
+                    projects: &granted(&root, &[temp.path().to_owned()]),
+                    user_config: None,
+                    check: &|| Ok(()),
+                },
+                &Options {
+                    kind,
+                    query: None,
+                    session_id: Some("same-id"),
+                },
+                &mut Budget::new(super::super::super::scoped_fs::Limits::default()),
+            );
+            assert_eq!(result.err(), Some("SOURCE_AMBIGUOUS"));
+        }
+    }
+}
+
 // Preserve titles and native time from a complete observed file. A partial file
 // can retain observed explicit titles but never promote its observed time to latest.
 // Claude Code 把 slash 命令调用写成首条 user 记录的 XML 封套（/model、/clear 等）。

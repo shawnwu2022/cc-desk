@@ -70,7 +70,7 @@ pub(super) fn read(
         // Ok(None) 表示这一行不是用户主动创建的会话，直接跳过而不计入任何失败。
         let parsed: ReadResult<Option<Transcript>> = (|| {
             // Codex 历史走缓存 + 一次打开的头窗口观察：身份取自 session_meta，
-            // 标题取自首条用户消息，时间取自尾部。命中缓存则不读文件。
+            // 标题取自首条用户消息，时间取自尾部。命中缓存仍校验当前身份。
             if o.kind == ResourceKind::History && c.cli == CliKind::Codex {
                 return codex_history(c, &path, b, &mut observation_bytes);
             }
@@ -109,6 +109,10 @@ pub(super) fn read(
             }
             Err(code) => return Err(code),
         };
+        // 行是否展示不能削弱全源身份检查，退出行也可能与另一目录的会话重名。
+        if c.cli == CliKind::Claude && !seen.insert(transcript.id.clone()) {
+            return Err("SOURCE_AMBIGUOUS");
+        }
         // 只有完整观察才能证明「从未有过真实用户输入」；有界观察未覆盖全程时
         // 照常列出（fail-open），不因未读到标题而隐藏真实会话。
         if o.kind == ResourceKind::History
@@ -123,9 +127,6 @@ pub(super) fn read(
             // 头窗口是否覆盖用户消息影响。
             transcript.title = name.clone();
             transcript.title_priority = Some(TitlePriority::Custom);
-        }
-        if c.cli == CliKind::Claude && !seen.insert(transcript.id.clone()) {
-            return Err("SOURCE_AMBIGUOUS");
         }
         // 一次观察服务多个已注册项目：cwd 唯一归属一个项目；无归属行不进入任何项目。
         let owner = if c.projects.is_empty() {

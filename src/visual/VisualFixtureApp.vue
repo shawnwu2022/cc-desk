@@ -82,7 +82,9 @@ if (scenario === 'session-status') {
     { activityState: 'idle' }, { activityState: 'working' }, { activityState: 'thinking' },
     { activityState: 'tool_executing' }, { activityState: 'subagent_running' }, { activityState: 'compacting' },
     { attentionState: 'needs-user' }, { activityState: 'waiting_input' }, { activityState: 'waiting_permission' },
-    { attentionKind: 'completed' }, { activityState: 'error' }, { activityState: 'unknown' },
+    { attentionKind: 'completed' }, { activityState: 'error' },
+    // 字形表显式提供已激活通道下的未知状态；无通道的真实行仍显示中性运行态。
+    { activityState: 'unknown', observationState: 'active' },
     { processState: 'starting' }, { processState: 'unknown' }, { processState: 'failed' },
     { processState: 'stopped', opened: true }, { processState: 'stopped', opened: false, resumable: true },
   ]
