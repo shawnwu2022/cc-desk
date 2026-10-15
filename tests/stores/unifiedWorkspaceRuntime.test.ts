@@ -310,7 +310,7 @@ describe('Workspace source warning diagnostics', () => {
     const known = Date.parse(item.updatedAt)
     expect(useUnifiedSessionsStore().sessions[0].lastActivityAt).toBe(known)
     const { updatedAt: _updated, ...summary } = item
-    io.read.mockResolvedValue({ state: 'ready', items: [{ ...summary, truncated: true }], hasMore: false, historyMetadataIncomplete: true })
+    io.read.mockResolvedValue({ state: 'ready', items: [{ ...summary, truncated: true }], hasMore: false, historyMetadataIncomplete: true, historyReadFailures: ['SOURCE_TOO_LARGE'] })
     await runtime.refresh()
     expect(useNativeHistoryStore().all()[0].sessions[0].updatedAt).toBeUndefined()
     expect(useNativeHistoryStore().all()[0].absenceEvidence).toBeUndefined()
@@ -452,9 +452,14 @@ describe('Workspace source warning diagnostics', () => {
   })
 
   it('keeps incomplete empty metadata visible without turning positive history into a failed source', async () => {
+    // 仅截断观察（无省略）是 Claude 有界读取的常态：缺席证据仍被抑制，但不再
+    // 常驻横幅；确有省略（读失败）时横幅才亮起并在完整刷新后熄灭。
     io.read.mockResolvedValue({ state: 'ready', reason: null, items: [], hasMore: false, historyMetadataIncomplete: true })
     const { runtime } = render(); await flushPromises()
     expect(runtime.error.value).toBeNull()
+    expect(runtime.historyMetadataPartial.value).toBe(false)
+    io.read.mockResolvedValue({ state: 'ready', reason: null, items: [], hasMore: false, historyMetadataIncomplete: true, historyReadFailures: ['SOURCE_TOO_LARGE'] })
+    await runtime.refresh()
     expect(runtime.historyMetadataPartial.value).toBe(true)
     io.read.mockResolvedValue({ state: 'ready', reason: null, items: [], hasMore: false })
     await runtime.refresh()

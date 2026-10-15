@@ -535,6 +535,17 @@ pub(crate) async fn native_list_resources(
     runtime.projection_read(&webview, &request).await
 }
 
+/// legacy Claude 历史固定读取 `~/.claude`。返回该目录的 native 根身份 key
+/// （与 SourceRef.sourceRootKey 同源同格式），前端只在 native 来源根与之相等时
+/// 才折叠重复历史行；无法证明同根时不折叠，保持两端独立投影。
+#[tauri::command]
+pub async fn legacy_claude_root_key() -> Result<String, String> {
+    let dir = crate::store::get_claude_dir().map_err(|e| e.to_string())?;
+    crate::cli::native_projection::scoped_fs::Root::open(&dir)
+        .map(|root| root.key().to_owned())
+        .map_err(|e| e.to_string())
+}
+
 /// 恢复 CLI 自身归档的会话（当前仅 codex 有该子命令）。归档状态归 CLI 所有，
 /// 这里只请求 CLI 执行 `unarchive`，Desk 不触碰 CLI 的归档文件。
 #[tauri::command]

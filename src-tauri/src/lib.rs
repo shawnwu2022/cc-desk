@@ -252,6 +252,7 @@ fn run_ordinary(initial_dir: Option<String>, #[cfg(windows)] startup: DesktopSta
             commands::native_get_scope,
             commands::native_list_resources,
             commands::native_unarchive_session,
+            commands::legacy_claude_root_key,
             cli::commands::cli_start,
             cli::commands::cli_get_launch_status,
             cli::commands::cli_cancel_launch,

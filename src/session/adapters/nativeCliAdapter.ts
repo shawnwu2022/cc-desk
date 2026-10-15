@@ -165,6 +165,7 @@ function projectHistory(entry: NativeHistoryEntry, item: NativeHistoryEntry['ses
     resumable: true,
     adapterSessionId: item.sessionKey,
     nativeSessionId: item.nativeSessionId,
+    nativeRootKey: entry.sourceRootKey,
     launchConfigId: entry.context.profileId,
     nativeOrigin: { ...entry.context },
     safeErrorCode: null,
@@ -265,7 +266,9 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
     // 唯一历史对应存在时（观察器回填身份后），活动行跟随 CLI 记录的标题
     // （首条消息 / AI 摘要 / 手动改名），而不是停留在本地占位名 "Claude Code"。
     // 保存的 Desk 显示名在 withSessionDisplayName 内仍优先于 CLI 标题。
-    const titled = identity.id.startsWith(HISTORY_PREFIX) ? { ...row, title: identity.title } : row
+    const titled = identity.id.startsWith(HISTORY_PREFIX)
+      ? { ...row, title: identity.title, ...(identity.nativeRootKey ? { nativeRootKey: identity.nativeRootKey } : {}) }
+      : row
     // 首次认证身份晚于用户改名时，未知身份下保存的名称仍属于这个 tab。
     // 仅用于当前终端显示；不猜测或迁移独立历史的 metadata key。
     const earlyNamed = withSessionDisplayName(titled, deps.metadata, { ...row, nativeSessionId: null })

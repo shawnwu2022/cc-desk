@@ -1,6 +1,6 @@
 import { computed, shallowRef, nextTick, onMounted, onUnmounted, ref, watch, type Ref } from 'vue'
 import { writeText } from '@tauri-apps/plugin-clipboard-manager'
-import { openInFileManager, nativeUnarchiveSession } from '@/api/tauri'
+import { openInFileManager, nativeUnarchiveSession, legacyClaudeRootKey } from '@/api/tauri'
 import { createNativeId } from '@/utils/nativeId'
 import { useAppStore } from '@/stores/app'
 import { useSessionStore } from '@/stores/session'
@@ -40,6 +40,8 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   const attention = useAttentionStore()
   const shell = useShellStore()
   const legacyPaths = ref<string[]>([])
+  /** legacy 固定根（~/.claude）的 native 身份 key；取到后才允许折叠同 ID 的 native 行。 */
+  let legacyClaudeRoot: string | undefined
   const error = ref<string | null>(null)
   const sourceWarnings = ref<WorkspaceSourceWarning[]>([])
   const sourceWarningsTruncated = ref(false)
@@ -64,7 +66,11 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   const relevantHistoryEntries = computed(() => history.all().filter(entry => profiles.profile(entry.context.profileId)?.revision === entry.context.profileRevision
     && workspace.projects.some(project => project.projectId === entry.context.projectId && sameProjectPath(project.selectedPath, entry.context.projectPath))))
   const currentHistoryEntries = computed(() => relevantHistoryEntries.value.filter(entry => entry.loaded && !entry.error))
-  const historyMetadataPartial = computed(() => currentHistoryEntries.value.some(entry => entry.metadataIncomplete))
+  // 横幅只对「确有省略」的来源亮起：读失败/整条省略才会让列表可能不完整。
+  // 有界观察（Claude 头窗口按设计在 cwd+标题处停）本身不是列表缺陷，把每个
+  // 正常扫描都标成“可能不完整”会让横幅变成常驻噪音（实测 48/50 行如此）。
+  // metadataIncomplete 仍继续承担缺席证据抑制，二者语义在此分叉。
+  const historyMetadataPartial = computed(() => currentHistoryEntries.value.some(entry => (entry.readFailures?.length ?? 0) > 0))
   const historyReadWarnings = computed(() => {
     const warnings = createWorkspaceSourceWarnings()
     for (const entry of currentHistoryEntries.value) for (const code of entry.readFailures ?? []) {
@@ -74,7 +80,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   })
   // Fixed diagnostics + canonical context/root identity, never raw transcript data.
   // Project navigation does not reset this workspace-owned acknowledgement.
-  const historyNoticeKeys = computed(() => currentHistoryEntries.value.filter(entry => entry.metadataIncomplete).map(entry =>
+  const historyNoticeKeys = computed(() => currentHistoryEntries.value.filter(entry => (entry.readFailures?.length ?? 0) > 0).map(entry =>
     JSON.stringify([entry.key, entry.sourceRootKey ?? null, [...(entry.readFailures ?? [])].sort()])))
   const historyNoticeDismissed = computed(() => historyNoticeKeys.value.length > 0
     && historyNoticeKeys.value.every(key => acknowledgedHistoryWarnings.value.has(key)))
@@ -220,6 +226,14 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   if (enabled) {
     // Subscribe attention before child TerminalView status consumers mount.
     attention.init()
+    // 折叠 legacy/native 重复历史行的前提是根身份已证明：后端给出 legacy 固定根
+    // （~/.claude）的 native key，与每个 native 行的来源根比较。取不到时保持
+    // 未知，store 端不折叠（v0.20.1 的 fail-closed 立场）。
+    void legacyClaudeRootKey().then(key => {
+      if (disposed || !key) return
+      legacyClaudeRoot = key
+      catalog.configureAdapters(sessionAdapters, { legacyClaudeRootKey: legacyClaudeRoot })
+    }).catch(() => undefined)
     catalog.configureUnknownRestartRecovery(async (id, canContinue) => {
       const row = catalog.sessions.find(row => row.id === id)
       if (row?.runtime !== 'native-cli') throw new Error('LAUNCH_STATE_UNKNOWN')
@@ -265,7 +279,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
       }))
       return partial
     })
-    catalog.configureAdapters([
+    const sessionAdapters = [
       createLegacyClaudeAdapter({ store: legacy, metadata: projects, attention, captureProjectAdmission: app.captureProjectAdmission, projectPaths: () => [...new Set([...legacyPaths.value, ...projects.pinnedProjects])],
         runtime: {
           startTab: id => {
@@ -286,7 +300,8 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
         runtime: { createTab: createNativeTab, restartTab: restartNative,
           stopTab: tab => requireHost().stopNative(tab.tabId, captureNativeAttempt(tab)),
           renameTab: (tabId, title, admission) => requireHost().renameNative(tabId, title, admission) } }),
-    ])
+    ]
+    catalog.configureAdapters(sessionAdapters)
   }
 
   async function refresh() {

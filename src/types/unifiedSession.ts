@@ -91,6 +91,8 @@ export interface UnifiedSession {
   resumable: boolean
   adapterSessionId: string
   nativeSessionId?: string | null
+  /** native 来源根身份（SourceRef.sourceRootKey）；仅 native 行携带。折叠重复历史行前必须与 legacy 固定根比较，相等才证明同源。 */
+  nativeRootKey?: string
   launchConfigId?: string | null
   nativeOrigin?: NativeSessionOrigin
   safeErrorCode?: string | null

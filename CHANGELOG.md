@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Fold duplicate Claude history rows again, but only when the backend proves the native source root is the legacy fixed root (`~/.claude`); a hidden native twin while the same session is open as a legacy terminal follows the same proof. Unknown or different roots keep both projections with their own archive/restore owners
+- Show the "history may be incomplete" notice only when entries were actually omitted (read failures), not for every normally bounded Claude observation; absence-evidence suppression is unchanged
+- Expose the legacy Claude root identity to the frontend via a new read-only command used for the folding proof
+
 ## [0.20.1] - 2026-10-15
 
 - Preserve XML-leading user prompts as Claude history titles, retain early tab display names when authenticated history identity arrives, and keep newer known display timestamps across partial reads of the same exact source

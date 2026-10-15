@@ -220,6 +220,11 @@ export const restoreSession = (projectPath: string, sessionId: string): Promise<
 export const deleteSessions = (projectPath: string, sessionIds: string[]): Promise<ProjectsState> =>
   invoke<ProjectsState>('delete_sessions', { projectPath, sessionIds });
 
+/** legacy Claude 历史固定根（~/.claude）的 native 根身份 key；与 SourceRef.sourceRootKey 同源可比较。 */
+export async function legacyClaudeRootKey(): Promise<string> {
+  return invoke<string>('legacy_claude_root_key');
+}
+
 export const setDisplayName = (path: string, alias: string): Promise<ProjectsState> =>
   invoke<ProjectsState>('set_display_name', { path, alias });
 
