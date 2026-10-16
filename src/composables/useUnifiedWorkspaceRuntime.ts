@@ -40,8 +40,30 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   const attention = useAttentionStore()
   const shell = useShellStore()
   const legacyPaths = ref<string[]>([])
-  /** legacy 固定根（~/.claude）的 native 身份 key；取到后才允许折叠同 ID 的 native 行。 */
+  /** 根证明只绑定本 runtime 初始目录；替换或验证失败即撤销，不能重绑旧终端和缓存。 */
   let legacyClaudeRoot: string | undefined
+  let legacyRootRetired = false
+  let legacyRootValidation: Promise<string | undefined> | undefined
+  function validateLegacyClaudeRoot(): Promise<string | undefined> {
+    const expected = legacyClaudeRoot
+    if (!expected || legacyRootRetired || disposed) return Promise.resolve(undefined)
+    if (legacyRootValidation) return legacyRootValidation
+    const validation = legacyClaudeRootKey().then(proof => {
+      if (disposed || legacyRootRetired) return undefined
+      if (proof?.rootKey === expected) return expected
+      legacyRootRetired = true
+      legacyClaudeRoot = undefined
+      return undefined
+    }).catch(() => {
+      legacyRootRetired = true
+      legacyClaudeRoot = undefined
+      return undefined
+    }).finally(() => {
+      if (legacyRootValidation === validation) legacyRootValidation = undefined
+    })
+    legacyRootValidation = validation
+    return validation
+  }
   const error = ref<string | null>(null)
   const sourceWarnings = ref<WorkspaceSourceWarning[]>([])
   const sourceWarningsTruncated = ref(false)
@@ -227,13 +249,13 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     // Subscribe attention before child TerminalView status consumers mount.
     attention.init()
     // 折叠 legacy/native 重复历史行的前提是根身份已证明：后端给出 legacy 固定根
-    // （~/.claude）的 native key，以及 legacy 终端自身是否也跑在该根上。取不到时
+    // （~/.claude）的 native key；终端自身另持有本次启动的环境/shell 证明。取不到时
     // 保持未知，store 端不折叠（v0.20.1 的 fail-closed 立场）。该 IPC 晚于首次
     // 历史加载完成时，仅更新非响应式状态不会改动已投影的行，必须重投影一次。
     void legacyClaudeRootKey().then(proof => {
       if (disposed || !proof?.rootKey) return
       legacyClaudeRoot = proof.rootKey
-      catalog.configureAdapters(sessionAdapters, { legacyClaudeRootKey: legacyClaudeRoot })
+      catalog.configureAdapters(sessionAdapters, { legacyClaudeRootKey: legacyClaudeRoot, validateLegacyClaudeRoot })
       // 该 IPC 晚于首次历史加载完成时，仅更新非响应式状态不会改动已投影的行。
       void refreshCatalog().catch(() => undefined)
     }).catch(() => undefined)
@@ -292,7 +314,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
           }, stopTab: id => requireHost().stopLegacy(id),
           restartTab: id => requireHost().restartLegacy(id), renameTab: (id, title, admission) => requireHost().renameLegacy(id, title, admission),
         } }),
-      createNativeCliAdapter({ tabs: native, history, metadata: projects, legacyClaudeRootKey: () => legacyClaudeRoot, archive: { getArchivedSessions: legacy.getArchivedSessions, archiveSession: projects.archiveSession, restoreSession: projects.restoreSession },
+      createNativeCliAdapter({ tabs: native, history, metadata: projects, legacyClaudeRootKey: validateLegacyClaudeRoot, archive: { getArchivedSessions: legacy.getArchivedSessions, archiveSession: projects.archiveSession, restoreSession: projects.restoreSession },
         cliUnarchive: { unarchive: (context, nativeSessionId) => {
           if (app.isProjectAdmissionBlocked(context.projectPath)) throw new Error('PROJECT_REMOVAL_IN_PROGRESS')
           // 只有 codex 有 CLI 侧归档；claude 行不进入此路径。
@@ -304,7 +326,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
           stopTab: tab => requireHost().stopNative(tab.tabId, captureNativeAttempt(tab)),
           renameTab: (tabId, title, admission) => requireHost().renameNative(tabId, title, admission) } }),
     ]
-    catalog.configureAdapters(sessionAdapters, { legacyClaudeRootKey: legacyClaudeRoot })
+    catalog.configureAdapters(sessionAdapters, { legacyClaudeRootKey: legacyClaudeRoot, validateLegacyClaudeRoot })
   }
 
   async function refresh() {

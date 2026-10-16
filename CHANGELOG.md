@@ -11,6 +11,7 @@
 - Reproject the session catalog when the legacy root proof arrives after the first history load, so duplicate rows do not persist until an unrelated refresh
 - Show the "history may be incomplete" notice only when entries were actually omitted (read failures), not for every normally bounded Claude observation; entries skipped because no project association could be observed now count as omissions instead of only raising the completeness flag
 - Expose the legacy Claude root identity to the frontend via a new read-only command used for the folding proof
+- Revalidate the initial physical Legacy root for every projection and bare-ID restore, retire its folding lease after replacement or failed validation, preserve Legacy archive restore owners when Native origins are ambiguous, and revoke prior launch proof before publishing a new PTY generation. Interactive Bash, PowerShell profiles and configured Windows `USERPROFILE` overrides keep their actual root unknown
 
 Windows source-build acceptance confirmed 13 Codex history rows across five projects in the real WebView2 session tree and verified search filtering. Archive drawer interaction, real CLI resume, cross-platform manual acceptance and D20 certification remain unverified; required main CI, authenticated coverage and three-platform signatures remain separate release gates.
 

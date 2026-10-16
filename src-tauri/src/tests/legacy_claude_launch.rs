@@ -1,8 +1,8 @@
 #![allow(non_snake_case)]
 
 use super::{
-    build_claude_command, prepare_legacy_claude_args, validate_resume_session_id,
-    validate_resume_session_ids,
+    apply_configured_claude_environment, build_claude_command, legacy_claude_root_is_proven,
+    prepare_legacy_claude_args, validate_resume_session_id, validate_resume_session_ids,
 };
 use crate::platform::{shell_quote_arg, ShellKind};
 
@@ -157,5 +157,58 @@ fn LegacyResume_OwnedPairBeforeRaw_02() {
 fn LegacyResume_BadOwnedIdRejected_03() {
     for invalid in ["", "..", "../escape", "CON", "--model", "name;calc"] {
         assert!(prepare_legacy_claude_args(Some(invalid), None).is_err());
+    }
+}
+
+#[test]
+fn LegacyRootProof_OnlyNonInteractiveGitBashPreservesEnvironmentProof_04() {
+    #[cfg(target_os = "windows")]
+    {
+        assert!(legacy_claude_root_is_proven(
+            true,
+            Some("C:\\Program Files\\Git\\bin\\bash.exe")
+        ));
+        assert!(!legacy_claude_root_is_proven(
+            false,
+            Some("C:\\Program Files\\Git\\bin\\bash.exe")
+        ));
+        assert!(!legacy_claude_root_is_proven(true, None));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        assert!(!legacy_claude_root_is_proven(true, None));
+        assert!(!legacy_claude_root_is_proven(true, Some("/bin/bash")));
+    }
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn LegacyRootProof_ConfiguredHomeKeepsEnvButRevokesProof_05() {
+    for key in ["USERPROFILE", "userprofile"] {
+        let mut cmd = portable_pty::CommandBuilder::new("claude");
+        let value = "C:\\custom-claude-home";
+        let vars = std::collections::HashMap::from([(key.to_owned(), value.to_owned())]);
+        assert!(
+            !apply_configured_claude_environment(&mut cmd, &vars),
+            "{key}"
+        );
+        assert_eq!(cmd.get_env(key), Some(std::ffi::OsStr::new(value)));
+    }
+}
+
+#[test]
+fn LegacyRootProof_ConfiguredRedirectPreservesAppliedEnvironment_06() {
+    for (key, value, proven) in [
+        ("CLAUDE_CONFIG_DIR", "C:\\alternate-root", false),
+        ("claude_config_dir", "", false),
+        ("BASH_ENV", "startup.sh", false),
+        ("bash_env", "", true),
+        ("CC_DESK_TEST_ENV", "retained", true),
+    ] {
+        let mut cmd = portable_pty::CommandBuilder::new("claude");
+        let vars = std::collections::HashMap::from([(key.to_owned(), value.to_owned())]);
+        assert_eq!(apply_configured_claude_environment(&mut cmd, &vars), proven);
+        assert_eq!(cmd.get_env(key), Some(std::ffi::OsStr::new(value)));
     }
 }

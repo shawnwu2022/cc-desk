@@ -387,8 +387,9 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
 
   /** legacy Claude 历史固定读 `~/.claude`；只有它的 native 根身份被证明后，同 ID 的 native 行才可折叠它。 */
   let legacyClaudeRoot: string | undefined
+  let validateLegacyClaudeRoot: (() => Promise<string | undefined>) | undefined
 
-  function configureAdapters(next: SessionAdapter[], roots?: { legacyClaudeRootKey?: string }): void {
+  function configureAdapters(next: SessionAdapter[], roots?: { legacyClaudeRootKey?: string; validateLegacyClaudeRoot?: () => Promise<string | undefined> }): void {
     const seen = new Set<SessionRuntimeKind>()
     for (const adapter of next) {
       if (seen.has(adapter.runtime)) throw new Error('DUPLICATE_SESSION_ADAPTER')
@@ -396,6 +397,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     }
     adapters = [...next]
     legacyClaudeRoot = roots?.legacyClaudeRootKey
+    validateLegacyClaudeRoot = roots?.validateLegacyClaudeRoot
   }
 
   function captureSessionOwnership(id: string) {
@@ -438,6 +440,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
 
     try {
       const lists = await Promise.all(adapters.map(adapter => adapter.listSessions(projectKey)))
+      const provenLegacyRoot = validateLegacyClaudeRoot ? await validateLegacyClaudeRoot() : legacyClaudeRoot
       if (fullRefreshVersion > version || (key !== undefined && !ownsProject(key))) return
 
       // Replace only the requested project. A full read also preserves scopes
@@ -465,18 +468,20 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
       // 文件索引）才是同一来源，UUID 相等本身不是证据。根身份未知或不同一律
       // 不折叠，保留两端各自投影（v0.20.1 的 fail-closed 立场）。
       const sameLegacyRoot = (row: UnifiedSession) =>
-        legacyClaudeRoot !== undefined && row.nativeRootKey === legacyClaudeRoot
-      const nativeHistoryKeys = new Map<string, UnifiedSession>()
+        provenLegacyRoot !== undefined && row.nativeRootKey === provenLegacyRoot
+      const nativeHistoryKeys = new Map<string, UnifiedSession[]>()
       for (const row of byId.values()) {
         if (row.runtime === 'native-cli' && row.nativeSessionId && sameLegacyRoot(row)) {
-          nativeHistoryKeys.set(`${row.cli}\u0000${normalizePath(row.projectPath)}\u0000${row.nativeSessionId}`, row)
+          const key = `${row.cli}\u0000${normalizePath(row.projectPath)}\u0000${row.nativeSessionId}`
+          nativeHistoryKeys.set(key, [...(nativeHistoryKeys.get(key) ?? []), row])
         }
       }
       if (nativeHistoryKeys.size) {
         for (const [id, row] of byId) {
           if (row.runtime !== 'legacy-claude' || row.opened === true) continue
-          const native = nativeHistoryKeys.get(`${row.cli}\u0000${normalizePath(row.projectPath)}\u0000${row.adapterSessionId}`)
-          if (!native) continue
+          const matches = nativeHistoryKeys.get(`${row.cli}\u0000${normalizePath(row.projectPath)}\u0000${row.adapterSessionId}`)
+          if (matches?.length !== 1 || matches[0].safeErrorCode === 'SESSION_ORIGIN_AMBIGUOUS') continue
+          const native = matches[0]
           // 折叠前先接管 legacy 行独占的证据：归档保存的是裸 session ID，而
           // nativeCliAdapter.archiveState 只识别完整 Native key 与旧 Native key，
           // 直接删除会让已归档会话重新出现在普通列表；已保存的 Desk 显示名与

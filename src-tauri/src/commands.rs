@@ -540,9 +540,9 @@ pub(crate) async fn native_list_resources(
 }
 
 /// legacy Claude 折叠证明：固定历史根 `~/.claude` 的 native 目录身份 key
-/// （与 SourceRef.sourceRootKey 同源同格式）。legacy 终端自身的根身份不在这里
-/// 一次性判定——它随每次 PTY 启动冻结（`PtySpawnResult.usesDefaultClaudeRoot`），
-/// 配置在运行期改变后旧证明不再适用。
+/// （与 SourceRef.sourceRootKey 同源同格式）。调用方每次使用前重查目录身份，
+/// 替换或验证失败时撤销旧 lease。终端环境/shell 证明另随每次 PTY 启动冻结，
+/// 不用当前配置重判已启动终端。
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LegacyClaudeRootProof {

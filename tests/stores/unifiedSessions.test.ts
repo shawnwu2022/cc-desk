@@ -1135,3 +1135,27 @@ it('Unified_OneEachRootKeepsRestoreOrigins_040', async () => {
   expect(legacy.adapter.restoreArchivedSession).toHaveBeenCalledWith('legacy-origin')
   expect(native.adapter.restoreArchivedSession).not.toHaveBeenCalled()
 })
+
+// 多个 profile 指向同一根时，Native 无法接管裸归档键，必须保留 Legacy 恢复 owner。
+it('Unified_AmbiguousTwinKeepsLegacyRestore_045', async () => {
+  const legacyRow = session({ id: 'legacy-origin', runtime: 'legacy-claude', processState: 'stopped', opened: false, archived: true, adapterSessionId: 'same-id', nativeSessionId: 'same-id' })
+  const entries: NativeHistoryEntry[] = ['profile-a', 'profile-b'].map(profileId => ({
+    key: profileId, sourceRootKey: LEGACY_ROOT,
+    context: { cli: 'claude', profileId, profileRevision: '7', projectId: 'project-1', projectPath: '/repo' },
+    sessions: [{ type: 'session', sessionKey: JSON.stringify(['local', 'claude', LEGACY_ROOT, 'same-id']), nativeSessionId: 'same-id', title: profileId, truncated: false, archived: false, cwd: '/repo', updatedAt: null }],
+    loading: false, loaded: true, error: null, requestEpoch: '1',
+  }))
+  const native = createNativeCliAdapter({
+    tabs: { tabs: new Map(), activeTabId: null, setActive: vi.fn(), close: vi.fn(), rename: vi.fn() },
+    history: { all: () => entries }, legacyClaudeRootKey: () => LEGACY_ROOT,
+    runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: vi.fn(), renameTab: vi.fn() },
+    archive: { getArchivedSessions: () => ['same-id'], archiveSession: vi.fn(), restoreSession: vi.fn() },
+  })
+  const legacy = fakeAdapter('legacy-claude', [legacyRow]), store = useUnifiedSessionsStore()
+  store.configureAdapters([legacy.adapter, native], { legacyClaudeRootKey: LEGACY_ROOT })
+  await store.refresh()
+  expect(store.sessions.filter(row => row.safeErrorCode === 'SESSION_ORIGIN_AMBIGUOUS')).toHaveLength(2)
+  expect(store.sessions.find(row => row.id === legacyRow.id)).toMatchObject({ archived: true })
+  await store.restoreArchivedSession(legacyRow.id)
+  expect(legacy.adapter.restoreArchivedSession).toHaveBeenCalledWith(legacyRow.id)
+})

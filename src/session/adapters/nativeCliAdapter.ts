@@ -64,8 +64,8 @@ export interface NativeCliAdapterDeps {
   cliUnarchive?: NativeCliUnarchivePort
   metadata?: SessionMetadataPort
   /** legacy 固定根（`~/.claude`）的目录身份 key；仅在该根被证明时才接管 legacy 的裸 ID 归档。
-   *  用取值函数而非字符串：根证明 IPC 晚于适配器创建返回。 */
-  legacyClaudeRootKey?: () => string | undefined
+   *  每次投影及恢复都重新验证，根替换后不能复用旧的归属证明。 */
+  legacyClaudeRootKey?: () => string | undefined | Promise<string | undefined>
 }
 
 function processState(status: NativeCliTab['status']): UnifiedSession['processState'] {
@@ -325,11 +325,10 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
     return deps.history.all().flatMap(entry => entry.sessions.filter(item => item.nativeSessionId === nativeSessionId)
       .map(item => ({ entry, item })))
   }
-  function archiveState(entry: NativeHistoryEntry, item: NativeHistoryEntry['sessions'][number]) {
+  function archiveState(entry: NativeHistoryEntry, item: NativeHistoryEntry['sessions'][number], legacyRoot: string | undefined) {
     const keys = deps.archive.getArchivedSessions(entry.context.projectPath)
     const old = oldHistoryId(entry, item.sessionKey, item.nativeSessionId)
     const legacy = keys.includes(old)
-    const legacyRoot = deps.legacyClaudeRootKey?.()
     const sameLegacyRoot = legacyRoot !== undefined && entry.sourceRootKey === legacyRoot
     const bare = sameLegacyRoot && keys.includes(item.nativeSessionId)
     const bareAmbiguous = bare && bareIdMatches(item.nativeSessionId).length !== 1
@@ -357,6 +356,7 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
   }
 
   async function listSessions(projectKey?: string): Promise<UnifiedSession[]> {
+    const legacyRoot = await deps.legacyClaudeRootKey?.()
     const wanted = projectKey == null ? null : normalizePath(projectKey)
     const tabs = [...deps.tabs.tabs.values()].filter(tab => wanted == null || normalizePath(tab.projectPath) === wanted)
     // Transfer the original accepted time when an exact history key becomes
@@ -375,7 +375,7 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
         const claim = historyId(entry, item.sessionKey, item.nativeSessionId)
         if (!claimed.has(claim)) sessions.push({
           ...withSessionDisplayName(projectHistory(entry, item), deps.metadata),
-          ...archiveState(entry, item),
+          ...archiveState(entry, item, legacyRoot),
           ...(closedNotices.has(claim) ? { observationNotice: { recent: { ...closedNotices.get(claim)!.recent! }, unreadReplyEnd: { ...closedNotices.get(claim)!.unreadReplyEnd! } } } : {}),
         })
       }
@@ -575,6 +575,7 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
   }
   async function restoreArchivedSession(id: string): Promise<void> {
     const history = parseHistoryId(id)
+    const legacyRoot = await deps.legacyClaudeRootKey?.()
     const match = deps.history.all().flatMap(entry => entry.sessions.filter(item => historyId(entry, item.sessionKey, item.nativeSessionId) === id).map(item => ({ entry, item })))[0]
     const keys = deps.archive.getArchivedSessions(history.projectPath)
     // 所有来源歧义必须在第一次写操作之前判定完毕：先删掉一个 key 再报歧义会让
@@ -590,7 +591,6 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
       // 与 archiveState 同一门槛：只在根身份证明为 legacy 固定根且唯一匹配时清除，
       // 否则保留并如实报歧义，不猜测归属。
       const bare = match.item.nativeSessionId
-      const legacyRoot = deps.legacyClaudeRootKey?.()
       if (legacyRoot !== undefined && match.entry.sourceRootKey === legacyRoot && keys.includes(bare)) {
         if (bareIdMatches(bare).length !== 1) throw new Error('SESSION_ORIGIN_AMBIGUOUS')
         pending.push(bare)

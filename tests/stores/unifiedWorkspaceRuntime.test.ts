@@ -468,6 +468,39 @@ describe('Workspace source warning diagnostics', () => {
     expect(refresh).toHaveBeenCalled()
   })
 
+  // 根替换或验证失败后，本 runtime 不能把旧终端/缓存的证明重新绑定到新目录。
+  it.each([{ failure: 'replaced', opened: false }, { failure: 'unavailable', opened: false }, { failure: 'replaced', opened: true }])('Runtime_LegacyRootLeaseRevoked_066: $failure/$opened', async ({ failure, opened }) => {
+    io.projects.mockResolvedValue([{ path: '/repo', name: 'Repo' }])
+    io.sessions.mockResolvedValue([{ sessionId: 'history-id', name: 'Legacy', projectPath: '/repo', lastActiveAt: 10 }])
+    io.profiles.mockResolvedValue({ revision: '7', profiles: [{ id: 'cl', revision: '7', cli: 'claude', name: 'CL', launcher: { kind: 'native' }, programPath: { mode: 'set', value: '/tools/claude' }, defaultArgs: { mode: 'inherit' }, skipPermissions: { mode: 'inherit' }, observer: { mode: 'inherit' }, env: {} }] })
+    io.scope.mockResolvedValue({ cli: 'claude', sourceRootKey: 'root-a' })
+    io.legacyRoot.mockResolvedValue({ rootKey: 'root-a' })
+    useProjectsStateStore().archivedSessions.set('/repo', ['history-id'])
+    const { runtime } = render(); await flushPromises(); await flushPromises()
+    const catalog = useUnifiedSessionsStore()
+    expect(runtime.ready.value).toBe(true)
+    expect(catalog.sessions.filter(row => row.nativeSessionId === 'history-id')).toHaveLength(1)
+    expect(catalog.sessions.find(row => row.nativeSessionId === 'history-id')).toMatchObject({ runtime: 'native-cli', archived: true })
+    if (opened) {
+      const legacy = useSessionStore(), tabId = legacy.createTab('/repo', { sessionId: 'history-id' })
+      legacy.setTabPty(tabId, 'legacy-pty')
+      legacy.setTabRootProof(tabId, 'legacy-pty', true)
+      await catalog.refresh()
+      expect(catalog.sessions.filter(row => row.nativeSessionId === 'history-id')).toHaveLength(1)
+      expect(catalog.sessions.find(row => row.nativeSessionId === 'history-id')).toMatchObject({ runtime: 'legacy-claude', opened: true, archived: false })
+    }
+    if (failure === 'replaced') io.legacyRoot.mockResolvedValue({ rootKey: 'root-b' })
+    else io.legacyRoot.mockRejectedValue(new Error('SOURCE_UNAVAILABLE'))
+    await catalog.refresh()
+    expect(catalog.sessions.filter(row => row.nativeSessionId === 'history-id')).toHaveLength(2)
+    expect(catalog.sessions.find(row => row.runtime === 'legacy-claude')).toMatchObject({ archived: !opened })
+    expect(catalog.sessions.find(row => row.runtime === 'native-cli')).toMatchObject({ archived: false })
+    expect(io.restore).not.toHaveBeenCalled()
+    io.legacyRoot.mockResolvedValue({ rootKey: 'root-a' })
+    await catalog.refresh()
+    expect(catalog.sessions.filter(row => row.nativeSessionId === 'history-id')).toHaveLength(2)
+  })
+
   it('keeps incomplete empty metadata visible without turning positive history into a failed source', async () => {
     // 仅截断观察（无省略）是 Claude 有界读取的常态：缺席证据仍被抑制，但不再
     // 常驻横幅；确有省略（读失败）时横幅才亮起并在完整刷新后熄灭。

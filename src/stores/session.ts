@@ -267,6 +267,9 @@ export const useSessionStore = defineStore('session', () => {
   function setTabPty(tabId: string, ptyId: string) {
     const tab = tabs.get(tabId)
     if (!tab) return
+    // 新 PTY 必须先撤销旧进程的根证明；同步观察者随后看到的新 generation/ptyId
+    // 只能处于未知状态，直到精确 PTY 的启动回执到达。
+    tab.usesDefaultClaudeRoot = undefined
     tab.ptyGeneration = (tab.ptyGeneration ?? 0) + 1
     tab.ptyId = ptyId
     tab.status = 'running'

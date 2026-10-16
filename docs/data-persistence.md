@@ -156,6 +156,18 @@ Adapters carry an explicitly matched Desk name as the display-only
 Legacy exact-key fallback; it never scans saved records by UUID/project or
 reconstructs another profile, revision, root or registration's history identity.
 
+Legacy folding revalidates the runtime's initial physical root key for each
+catalog projection and Native bare-ID archive restore. A changed, unavailable or
+unverifiable root retires that folding lease until a fresh runtime is created;
+existing terminal and cached-history proofs are never rebound to a new directory.
+Multiple Native candidates or an ambiguous replacement keep the Legacy archive
+restore owner visible. A new Legacy PTY generation clears its previous proof
+before publishing the new generation; only its own PTY receipt can set it again.
+Windows noninteractive Git Bash can preserve a clean environment proof. Unix
+interactive Bash, Windows PowerShell profiles, nonempty `BASH_ENV` and a configured
+Windows `USERPROFILE` override leave the actual root unknown without changing
+their existing launch behavior or environment.
+
 A new or raw Native terminal without a known authenticated history association
 can only save its name under its exact tab identity. It retains the name across a
 restart of that tab and when authenticated identity/history association appears
