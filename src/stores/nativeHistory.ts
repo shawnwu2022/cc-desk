@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { reactive } from 'vue'
 import { createNativeProjectionClient } from '@/api/tauri'
 import type { NativeCliKind } from '@/types/cli'
-import type { HistoryReadFailure, ResourceItem } from '@/types/nativeProjection'
+import type { HistoryReadFailure, ResourceItem, SourceRef } from '@/types/nativeProjection'
 import { projectionFailure, type ProjectionStage } from '@/api/nativeProjection'
 import { normalizePath } from '@/utils/path'
 
@@ -37,6 +37,7 @@ export interface NativeHistoryEntry {
   readFailures?: HistoryReadFailure[]
   /** Opaque backend-admitted identity; retained even when enumeration fails. */
   sourceRootKey?: string
+  source?: SourceRef
   requestEpoch: string
   /** Only one complete authenticated response can prove absence. Consecutive
    * pages can share a bounded backend observation, but do not grant additional
@@ -68,7 +69,7 @@ export function nativeHistoryContextKey(input: Omit<NativeHistoryContext, 'force
   ])
 }
 
-export const useNativeHistoryStore = defineStore('native-history', () => {
+export function createNativeHistoryReader() {
   const entries = reactive(new Map<string, NativeHistoryEntry>())
   const owners = new Map<string, object>()
   const inFlight = new Map<string, { owner: object; promise: Promise<NativeHistoryEntry> }>()
@@ -152,7 +153,7 @@ export const useNativeHistoryStore = defineStore('native-history', () => {
           if (!live().length) return
           if (source.cli !== profile.cli) throw new Error('PROFILE_CLI_MISMATCH')
           const sourceRootKey = typeof source.sourceRootKey === 'string' && source.sourceRootKey ? source.sourceRootKey : undefined
-          if (sourceRootKey) for (const { entry } of live()) entry.sourceRootKey = sourceRootKey
+          if (sourceRootKey) for (const { entry } of live()) { entry.sourceRootKey = sourceRootKey; entry.source = source }
           // 既有显示值的保留只对同一 backend root key 成立，跨 root 重新观察。
           for (const item of live()) {
             item.previousSessions = new Map(item.entry.sourceRootKey && item.cached?.sourceRootKey === item.entry.sourceRootKey
@@ -326,4 +327,6 @@ export const useNativeHistoryStore = defineStore('native-history', () => {
   }
 
   return { entries, get, all, load, loadGrouped, invalidate }
-})
+}
+
+export const useNativeHistoryStore = defineStore('native-history', createNativeHistoryReader)

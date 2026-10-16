@@ -6,6 +6,7 @@ export type SessionConfirmationRequest =
 
 export type ProjectConfirmationRequest =
   | { kind: 'remove-project'; title: string }
+  | { kind: 'close-project-sessions'; title: string }
   | { kind: 'delete-launch-configuration'; title: string }
 
 export interface DeleteLaunchConfigurationRequest {

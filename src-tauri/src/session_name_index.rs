@@ -87,6 +87,7 @@ pub(crate) struct SessionNameIndexPaths {
 }
 
 impl SessionNameIndexPaths {
+    #[allow(dead_code)]
     pub(crate) fn production() -> io::Result<Self> {
         let root = dirs::home_dir()
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Home directory not found"))?
@@ -124,6 +125,8 @@ pub(crate) enum RawIndexSnapshot {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct IndexSnapshot {
+    pub write_allowed: bool,
+    pub route: Option<crate::session_index_maintenance::IndexRoute>,
     pub index: SessionNameIndex,
     pub raw: RawIndexSnapshot,
     pub needs_compaction: bool,
@@ -133,6 +136,8 @@ pub(crate) struct IndexSnapshot {
 impl IndexSnapshot {
     fn empty(raw: RawIndexSnapshot, needs_compaction: bool, parse_attempted: bool) -> Self {
         Self {
+            write_allowed: true,
+            route: None,
             index: SessionNameIndex::empty(),
             raw,
             needs_compaction,
@@ -266,6 +271,8 @@ impl IndexHealth {
 }
 
 pub(crate) struct SessionNameIndexStore {
+    disabled: bool,
+    route: Option<crate::session_index_maintenance::IndexRoute>,
     paths: SessionNameIndexPaths,
     limits: IndexLimits,
     health: Arc<IndexHealth>,
@@ -288,6 +295,8 @@ impl SessionNameIndexStore {
         shared_lock_timeout: Duration,
     ) -> Self {
         Self {
+            disabled: false,
+            route: None,
             paths,
             limits,
             health,
@@ -341,15 +350,48 @@ impl SessionNameIndexStore {
 
     #[allow(dead_code)]
     pub(crate) fn production() -> io::Result<Self> {
-        Ok(Self::new(
-            SessionNameIndexPaths::production()?,
+        let route = match crate::session_index_maintenance::production().route() {
+            Ok(route) => route,
+            Err(_) => {
+                // 损坏的派生指针只禁用缓存；业务仍读取原始历史，绝不猜旧代写回。
+                let mut store = Self::new(
+                    SessionNameIndexPaths {
+                        data: PathBuf::new(),
+                        lock: PathBuf::new(),
+                    },
+                    IndexLimits::default(),
+                    Arc::new(IndexHealth::production()),
+                    Duration::from_millis(100),
+                );
+                store.disabled = true;
+                return Ok(store);
+            }
+        };
+        let mut store = Self::new(
+            SessionNameIndexPaths {
+                data: route.path("session-name-index.json"),
+                lock: route.path("session-name-index.json.lock"),
+            },
             IndexLimits::default(),
             Arc::clone(PRODUCTION_INDEX_HEALTH.get_or_init(|| Arc::new(IndexHealth::production()))),
             Duration::from_millis(100),
-        ))
+        );
+        store.route = Some(route);
+        Ok(store)
     }
 
     pub(crate) fn read_snapshot(&self) -> IndexSnapshot {
+        if self.disabled {
+            let mut snapshot = IndexSnapshot::empty(RawIndexSnapshot::Missing, false, false);
+            snapshot.write_allowed = false;
+            return snapshot;
+        }
+        let mut snapshot = self.read_snapshot_inner();
+        snapshot.route = self.route.clone();
+        snapshot
+    }
+
+    fn read_snapshot_inner(&self) -> IndexSnapshot {
         if let Some(counter) = &self.snapshot_read_counter {
             counter.fetch_add(1, Ordering::SeqCst);
         }
@@ -373,6 +415,8 @@ impl SessionNameIndexStore {
             Ok(index) if index.has_current_versions() => {
                 self.health.clear_invalid();
                 IndexSnapshot {
+                    write_allowed: true,
+                    route: self.route.clone(),
                     index,
                     raw,
                     needs_compaction,
@@ -394,6 +438,32 @@ impl SessionNameIndexStore {
     }
 
     pub(crate) fn flush_pending(&self, pending: PendingIndexFlush) -> io::Result<FlushMetrics> {
+        if self.disabled {
+            return Ok(FlushMetrics::default());
+        }
+        if let Some(route) = &pending.route {
+            let staging = crate::session_index_maintenance::production().is_staging(route);
+            let _guard = crate::session_index_maintenance::production().write_guard(route)?;
+            // detached flush 重开 production store 时，当前代可能已经变更。
+            let store = Self::new(
+                SessionNameIndexPaths {
+                    data: route.path("session-name-index.json"),
+                    lock: route.path("session-name-index.json.lock"),
+                },
+                self.limits,
+                if staging {
+                    Arc::new(IndexHealth::production())
+                } else {
+                    self.health.clone()
+                },
+                self.shared_lock_timeout,
+            );
+            return store.flush_pending_inner(pending);
+        }
+        self.flush_pending_inner(pending)
+    }
+
+    fn flush_pending_inner(&self, pending: PendingIndexFlush) -> io::Result<FlushMetrics> {
         let mut metrics = FlushMetrics::default();
         if !self.health.allows_write() {
             metrics.skipped_by_backoff = true;
@@ -1058,6 +1128,7 @@ pub(crate) struct ResolutionStats {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PendingIndexFlush {
+    pub route: Option<crate::session_index_maintenance::IndexRoute>,
     pub base_raw: RawIndexSnapshot,
     pub delta: SessionNameIndexDelta,
 }
@@ -1075,6 +1146,7 @@ pub(crate) struct SessionNameResolver {
     cached_at_ms: u64,
     stats: ResolutionStats,
     delta: SessionNameIndexDelta,
+    maintenance_failed: bool,
 }
 
 impl SessionNameResolver {
@@ -1088,6 +1160,7 @@ impl SessionNameResolver {
                 request_compaction,
                 ..SessionNameIndexDelta::default()
             },
+            maintenance_failed: false,
         }
     }
 
@@ -1109,6 +1182,17 @@ impl SessionNameResolver {
             .cloned();
         let resolution =
             resolve_session_name_at(path, initial_stamp, base.as_ref(), self.cached_at_ms);
+        if resolution.kind == ResolutionKind::FullRebuild && resolution.replacement.is_none() {
+            if let Some(route) =
+                self.snapshot.route.as_ref().filter(|route| {
+                    crate::session_index_maintenance::production().is_staging(route)
+                })
+            {
+                // 普通列表保留 Unnamed 容错；维护不能把未读取/不稳定文件当成功重建。
+                self.maintenance_failed = true;
+                crate::session_index_maintenance::production().record_failure(route);
+            }
+        }
 
         match resolution.kind {
             ResolutionKind::ExactHit => {
@@ -1168,12 +1252,20 @@ impl SessionNameResolver {
     pub(crate) fn stats(&self) -> ResolutionStats {
         self.stats
     }
+    pub(crate) fn ensure_maintenance_complete(&self) -> io::Result<()> {
+        if self.maintenance_failed {
+            Err(io::Error::other("MAINTENANCE_UNAVAILABLE"))
+        } else {
+            Ok(())
+        }
+    }
 
     pub(crate) fn finish(self) -> Option<PendingIndexFlush> {
-        if self.delta.is_empty() {
+        if !self.snapshot.write_allowed || self.delta.is_empty() {
             return None;
         }
         Some(PendingIndexFlush {
+            route: self.snapshot.route,
             base_raw: self.snapshot.raw,
             delta: self.delta,
         })

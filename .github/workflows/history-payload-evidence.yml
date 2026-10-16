@@ -89,6 +89,14 @@ jobs:
       - name: Verify pinned fixture provenance
         run: node --test tests/scripts/historyPayloadFixture.node.mjs tests/scripts/historyPayloadPolicy.node.mjs
 
+      - name: Prepare pinned session metadata helper
+        working-directory: .
+        run: |
+          npm ci --ignore-scripts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run prepare:session-sdk
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Prepare verified build runtime
         run: node scripts/prepare-conpty.mjs
 

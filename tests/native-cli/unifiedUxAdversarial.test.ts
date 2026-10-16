@@ -1,3 +1,4 @@
+import { saveSessionDisplayName } from '@/session/sessionMetadata'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
@@ -81,6 +82,13 @@ function workspaceFixture() {
   }
   const bridge = vi.fn(async (command: string, argument: any): Promise<unknown> => {
     if (command === 'native_get_scope') return source(argument)
+    if (command === 'cli_rename_session') {
+      for (const [key, rows] of fixture.histories) if (key.startsWith(argument.source.profileId + ':')) {
+        const item = rows.find(row => row.sessionKey === argument.sessionKey)
+        if (item) item.title = argument.title
+      }
+      return { ...argument, state: 'renamed' }
+    }
     if (command === 'native_list_resources') {
       const request = argument as ReadRequest
       const target = request.source.target
@@ -235,7 +243,9 @@ describe('Adversarial unified ownership and persistence', () => {
     await vi.waitFor(() => expect(f.ipc.mock.calls.some(([command]) => command === 'pin_project')).toBe(true))
     catalog.activeSessionId = row.id
     catalog.beginRename(row.id)
-    const renaming = catalog.renameSession(row.id, 'Must not persist stale name')
+    // 旧显示元数据的兼容 writer 仍须守住原 owner；GUI 已不走此路径。
+    const owns = catalog.captureSessionOwnership(row.id)
+    const renaming = saveSessionDisplayName(projects, sourceRow, 'Must not persist stale name', owns)
     const outcome = renaming.then(() => null, failure => failure)
     await flushPromises()
     if (kind === 'history') useNativeHistoryStore().invalidate(row.nativeOrigin)
@@ -259,7 +269,7 @@ describe('Adversarial unified ownership and persistence', () => {
       }
       return original(command, args)
     })
-    await expect(catalog.renameSession(row.id, 'My name')).rejects.toMatchObject({ code: 'REVISION_CONFLICT' })
+    await expect(saveSessionDisplayName(useProjectsStateStore(), row, 'My name', catalog.captureSessionOwnership(row.id))).rejects.toMatchObject({ code: 'REVISION_CONFLICT' })
     await catalog.refresh()
     expect(catalog.sessions[0].title).toBe('Other instance name')
     expect(f.ipc.mock.calls.filter(([command]) => command === 'upsert_session_ui_record')).toHaveLength(1)
@@ -339,31 +349,26 @@ describe('Adversarial unified ownership and persistence', () => {
   })
 })
 
-// 使用真实metadata写队列区分尚未发出的保存和已经发出的保存；切换项目只撤销前者。
+// 原生更名区分未派发和已派发操作；切换选择不能重放已发出的写入。
 it.each(['queued', 'issued'] as const)('Adversarial_RenameSelection_%s_015', async phase => {
   seedHistory(); await boot()
-  const catalog = useUnifiedSessionsStore(), historyRow = catalog.sessions.find(row => row.runtime === 'native-cli')!
-  const row = await catalog.resumeCatalogSession(historyRow)
-  const openWrites = f.ipc.mock.calls.filter(([command]) => command === 'upsert_session_ui_record')
-  expect(openWrites).toHaveLength(1)
-  expect(openWrites[0][1]).toMatchObject({ recordKey: historyRow.id, openOnly: true,
-    record: { nativeSessionId: historyRow.nativeSessionId, lastOpenedAt: expect.any(Number) } })
-  f.ipc.mockClear()
-  const barrier = deferred<any>(), original = f.ipc.getMockImplementation()!
-  f.ipc.mockImplementation((command, args) => command === (phase === 'queued' ? 'pin_project' : 'upsert_session_ui_record') ? barrier.promise : original(command, args))
-  const pinning = phase === 'queued' ? useProjectsStateStore().pinProject('/other') : Promise.resolve()
-  if (phase === 'queued') await vi.waitFor(() => expect(f.ipc.mock.calls.some(([command]) => command === 'pin_project')).toBe(true))
+  const catalog = useUnifiedSessionsStore(), row = catalog.sessions.find(row => row.runtime === 'native-cli')!
+  catalog.activeSessionId = row.id
+  const barrier = deferred<any>(), original = f.bridge.getMockImplementation()!
+  let request:any
+  f.bridge.mockImplementation((command,args)=>command==='cli_rename_session' ? (request=args,barrier.promise) : original(command,args))
   catalog.beginRename(row.id)
   const saving = catalog.renameSession(row.id, 'Name before switching', true)
   const outcome = saving.then(() => null, failure => failure)
-  await flushPromises()
-  const writesBeforeSwitch = f.ipc.mock.calls.filter(([command]) => command === 'upsert_session_ui_record').length
-  expect(writesBeforeSwitch).toBe(phase === 'issued' ? 1 : 0)
+  if (phase === 'issued') await flushPromises()
+  const writes = () => f.bridge.mock.calls.filter(([command])=>command==='cli_rename_session')
+  expect(writes()).toHaveLength(phase==='issued'?1:0)
   catalog.selectProjectContext('/other')
   await expect(catalog.renameSession(row.id, 'Stale second submit', true)).rejects.toThrow('STALE_SESSION_ATTEMPT')
-  barrier.resolve(clone(f.state)); await pinning
-  if (phase === 'queued') expect(await outcome).toMatchObject({ message: 'STALE_SESSION_ATTEMPT' })
+  if(request) barrier.resolve({...request,state:'renamed'})
+  if(phase==='queued') expect(await outcome).toMatchObject({message:'STALE_SESSION_ATTEMPT'})
   else expect(await outcome).toBeNull()
-  expect(f.ipc.mock.calls.filter(([command]) => command === 'upsert_session_ui_record')).toHaveLength(phase === 'issued' ? 1 : 0)
+  expect(writes()).toHaveLength(phase==='issued'?1:0)
   expect(catalog.activeSessionId).toBeNull()
+  expect(f.ipc.mock.calls.filter(([command])=>command==='upsert_session_ui_record')).toHaveLength(0)
 })

@@ -66,7 +66,7 @@ export async function saveSessionDisplayName(metadata: SessionMetadataPort, iden
   requireCurrent()
 }
 
-/** 原生改名输入经 PTY 完整写入后清除 GUI 覆盖名，显示回落 CLI 记录的真实标题；打开时间保留。 */
+/** 原生 API 读回确认后清除 GUI 覆盖名，显示回落 CLI 记录的真实标题；打开时间保留。 */
 export async function clearSessionDisplayName(metadata: SessionMetadataPort, identity: UnifiedSession, owns: () => boolean, onIssued?: () => void): Promise<void> {
   const requireCurrent = () => { if (!owns()) throw new Error('STALE_SESSION_ATTEMPT') }
   requireCurrent()

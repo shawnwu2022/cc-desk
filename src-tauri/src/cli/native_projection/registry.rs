@@ -36,6 +36,96 @@ struct Scope {
     grant: Grant,
     source: SourceRef,
     history_generation: std::sync::atomic::AtomicU64,
+    retired: std::sync::atomic::AtomicBool,
+}
+pub(crate) struct RenameAuthority {
+    scope: Arc<Scope>,
+    pub(crate) native_id: String,
+    pub(crate) cwd: String,
+    claude_file: Option<super::scoped_fs::PinnedTranscript>,
+}
+impl RenameAuthority {
+    pub(crate) fn prepare_claude(&self) -> Result<super::scoped_fs::PrivateTranscript, SafeError> {
+        self.verify_claude(None)?;
+        self.scope
+            .grant
+            .root
+            .private_transcript(
+                self.claude_file
+                    .as_ref()
+                    .ok_or_else(|| safe("NATIVE_RENAME_UNSUPPORTED"))?,
+                &self.native_id,
+            )
+            .map_err(safe)
+    }
+    pub(crate) fn verify_claude(&self, title: Option<&str>) -> Result<(), SafeError> {
+        self.current()?;
+        let file = self
+            .claude_file
+            .as_ref()
+            .ok_or_else(|| safe("NATIVE_RENAME_UNSUPPORTED"))?;
+        file.current(&self.scope.grant.root).map_err(safe)?;
+        file.verify(&self.native_id, &self.cwd, title)
+            .map_err(safe)?;
+        self.current()
+    }
+    pub(crate) fn root_path(&self) -> &std::path::Path {
+        self.scope.grant.root.selected_path()
+    }
+    pub(crate) fn current(&self) -> Result<(), SafeError> {
+        if self
+            .scope
+            .retired
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return Err(safe("SCOPE_REVOKED"));
+        }
+        self.scope.grant.current().map_err(safe)?;
+        if self
+            .scope
+            .retired
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return Err(safe("SCOPE_REVOKED"));
+        }
+        Ok(())
+    }
+    pub(crate) fn check_thread(&self, thread: &serde_json::Value) -> Result<(), SafeError> {
+        self.current()?;
+        if thread["id"].as_str() != Some(self.native_id.as_str())
+            || thread["cwd"].as_str() != Some(self.cwd.as_str())
+        {
+            return Err(safe("SESSION_ORIGIN_AMBIGUOUS"));
+        }
+        let path = thread["path"]
+            .as_str()
+            .ok_or_else(|| safe("SESSION_ORIGIN_AMBIGUOUS"))?;
+        let relative = self
+            .scope
+            .grant
+            .root
+            .descendant(std::path::Path::new(path))
+            .map_err(safe)?;
+        let mut budget = super::scoped_fs::Budget::new(super::scoped_fs::Limits::default());
+        let (bytes, _) = self
+            .scope
+            .grant
+            .root
+            .history_header(std::path::Path::new(&relative), &mut budget)
+            .map_err(safe)?
+            .ok_or_else(|| safe("SESSION_NOT_FOUND"))?;
+        let metadata = bytes
+            .split(|byte| *byte == b'\n')
+            .filter_map(|line| serde_json::from_slice::<serde_json::Value>(line).ok())
+            .find(|row| row["type"] == "session_meta")
+            .ok_or_else(|| safe("SESSION_ORIGIN_AMBIGUOUS"))?;
+        if metadata["payload"]["id"].as_str() != Some(self.native_id.as_str())
+            || metadata["payload"]["cwd"].as_str() != Some(self.cwd.as_str())
+        {
+            return Err(safe("SESSION_ORIGIN_AMBIGUOUS"));
+        }
+        self.current()
+    }
 }
 // Only consecutive History pages retain an observation. This is never a
 // cross-request freshness cache or additional filesystem authority.
@@ -134,6 +224,117 @@ impl Grant {
     }
 }
 impl ScopeRegistry {
+    pub(crate) fn authorize_rename(
+        &self,
+        owner: &Owner,
+        source: &SourceRef,
+        key: &str,
+    ) -> Result<RenameAuthority, SafeError> {
+        let scope = self
+            .state
+            .lock()
+            .map_err(|_| safe("SCOPE_UNAVAILABLE"))?
+            .scopes
+            .get(&source.scope_id)
+            .cloned()
+            .ok_or_else(|| safe("SCOPE_UNKNOWN"))?;
+        if &scope.grant.owner != owner {
+            return Err(safe("FORBIDDEN"));
+        }
+        if &scope.source != source {
+            return Err(safe("SCOPE_STALE"));
+        }
+        scope.grant.current().map_err(safe)?;
+        if matches!(source.target, ScopeTarget::Run { .. }) {
+            return Err(safe("SESSION_IDENTITY_UNKNOWN"));
+        }
+        if source.cli == CliKind::Shell {
+            return Err(safe("NATIVE_RENAME_UNSUPPORTED"));
+        }
+        let g = &scope.grant;
+        if g.projects.is_empty() {
+            return Err(safe("FORBIDDEN"));
+        }
+        use std::sync::atomic::Ordering;
+        self.reading
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |count| {
+                (count < 2).then_some(count + 1)
+            })
+            .map_err(|_| safe("SOURCE_BUSY"))?;
+        struct Permit<'a>(&'a std::sync::atomic::AtomicUsize);
+        impl Drop for Permit<'_> {
+            fn drop(&mut self) {
+                self.0.fetch_sub(1, Ordering::SeqCst);
+            }
+        }
+        let _permit = Permit(&self.reading);
+        let projects: Vec<_> = g
+            .projects
+            .iter()
+            .map(|p| super::catalog::ProjectRef {
+                id: &p.id,
+                root: &p.root,
+                paths: &p.paths,
+            })
+            .collect();
+        let catalog = super::catalog::Catalog {
+            cli: g.cli,
+            root: &g.root,
+            projects: &projects,
+            user_config: g.user_config.as_ref(),
+            check: g.check.as_ref(),
+        };
+        let mut budget = super::scoped_fs::Budget::new(super::scoped_fs::Limits::default());
+        let items = super::catalog::read(
+            &catalog,
+            &super::catalog::Options {
+                kind: ResourceKind::History,
+                query: None,
+                session_id: None,
+            },
+            &mut budget,
+        )
+        .map_err(safe)?;
+        if !budget.history_read_failures().is_empty() {
+            return Err(safe("SESSION_ORIGIN_AMBIGUOUS"));
+        }
+        let mut matched = None;
+        for item in items {
+            if let ResourceItem::Session {
+                session_key,
+                native_session_id,
+                project_id: Some(project),
+                cwd: Some(cwd),
+                ..
+            } = item
+            {
+                if session_key == key && g.projects.iter().any(|p| p.id == project) {
+                    if matched.is_some() {
+                        return Err(safe("SESSION_ORIGIN_AMBIGUOUS"));
+                    }
+                    matched = Some((native_session_id, cwd));
+                }
+            }
+        }
+        g.current().map_err(safe)?;
+        let (native_id, cwd) = matched.ok_or_else(|| safe("SESSION_NOT_FOUND"))?;
+        if uuid::Uuid::parse_str(&native_id).is_err() {
+            return Err(safe("SESSION_ORIGIN_AMBIGUOUS"));
+        }
+        let claude_file = if source.cli == CliKind::Claude {
+            let file = g.root.find_transcript(&native_id).map_err(safe)?;
+            file.verify(&native_id, &cwd, None).map_err(safe)?;
+            Some(file)
+        } else {
+            None
+        };
+        Ok(RenameAuthority {
+            scope,
+            native_id,
+            cwd,
+            claude_file,
+        })
+    }
     pub(crate) fn new(capacity: usize) -> Self {
         Self {
             state: std::sync::Mutex::new(State {
@@ -173,7 +374,12 @@ impl ScopeRegistry {
                     .get(&candidate.source.scope_id)
                     .is_some_and(|s| Arc::ptr_eq(s, &candidate))
                 {
-                    retired.extend(state.scopes.remove(&candidate.source.scope_id));
+                    if let Some(scope) = state.scopes.remove(&candidate.source.scope_id) {
+                        scope
+                            .retired
+                            .store(true, std::sync::atomic::Ordering::Release);
+                        retired.push(scope);
+                    }
                 }
             }
             if let Some(scope) = state.scopes.values().find(|s| s.grant.same(&grant)) {
@@ -211,6 +417,7 @@ impl ScopeRegistry {
                     grant,
                     source,
                     history_generation: Default::default(),
+                    retired: Default::default(),
                 });
                 state.next_epoch = epoch;
                 state

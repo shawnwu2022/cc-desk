@@ -7,10 +7,16 @@ import SessionStatusIcon from './SessionStatusIcon.vue'
 import { sessionVisualLabelKey } from '@/utils/sessionPresentation'
 import type { SessionActivityState, SessionVisualState, UnifiedCliKind } from '@/types/unifiedSession'
 
-const props = defineProps<{ cli: UnifiedCliKind; state: SessionVisualState; activityState?: SessionActivityState; archived?: boolean; notice?: { labelKey: string; unread: boolean } | null; receiptId?: string }>()
+const props = defineProps<{ cli: UnifiedCliKind; state: SessionVisualState; activityState?: SessionActivityState; observationState?: string; observerReasonCode?: import('@/api/observer').ObserverReasonCode; archived?: boolean; notice?: { labelKey: string; unread: boolean; detailLabelKey?: string } | null; receiptId?: string }>()
 const { t } = useI18n()
-const statusLabel = computed(() => t(sessionVisualLabelKey(props.state, props.activityState, props.archived)))
-const label = computed(() => [props.cli === 'claude' ? 'Claude Code' : 'Codex CLI', statusLabel.value, props.notice && t(props.notice.labelKey)].filter(Boolean).join('; '))
+const statusLabel = computed(() => {
+  if (props.cli === 'claude' && !props.archived && ['unknown','confirming'].includes(props.state) && props.observationState !== 'active') {
+    const reasons = { OBSERVER_DISABLED:'observerDisabled',OBSERVER_UNSUPPORTED:'observerUnsupported',OBSERVER_CONNECTING:'observerConnecting',OBSERVER_UNAVAILABLE:'observerUnavailable',OBSERVER_SERVICE_UNAVAILABLE:'observerServiceUnavailable',OBSERVER_PLUGIN_UNAVAILABLE:'observerPluginUnavailable',OBSERVER_PREPARE_FAILED:'observerPrepareFailed' }
+    return t(props.observerReasonCode ? reasons[props.observerReasonCode] : props.observationState === 'connecting' ? 'observerConnecting' : 'observerUnavailable')
+  }
+  return t(sessionVisualLabelKey(props.state, props.activityState, props.archived))
+})
+const label = computed(() => [props.cli === 'claude' ? 'Claude Code' : 'Codex CLI', statusLabel.value, props.notice && t(props.notice.labelKey), props.notice?.detailLabelKey && t(props.notice.detailLabelKey)].filter(Boolean).join('; '))
 const badge = computed(() => {
   // 关闭仅由应用图标本身的明暗区分；回执仍保留在可访问名称和 Tooltip 中。
   if (props.state === 'closed') return null

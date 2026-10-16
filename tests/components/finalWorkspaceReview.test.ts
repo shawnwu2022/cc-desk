@@ -272,7 +272,7 @@ describe('Final workspace review regressions', () => {
     for (let n = 0; n < 100; n++) { now.mockReturnValue(62000 + n); tabs.touch(tab.tabId, captureNativeAttempt(tab)); await flushPromises() }
     expect(order()).toEqual([`legacy-tab:${legacyId}`, `native-tab:${tab.tabId}`])
     expect(catalog.activeSessionId).toBe(`native-tab:${tab.tabId}`)
-    expect(refresh).toHaveBeenCalledTimes(1)
+    expect(refresh).not.toHaveBeenCalled()
   })
 
   // 准备中的占位记录也有诊断入口，取消 owner 后立即关闭而不启动 CLI。

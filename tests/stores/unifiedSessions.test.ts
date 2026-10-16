@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
+import { flushPromises } from '@vue/test-utils'
 import { useProjectsStateStore } from '@/stores/projectsState'
 import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
+import { useProjectManagementStore } from '@/stores/projectManagement'
+import { useNativeTabsStore } from '@/stores/nativeTabs'
 import { createNativeCliAdapter } from '@/session/adapters/nativeCliAdapter'
 import type { NativeHistoryEntry } from '@/stores/nativeHistory'
 import type { NativeCliTab } from '@/stores/nativeTabs'
@@ -49,6 +52,22 @@ function deferred<T>() {
   })
   return { promise, resolve, reject }
 }
+
+it('Catalog_BackgroundRefreshKeepsVisibleLoadingAndRowsStable_046', async () => {
+  setActivePinia(createPinia())
+  const store = useUnifiedSessionsStore()
+  const adapter = fakeAdapter('legacy-claude', [session()])
+  store.configureAdapters([adapter.adapter])
+  await store.refresh()
+  const original = store.sessions[0]
+  const wait = deferred<UnifiedSession[]>()
+  adapter.adapter.listSessions = () => wait.promise
+  const update = store.refresh('/repo', { background: true })
+  expect(store.loading).toBe(false)
+  expect(store.sessions[0]).toBe(original)
+  wait.resolve([session()]); await update
+  expect(store.sessions[0]).toBe(original)
+})
 
 function fakeAdapter(runtime: SessionRuntimeKind, initial: UnifiedSession[] = []) {
   let current = [...initial]
@@ -100,6 +119,32 @@ function fakeAdapter(runtime: SessionRuntimeKind, initial: UnifiedSession[] = []
     setSessions(next: UnifiedSession[]) { current = [...next] },
   }
 }
+
+it.each(['root','id','key','project','unknown-root','opened-owners','archive-owner'] as const)('Catalog_PhysicalFoldPreservesDistinctOwners_048 %s',async difference=>{
+  setActivePinia(createPinia())
+  const a=session({id:'a',runtime:'native-cli',opened:false,processState:'stopped',nativeRootKey:'root',nativeHistorySessionKey:'key',nativeOrigin:{cli:'claude',profileId:'a',profileRevision:'1',projectId:'project',projectPath:'/repo'}})
+  const b={...a,id:'b',nativeOrigin:{...a.nativeOrigin!,profileId:'b'}}
+  if(difference==='root') b.nativeRootKey='other-root'
+  if(difference==='id') b.nativeSessionId='other-id'
+  if(difference==='key') b.nativeHistorySessionKey='other-key'
+  if(difference==='project') b.nativeOrigin.projectId='other-project'
+  if(difference==='unknown-root') delete b.nativeRootKey
+  if(difference==='opened-owners'){a.opened=true;b.opened=true}
+  if(difference==='archive-owner') b.archived=true
+  const catalog=useUnifiedSessionsStore();catalog.configureAdapters([fakeAdapter('native-cli',[a,b]).adapter]);await catalog.refresh()
+  expect(catalog.sessions).toHaveLength(2)
+})
+
+it('Catalog_PhysicalFoldRefreshUsesLinearPreviousLookup_049',async()=>{
+  setActivePinia(createPinia())
+  const rows=Array.from({length:1000},(_,index)=>session({id:'row-'+index,runtime:'native-cli',opened:false,processState:'stopped',nativeSessionId:'session-'+index,nativeRootKey:'root',nativeHistorySessionKey:'key-'+index,nativeOrigin:{cli:'claude',profileId:'profile',profileRevision:'1',projectId:'project',projectPath:'/repo'}}))
+  const catalog=useUnifiedSessionsStore();catalog.configureAdapters([fakeAdapter('native-cli',rows).adapter]);await catalog.refresh()
+  let reads=0
+  for(const row of catalog.sessions){const id=row.id;Object.defineProperty(row,'id',{configurable:true,enumerable:true,get(){reads++;return id}})}
+  await catalog.refresh()
+  expect(catalog.sessions).toHaveLength(1000)
+  expect(reads).toBeLessThan(1000*20)
+})
 
 // 历史显示名编辑不能先恢复 CLI，也不能抢占当前运行终端的选择。
 it('Rename_ClosedHistoryEditsWithoutResume_013', async () => {
@@ -1158,4 +1203,191 @@ it('Unified_AmbiguousTwinKeepsLegacyRestore_045', async () => {
   expect(store.sessions.find(row => row.id === legacyRow.id)).toMatchObject({ archived: true })
   await store.restoreArchivedSession(legacyRow.id)
   expect(legacy.adapter.restoreArchivedSession).toHaveBeenCalledWith(legacyRow.id)
+})
+
+// 批量操作只承诺确认时的本项目owner，失败不归档，也不追逐后来新增的会话。
+it('Catalog_ProjectCloseFreezesOwnersAndContinuesAfterFailure_047', async () => {
+  setActivePinia(createPinia());const store=useUnifiedSessionsStore()
+  let rows=[session({id:'legacy-tab:a',adapterSessionId:'a',opened:true}),session({id:'legacy-tab:b',adapterSessionId:'b',opened:true}),session({id:'legacy-tab:other',adapterSessionId:'other',projectPath:'/other',projectKey:'/other',opened:true}),session({id:'history',opened:false,processState:'stopped'})]
+  const closed:string[]=[],archived=vi.fn(),owners=new Map(rows.map(row=>[row.id,{}]))
+  const adapter={runtime:'legacy-claude',listSessions:async()=>rows,captureOwnership:(id:string)=>{const owner=owners.get(id);return()=>owners.get(id)===owner},activateSession:vi.fn(),closeSession:async(id:string)=>{closed.push(id);if(id==='legacy-tab:a')throw new Error('STOP_FAILED');rows=rows.filter(row=>row.id!==id)},archiveSession:archived} as unknown as SessionAdapter
+  store.configureAdapters([adapter]);await store.refresh()
+  const close=store.captureProjectClose('/repo')
+  rows.push(session({id:'legacy-tab:late',adapterSessionId:'late',opened:true}));await store.refresh()
+  await expect(close()).rejects.toThrow('PROJECT_CLOSE_PARTIAL')
+  expect(closed).toEqual(['legacy-tab:a','legacy-tab:b']);expect(archived).not.toHaveBeenCalled()
+  expect(store.sessions.map(row=>row.id)).toEqual(expect.arrayContaining(['legacy-tab:other','legacy-tab:late','history','legacy-tab:a']))
+})
+it('Catalog_ProjectCloseDoesNotCloseReplacementGeneration_048',async()=>{
+  setActivePinia(createPinia());const store=useUnifiedSessionsStore();const row=session({id:'legacy-tab:a',adapterSessionId:'a',opened:true}),close=vi.fn();let owner={}
+  store.configureAdapters([{runtime:'legacy-claude',listSessions:async()=>[row],captureOwnership:()=>{const expected=owner;return()=>owner===expected},closeSession:close} as unknown as SessionAdapter]);await store.refresh()
+  const batch=store.captureProjectClose('/repo');owner={}
+  await expect(batch()).rejects.toThrow('PROJECT_CLOSE_PARTIAL');expect(close).not.toHaveBeenCalled()
+})
+
+it('Catalog_ProjectCloseCancellationStopsNextDispatch_049',async()=>{
+  setActivePinia(createPinia());const store=useUnifiedSessionsStore(),wait=deferred<void>();let active=true
+  let rows=[session({id:'legacy-tab:a',adapterSessionId:'a',opened:true}),session({id:'legacy-tab:b',adapterSessionId:'b',opened:true})]
+  const close=vi.fn(async(id:string)=>{await wait.promise;rows=rows.filter(row=>row.id!==id)})
+  store.configureAdapters([{runtime:'legacy-claude',listSessions:async()=>rows,captureOwnership:()=>()=>true,activateSession:vi.fn(),closeSession:close} as unknown as SessionAdapter]);await store.refresh()
+  const closing=store.captureProjectClose('/repo')(()=>active)
+  await flushPromises();expect(close).toHaveBeenCalledTimes(1)
+  active=false;wait.resolve();await expect(closing).rejects.toThrow('ACTION_CANCELLED')
+  expect(close).toHaveBeenCalledTimes(1);expect(store.sessions.some(row=>row.id==='legacy-tab:b')).toBe(true)
+})
+it('Catalog_ProjectCloseDoesNotActivateIntermediateTargets_050',async()=>{
+  setActivePinia(createPinia());const store=useUnifiedSessionsStore()
+  let rows=['a','b','other'].map(id=>session({id:'legacy-tab:'+id,adapterSessionId:id,opened:true,projectPath:id==='other'?'/other':'/repo',projectKey:id==='other'?'/other':'/repo'}))
+  const activate=vi.fn()
+  store.configureAdapters([{runtime:'legacy-claude',listSessions:async()=>rows,captureOwnership:()=>()=>true,activateSession:activate,
+    closeSession:async(id:string)=>{rows=rows.filter(row=>row.id!==id)}} as unknown as SessionAdapter]);await store.refresh()
+  store.activeSessionId='legacy-tab:a';await store.captureProjectClose('/repo')()
+  expect(activate.mock.calls).toEqual([['legacy-tab:other']])
+  expect(store.activeSessionId).toBe('legacy-tab:other')
+})
+
+it('Catalog_LegacyArchiveOwnerSurvivesOpenedNativeFold_061', async () => {
+  setActivePinia(createPinia())
+  const legacyRow = session({ id: 'legacy-archive', adapterSessionId: 'same-id', nativeSessionId: 'same-id', opened: false, archived: true, processState: 'stopped' })
+  const nativeRow = session({ id: 'native-tab:open', adapterSessionId: 'open', runtime: 'native-cli', opened: true, nativeSessionId: 'same-id',
+    nativeRootKey: LEGACY_ROOT, nativeHistorySessionKey: 'same-key', nativeOrigin: { cli: 'claude', profileId: 'one', profileRevision: '1', projectId: 'project', projectPath: '/repo' } })
+  const legacy = fakeAdapter('legacy-claude', [legacyRow])
+  const native = fakeAdapter('native-cli', [nativeRow, ...['one', 'two'].map(profileId => ({ ...nativeRow, id: `native-history:${profileId}`, adapterSessionId: 'same-key', opened: false, processState: 'stopped' as const, nativeOrigin: { ...nativeRow.nativeOrigin!, profileId } }))])
+  const store = useUnifiedSessionsStore()
+  store.configureAdapters([legacy.adapter, native.adapter], { legacyClaudeRootKey: LEGACY_ROOT })
+  await store.refresh()
+  expect(store.sessions.map(row => row.id).sort()).toEqual(['legacy-archive', 'native-tab:open'])
+  expect(store.sessions.find(row => row.id === legacyRow.id)).toMatchObject({ archived: true })
+  await store.restoreArchivedSession(legacyRow.id)
+  expect(legacy.adapter.restoreArchivedSession).toHaveBeenCalledWith(legacyRow.id)
+  expect(native.adapter.restoreArchivedSession).not.toHaveBeenCalled()
+})
+
+it.each(['a', 'b'])('Catalog_ProjectCloseSuppressesJoinedIndividualFallback_062 %s', async selected => {
+  setActivePinia(createPinia())
+  const store = useUnifiedSessionsStore()
+  const waits = { a: deferred<void>(), b: deferred<void>() }
+  let rows = ['a', 'b', 'other'].map(id => session({ id: `legacy-tab:${id}`, adapterSessionId: id, opened: true,
+    projectPath: id === 'other' ? '/other' : '/repo', projectKey: id === 'other' ? '/other' : '/repo' }))
+  const activate = vi.fn()
+  const close = vi.fn(async (id: string) => {
+    await waits[id.slice('legacy-tab:'.length) as 'a' | 'b'].promise
+    rows = rows.filter(row => row.id !== id)
+  })
+  store.configureAdapters([{ runtime: 'legacy-claude', listSessions: async () => rows, captureOwnership: (id: string) => { const row = rows.find(value => value.id === id); return () => !!row && rows.includes(row) },
+    activateSession: activate, closeSession: close } as unknown as SessionAdapter])
+  await store.refresh()
+  store.activeSessionId = `legacy-tab:${selected}`
+  const single = store.closeSession(`legacy-tab:${selected}`)
+  await flushPromises()
+  const batch = store.captureProjectClose('/repo')()
+  await flushPromises()
+  waits[selected as 'a' | 'b'].resolve()
+  await single
+  await flushPromises()
+  const intermediateActivations = [...activate.mock.calls]
+  waits[selected === 'a' ? 'b' : 'a'].resolve()
+  await batch
+  expect(intermediateActivations).toEqual([])
+  expect(activate.mock.calls).toEqual([['legacy-tab:other']])
+  expect(store.activeSessionId).toBe('legacy-tab:other')
+  expect(close.mock.calls.map(([id]) => id).sort()).toEqual(['legacy-tab:a', 'legacy-tab:b'])
+})
+
+it.each(['empty', 'different-owner'])('Catalog_ProjectCloseRejectsActualOwnerInventoryMismatch_063 %s', async catalogState => {
+  setActivePinia(createPinia())
+  const store = useUnifiedSessionsStore()
+  const tabs = useNativeTabsStore()
+  const actual = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'profile', profileRevision: '1', action: { kind: 'new' } })
+  const close = vi.fn()
+  const activate = vi.fn()
+  const stale = session({ id: 'native-tab:stale', adapterSessionId: 'stale', runtime: 'native-cli', cli: 'codex', opened: true })
+  store.configureAdapters([{ runtime: 'native-cli', listSessions: async () => catalogState === 'empty' ? [] : [stale],
+    captureOwnership: () => () => true, closeSession: close, activateSession: activate } as unknown as SessionAdapter])
+  await store.refresh()
+  store.activeSessionId = 'native-tab:stale'
+  const management = useProjectManagementStore()
+  expect(management.openCount('/repo')).toBe(1)
+  management.beginCloseSessions({ projectKey: '/repo', projectPath: '/repo' })
+  await management.closeSessions()
+  expect(management.dialog?.kind).toBe('close-sessions')
+  expect(management.error).toBe('projectCloseSessionsPartial')
+  expect(tabs.tab(actual.tabId)).toBeDefined()
+  expect(store.activeSessionId).toBe('native-tab:stale')
+  expect(close).not.toHaveBeenCalled()
+  expect(activate).not.toHaveBeenCalled()
+})
+
+it('Catalog_ProjectCloseDoesNotTreatMissingProjectionAsClosedOwner_064', async () => {
+  setActivePinia(createPinia())
+  const store = useUnifiedSessionsStore()
+  const wait = deferred<void>()
+  let rows = ['a', 'b'].map(id => session({ id: `legacy-tab:${id}`, adapterSessionId: id, opened: true }))
+  const owners = new Set(rows.map(row => row.id))
+  const close = vi.fn(async (id: string) => { await wait.promise; owners.delete(id); rows = rows.filter(row => row.id !== id) })
+  store.configureAdapters([{ runtime: 'legacy-claude', listSessions: async () => rows, captureOwnership: (id: string) => () => owners.has(id),
+    closeSession: close } as unknown as SessionAdapter])
+  await store.refresh()
+  const closing = store.captureProjectClose('/repo')()
+  await flushPromises()
+  rows = []
+  await store.refresh('/repo')
+  wait.resolve()
+  await expect(closing).rejects.toThrow('PROJECT_CLOSE_PARTIAL')
+  expect(close.mock.calls).toEqual([['legacy-tab:a', expect.any(Function)]])
+  expect(owners.has('legacy-tab:b')).toBe(true)
+})
+
+it('Catalog_UnarchivedLegacyFoldsIntoUniqueOpenedNative_065', async () => {
+  setActivePinia(createPinia())
+  const legacyRow = session({ id: 'legacy-history', adapterSessionId: 'same-id', nativeSessionId: 'same-id', opened: false, processState: 'stopped' })
+  const nativeRow = session({ id: 'native-tab:open', adapterSessionId: 'open', runtime: 'native-cli', opened: true,
+    nativeSessionId: 'same-id', nativeRootKey: LEGACY_ROOT, nativeHistorySessionKey: 'same-key' })
+  const legacy = fakeAdapter('legacy-claude', [legacyRow]), native = fakeAdapter('native-cli', [nativeRow])
+  const store = useUnifiedSessionsStore()
+  store.configureAdapters([legacy.adapter, native.adapter], { legacyClaudeRootKey: LEGACY_ROOT })
+  await store.refresh()
+  expect(store.sessions).toHaveLength(1)
+  expect(store.sessions[0]).toMatchObject({ id: nativeRow.id, adapterSessionId: 'open', opened: true, archived: false })
+  await store.closeSession(nativeRow.id)
+  expect(native.adapter.closeSession).toHaveBeenCalledWith(nativeRow.id, expect.any(Function))
+  expect(legacy.adapter.closeSession).not.toHaveBeenCalled()
+})
+
+it('Catalog_ProjectCloseConfirmationCaptureLeavesIndividualFallback_066', async () => {
+  setActivePinia(createPinia())
+  const store = useUnifiedSessionsStore(), wait = deferred<void>(), activate = vi.fn()
+  let rows = ['a', 'b'].map(id => session({ id: `legacy-tab:${id}`, adapterSessionId: id, opened: true }))
+  store.configureAdapters([{ runtime: 'legacy-claude', listSessions: async () => rows,
+    captureOwnership: (id: string) => { const row = rows.find(value => value.id === id); return () => !!row && rows.includes(row) },
+    activateSession: activate, closeSession: async (id: string) => { await wait.promise; rows = rows.filter(row => row.id !== id) },
+  } as unknown as SessionAdapter])
+  await store.refresh()
+  store.activeSessionId = 'legacy-tab:a'
+  const single = store.closeSession('legacy-tab:a')
+  await flushPromises()
+  store.captureProjectClose('/repo')
+  wait.resolve()
+  await single
+  expect(activate.mock.calls).toEqual([['legacy-tab:b']])
+  expect(store.activeSessionId).toBe('legacy-tab:b')
+})
+
+it.each(['catalog', 'adapter'] as const)('Rename_ConfirmedWriteSurvivesDisplayFailure_067 %s', async failureAt => {
+  setActivePinia(createPinia())
+  const value = session({ id: 'native-history:one', runtime: 'native-cli', opened: false, processState: 'stopped' })
+  const native = fakeAdapter('native-cli', [value]), legacy = fakeAdapter('legacy-claude', [])
+  const store = useUnifiedSessionsStore()
+  store.configureAdapters([native.adapter, legacy.adapter]); await store.refresh(); store.beginRename(value.id)
+  vi.mocked(native.adapter.renameSession).mockImplementation(async (_id, _title, _current, issued) => {
+    issued?.()
+    if (failureAt === 'adapter') throw new Error('RENAME_DISPLAY_SYNC_FAILED')
+    return 'native-title-saved'
+  })
+  if (failureAt === 'catalog') vi.mocked(legacy.adapter.listSessions).mockRejectedValueOnce(new Error('SOURCE_UNAVAILABLE'))
+  await expect(store.renameSession(value.id, 'Confirmed native title', true)).rejects.toThrow('RENAME_DISPLAY_SYNC_FAILED')
+  expect(store.sessions.find(row => row.id === value.id)?.renameState).toBe('idle')
+  await expect(store.renameSession(value.id, 'Confirmed native title', true)).rejects.toThrow('STALE_SESSION_ATTEMPT')
+  await store.refresh('/repo')
+  expect(native.adapter.renameSession).toHaveBeenCalledTimes(1)
 })

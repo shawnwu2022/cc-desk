@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-10-16
+
+### Fixed
+
+- Preserve one physical history row across launch configurations after native rename, concurrent refresh, close, resume and application restart; retain distinct source roots, archive groups and opened process owners
+- Restore original-session restart continuity from frozen source provenance instead of silently creating another conversation; reject missing, changed or ambiguous identities
+- Separate close and archive hit targets, refresh titles after the first authenticated prompt, retain unread reply attention for folded projects, and restore project-wide close with exact-owner confirmation
+- Include user-visible Codex code-review main threads while retaining background-agent filters and exact project association
+- Explain observer installation/availability and permission/failure reasons without inventing activity, preserve explicit observer choices, and keep closed rows free of status badges
+
+### Features
+
+- Add verified native Claude rename through pinned official Agent SDK 0.3.301 and Codex rename through its official app-server metadata API, preserving the full interactive TUI and unsubmitted drafts; write once, read back, and never replay unknown outcomes
+- Add transactional session-index rebuild with generation publication, write barriers and recoverable unknown-result checks instead of deleting history or configuration
+- Show explicit resumed-source or historical-record rename targets and actionable runtime prerequisite errors; refresh exact physical projections and clear only still-matching aliases after native success
+
+Claude GUI rename requires an existing Node.js 22.13+ on the launch configuration PATH, a writable configuration root supporting same-volume hard links, and plain JSONL history. The helper is embedded in the binary with SDK license notices; Node is neither bundled nor automatically installed. Missing prerequisites affect GUI rename only; the existing CLI remains usable and `/rename` in its terminal is the manual fallback. Real idle Claude 2.1.296 rename/resume was checked with synthetic history and no model turn. Busy-writer concurrency, incident-version 2.1.301, installed WebView2, unfiltered native All/D20 and native installation/return remain separately unverified. Cross-platform hosted compilation, exact-main CI/coverage and all three actual updater signatures remain mandatory release gates; local fixtures do not certify those targets or the original incident root cause.
+
 ## [0.20.2] - 2026-10-16
 
 - Read Codex `.jsonl.zst` history through bounded streaming decompression so compressed, unarchived sessions appear again; preserve archive containers, exact source/project identity, thread deduplication and corrupt-entry diagnostics

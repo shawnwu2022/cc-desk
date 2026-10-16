@@ -1,7 +1,10 @@
 import { randomUUID } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
-import { defineComponent, ref } from 'vue'
+import { computed, defineComponent, ref } from 'vue'
+import { mockIPC, clearMocks } from '@tauri-apps/api/mocks'
+import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
+import type { SessionAdapter, UnifiedSession } from '@/types/unifiedSession'
 import { createPinia, setActivePinia } from 'pinia'
 import { useStatusMonitor } from '@/composables/useStatusMonitor'
 import { useUnifiedWindowAttention } from '@/composables/useUnifiedWindowAttention'
@@ -37,6 +40,32 @@ function event(ptyId: string, detail: HookEventPayload['detail'], timestamp = 1,
 const completed: HookEventPayload['detail'] = { type: 'notification', data: { notificationType: 'idle_prompt' } }
 
 describe('Unified window attention ownership', () => {
+  it('Attention_ProjectBatchDoesNotAcknowledgeLegacyIntermediate_005', async () => {
+    mockIPC(command => command === 'get_sessions' ? [] : undefined)
+    try {
+      const first = legacy(), second = legacy(), sessions = useSessionStore(), catalog = useUnifiedSessionsStore()
+      sessions.setActiveTab(first.tabId)
+      const rows = (): UnifiedSession[] => [...sessions.tabs.values()].map(tab => ({ id: `legacy-tab:${tab.tabId}`, adapterSessionId: tab.tabId,
+        runtime: 'legacy-claude', cli: 'claude', title: 'Task', projectKey: '/repo', projectPath: '/repo', processState: 'running', attentionState: 'none',
+        lastActivityAt: 1, archived: false, opened: true, resumable: true }))
+      let secondUnreadDuringClose = false
+      catalog.configureAdapters([{ runtime: 'legacy-claude', listSessions: async () => rows(), captureOwnership: (id: string) => {
+        const key = id.slice('legacy-tab:'.length), tab = sessions.tabs.get(key); return () => sessions.tabs.get(key) === tab
+      }, closeSession: async (id: string) => {
+        if (id === `legacy-tab:${second.tabId}`) secondUnreadDuringClose = !!useAttentionStore().getItem(second.ptyId!)
+        await sessions.closeTab(id.slice('legacy-tab:'.length))
+      }, activateSession: async (id: string) => sessions.setActiveTab(id.slice('legacy-tab:'.length)) } as unknown as SessionAdapter])
+      await catalog.refresh(); catalog.activeSessionId = `legacy-tab:${first.tabId}`
+      const wrapper = mount(defineComponent({ setup() {
+        useStatusMonitor({ isFocused: ref(true), isTerminalVisible: computed(() => catalog.activeSessionId !== null), requestWindowAttention: false })
+        return () => null
+      } })); wrappers.push(wrapper); await flushPromises()
+      event(second.ptyId!, completed); await flushPromises()
+      expect(useAttentionStore().getItem(second.ptyId!)).toBeDefined()
+      await catalog.captureProjectClose('/repo')()
+      expect(secondUnreadDuringClose).toBe(true)
+    } finally { clearMocks() }
+  })
   it('Attention_OwnedCompletionOnlyOnce_001', async () => {
     const tab = legacy(); render(); await flushPromises()
     event(tab.ptyId!, completed); await flushPromises()

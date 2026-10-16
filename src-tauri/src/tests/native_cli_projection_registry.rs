@@ -53,6 +53,368 @@ fn request(source: SourceRef) -> ReadRequest {
         offset: 0,
     }
 }
+
+#[test]
+#[allow(non_snake_case)]
+fn NativeRename_AuthorityRequiresCurrentExactOwnerAndPositiveProject_006() {
+    let root = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let live = Arc::new(AtomicBool::new(true));
+    let registry = ScopeRegistry::new(8);
+    let mut g = grant(root.path(), "unused", live.clone());
+    g.cli = CliKind::Codex;
+    g.projects = vec![AdmittedProject {
+        id: "project".into(),
+        root: Root::open(project.path()).unwrap(),
+        paths: vec![project.path().to_owned()],
+    }];
+    if let ScopeTarget::Profile { project_ids, .. } = &mut g.target {
+        *project_ids = vec!["project".into()];
+    }
+    fs::create_dir_all(root.path().join("sessions")).unwrap();
+    let path = root.path().join("sessions/rollout.jsonl");
+    let id = "00000000-0000-4000-8000-000000000001";
+    fs::write(&path,format!("{}\n{}\n",serde_json::json!({"type":"session_meta","payload":{"id":id,"cwd":project.path(),"source":"cli"}}),serde_json::json!({"type":"event_msg","payload":{"type":"user_message","message":"task"}}))).unwrap();
+    let source = registry.register(g).unwrap();
+    let key = serde_json::to_string(&serde_json::json!([
+        "local",
+        "codex",
+        source.source_root_key,
+        id
+    ]))
+    .unwrap();
+    let mut foreign = owner();
+    foreign.epoch = n(2);
+    assert_eq!(
+        registry
+            .authorize_rename(&foreign, &source, &key)
+            .err()
+            .unwrap()
+            .code,
+        "FORBIDDEN"
+    );
+    let mut stale = source.clone();
+    stale.identity_epoch = n(9);
+    assert_eq!(
+        registry
+            .authorize_rename(&owner(), &stale, &key)
+            .err()
+            .unwrap()
+            .code,
+        "SCOPE_STALE"
+    );
+    assert_eq!(
+        registry
+            .authorize_rename(&owner(), &source, "unobserved")
+            .err()
+            .unwrap()
+            .code,
+        "SESSION_NOT_FOUND"
+    );
+    let authority = registry.authorize_rename(&owner(), &source, &key).unwrap();
+    let thread = serde_json::json!({"id":id,"cwd":project.path(),"path":path});
+    authority.check_thread(&thread).unwrap();
+    let mut wrong = thread.clone();
+    wrong["cwd"] = serde_json::json!(root.path());
+    assert_eq!(
+        authority.check_thread(&wrong).unwrap_err().code,
+        "SESSION_ORIGIN_AMBIGUOUS"
+    );
+    let mut wrong = thread.clone();
+    wrong["path"] = serde_json::json!(project.path().join("foreign.jsonl"));
+    assert!(authority.check_thread(&wrong).is_err());
+    live.store(false, Ordering::SeqCst);
+    assert_eq!(
+        authority.check_thread(&thread).unwrap_err().code,
+        "SCOPE_REVOKED"
+    );
+    live.store(true, Ordering::SeqCst);
+    authority.current().unwrap();
+    let mut expanded = grant(root.path(), "unused", live.clone());
+    expanded.cli = CliKind::Codex;
+    expanded.target = ScopeTarget::Profile {
+        profile_id: "p".into(),
+        expected_profile_revision: n(1),
+        project_ids: vec!["project".into(), "other".into()],
+    };
+    expanded.projects = ["project", "other"]
+        .iter()
+        .map(|id| AdmittedProject {
+            id: (*id).into(),
+            root: Root::open(project.path()).unwrap(),
+            paths: vec![project.path().to_owned()],
+        })
+        .collect();
+    registry.register(expanded).unwrap();
+    assert!(live.load(Ordering::SeqCst));
+    assert_eq!(authority.current().unwrap_err().code, "SCOPE_REVOKED");
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn NativeRename_UnregisteredProjectAndRunScopesNeverAuthorize_007() {
+    let temp = tempfile::tempdir().unwrap();
+    let registry = ScopeRegistry::new(8);
+    let source = registry
+        .register(grant(
+            temp.path(),
+            "unused",
+            Arc::new(AtomicBool::new(true)),
+        ))
+        .unwrap();
+    assert_eq!(
+        registry
+            .authorize_rename(&owner(), &source, "x")
+            .err()
+            .unwrap()
+            .code,
+        "FORBIDDEN"
+    );
+    let mut g = grant(temp.path(), "unused", Arc::new(AtomicBool::new(true)));
+    g.target = ScopeTarget::Run {
+        run_id: "run".into(),
+        generation: 1,
+    };
+    let source = registry.register(g).unwrap();
+    assert_eq!(
+        registry
+            .authorize_rename(&owner(), &source, "x")
+            .err()
+            .unwrap()
+            .code,
+        "SESSION_IDENTITY_UNKNOWN"
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn NativeRename_OperationIdentityNeverReplaysUnknown_008() {
+    use crate::cli::native_rename::{Operations, RenameRequest};
+    let temp = tempfile::tempdir().unwrap();
+    let registry = ScopeRegistry::new(8);
+    let source = registry
+        .register(grant(
+            temp.path(),
+            "unused",
+            Arc::new(AtomicBool::new(true)),
+        ))
+        .unwrap();
+    let caller = crate::cli::snapshot::CallerIdentity {
+        instance_id: "instance".into(),
+        window_label: "main".into(),
+        webview_epoch: n(1),
+    };
+    let request = RenameRequest {
+        operation_id: "operation".into(),
+        source,
+        session_key: "key".into(),
+        title: "new".into(),
+    };
+    request.validate().unwrap();
+    let operations = Operations::default();
+    assert!(operations.begin(&caller, &request).unwrap().is_none());
+    assert_eq!(
+        operations
+            .begin(&caller, &request)
+            .unwrap()
+            .unwrap()
+            .unwrap_err()
+            .code,
+        "RENAME_OUTCOME_UNKNOWN"
+    );
+    let mut changed = request.clone();
+    changed.title = "different".into();
+    assert_eq!(
+        operations.begin(&caller, &changed).unwrap_err().code,
+        "RENAME_OPERATION_CONFLICT"
+    );
+    operations.finish(&caller, &request, Err(safe("RENAME_OUTCOME_UNKNOWN")));
+    assert_eq!(
+        operations
+            .begin(&caller, &request)
+            .unwrap()
+            .unwrap()
+            .unwrap_err()
+            .code,
+        "RENAME_OUTCOME_UNKNOWN"
+    );
+    let mut invalid = request.clone();
+    invalid.title = "\nsecret".into();
+    assert!(invalid.validate().is_err());
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn NativeRename_ReclamationPinsInflightAndFullLiveCallers_018() {
+    use crate::cli::native_rename::{Operations, RenameRequest};
+    let temp = tempfile::tempdir().unwrap();
+    let registry = ScopeRegistry::new(8);
+    let source = registry
+        .register(grant(
+            temp.path(),
+            "unused",
+            Arc::new(AtomicBool::new(true)),
+        ))
+        .unwrap();
+    let caller = crate::cli::snapshot::CallerIdentity {
+        instance_id: "instance".into(),
+        window_label: "main".into(),
+        webview_epoch: n(1),
+    };
+    let mut other_instance = caller.clone();
+    other_instance.instance_id = "other-instance".into();
+    let mut other_window = caller.clone();
+    other_window.window_label = "other-window".into();
+    let mut other_epoch = caller.clone();
+    other_epoch.webview_epoch = n(2);
+    let mut request = RenameRequest {
+        operation_id: "operation".into(),
+        source,
+        session_key: "key".into(),
+        title: "new".into(),
+    };
+    let operations = Operations::default();
+    // 旧文档的在途操作填满预算，失权本身不能释放它们。
+    for index in 0..4096 {
+        request.operation_id = format!("pending-{index}");
+        assert!(operations.begin(&other_epoch, &request).unwrap().is_none());
+    }
+    operations
+        .release_revoked(|owner| owner == &caller)
+        .unwrap();
+    assert_eq!(
+        operations.begin(&caller, &request).unwrap_err().code,
+        "SOURCE_BUSY"
+    );
+    operations.finish(&other_epoch, &request, Err(safe("RENAME_OUTCOME_UNKNOWN")));
+    operations
+        .release_revoked(|owner| owner == &caller)
+        .unwrap();
+    assert!(operations.begin(&caller, &request).unwrap().is_none());
+    operations.finish(&caller, &request, Err(safe("RENAME_OUTCOME_UNKNOWN")));
+    operations
+        .release_revoked(|owner| owner == &caller)
+        .unwrap();
+    assert_eq!(
+        operations
+            .begin(&caller, &request)
+            .unwrap()
+            .unwrap()
+            .unwrap_err()
+            .code,
+        "RENAME_OUTCOME_UNKNOWN"
+    );
+    let mut conflict = request.clone();
+    conflict.title = "different".into();
+    assert_eq!(
+        operations.begin(&caller, &conflict).unwrap_err().code,
+        "RENAME_OPERATION_CONFLICT"
+    );
+    request.operation_id = "pending-0".into();
+    assert_eq!(
+        operations
+            .begin(&other_epoch, &request)
+            .unwrap()
+            .unwrap()
+            .unwrap_err()
+            .code,
+        "RENAME_OUTCOME_UNKNOWN"
+    );
+    let operations = Operations::default();
+    for owner in [&caller, &other_instance, &other_window, &other_epoch] {
+        assert!(operations.begin(owner, &request).unwrap().is_none());
+        operations.finish(owner, &request, Err(safe("RENAME_OUTCOME_UNKNOWN")));
+    }
+    // 多个仍有授权的完整 caller 均保留；同 instance 或 epoch 本身不是授权。
+    operations
+        .release_revoked(|owner| owner == &caller || owner == &other_instance)
+        .unwrap();
+    for owner in [&caller, &other_instance] {
+        assert_eq!(
+            operations
+                .begin(owner, &request)
+                .unwrap()
+                .unwrap()
+                .unwrap_err()
+                .code,
+            "RENAME_OUTCOME_UNKNOWN"
+        );
+    }
+    for owner in [&other_window, &other_epoch] {
+        assert!(operations.begin(owner, &request).unwrap().is_none());
+    }
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn NativeRename_ClaudeValidPlainScopePinsExactTranscript_011() {
+    let root = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let registry = ScopeRegistry::new(4);
+    let mut g = grant(root.path(), "unused", Arc::new(AtomicBool::new(true)));
+    fs::remove_file(root.path().join("projects/p/same.jsonl")).unwrap();
+    let id = "00000000-0000-4000-8000-000000000011";
+    fs::write(root.path().join(format!("projects/p/{id}.jsonl")),format!("{}\n",serde_json::json!({"type":"user","sessionId":id,"cwd":project.path(),"message":{"content":"fixture"}}))).unwrap();
+    g.projects = vec![AdmittedProject {
+        id: "project".into(),
+        root: Root::open(project.path()).unwrap(),
+        paths: vec![project.path().to_owned()],
+    }];
+    if let ScopeTarget::Profile { project_ids, .. } = &mut g.target {
+        *project_ids = vec!["project".into()];
+    }
+    let source = registry.register(g).unwrap();
+    let key = serde_json::to_string(&serde_json::json!([
+        "local",
+        "claude",
+        source.source_root_key,
+        id
+    ]))
+    .unwrap();
+    let authority = registry.authorize_rename(&owner(), &source, &key).unwrap();
+    assert_eq!(authority.native_id, id);
+    authority.verify_claude(None).unwrap();
+    let private = authority.prepare_claude().unwrap();
+    let bridge = private
+        .install_bridge(crate::cli::native_rename::claude::embedded_bridge())
+        .unwrap();
+    let environment = std::env::vars_os().collect();
+    let mut child =
+        crate::cli::native_rename::claude::command(&environment, &bridge, &private.path)
+            .unwrap()
+            .spawn()
+            .unwrap();
+    let result = crate::cli::native_rename::claude::process(
+        &mut child,
+        &authority,
+        "SDK native title",
+        &|| Ok(()),
+    );
+    let _ = child.kill();
+    let _ = child.wait();
+    result.unwrap();
+    authority.verify_claude(Some("SDK native title")).unwrap();
+    let data = fs::read_to_string(root.path().join(format!("projects/p/{id}.jsonl"))).unwrap();
+    let records: Vec<serde_json::Value> = data
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0]["message"]["content"], "fixture");
+    assert_eq!(records[1]["type"], "custom-title");
+    assert_eq!(records[1]["customTitle"], "SDK native title");
+    let history = registry.read(&owner(), &request(source.clone())).unwrap();
+    assert_eq!(history.items.len(), 1);
+    assert!(
+        matches!(&history.items[0], ResourceItem::Session { session_key, title, .. } if session_key == &key && title == "SDK native title")
+    );
+    drop(private);
+    assert!(!fs::read_dir(root.path()).unwrap().any(|entry| entry
+        .unwrap()
+        .file_name()
+        .to_string_lossy()
+        .starts_with(".ccdesk-rename-")));
+}
 #[test]
 fn incomplete_history_survives_filtering_and_empty_pages() {
     let t = tempfile::tempdir().unwrap();

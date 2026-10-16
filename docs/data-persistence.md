@@ -4,6 +4,12 @@ CC Desk currently carries two storage generations: the legacy Claude-compatible 
 
 ## Principles
 
+### Rebuilding display indexes
+
+Settings → General → Rebuild session index scans already-authorized configured sources into an isolated reader and backend staging generation. It does not delete or edit original JSONL/ZST history, CLI `session_index.jsonl`, archive state, saved names/pins, `projects.json`, configuration or workspace/profile files. Explicit read/enumeration failures cancel publication; ordinary bounded metadata alone does not imply missing sessions. Cancellation waits for the current source read before discarding staging. Existing visible lists remain available.
+
+The initial `native-history-metadata.json` and `session-name-index.json` remain the initial generation. Rebuilds stage only those regenerable files under `session-index-generations/<backend id>/`; an atomic `session-index-generation.json` manifest publishes the pair. Cache-only transaction/publish locks and generation checks reject stale writer completion, including another process. Cancelling or failing before publication preserves the old manifest, disk indexes and published Native memory. Frontend reload occurs after commit. An uncertain receipt triggers a read-only status check of the same document/transaction: confirmed staging may be cancelled, confirmed publication is refreshed, absence requires an explicit same-ID cancellation fence before releasing the identity. Cancelled IDs remain fenced for the document lifetime so a delayed begin cannot install a lease later; the bounded receipt table rejects new IDs when full rather than evicting a live fence. If status cannot be verified, the UI retains the transaction ID and offers “Check rebuild result”, without replaying begin/commit or guessing rollback. A failed post-commit refresh retains the published outcome and retries only the current runtime's refresh. Corrupt generation manifests degrade normal history to uncached reads with writes disabled; they never authorize fallback writes to an old generation. A manifest larger than 1 KiB is conservatively rejected by maintenance and requires separate diagnosis; old and cancelled generation directories are retained.
+
 1. Native CLI resources are **read-only projections** unless a specific CC Desk-owned workspace/profile operation is being performed.
 2. CC Desk does not own Provider/API-key configuration.
 3. Codex must never inherit legacy Claude secrets.
@@ -138,10 +144,14 @@ Concurrent project-state mutations use the existing lock + read-latest + canonic
 
 `projectsState` is the sole frontend writer for `projects.json`, including optional
 `sessionRecords` and per-project launch preferences. Both adapters consume saved
-names when projecting discovered history or an existing terminal. Saving a name
-does not change a native Session ID, write CLI history, send terminal input, or
-restart a process. The normal Workspace history row supports the same rename
-operation as a live row.
+names when projecting discovered history or an existing terminal. These records
+remain compatible presentation metadata. New GUI rename does not silently save an
+alias: supported Claude/Codex history and explicitly labeled opened source/record
+targets use the native authenticated metadata API, then clear exact Desk overrides
+only after official native readback. Failure or unsupported states preserve old
+metadata. Unknown outcomes never replay the write. Claude uses pinned public SDK
+0.3.301 with an existing Node >=22.13 and an isolated exact-transcript hardlink;
+no default root or model call is used. Busy-writer coordination remains unverified.
 
 Native history metadata uses the full `native-history-v2` catalog identity,
 including CLI, launch configuration ID/revision, registered project ID/path and
@@ -155,6 +165,12 @@ Adapters carry an explicitly matched Desk name as the display-only
 `savedDisplayName` projection. Folding consumes that resolved name before the
 Legacy exact-key fallback; it never scans saved records by UUID/project or
 reconstructs another profile, revision, root or registration's history identity.
+
+Display-only folding across profiles requires full CLI/root/registered-project/path/
+native-ID/session-key identity and the same archive state. Opened owners remain
+separate. Native rename clears aliases and refreshes all exact physical projections;
+each opened companion must still own that same record. A Legacy historical alias
+clears only after fresh proof that its root is the renamed physical Claude root.
 
 Legacy folding revalidates the runtime's initial physical root key for each
 catalog projection and Native bare-ID archive restore. A changed, unavailable or

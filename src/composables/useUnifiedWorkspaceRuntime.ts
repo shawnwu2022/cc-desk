@@ -1,11 +1,12 @@
 import { computed, shallowRef, nextTick, onMounted, onUnmounted, ref, watch, type Ref } from 'vue'
 import { writeText } from '@tauri-apps/plugin-clipboard-manager'
-import { openInFileManager, nativeUnarchiveSession, legacyClaudeRootKey } from '@/api/tauri'
+import { openInFileManager, nativeUnarchiveSession, nativeRenameSession, nativeGetScope, legacyClaudeRootKey, getSessions } from '@/api/tauri'
+import { useSessionIndexMaintenanceStore } from '@/stores/sessionIndexMaintenance'
 import { createNativeId } from '@/utils/nativeId'
 import { useAppStore } from '@/stores/app'
 import { useSessionStore } from '@/stores/session'
 import { useNativeTabsStore, captureNativeAttempt, matchesNativeAttempt, type NativeCliTab } from '@/stores/nativeTabs'
-import { nativeHistoryContextKey, useNativeHistoryStore } from '@/stores/nativeHistory'
+import { createNativeHistoryReader, nativeHistoryContextKey, useNativeHistoryStore } from '@/stores/nativeHistory'
 import { useNewSessionDraftStore } from '@/stores/newSessionDraft'
 import { useCliProfilesStore } from '@/stores/cliProfiles'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -16,7 +17,7 @@ import { useShellStore, type WorkspaceRequest } from '@/stores/shell'
 import { useHookStore } from '@/stores/hook'
 import { useAttentionStore } from '@/stores/attention'
 import { createLegacyClaudeAdapter } from '@/session/adapters/legacyClaudeAdapter'
-import { createNativeCliAdapter, type NativeRuntimeCreateInput } from '@/session/adapters/nativeCliAdapter'
+import { createNativeCliAdapter, type NativeRuntimeCreateInput, type NativeRestartContinuation } from '@/session/adapters/nativeCliAdapter'
 import { mapSafeUserError, safeUserErrorCode } from '@/utils/userError'
 import { projectSessionDiagnostics } from '@/utils/sessionDiagnostics'
 import { normalizePath, sameProjectPath } from '@/utils/path'
@@ -39,6 +40,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   const cliSupport = useCliSupportStore()
   const attention = useAttentionStore()
   const shell = useShellStore()
+  const indexMaintenance = useSessionIndexMaintenanceStore()
   const legacyPaths = ref<string[]>([])
   /** 根证明只绑定本 runtime 初始目录；替换或验证失败即撤销，不能重绑旧终端和缓存。 */
   let legacyClaudeRoot: string | undefined
@@ -223,7 +225,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
       cli: tab.cli, profileId: tab.profileId, profileRevision: tab.profileRevision })
     return tab
   }
-  async function restartNative(tabId: string) {
+  async function restartNative(tabId: string, continuation?: NativeRestartContinuation) {
     const tab = native.tab(tabId)
     if (!tab) throw new Error('NATIVE_SESSION_NOT_FOUND')
     const frozen = { ...tab }
@@ -237,11 +239,20 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
       if (!workspace.projects.some(project => project.projectId === frozen.projectId && sameProjectPath(project.selectedPath, frozen.projectPath))) throw new Error('PROJECT_NOT_FOUND')
     }
     requireSource()
+    const verifyContinuation = async () => { if (continuation) {
+      const proof=await nativeGetScope({kind:'run',runId:attempt.runId,generation:attempt.generation})
+      if (!matchesNativeAttempt(native.tab(tabId),attempt) || !ownsSource()) throw new Error('STALE_SESSION_ATTEMPT')
+      if (proof.cli!==frozen.cli || proof.profileId!==frozen.profileId || proof.profileRevision!==frozen.profileRevision || proof.sourceRootKey!==continuation.sourceRootKey
+        || proof.target.kind!=='run' || proof.target.runId!==attempt.runId || proof.target.generation!==attempt.generation) throw new Error('SOURCE_CHANGED')
+      requireSource()
+    } }
+    await verifyContinuation()
     if (frozen.status === 'starting' || frozen.status === 'running') await requireHost().stopNative(tabId, attempt)
     if (!matchesNativeAttempt(native.tab(tabId), attempt)) throw new Error('STALE_NATIVE_ATTEMPT')
     if (!ownsSource()) throw new Error('STALE_SESSION_ATTEMPT')
     requireSource()
-    const restarted = native.restart(tabId, { cli: frozen.cli, profileId: frozen.profileId, profileRevision: frozen.profileRevision })
+    await verifyContinuation()
+    const restarted = native.restart(tabId, { cli: frozen.cli, profileId: frozen.profileId, profileRevision: frozen.profileRevision },continuation)
     awaitingSuccess.set(restarted.tabId, { attempt: captureNativeAttempt(restarted), projectPath: restarted.projectPath, cli: restarted.cli, profileId: restarted.profileId, profileRevision: restarted.profileRevision })
     return restarted
   }
@@ -315,6 +326,8 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
           restartTab: id => requireHost().restartLegacy(id), renameTab: (id, title, admission) => requireHost().renameLegacy(id, title, admission),
         } }),
       createNativeCliAdapter({ tabs: native, history, metadata: projects, legacyClaudeRootKey: validateLegacyClaudeRoot, archive: { getArchivedSessions: legacy.getArchivedSessions, archiveSession: projects.archiveSession, restoreSession: projects.restoreSession },
+        nativeRename: { rename: nativeRenameSession },
+        runSource: tab => nativeGetScope({kind:'run',runId:tab.runId,generation:tab.generation}),
         cliUnarchive: { unarchive: (context, nativeSessionId) => {
           if (app.isProjectAdmissionBlocked(context.projectPath)) throw new Error('PROJECT_REMOVAL_IN_PROGRESS')
           // 只有 codex 有 CLI 侧归档；claude 行不进入此路径。
@@ -617,8 +630,8 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     if (!enabled || !ready.value || disposed || loading.value) return
     const owner = refreshOwner
     try {
-      if (projectPaths) await Promise.all(projectPaths.map(path => catalog.refresh(path)))
-      else await catalog.refresh()
+      if (projectPaths) await Promise.all(projectPaths.map(path => catalog.refresh(path, { background: true })))
+      else await catalog.refresh(undefined, { background: true })
     } catch (failure) {
       if (disposed || owner !== refreshOwner || loading.value) return
       const warnings = createWorkspaceSourceWarnings(sourceWarnings.value, sourceWarningsTruncated.value)
@@ -650,15 +663,18 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   const pendingHistoryOwners = new Map<string, HistoryOwner>()
   let historyTimer: ReturnType<typeof setTimeout> | undefined
   let historyReading = false
-  function historyCue(tab: NativeCliTab): { identity: string | null; reply: string | null } | null {
+  function historyCue(tab: NativeCliTab): { identity: string | null; reply: string | null; prompt: string | null } | null {
     if (tab.cli !== 'claude' || tab.action.kind === 'raw' || tab.status !== 'running' || tab.observationState !== 'active') return null
     const attempt = captureNativeAttempt(tab)
     const notice = native.hasOwnedObservationNotice(tab.tabId, attempt) ? tab.observationNotice : undefined
     const reply = notice?.recent?.kind === 'reply-ended' ? notice.recent : notice?.unreadReplyEnd
+    const prompt = notice?.lastPromptSubmitted?.kind === 'prompt-submitted' ? notice.lastPromptSubmitted
+      : notice?.recent?.kind === 'prompt-submitted' ? notice.recent : null
     const key = [attempt.requestId, attempt.runId, attempt.generation]
-    return tab.observedSessionId || reply ? {
+    return tab.observedSessionId || reply || prompt ? {
       identity: tab.observedSessionId ? JSON.stringify([...key, tab.observedSessionId]) : null,
       reply: reply ? JSON.stringify([...key, reply.eventId]) : null,
+      prompt: prompt ? JSON.stringify([...key, prompt.eventId]) : null,
     } : null
   }
   function scheduleHistoryRead() {
@@ -722,12 +738,21 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
         } })
         scheduleHistoryRead()
       }
-      owner.stop = watch(tab, () => {
+      // 输出/输入只推进 lastActivityAt，不使整个项目目录失效；状态/身份仍立即投影。
+      owner.stop = watch(() => {
+        const value = tab as unknown as Record<string, unknown>
+        return ['projectPath', 'projectId', 'profileId', 'profileRevision', 'cli', 'title', 'name', 'status',
+          'requestId', 'runId', 'generation', 'ptyId', 'ptyGeneration', 'sessionId', 'observedSessionId',
+          'activity', 'activityState', 'working', 'pending', 'attentionState', 'observation', 'observationState',
+          'observationNotice', 'observerEnabled', 'observerReasonCode', 'errorCode', 'sourceSessionKey', 'createdAt', 'usesDefaultClaudeRoot']
+          .map(key => value[key])
+      }, () => {
         const previousPath = owner.projectPath
         owner.projectPath = tab.projectPath
         queueCatalogProjects(previousPath, owner.projectPath)
         const cue = nativeTab && historyCue(nativeTab)
-        if (cue && (cue.identity && cue.identity !== owner.historyCue?.identity || cue.reply && cue.reply !== owner.historyCue?.reply)) queueHistory()
+        if (cue && (cue.identity && cue.identity !== owner.historyCue?.identity || cue.reply && cue.reply !== owner.historyCue?.reply
+          || cue.prompt && cue.prompt !== owner.historyCue?.prompt)) queueHistory()
         owner.historyCue = cue
       })
       catalogOwnerWatches.set(tab, owner)
@@ -749,7 +774,42 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     void useHookStore().init()
     void refresh()
   })
+  const stopIndexMaintenance = indexMaintenance.configure(async control => {
+    if (!ready.value || loading.value || disposed) throw new Error('INDEX_REBUILD_NOT_READY')
+    const sources = profiles.profiles.filter(profile => profile.cli !== 'shell' && cliSupport.isEnabled(profile.cli as UnifiedCliKind))
+      .map(profile => ({ cli: profile.cli as UnifiedCliKind, profileId: profile.id, profileRevision: profile.revision,
+        projects: workspace.projects.map(project => ({ projectId: project.projectId, projectPath: project.selectedPath })) }))
+    const identity = JSON.stringify(sources)
+    const paths = cliSupport.isEnabled('claude') ? [...new Set([...legacyPaths.value, ...projects.pinnedProjects, ...[...legacy.tabs.values()].map(tab => tab.projectPath)])] : []
+    const scratch = createNativeHistoryReader()
+    let completed = 0
+    control.progress(0, paths.length + sources.length)
+    try {
+      for (const path of paths) {
+        if (control.cancelled()) return
+        for (let offset = 0; ; offset += 200) {
+          const rows = await getSessions(path, 200, offset)
+          if (control.cancelled()) return
+          if (rows.length < 200) break
+          if (offset >= 1_000_000) throw new Error('INDEX_SCAN_LIMIT')
+        }
+        control.progress(++completed, paths.length + sources.length)
+      }
+      for (const source of sources) {
+        if (control.cancelled()) return
+        const entries = await scratch.loadGrouped(source, { force: true })
+        if (control.cancelled()) return
+        if ([...entries.values()].some(entry => entry.error || entry.readFailures?.length)) throw new Error('INDEX_SCAN_INCOMPLETE')
+        control.progress(++completed, paths.length + sources.length)
+      }
+      const current = profiles.profiles.filter(profile => profile.cli !== 'shell' && cliSupport.isEnabled(profile.cli as UnifiedCliKind))
+        .map(profile => ({ cli: profile.cli as UnifiedCliKind, profileId: profile.id, profileRevision: profile.revision,
+          projects: workspace.projects.map(project => ({ projectId: project.projectId, projectPath: project.selectedPath })) }))
+      if (disposed || JSON.stringify(current) !== identity) throw new Error('INDEX_SOURCE_CHANGED')
+    } finally { scratch.invalidate() }
+  }, () => refresh())
   onUnmounted(() => {
+    stopIndexMaintenance()
     disposed = true; ++refreshOwner
     if (historyTimer) clearTimeout(historyTimer)
     pendingHistoryOwners.clear()

@@ -1,4 +1,5 @@
 import { createProjectionClient } from './nativeProjection'
+import { readObserverInstallation } from './observer'
 import { createHistoryClient } from './versionHistory'
 import { createLaunchAttempt } from './cliLaunchAttempt';
 import { invoke } from '@tauri-apps/api/core';
@@ -477,6 +478,21 @@ export function createNativeProjectionClient(): import('./nativeProjection').Pro
 }
 export async function nativeGetScope(target: import('@/types/nativeProjection').ScopeTarget): Promise<import('@/types/nativeProjection').SourceRef> {
   return createNativeProjectionClient().scope(target);
+}
+
+export function cliGetObserverStatus(owner: { requestId: string; runId: string; generation: number }) {
+  return readObserverInstallation(nativeDocumentBridge(), owner)
+}
+export function nativeRenameSession(request: import('@/types/nativeProjection').NativeRenameRequest) {
+  return createNativeProjectionClient().rename(request)
+}
+
+export async function sessionIndexMaintenance(id: string, action: 'begin'|'commit'|'cancel'|'status'): Promise<{ id: string; state: 'staging'|'committed'|'cancelled'|'absent' }> {
+  const result = await nativeDocumentBridge().invoke('cli_session_index_maintenance', { id, action }) as { id: string; state: 'staging'|'committed'|'cancelled'|'absent' }
+  const expected = { begin: 'staging', commit: 'committed', cancel: 'cancelled' }
+  if (!result || Object.keys(result).sort().join() !== 'id,state' || result.id !== id ||
+    (action === 'status' ? !['staging','committed','cancelled','absent'].includes(result.state) : result.state !== expected[action])) throw new Error('INVALID_INDEX_MAINTENANCE_RESPONSE')
+  return { id, state: result.state }
 }
 export async function nativeListResources(request: import('@/types/nativeProjection').ReadRequest): Promise<import('@/types/nativeProjection').ProjectionResult> {
   return createNativeProjectionClient().read(request);

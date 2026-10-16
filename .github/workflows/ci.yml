@@ -101,6 +101,14 @@ jobs:
           CI_CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
         run: node scripts/ci-build-metrics.mjs context
 
+      - name: Prepare pinned session metadata helper
+        working-directory: .
+        run: |
+          npm ci --ignore-scripts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run prepare:session-sdk
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Prepare verified Windows runtime before direct cargo commands
         id: runtime
         working-directory: .
@@ -212,6 +220,14 @@ jobs:
         env:
           CI_CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
         run: node scripts/ci-build-metrics.mjs context
+
+      - name: Prepare pinned session metadata helper
+        working-directory: .
+        run: |
+          npm ci --ignore-scripts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run prepare:session-sdk
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Prepare verified Windows runtime before direct cargo commands
         id: runtime
@@ -388,6 +404,8 @@ jobs:
         run: |
           npm ci
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run prepare:session-sdk
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node scripts/prepare-conpty.mjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build ordinary embedded release without acceptance
@@ -429,6 +447,8 @@ jobs:
       - name: Prepare frontend and verified runtime
         run: |
           npm ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run prepare:session-sdk
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node scripts/prepare-conpty.mjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

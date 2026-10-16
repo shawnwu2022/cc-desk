@@ -2,6 +2,9 @@ import { describe, expect, test } from 'vitest'
 import { mapSafeUserError, safeUserErrorCode } from '@/utils/userError'
 
 describe('mapSafeUserError', () => {
+  test.each(['NODE_RUNTIME_UNAVAILABLE','SDK_HELPER_UNAVAILABLE'])('Rename_RuntimeRequirementIsExplicit_003 %s',code=>{
+    expect(mapSafeUserError(code,'session')).toMatchObject({messageKey:code==='NODE_RUNTIME_UNAVAILABLE'?'errorRenameNodeRuntime':'errorRenameSdkHelper',retryable:false,detailCode:code})
+  })
   test('SourceBudget_ExplicitRetry_002', () => {
     const code = safeUserErrorCode({ code: 'SOURCE_BUDGET_EXCEEDED', field: '/private/history', message: 'secret' })
     const result = mapSafeUserError(code, 'session')

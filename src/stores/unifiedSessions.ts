@@ -1,4 +1,4 @@
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { defineStore } from 'pinia'
 import { useProjectsStateStore } from '@/stores/projectsState'
 import { useCliSupportStore } from '@/stores/cliSupport'
@@ -16,7 +16,7 @@ import type { SessionConfirmationRequest } from '@/types/confirmation'
 import { mapSafeUserError, safeUserErrorCode, type UserErrorPresentation } from '@/utils/userError'
 import { useNotificationsStore } from '@/stores/notifications'
 import type { ToastInput } from '@/stores/notifications'
-import { makeSessionCatalogKey, makeSessionRenameOwnerKey } from '@/utils/sessionPresentation'
+import { makeSessionCatalogKey, makeSessionRenameOwnerKey, nativeHistoryRecordKey } from '@/utils/sessionPresentation'
 import { matchesSessionMetadata } from '@/session/sessionMetadata'
 import type { SessionUiRecord } from '@/types/app'
 import { nativeHistoryContextKey } from '@/stores/nativeHistory'
@@ -331,7 +331,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
   let selectionIntentEpoch = 0
   const actionVersion = new Map<string, number>()
   const actionTails = new Map<string, Promise<void>>()
-  const closingSessions = new Map<string, { owns: () => boolean; promise: Promise<void> }>()
+  const closingSessions = new Map<string, { owns: () => boolean; promise: Promise<void>; fallback: { enabled: boolean } }>()
 
   const activeSession = computed(() =>
     sessions.value.find(session => session.id === activeSessionId.value) ?? null,
@@ -360,6 +360,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
           errorCount: 0,
           permissionCount: 0,
           completedCount: 0,
+          unreadReplyCount: 0,
           lastActivityAt: 0,
         }
         groups.set(key, group)
@@ -369,6 +370,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
         group.runningCount += 1
       }
       if (session.attentionState === 'needs-user') group.needsUserCount += 1
+      if (session.observationNotice?.unreadReplyEnd?.kind === 'reply-ended') group.unreadReplyCount! += 1
       if (session.processState === 'running') {
         if (['working', 'thinking', 'tool_executing', 'subagent_running', 'compacting'].includes(session.activityState ?? 'unknown')) group.workingCount! += 1
         if (session.attentionKind === 'error' || session.activityState === 'error') group.errorCount! += 1
@@ -425,13 +427,14 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     return adapterForRuntime(matches[0]?.runtime ?? input.runtime ?? 'native-cli')
   }
 
-  async function refresh(projectKey?: string): Promise<void> {
+  async function refresh(projectKey?: string, options: { background?: boolean } = {}): Promise<void> {
     const version = ++refreshVersion
     const key = projectKey === undefined ? undefined : normalizePath(projectKey)
     if (key === undefined) fullRefreshVersion = version
     else projectRefreshVersions.set(key, version)
-    ++pendingRefreshes
-    loading.value = true
+    const visible = !options.background
+    if (visible) ++pendingRefreshes
+    loading.value = pendingRefreshes > 0
     error.value = null
 
     const ownsProject = (candidate: string): boolean =>
@@ -460,9 +463,28 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
         if (!cliSupport.isEnabled(session.cli) && session.opened !== true) continue
         byId.set(session.id, mergeDuplicateSession(byId.get(session.id), session))
       }
+      const physicalRecords = new Map<string, UnifiedSession[]>()
+      const previousIds = new Set(sessions.value.map(row => row.id))
+      for (const row of byId.values()) {
+        const record = nativeHistoryRecordKey(row)
+        if (!record || row.safeErrorCode === 'SESSION_ORIGIN_AMBIGUOUS') continue
+        const key = JSON.stringify([record, row.archived])
+        const rows = physicalRecords.get(key)
+        if (rows) rows.push(row)
+        else physicalRecords.set(key, [row])
+      }
+      for (const rows of physicalRecords.values()) {
+        if (rows.length < 2) continue
+        const opened = rows.filter(row => row.opened === true)
+        // 两个终端仍各有进程 owner；这里只移除同物理记录的关闭投影。
+        const retained = opened.length ? opened : [rows.find(row => row.id === activeSessionId.value)
+          ?? rows.find(row => previousIds.has(row.id)) ?? rows[0]]
+        for (const row of rows) if (!retained.includes(row)) byId.delete(row.id)
+      }
       // legacy 与 native 历史扫描同一 CLI 默认数据源,同一会话会各投影一行；以
       // native 行为准（归档/改名/恢复语义更完整），legacy 历史行在存在同一
-      // native 身份（活动的或历史的）时让位。已打开终端永不参与折叠。
+      // native 身份时让位；已归档 legacy 行只交给关闭的 native 历史行。
+      // 已打开终端保留自身进程 owner，不接管独立 legacy 归档 owner。
       // 折叠的前提是**根身份已证明**：legacy 读固定 `~/.claude`，native 读
       // profile 的 CLAUDE_CONFIG_DIR；只有两者的根 key 相同（同一目录的同一
       // 文件索引）才是同一来源，UUID 相等本身不是证据。根身份未知或不同一律
@@ -482,6 +504,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
           const matches = nativeHistoryKeys.get(`${row.cli}\u0000${normalizePath(row.projectPath)}\u0000${row.adapterSessionId}`)
           if (matches?.length !== 1 || matches[0].safeErrorCode === 'SESSION_ORIGIN_AMBIGUOUS') continue
           const native = matches[0]
+          if (row.archived && native.opened === true) continue
           // 折叠前先接管 legacy 行独占的证据：归档保存的是裸 session ID，而
           // nativeCliAdapter.archiveState 只识别完整 Native key 与旧 Native key，
           // 直接删除会让已归档会话重新出现在普通列表；已保存的 Desk 显示名与
@@ -526,9 +549,14 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
           if (row) byId.set(id, { ...row, renameState: 'idle' })
         }
       }
+      const previousRows = new Map(sessions.value.map(row => [row.id, row]))
       sessions.value = [...byId.values()].map(row => {
         const owner = renameOwners.get(row.id)
-        return owner ? { ...row, renameState: owner.state } : row
+        const next = owner ? { ...row, renameState: owner.state } : row
+        const previous = previousRows.get(row.id)
+        // 未变化的安全投影保留对象身份，避免同一项目内无关行重绘。
+        return previous && Object.keys(previous).length === Object.keys(next).length
+          && Object.keys(next).every(key => JSON.stringify(previous[key as keyof UnifiedSession]) === JSON.stringify(next[key as keyof UnifiedSession])) ? previous : next
       }).sort(compareSessionOpenOrder)
       if (activeSessionId.value && !byId.has(activeSessionId.value)) {
         activeSessionId.value = null
@@ -539,7 +567,8 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
       }
       throw failure
     } finally {
-      loading.value = --pendingRefreshes > 0
+      if (visible) --pendingRefreshes
+      loading.value = pendingRefreshes > 0
     }
   }
 
@@ -724,25 +753,32 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     await refresh(session.projectKey)
   }
 
-  function closeSession(id: string, canContinue = () => true): Promise<void> {
+  async function selectRemainingAfterClose(id: string, projectKey: string, wasSelected: boolean, ownsSelection: () => boolean) {
+    if (!wasSelected || !ownsSelection() || activeSessionId.value !== null && activeSessionId.value !== id) return
+    activeSessionId.value = null
+    const open = sessions.value.filter(row => row.id !== id && !row.archived
+      && row.id === `${row.runtime === 'native-cli' ? 'native-tab' : 'legacy-tab'}:${row.adapterSessionId}`)
+    const next = open.find(row => normalizePath(row.projectPath) === normalizePath(projectKey)) ?? open[0]
+    if (next) await activateSession(next.id)
+  }
+  function closeSession(id: string, canContinue = () => true, selectFallback = true): Promise<void> {
     if (!canContinue()) return Promise.reject(new Error('STALE_SESSION_ATTEMPT'))
     const closing = closingSessions.get(id)
     // Repeated clicks join only the exact still-owned attempt. Enqueuing another
     // close would invalidate the first operation's selection publication.
-    if (closing?.owns()) return closing.promise
+    if (closing?.owns()) {
+      if (!selectFallback) closing.fallback.enabled = false
+      return closing.promise
+    }
+    const fallback = { enabled: selectFallback }
     const wasSelected = activeSessionId.value === id
     const ownsSelection = captureSelectionOwnership()
     async function selectRemaining(projectKey: string) {
       // Ownership publication can clear the closed ID before this operation
       // finishes. Only its original selection intent may choose a replacement.
-      if (!wasSelected || !ownsSelection() || activeSessionId.value !== null && activeSessionId.value !== id) return
-      activeSessionId.value = null
-      const open = sessions.value.filter(row => row.id !== id && !row.archived
-        && row.id === `${row.runtime === 'native-cli' ? 'native-tab' : 'legacy-tab'}:${row.adapterSessionId}`)
-      const next = open.find(row => normalizePath(row.projectPath) === normalizePath(projectKey)) ?? open[0]
       // History is never resumed by a close; the existing runtime adapter owns
       // activation, including the Legacy aggregate's internal selected tab.
-      if (next) await activateSession(next.id)
+      if (fallback.enabled) await selectRemainingAfterClose(id, projectKey, wasSelected, ownsSelection)
     }
     const creation = creations.get(id)
     if (creation) {
@@ -766,7 +802,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
       completedClose.value = { projectKey: session.projectKey, sequence: (completedClose.value?.sequence ?? 0) + 1 }
       await selectRemaining(session.projectKey)
     }, 'close')
-    const pending = { owns, promise }
+    const pending = { owns, promise, fallback }
     closingSessions.set(id, pending)
     void promise.then(() => {
       if (closingSessions.get(id) === pending) closingSessions.delete(id)
@@ -774,6 +810,52 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
       if (closingSessions.get(id) === pending) closingSessions.delete(id)
     })
     return promise
+  }
+
+  function captureProjectClose(path: string, expectedOwnerIds?: readonly string[]): (canContinue?: () => boolean) => Promise<void> {
+    const projectKey = normalizePath(path)
+    const targets = sessions.value.filter(row => normalizePath(row.projectPath) === projectKey
+      && !row.archived && (row.opened === true || isPreparingSession(row.id))).map(row => ({
+      id: row.id, key: makeSessionRenameOwnerKey(row),
+      owns: creations.has(row.id) ? captureSessionOwnership(row.id)
+        : adapterForRuntime(row.runtime).captureOwnership?.(row.id, 'close') ?? (() => sessions.value.includes(row)),
+    }))
+    const expected = expectedOwnerIds && new Set(expectedOwnerIds)
+    const inventoryMatches = !expected || expected.size === expectedOwnerIds?.length
+      && targets.length === expected.size && targets.every(target => expected.has(target.id))
+    return async (canContinue = () => true) => {
+      if (!inventoryMatches) throw new Error('PROJECT_CLOSE_PARTIAL')
+      if (!canContinue()) throw new Error('ACTION_CANCELLED')
+      let failed = false
+      const selected = targets.find(target => target.id === activeSessionId.value)
+      const ownsSelection = captureSelectionOwnership()
+      try {
+        // 已开始的单个关闭也可能先于其批量次序完成，须在第一次 await 前接管后备选择。
+        for (const target of targets) {
+          const closing = closingSessions.get(target.id)
+          if (target.owns() && closing?.owns()) closing.fallback.enabled = false
+        }
+        // Legacy 内部关闭也会选择替补；先隐藏前台宿主，避免该内部切换触发未读 ACK。
+        if (selected) { activeSessionId.value = null; await nextTick() }
+        for (const target of targets) {
+          if (!canContinue()) throw new Error('ACTION_CANCELLED')
+          const row = sessions.value.find(item => item.id === target.id)
+          if (!row) { if (target.owns()) failed = true; continue }
+          const owns = () => canContinue() && target.owns() && sessions.value.some(item => item.id === target.id
+            && normalizePath(item.projectPath) === projectKey && makeSessionRenameOwnerKey(item) === target.key)
+          if (!owns()) { failed = true; continue }
+          try { await closeSession(target.id, owns, false) } catch { failed = true }
+        }
+        if (failed) throw new Error('PROJECT_CLOSE_PARTIAL')
+      } finally {
+        // 批次结束才选替补，避免短暂激活即将关闭的会话并清除其未读回执。
+        if (selected && ownsSelection() && activeSessionId.value === null) {
+          const remaining = sessions.value.find(row => row.id === selected.id)
+          if (!remaining) await selectRemainingAfterClose(selected.id, projectKey, true, ownsSelection)
+          else if (selected.owns() && makeSessionRenameOwnerKey(remaining) === selected.key) await activateSession(selected.id)
+        }
+      }
+    }
   }
 
   function discardPreparation(id: string): Promise<void> {
@@ -801,11 +883,11 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     owner?.controller.abort()
     sessions.value = sessions.value.map(row => row.id === id ? { ...row, renameState: 'idle' } : row)
   }
-  function renameSession(id: string, title: string, requireEditor = false): Promise<'input-written' | 'display-name-saved' | void> {
+  function renameSession(id: string, title: string, requireEditor = false): Promise<'input-written' | 'display-name-saved' | 'native-title-saved' | void> {
     const session = requireSession(id)
     const adapter = adapterForRuntime(session.runtime)
     const current = renameOwners.get(id)
-    if ((requireEditor && (!current || (session.opened !== false && activeSessionId.value !== id))) || (current && !ownsRename(current, session))) {
+    if ((requireEditor && (!current || current.state !== 'editing' || (session.opened !== false && activeSessionId.value !== id))) || (current && !ownsRename(current, session))) {
       if (!current?.issued) {
         renameOwners.delete(id)
         current?.controller.abort()
@@ -821,10 +903,18 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     return enqueue(id, () => {
       if (renameOwners.get(id) !== owner || !ownsRename(owner, sessions.value.find(row => row.id === id))) throw new Error('STALE_SESSION_ATTEMPT')
       return adapter.renameSession(id, title, () => renameOwners.get(id) === owner && ownsRename(owner, sessions.value.find(row => row.id === id)), () => { owner.issued = true }, owner.controller.signal)
-    }, () => refresh(session.projectKey)).catch(failure => {
+    }, async result => {
+      try { await refresh(session.projectKey) }
+      catch (failure) {
+        // 原生已确认写回，后置读取失败只能提示同步问题，不能重新开放同一次保存。
+        if (result === 'native-title-saved') throw new Error('RENAME_DISPLAY_SYNC_FAILED')
+        throw failure
+      }
+    }).catch(failure => {
       // A failed owned editor save must keep the user's draft available for
       // retry; revoked/replaced attempts still close through normal cleanup.
-      if (requireEditor && renameOwners.get(id) === owner && ownsRename(owner, sessions.value.find(row => row.id === id))) {
+      const nativeSaved = session.runtime === 'native-cli' && safeUserErrorCode(failure) === 'RENAME_DISPLAY_SYNC_FAILED'
+      if (!nativeSaved && requireEditor && renameOwners.get(id) === owner && ownsRename(owner, sessions.value.find(row => row.id === id))) {
         owner.state = 'editing'
         owner.issued = false
         sessions.value = sessions.value.map(row => row.id === id ? { ...row, renameState: 'editing' } : row)
@@ -895,6 +985,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     stopSession,
     restartSession,
     closeSession,
+    captureProjectClose,
     clearUnread,
     completedClose,
     renameSession, beginRename, cancelRename, discardPreparation,

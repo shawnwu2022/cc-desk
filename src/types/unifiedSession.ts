@@ -76,6 +76,7 @@ export interface UnifiedSession {
   /** Missing/unordered observation means unknown, never idle or completed. */
   activityState?: SessionActivityState
   observationState?: SessionObservationState
+  observerReasonCode?: import('@/api/observer').ObserverReasonCode
   /** An explicit attention cause; completion must come from a completion event. */
   attentionKind?: SessionAttentionKind
   /** Authenticated recent/unread event receipts, never a current activity claim. */
@@ -95,6 +96,8 @@ export interface UnifiedSession {
   nativeSessionId?: string | null
   /** native 来源根身份（SourceRef.sourceRootKey）；仅 native 行携带。折叠重复历史行前必须与 legacy 固定根比较，相等才证明同源。 */
   nativeRootKey?: string
+  /** 来自精确历史投影的记录键，仅用于同物理记录的显示去重，不授予操作权限。 */
+  nativeHistorySessionKey?: string
   /** legacy 终端本次启动冻结的根证明：为真才可与默认根同 UUID 历史互为孪生。未知视为不可证明。 */
   usesDefaultClaudeRoot?: boolean
   launchConfigId?: string | null
@@ -103,6 +106,8 @@ export interface UnifiedSession {
   /** Allowlisted preflight code only; never raw errors or configuration values. */
   preparationIssueCode?: string | null
   renameState?: SessionRenameState
+  /** 仅标明编辑目标；不能证明当前终端仍停留在恢复来源会话。 */
+  renameTarget?: 'resume-source' | 'history-record'
 }
 
 export interface UnifiedProjectGroup {
@@ -118,6 +123,7 @@ export interface UnifiedProjectGroup {
   errorCount?: number
   permissionCount?: number
   completedCount?: number
+  unreadReplyCount?: number
   lastActivityAt: number
 }
 
@@ -153,7 +159,7 @@ export interface ResumeUnifiedSessionInput {
   title?: string
 }
 
-export type SessionRenameResult = 'input-written' | 'display-name-saved'
+export type SessionRenameResult = 'input-written' | 'display-name-saved' | 'native-title-saved'
 
 export interface SessionAdapter {
   readonly runtime: SessionRuntimeKind
@@ -185,7 +191,7 @@ export interface SessionCatalogIdentity {
 
 /** Tree requests carry catalog/project identity; the workspace owns runtime dispatch. */
 export type UnifiedProjectIdentity = Pick<UnifiedProjectGroup, 'projectKey' | 'projectPath'>
-export type ProjectMenuAction = 'pin' | 'unpin' | 'rename' | 'view-archive' | 'open-project-directory' | 'remove-project'
+export type ProjectMenuAction = 'pin' | 'unpin' | 'rename' | 'view-archive' | 'open-project-directory' | 'close-project-sessions' | 'remove-project'
 export interface ProjectActionRequest extends UnifiedProjectIdentity {
   action: ProjectMenuAction
 }

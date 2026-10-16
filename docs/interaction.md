@@ -16,6 +16,8 @@ Mod 在 Windows/Linux 为 Ctrl，在 macOS 为 Cmd。设置中的快捷键编辑
 
 ## 终端输入边界
 
+打开的 Claude/Codex `resume-id` 标签若保留了精确来源键，更名菜单、保存按钮与编辑框说明明确指向“恢复来源会话”，说明中显示来源 ID。新建 Claude 已获得可靠原生 ID 时可明确更名其“历史会话记录”，同样显示记录 ID。终端内 `/new` 或切换会话不改变恢复来源目标。保存前重新核对冻结根与最新 profile revision、项目、原生 ID 和 key，再通过来源的 profile 授权写入；不发送终端按键。raw/picker 和未获可靠 ID 的新建会话不猜目标，原生失败不另存显示别名。Claude 的 Node ≥22.13、文件系统或 helper 条件不满足时给出固定安全错误；不自动安装运行环境。
+
 Native Claude/Codex 输入经过 authenticated document bridge，Legacy Claude 输入保留自己的 PTY adapter。应用快捷键之外的 CLI 快捷键由对应 CLI 解释。后台终端只接收已识别的协议回复，用户输入仍受可见性和精确运行身份约束。下列旧 Claude 输入说明仅描述其终端路径，不能替代 Native 输入契约或真实 CLI 验收。
 
 ## 终端快捷键（Claude CLI 处理）
@@ -164,6 +166,8 @@ AppShell 是所有构建的唯一外壳，一级入口为工作区、项目、�
 
 ## 鼠标交互
 
+会话尾部的关闭/时间槽与外置归档槽具有固定且不同的坐标；关闭后历史行或邻行顶上时，旧关闭坐标不能变成归档，也不触发历史恢复。归档仍可由独立外置按钮或共享菜单执行。首次空数据加载可显示加载文字，后台投影刷新不闪现该文字。
+
 - **文本选择**：xterm.js 原生支持
 - **链接点击**：WebLinksAddon 处理
 - **复制粘贴**：Ctrl+C/V（需聚焦终端）
@@ -179,3 +183,7 @@ AppShell 是所有构建的唯一外壳，一级入口为工作区、项目、�
 | 信息面板 | MCP/Skills/Agents/Plugins 只读展示 | 编辑配置 |
 | 搜索 | SearchAddon | 高级过滤 |
 | 自动更新 | GitHub Releases 检测 + 下载安装 | 后台静默更新 |
+
+## Structured restart continuity
+
+An already-started Native new or resume-id tab restarts only after checking its frozen run source, a fresh positive history identity and the exact current owner. The root/profile/project are revalidated around stopping; a known conversation restarts with resume-id and its proven source key. Unknown identity, changed source or stale ownership fails explicitly instead of silently starting a new conversation. A positively unstarted attempt remains a launch retry; raw actions remain explicit reruns.

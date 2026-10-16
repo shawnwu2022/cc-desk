@@ -37,6 +37,14 @@ jobs:
           shared-key: windows-debug-runtime
           cache-workspace-crates: false
           cache-on-failure: true
+      - name: Prepare pinned session metadata helper
+        working-directory: .
+        run: |
+          npm ci --ignore-scripts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run prepare:session-sdk
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Prepare verified Windows runtime
         id: runtime
         working-directory: .

@@ -119,6 +119,9 @@ export const useHookStore = defineStore('hook', () => {
     entry.handlers.add(handler)
     if (noticeHandler) entry.notices.add(noticeHandler)
     if (identityHandler) entry.identities.add(identityHandler)
+    // 初始/复用订阅同样发布当前状态，不能等首个 hook 才让 tab 离开 off。
+    const state = observations.get(run)!.state()
+    try { handler({ kind: state.observation === 'connecting' ? 'connecting' : 'unknown', ...run }, state) } catch { /* 订阅者隔离。 */ }
     ensureNativeListener()
     const owned = entry
     return () => {

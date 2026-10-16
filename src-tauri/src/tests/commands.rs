@@ -43,6 +43,7 @@ fn IndexDispatch_ReturnsBeforeFlush_010() {
                 Ok(IndexedResult {
                     value: 42,
                     pending_flush: Some(PendingIndexFlush {
+                        route: None,
                         base_raw: RawIndexSnapshot::Missing,
                         delta: SessionNameIndexDelta {
                             request_compaction: true,
@@ -108,6 +109,7 @@ fn IndexDispatch_FlushError_Ignored_012() {
                 Ok(IndexedResult {
                     value: "business",
                     pending_flush: Some(PendingIndexFlush {
+                        route: None,
                         base_raw: RawIndexSnapshot::Missing,
                         delta: SessionNameIndexDelta {
                             request_compaction: true,
@@ -157,6 +159,7 @@ fn IndexDispatch_CasExhausted_Ignored_014() {
                 Ok(IndexedResult {
                     value: 99,
                     pending_flush: Some(PendingIndexFlush {
+                        route: None,
                         base_raw: RawIndexSnapshot::Missing,
                         delta: SessionNameIndexDelta {
                             request_compaction: true,

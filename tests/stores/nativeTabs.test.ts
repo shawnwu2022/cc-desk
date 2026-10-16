@@ -26,6 +26,22 @@ beforeEach(() => setActivePinia(createPinia()))
 afterEach(() => vi.restoreAllMocks())
 
 describe('D22 native dual-CLI tab store', () => {
+  it('Observer_InstallationReceiptCannotOverwriteActivityOrNewAttempt_022', () => {
+    const store=useNativeTabsStore(),tab=store.create({cli:'claude',projectId:'p',projectPath:'/repo',profileId:'cc',profileRevision:'7',action:{kind:'new'}})
+    const owner=captureNativeAttempt(tab)
+    store.applyLaunchStatus(tab.tabId,status(tab))
+    const receipt={requestId:owner.requestId,run:{runId:owner.runId,generation:owner.generation},state:'unavailable' as const,reasonCode:'OBSERVER_PLUGIN_UNAVAILABLE' as const}
+    store.applyObserverInstallation(tab.tabId,owner,receipt)
+    expect(store.tab(tab.tabId)).toMatchObject({observationState:'unavailable',observerReasonCode:'OBSERVER_PLUGIN_UNAVAILABLE'})
+    store.applyObservation(tab.tabId,owner,{observation:'active',activity:'working'})
+    store.applyObserverInstallation(tab.tabId,owner,receipt)
+    expect(store.tab(tab.tabId)).toMatchObject({observationState:'active',activityState:'working',observerReasonCode:undefined})
+    store.applyObservation(tab.tabId,owner,{observation:'unavailable',activity:'unknown'})
+    store.applyLaunchStatus(tab.tabId,status(tab,'exited'))
+    store.restart(tab.tabId,{profileId:'cc',profileRevision:'7'})
+    store.applyObserverInstallation(tab.tabId,owner,receipt)
+    expect(store.tab(tab.tabId)?.observerReasonCode).toBeUndefined()
+  })
   it('D22_Tabs_SameProjectClaudeAndCodexRemainIndependent_08', () => {
     const store = useNativeTabsStore()
     const claude = store.create({

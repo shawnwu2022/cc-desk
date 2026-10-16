@@ -10,10 +10,13 @@ import type {
   SessionRenameResult,
   UnifiedSession,
 } from '@/types/unifiedSession'
-import { makeSessionCatalogKey } from '@/utils/sessionPresentation'
+import { makeSessionCatalogKey, nativeHistoryRecordKey } from '@/utils/sessionPresentation'
 import { normalizePath } from '@/utils/path'
-import { saveSessionDisplayName, saveSessionOpenedAt, withSessionDisplayName, type SessionMetadataPort } from '@/session/sessionMetadata'
+import { clearSessionDisplayName, saveSessionOpenedAt, withSessionDisplayName, type SessionMetadataPort } from '@/session/sessionMetadata'
+import type { NativeRenameRequest, NativeRenameReceipt } from '@/types/nativeProjection'
+import { createNativeId } from '@/utils/nativeId'
 import { compareSessionOpenOrder } from '@/utils/sessionOpenOrder'
+import { legacyHistoryId } from './legacyClaudeAdapter'
 
 const ACTIVE_PREFIX = 'native-tab:'
 const HISTORY_PREFIX = 'native-history:'
@@ -25,6 +28,7 @@ export interface NativeTabsPort {
   setActive(tabId: string | null): void
   close(tabId: string): void
   rename(tabId: string, title: string): void
+  hasUnstartedAttempt?(tabId: string): boolean
 }
 
 export interface NativeHistoryPort {
@@ -37,9 +41,10 @@ export interface NativeRuntimeCreateInput extends CreateUnifiedSessionInput {
   sourceSessionKey?: string
   sourceContext?: NativeHistoryEntry['context']
 }
+export interface NativeRestartContinuation { nativeSessionId:string; sourceSessionKey:string; sourceRootKey:string }
 export interface NativeRuntimePort {
   createTab(input: NativeRuntimeCreateInput): Promise<NativeCliTab> | NativeCliTab
-  restartTab(tabId: string): Promise<NativeCliTab> | NativeCliTab
+  restartTab(tabId: string, continuation?: NativeRestartContinuation): Promise<NativeCliTab> | NativeCliTab
   stopTab(tab: NativeCliTab): Promise<void>
   renameTab(tabId: string, title: string, admission?: InputWriteAdmission): Promise<void>
 }
@@ -63,6 +68,8 @@ export interface NativeCliAdapterDeps {
   archive: NativeArchivePort
   cliUnarchive?: NativeCliUnarchivePort
   metadata?: SessionMetadataPort
+  nativeRename?: { rename(request: NativeRenameRequest): Promise<NativeRenameReceipt> }
+  runSource?: (tab: NativeCliTab) => Promise<import('@/types/nativeProjection').SourceRef>
   /** legacy 固定根（`~/.claude`）的目录身份 key；仅在该根被证明时才接管 legacy 的裸 ID 归档。
    *  每次投影及恢复都重新验证，根替换后不能复用旧的归属证明。 */
   legacyClaudeRootKey?: () => string | undefined | Promise<string | undefined>
@@ -93,7 +100,7 @@ function projectNotice(tab: NativeCliTab, tabs: NativeTabsPort): NativeObservati
     || !tabs.hasOwnedObservationNotice?.(tab.tabId, captureNativeAttempt(tab))) return
   const copy = (notice: NativeObservationNotice | null | undefined): NativeObservationNotice | null => {
     if (!notice || notice.runId !== tab.runId || notice.generation !== tab.generation) return null
-    return { kind: notice.kind, eventId: notice.eventId, receivedAt: notice.receivedAt, runId: notice.runId, generation: notice.generation }
+    return { kind: notice.kind, eventId: notice.eventId, receivedAt: notice.receivedAt, runId: notice.runId, generation: notice.generation, ...(notice.reasonCode ? { reasonCode: notice.reasonCode } : {}) }
   }
   const recent = copy(tab.observationNotice?.recent)
   const unreadReplyEnd = tab.observationNotice?.unreadReplyEnd?.kind === 'reply-ended' ? copy(tab.observationNotice.unreadReplyEnd) : null
@@ -118,6 +125,8 @@ function projectTab(tab: NativeCliTab, tabs?: NativeTabsPort): UnifiedSession {
     attentionState: activeObservation ? tab.attentionState ?? 'none' : 'none',
     activityState: activeObservation ? tab.activityState ?? 'unknown' : 'unknown',
     observationState: claudeObservation ? tab.observationState ?? 'off' : 'off',
+    ...(!claudeObservation ? { observerReasonCode: 'OBSERVER_UNSUPPORTED' as const }
+      : tab.observerReasonCode ? { observerReasonCode: tab.observerReasonCode } : {}),
     ...(observationNotice ? { observationNotice } : {}),
     lastActivityAt: tab.lastActivityAt,
     lastOpenedAt: tab.createdAt,
@@ -130,6 +139,8 @@ function projectTab(tab: NativeCliTab, tabs?: NativeTabsPort): UnifiedSession {
     nativeOrigin: { cli: tab.cli, profileId: tab.profileId, profileRevision: tab.profileRevision, projectId: tab.projectId, projectPath: tab.projectPath },
     safeErrorCode: tab.errorCode,
     renameState: 'idle',
+    ...(tab.action.kind === 'resume-id' && tab.sourceSessionKey ? { renameTarget: 'resume-source' as const }
+      : tab.cli === 'claude' && tab.action.kind === 'new' && tab.observedSessionId ? { renameTarget: 'history-record' as const } : {}),
   }
 }
 
@@ -169,6 +180,7 @@ function projectHistory(entry: NativeHistoryEntry, item: NativeHistoryEntry['ses
     adapterSessionId: item.sessionKey,
     nativeSessionId: item.nativeSessionId,
     nativeRootKey: entry.sourceRootKey,
+    nativeHistorySessionKey: item.sessionKey,
     launchConfigId: entry.context.profileId,
     nativeOrigin: { ...entry.context },
     safeErrorCode: null,
@@ -270,7 +282,7 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
     // （首条消息 / AI 摘要 / 手动改名），而不是停留在本地占位名 "Claude Code"。
     // 保存的 Desk 显示名在 withSessionDisplayName 内仍优先于 CLI 标题。
     const titled = identity.id.startsWith(HISTORY_PREFIX)
-      ? { ...row, title: identity.title, ...(identity.nativeRootKey ? { nativeRootKey: identity.nativeRootKey } : {}) }
+      ? { ...row, title: identity.title, ...(identity.nativeRootKey ? { nativeRootKey: identity.nativeRootKey, nativeHistorySessionKey:identity.adapterSessionId } : {}) }
       : row
     // 首次认证身份晚于用户改名时，未知身份下保存的名称仍属于这个 tab。
     // 仅用于当前终端显示；不猜测或迁移独立历史的 metadata key。
@@ -501,6 +513,23 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
     if (!canContinue()) throw new Error('STALE_SESSION_ATTEMPT')
     const current = requireTab(id)
     if (current.status === 'unknown') throw new Error('LAUNCH_STATE_UNKNOWN')
+    if (current.action.kind !== 'raw' && !deps.tabs.hasUnstartedAttempt?.(current.tabId)
+      && !(current.status === 'failed' && current.launchRevision === null)) {
+      const frozen={...current},owns=captureOwnership(id),nativeSessionId=tabNativeSessionId(frozen)
+      if (!nativeSessionId) throw new Error('SESSION_NOT_RESUMABLE')
+      if (!deps.runSource || !deps.history.load) throw new Error('SOURCE_UNAVAILABLE')
+      const source=await deps.runSource(frozen)
+      if (!owns() || !canContinue()) throw new Error('STALE_SESSION_ATTEMPT')
+      if (source.cli!==frozen.cli || source.profileId!==frozen.profileId || source.profileRevision!==frozen.profileRevision
+        || source.target.kind!=='run' || source.target.runId!==frozen.runId || source.target.generation!==frozen.generation) throw new Error('SOURCE_CHANGED')
+      const entry=await deps.history.load({cli:frozen.cli,profileId:frozen.profileId,profileRevision:frozen.profileRevision,projectId:frozen.projectId,projectPath:frozen.projectPath,force:true})
+      if (!owns() || !canContinue()) throw new Error('STALE_SESSION_ATTEMPT')
+      if (!entry.loaded || entry.loading || entry.error) throw new Error(entry.error || 'SOURCE_UNAVAILABLE')
+      if (entry.sourceRootKey!==source.sourceRootKey) throw new Error('SOURCE_CHANGED')
+      const matches=entry.sessions.filter(item=>item.nativeSessionId===nativeSessionId && (!frozen.sourceSessionKey || item.sessionKey===frozen.sourceSessionKey))
+      if (matches.length!==1) throw new Error(matches.length?'SESSION_ORIGIN_AMBIGUOUS':'SESSION_NOT_FOUND')
+      return projectActive(await deps.runtime.restartTab(frozen.tabId,{nativeSessionId,sourceSessionKey:matches[0].sessionKey,sourceRootKey:source.sourceRootKey}))
+    }
     return projectActive(await deps.runtime.restartTab(current.tabId))
   }
   async function closeSession(id: string, canContinue = () => true): Promise<void> {
@@ -530,21 +559,92 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
     const value = title.trim()
     if (!value || /[\x00-\x1f\x7f]/.test(value) || [...value].length > 200) throw new Error('SESSION_TITLE_REQUIRED')
     const owns = captureOwnership(id)
-    const current = () => !signal?.aborted && canContinue() && owns()
+    let ownsRecord = () => true
+    const current = () => !signal?.aborted && canContinue() && owns() && ownsRecord()
     if (!current()) throw new Error('STALE_SESSION_ATTEMPT')
+    let target: ReturnType<typeof findHistory>[number]
+    let tabIdentity: UnifiedSession | undefined
     if (id.startsWith(ACTIVE_PREFIX)) {
-      const tab = requireTab(id)
-      // PTY 回执不能证明 CLI 编辑器为空；GUI 改名只写 Desk metadata，保留用户草稿。
-      if (deps.metadata) await saveSessionDisplayName(deps.metadata, tabDisplayIdentity(tab), value, current, onIssued)
-      else onIssued?.()
+      const tab = { ...requireTab(id) }
+      if (tab.cli === 'claude' && !deps.nativeRename) throw new Error('NATIVE_RENAME_UNSUPPORTED')
+      const nativeSessionId = tab.action.kind === 'resume-id' && tab.sourceSessionKey ? tab.action.nativeSessionId
+        : tab.cli === 'claude' && tab.action.kind === 'new' ? tab.observedSessionId : undefined
+      if (!nativeSessionId || !deps.runSource || !deps.history.load) throw new Error('SESSION_IDENTITY_UNKNOWN')
+      if (tab.action.kind === 'new') ownsRecord = () => deps.tabs.tabs.get(tab.tabId)?.observedSessionId === nativeSessionId
+      const context = { cli:tab.cli, profileId:tab.profileId, profileRevision:tab.profileRevision, projectId:tab.projectId, projectPath:tab.projectPath }
+      const frozenSource = await deps.runSource(tab)
       if (!current()) throw new Error('STALE_SESSION_ATTEMPT')
-      deps.tabs.rename(tab.tabId, value)
+      if (frozenSource.cli !== tab.cli || frozenSource.profileId !== tab.profileId || frozenSource.profileRevision !== tab.profileRevision
+        || frozenSource.target.kind !== 'run' || frozenSource.target.runId !== tab.runId || frozenSource.target.generation !== tab.generation) throw new Error('SOURCE_CHANGED')
+      const entry = await deps.history.load({ ...context, force:true })
+      if (!current()) throw new Error('STALE_SESSION_ATTEMPT')
+      if (!entry.loaded || entry.loading || entry.error) throw new Error(entry.error || 'SOURCE_UNAVAILABLE')
+      const source = entry.source
+      if (nativeHistoryContextKey(entry.context) !== nativeHistoryContextKey(context)
+        || !source || source.cli !== tab.cli || source.profileId !== tab.profileId || source.profileRevision !== tab.profileRevision
+        || !entry.sourceRootKey || entry.sourceRootKey !== frozenSource.sourceRootKey || source.sourceRootKey !== frozenSource.sourceRootKey
+        || source.target.kind !== 'profile' || source.target.profileId !== tab.profileId || source.target.expectedProfileRevision !== tab.profileRevision
+        || !source.target.projectIds.includes(tab.projectId)) throw new Error('SOURCE_CHANGED')
+      // 操作固定为恢复来源；CLI 内 /new 或切换会话不会把此授权转移到当前终端。
+      const matches = entry.sessions.filter(item => item.nativeSessionId === nativeSessionId && (!tab.sourceSessionKey || item.sessionKey === tab.sourceSessionKey))
+      if (matches.length !== 1) throw new Error(matches.length ? 'SESSION_ORIGIN_AMBIGUOUS' : 'SESSION_NOT_FOUND')
+      target = { entry, item:matches[0] }
+      tabIdentity = projectTab(tab)
     } else {
       const matches = findHistory(id)
-      if (matches.length !== 1 || !deps.metadata) throw new Error('SESSION_NOT_FOUND')
-      await saveSessionDisplayName(deps.metadata, projectHistory(matches[0].entry, matches[0].item), value, current, onIssued)
+      if (matches.length !== 1) throw new Error('SESSION_NOT_FOUND')
+      target = matches[0]
     }
-    return 'display-name-saved'
+    const { entry, item } = target
+    if (!entry.source || entry.error || !entry.loaded || !deps.nativeRename) throw new Error('NATIVE_RENAME_UNSUPPORTED')
+    const source = { ...entry.source, target:entry.source.target.kind === 'profile'
+      ? { ...entry.source.target, projectIds:[...entry.source.target.projectIds] } : { ...entry.source.target } }
+    const request = { operationId:createNativeId('rename'), source, sessionKey:item.sessionKey, title:value }
+    const historyIdentity = projectHistory(entry,item)
+    const recordKey = nativeHistoryRecordKey(historyIdentity)
+    const related = deps.history.all().flatMap(other => other.sessions.map(session => ({ identity:projectHistory(other,session), context:{ ...other.context } })))
+      .filter(({ identity }) => recordKey && nativeHistoryRecordKey(identity) === recordKey)
+    const tabAliases = [...deps.tabs.tabs.values()].flatMap(tab => {
+      if (!recordKey || nativeHistoryRecordKey(tabDisplayIdentity(tab)) !== recordKey) return []
+      const identity = projectTab(tab)
+      const ownsAttempt = captureOwnership(identity.id)
+      const owns = () => {
+        const current = deps.tabs.tabs.get(tab.tabId)
+        return ownsAttempt() && !!current && nativeHistoryRecordKey(tabDisplayIdentity(current)) === recordKey
+      }
+      return [{ identity, owns }, { identity:{ ...identity, nativeSessionId:null }, owns }]
+    })
+    const refreshContext = { ...entry.context, force:true }
+    if (!current()) throw new Error('STALE_SESSION_ATTEMPT')
+    onIssued?.()
+    const receipt = await deps.nativeRename.rename(request)
+    if (receipt.state !== 'renamed' || receipt.operationId !== request.operationId || receipt.sessionKey !== request.sessionKey || receipt.title !== value || JSON.stringify(receipt.source) !== JSON.stringify(request.source)) throw new Error('RENAME_OUTCOME_UNKNOWN')
+    if (!current()) throw new Error('STALE_SESSION_ATTEMPT')
+    // 仅在原生回读确认后移除旧显示覆盖；同步失败必须保留“原生已改名”的事实。
+    try {
+      if (deps.metadata) for (const identity of related.length ? related.map(item=>item.identity) : [historyIdentity]) {
+        await clearSessionDisplayName(deps.metadata, identity, current)
+      }
+      if (deps.metadata) for (const alias of tabAliases) {
+        if (!alias.owns()) continue
+        await clearSessionDisplayName(deps.metadata, alias.identity, () => current() && alias.owns())
+      }
+      if (deps.metadata && historyIdentity.cli === 'claude' && historyIdentity.nativeRootKey
+        && await deps.legacyClaudeRootKey?.() === historyIdentity.nativeRootKey) {
+        const legacyIdentity: UnifiedSession = { ...historyIdentity,
+          id:legacyHistoryId(historyIdentity.projectPath,item.nativeSessionId), runtime:'legacy-claude', adapterSessionId:item.nativeSessionId }
+        await clearSessionDisplayName(deps.metadata, legacyIdentity, current)
+      }
+      const contexts = new Map(related.map(item=>[nativeHistoryContextKey(item.context),item.context]))
+      contexts.set(nativeHistoryContextKey(refreshContext),refreshContext)
+      for (const context of contexts.values()) {
+        const refreshed = await deps.history.load?.({ ...context, force:true })
+        if ((tabIdentity && !refreshed) || (refreshed && (refreshed.error || !refreshed.loaded || refreshed.loading
+          || nativeHistoryContextKey(refreshed.context) !== nativeHistoryContextKey(context)
+          || refreshed.sourceRootKey !== request.source.sourceRootKey))) throw new Error('RENAME_DISPLAY_SYNC_FAILED')
+      }
+    } catch { throw new Error('RENAME_DISPLAY_SYNC_FAILED') }
+    return 'native-title-saved'
   }
   async function archiveSession(id: string, canContinue = () => true): Promise<void> {
     const owns = captureOwnership(id)

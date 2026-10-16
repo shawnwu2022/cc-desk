@@ -891,6 +891,7 @@ fn BenchmarkIndexMultiProcess_Real_006() {
             cached_at_ms: u64::MAX - id as u64,
         };
         let pending = PendingIndexFlush {
+            route: None,
             base_raw: snapshot.raw,
             delta: SessionNameIndexDelta {
                 mutations: vec![IndexMutation {

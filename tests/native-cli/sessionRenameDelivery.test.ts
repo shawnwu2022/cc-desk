@@ -50,18 +50,18 @@ async function harness(kind: 'native' | 'legacy', write?: (f: NativeInputFrame) 
 
 for (const kind of ['native', 'legacy'] as const) {
   // 已有 prompt 仍属于 CLI；GUI 改名不能追加任何字符或回车。
-  it(`Rename_ExistingDraftUsesMetadata_001 ${kind}`, async () => {
+  it(`Rename_UnsupportedNativeKeepsExistingDraft_001 ${kind}`, async () => {
     const h = await harness(kind)
     if (kind === 'native') await h.binding.sendUserText('unfinished private draft')
     else await h.legacyQueue.enqueue('unfinished private draft')
-    expect(await h.rename()).toBe('display-name-saved')
+    await expect(h.rename()).rejects.toThrow('NATIVE_RENAME_UNSUPPORTED')
     expect(h.writes).toEqual(['unfinished private draft'])
-    expect(h.records.get(h.id).title).toBe('New name'); expect(h.name()).toBe('New name')
+    expect(h.records.get(h.id).title).toBe('Old GUI override'); expect(h.name()).toBe('Original CLI title')
   })
   // 剪贴板 reservation 与 metadata 是独立通道；改名不排队注入 CLI。
   it(`Rename_PendingPasteDoesNotOwnDisplayName_002 ${kind}`, async () => {
     const h = await harness(kind), paste = deferred<Uint8Array>(), reserved = h.reserve(() => paste.promise)
-    try { expect(await h.rename()).toBe('display-name-saved'); expect(h.writes).toEqual([]); expect(h.records.get(h.id).title).toBe('New name') }
+    try { await expect(h.rename()).rejects.toThrow('NATIVE_RENAME_UNSUPPORTED'); expect(h.writes).toEqual([]); expect(h.records.get(h.id).title).toBe('Old GUI override') }
     finally { paste.resolve(new TextEncoder().encode('paste')); await reserved.settled }
     expect(h.writes).toEqual(['paste'])
   })
@@ -80,7 +80,7 @@ for (const kind of ['native', 'legacy'] as const) {
   })
   it(`Rename_MetadataFailureKeepsOverride_005 ${kind}`, async () => {
     const h = await harness(kind, undefined, async () => { throw new Error('REVISION_CONFLICT') })
-    await expect(h.rename()).rejects.toThrow('REVISION_CONFLICT')
+    await expect(h.rename()).rejects.toThrow('NATIVE_RENAME_UNSUPPORTED')
     expect(h.writes).toEqual([]); expect(h.records.get(h.id).title).toBe('Old GUI override'); expect(h.name()).toBe('Original CLI title')
   })
   it(`Rename_AbortedAdmissionCannotWriteMetadata_006 ${kind}`, async () => {
@@ -96,11 +96,11 @@ for (const fault of ['reject', 'partial', 'mismatch', 'short'] as const) {
       if (fault === 'reject') throw new Error('WRITE_DENIED')
       return fault === 'partial' ? { ...exact(f), state: 'partial-or-unknown', confirmedBytes: '0' } : fault === 'mismatch' ? { ...exact(f), inputSeq: '99' } : { ...exact(f), confirmedBytes: '1' }
     })
-    expect(await h.rename()).toBe('display-name-saved'); expect(h.writes).toEqual([]); expect(h.records.get(h.id).title).toBe('New name')
+    await expect(h.rename()).rejects.toThrow('NATIVE_RENAME_UNSUPPORTED'); expect(h.writes).toEqual([]); expect(h.records.get(h.id).title).toBe('Old GUI override')
   })
 }
 it('Rename_NativePausedQueueStillSavesDisplayName_008', async () => {
   const h = await harness('native', async () => { throw new Error('WRITE_DENIED') })
   await h.binding.sendUserText('previous input').catch(() => {})
-  expect(await h.rename()).toBe('display-name-saved'); expect(h.writes).toEqual(['previous input']); expect(h.records.get(h.id).title).toBe('New name')
+  await expect(h.rename()).rejects.toThrow('NATIVE_RENAME_UNSUPPORTED'); expect(h.writes).toEqual(['previous input']); expect(h.records.get(h.id).title).toBe('Old GUI override')
 })

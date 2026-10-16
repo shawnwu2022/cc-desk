@@ -891,7 +891,7 @@ fn HistoryCodex_AutoSessionsAreNotListed_046() {
         .collect();
     assert_eq!(
         listed,
-        BTreeSet::from(["user", "voice", "unmarked"]),
+        BTreeSet::from(["user", "voice", "unmarked", "review"]),
         "只有非自动创建的会话进入历史列表"
     );
     assert!(
@@ -2651,4 +2651,55 @@ fn HistoryCodex_ExecSessionsAreNotListed_056() {
     assert_eq!(items.len(), 1, "codex exec 会话不列出");
     assert_eq!(value[0]["nativeSessionId"], "interactive-thread");
     assert_eq!(value[0]["title"], "交互式会话的真实提问");
+}
+
+// 主线程代码评审即使正文只有 review 包装，也必须保留；缓存命中仍复核来源。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryCodex_MainThreadCodeReviewIsListed_060() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("sessions/2026/10/04")).unwrap();
+    let cwd = temp.path().to_str().unwrap();
+    let path = temp.path().join("sessions/2026/10/04/review.jsonl");
+    std::fs::write(&path, format!("{}\n{}\n",
+        json!({"type":"session_meta","payload":{"id":"review","cwd":cwd,"source":"vscode","thread_source":"code_review"}}),
+        json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"## Code review guidelines:\nReview these changes"}]}})
+    )).unwrap();
+    for _ in 0..2 {
+        let items = read_codex_history_fixture(temp.path()).unwrap();
+        let value = serde_json::to_value(items).unwrap();
+        assert_eq!(value.as_array().unwrap().len(), 1);
+        assert_eq!(value[0]["nativeSessionId"], "review");
+    }
+}
+
+// 同 stamp 缓存不能将明确的 review 子代理伪装为用户主线程。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryCodex_ReviewCacheStillRechecksSubagentSource_061() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("sessions/2026/10/04")).unwrap();
+    let cwd = temp.path().to_str().unwrap().to_owned();
+    let relative = Path::new("sessions/2026/10/04/review-cache.jsonl");
+    std::fs::write(temp.path().join(relative), format!("{}\n{}\n",
+        json!({"type":"session_meta","payload":{"id":"review-cache","cwd":cwd,"source":{"subagent":"review"},"thread_source":"code_review"}}),
+        json!({"type":"event_msg","payload":{"type":"user_message","message":"Review these changes"}})
+    )).unwrap();
+    let root = Root::open(temp.path()).unwrap();
+    let (len, modified) = root.stat(relative).unwrap().unwrap();
+    cache::with(|cache| {
+        cache.record(
+            cache::key(root.key(), "codex", relative),
+            cache::Stamps::from_system(len, modified).unwrap(),
+            cache::CachedMetadata {
+                native_id: "review-cache".into(),
+                cwd: Some(cwd),
+                title: "Cached main-thread review".into(),
+                title_priority: Some(0),
+                updated: None,
+                metadata_incomplete: false,
+            },
+        )
+    });
+    assert!(read_codex_history_fixture(temp.path()).unwrap().is_empty());
 }

@@ -13,6 +13,34 @@ afterEach(async () => {
   }
 })
 describe('D12 authenticated projection API', () => {
+  it.each(['NODE_RUNTIME_UNAVAILABLE', 'SDK_HELPER_UNAVAILABLE'])('Rename_RuntimePrerequisiteErrorsReachSafeUi_022 %s', async code => {
+    const request={operationId:'rename-1',source,sessionKey:'key',title:'Title'}
+    const invoke=vi.fn(async()=>{throw {code,env:'private',path:'private fixture'}})
+    const failure=await createProjectionClient({instanceId:'instance',invoke}).rename(request).catch(error=>error)
+    expect(failure).toMatchObject({code,retryable:false,message:code})
+    expect(Object.keys(failure).sort()).toEqual(['code','retryable'])
+    expect(invoke).toHaveBeenCalledTimes(1)
+  })
+  it('Rename_ExactNativeReceiptAndNoReplay_020', async()=>{
+    const request={operationId:'rename-1',source:{...source,cli:'codex' as const},sessionKey:JSON.stringify(['local','codex','root','native-id']),title:'New title'}
+    const invoke=vi.fn(async(_command:string,payload:unknown)=>({...payload as object,state:'renamed'}))
+    const client=createProjectionClient({instanceId:'instance',invoke})
+    expect(await client.rename(request)).toMatchObject({...request,state:'renamed'})
+    expect(invoke).toHaveBeenCalledWith('cli_rename_session',request)
+    invoke.mockImplementation(async()=>({...request,state:'renamed',source:{...request.source,sourceRootKey:'foreign'}}))
+    await expect(client.rename(request)).rejects.toMatchObject({code:'RENAME_OUTCOME_UNKNOWN',retryable:false})
+    expect(invoke).toHaveBeenCalledTimes(2)
+  })
+  it('Rename_DocumentAndSafeFailure_021',async()=>{
+    const request={operationId:'rename-1',source,sessionKey:'key',title:'Title'}
+    let current=false
+    const invoke=vi.fn(async()=>{throw {code:'RENAME_VERIFICATION_FAILED',env:'private'}})
+    const client=createProjectionClient({instanceId:'instance',invoke},()=>current)
+    await expect(client.rename(request)).rejects.toMatchObject({code:'BACKEND_INSTANCE_CHANGED'})
+    expect(invoke).not.toHaveBeenCalled()
+    current=true
+    await expect(client.rename(request)).rejects.toMatchObject({code:'RENAME_VERIFICATION_FAILED',retryable:false})
+  })
   // 传输完成与客户端发布之间的微任务撤销仍不得发布旧文档结果。
   it('Projection_FinalAdmissionRace_007', async () => {
     for (const operation of ['read', 'scope'] as const) {

@@ -3,6 +3,17 @@ on:
   pull_request:
     paths:
       - 'src-tauri/src/cli/**'
+      - 'src-tauri/src/session_name_index.rs'
+      - 'src-tauri/src/session_index_maintenance.rs'
+      - 'src-tauri/src/store.rs'
+      - 'src-tauri/src/platform/legacy.rs'
+      - 'src-tauri/src/version_history/windows.rs'
+      - 'src-tauri/src/version_history/windows/files.rs'
+      - 'src-tauri/src/version_history/windows/security.rs'
+      - 'scripts/session-sdk-bridge.mjs'
+      - 'scripts/prepare-session-sdk.mjs'
+      - 'package.json'
+      - 'package-lock.json'
       - 'src-tauri/src/tests/native_cli_projection_*.rs'
       - 'src-tauri/src/tests/native_cli_scoped_fs.rs'
       - 'tests/native-cli/scope-core/**'
@@ -27,6 +38,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.98.1
         with:
           components: rustfmt, clippy
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - name: Prepare pinned official session metadata helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts
+          npm run prepare:session-sdk
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: tests/native-cli/scope-core

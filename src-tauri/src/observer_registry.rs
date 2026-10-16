@@ -448,6 +448,33 @@ fn sanitize_event(event: Value) -> Result<Value, SafeError> {
         .ok_or_else(|| error("OBSERVER_INVALID_EVENT"))?;
     let mut safe = serde_json::Map::new();
     safe.insert("hook_event_name".into(), object["hook_event_name"].clone());
+    // 官方 StopFailure.error 是固定分类；详情、渲染错误文本和未知值仍不发布。
+    // https://code.claude.com/docs/en/hooks#stopfailure-input
+    if object["hook_event_name"] == "StopFailure" {
+        if let Some(reason) = object
+            .get("error")
+            .and_then(Value::as_str)
+            .filter(|reason| {
+                matches!(
+                    *reason,
+                    "rate_limit"
+                        | "overloaded"
+                        | "authentication_failed"
+                        | "oauth_org_not_allowed"
+                        | "account_on_hold"
+                        | "billing_error"
+                        | "invalid_request"
+                        | "model_not_found"
+                        | "server_error"
+                        | "max_output_tokens"
+                        | "cloud_credential_error"
+                        | "unknown"
+                )
+            })
+        {
+            safe.insert("error".into(), Value::String(reason.into()));
+        }
+    }
     for name in ["session_id", "cwd", "model", "source", "notification_type"] {
         if let Some(value) = object.get(name) {
             let text = value

@@ -110,6 +110,33 @@ pub(crate) async fn cli_cancel_launch(
 }
 
 #[tauri::command]
+pub(crate) async fn cli_get_observer_status(
+    webview: Webview,
+    request: Request<'_>,
+    runtime: State<'_, Arc<NativeRuntime>>,
+) -> Result<super::observer_status::ObserverStatus, SafeError> {
+    runtime.observer_status(&webview, &request)
+}
+
+#[tauri::command]
+pub(crate) async fn cli_session_index_maintenance(
+    webview: Webview,
+    request: Request<'_>,
+    runtime: State<'_, Arc<NativeRuntime>>,
+) -> Result<crate::session_index_maintenance::MaintenanceStatus, SafeError> {
+    runtime.session_index_maintenance(&webview, &request).await
+}
+
+#[tauri::command]
+pub(crate) async fn cli_rename_session(
+    webview: Webview,
+    request: Request<'_>,
+    runtime: State<'_, Arc<NativeRuntime>>,
+) -> Result<super::native_rename::RenameReceipt, SafeError> {
+    runtime.rename_session(&webview, &request).await
+}
+
+#[tauri::command]
 pub(crate) async fn cli_ack_output(
     webview: Webview,
     request: Request<'_>,

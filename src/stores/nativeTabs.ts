@@ -4,8 +4,10 @@ import type { LaunchStatus } from '@/api/cliLaunchAttempt'
 import type { LaunchAction, NativeCliKind } from '@/types/cli'
 import { parseU64 } from '@/utils/nativeIdentity'
 import type { ObservationState } from '@/integrations/registry'
+import type { ObserverInstallation, ObserverReasonCode } from '@/api/observer'
 import { createNativeId } from '@/utils/nativeId'
 import type { NativeObservationNotice, NativeObservationNoticeState } from '@/types/nativeObservationNotice'
+import { nativeNoticeReasonCode } from '@/types/nativeObservationNotice'
 import { useHookStore } from './hook'
 
 export type NativeTabStatus =
@@ -40,6 +42,7 @@ export interface NativeCliTab {
   attentionState?: 'none' | 'needs-user'
   activityState?: ObservationState['activity']
   observationState?: ObservationState['observation']
+  observerReasonCode?: ObserverReasonCode
   observationNotice?: NativeObservationNoticeState
 }
 
@@ -117,18 +120,19 @@ const noticeKinds = new Set<NativeObservationNotice['kind']>([
   'prompt-submitted', 'tool-started', 'tool-ended', 'tool-failed', 'reply-ended', 'reply-failed',
   'permission-requested', 'input-requested', 'subagent-started', 'subagent-ended', 'compaction-started', 'compaction-ended',
 ])
-function emptyNotices(): NativeObservationNoticeState { return { recent: null, unreadReplyEnd: null } }
+function emptyNotices(): NativeObservationNoticeState { return { recent: null, unreadReplyEnd: null, lastPromptSubmitted: null } }
 function copyNotice(notice: NativeObservationNotice): NativeObservationNotice {
-  return { kind: notice.kind, eventId: notice.eventId, receivedAt: notice.receivedAt, runId: notice.runId, generation: notice.generation }
+  return { kind: notice.kind, eventId: notice.eventId, receivedAt: notice.receivedAt, runId: notice.runId, generation: notice.generation, ...(notice.reasonCode ? { reasonCode: notice.reasonCode } : {}) }
 }
 function copyNotices(state: NativeObservationNoticeState): NativeObservationNoticeState {
-  return { recent: state.recent && copyNotice(state.recent), unreadReplyEnd: state.unreadReplyEnd && copyNotice(state.unreadReplyEnd) }
+  return { recent: state.recent && copyNotice(state.recent), unreadReplyEnd: state.unreadReplyEnd && copyNotice(state.unreadReplyEnd), lastPromptSubmitted: state.lastPromptSubmitted && copyNotice(state.lastPromptSubmitted) }
 }
 function validNotice(notice: NativeObservationNotice, attempt: NativeAttemptIdentity): boolean {
   return Boolean(notice && noticeKinds.has(notice.kind) && typeof notice.eventId === 'string'
     && notice.eventId.length <= 128 && /^[A-Za-z0-9._:-]+$/.test(notice.eventId)
     && Number.isSafeInteger(notice.receivedAt) && notice.receivedAt >= 0
-    && notice.runId === attempt.runId && notice.generation === attempt.generation)
+    && notice.runId === attempt.runId && notice.generation === attempt.generation
+    && (notice.reasonCode === undefined || nativeNoticeReasonCode(notice.kind, notice.reasonCode) === notice.reasonCode))
 }
 
 function snapshot(tab: NativeCliTab): NativeCliTab {
@@ -182,11 +186,12 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     const value = tabs.get(tabId), ledger = noticeLedgers.get(tabId)
     if (!value || !['running', 'exited', 'stopped'].includes(value.status) || value.cli !== 'claude' || value.action.kind === 'raw'
       || !matchesNativeAttempt(value, attempt) || !ledger || !matchesNativeAttempt(value, ledger.attempt)) return false
-    const notices = [value.observationNotice?.recent, value.observationNotice?.unreadReplyEnd].filter(Boolean) as NativeObservationNotice[]
+    const notices = [value.observationNotice?.recent, value.observationNotice?.unreadReplyEnd, value.observationNotice?.lastPromptSubmitted].filter(Boolean) as NativeObservationNotice[]
     return notices.length > 0 && notices.every(notice => {
       const accepted = ledger.seen.get(notice.eventId)
-      return validNotice(notice, attempt) && !!accepted && accepted.kind === notice.kind && accepted.receivedAt === notice.receivedAt
+      return validNotice(notice, attempt) && !!accepted && accepted.kind === notice.kind && accepted.receivedAt === notice.receivedAt && accepted.reasonCode === notice.reasonCode
     }) && (!value.observationNotice?.unreadReplyEnd || value.observationNotice.unreadReplyEnd.kind === 'reply-ended')
+      && (!value.observationNotice?.lastPromptSubmitted || value.observationNotice.lastPromptSubmitted.kind === 'prompt-submitted')
   }
   function applyObservationNotice(tabId: string, attempt: NativeAttemptIdentity, notice: NativeObservationNotice): boolean {
     const value = tabs.get(tabId)
@@ -204,7 +209,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     const previous = value.status === 'starting' ? pending && matchesNativeAttempt(value, pending.attempt) ? pending.state : emptyNotices()
       : value.observationNotice ?? emptyNotices()
     const state = { recent: copyNotice(notice), unreadReplyEnd: notice.kind === 'reply-ended' ? copyNotice(notice)
-      : previous.unreadReplyEnd && copyNotice(previous.unreadReplyEnd) }
+      : previous.unreadReplyEnd && copyNotice(previous.unreadReplyEnd), lastPromptSubmitted: notice.kind === 'prompt-submitted' ? copyNotice(notice) : previous.lastPromptSubmitted && copyNotice(previous.lastPromptSubmitted) }
     if (value.status === 'starting') pendingNotices.set(tabId, { attempt: captureNativeAttempt(value), state })
     else { value.observationNotice = state; value.lastActivityAt = Date.now() }
     return true
@@ -214,7 +219,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     if (!value || !hasOwnedObservationNotice(tabId, attempt)) return false
     const state = value.observationNotice, unread = state?.unreadReplyEnd
     if (!unread || unread.kind !== 'reply-ended' || unread.eventId !== eventId || !validNotice(unread, attempt)) return false
-    value.observationNotice = { recent: state.recent && copyNotice(state.recent), unreadReplyEnd: null }
+    value.observationNotice = { ...copyNotices(state), unreadReplyEnd: null }
     return true
   }
   const frozenIdentity = (tab: NativeCliTab) => JSON.stringify([tab.requestId, tab.runId, tab.generation,
@@ -300,6 +305,11 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
   function applyObservation(tabId: string, attempt: NativeAttemptIdentity, state: ObservationState): void {
     const value = tabs.get(tabId)
     if (!value || !matchesNativeAttempt(value, attempt)) return
+    if (state.observation === 'off') {
+      if (value.observationNotice) value.observationNotice.lastPromptSubmitted = null
+      const pending = pendingNotices.get(tabId)
+      if (pending && matchesNativeAttempt(value, pending.attempt)) pending.state.lastPromptSubmitted = null
+    }
     const projected: ObservationState = { observation: state.observation,
       activity: state.observation === 'active' ? state.activity : 'unknown' }
     if (value.status === 'starting') {
@@ -314,8 +324,22 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
       value.attentionState = attention
       value.activityState = projected.activity
       value.observationState = projected.observation
+      value.observerReasonCode = projected.observation === 'active' ? undefined
+        : projected.observation === 'connecting' ? 'OBSERVER_CONNECTING' : value.observerReasonCode && value.observerReasonCode !== 'OBSERVER_CONNECTING' ? value.observerReasonCode : 'OBSERVER_UNAVAILABLE'
       value.lastActivityAt = Date.now()
     }
+  }
+
+  function applyObserverInstallation(tabId: string, attempt: NativeAttemptIdentity, result: ObserverInstallation): void {
+    const value = tabs.get(tabId)
+    if (!value || !matchesNativeAttempt(value, attempt) || !['starting','running'].includes(value.status)
+      || value.observationState === 'active' || result.requestId !== attempt.requestId
+      || result.run.runId !== attempt.runId || result.run.generation !== attempt.generation) return
+    // 迟到的安装回执不能把已超时的连接重新宣称为连接中。
+    if (result.state === 'connecting' && value.observationState === 'unavailable') return
+    value.observationState = result.state
+    value.activityState = 'unknown'
+    value.observerReasonCode = result.reasonCode
   }
 
   function rename(tabId: string, title: string): void {
@@ -340,6 +364,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     value.activityState = 'unknown'
     value.observationState = 'off'
     value.errorCode = null
+    delete value.observerReasonCode
   }
 
   function markUnknown(tabId: string): void {
@@ -431,6 +456,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
       profileRevision: string
       cli?: NativeCliKind
     },
+    continuation?: { nativeSessionId:string; sourceSessionKey:string },
   ): NativeCliTab {
     const value = tabs.get(tabId)
     if (!value) throw new Error('TAB_NOT_FOUND')
@@ -445,6 +471,11 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
 
     const nextProfileId = text(profile.profileId, 'PROFILE_ID_REQUIRED')
     const nextProfileRevision = revision(profile.profileRevision)
+    if (continuation) {
+      const nativeSessionId=text(continuation.nativeSessionId,'SESSION_ID_REQUIRED')
+      const sourceSessionKey=text(continuation.sourceSessionKey,'SESSION_KEY_REQUIRED')
+      value.action={kind:'resume-id',nativeSessionId};value.sourceSessionKey=sourceSessionKey
+    }
     useHookStore().clearSession(value.runId)
     value.profileId = nextProfileId
     value.profileRevision = nextProfileRevision
@@ -455,6 +486,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     value.attentionState = 'none'
     value.activityState = 'unknown'
     value.observationState = 'off'
+    delete value.observerReasonCode
     delete value.observedSessionId
     value.errorCode = null
     value.launchRevision = null
@@ -512,6 +544,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     applyObservationIdentity,
     applyObservationNotice,
     ackReplyEndNotice,
+    applyObserverInstallation,
     rename,
     applyLaunchStatus,
     restart,

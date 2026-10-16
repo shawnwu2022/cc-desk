@@ -36,9 +36,9 @@ impl ObserverHost {
     ) -> Result<PreparedObservation, SafeError> {
         let port = (self.port)()
             .filter(|port| *port != 0)
-            .ok_or_else(|| error("OBSERVER_UNAVAILABLE"))?;
+            .ok_or_else(|| error("OBSERVER_SERVICE_UNAVAILABLE"))?;
         if !crate::hook_config::plugin_ready(&self.plugin_dir) {
-            return Err(error("OBSERVER_UNAVAILABLE"));
+            return Err(error("OBSERVER_PLUGIN_UNAVAILABLE"));
         }
         let lease = self.registry.lease(run, delivery, authorize)?;
         let binding = lease.binding();

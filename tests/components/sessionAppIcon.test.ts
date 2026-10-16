@@ -9,6 +9,17 @@ import type { UnifiedSession } from '@/types/unifiedSession'
 
 afterEach(() => { document.body.innerHTML = ''; vi.unstubAllGlobals() })
 describe('Merged session app status', () => {
+  it('Observer_ReasonDistinguishesIdleOffAndUnavailable_006', async () => {
+    const session: UnifiedSession = { id:'one',projectKey:'/repo',projectPath:'/repo',cli:'claude',runtime:'native-cli',title:'One',processState:'running',activityState:'unknown',observationState:'unavailable',observerReasonCode:'OBSERVER_PLUGIN_UNAVAILABLE',attentionState:'none',opened:true,archived:false,resumable:true,adapterSessionId:'one',lastActivityAt:1 }
+    const wrapper = mount(SessionItem,{props:{session},global:{plugins:[createI18n({legacy:false,locale:'en',messages:{en,zh}})]}})
+    expect(wrapper.get('.session-app-icon').attributes('aria-label')).toContain('Observer plugin unavailable')
+    await wrapper.setProps({session:{...session,observationState:'off',observerReasonCode:'OBSERVER_DISABLED'}})
+    expect(wrapper.get('.session-app-icon').attributes('aria-label')).toContain('Activity observation disabled')
+    await wrapper.setProps({session:{...session,observationState:'active',observerReasonCode:undefined,activityState:'idle'}})
+    expect(wrapper.get('.session-app-icon').attributes('aria-label')).toBe('Claude Code; Running')
+    expect(wrapper.find('[data-session-badge]').exists()).toBe(false)
+    wrapper.unmount()
+  })
   // 完成仅在实际状态或新回执进入时柔和亮起一次，稳定刷新与重新挂载不重播。
   it('AppIcon_CompletionCueOnce_003', async () => {
     const global = { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en, zh } })] }

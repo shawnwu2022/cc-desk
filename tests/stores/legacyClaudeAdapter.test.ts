@@ -244,7 +244,7 @@ describe('legacy Claude adapter', () => {
     await adapter.activateSession('legacy-tab:tab-active')
     await adapter.stopSession('legacy-tab:tab-active')
     const restarted = await adapter.restartSession('legacy-tab:tab-active')
-    await adapter.renameSession('legacy-tab:tab-active', 'Renamed')
+    await expect(adapter.renameSession('legacy-tab:tab-active', 'Renamed')).rejects.toThrow('NATIVE_RENAME_UNSUPPORTED')
     await adapter.closeSession('legacy-tab:tab-active')
     await adapter.restoreArchivedSession('legacy-history:/work/game:archived-1')
 
@@ -253,7 +253,6 @@ describe('legacy Claude adapter', () => {
       'activate:tab-active',
       'stop:tab-active',
       'restart:tab-active',
-      'rename:tab-active:Renamed',
       'stop:tab-active',
       'close:tab-active',
       'restore:/work/game:archived-1',

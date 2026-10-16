@@ -26,6 +26,7 @@ pub(crate) struct FrozenPty {
     pub(crate) pty: OwnedPty,
     pub(crate) snapshot: Arc<LaunchSnapshot>,
     pub(crate) observer: Option<crate::observer_registry::ObserverLease>,
+    pub(crate) observer_failure: Option<&'static str>,
 }
 pub(crate) type NativeRun = RoutedResource<FrozenPty, OutputRoute<OutputFrame>>;
 
@@ -84,6 +85,136 @@ pub(crate) struct LaunchService {
     command_owners: Arc<CommandOwners>,
 }
 impl LaunchService {
+    pub(crate) fn rename_metadata(
+        &self,
+        caller: &CallerIdentity,
+        request: &LaunchRequest,
+        authority: super::native_projection::registry::RenameAuthority,
+        title: String,
+    ) -> Result<(), SafeError> {
+        self.registry().check_caller(caller)?;
+        let profile = self.repository.get_profile(&request.profile_id)?;
+        let legacy =
+            profile.read_legacy(&self.repository.metadata_directory().join("config.json"))?;
+        let inherited = self.inherited_environment()?;
+        let snapshot = freeze_launch(
+            request,
+            &profile,
+            caller,
+            &FreezeContext {
+                inherited: &inherited,
+                terminal: &EnvMap::new(),
+                legacy: legacy.as_ref(),
+                observer: None,
+            },
+        )?;
+        let selected =
+            super::native_projection::selection::locations(request.cli, snapshot.environment())
+                .map_err(error)?;
+        if selected.root != authority.root_path() {
+            return Err(error("SCOPE_STALE"));
+        }
+        let private = if request.cli == super::types::CliKind::Claude {
+            Some(authority.prepare_claude()?)
+        } else {
+            None
+        };
+        let claude_command = if let Some(namespace) = &private {
+            let bridge = namespace
+                .install_bridge(super::native_rename::claude::embedded_bridge())
+                .map_err(error)?;
+            Some(super::native_rename::claude::command(
+                snapshot.environment(),
+                &bridge,
+                &namespace.path,
+            )?)
+        } else {
+            None
+        };
+        let spec = if claude_command.is_none() {
+            Some(resolve_process(&build_invocation(request, &snapshot)?)?)
+        } else {
+            None
+        };
+        let mut admission = self.admit_start()?;
+        let registry = self.registry().clone();
+        let caller = caller.clone();
+        let shutting_down = self.shutting_down.clone();
+        let owners = self.command_owners.clone();
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        // 先建立独立 owner，再创建 child；IPC 取消不释放进程或维护 admission。
+        std::thread::Builder::new()
+            .name("native-rename-owner".into())
+            .spawn(move || {
+                let run = || -> Result<(), SafeError> {
+                    let shutdown = shutting_down.read();
+                    if *shutdown {
+                        return Err(error("RUN_SUPERVISOR_STOPPING"));
+                    }
+                    registry.check_caller(&caller)?;
+                    authority.current()?;
+                    let mut command = if let Some(command) = claude_command {
+                        command
+                    } else {
+                        spec.ok_or_else(|| error("RENAME_FAILED"))?
+                            .metadata_command()?
+                    };
+                    let mut owner = owners.register()?;
+                    let ticket = admission.begin_creation();
+                    let mut child = match command.spawn() {
+                        Ok(child) => child,
+                        Err(_) => {
+                            ticket.no_child_created();
+                            drop(private);
+                            owner.settled = true;
+                            return Err(error("RENAME_FAILED"));
+                        }
+                    };
+                    let ticket = ticket.child_created();
+                    drop(shutdown);
+                    let result = catch_unwind(AssertUnwindSafe(|| {
+                        let current = || {
+                            if *shutting_down.read() {
+                                return Err(error("RUN_SUPERVISOR_STOPPING"));
+                            }
+                            registry.check_caller(&caller)
+                        };
+                        let _namespace = &private;
+                        if _namespace.is_some() {
+                            super::native_rename::claude::process(
+                                &mut child, &authority, &title, &current,
+                            )
+                        } else {
+                            super::native_rename::process(&mut child, &authority, &title, &current)
+                        }
+                    }))
+                    .unwrap_or_else(|_| Err(error("RENAME_OUTCOME_UNKNOWN")));
+                    // 结果可先回传；只有精确 child 真正 reap 后才释放 admission。
+                    let _ = sender.send(result);
+                    loop {
+                        match child.try_wait() {
+                            Ok(Some(_)) => {
+                                drop(private);
+                                ticket.reaped();
+                                owner.settled = true;
+                                return Ok(());
+                            }
+                            Ok(None) | Err(_) => {
+                                let _ = child.kill();
+                            }
+                        }
+                        std::thread::sleep(Duration::from_millis(100));
+                    }
+                };
+                if let Err(failure) = run() {
+                    let _ = sender.send(Err(failure));
+                }
+            })
+            .map_err(|_| error("RENAME_FAILED"))?;
+        receiver
+            .recv()
+            .map_err(|_| error("RENAME_OUTCOME_UNKNOWN"))?
+    }
     pub(crate) fn new(
         repository: WorkspaceRepository,
         inherited: Option<EnvMap>,
@@ -180,6 +311,7 @@ impl LaunchService {
             |snapshot| {
                 // Observer failure never fails preparation or creates another child.
                 // Only the reservation winner can mint this per-run capability.
+                let mut observer_failure = None;
                 let prepared = self
                     .observer
                     .as_ref()
@@ -214,7 +346,14 @@ impl LaunchService {
                             authorize,
                         ) {
                             Ok(prepared) => Some(prepared),
-                            Err(_) => {
+                            Err(failure) => {
+                                observer_failure = Some(match failure.code.as_str() {
+                                    "OBSERVER_SERVICE_UNAVAILABLE" => {
+                                        "OBSERVER_SERVICE_UNAVAILABLE"
+                                    }
+                                    "OBSERVER_PLUGIN_UNAVAILABLE" => "OBSERVER_PLUGIN_UNAVAILABLE",
+                                    _ => "OBSERVER_PREPARE_FAILED",
+                                });
                                 log::warn!("Observer unavailable; native launch unchanged");
                                 None
                             }
@@ -224,7 +363,10 @@ impl LaunchService {
                     Some(prepared) => {
                         match snapshot.with_observer(&prepared.environment, &prepared.plugin_dir) {
                             Ok(next) => (next, Some(prepared.lease)),
-                            Err(_) => (snapshot.clone(), None),
+                            Err(_) => {
+                                observer_failure = Some("OBSERVER_PREPARE_FAILED");
+                                (snapshot.clone(), None)
+                            }
                         }
                     }
                     None => (snapshot.clone(), None),
@@ -253,6 +395,7 @@ impl LaunchService {
                     pty,
                     snapshot: frozen,
                     observer,
+                    observer_failure,
                 })
             },
         )?;

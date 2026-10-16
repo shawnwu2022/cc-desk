@@ -181,6 +181,56 @@ impl NativeRuntime {
         let (caller, launch) = self.binding()?.start_native(webview, request)?;
         self.service.registry().cancel(&caller, &launch)
     }
+    pub(crate) fn observer_status<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        request: &Request<'_>,
+    ) -> Result<super::observer_status::ObserverStatus, SafeError> {
+        let caller = self.binding()?.admit_native(webview, request.headers())?;
+        let query = decode_projection(request.body(), 4096)?;
+        self.service.observer_status(&caller, &query)
+    }
+    pub(crate) async fn rename_session<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        request: &Request<'_>,
+    ) -> Result<super::native_rename::RenameReceipt, SafeError> {
+        let caller = self.binding()?.admit_native(webview, request.headers())?;
+        let query: super::native_rename::RenameRequest = decode_projection(request.body(), 32768)?;
+        query.validate()?;
+        let service = self.projections.clone();
+        let admitted = caller.clone();
+        let result = tauri::async_runtime::spawn_blocking(move || service.rename(&admitted, query))
+            .await
+            .map_err(|_| error("RENAME_OUTCOME_UNKNOWN"))??;
+        self.service.registry().check_caller(&caller)?;
+        Ok(result)
+    }
+    pub(crate) async fn session_index_maintenance<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        request: &Request<'_>,
+    ) -> Result<crate::session_index_maintenance::MaintenanceStatus, SafeError> {
+        let caller = self.binding()?.admit_native(webview, request.headers())?;
+        let query: crate::session_index_maintenance::MaintenanceRequest =
+            decode_projection(request.body(), 4096)?;
+        let registry = self.service.registry().clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            registry.check_caller(&caller)?;
+            if query.action == "begin" {
+                crate::session_index_maintenance::production()
+                    .release_revoked(|owner| registry.check_caller(owner).is_ok());
+            }
+            crate::session_index_maintenance::production().apply_checked(
+                &caller,
+                &query.id,
+                &query.action,
+                || registry.check_caller(&caller),
+            )
+        })
+        .await
+        .map_err(|_| error("MAINTENANCE_UNAVAILABLE"))?
+    }
     pub(crate) fn ack_output<T: Runtime>(
         &self,
         webview: &Webview<T>,

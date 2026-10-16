@@ -5,6 +5,7 @@ import { createNativeCliAdapter } from '@/session/adapters/nativeCliAdapter'
 import { createLegacyClaudeAdapter } from '@/session/adapters/legacyClaudeAdapter'
 import { captureNativeAttempt, useNativeTabsStore, type NativeCliTab } from '@/stores/nativeTabs'
 import type { NativeHistoryEntry } from '@/stores/nativeHistory'
+import { deriveSessionVisualState } from '@/utils/sessionPresentation'
 
 function tab(overrides: Partial<NativeCliTab> = {}): NativeCliTab {
   return {
@@ -85,7 +86,8 @@ it.each([false, true])('History_PreserveEarlyTabRename_039 identity known: %s', 
   state.metadata.upsertSessionRecord.mockImplementation(async (key: string, record: any, beforeMutation?: () => void) => {
     beforeMutation?.(); state.metadata.sessionRecords.set(key, record)
   })
-  await state.adapter.renameSession('native-tab:tab-1', 'Saved before identity')
+  const original=(await state.adapter.listSessions())[0]
+  state.metadata.sessionRecords.set(original.id,{runtime:original.runtime,cli:original.cli,projectPath:original.projectPath,adapterSessionId:original.adapterSessionId,nativeSessionId:original.nativeSessionId,title:'Saved before identity',lastActivityAt:original.lastActivityAt})
   active.observedSessionId = 'session-1'
   entries.push(history('claude', 'root', 'session-1'))
   expect((await state.adapter.listSessions())[0].title).toBe('Saved before identity')
@@ -94,7 +96,7 @@ it.each([false, true])('History_PreserveEarlyTabRename_039 identity known: %s', 
   state.map.delete(active.tabId)
   const closed = (await state.adapter.listSessions())[0]
   expect(closed.title).toBe('Later CLI title')
-  await state.adapter.renameSession(closed.id, 'Exact history name')
+  state.metadata.sessionRecords.set(closed.id,{runtime:closed.runtime,cli:closed.cli,projectPath:closed.projectPath,adapterSessionId:closed.adapterSessionId,nativeSessionId:closed.nativeSessionId,title:'Exact history name',lastActivityAt:closed.lastActivityAt})
   state.map.set(active.tabId, active)
   expect((await state.adapter.listSessions())[0].title).toBe('Exact history name')
 })
@@ -288,6 +290,13 @@ describe('native CLI adapter', () => {
       activityState: 'waiting', observationState: 'active', attentionState: 'needs-user' })
     const { adapter } = setup([value], [])
     expect((await adapter.listSessions())[0]).toMatchObject({ activityState: 'unknown', observationState: 'off', attentionState: 'none' })
+  })
+  it('NativeObservation_RawClaudeHasNoUnavailableBadge_046', async () => {
+    const { adapter } = setup([tab({ cli: 'claude', action: { kind: 'raw', argv: [] },
+      observerReasonCode: 'OBSERVER_PLUGIN_UNAVAILABLE', observationState: 'unavailable' })], [])
+    const session = (await adapter.listSessions())[0]
+    expect(session).toMatchObject({ activityState: 'unknown', observationState: 'off', observerReasonCode: 'OBSERVER_UNSUPPORTED' })
+    expect(deriveSessionVisualState(session)).toBe('running')
   })
   it.each(['working', 'waiting'] as const)('NativeObservation_PreservesClaudeOrderedActivity_021 %s', async activityState => {
     const { adapter } = setup([tab({ cli: 'claude', action: { kind: 'new' }, activityState, observationState: 'active',
@@ -488,21 +497,21 @@ it('CodexArchive_UnarchiveForcesHistoryReload_035', async () => {
 
 // 运行中 Claude 的编辑器状态未知；GUI 改名仅保存显示名。
 describe('Native rename preserves the CLI editor', () => {
-  it('Rename_ClaudeRunningUsesMetadata_034', async () => {
+  it('Rename_ClaudeUnsupportedDoesNotSaveAlias_034', async () => {
     const claudeTab = tab({ tabId: 'cc-1', cli: 'claude', profileId: 'claude-main', status: 'running' })
     const { adapter, runtime, metadata, map } = setup([claudeTab], [])
-    await adapter.renameSession('native-tab:cc-1', 'New name')
+    await expect(adapter.renameSession('native-tab:cc-1', 'New name')).rejects.toThrow('NATIVE_RENAME_UNSUPPORTED')
     expect(runtime.renameTab).not.toHaveBeenCalled()
-    expect(metadata.upsertSessionRecord).toHaveBeenCalledWith('native-tab:cc-1', expect.objectContaining({ title: 'New name' }), expect.any(Function))
-    expect(map.get('cc-1')?.title).toBe('New name')
+    expect(metadata.upsertSessionRecord).not.toHaveBeenCalled()
+    expect(map.get('cc-1')?.title).toBe(claudeTab.title)
   })
   // codex 的 /rename 参数形式未证实，激活改名继续由 GUI 显示名兜底，不注入。
-  it('Rename_CodexKeepsDisplayOverlay_035', async () => {
+  it('Rename_CodexUnverifiedRunDoesNotSaveAlias_035', async () => {
     const codexTab = tab({ tabId: 'cx-1', status: 'running' })
     const { adapter, runtime, metadata, map } = setup([codexTab], [])
-    await adapter.renameSession('native-tab:cx-1', 'New name')
+    await expect(adapter.renameSession('native-tab:cx-1', 'New name')).rejects.toThrow('SESSION_IDENTITY_UNKNOWN')
     expect(runtime.renameTab).not.toHaveBeenCalled()
-    expect(metadata.upsertSessionRecord).toHaveBeenCalledWith('native-tab:cx-1', expect.objectContaining({ title: 'New name' }), expect.any(Function))
-    expect(map.get('cx-1')?.title).toBe('New name')
+    expect(metadata.upsertSessionRecord).not.toHaveBeenCalled()
+    expect(map.get('cx-1')?.title).toBe(codexTab.title)
   })
 })

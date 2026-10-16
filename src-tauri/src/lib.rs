@@ -15,6 +15,7 @@ mod pty;
 mod pty_decoder;
 mod run_lifecycle;
 mod run_supervisor;
+mod session_index_maintenance;
 mod session_name_index;
 mod session_ui_record;
 mod store;
@@ -255,6 +256,9 @@ fn run_ordinary(initial_dir: Option<String>, #[cfg(windows)] startup: DesktopSta
             commands::legacy_claude_root_key,
             cli::commands::cli_start,
             cli::commands::cli_get_launch_status,
+            cli::commands::cli_get_observer_status,
+            cli::commands::cli_rename_session,
+            cli::commands::cli_session_index_maintenance,
             cli::commands::cli_cancel_launch,
             cli::commands::cli_ack_output,
             cli::commands::cli_input_begin,

@@ -63,6 +63,15 @@ function rules(file: string) {
 }
 
 describe('Unified project session tree', () => {
+  it('Tree_FoldedProjectShowsUnreadReplyReceipt_026', async () => {
+    const unread = session({ runtime: 'native-cli', processState: 'stopped', activityState: 'unknown',
+      observationNotice: { recent: null, unreadReplyEnd: { kind: 'reply-ended', eventId: 'reply', runId: 'run', generation: 1, receivedAt: 1 } } })
+    const wrapper = node(group([unread]), { expanded: false })
+    expect(wrapper.get('[data-project-attention]').attributes('data-status-kind')).toBe('unread-reply')
+    expect(wrapper.get('[data-project-attention]').attributes('aria-label')).toBe('Unread replies: 1')
+    await wrapper.setProps({ project: group([{ ...unread, observationNotice: { recent: null, unreadReplyEnd: null } }]) })
+    expect(wrapper.find('[data-project-attention]').exists()).toBe(false)
+  })
   // 创建序冻结：关闭后的历史身份替换是新增行，按其首见活动时间插入；行序此后稳定。
   it('Tree_CloseRefreshesSnapshot_024', async () => {
     const closing = session({ id: 'legacy-tab:closing', adapterSessionId: 'closing', nativeSessionId: 'same-session', lastActivityAt: 20 })
@@ -306,7 +315,7 @@ describe('Unified project session tree', () => {
     expect(wrapper.emitted('new-session-request')).toEqual([[{ projectKey: '/work/game', projectPath: '/work/game', intent: 'codex' }]])
     await wrapper.get('.project-overflow-trigger button').trigger('click')
     const ids = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]'), item => item.dataset.itemId)
-    expect(ids).toEqual(['pin', 'rename', 'view-archive', 'open-project-directory', 'remove-project'])
+    expect(ids).toEqual(['pin', 'rename', 'view-archive', 'close-project-sessions', 'open-project-directory', 'remove-project'])
     await selectMenu('pin')
     expect(wrapper.emitted('project-action')).toEqual([[{ action: 'pin', projectKey: '/work/game', projectPath: '/work/game' }]])
     await wrapper.get('.project-row').trigger('contextmenu')
@@ -447,7 +456,7 @@ describe('Unified project session tree', () => {
     const wrapper = node(group([session({ title: 'S'.repeat(80) })], { name }))
     expect(wrapper.get('.session-name').text()).toBe('S'.repeat(80))
     const sessionCss = rules('src/components/sessions/SessionItem.vue')
-    expect(sessionCss.find(rule => rule.selectorText === '.session-item')!.style.getPropertyValue('grid-template-columns')).toBe('20px minmax(0, 1fr) 38px 20px')
+    expect(sessionCss.find(rule => rule.selectorText === '.session-item')!.style.getPropertyValue('grid-template-columns')).toBe('20px minmax(0, 1fr) 38px 20px 20px')
     expect(wrapper.get('.project-name').text()).toBe(name)
     expect(wrapper.findAll('[data-project-quick-action]')).toHaveLength(1)
     const css = rules('src/components/sessions/ProjectNode.vue')

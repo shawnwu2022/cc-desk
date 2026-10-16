@@ -10,16 +10,25 @@ const props = withDefaults(defineProps<{ request: ProjectConfirmationRequest | n
 const emit = defineEmits<{ confirm: []; cancel: [] }>()
 const { t } = useI18n()
 const safeErrorKey = computed(() => props.errorKey && Object.prototype.hasOwnProperty.call(en, props.errorKey) ? props.errorKey : props.errorKey ? 'errorGenericUnavailable' : null)
+const cancelBlocked = computed(() => props.busy && props.request?.kind === 'close-project-sessions')
+function requestCancel() { if (!cancelBlocked.value) emit('cancel') }
+const keys = computed(() => props.request?.kind === 'close-project-sessions'
+  ? { title: 'projectCloseSessionsTitle', description: 'projectCloseSessionsDescription', action: 'projectCloseSessions' }
+  : props.request?.kind === 'remove-project'
+    ? { title: 'projectRemoveTitle', description: 'projectRemoveDescription', action: 'projectRemoveConfirm' }
+    : { title: 'configurationDeleteTitle', description: 'configurationDeleteDescription', action: 'configurationDeleteConfirm' })
 watch(() => [props.active, props.request], () => { if (!props.active && props.request) emit('cancel') }, { flush: 'sync', immediate: true })
 </script>
 <template>
-  <AppDialog :open="active && !!request" :title="t(request?.kind === 'remove-project' ? 'projectRemoveTitle' : 'configurationDeleteTitle')"
-    :description="t(request?.kind === 'remove-project' ? 'projectRemoveDescription' : 'configurationDeleteDescription')" @close="emit('cancel')">
+  <AppDialog :open="active && !!request" :title="t(keys.title)" :show-close="!cancelBlocked"
+    :description="t(keys.description)" @close="requestCancel">
     <div data-project-confirm><p class="confirm-title">{{ request?.title }}</p><InlineNotice v-if="safeErrorKey" kind="warning" :message="t(safeErrorKey)" /></div>
     <template #footer>
-      <AppButton data-cancel-project-action @click="emit('cancel')">{{ t('cancel') }}</AppButton>
-      <AppButton v-if="request?.kind === 'remove-project'" data-confirm-project-remove variant="danger" :disabled="busy" :loading="busy" @click="emit('confirm')">{{ t('projectRemoveConfirm') }}</AppButton>
-      <AppButton v-else data-confirm-configuration-delete variant="danger" :disabled="busy" :loading="busy" @click="emit('confirm')">{{ t('configurationDeleteConfirm') }}</AppButton>
+      <AppButton data-cancel-project-action :disabled="cancelBlocked" @click="requestCancel">{{ t('cancel') }}</AppButton>
+      <AppButton :data-confirm-project-remove="request?.kind === 'remove-project' ? '' : undefined"
+        :data-confirm-project-close="request?.kind === 'close-project-sessions' ? '' : undefined"
+        :data-confirm-configuration-delete="request?.kind === 'delete-launch-configuration' ? '' : undefined"
+        variant="danger" :disabled="busy" :loading="busy" @click="emit('confirm')">{{ t(keys.action) }}</AppButton>
     </template>
   </AppDialog>
 </template>

@@ -16,6 +16,7 @@ import { mount, type VueWrapper } from '@vue/test-utils'
 import { clearMocks, mockIPC } from '@tauri-apps/api/mocks'
 import { webcrypto } from 'node:crypto'
 import { useUnifiedWorkspaceRuntime } from '@/composables/useUnifiedWorkspaceRuntime'
+import { legacyHistoryId } from '@/session/adapters/legacyClaudeAdapter'
 import type { ProjectsState } from '@/types/app'
 import type { CliProfile } from '@/types/profile'
 import type { RegisteredProject } from '@/types/workspace'
@@ -57,6 +58,8 @@ function workspaceFixture() {
     resources: [] as ResourceItem[],
     roots: new Map<string, string>(),
     unavailable: new Set<string>(),
+    renameFailure: null as string | null,
+    legacyRoot: undefined as string | undefined,
     wrappers: [] as VueWrapper[],
   }
   function source(target: ScopeTarget): SourceRef {
@@ -70,6 +73,14 @@ function workspaceFixture() {
   }
   const bridge = vi.fn(async (command: string, argument: any): Promise<unknown> => {
     if (command === 'native_get_scope') return source(argument)
+    if (command === 'cli_rename_session') {
+      if (fixture.renameFailure) throw new Error(fixture.renameFailure)
+      for (const [key, rows] of fixture.histories) if (key.startsWith(argument.source.profileId + ':')) {
+        const item = rows.find(row => row.sessionKey === argument.sessionKey)
+        if (item) item.title = argument.title
+      }
+      return { ...argument, state: 'renamed' }
+    }
     if (command === 'native_list_resources') {
       const request = argument as ReadRequest
       const target = request.source.target
@@ -88,6 +99,7 @@ function workspaceFixture() {
       case 'update_app_config': Object.assign(fixture.config, clone(args.updates)); return
       case 'get_projects': return clone(fixture.legacyProjects)
       case 'get_sessions': return clone((fixture.legacyHistory.get(normalizePath(args.projectPath)) ?? []).slice(args.offset ?? 0, args.limit == null ? undefined : (args.offset ?? 0) + args.limit))
+      case 'legacy_claude_root_key': return fixture.legacyRoot ? { rootKey: fixture.legacyRoot } : null
       case 'cli_list_profiles': return { revision: '1', profiles: clone(fixture.profiles) }
       case 'cli_list_projects': return { revision: '1', projects: clone(fixture.registered) }
       case 'cli_get_availability': {
@@ -206,11 +218,11 @@ describe('Unified migration through real workspace composition', () => {
     useShellStore().requestWorkspaceAction({ kind: 'rename', sessionId: row.id, title: 'Saved history name' })
     await flushPromises()
     expect(catalog.sessions.find(value => value.id === row.id)?.title).toBe('Saved history name')
-    expect(f.state.sessionRecords?.[row.id]?.title).toBe('Saved history name')
+    expect(f.state.sessionRecords?.[row.id]?.title).not.toBe('Saved history name')
     f.resetStores(); await boot()
     expect(useUnifiedSessionsStore().sessions.find(value => value.id === row.id)?.title).toBe('Saved history name')
     expect(useNativeTabsStore().tabs.size).toBe(0)
-    expect(f.histories.get('codex:project')![0].title).toBe('Native history')
+    expect(f.histories.get('codex:project')![0].title).toBe('Saved history name')
   })
 
   it('Migration_NativeLiveNameRestart_007', async () => {
@@ -218,15 +230,83 @@ describe('Unified migration through real workspace composition', () => {
     const catalog = useUnifiedSessionsStore(), row = catalog.sessions.find(row => row.runtime === 'native-cli')!
     const active = await catalog.resumeCatalogSession(row)
     const tabs = useNativeTabsStore(), frozen = { ...tabs.tab(active.adapterSessionId)! }
-    await catalog.renameSession(active.id, 'Saved live name')
+    await expect(catalog.renameSession(active.id, 'Saved source name')).resolves.toBe('native-title-saved')
     await catalog.refresh()
-    expect(catalog.sessions.find(value => value.id === active.id)?.title).toBe('Saved live name')
+    expect(catalog.sessions.find(value => value.id === active.id)?.title).toBe('Saved source name')
     expect(tabs.tab(active.adapterSessionId)).toMatchObject({ requestId: frozen.requestId, runId: frozen.runId, generation: frozen.generation, action: frozen.action })
     tabs.close(active.adapterSessionId); await catalog.refresh()
-    expect(catalog.sessions.find(value => value.id === row.id)?.title).toBe('Saved live name')
+    expect(catalog.sessions.find(value => value.id === row.id)?.title).toBe('Saved source name')
     f.resetStores(); await boot()
-    expect(useUnifiedSessionsStore().sessions.find(value => value.id === row.id)?.title).toBe('Saved live name')
+    expect(useUnifiedSessionsStore().sessions.find(value => value.id === row.id)?.title).toBe('Saved source name')
+    expect(f.histories.get('codex:project')![0].title).toBe('Saved source name')
     expect(f.host.stopNative).not.toHaveBeenCalled()
+  })
+
+  it.each(['codex','claude'] as const)('Migration_RenameSharedPhysicalSourceHasOneLifecycleRow_015 %s', async cli => {
+    seedBoth()
+    f.profiles=[profile(cli),profile(cli, 'other-'+cli)]
+    f.histories.clear()
+    f.histories.set(cli+':project', [history(cli, 'root-'+cli, 'same', 'D:/Work/Project', 'Native history')])
+    f.roots.set('other-'+cli, 'root-'+cli)
+    f.histories.set('other-'+cli+':project', [history(cli, 'root-'+cli, 'same', 'D:/Work/Project', 'Native history')])
+    await boot()
+    const catalog=useUnifiedSessionsStore(),original=catalog.sessions.find(row=>row.runtime==='native-cli'&&row.launchConfigId===cli)!
+    const active=await catalog.resumeCatalogSession(original)
+    await catalog.renameSession(active.id,'Persistent native name')
+    await Promise.all([catalog.refresh(),catalog.refresh('D:/Work/Project',{background:true})])
+    expect(catalog.sessions.filter(row=>row.runtime==='native-cli'&&row.cli===cli&&row.nativeSessionId==='same')).toHaveLength(1)
+    useNativeTabsStore().close(active.adapterSessionId);await catalog.refresh()
+    const closed=catalog.sessions.filter(row=>row.runtime==='native-cli'&&row.cli===cli&&row.nativeSessionId==='same')
+    expect(closed).toHaveLength(1);expect(closed[0].title).toBe('Persistent native name')
+    const restored=await catalog.resumeCatalogSession(closed[0]);await catalog.refresh()
+    expect(catalog.sessions.filter(row=>row.runtime==='native-cli'&&row.cli===cli&&row.nativeSessionId==='same')).toHaveLength(1)
+    useNativeTabsStore().close(restored.adapterSessionId)
+    f.resetStores();await boot()
+    const rebooted=useUnifiedSessionsStore().sessions.filter(row=>row.runtime==='native-cli'&&row.cli===cli&&row.nativeSessionId==='same')
+    expect(rebooted).toHaveLength(1);expect(rebooted[0].title).toBe('Persistent native name')
+    expect(f.histories.get(cli+':project')![0].nativeSessionId).toBe('same')
+  })
+
+  it.each(['codex','claude'] as const)('Migration_RenameFailureKeepsNativeHistoryAndAlias_016 %s', async cli => {
+    f.profiles=[profile(cli)]
+    f.histories.set(cli+':project',[history(cli,'root-'+cli,'same','/repo','Native original')])
+    await boot()
+    const catalog=useUnifiedSessionsStore(),original=catalog.sessions.find(row=>row.runtime==='native-cli')!
+    await useProjectsStateStore().upsertSessionRecord(original.id,{runtime:original.runtime,cli,projectPath:original.projectPath,adapterSessionId:original.adapterSessionId,nativeSessionId:'same',title:'Existing alias',lastActivityAt:1})
+    const active=await catalog.resumeCatalogSession(original)
+    f.renameFailure='RENAME_OUTCOME_UNKNOWN'
+    await expect(catalog.renameSession(active.id,'Unconfirmed new name')).rejects.toThrow()
+    await Promise.all([catalog.refresh(),catalog.refresh('/repo',{background:true})])
+    expect(catalog.sessions.filter(row=>row.runtime==='native-cli')).toHaveLength(1)
+    expect(f.histories.get(cli+':project')![0]).toMatchObject({nativeSessionId:'same',title:'Native original'})
+    useNativeTabsStore().close(active.adapterSessionId);await catalog.refresh()
+    expect(catalog.sessions[0].title).toBe('Existing alias')
+    const restored=await catalog.resumeCatalogSession(catalog.sessions[0]);useNativeTabsStore().close(restored.adapterSessionId)
+    f.resetStores();await boot()
+    expect(useUnifiedSessionsStore().sessions).toHaveLength(1)
+    expect(useUnifiedSessionsStore().sessions[0].title).toBe('Existing alias')
+    expect(f.bridge.mock.calls.filter(([command])=>command==='cli_rename_session')).toHaveLength(1)
+  })
+
+  it('Migration_NativeRenameClearsProvenLegacyAliasAcrossReboot_017', async () => {
+    seedBoth()
+    f.profiles=[profile('claude')];f.histories.clear();f.legacyRoot='root-claude'
+    f.histories.set('claude:project',[history('claude','root-claude','same','D:/Work/Project','Original native title')])
+    const legacyKey=legacyHistoryId('D:/Work/Project','same')
+    f.state.sessionRecords![legacyKey]={runtime:'legacy-claude',cli:'claude',projectPath:'D:/Work/Project',adapterSessionId:'same',nativeSessionId:'same',title:'Old saved alias',lastActivityAt:1}
+    await boot()
+    const catalog=useUnifiedSessionsStore()
+    expect(catalog.sessions).toHaveLength(1);expect(catalog.sessions[0].title).toBe('Old saved alias')
+    const active=await catalog.resumeCatalogSession(catalog.sessions[0])
+    await catalog.renameSession(active.id,'Official persistent title')
+    await Promise.all([catalog.refresh(),catalog.refresh('D:/Work/Project',{background:true})])
+    expect(catalog.sessions).toHaveLength(1);expect(catalog.sessions[0].title).toBe('Official persistent title')
+    useNativeTabsStore().close(active.adapterSessionId);await catalog.refresh()
+    expect(catalog.sessions).toHaveLength(1);expect(catalog.sessions[0].title).toBe('Official persistent title')
+    expect(f.state.sessionRecords![legacyKey].title).toBe('')
+    f.resetStores();await boot()
+    expect(useUnifiedSessionsStore().sessions).toHaveLength(1)
+    expect(useUnifiedSessionsStore().sessions[0].title).toBe('Official persistent title')
   })
 
   it('Migration_ExactMetadataOrigin_008', async () => {
@@ -252,12 +332,13 @@ describe('Unified migration through real workspace composition', () => {
     catalog.beginRename(target.id)
     useShellStore().requestWorkspaceAction({ kind: 'rename', sessionId: target.id, title: 'Desk-only name' })
     await flushPromises()
-    expect(catalog.sessions.find(value => value.id === target.id)?.title).toBe('Desk-only name')
+    expect(catalog.sessions.find(value => value.id === target.id)?.title).toBe('Old Claude')
     expect(f.host.renameLegacy).not.toHaveBeenCalled()
     expect(f.ipc.mock.calls.some(([command]) => command === 'pty_input')).toBe(false)
-    expect(useNotificationsStore().toasts[useNotificationsStore().toasts.length - 1]?.messageKey).toBe('feedbackRenamed')
+    expect(catalog.actionFeedback?.detailCode).toBe('NATIVE_RENAME_UNSUPPORTED')
+    expect(useNotificationsStore().toasts.some(toast => toast.messageKey === 'feedbackRenamed')).toBe(false)
     f.resetStores(); await boot()
-    expect(useUnifiedSessionsStore().sessions.find(value => value.id === row.id)?.title).toBe('Desk-only name')
+    expect(useUnifiedSessionsStore().sessions.find(value => value.id === row.id)?.title).toBe('Old Claude')
     expect(f.legacyHistory.get('d:/work/project')![0].name).toBe('Old Claude')
   })
 
@@ -265,12 +346,12 @@ describe('Unified migration through real workspace composition', () => {
     await boot()
     const catalog = useUnifiedSessionsStore(), tabs = useNativeTabsStore()
     const row = await catalog.createSession({ cli: 'codex', projectKey: '/repo', projectPath: '/repo', action: { kind: 'raw', argv: ['', 'two words'] } })
-    await catalog.renameSession(row.id, 'Local tab name')
-    expect(f.state.sessionRecords?.[row.id]?.title).toBe('Local tab name')
+    await expect(catalog.renameSession(row.id, 'Local tab name')).rejects.toThrow('SESSION_IDENTITY_UNKNOWN')
+    expect(f.state.sessionRecords?.[row.id]?.title).not.toBe('Local tab name')
     const before = tabs.tab(row.adapterSessionId)!
     tabs.markError(before.tabId, 'LAUNCH_FAILED')
     tabs.restart(before.tabId, { profileId: 'codex', profileRevision: '1' }); await catalog.refresh()
-    expect(catalog.sessions.find(value => value.id === row.id)?.title).toBe('Local tab name')
+    expect(catalog.sessions.find(value => value.id === row.id)?.title).not.toBe('Local tab name')
     f.histories.set('codex:project', [history('codex', 'root-codex', row.adapterSessionId, '/repo', 'Discovered native title')])
     f.resetStores(); await boot()
     expect(useUnifiedSessionsStore().sessions.map(value => value.title)).toEqual(['Discovered native title'])

@@ -189,16 +189,18 @@ function onMenuAction(action: SessionMenuAction) {
   <div ref="row" class="session-item" :class="{ active: selected, 'has-primary': !!primary, 'has-launch': launchPrimary, 'has-archive': !!archive && !primary && !isRenaming, editing: isRenaming }"
     role="treeitem" :data-session-row="session.id" :aria-selected="selected" :aria-label="session.title" :aria-busy="session.resumePending || undefined" tabindex="0"
     @click="onClick" @dblclick="onDoubleClick" @keydown="onKeydown" @contextmenu="openContext">
-    <SessionAppIcon :cli="session.cli" :state="visualState" :activity-state="session.activityState" :archived="session.archived" :notice="observationNotice" :receipt-id="receiptId" />
+    <SessionAppIcon :cli="session.cli" :state="visualState" :activity-state="session.activityState" :observation-state="session.observationState" :observer-reason-code="session.observerReasonCode" :archived="session.archived" :notice="observationNotice" :receipt-id="receiptId" />
     <div class="session-name-wrapper">
-      <AppInput v-if="isRenaming" ref="renameInput" v-model="renameValue" class="rename-input" size="compact"
-        :aria-label="t('sessionRenameLabel')" :invalid="renameInvalid" :disabled="isSaving"
-        @click.stop @keydown.enter.stop.prevent="commitRename" @keydown.esc.stop.prevent="cancelRename" />
+      <AppTooltip v-if="isRenaming" class="session-title-tooltip" :text="session.renameTarget ? t(session.renameTarget === 'resume-source' ? 'sessionRenameResumeSourceHint' : 'sessionRenameHistoryRecordHint', { id: session.nativeSessionId }) : ''">
+        <AppInput ref="renameInput" v-model="renameValue" class="rename-input" size="compact"
+          :aria-label="t(session.renameTarget === 'resume-source' ? 'sessionRenameResumeSourceLabel' : session.renameTarget === 'history-record' ? 'sessionRenameHistoryRecordLabel' : 'sessionRenameLabel')" :invalid="renameInvalid" :disabled="isSaving"
+          @click.stop @keydown.enter.stop.prevent="commitRename" @keydown.esc.stop.prevent="cancelRename" />
+      </AppTooltip>
       <AppTooltip v-else class="session-title-tooltip" :text="session.title">
         <span class="session-name" tabindex="0">{{ session.title }}</span>
       </AppTooltip>
     </div>
-    <div class="session-tail">
+    <div class="session-tail" @click.stop @dblclick.stop>
       <AppTooltip :text="fullActivity">
         <span class="session-time" :class="{ 'session-time--date': age.includes('/') }" tabindex="0">{{ age }}</span>
       </AppTooltip>
@@ -214,6 +216,8 @@ function onMenuAction(action: SessionMenuAction) {
           </svg>
         </IconButton>
       </div>
+    </div>
+    <div class="session-archive-slot">
       <div v-if="archive && !primary && !isRenaming" class="session-archive-action" data-session-archive>
         <IconButton class="session-row-control" :label="t(archive.labelKey)" :disabled="archive.disabled" @click.stop="runArchive">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -235,7 +239,7 @@ function onMenuAction(action: SessionMenuAction) {
 <style scoped>
 .session-item {
   display: grid;
-  grid-template-columns: 20px minmax(0, 1fr) 38px 20px;
+  grid-template-columns: 20px minmax(0, 1fr) 38px 20px 20px;
   column-gap: 6px;
   align-items: center;
   height: 38px;
@@ -247,7 +251,7 @@ function onMenuAction(action: SessionMenuAction) {
   background: transparent;
   cursor: pointer;
 }
-.session-item.has-launch { grid-template-columns: 20px minmax(0, 1fr) 64px 20px; }
+.session-item.has-launch { grid-template-columns: 20px minmax(0, 1fr) 64px 20px 20px; }
 .session-item.has-launch .session-tail { width: 64px; gap: 6px; }
 .session-item.has-launch .session-launch-action { position: static; width: 20px; flex: 0 0 20px; opacity: 1; pointer-events: auto; }
 .session-item.has-launch:hover .session-time, .session-item.has-launch:focus-within .session-time { opacity: 1; pointer-events: auto; }
@@ -299,7 +303,8 @@ function onMenuAction(action: SessionMenuAction) {
   opacity: 0;
   pointer-events: none;
 }
-.session-archive-action { position: absolute; inset: 0; display: flex; justify-content: flex-end; align-items: center; opacity: 0; pointer-events: none; }
+.session-archive-slot { width: 20px; height: 28px; }
+.session-archive-action { display: flex; justify-content: flex-end; align-items: center; opacity: 0; pointer-events: none; }
 .session-item:hover .session-archive-action, .session-item:focus-within .session-archive-action { opacity: 1; pointer-events: auto; }
 .session-overflow-trigger { width: 20px; height: 28px; opacity: 0; pointer-events: none; }
 .session-primary-action :deep(.ui-button), .session-archive-action :deep(.ui-button), .session-overflow-trigger :deep(.ui-button) { width: 20px; min-width: 20px; height: 28px; padding: 0; }
@@ -308,10 +313,8 @@ function onMenuAction(action: SessionMenuAction) {
 .session-item:hover .session-overflow-trigger, .session-item:focus-within .session-overflow-trigger,
 .session-overflow-trigger.is-open { opacity: 1; pointer-events: auto; }
 .session-item.has-primary:not(.has-launch):hover .session-time, .session-item.has-primary:not(.has-launch):focus-within .session-time,
-.session-item.has-archive:hover .session-time, .session-item.has-archive:focus-within .session-time,
 .session-item.editing .session-time { opacity: 0; pointer-events: none; }
 @media (hover: none), (pointer: coarse) {
   .session-item.has-archive .session-archive-action { opacity: 1; pointer-events: auto; }
-  .session-item.has-archive .session-time { opacity: 0; pointer-events: none; }
 }
 </style>

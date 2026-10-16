@@ -67,8 +67,11 @@ impl<R> LaunchCoordinator<R> {
         if !ticket.begin() {
             return Ok(ticket.status());
         }
+        let source = Arc::new(super::source_provenance::SourceProvenance::freeze(
+            &snapshot,
+        ));
         match spawn(&snapshot) {
-            Ok(resource) => Ok(ticket.complete(resource)),
+            Ok(resource) => Ok(ticket.complete_with_source(resource, source)),
             Err(_) => Ok(ticket.fail(LaunchFailure::ProcessStartFailed)),
         }
     }
