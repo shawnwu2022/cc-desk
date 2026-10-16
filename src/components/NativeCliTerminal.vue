@@ -641,6 +641,19 @@ function fitVisible() {
   void resizeNative(term.cols, term.rows)
 }
 
+// 拖拽窗口时 ResizeObserver 逐帧触发，每帧都会 fit + 一次 ConPTY resize IPC；
+// Windows 下 ConPTY resize 会触发重绘，代价高。尾沿防抖只保留最后一次几何，
+// 与 legacy 侧同一策略。fitVisible 本身保持同步语义，供活跃切换等路径直接调用。
+let resizeDebounce: ReturnType<typeof setTimeout> | null = null
+function scheduleResizeFit() {
+  needsFit.value = true
+  if (resizeDebounce !== null) clearTimeout(resizeDebounce)
+  resizeDebounce = setTimeout(() => {
+    resizeDebounce = null
+    if (!disposed && props.active) fitVisible()
+  }, 80)
+}
+
 onMounted(async () => {
   if (!container.value) return
   const preferences = app.terminalPreferences
@@ -661,8 +674,7 @@ onMounted(async () => {
   // D19 provenance binding is installed by start(); bind IME after it exists so
   // xtermData observation and explicit fallback share the same native writer.
   resizeObserver = new ResizeObserver(() => {
-    needsFit.value = true
-    if (props.active) requestAnimationFrame(fitVisible)
+    scheduleResizeFit()
   })
   resizeObserver.observe(container.value)
 
@@ -745,6 +757,8 @@ onUnmounted(() => {
   pasteKeyDownListener = null
   resizeObserver?.disconnect()
   resizeObserver = null
+  if (resizeDebounce !== null) clearTimeout(resizeDebounce)
+  resizeDebounce = null
   try { webglAddon?.dispose() } catch { /* Optional renderer. */ }
   webglAddon = null
   term?.dispose()

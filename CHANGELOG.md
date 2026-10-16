@@ -6,6 +6,7 @@
 
 - Drop ten never-imported frontend dependencies (CodeMirror stack, `vue-codemirror`, `v3-infinite-loading`, `macos-traffic-lights`, `vue-draggable-plus`) and the dead `editor-vendor` chunk rule; DESIGN.md now describes the `<textarea>` the app actually uses for multi-line editing
 - Move blocking store reads (`get_projects`, `get_project_info`, `get_session_count`, `get_session_details`, `search_session_messages`, `get_app_config`, `get_project_config` and the four Agents/Skills/MCP/Plugins resource scans) onto the blocking pool instead of occupying async IPC workers
+- Debounce the native terminal's `ResizeObserver` fit by 80 ms so dragging the window produces one ConPTY resize instead of one per frame; hidden terminals still skip layout work
 
 ## [0.21.0] - 2026-10-16
 

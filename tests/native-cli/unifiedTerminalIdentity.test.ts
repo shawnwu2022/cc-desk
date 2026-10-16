@@ -338,6 +338,27 @@ it('Native_ModeTrackerLifetime_020', async () => {
   expect(() => secondTarget()).toThrow('NATIVE_RUN_NOT_WRITABLE')
 })
 
+// 拖拽窗口时 ResizeObserver 逐帧触发；一次拖拽只能产生一次 ConPTY resize。
+it('Native_ResizeObserverDebounced_022', async () => {
+  vi.useFakeTimers()
+  open(); await flushPromises()
+  expect(io.resize).toHaveBeenCalledTimes(1)
+  io.resize.mockClear(); io.fits[0].fit.mockClear()
+  for (let frame = 0; frame < 20; frame++) io.observers[0]()
+  await vi.advanceTimersByTimeAsync(79)
+  expect(io.resize).not.toHaveBeenCalled()
+  await vi.advanceTimersByTimeAsync(2)
+  expect(io.fits[0].fit).toHaveBeenCalledTimes(1)
+  expect(io.resize).toHaveBeenCalledTimes(1)
+  expect(io.resize).toHaveBeenCalledWith({ runId: expect.any(String), generation: 1 }, 80, 24)
+  // 隐藏终端的几何变化不在后台付出 resize 代价。
+  const hidden = open(false); await flushPromises()
+  const hiddenMountCalls = io.resize.mock.calls.length
+  io.observers[1](); await vi.advanceTimersByTimeAsync(120)
+  expect(io.resize).toHaveBeenCalledTimes(hiddenMountCalls)
+  hidden.wrapper.unmount()
+})
+
 // binding 工厂失败时释放已经创建的模式监听，且不能提交启动。
 it('Native_FailedBindingDisposesMode_021', async () => {
   io.failBinding = true
