@@ -182,3 +182,80 @@ fn NativeRename_CompressedSourceAndMissingFrozenNodeFailClosed_013() {
         "NODE_RUNTIME_UNAVAILABLE"
     );
 }
+
+#[test]
+fn NativeRename_ClaudeHelperUsesSamePhysicalNamespaceThroughAlias_015() {
+    use std::io::Write;
+    let temp = tempfile::tempdir().unwrap();
+    let physical = temp.path().join("physical");
+    let alias = temp.path().join("alias");
+    std::fs::create_dir_all(physical.join("projects/authorized")).unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&physical, &alias).unwrap();
+    #[cfg(windows)]
+    {
+        let mut command = std::process::Command::new("cmd.exe");
+        crate::platform::configure_command(&mut command);
+        assert!(command
+            .args(["/D", "/C", "mklink", "/J"])
+            .arg(&alias)
+            .arg(&physical)
+            .stdout(std::process::Stdio::null())
+            .status()
+            .unwrap()
+            .success());
+    }
+    let id = "00000000-0000-4000-8000-000000000015";
+    let transcript = physical.join(format!("projects/authorized/{id}.jsonl"));
+    std::fs::write(&transcript, format!("{}\n", json!({"type":"user","sessionId":id,"cwd":"/fixture","message":{"content":"private fixture"}}))).unwrap();
+    std::fs::write(physical.join("bridge.cjs"), claude::embedded_bridge()).unwrap();
+    let environment = std::env::vars_os().collect();
+    let mut child = claude::command(&environment, &alias.join("bridge.cjs"), &alias)
+        .unwrap()
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(json!({"nativeSessionId":id,"expectedCwd":"/fixture","title":"Physical namespace title"}).to_string().as_bytes()).unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "private SDK helper must load and rename through the alias"
+    );
+    let responses: Vec<serde_json::Value> = output
+        .stdout
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+        .map(|line| serde_json::from_slice(line).unwrap())
+        .collect();
+    assert_eq!(responses.len(), 2);
+    assert_eq!(responses[0]["state"], "ready");
+    assert_eq!(responses[1]["state"], "renamed");
+    assert_eq!(responses[1]["title"], "Physical namespace title");
+    let rows: Vec<serde_json::Value> = std::fs::read_to_string(transcript)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0]["message"]["content"], "private fixture");
+    assert_eq!(rows[1]["customTitle"], "Physical namespace title");
+    #[cfg(unix)]
+    std::fs::remove_file(alias).unwrap();
+    #[cfg(windows)]
+    std::fs::remove_dir(alias).unwrap();
+}
+
+#[test]
+fn NativeRename_ClaudeHelperRejectsBridgeOutsideNamespace_016() {
+    let temp = tempfile::tempdir().unwrap();
+    let namespace = temp.path().join("namespace");
+    std::fs::create_dir(&namespace).unwrap();
+    let bridge = temp.path().join("bridge.cjs");
+    std::fs::write(&bridge, b"module.exports=1;").unwrap();
+    let environment = std::env::vars_os().collect();
+    assert_eq!(
+        claude::command(&environment, &bridge, &namespace)
+            .unwrap_err()
+            .code,
+        "NATIVE_RENAME_UNSUPPORTED"
+    );
+}

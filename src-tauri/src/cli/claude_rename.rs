@@ -41,6 +41,35 @@ fn permission_path(path: &Path) -> Result<(), SafeError> {
     }
     Ok(())
 }
+fn physical_permission_path(path: &Path) -> Result<PathBuf, SafeError> {
+    let physical = std::fs::canonicalize(path).map_err(|_| error("NATIVE_RENAME_UNSUPPORTED"))?;
+    #[cfg(windows)]
+    let selected = {
+        let text = physical
+            .to_str()
+            .ok_or_else(|| error("NATIVE_RENAME_UNSUPPORTED"))?;
+        let selected = if let Some(unc) = text.strip_prefix(r"\\?\UNC\") {
+            PathBuf::from(format!(r"\\{unc}"))
+        } else if let Some(dos) = text.strip_prefix(r"\\?\") {
+            if dos.as_bytes().get(1) != Some(&b':') {
+                return Err(error("NATIVE_RENAME_UNSUPPORTED"));
+            }
+            PathBuf::from(dos)
+        } else {
+            physical.clone()
+        };
+        if std::fs::canonicalize(&selected).map_err(|_| error("NATIVE_RENAME_UNSUPPORTED"))?
+            != physical
+        {
+            return Err(error("NATIVE_RENAME_UNSUPPORTED"));
+        }
+        selected
+    };
+    #[cfg(not(windows))]
+    let selected = physical;
+    permission_path(&selected)?;
+    Ok(selected)
+}
 pub(crate) fn embedded_bridge() -> &'static [u8] {
     include_bytes!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -57,14 +86,20 @@ pub(crate) fn command(
     if !bridge.is_file() {
         return Err(error("SDK_HELPER_UNAVAILABLE"));
     }
+    // Node 加载模块时解析真实路径；权限、配置根、cwd 与模块必须使用同一物理目录。
+    let namespace = physical_permission_path(namespace)?;
+    let bridge = physical_permission_path(bridge)?;
+    if !namespace.is_dir() || bridge.parent() != Some(namespace.as_path()) {
+        return Err(error("NATIVE_RENAME_UNSUPPORTED"));
+    }
     let node = node_program(environment)?;
     // 只使用冻结环境中解析并核验的绝对运行时；不继承 NODE_OPTIONS 或 CLI 凭证。
     let mut command = std::process::Command::new(node);
     command.arg("--permission");
     for (flag, path) in [
-        ("--allow-fs-read=", bridge),
-        ("--allow-fs-read=", namespace),
-        ("--allow-fs-write=", namespace),
+        ("--allow-fs-read=", bridge.as_path()),
+        ("--allow-fs-read=", namespace.as_path()),
+        ("--allow-fs-write=", namespace.as_path()),
     ] {
         let mut value = std::ffi::OsString::from(flag);
         value.push(path);
@@ -73,8 +108,8 @@ pub(crate) fn command(
     command.arg("-e").arg("const [a,b]=process.versions.node.split('.').map(Number);if(a<22||(a===22&&b<13)||!process.permission){process.stdout.write('{\"state\":\"failed\",\"code\":\"NODE_RUNTIME_UNAVAILABLE\"}\\n');process.exit(1)}process.stdout.write('{\"state\":\"ready\"}\\n');require(process.argv[1]);").arg(bridge);
     command
         .env_clear()
-        .env("CLAUDE_CONFIG_DIR", namespace)
-        .current_dir(namespace);
+        .env("CLAUDE_CONFIG_DIR", &namespace)
+        .current_dir(&namespace);
     for name in ["SystemRoot", "WINDIR"] {
         if let Some(value) = lookup(environment, OsStr::new(name)) {
             command.env(name, value);

@@ -57,6 +57,36 @@ while each click changes `aria-expanded`; menu setup focuses the real session ro
 before clicking its hover/focus-enabled overflow button. These regressions verify
 setup ordering and actual component state, not browser hit testing or pixels.
 
+## PR57 session workflow baseline acceptance
+
+The v0.21.0 close/archive separation reserves independent trailing action slots.
+Two agents opened and inspected all five changed actual/expected/diff groups from
+[PR57 visual run 38884099695 attempt 1](https://github.com/shawnwu2022/cc-desk/actions/runs/38884099695).
+The remaining eight baseline images were also opened and independently SHA-256
+checked against the artifact copies; their bytes are unchanged. No error page,
+hidden content, tolerance change or screenshot mask was accepted.
+
+Capture source head: `327a6b60870547b1c0a11f327e28204bb98e4c25`; tested PR merge:
+`ff91ee7b72add5fad6a7356932004b1e0f8ffa85`. Artifact **12038981730** was independently
+downloaded through the authenticated API: 34,436,254 bytes, SHA-256
+`915f49f52c462b29bd0a4d160d251565f77479dc3dd901422331e3c02ecd6625`.
+Environment: Ubuntu 24.04, Node 22.23.3, Playwright 1.63.0, Chrome for Testing
+153.0.8010.12. Only the exact five actual PNG byte streams from that archive are
+adopted; the approval manifest preserves their former bytes' provenance.
+
+| Image | Reviewed change | Raw changed pixels / exclusive bounds |
+| --- | --- | --- |
+| workspace-mixed-1366-zh | Earlier session-title truncation; time/retry move left for separate archive slot | 2647 / [175,183,289,555] |
+| workspace-hover-action-1366-en | Close moves to independent primary slot; full title Tooltip follows its narrower anchor and stays in viewport | 4734 / [67,183,290,555] |
+| archived-sessions | Archive-row time/restore move left; drawer boundary and Close stay unchanged | 503 / [1246,74,1307,125] |
+| workspace-menu-1024-en | Underlying rows change; menu geometry, text and focus outline remain identical | 1679 / [175,183,290,555] |
+| workspace-dark-gui-light-terminal | Same row slot changes; main and terminal pixels unchanged | 2452 / [175,183,290,555] |
+
+The original run remains **RED: 5 screenshot failures, 231 other cases passed**.
+Adoption is pixel review, not a passing verification. A fresh complete original
+236-case CI run with `updateSnapshots: none` and `maxDiffPixels: 0` is required
+before merge. This evidence does not certify Windows WebView2 or real CLI IO.
+
 ## Commands
 
 Install the lockfile's exact development dependency and its official browser:

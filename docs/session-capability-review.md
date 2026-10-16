@@ -117,6 +117,16 @@
 
 ## 最终验证与交付边界
 
+### v0.21.0 发布准备与 PR57 补充
+
+用户随后明确授权提交、合并、发布与清理；本地审查快照是上一检查点，不是最终发布源码。版本按新增事务索引修复及官方元数据能力准备为 0.21.0，npm/Cargo/Tauri 和两份锁文件、版本契约与 changelog 已同步。提交前完整 Vitest 183 文件、2722 通过、2 原有跳过；类型、构建和 100 项发布门禁 fixture 通过。
+
+发布复审发现 Node/SDK 两个固定错误码被 ProjectionClient 吞为未知结果，桥接回归先 RED 后 GREEN，安全载荷剥离和单次调用仍保留。README 与双语提示给出 Node PATH、重启应用及 CLI 手动更名的处理路径。
+
+PR57 首次三平台 scope-core 中 Windows/Ubuntu 通过，macOS 186/187，原 Scope011 的 SDK 调用返回未知结果。Windows 私有路径别名夹具复现 Node 模块真实路径与权限路径不一致的加载拒绝；候选修复统一同一私有目录的物理路径，并拒绝 namespace 外的 bridge，不扩权限。两新增回归先 RED 后本地完整更名 16/16 GREEN，严格 Clippy/格式通过；macOS 根因确认仍以新 head 原 Scope011 的实际 CI 结果为准，不以宿主机制实验替代。
+
+首轮视觉 CI 231 通过、5 PNG 差异。主代理与独立代理实际审阅全部 changed actual/expected/diff 及 13 图库存，仅采纳已批准槽位调整的 5 张精确 PNG，另 8 张字节不变。原 ZIP 来源、哈希、像素范围与 fresh no-update 要求见 [视觉证据](visual-testing.md#pr57-session-workflow-baseline-acceptance)。原失败结果不抹除，不改容差或库存。最终合并和发布仍由新源码精确 main CI、coverage 和同 run 三平台签名门禁决定。
+
 ### 官方 Claude SDK、重复显示与生命周期收口（2026-10-16）
 
 当前在同一未提交分支与基线 `f3f0b9e7c495a0e9bc7aa0b008887b3b75094b95`，package 仍为 0.20.2。固定 SDK 0.3.301 已接入；未提交、推送、合并、安装或发布，未更改真实历史、真实配置或全局信任状态。
