@@ -75,10 +75,11 @@ export function deriveSessionVisualState(session: UnifiedSession, selected = fal
   if (session.attentionKind === 'completed') return 'completed'
   if (session.attentionState === 'needs-user' || activity === 'waiting' || activity === 'waiting_input') return 'needs-user'
   if (activity === 'idle') return 'running'
-  if (activity === 'unknown' && session.cli === 'claude' && session.runtime === 'native-cli' && session.observationState) {
+  if (activity === 'unknown' && session.cli === 'claude' && session.runtime === 'native-cli'
+    && session.observationState && session.observerReasonCode !== 'OBSERVER_UNSUPPORTED') {
     return session.observationState === 'connecting' ? 'confirming' : 'unknown'
   }
-  // 无观察通道（观察器关闭、codex、连接期）时无从得知 turn 状态；进程仍在
+  // 不支持观察通道（codex、raw）时无从得知 turn 状态；进程仍在
   // 运行,显示中性运行态而不是看似异常的"活动未知"。
   if (activity === 'unknown' && session.observationState !== 'active') return 'running'
   return 'unknown'
@@ -114,9 +115,10 @@ const noticeReasonLabelKeys: Record<NativeObservationReasonCode,string> = {
 export function selectSessionObservationNotice(session: UnifiedSession): { labelKey: string; unread: boolean; detailLabelKey?: string } | null {
   if (session.runtime !== 'native-cli' || session.cli !== 'claude' || !['running', 'stopped'].includes(session.processState)) return null
   const notice = session.observationNotice
+  // 未读提示只描述其自身回执；后续失败原因在确认未读后随最近回执展示。
+  if (notice?.unreadReplyEnd?.kind === 'reply-ended') return { labelKey: 'nativeNoticeReplyEndUnread', unread: true }
   const reason=notice?.recent && nativeNoticeReasonCode(notice.recent.kind,notice.recent.reasonCode)
   const details=reason ? {detailLabelKey:noticeReasonLabelKeys[reason]} : {}
-  if (notice?.unreadReplyEnd?.kind === 'reply-ended') return { labelKey: 'nativeNoticeReplyEndUnread', unread: true, ...details }
   const labelKey = notice?.recent && noticeLabelKeys[notice.recent.kind]
   return labelKey ? { labelKey, unread: false, ...details } : null
 }

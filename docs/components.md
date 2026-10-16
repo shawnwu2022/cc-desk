@@ -756,8 +756,16 @@ Legacy authenticated Claude activity hints expire after 30 seconds into unknown 
 
 ## Session workflow repairs (2026-10-16)
 
+Raw Claude launches explicitly project `OBSERVER_UNSUPPORTED` and keep the neutral
+process-running icon, rather than implying an observer installation failure. A
+supported Claude launch with observation disabled or unavailable still reports
+that fixed reason. An unread reply-end notice never borrows a later receipt's
+failure reason; acknowledging it reveals the recent failure and its own reason.
+
 Authenticated prompt-submitted receipts retain a separate attempt-owned marker; tool receipts do not erase it. Native history refresh coalesces that marker with identity/reply cues through the existing grouped reader and rechecks profile/project/attempt ownership before IO. It never reads prompt bodies from the observer.
 
 Collapsed projects expose an independent unread-reply count, including ended history receipts. Error and permission causes retain priority. Selecting a project or hiding a row does not acknowledge receipts; actual focused/visible active-owner acknowledgment remains authoritative.
 
 Project tree and project-page menus offer Close project sessions through the shared project confirmation dialog. Confirmation freezes current open/preparation session identities and exact close owners. Execution serializes canonical closes, stops dispatch after cancellation or registration replacement, excludes later-created sessions, and continues other original targets after individual failure. Partial completion is explicit; no archive, global PTY kill or cross-project operation is performed.
+
+The confirmation captures actual owning-store session IDs and requires an exact catalog match before changing selection or dispatching closes. A missing catalog projection does not prove its owner has closed. Batch execution also takes over fallback selection from original targets already closing individually, so it activates a remaining session only after the batch settles; opening or cancelling the dialog alone leaves individual-close behavior intact. Open Native terminals retain their own process owner and never absorb an independent Legacy archive owner. Ordinary unarchived Legacy history still folds into a unique, proven same-root Native row for display.

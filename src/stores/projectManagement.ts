@@ -38,13 +38,16 @@ export const useProjectManagementStore = defineStore('project-management', () =>
   }
   let refreshTail: Promise<void> | null = null
 
-  function openCount(path: string): number {
+  function openSessionIds(path: string): string[] {
     // Open stopped terminals still own runtime/profile/project identity. A stale
     // catalog saying "ended" cannot authorize unregistering their project.
-    return [...legacy.tabs.values()].filter(tab => sameProjectPath(tab.projectPath, path)).length
-      + [...native.tabs.values()].filter(tab => sameProjectPath(tab.projectPath, path)).length
-      + catalog.sessions.filter(row => sameProjectPath(row.projectPath, path) && catalog.isPreparingSession(row.id)).length
+    return [...new Set([
+      ...[...legacy.tabs.values()].filter(tab => sameProjectPath(tab.projectPath, path)).map(tab => `legacy-tab:${tab.tabId}`),
+      ...[...native.tabs.values()].filter(tab => sameProjectPath(tab.projectPath, path)).map(tab => `native-tab:${tab.tabId}`),
+      ...catalog.sessions.filter(row => sameProjectPath(row.projectPath, path) && catalog.isPreparingSession(row.id)).map(row => row.id),
+    ])]
   }
+  function openCount(path: string): number { return openSessionIds(path).length }
   const groups = computed<UnifiedProjectGroup[]>(() => {
     const rows = new Map<string, UnifiedProjectGroup>()
     const pinned = new Set(state.pinnedProjects.map(normalizePath))
@@ -130,7 +133,7 @@ export const useProjectManagementStore = defineStore('project-management', () =>
     error.value = null
     try {
       const proof = registration(project.projectPath)
-      const close = catalog.captureProjectClose(project.projectPath)
+      const close = catalog.captureProjectClose(project.projectPath, openSessionIds(project.projectPath))
       dialog.value = { kind: 'close-sessions', project: { ...project } }
       projectCloseOwner = { request: dialog.value, registration: proof, close }
     } catch { error.value = 'resumeConfigurationChanged' }

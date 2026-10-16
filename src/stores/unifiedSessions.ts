@@ -331,7 +331,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
   let selectionIntentEpoch = 0
   const actionVersion = new Map<string, number>()
   const actionTails = new Map<string, Promise<void>>()
-  const closingSessions = new Map<string, { owns: () => boolean; promise: Promise<void> }>()
+  const closingSessions = new Map<string, { owns: () => boolean; promise: Promise<void>; fallback: { enabled: boolean } }>()
 
   const activeSession = computed(() =>
     sessions.value.find(session => session.id === activeSessionId.value) ?? null,
@@ -483,7 +483,8 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
       }
       // legacy 与 native 历史扫描同一 CLI 默认数据源,同一会话会各投影一行；以
       // native 行为准（归档/改名/恢复语义更完整），legacy 历史行在存在同一
-      // native 身份（活动的或历史的）时让位。已打开终端永不参与折叠。
+      // native 身份时让位；已归档 legacy 行只交给关闭的 native 历史行。
+      // 已打开终端保留自身进程 owner，不接管独立 legacy 归档 owner。
       // 折叠的前提是**根身份已证明**：legacy 读固定 `~/.claude`，native 读
       // profile 的 CLAUDE_CONFIG_DIR；只有两者的根 key 相同（同一目录的同一
       // 文件索引）才是同一来源，UUID 相等本身不是证据。根身份未知或不同一律
@@ -503,6 +504,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
           const matches = nativeHistoryKeys.get(`${row.cli}\u0000${normalizePath(row.projectPath)}\u0000${row.adapterSessionId}`)
           if (matches?.length !== 1 || matches[0].safeErrorCode === 'SESSION_ORIGIN_AMBIGUOUS') continue
           const native = matches[0]
+          if (row.archived && native.opened === true) continue
           // 折叠前先接管 legacy 行独占的证据：归档保存的是裸 session ID，而
           // nativeCliAdapter.archiveState 只识别完整 Native key 与旧 Native key，
           // 直接删除会让已归档会话重新出现在普通列表；已保存的 Desk 显示名与
@@ -764,7 +766,11 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     const closing = closingSessions.get(id)
     // Repeated clicks join only the exact still-owned attempt. Enqueuing another
     // close would invalidate the first operation's selection publication.
-    if (closing?.owns()) return closing.promise
+    if (closing?.owns()) {
+      if (!selectFallback) closing.fallback.enabled = false
+      return closing.promise
+    }
+    const fallback = { enabled: selectFallback }
     const wasSelected = activeSessionId.value === id
     const ownsSelection = captureSelectionOwnership()
     async function selectRemaining(projectKey: string) {
@@ -772,7 +778,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
       // finishes. Only its original selection intent may choose a replacement.
       // History is never resumed by a close; the existing runtime adapter owns
       // activation, including the Legacy aggregate's internal selected tab.
-      if (selectFallback) await selectRemainingAfterClose(id, projectKey, wasSelected, ownsSelection)
+      if (fallback.enabled) await selectRemainingAfterClose(id, projectKey, wasSelected, ownsSelection)
     }
     const creation = creations.get(id)
     if (creation) {
@@ -796,7 +802,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
       completedClose.value = { projectKey: session.projectKey, sequence: (completedClose.value?.sequence ?? 0) + 1 }
       await selectRemaining(session.projectKey)
     }, 'close')
-    const pending = { owns, promise }
+    const pending = { owns, promise, fallback }
     closingSessions.set(id, pending)
     void promise.then(() => {
       if (closingSessions.get(id) === pending) closingSessions.delete(id)
@@ -806,7 +812,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     return promise
   }
 
-  function captureProjectClose(path: string): (canContinue?: () => boolean) => Promise<void> {
+  function captureProjectClose(path: string, expectedOwnerIds?: readonly string[]): (canContinue?: () => boolean) => Promise<void> {
     const projectKey = normalizePath(path)
     const targets = sessions.value.filter(row => normalizePath(row.projectPath) === projectKey
       && !row.archived && (row.opened === true || isPreparingSession(row.id))).map(row => ({
@@ -814,17 +820,27 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
       owns: creations.has(row.id) ? captureSessionOwnership(row.id)
         : adapterForRuntime(row.runtime).captureOwnership?.(row.id, 'close') ?? (() => sessions.value.includes(row)),
     }))
+    const expected = expectedOwnerIds && new Set(expectedOwnerIds)
+    const inventoryMatches = !expected || expected.size === expectedOwnerIds?.length
+      && targets.length === expected.size && targets.every(target => expected.has(target.id))
     return async (canContinue = () => true) => {
+      if (!inventoryMatches) throw new Error('PROJECT_CLOSE_PARTIAL')
+      if (!canContinue()) throw new Error('ACTION_CANCELLED')
       let failed = false
       const selected = targets.find(target => target.id === activeSessionId.value)
       const ownsSelection = captureSelectionOwnership()
       try {
+        // 已开始的单个关闭也可能先于其批量次序完成，须在第一次 await 前接管后备选择。
+        for (const target of targets) {
+          const closing = closingSessions.get(target.id)
+          if (target.owns() && closing?.owns()) closing.fallback.enabled = false
+        }
         // Legacy 内部关闭也会选择替补；先隐藏前台宿主，避免该内部切换触发未读 ACK。
         if (selected) { activeSessionId.value = null; await nextTick() }
         for (const target of targets) {
           if (!canContinue()) throw new Error('ACTION_CANCELLED')
           const row = sessions.value.find(item => item.id === target.id)
-          if (!row) continue
+          if (!row) { if (target.owns()) failed = true; continue }
           const owns = () => canContinue() && target.owns() && sessions.value.some(item => item.id === target.id
             && normalizePath(item.projectPath) === projectKey && makeSessionRenameOwnerKey(item) === target.key)
           if (!owns()) { failed = true; continue }

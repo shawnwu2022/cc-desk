@@ -35,16 +35,18 @@ describe('Honest Native event notice presentation', () => {
     expect(en[detail as keyof typeof en]).toMatch(/^Reply failure received:/)
     expect(zh[detail as keyof typeof zh]).toMatch(/^收到的回复失败原因：/)
   })
-  it('Notice_ExactRateLimitReasonStaysOccurrenceBesideUnread_005', () => {
+  it('Notice_UnreadReceiptDoesNotBorrowLaterFailureReason_005', async () => {
     const session=row()
     session.observationNotice!.recent={...session.observationNotice!.recent!,kind:'reply-failed',reasonCode:'rate_limit'}
     const wrapper=render(session)
     const label=wrapper.get('[data-native-observation-notice]').attributes('aria-label')
     expect(label).toContain('Reply-end notice received (unread)')
-    expect(label).toContain('Reply failure received: rate limit')
+    expect(label).not.toContain('Reply failure received: rate limit')
     expect(label).toContain('current activity unverified')
     expect(wrapper.get('[data-session-badge]').attributes('data-session-badge')).toBe('completed')
     expect(wrapper.html()).not.toContain('session-app-icon--error')
+    await wrapper.setProps({ session: { ...session, observationNotice: { ...session.observationNotice!, unreadReplyEnd: null } } })
+    expect(wrapper.get('[data-native-observation-notice]').attributes('aria-label')).toContain('Reply failure received: rate limit')
   })
   it.each([
     ['en', 'Reply-end notice received (unread); current activity unverified'],

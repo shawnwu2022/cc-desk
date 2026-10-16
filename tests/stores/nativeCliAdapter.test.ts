@@ -5,6 +5,7 @@ import { createNativeCliAdapter } from '@/session/adapters/nativeCliAdapter'
 import { createLegacyClaudeAdapter } from '@/session/adapters/legacyClaudeAdapter'
 import { captureNativeAttempt, useNativeTabsStore, type NativeCliTab } from '@/stores/nativeTabs'
 import type { NativeHistoryEntry } from '@/stores/nativeHistory'
+import { deriveSessionVisualState } from '@/utils/sessionPresentation'
 
 function tab(overrides: Partial<NativeCliTab> = {}): NativeCliTab {
   return {
@@ -289,6 +290,13 @@ describe('native CLI adapter', () => {
       activityState: 'waiting', observationState: 'active', attentionState: 'needs-user' })
     const { adapter } = setup([value], [])
     expect((await adapter.listSessions())[0]).toMatchObject({ activityState: 'unknown', observationState: 'off', attentionState: 'none' })
+  })
+  it('NativeObservation_RawClaudeHasNoUnavailableBadge_046', async () => {
+    const { adapter } = setup([tab({ cli: 'claude', action: { kind: 'raw', argv: [] },
+      observerReasonCode: 'OBSERVER_PLUGIN_UNAVAILABLE', observationState: 'unavailable' })], [])
+    const session = (await adapter.listSessions())[0]
+    expect(session).toMatchObject({ activityState: 'unknown', observationState: 'off', observerReasonCode: 'OBSERVER_UNSUPPORTED' })
+    expect(deriveSessionVisualState(session)).toBe('running')
   })
   it.each(['working', 'waiting'] as const)('NativeObservation_PreservesClaudeOrderedActivity_021 %s', async activityState => {
     const { adapter } = setup([tab({ cli: 'claude', action: { kind: 'new' }, activityState, observationState: 'active',

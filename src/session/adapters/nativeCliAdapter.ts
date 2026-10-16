@@ -125,7 +125,8 @@ function projectTab(tab: NativeCliTab, tabs?: NativeTabsPort): UnifiedSession {
     attentionState: activeObservation ? tab.attentionState ?? 'none' : 'none',
     activityState: activeObservation ? tab.activityState ?? 'unknown' : 'unknown',
     observationState: claudeObservation ? tab.observationState ?? 'off' : 'off',
-    ...(tab.observerReasonCode ? { observerReasonCode: tab.observerReasonCode } : {}),
+    ...(!claudeObservation ? { observerReasonCode: 'OBSERVER_UNSUPPORTED' as const }
+      : tab.observerReasonCode ? { observerReasonCode: tab.observerReasonCode } : {}),
     ...(observationNotice ? { observationNotice } : {}),
     lastActivityAt: tab.lastActivityAt,
     lastOpenedAt: tab.createdAt,
