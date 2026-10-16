@@ -101,9 +101,9 @@ pub(crate) fn validate_probe_manifest(data: &[u8]) -> Result<(), UpdateFailure> 
     let manifest: serde_json::Value = serde_json::from_slice(data).map_err(|_| invalid())?;
     let version = manifest["version"].as_str().ok_or_else(invalid)?;
     if semver::Version::parse(version).is_err()
-        || !manifest["platforms"]
+        || manifest["platforms"]
             .as_object()
-            .is_some_and(|platforms| !platforms.is_empty())
+            .is_none_or(|platforms| platforms.is_empty())
     {
         return Err(invalid());
     }

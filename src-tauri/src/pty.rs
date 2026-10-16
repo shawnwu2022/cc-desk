@@ -437,7 +437,10 @@ impl PtyManager {
         let mut inherited_redirect = false;
         let mut bash_env = false;
         for (key, value) in env::vars_os() {
-            if key.to_string_lossy().eq_ignore_ascii_case("CLAUDE_CONFIG_DIR") {
+            if key
+                .to_string_lossy()
+                .eq_ignore_ascii_case("CLAUDE_CONFIG_DIR")
+            {
                 inherited_redirect = true;
             }
             if key.to_string_lossy().eq_ignore_ascii_case("BASH_ENV") && !value.is_empty() {
@@ -471,10 +474,7 @@ impl PtyManager {
         for name in crate::cli::environment::OBSERVER_ENV_NAMES {
             cmd.env_remove(name);
         }
-        !inherited_redirect
-            && !configured_redirect
-            && !bash_env
-            && !configured_bash_env
+        !inherited_redirect && !configured_redirect && !bash_env && !configured_bash_env
     }
 
     #[allow(clippy::too_many_arguments)]

@@ -178,8 +178,8 @@ fn HistoryRuntime_LegacyWorker_99() {
             command,
             "single close fixture",
             None,
-                true,
-            )
+            true,
+        )
         .unwrap();
     // A real live child remains registered when either read cleanup cannot stop
     // it or a waiter supplies no successful exit result. Neither is exit proof.
@@ -221,8 +221,8 @@ fn HistoryRuntime_LegacyWorker_99() {
             command,
             "reused ID fixture",
             None,
-                true,
-            )
+            true,
+        )
         .unwrap();
     let replacement = manager.instances.lock().get(&id).unwrap().killer.clone();
     manager.fail_reader(&id, &control, "old reader failure");
@@ -269,8 +269,8 @@ fn HistoryRuntime_LegacyWorker_99() {
             command,
             "maintenance fixture",
             None,
-                true,
-            )
+            true,
+        )
         .unwrap();
     HOLD_WAITER.with(|held| held.borrow_mut().take());
     assert!(gate.freeze(&Uuid::new_v4().to_string()).is_err());

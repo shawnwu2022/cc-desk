@@ -691,7 +691,8 @@ fn walk(
             // links/invalid paths. Only individual transcript reads are isolatable.
             walk(c, &p, depth - 1, kind, b, files)?;
         } else if entry.is_file
-            && entry.name.ends_with(".jsonl")
+            && (entry.name.ends_with(".jsonl")
+                || (c.cli == CliKind::Codex && entry.name.ends_with(".jsonl.zst")))
             && !entry.name.starts_with("agent-")
         {
             // Documented set-aside transcripts are not shown by Claude's picker.
@@ -1324,3 +1325,6 @@ fn content(v: &Value) -> String {
 #[path = "../../tests/native_cli_history_metadata.rs"]
 mod tests;
 
+#[cfg(test)]
+#[path = "../../tests/native_cli_history_zstd.rs"]
+mod zstd_tests;

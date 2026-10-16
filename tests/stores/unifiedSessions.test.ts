@@ -2,6 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { useProjectsStateStore } from '@/stores/projectsState'
 import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
+import { createNativeCliAdapter } from '@/session/adapters/nativeCliAdapter'
+import type { NativeHistoryEntry } from '@/stores/nativeHistory'
+import type { NativeCliTab } from '@/stores/nativeTabs'
 import { LaunchConfigurationRequiredError } from '@/utils/launchPreparation'
 import type {
   CreateUnifiedSessionInput,
@@ -670,9 +673,12 @@ it('Unified_OpenLegacyTabHidesNativeTwin_023b', async () => {
 
 // 折叠必须接管 legacy 行独占的证据：归档保存的是裸 session ID（native 侧不识别），
 // 已保存的 Desk 显示名与最近打开时间也只挂在 legacy 记录上。
-// 已打开的 native 终端以 native-tab ID 投影，它的保存名却记在 native 历史键下；
-// 折叠不得因此改用 legacy 的保存名。
-it('Unified_FoldingKeepsNativeTabSavedName_044', async () => {
+// 同 UUID 的其他根、配置、修订及注册项目保存名不得覆盖当前来源；使用真实 adapter 解析历史身份。
+it.each(['root', 'profile', 'revision', 'project'].flatMap(source => [
+  { opened: true, ownSaved: true },
+  { opened: true, ownSaved: false },
+  { opened: false, ownSaved: false },
+].map(state => ({ source, ...state }))))('Unified_FoldNameSource_044 $source/$opened/$ownSaved', async ({ source, opened, ownSaved }) => {
   const legacyRow = session({
     id: 'legacy-history:/repo:sess-3',
     runtime: 'legacy-claude',
@@ -681,21 +687,46 @@ it('Unified_FoldingKeepsNativeTabSavedName_044', async () => {
     adapterSessionId: 'sess-3',
     nativeSessionId: 'sess-3',
   })
-  const nativeTab: UnifiedSession = {
-    id: 'native-tab:tab-1', projectKey: '/repo', projectPath: '/repo',
-    cli: 'claude', runtime: 'native-cli', title: 'CLI 标题',
-    processState: 'running', attentionState: 'none', lastActivityAt: 500,
-    archived: false, opened: true, resumable: true,
-    adapterSessionId: 'tab-1', nativeSessionId: 'sess-3',
-    nativeRootKey: LEGACY_ROOT, launchConfigId: 'profile-a',
-    nativeOrigin: { cli: 'claude', profileId: 'profile-a', profileRevision: '7', projectId: 'project-1', projectPath: '/repo' },
+  const entry: NativeHistoryEntry = {
+    key: 'current', context: { cli: 'claude', profileId: 'profile-a', profileRevision: '7', projectId: 'project-1', projectPath: '/repo' },
+    sourceRootKey: LEGACY_ROOT, sessions: [{ type: 'session', sessionKey: JSON.stringify(['local', 'claude', LEGACY_ROOT, 'sess-3']), nativeSessionId: 'sess-3', title: 'CLI 标题',
+      truncated: false, archived: false, cwd: '/repo', updatedAt: '2026-10-16T00:00:00Z' }],
+    loading: false, loaded: true, error: null, requestEpoch: '1',
   }
-  const records = useProjectsStateStore().sessionRecords
-  // native 历史键上的保存名（活动终端由它显示）
-  records.set('native-history:v2:sess-3', {
+  const other: NativeHistoryEntry = { ...entry, context: { ...entry.context }, sessions: [{ ...entry.sessions[0] }] }
+  if (source === 'root') {
+    other.sourceRootKey = 'another-root'
+    other.sessions[0].sessionKey = JSON.stringify(['local', 'claude', 'another-root', 'sess-3'])
+  } else if (source === 'profile') other.context.profileId = 'another-profile'
+  else if (source === 'revision') other.context.profileRevision = '6'
+  else other.context.projectId = 'previous-project'
+  const projects = useProjectsStateStore(), records = projects.sessionRecords
+  const entries = [entry], tabs = new Map<string, NativeCliTab>()
+  const native = createNativeCliAdapter({
+    tabs: { tabs, activeTabId: null, setActive: vi.fn(), close: vi.fn(), rename: vi.fn() },
+    history: { all: () => entries }, metadata: projects,
+    runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: vi.fn(), renameTab: vi.fn() },
+    archive: { getArchivedSessions: () => [], archiveSession: vi.fn(), restoreSession: vi.fn() },
+  })
+  const ownHistory = (await native.listSessions())[0]
+  entries[0] = other
+  const otherHistory = (await native.listSessions())[0]
+  entries[0] = entry
+  records.set(otherHistory.id, {
     runtime: 'native-cli', cli: 'claude', projectPath: '/repo',
-    adapterSessionId: 'native-history-key-3', nativeSessionId: 'sess-3',
+    adapterSessionId: other.sessions[0].sessionKey, nativeSessionId: 'sess-3',
+    title: '其他来源保存名', lastActivityAt: 400,
+  })
+  if (ownSaved) records.set(ownHistory.id, {
+    runtime: 'native-cli', cli: 'claude', projectPath: '/repo',
+    adapterSessionId: entry.sessions[0].sessionKey, nativeSessionId: 'sess-3',
     title: 'native 保存名', lastActivityAt: 400,
+  })
+  if (opened) tabs.set('tab-1', {
+    tabId: 'tab-1', cli: 'claude', projectPath: '/repo', projectId: 'project-1', profileId: 'profile-a', profileRevision: '7',
+    requestId: 'request-1', runId: 'run-1', generation: 1, action: { kind: 'resume-id', nativeSessionId: 'sess-3' },
+    sourceSessionKey: entry.sessions[0].sessionKey, status: 'running', errorCode: null, launchRevision: '7',
+    title: 'CLI 标题', createdAt: 1, lastActivityAt: 500,
   })
   records.set(legacyRow.id, {
     runtime: 'legacy-claude', cli: 'claude', projectPath: '/repo',
@@ -703,13 +734,16 @@ it('Unified_FoldingKeepsNativeTabSavedName_044', async () => {
     title: 'legacy 保存名', lastActivityAt: 100,
   })
   const legacy = fakeAdapter('legacy-claude', [legacyRow])
-  const native = fakeAdapter('native-cli', [nativeTab])
   const store = useUnifiedSessionsStore()
-  store.configureAdapters([legacy.adapter, native.adapter], { legacyClaudeRootKey: LEGACY_ROOT })
+  store.configureAdapters([legacy.adapter, native], { legacyClaudeRootKey: LEGACY_ROOT })
   await store.refresh()
   const rows = store.sessions.filter(row => row.projectKey === '/repo')
   expect(rows).toHaveLength(1)
-  expect(rows[0].title).toBe('native 保存名')
+  expect(rows[0]).toMatchObject({ title: ownSaved ? 'native 保存名' : 'legacy 保存名', opened })
+  records.delete(ownHistory.id)
+  records.delete(legacyRow.id)
+  await store.refresh()
+  expect(store.sessions[0].title).toBe('CLI 标题')
 })
 
 // 折叠必须接管 legacy 行独占的证据：归档（存裸 session ID）、显式保存的 Desk

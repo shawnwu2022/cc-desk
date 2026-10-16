@@ -98,6 +98,23 @@ Native CLI v3 accesses supported native resources through authenticated backend 
 
 Projection kinds include the supported history/config-resource categories implemented by `cli/native_projection`. Returned DTOs are bounded and kind-specific.
 
+Codex history accepts both `.jsonl` and Zstandard-compressed `.jsonl.zst` rollouts
+under `sessions/` and `archived_sessions/`. Compression does not mean archival;
+the representative rollout's container still supplies the archive flag. Both
+formats use the same session identity, project association, filtering and thread
+deduplication. Reads never unpack files onto disk or change native history.
+
+Compressed reads stream through the held source capability, charge compressed
+input and decoded output against the existing aggregate budget, cap each side at
+the existing per-file limit, and limit the decoder window to 8 MiB. History reads
+stop after bounded identity/title observation (normally at most 192 KiB of decoded
+prefix; a longer first identity record may use the per-file limit). They cannot
+seek to a compressed tail: timestamps come only from observed complete records,
+and partial observation remains explicitly incomplete on cold and cached reads.
+Full message/search reads retain the decoded per-file limit. Decoding failures
+observed in corrupt or truncated entries are reported as individual history read
+failures; a partial read does not certify unread frame tails.
+
 Raw values that may contain credentials—environment values, headers, arbitrary configuration blobs—must not be projected.
 
 ## Project registry
@@ -133,6 +150,11 @@ display name, so refresh, close and a fresh application-store load retain the na
 Legacy metadata binds the normalized project path and Legacy session ID. Records
 with a key whose runtime, CLI, project or session fields disagree are not applied.
 Raw IDs and ambiguous old Native keys are never guessed into another origin.
+
+Adapters carry an explicitly matched Desk name as the display-only
+`savedDisplayName` projection. Folding consumes that resolved name before the
+Legacy exact-key fallback; it never scans saved records by UUID/project or
+reconstructs another profile, revision, root or registration's history identity.
 
 A new or raw Native terminal without a known authenticated history association
 can only save its name under its exact tab identity. It retains the name across a

@@ -1,6 +1,6 @@
 [package]
 name = "cc-desk"
-version = "0.20.1"
+version = "0.20.2"
 description = "CC Desk - a multi-project, multi-session desktop workspace for Claude Code"
 authors = ["shawnwu2022"]
 license = "MIT"
@@ -48,6 +48,7 @@ once_cell = "1"
 axum = "0.7"
 tower = "0.5"
 rusqlite = { version = "0.31", features = ["bundled"], optional = true }
+zstd = { version = "=0.13.3", default-features = false }
 
 [features]
 default = ["sqlite"]

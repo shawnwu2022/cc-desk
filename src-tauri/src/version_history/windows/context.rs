@@ -2167,7 +2167,7 @@ impl RootRecoveryEvidence<'_> {
         };
         let at_original = occupies(root, &ticket.original_parent, &ticket.original_name)?;
         let at_quarantine = occupies(root, ticket.quarantine.directory(), &ticket.quarantine_name)?;
-        if (!at_original && !at_quarantine) || (self.returned && !at_original) {
+        if !at_original && (!at_quarantine || self.returned) {
             return Err(blocked(
                 "owned recovery root occupies an unsupported location",
             ));

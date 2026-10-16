@@ -100,6 +100,11 @@ Native resource reads:
 - return kind-specific projection DTOs only;
 - do not return raw env values, headers, credential material, arbitrary argv, or unbounded native errors.
 
+Codex rollout projections include `.jsonl.zst` alongside `.jsonl`, using bounded
+streaming decompression through the same held source capability. Compression does
+not change archive state or project/session identity. Input/output budgets and
+partial-observation semantics are described in [data persistence](data-persistence.md).
+
 The contextual drawer renders six structured categories: instructions, settings,
 MCP, skills, agents and plugins. It prefers exact active-run authority; a missing or
 invalid run never falls back to current defaults. Profile/project changes reject

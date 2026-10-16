@@ -69,6 +69,8 @@ export interface UnifiedSession {
   cli: UnifiedCliKind
   runtime: SessionRuntimeKind
   title: string
+  /** adapter 按精确元数据身份解析的 Desk 覆盖名；仅供显示，不能据此推断其他来源。 */
+  savedDisplayName?: string
   processState: SessionProcessState
   attentionState: SessionAttentionState
   /** Missing/unordered observation means unknown, never idle or completed. */

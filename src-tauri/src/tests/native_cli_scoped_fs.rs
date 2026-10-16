@@ -369,3 +369,123 @@ fn CodexHeader_ChargeSample_002() {
         Some("SOURCE_TOO_LARGE")
     );
 }
+
+// 压缩输入与解压输出分别计入同一聚合预算，恰好用尽后不能再次读取。
+#[test]
+#[allow(non_snake_case)]
+fn ZstdRead_ChargeInputAndOutput_003() {
+    let temp = tempfile::tempdir().unwrap();
+    let input = b"hello";
+    let encoded = zstd::stream::encode_all(&input[..], 1).unwrap();
+    let total = encoded.len() + input.len();
+    fs::write(temp.path().join("x.jsonl.zst"), &encoded).unwrap();
+    let root = Root::open(temp.path()).unwrap();
+    let mut budget = Budget::new(Limits {
+        file_bytes: 1024,
+        total_bytes: total,
+        entries: 10,
+    });
+    assert_eq!(
+        root.read(Path::new("x.jsonl.zst"), &mut budget).unwrap(),
+        Some(input.to_vec())
+    );
+    assert_eq!(budget.bytes_left, 0);
+    assert_eq!(
+        root.read(Path::new("x.jsonl.zst"), &mut budget).err(),
+        Some("SOURCE_TOO_LARGE")
+    );
+    assert_eq!(budget.bytes_left, 0);
+}
+
+// 高压缩比不能绕过解压输出上限；失败仍扣除已经读取的压缩输入与解压输出。
+#[test]
+#[allow(non_snake_case)]
+fn ZstdRead_DecodedLimit_004() {
+    let temp = tempfile::tempdir().unwrap();
+    let encoded = zstd::stream::encode_all(&vec![b'x'; 64 * 1024][..], 1).unwrap();
+    fs::write(temp.path().join("x.jsonl.zst"), &encoded).unwrap();
+    let root = Root::open(temp.path()).unwrap();
+    let mut budget = Budget::new(Limits {
+        file_bytes: 1024,
+        total_bytes: 10000,
+        entries: 10,
+    });
+    assert_eq!(
+        root.read(Path::new("x.jsonl.zst"), &mut budget).err(),
+        Some("SOURCE_TOO_LARGE")
+    );
+    assert_eq!(budget.bytes_left, 10000 - encoded.len() - 1024);
+}
+
+// 头窗口受解压后的字节限制，并且不因源文件压缩得很小而变成完整观察。
+#[test]
+#[allow(non_snake_case)]
+fn ZstdRead_BoundedMetadata_005() {
+    let temp = tempfile::tempdir().unwrap();
+    let input = format!("{{}}\n{}", "x".repeat(3 * 1024 * 1024));
+    let encoded = zstd::stream::encode_all(input.as_bytes(), 1).unwrap();
+    fs::write(temp.path().join("x.jsonl.zst"), &encoded).unwrap();
+    let root = Root::open(temp.path()).unwrap();
+    let mut budget = budget();
+    let (head, _, incomplete) = root
+        .history_codex_metadata(Path::new("x.jsonl.zst"), &mut budget, &mut |bytes| {
+            Ok(bytes.starts_with(b"{}\n"))
+        })
+        .unwrap()
+        .unwrap();
+    assert!(head.starts_with(b"{}\n"));
+    assert!(head.len() <= CODEX_HEAD_WINDOW);
+    assert!(incomplete);
+    assert!(budget.history_metadata_incomplete());
+    assert!(Limits::default().total_bytes - budget.bytes_left <= CODEX_HEAD_WINDOW + encoded.len());
+    assert_eq!(
+        root.read(Path::new("../x.jsonl.zst"), &mut budget).err(),
+        Some("SOURCE_PATH_REJECTED")
+    );
+}
+
+// 合法压缩帧也不能要求超出产品上限的解码窗口，避免输出很小时仍大额分配内存。
+#[test]
+#[allow(non_snake_case)]
+fn ZstdRead_WindowLimit_006() {
+    use std::io::Write;
+    let temp = tempfile::tempdir().unwrap();
+    let mut encoder = zstd::stream::write::Encoder::new(Vec::new(), 1).unwrap();
+    encoder.window_log(25).unwrap();
+    encoder.include_contentsize(false).unwrap();
+    encoder.write_all(b"small valid payload").unwrap();
+    let encoded = encoder.finish().unwrap();
+    assert_eq!(
+        zstd::stream::decode_all(&encoded[..]).unwrap(),
+        b"small valid payload"
+    );
+    fs::write(temp.path().join("x.jsonl.zst"), &encoded).unwrap();
+    let root = Root::open(temp.path()).unwrap();
+    assert_eq!(
+        root.read(Path::new("x.jsonl.zst"), &mut budget()).err(),
+        Some("SOURCE_INVALID")
+    );
+}
+
+// 短首 frame 会使输出块不对齐；即使一直未找到标题也不能越过 192KiB 头窗口。
+#[test]
+#[allow(non_snake_case)]
+fn ZstdRead_UnalignedFrameWindow_007() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut encoded = zstd::stream::encode_all(&b"{}\n"[..], 1).unwrap();
+    encoded.extend(zstd::stream::encode_all("record\n".repeat(40 * 1024).as_bytes(), 1).unwrap());
+    assert!(encoded.len() < 8192);
+    fs::write(temp.path().join("x.jsonl.zst"), &encoded).unwrap();
+    let root = Root::open(temp.path()).unwrap();
+    let mut budget = budget();
+    let (head, _, incomplete) = root
+        .history_codex_metadata(Path::new("x.jsonl.zst"), &mut budget, &mut |_| Ok(false))
+        .unwrap()
+        .unwrap();
+    assert!(incomplete);
+    assert!(head.len() <= CODEX_HEAD_WINDOW);
+    assert_eq!(
+        Limits::default().total_bytes - budget.bytes_left,
+        encoded.len() + CODEX_HEAD_WINDOW
+    );
+}
