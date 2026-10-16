@@ -27,6 +27,8 @@ impl ProjectionService {
     ) -> Result<crate::cli::native_rename::RenameReceipt, SafeError> {
         self.launch.registry().check_caller(caller)?;
         request.validate()?;
+        self.rename_operations
+            .release_revoked(|owner| self.launch.registry().check_caller(owner).is_ok())?;
         if let Some(result) = self.rename_operations.begin(caller, &request)? {
             result?;
             return Ok(request.receipt());

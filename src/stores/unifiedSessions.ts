@@ -903,10 +903,18 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     return enqueue(id, () => {
       if (renameOwners.get(id) !== owner || !ownsRename(owner, sessions.value.find(row => row.id === id))) throw new Error('STALE_SESSION_ATTEMPT')
       return adapter.renameSession(id, title, () => renameOwners.get(id) === owner && ownsRename(owner, sessions.value.find(row => row.id === id)), () => { owner.issued = true }, owner.controller.signal)
-    }, () => refresh(session.projectKey)).catch(failure => {
+    }, async result => {
+      try { await refresh(session.projectKey) }
+      catch (failure) {
+        // 原生已确认写回，后置读取失败只能提示同步问题，不能重新开放同一次保存。
+        if (result === 'native-title-saved') throw new Error('RENAME_DISPLAY_SYNC_FAILED')
+        throw failure
+      }
+    }).catch(failure => {
       // A failed owned editor save must keep the user's draft available for
       // retry; revoked/replaced attempts still close through normal cleanup.
-      if (requireEditor && renameOwners.get(id) === owner && ownsRename(owner, sessions.value.find(row => row.id === id))) {
+      const nativeSaved = session.runtime === 'native-cli' && safeUserErrorCode(failure) === 'RENAME_DISPLAY_SYNC_FAILED'
+      if (!nativeSaved && requireEditor && renameOwners.get(id) === owner && ownsRename(owner, sessions.value.find(row => row.id === id))) {
         owner.state = 'editing'
         owner.issued = false
         sessions.value = sessions.value.map(row => row.id === id ? { ...row, renameState: 'editing' } : row)

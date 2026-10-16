@@ -769,3 +769,10 @@ Collapsed projects expose an independent unread-reply count, including ended his
 Project tree and project-page menus offer Close project sessions through the shared project confirmation dialog. Confirmation freezes current open/preparation session identities and exact close owners. Execution serializes canonical closes, stops dispatch after cancellation or registration replacement, excludes later-created sessions, and continues other original targets after individual failure. Partial completion is explicit; no archive, global PTY kill or cross-project operation is performed.
 
 The confirmation captures actual owning-store session IDs and requires an exact catalog match before changing selection or dispatching closes. A missing catalog projection does not prove its owner has closed. Batch execution also takes over fallback selection from original targets already closing individually, so it activates a remaining session only after the batch settles; opening or cancelling the dialog alone leaves individual-close behavior intact. Open Native terminals retain their own process owner and never absorb an independent Legacy archive owner. Ordinary unarchived Legacy history still folds into a unique, proven same-root Native row for display.
+
+Once project-close execution starts, the confirmation blocks its Cancel, Escape and
+header-close controls until the batch settles, retaining any partial-result notice.
+Context invalidation still revokes dispatch ownership. A confirmed native rename
+whose later adapter/catalog display synchronization fails ends the original editor
+and reports `RENAME_DISPLAY_SYNC_FAILED`; it does not reopen that save for another
+write. Refresh remains a separate read-only recovery action.

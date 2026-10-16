@@ -76,6 +76,58 @@ fn req(source: SourceRef) -> ReadRequest {
         offset: 0,
     }
 }
+
+#[test]
+#[allow(non_snake_case)]
+fn NativeRename_RevokedDocumentReclaimsCompletedBudget_017() {
+    use crate::cli::native_rename::RenameRequest;
+    let f = Fixture::new();
+    let target = f.profile("rename-budget", &f._temp.path().join("root"));
+    let mut source = f.service.scope(&f.caller, &target).unwrap();
+    source.scope_id = "nonexistent-fixture-scope".into();
+    let mut request = RenameRequest {
+        operation_id: String::new(),
+        source,
+        session_key: "fixture-key".into(),
+        title: "fixture-title".into(),
+    };
+    // 仅制造已确定的准入失败，不启动 CLI 或触及真实会话。
+    for index in 0..4096 {
+        request.operation_id = format!("attempt-{index}");
+        assert_eq!(
+            f.service
+                .rename(&f.caller, request.clone())
+                .err()
+                .unwrap()
+                .code,
+            "SCOPE_UNKNOWN"
+        );
+    }
+    request.operation_id = "next-attempt".into();
+    assert_eq!(
+        f.service
+            .rename(&f.caller, request.clone())
+            .err()
+            .unwrap()
+            .code,
+        "SOURCE_BUSY"
+    );
+    f.launch.registry().revoke_window(&f.caller).unwrap();
+    let replacement = f.launch.registry().activate_window("main").unwrap();
+    assert_eq!(
+        f.service
+            .rename(&f.caller, request.clone())
+            .err()
+            .unwrap()
+            .code,
+        "FORBIDDEN"
+    );
+    assert_eq!(
+        f.service.rename(&replacement, request).err().unwrap().code,
+        "SCOPE_UNKNOWN"
+    );
+}
+
 #[test]
 fn D12_Production_ProfilesActuallyReadIndependentRoots_001() {
     let f = Fixture::new();

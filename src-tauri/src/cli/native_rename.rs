@@ -59,6 +59,18 @@ type OperationEntry = (
 #[derive(Default)]
 pub(crate) struct Operations(std::sync::Mutex<Vec<OperationEntry>>);
 impl Operations {
+    pub(crate) fn release_revoked(
+        &self,
+        authorized: impl Fn(&super::snapshot::CallerIdentity) -> bool,
+    ) -> Result<(), SafeError> {
+        let mut entries = self
+            .0
+            .lock()
+            .map_err(|_| super::profiles::error("RENAME_FAILED"))?;
+        // 活跃文档的确定/未知结果仍是去重凭据；在途记录不能因失权提前释放。
+        entries.retain(|(owner, _, result)| result.is_none() || authorized(owner));
+        Ok(())
+    }
     pub(crate) fn begin(
         &self,
         caller: &super::snapshot::CallerIdentity,

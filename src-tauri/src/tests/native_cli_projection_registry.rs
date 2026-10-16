@@ -245,6 +245,108 @@ fn NativeRename_OperationIdentityNeverReplaysUnknown_008() {
 
 #[test]
 #[allow(non_snake_case)]
+fn NativeRename_ReclamationPinsInflightAndFullLiveCallers_018() {
+    use crate::cli::native_rename::{Operations, RenameRequest};
+    let temp = tempfile::tempdir().unwrap();
+    let registry = ScopeRegistry::new(8);
+    let source = registry
+        .register(grant(
+            temp.path(),
+            "unused",
+            Arc::new(AtomicBool::new(true)),
+        ))
+        .unwrap();
+    let caller = crate::cli::snapshot::CallerIdentity {
+        instance_id: "instance".into(),
+        window_label: "main".into(),
+        webview_epoch: n(1),
+    };
+    let mut other_instance = caller.clone();
+    other_instance.instance_id = "other-instance".into();
+    let mut other_window = caller.clone();
+    other_window.window_label = "other-window".into();
+    let mut other_epoch = caller.clone();
+    other_epoch.webview_epoch = n(2);
+    let mut request = RenameRequest {
+        operation_id: "operation".into(),
+        source,
+        session_key: "key".into(),
+        title: "new".into(),
+    };
+    let operations = Operations::default();
+    // 旧文档的在途操作填满预算，失权本身不能释放它们。
+    for index in 0..4096 {
+        request.operation_id = format!("pending-{index}");
+        assert!(operations.begin(&other_epoch, &request).unwrap().is_none());
+    }
+    operations
+        .release_revoked(|owner| owner == &caller)
+        .unwrap();
+    assert_eq!(
+        operations.begin(&caller, &request).unwrap_err().code,
+        "SOURCE_BUSY"
+    );
+    operations.finish(&other_epoch, &request, Err(safe("RENAME_OUTCOME_UNKNOWN")));
+    operations
+        .release_revoked(|owner| owner == &caller)
+        .unwrap();
+    assert!(operations.begin(&caller, &request).unwrap().is_none());
+    operations.finish(&caller, &request, Err(safe("RENAME_OUTCOME_UNKNOWN")));
+    operations
+        .release_revoked(|owner| owner == &caller)
+        .unwrap();
+    assert_eq!(
+        operations
+            .begin(&caller, &request)
+            .unwrap()
+            .unwrap()
+            .unwrap_err()
+            .code,
+        "RENAME_OUTCOME_UNKNOWN"
+    );
+    let mut conflict = request.clone();
+    conflict.title = "different".into();
+    assert_eq!(
+        operations.begin(&caller, &conflict).unwrap_err().code,
+        "RENAME_OPERATION_CONFLICT"
+    );
+    request.operation_id = "pending-0".into();
+    assert_eq!(
+        operations
+            .begin(&other_epoch, &request)
+            .unwrap()
+            .unwrap()
+            .unwrap_err()
+            .code,
+        "RENAME_OUTCOME_UNKNOWN"
+    );
+    let operations = Operations::default();
+    for owner in [&caller, &other_instance, &other_window, &other_epoch] {
+        assert!(operations.begin(owner, &request).unwrap().is_none());
+        operations.finish(owner, &request, Err(safe("RENAME_OUTCOME_UNKNOWN")));
+    }
+    // 多个仍有授权的完整 caller 均保留；同 instance 或 epoch 本身不是授权。
+    operations
+        .release_revoked(|owner| owner == &caller || owner == &other_instance)
+        .unwrap();
+    for owner in [&caller, &other_instance] {
+        assert_eq!(
+            operations
+                .begin(owner, &request)
+                .unwrap()
+                .unwrap()
+                .unwrap_err()
+                .code,
+            "RENAME_OUTCOME_UNKNOWN"
+        );
+    }
+    for owner in [&other_window, &other_epoch] {
+        assert!(operations.begin(owner, &request).unwrap().is_none());
+    }
+}
+
+#[test]
+#[allow(non_snake_case)]
 fn NativeRename_ClaudeValidPlainScopePinsExactTranscript_011() {
     let root = tempfile::tempdir().unwrap();
     let project = tempfile::tempdir().unwrap();

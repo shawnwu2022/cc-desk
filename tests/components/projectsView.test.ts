@@ -37,6 +37,44 @@ function render(locale = 'en') {
   mounted.push(wrapper); return wrapper
 }
 describe('Unified project management page', () => {
+  it('Projects_CloseBatchCannotDisappearWhileBusy_012', async () => {
+    const tabs = useNativeTabsStore(), catalog = useUnifiedSessionsStore()
+    const owned = ['a', 'b'].map(title => tabs.create({ cli: 'codex', projectId: 'one', projectPath: 'C:/work/one', profileId: 'p', profileRevision: '1', action: { kind: 'new' }, title }))
+    let rows: UnifiedSession[] = owned.map(tab => ({ id: `native-tab:${tab.tabId}`, adapterSessionId: tab.tabId,
+      projectKey: 'c:/work/one', projectPath: tab.projectPath, cli: 'codex', runtime: 'native-cli', title: tab.title,
+      processState: 'running', attentionState: 'none', lastActivityAt: 1, archived: false, opened: true, resumable: true }))
+    let release!: () => void
+    const waiting = new Promise<void>(resolve => { release = resolve })
+    catalog.configureAdapters([{ runtime: 'native-cli', listSessions: async () => rows, captureOwnership: (id: string) => {
+      const row = rows.find(row => row.id === id)!, owner = tabs.tab(row.adapterSessionId)
+      return () => tabs.tab(row.adapterSessionId) === owner
+    }, closeSession: async (id: string) => {
+      if (id === `native-tab:${owned[0].tabId}`) { await waiting; throw new Error('SOURCE_BUSY') }
+      const row = rows.find(row => row.id === id)!
+      tabs.close(row.adapterSessionId); rows = rows.filter(row => row.id !== id)
+    } } as unknown as SessionAdapter])
+    await catalog.refresh()
+    render(); await flushPromises()
+    const management = useProjectManagementStore()
+    management.beginCloseSessions({ projectKey: 'c:/work/one', projectPath: 'C:/work/one' }); await flushPromises()
+    document.querySelector<HTMLElement>('[data-confirm-project-close]')!.click(); await flushPromises()
+    const cancel = document.querySelector<HTMLButtonElement>('[data-cancel-project-action]')!
+    const disabled = cancel.disabled
+    cancel.click(); await flushPromises()
+    document.querySelector('[role="dialog"]')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await flushPromises()
+    document.querySelector<HTMLElement>('.ui-dialog-header .ui-icon-button')?.click(); await flushPromises()
+    const retainedWhileBusy = management.dialog?.kind === 'close-sessions'
+    release(); await flushPromises()
+    expect(disabled).toBe(true)
+    expect(retainedWhileBusy).toBe(true)
+    expect(management.dialog?.kind).toBe('close-sessions')
+    expect(management.error).toBe('projectCloseSessionsPartial')
+    expect(tabs.tab(owned[0].tabId)).toBeDefined()
+    expect(tabs.tab(owned[1].tabId)).toBeUndefined()
+    document.querySelector<HTMLElement>('[data-cancel-project-action]')!.click(); await flushPromises()
+    expect(management.dialog).toBeNull()
+  })
   it('Projects_CloseProjectConfirmationUsesFrozenSessionSet_011', async () => {
     const tabs = useNativeTabsStore(), catalog = useUnifiedSessionsStore()
     const first = tabs.create({ cli: 'codex', projectId: 'one', projectPath: 'C:/work/one', profileId: 'p', profileRevision: '1', action: { kind: 'new' } })

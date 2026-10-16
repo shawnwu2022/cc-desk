@@ -1372,3 +1372,22 @@ it('Catalog_ProjectCloseConfirmationCaptureLeavesIndividualFallback_066', async 
   expect(activate.mock.calls).toEqual([['legacy-tab:b']])
   expect(store.activeSessionId).toBe('legacy-tab:b')
 })
+
+it.each(['catalog', 'adapter'] as const)('Rename_ConfirmedWriteSurvivesDisplayFailure_067 %s', async failureAt => {
+  setActivePinia(createPinia())
+  const value = session({ id: 'native-history:one', runtime: 'native-cli', opened: false, processState: 'stopped' })
+  const native = fakeAdapter('native-cli', [value]), legacy = fakeAdapter('legacy-claude', [])
+  const store = useUnifiedSessionsStore()
+  store.configureAdapters([native.adapter, legacy.adapter]); await store.refresh(); store.beginRename(value.id)
+  vi.mocked(native.adapter.renameSession).mockImplementation(async (_id, _title, _current, issued) => {
+    issued?.()
+    if (failureAt === 'adapter') throw new Error('RENAME_DISPLAY_SYNC_FAILED')
+    return 'native-title-saved'
+  })
+  if (failureAt === 'catalog') vi.mocked(legacy.adapter.listSessions).mockRejectedValueOnce(new Error('SOURCE_UNAVAILABLE'))
+  await expect(store.renameSession(value.id, 'Confirmed native title', true)).rejects.toThrow('RENAME_DISPLAY_SYNC_FAILED')
+  expect(store.sessions.find(row => row.id === value.id)?.renameState).toBe('idle')
+  await expect(store.renameSession(value.id, 'Confirmed native title', true)).rejects.toThrow('STALE_SESSION_ATTEMPT')
+  await store.refresh('/repo')
+  expect(native.adapter.renameSession).toHaveBeenCalledTimes(1)
+})

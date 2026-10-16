@@ -10,6 +10,8 @@ const props = withDefaults(defineProps<{ request: ProjectConfirmationRequest | n
 const emit = defineEmits<{ confirm: []; cancel: [] }>()
 const { t } = useI18n()
 const safeErrorKey = computed(() => props.errorKey && Object.prototype.hasOwnProperty.call(en, props.errorKey) ? props.errorKey : props.errorKey ? 'errorGenericUnavailable' : null)
+const cancelBlocked = computed(() => props.busy && props.request?.kind === 'close-project-sessions')
+function requestCancel() { if (!cancelBlocked.value) emit('cancel') }
 const keys = computed(() => props.request?.kind === 'close-project-sessions'
   ? { title: 'projectCloseSessionsTitle', description: 'projectCloseSessionsDescription', action: 'projectCloseSessions' }
   : props.request?.kind === 'remove-project'
@@ -18,11 +20,11 @@ const keys = computed(() => props.request?.kind === 'close-project-sessions'
 watch(() => [props.active, props.request], () => { if (!props.active && props.request) emit('cancel') }, { flush: 'sync', immediate: true })
 </script>
 <template>
-  <AppDialog :open="active && !!request" :title="t(keys.title)"
-    :description="t(keys.description)" @close="emit('cancel')">
+  <AppDialog :open="active && !!request" :title="t(keys.title)" :show-close="!cancelBlocked"
+    :description="t(keys.description)" @close="requestCancel">
     <div data-project-confirm><p class="confirm-title">{{ request?.title }}</p><InlineNotice v-if="safeErrorKey" kind="warning" :message="t(safeErrorKey)" /></div>
     <template #footer>
-      <AppButton data-cancel-project-action @click="emit('cancel')">{{ t('cancel') }}</AppButton>
+      <AppButton data-cancel-project-action :disabled="cancelBlocked" @click="requestCancel">{{ t('cancel') }}</AppButton>
       <AppButton :data-confirm-project-remove="request?.kind === 'remove-project' ? '' : undefined"
         :data-confirm-project-close="request?.kind === 'close-project-sessions' ? '' : undefined"
         :data-confirm-configuration-delete="request?.kind === 'delete-launch-configuration' ? '' : undefined"

@@ -229,6 +229,14 @@ project/key checks. Raw/picker and unproven new identities cannot infer a target
 `thread/name/set` and Claude public Agent SDK 0.3.301 `renameSession` must read back
 successfully before Desk clears matching aliases; uncertain writes are not replayed.
 
+Rename operation receipts share a 4096-entry budget. Before each new admission,
+completed receipts belonging to permanently revoked full caller identities are
+reclaimed through the authenticated run registry. Active-document receipts,
+including unknown outcomes, and all in-flight operations remain pinned; exact
+retries preserve their stored result and conflicting requests are rejected. A full
+budget still rejects admission with `SOURCE_BUSY`; document replacement can reclaim
+its revoked predecessor's completed receipts without restarting the application.
+
 Claude metadata runs in a private same-volume namespace containing only the pinned
 transcript hardlink and bundled helper. It needs an existing Node >=22.13 from the
 frozen profile PATH; the app neither bundles nor installs Node. Unsupported filesystem,
