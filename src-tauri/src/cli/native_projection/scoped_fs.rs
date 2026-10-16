@@ -251,11 +251,13 @@ impl Root {
                     Some(observe),
                 )
                 .map(|result| {
-                    result.map(|(mut head, incomplete)| {
+                    result.map(|(mut head, mut incomplete)| {
                         // 压缩流没有可随机定位的尾窗；时间只能取自已观察的完整记录。
                         if let Some(end) = head.iter().rposition(|byte| *byte == b'\n') {
+                            incomplete |= end + 1 < head.len();
                             head.truncate(end + 1);
                         }
+                        budget.history_metadata_incomplete |= incomplete;
                         let mut start = head.len().saturating_sub(4096);
                         if start > 0 {
                             start += head[start..]

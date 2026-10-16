@@ -489,3 +489,25 @@ fn ZstdRead_UnalignedFrameWindow_007() {
         encoded.len() + CODEX_HEAD_WINDOW
     );
 }
+
+// 元数据丢弃末尾不完整行后，压缩帧已读完也不能宣称完整观察。
+#[test]
+#[allow(non_snake_case)]
+fn ZstdRead_TruncatedRecordIsIncomplete_008() {
+    let temp = tempfile::tempdir().unwrap();
+    let input = b"{}\n{\"partial\": true}";
+    let encoded = zstd::stream::encode_all(&input[..], 1).unwrap();
+    fs::write(temp.path().join("x.jsonl"), input).unwrap();
+    fs::write(temp.path().join("x.jsonl.zst"), encoded).unwrap();
+    let root = Root::open(temp.path()).unwrap();
+    for path in ["x.jsonl", "x.jsonl.zst"] {
+        let mut budget = budget();
+        let (head, _, incomplete) = root
+            .history_codex_metadata(Path::new(path), &mut budget, &mut |_| Ok(false))
+            .unwrap()
+            .unwrap();
+        assert_eq!(head, b"{}\n");
+        assert!(incomplete, "{path}");
+        assert!(budget.history_metadata_incomplete(), "{path}");
+    }
+}
