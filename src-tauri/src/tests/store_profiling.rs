@@ -162,6 +162,27 @@ pub(crate) fn extract_session_name_legacy(path: &Path) -> String {
         .unwrap_or_else(|| "Unnamed session".to_string())
 }
 
+/// 把真实 projects 树复制为静止快照。活跃会话会在基准运行期间追加 jsonl：
+/// mtime 变化会改变 last_active_at，写入中的半行 JSON 会让名称提取在轮次间
+/// 漂移——两者都会让「三变体产出一致」的 gate 把数据漂移误判为行为分叉
+/// （实测同一台机器上失败轮次与变体随机漂移）。变体比较的是提取逻辑而非
+/// 数据集，必须在同一份不可变数据上进行；`benchmark_active_full_scan_real`
+/// 的 tempdir 副本沿用同一模式。
+fn snapshot_projects_tree(source: &Path, destination: &Path) -> Result<()> {
+    fs::create_dir_all(destination)?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let path = entry.path();
+        let target = destination.join(entry.file_name());
+        if path.is_dir() {
+            snapshot_projects_tree(&path, &target)?;
+        } else {
+            fs::copy(&path, &target)?;
+        }
+    }
+    Ok(())
+}
+
 fn profile_project_scan_at(
     projects_dir: &Path,
     variant: HomeProfileVariant,
@@ -364,7 +385,10 @@ pub(crate) fn profile_real_home_variants(rounds: usize) -> Result<HomeProfileRep
     if rounds == 0 {
         bail!("profile rounds must be greater than zero");
     }
-    let projects_dir = get_claude_dir()?.join("projects");
+    let real_projects_dir = get_claude_dir()?.join("projects");
+    let snapshot = tempfile::tempdir()?;
+    let projects_dir = snapshot.path().join("projects");
+    snapshot_projects_tree(&real_projects_dir, &projects_dir)?;
     let orders = [
         [
             HomeProfileVariant::LegacyDoubleScan,
