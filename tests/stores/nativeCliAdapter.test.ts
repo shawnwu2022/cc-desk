@@ -495,6 +495,38 @@ it('CodexArchive_UnarchiveForcesHistoryReload_035', async () => {
   expect(metadata.recordSessionOpened).toHaveBeenCalledTimes(1)
 })
 
+// 会话同时被 Desk 注册表与 codex CLI 容器归档时，恢复必须先让 CLI 取消归档、
+// 再清注册表：CLI unarchive 失败时注册表 key 保持原样，整体失败，不留
+// 「注册表已清、CLI 仍归档」的部分状态变更。
+it('CodexArchive_CliUnarchiveFailureKeepsAppArchiveKeys_036', async () => {
+  setActivePinia(createPinia())
+  const entry = history('codex', '/root', 'session-9')
+  entry.sessions[0].archived = true
+  const { adapter, archive, cliUnarchive, archived } = setup([], [entry])
+  const rows = await adapter.listSessions()
+  archived.set('/repo', [rows[0].id])
+  cliUnarchive.unarchive.mockRejectedValueOnce(new Error('codex unarchive failed'))
+  await expect(adapter.restoreArchivedSession(rows[0].id)).rejects.toThrow('codex unarchive failed')
+  expect(archive.restoreSession).not.toHaveBeenCalled()
+  expect(archived.get('/repo')).toEqual([rows[0].id])
+})
+// 成功路径同序：CLI unarchive 先于清注册表 key，历史强刷在两者之间，保证清 key
+// 失败后的重试不会对已恢复会话重复请求 CLI unarchive。
+it('CodexArchive_ConcurrentArchiveUnarchivesBeforeRegistryClear_037', async () => {
+  setActivePinia(createPinia())
+  const entry = history('codex', '/root', 'session-9')
+  entry.sessions[0].archived = true
+  const { adapter, archive, cliUnarchive, archived, historyLoad } = setup([], [entry])
+  const rows = await adapter.listSessions()
+  archived.set('/repo', [rows[0].id])
+  await adapter.restoreArchivedSession(rows[0].id)
+  expect(vi.mocked(cliUnarchive.unarchive).mock.invocationCallOrder[0])
+    .toBeLessThan(vi.mocked(archive.restoreSession).mock.invocationCallOrder[0])
+  expect(historyLoad).toHaveBeenCalledTimes(1)
+  expect(archive.restoreSession).toHaveBeenCalledTimes(1)
+  expect(archived.get('/repo')).toEqual([])
+})
+
 // 运行中 Claude 的编辑器状态未知；GUI 改名仅保存显示名。
 describe('Native rename preserves the CLI editor', () => {
   it('Rename_ClaudeUnsupportedDoesNotSaveAlias_034', async () => {
