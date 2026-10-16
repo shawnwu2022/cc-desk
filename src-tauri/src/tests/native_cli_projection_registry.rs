@@ -1022,6 +1022,7 @@ fn history_snapshot_accounts_allocated_capacity_and_retains_partial_flags() {
         metadata_incomplete: None,
         cwd: None,
         updated_at: None,
+        created_at: None,
         truncated: true,
         archived: false,
     }];

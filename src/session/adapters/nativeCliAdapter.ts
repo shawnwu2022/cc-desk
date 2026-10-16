@@ -130,6 +130,8 @@ function projectTab(tab: NativeCliTab, tabs?: NativeTabsPort): UnifiedSession {
     ...(observationNotice ? { observationNotice } : {}),
     lastActivityAt: tab.lastActivityAt,
     lastOpenedAt: tab.createdAt,
+    // tab 的真实创建时刻是创建序键；resume 身份回填后由历史继承覆盖。
+    createdAt: tab.createdAt,
     archived: false,
     opened: true,
     resumable: Boolean(nativeSessionId),
@@ -161,6 +163,8 @@ function historyId(entry: Pick<NativeHistoryEntry, 'context'>, sessionKey: strin
 function projectHistory(entry: NativeHistoryEntry, item: NativeHistoryEntry['sessions'][number]): UnifiedSession {
   const updated = item.updatedAt ? Date.parse(item.updatedAt) : 0
   const lastKnown = item.lastKnownActivityAt ?? 0
+  // CLI 会话创建时间是创建序排序键；解析失败或缺失时不投影，UI 回落首见近似。
+  const created = item.createdAt ? Date.parse(item.createdAt) : NaN
   return {
     id: historyId(entry, item.sessionKey, item.nativeSessionId),
     projectKey: normalizePath(entry.context.projectPath),
@@ -173,6 +177,7 @@ function projectHistory(entry: NativeHistoryEntry, item: NativeHistoryEntry['ses
     activityState: 'unknown',
     observationState: 'off',
     lastActivityAt: Math.max(Number.isFinite(updated) ? updated : 0, Number.isFinite(lastKnown) && lastKnown >= 0 ? lastKnown : 0),
+    ...(created > 0 ? { createdAt: created } : {}),
     lastOpenedAt: 0,
     archived: false,
     opened: false,
@@ -281,8 +286,11 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
     // 唯一历史对应存在时（观察器回填身份后），活动行跟随 CLI 记录的标题
     // （首条消息 / AI 摘要 / 手动改名），而不是停留在本地占位名 "Claude Code"。
     // 保存的 Desk 显示名在 withSessionDisplayName 内仍优先于 CLI 标题。
+    // 创建时间同样继承历史身份：resume/激活不改变会话的创建序位置。
     const titled = identity.id.startsWith(HISTORY_PREFIX)
-      ? { ...row, title: identity.title, ...(identity.nativeRootKey ? { nativeRootKey: identity.nativeRootKey, nativeHistorySessionKey:identity.adapterSessionId } : {}) }
+      ? { ...row, title: identity.title,
+          ...(identity.nativeRootKey ? { nativeRootKey: identity.nativeRootKey, nativeHistorySessionKey:identity.adapterSessionId } : {}),
+          ...(identity.createdAt !== undefined ? { createdAt: identity.createdAt } : {}) }
       : row
     // 首次认证身份晚于用户改名时，未知身份下保存的名称仍属于这个 tab。
     // 仅用于当前终端显示；不猜测或迁移独立历史的 metadata key。

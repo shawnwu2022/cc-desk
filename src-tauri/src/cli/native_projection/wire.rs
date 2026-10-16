@@ -183,6 +183,9 @@ pub(crate) enum ResourceItem {
         archived: bool,
         cwd: Option<String>,
         updated_at: Option<String>,
+        /// 会话创建时间（稳定排序键）；缺失时前端回落首见近似。
+        #[serde(skip_serializing_if = "Option::is_none")]
+        created_at: Option<String>,
     },
     Message {
         session_key: String,

@@ -116,6 +116,44 @@ describe('Unified project session tree', () => {
     expect(wrapper.emitted('refresh')).toHaveLength(1)
   })
 
+  // 重启（卸载重挂）后创建序不得重置：行位置由 CLI 会话创建时间决定，不因
+  // CLI 侧后续活动改变——否则用户每次启动看到的顺序都不同，感知为「自动排序」。
+  it('Tree_RemountKeepsCreationOrder_027', async () => {
+    const first = panel({ projectGroups: [group([
+      session({ id: 'old', opened: false, processState: 'stopped', createdAt: 5, lastActivityAt: 10 }),
+      session({ id: 'recent', opened: false, processState: 'stopped', createdAt: 20, lastActivityAt: 40 }),
+    ]), ], currentProjectPath: '/work/game', loading: false })
+    await first.get('.project-main').trigger('click')
+    const order = () => first.findAll('[data-session-row]').map(row => row.attributes('data-session-row'))
+    expect(order()).toEqual(['recent', 'old'])
+    mounted.splice(mounted.indexOf(first), 1)
+    first.unmount()
+    // 重启后 old 在 CLI 侧有了新活动：创建时间不变，位置必须保持。
+    const second = panel({ projectGroups: [group([
+      session({ id: 'old', opened: false, processState: 'stopped', createdAt: 5, lastActivityAt: 1000 }),
+      session({ id: 'recent', opened: false, processState: 'stopped', createdAt: 20, lastActivityAt: 40 }),
+    ]), ], currentProjectPath: '/work/game', loading: false })
+    await second.get('.project-main').trigger('click')
+    const orderAfter = () => second.findAll('[data-session-row]').map(row => row.attributes('data-session-row'))
+    expect(orderAfter()).toEqual(['recent', 'old'])
+  })
+
+  // 无 CLI 创建时间的行（legacy/旧缓存）保持既有首见近似：会话内冻结不变。
+  it('Tree_MissingCreationTimeFallsBackToFirstSeen_028', async () => {
+    const wrapper = panel({ projectGroups: [group([
+      session({ id: 'old', opened: false, processState: 'stopped', lastActivityAt: 10 }),
+      session({ id: 'recent', opened: false, processState: 'stopped', lastActivityAt: 40 }),
+    ]), ], currentProjectPath: '/work/game', loading: false })
+    await wrapper.get('.project-main').trigger('click')
+    const order = () => wrapper.findAll('[data-session-row]').map(row => row.attributes('data-session-row'))
+    expect(order()).toEqual(['recent', 'old'])
+    await wrapper.setProps({ projectGroups: [group([
+      session({ id: 'old', opened: false, processState: 'stopped', lastActivityAt: 1000 }),
+      session({ id: 'recent', opened: false, processState: 'stopped', lastActivityAt: 40 }),
+    ]), ] })
+    expect(order()).toEqual(['recent', 'old'])
+  })
+
   // 创建序倒序（同键按精确 ID 破平）；已存在行不随后续活动或刷新移动。
   it('Tree_DiscoveredHistoryAndTies_025', async () => {
     const a = session({ id: 'a', lastActivityAt: 20, lastOpenedAt: 1 })

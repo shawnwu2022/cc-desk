@@ -402,6 +402,23 @@ describe('native CLI adapter', () => {
     expect(sessions.find(value => !value.opened)?.adapterSessionId).toBe(second.sessions[0].sessionKey)
   })
 
+  // resume 打开历史会话时，活动行继承 CLI 记录的会话创建时间：激活不改变创建序
+  // 位置，不会把排在后面的会话顶到最前。
+  it('NativeResume_InheritsCreationTime_013', async () => {
+    const entry = history('codex', '/root', 'session-1')
+    entry.sessions[0].createdAt = '2026-09-01T00:00:00Z'
+    const { adapter, runtime, map } = setup([], [entry])
+    runtime.createTab.mockImplementation((input: any) => {
+      const created = tab({ tabId: 'created', cli: input.cli, projectPath: input.projectPath, profileId: input.launchConfigId, action: input.action, sourceSessionKey: input.sourceSessionKey, title: input.title ?? 'Created' })
+      map.set(created.tabId, created)
+      return created
+    })
+    await adapter.resumeSession({ projectKey: '/repo', projectPath: '/repo', cli: 'codex', adapterSessionId: entry.sessions[0].sessionKey, nativeSessionId: 'session-1', launchConfigId: 'codex-main' })
+    const rows = await adapter.listSessions()
+    const open = rows.find(row => row.opened === true)
+    expect(open?.createdAt).toBe(Date.parse('2026-09-01T00:00:00Z'))
+  })
+
   it('NativeResume_DistinguishesRevision_010', async () => {
     const entry = history('codex', '/root', 'session-1')
     entry.context.profileRevision = '8'

@@ -75,28 +75,30 @@ watch(() => props.active, active => {
 const normalGroups = computed(() => props.projectGroups ?? store.projectGroups)
 const archived = computed(() => (props.archivedSessions ?? store.sessions).filter(session => session.archived)
   .map(session => store.isResumePending(session) ? { ...session, resumePending: true } : session))
-// 创建序键一次性冻结：打开 tab 用真实创建时间（lastOpenedAt 即 tab.createdAt），
-// 历史行冻结首见活动时间作为稳定的创建序近似——CLI 历史只有最后活动时间，没有创建时间。
+// 创建序键一次性冻结：CLI 会话真实创建时间（跨重启稳定，激活/活动不改变位置）随行投影，
+// 无需入 Map；只有没有创建时间的行（legacy 历史、旧数据）才冻结首见时间作稳定近似——
+// CLI 历史只有最后活动时间，没有创建时间。
 // 行位置不随后续活动、打开状态或刷新变化。
 const createdKeys = ref(new Map<string, number>())
 watch(() => normalGroups.value, groups => {
-  const next = new Map(createdKeys.value)
-  let changed = false
+  // 延迟复制：常态刷新没有新兜底行时零分配。
+  let next: Map<string, number> | null = null
   for (const group of groups) {
     for (const row of group.sessions) {
-      if (row.archived || next.has(row.id)) continue
-      changed = true
-      const created = row.opened === true && row.lastOpenedAt ? row.lastOpenedAt
+      if (row.archived || row.createdAt !== undefined || createdKeys.value.has(row.id)) continue
+      next ??= new Map(createdKeys.value)
+      const fallback = row.opened === true && row.lastOpenedAt ? row.lastOpenedAt
         : Number.isFinite(row.lastActivityAt) ? row.lastActivityAt : 0
-      next.set(row.id, created)
+      next.set(row.id, fallback)
     }
   }
   // 键只增不删：来源读取失败会临时清空该来源的行，删除键会让同一行在恢复后按新活动
   // 时间重新插入而跳动。键的数量与出现过的会话身份同阶，不构成无界增长。
-  if (changed) createdKeys.value = next
+  if (next) createdKeys.value = next
 }, { immediate: true })
 function createdOrder(a: UnifiedSession, b: UnifiedSession): number {
-  return (createdKeys.value.get(b.id) ?? 0) - (createdKeys.value.get(a.id) ?? 0) || a.id.localeCompare(b.id)
+  const key = (row: UnifiedSession) => createdKeys.value.get(row.id) ?? row.createdAt ?? 0
+  return key(b) - key(a) || a.id.localeCompare(b.id)
 }
 const selectedId = computed(() => props.selectedId === undefined ? store.activeSessionId : props.selectedId)
 const loading = computed(() => props.loading ?? store.loading)
