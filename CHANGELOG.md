@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Drop ten never-imported frontend dependencies (CodeMirror stack, `vue-codemirror`, `v3-infinite-loading`, `macos-traffic-lights`, `vue-draggable-plus`) and the dead `editor-vendor` chunk rule; DESIGN.md now describes the `<textarea>` the app actually uses for multi-line editing
+
 ## [0.21.0] - 2026-10-16
 
 ### Fixed
