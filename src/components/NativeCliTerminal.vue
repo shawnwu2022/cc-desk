@@ -26,7 +26,7 @@ import { classifyClipboardSnapshot, createImeInputPolicy, readClipboardSnapshot 
 import { platform } from '@/utils/platform'
 import { formatDroppedPaths } from '@/utils/terminalDropPaths'
 import { publicNativeErrorCode } from '@/utils/nativeErrorCode'
-import { cliResize, cliStop } from '@/api/tauri'
+import { cliResize, cliStop, cliGetObserverStatus } from '@/api/tauri'
 import type { OutputFrame } from '@/types/terminal'
 import { useHookStore } from '@/stores/hook'
 import { useAppStore } from '@/stores/app'
@@ -450,6 +450,18 @@ async function startAttempt(attempt: NativeAttemptIdentity): Promise<void> {
     }, channel)
     if (runToken !== token || receiptPublication !== publication || !attemptIsCurrent(attempt)) return
     if (!applyReceipt(attempt, result)) return
+    if (tab.cli === 'claude' && tab.action.kind !== 'raw') {
+      void Promise.resolve().then(() => cliGetObserverStatus(attempt)).then(status => {
+        if (runToken === token && attemptIsCurrent(attempt)) {
+          tabs.applyObserverInstallation(props.tabId, attempt, status)
+          if (status.state === 'off') { stopObservation?.(); stopObservation = null }
+        }
+      }).catch(() => {
+        if (runToken === token && attemptIsCurrent(attempt)) tabs.applyObserverInstallation(props.tabId, attempt, {
+          requestId: attempt.requestId, run: { runId, generation }, state: 'unavailable', reasonCode: 'OBSERVER_UNAVAILABLE',
+        })
+      })
+    }
     if (launched && !matchesNativeAttempt(stoppingAttempt ?? undefined, attempt)) {
       await resizeNative(target.cols, target.rows)
       if (runToken !== token || !attemptIsCurrent(attempt)) return

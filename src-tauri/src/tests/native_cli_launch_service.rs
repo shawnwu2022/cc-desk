@@ -51,6 +51,222 @@ struct Fixture {
     request: LaunchRequest,
     routes: OutputRoutes,
 }
+
+fn metadata_fixture(
+    hang: bool,
+) -> (
+    Fixture,
+    Arc<LaunchService>,
+    CallerIdentity,
+    crate::cli::native_projection::registry::RenameAuthority,
+    LaunchRequest,
+) {
+    use crate::cli::native_projection::{
+        registry::{AdmittedProject, Grant, Owner, ScopeRegistry},
+        scoped_fs::Root,
+        wire::{ScopeTarget, SourceBasis},
+    };
+    let f = Fixture::new(false);
+    let root = f.root.path().join("native-root");
+    fs::create_dir_all(root.join("sessions")).unwrap();
+    let path = root.join("sessions/rollout.jsonl");
+    let id = "00000000-0000-4000-8000-000000000009";
+    fs::write(&path,format!("{}\n{}\n",serde_json::json!({"type":"session_meta","payload":{"id":id,"cwd":f.request.launch_cwd,"source":"cli"}}),serde_json::json!({"type":"event_msg","payload":{"type":"user_message","message":"fixture"}}))).unwrap();
+    let mut env = EnvMap::new();
+    env.insert("CODEX_HOME".into(), root.as_os_str().into());
+    if let Some(value) = std::env::var_os("SystemRoot") {
+        env.insert("SystemRoot".into(), value);
+    }
+    let service = Arc::new(LaunchService::new(f.repository.clone(), Some(env), None));
+    let caller = service.registry().activate_window("main").unwrap();
+    let owner = Owner {
+        instance: caller.instance_id.clone(),
+        window: caller.window_label.clone(),
+        epoch: caller.webview_epoch,
+    };
+    let registry = ScopeRegistry::new(4);
+    let source = registry
+        .register(Grant {
+            owner: owner.clone(),
+            cli: CliKind::Codex,
+            profile_id: f.request.profile_id.clone(),
+            profile_revision: f.request.expected_profile_revision,
+            target: ScopeTarget::Profile {
+                profile_id: f.request.profile_id.clone(),
+                expected_profile_revision: f.request.expected_profile_revision,
+                project_ids: vec!["project".into()],
+            },
+            basis: SourceBasis::ConfiguredProfile,
+            root: Root::open(&root).unwrap(),
+            projects: vec![AdmittedProject {
+                id: "project".into(),
+                root: Root::open(Path::new(&f.request.launch_cwd)).unwrap(),
+                paths: vec![f.request.launch_cwd.clone().into()],
+            }],
+            user_config: None,
+            check: Arc::new(|| Ok(())),
+        })
+        .unwrap();
+    let key = serde_json::to_string(&serde_json::json!([
+        "local",
+        "codex",
+        source.source_root_key,
+        id
+    ]))
+    .unwrap();
+    let authority = registry.authorize_rename(&owner, &source, &key).unwrap();
+    let mut request = f.request.clone();
+    let thread = serde_json::json!({"id":id,"cwd":request.launch_cwd,"path":path});
+    let script = format!(
+        r#"const fs=require('fs');const thread={thread};let name=null;fs.writeFileSync('metadata-ready','ready');require('readline').createInterface({{input:process.stdin}}).on('line',line=>{{let q=JSON.parse(line);if(q.method==='initialized')return;if({hang})return;let result={{}};if(q.method==='thread/read')result={{thread:{{...thread,name}}}};else if(q.method==='thread/name/set')name=q.params.name;else if(q.method!=='initialize')process.exit(7);process.stdout.write(JSON.stringify({{id:q.id,result}})+'\n')}});"#
+    );
+    request.action = LaunchAction::Raw {
+        argv: vec!["-e".into(), script],
+    };
+    (f, service, caller, authority, request)
+}
+
+#[test]
+fn NativeRename_RealStdioFixtureReapsAndKeepsRollout_009() {
+    let (f, service, caller, authority, request) = metadata_fixture(false);
+    let rollout = f.root.path().join("native-root/sessions/rollout.jsonl");
+    let before = fs::read(&rollout).unwrap();
+    service
+        .rename_metadata(&caller, &request, authority, "Native fixture title".into())
+        .unwrap();
+    service.wait_for_commands();
+    assert_eq!(fs::read(&rollout).unwrap(), before);
+    f.repository
+        .admission()
+        .freeze(&uuid::Uuid::new_v4().to_string())
+        .unwrap()
+        .release_review()
+        .unwrap();
+}
+
+#[test]
+fn NativeRename_ShutdownInterruptsReadAndRetainsReap_010() {
+    let (f, service, caller, authority, request) = metadata_fixture(true);
+    let worker_service = service.clone();
+    let worker = std::thread::spawn(move || {
+        worker_service.rename_metadata(&caller, &request, authority, "new".into())
+    });
+    let started = Instant::now();
+    while !Path::new(&f.request.launch_cwd)
+        .join("metadata-ready")
+        .exists()
+    {
+        assert!(started.elapsed() < Duration::from_secs(10));
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    service.begin_shutdown();
+    assert_eq!(
+        worker.join().unwrap().unwrap_err().code,
+        "RUN_SUPERVISOR_STOPPING"
+    );
+    service.wait_for_commands();
+    assert!(started.elapsed() < Duration::from_secs(6));
+    f.repository
+        .admission()
+        .freeze(&uuid::Uuid::new_v4().to_string())
+        .unwrap()
+        .release_review()
+        .unwrap();
+}
+
+#[test]
+fn NativeRename_OfficialClaudeSdkUsesOwnedHelperAndReaps_014() {
+    use crate::cli::native_projection::{
+        registry::{AdmittedProject, Grant, Owner, ScopeRegistry},
+        scoped_fs::Root,
+        wire::{ScopeTarget, SourceBasis},
+    };
+    let f = Fixture::new(false);
+    let root = f.root.path().join("claude-native-root");
+    fs::create_dir_all(root.join("projects/fixture")).unwrap();
+    let id = "00000000-0000-4000-8000-000000000014";
+    let transcript = root.join(format!("projects/fixture/{id}.jsonl"));
+    let original = format!(
+        "{}\n",
+        serde_json::json!({"type":"user","sessionId":id,"cwd":f.request.launch_cwd,"message":{"content":"private fixture"}})
+    );
+    fs::write(&transcript, &original).unwrap();
+    let mut profile = Profile::new("claude-metadata", CliKind::Claude);
+    profile.program_path = Override::Set(crate::platform::find_executable("node").unwrap());
+    let document = f.repository.read().unwrap();
+    let document = f
+        .repository
+        .apply(
+            document.revision,
+            Patch::Create {
+                profile: profile.clone(),
+            },
+        )
+        .unwrap();
+    let mut env: EnvMap = std::env::vars_os().collect();
+    env.insert("CLAUDE_CONFIG_DIR".into(), root.as_os_str().into());
+    let service = Arc::new(LaunchService::new(f.repository.clone(), Some(env), None));
+    let caller = service.registry().activate_window("main").unwrap();
+    let owner = Owner {
+        instance: caller.instance_id.clone(),
+        window: caller.window_label.clone(),
+        epoch: caller.webview_epoch,
+    };
+    let scopes = ScopeRegistry::new(4);
+    let source = scopes
+        .register(Grant {
+            owner: owner.clone(),
+            cli: CliKind::Claude,
+            profile_id: profile.id.clone(),
+            profile_revision: document.profiles[&profile.id].revision,
+            target: ScopeTarget::Profile {
+                profile_id: profile.id.clone(),
+                expected_profile_revision: document.profiles[&profile.id].revision,
+                project_ids: vec!["project".into()],
+            },
+            basis: SourceBasis::ConfiguredProfile,
+            root: Root::open(&root).unwrap(),
+            projects: vec![AdmittedProject {
+                id: "project".into(),
+                root: Root::open(Path::new(&f.request.launch_cwd)).unwrap(),
+                paths: vec![f.request.launch_cwd.clone().into()],
+            }],
+            user_config: None,
+            check: Arc::new(|| Ok(())),
+        })
+        .unwrap();
+    let key = serde_json::json!(["local", "claude", source.source_root_key, id]).to_string();
+    let authority = scopes.authorize_rename(&owner, &source, &key).unwrap();
+    let mut request = f.request.clone();
+    request.profile_id = profile.id.clone();
+    request.expected_profile_revision = document.profiles[&profile.id].revision;
+    request.cli = CliKind::Claude;
+    request.action = LaunchAction::Raw { argv: vec![] };
+    service
+        .rename_metadata(&caller, &request, authority, "Owned SDK title".into())
+        .unwrap();
+    service.wait_for_commands();
+    let data = fs::read_to_string(&transcript).unwrap();
+    assert!(data.starts_with(&original));
+    let records: Vec<serde_json::Value> = data
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[1]["customTitle"], "Owned SDK title");
+    assert!(!fs::read_dir(&root).unwrap().any(|entry| entry
+        .unwrap()
+        .file_name()
+        .to_string_lossy()
+        .starts_with(".ccdesk-rename-")));
+    f.repository
+        .admission()
+        .freeze(&uuid::Uuid::new_v4().to_string())
+        .unwrap()
+        .release_review()
+        .unwrap();
+}
+
 impl Fixture {
     fn new(fail: bool) -> Self {
         #[cfg(windows)]

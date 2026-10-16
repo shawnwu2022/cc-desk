@@ -60,3 +60,6 @@ releases/
 # Local visual test output (reviewed baselines stay in tests/visual)
 test-results/
 playwright-report/
+
+# Generated pinned Claude session metadata helper
+src-tauri/resources/native-session-sdk/

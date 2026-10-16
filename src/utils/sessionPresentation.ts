@@ -8,6 +8,7 @@ import type {
   UnifiedSession,
 } from '@/types/unifiedSession'
 import type { NativeObservationNoticeKind } from '@/types/nativeObservationNotice'
+import { nativeNoticeReasonCode, type NativeObservationReasonCode } from '@/types/nativeObservationNotice'
 
 function requiredIdentity(value: string, code: string): string {
   const text = value.trim()
@@ -51,6 +52,14 @@ export function makeSessionRenameOwnerKey(session: UnifiedSession): string {
     origin ? [origin.cli, origin.profileId, origin.profileRevision, origin.projectId, normalizeProjectPath(origin.projectPath)] : null])
 }
 
+/** 配置可以共享物理记录；折叠投影后仍由保留行原有 scope 授权。 */
+export function nativeHistoryRecordKey(session: UnifiedSession): string | null {
+  if (session.runtime !== 'native-cli' || !session.nativeRootKey || !session.nativeSessionId
+    || !session.nativeHistorySessionKey || !session.nativeOrigin) return null
+  return JSON.stringify([session.cli, session.nativeRootKey, session.nativeOrigin.projectId,
+    normalizeProjectPath(session.projectPath), session.nativeSessionId, session.nativeHistorySessionKey])
+}
+
 export function deriveSessionVisualState(session: UnifiedSession, selected = false): SessionVisualState {
   if (session.processState === 'failed') return 'failed'
   if (session.processState === 'starting') return 'starting'
@@ -66,6 +75,9 @@ export function deriveSessionVisualState(session: UnifiedSession, selected = fal
   if (session.attentionKind === 'completed') return 'completed'
   if (session.attentionState === 'needs-user' || activity === 'waiting' || activity === 'waiting_input') return 'needs-user'
   if (activity === 'idle') return 'running'
+  if (activity === 'unknown' && session.cli === 'claude' && session.runtime === 'native-cli' && session.observationState) {
+    return session.observationState === 'connecting' ? 'confirming' : 'unknown'
+  }
   // 无观察通道（观察器关闭、codex、连接期）时无从得知 turn 状态；进程仍在
   // 运行,显示中性运行态而不是看似异常的"活动未知"。
   if (activity === 'unknown' && session.observationState !== 'active') return 'running'
@@ -92,12 +104,21 @@ const noticeLabelKeys: Record<NativeObservationNoticeKind, string> = {
   'compaction-started': 'nativeNoticeCompactionStarted', 'compaction-ended': 'nativeNoticeCompactionEnded',
 }
 /** Occurrence metadata stays separate from the current activity/status icon. */
-export function selectSessionObservationNotice(session: UnifiedSession): { labelKey: string; unread: boolean } | null {
+const noticeReasonLabelKeys: Record<NativeObservationReasonCode,string> = {
+  rate_limit:'nativeNoticeReasonRateLimit', overloaded:'nativeNoticeReasonOverloaded', authentication_failed:'nativeNoticeReasonAuthentication',
+  oauth_org_not_allowed:'nativeNoticeReasonOrganization', account_on_hold:'nativeNoticeReasonAccount', billing_error:'nativeNoticeReasonBilling',
+  invalid_request:'nativeNoticeReasonInvalidRequest', model_not_found:'nativeNoticeReasonModel', server_error:'nativeNoticeReasonServer',
+  max_output_tokens:'nativeNoticeReasonOutputLimit', cloud_credential_error:'nativeNoticeReasonCloudCredential', unknown:'nativeNoticeReasonUnknown',
+  permission_prompt:'nativeNoticeReasonPermission', worker_permission_prompt:'nativeNoticeReasonWorkerPermission', idle_prompt:'nativeNoticeReasonInput',
+}
+export function selectSessionObservationNotice(session: UnifiedSession): { labelKey: string; unread: boolean; detailLabelKey?: string } | null {
   if (session.runtime !== 'native-cli' || session.cli !== 'claude' || !['running', 'stopped'].includes(session.processState)) return null
   const notice = session.observationNotice
-  if (notice?.unreadReplyEnd?.kind === 'reply-ended') return { labelKey: 'nativeNoticeReplyEndUnread', unread: true }
+  const reason=notice?.recent && nativeNoticeReasonCode(notice.recent.kind,notice.recent.reasonCode)
+  const details=reason ? {detailLabelKey:noticeReasonLabelKeys[reason]} : {}
+  if (notice?.unreadReplyEnd?.kind === 'reply-ended') return { labelKey: 'nativeNoticeReplyEndUnread', unread: true, ...details }
   const labelKey = notice?.recent && noticeLabelKeys[notice.recent.kind]
-  return labelKey ? { labelKey, unread: false } : null
+  return labelKey ? { labelKey, unread: false, ...details } : null
 }
 
 export function selectSessionPrimaryAction(session: UnifiedSession): SessionPrimaryAction | null {
@@ -146,6 +167,10 @@ export const SESSION_MENU_ACTION_DEFINITIONS: readonly MenuActionRule[] = [
   { id: 'view-diagnostics', labelKey: 'sessionActionDiagnostics', visible: () => true },
 ]
 export function sessionActionLabelKey(action: SessionMenuAction | SessionPrimaryAction, session: UnifiedSession): string {
+  if (session.renameTarget === 'resume-source' && action === 'rename') return 'sessionActionRenameResumeSource'
+  if (session.renameTarget === 'resume-source' && action === 'save-rename') return 'sessionActionSaveRenameResumeSource'
+  if (session.renameTarget === 'history-record' && action === 'rename') return 'sessionActionRenameHistoryRecord'
+  if (session.renameTarget === 'history-record' && action === 'save-rename') return 'sessionActionSaveRenameHistoryRecord'
   if (action === 'save-rename') return 'sessionActionSaveRename'
   if (action === 'archive' && session.processState === 'running') return 'sessionActionStopAndArchive'
   return SESSION_MENU_ACTION_DEFINITIONS.find((definition) => definition.id === action)!.labelKey

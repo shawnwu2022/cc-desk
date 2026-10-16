@@ -7,6 +7,8 @@ export interface SourceRef {
   scopeId: string; instanceId: string; cli: NativeCliKind; sourceRootKey: string; identityEpoch: string
   profileId: string; profileRevision: string; target: ScopeTarget; basis: 'configured-profile' | 'launch-environment'
 }
+export interface NativeRenameRequest { operationId: string; source: SourceRef; sessionKey: string; title: string }
+export interface NativeRenameReceipt extends NativeRenameRequest { state: 'renamed' }
 export interface ReadRequest {
   source: SourceRef; resourceKind: ResourceKind; requestEpoch: string
   query?: string | null; sessionId?: string | null; limit?: number; offset?: number

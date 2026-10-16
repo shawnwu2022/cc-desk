@@ -55,6 +55,12 @@ The unified workspace supports:
 
 Existing Claude history and sessions remain supported through the Legacy adapter in the same shell. New Claude/Codex sessions use the authenticated Native adapter. There is no separate Native product page or Legacy startup route, and Native operations never fall back to Legacy PTY APIs.
 
+### Native session rename
+
+Claude GUI rename uses the pinned public Agent SDK's local metadata API while keeping the full CLI TUI. It requires **Node.js 22.13+ on the launch configuration PATH**, a writable configuration root supporting same-volume hard links, and a plain JSONL transcript. Standalone Claude installations do not necessarily include Node. CC Desk embeds the SDK helper and includes its license notices, but does not bundle or install Node. If necessary, install/update Node, make it available to that launch configuration, and restart CC Desk; alternatively use `/rename` directly in the CLI (resume a closed Claude session first). Missing prerequisites affect GUI rename only; the existing CLI can still run.
+
+Codex GUI rename uses the official app-server API. Opened resumed tabs explicitly target their retained source session, rather than assuming which thread the TUI currently shows. Both paths require exact source identity and verified native readback; failed or unknown writes do not save a display alias or replay automatically. Real idle Claude 2.1.296 rename/resume has been checked in a private fixture. Busy writer concurrency, incident-version 2.1.301 and installed WebView2 remain unverified.
+
 ## Safety properties
 
 The native path is intentionally fail-closed:
@@ -92,7 +98,7 @@ A green code-side CI run alone is not an authorization to publish, and the gate 
 
 ### Requirements
 
-- Node.js 20+
+- Node.js 22.13+
 - Rust stable
 - platform dependencies required by Tauri 2
 - the CLI(s) you intend to run installed and authenticated on the target machine
@@ -118,7 +124,7 @@ During iteration, select the checks that cover the changed behavior:
 | Full stress workload | `npm run test:stress` |
 | Production startup under the actual CSP | `npm run test:production` |
 
-For complete Vitest and Rust checks, use the following separately from the iteration loop. Before direct Cargo commands on Windows, run `node scripts/prepare-conpty.mjs` from the repository root.
+For complete Vitest and Rust checks, use the following separately from the iteration loop. Before direct Cargo commands, run `npm run prepare:session-sdk`; on Windows also run `node scripts/prepare-conpty.mjs` from the repository root.
 
 ```bash
 npm run test:ci

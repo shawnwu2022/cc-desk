@@ -147,6 +147,22 @@ where
 {
     let indexed = spawn_blocking_store(command, load).await?;
     if let Some(pending_flush) = indexed.pending_flush {
+        if pending_flush
+            .route
+            .as_ref()
+            .is_some_and(|route| crate::session_index_maintenance::production().is_staging(route))
+        {
+            // 维护扫描必须确认暂存写回后才报告该来源成功；普通读取仍保持 detached。
+            let route = pending_flush.route.clone();
+            let result = tokio::task::spawn_blocking(move || flush(pending_flush)).await;
+            if !matches!(result, Ok(Ok(()))) {
+                if let Some(route) = route.as_ref() {
+                    crate::session_index_maintenance::production().record_failure(route);
+                }
+                return Err("MAINTENANCE_UNAVAILABLE".into());
+            }
+            return Ok(indexed.value);
+        }
         let _flush_task = tokio::task::spawn_blocking(move || {
             let _ = flush(pending_flush);
         });

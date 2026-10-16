@@ -8,6 +8,9 @@ use std::time::{Duration, Instant};
 #[path = "compressed.rs"]
 mod compressed;
 use compressed::{is_zstd_history, Mode};
+#[path = "rename_fs.rs"]
+mod rename_fs;
+pub(crate) use rename_fs::{PinnedTranscript, PrivateTranscript};
 
 pub(crate) type ReadResult<T> = Result<T, &'static str>;
 type HistoryObserver<'a> = dyn FnMut(&[u8]) -> ReadResult<bool> + 'a;
@@ -134,6 +137,29 @@ pub(crate) struct Entry {
     pub is_file: bool,
 }
 impl Root {
+    pub(crate) fn selected_path(&self) -> &Path {
+        &self.selected
+    }
+    /// 延续证明单独复核路径入口；普通历史热路径仍使用现有 held-cap 检查。
+    pub(crate) fn source_current(&self) -> ReadResult<()> {
+        self.current()?;
+        let selected = Dir::open_ambient_dir(&self.selected, cap_std::ambient_authority())
+            .map_err(|_| "SOURCE_CHANGED")?;
+        if directory_key(&selected)? != self.identity {
+            return Err("SOURCE_CHANGED");
+        }
+        Ok(())
+    }
+    pub(crate) fn clone_source(&self) -> ReadResult<Self> {
+        self.source_current()?;
+        let copy = Self {
+            dir: self.dir.try_clone().map_err(read_error)?,
+            selected: self.selected.clone(),
+            identity: self.identity.clone(),
+        };
+        copy.source_current()?;
+        Ok(copy)
+    }
     pub(crate) fn open(path: &Path) -> ReadResult<Self> {
         let text = path.to_str().ok_or("SOURCE_INVALID_TEXT")?;
         if !path.is_absolute() || text.len() > 32768 || text.contains('\0') {

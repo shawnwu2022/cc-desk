@@ -1,6 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
+
+const require = createRequire(import.meta.url)
+const { transpileProductionSource } = require('../../.github/scripts/transpile_production_source.cjs')
 
 // 执行 adapter 与 metadata writer 的真实函数体；已有 CLI 草稿由独立 writer 模型持有。
 const metadataSource = readFileSync('src/session/sessionMetadata.ts', 'utf8')
@@ -34,9 +38,11 @@ function harness(kind, failWrite = false, failMetadata = false) {
       const text = '/rename ' + title + '\r'; writes.push(text); draft += text
     } } }
   const store = { updateTabName(_id, title) { tab.name = title } }
+  // 真实函数体可能含局部 TS 类型；用共享 AST 编译器处理，不删改分支或正文。
+  const compiled = transpileProductionSource('async function extractedRename(id,title,canContinue=()=>true,onIssued,signal){' + body + '}')
   const rename = Function('deps', 'store', 'captureOwnership', 'requireTab', 'tabDisplayIdentity',
     'saveSessionDisplayName', 'clearSessionDisplayName', 'ACTIVE_PREFIX',
-    'return async function(id,title,canContinue=()=>true,onIssued,signal){' + body + '}')(
+    compiled + '\nreturn extractedRename')(
     deps, store, () => () => true, () => tab, () => identity,
     saveSessionDisplayName, clearSessionDisplayName, kind === 'native' ? 'native-tab:' : 'legacy-tab:')
   return { writes, metadata, id, tab, draft: () => draft, rename: () => rename(id, 'New name') }
@@ -44,20 +50,20 @@ function harness(kind, failWrite = false, failMetadata = false) {
 for (const kind of ['native', 'legacy']) {
   test('Rename_DraftNeverSubmitted_001 ' + kind, async () => {
     const h = harness(kind)
-    assert.equal(await h.rename(), 'display-name-saved')
+    await assert.rejects(h.rename(), /NATIVE_RENAME_UNSUPPORTED/)
     assert.deepEqual(h.writes, [])
     assert.equal(h.draft(), 'unfinished private draft')
-    assert.equal(h.metadata.sessionRecords.get(h.id).title, 'New name')
+    assert.equal(h.metadata.sessionRecords.get(h.id).title, 'Old override')
   })
   test('Rename_PausedPtyDoesNotOwnMetadata_002 ' + kind, async () => {
     const h = harness(kind, true)
-    assert.equal(await h.rename(), 'display-name-saved')
+    await assert.rejects(h.rename(), /NATIVE_RENAME_UNSUPPORTED/)
     assert.deepEqual(h.writes, [])
-    assert.equal(h.metadata.sessionRecords.get(h.id).title, 'New name')
+    assert.equal(h.metadata.sessionRecords.get(h.id).title, 'Old override')
   })
   test('Rename_MetadataConflictKeepsDraftAndOldName_003 ' + kind, async () => {
     const h = harness(kind, false, true)
-    await assert.rejects(h.rename(), /REVISION_CONFLICT/)
+    await assert.rejects(h.rename(), /NATIVE_RENAME_UNSUPPORTED/)
     assert.deepEqual(h.writes, [])
     assert.equal(h.draft(), 'unfinished private draft')
     assert.equal(h.metadata.sessionRecords.get(h.id).title, 'Old override')

@@ -1,5 +1,6 @@
 import type { HookEventPayload } from '@/types/hook'
 import type { NativeObservationNotice, NativeObservationNoticeKind } from '@/types/nativeObservationNotice'
+import { nativeNoticeReasonCode } from '@/types/nativeObservationNotice'
 import { fromClaudeHook } from './claudeObserver'
 
 const kinds: Readonly<Record<string, NativeObservationNoticeKind>> = {
@@ -22,5 +23,7 @@ export function fromNativeObservationNotice(payload: HookEventPayload, receivedA
     else if (reason === 'idle_prompt') kind = 'input-requested'
   } else if (Object.prototype.hasOwnProperty.call(kinds, payload.detail.type)) kind = kinds[payload.detail.type]
   if (!kind) return null
-  return { kind, eventId: event.eventId!, receivedAt, runId: event.runId, generation: event.generation }
+  const reasonCode = nativeNoticeReasonCode(kind, payload.detail.type === 'stopFailure' ? payload.detail.data.error
+    : payload.detail.type === 'notification' ? payload.detail.data.notificationType : undefined)
+  return { kind, eventId: event.eventId!, receivedAt, runId: event.runId, generation: event.generation, ...(reasonCode ? { reasonCode } : {}) }
 }

@@ -42,6 +42,7 @@ pub(super) fn read(
     o: &Options<'_>,
     b: &mut Budget,
 ) -> ReadResult<Vec<ResourceItem>> {
+    let cache_route = cache::route();
     if c.cli == CliKind::Shell {
         return Err("SOURCE_UNSUPPORTED");
     }
@@ -72,7 +73,7 @@ pub(super) fn read(
             // Codex 历史走缓存 + 一次打开的头窗口观察：身份取自 session_meta，
             // 标题取自首条用户消息，时间取自尾部。命中缓存仍校验当前身份。
             if o.kind == ResourceKind::History && c.cli == CliKind::Codex {
-                return codex_history(c, &path, b, &mut observation_bytes);
+                return codex_history(c, &path, b, &mut observation_bytes, cache_route.as_ref());
             }
             let observation = if o.kind == ResourceKind::History {
                 c.history_prefix(&path, b)?
@@ -244,7 +245,11 @@ pub(super) fn read(
         }
     }
     // 显示元数据缓存只影响后续扫描的读取成本，不改变本次观察结果。
-    let _ = cache::with(|cache| cache.flush());
+    if let Some(Err(_)) = cache::with_route(cache_route.as_ref(), |cache| cache.flush()) {
+        if let Some(route) = cache_route.as_ref() {
+            crate::session_index_maintenance::production().record_failure(route);
+        }
+    }
     Ok(result)
 }
 
@@ -313,6 +318,7 @@ fn codex_history(
     path: &str,
     b: &mut Budget,
     observation_bytes: &mut usize,
+    cache_route: Option<&crate::session_index_maintenance::IndexRoute>,
 ) -> ReadResult<Option<Transcript>> {
     let relative = Path::new(path);
     let Some((len, modified)) = c.root.stat(relative)? else {
@@ -322,7 +328,9 @@ fn codex_history(
         return Err("SOURCE_CHANGED");
     };
     let key = cache::key(c.root.key(), c.cli.as_str(), relative);
-    if let Some(metadata) = cache::with(|cache| cache.lookup(&key, &stamps).cloned()) {
+    if let Some(metadata) =
+        cache::with_route(cache_route, |cache| cache.lookup(&key, &stamps).cloned()).flatten()
+    {
         // 恢复/同步可保留 size/mtime；每次从已准入且持有的文件证明当前首个身份。
         let mut identity_probe = |bytes: &[u8]| {
             Ok(bytes.split_inclusive(|byte| *byte == b'\n').any(|line| {
@@ -334,7 +342,7 @@ fn codex_history(
         };
         let Some((header, incomplete)) = c.root.history_until(relative, b, &mut identity_probe)?
         else {
-            cache::with(|cache| cache.forget(&key));
+            cache::with_route(cache_route, |cache| cache.forget(&key));
             return Err("SOURCE_CHANGED");
         };
         // 整个块仍计入预算，只解析最后完整记录前的字节，避免后续 UTF-8 字符切半。
@@ -359,33 +367,33 @@ fn codex_history(
             }
             return Ok(Some(transcript));
         }
-        cache::with(|cache| cache.forget(&key));
+        cache::with_route(cache_route, |cache| cache.forget(&key));
     }
     // 观察者在确认「非用户创建的会话」时立即停止，省下该文件其余头窗口的读取。
     let auto = std::cell::Cell::new(false);
     let mut probe = codex_metadata_probe(&auto);
     let Some((head, tail, incomplete)) = c.root.history_codex_metadata(relative, b, &mut probe)?
     else {
-        cache::with(|cache| cache.forget(&key));
+        cache::with_route(cache_route, |cache| cache.forget(&key));
         return Err("SOURCE_CHANGED");
     };
     let mut transcript = parse_codex_metadata(text(&head)?, text(&tail).ok(), !incomplete)?;
     if transcript.auto_session {
-        cache::with(|cache| cache.forget(&key));
+        cache::with_route(cache_route, |cache| cache.forget(&key));
         return Ok(None);
     }
     // wrapper-only 且观察不完整：几乎全为 exec/SDK 自动会话，Untitled 行只是
     // 噪声；但前缀不能证明全会话只含包装，因此按单文件省略披露（来源不完整 +
     // 读失败计数）而不是伪装成无此会话，Messages 仍可按显式 id 读取。
     if transcript.unconfirmable_wrapper_only {
-        cache::with(|cache| cache.forget(&key));
+        cache::with_route(cache_route, |cache| cache.forget(&key));
         b.omit_history_entry("SOURCE_UNSUPPORTED");
         return Ok(None);
     }
     transcript.metadata_incomplete = incomplete;
     transcript.source_path = path.to_owned();
     *observation_bytes = head.len();
-    cache::with(|cache| {
+    cache::with_route(cache_route, |cache| {
         cache.record(
             key,
             stamps,
@@ -436,6 +444,7 @@ pub(super) fn codex_metadata_probe(
     let mut scanned = 0usize;
     let mut seen_meta = false;
     let mut seen_user = false;
+    let mut main_review = false;
     move |bytes: &[u8]| {
         for position in scanned..bytes.len() {
             if bytes[position] != b'\n' {
@@ -452,6 +461,8 @@ pub(super) fn codex_metadata_probe(
             match value["type"].as_str() {
                 Some("session_meta") => {
                     seen_meta = true;
+                    main_review = value["payload"]["thread_source"] == "code_review"
+                        && !is_auto_session(&value["payload"]);
                     if is_auto_session(&value["payload"]) {
                         auto.set(true);
                         return Ok(true);
@@ -461,7 +472,7 @@ pub(super) fn codex_metadata_probe(
                     let message = value["payload"]["message"].as_str().unwrap_or_default();
                     if !message.is_empty()
                         && !is_injected_user_context(message)
-                        && !is_automation_wrapper(message)
+                        && (main_review || !is_automation_wrapper(message))
                     {
                         seen_user = true;
                     }
@@ -473,7 +484,7 @@ pub(super) fn codex_metadata_probe(
                     let candidate = content(&value["payload"]["content"]);
                     if !candidate.is_empty()
                         && !is_injected_user_context(&candidate)
-                        && !is_automation_wrapper(&candidate)
+                        && (main_review || !is_automation_wrapper(&candidate))
                     {
                         seen_user = true;
                     }
@@ -495,7 +506,7 @@ pub(super) fn codex_metadata_probe(
 fn is_auto_session(payload: &Value) -> bool {
     if matches!(
         payload["thread_source"].as_str(),
-        Some("subagent" | "guardian_review" | "security_scan" | "code_review")
+        Some("subagent" | "guardian_review" | "security_scan")
     ) {
         return true;
     }
@@ -565,6 +576,7 @@ fn parse_codex_metadata(
     let mut title = None;
     let mut auto_session = false;
     let mut wrapper_only = false;
+    let mut main_review = false;
     for line in head.lines().filter(|line| !line.trim().is_empty()) {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
@@ -579,6 +591,8 @@ fn parse_codex_metadata(
                 };
                 id = Some(observed.to_owned());
                 auto_session = is_auto_session(&value["payload"]);
+                // 主线程 review 是用户动作；正文包装不能覆盖权威来源标记。
+                main_review = value["payload"]["thread_source"] == "code_review" && !auto_session;
                 cwd = value["payload"]["cwd"]
                     .as_str()
                     .filter(|path| !path.contains('\0'))
@@ -590,14 +604,22 @@ fn parse_codex_metadata(
                     .as_str()
                     .filter(|text| !text.contains('\0'))
                     .and_then(|text| {
-                        let display = user_title(text, &mut wrapper_only);
+                        let display = if main_review && is_automation_wrapper(text) {
+                            display_title(text)
+                        } else {
+                            user_title(text, &mut wrapper_only)
+                        };
                         (!display.is_empty()).then_some(display)
                     });
             }
             Some("response_item") if title.is_none() && value["payload"]["role"] == "user" => {
                 let candidate = content(&value["payload"]["content"]);
                 if !candidate.is_empty() && !candidate.contains('\0') {
-                    let display = user_title(&candidate, &mut wrapper_only);
+                    let display = if main_review && is_automation_wrapper(&candidate) {
+                        display_title(&candidate)
+                    } else {
+                        user_title(&candidate, &mut wrapper_only)
+                    };
                     if !display.is_empty() {
                         title = Some(display);
                     }
@@ -721,6 +743,7 @@ fn walk(
     }
     Ok(())
 }
+
 fn parse(path: &str, cli: CliKind, input: &str) -> ReadResult<Transcript> {
     parse_complete(path, cli, input, false)
 }

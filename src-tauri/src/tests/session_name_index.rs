@@ -486,6 +486,8 @@ fn Resolver_ExactHit_NoDelta_020() {
     );
     let mut resolver = SessionNameResolver::new(
         IndexSnapshot {
+            write_allowed: true,
+            route: None,
             index: SessionNameIndex {
                 schema_version: SESSION_NAME_INDEX_SCHEMA_VERSION,
                 parser_version: SESSION_NAME_PARSER_VERSION,
@@ -542,6 +544,8 @@ fn Resolver_Miss_CreatesStableDelta_021() {
     );
     let mut resolver = SessionNameResolver::new(
         IndexSnapshot {
+            write_allowed: true,
+            route: None,
             index: SessionNameIndex {
                 schema_version: SESSION_NAME_INDEX_SCHEMA_VERSION,
                 parser_version: SESSION_NAME_PARSER_VERSION,
@@ -588,6 +592,8 @@ fn Resolver_Unstable_NoDelta_022() {
         .unwrap();
     let mut resolver = SessionNameResolver::new(
         IndexSnapshot {
+            write_allowed: true,
+            route: None,
             index: SessionNameIndex {
                 schema_version: SESSION_NAME_INDEX_SCHEMA_VERSION,
                 parser_version: SESSION_NAME_PARSER_VERSION,
@@ -646,6 +652,8 @@ fn Resolver_Dirs_PruneComplete_023() {
     ]);
     let mut resolver = SessionNameResolver::new(
         IndexSnapshot {
+            write_allowed: true,
+            route: None,
             index: SessionNameIndex {
                 schema_version: SESSION_NAME_INDEX_SCHEMA_VERSION,
                 parser_version: SESSION_NAME_PARSER_VERSION,
@@ -681,6 +689,8 @@ fn Resolver_Dirs_NoPruneIncomplete_024() {
     let project_dir = dir.path().join("-e-source-project");
     let mut resolver = SessionNameResolver::new(
         IndexSnapshot {
+            write_allowed: true,
+            route: None,
             index: SessionNameIndex {
                 schema_version: SESSION_NAME_INDEX_SCHEMA_VERSION,
                 parser_version: SESSION_NAME_PARSER_VERSION,
@@ -707,6 +717,8 @@ fn Resolver_Dirs_NoPruneIncomplete_024() {
 fn Resolver_SoftSize_CompressDelta_025() {
     let resolver = SessionNameResolver::new(
         IndexSnapshot {
+            write_allowed: true,
+            route: None,
             index: SessionNameIndex {
                 schema_version: SESSION_NAME_INDEX_SCHEMA_VERSION,
                 parser_version: SESSION_NAME_PARSER_VERSION,
@@ -748,6 +760,8 @@ fn Resolver_DuplicateDirs_Separate_026() {
     .unwrap();
     let mut resolver = SessionNameResolver::new(
         IndexSnapshot {
+            write_allowed: true,
+            route: None,
             index: SessionNameIndex {
                 schema_version: SESSION_NAME_INDEX_SCHEMA_VERSION,
                 parser_version: SESSION_NAME_PARSER_VERSION,
@@ -885,12 +899,14 @@ fn Flush_Disjoint_MergesBoth_030() {
     );
     store
         .flush_pending(PendingIndexFlush {
+            route: None,
             base_raw: RawIndexSnapshot::Bytes(initial_bytes.clone()),
             delta: first_delta,
         })
         .unwrap();
     store
         .flush_pending(PendingIndexFlush {
+            route: None,
             base_raw: RawIndexSnapshot::Bytes(initial_bytes),
             delta: second_delta,
         })
@@ -1251,6 +1267,7 @@ fn Flush_GrownFile_DropsReplacement_032() {
 
     let metrics = store
         .flush_pending(PendingIndexFlush {
+            route: None,
             base_raw: RawIndexSnapshot::Missing,
             delta,
         })
@@ -1318,6 +1335,7 @@ fn Flush_ChangedStamp_DropsReplacement_033() {
 
     store
         .flush_pending(PendingIndexFlush {
+            route: None,
             base_raw: RawIndexSnapshot::Missing,
             delta,
         })
@@ -1367,6 +1385,7 @@ fn Flush_NoExpensiveWork_UnderLock_035() {
 
     store
         .flush_pending(PendingIndexFlush {
+            route: None,
             base_raw: RawIndexSnapshot::Bytes(bytes),
             delta: SessionNameIndexDelta {
                 request_compaction: true,
@@ -1421,6 +1440,7 @@ fn Flush_AtomicFail_KeepsOld_038() {
 
     let error = store
         .flush_pending(PendingIndexFlush {
+            route: None,
             base_raw: RawIndexSnapshot::Bytes(bytes.clone()),
             delta: SessionNameIndexDelta {
                 request_compaction: true,
@@ -1475,6 +1495,7 @@ fn Flush_Probe_AllPreparationUnlocked_040() {
 
     store
         .flush_pending(PendingIndexFlush {
+            route: None,
             base_raw: RawIndexSnapshot::Bytes(bytes),
             delta: SessionNameIndexDelta {
                 request_compaction: true,
@@ -1533,6 +1554,7 @@ fn Flush_RetryBudget_Cumulative_041() {
     let started = Instant::now();
     let error = store
         .flush_pending(PendingIndexFlush {
+            route: None,
             base_raw: RawIndexSnapshot::Bytes(bytes),
             delta: SessionNameIndexDelta {
                 request_compaction: true,
@@ -1614,6 +1636,7 @@ fn Flush_CasExhausted_CleansTemps_042() {
 
     let error = store
         .flush_pending(PendingIndexFlush {
+            route: None,
             base_raw: RawIndexSnapshot::Bytes(bytes),
             delta: SessionNameIndexDelta {
                 request_compaction: true,
@@ -1715,6 +1738,7 @@ fn Flush_CasRetryBudget_CleansTemps_043() {
 
         let error = store
             .flush_pending(PendingIndexFlush {
+                route: None,
                 base_raw: RawIndexSnapshot::Bytes(bytes),
                 delta: SessionNameIndexDelta {
                     request_compaction: true,
@@ -1924,6 +1948,7 @@ fn BenchmarkIndexSizes_001() {
             );
             let metrics = store
                 .flush_pending(PendingIndexFlush {
+                    route: None,
                     base_raw: RawIndexSnapshot::Bytes(bytes.clone()),
                     delta: SessionNameIndexDelta {
                         request_compaction: true,

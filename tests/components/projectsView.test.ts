@@ -8,10 +8,12 @@ import { useShellStore } from '@/stores/shell'
 import { useAppStore } from '@/stores/app'
 import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
 import { useNativeTabsStore } from '@/stores/nativeTabs'
+import { useWorkspaceStore } from '@/stores/workspace'
 import { useProjectManagementStore } from '@/stores/projectManagement'
 import { useProjectsStateStore } from '@/stores/projectsState'
 import en from '@/i18n/locales/en'
 import zh from '@/i18n/locales/zh'
+import type { SessionAdapter, UnifiedSession } from '@/types/unifiedSession'
 vi.mock('@/utils/platform', () => ({ isMac: false, isWindows: true, ctrl: 'Ctrl' }))
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ isMaximized: async () => false, onResized: async () => () => {} }) }))
 vi.mock('@xterm/xterm', () => ({ Terminal: class {} }))
@@ -35,6 +37,39 @@ function render(locale = 'en') {
   mounted.push(wrapper); return wrapper
 }
 describe('Unified project management page', () => {
+  it('Projects_CloseProjectConfirmationUsesFrozenSessionSet_011', async () => {
+    const tabs = useNativeTabsStore(), catalog = useUnifiedSessionsStore()
+    const first = tabs.create({ cli: 'codex', projectId: 'one', projectPath: 'C:/work/one', profileId: 'p', profileRevision: '1', action: { kind: 'new' } })
+    const other = tabs.create({ cli: 'codex', projectId: 'two', projectPath: 'C:/work/two', profileId: 'p', profileRevision: '1', action: { kind: 'new' } })
+    let rows: UnifiedSession[] = [first, other].map(tab => ({ id: `native-tab:${tab.tabId}`, adapterSessionId: tab.tabId,
+      projectKey: tab.projectPath.toLowerCase(), projectPath: tab.projectPath, cli: 'codex', runtime: 'native-cli', title: 'Open',
+      processState: 'running', attentionState: 'none', lastActivityAt: 1, archived: false, opened: true, resumable: true }))
+    const close = vi.fn(async (id: string) => { const row = rows.find(row => row.id === id)!; tabs.close(row.adapterSessionId); rows = rows.filter(row => row.id !== id) })
+    const archive = vi.fn()
+    catalog.configureAdapters([{ runtime: 'native-cli', listSessions: async () => rows, captureOwnership: (id: string) => {
+      const row = rows.find(row => row.id === id)!; const tab = tabs.tab(row.adapterSessionId); return () => tabs.tab(row.adapterSessionId) === tab
+    }, closeSession: close, archiveSession: archive } as unknown as SessionAdapter])
+    await catalog.refresh()
+    const wrapper = render(); await flushPromises()
+    await wrapper.get('[data-project-path="C:/work/one"] [data-project-overflow]').trigger('click'); await flushPromises()
+    document.querySelector<HTMLElement>('[data-item-id="close-project-sessions"]')!.click(); await flushPromises()
+    expect(close).not.toHaveBeenCalled()
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain('History stays available')
+    document.querySelector<HTMLElement>('[data-cancel-project-action]')!.click(); await flushPromises()
+    expect(close).not.toHaveBeenCalled()
+    const management = useProjectManagementStore()
+    await management.action({ action: 'close-project-sessions', projectKey: 'c:/work/one', projectPath: 'C:/work/one' }); await flushPromises()
+    useWorkspaceStore().projects = [{ projectId: 'replacement', hostId: 'host', sourcePathKey: 'new', selectedPath: 'C:/work/one', canonicalPath: null,
+      alias: { mode: 'inherit' }, pinned: { mode: 'inherit' }, hidden: { mode: 'inherit' } }]
+    document.querySelector<HTMLElement>('[data-confirm-project-close]')!.click(); await flushPromises()
+    expect(close).not.toHaveBeenCalled(); expect(management.error).toBe('projectCloseSessionsPartial')
+    management.closeDialog(); await flushPromises()
+    await useProjectManagementStore().action({ action: 'close-project-sessions', projectKey: 'c:/work/one', projectPath: 'C:/work/one' }); await flushPromises()
+    document.querySelector<HTMLElement>('[data-confirm-project-close]')!.click(); await flushPromises()
+    expect(close.mock.calls).toEqual([[`native-tab:${first.tabId}`, expect.any(Function)]])
+    expect(tabs.tab(other.tabId)).toBeDefined(); expect(archive).not.toHaveBeenCalled()
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+  })
   // 页面采用真实项目列表，50个项目支持名称/路径搜索和固定优先排序。
   it('Projects_SearchSortFifty_001', async () => {
     const app = useAppStore()

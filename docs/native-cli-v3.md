@@ -157,6 +157,10 @@ Caller stop carries `requestId` with the run identity. One registry lock admits 
 
 Observer delivery is optional metadata, not process ownership.
 
+`cli_get_observer_status` uses the authenticated document and exact request/run/generation. Its safe DTO reports `off`, `connecting` or `unavailable` plus a fixed reason: disabled/unsupported, waiting for events, missing service, unavailable plugin, preparation failure or generic unavailable. It describes the frozen installation result; only accepted hook events establish active observation. Frontend subscription immediately publishes the current state. Query failure cannot fail a successful launch, and a delayed query cannot replace newer activity. New Claude configurations default to observation enabled; explicit off and the original profile of resumed history remain authoritative.
+
+For a machine-specific investigation, collect only: CC Desk and CLI versions; runtime/CLI kind; frozen profile revision and observer override mode/boolean; launch/run/generation matching booleans; installation state and fixed reason; listener readiness; whether an event was accepted, its allowlisted type and age; current observation/activity enums; plugin content-ready, service-ready and required shell-tool-available booleans; effective `disableAllHooks` boolean if independently verified. Do not collect transcript bodies, full settings/environment, arguments, port/capability values or secrets. A normal run on another machine does not certify the affected machine.
+
 - observer credentials/capabilities are scoped to the exact run/document;
 - only allowlisted bounded metadata reaches the owning WebView;
 - prompt, response, env, credential, and raw error bodies are excluded;
@@ -211,3 +215,32 @@ The shared frontend logging command now reduces untrusted string content to its 
 Transport high-water hysteresis is latched when a frame reaches the high watermark, under the same accounting lock. An intervening ACK above the low watermark cannot admit another read. Exact ACK ownership, per-stream accounting, FIFO global budgets, revocation and cleanup retain their existing semantics. Production-source core regressions cover this ordering and 32 concurrent streams sharing a 16-byte budget; such host tests do not substitute for real CLI or native-platform acceptance.
 
 Native input receipts are correlated against the frozen run, generation, sequence, mode epoch and expected byte count. The xterm 5.5.0 mode tracker observes nine public modes after parsed write batches; it detects changes across batches, not a mode round trip wholly inside one batch. Exhaustion and disposal permanently reject further epochs. A paused write produces a fixed localized diagnostic and never automatically replays pending input; inspect the session before deciding whether to restart. These changes do not add backend/schema fields or change queue admission and recovery semantics.
+
+## Frozen source after process retirement
+
+Opened Claude/Codex `resume-id` tabs may explicitly rename their retained historical
+source, using fresh profile history authority only after matching frozen run root,
+profile revision, registered project, native ID and source key. This target remains
+the resumed source even if the CLI switches threads. It is never a proof of the
+current terminal thread. A new Claude tab with a positively observed native ID
+may explicitly target that historical record after the same fresh-root/profile/
+project/key checks. Raw/picker and unproven new identities cannot infer a target.
+`cli_rename_session` still rejects Run scopes. Codex official app-server
+`thread/name/set` and Claude public Agent SDK 0.3.301 `renameSession` must read back
+successfully before Desk clears matching aliases; uncertain writes are not replayed.
+
+Claude metadata runs in a private same-volume namespace containing only the pinned
+transcript hardlink and bundled helper. It needs an existing Node >=22.13 from the
+frozen profile PATH; the app neither bundles nor installs Node. Unsupported filesystem,
+path or runtime requirements fail explicitly. The helper clears inherited credentials,
+limits filesystem access and never calls a model query. Node permission is not a
+general network sandbox. Private files are cleaned before the helper owner settles.
+Actual idle TUI restart evidence does not certify concurrent busy-writer behavior.
+
+Display-only history folding compares full CLI/root/project/path/native-ID/session-key
+identity across profiles. It preserves distinct opened process owners and archive
+groups. It does not merge source authority or use titles as identity. Successful rename
+refreshes every matching physical-source projection and clears only still-matching
+tab aliases; a Legacy alias additionally requires a fresh same-root proof.
+
+Exact run receipts retain a backend-only source provenance separate from PTY resources: CLI, profile revision and already-selected configuration/project paths, without env, argv or process handles. It is published atomically with the existing launch completion and only authorizes read scopes for the same caller/document/run/generation. Retirement still invalidates all old process-control and snapshot handles. Revoke, document reload and mismatched generations reject retained source access. This lets explicit structured restarts verify their original physical root after exit; raw restarts keep their explicit rerun semantics.

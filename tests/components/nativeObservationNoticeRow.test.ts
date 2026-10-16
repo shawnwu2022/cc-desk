@@ -27,6 +27,25 @@ function render(session: UnifiedSession, locale = 'en') {
 
 // 独立通知标记应可访问、双语且不把收到回复结束事件伪装为当前已完成状态。
 describe('Honest Native event notice presentation', () => {
+  it.each(['rate_limit','overloaded','authentication_failed','oauth_org_not_allowed','account_on_hold','billing_error','invalid_request','model_not_found','server_error','max_output_tokens','cloud_credential_error','unknown'] as const)
+  ('Notice_FailureReasonsHaveBoundedBilingualLabels_006 %s',reasonCode=>{
+    const session=row('reply-failed',false)
+    session.observationNotice!.recent!.reasonCode=reasonCode
+    const detail=selectSessionObservationNotice(session)!.detailLabelKey!
+    expect(en[detail as keyof typeof en]).toMatch(/^Reply failure received:/)
+    expect(zh[detail as keyof typeof zh]).toMatch(/^收到的回复失败原因：/)
+  })
+  it('Notice_ExactRateLimitReasonStaysOccurrenceBesideUnread_005', () => {
+    const session=row()
+    session.observationNotice!.recent={...session.observationNotice!.recent!,kind:'reply-failed',reasonCode:'rate_limit'}
+    const wrapper=render(session)
+    const label=wrapper.get('[data-native-observation-notice]').attributes('aria-label')
+    expect(label).toContain('Reply-end notice received (unread)')
+    expect(label).toContain('Reply failure received: rate limit')
+    expect(label).toContain('current activity unverified')
+    expect(wrapper.get('[data-session-badge]').attributes('data-session-badge')).toBe('completed')
+    expect(wrapper.html()).not.toContain('session-app-icon--error')
+  })
   it.each([
     ['en', 'Reply-end notice received (unread); current activity unverified'],
     ['zh', '收到回复结束通知（未读）；当前活动尚未验证'],

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
 import { defineComponent, ref, h } from 'vue'
-import { createPinia, setActivePinia } from 'pinia'
+import { createPinia, setActivePinia, getActivePinia } from 'pinia'
 import App from '@/App.vue'
 import ArchivedSessionsDrawer from '@/components/sessions/ArchivedSessionsDrawer.vue'
 import { createI18n } from 'vue-i18n'
@@ -60,6 +60,50 @@ function render() {
   const w = mount(defineComponent({ setup() { runtime = useUnifiedWorkspaceRuntime(ref(port)); return () => null } })); wrappers.push(w)
   return { runtime, port }
 }
+
+it('IndexRebuild_IsolatedReaderKeepsAppAndOldListOnPartial_066', async () => {
+  const { useSessionIndexMaintenanceStore } = await import('@/stores/sessionIndexMaintenance')
+  const api = await import('@/api/tauri')
+  const calls = vi.spyOn(api, 'sessionIndexMaintenance').mockImplementation(async(id,action)=>({id,state:action==='begin'?'staging':action==='commit'?'committed':'cancelled'}))
+  render(); await flushPromises()
+  const pinia=getActivePinia(), catalog=useUnifiedSessionsStore(), rows=catalog.sessions
+  const maintenance=useSessionIndexMaintenanceStore()
+  io.read.mockResolvedValue({state:'ready',items:[],hasMore:false,historyMetadataIncomplete:true,historyReadFailures:['SOURCE_UNSUPPORTED']})
+  await maintenance.run();await flushPromises()
+  expect(getActivePinia() === pinia).toBe(true)
+  expect(maintenance.state).toBe('failed')
+  expect(calls.mock.calls.map(call=>call[1])).toEqual(['begin','cancel'])
+  expect(catalog.sessions).toBe(rows)
+  calls.mockRestore()
+})
+
+it('IndexRebuild_BoundedMetadataCanPublish_067', async () => {
+  const { useSessionIndexMaintenanceStore } = await import('@/stores/sessionIndexMaintenance')
+  const api = await import('@/api/tauri')
+  const calls=vi.spyOn(api,'sessionIndexMaintenance').mockImplementation(async(id,action)=>({id,state:action==='begin'?'staging':action==='commit'?'committed':'cancelled'}))
+  render();await flushPromises()
+  io.read.mockResolvedValue({state:'ready',items:[],hasMore:false,historyMetadataIncomplete:true,historyReadFailures:[]})
+  const maintenance=useSessionIndexMaintenanceStore();await maintenance.run();await flushPromises()
+  expect(maintenance.state).toBe('completed')
+  expect(calls.mock.calls.map(call=>call[1])).toEqual(['begin','commit'])
+  calls.mockRestore()
+})
+
+it('Restart_NewObservedConversationKeepsNativeIdAcrossGeneration_068', async()=>{
+  const api=await import('@/api/tauri')
+  const scope=vi.spyOn(api,'nativeGetScope')
+  render();await flushPromises()
+  const tabs=useNativeTabsStore(),created=tabs.create({cli:'codex',projectId:'project',projectPath:'/repo',profileId:'cx',profileRevision:'7',action:{kind:'new'}})
+  tabs.markStarting(created.tabId)
+  const tab=tabs.tab(created.tabId)!;tab.status='exited';tab.observedSessionId='history-id'
+  scope.mockResolvedValue({scopeId:'run-scope',instanceId:'instance',cli:'codex',sourceRootKey:'root',identityEpoch:'1',profileId:'cx',profileRevision:'7',target:{kind:'run',runId:tab.runId,generation:tab.generation},basis:'launch-environment'})
+  io.scope.mockResolvedValue({cli:'codex',sourceRootKey:'root'})
+  io.read.mockResolvedValue({state:'ready',items:[{type:'session',projectId:'project',sessionKey:JSON.stringify(['local','codex','root','history-id']),nativeSessionId:'history-id',title:'History',cwd:'/repo'}],hasMore:false})
+  const catalog=useUnifiedSessionsStore();await catalog.refresh()
+  await catalog.restartSession(`native-tab:${created.tabId}`)
+  expect(tabs.tab(created.tabId)).toMatchObject({generation:2,action:{kind:'resume-id',nativeSessionId:'history-id'},sourceSessionKey:JSON.stringify(['local','codex','root','history-id'])})
+  scope.mockRestore()
+})
 describe('Workspace source warning diagnostics', () => {
   // 单条历史读取失败保留已识别会话，仅显示可收起的部分历史诊断。
   it('HistoryPartial_KeepsPositiveRows_001', async () => {
@@ -751,7 +795,8 @@ describe('Unified production runtime', () => {
     expect(io.writeText).not.toHaveBeenCalled()
     useUnifiedSessionsStore().beginRename(opened.id)
     useShellStore().requestWorkspaceAction({ kind: 'rename', sessionId: opened.id, title: 'Unified name' }); await flushPromises()
-    expect(tabsTitle()).toBe('Unified name'); expect(useShellStore().pendingRequest).toBeNull()
+    expect(tabsTitle()).toBe('Codex CLI'); expect(useShellStore().pendingRequest).toBeNull()
+    expect(unified.actionFeedback?.detailCode).toBe('SESSION_IDENTITY_UNKNOWN')
     function tabsTitle() { return useNativeTabsStore().tab(opened.adapterSessionId)?.title }
   })
 
@@ -1082,7 +1127,9 @@ it('Runtime_RowDoubleClickSelection_028', async () => {
   expect(row.find('input').exists()).toBe(true)
   await row.get('input').setValue('Renamed by double click')
   await row.get('input').trigger('keydown', { key: 'Enter' }); await flushPromises()
-  expect(tabs.tab(opened.adapterSessionId)?.title).toBe('Renamed by double click')
+  expect(tabs.tab(opened.adapterSessionId)?.title).toBe('Codex CLI')
+  expect(row.get('input').element.value).toBe('Renamed by double click')
+  expect(catalog.actionFeedback?.detailCode).toBe('SESSION_IDENTITY_UNKNOWN')
   expect(tabs.tab(opened.adapterSessionId)?.status).toBe('exited')
   expect(tabs.tab(opened.adapterSessionId)?.generation).toBe(1)
   window.dispatchEvent(new KeyboardEvent('keydown', { key: 'F2', code: 'F2', bubbles: true })); await flushPromises()
@@ -1291,6 +1338,20 @@ it('Catalog_RuntimeProjectScope_001', async () => {
   expect(io.ptySpawn).not.toHaveBeenCalled()
 })
 
+it('Catalog_OutputTouchDoesNotInvalidateProjection_005', async () => {
+  const tabs = useNativeTabsStore()
+  const created = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+  Object.assign(tabs.tab(created.tabId)!, { status: 'running', launchRevision: '1' })
+  render(); await flushPromises()
+  const catalog = useUnifiedSessionsStore()
+  const refresh = vi.spyOn(catalog, 'refresh')
+  tabs.tab(created.tabId)!.lastActivityAt += 1
+  await flushPromises()
+  expect(refresh).not.toHaveBeenCalled()
+  tabs.markUnknown(created.tabId); await flushPromises()
+  expect(refresh).toHaveBeenCalledWith('/repo', { background: true })
+})
+
 // owner 跨项目、替换、移除与新增均更新目录，已替换对象的迟到变化不能发布。
 it('Catalog_OwnerChanges_002', async () => {
   const tabs = useNativeTabsStore()
@@ -1482,6 +1543,16 @@ it('History_ReplyRefreshCoalesces_061', async () => {
   tabs.ackReplyEndNotice(one.tabId, one, 'reply-9')
   await flushPromises(); await vi.advanceTimersByTimeAsync(350)
   expect(io.read).toHaveBeenCalledTimes(afterReply + 1)
+  const afterIdentity = io.read.mock.calls.length
+  title = 'First prompt is already in native history'
+  tabs.applyObservationNotice(one.tabId, one, { kind: 'prompt-submitted', eventId: 'first-prompt', receivedAt: 100, runId: one.runId, generation: one.generation })
+  tabs.applyObservationNotice(one.tabId, one, { kind: 'tool-started', eventId: 'following-tool', receivedAt: 101, runId: one.runId, generation: one.generation })
+  await flushPromises(); await vi.advanceTimersByTimeAsync(250); await flushPromises()
+  expect(io.read).toHaveBeenCalledTimes(afterIdentity + 1)
+  expect(useUnifiedSessionsStore().sessions.find(row => row.adapterSessionId === one.tabId)?.title).toBe(title)
+  tabs.applyObservationNotice(one.tabId, one, { kind: 'prompt-submitted', eventId: 'first-prompt', receivedAt: 100, runId: one.runId, generation: one.generation })
+  await flushPromises(); await vi.advanceTimersByTimeAsync(350)
+  expect(io.read).toHaveBeenCalledTimes(afterIdentity + 1)
 })
 
 // 去抖期间失去原 attempt、配置或组件 owner 的事件，不能发起新的历史读取。

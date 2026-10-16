@@ -48,6 +48,26 @@ fn require_file(path: &Path, code: &str, executable: bool) -> Result<(), SafeErr
 }
 
 impl ProcessLaunchSpec {
+    pub(crate) fn metadata_command(&self) -> Result<std::process::Command, SafeError> {
+        // 与 PTY 路径共享已选择程序、runner、完整环境及立即执行前检查。
+        let _validated = self.command()?;
+        let mut command = std::process::Command::new(&self.program);
+        command
+            .args(&self.args)
+            .current_dir(&self.cwd)
+            .env_clear()
+            .envs(&self.environment);
+        command
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x08000000);
+        }
+        Ok(command)
+    }
     /// Build immediately before spawn. This rejects missing selected paths/cwd;
     /// it does not pin file bytes or eliminate external filesystem races.
     pub(crate) fn command(&self) -> Result<CommandBuilder, SafeError> {

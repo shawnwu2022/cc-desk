@@ -87,17 +87,16 @@ it('Feedback_LegacyRenameRejectsNewPty_009', async () => {
   const { useSessionStore } = await import('@/stores/session'); const { createLegacyClaudeAdapter } = await import('@/session/adapters/legacyClaudeAdapter')
   const legacy = useSessionStore(); const id = legacy.createTab('/repo', { sessionId: 'saved', name: 'Original' }); const tab = legacy.tabs.get(id)!
   tab.ptyId = 'pty-1'; tab.ptyGeneration = 1; tab.status = 'running'
-  let finish!: (value: unknown) => void; const pending = new Promise(resolve => { finish = resolve })
   const commands: string[] = []
-  mockIPC(command => { commands.push(command); if (command === 'upsert_session_ui_record') return pending; throw new Error('unexpected') })
+  mockIPC(command => { commands.push(command); throw new Error('unexpected mutation') })
   const metadata = useProjectsStateStore(); metadata.loaded = true
   // 预存 GUI 覆盖名：metadata IPC 的 pending 窗口承载 stale 竞态。
   metadata.sessionRecords.set('legacy-history:/repo:saved', { runtime: 'legacy-claude', cli: 'claude', projectPath: '/repo', adapterSessionId: 'saved', nativeSessionId: 'saved', title: 'Original', lastActivityAt: 0 })
   const runtimeRename = vi.fn()
   const adapter = createLegacyClaudeAdapter({ store: legacy, metadata, projectPaths: () => ['/repo'], runtime: { startTab: vi.fn(), stopTab: vi.fn(), restartTab: vi.fn(), renameTab: runtimeRename } })
-  const rename = adapter.renameSession('legacy-tab:' + id, 'Late name'); const rejected = expect(rename).rejects.toThrow('STALE_SESSION_ATTEMPT')
-  await vi.waitFor(() => expect(commands).toEqual(['upsert_session_ui_record']))
-  tab.ptyGeneration = 2; tab.ptyId = 'pty-2'; finish({ pinnedProjects: [], archivedSessions: {} }); await rejected
+  await expect(adapter.renameSession('legacy-tab:' + id, 'Late name')).rejects.toThrow('NATIVE_RENAME_UNSUPPORTED')
+  tab.ptyGeneration = 2; tab.ptyId = 'pty-2'
+  expect(commands).toEqual([])
   expect(tab.name).toBe('Original')
   // metadata 写入不接触任一代次的 PTY。
   expect(runtimeRename).not.toHaveBeenCalled(); expect(commands).not.toContain('pty_input')

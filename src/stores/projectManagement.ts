@@ -24,10 +24,11 @@ export const useProjectManagementStore = defineStore('project-management', () =>
   const error = ref<string | null>(null)
   const busy = ref(false)
   const loading = ref(false)
-  const dialog = ref<{ kind: 'rename'; project: UnifiedProjectIdentity } | { kind: 'remove'; project: UnifiedProjectIdentity } | null>(null)
+  const dialog = ref<{ kind: 'rename' | 'remove' | 'close-sessions'; project: UnifiedProjectIdentity } | null>(null)
   const renameValue = ref('')
   const renameError = ref<string | null>(null)
   let feedbackVersion = 0
+  let projectCloseOwner: { request: NonNullable<typeof dialog.value>; registration: string | null; close: ReturnType<typeof catalog.captureProjectClose> } | null = null
   let removeOwner: { request: NonNullable<typeof dialog.value>; registration?: string | null; selected: () => boolean } | null = null
   function registration(path: string): string | null {
     const matches = registry.projects.filter(project => sameProjectPath(project.selectedPath, path))
@@ -125,7 +126,29 @@ export const useProjectManagementStore = defineStore('project-management', () =>
     try { removeOwner = { request: dialog.value, registration: registry.status === 'loaded' ? registration(project.projectPath) : undefined, selected: catalog.captureSelectionOwnership() } }
     catch { closeDialog(); error.value = 'resumeConfigurationChanged' }
   }
-  function closeDialog() { ++feedbackVersion; dialog.value = null; removeOwner = null; renameError.value = null; error.value = null }
+  function beginCloseSessions(project: UnifiedProjectIdentity) {
+    error.value = null
+    try {
+      const proof = registration(project.projectPath)
+      const close = catalog.captureProjectClose(project.projectPath)
+      dialog.value = { kind: 'close-sessions', project: { ...project } }
+      projectCloseOwner = { request: dialog.value, registration: proof, close }
+    } catch { error.value = 'resumeConfigurationChanged' }
+  }
+  async function closeSessions() {
+    const owner = projectCloseOwner
+    if (!owner || busy.value || dialog.value !== owner.request) return
+    const current = () => projectCloseOwner === owner && dialog.value === owner.request
+    const canContinue = () => current() && registration(owner.request.project.projectPath) === owner.registration
+    busy.value = true; error.value = null
+    try {
+      await owner.close(canContinue)
+      if (current()) closeDialog()
+    } catch {
+      if (current()) error.value = 'projectCloseSessionsPartial'
+    } finally { busy.value = false }
+  }
+  function closeDialog() { ++feedbackVersion; dialog.value = null; removeOwner = null; projectCloseOwner = null; renameError.value = null; error.value = null }
   async function rename() {
     const target = dialog.value
     if (target?.kind !== 'rename' || busy.value) return
@@ -175,6 +198,7 @@ export const useProjectManagementStore = defineStore('project-management', () =>
     if (busy.value) return
     if (request.action === 'rename') { beginRename(request); return }
     if (request.action === 'remove-project') { beginRemove(request); return }
+    if (request.action === 'close-project-sessions') { beginCloseSessions(request); return }
     if (request.action === 'view-archive') return // The tree already owns its archive drawer.
     await run(async () => {
       if (request.action === 'pin') await state.pinProject(request.projectPath)
@@ -195,5 +219,5 @@ export const useProjectManagementStore = defineStore('project-management', () =>
     })
   }
   return { groups, visibleGroups, error, busy, loading, dialog, renameValue, renameError,
-    openCount, refresh, add, action, setHidden, beginRename, beginRemove, closeDialog, rename, remove }
+    openCount, refresh, add, action, setHidden, beginRename, beginRemove, beginCloseSessions, closeSessions, closeDialog, rename, remove }
 })

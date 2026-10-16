@@ -20,10 +20,39 @@ mod types;
 #[path = "../../../src-tauri/src/cli/native_projection/wire.rs"]
 mod wire;
 
-mod cli {
-    pub(crate) use crate::{environment, profiles, types};
-    #[cfg(test)]
-    pub(crate) mod native_projection {
-        pub(crate) use crate::wire;
+#[path = "../../../src-tauri/src/cli/native_rename.rs"]
+mod native_rename;
+#[path = "../../../src-tauri/src/cli/projection.rs"]
+mod projection;
+#[path = "../../../src-tauri/src/session_index_maintenance.rs"]
+mod session_index_maintenance;
+#[path = "../../../src-tauri/src/session_name_index.rs"]
+mod session_name_index;
+#[path = "../../../src-tauri/src/cli/source_scope.rs"]
+mod source_scope;
+mod snapshot {
+    include!(concat!(env!("OUT_DIR"), "/snapshot.rs"));
+}
+mod store {
+    include!(concat!(env!("OUT_DIR"), "/store.rs"));
+}
+mod platform {
+    include!(concat!(env!("OUT_DIR"), "/platform.rs"));
+}
+mod version_history {
+    #[cfg(windows)]
+    pub(crate) mod windows {
+        include!(concat!(env!("OUT_DIR"), "/windows.rs"));
     }
+}
+
+mod native_projection {
+    #[allow(unused_imports)]
+    pub(crate) use crate::{cache, registry, scoped_fs, wire};
+}
+mod cli {
+    #[allow(unused_imports)]
+    pub(crate) use crate::{
+        environment, native_projection, native_rename, profiles, projection, snapshot, types,
+    };
 }

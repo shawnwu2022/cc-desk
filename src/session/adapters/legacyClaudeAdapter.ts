@@ -8,7 +8,7 @@ import type {
   UnifiedSession,
 } from '@/types/unifiedSession'
 import { normalizePath } from '@/utils/path'
-import { saveSessionDisplayName, saveSessionOpenedAt, withSessionDisplayName, type SessionMetadataPort } from '@/session/sessionMetadata'
+import { saveSessionOpenedAt, withSessionDisplayName, type SessionMetadataPort } from '@/session/sessionMetadata'
 import { compareSessionOpenOrder } from '@/utils/sessionOpenOrder'
 import type { AttentionItem } from '@/composables/useAttentionQueue'
 
@@ -66,6 +66,7 @@ function activeId(tabId: string): string {
 function historyId(projectPath: string, sessionId: string): string {
   return `${HISTORY_PREFIX}${normalizeProjectIdentity(projectPath)}:${sessionId}`
 }
+export { historyId as legacyHistoryId }
 
 function activeTabId(id: string): string {
   if (!id.startsWith(ACTIVE_PREFIX) || id.length === ACTIVE_PREFIX.length) {
@@ -343,26 +344,13 @@ export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): Sessio
     acceptedOpens.delete(tab.tabId)
   }
 
-  async function renameSession(id: string, title: string, canContinue = () => true, onIssued?: () => void, signal?: AbortSignal): Promise<SessionRenameResult> {
+  async function renameSession(id: string, title: string, canContinue = () => true, _onIssued?: () => void, signal?: AbortSignal): Promise<SessionRenameResult> {
     const value = title.trim()
     if (!value || /[\x00-\x1f\x7f]/.test(value) || [...value].length > 200) throw new Error('SESSION_TITLE_REQUIRED')
     const owns = captureOwnership(id)
     const current = () => !signal?.aborted && canContinue() && owns()
     if (!current()) throw new Error('STALE_SESSION_ATTEMPT')
-    if (id.startsWith(ACTIVE_PREFIX)) {
-      const tab = requireTab(id)
-      // PTY 回执不能证明 CLI 编辑器为空；GUI 改名只写 Desk metadata，保留用户草稿。
-      if (deps.metadata) await saveSessionDisplayName(deps.metadata, tabDisplayIdentity(tab), value, current, onIssued)
-      else onIssued?.()
-      if (!current()) throw new Error('STALE_SESSION_ATTEMPT')
-      store.updateTabName(tab.tabId, value)
-    } else {
-      const history = parseHistoryId(id)
-      const row = store.getCatalogHistoryFor(history.projectPath).find(row => row.sessionId === history.sessionId)
-      if (!row || !deps.metadata) throw new Error('SESSION_NOT_FOUND')
-      await saveSessionDisplayName(deps.metadata, projectHistorySession(history.projectPath, row), value, current, onIssued)
-    }
-    return 'display-name-saved'
+    throw new Error('NATIVE_RENAME_UNSUPPORTED')
   }
 
   async function archiveSession(id: string, canContinue = () => true): Promise<void> {

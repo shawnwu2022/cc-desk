@@ -5,11 +5,15 @@ import { useCliSupportStore } from '@/stores/cliSupport'
 import AppSelect from '@/components/ui/AppSelect.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import InlineNotice from '@/components/ui/InlineNotice.vue'
+import AppButton from '@/components/ui/AppButton.vue'
+import { useSessionIndexMaintenanceStore } from '@/stores/sessionIndexMaintenance'
 import claudeIcon from '@/assets/icons/cli/claude.svg'
 import codexIcon from '@/assets/icons/cli/codex.svg'
 const { t } = useI18n()
 const app = useAppStore()
 const support = useCliSupportStore()
+const indexMaintenance = useSessionIndexMaintenanceStore()
+const indexStateLabels = { idle:'indexRebuildTitle',preparing:'indexRebuildState_preparing',scanning:'indexRebuildState_scanning',committing:'indexRebuildState_committing',completed:'indexRebuildState_completed',cancelled:'indexRebuildState_cancelled',failed:'indexRebuildState_failed' }
 const cliName = { claude: 'Claude Code', codex: 'Codex CLI' } as const
 </script>
 <template>
@@ -41,6 +45,16 @@ const cliName = { claude: 'Claude Code', codex: 'Codex CLI' } as const
     </div>
     <div class="setting-field" data-close-window-behavior><h3>{{ t('settingsCloseWindow') }}</h3><p>{{ t('settingsCloseWindowHint') }}</p></div>
     <InlineNotice :message="t('settingsSavedLaunchOptionsHint')" />
+    <div class="setting-field" data-session-index-maintenance>
+      <span class="ui-field-label">{{ t('indexRebuildTitle') }}</span>
+      <p>{{ t('indexRebuildHint') }}</p>
+      <div class="cli-support-row">
+        <AppButton :disabled="indexMaintenance.busy" @click="indexMaintenance.run">{{ t(indexMaintenance.needsReconciliation ? 'indexRebuildCheck' : indexMaintenance.needsRefresh ? 'refresh' : 'indexRebuildTitle') }}</AppButton>
+        <AppButton v-if="indexMaintenance.canCancel" @click="indexMaintenance.cancel">{{ t('cancel') }}</AppButton>
+      </div>
+      <p role="status" aria-live="polite" v-if="indexMaintenance.state !== 'idle'">{{ t(indexStateLabels[indexMaintenance.state]) }} <span v-if="indexMaintenance.busy">{{ indexMaintenance.done }}/{{ indexMaintenance.total }}</span></p>
+      <InlineNotice v-if="indexMaintenance.error" kind="warning" :message="t(indexMaintenance.error)" />
+    </div>
   </section>
 </template>
 <style scoped>

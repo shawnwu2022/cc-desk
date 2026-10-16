@@ -409,6 +409,30 @@ fn D12_Production_RunSnapshotSurvivesProfileDeleteButNotDocumentRevoke_006() {
     query.resource_kind = ResourceKind::Config;
     let data = projection.read(&caller, &query).unwrap();
     assert!(matches!(&data.items[0],ResourceItem::Setting{value,..} if value=="frozen"));
+    // 先证明真实 child 已 reap，再退役 PTY；只读来源证明不能依赖资源仍被 registry 持有。
+    let run = RunKey {
+        run_id: request.run_id.clone(),
+        generation: request.generation,
+    };
+    let former_access = launch.access(&caller, &run).unwrap();
+    for resource in consumer.0.lock().drain(..) {
+        resource.process.pty.terminate_root().unwrap();
+        resource.process.pty.wait().unwrap();
+    }
+    launch.registry().mark_exited(&run).unwrap();
+    launch.registry().retire(&run).unwrap();
+    assert_eq!(former_access.snapshot().unwrap_err().code, "RUN_NOT_READY");
+    assert_eq!(
+        launch.registry().resource(&caller, &run).unwrap_err().code,
+        "RUN_NOT_READY"
+    );
+    drop(former_access);
+    let exited = projection.scope(&caller, &target).unwrap();
+    assert_eq!(exited, query.source);
+    let after_retirement = projection.read(&caller, &query).unwrap();
+    assert!(
+        matches!(&after_retirement.items[0],ResourceItem::Setting{value,..} if value=="frozen")
+    );
     let stale = ScopeTarget::Run {
         run_id: "run".into(),
         generation: 2,
@@ -417,6 +441,19 @@ fn D12_Production_RunSnapshotSurvivesProfileDeleteButNotDocumentRevoke_006() {
     launch.registry().revoke_window(&caller).unwrap();
     assert_eq!(
         projection.read(&caller, &query).unwrap_err().code,
+        "FORBIDDEN"
+    );
+    assert_eq!(
+        projection.scope(&caller, &target).unwrap_err().code,
+        "FORBIDDEN"
+    );
+    let replacement = launch.registry().activate_window("main").unwrap();
+    assert_eq!(
+        projection.scope(&caller, &target).unwrap_err().code,
+        "FORBIDDEN"
+    );
+    assert_eq!(
+        projection.scope(&replacement, &target).unwrap_err().code,
         "FORBIDDEN"
     );
     // The supervisor's explicit cleanup owns the process; the projection has no stop primitive.

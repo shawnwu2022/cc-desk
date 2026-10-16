@@ -17,12 +17,56 @@ use std::sync::Arc;
 pub(crate) struct ProjectionService {
     launch: Arc<LaunchService>,
     registry: ScopeRegistry,
+    rename_operations: crate::cli::native_rename::Operations,
 }
 impl ProjectionService {
+    pub(crate) fn rename(
+        &self,
+        caller: &CallerIdentity,
+        request: crate::cli::native_rename::RenameRequest,
+    ) -> Result<crate::cli::native_rename::RenameReceipt, SafeError> {
+        self.launch.registry().check_caller(caller)?;
+        request.validate()?;
+        if let Some(result) = self.rename_operations.begin(caller, &request)? {
+            result?;
+            return Ok(request.receipt());
+        }
+        let result = (|| {
+            let authority = self.registry.authorize_rename(
+                &owner(caller),
+                &request.source,
+                &request.session_key,
+            )?;
+            let launch = crate::cli::types::LaunchRequest {
+                request_id: format!("rename-{}", request.operation_id),
+                tab_id: "metadata".into(),
+                run_id: "metadata".into(),
+                generation: 1,
+                profile_id: request.source.profile_id.clone(),
+                expected_profile_revision: request.source.profile_revision,
+                cli: request.source.cli,
+                launch_cwd: authority.cwd.clone(),
+                action: LaunchAction::Raw {
+                    argv: vec!["app-server".into()],
+                },
+                extra_args: vec![],
+                cols: 80,
+                rows: 24,
+            };
+            self.launch
+                .rename_metadata(caller, &launch, authority, request.title.clone())
+        })();
+        self.rename_operations
+            .finish(caller, &request, result.clone());
+        result?;
+        self.launch.registry().check_caller(caller)?;
+        Ok(request.receipt())
+    }
     pub(crate) fn new(launch: Arc<LaunchService>) -> Self {
         Self {
             launch,
             registry: ScopeRegistry::new(64),
+            rename_operations: Default::default(),
         }
     }
     #[cfg(test)]
@@ -151,43 +195,28 @@ impl ProjectionService {
                     run_id: run_id.clone(),
                     generation: *generation,
                 };
-                let snapshot = self.launch.access(caller, &run)?.snapshot()?;
-                // Unknown/native-picker changes are not inferred by inspecting terminal text.
-                if snapshot.raw_args().is_some()
-                    || !read_scope_known(
-                        snapshot.request().cli,
-                        snapshot.launcher(),
-                        snapshot.default_args().iter().chain(snapshot.extra_args()),
-                    )
-                    || snapshot
-                        .legacy_default_args()
-                        .is_some_and(|s| !s.is_empty())
-                {
-                    return Err(error("SCOPE_UNKNOWN"));
-                }
+                let snapshot = self.launch.registry().source_provenance(caller, &run)?;
                 *stage = ProjectionStage::ScopeSourceSelection;
-                let selected =
-                    locations(snapshot.request().cli, snapshot.environment()).map_err(error)?;
+                let selected = snapshot.selection()?;
                 *stage = ProjectionStage::ScopeSourceRoot;
                 // Only a new launch with proven root-neutral args authorizes its frozen requested cwd.
                 // Resume/picker can choose another cwd; they expose root-wide observations only.
-                let (project, project_paths) =
-                    if matches!(snapshot.request().action, LaunchAction::New) {
-                        let path = Path::new(&snapshot.request().launch_cwd);
-                        let root = Root::open(path).map_err(error)?;
-                        let paths = verified_spellings(path, &root)?;
-                        (Some(root), paths)
-                    } else {
-                        (None, vec![])
-                    };
+                let (project, project_paths) = if let Some(capability) = selected.project.as_ref() {
+                    let path = capability.selected_path();
+                    let root = capability.clone_source().map_err(error)?;
+                    let paths = verified_spellings(path, &root)?;
+                    (Some(root), paths)
+                } else {
+                    (None, vec![])
+                };
                 let service = Arc::downgrade(&self.launch);
                 let expected = snapshot.clone();
                 let authority = caller.clone();
                 let check = Arc::new(move || -> ReadResult<()> {
                     let service = service.upgrade().ok_or("SCOPE_REVOKED")?;
                     let current = service
-                        .access(&authority, &run)
-                        .and_then(|a| a.snapshot())
+                        .registry()
+                        .source_provenance(&authority, &run)
                         .map_err(|_| "SCOPE_REVOKED")?;
                     if !Arc::ptr_eq(&expected, &current) {
                         return Err("SCOPE_REVOKED");
@@ -196,16 +225,16 @@ impl ProjectionService {
                 });
                 Grant {
                     owner: owner(caller),
-                    cli: snapshot.request().cli,
-                    profile_id: snapshot.request().profile_id.clone(),
-                    profile_revision: snapshot.profile_revision(),
+                    cli: snapshot.cli,
+                    profile_id: snapshot.profile_id.clone(),
+                    profile_revision: snapshot.profile_revision,
                     target: target.clone(),
                     basis: SourceBasis::LaunchEnvironment,
-                    root: Root::open(&selected.root).map_err(error)?,
+                    root: selected.root.clone_source().map_err(error)?,
                     user_config: selected
                         .user_config
                         .as_ref()
-                        .map(|p| Root::open(p))
+                        .map(Root::clone_source)
                         .transpose()
                         .map_err(error)?,
                     projects: project
@@ -213,7 +242,12 @@ impl ProjectionService {
                             // Run 观察的项目不是注册项目；冻结的 launch cwd 就是它的身份，
                             // 只用于前端行归属，不引入新的授权面。
                             vec![AdmittedProject {
-                                id: snapshot.request().launch_cwd.clone(),
+                                id: selected
+                                    .project
+                                    .as_ref()
+                                    .and_then(|root| root.selected_path().to_str())
+                                    .expect("frozen UTF-8 launch cwd")
+                                    .to_owned(),
                                 root,
                                 paths: project_paths,
                             }]

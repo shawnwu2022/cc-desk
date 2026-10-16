@@ -27,6 +27,27 @@ function requireNoticeApi(store: ReturnType<typeof useNativeTabsStore>) { expect
 
 // 原生事件通知只保留已认证发生事实，精确所有权、未读确认和启动生命周期互不混淆。
 describe('Exact Native tab occurrence receipts', () => {
+  it('Notice_ReasonProofCannotMutateCurrentActivityOrBorrowOtherKind_014', async () => {
+    const {store,tab,attempt,notice}=setup()
+    expect(store.applyObservationNotice(tab.tabId,attempt,{...notice('failed','reply-failed'),reasonCode:'rate_limit'})).toBe(true)
+    const row=(await adapter(store).listSessions())[0]
+    expect(row.observationNotice?.recent?.reasonCode).toBe('rate_limit')
+    expect(row.activityState).toBe('unknown')
+    expect(row.attentionKind).toBeUndefined()
+    expect(store.applyObservationNotice(tab.tabId,attempt,{...notice('invalid','permission-requested'),reasonCode:'rate_limit'})).toBe(false)
+    store.tab(tab.tabId)!.observationNotice!.recent!.reasonCode='billing_error'
+    expect(store.hasOwnedObservationNotice(tab.tabId,attempt)).toBe(false)
+    expect((await adapter(store).listSessions())[0].observationNotice).toBeUndefined()
+  })
+  it('Notice_LastPromptSurvivesSameTickToolWithoutBody_013', () => {
+    const {store,tab,attempt,notice}=setup()
+    store.applyObservationNotice(tab.tabId,attempt,notice('prompt','prompt-submitted'))
+    store.applyObservationNotice(tab.tabId,attempt,notice('tool','tool-started'))
+    expect(store.tab(tab.tabId)!.observationNotice).toMatchObject({recent:{eventId:'tool'},lastPromptSubmitted:{kind:'prompt-submitted',eventId:'prompt'}})
+    expect(store.applyObservationNotice(tab.tabId,attempt,notice('prompt','prompt-submitted'))).toBe(false)
+    store.markUnknown(tab.tabId)
+    expect(store.tab(tab.tabId)!.observationNotice?.lastPromptSubmitted ?? null).toBeNull()
+  })
   // 关闭缓存仅命中完整来源键，恢复的新运行不借用旧通知，显式清除不会影响其他来源。
   it('Notice_CloseResumeExactSource_011', async () => {
     const { store, tab, attempt, notice } = setup()

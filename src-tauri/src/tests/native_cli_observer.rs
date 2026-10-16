@@ -21,6 +21,61 @@ fn payload(name: &str) -> Vec<u8> {
 }
 
 #[test]
+fn ObserverReason_StopFailureAllowlistNeverPublishesDetails_001() {
+    let registry = ObserverRegistry::new();
+    let binding = registry
+        .attach(
+            run("reason-run", 1),
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+            ObserverSource::ClaudeHook,
+        )
+        .unwrap();
+    for (index, reason) in [
+        "rate_limit",
+        "overloaded",
+        "authentication_failed",
+        "oauth_org_not_allowed",
+        "account_on_hold",
+        "billing_error",
+        "invalid_request",
+        "model_not_found",
+        "server_error",
+        "max_output_tokens",
+        "cloud_credential_error",
+        "unknown",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let input=serde_json::to_vec(&serde_json::json!({"hook_event_name":"StopFailure","error":reason,"error_details":"PRIVATE","last_assistant_message":"PRIVATE"})).unwrap();
+        let ObserverAccept::Accepted(validated) = registry
+            .accept_event(&binding, &format!("reason-{index}"), &input)
+            .unwrap()
+        else {
+            panic!("expected accepted event")
+        };
+        let safe = serde_json::to_value(HookPayload::from_validated(validated)).unwrap();
+        assert_eq!(safe["detail"]["data"]["error"], *reason);
+        assert!(!safe.to_string().contains("PRIVATE"));
+        assert_eq!(safe["state"], "unknown");
+    }
+    let input =
+        serde_json::to_vec(&serde_json::json!({"hook_event_name":"StopFailure","error":"PRIVATE"}))
+            .unwrap();
+    let ObserverAccept::Accepted(validated) = registry
+        .accept_event(&binding, "unknown-error", &input)
+        .unwrap()
+    else {
+        panic!("expected accepted event")
+    };
+    assert!(
+        !serde_json::to_string(&HookPayload::from_validated(validated))
+            .unwrap()
+            .contains("PRIVATE")
+    );
+}
+
+#[test]
 fn D13_Observer_CapabilityRunReplayAndPayloadBoundary_001() {
     let registry = ObserverRegistry::new();
     let current = run("run-current", 2);

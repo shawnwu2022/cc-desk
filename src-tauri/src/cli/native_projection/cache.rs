@@ -141,31 +141,74 @@ impl MetadataCache {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let temp = path.with_extension("json.tmp");
-        std::fs::write(&temp, &bytes)?;
-        std::fs::rename(&temp, &path)?;
+        let lock = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path.with_extension("json.lock"))?;
+        crate::store::acquire_lock_with_label(
+            &lock,
+            true,
+            std::time::Duration::from_millis(100),
+            "native-history-metadata",
+        )
+        .map_err(std::io::Error::other)?;
+        crate::store::write_bytes_atomic(&path, &bytes)?;
         self.dirty = false;
         Ok(())
     }
 }
 
-static CACHE: LazyLock<parking_lot::Mutex<MetadataCache>> = LazyLock::new(|| {
-    // 测试期使用进程专属临时目录，避免污染用户真实缓存、也避免测试间串扰。
-    #[cfg(test)]
-    let path = std::env::temp_dir().join(format!("cc-box-meta-{}.json", std::process::id()));
-    #[cfg(not(test))]
-    let path = dirs::home_dir()
-        .map(|home| home.join(".cc-box").join("native-history-metadata.json"))
-        .unwrap_or_else(|| PathBuf::from("native-history-metadata.json"));
-    parking_lot::Mutex::new(MetadataCache::with_path(path))
-});
+static CACHE: LazyLock<parking_lot::Mutex<HashMap<PathBuf, MetadataCache>>> =
+    LazyLock::new(|| parking_lot::Mutex::new(HashMap::new()));
 
 pub(crate) fn key(root_key: &str, cli: &str, relative_path: &Path) -> String {
     format!("{root_key}\u{0}{cli}\u{0}{}", relative_path.display())
 }
 
+#[cfg(test)]
 pub(crate) fn with<R>(f: impl FnOnce(&mut MetadataCache) -> R) -> R {
-    f(&mut CACHE.lock())
+    with_route(route().as_ref(), f).expect("test cache route")
+}
+
+pub(crate) fn empty_bytes() -> Vec<u8> {
+    serde_json::to_vec(&CacheFile {
+        schema: SCHEMA,
+        entries: HashMap::new(),
+    })
+    .expect("fixed cache schema")
+}
+
+pub(crate) fn route() -> Option<crate::session_index_maintenance::IndexRoute> {
+    crate::session_index_maintenance::production().route().ok()
+}
+
+/// 每次扫描携带自己的 generation；迟到结果不能污染提交后或取消后的缓存。
+pub(crate) fn with_route<R>(
+    route: Option<&crate::session_index_maintenance::IndexRoute>,
+    f: impl FnOnce(&mut MetadataCache) -> R,
+) -> Option<R> {
+    let route = route?;
+    let _guard = match crate::session_index_maintenance::production().write_guard(route) {
+        Ok(guard) => guard,
+        Err(_) => {
+            crate::session_index_maintenance::production().record_failure(route);
+            return None;
+        }
+    };
+    let published = crate::session_index_maintenance::production()
+        .published()
+        .ok()
+        .map(|route| route.path("native-history-metadata.json"));
+    let mut caches = CACHE.lock();
+    let path = route.path("native-history-metadata.json");
+    // 保留已发布与当前暂存两份内存，取消时原缓存仍在；旧代不会无界累计。
+    caches.retain(|cached_path, _| *cached_path == path || published.as_ref() == Some(cached_path));
+    let cache = caches
+        .entry(path.clone())
+        .or_insert_with(|| MetadataCache::with_path(path));
+    Some(f(cache))
 }
 
 #[cfg(test)]

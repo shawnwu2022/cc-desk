@@ -19,7 +19,7 @@ for (const gui of ['light', 'dark']) for (const cli of ['claude', 'codex']) {
     const closed = page.locator('[data-session-row="visual-status-16"] .session-app-icon')
     for (const row of await rows.all()) {
       await expect(row.locator('.session-app-icon')).toHaveCount(1)
-      await expect(row).toHaveCSS('grid-template-columns', /20px .* 38px 20px/)
+      await expect(row).toHaveCSS('grid-template-columns', /20px .* 38px 20px 20px$/)
       await expect(row.locator('.session-app-icon')).toHaveCSS('width', '20px')
       await expect(row.locator('.cli-app-icon__image')).toHaveAttribute('src', new RegExp(cli + '\\.svg'))
     }

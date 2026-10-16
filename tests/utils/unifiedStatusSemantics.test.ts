@@ -25,6 +25,13 @@ function receipt(tab: ReturnType<ReturnType<typeof useNativeTabsStore>['create']
 beforeEach(() => { setActivePinia(createPinia()) })
 
 describe('Unified historical status semantics', () => {
+  it('Observer_UnknownDoesNotMasqueradeAsIdle_010', () => {
+    for (const [observationState, expected] of [['off','unknown'],['connecting','confirming'],['unavailable','unknown']] as const) {
+      expect(deriveSessionVisualState(row({ runtime:'native-cli', observationState, activityState:'unknown' }))).toBe(expected)
+    }
+    expect(deriveSessionVisualState(row({ runtime:'native-cli',observationState:'active',activityState:'idle' }))).toBe('running')
+    expect(deriveSessionVisualState(row({ cli:'codex',runtime:'native-cli',observationState:'off',activityState:'unknown' }))).toBe('running')
+  })
   // 删除活动/关注原因投影会使这些边界断言失败，进程运行不能代替回合活动。
   // 无观察通道（observationState 未激活）的 unknown 是"无从得知"，显示中性
   // 运行态；观察已激活时的 unknown 仍是真实未知。

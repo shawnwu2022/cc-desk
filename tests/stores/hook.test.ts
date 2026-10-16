@@ -42,6 +42,16 @@ describe('useHookStore', () => {
     capturedNative = null
   })
 
+  it('Observer_SubscriptionPublishesCurrentState_006', () => {
+    const store = useHookStore(), handler = vi.fn()
+    const stop = store.subscribeObservation(observationTarget, handler)
+    expect(handler).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'connecting' }), { observation: 'connecting', activity: 'unknown' })
+    const second = vi.fn()
+    store.subscribeObservation(observationTarget, second)()
+    expect(second).toHaveBeenLastCalledWith(expect.anything(), { observation: 'connecting', activity: 'unknown' })
+    stop()
+  })
+
   // ---------- subscribe ----------
 
   // 注册 ["PreToolUse"] 后分发 PreToolUse 事件时 handler 被调用
@@ -178,7 +188,7 @@ describe('useHookStore', () => {
       detail: { type: 'userPromptSubmit', data: { prompt: 'must-not-route-by-pty' } },
     })
 
-    expect(observationHandler).toHaveBeenCalledOnce()
+    expect(observationHandler).toHaveBeenCalledTimes(2)
     expect(observationHandler).toHaveBeenCalledWith({
       kind: 'working',
       runId: 'run-claude',
@@ -216,6 +226,7 @@ describe('useHookStore', () => {
 
     const handler = vi.fn()
     const unsubscribe = store.subscribeObservation(observationTarget, handler)
+    handler.mockClear()
     unsubscribe()
 
     capturedNative!({
@@ -304,6 +315,7 @@ it('D13_HookStore_RunCliAndGenerationAreExactNotActiveTab', () => {
     store.subscribeObservation({ ...observationTarget, cli: 'codex' }, codex),
     store.subscribeObservation({ ...observationTarget, enabled: false }, disabled),
   ]
+  current.mockClear(); foreign.mockClear()
   capturedNative!(nativePayload())
   expect(current).toHaveBeenCalledOnce()
   expect(store.observationFor(observationTarget)).toEqual({ observation: 'active', activity: 'working' })
@@ -313,6 +325,7 @@ it('D13_HookStore_RunCliAndGenerationAreExactNotActiveTab', () => {
 it('D13_HookStore_ClearRejectsLateMetadataAndRevokesState', () => {
   setActivePinia(createPinia()); const store = useHookStore(); const handler = vi.fn()
   store.subscribeObservation(observationTarget, handler)
+  handler.mockClear()
   store.clearSession(observationTarget.runId)
   capturedNative!(nativePayload())
   expect(handler).not.toHaveBeenCalled(); expect(store.observationFor(observationTarget)).toBeUndefined()

@@ -75,10 +75,7 @@ it('WorkspaceClose_LastSession_001', async () => {
 // 关闭当前会话后选中仍打开的会话，保持其终端实例并同步工作区标题。
 it('WorkspaceClose_SelectRemaining_002', async () => {
   const wrapper = render(); await flushPromises(); const remaining = await running()
-  // 显示名走实际 GUI metadata 写入；tab.title 本身只是可被 CLI 历史更新的占位名。
-  const catalog = useUnifiedSessionsStore()
-  catalog.beginRename('native-tab:' + remaining.tabId)
-  await catalog.renameSession('native-tab:' + remaining.tabId, 'Remaining work', true); await flushPromises()
+  // 以原生历史标题验证关闭后的工作区连续性，不依赖在线更名前置。
   const existingTerminal = wrapper.get(`[data-live-terminal="${remaining.tabId}"]`).element
   const closing = await running()
   useShellStore().requestWorkspaceAction({ kind: 'menu-action', sessionId: 'native-tab:' + closing.tabId, action: 'close' }); await flushPromises()
@@ -88,7 +85,7 @@ it('WorkspaceClose_SelectRemaining_002', async () => {
   expect(useNativeTabsStore().activeTabId).toBe(remaining.tabId)
   expect(wrapper.get(`[data-live-terminal="${remaining.tabId}"]`).element).toBe(existingTerminal)
   expect(wrapper.get(`[data-live-terminal="${remaining.tabId}"]`).isVisible()).toBe(true)
-  expect(wrapper.get('[data-session-title]').text()).toBe('Remaining work')
+  expect(wrapper.get('[data-session-title]').text()).toBe('Saved')
   expect(wrapper.find('[data-unified-terminal-empty]').exists()).toBe(false)
 })
 

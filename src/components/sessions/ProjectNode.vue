@@ -74,8 +74,10 @@ const statusBadge = computed(() => {
     && session.activityState !== 'error' && (session.attentionKind === 'permission' || session.activityState === 'waiting_permission')).length
   const completed = props.project.completedCount ?? running.filter(session => session.attentionKind === 'completed'
     && session.activityState !== 'error' && session.activityState !== 'waiting_permission').length
+  const unreadReply = props.project.unreadReplyCount ?? sessions.value.filter(session => session.observationNotice?.unreadReplyEnd?.kind === 'reply-ended').length
   if (error > 0) return { kind: 'error', count: error, labelKey: 'projectErrorCount' }
   if (permission > 0) return { kind: 'permission', count: permission, labelKey: 'projectPermissionCount' }
+  if (unreadReply > 0) return { kind: 'unread-reply', count: unreadReply, labelKey: 'projectUnreadReplyCount' }
   if (completed > 0) return { kind: 'completed', count: completed, labelKey: 'projectCompletedCount' }
   if (props.project.needsUserCount > 0) return { kind: 'needs-user', count: props.project.needsUserCount, labelKey: 'projectNeedsReplyCount' }
   if (props.project.runningCount > 0) return { kind: 'running', count: props.project.runningCount, labelKey: 'projectRunningCount' }
@@ -88,6 +90,7 @@ const menuItems = computed(() => [
   { id: props.project.pinned ? 'unpin' : 'pin', label: t(props.project.pinned ? 'unpin' : 'pin') },
   { id: 'rename', label: t('rename') },
   { id: 'view-archive', label: t('archivedSessions') },
+  { id: 'close-project-sessions', label: t('projectCloseSessions'), disabled: !sessions.value.some(session => session.opened === true || !!session.preparationState) },
   { id: 'open-project-directory', label: t('openFolder') },
   { id: 'remove-project', label: t('removeProject'), danger: true },
 ])
@@ -242,7 +245,7 @@ onBeforeUnmount(() => { window.removeEventListener('resize', placeMenu) })
 .project-attention { min-width: 16px; height: 16px; justify-self: center; border-radius: 50%;
   display: inline-flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 600; color: var(--accent-gold-text); }
 .project-attention--error { color: var(--status-error); }
-.project-attention--completed, .project-attention--running { color: var(--status-success); }
+.project-attention--completed, .project-attention--running, .project-attention--unread-reply { color: var(--status-success); }
 .project-row :deep(.ui-icon-button) { width: 28px; min-width: 28px; height: 28px; padding: 0; }
 .project-row :deep(.expand-arrow) { width: 20px; min-width: 20px; padding: 0; }
 .expand-arrow :deep(svg) { transition: transform 0.15s ease; }

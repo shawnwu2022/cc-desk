@@ -66,6 +66,12 @@ jobs:
           cache-on-failure: true
       - id: deps
         run: npm ci
+      - name: Prepare pinned session metadata helper
+        working-directory: .
+        run: |
+          npm run prepare:session-sdk
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - run: node scripts/prepare-conpty.mjs
       - name: Verify generator regression contracts
         run: node --test tests/scripts/pasteAcceptance.node.cjs tests/scripts/conptyBundle.node.cjs tests/scripts/pasteReleaseGate.node.cjs

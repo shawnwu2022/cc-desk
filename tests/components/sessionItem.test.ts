@@ -45,6 +45,21 @@ function menuIds() {
   return Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]'), (item) => item.dataset.itemId)
 }
 
+it.each(['en', 'zh'] as const)('Row_ResumeSourceRenameNamesItsTarget_049 %s', async locale => {
+  i18n.global.locale.value = locale
+  const session = { ...base, renameTarget: 'resume-source' as const }
+  const wrapper = row(session, { selected: true })
+  await wrapper.trigger('contextmenu'); await nextTick()
+  expect(body.get('[data-item-id="rename"]').text()).toBe(locale === 'zh' ? '重命名恢复来源会话' : 'Rename resumed source session')
+  await body.get('[data-item-id="rename"]').trigger('click')
+  await wrapper.setProps({ session: { ...session, renameState: 'editing' } }); await nextTick(); await nextTick()
+  const input = wrapper.get('input')
+  expect(input.attributes('aria-label')).toBe(locale === 'zh' ? '恢复来源会话名称' : 'Resumed source session name')
+  await input.trigger('focus'); await nextTick()
+  expect(body.get('[role="tooltip"]').text()).toContain('native-1')
+  expect(wrapper.find('[aria-label="'+(locale === 'zh' ? '保存恢复来源会话名称' : 'Save resumed source session name')+'"]').exists()).toBe(true)
+})
+
 // 关闭历史从菜单进入显示名编辑，焦点进入输入框而不恢复或选择终端。
 it('Row_ClosedHistoryRenameKeepsTerminalSelection_042', async () => {
   const history = { ...base, opened: false, processState: 'stopped' as const }
@@ -175,7 +190,7 @@ describe('Unified SessionItem', () => {
     const rules = styleRules()
     const grid = rules.find((rule) => rule.selectorText === '.session-item')!
     expect(grid.style.getPropertyValue('display')).toBe('grid')
-    expect(grid.style.getPropertyValue('grid-template-columns')).toBe('20px minmax(0, 1fr) 38px 20px')
+    expect(grid.style.getPropertyValue('grid-template-columns')).toBe('20px minmax(0, 1fr) 38px 20px 20px')
     expect(grid.style.getPropertyValue('column-gap')).toBe('6px')
     expect(Number.parseInt(grid.style.getPropertyValue('height'))).toBeGreaterThanOrEqual(36)
     expect(Number.parseInt(grid.style.getPropertyValue('height'))).toBeLessThanOrEqual(38)
@@ -639,15 +654,14 @@ it('Row_ArchiveQuickAction_043', async () => {
   expect(wrapper.find('[data-session-archive]').exists()).toBe(false)
 })
 
-// 归档与时间共用固定尾区，关闭保留优先级，不新增一列或触发恢复。
+// 归档占独立固定槽，关闭槽不会在历史行出现后变成归档。
 it('Row_ArchiveOverlaysTime_044', async () => {
   const wrapper = row({ ...base, opened: false, processState: 'stopped' })
-  expect(wrapper.get('.session-tail [data-session-archive] button').attributes('aria-label')).toBe('Archive')
+  expect(wrapper.get('[data-session-archive] button').attributes('aria-label')).toBe('Archive')
+  expect(wrapper.find('.session-tail [data-session-archive]').exists()).toBe(false)
   expect(wrapper.get('.session-overflow-trigger button').attributes('aria-label')).toBe('Session actions')
   const rules = styleRules()
-  expect(rules.find(rule => rule.selectorText === '.session-archive-action')?.style.getPropertyValue('position')).toBe('absolute')
-  expect(rules.some(rule => rule.selectorText.includes('.has-archive:hover .session-time') && rule.style.getPropertyValue('opacity') === '0')).toBe(true)
-  expect(rules.some(rule => rule.selectorText.includes('.has-archive:focus-within .session-time') && rule.style.getPropertyValue('pointer-events') === 'none')).toBe(true)
+  expect(rules.find(rule => rule.selectorText === '.session-archive-slot')?.style.getPropertyValue('width')).toBe('20px')
   expect(rules.some(rule => rule.selectorText === '.session-item.has-archive' && rule.style.getPropertyValue('grid-template-columns'))).toBe(false)
   await wrapper.get('[data-session-archive] button').trigger('click')
   expect(wrapper.emitted('menu-action')).toEqual([[base.id, 'archive']])
@@ -662,7 +676,17 @@ it('Row_ArchiveOverlaysTime_044', async () => {
   expect(wrapper.emitted('activate')).toBeUndefined()
 })
 
-// 无 hover 或粗指针设备直接显示归档按钮，仍占同一固定尾区。
+it('Row_ClosedActionSlotCannotArchiveOrResume_046', async () => {
+  const wrapper = row({ ...base, processState:'stopped' })
+  await wrapper.get('.session-tail button').trigger('click')
+  expect(wrapper.emitted('primary-action')).toEqual([[base.id,'close']])
+  await wrapper.setProps({session:{...base,opened:false,processState:'stopped'}})
+  await wrapper.get('.session-tail').trigger('click')
+  expect(wrapper.emitted('primary-action')).toEqual([[base.id,'close']])
+  expect(wrapper.emitted('menu-action')).toBeUndefined()
+})
+
+// 无 hover 或粗指针设备直接显示归档按钮，时间仍可见。
 it('Row_ArchiveCoarsePointer_045', () => {
   const source = readFileSync(resolve('src/components/sessions/SessionItem.vue'), 'utf8')
   const style = document.createElement('style')
@@ -675,5 +699,5 @@ it('Row_ArchiveCoarsePointer_045', () => {
   const rules = [...media.cssRules] as CSSStyleRule[]
   expect(rules.find(rule => rule.selectorText.endsWith('.session-archive-action'))?.style.getPropertyValue('opacity')).toBe('1')
   expect(rules.find(rule => rule.selectorText.endsWith('.session-archive-action'))?.style.getPropertyValue('pointer-events')).toBe('auto')
-  expect(rules.find(rule => rule.selectorText.endsWith('.session-time'))?.style.getPropertyValue('opacity')).toBe('0')
+  expect(rules.some(rule => rule.selectorText.endsWith('.session-time'))).toBe(false)
 })

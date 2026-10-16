@@ -1166,6 +1166,7 @@ pub(crate) fn get_sessions_indexed_at(
         &mut resolver,
         before_resolve.as_deref(),
     )?;
+    resolver.ensure_maintenance_complete()?;
     Ok(finish_resolver(resolver, value))
 }
 

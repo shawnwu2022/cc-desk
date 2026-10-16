@@ -130,6 +130,24 @@ fn D13_Service_RawAndOffNeverInjectObserverOrRequireItsService_002() {
         }
         let status = fixture.start().unwrap();
         fixture.ready();
+        let query = crate::cli::observer_status::ObserverStatusRequest {
+            request_id: status.request_id.clone(),
+            run_id: status.run.run_id.clone(),
+            generation: status.run.generation,
+        };
+        let projected = fixture
+            .service
+            .observer_status(&fixture.caller, &query)
+            .unwrap();
+        assert_eq!(projected.state, "off");
+        assert_eq!(
+            projected.reason_code,
+            if raw {
+                "OBSERVER_UNSUPPORTED"
+            } else {
+                "OBSERVER_DISABLED"
+            }
+        );
         let snapshot = fixture
             .service
             .access(&fixture.caller, &status.run)
@@ -145,5 +163,69 @@ fn D13_Service_RawAndOffNeverInjectObserverOrRequireItsService_002() {
                 .args()
                 .contains(&"--plugin-dir".into())
         );
+    }
+}
+
+#[test]
+fn ObserverStatus_FrozenInstallationAndExactReceipt_003() {
+    let (fixture, _) = observed_fixture(true);
+    let status = fixture.start().unwrap();
+    fixture.ready();
+    let query = crate::cli::observer_status::ObserverStatusRequest {
+        request_id: status.request_id.clone(),
+        run_id: status.run.run_id.clone(),
+        generation: status.run.generation,
+    };
+    let projected = fixture
+        .service
+        .observer_status(&fixture.caller, &query)
+        .unwrap();
+    assert_eq!(projected.reason_code, "OBSERVER_CONNECTING");
+    let mut stale = query;
+    stale.request_id = "other-request".into();
+    assert!(fixture
+        .service
+        .observer_status(&fixture.caller, &stale)
+        .is_err());
+}
+
+#[test]
+fn ObserverStatus_ServiceAndPluginInitializationFailures_004() {
+    for (service, plugin, expected) in [
+        (false, true, "OBSERVER_SERVICE_UNAVAILABLE"),
+        (true, false, "OBSERVER_PLUGIN_UNAVAILABLE"),
+    ] {
+        let (mut fixture, _) = observed_fixture(true);
+        let path = fixture.root.path().join("status-plugin");
+        if plugin {
+            crate::hook_config::ensure_plugin_files_at(&path).unwrap();
+        }
+        let host = Arc::new(ObserverHost::new(
+            Arc::new(ObserverRegistry::new()),
+            path,
+            Arc::new(move || service.then_some(12345)),
+        ));
+        fixture.service = Arc::new(
+            LaunchService::new(
+                fixture.repository.clone(),
+                Some(fixture.service.inherited_environment().unwrap()),
+                Some(fixture.consumer.clone()),
+            )
+            .with_observer(host),
+        );
+        fixture.caller = fixture.service.registry().activate_window("main").unwrap();
+        let status = fixture.start().unwrap();
+        fixture.ready();
+        let query = crate::cli::observer_status::ObserverStatusRequest {
+            request_id: status.request_id.clone(),
+            run_id: status.run.run_id.clone(),
+            generation: status.run.generation,
+        };
+        let projected = fixture
+            .service
+            .observer_status(&fixture.caller, &query)
+            .unwrap();
+        assert_eq!(projected.reason_code, expected);
+        assert_eq!(fixture.children(), 1);
     }
 }

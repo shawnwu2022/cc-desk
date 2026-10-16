@@ -95,6 +95,12 @@ jobs:
           }
           NODE
 
+      - name: Prepare pinned session metadata helper
+        working-directory: .
+        run: |
+          npm run prepare:session-sdk
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Prepare verified bundled Windows runtime
         run: node scripts/prepare-conpty.mjs
 

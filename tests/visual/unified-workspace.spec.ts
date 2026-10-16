@@ -57,7 +57,7 @@ for (const gui of ['light', 'dark']) for (const locale of ['en', 'zh']) {
     await page.mouse.move(1020, 996)
     await expect(history.locator('.session-time')).toHaveCSS('opacity', '1')
     await history.hover()
-    await expect(history.locator('.session-time')).toHaveCSS('opacity', '0')
+    await expect(history.locator('.session-time')).toHaveCSS('opacity', '1')
     await expect(history.locator('[data-session-archive]')).toHaveCSS('opacity', '1')
     // History now restores through the row, without a second launch control.
     // This inert visual fixture checks focus/layout only, never runtime admission.
@@ -388,7 +388,7 @@ for (const viewport of [{ width: 1024, height: 640 }, { width: 1468, height: 744
 
 test.describe('rendered interaction boundaries', () => {
   test.use({ viewport: { width: 1024, height: 640 } })
-  test('archive replaces time in one fixed tail on hover and focus', async ({ page }) => {
+  test('archive keeps its own fixed slot beside time on hover and focus', async ({ page }) => {
     await openFixture(page, { scenario: 'mixed', locale: 'en' })
     const row = page.locator('[data-session-row]').filter({ has: page.locator('[data-session-archive]') }).first()
     const time = row.locator('.session-time')
@@ -402,20 +402,19 @@ test.describe('rendered interaction boundaries', () => {
     const tail = await row.locator('.session-tail').boundingBox()
     const overflow = await menu.boundingBox()
     await row.hover()
-    await expect(time).toHaveCSS('opacity', '0')
+    await expect(time).toHaveCSS('opacity', '1')
     await expect(archive).toHaveCSS('opacity', '1')
     await expect(archive).toHaveCSS('pointer-events', 'auto')
     expect(await row.boundingBox()).toEqual(before)
     const action = await archive.getByRole('button').boundingBox()
-    expect(action!.x).toBeGreaterThanOrEqual(tail!.x)
-    expect(action!.x + action!.width).toBeLessThanOrEqual(tail!.x + tail!.width)
+    expect(action!.x).toBeGreaterThanOrEqual(tail!.x + tail!.width)
     expect(action!.x + action!.width).toBeLessThanOrEqual(overflow!.x)
     await page.mouse.move(1020, 636)
     await expect(time).toHaveCSS('opacity', '1')
     await expect(archive).toHaveCSS('opacity', '0')
     await archive.getByRole('button').focus()
     await expect(archive.getByRole('button')).toBeFocused()
-    await expect(time).toHaveCSS('opacity', '0')
+    await expect(time).toHaveCSS('opacity', '1')
     await expect(archive).toHaveCSS('opacity', '1')
     await menu.focus()
     await page.keyboard.press('Enter')
@@ -424,7 +423,7 @@ test.describe('rendered interaction boundaries', () => {
     await expect(menu).toBeFocused()
     await clearFixtureSetupFocus(page)
     await expect(time).toHaveCSS('opacity', '1')
-    await captureFixtureEvidence(page, test.info(), 'archive-overlay-at-rest-unapproved')
+    await captureFixtureEvidence(page, test.info(), 'archive-separate-slot-at-rest-unapproved')
   })
 
   test('tooltip escapes transformed clipping and remains viewport bounded', async ({ page }) => {
@@ -503,7 +502,7 @@ test.describe('archive touch discovery', () => {
     const row = page.locator('[data-session-row]').filter({ has: page.locator('[data-session-archive]') }).first()
     await expect(row.locator('[data-session-archive]')).toHaveCSS('opacity', '1')
     await expect(row.locator('[data-session-archive]')).toHaveCSS('pointer-events', 'auto')
-    await expect(row.locator('.session-time')).toHaveCSS('opacity', '0')
+    await expect(row.locator('.session-time')).toHaveCSS('opacity', '1')
     await expect(row.locator('[data-session-archive] button')).toBeInViewport({ ratio: 1 })
     await row.locator('[data-session-archive] button').tap()
     await expect(page.locator('[data-blocked-host-calls]')).toHaveAttribute('data-blocked-host-calls', '0')

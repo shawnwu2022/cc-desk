@@ -57,6 +57,7 @@ struct Record<R> {
     fingerprint: Fingerprint,
     status: LaunchStatus,
     resource: Option<Arc<R>>,
+    source: Option<Arc<super::source_provenance::SourceProvenance>>,
     in_flight: bool,
     retired: bool,
     eviction_ready: bool,
@@ -150,11 +151,19 @@ impl<R> RunRegistry<R> {
         state.active = true;
         // 旧 document 已永久失去准入资格；仅其代次下限可释放，运行资源仍由后台保有。
         state.tab_generations.clear();
-        Ok(CallerIdentity {
+        let sources: Vec<_> = state
+            .records
+            .values_mut()
+            .filter_map(|record| record.source.take())
+            .collect();
+        let caller = CallerIdentity {
             instance_id: self.instance_id.clone(),
             window_label: label.into(),
             webview_epoch: WireU64::parse(&epoch.to_string())?,
-        })
+        };
+        drop(state);
+        drop(sources);
+        Ok(caller)
     }
 
     fn authorize(
@@ -182,8 +191,15 @@ impl<R> RunRegistry<R> {
         let mut state = self.state.lock();
         self.authorize(&state, caller)?;
         state.active = false;
+        let sources: Vec<_> = state
+            .records
+            .values_mut()
+            .filter_map(|record| record.source.take())
+            .collect();
         // Existing resources stay owned. The lifecycle layer decides drain/stop;
         // revocation alone never drops a master PTY or kills an agent.
+        drop(state);
+        drop(sources);
         Ok(())
     }
 
@@ -287,6 +303,7 @@ impl<R> RunRegistry<R> {
                 fingerprint,
                 status,
                 resource: None,
+                source: None,
                 in_flight: true,
                 retired: false,
                 eviction_ready: false,
@@ -459,6 +476,38 @@ impl<R> RunRegistry<R> {
             .ok_or_else(|| error("RUN_NOT_READY"))
     }
 
+    /// 只读来源证明随 exact receipt 保留；它不包含进程、环境或 argv 能力。
+    pub(crate) fn source_provenance(
+        &self,
+        caller: &CallerIdentity,
+        run: &RunKey,
+    ) -> Result<Arc<super::source_provenance::SourceProvenance>, SafeError> {
+        let source = {
+            let state = self.state.lock();
+            let record = self.checked_run_record(&state, caller, run)?;
+            if !matches!(
+                record.status.phase,
+                LaunchPhase::Running | LaunchPhase::Exited
+            ) {
+                return Err(error("RUN_NOT_READY"));
+            }
+            record
+                .source
+                .clone()
+                .ok_or_else(|| error("RUN_NOT_READY"))?
+        };
+        source.selection()?;
+        let state = self.state.lock();
+        let record = self.checked_run_record(&state, caller, run)?;
+        if !record
+            .source
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, &source))
+        {
+            return Err(error("FORBIDDEN"));
+        }
+        Ok(source)
+    }
     /// Backend lifecycle adoption must survive document revocation. Never expose
     /// this method to a wire command: use resource(caller, run) for caller access.
     pub(crate) fn retained_resource(&self, run: &RunKey) -> Result<Arc<R>, SafeError> {
@@ -611,6 +660,20 @@ impl<R> Ticket<'_, R> {
     }
 
     pub(super) fn complete(mut self, resource: R) -> LaunchStatus {
+        self.complete_inner(resource, None)
+    }
+    pub(super) fn complete_with_source(
+        mut self,
+        resource: R,
+        source: Arc<super::source_provenance::SourceProvenance>,
+    ) -> LaunchStatus {
+        self.complete_inner(resource, Some(source))
+    }
+    fn complete_inner(
+        &mut self,
+        resource: R,
+        source: Option<Arc<super::source_provenance::SourceProvenance>>,
+    ) -> LaunchStatus {
         let resource = Arc::new(resource);
         let mut state = self.registry.state.lock();
         let record = state
@@ -618,6 +681,7 @@ impl<R> Ticket<'_, R> {
             .get_mut(&self.key)
             .expect("ticket owns retained record");
         record.resource = Some(resource);
+        record.source = source;
         record.in_flight = false;
         if record.status.phase == LaunchPhase::Starting {
             record.transition(LaunchPhase::Running, None);

@@ -2,7 +2,12 @@
 name = "d12-scope-core"
 version = "0.0.0"
 edition = "2021"
+[build-dependencies]
+quote = "=1.0.45"
+syn = { version = "=2.0.117", features = ["full"] }
 [dependencies]
+anyhow = "1"
+log = "0.4"
 cap-std = "=4.0.3"
 dirs = "=5.0.1"
 libc = "=0.2.186"
@@ -12,8 +17,11 @@ serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = "=1.0.149"
 toml = "=0.9.12"
 zstd = { version = "=0.13.3", default-features = false }
+sha2 = "=0.10.9"
+uuid = { version = "1", features = ["v4"] }
 [target.'cfg(windows)'.dependencies]
-windows = { version = "=0.61.3", features = ["Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Ioctl"] }
+windows-core = "0.61"
+windows = { version = "=0.61.3", features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Ioctl", "Win32_System_Threading", "Win32_System_SystemServices"] }
 
 [lib]
 path = "lib.rs"

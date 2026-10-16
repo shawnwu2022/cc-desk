@@ -1,6 +1,6 @@
-import type { HistoryReadFailure, ProjectionResult, ReadRequest, ResourceItem, ResourceKind, ScopeTarget, SourceRef, UnarchiveRequest } from '@/types/nativeProjection'
+import type { HistoryReadFailure, NativeRenameRequest, NativeRenameReceipt, ProjectionResult, ReadRequest, ResourceItem, ResourceKind, ScopeTarget, SourceRef, UnarchiveRequest } from '@/types/nativeProjection'
 export interface ProjectionBridge { readonly instanceId: string; invoke(command: string, payload: unknown): Promise<unknown> }
-export interface ProjectionClient { scope(target: ScopeTarget): Promise<SourceRef>; read(request: ReadRequest): Promise<ProjectionResult>; unarchive(request: UnarchiveRequest): Promise<void> }
+export interface ProjectionClient { scope(target: ScopeTarget): Promise<SourceRef>; read(request: ReadRequest): Promise<ProjectionResult>; unarchive(request: UnarchiveRequest): Promise<void>; rename(request: NativeRenameRequest): Promise<NativeRenameReceipt> }
 const kinds: ResourceKind[] = ['history', 'messages', 'search', 'config', 'mcp', 'skills', 'agents', 'plugins', 'instructions']
 const diagnosticStages = ['frontend-bridge', 'frontend-serialization',
   'scope-invoke', 'scope-document-admission', 'scope-request-decode', 'scope-request-validation', 'scope-profile-validation',
@@ -239,6 +239,24 @@ export function createProjectionClient(bridge: ProjectionBridge, current: () => 
     return response
   }
   return {
+    async rename(value) {
+      const admitted = source(value.source)
+      const operationId = id(value.operationId), sessionKey = text(value.sessionKey, 8192, false), title = text(value.title, 800, false).trim()
+      if (admitted.instanceId !== instance || !title || [...title].length > 200 || /\p{Cc}/u.test(title)) return invalid()
+      const query = { operationId, source: admitted, sessionKey, title }
+      const codes = new Set(['NATIVE_RENAME_UNSUPPORTED','NODE_RUNTIME_UNAVAILABLE','SDK_HELPER_UNAVAILABLE','SESSION_IDENTITY_UNKNOWN','SESSION_NOT_FOUND','SESSION_ORIGIN_AMBIGUOUS',
+        'RENAME_FAILED','RENAME_OUTCOME_UNKNOWN','RENAME_VERIFICATION_FAILED','RENAME_OPERATION_CONFLICT','PROGRAM_UNAVAILABLE','RUNNER_UNAVAILABLE'])
+      try {
+        const received = object(await invoke('cli_rename_session', query), ['operationId','source','sessionKey','title','state'])
+        const receipt = { operationId: id(received.operationId), source: source(received.source), sessionKey: text(received.sessionKey,8192,false), title: text(received.title,800,false), state: received.state }
+        if (receipt.state !== 'renamed' || receipt.operationId !== operationId || receipt.sessionKey !== sessionKey || receipt.title !== title || JSON.stringify(receipt.source) !== JSON.stringify(admitted)) return invalid()
+        return { ...query, state:'renamed' }
+      } catch (failure) {
+        const code = failure && typeof failure === 'object' && 'code' in failure ? (failure as {code:unknown}).code : failure instanceof Error ? failure.message : null
+        const safe = typeof code === 'string' && (codes.has(code) || reasons.has(code)) ? code : 'RENAME_OUTCOME_UNKNOWN'
+        throw Object.assign(new Error(safe), { code:safe, retryable:false })
+      }
+    },
     async scope(value) {
       let stage: ProjectionStage = 'scope-request-validation'
       try {

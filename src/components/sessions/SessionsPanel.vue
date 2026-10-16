@@ -193,7 +193,7 @@ onUnmounted(() => { window.removeEventListener('keydown', onKeydown) })
         <IconButton data-view-archived :label="t('archivedSessions')" @click="showArchived()">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 8h16v12H4zM3 4h18v4H3zm6 8h6" /></svg>
         </IconButton>
-        <IconButton :label="t('refreshSessions')" :disabled="loading" @click="refreshSessions">
+        <IconButton :label="t('refreshSessions')" :disabled="loading" :loading="loading" @click="refreshSessions">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 7v5h-5m5 0a8 8 0 1 0-2 6" /></svg>
         </IconButton>
       </template>
@@ -221,7 +221,7 @@ onUnmounted(() => { window.removeEventListener('keydown', onKeydown) })
           @rename-commit="(id, title) => emit('rename-commit', id, title)" @rename-cancel="emit('rename-cancel', $event)"
           @confirmation-request="emit('confirmation-request', $event)" />
         <div v-if="displayedGroups.length === 0 && !loading" class="empty-hint">{{ t(searching ? 'noSessionsFound' : 'noProjectsYet') }}</div>
-        <div v-if="loading" class="loading-indicator">{{ t('loading') }}</div>
+        <div v-if="loading && displayedGroups.length === 0" class="loading-indicator">{{ t('loading') }}</div>
       </template>
     </div>
     <ArchivedSessionsDrawer v-model:open="archivedOpen" :sessions="archived" :project="archivedProject"

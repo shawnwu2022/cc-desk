@@ -150,6 +150,7 @@ it('LaunchSettings_ProjectRevision_010', async () => {
   await input('[data-launch-name]', 'First configuration')
   button('[data-launch-save]').click(); await flushPromises()
   expect(rows.map(row => row.name)).toEqual(['First configuration'])
+  expect(rows[0].observer).toEqual({mode:'set',value:true})
   expect(writes).toHaveLength(1); expect(revision).toBe('2')
   expect(document.querySelector('[data-launch-save]')).toBeNull()
 })

@@ -26,6 +26,7 @@ const menu = computed(() => [
   { id: 'new-session', label: t('newSession'), disabled: props.project.hidden },
   { id: props.project.pinned ? 'unpin' : 'pin', label: t(props.project.pinned ? 'unpin' : 'pin') },
   { id: 'rename', label: t('rename') },
+  { id: 'close-project-sessions', label: t('projectCloseSessions'), disabled: props.openCount === 0 },
   { id: 'open-project-directory', label: t('openFolder') },
   { id: props.project.hidden ? 'show' : 'hide', label: t(props.project.hidden ? 'show' : 'hide'), disabled: !props.project.hidden && props.openCount > 0 },
   { id: 'remove-project', label: t('removeProject'), danger: true, disabled: props.openCount > 0 },

@@ -25,7 +25,7 @@ describe('Native receipt subscription lifetime', () => {
     expect(onNotice).toHaveBeenCalledOnce()
     expect(onNotice).toHaveBeenCalledWith({ kind: 'reply-ended', eventId: 'receipt-1', receivedAt: 1234, runId: 'owned-run', generation: 1 })
     // stop 现在映射粗粒度 turn-end：回执不产生 completed，活动回落 idle。
-    expect(observe.mock.calls[0][1]).toEqual({ observation: 'active', activity: 'idle' })
+    expect(observe).toHaveBeenLastCalledWith(expect.anything(), { observation: 'active', activity: 'idle' })
     expect(JSON.stringify(onNotice.mock.calls)).not.toContain('SECRET')
   })
   it('Notice_DuplicateAndReattachedOwnerCannotReplay_002', async () => {
@@ -74,6 +74,6 @@ describe('Native receipt subscription lifetime', () => {
     detachSecond = store.subscribeObservation(target(), vi.fn(), { onNotice: second }); await flushPromises()
     expect(() => io.listener!(payload())).not.toThrow()
     expect(second).not.toHaveBeenCalled()
-    expect(observation.mock.calls[0][1]).toEqual({ observation: 'active', activity: 'idle' })
+    expect(observation).toHaveBeenLastCalledWith(expect.anything(), { observation: 'active', activity: 'idle' })
   })
 })

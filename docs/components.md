@@ -96,18 +96,34 @@ explicit restart/retry, rename, close/archive/restore, copy session ID and
 open directory to current adapters and shared confirmations. New/Resume dialogs,
 project management, contextual resources and safe diagnostics are implemented;
 unsupported operations are never translated to Legacy commands. Refresh reloads
-sources without retrying a failed lifecycle request. GUI renames save Desk display
-metadata for running and closed sessions through the existing queued writer.
-The CLI editor contents remain unchanged: PTY ownership and exact write receipts
-cannot prove an empty prompt or safe slash-command interpretation. The explicit
-terminal rename ports reject with `CLI_RENAME_EDITOR_UNVERIFIED`; they never clear
-a draft or inject a command. The result is `display-name-saved`, and feedback says
-that the display name was saved, without claiming a CLI-native name change.
-Selection cancels unissued metadata saves; an issued save retains its exact owner,
-and source/attempt invalidation still rejects stale completion.
+sources without retrying a failed lifecycle request. Native history renames use
+an authenticated backend native metadata operation, verified against the exact
+source, session ID and cwd before and after the official app-server (Codex) or
+pinned public Agent SDK (Claude) request.
+Only a confirmed native receipt produces native-name success; old Desk overrides
+are cleared afterward. Opened Claude/Codex `resume-id` tabs with a retained source key can
+explicitly rename that resumed source session through a fresh profile SourceRef,
+after matching the frozen run root, profile revision, project, native ID and key.
+Menu/save labels and the focused editor description name this source target;
+terminal-side session switching does not retarget it. A new Claude tab may explicitly
+target its positively observed historical record after fresh source checks; its labels
+show that record ID. Raw/picker and unproven new identities are never guessed from
+titles or latest history. Rust Run scopes still refuse rename. Matching historical
+and tab aliases clear only after native success; Legacy aliases need same-root proof.
+Unsupported CLI/runtime states and uncertain outcomes are
+explicit failures, with no alias-only success or automatic write replay. Claude
+requires an existing Node >=22.13 and a private exact-transcript hardlink. It preserves
+the full interactive TUI and uses only the SDK's local metadata API. Idle real-TUI
+rename/restart is verified separately; busy-writer coordination remains unverified.
+Terminal rename ports continue rejecting command
+injection; no draft clearing or guessed editor state is permitted.
+Selection cancels unissued operations; issued operations retain their exact owner.
+Cross-profile duplicate history rows fold by full physical source identity, preserving
+distinct opened owners and archive state. Titles never decide identity. All matching
+source caches refresh after rename so close/reopen cannot restore a stale title.
 
 Closed non-archived history exposes Rename without resuming or selecting a
-terminal. Its original source owner admits the inline editor and metadata write.
+terminal. Its original source owner admits the inline editor and native operation.
 Preparing/archived rows remain excluded, and active rows retain their selection
 requirement. Both drop endpoints use `formatDroppedPaths`: original paths,
 project context and relative results reject terminal control characters as one
@@ -244,6 +260,10 @@ There is no Provider/API-key management or alternate settings overlay.
 - release docs match the enforced candidate-only workflow.
 
 ## Unified session icon primitives
+
+Native Claude 的活动观察与进程运行分开呈现：已知 idle 保持无角标；连接中使用确认字形，关闭或不可用使用活动未知字形，并在共享 Tooltip/可访问名称中说明固定原因。Codex/raw 不据此伪造活动。订阅立即发布当前 reducer 状态；冻结 run 的安装状态另经 `cli_get_observer_status` 查询，迟到安装回执不能覆盖已接受事件或新 attempt。观察失败不会把 CLI 标成启动失败。
+
+后台 catalog 刷新使用 `refresh(projectPath, { background: true })`，不触发可见 loading；首次/手动刷新保留独立并发计数。有旧项目行时加载仅体现在刷新控件。owner 监听只依赖行投影字段，原始输入输出推进的 `lastActivityAt` 不触发项目重建；语义相同的行保留对象身份，项目版本和迟到完成防护不变。
 
 `SessionAppIcon.vue` takes CLI, visual/activity state, archive context and an
 independent occurrence-notice description. It reserves one 20px slot and combines
@@ -733,3 +753,11 @@ Underlying state transitions exclude selection suppression; refresh and remount 
 not replay entry cues. Reduced-motion is fully static and tool/branch marks never rotate.
 
 Legacy authenticated Claude activity hints expire after 30 seconds into unknown activity and clear `working`. This does not end the observed turn: a later authenticated Stop or permission notification still updates completion/attention. A real terminal event consumes that turn once; duplicate Stop events cannot recreate unread attention. Explicitly disabled, off or unavailable observation revokes that eligibility until fresh activity is observed; re-enabling alone cannot revive an old turn.
+
+## Session workflow repairs (2026-10-16)
+
+Authenticated prompt-submitted receipts retain a separate attempt-owned marker; tool receipts do not erase it. Native history refresh coalesces that marker with identity/reply cues through the existing grouped reader and rechecks profile/project/attempt ownership before IO. It never reads prompt bodies from the observer.
+
+Collapsed projects expose an independent unread-reply count, including ended history receipts. Error and permission causes retain priority. Selecting a project or hiding a row does not acknowledge receipts; actual focused/visible active-owner acknowledgment remains authoritative.
+
+Project tree and project-page menus offer Close project sessions through the shared project confirmation dialog. Confirmation freezes current open/preparation session identities and exact close owners. Execution serializes canonical closes, stops dispatch after cancellation or registration replacement, excludes later-created sessions, and continues other original targets after individual failure. Partial completion is explicit; no archive, global PTY kill or cross-project operation is performed.

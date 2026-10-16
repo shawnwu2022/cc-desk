@@ -9,6 +9,11 @@ function payload(detail: HookEventDetail): HookEventPayload {
     timestamp: 999999, runId: 'owned-run', generation: 2, eventId: 'receipt-1', observerSource: 'claude-hook', detail }
 }
 describe('Authenticated Native event receipt, separate from current activity', () => {
+  it('Notice_FixedFailureAndPermissionReasonsOnly_007', () => {
+    expect(fromNativeObservationNotice(payload({type:'stopFailure',data:{error:'rate_limit'}}),1234)).toMatchObject({kind:'reply-failed',reasonCode:'rate_limit'})
+    expect(fromNativeObservationNotice(payload({type:'notification',data:{notificationType:'worker_permission_prompt',message:'PRIVATE'}}),1234)).toMatchObject({kind:'permission-requested',reasonCode:'worker_permission_prompt'})
+    expect(fromNativeObservationNotice(payload({type:'stopFailure',data:{error:'PRIVATE'}}),1234)?.reasonCode).toBeUndefined()
+  })
   it.each([
     ['userPromptSubmit', 'prompt-submitted'], ['preToolUse', 'tool-started'], ['postToolUse', 'tool-ended'],
     ['postToolUseFailure', 'tool-failed'], ['stop', 'reply-ended'], ['stopFailure', 'reply-failed'],
