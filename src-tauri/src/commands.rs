@@ -33,11 +33,14 @@ pub struct PtySpawnOptions {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PtySpawnResult {
     id: String,
     #[serde(rename = "type")]
     pty_type: String,
     cwd: String,
+    /// 本次启动冻结的根身份证明；前端据此决定该终端能否作为默认根历史的同源孪生。
+    uses_default_claude_root: bool,
 }
 
 /// 启动 PTY。ID 由前端预分配，使事件路由在子进程启动前就绪。
@@ -71,6 +74,7 @@ pub async fn pty_spawn(
                 id: info.id,
                 pty_type: info.pty_type,
                 cwd: info.cwd,
+                uses_default_claude_root: info.uses_default_claude_root,
             })
         })
         .map_err(|error| error.to_string())
@@ -533,6 +537,25 @@ pub(crate) async fn native_list_resources(
     crate::cli::native_projection::diagnostics::ProjectionFailure,
 > {
     runtime.projection_read(&webview, &request).await
+}
+
+/// legacy Claude 折叠证明：固定历史根 `~/.claude` 的 native 目录身份 key
+/// （与 SourceRef.sourceRootKey 同源同格式）。调用方每次使用前重查目录身份，
+/// 替换或验证失败时撤销旧 lease。终端环境/shell 证明另随每次 PTY 启动冻结，
+/// 不用当前配置重判已启动终端。
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LegacyClaudeRootProof {
+    pub root_key: String,
+}
+
+#[tauri::command]
+pub async fn legacy_claude_root_key() -> Result<LegacyClaudeRootProof, String> {
+    let dir = crate::store::get_claude_dir().map_err(|e| e.to_string())?;
+    let root_key = crate::cli::native_projection::scoped_fs::Root::open(&dir)
+        .map(|root| root.key().to_owned())
+        .map_err(|e| e.to_string())?;
+    Ok(LegacyClaudeRootProof { root_key })
 }
 
 /// 恢复 CLI 自身归档的会话（当前仅 codex 有该子命令）。归档状态归 CLI 所有，

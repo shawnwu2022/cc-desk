@@ -1,6 +1,6 @@
 import { computed, shallowRef, nextTick, onMounted, onUnmounted, ref, watch, type Ref } from 'vue'
 import { writeText } from '@tauri-apps/plugin-clipboard-manager'
-import { openInFileManager, nativeUnarchiveSession } from '@/api/tauri'
+import { openInFileManager, nativeUnarchiveSession, legacyClaudeRootKey } from '@/api/tauri'
 import { createNativeId } from '@/utils/nativeId'
 import { useAppStore } from '@/stores/app'
 import { useSessionStore } from '@/stores/session'
@@ -40,6 +40,30 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   const attention = useAttentionStore()
   const shell = useShellStore()
   const legacyPaths = ref<string[]>([])
+  /** 根证明只绑定本 runtime 初始目录；替换或验证失败即撤销，不能重绑旧终端和缓存。 */
+  let legacyClaudeRoot: string | undefined
+  let legacyRootRetired = false
+  let legacyRootValidation: Promise<string | undefined> | undefined
+  function validateLegacyClaudeRoot(): Promise<string | undefined> {
+    const expected = legacyClaudeRoot
+    if (!expected || legacyRootRetired || disposed) return Promise.resolve(undefined)
+    if (legacyRootValidation) return legacyRootValidation
+    const validation = legacyClaudeRootKey().then(proof => {
+      if (disposed || legacyRootRetired) return undefined
+      if (proof?.rootKey === expected) return expected
+      legacyRootRetired = true
+      legacyClaudeRoot = undefined
+      return undefined
+    }).catch(() => {
+      legacyRootRetired = true
+      legacyClaudeRoot = undefined
+      return undefined
+    }).finally(() => {
+      if (legacyRootValidation === validation) legacyRootValidation = undefined
+    })
+    legacyRootValidation = validation
+    return validation
+  }
   const error = ref<string | null>(null)
   const sourceWarnings = ref<WorkspaceSourceWarning[]>([])
   const sourceWarningsTruncated = ref(false)
@@ -64,7 +88,11 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   const relevantHistoryEntries = computed(() => history.all().filter(entry => profiles.profile(entry.context.profileId)?.revision === entry.context.profileRevision
     && workspace.projects.some(project => project.projectId === entry.context.projectId && sameProjectPath(project.selectedPath, entry.context.projectPath))))
   const currentHistoryEntries = computed(() => relevantHistoryEntries.value.filter(entry => entry.loaded && !entry.error))
-  const historyMetadataPartial = computed(() => currentHistoryEntries.value.some(entry => entry.metadataIncomplete))
+  // 横幅只对「确有省略」的来源亮起：读失败/整条省略才会让列表可能不完整。
+  // 有界观察（Claude 头窗口按设计在 cwd+标题处停）本身不是列表缺陷，把每个
+  // 正常扫描都标成“可能不完整”会让横幅变成常驻噪音（实测 48/50 行如此）。
+  // metadataIncomplete 仍继续承担缺席证据抑制，二者语义在此分叉。
+  const historyMetadataPartial = computed(() => currentHistoryEntries.value.some(entry => (entry.readFailures?.length ?? 0) > 0))
   const historyReadWarnings = computed(() => {
     const warnings = createWorkspaceSourceWarnings()
     for (const entry of currentHistoryEntries.value) for (const code of entry.readFailures ?? []) {
@@ -74,7 +102,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   })
   // Fixed diagnostics + canonical context/root identity, never raw transcript data.
   // Project navigation does not reset this workspace-owned acknowledgement.
-  const historyNoticeKeys = computed(() => currentHistoryEntries.value.filter(entry => entry.metadataIncomplete).map(entry =>
+  const historyNoticeKeys = computed(() => currentHistoryEntries.value.filter(entry => (entry.readFailures?.length ?? 0) > 0).map(entry =>
     JSON.stringify([entry.key, entry.sourceRootKey ?? null, [...(entry.readFailures ?? [])].sort()])))
   const historyNoticeDismissed = computed(() => historyNoticeKeys.value.length > 0
     && historyNoticeKeys.value.every(key => acknowledgedHistoryWarnings.value.has(key)))
@@ -220,6 +248,17 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   if (enabled) {
     // Subscribe attention before child TerminalView status consumers mount.
     attention.init()
+    // 折叠 legacy/native 重复历史行的前提是根身份已证明：后端给出 legacy 固定根
+    // （~/.claude）的 native key；终端自身另持有本次启动的环境/shell 证明。取不到时
+    // 保持未知，store 端不折叠（v0.20.1 的 fail-closed 立场）。该 IPC 晚于首次
+    // 历史加载完成时，仅更新非响应式状态不会改动已投影的行，必须重投影一次。
+    void legacyClaudeRootKey().then(proof => {
+      if (disposed || !proof?.rootKey) return
+      legacyClaudeRoot = proof.rootKey
+      catalog.configureAdapters(sessionAdapters, { legacyClaudeRootKey: legacyClaudeRoot, validateLegacyClaudeRoot })
+      // 该 IPC 晚于首次历史加载完成时，仅更新非响应式状态不会改动已投影的行。
+      void refreshCatalog().catch(() => undefined)
+    }).catch(() => undefined)
     catalog.configureUnknownRestartRecovery(async (id, canContinue) => {
       const row = catalog.sessions.find(row => row.id === id)
       if (row?.runtime !== 'native-cli') throw new Error('LAUNCH_STATE_UNKNOWN')
@@ -265,7 +304,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
       }))
       return partial
     })
-    catalog.configureAdapters([
+    const sessionAdapters = [
       createLegacyClaudeAdapter({ store: legacy, metadata: projects, attention, captureProjectAdmission: app.captureProjectAdmission, projectPaths: () => [...new Set([...legacyPaths.value, ...projects.pinnedProjects])],
         runtime: {
           startTab: id => {
@@ -275,7 +314,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
           }, stopTab: id => requireHost().stopLegacy(id),
           restartTab: id => requireHost().restartLegacy(id), renameTab: (id, title, admission) => requireHost().renameLegacy(id, title, admission),
         } }),
-      createNativeCliAdapter({ tabs: native, history, metadata: projects, archive: { getArchivedSessions: legacy.getArchivedSessions, archiveSession: projects.archiveSession, restoreSession: projects.restoreSession },
+      createNativeCliAdapter({ tabs: native, history, metadata: projects, legacyClaudeRootKey: validateLegacyClaudeRoot, archive: { getArchivedSessions: legacy.getArchivedSessions, archiveSession: projects.archiveSession, restoreSession: projects.restoreSession },
         cliUnarchive: { unarchive: (context, nativeSessionId) => {
           if (app.isProjectAdmissionBlocked(context.projectPath)) throw new Error('PROJECT_REMOVAL_IN_PROGRESS')
           // 只有 codex 有 CLI 侧归档；claude 行不进入此路径。
@@ -286,7 +325,8 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
         runtime: { createTab: createNativeTab, restartTab: restartNative,
           stopTab: tab => requireHost().stopNative(tab.tabId, captureNativeAttempt(tab)),
           renameTab: (tabId, title, admission) => requireHost().renameNative(tabId, title, admission) } }),
-    ])
+    ]
+    catalog.configureAdapters(sessionAdapters, { legacyClaudeRootKey: legacyClaudeRoot, validateLegacyClaudeRoot })
   }
 
   async function refresh() {

@@ -112,6 +112,8 @@ function projectActiveTab(tab: TerminalTab, attention?: LegacyClaudeAdapterDeps[
     resumable: Boolean(tab.sessionId),
     adapterSessionId: tab.tabId,
     nativeSessionId: tab.sessionId,
+    // 本次 PTY 启动冻结的根证明（后端在 spawn 时判定）。未知视为不可证明。
+    ...(tab.usesDefaultClaudeRoot === true ? { usesDefaultClaudeRoot: true as const } : {}),
     launchConfigId: null,
     safeErrorCode: null,
     renameState: 'idle',

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
+import { watch } from 'vue'
 import { useSessionStore, filterDeletable, groupByProject } from '@/stores/session'
 import { useAttentionStore } from '@/stores/attention'
 
@@ -322,6 +323,46 @@ describe('session store', () => {
       const tab = store.tabs.get(tabId)!
       expect(tab.status).toBe('stopped') // 状态稳定，未被重复 exit 破坏
       expect(tab.ptyId).toBeNull()
+    })
+  })
+
+  // ==================== PTY 根证明 ====================
+
+  describe('PTY root proof', () => {
+    it('SetTabPty_ClearsRootProofBeforeGenerationChanges_001', () => {
+      const store = useSessionStore()
+      const tabId = store.createTab('/project')
+      store.setTabPty(tabId, 'pty-old')
+      store.setTabRootProof(tabId, 'pty-old', true)
+
+      const observed: Array<[string | null, number | undefined, boolean | undefined]> = []
+      const stop = watch(
+        () => {
+          const tab = store.tabs.get(tabId)!
+          return [tab.ptyId, tab.ptyGeneration, tab.usesDefaultClaudeRoot] as const
+        },
+        value => observed.push([...value]),
+        { flush: 'sync' },
+      )
+
+      store.setTabPty(tabId, 'pty-new')
+      stop()
+
+      expect(observed).not.toContainEqual(['pty-old', 2, true])
+      expect(observed).not.toContainEqual(['pty-new', 2, true])
+      expect(observed[observed.length - 1]).toEqual(['pty-new', 2, undefined])
+    })
+
+    it('SetTabPty_RejectsPreviousPtyRootProof_002', () => {
+      const store = useSessionStore()
+      const tabId = store.createTab('/project')
+      store.setTabPty(tabId, 'pty-old')
+      store.setTabRootProof(tabId, 'pty-old', true)
+
+      store.setTabPty(tabId, 'pty-new')
+      store.setTabRootProof(tabId, 'pty-old', true)
+
+      expect(store.tabs.get(tabId)?.usesDefaultClaudeRoot).toBeUndefined()
     })
   })
 

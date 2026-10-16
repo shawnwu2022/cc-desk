@@ -124,6 +124,7 @@ fn HistoryRuntime_LegacyWorker_99() {
             command,
             "maintenance fixture",
             None,
+            true,
         );
         FAIL_THREAD.with(|fault| fault.set(None));
         assert!(result.is_err());
@@ -150,6 +151,7 @@ fn HistoryRuntime_LegacyWorker_99() {
             command,
             "maintenance fixture",
             None,
+            true,
         );
         FAIL_IO.with(|fault| fault.set(None));
         assert!(result.is_err());
@@ -176,6 +178,7 @@ fn HistoryRuntime_LegacyWorker_99() {
             command,
             "single close fixture",
             None,
+            true,
         )
         .unwrap();
     // A real live child remains registered when either read cleanup cannot stop
@@ -218,6 +221,7 @@ fn HistoryRuntime_LegacyWorker_99() {
             command,
             "reused ID fixture",
             None,
+            true,
         )
         .unwrap();
     let replacement = manager.instances.lock().get(&id).unwrap().killer.clone();
@@ -265,6 +269,7 @@ fn HistoryRuntime_LegacyWorker_99() {
             command,
             "maintenance fixture",
             None,
+            true,
         )
         .unwrap();
     HOLD_WAITER.with(|held| held.borrow_mut().take());

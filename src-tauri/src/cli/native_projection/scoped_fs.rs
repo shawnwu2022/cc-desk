@@ -5,6 +5,10 @@ use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
 
+#[path = "compressed.rs"]
+mod compressed;
+use compressed::{is_zstd_history, Mode};
+
 pub(crate) type ReadResult<T> = Result<T, &'static str>;
 type HistoryObserver<'a> = dyn FnMut(&[u8]) -> ReadResult<bool> + 'a;
 pub(crate) type TitleTail = (Vec<u8>, Vec<u8>, bool);
@@ -70,9 +74,6 @@ impl Budget {
     }
     pub(crate) fn history_metadata_incomplete(&self) -> bool {
         self.history_metadata_incomplete
-    }
-    pub(crate) fn unobserved_history_association(&mut self) {
-        self.history_metadata_incomplete = true;
     }
     /// 缓存命中不打开文件；行内恢复的「观察不完整」事实由此回到来源级标记。
     pub(crate) fn retain_history_metadata_incomplete(&mut self) {
@@ -199,6 +200,11 @@ impl Root {
         Ok(())
     }
     pub(crate) fn read(&self, path: &Path, budget: &mut Budget) -> ReadResult<Option<Vec<u8>>> {
+        if is_zstd_history(path) {
+            return Ok(self
+                .read_zstd(path, budget, Mode::Full, None)?
+                .map(|(bytes, _)| bytes));
+        }
         Ok(self
             .read_bounded(path, budget, false, 64 * 1024, None)?
             .map(|(bytes, _)| bytes))
@@ -216,6 +222,9 @@ impl Root {
         path: &Path,
         budget: &mut Budget,
     ) -> ReadResult<Option<(Vec<u8>, bool)>> {
+        if is_zstd_history(path) {
+            return self.read_zstd(path, budget, Mode::Prefix { window: usize::MAX }, None);
+        }
         // Codex stores identity/cwd in its first complete session_meta record.
         // Sample a bounded title only when it is in the same observed chunks.
         self.read_bounded(path, budget, true, 4 * 1024, None)
@@ -231,6 +240,36 @@ impl Root {
         budget: &mut Budget,
         observe: &mut HistoryObserver<'_>,
     ) -> ReadResult<Option<CodexHead>> {
+        if is_zstd_history(path) {
+            return self
+                .read_zstd(
+                    path,
+                    budget,
+                    Mode::Prefix {
+                        window: CODEX_HEAD_WINDOW,
+                    },
+                    Some(observe),
+                )
+                .map(|result| {
+                    result.map(|(mut head, mut incomplete)| {
+                        // 压缩流没有可随机定位的尾窗；时间只能取自已观察的完整记录。
+                        if let Some(end) = head.iter().rposition(|byte| *byte == b'\n') {
+                            incomplete |= end + 1 < head.len();
+                            head.truncate(end + 1);
+                        }
+                        budget.history_metadata_incomplete |= incomplete;
+                        let mut start = head.len().saturating_sub(4096);
+                        if start > 0 {
+                            start += head[start..]
+                                .iter()
+                                .position(|byte| *byte == b'\n')
+                                .map_or(head.len() - start, |offset| offset + 1);
+                        }
+                        let tail = head[start..].to_vec();
+                        (head, tail, incomplete)
+                    })
+                });
+        }
         relative(path, false)?;
         budget.entry()?;
         budget.checkpoint()?;
@@ -365,6 +404,14 @@ impl Root {
         budget: &mut Budget,
         observe: &mut HistoryObserver<'_>,
     ) -> ReadResult<Option<(Vec<u8>, bool)>> {
+        if is_zstd_history(path) {
+            return self.read_zstd(
+                path,
+                budget,
+                Mode::Prefix { window: usize::MAX },
+                Some(observe),
+            );
+        }
         // The observer sees charged bytes from one held file. It may ask for
         // another chunk but cannot expand the original file/aggregate caps.
         self.read_bounded(path, budget, true, 4 * 1024, Some(observe))

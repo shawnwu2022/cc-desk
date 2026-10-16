@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [0.20.2] - 2026-10-16
+
+- Read Codex `.jsonl.zst` history through bounded streaming decompression so compressed, unarchived sessions appear again; preserve archive containers, exact source/project identity, thread deduplication and corrupt-entry diagnostics
+- Keep folded Native display names bound to the adapter's exact history or tab identity; saved names from another root, profile, revision or registered project cannot replace them through a matching UUID
+- Fold duplicate Claude history rows again, but only when the backend proves the native source root is the legacy fixed root (`~/.claude`); hiding the closed native twin of an open legacy terminal requires the same proof plus that terminal's own frozen launch evidence, derived from the same environment snapshot written into the command (a `CLAUDE_CONFIG_DIR` override at spawn time, or a `BASH_ENV` startup script that could set one, disables it; a later config change does not retroactively apply to a running terminal). Unknown or different roots keep both projections with their own archive/restore owners
+- Carry a folded-away legacy row's own evidence onto the surviving native row: Desk archive entries (legacy stores the bare session id, which the native adapter now recognizes under the same root proof) and the explicitly saved Desk name/opened time (a running native terminal's own saved name, which lives under its history key, still wins). An open terminal keeps its non-archived projection, and resolving a restore settles every origin-ambiguity check before the first write so an ambiguous restore leaves archive metadata untouched
+- Reproject the session catalog when the legacy root proof arrives after the first history load, so duplicate rows do not persist until an unrelated refresh
+- Show the "history may be incomplete" notice only when entries were actually omitted (read failures), not for every normally bounded Claude observation; entries skipped because no project association could be observed now count as omissions instead of only raising the completeness flag
+- Expose the legacy Claude root identity to the frontend via a new read-only command used for the folding proof
+- Revalidate the initial physical Legacy root for every projection and bare-ID restore, retire its folding lease after replacement or failed validation, preserve Legacy archive restore owners when Native origins are ambiguous, and revoke prior launch proof before publishing a new PTY generation. Interactive Bash, PowerShell profiles and configured Windows `USERPROFILE` overrides keep their actual root unknown
+
+Windows source-build acceptance confirmed 13 Codex history rows across five projects in the real WebView2 session tree and verified search filtering. Archive drawer interaction, real CLI resume, cross-platform manual acceptance and D20 certification remain unverified; required main CI, authenticated coverage and three-platform signatures remain separate release gates.
+
 ## [0.20.1] - 2026-10-15
 
 - Preserve XML-leading user prompts as Claude history titles, retain early tab display names when authenticated history identity arrives, and keep newer known display timestamps across partial reads of the same exact source

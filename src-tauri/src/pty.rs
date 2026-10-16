@@ -89,11 +89,15 @@ pub(crate) fn is_pty_stream_end(error: &io::Error) -> bool {
 
 /// PTY 实例信息
 #[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PtyInfo {
     pub id: String,
     #[serde(rename = "type")]
     pub pty_type: String,
     pub cwd: String,
+    /// 本次启动冻结的根身份证明：配置未重定向子进程 home/Claude 根，且所选
+    /// shell 启动路径不会再执行可改写该变量的用户启动脚本。
+    pub uses_default_claude_root: bool,
 }
 
 /// PTY 输出事件 payload
@@ -421,8 +425,27 @@ impl PtyManager {
         crate::platform::find_executable("claude")
     }
 
-    fn apply_common_environment(cmd: &mut CommandBuilder, truecolor: bool) {
-        for (key, value) in env::vars() {
+    /// 写入有效环境，并返回**同一份快照**推导出的环境前置证明：继承进程环境和
+    /// 配置 env 均未把 Claude 根重定向。最终根证明还必须核对所选 shell 是否会执行
+    /// 当前进程无法检查的用户启动脚本。
+    ///
+    /// 出现 `BASH_ENV` 时返回 false（根未知）：Windows 的 Git Bash 启动路径使用
+    /// `bash -c`，会执行该脚本，脚本可以自行设置 `CLAUDE_CONFIG_DIR`；父进程环境里
+    /// 看不到这个改写，因此不能声称本次终端跑在默认根上。这与
+    /// `version_history/windows/scope.rs` 把 `BASH_ENV` 视为根未知的既有判定一致。
+    fn apply_common_environment(cmd: &mut CommandBuilder, truecolor: bool) -> bool {
+        let mut inherited_redirect = false;
+        let mut bash_env = false;
+        for (key, value) in env::vars_os() {
+            if key
+                .to_string_lossy()
+                .eq_ignore_ascii_case("CLAUDE_CONFIG_DIR")
+            {
+                inherited_redirect = true;
+            }
+            if key.to_string_lossy().eq_ignore_ascii_case("BASH_ENV") && !value.is_empty() {
+                bash_env = true;
+            }
             cmd.env(key, value);
         }
 
@@ -431,11 +454,10 @@ impl PtyManager {
             cmd.env("COLORTERM", "truecolor");
         }
 
+        let mut configured_root_proof = true;
         if let Ok(config) = crate::store::get_app_config() {
             if let Some(env_vars) = config.claude_env_vars {
-                for (key, value) in &env_vars {
-                    cmd.env(key, value);
-                }
+                configured_root_proof = apply_configured_claude_environment(cmd, &env_vars);
             }
         }
         // Strip only this application's capability namespace, never provider
@@ -443,6 +465,7 @@ impl PtyManager {
         for name in crate::cli::environment::OBSERVER_ENV_NAMES {
             cmd.env_remove(name);
         }
+        !inherited_redirect && !bash_env && configured_root_proof
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -457,6 +480,7 @@ impl PtyManager {
         cmd: CommandBuilder,
         description: &str,
         observer: Option<crate::observer_registry::ObserverLease>,
+        uses_default_claude_root: bool,
     ) -> Result<PtyInfo> {
         let pty_system = native_pty_system();
         let PtyPair { master, slave } = pty_system
@@ -519,6 +543,7 @@ impl PtyManager {
             id,
             pty_type: pty_type.to_string(),
             cwd: cwd.to_string(),
+            uses_default_claude_root,
         })
     }
 
@@ -605,7 +630,9 @@ impl PtyManager {
             cmd.arg(arg);
         }
         cmd.cwd(cwd);
-        Self::apply_common_environment(&mut cmd, true);
+        let environment_proves_default_root = Self::apply_common_environment(&mut cmd, true);
+        let uses_default_claude_root =
+            legacy_claude_root_is_proven(environment_proves_default_root, git_bash.as_deref());
 
         if let Some(observer) = &prepared {
             for (name, value) in &observer.environment.values {
@@ -629,6 +656,7 @@ impl PtyManager {
             cmd,
             "Claude shell command",
             prepared.map(|prepared| prepared.lease),
+            uses_default_claude_root,
         )
     }
 
@@ -663,7 +691,7 @@ impl PtyManager {
             cmd.arg(*arg);
         }
         cmd.cwd(cwd);
-        Self::apply_common_environment(&mut cmd, false);
+        let _ = Self::apply_common_environment(&mut cmd, false);
 
         self.spawn_command(
             admission,
@@ -675,6 +703,7 @@ impl PtyManager {
             cmd,
             &format!("shell '{program}'"),
             None,
+            true,
         )
     }
 
@@ -966,6 +995,42 @@ fn prepare_legacy_claude_args(
         prepared.extend_from_slice(args);
     }
     Ok((!prepared.is_empty()).then_some(prepared))
+}
+
+fn apply_configured_claude_environment(
+    cmd: &mut CommandBuilder,
+    env_vars: &HashMap<String, String>,
+) -> bool {
+    let mut root_proof = true;
+    for (key, value) in env_vars {
+        if key.eq_ignore_ascii_case("CLAUDE_CONFIG_DIR")
+            || (cfg!(target_os = "windows") && key.eq_ignore_ascii_case("USERPROFILE"))
+            || (key.eq_ignore_ascii_case("BASH_ENV") && !value.is_empty())
+        {
+            root_proof = false;
+        }
+        cmd.env(key, value);
+    }
+    root_proof
+}
+
+/// 环境快照只有在 shell 不会继续加载用户启动脚本时，才能升级为默认根证明。
+/// Windows Git Bash 的非交互 `-c` 启动脚本入口由环境检查中的 `BASH_ENV` 覆盖；
+/// PowerShell fallback 会读取 profile，Unix 的 `bash -i -c` 会读取 `.bashrc`。
+fn legacy_claude_root_is_proven(
+    environment_proves_default_root: bool,
+    git_bash_path: Option<&str>,
+) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        environment_proves_default_root && git_bash_path.is_some()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = environment_proves_default_root;
+        let _ = git_bash_path;
+        false
+    }
 }
 
 /// 组装交给 shell 执行的 Claude 命令：可执行路径与每个参数逐一引用为

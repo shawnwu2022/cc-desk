@@ -22,6 +22,7 @@ export function withSessionDisplayName(row: UnifiedSession, metadata: SessionMet
   // Last-known display metadata is not a fresh CLI observation or admission proof.
   const savedActivity = Number.isFinite(saved.lastActivityAt) && saved.lastActivityAt >= 0 ? saved.lastActivityAt : 0
   return { ...row, title: saved.title || row.title,
+    ...(saved.title ? { savedDisplayName: saved.title } : {}),
     lastActivityAt: Math.max(row.lastActivityAt, savedActivity),
     lastOpenedAt: Math.max(row.lastOpenedAt ?? 0, saved.lastOpenedAt ?? 0) }
 }

@@ -24,8 +24,8 @@ import { useProjectManagementStore } from '@/stores/projectManagement'
 import { useShellStore } from '@/stores/shell'
 import { useAttentionStore } from '@/stores/attention'
 
-const io = vi.hoisted(() => ({ projects: vi.fn(), sessions: vi.fn(), profiles: vi.fn(), registered: vi.fn(), register: vi.fn(), patchProfile: vi.fn(), getState: vi.fn(), upsertRecord: vi.fn(), setPreference: vi.fn(), scope: vi.fn(), read: vi.fn(), writeText: vi.fn(), archive: vi.fn(), restore: vi.fn(), open: vi.fn(), remove: vi.fn(), runChecks: vi.fn(), ptySpawn: vi.fn(), ptyInput: vi.fn(), ptyKill: vi.fn() }))
-vi.mock('@/api/tauri', async original => ({ ...await original<object>(), runChecks: io.runChecks, ptySpawn: io.ptySpawn, ptyInput: io.ptyInput, ptyKill: io.ptyKill, getProjectsState: io.getState, upsertSessionUiRecord: io.upsertRecord, setProjectLaunchPreference: io.setPreference, updateAppConfig: vi.fn().mockResolvedValue(undefined), getAppConfig: vi.fn().mockResolvedValue({ theme: 'light', terminalTheme: 'cc-box-light', language: 'en' }), archiveSession: io.archive, restoreSession: io.restore, getProjects: io.projects, getSessions: io.sessions, openInFileManager: io.open, createNativeProjectionClient: () => ({ scope: io.scope, read: io.read }), onHookEvent: async () => () => {} }))
+const io = vi.hoisted(() => ({ projects: vi.fn(), sessions: vi.fn(), profiles: vi.fn(), registered: vi.fn(), register: vi.fn(), patchProfile: vi.fn(), getState: vi.fn(), upsertRecord: vi.fn(), setPreference: vi.fn(), scope: vi.fn(), read: vi.fn(), writeText: vi.fn(), archive: vi.fn(), restore: vi.fn(), open: vi.fn(), remove: vi.fn(), runChecks: vi.fn(), ptySpawn: vi.fn(), ptyInput: vi.fn(), ptyKill: vi.fn(), legacyRoot: vi.fn() }))
+vi.mock('@/api/tauri', async original => ({ ...await original<object>(), runChecks: io.runChecks, ptySpawn: io.ptySpawn, ptyInput: io.ptyInput, ptyKill: io.ptyKill, getProjectsState: io.getState, upsertSessionUiRecord: io.upsertRecord, setProjectLaunchPreference: io.setPreference, updateAppConfig: vi.fn().mockResolvedValue(undefined), getAppConfig: vi.fn().mockResolvedValue({ theme: 'light', terminalTheme: 'cc-box-light', language: 'en' }), archiveSession: io.archive, restoreSession: io.restore, getProjects: io.projects, getSessions: io.sessions, openInFileManager: io.open, createNativeProjectionClient: () => ({ scope: io.scope, read: io.read }), legacyClaudeRootKey: io.legacyRoot, onHookEvent: async () => () => {} }))
 vi.mock('@/api/cli', () => ({ cliListProfiles: io.profiles, cliPatchProfile: io.patchProfile }))
 vi.mock('@/api/cliAvailability', () => ({ cliGetAvailability: async (profileId: string, profileRevision: string) => {
   const profile = useCliProfilesStore().profile(profileId)!
@@ -50,6 +50,7 @@ beforeEach(() => {
   io.profiles.mockResolvedValue({ revision: '7', profiles: [{ id: 'cx', revision: '7', cli: 'codex', name: 'CX', launcher: { kind: 'native' }, programPath: { mode: 'set', value: '/tools/codex' }, defaultArgs: { mode: 'inherit' }, skipPermissions: { mode: 'inherit' }, observer: { mode: 'inherit' }, env: {} }] })
   io.registered.mockResolvedValue({ revision: '1', projects: [{ projectId: 'project', hostId: 'host', sourcePathKey: 'source', selectedPath: '/repo', canonicalPath: '/repo', alias: { mode: 'inherit' }, pinned: { mode: 'inherit' }, hidden: { mode: 'inherit' } }] })
   io.register.mockImplementation(async path => ({ revision: '2', projectId: 'registered-new', projects: [{ projectId: 'registered-new', hostId: 'host', sourcePathKey: 'source-new', selectedPath: path, canonicalPath: path, alias: { mode: 'inherit' }, pinned: { mode: 'inherit' }, hidden: { mode: 'inherit' } }] }))
+  io.legacyRoot.mockResolvedValue({ rootKey: '', tabsUseDefaultRoot: false })
   io.scope.mockResolvedValue({ cli: 'codex' }); io.read.mockReset().mockResolvedValue({ state: 'ready', items: [{ type: 'session', projectId: 'project', sessionKey: 'root-key', nativeSessionId: 'history-id', title: 'History', cwd: '/repo' }] })
 })
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.useRealTimers(); vi.unstubAllGlobals() })
@@ -310,7 +311,7 @@ describe('Workspace source warning diagnostics', () => {
     const known = Date.parse(item.updatedAt)
     expect(useUnifiedSessionsStore().sessions[0].lastActivityAt).toBe(known)
     const { updatedAt: _updated, ...summary } = item
-    io.read.mockResolvedValue({ state: 'ready', items: [{ ...summary, truncated: true }], hasMore: false, historyMetadataIncomplete: true })
+    io.read.mockResolvedValue({ state: 'ready', items: [{ ...summary, truncated: true }], hasMore: false, historyMetadataIncomplete: true, historyReadFailures: ['SOURCE_TOO_LARGE'] })
     await runtime.refresh()
     expect(useNativeHistoryStore().all()[0].sessions[0].updatedAt).toBeUndefined()
     expect(useNativeHistoryStore().all()[0].absenceEvidence).toBeUndefined()
@@ -451,10 +452,64 @@ describe('Workspace source warning diagnostics', () => {
     expect(useUnifiedSessionsStore().sessions.some(row => row.nativeSessionId === 'late-history')).toBe(false)
   })
 
+  it('reprojects the catalog when the legacy root proof arrives late', async () => {
+    // 根证明 IPC 晚于首次历史加载完成时，仅更新非响应式状态不会改动已投影的行；
+    // 必须在证明到达后重投影，否则重复行会一直保留到下一次无关刷新。
+    let resolveProof: ((value: unknown) => void) | undefined
+    io.legacyRoot.mockImplementation(() => new Promise(resolve => { resolveProof = resolve }))
+    const { runtime } = render(); await flushPromises()
+    const catalog = useUnifiedSessionsStore()
+    const refresh = vi.spyOn(catalog, 'refresh')
+    expect(resolveProof).toBeTypeOf('function')
+    expect(refresh).not.toHaveBeenCalled()
+    resolveProof!({ rootKey: 'admitted-root-key', tabsUseDefaultRoot: true })
+    await flushPromises(); await flushPromises()
+    expect(runtime.error.value).toBeNull()
+    expect(refresh).toHaveBeenCalled()
+  })
+
+  // 根替换或验证失败后，本 runtime 不能把旧终端/缓存的证明重新绑定到新目录。
+  it.each([{ failure: 'replaced', opened: false }, { failure: 'unavailable', opened: false }, { failure: 'replaced', opened: true }])('Runtime_LegacyRootLeaseRevoked_066: $failure/$opened', async ({ failure, opened }) => {
+    io.projects.mockResolvedValue([{ path: '/repo', name: 'Repo' }])
+    io.sessions.mockResolvedValue([{ sessionId: 'history-id', name: 'Legacy', projectPath: '/repo', lastActiveAt: 10 }])
+    io.profiles.mockResolvedValue({ revision: '7', profiles: [{ id: 'cl', revision: '7', cli: 'claude', name: 'CL', launcher: { kind: 'native' }, programPath: { mode: 'set', value: '/tools/claude' }, defaultArgs: { mode: 'inherit' }, skipPermissions: { mode: 'inherit' }, observer: { mode: 'inherit' }, env: {} }] })
+    io.scope.mockResolvedValue({ cli: 'claude', sourceRootKey: 'root-a' })
+    io.legacyRoot.mockResolvedValue({ rootKey: 'root-a' })
+    useProjectsStateStore().archivedSessions.set('/repo', ['history-id'])
+    const { runtime } = render(); await flushPromises(); await flushPromises()
+    const catalog = useUnifiedSessionsStore()
+    expect(runtime.ready.value).toBe(true)
+    expect(catalog.sessions.filter(row => row.nativeSessionId === 'history-id')).toHaveLength(1)
+    expect(catalog.sessions.find(row => row.nativeSessionId === 'history-id')).toMatchObject({ runtime: 'native-cli', archived: true })
+    if (opened) {
+      const legacy = useSessionStore(), tabId = legacy.createTab('/repo', { sessionId: 'history-id' })
+      legacy.setTabPty(tabId, 'legacy-pty')
+      legacy.setTabRootProof(tabId, 'legacy-pty', true)
+      await catalog.refresh()
+      expect(catalog.sessions.filter(row => row.nativeSessionId === 'history-id')).toHaveLength(1)
+      expect(catalog.sessions.find(row => row.nativeSessionId === 'history-id')).toMatchObject({ runtime: 'legacy-claude', opened: true, archived: false })
+    }
+    if (failure === 'replaced') io.legacyRoot.mockResolvedValue({ rootKey: 'root-b' })
+    else io.legacyRoot.mockRejectedValue(new Error('SOURCE_UNAVAILABLE'))
+    await catalog.refresh()
+    expect(catalog.sessions.filter(row => row.nativeSessionId === 'history-id')).toHaveLength(2)
+    expect(catalog.sessions.find(row => row.runtime === 'legacy-claude')).toMatchObject({ archived: !opened })
+    expect(catalog.sessions.find(row => row.runtime === 'native-cli')).toMatchObject({ archived: false })
+    expect(io.restore).not.toHaveBeenCalled()
+    io.legacyRoot.mockResolvedValue({ rootKey: 'root-a' })
+    await catalog.refresh()
+    expect(catalog.sessions.filter(row => row.nativeSessionId === 'history-id')).toHaveLength(2)
+  })
+
   it('keeps incomplete empty metadata visible without turning positive history into a failed source', async () => {
+    // 仅截断观察（无省略）是 Claude 有界读取的常态：缺席证据仍被抑制，但不再
+    // 常驻横幅；确有省略（读失败）时横幅才亮起并在完整刷新后熄灭。
     io.read.mockResolvedValue({ state: 'ready', reason: null, items: [], hasMore: false, historyMetadataIncomplete: true })
     const { runtime } = render(); await flushPromises()
     expect(runtime.error.value).toBeNull()
+    expect(runtime.historyMetadataPartial.value).toBe(false)
+    io.read.mockResolvedValue({ state: 'ready', reason: null, items: [], hasMore: false, historyMetadataIncomplete: true, historyReadFailures: ['SOURCE_TOO_LARGE'] })
+    await runtime.refresh()
     expect(runtime.historyMetadataPartial.value).toBe(true)
     io.read.mockResolvedValue({ state: 'ready', reason: null, items: [], hasMore: false })
     await runtime.refresh()

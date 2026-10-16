@@ -140,9 +140,10 @@ pub(super) fn read(
                 Some(project) => Some(project.id.to_owned()),
                 None => {
                     if o.kind == ResourceKind::History && transcript.cwd.is_none() {
-                        // Even an EOF-complete metadata file cannot establish project
-                        // absence when no association was observed in its records.
-                        b.unobserved_history_association();
+                        // 无 cwd 观察的行无法证明不属于任何注册项目：按单文件省略
+                        // 披露（与 wrapper-only 同语义），只置 incomplete 不记失败
+                        // 会让「列表可能不完整」横幅对这种真实省略失明。
+                        b.omit_history_entry("SOURCE_UNSUPPORTED");
                     }
                     continue;
                 }
@@ -690,7 +691,8 @@ fn walk(
             // links/invalid paths. Only individual transcript reads are isolatable.
             walk(c, &p, depth - 1, kind, b, files)?;
         } else if entry.is_file
-            && entry.name.ends_with(".jsonl")
+            && (entry.name.ends_with(".jsonl")
+                || (c.cli == CliKind::Codex && entry.name.ends_with(".jsonl.zst")))
             && !entry.name.starts_with("agent-")
         {
             // Documented set-aside transcripts are not shown by Claude's picker.
@@ -1322,3 +1324,7 @@ fn content(v: &Value) -> String {
 #[cfg(test)]
 #[path = "../../tests/native_cli_history_metadata.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../tests/native_cli_history_zstd.rs"]
+mod zstd_tests;

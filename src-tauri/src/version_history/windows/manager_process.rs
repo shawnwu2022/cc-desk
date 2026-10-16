@@ -202,9 +202,9 @@ fn manager_command(image: &OsStr, transaction: &str) -> io::Result<String> {
     let units: Vec<_> = image.encode_wide().collect();
     super::files::validate_absolute(&units)?;
     if path.contains(['"', '\r', '\n'])
-        || !std::path::Path::new(image)
+        || std::path::Path::new(image)
             .file_name()
-            .is_some_and(|name| name == OsStr::new(MANAGER_BASENAME))
+            .is_none_or(|name| name != OsStr::new(MANAGER_BASENAME))
     {
         return Err(blocked("manager executable spelling differs"));
     }

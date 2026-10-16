@@ -17,6 +17,8 @@ import { mapSafeUserError, safeUserErrorCode, type UserErrorPresentation } from 
 import { useNotificationsStore } from '@/stores/notifications'
 import type { ToastInput } from '@/stores/notifications'
 import { makeSessionCatalogKey, makeSessionRenameOwnerKey } from '@/utils/sessionPresentation'
+import { matchesSessionMetadata } from '@/session/sessionMetadata'
+import type { SessionUiRecord } from '@/types/app'
 import { nativeHistoryContextKey } from '@/stores/nativeHistory'
 import { normalizePath } from '@/utils/path'
 import { compareProjectGroups } from '@/utils/projectGroupOrder'
@@ -27,6 +29,32 @@ function projectName(path: string): string {
   const normalized = path.replace(/[\\/]+$/, '')
   const parts = normalized.split(/[\\/]/).filter(Boolean)
   return parts.length ? parts[parts.length - 1] : path
+}
+
+/**
+ * 折叠 legacy 行前，把它独占的、属于同一会话的证据交给接替的 native 行：
+ * 归档状态、显式 Desk 覆盖名与最近打开时间只挂在 legacy 键上（归档存裸 session
+ * ID，显示元数据键是 legacy 历史键）。**已打开的终端必须保持自己的非归档
+ * 投影**：它由运行所有权决定，继承归档会让普通树隐藏该终端，而归档抽屉对活动
+ * ID 调恢复会因不是历史 ID 直接失败。
+ *
+ * native 覆盖名由 adapter 按精确历史/终端身份解析后随行携带；目录层不再按 UUID
+ * 扫描保存记录。没有 native 覆盖名时才读取 legacy 历史键，最后回落 CLI 标题。
+ */
+function adoptLegacyRow(
+  native: UnifiedSession,
+  legacy: UnifiedSession,
+  records: ReadonlyMap<string, SessionUiRecord>,
+): UnifiedSession {
+  const legacySaved = records.get(legacy.id)
+  const saved = matchesSessionMetadata(legacySaved, legacy) ? legacySaved : undefined
+  return {
+    ...native,
+    archived: native.opened === true ? native.archived : native.archived || legacy.archived,
+    title: native.savedDisplayName || saved?.title || native.title,
+    lastActivityAt: Math.max(native.lastActivityAt, legacy.lastActivityAt),
+    lastOpenedAt: Math.max(native.lastOpenedAt ?? 0, legacy.lastOpenedAt ?? 0),
+  }
 }
 
 function mergeDuplicateSession(existing: UnifiedSession | undefined, candidate: UnifiedSession): UnifiedSession {
@@ -357,13 +385,19 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     return [...groups.values()].sort(compareProjectGroups)
   })
 
-  function configureAdapters(next: SessionAdapter[]): void {
+  /** legacy Claude 历史固定读 `~/.claude`；只有它的 native 根身份被证明后，同 ID 的 native 行才可折叠它。 */
+  let legacyClaudeRoot: string | undefined
+  let validateLegacyClaudeRoot: (() => Promise<string | undefined>) | undefined
+
+  function configureAdapters(next: SessionAdapter[], roots?: { legacyClaudeRootKey?: string; validateLegacyClaudeRoot?: () => Promise<string | undefined> }): void {
     const seen = new Set<SessionRuntimeKind>()
     for (const adapter of next) {
       if (seen.has(adapter.runtime)) throw new Error('DUPLICATE_SESSION_ADAPTER')
       seen.add(adapter.runtime)
     }
     adapters = [...next]
+    legacyClaudeRoot = roots?.legacyClaudeRootKey
+    validateLegacyClaudeRoot = roots?.validateLegacyClaudeRoot
   }
 
   function captureSessionOwnership(id: string) {
@@ -406,6 +440,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
 
     try {
       const lists = await Promise.all(adapters.map(adapter => adapter.listSessions(projectKey)))
+      const provenLegacyRoot = validateLegacyClaudeRoot ? await validateLegacyClaudeRoot() : legacyClaudeRoot
       if (fullRefreshVersion > version || (key !== undefined && !ownsProject(key))) return
 
       // Replace only the requested project. A full read also preserves scopes
@@ -425,8 +460,57 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
         if (!cliSupport.isEnabled(session.cli) && session.opened !== true) continue
         byId.set(session.id, mergeDuplicateSession(byId.get(session.id), session))
       }
-      // Legacy 没有可与 Native 比对的已准入根身份；UUID 相等不能转移其归档、
-      // 显示名或恢复 owner。两端继续独立，Native 内部只认领唯一精确来源。
+      // legacy 与 native 历史扫描同一 CLI 默认数据源,同一会话会各投影一行；以
+      // native 行为准（归档/改名/恢复语义更完整），legacy 历史行在存在同一
+      // native 身份（活动的或历史的）时让位。已打开终端永不参与折叠。
+      // 折叠的前提是**根身份已证明**：legacy 读固定 `~/.claude`，native 读
+      // profile 的 CLAUDE_CONFIG_DIR；只有两者的根 key 相同（同一目录的同一
+      // 文件索引）才是同一来源，UUID 相等本身不是证据。根身份未知或不同一律
+      // 不折叠，保留两端各自投影（v0.20.1 的 fail-closed 立场）。
+      const sameLegacyRoot = (row: UnifiedSession) =>
+        provenLegacyRoot !== undefined && row.nativeRootKey === provenLegacyRoot
+      const nativeHistoryKeys = new Map<string, UnifiedSession[]>()
+      for (const row of byId.values()) {
+        if (row.runtime === 'native-cli' && row.nativeSessionId && sameLegacyRoot(row)) {
+          const key = `${row.cli}\u0000${normalizePath(row.projectPath)}\u0000${row.nativeSessionId}`
+          nativeHistoryKeys.set(key, [...(nativeHistoryKeys.get(key) ?? []), row])
+        }
+      }
+      if (nativeHistoryKeys.size) {
+        for (const [id, row] of byId) {
+          if (row.runtime !== 'legacy-claude' || row.opened === true) continue
+          const matches = nativeHistoryKeys.get(`${row.cli}\u0000${normalizePath(row.projectPath)}\u0000${row.adapterSessionId}`)
+          if (matches?.length !== 1 || matches[0].safeErrorCode === 'SESSION_ORIGIN_AMBIGUOUS') continue
+          const native = matches[0]
+          // 折叠前先接管 legacy 行独占的证据：归档保存的是裸 session ID，而
+          // nativeCliAdapter.archiveState 只识别完整 Native key 与旧 Native key，
+          // 直接删除会让已归档会话重新出现在普通列表；已保存的 Desk 显示名与
+          // 最近打开时间同样只挂在 legacy 记录上。
+          byId.set(native.id, adoptLegacyRow(native, row, projects.sessionRecords))
+          byId.delete(id)
+        }
+      }
+      // 反向同理：同一会话已在 legacy 运行时打开时，其 native 历史行是同一
+      // 内容的第二行（标题与时间来源各不相同）。隐藏关闭的 native 行，保留
+      // 可选中、可关闭的打开行；关闭该 tab 后的下一次刷新会让 native 行
+      // （AI 标题与记录时间）回到列表。但打开的 legacy 终端只有在**它自己这次
+      // 启动**确实跑在默认根上时才是「同源孪生」：该证明随每次 PTY 启动冻结
+      // （`usesDefaultClaudeRoot`），运行期改配置不会让旧终端变成另一种根。
+      const openLegacyKeys = new Set<string>()
+      for (const row of byId.values()) {
+        if (row.runtime === 'legacy-claude' && row.opened === true && row.nativeSessionId
+          && row.usesDefaultClaudeRoot === true) {
+          openLegacyKeys.add(`${row.cli}\u0000${normalizePath(row.projectPath)}\u0000${row.nativeSessionId}`)
+        }
+      }
+      if (openLegacyKeys.size) {
+        for (const [id, row] of byId) {
+          if (row.runtime === 'native-cli' && row.opened !== true && sameLegacyRoot(row)
+            && openLegacyKeys.has(`${row.cli}\u0000${normalizePath(row.projectPath)}\u0000${row.nativeSessionId}`)) {
+            byId.delete(id)
+          }
+        }
+      }
       for (const [id, row] of missingRecords) {
         // 缺失记录与普通行同一支持过滤，不能经该路径让停用 CLI 绕过隐藏。
         if (!cliSupport.isEnabled(row.cli) && row.opened !== true) continue

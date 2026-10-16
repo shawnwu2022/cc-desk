@@ -69,6 +69,8 @@ export interface UnifiedSession {
   cli: UnifiedCliKind
   runtime: SessionRuntimeKind
   title: string
+  /** adapter 按精确元数据身份解析的 Desk 覆盖名；仅供显示，不能据此推断其他来源。 */
+  savedDisplayName?: string
   processState: SessionProcessState
   attentionState: SessionAttentionState
   /** Missing/unordered observation means unknown, never idle or completed. */
@@ -91,6 +93,10 @@ export interface UnifiedSession {
   resumable: boolean
   adapterSessionId: string
   nativeSessionId?: string | null
+  /** native 来源根身份（SourceRef.sourceRootKey）；仅 native 行携带。折叠重复历史行前必须与 legacy 固定根比较，相等才证明同源。 */
+  nativeRootKey?: string
+  /** legacy 终端本次启动冻结的根证明：为真才可与默认根同 UUID 历史互为孪生。未知视为不可证明。 */
+  usesDefaultClaudeRoot?: boolean
   launchConfigId?: string | null
   nativeOrigin?: NativeSessionOrigin
   safeErrorCode?: string | null
