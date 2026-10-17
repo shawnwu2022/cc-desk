@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-10-18
+
 ### Changed
 
 - Group mixed-CLI projects under collapsible Claude Code / Codex CLI headers, with per-group status counts and keyboard navigation that skips collapsed rows
@@ -10,6 +12,16 @@
 - Drop ten never-imported frontend dependencies (CodeMirror stack, `vue-codemirror`, `v3-infinite-loading`, `macos-traffic-lights`, `vue-draggable-plus`) and the dead `editor-vendor` chunk rule; DESIGN.md now describes the `<textarea>` the app actually uses for multi-line editing
 - Move blocking store reads (`get_projects`, `get_project_info`, `get_session_count`, `get_session_details`, `search_session_messages`, `get_app_config`, `get_project_config` and the four Agents/Skills/MCP/Plugins resource scans) onto the blocking pool instead of occupying async IPC workers
 - Debounce the native terminal's `ResizeObserver` fit by 80 ms so dragging the window produces one ConPTY resize instead of one per frame; hidden terminals still skip layout work
+- Reuse unchanged session-row projection objects when another row's status changes
+
+### Fixed
+
+- Expand the target CLI group when creating a session through the shortcut so the new row stays visible
+- Forward native Codex Ctrl+V only on Windows when a bounded executable version probe identifies `codex-cli` 0.163.0 or later; retain the existing clipboard fallback for older, unidentified or unavailable executables
+- Preserve one session row when an opened session replaces its history projection
+- Reveal forward-slash project paths correctly in Windows Explorer
+
+The complete Linux Chromium no-update visual gate passed all 237 cases in PR58 run 39053275403. Exact-main CI, authenticated coverage and all three same-run signed updater payloads remain required before publication. Installed WebView2, old Codex 0.162.x paste behavior, unfiltered native All/D20 and native installation/return remain separately unverified.
 
 ## [0.21.0] - 2026-10-16
 
