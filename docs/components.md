@@ -730,8 +730,13 @@ The key is written once per row id and never updated, so output, status, complet
 search, rerender, later activity, opening, closing, background discovery and the
 Refresh sessions button all leave existing row positions unchanged. A newly seen row
 (including a just-closed session's history identity and archive restores) inserts at
-its frozen key. `ProjectNode` clusters the rows of one project by CLI type (Claude then Codex) with no
-rendered heading — the row app-icon already distinguishes the CLI. Project pin/name
+its frozen key. `ProjectNode` clusters the rows of one project by CLI type (Claude then Codex) and renders
+a collapsible, always-visible 28px header per type when a project has more than one type — the header
+carries the CLI name, its row count and, while collapsed, that group's own status badge (never a project
+aggregate). A single-CLI project renders no header and is unchanged. The header is a disclosure control:
+it is not a treeitem, it stays out of the arrow-key row selector, and collapsing uses `v-show`, so rows
+keep their mounted state (an in-progress rename draft survives) and `aria-controls` never dangles.
+Collapse state is in-memory, like `expandedKeys`. Project pin/name
 ordering and archive opening-order grouping are unchanged.
 
 Exact-source pending restores publish `resumePending` only as presentation metadata.
