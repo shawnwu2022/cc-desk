@@ -159,7 +159,7 @@ describe('Unified project session tree', () => {
     expect(order()).toEqual(['c', 'b', 'a', 'd'])
   })
 
-  // 项目内按 CLI 类型聚类排序（claude 在前、codex 在后），不渲染分组标题；组内保持创建序倒序。
+  // 项目内按 CLI 类型聚类排序（claude 在前、codex 在后），组内保持创建序倒序；多 CLI 才渲染组头。
   it('Tree_GroupByCliType_026', async () => {
     const claudeOld = session({ id: 'cc-old', cli: 'claude', runtime: 'legacy-claude', lastOpenedAt: 1, opened: false, processState: 'stopped' })
     const claudeNew = session({ id: 'cc-new', cli: 'claude', runtime: 'legacy-claude', lastOpenedAt: 9, opened: false, processState: 'stopped' })
@@ -167,9 +167,92 @@ describe('Unified project session tree', () => {
     const wrapper = panel({ projectGroups: [group([claudeOld, codexOpen, claudeNew])] })
     await wrapper.get('.project-main').trigger('click')
     expect(wrapper.findAll('[data-cli-group]').map(group => group.attributes('data-cli-group'))).toEqual(['claude', 'codex'])
-    expect(wrapper.find('.cli-group-label').exists()).toBe(false)
+    expect(wrapper.findAll('[data-cli-group-header]').map(header => header.attributes('data-cli-group-header'))).toEqual(['claude', 'codex'])
     const order = () => wrapper.findAll('[data-session-row]').map(row => row.attributes('data-session-row'))
     expect(order()).toEqual(['cc-new', 'cc-old', 'cx-open'])
+    // 单 CLI 项目：组头消失，行仍然渲染，位置不变。
+    await wrapper.setProps({ projectGroups: [group([claudeOld, claudeNew])] })
+    expect(wrapper.findAll('[data-cli-group]')).toHaveLength(1)
+    expect(wrapper.find('[data-cli-group-header]').exists()).toBe(false)
+    expect(order()).toEqual(['cc-new', 'cc-old'])
+  })
+
+  // 组头不参与树导航：DOM 里夹在两行之间的组头不是 ↑↓ 的下一站。
+  it('Tree_CliHeaderSkippedByArrowNavigation_027', async () => {
+    const claude = session({ id: 'cc', cli: 'claude' })
+    const codex = session({ id: 'cx', cli: 'codex', runtime: 'native-cli' })
+    const wrapper = panel({ projectGroups: [group([claude, codex])] })
+    await wrapper.get('.project-main').trigger('click')
+    // 用一次真实 DOM 遍历钉住夹层顺序：项目行 → claude 组头 → cc 行 → codex 组头 → cx 行。
+    // wrapper.element 是 VueNode<Element>（带调用签名的交叉类型），不能直接带泛型调用 querySelectorAll。
+    const nodes = [...wrapper.element.querySelectorAll('.project-row, [data-cli-group-header], [data-session-row]')] as HTMLElement[]
+    expect(nodes.map(node => node.dataset.sessionRow ?? node.dataset.cliGroupHeader ?? `project:${node.dataset.projectKey}`))
+      .toEqual(['project:/work/game', 'claude', 'cc', 'codex', 'cx'])
+    // 焦点从 claude 组的行往下：下一站是下一组的会话行，跳过中间那个 codex 组头。
+    const first = wrapper.get('[data-session-row="cc"]')
+    const next = wrapper.get('[data-session-row="cx"]')
+    ;(first.element as HTMLElement).focus()
+    await first.trigger('keydown', { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(next.element)
+    // 焦点已在组头上时 ↓ 早退（`:164` 的 closest('button')），焦点不被树导航接管。
+    const header = wrapper.get('[data-cli-group-header="codex"]')
+    ;(header.element as HTMLElement).focus()
+    await header.trigger('keydown', { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(header.element)
+  })
+
+  // 折叠状态由面板独占，catalog 重投影不改变它；键与 expandedKeys 同层同语义。
+  // closest 的泛型参数是必须的：element 是 Element，不带泛型拿不到 .style（TS2339）。
+  it('CliGroup_CollapseStateSurvivesRefresh_028', async () => {
+    const claude = session({ id: 'cc', cli: 'claude' })
+    const codex = session({ id: 'cx', cli: 'codex', runtime: 'native-cli' })
+    const wrapper = panel({ projectGroups: [group([claude, codex])] })
+    // element 是 Element，closest 不带泛型也只返回 Element；必须显式指定泛型才能读 .style。
+    const display = (id: string) => wrapper.get(`[data-session-row="${id}"]`).element.closest<HTMLElement>('.session-list')!.style.display
+    await wrapper.get('.project-main').trigger('click')
+    expect(display('cx')).not.toBe('none')
+    await wrapper.get('[data-cli-group-header="codex"]').trigger('click')
+    expect(display('cx')).toBe('none')
+    // 行未卸载：折叠后仍能在 DOM 里找到。
+    expect(wrapper.findAll('[data-session-row]')).toHaveLength(2)
+    await wrapper.setProps({ projectGroups: [group([{ ...claude, lastActivityAt: now }, { ...codex, lastActivityAt: now }])] })
+    expect(display('cx')).toBe('none')
+    await wrapper.get('[data-cli-group-header="codex"]').trigger('click')
+    expect(display('cx')).not.toBe('none')
+  })
+
+  // 搜索期间组头保留但禁用，本组行强制可见；清空搜索后恢复用户折叠状态。
+  // 注意搜索词必须匹配项目名（而非只匹配一个 CLI 组的标题），否则项目只剩一组、
+  // 组头会按设计消失——那是另一条边界，由 Tree_GroupByCliType_026 覆盖。
+  it('CliGroup_SearchForcesExpandAndDisables_029', async () => {
+    const claude = session({ id: 'cc', cli: 'claude', title: 'Claude work' })
+    const codex = session({ id: 'cx', cli: 'codex', runtime: 'native-cli', title: 'Codex work' })
+    const wrapper = panel({ projectGroups: [group([claude, codex])] })
+    await wrapper.get('.project-main').trigger('click')
+    await wrapper.get('[data-cli-group-header="codex"]').trigger('click')
+    expect(wrapper.get('[data-cli-group-header="codex"]').attributes('aria-expanded')).toBe('false')
+    await wrapper.get('.search-input').setValue('game')
+    expect(wrapper.findAll('[data-cli-group-header]')).toHaveLength(2)
+    const header = wrapper.get('[data-cli-group-header="codex"]')
+    expect(header.attributes('aria-expanded')).toBe('true')
+    expect((header.element as HTMLButtonElement).disabled).toBe(true)
+    expect(wrapper.get('[data-session-row="cx"]').element.closest<HTMLElement>('.session-list')!.style.display).not.toBe('none')
+    await wrapper.get('.search-input').setValue('')
+    expect(wrapper.get('[data-cli-group-header="codex"]').attributes('aria-expanded')).toBe('false')
+  })
+
+  // 组内有待提交的改名草稿时强制展开，F2 编辑框不会落在隐藏组里。
+  it('CliGroup_RenameDraftForcesExpand_030', async () => {
+    const claude = session({ id: 'cc', cli: 'claude' })
+    const codex = session({ id: 'cx', cli: 'codex', runtime: 'native-cli' })
+    const wrapper = panel({ projectGroups: [group([claude, codex])] })
+    await wrapper.get('.project-main').trigger('click')
+    await wrapper.get('[data-cli-group-header="codex"]').trigger('click')
+    await wrapper.setProps({ projectGroups: [group([claude, { ...codex, renameState: 'editing' as const }])] })
+    const header = wrapper.get('[data-cli-group-header="codex"]')
+    expect(header.attributes('aria-expanded')).toBe('true')
+    expect((header.element as HTMLButtonElement).disabled).toBe(true)
+    expect(wrapper.get('[data-session-row="cx"]').element.closest<HTMLElement>('.session-list')!.style.display).not.toBe('none')
   })
 
   // 普通项目与仅归档项目统一按名称排序，活动刷新和来源顺序不会移动项目行。

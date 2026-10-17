@@ -4,13 +4,13 @@ import { useI18n } from 'vue-i18n'
 import AppButton from '@/components/ui/AppButton.vue'
 import AppMenu from '@/components/ui/AppMenu.vue'
 import IconButton from '@/components/ui/IconButton.vue'
-import SessionList from './SessionList.vue'
+import SessionCliGroup from './SessionCliGroup.vue'
 import NewSessionMenu from './NewSessionMenu.vue'
 import { useNewSessionDraftStore } from '@/stores/newSessionDraft'
 import { summarizeSessionStatus } from '@/utils/sessionStatusBadge'
 import type {
   ProjectActionRequest, ProjectMenuAction, SessionMenuAction, SessionPrimaryAction,
-  SessionTreeConfirmationRequest, UnifiedProjectGroup, UnifiedProjectIdentity, UnifiedSession, NewSessionRequest,
+  SessionTreeConfirmationRequest, UnifiedCliKind, UnifiedProjectGroup, UnifiedProjectIdentity, UnifiedSession, NewSessionRequest,
 } from '@/types/unifiedSession'
 
 const props = withDefaults(defineProps<{
@@ -21,9 +21,12 @@ const props = withDefaults(defineProps<{
   isCurrent?: boolean
   /** Search expansion is temporary and must not alter explicit user state. */
   disableToggle?: boolean
-}>(), { isCurrent: false, disableToggle: false, surfaceActive: true })
+  /** 已收起的 CLI 组键（`${projectKey}::${cli}`）；空集即全展开。 */
+  collapsedCliGroups?: ReadonlySet<string>
+}>(), { isCurrent: false, disableToggle: false, surfaceActive: true, collapsedCliGroups: () => new Set<string>() })
 const emit = defineEmits<{
   'toggle-expand': [projectKey: string]
+  'toggle-cli-group': [projectKey: string, cli: UnifiedCliKind]
   'new-session-request': [project: NewSessionRequest]
   'project-action': [request: ProjectActionRequest]
   activate: [id: string]
@@ -53,10 +56,10 @@ const anchor = ref({ x: 8, y: 8 })
 const menuPosition = ref({ left: '8px', top: '8px' })
 const sessions = computed(() => props.project.sessions.filter(session => !session.archived))
 // 类型分组与打开状态无关：项目内按 CLI 分组，组内保持父级传入的创建时间倒序。
-// 只按类型聚类排序，不渲染分组标题——行图标已能区分 CLI。
+// 多 CLI 项目渲染可折叠组头；单 CLI 项目零视觉变化（组头是唯一的恢复入口，不存在就必须展开）。
 const CLI_GROUP_ORDER: Record<string, number> = { claude: 0, codex: 1, shell: 2 }
 const typeGroups = computed(() => {
-  const byCli = new Map<string, UnifiedSession[]>()
+  const byCli = new Map<UnifiedCliKind, UnifiedSession[]>()
   for (const row of sessions.value) {
     const list = byCli.get(row.cli)
     if (list) list.push(row)
@@ -67,6 +70,7 @@ const typeGroups = computed(() => {
     .map(([cli, rows]) => ({ cli, rows }))
 })
 const statusBadge = computed(() => summarizeSessionStatus(sessions.value, props.project))
+const showCliHeaders = computed(() => typeGroups.value.length > 1)
 const projectIdentity = computed<UnifiedProjectIdentity>(() => ({
   projectKey: props.project.projectKey, projectPath: props.project.projectPath,
 }))
@@ -182,11 +186,15 @@ onBeforeUnmount(() => { window.removeEventListener('resize', placeMenu) })
       </div>
     </div>
     <div v-if="expanded" class="session-sub">
-      <div v-for="typeGroup in typeGroups" :key="typeGroup.cli" class="cli-group" :data-cli-group="typeGroup.cli">
-        <SessionList :sessions="typeGroup.rows" :selected-id="selectedId" :surface-active="surfaceActive" @activate="emit('activate', $event)"
-          @primary-action="(id, action) => emit('primary-action', id, action)" @menu-action="sessionMenuAction"
-          @rename-commit="(id, title) => emit('rename-commit', id, title)" @rename-cancel="emit('rename-cancel', $event)" />
-      </div>
+      <SessionCliGroup v-for="typeGroup in typeGroups" :key="typeGroup.cli" :cli="typeGroup.cli" :sessions="typeGroup.rows"
+        :show-header="showCliHeaders"
+        :toggle-disabled="disableToggle || typeGroup.rows.some(session => session.renameState === 'editing' || session.renameState === 'saving')"
+        :collapsed="collapsedCliGroups.has(`${project.projectKey}::${typeGroup.cli}`)"
+        :selected-id="selectedId" :surface-active="surfaceActive"
+        @toggle="emit('toggle-cli-group', project.projectKey, typeGroup.cli)"
+        @activate="emit('activate', $event)" @primary-action="(id, action) => emit('primary-action', id, action)"
+        @menu-action="sessionMenuAction" @rename-commit="(id, title) => emit('rename-commit', id, title)"
+        @rename-cancel="emit('rename-cancel', $event)" />
       <div v-if="sessions.length === 0" class="empty-hint">{{ t('noHistorySessions') }}</div>
     </div>
     <NewSessionMenu v-model:open="newMenuOpen" :active="surfaceActive" :anchor="newMenuAnchor" :availability="draft.availabilityFor(projectIdentity)"
