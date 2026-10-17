@@ -27,6 +27,7 @@ import { platform } from '@/utils/platform'
 import { formatDroppedPaths } from '@/utils/terminalDropPaths'
 import { publicNativeErrorCode } from '@/utils/nativeErrorCode'
 import { cliResize, cliStop, cliGetObserverStatus } from '@/api/tauri'
+import { codexNativeTextPasteCached } from '@/api/cliPasteSupport'
 import type { OutputFrame } from '@/types/terminal'
 import { useHookStore } from '@/stores/hook'
 import { useAppStore } from '@/stores/app'
@@ -178,16 +179,6 @@ function bindClipboard() {
     event.preventDefault()
     event.stopPropagation()
 
-    // codex 在 Windows 上内建了 Ctrl+V 原生粘贴（fixed.paste_image 键绑定，
-    // 先尝试图片、回退到文本，由 codex 自己读系统剪贴板）。直接转发 Ctrl+V
-    // 控制字符 \x16，绕过 CC Desk 的剪贴板读取与 payload 构造，让 codex
-    // 原生处理粘贴——避免大 payload 的 IPC 传输开销和 ConPTY 翻译延迟。
-    if (tabs.tab(props.tabId)?.cli === 'codex') {
-      const attempt = currentAttempt()
-      void binding.sendUserText('\x16').catch(() => markInputFailure(attempt))
-      return
-    }
-
     const attempt = currentAttempt()
     const activeTerm = term
     const activeBinding = binding
@@ -198,8 +189,22 @@ function bindClipboard() {
       if (!cancelReservation?.()) throw new Error('NATIVE_PASTE_CANCEL_FAILED')
       return new Uint8Array()
     }
+    // codex ≥0.163.0 在 Windows 上对纯 Ctrl+V 构造 PasteImage{text_fallback}，
+    // 无图时由 codex 自己读剪贴板文本；此时 producer 返回 1 字节 \x16 即一次完整
+    // 粘贴事件，绕开 bracketed frame 传输与 paste burst 逐字插入。0.162.x 无文本
+    // 回退（会吞掉纯文本按键），必须探测后再转发，否则回退 Desk 剪贴板路径。
+    const activeTab = tabs.tab(props.tabId)
+    const codexTextFallback = activeTab?.cli === 'codex'
+      ? codexNativeTextPasteCached(activeTab.profileId, activeTab.profileRevision)
+      : null
     // 先在当前 attempt/mode 同步预留 intent；异步剪贴板结果只能完成这个固定预留。
     const reserved = activeBinding.reserveUserPaste(async () => {
+      if (codexTextFallback && await codexTextFallback) {
+        if (!attemptIsCurrent(attempt) || binding !== activeBinding || term !== activeTerm) {
+          return cancelNoop()
+        }
+        return new TextEncoder().encode('\x16')
+      }
       const clipboard = await readClipboardSnapshot(() => readText(), () => readImage())
       if (!attemptIsCurrent(attempt) || binding !== activeBinding || term !== activeTerm) {
         return cancelNoop()

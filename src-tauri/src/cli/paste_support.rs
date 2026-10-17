@@ -1,0 +1,157 @@
+//! Codex Ctrl+V 原生文本粘贴能力探测（运行时查询，非 launch preflight）。
+//!
+//! Windows 上 codex 的 Ctrl+V 文本回退于 0.163.0 加入：chatwidget/interaction.rs
+//! 对纯 Ctrl+V 构造 `PasteImage { text_fallback }`，无图时回退读剪贴板文本；
+//! 0.162.x 的 `paste_image` 只处理图片，纯文本按键被吞。CC Desk 转发 `\x16`
+//! 前必须确认该能力，否则用户文本无法粘贴。结果按可执行路径缓存进程生命周期。
+
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+
+use super::profile_service::authorize_profile_window;
+use super::profiles::error;
+use super::snapshot::configured_program;
+use super::storage::WorkspaceRepository;
+use super::types::{CliKind, SafeError, WireU64};
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct PasteSupportRequest {
+    pub(crate) profile_id: String,
+    pub(crate) expected_revision: WireU64,
+}
+
+impl PasteSupportRequest {
+    fn validate(&self) -> Result<(), SafeError> {
+        if self.profile_id.is_empty()
+            || self.profile_id.len() > 128
+            || !self
+                .profile_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"-_".contains(&byte))
+        {
+            return Err(SafeError::invalid("profileId"));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CodexNativePasteSupport {
+    pub(crate) profile_id: String,
+    pub(crate) native_text_paste: bool,
+}
+
+pub(crate) fn native_paste_support(
+    repository: &WorkspaceRepository,
+    caller: &str,
+    request: &PasteSupportRequest,
+) -> Result<CodexNativePasteSupport, SafeError> {
+    authorize_profile_window(caller)?;
+    request.validate()?;
+    let profile = repository.get_profile(&request.profile_id)?;
+    if profile.revision != request.expected_revision {
+        return Err(error("REVISION_CONFLICT"));
+    }
+    // 仅 codex 有原生 Ctrl+V 剪贴板键位；其他 CLI 恒走 Desk 剪贴板路径。
+    let native_text_paste = if profile.cli == CliKind::Codex {
+        let legacy = profile.read_legacy(&repository.metadata_directory().join("config.json"))?;
+        // 未配置或不可用的 program 无法运行，也就没有可转发目标。
+        configured_program(&profile, legacy.as_ref())
+            .ok()
+            .and_then(|program| program.to_str().map(str::to_owned))
+            .map(|program| probe_program_cached(&program))
+            .unwrap_or(false)
+    } else {
+        false
+    };
+    Ok(CodexNativePasteSupport {
+        profile_id: profile.id,
+        native_text_paste,
+    })
+}
+
+/// Windows Ctrl+V 文本回退要求 codex ≥ 0.163.0。
+const MIN_TEXT_FALLBACK_VERSION: (u64, u64, u64) = (0, 163, 0);
+
+fn probe_program_cached(program: &str) -> bool {
+    static CACHE: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let cached = match cache.lock() {
+        Ok(guard) => guard.get(program).copied(),
+        Err(_) => None,
+    };
+    if let Some(supported) = cached {
+        return supported;
+    }
+    let supported = run_version_probe(program).unwrap_or(false);
+    if let Ok(mut guard) = cache.lock() {
+        guard.insert(program.to_owned(), supported);
+    }
+    supported
+}
+
+fn run_version_probe(program: &str) -> Option<bool> {
+    let output = crate::platform::new_command(program)
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(parse_text_fallback_support(&String::from_utf8_lossy(
+        &output.stdout,
+    )))
+}
+
+/// 输出形如 `codex-cli 0.163.0`；无法解析时视为不支持（保守走 Desk 剪贴板路径）。
+fn parse_text_fallback_support(version_output: &str) -> bool {
+    parse_codex_version(version_output)
+        .map(|version| version >= MIN_TEXT_FALLBACK_VERSION)
+        .unwrap_or(false)
+}
+
+fn parse_codex_version(version_output: &str) -> Option<(u64, u64, u64)> {
+    version_output.split_whitespace().find_map(|token| {
+        let mut parts = token.split('.');
+        let major = parts.next()?.parse().ok()?;
+        let minor = parts.next()?.parse().ok()?;
+        let patch = parts.next()?.parse().ok()?;
+        if parts.next().is_some() {
+            return None;
+        }
+        Some((major, minor, patch))
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_exact_minimum_version() {
+        assert!(parse_text_fallback_support("codex-cli 0.163.0\n"));
+    }
+
+    #[test]
+    fn rejects_version_without_text_fallback() {
+        assert!(!parse_text_fallback_support("codex-cli 0.162.1\n"));
+    }
+
+    #[test]
+    fn accepts_newer_version() {
+        assert!(parse_text_fallback_support("codex-cli 1.0.0\n"));
+    }
+
+    #[test]
+    fn rejects_unparseable_output() {
+        assert!(!parse_text_fallback_support(""));
+        assert!(!parse_text_fallback_support("internal error"));
+        assert!(!parse_text_fallback_support("codex-cli 0.163"));
+    }
+}

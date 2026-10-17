@@ -124,13 +124,15 @@ Native Ctrl+V 在读取剪贴板前同步向当前 binding 预留输入 intent�
 
 ### codex Ctrl+V 原生粘贴转发
 
-codex 内建了 `fixed.paste_image` 键绑定（`keymap.rs:2482`，绑定 Ctrl+V），由 codex TUI **自行读系统剪贴板**（`clipboard_paste/text.rs` 用 arboard 读文本、`clipboard_paste.rs` 读图片），同时处理文本和图片（`app/clipboard.rs:23-52`：先尝试图片、无图时回退文本）。
+codex 的 Ctrl+V 能力分版本：**≥0.163.0** 在 Windows 上对纯 Ctrl+V 构造 `PasteImage { text_fallback }`（`chatwidget/interaction.rs`，先尝试图片、无图时回退由 codex TUI 自行读系统剪贴板文本：`clipboard_paste/text.rs` 用 arboard，`app/clipboard.rs:23-52` 处理回退）；**0.162.x** 的 `chatwidget/clipboard.rs` 只处理图片、无文本回退，纯文本按键会被吞掉。
 
-CC Desk 在 codex 会话的 Ctrl+V keydown 路径上**直接转发 `\x16`（Ctrl+V 控制字符）一个字节**到 PTY，由 codex 原生处理粘贴——不读剪贴板、不构造 bracketed frame、不分块上传。
+因此 CC Desk 不能无条件转发：`cli_codex_native_paste_support`（`cli/paste_support.rs`）按 profile 授权解析 `configured_program` 后运行 `codex --version`，版本 ≥0.163.0 才支持原生转发；结果按可执行路径缓存进程生命周期，探测失败保守返回不支持。这是运行时能力查询，不属于 launch preflight（preflight 仍不 spawn CLI）。
 
-为什么：CC Desk 的原路径（读剪贴板 IPC → 构造 76011 字节 bracketed frame → 分块 IPC 上传 → 一次 `write_all` 进 ConPTY）端到端约 150ms，但 codex 侧的 paste burst 启发式（`paste_burst.rs`，Windows 上无 bracketed paste 事件只能靠 `PASTE_BURST_CHAR_INTERVAL=8ms` 的字符间隔判定）在大 payload 时 burst 断裂，导致 codex **逐字插入**而非折叠——29198 字符的逐字插入是 O(n²) 的 textarea 编辑，耗时 3.7–10+ 秒且部分展开。转发 `\x16` 绕过整个问题链：codex 收到的是一次完整粘贴事件，自行读剪贴板、自行折叠。
+Ctrl+V keydown 仍先**同步** `reserveUserPaste` 保持输入排序契约；producer 内等待探测结果：支持时返回 1 字节 `\x16`（Ctrl+V 控制字符），由 codex 原生读剪贴板处理文本和图片；不支持时回退 Desk 剪贴板读取路径（文本构造 bracketed frame、图片走键位分流）。
 
-约束与限制：仅适用于 codex（Claude Code 无等效的 Ctrl+V 剪贴板读取键位，仍走剪贴板插件读取路径）。CC Desk 不再控制粘贴内容（无 LF 规范化、无 atomic write_all 保证），由 codex 自行处理。Claude Code 在 Windows 上仍有同样的 bracketed paste 限制（上游未修），大段粘贴建议用 `@路径` 或 `Ctrl+G`。
+为什么转发：CC Desk 原路径（读剪贴板 IPC → 构造 76011 字节 bracketed frame → 分块 IPC 上传 → 一次 `write_all` 进 ConPTY）端到端约 150ms，但 codex 侧的 paste burst 启发式（`paste_burst.rs`，Windows 上无 bracketed paste 事件只能靠 `PASTE_BURST_CHAR_INTERVAL=8ms` 的字符间隔判定）在大 payload 时 burst 断裂，导致 codex **逐字插入**而非折叠——29198 字符的逐字插入是 O(n²) 的 textarea 编辑，耗时 3.7–10+ 秒且部分展开。转发 `\x16` 绕过整个问题链：codex 收到的是一次完整粘贴事件，自行读剪贴板、自行折叠。
+
+约束与限制：仅适用于 codex（Claude Code 无等效的 Ctrl+V 剪贴板读取键位，仍走剪贴板插件读取路径）。转发分支由 codex 自行处理内容（无 LF 规范化、无 atomic write_all 保证）。codex 升级后需重启 CC Desk 才会重新探测（按路径缓存）。Claude Code 在 Windows 上仍有同样的 bracketed paste 限制（上游未修），大段粘贴建议用 `@路径` 或 `Ctrl+G`。
 
 ### 图片粘贴分流
 

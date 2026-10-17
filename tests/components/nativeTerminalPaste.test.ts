@@ -21,6 +21,7 @@ const io = vi.hoisted(() => ({
   readText: vi.fn(),
   readImage: vi.fn(),
   failReservation: false,
+  codexSupport: true,
 }))
 vi.mock('@/terminal/deskNativeTerminal', () => ({
   createDeskNativeTerminalBinding: vi.fn((options: any) => {
@@ -78,6 +79,9 @@ vi.mock('@xterm/xterm', async original => {
 vi.mock('@xterm/addon-fit', () => ({ FitAddon: class { activate() {} dispose() {} fit() {} } }))
 vi.mock('@tauri-apps/api/core', async original => ({ ...await original<object>(), Channel: class { onmessage: any } }))
 vi.mock('@/api/observer', () => ({ onNativeObservation: async () => () => {} }))
+vi.mock('@/api/cliPasteSupport', () => ({
+  codexNativeTextPasteCached: () => Promise.resolve(io.codexSupport),
+}))
 vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({
   writeText: vi.fn().mockResolvedValue(undefined),
   readText: (...args: unknown[]) => io.readText(...args),
@@ -97,6 +101,7 @@ beforeEach(() => {
   io.binding = null; io.bindings = []; io.terminals = []; io.starts = []; io.failReservation = false
   io.readText.mockResolvedValue('')
   io.readImage.mockRejectedValue(new Error('NO_IMAGE'))
+  io.codexSupport = true
   Object.defineProperty(window, '__CC_DESK_DOCUMENT__', { configurable: true, value: {
     instanceId: 'test-backend',
     async invoke(command: string, input: any) {
@@ -151,10 +156,9 @@ describe('NativeTerminalPaste_TextEventRoutesToBinding', () => {
     expect(new TextDecoder().decode(await produce())).toBe('hello')
   })
 
-  // codex 在 Windows 上内建了 Ctrl+V 原生粘贴（fixed.paste_image 键绑定，codex 自行
-  // 读系统剪贴板处理文本和图片），CC Desk 转发 Ctrl+V 控制字符 \x16 让 CLI 原生处理，
-  // 绕过剪贴板 IPC 读取和 bracketed frame 构造，避免大 payload 的投递延迟。
-  it('Running_KeyDownCtrlVCodexSendsNativeChar_002 — codex Ctrl+V 转发 \x16 原生粘贴键', async () => {
+  // codex ≥0.163.0 探测通过后，\x16 由 codex 自行读剪贴板处理文本和图片；
+  // 预留仍走同步 reserveUserPaste 保持输入排序契约，仅 producer 返回 1 字节。
+  it('Running_KeyDownCtrlVCodexSendsNativeChar_002 — codex Ctrl+V 探测通过后经预留转发 \x16', async () => {
     const tabs = useNativeTabsStore()
     const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
     wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } })
@@ -167,8 +171,31 @@ describe('NativeTerminalPaste_TextEventRoutesToBinding', () => {
     await vi.advanceTimersByTimeAsync(0)
 
     expect(keydown.defaultPrevented).toBe(true)
-    expect(io.binding.sendUserText).toHaveBeenCalledWith('\x16')
-    expect(io.binding.reserveUserPaste).not.toHaveBeenCalled()
+    expect(io.binding.reserveUserPaste).toHaveBeenCalledOnce()
+    const produce = io.binding.reserveUserPaste.mock.calls[0][0] as () => Promise<Uint8Array>
+    expect(new TextDecoder().decode(await produce())).toBe('\x16')
+    // codex 原生路径不读剪贴板插件，文本和图片都由 CLI 自行处理。
+    expect(io.readText).not.toHaveBeenCalled()
+    expect(io.readImage).not.toHaveBeenCalled()
+  })
+
+  // 探测不支持（codex 0.162.x 无 Windows 文本回退）时回退剪贴板读取路径。
+  it('Running_KeyDownCtrlVCodexUnsupportedFallsBackToClipboard_002c — 探测不过时 codex Ctrl+V 走剪贴板路径', async () => {
+    io.codexSupport = false
+    useCliProfilesStore().profiles[0].cli = 'codex'
+    const tabs = useNativeTabsStore()
+    const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+    wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } })
+    await vi.advanceTimersByTimeAsync(0)
+    io.readText.mockResolvedValue('from-clipboard')
+
+    const textarea = wrapper.find('textarea').element
+    textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'v', ctrlKey: true, bubbles: true, cancelable: true }))
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(io.binding.reserveUserPaste).toHaveBeenCalledOnce()
+    const produce = io.binding.reserveUserPaste.mock.calls[0][0] as () => Promise<Uint8Array>
+    expect(new TextDecoder().decode(await produce())).toBe('from-clipboard')
   })
 
   // claude 没有 codex 那样的原生 Ctrl+V 剪贴板读取，仍走剪贴板插件读取路由。
@@ -211,7 +238,8 @@ describe('NativeTerminalPaste_TextEventRoutesToBinding', () => {
     expect(io.binding.sendUserText).toHaveBeenCalledWith('\r')
   })
 
-  // codex 的 \x16 路径由 codex 自行读系统剪贴板，同时处理文本和图片，无需 CC Desk 分流。
+  // 探测通过时 codex 的 \x16 路径由 codex 自行读剪贴板，同时处理文本和图片，
+  // 无需 CC Desk 分流；图片字节也不必转发。
   it('Running_KeyDownCtrlVCodexImageHandledNatively_004 — codex Ctrl+V 转发 \x16 后由 CLI 原生处理图片', async () => {
     const tabs = useNativeTabsStore()
     const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
@@ -224,10 +252,32 @@ describe('NativeTerminalPaste_TextEventRoutesToBinding', () => {
     const textarea = wrapper.find('textarea').element
     textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'v', ctrlKey: true, bubbles: true, cancelable: true }))
     await vi.advanceTimersByTimeAsync(0)
-    expect(io.binding.sendUserText).toHaveBeenCalledWith('\x16')
+    expect(io.binding.reserveUserPaste).toHaveBeenCalledOnce()
+    const produce = io.binding.reserveUserPaste.mock.calls[0][0] as () => Promise<Uint8Array>
+    expect(new TextDecoder().decode(await produce())).toBe('\x16')
     // codex 原生路径不走剪贴板插件读取，CC Desk 不需要读图片。
     expect(io.readImage).not.toHaveBeenCalled()
-    expect(io.binding.reserveUserPaste).not.toHaveBeenCalled()
+  })
+
+  // 探测不支持时 codex 与 claude 相同：无文本走图片键位分流。
+  it('Running_KeyDownCtrlVCodexUnsupportedImageFallback_004c — 探测不过时 codex 图片走键位分流', async () => {
+    io.codexSupport = false
+    useCliProfilesStore().profiles[0].cli = 'codex'
+    const tabs = useNativeTabsStore()
+    const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+    wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } })
+    await vi.advanceTimersByTimeAsync(0)
+    io.readText.mockResolvedValue('')
+    const close = vi.fn().mockResolvedValue(undefined)
+    io.readImage.mockResolvedValue({ close })
+
+    const textarea = wrapper.find('textarea').element
+    textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'v', ctrlKey: true, bubbles: true, cancelable: true }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(io.binding.reserveUserPaste).toHaveBeenCalledOnce()
+    const reservation = io.binding.reserveUserPaste.mock.results[0].value as { produced: Promise<Uint8Array> }
+    expect(new TextDecoder().decode(await reservation.produced)).toBe(imagePasteBytes(platform))
+    expect(close).toHaveBeenCalledOnce()
   })
 
   // claude 没有原生 Ctrl+V 粘贴，无文本时走图片键位分流。
