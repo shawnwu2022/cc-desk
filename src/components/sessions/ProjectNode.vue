@@ -7,6 +7,7 @@ import IconButton from '@/components/ui/IconButton.vue'
 import SessionList from './SessionList.vue'
 import NewSessionMenu from './NewSessionMenu.vue'
 import { useNewSessionDraftStore } from '@/stores/newSessionDraft'
+import { summarizeSessionStatus } from '@/utils/sessionStatusBadge'
 import type {
   ProjectActionRequest, ProjectMenuAction, SessionMenuAction, SessionPrimaryAction,
   SessionTreeConfirmationRequest, UnifiedProjectGroup, UnifiedProjectIdentity, UnifiedSession, NewSessionRequest,
@@ -65,24 +66,7 @@ const typeGroups = computed(() => {
     .sort((a, b) => (CLI_GROUP_ORDER[a[0]] ?? 9) - (CLI_GROUP_ORDER[b[0]] ?? 9))
     .map(([cli, rows]) => ({ cli, rows }))
 })
-const statusBadge = computed(() => {
-  // Some project projections also contain empty registered projects. Preserve
-  // explicit causes from their unified rows when aggregate fields are absent.
-  const running = sessions.value.filter(session => session.processState === 'running')
-  const error = props.project.errorCount ?? running.filter(session => session.attentionKind === 'error' || session.activityState === 'error').length
-  const permission = props.project.permissionCount ?? running.filter(session => session.attentionKind !== 'error'
-    && session.activityState !== 'error' && (session.attentionKind === 'permission' || session.activityState === 'waiting_permission')).length
-  const completed = props.project.completedCount ?? running.filter(session => session.attentionKind === 'completed'
-    && session.activityState !== 'error' && session.activityState !== 'waiting_permission').length
-  const unreadReply = props.project.unreadReplyCount ?? sessions.value.filter(session => session.observationNotice?.unreadReplyEnd?.kind === 'reply-ended').length
-  if (error > 0) return { kind: 'error', count: error, labelKey: 'projectErrorCount' }
-  if (permission > 0) return { kind: 'permission', count: permission, labelKey: 'projectPermissionCount' }
-  if (unreadReply > 0) return { kind: 'unread-reply', count: unreadReply, labelKey: 'projectUnreadReplyCount' }
-  if (completed > 0) return { kind: 'completed', count: completed, labelKey: 'projectCompletedCount' }
-  if (props.project.needsUserCount > 0) return { kind: 'needs-user', count: props.project.needsUserCount, labelKey: 'projectNeedsReplyCount' }
-  if (props.project.runningCount > 0) return { kind: 'running', count: props.project.runningCount, labelKey: 'projectRunningCount' }
-  return null
-})
+const statusBadge = computed(() => summarizeSessionStatus(sessions.value, props.project))
 const projectIdentity = computed<UnifiedProjectIdentity>(() => ({
   projectKey: props.project.projectKey, projectPath: props.project.projectPath,
 }))

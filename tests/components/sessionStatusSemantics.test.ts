@@ -9,6 +9,15 @@ import zh from '@/i18n/locales/zh'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import type { SessionVisualState, UnifiedProjectGroup, UnifiedSession } from '@/types/unifiedSession'
+import { summarizeSessionStatus } from '@/utils/sessionStatusBadge'
+import type { NativeObservationNoticeState } from '@/types/nativeObservationNotice'
+
+// 既有用例各自内联 row 字面量；新增的行级用例共享一个工厂。
+function statusRow(extra: Partial<UnifiedSession> = {}): UnifiedSession {
+  return { id: 'one', projectKey: '/repo', projectPath: '/repo', runtime: 'legacy-claude', cli: 'claude',
+    title: 'One', processState: 'running', attentionState: 'none', opened: true, archived: false,
+    resumable: true, adapterSessionId: 'one', lastActivityAt: 1, ...extra }
+}
 
 const mounted: VueWrapper[] = []
 beforeEach(() => { setActivePinia(createPinia()) })
@@ -105,5 +114,33 @@ describe('Preserved status rendering', () => {
     mounted.push(wrapper)
     expect(wrapper.get('[data-project-attention]').attributes('data-status-kind')).toBe('permission')
     expect(wrapper.get('[data-project-attention]').attributes('aria-label')).toBe('Waiting for permission: 1')
+  })
+
+  // 组头不传 aggregate：running / needs-user 必须走行级回退，且 running 含 starting。
+  it('Project_RowLevelSummaryWithoutAggregate_009', () => {
+    const rows: UnifiedSession[] = [
+      statusRow({ id: 'starting', processState: 'starting' }),
+      statusRow({ id: 'waiting', attentionState: 'needs-user' }),
+    ]
+    expect(summarizeSessionStatus(rows)).toEqual({ kind: 'needs-user', count: 1, labelKey: 'projectNeedsReplyCount' })
+    expect(summarizeSessionStatus([statusRow({ id: 'only', processState: 'starting' })]))
+      .toEqual({ kind: 'running', count: 1, labelKey: 'projectRunningCount' })
+    expect(summarizeSessionStatus([])).toBeNull()
+  })
+
+  // 行级优先级：unread-reply 高于 needs-user。
+  it('Project_RowLevelSummaryPriority_010', () => {
+    const unread: NativeObservationNoticeState = { recent: null,
+      unreadReplyEnd: { kind: 'reply-ended', eventId: 'reply', runId: 'run', generation: 1, receivedAt: 1 } }
+    expect(summarizeSessionStatus([statusRow({ observationNotice: unread, attentionState: 'needs-user' })]))
+      .toEqual({ kind: 'unread-reply', count: 1, labelKey: 'projectUnreadReplyCount' })
+  })
+
+  // 聚合值 0 必须压过行级回退（既有 ?? 契约），抽取不得改变它。
+  it('Project_AggregateZeroSuppressesRowFallback_011', () => {
+    const errored = statusRow({ attentionKind: 'error' })
+    expect(summarizeSessionStatus([errored], { errorCount: 0, runningCount: 0, needsUserCount: 0 })).toBeNull()
+    expect(summarizeSessionStatus([errored]))
+      .toEqual({ kind: 'error', count: 1, labelKey: 'projectErrorCount' })
   })
 })
