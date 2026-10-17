@@ -177,6 +177,17 @@ function bindClipboard() {
     if (!target || !term.element?.contains(target)) return
     event.preventDefault()
     event.stopPropagation()
+
+    // codex 在 Windows 上内建了 Ctrl+V 原生粘贴（fixed.paste_image 键绑定，
+    // 先尝试图片、回退到文本，由 codex 自己读系统剪贴板）。直接转发 Ctrl+V
+    // 控制字符 \x16，绕过 CC Desk 的剪贴板读取与 payload 构造，让 codex
+    // 原生处理粘贴——避免大 payload 的 IPC 传输开销和 ConPTY 翻译延迟。
+    if (tabs.tab(props.tabId)?.cli === 'codex') {
+      const attempt = currentAttempt()
+      void binding.sendUserText('\x16').catch(() => markInputFailure(attempt))
+      return
+    }
+
     const attempt = currentAttempt()
     const activeTerm = term
     const activeBinding = binding

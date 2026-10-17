@@ -118,15 +118,19 @@ term.attachCustomKeyEventHandler((event: KeyboardEvent) => {
 
 Native Ctrl+V 在读取剪贴板前同步向当前 binding 预留输入 intent，并冻结当前 attempt 与 bracketed-paste mode；随后 Enter 等用户输入排在该 intent 之后。异步结果只可完成原预留；空、不可读或 restart 后变旧的结果仅取消尚未提交的原预留，让已排队输入按既有序号继续，不能借用可变 `binding` 写入新 run。producer 已就绪或传输开始后不可取消，真实 producer/传输失败仍保持 partial/unknown 冻结与诊断。文本为空时的图片探测只确认资源存在，始终关闭 Tauri `Image`，不读取或记录像素。
 
-### JSON 粘贴压缩
+### JSON 粘贴压缩（已废弃）
 
-`buildPastePayload` 在规范化 LF 之前先经 `compactJsonForPaste`：剪贴板文本是**合法多行 JSON** 时压缩成单行，非 JSON 原样保留。
+`compactJsonForPaste` 曾在 Claude Code 的 bracketed paste 标记被 ConPTY 吞掉后，把合法多行 JSON 压缩为单行以降低 burst 丢失率（上游 [claude-code#49673](https://github.com/anthropics/claude-code/issues/49673)、[#49337](https://github.com/anthropics/claude-code/issues/49337)，官方关闭不修）。**已废弃不再使用**：治标且大段粘贴仍可能截尾（上游未修，带内无 100% 可靠方案）。`src/utils/pasteText.ts` 保留导出仅供历史回归。大段内容建议让 CLI 读文件（`@路径`）或用 CLI 的 `Ctrl+G` 外部编辑器。
 
-为什么需要：Windows ConPTY 输入解析器会吞掉 `ESC[200~`/`ESC[201~` bracketed paste 标记（CSI 序列不透传子进程），Claude Code 只能靠 burst 启发式识别粘贴；大段多行无标记 burst 识别会间歇性失败，按逐键处理时输入编辑器静默丢弃头部或尾部（上游 [claude-code#49673](https://github.com/anthropics/claude-code/issues/49673)、[#49337](https://github.com/anthropics/claude-code/issues/49337)，官方关闭不修）。实测单行 burst 丢失率显著更低，且小中型 JSON 压缩后整体可靠。
+### codex Ctrl+V 原生粘贴转发
 
-无损性：合法 JSON 的裸换行只会出现在 token 之间（字符串内部换行必须是 `\n` 转义），移除「换行 + 后续缩进空白」不影响任何值；JSON.parse 仅做校验，刻意不用 parse+stringify 往返——超出 2^53 的整数 ID 会被静默取整。
+codex 内建了 `fixed.paste_image` 键绑定（`keymap.rs:2482`，绑定 Ctrl+V），由 codex TUI **自行读系统剪贴板**（`clipboard_paste/text.rs` 用 arboard 读文本、`clipboard_paste.rs` 读图片），同时处理文本和图片（`app/clipboard.rs:23-52`：先尝试图片、无图时回退文本）。
 
-残余风险：压缩后仍超约 4KB 的大段粘贴在 Claude 识别失败时仍可能截尾（上游未修，带内无 100% 可靠方案）；超大内容建议让 Claude 读文件（`@路径`）或用 CLI 的 `Ctrl+G` 外部编辑器。src-tauri/tests/paste_claude_e2e.rs（`#[ignore]`，真实 claude CLI 端到端）可人工监测上游行为变化。
+CC Desk 在 codex 会话的 Ctrl+V keydown 路径上**直接转发 `\x16`（Ctrl+V 控制字符）一个字节**到 PTY，由 codex 原生处理粘贴——不读剪贴板、不构造 bracketed frame、不分块上传。
+
+为什么：CC Desk 的原路径（读剪贴板 IPC → 构造 76011 字节 bracketed frame → 分块 IPC 上传 → 一次 `write_all` 进 ConPTY）端到端约 150ms，但 codex 侧的 paste burst 启发式（`paste_burst.rs`，Windows 上无 bracketed paste 事件只能靠 `PASTE_BURST_CHAR_INTERVAL=8ms` 的字符间隔判定）在大 payload 时 burst 断裂，导致 codex **逐字插入**而非折叠——29198 字符的逐字插入是 O(n²) 的 textarea 编辑，耗时 3.7–10+ 秒且部分展开。转发 `\x16` 绕过整个问题链：codex 收到的是一次完整粘贴事件，自行读剪贴板、自行折叠。
+
+约束与限制：仅适用于 codex（Claude Code 无等效的 Ctrl+V 剪贴板读取键位，仍走剪贴板插件读取路径）。CC Desk 不再控制粘贴内容（无 LF 规范化、无 atomic write_all 保证），由 codex 自行处理。Claude Code 在 Windows 上仍有同样的 bracketed paste 限制（上游未修），大段粘贴建议用 `@路径` 或 `Ctrl+G`。
 
 ### 图片粘贴分流
 
