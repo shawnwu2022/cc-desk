@@ -338,6 +338,11 @@ for (const viewport of viewports) for (const dpr of [1, 1.25, 1.5]) for (const l
         for (const control of row.controls) { expect(control.width).toBeGreaterThanOrEqual(20); expect(control.height).toBeGreaterThanOrEqual(28) }
       }
       expect(geometry.find(row => row.titleLength === 200)).toMatchObject({ truncated: true, textOverflow: 'ellipsis' })
+      // 组头不是 session row，不受上面的行内控件检查覆盖——单独断言它的交互目标高度。
+      const cliHeaderHeights = await page.locator('[data-cli-group-header]')
+        .evaluateAll(headers => headers.map(header => header.getBoundingClientRect().height))
+      expect(cliHeaderHeights.length, 'mixed fixture 必须至少渲染一个多 CLI 项目的组头').toBeGreaterThan(0)
+      for (const height of cliHeaderHeights) expect(height).toBeGreaterThanOrEqual(28)
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
       expect(await page.locator('.app-shell').evaluate(element => element.getBoundingClientRect().width)).toBe(viewport.width)
       expect(await page.evaluate(() => devicePixelRatio)).toBe(dpr)
