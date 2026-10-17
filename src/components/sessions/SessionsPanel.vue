@@ -14,7 +14,7 @@ import ProjectNode from './ProjectNode.vue'
 import ArchivedSessionsDrawer from './ArchivedSessionsDrawer.vue'
 import type {
   ProjectActionRequest, SessionMenuAction, SessionPrimaryAction, SessionTreeConfirmationRequest,
-  UnifiedProjectGroup, UnifiedProjectIdentity, UnifiedSession, NewSessionRequest,
+  UnifiedCliKind, UnifiedProjectGroup, UnifiedProjectIdentity, UnifiedSession, NewSessionRequest,
 } from '@/types/unifiedSession'
 
 // Adapter setup, initial reads and runtime dispatch belong to the workspace container.
@@ -61,6 +61,8 @@ async function focusSearch() {
 }
 defineExpose({ focusSearch })
 const expandedKeys = ref(new Set<string>())
+// 与 expandedKeys 同层同语义：纯内存态，空集即全展开。键为 `${projectKey}::${cli}`。
+const collapsedCliGroups = ref(new Set<string>())
 const archivedOpen = ref(false)
 const archivedProject = ref<UnifiedProjectIdentity | null>(null)
 // A persistent tree is not an active surface after navigation/collapse. Its
@@ -146,6 +148,13 @@ function toggleExpand(key: string) {
   expandedKeys.value = next
   emit('toggle-expand', key)
 }
+function toggleCliGroup(projectKey: string, cli: UnifiedCliKind) {
+  const key = `${projectKey}::${cli}`
+  const next = new Set(collapsedCliGroups.value)
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  collapsedCliGroups.value = next
+}
 function showArchived(project: UnifiedProjectIdentity | null = null) {
   if (!props.active) return
   archivedProject.value = project
@@ -214,6 +223,7 @@ onUnmounted(() => { window.removeEventListener('keydown', onKeydown) })
       <template v-else>
         <ProjectNode v-for="group in displayedGroups" :key="group.projectKey" :project="group" :surface-active="active"
           :expanded="searching || expandedKeys.has(group.projectKey) || group.sessions.some(row => row.renameState === 'editing' || row.renameState === 'saving')" :disable-toggle="searching"
+          :collapsed-cli-groups="collapsedCliGroups" @toggle-cli-group="toggleCliGroup"
           :is-current="sameProjectPath(group.projectPath, currentProjectPath ?? '')" :selected-id="selectedId"
           @toggle-expand="toggleExpand" @new-session-request="newSessionRequest" @project-action="projectAction"
           @activate="emit('activate', $event)" @primary-action="(id, action) => emit('primary-action', id, action)"
