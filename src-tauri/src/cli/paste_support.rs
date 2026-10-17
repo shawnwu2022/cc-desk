@@ -142,12 +142,10 @@ fn run_version_probe(program: &str) -> Option<bool> {
         let _ = child.wait();
     }
     // 孙进程可能继承管道让 read 不返回：取不到结果就放弃（线程随后自行结束）。
-    let output = receiver
-        .recv_timeout(Duration::from_secs(1))
-        .ok()?;
-    exited?.success().then(|| {
-        parse_text_fallback_support(&String::from_utf8_lossy(&output))
-    })
+    let output = receiver.recv_timeout(Duration::from_secs(1)).ok()?;
+    exited?
+        .success()
+        .then(|| parse_text_fallback_support(&String::from_utf8_lossy(&output)))
 }
 
 /// 探测期限：只发生一次（结果按路径缓存），失败即永久走 Desk 剪贴板路径。
