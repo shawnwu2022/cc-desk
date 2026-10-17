@@ -329,6 +329,20 @@ describe('Unified project session tree', () => {
     expect(wrapper.get('[data-session-row="cx"]').element.closest<HTMLElement>('.session-list')!.style.display).not.toBe('none')
   })
 
+  // 快捷新建必须同步展开目标 CLI 组：折叠时新建/失败行不可见，取消与重试入口随之隐藏。
+  it('CliGroup_QuickNewExpandsCollapsedGroup_033', async () => {
+    const claude = session({ id: 'cc', cli: 'claude' })
+    const codex = session({ id: 'cx', cli: 'codex', runtime: 'native-cli' })
+    const wrapper = panel({ projectGroups: [group([claude, codex])] })
+    await wrapper.get('.project-main').trigger('click')
+    await wrapper.get('[data-cli-group-header="codex"]').trigger('click')
+    expect(wrapper.get('[data-cli-group-header="codex"]').attributes('aria-expanded')).toBe('false')
+    await wrapper.get('[data-project-quick-action]').trigger('click')
+    await selectMenu('codex')
+    expect(wrapper.get('[data-cli-group-header="codex"]').attributes('aria-expanded')).toBe('true')
+    expect(wrapper.get('[data-session-row="cx"]').element.closest<HTMLElement>('.session-list')!.style.display).not.toBe('none')
+  })
+
   // 普通项目与仅归档项目统一按名称排序，活动刷新和来源顺序不会移动项目行。
   it('StableProjectOrder_PanelAndArchive_001', async () => {
     const groups = [
