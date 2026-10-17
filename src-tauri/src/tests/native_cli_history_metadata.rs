@@ -2887,3 +2887,131 @@ fn HistoryCodex_ReviewCacheStillRechecksSubagentSource_061() {
     });
     assert!(read_codex_history_fixture(temp.path()).unwrap().is_empty());
 }
+
+// 同一 thread 的旧 rollout 属于 scope 之外的项目时，它的创建时间仍必须参与 thread 汇总。
+// 只在「代表 rollout 合并」处取最小值会让 createdAt 取决于当前 scope 恰好注册了哪些项目：
+// A+B 与仅 B 两个 scope 必须给出同一个创建时间，否则首次排序与重启后的顺序会随刷新变化。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryCodex_ThreadCreationIgnoresProjectScope_063() {
+    let temp = tempfile::tempdir().unwrap();
+    let project_x = temp.path().join("x");
+    let project_y = temp.path().join("y");
+    std::fs::create_dir_all(&project_x).unwrap();
+    std::fs::create_dir_all(&project_y).unwrap();
+    let directory = temp.path().join("sessions/2026/10/03");
+    std::fs::create_dir_all(&directory).unwrap();
+    for (name, cwd, created) in [
+        (
+            "rollout-2026-10-03T08-00-00-thread.jsonl",
+            project_x.to_str().unwrap().to_owned(),
+            "2026-10-03T08:00:00Z",
+        ),
+        (
+            "rollout-2026-10-03T10-00-00-thread.jsonl",
+            project_y.to_str().unwrap().to_owned(),
+            "2026-10-03T10:00:00Z",
+        ),
+    ] {
+        std::fs::write(
+            directory.join(name),
+            format!(
+                "{}\n{}\n",
+                json!({"type":"session_meta","payload":{"id":"same-thread","cwd":cwd,"timestamp":created}}),
+                json!({"type":"event_msg","payload":{"type":"user_message","message":"task"},"timestamp":created}),
+            ),
+        )
+        .unwrap();
+    }
+    let root = Root::open(temp.path()).unwrap();
+    let read_with = |projects: &[ProjectRef<'_>]| {
+        read(
+            &Catalog {
+                cli: CliKind::Codex,
+                root: &root,
+                projects,
+                user_config: None,
+                check: &|| Ok(()),
+            },
+            &Options {
+                kind: ResourceKind::History,
+                query: None,
+                session_id: None,
+            },
+            &mut Budget::new(super::super::super::scoped_fs::Limits::default()),
+        )
+        .unwrap()
+    };
+    let both = [
+        ProjectRef {
+            id: "project-x",
+            root: &root,
+            paths: std::slice::from_ref(&project_x),
+        },
+        ProjectRef {
+            id: "project-y",
+            root: &root,
+            paths: std::slice::from_ref(&project_y),
+        },
+    ];
+    let only_newer = [ProjectRef {
+        id: "project-y",
+        root: &root,
+        paths: std::slice::from_ref(&project_y),
+    }];
+    let both_scope = serde_json::to_value(read_with(&both)).unwrap();
+    let newer_scope = serde_json::to_value(read_with(&only_newer)).unwrap();
+    assert_eq!(both_scope[0]["createdAt"], "2026-10-03T08:00:00Z");
+    assert_eq!(
+        newer_scope[0]["createdAt"], "2026-10-03T08:00:00Z",
+        "仅含较新 rollout 所属项目的 scope 也必须取 thread 最早创建时间"
+    );
+    assert_eq!(newer_scope[0]["projectId"], "project-y");
+}
+
+// Claude 转录的首条带时间戳记录可能是 `isMeta: true` 的元消息（完整解析会跳过其正文）。
+// 创建时间必须在跳过元消息之前记录：否则完整读取与有界读取会给同一文件不同的
+// createdAt，重启后排序随之改变。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_MetaFirstStampKeepsCreation_064() {
+    let input = concat!(
+        "{\"type\":\"user\",\"isMeta\":true,\"message\":{\"content\":\"meta\"},\"timestamp\":\"2026-10-01T08:00:00Z\"}\n",
+        "{\"type\":\"assistant\",\"message\":{\"content\":\"answer\"},\"timestamp\":\"2026-10-01T10:00:00Z\"}\n",
+    );
+    let complete = parse("fixture.jsonl", CliKind::Claude, input).unwrap();
+    let bounded = parse_metadata("fixture.jsonl", CliKind::Claude, input).unwrap();
+    assert_eq!(complete.created.as_deref(), Some("2026-10-01T08:00:00Z"));
+    assert_eq!(bounded.created.as_deref(), Some("2026-10-01T08:00:00Z"));
+    assert_eq!(complete.created, bounded.created);
+}
+
+// Codex session_meta 的 payload 时间戳若含转义 NUL，前端严格解码器会判整条响应
+// INVALID_PROJECTION，使历史列表不可用——而缺这个可选字段的同一响应本来可读。
+// 因此非法候选必须回退到合法的行时间戳（或省略），不能直接发布。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryCodex_CreationTimeRejectsUndecodableValue_065() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("sessions/2026/10/04")).unwrap();
+    let cwd = temp.path().to_str().unwrap().to_owned();
+    std::fs::write(
+        temp.path().join("sessions/2026/10/04/nul-created.jsonl"),
+        format!(
+            "{}\n{}\n",
+            json!({"type":"session_meta","timestamp":"2026-10-04T09:00:00Z","payload":{"id":"nul-created","cwd":cwd,"timestamp":"2026-10-04T08:00:00\u{0}Z"}}),
+            json!({"type":"event_msg","payload":{"type":"user_message","message":"task"},"timestamp":"2026-10-04T09:00:00Z"}),
+        ),
+    )
+    .unwrap();
+    let value = serde_json::to_value(read_codex_history_fixture(temp.path()).unwrap()).unwrap();
+    assert_eq!(value[0]["nativeSessionId"], "nul-created");
+    assert_eq!(
+        value[0]["createdAt"], "2026-10-04T09:00:00Z",
+        "含 NUL 的创建时间不能发布，必须回退到合法的行时间戳"
+    );
+    assert!(
+        !value[0]["createdAt"].as_str().unwrap().contains('\0'),
+        "发布的 createdAt 必须能通过前端的严格文本解码"
+    );
+}

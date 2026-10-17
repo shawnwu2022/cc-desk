@@ -725,9 +725,16 @@ Close overlay and ended-session Archive control retain their sizing and ownershi
 
 `SessionsPanel` orders rows by a frozen creation key, not live activity.
 The key is the CLI session creation time when the backend provides one (codex
-`session_meta` timestamp; claude first stamped record) — it survives restarts,
+`session_meta` timestamp; claude first stamped record, including an `isMeta`
+record whose body is skipped) — it survives restarts,
 activation and background activity, so resuming or activating a session never
-moves it. An open terminal row is projected by both adapters with its real
+moves it. A codex thread's creation time is the earliest across all its rollouts
+and does not depend on which projects the current history scope registers, so a
+single-project refresh and a grouped view agree. The backend only publishes a
+creation time the strict IPC decoder accepts; an over-long or NUL-bearing
+candidate falls back to a valid line timestamp or is omitted, because one
+undecodable optional field would reject the whole response.
+An open terminal row is projected by both adapters with its real
 creation time as `createdAt`; a history row whose CLI source carries no creation
 time freezes its first-seen activity time as the stable approximation. The key is
 fixed once per row id and never recomputed, so output, status, completion, search,
