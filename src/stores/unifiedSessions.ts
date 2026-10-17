@@ -166,6 +166,8 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
 
   const resumeDialog = ref<ResumeDialogRequest | null>(null)
   const missingRecords = new Map<string, UnifiedSession>()
+  // 行投影缓存：让 projectGroups 在无关变化时保留行对象身份，避免整棵树重渲染。
+  const projectedRows = new WeakMap<UnifiedSession, { resumePending: boolean; row: UnifiedSession }>()
   let historyLoader: (query: ResumeHistoryQuery) => Promise<boolean> = async () => false
   function configureHistoryLoader(loader: typeof historyLoader) { historyLoader = loader }
   function openResumeDialog(request: ResumeDialogRequest) {
@@ -365,7 +367,15 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
         }
         groups.set(key, group)
       }
-      group.sessions.push({ ...session, resumePending: isResumePending(session) })
+      // 行投影复用同一对象：refresh 已保留未变化行的身份，这里若每次展开新对象，
+      // 所有 SessionItem 的 prop 都会换身份，任何单行状态变化都会重渲染整棵树。
+      const resumePending = isResumePending(session)
+      let projected = projectedRows.get(session)
+      if (!projected || projected.resumePending !== resumePending) {
+        projected = { resumePending, row: { ...session, resumePending } }
+        projectedRows.set(session, projected)
+      }
+      group.sessions.push(projected.row)
       if (session.processState === 'running' || session.processState === 'starting') {
         group.runningCount += 1
       }

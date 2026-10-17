@@ -11,7 +11,7 @@ import { useNativeTabsStore } from '@/stores/nativeTabs'
 import { normalizePath, sameProjectPath } from '@/utils/path'
 import { projectBasename, validateDisplayName } from '@/utils/displayName'
 import { openInFileManager, selectDirectory } from '@/api/tauri'
-import type { ProjectActionRequest, UnifiedProjectGroup, UnifiedProjectIdentity } from '@/types/unifiedSession'
+import type { ProjectActionRequest, UnifiedProjectGroup, UnifiedProjectIdentity, UnifiedSession } from '@/types/unifiedSession'
 
 /** Management never owns a process and never deletes CLI history or project files. */
 export const useProjectManagementStore = defineStore('project-management', () => {
@@ -27,6 +27,8 @@ export const useProjectManagementStore = defineStore('project-management', () =>
   const dialog = ref<{ kind: 'rename' | 'remove' | 'close-sessions'; project: UnifiedProjectIdentity } | null>(null)
   const renameValue = ref('')
   const renameError = ref<string | null>(null)
+  // 行投影缓存：与 catalog.sessions 的行对象身份联动，避免任何单行变化让整表重渲染。
+  const projectedRows = new WeakMap<UnifiedSession, { resumePending: boolean; row: UnifiedSession }>()
   let feedbackVersion = 0
   let projectCloseOwner: { request: NonNullable<typeof dialog.value>; registration: string | null; close: ReturnType<typeof catalog.captureProjectClose> } | null = null
   let removeOwner: { request: NonNullable<typeof dialog.value>; registration?: string | null; selected: () => boolean } | null = null
@@ -67,7 +69,15 @@ export const useProjectManagementStore = defineStore('project-management', () =>
       add(row.projectPath)
       const group = rows.get(normalizePath(row.projectPath))!
       group.lastActivityAt = Math.max(group.lastActivityAt, row.lastActivityAt)
-      if (!row.archived) group.sessions.push({ ...row, resumePending: catalog.isResumePending(row) })
+      // 行投影复用同一对象：catalog 每次发布都会重建行对象，这里若再展开新对象，
+      // 任何单行状态变化都会让所有 SessionItem 的 prop 换身份、整表重渲染。
+      const resumePending = catalog.isResumePending(row)
+      let projected = projectedRows.get(row)
+      if (!projected || projected.resumePending !== resumePending) {
+        projected = { resumePending, row: { ...row, resumePending } }
+        projectedRows.set(row, projected)
+      }
+      if (!row.archived) group.sessions.push(projected.row)
       if (row.processState === 'running' || row.processState === 'starting') group.runningCount++
       if (row.attentionState === 'needs-user') group.needsUserCount++
     }
