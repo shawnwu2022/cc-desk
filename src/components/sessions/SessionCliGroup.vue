@@ -35,6 +35,9 @@ const CLI_NAMES: Record<UnifiedCliKind, string> = { claude: 'Claude Code', codex
 const listId = useId()
 const hidden = computed(() => props.showHeader && !props.toggleDisabled && props.collapsed)
 const badge = computed(() => summarizeSessionStatus(props.sessions))
+// 活跃 = 正在跑或正在启动；与聚合口径（unifiedSessions 的 runningCount）一致。
+const activeCount = computed(() => props.sessions.filter(session =>
+  session.processState === 'running' || session.processState === 'starting').length)
 </script>
 
 <template>
@@ -51,12 +54,13 @@ const badge = computed(() => summarizeSessionStatus(props.sessions))
         <svg class="cli-group-chevron" :class="{ expanded: !hidden }" aria-hidden="true" focusable="false"
           width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="9 6 15 12 9 18" /></svg>
         <span class="cli-group-name">{{ CLI_NAMES[cli] }}</span>
-        <!-- 收起时用状态徽章取代会话数：两者都是「这个组还有多少东西」，
-             同时显示会出现两个相邻的相同数字。 -->
-        <span v-if="!hidden || !badge" class="cli-group-count" aria-hidden="true">{{ sessions.length }}</span>
-        <span v-else class="cli-group-attention" :class="`cli-group-attention--${badge.kind}`"
+        <!-- 数字是「活跃/总数」而不是纯行数：纯行数和上面项目名的计数重复，
+             而且看不出这个组里有多少在跑。收起时若本组有更紧急的状态原因，
+             就用状态徽章取代活跃数（两者都是「组内还在动的量」，并排会读成两个数字打架）。 -->
+        <span v-if="hidden && badge" class="cli-group-attention" :class="`cli-group-attention--${badge.kind}`"
           data-cli-group-attention :data-status-kind="badge.kind" role="img"
           :aria-label="t(badge.labelKey, { count: badge.count })">{{ badge.count > 99 ? '99+' : badge.count }}</span>
+        <span v-else class="cli-group-count">{{ activeCount }}<span class="cli-group-count-total">/{{ sessions.length }}</span></span>
       </span>
       <span class="cli-group-rule" aria-hidden="true" />
     </AppButton>
@@ -78,7 +82,9 @@ const badge = computed(() => summarizeSessionStatus(props.sessions))
 .cli-group-chevron.expanded { transform: rotate(90deg); }
 /* 比会话标题（13px/500）更小更轻：组头是分节标签，不该压过它分隔的行。 */
 .cli-group-name { font-size: 10px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; }
-.cli-group-count { font-size: 10px; font-weight: 500; opacity: 0.7; }
+/* 活跃数比总数更重：它才是需要被看见的那一位。 */
+.cli-group-count { font-size: 10px; font-weight: 600; }
+.cli-group-count-total { font-weight: 400; opacity: 0.6; }
 .cli-group-attention { min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px;
   display: inline-flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 600;
   color: var(--accent-gold-text); }

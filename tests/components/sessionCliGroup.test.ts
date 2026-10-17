@@ -29,7 +29,7 @@ function mountGroup(props: Record<string, unknown> = {}) {
 }
 
 describe('CLI group header', () => {
-  // 多 CLI 项目渲染组头：名称、计数、以及指向本组列表根元素的 aria-controls。
+  // 多 CLI 项目渲染组头：名称、活跃/总数、以及指向本组列表根元素的 aria-controls。
   it('CliGroup_HeaderNamesCountAndControls_001', () => {
     const wrapper = mountGroup()
     // 根元素保留 data-cli-group 测试钩子且不带 role——SessionList 自带 role="group"，
@@ -40,7 +40,8 @@ describe('CLI group header', () => {
     const header = wrapper.get('[data-cli-group-header]')
     expect(header.attributes('data-cli-group-header')).toBe('claude')
     expect(header.get('.cli-group-name').text()).toBe('Claude Code')
-    expect(header.get('.cli-group-count').text()).toBe('2')
+    // 两行都是 running，所以活跃/总数是 2/2。
+    expect(header.get('.cli-group-count').text()).toBe('2/2')
     expect(header.attributes('aria-expanded')).toBe('true')
     const list = wrapper.get('.session-list')
     expect(list.attributes('role')).toBe('group')
@@ -119,7 +120,18 @@ describe('CLI group header', () => {
     const wrapper = mountGroup()
     const header = wrapper.get('[data-cli-group-header]')
     expect(header.findAll('.cli-group-rule')).toHaveLength(2)
-    expect(header.get('.cli-group-mark').find('.cli-group-name').text()).toBe('Claude Code')
-    expect(header.get('.cli-group-mark').find('.cli-group-count').text()).toBe('2')
+    const mark = header.get('.cli-group-mark')
+    expect(mark.get('.cli-group-name').text()).toBe('Claude Code')
+    expect(mark.get('.cli-group-count').text()).toBe('2/2')
+  })
+
+  // 活跃数按本组行计算且含 starting：与聚合口径一致，不显示项目总数。
+  it('CliGroup_ActiveCountIncludesStarting_010', () => {
+    const wrapper = mountGroup({ sessions: [
+      row({ id: 'a', processState: 'running' }),
+      row({ id: 'b', processState: 'starting' }),
+      row({ id: 'c', processState: 'stopped', opened: false }),
+    ] })
+    expect(wrapper.get('.cli-group-count').text()).toBe('2/3')
   })
 })
