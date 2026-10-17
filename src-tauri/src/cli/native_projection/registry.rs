@@ -753,6 +753,7 @@ fn history_snapshot_bytes(items: &[ResourceItem], capacity: usize) -> usize {
                 title,
                 cwd,
                 updated_at,
+                created_at,
                 ..
             } = item
             else {
@@ -765,6 +766,7 @@ fn history_snapshot_bytes(items: &[ResourceItem], capacity: usize) -> usize {
                 title.capacity(),
                 cwd.as_ref().map_or(0, String::capacity),
                 updated_at.as_ref().map_or(0, String::capacity),
+                created_at.as_ref().map_or(0, String::capacity),
             ]
             .into_iter()
             .fold(size, usize::saturating_add)

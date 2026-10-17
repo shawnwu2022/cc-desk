@@ -393,6 +393,28 @@ for (const viewport of [{ width: 1024, height: 640 }, { width: 1468, height: 744
 
 test.describe('rendered interaction boundaries', () => {
   test.use({ viewport: { width: 1024, height: 640 } })
+  test('CLI group collapse skips hidden rows in both arrow directions', async ({ page }) => {
+    await openFixture(page, { scenario: 'mixed', locale: 'en' })
+    const projectRow = page.locator('[data-project-key="c:/visual/cc-desk"]')
+    const project = page.locator('.project-node').filter({ has: projectRow })
+    const header = project.locator('[data-cli-group-header="claude"]')
+    const claude = project.locator('[data-cli-group="claude"] [data-session-row]').first()
+    const codex = project.locator('[data-cli-group="codex"] [data-session-row]').first()
+    await header.click()
+    await expect(header).toHaveAttribute('aria-expanded', 'false')
+    await expect(claude).toBeHidden()
+    await projectRow.focus()
+    await page.keyboard.press('ArrowDown')
+    await expect(codex).toBeFocused()
+    await page.keyboard.press('ArrowUp')
+    await expect(projectRow).toBeFocused()
+    await header.click()
+    await expect(claude).toBeVisible()
+    await projectRow.focus()
+    await page.keyboard.press('ArrowDown')
+    await expect(claude).toBeFocused()
+  })
+
   test('archive keeps its own fixed slot beside time on hover and focus', async ({ page }) => {
     await openFixture(page, { scenario: 'mixed', locale: 'en' })
     const row = page.locator('[data-session-row]').filter({ has: page.locator('[data-session-archive]') }).first()

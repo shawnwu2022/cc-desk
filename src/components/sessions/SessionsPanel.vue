@@ -77,25 +77,25 @@ watch(() => props.active, active => {
 const normalGroups = computed(() => props.projectGroups ?? store.projectGroups)
 const archived = computed(() => (props.archivedSessions ?? store.sessions).filter(session => session.archived)
   .map(session => store.isResumePending(session) ? { ...session, resumePending: true } : session))
-// 创建序键一次性冻结：打开 tab 用真实创建时间（lastOpenedAt 即 tab.createdAt），
-// 历史行冻结首见活动时间作为稳定的创建序近似——CLI 历史只有最后活动时间，没有创建时间。
+// 创建序键一次性冻结：优先 CLI 创建时间，缺失时以 tab 创建时间或首见活动时间近似。
+// 历史读取失败时 adapter 可能暂时回退 tab 创建时间，同一行仍须保留最初的位置。
 // 行位置不随后续活动、打开状态或刷新变化。
 const createdKeys = ref(new Map<string, number>())
 watch(() => normalGroups.value, groups => {
-  const next = new Map(createdKeys.value)
-  let changed = false
+  // 延迟复制：常态刷新没有新兜底行时零分配。
+  let next: Map<string, number> | null = null
   for (const group of groups) {
     for (const row of group.sessions) {
-      if (row.archived || next.has(row.id)) continue
-      changed = true
-      const created = row.opened === true && row.lastOpenedAt ? row.lastOpenedAt
+      if (row.archived || createdKeys.value.has(row.id)) continue
+      next ??= new Map(createdKeys.value)
+      const fallback = row.opened === true && row.lastOpenedAt ? row.lastOpenedAt
         : Number.isFinite(row.lastActivityAt) ? row.lastActivityAt : 0
-      next.set(row.id, created)
+      next.set(row.id, row.createdAt ?? fallback)
     }
   }
   // 键只增不删：来源读取失败会临时清空该来源的行，删除键会让同一行在恢复后按新活动
   // 时间重新插入而跳动。键的数量与出现过的会话身份同阶，不构成无界增长。
-  if (changed) createdKeys.value = next
+  if (next) createdKeys.value = next
 }, { immediate: true })
 function createdOrder(a: UnifiedSession, b: UnifiedSession): number {
   return (createdKeys.value.get(b.id) ?? 0) - (createdKeys.value.get(a.id) ?? 0) || a.id.localeCompare(b.id)
@@ -172,6 +172,11 @@ function onTreeKeydown(event: KeyboardEvent) {
   const search = target.matches('.search-input')
   if (!search && target.closest('input, textarea, select, [contenteditable="true"], button')) return
   const rows = [...(panel.value?.querySelectorAll<HTMLElement>('.panel-content .project-row, .panel-content [data-session-row]') ?? [])]
+    .filter(element => {
+      // 折叠组保留常驻行；方向键只能落在可见列表中的行。
+      const list = element.closest<HTMLElement>('.session-list')
+      return !list || getComputedStyle(list).display !== 'none'
+    })
   const row = target.closest<HTMLElement>('.project-row, [data-session-row]')
   if (event.key === 'Enter' && quickSwitch.value && row?.classList.contains('project-row')) {
     const group = displayedGroups.value.find(group => group.projectKey === row.dataset.projectKey)

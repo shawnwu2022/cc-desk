@@ -116,6 +116,58 @@ describe('Unified project session tree', () => {
     expect(wrapper.emitted('refresh')).toHaveLength(1)
   })
 
+  // 重启（卸载重挂）后创建序不得重置：行位置由 CLI 会话创建时间决定，不因
+  // CLI 侧后续活动改变——否则用户每次启动看到的顺序都不同，感知为「自动排序」。
+  it('Tree_RemountKeepsCreationOrder_027', async () => {
+    const first = panel({ projectGroups: [group([
+      session({ id: 'old', opened: false, processState: 'stopped', createdAt: 5, lastActivityAt: 10 }),
+      session({ id: 'recent', opened: false, processState: 'stopped', createdAt: 20, lastActivityAt: 40 }),
+    ]), ], currentProjectPath: '/work/game', loading: false })
+    await first.get('.project-main').trigger('click')
+    const order = () => first.findAll('[data-session-row]').map(row => row.attributes('data-session-row'))
+    expect(order()).toEqual(['recent', 'old'])
+    mounted.splice(mounted.indexOf(first), 1)
+    first.unmount()
+    // 重启后 old 在 CLI 侧有了新活动：创建时间不变，位置必须保持。
+    const second = panel({ projectGroups: [group([
+      session({ id: 'old', opened: false, processState: 'stopped', createdAt: 5, lastActivityAt: 1000 }),
+      session({ id: 'recent', opened: false, processState: 'stopped', createdAt: 20, lastActivityAt: 40 }),
+    ]), ], currentProjectPath: '/work/game', loading: false })
+    await second.get('.project-main').trigger('click')
+    const orderAfter = () => second.findAll('[data-session-row]').map(row => row.attributes('data-session-row'))
+    expect(orderAfter()).toEqual(['recent', 'old'])
+  })
+
+  // 已打开历史会话的来源读取失败时，adapter 会暂时回退 tab 创建时间；同一行不能跳序。
+  it('Tree_CreationKeySurvivesHistoryGap_032', async () => {
+    const old = session({ id: 'native-tab:old', runtime: 'native-cli', createdAt: 5, lastOpenedAt: 100 })
+    const recent = session({ id: 'native-tab:recent', runtime: 'native-cli', createdAt: 20, lastOpenedAt: 20 })
+    const wrapper = panel({ projectGroups: [group([old, recent])] })
+    await wrapper.get('.project-main').trigger('click')
+    const order = () => wrapper.findAll('[data-session-row]').map(row => row.attributes('data-session-row'))
+    expect(order()).toEqual(['native-tab:recent', 'native-tab:old'])
+    await wrapper.setProps({ projectGroups: [group([{ ...old, createdAt: 100 }, recent])] })
+    expect(order()).toEqual(['native-tab:recent', 'native-tab:old'])
+    await wrapper.setProps({ projectGroups: [group([old, recent])] })
+    expect(order()).toEqual(['native-tab:recent', 'native-tab:old'])
+  })
+
+  // 无 CLI 创建时间的行（legacy/旧缓存）保持既有首见近似：会话内冻结不变。
+  it('Tree_MissingCreationTimeFallsBackToFirstSeen_028', async () => {
+    const wrapper = panel({ projectGroups: [group([
+      session({ id: 'old', opened: false, processState: 'stopped', lastActivityAt: 10 }),
+      session({ id: 'recent', opened: false, processState: 'stopped', lastActivityAt: 40 }),
+    ]), ], currentProjectPath: '/work/game', loading: false })
+    await wrapper.get('.project-main').trigger('click')
+    const order = () => wrapper.findAll('[data-session-row]').map(row => row.attributes('data-session-row'))
+    expect(order()).toEqual(['recent', 'old'])
+    await wrapper.setProps({ projectGroups: [group([
+      session({ id: 'old', opened: false, processState: 'stopped', lastActivityAt: 1000 }),
+      session({ id: 'recent', opened: false, processState: 'stopped', lastActivityAt: 40 }),
+    ]), ] })
+    expect(order()).toEqual(['recent', 'old'])
+  })
+
   // 创建序倒序（同键按精确 ID 破平）；已存在行不随后续活动或刷新移动。
   it('Tree_DiscoveredHistoryAndTies_025', async () => {
     const a = session({ id: 'a', lastActivityAt: 20, lastOpenedAt: 1 })
@@ -199,6 +251,28 @@ describe('Unified project session tree', () => {
     ;(header.element as HTMLElement).focus()
     await header.trigger('keydown', { key: 'ArrowDown' })
     expect(document.activeElement).toBe(header.element)
+  })
+
+  // v-show 保留隐藏行的 DOM，双向导航仍须越过折叠组到下一个可见项目/会话。
+  it.each(['ArrowDown', 'ArrowUp'])('Tree_CollapsedCliSkippedByArrowNavigation_031 %s', async key => {
+    const nextProject = group([], { projectKey: '/work/tools', projectPath: '/work/tools', name: 'Tools' })
+    const wrapper = panel({ projectGroups: [group([
+      session({ id: 'cc', cli: 'claude' }),
+      session({ id: 'cx', cli: 'codex', runtime: 'native-cli' }),
+    ]), nextProject] })
+    await wrapper.get('.project-main').trigger('click')
+    await wrapper.get('[data-cli-group-header="codex"]').trigger('click')
+    expect(wrapper.get('[data-session-row="cx"]').isVisible()).toBe(false)
+    const claude = wrapper.get('[data-session-row="cc"]')
+    const tools = wrapper.get('[data-project-key="/work/tools"]')
+    const [from, to] = key === 'ArrowDown' ? [claude, tools] : [tools, claude]
+    ;(from.element as HTMLElement).focus()
+    await from.trigger('keydown', { key })
+    expect(document.activeElement).toBe(to.element)
+    await wrapper.get('[data-cli-group-header="codex"]').trigger('click')
+    ;(from.element as HTMLElement).focus()
+    await from.trigger('keydown', { key })
+    expect(document.activeElement).toBe(wrapper.get('[data-session-row="cx"]').element)
   })
 
   // 折叠状态由面板独占，catalog 重投影不改变它；键与 expandedKeys 同层同语义。

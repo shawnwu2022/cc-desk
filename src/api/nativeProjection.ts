@@ -88,7 +88,7 @@ function item(v: unknown, request: ReadRequest): ResourceItem {
   if (r.type !== allowed[request.resourceKind]) return invalid()
   if (r.type === 'session' || r.type === 'message') {
     const common = ['type', 'sessionKey', 'nativeSessionId', 'truncated']
-    object(r, [...common, ...(r.type === 'session' ? ['title', 'cwd', 'updatedAt', 'archived'] : ['role', 'text'])], r.type === 'session' ? ['titleUnknown', 'titleSource', 'metadataIncomplete', 'projectId'] : [])
+    object(r, [...common, ...(r.type === 'session' ? ['title', 'cwd', 'updatedAt', 'archived'] : ['role', 'text'])], r.type === 'session' ? ['titleUnknown', 'titleSource', 'metadataIncomplete', 'projectId', 'createdAt'] : [])
     const nativeSessionId = text(r.nativeSessionId, 256, false)
     const sessionKey = text(r.sessionKey, 8192, false)
     if (/\p{Cc}/u.test(nativeSessionId) || sessionKey !== JSON.stringify(['local', request.source.cli, request.source.sourceRootKey, nativeSessionId])) return invalid()
@@ -112,7 +112,8 @@ function item(v: unknown, request: ReadRequest): ResourceItem {
       if (metadataIncomplete.metadataIncomplete === true && !truncated) return invalid()
       const titleSource = Object.prototype.hasOwnProperty.call(r, 'titleSource') ? text(r.titleSource, 6, false) : undefined
       if (titleSource !== undefined && (!['prompt', 'ai', 'custom'].includes(titleSource) || titleUnknown.titleUnknown === true)) return invalid()
-      return { ...titleUnknown, ...metadataIncomplete, ...(projectId === undefined ? {} : { projectId }), ...(titleSource === undefined ? {} : { titleSource: titleSource as 'prompt' | 'ai' | 'custom' }),
+      const createdAt = Object.prototype.hasOwnProperty.call(r, 'createdAt') ? { createdAt: optionalText(r.createdAt, 64) } : {}
+      return { ...titleUnknown, ...metadataIncomplete, ...createdAt, ...(projectId === undefined ? {} : { projectId }), ...(titleSource === undefined ? {} : { titleSource: titleSource as 'prompt' | 'ai' | 'custom' }),
         type: 'session', sessionKey, nativeSessionId, truncated, archived: bool(r.archived), title: text(r.title, 512), cwd: optionalText(r.cwd, 32768), updatedAt: optionalText(r.updatedAt, 64) }
     }
     if (r.role !== 'user' && r.role !== 'assistant') return invalid()

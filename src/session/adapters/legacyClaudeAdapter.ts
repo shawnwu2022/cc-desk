@@ -108,6 +108,9 @@ function projectActiveTab(tab: TerminalTab, attention?: LegacyClaudeAdapterDeps[
     observationState: tab.observerEnabled === false ? 'off' : tab.observation ?? 'off',
     lastActivityAt: tab.lastActiveAt,
     lastOpenedAt: tab.createdAt,
+    // legacy tab 的真实创建时刻同样是创建序键：跨重启/激活保持行位置，
+    // 与 native 行对齐后调用方的排序不再依赖「lastOpenedAt 即创建时间」。
+    createdAt: tab.createdAt,
     archived: false,
     opened: true,
     resumable: Boolean(tab.sessionId),

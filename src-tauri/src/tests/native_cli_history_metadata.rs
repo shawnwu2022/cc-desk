@@ -398,6 +398,152 @@ fn HistoryCodex_SameThreadRolloutsKeepLatest_040() {
     assert_eq!(value[0]["updatedAt"], "2026-10-03T23:35:11Z");
 }
 
+// 会话创建时间是列表创建序的稳定键：codex 取 session_meta 的时间戳（会话开始
+// 时刻），claude 取首条带时间戳记录；两者都不随后续活动变化。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryCodex_CreationTimeFromSessionMeta_045() {
+    let temp = tempfile::tempdir().unwrap();
+    let directory = temp.path().join("sessions/2026/10/03");
+    std::fs::create_dir_all(&directory).unwrap();
+    let cwd = temp.path().to_str().unwrap().to_owned();
+    std::fs::write(
+        directory.join("rollout-2026-10-03T20-14-17-thread.jsonl"),
+        format!(
+            "{}\n{}\n",
+            json!({"timestamp":"2026-10-03T20:15:00Z","type":"session_meta","payload":{"id":"thread","cwd":cwd,"timestamp":"2026-10-03T20:14:17Z"}}),
+            json!({"type":"event_msg","payload":{"type":"user_message","message":"task"},"timestamp":"2026-10-03T23:35:11Z"})
+        ),
+    )
+    .unwrap();
+    let root = Root::open(temp.path()).unwrap();
+    let items = read(
+        &Catalog {
+            cli: CliKind::Codex,
+            root: &root,
+            projects: &granted(&root, &[temp.path().to_owned()]),
+            user_config: None,
+            check: &|| Ok(()),
+        },
+        &Options {
+            kind: ResourceKind::History,
+            query: None,
+            session_id: None,
+        },
+        &mut Budget::new(super::super::super::scoped_fs::Limits::default()),
+    )
+    .expect("创建时间提取不得让历史读取失败");
+    let value = serde_json::to_value(&items).unwrap();
+    assert_eq!(value[0]["createdAt"], "2026-10-03T20:14:17Z");
+    assert_eq!(value[0]["updatedAt"], "2026-10-03T23:35:11Z");
+}
+
+// resume/fork 会写新 rollout 文件：thread 的创建时间取同 thread 最早文件的
+// session_meta 时间，代表切换（新文件成为最新状态）不移动会话的创建序位置。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryCodex_ForkKeepsThreadCreationTime_047() {
+    let temp = tempfile::tempdir().unwrap();
+    let directory = temp.path().join("sessions/2026/10/03");
+    std::fs::create_dir_all(&directory).unwrap();
+    let cwd = temp.path().to_str().unwrap().to_owned();
+    for (name, created, updated) in [
+        (
+            "rollout-2026-10-03T20-14-17-thread.jsonl",
+            "2026-10-03T20:14:17Z",
+            "2026-10-03T20:14:20Z",
+        ),
+        (
+            "rollout-2026-10-03T23-35-11-thread_fork.jsonl",
+            "2026-10-03T23:35:00Z",
+            "2026-10-03T23:35:11Z",
+        ),
+    ] {
+        std::fs::write(
+            directory.join(name),
+            format!(
+                "{}\n{}\n",
+                json!({"type":"session_meta","payload":{"id":"thread","cwd":cwd,"timestamp":created}}),
+                json!({"type":"event_msg","payload":{"type":"user_message","message":"task"},"timestamp":updated})
+            ),
+        )
+        .unwrap();
+    }
+    let root = Root::open(temp.path()).unwrap();
+    let items = read(
+        &Catalog {
+            cli: CliKind::Codex,
+            root: &root,
+            projects: &granted(&root, &[temp.path().to_owned()]),
+            user_config: None,
+            check: &|| Ok(()),
+        },
+        &Options {
+            kind: ResourceKind::History,
+            query: None,
+            session_id: None,
+        },
+        &mut Budget::new(super::super::super::scoped_fs::Limits::default()),
+    )
+    .expect("fork 后的创建时间合并不得让历史读取失败");
+    assert_eq!(items.len(), 1, "同 thread 只保留最新代表");
+    let value = serde_json::to_value(&items).unwrap();
+    // 代表是最新文件（updatedAt 为 fork 后时刻），创建时间仍是 thread 起点。
+    assert_eq!(value[0]["updatedAt"], "2026-10-03T23:35:11Z");
+    assert_eq!(value[0]["createdAt"], "2026-10-03T20:14:17Z");
+}
+
+// 历史容器和文件名顺序不能决定创建时刻：较早 rollout 即使后读到也须合并。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryCodex_LaterVisitedRolloutKeepsEarliestCreation_062() {
+    for (older, newer) in [
+        ("sessions/rollout-z.jsonl", "sessions/rollout-a.jsonl"),
+        (
+            "archived_sessions/rollout-old.jsonl",
+            "sessions/rollout-new.jsonl",
+        ),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        for (relative, created, updated) in [
+            (older, "2026-10-03T20:00:00Z", "2026-10-03T20:01:00Z"),
+            (newer, "2026-10-03T23:00:00Z", "2026-10-03T23:01:00Z"),
+        ] {
+            let path = temp.path().join(relative);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(
+                path,
+                format!(
+                    "{}\n{}\n",
+                    json!({"type":"session_meta","payload":{"id":"same-thread","cwd":temp.path().to_str().unwrap(),"timestamp":created}}),
+                    json!({"type":"event_msg","payload":{"type":"user_message","message":"task"},"timestamp":updated}),
+                ),
+            )
+            .unwrap();
+        }
+        let items = read_codex_history_fixture(temp.path()).unwrap();
+        assert_eq!(items.len(), 1);
+        let row = serde_json::to_value(&items[0]).unwrap();
+        assert_eq!(row["createdAt"], "2026-10-03T20:00:00Z", "{older}");
+        assert_eq!(row["updatedAt"], "2026-10-03T23:01:00Z");
+        assert_eq!(row["archived"], false);
+    }
+}
+
+// Claude 转录没有会话级 meta：首条带时间戳的记录近似创建时刻，后续记录只
+// 更新最新活动时间。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_CreationTimeFromFirstStampedRecord_046() {
+    let input = concat!(
+        "{\"type\":\"user\",\"message\":{\"content\":\"first task\"},\"timestamp\":\"2026-10-01T08:00:00Z\"}\n",
+        "{\"type\":\"assistant\",\"message\":{\"content\":\"answer\"},\"timestamp\":\"2026-10-01T09:00:00Z\"}\n",
+    );
+    let transcript = parse("fixture.jsonl", CliKind::Claude, input).unwrap();
+    assert_eq!(transcript.created.as_deref(), Some("2026-10-01T08:00:00Z"));
+    assert_eq!(transcript.updated.as_deref(), Some("2026-10-01T09:00:00Z"));
+}
+
 // 同 thread 的最新 rollout 归属其自身 cwd 对应的项目：fork 后 thread 在另一
 // 项目继续时，条目随最新代表移动，不残留旧项目。
 #[test]
@@ -2557,6 +2703,44 @@ fn HistoryCodex_CacheChecksCurrentIdentity_054() {
         values[0]["nativeSessionId"], "fresh-bb",
         "当前文件身份必须优先于同 stamp 的陈旧缓存"
     );
+}
+
+// 缓存不携带创建时间字段：身份校验已解析出头窗口，命中分支当场填回。
+// 暖读与冷读的 createdAt 必须一致，否则重启后的缓存路径会丢失稳定排序键。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryCodex_CacheHitKeepsCreationTime_057() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("sessions/2026/10/14")).unwrap();
+    let cwd = temp.path().to_str().unwrap().to_owned();
+    let relative = Path::new("sessions/2026/10/14/rollout-cache-created.jsonl");
+    std::fs::write(
+        temp.path().join(relative),
+        format!("{}\n{}\n",
+        json!({"type":"session_meta","payload":{"id":"cache-created","cwd":cwd,"timestamp":"2026-10-14T01:02:03Z","thread_source":"user"}}),
+        json!({"type":"event_msg","payload":{"type":"user_message","message":"real work"},"timestamp":"2026-10-14T05:00:00Z"}))).unwrap();
+    let root = Root::open(temp.path()).unwrap();
+    let (len, modified) = root.stat(relative).unwrap().unwrap();
+    let stamps = cache::Stamps::from_system(len, modified).unwrap();
+    cache::with(|cache| {
+        cache.record(
+            cache::key(root.key(), "codex", relative),
+            stamps,
+            cache::CachedMetadata {
+                native_id: "cache-created".into(),
+                cwd: Some(cwd),
+                title: "real work".into(),
+                title_priority: Some(0),
+                updated: Some("2026-10-14T05:00:00Z".into()),
+                metadata_incomplete: false,
+            },
+        )
+    });
+    let items = read_codex_history_fixture(temp.path()).unwrap();
+    let values = serde_json::to_value(&items).unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(values[0]["createdAt"], "2026-10-14T01:02:03Z");
+    assert_eq!(values[0]["updatedAt"], "2026-10-14T05:00:00Z");
 }
 
 // 暖缓存的身份读取只能解析完整记录；4KiB 后续正文字符切半不能丢失合法会话。

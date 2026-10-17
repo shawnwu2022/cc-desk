@@ -87,6 +87,67 @@ Adoption is pixel review, not a passing verification. A fresh complete original
 236-case CI run with `updateSnapshots: none` and `maxDiffPixels: 0` is required
 before merge. This evidence does not certify Windows WebView2 or real CLI IO.
 
+## CLI group integration baseline acceptance
+
+On 2026-10-17, grouping, creation ordering and runtime optimizations were reviewed
+as one integrated working tree: `b8924d7` (including `3be33b1`) plus `12a7af1`,
+based on `351f539`. The four actual PNG streams below were independently opened
+alongside their expected/diff images by `root` and `integrated_review`. Nine prior
+baseline byte streams remain unchanged. No mask, tolerance or production CSS was changed.
+
+| Image | Raw changed pixels | Exclusive difference bounds |
+| --- | ---: | --- |
+| workspace-mixed-1366-zh | 27732 | [60,163,515,619) |
+| workspace-hover-action-1366-en | 33941 | [60,163,534,619) |
+| workspace-menu-1024-en | 45026 | [60,163,534,619) |
+| workspace-dark-gui-light-terminal | 28033 | [60,163,534,619) |
+
+The two 28px CLI headers each have a 2px list gap: the selected row and its
+hover tooltip move down 30px, and subsequent projects move down 60px. The shared
+menu follows its row from y325 to y355 (bottom y493 to y523), retaining its size,
+entries and focus outline without clipping. Column widths, title truncation,
+terminal geometry and terminal text positions remain intact. Each image also has
+exactly 13 changed pixels inside the terminal sample leaf emoji: every changed
+channel differs by only one and alpha stays 255. Their bounds are
+[503,163,515,171) in Chinese and [522,163,534,171) in English. These raster details
+were explicitly inspected and accepted; the screenshots are unedited actual bytes.
+
+Capture environment: Ubuntu 22.04 under WSL2, Node 22.19.0, Playwright 1.63.0,
+Chrome for Testing 153.0.8010.12, Noto core `20201225-1build1`, CJK
+`1:20220127+repack1-1` and emoji `2.047-0ubuntu0.22.04.1`. The local fontconfig
+default omitted the RGB subpixel setting. Its first full run remains RED
+(10 screenshot failures, 227 passes). A process-only `FONTCONFIG_FILE` restored
+the original font rendering: all nine unrelated comparisons passed, and only the
+four reviewed group-header screenshots failed. That 4-failure/9-pass comparison
+also remains RED; image adoption does not rewrite a failed verification result.
+Passing Playwright comparisons do not assert byte equality of separately captured PNGs.
+
+For this local environment the exact fontconfig file is:
+
+```xml
+<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
+<fontconfig>
+  <include>/etc/fonts/fonts.conf</include>
+  <match target="font">
+    <edit name="rgba" mode="assign"><const>rgb</const></edit>
+  </match>
+</fontconfig>
+```
+
+Set `FONTCONFIG_FILE` to that file only for the test process. Its SHA-256 is
+`e86daa6a2a4f1283605029630bf393957b784dd0a582d9c5ed3fea7c78305e3f`.
+The reviewed frontend-source patch against `351f539` (excluding baseline images)
+has SHA-256 `3ac6696677b68b94e582022cd6f22067e18b482bb0525142c5efe002e8877173`;
+the exact diff command, per-image hashes, prior provenance and both reviewers are
+recorded in `tests/visual/__screenshots__/approval-manifest.json`. Local logs,
+actual/expected/diff files and that source patch are retained under
+`test-results/release-integration-review/`. After adoption, a fresh complete
+237-case no-update run passed in 2.6 minutes, including every original snapshot,
+geometry/interaction case and the new real-browser bidirectional collapsed CLI
+navigation regression. `updateSnapshots: none` and `maxDiffPixels: 0` remain unchanged.
+Current-source CI and Windows WebView2/real CLI acceptance remain separate requirements.
+
 ## Commands
 
 Install the lockfile's exact development dependency and its official browser:

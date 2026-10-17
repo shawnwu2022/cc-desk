@@ -217,13 +217,19 @@ pub async fn get_projects(
     limit: Option<usize>,
     offset: Option<usize>,
 ) -> Result<Vec<Project>, String> {
-    spawn_blocking_store("get_projects", move || crate::store::get_projects(limit, offset)).await
+    spawn_blocking_store("get_projects", move || {
+        crate::store::get_projects(limit, offset)
+    })
+    .await
 }
 
 /// 获取项目信息
 #[tauri::command]
 pub async fn get_project_info(path: String) -> Result<Option<Project>, String> {
-    spawn_blocking_store("get_project_info", move || crate::store::get_project_info(&path)).await
+    spawn_blocking_store("get_project_info", move || {
+        crate::store::get_project_info(&path)
+    })
+    .await
 }
 
 /// 获取会话列表
