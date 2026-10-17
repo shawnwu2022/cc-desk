@@ -2,7 +2,6 @@
 import { computed, useId } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppButton from '@/components/ui/AppButton.vue'
-import CliAppIcon from './CliAppIcon.vue'
 import SessionList from './SessionList.vue'
 import { summarizeSessionStatus } from '@/utils/sessionStatusBadge'
 import type {
@@ -40,15 +39,26 @@ const badge = computed(() => summarizeSessionStatus(props.sessions))
 
 <template>
   <div class="cli-group" :data-cli-group="cli">
+    <!--
+      组头是一条「居中分隔标签」，不是会话行：两侧细线把标题夹在中间，字号比会话标题更小、
+      字重更轻，避免与会话行或项目名抢层级。左侧箭头复用项目行的折叠语义。
+    -->
     <AppButton v-if="showHeader" class="cli-group-header" variant="ghost" size="compact"
       :data-cli-group-header="cli" :aria-expanded="!hidden" :aria-controls="listId" :disabled="toggleDisabled"
       @click="emit('toggle')">
-      <CliAppIcon :cli="cli" decorative />
-      <span class="cli-group-name">{{ CLI_NAMES[cli] }}</span>
-      <span class="cli-group-count">{{ sessions.length }}</span>
-      <span v-if="hidden && badge" class="cli-group-attention" :class="`cli-group-attention--${badge.kind}`"
-        data-cli-group-attention :data-status-kind="badge.kind" role="img"
-        :aria-label="t(badge.labelKey, { count: badge.count })">{{ badge.count > 99 ? '99+' : badge.count }}</span>
+      <span class="cli-group-rule" aria-hidden="true" />
+      <span class="cli-group-mark">
+        <svg class="cli-group-chevron" :class="{ expanded: !hidden }" aria-hidden="true" focusable="false"
+          width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="9 6 15 12 9 18" /></svg>
+        <span class="cli-group-name">{{ CLI_NAMES[cli] }}</span>
+        <!-- 收起时用状态徽章取代会话数：两者都是「这个组还有多少东西」，
+             同时显示会出现两个相邻的相同数字。 -->
+        <span v-if="!hidden || !badge" class="cli-group-count" aria-hidden="true">{{ sessions.length }}</span>
+        <span v-else class="cli-group-attention" :class="`cli-group-attention--${badge.kind}`"
+          data-cli-group-attention :data-status-kind="badge.kind" role="img"
+          :aria-label="t(badge.labelKey, { count: badge.count })">{{ badge.count > 99 ? '99+' : badge.count }}</span>
+      </span>
+      <span class="cli-group-rule" aria-hidden="true" />
     </AppButton>
     <SessionList v-show="!hidden" :id="listId" :sessions="sessions" :selected-id="selectedId" :surface-active="surfaceActive"
       @activate="emit('activate', $event)" @primary-action="(id, action) => emit('primary-action', id, action)"
@@ -59,13 +69,21 @@ const badge = computed(() => summarizeSessionStatus(props.sessions))
 
 <style scoped>
 .cli-group { min-width: 0; }
-.cli-group-header { width: 100%; justify-content: flex-start; gap: 6px; padding: 0 8px; }
+.cli-group-header { width: 100%; justify-content: center; gap: 8px; padding: 0 4px;
+  border-radius: var(--radius-sm); color: var(--text-tertiary); }
 .cli-group-header:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
-.cli-group-name { color: var(--text-secondary); font-size: 12px; font-weight: 500; }
-.cli-group-count { color: var(--text-tertiary); font-size: 11px; }
-.cli-group-attention { margin-left: auto; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px;
-  display: inline-flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 600; color: var(--accent-gold-text); }
+.cli-group-rule { flex: 1 1 0; min-width: 12px; height: 1px; background: var(--border-color); }
+.cli-group-mark { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+.cli-group-chevron { flex: 0 0 8px; transition: transform 0.15s ease; }
+.cli-group-chevron.expanded { transform: rotate(90deg); }
+/* 比会话标题（13px/500）更小更轻：组头是分节标签，不该压过它分隔的行。 */
+.cli-group-name { font-size: 10px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; }
+.cli-group-count { font-size: 10px; font-weight: 500; opacity: 0.7; }
+.cli-group-attention { min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px;
+  display: inline-flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 600;
+  color: var(--accent-gold-text); }
 .cli-group-attention--error { color: var(--status-error); }
 .cli-group-attention--completed, .cli-group-attention--running, .cli-group-attention--unread-reply { color: var(--status-success); }
 .cli-group-header + .session-list { margin-top: 2px; }
+@media (prefers-reduced-motion: reduce) { .cli-group-chevron { transition: none; } }
 </style>

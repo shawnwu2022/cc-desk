@@ -104,11 +104,22 @@ describe('CLI group header', () => {
     expect(mountGroup().find('[data-cli-group-attention]').exists()).toBe(false)
   })
 
-  // CliAppIcon 必须装饰性传入，否则会注入一个额外的 tabindex=0 焦点目标。
-  it('CliGroup_AppIconIsDecorative_008', () => {
+  // 组头不重复会话行的 CLI 图标：那会让组头读成「多出来的一条会话行」。
+  // 折叠指示用独立的箭头，且不制造额外的 Tab 止点。
+  it('CliGroup_HeaderOmitsRowIconAndStaysSingleTabStop_008', () => {
     const wrapper = mountGroup()
-    const icon = wrapper.get('[data-cli-group-header] .cli-app-icon')
-    expect(icon.attributes('tabindex')).toBeUndefined()
-    expect(icon.attributes('aria-hidden')).toBe('true')
+    const header = wrapper.get('[data-cli-group-header]')
+    expect(header.find('.cli-app-icon').exists()).toBe(false)
+    expect(header.get('.cli-group-chevron').attributes('aria-hidden')).toBe('true')
+    expect(header.attributes('tabindex')).toBeUndefined()
+  })
+
+  // 组头是紧凑的分节标签：两侧细线 + 居中标记，文字比会话标题更小。
+  it('CliGroup_HeaderIsCenteredRuleLabel_009', () => {
+    const wrapper = mountGroup()
+    const header = wrapper.get('[data-cli-group-header]')
+    expect(header.findAll('.cli-group-rule')).toHaveLength(2)
+    expect(header.get('.cli-group-mark').find('.cli-group-name').text()).toBe('Claude Code')
+    expect(header.get('.cli-group-mark').find('.cli-group-count').text()).toBe('2')
   })
 })
