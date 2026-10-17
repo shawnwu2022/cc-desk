@@ -148,6 +148,42 @@ geometry/interaction case and the new real-browser bidirectional collapsed CLI
 navigation regression. `updateSnapshots: none` and `maxDiffPixels: 0` remain unchanged.
 Current-source CI and Windows WebView2/real CLI acceptance remain separate requirements.
 
+## PR58 CLI group header baseline acceptance
+
+Two agents (`root` and `backend_review`) opened all four actual/expected/diff
+groups from [PR58 visual run 39052536216 attempt 1](https://github.com/shawnwu2022/cc-desk/actions/runs/39052536216)
+and all nine retained baseline images. The artifact's thirteen previous baseline
+copies match the repository SHA-256 values. Only the four exact actual PNG byte
+streams are adopted; the other nine files and prior review provenance remain intact.
+
+Capture source head: `f822aa03661875ba2529f59969cb84a39df3f989`; tested PR merge:
+`1c8a5cd2fe3c1b10fa4ddcf9215e6e699b16f70b`. Authenticated artifact **12108256058**
+was independently downloaded and hashed: 34,100,120 bytes, SHA-256
+`b5908107d32c117d82b7cefcc4517ba1cc61dfe0ffd5079f8b9311fd1c081a33`.
+Environment: Ubuntu 24.04, Node 22.23.3, Playwright 1.63.0, Chrome for Testing
+153.0.8010.12; Noto core `20201225-2`, CJK `1:20230817+repack1-3`, emoji
+`2.047-0ubuntu0.24.04.1`.
+
+| Image | Raw changed pixels | Exclusive difference bounds |
+| --- | ---: | --- |
+| workspace-mixed-1366-zh | 13129 | [60,163,515,622) |
+| workspace-hover-action-1366-en | 15359 | [60,163,534,622) |
+| workspace-menu-1024-en | 19266 | [60,163,534,622) |
+| workspace-dark-gui-light-terminal | 13360 | [60,163,534,622) |
+
+The CLI headers now use centered rule-labels, omit redundant icons and show
+active/total counts. The list gaps move the selected row and its tooltip/menu
+down 2px and subsequent projects down 4px. The menu, focus outline and tooltip
+remain inside the viewport. Each image also contains exactly thirteen leaf-emoji
+pixels differing by one channel value, at [503,163,515,171) for Chinese or
+[522,163,534,171) for English. No terminal text or geometry changes were found.
+No error page, hidden content, mask or tolerance change was accepted.
+
+The original run remains **RED: four screenshot failures, 233 cases passed**.
+The subsequent backend-only rustfmt repair does not alter the rendered source.
+A fresh full 237-case no-update CI run with `maxDiffPixels: 0` remains required
+before merge. Pixel acceptance does not certify Windows WebView2 or real CLI IO.
+
 ## Commands
 
 Install the lockfile's exact development dependency and its official browser:
