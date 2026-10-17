@@ -126,7 +126,7 @@ Native Ctrl+V 在读取剪贴板前同步向当前 binding 预留输入 intent�
 
 codex 的 Ctrl+V 能力分版本：**≥0.163.0** 在 Windows 上对纯 Ctrl+V 构造 `PasteImage { text_fallback }`（`chatwidget/interaction.rs`，先尝试图片、无图时回退由 codex TUI 自行读系统剪贴板文本：`clipboard_paste/text.rs` 用 arboard，`app/clipboard.rs:23-52` 处理回退）；**0.162.x** 的 `chatwidget/clipboard.rs` 只处理图片、无文本回退，纯文本按键会被吞掉。
 
-因此 CC Desk 不能无条件转发：`cli_codex_native_paste_support`（`cli/paste_support.rs`）按 profile 授权解析 `configured_program` 后运行 `codex --version`，版本 ≥0.163.0 才支持原生转发；结果按可执行路径缓存进程生命周期，探测失败保守返回不支持。这是运行时能力查询，不属于 launch preflight（preflight 仍不 spawn CLI）。
+因此 CC Desk 不能无条件转发：`cli_codex_native_paste_support`（`cli/paste_support.rs`）仅在接受探测的 Windows 上运行，按 profile 授权解析 `configured_program` 后运行 `codex --version`，输出必须携带 `codex-cli` 标识 token（裸 semver 如启动器 npx 打印的自身版本不算），版本 ≥0.163.0 才支持原生转发；探测有 5s 期限并回收挂起子进程，结果按可执行路径缓存进程生命周期，失败保守返回不支持。这是运行时能力查询，不属于 launch preflight（preflight 仍不 spawn CLI）。
 
 Ctrl+V keydown 仍先**同步** `reserveUserPaste` 保持输入排序契约；producer 内等待探测结果：支持时返回 1 字节 `\x16`（Ctrl+V 控制字符），由 codex 原生读剪贴板处理文本和图片；不支持时回退 Desk 剪贴板读取路径（文本构造 bracketed frame、图片走键位分流）。
 
