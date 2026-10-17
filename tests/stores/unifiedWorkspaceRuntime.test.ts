@@ -1653,3 +1653,23 @@ it.each(['SOURCE_BUSY', 'SOURCE_CHANGED'])('History_AutoFailureKeepsRows_065 %s'
   expect(runtime.sourceDiagnosticsWarnings.value.some(warning => warning.code === code)).toBe(true)
   expect(useUnifiedSessionsStore().sessions.find(row => row.adapterSessionId === tab.tabId)?.title).toBe('Known title')
 })
+
+// 来源问题入口紧贴面板标题（标题右侧），不占列表行也不与右侧动作组混排：引导期
+// 来源（项目元数据/配置）失败时列表为空，没有行可以挂载该信号。
+it('Warnings_SourceEntryFollowsPanelTitle_069', async () => {
+  io.scope.mockRejectedValue({ code: 'SCOPE_UNKNOWN', stage: 'scope-profile-validation' })
+  const w = mount(App, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { NativeCliTerminal: true, SettingsView: true } } })
+  wrappers.push(w); await flushPromises()
+  const group = w.get('.panel-title-group')
+  expect(group.get('.panel-title').text()).toBe(en.sessions)
+  const entry = group.get('[data-history-source-entry]')
+  // 排在标题之后，且不属于右侧动作组。
+  expect(group.element.lastElementChild?.contains(entry.element)).toBe(true)
+  expect(w.get('.header-actions').find('[data-history-source-entry]').exists()).toBe(false)
+  // 图标按钮：可访问名称留在 aria-label/tooltip，没有可见文案。
+  expect(entry.classes()).toContain('ui-icon-button')
+  expect(entry.attributes('aria-label')).toBe(en.historySourceIssues)
+  // 入口是通往诊断抽屉的唯一路径，必须仍能打开抽屉。
+  await entry.trigger('click'); await flushPromises()
+  expect(document.querySelector('[data-history-source-dialog]')).not.toBeNull()
+})

@@ -276,9 +276,16 @@ onUnmounted(() => {
         @rename-cancel="request({ kind: 'rename-cancel', sessionId: $event })"
         @confirmation-request="request({ kind: 'confirmation', request: $event })"
         @restore-request="request({ kind: 'restore-archive', sessionId: $event })">
-        <template #source-status>
-          <AppButton v-if="runtime.sourceIssuesAvailable?.value" data-history-source-entry variant="ghost" size="compact"
-            :inert="shell.section !== 'workspace' || !shell.sidebarVisible || undefined" @click="sourceDiagnosticsOpen = true">{{ t('historySourceIssues') }}</AppButton>
+        <template #title-trailing>
+          <!-- 来源问题只在有实际故障时出现；它是通往诊断抽屉的唯一入口，所以必须常驻可达。
+               挂在面板标题而不是会话行：警告是来源级的（整个 Claude/Codex 历史源），
+               且引导期来源（项目元数据/配置/目录）失败时列表为空，没有行可承接。 -->
+          <span v-if="runtime.sourceIssuesAvailable?.value" class="source-issue-entry"
+            :inert="shell.section !== 'workspace' || !shell.sidebarVisible || undefined">
+            <IconButton data-history-source-entry :label="t('historySourceIssues')" @click="sourceDiagnosticsOpen = true">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3.5 21.5 20h-19z" /><path d="M12 10.5v4" /><path d="M12 17.5h.01" /></svg>
+            </IconButton>
+          </span>
         </template>
       </SidebarPanel>
     </template>
@@ -367,5 +374,6 @@ onUnmounted(() => {
 
 <style scoped>
 .workspace-source-notice { flex-wrap: wrap; }
-[data-history-source-entry] { margin: 4px 12px 0; align-self: flex-start; }
+.source-issue-entry { display: inline-flex; }
+.source-issue-entry :deep(.ui-icon-button) { color: var(--status-warning); }
 </style>

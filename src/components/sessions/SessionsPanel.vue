@@ -200,6 +200,7 @@ onUnmounted(() => { window.removeEventListener('keydown', onKeydown) })
 <template>
   <div ref="panel" class="sessions-panel" @keydown.capture="onTreeKeydown">
     <PanelHeader :title="t('sessions')" @close="emit('close')">
+      <template #title-trailing><slot name="title-trailing" /></template>
       <template #actions>
         <IconButton :label="t('addProject')" @click="emit('add-project')">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14" /></svg>
@@ -212,7 +213,6 @@ onUnmounted(() => { window.removeEventListener('keydown', onKeydown) })
         </IconButton>
       </template>
     </PanelHeader>
-    <slot name="source-status" />
     <div class="search-box">
       <AppInput ref="searchInput" v-model="searchQuery" class="search-input" size="compact" :aria-label="t('searchSessions')" :placeholder="t('searchSessions')" />
       <IconButton v-if="searchQuery" :label="t('clearSearch')" @click="searchQuery = ''">
