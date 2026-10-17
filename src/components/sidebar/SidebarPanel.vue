@@ -47,7 +47,7 @@ defineExpose({ focusSearch: () => panel.value?.focusSearch() })
       @menu-action="(id, action) => emit('menu-action', id, action)"
       @rename-commit="(id, title) => emit('rename-commit', id, title)" @rename-cancel="emit('rename-cancel', $event)"
       @confirmation-request="emit('confirmation-request', $event)" @restore-request="emit('restore-request', $event)">
-      <template #source-status><slot name="source-status" /></template>
+      <template #title-trailing><slot name="title-trailing" /></template>
     </SessionsPanel>
   </div>
 </template>

@@ -166,6 +166,8 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
 
   const resumeDialog = ref<ResumeDialogRequest | null>(null)
   const missingRecords = new Map<string, UnifiedSession>()
+  // 行投影缓存：让 projectGroups 在无关变化时保留行对象身份，避免整棵树重渲染。
+  const projectedRows = new WeakMap<UnifiedSession, { resumePending: boolean; row: UnifiedSession }>()
   let historyLoader: (query: ResumeHistoryQuery) => Promise<boolean> = async () => false
   function configureHistoryLoader(loader: typeof historyLoader) { historyLoader = loader }
   function openResumeDialog(request: ResumeDialogRequest) {
@@ -303,7 +305,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     // Never use new-session preparation: an explicit existing configuration and
     // already registered project are checked by the Native runtime owner.
     const opened = await adapterForRuntime('native-cli').createSession(copyInput(input), canAdmit)
-    sessions.value = [...sessions.value.filter(row => row.id !== opened.id), opened]
+    sessions.value = [...sessions.value.filter(row => row.id !== opened.id && !supersedesSourceRow(row, opened)), opened]
     if (epoch === selectionEpoch) activeSessionId.value = opened.id
     await refresh(input.projectKey).catch(() => { error.value = 'SESSION_REFRESH_FAILED' })
     return opened
@@ -365,7 +367,15 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
         }
         groups.set(key, group)
       }
-      group.sessions.push({ ...session, resumePending: isResumePending(session) })
+      // 行投影复用同一对象：refresh 已保留未变化行的身份，这里若每次展开新对象，
+      // 所有 SessionItem 的 prop 都会换身份，任何单行状态变化都会重渲染整棵树。
+      const resumePending = isResumePending(session)
+      let projected = projectedRows.get(session)
+      if (!projected || projected.resumePending !== resumePending) {
+        projected = { resumePending, row: { ...session, resumePending } }
+        projectedRows.set(session, projected)
+      }
+      group.sessions.push(projected.row)
       if (session.processState === 'running' || session.processState === 'starting') {
         group.runningCount += 1
       }
@@ -647,12 +657,37 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     }
   }
 
+  /**
+   * 打开行接管它取代的关闭历史投影：打开行 id 是 tab 身份，历史行 id 不同，
+   * 只按 resumed.id 过滤会让两行在列表里并存一个刷新往返。折叠口径与 refresh
+   * 一致：同 runtime 的历史行只在物理记录键相同时让位；跨 runtime 的 legacy
+   * 孪生仅在根身份已证明时让位；绝不触碰其他打开的终端。
+   */
+  function supersedesSourceRow(row: UnifiedSession, opened: UnifiedSession): boolean {
+    if (row.opened === true || row.archived || row.id === opened.id) return false
+    if (row.cli !== opened.cli || normalizePath(row.projectPath) !== normalizePath(opened.projectPath)) return false
+    if (!opened.nativeSessionId || row.nativeSessionId !== opened.nativeSessionId) return false
+    if (opened.runtime === 'legacy-claude') {
+      return row.runtime === 'legacy-claude' && row.id.startsWith('legacy-history:')
+    }
+    const record = nativeHistoryRecordKey(opened)
+    if (row.runtime === 'native-cli') return record !== null && nativeHistoryRecordKey(row) === record
+    if (row.runtime === 'legacy-claude') {
+      return legacyClaudeRoot !== undefined && opened.nativeRootKey === legacyClaudeRoot
+        && row.id.startsWith('legacy-history:')
+    }
+    return false
+  }
+
   async function resumeSession(input: ResumeUnifiedSessionInput, canAdmit = () => true): Promise<UnifiedSession> {
     revokeUnissuedRenames(null)
     const epoch = ++selectionEpoch
     ++selectionIntentEpoch
     const resumed = await adapterForResume(input).resumeSession(input, canAdmit)
-    sessions.value = [...sessions.value.filter(row => row.id !== resumed.id), resumed]
+    // 打开行必须在同一次发布里接管它的来源历史行：打开行 id 是 tab 身份，
+    // 历史行 id 不同，只按 resumed.id 过滤会让两行并存一个刷新往返。
+    sessions.value = [...sessions.value.filter(row => row.id !== resumed.id
+      && !supersedesSourceRow(row, resumed)), resumed]
     await refresh(input.projectKey).catch(() => { error.value = 'SESSION_REFRESH_FAILED' })
     if (epoch === selectionEpoch) activeSessionId.value = resumed.id
     return sessions.value.find(value => value.id === resumed.id) ?? resumed

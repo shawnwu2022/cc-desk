@@ -183,9 +183,11 @@ pub(crate) fn is_gbk_trail(b: u8) -> bool {
 
 /// 在系统文件管理器中打开指定路径
 ///
-/// Windows 的 explorer 会把单个参数按自身规则切分，`/select,` 之类的开关形态
-/// 会被当作命令开关而非路径，因此 Windows 将规范化 UNC/长路径恢复为反斜杠，
-/// 并拒绝单个 `/` 开头的开关；`-` 开头在所有平台都拒绝，POSIX 绝对路径不受影响。
+/// Windows 的 explorer 只按自身规则解析单个参数：任何正斜杠（前端与历史记录统一
+/// 使用的写法，如 `C:/proj` 或混合 `C:\proj/sub`）都会让它把参数当作无效路径，
+/// 回退打开「文档」；`/select,` 之类的开关形态同样会被当作命令开关。因此 Windows
+/// 把盘符/UNC/长路径的正斜杠恢复为反斜杠，并拒绝单个 `/` 开头的开关；`-` 开头在
+/// 所有平台都拒绝，POSIX 绝对路径不受影响。
 pub(crate) fn open_in_file_manager(path: &str) -> Result<(), String> {
     let path = file_manager_argument(path)?;
     #[cfg(target_os = "windows")]
@@ -216,12 +218,15 @@ fn file_manager_argument(path: &str) -> Result<std::borrow::Cow<'_, str>, String
         return Err(format!("path looks like a command switch: {path}"));
     }
     #[cfg(target_os = "windows")]
-    if path.starts_with("//") {
-        return Ok(std::borrow::Cow::Owned(path.replace('/', "\\")));
-    }
-    #[cfg(target_os = "windows")]
-    if path.starts_with('/') {
-        return Err(format!("path looks like an explorer switch: {path}"));
+    {
+        // 单个 `/` 开头是 explorer 自身的开关形态（`/select,` 等），必须拒绝；
+        // `//` 开头是 UNC 或 `\\?\` 长路径的字面量前缀，不是开关。
+        if path.starts_with('/') && !path.starts_with("//") {
+            return Err(format!("path looks like an explorer switch: {path}"));
+        }
+        if path.contains('/') {
+            return Ok(std::borrow::Cow::Owned(path.replace('/', "\\")));
+        }
     }
     Ok(std::borrow::Cow::Borrowed(path))
 }

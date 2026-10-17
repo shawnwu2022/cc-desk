@@ -81,6 +81,26 @@ pub(crate) async fn cli_discover_programs(
     .map_err(|_| error("DISCOVERY_UNAVAILABLE"))?
 }
 
+// 运行时能力查询：codex Ctrl+V 是否原生回退读文本。探测按 program 缓存。
+#[tauri::command]
+pub(crate) async fn cli_codex_native_paste_support(
+    window: WebviewWindow,
+    request: Value,
+) -> Result<super::paste_support::CodexNativePasteSupport, SafeError> {
+    let caller = window.label().to_string();
+    let request: super::paste_support::PasteSupportRequest =
+        serde_json::from_value(request).map_err(|_| SafeError::invalid("request"))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        super::paste_support::native_paste_support(
+            &WorkspaceRepository::production()?,
+            &caller,
+            &request,
+        )
+    })
+    .await
+    .map_err(|_| error("PASTE_SUPPORT_TASK_FAILED"))?
+}
+
 // Raw document-authenticated launch boundary. No wire owner fields.
 #[tauri::command]
 pub(crate) async fn cli_start(

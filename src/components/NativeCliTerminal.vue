@@ -27,6 +27,7 @@ import { platform } from '@/utils/platform'
 import { formatDroppedPaths } from '@/utils/terminalDropPaths'
 import { publicNativeErrorCode } from '@/utils/nativeErrorCode'
 import { cliResize, cliStop, cliGetObserverStatus } from '@/api/tauri'
+import { codexNativeTextPasteCached } from '@/api/cliPasteSupport'
 import type { OutputFrame } from '@/types/terminal'
 import { useHookStore } from '@/stores/hook'
 import { useAppStore } from '@/stores/app'
@@ -177,6 +178,7 @@ function bindClipboard() {
     if (!target || !term.element?.contains(target)) return
     event.preventDefault()
     event.stopPropagation()
+
     const attempt = currentAttempt()
     const activeTerm = term
     const activeBinding = binding
@@ -187,8 +189,22 @@ function bindClipboard() {
       if (!cancelReservation?.()) throw new Error('NATIVE_PASTE_CANCEL_FAILED')
       return new Uint8Array()
     }
+    // codex ≥0.163.0 在 Windows 上对纯 Ctrl+V 构造 PasteImage{text_fallback}，
+    // 无图时由 codex 自己读剪贴板文本；此时 producer 返回 1 字节 \x16 即一次完整
+    // 粘贴事件，绕开 bracketed frame 传输与 paste burst 逐字插入。0.162.x 无文本
+    // 回退（会吞掉纯文本按键），必须探测后再转发，否则回退 Desk 剪贴板路径。
+    const activeTab = tabs.tab(props.tabId)
+    const codexTextFallback = activeTab?.cli === 'codex'
+      ? codexNativeTextPasteCached(activeTab.profileId, activeTab.profileRevision)
+      : null
     // 先在当前 attempt/mode 同步预留 intent；异步剪贴板结果只能完成这个固定预留。
     const reserved = activeBinding.reserveUserPaste(async () => {
+      if (codexTextFallback && await codexTextFallback) {
+        if (!attemptIsCurrent(attempt) || binding !== activeBinding || term !== activeTerm) {
+          return cancelNoop()
+        }
+        return new TextEncoder().encode('\x16')
+      }
       const clipboard = await readClipboardSnapshot(() => readText(), () => readImage())
       if (!attemptIsCurrent(attempt) || binding !== activeBinding || term !== activeTerm) {
         return cancelNoop()
@@ -641,6 +657,19 @@ function fitVisible() {
   void resizeNative(term.cols, term.rows)
 }
 
+// 拖拽窗口时 ResizeObserver 逐帧触发，每帧都会 fit + 一次 ConPTY resize IPC；
+// Windows 下 ConPTY resize 会触发重绘，代价高。尾沿防抖只保留最后一次几何，
+// 与 legacy 侧同一策略。fitVisible 本身保持同步语义，供活跃切换等路径直接调用。
+let resizeDebounce: ReturnType<typeof setTimeout> | null = null
+function scheduleResizeFit() {
+  needsFit.value = true
+  if (resizeDebounce !== null) clearTimeout(resizeDebounce)
+  resizeDebounce = setTimeout(() => {
+    resizeDebounce = null
+    if (!disposed && props.active) fitVisible()
+  }, 80)
+}
+
 onMounted(async () => {
   if (!container.value) return
   const preferences = app.terminalPreferences
@@ -661,8 +690,7 @@ onMounted(async () => {
   // D19 provenance binding is installed by start(); bind IME after it exists so
   // xtermData observation and explicit fallback share the same native writer.
   resizeObserver = new ResizeObserver(() => {
-    needsFit.value = true
-    if (props.active) requestAnimationFrame(fitVisible)
+    scheduleResizeFit()
   })
   resizeObserver.observe(container.value)
 
@@ -745,6 +773,8 @@ onUnmounted(() => {
   pasteKeyDownListener = null
   resizeObserver?.disconnect()
   resizeObserver = null
+  if (resizeDebounce !== null) clearTimeout(resizeDebounce)
+  resizeDebounce = null
   try { webglAddon?.dispose() } catch { /* Optional renderer. */ }
   webglAddon = null
   term?.dispose()

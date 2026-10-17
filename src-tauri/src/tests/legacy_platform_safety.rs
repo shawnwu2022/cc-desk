@@ -60,7 +60,7 @@ fn OpenInFileManager_RejectsExplorerSwitchInput() {
 #[cfg(windows)]
 #[test]
 fn OpenInFileManager_NormalizedWindowsPaths_001() {
-    // 前端统一路径使用正斜杠；进入 Explorer 前恢复 UNC 与长路径的字面量前缀。
+    // 前端与历史记录统一使用正斜杠；explorer 只认反斜杠，进入前必须整体还原。
     for (input, expected) in [
         ("//server/share/project", r"\\server\share\project"),
         (
@@ -70,9 +70,17 @@ fn OpenInFileManager_NormalizedWindowsPaths_001() {
         ("//?/C:/projects/demo", r"\\?\C:\projects\demo"),
         ("//?/UNC/server/share/demo", r"\\?\UNC\server\share\demo"),
         (r"\\server\share\project", r"\\server\share\project"),
-        ("C:/projects/demo", "C:/projects/demo"),
+        ("C:/projects/demo", r"C:\projects\demo"),
+        ("f:/downloads/vbs", r"f:\downloads\vbs"),
+        ("C:/projects/demo/", r"C:\projects\demo\"),
+        // 混合写法同样必须还原，否则 explorer 回退打开「文档」。
+        (r"C:\projects/demo/sub", r"C:\projects\demo\sub"),
+        (r"\\server\share/project", r"\\server\share\project"),
+        // 已是纯反斜杠时不改写（保留 Cow::Borrowed）。
+        (r"C:\projects\demo", r"C:\projects\demo"),
     ] {
-        assert_eq!(file_manager_argument(input).unwrap(), expected);
+        let argument = file_manager_argument(input).unwrap();
+        assert_eq!(argument, expected, "input: {input}");
     }
 }
 

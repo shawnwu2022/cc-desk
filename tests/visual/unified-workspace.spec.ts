@@ -338,6 +338,11 @@ for (const viewport of viewports) for (const dpr of [1, 1.25, 1.5]) for (const l
         for (const control of row.controls) { expect(control.width).toBeGreaterThanOrEqual(20); expect(control.height).toBeGreaterThanOrEqual(28) }
       }
       expect(geometry.find(row => row.titleLength === 200)).toMatchObject({ truncated: true, textOverflow: 'ellipsis' })
+      // 组头不是 session row，不受上面的行内控件检查覆盖——单独断言它的交互目标高度。
+      const cliHeaderHeights = await page.locator('[data-cli-group-header]')
+        .evaluateAll(headers => headers.map(header => header.getBoundingClientRect().height))
+      expect(cliHeaderHeights.length, 'mixed fixture 必须至少渲染一个多 CLI 项目的组头').toBeGreaterThan(0)
+      for (const height of cliHeaderHeights) expect(height).toBeGreaterThanOrEqual(28)
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
       expect(await page.locator('.app-shell').evaluate(element => element.getBoundingClientRect().width)).toBe(viewport.width)
       expect(await page.evaluate(() => devicePixelRatio)).toBe(dpr)
@@ -388,6 +393,28 @@ for (const viewport of [{ width: 1024, height: 640 }, { width: 1468, height: 744
 
 test.describe('rendered interaction boundaries', () => {
   test.use({ viewport: { width: 1024, height: 640 } })
+  test('CLI group collapse skips hidden rows in both arrow directions', async ({ page }) => {
+    await openFixture(page, { scenario: 'mixed', locale: 'en' })
+    const projectRow = page.locator('[data-project-key="c:/visual/cc-desk"]')
+    const project = page.locator('.project-node').filter({ has: projectRow })
+    const header = project.locator('[data-cli-group-header="claude"]')
+    const claude = project.locator('[data-cli-group="claude"] [data-session-row]').first()
+    const codex = project.locator('[data-cli-group="codex"] [data-session-row]').first()
+    await header.click()
+    await expect(header).toHaveAttribute('aria-expanded', 'false')
+    await expect(claude).toBeHidden()
+    await projectRow.focus()
+    await page.keyboard.press('ArrowDown')
+    await expect(codex).toBeFocused()
+    await page.keyboard.press('ArrowUp')
+    await expect(projectRow).toBeFocused()
+    await header.click()
+    await expect(claude).toBeVisible()
+    await projectRow.focus()
+    await page.keyboard.press('ArrowDown')
+    await expect(claude).toBeFocused()
+  })
+
   test('archive keeps its own fixed slot beside time on hover and focus', async ({ page }) => {
     await openFixture(page, { scenario: 'mixed', locale: 'en' })
     const row = page.locator('[data-session-row]').filter({ has: page.locator('[data-session-archive]') }).first()

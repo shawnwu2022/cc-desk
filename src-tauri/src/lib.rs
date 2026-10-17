@@ -272,6 +272,7 @@ fn run_ordinary(initial_dir: Option<String>, #[cfg(windows)] startup: DesktopSta
             cli::commands::cli_patch_profile,
             cli::commands::cli_get_availability,
             cli::commands::cli_discover_programs,
+            cli::commands::cli_codex_native_paste_support,
             cli::project_commands::cli_list_projects,
             cli::project_commands::cli_register_project,
             cli::project_commands::cli_patch_project,

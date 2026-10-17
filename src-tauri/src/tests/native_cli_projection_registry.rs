@@ -1022,6 +1022,7 @@ fn history_snapshot_accounts_allocated_capacity_and_retains_partial_flags() {
         metadata_incomplete: None,
         cwd: None,
         updated_at: None,
+        created_at: None,
         truncated: true,
         archived: false,
     }];
@@ -1042,6 +1043,28 @@ fn history_snapshot_accounts_allocated_capacity_and_retains_partial_flags() {
     assert_eq!(second.observed_at, first.observed_at);
     assert_eq!(second.history_metadata_incomplete, Some(true));
     assert_eq!(second.history_read_failures, vec!["SOURCE_UNSUPPORTED"]);
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn HistorySnapshot_CreationTimeCapacityIsBounded_001() {
+    let mut created = String::with_capacity(HISTORY_SNAPSHOT_BYTES);
+    created.push('x');
+    let items = vec![ResourceItem::Session {
+        session_key: "key".into(),
+        native_session_id: "id".into(),
+        project_id: None,
+        title: "title".into(),
+        title_unknown: None,
+        title_source: None,
+        metadata_incomplete: None,
+        cwd: None,
+        updated_at: None,
+        created_at: Some(created),
+        truncated: false,
+        archived: false,
+    }];
+    assert!(history_snapshot_bytes(&items, items.capacity()) > HISTORY_SNAPSHOT_BYTES);
 }
 #[test]
 fn history_snapshot_rechecks_root_and_registered_project_handles() {

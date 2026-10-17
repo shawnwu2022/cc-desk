@@ -723,15 +723,33 @@ Resume/failed-creation Retry/archive Restore sit beside the live age and remain
 visible without hover. Their duplicate menu entries are omitted. The existing open
 Close overlay and ended-session Archive control retain their sizing and ownership.
 
-`SessionsPanel` orders rows by a frozen first-seen creation key, not live activity.
-A tab's key is its real creation time; a history row's key is its first-seen activity
-time, because CLI history carries only the last-updated time and no creation time.
-The key is written once per row id and never updated, so output, status, completion,
-search, rerender, later activity, opening, closing, background discovery and the
-Refresh sessions button all leave existing row positions unchanged. A newly seen row
-(including a just-closed session's history identity and archive restores) inserts at
-its frozen key. `ProjectNode` clusters the rows of one project by CLI type (Claude then Codex) with no
-rendered heading — the row app-icon already distinguishes the CLI. Project pin/name
+`SessionsPanel` orders rows by a frozen creation key, not live activity.
+The key is the CLI session creation time when the backend provides one (codex
+`session_meta` timestamp; claude first stamped record, including an `isMeta`
+record whose body is skipped) — it survives restarts,
+activation and background activity, so resuming or activating a session never
+moves it. A codex thread's creation time is the earliest across all its rollouts
+and does not depend on which projects the current history scope registers, so a
+single-project refresh and a grouped view agree. The backend only publishes a
+creation time the strict IPC decoder accepts; an over-long or NUL-bearing
+candidate falls back to a valid line timestamp or is omitted, because one
+undecodable optional field would reject the whole response.
+An open terminal row is projected by both adapters with its real
+creation time as `createdAt`; a history row whose CLI source carries no creation
+time freezes its first-seen activity time as the stable approximation. The key is
+fixed once per row id and never recomputed, so output, status, completion, search,
+rerender, later activity, opening, closing, background discovery and the Refresh
+sessions button all leave existing row positions unchanged. A newly seen row
+(including a just-closed session's history identity and archive restores) inserts
+at its key. There is no open/closed grouping inside a project: rows interleave purely by creation key.
+`ProjectNode` clusters rows by CLI type (Claude then Codex) and renders a collapsible,
+always-visible 28px header per type when a project has more than one type. The header
+carries the CLI name, its row count and, while collapsed, that group's own status badge
+(never a project aggregate). A single-CLI project renders no header and stays expanded.
+The header is a disclosure control, not a treeitem, and stays out of the arrow-key row
+sequence. Collapsing uses `v-show`, so rows keep their mounted state (an in-progress
+rename draft survives) and `aria-controls` never dangles; hidden rows are excluded
+from arrow-key navigation. Collapse state is in-memory, like `expandedKeys`. Project pin/name
 ordering and archive opening-order grouping are unchanged.
 
 Exact-source pending restores publish `resumePending` only as presentation metadata.

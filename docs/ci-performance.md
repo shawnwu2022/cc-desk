@@ -1,5 +1,67 @@
 # CI runtime work
 
+## Runtime performance audit and falsified candidates (2026-10-17, local)
+
+A full application-runtime audit was run on `perf/runtime-batch1` (based on main
+`351f5397`). Three optimizations were planned from the audit and **all three were
+falsified by measurement before adoption**. This entry records them so the
+negative results are not re-litigated.
+
+Baseline measurements on the author's machine, all under the debug test profile
+unless noted. These are local samples on a busy workstation, not hosted numbers,
+and the stress cases are load-sensitive (the same case measured 22.6 s / 28.4 s
+across adjacent runs).
+
+- **Vue rendering dominates the multi-session stress case.** Instrumenting
+  `Stress_30Owners120Changes_002` for one run split its 120 changes into
+  `refresh=435 ms`, `projection=18,774 ms`, `render=22,499 ms`. The catalog
+  refresh that the audit proposed to optimize is 1% of the case; component
+  rendering is 54%. `refreshCatalog` is additionally a no-op on those paths:
+  it returns early while `loading` is true, and the per-tab watchers are
+  coalesced by `queueCatalogProjects` + `nextTick`.
+- **Append-resume name parsing saves less than it costs.** The largest real
+  transcript on this machine is 37.3 MB / 17,058 lines. Its cost split
+  (Node, same file, cold): read 49.6 ms, UTF-8 decode 169.7 ms, full
+  `JSON.parse` 166.2 ms, whole-file SHA-256 80.9 ms. Any safe resume needs a
+  prefix/head guard against rewrites, so the guard alone is roughly half the
+  full-parse cost, and it only pays off for large files. Cost also scales with
+  the largest files, not the session count. Not adopted.
+- **Legacy 4 KiB `pty-output` emits are not measurable.** A 1 MiB burst through
+  `pump_pty_output` produced 257 emits in 21 ms; batching to 64 KiB produced 17
+  emits in 19 ms. The decoder itself (43 ms) is only 24 ms above raw
+  `decode_output` (19 ms), so the `to_vec` copy has no separable cost here.
+  Not adopted. Real WebView IPC serialization on the frontend is not covered by
+  this measurement.
+
+Two audit claims were also disproved during the same pass:
+
+- **i18n splitting is not worth it.** Extracting the `zh` locale to a dynamic
+  import moved the main chunk from 513 kB to 511 kB (gzip 154.4 kB): CJK strings
+  compress too well for the uncompressed-byte estimate to hold.
+- **`get_home_data` is not double-scanned at startup.** `loadCache` has no
+  production caller (only tests reach it); the real startup scan is the single
+  `loadManagedProjects` → `get_projects` path.
+
+The audit's static severity ranking did not survive measurement. Future runtime
+performance work should measure the share of the actual critical path first, and
+only then choose what to change.
+
+`BenchmarkActiveFullScan_Real_004` was repaired in the same branch. It read the
+live `~/.claude/projects` tree, so active development changed `last_active_at`
+and left half-written JSONL lines between rounds; the three-variant equivalence
+gate failed with a round/variant that drifted per run (round 2
+`SnapshotStreamName`, then round 1 `SnapshotLegacyName`). Phase 0A now copies the
+real tree to a one-shot static snapshot before comparing variants, matching the
+existing tempdir-copy pattern in `benchmark_active_full_scan_real`. The gate had
+also been asserting a hardcoded `variants_are_equivalent: true` rather than the
+comparison result. With the snapshot in place the benchmark passes (47.85 s) and
+reports `append_resume_required = true` for the debug profile.
+
+Delivered on this branch, each independent of the falsified candidates:
+dependency removal (10 never-imported packages), 11 blocking store reads moved
+onto the blocking pool, an 80 ms trailing debounce on the native terminal
+`ResizeObserver`, the benchmark repair, and the matching documentation updates.
+
 ## Session-list repair follow-up (2026-10-15, local evidence)
 
 The review started from `aed8abbf4594925bc547fe7dcef6efe2836f3752` on

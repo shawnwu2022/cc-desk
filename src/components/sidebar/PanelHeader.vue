@@ -1,6 +1,9 @@
 <template>
   <div class="panel-header">
-    <span class="panel-title">{{ title }}</span>
+    <div class="panel-title-group">
+      <span class="panel-title">{{ title }}</span>
+      <slot name="title-trailing" />
+    </div>
     <div class="header-actions">
       <slot name="actions" />
       <button class="close-btn" @click="$emit('close')">
@@ -31,6 +34,13 @@ defineEmits<{
   justify-content: space-between;
   padding: 12px 16px;
   border-bottom: 1px solid var(--border-color);
+}
+
+.panel-title-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
 }
 
 .panel-title {

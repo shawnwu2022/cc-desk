@@ -3,6 +3,8 @@ import type { ProfileList, ProfilePatch } from '@/types/profile'
 
 export { cliGetAvailability } from './cliAvailability'
 export type { CliAvailability } from './cliAvailability'
+export { cliCodexNativePasteSupport } from './cliPasteSupport'
+export type { CodexNativePasteSupport } from './cliPasteSupport'
 export { cliDiscoverPrograms } from './programDiscovery'
 export type { ProgramCandidate, ProgramDiscovery } from './programDiscovery'
 

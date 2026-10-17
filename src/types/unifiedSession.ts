@@ -84,6 +84,8 @@ export interface UnifiedSession {
   lastActivityAt: number
   /** New/reopened/restored time; selecting an already open terminal preserves it. */
   lastOpenedAt?: number
+  /** CLI 会话创建时间（毫秒）；创建序排序的稳定键，缺失时 UI 回落首见近似。 */
+  createdAt?: number
   archived: boolean
   /** UI projection only; runtime actions must still check the owning store. */
   opened?: boolean

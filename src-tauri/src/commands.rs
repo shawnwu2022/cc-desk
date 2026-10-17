@@ -217,13 +217,19 @@ pub async fn get_projects(
     limit: Option<usize>,
     offset: Option<usize>,
 ) -> Result<Vec<Project>, String> {
-    crate::store::get_projects(limit, offset).map_err(|e| e.to_string())
+    spawn_blocking_store("get_projects", move || {
+        crate::store::get_projects(limit, offset)
+    })
+    .await
 }
 
 /// 获取项目信息
 #[tauri::command]
 pub async fn get_project_info(path: String) -> Result<Option<Project>, String> {
-    crate::store::get_project_info(&path).map_err(|e| e.to_string())
+    spawn_blocking_store("get_project_info", move || {
+        crate::store::get_project_info(&path)
+    })
+    .await
 }
 
 /// 获取会话列表
@@ -246,7 +252,10 @@ pub async fn get_sessions(
 /// 获取会话总数
 #[tauri::command]
 pub async fn get_session_count(project_path: String) -> Result<usize, String> {
-    crate::store::get_session_count(&project_path).map_err(|e| e.to_string())
+    spawn_blocking_store("get_session_count", move || {
+        crate::store::get_session_count(&project_path)
+    })
+    .await
 }
 
 /// 获取所有项目的近期会话
@@ -267,7 +276,10 @@ pub async fn get_session_details(
     project_path: String,
     session_id: String,
 ) -> Result<Option<SessionDetails>, String> {
-    crate::store::get_session_details(&project_path, &session_id).map_err(|e| e.to_string())
+    spawn_blocking_store("get_session_details", move || {
+        crate::store::get_session_details(&project_path, &session_id)
+    })
+    .await
 }
 
 /// 搜索会话消息内容
@@ -278,13 +290,16 @@ pub async fn search_session_messages(
     limit: Option<usize>,
 ) -> Result<Vec<SessionSearchResult>, String> {
     let limit = limit.unwrap_or(20);
-    crate::store::search_session_messages(&project_path, &query, limit).map_err(|e| e.to_string())
+    spawn_blocking_store("search_session_messages", move || {
+        crate::store::search_session_messages(&project_path, &query, limit)
+    })
+    .await
 }
 
 /// 获取应用配置
 #[tauri::command]
 pub async fn get_app_config() -> Result<AppConfig, String> {
-    crate::store::get_app_config().map_err(|e| e.to_string())
+    spawn_blocking_store("get_app_config", crate::store::get_app_config).await
 }
 
 /// 更新应用配置
@@ -471,31 +486,46 @@ pub async fn test_communication(message: String) -> Result<String, String> {
 /// 获取项目配置
 #[tauri::command]
 pub async fn get_project_config(project_path: String) -> Result<ProjectConfig, String> {
-    crate::store::get_project_config(&project_path).map_err(|e| e.to_string())
+    spawn_blocking_store("get_project_config", move || {
+        crate::store::get_project_config(&project_path)
+    })
+    .await
 }
 
 /// 获取所有 Agents（包括 built-in、plugin、user、project）
 #[tauri::command]
 pub async fn get_all_agents(project_path: String) -> Result<Vec<AgentInfo>, String> {
-    crate::store::get_all_agents(&project_path).map_err(|e| e.to_string())
+    spawn_blocking_store("get_all_agents", move || {
+        crate::store::get_all_agents(&project_path)
+    })
+    .await
 }
 
 /// 获取所有 Skills（包括 project、user、plugin）
 #[tauri::command]
 pub async fn get_all_skills(project_path: String) -> Result<Vec<SkillInfo>, String> {
-    crate::store::get_all_skills(&project_path).map_err(|e| e.to_string())
+    spawn_blocking_store("get_all_skills", move || {
+        crate::store::get_all_skills(&project_path)
+    })
+    .await
 }
 
 /// 获取所有 MCP Servers（包括 plugin 和配置的）
 #[tauri::command]
 pub async fn get_all_mcp_servers(project_path: String) -> Result<Vec<McpServerInfo>, String> {
-    crate::store::get_all_mcp_servers(&project_path).map_err(|e| e.to_string())
+    spawn_blocking_store("get_all_mcp_servers", move || {
+        crate::store::get_all_mcp_servers(&project_path)
+    })
+    .await
 }
 
 /// 获取所有 Plugins（使用 --json）
 #[tauri::command]
 pub async fn get_all_plugins(project_path: String) -> Result<Vec<PluginInfo>, String> {
-    crate::store::get_all_plugins(&project_path).map_err(|e| e.to_string())
+    spawn_blocking_store("get_all_plugins", move || {
+        crate::store::get_all_plugins(&project_path)
+    })
+    .await
 }
 
 // ==================== Logging Commands ====================

@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Group mixed-CLI projects under collapsible Claude Code / Codex CLI headers, with per-group status counts and keyboard navigation that skips collapsed rows
+- Keep session creation order stable across activity, history refresh failures and restarts; use CLI creation timestamps when available and restore CLI archives before clearing Desk archive markers
+- Close three creation-time boundary defects: a Codex thread's creation time no longer depends on whether the current scope registers the project owning an older rollout, a Claude transcript whose first stamped record is an `isMeta` message no longer reports a different creation time under complete versus bounded reads, and an over-long or NUL-bearing timestamp candidate is no longer published (one undecodable optional field rejected the whole history response)
+- Drop ten never-imported frontend dependencies (CodeMirror stack, `vue-codemirror`, `v3-infinite-loading`, `macos-traffic-lights`, `vue-draggable-plus`) and the dead `editor-vendor` chunk rule; DESIGN.md now describes the `<textarea>` the app actually uses for multi-line editing
+- Move blocking store reads (`get_projects`, `get_project_info`, `get_session_count`, `get_session_details`, `search_session_messages`, `get_app_config`, `get_project_config` and the four Agents/Skills/MCP/Plugins resource scans) onto the blocking pool instead of occupying async IPC workers
+- Debounce the native terminal's `ResizeObserver` fit by 80 ms so dragging the window produces one ConPTY resize instead of one per frame; hidden terminals still skip layout work
+
 ## [0.21.0] - 2026-10-16
 
 ### Fixed

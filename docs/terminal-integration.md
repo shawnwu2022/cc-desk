@@ -133,6 +133,11 @@ Route revocation releases reserved credit and wakes blocked peers. One degraded 
 
 Native resize and stop go through authenticated native commands.
 
+Native window-geometry fitting is debounced (80 ms trailing) so a window drag
+produces one `fit`/`cli_resize` pair instead of one per animation frame; the
+legacy PTY path already used the same strategy. Hidden terminals still skip the
+fit entirely — visibility gates layout work, as it does user input and focus.
+
 Natural exits are adopted by the exact run/generation. Restart is explicit and increments generation with new request/run IDs.
 
 Native owner status synchronization continues while a terminal is hidden because the output channel and optional observer do not own process phase. Visibility gates user input, focus and layout work; it does not suspend lifecycle adoption.

@@ -130,6 +130,8 @@ function projectTab(tab: NativeCliTab, tabs?: NativeTabsPort): UnifiedSession {
     ...(observationNotice ? { observationNotice } : {}),
     lastActivityAt: tab.lastActivityAt,
     lastOpenedAt: tab.createdAt,
+    // tab 的真实创建时刻是创建序键；resume 身份回填后由历史继承覆盖。
+    createdAt: tab.createdAt,
     archived: false,
     opened: true,
     resumable: Boolean(nativeSessionId),
@@ -161,6 +163,8 @@ function historyId(entry: Pick<NativeHistoryEntry, 'context'>, sessionKey: strin
 function projectHistory(entry: NativeHistoryEntry, item: NativeHistoryEntry['sessions'][number]): UnifiedSession {
   const updated = item.updatedAt ? Date.parse(item.updatedAt) : 0
   const lastKnown = item.lastKnownActivityAt ?? 0
+  // CLI 会话创建时间是创建序排序键；解析失败或缺失时不投影，UI 回落首见近似。
+  const created = item.createdAt ? Date.parse(item.createdAt) : NaN
   return {
     id: historyId(entry, item.sessionKey, item.nativeSessionId),
     projectKey: normalizePath(entry.context.projectPath),
@@ -173,6 +177,7 @@ function projectHistory(entry: NativeHistoryEntry, item: NativeHistoryEntry['ses
     activityState: 'unknown',
     observationState: 'off',
     lastActivityAt: Math.max(Number.isFinite(updated) ? updated : 0, Number.isFinite(lastKnown) && lastKnown >= 0 ? lastKnown : 0),
+    ...(created > 0 ? { createdAt: created } : {}),
     lastOpenedAt: 0,
     archived: false,
     opened: false,
@@ -281,8 +286,11 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
     // 唯一历史对应存在时（观察器回填身份后），活动行跟随 CLI 记录的标题
     // （首条消息 / AI 摘要 / 手动改名），而不是停留在本地占位名 "Claude Code"。
     // 保存的 Desk 显示名在 withSessionDisplayName 内仍优先于 CLI 标题。
+    // 创建时间同样继承历史身份：resume/激活不改变会话的创建序位置。
     const titled = identity.id.startsWith(HISTORY_PREFIX)
-      ? { ...row, title: identity.title, ...(identity.nativeRootKey ? { nativeRootKey: identity.nativeRootKey, nativeHistorySessionKey:identity.adapterSessionId } : {}) }
+      ? { ...row, title: identity.title,
+          ...(identity.nativeRootKey ? { nativeRootKey: identity.nativeRootKey, nativeHistorySessionKey:identity.adapterSessionId } : {}),
+          ...(identity.createdAt !== undefined ? { createdAt: identity.createdAt } : {}) }
       : row
     // 首次认证身份晚于用户改名时，未知身份下保存的名称仍属于这个 tab。
     // 仅用于当前终端显示；不猜测或迁移独立历史的 metadata key。
@@ -697,7 +705,9 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
       }
     }
     if (keys.includes(id)) pending.push(id)
-    for (const key of pending) await deps.archive.restoreSession(history.projectPath, key)
+    // CLI 取消归档必须在清注册表之前：codex unarchive 是可能失败的外部副作用，
+    // 先清应用侧标记会留下「注册表已清、CLI 仍归档」的部分状态变更。失败时这里
+    // 尚未发生任何写操作，整体失败，重试自洽。
     if (match) {
       // CLI 自身归档（codex archived_sessions）不在 Desk 注册表内：它的恢复就是
       // 让 CLI 取消归档。codex 明确拒绝 resume 已归档会话（要求先 unarchive），
@@ -707,10 +717,13 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
         if (!unarchive) throw new Error('CLI_UNARCHIVE_UNAVAILABLE')
         await unarchive.unarchive(match.entry.context, match.item.nativeSessionId)
         // 归档状态由下一次历史读取按容器位置重投影；all() 仍是旧缓存，必须
-        // 强制重读原上下文，调用方的目录刷新才能看到已恢复的行。不提前返回：
-        // 恢复后的行照常写入最近打开时间，保持既有排序语义。
+        // 强制重读原上下文。先重读再清注册表：后续清 key 失败时投影已是未归档，
+        // 重试不会对已恢复的会话重复请求 CLI unarchive。
         await deps.history.load?.({ ...match.entry.context, force: true })
       }
+    }
+    for (const key of pending) await deps.archive.restoreSession(history.projectPath, key)
+    if (match) {
       await saveSessionOpenedAt(deps.metadata, projectHistory(match.entry, match.item), Date.now(),
         () => findHistory(id).length === 1).catch(() => {})
     }

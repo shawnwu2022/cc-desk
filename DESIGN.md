@@ -247,7 +247,7 @@ CC Desk 的界面是一件放在木工坊里的精密仪器：温暖米灰的纸
 类型标签：10px 字号、2px 6px padding、4px 圆角、类型色淡底+同系深字（MCP 蓝 #e3f2fd/#1565c0、Skills 琥珀、Agents 紫；暗色换半透明底+亮字）。仅用于元数据分类，不做可交互筛选。
 
 ### Inputs / Fields
-`--bg-primary` 底、1px `--border-color`、6px 圆角，继承 14px 字号。聚焦：无 outline，`border-color → var(--focus-ring)` 墨蓝，0.15s 过渡。禁用 opacity 0.5。多行编辑用 CodeMirror（One Dark 仅限 JSON 编辑器）。
+`--bg-primary` 底、1px `--border-color`、6px 圆角，继承 14px 字号。聚焦：无 outline，`border-color → var(--focus-ring)` 墨蓝，0.15s 过渡。禁用 opacity 0.5。多行编辑用带 `ui-input` 样式的 `<textarea>`（如启动参数编辑器）。
 
 ### Navigation
 项目下直接混排 Claude Code 与 Codex CLI。项目/会话树是唯一会话 Tab 系统，没有第二个 Native Tab 栏。切换只改变显示/选择；归档是 Desk 索引状态，重命名是 Desk 显示元数据，都不改写 CLI 历史或向终端注入命令。

@@ -13,6 +13,30 @@ afterEach(async () => {
   }
 })
 describe('D12 authenticated projection API', () => {
+  // 真实 IPC 解码必须保留新增排序字段，同时兼容没有该字段的旧历史响应。
+  it.each(['claude', 'codex'] as const)('Projection_HistoryCreationTime_023 %s', async cli => {
+    for (const createdAt of ['2026-10-01T00:00:00Z', null, undefined]) {
+      const query = { ...request(), source: { ...source, cli } }
+      const row = { type: 'session', sessionKey: JSON.stringify(['local', cli, 'root', 'session-1']),
+        nativeSessionId: 'session-1', title: 'Work', cwd: null, updatedAt: null, archived: false, truncated: false,
+        ...(createdAt === undefined ? {} : { createdAt }) }
+      const client = createProjectionClient({ instanceId: 'instance', invoke: async () => ({ ...response(), source: query.source, items: [row] }) })
+      const result = await client.read(query)
+      expect(result.state).toBe('ready')
+      expect(result.items).toEqual([row])
+    }
+  })
+
+  // 新字段与现有 updatedAt 使用同一有界文本契约，未知字段仍不得穿过安全 DTO。
+  it('Projection_InvalidHistoryCreationTime_024', async () => {
+    const row = { type: 'session', sessionKey: JSON.stringify(['local', 'claude', 'root', 'session-1']),
+      nativeSessionId: 'session-1', title: 'Work', cwd: null, updatedAt: null, archived: false, truncated: false }
+    for (const extra of [{ createdAt: 123 }, { createdAt: 'x'.repeat(65) }, { createdAt: 'bad\0stamp' }, { created_at: '2026-10-01T00:00:00Z' }]) {
+      const client = createProjectionClient({ instanceId: 'instance', invoke: async () => ({ ...response(), items: [{ ...row, ...extra }] }) })
+      await expect(client.read(request())).rejects.toMatchObject({ code: 'INVALID_PROJECTION', stage: 'read-response-validation' })
+    }
+  })
+
   it.each(['NODE_RUNTIME_UNAVAILABLE', 'SDK_HELPER_UNAVAILABLE'])('Rename_RuntimePrerequisiteErrorsReachSafeUi_022 %s', async code => {
     const request={operationId:'rename-1',source,sessionKey:'key',title:'Title'}
     const invoke=vi.fn(async()=>{throw {code,env:'private',path:'private fixture'}})

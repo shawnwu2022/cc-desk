@@ -25,6 +25,9 @@ struct Transcript {
     cwd: Option<String>,
     title: String,
     updated: Option<String>,
+    /// 会话创建时间：codex 取 session_meta 的时间戳，claude 取首条带时间戳记录。
+    /// 它是列表创建序的稳定键，不随后续活动变化。
+    created: Option<String>,
     messages: Vec<(String, String)>,
     metadata_incomplete: bool,
     title_priority: Option<TitlePriority>,
@@ -66,6 +69,11 @@ pub(super) fn read(
     // codex fork/compact 为同一 thread 追加 rollout，同 id 是合法 thread 模型；
     // Claude 文件名即身份，跨目录同 id 仍是来源级异常。
     let mut codex_representatives = std::collections::HashMap::<String, usize>::new();
+    // 创建时间属于整个 thread，但同一 thread 的旧 rollout 可能属于本 scope 之外的项目，
+    // 会先被项目归属过滤跳过。若只在合并处取最小值，同一 thread 的 createdAt 就会随
+    // 「当前 scope 恰好注册了哪些项目」变化（跨项目刷新或分组不同即不同），破坏创建序契约。
+    // 因此在归属过滤之前独立汇总每个 thread 的最早创建时间，发布时按 thread 取值。
+    let mut codex_creation = std::collections::HashMap::<String, String>::new();
     for path in files {
         let mut observation_bytes = 0;
         // Ok(None) 表示这一行不是用户主动创建的会话，直接跳过而不计入任何失败。
@@ -123,6 +131,14 @@ pub(super) fn read(
             continue;
         }
         transcript.observation_bytes = observation_bytes;
+        if c.cli == CliKind::Codex {
+            if let Some(created) = transcript.created.as_ref() {
+                codex_creation
+                    .entry(transcript.id.clone())
+                    .and_modify(|old| *old = created.min(old).clone())
+                    .or_insert_with(|| created.clone());
+            }
+        }
         if let Some(name) = named.get(&transcript.id) {
             // 用户自己起的名字就是这条会话的身份：优先于任何现抽标题，且不受
             // 头窗口是否覆盖用户消息影响。
@@ -159,6 +175,8 @@ pub(super) fn read(
                     (Some(_), None) => true,
                     (None, _) => false,
                 };
+                // 创建时间不在这里合并：它属于整个 thread，可能在其它项目下，已由
+                // codex_creation 在归属过滤前汇总，发布时按 thread 统一取值。
                 if replaces {
                     transcripts[index] = (transcript, owner);
                 }
@@ -208,6 +226,13 @@ pub(super) fn read(
             // Codex 自身把归档会话移进 archived_sessions/（与 sessions/ 零重叠的
             // move 语义）；代表 rollout 的容器位置就是该 thread 的归档状态。
             let archived = t.source_path.starts_with("archived_sessions/");
+            // codex 的创建时间按 thread 取值（归属过滤前已汇总最早 rollout），
+            // 不采用本代表 rollout 自己的值——旧 rollout 可能在 scope 之外的项目下。
+            let created_at = if c.cli == CliKind::Codex {
+                codex_creation.get(&t.id).cloned()
+            } else {
+                t.created
+            };
             result.push(ResourceItem::Session {
                 session_key: key,
                 native_session_id: t.id,
@@ -220,6 +245,7 @@ pub(super) fn read(
                 archived,
                 cwd: t.cwd,
                 updated_at: t.updated,
+                created_at,
             });
             continue;
         }
@@ -358,6 +384,9 @@ fn codex_history(
         {
             *observation_bytes = header.len();
             let mut transcript = cached_transcript(metadata);
+            // 身份校验已解析出头窗口：会话创建时间（排序稳定键）当场取用，
+            // 不占缓存位（它与首条 session_meta 同在必读字节里，永远可重推）。
+            transcript.created = observed.created;
             // 归档状态由代表 rollout 的容器位置决定，必须保留真实相对路径。
             transcript.source_path = path.to_owned();
             // 缓存命中的行若上次只观察到文件前缀，这个事实必须回到来源级标记：
@@ -422,6 +451,8 @@ fn cached_transcript(metadata: cache::CachedMetadata) -> Transcript {
         cwd: metadata.cwd,
         title: metadata.title,
         updated: metadata.updated,
+        // 缓存不携带创建时间：命中分支的身份校验已解析出头窗口，当场覆盖。
+        created: None,
         messages: Vec::new(),
         metadata_incomplete: metadata.metadata_incomplete,
         title_priority,
@@ -574,6 +605,7 @@ fn parse_codex_metadata(
     let mut id = None;
     let mut cwd = None;
     let mut title = None;
+    let mut created: Option<String> = None;
     let mut auto_session = false;
     let mut wrapper_only = false;
     let mut main_review = false;
@@ -598,6 +630,23 @@ fn parse_codex_metadata(
                     .filter(|path| !path.contains('\0'))
                     .map(str::to_owned)
                     .or(cwd);
+                // 会话创建时间是排序的稳定键；payload 时间戳是 codex 写入的会话开始时刻，
+                // 优先于行写入时刻。仅取首个 session_meta（compact/fork 续写内嵌的跳过）。
+                if created.is_none() {
+                    // payload 时间是 codex 写入的会话开始时刻，优先于行写入时刻；
+                    // 两者都按严格 IPC 解码契约过滤，含 NUL 的候选不得发布——
+                    // 它会让整条历史响应被判 INVALID_PROJECTION，而不是只丢该字段。
+                    let payload = value["payload"]["timestamp"]
+                        .as_str()
+                        .filter(|stamp| !stamp.is_empty() && strict_timestamp(stamp));
+                    created = payload
+                        .or_else(|| {
+                            value["timestamp"]
+                                .as_str()
+                                .filter(|stamp| !stamp.is_empty() && strict_timestamp(stamp))
+                        })
+                        .map(str::to_owned);
+                }
             }
             Some("event_msg") if title.is_none() && value["payload"]["type"] == "user_message" => {
                 title = value["payload"]["message"]
@@ -639,6 +688,7 @@ fn parse_codex_metadata(
         cwd,
         title: title.unwrap_or_else(|| "Untitled".into()),
         updated,
+        created,
         messages: Vec::new(),
         metadata_incomplete: false,
         title_priority,
@@ -669,6 +719,14 @@ fn user_title(text: &str, wrapper_only: &mut bool) -> String {
     display_title(text)
 }
 
+/// 时间戳要进入严格 IPC 解码（`src/api/nativeProjection.ts` 的 `text()`）：字节数不超
+/// 上限、且不含 NUL。完整解析路径的 `validate_value` 已排除 NUL；有界 codex 元数据解析
+/// 不调用 `validate_value`，所以这里显式过滤——一个无法解码的排序字段会让整条历史响应
+/// 被判 INVALID_PROJECTION，而不是只丢该字段。
+fn strict_timestamp(stamp: &str) -> bool {
+    stamp.len() <= 64 && !stamp.contains('\0')
+}
+
 /// 尾部最近时间戳。尾部读取已保证从完整行开始（不完整的首行在字节层丢弃），
 /// 这里逐行解析并取最大时间戳。
 fn latest_timestamp(tail: &str) -> Option<String> {
@@ -676,7 +734,7 @@ fn latest_timestamp(tail: &str) -> Option<String> {
         .filter(|line| !line.trim().is_empty())
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
         .filter_map(|value| value["timestamp"].as_str().map(str::to_owned))
-        .filter(|stamp| stamp.len() <= 64)
+        .filter(|stamp| strict_timestamp(stamp))
         .max()
 }
 fn walk(
@@ -960,6 +1018,7 @@ fn parse_complete(
         cwd: None,
         title: String::new(),
         updated: None,
+        created: None,
         messages: Vec::new(),
         metadata_incomplete: false,
         title_priority: None,
@@ -984,6 +1043,17 @@ fn parse_complete(
         validate_value(&v)?;
         if !v.is_object() {
             return Err("SOURCE_INVALID");
+        }
+        // 时间戳必须先于下面的记录分派处理：`isMeta` 元消息会 `continue` 跳过记录体，
+        // 若把这段留在循环末尾，首条带时间戳的元消息就被漏掉，而有界解析
+        // （parse_metadata）对每条记录都取时间——同一文件在完整/有界读取间会得到
+        // 不同的 createdAt，重启后排序随之变化。
+        if let Some(ts) = v["timestamp"].as_str().filter(|s| strict_timestamp(s)) {
+            // 首条带时间戳的记录近似创建时刻；后续记录只更新最新活动时间。
+            if t.created.is_none() {
+                t.created = Some(ts.into());
+            }
+            t.updated = Some(ts.into());
         }
         match cli {
             CliKind::Claude => {
@@ -1089,9 +1159,6 @@ fn parse_complete(
             },
             CliKind::Shell => return Err("SOURCE_UNSUPPORTED"),
         }
-        if let Some(ts) = v["timestamp"].as_str().filter(|s| s.len() <= 64) {
-            t.updated = Some(ts.into());
-        }
     }
     if !recognized {
         return Err("SOURCE_UNSUPPORTED");
@@ -1174,6 +1241,7 @@ fn parse_metadata(path: &str, cli: CliKind, input: &str) -> ReadResult<Transcrip
     let mut explicit_title = None;
     let mut ai_title = None;
     let mut observed_updated: Option<String> = None;
+    let mut observed_created: Option<String> = None;
     let mut envelope_title: Option<String> = None;
     let mut recognized = false;
     for line in input.lines().filter(|line| !line.trim().is_empty()) {
@@ -1273,10 +1341,15 @@ fn parse_metadata(path: &str, cli: CliKind, input: &str) -> ReadResult<Transcrip
             }
         }
         // 与 codex 尾部时间同语义：已观察记录的时间是最新部分证据（ISO 字典序即时间序）。
+        // 与完整解析共用同一严格判定，避免两条路径对同一文件给出不同的发布时间。
         if let Some(stamp) = value["timestamp"]
             .as_str()
-            .filter(|stamp| stamp.len() <= 64)
+            .filter(|stamp| strict_timestamp(stamp))
         {
+            // 首条带时间戳的记录近似创建时刻，作为稳定排序键保留。
+            if observed_created.is_none() {
+                observed_created = Some(stamp.to_owned());
+            }
             observed_updated = std::cmp::max(observed_updated, Some(stamp.to_owned()));
         }
     }
@@ -1314,6 +1387,7 @@ fn parse_metadata(path: &str, cli: CliKind, input: &str) -> ReadResult<Transcrip
             .or(envelope_title)
             .unwrap_or_else(|| "Untitled".into()),
         updated: observed_updated,
+        created: observed_created,
         messages: Vec::new(),
         metadata_incomplete: true,
         title_priority,
