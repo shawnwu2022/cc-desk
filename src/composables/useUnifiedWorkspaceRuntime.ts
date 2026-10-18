@@ -716,12 +716,16 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   }
   watch(() => [ready.value, loading.value], scheduleHistoryRead)
   // 每个运行 owner 独立监听；状态变化不再遍历全部历史。移动或替换时刷新旧、新项目。
-  const catalogOwnerWatches = new Map<object, { projectPath: string; stop: () => void }>()
+  // AI 标题常晚于 reply-ended 写盘（CLI 异步生成），按 owner 保留一次延迟补读。
+  const lateTitleReadDelay = 15_000
+  type CatalogOwner = { projectPath: string; stop: () => void; historyCue: ReturnType<typeof historyCue>; titleReadTimer?: ReturnType<typeof setTimeout> }
+  const catalogOwnerWatches = new Map<object, CatalogOwner>()
   watch(() => [...legacy.tabs.values(), ...native.tabs.values()], tabs => {
     const current = new Set<object>(tabs)
     for (const [tab, owner] of catalogOwnerWatches) {
       if (current.has(tab)) continue
       owner.stop(); catalogOwnerWatches.delete(tab)
+      if (owner.titleReadTimer) clearTimeout(owner.titleReadTimer)
       const removedId = (tab as { tabId: string }).tabId
       if (pendingHistoryOwners.get(removedId)?.tab === tab) pendingHistoryOwners.delete(removedId)
       queueCatalogProjects(owner.projectPath)
@@ -729,7 +733,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     for (const tab of tabs) {
       if (catalogOwnerWatches.has(tab)) continue
       const nativeTab = native.tabs.get(tab.tabId) === tab ? tab as NativeCliTab : null
-      const owner = { projectPath: tab.projectPath, stop: () => {}, historyCue: nativeTab && historyCue(nativeTab) }
+      const owner: CatalogOwner = { projectPath: tab.projectPath, stop: () => {}, historyCue: nativeTab && historyCue(nativeTab) }
       const queueHistory = () => {
         if (!nativeTab) return
         pendingHistoryOwners.set(nativeTab.tabId, { tab: nativeTab, attempt: captureNativeAttempt(nativeTab), context: {
@@ -753,6 +757,17 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
         const cue = nativeTab && historyCue(nativeTab)
         if (cue && (cue.identity && cue.identity !== owner.historyCue?.identity || cue.reply && cue.reply !== owner.historyCue?.reply
           || cue.prompt && cue.prompt !== owner.historyCue?.prompt)) queueHistory()
+        // 迟到的 AI 标题没有新 cue；每次新 reply-ended 重置补读，到点时仅当该
+        // 回执仍是最新 cue（无更新交互抢占）才再读一次历史。
+        if (nativeTab && cue?.reply && cue.reply !== owner.historyCue?.reply) {
+          if (owner.titleReadTimer) clearTimeout(owner.titleReadTimer)
+          const reply = cue.reply
+          owner.titleReadTimer = setTimeout(() => {
+            owner.titleReadTimer = undefined
+            if (!matchesNativeAttempt(nativeTab, captureNativeAttempt(nativeTab)) || native.tabs.get(nativeTab.tabId) !== nativeTab) return
+            if (historyCue(nativeTab)?.reply === reply) queueHistory()
+          }, lateTitleReadDelay)
+        }
         owner.historyCue = cue
       })
       catalogOwnerWatches.set(tab, owner)
@@ -764,7 +779,15 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     const ptyIds = new Set([...next, ...previous].map(item => item.ptyId))
     queueCatalogProjects(...[...legacy.tabs.values()].filter(tab => tab.ptyId && ptyIds.has(tab.ptyId)).map(tab => tab.projectPath))
   }, { deep: true })
-  watch(() => [history.all(), projects.archivedSessions], () => { void refreshCatalog() }, { deep: true })
+  // 历史/归档的每次响应式写入（entry 替换、sessions、loading 翻转）都按项目范围
+  // 合批刷新：全量 refresh 会霸占 refresh 版本并作废并发范围刷新，单条标题变化
+  // 曾引发 4 次全量 listSessions；queueCatalogProjects 在同一 nextTick 去重合批。
+  watch(() => [history.all(), projects.archivedSessions], () => {
+    const paths = new Set<string>()
+    for (const entry of history.all()) paths.add(entry.context.projectPath)
+    for (const path of projects.archivedSessions.keys()) paths.add(path)
+    queueCatalogProjects(...paths)
+  }, { deep: true })
   watch(() => catalog.activeSessionId, async () => {
     await nextTick()
     if (!disposed && shell.section === 'workspace') host.value?.focus()
