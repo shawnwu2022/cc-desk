@@ -716,8 +716,8 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   }
   watch(() => [ready.value, loading.value], scheduleHistoryRead)
   // 每个运行 owner 独立监听；状态变化不再遍历全部历史。移动或替换时刷新旧、新项目。
-  // AI 标题常晚于 reply-ended 写盘（CLI 异步生成），按 owner 保留一次延迟补读。
-  const lateTitleReadDelay = 15_000
+  // AI 标题晚于 reply-ended 异步写盘；最多在约 15、30、60 秒补读，避免持续轮询。
+  const lateTitleReadDelays = [15_000, 15_000, 30_000]
   type CatalogOwner = { projectPath: string; stop: () => void; historyCue: ReturnType<typeof historyCue>; titleReadTimer?: ReturnType<typeof setTimeout> }
   const catalogOwnerWatches = new Map<object, CatalogOwner>()
   watch(() => [...legacy.tabs.values(), ...native.tabs.values()], tabs => {
@@ -757,16 +757,30 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
         const cue = nativeTab && historyCue(nativeTab)
         if (cue && (cue.identity && cue.identity !== owner.historyCue?.identity || cue.reply && cue.reply !== owner.historyCue?.reply
           || cue.prompt && cue.prompt !== owner.historyCue?.prompt)) queueHistory()
-        // 迟到的 AI 标题没有新 cue；每次新 reply-ended 重置补读，到点时仅当该
-        // 回执仍是最新 cue（无更新交互抢占）才再读一次历史。
+        // 每轮重读绑定冻结的运行、来源与最新交互；发现 AI/自定义标题即停止。
         if (nativeTab && cue?.reply && cue.reply !== owner.historyCue?.reply) {
           if (owner.titleReadTimer) clearTimeout(owner.titleReadTimer)
-          const reply = cue.reply
-          owner.titleReadTimer = setTimeout(() => {
-            owner.titleReadTimer = undefined
-            if (!matchesNativeAttempt(nativeTab, captureNativeAttempt(nativeTab)) || native.tabs.get(nativeTab.tabId) !== nativeTab) return
-            if (historyCue(nativeTab)?.reply === reply) queueHistory()
-          }, lateTitleReadDelay)
+          const attempt = captureNativeAttempt(nativeTab)
+          const contextKey = () => JSON.stringify([nativeTab.cli, nativeTab.profileId, nativeTab.profileRevision,
+            nativeTab.projectId, normalizePath(nativeTab.projectPath), nativeTab.sourceSessionKey])
+          const context = contextKey()
+          const retryTitle = (index: number) => {
+            owner.titleReadTimer = setTimeout(() => {
+              owner.titleReadTimer = undefined
+              const currentCue = historyCue(nativeTab)
+              if (disposed || !matchesNativeAttempt(nativeTab, attempt) || native.tabs.get(nativeTab.tabId) !== nativeTab
+                || contextKey() !== context || currentCue?.reply !== cue.reply
+                || currentCue?.identity !== cue.identity || currentCue?.prompt !== cue.prompt) return
+              const hasTitle = history.get(nativeTab)?.sessions.some(session =>
+                (nativeTab.sourceSessionKey ? session.sessionKey === nativeTab.sourceSessionKey
+                  : !!nativeTab.observedSessionId && session.nativeSessionId === nativeTab.observedSessionId)
+                && [session.titleSource, session.lastKnownTitleSource].some(source => source === 'ai' || source === 'custom'))
+              if (hasTitle) return
+              queueHistory()
+              if (index + 1 < lateTitleReadDelays.length) retryTitle(index + 1)
+            }, lateTitleReadDelays[index])
+          }
+          retryTitle(0)
         }
         owner.historyCue = cue
       })
@@ -842,7 +856,10 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     disposed = true; ++refreshOwner
     if (historyTimer) clearTimeout(historyTimer)
     pendingHistoryOwners.clear()
-    for (const owner of catalogOwnerWatches.values()) owner.stop()
+    for (const owner of catalogOwnerWatches.values()) {
+      owner.stop()
+      if (owner.titleReadTimer) clearTimeout(owner.titleReadTimer)
+    }
     catalogOwnerWatches.clear(); pendingCatalogProjects.clear()
   })
   return { diagnostics, closeDiagnostics, openSessions, cliAvailability, cliProblems, fatal, ready, loading, error, sourceWarnings, sourceWarningsTruncated, sourceWarningConfigurations, sourceNoticeDismissed, historyNoticeDismissed, sourceIssuesAvailable, sourceDiagnosticsWarnings, sourceDiagnosticsTruncated, sourceChecksPending, dismissSourceNotice, historyMetadataPartial, historyReadWarnings, refresh, retryAction }

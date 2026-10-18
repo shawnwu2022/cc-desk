@@ -44,6 +44,19 @@ async function openFixture(page: Page, options: Record<string, string | number>)
 // 真实指针捕获与 click 顺序不能由 jsdom 代替；这里只验证文档内拖拽，不认证 CLI。
 for (const dpr of [1, 1.5]) test.describe(`SessionRef_PointerBrowser_001 DPR ${dpr}`, () => {
   test.use({ viewport: { width: 1366, height: 768 }, deviceScaleFactor: dpr })
+  test('SessionRef_ClickKeepsKeyboardFocus_002', async ({ page }) => {
+    await openFixture(page, { scenario: 'mixed', locale: 'en' })
+    const row = page.locator('[data-session-row][aria-selected="true"]')
+    const title = row.locator('.session-name')
+    await row.locator('.session-overflow-trigger button').focus()
+    const box = (await title.boundingBox())!
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
+    await expect(title).toBeFocused()
+    await page.keyboard.press('Shift+F10')
+    await expect(page.getByRole('menu')).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(row).toBeFocused()
+  })
   test('SessionRef_PointerDragAndCancel_001', async ({ page }) => {
     await openFixture(page, { scenario: 'mixed', locale: 'en' })
     const events: { phase: string; payload?: string }[] = []

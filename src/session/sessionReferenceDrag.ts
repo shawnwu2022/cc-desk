@@ -109,6 +109,5 @@ export function startSessionReferenceDrag(event: PointerEvent, payload: string):
   window.addEventListener('blur', cancel)
   source.addEventListener('lostpointercapture', cancel)
   source.setPointerCapture?.(pointerId)
-  event.preventDefault()
   return cancel
 }

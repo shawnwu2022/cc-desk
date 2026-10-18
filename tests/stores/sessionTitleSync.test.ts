@@ -158,4 +158,48 @@ describe('running session title sync to session list', () => {
     expect(catalog.projectGroups.flatMap(group => group.sessions).some(row => row.id === original.id)).toBe(true)
     expect(io.restore).toHaveBeenCalledTimes(1)
   })
+
+  // 第一轮补读之后才写入 AI 标题，仍应有界重读，并在观察到标题后停止 IO。
+  it('TitleSync_AiTitleBeyondFirstRetry_005', async () => {
+    render(); await flushPromises()
+    const tabs = useNativeTabsStore()
+    const created = tabs.create({ cli: 'claude', projectId: 'project', projectPath: '/repo', profileId: 'cl', profileRevision: '7', action: { kind: 'new' } })
+    const tab = tabs.tab(created.tabId)!
+    const attempt = captureNativeAttempt(tab)
+    tabs.applyLaunchStatus(tab.tabId, { instanceId: 'i', requestId: tab.requestId, run: { runId: tab.runId, generation: tab.generation }, revision: '1', phase: 'running', failure: null })
+    tabs.applyObservation(tab.tabId, attempt, { observation: 'active', activity: 'idle' })
+    tabs.applyObservationIdentity(tab.tabId, attempt, 'session-1')
+    await flushPromises()
+    tabs.applyObservationNotice(tab.tabId, attempt, { kind: 'reply-ended', eventId: 'evt-1', receivedAt: 1, runId: tab.runId, generation: tab.generation })
+    await vi.advanceTimersByTimeAsync(20_000); await flushPromises()
+    io.read.mockResolvedValue({ state: 'ready', items: [sessionItem('Delayed AI title', 'ai')], hasMore: false })
+    await vi.advanceTimersByTimeAsync(45_000); await flushPromises()
+    expect(useUnifiedSessionsStore().sessions.find(row => row.opened && row.nativeSessionId === 'session-1')?.title).toBe('Delayed AI title')
+    const reads = io.read.mock.calls.length
+    await vi.advanceTimersByTimeAsync(120_000); await flushPromises()
+    expect(io.read).toHaveBeenCalledTimes(reads)
+  })
+
+  it.each(['new-prompt', 'unmount', 'budget'] as const)('TitleSync_RetryStops_006 %s', async reason => {
+    render(); await flushPromises()
+    const tabs = useNativeTabsStore()
+    const created = tabs.create({ cli: 'claude', projectId: 'project', projectPath: '/repo', profileId: 'cl', profileRevision: '7', action: { kind: 'new' } })
+    const tab = tabs.tab(created.tabId)!
+    const attempt = captureNativeAttempt(tab)
+    tabs.applyLaunchStatus(tab.tabId, { instanceId: 'i', requestId: tab.requestId, run: { runId: tab.runId, generation: tab.generation }, revision: '1', phase: 'running', failure: null })
+    tabs.applyObservation(tab.tabId, attempt, { observation: 'active', activity: 'idle' })
+    tabs.applyObservationIdentity(tab.tabId, attempt, 'session-1')
+    await flushPromises()
+    tabs.applyObservationNotice(tab.tabId, attempt, { kind: 'reply-ended', eventId: 'evt-1', receivedAt: 1, runId: tab.runId, generation: tab.generation })
+    await vi.advanceTimersByTimeAsync(300); await flushPromises()
+    if (reason === 'unmount') wrappers.pop()!.unmount()
+    if (reason === 'new-prompt') {
+      tabs.applyObservationNotice(tab.tabId, attempt, { kind: 'prompt-submitted', eventId: 'evt-2', receivedAt: 2, runId: tab.runId, generation: tab.generation })
+      await vi.advanceTimersByTimeAsync(300); await flushPromises()
+    }
+    if (reason === 'budget') { await vi.advanceTimersByTimeAsync(65_000); await flushPromises() }
+    const reads = io.read.mock.calls.length
+    await vi.advanceTimersByTimeAsync(120_000); await flushPromises()
+    expect(io.read).toHaveBeenCalledTimes(reads)
+  })
 })
