@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-10-18
+
+### Features
+
+- Add session-row dragging to insert a single-line session reference into the active terminal without submitting the prompt
+
+### Changed
+
+- Preserve unchanged project-group identity so a session status update repaints only the affected project
+- Coalesce runtime status and attention refreshes for affected projects while preserving complete history and archive projections
+
+### Fixed
+
+- Keep session-reference dragging compatible with Windows native file drops through document pointer events, with cancellation and click suppression
+- Refresh restored Legacy sessions after a lost acknowledgement even when restoring the last archive removes its project key
+- Escape every terminal control character in session-reference fields, including DEL and C1 controls
+- Preserve ordinary click focus and keyboard menus before a session drag starts
+- Retry late AI titles within a bounded window and stop on a generated title, changed owner or newer interaction
+
+The complete Linux Chromium no-update visual gate passed all 241 cases in PR60 run 39120741597, and the Windows package installation/relocation gate passed in run 39120741531. The final local full Vitest run passed 2,803 cases with two existing Windows skips. Exact-main CI, authenticated coverage and all three same-run signed updater payloads remain mandatory before publication. Installed Windows WebView2 drag/file-drop behavior, real CLI input, unfiltered native All/D20 and native historical installation/return remain separately unverified.
+
 ## [0.22.0] - 2026-10-18
 
 ### Changed
