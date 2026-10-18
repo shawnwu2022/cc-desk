@@ -281,6 +281,14 @@ function dropPaths(paths: string[]): boolean {
   return true
 }
 
+// 会话引用为已格式化的单行纯文本，与拖入文件同为 native 用户写入。
+function dropSessionReference(text: string): boolean {
+  if (!props.active || !inputEnabled || !term || !binding || !text) return false
+  const attempt = currentAttempt()
+  void binding.sendUserText(text).catch(() => markInputFailure(attempt))
+  return true
+}
+
 // 保留显式端口的拒绝边界；GUI 重命名由 adapter 的 metadata writer 处理。
 async function renameTab(_title: string, _admission?: InputWriteAdmission): Promise<void> {
   // 当前没有 CLI 编辑态证明，禁止向未知 prompt 追加命令或回车。
@@ -782,7 +790,7 @@ onUnmounted(() => {
   fit = null
 })
 
-defineExpose({ start, recover, stop, focus, fitVisible, needsFit, dropPaths, renameTab })
+defineExpose({ start, recover, stop, focus, fitVisible, needsFit, dropPaths, dropSessionReference, renameTab })
 </script>
 
 <style scoped>

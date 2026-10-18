@@ -716,12 +716,16 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   }
   watch(() => [ready.value, loading.value], scheduleHistoryRead)
   // 每个运行 owner 独立监听；状态变化不再遍历全部历史。移动或替换时刷新旧、新项目。
-  const catalogOwnerWatches = new Map<object, { projectPath: string; stop: () => void }>()
+  // AI 标题晚于 reply-ended 异步写盘；最多在约 15、30、60 秒补读，避免持续轮询。
+  const lateTitleReadDelays = [15_000, 15_000, 30_000]
+  type CatalogOwner = { projectPath: string; stop: () => void; historyCue: ReturnType<typeof historyCue>; titleReadTimer?: ReturnType<typeof setTimeout> }
+  const catalogOwnerWatches = new Map<object, CatalogOwner>()
   watch(() => [...legacy.tabs.values(), ...native.tabs.values()], tabs => {
     const current = new Set<object>(tabs)
     for (const [tab, owner] of catalogOwnerWatches) {
       if (current.has(tab)) continue
       owner.stop(); catalogOwnerWatches.delete(tab)
+      if (owner.titleReadTimer) clearTimeout(owner.titleReadTimer)
       const removedId = (tab as { tabId: string }).tabId
       if (pendingHistoryOwners.get(removedId)?.tab === tab) pendingHistoryOwners.delete(removedId)
       queueCatalogProjects(owner.projectPath)
@@ -729,7 +733,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     for (const tab of tabs) {
       if (catalogOwnerWatches.has(tab)) continue
       const nativeTab = native.tabs.get(tab.tabId) === tab ? tab as NativeCliTab : null
-      const owner = { projectPath: tab.projectPath, stop: () => {}, historyCue: nativeTab && historyCue(nativeTab) }
+      const owner: CatalogOwner = { projectPath: tab.projectPath, stop: () => {}, historyCue: nativeTab && historyCue(nativeTab) }
       const queueHistory = () => {
         if (!nativeTab) return
         pendingHistoryOwners.set(nativeTab.tabId, { tab: nativeTab, attempt: captureNativeAttempt(nativeTab), context: {
@@ -753,6 +757,31 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
         const cue = nativeTab && historyCue(nativeTab)
         if (cue && (cue.identity && cue.identity !== owner.historyCue?.identity || cue.reply && cue.reply !== owner.historyCue?.reply
           || cue.prompt && cue.prompt !== owner.historyCue?.prompt)) queueHistory()
+        // 每轮重读绑定冻结的运行、来源与最新交互；发现 AI/自定义标题即停止。
+        if (nativeTab && cue?.reply && cue.reply !== owner.historyCue?.reply) {
+          if (owner.titleReadTimer) clearTimeout(owner.titleReadTimer)
+          const attempt = captureNativeAttempt(nativeTab)
+          const contextKey = () => JSON.stringify([nativeTab.cli, nativeTab.profileId, nativeTab.profileRevision,
+            nativeTab.projectId, normalizePath(nativeTab.projectPath), nativeTab.sourceSessionKey])
+          const context = contextKey()
+          const retryTitle = (index: number) => {
+            owner.titleReadTimer = setTimeout(() => {
+              owner.titleReadTimer = undefined
+              const currentCue = historyCue(nativeTab)
+              if (disposed || !matchesNativeAttempt(nativeTab, attempt) || native.tabs.get(nativeTab.tabId) !== nativeTab
+                || contextKey() !== context || currentCue?.reply !== cue.reply
+                || currentCue?.identity !== cue.identity || currentCue?.prompt !== cue.prompt) return
+              const hasTitle = history.get(nativeTab)?.sessions.some(session =>
+                (nativeTab.sourceSessionKey ? session.sessionKey === nativeTab.sourceSessionKey
+                  : !!nativeTab.observedSessionId && session.nativeSessionId === nativeTab.observedSessionId)
+                && [session.titleSource, session.lastKnownTitleSource].some(source => source === 'ai' || source === 'custom'))
+              if (hasTitle) return
+              queueHistory()
+              if (index + 1 < lateTitleReadDelays.length) retryTitle(index + 1)
+            }, lateTitleReadDelays[index])
+          }
+          retryTitle(0)
+        }
         owner.historyCue = cue
       })
       catalogOwnerWatches.set(tab, owner)
@@ -764,7 +793,21 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     const ptyIds = new Set([...next, ...previous].map(item => item.ptyId))
     queueCatalogProjects(...[...legacy.tabs.values()].filter(tab => tab.ptyId && ptyIds.has(tab.ptyId)).map(tab => tab.projectPath))
   }, { deep: true })
-  watch(() => [history.all(), projects.archivedSessions], () => { void refreshCatalog() }, { deep: true })
+  // 历史/归档的每次响应式写入（entry 替换、sessions、loading 翻转）都按项目范围
+  // 合批刷新：全量 refresh 会霸占 refresh 版本并作废并发范围刷新，单条标题变化
+  // 曾引发 4 次全量 listSessions；queueCatalogProjects 在同一 nextTick 去重合批。
+  // 恢复提交成功但回执失败时，失败协调的重读会删除空归档键并抛错，成功路径的
+  // refresh 不再执行；排队范围必须取上一批与当前批的并集，删除键/条目的项目
+  // 不能从刷新范围里消失。
+  let lastHistoryPaths: string[] = []
+  let lastArchivePaths: string[] = []
+  watch(() => [history.all(), projects.archivedSessions], () => {
+    const historyPaths = [...history.all()].map(entry => entry.context.projectPath)
+    const archivePaths = [...projects.archivedSessions.keys()]
+    queueCatalogProjects(...new Set<string>([...lastHistoryPaths, ...lastArchivePaths, ...historyPaths, ...archivePaths]))
+    lastHistoryPaths = historyPaths
+    lastArchivePaths = archivePaths
+  }, { deep: true, immediate: true })
   watch(() => catalog.activeSessionId, async () => {
     await nextTick()
     if (!disposed && shell.section === 'workspace') host.value?.focus()
@@ -813,7 +856,10 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     disposed = true; ++refreshOwner
     if (historyTimer) clearTimeout(historyTimer)
     pendingHistoryOwners.clear()
-    for (const owner of catalogOwnerWatches.values()) owner.stop()
+    for (const owner of catalogOwnerWatches.values()) {
+      owner.stop()
+      if (owner.titleReadTimer) clearTimeout(owner.titleReadTimer)
+    }
     catalogOwnerWatches.clear(); pendingCatalogProjects.clear()
   })
   return { diagnostics, closeDiagnostics, openSessions, cliAvailability, cliProblems, fatal, ready, loading, error, sourceWarnings, sourceWarningsTruncated, sourceWarningConfigurations, sourceNoticeDismissed, historyNoticeDismissed, sourceIssuesAvailable, sourceDiagnosticsWarnings, sourceDiagnosticsTruncated, sourceChecksPending, dismissSourceNotice, historyMetadataPartial, historyReadWarnings, refresh, retryAction }

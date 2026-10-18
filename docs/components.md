@@ -456,6 +456,10 @@ independently discovered history row. Automatic title refresh shares the existin
 1024-event observer budget: exhaustion rejects new receipts, so later automatic
 reply-triggered refreshes stop until a new attempt. Explicit Refresh, project
 queries and closing still read history; no replay protection is relaxed.
+After each reply, up to three title retries run at approximately 15, 30 and 60
+seconds, stopping when the exact source has an AI/custom title or its frozen
+attempt, context or latest interaction changes. Titles written after this bounded
+window require a later cue or explicit refresh. Unmount releases pending timers.
 Claude still reads its bounded header and optional tail on each observation; there
 is no zero-read warm metadata cache. See the reproducible measurements in
 [history-source-diagnostics.md](history-source-diagnostics.md).

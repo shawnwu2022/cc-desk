@@ -29,6 +29,8 @@ export const useProjectManagementStore = defineStore('project-management', () =>
   const renameError = ref<string | null>(null)
   // 行投影缓存：与 catalog.sessions 的行对象身份联动，避免任何单行变化让整表重渲染。
   const projectedRows = new WeakMap<UnifiedSession, { resumePending: boolean; row: UnifiedSession }>()
+  // 组投影缓存：键为规范化 projectKey，值是上一次发布的组对象。
+  const groupCache = new Map<string, UnifiedProjectGroup>()
   let feedbackVersion = 0
   let projectCloseOwner: { request: NonNullable<typeof dialog.value>; registration: string | null; close: ReturnType<typeof catalog.captureProjectClose> } | null = null
   let removeOwner: { request: NonNullable<typeof dialog.value>; registration?: string | null; selected: () => boolean } | null = null
@@ -81,11 +83,26 @@ export const useProjectManagementStore = defineStore('project-management', () =>
       if (row.processState === 'running' || row.processState === 'starting') group.runningCount++
       if (row.attentionState === 'needs-user') group.needsUserCount++
     }
+    // 组投影缓存：行对象身份已由 projectedRows 稳定，这里对未变化的项目复用
+    // 同一组对象，单行状态变化不再让无关项目的 ProjectNode 重渲染。
+    for (const [key, group] of rows) {
+      const previous = groupCache.get(key)
+      if (!previous
+        || previous.projectPath !== group.projectPath || previous.name !== group.name
+        || previous.pinned !== group.pinned || previous.hidden !== group.hidden
+        || previous.lastActivityAt !== group.lastActivityAt
+        || previous.runningCount !== group.runningCount || previous.needsUserCount !== group.needsUserCount
+        || previous.sessions.length !== group.sessions.length
+        || group.sessions.some((row, index) => row !== previous.sessions[index])) continue
+      rows.set(key, previous)
+    }
+    groupCache.clear()
+    for (const [key, group] of rows) groupCache.set(key, group)
     return [...rows.values()].sort((a, b) => Number(b.pinned) - Number(a.pinned)
       || b.lastActivityAt - a.lastActivityAt || a.name.localeCompare(b.name) || a.projectKey.localeCompare(b.projectKey))
   })
   const visibleGroups = computed(() => groups.value.filter(group => !group.hidden || openCount(group.projectPath) > 0)
-    .map(group => ({ ...group, hidden: false })))
+    .map(group => group.hidden ? { ...group, hidden: false } : group))
 
   function refresh(): Promise<void> {
     if (refreshTail) return refreshTail

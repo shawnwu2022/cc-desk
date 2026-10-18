@@ -109,9 +109,19 @@ function refreshSessions() {
   if (!props.active) return
   emit('refresh')
 }
+// 上游组对象在无关变化时已保持身份；这里按输入组对象缓存输出，
+// 归档过滤与排序结果不变时复用同一输出对象，避免所有 ProjectNode 重渲染。
+const allGroupsCache = new WeakMap<UnifiedProjectGroup, { output: UnifiedProjectGroup; sessions: UnifiedSession[] }>()
 const allGroups = computed<UnifiedProjectGroup[]>(() => {
-  const groups = normalGroups.value.filter(group => !group.hidden).map(group => ({
-    ...group, sessions: group.sessions.filter(session => !session.archived).sort(createdOrder) }))
+  const groups = normalGroups.value.filter(group => !group.hidden).map(group => {
+    const sessions = group.sessions.filter(session => !session.archived).sort(createdOrder)
+    const cached = allGroupsCache.get(group)
+    if (cached && cached.sessions.length === sessions.length
+      && sessions.every((row, index) => row === cached.sessions[index])) return cached.output
+    const output = { ...group, sessions }
+    allGroupsCache.set(group, { output, sessions })
+    return output
+  })
   const seen = new Set(normalGroups.value.map(group => normalizePath(group.projectPath)))
   const pinned = new Set(projects.pinnedProjects.map(normalizePath))
   // Task 5 intentionally omits all-archived projects. Keep one empty project shell

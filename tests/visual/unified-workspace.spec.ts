@@ -41,6 +41,66 @@ async function openFixture(page: Page, options: Record<string, string | number>)
   }
 }
 
+// 真实指针捕获与 click 顺序不能由 jsdom 代替；这里只验证文档内拖拽，不认证 CLI。
+for (const dpr of [1, 1.5]) test.describe(`SessionRef_PointerBrowser_001 DPR ${dpr}`, () => {
+  test.use({ viewport: { width: 1366, height: 768 }, deviceScaleFactor: dpr })
+  test('SessionRef_ClickKeepsKeyboardFocus_002', async ({ page }) => {
+    await openFixture(page, { scenario: 'mixed', locale: 'en' })
+    const row = page.locator('[data-session-row][aria-selected="true"]')
+    const title = row.locator('.session-name')
+    await row.locator('.session-overflow-trigger button').focus()
+    const box = (await title.boundingBox())!
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
+    await expect(title).toBeFocused()
+    await page.keyboard.press('Shift+F10')
+    await expect(page.getByRole('menu')).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(row).toBeFocused()
+  })
+  test('SessionRef_PointerDragAndCancel_001', async ({ page }) => {
+    await openFixture(page, { scenario: 'mixed', locale: 'en' })
+    const events: { phase: string; payload?: string }[] = []
+    let nativeDragStarts = 0
+    await page.exposeFunction('recordSessionReferenceDrag', (event: { phase: string; payload?: string }) => { events.push(event) })
+    await page.exposeFunction('recordNativeDragStart', () => { nativeDragStarts++ })
+    await page.evaluate(async () => {
+      const modulePath = '/src/session/sessionReferenceDrag.ts'
+      const { subscribeSessionReferenceDrag } = await import(modulePath)
+      const bridge = window as unknown as {
+        recordSessionReferenceDrag: (event: unknown) => void
+        recordNativeDragStart: () => void
+      }
+      subscribeSessionReferenceDrag(bridge.recordSessionReferenceDrag)
+      window.addEventListener('dragstart', bridge.recordNativeDragStart, true)
+    })
+    const source = page.locator('[data-session-row="visual-session-1"]')
+    const sourceBox = (await source.boundingBox())!
+    const targetBox = (await page.locator('.visual-terminal').boundingBox())!
+    const start = { x: sourceBox.x + 80, y: sourceBox.y + sourceBox.height / 2 }
+    const end = { x: targetBox.x + targetBox.width / 2, y: targetBox.y + targetBox.height / 2 }
+    const selected = await page.locator('[data-session-row][aria-selected="true"]').getAttribute('data-session-row')
+    await page.mouse.move(start.x, start.y)
+    await page.mouse.down()
+    await page.mouse.move(start.x + 2, start.y + 2)
+    expect(events).toEqual([])
+    await page.mouse.move(end.x, end.y, { steps: 10 })
+    await page.mouse.up()
+    await expect.poll(() => events.filter(event => event.phase === 'drop').length).toBe(1)
+    const drop = events.find(event => event.phase === 'drop')!
+    expect(JSON.parse(drop.payload!)).toMatchObject({ title: 'Implement resource drawer', cli: 'codex', sessionId: 'visual-tab-1' })
+    await expect(page.locator(`[data-session-row="${selected}"]`)).toHaveAttribute('aria-selected', 'true')
+    await page.mouse.move(start.x, start.y)
+    await page.mouse.down()
+    await page.mouse.move(end.x, end.y, { steps: 10 })
+    await page.keyboard.press('Escape')
+    await page.mouse.up()
+    await expect.poll(() => events.filter(event => event.phase === 'cancel').length).toBe(1)
+    expect(events.filter(event => event.phase === 'drop')).toHaveLength(1)
+    expect(nativeDragStarts).toBe(0)
+    await expect(source).toBeVisible()
+  })
+})
+
 // Unapproved status/explicit-launch pixels stay separate from the immutable
 // historical baselines. Synthetic signals do not certify live CLI semantics.
 for (const gui of ['light', 'dark']) for (const locale of ['en', 'zh']) {

@@ -570,6 +570,12 @@ function dropPaths(paths: string[]): boolean {
   return sendText(text)
 }
 
+// 会话引用为已格式化的单行纯文本，与键盘输入同语义注入当前显示标签。
+function dropSessionReference(text: string): boolean {
+  if (!visible.value || !text) return false
+  return sendText(text)
+}
+
 let coreListenersReady: Promise<void> | null = null
 const stopExitWaiters = new Map<string, Set<() => void>>()
 function ensureCoreListeners(): Promise<void> {
@@ -1015,6 +1021,7 @@ defineExpose({
   cleanup,
   sendText,
   dropPaths,
+  dropSessionReference,
   focus,
   fitCurrentTerminal, fitVisible, stopTab, stop: stopTab, recover, renameTab,
   disposeTabInstance,
