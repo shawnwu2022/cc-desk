@@ -6,6 +6,7 @@ import NativeCliTerminal from '@/components/NativeCliTerminal.vue'
 import { useShellStore } from '@/stores/shell'
 import { useAppStore } from '@/stores/app'
 import { computeTerminalSurfaceVars, getTerminalTheme } from '@/config/terminalThemes'
+import { formatSessionReference, parseSessionDragPayload, SESSION_DRAG_MIME } from '@/utils/sessionReference'
 import type { OpenTerminalSession, UnifiedTerminalHostPort } from '@/terminal/unifiedTerminalHost'
 import type { NativeAttemptIdentity } from '@/stores/nativeTabs'
 import { UNIFIED_WINDOW_FOCUS, useUnifiedWindowAttention } from '@/composables/useUnifiedWindowAttention'
@@ -83,6 +84,40 @@ async function setupDragDropListener() {
 }
 onMounted(() => { void setupDragDropListener().catch(() => {}) })
 onUnmounted(() => { dragDropDisposed = true; unlistenDragDrop?.(); unlistenDragDrop = null })
+// 应用内会话引用拖拽是 DOM 级事件，与上面的 webview 级 OS 文件拖放互不经过对方通道；
+// 高亮共用同一视觉（drag-over），但状态独立，避免两个来源互相清除。
+const hostElement = ref<HTMLElement | null>(null)
+const isRefDragOver = ref(false)
+function hasSessionDragType(event: DragEvent): boolean {
+  return !!event.dataTransfer?.types.includes(SESSION_DRAG_MIME)
+}
+function onDragEnter(event: DragEvent) {
+  if (!hasSessionDragType(event)) return
+  event.preventDefault()
+  isRefDragOver.value = true
+}
+function onDragOver(event: DragEvent) {
+  if (!hasSessionDragType(event)) return
+  event.preventDefault()
+  event.dataTransfer!.dropEffect = 'copy'
+  isRefDragOver.value = true
+}
+function onDragLeave(event: DragEvent) {
+  if (!isRefDragOver.value) return
+  const host = hostElement.value
+  if (host && event.relatedTarget instanceof Node && host.contains(event.relatedTarget)) return
+  isRefDragOver.value = false
+}
+function onSessionRefDrop(event: DragEvent) {
+  if (!hasSessionDragType(event)) return
+  event.preventDefault()
+  event.stopPropagation()
+  isRefDragOver.value = false
+  const payload = parseSessionDragPayload(event.dataTransfer?.getData(SESSION_DRAG_MIME))
+  if (!payload) return
+  const reference = formatSessionReference(payload)
+  activeTerminal()?.dropSessionReference(reference)
+}
 const port: UnifiedTerminalHostPort = {
   async startLegacy(id) { await nextTick(); await requireLegacy().startTab(id) },
   async stopLegacy(id) { await requireLegacy().stopTab(id) },
@@ -97,7 +132,8 @@ defineExpose({ ...port, fitVisible })
 </script>
 
 <template>
-  <div class="unified-terminal-host" :class="{ 'drag-over': isDragOver }" data-unified-terminal-host :style="surface">
+  <div ref="hostElement" class="unified-terminal-host" :class="{ 'drag-over': isDragOver || isRefDragOver }" data-unified-terminal-host :style="surface"
+    @dragenter="onDragEnter" @dragover="onDragOver" @dragleave="onDragLeave" @drop="onSessionRefDrop">
     <!-- XTermTerminal already aggregates Legacy tabs; there is exactly one owner. -->
     <TerminalView v-if="legacyMounted" ref="legacy" :visible="legacyVisible" v-show="legacyVisible" />
     <NativeCliTerminal v-for="session in nativeSessions" :key="session.id"

@@ -1,14 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
-import { defineComponent, h, onMounted, onUnmounted } from 'vue'
+import { defineComponent, h, nextTick, onMounted, onUnmounted } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import UnifiedTerminalHost from '@/components/workspace/UnifiedTerminalHost.vue'
+import { SESSION_DRAG_MIME } from '@/utils/sessionReference'
 import { mockIPC, clearMocks } from '@tauri-apps/api/mocks'
 import { useAppStore } from '@/stores/app'
 import { useShellStore } from '@/stores/shell'
 import en from '@/i18n/locales/en'
-const seen = { mounts: [] as string[], unmounts: [] as string[], fits: [] as string[], focus: [] as string[], stops: [] as any[], drops: [] as [string, string[]][] }
+const seen = { mounts: [] as string[], unmounts: [] as string[], fits: [] as string[], focus: [] as string[], stops: [] as any[], drops: [] as [string, string[]][], refDrops: [] as [string, string][] }
 const drag = vi.hoisted(() => ({ handler: null as null | ((event: any) => void) }))
 vi.mock('@tauri-apps/api/webview', () => ({
   getCurrentWebview: () => ({ onDragDropEvent: async (handler: (event: any) => void) => { drag.handler = handler; return () => { drag.handler = null } } }),
@@ -18,7 +19,7 @@ vi.mock('@xterm/xterm', () => ({ Terminal: class {} }))
 const Child = defineComponent({ props: { tabId: String, active: { type: Boolean, default: undefined }, visible: Boolean }, setup(props, { expose }) {
   const id = props.tabId ?? 'legacy'
   onMounted(() => seen.mounts.push(id)); onUnmounted(() => seen.unmounts.push(id))
-  expose({ fitVisible: () => seen.fits.push(id), focus: () => seen.focus.push(id), stop: (attempt: any) => seen.stops.push([id, attempt]), recover: vi.fn(), startTab: vi.fn(), stopTab: vi.fn(), restartTab: vi.fn(), renameTab: vi.fn(), dropPaths: (paths: string[]) => { seen.drops.push([id, paths]) } })
+  expose({ fitVisible: () => seen.fits.push(id), focus: () => seen.focus.push(id), stop: (attempt: any) => seen.stops.push([id, attempt]), recover: vi.fn(), startTab: vi.fn(), stopTab: vi.fn(), restartTab: vi.fn(), renameTab: vi.fn(), dropPaths: (paths: string[]) => { seen.drops.push([id, paths]) }, dropSessionReference: (text: string) => { seen.refDrops.push([id, text]) } })
   return () => h('div', { 'data-child': id, 'data-visible': String(props.active ?? props.visible) }, id)
 } })
 const wrappers: VueWrapper[] = []
@@ -95,5 +96,62 @@ describe('Unified terminal host', () => {
     drag.handler!({ payload: { type: 'enter', paths: [] } })
     expect(w.find('[data-unified-terminal-host]').classes()).not.toContain('drag-over')
   })
+  // 应用内会话引用拖拽在拖入时高亮、drop 时只分发给当前活跃终端，drop 后清除高亮。
+  it('Host_RefDragHighlightsAndDropsToActive_007', async () => {
+    const w = render(); await flushPromises()
+    await w.setProps({ activeSessionId: 'native-tab:cx' }); await flushPromises()
+    const host = w.get('[data-unified-terminal-host]')
+    fireDrag(host, 'dragenter', { types: [SESSION_DRAG_MIME] })
+    await nextTick()
+    expect(host.classes()).toContain('drag-over')
+    const payload = JSON.stringify({ title: 'Fix login bug', cli: 'claude', projectPath: 'E:/repo/app', sessionId: 'native-1' })
+    const event = fireDrag(host, 'drop', { types: [SESSION_DRAG_MIME], data: payload })
+    await nextTick()
+    expect(event.defaultPrevented).toBe(true)
+    expect(seen.refDrops).toEqual([['cx', 'Session: Fix login bug (cli: claude, project: E:/repo/app, id: native-1)']])
+    expect(seen.drops).toEqual([])
+    expect(host.classes()).not.toContain('drag-over')
+  })
+  // 非 MIME 拖拽与非法载荷不分发；拖拽离开宿主后清除悬停态。
+  it('Host_RefDragForeignOrInvalidIgnored_008', async () => {
+    const w = render(); await flushPromises()
+    const host = w.get('[data-unified-terminal-host]')
+    fireDrag(host, 'dragover', { types: ['text/plain'] })
+    await nextTick()
+    expect(host.classes()).not.toContain('drag-over')
+    fireDrag(host, 'dragover', { types: [SESSION_DRAG_MIME] })
+    await nextTick()
+    expect(host.classes()).toContain('drag-over')
+    fireDrag(host, 'dragleave', { types: [SESSION_DRAG_MIME], relatedTarget: host.element })
+    await nextTick()
+    expect(host.classes()).toContain('drag-over')
+    fireDrag(host, 'dragleave', { types: [SESSION_DRAG_MIME], relatedTarget: null })
+    await nextTick()
+    expect(host.classes()).not.toContain('drag-over')
+    fireDrag(host, 'drop', { types: [SESSION_DRAG_MIME], data: 'not json' })
+    expect(seen.refDrops).toEqual([])
+  })
+  // host 不可见时引用 drop 同样不分发。
+  it('Host_RefDropIgnoredWhenHidden_009', async () => {
+    const w = render(); await flushPromises()
+    await w.setProps({ visible: false }); await flushPromises()
+    fireDrag(w.get('[data-unified-terminal-host]'), 'drop', {
+      types: [SESSION_DRAG_MIME],
+      data: JSON.stringify({ title: 't', cli: 'codex', projectPath: '/p', sessionId: 's1' }),
+    })
+    expect(seen.refDrops).toEqual([])
+  })
 
 })
+// jsdom 的 DragEvent/dataTransfer 支持不完整，用普通 Event 附加受控 dataTransfer 桩。
+function fireDrag(wrapper: { element: Element }, type: string, init: { types?: string[]; data?: string; relatedTarget?: Node | null }) {
+  const event = new Event(type, { bubbles: true, cancelable: true }) as any
+  event.dataTransfer = {
+    types: init.types ?? [],
+    getData: (mime: string) => (mime === SESSION_DRAG_MIME ? init.data ?? '' : ''),
+    dropEffect: 'none',
+  }
+  if (init.relatedTarget !== undefined) event.relatedTarget = init.relatedTarget
+  wrapper.element.dispatchEvent(event)
+  return event
+}

@@ -11,6 +11,7 @@ import SessionAppIcon from './SessionAppIcon.vue'
 import SessionOverflowMenu from './SessionOverflowMenu.vue'
 import { deriveSessionVisualState, makeSessionRenameOwnerKey, selectSessionMenuActions, selectSessionArchiveAction, selectSessionPrimaryAction, selectSessionObservationNotice, sessionActionLabelKey } from '@/utils/sessionPresentation'
 import { formatRelativeActivity, useRelativeActivityClock } from '@/utils/relativeTime'
+import { buildSessionDragPayload, SESSION_DRAG_MIME } from '@/utils/sessionReference'
 import type { SessionMenuAction, SessionMenuActionVisibility, SessionPrimaryAction, UnifiedSession } from '@/types/unifiedSession'
 
 const props = withDefaults(defineProps<{
@@ -183,11 +184,18 @@ function onMenuAction(action: SessionMenuAction) {
   if (action === 'rename') startRename()
   else emit('menu-action', props.session.id, action)
 }
+// 拖拽引用是只读动作：载荷只含显示安全字段，终端侧统一格式化注入。
+function onDragStart(event: DragEvent) {
+  if (isRenaming.value || !event.dataTransfer) { event.preventDefault(); return }
+  event.dataTransfer.effectAllowed = 'copy'
+  event.dataTransfer.setData(SESSION_DRAG_MIME, buildSessionDragPayload(props.session))
+}
 </script>
 
 <template>
   <div ref="row" class="session-item" :class="{ active: selected, 'has-primary': !!primary, 'has-launch': launchPrimary, 'has-archive': !!archive && !primary && !isRenaming, editing: isRenaming }"
     role="treeitem" :data-session-row="session.id" :aria-selected="selected" :aria-label="session.title" :aria-busy="session.resumePending || undefined" tabindex="0"
+    :draggable="!isRenaming" @dragstart="onDragStart"
     @click="onClick" @dblclick="onDoubleClick" @keydown="onKeydown" @contextmenu="openContext">
     <SessionAppIcon :cli="session.cli" :state="visualState" :activity-state="session.activityState" :observation-state="session.observationState" :observer-reason-code="session.observerReasonCode" :archived="session.archived" :notice="observationNotice" :receipt-id="receiptId" />
     <div class="session-name-wrapper">

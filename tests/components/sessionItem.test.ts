@@ -701,3 +701,25 @@ it('Row_ArchiveCoarsePointer_045', () => {
   expect(rules.find(rule => rule.selectorText.endsWith('.session-archive-action'))?.style.getPropertyValue('pointer-events')).toBe('auto')
   expect(rules.some(rule => rule.selectorText.endsWith('.session-time'))).toBe(false)
 })
+
+// 拖拽引用载荷只含显示安全字段，身份优先 native 会话 ID。
+it('Row_DragStartCarriesReferencePayload_060', () => {
+  const setData = vi.fn()
+  const wrapper = row(base)
+  expect(wrapper.attributes('draggable')).toBe('true')
+  wrapper.trigger('dragstart', { dataTransfer: { effectAllowed: 'none', setData } })
+  expect(setData).toHaveBeenCalledTimes(1)
+  const [mime, payload] = setData.mock.calls[0] as [string, string]
+  expect(mime).toBe('application/x-cc-desk-session')
+  expect(JSON.parse(payload)).toEqual({ title: base.title, cli: 'codex', projectPath: base.projectPath, sessionId: 'native-1' })
+})
+
+// 重命名编辑中禁止发起拖拽，避免与输入框文本选择冲突。
+it('Row_DragSuppressedWhileRenaming_061', async () => {
+  const setData = vi.fn()
+  const wrapper = row({ ...base, renameState: 'editing' as const }, { selected: true })
+  await nextTick(); await nextTick()
+  expect(wrapper.attributes('draggable')).toBe('false')
+  wrapper.trigger('dragstart', { dataTransfer: { effectAllowed: 'none', setData } })
+  expect(setData).not.toHaveBeenCalled()
+})
