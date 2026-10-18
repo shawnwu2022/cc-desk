@@ -77,6 +77,7 @@ export default {
   settingsFollowSystem: '跟随系统',
   settingsGuiThemeHint: '仅更改应用界面配色，不改变终端配色或已打开的会话。',
   settingsDensity: '界面密度',
+  settingsDensityHint: '紧凑压缩会话与项目列表的行高、字号和边距，一屏可显示更多内容；不影响终端字体与行高。',
   settingsDensityStandard: '标准',
   settingsDensityCompact: '紧凑',
   settingsSidebarWidth: '会话栏宽度（px）',

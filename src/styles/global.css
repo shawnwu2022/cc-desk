@@ -80,6 +80,15 @@
   --control-height-normal: 32px;
   --control-height-primary: 36px;
 
+  /* GUI density geometry（data-density 切换，仅界面，不涉终端） */
+  --session-row-height: 38px;
+  --session-list-gap: 2px;
+  --sidebar-title-size: 13px;
+  --project-row-height: 40px;
+  --workspace-content-padding: 12px;
+  --workspace-header-padding-y: 8px;
+  --project-list-row-padding-y: 8px;
+
   /* 圆角系统 */
   --radius-sm: 4px;
   --radius-md: 6px;
@@ -453,7 +462,12 @@ button:disabled, input:disabled {
 }
 
 /* GUI density affects navigation geometry only, never xterm/PTY preferences. */
-[data-density="compact"] .session-list .session-item { height: 34px; }
-[data-density="compact"] .project-node > .project-row { height: 36px; }
-[data-density="compact"] .projects-list .project-row { padding-top: 6px; padding-bottom: 6px; }
-[data-density="compact"] .workspace-view > .workspace-header { padding-top: 6px; padding-bottom: 6px; }
+html[data-density="compact"] {
+  --session-row-height: 32px;
+  --session-list-gap: 1px;
+  --sidebar-title-size: 12px;
+  --project-row-height: 34px;
+  --workspace-content-padding: 8px;
+  --workspace-header-padding-y: 6px;
+  --project-list-row-padding-y: 5px;
+}

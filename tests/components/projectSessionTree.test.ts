@@ -634,7 +634,7 @@ describe('Unified project session tree', () => {
     const row = css.find(rule => rule.selectorText === '.project-row')!
     expect(row.style.getPropertyValue('display')).toBe('grid')
     expect(row.style.getPropertyValue('grid-template-columns')).toBe('20px minmax(0, 1fr) 20px 28px 28px')
-    expect(row.style.getPropertyValue('height')).toBe('40px')
+    expect(row.style.getPropertyValue('height')).toBe('var(--project-row-height)')
     const title = css.find(rule => rule.selectorText === '.project-name')!
     expect(title.style.getPropertyValue('overflow')).toBe('hidden')
     expect(title.style.getPropertyValue('text-overflow')).toBe('ellipsis')

@@ -29,8 +29,11 @@ function commitWidth() {
         :options="[{ value: 'light', label: t('light') }, { value: 'dark', label: t('dark') }, { value: 'system', label: t('settingsFollowSystem') }]" @update:model-value="app.setTheme" />
       <p>{{ t('settingsGuiThemeHint') }}</p>
     </div>
-    <AppSelect data-gui-density :model-value="app.guiDensity" :label="t('settingsDensity')"
-      :options="[{ value: 'standard', label: t('settingsDensityStandard') }, { value: 'compact', label: t('settingsDensityCompact') }]" @update:model-value="app.setGuiDensity" />
+    <div class="setting-field">
+      <AppSelect data-gui-density :model-value="app.guiDensity" :label="t('settingsDensity')"
+        :options="[{ value: 'standard', label: t('settingsDensityStandard') }, { value: 'compact', label: t('settingsDensityCompact') }]" @update:model-value="app.setGuiDensity" />
+      <p>{{ t('settingsDensityHint') }}</p>
+    </div>
     <div class="setting-field">
       <AppInput data-settings-sidebar-width type="number" :model-value="widthDraft" :label="t('settingsSidebarWidth')" min="240" max="360" step="8" @update:model-value="editWidth" @blur="commitWidth" @keydown.enter.prevent="commitWidth" @keydown.esc.prevent="cancelWidth" />
       <p>{{ t('settingsSidebarWidthHint') }}</p>

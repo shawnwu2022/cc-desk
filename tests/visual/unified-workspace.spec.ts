@@ -383,11 +383,13 @@ for (const viewport of viewports) for (const dpr of [1, 1.25, 1.5]) for (const l
         const cells = [...row.children].slice(0, 4).map(cell => { const rect = cell.getBoundingClientRect(); return { left: rect.left, right: rect.right, width: rect.width } })
         return { height: box.height, right: box.right, cells, titleLength: row.getAttribute('aria-label')!.length,
           truncated: name.scrollWidth > name.clientWidth, textOverflow: getComputedStyle(name).textOverflow,
+          titleSize: getComputedStyle(name).fontSize,
           actionCount: row.querySelectorAll('.session-primary-action button').length,
           controls: [...row.querySelectorAll('.session-row-control')].map(control => { const rect = control.getBoundingClientRect(); return { width: rect.width, height: rect.height } }) }
       }))
       for (const row of geometry) {
-        expect(row.height).toBe(density === 'compact' ? 34 : 38)
+        expect(row.height).toBe(density === 'compact' ? 32 : 38)
+        expect(row.titleSize).toBe(density === 'compact' ? '12px' : '13px')
         expect(row.cells).toHaveLength(4)
         expect(row.cells[0].width).toBe(20)
         expect(row.cells[1].width).toBeGreaterThan(0)

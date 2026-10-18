@@ -30,7 +30,7 @@ const { t } = useI18n()
 </template>
 
 <style scoped>
-.workspace-header { display: flex; align-items: center; gap: 8px; padding: 8px 12px; flex-shrink: 0; min-width: 0; border-bottom: 1px solid var(--border-color); }
+.workspace-header { display: flex; align-items: center; gap: 8px; padding: var(--workspace-header-padding-y) 12px; flex-shrink: 0; min-width: 0; border-bottom: 1px solid var(--border-color); }
 .workspace-context { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
 .context-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--text-primary); }
 .project-title { flex: 0 1 auto; font-weight: 600; }

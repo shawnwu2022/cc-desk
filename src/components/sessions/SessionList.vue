@@ -32,5 +32,5 @@ const emit = defineEmits<{
 </template>
 
 <style scoped>
-.session-list { display: flex; flex-direction: column; gap: 2px; }
+.session-list { display: flex; flex-direction: column; gap: var(--session-list-gap); }
 </style>

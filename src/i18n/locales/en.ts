@@ -77,6 +77,7 @@ export default {
   settingsFollowSystem: 'Follow system',
   settingsGuiThemeHint: 'Changes application colors only. Terminal colors and open sessions stay as they are.',
   settingsDensity: 'Interface density',
+  settingsDensityHint: 'Compact reduces session and project list row heights, text size and spacing to fit more on screen. Terminal fonts and line height are unaffected.',
   settingsDensityStandard: 'Standard',
   settingsDensityCompact: 'Compact',
   settingsSidebarWidth: 'Session sidebar width (px)',

@@ -259,7 +259,7 @@ function preventReferenceNativeDrag(event: DragEvent) {
   grid-template-columns: 20px minmax(0, 1fr) 38px 20px 20px;
   column-gap: 6px;
   align-items: center;
-  height: 38px;
+  height: var(--session-row-height);
   width: 100%;
   padding: 0 8px;
   position: relative;
@@ -294,12 +294,12 @@ function preventReferenceNativeDrag(event: DragEvent) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 13px;
+  font-size: var(--sidebar-title-size);
   font-weight: 500;
 }
 .session-item.active .session-name { font-weight: 600; }
 .session-name:focus-visible, .session-time:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; border-radius: var(--radius-sm); }
-.session-name-wrapper :deep(.rename-input) { width: 100%; min-width: 0; padding: 0 4px; font-size: 13px; }
+.session-name-wrapper :deep(.rename-input) { width: 100%; min-width: 0; padding: 0 4px; font-size: var(--sidebar-title-size); }
 .session-tail { position: relative; width: 38px; height: 28px; display: flex; align-items: center; justify-content: flex-end; }
 .session-time {
   display: block;

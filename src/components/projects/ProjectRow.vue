@@ -86,7 +86,7 @@ function select(id: string) {
   </li>
 </template>
 <style scoped>
-.project-row { display: grid; grid-template-columns: minmax(0, 1fr) 18px 54px 32px 28px; align-items: center; gap: 8px; min-width: 0; padding: 8px 10px; border-bottom: 1px solid var(--border-color); }
+.project-row { display: grid; grid-template-columns: minmax(0, 1fr) 18px 54px 32px 28px; align-items: center; gap: 8px; min-width: 0; padding: var(--project-list-row-padding-y) 10px; border-bottom: 1px solid var(--border-color); }
 .project-row--hidden .project-identity { opacity: .65; }
 .project-identity { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; overflow: hidden; gap: 2px; }
 .project-name { display: block; max-width: 100%; min-width: 0; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); }

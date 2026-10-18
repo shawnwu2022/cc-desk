@@ -45,6 +45,6 @@ function requestSession() {
 
 <style scoped>
 .workspace-view { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
-.workspace-content { display: flex; flex-direction: column; flex: 1; gap: 8px; padding: 12px; min-width: 0; min-height: 0; overflow: hidden; }
+.workspace-content { display: flex; flex-direction: column; flex: 1; gap: 8px; padding: var(--workspace-content-padding); min-width: 0; min-height: 0; overflow: hidden; }
 .workspace-terminal-host { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
 </style>

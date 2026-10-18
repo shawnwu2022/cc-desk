@@ -213,7 +213,7 @@ onBeforeUnmount(() => { window.removeEventListener('resize', placeMenu) })
   grid-template-columns: 20px minmax(0, 1fr) 20px 28px 28px;
   column-gap: 4px;
   align-items: center;
-  height: 40px;
+  height: var(--project-row-height);
   min-width: 0;
   padding: 0 4px;
   border-radius: var(--radius-md);
@@ -229,7 +229,7 @@ onBeforeUnmount(() => { window.removeEventListener('resize', placeMenu) })
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: var(--sidebar-title-size);
   font-weight: 600;
 }
 .project-node.current .project-name { color: var(--accent-color); }

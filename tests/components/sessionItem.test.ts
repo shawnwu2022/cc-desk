@@ -192,8 +192,7 @@ describe('Unified SessionItem', () => {
     expect(grid.style.getPropertyValue('display')).toBe('grid')
     expect(grid.style.getPropertyValue('grid-template-columns')).toBe('20px minmax(0, 1fr) 38px 20px 20px')
     expect(grid.style.getPropertyValue('column-gap')).toBe('6px')
-    expect(Number.parseInt(grid.style.getPropertyValue('height'))).toBeGreaterThanOrEqual(36)
-    expect(Number.parseInt(grid.style.getPropertyValue('height'))).toBeLessThanOrEqual(38)
+    expect(grid.style.getPropertyValue('height')).toBe('var(--session-row-height)')
     const title = rules.find((rule) => rule.selectorText === '.session-name')!
     expect(title.style.getPropertyValue('white-space')).toBe('nowrap')
     expect(title.style.getPropertyValue('overflow')).toBe('hidden')
