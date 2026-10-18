@@ -3,7 +3,6 @@ import {
   buildSessionDragPayload,
   formatSessionReference,
   parseSessionDragPayload,
-  SESSION_DRAG_MIME,
 } from '@/utils/sessionReference'
 import type { UnifiedSession } from '@/types/unifiedSession'
 
@@ -26,7 +25,6 @@ const base = {
 describe('Session reference drag payload', () => {
   // 载荷身份优先 native 会话 ID；无 native ID（legacy 行）回退 adapter ID。
   it('SessionRef_PayloadPrefersNativeIdentity_001', () => {
-    expect(SESSION_DRAG_MIME).toBe('application/x-cc-desk-session')
     const payload = JSON.parse(buildSessionDragPayload(base))
     expect(payload).toEqual({ title: 'Fix login bug', cli: 'claude', projectPath: 'E:/repo/app', sessionId: 'native-1' })
     const legacy = JSON.parse(buildSessionDragPayload({ ...base, nativeSessionId: null }))
@@ -77,5 +75,33 @@ describe('Session reference injection text', () => {
   it('SessionRef_FallsBackToSessionIdWhenTitleEmpty_006', () => {
     const payload = parseSessionDragPayload(buildSessionDragPayload(base))!
     expect(formatSessionReference({ ...payload, title: '' })).toBe('Session: native-1 (cli: claude, project: E:/repo/app, id: native-1)')
+  })
+
+  // JSON 转义规则遗漏 DEL 与 C1：它们必须显式展开为 \uXXXX 字面量，
+  // 否则 sendUserText 会把裸 0x7F/0x85 字节发给 CLI（DEL 删除输入）。
+  it('SessionRef_EscapesDelAndC1Controls_007', () => {
+    const payload = parseSessionDragPayload(buildSessionDragPayload(base))!
+    const reference = formatSessionReference({ ...payload, title: 'a\x7fb\x85c' })
+    expect(reference).toContain('a\\u007fb\\u0085c')
+    expect(reference).not.toMatch(/[\u007F-\u009F]/)
+  })
+
+  // 空标题回退的会话 ID 同样经过控制字符转义，不留裸字节通道。
+  it('SessionRef_EscapesSessionIdFallback_008', () => {
+    const payload = parseSessionDragPayload(buildSessionDragPayload(base))!
+    const reference = formatSessionReference({ ...payload, title: '', sessionId: 'id\x7f' })
+    expect(reference).toContain('id\\u007f')
+    expect(reference).not.toMatch(/\u007F/)
+  })
+
+  // 标题、项目路径与空标题回退 ID 均覆盖完整 C0/DEL/C1 和 Unicode 行分隔符。
+  it.each(['title', 'projectPath', 'sessionId'] as const)('SessionRef_AllFieldsRejectRawControls_009 %s', field => {
+    const controls = Array.from({ length: 32 }, (_, index) => String.fromCharCode(index)).join('')
+      + Array.from({ length: 33 }, (_, index) => String.fromCharCode(0x7f + index)).join('') + '\u2028\u2029'
+    const payload = { title: field === 'sessionId' ? '' : 'Title', cli: 'claude' as const, projectPath: '/repo', sessionId: 'session-1', [field]: `before${controls}after` }
+    const reference = formatSessionReference(payload)
+    expect(reference).not.toMatch(/[\p{Cc}\u2028\u2029]/u)
+    expect(reference).toContain('before')
+    expect(reference).toContain('after')
   })
 })

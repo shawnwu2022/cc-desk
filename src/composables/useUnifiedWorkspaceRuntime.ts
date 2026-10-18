@@ -782,12 +782,18 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   // 历史/归档的每次响应式写入（entry 替换、sessions、loading 翻转）都按项目范围
   // 合批刷新：全量 refresh 会霸占 refresh 版本并作废并发范围刷新，单条标题变化
   // 曾引发 4 次全量 listSessions；queueCatalogProjects 在同一 nextTick 去重合批。
+  // 恢复提交成功但回执失败时，失败协调的重读会删除空归档键并抛错，成功路径的
+  // refresh 不再执行；排队范围必须取上一批与当前批的并集，删除键/条目的项目
+  // 不能从刷新范围里消失。
+  let lastHistoryPaths: string[] = []
+  let lastArchivePaths: string[] = []
   watch(() => [history.all(), projects.archivedSessions], () => {
-    const paths = new Set<string>()
-    for (const entry of history.all()) paths.add(entry.context.projectPath)
-    for (const path of projects.archivedSessions.keys()) paths.add(path)
-    queueCatalogProjects(...paths)
-  }, { deep: true })
+    const historyPaths = [...history.all()].map(entry => entry.context.projectPath)
+    const archivePaths = [...projects.archivedSessions.keys()]
+    queueCatalogProjects(...new Set<string>([...lastHistoryPaths, ...lastArchivePaths, ...historyPaths, ...archivePaths]))
+    lastHistoryPaths = historyPaths
+    lastArchivePaths = archivePaths
+  }, { deep: true, immediate: true })
   watch(() => catalog.activeSessionId, async () => {
     await nextTick()
     if (!disposed && shell.section === 'workspace') host.value?.focus()

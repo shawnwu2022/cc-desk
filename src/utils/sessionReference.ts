@@ -8,8 +8,6 @@
  * 已回退；将来若后端提供 tail/prefix 消息读取再恢复该档位。
  */
 
-export const SESSION_DRAG_MIME = 'application/x-cc-desk-session'
-
 import type { UnifiedCliKind } from '@/types/unifiedSession'
 
 export interface SessionReferencePayload {
@@ -23,6 +21,9 @@ export interface SessionReferencePayload {
 const terminalControls = new RegExp('[\\p{Cc}\\u2028\\u2029]', 'u')
 // JSON.stringify 按规范不转义 U+2028/U+2029，需先行替换。
 const lineSeparators = new RegExp('[\\u2028\\u2029]', 'g')
+// JSON.stringify 只转义 C0 与引号；DEL（U+007F）与 C1（U+0080–U+009F）会以裸
+// 字节留在输出里，进入终端键盘通道会被 CLI 解释（DEL 删除输入），需补转义。
+const jsonUnescapedControls = /[\u007F-\u009F]/g
 // 标题来自可重命名字段与 CLI 元数据，长度无前端保证；超长单行 burst 有上游截断风险。
 const MAX_TITLE_LENGTH = 200
 
@@ -58,16 +59,23 @@ export function parseSessionDragPayload(raw: unknown): SessionReferencePayload |
 }
 
 // 标题是显示标签而非路径身份，转义保留完整信息即可，不必像路径那样整批拒绝。
-// JSON.stringify 不转义 U+2028/U+2029，先折叠行分隔符再判断。
+// JSON.stringify 不转义 U+2028/U+2029，先折叠行分隔符再判断；它按规范保留的
+// DEL/C1 裸字节由 jsonUnescapedControls 补齐为 \uXXXX 字面量。
 function escapeReferenceField(value: string): string {
   const folded = value.replace(lineSeparators, ' ')
-  return terminalControls.test(folded) ? JSON.stringify(folded) : folded
+  return terminalControls.test(folded)
+    ? JSON.stringify(folded).replace(jsonUnescapedControls, ch => `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`)
+    : folded
 }
 
-/** 生成注入文本：单行线索，包含标题、CLI、项目与会话身份。 */
+/**
+ * 生成单行引用线索，全部字段均不含可执行的终端控制字符。
+ * @param payload 已通过载荷校验的标题、CLI、项目与会话身份。
+ * @returns 仅供 CLI 识别来源的显示文本，不提交回车。
+ */
 export function formatSessionReference(payload: SessionReferencePayload): string {
   const displayTitle = payload.title
     ? escapeReferenceField(Array.from(payload.title).slice(0, MAX_TITLE_LENGTH).join(''))
-    : payload.sessionId
+    : escapeReferenceField(payload.sessionId)
   return `Session: ${displayTitle} (cli: ${payload.cli}, project: ${escapeReferenceField(payload.projectPath)}, id: ${escapeReferenceField(payload.sessionId)})`
 }

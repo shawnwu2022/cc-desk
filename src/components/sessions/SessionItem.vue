@@ -2,7 +2,7 @@
 import { inject } from 'vue'
 import { SESSION_INTERACTION_OWNER } from '@/session/sessionInteraction'
 import { APP_RENAME_SHORTCUT, captureShortcut } from '@/config/appShortcuts'
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppInput from '@/components/ui/AppInput.vue'
 import AppTooltip from '@/components/ui/AppTooltip.vue'
@@ -11,7 +11,8 @@ import SessionAppIcon from './SessionAppIcon.vue'
 import SessionOverflowMenu from './SessionOverflowMenu.vue'
 import { deriveSessionVisualState, makeSessionRenameOwnerKey, selectSessionMenuActions, selectSessionArchiveAction, selectSessionPrimaryAction, selectSessionObservationNotice, sessionActionLabelKey } from '@/utils/sessionPresentation'
 import { formatRelativeActivity, useRelativeActivityClock } from '@/utils/relativeTime'
-import { buildSessionDragPayload, SESSION_DRAG_MIME } from '@/utils/sessionReference'
+import { buildSessionDragPayload } from '@/utils/sessionReference'
+import { startSessionReferenceDrag } from '@/session/sessionReferenceDrag'
 import type { SessionMenuAction, SessionMenuActionVisibility, SessionPrimaryAction, UnifiedSession } from '@/types/unifiedSession'
 
 const props = withDefaults(defineProps<{
@@ -42,6 +43,7 @@ const renameInvalid = ref(false)
 const menuOpen = ref(false)
 let firstClick: { session: UnifiedSession; owner: string; owns: (() => boolean) | null; selected: boolean } | null = null
 const menuAnchor = ref({ x: 8, y: 8 })
+let cancelReferenceDrag: (() => void) | undefined
 const isRenaming = computed(() => (props.selected || props.session.opened === false) && (localRename.value || props.session.renameState === 'editing' || (props.selected && props.session.renameState === 'saving')))
 const isSaving = computed(() => props.session.renameState === 'saving')
 const visualState = computed(() => deriveSessionVisualState(props.session, props.session.opened === true))
@@ -67,6 +69,7 @@ const age = computed(() => formatRelativeActivity(props.session.lastActivityAt, 
 const fullActivity = computed(() => new Date(props.session.lastActivityAt).toLocaleString(locale.value))
 
 watch(() => makeSessionRenameOwnerKey(props.session), () => {
+  cancelReferenceDrag?.()
   localRename.value = false
   renameInvalid.value = false
   renameValue.value = props.session.title
@@ -84,6 +87,8 @@ watch(() => props.session.renameState, (state, previous) => {
 }, { immediate: true })
 watch(() => props.selected, selected => { if (!selected) { localRename.value = false; renameInvalid.value = false } }, { flush: 'sync' })
 watch(() => props.surfaceActive, active => { if (!active) menuOpen.value = false }, { flush: 'sync' })
+watch(() => [props.surfaceActive, isRenaming.value, menuOpen.value], () => { cancelReferenceDrag?.() }, { flush: 'sync' })
+onUnmounted(() => { cancelReferenceDrag?.() })
 async function focusRename() {
   await nextTick()
   if (!props.surfaceActive || (props.session.opened !== false && !props.selected)) return
@@ -184,18 +189,22 @@ function onMenuAction(action: SessionMenuAction) {
   if (action === 'rename') startRename()
   else emit('menu-action', props.session.id, action)
 }
-// 拖拽引用是只读动作：载荷只含显示安全字段，终端侧统一格式化注入。
-function onDragStart(event: DragEvent) {
-  if (isRenaming.value || !event.dataTransfer) { event.preventDefault(); return }
-  event.dataTransfer.effectAllowed = 'copy'
-  event.dataTransfer.setData(SESSION_DRAG_MIME, buildSessionDragPayload(props.session))
+// 原生拖放只接受文件；会话引用在同一文档内跟踪指针，不进入 OS 拖放协议。
+function onReferencePointerdown(event: PointerEvent) {
+  if (!props.surfaceActive || isRenaming.value || menuOpen.value || event.button !== 0 || !event.isPrimary || event.pointerType === 'touch') return
+  if (event.target instanceof Element && event.target.closest('button, input, textarea, select, a, [role="menu"], .session-tail')) return
+  cancelReferenceDrag?.()
+  cancelReferenceDrag = startSessionReferenceDrag(event, buildSessionDragPayload(props.session))
+}
+function preventReferenceNativeDrag(event: DragEvent) {
+  if (!isRenaming.value) event.preventDefault()
 }
 </script>
 
 <template>
   <div ref="row" class="session-item" :class="{ active: selected, 'has-primary': !!primary, 'has-launch': launchPrimary, 'has-archive': !!archive && !primary && !isRenaming, editing: isRenaming }"
     role="treeitem" :data-session-row="session.id" :aria-selected="selected" :aria-label="session.title" :aria-busy="session.resumePending || undefined" tabindex="0"
-    :draggable="!isRenaming" @dragstart="onDragStart"
+    draggable="false" @pointerdown="onReferencePointerdown" @dragstart="preventReferenceNativeDrag"
     @click="onClick" @dblclick="onDoubleClick" @keydown="onKeydown" @contextmenu="openContext">
     <SessionAppIcon :cli="session.cli" :state="visualState" :activity-state="session.activityState" :observation-state="session.observationState" :observer-reason-code="session.observerReasonCode" :archived="session.archived" :notice="observationNotice" :receipt-id="receiptId" />
     <div class="session-name-wrapper">

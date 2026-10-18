@@ -13,8 +13,8 @@ import { useCliProfilesStore } from '@/stores/cliProfiles'
 import { useProjectsStateStore } from '@/stores/projectsState'
 import type { ProjectsState } from '@/types/app'
 
-const io = vi.hoisted(() => ({ projects: vi.fn(), sessions: vi.fn(), profiles: vi.fn(), registered: vi.fn(), register: vi.fn(), patchProfile: vi.fn(), getState: vi.fn(), upsertRecord: vi.fn(), setPreference: vi.fn(), scope: vi.fn(), read: vi.fn(), writeText: vi.fn(), legacyRoot: vi.fn() }))
-vi.mock('@/api/tauri', async original => ({ ...await original<object>(), ptySpawn: vi.fn(), ptyInput: vi.fn(), ptyKill: vi.fn(), getProjectsState: io.getState, upsertSessionUiRecord: io.upsertRecord, setProjectLaunchPreference: io.setPreference, updateAppConfig: vi.fn().mockResolvedValue(undefined), getAppConfig: vi.fn().mockResolvedValue({ theme: 'light', terminalTheme: 'cc-box-light', language: 'en' }), getProjects: io.projects, getSessions: io.sessions, createNativeProjectionClient: () => ({ scope: io.scope, read: io.read }), legacyClaudeRootKey: io.legacyRoot, onHookEvent: async () => () => {} }))
+const io = vi.hoisted(() => ({ projects: vi.fn(), sessions: vi.fn(), profiles: vi.fn(), registered: vi.fn(), register: vi.fn(), patchProfile: vi.fn(), getState: vi.fn(), restore: vi.fn(), upsertRecord: vi.fn(), setPreference: vi.fn(), scope: vi.fn(), read: vi.fn(), writeText: vi.fn(), legacyRoot: vi.fn() }))
+vi.mock('@/api/tauri', async original => ({ ...await original<object>(), ptySpawn: vi.fn(), ptyInput: vi.fn(), ptyKill: vi.fn(), getProjectsState: io.getState, restoreSession: io.restore, upsertSessionUiRecord: io.upsertRecord, setProjectLaunchPreference: io.setPreference, updateAppConfig: vi.fn().mockResolvedValue(undefined), getAppConfig: vi.fn().mockResolvedValue({ theme: 'light', terminalTheme: 'cc-box-light', language: 'en' }), getProjects: io.projects, getSessions: io.sessions, createNativeProjectionClient: () => ({ scope: io.scope, read: io.read }), legacyClaudeRootKey: io.legacyRoot, onHookEvent: async () => () => {} }))
 vi.mock('@/api/cli', () => ({ cliListProfiles: io.profiles, cliPatchProfile: io.patchProfile }))
 vi.mock('@/api/cliAvailability', () => ({ cliGetAvailability: async (profileId: string, profileRevision: string) => {
   const profile = useCliProfilesStore().profile(profileId)!
@@ -132,5 +132,30 @@ describe('running session title sync to session list', () => {
     await vi.advanceTimersByTimeAsync(60_000)
     await flushPromises()
     expect(catalog.sessions.find(value => value.opened && value.nativeSessionId === 'session-1')?.title).toBe('AI title')
+  })
+
+  // 恢复提交成功但回执失败时，失败协调的重读删除空归档键并抛错；删除键的
+  // 项目必须仍在刷新范围（上一批并集）内，否则已恢复会话留在归档抽屉。
+  it('TitleSync_RestoreAckLoss_004', async () => {
+    persisted.archivedSessions = { '/legacy': ['old-session'] }
+    const projects = useProjectsStateStore()
+    await projects.reload()
+    io.projects.mockResolvedValue([{ path: '/legacy', name: 'Legacy' }])
+    io.sessions.mockImplementation(async (path: string) => path === '/legacy'
+      ? [{ sessionId: 'old-session', name: 'Old Legacy', lastActiveAt: 1 }] : [])
+    render(); await flushPromises()
+    const catalog = useUnifiedSessionsStore()
+    const original = catalog.sessions.find(row => row.nativeSessionId === 'old-session')!
+    expect(original.archived).toBe(true)
+    io.restore.mockImplementationOnce(async () => {
+      persisted.archivedSessions = {}
+      throw new Error('ACK_LOST')
+    })
+    await expect(catalog.restoreArchivedSession(original.id)).rejects.toThrow('ACK_LOST')
+    await flushPromises()
+    expect(projects.archivedSessions.has('/legacy')).toBe(false)
+    expect(catalog.sessions.find(row => row.id === original.id)?.archived).toBe(false)
+    expect(catalog.projectGroups.flatMap(group => group.sessions).some(row => row.id === original.id)).toBe(true)
+    expect(io.restore).toHaveBeenCalledTimes(1)
   })
 })

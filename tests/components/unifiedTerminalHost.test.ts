@@ -4,7 +4,8 @@ import { defineComponent, h, nextTick, onMounted, onUnmounted } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import UnifiedTerminalHost from '@/components/workspace/UnifiedTerminalHost.vue'
-import { SESSION_DRAG_MIME } from '@/utils/sessionReference'
+import SessionItem from '@/components/sessions/SessionItem.vue'
+import type { UnifiedSession } from '@/types/unifiedSession'
 import { mockIPC, clearMocks } from '@tauri-apps/api/mocks'
 import { useAppStore } from '@/stores/app'
 import { useShellStore } from '@/stores/shell'
@@ -24,7 +25,7 @@ const Child = defineComponent({ props: { tabId: String, active: { type: Boolean,
 } })
 const wrappers: VueWrapper[] = []
 beforeEach(() => { clearMocks(); mockIPC(command => command === 'get_app_config' ? { theme: 'light', terminalTheme: 'cc-box-light', language: 'en' } : undefined); setActivePinia(createPinia()); Object.values(seen).forEach(values => { values.length = 0 }); drag.handler = null; vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} }) })
-afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.unstubAllGlobals(); clearMocks() })
+afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.unstubAllGlobals(); vi.restoreAllMocks(); clearMocks() })
 const sessions = [
   { id: 'legacy-tab:old-a', adapterSessionId: 'old-a', runtime: 'legacy-claude' },
   { id: 'legacy-tab:old-b', adapterSessionId: 'old-b', runtime: 'legacy-claude' },
@@ -96,62 +97,126 @@ describe('Unified terminal host', () => {
     drag.handler!({ payload: { type: 'enter', paths: [] } })
     expect(w.find('[data-unified-terminal-host]').classes()).not.toContain('drag-over')
   })
-  // 应用内会话引用拖拽在拖入时高亮、drop 时只分发给当前活跃终端，drop 后清除高亮。
-  it('Host_RefDragHighlightsAndDropsToActive_007', async () => {
+  // 真实会话行的指针拖拽无需 DOM/Tauri drop 事件，也不应激活或恢复来源会话。
+  it('Host_PointerReferenceDrop_012', async () => {
     const w = render(); await flushPromises()
     await w.setProps({ activeSessionId: 'native-tab:cx' }); await flushPromises()
+    const source = mount(SessionItem, { attachTo: document.body, props: { session: {
+      id: 'source', projectKey: '/repo', projectPath: '/repo', title: 'Source session', cli: 'claude',
+      runtime: 'native-cli', processState: 'stopped', attentionState: 'none', lastActivityAt: 0,
+      archived: false, opened: false, resumable: true, adapterSessionId: 'source', nativeSessionId: 'session-1',
+    } satisfies UnifiedSession }, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { TerminalView: Child, NativeCliTerminal: Child } } })
+    wrappers.push(source)
     const host = w.get('[data-unified-terminal-host]')
-    fireDrag(host, 'dragenter', { types: [SESSION_DRAG_MIME] })
-    await nextTick()
-    expect(host.classes()).toContain('drag-over')
-    const payload = JSON.stringify({ title: 'Fix login bug', cli: 'claude', projectPath: 'E:/repo/app', sessionId: 'native-1' })
-    const event = fireDrag(host, 'drop', { types: [SESSION_DRAG_MIME], data: payload })
-    await nextTick()
-    expect(event.defaultPrevented).toBe(true)
-    expect(seen.refDrops).toEqual([['cx', 'Session: Fix login bug (cli: claude, project: E:/repo/app, id: native-1)']])
-    expect(seen.drops).toEqual([])
-    expect(host.classes()).not.toContain('drag-over')
+    document.elementFromPoint = () => host.element
+    try {
+      firePointer(source.element, 'pointerdown', 10, 10)
+      firePointer(window, 'pointermove', 100, 100)
+      await nextTick()
+      expect(host.classes()).toContain('drag-over')
+      firePointer(window, 'pointerup', 100, 100)
+      source.element.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }))
+      firePointer(window, 'pointerup', 100, 100)
+      await nextTick()
+      expect(seen.refDrops).toEqual([['cx', 'Session: Source session (cli: claude, project: /repo, id: session-1)']])
+      expect(host.classes()).not.toContain('drag-over')
+      expect(source.emitted('activate')).toBeUndefined()
+      expect(source.emitted('primary-action')).toBeUndefined()
+      expect(seen.focus[seen.focus.length - 1]).toBe('cx')
+      expect(seen.drops).toEqual([])
+    } finally { delete (document as { elementFromPoint?: unknown }).elementFromPoint }
   })
-  // 非 MIME 拖拽与非法载荷不分发；拖拽离开宿主后清除悬停态。
-  it('Host_RefDragForeignOrInvalidIgnored_008', async () => {
+
+  // 取消拖拽后没有延迟投递；离开终端、窗口失焦和来源卸载都释放当前拖拽。
+  it.each(['outside', 'escape', 'cancel', 'blur', 'source-unmount', 'hidden', 'empty'] as const)('Host_CancelPointerReference_013 %s', async reason => {
     const w = render(); await flushPromises()
+    const source = mount(SessionItem, { attachTo: document.body, props: { session: {
+      id: 'source', projectKey: '/repo', projectPath: '/repo', title: 'Source session', cli: 'claude',
+      runtime: 'native-cli', processState: 'stopped', attentionState: 'none', lastActivityAt: 0,
+      archived: false, opened: false, resumable: true, adapterSessionId: 'source', nativeSessionId: 'session-1',
+    } satisfies UnifiedSession }, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { TerminalView: Child, NativeCliTerminal: Child } } })
+    wrappers.push(source)
+    const sourceElement = source.element
     const host = w.get('[data-unified-terminal-host]')
-    fireDrag(host, 'dragover', { types: ['text/plain'] })
-    await nextTick()
-    expect(host.classes()).not.toContain('drag-over')
-    fireDrag(host, 'dragover', { types: [SESSION_DRAG_MIME] })
-    await nextTick()
-    expect(host.classes()).toContain('drag-over')
-    fireDrag(host, 'dragleave', { types: [SESSION_DRAG_MIME], relatedTarget: host.element })
-    await nextTick()
-    expect(host.classes()).toContain('drag-over')
-    fireDrag(host, 'dragleave', { types: [SESSION_DRAG_MIME], relatedTarget: null })
-    await nextTick()
-    expect(host.classes()).not.toContain('drag-over')
-    fireDrag(host, 'drop', { types: [SESSION_DRAG_MIME], data: 'not json' })
-    expect(seen.refDrops).toEqual([])
+    document.elementFromPoint = () => host.element
+    try {
+      firePointer(source.element, 'pointerdown', 10, 10)
+      firePointer(window, 'pointermove', 100, 100)
+      await nextTick()
+      expect(host.classes()).toContain('drag-over')
+      if (reason === 'outside') { document.elementFromPoint = () => document.body; firePointer(window, 'pointermove', 200, 200) }
+      else if (reason === 'escape') window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+      else if (reason === 'cancel') firePointer(window, 'pointercancel', 100, 100)
+      else if (reason === 'blur') window.dispatchEvent(new Event('blur'))
+      else if (reason === 'source-unmount') { wrappers.splice(wrappers.indexOf(source), 1); source.unmount() }
+      else if (reason === 'hidden') await w.setProps({ visible: false })
+      else await w.setProps({ activeSessionId: null })
+      firePointer(window, 'pointerup', 100, 100)
+      sourceElement.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }))
+      await nextTick()
+      expect(seen.refDrops).toEqual([])
+      expect(source.emitted('primary-action')).toBeUndefined()
+      expect(host.classes()).not.toContain('drag-over')
+    } finally { delete (document as { elementFromPoint?: unknown }).elementFromPoint }
   })
-  // host 不可见时引用 drop 同样不分发。
-  it('Host_RefDropIgnoredWhenHidden_009', async () => {
+
+  // 普通点击不变；编辑器和行内按钮不会启动拖拽，也不会吞掉按下默认行为。
+  it('Host_ClickAndRenameAdmission_014', async () => {
     const w = render(); await flushPromises()
-    await w.setProps({ visible: false }); await flushPromises()
-    fireDrag(w.get('[data-unified-terminal-host]'), 'drop', {
-      types: [SESSION_DRAG_MIME],
-      data: JSON.stringify({ title: 't', cli: 'codex', projectPath: '/p', sessionId: 's1' }),
-    })
-    expect(seen.refDrops).toEqual([])
+    const source = mount(SessionItem, { attachTo: document.body, props: { session: {
+      id: 'source', projectKey: '/repo', projectPath: '/repo', title: 'Source session', cli: 'claude',
+      runtime: 'native-cli', processState: 'stopped', attentionState: 'none', lastActivityAt: 0,
+      archived: false, opened: false, resumable: true, adapterSessionId: 'source', nativeSessionId: 'session-1',
+    } satisfies UnifiedSession }, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { TerminalView: Child, NativeCliTerminal: Child } } })
+    wrappers.push(source)
+    document.elementFromPoint = () => w.get('[data-unified-terminal-host]').element
+    try {
+      firePointer(source.element, 'pointerdown', 10, 10)
+      firePointer(window, 'pointermove', 12, 12)
+      firePointer(window, 'pointerup', 12, 12)
+      await source.trigger('click')
+      expect(source.emitted('primary-action')).toEqual([['source', 'resume']])
+      expect(seen.refDrops).toEqual([])
+      const buttonDown = firePointer(source.get('.session-overflow-trigger button').element, 'pointerdown', 10, 10)
+      firePointer(window, 'pointermove', 100, 100)
+      firePointer(window, 'pointerup', 100, 100)
+      expect(buttonDown.defaultPrevented).toBe(false)
+      expect(seen.refDrops).toEqual([])
+      await source.setProps({ session: { ...source.props('session'), renameState: 'editing' } })
+      const down = firePointer(source.get('input').element, 'pointerdown', 10, 10)
+      firePointer(window, 'pointermove', 100, 100)
+      firePointer(window, 'pointerup', 100, 100)
+      expect(down.defaultPrevented).toBe(false)
+      expect(seen.refDrops).toEqual([])
+    } finally { delete (document as { elementFromPoint?: unknown }).elementFromPoint }
+  })
+
+  // 指针坐标已是 CSS 像素，150% 缩放不再除以 DPR；原生空 drop 不参与引用投递。
+  it('Host_ReferenceCoordinates_015', async () => {
+    const w = render(); await flushPromises()
+    const source = mount(SessionItem, { attachTo: document.body, props: { session: {
+      id: 'source', projectKey: '/repo', projectPath: '/repo', title: 'Source session', cli: 'codex',
+      runtime: 'native-cli', processState: 'stopped', attentionState: 'none', lastActivityAt: 0,
+      archived: false, opened: false, resumable: true, adapterSessionId: 'source', nativeSessionId: 'session-1',
+    } satisfies UnifiedSession }, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { TerminalView: Child, NativeCliTerminal: Child } } })
+    wrappers.push(source)
+    vi.stubGlobal('devicePixelRatio', 1.5)
+    document.elementFromPoint = (x, y) => x === 150 && y === 120 ? w.element : document.body
+    try {
+      firePointer(source.element, 'pointerdown', 10, 10)
+      firePointer(window, 'pointermove', 150, 120)
+      firePointer(window, 'pointerup', 150, 120)
+      drag.handler!({ payload: { type: 'drop', paths: [], position: { x: 150, y: 120 } } })
+      expect(seen.refDrops).toEqual([['legacy', 'Session: Source session (cli: codex, project: /repo, id: session-1)']])
+      drag.handler!({ payload: { type: 'drop', paths: ['C:/a.txt'], position: { x: 150, y: 120 } } })
+      expect(seen.drops).toEqual([['legacy', ['C:/a.txt']]])
+    } finally { delete (document as { elementFromPoint?: unknown }).elementFromPoint }
   })
 
 })
-// jsdom 的 DragEvent/dataTransfer 支持不完整，用普通 Event 附加受控 dataTransfer 桩。
-function fireDrag(wrapper: { element: Element }, type: string, init: { types?: string[]; data?: string; relatedTarget?: Node | null }) {
-  const event = new Event(type, { bubbles: true, cancelable: true }) as any
-  event.dataTransfer = {
-    types: init.types ?? [],
-    getData: (mime: string) => (mime === SESSION_DRAG_MIME ? init.data ?? '' : ''),
-    dropEffect: 'none',
-  }
-  if (init.relatedTarget !== undefined) event.relatedTarget = init.relatedTarget
-  wrapper.element.dispatchEvent(event)
+function firePointer(target: EventTarget, type: string, clientX: number, clientY: number) {
+  const event = new MouseEvent(type, { bubbles: true, cancelable: true, button: 0, buttons: type === 'pointerup' ? 0 : 1, clientX, clientY })
+  Object.defineProperties(event, { pointerId: { value: 1 }, pointerType: { value: 'mouse' }, isPrimary: { value: true } })
+  target.dispatchEvent(event)
   return event
 }
