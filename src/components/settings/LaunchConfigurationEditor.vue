@@ -22,9 +22,9 @@ const request = props.request
 const original = request.kind === 'create' ? undefined : profiles.profile(request.profileId)
 const workspaceRevision = profiles.revision
 const source = original ? { id: original.id, revision: original.revision } : undefined
-const cli = request.kind === 'create' ? request.cli : original?.cli === 'codex' ? 'codex' : 'claude'
+const cli = request.kind === 'create' ? request.cli : original?.cli === 'codex' ? 'codex' : original?.cli === 'opencode' ? 'opencode' : 'claude'
 const createdId = request.kind === 'create' || request.kind === 'copy' ? createNativeId('configuration') : undefined
-const name = ref(request.kind === 'copy' ? `${original?.name ?? ''} ${t('launchConfigCopySuffix')}` : original?.name ?? (cli === 'claude' ? 'Claude Code' : 'Codex CLI'))
+const name = ref(request.kind === 'copy' ? `${original?.name ?? ''} ${t('launchConfigCopySuffix')}` : original?.name ?? (cli === 'claude' ? 'Claude Code' : cli === 'codex' ? 'Codex CLI' : 'opencode'))
 const pathMode = ref(original?.programPath.mode ?? 'inherit')
 const pathText = ref(original?.programPath.mode === 'set' ? original.programPath.value : '')
 const argsMode = ref(original?.defaultArgs.mode ?? 'set')
@@ -103,7 +103,7 @@ async function save() {
     <div class="launch-editor">
       <AppInput data-launch-name :label="t('launchConfigName')" v-model="name" :disabled="busy || blocked" />
       <template v-if="request.kind !== 'rename'">
-        <p>{{ cli === 'claude' ? 'Claude Code' : 'Codex CLI' }}</p>
+        <p>{{ cli === 'claude' ? 'Claude Code' : cli === 'codex' ? 'Codex CLI' : 'opencode' }}</p>
         <details><summary>{{ t('newSessionMoreOptions') }}</summary>
           <AppSelect :label="t('launchConfigProgram')" v-model="pathMode" :options="modes" :disabled="busy || blocked" />
           <AppInput v-if="pathMode === 'set'" data-launch-program :label="t('launchConfigProgramPath')" v-model="pathText" :disabled="busy || blocked" />

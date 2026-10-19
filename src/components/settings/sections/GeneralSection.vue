@@ -7,14 +7,13 @@ import IconButton from '@/components/ui/IconButton.vue'
 import InlineNotice from '@/components/ui/InlineNotice.vue'
 import AppButton from '@/components/ui/AppButton.vue'
 import { useSessionIndexMaintenanceStore } from '@/stores/sessionIndexMaintenance'
-import claudeIcon from '@/assets/icons/cli/claude.svg'
-import codexIcon from '@/assets/icons/cli/codex.svg'
+import CliAppIcon from '@/components/sessions/CliAppIcon.vue'
 const { t } = useI18n()
 const app = useAppStore()
 const support = useCliSupportStore()
 const indexMaintenance = useSessionIndexMaintenanceStore()
 const indexStateLabels = { idle:'indexRebuildTitle',preparing:'indexRebuildState_preparing',scanning:'indexRebuildState_scanning',committing:'indexRebuildState_committing',completed:'indexRebuildState_completed',cancelled:'indexRebuildState_cancelled',failed:'indexRebuildState_failed' }
-const cliName = { claude: 'Claude Code', codex: 'Codex CLI' } as const
+const cliName = { claude: 'Claude Code', codex: 'Codex CLI', opencode: 'opencode' } as const
 </script>
 <template>
   <section class="settings-section" data-settings-general :aria-label="t('settingsGeneral')">
@@ -27,18 +26,18 @@ const cliName = { claude: 'Claude Code', codex: 'Codex CLI' } as const
     </div>
     <div class="setting-field">
       <AppSelect data-default-new-cli :model-value="app.defaultNewCli" :label="t('settingsDefaultCli')"
-        :options="[{ value: 'claude', label: 'Claude Code' }, { value: 'codex', label: 'Codex CLI' }]" @update:model-value="app.setDefaultNewCli" />
+        :options="[{ value: 'claude', label: 'Claude Code' }, { value: 'codex', label: 'Codex CLI' }, { value: 'opencode', label: 'opencode' }]" @update:model-value="app.setDefaultNewCli" />
       <p>{{ t('settingsDefaultCliHint') }}</p>
     </div>
     <div class="setting-field">
       <span class="ui-field-label">{{ t('settingsCliSupport') }}</span>
       <div class="cli-support-row" role="group" :aria-label="t('settingsCliSupport')">
-        <IconButton v-for="cli in (['claude', 'codex'] as const)" :key="cli" :data-cli-support="cli"
+        <IconButton v-for="cli in (['claude', 'codex', 'opencode'] as const)" :key="cli" :data-cli-support="cli"
           :label="t(support.isEnabled(cli) ? 'settingsCliClickToDisable' : 'settingsCliClickToEnable', { cli: cliName[cli] })"
           :aria-pressed="support.isEnabled(cli)" class="cli-support-toggle"
           :class="{ 'cli-support-toggle--off': !support.isEnabled(cli) }"
           @click="support.setCliEnabled(cli, !support.isEnabled(cli))">
-          <img :src="cli === 'claude' ? claudeIcon : codexIcon" width="16" height="16" alt="" />
+          <CliAppIcon :cli="cli" decorative />
         </IconButton>
       </div>
       <p>{{ t('settingsCliSupportHint') }}</p>

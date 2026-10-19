@@ -326,3 +326,13 @@ it('Settings_CliSupportIconTogglesPersist_020', async () => {
   await wrapper.find('[data-cli-support=codex]').trigger('click'); await flushPromises()
   expect(support.isEnabled('codex')).toBe(true)
 })
+
+// opencode 开关与既有两键同排；停用持久化只翻转自身键。
+it('Settings_OpencodeSupportToggle_021', async () => {
+  const wrapper = render()
+  await flushPromises()
+  const opencode = wrapper.find('[data-cli-support=opencode]')
+  expect(opencode.attributes('aria-pressed')).toBe('true')
+  await opencode.trigger('click'); await flushPromises()
+  expect(JSON.parse(localStorage.getItem('cc-desk-cli-support-v1')!)).toEqual({ claude: true, codex: true, opencode: false })
+})

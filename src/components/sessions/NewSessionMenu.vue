@@ -17,6 +17,7 @@ const position = ref({ left: '8px', top: '8px' })
 const items = computed(() => [
   support.isEnabled('claude') ? { id: 'claude', label: props.availability.claude === 'unavailable' ? t('newSessionToolUnavailable', { cli: 'Claude Code' }) : 'Claude Code', disabled: props.availability.claude === 'unavailable' } : null,
   support.isEnabled('codex') ? { id: 'codex', label: props.availability.codex === 'unavailable' ? t('newSessionToolUnavailable', { cli: 'Codex CLI' }) : 'Codex CLI', disabled: props.availability.codex === 'unavailable' } : null,
+  support.isEnabled('opencode') ? { id: 'opencode', label: props.availability.opencode === 'unavailable' ? t('newSessionToolUnavailable', { cli: 'opencode' }) : 'opencode', disabled: props.availability.opencode === 'unavailable' } : null,
 ].filter(item => item !== null).sort((left, right) => Number(right.id === app.defaultNewCli) - Number(left.id === app.defaultNewCli)).concat([
   { id: 'restore', label: t('newSessionRestore'), disabled: false }, { id: 'options', label: t('newSessionMoreOptions'), disabled: false },
 ]))
@@ -37,7 +38,7 @@ onBeforeUnmount(() => window.removeEventListener('resize', place))
   <Teleport to="body">
     <AppMenu ref="menu" :open="open && active" :label="t('newSessionTitle')" :items="items" class="new-session-menu" :style="position"
       @update:open="emit('update:open', $event)" @select="emit('select', $event as NonNullable<NewSessionRequest['intent']>)">
-      <template #item="{ item }"><img v-if="item.id === 'claude' || item.id === 'codex'" :src="item.id === 'claude' ? claudeIcon : codexIcon" width="16" height="16" alt="" aria-hidden="true" /><span>{{ item.label }}</span></template>
+      <template #item="{ item }"><img v-if="item.id === 'claude' || item.id === 'codex'" :src="item.id === 'claude' ? claudeIcon : codexIcon" width="16" height="16" alt="" aria-hidden="true" /><span v-else-if="item.id === 'opencode'" class="new-session-menu__glyph" aria-hidden="true">OC</span><span>{{ item.label }}</span></template>
     </AppMenu>
   </Teleport>
 </template>
@@ -45,4 +46,5 @@ onBeforeUnmount(() => window.removeEventListener('resize', place))
 .new-session-menu { position: fixed; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); }
 .new-session-menu :deep(.ui-menu-item) { display: flex; align-items: center; gap: 8px; }
 .new-session-menu :deep([data-item-id='restore']) { border-top: 1px solid var(--border-color); margin-top: 4px; padding-top: 8px; }
+.new-session-menu :deep(.new-session-menu__glyph) { display: inline-flex; width: 16px; height: 16px; align-items: center; justify-content: center; font-family: var(--font-sans); font-size: 9px; font-weight: 600; color: var(--text-secondary); }
 </style>

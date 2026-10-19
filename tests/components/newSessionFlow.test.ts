@@ -20,7 +20,7 @@ describe('New session flow', () => {
     const w = mount(ProjectNode, { props: { project, expanded: true }, global: global(), attachTo: document.body }); wrappers.push(w)
     await w.get('[data-project-quick-action]').trigger('click'); await flushPromises()
     expect(w.emitted('new-session-request')).toBeUndefined()
-    expect(document.querySelectorAll('[role=menuitem]')).toHaveLength(4)
+    expect(document.querySelectorAll('[role=menuitem]')).toHaveLength(5)
     ;(document.querySelector('[data-item-id=codex]') as HTMLButtonElement).click(); await flushPromises()
     expect(w.emitted('new-session-request')?.[0]).toEqual([{ projectKey: '/repo', projectPath: '/repo', intent: 'codex' }])
     expect(document.body.textContent).not.toMatch(/revision|profile|argv/i)
@@ -159,6 +159,21 @@ describe('New session flow', () => {
     expect(w.emitted('create')).toHaveLength(1)
   })
 
+  it('NewSession_OpencodeMenuEntry_006', async () => {
+    const w = mount(ProjectNode, { props: { project, expanded: true }, global: global(), attachTo: document.body }); wrappers.push(w)
+    await w.get('[data-project-quick-action]').trigger('click'); await flushPromises()
+    ;(document.querySelector('[data-item-id=opencode]') as HTMLButtonElement).click(); await flushPromises()
+    expect(w.emitted('new-session-request')?.[0]).toEqual([{ projectKey: '/repo', projectPath: '/repo', intent: 'opencode' }])
+  })
+  it('NewSession_OpencodeHidesPickerMode_007', async () => {
+    const draft = useNewSessionDraftStore(); draft.open(project, 'codex'); draft.startMode = 'resume-picker'
+    const w = mount(NewSessionDialog, { props: { active: true }, global: global(), attachTo: document.body }); wrappers.push(w)
+    draft.cli = 'opencode'; await flushPromises()
+    expect(draft.startMode).toBe('new')
+    ;(document.querySelector('[data-create-session]') as HTMLButtonElement).click(); await flushPromises()
+    expect(w.emitted('create')?.[0]?.[0]).toMatchObject({ cli: 'opencode', action: { kind: 'new' } })
+  })
+
 })
 
 // 支持开关关闭的 CLI 从新建菜单隐藏（而非置灰），恢复/更多选项不受影响。
@@ -167,7 +182,7 @@ it('NewSession_DisabledCliLosesMenuEntry_011', async () => {
   useCliSupportStore().setCliEnabled('codex', false)
   const w = mount(ProjectNode, { props: { project, expanded: true }, global: global(), attachTo: document.body }); wrappers.push(w)
   await w.get('[data-project-quick-action]').trigger('click'); await flushPromises()
-  expect(document.querySelectorAll('[role=menuitem]')).toHaveLength(3)
+  expect(document.querySelectorAll('[role=menuitem]')).toHaveLength(4)
   expect(document.querySelector('[data-item-id=codex]')).toBeNull()
   expect(document.querySelector('[data-item-id=claude]')).not.toBeNull()
   expect(document.querySelector('[data-item-id=restore]')).not.toBeNull()

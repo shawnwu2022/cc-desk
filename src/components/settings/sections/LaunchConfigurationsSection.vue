@@ -22,7 +22,7 @@ let menuOpener: Element | null = null
 const anchor = ref({ left: '8px', top: '8px' })
 const loadError = ref<UserErrorPresentation | null>(null)
 let activeOwner = 0, disposed = false
-const tools = ['claude', 'codex'] as const
+const tools = ['claude', 'codex', 'opencode'] as const
 async function load() {
   const owner = ++activeOwner; loadError.value = null
   try { await profiles.load() } catch { if (!disposed && props.active && owner === activeOwner) loadError.value = mapSafeUserError(profiles.lastError ?? 'GENERIC_UNAVAILABLE', 'settings') }
@@ -47,7 +47,7 @@ const menuItems = computed(() => {
   const row = menuId.value ? profiles.profile(menuId.value) : undefined
   return row ? [
     { id: 'copy', label: t('launchConfigCopy') }, { id: 'rename', label: t('launchConfigRename') },
-    { id: 'default', label: t('launchConfigMakeDefault'), hidden: defaults.defaultFor(row.cli as 'claude' | 'codex')?.id === row.id },
+    { id: 'default', label: t('launchConfigMakeDefault'), hidden: defaults.defaultFor(row.cli as 'claude' | 'codex' | 'opencode')?.id === row.id },
     { id: 'delete', label: t('delete'), danger: true },
   ] : []
 })
@@ -69,7 +69,7 @@ function action(value: string) {
     <LoadingState v-if="opening || profiles.status === 'loading' && !profiles.profiles.length" :label="t('loading')" />
     <AppButton v-if="opening" data-launch-prepare-cancel @click="closeEditor">{{ t('cancel') }}</AppButton>
     <section v-for="cli in tools" :key="cli" :data-launch-group="cli" class="launch-group">
-      <header><h3><CliAppIcon :cli="cli" />{{ cli === 'claude' ? 'Claude Code' : 'Codex CLI' }}</h3><AppButton data-launch-create :disabled="opening" @click="open({ kind: 'create', cli })">{{ t('launchConfigCreate') }}</AppButton></header>
+      <header><h3><CliAppIcon :cli="cli" />{{ cli === 'claude' ? 'Claude Code' : cli === 'codex' ? 'Codex CLI' : 'opencode' }}</h3><AppButton data-launch-create :disabled="opening" @click="open({ kind: 'create', cli })">{{ t('launchConfigCreate') }}</AppButton></header>
       <div v-for="row in profiles.byCli[cli]" :key="row.id" :data-launch-row="row.id" class="launch-row" @contextmenu.prevent="showMenu(row.id, $event)">
         <CliAppIcon :cli="cli" /><span class="launch-name">{{ row.name }}</span>
         <span class="launch-default" v-if="defaults.defaultFor(cli)?.id === row.id">{{ t('launchConfigDefault') }}</span><span v-else />
