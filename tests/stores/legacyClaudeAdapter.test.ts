@@ -129,6 +129,33 @@ it('LegacyHistory_QueuedRestoreRechecksRootBeforeWrite_028', async () => {
   expect(store.archived.get('/repo')).toEqual(['old-id'])
 })
 
+// 首次根证明未知、失败或仍在等待时，都不能把“尚未退休”当成恢复准入。
+it.each(['unknown', 'failed', 'pending'] as const)('LegacyHistory_RestoreRequiresInitialRootProof_029 %s', async state => {
+  const store = new FakeLegacyStore(); store.archived.set('/repo', ['old-id'])
+  let release!: () => void
+  const pending = new Promise<undefined>(resolve => { release = () => resolve(undefined) })
+  const root = vi.fn(() => state === 'pending' ? pending : state === 'failed' ? Promise.reject(new Error('unavailable')) : Promise.resolve(undefined))
+  const adapter = createLegacyClaudeAdapter({ store, validateHistoryRoot: root, projectPaths: () => ['/repo'],
+    runtime: { startTab: vi.fn(), stopTab: vi.fn(), restartTab: vi.fn(), renameTab: vi.fn() } })
+  const restoring = adapter.restoreArchivedSession('legacy-history:/repo:old-id')
+  const rejected = expect(restoring).rejects.toThrow('SOURCE_UNAVAILABLE')
+  await Promise.resolve(); expect(store.events).toEqual([])
+  release(); await rejected
+  expect(store.archived.get('/repo')).toEqual(['old-id'])
+})
+
+it.each(['unknown', 'failed'] as const)('LegacyHistory_InitialRootFailureDoesNotStartHistory_030 %s', async state => {
+  const store = Object.assign(new FakeLegacyStore(), { loadHistoryFor: vi.fn(async () => ({ ok: true as const,
+    sessions: [{ sessionId: 'old-id', name: 'Old', projectPath: '/repo', lastActiveAt: 1 }] })) })
+  const start = vi.fn()
+  const adapter = createLegacyClaudeAdapter({ store, validateHistoryRoot: async () => {
+    if (state === 'failed') throw new Error('unavailable')
+    return undefined
+  }, projectPaths: () => ['/repo'], runtime: { startTab: start, stopTab: vi.fn(), restartTab: vi.fn(), renameTab: vi.fn() } })
+  await expect(adapter.resumeSession({ cli: 'claude', projectKey: '/repo', projectPath: '/repo', adapterSessionId: 'old-id', nativeSessionId: 'old-id' })).rejects.toThrow('SOURCE_UNAVAILABLE')
+  expect(start).not.toHaveBeenCalled(); expect(store.loadHistoryFor).not.toHaveBeenCalled(); expect(store.tabs.size).toBe(0)
+})
+
 function runtime(store: FakeLegacyStore): LegacyClaudeRuntimePort {
   return {
     async startTab(tabId) {

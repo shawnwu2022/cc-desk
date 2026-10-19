@@ -172,8 +172,8 @@ export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): Sessio
     return historyRootRetired ? undefined : root
   }
   async function requireHistoryRoot() {
-    await currentHistoryRoot()
-    if (historyRootRetired) throw new Error('SOURCE_UNAVAILABLE')
+    const root = await currentHistoryRoot()
+    if (historyRootRetired || (deps.validateHistoryRoot !== undefined && !root)) throw new Error('SOURCE_UNAVAILABLE')
   }
   function tabDisplayIdentity(tab: TerminalTab) {
     const row = projectActiveTab(tab)

@@ -547,11 +547,11 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
       } else {
         if (cli === 'claude') for (const path of new Set([...legacyPaths.value, ...projects.pinnedProjects])) {
           if (!current()) return
-          await legacy.loadHistoryFor(path, true)
+          await legacy.loadHistoryFor(path, true).catch(() => {})
         }
         const sources = profiles.profiles.filter(profile => profile.cli === cli)
         for (let i = 0; i < sources.length && current(); i += 2) {
-          await Promise.all(sources.slice(i, i + 2).map(async profile => {
+          await Promise.allSettled(sources.slice(i, i + 2).map(async profile => {
             if (!current() || profiles.profile(profile.id)?.revision !== profile.revision) return
             await history.loadGrouped({ cli, profileId:profile.id, profileRevision:profile.revision,
               projects:workspace.projects.map(project => ({ projectId:project.projectId, projectPath:project.selectedPath })) }, { force:true, retainOnFailure:true })

@@ -903,6 +903,7 @@ describe('Unified production runtime', () => {
 
   // 真实Legacy store归档后仍保留统一目录记录，普通列表隐藏而抽屉可恢复。
   it('Runtime_LegacyArchiveRemainsVisible_012', async () => {
+    io.legacyRoot.mockResolvedValue({ rootKey: 'root', tabsUseDefaultRoot: false })
     io.sessions.mockResolvedValue([{ sessionId: 'old-session', name: 'Old Legacy', projectPath: '/legacy', lastActiveAt: 10 }])
     io.archive.mockResolvedValue({ pinnedProjects: [], archivedSessions: { '/legacy': ['old-session'] } })
     io.restore.mockResolvedValue({ pinnedProjects: [], archivedSessions: {} })
@@ -1135,6 +1136,7 @@ it('Runtime_RemoveBlocksLegacyRestore_028', async () => {
 })
 // 较早恢复的历史读取在移除期间或完成后返回，也不能取得新的终端所有权。
 it.each(['during', 'after'])('Runtime_RemoveRevokesDeferredLegacy_%s', async when => {
+  io.legacyRoot.mockResolvedValue({ rootKey: 'root', tabsUseDefaultRoot: false })
   io.sessions.mockResolvedValue([{ sessionId: 'legacy-history', name: 'Legacy history', projectPath: '/legacy', lastActiveAt: 10 }])
   io.registered.mockResolvedValue({ revision: '1', projects: [{ projectId: 'p', hostId: 'h', sourcePathKey: 's', selectedPath: '/legacy', canonicalPath: '/legacy', alias: { mode: 'inherit' }, pinned: { mode: 'inherit' }, hidden: { mode: 'inherit' } }] })
   const { port } = render(); await flushPromises()
@@ -1222,6 +1224,7 @@ it('Runtime_RowDoubleClickSelection_028', async () => {
 
 // 历史行首次点击恢复精确来源，双击的第二次点击不重复，也不弹出重命名。
 it.each(['legacy-claude', 'native-cli'] as const)('Runtime_HistoryMenuAndDoubleClick_029: %s', async runtime => {
+  io.legacyRoot.mockResolvedValue({ rootKey: 'root', tabsUseDefaultRoot: false })
   io.sessions.mockResolvedValue([{ sessionId: 'legacy-history', name: 'Legacy history', projectPath: '/legacy', lastActiveAt: 10 }])
   const startLegacy = vi.fn().mockResolvedValue({ ok: true })
   const nativeTerminal = defineComponent({ setup(_props, { expose }) { expose({ focus() {}, fitVisible() {}, async stop() {}, async recover() {} }); return () => h('div') } })
@@ -1590,6 +1593,26 @@ it('HistorySupport_RapidToggleRejectsLateSource_087', async () => {
   release({ cli:'codex',sourceRootKey:'root' }); await flushPromises(); await flushPromises()
   expect(useUnifiedSessionsStore().sessions.filter(row => row.cli === 'codex')).toEqual([])
   expect(io.ptyKill).not.toHaveBeenCalled()
+})
+
+// 单个配置读取失败不能吞掉同轮已成功来源和 Legacy 历史的目录发布。
+it.each(['claude', 'codex'] as const)('HistorySupport_PartialEnableStillPublishesReadableSources_088 %s', async cli => {
+  localStorage.setItem('cc-desk-cli-support-v1', JSON.stringify({ claude: cli !== 'claude', codex: cli !== 'codex' }))
+  const configured = await io.profiles()
+  io.profiles.mockResolvedValue({ ...configured, profiles: ['bad', 'good'].map(id => ({ ...configured.profiles[0], id, cli })) })
+  io.legacyRoot.mockResolvedValue({ rootKey: 'root', tabsUseDefaultRoot: false })
+  io.sessions.mockResolvedValue([{ sessionId: 'legacy-readable', name: 'Legacy readable', projectPath: '/legacy', lastActiveAt: 1 }])
+  io.scope.mockImplementation(async target => {
+    if (target.profileId === 'bad') throw { code: 'SOURCE_UNAVAILABLE' }
+    return { cli, sourceRootKey: 'root', profileId: target.profileId }
+  })
+  io.read.mockResolvedValue({ state: 'ready', items: [{ type: 'session', projectId: 'project', sessionKey: 'good-key', nativeSessionId: 'good-id', title: 'Readable', cwd: '/repo' }], hasMore: false })
+  const { runtime } = render(); await runtime.refresh(); await flushPromises()
+  const { useCliSupportStore } = await import('@/stores/cliSupport')
+  useCliSupportStore().setCliEnabled(cli, true); await flushPromises(); await flushPromises()
+  expect(useUnifiedSessionsStore().sessions.some(row => row.cli === cli && row.nativeSessionId === 'good-id')).toBe(true)
+  if (cli === 'claude') expect(useUnifiedSessionsStore().sessions.some(row => row.nativeSessionId === 'legacy-readable')).toBe(true)
+  expect(runtime.sourceWarnings.value).toEqual(expect.arrayContaining([expect.objectContaining({ source: `${cli}-history`, code: 'SOURCE_UNAVAILABLE' })]))
 })
 
 // 模板 ID 不能证明 false 是旧默认值：用户关闭后刷新不得覆写，也不应增加 revision。

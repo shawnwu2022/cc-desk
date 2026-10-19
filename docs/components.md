@@ -125,6 +125,8 @@ source caches refresh after rename so close/reopen cannot restore a stale title.
 
 CLI support changes refresh only the changed CLI's sources and catalog projection.
 Codex toggles neither reload Claude history nor revalidate its default-root lease.
+Each profile failure is isolated so readable profiles and Legacy history still
+publish in the same scoped refresh, with the failed source's diagnostic retained.
 Per-CLI and per-project request ownership reject late replacement. An opened Native
 attempt retains its last proven CLI title while history is hidden; this display-only
 snapshot supplies no root proof and expires with its attempt or source identity.

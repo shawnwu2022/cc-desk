@@ -10,10 +10,10 @@
 - Configure the NSIS installer shell to use the approved application icon
 - Preserve actionable, bounded history-source diagnostics and recover readable history without exposing raw upstream errors
 - Restore exact-source native session rename admission and use one Rename action with precise target and failure messages
-- Refresh only the affected CLI when support is toggled, retain opened terminal titles, and prevent late refreshes from reviving archived or duplicate history rows
+- Refresh only the affected CLI when support is toggled, publish readable profiles despite another source's failure, retain opened terminal titles, and prevent late refreshes from reviving archived or duplicate history rows
 - Fold closed archive aliases only with complete physical-source proof, keep distinct opened owners, and revalidate source ownership immediately before archive metadata writes
 
-Local validation of the final repair chain passed 2,778 fast Vitest cases, type checking and the production build. Earlier focused validation passed the six real-xterm/FitAddon Chromium layout cases at DPR 1/1.25/1.5, 20 native rename cases and 172 projection cases; an uninstalled debug NSIS bundle's seven PE icon frames matched the approved ICO. These are source/component and synthetic-history checks, not installed Windows WebView2, live Claude/Codex last-row acceptance or native installation/return proof. Final source-bound required CI, authenticated coverage and all three same-run signed updater payloads remain mandatory before publication; unfiltered native All and D20 remain separately unverified.
+Local validation of the final repair chain passed 2,785 fast Vitest cases, type checking and the production build. Earlier focused validation passed the six real-xterm/FitAddon Chromium layout cases at DPR 1/1.25/1.5, 20 native rename cases and 172 projection cases; an uninstalled debug NSIS bundle's seven PE icon frames matched the approved ICO. These are source/component and synthetic-history checks, not installed Windows WebView2, live Claude/Codex last-row acceptance or native installation/return proof. Final source-bound required CI, authenticated coverage and all three same-run signed updater payloads remain mandatory before publication; unfiltered native All and D20 remain separately unverified.
 
 ## [0.23.2] - 2026-10-19
 

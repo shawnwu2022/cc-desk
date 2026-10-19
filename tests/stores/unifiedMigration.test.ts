@@ -324,6 +324,7 @@ describe('Unified migration through real workspace composition', () => {
   })
 
   it.each(['history', 'live'] as const)('Migration_LegacyName_%s_009', async kind => {
+    f.legacyRoot = 'legacy-root'
     seedBoth(); await boot()
     const catalog = useUnifiedSessionsStore(), row = catalog.sessions.find(row => row.runtime === 'legacy-claude')!
     const target = kind === 'live' ? await catalog.resumeCatalogSession(row) : row

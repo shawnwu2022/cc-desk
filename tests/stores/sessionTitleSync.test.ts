@@ -465,6 +465,7 @@ describe('running session title sync to session list', () => {
   // 恢复提交成功但回执失败时，失败协调的重读删除空归档键并抛错；删除键的
   // 项目必须仍在刷新范围（上一批并集）内，否则已恢复会话留在归档抽屉。
   it('TitleSync_RestoreAckLoss_004', async () => {
+    io.legacyRoot.mockResolvedValue({ rootKey: 'legacy-root', tabsUseDefaultRoot: false })
     persisted.archivedSessions = { '/legacy': ['old-session'] }
     const projects = useProjectsStateStore()
     await projects.reload()

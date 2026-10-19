@@ -187,6 +187,8 @@ Legacy folding revalidates the runtime's initial physical root key for each
 Claude catalog projection, Legacy history admission/restore and Native bare-ID archive restore. A changed, unavailable or
 unverifiable root retires that folding lease until a fresh runtime is created;
 existing terminal and cached-history proofs are never rebound to a new directory.
+The production workspace supplies a root validator; an initially unknown or failed
+proof rejects that history operation even before any lease can be retired.
 Closed Legacy cache rows stop publishing after lease retirement; positive Native
 archive display proof remains marked unavailable and cannot authorize a restore.
 Bare Legacy archive IDs apply only to Claude, with complete physical aliases counted
