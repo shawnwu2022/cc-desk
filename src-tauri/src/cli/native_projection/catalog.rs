@@ -101,6 +101,15 @@ pub(crate) fn read(
     {
         return Err("SOURCE_UNSUPPORTED");
     }
+    // opencode 守卫必须在 match 之前：metadata 的 else 分支是 codex_settings()，
+    // 若 Opencode 落进 `_` 臂会被当作 Codex 读取 config.toml（对抗审查 S1，静默错径）。
+    if catalog.cli == crate::cli::types::CliKind::Opencode {
+        if options.kind != ResourceKind::History {
+            return Err("SOURCE_UNSUPPORTED");
+        }
+        let items = super::opencode_db::read_history(catalog.root, catalog.projects)?;
+        return Ok(items);
+    }
     let result = match options.kind {
         ResourceKind::History | ResourceKind::Messages | ResourceKind::Search => {
             history::read(catalog, options, budget)

@@ -1033,3 +1033,49 @@ fn unknown_plugin_scope_never_becomes_global() {
         Some("SOURCE_UNSUPPORTED")
     );
 }
+
+// opencode 只开放 History；六类资源与 messages/search 必须在进 metadata 之前被拒（spec §2）。
+// sentinel config.toml：若守卫失效、Opencode 落进 metadata 的 else 分支，codex_settings 会
+// 把它读成 Codex 设置并产出 items（Ok 非空）——断言 Err 才能证明「禁分支未被触达」，
+// 而不是「恰好读了个空目录」。
+#[test]
+fn Opencode_CatalogRoutesHistoryOnly_01() {
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::write(dir.path().join("config.toml"), "model = \"sentinel\"\n").unwrap();
+    let root = Root::open(dir.path()).unwrap();
+    let project_root = Root::open(dir.path()).unwrap();
+    let paths = vec![dir.path().to_path_buf()];
+    let projects = vec![ProjectRef {
+        id: "test-project",
+        root: &project_root,
+        paths: &paths,
+    }];
+    for kind in [
+        ResourceKind::Messages,
+        ResourceKind::Search,
+        ResourceKind::Config,
+        ResourceKind::Mcp,
+        ResourceKind::Skills,
+        ResourceKind::Agents,
+        ResourceKind::Plugins,
+        ResourceKind::Instructions,
+    ] {
+        let err = read(
+            &Catalog {
+                cli: CliKind::Opencode,
+                root: &root,
+                projects: &projects,
+                user_config: None,
+                check: &|| Ok(()),
+            },
+            &Options {
+                kind,
+                query: None,
+                session_id: None,
+            },
+            &mut Budget::new(Limits::default()),
+        )
+        .unwrap_err();
+        assert_eq!(err, "SOURCE_UNSUPPORTED", "kind {kind:?} 未被守卫拒绝");
+    }
+}
