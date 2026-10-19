@@ -158,6 +158,7 @@ UnifiedSession catalog（Legacy/Native adapters）→ UnifiedProjectGroup[] → 
 
 - Claude 的 OSC 标题变化只发出绑定当前运行/PTY 的只读失效信号，不作为名称或来源证明；经 500ms 合并、至少两秒通知间隔后复用当前项目的历史读取。来源已确认的 Native 恢复/观察身份和默认根已证明的 Legacy PTY 不依赖可选 hook observer；hook 派生事件和迟到补读仍遵守 observer 开关。普通终端输出不触发历史扫描，重启/关闭/卸载撤销未发出的标题通知。
 - 历史投影签名只包含来源根与已发布行，`loaded`、`loading`、`error` 等读取诊断变化独立发布，不重新扫描相同行。Legacy 项目历史分页在所有页成功后一次替换缓存；读取中与失败时保留最后完整快照，错误仍可见，冷读失败不发布 partial，永久删除后的失败重载仍显式清除该项目缓存。
+- 裸 ID 归档的唯一性依赖全部历史；同 ID 增删或撤销导致唯一性变化时，仅追加刷新持有相关裸 ID 归档的项目，标题更新不扩散。归档路径签名与 adapter 一致，合并规范化路径别名。默认根证明撤销时刷新依赖旧根的项目，其他根保持原投影；这些刷新不改变进程或授权所有权。
 - `get_home_data` 单次扫描 `~/.claude/projects`，同时生成项目列表与真实路径映射；近期会话直接复用该映射的目录列表，`get_home_data` / `get_sessions` 的同步文件 IO 统一放入 `spawn_blocking`。
 - JSONL 按字节行流式解析：项目路径在首个有效 `cwd` 后停止，名称继续扫描到 EOF，取最后一个有效手动标题 > 最后一个有效 AI 标题 > 首条用户消息；峰值内存为 O(最大 JSONL 单行)。首页、项目历史和 all-recent 共享 `~/.cc-box/session-name-index.json` 派生名称索引：`length + 高精度 mtime` 完全一致才 exact-hit（读取 0 JSONL bytes），任一变化都 full rebuild，不使用 append cursor；解析器版本 2 自动淘汰旧的首问名称缓存。
 - 名称索引每个请求只读一次快照，前台共享锁内只读取有界 raw bytes、锁外解析；业务值先返回，delta 在 detached `spawn_blocking` 中写回。后台使用 replacement stamp 复核、entry/bucket CAS、整文件 raw CAS 和唯一临时文件；排他锁内只做 64 KiB 分块 raw compare 与原子替换。8 MiB 以上压缩至 6 MiB，16 MiB 为读取硬上限；损坏、未知版本、锁/写失败均只降低命中率，不改变业务结果。

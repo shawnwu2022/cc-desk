@@ -19,6 +19,22 @@ and production build passed. These are local synthetic-store results; fresh host
 CI and Windows package gates are required, and final real WebView2 title-sync
 acceptance remains unverified.
 
+The shared-dependency follow-up adds seven cases. Three RED cases reproduced
+stale archive ambiguity after another project's same-ID row was added, removed or
+invalidated. Native-ID uniqueness changes now refresh only archives that depend
+on those IDs; an unchanged-cardinality title update stays local. A trailing-slash
+archive key reproduced three rescans during an unrelated unchanged read; using
+the adapter's canonical path/merged-key semantics reduces that case to zero.
+Two further RED cases reproduced stale folds in project A when project B detected
+replacement or loss of the shared root proof. Revocation now queues projects
+bound to that old root, retaining unrelated-root projections. The four affected
+suites pass 160 cases. The final full local inventory passed 2,863 cases with two
+existing skips across 193 files in 88.33 seconds using four workers, including
+the unchanged 5,000-session/30-owner/120-change workloads. The continuity loop
+recorded 27,793 ms within that run; this is a workload pass, not a comparative
+speedup claim. Typecheck and production build passed. Fresh exact-source hosted
+CI and Windows package gates remain required.
+
 ## Runtime performance audit and falsified candidates (2026-10-17, local)
 
 A full application-runtime audit was run on `perf/runtime-batch1` (based on main
