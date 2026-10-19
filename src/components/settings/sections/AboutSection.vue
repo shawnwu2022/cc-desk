@@ -17,6 +17,7 @@ const links = [
   { id: 'github', label: 'githubRepo', url: 'https://github.com/shawnwu2022/cc-desk' },
   { id: 'claude', label: 'claudeDocs', url: 'https://code.claude.com/docs' },
   { id: 'codex', label: 'codexDocs', url: 'https://developers.openai.com/learn/codex' },
+  { id: 'opencode', label: 'opencodeDocs', url: 'https://opencode.ai/docs' },
   { id: 'license', label: 'aboutLicense', url: 'https://github.com/shawnwu2022/cc-desk#license' },
 ]
 const error = ref<string | null>(null), copying = ref(false)

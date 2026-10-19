@@ -152,7 +152,8 @@ const isState = (...states: UnifiedSession['processState'][]) =>
 /** Both menu entry points consume this one allowlisted action model. */
 export const SESSION_MENU_ACTION_DEFINITIONS: readonly MenuActionRule[] = [
   { id: 'clear-unread', labelKey: 'sessionActionClearUnread', visible: session => !session.opened && !!session.observationNotice?.unreadReplyEnd },
-  { id: 'rename', labelKey: 'sessionActionRename', visible: (session) => !session.preparationState && !session.archived },
+  // opencode 后端拒绝原生 rename（NATIVE_RENAME_UNSUPPORTED），仅对支持的 CLI 暴露该动作。
+  { id: 'rename', labelKey: 'sessionActionRename', visible: (session) => session.cli !== 'opencode' && !session.preparationState && !session.archived },
   { id: 'cancel-start', labelKey: 'sessionActionCancelStart', danger: true, visible: isState('starting') },
   { id: 'stop', labelKey: 'sessionActionStop', danger: true, visible: () => false },
   { id: 'confirm-status', labelKey: 'sessionActionConfirmStatus', visible: isState('unknown') },

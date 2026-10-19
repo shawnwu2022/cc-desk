@@ -472,6 +472,7 @@ export default {
   githubRepo: 'GitHub Repository',
   claudeDocs: 'Claude Code Docs',
   codexDocs: 'Codex Docs',
+  opencodeDocs: 'opencode Docs',
 
   // Keyboard shortcuts
   keyboardShortcuts: 'Keyboard Shortcuts',

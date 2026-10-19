@@ -148,7 +148,7 @@ onUnmounted(() => { ++searchEpoch; ++operationEpoch })
       <template v-else-if="mode === 'history'">
         <AppInput v-model="query" data-resume-query :label="t('resumeSearch')" :disabled="busy" />
         <div class="resume-filters">
-          <AppSelect v-model="cli" data-resume-cli :label="t('newSessionTool')" :disabled="busy" :options="[{ value: '', label: t('resumeAllTools') }, { value: 'claude', label: 'Claude Code' }, { value: 'codex', label: 'Codex CLI' }]" />
+          <AppSelect v-model="cli" data-resume-cli :label="t('newSessionTool')" :disabled="busy" :options="[{ value: '', label: t('resumeAllTools') }, { value: 'claude', label: 'Claude Code' }, { value: 'codex', label: 'Codex CLI' }, { value: 'opencode', label: 'opencode' }]" />
           <AppSelect v-model="scope" data-resume-scope :label="t('resumeScope')" :disabled="busy" :options="[{ value: 'current-project', label: t('resumeCurrentProject') }, { value: 'all', label: t('resumeAllProjects') }]" />
           <AppSelect v-model="age" data-resume-age :label="t('resumeTime')" :disabled="busy" :options="[{ value: 'all', label: t('resumeAnyTime') }, { value: '1', label: t('resumeLastDay') }, { value: '7', label: t('resumeLastWeek') }, { value: '30', label: t('resumeLastMonth') }]" />
         </div>
@@ -162,7 +162,7 @@ onUnmounted(() => { ++searchEpoch; ++operationEpoch })
         </div>
       </template>
       <template v-else-if="mode !== 'session'">
-        <AppSelect v-model="cli" data-resume-cli :label="t('newSessionTool')" :disabled="busy" :options="[{ value: 'claude', label: 'Claude Code' }, { value: 'codex', label: 'Codex CLI' }]" />
+        <AppSelect v-model="cli" data-resume-cli :label="t('newSessionTool')" :disabled="busy" :options="[{ value: 'claude', label: 'Claude Code' }, { value: 'codex', label: 'Codex CLI' }, { value: 'opencode', label: 'opencode' }]" />
         <AppSelect v-model="projectId" data-resume-project :label="t('newSessionProject')" :options="registeredProjects" :disabled="busy" />
         <AppSelect v-model="configId" data-resume-config :label="t('newSessionConfiguration')" :options="configurations" :disabled="busy" />
         <AppInput v-if="mode === 'resume-id'" v-model="sessionId" data-resume-id :label="t('resumeSessionId')" :disabled="busy" />

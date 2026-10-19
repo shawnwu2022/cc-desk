@@ -472,6 +472,7 @@ export default {
   githubRepo: 'GitHub 仓库',
   claudeDocs: 'Claude Code 文档',
   codexDocs: 'Codex 文档',
+  opencodeDocs: 'opencode 文档',
 
   // Keyboard shortcuts
   keyboardShortcuts: '快捷键',
