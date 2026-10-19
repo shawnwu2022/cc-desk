@@ -133,6 +133,11 @@ and an enabled source's retired-root diagnostic remains in force.
 Full refreshes keep retired-root warnings hidden while Claude is disabled. History
 issue retries refresh only their originating CLI/project; history recovery guidance
 is limited to history warnings, rather than unrelated application-state errors.
+Archive restore also refreshes its original CLI/project and reads Legacy root proof
+only for Claude bare-ID archive ownership. In-flight root failures still retire
+the lease after disable, but publish warnings only when Claude is enabled.
+Archive-signature background refreshes of Codex-only projects likewise skip
+unrelated Claude root validation; actual Claude projections retain fresh proof.
 Claude reloads also include projects owned only by an open Legacy tab. Disabling
 history publishes real opened owners without validating the disabled Claude root;
 later full catalog refreshes follow the same rule. Root retirement refreshes every

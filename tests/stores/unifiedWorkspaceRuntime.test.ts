@@ -1735,6 +1735,41 @@ it('HistoryRecovery_CodexRetryDoesNotValidateClaude_095', async () => {
   expect(useUnifiedSessionsStore().sessions.find(row => row.nativeSessionId === 'legacy')).toMatchObject({ title: 'Legacy' })
 })
 
+it.each(['reject', 'replacement'] as const)('HistorySupport_PendingRootFailureAfterDisable_096 %s', async failure => {
+  io.legacyRoot.mockResolvedValue({ rootKey: 'root' })
+  const { runtime } = render(); await runtime.refresh(); await flushPromises()
+  let finish!: () => void
+  const proof = new Promise<{ rootKey: string }>((resolve, reject) => { finish = () => failure === 'reject' ? reject(new Error('unavailable')) : resolve({ rootKey: 'replacement' }) })
+  io.legacyRoot.mockClear().mockReturnValueOnce(proof)
+  const refreshing = useUnifiedSessionsStore().refresh('/legacy'); await flushPromises()
+  expect(io.legacyRoot).toHaveBeenCalledOnce()
+  const { useCliSupportStore } = await import('@/stores/cliSupport')
+  useCliSupportStore().setCliEnabled('claude', false); await flushPromises()
+  expect(runtime.sourceWarnings.value.filter(row => row.source === 'legacy-history')).toEqual([])
+  finish(); await refreshing; await flushPromises(); await flushPromises()
+  expect(runtime.sourceWarnings.value.filter(row => row.source === 'legacy-history')).toEqual([])
+  expect(runtime.error.value).toBeNull()
+  useCliSupportStore().setCliEnabled('claude', true); await flushPromises(); await flushPromises()
+  expect(runtime.sourceWarnings.value.some(row => row.source === 'legacy-history')).toBe(true)
+})
+
+it('HistoryRecovery_CodexArchiveRestorePreservesClaude_097', async () => {
+  io.legacyRoot.mockResolvedValue({ rootKey: 'root' })
+  io.sessions.mockResolvedValue([{ sessionId: 'legacy', name: 'Legacy', projectPath: '/legacy', lastActiveAt: 1 }])
+  io.restore.mockResolvedValue({ pinnedProjects: [], archivedSessions: {} })
+  const { runtime } = render(); await runtime.refresh(); await flushPromises()
+  const catalog = useUnifiedSessionsStore(), row = catalog.sessions.find(session => session.cli === 'codex')!
+  useProjectsStateStore().archivedSessions.set('/repo', [row.id])
+  await catalog.refresh('/repo', { cli: 'codex' })
+  await flushPromises(); await flushPromises()
+  io.legacyRoot.mockClear().mockRejectedValue(new Error('unrelated unavailable'))
+  await catalog.restoreArchivedSession(row.id); await flushPromises()
+  expect(io.legacyRoot).not.toHaveBeenCalled()
+  expect(io.restore).toHaveBeenCalledOnce()
+  expect(runtime.sourceWarnings.value.filter(warning => warning.source === 'legacy-history')).toEqual([])
+  expect(catalog.sessions.find(session => session.nativeSessionId === 'legacy')).toMatchObject({ title: 'Legacy' })
+})
+
 // 模板 ID 不能证明 false 是旧默认值：用户关闭后刷新不得覆写，也不应增加 revision。
 it('Observer_ExplicitOffSurvivesRefresh_060', async () => {
   const claudeTemplate = { id: 'desk-safe-claude', revision: '2', cli: 'claude', name: 'Claude Code', launcher: { kind: 'native' },

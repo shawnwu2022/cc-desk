@@ -26,6 +26,19 @@ function history(cli: 'claude' | 'codex', root: string, nativeSessionId: string,
   }
 }
 
+it('CodexArchive_RestoreDoesNotValidateClaude_050', async () => {
+  setActivePinia(createPinia())
+  const entry = history('codex', '/root', 'session-9'); entry.sourceRootKey = '/root'
+  const root = vi.fn().mockRejectedValue(new Error('unrelated unavailable'))
+  const { adapter, archived, archive } = setup([], [entry], root)
+  const row = (await adapter.listSessions(undefined, 'codex'))[0]
+  archived.set('/repo', [row.id])
+  await adapter.restoreArchivedSession(row.id)
+  expect(root).not.toHaveBeenCalled()
+  expect(archive.restoreSession).toHaveBeenCalledOnce()
+  expect(archived.get('/repo')).toEqual([])
+})
+
 function setup(tabs: NativeCliTab[], entries: NativeHistoryEntry[], legacyRoot?: () => Promise<string | undefined>) {
   const map = new Map(tabs.map(value => [value.tabId, value]))
   const setActive = vi.fn()

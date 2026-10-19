@@ -401,9 +401,12 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
   }
 
   async function listSessions(projectKey?: string, cli?: UnifiedCliKind): Promise<UnifiedSession[]> {
-    const legacyRoot = cli === 'codex' || deps.historyEnabled?.('claude') === false ? undefined : await deps.legacyClaudeRootKey?.()
-    if (!legacyArchiveDisplayRoot && legacyRoot) legacyArchiveDisplayRoot = legacyRoot
     const wanted = projectKey == null ? null : normalizePath(projectKey)
+    const hasClaudeHistory = deps.history.all().some(entry => entry.context.cli === 'claude'
+      && (wanted == null || normalizePath(entry.context.projectPath) === wanted))
+    const legacyRoot = cli === 'codex' || deps.historyEnabled?.('claude') === false || !hasClaudeHistory
+      ? undefined : await deps.legacyClaudeRootKey?.()
+    if (!legacyArchiveDisplayRoot && legacyRoot) legacyArchiveDisplayRoot = legacyRoot
     const tabs = [...deps.tabs.tabs.values()].filter(tab => (!cli || tab.cli === cli) && (wanted == null || normalizePath(tab.projectPath) === wanted))
     // Transfer the original accepted time when an exact history key becomes
     // available. Activity does not generate a new time or another saved write.
@@ -714,9 +717,10 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
   }
   async function restoreArchivedSession(id: string): Promise<void> {
     const history = parseHistoryId(id)
-    const legacyRoot = await deps.legacyClaudeRootKey?.()
     const match = deps.history.all().flatMap(entry => entry.sessions.filter(item => historyId(entry, item.sessionKey, item.nativeSessionId) === id).map(item => ({ entry, item })))[0]
     const keys = deps.archive.getArchivedSessions(history.projectPath)
+    const legacyRoot = match?.entry.context.cli === 'claude' && keys.includes(match.item.nativeSessionId)
+      ? await deps.legacyClaudeRootKey?.() : undefined
     const physical = match ? nativeHistoryRecordKey(projectHistory(match.entry, match.item)) : null
     const sourceRoot = match?.entry.sourceRootKey
     const exactAliases = new Set<string>()

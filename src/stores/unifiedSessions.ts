@@ -456,7 +456,8 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
 
     try {
       const lists = await Promise.all(adapters.map(adapter => adapter.listSessions(projectKey, options.cli)))
-      const provenLegacyRoot = options.cli === 'codex' || !cliSupport.isEnabled('claude') ? undefined : validateLegacyClaudeRoot ? await validateLegacyClaudeRoot() : legacyClaudeRoot
+      const hasClaudeRows = lists.some(rows => rows.some(row => row.cli === 'claude'))
+      const provenLegacyRoot = options.cli === 'codex' || !cliSupport.isEnabled('claude') || !hasClaudeRows ? undefined : validateLegacyClaudeRoot ? await validateLegacyClaudeRoot() : legacyClaudeRoot
       if (fullRefreshVersion > version || (key !== undefined && !ownsProject(key))) return
 
       // Replace only the requested project. A full read also preserves scopes
@@ -1000,7 +1001,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     if (existing) return existing
     const adapter = adapterForRuntime(session.runtime)
     pendingArchiveKeys.value = new Set([...pendingArchiveKeys.value, key])
-    const task = enqueue(id, () => adapter.restoreArchivedSession(id), () => refresh(session.projectKey))
+    const task = enqueue(id, () => adapter.restoreArchivedSession(id), () => refresh(session.projectKey, { cli: session.cli }))
     pendingArchiveRestores.set(key, task)
     void task.finally(() => {
       if (pendingArchiveRestores.get(key) !== task) return

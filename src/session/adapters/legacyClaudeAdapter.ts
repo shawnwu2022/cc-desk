@@ -226,6 +226,7 @@ export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): Sessio
   async function listSessions(projectKey?: string, cli?: 'claude' | 'codex'): Promise<UnifiedSession[]> {
     if (cli && cli !== 'claude') return []
     const wanted = projectKey === undefined ? null : normalizeProjectIdentity(projectKey)
+    if (wanted !== null && !knownProjects().has(wanted)) return []
     const sessions: UnifiedSession[] = []
     const includeHistory = deps.historyEnabled?.() !== false
     const historyRoot = includeHistory ? await currentHistoryRoot() : undefined

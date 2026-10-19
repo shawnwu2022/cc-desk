@@ -57,12 +57,14 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
       legacyRootRetired = true
       legacyClaudeRoot = undefined
       legacyRootFailure = code
-      const warnings = createWorkspaceSourceWarnings(sourceWarnings.value, sourceWarningsTruncated.value)
-      const warning = warnings.add('legacy-history', { code })
-      sourceWarnings.value = warnings.items
-      sourceWarningsTruncated.value = warnings.truncated
-      sourceNoticeKeys.value = [...new Set([...sourceNoticeKeys.value, workspaceWarningKey(warning)])]
-      error.value = 'workspaceRuntimePartial'
+      if (cliSupport.isEnabled('claude')) {
+        const warnings = createWorkspaceSourceWarnings(sourceWarnings.value, sourceWarningsTruncated.value)
+        const warning = warnings.add('legacy-history', { code })
+        sourceWarnings.value = warnings.items
+        sourceWarningsTruncated.value = warnings.truncated
+        sourceNoticeKeys.value = [...new Set([...sourceNoticeKeys.value, workspaceWarningKey(warning)])]
+        error.value = 'workspaceRuntimePartial'
+      }
       // 证明属于整个旧根：局部读取发现撤销时，其他依赖项目也必须解除折叠。
       queueCatalogProjects(...legacyPaths.value, ...projects.pinnedProjects,
         ...[...legacy.tabs.values()].map(tab => tab.projectPath),
