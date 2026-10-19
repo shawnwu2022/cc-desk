@@ -43,7 +43,7 @@ describe('Session reference drag payload', () => {
       title: 'Fix login bug', cli: 'claude', projectPath: 'E:/repo/app', sessionId: 'native-1',
     })
   })
-  it('SessionRef_PayloadAcceptsOpencode_003', () => {
+  it('SessionRef_PayloadAcceptsOpencode_009', () => {
     const valid = JSON.parse(buildSessionDragPayload(base))
     expect(parseSessionDragPayload(JSON.stringify({ ...valid, cli: 'opencode' }))).not.toBeNull()
   })

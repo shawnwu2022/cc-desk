@@ -64,6 +64,7 @@ describe('D23 native launch/recovery user entry', () => {
       .resolves.toMatchObject({ phase: 'running', requestId: tab.requestId })
     expect(captured).toEqual({ kind: 'new' })
     expect(captured).not.toBe(tab.action)
+    expect(created.title).toBe(cli === 'claude' ? 'Claude Code' : cli === 'codex' ? 'Codex CLI' : 'opencode')
   })
   // raw argv 从响应式数组复制后，后续界面更改不能改变已冻结的启动请求。
   it('Launch_ReactiveArgvSnapshot_011', async () => {
