@@ -289,6 +289,8 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
   function projectActive(tab: NativeCliTab) {
     const row = projectTab(tab, deps.tabs)
     let identity = tabDisplayIdentity(tab)
+    // 精确错误只来自当前匹配行，标题快照不能回放旧诊断。
+    const currentReadFailure = identity.historyReadFailure
     const observedHistory = Boolean(identity.nativeRootKey)
     const owner = JSON.stringify([captureNativeAttempt(tab), tab.cli, tab.projectId, tab.projectPath,
       tab.profileId, tab.profileRevision, tab.action, tab.sourceSessionKey, tabNativeSessionId(tab)])
@@ -307,6 +309,7 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
     // 创建时间同样继承历史身份：resume/激活不改变会话的创建序位置。
     const titled = identity.id.startsWith(HISTORY_PREFIX)
       ? { ...row, title: identity.title,
+          ...(currentReadFailure ? { historyReadFailure: currentReadFailure } : {}),
           ...(observedHistory ? { nativeRootKey: identity.nativeRootKey, nativeHistorySessionKey: identity.adapterSessionId } : {}),
           ...(identity.createdAt !== undefined ? { createdAt: identity.createdAt } : {}) }
       : row
@@ -751,6 +754,24 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
       }
     }
     if (keys.includes(id)) pending.push(id)
+    const requireCurrent = (key: string) => {
+      // 队列等待和强制重读都可能撤销来源，保留的旧行不能授权清理归档键。
+      if (match) {
+        const current = findHistory(id)
+        if (current.length !== 1 || current[0].entry.loading || current[0].entry.error || !current[0].entry.loaded
+          || current[0].entry.sourceRootKey !== sourceRoot
+          || nativeHistoryRecordKey(projectHistory(current[0].entry, current[0].item)) !== physical) throw new Error('STALE_SESSION_ATTEMPT')
+        if (exactAliases.has(key)) {
+          const aliases = findHistory(key)
+          if (aliases.length !== 1 || aliases[0].entry.loading || aliases[0].entry.error || !aliases[0].entry.loaded
+            || nativeHistoryRecordKey(projectHistory(aliases[0].entry, aliases[0].item)) !== physical) throw new Error('STALE_SESSION_ATTEMPT')
+        }
+        if (key === match.item.nativeSessionId && !uniqueBareIdSource(key)) {
+          throw new Error('SESSION_ORIGIN_AMBIGUOUS')
+        }
+      }
+    }
+    for (const key of new Set(pending)) requireCurrent(key)
     // CLI 取消归档必须在清注册表之前：codex unarchive 是可能失败的外部副作用，
     // 先清应用侧标记会留下「注册表已清、CLI 仍归档」的部分状态变更。失败时这里
     // 尚未发生任何写操作，整体失败，重试自洽。
@@ -768,23 +789,7 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
         await deps.history.load?.({ ...match.entry.context, force: true, retainOnFailure: true })
       }
     }
-    for (const key of new Set(pending)) await deps.archive.restoreSession(history.projectPath, key, () => {
-      // 队列等待和强制重读都可能撤销来源，保留的旧行不能授权清理归档键。
-      if (match) {
-        const current = findHistory(id)
-        if (current.length !== 1 || current[0].entry.loading || current[0].entry.error || !current[0].entry.loaded
-          || current[0].entry.sourceRootKey !== sourceRoot
-          || nativeHistoryRecordKey(projectHistory(current[0].entry, current[0].item)) !== physical) throw new Error('STALE_SESSION_ATTEMPT')
-        if (exactAliases.has(key)) {
-          const aliases = findHistory(key)
-          if (aliases.length !== 1 || aliases[0].entry.loading || aliases[0].entry.error || !aliases[0].entry.loaded
-            || nativeHistoryRecordKey(projectHistory(aliases[0].entry, aliases[0].item)) !== physical) throw new Error('STALE_SESSION_ATTEMPT')
-        }
-        if (key === match.item.nativeSessionId && !uniqueBareIdSource(key)) {
-          throw new Error('SESSION_ORIGIN_AMBIGUOUS')
-        }
-      }
-    }, match && key === match.item.nativeSessionId ? async () => {
+    for (const key of new Set(pending)) await deps.archive.restoreSession(history.projectPath, key, () => requireCurrent(key), match && key === match.item.nativeSessionId ? async () => {
       if (await deps.legacyClaudeRootKey?.() !== sourceRoot) throw new Error('SESSION_ORIGIN_AMBIGUOUS')
     } : undefined)
     if (match) {

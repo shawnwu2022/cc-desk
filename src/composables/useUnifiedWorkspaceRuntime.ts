@@ -410,7 +410,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
       return partial
     })
     const sessionAdapters = [
-      createLegacyClaudeAdapter({ store: legacy, metadata: projects, attention, validateHistoryRoot: validateLegacyClaudeRoot, historyEnabled: () => cliSupport.isEnabled('claude'), captureProjectAdmission: app.captureProjectAdmission, projectPaths: () => [...new Set([...legacyPaths.value, ...projects.pinnedProjects])],
+      createLegacyClaudeAdapter({ store: legacy, metadata: projects, attention, validateHistoryRoot: validateLegacyClaudeRoot, historyRootRetired: () => legacyRootRetired, historyEnabled: () => cliSupport.isEnabled('claude'), captureProjectAdmission: app.captureProjectAdmission, projectPaths: () => [...new Set([...legacyPaths.value, ...projects.pinnedProjects])],
         runtime: {
           startTab: id => {
             const tab = legacy.tabs.get(id)

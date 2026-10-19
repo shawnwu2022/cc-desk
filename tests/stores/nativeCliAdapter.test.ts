@@ -39,6 +39,37 @@ it('CodexArchive_RestoreDoesNotValidateClaude_050', async () => {
   expect(archived.get('/repo')).toEqual([])
 })
 
+it.each(['claude', 'codex'] as const)('History_OpenedOwnerShowsCurrentReadFailure_051 %s', async cli => {
+  const entry = history(cli, 'root', 'session-1'); entry.sourceRootKey = 'root'
+  entry.sessions[0].readFailure = 'SOURCE_INVALID_TEXT'
+  const active = tab({ cli, profileId: entry.context.profileId, sourceSessionKey: entry.sessions[0].sessionKey })
+  const entries = [entry], { adapter } = setup([active], entries)
+  let rows = await adapter.listSessions()
+  expect(rows).toHaveLength(1)
+  expect(rows[0]).toMatchObject({ opened: true, historyReadFailure: 'SOURCE_INVALID_TEXT' })
+  delete entry.sessions[0].readFailure
+  expect((await adapter.listSessions())[0].historyReadFailure).toBeUndefined()
+  entry.sessions[0].readFailure = 'SOURCE_INVALID_TEXT'; await adapter.listSessions()
+  entries.splice(0)
+  rows = await adapter.listSessions()
+  expect(rows[0].historyReadFailure).toBeUndefined()
+  expect(rows[0].title).toBe(`${cli}-root`)
+})
+
+it.each(['loading', 'error', 'unloaded'] as const)('History_RestorePreflightsEveryExactAlias_052 %s', async failure => {
+  const first = history('codex', 'root', 'same'), second = history('codex', 'root', 'same')
+  first.sourceRootKey = second.sourceRootKey = 'root'; second.context.profileId = 'other-profile'
+  const { adapter, archived, archive } = setup([], [first, second])
+  const rows = await adapter.listSessions(undefined, 'codex'), keys = rows.map(row => row.id)
+  archived.set('/repo', keys)
+  if (failure === 'loading') second.loading = true
+  else if (failure === 'error') second.error = 'SOURCE_UNAVAILABLE'
+  else second.loaded = false
+  await expect(adapter.restoreArchivedSession(rows[0].id)).rejects.toThrow('STALE_SESSION_ATTEMPT')
+  expect(archive.restoreSession).not.toHaveBeenCalled()
+  expect(archived.get('/repo')).toEqual(keys)
+})
+
 function setup(tabs: NativeCliTab[], entries: NativeHistoryEntry[], legacyRoot?: () => Promise<string | undefined>) {
   const map = new Map(tabs.map(value => [value.tabId, value]))
   const setActive = vi.fn()

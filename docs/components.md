@@ -138,6 +138,10 @@ only for Claude bare-ID archive ownership. In-flight root failures still retire
 the lease after disable, but publish warnings only when Claude is enabled.
 Archive-signature background refreshes of Codex-only projects likewise skip
 unrelated Claude root validation; actual Claude projections retain fresh proof.
+Runtime retirement is propagated even when the Legacy adapter was cold-disabled
+before its first proof. Open Native owners show only current history read errors,
+never errors retained in title snapshots. Archive restore preflights every pending
+exact alias before any write and rechecks each alias again inside its write queue.
 Claude reloads also include projects owned only by an open Legacy tab. Disabling
 history publishes real opened owners without validating the disabled Claude root;
 later full catalog refreshes follow the same rule. Root retirement refreshes every

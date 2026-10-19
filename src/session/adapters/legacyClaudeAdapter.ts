@@ -60,6 +60,8 @@ export interface LegacyClaudeAdapterDeps {
   /** 验证本 runtime 冻结的默认根；失败后不得从默认历史借用运行行标题。 */
   validateHistoryRoot?(): Promise<string | undefined>
   historyEnabled?(): boolean
+  /** 已撤销不同于首次证明未知；冷停用后也不能发布替换根的缓存行。 */
+  historyRootRetired?(): boolean
 }
 
 function activeId(tabId: string): string {
@@ -168,6 +170,7 @@ export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): Sessio
     let root: string | undefined
     try { root = await deps.validateHistoryRoot?.() }
     catch { if (provenHistoryRoot) historyRootRetired = true }
+    if (deps.historyRootRetired?.()) historyRootRetired = true
     if (provenHistoryRoot && root !== provenHistoryRoot) historyRootRetired = true
     if (!provenHistoryRoot && root) provenHistoryRoot = root
     return historyRootRetired ? undefined : root

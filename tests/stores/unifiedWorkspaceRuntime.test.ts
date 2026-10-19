@@ -1770,6 +1770,19 @@ it('HistoryRecovery_CodexArchiveRestorePreservesClaude_097', async () => {
   expect(catalog.sessions.find(session => session.nativeSessionId === 'legacy')).toMatchObject({ title: 'Legacy' })
 })
 
+it.each(['replacement', 'unavailable'] as const)('HistorySupport_ColdDisabledRetiredRootHidesReplacementRows_098 %s', async failure => {
+  localStorage.setItem('cc-desk-cli-support-v1', JSON.stringify({ claude: false, codex: true }))
+  io.legacyRoot.mockResolvedValue({ rootKey: 'initial-root' })
+  io.sessions.mockResolvedValue([{ sessionId: 'replacement-row', name: 'Replacement', projectPath: '/legacy', lastActiveAt: 1 }])
+  const { runtime } = render(); await runtime.refresh(); await flushPromises()
+  if (failure === 'replacement') io.legacyRoot.mockResolvedValue({ rootKey: 'replacement-root' })
+  else io.legacyRoot.mockRejectedValue(new Error('unavailable'))
+  const { useCliSupportStore } = await import('@/stores/cliSupport')
+  useCliSupportStore().setCliEnabled('claude', true); await flushPromises(); await flushPromises()
+  expect(runtime.sourceWarnings.value.some(row => row.source === 'legacy-history')).toBe(true)
+  expect(useUnifiedSessionsStore().sessions.some(row => row.nativeSessionId === 'replacement-row')).toBe(false)
+})
+
 // 模板 ID 不能证明 false 是旧默认值：用户关闭后刷新不得覆写，也不应增加 revision。
 it('Observer_ExplicitOffSurvivesRefresh_060', async () => {
   const claudeTemplate = { id: 'desk-safe-claude', revision: '2', cli: 'claude', name: 'Claude Code', launcher: { kind: 'native' },
