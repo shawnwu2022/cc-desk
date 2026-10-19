@@ -77,6 +77,7 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version: 22
+          cache: npm
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@1.98.1
@@ -157,7 +158,8 @@ jobs:
           retention-days: 30
 
       - name: Share only verified same-run test executables and inventories
-        uses: actions/upload-artifact@v4
+        timeout-minutes: 5
+        uses: ./.github/actions/upload-evidence
         with:
           name: windows-rust-bundle-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: src-tauri/target/ci-rust-bundle/
@@ -196,6 +198,7 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version: 22
+          cache: npm
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@1.98.1
@@ -339,7 +342,8 @@ jobs:
         run: node scripts/windows-rust-shard-runner.mjs run --index ${{ matrix.shard }} --job-start-ms "${{ env.CI_RUST_JOB_START_MS }}" --in-job "${{ steps.host.outputs.job_free != 'true' }}" --elevated "${{ steps.host.outputs.elevated }}" --artifact-name windows-rust-bundle-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Preserve original selection, execution and timing even on failure
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        timeout-minutes: 5
+        uses: ./.github/actions/upload-evidence
         with:
           name: windows-rust-shard-${{ matrix.shard }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: src-tauri/target/ci-rust-shard-${{ matrix.shard }}/
@@ -373,7 +377,8 @@ jobs:
       - name: Reconcile every full name, raw outer result and original ignored reason
         run: node scripts/windows-rust-shard-runner.mjs aggregate --shards src-tauri/target/ci-rust-shards
       - name: Preserve exact native validation scope and original logs
-        uses: actions/upload-artifact@v4
+        timeout-minutes: 5
+        uses: ./.github/actions/upload-evidence
         with:
           name: windows-native-coverage-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: src-tauri/target/windows-native-coverage/

@@ -250,6 +250,10 @@ npm run tauri:build        # 生产构建
 - **CI 性能与来源**：Windows 普通 Rust CI 一次编译四个原始 harness，以同 source SHA/run/attempt 绑定的编译包确定性分为 16 片；`Rust checks` 在全片成功、完整名称与原始忽略集合及原始输出计数核对后才通过。18 条 Job-free 专项仍按原政策披露为未验证，不增排除。roundtrip 的普通 release 与惰性 debug 场景并行，原 required policy 聚合全部成功。发布候选可在同源 CI 等待期间构建，正式发布仍受原完整来源、coverage 与平台签名门控。详见 [docs/ci-performance.md](../docs/ci-performance.md)。 分片必须流式保留原始输出和未完成名称诊断；单 harness 20 分钟、job 30 分钟上限超出后失败并保留部分证据，不能把 timeout 或先打印的成功摘要计作完整通过。
   - Producer 与 Windows entry/fmt/Clippy/实际 loader 静态门禁独立并行；原 `Rust checks` 必须同时要求 producer、static 与全 16 片成功。分片从第一个 runner step 起共用 25 分钟预算（含 checkout/download，单 harness 仍最多 20 分钟），原子保存未完成回执并始终尝试上传；基础设施硬停止不能保证上传成功。Cargo cache match 与真实 fresh/rebuilt 分开记录，libtest 名称的输出观察时刻不是单测试耗时，不可作为已校准分片权重。
 
+- **CI 不可变上传恢复**：普通 CI 的编译包、分片证据及 coverage 上传回执失败后，先读回当前 run 的同一 SHA/run/attempt 名称并逐文件核对完整库存、尺寸与 SHA-256；完全相等才确认原上传。读回不可用时只允许同名、禁止覆盖地再传一次。字节差异、取消、未知传输及原测试失败均不能变绿。外层上传步骤最多 5 分钟，原执行预算与 job 上限不变；不删除 artifact，不混用 attempt，也不以传输相等替代原 coverage 校验。新上传代码纳入 plan 内容哈希。长尾候选只可离线比较，当前默认分片算法及权重不变，须满足已有净收益证据门槛后才采纳。
+
+- **Windows 测试包并行门禁**：`conpty-integration.yml` 的完整前端、ConPTY guards 与严格 all-target Clippy 在独立 Windows validation job 执行，与真实 NSIS 构建、安装/重装/迁移及 fail-closed probes 并行。原 `installer` 检查名汇总 formatting/validation/package 全部成功，按同 SHA/run/attempt 下载候选并核对 manifest 与安装包 SHA-256 后，才上传原已验证测试包名称。中间 candidate 仅为未完成整体验证的 test-only 产物；不能用于正式发布、替代普通 CI、跨 attempt 复用或改变真实安装验收要求。Release admission 可提前拒绝已知失败的精确 main CI，pending 仍并行构建；原完整 preflight、coverage 与签名门禁不变。测量与边界见 [CI 性能](ci-performance.md)。
+
 - **开发必须搭配测试**：新增功能、修改逻辑、修复 bug 时，同步编写或更新对应测试。遵循 [测试编写原则](../docs/测试编写原则.md)
 - **Bug 修复必须先写测试**：修复 bug 时，先编写测试复现问题，确认测试失败，然后修复代码直至测试通过
 - **自动测试优先**：能用自动测试覆盖的场景，必须写成自动测试，不要写入手动测试文档

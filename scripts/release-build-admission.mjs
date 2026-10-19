@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process'
 import { appendFileSync, readFileSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
+import { ciWaitState } from './release-wait-for-ci.mjs'
 
 // Candidate build admission only. This never establishes CI coverage, verifies
 // release assets, changes a tag/draft, or grants publication authority.
@@ -38,6 +39,14 @@ export async function runBuildAdmission() {
   const branch = await response.json()
   assertBuildAdmission({ event, ref, sha, checkoutSha,
     main: { sha: branch.commit?.sha, protected: branch.protected }, versions: [packageVersion, cargoVersion, tauriVersion] })
+  // 已知失败应在三平台签名构建前拒绝；pending 仍并行构建，完整发布门禁照常复核。
+  const ciResponse = await fetch(`https://api.github.com/repos/${repository}/actions/workflows/ci.yml/runs?head_sha=${sha}&branch=main&event=push&per_page=100`, {
+    redirect: 'error', signal: AbortSignal.timeout(30000),
+    headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' },
+  })
+  if (!ciResponse.ok) throw new Error(`build admission CI API failed: HTTP ${ciResponse.status}`)
+  const ci = await ciResponse.json()
+  ciWaitState({ sha, main: { sha: branch.commit?.sha, protected: branch.protected }, runs: ci.workflow_runs })
   if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `version=${packageVersion}\ntag=v${packageVersion}\n`)
   console.log(`Build source admitted for ${sha}; publication still requires exact CI coverage and signatures`)
 }

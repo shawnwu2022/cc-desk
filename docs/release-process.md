@@ -2,6 +2,14 @@
 
 Every authorized version release first merges reviewed changes into **protected main** and then publishes only from that exact merged main source. After merging, remove integrated and redundant local/remote branches and the temporary release branch; retain unfinished branches with continued value or long-term purpose in place. Do not create backups merely to justify deletion; permanently deleting unintegrated unique work requires explicit itemized confirmation. The user-authorized recovery path promotes one signed platform set from **protected main**. Feature revisions remain candidates until they are merged and the actual merged main SHA passes full CI under the required-checks policy, with a validated disclosure of unavailable native checks. Required CI success does not prove original unfiltered native All or real installation/return roundtrip acceptance. Package metadata changes and manual dispatch can start the release workflow; tags and feature branches cannot promote. The release workflow waits for that exact main SHA's ordinary CI to finish; failed CI and changed main remain blocking.
 
+Before starting signed builds, the read-only admission step also samples the
+latest ordinary push CI for the exact protected-main SHA. A completed unsuccessful
+CI run rejects redundant candidate builds immediately; a missing or pending run
+still permits compilation in parallel. API errors fail admission. This early
+sample is never publication evidence: full preflight still waits after all builds,
+then freshly resolves the current run/attempt, authenticates coverage bytes and
+checks all three actual platform signatures before promotion.
+
 `release-preflight.mjs` enforces the same `release-policy.mjs` used by fixture tests:
 
 - The workflow SHA equals the current protected main SHA.

@@ -52,6 +52,10 @@ for (const [name, fixture, expected] of [
   ['current main changed', 'advanced', 1],
   ['protection unavailable', 'unprotected', 1],
   ['API denied', 'denied', 1],
+  ['known failed exact-source CI blocks redundant signed builds', 'failed-ci', 1],
+  ['known cancelled exact-source CI blocks redundant signed builds', 'cancelled-ci', 1],
+  ['latest pending attempt may build while full preflight waits', 'pending-ci', 0],
+  ['CI API failure cannot be treated as pending CI', 'ci-denied', 1],
 ]) {
   test(`ReleaseBuildAdmission_CLI_${name}`, () => {
     assert.ok(existsSync(script), 'exact-source build admission CLI is required')
@@ -59,6 +63,13 @@ for (const [name, fixture, expected] of [
     const output = join(directory, 'github-output')
     const harness = `
       globalThis.fetch = async (url, options) => {
+        if (url === 'https://api.github.com/repos/shawnwu2022/cc-desk/actions/workflows/ci.yml/runs?head_sha=' + process.env.GITHUB_SHA + '&branch=main&event=push&per_page=100') {
+          if (process.env.FIXTURE === 'ci-denied') return { ok: false, status: 403 };
+          const fixture = process.env.FIXTURE;
+          const conclusion = fixture === 'failed-ci' ? 'failure' : fixture === 'cancelled-ci' ? 'cancelled' : null;
+          const run = { id: 11, head_sha: process.env.GITHUB_SHA, head_branch: 'main', event: 'push', path: '.github/workflows/ci.yml', status: conclusion ? 'completed' : 'in_progress', conclusion };
+          return { ok: true, json: async () => ({ workflow_runs: [run, { ...run, id: 10, status: 'completed', conclusion: 'failure' }] }) };
+        }
         if (url !== 'https://api.github.com/repos/shawnwu2022/cc-desk/branches/main'
           || (options.method ?? 'GET') !== 'GET') throw new Error('unexpected admission API');
         if (process.env.FIXTURE === 'denied') return { ok: false, status: 403 };
@@ -84,6 +95,8 @@ for (const [name, fixture, expected] of [
         assert.match(result.stdout, /publication still requires exact CI coverage and signatures/)
       } else {
         assert.equal(existsSync(output), false, 'a refused source cannot publish admission outputs')
+        if (fixture === 'failed-ci' || fixture === 'cancelled-ci') assert.match(result.stderr, /Release wait: current-source CI 11 failed/)
+        if (fixture === 'ci-denied') assert.match(result.stderr, /build admission CI API failed: HTTP 403/)
       }
     } finally { rmSync(directory, { recursive: true, force: true }) }
   })

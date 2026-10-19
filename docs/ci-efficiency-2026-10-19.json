@@ -1,0 +1,1034 @@
+{
+  "schema": 1,
+  "repository": "shawnwu2022/cc-desk",
+  "observedAt": "2026-10-19",
+  "baselineCommit": "37fef8b730660c42f0967fb3e0e0b93809174dd5",
+  "semantics": "Read-only GitHub REST job/step metadata; elapsed seconds, not billable minutes, cache proof, per-test calibration or current-patch qualification. Wall spans use earliest job start to last job completion and exclude initial queue.",
+  "artifactBytesVerified": false,
+  "tenMinuteTargetVerified": false,
+  "runs": [
+    {
+      "variant": "pr1",
+      "runId": "39197993040",
+      "runAttempt": 1,
+      "sourceSha": "7d5cfdf05ea220e1bd2abc891b52bceba908f1b5",
+      "url": "https://github.com/shawnwu2022/cc-desk/actions/runs/39197993040/attempts/1",
+      "metadataSha256": "fac2a65a341c6cd666346362cd59286c0f42c9ef2739fc2e5294e8d5b8c95460",
+      "firstJobStartedAt": "2026-10-19T04:08:42.000Z",
+      "lastJobCompletedAt": "2026-10-19T04:21:22.000Z",
+      "wallSeconds": 760,
+      "runnerSeconds": 5364,
+      "jobs": [
+        {
+          "jobId": 117884806356,
+          "name": "Roundtrip inert debug scenarios",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:08:42Z",
+          "completedAt": "2026-10-19T04:15:26Z",
+          "seconds": 404
+        },
+        {
+          "jobId": 117884806589,
+          "name": "Roundtrip ordinary release exclusion",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:08:43Z",
+          "completedAt": "2026-10-19T04:16:05Z",
+          "seconds": 442
+        },
+        {
+          "jobId": 117884806598,
+          "name": "Rust compiled test bundle",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:08:43Z",
+          "completedAt": "2026-10-19T04:13:06Z",
+          "seconds": 263
+        },
+        {
+          "jobId": 117884806618,
+          "name": "Frontend checks",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:08:42Z",
+          "completedAt": "2026-10-19T04:11:15Z",
+          "seconds": 153
+        },
+        {
+          "jobId": 117884806694,
+          "name": "Rust static and actual loader checks",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:08:43Z",
+          "completedAt": "2026-10-19T04:12:04Z",
+          "seconds": 201
+        },
+        {
+          "jobId": 117885913116,
+          "name": "Rust test shard 1",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:13:09Z",
+          "completedAt": "2026-10-19T04:16:38Z",
+          "seconds": 209
+        },
+        {
+          "jobId": 117885913155,
+          "name": "Rust test shard 15",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:13:10Z",
+          "completedAt": "2026-10-19T04:16:12Z",
+          "seconds": 182
+        },
+        {
+          "jobId": 117885913160,
+          "name": "Rust test shard 5",
+          "conclusion": "failure",
+          "startedAt": "2026-10-19T04:13:18Z",
+          "completedAt": "2026-10-19T04:16:53Z",
+          "seconds": 215
+        },
+        {
+          "jobId": 117885913179,
+          "name": "Rust test shard 0",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:13:09Z",
+          "completedAt": "2026-10-19T04:15:29Z",
+          "seconds": 140
+        },
+        {
+          "jobId": 117885913183,
+          "name": "Rust test shard 2",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:13:09Z",
+          "completedAt": "2026-10-19T04:15:17Z",
+          "seconds": 128
+        },
+        {
+          "jobId": 117885913188,
+          "name": "Rust test shard 6",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:13:09Z",
+          "completedAt": "2026-10-19T04:21:09Z",
+          "seconds": 480
+        },
+        {
+          "jobId": 117885913193,
+          "name": "Rust test shard 4",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:13:09Z",
+          "completedAt": "2026-10-19T04:16:45Z",
+          "seconds": 216
+        },
+        {
+          "jobId": 117885913195,
+          "name": "Rust test shard 3",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:13:10Z",
+          "completedAt": "2026-10-19T04:17:06Z",
+          "seconds": 236
+        },
+        {
+          "jobId": 117885913208,
+          "name": "Rust test shard 9",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:13:09Z",
+          "completedAt": "2026-10-19T04:18:59Z",
+          "seconds": 350
+        },
+        {
+          "jobId": 117885913215,
+          "name": "Rust test shard 11",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:13:09Z",
+          "completedAt": "2026-10-19T04:17:20Z",
+          "seconds": 251
+        },
+        {
+          "jobId": 117885913228,
+          "name": "Rust test shard 7",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:13:10Z",
+          "completedAt": "2026-10-19T04:18:20Z",
+          "seconds": 310
+        },
+        {
+          "jobId": 117885913229,
+          "name": "Rust test shard 10",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:13:10Z",
+          "completedAt": "2026-10-19T04:16:17Z",
+          "seconds": 187
+        },
+        {
+          "jobId": 117885913237,
+          "name": "Rust test shard 8",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:13:10Z",
+          "completedAt": "2026-10-19T04:16:24Z",
+          "seconds": 194
+        },
+        {
+          "jobId": 117885913241,
+          "name": "Rust test shard 13",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:13:09Z",
+          "completedAt": "2026-10-19T04:17:23Z",
+          "seconds": 254
+        },
+        {
+          "jobId": 117885913269,
+          "name": "Rust test shard 12",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:13:09Z",
+          "completedAt": "2026-10-19T04:18:14Z",
+          "seconds": 305
+        },
+        {
+          "jobId": 117885913402,
+          "name": "Rust test shard 14",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:13:10Z",
+          "completedAt": "2026-10-19T04:17:01Z",
+          "seconds": 231
+        },
+        {
+          "jobId": 117886673752,
+          "name": "Disposable roundtrip compile-only policy (no native acceptance)",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:16:08Z",
+          "completedAt": "2026-10-19T04:16:12Z",
+          "seconds": 4
+        },
+        {
+          "jobId": 117887940936,
+          "name": "Rust checks",
+          "conclusion": "failure",
+          "startedAt": "2026-10-19T04:21:13Z",
+          "completedAt": "2026-10-19T04:21:22Z",
+          "seconds": 9
+        }
+      ]
+    },
+    {
+      "variant": "pr2",
+      "runId": "39197993040",
+      "runAttempt": 2,
+      "sourceSha": "7d5cfdf05ea220e1bd2abc891b52bceba908f1b5",
+      "url": "https://github.com/shawnwu2022/cc-desk/actions/runs/39197993040/attempts/2",
+      "metadataSha256": "11e4164197eb8c9890ff7c17b1afed6e8e7cabf219de9c8cf756eab012458cfe",
+      "firstJobStartedAt": "2026-10-19T04:21:51.000Z",
+      "lastJobCompletedAt": "2026-10-19T04:32:04.000Z",
+      "wallSeconds": 613,
+      "runnerSeconds": 5689,
+      "jobs": [
+        {
+          "jobId": 117888100101,
+          "name": "Roundtrip inert debug scenarios",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:21:51Z",
+          "completedAt": "2026-10-19T04:28:32Z",
+          "seconds": 401
+        },
+        {
+          "jobId": 117888100287,
+          "name": "Frontend checks",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:21:52Z",
+          "completedAt": "2026-10-19T04:25:10Z",
+          "seconds": 198
+        },
+        {
+          "jobId": 117888100299,
+          "name": "Roundtrip ordinary release exclusion",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:21:52Z",
+          "completedAt": "2026-10-19T04:31:58Z",
+          "seconds": 606
+        },
+        {
+          "jobId": 117888100360,
+          "name": "Rust static and actual loader checks",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:21:51Z",
+          "completedAt": "2026-10-19T04:25:12Z",
+          "seconds": 201
+        },
+        {
+          "jobId": 117888100383,
+          "name": "Rust compiled test bundle",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:21:51Z",
+          "completedAt": "2026-10-19T04:24:39Z",
+          "seconds": 168
+        },
+        {
+          "jobId": 117888814559,
+          "name": "Rust test shard 11",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:24:42Z",
+          "completedAt": "2026-10-19T04:29:52Z",
+          "seconds": 310
+        },
+        {
+          "jobId": 117888814574,
+          "name": "Rust test shard 8",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:24:42Z",
+          "completedAt": "2026-10-19T04:29:25Z",
+          "seconds": 283
+        },
+        {
+          "jobId": 117888814576,
+          "name": "Rust test shard 4",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:24:42Z",
+          "completedAt": "2026-10-19T04:28:24Z",
+          "seconds": 222
+        },
+        {
+          "jobId": 117888814582,
+          "name": "Rust test shard 10",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:24:42Z",
+          "completedAt": "2026-10-19T04:29:06Z",
+          "seconds": 264
+        },
+        {
+          "jobId": 117888814583,
+          "name": "Rust test shard 3",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:24:42Z",
+          "completedAt": "2026-10-19T04:28:00Z",
+          "seconds": 198
+        },
+        {
+          "jobId": 117888814591,
+          "name": "Rust test shard 9",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:24:43Z",
+          "completedAt": "2026-10-19T04:30:31Z",
+          "seconds": 348
+        },
+        {
+          "jobId": 117888814593,
+          "name": "Rust test shard 14",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:24:42Z",
+          "completedAt": "2026-10-19T04:27:57Z",
+          "seconds": 195
+        },
+        {
+          "jobId": 117888814608,
+          "name": "Rust test shard 0",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:24:42Z",
+          "completedAt": "2026-10-19T04:28:53Z",
+          "seconds": 251
+        },
+        {
+          "jobId": 117888814609,
+          "name": "Rust test shard 12",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:24:42Z",
+          "completedAt": "2026-10-19T04:29:43Z",
+          "seconds": 301
+        },
+        {
+          "jobId": 117888814617,
+          "name": "Rust test shard 1",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:24:43Z",
+          "completedAt": "2026-10-19T04:29:11Z",
+          "seconds": 268
+        },
+        {
+          "jobId": 117888814620,
+          "name": "Rust test shard 15",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:24:42Z",
+          "completedAt": "2026-10-19T04:27:15Z",
+          "seconds": 153
+        },
+        {
+          "jobId": 117888814625,
+          "name": "Rust test shard 2",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:24:42Z",
+          "completedAt": "2026-10-19T04:27:54Z",
+          "seconds": 192
+        },
+        {
+          "jobId": 117888814632,
+          "name": "Rust test shard 6",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:25:13Z",
+          "completedAt": "2026-10-19T04:31:25Z",
+          "seconds": 372
+        },
+        {
+          "jobId": 117888814666,
+          "name": "Rust test shard 7",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:24:43Z",
+          "completedAt": "2026-10-19T04:28:14Z",
+          "seconds": 211
+        },
+        {
+          "jobId": 117888814673,
+          "name": "Rust test shard 5",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:24:42Z",
+          "completedAt": "2026-10-19T04:30:02Z",
+          "seconds": 320
+        },
+        {
+          "jobId": 117888814739,
+          "name": "Rust test shard 13",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:24:42Z",
+          "completedAt": "2026-10-19T04:28:06Z",
+          "seconds": 204
+        },
+        {
+          "jobId": 117890488968,
+          "name": "Rust checks",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:31:29Z",
+          "completedAt": "2026-10-19T04:31:49Z",
+          "seconds": 20
+        },
+        {
+          "jobId": 117890624919,
+          "name": "Disposable roundtrip compile-only policy (no native acceptance)",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:32:01Z",
+          "completedAt": "2026-10-19T04:32:04Z",
+          "seconds": 3
+        }
+      ]
+    },
+    {
+      "variant": "main1",
+      "runId": "39200098896",
+      "runAttempt": 1,
+      "sourceSha": "37fef8b730660c42f0967fb3e0e0b93809174dd5",
+      "url": "https://github.com/shawnwu2022/cc-desk/actions/runs/39200098896/attempts/1",
+      "metadataSha256": "bfccc757badef4acd63f4dfbd9b3e9c97305421c8c594f0858c6d6fab0b747d3",
+      "firstJobStartedAt": "2026-10-19T04:33:54.000Z",
+      "lastJobCompletedAt": "2026-10-19T04:46:40.000Z",
+      "wallSeconds": 766,
+      "runnerSeconds": 6000,
+      "jobs": [
+        {
+          "jobId": 117891091475,
+          "name": "Rust compiled test bundle",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:33:54Z",
+          "completedAt": "2026-10-19T04:38:18Z",
+          "seconds": 264
+        },
+        {
+          "jobId": 117891091642,
+          "name": "Roundtrip inert debug scenarios",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:33:54Z",
+          "completedAt": "2026-10-19T04:40:20Z",
+          "seconds": 386
+        },
+        {
+          "jobId": 117891091696,
+          "name": "Roundtrip ordinary release exclusion",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:33:54Z",
+          "completedAt": "2026-10-19T04:43:11Z",
+          "seconds": 557
+        },
+        {
+          "jobId": 117891091799,
+          "name": "Frontend checks",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:33:54Z",
+          "completedAt": "2026-10-19T04:37:29Z",
+          "seconds": 215
+        },
+        {
+          "jobId": 117891091897,
+          "name": "Rust static and actual loader checks",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:33:54Z",
+          "completedAt": "2026-10-19T04:37:18Z",
+          "seconds": 204
+        },
+        {
+          "jobId": 117892196397,
+          "name": "Rust test shard 13",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:38:22Z",
+          "completedAt": "2026-10-19T04:43:30Z",
+          "seconds": 308
+        },
+        {
+          "jobId": 117892196401,
+          "name": "Rust test shard 14",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:38:22Z",
+          "completedAt": "2026-10-19T04:42:55Z",
+          "seconds": 273
+        },
+        {
+          "jobId": 117892196402,
+          "name": "Rust test shard 4",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:38:22Z",
+          "completedAt": "2026-10-19T04:41:25Z",
+          "seconds": 183
+        },
+        {
+          "jobId": 117892196405,
+          "name": "Rust test shard 0",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:38:22Z",
+          "completedAt": "2026-10-19T04:41:22Z",
+          "seconds": 180
+        },
+        {
+          "jobId": 117892196416,
+          "name": "Rust test shard 10",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:38:21Z",
+          "completedAt": "2026-10-19T04:42:36Z",
+          "seconds": 255
+        },
+        {
+          "jobId": 117892196432,
+          "name": "Rust test shard 15",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:38:22Z",
+          "completedAt": "2026-10-19T04:42:43Z",
+          "seconds": 261
+        },
+        {
+          "jobId": 117892196441,
+          "name": "Rust test shard 1",
+          "conclusion": "failure",
+          "startedAt": "2026-10-19T04:38:22Z",
+          "completedAt": "2026-10-19T04:45:40Z",
+          "seconds": 438
+        },
+        {
+          "jobId": 117892196446,
+          "name": "Rust test shard 11",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:38:22Z",
+          "completedAt": "2026-10-19T04:42:01Z",
+          "seconds": 219
+        },
+        {
+          "jobId": 117892196447,
+          "name": "Rust test shard 12",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:38:22Z",
+          "completedAt": "2026-10-19T04:42:25Z",
+          "seconds": 243
+        },
+        {
+          "jobId": 117892196452,
+          "name": "Rust test shard 2",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:38:22Z",
+          "completedAt": "2026-10-19T04:41:39Z",
+          "seconds": 197
+        },
+        {
+          "jobId": 117892196458,
+          "name": "Rust test shard 7",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:38:21Z",
+          "completedAt": "2026-10-19T04:42:14Z",
+          "seconds": 233
+        },
+        {
+          "jobId": 117892196459,
+          "name": "Rust test shard 5",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:38:21Z",
+          "completedAt": "2026-10-19T04:43:36Z",
+          "seconds": 315
+        },
+        {
+          "jobId": 117892196461,
+          "name": "Rust test shard 8",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:38:22Z",
+          "completedAt": "2026-10-19T04:41:44Z",
+          "seconds": 202
+        },
+        {
+          "jobId": 117892196465,
+          "name": "Rust test shard 6",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:38:22Z",
+          "completedAt": "2026-10-19T04:46:30Z",
+          "seconds": 488
+        },
+        {
+          "jobId": 117892196467,
+          "name": "Rust test shard 9",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:38:22Z",
+          "completedAt": "2026-10-19T04:43:22Z",
+          "seconds": 300
+        },
+        {
+          "jobId": 117892196495,
+          "name": "Rust test shard 3",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:40:23Z",
+          "completedAt": "2026-10-19T04:44:52Z",
+          "seconds": 269
+        },
+        {
+          "jobId": 117893405201,
+          "name": "Disposable roundtrip compile-only policy (no native acceptance)",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:43:13Z",
+          "completedAt": "2026-10-19T04:43:16Z",
+          "seconds": 3
+        },
+        {
+          "jobId": 117894230252,
+          "name": "Rust checks",
+          "conclusion": "failure",
+          "startedAt": "2026-10-19T04:46:33Z",
+          "completedAt": "2026-10-19T04:46:40Z",
+          "seconds": 7
+        }
+      ]
+    },
+    {
+      "variant": "main2",
+      "runId": "39200098896",
+      "runAttempt": 2,
+      "sourceSha": "37fef8b730660c42f0967fb3e0e0b93809174dd5",
+      "url": "https://github.com/shawnwu2022/cc-desk/actions/runs/39200098896/attempts/2",
+      "metadataSha256": "fed221a643a6ba1275ccbb4ad817070ece84a4d274de7ea345317a9763bce8c4",
+      "firstJobStartedAt": "2026-10-19T04:48:03.000Z",
+      "lastJobCompletedAt": "2026-10-19T05:00:25.000Z",
+      "wallSeconds": 742,
+      "runnerSeconds": 5643,
+      "jobs": [
+        {
+          "jobId": 117894600190,
+          "name": "Rust static and actual loader checks",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:48:03Z",
+          "completedAt": "2026-10-19T04:51:40Z",
+          "seconds": 217
+        },
+        {
+          "jobId": 117894600417,
+          "name": "Frontend checks",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:48:04Z",
+          "completedAt": "2026-10-19T04:50:26Z",
+          "seconds": 142
+        },
+        {
+          "jobId": 117894600472,
+          "name": "Rust compiled test bundle",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:48:04Z",
+          "completedAt": "2026-10-19T04:52:16Z",
+          "seconds": 252
+        },
+        {
+          "jobId": 117894600529,
+          "name": "Roundtrip ordinary release exclusion",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:48:04Z",
+          "completedAt": "2026-10-19T04:54:25Z",
+          "seconds": 381
+        },
+        {
+          "jobId": 117894600620,
+          "name": "Roundtrip inert debug scenarios",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:48:04Z",
+          "completedAt": "2026-10-19T04:54:00Z",
+          "seconds": 356
+        },
+        {
+          "jobId": 117895650694,
+          "name": "Rust test shard 0",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:52:19Z",
+          "completedAt": "2026-10-19T04:56:33Z",
+          "seconds": 254
+        },
+        {
+          "jobId": 117895650709,
+          "name": "Rust test shard 4",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:52:19Z",
+          "completedAt": "2026-10-19T04:55:52Z",
+          "seconds": 213
+        },
+        {
+          "jobId": 117895650735,
+          "name": "Rust test shard 7",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:52:19Z",
+          "completedAt": "2026-10-19T04:57:21Z",
+          "seconds": 302
+        },
+        {
+          "jobId": 117895650754,
+          "name": "Rust test shard 8",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:52:19Z",
+          "completedAt": "2026-10-19T04:57:06Z",
+          "seconds": 287
+        },
+        {
+          "jobId": 117895650784,
+          "name": "Rust test shard 10",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:52:19Z",
+          "completedAt": "2026-10-19T04:55:23Z",
+          "seconds": 184
+        },
+        {
+          "jobId": 117895650792,
+          "name": "Rust test shard 6",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:52:20Z",
+          "completedAt": "2026-10-19T05:00:09Z",
+          "seconds": 469
+        },
+        {
+          "jobId": 117895650793,
+          "name": "Rust test shard 2",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:52:19Z",
+          "completedAt": "2026-10-19T04:55:34Z",
+          "seconds": 195
+        },
+        {
+          "jobId": 117895650808,
+          "name": "Rust test shard 3",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:52:19Z",
+          "completedAt": "2026-10-19T04:56:33Z",
+          "seconds": 254
+        },
+        {
+          "jobId": 117895650827,
+          "name": "Rust test shard 15",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:52:19Z",
+          "completedAt": "2026-10-19T04:56:39Z",
+          "seconds": 260
+        },
+        {
+          "jobId": 117895650831,
+          "name": "Rust test shard 1",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:52:20Z",
+          "completedAt": "2026-10-19T04:57:24Z",
+          "seconds": 304
+        },
+        {
+          "jobId": 117895650834,
+          "name": "Rust test shard 9",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:52:19Z",
+          "completedAt": "2026-10-19T04:58:11Z",
+          "seconds": 352
+        },
+        {
+          "jobId": 117895650842,
+          "name": "Rust test shard 14",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:52:19Z",
+          "completedAt": "2026-10-19T04:55:53Z",
+          "seconds": 214
+        },
+        {
+          "jobId": 117895650851,
+          "name": "Rust test shard 11",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:52:19Z",
+          "completedAt": "2026-10-19T04:54:56Z",
+          "seconds": 157
+        },
+        {
+          "jobId": 117895650866,
+          "name": "Rust test shard 5",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:52:20Z",
+          "completedAt": "2026-10-19T04:57:42Z",
+          "seconds": 322
+        },
+        {
+          "jobId": 117895650959,
+          "name": "Rust test shard 12",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:52:20Z",
+          "completedAt": "2026-10-19T04:57:27Z",
+          "seconds": 307
+        },
+        {
+          "jobId": 117895651054,
+          "name": "Rust test shard 13",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:53:57Z",
+          "completedAt": "2026-10-19T04:57:21Z",
+          "seconds": 204
+        },
+        {
+          "jobId": 117896177309,
+          "name": "Disposable roundtrip compile-only policy (no native acceptance)",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:54:28Z",
+          "completedAt": "2026-10-19T04:54:31Z",
+          "seconds": 3
+        },
+        {
+          "jobId": 117897600442,
+          "name": "Rust checks",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T05:00:11Z",
+          "completedAt": "2026-10-19T05:00:25Z",
+          "seconds": 14
+        }
+      ]
+    },
+    {
+      "variant": "release",
+      "runId": "39201292937",
+      "runAttempt": 1,
+      "sourceSha": "37fef8b730660c42f0967fb3e0e0b93809174dd5",
+      "url": "https://github.com/shawnwu2022/cc-desk/actions/runs/39201292937/attempts/1",
+      "metadataSha256": "fe5a7a3f8a8d2f95f23fea703cf72be2da5e843d558fcfd644d25ad7f852d364",
+      "firstJobStartedAt": "2026-10-19T04:48:09.000Z",
+      "lastJobCompletedAt": "2026-10-19T05:01:18.000Z",
+      "wallSeconds": 789,
+      "runnerSeconds": 1520,
+      "jobs": [
+        {
+          "jobId": 117894621897,
+          "name": "admission",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:48:09Z",
+          "completedAt": "2026-10-19T04:48:16Z",
+          "seconds": 7,
+          "steps": []
+        },
+        {
+          "jobId": 117894664109,
+          "name": "build (macos-latest, aarch64-apple-darwin, macos, src-tauri/target/aarch64-apple-darwin/release/b...",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:48:24Z",
+          "completedAt": "2026-10-19T04:53:54Z",
+          "seconds": 330,
+          "steps": [
+            {
+              "name": "Build signed candidate",
+              "seconds": 291
+            }
+          ]
+        },
+        {
+          "jobId": 117894664131,
+          "name": "build (windows-2022, windows, src-tauri/target/release/bundle/nsis/*.exe\nsrc-tauri/target/release...",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:48:19Z",
+          "completedAt": "2026-10-19T04:58:09Z",
+          "seconds": 590,
+          "steps": [
+            {
+              "name": "Cache Rust",
+              "seconds": 23
+            },
+            {
+              "name": "Install frontend dependencies",
+              "seconds": 16
+            },
+            {
+              "name": "Build signed candidate",
+              "seconds": 509
+            }
+          ]
+        },
+        {
+          "jobId": 117894664161,
+          "name": "build (ubuntu-22.04, linux, src-tauri/target/release/bundle/appimage/*.AppImage\nsrc-tauri/target/...",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:48:19Z",
+          "completedAt": "2026-10-19T04:55:09Z",
+          "seconds": 410,
+          "steps": [
+            {
+              "name": "Install Linux dependencies",
+              "seconds": 32
+            },
+            {
+              "name": "Build signed candidate",
+              "seconds": 331
+            }
+          ]
+        },
+        {
+          "jobId": 117897112978,
+          "name": "preflight",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:58:12Z",
+          "completedAt": "2026-10-19T05:00:36Z",
+          "seconds": 144,
+          "steps": [
+            {
+              "name": "Wait for this exact main SHA ordinary CI to finish",
+              "seconds": 125
+            }
+          ]
+        },
+        {
+          "jobId": 117897729202,
+          "name": "release",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T05:00:39Z",
+          "completedAt": "2026-10-19T05:01:18Z",
+          "seconds": 39,
+          "steps": []
+        }
+      ]
+    },
+    {
+      "variant": "release-failed",
+      "runId": "39200098954",
+      "runAttempt": 1,
+      "sourceSha": "37fef8b730660c42f0967fb3e0e0b93809174dd5",
+      "url": "https://github.com/shawnwu2022/cc-desk/actions/runs/39200098954/attempts/1",
+      "metadataSha256": "951e082e2946bc88d5ae5ac2a8755f3968a023d342545f96268152f49167d4be",
+      "firstJobStartedAt": "2026-10-19T04:33:53.000Z",
+      "lastJobCompletedAt": "2026-10-19T04:46:54.000Z",
+      "wallSeconds": 781,
+      "runnerSeconds": 1625,
+      "jobs": [
+        {
+          "jobId": 117891091723,
+          "name": "admission",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:33:53Z",
+          "completedAt": "2026-10-19T04:33:59Z",
+          "seconds": 6
+        },
+        {
+          "jobId": 117891125033,
+          "name": "build (windows-2022, windows, src-tauri/target/release/bundle/nsis/*.exe\nsrc-tauri/target/release...",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:34:02Z",
+          "completedAt": "2026-10-19T04:43:58Z",
+          "seconds": 596
+        },
+        {
+          "jobId": 117891125053,
+          "name": "build (ubuntu-22.04, linux, src-tauri/target/release/bundle/appimage/*.AppImage\nsrc-tauri/target/...",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:34:02Z",
+          "completedAt": "2026-10-19T04:40:44Z",
+          "seconds": 402
+        },
+        {
+          "jobId": 117891125058,
+          "name": "build (macos-latest, aarch64-apple-darwin, macos, src-tauri/target/aarch64-apple-darwin/release/b...",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:34:06Z",
+          "completedAt": "2026-10-19T04:41:34Z",
+          "seconds": 448
+        },
+        {
+          "jobId": 117893600413,
+          "name": "preflight",
+          "conclusion": "failure",
+          "startedAt": "2026-10-19T04:44:01Z",
+          "completedAt": "2026-10-19T04:46:54Z",
+          "seconds": 173
+        },
+        {
+          "jobId": 117894328689,
+          "name": "release",
+          "conclusion": "skipped",
+          "startedAt": "2026-10-19T04:46:54Z",
+          "completedAt": "2026-10-19T04:46:54Z",
+          "seconds": 0
+        }
+      ]
+    },
+    {
+      "variant": "conpty",
+      "runId": "39197993029",
+      "runAttempt": 1,
+      "sourceSha": "7d5cfdf05ea220e1bd2abc891b52bceba908f1b5",
+      "url": "https://github.com/shawnwu2022/cc-desk/actions/runs/39197993029/attempts/1",
+      "metadataSha256": "04f3fea37881a699312d6d5bccff933b0927e0367c1a2de72544767a76f45b2f",
+      "firstJobStartedAt": "2026-10-19T04:09:09.000Z",
+      "lastJobCompletedAt": "2026-10-19T04:30:41.000Z",
+      "wallSeconds": 1292,
+      "runnerSeconds": 1310,
+      "jobs": [
+        {
+          "jobId": 117884916308,
+          "name": "formatting",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:09:09Z",
+          "completedAt": "2026-10-19T04:09:27Z",
+          "seconds": 18,
+          "steps": []
+        },
+        {
+          "jobId": 117884916536,
+          "name": "installer",
+          "conclusion": "success",
+          "startedAt": "2026-10-19T04:09:09Z",
+          "completedAt": "2026-10-19T04:30:41Z",
+          "seconds": 1292,
+          "steps": [
+            {
+              "name": "Run actions/setup-node@v5",
+              "seconds": 16
+            },
+            {
+              "name": "Run dtolnay/rust-toolchain@1.98.1",
+              "seconds": 15
+            },
+            {
+              "name": "Run Swatinem/rust-cache@v2",
+              "seconds": 16
+            },
+            {
+              "name": "Install locked frontend dependencies",
+              "seconds": 16
+            },
+            {
+              "name": "Type check frontend",
+              "seconds": 18
+            },
+            {
+              "name": "Run frontend and adversarial tests",
+              "seconds": 160
+            },
+            {
+              "name": "Windows runtime guard tests",
+              "seconds": 268
+            },
+            {
+              "name": "Strict Rust lint",
+              "seconds": 150
+            },
+            {
+              "name": "Build ordinary Windows installer (test-only, no updater publication)",
+              "seconds": 602
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

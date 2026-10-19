@@ -1,0 +1,81 @@
+name: Preserve immutable CI evidence
+description: Reconcile an unknown upload acknowledgement without replacing evidence or mixing attempts
+inputs:
+  name:
+    description: Exact source/run/attempt-bound artifact name
+    required: true
+  path:
+    description: Single complete evidence directory (no glob)
+    required: true
+  retention-days:
+    description: Original artifact retention
+    required: true
+  compression-level:
+    description: Original compression level
+    default: '6'
+runs:
+  using: composite
+  steps:
+    - name: Upload original immutable evidence
+      id: original
+      if: ${{ always() }}
+      continue-on-error: true
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.name }}
+        path: ${{ inputs.path }}
+        retention-days: ${{ inputs.retention-days }}
+        compression-level: ${{ inputs.compression-level }}
+        if-no-files-found: error
+        overwrite: false
+
+    # 未知回执先读回；只比较现存字节，不重新执行测试或改变原失败状态。
+    - name: Read back after an unknown acknowledgement
+      id: readback
+      if: ${{ always() && !cancelled() && steps.original.outcome == 'failure' }}
+      continue-on-error: true
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ inputs.name }}
+        path: ${{ runner.temp }}/ccdesk-evidence-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+    - name: Require byte-exact readback
+      id: reconcile
+      if: ${{ always() && !cancelled() && steps.readback.outcome == 'success' }}
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        EVIDENCE_ROOT: ${{ inputs.path }}
+        EVIDENCE_COPY: ${{ runner.temp }}/ccdesk-evidence-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+        EVIDENCE_ACTION: ${{ github.action_path }}
+      run: node "$EVIDENCE_ACTION/verify.mjs"
+
+    # 未能读回时只再上传一次；相同名称冲突会失败，绝不 overwrite/delete。
+    - name: Retry once without replacing any artifact
+      id: retry
+      if: ${{ always() && !cancelled() && steps.readback.outcome == 'failure' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.name }}
+        path: ${{ inputs.path }}
+        retention-days: ${{ inputs.retention-days }}
+        compression-level: ${{ inputs.compression-level }}
+        if-no-files-found: error
+        overwrite: false
+
+    - name: Require a confirmed immutable upload or exact readback
+      if: ${{ always() }}
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        ORIGINAL_RESULT: ${{ steps.original.outcome }}
+        READBACK_RESULT: ${{ steps.readback.outcome }}
+        RECONCILE_RESULT: ${{ steps.reconcile.outcome }}
+        RETRY_RESULT: ${{ steps.retry.outcome }}
+      run: |
+        node --input-type=module - <<'NODE'
+        const { ORIGINAL_RESULT: original, READBACK_RESULT: readback, RECONCILE_RESULT: reconcile, RETRY_RESULT: retry } = process.env
+        if (!(original === 'success' || retry === 'success' || (readback === 'success' && reconcile === 'success'))) {
+          throw new Error('CI evidence upload remains unconfirmed; coverage cannot pass')
+        }
+        NODE

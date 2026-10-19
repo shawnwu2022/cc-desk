@@ -1,5 +1,193 @@
 # CI runtime work
 
+## Post-0.23.1 CI efficiency batch (2026-10-19, local patch)
+
+Baseline source is main `37fef8b730660c42f0967fb3e0e0b93809174dd5`.
+Public v0.23.1 was independently observed at `2026-10-19T05:01:09Z`, with
+nine assets. No remote write had occurred at the initial local-review checkpoint.
+The user subsequently authorized commit/push, a Draft PR and exact-source hosted
+validation; merge and release remain outside this task. The original
+checkout remains untouched; the patch is on `perf/ci-efficiency-oct19`
+in a separate checkout under the ignored `.cache/ci-efficiency-oct19` directory.
+Managed worktree creation was unavailable for this task and writing the original
+Git metadata was blocked, so isolation uses a local shared-object clone.
+
+Read-only GitHub job/step metadata, immutable job IDs, exact run/attempt and
+source identities are retained in [the baseline ledger](ci-efficiency-2026-10-19.json).
+The intervals below span the first job start to last job completion, excluding
+initial queue time. Runner minutes sum job durations, not billable rounding.
+These distinct attempts and sources are separate observations, not a controlled
+before/after speed comparison.
+
+| Workflow/run/attempt | Job span | Runner minutes | Outcome |
+| --- | ---: | ---: | --- |
+| PR CI `39197993040/1`, source `7d5cfdf` | 12:40 | 89.40 | Shard 5 failed; aggregate failed |
+| Same PR CI `39197993040/2` | 10:13 | 94.82 | All 23 jobs passed; all jobs rerun |
+| Main CI `39200098896/1` | 12:46 | 100.00 | Shard 1 artifact upload failed; aggregate failed |
+| Same main CI `39200098896/2` | 12:22 | 94.05 | All 23 jobs passed; all jobs rerun |
+| Failed Release `39200098954/1` | 13:01 | 27.08 | Three signed builds passed; preflight failed |
+| Release `39201292937/1` | 13:09 | 25.33 | All six jobs passed |
+| Windows package `39197993029/1`, source `7d5cfdf` | 21:32 | 21.83 | Both original jobs passed |
+
+The main attempt-2 producer took 252 seconds, the slowest shard 469 seconds
+(439.263 seconds in the library harness), frontend 142 seconds, ordinary
+roundtrip release exclusion 381 seconds and debug scenarios 356 seconds.
+The **7:49** metric is that single shard job; **12:22** is the entire job span.
+The latter consists of one second before producer start, 252 seconds of producer,
+four seconds to shard 6 start, 469 seconds of that shard, two seconds to aggregate
+start and fourteen seconds of aggregation. These are not two shard measurements.
+Shard 6's source-bound job log reports plan hash
+`e7f16f11ca6612c5e6b4c94361c7ed9efda186a0358c49f03d0ae100316fa549`;
+RestorePresentImage was the last pending original name, but its output-observation
+timestamp is **not** an isolated test duration. Most shards started 3–4 seconds
+after the producer; changing matrix order cannot remove this tail.
+The successful Release's Windows/macOS/Linux builds took 590/330/410 seconds;
+Windows signed compilation accounted for 509 seconds, with no profile changes
+adopted here.
+
+The failed main attempt's actual shard-1 job log (`117892196441`) reports a
+completed receipt, exit zero, 92 passed and two original ignores across its four
+harnesses. All five `CreateArtifact` attempts then timed out. This is a transport
+failure, **not** a verified coverage pass: the artifact bytes were not recovered.
+No ignore, test assertion, required check or timeout was changed to turn it green.
+
+### Implemented graph and dependency changes
+
+- Windows package verification and actual installer construction now start in
+  independent **Windows** jobs. Every original full frontend/adversarial test,
+  runtime guard, strict all-target Clippy, release-policy assertion, NSIS build,
+  install/reinstall/relocation and missing/corrupt runtime probe remains.
+  The original `installer` check name is a mandatory final gate over formatting,
+  validation and package jobs. It rejects failure, cancellation, skipped or missing
+  results before downloading the exact same-SHA/run/attempt candidate and audit
+  report. It then rechecks manifest identity and installer SHA-256 before uploading
+  the original verified-package name. Intermediate candidates clearly remain
+  test-only and pending full validation; no publication permissions were added.
+  Debug validation has a separate dependency cache namespace; package compilation
+  keeps the original no-LTO cache/profile. Both exclude workspace crates.
+- Release admission reuses the existing `ciWaitState` rule for a single cheap
+  exact-source CI read. Already failed/cancelled CI prevents redundant new signed
+  builds; pending/missing CI still permits parallel builds. API errors reject.
+  This does **not** prevent a CI failure that appears after admission, recover
+  failed uploads, or reuse old signed builds. Full post-build preflight, its
+  120-minute wait, fresh coverage/run/attempt checks and signatures are unchanged.
+- Ordinary CI's producer/static setup now caches locked npm download dependencies,
+  as the frontend and packaging jobs already do. Both still execute `npm ci`,
+  rebuild the metadata helper, and compile/check their original source. No
+  executable, test result, coverage or source-bound receipt enters this npm cache.
+- The three authoritative ordinary-CI uploads (bundle, shard evidence and final
+  coverage) use a bounded immutable-upload composite. A failed upload acknowledgement
+  first triggers a read of the **same exact artifact name in the current run**.
+  Only equal file inventory, sizes and streaming SHA-256 digests confirm a completed
+  unknown upload. An unreadable/missing artifact permits one more upload using the
+  original name, with `overwrite: false`. Different readback bytes fail without
+  retrying or replacing anything. Unconfirmed transfer, cancellation and any original
+  test failure still fail the workflow; this does not certify coverage by itself.
+  Original upload is still attempted after failure/cancellation, as before. Recovery
+  does not run on cancellation. The workflow's outer upload step has a five-minute
+  bound; the original 25-minute shared execution budget and 30-minute shard job
+  remain. No artifact, permission, credential, assertion or ignored set is deleted
+  or weakened. Both local action files enter the exact plan content hashes.
+
+For the measured package job, the moved verification steps sum to **599 seconds**;
+all retained package/setup/post steps sum to **691 seconds**. Ideal overlap of
+the original work would change 1,292 seconds to roughly 691 seconds, before the
+second runner's setup, new cold cache, scheduling and final transfer/gate costs.
+That is a graph estimate (~11.5 minutes plus overhead), **not a measured saving**.
+Extra checkout/toolchain/npm preparation and artifact transfer may increase total
+runner consumption. Ordinary CI npm caching also has no measured net hosted gain.
+The ten-minute objective remains unmet by evidence in this batch.
+
+### Tail placement investigation and independent review
+
+All sixteen authenticated decoded main-attempt-2 job logs were read and reconciled
+against the same SHA/run/attempt/plan hash. Their selected library inventories are
+retained in [the advisory observation record](ci-shard-observations-2026-10-19.json).
+The **1,587 unique names** reproduce every original partition exactly. This is
+decoded-log evidence, not archive-byte validation or per-name timing calibration.
+
+An isolated-library-partition candidate for the last pending RestorePresentImage
+case preserves all names but moves the remaining workload into fifteen partitions.
+The existing heuristic maximum rises from **1333 to 1414** (about 6.1% in heuristic
+units, not seconds). A local implementation was reviewed and **withdrawn from the
+production partitioner** because the CI-4 net-gain adoption requirement is not met.
+`scripts/windows-rust-shards.mjs` remains byte-identical to the base source.
+The separate comparison tool prepares that candidate without executing it or
+granting coverage authority:
+
+```powershell
+node scripts/windows-rust-shard-placement.mjs docs/ci-shard-observations-2026-10-19.json
+```
+
+It first requires all sixteen baseline partitions to match the default algorithm,
+then reports `advisoryOnly: true`, `durationPrediction: null` and
+`hostedNetGainVerified: false`. It is referenced only by its CLI and tests; no
+workflow, producer, executor or release gate invokes it. No old calibration
+weights are adopted and no unsupported wall-time estimate is emitted.
+
+Independent read-only review found no blocker in the Windows package split,
+early CI rejection or cache changes. Review of the upload composite caught an
+actual schema error: `timeout-minutes` is not supported on internal composite
+steps by the [runner metadata schema](https://github.com/actions/runner/blob/main/src/Runner.Worker/action_yaml.json).
+The key was removed from the action, the total bound moved to the workflow call,
+and a failing-then-passing regression added. Review also identified the unsupported
+production placement adoption above; default placement was restored. Final review
+confirmed both items resolved and found no additional blocker. Hosted composite
+execution and real transport-fault recovery remain unverified.
+
+### Validation and remaining evidence
+
+The two initial ConPTY graph/gate regressions failed on the old workflow; three
+Release admission regressions reproduced known failed/cancelled CI and API errors
+being admitted. After the change the complete ordinary frontend job's Node policy
+command initially passed **250 tests, six existing Windows skips, 256 total**. This includes
+real child-process orchestration, the original signature/coverage/refusal cases,
+and new executable package-gate/identity/attempt/hash/traversal checks.
+The two affected Vitest config suites passed **44 cases**. Typecheck passed.
+Workflow YAML and extracted PowerShell syntax were checked separately.
+Local Node is **24.18.0**; hosted Node 22 validation is still required.
+The final second-batch ordinary Node policy command passed **254 tests with six
+existing Windows skips (260 total)** in 20.11 seconds. Added cases execute real
+filesystem/CLI byte identity, CRLF/binary/equal-length drift, extra/missing/linked
+files, privacy and recovery-result handling, plus the offline candidate/default
+layout comparison. No real GitHub write or platform installation ran locally.
+
+Dependency installation initially hit a missing offline npm-cache entry; a normal
+`npm ci` with a writable task-local cache succeeded (293 packages, nine seconds).
+Vitest initially failed before discovery because esbuild could not read ancestors
+of the temporary C: checkout. Moving the isolated checkout into the ignored E:
+workspace cache resolved that startup limitation; it was not an application test
+failure. No ACL, token, installed application or real session state was changed.
+
+The old `perf/ci-duration-balanced-p1` branch still has unique calibration/weight
+commits `189650d` and `5656959`. No weights or calibration workflow were copied.
+Direct artifact ZIP reads returned HTTP 401; the connected artifact tool returned
+a file reference whose local HTTPS transfer failed. API digests and decoded job
+logs alone do not verify archive bytes, so historical per-name calibration remains
+unverified here. Same-attempt shard/bundle/coverage validation is unchanged;
+failed-only cross-attempt reuse remains deliberately unimplemented.
+
+Minimum hosted follow-up, owned by the parent after review and authorization:
+
+1. Run one exact-source ordinary PR CI and Windows package workflow on existing
+   runners/Node 22; require all sixteen shards, unchanged full inventory/ignores,
+   existing aggregates and original install probes. Compare against this ledger's
+   full wall spans and runner totals, separating cold/warm caches. Record the
+   package candidate/download/final hash checks and composite action loading.
+2. In a disposable current-run artifact test, exercise primary success, a completed
+   upload with lost acknowledgement, no artifact plus one retry, different readback
+   bytes, original test failure and cancellation. Confirm immutable names/IDs and
+   no overwrite/delete. Local mocked statuses cannot establish these service facts.
+3. Before adopting any tail placement, obtain archive bytes and source-bound exact
+   calibration, then run a comparable candidate/control using the same test inputs,
+   toolchain, runner class and complete gates. A pending-only log is not a duration.
+
+Next evidence must compare matching inventory/toolchain/runner/cache conditions.
+Retain first-start-to-final-gate time, queueing, actual fresh/rebuilt compiler
+metrics, transfer time and runner totals. Signed Release timing needs a separately
+authorized future release; local scripts do not certify real CLI, WebView2,
+installed-platform acceptance, D20 or new signed artifacts.
+
 ## PR62 projection and optional-observer regressions (2026-10-19, local)
 
 The first strengthened unchanged-history case reproduced two project catalog
