@@ -27,6 +27,11 @@ impl ProjectionService {
     ) -> Result<crate::cli::native_rename::RenameReceipt, SafeError> {
         self.launch.registry().check_caller(caller)?;
         request.validate()?;
+        // opencode 无 rename 动词；快捷拒绝省一次 registry 往返。
+        // 权威门禁在 authorize_rename 的 grant.cli 上（对抗修订 #7）。
+        if request.source.cli == crate::cli::types::CliKind::Opencode {
+            return Err(error("NATIVE_RENAME_UNSUPPORTED"));
+        }
         self.rename_operations
             .release_revoked(|owner| self.launch.registry().check_caller(owner).is_ok())?;
         if let Some(result) = self.rename_operations.begin(caller, &request)? {

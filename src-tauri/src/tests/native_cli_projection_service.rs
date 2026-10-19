@@ -514,3 +514,39 @@ fn D12_Production_RunSnapshotSurvivesProfileDeleteButNotDocumentRevoke_006() {
         r.process.pty.wait().unwrap();
     }
 }
+
+// opencode 无 rename 动词：必须在 scope 准入与任何 spawn 之前拒绝（spec §2）。
+// scope_id 故意编造：拿到 NATIVE_RENAME_UNSUPPORTED 而非 SCOPE_UNKNOWN，
+// 证明拒绝发生在 authorize_rename 之前，而非准入失败的附带结果。
+#[test]
+#[allow(non_snake_case)]
+fn Opencode_RenameRejectedBeforeScopeAdmission_01() {
+    use crate::cli::native_projection::wire::{SourceBasis, SourceRef, ScopeTarget};
+    use crate::cli::types::{CliKind, WireU64};
+    let f = Fixture::new();
+    let source = SourceRef {
+        scope_id: "fixture-scope".into(),
+        instance_id: "fixture-instance".into(),
+        cli: CliKind::Opencode,
+        source_root_key: "fixture-root-key".into(),
+        identity_epoch: WireU64::parse("1").unwrap(),
+        profile_id: "fixture-profile".into(),
+        profile_revision: WireU64::parse("1").unwrap(),
+        target: ScopeTarget::Profile {
+            profile_id: "fixture-profile".into(),
+            expected_profile_revision: WireU64::parse("1").unwrap(),
+            project_ids: vec![],
+        },
+        basis: SourceBasis::ConfiguredProfile,
+    };
+    let request = crate::cli::native_rename::RenameRequest {
+        operation_id: "opencode-rename".into(),
+        source,
+        session_key: "fixture-key".into(),
+        title: "fixture-title".into(),
+    };
+    assert_eq!(
+        f.service.rename(&f.caller, request).err().unwrap().code,
+        "NATIVE_RENAME_UNSUPPORTED"
+    );
+}
