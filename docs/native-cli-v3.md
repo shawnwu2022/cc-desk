@@ -4,7 +4,9 @@
 
 ## Product boundary
 
-CC Desk is a desktop workspace for **Claude Code and Codex CLI**. The native path runs the real CLI process in an owned PTY and keeps the CLI responsible for its own interaction model, commands, permissions, authentication, MCP/runtime behavior, skills/agents/plugins, editors, and future CLI features.
+CC Desk is a desktop workspace for **Claude Code, Codex CLI and opencode**. The native path runs the real CLI process in an owned PTY and keeps the CLI responsible for its own interaction model, commands, permissions, authentication, MCP/runtime behavior, skills/agents/plugins, editors, and future CLI features.
+
+opencode's history is not per-project files but a single SQLite store (`<XDG_DATA_HOME|~/.local/share>/opencode/opencode.db`). Its projection runs through a dedicated read-only reader (`cli/native_projection/opencode_db.rs`), not the file-walking catalog path; attribution matches `project.worktree` (named projects) or `session.directory` (the drifting `global` bucket) by normalized spelling, and sessions with a non-null `parent_id` (subagents) are excluded. The CLI has no picker/rename/archive verbs, so those capabilities are explicitly unsupported (`UNSUPPORTED_ACTION` / `NATIVE_RENAME_UNSUPPORTED`) and never silently degraded. Known inherited defect: `session.directory` is never updated when a project directory is renamed (upstream anomalyco/opencode#23248, verified), so sessions recorded under the old path stay invisible after a rename; Desk neither moves nor guesses. Resume (`-s <id>`) ignores the launch cwd and re-enters the session's recorded directory, so `effective_cwd` stays Unknown. Layer C (real logged-in opencode four-cell: create/resume/stop/restart-continue) remains BLOCKED like the other CLIs.
 
 CC Desk adds the host capabilities that a normal terminal does not provide well:
 
