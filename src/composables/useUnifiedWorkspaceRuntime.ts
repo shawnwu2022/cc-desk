@@ -26,6 +26,12 @@ import { createWorkspaceSourceWarnings, workspaceWarningKey, type WorkspaceHisto
 import type { OpenTerminalSession, UnifiedTerminalHostPort } from '@/terminal/unifiedTerminalHost'
 import type { UnifiedCliKind, UnifiedSession } from '@/types/unifiedSession'
 
+/** 历史读取失败的警告源按发起读取的 CLI 归属，不能把非 Claude 失败一律归给 Codex。 */
+export const historyWarningSource = (cli: UnifiedCliKind) =>
+  cli === 'claude' ? 'claude-history' as const
+    : cli === 'codex' ? 'codex-history' as const
+      : 'opencode-history' as const
+
 /** Normal App composition root. Read-only bootstrap is independent per source;
  * only explicitly admitted operations can enter the existing runtime owners. */
 export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | null>, enabled = true) {
@@ -104,7 +110,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   const historyReadWarnings = computed(() => {
     const warnings = createWorkspaceSourceWarnings()
     for (const entry of currentHistoryEntries.value) for (const code of entry.readFailures ?? []) {
-      warnings.add(entry.context.cli === 'claude' ? 'claude-history' : 'codex-history', { code, stage: 'read-source-enumeration' })
+      warnings.add(historyWarningSource(entry.context.cli), { code, stage: 'read-source-enumeration' })
     }
     return warnings.items
   })
@@ -122,7 +128,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   const sourceDiagnostics = computed(() => {
     const warnings = createWorkspaceSourceWarnings(sourceWarnings.value, sourceWarningsTruncated.value)
     for (const entry of relevantHistoryEntries.value) if (!entry.loading && entry.error) {
-      warnings.add(entry.context.cli === 'claude' ? 'claude-history' : 'codex-history', { code: entry.error, stage: entry.diagnosticStage })
+      warnings.add(historyWarningSource(entry.context.cli), { code: entry.error, stage: entry.diagnosticStage })
     }
     return { warnings: warnings.items, truncated: warnings.truncated }
   })
@@ -131,7 +137,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   const sourceIssuesAvailable = computed(() => sourceDiagnosticsWarnings.value.length > 0 || historyMetadataPartial.value)
   const allHistoryIssues = computed<WorkspaceHistoryIssue[]>(() => relevantHistoryEntries.value.flatMap(entry => {
     if (entry.loading) return []
-    const source = entry.context.cli === 'claude' ? 'claude-history' as const : 'codex-history' as const
+    const source = historyWarningSource(entry.context.cli)
     const configurationName = profiles.profile(entry.context.profileId)?.name ?? ''
     const stage = entry.error ? entry.diagnosticStage : 'read-source-enumeration' as const
     const issue = (code: string, session?: NativeHistoryEntry['sessions'][number]): WorkspaceHistoryIssue => ({
@@ -154,12 +160,12 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     return issue && entry ? { issue, entry } : undefined
   }
   function reconcileHistoryWarningSnapshot() {
-    const isHistory = (source: WorkspaceWarningSource) => source === 'claude-history' || source === 'codex-history'
+    const isHistory = (source: WorkspaceWarningSource) => source === 'claude-history' || source === 'codex-history' || source === 'opencode-history'
     const warnings = createWorkspaceSourceWarnings(sourceWarnings.value.filter(row => !isHistory(row.source)), sourceWarningsTruncated.value)
     const owners: Omit<WorkspaceSourceConfiguration, 'name'>[] = []
     const identities = new Map<string, Set<string>>()
     for (const entry of relevantHistoryEntries.value) if (entry.error) {
-      const warning = warnings.add(entry.context.cli === 'claude' ? 'claude-history' : 'codex-history', { code: entry.error, stage: entry.diagnosticStage })
+      const warning = warnings.add(historyWarningSource(entry.context.cli), { code: entry.error, stage: entry.diagnosticStage })
       const key = workspaceWarningKey(warning)
       const set = identities.get(key) ?? new Set<string>()
       set.add(JSON.stringify([key, entry.context.profileId, entry.context.profileRevision, entry.sourceRootKey ?? null]))
@@ -428,7 +434,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     const configurationOwners = new Map<string, Omit<WorkspaceSourceConfiguration, 'name'>>()
     const historyWarningIdentities = new Map<string, Set<string>>()
     const addHistoryWarning = (context: { cli: UnifiedCliKind; profileId: string; profileRevision: string; sourceRootKey?: string }, failure: unknown) => {
-      const warning = warnings.add(context.cli === 'claude' ? 'claude-history' : 'codex-history', failure)
+      const warning = warnings.add(historyWarningSource(context.cli), failure)
       const warningKey = workspaceWarningKey(warning)
       const identities = historyWarningIdentities.get(warningKey) ?? new Set<string>()
       identities.add(JSON.stringify([warningKey, context.profileId, context.profileRevision, context.sourceRootKey ?? null]))

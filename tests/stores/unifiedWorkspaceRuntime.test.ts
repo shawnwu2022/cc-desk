@@ -8,7 +8,7 @@ import { createI18n } from 'vue-i18n'
 import en from '@/i18n/locales/en'
 import zh from '@/i18n/locales/zh'
 import LaunchConfigurationEditor from '@/components/settings/LaunchConfigurationEditor.vue'
-import { useUnifiedWorkspaceRuntime } from '@/composables/useUnifiedWorkspaceRuntime'
+import { useUnifiedWorkspaceRuntime, historyWarningSource } from '@/composables/useUnifiedWorkspaceRuntime'
 import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
 import { useNativeTabsStore } from '@/stores/nativeTabs'
 import { useNativeHistoryStore } from '@/stores/nativeHistory'
@@ -1754,4 +1754,12 @@ it('Warnings_SourceEntryFollowsPanelTitle_069', async () => {
   // 入口是通往诊断抽屉的唯一路径，必须仍能打开抽屉。
   await entry.trigger('click'); await flushPromises()
   expect(document.querySelector('[data-history-source-dialog]')).not.toBeNull()
+})
+
+describe('history warning source mapping', () => {
+  it('Runtime_OpencodeHistoryWarningSource_01', () => {
+    expect(historyWarningSource('claude')).toBe('claude-history')
+    expect(historyWarningSource('codex')).toBe('codex-history')
+    expect(historyWarningSource('opencode')).toBe('opencode-history')
+  })
 })

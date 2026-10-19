@@ -305,6 +305,7 @@ export default {
   sourceWarningLegacyHistory: 'Claude Code 兼容历史',
   sourceWarningClaudeHistory: 'Claude Code 历史',
   sourceWarningCodexHistory: 'Codex CLI 历史',
+  sourceWarningOpencodeHistory: 'opencode 历史',
   sourceWarningCatalog: '会话列表',
   sourceWarningMore: '更多来源错误未列出，可刷新后重新检查。',
   workspaceRuntimeActionFailed: '操作未完成，请先检查会话状态再重试。',

@@ -305,6 +305,7 @@ export default {
   sourceWarningLegacyHistory: 'Claude Code compatibility history',
   sourceWarningClaudeHistory: 'Claude Code history',
   sourceWarningCodexHistory: 'Codex CLI history',
+  sourceWarningOpencodeHistory: 'opencode history',
   sourceWarningCatalog: 'Session list',
   sourceWarningMore: 'More source errors were omitted. Refresh to check again.',
   workspaceRuntimeActionFailed: 'The action could not be completed. Check the session state before trying again.',

@@ -8,6 +8,7 @@ export const workspaceSourceLabels = {
   'legacy-history': 'sourceWarningLegacyHistory',
   'claude-history': 'sourceWarningClaudeHistory',
   'codex-history': 'sourceWarningCodexHistory',
+  'opencode-history': 'sourceWarningOpencodeHistory',
   catalog: 'sourceWarningCatalog',
 } as const
 export type WorkspaceWarningSource = keyof typeof workspaceSourceLabels
