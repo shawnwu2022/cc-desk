@@ -5,7 +5,7 @@ import { parseU64 } from '@/utils/nativeIdentity'
 export interface ProgramCandidate { programPath: string; launcher: ProfileLauncher }
 export interface ProgramDiscovery {
   profileId: string; profileRevision: string; workspaceRevision: string; projectId: string
-  cli: 'claude' | 'codex'; candidates: ProgramCandidate[]
+  cli: 'claude' | 'codex' | 'opencode'; candidates: ProgramCandidate[]
 }
 
 function invalid(): never { throw new Error('DISCOVERY_UNAVAILABLE') }
@@ -27,7 +27,7 @@ export async function cliDiscoverPrograms(profileId: string, expectedRevision: s
   revision(expectedRevision)
   const value = record(await invoke('cli_discover_programs', { request: { profileId, expectedRevision, projectId } }))
   if (value.profileId !== profileId || value.profileRevision !== expectedRevision || value.projectId !== projectId
-    || (value.cli !== 'claude' && value.cli !== 'codex') || !Array.isArray(value.candidates) || value.candidates.length > 32) return invalid()
+    || (value.cli !== 'claude' && value.cli !== 'codex' && value.cli !== 'opencode') || !Array.isArray(value.candidates) || value.candidates.length > 32) return invalid()
   const candidates = value.candidates.map(item => {
     const candidate = record(item), launcher = record(candidate.launcher)
     let selected: ProfileLauncher

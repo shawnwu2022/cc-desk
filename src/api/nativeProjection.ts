@@ -61,9 +61,10 @@ function target(v: unknown): ScopeTarget {
 }
 function source(v: unknown): SourceRef {
   const r = object(v, ['scopeId', 'instanceId', 'cli', 'sourceRootKey', 'identityEpoch', 'profileId', 'profileRevision', 'target', 'basis'])
-  if (r.cli !== 'claude' && r.cli !== 'codex') return invalid()
+  // opencode 由后端 CliKind 序列化引入；TS union 扩散属 Plan B，白名单通过后局部桥接。
+  if (r.cli !== 'claude' && r.cli !== 'codex' && r.cli !== 'opencode') return invalid()
   if (r.basis !== 'configured-profile' && r.basis !== 'launch-environment') return invalid()
-  const s: SourceRef = { scopeId: id(r.scopeId), instanceId: id(r.instanceId), cli: r.cli, sourceRootKey: text(r.sourceRootKey, 4096, false),
+  const s: SourceRef = { scopeId: id(r.scopeId), instanceId: id(r.instanceId), cli: r.cli as SourceRef['cli'], sourceRootKey: text(r.sourceRootKey, 4096, false),
     identityEpoch: u64(r.identityEpoch), profileId: id(r.profileId), profileRevision: u64(r.profileRevision), target: target(r.target), basis: r.basis }
   if (s.identityEpoch === '0') return invalid()
   if (s.target.kind === 'profile' && (s.basis !== 'configured-profile' || s.profileId !== s.target.profileId || s.profileRevision !== s.target.expectedProfileRevision)) return invalid()

@@ -107,7 +107,8 @@ function launcher(value: unknown): ProfileLauncher {
 
 function profile(value: unknown): CliProfile {
   const row = object(value)
-  if (row.cli !== 'claude' && row.cli !== 'codex') return invalid()
+  // opencode 由后端 CliKind 序列化引入；CliKind union 扩散属 Plan B，白名单通过后局部桥接。
+  if (row.cli !== 'claude' && row.cli !== 'codex' && row.cli !== 'opencode') return invalid()
 
   const envRow = object(row.env)
   const env: CliProfile['env'] = {}
@@ -119,7 +120,7 @@ function profile(value: unknown): CliProfile {
   return {
     id: text(row.id),
     revision: u64(row.revision),
-    cli: row.cli,
+    cli: row.cli as CliProfile['cli'],
     name: text(row.name),
     launcher: launcher(row.launcher),
     programPath: override(row.programPath, stringValue),

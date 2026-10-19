@@ -45,7 +45,9 @@ export async function cliGetAvailability(
   })
   if (!isRecord(value) || value.profileId !== profileId
     || value.profileRevision !== expectedRevision || value.certified !== false
-    || (value.cli !== 'claude' && value.cli !== 'codex' && value.cli !== 'shell')
+    // opencode 由后端 CliKind 序列化引入；CliKind union 扩散属 Plan B，白名单通过后局部桥接。
+    // opencode profile 的可用性应可用，不能在此被白名单误判为 INVALID_AVAILABILITY_RESPONSE。
+    || (value.cli !== 'claude' && value.cli !== 'codex' && value.cli !== 'opencode' && value.cli !== 'shell')
     || (value.state !== 'available-unverified' && value.state !== 'unavailable'
       && value.state !== 'configuration-required')
     || (value.hostStatus !== 'not-checked' && value.hostStatus !== 'available'
@@ -61,7 +63,7 @@ export async function cliGetAvailability(
   return {
     profileId,
     profileRevision: expectedRevision,
-    cli: value.cli,
+    cli: value.cli as CliKind,
     state: value.state,
     hostStatus: value.hostStatus,
     certified: false,
