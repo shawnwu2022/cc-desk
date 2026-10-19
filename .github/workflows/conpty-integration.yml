@@ -55,7 +55,85 @@ jobs:
           path: conpty-format.patch
           retention-days: 3
 
-  installer:
+  # 独立 Windows runner 保留完整验证；与 release-profile 安装包编译同时开始。
+  validation:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    env:
+      CARGO_PROFILE_RELEASE_LTO: 'false'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@1.98.1
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: windows-test-validation
+          cache-workspace-crates: false
+          cache-on-failure: true
+
+      - name: Install locked frontend dependencies
+        run: npm ci
+
+      - name: Capture npm advisory report without mutating dependencies
+        shell: bash
+        run: |
+          npm audit --json > npm-audit.json || true
+          node - <<'NODE'
+          const fs = require('node:fs')
+          try {
+            const report = JSON.parse(fs.readFileSync('npm-audit.json', 'utf8'))
+            console.log('NPM_AUDIT ' + JSON.stringify(report.metadata?.vulnerabilities ?? { unavailable: true }))
+          } catch {
+            console.log('NPM_AUDIT unavailable')
+          }
+          NODE
+
+      - name: Prepare pinned session metadata helper
+        run: npm run prepare:session-sdk
+
+      - name: Prepare verified bundled Windows runtime
+        run: node scripts/prepare-conpty.mjs
+
+      - name: Verify bundled runtime generator contracts
+        run: node --test tests/scripts/conptyBundle.node.cjs
+
+      - name: Type check frontend
+        run: npm run typecheck
+
+      - name: Run frontend and adversarial tests
+        run: npm test
+
+      - name: Verify release and package aggregation remain fail-closed
+        run: node --test tests/scripts/nativeReleasePolicy.node.mjs tests/scripts/ciRustWorkflow.node.mjs
+
+      - name: Windows runtime guard tests
+        working-directory: src-tauri
+        run: cargo test --locked --bin cc-desk ConptyRuntime_ -- --nocapture
+
+      - name: Strict Rust lint
+        working-directory: src-tauri
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Verify tracked files unchanged
+        run: git diff --exit-code
+
+      - name: Preserve same-attempt advisory report
+        uses: actions/upload-artifact@v4
+        with:
+          name: conpty-validation-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: npm-audit.json
+          retention-days: 14
+          if-no-files-found: error
+
+  package:
     runs-on: windows-2022
     timeout-minutes: 60
     env:
@@ -81,20 +159,6 @@ jobs:
       - name: Install locked frontend dependencies
         run: npm ci
 
-      - name: Capture npm advisory report without mutating dependencies
-        shell: bash
-        run: |
-          npm audit --json > npm-audit.json || true
-          node - <<'NODE'
-          const fs = require('node:fs')
-          try {
-            const report = JSON.parse(fs.readFileSync('npm-audit.json', 'utf8'))
-            console.log('NPM_AUDIT ' + JSON.stringify(report.metadata?.vulnerabilities ?? { unavailable: true }))
-          } catch {
-            console.log('NPM_AUDIT unavailable')
-          }
-          NODE
-
       - name: Prepare pinned session metadata helper
         working-directory: .
         run: |
@@ -103,26 +167,6 @@ jobs:
 
       - name: Prepare verified bundled Windows runtime
         run: node scripts/prepare-conpty.mjs
-
-      - name: Verify bundled runtime generator contracts
-        run: node --test tests/scripts/conptyBundle.node.cjs
-
-      - name: Type check frontend
-        run: npm run typecheck
-
-      - name: Run frontend and adversarial tests
-        run: npm test
-
-      - name: Verify release remains fail-closed
-        run: node --test tests/scripts/nativeReleasePolicy.node.mjs
-
-      - name: Windows runtime guard tests
-        working-directory: src-tauri
-        run: cargo test --locked --bin cc-desk ConptyRuntime_ -- --nocapture
-
-      - name: Strict Rust lint
-        working-directory: src-tauri
-        run: cargo clippy --locked --all-targets -- -D warnings
 
       - name: Build ordinary Windows installer (test-only, no updater publication)
         shell: pwsh
@@ -174,7 +218,7 @@ jobs:
           Platform: Windows x86_64
           SHA-256: $hash
 
-          Automated package verification performed before artifact upload:
+          Automated package verification required before verified artifact upload:
           - locked dependency install
           - TypeScript typecheck
           - full frontend/adversarial test suite
@@ -192,14 +236,68 @@ jobs:
       - name: Verify tracked files unchanged
         run: git diff --exit-code
 
+      - name: Preserve candidate pending complete parallel validation
+        uses: actions/upload-artifact@v4
+        with:
+          name: conpty-package-candidate-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            test-package/*
+            conpty-install-results.json
+          retention-days: 14
+          if-no-files-found: error
+          compression-level: 0
+
+  # 保留原检查名；失败/取消/跳过不能因另一支构建成功而变成绿色。
+  installer:
+    needs: [formatting, validation, package]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Require all Windows checks before verified package upload
+        env:
+          FORMAT_RESULT: ${{ needs.formatting.result }}
+          VALIDATION_RESULT: ${{ needs.validation.result }}
+          PACKAGE_RESULT: ${{ needs.package.result }}
+        run: |
+          node --input-type=module - <<'NODE'
+          for (const name of ['FORMAT_RESULT', 'VALIDATION_RESULT', 'PACKAGE_RESULT']) {
+            if (process.env[name] !== 'success') throw new Error(`Windows test package: ${name} must be success`)
+          }
+          NODE
+      - uses: actions/download-artifact@v4
+        with:
+          name: conpty-package-candidate-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: verified-package
+      - uses: actions/download-artifact@v4
+        with:
+          name: conpty-validation-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: verified-package
+      - name: Recheck candidate identity and installer bytes
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs'
+          import { createHash } from 'node:crypto'
+          const root = 'verified-package/test-package'
+          const manifest = JSON.parse(fs.readFileSync(`${root}/test-package-manifest.json`, 'utf8').replace(/^\uFEFF/, ''))
+          if (manifest.sourceCommit !== process.env.SOURCE_SHA || manifest.workflowRunId !== process.env.RUN_ID
+            || manifest.workflowRunAttempt !== process.env.RUN_ATTEMPT || manifest.channel !== 'test-only'
+            || manifest.publishable !== false || manifest.updaterPublication !== false
+            || !/^CC-Desk-[\w.-]+-setup\.exe$/.test(manifest.installerFile)) throw new Error('Windows test package: candidate identity mismatch')
+          const bytes = fs.readFileSync(`${root}/${manifest.installerFile}`)
+          if (createHash('sha256').update(bytes).digest('hex') !== manifest.sha256) throw new Error('Windows test package: installer hash mismatch')
+          NODE
       - name: Upload verified Windows test package, never a GitHub release
         uses: actions/upload-artifact@v4
         with:
           name: cc-desk-native-v3-test-${{ github.sha }}
-          path: |
-            test-package/*
-            conpty-install-results.json
-            npm-audit.json
+          path: verified-package/
           retention-days: 14
           if-no-files-found: error
           compression-level: 0

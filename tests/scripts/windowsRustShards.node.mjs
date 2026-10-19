@@ -19,6 +19,25 @@ test('WindowsRustShards_MeasuredPlacement_008: real nested bundle and retained-c
   const shards = partitionNames([custody, bundle, context], 3);
   assert.ok(shards.every(names => names.length === 1));
 });
+
+// 候选只供离线比较；默认布局仍逐项重现原记录，未获净收益证据前不能直接采纳。
+test('WindowsRustShards_TailCandidate_009', async () => {
+  const observation = JSON.parse(fs.readFileSync(new URL('../../docs/ci-shard-observations-2026-10-19.json', import.meta.url), 'utf8'));
+  const names = observation.shards.flatMap(shard => shard.names);
+  const slow = 'version_history::windows::context::bundle_restore::tests::BundleReturn_RestorePresentImage_002';
+  const { compareTailCandidate } = await import('../../scripts/windows-rust-shard-placement.mjs');
+  const { candidate: shards, summary } = compareTailCandidate(observation);
+  assert.deepEqual(shards.find(shard => shard.includes(slow)), [slow]);
+  assert.equal(shards.length, 16);
+  assert.deepEqual(new Set(shards.flat()), new Set(names));
+  assert.equal(shards.flat().length, names.length);
+  assert.equal(summary.advisoryOnly, true);
+  assert.equal(summary.originalMaxHeuristicLoad, 1333);
+  assert.equal(summary.candidateMaxHeuristicLoad, 1414);
+  for (const shard of observation.shards) assert.deepEqual(partitionNames(names, 16)[shard.index], shard.names);
+  const drift = structuredClone(observation); drift.shards[0].names.pop();
+  assert.throws(() => compareTailCandidate(drift), /baseline/);
+});
 function slice(index, names, fail = false) {
   const ignored = names.filter(n => n === 'worker').length;
   const result = { exitCode: fail ? 101 : 0, passed: names.length - ignored - Number(fail), failed: Number(fail), ignored, measured: 0, filteredOut: full.length - names.length };

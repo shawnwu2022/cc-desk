@@ -109,7 +109,7 @@ async function runnerFixture(t, failureName = null, elevated = false) {
   const { createPlan, runShard, aggregateResults, verifyBundle, bundleArtifactName } = await import(moduleUrl);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rust-shard-runner-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const files = ['src-tauri/Cargo.lock', '.github/workflows/ci.yml', 'scripts/windows-rust-tests.ps1', 'scripts/windows-rust-shard-runner.mjs', 'scripts/windows-rust-shards.mjs', 'scripts/windows-native-validation.mjs', 'scripts/windows-native-scope.json', 'scripts/windows-ordinary-preflight.mjs', 'scripts/ci-rust-job-gate.mjs', 'scripts/ci-build-metrics.mjs', 'scripts/prepare-conpty.mjs', 'src-tauri/conpty/manifest.json'];
+  const files = ['src-tauri/Cargo.lock', '.github/workflows/ci.yml', '.github/actions/upload-evidence/action.yml', '.github/actions/upload-evidence/verify.mjs', 'scripts/windows-rust-tests.ps1', 'scripts/windows-rust-shard-runner.mjs', 'scripts/windows-rust-shards.mjs', 'scripts/windows-native-validation.mjs', 'scripts/windows-native-scope.json', 'scripts/windows-ordinary-preflight.mjs', 'scripts/ci-rust-job-gate.mjs', 'scripts/ci-build-metrics.mjs', 'scripts/prepare-conpty.mjs', 'src-tauri/conpty/manifest.json'];
   for (const name of files) {
     fs.mkdirSync(path.dirname(path.join(root, name)), { recursive: true });
     fs.copyFileSync(path.join(repository, name), path.join(root, name));
