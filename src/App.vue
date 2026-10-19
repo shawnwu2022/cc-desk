@@ -296,7 +296,7 @@ onUnmounted(() => {
       @add-project="request({ kind: 'add-project' })" @new-session-request="request({ kind: 'new-session', project: $event })">
       <template #terminal>
         <EmptyState v-if="runtime.fatal?.value" data-workspace-fatal :title="t('workspaceLoadFailed')" :description="t('workspaceLoadFailedHint')" :action-label="t('retry')" @action="request({ kind: 'refresh' })" />
-        <InlineNotice v-for="problem in runtime.cliProblems?.value ?? []" :key="problem.cli" data-cli-banner kind="warning" :message="t('cliFailureBanner', { cli: problem.cli === 'claude' ? 'Claude Code' : 'Codex CLI', reason: t(problem.messageKey) })" :action-label="t('refresh')" @action="request({ kind: 'refresh' })" />
+        <InlineNotice v-for="problem in runtime.cliProblems?.value ?? []" :key="problem.cli" data-cli-banner kind="warning" :message="t('cliFailureBanner', { cli: problem.cli === 'claude' ? 'Claude Code' : problem.cli === 'codex' ? 'Codex CLI' : 'opencode', reason: t(problem.messageKey) })" :action-label="t('refresh')" @action="request({ kind: 'refresh' })" />
         <InlineNotice v-if="sessions.actionFeedback && sessions.actionFeedback.detailCode !== 'LAUNCH_CONFIGURATION_REQUIRED'" data-action-feedback :kind="sessions.actionFeedback.severity" :message="t(sessions.actionFeedback.messageKey)" :action-label="sessions.actionFeedback.retryable ? t('retry') : t('refresh')" @action="runtime.retryAction?.()">
           <ErrorDetails :code="sessions.actionFeedback.detailCode" context="session" />
         </InlineNotice>

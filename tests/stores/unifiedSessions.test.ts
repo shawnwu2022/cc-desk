@@ -1140,6 +1140,30 @@ it('Unified_BothArchivesKeepOwners_030', async () => {
   expect(store.projectGroups[0].sessions.map(row => row.id)).toEqual(['native-history:profile-a'])
 })
 
+// 旧存储值没有 opencode 键：迁移默认启用，既有的 claude/codex 偏好保持不变。
+it('CliSupport_LegacyStorageDefaultsOpencode_01', async () => {
+  localStorage.setItem('cc-desk-cli-support-v1', JSON.stringify({ claude: true, codex: false }))
+  try {
+    const { useCliSupportStore } = await import('@/stores/cliSupport')
+    const store = useCliSupportStore()
+    expect(store.isEnabled('opencode')).toBe(true)
+    expect(store.isEnabled('codex')).toBe(false)
+    expect(store.isEnabled('claude')).toBe(true)
+  } finally {
+    localStorage.removeItem('cc-desk-cli-support-v1')
+  }
+})
+
+// opencode 准备行使用自己的显示名，不能落回 Codex CLI 的兜底分支。
+it('Unified_OpencodePreparingRowTitle_01', async () => {
+  localStorage.removeItem('cc-desk-cli-support-v1')
+  const store = useUnifiedSessionsStore()
+  store.configureAdapters([fakeAdapter('native-cli').adapter])
+  store.configureCreationPreparer(() => new Promise<CreateUnifiedSessionInput>(() => {}))
+  void store.createSession({ cli: 'opencode', projectKey: '/repo', projectPath: '/repo' })
+  expect(store.sessions[0]?.title).toBe('opencode')
+})
+
 // CLI 支持开关关闭的 CLI 不列出历史行；已打开终端是活进程，保留可选中与关闭。
 it('UnifiedSessions_DisabledCliHidesHistoryKeepsOpenTabs_029', async () => {
   localStorage.setItem('cc-desk-cli-support-v1', JSON.stringify({ claude: true, codex: false }))
