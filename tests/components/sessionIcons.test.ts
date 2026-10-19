@@ -264,6 +264,21 @@ describe('SessionIcons', () => {
     expect(body.get('[role="tooltip"]').text()).toBe(label)
   })
 
+  // opencode 无 SVG 资产：OC 字形是常驻显示形态，不是加载失败回退。
+  it('Cli_OpencodeGlyph_032', async () => {
+    const wrapper = mount(CliAppIcon, { attachTo: document.body, props: { cli: 'opencode' } })
+    mounted.push(wrapper)
+    const trigger = wrapper.get('[role="img"]')
+    expect(trigger.attributes('aria-label')).toBe('opencode')
+    expect(trigger.attributes('tabindex')).toBe('0')
+    expect(wrapper.find('img').exists()).toBe(false)
+    expect(trigger.text()).toBe('OC')
+    expect(trigger.get('[aria-hidden="true"]').text()).toBe('OC')
+    ;(trigger.element as HTMLElement).focus()
+    await nextTick()
+    expect(body.get('[role="tooltip"]').text()).toBe('opencode')
+  })
+
   // CLI 变更会清除旧图片失败态，不能把 CC/CX 带到另一种 CLI。
   it('Cli_SwitchClearsFailure_022', async () => {
     const wrapper = mount(CliAppIcon, { props: { cli: 'claude' } })

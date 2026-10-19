@@ -16,6 +16,7 @@ export function fixtureSessions(): UnifiedSession[] {
     ['Retry project preparation', 'codex', 'failed', 'none', 1440],
     ['Archive: keyboard navigation', 'claude', 'stopped', 'none', 2880],
     ['Archive: read-only resources', 'codex', 'stopped', 'none', 5000],
+    ['Probe opencode history', 'opencode', 'stopped', 'none', 8000],
   ].map(([title, cli, processState, attentionState, age], index) => ({
     id: `visual-session-${index}`, adapterSessionId: `visual-tab-${index}`,
     projectKey: projectPaths[index < 4 ? 0 : index === 4 ? 1 : 2].toLowerCase(),
@@ -28,9 +29,9 @@ export function fixtureSessions(): UnifiedSession[] {
     lastActivityAt: FIXTURE_TIME - Number(age) * 60_000, archived: index >= 6, opened: index < 4, preparationState: index === 5 ? 'failed' as const : undefined, resumable: index >= 4,
   }))
 }
-export const fixtureProfiles: CliProfile[] = ['claude', 'codex'].flatMap(cli => [0, 1].map(index => ({
-  id: `visual-${cli}-${index}`, revision: '1', cli: cli as 'claude' | 'codex',
-  name: `${cli === 'claude' ? 'Claude Code' : 'Codex CLI'} · ${index === 0 ? 'Everyday development' : 'Read-only review'}`,
+export const fixtureProfiles: CliProfile[] = ['claude', 'codex', 'opencode'].flatMap(cli => [0, 1].map(index => ({
+  id: `visual-${cli}-${index}`, revision: '1', cli: cli as 'claude' | 'codex' | 'opencode',
+  name: `${cli === 'claude' ? 'Claude Code' : cli === 'codex' ? 'Codex CLI' : 'opencode'} · ${index === 0 ? 'Everyday development' : 'Read-only review'}`,
   launcher: { kind: 'native' }, programPath: { mode: 'inherit' }, defaultArgs: { mode: 'set', value: [] },
   skipPermissions: { mode: 'set', value: false }, observer: { mode: 'inherit' }, env: {},
 })))

@@ -16,7 +16,8 @@ const statusLabel = computed(() => {
   }
   return t(sessionVisualLabelKey(props.state, props.activityState, props.archived))
 })
-const label = computed(() => [props.cli === 'claude' ? 'Claude Code' : 'Codex CLI', statusLabel.value, props.notice && t(props.notice.labelKey), props.notice?.detailLabelKey && t(props.notice.detailLabelKey)].filter(Boolean).join('; '))
+const CLI_NAMES: Record<UnifiedCliKind, string> = { claude: 'Claude Code', codex: 'Codex CLI', opencode: 'opencode' }
+const label = computed(() => [CLI_NAMES[props.cli], statusLabel.value, props.notice && t(props.notice.labelKey), props.notice?.detailLabelKey && t(props.notice.detailLabelKey)].filter(Boolean).join('; '))
 const badge = computed(() => {
   // 关闭仅由应用图标本身的明暗区分；回执仍保留在可访问名称和 Tooltip 中。
   if (props.state === 'closed') return null

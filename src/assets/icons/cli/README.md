@@ -3,7 +3,7 @@
 These bundled assets identify the application behind each session. They are
 third-party brand assets, not CC Desk artwork, and are not relicensed under the
 repository's MIT license. Their use does not imply endorsement or affiliation.
-Both were checked against the official sources on 2026-10-01.
+Both bundled assets were checked against the official sources on 2026-10-01.
 
 ## Claude Code
 
@@ -40,14 +40,25 @@ Both were checked against the official sources on 2026-10-01.
   from public availability; OpenAI retains its rights in the mark. It identifies
   the OpenAI CLI inside CC Desk and is not CC Desk's own branding.
 
+## opencode: OC glyph (interim)
+
+- Owner: opencode (Anomaly). No image asset is bundled for this CLI yet.
+- The current mark is the text glyph “OC” rendered by `CliAppIcon.vue` in the
+  theme's secondary text color; it is CC Desk's own fallback rendering, not a
+  brand asset, and makes no trademark claim.
+- Official brand asset pending: replace this entry with a sourced, licensed
+  official SVG once the user provides the source URL and usage terms.
+
 ## Accessibility and rendering
 
 The shared component keeps the full accessible names “Claude Code” / “Codex
-CLI”, keyboard focus and tooltips. Decorative images have empty alt text so
-screen readers do not announce the application twice. `CC` / `CX` are only
-image-loading-error fallbacks. Codex's monochrome contrast is tested against
-both themes and selected rows; Claude retains the official brand color rather
-than claiming the previous neutral-ink 3:1 guarantee for its logo.
+CLI” / “opencode”, keyboard focus and tooltips. Decorative images have empty
+alt text so screen readers do not announce the application twice. `CC` / `CX` /
+`OC` are the visible short marks; `CC` / `CX` appear only as image-loading-error
+fallbacks, while `OC` is opencode's persistent glyph rather than a load-failure
+fallback. Codex's monochrome contrast is tested against both themes and selected
+rows; Claude retains the official brand color rather than claiming the previous
+neutral-ink 3:1 guarantee for its logo.
 
 Assets are local and contain only static SVG geometry; rendering does not
 request provider sites or execute SVG code.
