@@ -61,6 +61,7 @@ pub(crate) fn locations(cli: CliKind, env: &EnvMap) -> ReadResult<Locations> {
     let (key, default) = match cli {
         CliKind::Claude => ("CLAUDE_CONFIG_DIR", ".claude"),
         CliKind::Codex => ("CODEX_HOME", ".codex"),
+        CliKind::Opencode => return Err("SCOPE_UNKNOWN"),
         CliKind::Shell => return Err("SCOPE_UNKNOWN"),
     };
     let explicit = lookup(env, OsStr::new(key));
