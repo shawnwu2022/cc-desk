@@ -159,3 +159,74 @@ fn ScopeArgs_RejectConflictingFlags_004() {
         assert!(!read_scope_known(CliKind::Codex, &Launcher::Native, args));
     }
 }
+
+// 数据根：XDG_DATA_HOME 优先；否则 HOME/.local/share/opencode（Windows 同规则，已实测）。
+#[test]
+fn Opencode_LocationsResolveXdgDataRoot_01() {
+    let t = tempfile::tempdir().unwrap();
+    let mut env = EnvMap::new();
+    env.insert(home().into(), t.path().into());
+    let base = locations(CliKind::Opencode, &env).unwrap();
+    assert_eq!(
+        base.root,
+        t.path().join(".local").join("share").join("opencode")
+    );
+    assert!(base.user_config.is_none());
+
+    let xdg = t.path().join("xdg");
+    env.insert("XDG_DATA_HOME".into(), xdg.clone().into_os_string());
+    let with_xdg = locations(CliKind::Opencode, &env).unwrap();
+    assert_eq!(with_xdg.root, xdg.join("opencode"));
+    assert!(with_xdg.user_config.is_none());
+}
+
+// 空/非法 XDG 覆盖不得回退默认根（fail-closed，与既有 CODEX_HOME 语义一致）。
+#[test]
+fn Opencode_InvalidXdgOverrideNeverFallsBackToHome_02() {
+    let t = tempfile::tempdir().unwrap();
+    let mut env = EnvMap::new();
+    env.insert(home().into(), t.path().into());
+    for value in ["", "relative", "nul\0root"] {
+        env.insert("XDG_DATA_HOME".into(), value.into());
+        assert!(locations(CliKind::Opencode, &env).is_err());
+    }
+}
+
+// read_scope_known：空参 true（New 场景），任何非空参一律 false。
+// 不给 --auto 开白名单：flag 存在已实测，但"不改 cwd/config root"未证实，
+// 未证实的语义不进白名单（spec §6.1 对抗修订）。用户配了就无历史投影，属有意 fail-closed。
+#[test]
+fn Opencode_ReadScopeKnownMatrix_03() {
+    assert!(read_scope_known(
+        CliKind::Opencode,
+        &Launcher::Native,
+        std::iter::empty::<&str>()
+    ));
+    for args in [
+        ["--auto"].as_slice(),
+        ["--model", "x/y"].as_slice(),
+        ["--mini"].as_slice(),
+    ] {
+        assert!(
+            !read_scope_known(CliKind::Opencode, &Launcher::Native, args),
+            "非空参必须 false：{:?}",
+            args
+        );
+    }
+    for launcher in [
+        Launcher::Shell {
+            program: "bash".into(),
+            dialect: Dialect::Bash,
+        },
+        Launcher::Shim {
+            runner: "pwsh".into(),
+            dialect: Dialect::PowerShell,
+        },
+    ] {
+        assert!(!read_scope_known(
+            CliKind::Opencode,
+            &launcher,
+            std::iter::empty::<&str>()
+        ));
+    }
+}
