@@ -120,7 +120,8 @@ and partial observation remains explicitly incomplete on cold and cached reads.
 Full message/search reads retain the decoded per-file limit. Decoding failures
 observed in corrupt or truncated entries are reported as individual history read
 failures; a partial read does not certify unread frame tails.
-The frontend may retain same-root display rows omitted by a later failed scan.
+The frontend may retain display rows after a whole-source failure or same-root
+rows omitted by a later partial failed scan.
 Those cached rows retain identity/title/time, but an exact `readFailure` must be
 emitted by the current response; an aggregate failure alone cannot identify that
 cached session as a current recovery target, even when the error code matches.

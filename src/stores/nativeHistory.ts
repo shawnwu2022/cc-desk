@@ -45,6 +45,16 @@ export interface NativeHistoryEntry {
   absenceEvidence?: { cli: NativeCliKind; sourceRootKey: string }
 }
 
+function retainedDisplayRows(rows: readonly NativeHistorySession[]): NativeHistorySession[] {
+  return rows.map(row => {
+    if (!row.readFailure) return row
+    const retained = { ...row }
+    // 旧显示行不是本轮精确失败证据，且不能修改上一份可信快照。
+    delete retained.readFailure
+    return retained
+  })
+}
+
 function required(value: string, code: string): string {
   const text = value.trim()
   if (!text || text.includes('\0')) throw new Error(code)
@@ -230,7 +240,7 @@ export function createNativeHistoryReader() {
               for (const { entry } of live()) {
                 entry.error = result.reason ?? 'SOURCE_UNAVAILABLE'
                 entry.diagnosticStage = 'read-source-enumeration'
-                if (!options.retainOnFailure) entry.sessions = []
+                entry.sessions = options.retainOnFailure ? retainedDisplayRows(entry.sessions) : []
               }
               break
             }
@@ -258,12 +268,7 @@ export function createNativeHistoryReader() {
                 // 是正常观察，不构成「行可能缺失」的证据，否则会积累幽灵行。
                 const merged = readFailures.size
                   ? [...item.sessions.values(), ...(item.observedRootKey && item.cached?.sourceRootKey === item.observedRootKey
-                    ? item.cached!.sessions.filter(row => !item.sessions.has(row.sessionKey)).map(row => {
-                      const retained = { ...row }
-                      // 保留显示行不等于本轮确认该文件失败，精确诊断须由当前响应重发。
-                      delete retained.readFailure
-                      return retained
-                    }) : [])]
+                    ? retainedDisplayRows(item.cached!.sessions.filter(row => !item.sessions.has(row.sessionKey))) : [])]
                   : [...item.sessions.values()]
                 // root、来源与行作为同一份不可拆分的显示快照一起提交：先换 root
                 // 再保留旧行会把旧 root 的归档状态重标成新 root。
@@ -297,7 +302,7 @@ export function createNativeHistoryReader() {
           for (const { entry } of alive) {
             entry.error = diagnostic.code
             entry.diagnosticStage = diagnostic.stage
-            if (!options.retainOnFailure) entry.sessions = []
+            entry.sessions = options.retainOnFailure ? retainedDisplayRows(entry.sessions) : []
             entry.loaded = diagnostic.code !== 'SOURCE_BUSY'
           }
           throw diagnostic
