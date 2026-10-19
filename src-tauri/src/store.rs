@@ -1347,7 +1347,7 @@ pub(crate) fn get_session_details_at(
     let mut total_tokens = 0u64;
     let mut total_cost = 0.0;
     let mut created_at: Option<u64> = None;
-    let mut name = "Unnamed session".to_string();
+    let mut title = crate::session_name_index::SessionNameState::default();
 
     for line in content.lines() {
         if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
@@ -1379,18 +1379,11 @@ pub(crate) fn get_session_details_at(
                 total_cost += cost;
             }
 
-            // 名称
-            if msg_type == Some("custom-title") {
-                if let Some(title) = json.get("customTitle").and_then(|v| v.as_str()) {
-                    name = title.to_string();
-                }
-            }
+            title.observe(&json, session_id);
         }
     }
 
-    if name == "Unnamed session" {
-        name = extract_session_name(&session_file);
-    }
+    let name = title.into_name();
 
     let last_active_at = fs::metadata(&session_file)
         .and_then(|m| m.modified())

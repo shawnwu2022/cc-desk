@@ -352,6 +352,7 @@ it('Resume_TargetMissingStaysClosed_018', async () => {
 // 直接恢复失败后的 Retry 重新核实原来源，而不是仅刷新目录；仍只准入一次。
 it('Resume_TargetRetryKeepsExactSource_019', async () => {
   const { useUnifiedSessionsStore } = await import('@/stores/unifiedSessions')
+  const { useNativeHistoryStore } = await import('@/stores/nativeHistory')
   const w = mount(App, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { NativeCliTerminal: NativeHost, SettingsView: true } } }); wrappers.push(w); await flushPromises()
   const catalog = useUnifiedSessionsStore(), row = catalog.sessions[0]
   io.read.mockRejectedValueOnce({ code: 'SOURCE_UNAVAILABLE', message: '/private/secret TOKEN' })
@@ -360,6 +361,10 @@ it('Resume_TargetRetryKeepsExactSource_019', async () => {
   expect(document.body.textContent).not.toContain('/private/secret')
   expect(useNativeTabsStore().tabs.size).toBe(0)
   expect(document.querySelector('[role=dialog]')).toBeNull()
+  await catalog.refresh()
+  expect(catalog.sessions.some(session => session.id === row.id)).toBe(true)
+  // 失败不再清空显示缓存；显式撤销 entry，继续覆盖行消失后的冻结来源重试。
+  useNativeHistoryStore().invalidate(row.nativeOrigin!)
   await catalog.refresh()
   expect(catalog.sessions.some(session => session.id === row.id)).toBe(false)
   const retry = [...document.querySelectorAll<HTMLButtonElement>('[data-action-feedback] button')].find(button => button.textContent === en.retry)!
@@ -376,10 +381,14 @@ it('Resume_TargetRetryKeepsExactSource_019', async () => {
 it.each(['configuration', 'navigation', 'replacement'] as const)('Resume_TargetRetryRechecksAdmission_020_%s', async change => {
   const { useUnifiedSessionsStore } = await import('@/stores/unifiedSessions')
   const { useCliProfilesStore } = await import('@/stores/cliProfiles')
+  const { useNativeHistoryStore } = await import('@/stores/nativeHistory')
   const w = mount(App, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { NativeCliTerminal: NativeHost, SettingsView: true } } }); wrappers.push(w); await flushPromises()
   const catalog = useUnifiedSessionsStore(), shell = useShellStore(), row = catalog.sessions[0]
   io.read.mockRejectedValueOnce({ code: 'SOURCE_UNAVAILABLE' })
   shell.requestWorkspaceAction({ kind: 'primary-action', action: 'resume', sessionId: row.id }); await flushPromises()
+  await catalog.refresh()
+  expect(catalog.sessions.some(session => session.id === row.id)).toBe(true)
+  useNativeHistoryStore().invalidate(row.nativeOrigin!)
   await catalog.refresh()
   expect(catalog.sessions.some(session => session.id === row.id)).toBe(false)
   let finish!: (value: unknown) => void

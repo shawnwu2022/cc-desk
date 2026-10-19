@@ -3716,6 +3716,34 @@ fn GetSessionDetails_LegalUuidStillReads_002() {
     assert_eq!(details.total_cost, Some(0.5));
 }
 
+// 列表、搜索与详情读取同一份 CLI AI 标题，后续手动改名统一覆盖。
+#[test]
+fn SessionTitle_AllReaders_003() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = "3f2b8c64-1a2b-4c3d-9e8f-0a1b2c3d4e5f";
+    let path = dir.path().join(format!("{id}.jsonl"));
+    let prompt = "{\"type\":\"user\",\"message\":{\"content\":\"Find this prompt\"}}\n";
+    let ai =
+        format!("{{\"type\":\"ai-title\",\"sessionId\":\"{id}\",\"aiTitle\":\"CLI title\"}}\n");
+    for (suffix, expected) in [
+        ("", "CLI title"),
+        (
+            "{\"type\":\"custom-title\",\"customTitle\":\"Manual title\"}\n",
+            "Manual title",
+        ),
+    ] {
+        std::fs::write(&path, format!("{prompt}{ai}{suffix}")).unwrap();
+        assert_eq!(extract_session_name(&path), expected);
+        let details = get_session_details_at(&[dir.path().to_path_buf()], id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(details.name, expected);
+        let results =
+            search_session_messages_in_dirs(&[dir.path().to_path_buf()], "/repo", "Find", 10);
+        assert_eq!(results[0].name, expected);
+    }
+}
+
 // ==================== build_project_path_mapping_at / lookup_project_dirs ====================
 
 // 等价 key 全集合并:两个 cwd 大小写/斜杠规范化后相等,一次查找两目录都命中。

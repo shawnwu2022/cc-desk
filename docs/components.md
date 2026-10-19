@@ -448,18 +448,34 @@ Native Claude identity and reply-end receipts queue a 250ms debounced history re
 grouped by profile/revision across affected registered projects, with two readers
 and at most one pending batch while reading. Queued owners are rechecked before
 each group starts; restart, close, configuration change and unmount revoke them.
-Reply acknowledgment/focus/output never request a read. Resumed tabs also use the
+Reply acknowledgment/focus/ordinary output never request a read. Resumed tabs also use the
 latest uniquely matched CLI title, below any explicit Desk display-name override.
 Names saved under the same tab before history association remain visible on that
 tab; exact history names take priority, and tab metadata is not migrated to an
-independently discovered history row. Automatic title refresh shares the existing
+independently discovered history row. Reply-triggered title refresh shares the existing
 1024-event observer budget: exhaustion rejects new receipts, so later automatic
 reply-triggered refreshes stop until a new attempt. Explicit Refresh, project
 queries and closing still read history; no replay protection is relaxed.
 After each reply, up to three title retries run at approximately 15, 30 and 60
-seconds, stopping when the exact source has an AI/custom title or its frozen
+seconds, stopping when the exact source has a changed AI/custom title or its frozen
 attempt, context or latest interaction changes. Titles written after this bounded
 window require a later cue or explicit refresh. Unmount releases pending timers.
+An AI title from an earlier reply does not suppress retries for the current reply.
+Legacy opened Claude tabs also consume the latest unique project/session title,
+provided the PTY proves the runtime's still-valid frozen default root. Authenticated
+session-start, prompt and reply hooks coalesce into project-scoped rereads (250ms,
+at most two projects concurrently); replies allow three retries at 15/30/60 seconds.
+Restart, close, a newer interaction or unmount cancels those retries. Read failures
+retain the last trusted title, and unknown/replaced roots cannot borrow default
+history names. Explicit Desk display-name overrides remain higher priority.
+Native and Legacy Claude terminals also observe OSC title changes, including idle
+`/rename`. A 500ms debounce and a two-second minimum notification interval coalesce
+transient status-title changes; returning to the last settled title does not reread.
+The notification carries no terminal text: it only invalidates the exact existing
+history owner, and the CLI metadata reader remains the title authority. Pending
+notifications are cancelled on parser/run disposal and recheck their frozen owner.
+There is no periodic scan, and raw/Codex Native terminals do not enter this Claude
+observation path.
 Claude still reads its bounded header and optional tail on each observation; there
 is no zero-read warm metadata cache. See the reproducible measurements in
 [history-source-diagnostics.md](history-source-diagnostics.md).
@@ -683,6 +699,11 @@ Local preparation rows project `preparationState`; a positively never-admitted
 failure exposes “Cancel creation” / “取消新建” through `discard-creation`. The store
 rechecks its creation record before discarding. An unknown admission, ordinary
 history record or existing terminal cannot use this path.
+
+For independent new/raw launches, the admitted runtime row replaces its preparation
+row before opening-time metadata finishes saving. The two rows are never published
+together. A late metadata receipt cannot reinsert a runtime row that was closed
+after this handoff; admission still does not imply CLI launch success.
 
 Rename menu entries, row shortcuts and double-click admission require selection.
 The first click captures whether the row was selected and its exact runtime owner;

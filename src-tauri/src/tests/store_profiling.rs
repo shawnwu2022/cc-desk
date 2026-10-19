@@ -145,21 +145,18 @@ pub(crate) fn extract_session_name_legacy(path: &Path) -> String {
     let Ok(content) = fs::read_to_string(path) else {
         return "Unnamed session".to_string();
     };
-    let mut custom_title = None;
-    let mut first_user_message = None;
+    let mut title = crate::session_name_index::SessionNameState::default();
+    let session_id = path
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
     for line in content.lines() {
         let Ok(json) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
         };
-        crate::session_name_index::apply_session_name_value(
-            &json,
-            &mut custom_title,
-            &mut first_user_message,
-        );
+        title.observe(&json, session_id);
     }
-    custom_title
-        .or(first_user_message)
-        .unwrap_or_else(|| "Unnamed session".to_string())
+    title.into_name()
 }
 
 /// 把真实 projects 树复制为静止快照。活跃会话会在基准运行期间追加 jsonl：

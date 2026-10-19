@@ -13,7 +13,7 @@ export interface NativeHistoryContext {
   projectId: string
   projectPath: string
   force?: boolean
-  /** 仅 close 路径使用：读失败时保留已有显示行（本地证据最强），错误标注仍阻止 absence 误判。 */
+  /** 读失败时保留已发布显示行（本地证据最强）；错误标注仍阻止恢复/缺席判定。 */
   retainOnFailure?: boolean
 }
 
@@ -132,11 +132,18 @@ export function createNativeHistoryReader() {
         owners.set(key, owner)
         const entry = reactive<NativeHistoryEntry>({
           key, context, sessions: cached?.sessions ?? [], loading: true, loaded: false, error: null, requestEpoch: epoch,
+          // root 是 scope（目录）的身份属性：同一 context 的已证明 root 在本轮 scope
+          // 返回前不可能合法变化，沿用缓存值。否则重载过渡态丢失 root，同源折叠与
+          // 归档判断（bare/legacy 路径）失效一个往返，列表会闪出双行与归档行。
+          ...(cached?.sourceRootKey ? { sourceRootKey: cached.sourceRootKey, source: cached.source } : {}),
         })
         entries.set(key, entry)
         return { context, key, entry, cached,
           sessions: new Map<string, NativeHistorySession>(),
-          previousSessions: new Map<string, NativeHistorySession>() }
+          previousSessions: new Map<string, NativeHistorySession>(),
+          // 本轮观察到的来源；在发布行之前不写入 entry —— root 与行必须同时换。
+          observedRootKey: undefined as string | undefined,
+          observedSource: undefined as SourceRef | undefined }
       })
       const observe = async (batch: typeof state): Promise<void> => {
         let stage: ProjectionStage = 'frontend-bridge'
@@ -153,10 +160,20 @@ export function createNativeHistoryReader() {
           if (!live().length) return
           if (source.cli !== profile.cli) throw new Error('PROFILE_CLI_MISMATCH')
           const sourceRootKey = typeof source.sourceRootKey === 'string' && source.sourceRootKey ? source.sourceRootKey : undefined
-          if (sourceRootKey) for (const { entry } of live()) { entry.sourceRootKey = sourceRootKey; entry.source = source }
-          // 既有显示值的保留只对同一 backend root key 成立，跨 root 重新观察。
+          // 新 root 只暂存到本地：root/source/行必须作为同一份快照原子发布。
+          // 读取中途换根会把旧 root 的行重标成新 root，归档判断随之翻转。
           for (const item of live()) {
-            item.previousSessions = new Map(item.entry.sourceRootKey && item.cached?.sourceRootKey === item.entry.sourceRootKey
+            item.observedRootKey = sourceRootKey
+            item.observedSource = source
+            // 无已发布行（或根未变化）时立即记录新根：诊断/警告身份需要它，且不存
+            // 在重标风险。已有行且根变化时延迟到提交，避免旧行被重标成新来源。
+            const rootUnchanged = !sourceRootKey || !item.entry.sessions.length || item.entry.sourceRootKey === sourceRootKey
+            if (rootUnchanged && sourceRootKey) {
+              item.entry.sourceRootKey = sourceRootKey
+              item.entry.source = source
+            }
+            // 既有显示值的保留只对同一 backend root key 成立，跨 root 重新观察。
+            item.previousSessions = new Map(sourceRootKey && item.cached?.sourceRootKey === sourceRootKey
               ? item.cached?.sessions.map(row => [row.sessionKey, row]) ?? [] : [])
           }
           let offset = 0
@@ -235,9 +252,23 @@ export function createNativeHistoryReader() {
             }
             if (!result.hasMore) {
               for (const item of live()) {
-                item.entry.sessions = [...item.sessions.values()]
-                if (offset === 0 && !metadataIncomplete && sourceRootKey) {
-                  item.entry.absenceEvidence = { cli: source.cli, sourceRootKey }
+                // 部分观察不能撤销已证明的存在：缺失的行保留上一次同根观察的投影，
+                // 直到一次无遗漏的完整观察证明其消失。保留只在真实读取失败
+                // （readFailures）时成立 —— 有界元数据读取（metadataIncomplete）
+                // 是正常观察，不构成「行可能缺失」的证据，否则会积累幽灵行。
+                const merged = readFailures.size
+                  ? [...item.sessions.values(), ...(item.observedRootKey && item.cached?.sourceRootKey === item.observedRootKey
+                    ? item.cached!.sessions.filter(row => !item.sessions.has(row.sessionKey)) : [])]
+                  : [...item.sessions.values()]
+                // root、来源与行作为同一份不可拆分的显示快照一起提交：先换 root
+                // 再保留旧行会把旧 root 的归档状态重标成新 root。
+                if (item.observedRootKey) {
+                  item.entry.sourceRootKey = item.observedRootKey
+                  item.entry.source = item.observedSource
+                }
+                item.entry.sessions = merged
+                if (offset === 0 && !metadataIncomplete && item.observedRootKey) {
+                  item.entry.absenceEvidence = { cli: source.cli, sourceRootKey: item.observedRootKey }
                 }
               }
               break

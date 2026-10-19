@@ -19,7 +19,7 @@ static PRODUCTION_INDEX_HEALTH: OnceLock<Arc<IndexHealth>> = OnceLock::new();
 type ReplaceFileFn = dyn Fn(&Path, &Path) -> io::Result<()> + Send + Sync;
 
 pub(crate) const SESSION_NAME_INDEX_SCHEMA_VERSION: u32 = 2;
-pub(crate) const SESSION_NAME_PARSER_VERSION: u32 = 1;
+pub(crate) const SESSION_NAME_PARSER_VERSION: u32 = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1278,43 +1278,72 @@ pub(crate) struct FullNameParse {
     pub jsonl_bytes_read: u64,
 }
 
-pub(crate) fn apply_session_name_value(
-    json: &serde_json::Value,
-    custom_title: &mut Option<String>,
-    first_user_message: &mut Option<String>,
-) {
-    if json.get("type").and_then(|value| value.as_str()) == Some("custom-title") {
-        if let Some(title) = json.get("customTitle").and_then(|value| value.as_str()) {
-            *custom_title = Some(title.to_string());
+/// 旧列表、搜索与详情共用 CLI 标题优先级；只接受当前文件的显式标题。
+#[derive(Default)]
+pub(crate) struct SessionNameState {
+    custom_title: Option<String>,
+    ai_title: Option<String>,
+    first_user_message: Option<String>,
+}
+
+impl SessionNameState {
+    /// 读取一条记录；AI 标题必须带精确 sessionId，旧手动标题允许缺省身份。
+    pub(crate) fn observe(&mut self, json: &serde_json::Value, session_id: &str) {
+        let kind = json.get("type").and_then(|value| value.as_str());
+        if matches!(kind, Some("custom-title" | "ai-title")) {
+            let observed = json.get("sessionId");
+            if observed.is_some_and(|id| id.as_str() != Some(session_id))
+                || (kind == Some("ai-title") && observed.is_none())
+            {
+                return;
+            }
+            let (field, target) = if kind == Some("custom-title") {
+                ("customTitle", &mut self.custom_title)
+            } else {
+                ("aiTitle", &mut self.ai_title)
+            };
+            if let Some(title) = json[field]
+                .as_str()
+                .filter(|title| !title.trim().is_empty())
+            {
+                *target = Some(title.to_owned());
+            }
+            return;
         }
+
+        if kind != Some("user") || self.first_user_message.is_some() {
+            return;
+        }
+        let Some(content) = json
+            .get("message")
+            .and_then(|message| message.get("content"))
+            .and_then(|content| content.as_str())
+        else {
+            return;
+        };
+        let is_meta = json
+            .get("isMeta")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+        if is_meta || content.trim_start().starts_with('<') {
+            return;
+        }
+
+        let truncated = content.chars().take(50).collect::<String>();
+        self.first_user_message = if content.chars().count() > 50 {
+            Some(format!("{truncated}..."))
+        } else {
+            Some(content.to_string())
+        };
     }
 
-    if json.get("type").and_then(|value| value.as_str()) != Some("user")
-        || first_user_message.is_some()
-    {
-        return;
+    /// 显式手动名优先于 AI 标题，首问只作兜底，与 Native 标题投影一致。
+    pub(crate) fn into_name(self) -> String {
+        self.custom_title
+            .or(self.ai_title)
+            .or(self.first_user_message)
+            .unwrap_or_else(|| "Unnamed session".to_string())
     }
-    let Some(content) = json
-        .get("message")
-        .and_then(|message| message.get("content"))
-        .and_then(|content| content.as_str())
-    else {
-        return;
-    };
-    let is_meta = json
-        .get("isMeta")
-        .and_then(|value| value.as_bool())
-        .unwrap_or(false);
-    if is_meta || content.trim_start().starts_with('<') {
-        return;
-    }
-
-    let truncated = content.chars().take(50).collect::<String>();
-    *first_user_message = if content.chars().count() > 50 {
-        Some(format!("{truncated}..."))
-    } else {
-        Some(content.to_string())
-    };
 }
 
 pub(crate) fn parse_session_name_full(path: &Path) -> io::Result<FullNameParse> {
@@ -1322,8 +1351,11 @@ pub(crate) fn parse_session_name_full(path: &Path) -> io::Result<FullNameParse> 
     let mut reader = io::BufReader::new(file);
     let mut line = Vec::new();
     let mut bytes_read = 0u64;
-    let mut custom_title = None;
-    let mut first_user_message = None;
+    let mut title = SessionNameState::default();
+    let session_id = path
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
 
     loop {
         line.clear();
@@ -1338,13 +1370,11 @@ pub(crate) fn parse_session_name_full(path: &Path) -> io::Result<FullNameParse> 
         let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
             continue;
         };
-        apply_session_name_value(&value, &mut custom_title, &mut first_user_message);
+        title.observe(&value, session_id);
     }
 
     Ok(FullNameParse {
-        name: custom_title
-            .or(first_user_message)
-            .unwrap_or_else(|| "Unnamed session".to_string()),
+        name: title.into_name(),
         jsonl_bytes_read: bytes_read,
     })
 }

@@ -21,6 +21,7 @@ import type { LaunchStatus } from '@/api/cliLaunchAttempt'
 import { createDeskNativeTerminalBinding } from '@/terminal/deskNativeTerminal'
 import type { NativeTerminalBinding } from '@/terminal/nativeTerminalBinding'
 import { createXtermModeEpoch, type XtermModeEpoch } from '@/terminal/modeEpoch'
+import { observeTerminalTitleChanges } from '@/terminal/titleRefresh'
 import { buildPastePayload, imagePasteBytes } from '@/utils/pasteText'
 import { classifyClipboardSnapshot, createImeInputPolicy, readClipboardSnapshot } from '@/terminal/inputPolicy'
 import { platform } from '@/utils/platform'
@@ -65,6 +66,7 @@ let modeTracker: XtermModeEpoch | null = null
 let launched = false
 let inputEnabled = false
 let stopObservation: (() => void) | null = null
+let stopTitleObservation: (() => void) | null = null
 let statusTimer: ReturnType<typeof setInterval> | null = null
 let statusSyncInFlight: object | null = null
 let disposed = false
@@ -119,6 +121,7 @@ function disposeRunBinding() {
   inputEnabled = false
   stopStatusSync()
   stopObservation?.(); stopObservation = null
+  stopTitleObservation?.(); stopTitleObservation = null
   binding?.dispose()
   binding = null
   modeTracker?.dispose()
@@ -415,6 +418,12 @@ async function startAttempt(attempt: NativeAttemptIdentity): Promise<void> {
   try {
     const tracker = createXtermModeEpoch(target)
     modeTracker = tracker
+    if (tab.cli === 'claude' && tab.action.kind !== 'raw') {
+      stopTitleObservation = observeTerminalTitleChanges(target, () => () => {
+        if (runToken !== token || !attemptIsCurrent(attempt)) return
+        tab.titleChangeRevision = (tab.titleChangeRevision ?? 0) + 1
+      })
+    }
     binding = createDeskNativeTerminalBinding({
       term: target as any,
       runId,

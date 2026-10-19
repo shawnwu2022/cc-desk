@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises } from '@vue/test-utils'
+import { watch } from 'vue'
 import { useProjectsStateStore } from '@/stores/projectsState'
 import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
 import { useProjectManagementStore } from '@/stores/projectManagement'
@@ -52,6 +53,49 @@ function deferred<T>() {
   })
   return { promise, resolve, reject }
 }
+
+// WebView2 实测：打开时间写入尚未返回时，运行行与准备占位行同时显示约 132ms。
+it.each(['new', 'raw', 'metadata-failure', 'close-before-save'] as const)('Catalog_CreationHandoffBeforeMetadata_071 %s', async mode => {
+  setActivePinia(createPinia())
+  const catalog = useUnifiedSessionsStore(), tabs = useNativeTabsStore()
+  const saved = deferred<void>()
+  const recordSessionOpened = vi.fn(() => saved.promise)
+  const adapter = createNativeCliAdapter({
+    tabs, history: { all: () => [] },
+    metadata: { sessionRecords: new Map(), upsertSessionRecord: recordSessionOpened, recordSessionOpened },
+    archive: { getArchivedSessions: () => [], archiveSession: async () => {}, restoreSession: async () => {} },
+    runtime: {
+      createTab: input => tabs.create({ cli: input.cli, projectId: 'project', projectPath: input.projectPath, profileId: 'profile', profileRevision: '1', action: input.action }),
+      stopTab: async () => {}, restartTab: async () => { throw new Error('unexpected restart') }, renameTab: async () => {},
+    },
+  })
+  catalog.configureAdapters([adapter])
+  const publications: string[][] = []
+  const stop = watch(() => catalog.sessions, rows => publications.push(rows.map(row => row.id)), { flush: 'sync' })
+  const creating = catalog.createSession({ cli: 'claude', projectKey: '/repo', projectPath: '/repo', action: mode === 'raw' ? { kind: 'raw', argv: [] } : { kind: 'new' } })
+  await flushPromises()
+  expect(recordSessionOpened).toHaveBeenCalledOnce()
+  await catalog.refresh('/repo', { background: true })
+  const opened = catalog.sessions.find(row => row.opened)!
+  try {
+    expect(catalog.sessions).toHaveLength(1)
+    expect(catalog.activeSessionId).toBe(opened.id)
+    expect(catalog.isPreparingSession(opened.id)).toBe(false)
+    if (mode === 'close-before-save') await catalog.closeSession(opened.id)
+  } finally {
+    if (mode === 'metadata-failure') saved.reject(new Error('write unavailable'))
+    else saved.resolve()
+    await creating
+    stop()
+  }
+  expect(publications.every(rows => rows.length <= 1)).toBe(true)
+  if (mode === 'close-before-save') {
+    const removed = publications.findIndex(rows => !rows.length)
+    expect(removed).toBeGreaterThanOrEqual(0)
+    expect(publications.slice(removed).every(rows => !rows.includes(opened.id))).toBe(true)
+    expect(catalog.sessions).toHaveLength(0)
+  }
+})
 
 it('Catalog_BackgroundRefreshKeepsVisibleLoadingAndRowsStable_046', async () => {
   setActivePinia(createPinia())

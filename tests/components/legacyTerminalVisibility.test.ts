@@ -12,6 +12,8 @@ const io = vi.hoisted(() => ({ terms: [] as any[], fits: [] as any[], input: vi.
 vi.mock('@xterm/xterm', () => ({ Terminal: class {
   options: any; textarea!: HTMLTextAreaElement; element!: HTMLElement; cols = 80; rows = 24; output = ''; modes = { bracketedPasteMode: false }; unicode = { activeVersion: '6' }; buffer = { active: { length: 0 } }
   userSignal: (() => void) | null = null
+  title: ((value: string) => void) | null = null
+  onTitleChange(listener: (value: string) => void) { this.title = listener; return { dispose: () => { this.title = null } } }
   _core = { coreService: { onUserInput: (fn: () => void) => { this.userSignal = fn; return { dispose() {} } } } }
   userData(data: string) { this.userSignal?.(); this.data(data) }
   focus = vi.fn(); refresh = vi.fn(); dispose = vi.fn(); selection = 'old selection'; data: any; key: any
@@ -35,6 +37,20 @@ beforeEach(() => {
 })
 afterEach(() => { wrapper?.unmount(); wrapper = null; vi.unstubAllGlobals(); vi.useRealTimers() })
 describe('Legacy unified ownership', () => {
+  it('Legacy_TitleSignalFreezesPty_023 — 迟到 OSC 通知不能转移到新 PTY', async () => {
+    const sessions = useSessionStore(), id = sessions.createTab('/repo')
+    wrapper = mount(XTermTerminal, { props: { visible: true } }); await flushPromises()
+    await (wrapper.vm as any).startTab(id); await flushPromises()
+    vi.useFakeTimers()
+    const tab = sessions.tabs.get(id)!, term = io.terms[0]
+    term.title('✳ A'); await vi.advanceTimersByTimeAsync(500)
+    expect(tab.titleChangeRevision).toBe(1)
+    term.title('✳ B')
+    tab.ptyGeneration = (tab.ptyGeneration ?? 0) + 1
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(tab.titleChangeRevision).toBe(1)
+  })
+
   it.each(['\r', '\n', '\x1b', '\t'])('Legacy_DropRejectsWholeUnsafeBatch_022 %j', async control => {
     const sessions = useSessionStore()
     const id = sessions.createTab('/repo')

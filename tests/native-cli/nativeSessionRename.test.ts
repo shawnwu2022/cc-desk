@@ -56,7 +56,7 @@ describe('Native session rename admission',()=>{
     expect(await h.adapter.renameSession(h.id,'Source title')).toBe('native-title-saved')
     expect(h.runSource).toHaveBeenCalled()
     expect(h.load).toHaveBeenCalledTimes(2)
-    expect(h.load.mock.calls[0][0]).toEqual({...h.entry.context,force:true})
+    expect(h.load.mock.calls[0][0]).toEqual({...h.entry.context,force:true,retainOnFailure:true})
     expect(h.rename).toHaveBeenCalledWith(expect.objectContaining({source:h.entry.source,sessionKey:h.tab.sourceSessionKey,title:'Source title'}))
     expect(h.runtime.renameTab).not.toHaveBeenCalled();expect(h.runtime.stopTab).not.toHaveBeenCalled()
   })

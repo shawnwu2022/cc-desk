@@ -200,6 +200,8 @@ it('History_ExpiredContinuationCannotAdmitCachedPresence_012', async () => {
   const fresh = await history.load({ ...context, force: true })
   expect(fresh.error).toBe('SOURCE_CHANGED')
   expect(fresh.loading).toBe(false)
+  // 来源级失败按既有 fail-closed 契约清空显示行；缺席证据被撤销，缓存的行
+  // 不能当作缺席/恢复授权使用（adapter verify 因 error 拒绝）。
   expect(fresh.sessions).toEqual([])
   expect(fresh.absenceEvidence).toBeUndefined()
 })
@@ -423,4 +425,56 @@ it('History_IsolationOwnerFence_024', async () => {
   expect(result.get('healthy')).toBe(replacement)
   expect(replacement.loading).toBe(false)
   expect(result.get('offline')?.error).toBe('SOURCE_CHANGED')
+})
+
+// 部分观察（单文件读取失败）不能撤销已证明的存在：已观察行保留，直到一次
+// 完整观察证明其消失 —— 与 absenceEvidence 的「完整观察才证明缺失」同一原则。
+// 此前的缺陷：完成时无条件用本次暂存替换 entry.sessions，一次单文件读取失败
+// 就让该行从列表消失，运行中 tab 的 claim 失效，列表闪出标题完全相同的关闭行。
+it('History_PartialObservationKeepsPreviouslySeenRows_027', async () => {
+  const context = { cli: 'claude' as const, profileId: 'p', profileRevision: '1', projectId: 'x', projectPath: '/repo' }
+  const a = { type: 'session', sessionKey: 'a', nativeSessionId: 'a-id', title: 'A', archived: false, truncated: false, updatedAt: '2026-10-15T12:00:00Z' }
+  const b = { type: 'session', sessionKey: 'b', nativeSessionId: 'b-id', title: 'B', archived: false, truncated: false, updatedAt: '2026-10-15T11:00:00Z' }
+  const bUpdated = { ...b, updatedAt: '2026-10-16T11:00:00Z' }
+  clients.push({ scope: vi.fn().mockResolvedValue(source('claude', 'p', '1', 'x')),
+    read: vi.fn().mockResolvedValue({ state: 'ready', items: [a, b], hasMore: false }) })
+  // 部分观察：b 文件读取失败，只返回 a。
+  clients.push({ scope: vi.fn().mockResolvedValue(source('claude', 'p', '1', 'x')),
+    read: vi.fn().mockResolvedValue({ state: 'ready', items: [a], hasMore: false, historyMetadataIncomplete: true, historyReadFailures: ['SOURCE_INVALID_TEXT'] }) })
+  // 随后的完整观察确认 b 更新。
+  clients.push({ scope: vi.fn().mockResolvedValue(source('claude', 'p', '1', 'x')),
+    read: vi.fn().mockResolvedValue({ state: 'ready', items: [a, bUpdated], hasMore: false }) })
+  const store = useNativeHistoryStore()
+  await store.load(context)
+  const partial = await store.load({ ...context, force: true })
+  expect(partial.metadataIncomplete).toBe(true)
+  expect(partial.readFailures).toEqual(['SOURCE_INVALID_TEXT'])
+  expect(partial.sessions.map(row => row.sessionKey)).toEqual(['a', 'b'])
+  // 完整观察仍可纠正与移除。
+  const complete = await store.load({ ...context, force: true })
+  expect(complete.metadataIncomplete).toBe(false)
+  expect(complete.sessions.map(row => row.sessionKey)).toEqual(['a', 'b'])
+  expect(complete.sessions.find(row => row.sessionKey === 'b')?.updatedAt).toBe('2026-10-16T11:00:00Z')
+})
+
+// force 重载会重建 entry（loading:true、sessions 从缓存恢复）。root 是 scope 的
+// 身份属性（同一 context 的同一目录），已在上一轮证明且本轮 scope 未返回前不可能
+// 变化；丢失它会让同源折叠与归档判断在过渡窗口失效（列表闪出双行/归档行）。
+it('History_ForceReloadKeepsProvenRootDuringScope_028', async () => {
+  const context = { cli: 'claude' as const, profileId: 'p', profileRevision: '1', projectId: 'x', projectPath: '/repo' }
+  const item = { type: 'session', sessionKey: 'key', nativeSessionId: 'id', title: 'Task', archived: false, truncated: false }
+  clients.push({ scope: vi.fn().mockResolvedValue(source('claude', 'p', '1', 'x', '/root')),
+    read: vi.fn().mockResolvedValue({ state: 'ready', items: [item], hasMore: false }) })
+  const store = useNativeHistoryStore()
+  await store.load(context)
+  expect(store.get(context)?.sourceRootKey).toBe('/root')
+  // 第二轮 force：scope 挂起（生产中为一次后端往返），entry 处于 loading 过渡态。
+  clients.push({ scope: vi.fn(() => new Promise(() => {})), read: vi.fn() })
+  const pending = store.load({ ...context, force: true })
+  await flushPromises()
+  const entry = store.get(context)
+  expect(entry?.loading).toBe(true)
+  expect(entry?.sessions).toHaveLength(1)
+  expect(entry?.sourceRootKey).toBe('/root')
+  void pending.catch(() => {})
 })

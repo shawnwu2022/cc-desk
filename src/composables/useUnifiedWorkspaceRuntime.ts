@@ -2,6 +2,7 @@ import { computed, shallowRef, nextTick, onMounted, onUnmounted, ref, watch, typ
 import { writeText } from '@tauri-apps/plugin-clipboard-manager'
 import { openInFileManager, nativeUnarchiveSession, nativeRenameSession, nativeGetScope, legacyClaudeRootKey, getSessions } from '@/api/tauri'
 import { useSessionIndexMaintenanceStore } from '@/stores/sessionIndexMaintenance'
+import { useLegacyHistoryRefresh } from '@/composables/useLegacyHistoryRefresh'
 import { createNativeId } from '@/utils/nativeId'
 import { useAppStore } from '@/stores/app'
 import { useSessionStore } from '@/stores/session'
@@ -311,12 +312,12 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
         })))
       for (let i = 0; i < contexts.length && !disposed; i += 2) await Promise.all(contexts.slice(i, i + 2).map(async context => {
         // 恢复搜索显式重读当前项目；普通 owner 投影不经过此 loader。
-        try { const entry = await history.load({ ...context, force: query.scope !== 'all' }); if (entry.error || entry.metadataIncomplete) partial = true } catch { partial = true }
+        try { const entry = await history.load({ ...context, force: query.scope !== 'all', retainOnFailure: true }); if (entry.error || entry.metadataIncomplete) partial = true } catch { partial = true }
       }))
       return partial
     })
     const sessionAdapters = [
-      createLegacyClaudeAdapter({ store: legacy, metadata: projects, attention, captureProjectAdmission: app.captureProjectAdmission, projectPaths: () => [...new Set([...legacyPaths.value, ...projects.pinnedProjects])],
+      createLegacyClaudeAdapter({ store: legacy, metadata: projects, attention, validateHistoryRoot: validateLegacyClaudeRoot, captureProjectAdmission: app.captureProjectAdmission, projectPaths: () => [...new Set([...legacyPaths.value, ...projects.pinnedProjects])],
         runtime: {
           startTab: id => {
             const tab = legacy.tabs.get(id)
@@ -409,7 +410,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
         for (let i = 0; i < contexts.length && current(); i += 2) {
           await Promise.all(contexts.slice(i, i + 2).map(async group => {
             try {
-              const loaded = await history.loadGrouped(group, { force: true })
+              const loaded = await history.loadGrouped(group, { force: true, retainOnFailure: true })
               for (const entry of loaded.values()) {
                 if (entry.error) addHistoryWarning({ ...entry.context, sourceRootKey: entry.sourceRootKey }, { code: entry.error, stage: entry.diagnosticStage })
               }
@@ -656,14 +657,19 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
       await refreshCatalog(changed)
     })
   }
-  // 身份确认/回复结束才请求历史 IO；状态、输出和焦点仍只刷新 catalog 投影。
+  useLegacyHistoryRefresh({
+    ready: () => enabled && ready.value && !loading.value && !disposed && cliSupport.isEnabled('claude'),
+    validateRoot: validateLegacyClaudeRoot,
+    publish: queueCatalogProjects,
+  })
+  // 身份确认/交互/标题失效才请求历史 IO；普通输出和焦点不使历史失效。
   // 每个 tab 仅保留最新请求，同 profile 合并项目，读取中至多留一批后继任务。
   type HistoryOwner = { tab: NativeCliTab; attempt: ReturnType<typeof captureNativeAttempt>;
     context: Pick<NativeCliTab, 'cli' | 'profileId' | 'profileRevision' | 'projectId' | 'projectPath'> }
   const pendingHistoryOwners = new Map<string, HistoryOwner>()
   let historyTimer: ReturnType<typeof setTimeout> | undefined
   let historyReading = false
-  function historyCue(tab: NativeCliTab): { identity: string | null; reply: string | null; prompt: string | null } | null {
+  function historyCue(tab: NativeCliTab): { identity: string | null; reply: string | null; prompt: string | null; titleRevision: number } | null {
     if (tab.cli !== 'claude' || tab.action.kind === 'raw' || tab.status !== 'running' || tab.observationState !== 'active') return null
     const attempt = captureNativeAttempt(tab)
     const notice = native.hasOwnedObservationNotice(tab.tabId, attempt) ? tab.observationNotice : undefined
@@ -675,6 +681,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
       identity: tab.observedSessionId ? JSON.stringify([...key, tab.observedSessionId]) : null,
       reply: reply ? JSON.stringify([...key, reply.eventId]) : null,
       prompt: prompt ? JSON.stringify([...key, prompt.eventId]) : null,
+      titleRevision: tab.titleChangeRevision ?? 0,
     } : null
   }
   function scheduleHistoryRead() {
@@ -748,7 +755,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
         return ['projectPath', 'projectId', 'profileId', 'profileRevision', 'cli', 'title', 'name', 'status',
           'requestId', 'runId', 'generation', 'ptyId', 'ptyGeneration', 'sessionId', 'observedSessionId',
           'activity', 'activityState', 'working', 'pending', 'attentionState', 'observation', 'observationState',
-          'observationNotice', 'observerEnabled', 'observerReasonCode', 'errorCode', 'sourceSessionKey', 'createdAt', 'usesDefaultClaudeRoot']
+          'observationNotice', 'observerEnabled', 'observerReasonCode', 'errorCode', 'sourceSessionKey', 'createdAt', 'usesDefaultClaudeRoot', 'titleChangeRevision']
           .map(key => value[key])
       }, () => {
         const previousPath = owner.projectPath
@@ -756,14 +763,24 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
         queueCatalogProjects(previousPath, owner.projectPath)
         const cue = nativeTab && historyCue(nativeTab)
         if (cue && (cue.identity && cue.identity !== owner.historyCue?.identity || cue.reply && cue.reply !== owner.historyCue?.reply
-          || cue.prompt && cue.prompt !== owner.historyCue?.prompt)) queueHistory()
-        // 每轮重读绑定冻结的运行、来源与最新交互；发现 AI/自定义标题即停止。
+          || cue.prompt && cue.prompt !== owner.historyCue?.prompt || cue.titleRevision !== owner.historyCue?.titleRevision)) queueHistory()
+        // 每轮重读绑定冻结的运行、来源与最新交互；已有旧 AI 标题不能阻止本轮更新。
         if (nativeTab && cue?.reply && cue.reply !== owner.historyCue?.reply) {
           if (owner.titleReadTimer) clearTimeout(owner.titleReadTimer)
           const attempt = captureNativeAttempt(nativeTab)
           const contextKey = () => JSON.stringify([nativeTab.cli, nativeTab.profileId, nativeTab.profileRevision,
             nativeTab.projectId, normalizePath(nativeTab.projectPath), nativeTab.sourceSessionKey])
           const context = contextKey()
+          const explicitTitle = () => {
+            const matches = history.get(nativeTab)?.sessions.filter(session => nativeTab.sourceSessionKey
+              ? session.sessionKey === nativeTab.sourceSessionKey
+              : !!nativeTab.observedSessionId && session.nativeSessionId === nativeTab.observedSessionId) ?? []
+            const session = matches.length === 1 ? matches[0] : undefined
+            if (!session) return undefined
+            const source = session.lastKnownTitleSource ?? session.titleSource
+            return source === 'ai' || source === 'custom' ? JSON.stringify([source, session.lastKnownTitle ?? session.title]) : undefined
+          }
+          const previousTitle = explicitTitle()
           const retryTitle = (index: number) => {
             owner.titleReadTimer = setTimeout(() => {
               owner.titleReadTimer = undefined
@@ -771,11 +788,8 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
               if (disposed || !matchesNativeAttempt(nativeTab, attempt) || native.tabs.get(nativeTab.tabId) !== nativeTab
                 || contextKey() !== context || currentCue?.reply !== cue.reply
                 || currentCue?.identity !== cue.identity || currentCue?.prompt !== cue.prompt) return
-              const hasTitle = history.get(nativeTab)?.sessions.some(session =>
-                (nativeTab.sourceSessionKey ? session.sessionKey === nativeTab.sourceSessionKey
-                  : !!nativeTab.observedSessionId && session.nativeSessionId === nativeTab.observedSessionId)
-                && [session.titleSource, session.lastKnownTitleSource].some(source => source === 'ai' || source === 'custom'))
-              if (hasTitle) return
+              const title = explicitTitle()
+              if (title !== undefined && title !== previousTitle) return
               queueHistory()
               if (index + 1 < lateTitleReadDelays.length) retryTitle(index + 1)
             }, lateTitleReadDelays[index])
@@ -799,14 +813,47 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   // 恢复提交成功但回执失败时，失败协调的重读会删除空归档键并抛错，成功路径的
   // refresh 不再执行；排队范围必须取上一批与当前批的并集，删除键/条目的项目
   // 不能从刷新范围里消失。
-  let lastHistoryPaths: string[] = []
-  let lastArchivePaths: string[] = []
-  watch(() => [history.all(), projects.archivedSessions], () => {
-    const historyPaths = [...history.all()].map(entry => entry.context.projectPath)
-    const archivePaths = [...projects.archivedSessions.keys()]
-    queueCatalogProjects(...new Set<string>([...lastHistoryPaths, ...lastArchivePaths, ...historyPaths, ...archivePaths]))
-    lastHistoryPaths = historyPaths
-    lastArchivePaths = archivePaths
+  // 只有会影响目录投影的历史变化才需要刷新该项目：已发布行 + 来源根构成投影签名。
+  // loading/requestEpoch/error 等读取进度不改变行，逐字段把全部历史项目入队会让
+  // 单项目读取放大成全项目反复重扫（实测 8 项目一次重读 32 次刷新、24 次发布）。
+  // 撤销/删除的 entry 也必须入队一次：行消失同样改变该项目投影。
+  const historySignatures = new Map<string, { path: string; signature: string }>()
+  const archiveSignatures = new Map<string, string>()
+  watch(() => [history.all(), projects.archivedSessions] as const, () => {
+    const changed = new Set<string>()
+    const seenEntries = new Set<string>()
+    for (const entry of history.all()) {
+      seenEntries.add(entry.key)
+      const path = entry.context.projectPath
+      const signature = `${entry.sourceRootKey ?? ''}|${entry.loaded}|${entry.error ?? ''}|` +
+        entry.sessions.map(row => `${row.sessionKey}|${row.nativeSessionId}|${row.archived ? 1 : 0}|${row.title}|` +
+          `${row.titleSource ?? ''}|${row.lastKnownTitle ?? ''}|${row.lastKnownTitleSource ?? ''}|` +
+          `${row.updatedAt ?? ''}|${row.lastKnownActivityAt ?? ''}|${row.truncated ? 1 : 0}|` +
+          `${row.metadataIncomplete ? 1 : 0}|${row.createdAt ?? ''}`).join('\u0001')
+      const previous = historySignatures.get(entry.key)
+      if (previous && previous.signature === signature) continue
+      changed.add(normalizePath(path))
+      if (previous && previous.path !== path) changed.add(normalizePath(previous.path))
+      historySignatures.set(entry.key, { path, signature })
+    }
+    for (const [key, previous] of historySignatures) {
+      if (seenEntries.has(key)) continue
+      historySignatures.delete(key)
+      changed.add(normalizePath(previous.path))
+    }
+    for (const [path, ids] of projects.archivedSessions) {
+      const key = normalizePath(path)
+      const signature = [...ids].sort().join('\u0000')
+      if (archiveSignatures.get(key) === signature) continue
+      archiveSignatures.set(key, signature)
+      changed.add(key)
+    }
+    for (const key of archiveSignatures.keys()) {
+      if (projects.archivedSessions.has(key)) continue
+      archiveSignatures.delete(key)
+      changed.add(key)
+    }
+    if (changed.size) queueCatalogProjects(...changed)
   }, { deep: true, immediate: true })
   watch(() => catalog.activeSessionId, async () => {
     await nextTick()

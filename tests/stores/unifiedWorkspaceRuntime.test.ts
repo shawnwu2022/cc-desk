@@ -1197,7 +1197,9 @@ it('Runtime_AppResumePendingRow_058', async () => {
   expect(w.emitted('workspace-request')?.filter(([request]) => (request as { kind: string }).kind === 'primary-action')).toHaveLength(1)
   finish({ state: 'unavailable', reason: 'SOURCE_BUSY', items: [], hasMore: false }); await flushPromises()
   expect(catalog.isResumePending(history)).toBe(false)
-  expect(w.findAll('[data-session-row]').some(item => item.attributes('data-session-row') === history.id)).toBe(false)
+  const retained = w.findAll('[data-session-row]').find(item => item.attributes('data-session-row') === history.id)!
+  expect(retained, '读失败后保留可重试的历史行').toBeDefined()
+  expect(retained.attributes('aria-busy')).not.toBe('true')
   expect(useNativeTabsStore().tabs.size).toBe(0)
   expect(catalog.actionFeedback).toMatchObject({ detailCode: 'SOURCE_BUSY', retryable: true })
 })

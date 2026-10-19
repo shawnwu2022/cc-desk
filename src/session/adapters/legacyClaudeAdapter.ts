@@ -57,6 +57,8 @@ export interface LegacyClaudeAdapterDeps {
   attention?: { getItem(ptyId: string): AttentionItem | undefined }
   /** Freeze the caller's project mutation barrier across history checks. */
   captureProjectAdmission?(projectPath: string): () => boolean
+  /** 验证本 runtime 冻结的默认根；失败后不得从默认历史借用运行行标题。 */
+  validateHistoryRoot?(): Promise<string | undefined>
 }
 
 function activeId(tabId: string): string {
@@ -163,7 +165,10 @@ export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): Sessio
     const row = projectActiveTab(tab)
     return tab.sessionId ? { ...row, id: historyId(tab.projectPath, tab.sessionId), adapterSessionId: tab.sessionId } : row
   }
-  function projectActive(tab: TerminalTab) { return withSessionDisplayName(projectActiveTab(tab, deps.attention), deps.metadata, tabDisplayIdentity(tab)) }
+  function projectActive(tab: TerminalTab, historyTitle?: string) {
+    const row = projectActiveTab(tab, deps.attention)
+    return withSessionDisplayName(historyTitle ? { ...row, title: historyTitle } : row, deps.metadata, tabDisplayIdentity(tab))
+  }
   const acceptedOpens = new Map<string, { tab: TerminalTab; at: number; savedIdentities: Set<string> }>()
   async function transferOpen(tab: TerminalTab) {
     const accepted = acceptedOpens.get(tab.tabId)
@@ -206,6 +211,7 @@ export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): Sessio
   async function listSessions(projectKey?: string): Promise<UnifiedSession[]> {
     const wanted = projectKey === undefined ? null : normalizeProjectIdentity(projectKey)
     const sessions: UnifiedSession[] = []
+    const historyRoot = await deps.validateHistoryRoot?.()
 
     for (const [key, projectPath] of knownProjects()) {
       if (wanted !== null && key !== wanted) continue
@@ -218,7 +224,11 @@ export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): Sessio
       const archived = new Set(store.getArchivedSessions(projectPath))
 
       await Promise.all(tabs.map(transferOpen))
-      sessions.push(...tabs.map(projectActive))
+      sessions.push(...tabs.map(tab => {
+        const matches = historyRoot && tab.usesDefaultClaudeRoot === true && tab.sessionId
+          ? store.getCatalogHistoryFor(projectPath).filter(item => item.sessionId === tab.sessionId) : []
+        return projectActive(tab, matches.length === 1 ? matches[0].name : undefined)
+      }))
       for (const history of store.getCatalogHistoryFor(projectPath)) {
         if (claimed.has(history.sessionId)) continue
         sessions.push({ ...withSessionDisplayName(projectHistorySession(projectPath, history), deps.metadata), archived: archived.has(history.sessionId) })
