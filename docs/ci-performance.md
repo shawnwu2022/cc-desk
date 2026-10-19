@@ -28,12 +28,21 @@ the adapter's canonical path/merged-key semantics reduces that case to zero.
 Two further RED cases reproduced stale folds in project A when project B detected
 replacement or loss of the shared root proof. Revocation now queues projects
 bound to that old root, retaining unrelated-root projections. The four affected
-suites pass 160 cases. The final full local inventory passed 2,863 cases with two
+suites pass 160 cases. The full local inventory at this checkpoint passed 2,863 cases with two
 existing skips across 193 files in 88.33 seconds using four workers, including
 the unchanged 5,000-session/30-owner/120-change workloads. The continuity loop
 recorded 27,793 ms within that run; this is a workload pass, not a comparative
 speedup claim. Typecheck and production build passed. Fresh exact-source hosted
 CI and Windows package gates remain required.
+
+A further RED regression showed two distinct valid title snapshots colliding
+under delimiter concatenation, leaving the catalog at the previous title.
+History row tuples and sorted archive-ID arrays now use structural JSON encoding.
+The four focused suites pass 161 cases; the fresh full inventory passes 2,864
+cases with two existing skips across 193 files in 78.46 seconds with four workers.
+The unchanged stress continuity loop recorded 23,194 ms. Typecheck and production
+build passed; exact-source hosted gates and final WebView2 acceptance remain
+separate requirements.
 
 ## Runtime performance audit and falsified candidates (2026-10-17, local)
 

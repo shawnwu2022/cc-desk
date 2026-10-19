@@ -841,11 +841,13 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
         identity.paths.add(normalizePath(path))
         nextIdProjects.set(row.nativeSessionId, identity)
       }
-      const signature = `${entry.sourceRootKey ?? ''}|` +
-        entry.sessions.map(row => `${row.sessionKey}|${row.nativeSessionId}|${row.archived ? 1 : 0}|${row.title}|` +
-          `${row.titleSource ?? ''}|${row.lastKnownTitle ?? ''}|${row.lastKnownTitleSource ?? ''}|` +
-          `${row.updatedAt ?? ''}|${row.lastKnownActivityAt ?? ''}|${row.truncated ? 1 : 0}|` +
-          `${row.metadataIncomplete ? 1 : 0}|${row.createdAt ?? ''}`).join('\u0001')
+      // 标题来自 CLI，可能包含任意分隔符；结构编码避免不同字段组合撞签名。
+      const signature = JSON.stringify([entry.sourceRootKey ?? '', entry.sessions.map(row => [
+        row.sessionKey, row.nativeSessionId, row.archived ? 1 : 0, row.title,
+        row.titleSource ?? '', row.lastKnownTitle ?? '', row.lastKnownTitleSource ?? '',
+        row.updatedAt ?? '', row.lastKnownActivityAt ?? '', row.truncated ? 1 : 0,
+        row.metadataIncomplete ? 1 : 0, row.createdAt ?? '',
+      ])])
       const previous = historySignatures.get(entry.key)
       if (previous && previous.signature === signature) continue
       changed.add(normalizePath(path))
@@ -870,7 +872,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     // 使用与 adapter 相同的归一化、合并查询，兼容重启后保留的路径别名。
     const archivedProjects = new Set([...projects.archivedSessions.keys()].map(normalizePath))
     for (const key of archivedProjects) {
-      const signature = [...new Set(legacy.getArchivedSessions(key))].sort().join('\u0000')
+      const signature = JSON.stringify([...new Set(legacy.getArchivedSessions(key))].sort())
       if (archiveSignatures.get(key) === signature) continue
       archiveSignatures.set(key, signature)
       changed.add(key)
