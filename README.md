@@ -4,7 +4,7 @@ CC Desk is a desktop workspace for **Claude Code, Codex CLI and opencode** built
 
 It keeps the real CLI in charge of the interactive session and adds the host capabilities that become awkward in a normal terminal: multi-project navigation, multiple concurrent sessions, stable run identity, recovery, bounded terminal transport, and read-only native-resource projection.
 
-> Native CLI v3 is currently code-complete through D27 on the development stack. Real Claude Code / Codex CLI Layer-C certification (D20) still requires an authorized target environment. Do not treat host CI as real-CLI certification.
+> Native CLI v3 is currently code-complete through D27 on the development stack. Real CLI Layer-C certification still requires an authorized target environment: D20 covers Claude Code / Codex CLI, and opencode — which ships in this release — has no Layer-C certification at all. Do not treat host CI as real-CLI certification.
 
 ## What CC Desk does
 

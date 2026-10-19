@@ -4,7 +4,7 @@ CC Desk 是面向 **Claude Code、Codex CLI 与 opencode** 的桌面工作台，
 
 它不替代 CLI 的单会话交互，而是让真实 CLI 继续负责命令、权限、认证、MCP、扩展与未来版本行为；CC Desk 负责多项目、多会话、稳定运行身份、恢复、终端传输和只读资源投影。
 
-> Native CLI v3 的代码侧实现已推进到 D27。D20 真实 Claude Code / Codex CLI Layer-C 认证仍需要一个明确授权的目标环境。CI 的宿主测试不能被表述为真实 CLI 认证。
+> Native CLI v3 的代码侧实现已推进到 D27。真实 CLI Layer-C 认证仍需要一个明确授权的目标环境：D20 覆盖 Claude Code / Codex CLI，本版随附的 opencode 完全没有 Layer-C 认证。CI 的宿主测试不能被表述为真实 CLI 认证。
 
 ## 核心能力
 

@@ -187,7 +187,7 @@ Evidence is intentionally split:
 
 - **Layer A** — pure/frontend/unit contracts.
 - **Layer B** — host/runtime integration on CI targets.
-- **Layer C** — real installed Claude Code / Codex CLI behavior using an authorized test account.
+- **Layer C** — real installed CLI behavior using an authorized test account. D20 scopes the four-cell matrix to Claude Code / Codex CLI; opencode has no Layer-C certification yet.
 
 Layer A/B cannot be promoted to Layer C.
 
