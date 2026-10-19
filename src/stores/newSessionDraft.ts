@@ -68,7 +68,8 @@ export const useNewSessionDraftStore = defineStore('new-session-draft', () => {
   function savePreferences() { try { localStorage.setItem(preferenceKey, JSON.stringify(preferences.value)) } catch { /* In-memory preferences remain usable. */ } }
   function preferred(identity: Pick<UnifiedProjectIdentity, 'projectPath'>, tool: UnifiedCliKind): CliProfile | null {
     const canonical = projects.launchPreferences.get(normalizePath(identity.projectPath))
-    const recent = tool === 'claude' ? canonical?.claudeLaunchConfigId : canonical?.codexLaunchConfigId
+    const perCli = { claude: canonical?.claudeLaunchConfigId, codex: canonical?.codexLaunchConfigId, opencode: canonical?.opencodeLaunchConfigId } as const
+    const recent = perCli[tool]
     const ids = [recent, preferences.value.defaults[tool]]
     for (const id of ids) {
       const found = id ? profiles.profile(id) : undefined

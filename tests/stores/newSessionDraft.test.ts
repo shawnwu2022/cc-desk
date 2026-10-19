@@ -148,7 +148,7 @@ describe('New session draft', () => {
     await useProjectsStateStore().load()
     const draft = useNewSessionDraftStore(); await draft.recordSuccess('/repo', 'codex', 'success')
     expect(io.setPreference).toHaveBeenCalledOnce()
-    expect(persisted.launchPreferences?.['/repo']).toEqual({ lastCli: 'codex', claudeLaunchConfigId: 'existing-claude', codexLaunchConfigId: 'success' })
+    expect(persisted.launchPreferences?.['/repo']).toEqual({ lastCli: 'codex', claudeLaunchConfigId: 'existing-claude', codexLaunchConfigId: 'success', opencodeLaunchConfigId: null })
     expect(useProjectsStateStore().launchPreferences.get('/repo')?.codexLaunchConfigId).toBe('success')
     expect(localStorage.getItem('cc-desk-launch-preferences-v1')).toBeNull()
   })
@@ -169,7 +169,7 @@ describe('New session draft', () => {
     releaseRecovery(structuredClone(persisted)); const settled = await results
     expect(writesBeforeRecovery).toBe(1)
     expect(settled.map(result => result.status)).toEqual(['rejected', 'fulfilled'])
-    expect(persisted.launchPreferences?.['/repo']).toEqual({ lastCli: 'codex', claudeLaunchConfigId: 'cc', codexLaunchConfigId: 'cx' })
+    expect(persisted.launchPreferences?.['/repo']).toEqual({ lastCli: 'codex', claudeLaunchConfigId: 'cc', codexLaunchConfigId: 'cx', opencodeLaunchConfigId: null })
     expect(io.setPreference).toHaveBeenCalledTimes(2)
   })
   it('Draft_UnverifiedRecoveryBlocksQueuedPreferenceWrite_012', async () => {

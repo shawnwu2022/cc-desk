@@ -2467,6 +2467,22 @@ fn ProjectsState_SkipsMalformedSessionRecord_003() {
 }
 
 #[test]
+fn opencode_launch_preference_accepts_third_key_01() {
+    let value = crate::store::ProjectLaunchPreference {
+        last_cli: "opencode".into(),
+        claude_launch_config_id: None,
+        codex_launch_config_id: None,
+        opencode_launch_config_id: Some("cfg-1".into()),
+    };
+    assert!(crate::store::validate_project_launch_preference(&value).is_ok());
+    let rejected = crate::store::ProjectLaunchPreference {
+        last_cli: "nonsense".into(),
+        ..value
+    };
+    assert!(crate::store::validate_project_launch_preference(&rejected).is_err());
+}
+
+#[test]
 #[allow(non_snake_case)]
 fn ProjectsState_PreservesUnknownTopLevelDataOnlyWhereAlreadySupported_004() {
     let tmp = tempfile::tempdir().unwrap();

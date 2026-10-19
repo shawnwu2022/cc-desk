@@ -71,3 +71,13 @@ fn SessionMeta_ExactIdentity_005() {
         incoming
     );
 }
+
+// opencode 是合法会话行 CLI（第三 CLI）；store 侧校验必须同步放行。
+#[test]
+fn SessionMeta_OpencodeCliAccepted_006() {
+    let mut value = record("opencode row", None);
+    value.cli = "opencode".into();
+    assert!(crate::store::validate_session_ui_record(&value).is_ok());
+    value.cli = "nonsense".into();
+    assert!(crate::store::validate_session_ui_record(&value).is_err());
+}

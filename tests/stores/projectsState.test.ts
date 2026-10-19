@@ -24,6 +24,7 @@ const codexPreference: ProjectLaunchPreference = {
   lastCli: 'codex',
   claudeLaunchConfigId: null,
   codexLaunchConfigId: 'codex-default',
+  opencodeLaunchConfigId: null,
 }
 
 vi.mock('@/api/tauri', () => ({
@@ -206,8 +207,17 @@ describe('durable shared projects state', () => {
     const codex = store.setLaunchPreference('/repo', 'codex', 'codex-success')
     first.resolve({ ...emptyState(), launchPreferences: { '/repo': { lastCli: 'claude', claudeLaunchConfigId: 'claude-success', codexLaunchConfigId: null } } })
     await Promise.all([claude, codex])
-    expect(write.mock.calls[1][1]).toEqual({ lastCli: 'codex', claudeLaunchConfigId: 'claude-success', codexLaunchConfigId: 'codex-success' })
-    expect(store.launchPreferences.get('/repo')).toEqual({ lastCli: 'codex', claudeLaunchConfigId: 'claude-success', codexLaunchConfigId: 'codex-success' })
+    expect(write.mock.calls[1][1]).toEqual({ lastCli: 'codex', claudeLaunchConfigId: 'claude-success', codexLaunchConfigId: 'codex-success', opencodeLaunchConfigId: null })
+    expect(store.launchPreferences.get('/repo')).toEqual({ lastCli: 'codex', claudeLaunchConfigId: 'claude-success', codexLaunchConfigId: 'codex-success', opencodeLaunchConfigId: null })
+  })
+
+  it('Task12_OpencodePreferenceThirdKey', async () => {
+    const api = await import('@/api/tauri')
+    const write = api.setProjectLaunchPreference as ReturnType<typeof vi.fn>
+    write.mockImplementationOnce(async (_path, preference) => ({ ...emptyState(), launchPreferences: { '/repo': preference } }))
+    const store = useProjectsStateStore(); await store.load()
+    await store.setLaunchPreference('/repo', 'opencode', 'opencode-success')
+    expect(write).toHaveBeenLastCalledWith('/repo', { lastCli: 'opencode', claudeLaunchConfigId: null, codexLaunchConfigId: null, opencodeLaunchConfigId: 'opencode-success' })
   })
 
 })

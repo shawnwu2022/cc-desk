@@ -29,7 +29,7 @@ function boundedText(value: unknown, maximum: number, empty = false): value is s
 function sessionRecord(value: unknown): value is SessionUiRecord {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const row = value as SessionUiRecord
-  return ['legacy-claude', 'native-cli'].includes(row.runtime) && ['claude', 'codex'].includes(row.cli)
+  return ['legacy-claude', 'native-cli'].includes(row.runtime) && ['claude', 'codex', 'opencode'].includes(row.cli)
     && boundedText(row.projectPath, 32768) && boundedText(row.adapterSessionId, 256)
     && (row.nativeSessionId == null || boundedText(row.nativeSessionId, 256)) && boundedText(row.title, 200, true)
     && Number.isInteger(row.lastActivityAt) && row.lastActivityAt >= 0
@@ -43,8 +43,8 @@ function sameSessionRecord(left: SessionUiRecord | undefined, right: SessionUiRe
 function launchPreference(value: unknown): value is ProjectLaunchPreference {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const row = value as ProjectLaunchPreference
-  return ['claude', 'codex'].includes(row.lastCli)
-    && [row.claudeLaunchConfigId, row.codexLaunchConfigId].every(id => id == null || boundedText(id, 256))
+  return ['claude', 'codex', 'opencode'].includes(row.lastCli)
+    && [row.claudeLaunchConfigId, row.codexLaunchConfigId, row.opencodeLaunchConfigId].every(id => id == null || boundedText(id, 256))
 }
 function syncStringMap(target: Map<string, string>, source: Record<string, string> | undefined): void {
   target.clear()
@@ -224,9 +224,11 @@ export const useProjectsStateStore = defineStore('projects-state', () => {
         lastCli: cli,
         claudeLaunchConfigId: current?.claudeLaunchConfigId ?? null,
         codexLaunchConfigId: current?.codexLaunchConfigId ?? null,
+        opencodeLaunchConfigId: current?.opencodeLaunchConfigId ?? null,
       }
       if (cli === 'claude') next.claudeLaunchConfigId = launchConfigId
-      else next.codexLaunchConfigId = launchConfigId
+      else if (cli === 'codex') next.codexLaunchConfigId = launchConfigId
+      else next.opencodeLaunchConfigId = launchConfigId
       return projectsApi.setProjectLaunchPreference(projectPath, next)
     }, true)
   }
