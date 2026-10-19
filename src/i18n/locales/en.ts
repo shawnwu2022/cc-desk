@@ -209,7 +209,7 @@ export default {
   newSessionAutomaticConfig: "Choose automatically",
   newSessionPermissions: "Permissions",
   newSessionCodexPermissions: "Uses Codex CLI’s own permission and approval settings",
-  newSessionOpencodePermissions: "Uses opencode's own permission settings",
+  newSessionOpencodePermissions: "Uses opencode’s own permission settings",
   newSessionSkipPermissions: "Desk’s configured skip-permission flag: enabled",
   newSessionInheritedPermissions: "Desk’s skip-permission flag follows the existing Claude launch settings",
   newSessionStandardPermissions: "Desk’s configured skip-permission flag: disabled",

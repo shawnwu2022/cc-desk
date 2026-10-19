@@ -63,8 +63,6 @@ h3 { font-size: 13px; font-weight: 500; color: var(--text-primary); }
 .setting-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 p { font-size: 12px; line-height: 1.5; color: var(--text-secondary); overflow-wrap: anywhere; }
 .cli-support-row { display: flex; gap: 10px; }
-.cli-support-toggle img { display: block; }
-/* 灰态 = 停用：沿用 SessionAppIcon 的 grayscale 先例，禁用控件透明度规范 .5。 */
+/* 灰态 = 停用：图标已改由 CliAppIcon 渲染，停用态仅靠禁用控件透明度规范 .5 区分。 */
 .cli-support-toggle--off { opacity: 0.5; }
-.cli-support-toggle--off img { filter: grayscale(1); }
 </style>
