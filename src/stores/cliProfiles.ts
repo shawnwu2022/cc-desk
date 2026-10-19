@@ -213,6 +213,7 @@ export const useCliProfilesStore = defineStore('cli-profiles', () => {
   const selectedIds = ref<Record<NativeCliKind, string | null>>({
     claude: null,
     codex: null,
+    opencode: null,
   })
 
   let epoch = 0
@@ -222,11 +223,13 @@ export const useCliProfilesStore = defineStore('cli-profiles', () => {
   const byCli = computed<Record<NativeCliKind, CliProfile[]>>(() => ({
     claude: profiles.value.filter(item => item.cli === 'claude'),
     codex: profiles.value.filter(item => item.cli === 'codex'),
+    opencode: profiles.value.filter(item => item.cli === 'opencode'),
   }))
 
   const selected = computed<Record<NativeCliKind, CliProfile | null>>(() => ({
     claude: selectedProfile('claude'),
     codex: selectedProfile('codex'),
+    opencode: selectedProfile('opencode'),
   }))
 
   function selectedProfile(cli: NativeCliKind): CliProfile | null {
@@ -236,7 +239,7 @@ export const useCliProfilesStore = defineStore('cli-profiles', () => {
   }
 
   function reconcileSelection() {
-    for (const cli of ['claude', 'codex'] as const) {
+    for (const cli of ['claude', 'codex', 'opencode'] as const) {
       const rows = profiles.value.filter(item => item.cli === cli)
       const current = selectedIds.value[cli]
       selectedIds.value[cli] = rows.some(item => item.id === current)

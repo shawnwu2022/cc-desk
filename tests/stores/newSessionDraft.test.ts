@@ -112,7 +112,7 @@ describe('New session draft', () => {
     const profiles = useCliProfilesStore(); profiles.profiles = [config('cx'), config('cc', 'claude')]; profiles.status = 'loaded'
     io.availability.mockImplementation(async (id, revision) => ({ profileId: id, profileRevision: revision, cli: id === 'cx' ? 'codex' : 'claude', state: id === 'cx' ? 'unavailable' : 'available-unverified', hostStatus: 'available', certified: false, ...(id === 'cx' ? { issue: { code: 'PROGRAM_UNAVAILABLE', retryable: false } } : {}) }))
     const draft = useNewSessionDraftStore(); await draft.refreshAvailability()
-    expect(draft.cliAvailability).toEqual({ claude: 'unknown', codex: 'unavailable' })
+    expect(draft.cliAvailability).toEqual({ claude: 'unknown', codex: 'unavailable', opencode: 'unknown' })
     expect(localStorage.getItem('cc-desk-launch-preferences-v1')).toBeNull()
     profiles.profiles[0].revision = '2'
     expect(draft.cliAvailability.codex).toBe('unknown')

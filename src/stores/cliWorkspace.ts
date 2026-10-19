@@ -252,6 +252,8 @@ export const useCliWorkspaceStore = defineStore('cli-product-workspace', () => {
       profiles.selected.claude?.revision ?? null,
       profiles.selected.codex?.id ?? null,
       profiles.selected.codex?.revision ?? null,
+      profiles.selected.opencode?.id ?? null,
+      profiles.selected.opencode?.revision ?? null,
     ],
     () => {
       if (profileIdentity.value && !currentSelectionMatches()) {

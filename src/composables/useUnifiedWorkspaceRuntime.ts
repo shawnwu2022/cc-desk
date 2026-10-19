@@ -214,7 +214,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     && !profiles.profiles.length && !workspace.projects.length && !projects.pinnedProjects.length)
   let retryRequest: { request: WorkspaceRequest; owns: () => boolean; resumeTarget?: UnifiedSession } | null = null
   let retryResumeTarget: { sequence: number; target: UnifiedSession } | null = null
-  const cliProblems = computed(() => (['claude', 'codex'] as const).flatMap(cli => {
+  const cliProblems = computed(() => (['claude', 'codex', 'opencode'] as const).flatMap(cli => {
     const latest = [...native.tabs.values()].reverse().filter(tab => tab.cli === cli).sort((a, b) => b.lastActivityAt - a.lastActivityAt)[0]
     const failed = latest?.status === 'failed' ? latest : null
     const code = latest?.status === 'running' ? null : failed?.errorCode === 'AUTH_REQUIRED' ? 'AUTH_REQUIRED'
@@ -549,7 +549,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
       const { intent, ...project } = request.project
       if (intent === 'restore') {
         shell.requestWorkspaceAction({ kind: 'restore-session', project, mode: 'history' })
-      } else if (intent === 'claude' || intent === 'codex') {
+      } else if (intent === 'claude' || intent === 'codex' || intent === 'opencode') {
         await catalog.createSession({ ...project, cli: intent, action: { kind: 'new' } })
       } else if (intent === 'options') draft.open(project)
       else draft.openChooser(project)

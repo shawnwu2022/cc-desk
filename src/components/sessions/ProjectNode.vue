@@ -57,7 +57,7 @@ const menuPosition = ref({ left: '8px', top: '8px' })
 const sessions = computed(() => props.project.sessions.filter(session => !session.archived))
 // 类型分组与打开状态无关：项目内按 CLI 分组，组内保持父级传入的创建时间倒序。
 // 多 CLI 项目渲染可折叠组头；单 CLI 项目零视觉变化（组头是唯一的恢复入口，不存在就必须展开）。
-const CLI_GROUP_ORDER: Record<string, number> = { claude: 0, codex: 1, shell: 2 }
+const CLI_GROUP_ORDER: Record<string, number> = { claude: 0, codex: 1, opencode: 2, shell: 3 }
 const typeGroups = computed(() => {
   const byCli = new Map<UnifiedCliKind, UnifiedSession[]>()
   for (const row of sessions.value) {

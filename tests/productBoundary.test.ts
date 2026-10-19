@@ -43,7 +43,7 @@ describe('CC Desk product boundary', () => {
     expect(app).not.toContain('decideStartupView')
     expect(app).not.toContain('startProjectSession')
     const workspace = read('src/components/workspace/WorkspaceView.vue')
-    expect(workspace).toContain("['claude', 'codex']")
+    expect(workspace).toContain("['claude', 'codex', 'opencode']")
     expect(workspace).toContain("cliAvailability[cli] === 'unavailable'")
     expect(workspace).not.toContain('check-failed-overlay')
     expect(workspace).not.toContain('ptySpawn')

@@ -1,8 +1,8 @@
-import type { UnifiedSession } from '@/types/unifiedSession'
+import type { UnifiedCliKind, UnifiedSession } from '@/types/unifiedSession'
 import { mapSafeUserError } from './userError'
 
 export interface SessionDiagnostics {
-  cli: 'claude' | 'codex'
+  cli: UnifiedCliKind
   runtime: 'native-cli' | 'legacy-claude'
   stateKey: string
   open: boolean
@@ -18,7 +18,7 @@ const stateKeys = {
 /** Deliberate allowlist: no title, IDs, paths, argv, configuration or raw errors. */
 export function projectSessionDiagnostics(row: UnifiedSession, open: boolean, generation?: number, preparing = false): SessionDiagnostics {
   return {
-    cli: row.cli === 'codex' ? 'codex' : 'claude',
+    cli: row.cli,
     runtime: row.runtime === 'native-cli' ? 'native-cli' : 'legacy-claude',
     stateKey: row.attentionState === 'needs-user' ? 'sessionStatusNeedsUser'
       : Object.prototype.hasOwnProperty.call(stateKeys, row.processState) ? stateKeys[row.processState] : 'sessionStatusConfirming',

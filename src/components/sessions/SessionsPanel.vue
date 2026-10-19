@@ -147,7 +147,7 @@ const displayedGroups = computed(() => {
   })
 })
 function newSessionRequest(request: NewSessionRequest) {
-  if (request.intent === 'claude' || request.intent === 'codex') {
+  if (request.intent === 'claude' || request.intent === 'codex' || request.intent === 'opencode') {
     expandedKeys.value = new Set([...expandedKeys.value, request.projectKey])
     // 目标 CLI 组折叠时新建行不可见，取消/重试入口也随之隐藏，必须一并展开。
     collapsedCliGroups.value = new Set([...collapsedCliGroups.value].filter(key => key !== `${request.projectKey}::${request.intent}`))

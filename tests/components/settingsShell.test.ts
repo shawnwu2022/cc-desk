@@ -322,7 +322,7 @@ it('Settings_CliSupportIconTogglesPersist_020', async () => {
   expect(support.isEnabled('codex')).toBe(false)
   expect(wrapper.find('[data-cli-support=codex]').attributes('aria-pressed')).toBe('false')
   expect(wrapper.find('[data-cli-support=codex]').classes()).toContain('cli-support-toggle--off')
-  expect(JSON.parse(localStorage.getItem('cc-desk-cli-support-v1')!)).toEqual({ claude: true, codex: false })
+  expect(JSON.parse(localStorage.getItem('cc-desk-cli-support-v1')!)).toEqual({ claude: true, codex: false, opencode: true })
   await wrapper.find('[data-cli-support=codex]').trigger('click'); await flushPromises()
   expect(support.isEnabled('codex')).toBe(true)
 })

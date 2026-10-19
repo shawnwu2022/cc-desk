@@ -41,7 +41,7 @@ export const useNativeProjectionStore = defineStore('native-projection', () => {
   /** Independent one-page read for an exact owning session. Does not share the
    * compatibility panel's mutable result slot or clear its in-flight request. */
   async function readScoped(target: ScopeTarget, kind: ResourceKind, identity: {
-    cli: 'claude' | 'codex'; profileId: string; profileRevision: string
+    cli: 'claude' | 'codex' | 'opencode'; profileId: string; profileRevision: string
   }, isCurrent: () => boolean = () => true): Promise<ProjectionResult> {
     if (sequence === BigInt('18446744073709551615')) throw { code: 'SCOPE_EPOCH_EXHAUSTED' }
     const epoch = (++sequence).toString()

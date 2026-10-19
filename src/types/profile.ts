@@ -46,7 +46,7 @@ export interface ProfileList {
 }
 
 export type LaunchConfigurationEditorRequest =
-  | { kind: 'create'; cli: 'claude' | 'codex' }
+  | { kind: 'create'; cli: 'claude' | 'codex' | 'opencode' }
   | { kind: 'edit' | 'copy' | 'rename'; profileId: string }
 
 /** A frozen editor submission, separate from a runtime's launch snapshot. */

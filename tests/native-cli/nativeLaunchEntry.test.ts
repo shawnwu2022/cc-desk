@@ -2,10 +2,11 @@ import { describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { useNativeTabsStore } from '@/stores/nativeTabs'
 import type { CliProfile } from '@/types/profile'
+import type { NativeCliKind } from '@/types/cli'
 import type { LaunchAttempt, LaunchStatus } from '@/api/cliLaunchAttempt'
 import { createNativeLaunchEntry } from '@/terminal/nativeLaunchEntry'
 
-function profile(id: string, cli: 'claude' | 'codex', revision = '7'): CliProfile {
+function profile(id: string, cli: NativeCliKind, revision = '7'): CliProfile {
   return {
     id,
     revision,
@@ -80,7 +81,11 @@ describe('D23 native launch/recovery user entry', () => {
     expect(captured).toEqual({ kind: 'raw', argv: ['two words', '', '--literal= x'] })
   })
   it('D23_Launch_FreezesSelectedProfileRevisionIntoOneAttempt_01', async () => {
-    const selected = { claude: profile('claude-main', 'claude', '9'), codex: profile('codex-main', 'codex', '4') }
+    const selected: Record<NativeCliKind, CliProfile> = {
+      claude: profile('claude-main', 'claude', '9'),
+      codex: profile('codex-main', 'codex', '4'),
+      opencode: profile('opencode-main', 'opencode', '3'),
+    }
     let captured: any
     const attempt: LaunchAttempt = {
       start: vi.fn(async () => running('request-1', 'run-1', 1)),
