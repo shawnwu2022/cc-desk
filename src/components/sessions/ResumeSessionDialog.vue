@@ -46,6 +46,9 @@ const open = computed({ get: () => !!catalog.resumeDialog, set: value => { if (!
 const mode = computed(() => catalog.resumeDialog?.mode ?? 'history')
 const configurations = computed(() => [{ value: '', label: t('resumeChooseConfiguration') }, ...profiles.profiles.filter(profile => profile.cli === cli.value).map(profile => ({ value: profile.id, label: profile.name }))])
 const registeredProjects = computed(() => [{ value: '', label: t('resumeChooseProject') }, ...workspace.projects.map(project => ({ value: project.projectId, label: projectBasename(project.selectedPath) }))])
+// resume-picker 只有 claude/codex 提供原生列表；opencode 入口必须隐藏而非降级，
+// 否则会准备出后端必拒（UNSUPPORTED_ACTION）的 picker。
+const directToolOptions = computed(() => [{ value: 'claude', label: 'Claude Code' }, { value: 'codex', label: 'Codex CLI' }, ...(mode.value === 'resume-picker' ? [] : [{ value: 'opencode', label: 'opencode' }])])
 const title = computed(() => t(mode.value === 'session' ? 'resumeConfirm' : mode.value === 'resume-id' ? 'newSessionById' : mode.value === 'resume-picker' ? 'newSessionNativePicker' : 'newSessionRestore'))
 function safeMessage(failure: unknown) {
   const code = failure instanceof Error ? failure.message : failure && typeof failure === 'object' && 'code' in failure && typeof failure.code === 'string' ? failure.code : ''
@@ -162,7 +165,7 @@ onUnmounted(() => { ++searchEpoch; ++operationEpoch })
         </div>
       </template>
       <template v-else-if="mode !== 'session'">
-        <AppSelect v-model="cli" data-resume-cli :label="t('newSessionTool')" :disabled="busy" :options="[{ value: 'claude', label: 'Claude Code' }, { value: 'codex', label: 'Codex CLI' }, { value: 'opencode', label: 'opencode' }]" />
+        <AppSelect v-model="cli" data-resume-cli :label="t('newSessionTool')" :disabled="busy" :options="directToolOptions" />
         <AppSelect v-model="projectId" data-resume-project :label="t('newSessionProject')" :options="registeredProjects" :disabled="busy" />
         <AppSelect v-model="configId" data-resume-config :label="t('newSessionConfiguration')" :options="configurations" :disabled="busy" />
         <AppInput v-if="mode === 'resume-id'" v-model="sessionId" data-resume-id :label="t('resumeSessionId')" :disabled="busy" />

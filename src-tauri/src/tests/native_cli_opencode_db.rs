@@ -167,6 +167,63 @@ fn Opencode_SessionKeyUsesStableIdentityContract_06() {
     }
 }
 
+// 具名项目超限：保留最新的 PER_PROJECT_LIMIT 行并在末行披露 truncated，不伪造完整列表。
+#[test]
+#[allow(non_snake_case)]
+fn Opencode_NamedOverflowDisclosesTruncation_07() {
+    let f = Fixture::new();
+    let conn = f.conn();
+    f.register_project(&conn, "p1");
+    for index in 0..(2000 + 3) {
+        seed(&conn, &format!("ses_{index:05}"), "p1", &f.project.to_string_lossy(), "T", 1000 + index, None);
+    }
+    let items = read_history(&Root::open(&f.root).unwrap(), &[f.project_ref()]).unwrap();
+    assert_eq!(items.len(), 2000);
+    match &items[items.len() - 1] {
+        ResourceItem::Session { truncated, native_session_id, .. } => {
+            assert!(truncated);
+            // ORDER BY time_updated DESC：丢弃的是最旧的 3 行，末行是保留窗口里最旧的。
+            assert_eq!(native_session_id, "ses_00003");
+        }
+        _ => panic!("session expected"),
+    }
+}
+
+// global 桶同样多取一行：目录过滤后无法证明完整性，超限也必须披露「可能不完整」。
+#[test]
+#[allow(non_snake_case)]
+fn Opencode_GlobalOverflowDisclosesTruncation_08() {
+    let f = Fixture::new();
+    let conn = f.conn();
+    conn.execute("INSERT INTO project (id, worktree, time_created, time_updated, sandboxes) VALUES ('global', '/', 1, 1, '[]')", []).unwrap();
+    for index in 0..(2000 + 1) {
+        seed(&conn, &format!("glo_{index:05}"), "global", &f.project.to_string_lossy(), "T", 1000 + index, None);
+    }
+    let items = read_history(&Root::open(&f.root).unwrap(), &[f.project_ref()]).unwrap();
+    assert_eq!(items.len(), 2000);
+    match &items[items.len() - 1] {
+        ResourceItem::Session { truncated, .. } => assert!(truncated),
+        _ => panic!("session expected"),
+    }
+}
+
+// 病理行（超长 id）逐行省略而非整包拒绝；同页正常行不受影响。
+#[test]
+#[allow(non_snake_case)]
+fn Opencode_OversizedIdentityRowIsOmitted_09() {
+    let f = Fixture::new();
+    let conn = f.conn();
+    f.register_project(&conn, "p1");
+    seed(&conn, &"a".repeat(300), "p1", &f.project.to_string_lossy(), "bad", 300, None);
+    seed(&conn, "ses_ok", "p1", &f.project.to_string_lossy(), "ok", 100, None);
+    let items = read_history(&Root::open(&f.root).unwrap(), &[f.project_ref()]).unwrap();
+    assert_eq!(items.len(), 1);
+    match &items[0] {
+        ResourceItem::Session { native_session_id, .. } => assert_eq!(native_session_id, "ses_ok"),
+        _ => panic!("session expected"),
+    }
+}
+
 // 独立进程持未提交写事务时，WAL 只读读者必须读到已提交行（对抗修订 #5）：
 // "成功或 BUSY 都算过"会掩盖错误实现；确定性 BUSY 是另一条用例，不在这里混测。
 #[cfg(windows)]

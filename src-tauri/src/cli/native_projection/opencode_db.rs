@@ -134,9 +134,12 @@ fn append_project(
                WHERE parent_id IS NULL AND project_id = ?1 \
                ORDER BY time_updated DESC, id ASC LIMIT ?2";
     for project_id in &named {
-        append_rows(tx, root, project, sql, &[project_id as &dyn rusqlite::ToSql, &PER_PROJECT_LIMIT], out)?;
+        // SQL 多取一行：让 append_rows 能观察到「还有更多」，否则截断分支永不触发。
+        append_rows(tx, root, project, sql, &[project_id as &dyn rusqlite::ToSql, &(PER_PROJECT_LIMIT + 1)], out)?;
     }
     // global 是漂移桶：永不按 worktree 归属，只按 directory 拼法比对（spec §5.3）。
+    // 故意多取一行：目录过滤后无法证明完整性，超限就在该项目末行披露「可能不完整」，
+    // 宁可过度披露也好过静默省略。
     let sql = format!(
         "SELECT id, title, directory, time_created, time_updated FROM session \
          WHERE parent_id IS NULL AND project_id = '{GLOBAL_PROJECT_ID}' \
@@ -144,7 +147,7 @@ fn append_project(
     );
     let mut stmt = tx.prepare(&sql).map_err(sqlite_code)?;
     let rows = stmt
-        .query_map([PER_PROJECT_LIMIT], |row| {
+        .query_map([PER_PROJECT_LIMIT + 1], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
@@ -155,9 +158,20 @@ fn append_project(
         })
         .map_err(sqlite_code)?;
     let spellings: Vec<String> = project.paths.iter().map(|path| spelling(&path.to_string_lossy())).collect();
+    let mut count = 0i64;
     for row in rows {
         let (id, title, directory, created_ms, updated_ms) = row.map_err(sqlite_code)?;
+        count += 1;
+        if count > PER_PROJECT_LIMIT {
+            if let Some(ResourceItem::Session { truncated, .. }) = out.last_mut() {
+                *truncated = true;
+            }
+            continue;
+        }
         if !spellings.iter().any(|candidate| *candidate == spelling(&directory)) {
+            continue;
+        }
+        if !bounded_identity(&id, &directory) {
             continue;
         }
         push_session(root, project, out, id, title, directory, created_ms, updated_ms);
@@ -165,7 +179,8 @@ fn append_project(
     Ok(())
 }
 
-/// 单个具名 project_id 的有界查询；超出上限的行丢弃并按截断披露。
+/// 单个具名 project_id 的有界查询；调用方以 LIMIT+1 取行，超出上限的行丢弃
+/// 并在该项目最后一行披露截断。计数按取到的行算，病理行不参与披露判定。
 fn append_rows(
     tx: &Connection,
     root: &Root,
@@ -197,9 +212,18 @@ fn append_rows(
             }
             continue;
         }
+        if !bounded_identity(&id, &directory) {
+            continue;
+        }
         push_session(root, project, out, id, title, directory, created_ms, updated_ms);
     }
     Ok(())
+}
+
+/// 行身份界与 Claude/Codex 解析路径一致（id ≤256 字节、directory ≤32768 字节）。
+/// 病理行选择逐行省略而非整包拒绝：一行脏数据不该让前端整个响应 INVALID_PROJECTION。
+fn bounded_identity(id: &str, directory: &str) -> bool {
+    !id.is_empty() && id.len() <= 256 && !directory.is_empty() && directory.len() <= 32768
 }
 
 #[allow(clippy::too_many_arguments)]
