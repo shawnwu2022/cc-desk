@@ -100,4 +100,10 @@ describe('Merged session app status', () => {
     }
     wrapper.unmount()
   })
+  // opencode 的可访问名同样来自完整工具名，不能落回 “Codex CLI”。
+  it('AppIcon_OpencodeAccessibleName_007', () => {
+    const wrapper = mount(SessionAppIcon, { props: { cli: 'opencode', state: 'running' }, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en, zh } })] } })
+    expect(wrapper.get('.session-app-icon').attributes('aria-label')).toBe('opencode; Running')
+    wrapper.unmount()
+  })
 })
