@@ -22,6 +22,7 @@ vi.mock('@xterm/xterm', () => ({ Terminal: class {
   loadAddon() {} open(el: HTMLElement) { this.element = el; this.textarea = document.createElement('textarea'); el.append(this.textarea) }
   parsed = new Set<() => void>(); parsedRegistrations = 0
   onWriteParsed(callback: () => void) { this.parsedRegistrations++; this.parsed.add(callback); return { dispose: () => this.parsed.delete(callback) } }
+  onTitleChange() { return { dispose() {} } }
   onData() { return { dispose() {} } } attachCustomKeyEventHandler(fn: any) { this.key = fn } getSelection() { return this.selection }
   write(data: string | Uint8Array, callback?: () => void) { this.output += typeof data === 'string' ? data : new TextDecoder().decode(data); this.parsed.forEach(listener => listener()); callback?.() }
   reset() { this.output = ''; this.modes = { applicationCursorKeysMode: false, applicationKeypadMode: false, bracketedPasteMode: false, insertMode: false, mouseTrackingMode: 'none', originMode: false, reverseWraparoundMode: false, sendFocusMode: false, wraparoundMode: true } }

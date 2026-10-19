@@ -48,6 +48,46 @@ fn Parser_FirstUser_002() {
     assert_eq!(parse_session_name_full(&path).unwrap().name, "First user");
 }
 
+// CLI AI 标题覆盖首问，后写 AI 标题生效；手动标题始终优先。
+#[test]
+fn Parser_AiTitle_044() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session.jsonl");
+    let prompt = "{\"type\":\"user\",\"message\":{\"content\":\"First user\"}}\n";
+    let ai = "{\"type\":\"ai-title\",\"sessionId\":\"session\",\"aiTitle\":\"AI title\"}\n";
+    let newer = "{\"type\":\"ai-title\",\"sessionId\":\"session\",\"aiTitle\":\"New AI title\"}\n";
+    let custom = "{\"type\":\"custom-title\",\"customTitle\":\"Manual title\"}\n";
+    for (content, expected) in [
+        (format!("{prompt}{ai}"), "AI title"),
+        (format!("{ai}{prompt}{newer}"), "New AI title"),
+        (format!("{prompt}{custom}{ai}"), "Manual title"),
+        (format!("{prompt}{ai}{custom}"), "Manual title"),
+    ] {
+        std::fs::write(&path, content).unwrap();
+        assert_eq!(parse_session_name_full(&path).unwrap().name, expected);
+    }
+}
+
+// 不借用其他会话或缺失身份的 AI 标题；无效后续标题不能覆盖已确认标题。
+#[test]
+fn Parser_TitleIdentity_045() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session.jsonl");
+    std::fs::write(
+        &path,
+        concat!(
+        "{\"type\":\"user\",\"message\":{\"content\":\"Prompt\"}}\n",
+        "{\"type\":\"ai-title\",\"sessionId\":\"session\",\"aiTitle\":\"Own title\"}\n",
+        "{\"type\":\"ai-title\",\"sessionId\":\"other\",\"aiTitle\":\"Wrong AI\"}\n",
+        "{\"type\":\"ai-title\",\"aiTitle\":\"Unknown owner\"}\n",
+        "{\"type\":\"custom-title\",\"sessionId\":\"other\",\"customTitle\":\"Wrong custom\"}\n",
+        "{\"type\":\"ai-title\",\"sessionId\":\"session\",\"aiTitle\":\"  \"}\n"
+    ),
+    )
+    .unwrap();
+    assert_eq!(parse_session_name_full(&path).unwrap().name, "Own title");
+}
+
 // 无效 UTF-8 与无效 JSON 行不得阻止后续有效名称解析。
 #[test]
 fn Parser_InvalidLines_003() {
@@ -278,7 +318,7 @@ fn Index_ParserVersion_Empty_012() {
     };
     std::fs::write(
         &paths.data,
-        r#"{"schemaVersion":2,"parserVersion":0,"projects":{"p":{"s.jsonl":{"name":"stale","observedLength":1,"modifiedSecs":1,"modifiedNanos":1,"cachedAtMs":1}}}}"#,
+        r#"{"schemaVersion":2,"parserVersion":1,"projects":{"p":{"s.jsonl":{"name":"stale prompt","observedLength":1,"modifiedSecs":1,"modifiedNanos":1,"cachedAtMs":1}}}}"#,
     )
     .unwrap();
     let now_ms = Arc::new(AtomicU64::new(1_000));

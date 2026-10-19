@@ -43,6 +43,7 @@ import { formatDroppedPaths } from '@/utils/terminalDropPaths'
 import { parseLegacyCustomArgs } from '@/utils/legacyCustomArgs'
 import { PtyIndex } from '@/utils/ptyIndex'
 import { TerminalRendererRegistry } from '@/utils/rendererRegistry'
+import { observeTerminalTitleChanges } from '@/terminal/titleRefresh'
 import {
   bindNativePaste,
   createLegacyInputQueue,
@@ -323,7 +324,10 @@ async function loadRendererAddonsOnce(term: Terminal) {
 }
 
 // 统一清理 terminal：先停 timer，再 dispose
+const titleObservations = new WeakMap<Terminal, () => void>()
 async function disposeTerminal(term: Terminal, context: string) {
+  titleObservations.get(term)?.()
+  titleObservations.delete(term)
   legacyInputQueues.get(term)?.dispose()
   legacyInputQueues.delete(term)
   rendererRegistry.markDisposed(term)
@@ -409,6 +413,17 @@ function createTerminal(tabId: string): { term: Terminal; fitAddon: FitAddon } {
 
   const fitAddon = new FitAddon()
   term.loadAddon(fitAddon)
+  titleObservations.set(term, observeTerminalTitleChanges(term, () => {
+    const tab = sessionStore.tabs.get(tabId)
+    const instance = terminalInstances.get(tabId)
+    if (!tab || !instance || instance.term !== term || !instance.ptyId || tab.ptyId !== instance.ptyId) return
+    const ptyId = tab.ptyId, generation = tab.ptyGeneration
+    return () => {
+      if (sessionStore.tabs.get(tabId) !== tab || terminalInstances.get(tabId) !== instance
+        || tab.ptyId !== ptyId || tab.ptyGeneration !== generation) return
+      tab.titleChangeRevision = (tab.titleChangeRevision ?? 0) + 1
+    }
+  }))
 
   // disableStdin also suppresses parser replies, so it must stay off.
   // The pinned xterm user-input signal separates hidden user events from

@@ -11,10 +11,12 @@ import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
 import { useNativeTabsStore, captureNativeAttempt } from '@/stores/nativeTabs'
 import { useCliProfilesStore } from '@/stores/cliProfiles'
 import { useProjectsStateStore } from '@/stores/projectsState'
+import { useSessionStore } from '@/stores/session'
+import type { HookEventPayload } from '@/types/hook'
 import type { ProjectsState } from '@/types/app'
 
-const io = vi.hoisted(() => ({ projects: vi.fn(), sessions: vi.fn(), profiles: vi.fn(), registered: vi.fn(), register: vi.fn(), patchProfile: vi.fn(), getState: vi.fn(), restore: vi.fn(), upsertRecord: vi.fn(), setPreference: vi.fn(), scope: vi.fn(), read: vi.fn(), writeText: vi.fn(), legacyRoot: vi.fn() }))
-vi.mock('@/api/tauri', async original => ({ ...await original<object>(), ptySpawn: vi.fn(), ptyInput: vi.fn(), ptyKill: vi.fn(), getProjectsState: io.getState, restoreSession: io.restore, upsertSessionUiRecord: io.upsertRecord, setProjectLaunchPreference: io.setPreference, updateAppConfig: vi.fn().mockResolvedValue(undefined), getAppConfig: vi.fn().mockResolvedValue({ theme: 'light', terminalTheme: 'cc-box-light', language: 'en' }), getProjects: io.projects, getSessions: io.sessions, createNativeProjectionClient: () => ({ scope: io.scope, read: io.read }), legacyClaudeRootKey: io.legacyRoot, onHookEvent: async () => () => {} }))
+const io = vi.hoisted(() => ({ projects: vi.fn(), sessions: vi.fn(), profiles: vi.fn(), registered: vi.fn(), register: vi.fn(), patchProfile: vi.fn(), getState: vi.fn(), restore: vi.fn(), upsertRecord: vi.fn(), setPreference: vi.fn(), scope: vi.fn(), read: vi.fn(), writeText: vi.fn(), legacyRoot: vi.fn(), hook: vi.fn() }))
+vi.mock('@/api/tauri', async original => ({ ...await original<object>(), ptySpawn: vi.fn(), ptyInput: vi.fn(), ptyKill: vi.fn(), getProjectsState: io.getState, restoreSession: io.restore, upsertSessionUiRecord: io.upsertRecord, setProjectLaunchPreference: io.setPreference, updateAppConfig: vi.fn().mockResolvedValue(undefined), getAppConfig: vi.fn().mockResolvedValue({ theme: 'light', terminalTheme: 'cc-box-light', language: 'en' }), getProjects: io.projects, getSessions: io.sessions, createNativeProjectionClient: () => ({ scope: io.scope, read: io.read }), legacyClaudeRootKey: io.legacyRoot, onHookEvent: io.hook }))
 vi.mock('@/api/cli', () => ({ cliListProfiles: io.profiles, cliPatchProfile: io.patchProfile }))
 vi.mock('@/api/cliAvailability', () => ({ cliGetAvailability: async (profileId: string, profileRevision: string) => {
   const profile = useCliProfilesStore().profile(profileId)!
@@ -36,6 +38,7 @@ beforeEach(() => {
   io.getState.mockImplementation(async () => structuredClone(persisted))
   io.upsertRecord.mockImplementation(async (key, record) => { persisted.sessionRecords ??= {}; persisted.sessionRecords[key] = structuredClone(record); return structuredClone(persisted) })
   io.projects.mockResolvedValue([]); io.sessions.mockResolvedValue([])
+  io.hook.mockResolvedValue(() => {})
   io.profiles.mockResolvedValue({ revision: '7', profiles: [{ id: 'cl', revision: '7', cli: 'claude', name: 'CL', launcher: { kind: 'native' }, programPath: { mode: 'set', value: '/tools/claude' }, defaultArgs: { mode: 'inherit' }, skipPermissions: { mode: 'inherit' }, observer: { mode: 'inherit' }, env: {} }] })
   io.registered.mockResolvedValue({ revision: '1', projects: [{ projectId: 'project', hostId: 'host', sourcePathKey: 'source', selectedPath: '/repo', canonicalPath: '/repo', alias: { mode: 'inherit' }, pinned: { mode: 'inherit' }, hidden: { mode: 'inherit' } }] })
   io.legacyRoot.mockResolvedValue({ rootKey: '', tabsUseDefaultRoot: false })
@@ -58,6 +61,202 @@ function render() {
 }
 
 describe('running session title sync to session list', () => {
+  // CLI /rename 没有 UserPromptSubmit/Stop；OSC 只使精确来源过期，显示名仍从历史读取。
+  it.each(['native', 'legacy'] as const)('TitleSync_IdleCliRenameSignal_015 %s', async runtimeKind => {
+    let tab: { titleChangeRevision?: number }
+    if (runtimeKind === 'legacy') {
+      io.profiles.mockResolvedValue({ revision: '1', profiles: [] })
+      io.legacyRoot.mockResolvedValue({ rootKey: 'root', tabsUseDefaultRoot: true })
+      io.sessions.mockResolvedValue([{ sessionId: 'session-1', name: 'First prompt title', lastActiveAt: 1 }])
+      const legacy = useSessionStore(), id = legacy.createTab('/repo', { sessionId: 'session-1', name: 'First prompt title' })
+      tab = Object.assign(legacy.tabs.get(id)!, { status: 'running' as const, ptyId: 'pty', usesDefaultClaudeRoot: true, titleChangeRevision: 0 })
+      render()
+    } else {
+      render(); await flushPromises()
+      const tabs = useNativeTabsStore()
+      const created = tabs.create({ cli: 'claude', projectId: 'project', projectPath: '/repo', profileId: 'cl', profileRevision: '7', action: { kind: 'new' } })
+      const live = tabs.tab(created.tabId)!, attempt = captureNativeAttempt(live)
+      tabs.applyLaunchStatus(live.tabId, { instanceId: 'i', requestId: live.requestId, run: { runId: live.runId, generation: live.generation }, revision: '1', phase: 'running', failure: null })
+      tabs.applyObservation(live.tabId, attempt, { observation: 'active', activity: 'idle' })
+      tabs.applyObservationIdentity(live.tabId, attempt, 'session-1')
+      tab = Object.assign(live, { titleChangeRevision: 0 })
+    }
+    await flushPromises(); await vi.advanceTimersByTimeAsync(300)
+    const catalog = useUnifiedSessionsStore(), refresh = vi.spyOn(catalog, 'refresh')
+    for (const name of ['CLI rename A', 'CLI rename B']) {
+      io.read.mockResolvedValue({ state: 'ready', items: [sessionItem(name, 'custom')], hasMore: false })
+      io.sessions.mockResolvedValue([{ sessionId: 'session-1', name, lastActiveAt: 1 }])
+      tab.titleChangeRevision = (tab.titleChangeRevision ?? 0) + 1
+      await flushPromises(); await vi.advanceTimersByTimeAsync(300)
+      expect(catalog.sessions.find(row => row.opened)?.title).toBe(name)
+    }
+    expect(refresh.mock.calls.every(([project]) => project === '/repo')).toBe(true)
+    const reads = io.read.mock.calls.length + io.sessions.mock.calls.length
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(io.read.mock.calls.length + io.sessions.mock.calls.length).toBe(reads)
+  })
+
+  // 已有 AI 标题不能阻止后续回合迟写的新标题，避免 Native 打开行永久停留在旧摘要。
+  it('TitleSync_NativeRevisedAi_011', async () => {
+    io.read.mockResolvedValue({ state: 'ready', items: [sessionItem('Old AI title', 'ai')], hasMore: false })
+    render(); await flushPromises()
+    const tabs = useNativeTabsStore()
+    const created = tabs.create({ cli: 'claude', projectId: 'project', projectPath: '/repo', profileId: 'cl', profileRevision: '7', action: { kind: 'new' } })
+    const tab = tabs.tab(created.tabId)!, attempt = captureNativeAttempt(tab)
+    tabs.applyLaunchStatus(tab.tabId, { instanceId: 'i', requestId: tab.requestId, run: { runId: tab.runId, generation: tab.generation }, revision: '1', phase: 'running', failure: null })
+    tabs.applyObservation(tab.tabId, attempt, { observation: 'active', activity: 'idle' })
+    tabs.applyObservationIdentity(tab.tabId, attempt, 'session-1')
+    await flushPromises(); await vi.advanceTimersByTimeAsync(300)
+    tabs.applyObservationNotice(tab.tabId, attempt, { kind: 'reply-ended', eventId: 'reply-2', receivedAt: 2, runId: tab.runId, generation: tab.generation })
+    await vi.advanceTimersByTimeAsync(300)
+    io.read.mockResolvedValue({ state: 'ready', items: [sessionItem('Revised AI title', 'ai')], hasMore: false })
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(useUnifiedSessionsStore().sessions.find(row => row.opened)?.title).toBe('Revised AI title')
+  })
+
+  // 旧运行行在刷新后跟随精确来源标题，Desk 显式别名继续覆盖，未知根不得借名。
+  it.each(['cli', 'alias', 'unknown-root'] as const)('TitleSync_LegacyRefresh_007 %s', async mode => {
+    io.profiles.mockResolvedValue({ revision: '1', profiles: [] })
+    io.legacyRoot.mockResolvedValue({ rootKey: 'root', tabsUseDefaultRoot: true })
+    io.sessions.mockResolvedValue([{ sessionId: 'legacy-session', name: 'AI title', projectPath: '/repo', lastActiveAt: 1 }])
+    const legacy = useSessionStore()
+    const id = legacy.createTab('/repo', { sessionId: 'legacy-session', name: 'First prompt' })
+    Object.assign(legacy.tabs.get(id)!, { status: 'running', ptyId: 'pty', usesDefaultClaudeRoot: mode !== 'unknown-root' })
+    if (mode === 'alias') useProjectsStateStore().sessionRecords.set('legacy-history:/repo:legacy-session', {
+      runtime: 'legacy-claude', cli: 'claude', projectPath: '/repo', adapterSessionId: 'legacy-session', nativeSessionId: 'legacy-session', title: 'Desk alias', lastActivityAt: 1,
+    })
+    const { runtime } = render(); await flushPromises()
+    const catalog = useUnifiedSessionsStore()
+    expect(catalog.sessions.find(row => row.opened)?.title).toBe(mode === 'alias' ? 'Desk alias' : mode === 'cli' ? 'AI title' : 'First prompt')
+    io.sessions.mockResolvedValue([{ sessionId: 'legacy-session', name: 'CLI renamed', projectPath: '/repo', lastActiveAt: 2 }])
+    await runtime.refresh(); await flushPromises()
+    expect(catalog.sessions.find(row => row.opened)?.title).toBe(mode === 'alias' ? 'Desk alias' : mode === 'cli' ? 'CLI renamed' : 'First prompt')
+  })
+
+  // 真实 hook 分发触发旧会话补读；AI 标题迟写盘也能更新，读取仅限所在项目且有界。
+  it('TitleSync_LegacyLateTitle_008', async () => {
+    io.profiles.mockResolvedValue({ revision: '1', profiles: [] })
+    io.legacyRoot.mockResolvedValue({ rootKey: 'root', tabsUseDefaultRoot: true })
+    io.sessions.mockResolvedValue([{ sessionId: 'legacy-session', name: 'First prompt', projectPath: '/repo', lastActiveAt: 1 }])
+    let receive!: (event: HookEventPayload) => void
+    io.hook.mockImplementation(async handler => { receive = handler; return () => {} })
+    const legacy = useSessionStore(), id = legacy.createTab('/repo', { sessionId: 'legacy-session', name: 'First prompt' })
+    Object.assign(legacy.tabs.get(id)!, { status: 'running', ptyId: 'pty', usesDefaultClaudeRoot: true })
+    render(); await flushPromises(); await vi.advanceTimersByTimeAsync(300)
+    const catalog = useUnifiedSessionsStore(), refresh = vi.spyOn(catalog, 'refresh')
+    io.sessions.mockClear()
+    receive({ ptyId: 'pty', runId: 'pty', generation: 1, sessionId: 'legacy-session', eventId: 'reply-1', observerSource: 'claude-hook',
+      eventName: 'Stop', state: 'idle', timestamp: 1, detail: { type: 'stop', data: {} } } as HookEventPayload)
+    await vi.advanceTimersByTimeAsync(300)
+    expect(catalog.sessions.find(row => row.opened)?.title).toBe('First prompt')
+    io.sessions.mockResolvedValue([{ sessionId: 'legacy-session', name: 'Late AI title', projectPath: '/repo', lastActiveAt: 2 }])
+    await vi.advanceTimersByTimeAsync(60_000); await flushPromises()
+    expect(catalog.sessions.find(row => row.opened)?.title).toBe('Late AI title')
+    expect(io.sessions.mock.calls.every(([project]) => project === '/repo')).toBe(true)
+    expect(io.sessions.mock.calls.length).toBeLessThanOrEqual(4)
+    expect(refresh.mock.calls.every(([project]) => project === '/repo')).toBe(true)
+    const calls = io.sessions.mock.calls.length
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(io.sessions).toHaveBeenCalledTimes(calls)
+  })
+
+  // 同项目多个运行会话的事件突发合并为一次读取，标题按各自 sessionId 发布。
+  it('TitleSync_LegacyCoalesced_012', async () => {
+    io.profiles.mockResolvedValue({ revision: '1', profiles: [] })
+    io.legacyRoot.mockResolvedValue({ rootKey: 'root', tabsUseDefaultRoot: true })
+    io.sessions.mockResolvedValue(['first', 'second'].map(sessionId => ({ sessionId, name: sessionId, lastActiveAt: 1 })))
+    let receive!: (event: HookEventPayload) => void
+    io.hook.mockImplementation(async handler => { receive = handler; return () => {} })
+    const legacy = useSessionStore(), id = legacy.createTab('/repo', { sessionId: 'first', name: 'first' })
+    Object.assign(legacy.tabs.get(id)!, { status: 'running', ptyId: 'pty-first', usesDefaultClaudeRoot: true })
+    legacy.tabs.set('second-tab', { ...legacy.tabs.get(id)!, tabId: 'second-tab', ptyId: 'pty-second', sessionId: 'second' })
+    render(); await flushPromises(); await vi.advanceTimersByTimeAsync(300)
+    io.sessions.mockClear().mockResolvedValue(['first', 'second'].map(sessionId => ({ sessionId, name: `${sessionId} AI`, lastActiveAt: 2 })))
+    for (const sessionId of ['first', 'second']) receive({ ptyId: `pty-${sessionId}`, runId: `pty-${sessionId}`, generation: 1,
+      sessionId, eventId: `prompt-${sessionId}`, observerSource: 'claude-hook', eventName: 'UserPromptSubmit', state: 'thinking',
+      timestamp: 1, detail: { type: 'userPromptSubmit', data: { prompt: 'next' } } } as HookEventPayload)
+    await vi.advanceTimersByTimeAsync(300)
+    expect(io.sessions).toHaveBeenCalledExactlyOnceWith('/repo', 21, 0)
+    const rows = useUnifiedSessionsStore().sessions.filter(row => row.opened)
+    expect(rows.map(row => row.title).sort()).toEqual(['first AI', 'second AI'])
+  })
+
+  // 读取已发出后卸载也不得把旧结果写回运行行或继续补读。
+  it('TitleSync_LegacyInflightUnmount_013', async () => {
+    io.profiles.mockResolvedValue({ revision: '1', profiles: [] })
+    io.legacyRoot.mockResolvedValue({ rootKey: 'root', tabsUseDefaultRoot: true })
+    io.sessions.mockResolvedValue([{ sessionId: 'session', name: 'Trusted title', lastActiveAt: 1 }])
+    let receive!: (event: HookEventPayload) => void
+    io.hook.mockImplementation(async handler => { receive = handler; return () => {} })
+    const legacy = useSessionStore(), id = legacy.createTab('/repo', { sessionId: 'session', name: 'Trusted title' })
+    const tab = legacy.tabs.get(id)!
+    Object.assign(tab, { status: 'running', ptyId: 'pty', usesDefaultClaudeRoot: true })
+    render(); await flushPromises(); await vi.advanceTimersByTimeAsync(300)
+    let resolve!: (rows: unknown[]) => void
+    io.sessions.mockClear().mockImplementationOnce(() => new Promise(done => { resolve = done }))
+    receive({ ptyId: 'pty', runId: 'pty', generation: 1, sessionId: 'session', eventId: 'reply', observerSource: 'claude-hook',
+      eventName: 'Stop', state: 'idle', timestamp: 1, detail: { type: 'stop', data: {} } } as HookEventPayload)
+    await vi.advanceTimersByTimeAsync(300)
+    expect(io.sessions).toHaveBeenCalledTimes(1)
+    wrappers.pop()!.unmount()
+    resolve([{ sessionId: 'session', name: 'Late result', lastActiveAt: 2 }])
+    await flushPromises(); await vi.advanceTimersByTimeAsync(120_000)
+    expect(tab.name).toBe('Trusted title')
+    expect(io.sessions).toHaveBeenCalledTimes(1)
+  })
+
+  // 精确 PTY、根或交互失效后，旧回复的延迟补读不能继续扫描或改变新尝试的标题。
+  it.each(['restart', 'close', 'unmount', 'root', 'prompt'] as const)('TitleSync_LegacyCancel_009 %s', async reason => {
+    io.profiles.mockResolvedValue({ revision: '1', profiles: [] })
+    io.legacyRoot.mockResolvedValue({ rootKey: 'root', tabsUseDefaultRoot: true })
+    io.sessions.mockResolvedValue([{ sessionId: 'legacy-session', name: 'First prompt', projectPath: '/repo', lastActiveAt: 1 }])
+    let receive!: (event: HookEventPayload) => void
+    io.hook.mockImplementation(async handler => { receive = handler; return () => {} })
+    const legacy = useSessionStore(), id = legacy.createTab('/repo', { sessionId: 'legacy-session', name: 'First prompt' })
+    const tab = legacy.tabs.get(id)!
+    Object.assign(tab, { status: 'running', ptyId: 'pty', usesDefaultClaudeRoot: true })
+    render(); await flushPromises(); await vi.advanceTimersByTimeAsync(300)
+    const event = { ptyId: 'pty', runId: 'pty', generation: 1, sessionId: 'legacy-session', eventId: 'reply-1', observerSource: 'claude-hook',
+      eventName: 'Stop', state: 'idle', timestamp: 1, detail: { type: 'stop', data: {} } } as HookEventPayload
+    receive(event); await vi.advanceTimersByTimeAsync(300)
+    if (reason === 'restart') { tab.ptyId = 'new-pty'; tab.ptyGeneration = 2 }
+    if (reason === 'close') legacy.removeTab(id)
+    if (reason === 'unmount') wrappers.pop()!.unmount()
+    if (reason === 'root') io.legacyRoot.mockResolvedValue({ rootKey: 'replacement', tabsUseDefaultRoot: true })
+    if (reason === 'prompt') receive({ ...event, eventId: 'prompt-2', detail: { type: 'userPromptSubmit', data: { prompt: 'next' } } })
+    await flushPromises(); await vi.advanceTimersByTimeAsync(300)
+    const calls = io.sessions.mock.calls.length
+    io.sessions.mockResolvedValue([{ sessionId: 'legacy-session', name: 'Stale title', projectPath: '/repo', lastActiveAt: 2 }])
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(io.sessions).toHaveBeenCalledTimes(calls)
+    expect(tab.name).toBe('First prompt')
+  })
+
+  // 读取失败保留最近标题；无 PTY 来源证明的事件不能触发磁盘扫描。
+  it('TitleSync_LegacyReadFailure_010', async () => {
+    io.profiles.mockResolvedValue({ revision: '1', profiles: [] })
+    io.legacyRoot.mockResolvedValue({ rootKey: 'root', tabsUseDefaultRoot: true })
+    io.sessions.mockResolvedValue([{ sessionId: 'legacy-session', name: 'AI title', projectPath: '/repo', lastActiveAt: 1 }])
+    let receive!: (event: HookEventPayload) => void
+    io.hook.mockImplementation(async handler => { receive = handler; return () => {} })
+    const legacy = useSessionStore(), id = legacy.createTab('/repo', { sessionId: 'legacy-session', name: 'First prompt' })
+    Object.assign(legacy.tabs.get(id)!, { status: 'running', ptyId: 'pty', usesDefaultClaudeRoot: true })
+    render(); await flushPromises(); await vi.advanceTimersByTimeAsync(300)
+    const event = { ptyId: 'pty', runId: 'pty', generation: 1, sessionId: 'legacy-session', eventId: 'prompt-1', observerSource: 'claude-hook',
+      eventName: 'UserPromptSubmit', state: 'thinking', timestamp: 1, detail: { type: 'userPromptSubmit', data: { prompt: 'next' } } } as HookEventPayload
+    io.sessions.mockClear()
+    receive({ ...event, observerSource: undefined, runId: undefined, generation: undefined })
+    await vi.advanceTimersByTimeAsync(300)
+    expect(io.sessions).not.toHaveBeenCalled()
+    io.sessions.mockRejectedValueOnce(new Error('read failed'))
+    receive(event); await vi.advanceTimersByTimeAsync(300)
+    const catalog = useUnifiedSessionsStore()
+    await catalog.refresh('/repo')
+    expect(catalog.sessions.find(row => row.opened)?.title).toBe('AI title')
+    expect(io.sessions).toHaveBeenCalledTimes(1)
+    expect(legacy.historyLoadState.get('/repo')?.error).toContain('read failed')
+  })
+
   // 症状①：首问后 CLI 标题变化（prompt → AI 标题）必须出现在会话列表。
   it('TitleSync_HistoryUpdateReachesRunningRow_001', async () => {
     render(); await flushPromises()

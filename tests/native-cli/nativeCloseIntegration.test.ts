@@ -45,6 +45,7 @@ vi.mock('@xterm/xterm', () => ({ Terminal: class {
   constructor(options: any) { this.options = options; io.terms.push(this) }
   open(element: HTMLElement) { this.element = element; this.textarea = document.createElement('textarea'); element.append(this.textarea) }
   onData() { return { dispose() {} } } onWriteParsed() { return { dispose() {} } }
+  onTitleChange() { return { dispose() {} } }
   write(_data: string | Uint8Array, callback?: () => void) { callback?.() } reset() {}
 } }))
 
@@ -151,7 +152,7 @@ it.each(['budget', 'navigation'] as const)('Native_AppRowResumeNoStaleAdmission_
   expect(useNativeTabsStore().tabs.size).toBe(0)
   if (failure === 'budget') {
     expect(catalog.actionFeedback).toMatchObject({ detailCode: 'SOURCE_BUDGET_EXCEEDED', retryable: true, actionKey: 'retry' })
-    expect(catalog.sessions.some(value => value.id === history.id)).toBe(false)
+    expect(catalog.sessions.some(value => value.id === history.id), '保留显示行不能成为启动准入证据').toBe(true)
     const profiles = useCliProfilesStore()
     profiles.profiles.push({ ...profiles.profiles[0], id: 'other-default', revision: '8' })
     profiles.select('codex', 'other-default')

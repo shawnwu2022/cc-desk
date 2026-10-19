@@ -79,6 +79,8 @@ export interface TerminalTab {
   usesDefaultClaudeRoot?: boolean
   sessionId: string | null
   name: string
+  /** 当前 PTY 的标题失效序号，不保存或采用 OSC 文本。 */
+  titleChangeRevision?: number
   status: 'starting' | 'running' | 'stopped'
   createdAt: number
   lastActiveAt: number

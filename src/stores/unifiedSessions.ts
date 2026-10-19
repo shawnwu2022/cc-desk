@@ -560,7 +560,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
         }
       }
       const previousRows = new Map(sessions.value.map(row => [row.id, row]))
-      sessions.value = [...byId.values()].map(row => {
+      const nextRows = [...byId.values()].map(row => {
         const owner = renameOwners.get(row.id)
         const next = owner ? { ...row, renameState: owner.state } : row
         const previous = previousRows.get(row.id)
@@ -568,6 +568,11 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
         return previous && Object.keys(previous).length === Object.keys(next).length
           && Object.keys(next).every(key => JSON.stringify(previous[key as keyof UnifiedSession]) === JSON.stringify(next[key as keyof UnifiedSession])) ? previous : next
       }).sort(compareSessionOpenOrder)
+      // 行序列完全一致时不发布新数组：下游以数组身份为界，无变化发布会让
+      // 整条 watch/投影链空转（实测同数据单项目读取 24 次数组发布）。
+      if (nextRows.length !== sessions.value.length || nextRows.some((row, index) => row !== sessions.value[index])) {
+        sessions.value = nextRows
+      }
       if (activeSessionId.value && !byId.has(activeSessionId.value)) {
         activeSessionId.value = null
       }
@@ -630,20 +635,28 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     const current = () => creations.get(id)?.owner === owner
     const canAdmit = () => current() && (!confirmationGuard || confirmationGuard()
       && intentEpoch === selectionIntentEpoch && activeSessionId.value === id)
+    let admitted = false
+    const publishAdmitted = (created: UnifiedSession) => {
+      if (admitted) return
+      admitted = true
+      creations.delete(id)
+      sessions.value = [...sessions.value.filter(session => session.id !== id && session.id !== created.id), created]
+      if (creation.selectionIntentEpoch === selectionIntentEpoch && activeSessionId.value === id) activeSessionId.value = created.id
+    }
     try {
       const prepared = await prepareCreation(copyInput(creation.input))
       if (!canAdmit()) throw new Error('NEW_SESSION_CANCELLED')
       if (confirmationGuard && (prepared.launchConfigId !== input.launchConfigId || prepared.launchConfigRevision !== input.launchConfigRevision)) throw new Error('PROFILE_SELECTION_CHANGED')
       creation.preparing = false
-      const created = await adapterForRuntime('native-cli').createSession(prepared, canAdmit)
-      creations.delete(id)
-      sessions.value = [...sessions.value.filter(session => session.id !== id && session.id !== created.id), created]
-      if (creation.selectionIntentEpoch === selectionIntentEpoch && activeSessionId.value === id) activeSessionId.value = created.id
+      const created = await adapterForRuntime('native-cli').createSession(prepared, canAdmit, publishAdmitted)
+      // 提前交接后用户可能已经关闭运行行；迟到的显示元数据回执不能再次插入它。
+      publishAdmitted(created)
       // Admission is not CLI success. A failed catalog read cannot turn an
       // admitted attempt into a retryable preparation row.
       await refresh(creation.input.projectKey).catch(() => { error.value = 'SESSION_REFRESH_FAILED' })
       return sessions.value.find(value => value.id === created.id) ?? created
     } catch (failure) {
+      if (admitted) throw new Error('LAUNCH_STATE_UNKNOWN')
       if (!current()) throw new Error('NEW_SESSION_CANCELLED')
       row.processState = creation.preparing ? 'failed' : 'unknown'
       row.preparationState = creation.preparing ? 'failed' : 'unknown'

@@ -13,6 +13,7 @@ const io = vi.hoisted(() => ({
   statusReads: 0,
   phase: 'running' as 'running' | 'exited',
   starts: [] as any[],
+  terms: [] as import('@xterm/xterm').Terminal[],
   observation: null as ((payload: import('@/types/hook').HookEventPayload) => void) | null,
   stop: vi.fn(),
 }))
@@ -22,6 +23,7 @@ vi.mock('@xterm/xterm', async original => {
   canvas.mockRestore()
   return { ...actual, Terminal: class extends actual.Terminal {
     open(element: HTMLElement) {
+      io.terms.push(this)
       const core = (this as any)._core
       core.element = element
       core.textarea = document.createElement('textarea')
@@ -48,6 +50,7 @@ let wrapper: VueWrapper | null = null
 beforeEach(() => {
   setActivePinia(createPinia()); vi.clearAllMocks()
   io.statusReads = 0; io.phase = 'running'; io.observation = null
+  io.terms.length = 0
   Object.defineProperty(window, '__CC_DESK_DOCUMENT__', { configurable: true, value: {
     instanceId: 'test-backend',
     async invoke(command: string, input: any) {
@@ -79,6 +82,22 @@ afterEach(() => {
 })
 
 describe('NativeStatusPolling_BackgroundLife', () => {
+  it.each(['claude', 'codex', 'unmount'] as const)('NativeTitleSignal_OwnedParser_002 %s', async mode => {
+    const cli = mode === 'codex' ? 'codex' : 'claude'
+    useCliProfilesStore().profiles[0].cli = cli
+    const tabs = useNativeTabsStore()
+    const tab = tabs.create({ cli, projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+    wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(tabs.tab(tab.tabId)?.status).toBe('running')
+    io.terms[0].write('\x1b]0;✳ CLI renamed\x07')
+    await vi.advanceTimersByTimeAsync(10)
+    if (mode === 'unmount') { wrapper.unmount(); wrapper = null }
+    await vi.advanceTimersByTimeAsync(600)
+    expect(tabs.tab(tab.tabId)?.titleChangeRevision ?? 0).toBe(mode === 'claude' ? 1 : 0)
+    expect(tabs.tab(tab.tabId)?.title).not.toContain('CLI renamed')
+  })
+
   // active=false 时进程退出仍须通过 owner status 同步投影到 store。
   it('InactiveTab_TracksExit_001 — 后台 tab 保留生命周期同步并发布 exited', async () => {
     const tabs = useNativeTabsStore()

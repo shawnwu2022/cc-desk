@@ -403,7 +403,7 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
     return sessions.sort(compareSessionOpenOrder)
   }
 
-  async function createSession(input: CreateUnifiedSessionInput, canAdmit = () => true): Promise<UnifiedSession> {
+  async function createSession(input: CreateUnifiedSessionInput, canAdmit = () => true, onAdmitted?: (session: UnifiedSession) => void): Promise<UnifiedSession> {
     const action = input.action ?? { kind: 'new' as const }
     if (action.kind === 'resume-id') {
       const candidates = deps.history.all().filter(entry => entry.context.cli === input.cli && entry.context.profileId === input.launchConfigId
@@ -426,6 +426,9 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
       if (!owns()) throw new Error('RESTORE_CANCELLED')
       const tab = await deps.runtime.createTab({ ...input, action })
       deps.tabs.setActive(tab.tabId)
+      // 独立新建已获得明确 owner；元数据写入可以继续等待，但占位行应立即让位。
+      // 合并恢复仍保留每个调用方在 coalesce 完成时的独立取消判定。
+      if (action.kind === 'new' || action.kind === 'raw') onAdmitted?.(projectActive(tab))
       await rememberOpen(tab)
       return projectActive(tab)
     }
@@ -457,7 +460,7 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
   async function verify(input: ResumeUnifiedSessionInput, missing: boolean) {
     const origin = matchingOrigins(input)
     if (!origin) throw new Error('SOURCE_UNAVAILABLE')
-    const entry = deps.history.load ? await deps.history.load({ ...origin, force: true })
+    const entry = deps.history.load ? await deps.history.load({ ...origin, force: true, retainOnFailure: true })
       : deps.history.all().find(entry => nativeHistoryContextKey(entry.context) === nativeHistoryContextKey(origin))
     if (!entry?.loaded || entry.loading || entry.error) throw new Error(entry?.error || 'SOURCE_UNAVAILABLE')
     const present = entry.sessions.some(item => item.sessionKey === input.adapterSessionId && item.nativeSessionId === (input.nativeSessionId ?? input.adapterSessionId))
@@ -530,7 +533,7 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
       if (!owns() || !canContinue()) throw new Error('STALE_SESSION_ATTEMPT')
       if (source.cli!==frozen.cli || source.profileId!==frozen.profileId || source.profileRevision!==frozen.profileRevision
         || source.target.kind!=='run' || source.target.runId!==frozen.runId || source.target.generation!==frozen.generation) throw new Error('SOURCE_CHANGED')
-      const entry=await deps.history.load({cli:frozen.cli,profileId:frozen.profileId,profileRevision:frozen.profileRevision,projectId:frozen.projectId,projectPath:frozen.projectPath,force:true})
+      const entry=await deps.history.load({cli:frozen.cli,profileId:frozen.profileId,profileRevision:frozen.profileRevision,projectId:frozen.projectId,projectPath:frozen.projectPath,force:true,retainOnFailure:true})
       if (!owns() || !canContinue()) throw new Error('STALE_SESSION_ATTEMPT')
       if (!entry.loaded || entry.loading || entry.error) throw new Error(entry.error || 'SOURCE_UNAVAILABLE')
       if (entry.sourceRootKey!==source.sourceRootKey) throw new Error('SOURCE_CHANGED')
@@ -584,7 +587,7 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
       if (!current()) throw new Error('STALE_SESSION_ATTEMPT')
       if (frozenSource.cli !== tab.cli || frozenSource.profileId !== tab.profileId || frozenSource.profileRevision !== tab.profileRevision
         || frozenSource.target.kind !== 'run' || frozenSource.target.runId !== tab.runId || frozenSource.target.generation !== tab.generation) throw new Error('SOURCE_CHANGED')
-      const entry = await deps.history.load({ ...context, force:true })
+      const entry = await deps.history.load({ ...context, force:true, retainOnFailure:true })
       if (!current()) throw new Error('STALE_SESSION_ATTEMPT')
       if (!entry.loaded || entry.loading || entry.error) throw new Error(entry.error || 'SOURCE_UNAVAILABLE')
       const source = entry.source
@@ -646,7 +649,7 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
       const contexts = new Map(related.map(item=>[nativeHistoryContextKey(item.context),item.context]))
       contexts.set(nativeHistoryContextKey(refreshContext),refreshContext)
       for (const context of contexts.values()) {
-        const refreshed = await deps.history.load?.({ ...context, force:true })
+        const refreshed = await deps.history.load?.({ ...context, force:true, retainOnFailure:true })
         if ((tabIdentity && !refreshed) || (refreshed && (refreshed.error || !refreshed.loaded || refreshed.loading
           || nativeHistoryContextKey(refreshed.context) !== nativeHistoryContextKey(context)
           || refreshed.sourceRootKey !== request.source.sourceRootKey))) throw new Error('RENAME_DISPLAY_SYNC_FAILED')
@@ -719,7 +722,7 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
         // 归档状态由下一次历史读取按容器位置重投影；all() 仍是旧缓存，必须
         // 强制重读原上下文。先重读再清注册表：后续清 key 失败时投影已是未归档，
         // 重试不会对已恢复的会话重复请求 CLI unarchive。
-        await deps.history.load?.({ ...match.entry.context, force: true })
+        await deps.history.load?.({ ...match.entry.context, force: true, retainOnFailure: true })
       }
     }
     for (const key of pending) await deps.archive.restoreSession(history.projectPath, key)

@@ -156,8 +156,9 @@ UnifiedSession catalog（Legacy/Native adapters）→ UnifiedProjectGroup[] → 
 
 ### 性能边界
 
+- Claude 的 OSC 标题变化只发出绑定当前运行/PTY 的只读失效信号，不作为名称或来源证明；经 500ms 合并、至少两秒通知间隔后复用当前项目的历史读取。普通终端输出不触发历史扫描，重启/关闭/卸载撤销未发出的标题通知。
 - `get_home_data` 单次扫描 `~/.claude/projects`，同时生成项目列表与真实路径映射；近期会话直接复用该映射的目录列表，`get_home_data` / `get_sessions` 的同步文件 IO 统一放入 `spawn_blocking`。
-- JSONL 按字节行流式解析：项目路径在首个有效 `cwd` 后停止，名称继续扫描到 EOF 以保留末尾 `custom-title` 优先级；峰值内存为 O(最大 JSONL 单行)。首页、项目历史和 all-recent 共享 `~/.cc-box/session-name-index.json` 派生名称索引：`length + 高精度 mtime` 完全一致才 exact-hit（读取 0 JSONL bytes），任一变化都 full rebuild，不使用 append cursor。
+- JSONL 按字节行流式解析：项目路径在首个有效 `cwd` 后停止，名称继续扫描到 EOF，取最后一个有效手动标题 > 最后一个有效 AI 标题 > 首条用户消息；峰值内存为 O(最大 JSONL 单行)。首页、项目历史和 all-recent 共享 `~/.cc-box/session-name-index.json` 派生名称索引：`length + 高精度 mtime` 完全一致才 exact-hit（读取 0 JSONL bytes），任一变化都 full rebuild，不使用 append cursor；解析器版本 2 自动淘汰旧的首问名称缓存。
 - 名称索引每个请求只读一次快照，前台共享锁内只读取有界 raw bytes、锁外解析；业务值先返回，delta 在 detached `spawn_blocking` 中写回。后台使用 replacement stamp 复核、entry/bucket CAS、整文件 raw CAS 和唯一临时文件；排他锁内只做 64 KiB 分块 raw compare 与原子替换。8 MiB 以上压缩至 6 MiB，16 MiB 为读取硬上限；损坏、未知版本、锁/写失败均只降低命中率，不改变业务结果。
 - `SettingsView` 首次进入时异步加载，之后在统一主内容列保持挂载；复杂编辑器使用共享对话框。WebGL 仅在新终端启用 WebGL renderer 时动态加载，DOM renderer 仍为默认。
 
@@ -260,7 +261,7 @@ npm run tauri:build        # 生产构建
   - Store 测试：`setActivePinia(createPinia())` + `mockIPC`
 - **命名规范**：英文函数名 `Feature_SubFeature_SeqNum` 格式，中文注释描述目标
 - **什么要测**：纯函数、数据转换、解析逻辑、状态管理、边界条件和错误路径
-- **什么不测**：getter/setter、类型定义、简单 props 传递、第三方库能力
+  - **什么不测**：getter/setter、类型定义、简单 props 传递、第三方库能力
 - **树形项目会话管理测试**：`tests/stores/sessionTree.test.ts`（分组/排序/过滤/展开/多项目历史选择器 getHistoryFor）+ `tests/composables/projectTreeNavigation.test.ts`（resolveSwitchAction 切换语义 noop/activate/resume/new，D/E 参数直传无竞态）
 
 ### DevTools JSON 粘贴
@@ -468,6 +469,7 @@ npm run tauri:build        # 生产构建
 
 - Unified row rename must report a verified native result or an explicit unsupported/failure outcome. Codex uses official app-server metadata and Claude uses pinned public Agent SDK 0.3.301 `renameSession`, via authenticated `cli_rename_session` bound to exact scope/session key/profile revision/project/root/native ID and file identity. Opened `resume-id` tabs label their **resumed source session**; a new Claude tab may label its positively observed **historical session record**. Frozen run provenance must match fresh profile history before using its profile SourceRef. Neither target asserts current TUI thread identity. Run scopes, raw/picker and unproven IDs remain rejected. Claude requires an existing Node >=22.13 from frozen profile PATH, a private same-volume namespace and an exact hardlink; no install or default-root fallback. The helper performs one write and official readback; uncertain writes permit read-only reconciliation, never automatic replay. Existing Desk names remain read-compatible; matching history/opened-tab overrides and independently proven same-root Legacy aliases clear only after native success. Physical history deduplication uses CLI/root/registered project/path/native ID/session key, preserves separate opened owners and archive groups, and never authorizes writes. Legacy/Native terminal ports must never inject `/rename`, clear drafts or guess editor state. Saved display names do not authorize source access. Real idle Claude TUI verification is separate from busy-writer, incident-version and installed-WebView certification.
 - Native historical names use the full existing history catalog key (CLI, configuration ID/revision, registered project/path and authenticated source session key). Resumed live names use that same known source identity. A new/raw tab with no authenticated historical association keeps an exact tab-key name; later unrelated discovery cannot inherit it by raw Session ID, title or current defaults. Legacy names bind their project/session identity. Persisted record fields must agree with the catalog key's projected identity.
+- Claude titles prefer the latest valid custom title, then AI title, then first user prompt. Legacy list/search/details share this precedence and invalidate old parser-version caches. Opened tabs follow refreshed CLI titles only within their proven source identity; explicit Desk aliases retain precedence. Legacy hook-driven reads require the exact PTY/session and a valid frozen default-root proof, coalesce by project and cancel on owner invalidation. Both reply paths use bounded delayed rereads; an old Native AI title must not suppress a subsequent reply's update. See `docs/components.md` and `docs/data-persistence.md`.
 - Rename ownership is checked again at actual `projectsState` queue admission and after receipt. Invalidated history, replaced Native attempts and Legacy PTY generations cannot issue a queued metadata write. Pre-admission cancellation triggers no unknown-write reconciliation; issued conflicts/uncertain writes reconcile read-only without replay. Optional session/launch metadata containers and individual entries are validated independently with existing backend bounds, preserving valid siblings.
 - Gate: `npm test -- tests/stores/unifiedMigration.test.ts tests/stores/unifiedStress.test.ts tests/native-cli/unifiedUxAdversarial.test.ts tests/native-cli tests/stores/session.test.ts tests/stores/nativeTabs.test.ts && npm run typecheck`. Stress covers 50 projects × 100 mixed sessions, 30 open descriptors, 120 state/selection/layout changes, 200-character titles and Windows paths longer than 260 characters. Timings are host/jsdom observations; 30 real CLI processes, output throughput, Rust, actual platform and rendered visual acceptance remain separate gates.
 - 2026-10-14 post-merge safety review: the earlier CLI rename injection is withdrawn because exact PTY receipts and ownership do not prove an empty CLI editor. At that revision GUI renames used Desk display metadata, including running Claude and closed history. The 2026-10-16 native metadata change above supersedes that behavior only for explicitly supported sources. Terminal rename ports refuse injection; no Ctrl-U or screen heuristic may clear/guess user drafts. A future CLI-native rename path requires an independently verifiable safe API/editor state. Metadata saves retain source/attempt admission, cancellation before the queued write and honest display-only feedback.
@@ -597,9 +599,11 @@ npm run tauri:build        # 生产构建
 
 ### 统一目录刷新性能
 
-- `useUnifiedWorkspaceRuntime` 为每个 Legacy/Native owner 独立监听，按 Vue tick 合并受影响项目后使用现有 `catalog.refresh(projectPath)`。跨项目移动必须刷新旧、新项目；替换、移除及卸载必须撤销旧监听。关注事件及确认移除绑定精确 Legacy PTY 的项目；历史与归档变化继续完整刷新。
+- `useUnifiedWorkspaceRuntime` 为每个 Legacy/Native owner 独立监听，按 Vue tick 合并受影响项目后使用现有 `catalog.refresh(projectPath)`。跨项目移动必须刷新旧、新项目；替换、移除及卸载必须撤销旧监听。关注事件及确认移除绑定精确 Legacy PTY 的项目。历史与归档变化按**投影签名**入队：已发布行、来源根、loaded/error 与归档键集合不变时不入队，读取进度（loading/requestEpoch）不产生刷新；entry 出现或撤销按其项目入队一次。目录发布本身也在行序列完全一致（含对象身份）时不替换 `sessions` 数组。此前的逐字段全项目扇出会把单项目读取放大成全体重扫（8 项目实测 32 次刷新、24 次数组发布）。
 - 项目范围请求版本、原 adapter 投影、未关联历史保留、目录顺序及其他项目行的对象身份必须保持。目录刷新不拥有进程控制权，不得据此修改 launch/stop/admission 或推断安全所有权。
-- 四条行为回归在 `tests/stores/unifiedWorkspaceRuntime.test.ts`；原压力用例仍执行 5,000 条会话、30 个 owner、120 次变化及全部断言。本机前后耗时与完整验证记录见 [CI 性能](ci-performance.md)，不能当作 hosted CI、真实 CLI 或 Windows WebView 验收。
+- 历史读取的显示快照与读取进度分离：`sourceRootKey`/`source` 只有在与它对应的行一起发布时才提交（已有行且根变化时延迟到本轮读取完成），读取失败按 `retainOnFailure` 保留最后一次可信显示行并撤销 absence 证据——不得把旧根的行重标成新根，也不得让瞬时失败抹掉运行行的来源归属（后者会闪出同名的打开行与关闭行）。有界元数据读取（`metadataIncomplete`）是正常观察，不构成缺失证据，因此不触发行保留；只有真实读取失败（`readFailures`）才保留本轮未见的旧行，保留行随下一次无失败的完整观察退出。
+- 所有共享目录缓存的读取入口（搜索、全量/观察刷新、恢复/缺失验证、重启、关闭、改名前校验与改名后同步、CLI 取消归档后重读）都启用 `retainOnFailure: true`。保留仅用于显示：恢复/缺失验证、重启与改名前校验仍检查 `loaded/loading/error`，失败不启动、不重启、不发出改名；改名已成功而回读失败仍报 `RENAME_DISPLAY_SYNC_FAILED`。独立索引维护使用临时 reader，不改变底层 reader 默认失败清空的契约。
+- 四条行为回归在 `tests/stores/unifiedWorkspaceRuntime.test.ts`；历史读取范围、根切换与失败保留回归在 `tests/stores/historyRefreshScope.test.ts`、`tests/stores/catalogHistoryReloadFolding.test.ts` 与 `tests/stores/nativeHistoryActionFailures.test.ts`；原压力用例仍执行 5,000 条会话、30 个 owner、120 次变化及全部断言。本机前后耗时与完整验证记录见 [CI 性能](ci-performance.md)，不能当作 hosted CI、真实 CLI 或 Windows WebView 验收。
 
 ### Rust fixture 清理与校准
 

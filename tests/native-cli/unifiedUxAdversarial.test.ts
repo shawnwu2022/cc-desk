@@ -145,6 +145,7 @@ const terminal = vi.hoisted(() => ({ start: vi.fn(), recover: vi.fn(), cancel: v
 vi.mock('@xterm/xterm', () => ({ Terminal: class {
   options: any; cols = 80; rows = 24; modes = { applicationCursorKeysMode: false, applicationKeypadMode: false, bracketedPasteMode: false, insertMode: false, mouseTrackingMode: 'none', originMode: false, reverseWraparoundMode: false, sendFocusMode: false, wraparoundMode: true }; element!: HTMLElement; textarea!: HTMLTextAreaElement
   onWriteParsed() { return { dispose() {} } }
+  onTitleChange() { return { dispose() {} } }
   constructor(options: any) { this.options = options }
   loadAddon() {} open(element: HTMLElement) { this.element = element; this.textarea = document.createElement('textarea'); element.append(this.textarea) }
   onData() { return { dispose() {} } } attachCustomKeyEventHandler() {} getSelection() { return '' }

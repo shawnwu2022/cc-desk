@@ -37,6 +37,8 @@ export interface NativeCliTab {
   errorCode: string | null
   launchRevision: string | null
   title: string
+  /** 当前解析器的标题失效序号，仅触发已证明来源的只读补读。 */
+  titleChangeRevision?: number
   createdAt: number
   lastActivityAt: number
   attentionState?: 'none' | 'needs-user'

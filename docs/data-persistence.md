@@ -142,6 +142,14 @@ Concurrent project-state mutations use the existing lock + read-latest + canonic
 
 ### Unified display names
 
+Claude title readers use the same precedence: the latest valid `custom-title`,
+then the latest valid `ai-title`, then the first user prompt. Explicit title records
+must match the transcript session ID; old custom-title records without an ID remain
+compatible. Legacy list/search/details share one parser. Name-index parser version
+2 invalidates old prompt-only cache entries automatically; it does not rewrite CLI
+history or require deleting the index. Opened rows follow freshly read CLI titles
+within their proven source identity; existing explicit Desk aliases still win.
+
 `projectsState` is the sole frontend writer for `projects.json`, including optional
 `sessionRecords` and per-project launch preferences. Both adapters consume saved
 names when projecting discovered history or an existing terminal. These records

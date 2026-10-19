@@ -15,6 +15,7 @@ vi.mock('@xterm/xterm', () => ({ Terminal: class {
   options: any; textarea!: HTMLTextAreaElement; element!: HTMLElement; cols = 80; rows = 24; output = ''; modes = { bracketedPasteMode: false }; unicode = { activeVersion: '6' }; buffer = { active: { length: 0 } }
   _core = { coreService: { onUserInput: () => ({ dispose() {} }) } }
   focus = vi.fn(); refresh = vi.fn(); dispose = vi.fn()
+  onTitleChange() { return { dispose() {} } }
   constructor(options: any) { this.options = options; io.terms.push(this) }
   open(el: HTMLElement) { this.element = el; this.textarea = document.createElement('textarea'); el.append(this.textarea) }
   loadAddon() {} onData() { return { dispose() {} } } onResize() {} attachCustomKeyEventHandler() {} getSelection() { return '' } write(data: string) { this.output += data }
