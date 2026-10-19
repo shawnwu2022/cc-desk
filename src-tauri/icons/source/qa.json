@@ -1,0 +1,163 @@
+{
+  "renderer": "Inkscape 1.4 (e7c3feb100, 2024-10-09)",
+  "palette": {
+    "charcoal": "#35404B",
+    "orange": "#FA8939",
+    "white": "#FFFFFF"
+  },
+  "png": {
+    "16": {
+      "size": [
+        16,
+        16
+      ],
+      "mode": "RGBA",
+      "alpha_bbox": [
+        1,
+        2,
+        15,
+        14
+      ],
+      "transparent_canvas": true,
+      "edge_clipping": false
+    },
+    "24": {
+      "size": [
+        24,
+        24
+      ],
+      "mode": "RGBA",
+      "alpha_bbox": [
+        1,
+        3,
+        23,
+        21
+      ],
+      "transparent_canvas": true,
+      "edge_clipping": false
+    },
+    "32": {
+      "size": [
+        32,
+        32
+      ],
+      "mode": "RGBA",
+      "alpha_bbox": [
+        2,
+        4,
+        30,
+        28
+      ],
+      "transparent_canvas": true,
+      "edge_clipping": false
+    },
+    "48": {
+      "size": [
+        48,
+        48
+      ],
+      "mode": "RGBA",
+      "alpha_bbox": [
+        3,
+        6,
+        45,
+        41
+      ],
+      "transparent_canvas": true,
+      "edge_clipping": false
+    },
+    "64": {
+      "size": [
+        64,
+        64
+      ],
+      "mode": "RGBA",
+      "alpha_bbox": [
+        5,
+        8,
+        59,
+        55
+      ],
+      "transparent_canvas": true,
+      "edge_clipping": false
+    },
+    "128": {
+      "size": [
+        128,
+        128
+      ],
+      "mode": "RGBA",
+      "alpha_bbox": [
+        10,
+        17,
+        118,
+        109
+      ],
+      "transparent_canvas": true,
+      "edge_clipping": false
+    },
+    "256": {
+      "size": [
+        256,
+        256
+      ],
+      "mode": "RGBA",
+      "alpha_bbox": [
+        20,
+        34,
+        236,
+        218
+      ],
+      "transparent_canvas": true,
+      "edge_clipping": false
+    },
+    "512": {
+      "size": [
+        512,
+        512
+      ],
+      "mode": "RGBA",
+      "alpha_bbox": [
+        40,
+        68,
+        472,
+        436
+      ],
+      "transparent_canvas": true,
+      "edge_clipping": false
+    },
+    "1024": {
+      "size": [
+        1024,
+        1024
+      ],
+      "mode": "RGBA",
+      "alpha_bbox": [
+        80,
+        136,
+        944,
+        872
+      ],
+      "transparent_canvas": true,
+      "edge_clipping": false
+    }
+  },
+  "ico": {
+    "sizes": [
+      16,
+      24,
+      32,
+      48,
+      64,
+      128,
+      256
+    ],
+    "rgba_matches_png": true,
+    "frames_16_to_128": "32-bit BGRA DIB + AND transparency masks",
+    "frame_256": "PNG"
+  },
+  "limitations": [
+    "No installed Windows shell or application runtime test.",
+    "Rendering may vary slightly between SVG renderers and OS scaling."
+  ]
+}

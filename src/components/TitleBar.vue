@@ -6,7 +6,9 @@
 
     <!-- Windows 左侧图标和标题 -->
     <div class="win-title-left" data-tauri-drag-region>
-      <img v-if="!isMac" src="@/assets/icons/app-icon.png" alt="" class="win-app-icon" data-tauri-drag-region draggable="false" />
+      <img v-if="!isMac" src="@/assets/icons/app-icon-16.png"
+        srcset="@/assets/icons/app-icon-24.png 1.5x, @/assets/icons/app-icon-32.png 2x, @/assets/icons/app-icon-48.png 3x, @/assets/icons/app-icon-64.png 4x"
+        alt="" class="win-app-icon app-icon" data-tauri-drag-region draggable="false" />
       <span class="win-app-title" data-tauri-drag-region>{{ title }}</span>
     </div>
 

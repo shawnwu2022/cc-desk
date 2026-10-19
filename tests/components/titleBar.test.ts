@@ -3,6 +3,7 @@ import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
 import TitleBar from '@/components/TitleBar.vue'
 import en from '@/i18n/locales/en'
+import { readFileSync } from 'node:fs'
 
 const platform = vi.hoisted(() => ({ isMac: false, isWindows: true }))
 const host = vi.hoisted(() => ({
@@ -23,6 +24,26 @@ beforeEach(() => {
 afterEach(() => { wrapper?.unmount() })
 
 describe('Title bar native interaction boundary', () => {
+  // 生产构建会将小 PNG 内联为 data URL，品牌颜色豁免必须继续生效。
+  it('TitleBar_InlineBrandColors_005', async () => {
+    const style = document.createElement('style')
+    style.textContent = readFileSync('src/styles/global.css', 'utf8')
+    const theme = document.documentElement.getAttribute('data-theme')
+    document.head.append(style)
+    try {
+      document.documentElement.dataset.theme = 'dark'
+      wrapper = mount(TitleBar, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })] } })
+      await flushPromises()
+      const image = wrapper.get('.win-app-icon').element as HTMLImageElement
+      image.src = `data:image/png;base64,${readFileSync('src/assets/icons/app-icon-16.png').toString('base64')}`
+      expect(getComputedStyle(image).filter).toBe('none')
+    } finally {
+      style.remove()
+      if (theme === null) document.documentElement.removeAttribute('data-theme')
+      else document.documentElement.setAttribute('data-theme', theme)
+    }
+  })
+
   // Tauri读取实际鼠标目标的属性；标题文本、图标和空白区域都必须显式声明拖动。
   it.each(['windows', 'macos', 'linux'])('TitleBar_DragTargets_001_%s', async (os) => {
     platform.isMac = os === 'macos'

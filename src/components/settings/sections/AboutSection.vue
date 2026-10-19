@@ -47,7 +47,7 @@ async function copyDiagnostics() {
 <template>
   <section class="remaining-settings" data-settings-about>
     <h2>{{ t('aboutTitle') }}</h2>
-    <div class="about-card"><img src="@/assets/icons/app-icon.png" alt="CC Desk" /><div><strong>CC Desk</strong><p>{{ t('version', { version }) }}</p><p>{{ t('aboutDesc') }}</p></div></div>
+    <div class="about-card"><img class="app-icon" src="@/assets/icons/app-icon.png" alt="CC Desk" /><div><strong>CC Desk</strong><p>{{ t('version', { version }) }}</p><p>{{ t('aboutDesc') }}</p></div></div>
     <p data-build-commit class="build-commit">{{ t('aboutBuildCommit') }}: {{ buildCommit === 'unknown' ? t('aboutBuildUnknown') : buildCommit }}</p>
     <p>MIT · {{ t('aboutLicense') }}</p>
     <div class="about-links"><AppButton v-for="link in links" :key="link.id" :data-about-link="link.id" variant="ghost" @click="external(link.id)">{{ t(link.label) }} ↗</AppButton></div>

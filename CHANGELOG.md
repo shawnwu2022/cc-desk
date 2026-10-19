@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [0.23.2] - 2026-10-19
+
+### Changed
+
+- Adopt the approved stacked-terminal CC Desk icon in the title bar, About page, browser favicon and Windows/macOS/Linux packaging, preserving the separate Claude Code and Codex CLI session marks
+
+### Fixed
+
+- Preserve the approved icon colors in dark mode when small PNGs are inlined by the production build
+
+Local validation passed all 19 approved source hashes, nine transparent PNGs, seven exact ICO frames, ten exact ICNS representations, deterministic regeneration, 47 targeted component tests, type checking and 82 release-policy fixtures. Both English and Chinese production-browser cases passed under the actual CSP, including favicon bytes and light/dark titlebar/About rendering; the local run used an alternate port because a previous test server could not be stopped by the available Windows identity. Installed taskbar/Start menu, macOS Finder/Dock, Linux icon caches, OS fractional scaling, native All and D20 remain separately unverified. Exact-main CI, authenticated coverage and three same-run signed updater payloads remain mandatory before publication.
+
 ## [0.23.1] - 2026-10-19
 
 ### Fixed

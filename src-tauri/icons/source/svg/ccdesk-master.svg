@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">CC Desk — stacked terminal icon</title>
+  <desc id="desc">Frontal rounded charcoal terminal with a white greater-than and underscore prompt, in front of an orange card offset up and right. Flat fills, transparent canvas.</desc>
+  <rect x="54" y="34" width="182" height="152" rx="22" fill="#FA8939"/>
+  <rect x="20" y="57" width="196" height="161" rx="20" fill="#35404B"/>
+  <path d="M 69.010408 98.989592 L 102.010408 131.989592 A 8.500000 8.500000 0 0 1 102.010408 144.010408 L 69.010408 177.010408 A 8.500000 8.500000 0 0 1 56.989592 164.989592 L 83.979185 138.000000 L 56.989592 111.010408 A 8.500000 8.500000 0 0 1 69.010408 98.989592 Z" fill="#FFFFFF"/>
+  <rect x="107" y="164.5" width="65" height="17" rx="8.5" fill="#FFFFFF"/>
+</svg>

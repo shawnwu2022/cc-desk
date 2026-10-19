@@ -178,8 +178,8 @@
   filter: invert(0.85) sepia(0.05) hue-rotate(180deg);
 }
 
-/* 暗色主题：PNG 图片（应用图标）不反色 */
-[data-theme="dark"] img[src*="app-icon"] {
+/* 应用图标在生产构建中可内联为 data URL，按语义类保留品牌原色。 */
+[data-theme="dark"] img.app-icon {
   filter: none;
 }
 

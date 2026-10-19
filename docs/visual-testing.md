@@ -637,3 +637,32 @@ No rendered source, tolerance or test configuration changes. The original failed
 run remains RED. A fresh complete 241-case no-update run with `maxDiffPixels: 0`
 is required before merging. This Linux fixture evidence does not certify Windows
 WebView2, native scaling, real CLI lifecycle or the final title-sync fix.
+
+## PR64 refined product icon baseline acceptance
+
+The approved refined CC Desk icon replaces the former titlebar product mark.
+Two reviewers (`root` and `icon_final_review`) inspected all thirteen
+expected/actual/diff groups from [run 39224444406, attempt 1](https://github.com/shawnwu2022/cc-desk/actions/runs/39224444406).
+The independent reviewer opened all 39 full-size images, including the complete
+150% icon lower edge. Twelve images differ by exactly 175 pixels within
+`[13,9,27,23)`; `projects-150-percent.png` differs by 406 pixels within
+`[19,13,41,35)`. Every pixel outside those bounds is identical. Session CLI
+marks, status badges, layout and text are unchanged; dark-theme brand colors
+match the approved icon.
+
+The accepted PNGs are the exact actual bytes from source head
+`a8d12f9ab902ba93491f9d9d345c01ee04c22057`, tested merge
+`d77b22b8a95b9a0a271bd83e4a55865b9134832e`, artifact `12173306619`.
+The downloaded ZIP is 37,661,053 bytes with SHA-256
+`02803bfb31e8beac8a517f3b179157c4b37fa8258d15366781c2c45913d3a409`.
+The approval manifest retains each previous image hash and provenance, and
+records the new hash, exact ZIP entry and pixel review for every accepted image.
+The environment is Ubuntu 24.04, Node 22.23.3, Playwright 1.63.0 and Chromium
+153.0.8010.12, with the recorded Noto core, CJK and emoji versions.
+
+The original run remains RED: thirteen snapshot failures and 228 other cases
+passed. This acceptance changes no rendered source, fixture, mask, tolerance or
+test configuration, and performs no image repainting or regeneration. A fresh
+complete 241-case current-head no-update CI with `maxDiffPixels: 0` is required
+before merging. These Linux fixture pixels do not certify installed WebView2,
+native taskbar/Dock presentation, native scaling or real CLI behavior.
