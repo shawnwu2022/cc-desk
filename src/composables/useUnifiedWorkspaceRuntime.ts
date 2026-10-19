@@ -26,11 +26,14 @@ import { createWorkspaceSourceWarnings, workspaceWarningKey, type WorkspaceHisto
 import type { OpenTerminalSession, UnifiedTerminalHostPort } from '@/terminal/unifiedTerminalHost'
 import type { UnifiedCliKind, UnifiedSession } from '@/types/unifiedSession'
 
-/** 历史读取失败的警告源按发起读取的 CLI 归属，不能把非 Claude 失败一律归给 Codex。 */
-export const historyWarningSource = (cli: UnifiedCliKind) =>
-  cli === 'claude' ? 'claude-history' as const
-    : cli === 'codex' ? 'codex-history' as const
-      : 'opencode-history' as const
+/** 历史读取失败的警告源按发起读取的 CLI 归属，不能把非 Claude 失败一律归给 Codex。
+ * 用 Record 而非链式三元：新增 CLI 时由编译器强制补映射，避免静默落入他人来源。 */
+const historyWarningSources: Record<UnifiedCliKind, WorkspaceWarningSource> = {
+  claude: 'claude-history',
+  codex: 'codex-history',
+  opencode: 'opencode-history',
+}
+export const historyWarningSource = (cli: UnifiedCliKind): WorkspaceWarningSource => historyWarningSources[cli]
 
 /** Normal App composition root. Read-only bootstrap is independent per source;
  * only explicitly admitted operations can enter the existing runtime owners. */
