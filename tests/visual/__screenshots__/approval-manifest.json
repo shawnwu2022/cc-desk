@@ -2,17 +2,17 @@
   "schemaVersion": 1,
   "approved": true,
   "approvedFor": "Exact inspected Linux Chromium expected screenshot bytes",
-  "reviewDate": "2026-10-18",
+  "reviewDate": "2026-10-19",
   "actualPixelsInspected": 13,
-  "independentPixelReviewCount": 2,
+  "independentPixelReviewCount": 1,
   "rejectedImages": 0,
-  "sourceHead": "f822aa03661875ba2529f59969cb84a39df3f989",
-  "testedCommit": "1c8a5cd2fe3c1b10fa4ddcf9215e6e699b16f70b",
-  "workflowRunId": "39052536216",
-  "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/39052536216",
-  "artifactId": "12108256058",
-  "artifactZipSha256": "b5908107d32c117d82b7cefcc4517ba1cc61dfe0ffd5079f8b9311fd1c081a33",
-  "sourceScope": "Four exact PR58 CI actual PNG byte streams accepted after two independent actual/expected/diff pixel reviews. Nine baseline byte streams inspected and retained unchanged. Prior provenance and the original failed run remain intact.",
+  "sourceHead": "cee1c14b5f950e22bd213e4b961ab22b1eeb0e67",
+  "testedCommit": "efa08c903a8c3a16d5dac11b9cac8e596edf2b88",
+  "workflowRunId": "39191092606",
+  "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/39191092606",
+  "artifactId": "12159579806",
+  "artifactZipSha256": "f79841dab041af3d38acdad6982ab55d7be1504dde1b83f60b3c5b9b2449deac",
+  "sourceScope": "One exact inspected Linux Chromium CI actual PNG restores compact-density baseline provenance after main b642a8a changed its PNG without updating this manifest. Twelve baseline images inspected and retained unchanged. Historical revision records and original failed runs remain intact.",
   "reviewedSourceTransport": {
     "repository": "shawnwu2022/cc-desk",
     "branch": "evidence/pr37-reviewed-baselines",
@@ -22,9 +22,9 @@
     "sourceMapSha256": "ff3bff2bfeacc406db9443f58eeae398970af205f920769d86c8c40d31b81a96"
   },
   "environment": {
-    "sourceHead": "f822aa03661875ba2529f59969cb84a39df3f989",
-    "eventCommit": "1c8a5cd2fe3c1b10fa4ddcf9215e6e699b16f70b",
-    "testedCommit": "1c8a5cd2fe3c1b10fa4ddcf9215e6e699b16f70b",
+    "sourceHead": "cee1c14b5f950e22bd213e4b961ab22b1eeb0e67",
+    "eventCommit": "efa08c903a8c3a16d5dac11b9cac8e596edf2b88",
+    "testedCommit": "efa08c903a8c3a16d5dac11b9cac8e596edf2b88",
     "node": "v22.23.3",
     "playwright": "1.63.0",
     "browser": "Google Chrome for Testing 153.0.8010.12",
@@ -36,30 +36,30 @@
     }
   },
   "verificationBeforeBaselineAcceptance": {
-    "total": 237,
-    "nonSnapshotCasesPassed": 224,
-    "unchangedSnapshotsPassed": 9,
-    "changedSnapshotFailures": 4,
+    "total": 241,
+    "nonSnapshotCasesPassed": 228,
+    "unchangedSnapshotsPassed": 12,
+    "changedSnapshotFailures": 1,
     "otherFailures": 0,
     "fullVerification": "failed-reviewed-snapshot-differences; retained RED"
   },
   "currentSourceDifference": {
-    "sourceHead": "f822aa03661875ba2529f59969cb84a39df3f989",
-    "testedCommit": "1c8a5cd2fe3c1b10fa4ddcf9215e6e699b16f70b",
-    "workflowRunId": "39052536216",
+    "sourceHead": "cee1c14b5f950e22bd213e4b961ab22b1eeb0e67",
+    "testedCommit": "efa08c903a8c3a16d5dac11b9cac8e596edf2b88",
+    "workflowRunId": "39191092606",
     "workflowRunAttempt": 1,
-    "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/39052536216",
-    "artifactId": "12108256058",
-    "artifactZipBytes": 34100120,
-    "artifactZipSha256": "b5908107d32c117d82b7cefcc4517ba1cc61dfe0ffd5079f8b9311fd1c081a33",
-    "review": "Only four reviewed CLI group-header screenshots change. Subsequent rustfmt-only backend commit does not change rendered source. A fresh complete current-source no-update CI run remains required."
+    "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/39191092606",
+    "artifactId": "12159579806",
+    "artifactZipBytes": 31878696,
+    "artifactZipSha256": "f79841dab041af3d38acdad6982ab55d7be1504dde1b83f60b3c5b9b2449deac",
+    "review": "Only the inspected projects-150-percent PNG and provenance documentation change; no rendered source or tolerance changes. A fresh complete current-source no-update CI run remains required."
   },
   "finalNoUpdateVerification": {
     "status": "pending",
-    "required": "Fresh complete 237-case current-source CI with updateSnapshots none and maxDiffPixels 0. Original PR58 run remains RED: four screenshot failures and 233 passed cases."
+    "required": "Fresh complete 241-case current-source CI with updateSnapshots none and maxDiffPixels 0. Original PR62 run remains RED: one screenshot failure and 240 passed cases."
   },
   "acceptanceLimits": [
-    "Exact four inspected CI Linux Chromium PNG bytes; nine inspected prior PNG streams and all earlier provenance retained",
+    "Exact one inspected CI Linux Chromium PNG byte stream; twelve inspected prior PNG streams and all earlier provenance retained",
     "Original failed verification remains RED; fresh full no-update zero-tolerance CI is required",
     "Not Windows WebView2, native scaling, screen reader, live CLI or taskbar certification",
     "Pixel approval alone is not merge, release or updater promotion approval"
@@ -292,10 +292,10 @@
       "name": "projects-150-percent.png",
       "width": 1920,
       "height": 1080,
-      "sha256": "041a26a2dee56187907051d0e9f48d32799d30681807ec3abf6f3d909010905b",
-      "bytes": 60036,
+      "sha256": "d2dbcd7320cd993f7dfe27480cef1bb2c38932e322b0108924d49042cb1ca153",
+      "bytes": 59931,
       "reviewVerdict": "approve",
-      "provenance": "Exact PR51 actual PNG bytes accepted by one independent direct actual/expected/diff pixel review; original 13 screenshot failures remain RED.",
+      "provenance": "Exact PR62 Linux CI actual PNG bytes accepted by one direct actual/expected/diff pixel review. Compact geometry is retained; the original one-screenshot failure remains RED.",
       "zipEntry": "test-results/visual-verification/unified-workspace-projects-150-percent-snapshot/projects-150-percent-actual.png",
       "pixelReview": {
         "inspected": [
@@ -304,16 +304,27 @@
           "diff"
         ],
         "decision": "accept",
-        "report": "docs/visual-testing.md#pr51-session-ux-batch-baseline-adoption"
+        "report": "docs/visual-testing.md#pr62-compact-density-baseline-provenance-repair"
       },
       "revisionProvenance": {
-        "sourceHead": "4c74618853f01dc5a65a848a7a63aed16490eaf2",
-        "testedCommit": "8ac79430edd9170d85c5f3785b1f8340c2f11483",
+        "sourceHead": "cee1c14b5f950e22bd213e4b961ab22b1eeb0e67",
+        "testedCommit": "efa08c903a8c3a16d5dac11b9cac8e596edf2b88",
+        "workflowRunId": "39191092606",
+        "artifactId": "12159579806",
+        "originalArtifactZipSha256": "f79841dab041af3d38acdad6982ab55d7be1504dde1b83f60b3c5b9b2449deac",
+        "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/39191092606"
+      },
+      "supersededUnrecordedBaseline": {
+        "sourceCommit": "b642a8ab93a7b333e1a781f9fa70b175736bdb50",
+        "sha256": "e06a7febb70895aa51a6aaedbe469ba0dac9722b4c77ad7a7f4726a24469a6e1",
+        "bytes": 40576,
+        "reason": "Main changed this PNG without recording its provenance; it differs from standard Linux CI text and icon rasterization."
+      },
+      "previousRecordedRevision": {
+        "sha256": "041a26a2dee56187907051d0e9f48d32799d30681807ec3abf6f3d909010905b",
+        "bytes": 60036,
         "workflowRunId": "38550064925",
-        "artifactId": "11885664893",
-        "originalArtifactZipSha256": "3cef9bd05a37a26b9134b19563077bb8c96a5c4e2013cd86d211a136ec3e393e",
-        "sourceAndTestedTree": "e289558672317438ae56fee7b46b997168f01aa2",
-        "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/38550064925"
+        "artifactId": "11885664893"
       },
       "priorCurrentRevision": {
         "width": 1920,
@@ -1851,6 +1862,22 @@
   ],
   "unchangedVerifiedSnapshots": [
     {
+      "name": "workspace-dark-gui-light-terminal.png",
+      "sha256": "f6a1657051094edc3313dd627bbecbe60cb0bae008e671a4a6b602da3fa3f6a2"
+    },
+    {
+      "name": "workspace-hover-action-1366-en.png",
+      "sha256": "1a2bc67dc6a5f6e31bac4395480b7026663fb4cf4a53ac90c18fee67ad5ea304"
+    },
+    {
+      "name": "workspace-menu-1024-en.png",
+      "sha256": "d368c599d135d217bc1199a9408e6b1ac407ee3f1b779935ca0f16526b7348f0"
+    },
+    {
+      "name": "workspace-mixed-1366-zh.png",
+      "sha256": "edd5e58bf64bc416239c893d5e2e1afad12684bc1bd1e1f2849f6e94d25b90bc"
+    },
+    {
       "name": "archived-sessions.png",
       "sha256": "5806998138e88c70d5d3c10eebedc17ec4539dc5adcd37dfe86e5d14ce76e8a1"
     },
@@ -1861,10 +1888,6 @@
     {
       "name": "new-session-dialog.png",
       "sha256": "58aacab079523741414455e9ccaaae9cdaee2c416bde061740a61dca3d34dc71"
-    },
-    {
-      "name": "projects-150-percent.png",
-      "sha256": "041a26a2dee56187907051d0e9f48d32799d30681807ec3abf6f3d909010905b"
     },
     {
       "name": "settings-launch-configurations.png",

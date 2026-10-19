@@ -610,3 +610,30 @@ The local preparation environment lacks Playwright 1.63.0 and Chromium; this
 adoption is not a successful browser test or hosted CI result. These Linux
 synthetic screenshots do not certify Windows WebView2, native drag-and-drop,
 terminal lifecycle, rename delivery, real CLI IO or authenticated receipts.
+
+## PR62 compact-density baseline provenance repair
+
+Main commit `b642a8ab93a7b333e1a781f9fa70b175736bdb50` changed
+`projects-150-percent.png` without updating its approval manifest. The committed
+PNG has SHA-256 `e06a7febb70895aa51a6aaedbe469ba0dac9722b4c77ad7a7f4726a24469a6e1`
+and 40,576 bytes; its capture environment is unconfirmed. Standard Linux CI
+[run 39191092606](https://github.com/shawnwu2022/cc-desk/actions/runs/39191092606)
+passed 240 of 241 cases, with only this snapshot failing (13,420 differing
+pixels). Direct inspection of actual, expected and diff at 1920 by 1080 pixels
+confirmed the compact geometry, with differences in text and icon rasterization.
+All thirteen baseline images were inspected; the twelve passing PNGs stay unchanged.
+
+The replacement is the exact inspected actual PNG from artifact `12159579806`,
+source head `cee1c14b5f950e22bd213e4b961ab22b1eeb0e67`, tested synthetic merge
+`efa08c903a8c3a16d5dac11b9cac8e596edf2b88`. Its SHA-256 is
+`d2dbcd7320cd993f7dfe27480cef1bb2c38932e322b0108924d49042cb1ca153`
+and size is 59,931 bytes. The downloaded artifact ZIP matched GitHub's digest
+`f79841dab041af3d38acdad6982ab55d7be1504dde1b83f60b3c5b9b2449deac`
+and 31,878,696-byte size. The environment remains Ubuntu 24.04, Node 22.23.3,
+Playwright 1.63.0 and Chromium 153.0.8010.12, with the recorded Noto fonts.
+
+One reviewer accepted this image; earlier review records are retained separately.
+No rendered source, tolerance or test configuration changes. The original failed
+run remains RED. A fresh complete 241-case no-update run with `maxDiffPixels: 0`
+is required before merging. This Linux fixture evidence does not certify Windows
+WebView2, native scaling, real CLI lifecycle or the final title-sync fix.
