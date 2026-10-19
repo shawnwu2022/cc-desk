@@ -408,7 +408,7 @@ persisted. Canonical project/CLI last-success preferences are read from
 `setLaunchPreference` action and projects.json single writer. The draft waits for
 canonical metadata before automatic selection; a not-yet-loaded automatic draft
 does not freeze a fallback configuration prematurely. The setter merges the other
-CLI field inside the serialized mutation, after previous snapshots are adopted.
+CLI fields inside the serialized mutation, after previous snapshots are adopted.
 Only the separate global CLI default selection uses optional local UI storage with
 an in-memory fallback; local project history is ignored. A failed metadata save
 leaves the running session intact, reloads within canonical writer queue ownership

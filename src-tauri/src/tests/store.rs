@@ -2467,7 +2467,8 @@ fn ProjectsState_SkipsMalformedSessionRecord_003() {
 }
 
 #[test]
-fn opencode_launch_preference_accepts_third_key_01() {
+#[allow(non_snake_case)]
+fn ProjectsState_OpencodeLaunchPreferenceThirdKey_005() {
     let value = crate::store::ProjectLaunchPreference {
         last_cli: "opencode".into(),
         claude_launch_config_id: None,
@@ -2480,6 +2481,16 @@ fn opencode_launch_preference_accepts_third_key_01() {
         ..value
     };
     assert!(crate::store::validate_project_launch_preference(&rejected).is_err());
+    // 第三键与另两键共用同一 text-bounds 校验，越界/空串必须同样被拒。
+    for invalid in [String::new(), "a".repeat(257), "bad\0id".into()] {
+        let value = crate::store::ProjectLaunchPreference {
+            last_cli: "opencode".into(),
+            claude_launch_config_id: None,
+            codex_launch_config_id: None,
+            opencode_launch_config_id: Some(invalid),
+        };
+        assert!(crate::store::validate_project_launch_preference(&value).is_err());
+    }
 }
 
 #[test]

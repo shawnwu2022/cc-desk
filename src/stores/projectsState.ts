@@ -217,8 +217,8 @@ export const useProjectsStateStore = defineStore('projects-state', () => {
     // Reconcile an uncertain acknowledgement while holding this writer queue.
     // A later CLI cannot merge against the pre-commit snapshot.
     return mutate(() => {
-      // Read after prior mutations and the initial load have been adopted. Two
-      // successful CLIs must not overwrite each other's last-used configuration.
+      // Read after prior mutations and the initial load have been adopted. Each
+      // CLI owns its own slot, so a later CLI cannot overwrite another's choice.
       const current = launchPreferences.get(normalizePath(projectPath))
       const next: ProjectLaunchPreference = {
         lastCli: cli,
@@ -228,7 +228,7 @@ export const useProjectsStateStore = defineStore('projects-state', () => {
       }
       if (cli === 'claude') next.claudeLaunchConfigId = launchConfigId
       else if (cli === 'codex') next.codexLaunchConfigId = launchConfigId
-      else next.opencodeLaunchConfigId = launchConfigId
+      else if (cli === 'opencode') next.opencodeLaunchConfigId = launchConfigId
       return projectsApi.setProjectLaunchPreference(projectPath, next)
     }, true)
   }
