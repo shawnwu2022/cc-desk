@@ -5,6 +5,7 @@
 ### Added
 
 - Backend support for a third CLI, opencode: launch (new / resume by `-s <id>` / raw), SQLite-backed history projection, discovery, availability, and explicit capability gates (CLI-side picker/rename/archive are unsupported, not degraded). Creating an opencode launch configuration is a one-way upgrade: older app versions fail to read the workspace document (`WORKSPACE_INVALID`).
+- Frontend support for opencode: new-session entry, resume by session ID, per-project launch preference as a third key, `opencode-history` diagnostics source, OC glyph mark (official asset pending), capability-gated UI (picker/rename hidden), and docs updates. Old localStorage `cli-support` data migrates with opencode defaulting to enabled.
 
 ## [0.23.2] - 2026-10-19
 

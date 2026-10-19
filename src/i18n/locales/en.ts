@@ -467,7 +467,7 @@ export default {
 
   // About section
   aboutTitle: 'About',
-  aboutDesc: 'Multi-project workspace for Claude Code and Codex CLI.',
+  aboutDesc: 'Multi-project workspace for Claude Code, Codex CLI and opencode.',
   version: 'Version {version}',
   githubRepo: 'GitHub Repository',
   claudeDocs: 'Claude Code Docs',

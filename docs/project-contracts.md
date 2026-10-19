@@ -6,28 +6,28 @@
 
 > **当前架构权威入口**：[docs/native-cli-v3.md](../docs/native-cli-v3.md)。Native CLI v3 代码侧已完成到 D27；D20 真实 Claude Code / Codex CLI Layer-C 认证仍需授权目标环境。Provider 管理、bundled CLI installer、独立 MCP runtime 等旧文档口径均已废弃。
 
-面向 Claude Code 与 Codex CLI 的多项目、多会话桌面工作台。Tauri 2 + Vue 3 + xterm.js + Rust 负责宿主、终端与运行生命周期，真实 CLI 继续负责交互语义。
+面向 Claude Code、Codex CLI 与 opencode 的多项目、多会话桌面工作台。Tauri 2 + Vue 3 + xterm.js + Rust 负责宿主、终端与运行生命周期，真实 CLI 继续负责交互语义。
 
 ## 核心思想
 
-**面向 Claude Code / Codex CLI 重度用户的多会话工作台。GUI 做宿主增强，不重做 CLI 已经拥有的能力。**
+**面向 Claude Code / Codex CLI / opencode 重度用户的多会话工作台。GUI 做宿主增强，不重做 CLI 已经拥有的能力。**
 
 ### 产品定位
 
-- **面向谁**：已熟练使用 Claude Code、Codex CLI 或两者的开发者，尤其是需要同时管理多个会话、多个项目的重度用户
+- **面向谁**：已熟练使用 Claude Code、Codex CLI、opencode 或其中若干的开发者，尤其是需要同时管理多个会话、多个项目的重度用户
 - **解决什么问题**：CLI 在单会话交互上已经足够好，但在多会话并行、信息总览、跨会话状态追踪上力不从心
 - **核心价值**：
-  1. **多会话并行管理** — 一个窗口内同时运行多个 Claude/Codex 会话，快速切换、互不干扰
+  1. **多会话并行管理** — 一个窗口内同时运行多个 Claude/Codex/opencode 会话，快速切换、互不干扰
   2. **信息可视化增强** — MCP 工具详情等 CLI 不方便展示的信息，通过侧边栏面板呈现
   3. **工作流加速** — 快捷命令、prompt 片段、项目预设等 CLI 之外的外围辅助
 
 ### 设计原则
 
-- **CLI 优先，GUI 增强** — Native CLI v3 直接运行真实 Claude Code / Codex CLI；GUI 负责宿主能力，交互语义仍归 CLI
+- **CLI 优先，GUI 增强** — Native CLI v3 直接运行真实 Claude Code / Codex CLI / opencode；GUI 负责宿主能力，交互语义仍归 CLI
 - **轻量透明** — 原生 CLI 资源默认只读投影；Native workspace 使用独立 revision/CAS 存储，兼容旧 `~/.cc-box/` 数据但不让旧状态覆盖新状态
 - **功能边界** — CLI 里已经很好用的功能（对话交互、slash 命令、快捷键、模型切换），不在 GUI 里重复实现；GUI 专注于管理、可视化、辅助三类增强
 - **可逆性** — 用户可随时回到纯 CLI；CC Desk 不拥有 Provider/API Key 配置，不把 native resource projection 变成第二个配置写入器
-- **最小依赖** — 不依赖 Claude/Codex 内部 SDK；Claude 更名仅使用固定版本官方公开 Agent SDK 的本地元数据 API，不接管原生 TUI 或模型调用。版本相关能力必须通过真实 CLI/公开契约验证，不能把宿主测试冒充真实 CLI 认证
+- **最小依赖** — 不依赖 Claude/Codex/opencode 内部 SDK；Claude 更名仅使用固定版本官方公开 Agent SDK 的本地元数据 API，不接管原生 TUI 或模型调用。版本相关能力必须通过真实 CLI/公开契约验证，不能把宿主测试冒充真实 CLI 认证
 
 ### 不做什么
 
@@ -87,7 +87,7 @@ NativeCliTerminal
   ↕ authenticated document bridge
 cli launch / terminal_input / terminal_transport
   ↕ owned PTY
-Claude Code | Codex CLI
+Claude Code | Codex CLI | opencode
 ```
 
 - launch 绑定 cli/project/profile revision/request/run/generation/action；

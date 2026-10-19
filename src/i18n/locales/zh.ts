@@ -467,7 +467,7 @@ export default {
 
   // About section
   aboutTitle: '关于',
-  aboutDesc: '面向 Claude Code 与 Codex CLI 的多项目工作台。',
+  aboutDesc: '面向 Claude Code、Codex CLI 与 opencode 的多项目工作台。',
   version: '版本 {version}',
   githubRepo: 'GitHub 仓库',
   claudeDocs: 'Claude Code 文档',

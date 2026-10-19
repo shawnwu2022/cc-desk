@@ -24,8 +24,8 @@
 
 ## 架构与安全底线
 
-- CC Desk 是 Tauri 2 + Vue 3 + Rust + xterm.js 的多项目、多会话 CLI 宿主。真实 Claude Code / Codex CLI 拥有交互、slash 命令、模型和 Provider/API Key 配置语义；GUI 不重做这些能力。
-- Native CLI v3 使用 authenticated document bridge、冻结的 launch snapshot 和 owned run。新双 CLI 功能不得 fallback 到 Legacy `ptySpawn`/`ptyInput`/`ptyKill`、默认配置根或历史删除接口；Legacy 仅经统一 adapter 保持兼容。
+- CC Desk 是 Tauri 2 + Vue 3 + Rust + xterm.js 的多项目、多会话 CLI 宿主。真实 Claude Code / Codex CLI / opencode 拥有交互、slash 命令、模型和 Provider/API Key 配置语义；GUI 不重做这些能力。
+- Native CLI v3 使用 authenticated document bridge、冻结的 launch snapshot 和 owned run。新 CLI 功能不得 fallback 到 Legacy `ptySpawn`/`ptyInput`/`ptyKill`、默认配置根或历史删除接口；Legacy 仅经统一 adapter 保持兼容。
 - 运行 owner 的状态/关注变化经现有 `catalog.refresh(projectPath)` 合并刷新受影响项目，跨项目移动同时刷新旧、新项目；替换、移除和卸载释放对应监听。历史与归档按投影签名刷新受影响项目，读取进度不触发刷新，行序列不变时不替换目录数组；项目请求版本继续拒绝迟到覆盖。这是 UI 投影优化，不能据此改变进程或授权所有权。回归与测量见 [CI 性能记录](docs/ci-performance.md)。
 - 请求、profile revision、run、generation、document 与 stream 必须精确绑定。输入 partial/unknown 不重放；输出有界并使用 exact ACK；原生 workspace 写入遵守 revision/CAS。
 - path、owner 或 opaque scope ID 本身不是授权。资源读取使用 backend-held scope 和 kind-specific safe DTO，不发布原始 env、argv、headers、凭证或异常载荷；路径只按对应 DTO 的授权与展示契约返回。Observer 是可选隔离侧通道，不拥有进程控制权。
