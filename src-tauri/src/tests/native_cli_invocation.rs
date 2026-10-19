@@ -599,3 +599,88 @@ fn D09_UnarchiveRequest_ValidatesAndConverts_019() {
         assert_eq!(failure.field.as_deref(), Some("action.nativeSessionId"));
     }
 }
+
+// opencode：New 无参；resume-id 是 -s <id>；picker/unarchive 拒绝（spec §2）。
+// Raw 不进断言矩阵：raw_args() 在客户端分发前整体接管（实测不可达），
+// opencode.rs 的 Raw arm 是与 claude.rs 同款的纵深防御，行为见 RawPassesThrough。
+#[test]
+fn Opencode_ArgvMappingFollowsSpecMatrix_01() {
+    let f = Fixture::new(CliKind::Opencode, LaunchAction::New);
+    let snapshot = f.freeze();
+    let invocation = build_invocation(&f.request, &snapshot).unwrap();
+    assert!(invocation.args().is_empty());
+
+    let f = Fixture::new(
+        CliKind::Opencode,
+        LaunchAction::ResumeId {
+            native_session_id: LOCATOR.into(),
+        },
+    );
+    let snapshot = f.freeze();
+    let invocation = build_invocation(&f.request, &snapshot).unwrap();
+    assert_eq!(invocation.args(), words(&["-s", LOCATOR]).as_slice());
+
+    for action in [
+        LaunchAction::ResumePicker {
+            scope: ResumeScope::CurrentProject,
+        },
+        LaunchAction::ResumePicker {
+            scope: ResumeScope::All,
+        },
+        LaunchAction::Unarchive {
+            native_session_id: LOCATOR.into(),
+        },
+    ] {
+        let f = Fixture::new(CliKind::Opencode, action);
+        let snapshot = f.freeze();
+        let err = build_invocation(&f.request, &snapshot).unwrap_err();
+        assert_eq!(err.code, "UNSUPPORTED_ACTION");
+    }
+}
+
+// Raw 走公共 builder 透传（raw_args 提前返回），这是真实契约而非拒绝。
+#[test]
+fn Opencode_RawPassesThroughCommonBuilder_02() {
+    let f = Fixture::new(
+        CliKind::Opencode,
+        LaunchAction::Raw {
+            argv: vec!["--mini".into(), "--pure".into()],
+        },
+    );
+    let snapshot = f.freeze();
+    let invocation = build_invocation(&f.request, &snapshot).unwrap();
+    assert_eq!(invocation.args(), words(&["--mini", "--pure"]).as_slice());
+}
+
+// locator 校验沿用公共 validate_locator：flag 形状、空白、控制字符都拒绝。
+#[test]
+fn Opencode_ResumeIdRejectsFlagShapedLocator_03() {
+    let f = Fixture::new(
+        CliKind::Opencode,
+        LaunchAction::ResumeId {
+            native_session_id: "--fork".into(),
+        },
+    );
+    let snapshot = f.freeze();
+    let err = build_invocation(&f.request, &snapshot).unwrap_err();
+    assert_eq!(err.code, "INVALID_REQUEST");
+}
+
+// spec §6.2：opencode resume 的 effective cwd 必须保持 Unknown；Launch 来源不存在任何 Known。
+// RunPublicIdentity 字段私有，经 serde 断言（derive 已实现 Serialize）。
+#[test]
+fn Opencode_InitialIdentityKeepsEffectiveCwdUnknown_04() {
+    let f = Fixture::new(
+        CliKind::Opencode,
+        LaunchAction::ResumeId {
+            native_session_id: LOCATOR.into(),
+        },
+    );
+    let snapshot = f.freeze();
+    let invocation = build_invocation(&f.request, &snapshot).unwrap();
+    assert_eq!(invocation.requested_session_id(), Some(LOCATOR));
+    let identity = serde_json::to_value(invocation.initial_identity()).unwrap();
+    assert_eq!(identity["effectiveCwd"]["state"], "unknown");
+    assert_eq!(identity["effectiveConfigRoot"]["state"], "unknown");
+    assert_eq!(identity["nativeSessionId"]["state"], "unknown");
+}

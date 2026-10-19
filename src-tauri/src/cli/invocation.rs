@@ -99,8 +99,7 @@ pub(crate) fn build_invocation<'a>(
     let mut args = match request.cli {
         CliKind::Claude => super::claude::action_args(snapshot)?,
         CliKind::Codex => super::codex::action_args(snapshot)?,
-        // Task 2 前先整体 fail-closed；不得静默当 Shell。
-        CliKind::Opencode => return Err(error("UNSUPPORTED_ACTION")),
+        CliKind::Opencode => super::opencode::action_args(snapshot)?,
         CliKind::Shell => super::shell::action_args(snapshot)?,
     };
     // No quoting, parsing or deduplication. Explicit caller flags and positionals
