@@ -162,6 +162,7 @@ fn ScopeArgs_RejectConflictingFlags_004() {
 
 // 数据根：XDG_DATA_HOME 优先；否则 HOME/.local/share/opencode（Windows 同规则，已实测）。
 #[test]
+#[allow(non_snake_case)]
 fn Opencode_LocationsResolveXdgDataRoot_01() {
     let t = tempfile::tempdir().unwrap();
     let mut env = EnvMap::new();
@@ -182,6 +183,7 @@ fn Opencode_LocationsResolveXdgDataRoot_01() {
 
 // 空/非法 XDG 覆盖不得回退默认根（fail-closed，与既有 CODEX_HOME 语义一致）。
 #[test]
+#[allow(non_snake_case)]
 fn Opencode_InvalidXdgOverrideNeverFallsBackToHome_02() {
     let t = tempfile::tempdir().unwrap();
     let mut env = EnvMap::new();
@@ -196,6 +198,7 @@ fn Opencode_InvalidXdgOverrideNeverFallsBackToHome_02() {
 // 不给 --auto 开白名单：flag 存在已实测，但"不改 cwd/config root"未证实，
 // 未证实的语义不进白名单（spec §6.1 对抗修订）。用户配了就无历史投影，属有意 fail-closed。
 #[test]
+#[allow(non_snake_case)]
 fn Opencode_ReadScopeKnownMatrix_03() {
     assert!(read_scope_known(
         CliKind::Opencode,

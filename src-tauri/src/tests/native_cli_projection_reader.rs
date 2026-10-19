@@ -1039,6 +1039,7 @@ fn unknown_plugin_scope_never_becomes_global() {
 // 把它读成 Codex 设置并产出 items（Ok 非空）——断言 Err 才能证明「禁分支未被触达」，
 // 而不是「恰好读了个空目录」。
 #[test]
+#[allow(non_snake_case)]
 fn Opencode_CatalogRoutesHistoryOnly_01() {
     let dir = tempfile::TempDir::new().unwrap();
     std::fs::write(dir.path().join("config.toml"), "model = \"sentinel\"\n").unwrap();
