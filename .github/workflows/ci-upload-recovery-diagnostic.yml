@@ -1,0 +1,197 @@
+name: Artifact recovery advisory (no coverage authority)
+on:
+  push:
+    branches: [test/ci-upload-recovery-oct19]
+permissions:
+  contents: read
+env:
+  GIT_CONFIG_COUNT: 1
+  GIT_CONFIG_KEY_0: core.autocrlf
+  GIT_CONFIG_VALUE_0: "false"
+jobs:
+  transport:
+    name: Advisory transport (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Bind actual production action bytes and prepare disposable evidence
+        shell: bash
+        run: |
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs'
+          import { execFileSync } from 'node:child_process'
+          const expected = {
+            '.github/actions/upload-evidence/action.yml': 'a7440d5a0dd3147135c9f8f31fc0b6c685a5d22e',
+            '.github/actions/upload-evidence/verify.mjs': '2ffbdba44ed0741ec493c19aab54a1d2968b6df4',
+          }
+          for (const [path, sha] of Object.entries(expected)) {
+            if (execFileSync('git', ['hash-object', '--no-filters', path], { encoding: 'utf8' }).trim() !== sha) throw Error('Production action byte binding changed')
+          }
+          for (const folder of ['primary', 'present', 'mismatch', 'retry']) {
+            fs.mkdirSync(`.cache/advisory-${folder}/logs`, { recursive: true })
+            fs.writeFileSync(`.cache/advisory-${folder}/receipt.json`, '{"advisoryOnly":true,"coverageAuthority":false}')
+            fs.writeFileSync(`.cache/advisory-${folder}/logs/raw.log`, 'same original bytes\r\n')
+          }
+          fs.writeFileSync('.cache/ci-artifact-fault.cjs', `
+          const fs = require('node:fs'), http = require('node:http'), https = require('node:https');
+          const state = require('node:path').resolve('.cache/advisory-fault-owner');
+          for (const protocol of [http, https]) {
+            const original = protocol.request;
+            protocol.request = function (...args) {
+              const value = args[0];
+              const target = typeof value === 'string' ? new URL(value).pathname : value?.pathname ?? value?.path ?? '';
+              if (target === '/twirp/github.actions.results.api.v1.ArtifactService/CreateArtifact') {
+                try { fs.writeFileSync(state, String(process.pid), { flag: 'wx' }); } catch (error) { if (error.code !== 'EEXIST') throw error; }
+                if (fs.readFileSync(state, 'utf8') === String(process.pid)) {
+                  fs.appendFileSync(state + '.blocked', 'blocked before send\\n');
+                  throw new Error('ADVISORY_INJECTED_BEFORE_SEND');
+                }
+              }
+              return original.apply(this, args);
+            };
+          }
+          `)
+          console.log('ADVISORY_BINDING productionHead=3f85e6634dffbefc402825dc5416fffb85e3ced5; current action blob IDs match; no coverage authority')
+          NODE
+      - name: Actual first upload succeeds
+        timeout-minutes: 5
+        uses: ./.github/actions/upload-evidence
+        with:
+          name: advisory-primary-${{ matrix.os }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/advisory-primary/
+          retention-days: 7
+      - name: Preserve prior same-name immutable bytes
+        uses: actions/upload-artifact@v4
+        with:
+          name: advisory-present-${{ matrix.os }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/advisory-present/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Reconcile completed upload with unknown acknowledgement equivalent
+        timeout-minutes: 5
+        uses: ./.github/actions/upload-evidence
+        with:
+          name: advisory-present-${{ matrix.os }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/advisory-present/
+          retention-days: 7
+      - name: Preserve original bytes for a negative comparison
+        uses: actions/upload-artifact@v4
+        with:
+          name: advisory-mismatch-${{ matrix.os }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/advisory-mismatch/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Change only the disposable local comparison bytes
+        shell: bash
+        run: node -e "require('node:fs').writeFileSync('.cache/advisory-mismatch/logs/raw.log', 'DIFF original bytes\r\n')"
+      - name: Different readback bytes must remain failed
+        id: mismatch
+        continue-on-error: true
+        timeout-minutes: 5
+        uses: ./.github/actions/upload-evidence
+        with:
+          name: advisory-mismatch-${{ matrix.os }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/advisory-mismatch/
+          retention-days: 7
+      - name: Require the negative comparison refusal
+        if: ${{ always() }}
+        shell: bash
+        env:
+          MISMATCH: ${{ steps.mismatch.outcome }}
+        run: node -e "if(process.env.MISMATCH!=='failure')throw Error('Different immutable bytes were not refused')"
+      - name: Inject pre-send failure only in the first uploader process
+        timeout-minutes: 5
+        uses: ./.github/actions/upload-evidence
+        env:
+          NODE_OPTIONS: --require=./.cache/ci-artifact-fault.cjs
+        with:
+          name: advisory-retry-${{ matrix.os }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/advisory-retry/
+          retention-days: 7
+      - name: Require the injection really executed
+        shell: bash
+        run: |
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs'
+          const events = fs.readFileSync('.cache/advisory-fault-owner.blocked', 'utf8').trim().split('\n')
+          if (events.length !== 5 || events.some(event => event !== 'blocked before send')) throw Error('All five original pre-send failures were not exercised')
+          console.log(`ADVISORY_PRE_SEND_FAILURES ${events.length}`)
+          NODE
+      - uses: actions/download-artifact@v4
+        with:
+          name: advisory-retry-${{ matrix.os }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/advisory-confirmed-retry
+      - name: Independently verify the actual retry artifact bytes
+        shell: bash
+        env:
+          EVIDENCE_ROOT: .cache/advisory-retry
+          EVIDENCE_COPY: .cache/advisory-confirmed-retry
+        run: node .github/actions/upload-evidence/verify.mjs
+
+  original-failure:
+    name: Advisory original failure must remain failed
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      observed: ${{ steps.confirm.outputs.observed }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Prepare disposable failing receipt
+        run: |
+          mkdir -p .cache/advisory-failed
+          printf '{"advisoryOnly":true,"completed":false,"exitCode":17}\n' > .cache/advisory-failed/receipt.json
+      - name: Deliberate source failure (expected negative evidence)
+        id: deliberate
+        run: exit 17
+      - name: Preserve failed receipt without clearing the original failure
+        id: preserve
+        if: ${{ always() }}
+        timeout-minutes: 3
+        uses: ./.github/actions/upload-evidence
+        with:
+          name: advisory-original-failed-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/advisory-failed/
+          retention-days: 7
+      - name: Confirm the expected source failure and successful evidence transfer
+        id: confirm
+        if: ${{ always() }}
+        env:
+          DELIBERATE: ${{ steps.deliberate.outcome }}
+          PRESERVE: ${{ steps.preserve.outcome }}
+        run: |
+          test "$DELIBERATE" = failure
+          test "$PRESERVE" = success
+          echo 'observed=true' >> "$GITHUB_OUTPUT"
+
+  expected-outcomes:
+    name: Advisory scenario expectations (not application CI)
+    needs: [transport, original-failure]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Observe preserved expected failure and successful transport controls
+        env:
+          TRANSPORT: ${{ needs.transport.result }}
+          ORIGINAL: ${{ needs.original-failure.result }}
+          OBSERVED: ${{ needs.original-failure.outputs.observed }}
+        run: |
+          test "$TRANSPORT" = success
+          test "$ORIGINAL" = failure
+          test "$OBSERVED" = true
+          echo 'ADVISORY_ONLY: expected original failure remains failed. This workflow intentionally cannot certify application coverage; cancellation and real service outages remain unverified.'
+
