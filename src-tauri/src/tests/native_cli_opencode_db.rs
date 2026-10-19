@@ -23,6 +23,9 @@ impl Fixture {
         let root = guard.path().to_path_buf();
         let conn = Connection::open(root.join("opencode.db")).unwrap();
         conn.execute_batch(SCHEMA).unwrap();
+        // 真实 opencode 库是 WAL；不显式设置则 fixture 落在 rollback journal，
+        // 并发探针声称的「WAL 快照隔离」就不成立于其真实机制。
+        conn.query_row("PRAGMA journal_mode=WAL", [], |row| row.get::<_, String>(0)).unwrap();
         drop(conn);
         let project = root.join("proj");
         std::fs::create_dir_all(&project).unwrap();
@@ -253,8 +256,9 @@ fn Opencode_ConcurrentWriterRemainsReadable_01() {
         .stderr(std::process::Stdio::null())
         .spawn()
     else {
-        // 环境无可用解释器时跳过并显式告知：不因宿主缺 Python 让 CI 变红。
-        eprintln!("skipped: no usable python for concurrent-writer probe");
+        // 环境无可用解释器时跳过并显式告知：[SKIP] 标记可被 CI 日志检索，
+        // 不因宿主缺 Python 让 CI 变红，也不冒充「已验证」。
+        eprintln!("[SKIP] Opencode_ConcurrentWriterRemainsReadable_01: no usable python for concurrent-writer probe");
         return;
     };
     std::thread::sleep(std::time::Duration::from_millis(1500));
@@ -270,4 +274,25 @@ fn Opencode_ConcurrentWriterRemainsReadable_01() {
         } => assert_eq!(native_session_id, "ses_a"),
         _ => panic!("session expected"),
     }
+}
+
+// 确定性 BUSY：另一连接以 locking_mode=EXCLUSIVE 独占打开（备份/同步工具、另一
+// 实例迁移等真实场景）时，读者的读锁在 busy_timeout(2s) 重试耗尽后必须映射
+// SOURCE_BUSY，不得伪装成 schema 不支持或读取失败。WAL 快照隔离的「可读」半边
+// 由上面的并发探针覆盖，两者互补。
+#[test]
+#[allow(non_snake_case)]
+fn Opencode_ExclusiveWriterMapsSourceBusy_10() {
+    let f = Fixture::new();
+    {
+        let conn = f.conn();
+        f.register_project(&conn, "p1");
+        seed(&conn, "ses_held", "p1", &f.project.to_string_lossy(), "T", 100, None);
+    }
+    let writer = f.conn();
+    writer.query_row("PRAGMA locking_mode=EXCLUSIVE", [], |row| row.get::<_, String>(0)).unwrap();
+    writer.execute_batch("BEGIN EXCLUSIVE").unwrap();
+    let error = read_history(&Root::open(&f.root).unwrap(), &[f.project_ref()]).unwrap_err();
+    writer.execute_batch("ROLLBACK").unwrap();
+    assert_eq!(error, "SOURCE_BUSY");
 }
