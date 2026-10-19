@@ -100,6 +100,23 @@ it('History_RetainedFailureDoesNotRefreshRows_074', async () => {
   expect(catalog.sessions).toBe(published)
 })
 
+// CLI 标题可包含分隔符；两个不同的合法显示快照不能撞签名而漏掉列表更新。
+it('History_TitleDelimitersCannotHideProjectionChanges_079', async () => {
+  wrapper = mount(defineComponent({ setup() { useUnifiedWorkspaceRuntime(ref(null)); return () => null } }))
+  await flushPromises()
+  const history = useNativeHistoryStore(), catalog = useUnifiedSessionsStore()
+  const entry = history.get({ cli: 'claude', profileId: 'p', profileRevision: '1', projectId: 'p0', projectPath: '/p0' })!
+  const row = entry.sessions[0]
+  entry.sessions = [{ ...row, title: 'x', lastKnownTitle: '|y' }]
+  await flushPromises()
+  expect(catalog.sessions.find(item => item.nativeSessionId === 'n0')?.title).toBe('|y')
+  const refresh = vi.spyOn(catalog, 'refresh')
+  entry.sessions = [{ ...row, title: 'x|', lastKnownTitle: 'y' }]
+  await flushPromises()
+  expect(catalog.sessions.find(item => item.nativeSessionId === 'n0')?.title).toBe('y')
+  expect(refresh.mock.calls.map(([path]) => path)).toEqual(['/p0'])
+})
+
 // 裸 ID 归档的来源歧义依赖全部历史；另一项目增删同 ID 时只刷新两个相关项目。
 it.each(['add', 'remove', 'invalidate'] as const)('History_SharedNativeIdRefreshesDependentProjects_075 %s', async operation => {
   useProjectsStateStore().archivedSessions.set('/p0', ['n0'])
