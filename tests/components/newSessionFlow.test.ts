@@ -159,13 +159,13 @@ describe('New session flow', () => {
     expect(w.emitted('create')).toHaveLength(1)
   })
 
-  it('NewSession_OpencodeMenuEntry_006', async () => {
+  it('NewSession_OpencodeMenuEntry_015', async () => {
     const w = mount(ProjectNode, { props: { project, expanded: true }, global: global(), attachTo: document.body }); wrappers.push(w)
     await w.get('[data-project-quick-action]').trigger('click'); await flushPromises()
     ;(document.querySelector('[data-item-id=opencode]') as HTMLButtonElement).click(); await flushPromises()
     expect(w.emitted('new-session-request')?.[0]).toEqual([{ projectKey: '/repo', projectPath: '/repo', intent: 'opencode' }])
   })
-  it('NewSession_OpencodeHidesPickerMode_007', async () => {
+  it('NewSession_OpencodeHidesPickerMode_016', async () => {
     const draft = useNewSessionDraftStore(); draft.open(project, 'codex'); draft.startMode = 'resume-picker'
     const w = mount(NewSessionDialog, { props: { active: true }, global: global(), attachTo: document.body }); wrappers.push(w)
     draft.cli = 'opencode'; await flushPromises()
