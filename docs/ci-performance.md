@@ -1,5 +1,24 @@
 # CI runtime work
 
+## PR62 projection and optional-observer regressions (2026-10-19, local)
+
+The first strengthened unchanged-history case reproduced two project catalog
+rescans for one forced read, although the row array stayed identical. Removing
+`loaded` and `error` from the row signature reduces that case to zero rescans;
+failure diagnostics and absence-evidence revocation still update independently.
+An automatic Legacy title refresh with 25 cached sessions also reproduced an
+intermediate 20-row cache. Pages now publish only as a complete replacement;
+later-page failure retains all 25 trusted rows, while a cold failure publishes none.
+
+Native resumed sources and Legacy PTYs with proven default roots now accept owned
+OSC invalidations when the optional hook observer is off or unavailable. Hook
+events remain gated, disabling observation cancels hook retries, and unproven
+sources cannot request reads. Nine additional cases plus the strengthened existing
+case cover these paths. The five affected suites passed all 285 cases, typecheck
+and production build passed. These are local synthetic-store results; fresh hosted
+CI and Windows package gates are required, and final real WebView2 title-sync
+acceptance remains unverified.
+
 ## Runtime performance audit and falsified candidates (2026-10-17, local)
 
 A full application-runtime audit was run on `perf/runtime-batch1` (based on main

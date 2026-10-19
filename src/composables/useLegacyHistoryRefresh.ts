@@ -20,7 +20,7 @@ export function useLegacyHistoryRefresh(options: {
   let disposed = false, reading = false
   const identity = (tab: TerminalTab) => JSON.stringify([tab.ptyId, tab.ptyGeneration, tab.sessionId, normalizePath(tab.projectPath)])
   const eligible = (tab: TerminalTab) => (tab.cli ?? 'claude') === 'claude' && tab.status === 'running'
-    && !!tab.ptyId && !!tab.sessionId && tab.usesDefaultClaudeRoot === true && tab.observerEnabled !== false
+    && !!tab.ptyId && !!tab.sessionId && tab.usesDefaultClaudeRoot === true
   const current = (owner: Owner) => !disposed && sessions.tabs.get(owner.tab.tabId) === owner.tab
     && eligible(owner.tab) && identity(owner.tab) === owner.identity && owners.get(owner.tab.tabId) === owner
   function schedule() {
@@ -59,9 +59,13 @@ export function useLegacyHistoryRefresh(options: {
     } finally { reading = false; schedule() }
   }
   function queue(owner: Owner) { pending.set(owner.tab.tabId, owner); schedule() }
-  watch(() => [...sessions.tabs.values()].map(tab => [tab, identity(tab), eligible(tab), tab.titleChangeRevision] as const), () => {
+  watch(() => [...sessions.tabs.values()].map(tab => [tab, identity(tab), eligible(tab), tab.titleChangeRevision, tab.observerEnabled] as const), () => {
     for (const [id, owner] of owners) if (!current(owner)) {
       clearTimeout(owner.timer); owners.delete(id); pending.delete(id)
+    }
+    // OSC 不依赖 hook observer；关闭观察仅取消 hook 的迟到标题补读。
+    for (const owner of owners.values()) if (owner.tab.observerEnabled === false) {
+      clearTimeout(owner.timer); owner.timer = undefined
     }
     for (const tab of sessions.tabs.values()) if (eligible(tab)) {
       const titleRevision = tab.titleChangeRevision ?? 0
@@ -78,7 +82,7 @@ export function useLegacyHistoryRefresh(options: {
   const unsubscribe = useHookStore().subscribe(['sessionStart', 'userPromptSubmit', 'stop', 'stopFailure'], event => {
     const tab = event.ptyId ? sessions.getTabByPtyId(event.ptyId) : undefined
     const owner = tab && owners.get(tab.tabId)
-    if (!owner || !current(owner) || event.observerSource !== 'claude-hook' || event.runId !== tab!.ptyId
+    if (!owner || !current(owner) || tab!.observerEnabled === false || event.observerSource !== 'claude-hook' || event.runId !== tab!.ptyId
       || event.generation !== 1 || event.sessionId !== tab!.sessionId || !event.eventId || owner.eventId === event.eventId) return
     owner.eventId = event.eventId
     clearTimeout(owner.timer); owner.timer = undefined
@@ -89,7 +93,7 @@ export function useLegacyHistoryRefresh(options: {
     const retry = (index: number) => {
       owner.timer = setTimeout(() => {
         owner.timer = undefined
-        if (!current(owner)) return
+        if (!current(owner) || owner.tab.observerEnabled === false) return
         queue(owner)
         if (index + 1 < delays.length) retry(index + 1)
       }, delays[index])

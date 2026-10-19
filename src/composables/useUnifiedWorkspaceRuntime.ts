@@ -670,15 +670,17 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   let historyTimer: ReturnType<typeof setTimeout> | undefined
   let historyReading = false
   function historyCue(tab: NativeCliTab): { identity: string | null; reply: string | null; prompt: string | null; titleRevision: number } | null {
-    if (tab.cli !== 'claude' || tab.action.kind === 'raw' || tab.status !== 'running' || tab.observationState !== 'active') return null
+    if (tab.cli !== 'claude' || tab.action.kind === 'raw' || tab.status !== 'running') return null
     const attempt = captureNativeAttempt(tab)
-    const notice = native.hasOwnedObservationNotice(tab.tabId, attempt) ? tab.observationNotice : undefined
+    const observing = tab.observationState === 'active'
+    const notice = observing && native.hasOwnedObservationNotice(tab.tabId, attempt) ? tab.observationNotice : undefined
     const reply = notice?.recent?.kind === 'reply-ended' ? notice.recent : notice?.unreadReplyEnd
     const prompt = notice?.lastPromptSubmitted?.kind === 'prompt-submitted' ? notice.lastPromptSubmitted
       : notice?.recent?.kind === 'prompt-submitted' ? notice.recent : null
     const key = [attempt.requestId, attempt.runId, attempt.generation]
-    return tab.observedSessionId || reply || prompt ? {
-      identity: tab.observedSessionId ? JSON.stringify([...key, tab.observedSessionId]) : null,
+    // 已冻结的恢复来源或本次运行已证明的身份足以处理 OSC；hook 事件仍要求观察已激活。
+    return tab.sourceSessionKey || tab.observedSessionId || reply || prompt ? {
+      identity: observing && tab.observedSessionId ? JSON.stringify([...key, tab.observedSessionId]) : null,
       reply: reply ? JSON.stringify([...key, reply.eventId]) : null,
       prompt: prompt ? JSON.stringify([...key, prompt.eventId]) : null,
       titleRevision: tab.titleChangeRevision ?? 0,
@@ -825,7 +827,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     for (const entry of history.all()) {
       seenEntries.add(entry.key)
       const path = entry.context.projectPath
-      const signature = `${entry.sourceRootKey ?? ''}|${entry.loaded}|${entry.error ?? ''}|` +
+      const signature = `${entry.sourceRootKey ?? ''}|` +
         entry.sessions.map(row => `${row.sessionKey}|${row.nativeSessionId}|${row.archived ? 1 : 0}|${row.title}|` +
           `${row.titleSource ?? ''}|${row.lastKnownTitle ?? ''}|${row.lastKnownTitleSource ?? ''}|` +
           `${row.updatedAt ?? ''}|${row.lastKnownActivityAt ?? ''}|${row.truncated ? 1 : 0}|` +

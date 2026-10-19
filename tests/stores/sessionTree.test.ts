@@ -1330,7 +1330,7 @@ describe('session store - codex batch2 缓存/状态一致性', () => {
     expect(store.historyLoadState.get('/p-a')?.loading).toBe(false)
   })
 
-  // 分页失败：首页成功有更多 -> 进入分页 -> 分页 reject -> isLoadingMore 复位 + 缓存清空（partial 不当完整）
+  // 冷读分页失败：不发布 partial；isLoadingMore 复位，缓存仍为空。
   it('FetchHistory_PaginationFail_ClearPartialAndResetLoadingMore_001', async () => {
     const { getSessions } = await import('@/api/tauri')
     const mock = getSessions as ReturnType<typeof vi.fn>
@@ -1343,7 +1343,7 @@ describe('session store - codex batch2 缓存/状态一致性', () => {
     const res = await store.loadHistoryFor('/big')
     expect(res.ok).toBe(false)                              // 分页失败向上传播
     expect(store.isLoadingMore).toBe(false)                 // finally 复位
-    expect(store.getHistoryFor('/big').length).toBe(0)      // partial 缓存已清，不当完整
+    expect(store.getHistoryFor('/big').length).toBe(0)      // partial 未发布，不当完整
   })
 
   // 首页失败：不写缓存，error 置位
