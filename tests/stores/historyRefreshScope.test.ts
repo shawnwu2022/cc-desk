@@ -80,7 +80,23 @@ it('History_SingleProjectReadRefreshesOnlyThatProject_067', async () => {
   stop()
   const unrelated = refresh.mock.calls.filter(call => call[0] !== '/p0')
   expect(unrelated, '单项目读取不能刷新无关项目').toEqual([])
+  expect(refresh, '相同行的读取进度不能触发所在项目重扫').not.toHaveBeenCalled()
   expect(publications, '投影不变的读取不能发布新的目录数组').toBe(0)
+  expect(catalog.sessions).toBe(published)
+})
+
+// 错误诊断独立更新；保留的可信行没有改变时，不重新扫描目录。
+it('History_RetainedFailureDoesNotRefreshRows_074', async () => {
+  wrapper = mount(defineComponent({ setup() { useUnifiedWorkspaceRuntime(ref(null)); return () => null } }))
+  await flushPromises()
+  const catalog = useUnifiedSessionsStore(), history = useNativeHistoryStore()
+  const published = catalog.sessions, refresh = vi.spyOn(catalog, 'refresh')
+  io.read.mockResolvedValueOnce({ state: 'unavailable', reason: 'SOURCE_BUSY', items: [], hasMore: false })
+  const entry = await history.load({ cli: 'claude', profileId: 'p', profileRevision: '1', projectId: 'p0', projectPath: '/p0', force: true, retainOnFailure: true })
+  await flushPromises()
+  expect(entry.error).toBe('SOURCE_BUSY')
+  expect(entry.absenceEvidence).toBeUndefined()
+  expect(refresh).not.toHaveBeenCalled()
   expect(catalog.sessions).toBe(published)
 })
 

@@ -10,6 +10,7 @@
 - Keep trusted source roots, titles and archive state together during reloads and read failures to prevent transient archived or duplicate session rows
 - Read the latest valid Claude custom title, then AI title, then first prompt consistently across history lists, search, details and opened sessions; invalidate older derived name-cache entries
 - Follow idle Claude CLI `/rename` changes in opened Native and Legacy sessions through coalesced, owner-bound title invalidation without periodic history scans
+- Keep source-proven CLI title updates working when the optional hook observer is off or unavailable, and retain complete Legacy history until every replacement page succeeds
 - Replace a new session's preparation row as soon as its runtime owner is admitted, before opening-time metadata finishes saving; prevent late saves from reinserting closed sessions
 - Make compact density visibly tighten shared controls, project/session rows and workspace spacing through geometry tokens while preserving terminal fonts and control hit targets
 - Resolve locked npm tarballs through the official registry instead of fixed regional mirrors while preserving every dependency version and integrity hash

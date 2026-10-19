@@ -61,6 +61,135 @@ function render() {
 }
 
 describe('running session title sync to session list', () => {
+  // 恢复来源已冻结；关闭或不可用的 hook observer 不应阻止当前运行的 OSC 失效信号。
+  it.each(['off', 'unavailable'] as const)('TitleSync_NativeOscWithoutObserver_016 %s', async observation => {
+    render(); await flushPromises()
+    const tabs = useNativeTabsStore()
+    const created = tabs.create({ cli: 'claude', projectId: 'project', projectPath: '/repo', profileId: 'cl', profileRevision: '7',
+      sourceSessionKey: 'root-key', action: { kind: 'resume-id', nativeSessionId: 'session-1' } })
+    const tab = tabs.tab(created.tabId)!, attempt = captureNativeAttempt(tab)
+    tabs.applyLaunchStatus(tab.tabId, { instanceId: 'i', requestId: tab.requestId, run: { runId: tab.runId, generation: tab.generation }, revision: '1', phase: 'running', failure: null })
+    tabs.applyObservation(tab.tabId, attempt, { observation, activity: 'unknown' })
+    await flushPromises(); await vi.advanceTimersByTimeAsync(300)
+    io.read.mockClear().mockResolvedValue({ state: 'ready', items: [sessionItem('CLI renamed without hook', 'custom')], hasMore: false })
+    tabs.applyObservationNotice(tab.tabId, attempt, { kind: 'reply-ended', eventId: 'inactive-hook', receivedAt: 1, runId: tab.runId, generation: tab.generation })
+    await flushPromises(); await vi.advanceTimersByTimeAsync(300)
+    expect(io.read).not.toHaveBeenCalled()
+    tab.titleChangeRevision = (tab.titleChangeRevision ?? 0) + 1
+    await flushPromises(); await vi.advanceTimersByTimeAsync(300)
+    expect(useUnifiedSessionsStore().sessions.find(row => row.opened)?.title).toBe('CLI renamed without hook')
+    expect(io.read).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(io.read).toHaveBeenCalledTimes(1)
+  })
+
+  // observer 关闭仍接受精确 PTY 的 OSC；伪造的 hook 不得变成读取或迟到补读。
+  it('TitleSync_LegacyOscWithoutObserver_017', async () => {
+    io.profiles.mockResolvedValue({ revision: '1', profiles: [] })
+    io.legacyRoot.mockResolvedValue({ rootKey: 'root', tabsUseDefaultRoot: true })
+    io.sessions.mockResolvedValue([{ sessionId: 'session-1', name: 'First prompt title', projectPath: '/repo', lastActiveAt: 1 }])
+    let receive!: (event: HookEventPayload) => void
+    io.hook.mockImplementation(async handler => { receive = handler; return () => {} })
+    const legacy = useSessionStore(), id = legacy.createTab('/repo', { sessionId: 'session-1', name: 'First prompt title' })
+    const tab = Object.assign(legacy.tabs.get(id)!, { status: 'running' as const, ptyId: 'pty', usesDefaultClaudeRoot: true, observerEnabled: false })
+    render(); await flushPromises(); await vi.advanceTimersByTimeAsync(300)
+    io.sessions.mockClear()
+    receive({ ptyId: 'pty', runId: 'pty', generation: 1, sessionId: 'session-1', eventId: 'disabled-hook', observerSource: 'claude-hook',
+      eventName: 'Stop', state: 'idle', timestamp: 1, detail: { type: 'stop', data: {} } } as HookEventPayload)
+    await vi.advanceTimersByTimeAsync(300)
+    expect(io.sessions).not.toHaveBeenCalled()
+    io.sessions.mockResolvedValue([{ sessionId: 'session-1', name: 'CLI renamed without hook', projectPath: '/repo', lastActiveAt: 2 }])
+    tab.titleChangeRevision = (tab.titleChangeRevision ?? 0) + 1
+    await flushPromises(); await vi.advanceTimersByTimeAsync(300)
+    expect(useUnifiedSessionsStore().sessions.find(row => row.opened)?.title).toBe('CLI renamed without hook')
+    expect(io.sessions).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(io.sessions).toHaveBeenCalledTimes(1)
+  })
+
+  // 放宽 observer 条件不等于放宽来源证明；新 Native 身份未知、Legacy 根未知都不扫描。
+  it.each(['native', 'legacy'] as const)('TitleSync_OscRequiresSourceProof_019 %s', async runtimeKind => {
+    let tab: { titleChangeRevision?: number }
+    if (runtimeKind === 'native') {
+      render(); await flushPromises()
+      const tabs = useNativeTabsStore()
+      const created = tabs.create({ cli: 'claude', projectId: 'project', projectPath: '/repo', profileId: 'cl', profileRevision: '7', action: { kind: 'new' } })
+      tab = tabs.tab(created.tabId)!
+      tabs.applyLaunchStatus(created.tabId, { instanceId: 'i', requestId: created.requestId, run: { runId: created.runId, generation: created.generation }, revision: '1', phase: 'running', failure: null })
+    } else {
+      io.profiles.mockResolvedValue({ revision: '1', profiles: [] })
+      const legacy = useSessionStore(), id = legacy.createTab('/repo', { sessionId: 'session-1', name: 'Unproven' })
+      tab = Object.assign(legacy.tabs.get(id)!, { status: 'running' as const, ptyId: 'pty', usesDefaultClaudeRoot: false, observerEnabled: false })
+      render()
+    }
+    await flushPromises(); await vi.advanceTimersByTimeAsync(300)
+    io.read.mockClear(); io.sessions.mockClear()
+    tab.titleChangeRevision = (tab.titleChangeRevision ?? 0) + 1
+    await flushPromises(); await vi.advanceTimersByTimeAsync(120_000)
+    expect(io.read).not.toHaveBeenCalled()
+    expect(io.sessions).not.toHaveBeenCalled()
+  })
+
+  // 关闭 observer 撤销旧 Stop 的定时器，但同一可信 PTY 后续 OSC 仍可同步标题。
+  it('TitleSync_LegacyDisableObserverCancelsHookRetries_020', async () => {
+    io.profiles.mockResolvedValue({ revision: '1', profiles: [] })
+    io.legacyRoot.mockResolvedValue({ rootKey: 'root', tabsUseDefaultRoot: true })
+    io.sessions.mockResolvedValue([{ sessionId: 'session-1', name: 'Trusted', projectPath: '/repo', lastActiveAt: 1 }])
+    let receive!: (event: HookEventPayload) => void
+    io.hook.mockImplementation(async handler => { receive = handler; return () => {} })
+    const legacy = useSessionStore(), id = legacy.createTab('/repo', { sessionId: 'session-1', name: 'Trusted' })
+    const tab = Object.assign(legacy.tabs.get(id)!, { status: 'running' as const, ptyId: 'pty', usesDefaultClaudeRoot: true, observerEnabled: true })
+    render(); await flushPromises(); await vi.advanceTimersByTimeAsync(300)
+    receive({ ptyId: 'pty', runId: 'pty', generation: 1, sessionId: 'session-1', eventId: 'old-stop', observerSource: 'claude-hook',
+      eventName: 'Stop', state: 'idle', timestamp: 1, detail: { type: 'stop', data: {} } } as HookEventPayload)
+    await vi.advanceTimersByTimeAsync(300)
+    tab.observerEnabled = false
+    await flushPromises(); io.sessions.mockClear()
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(io.sessions).not.toHaveBeenCalled()
+    io.sessions.mockResolvedValue([{ sessionId: 'session-1', name: 'After disabling', projectPath: '/repo', lastActiveAt: 2 }])
+    tab.titleChangeRevision = (tab.titleChangeRevision ?? 0) + 1
+    await flushPromises(); await vi.advanceTimersByTimeAsync(300)
+    expect(useUnifiedSessionsStore().sessions.find(row => row.opened)?.title).toBe('After disabling')
+    expect(io.sessions).toHaveBeenCalledTimes(1)
+  })
+
+  // 自动分页读取中不能发布前二十行；后页失败保留完整缓存，成功一次发布完整新行。
+  it.each(['failure', 'success'] as const)('TitleSync_LegacyAtomicPages_018 %s', async outcome => {
+    io.profiles.mockResolvedValue({ revision: '1', profiles: [] })
+    io.legacyRoot.mockResolvedValue({ rootKey: 'root', tabsUseDefaultRoot: true })
+    const rows = Array.from({ length: 25 }, (_, i) => ({ sessionId: `session-${i}`, name: `Trusted ${i}`, projectPath: '/repo', lastActiveAt: i }))
+    io.sessions.mockImplementation(async (_path, limit, offset) => rows.slice(offset, offset + limit))
+    const legacy = useSessionStore(), id = legacy.createTab('/repo', { sessionId: 'session-0', name: 'Trusted 0' })
+    const tab = Object.assign(legacy.tabs.get(id)!, { status: 'running' as const, ptyId: 'pty', usesDefaultClaudeRoot: true })
+    render(); await flushPromises(); await vi.advanceTimersByTimeAsync(300)
+    const prior = legacy.getCatalogHistoryFor('/repo')
+    expect(prior).toHaveLength(25)
+    let finish!: (rows: unknown[]) => void, fail!: (error: Error) => void
+    const updated = rows.map(row => ({ ...row, name: `Updated ${row.sessionId}` }))
+    io.sessions.mockImplementation((_path, limit, offset) => offset === 0 ? Promise.resolve(updated.slice(0, limit))
+      : new Promise((resolve, reject) => { finish = resolve; fail = reject }))
+    tab.titleChangeRevision = (tab.titleChangeRevision ?? 0) + 1
+    await flushPromises(); await vi.advanceTimersByTimeAsync(300)
+    const duringRead = legacy.getCatalogHistoryFor('/repo')
+    if (outcome === 'failure') fail(new Error('later page failed'))
+    else finish(updated.slice(20))
+    await flushPromises()
+    expect(duringRead, '分页中的首二十行不能替换已发布快照').toBe(prior)
+    const catalog = useUnifiedSessionsStore()
+    await catalog.refresh('/repo')
+    expect(catalog.sessions).toHaveLength(25)
+    expect(legacy.isLoadingMore).toBe(false)
+    if (outcome === 'failure') {
+      expect(legacy.getCatalogHistoryFor('/repo')).toBe(prior)
+      expect(legacy.historyLoadState.get('/repo')?.error).toContain('later page failed')
+      expect(catalog.sessions.find(row => row.opened)?.title).toBe('Trusted 0')
+    } else {
+      expect(legacy.getCatalogHistoryFor('/repo').every(row => row.name.startsWith('Updated '))).toBe(true)
+      expect(catalog.sessions.find(row => row.opened)?.title).toBe('Updated session-0')
+    }
+  })
+
   // CLI /rename 没有 UserPromptSubmit/Stop；OSC 只使精确来源过期，显示名仍从历史读取。
   it.each(['native', 'legacy'] as const)('TitleSync_IdleCliRenameSignal_015 %s', async runtimeKind => {
     let tab: { titleChangeRevision?: number }

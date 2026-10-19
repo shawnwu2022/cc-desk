@@ -502,7 +502,7 @@ export const useSessionStore = defineStore('session', () => {
   /**
    * 实际拉取 + 分页 + 写缓存（不处理并发/force）。
    * 缓存 key 用规范化路径（与 getHistoryFor/invalidate 一致）；调用后端 getSessions 保留原始路径
-   * （后端按原始路径查 JSONL）。分页 try/finally 保证 isLoadingMore 复位；分页失败清缓存避免 partial 当完整。
+   * （后端按原始路径查 JSONL）。全部页成功后一次发布；失败保留上次完整快照，绝不发布 partial。
    */
   async function runFetch(projectPath: string): Promise<HistorySession[]> {
     const n = normalizePath(projectPath)
@@ -515,12 +515,13 @@ export const useSessionStore = defineStore('session', () => {
       .map(s => ({ sessionId: s.sessionId, name: s.name, projectPath: s.projectPath, lastActiveAt: s.lastActiveAt }))
       .sort((a, b) => b.lastActiveAt - a.lastActiveAt)
 
-    // 数据就绪后才写入缓存（规范化 key；不提前清空）
-    historyCacheMap.set(n, mapped)
-    if (!hasMore) return historyCacheMap.get(n) ?? []
+    if (!hasMore) {
+      historyCacheMap.set(n, mapped)
+      return historyCacheMap.get(n) ?? []
+    }
 
     // 有更多：分页拉取剩余。try/finally 保证 isLoadingMore 必复位；
-    // 失败时清缓存（partial 不当完整）并向上抛错，由 fetchHistory 据代次置 error。
+    // 读取期间保留最后完整缓存；失败向上抛错，由 fetchHistory 据代次置 error。
     isLoadingMore.value = true
     try {
       let offset = BATCH_SIZE
@@ -536,10 +537,6 @@ export const useSessionStore = defineStore('session', () => {
       }
       historyCacheMap.set(n, all)
       return historyCacheMap.get(n) ?? []
-    } catch (e) {
-      // 分页失败：清缓存（避免 partial 被后续命中当完整），错误向上传播
-      historyCacheMap.delete(n)
-      throw e
     } finally {
       isLoadingMore.value = false
     }
