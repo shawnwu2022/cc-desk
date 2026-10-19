@@ -161,9 +161,14 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     const entry = issue && relevantHistoryEntries.value.find(row => row.key === issue.entryKey)
     return issue && entry ? { issue, entry } : undefined
   }
-  function reconcileHistoryWarningSnapshot() {
+  function reconcileHistoryWarningSnapshot(legacyWarnings?: readonly WorkspaceSourceWarning[]) {
     const isHistory = (source: WorkspaceWarningSource) => source === 'claude-history' || source === 'codex-history'
-    const warnings = createWorkspaceSourceWarnings(sourceWarnings.value.filter(row => !isHistory(row.source)), sourceWarningsTruncated.value)
+    const warnings = createWorkspaceSourceWarnings(sourceWarnings.value.filter(row => !isHistory(row.source)
+      && !(legacyWarnings && row.source === 'legacy-history')), sourceWarningsTruncated.value)
+    if (legacyWarnings) {
+      for (const warning of legacyWarnings) warnings.add(warning.source, warning)
+      if (cliSupport.isEnabled('claude') && legacyRootFailure) warnings.add('legacy-history', { code: legacyRootFailure })
+    }
     const owners: Omit<WorkspaceSourceConfiguration, 'name'>[] = []
     const identities = new Map<string, Set<string>>()
     for (const entry of relevantHistoryEntries.value) if (entry.error) {
@@ -538,8 +543,10 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   async function refreshSupport(cli: UnifiedCliKind) {
     const version = (supportRefreshVersions.get(cli) ?? 0) + 1
     supportRefreshVersions.set(cli, version)
+    const owner = refreshOwner
     const on = cliSupport.isEnabled(cli)
-    const current = () => !disposed && supportRefreshVersions.get(cli) === version && cliSupport.isEnabled(cli) === on
+    const legacyWarnings = cli === 'claude' ? createWorkspaceSourceWarnings() : undefined
+    const current = () => !disposed && owner === refreshOwner && supportRefreshVersions.get(cli) === version && cliSupport.isEnabled(cli) === on
     supportRefreshCLIs.add(cli)
     try {
       if (!on) {
@@ -547,7 +554,9 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
       } else {
         if (cli === 'claude') for (const path of new Set([...legacyPaths.value, ...projects.pinnedProjects])) {
           if (!current()) return
-          await legacy.loadHistoryFor(path, true).catch(() => {})
+          try {
+            if (!(await legacy.loadHistoryFor(path, true)).ok) legacyWarnings!.add('legacy-history')
+          } catch (failure) { legacyWarnings!.add('legacy-history', failure) }
         }
         const sources = profiles.profiles.filter(profile => profile.cli === cli)
         for (let i = 0; i < sources.length && current(); i += 2) {
@@ -559,10 +568,10 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
         }
       }
       if (!current()) return
-      reconcileHistoryWarningSnapshot()
+      reconcileHistoryWarningSnapshot(legacyWarnings?.items)
       await catalog.refresh(undefined, { cli, background:true })
     } catch {
-      if (current()) { reconcileHistoryWarningSnapshot(); error.value = 'workspaceRuntimePartial' }
+      if (current()) { reconcileHistoryWarningSnapshot(legacyWarnings?.items); error.value = 'workspaceRuntimePartial' }
     } finally {
       await nextTick()
       if (supportRefreshVersions.get(cli) === version) supportRefreshCLIs.delete(cli)

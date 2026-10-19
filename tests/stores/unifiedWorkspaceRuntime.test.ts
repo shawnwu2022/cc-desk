@@ -1615,6 +1615,52 @@ it.each(['claude', 'codex'] as const)('HistorySupport_PartialEnableStillPublishe
   expect(runtime.sourceWarnings.value).toEqual(expect.arrayContaining([expect.objectContaining({ source: `${cli}-history`, code: 'SOURCE_UNAVAILABLE' })]))
 })
 
+// Legacy 警告随本轮失败、成功与停用结果更新。
+it.each(['failure', 'success', 'disabled'] as const)('HistorySupport_LegacyWarningTracksCurrentSupport_089 %s', async state => {
+  localStorage.setItem('cc-desk-cli-support-v1', JSON.stringify({ claude: state !== 'failure', codex: true }))
+  io.legacyRoot.mockResolvedValue({ rootKey: 'root' })
+  io.sessions.mockRejectedValue(new Error('private read failure'))
+  const { runtime } = render(); await runtime.refresh(); await flushPromises()
+  const { useCliSupportStore } = await import('@/stores/cliSupport')
+  const support = useCliSupportStore()
+  if (state === 'failure') support.setCliEnabled('claude', true)
+  else {
+    expect(runtime.sourceWarnings.value).toEqual(expect.arrayContaining([expect.objectContaining({ source: 'legacy-history' })]))
+    support.setCliEnabled('claude', false); await flushPromises()
+    if (state === 'success') {
+      io.sessions.mockResolvedValue([{ sessionId: 'legacy-readable', name: 'Readable', projectPath: '/legacy', lastActiveAt: 1 }])
+      support.setCliEnabled('claude', true)
+    }
+  }
+  await flushPromises(); await flushPromises()
+  expect(runtime.sourceWarnings.value.filter(warning => warning.source === 'legacy-history'))
+    .toEqual(state === 'failure' ? [{ source: 'legacy-history', code: 'SOURCE_UNAVAILABLE' }] : [])
+  if (state === 'success') expect(useUnifiedSessionsStore().sessions.some(row => row.nativeSessionId === 'legacy-readable')).toBe(true)
+})
+
+// 全量刷新接管后，旧开关读取的 Legacy 结果不得覆盖最新警告。
+it.each([true, false])('HistorySupport_FullRefreshOwnsLegacyWarnings_090 %s', async oldFailed => {
+  localStorage.setItem('cc-desk-cli-support-v1', JSON.stringify({ claude: false, codex: true }))
+  const configured = await io.profiles()
+  io.profiles.mockResolvedValue({ ...configured, profiles: [{ ...configured.profiles[0], cli: 'claude' }] })
+  const { runtime } = render(); await runtime.refresh(); await flushPromises()
+  let release!: () => void
+  const queued = new Promise<void>(resolve => { release = resolve })
+  const grouped = vi.spyOn(useNativeHistoryStore(), 'loadGrouped').mockImplementationOnce(async () => { await queued; return new Map() })
+  if (oldFailed) io.sessions.mockRejectedValue(new Error('old private failure'))
+  else io.sessions.mockResolvedValue([])
+  const { useCliSupportStore } = await import('@/stores/cliSupport')
+  useCliSupportStore().setCliEnabled('claude', true); await flushPromises()
+  expect(grouped).toHaveBeenCalledOnce()
+  if (oldFailed) io.sessions.mockResolvedValue([])
+  else io.sessions.mockRejectedValue(new Error('new private failure'))
+  await runtime.refresh(); await flushPromises()
+  const expected = oldFailed ? [] : [{ source: 'legacy-history', code: 'SOURCE_UNAVAILABLE' }]
+  expect(runtime.sourceWarnings.value.filter(warning => warning.source === 'legacy-history')).toEqual(expected)
+  release(); await flushPromises(); await flushPromises()
+  expect(runtime.sourceWarnings.value.filter(warning => warning.source === 'legacy-history')).toEqual(expected)
+})
+
 // 模板 ID 不能证明 false 是旧默认值：用户关闭后刷新不得覆写，也不应增加 revision。
 it('Observer_ExplicitOffSurvivesRefresh_060', async () => {
   const claudeTemplate = { id: 'desk-safe-claude', revision: '2', cli: 'claude', name: 'Claude Code', launcher: { kind: 'native' },
