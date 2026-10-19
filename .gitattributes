@@ -12,3 +12,6 @@ tests/fixtures/version-history-releases.json -text
 
 # Public signature vectors and their provenance are hashed as canonical bytes.
 tests/fixtures/version-history-minisign/* -text
+
+# 已批准图标交付件按原始字节校验，禁止跨平台换行转换。
+src-tauri/icons/source/** -text

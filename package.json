@@ -1,6 +1,6 @@
 {
   "name": "cc-desk",
-  "version": "0.23.1",
+  "version": "0.23.2",
   "description": "CC Desk - a multi-project, multi-session desktop workspace for Claude Code and Codex CLI",
   "license": "MIT",
   "author": {
@@ -38,6 +38,8 @@
     "release": "node scripts/release.js",
     "release:oss": "node scripts/release.js --oss-only",
     "download-deps": "node scripts/download-deps.js",
+    "icons:generate": "node scripts/generate-app-icons.mjs",
+    "icons:check": "node scripts/generate-app-icons.mjs --check",
     "test": "vitest run",
     "test:ci": "vitest run",
     "test:all": "vitest run",

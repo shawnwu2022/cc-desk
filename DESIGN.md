@@ -225,6 +225,10 @@ CC Desk 的界面是一件放在木工坊里的精密仪器：温暖米灰的纸
 
 小而克制的圆角语言：控件 6px（radius-md）、卡片/容器 8px（radius-lg）、侧边栏分组容器 10px（card）、弹窗 12px（radius-xl）、内部小元素与 tag 4px、状态徽标点 3px 或 50% 圆形、指示条端角 2px。整体没有直角也没有胶囊形——不设 >12px 的圆角。边框统一 1px 实线，三级深浅（border-light / border-color / border-dark）。图标为 20px 线性 PNG/SVG，激活态以 3px 琥珀侧条（`border-radius: 0 2px 2px 0`）标记。滚动条 6px 细条、3px 圆角、透明轨道。
 
+### Product application icon
+
+CC Desk 产品图标采用已批准的正面深灰终端卡片、右上橙色后卡和白色提示符，保持透明画布和平面填色。标题栏使用 16/24/32 光学校准资源，较高像素密度使用 48/64 PNG；About 与系统打包使用同一套交付资源。产品图标不套用 GUI 暗色反色滤镜，不替换 Claude Code / Codex CLI 会话图标或状态角标。母版、来源、生成与验收边界见 [图标资源说明](docs/app-icon.md)。
+
 ## Components
 
 ### Buttons

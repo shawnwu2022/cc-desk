@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" role="img" aria-labelledby="title desc">
+  <title id="title">CC Desk — stacked terminal icon</title>
+  <desc id="desc">Optically tuned 32 pixel variant. Flat fills, transparent canvas.</desc>
+  <rect x="6.75" y="4" width="23.25" height="19.5" rx="3.1" fill="#FA8939"/>
+  <rect x="2" y="7" width="25.25" height="21" rx="3.3" fill="#35404B"/>
+  <path d="M 8.666726 11.833274 L 13.066726 16.233274 A 1.650000 1.650000 0 0 1 13.066726 18.566726 L 8.666726 22.966726 A 1.650000 1.650000 0 0 1 6.333274 20.633274 L 9.566548 17.400000 L 6.333274 14.166726 A 1.650000 1.650000 0 0 1 8.666726 11.833274 Z" fill="#FFFFFF"/>
+  <rect x="13.6" y="20.5" width="8.2" height="3.3" rx="1.65" fill="#FFFFFF"/>
+</svg>
