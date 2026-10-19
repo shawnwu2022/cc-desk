@@ -914,7 +914,9 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
 
   function beginRename(id: string) {
     const row = sessions.value.find(value => value.id === id)
-    if (!row || (row.opened !== false && activeSessionId.value !== id) || row.archived || row.renameState === 'saving' || (pendingRenames.get(id) ?? 0) > 0 || isPreparingSession(id)) return
+    // 菜单入口已按能力隐藏 opencode rename；双击/F2/全局快捷键也必须在此收口，
+    // 否则用户输入完标题才撞上后端 NATIVE_RENAME_UNSUPPORTED。
+    if (!row || row.cli === 'opencode' || (row.opened !== false && activeSessionId.value !== id) || row.archived || row.renameState === 'saving' || (pendingRenames.get(id) ?? 0) > 0 || isPreparingSession(id)) return
     const current = renameOwners.get(id)
     if (!current || !ownsRename(current, row)) {
       current?.controller.abort()

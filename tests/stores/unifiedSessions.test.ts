@@ -201,6 +201,12 @@ it('Rename_ClosedHistoryEditsWithoutResume_013', async () => {
   store.activeSessionId = live.id
   store.beginRename(history.id)
   expect(store.sessions.find(row => row.id === history.id)?.renameState).toBe('editing')
+  // opencode 行即使从双击/F2/全局快捷键进入也不得打开改名编辑器（后端无 rename 动词）。
+  const opencodeRow = session({ id: 'oc-row', opened: false, processState: 'stopped', cli: 'opencode' })
+  fakeAdapter('legacy-claude', [opencodeRow])
+  store.sessions = [...store.sessions, opencodeRow]
+  store.beginRename(opencodeRow.id)
+  expect(store.sessions.find(row => row.id === opencodeRow.id)?.renameState).toBe('idle')
   await store.renameSession(history.id, 'History display name', true)
   expect(store.sessions.find(row => row.id === history.id)?.title).toBe('History display name')
   expect(store.activeSessionId).toBe(live.id)
