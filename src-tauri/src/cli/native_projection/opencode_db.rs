@@ -140,14 +140,12 @@ fn append_project(
     // global 是漂移桶：永不按 worktree 归属，只按 directory 拼法比对（spec §5.3）。
     // 故意多取一行：目录过滤后无法证明完整性，超限就在该项目末行披露「可能不完整」，
     // 宁可过度披露也好过静默省略。
-    let sql = format!(
-        "SELECT id, title, directory, time_created, time_updated FROM session \
-         WHERE parent_id IS NULL AND project_id = '{GLOBAL_PROJECT_ID}' \
-         ORDER BY time_updated DESC, id ASC LIMIT ?1"
-    );
-    let mut stmt = tx.prepare(&sql).map_err(sqlite_code)?;
+    let sql = "SELECT id, title, directory, time_created, time_updated FROM session \
+               WHERE parent_id IS NULL AND project_id = ?1 \
+               ORDER BY time_updated DESC, id ASC LIMIT ?2";
+    let mut stmt = tx.prepare(sql).map_err(sqlite_code)?;
     let rows = stmt
-        .query_map([PER_PROJECT_LIMIT + 1], |row| {
+        .query_map([&GLOBAL_PROJECT_ID as &dyn rusqlite::ToSql, &(PER_PROJECT_LIMIT + 1)], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
