@@ -100,6 +100,91 @@ it('History_RetainedFailureDoesNotRefreshRows_074', async () => {
   expect(catalog.sessions).toBe(published)
 })
 
+// 裸 ID 归档的来源歧义依赖全部历史；另一项目增删同 ID 时只刷新两个相关项目。
+it.each(['add', 'remove', 'invalidate'] as const)('History_SharedNativeIdRefreshesDependentProjects_075 %s', async operation => {
+  useProjectsStateStore().archivedSessions.set('/p0', ['n0'])
+  io.root.mockResolvedValue({ rootKey: 'root-a', tabsUseDefaultRoot: false })
+  const sharedInitially = operation !== 'add'
+  io.read.mockResolvedValueOnce({ state: 'ready', items: Array.from({ length: 8 }, (_, i) => ({
+    type: 'session', projectId: `p${i}`, sessionKey: `s${i}`, nativeSessionId: i === 1 && sharedInitially ? 'n0' : `n${i}`,
+    title: `Title ${i}`, archived: false, truncated: false,
+  })), hasMore: false })
+  wrapper = mount(defineComponent({ setup() { useUnifiedWorkspaceRuntime(ref(null)); return () => null } }))
+  await flushPromises()
+  const catalog = useUnifiedSessionsStore(), history = useNativeHistoryStore()
+  const archived = () => catalog.sessions.find(row => row.projectPath === '/p0' && row.nativeSessionId === 'n0')!
+  expect(archived()).toMatchObject({ archived: true, safeErrorCode: sharedInitially ? 'SESSION_ORIGIN_AMBIGUOUS' : null })
+  const refresh = vi.spyOn(catalog, 'refresh')
+  const context = { cli: 'claude' as const, profileId: 'p', profileRevision: '1', projectId: 'p1', projectPath: '/p1' }
+  if (operation === 'invalidate') history.invalidate(context)
+  else {
+    io.read.mockResolvedValueOnce({ state: 'ready', items: operation === 'add'
+      ? [{ type: 'session', projectId: 'p1', sessionKey: 's1', nativeSessionId: 'n0', title: 'Shared', archived: false, truncated: false }] : [], hasMore: false })
+    await history.load({ ...context, force: true })
+  }
+  await flushPromises()
+  expect(archived().safeErrorCode).toBe(operation === 'add' ? 'SESSION_ORIGIN_AMBIGUOUS' : null)
+  expect([...new Set(refresh.mock.calls.map(([path]) => path))].sort()).toEqual(['/p0', '/p1'])
+})
+
+// 同 ID 的标题更新不改变歧义，不应连带刷新持有裸 ID 归档的项目。
+it('History_SharedIdTitleKeepsRefreshLocal_076', async () => {
+  useProjectsStateStore().archivedSessions.set('/p0', ['n0'])
+  io.root.mockResolvedValue({ rootKey: 'root-a', tabsUseDefaultRoot: false })
+  io.read.mockResolvedValueOnce({ state: 'ready', items: [0, 1].map(i => ({
+    type: 'session', projectId: `p${i}`, sessionKey: `s${i}`, nativeSessionId: 'n0', title: `Title ${i}`, archived: false, truncated: false,
+  })), hasMore: false })
+  wrapper = mount(defineComponent({ setup() { useUnifiedWorkspaceRuntime(ref(null)); return () => null } }))
+  await flushPromises()
+  const refresh = vi.spyOn(useUnifiedSessionsStore(), 'refresh')
+  io.read.mockResolvedValueOnce({ state: 'ready', items: [{ type: 'session', projectId: 'p1', sessionKey: 's1', nativeSessionId: 'n0', title: 'Changed title', archived: false, truncated: false }], hasMore: false })
+  await useNativeHistoryStore().load({ cli: 'claude', profileId: 'p', profileRevision: '1', projectId: 'p1', projectPath: '/p1', force: true })
+  await flushPromises()
+  expect(refresh.mock.calls.map(([path]) => path)).toEqual(['/p1'])
+})
+
+// 旧归档键允许尾斜杠/路径大小写漂移；规范化键不能在每次读取时被误判删除。
+it('History_ArchivePathAliasDoesNotRescanOnReadProgress_077', async () => {
+  useProjectsStateStore().archivedSessions.set('/p0/', ['n0'])
+  io.root.mockResolvedValue({ rootKey: 'root-a', tabsUseDefaultRoot: false })
+  wrapper = mount(defineComponent({ setup() { useUnifiedWorkspaceRuntime(ref(null)); return () => null } }))
+  await flushPromises()
+  const catalog = useUnifiedSessionsStore(), refresh = vi.spyOn(catalog, 'refresh')
+  expect(catalog.sessions.find(row => row.nativeSessionId === 'n0')?.archived).toBe(true)
+  io.read.mockResolvedValueOnce({ state: 'ready', items: [{ type: 'session', projectId: 'p1', sessionKey: 's1', nativeSessionId: 'n1', title: 'Title 1', archived: false, truncated: false }], hasMore: false })
+  await useNativeHistoryStore().load({ cli: 'claude', profileId: 'p', profileRevision: '1', projectId: 'p1', projectPath: '/p1', force: true })
+  await flushPromises()
+  expect(refresh).not.toHaveBeenCalled()
+  useProjectsStateStore().archivedSessions.delete('/p0/')
+  await flushPromises()
+  expect(refresh.mock.calls.map(([path]) => path)).toEqual(['/p0'])
+  expect(catalog.sessions.find(row => row.nativeSessionId === 'n0')?.archived).toBe(false)
+})
+
+// 根折叠证明是跨项目依赖；在一个项目检测到撤销时，其余旧根项目也必须解除折叠。
+it.each(['changed', 'unavailable'] as const)('History_RetiredRootRefreshesEveryDependentProject_078 %s', async reason => {
+  useProjectsStateStore().pinnedProjects = ['/p0', '/p1']
+  io.root.mockResolvedValue({ rootKey: 'root-a', tabsUseDefaultRoot: false })
+  io.sessions.mockImplementation(async path => [{ sessionId: path === '/p0' ? 'n0' : 'n1', name: 'Legacy title', projectPath: path, lastActiveAt: 1 }])
+  wrapper = mount(defineComponent({ setup() { useUnifiedWorkspaceRuntime(ref(null)); return () => null } }))
+  await flushPromises()
+  const catalog = useUnifiedSessionsStore(), history = useNativeHistoryStore()
+  const rowsA = () => catalog.sessions.filter(row => row.projectPath === '/p0' && row.nativeSessionId === 'n0')
+  expect(rowsA()).toHaveLength(1)
+  expect(rowsA()[0].runtime).toBe('native-cli')
+  io.scope.mockResolvedValueOnce({ cli: 'claude', sourceRootKey: 'unrelated-root' })
+  io.read.mockResolvedValueOnce({ state: 'ready', items: [{ type: 'session', projectId: 'p7', sessionKey: 's7', nativeSessionId: 'n7', title: 'Unrelated', archived: false, truncated: false }], hasMore: false })
+  await history.load({ cli: 'claude', profileId: 'p', profileRevision: '1', projectId: 'p7', projectPath: '/p7', force: true })
+  await flushPromises()
+  const refresh = vi.spyOn(catalog, 'refresh')
+  if (reason === 'changed') io.root.mockResolvedValue({ rootKey: 'replacement-root', tabsUseDefaultRoot: false })
+  else io.root.mockRejectedValue(new Error('root unavailable'))
+  await catalog.refresh('/p1')
+  await flushPromises()
+  expect(rowsA().map(row => row.runtime).sort()).toEqual(['legacy-claude', 'native-cli'])
+  expect(refresh.mock.calls.every(([path]) => path !== undefined && path !== '/p7')).toBe(true)
+})
+
 // 来源根在新读取完成前不得覆盖 entry：旧 root 的归档行重标成新 root 会漏进普通列表。
 it('History_RootSwitchDoesNotRetagCachedRows_068', async () => {
   const history = useNativeHistoryStore(), tabs = useNativeTabsStore()

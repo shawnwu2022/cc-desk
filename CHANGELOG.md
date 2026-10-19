@@ -8,6 +8,7 @@
 
 - Refresh only affected session-history projections and preserve unchanged rows and arrays instead of repeatedly refreshing the complete session list
 - Keep trusted source roots, titles and archive state together during reloads and read failures to prevent transient archived or duplicate session rows
+- Reproject dependent archive/folding states when native-ID uniqueness or a shared root proof changes, and normalize legacy archive keys to prevent repeated rescans
 - Read the latest valid Claude custom title, then AI title, then first prompt consistently across history lists, search, details and opened sessions; invalidate older derived name-cache entries
 - Follow idle Claude CLI `/rename` changes in opened Native and Legacy sessions through coalesced, owner-bound title invalidation without periodic history scans
 - Keep source-proven CLI title updates working when the optional hook observer is off or unavailable, and retain complete Legacy history until every replacement page succeeds
@@ -15,7 +16,7 @@
 - Make compact density visibly tighten shared controls, project/session rows and workspace spacing through geometry tokens while preserving terminal fonts and control hit targets
 - Resolve locked npm tarballs through the official registry instead of fixed regional mirrors while preserving every dependency version and integrity hash
 
-Local validation passed 2,847 Vitest cases with two existing skips using four workers, type checking and the production build. The original concurrent full run hit the unchanged 60-second stress timeout; the unchanged 5,000-session, 30-owner, 120-change stress inventory passed separately and in the four-worker full run. Real source-build WebView2 observations covered close/resume/archive/restore with no full catalog refresh or unrelated row replacement, and real Claude Code 2.1.296 PTY checks confirmed idle rename title notifications and metadata writes. The final post-fix WebView2 interaction/visual rerun remains unverified because desktop capture/input automation failed. Exact-main CI, authenticated coverage and all three same-run signed updater payloads remain mandatory before publication; unfiltered native All/D20 and native historical installation/return remain separately unverified.
+Local validation passed 2,863 Vitest cases with two existing skips using four workers, type checking and the production build. The original concurrent full run hit the unchanged 60-second stress timeout; the unchanged 5,000-session, 30-owner, 120-change stress inventory passed separately and in the four-worker full run. Real source-build WebView2 observations covered close/resume/archive/restore with no full catalog refresh or unrelated row replacement, and real Claude Code 2.1.296 PTY checks confirmed idle rename title notifications and metadata writes. The final post-fix WebView2 interaction/visual rerun remains unverified because desktop capture/input automation failed. Exact-main CI, authenticated coverage and all three same-run signed updater payloads remain mandatory before publication; unfiltered native All/D20 and native historical installation/return remain separately unverified.
 
 ## [0.23.0] - 2026-10-18
 

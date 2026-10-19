@@ -51,15 +51,20 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     const expected = legacyClaudeRoot
     if (!expected || legacyRootRetired || disposed) return Promise.resolve(undefined)
     if (legacyRootValidation) return legacyRootValidation
+    const retire = () => {
+      if (disposed || legacyRootRetired) return
+      legacyRootRetired = true
+      legacyClaudeRoot = undefined
+      // 证明属于整个旧根：局部读取发现撤销时，其他依赖项目也必须解除折叠。
+      queueCatalogProjects(...history.all().filter(entry => entry.sourceRootKey === expected).map(entry => entry.context.projectPath))
+    }
     const validation = legacyClaudeRootKey().then(proof => {
       if (disposed || legacyRootRetired) return undefined
       if (proof?.rootKey === expected) return expected
-      legacyRootRetired = true
-      legacyClaudeRoot = undefined
+      retire()
       return undefined
     }).catch(() => {
-      legacyRootRetired = true
-      legacyClaudeRoot = undefined
+      retire()
       return undefined
     }).finally(() => {
       if (legacyRootValidation === validation) legacyRootValidation = undefined
@@ -820,13 +825,22 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   // 单项目读取放大成全项目反复重扫（实测 8 项目一次重读 32 次刷新、24 次发布）。
   // 撤销/删除的 entry 也必须入队一次：行消失同样改变该项目投影。
   const historySignatures = new Map<string, { path: string; signature: string }>()
+  type NativeIdProjects = { count: number; paths: Set<string> }
+  let nativeIdProjects = new Map<string, NativeIdProjects>()
   const archiveSignatures = new Map<string, string>()
   watch(() => [history.all(), projects.archivedSessions] as const, () => {
     const changed = new Set<string>()
     const seenEntries = new Set<string>()
+    const nextIdProjects = new Map<string, NativeIdProjects>()
     for (const entry of history.all()) {
       seenEntries.add(entry.key)
       const path = entry.context.projectPath
+      for (const row of entry.sessions) {
+        const identity = nextIdProjects.get(row.nativeSessionId) ?? { count: 0, paths: new Set<string>() }
+        identity.count++
+        identity.paths.add(normalizePath(path))
+        nextIdProjects.set(row.nativeSessionId, identity)
+      }
       const signature = `${entry.sourceRootKey ?? ''}|` +
         entry.sessions.map(row => `${row.sessionKey}|${row.nativeSessionId}|${row.archived ? 1 : 0}|${row.title}|` +
           `${row.titleSource ?? ''}|${row.lastKnownTitle ?? ''}|${row.lastKnownTitleSource ?? ''}|` +
@@ -843,15 +857,26 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
       historySignatures.delete(key)
       changed.add(normalizePath(previous.path))
     }
-    for (const [path, ids] of projects.archivedSessions) {
-      const key = normalizePath(path)
-      const signature = [...ids].sort().join('\u0000')
+    // 裸 ID 归档的歧义依赖所有项目；仅唯一性改变才使相关归档项目失效。
+    // 标题/读取进度不改变唯一性，不能借此扩散为全目录刷新。
+    for (const id of new Set([...nativeIdProjects.keys(), ...nextIdProjects.keys()])) {
+      const previous = nativeIdProjects.get(id), next = nextIdProjects.get(id)
+      if ((previous?.count === 1) === (next?.count === 1)) continue
+      for (const path of new Set([...(previous?.paths ?? []), ...(next?.paths ?? [])])) {
+        if (legacy.getArchivedSessions(path).includes(id)) changed.add(path)
+      }
+    }
+    nativeIdProjects = nextIdProjects
+    // 使用与 adapter 相同的归一化、合并查询，兼容重启后保留的路径别名。
+    const archivedProjects = new Set([...projects.archivedSessions.keys()].map(normalizePath))
+    for (const key of archivedProjects) {
+      const signature = [...new Set(legacy.getArchivedSessions(key))].sort().join('\u0000')
       if (archiveSignatures.get(key) === signature) continue
       archiveSignatures.set(key, signature)
       changed.add(key)
     }
     for (const key of archiveSignatures.keys()) {
-      if (projects.archivedSessions.has(key)) continue
+      if (archivedProjects.has(key)) continue
       archiveSignatures.delete(key)
       changed.add(key)
     }
