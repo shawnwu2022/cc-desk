@@ -50,14 +50,22 @@ it.each(['en', 'zh'] as const)('Row_ResumeSourceRenameNamesItsTarget_049 %s', as
   const session = { ...base, renameTarget: 'resume-source' as const }
   const wrapper = row(session, { selected: true })
   await wrapper.trigger('contextmenu'); await nextTick()
-  expect(body.get('[data-item-id="rename"]').text()).toBe(locale === 'zh' ? '重命名恢复来源会话' : 'Rename resumed source session')
+  expect(body.get('[data-item-id="rename"]').text()).toBe(locale === 'zh' ? '重命名' : 'Rename')
   await body.get('[data-item-id="rename"]').trigger('click')
   await wrapper.setProps({ session: { ...session, renameState: 'editing' } }); await nextTick(); await nextTick()
   const input = wrapper.get('input')
-  expect(input.attributes('aria-label')).toBe(locale === 'zh' ? '恢复来源会话名称' : 'Resumed source session name')
+  expect(input.attributes('aria-label')).toBe(locale === 'zh' ? '会话名称' : 'Session name')
   await input.trigger('focus'); await nextTick()
   expect(body.get('[role="tooltip"]').text()).toContain('native-1')
-  expect(wrapper.find('[aria-label="'+(locale === 'zh' ? '保存恢复来源会话名称' : 'Save resumed source session name')+'"]').exists()).toBe(true)
+  expect(wrapper.find('[aria-label="'+(locale === 'zh' ? '保存名称' : 'Save name')+'"]').exists()).toBe(true)
+})
+
+// 目标的技术区别只留在说明，不改变用户的菜单入口。
+it('Row_HistoryRecordRenameUsesSimpleAction_050', async () => {
+  i18n.global.locale.value = 'zh'
+  const wrapper = row({ ...base, renameTarget: 'history-record' }, { selected: true })
+  await wrapper.trigger('contextmenu'); await nextTick()
+  expect(body.get('[data-item-id="rename"]').text()).toBe('重命名')
 })
 
 // 关闭历史从菜单进入显示名编辑，焦点进入输入框而不恢复或选择终端。

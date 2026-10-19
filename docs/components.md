@@ -815,6 +815,10 @@ The confirmation captures actual owning-store session IDs and requires an exact 
 
 Once project-close execution starts, the confirmation blocks its Cancel, Escape and
 header-close controls until the batch settles, retaining any partial-result notice.
+Session menus use the single localized **Rename** action, with **Save name** in
+the editor. Technical resumed-source/history-record distinctions remain in the
+editor tooltip rather than the menu or input label.
+
 Context invalidation still revokes dispatch ownership. A confirmed native rename
 whose later adapter/catalog display synchronization fails ends the original editor
 and reports `RENAME_DISPLAY_SYNC_FAILED`; it does not reopen that save for another

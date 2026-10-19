@@ -52,6 +52,8 @@ pub(crate) struct Budget {
     started: Instant,
     history_metadata_incomplete: bool,
     history_read_failures: std::collections::BTreeSet<&'static str>,
+    history_omitted_sessions: std::collections::BTreeSet<uuid::Uuid>,
+    history_anonymous_omission: bool,
 }
 impl Budget {
     pub(crate) fn new(limits: Limits) -> Self {
@@ -63,6 +65,8 @@ impl Budget {
             started: Instant::now(),
             history_metadata_incomplete: false,
             history_read_failures: Default::default(),
+            history_omitted_sessions: Default::default(),
+            history_anonymous_omission: false,
         }
     }
     pub(crate) fn checkpoint(&self) -> ReadResult<()> {
@@ -96,6 +100,10 @@ impl Budget {
     // Only content/read failures of an individual history entry are isolatable.
     // Scope, identity, permission, links, ambiguity and aggregate limits still fail closed.
     pub(crate) fn omit_history_entry(&mut self, code: &'static str) -> bool {
+        self.omit_history_session(code, None)
+    }
+    /// 身份证据仅供本次后端改名准入；匿名省略不能被后续已知身份覆盖。
+    pub(crate) fn omit_history_session(&mut self, code: &'static str, id: Option<&str>) -> bool {
         if (code == "SOURCE_TOO_LARGE" && self.bytes_left == 0)
             || !matches!(
                 code,
@@ -110,7 +118,18 @@ impl Budget {
         }
         self.history_metadata_incomplete = true;
         self.history_read_failures.insert(code);
+        if let Some(id) = id.and_then(|id| uuid::Uuid::parse_str(id).ok()) {
+            self.history_omitted_sessions.insert(id);
+        } else {
+            self.history_anonymous_omission = true;
+        }
         true
+    }
+    pub(crate) fn rename_target_may_be_omitted(&self, id: &str) -> bool {
+        self.history_anonymous_omission
+            || uuid::Uuid::parse_str(id)
+                .map(|id| self.history_omitted_sessions.contains(&id))
+                .unwrap_or(true)
     }
     fn entry(&mut self) -> ReadResult<()> {
         self.checkpoint()?;

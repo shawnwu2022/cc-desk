@@ -169,10 +169,6 @@ export const SESSION_MENU_ACTION_DEFINITIONS: readonly MenuActionRule[] = [
   { id: 'view-diagnostics', labelKey: 'sessionActionDiagnostics', visible: () => true },
 ]
 export function sessionActionLabelKey(action: SessionMenuAction | SessionPrimaryAction, session: UnifiedSession): string {
-  if (session.renameTarget === 'resume-source' && action === 'rename') return 'sessionActionRenameResumeSource'
-  if (session.renameTarget === 'resume-source' && action === 'save-rename') return 'sessionActionSaveRenameResumeSource'
-  if (session.renameTarget === 'history-record' && action === 'rename') return 'sessionActionRenameHistoryRecord'
-  if (session.renameTarget === 'history-record' && action === 'save-rename') return 'sessionActionSaveRenameHistoryRecord'
   if (action === 'save-rename') return 'sessionActionSaveRename'
   if (action === 'archive' && session.processState === 'running') return 'sessionActionStopAndArchive'
   return SESSION_MENU_ACTION_DEFINITIONS.find((definition) => definition.id === action)!.labelKey

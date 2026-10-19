@@ -210,7 +210,7 @@ function preventReferenceNativeDrag(event: DragEvent) {
     <div class="session-name-wrapper">
       <AppTooltip v-if="isRenaming" class="session-title-tooltip" :text="session.renameTarget ? t(session.renameTarget === 'resume-source' ? 'sessionRenameResumeSourceHint' : 'sessionRenameHistoryRecordHint', { id: session.nativeSessionId }) : ''">
         <AppInput ref="renameInput" v-model="renameValue" class="rename-input" size="compact"
-          :aria-label="t(session.renameTarget === 'resume-source' ? 'sessionRenameResumeSourceLabel' : session.renameTarget === 'history-record' ? 'sessionRenameHistoryRecordLabel' : 'sessionRenameLabel')" :invalid="renameInvalid" :disabled="isSaving"
+          :aria-label="t('sessionRenameLabel')" :invalid="renameInvalid" :disabled="isSaving"
           @click.stop @keydown.enter.stop.prevent="commitRename" @keydown.esc.stop.prevent="cancelRename" />
       </AppTooltip>
       <AppTooltip v-else class="session-title-tooltip" :text="session.title">

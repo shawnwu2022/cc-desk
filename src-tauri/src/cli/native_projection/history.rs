@@ -114,7 +114,15 @@ pub(super) fn read(
         let mut transcript = match parsed {
             Ok(Some(transcript)) => transcript,
             Ok(None) => continue,
-            Err(code) if o.kind == ResourceKind::History && b.omit_history_entry(code) => {
+            Err(code)
+                if o.kind == ResourceKind::History
+                    && b.omit_history_session(
+                        code,
+                        (c.cli == CliKind::Claude)
+                            .then(|| claude_file_identity(&path))
+                            .flatten(),
+                    ) =>
+            {
                 continue;
             }
             Err(code) => return Err(code),
@@ -161,7 +169,7 @@ pub(super) fn read(
                         // 无 cwd 观察的行无法证明不属于任何注册项目：按单文件省略
                         // 披露（与 wrapper-only 同语义），只置 incomplete 不记失败
                         // 会让「列表可能不完整」横幅对这种真实省略失明。
-                        b.omit_history_entry("SOURCE_UNSUPPORTED");
+                        b.omit_history_session("SOURCE_UNSUPPORTED", Some(&transcript.id));
                     }
                     continue;
                 }
@@ -210,7 +218,7 @@ pub(super) fn read(
                         }
                     }
                 }
-                Err(code) if b.omit_history_entry(code) => {
+                Err(code) if b.omit_history_session(code, Some(&transcript.id)) => {
                     session_failures.insert(transcript.id.clone(), code);
                 }
                 Err(code) => return Err(code),
@@ -420,7 +428,7 @@ fn codex_history(
     // 读失败计数）而不是伪装成无此会话，Messages 仍可按显式 id 读取。
     if transcript.unconfirmable_wrapper_only {
         cache::with_route(cache_route, |cache| cache.forget(&key));
-        b.omit_history_entry("SOURCE_UNSUPPORTED");
+        b.omit_history_session("SOURCE_UNSUPPORTED", Some(&transcript.id));
         return Ok(None);
     }
     transcript.metadata_incomplete = incomplete;
@@ -740,6 +748,18 @@ fn latest_timestamp(tail: &str) -> Option<String> {
         .filter_map(|value| value["timestamp"].as_str().map(str::to_owned))
         .filter(|stamp| strict_timestamp(stamp))
         .max()
+}
+// 只有普通主会话的规范文件名能排除其它 ID；未知目录与拼法保持匿名。
+fn claude_file_identity(path: &str) -> Option<&str> {
+    let mut parts = path.split('/');
+    if parts.next()? != "projects" || parts.next()?.is_empty() {
+        return None;
+    }
+    let id = parts.next()?.strip_suffix(".jsonl")?;
+    if parts.next().is_some() || uuid::Uuid::parse_str(id).ok()?.to_string() != id {
+        return None;
+    }
+    Some(id)
 }
 fn walk(
     c: &Catalog<'_>,
