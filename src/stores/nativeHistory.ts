@@ -258,7 +258,12 @@ export function createNativeHistoryReader() {
                 // 是正常观察，不构成「行可能缺失」的证据，否则会积累幽灵行。
                 const merged = readFailures.size
                   ? [...item.sessions.values(), ...(item.observedRootKey && item.cached?.sourceRootKey === item.observedRootKey
-                    ? item.cached!.sessions.filter(row => !item.sessions.has(row.sessionKey)) : [])]
+                    ? item.cached!.sessions.filter(row => !item.sessions.has(row.sessionKey)).map(row => {
+                      const retained = { ...row }
+                      // 保留显示行不等于本轮确认该文件失败，精确诊断须由当前响应重发。
+                      delete retained.readFailure
+                      return retained
+                    }) : [])]
                   : [...item.sessions.values()]
                 // root、来源与行作为同一份不可拆分的显示快照一起提交：先换 root
                 // 再保留旧行会把旧 root 的归档状态重标成新 root。

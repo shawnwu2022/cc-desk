@@ -64,7 +64,10 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
       sourceNoticeKeys.value = [...new Set([...sourceNoticeKeys.value, workspaceWarningKey(warning)])]
       error.value = 'workspaceRuntimePartial'
       // 证明属于整个旧根：局部读取发现撤销时，其他依赖项目也必须解除折叠。
-      queueCatalogProjects(...history.all().filter(entry => entry.sourceRootKey === expected).map(entry => entry.context.projectPath))
+      queueCatalogProjects(...legacyPaths.value, ...projects.pinnedProjects,
+        ...[...legacy.tabs.values()].map(tab => tab.projectPath),
+        ...catalog.sessions.filter(row => row.runtime === 'legacy-claude').map(row => row.projectPath),
+        ...history.all().filter(entry => entry.sourceRootKey === expected).map(entry => entry.context.projectPath))
     }
     const validation = legacyClaudeRootKey().then(proof => {
       if (disposed || legacyRootRetired) return undefined
@@ -405,7 +408,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
       return partial
     })
     const sessionAdapters = [
-      createLegacyClaudeAdapter({ store: legacy, metadata: projects, attention, validateHistoryRoot: validateLegacyClaudeRoot, captureProjectAdmission: app.captureProjectAdmission, projectPaths: () => [...new Set([...legacyPaths.value, ...projects.pinnedProjects])],
+      createLegacyClaudeAdapter({ store: legacy, metadata: projects, attention, validateHistoryRoot: validateLegacyClaudeRoot, historyEnabled: () => cliSupport.isEnabled('claude'), captureProjectAdmission: app.captureProjectAdmission, projectPaths: () => [...new Set([...legacyPaths.value, ...projects.pinnedProjects])],
         runtime: {
           startTab: id => {
             const tab = legacy.tabs.get(id)
@@ -414,7 +417,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
           }, stopTab: id => requireHost().stopLegacy(id),
           restartTab: id => requireHost().restartLegacy(id), renameTab: (id, title, admission) => requireHost().renameLegacy(id, title, admission),
         } }),
-      createNativeCliAdapter({ tabs: native, history, metadata: projects, legacyClaudeRootKey: validateLegacyClaudeRoot, archive: { getArchivedSessions: legacy.getArchivedSessions, archiveSession: projects.archiveSession, restoreSession: projects.restoreSession },
+      createNativeCliAdapter({ tabs: native, history, metadata: projects, legacyClaudeRootKey: validateLegacyClaudeRoot, historyEnabled: cli => cliSupport.isEnabled(cli), archive: { getArchivedSessions: legacy.getArchivedSessions, archiveSession: projects.archiveSession, restoreSession: projects.restoreSession },
         nativeRename: { rename: nativeRenameSession },
         runSource: tab => nativeGetScope({kind:'run',runId:tab.runId,generation:tab.generation}),
         cliUnarchive: { unarchive: (context, nativeSessionId) => {
@@ -552,7 +555,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
       if (!on) {
         for (const entry of history.all()) if (entry.context.cli === cli) history.invalidate(entry.context)
       } else {
-        if (cli === 'claude') for (const path of new Set([...legacyPaths.value, ...projects.pinnedProjects])) {
+        if (cli === 'claude') for (const path of new Set([...legacyPaths.value, ...projects.pinnedProjects, ...[...legacy.tabs.values()].map(tab => tab.projectPath)])) {
           if (!current()) return
           try {
             if (!(await legacy.loadHistoryFor(path, true)).ok) legacyWarnings!.add('legacy-history')

@@ -59,6 +59,7 @@ export interface LegacyClaudeAdapterDeps {
   captureProjectAdmission?(projectPath: string): () => boolean
   /** 验证本 runtime 冻结的默认根；失败后不得从默认历史借用运行行标题。 */
   validateHistoryRoot?(): Promise<string | undefined>
+  historyEnabled?(): boolean
 }
 
 function activeId(tabId: string): string {
@@ -226,7 +227,8 @@ export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): Sessio
     if (cli && cli !== 'claude') return []
     const wanted = projectKey === undefined ? null : normalizeProjectIdentity(projectKey)
     const sessions: UnifiedSession[] = []
-    const historyRoot = await currentHistoryRoot()
+    const includeHistory = deps.historyEnabled?.() !== false
+    const historyRoot = includeHistory ? await currentHistoryRoot() : undefined
 
     for (const [key, projectPath] of knownProjects()) {
       if (wanted !== null && key !== wanted) continue
@@ -245,7 +247,7 @@ export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): Sessio
         return projectActive(tab, matches.length === 1 ? matches[0].name : undefined)
       }))
       for (const history of store.getCatalogHistoryFor(projectPath)) {
-        if (historyRootRetired) continue
+        if (!includeHistory || historyRootRetired) continue
         if (claimed.has(history.sessionId)) continue
         sessions.push({ ...withSessionDisplayName(projectHistorySession(projectPath, history), deps.metadata), archived: archived.has(history.sessionId) })
       }

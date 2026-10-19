@@ -1661,6 +1661,52 @@ it.each([true, false])('HistorySupport_FullRefreshOwnsLegacyWarnings_090 %s', as
   expect(runtime.sourceWarnings.value.filter(warning => warning.source === 'legacy-history')).toEqual(expected)
 })
 
+it('HistorySupport_OpenOnlyProjectReloads_091', async () => {
+  io.legacyRoot.mockResolvedValue({ rootKey: 'root' })
+  const legacy = useSessionStore(); legacy.createTab('/open-only', { sessionId: 'opened' })
+  let title = 'Before'
+  io.sessions.mockImplementation(async path => path === '/open-only' ? [{ sessionId: 'closed', name: title, projectPath: path, lastActiveAt: 1 }] : [])
+  const { runtime } = render(); await runtime.refresh(); await flushPromises()
+  const { useCliSupportStore } = await import('@/stores/cliSupport')
+  useCliSupportStore().setCliEnabled('claude', false); await flushPromises()
+  title = 'After'; io.sessions.mockClear()
+  useCliSupportStore().setCliEnabled('claude', true); await flushPromises(); await flushPromises()
+  expect(useUnifiedSessionsStore().sessions.find(row => row.nativeSessionId === 'closed')?.title).toBe('After')
+})
+
+it('HistoryRoot_RetirementRefreshesLegacyOnlyProjects_092', async () => {
+  io.legacyRoot.mockResolvedValue({ rootKey: 'root' })
+  io.projects.mockResolvedValue([{ path: '/one', name: 'One' }, { path: '/two', name: 'Two' }])
+  io.sessions.mockImplementation(async path => [{ sessionId: path, name: path, projectPath: path, lastActiveAt: 1 }])
+  const { runtime } = render(); await runtime.refresh(); await flushPromises()
+  const catalog = useUnifiedSessionsStore()
+  expect(catalog.sessions.filter(row => row.runtime === 'legacy-claude')).toHaveLength(2)
+  io.legacyRoot.mockRejectedValue(new Error('unavailable'))
+  await catalog.refresh('/one'); await flushPromises(); await flushPromises()
+  expect(catalog.sessions.filter(row => row.runtime === 'legacy-claude')).toEqual([])
+})
+
+it('HistorySupport_DisableDoesNotRetireRoot_093', async () => {
+  io.legacyRoot.mockResolvedValue({ rootKey: 'root' })
+  io.sessions.mockResolvedValue([{ sessionId: 'legacy', name: 'Legacy', projectPath: '/legacy', lastActiveAt: 1 }])
+  const { runtime } = render(); await runtime.refresh(); await flushPromises()
+  const legacy = useSessionStore(); legacy.createTab('/legacy', { sessionId: 'opened' })
+  useNativeTabsStore().create({ cli: 'claude', projectId: 'project', projectPath: '/repo', profileId: 'cl', profileRevision: '7', action: { kind: 'new' } })
+  await useUnifiedSessionsStore().refresh(); await flushPromises()
+  const { useCliSupportStore } = await import('@/stores/cliSupport')
+  io.legacyRoot.mockClear().mockRejectedValue(new Error('transient unavailable'))
+  useCliSupportStore().setCliEnabled('claude', false); await flushPromises(); await flushPromises()
+  expect(io.legacyRoot).not.toHaveBeenCalled()
+  expect(runtime.sourceWarnings.value.filter(row => row.source === 'legacy-history')).toEqual([])
+  expect(useUnifiedSessionsStore().sessions.filter(row => row.cli === 'claude')).toMatchObject([{ opened: true }, { opened: true }])
+  await runtime.refresh(); await flushPromises()
+  expect(io.legacyRoot).not.toHaveBeenCalled()
+  expect(runtime.sourceWarnings.value.filter(row => row.source === 'legacy-history')).toEqual([])
+  io.legacyRoot.mockResolvedValue({ rootKey: 'root' })
+  useCliSupportStore().setCliEnabled('claude', true); await flushPromises(); await flushPromises()
+  expect(useUnifiedSessionsStore().sessions.some(row => row.nativeSessionId === 'legacy')).toBe(true)
+})
+
 // 模板 ID 不能证明 false 是旧默认值：用户关闭后刷新不得覆写，也不应增加 revision。
 it('Observer_ExplicitOffSurvivesRefresh_060', async () => {
   const claudeTemplate = { id: 'desk-safe-claude', revision: '2', cli: 'claude', name: 'Claude Code', launcher: { kind: 'native' },

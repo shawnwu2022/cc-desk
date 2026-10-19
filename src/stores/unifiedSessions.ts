@@ -456,7 +456,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
 
     try {
       const lists = await Promise.all(adapters.map(adapter => adapter.listSessions(projectKey, options.cli)))
-      const provenLegacyRoot = options.cli === 'codex' ? undefined : validateLegacyClaudeRoot ? await validateLegacyClaudeRoot() : legacyClaudeRoot
+      const provenLegacyRoot = options.cli === 'codex' || !cliSupport.isEnabled('claude') ? undefined : validateLegacyClaudeRoot ? await validateLegacyClaudeRoot() : legacyClaudeRoot
       if (fullRefreshVersion > version || (key !== undefined && !ownsProject(key))) return
 
       // Replace only the requested project. A full read also preserves scopes

@@ -74,6 +74,7 @@ export interface NativeCliAdapterDeps {
   /** legacy 固定根（`~/.claude`）的目录身份 key；仅在该根被证明时才接管 legacy 的裸 ID 归档。
    *  每次投影及恢复都重新验证，根替换后不能复用旧的归属证明。 */
   legacyClaudeRootKey?: () => string | undefined | Promise<string | undefined>
+  historyEnabled?(cli: UnifiedCliKind): boolean
 }
 
 function processState(status: NativeCliTab['status']): UnifiedSession['processState'] {
@@ -400,7 +401,7 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
   }
 
   async function listSessions(projectKey?: string, cli?: UnifiedCliKind): Promise<UnifiedSession[]> {
-    const legacyRoot = cli === 'codex' ? undefined : await deps.legacyClaudeRootKey?.()
+    const legacyRoot = cli === 'codex' || deps.historyEnabled?.('claude') === false ? undefined : await deps.legacyClaudeRootKey?.()
     if (!legacyArchiveDisplayRoot && legacyRoot) legacyArchiveDisplayRoot = legacyRoot
     const wanted = projectKey == null ? null : normalizePath(projectKey)
     const tabs = [...deps.tabs.tabs.values()].filter(tab => (!cli || tab.cli === cli) && (wanted == null || normalizePath(tab.projectPath) === wanted))
@@ -415,6 +416,7 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
     }))
     const sessions = tabs.map(projectActive)
     for (const entry of deps.history.all()) {
+      if (deps.historyEnabled?.(entry.context.cli) === false) continue
       if (cli && entry.context.cli !== cli) continue
       if (wanted != null && normalizePath(entry.context.projectPath) !== wanted) continue
       for (const item of entry.sessions) {
