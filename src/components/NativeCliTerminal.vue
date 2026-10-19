@@ -807,7 +807,6 @@ defineExpose({ start, recover, stop, focus, fitVisible, needsFit, dropPaths, dro
   position: absolute;
   inset: 0;
   display: none;
-  padding: 6px;
   background: var(--terminal-surface-bg);
 }
 
@@ -817,5 +816,7 @@ defineExpose({ start, recover, stop, focus, fitVisible, needsFit, dropPaths, dro
 
 .native-cli-terminal :deep(.xterm) {
   height: 100%;
+  /* FitAddon 只扣除 xterm 自身的 padding，放在宿主会多算可显示行数。 */
+  padding: 6px;
 }
 </style>

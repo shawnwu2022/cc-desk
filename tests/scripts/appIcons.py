@@ -99,6 +99,7 @@ def AppIcon_ConsumerCopies_005():
         assert (ROOT / output).read_bytes() == (SOURCE / original).read_bytes(), output
     config = json.loads((ROOT / 'src-tauri/tauri.conf.json').read_text(encoding='utf-8'))
     assert config['bundle']['icon'] == ['icons/32x32.png', 'icons/128x128.png', 'icons/128x128@2x.png', 'icons/icon.icns', 'icons/icon.ico']
+    assert config['bundle']['windows']['nsis']['installerIcon'] == 'icons/icon.ico'
     assert 'vite.svg' not in (ROOT / 'index.html').read_text(encoding='utf-8')
 
 

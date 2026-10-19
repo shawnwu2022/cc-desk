@@ -7,7 +7,7 @@ import { createNativeId } from '@/utils/nativeId'
 import { useAppStore } from '@/stores/app'
 import { useSessionStore } from '@/stores/session'
 import { useNativeTabsStore, captureNativeAttempt, matchesNativeAttempt, type NativeCliTab } from '@/stores/nativeTabs'
-import { createNativeHistoryReader, nativeHistoryContextKey, useNativeHistoryStore } from '@/stores/nativeHistory'
+import { createNativeHistoryReader, nativeHistoryContextKey, useNativeHistoryStore, type NativeHistoryEntry } from '@/stores/nativeHistory'
 import { useNewSessionDraftStore } from '@/stores/newSessionDraft'
 import { useCliProfilesStore } from '@/stores/cliProfiles'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -22,7 +22,7 @@ import { createNativeCliAdapter, type NativeRuntimeCreateInput, type NativeResta
 import { mapSafeUserError, safeUserErrorCode } from '@/utils/userError'
 import { projectSessionDiagnostics } from '@/utils/sessionDiagnostics'
 import { normalizePath, sameProjectPath } from '@/utils/path'
-import { createWorkspaceSourceWarnings, workspaceWarningKey, type WorkspaceSourceConfiguration, type WorkspaceSourceWarning, type WorkspaceWarningSource } from '@/utils/workspaceSourceWarnings'
+import { createWorkspaceSourceWarnings, workspaceWarningKey, type WorkspaceHistoryIssue, type WorkspaceSourceConfiguration, type WorkspaceSourceWarning, type WorkspaceWarningSource } from '@/utils/workspaceSourceWarnings'
 import type { OpenTerminalSession, UnifiedTerminalHostPort } from '@/terminal/unifiedTerminalHost'
 import type { UnifiedCliKind, UnifiedSession } from '@/types/unifiedSession'
 
@@ -110,8 +110,10 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   })
   // Fixed diagnostics + canonical context/root identity, never raw transcript data.
   // Project navigation does not reset this workspace-owned acknowledgement.
-  const historyNoticeKeys = computed(() => currentHistoryEntries.value.filter(entry => (entry.readFailures?.length ?? 0) > 0).map(entry =>
-    JSON.stringify([entry.key, entry.sourceRootKey ?? null, [...(entry.readFailures ?? [])].sort()])))
+  const historyNoticeKeys = computed(() => currentHistoryEntries.value.flatMap(entry => [
+    ...(entry.readFailures ?? []).map(code => JSON.stringify([entry.key, entry.sourceRootKey ?? null, code, 'source'])),
+    ...entry.sessions.filter(row => row.readFailure).map(row => JSON.stringify([entry.key, entry.sourceRootKey ?? null, row.readFailure, row.sessionKey])),
+  ]))
   const historyNoticeDismissed = computed(() => historyNoticeKeys.value.length > 0
     && historyNoticeKeys.value.every(key => acknowledgedHistoryWarnings.value.has(key)))
   // Adapter-owned forced reads (close/resume) can finish outside refresh(). Keep
@@ -127,6 +129,74 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   const sourceDiagnosticsWarnings = computed(() => sourceDiagnostics.value.warnings)
   const sourceDiagnosticsTruncated = computed(() => sourceDiagnostics.value.truncated)
   const sourceIssuesAvailable = computed(() => sourceDiagnosticsWarnings.value.length > 0 || historyMetadataPartial.value)
+  const allHistoryIssues = computed<WorkspaceHistoryIssue[]>(() => relevantHistoryEntries.value.flatMap(entry => {
+    if (entry.loading) return []
+    const source = entry.context.cli === 'claude' ? 'claude-history' as const : 'codex-history' as const
+    const configurationName = profiles.profile(entry.context.profileId)?.name ?? ''
+    const stage = entry.error ? entry.diagnosticStage : 'read-source-enumeration' as const
+    const issue = (code: string, session?: NativeHistoryEntry['sessions'][number]): WorkspaceHistoryIssue => ({
+      key: JSON.stringify([entry.key, entry.sourceRootKey ?? null, code, stage, session?.sessionKey ?? null]),
+      entryKey: entry.key, warningKey: workspaceWarningKey({ source, code, stage }), source, code, stage,
+      configurationName, projectPath: entry.context.projectPath,
+      ...(session ? { sessionId: session.nativeSessionId, sessionTitle: session.lastKnownTitle || session.title } : {}),
+    })
+    // 汇总没有条目身份时仍保留范围未知，不把同代码的其它会话推断为全部受影响条目。
+    return [...(entry.error ? [issue(entry.error)] : (entry.readFailures ?? []).map(code => issue(code))),
+      ...(!entry.error ? entry.sessions.filter(row => row.readFailure).map(row => issue(row.readFailure!, row)) : [])]
+  }).sort((a, b) => a.key.localeCompare(b.key, 'en')))
+  const historyIssues = computed(() => allHistoryIssues.value.slice(0, 48))
+  const historyIssuesTruncated = computed(() => allHistoryIssues.value.length > 48)
+  const historyRecoveryError = ref(false)
+  const historyRecoveryOwners = new Set<string>()
+  function currentHistoryIssue(key: string) {
+    const issue = allHistoryIssues.value.find(row => row.key === key)
+    const entry = issue && relevantHistoryEntries.value.find(row => row.key === issue.entryKey)
+    return issue && entry ? { issue, entry } : undefined
+  }
+  function reconcileHistoryWarningSnapshot() {
+    const isHistory = (source: WorkspaceWarningSource) => source === 'claude-history' || source === 'codex-history'
+    const warnings = createWorkspaceSourceWarnings(sourceWarnings.value.filter(row => !isHistory(row.source)), sourceWarningsTruncated.value)
+    const owners: Omit<WorkspaceSourceConfiguration, 'name'>[] = []
+    const identities = new Map<string, Set<string>>()
+    for (const entry of relevantHistoryEntries.value) if (entry.error) {
+      const warning = warnings.add(entry.context.cli === 'claude' ? 'claude-history' : 'codex-history', { code: entry.error, stage: entry.diagnosticStage })
+      const key = workspaceWarningKey(warning)
+      const set = identities.get(key) ?? new Set<string>()
+      set.add(JSON.stringify([key, entry.context.profileId, entry.context.profileRevision, entry.sourceRootKey ?? null]))
+      identities.set(key, set)
+      if (!owners.some(owner => owner.warningKey === key && owner.profileId === entry.context.profileId)) owners.push({ warningKey: key, profileId: entry.context.profileId, profileRevision: entry.context.profileRevision })
+    }
+    sourceWarnings.value = warnings.items
+    sourceWarningsTruncated.value = warnings.truncated
+    sourceConfigurationOwners.value = owners
+    sourceNoticeKeys.value = warnings.identityKeys().flatMap(key => [...(identities.get(key) ?? [key])])
+    if (warnings.truncated) sourceNoticeKeys.value.push('truncated')
+    const currentKeys = new Set(sourceNoticeKeys.value)
+    acknowledgedSourceWarnings.value = new Set([...acknowledgedSourceWarnings.value].filter(key => currentKeys.has(key)))
+    error.value = warnings.items.length && !fatal.value ? 'workspaceRuntimePartial' : null
+  }
+  async function retryHistoryIssue(key: string) {
+    const target = currentHistoryIssue(key)
+    if (!target || disposed || loading.value || historyRecoveryOwners.has(target.entry.key)) return
+    const context = { ...target.entry.context }
+    historyRecoveryOwners.add(target.entry.key)
+    historyRecoveryError.value = false
+    try {
+      // 只重新读取已授权配置/项目，不重放生命周期命令或改写 CLI 原始历史。
+      await history.load({ ...context, force: true, retainOnFailure: true }).catch(() => {})
+      if (disposed || !relevantHistoryEntries.value.some(row => row.key === target.entry.key)) return
+      reconcileHistoryWarningSnapshot()
+      await catalog.refresh(context.projectPath)
+    } catch { historyRecoveryError.value = true }
+    finally { historyRecoveryOwners.delete(target.entry.key) }
+  }
+  async function openHistoryIssueProject(key: string) {
+    const target = currentHistoryIssue(key)
+    if (!target || disposed) return
+    historyRecoveryError.value = false
+    try { await openInFileManager(target.entry.context.projectPath) }
+    catch { historyRecoveryError.value = true }
+  }
   function retireHistoryAcknowledgements() {
     const current = new Set(historyNoticeKeys.value)
     acknowledgedHistoryWarnings.value = new Set([...acknowledgedHistoryWarnings.value].filter(key => current.has(key)))
@@ -846,7 +916,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
         row.sessionKey, row.nativeSessionId, row.archived ? 1 : 0, row.title,
         row.titleSource ?? '', row.lastKnownTitle ?? '', row.lastKnownTitleSource ?? '',
         row.updatedAt ?? '', row.lastKnownActivityAt ?? '', row.truncated ? 1 : 0,
-        row.metadataIncomplete ? 1 : 0, row.createdAt ?? '',
+        row.metadataIncomplete ? 1 : 0, row.readFailure ?? '', row.createdAt ?? '',
       ])])
       const previous = historySignatures.get(entry.key)
       if (previous && previous.signature === signature) continue
@@ -938,5 +1008,5 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     }
     catalogOwnerWatches.clear(); pendingCatalogProjects.clear()
   })
-  return { diagnostics, closeDiagnostics, openSessions, cliAvailability, cliProblems, fatal, ready, loading, error, sourceWarnings, sourceWarningsTruncated, sourceWarningConfigurations, sourceNoticeDismissed, historyNoticeDismissed, sourceIssuesAvailable, sourceDiagnosticsWarnings, sourceDiagnosticsTruncated, sourceChecksPending, dismissSourceNotice, historyMetadataPartial, historyReadWarnings, refresh, retryAction }
+  return { historyIssues, historyIssuesTruncated, historyRecoveryError, retryHistoryIssue, openHistoryIssueProject, diagnostics, closeDiagnostics, openSessions, cliAvailability, cliProblems, fatal, ready, loading, error, sourceWarnings, sourceWarningsTruncated, sourceWarningConfigurations, sourceNoticeDismissed, historyNoticeDismissed, sourceIssuesAvailable, sourceDiagnosticsWarnings, sourceDiagnosticsTruncated, sourceChecksPending, dismissSourceNotice, historyMetadataPartial, historyReadWarnings, refresh, retryAction }
 }

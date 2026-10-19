@@ -19,10 +19,17 @@ The 19-file manifest is byte-exact across platforms; `.gitattributes` disables n
 | Browser favicon | `src/assets/icons/app-icon.ico` via `index.html` | Original seven-frame ICO |
 | Tauri Linux PNGs | `src-tauri/icons/{32x32,128x128,128x128@2x}.png` | 32 optical / 128 / 256 PNGs |
 | Tauri Windows icon | `src-tauri/icons/icon.ico` | Original ICO: 16/24/32/48/64/128/256 |
+| Windows NSIS installer shell | `bundle.windows.nsis.installerIcon`: `icons/icon.ico` | Same original seven-frame ICO |
 | Tauri macOS icon | `src-tauri/icons/icon.icns` | Tauri-encoded family using approved size-specific pixels |
 | High-resolution source | `src-tauri/icons/cc-desk-icon-source.png` | 1024 PNG |
 
 The explicit `app-icon` CSS class exempts these images from the dark-theme filter, including when Vite inlines small PNGs into data URLs. Vite imports the titlebar `srcset` and favicon so production HTML/chunks reference emitted assets. Existing Tauri bundle icon paths stay stable; `tauri.windows.conf.json` does not override them. Normal release builds consume these checked-in files through the unchanged Windows NSIS, macOS App/DMG and Linux AppImage build paths.
+
+NSIS requires its own explicit `installerIcon`; `bundle.icon` alone updates the
+application executable but does not select the installer shell icon. Keep both
+references on the approved ICO. The [Tauri config reference](https://v2.tauri.app/reference/config/#installericon)
+defines this separate field. It is a compile-time installer resource, not an
+extra installed file requiring a `bundle.resources` entry.
 
 ## Reproduce application outputs
 
@@ -49,4 +56,21 @@ python tests/scripts/appIcons.py
 
 This independently decodes all nine PNGs, seven ICO frames and ten standard/Retina ICNS representations. It verifies dimensions, alpha extrema, transparent canvas borders, ICO DIB/PNG framing and exact RGBA pixels against the approved exports. It also checks generated frontend/native copies and packaging paths. It performs no writes or downloads.
 
+After an authorized local NSIS test build, verify the actual installer shell
+without running or installing it (Python standard library only):
+
+```sh
+python tests/scripts/nsisInstallerIcon.py "path/to/CC Desk_VERSION_x64-setup.exe"
+```
+
+The script reads the outer PE's RT_GROUP_ICON and RT_ICON resources and requires
+one complete icon group to match all seven approved ICO frames byte-for-byte.
+It does not mistake the bundled application's icon for the installer shell.
+
 Integration validation includes source/manifest checks, repeated byte-stable generation, image decoding, session-icon regressions, typecheck, production build and browser verification of emitted icon references and light/dark colors. These checks do not certify installed taskbar/Start menu rendering, macOS Finder/Dock behavior, Linux desktop icon caches or OS fractional scaling. Signing and publication are verified separately through the standard protected-main release process. The icon integration does not install the app or alter release gates; authorized version metadata changes follow the normal release policy.
+
+The taskbar-only v0.23.2 field report has a separate
+[source/package investigation and minimal read-only field checklist](windows-taskbar-icon-investigation.md).
+The user reported recovery after restarting Explorer; the exact internal cause
+remains unproven. No taskbar code change was added, and the installer-shell icon
+fix must not be presented as its confirmed remedy.

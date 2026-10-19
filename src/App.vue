@@ -347,11 +347,16 @@ onUnmounted(() => {
     <AppDrawer v-model:open="sourceDiagnosticsOpen" :title="t('historySourceDiagnostics')">
       <div data-history-source-dialog>
         <InlineNotice v-if="runtime.sourceDiagnosticsWarnings?.value.length" kind="warning" :message="t('workspaceRuntimePartial')" />
-        <WorkspaceSourceDetails compact :warnings="runtime.sourceDiagnosticsWarnings.value" :truncated="runtime.sourceDiagnosticsTruncated.value"
-          :configurations="runtime.sourceWarningConfigurations?.value ?? []" @configure="editSourceConfiguration" />
+        <WorkspaceSourceDetails compact :warnings="runtime.sourceDiagnosticsWarnings.value" :truncated="runtime.sourceDiagnosticsTruncated.value || runtime.historyIssuesTruncated.value"
+          :configurations="runtime.sourceWarningConfigurations?.value ?? []" :issues="runtime.historyIssues.value" :busy="runtime.sourceChecksPending.value"
+          @configure="editSourceConfiguration" @retry="runtime.retryHistoryIssue" @open-project="runtime.openHistoryIssueProject" />
         <InlineNotice v-if="runtime.historyMetadataPartial?.value" kind="info" :message="t('workspaceHistoryMetadataPartial')" />
-        <WorkspaceSourceDetails compact partial :warnings="runtime.historyReadWarnings.value" :truncated="false" />
+        <WorkspaceSourceDetails compact partial :warnings="runtime.historyReadWarnings.value" :truncated="runtime.historyIssuesTruncated.value"
+          :issues="runtime.historyIssues.value" :busy="runtime.sourceChecksPending.value" @retry="runtime.retryHistoryIssue" @open-project="runtime.openHistoryIssueProject" />
+        <InlineNotice v-if="runtime.historyRecoveryError.value" kind="warning" :message="t('historyRecoveryActionFailed')" />
+        <p v-if="runtime.sourceNoticeDismissed.value || runtime.historyNoticeDismissed.value">{{ t('historyIssuesIgnored') }}</p>
         <p v-if="runtime.sourceChecksPending?.value">{{ t('loading') }}</p>
+        <AppButton v-if="runtime.sourceIssuesAvailable.value" data-source-diagnostics-ignore variant="ghost" @click="dismissSourceNotice">{{ t('historyIssuesIgnore') }}</AppButton>
         <AppButton data-source-warning-retry variant="ghost" :disabled="runtime.loading.value" @click="request({ kind: 'refresh' })">{{ t('retry') }}</AppButton>
       </div>
     </AppDrawer>

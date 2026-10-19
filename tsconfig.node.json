@@ -18,6 +18,7 @@
     "vitest.config.ts",
     "playwright.config.ts",
     "playwright.production.config.ts",
+    "playwright.terminal-fit.config.ts",
     "vitest.visual.config.ts"
   ]
 }

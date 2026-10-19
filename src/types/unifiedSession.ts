@@ -96,6 +96,8 @@ export interface UnifiedSession {
   resumable: boolean
   adapterSessionId: string
   nativeSessionId?: string | null
+  /** 已授权历史行的明确读取诊断；不改变进程/活动状态。 */
+  historyReadFailure?: import('./nativeProjection').HistoryReadFailure
   /** native 来源根身份（SourceRef.sourceRootKey）；仅 native 行携带。折叠重复历史行前必须与 legacy 固定根比较，相等才证明同源。 */
   nativeRootKey?: string
   /** 来自精确历史投影的记录键，仅用于同物理记录的显示去重，不授予操作权限。 */

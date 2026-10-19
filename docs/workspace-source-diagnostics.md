@@ -4,7 +4,72 @@ The workspace partial-load warning remains visible when an entire source read is
 
 `useUnifiedWorkspaceRuntime.refresh` collects failures locally and publishes only when that refresh still owns completion. Repeated category/code/stage triples collapse to one entry; at most twelve appear, with an explicit omitted-errors message if more distinct failures occurred. Later catalog failures merge into the current diagnostics only while their refresh ownership remains valid. A successful explicit refresh clears the reported failures.
 
-`workspaceSourceWarnings` accepts exact known public codes. Unknown codes, native field contents, paths, profile and session identifiers, titles, and raw exception text are never rendered. The production document bootstrap and projection client tests cover raw authenticated request envelopes, Rust-style safe error rejection, unavailable projection responses, malformed response rejection, and bounded diagnostic output. Runtime tests cover isolated failures, open-session preservation, stale refreshes, subsequent catalog failures, and the real App details surface.
+`workspaceSourceWarnings` accepts exact known public codes. Unknown codes, native field contents, paths, profile/session identifiers, titles, and raw exception text from error envelopes are never rendered. Separately admitted configuration/project metadata and explicitly identified safe session DTOs can populate recovery cards; error text never supplies their identity. The production document bootstrap and projection client tests cover raw authenticated request envelopes, Rust-style safe error rejection, unavailable projection responses, malformed response rejection, and bounded diagnostic output. Runtime tests cover isolated failures, open-session preservation, stale refreshes, subsequent catalog failures, and the real App details surface.
+
+## Actionable recovery (0.23.3 work)
+
+Source-level enumeration failures such as `SOURCE_UNSUPPORTED / read-source-enumeration`
+do not carry a session ID or historical file path. The UI explicitly says the
+affected scope is unknown and does not claim every unreadable entry was marked.
+Normal `metadataIncomplete` is not treated as corruption: it can describe a
+healthy bounded observation.
+
+There is one newly precise case: after Claude history has proved a session's
+registered-project association, optional title-tail enrichment can fail while
+the positive row remains usable. That row now carries optional camelCase
+`readFailure`, one of the existing five fixed history-read failure codes.
+Aggregate diagnostics remain unchanged. The frontend requires the row's bounded
+metadata flag and corresponding aggregate code, rejects arbitrary values, and
+only then displays its exact session ID/title with a list-row warning marker.
+No raw transcript path, text, environment or parser payload is added. Other
+unidentified failures remain source-level; a known row does not identify other
+omissions with the same code.
+
+The existing diagnostics drawer provides localized reasons and appropriate
+next steps for unsupported format/version/required metadata, parsing/text
+validation, explicit denied access, missing configured references, unsafe paths,
+limits, temporary changes/busy/time budget, and revoked scope/revisions. Generic
+`SOURCE_READ_FAILED`/unavailable cannot establish whether a path is missing or
+an IO failure occurred, and is described with that uncertainty. No automatic
+repair, ACL change, CLI migration or original-history deletion is offered.
+
+Recovery cards show the current configuration and registered project, and a
+session only when explicitly known. At most 48 cards are shown, with an omitted
+targets hint. **Rescan this configuration/project** rechecks the current issue
+key, profile revision and registered project/path, then uses the existing forced
+history reader for that context and refreshes only the affected catalog project.
+A stale issue cannot authorize a read. **Open project directory** uses only that
+same current registered project through the existing file-manager API; it is
+not presented as the historical file's location. Existing configuration editing
+remains available for whole-source errors.
+
+Ignoring current problems suppresses their repeated banners, not their details
+or the source failure itself. Acknowledgements are individual context/root/code
+keys, plus sessionKey for known row failures. Removing or repairing one problem
+does not alert again for another unchanged acknowledged problem. New code,
+root/revision or known-session identity alerts again; a successful complete
+observation retires resolved acknowledgements. Anonymous failures with the same
+context/root/code cannot be distinguished by the current DTO and remain the
+same acknowledged issue until a successful observation or identifiable change.
+This acknowledgement is in memory for the workspace runtime, not persistent
+suppression across application restarts.
+
+The history projection signature includes `readFailure`, so a backend observation
+that changes only a diagnostic also updates the corresponding list marker.
+This remains a UI projection change and does not change process ownership.
+
+The 2026-10-19 WSK-MSI checks include a real Rust RED for the missing per-session
+diagnostic, then 35 Claude-history tests passing; the broader projection group
+initially passed 169/170 in the sandbox, with
+`NativeRename_ClaudeValidPlainScopePinsExactTranscript_011` failing during private
+fixture preparation (`NATIVE_RENAME_UNSUPPORTED`). The same compiled exact test
+passed under the ordinary host token, followed by all 170 projection tests
+passing there. No assertion, ACL rule or fixture admission guard was relaxed.
+Frontend targeted recovery/API/history/localization/inventory coverage passed
+188 tests; the complete frontend fast group passed 2,752 tests in 179 files.
+Typecheck, rustfmt and strict all-target Clippy checks passed. These are synthetic
+filesystem/frontend checks, not affected-machine history-data or WebView2/CLI
+acceptance.
 
 This change does not change document admission, source-reader budgets, filesystem capabilities, or CLI behavior. The generic warning is not proof of one root cause: `FORBIDDEN` is distinct from a history-reader result such as `SOURCE_TOO_LARGE` or `SOURCE_UNSUPPORTED`. Real Windows source data and WebView lifecycle acceptance remain separate from fixture coverage.
 

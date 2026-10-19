@@ -4,6 +4,14 @@ CC Desk contains a legacy Claude terminal path and the Native CLI v3 path for Cl
 
 ## Unified host
 
+Native terminal fitting uses a padding-free host and places the 6px inset on
+`.xterm` itself. The pinned FitAddon 0.11.0 reads the parent's computed size and
+subtracts only `.xterm` padding; padding on the border-box host overstates usable
+height and can clip the last row at the unified host's overflow boundary. Keep
+the full FitAddon result for both rendering and Native PTY resize; do not subtract
+an arbitrary row. See [terminal fit regression](terminal-fit-regression.md) for
+the real-xterm browser matrix and its platform evidence limits.
+
 The normal App mounts `UnifiedTerminalHost` in its only Workspace terminal slot.
 The host keeps every open Native terminal and one Legacy aggregator mounted across
 selection, navigation, and GUI-theme changes. Only visible terminals fit/focus;

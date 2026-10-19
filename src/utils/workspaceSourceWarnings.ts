@@ -18,6 +18,30 @@ export interface WorkspaceSourceConfiguration {
   profileRevision: string
   name: string
 }
+export interface WorkspaceHistoryIssue {
+  key: string
+  entryKey: string
+  warningKey: string
+  source: WorkspaceWarningSource
+  code: string
+  stage?: ProjectionStage
+  configurationName: string
+  projectPath: string
+  sessionId?: string
+  sessionTitle?: string
+}
+/** 仅解释后端明确保留的类别，不从泛化读取失败猜测损坏、权限或缺失文件。 */
+export function historyRecoveryHint(code: string): string {
+  if (code === 'SOURCE_UNSUPPORTED' || code === 'UNSUPPORTED_SCHEMA') return 'historyRecoveryUnsupported'
+  if (code === 'SOURCE_INVALID' || code === 'SOURCE_INVALID_TEXT') return 'historyRecoveryInvalid'
+  if (code === 'SOURCE_READ_FORBIDDEN' || code === 'FORBIDDEN') return 'historyRecoveryPermission'
+  if (code === 'PROFILE_NOT_FOUND' || code === 'PROJECT_NOT_FOUND' || code === 'ENV_SOURCE_MISSING') return 'historyRecoveryMissing'
+  if (code === 'SOURCE_PATH_REJECTED' || code === 'SOURCE_NOT_REGULAR' || code === 'UNSAFE_WORKSPACE_PATH') return 'historyRecoveryUnsafePath'
+  if (code === 'SOURCE_TOO_LARGE' || code === 'SOURCE_TOO_MANY_ENTRIES' || code === 'SOURCE_RESPONSE_TOO_LARGE') return 'historyRecoveryLimit'
+  if (code === 'SOURCE_BUSY' || code === 'SOURCE_CHANGED' || code === 'SOURCE_BUDGET_EXCEEDED' || code === 'SOURCE_SNAPSHOT_EXPIRED') return 'historyRecoveryTemporary'
+  if (code.startsWith('SCOPE_') || code === 'REVISION_CONFLICT' || code === 'PROJECT_IDENTITY_CHANGED') return 'historyRecoveryScope'
+  return 'historyRecoveryUnavailable'
+}
 export function workspaceWarningKey(warning: WorkspaceSourceWarning): string {
   return JSON.stringify([warning.source, warning.code, warning.stage ?? ''])
 }

@@ -2220,6 +2220,11 @@ fn HistoryClaude_TailFailureRetainsProvenRow_026() {
         };
         assert_eq!(title, "first prompt");
         assert_eq!(budget.history_read_failures(), vec![code]);
+        // 已证明项目归属的会话须携带固定原因，不能只剩无法定位的来源汇总。
+        assert_eq!(
+            serde_json::to_value(&items[0]).unwrap()["readFailure"],
+            code
+        );
     }
 }
 

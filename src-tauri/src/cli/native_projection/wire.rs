@@ -178,6 +178,9 @@ pub(crate) enum ResourceItem {
         title_source: Option<TitleSource>,
         #[serde(skip_serializing_if = "Option::is_none")]
         metadata_incomplete: Option<bool>,
+        /// 仅对已确认项目归属的行返回固定原因；不携带文件路径或解析载荷。
+        #[serde(skip_serializing_if = "Option::is_none")]
+        read_failure: Option<&'static str>,
         truncated: bool,
         /// 代表 rollout 位于 CLI 自身的归档容器（如 Codex archived_sessions/）。
         archived: bool,

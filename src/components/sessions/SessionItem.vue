@@ -216,6 +216,9 @@ function preventReferenceNativeDrag(event: DragEvent) {
       <AppTooltip v-else class="session-title-tooltip" :text="session.title">
         <span class="session-name" tabindex="0">{{ session.title }}</span>
       </AppTooltip>
+      <AppTooltip v-if="session.historyReadFailure" :text="t('historySessionReadIssue', { code: session.historyReadFailure })">
+        <span data-session-history-issue tabindex="0" :aria-label="t('historySessionReadIssue', { code: session.historyReadFailure })">!</span>
+      </AppTooltip>
     </div>
     <div class="session-tail" @click.stop @dblclick.stop>
       <AppTooltip :text="fullActivity">
@@ -321,6 +324,7 @@ function preventReferenceNativeDrag(event: DragEvent) {
   pointer-events: none;
 }
 .session-archive-slot { width: 20px; height: 28px; }
+[data-session-history-issue] { color: var(--status-warning); flex-shrink: 0; font-weight: 600; }
 .session-archive-action { display: flex; justify-content: flex-end; align-items: center; opacity: 0; pointer-events: none; }
 .session-item:hover .session-archive-action, .session-item:focus-within .session-archive-action { opacity: 1; pointer-events: auto; }
 .session-overflow-trigger { width: 20px; height: 28px; opacity: 0; pointer-events: none; }

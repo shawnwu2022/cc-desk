@@ -65,6 +65,7 @@ pub(super) fn read(
         CliKind::Shell => unreachable!(),
     }
     let mut transcripts: Vec<(Transcript, Option<String>)> = Vec::new();
+    let mut session_failures = std::collections::HashMap::new();
     let mut seen = BTreeSet::new();
     // codex fork/compact 为同一 thread 追加 rollout，同 id 是合法 thread 模型；
     // Claude 文件名即身份，跨目录同 id 仍是来源级异常。
@@ -209,7 +210,9 @@ pub(super) fn read(
                         }
                     }
                 }
-                Err(code) if b.omit_history_entry(code) => {}
+                Err(code) if b.omit_history_entry(code) => {
+                    session_failures.insert(transcript.id.clone(), code);
+                }
                 Err(code) => return Err(code),
             }
         }
@@ -234,6 +237,7 @@ pub(super) fn read(
                 t.created
             };
             result.push(ResourceItem::Session {
+                read_failure: session_failures.get(&t.id).copied(),
                 session_key: key,
                 native_session_id: t.id,
                 project_id: owner,

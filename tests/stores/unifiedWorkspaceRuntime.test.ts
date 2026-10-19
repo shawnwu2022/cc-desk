@@ -105,6 +105,86 @@ it('Restart_NewObservedConversationKeepsNativeIdAcrossGeneration_068', async()=>
   scope.mockRestore()
 })
 describe('Workspace source warning diagnostics', () => {
+  // 无身份的来源错误不能冒认会话；明确会话错误则精确定位，忽略后新问题再次提示。
+  it('HistoryRecovery_ExactAndUnknown_080', async () => {
+    const item = { type: 'session', projectId: 'project', sessionKey: 'root-key', nativeSessionId: 'history-id', title: 'Known', cwd: '/repo', readFailure: 'SOURCE_INVALID' }
+    io.read.mockResolvedValue({ state: 'ready', items: [item], hasMore: false, historyMetadataIncomplete: true, historyReadFailures: ['SOURCE_INVALID'] })
+    const { runtime } = render(); await flushPromises()
+    expect(runtime.historyIssues.value.some(issue => issue.sessionId === 'history-id' && issue.code === 'SOURCE_INVALID')).toBe(true)
+    expect(runtime.historyIssues.value.some(issue => issue.sessionId === undefined && issue.code === 'SOURCE_INVALID')).toBe(true)
+    expect(useUnifiedSessionsStore().sessions.find(row => row.nativeSessionId === 'history-id')?.historyReadFailure).toBe('SOURCE_INVALID')
+    runtime.dismissSourceNotice()
+    await runtime.refresh()
+    expect(runtime.historyNoticeDismissed.value).toBe(true)
+    io.read.mockResolvedValue({ state: 'ready', items: [{ ...item, sessionKey: 'new-key', nativeSessionId: 'new-id' }], hasMore: false, historyMetadataIncomplete: true, historyReadFailures: ['SOURCE_INVALID'] })
+    await runtime.refresh()
+    expect(runtime.historyNoticeDismissed.value).toBe(false)
+  })
+  // 针对单一已授权上下文重扫，成功清除问题，旧身份动作不再有效。
+  it('HistoryRecovery_TargetedRetry_081', async () => {
+    io.read.mockResolvedValue({ state: 'ready', items: [], hasMore: false, historyMetadataIncomplete: true, historyReadFailures: ['SOURCE_UNSUPPORTED'] })
+    const { runtime } = render(); await flushPromises()
+    const issue = runtime.historyIssues.value[0]
+    io.scope.mockClear(); io.read.mockResolvedValue({ state: 'ready', items: [], hasMore: false })
+    await runtime.retryHistoryIssue(issue.key)
+    expect(io.scope).toHaveBeenCalledTimes(1)
+    expect(io.scope.mock.calls[0][0]).toMatchObject({ profileId: 'cx', expectedProfileRevision: '7', projectIds: ['project'] })
+    expect(runtime.historyIssues.value).toEqual([])
+    expect(runtime.historyMetadataPartial.value).toBe(false)
+    io.scope.mockClear(); await runtime.retryHistoryIssue(issue.key)
+    expect(io.scope).not.toHaveBeenCalled()
+  })
+  // 来源级错误重试成功后撤销旧汇总和确认；同一错误重新发生也应再次提示。
+  it('HistoryRecovery_SourceRetryClears_082', async () => {
+    io.read.mockResolvedValue({ state: 'unavailable', reason: 'SOURCE_UNSUPPORTED', items: [], hasMore: false })
+    const { runtime } = render(); await flushPromises()
+    const issue = runtime.historyIssues.value[0]
+    expect(issue.sessionId).toBeUndefined()
+    runtime.dismissSourceNotice()
+    io.read.mockResolvedValue({ state: 'ready', items: [], hasMore: false })
+    await runtime.retryHistoryIssue(issue.key)
+    expect(runtime.sourceDiagnosticsWarnings.value).toEqual([])
+    expect(runtime.sourceWarnings.value).toEqual([])
+    io.read.mockResolvedValue({ state: 'unavailable', reason: 'SOURCE_UNSUPPORTED', items: [], hasMore: false })
+    await runtime.refresh()
+    expect(runtime.sourceNoticeDismissed.value).toBe(false)
+  })
+  // 修复部分已确认的问题，不得让其它完全未变化的已忽略问题重新亮横幅。
+  it('HistoryRecovery_PartialRepairKeepsAck_083', async () => {
+    const item = { type: 'session', projectId: 'project', sessionKey: 'one', nativeSessionId: 'one', title: 'Known', cwd: '/repo', metadataIncomplete: true, readFailure: 'SOURCE_INVALID' }
+    const response = { state: 'ready', items: [item, { ...item, sessionKey: 'two', nativeSessionId: 'two' }], hasMore: false, historyMetadataIncomplete: true, historyReadFailures: ['SOURCE_INVALID'] }
+    io.read.mockResolvedValue(response)
+    const { runtime } = render(); await flushPromises()
+    runtime.dismissSourceNotice()
+    io.read.mockResolvedValue({ ...response, items: [{ ...response.items[0], readFailure: undefined }, response.items[1]] })
+    await runtime.refresh()
+    expect(runtime.historyIssues.value.filter(row => row.sessionId).map(row => row.sessionId)).toEqual(['two'])
+    expect(runtime.historyNoticeDismissed.value).toBe(true)
+  })
+  // 后台只改变诊断字段仍须发布受影响项目；恢复时同一列表标记随之撤销。
+  it('HistoryRecovery_DiagnosticProjection_084', async () => {
+    const { runtime } = render(); await flushPromises()
+    const entry = useNativeHistoryStore().all()[0]
+    entry.sessions[0].readFailure = 'SOURCE_INVALID'
+    await flushPromises()
+    expect(useUnifiedSessionsStore().sessions.find(row => row.nativeSessionId === 'history-id')?.historyReadFailure).toBe('SOURCE_INVALID')
+    delete entry.sessions[0].readFailure
+    await flushPromises()
+    expect(useUnifiedSessionsStore().sessions.find(row => row.nativeSessionId === 'history-id')?.historyReadFailure).toBeUndefined()
+    expect(runtime.historyIssues.value.filter(row => row.sessionId)).toEqual([])
+  })
+  // 配置修订撤销后，旧详情上的路径和重试按钮不能作为读取授权。
+  it('HistoryRecovery_StaleOwner_085', async () => {
+    io.read.mockResolvedValue({ state: 'ready', items: [], hasMore: false, historyMetadataIncomplete: true, historyReadFailures: ['SOURCE_INVALID'] })
+    const { runtime } = render(); await flushPromises()
+    const issue = runtime.historyIssues.value[0]
+    useCliProfilesStore().profiles[0].revision = '8'
+    io.scope.mockClear(); io.open.mockClear()
+    await runtime.retryHistoryIssue(issue.key)
+    await runtime.openHistoryIssueProject(issue.key)
+    expect(io.scope).not.toHaveBeenCalled()
+    expect(io.open).not.toHaveBeenCalled()
+  })
   // 单条历史读取失败保留已识别会话，仅显示可收起的部分历史诊断。
   it('HistoryPartial_KeepsPositiveRows_001', async () => {
     io.read.mockResolvedValue({ state: 'ready', items: [{ type: 'session', projectId: 'project', sessionKey: 'root-key', nativeSessionId: 'history-id', title: 'History', cwd: '/repo' }], hasMore: false,

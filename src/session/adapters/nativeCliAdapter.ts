@@ -184,6 +184,7 @@ function projectHistory(entry: NativeHistoryEntry, item: NativeHistoryEntry['ses
     resumable: true,
     adapterSessionId: item.sessionKey,
     nativeSessionId: item.nativeSessionId,
+    ...(item.readFailure ? { historyReadFailure: item.readFailure } : {}),
     nativeRootKey: entry.sourceRootKey,
     nativeHistorySessionKey: item.sessionKey,
     launchConfigId: entry.context.profileId,

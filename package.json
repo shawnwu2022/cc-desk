@@ -51,6 +51,7 @@
     "typecheck": "tsc --build tsconfig.node.json && vue-tsc --noEmit",
     "test:visual": "playwright test tests/visual/unified-workspace.spec.ts tests/visual/version-manager.spec.ts tests/visual/session-app-icon.spec.ts",
     "test:visual:unit": "vitest run --config vitest.visual.config.ts",
+    "test:terminal-fit": "playwright test --config playwright.terminal-fit.config.ts",
     "test:production": "playwright test --config playwright.production.config.ts",
     "prepare:session-sdk": "node scripts/prepare-session-sdk.mjs"
   },

@@ -57,6 +57,7 @@
       "digestAlgorithm": "sha256",
       "timestampUrl": "",
       "nsis": {
+        "installerIcon": "icons/icon.ico",
         "installerHooks": "./installer.nsh"
       }
     },
