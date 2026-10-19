@@ -14,7 +14,7 @@ const { t } = useI18n()
     <ul>
       <li v-for="warning in warnings" :key="`${warning.source}:${warning.stage}:${warning.code}`">
         {{ t(workspaceSourceLabels[warning.source]) }}: <code>{{ warning.code }}<template v-if="warning.stage"> / {{ warning.stage }}</template></code>
-        <p class="source-warning-hint">{{ t(historyRecoveryHint(warning.code)) }}</p>
+        <p v-if="warning.source === 'legacy-history' || warning.source === 'claude-history' || warning.source === 'codex-history'" class="source-warning-hint">{{ t(historyRecoveryHint(warning.code)) }}</p>
         <p v-if="warning.source === 'claude-history' || warning.source === 'codex-history'">{{ t('historyIssueUnknownScope') }}</p>
         <div v-for="issue in issues.filter(row => row.warningKey === workspaceWarningKey(warning))" :key="issue.key" class="source-issue" data-history-issue :data-session-id="issue.sessionId">
           <dl>

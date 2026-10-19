@@ -1707,6 +1707,34 @@ it('HistorySupport_DisableDoesNotRetireRoot_093', async () => {
   expect(useUnifiedSessionsStore().sessions.some(row => row.nativeSessionId === 'legacy')).toBe(true)
 })
 
+it('HistorySupport_RetiredWarningStaysHiddenWhileDisabled_094', async () => {
+  io.legacyRoot.mockResolvedValue({ rootKey: 'root' })
+  const { runtime } = render(); await runtime.refresh(); await flushPromises()
+  io.legacyRoot.mockRejectedValue(new Error('unavailable'))
+  await useUnifiedSessionsStore().refresh('/legacy'); await flushPromises()
+  expect(runtime.sourceWarnings.value.some(row => row.source === 'legacy-history')).toBe(true)
+  const { useCliSupportStore } = await import('@/stores/cliSupport')
+  useCliSupportStore().setCliEnabled('claude', false); await flushPromises()
+  await runtime.refresh(); await flushPromises()
+  expect(runtime.sourceWarnings.value.filter(row => row.source === 'legacy-history')).toEqual([])
+  useCliSupportStore().setCliEnabled('claude', true); await flushPromises(); await flushPromises()
+  expect(runtime.sourceWarnings.value.some(row => row.source === 'legacy-history')).toBe(true)
+})
+
+it('HistoryRecovery_CodexRetryDoesNotValidateClaude_095', async () => {
+  io.legacyRoot.mockResolvedValue({ rootKey: 'root' })
+  io.sessions.mockResolvedValue([{ sessionId: 'legacy', name: 'Legacy', projectPath: '/legacy', lastActiveAt: 1 }])
+  io.read.mockResolvedValue({ state: 'ready', items: [], hasMore: false, historyReadFailures: ['SOURCE_INVALID'] })
+  const { runtime } = render(); await runtime.refresh(); await flushPromises()
+  const issue = runtime.historyIssues.value[0]
+  io.legacyRoot.mockClear().mockRejectedValue(new Error('unrelated transient failure'))
+  io.read.mockResolvedValue({ state: 'ready', items: [], hasMore: false })
+  await runtime.retryHistoryIssue(issue.key); await flushPromises()
+  expect(io.legacyRoot).not.toHaveBeenCalled()
+  expect(runtime.historyIssues.value).toEqual([])
+  expect(useUnifiedSessionsStore().sessions.find(row => row.nativeSessionId === 'legacy')).toMatchObject({ title: 'Legacy' })
+})
+
 // 模板 ID 不能证明 false 是旧默认值：用户关闭后刷新不得覆写，也不应增加 revision。
 it('Observer_ExplicitOffSurvivesRefresh_060', async () => {
   const claudeTemplate = { id: 'desk-safe-claude', revision: '2', cli: 'claude', name: 'Claude Code', launcher: { kind: 'native' },

@@ -202,7 +202,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
       await history.load({ ...context, force: true, retainOnFailure: true }).catch(() => {})
       if (disposed || !relevantHistoryEntries.value.some(row => row.key === target.entry.key)) return
       reconcileHistoryWarningSnapshot()
-      await catalog.refresh(context.projectPath)
+      await catalog.refresh(context.projectPath, { cli: context.cli })
     } catch { historyRecoveryError.value = true }
     finally { historyRecoveryOwners.delete(target.entry.key) }
   }
@@ -522,7 +522,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     // Even unavailable projects.json must not prevent the readable runtime catalog.
     await settle('catalog', () => catalog.refresh())
     if (!current()) return
-    if (legacyRootFailure) warnings.add('legacy-history', { code: legacyRootFailure })
+    if (legacyRootFailure && cliSupport.isEnabled('claude')) warnings.add('legacy-history', { code: legacyRootFailure })
     ready.value = true
     loading.value = false
     sourceWarnings.value = warnings.items

@@ -130,6 +130,9 @@ publish in the same scoped refresh, with the failed source's diagnostic retained
 Legacy read results also replace that source's warning snapshot: failed reloads
 remain visible, successful reloads and disabling Claude clear obsolete warnings,
 and an enabled source's retired-root diagnostic remains in force.
+Full refreshes keep retired-root warnings hidden while Claude is disabled. History
+issue retries refresh only their originating CLI/project; history recovery guidance
+is limited to history warnings, rather than unrelated application-state errors.
 Claude reloads also include projects owned only by an open Legacy tab. Disabling
 history publishes real opened owners without validating the disabled Claude root;
 later full catalog refreshes follow the same rule. Root retirement refreshes every

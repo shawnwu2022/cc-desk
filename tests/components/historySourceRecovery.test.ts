@@ -7,6 +7,12 @@ import en from '@/i18n/locales/en'
 import zh from '@/i18n/locales/zh'
 
 describe('Actionable history diagnostics', () => {
+  it.each(['project-metadata', 'configurations', 'registrations', 'catalog'] as const)('HistoryRecovery_NonHistoryGuidance_003 %s', source => {
+    const view = mount(WorkspaceSourceDetails, { props: { warnings: [{ source, code: 'SOURCE_UNAVAILABLE' }], truncated: false }, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en, zh } })] } })
+    expect(view.text()).not.toContain(en.historyRecoveryUnavailable)
+    expect(view.text()).toContain('SOURCE_UNAVAILABLE')
+    view.unmount()
+  })
   // 匿名枚举问题明确保留未知范围，已确认身份的条目才显示会话与精确动作。
   it('HistoryRecovery_KnownAndUnknown_001', async () => {
     const warning = { source: 'codex-history' as const, code: 'SOURCE_UNSUPPORTED', stage: 'read-source-enumeration' as const }
