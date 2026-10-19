@@ -169,7 +169,7 @@ export interface SessionAdapter {
   readonly runtime: SessionRuntimeKind
   /** Freeze process ownership at admission, before a queued async action starts. */
   captureOwnership?(id: string, operation?: 'close' | 'archive'): () => boolean
-  listSessions(projectKey?: string): Promise<UnifiedSession[]>
+  listSessions(projectKey?: string, cli?: UnifiedCliKind): Promise<UnifiedSession[]>
   /** 新建独立运行 owner 后可提前交接显示行；回调不代表 CLI 成功，也不授予操作权限。 */
   createSession(input: CreateUnifiedSessionInput, canAdmit?: () => boolean, onAdmitted?: (session: UnifiedSession) => void): Promise<UnifiedSession>
   resumeSession(input: ResumeUnifiedSessionInput, canAdmit?: () => boolean): Promise<UnifiedSession>

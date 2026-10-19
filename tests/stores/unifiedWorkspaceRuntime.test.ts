@@ -616,13 +616,15 @@ describe('Workspace source warning diagnostics', () => {
     if (failure === 'replaced') io.legacyRoot.mockResolvedValue({ rootKey: 'root-b' })
     else io.legacyRoot.mockRejectedValue(new Error('SOURCE_UNAVAILABLE'))
     await catalog.refresh()
-    expect(catalog.sessions.filter(row => row.nativeSessionId === 'history-id')).toHaveLength(2)
-    expect(catalog.sessions.find(row => row.runtime === 'legacy-claude')).toMatchObject({ archived: !opened })
-    expect(catalog.sessions.find(row => row.runtime === 'native-cli')).toMatchObject({ archived: false })
+    expect(catalog.sessions.filter(row => row.nativeSessionId === 'history-id')).toHaveLength(opened ? 2 : 1)
+    if (opened) expect(catalog.sessions.find(row => row.runtime === 'legacy-claude')).toMatchObject({ archived: false })
+    else expect(catalog.sessions.some(row => row.runtime === 'legacy-claude')).toBe(false)
+    expect(catalog.sessions.find(row => row.runtime === 'native-cli')).toMatchObject({ archived: true, safeErrorCode:'SOURCE_UNAVAILABLE' })
+    expect(runtime.sourceWarnings.value.some(row => row.source === 'legacy-history')).toBe(true)
     expect(io.restore).not.toHaveBeenCalled()
     io.legacyRoot.mockResolvedValue({ rootKey: 'root-a' })
     await catalog.refresh()
-    expect(catalog.sessions.filter(row => row.nativeSessionId === 'history-id')).toHaveLength(2)
+    expect(catalog.sessions.filter(row => row.nativeSessionId === 'history-id')).toHaveLength(opened ? 2 : 1)
   })
 
   it('keeps incomplete empty metadata visible without turning positive history into a failed source', async () => {
@@ -1551,6 +1553,43 @@ it('HistorySupport_ColdEnableReloadsHistory_059', async () => {
   const { useCliSupportStore } = await import('@/stores/cliSupport')
   useCliSupportStore().setCliEnabled('codex', true)
   await vi.waitFor(() => expect(catalog.sessions.some(row => row.cli === 'codex' && row.nativeSessionId === 'history-id')).toBe(true))
+})
+
+// 工具开关只改变对应来源，不重扫另一个 CLI 或重新验证其折叠 lease。
+it('HistorySupport_CodexToggleDoesNotReloadClaude_086', async () => {
+  persisted.archivedSessions = { '/repo': ['codex'] }
+  useProjectsStateStore().archivedSessions.set('/repo', ['codex'])
+  const configured = await io.profiles()
+  io.profiles.mockResolvedValue({ ...configured, profiles: [...configured.profiles, { ...configured.profiles[0], id: 'cl', cli: 'claude' }] })
+  io.scope.mockImplementation(async target => ({ cli: target.profileId === 'cl' ? 'claude' : 'codex', sourceRootKey: 'root', profileId: target.profileId }))
+  io.read.mockImplementation(async query => ({ state: 'ready', items: [{ type: 'session', projectId: 'project', sessionKey: query.source.cli, nativeSessionId: query.source.cli, title: query.source.cli + ' title', cwd: '/repo' }], hasMore: false }))
+  const { runtime } = render(); await runtime.refresh(); await flushPromises()
+  const before = useUnifiedSessionsStore().sessions.filter(row => row.cli === 'claude')
+  const { useCliSupportStore } = await import('@/stores/cliSupport')
+  vi.clearAllMocks()
+  useCliSupportStore().setCliEnabled('codex', false); await flushPromises()
+  expect(io.projects).not.toHaveBeenCalled(); expect(io.profiles).not.toHaveBeenCalled()
+  expect(io.scope).not.toHaveBeenCalled(); expect(io.legacyRoot).not.toHaveBeenCalled()
+  expect(useUnifiedSessionsStore().sessions.filter(row => row.cli === 'claude')).toEqual(before)
+  useCliSupportStore().setCliEnabled('codex', true); await flushPromises()
+  expect(io.scope.mock.calls.map(([target]) => target.profileId)).toEqual(['cx'])
+  expect(io.legacyRoot).not.toHaveBeenCalled()
+  expect(useUnifiedSessionsStore().sessions.some(row => row.cli === 'codex')).toBe(true)
+})
+
+// 开启尚未返回时再次关闭，旧 scope/read 完成不能复活已停用的历史。
+it('HistorySupport_RapidToggleRejectsLateSource_087', async () => {
+  localStorage.setItem('cc-desk-cli-support-v1',JSON.stringify({ claude:true,codex:false }))
+  const { runtime } = render(); await runtime.refresh(); await flushPromises()
+  let release!: (value: unknown) => void
+  io.scope.mockImplementation(() => new Promise(resolve => { release = resolve }))
+  const { useCliSupportStore } = await import('@/stores/cliSupport')
+  useCliSupportStore().setCliEnabled('codex',true); await flushPromises()
+  expect(io.scope).toHaveBeenCalledTimes(1)
+  useCliSupportStore().setCliEnabled('codex',false); await flushPromises()
+  release({ cli:'codex',sourceRootKey:'root' }); await flushPromises(); await flushPromises()
+  expect(useUnifiedSessionsStore().sessions.filter(row => row.cli === 'codex')).toEqual([])
+  expect(io.ptyKill).not.toHaveBeenCalled()
 })
 
 // 模板 ID 不能证明 false 是旧默认值：用户关闭后刷新不得覆写，也不应增加 revision。

@@ -119,8 +119,15 @@ Terminal rename ports continue rejecting command
 injection; no draft clearing or guessed editor state is permitted.
 Selection cancels unissued operations; issued operations retain their exact owner.
 Cross-profile duplicate history rows fold by full physical source identity, preserving
-distinct opened owners and archive state. Titles never decide identity. All matching
+distinct opened owners. A closed archived representative hides its closed ordinary
+twin; restore clears every exact full-key alias for that physical record. Titles never decide identity. All matching
 source caches refresh after rename so close/reopen cannot restore a stale title.
+
+CLI support changes refresh only the changed CLI's sources and catalog projection.
+Codex toggles neither reload Claude history nor revalidate its default-root lease.
+Per-CLI and per-project request ownership reject late replacement. An opened Native
+attempt retains its last proven CLI title while history is hidden; this display-only
+snapshot supplies no root proof and expires with its attempt or source identity.
 
 Closed non-archived history exposes Rename without resuming or selecting a
 terminal. Its original source owner admits the inline editor and native operation.

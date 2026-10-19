@@ -328,7 +328,7 @@ npm run tauri:build        # 生产构建
 ### Unified workspace session facade
 
 - New Claude and Codex sessions use the Native adapter; historical resume retains the catalog runtime. Native operations never fall back to Legacy PTY commands.
-- Scoped catalog refresh replaces only that project. Per-project request ownership prevents distinct concurrent refreshes or late full refreshes from dropping newer projections.
+- Scoped catalog refresh replaces only that project or CLI. Per-project and per-CLI request ownership prevents late reads from dropping newer projections. A CLI support toggle refreshes only that CLI's history and catalog; Codex toggles do not read Claude history or revalidate its root lease. Proven identical closed physical records retain one archived representative rather than an ordinary twin; opened owners remain separate. Archive restore clears exact full-key aliases only after current source validation in the canonical writer queue. Bare Legacy archive IDs are Claude-only and require a unique proven physical source.
 - Archived records remain in the addressable catalog, while normal project groups hide them. Legacy archive IDs retain compatibility; Native archive IDs include runtime, CLI, project and authenticated history session identity to avoid cross-source collisions.
 - Native active archive requires an exact known history origin; ambiguous origins fail before process side effects. Execution evidence and remaining gates are recorded in `docs/superpowers/execution/unified-workspace-progress.md`.
 

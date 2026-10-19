@@ -175,15 +175,22 @@ Legacy exact-key fallback; it never scans saved records by UUID/project or
 reconstructs another profile, revision, root or registration's history identity.
 
 Display-only folding across profiles requires full CLI/root/registered-project/path/
-native-ID/session-key identity and the same archive state. Opened owners remain
-separate. Native rename clears aliases and refreshes all exact physical projections;
+native-ID/session-key identity. Closed archived projections take precedence over
+ordinary closed twins; opened owners remain separate. Explicit archive restore clears
+all exact full-key aliases after rechecking current source identity in the metadata
+writer queue. Loading or failed retained entries cannot authorize those writes.
+Native rename clears aliases and refreshes all exact physical projections;
 each opened companion must still own that same record. A Legacy historical alias
 clears only after fresh proof that its root is the renamed physical Claude root.
 
 Legacy folding revalidates the runtime's initial physical root key for each
-catalog projection and Native bare-ID archive restore. A changed, unavailable or
+Claude catalog projection, Legacy history admission/restore and Native bare-ID archive restore. A changed, unavailable or
 unverifiable root retires that folding lease until a fresh runtime is created;
 existing terminal and cached-history proofs are never rebound to a new directory.
+Closed Legacy cache rows stop publishing after lease retirement; positive Native
+archive display proof remains marked unavailable and cannot authorize a restore.
+Bare Legacy archive IDs apply only to Claude, with complete physical aliases counted
+as one source; unknown or distinct physical sources remain ambiguous.
 Multiple Native candidates or an ambiguous replacement keep the Legacy archive
 restore owner visible. A new Legacy PTY generation clears its previous proof
 before publishing the new generation; only its own PTY receipt can set it again.

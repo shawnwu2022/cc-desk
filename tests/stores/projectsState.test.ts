@@ -66,6 +66,41 @@ beforeEach(async () => {
 })
 
 describe('durable shared projects state', () => {
+  it('MetadataGuard_SynchronousAdmissionHasNoExtraYield_008', async () => {
+    const api = await import('@/api/tauri')
+    const store = useProjectsStateStore(); await store.load()
+    let current = true
+    vi.mocked(api.archiveSession).mockImplementation(async () => {
+      expect(current).toBe(true)
+      return emptyState()
+    })
+    await store.archiveSession('/repo', 'session', () => { queueMicrotask(() => { current = false }) })
+  })
+  it('ArchiveRestore_FinalGuardFollowsAsyncProof_009', async () => {
+    const api = await import('@/api/tauri')
+    const store = useProjectsStateStore(); await store.load()
+    let current = true
+    await expect(store.restoreSession('/repo', 'session', () => {
+      if (!current) throw new Error('STALE_SESSION_ATTEMPT')
+    }, async () => { current = false })).rejects.toThrow('STALE_SESSION_ATTEMPT')
+    expect(api.restoreSession).not.toHaveBeenCalled()
+  })
+  it('ArchiveRestore_QueuedOwnerIsRechecked_007', async () => {
+    const api = await import('@/api/tauri')
+    const pending = deferred<ProjectsState>()
+    vi.mocked(api.pinProject).mockReturnValueOnce(pending.promise)
+    const store = useProjectsStateStore(); await store.load()
+    const pinning = store.pinProject('/repo')
+    let current = true
+    const restoring = store.restoreSession('/repo', 'session', () => {
+      if (!current) throw new Error('SOURCE_UNAVAILABLE')
+    })
+    const rejected = expect(restoring).rejects.toThrow('SOURCE_UNAVAILABLE')
+    await vi.waitFor(() => expect(api.pinProject).toHaveBeenCalledOnce())
+    current = false; pending.resolve(emptyState())
+    await pinning; await rejected
+    expect(api.restoreSession).not.toHaveBeenCalled()
+  })
   it('opening metadata uses the atomic open-only mode and preserves a queued rename', async () => {
     const api = await import('@/api/tauri')
     let records: Record<string, SessionUiRecord> = { native: { ...nativeRecord, title: 'Existing title', lastOpenedAt: 10 } }
