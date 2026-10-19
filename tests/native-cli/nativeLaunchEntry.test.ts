@@ -50,7 +50,7 @@ function input(overrides: Record<string, unknown> = {}) {
 
 describe('D23 native launch/recovery user entry', () => {
   // NativeCliTerminal 传入真实 Pinia tab.action；代理对象必须经过字段校验生成独立请求。
-  it.each(['claude', 'codex'] as const)('Launch_RealStoreAction_010: %s', async cli => {
+  it.each(['claude', 'codex', 'opencode'] as const)('Launch_RealStoreAction_010: %s', async cli => {
     setActivePinia(createPinia())
     const tabs = useNativeTabsStore()
     const created = tabs.create({ cli, projectId: 'project', projectPath: 'C:\\repo', profileId: `${cli}-main`, profileRevision: '7', action: { kind: 'new' } })

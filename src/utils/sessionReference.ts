@@ -54,7 +54,7 @@ export function parseSessionDragPayload(raw: unknown): SessionReferencePayload |
   if (typeof payload !== 'object' || payload === null) return null
   const { title, cli, projectPath, sessionId } = payload as Record<string, unknown>
   if (typeof title !== 'string' || typeof projectPath !== 'string' || typeof sessionId !== 'string') return null
-  if ((cli !== 'claude' && cli !== 'codex') || !sessionId) return null
+  if ((cli !== 'claude' && cli !== 'codex' && cli !== 'opencode') || !sessionId) return null
   return { title, cli, projectPath, sessionId }
 }
 
