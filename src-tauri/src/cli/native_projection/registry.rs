@@ -295,9 +295,6 @@ impl ScopeRegistry {
             &mut budget,
         )
         .map_err(safe)?;
-        if !budget.history_read_failures().is_empty() {
-            return Err(safe("SESSION_ORIGIN_AMBIGUOUS"));
-        }
         let mut matched = None;
         for item in items {
             if let ResourceItem::Session {
@@ -318,6 +315,9 @@ impl ScopeRegistry {
         }
         g.current().map_err(safe)?;
         let (native_id, cwd) = matched.ok_or_else(|| safe("SESSION_NOT_FOUND"))?;
+        if budget.rename_target_may_be_omitted(&native_id) {
+            return Err(safe("SESSION_ORIGIN_AMBIGUOUS"));
+        }
         if uuid::Uuid::parse_str(&native_id).is_err() {
             return Err(safe("SESSION_ORIGIN_AMBIGUOUS"));
         }

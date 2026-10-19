@@ -415,6 +415,166 @@ fn NativeRename_ClaudeValidPlainScopePinsExactTranscript_011() {
         .to_string_lossy()
         .starts_with(".ccdesk-rename-")));
 }
+
+// 无关的普通会话空桩不能让已确认身份的其它会话全部失去改名能力。
+#[test]
+#[allow(non_snake_case)]
+fn NativeRename_IsolatedOtherClaudeStubDoesNotBlockTarget_019() {
+    let root = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let registry = ScopeRegistry::new(4);
+    let mut g = grant(root.path(), "unused", Arc::new(AtomicBool::new(true)));
+    fs::remove_file(root.path().join("projects/p/same.jsonl")).unwrap();
+    let id = "00000000-0000-4000-8000-000000000019";
+    fs::write(root.path().join(format!("projects/p/{id}.jsonl")), format!("{}\n", serde_json::json!({"type":"user","sessionId":id,"cwd":project.path(),"message":{"content":"target"}}))).unwrap();
+    fs::write(
+        root.path()
+            .join("projects/p/00000000-0000-4000-8000-000000000099.jsonl"),
+        "",
+    )
+    .unwrap();
+    g.projects = vec![AdmittedProject {
+        id: "project".into(),
+        root: Root::open(project.path()).unwrap(),
+        paths: vec![project.path().to_owned()],
+    }];
+    if let ScopeTarget::Profile { project_ids, .. } = &mut g.target {
+        *project_ids = vec!["project".into()];
+    }
+    let source = registry.register(g).unwrap();
+    let key = serde_json::to_string(&serde_json::json!([
+        "local",
+        "claude",
+        source.source_root_key,
+        id
+    ]))
+    .unwrap();
+    let authority = registry.authorize_rename(&owner(), &source, &key).unwrap();
+    authority.verify_claude(None).unwrap();
+    let private = authority.prepare_claude().unwrap();
+    let bridge = private
+        .install_bridge(crate::cli::native_rename::claude::embedded_bridge())
+        .unwrap();
+    let environment = std::env::vars_os().collect();
+    let mut child =
+        crate::cli::native_rename::claude::command(&environment, &bridge, &private.path)
+            .unwrap()
+            .spawn()
+            .unwrap();
+    let result = crate::cli::native_rename::claude::process(
+        &mut child,
+        &authority,
+        "Recovered native title",
+        &|| Ok(()),
+    );
+    let _ = child.kill();
+    let _ = child.wait();
+    result.unwrap();
+    authority
+        .verify_claude(Some("Recovered native title"))
+        .unwrap();
+    let refreshed = registry.read(&owner(), &request(source)).unwrap();
+    assert!(refreshed.items.iter().any(|item| matches!(item, ResourceItem::Session { title, .. } if title == "Recovered native title")));
+    assert!(fs::read(
+        root.path()
+            .join("projects/p/00000000-0000-4000-8000-000000000099.jsonl")
+    )
+    .unwrap()
+    .is_empty());
+}
+
+// 省略只有明确排除目标身份时才不阻断；跨项目重复、未知子树和目标尾读失败仍拒绝。
+#[test]
+#[allow(non_snake_case)]
+fn NativeRename_IsolationRetainsTargetAndUnknownGuards_020() {
+    for scenario in [
+        "duplicate",
+        "unknown-tree",
+        "noncanonical",
+        "target-tail",
+        "codex-anonymous",
+        "codex-known-other",
+        "codex-same-id-alias",
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let registry = ScopeRegistry::new(4);
+        let mut g = grant(root.path(), "unused", Arc::new(AtomicBool::new(true)));
+        fs::remove_file(root.path().join("projects/p/same.jsonl")).unwrap();
+        let id = "00000000-0000-4000-8000-000000000020";
+        let codex = scenario.starts_with("codex");
+        if codex {
+            g.cli = CliKind::Codex;
+            fs::create_dir(root.path().join("sessions")).unwrap();
+            fs::write(root.path().join("sessions/target.jsonl"), format!("{}\n{}\n", serde_json::json!({"type":"session_meta","payload":{"id":id,"cwd":project.path(),"source":"cli"}}),serde_json::json!({"type":"event_msg","payload":{"type":"user_message","message":"target"}}))).unwrap();
+            let other = if matches!(scenario, "codex-known-other" | "codex-same-id-alias") {
+                let other_id = if scenario == "codex-same-id-alias" {
+                    id.replace('-', "")
+                } else {
+                    "00000000-0000-4000-8000-000000000099".into()
+                };
+                format!(
+                    "{}\n",
+                    serde_json::json!({"type":"session_meta","payload":{"id":other_id,"source":"cli"}})
+                )
+            } else {
+                String::new()
+            };
+            fs::write(root.path().join("sessions/other.jsonl"), other).unwrap();
+        } else {
+            let target = root.path().join(format!("projects/p/{id}.jsonl"));
+            let mut data = format!("{}\n", serde_json::json!({"type":"user","sessionId":id,"cwd":project.path(),"message":{"content":"target"}})).into_bytes();
+            match scenario {
+                "duplicate" => {
+                    fs::create_dir(root.path().join("projects/q")).unwrap();
+                    fs::write(root.path().join(format!("projects/q/{id}.jsonl")), "").unwrap();
+                }
+                "unknown-tree" => {
+                    fs::create_dir_all(root.path().join("projects/p/session/unknown")).unwrap()
+                }
+                "noncanonical" => {
+                    fs::write(root.path().join("projects/p/unknown.jsonl"), "").unwrap()
+                }
+                "target-tail" => {
+                    for _ in 0..6000 {
+                        data.extend_from_slice(
+                            b"{\"type\":\"progress\",\"padding\":\"fixture\"}\n",
+                        );
+                    }
+                    data.extend_from_slice(b"\xff\n");
+                }
+                _ => unreachable!(),
+            }
+            fs::write(target, data).unwrap();
+        }
+        g.projects = vec![AdmittedProject {
+            id: "project".into(),
+            root: Root::open(project.path()).unwrap(),
+            paths: vec![project.path().to_owned()],
+        }];
+        if let ScopeTarget::Profile { project_ids, .. } = &mut g.target {
+            *project_ids = vec!["project".into()];
+        }
+        let source = registry.register(g).unwrap();
+        let key = serde_json::to_string(&serde_json::json!([
+            "local",
+            if codex { "codex" } else { "claude" },
+            source.source_root_key,
+            id
+        ]))
+        .unwrap();
+        let result = registry.authorize_rename(&owner(), &source, &key);
+        if scenario == "codex-known-other" {
+            assert!(result.is_ok(), "{scenario}");
+        } else {
+            assert_eq!(
+                result.err().unwrap().code,
+                "SESSION_ORIGIN_AMBIGUOUS",
+                "{scenario}"
+            );
+        }
+    }
+}
 #[test]
 fn incomplete_history_survives_filtering_and_empty_pages() {
     let t = tempfile::tempdir().unwrap();
@@ -1020,6 +1180,7 @@ fn history_snapshot_accounts_allocated_capacity_and_retains_partial_flags() {
         title_unknown: None,
         title_source: None,
         metadata_incomplete: None,
+        read_failure: None,
         cwd: None,
         updated_at: None,
         created_at: None,
@@ -1058,6 +1219,7 @@ fn HistorySnapshot_CreationTimeCapacityIsBounded_001() {
         title_unknown: None,
         title_source: None,
         metadata_incomplete: None,
+        read_failure: None,
         cwd: None,
         updated_at: None,
         created_at: Some(created),

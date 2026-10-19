@@ -71,12 +71,90 @@ class FakeLegacyStore implements LegacyClaudeStorePort {
     this.events.push(`archive:${projectPath}:${sessionId}`)
   }
 
-  async restoreSession(projectPath: string, sessionId: string): Promise<void> {
+  async restoreSession(projectPath: string, sessionId: string, beforeMutation?: () => void, prepareMutation?: () => Promise<void>): Promise<void> {
+    if (prepareMutation) await prepareMutation()
+    beforeMutation?.()
     const key = projectPath.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
     this.archived.set(key, (this.archived.get(key) ?? []).filter(id => id !== sessionId))
     this.events.push(`restore:${projectPath}:${sessionId}`)
   }
 }
+
+// 先前证明的根失效后，不允许旧缓存作为新来源复活；已打开的进程 owner 保留。
+it('LegacyHistory_RetiredRootDoesNotReviveCachedRows_026', async () => {
+  const store = new FakeLegacyStore()
+  store.history.set('/repo', [{ sessionId:'old-id',name:'Old cached',projectPath:'/repo',lastActiveAt:1 }])
+  const root = vi.fn<() => Promise<string | undefined>>().mockResolvedValue('root')
+  const adapter = createLegacyClaudeAdapter({ store, validateHistoryRoot:root, projectPaths:() => ['/repo'],
+    runtime:{ startTab:vi.fn(),stopTab:vi.fn(),restartTab:vi.fn(),renameTab:vi.fn() } })
+  expect((await adapter.listSessions()).map(row => row.nativeSessionId)).toEqual(['old-id'])
+  const opened = store.createTab('/repo', { sessionId:'opened' })
+  root.mockResolvedValue(undefined)
+  expect((await adapter.listSessions()).map(row => row.adapterSessionId)).toEqual([opened])
+  root.mockResolvedValue('replacement-root')
+  expect((await adapter.listSessions()).map(row => row.adapterSessionId)).toEqual([opened])
+})
+
+// 列表之后、操作之前失去根证明也必须在首次元数据写入前拒绝。
+it('LegacyHistory_RestoreRechecksRootBeforeWrite_027', async () => {
+  const store = new FakeLegacyStore()
+  store.history.set('/repo',[{ sessionId:'old-id',name:'Old',projectPath:'/repo',lastActiveAt:1 }])
+  store.archived.set('/repo',['old-id'])
+  const root = vi.fn<() => Promise<string | undefined>>().mockResolvedValue('root')
+  const adapter = createLegacyClaudeAdapter({ store, validateHistoryRoot:root,projectPaths:() => ['/repo'],
+    runtime:{ startTab:vi.fn(),stopTab:vi.fn(),restartTab:vi.fn(),renameTab:vi.fn() } })
+  const row = (await adapter.listSessions())[0]
+  root.mockResolvedValue(undefined)
+  await expect(adapter.restoreArchivedSession(row.id)).rejects.toThrow('SOURCE_UNAVAILABLE')
+  expect(store.archived.get('/repo')).toEqual(['old-id'])
+})
+it('LegacyHistory_QueuedRestoreRechecksRootBeforeWrite_028', async () => {
+  const store = new FakeLegacyStore()
+  store.history.set('/repo', [{ sessionId: 'old-id', name: 'Old', projectPath: '/repo', lastActiveAt: 1 }])
+  store.archived.set('/repo', ['old-id'])
+  const root = vi.fn<() => Promise<string | undefined>>().mockResolvedValue('root')
+  let release!: () => void
+  const queued = new Promise<void>(resolve => { release = resolve })
+  const restore = store.restoreSession.bind(store)
+  vi.spyOn(store, 'restoreSession').mockImplementation(async (path, id, beforeMutation?: () => void, prepareMutation?: () => Promise<void>) => {
+    await queued; await restore(path, id, beforeMutation, prepareMutation)
+  })
+  const adapter = createLegacyClaudeAdapter({ store, validateHistoryRoot: root, projectPaths: () => ['/repo'],
+    runtime: { startTab: vi.fn(), stopTab: vi.fn(), restartTab: vi.fn(), renameTab: vi.fn() } })
+  const row = (await adapter.listSessions())[0]
+  const restoring = adapter.restoreArchivedSession(row.id)
+  await vi.waitFor(() => expect(store.restoreSession).toHaveBeenCalledOnce())
+  root.mockResolvedValue(undefined); release()
+  await expect(restoring).rejects.toThrow('SOURCE_UNAVAILABLE')
+  expect(store.archived.get('/repo')).toEqual(['old-id'])
+})
+
+// 首次根证明未知、失败或仍在等待时，都不能把“尚未退休”当成恢复准入。
+it.each(['unknown', 'failed', 'pending'] as const)('LegacyHistory_RestoreRequiresInitialRootProof_029 %s', async state => {
+  const store = new FakeLegacyStore(); store.archived.set('/repo', ['old-id'])
+  let release!: () => void
+  const pending = new Promise<undefined>(resolve => { release = () => resolve(undefined) })
+  const root = vi.fn(() => state === 'pending' ? pending : state === 'failed' ? Promise.reject(new Error('unavailable')) : Promise.resolve(undefined))
+  const adapter = createLegacyClaudeAdapter({ store, validateHistoryRoot: root, projectPaths: () => ['/repo'],
+    runtime: { startTab: vi.fn(), stopTab: vi.fn(), restartTab: vi.fn(), renameTab: vi.fn() } })
+  const restoring = adapter.restoreArchivedSession('legacy-history:/repo:old-id')
+  const rejected = expect(restoring).rejects.toThrow('SOURCE_UNAVAILABLE')
+  await Promise.resolve(); expect(store.events).toEqual([])
+  release(); await rejected
+  expect(store.archived.get('/repo')).toEqual(['old-id'])
+})
+
+it.each(['unknown', 'failed'] as const)('LegacyHistory_InitialRootFailureDoesNotStartHistory_030 %s', async state => {
+  const store = Object.assign(new FakeLegacyStore(), { loadHistoryFor: vi.fn(async () => ({ ok: true as const,
+    sessions: [{ sessionId: 'old-id', name: 'Old', projectPath: '/repo', lastActiveAt: 1 }] })) })
+  const start = vi.fn()
+  const adapter = createLegacyClaudeAdapter({ store, validateHistoryRoot: async () => {
+    if (state === 'failed') throw new Error('unavailable')
+    return undefined
+  }, projectPaths: () => ['/repo'], runtime: { startTab: start, stopTab: vi.fn(), restartTab: vi.fn(), renameTab: vi.fn() } })
+  await expect(adapter.resumeSession({ cli: 'claude', projectKey: '/repo', projectPath: '/repo', adapterSessionId: 'old-id', nativeSessionId: 'old-id' })).rejects.toThrow('SOURCE_UNAVAILABLE')
+  expect(start).not.toHaveBeenCalled(); expect(store.loadHistoryFor).not.toHaveBeenCalled(); expect(store.tabs.size).toBe(0)
+})
 
 function runtime(store: FakeLegacyStore): LegacyClaudeRuntimePort {
   return {

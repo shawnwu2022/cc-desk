@@ -7,7 +7,7 @@ import { createNativeId } from '@/utils/nativeId'
 import { useAppStore } from '@/stores/app'
 import { useSessionStore } from '@/stores/session'
 import { useNativeTabsStore, captureNativeAttempt, matchesNativeAttempt, type NativeCliTab } from '@/stores/nativeTabs'
-import { createNativeHistoryReader, nativeHistoryContextKey, useNativeHistoryStore } from '@/stores/nativeHistory'
+import { createNativeHistoryReader, nativeHistoryContextKey, useNativeHistoryStore, type NativeHistoryEntry } from '@/stores/nativeHistory'
 import { useNewSessionDraftStore } from '@/stores/newSessionDraft'
 import { useCliProfilesStore } from '@/stores/cliProfiles'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -22,7 +22,7 @@ import { createNativeCliAdapter, type NativeRuntimeCreateInput, type NativeResta
 import { mapSafeUserError, safeUserErrorCode } from '@/utils/userError'
 import { projectSessionDiagnostics } from '@/utils/sessionDiagnostics'
 import { normalizePath, sameProjectPath } from '@/utils/path'
-import { createWorkspaceSourceWarnings, workspaceWarningKey, type WorkspaceSourceConfiguration, type WorkspaceSourceWarning, type WorkspaceWarningSource } from '@/utils/workspaceSourceWarnings'
+import { createWorkspaceSourceWarnings, workspaceWarningKey, type WorkspaceHistoryIssue, type WorkspaceSourceConfiguration, type WorkspaceSourceWarning, type WorkspaceWarningSource } from '@/utils/workspaceSourceWarnings'
 import type { OpenTerminalSession, UnifiedTerminalHostPort } from '@/terminal/unifiedTerminalHost'
 import type { UnifiedCliKind, UnifiedSession } from '@/types/unifiedSession'
 
@@ -46,25 +46,38 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   /** 根证明只绑定本 runtime 初始目录；替换或验证失败即撤销，不能重绑旧终端和缓存。 */
   let legacyClaudeRoot: string | undefined
   let legacyRootRetired = false
+  let legacyRootFailure: 'SOURCE_CHANGED' | 'SOURCE_UNAVAILABLE' | undefined
   let legacyRootValidation: Promise<string | undefined> | undefined
   function validateLegacyClaudeRoot(): Promise<string | undefined> {
     const expected = legacyClaudeRoot
     if (!expected || legacyRootRetired || disposed) return Promise.resolve(undefined)
     if (legacyRootValidation) return legacyRootValidation
-    const retire = () => {
+    const retire = (code: 'SOURCE_CHANGED' | 'SOURCE_UNAVAILABLE') => {
       if (disposed || legacyRootRetired) return
       legacyRootRetired = true
       legacyClaudeRoot = undefined
+      legacyRootFailure = code
+      if (cliSupport.isEnabled('claude')) {
+        const warnings = createWorkspaceSourceWarnings(sourceWarnings.value, sourceWarningsTruncated.value)
+        const warning = warnings.add('legacy-history', { code })
+        sourceWarnings.value = warnings.items
+        sourceWarningsTruncated.value = warnings.truncated
+        sourceNoticeKeys.value = [...new Set([...sourceNoticeKeys.value, workspaceWarningKey(warning)])]
+        error.value = 'workspaceRuntimePartial'
+      }
       // 证明属于整个旧根：局部读取发现撤销时，其他依赖项目也必须解除折叠。
-      queueCatalogProjects(...history.all().filter(entry => entry.sourceRootKey === expected).map(entry => entry.context.projectPath))
+      queueCatalogProjects(...legacyPaths.value, ...projects.pinnedProjects,
+        ...[...legacy.tabs.values()].map(tab => tab.projectPath),
+        ...catalog.sessions.filter(row => row.runtime === 'legacy-claude').map(row => row.projectPath),
+        ...history.all().filter(entry => entry.sourceRootKey === expected).map(entry => entry.context.projectPath))
     }
     const validation = legacyClaudeRootKey().then(proof => {
       if (disposed || legacyRootRetired) return undefined
       if (proof?.rootKey === expected) return expected
-      retire()
+      retire('SOURCE_CHANGED')
       return undefined
     }).catch(() => {
-      retire()
+      retire('SOURCE_UNAVAILABLE')
       return undefined
     }).finally(() => {
       if (legacyRootValidation === validation) legacyRootValidation = undefined
@@ -110,8 +123,10 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   })
   // Fixed diagnostics + canonical context/root identity, never raw transcript data.
   // Project navigation does not reset this workspace-owned acknowledgement.
-  const historyNoticeKeys = computed(() => currentHistoryEntries.value.filter(entry => (entry.readFailures?.length ?? 0) > 0).map(entry =>
-    JSON.stringify([entry.key, entry.sourceRootKey ?? null, [...(entry.readFailures ?? [])].sort()])))
+  const historyNoticeKeys = computed(() => currentHistoryEntries.value.flatMap(entry => [
+    ...(entry.readFailures ?? []).map(code => JSON.stringify([entry.key, entry.sourceRootKey ?? null, code, 'source'])),
+    ...entry.sessions.filter(row => row.readFailure).map(row => JSON.stringify([entry.key, entry.sourceRootKey ?? null, row.readFailure, row.sessionKey])),
+  ]))
   const historyNoticeDismissed = computed(() => historyNoticeKeys.value.length > 0
     && historyNoticeKeys.value.every(key => acknowledgedHistoryWarnings.value.has(key)))
   // Adapter-owned forced reads (close/resume) can finish outside refresh(). Keep
@@ -127,6 +142,79 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   const sourceDiagnosticsWarnings = computed(() => sourceDiagnostics.value.warnings)
   const sourceDiagnosticsTruncated = computed(() => sourceDiagnostics.value.truncated)
   const sourceIssuesAvailable = computed(() => sourceDiagnosticsWarnings.value.length > 0 || historyMetadataPartial.value)
+  const allHistoryIssues = computed<WorkspaceHistoryIssue[]>(() => relevantHistoryEntries.value.flatMap(entry => {
+    if (entry.loading) return []
+    const source = entry.context.cli === 'claude' ? 'claude-history' as const : 'codex-history' as const
+    const configurationName = profiles.profile(entry.context.profileId)?.name ?? ''
+    const stage = entry.error ? entry.diagnosticStage : 'read-source-enumeration' as const
+    const issue = (code: string, session?: NativeHistoryEntry['sessions'][number]): WorkspaceHistoryIssue => ({
+      key: JSON.stringify([entry.key, entry.sourceRootKey ?? null, code, stage, session?.sessionKey ?? null]),
+      entryKey: entry.key, warningKey: workspaceWarningKey({ source, code, stage }), source, code, stage,
+      configurationName, projectPath: entry.context.projectPath,
+      ...(session ? { sessionId: session.nativeSessionId, sessionTitle: session.lastKnownTitle || session.title } : {}),
+    })
+    // 汇总没有条目身份时仍保留范围未知，不把同代码的其它会话推断为全部受影响条目。
+    return [...(entry.error ? [issue(entry.error)] : (entry.readFailures ?? []).map(code => issue(code))),
+      ...(!entry.error ? entry.sessions.filter(row => row.readFailure).map(row => issue(row.readFailure!, row)) : [])]
+  }).sort((a, b) => a.key.localeCompare(b.key, 'en')))
+  const historyIssues = computed(() => allHistoryIssues.value.slice(0, 48))
+  const historyIssuesTruncated = computed(() => allHistoryIssues.value.length > 48)
+  const historyRecoveryError = ref(false)
+  const historyRecoveryOwners = new Set<string>()
+  function currentHistoryIssue(key: string) {
+    const issue = allHistoryIssues.value.find(row => row.key === key)
+    const entry = issue && relevantHistoryEntries.value.find(row => row.key === issue.entryKey)
+    return issue && entry ? { issue, entry } : undefined
+  }
+  function reconcileHistoryWarningSnapshot(legacyWarnings?: readonly WorkspaceSourceWarning[]) {
+    const isHistory = (source: WorkspaceWarningSource) => source === 'claude-history' || source === 'codex-history'
+    const warnings = createWorkspaceSourceWarnings(sourceWarnings.value.filter(row => !isHistory(row.source)
+      && !(legacyWarnings && row.source === 'legacy-history')), sourceWarningsTruncated.value)
+    if (legacyWarnings) {
+      for (const warning of legacyWarnings) warnings.add(warning.source, warning)
+      if (cliSupport.isEnabled('claude') && legacyRootFailure) warnings.add('legacy-history', { code: legacyRootFailure })
+    }
+    const owners: Omit<WorkspaceSourceConfiguration, 'name'>[] = []
+    const identities = new Map<string, Set<string>>()
+    for (const entry of relevantHistoryEntries.value) if (entry.error) {
+      const warning = warnings.add(entry.context.cli === 'claude' ? 'claude-history' : 'codex-history', { code: entry.error, stage: entry.diagnosticStage })
+      const key = workspaceWarningKey(warning)
+      const set = identities.get(key) ?? new Set<string>()
+      set.add(JSON.stringify([key, entry.context.profileId, entry.context.profileRevision, entry.sourceRootKey ?? null]))
+      identities.set(key, set)
+      if (!owners.some(owner => owner.warningKey === key && owner.profileId === entry.context.profileId)) owners.push({ warningKey: key, profileId: entry.context.profileId, profileRevision: entry.context.profileRevision })
+    }
+    sourceWarnings.value = warnings.items
+    sourceWarningsTruncated.value = warnings.truncated
+    sourceConfigurationOwners.value = owners
+    sourceNoticeKeys.value = warnings.identityKeys().flatMap(key => [...(identities.get(key) ?? [key])])
+    if (warnings.truncated) sourceNoticeKeys.value.push('truncated')
+    const currentKeys = new Set(sourceNoticeKeys.value)
+    acknowledgedSourceWarnings.value = new Set([...acknowledgedSourceWarnings.value].filter(key => currentKeys.has(key)))
+    error.value = warnings.items.length && !fatal.value ? 'workspaceRuntimePartial' : null
+  }
+  async function retryHistoryIssue(key: string) {
+    const target = currentHistoryIssue(key)
+    if (!target || disposed || loading.value || historyRecoveryOwners.has(target.entry.key)) return
+    const context = { ...target.entry.context }
+    historyRecoveryOwners.add(target.entry.key)
+    historyRecoveryError.value = false
+    try {
+      // 只重新读取已授权配置/项目，不重放生命周期命令或改写 CLI 原始历史。
+      await history.load({ ...context, force: true, retainOnFailure: true }).catch(() => {})
+      if (disposed || !relevantHistoryEntries.value.some(row => row.key === target.entry.key)) return
+      reconcileHistoryWarningSnapshot()
+      await catalog.refresh(context.projectPath, { cli: context.cli })
+    } catch { historyRecoveryError.value = true }
+    finally { historyRecoveryOwners.delete(target.entry.key) }
+  }
+  async function openHistoryIssueProject(key: string) {
+    const target = currentHistoryIssue(key)
+    if (!target || disposed) return
+    historyRecoveryError.value = false
+    try { await openInFileManager(target.entry.context.projectPath) }
+    catch { historyRecoveryError.value = true }
+  }
   function retireHistoryAcknowledgements() {
     const current = new Set(historyNoticeKeys.value)
     acknowledgedHistoryWarnings.value = new Set([...acknowledgedHistoryWarnings.value].filter(key => current.has(key)))
@@ -322,7 +410,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
       return partial
     })
     const sessionAdapters = [
-      createLegacyClaudeAdapter({ store: legacy, metadata: projects, attention, validateHistoryRoot: validateLegacyClaudeRoot, captureProjectAdmission: app.captureProjectAdmission, projectPaths: () => [...new Set([...legacyPaths.value, ...projects.pinnedProjects])],
+      createLegacyClaudeAdapter({ store: legacy, metadata: projects, attention, validateHistoryRoot: validateLegacyClaudeRoot, historyRootRetired: () => legacyRootRetired, historyEnabled: () => cliSupport.isEnabled('claude'), captureProjectAdmission: app.captureProjectAdmission, projectPaths: () => [...new Set([...legacyPaths.value, ...projects.pinnedProjects])],
         runtime: {
           startTab: id => {
             const tab = legacy.tabs.get(id)
@@ -331,7 +419,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
           }, stopTab: id => requireHost().stopLegacy(id),
           restartTab: id => requireHost().restartLegacy(id), renameTab: (id, title, admission) => requireHost().renameLegacy(id, title, admission),
         } }),
-      createNativeCliAdapter({ tabs: native, history, metadata: projects, legacyClaudeRootKey: validateLegacyClaudeRoot, archive: { getArchivedSessions: legacy.getArchivedSessions, archiveSession: projects.archiveSession, restoreSession: projects.restoreSession },
+      createNativeCliAdapter({ tabs: native, history, metadata: projects, legacyClaudeRootKey: validateLegacyClaudeRoot, historyEnabled: cli => cliSupport.isEnabled(cli), archive: { getArchivedSessions: legacy.getArchivedSessions, archiveSession: projects.archiveSession, restoreSession: projects.restoreSession },
         nativeRename: { rename: nativeRenameSession },
         runSource: tab => nativeGetScope({kind:'run',runId:tab.runId,generation:tab.generation}),
         cliUnarchive: { unarchive: (context, nativeSessionId) => {
@@ -414,6 +502,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
         // Match the backend's two-reader budget; isolate each source failure.
         for (let i = 0; i < contexts.length && current(); i += 2) {
           await Promise.all(contexts.slice(i, i + 2).map(async group => {
+            if (!cliSupport.isEnabled(group.cli)) return
             try {
               const loaded = await history.loadGrouped(group, { force: true, retainOnFailure: true })
               for (const entry of loaded.values()) {
@@ -435,6 +524,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     // Even unavailable projects.json must not prevent the readable runtime catalog.
     await settle('catalog', () => catalog.refresh())
     if (!current()) return
+    if (legacyRootFailure && cliSupport.isEnabled('claude')) warnings.add('legacy-history', { code: legacyRootFailure })
     ready.value = true
     loading.value = false
     sourceWarnings.value = warnings.items
@@ -453,10 +543,51 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     error.value = warnings.items.length && !fatal.value ? 'workspaceRuntimePartial' : null
   }
 
-  // 支持开关切换后触发完整工作区刷新：catalog.refresh 只读历史缓存，停用期间
-  // 失效的 entry（含启动即停用的冷缓存）必须经由这里的历史观察组重新装载。
-  // Pinia 会解包 setup store 的 ref，必须用 getter 观察每次替换后的新对象。
-  watch(() => cliSupport.support, () => { if (!disposed) void refresh() })
+  const supportRefreshCLIs = new Set<UnifiedCliKind>()
+  const supportRefreshVersions = new Map<UnifiedCliKind, number>()
+  async function refreshSupport(cli: UnifiedCliKind) {
+    const version = (supportRefreshVersions.get(cli) ?? 0) + 1
+    supportRefreshVersions.set(cli, version)
+    const owner = refreshOwner
+    const on = cliSupport.isEnabled(cli)
+    const legacyWarnings = cli === 'claude' ? createWorkspaceSourceWarnings() : undefined
+    const current = () => !disposed && owner === refreshOwner && supportRefreshVersions.get(cli) === version && cliSupport.isEnabled(cli) === on
+    supportRefreshCLIs.add(cli)
+    try {
+      if (!on) {
+        for (const entry of history.all()) if (entry.context.cli === cli) history.invalidate(entry.context)
+      } else {
+        if (cli === 'claude') for (const path of new Set([...legacyPaths.value, ...projects.pinnedProjects, ...[...legacy.tabs.values()].map(tab => tab.projectPath)])) {
+          if (!current()) return
+          try {
+            if (!(await legacy.loadHistoryFor(path, true)).ok) legacyWarnings!.add('legacy-history')
+          } catch (failure) { legacyWarnings!.add('legacy-history', failure) }
+        }
+        const sources = profiles.profiles.filter(profile => profile.cli === cli)
+        for (let i = 0; i < sources.length && current(); i += 2) {
+          await Promise.allSettled(sources.slice(i, i + 2).map(async profile => {
+            if (!current() || profiles.profile(profile.id)?.revision !== profile.revision) return
+            await history.loadGrouped({ cli, profileId:profile.id, profileRevision:profile.revision,
+              projects:workspace.projects.map(project => ({ projectId:project.projectId, projectPath:project.selectedPath })) }, { force:true, retainOnFailure:true })
+          }))
+        }
+      }
+      if (!current()) return
+      reconcileHistoryWarningSnapshot(legacyWarnings?.items)
+      await catalog.refresh(undefined, { cli, background:true })
+    } catch {
+      if (current()) { reconcileHistoryWarningSnapshot(legacyWarnings?.items); error.value = 'workspaceRuntimePartial' }
+    } finally {
+      await nextTick()
+      if (supportRefreshVersions.get(cli) === version) supportRefreshCLIs.delete(cli)
+    }
+  }
+  // 开关只重装对应工具；其它来源的行、诊断与根证明不能因本次操作被重读。
+  watch(() => cliSupport.support, (next, previous) => {
+    if (disposed) return
+    if (!ready.value || loading.value) { void refresh(); return }
+    for (const cli of ['claude', 'codex'] as const) if (next[cli] !== previous[cli]) void refreshSupport(cli)
+  })
 
   async function resumeDirect(row: UnifiedSession, claimFeedback: (target: UnifiedSession) => void) {
     if (shell.section !== 'workspace') return
@@ -824,8 +955,8 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   // loading/requestEpoch/error 等读取进度不改变行，逐字段把全部历史项目入队会让
   // 单项目读取放大成全项目反复重扫（实测 8 项目一次重读 32 次刷新、24 次发布）。
   // 撤销/删除的 entry 也必须入队一次：行消失同样改变该项目投影。
-  const historySignatures = new Map<string, { path: string; signature: string }>()
-  type NativeIdProjects = { count: number; paths: Set<string> }
+  const historySignatures = new Map<string, { path: string; cli: UnifiedCliKind; signature: string }>()
+  type NativeIdProjects = { records: Set<string>; paths: Set<string> }
   let nativeIdProjects = new Map<string, NativeIdProjects>()
   const archiveSignatures = new Map<string, string>()
   watch(() => [history.all(), projects.archivedSessions] as const, () => {
@@ -835,9 +966,11 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     for (const entry of history.all()) {
       seenEntries.add(entry.key)
       const path = entry.context.projectPath
-      for (const row of entry.sessions) {
-        const identity = nextIdProjects.get(row.nativeSessionId) ?? { count: 0, paths: new Set<string>() }
-        identity.count++
+      for (const row of entry.context.cli === 'claude' ? entry.sessions : []) {
+        const identity = nextIdProjects.get(row.nativeSessionId) ?? { records: new Set<string>(), paths: new Set<string>() }
+        identity.records.add(entry.sourceRootKey
+          ? JSON.stringify([entry.sourceRootKey, entry.context.projectId, normalizePath(path), row.nativeSessionId, row.sessionKey])
+          : JSON.stringify([entry.key, row.sessionKey]))
         identity.paths.add(normalizePath(path))
         nextIdProjects.set(row.nativeSessionId, identity)
       }
@@ -846,24 +979,26 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
         row.sessionKey, row.nativeSessionId, row.archived ? 1 : 0, row.title,
         row.titleSource ?? '', row.lastKnownTitle ?? '', row.lastKnownTitleSource ?? '',
         row.updatedAt ?? '', row.lastKnownActivityAt ?? '', row.truncated ? 1 : 0,
-        row.metadataIncomplete ? 1 : 0, row.createdAt ?? '',
+        row.metadataIncomplete ? 1 : 0, row.readFailure ?? '', row.createdAt ?? '',
       ])])
       const previous = historySignatures.get(entry.key)
       if (previous && previous.signature === signature) continue
-      changed.add(normalizePath(path))
-      if (previous && previous.path !== path) changed.add(normalizePath(previous.path))
-      historySignatures.set(entry.key, { path, signature })
+      if (!supportRefreshCLIs.has(entry.context.cli)) {
+        changed.add(normalizePath(path))
+        if (previous && previous.path !== path) changed.add(normalizePath(previous.path))
+      }
+      historySignatures.set(entry.key, { path, cli:entry.context.cli, signature })
     }
     for (const [key, previous] of historySignatures) {
       if (seenEntries.has(key)) continue
       historySignatures.delete(key)
-      changed.add(normalizePath(previous.path))
+      if (!supportRefreshCLIs.has(previous.cli)) changed.add(normalizePath(previous.path))
     }
     // 裸 ID 归档的歧义依赖所有项目；仅唯一性改变才使相关归档项目失效。
     // 标题/读取进度不改变唯一性，不能借此扩散为全目录刷新。
     for (const id of new Set([...nativeIdProjects.keys(), ...nextIdProjects.keys()])) {
       const previous = nativeIdProjects.get(id), next = nextIdProjects.get(id)
-      if ((previous?.count === 1) === (next?.count === 1)) continue
+      if ((previous?.records.size === 1) === (next?.records.size === 1)) continue
       for (const path of new Set([...(previous?.paths ?? []), ...(next?.paths ?? [])])) {
         if (legacy.getArchivedSessions(path).includes(id)) changed.add(path)
       }
@@ -938,5 +1073,5 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     }
     catalogOwnerWatches.clear(); pendingCatalogProjects.clear()
   })
-  return { diagnostics, closeDiagnostics, openSessions, cliAvailability, cliProblems, fatal, ready, loading, error, sourceWarnings, sourceWarningsTruncated, sourceWarningConfigurations, sourceNoticeDismissed, historyNoticeDismissed, sourceIssuesAvailable, sourceDiagnosticsWarnings, sourceDiagnosticsTruncated, sourceChecksPending, dismissSourceNotice, historyMetadataPartial, historyReadWarnings, refresh, retryAction }
+  return { historyIssues, historyIssuesTruncated, historyRecoveryError, retryHistoryIssue, openHistoryIssueProject, diagnostics, closeDiagnostics, openSessions, cliAvailability, cliProblems, fatal, ready, loading, error, sourceWarnings, sourceWarningsTruncated, sourceWarningConfigurations, sourceNoticeDismissed, historyNoticeDismissed, sourceIssuesAvailable, sourceDiagnosticsWarnings, sourceDiagnosticsTruncated, sourceChecksPending, dismissSourceNotice, historyMetadataPartial, historyReadWarnings, refresh, retryAction }
 }

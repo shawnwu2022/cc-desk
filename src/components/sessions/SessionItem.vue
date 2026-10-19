@@ -210,11 +210,14 @@ function preventReferenceNativeDrag(event: DragEvent) {
     <div class="session-name-wrapper">
       <AppTooltip v-if="isRenaming" class="session-title-tooltip" :text="session.renameTarget ? t(session.renameTarget === 'resume-source' ? 'sessionRenameResumeSourceHint' : 'sessionRenameHistoryRecordHint', { id: session.nativeSessionId }) : ''">
         <AppInput ref="renameInput" v-model="renameValue" class="rename-input" size="compact"
-          :aria-label="t(session.renameTarget === 'resume-source' ? 'sessionRenameResumeSourceLabel' : session.renameTarget === 'history-record' ? 'sessionRenameHistoryRecordLabel' : 'sessionRenameLabel')" :invalid="renameInvalid" :disabled="isSaving"
+          :aria-label="t('sessionRenameLabel')" :invalid="renameInvalid" :disabled="isSaving"
           @click.stop @keydown.enter.stop.prevent="commitRename" @keydown.esc.stop.prevent="cancelRename" />
       </AppTooltip>
       <AppTooltip v-else class="session-title-tooltip" :text="session.title">
         <span class="session-name" tabindex="0">{{ session.title }}</span>
+      </AppTooltip>
+      <AppTooltip v-if="session.historyReadFailure" :text="t('historySessionReadIssue', { code: session.historyReadFailure })">
+        <span data-session-history-issue tabindex="0" :aria-label="t('historySessionReadIssue', { code: session.historyReadFailure })">!</span>
       </AppTooltip>
     </div>
     <div class="session-tail" @click.stop @dblclick.stop>
@@ -321,6 +324,7 @@ function preventReferenceNativeDrag(event: DragEvent) {
   pointer-events: none;
 }
 .session-archive-slot { width: 20px; height: 28px; }
+[data-session-history-issue] { color: var(--status-warning); flex-shrink: 0; font-weight: 600; }
 .session-archive-action { display: flex; justify-content: flex-end; align-items: center; opacity: 0; pointer-events: none; }
 .session-item:hover .session-archive-action, .session-item:focus-within .session-archive-action { opacity: 1; pointer-events: auto; }
 .session-overflow-trigger { width: 20px; height: 28px; opacity: 0; pointer-events: none; }

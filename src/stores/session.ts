@@ -874,8 +874,8 @@ export const useSessionStore = defineStore('session', () => {
     await projectsState.archiveSession(projectPath, sessionId, beforeMutation)
   }
 
-  async function restoreSession(projectPath: string, sessionId: string) {
-    await projectsState.restoreSession(projectPath, sessionId)
+  async function restoreSession(projectPath: string, sessionId: string, beforeMutation?: () => void, prepareMutation?: () => Promise<void>) {
+    await projectsState.restoreSession(projectPath, sessionId, beforeMutation, prepareMutation)
   }
 
   /**

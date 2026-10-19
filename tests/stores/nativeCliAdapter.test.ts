@@ -26,7 +26,51 @@ function history(cli: 'claude' | 'codex', root: string, nativeSessionId: string,
   }
 }
 
-function setup(tabs: NativeCliTab[], entries: NativeHistoryEntry[]) {
+it('CodexArchive_RestoreDoesNotValidateClaude_050', async () => {
+  setActivePinia(createPinia())
+  const entry = history('codex', '/root', 'session-9'); entry.sourceRootKey = '/root'
+  const root = vi.fn().mockRejectedValue(new Error('unrelated unavailable'))
+  const { adapter, archived, archive } = setup([], [entry], root)
+  const row = (await adapter.listSessions(undefined, 'codex'))[0]
+  archived.set('/repo', [row.id])
+  await adapter.restoreArchivedSession(row.id)
+  expect(root).not.toHaveBeenCalled()
+  expect(archive.restoreSession).toHaveBeenCalledOnce()
+  expect(archived.get('/repo')).toEqual([])
+})
+
+it.each(['claude', 'codex'] as const)('History_OpenedOwnerShowsCurrentReadFailure_051 %s', async cli => {
+  const entry = history(cli, 'root', 'session-1'); entry.sourceRootKey = 'root'
+  entry.sessions[0].readFailure = 'SOURCE_INVALID_TEXT'
+  const active = tab({ cli, profileId: entry.context.profileId, sourceSessionKey: entry.sessions[0].sessionKey })
+  const entries = [entry], { adapter } = setup([active], entries)
+  let rows = await adapter.listSessions()
+  expect(rows).toHaveLength(1)
+  expect(rows[0]).toMatchObject({ opened: true, historyReadFailure: 'SOURCE_INVALID_TEXT' })
+  delete entry.sessions[0].readFailure
+  expect((await adapter.listSessions())[0].historyReadFailure).toBeUndefined()
+  entry.sessions[0].readFailure = 'SOURCE_INVALID_TEXT'; await adapter.listSessions()
+  entries.splice(0)
+  rows = await adapter.listSessions()
+  expect(rows[0].historyReadFailure).toBeUndefined()
+  expect(rows[0].title).toBe(`${cli}-root`)
+})
+
+it.each(['loading', 'error', 'unloaded'] as const)('History_RestorePreflightsEveryExactAlias_052 %s', async failure => {
+  const first = history('codex', 'root', 'same'), second = history('codex', 'root', 'same')
+  first.sourceRootKey = second.sourceRootKey = 'root'; second.context.profileId = 'other-profile'
+  const { adapter, archived, archive } = setup([], [first, second])
+  const rows = await adapter.listSessions(undefined, 'codex'), keys = rows.map(row => row.id)
+  archived.set('/repo', keys)
+  if (failure === 'loading') second.loading = true
+  else if (failure === 'error') second.error = 'SOURCE_UNAVAILABLE'
+  else second.loaded = false
+  await expect(adapter.restoreArchivedSession(rows[0].id)).rejects.toThrow('STALE_SESSION_ATTEMPT')
+  expect(archive.restoreSession).not.toHaveBeenCalled()
+  expect(archived.get('/repo')).toEqual(keys)
+})
+
+function setup(tabs: NativeCliTab[], entries: NativeHistoryEntry[], legacyRoot?: () => Promise<string | undefined>) {
   const map = new Map(tabs.map(value => [value.tabId, value]))
   const setActive = vi.fn()
   const close = vi.fn((id: string) => map.delete(id))
@@ -38,11 +82,11 @@ function setup(tabs: NativeCliTab[], entries: NativeHistoryEntry[]) {
     renameTab: vi.fn().mockResolvedValue(undefined),
   }
   const archived = new Map<string, string[]>()
-  const archive = { getArchivedSessions: (path: string) => archived.get(path) ?? [], archiveSession: vi.fn(async (path: string, id: string) => { archived.set(path, [...(archived.get(path) ?? []), id]) }), restoreSession: vi.fn(async (path: string, id: string) => { archived.set(path, (archived.get(path) ?? []).filter(value => value !== id)) }) }
+  const archive = { getArchivedSessions: (path: string) => archived.get(path) ?? [], archiveSession: vi.fn(async (path: string, id: string) => { archived.set(path, [...(archived.get(path) ?? []), id]) }), restoreSession: vi.fn(async (path: string, id: string, beforeMutation?: () => void, prepareMutation?: () => Promise<void>) => { if (prepareMutation) await prepareMutation(); beforeMutation?.(); archived.set(path, (archived.get(path) ?? []).filter(value => value !== id)) }) }
   const cliUnarchive = { unarchive: vi.fn().mockResolvedValue(undefined) }
   const historyLoad = vi.fn(async () => entries[0])
   const metadata = { sessionRecords: new Map(), recordSessionOpened: vi.fn(async () => undefined), upsertSessionRecord: vi.fn(async (_key: string, _record: any, _beforeMutation?: () => void) => undefined) }
-  const adapter = createNativeCliAdapter({ tabs: { tabs: map, activeTabId: null, setActive, close, rename }, history: { all: () => entries, load: historyLoad }, runtime, archive, cliUnarchive, metadata })
+  const adapter = createNativeCliAdapter({ tabs: { tabs: map, activeTabId: null, setActive, close, rename }, history: { all: () => entries, load: historyLoad }, runtime, archive, cliUnarchive, metadata, legacyClaudeRootKey:legacyRoot })
   return { adapter, map, runtime, archive, cliUnarchive, setActive, archived, historyLoad, metadata }
 }
 
@@ -64,7 +108,7 @@ it('History_KeepLegacyArchiveOwner_037', async () => {
   expect(archived).toMatchObject({ archived: true, title: 'Legacy archived' })
   expect(catalog.sessions.find(row => row.runtime === 'native-cli')).toMatchObject({ archived: false })
   await catalog.restoreArchivedSession(archived!.id)
-  expect(restore).toHaveBeenCalledWith('/repo', 'session-1')
+  expect(restore).toHaveBeenCalledWith('/repo', 'session-1', expect.any(Function), expect.any(Function))
   expect(native.archive.restoreSession).not.toHaveBeenCalled()
 })
 
@@ -102,6 +146,98 @@ it.each([false, true])('History_PreserveEarlyTabRename_039 identity known: %s', 
 })
 
 describe('native CLI adapter', () => {
+  // 关闭历史投影不应把同一已打开 attempt 的 CLI 标题退回占位名；新 attempt 不继承。
+  it.each(['generation', 'profile', 'project', 'session', 'root', 'replacement'] as const)('History_ActiveTitleSurvivesHistoryRemoval_043 %s', async change => {
+    const entry = history('codex', 'root', 'session-1'); entry.sourceRootKey = 'root'
+    entry.sessions[0].title = 'Native renamed title'
+    const active = tab({ sourceSessionKey:entry.sessions[0].sessionKey, title:'Codex CLI' })
+    const entries = [entry], state = setup([active], entries)
+    expect((await state.adapter.listSessions())[0].title).toBe('Native renamed title')
+    entries.length = 0
+    expect((await state.adapter.listSessions())[0].title).toBe('Native renamed title')
+    if (change === 'generation') active.generation++
+    if (change === 'profile') active.profileRevision = '8'
+    if (change === 'project') active.projectId = 'replacement-project'
+    if (change === 'session') active.sourceSessionKey = 'replacement-session'
+    if (change === 'root') entries.push({ ...entry, sourceRootKey: 'replacement-root', sessions: [] })
+    if (change === 'replacement') state.map.set(active.tabId, { ...active })
+    expect((await state.adapter.listSessions())[0].title).toBe('Codex CLI')
+  })
+  // 恢复同一物理记录时先收集全部精确归档别名，不能刷新后又被另一 profile 的 key 归档。
+  it('History_RestoreAllProvenPhysicalArchiveKeys_044', async () => {
+    const a = history('claude','root','session-1'); a.sourceRootKey = 'root'
+    const b = { ...a, key:'other-profile',context:{ ...a.context,profileId:'other-profile' } }
+    const state = setup([], [a,b])
+    const rows = await state.adapter.listSessions()
+    for (const row of rows) await state.adapter.archiveSession(row.id)
+    await state.adapter.restoreArchivedSession(rows[0].id)
+    expect((await state.adapter.listSessions()).every(row => !row.archived)).toBe(true)
+    expect(state.archive.restoreSession).toHaveBeenCalledTimes(2)
+  })
+  // 历史归档的显示证据保留，但失效 lease 不能授权恢复写入。
+  it('History_RetiredLegacyArchiveProofIsDisplayOnly_045', async () => {
+    const entry = history('claude','root','session-1'); entry.sourceRootKey = 'root'
+    const root = vi.fn<() => Promise<string | undefined>>().mockResolvedValue('root')
+    const state = setup([], [entry],root); state.archived.set('/repo',['session-1'])
+    const row = (await state.adapter.listSessions())[0]; expect(row.archived).toBe(true)
+    root.mockResolvedValue(undefined)
+    expect((await state.adapter.listSessions())[0]).toMatchObject({ archived:true,safeErrorCode:'SOURCE_UNAVAILABLE' })
+    await expect(state.adapter.restoreArchivedSession(row.id)).rejects.toThrow('SESSION_ORIGIN_AMBIGUOUS')
+    expect(state.archive.restoreSession).not.toHaveBeenCalled()
+  })
+  // 同 root/UUID 也不能把 Claude 的裸归档键套给另一种 CLI。
+  it('History_LegacyBareArchiveDoesNotCrossCli_046', async () => {
+    const entry = history('codex','root','session-1'); entry.sourceRootKey = 'root'
+    const state = setup([], [entry],async () => 'root'); state.archived.set('/repo',['session-1'])
+    const row = (await state.adapter.listSessions())[0]
+    expect(row.archived).toBe(false)
+    await state.adapter.restoreArchivedSession(row.id)
+    expect(state.archive.restoreSession).not.toHaveBeenCalled()
+  })
+  it('History_LegacyBareArchiveSharesProvenPhysicalProfiles_047', async () => {
+    const a = history('claude', 'root', 'session-1'); a.sourceRootKey = 'root'
+    const b = { ...a, key: 'other-profile', context: { ...a.context, profileId: 'other-profile' } }
+    const state = setup([], [a, b], async () => 'root'); state.archived.set('/repo', ['session-1'])
+    const rows = await state.adapter.listSessions()
+    expect(rows.every(row => row.archived && !row.safeErrorCode)).toBe(true)
+    await state.adapter.restoreArchivedSession(rows[0].id)
+    expect((await state.adapter.listSessions()).every(row => !row.archived)).toBe(true)
+  })
+  it.each(['missing', 'loading', 'error', 'root'] as const)('History_QueuedRestoreDoesNotClearRetiredSource_048 %s', async change => {
+    const entry = history('claude', 'root', 'session-1'); entry.sourceRootKey = 'root'
+    const entries = [entry], state = setup([], entries)
+    const row = (await state.adapter.listSessions())[0]
+    await state.adapter.archiveSession(row.id)
+    let release!: () => void
+    const queued = new Promise<void>(resolve => { release = resolve })
+    const restore = state.archive.restoreSession.getMockImplementation()!
+    state.archive.restoreSession.mockImplementation(async (path, key, beforeMutation?: () => void, prepareMutation?: () => Promise<void>) => {
+      await queued; await restore(path, key, beforeMutation, prepareMutation)
+    })
+    const restoring = state.adapter.restoreArchivedSession(row.id)
+    await vi.waitFor(() => expect(state.archive.restoreSession).toHaveBeenCalledOnce())
+    if (change === 'missing') entries.length = 0
+    if (change === 'loading') entry.loading = true
+    if (change === 'error') entry.error = 'SOURCE_UNAVAILABLE'
+    if (change === 'root') entry.sourceRootKey = 'replacement-root'
+    release()
+    await expect(restoring).rejects.toThrow('STALE_SESSION_ATTEMPT')
+    expect(state.archived.get('/repo')).toEqual([row.id])
+  })
+  it('History_RootRecheckCannotBorrowAnotherProfileOwner_049', async () => {
+    const a = history('claude', 'root', 'session-1'); a.sourceRootKey = 'root'
+    const b = { ...a, key: 'other-profile', context: { ...a.context, profileId: 'other-profile' } }
+    let release!: (root: string) => void
+    const rootCheck = new Promise<string>(resolve => { release = resolve })
+    const root = vi.fn<() => Promise<string | undefined>>().mockResolvedValueOnce('root').mockResolvedValueOnce('root').mockReturnValue(rootCheck)
+    const entries = [a, b], state = setup([], entries, root); state.archived.set('/repo', ['session-1'])
+    const row = (await state.adapter.listSessions())[0]
+    const restoring = state.adapter.restoreArchivedSession(row.id)
+    await vi.waitFor(() => expect(root).toHaveBeenCalledTimes(3))
+    entries.shift(); release('root')
+    await expect(restoring).rejects.toThrow('STALE_SESSION_ATTEMPT')
+    expect(state.archived.get('/repo')).toEqual(['session-1'])
+  })
   // 容量满时不淘汰旧未读；同一完整来源的新回执仍可替换，并拒绝旧快照清除。
   it('Notice_CacheBoundAndExactClear_033', async () => {
     const map = new Map<string, NativeCliTab>(), entries: NativeHistoryEntry[] = []

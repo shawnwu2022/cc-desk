@@ -164,7 +164,7 @@ function fakeAdapter(runtime: SessionRuntimeKind, initial: UnifiedSession[] = []
   }
 }
 
-it.each(['root','id','key','project','unknown-root','opened-owners','archive-owner'] as const)('Catalog_PhysicalFoldPreservesDistinctOwners_048 %s',async difference=>{
+it.each(['root','id','key','project','unknown-root','opened-owners'] as const)('Catalog_PhysicalFoldPreservesDistinctOwners_048 %s',async difference=>{
   setActivePinia(createPinia())
   const a=session({id:'a',runtime:'native-cli',opened:false,processState:'stopped',nativeRootKey:'root',nativeHistorySessionKey:'key',nativeOrigin:{cli:'claude',profileId:'a',profileRevision:'1',projectId:'project',projectPath:'/repo'}})
   const b={...a,id:'b',nativeOrigin:{...a.nativeOrigin!,profileId:'b'}}
@@ -174,9 +174,75 @@ it.each(['root','id','key','project','unknown-root','opened-owners','archive-own
   if(difference==='project') b.nativeOrigin.projectId='other-project'
   if(difference==='unknown-root') delete b.nativeRootKey
   if(difference==='opened-owners'){a.opened=true;b.opened=true}
-  if(difference==='archive-owner') b.archived=true
   const catalog=useUnifiedSessionsStore();catalog.configureAdapters([fakeAdapter('native-cli',[a,b]).adapter]);await catalog.refresh()
   expect(catalog.sessions).toHaveLength(2)
+})
+
+// 完整同源证明成立时归档属于同一关闭记录；保留归档 owner，普通孪生行不能复活。
+it('Catalog_PhysicalArchiveRetainsArchivedRepresentative_072', async () => {
+  setActivePinia(createPinia())
+  const a = session({ id:'a', runtime:'native-cli', opened:false, processState:'stopped', nativeRootKey:'root', nativeHistorySessionKey:'key', nativeOrigin:{ cli:'claude',profileId:'a',profileRevision:'1',projectId:'project',projectPath:'/repo' } })
+  const b = { ...a, id:'b', archived:true, nativeOrigin:{ ...a.nativeOrigin!,profileId:'b' } }
+  const catalog = useUnifiedSessionsStore(); catalog.configureAdapters([fakeAdapter('native-cli', [a,b]).adapter])
+  await catalog.refresh()
+  expect(catalog.sessions.map(row => [row.id,row.archived])).toEqual([['b',true]])
+})
+
+// CLI 范围请求与项目/全量请求交叠时，迟到读取不能删掉较新的另一范围投影。
+it.each([undefined, '/repo'])('Catalog_CliRefreshPreservesNewerRows_073 %s', async project => {
+  setActivePinia(createPinia())
+  const initial = session({ id:'codex',cli:'codex',runtime:'native-cli',title:'Old',opened:false })
+  const native = fakeAdapter('native-cli',[initial]), catalog = useUnifiedSessionsStore()
+  catalog.configureAdapters([native.adapter]); await catalog.refresh()
+  const old = deferred<UnifiedSession[]>()
+  native.adapter.listSessions = vi.fn().mockReturnValueOnce(old.promise).mockResolvedValue([{ ...initial,title:'New' }])
+  const pending = catalog.refresh(project)
+  await catalog.refresh(undefined,{ cli:'codex' })
+  old.resolve([initial]); await pending
+  expect(catalog.sessions.find(row => row.id === 'codex')?.title).toBe('New')
+})
+
+it.each(['claude', 'codex'] as const)('Catalog_ProjectCliRefreshesRemainIndependent_074 %s', async firstCli => {
+  const secondCli = firstCli === 'claude' ? 'codex' : 'claude'
+  const first = session({ id: firstCli, cli: firstCli, runtime: 'native-cli', title: 'Old first', opened: false })
+  const second = session({ id: secondCli, cli: secondCli, runtime: 'native-cli', title: 'Old second', opened: false })
+  const native = fakeAdapter('native-cli', [first, second]), catalog = useUnifiedSessionsStore()
+  catalog.configureAdapters([native.adapter]); await catalog.refresh()
+  const pendingRows = deferred<UnifiedSession[]>()
+  native.adapter.listSessions = vi.fn((_project, cli) => cli === firstCli ? pendingRows.promise : Promise.resolve([{ ...second, title: 'New second' }]))
+  const pending = catalog.refresh('/repo', { cli: firstCli })
+  await catalog.refresh('/repo', { cli: secondCli })
+  pendingRows.resolve([{ ...first, title: 'New first' }]); await pending
+  expect(catalog.sessions.find(row => row.cli === firstCli)?.title).toBe('New first')
+  expect(catalog.sessions.find(row => row.cli === secondCli)?.title).toBe('New second')
+})
+
+it.each(['same-cli', 'project', 'full', 'global-cli'] as const)('Catalog_ProjectCliRefreshPreservesNewerScope_075 %s', async scope => {
+  const original = session({ id: 'claude', cli: 'claude', runtime: 'native-cli', title: 'Initial', opened: false })
+  const native = fakeAdapter('native-cli', [original]), catalog = useUnifiedSessionsStore()
+  catalog.configureAdapters([native.adapter]); await catalog.refresh()
+  const stale = deferred<UnifiedSession[]>()
+  native.adapter.listSessions = vi.fn().mockReturnValueOnce(stale.promise).mockResolvedValue([{ ...original, title: 'Fresh' }])
+  const pending = catalog.refresh('/repo', { cli: 'claude' })
+  await catalog.refresh(scope === 'full' || scope === 'global-cli' ? undefined : '/repo',
+    scope === 'same-cli' || scope === 'global-cli' ? { cli: 'claude' } : {})
+  stale.resolve([{ ...original, title: 'Stale' }]); await pending
+  expect(catalog.sessions.find(row => row.id === 'claude')?.title).toBe('Fresh')
+})
+
+it.each(['claude', 'codex'] as const)('Catalog_ProjectRefreshKeepsOtherCliAfterScopedUpdate_076 %s', async refreshedCli => {
+  const otherCli = refreshedCli === 'claude' ? 'codex' : 'claude'
+  const refreshed = session({ id: refreshedCli, cli: refreshedCli, runtime: 'native-cli', title: 'Initial refreshed', opened: false })
+  const other = session({ id: otherCli, cli: otherCli, runtime: 'native-cli', title: 'Initial other', opened: false })
+  const native = fakeAdapter('native-cli', [refreshed, other]), catalog = useUnifiedSessionsStore()
+  catalog.configureAdapters([native.adapter]); await catalog.refresh()
+  const projectRows = deferred<UnifiedSession[]>()
+  native.adapter.listSessions = vi.fn().mockReturnValueOnce(projectRows.promise).mockResolvedValue([{ ...refreshed, title: 'Fresh scoped' }])
+  const pending = catalog.refresh('/repo')
+  await catalog.refresh('/repo', { cli: refreshedCli })
+  projectRows.resolve([{ ...refreshed, title: 'Stale scoped' }, { ...other, title: 'Fresh other' }]); await pending
+  expect(catalog.sessions.find(row => row.cli === refreshedCli)?.title).toBe('Fresh scoped')
+  expect(catalog.sessions.find(row => row.cli === otherCli)?.title).toBe('Fresh other')
 })
 
 it('Catalog_PhysicalFoldRefreshUsesLinearPreviousLookup_049',async()=>{
@@ -1230,7 +1296,7 @@ it('Unified_AmbiguousTwinKeepsLegacyRestore_045', async () => {
   const legacyRow = session({ id: 'legacy-origin', runtime: 'legacy-claude', processState: 'stopped', opened: false, archived: true, adapterSessionId: 'same-id', nativeSessionId: 'same-id' })
   const entries: NativeHistoryEntry[] = ['profile-a', 'profile-b'].map(profileId => ({
     key: profileId, sourceRootKey: LEGACY_ROOT,
-    context: { cli: 'claude', profileId, profileRevision: '7', projectId: 'project-1', projectPath: '/repo' },
+    context: { cli: 'claude', profileId, profileRevision: '7', projectId: profileId, projectPath: '/repo' },
     sessions: [{ type: 'session', sessionKey: JSON.stringify(['local', 'claude', LEGACY_ROOT, 'same-id']), nativeSessionId: 'same-id', title: profileId, truncated: false, archived: false, cwd: '/repo', updatedAt: null }],
     loading: false, loaded: true, error: null, requestEpoch: '1',
   }))

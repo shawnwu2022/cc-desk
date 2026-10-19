@@ -68,6 +68,7 @@ function workspaceFixture() {
     histories: new Map<string, NativeHistorySession[]>(),
     resources: [] as ResourceItem[],
     roots: new Map<string, string>(),
+    legacyRoot: undefined as string | undefined,
     unavailable: new Set<string>(),
     wrappers: [] as VueWrapper[],
   }
@@ -106,6 +107,7 @@ function workspaceFixture() {
       case 'get_app_config': return clone(fixture.config)
       case 'update_app_config': Object.assign(fixture.config, clone(args.updates)); return
       case 'get_projects': return clone(fixture.legacyProjects)
+      case 'legacy_claude_root_key': return fixture.legacyRoot ? { rootKey: fixture.legacyRoot } : null
       case 'get_sessions': return clone((fixture.legacyHistory.get(normalizePath(args.projectPath)) ?? []).slice(args.offset ?? 0, args.limit == null ? undefined : (args.offset ?? 0) + args.limit))
       case 'cli_list_profiles': return { revision: '1', profiles: clone(fixture.profiles) }
       case 'cli_list_projects': return { revision: '1', projects: clone(fixture.registered) }
@@ -225,6 +227,7 @@ describe('Adversarial unified ownership and persistence', () => {
 
   it.each(['history', 'native-live', 'legacy-live'] as const)('Adversarial_QueuedRename_%s_003', async kind => {
     seedHistory()
+    f.legacyRoot = 'legacy-root'
     f.legacyProjects = [{ path: '/repo', name: 'Repo' }]
     f.legacyHistory.set('/repo', [{ sessionId: 'same', name: 'Legacy', projectPath: '/repo', lastActiveAt: 1 }])
     await boot()
@@ -280,6 +283,7 @@ describe('Adversarial unified ownership and persistence', () => {
   })
 
   it('Adversarial_DuplicateRoots_005', async () => {
+    f.legacyRoot = 'legacy-root'
     seedHistory(); f.profiles.push(profile('codex', 'other')); f.roots.set('other', 'other-root')
     f.histories.set('other:project', [history('codex', 'other-root', 'same', '/repo', 'Other history')])
     f.legacyProjects = [{ path: '/repo', name: 'Repo' }]; f.legacyHistory.set('/repo', [{ sessionId: 'same', name: 'Legacy', projectPath: '/repo', lastActiveAt: 1 }])

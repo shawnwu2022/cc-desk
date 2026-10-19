@@ -229,6 +229,32 @@ project/key checks. Raw/picker and unproven new identities cannot infer a target
 `thread/name/set` and Claude public Agent SDK 0.3.301 `renameSession` must read back
 successfully before Desk clears matching aliases; uncertain writes are not replayed.
 
+History omissions block rename only when they can conceal the requested identity.
+The per-read backend budget keeps a monotonic anonymous-omission flag and omitted
+native IDs; neither is a public DTO. Claude can exclude a different identity only
+for a regular canonical `projects/{project}/{UUID}.jsonl` file. Codex requires a
+successfully parsed authoritative first `session_meta`, never a rollout filename
+or display-cache guess. Unknown subtrees, noncanonical/unidentified entries and
+failures on the requested ID still reject rename. Full-source duplicate checks,
+file pinning, project/cwd/root checks and official readback remain mandatory.
+The menu uses the single **Rename** action; resumed-source/history-record target
+details remain in the editor tooltip.
+
+2026-10-19 WSK-MSI regression: a valid Claude target plus an unrelated canonical
+empty transcript reproduced `SESSION_ORIGIN_AMBIGUOUS` before the fix. The fixed
+test executes the pinned official SDK, verifies the original file and refreshes
+the title without changing that empty transcript. Guards cover same-ID duplicates
+across projects, unknown subtrees, noncanonical names, target tail-read failure,
+anonymous Codex failures and equivalent UUID spellings. The UUID spelling case
+also produced RED before normalization. The 20 native-rename and 172 projection
+tests passed under the host token; three original private-directory fixtures fail
+under the restricted sandbox, so sandbox failure is not presented as a product
+diagnosis. Frontend related coverage passed 289 tests, error/localization coverage
+11 tests, plus typecheck, build, rustfmt and strict all-target Clippy. Independent
+read-only review found no remaining blocker. The user's actual error code and
+machine remain unconfirmed; these fixtures do not certify live CLI/WebView2 or
+the user's histories. Anonymous omissions still block rather than guess identity.
+
 Rename operation receipts share a 4096-entry budget. Before each new admission,
 completed receipts belonging to permanently revoked full caller identities are
 reclaimed through the authenticated run registry. Active-document receipts,

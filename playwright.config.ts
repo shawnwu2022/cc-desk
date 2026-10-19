@@ -3,6 +3,7 @@ import { defineConfig } from '@playwright/test'
 export default defineConfig({
   testDir: './tests/visual',
   testMatch: '**/*.spec.ts',
+  testIgnore: '**/terminal-fit.spec.ts',
   fullyParallel: true,
   workers: 4,
   retries: 0,

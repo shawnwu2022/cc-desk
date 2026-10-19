@@ -198,7 +198,7 @@ it.each(['changed', 'unavailable'] as const)('History_RetiredRootRefreshesEveryD
   else io.root.mockRejectedValue(new Error('root unavailable'))
   await catalog.refresh('/p1')
   await flushPromises()
-  expect(rowsA().map(row => row.runtime).sort()).toEqual(['legacy-claude', 'native-cli'])
+  expect(rowsA().map(row => row.runtime)).toEqual(['native-cli'])
   expect(refresh.mock.calls.every(([path]) => path !== undefined && path !== '/p7')).toBe(true)
 })
 

@@ -13,6 +13,15 @@ afterEach(async () => {
   }
 })
 describe('D12 authenticated projection API', () => {
+  // 单会话原因必须由安全 DTO 明确提供；任意异常、路径和非历史载荷均拒绝。
+  it('Projection_SessionReadFailure_025', async () => {
+    const row = { type: 'session', sessionKey: JSON.stringify(['local', 'claude', 'root', 'session-1']), nativeSessionId: 'session-1', title: 'Work', cwd: null, updatedAt: null, archived: false, truncated: true, metadataIncomplete: true }
+    for (const code of ['SOURCE_INVALID', 'SOURCE_READ_FAILED', 'private/path']) {
+      const client = createProjectionClient({ instanceId: 'instance', invoke: async () => ({ ...response(), historyMetadataIncomplete: true, historyReadFailures: ['SOURCE_INVALID', 'SOURCE_READ_FAILED'], items: [{ ...row, readFailure: code }] }) })
+      if (code === 'private/path') await expect(client.read(request())).rejects.toMatchObject({ code: 'INVALID_PROJECTION' })
+      else expect((await client.read(request())).items[0]).toMatchObject({ nativeSessionId: 'session-1', readFailure: code })
+    }
+  })
   // 真实 IPC 解码必须保留新增排序字段，同时兼容没有该字段的旧历史响应。
   it.each(['claude', 'codex'] as const)('Projection_HistoryCreationTime_023 %s', async cli => {
     for (const createdAt of ['2026-10-01T00:00:00Z', null, undefined]) {

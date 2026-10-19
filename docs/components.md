@@ -119,8 +119,37 @@ Terminal rename ports continue rejecting command
 injection; no draft clearing or guessed editor state is permitted.
 Selection cancels unissued operations; issued operations retain their exact owner.
 Cross-profile duplicate history rows fold by full physical source identity, preserving
-distinct opened owners and archive state. Titles never decide identity. All matching
+distinct opened owners. A closed archived representative hides its closed ordinary
+twin; restore clears every exact full-key alias for that physical record. Titles never decide identity. All matching
 source caches refresh after rename so close/reopen cannot restore a stale title.
+
+CLI support changes refresh only the changed CLI's sources and catalog projection.
+Codex toggles neither reload Claude history nor revalidate its default-root lease.
+Each profile failure is isolated so readable profiles and Legacy history still
+publish in the same scoped refresh, with the failed source's diagnostic retained.
+Legacy read results also replace that source's warning snapshot: failed reloads
+remain visible, successful reloads and disabling Claude clear obsolete warnings,
+and an enabled source's retired-root diagnostic remains in force.
+Full refreshes keep retired-root warnings hidden while Claude is disabled. History
+issue retries refresh only their originating CLI/project; history recovery guidance
+is limited to history warnings, rather than unrelated application-state errors.
+Archive restore also refreshes its original CLI/project and reads Legacy root proof
+only for Claude bare-ID archive ownership. In-flight root failures still retire
+the lease after disable, but publish warnings only when Claude is enabled.
+Archive-signature background refreshes of Codex-only projects likewise skip
+unrelated Claude root validation; actual Claude projections retain fresh proof.
+Runtime retirement is propagated even when the Legacy adapter was cold-disabled
+before its first proof. Open Native owners show only current history read errors,
+never errors retained in title snapshots. Archive restore preflights every pending
+exact alias before any write and rechecks each alias again inside its write queue.
+Claude reloads also include projects owned only by an open Legacy tab. Disabling
+history publishes real opened owners without validating the disabled Claude root;
+later full catalog refreshes follow the same rule. Root retirement refreshes every
+known Legacy project, including Legacy-only rows outside Native history contexts.
+Full, per-CLI, per-project and per-project/CLI request ownership reject late
+replacement without cancelling another CLI's update in the same project. An opened Native
+attempt retains its last proven CLI title while history is hidden; this display-only
+snapshot supplies no root proof and expires with its attempt or source identity.
 
 Closed non-archived history exposes Rename without resuming or selecting a
 terminal. Its original source owner admits the inline editor and native operation.
@@ -815,6 +844,10 @@ The confirmation captures actual owning-store session IDs and requires an exact 
 
 Once project-close execution starts, the confirmation blocks its Cancel, Escape and
 header-close controls until the batch settles, retaining any partial-result notice.
+Session menus use the single localized **Rename** action, with **Save name** in
+the editor. Technical resumed-source/history-record distinctions remain in the
+editor tooltip rather than the menu or input label.
+
 Context invalidation still revokes dispatch ownership. A confirmed native rename
 whose later adapter/catalog display synchronization fails ends the original editor
 and reports `RENAME_DISPLAY_SYNC_FAILED`; it does not reopen that save for another

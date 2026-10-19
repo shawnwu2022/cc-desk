@@ -88,7 +88,7 @@ function item(v: unknown, request: ReadRequest): ResourceItem {
   if (r.type !== allowed[request.resourceKind]) return invalid()
   if (r.type === 'session' || r.type === 'message') {
     const common = ['type', 'sessionKey', 'nativeSessionId', 'truncated']
-    object(r, [...common, ...(r.type === 'session' ? ['title', 'cwd', 'updatedAt', 'archived'] : ['role', 'text'])], r.type === 'session' ? ['titleUnknown', 'titleSource', 'metadataIncomplete', 'projectId', 'createdAt'] : [])
+    object(r, [...common, ...(r.type === 'session' ? ['title', 'cwd', 'updatedAt', 'archived'] : ['role', 'text'])], r.type === 'session' ? ['titleUnknown', 'titleSource', 'metadataIncomplete', 'readFailure', 'projectId', 'createdAt'] : [])
     const nativeSessionId = text(r.nativeSessionId, 256, false)
     const sessionKey = text(r.sessionKey, 8192, false)
     if (/\p{Cc}/u.test(nativeSessionId) || sessionKey !== JSON.stringify(['local', request.source.cli, request.source.sourceRootKey, nativeSessionId])) return invalid()
@@ -110,10 +110,13 @@ function item(v: unknown, request: ReadRequest): ResourceItem {
       const titleUnknown = Object.prototype.hasOwnProperty.call(r, 'titleUnknown') ? { titleUnknown: bool(r.titleUnknown) } : {}
       const metadataIncomplete = Object.prototype.hasOwnProperty.call(r, 'metadataIncomplete') ? { metadataIncomplete: bool(r.metadataIncomplete) } : {}
       if (metadataIncomplete.metadataIncomplete === true && !truncated) return invalid()
+      const readFailure = r.readFailure === undefined ? undefined : text(r.readFailure, 32, false)
+      if (readFailure !== undefined && (request.resourceKind !== 'history' || metadataIncomplete.metadataIncomplete !== true
+        || !['SOURCE_UNSUPPORTED', 'SOURCE_INVALID', 'SOURCE_INVALID_TEXT', 'SOURCE_TOO_LARGE', 'SOURCE_READ_FAILED'].includes(readFailure))) return invalid()
       const titleSource = Object.prototype.hasOwnProperty.call(r, 'titleSource') ? text(r.titleSource, 6, false) : undefined
       if (titleSource !== undefined && (!['prompt', 'ai', 'custom'].includes(titleSource) || titleUnknown.titleUnknown === true)) return invalid()
       const createdAt = Object.prototype.hasOwnProperty.call(r, 'createdAt') ? { createdAt: optionalText(r.createdAt, 64) } : {}
-      return { ...titleUnknown, ...metadataIncomplete, ...createdAt, ...(projectId === undefined ? {} : { projectId }), ...(titleSource === undefined ? {} : { titleSource: titleSource as 'prompt' | 'ai' | 'custom' }),
+      return { ...titleUnknown, ...metadataIncomplete, ...createdAt, ...(readFailure === undefined ? {} : { readFailure: readFailure as HistoryReadFailure }), ...(projectId === undefined ? {} : { projectId }), ...(titleSource === undefined ? {} : { titleSource: titleSource as 'prompt' | 'ai' | 'custom' }),
         type: 'session', sessionKey, nativeSessionId, truncated, archived: bool(r.archived), title: text(r.title, 512), cwd: optionalText(r.cwd, 32768), updatedAt: optionalText(r.updatedAt, 64) }
     }
     if (r.role !== 'user' && r.role !== 'assistant') return invalid()
@@ -160,11 +163,13 @@ function result(v: unknown, request: Required<ReadRequest>): ProjectionResult {
     failures = { historyReadFailures: [...codes] }
   }
   if (!Array.isArray(r.items) || r.items.length > request.limit) return invalid()
+  const items = r.items.map(v => item(v, request))
+  if (items.some(row => row.type === 'session' && row.readFailure && !failures.historyReadFailures?.includes(row.readFailure))) return invalid()
   const reason = optionalText(r.reason, 128)
   if (r.state === 'ready' ? reason !== null : !reason || !reasons.has(reason) || r.items.length !== 0 || r.hasMore !== false) return invalid()
   if (new TextEncoder().encode(JSON.stringify(r)).length > 2 * 1024 * 1024) return invalid()
   return { source: s, resourceKind: request.resourceKind, requestEpoch: request.requestEpoch, observedAt: u64(r.observedAt),
-    state: r.state, reason, items: r.items.map(v => item(v, request)), hasMore: bool(r.hasMore), ...metadata, ...failures }
+    state: r.state, reason, items, hasMore: bool(r.hasMore), ...metadata, ...failures }
 }
 // 一次性命令在本前端只可能产生下列有限错误码；其余一律折叠为不可用，
 // 绝不回显原生载荷或任意异常文本。
