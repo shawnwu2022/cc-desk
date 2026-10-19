@@ -43,7 +43,7 @@ Tauri 2.x (Rust) + Vue 3 + TypeScript + Vite + xterm.js + portable-pty + Pinia +
 
 ## 项目架构
 
-> Native CLI v3 的权威边界见 [docs/native-cli-v3.md](../docs/native-cli-v3.md)。旧 Claude runtime 通过统一 adapter 保持兼容；新的双 CLI 功能不得借道旧 PTY/API。
+> Native CLI v3 的权威边界见 [docs/native-cli-v3.md](../docs/native-cli-v3.md)。旧 Claude runtime 通过统一 adapter 保持兼容；新的 CLI 功能不得借道旧 PTY/API。
 
 ```text
 cc-desk/
@@ -102,7 +102,7 @@ Claude Code | Codex CLI | opencode
 XTermTerminal ←→ legacy Tauri IPC ←→ pty.rs ←→ Claude Code
 ```
 
-Legacy 路径继续维护兼容性，但不是新的双 CLI 架构扩展点。
+Legacy 路径继续维护兼容性，但不是新 CLI 架构的扩展点。
 
 Legacy `customArgs` 统一解析成 argv：单/双引号包围的空格、空参数及引号转义保持参数边界，Windows 路径分隔符保留；未闭合引号拒绝启动。变量和 shell 操作符按字面值传递，不执行 shell 表达式。Desk 历史恢复使用独立、冻结的 `resumeSessionId`，仅该 locator 按会话文件名组件校验并由后端生成 `--resume <id>`；用户 argv 的裸 `--resume`、`-r`、会话名及转录路径交由 CLI 解释，不套用文件名白名单。Native profile 的结构化参数与迁移约束不变。
 
@@ -218,7 +218,7 @@ npm run tauri:build        # 生产构建
 |--------------------------------------------------------------|-------------------------------------------------------|
 | [docs/测试编写原则.md](../docs/测试编写原则.md)   | 项目如何编写测试                                              |
 | [docs/manual-test-cases.md](../docs/manual-test-cases.md)   | **手动测试条目**：自动化无法覆盖的 UI 交互与端到端测试                  |
-| [docs/native-cli-v3.md](../docs/native-cli-v3.md)               | **Native CLI v3 权威架构**：双 CLI、鉴权、输入输出、证据与发布边界        |
+| [docs/native-cli-v3.md](../docs/native-cli-v3.md)               | **Native CLI v3 权威架构**：多 CLI、鉴权、输入输出、证据与发布边界        |
 | [docs/terminal-integration.md](../docs/terminal-integration.md) | 终端集成架构、PTY 生命周期、IPC 命令与事件对照                           |
 | [docs/hook-monitor.md](../docs/hook-monitor.md)                 | **Hook 监控系统**：Plugin 注入、事件采集、状态机、多终端区分                |
 | [docs/layout-design.md](../docs/layout-design.md)               | 布局设计、窗口结构、色彩系统、排版规范                                   |
@@ -305,7 +305,7 @@ npm run tauri:build        # 生产构建
 - 派生名称索引 schema v2 使用 CLI、已验证 sourceRootKey、identityEpoch 和项目目录身份组成的缓存键；旧 v1 缓存重建，不跨根命中。未知目录身份跳过缓存，不猜测默认根。
 - 旧 Claude 项目映射按来源根与路径分区，最多保留 64 个派生分区；显式根扫描不得覆盖默认根，失效操作清空所有分区。
 - 配置面板请求用本地选择所有权拒绝迟到的成功/失败/finally；清空与切换立即隐藏旧配置，不记录原始异常载荷。
-- `SourcePartition` 只是缓存身份，不是授权 SourceScope / 文件系统沙箱。鉴权读取已由下节 `native_get_scope`、`native_list_resources` 与 `cli/native_projection` 实现；不要重复实现或让新双 CLI UI 借道旧默认根读取。
+- `SourcePartition` 只是缓存身份，不是授权 SourceScope / 文件系统沙箱。鉴权读取已由下节 `native_get_scope`、`native_list_resources` 与 `cli/native_projection` 实现；不要重复实现或让新 CLI UI 借道旧默认根读取。
 - D11 的 `NATIVE_RUNTIME_NOT_READY` 保持关闭，详见 `docs/superpowers/execution/D12.md`。
 
 ### D12 authenticated native projections
@@ -313,7 +313,7 @@ npm run tauri:build        # 生产构建
 - New native reads go through `native_get_scope` / `native_list_resources`, D11 document admission, and `cli/native_projection` held directory capabilities. A frontend path/owner or an opaque scope ID alone never authorizes a read.
 - `SourceRef.basis` is an observation source, not effective CLI state. Keep shell/raw/unknown-argument roots unknown. Never authorize transcript cwd or plugin install paths outside a granted root.
 - Return only the kind-specific projection DTO; do not add raw config/env/argv/headers to resource items or error logs. Scan failure must not remove registered projects.
-- D22-D24 已完成 Native Claude/Codex UI adoption。新的双 CLI 代码必须继续使用 authenticated API/store，不得 fallback 到 legacy root/delete/PTY commands。
+- D22-D24 已完成 Native Claude/Codex UI adoption。新 CLI 代码必须继续使用 authenticated API/store，不得 fallback 到 legacy root/delete/PTY commands。
 - Run the committed `tests/native-cli/scope-core` harness (actual production sources), frontend tests/build, and Windows production/live WebView tests. Headless core success is not real CLI or package certification.
 
 ### D13 observer isolation
