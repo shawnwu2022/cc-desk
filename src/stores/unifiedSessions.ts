@@ -328,6 +328,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
   const cliRefreshVersions = new Map<UnifiedSession['cli'], number>()
   let pendingRefreshes = 0
   const projectRefreshVersions = new Map<string, number>()
+  const projectCliRefreshVersions = new Map<string, number>()
   let selectionEpoch = 0
   // Selection intent is distinct from lifecycle invalidation: closing an unrelated
   // row must not revoke the selected preparation's eventual identity transfer.
@@ -443,6 +444,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     const key = projectKey === undefined ? undefined : normalizePath(projectKey)
     if (key === undefined && options.cli) cliRefreshVersions.set(options.cli, version)
     else if (key === undefined) fullRefreshVersion = version
+    else if (options.cli) projectCliRefreshVersions.set(JSON.stringify([key, options.cli]), version)
     else projectRefreshVersions.set(key, version)
     const visible = !options.background
     if (visible) ++pendingRefreshes
@@ -452,13 +454,14 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     const ownsProject = (candidate: string, cli?: UnifiedSession['cli']): boolean =>
       fullRefreshVersion <= version
       && (projectRefreshVersions.get(candidate) ?? 0) <= version
-      && (!cli || (cliRefreshVersions.get(cli) ?? 0) <= version)
+      && (!cli || ((cliRefreshVersions.get(cli) ?? 0) <= version
+        && (projectCliRefreshVersions.get(JSON.stringify([candidate, cli])) ?? 0) <= version))
 
     try {
       const lists = await Promise.all(adapters.map(adapter => adapter.listSessions(projectKey, options.cli)))
       const hasClaudeRows = lists.some(rows => rows.some(row => row.cli === 'claude'))
       const provenLegacyRoot = options.cli === 'codex' || !cliSupport.isEnabled('claude') || !hasClaudeRows ? undefined : validateLegacyClaudeRoot ? await validateLegacyClaudeRoot() : legacyClaudeRoot
-      if (fullRefreshVersion > version || (key !== undefined && !ownsProject(key))) return
+      if (fullRefreshVersion > version || (key !== undefined && !ownsProject(key, options.cli))) return
 
       // Replace only the requested project. A full read also preserves scopes
       // refreshed after it began, regardless of completion order.

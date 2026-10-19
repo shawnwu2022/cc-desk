@@ -202,6 +202,49 @@ it.each([undefined, '/repo'])('Catalog_CliRefreshPreservesNewerRows_073 %s', asy
   expect(catalog.sessions.find(row => row.id === 'codex')?.title).toBe('New')
 })
 
+it.each(['claude', 'codex'] as const)('Catalog_ProjectCliRefreshesRemainIndependent_074 %s', async firstCli => {
+  const secondCli = firstCli === 'claude' ? 'codex' : 'claude'
+  const first = session({ id: firstCli, cli: firstCli, runtime: 'native-cli', title: 'Old first', opened: false })
+  const second = session({ id: secondCli, cli: secondCli, runtime: 'native-cli', title: 'Old second', opened: false })
+  const native = fakeAdapter('native-cli', [first, second]), catalog = useUnifiedSessionsStore()
+  catalog.configureAdapters([native.adapter]); await catalog.refresh()
+  const pendingRows = deferred<UnifiedSession[]>()
+  native.adapter.listSessions = vi.fn((_project, cli) => cli === firstCli ? pendingRows.promise : Promise.resolve([{ ...second, title: 'New second' }]))
+  const pending = catalog.refresh('/repo', { cli: firstCli })
+  await catalog.refresh('/repo', { cli: secondCli })
+  pendingRows.resolve([{ ...first, title: 'New first' }]); await pending
+  expect(catalog.sessions.find(row => row.cli === firstCli)?.title).toBe('New first')
+  expect(catalog.sessions.find(row => row.cli === secondCli)?.title).toBe('New second')
+})
+
+it.each(['same-cli', 'project', 'full', 'global-cli'] as const)('Catalog_ProjectCliRefreshPreservesNewerScope_075 %s', async scope => {
+  const original = session({ id: 'claude', cli: 'claude', runtime: 'native-cli', title: 'Initial', opened: false })
+  const native = fakeAdapter('native-cli', [original]), catalog = useUnifiedSessionsStore()
+  catalog.configureAdapters([native.adapter]); await catalog.refresh()
+  const stale = deferred<UnifiedSession[]>()
+  native.adapter.listSessions = vi.fn().mockReturnValueOnce(stale.promise).mockResolvedValue([{ ...original, title: 'Fresh' }])
+  const pending = catalog.refresh('/repo', { cli: 'claude' })
+  await catalog.refresh(scope === 'full' || scope === 'global-cli' ? undefined : '/repo',
+    scope === 'same-cli' || scope === 'global-cli' ? { cli: 'claude' } : {})
+  stale.resolve([{ ...original, title: 'Stale' }]); await pending
+  expect(catalog.sessions.find(row => row.id === 'claude')?.title).toBe('Fresh')
+})
+
+it.each(['claude', 'codex'] as const)('Catalog_ProjectRefreshKeepsOtherCliAfterScopedUpdate_076 %s', async refreshedCli => {
+  const otherCli = refreshedCli === 'claude' ? 'codex' : 'claude'
+  const refreshed = session({ id: refreshedCli, cli: refreshedCli, runtime: 'native-cli', title: 'Initial refreshed', opened: false })
+  const other = session({ id: otherCli, cli: otherCli, runtime: 'native-cli', title: 'Initial other', opened: false })
+  const native = fakeAdapter('native-cli', [refreshed, other]), catalog = useUnifiedSessionsStore()
+  catalog.configureAdapters([native.adapter]); await catalog.refresh()
+  const projectRows = deferred<UnifiedSession[]>()
+  native.adapter.listSessions = vi.fn().mockReturnValueOnce(projectRows.promise).mockResolvedValue([{ ...refreshed, title: 'Fresh scoped' }])
+  const pending = catalog.refresh('/repo')
+  await catalog.refresh('/repo', { cli: refreshedCli })
+  projectRows.resolve([{ ...refreshed, title: 'Stale scoped' }, { ...other, title: 'Fresh other' }]); await pending
+  expect(catalog.sessions.find(row => row.cli === refreshedCli)?.title).toBe('Fresh scoped')
+  expect(catalog.sessions.find(row => row.cli === otherCli)?.title).toBe('Fresh other')
+})
+
 it('Catalog_PhysicalFoldRefreshUsesLinearPreviousLookup_049',async()=>{
   setActivePinia(createPinia())
   const rows=Array.from({length:1000},(_,index)=>session({id:'row-'+index,runtime:'native-cli',opened:false,processState:'stopped',nativeSessionId:'session-'+index,nativeRootKey:'root',nativeHistorySessionKey:'key-'+index,nativeOrigin:{cli:'claude',profileId:'profile',profileRevision:'1',projectId:'project',projectPath:'/repo'}}))
