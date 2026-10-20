@@ -671,3 +671,203 @@ fn D09_UnarchiveRequest_ValidatesAndConverts_019() {
         assert_eq!(failure.field.as_deref(), Some("action.nativeSessionId"));
     }
 }
+
+#[cfg(windows)]
+#[test]
+fn CodexIdentity_CmdNpmForwardsHooksOutsideCall_047() {
+    // CALL仍只接收用户安全参数；TOML由已识别的Node入口转发给原生CLI。
+    let mut f = Fixture::new(CliKind::Codex, resume(LOCATOR));
+    let npm = f.root.path().join("中文 空格");
+    let package = npm.join("node_modules/@openai/codex");
+    fs::create_dir_all(package.join("bin")).unwrap();
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .join("tests/fixtures/native-cli/codex-npm-0.163.0");
+    fs::copy(fixtures.join("codex.cmd"), npm.join("codex.cmd")).unwrap();
+    fs::copy(fixtures.join("codex.js"), package.join("bin/codex.js")).unwrap();
+    fs::write(
+        package.join("package.json"),
+        r#"{"name":"@openai/codex","version":"0.163.0","bin":{"codex":"bin/codex.js"}}"#,
+    )
+    .unwrap();
+    f.profile.program_path = Override::Set(npm.join("codex.cmd").to_str().unwrap().into());
+    f.profile.launcher = Launcher::Shim {
+        runner: std::env::var("COMSPEC").unwrap(),
+        dialect: Dialect::Cmd,
+    };
+    f.profile.default_args = Override::Set(vec!["--model".into(), "user-model".into()]);
+    f.inherited
+        .insert("cc_desk_codex_argv".into(), "ancestor-transport".into());
+    // Windows Node 的系统随机源初始化需要 SystemRoot；不是待测参数层的一部分。
+    f.inherited
+        .insert("SystemRoot".into(), std::env::var_os("SystemRoot").unwrap());
+    let original = f.freeze();
+    let observer = ObserverEnv {
+        values: EnvMap::from([
+            ("CC_DESK_CODEX_PORT".into(), "1234".into()),
+            ("CC_DESK_CODEX_RUN".into(), "run-one".into()),
+            ("CC_DESK_CODEX_GENERATION".into(), "7".into()),
+            ("CC_DESK_CODEX_CAPABILITY".into(), "fresh".into()),
+        ]),
+    };
+    let hooks = crate::codex_observer::hook_args(std::path::Path::new(
+        r"C:\中文 空格 & (Desk)\cc-desk.exe",
+    ))
+    .unwrap();
+    let prepared = original.with_codex_identity(&observer, &hooks).unwrap();
+    let invocation = build_invocation(&f.request, &prepared).unwrap();
+    assert!(
+        crate::platform::launch::resolve_process(&invocation).is_ok(),
+        "official cmd must keep hooks without placing TOML in CALL"
+    );
+    assert_eq!(
+        invocation.args(),
+        words(&["resume", LOCATOR, "--model", "user-model"])
+    );
+    assert!(!original.environment().keys().any(|k| k
+        .to_string_lossy()
+        .eq_ignore_ascii_case("CC_DESK_CODEX_ARGV")));
+    let node = crate::platform::find_executable("node").unwrap();
+    let script = "process.stdout.write(JSON.stringify({argv:process.argv.slice(2),options:process.env.NODE_OPTIONS??null,transport:process.env.CC_DESK_CODEX_ARGV??null}))";
+    let output = std::process::Command::new(&node)
+        .env_clear()
+        .envs(prepared.environment())
+        .args(["-e", script])
+        .arg(package.join("bin/codex.js"))
+        .args(invocation.args())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "node preload probe: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let observed: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let mut expected = hooks
+        .iter()
+        .map(|v| v.to_str().unwrap().to_owned())
+        .collect::<Vec<_>>();
+    expected.extend(
+        invocation
+            .args()
+            .iter()
+            .map(|v| v.to_str().unwrap().to_owned()),
+    );
+    assert_eq!(observed["argv"], json!(expected));
+    assert!(observed["options"].is_null());
+    assert!(observed["transport"].is_null());
+    let read_back = |environment: &EnvMap, main: &std::path::Path| -> Value {
+        let output = std::process::Command::new(&node).env_clear().envs(environment)
+            .args(["-e", "process.stdout.write(JSON.stringify({argv:process.argv.slice(2),options:process.env.NODE_OPTIONS??null,transport:process.env.CC_DESK_CODEX_ARGV??null,capability:process.env.CC_DESK_CODEX_CAPABILITY??null}))"])
+            .arg(main).args(invocation.args()).output().unwrap();
+        assert!(
+            output.status.success(),
+            "fixed Node transport probe must finish"
+        );
+        serde_json::from_slice(&output.stdout).unwrap()
+    };
+    // 错入口和损坏载荷都必须还原环境、保留原参数并移除观察能力。
+    for (wrong_entry, corrupt_payload) in [(true, false), (false, true)] {
+        let mut environment = prepared.environment().clone();
+        if corrupt_payload {
+            environment.insert("CC_DESK_CODEX_ARGV".into(), "not-json".into());
+        }
+        let main = if wrong_entry {
+            npm.join("codex.cmd")
+        } else {
+            package.join("bin/codex.js")
+        };
+        let result = read_back(&environment, &main);
+        assert_eq!(
+            result["argv"],
+            json!(["resume", LOCATOR, "--model", "user-model"])
+        );
+        assert!(result["options"].is_null());
+        assert!(result["transport"].is_null());
+        assert!(result["capability"].is_null());
+    }
+    f.inherited.insert("NODE_OPTIONS".into(), "".into());
+    let empty = f.freeze().with_codex_identity(&observer, &hooks).unwrap();
+    let empty_result = read_back(empty.environment(), &package.join("bin/codex.js"));
+    assert_eq!(empty_result["options"], "");
+    assert_eq!(empty_result["argv"], json!(expected));
+    drop(empty);
+    f.inherited.remove(OsStr::new("NODE_OPTIONS"));
+    // 只转移后端 hooks；用户危险参数仍经过原 CALL 校验，过长传输仍经过 env 上限。
+    f.request.extra_args.push("unsafe&marker".into());
+    let unsafe_snapshot = f.freeze().with_codex_identity(&observer, &hooks).unwrap();
+    let unsafe_invocation = build_invocation(&f.request, &unsafe_snapshot).unwrap();
+    assert_eq!(
+        crate::platform::launch::resolve_process(&unsafe_invocation)
+            .unwrap_err()
+            .code,
+        "ARG_NOT_REPRESENTABLE"
+    );
+    drop(unsafe_invocation);
+    drop(unsafe_snapshot);
+    f.request.extra_args.clear();
+    let mut oversized = hooks.clone();
+    oversized[1] = format!("hooks.SessionStart={}", "x".repeat(9000)).into();
+    let oversized = f
+        .freeze()
+        .with_codex_identity(&observer, &oversized)
+        .unwrap();
+    assert_eq!(
+        crate::platform::launch::resolve_process(
+            &build_invocation(&f.request, &oversized).unwrap()
+        )
+        .unwrap_err()
+        .code,
+        "ENV_NOT_REPRESENTABLE"
+    );
+    drop(oversized);
+    let options = prepared.environment()[OsStr::new("NODE_OPTIONS")]
+        .to_str()
+        .unwrap();
+    let loader = std::path::PathBuf::from(
+        options
+            .strip_prefix("--require \"")
+            .unwrap()
+            .strip_suffix('"')
+            .unwrap(),
+    );
+    assert!(
+        fs::write(&loader, "tamper").is_err(),
+        "preload stays immutable while owned snapshot is retained"
+    );
+    assert!(fs::remove_file(&loader).is_err());
+    assert!(fs::write(package.join("bin/codex.js"), "tamper").is_err());
+    drop(invocation);
+    drop(prepared);
+    assert!(
+        !loader.exists(),
+        "owned snapshot releases its temporary artifact"
+    );
+    let alias = f.root.path().join("npm-junction");
+    let link = std::process::Command::new(std::env::var_os("COMSPEC").unwrap())
+        .args(["/D", "/C", "mklink", "/J"])
+        .arg(&alias)
+        .arg(&npm)
+        .output()
+        .unwrap();
+    assert!(link.status.success(), "junction fixture must be created");
+    f.profile.program_path = Override::Set(alias.join("codex.cmd").to_str().unwrap().into());
+    assert!(
+        f.freeze().with_codex_identity(&observer, &hooks).is_err(),
+        "a replaceable lexical junction must retain ordinary launch without the transport"
+    );
+    f.profile.program_path = Override::Set(npm.join("codex.cmd").to_str().unwrap().into());
+    f.inherited
+        .insert("NODE_OPTIONS".into(), "--permission".into());
+    assert!(
+        f.freeze().with_codex_identity(&observer, &hooks).is_err(),
+        "pre-Node permission failures must preserve baseline launch"
+    );
+    f.inherited.remove(OsStr::new("NODE_OPTIONS"));
+    fs::write(npm.join("codex.cmd"), "@echo custom").unwrap();
+    assert!(
+        f.freeze().with_codex_identity(&observer, &hooks).is_err(),
+        "do not adapt a user-custom launcher"
+    );
+}

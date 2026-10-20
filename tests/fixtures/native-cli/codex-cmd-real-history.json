@@ -1,0 +1,90 @@
+{
+  "description": "Safe metadata captured from installed Codex 0.163.0 on Windows, production cmd transport, loopback synthetic Responses provider. Same fresh CODEX_HOME/project. No credentials, capability headers, environment, raw prompts, argv or user data.",
+  "probe": "RealCodex_CmdShared_ConcurrentTitleHooksHistoryResume_004",
+  "nativeHistoryRows": [
+    {
+      "nativeSessionId": "01a15960-2c31-78c0-92a3-c7f7e3a53821",
+      "projectId": "SHARED",
+      "sessionKey": "[\"local\",\"codex\",\"local:windows:2083130666:3211264:1522159\",\"01a15960-2c31-78c0-92a3-c7f7e3a53821\"]",
+      "title": "Verify ALPHA isolation",
+      "titleSource": "custom"
+    },
+    {
+      "nativeSessionId": "01a15960-2c02-7e93-8e25-c1a2491040c9",
+      "projectId": "SHARED",
+      "sessionKey": "[\"local\",\"codex\",\"local:windows:2083130666:3211264:1522159\",\"01a15960-2c02-7e93-8e25-c1a2491040c9\"]",
+      "title": "Verify BETA isolation",
+      "titleSource": "custom"
+    }
+  ],
+  "authenticatedEvents": [
+    {
+      "event": "SessionStart",
+      "generation": 1,
+      "nativeSessionId": "01a15960-2c31-78c0-92a3-c7f7e3a53821",
+      "runId": "full-ALPHA-run"
+    },
+    {
+      "event": "SessionStart",
+      "generation": 1,
+      "nativeSessionId": "01a15960-2c02-7e93-8e25-c1a2491040c9",
+      "runId": "full-BETA-run"
+    },
+    {
+      "event": "UserPromptSubmit",
+      "generation": 1,
+      "nativeSessionId": "01a15960-2c31-78c0-92a3-c7f7e3a53821",
+      "runId": "full-ALPHA-run"
+    },
+    {
+      "event": "Stop",
+      "generation": 1,
+      "nativeSessionId": "01a15960-2c31-78c0-92a3-c7f7e3a53821",
+      "runId": "full-ALPHA-run"
+    },
+    {
+      "event": "UserPromptSubmit",
+      "generation": 1,
+      "nativeSessionId": "01a15960-2c02-7e93-8e25-c1a2491040c9",
+      "runId": "full-BETA-run"
+    },
+    {
+      "event": "Stop",
+      "generation": 1,
+      "nativeSessionId": "01a15960-2c02-7e93-8e25-c1a2491040c9",
+      "runId": "full-BETA-run"
+    },
+    {
+      "event": "Stop",
+      "generation": 1,
+      "nativeSessionId": "01a15960-2c02-7e93-8e25-c1a2491040c9",
+      "runId": "full-BETA-run"
+    },
+    {
+      "event": "UserPromptSubmit",
+      "generation": 1,
+      "nativeSessionId": "01a15960-2c02-7e93-8e25-c1a2491040c9",
+      "runId": "full-BETA-run"
+    },
+    {
+      "event": "SessionStart",
+      "generation": 2,
+      "nativeSessionId": "01a15960-2c31-78c0-92a3-c7f7e3a53821",
+      "runId": "full-ALPHA-resume-run"
+    },
+    {
+      "event": "UserPromptSubmit",
+      "generation": 2,
+      "nativeSessionId": "01a15960-2c31-78c0-92a3-c7f7e3a53821",
+      "runId": "full-ALPHA-resume-run"
+    },
+    {
+      "event": "Stop",
+      "generation": 2,
+      "nativeSessionId": "01a15960-2c31-78c0-92a3-c7f7e3a53821",
+      "runId": "full-ALPHA-resume-run"
+    }
+  ],
+  "historyRefreshCount": 10,
+  "allOwnedCliExited": true
+}

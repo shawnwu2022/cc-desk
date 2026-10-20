@@ -46,6 +46,8 @@ pub(crate) struct LaunchSnapshot {
     observer_requested: bool,
     observer_plugin: Option<PathBuf>,
     identity_args: Vec<OsString>,
+    #[cfg(windows)]
+    codex_cmd: Option<std::sync::Arc<super::codex_cmd::Transport>>,
 }
 
 impl std::fmt::Debug for LaunchSnapshot {
@@ -80,6 +82,21 @@ impl LaunchSnapshot {
         let mut next = self.clone();
         next.environment = super::environment::overlay_codex_identity(&self.environment, observer)?;
         next.identity_args = args.to_vec();
+        #[cfg(windows)]
+        if matches!(
+            self.launcher(),
+            super::profiles::Launcher::Shim {
+                dialect: super::profiles::Dialect::Cmd,
+                ..
+            }
+        ) {
+            next.codex_cmd = Some(std::sync::Arc::new(super::codex_cmd::prepare(
+                &self.program,
+                args,
+                &mut next.environment,
+            )?));
+            next.identity_args.clear();
+        }
         Ok(next)
     }
     pub(crate) fn observer_requested(&self) -> bool {
@@ -300,6 +317,8 @@ pub(crate) fn freeze_launch(
             && !request.extra_args.iter().any(|arg| arg == "--"),
         observer_plugin: None,
         identity_args: Vec::new(),
+        #[cfg(windows)]
+        codex_cmd: None,
         request: request.clone(),
         profile: profile.clone(),
         owner: caller.clone(),

@@ -192,11 +192,34 @@ unrepresentable overlay is discarded together with its capability; the original
 frozen invocation still undergoes every ordinary launch check. In particular,
 Windows Cmd shims retain their strict CALL literal subset and size limits, so
 Codex hook TOML cannot prevent an otherwise valid new or resumed session from
-starting. This degradation leaves identity observation unavailable and never
-selects another executable or writes a configuration file. New Codex tabs then
-lack the hook-proven native ID: first-title synchronization and deduplication
-against that tab's newly discovered history cannot operate. Explicit-ID resume
-keeps its original frozen historical source; it does not gain hook observation.
+starting. The audited official npm Codex 0.163.0 Cmd wrapper has a separate
+per-launch argv transport: the selected Cmd runner and wrapper still execute,
+while Node's supported `NODE_OPTIONS --require` preloads a fixed CJS module before
+the official npm entry point. That module prepends only the four backend-generated
+hook configuration pairs to `process.argv`; the official wrapper then forwards
+them directly to its selected native Codex binary. Hook TOML never enters CALL.
+The module first restores the original absent/empty `NODE_OPTIONS` and removes
+the two internal `CC_DESK_CODEX_ARGV`/`CC_DESK_CODEX_NODE_OPTIONS` values, so neither
+the native CLI nor subsequent Node tools inherit the preload. Both internal names
+are stripped from inherited/profile inputs, including Windows case aliases.
+
+This transport requires matching audited wrapper/entry bytes and npm package
+name, version and bin metadata. Selected and entry paths must have direct canonical
+spellings: junction/short-name aliases are not adapted. The backend holds the
+audited files and their parent directories against writing/deletion, rechecks
+paths and actual file identities after opening, and retains a private fixed-code
+preload with the owned snapshot until run retirement. It does not change global
+configuration or persistent permissions. Windows builds declare the existing
+locked `tempfile` dependency for this production artifact lifetime.
+
+Nonempty user `NODE_OPTIONS` are deliberately left untouched: Node permission or
+loader options can fail before CJS executes. Unknown/custom wrappers, different
+versions, nonliteral paths, preparation failures and size limits retain the
+original frozen launch without this transport. This degradation leaves identity
+observation unavailable and never selects another executable or writes a Codex
+configuration file. A degraded new tab lacks the hook-proven native ID, so its
+first-title synchronization and history deduplication cannot operate. Explicit-ID
+resume keeps its original frozen historical source without gaining observation.
 Codex discovers disk configuration hooks separately in each configuration layer,
 so the added session-flags handlers coexist with user-file handlers. A later user
 `-c` override in the same session-flags layer retains its normal precedence.
@@ -222,9 +245,12 @@ The Windows Codex 0.163 smoke uses the installed real TUI, bundled ConPTY and
 production reporter with temporary configuration/project data and a local synthetic
 Responses endpoint. It covers concurrent new identities, delayed automatic title
 readback, one survivor after another TUI closes, resume identity, and reporter
-paths containing spaces/non-ASCII characters. Host projection regressions separately
-cover Refresh deduplication and late-event retirement. These checks do not certify
-an installed WebView2 build or the account-backed D20 Layer-C matrix.
+paths containing spaces/non-ASCII characters. A shared-home, shared-project variant
+checks ten production history refreshes with exactly one record per native UUID.
+Host projection regressions replay its captured safe IDs, titles and authenticated
+event metadata to check Refresh deduplication and late-event retirement. These
+checks do not certify an installed WebView2 build or the account-backed D20 Layer-C
+matrix.
 
 ## Security and diagnostics
 

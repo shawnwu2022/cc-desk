@@ -23,6 +23,7 @@ import { useAppStore } from '@/stores/app'
 import { useProjectManagementStore } from '@/stores/projectManagement'
 import { useShellStore } from '@/stores/shell'
 import { useAttentionStore } from '@/stores/attention'
+import cmdHistoryCapture from '../fixtures/native-cli/codex-cmd-real-history.json'
 
 const io = vi.hoisted(() => ({ projects: vi.fn(), sessions: vi.fn(), profiles: vi.fn(), registered: vi.fn(), register: vi.fn(), patchProfile: vi.fn(), getState: vi.fn(), upsertRecord: vi.fn(), setPreference: vi.fn(), scope: vi.fn(), read: vi.fn(), writeText: vi.fn(), archive: vi.fn(), restore: vi.fn(), open: vi.fn(), remove: vi.fn(), runChecks: vi.fn(), ptySpawn: vi.fn(), ptyInput: vi.fn(), ptyKill: vi.fn(), legacyRoot: vi.fn() }))
 vi.mock('@/api/tauri', async original => ({ ...await original<object>(), runChecks: io.runChecks, ptySpawn: io.ptySpawn, ptyInput: io.ptyInput, ptyKill: io.ptyKill, getProjectsState: io.getState, upsertSessionUiRecord: io.upsertRecord, setProjectLaunchPreference: io.setPreference, updateAppConfig: vi.fn().mockResolvedValue(undefined), getAppConfig: vi.fn().mockResolvedValue({ theme: 'light', terminalTheme: 'cc-box-light', language: 'en' }), archiveSession: io.archive, restoreSession: io.restore, getProjects: io.projects, getSessions: io.sessions, openInFileManager: io.open, createNativeProjectionClient: () => ({ scope: io.scope, read: io.read }), legacyClaudeRootKey: io.legacyRoot, onHookEvent: async () => () => {} }))
@@ -2322,4 +2323,49 @@ it('CodexIdentity_ConcurrentTitleProjection_032', async () => {
   const resumed = await catalog.resumeCatalogSession(closed); await flushPromises()
   expect(tabs.tab(resumed.adapterSessionId)?.action).toEqual({ kind: 'resume-id', nativeSessionId: ids[0] })
   expect(catalog.sessions.filter(row => row.nativeSessionId === ids[0])).toHaveLength(1)
+})
+
+// 数据来自 Windows 真实 cmd 双 TUI，共用临时 root；只替换测试项目映射，不构造 UUID/标题。
+it('CodexIdentity_CapturedCmdHistoryRefresh_048', async () => {
+  const rows = cmdHistoryCapture.nativeHistoryRows.map(row => ({ ...row, type: 'session', projectId: 'project', cwd: '/repo' }))
+  const rootKey = JSON.parse(rows[0].sessionKey)[2]
+  io.scope.mockImplementation(async target => ({ scopeId: 'captured-cmd', instanceId: 'instance', cli: 'codex', sourceRootKey: rootKey, identityEpoch: '1', profileId: 'cx', profileRevision: '7', target, basis: 'configured-profile' }))
+  io.read.mockImplementation(async () => ({ state: 'ready', items: structuredClone(rows), hasMore: false }))
+  render(); await flushPromises()
+  const tabs = useNativeTabsStore(), catalog = useUnifiedSessionsStore()
+  vi.useFakeTimers()
+  const opened = rows.map(row => {
+    const event = cmdHistoryCapture.authenticatedEvents.find(event => event.nativeSessionId === row.nativeSessionId && event.event === 'SessionStart' && event.generation === 1)!
+    const created = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+    const tab = tabs.tab(created.tabId)!
+    tab.runId = event.runId; tab.generation = event.generation; tab.status = 'running'; tab.launchRevision = '1'
+    for (const captured of cmdHistoryCapture.authenticatedEvents.filter(captured => captured.runId === tab.runId && captured.generation === tab.generation)) {
+      const kind = captured.event === 'SessionStart' ? 'sessionStart' : captured.event === 'UserPromptSubmit' ? 'userPromptSubmit' : 'stop'
+      expect(tabs.applyObservationIdentity(tab.tabId, captureNativeAttempt(tab), captured.nativeSessionId, kind)).toBe(true)
+    }
+    return tab
+  })
+  await flushPromises(); await vi.advanceTimersByTimeAsync(250); await flushPromises()
+  for (let refresh = 0; refresh < cmdHistoryCapture.historyRefreshCount; refresh++) {
+    await catalog.refresh(); await flushPromises()
+    expect(catalog.sessions).toHaveLength(2)
+    for (const row of rows) {
+      const projected = catalog.sessions.filter(session => session.nativeSessionId === row.nativeSessionId)
+      expect(projected).toHaveLength(1)
+      expect(projected[0]).toMatchObject({ title: row.title, opened: true })
+    }
+  }
+  const oldAttempt = captureNativeAttempt(opened[0])
+  opened[0].status = 'exited'; tabs.close(opened[0].tabId); await flushPromises()
+  const closed = catalog.sessions.find(row => row.nativeSessionId === rows[0].nativeSessionId)!
+  const result = await catalog.resumeCatalogSession(closed); await flushPromises()
+  const resumed = tabs.tab(result.adapterSessionId)!
+  const resumedEvent = cmdHistoryCapture.authenticatedEvents.find(event => event.nativeSessionId === rows[0].nativeSessionId && event.event === 'SessionStart' && event.generation === 2)!
+  resumed.runId = resumedEvent.runId; resumed.generation = resumedEvent.generation; resumed.status = 'running'; resumed.launchRevision = '1'
+  expect(tabs.applyObservationIdentity(resumed.tabId, oldAttempt, rows[1].nativeSessionId)).toBe(false)
+  expect(tabs.applyObservationIdentity(resumed.tabId, captureNativeAttempt(resumed), resumedEvent.nativeSessionId)).toBe(true)
+  await flushPromises(); await vi.advanceTimersByTimeAsync(250); await flushPromises()
+  await catalog.refresh(); await flushPromises()
+  expect(catalog.sessions).toHaveLength(2)
+  expect(catalog.sessions.filter(row => row.nativeSessionId === resumedEvent.nativeSessionId)).toHaveLength(1)
 })
