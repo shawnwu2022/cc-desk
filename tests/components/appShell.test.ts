@@ -480,7 +480,7 @@ describe('Unified application shell', () => {
 describe('Task 20 normal app shortcut integration', () => {
   it('App_ShortcutUsesUnifiedSelection_032', async () => {
     const sessions = useUnifiedSessionsStore(), shell = useShellStore()
-    sessions.sessions = [{ id: 'native-tab:active', projectKey: '/selected', projectPath: '/selected', cli: 'codex', runtime: 'native-cli', title: 'Selected session', processState: 'running', attentionState: 'none', lastActivityAt: 1, archived: false, resumable: false, adapterSessionId: 'active' }]
+    sessions.sessions = [{ id: 'native-tab:active', renameAvailable: true, projectKey: '/selected', projectPath: '/selected', cli: 'codex', runtime: 'native-cli', title: 'Selected session', processState: 'running', attentionState: 'none', lastActivityAt: 1, archived: false, resumable: false, adapterSessionId: 'active' }]
     sessions.activeSessionId = 'native-tab:active'
     const wrapper = render(App); await flushPromises()
     const key = (value: string, code: string, ctrl = true) => window.dispatchEvent(new KeyboardEvent('keydown', { key: value, code, ctrlKey: ctrl, bubbles: true, cancelable: true }))

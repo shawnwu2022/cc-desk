@@ -226,6 +226,28 @@ describe('Unified migration through real workspace composition', () => {
     expect(f.histories.get('codex:project')![0].title).toBe('Saved history name')
   })
 
+  // 活动改名的真实强制预检可延迟；读取进度不能撤销自身尚未发出的保存。
+  it('Migration_RenameRetainsAdmissionDuringRead_018', async () => {
+    seedBoth(); await boot()
+    const catalog = useUnifiedSessionsStore()
+    const active = await catalog.resumeCatalogSession(catalog.sessions.find(row => row.runtime === 'native-cli')!)
+    const original = f.bridge.getMockImplementation()!
+    let finish!: () => void
+    const gate = new Promise<void>(resolve => { finish = resolve })
+    f.bridge.mockImplementation(async (command, argument) => {
+      if (command === 'native_list_resources') await gate
+      return original(command, argument)
+    })
+    const pending = catalog.renameSession(active.id, 'Delayed source name')
+    await flushPromises()
+    await catalog.refresh(); await flushPromises()
+    expect(catalog.sessions.find(row => row.id === active.id)).toMatchObject({ renameAvailable: true, renameState: 'saving' })
+    expect(f.bridge.mock.calls.some(([command]) => command === 'cli_rename_session')).toBe(false)
+    finish()
+    await expect(pending).resolves.toBe('native-title-saved')
+    expect(f.histories.get('codex:project')![0].title).toBe('Delayed source name')
+  })
+
   it('Migration_NativeLiveNameRestart_007', async () => {
     seedBoth(); await boot()
     const catalog = useUnifiedSessionsStore(), row = catalog.sessions.find(row => row.runtime === 'native-cli')!
@@ -348,7 +370,8 @@ describe('Unified migration through real workspace composition', () => {
     await boot()
     const catalog = useUnifiedSessionsStore(), tabs = useNativeTabsStore()
     const row = await catalog.createSession({ cli: 'codex', projectKey: '/repo', projectPath: '/repo', action: { kind: 'raw', argv: ['', 'two words'] } })
-    await expect(catalog.renameSession(row.id, 'Local tab name')).rejects.toThrow('SESSION_IDENTITY_UNKNOWN')
+    expect(row.renameAvailable).toBe(false)
+    await expect(catalog.renameSession(row.id, 'Local tab name')).rejects.toThrow('NATIVE_RENAME_UNSUPPORTED')
     expect(f.state.sessionRecords?.[row.id]?.title).not.toBe('Local tab name')
     const before = tabs.tab(row.adapterSessionId)!
     tabs.markError(before.tabId, 'LAUNCH_FAILED')

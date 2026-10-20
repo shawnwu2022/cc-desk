@@ -878,7 +878,7 @@ describe('Unified production runtime', () => {
     useUnifiedSessionsStore().beginRename(opened.id)
     useShellStore().requestWorkspaceAction({ kind: 'rename', sessionId: opened.id, title: 'Unified name' }); await flushPromises()
     expect(tabsTitle()).toBe('Codex CLI'); expect(useShellStore().pendingRequest).toBeNull()
-    expect(unified.actionFeedback?.detailCode).toBe('SESSION_IDENTITY_UNKNOWN')
+    expect(unified.actionFeedback?.detailCode).toBe('NATIVE_RENAME_UNSUPPORTED')
     function tabsTitle() { return useNativeTabsStore().tab(opened.adapterSessionId)?.title }
   })
 
@@ -1208,16 +1208,12 @@ it('Runtime_RowDoubleClickSelection_028', async () => {
   expect(w.emitted('workspace-request')?.filter(([request]) => (request as { kind: string }).kind === 'activate')).toHaveLength(1)
   row.element.dispatchEvent(new MouseEvent('click', { detail: 1, bubbles: true })); await flushPromises()
   row.element.dispatchEvent(new MouseEvent('click', { detail: 2, bubbles: true })); await flushPromises(); row.element.dispatchEvent(new MouseEvent('dblclick', { detail: 2, bubbles: true })); await flushPromises()
-  expect(row.find('input').exists()).toBe(true)
-  await row.get('input').setValue('Renamed by double click')
-  await row.get('input').trigger('keydown', { key: 'Enter' }); await flushPromises()
-  expect(tabs.tab(opened.adapterSessionId)?.title).toBe('Codex CLI')
-  expect(row.get('input').element.value).toBe('Renamed by double click')
-  expect(catalog.actionFeedback?.detailCode).toBe('SESSION_IDENTITY_UNKNOWN')
+  expect(row.find('input').exists()).toBe(false)
+  expect(catalog.sessions.find(session => session.id === opened.id)?.renameAvailable).toBe(false)
   expect(tabs.tab(opened.adapterSessionId)?.status).toBe('exited')
   expect(tabs.tab(opened.adapterSessionId)?.generation).toBe(1)
   window.dispatchEvent(new KeyboardEvent('keydown', { key: 'F2', code: 'F2', bubbles: true })); await flushPromises()
-  expect(row.find('input').exists()).toBe(true)
+  expect(row.find('input').exists()).toBe(false)
   expect(tabs.tabs.size).toBe(1)
   expect(io.ptySpawn).not.toHaveBeenCalled()
 })
@@ -1503,10 +1499,11 @@ it('Catalog_UnmountRevokesQueue_004', async () => {
 
 // 同一真实尝试的只读目录刷新不能打断当前行双击重命名。
 it('Runtime_DoubleClickSurvivesRefresh_032', async () => {
+  io.scope.mockImplementation(async target => ({ scopeId: 'scope', instanceId: 'instance', cli: 'codex', sourceRootKey: 'root', identityEpoch: '1', profileId: 'cx', profileRevision: '7', target, basis: 'configured-profile' }))
   const terminal = defineComponent({ props: ['tabId'], setup(_props, { expose }) { expose({ focus() {}, fitVisible() {}, async stop() {}, async recover() {} }); return () => h('div') } })
   const w = mount(App, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { NativeCliTerminal: terminal, SettingsView: true } } }); wrappers.push(w); await flushPromises()
   const catalog = useUnifiedSessionsStore()
-  const opened = await catalog.createSession({ cli: 'codex', projectKey: '/repo', projectPath: '/repo' }); await flushPromises()
+  const opened = await catalog.resumeCatalogSession(catalog.sessions.find(row => row.nativeSessionId === 'history-id')!); await flushPromises()
   await w.get('.search-input').setValue('/repo'); await flushPromises()
   const row = w.get(`[data-session-row="${opened.id}"]`)
   row.element.dispatchEvent(new MouseEvent('click', { detail: 1, bubbles: true })); await flushPromises()
@@ -1518,16 +1515,18 @@ it('Runtime_DoubleClickSurvivesRefresh_032', async () => {
 
 // 实际App切换到另一会话立即移走旧编辑器，迟到的旧提交不写metadata也不抢回选择。
 it('Runtime_SwitchRevokesRowEditor_033', async () => {
+  io.scope.mockImplementation(async target => ({ scopeId: 'scope', instanceId: 'instance', cli: 'codex', sourceRootKey: 'root', identityEpoch: '1', profileId: 'cx', profileRevision: '7', target, basis: 'configured-profile' }))
   const terminal = defineComponent({ props: ['tabId'], setup(_props, { expose }) { expose({ focus() {}, fitVisible() {}, async stop() {}, async recover() {} }); return () => h('div') } })
   const w = mount(App, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { NativeCliTerminal: terminal, SettingsView: true } } }); wrappers.push(w); await flushPromises()
   const catalog = useUnifiedSessionsStore()
-  const first = await catalog.createSession({ cli: 'codex', projectKey: '/repo', projectPath: '/repo', title: 'First' })
+  const sourceId = catalog.sessions.find(row => row.nativeSessionId === 'history-id')!.id
+  const first = await catalog.resumeCatalogSession(catalog.sessions.find(row => row.id === sourceId)!)
   const second = await catalog.createSession({ cli: 'codex', projectKey: '/repo', projectPath: '/repo', title: 'Second' }); await flushPromises()
   // Opening-order persistence is not a manual rename; source display titles remain intact.
-  expect(catalog.sessions.find(row => row.id === first.id)?.title).toBe('First')
+  expect(catalog.sessions.find(row => row.id === first.id)?.title).toBe('History')
   expect(catalog.sessions.find(row => row.id === second.id)?.title).toBe('Second')
   expect(io.upsertRecord).toHaveBeenCalledTimes(2)
-  expect(io.upsertRecord).toHaveBeenNthCalledWith(1, first.id, expect.objectContaining({ title: '', lastOpenedAt: expect.any(Number) }), true)
+  expect(io.upsertRecord).toHaveBeenNthCalledWith(1, sourceId, expect.objectContaining({ title: '', lastOpenedAt: expect.any(Number) }), true)
   expect(io.upsertRecord).toHaveBeenNthCalledWith(2, second.id, expect.objectContaining({ title: '', lastOpenedAt: expect.any(Number) }), true)
   io.upsertRecord.mockClear()
   await catalog.activateSession(first.id)
@@ -1541,7 +1540,7 @@ it('Runtime_SwitchRevokesRowEditor_033', async () => {
   useShellStore().requestWorkspaceAction({ kind: 'rename', sessionId: first.id, title: 'Stale submit' }); await flushPromises()
   expect(io.upsertRecord).not.toHaveBeenCalled()
   expect(catalog.activeSessionId).toBe(second.id)
-  expect(catalog.sessions.find(row => row.id === first.id)?.title).toBe('First')
+  expect(catalog.sessions.find(row => row.id === first.id)?.title).toBe('History')
 })
 
 // 启动时已停用的 CLI 在启用后必须重新加载历史：catalog.refresh 只读缓存，
@@ -1984,4 +1983,21 @@ it('Warnings_SourceEntryFollowsPanelTitle_069', async () => {
   // 入口是通往诊断抽屉的唯一路径，必须仍能打开抽屉。
   await entry.trigger('click'); await flushPromises()
   expect(document.querySelector('[data-history-source-dialog]')).not.toBeNull()
+})
+
+
+// 来源错误与恢复重算改名能力，读取进度保持原投影。
+it('Runtime_RenameCapabilitySourceTransition_091', async () => {
+  io.scope.mockImplementation(async target => ({ scopeId: 'scope', instanceId: 'instance', cli: 'codex', sourceRootKey: 'root', identityEpoch: '1', profileId: 'cx', profileRevision: '7', target, basis: 'configured-profile' }))
+  render(); await flushPromises()
+  const catalog = useUnifiedSessionsStore(), history = useNativeHistoryStore()
+  const entry = history.all()[0]
+  expect(catalog.sessions.find(row => row.runtime === 'native-cli')?.renameAvailable).toBe(true)
+  const refresh = vi.spyOn(catalog, 'refresh')
+  entry.loading = true; entry.loaded = false; entry.requestEpoch = 'next'; await flushPromises()
+  expect(refresh).not.toHaveBeenCalled()
+  entry.loading = false; entry.loaded = true; entry.error = 'SOURCE_CHANGED'; await flushPromises()
+  expect(catalog.sessions.find(row => row.runtime === 'native-cli')?.renameAvailable).toBe(false)
+  entry.error = null; await flushPromises()
+  expect(catalog.sessions.find(row => row.runtime === 'native-cli')?.renameAvailable).toBe(true)
 })

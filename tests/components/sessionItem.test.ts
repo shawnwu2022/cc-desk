@@ -15,7 +15,7 @@ import type { SessionMenuAction, UnifiedSession } from '@/types/unifiedSession'
 const body = new DOMWrapper(document.body)
 const now = new Date(2026, 8, 30, 9, 0).getTime()
 const base: UnifiedSession = {
-  id: 'catalog-codex-1', projectKey: '/work/game', projectPath: '/work/game',
+  id: 'catalog-codex-1', renameAvailable: true, projectKey: '/work/game', projectPath: '/work/game',
   cli: 'codex', runtime: 'native-cli', title: 'Fix a very long login title',
   processState: 'running', attentionState: 'none', lastActivityAt: now - 6 * 60_000,
   archived: false, opened: true, resumable: true, adapterSessionId: 'run-1', nativeSessionId: 'native-1',
@@ -728,4 +728,16 @@ it('Row_DragSuppressedWhileRenaming_061', async () => {
   Object.defineProperties(event, { pointerId: { value: 1 }, isPrimary: { value: true }, pointerType: { value: 'mouse' } })
   wrapper.get('input').element.dispatchEvent(event)
   expect(event.defaultPrevented).toBe(false)
+})
+
+// 能力失效时菜单与快捷键同时撤销，旧编辑草稿不能提交。
+it('Rename_CapabilityRevoked_062', async () => {
+  const wrapper = row(base, { selected: true })
+  await wrapper.setProps({ session: { ...base, renameState: 'editing' } })
+  expect(wrapper.find('input.rename-input').exists()).toBe(true)
+  await wrapper.setProps({ session: { ...base, renameState: 'editing', renameAvailable: false } })
+  expect(wrapper.find('input.rename-input').exists()).toBe(false)
+  await wrapper.trigger('keydown', { key: 'F2' })
+  expect(wrapper.emitted('menu-action')).toBeUndefined()
+  expect(selectSessionMenuActions({ ...base, renameAvailable: false }).some(action => action.id === 'rename')).toBe(false)
 })

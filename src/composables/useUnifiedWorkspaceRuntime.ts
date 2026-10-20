@@ -18,7 +18,7 @@ import { useShellStore, type WorkspaceRequest } from '@/stores/shell'
 import { useHookStore } from '@/stores/hook'
 import { useAttentionStore } from '@/stores/attention'
 import { createLegacyClaudeAdapter } from '@/session/adapters/legacyClaudeAdapter'
-import { createNativeCliAdapter, type NativeRuntimeCreateInput, type NativeRestartContinuation } from '@/session/adapters/nativeCliAdapter'
+import { nativeHistoryRenameReady, createNativeCliAdapter, type NativeRuntimeCreateInput, type NativeRestartContinuation } from '@/session/adapters/nativeCliAdapter'
 import { mapSafeUserError, safeUserErrorCode } from '@/utils/userError'
 import { projectSessionDiagnostics } from '@/utils/sessionDiagnostics'
 import { normalizePath, sameProjectPath } from '@/utils/path'
@@ -975,7 +975,10 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
         nextIdProjects.set(row.nativeSessionId, identity)
       }
       // 标题来自 CLI，可能包含任意分隔符；结构编码避免不同字段组合撞签名。
+      // 来源读取结果影响改名能力；loading/requestEpoch 仍不属于目录投影。
+      if (entry.loading && historySignatures.has(entry.key)) continue
       const signature = JSON.stringify([entry.sourceRootKey ?? '', entry.sessions.map(row => [
+        nativeHistoryRenameReady(entry, row),
         row.sessionKey, row.nativeSessionId, row.archived ? 1 : 0, row.title,
         row.titleSource ?? '', row.lastKnownTitle ?? '', row.lastKnownTitleSource ?? '',
         row.updatedAt ?? '', row.lastKnownActivityAt ?? '', row.truncated ? 1 : 0,

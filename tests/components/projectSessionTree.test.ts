@@ -18,7 +18,7 @@ import type { SessionAdapter, UnifiedProjectGroup, UnifiedSession } from '@/type
 
 const now = new Date(2026, 8, 30, 9, 0).getTime()
 function session(extra: Partial<UnifiedSession> = {}): UnifiedSession {
-  return { id: 'claude-1', projectKey: '/work/game', projectPath: '/work/game', cli: 'claude',
+  return { id: 'claude-1', renameAvailable: true, projectKey: '/work/game', projectPath: '/work/game', cli: 'claude',
     runtime: 'legacy-claude', title: 'Claude work', processState: 'running', attentionState: 'none',
     lastActivityAt: now - 60_000, archived: false, opened: true, resumable: true, adapterSessionId: 'adapter-1', ...extra }
 }

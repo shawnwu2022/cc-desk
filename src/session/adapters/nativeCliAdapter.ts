@@ -219,10 +219,21 @@ function parseHistoryId(id: string): { adapterSessionId: string; nativeSessionId
   return { projectPath, adapterSessionId, nativeSessionId }
 }
 
+export function nativeHistoryRenameReady(entry: NativeHistoryEntry, item: NativeHistoryEntry['sessions'][number]): boolean {
+  return entry.loaded && !entry.loading && !entry.error && !item.readFailure
+    && !!entry.source && !!entry.sourceRootKey && entry.source.sourceRootKey === entry.sourceRootKey
+    && entry.source.target?.kind === 'profile' && entry.source.cli === entry.context.cli
+    && entry.source.profileId === entry.context.profileId && entry.source.profileRevision === entry.context.profileRevision
+    && entry.source.target.profileId === entry.context.profileId
+    && entry.source.target.expectedProfileRevision === entry.context.profileRevision
+    && Array.isArray(entry.source.target.projectIds) && entry.source.target.projectIds.includes(entry.context.projectId)
+}
+
 export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapter {
   let legacyArchiveDisplayRoot: string | undefined
   // 仅显示快照：不能用它补出运行 scope、归档或改名授权。
   const titleSnapshots = new WeakMap<NativeCliTab, { owner: string; identity: UnifiedSession }>()
+  const renameCapabilities = new WeakMap<NativeHistoryEntry['sessions'][number], { entry: string; root?: string; ready: boolean }>()
   // 仅内存展示快照：不跨应用重启、不赋予资源/进程授权；满额不淘汰既有未读。
   const closedNotices = new Map<string, NativeObservationNoticeState>()
   const closingNoticeOwners = new Map<string, { latest: symbol; order: number; pending: number }>()
@@ -288,6 +299,10 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
   }
   function projectActive(tab: NativeCliTab) {
     const row = projectTab(tab, deps.tabs)
+    const renameMatches = historyForTab(tab)
+    row.renameAvailable = !!deps.nativeRename && !!deps.runSource && !!deps.history.load
+      && !!row.renameTarget && renameMatches.length === 1
+      && displayRenameSourceReady(renameMatches[0].entry, renameMatches[0].item)
     let identity = tabDisplayIdentity(tab)
     // 精确错误只来自当前匹配行，标题快照不能回放旧诊断。
     const currentReadFailure = identity.historyReadFailure
@@ -403,6 +418,18 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
     })
   }
 
+  function displayRenameSourceReady(entry: NativeHistoryEntry, item: NativeHistoryEntry['sessions'][number]): boolean {
+    // 强制预检保留旧行；读取中沿用最后已验证的展示能力，避免保存被自身预检取消。
+    if (entry.loading) {
+      const previous = renameCapabilities.get(item)
+      return previous?.entry === entry.key && previous.root === entry.sourceRootKey && previous.ready
+    }
+    const ready = nativeHistoryRenameReady(entry, item)
+    renameCapabilities.set(item, { entry: entry.key, root: entry.sourceRootKey, ready })
+    return ready
+  }
+
+
   async function listSessions(projectKey?: string, cli?: UnifiedCliKind): Promise<UnifiedSession[]> {
     const wanted = projectKey == null ? null : normalizePath(projectKey)
     const hasClaudeHistory = deps.history.all().some(entry => entry.context.cli === 'claude'
@@ -429,6 +456,7 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
         const claim = historyId(entry, item.sessionKey, item.nativeSessionId)
         if (!claimed.has(claim)) sessions.push({
           ...withSessionDisplayName(projectHistory(entry, item), deps.metadata),
+          renameAvailable: !!deps.nativeRename && displayRenameSourceReady(entry, item),
           ...archiveState(entry, item, legacyRoot),
           ...(closedNotices.has(claim) ? { observationNotice: { recent: { ...closedNotices.get(claim)!.recent! }, unreadReplyEnd: { ...closedNotices.get(claim)!.unreadReplyEnd! } } } : {}),
         })
@@ -641,7 +669,8 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
       target = matches[0]
     }
     const { entry, item } = target
-    if (!entry.source || entry.error || !entry.loaded || !deps.nativeRename) throw new Error('NATIVE_RENAME_UNSUPPORTED')
+    if (!nativeHistoryRenameReady(entry, item) || !deps.nativeRename) throw new Error('NATIVE_RENAME_UNSUPPORTED')
+    if (!entry.source) throw new Error('NATIVE_RENAME_UNSUPPORTED')
     const source = { ...entry.source, target:entry.source.target.kind === 'profile'
       ? { ...entry.source.target, projectIds:[...entry.source.target.projectIds] } : { ...entry.source.target } }
     const request = { operationId:createNativeId('rename'), source, sessionKey:item.sessionKey, title:value }

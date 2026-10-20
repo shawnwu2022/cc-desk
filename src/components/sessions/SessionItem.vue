@@ -9,7 +9,7 @@ import AppTooltip from '@/components/ui/AppTooltip.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import SessionAppIcon from './SessionAppIcon.vue'
 import SessionOverflowMenu from './SessionOverflowMenu.vue'
-import { deriveSessionVisualState, makeSessionRenameOwnerKey, selectSessionMenuActions, selectSessionArchiveAction, selectSessionPrimaryAction, selectSessionObservationNotice, sessionActionLabelKey } from '@/utils/sessionPresentation'
+import { canRenameSession, deriveSessionVisualState, makeSessionRenameOwnerKey, selectSessionMenuActions, selectSessionArchiveAction, selectSessionPrimaryAction, selectSessionObservationNotice, sessionActionLabelKey } from '@/utils/sessionPresentation'
 import { formatRelativeActivity, useRelativeActivityClock } from '@/utils/relativeTime'
 import { buildSessionDragPayload } from '@/utils/sessionReference'
 import { startSessionReferenceDrag } from '@/session/sessionReferenceDrag'
@@ -44,7 +44,7 @@ const menuOpen = ref(false)
 let firstClick: { session: UnifiedSession; owner: string; owns: (() => boolean) | null; selected: boolean } | null = null
 const menuAnchor = ref({ x: 8, y: 8 })
 let cancelReferenceDrag: (() => void) | undefined
-const isRenaming = computed(() => (props.selected || props.session.opened === false) && (localRename.value || props.session.renameState === 'editing' || (props.selected && props.session.renameState === 'saving')))
+const isRenaming = computed(() => (props.selected || props.session.opened === false) && (canRenameSession(props.session) || props.session.renameState === 'saving') && (localRename.value || props.session.renameState === 'editing' || (props.selected && props.session.renameState === 'saving')))
 const isSaving = computed(() => props.session.renameState === 'saving')
 const visualState = computed(() => deriveSessionVisualState(props.session, props.session.opened === true))
 const observationNotice = computed(() => selectSessionObservationNotice(props.session))
@@ -52,7 +52,7 @@ const receiptId = computed(() => {
   const notice = props.session.observationNotice?.unreadReplyEnd
   return notice ? JSON.stringify([notice.runId, notice.generation, notice.eventId]) : undefined
 })
-const canRename = computed(() => (props.selected || props.session.opened === false) && !props.session.archived && !props.session.preparationState && props.menuActionVisibility?.rename !== false)
+const canRename = computed(() => (props.selected || props.session.opened === false) && canRenameSession(props.session) && props.menuActionVisibility?.rename !== false)
 const actions = computed(() => selectSessionMenuActions(props.session, { ...props.menuActionVisibility, rename: canRename.value }))
 const archive = computed(() => selectSessionArchiveAction(props.session, props.menuActionVisibility))
 const requestedPrimary = computed(() => isRenaming.value ? 'save-rename'

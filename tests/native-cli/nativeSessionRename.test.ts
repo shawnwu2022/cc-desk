@@ -3,6 +3,7 @@ import { createNativeCliAdapter } from '@/session/adapters/nativeCliAdapter'
 import type { NativeHistoryContext, NativeHistoryEntry } from '@/stores/nativeHistory'
 import type { SourceRef } from '@/types/nativeProjection'
 import type { NativeCliTab } from '@/stores/nativeTabs'
+import { selectSessionMenuActions } from '@/utils/sessionPresentation'
 
 const source: SourceRef = { scopeId:'scope',instanceId:'instance',cli:'codex',sourceRootKey:'root',identityEpoch:'1',profileId:'profile',profileRevision:'1',basis:'configured-profile',target:{kind:'profile',profileId:'profile',expectedProfileRevision:'1',projectIds:['project']} }
 function fixture(cli:'claude'|'codex'='codex') {
@@ -24,6 +25,48 @@ function resumed(cli:'claude'|'codex'='codex') {
   return {...h,tab,id:'native-tab:tab'}
 }
 describe('Native session rename admission',()=>{
+  // 缺失或不匹配的授权只撤销改名，不让历史目录整批消失。
+  it.each(['missing', 'profile', 'revision', 'project'] as const)('Rename_InvalidScopeKeepsHistory_023_%s', async mismatch => {
+    const h = fixture()
+    h.entry.source!.target = mismatch === 'missing' ? undefined as any : {
+      kind: 'profile', profileId: mismatch === 'profile' ? 'other' : 'profile',
+      expectedProfileRevision: mismatch === 'revision' ? 'old' : '1',
+      projectIds: mismatch === 'project' ? ['other'] : ['project'],
+    }
+    const rows = await h.adapter.listSessions()
+    expect(rows).toHaveLength(1)
+    expect(rows[0].title).toBe('Old title')
+    expect(rows[0].renameAvailable).toBe(false)
+    await expect(h.adapter.renameSession(rows[0].id, 'No write')).rejects.toThrow('NATIVE_RENAME_UNSUPPORTED')
+    expect(h.rename).not.toHaveBeenCalled()
+  })
+  // 两种 CLI 的已绑定活动来源与关闭记录使用相同的菜单能力，来源失败立即隐藏入口。
+  it.each(['claude', 'codex'] as const)('Rename_CapabilityMatrix_021_%s', async cli => {
+    const h = resumed(cli)
+    const opened = (await h.adapter.listSessions()).find(row => row.opened)!
+    expect(opened.renameAvailable).toBe(true)
+    expect(selectSessionMenuActions(opened).some(action => action.id === 'rename')).toBe(true)
+    h.tabs.clear()
+    const closed = (await h.adapter.listSessions())[0]
+    expect(closed.renameAvailable).toBe(true)
+    expect(selectSessionMenuActions(closed).some(action => action.id === 'rename')).toBe(true)
+    h.entry.error = 'SOURCE_CHANGED'
+    const stale = (await h.adapter.listSessions())[0]
+    expect(stale.renameAvailable).toBe(false)
+    expect(selectSessionMenuActions(stale).some(action => action.id === 'rename')).toBe(false)
+    await expect(h.adapter.renameSession(stale.id, 'No write')).rejects.toThrow()
+    expect(h.rename).not.toHaveBeenCalled()
+  })
+  // 未绑定的 new、raw 和 picker 不能展示改名入口，也不能向终端补写命令。
+  it.each(['new', 'raw', 'resume-picker'] as const)('Rename_UnknownMenuHidden_022_%s', async kind => {
+    const h = resumed('claude')
+    h.tab.action = kind === 'raw' ? { kind, argv: [] } : kind === 'resume-picker' ? { kind, scope: 'current-project' } : { kind }
+    delete h.tab.sourceSessionKey
+    const row = (await h.adapter.listSessions()).find(row => row.opened)!
+    expect(selectSessionMenuActions(row).some(action => action.id === 'rename')).toBe(false)
+    await expect(h.adapter.renameSession(h.id, 'No write')).rejects.toThrow('SESSION_IDENTITY_UNKNOWN')
+    expect(h.rename).not.toHaveBeenCalled()
+  })
   it('Rename_CodexHistoryUsesNativeReceiptThenReload_001',async()=>{
     const h=fixture(),row=(await h.adapter.listSessions())[0]
     expect(await h.adapter.renameSession(row.id,' New native title ')).toBe('native-title-saved')

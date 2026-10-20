@@ -239,6 +239,14 @@ failures on the requested ID still reject rename. Full-source duplicate checks,
 file pinning, project/cwd/root checks and official readback remain mandatory.
 The menu uses the single **Rename** action; resumed-source/history-record target
 details remain in the editor tooltip.
+The adapter exposes rename capability only for an exact, readable source with a
+current profile revision and registered project. Menu, F2, double-click and store
+admission share that capability; execution still reacquires and validates source
+authority. Unbound new/raw/picker sessions and unreadable sources omit Rename.
+Claude project identity follows the first transcript cwd; later cwd changes do
+not change the project, while a different first cwd or any different session ID
+still rejects the target. Plugin hook commands quote the complete script path so
+Windows configuration directories containing spaces preserve observer delivery.
 
 2026-10-19 WSK-MSI regression: a valid Claude target plus an unrelated canonical
 empty transcript reproduced `SESSION_ORIGIN_AMBIGUOUS` before the fix. The fixed
