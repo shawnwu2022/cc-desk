@@ -64,8 +64,9 @@ describe('generate updater manifest', () => {
     expect(renderDocument(source, 'zh')).toContain('保留备份。')
     expect(() => readNotes('1.2.3', { schemaVersion: 1, releases: { '1.2.3': { zh: '不能假装有英文摘要' } } })).toThrow(/English/)
     const actual = JSON.parse(readFileSync('docs/release-notes.json', 'utf8'))
-    expect(readFileSync('RELEASE_NOTES.md', 'utf8')).toBe(renderDocument(actual, 'en'))
-    expect(readFileSync('RELEASE_NOTES_CN.md', 'utf8')).toBe(renderDocument(actual, 'zh'))
+    // 文档允许 Git 的平台换行转换；下方发布披露仍逐字节保留原文。
+    expect(readFileSync('RELEASE_NOTES.md', 'utf8').replaceAll('\r\n', '\n')).toBe(renderDocument(actual, 'en'))
+    expect(readFileSync('RELEASE_NOTES_CN.md', 'utf8').replaceAll('\r\n', '\n')).toBe(renderDocument(actual, 'zh'))
   })
 
   it('ReleaseNotes_PublicBodyRetainsExactDisclosure_013', () => {
