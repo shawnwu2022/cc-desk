@@ -3,6 +3,7 @@ import { inject } from 'vue'
 import { SESSION_INTERACTION_OWNER } from '@/session/sessionInteraction'
 import { SESSION_HISTORY_WARNING_VISIBLE } from '@/utils/workspaceSourceWarnings'
 import { APP_RENAME_SHORTCUT, captureShortcut } from '@/config/appShortcuts'
+import { isTextEditingTarget, ownsListKeyboardEvent } from '@/utils/keyboardScope'
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppInput from '@/components/ui/AppInput.vue'
@@ -172,9 +173,13 @@ function openContext(event: MouseEvent) {
   menuOpen.value = true
 }
 function onKeydown(event: KeyboardEvent) {
-  if (!props.surfaceActive) return
-  if (event.target instanceof HTMLInputElement) return
-  if (renameShortcut.value && captureShortcut(event) === renameShortcut.value) { event.preventDefault(); event.stopPropagation(); startRename() }
+  if (!props.surfaceActive || !ownsListKeyboardEvent(event, row.value) || event.repeat
+    || isTextEditingTarget(event.target) || isTextEditingTarget(document.activeElement)
+    || event.target instanceof Element && event.target.closest('[role="menu"]')) return
+  if (renameShortcut.value && captureShortcut(event) === renameShortcut.value) {
+    if (!canRename.value || isSaving.value || isRenaming.value) return
+    event.preventDefault(); event.stopPropagation(); startRename()
+  }
   else if (event.key === 'ContextMenu' || (event.key === 'F10' && event.shiftKey)) {
     if (!actions.value.length || isRenaming.value) return
     event.preventDefault(); event.stopPropagation()

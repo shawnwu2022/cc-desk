@@ -70,6 +70,7 @@ describe('Final workspace review regressions', () => {
   })
   it('RENAME: row F2 draft must be invalidated when exact Native attempt changes', async () => {
     const w = renderApp(); const { row, tabs, tab } = await openNativeRow(w, true)
+    ;(row.element as HTMLElement).focus()
     await row.trigger('keydown', { key: 'F2', code: 'F2' }); await flushPromises()
     await row.get('input').setValue('Old attempt draft')
     tabs.tab(tab.tabId)!.status = 'exited'
@@ -171,6 +172,7 @@ describe('Final workspace review regressions', () => {
   // 已取消的编辑不能通过迟到 Save 被解释为新的尝试。
   it('Rename_CancelRejectsLateSave_003', async () => {
     const w = renderApp(); const { row, tab } = await openNativeRow(w, true)
+    ;(row.element as HTMLElement).focus()
     await row.trigger('keydown', { key: 'F2', code: 'F2' }); await flushPromises()
     await row.get('input').setValue('Discarded')
     await row.get('input').trigger('keydown', { key: 'Escape' }); await flushPromises()
@@ -203,6 +205,7 @@ describe('Final workspace review regressions', () => {
   it('Keyboard_FilteredHistory_005', async () => {
     const w = renderApp(); await openNativeRow(w)
     const search = w.get('.search-input')
+    ;(search.element as HTMLElement).focus()
     await search.setValue('History'); await search.trigger('keydown', { key: 'ArrowDown' }); await flushPromises()
     const first = document.activeElement as HTMLElement
     expect(first.classList.contains('project-row')).toBe(true)
@@ -304,6 +307,7 @@ describe('Final workspace review regressions', () => {
     await flushPromises()
     const project = w.get('[data-project-key="/legacy"]')
     expect(project.attributes('aria-expanded')).toBe('false')
+    ;(project.element as HTMLElement).focus()
     await project.trigger('keydown', { key: 'Enter' }); await flushPromises()
     expect(project.attributes('aria-expanded')).toBe('true')
     expect(useUnifiedSessionsStore().activeSessionId).toBe(selected)

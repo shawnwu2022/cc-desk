@@ -7,6 +7,7 @@ export class Channel<T> { onmessage: ((frame: T) => void) | null = null }
 export let terminal: Terminal
 export const sizes: { cols: number; rows: number }[] = []
 export let launches = 0
+export const inputEvents: string[] = []
 export async function cliResize(_owner: unknown, cols: number, rows: number) { sizes.push({ cols, rows }) }
 export class NativeLaunchNotSubmittedError extends Error {}
 export function createNativeLaunchEntry() {
@@ -23,5 +24,6 @@ export function createNativeLaunchEntry() {
 }
 export function createDeskNativeTerminalBinding(options: { term: Terminal }) {
   terminal = options.term
-  return { dispose() {} }
+  const listener = terminal.onData(data => inputEvents.push(data))
+  return { dispose() { listener.dispose() } }
 }

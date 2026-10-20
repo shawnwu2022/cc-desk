@@ -23,7 +23,7 @@ describe('Normal app shortcut routing', () => {
     const actions = shortcuts(); await flushPromises()
     for (const value of ['n', 'w', 'p', ',']) expect(key(value, { [modifier]: true }).defaultPrevented).toBe(true)
     key('F2')
-    expect(actions).toEqual(['new-session', 'close-session', 'projects', 'settings', 'rename'])
+    expect(actions).toEqual(['new-session', 'close-session', 'projects', 'settings'])
   })
   // 重复、输入法、额外修饰键和已有处理事件不消费，普通编辑字段保留自己的编辑语义。
   it('Shortcuts_InputAndRepeatOwnership_002', async () => {
@@ -57,6 +57,29 @@ describe('Normal app shortcut routing', () => {
     const actions = shortcuts(); await flushPromises()
     const row = document.createElement('div'); row.dataset.sessionRow = 'focused'; document.body.append(row)
     key('F2', {}, row); expect(actions).toEqual([])
+  })
+
+  // 全局捕获不得先吞掉终端 F2；同一终端里的既有全局命令仍然生效。
+  it('Shortcuts_TerminalRetainsRenameKey_007', async () => {
+    const actions = shortcuts(); await flushPromises()
+    const terminal = document.createElement('textarea'); terminal.className = 'xterm-helper-textarea'
+    document.body.append(terminal); terminal.focus()
+    const received: KeyboardEvent[] = []
+    terminal.addEventListener('keydown', event => received.push(event))
+    const event = key('F2', {}, terminal)
+    expect(event.defaultPrevented).toBe(false)
+    expect(received).toEqual([event]); expect(actions).toEqual([])
+    key('w', { ctrlKey: true }, terminal); expect(actions).toEqual(['close-session'])
+    terminal.blur(); expect(key('F2').defaultPrevented).toBe(false)
+    expect(actions).toEqual(['close-session'])
+  })
+
+  it.each(['', 'true', 'plaintext-only'])('Shortcuts_EditableInheritanceOwnsKeys_008 %s', async value => {
+    const actions = shortcuts(); await flushPromises()
+    const editable = document.createElement('div'); editable.setAttribute('contenteditable', value)
+    const child = document.createElement('span'); editable.append(child); document.body.append(editable)
+    expect(key('n', { ctrlKey: true }, child).defaultPrevented).toBe(false)
+    expect(actions).toEqual([])
   })
 
   // 未知整组写可能已提交，失败的读回阻止后续写；成功只读协调后才允许新的明确更改。

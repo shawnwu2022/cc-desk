@@ -225,11 +225,11 @@ function shortcutAction(action: AppShortcutAction) {
     request(selected ? { kind: 'new-session', project: selected } : { kind: 'add-project' })
     return
   }
+  if (action !== 'close-session') return
   const selected = sessions.activeSession
   if (!selected) return
   shell.navigate('workspace')
-  if (action === 'close-session') request({ kind: 'menu-action', sessionId: selected.id, action: 'close' })
-  else if (!sessions.isPreparingSession(selected.id)) { shell.sidebarVisible = true; sessions.beginRename(selected.id) }
+  request({ kind: 'menu-action', sessionId: selected.id, action: 'close' })
 }
 const shortcuts = useAppShortcuts({ onAction: shortcutAction })
 
