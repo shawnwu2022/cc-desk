@@ -727,6 +727,8 @@ export default {
   attentionKind_permission: '等权限',
   attentionKind_completed: '完成',
   searchSessions: '搜索会话...',
+  activeSessionsOnly: '仅显示活跃会话',
+  noActiveSessions: '暂无活跃会话',
   searchResults: '搜索结果',
   clearSearch: '清除搜索',
   openTabs: '打开的标签页',

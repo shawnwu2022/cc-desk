@@ -770,6 +770,19 @@ Isolated bilingual `resume-session` and `resume-history` visual scenarios use a 
 
 ## Next session-list interaction contract
 
+`SessionsPanel` 在搜索框下提供“仅显示活跃会话”快捷按钮，默认关闭，
+仅在当前面板生命周期内保留选择。开启后仅展示 adapter 明确投影 `opened === true`
+的非归档会话：包括空闲、运行、等待权限、启动中和已结束但尚未关闭的终端，
+不根据当前选择、标题、活动时间或生成状态推断。关闭/打开后的目录投影实时更新结果。
+过滤先作用于现有项目/CLI 可见投影，再组合项目名/路径与会话标题搜索；
+过滤后没有会话的项目不显示。项目置顶、CLI 分组、冻结创建序和展开状态保持原有规则。
+关闭过滤后恢复全部现有可见会话，不重置搜索。无结果区分“暂无活跃会话”
+与搜索无匹配；按钮使用共享 `AppButton`、原生键盘语义及 `aria-pressed`，
+不注册应用级快捷键，不改变选择或运行所有权。
+回归入口为 `tests/components/activeSessionFilter.test.ts`；浏览器 Enter/Space、
+焦点与双语明暗布局检查收在现有 `tests/visual/unified-workspace.spec.ts` 的
+`ActiveFilter_KeyboardLayout_001`，由普通视觉入口及 CI 显式清单一并执行。
+
 An open row selects its already-owned terminal. Closed history ignores row click,
 double click, Enter and Space; the separate native Resume button is its only launch
 entry. F2/menu and selected-row double click still request rename independently.

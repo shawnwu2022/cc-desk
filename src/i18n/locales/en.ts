@@ -727,6 +727,8 @@ export default {
   attentionKind_permission: 'Permission',
   attentionKind_completed: 'Done',
   searchSessions: 'Search sessions...',
+  activeSessionsOnly: 'Active sessions only',
+  noActiveSessions: 'No active sessions',
   searchResults: 'Search Results',
   clearSearch: 'Clear search',
   openTabs: 'Open Tabs',
