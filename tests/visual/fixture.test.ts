@@ -255,6 +255,7 @@ describe('Isolated production-component fixture', () => {
     await flushPromises()
     expect(document.querySelector('[role="menu"]')).not.toBeNull()
     expect(document.querySelector('[role="menu"]')!.contains(document.activeElement)).toBe(true)
+    expect(document.querySelector('[data-item-id="rename"]')).not.toBeNull()
     expect(document.querySelector('[data-item-id="close"]')).toBeNull()
     expect(document.querySelector('[data-item-id="stop"]')).toBeNull()
     expect(document.querySelector('[data-item-id="archive"]')).toBeNull()
