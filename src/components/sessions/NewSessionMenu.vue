@@ -4,8 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { useCliSupportStore } from '@/stores/cliSupport'
 import AppMenu from '@/components/ui/AppMenu.vue'
-import claudeIcon from '@/assets/icons/cli/claude.svg'
-import codexIcon from '@/assets/icons/cli/codex.svg'
+import CliAppIcon from './CliAppIcon.vue'
 import type { NewSessionRequest, UnifiedCliKind } from '@/types/unifiedSession'
 const props = withDefaults(defineProps<{ open: boolean; active?: boolean; anchor: { x: number; y: number }; availability?: Partial<Record<UnifiedCliKind, 'unknown' | 'available' | 'unavailable'>> }>(), { active: true, availability: () => ({}) })
 const emit = defineEmits<{ 'update:open': [open: boolean]; select: [intent: NonNullable<NewSessionRequest['intent']>] }>()
@@ -38,7 +37,7 @@ onBeforeUnmount(() => window.removeEventListener('resize', place))
   <Teleport to="body">
     <AppMenu ref="menu" :open="open && active" :label="t('newSessionTitle')" :items="items" class="new-session-menu" :style="position"
       @update:open="emit('update:open', $event)" @select="emit('select', $event as NonNullable<NewSessionRequest['intent']>)">
-      <template #item="{ item }"><img v-if="item.id === 'claude' || item.id === 'codex'" :src="item.id === 'claude' ? claudeIcon : codexIcon" width="16" height="16" alt="" aria-hidden="true" /><span v-else-if="item.id === 'opencode'" class="new-session-menu__glyph" aria-hidden="true">OC</span><span>{{ item.label }}</span></template>
+      <template #item="{ item }"><CliAppIcon v-if="item.id === 'claude' || item.id === 'codex' || item.id === 'opencode'" :cli="item.id" decorative /><span>{{ item.label }}</span></template>
     </AppMenu>
   </Teleport>
 </template>
@@ -46,5 +45,4 @@ onBeforeUnmount(() => window.removeEventListener('resize', place))
 .new-session-menu { position: fixed; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); }
 .new-session-menu :deep(.ui-menu-item) { display: flex; align-items: center; gap: 8px; }
 .new-session-menu :deep([data-item-id='restore']) { border-top: 1px solid var(--border-color); margin-top: 4px; padding-top: 8px; }
-.new-session-menu :deep(.new-session-menu__glyph) { display: inline-flex; width: 16px; height: 16px; align-items: center; justify-content: center; font-family: var(--font-sans); font-size: 9px; font-weight: 600; color: var(--text-secondary); }
 </style>

@@ -55,6 +55,7 @@ async function input(selector: string, value: string) { const el = document.quer
 it('LaunchSettings_GroupDefault_001', async () => {
   const w = await render()
   expect(w.findAll('[data-launch-group]').map(group => group.attributes('data-launch-group'))).toEqual(['claude', 'codex', 'opencode'])
+  expect(w.get('[data-launch-group="opencode"] .cli-app-icon__image').attributes('src')).toContain('/cli/opencode.svg')
   expect(w.get('[data-launch-row="cc"]').text()).toContain('Default')
   expect(w.get('[data-launch-row="cx"]').text()).toContain('Default')
   expect(w.get('[data-launch-row="cc"]').findAll('[data-launch-edit]')).toHaveLength(1)

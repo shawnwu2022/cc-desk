@@ -2,7 +2,8 @@ import { test, expect } from '@playwright/test'
 import { expandFixtureProjects, clearFixtureSetupFocus } from './fixtureActions'
 
 // 生产组件的合成状态投影验收；不连接 CLI、用户数据或安装包 WebView。
-for (const gui of ['light', 'dark']) for (const cli of ['claude', 'codex']) {
+const cliName = (cli: string) => cli === 'claude' ? 'Claude Code' : cli === 'codex' ? 'Codex CLI' : 'opencode'
+for (const gui of ['light', 'dark']) for (const cli of ['claude', 'codex', 'opencode']) {
   test(`merged app status ${gui} ${cli}`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width: 1024, height: 1000 })
     const errors: string[] = []
@@ -21,11 +22,14 @@ for (const gui of ['light', 'dark']) for (const cli of ['claude', 'codex']) {
       await expect(row.locator('.session-app-icon')).toHaveCount(1)
       await expect(row).toHaveCSS('grid-template-columns', /20px .* 38px 20px 20px$/)
       await expect(row.locator('.session-app-icon')).toHaveCSS('width', '20px')
-      await expect(row.locator('.cli-app-icon__image')).toHaveAttribute('src', new RegExp(cli + '\\.svg'))
+      const image = row.locator('.cli-app-icon__image:visible')
+      await expect(image).toHaveCount(1)
+      await expect(image).toHaveAttribute('src', new RegExp(cli + (cli === 'opencode' && gui === 'dark' ? '-dark' : '') + '\\.svg'))
+      expect(await image.evaluate(el => (el as HTMLImageElement).naturalWidth)).toBe(16)
     }
     await expect(idle.locator('[data-session-badge]')).toHaveCount(0)
     await expect(closed.locator('[data-session-badge]')).toHaveCount(0)
-    await expect(closed).toHaveAttribute('aria-label', `${cli === 'claude' ? 'Claude Code' : 'Codex CLI'}; Closed`)
+    await expect(closed).toHaveAttribute('aria-label', `${cliName(cli)}; Closed`)
     if (cli === 'codex') {
       await expect(idle.locator('.session-app-icon__app')).toHaveCSS('opacity', '1')
       const closedApp = closed.locator('.session-app-icon__app')
@@ -49,10 +53,10 @@ for (const gui of ['light', 'dark']) for (const cli of ['claude', 'codex']) {
     await expect(permission.locator('.session-status-icon')).toHaveCSS('color', gui === 'light' ? 'rgb(122, 92, 58)' : 'rgb(240, 212, 168)')
     await expect(waiting.locator('.session-status-icon')).toHaveCSS('color', gui === 'light' ? 'rgb(42, 80, 130)' : 'rgb(106, 154, 205)')
     await permission.hover()
-    await expect(page.getByRole('tooltip')).toHaveText((cli === 'claude' ? 'Claude Code' : 'Codex CLI') + '; Waiting for permission')
+    await expect(page.getByRole('tooltip')).toHaveText(cliName(cli) + '; Waiting for permission')
     await page.mouse.move(1020, 996)
     await waiting.focus()
-    await expect(page.getByRole('tooltip')).toHaveText((cli === 'claude' ? 'Claude Code' : 'Codex CLI') + '; Waiting for input')
+    await expect(page.getByRole('tooltip')).toHaveText(cliName(cli) + '; Waiting for input')
     await page.keyboard.press('Escape')
     await expect(page.getByRole('tooltip')).toHaveCount(0)
     await expect(waiting).toBeFocused()
@@ -72,6 +76,47 @@ for (const gui of ['light', 'dark']) for (const cli of ['claude', 'codex']) {
     await expect(page.locator('[data-blocked-host-calls]')).toHaveAttribute('data-blocked-host-calls', '0')
   })
 }
+
+for (const gui of ['light', 'dark']) test(`OpenCode actual icon surfaces ${gui}`, async ({ page }, testInfo) => {
+  const errors: string[] = []
+  page.on('pageerror', error => errors.push(error.message))
+  await page.route('**/*', route => new URL(route.request().url()).origin === new URL(testInfo.project.use.baseURL!).origin ? route.continue() : route.abort())
+  const expected = gui === 'dark' ? 'opencode-dark.svg' : 'opencode.svg'
+  const check = async (selector: string) => {
+    const image = page.locator(selector).locator('.cli-app-icon__image:visible').first()
+    await expect(image).toHaveAttribute('src', new RegExp(expected.replace('.', '\\.')))
+    await expect(image).toHaveCSS('filter', 'none')
+    expect(await image.evaluate(el => (el as HTMLImageElement).naturalWidth)).toBe(16)
+    expect(await image.evaluate(el => (el as HTMLImageElement).complete)).toBe(true)
+  }
+  const capture = async (surface: string) => {
+    await expect(page.locator('[data-blocked-host-calls]')).toHaveAttribute('data-blocked-host-calls', '0')
+    const path = testInfo.outputPath(`opencode-${surface}-${gui}.png`)
+    await page.screenshot({ path })
+    await testInfo.attach(`${surface} ${gui}`, { path, contentType: 'image/png' })
+  }
+  await page.goto(`/__visual__/?scenario=session-status&cli=opencode&gui=${gui}&locale=en`)
+  await expect(page.locator('[data-visual-ready]')).toHaveAttribute('data-visual-ready', 'true')
+  await expandFixtureProjects(page)
+  await check('[data-session-row="visual-status-0"]')
+  await page.locator('[data-project-quick-action]').first().click()
+  await check('[data-item-id="opencode"]')
+  await capture('list-and-menu')
+
+  await page.goto(`/__visual__/?scenario=resume-history&cli=opencode&gui=${gui}&locale=en`)
+  await page.locator('[data-resume-scope]').selectOption('all')
+  await check('[data-resume-result]')
+  await capture('history-picker')
+
+  await page.goto(`/__visual__/?scenario=launch-configurations&gui=${gui}&locale=en`)
+  await check('[data-launch-group="opencode"]')
+  await check('[data-launch-row="visual-opencode-0"]')
+  await capture('launch-settings')
+  await page.locator('[data-settings-section="general"]').click()
+  await check('[data-cli-support="opencode"]')
+  await capture('general-settings')
+  expect(errors).toEqual([])
+})
 
 test('merged unread receipt touch', async ({ browser }, testInfo) => {
   const context = await browser.newContext({ hasTouch: true, isMobile: true, viewport: { width: 1024, height: 640 }, reducedMotion: 'reduce' })

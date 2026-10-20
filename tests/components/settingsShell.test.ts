@@ -333,6 +333,8 @@ it('Settings_OpencodeSupportToggle_021', async () => {
   await flushPromises()
   const opencode = wrapper.find('[data-cli-support=opencode]')
   expect(opencode.attributes('aria-pressed')).toBe('true')
+  expect(opencode.find('.cli-app-icon__image').attributes('src')).toContain('/cli/opencode.svg')
+  expect(opencode.find('.cli-app-icon').attributes('aria-hidden')).toBe('true')
   await opencode.trigger('click'); await flushPromises()
   expect(JSON.parse(localStorage.getItem('cc-desk-cli-support-v1')!)).toEqual({ claude: true, codex: true, opencode: false })
 })

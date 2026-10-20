@@ -106,8 +106,9 @@ const project = { projectKey: projectPaths[0].toLowerCase(), projectPath: projec
 const archived = ref(scenario === 'archived')
 // Inert history adapter keeps the real picker/filter rendering without any host or resume operation.
 if (scenario === 'resume-session' || scenario === 'resume-history') {
-  const rows = fixtureSessions().slice(0, 2).map((row, index) => ({ ...row,
-    id: `visual-history-${index}`, opened: false, processState: 'stopped' as const,
+  const candidates = fixtureSessions()
+  const rows = (parameters.get('cli') === 'opencode' ? candidates.filter(row => row.cli === 'opencode') : candidates.slice(0, 2)).map((row, index) => ({ ...row,
+    id: `visual-history-${index}`, opened: false, archived: false, processState: 'stopped' as const,
     resumable: true, nativeSessionId: `visual-cli-session-${index}`, launchConfigId: `visual-${row.cli}-0`,
   }))
   const blockedMutation = async (): Promise<never> => { ++blockedHostCalls.value; throw new Error('VISUAL_RESUME_MUTATION_BLOCKED') }

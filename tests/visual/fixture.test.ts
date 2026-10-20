@@ -173,7 +173,10 @@ describe('Isolated production-component fixture', () => {
     expect(longProjectName).toHaveLength(80); expect(longSessionTitle).toHaveLength(200)
     if (scenario === 'resources') expect(document.querySelectorAll('.resource-card')).toHaveLength(3)
     if (scenario === 'new-session' || scenario === 'confirmation' || scenario === 'archived') expect(document.querySelector('[role="dialog"]')).not.toBeNull()
-    if (scenario === 'launch-configurations') expect(view.findAll('[data-launch-row]')).toHaveLength(4)
+    if (scenario === 'launch-configurations') {
+      expect(view.findAll('[data-launch-row]')).toHaveLength(6)
+      expect(view.get('[data-launch-row="visual-opencode-0"] .cli-app-icon__image').attributes('src')).toContain('/cli/opencode.svg')
+    }
   })
   // 空工作区经过真实宿主的布局边界，但不挂载 Native/Legacy 终端或调用宿主。
   it.each(['empty', 'empty-project'])('Fixture_EmptyUsesActualHost_006: %s', async scenario => {

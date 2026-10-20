@@ -3,7 +3,8 @@
 These bundled assets identify the application behind each session. They are
 third-party brand assets, not CC Desk artwork, and are not relicensed under the
 repository's MIT license. Their use does not imply endorsement or affiliation.
-Both bundled assets were checked against the official sources on 2026-10-01.
+Claude and Codex assets were checked against official sources on 2026-10-01.
+OpenCode assets were checked on 2026-10-20.
 
 ## Claude Code
 
@@ -40,23 +41,32 @@ Both bundled assets were checked against the official sources on 2026-10-01.
   from public availability; OpenAI retains its rights in the mark. It identifies
   the OpenAI CLI inside CC Desk and is not CC Desk's own branding.
 
-## opencode: OC glyph (interim)
+## OpenCode
 
-- Owner: opencode (Anomaly). No image asset is bundled for this CLI yet.
-- The current mark is the text glyph “OC” rendered by `CliAppIcon.vue` in the
-  theme's secondary text color; it is CC Desk's own fallback rendering, not a
-  brand asset, and makes no trademark claim.
-- Official brand asset pending: replace this entry with a sourced, licensed
-  official SVG once the user provides the source URL and usage terms.
+- Owner: Anomaly Innovations, Inc.
+- Official brand page: https://opencode.ai/brand
+- Source SVGs: `packages/console/app/src/asset/brand/opencode-logo-light.svg`
+  and `opencode-logo-dark.svg` in the official repository, pinned to commit
+  `a62028dd2aa6c6fc1788dddb57bf6745fc2eb905`:
+  https://github.com/anomalyco/opencode/tree/a62028dd2aa6c6fc1788dddb57bf6745fc2eb905/packages/console/app/src/asset/brand
+- `opencode.svg` / `opencode-dark.svg` preserve both visible paths, their
+  original 240 × 300 coordinates and original paired colors unchanged. The
+  full-canvas clipping/mask wrappers are omitted; the mark fits proportionally
+  in a 16 × 16 CSS-pixel box. GUI theme changes select the official light/dark
+  artwork without recoloring it or relying on the OS theme.
+- Combined path SHA-256 (path data joined by LF, both assets):
+  `6509feb0ebe1401aee4d187f51e7cf7a94ac19bd88377e59a0c3b6224658a20e`
+- Repository license: https://github.com/anomalyco/opencode/blob/a62028dd2aa6c6fc1788dddb57bf6745fc2eb905/LICENSE
+  OpenCode retains its brand rights; public availability does not imply
+  endorsement, affiliation or additional trademark permission.
 
 ## Accessibility and rendering
 
 The shared component keeps the full accessible names “Claude Code” / “Codex
 CLI” / “opencode”, keyboard focus and tooltips. Decorative images have empty
 alt text so screen readers do not announce the application twice. `CC` / `CX` /
-`OC` are the visible short marks; `CC` / `CX` appear only as image-loading-error
-fallbacks, while `OC` is opencode's persistent glyph rather than a load-failure
-fallback. Codex's monochrome contrast is tested against both themes and selected
+`OC` appear only as image-loading-error fallbacks. Codex's monochrome contrast
+is tested against both themes and selected
 rows; Claude retains the official brand color rather than claiming the previous
 neutral-ink 3:1 guarantee for its logo.
 

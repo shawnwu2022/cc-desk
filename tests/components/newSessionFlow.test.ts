@@ -21,6 +21,10 @@ describe('New session flow', () => {
     await w.get('[data-project-quick-action]').trigger('click'); await flushPromises()
     expect(w.emitted('new-session-request')).toBeUndefined()
     expect(document.querySelectorAll('[role=menuitem]')).toHaveLength(5)
+    const opencode = document.querySelector('[data-item-id=opencode]')!
+    expect(opencode.querySelector('img[src$="/opencode.svg"]')).not.toBeNull()
+    expect(opencode.querySelector('.cli-app-icon')?.getAttribute('aria-hidden')).toBe('true')
+    expect(opencode.textContent).toBe('opencode')
     ;(document.querySelector('[data-item-id=codex]') as HTMLButtonElement).click(); await flushPromises()
     expect(w.emitted('new-session-request')?.[0]).toEqual([{ projectKey: '/repo', projectPath: '/repo', intent: 'codex' }])
     expect(document.body.textContent).not.toMatch(/revision|profile|argv/i)
