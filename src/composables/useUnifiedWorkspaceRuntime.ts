@@ -493,7 +493,16 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     catalog.configureAdapters(sessionAdapters, { legacyClaudeRootKey: legacyClaudeRoot, validateLegacyClaudeRoot })
   }
 
-  async function refresh() {
+  let configurationHistoryTail = Promise.resolve()
+  const historyRefreshes = new Set<Promise<void>>()
+  function trackHistoryRefresh(operation: Promise<void>) {
+    historyRefreshes.add(operation)
+    void operation.then(() => historyRefreshes.delete(operation), () => historyRefreshes.delete(operation))
+    return operation
+  }
+  function refresh() { return trackHistoryRefresh(refreshSources()) }
+  async function refreshSources() {
+    await configurationHistoryTail
     if (!enabled || disposed) return
     const owner = ++refreshOwner
     const current = () => !disposed && owner === refreshOwner
@@ -503,6 +512,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     const configurationOwners = new Map<string, Omit<WorkspaceSourceConfiguration, 'name'>>()
     const historyWarningIdentities = new Map<string, Set<string>>()
     const addHistoryWarning = (context: { cli: UnifiedCliKind; profileId: string; profileRevision: string; sourceRootKey?: string }, failure: unknown) => {
+      if (profiles.profile(context.profileId)?.revision !== context.profileRevision) return
       const warning = warnings.add(context.cli === 'claude' ? 'claude-history' : 'codex-history', failure)
       const warningKey = workspaceWarningKey(warning)
       const identities = historyWarningIdentities.get(warningKey) ?? new Set<string>()
@@ -559,7 +569,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
         // Match the backend's two-reader budget; isolate each source failure.
         for (let i = 0; i < contexts.length && current(); i += 2) {
           await Promise.all(contexts.slice(i, i + 2).map(async group => {
-            if (!cliSupport.isEnabled(group.cli)) return
+            if (!cliSupport.isEnabled(group.cli) || profiles.profile(group.profileId)?.revision !== group.profileRevision) return
             try {
               const loaded = await history.loadGrouped(group, { force: true, retainOnFailure: true })
               for (const entry of loaded.values()) {
@@ -601,7 +611,8 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
 
   const supportRefreshCLIs = new Set<UnifiedCliKind>()
   const supportRefreshVersions = new Map<UnifiedCliKind, number>()
-  async function refreshSupport(cli: UnifiedCliKind) {
+  function refreshSupport(cli: UnifiedCliKind) { return trackHistoryRefresh(refreshSupportSources(cli)) }
+  async function refreshSupportSources(cli: UnifiedCliKind) {
     const version = (supportRefreshVersions.get(cli) ?? 0) + 1
     supportRefreshVersions.set(cli, version)
     const owner = refreshOwner
@@ -613,6 +624,8 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
       if (!on) {
         for (const entry of history.all()) if (entry.context.cli === cli) history.invalidate(entry.context)
       } else {
+        await configurationHistoryTail
+        if (!current()) return
         if (cli === 'claude') for (const path of new Set([...legacyPaths.value, ...projects.pinnedProjects, ...[...legacy.tabs.values()].map(tab => tab.projectPath)])) {
           if (!current()) return
           try {
@@ -645,6 +658,31 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     for (const cli of ['claude', 'codex'] as const) if (next[cli] !== previous[cli]) void refreshSupport(cli)
   })
 
+  watch(() => profiles.profiles.map(profile => ({ id: profile.id, cli: profile.cli, revision: profile.revision })), (next, previous) => {
+    if (!enabled || disposed || (!ready.value && !history.all().length)) return
+    const changed = next.filter(profile => !previous.some(old => old.id === profile.id && old.cli === profile.cli && old.revision === profile.revision))
+    if (!changed.length && previous.every(old => next.some(profile => profile.id === old.id && profile.cli === old.cli && profile.revision === old.revision))) return
+    // 保留已有扫描的完成屏障；撤销前端 owner 不会释放后端两个扫描槽。
+    const drained = Promise.allSettled([configurationHistoryTail, ...historyRefreshes, ...history.all().filter(entry => entry.loading)
+      .map(entry => history.load({ ...entry.context, force: false }))])
+    // 先撤销旧读取所有权，保存后的迟到响应不能复活旧 revision 的目录行。
+    for (const entry of history.all()) {
+      if (!next.some(profile => profile.id === entry.context.profileId && profile.cli === entry.context.cli && profile.revision === entry.context.profileRevision)) history.invalidate(entry.context)
+    }
+    configurationHistoryTail = (async () => {
+      await drained
+      if (disposed) return
+      await draft.refreshAvailability()
+      for (let index = 0; index < changed.length && !disposed; index += 2) {
+        await Promise.allSettled(changed.slice(index, index + 2).map(async profile => {
+          if (profile.cli === 'shell' || !cliSupport.isEnabled(profile.cli) || profiles.profile(profile.id)?.revision !== profile.revision) return
+          await history.loadGrouped({ cli: profile.cli, profileId: profile.id, profileRevision: profile.revision,
+            projects: workspace.projects.map(project => ({ projectId: project.projectId, projectPath: project.selectedPath })) }, { retainOnFailure: true })
+        }))
+      }
+    })().catch(() => { if (!disposed) error.value = 'workspaceRuntimePartial' })
+  }, { flush: 'sync' })
+
   async function resumeDirect(row: UnifiedSession, claimFeedback: (target: UnifiedSession) => void) {
     if (shell.section !== 'workspace') return
     const sequence = shell.requestSequence
@@ -656,7 +694,13 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     const frozen = { ...row, ...(row.nativeOrigin ? { nativeOrigin: { ...row.nativeOrigin } } : {}) }
     // History and ended Legacy terminals claim selection at different async
     // boundaries. Capture feedback only after the actual owning selection claim.
-    await catalog.resumeCatalogSession(frozen, canAdmit, () => claimFeedback(frozen))
+    try { await catalog.resumeCatalogSession(frozen, canAdmit, () => claimFeedback(frozen)) }
+    catch (failure) {
+      const origin = frozen.nativeOrigin
+      const profile = origin && profiles.profile(origin.profileId)
+      if (origin && (!profile || profile.cli !== origin.cli || profile.revision !== origin.profileRevision)) throw new Error('PROFILE_SELECTION_CHANGED')
+      throw failure
+    }
   }
 
   async function dispatch(request: WorkspaceRequest, claimResumeFeedback: (target: UnifiedSession) => void, resumeTarget?: UnifiedSession): Promise<boolean | 'rename-written'> {
@@ -884,7 +928,9 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     if (historyTimer) clearTimeout(historyTimer)
     historyTimer = setTimeout(() => { historyTimer = undefined; void refreshObservedHistory() }, 250)
   }
-  async function refreshObservedHistory() {
+  function refreshObservedHistory() { return trackHistoryRefresh(refreshObservedHistorySources()) }
+  async function refreshObservedHistorySources() {
+    await configurationHistoryTail
     if (disposed || historyReading || loading.value || !ready.value) return
     const groups = new Map<string, HistoryOwner[]>()
     for (const owner of pendingHistoryOwners.values()) {

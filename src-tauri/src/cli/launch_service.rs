@@ -375,6 +375,13 @@ impl LaunchService {
                                 snapshot.with_observer(&prepared.environment, &prepared.plugin_dir)
                             }
                         };
+                        // 可选覆盖必须能由已选择的 runner 完整表示；失败仅撤销覆盖，
+                        // 原始快照仍走同一严格校验，不能放宽 cmd 转义或更换启动器。
+                        let overlaid = overlaid.and_then(|next| {
+                            let invocation = build_invocation(next.request(), &next)?;
+                            resolve_process(&invocation)?;
+                            Ok(next)
+                        });
                         match overlaid {
                             Ok(next) => (next, Some(prepared.lease)),
                             Err(_) => {

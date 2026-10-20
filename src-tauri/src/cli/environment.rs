@@ -252,7 +252,9 @@ pub(crate) fn build_environment(
     // These names are Desk-issued capabilities, not user CLI credentials. Never
     // inherit an ancestor Desk run's observer authority into a new run.
     result.retain(|name, _| {
-        !permitted(name, OBSERVER_ENV_NAMES) && !permitted(name, CODEX_OBSERVER_ENV_NAMES)
+        !permitted(name, OBSERVER_ENV_NAMES)
+            && !permitted(name, CODEX_OBSERVER_ENV_NAMES)
+            && !permitted(name, &["CC_DESK_CODEX_ARGV", "CC_DESK_CODEX_NODE_OPTIONS"])
     });
     if observer_enabled(profile) {
         if let Some(observer) = observer {

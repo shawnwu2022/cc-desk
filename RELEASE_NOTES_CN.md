@@ -4,6 +4,19 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
+## [0.23.5]
+
+修复
+
+- 恢复通过 Windows npm 命令包装器新建和继续 Codex 会话。
+- 使用受支持的官方 npm 包装器时，同步 Codex 自动标题，刷新后保持单一历史条目。
+- 修改启动配置后无需重启 CC Desk，即可继续打开会话。
+
+重要说明
+
+- Codex 标题同步支持直接路径下的官方 npm 0.163.0 包装器，且 NODE_OPTIONS 未设置或为空。其他包装器或 Node 选项仍可启动，但标题同步和历史去重可能不可用。
+- 历史版本回滚失败仍在调查中。
+
 ## [0.23.4]
 
 新增

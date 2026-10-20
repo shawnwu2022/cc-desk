@@ -23,6 +23,7 @@ import { useAppStore } from '@/stores/app'
 import { useProjectManagementStore } from '@/stores/projectManagement'
 import { useShellStore } from '@/stores/shell'
 import { useAttentionStore } from '@/stores/attention'
+import cmdHistoryCapture from '../fixtures/native-cli/codex-cmd-real-history.json'
 
 const io = vi.hoisted(() => ({ projects: vi.fn(), sessions: vi.fn(), profiles: vi.fn(), registered: vi.fn(), register: vi.fn(), patchProfile: vi.fn(), getState: vi.fn(), upsertRecord: vi.fn(), setPreference: vi.fn(), scope: vi.fn(), read: vi.fn(), writeText: vi.fn(), archive: vi.fn(), restore: vi.fn(), open: vi.fn(), remove: vi.fn(), runChecks: vi.fn(), ptySpawn: vi.fn(), ptyInput: vi.fn(), ptyKill: vi.fn(), legacyRoot: vi.fn() }))
 vi.mock('@/api/tauri', async original => ({ ...await original<object>(), runChecks: io.runChecks, ptySpawn: io.ptySpawn, ptyInput: io.ptyInput, ptyKill: io.ptyKill, getProjectsState: io.getState, upsertSessionUiRecord: io.upsertRecord, setProjectLaunchPreference: io.setPreference, updateAppConfig: vi.fn().mockResolvedValue(undefined), getAppConfig: vi.fn().mockResolvedValue({ theme: 'light', terminalTheme: 'cc-box-light', language: 'en' }), archiveSession: io.archive, restoreSession: io.restore, getProjects: io.projects, getSessions: io.sessions, openInFileManager: io.open, createNativeProjectionClient: () => ({ scope: io.scope, read: io.read }), legacyClaudeRootKey: io.legacyRoot, onHookEvent: async () => () => {} }))
@@ -662,6 +663,150 @@ describe('Workspace source warning diagnostics', () => {
     expect(runtime.sourceNoticeDismissed.value).toBe(false)
   })
 
+  it.each(['claude', 'codex'] as const)('Runtime_SaveRefreshesRevisionWithoutRestart_075_%s', async cli => {
+    const initial = await io.profiles()
+    const source = { ...initial.profiles[0], cli }
+    const other = { ...source, id: 'other', cli: cli === 'claude' ? 'codex' : 'claude' }
+    io.profiles.mockResolvedValue({ revision: '7', profiles: [source, other] })
+    io.scope.mockImplementation(async request => {
+      const profile = useCliProfilesStore().profile(request.profileId)!
+      if (request.expectedProfileRevision !== profile.revision) throw { code: 'REVISION_CONFLICT' }
+      return { cli: profile.cli }
+    })
+    render(); await flushPromises()
+    const history = useNativeHistoryStore()
+    expect(history.all().map(entry => entry.context.profileRevision)).toEqual(['7', '7'])
+    const otherEntry = history.all().find(entry => entry.context.profileId === 'other')
+    const reads = io.scope.mock.calls.length
+    const saved = { revision: '8', profiles: [{ ...source, revision: '8' }, other] }
+    io.patchProfile.mockResolvedValue(saved)
+    io.profiles.mockResolvedValue(saved)
+    await useCliProfilesStore().saveConfiguration({ expectedRevision: '7', source: { id: 'cx', revision: '7' },
+      patch: { op: 'update', id: 'cx', changes: { name: 'Updated' } } }, () => true)
+    await flushPromises()
+    expect(history.all().find(entry => entry.context.profileId === 'cx')?.context.profileRevision).toBe('8')
+    expect(history.all().find(entry => entry.context.profileId === 'other')).toBe(otherEntry)
+    expect(io.scope.mock.calls.slice(reads).map(call => call[0])).toEqual([
+      { kind: 'profile', profileId: 'cx', expectedProfileRevision: '8', projectIds: ['project'] },
+    ])
+    expect(useNativeTabsStore().tabs.size).toBe(0)
+    const catalog = useUnifiedSessionsStore()
+    const row = catalog.sessions.find(row => row.runtime === 'native-cli' && row.cli === cli)!
+    const resumed = await catalog.resumeSession({ runtime: 'native-cli', cli, projectKey: row.projectKey, projectPath: row.projectPath,
+      adapterSessionId: row.adapterSessionId, nativeSessionId: row.nativeSessionId })
+    expect(useNativeTabsStore().tab(resumed.adapterSessionId)?.profileRevision).toBe('8')
+    const created = await catalog.createSession({ projectKey: '/repo', projectPath: '/repo', cli, action: { kind: 'new' } })
+    expect(useNativeTabsStore().tab(created.adapterSessionId)?.profileRevision).toBe('8')
+  })
+
+  it.each(['claude', 'codex'] as const)('Runtime_SaveRevokesLateHistory_076_%s', async cli => {
+    const initial = await io.profiles()
+    const source = { ...initial.profiles[0], cli }
+    io.profiles.mockResolvedValue({ revision: '7', profiles: [source] })
+    io.scope.mockResolvedValue({ cli })
+    let finish!: (value: unknown) => void
+    io.read.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    render(); await flushPromises()
+    const saved = { revision: '8', profiles: [{ ...source, revision: '8' }] }
+    io.patchProfile.mockResolvedValue(saved); io.profiles.mockResolvedValue(saved)
+    await useCliProfilesStore().saveConfiguration({ expectedRevision: '7', source: { id: 'cx', revision: '7' },
+      patch: { op: 'update', id: 'cx', changes: { name: 'Updated' } } }, () => true)
+    await flushPromises()
+    expect(useNativeHistoryStore().all()).toEqual([])
+    finish({ state: 'ready', items: [{ type: 'session', projectId: 'project', sessionKey: 'late-key', nativeSessionId: 'late-id', title: 'Obsolete', cwd: '/repo' }] })
+    await flushPromises()
+    expect(useNativeHistoryStore().all().map(entry => entry.context.profileRevision)).toEqual(['8'])
+    expect(useUnifiedSessionsStore().sessions.some(row => row.nativeSessionId === 'late-id')).toBe(false)
+  })
+
+  it.each(['claude', 'codex'] as const)('Runtime_InvalidConfigurationRepairNeedsNoRestart_078_%s', async cli => {
+    const initial = await io.profiles(), source = { ...initial.profiles[0], cli }
+    io.profiles.mockResolvedValue({ revision: '7', profiles: [source] }); io.scope.mockResolvedValue({ cli })
+    render(); await flushPromises()
+    const profiles = useCliProfilesStore(), draft = useNewSessionDraftStore()
+    const invalid = { ...source, revision: '8', programPath: { mode: 'inherit' } }
+    io.patchProfile.mockResolvedValue({ revision: '8', profiles: [invalid] })
+    await profiles.saveConfiguration({ expectedRevision: '7', source: { id: 'cx', revision: '7' },
+      patch: { op: 'update', id: 'cx', changes: { programPath: { mode: 'inherit' } } } }, () => true)
+    await flushPromises()
+    const input = { projectKey: '/repo', projectPath: '/repo', cli, action: { kind: 'new' as const } }
+    await expect(draft.prepareInput(input)).rejects.toThrow('LAUNCH_CONFIGURATION_REQUIRED')
+    expect(useNativeTabsStore().tabs.size).toBe(0)
+    io.patchProfile.mockResolvedValue({ revision: '9', profiles: [{ ...source, revision: '9' }] })
+    await profiles.saveConfiguration({ expectedRevision: '8', source: { id: 'cx', revision: '8' },
+      patch: { op: 'update', id: 'cx', changes: { programPath: { mode: 'set', value: '/tools/repaired' } } } }, () => true)
+    await flushPromises()
+    expect(await draft.prepareInput(input)).toMatchObject({ launchConfigId: 'cx', launchConfigRevision: '9' })
+    const catalog = useUnifiedSessionsStore(), row = catalog.sessions.find(row => row.cli === cli)!
+    const resumed = await catalog.resumeSession({ runtime: 'native-cli', cli, projectKey: row.projectKey, projectPath: row.projectPath,
+      adapterSessionId: row.adapterSessionId, nativeSessionId: row.nativeSessionId })
+    expect(useNativeTabsStore().tab(resumed.adapterSessionId)?.profileRevision).toBe('9')
+  })
+
+  it('Runtime_SaveWaitsForOccupiedHistorySlots_077', async () => {
+    const initial = await io.profiles(), source = initial.profiles[0]
+    const other = { ...source, id: 'other', cli: 'claude' }
+    const remaining = [{ ...source, id: 'third' }, { ...source, id: 'fourth' }]
+    io.profiles.mockResolvedValue({ revision: '7', profiles: [source, other, ...remaining] })
+    let active = 0
+    const finish: (() => void)[] = []
+    io.scope.mockImplementation(async request => {
+      if (active === 2) throw { code: 'SOURCE_BUSY' }
+      active++
+      return { cli: request.profileId === 'other' ? 'claude' : 'codex' }
+    })
+    io.read.mockImplementation(() => {
+      if (finish.length < 4) return new Promise(resolve => finish.push(() => { active--; resolve({ state: 'ready', items: [] }) }))
+      active--; return Promise.resolve({ state: 'ready', items: [] })
+    })
+    render(); await flushPromises()
+    expect(active).toBe(2)
+    const saved = { revision: '8', profiles: [{ ...source, revision: '8' }, other, ...remaining] }
+    io.patchProfile.mockResolvedValue(saved); io.profiles.mockResolvedValue(saved)
+    await useCliProfilesStore().saveConfiguration({ expectedRevision: '7', source: { id: 'cx', revision: '7' },
+      patch: { op: 'update', id: 'cx', changes: { name: 'Updated' } } }, () => true)
+    await flushPromises()
+    expect(io.scope).toHaveBeenCalledTimes(2)
+    expect(useNativeHistoryStore().all().some(entry => entry.context.profileId === 'cx')).toBe(false)
+    const latest = { revision: '9', profiles: [{ ...source, revision: '9' }, other, ...remaining] }
+    io.patchProfile.mockResolvedValue(latest); io.profiles.mockResolvedValue(latest)
+    await useCliProfilesStore().saveConfiguration({ expectedRevision: '8', source: { id: 'cx', revision: '8' },
+      patch: { op: 'update', id: 'cx', changes: { name: 'Latest' } } }, () => true)
+    await flushPromises()
+    expect(io.scope).toHaveBeenCalledTimes(2)
+    finish.slice(0, 2).forEach(release => release()); await flushPromises()
+    expect(io.scope.mock.calls.map(call => [call[0].profileId, call[0].expectedProfileRevision])).toEqual([
+      ['cx', '7'], ['other', '7'], ['third', '7'], ['fourth', '7'],
+    ])
+    expect(active).toBe(2)
+    finish.slice(2).forEach(release => release()); await flushPromises()
+    expect(io.scope.mock.calls.slice(4).map(call => call[0].expectedProfileRevision)).toEqual(['9'])
+    expect(useNativeHistoryStore().all().find(entry => entry.context.profileId === 'cx')).toMatchObject({ loaded: true, error: null, context: { profileRevision: '9' } })
+  })
+
+  it('Runtime_RefreshWaitsForSavedRevisionRead_079', async () => {
+    const initial = await io.profiles(), source = initial.profiles[0], other = { ...source, id: 'other' }
+    io.profiles.mockResolvedValue({ revision: '7', profiles: [source, other] })
+    let active = 0
+    io.scope.mockImplementation(async () => { if (active === 2) throw { code: 'SOURCE_BUSY' }; active++; return { cli: 'codex' } })
+    io.read.mockImplementation(async () => { active--; return { state: 'ready', items: [] } })
+    const { runtime } = render(); await flushPromises()
+    let finish!: () => void
+    io.read.mockImplementationOnce(() => new Promise(resolve => { finish = () => { active--; resolve({ state: 'ready', items: [] }) } }))
+    const saved = { revision: '8', profiles: [{ ...source, revision: '8' }, other] }
+    io.patchProfile.mockResolvedValue(saved); io.profiles.mockResolvedValue(saved)
+    await useCliProfilesStore().saveConfiguration({ expectedRevision: '7', source: { id: 'cx', revision: '7' },
+      patch: { op: 'update', id: 'cx', changes: { name: 'Updated' } } }, () => true)
+    await flushPromises()
+    const reads = io.scope.mock.calls.length
+    expect(active).toBe(1)
+    const refreshed = runtime.refresh(); await flushPromises()
+    expect(io.scope).toHaveBeenCalledTimes(reads)
+    finish(); await refreshed; await flushPromises()
+    expect(useNativeHistoryStore().all().every(entry => entry.loaded && entry.error === null)).toBe(true)
+    expect(useNativeHistoryStore().all().map(entry => entry.context.profileRevision).sort()).toEqual(['7', '8'])
+  })
+
   it('Runtime_RefreshDropsStaleRevisionHistory_050', async () => {
     const { runtime } = render(); await flushPromises()
     const history = useNativeHistoryStore()
@@ -898,7 +1043,8 @@ describe('Unified production runtime', () => {
     expect(useNativeTabsStore().tab(opened.adapterSessionId)).toMatchObject({ projectId: 'project', profileId: 'cx', profileRevision: '7', sourceSessionKey: 'root-key', action: { kind: 'resume-id', nativeSessionId: 'history-id' } })
     useNativeTabsStore().close(opened.adapterSessionId)
     useCliProfilesStore().profiles[0].revision = '8'
-    await expect(unified.resumeSession({ runtime: 'native-cli', cli: history.cli, projectKey: history.projectKey, projectPath: history.projectPath, adapterSessionId: history.adapterSessionId, nativeSessionId: history.nativeSessionId })).rejects.toThrow('PROFILE_SELECTION_CHANGED')
+    // 配置改变即撤销旧行；旧引用不能借新配置获得启动权限。
+    await expect(unified.resumeSession({ runtime: 'native-cli', cli: history.cli, projectKey: history.projectKey, projectPath: history.projectPath, adapterSessionId: history.adapterSessionId, nativeSessionId: history.nativeSessionId })).rejects.toThrow('SESSION_NOT_FOUND')
     expect(useNativeTabsStore().tabs.size).toBe(0)
   })
   // 显式创建通过鉴权项目注册，原始argv保留字符串边界；初始化仍然只读。
@@ -2017,8 +2163,12 @@ it.each(['restart', 'close', 'profile', 'unmount'] as const)('History_QueuedOwne
   if (invalidation === 'close') tabs.close(tab.tabId)
   if (invalidation === 'profile') useCliProfilesStore().profiles[0].revision = '8'
   if (invalidation === 'unmount') wrappers.pop()!.unmount()
+  await flushPromises()
+  // 配置更新会主动读新 revision，旧 attempt 的去抖任务仍不得再读。
+  expect(io.read).toHaveBeenCalledTimes(reads + (invalidation === 'profile' ? 1 : 0))
+  const afterInvalidation = io.read.mock.calls.length
   await flushPromises(); await vi.advanceTimersByTimeAsync(350)
-  expect(io.read).toHaveBeenCalledTimes(reads)
+  expect(io.read).toHaveBeenCalledTimes(afterInvalidation)
 })
 
 // 读取未结束时的新事件只保留一次后继读取，完成后显示最新 CLI 标题。
@@ -2173,4 +2323,49 @@ it('CodexIdentity_ConcurrentTitleProjection_032', async () => {
   const resumed = await catalog.resumeCatalogSession(closed); await flushPromises()
   expect(tabs.tab(resumed.adapterSessionId)?.action).toEqual({ kind: 'resume-id', nativeSessionId: ids[0] })
   expect(catalog.sessions.filter(row => row.nativeSessionId === ids[0])).toHaveLength(1)
+})
+
+// 数据来自 Windows 真实 cmd 双 TUI，共用临时 root；只替换测试项目映射，不构造 UUID/标题。
+it('CodexIdentity_CapturedCmdHistoryRefresh_048', async () => {
+  const rows = cmdHistoryCapture.nativeHistoryRows.map(row => ({ ...row, type: 'session', projectId: 'project', cwd: '/repo' }))
+  const rootKey = JSON.parse(rows[0].sessionKey)[2]
+  io.scope.mockImplementation(async target => ({ scopeId: 'captured-cmd', instanceId: 'instance', cli: 'codex', sourceRootKey: rootKey, identityEpoch: '1', profileId: 'cx', profileRevision: '7', target, basis: 'configured-profile' }))
+  io.read.mockImplementation(async () => ({ state: 'ready', items: structuredClone(rows), hasMore: false }))
+  render(); await flushPromises()
+  const tabs = useNativeTabsStore(), catalog = useUnifiedSessionsStore()
+  vi.useFakeTimers()
+  const opened = rows.map(row => {
+    const event = cmdHistoryCapture.authenticatedEvents.find(event => event.nativeSessionId === row.nativeSessionId && event.event === 'SessionStart' && event.generation === 1)!
+    const created = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+    const tab = tabs.tab(created.tabId)!
+    tab.runId = event.runId; tab.generation = event.generation; tab.status = 'running'; tab.launchRevision = '1'
+    for (const captured of cmdHistoryCapture.authenticatedEvents.filter(captured => captured.runId === tab.runId && captured.generation === tab.generation)) {
+      const kind = captured.event === 'SessionStart' ? 'sessionStart' : captured.event === 'UserPromptSubmit' ? 'userPromptSubmit' : 'stop'
+      expect(tabs.applyObservationIdentity(tab.tabId, captureNativeAttempt(tab), captured.nativeSessionId, kind)).toBe(true)
+    }
+    return tab
+  })
+  await flushPromises(); await vi.advanceTimersByTimeAsync(250); await flushPromises()
+  for (let refresh = 0; refresh < cmdHistoryCapture.historyRefreshCount; refresh++) {
+    await catalog.refresh(); await flushPromises()
+    expect(catalog.sessions).toHaveLength(2)
+    for (const row of rows) {
+      const projected = catalog.sessions.filter(session => session.nativeSessionId === row.nativeSessionId)
+      expect(projected).toHaveLength(1)
+      expect(projected[0]).toMatchObject({ title: row.title, opened: true })
+    }
+  }
+  const oldAttempt = captureNativeAttempt(opened[0])
+  opened[0].status = 'exited'; tabs.close(opened[0].tabId); await flushPromises()
+  const closed = catalog.sessions.find(row => row.nativeSessionId === rows[0].nativeSessionId)!
+  const result = await catalog.resumeCatalogSession(closed); await flushPromises()
+  const resumed = tabs.tab(result.adapterSessionId)!
+  const resumedEvent = cmdHistoryCapture.authenticatedEvents.find(event => event.nativeSessionId === rows[0].nativeSessionId && event.event === 'SessionStart' && event.generation === 2)!
+  resumed.runId = resumedEvent.runId; resumed.generation = resumedEvent.generation; resumed.status = 'running'; resumed.launchRevision = '1'
+  expect(tabs.applyObservationIdentity(resumed.tabId, oldAttempt, rows[1].nativeSessionId)).toBe(false)
+  expect(tabs.applyObservationIdentity(resumed.tabId, captureNativeAttempt(resumed), resumedEvent.nativeSessionId)).toBe(true)
+  await flushPromises(); await vi.advanceTimersByTimeAsync(250); await flushPromises()
+  await catalog.refresh(); await flushPromises()
+  expect(catalog.sessions).toHaveLength(2)
+  expect(catalog.sessions.filter(row => row.nativeSessionId === resumedEvent.nativeSessionId)).toHaveLength(1)
 })
