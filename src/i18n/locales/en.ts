@@ -54,6 +54,8 @@ export default {
   terminalPreviewOnly: "Preview only. No session is running here.",
   terminalPreview: "Terminal preview",
   settingsUpdateAvailable: 'Update available',
+  settingsUpdateAvailableVersion: 'Settings, update v{version} available',
+  updateCheckBeforeInstall: 'Check for updates again to verify installation availability.',
   settingsSaveUnconfirmed: 'The save could not be confirmed. The current saved value was reloaded; check it before trying again.',
   settingsSaveReloadFailed: 'The save could not be confirmed and saved settings could not be reloaded. Reload successfully before submitting another change.',
   settingsSaveReadFailed: 'Saved settings could not be loaded. No change was submitted. Try again when the connection is available.',

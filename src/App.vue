@@ -25,6 +25,7 @@ import { SESSION_INTERACTION_OWNER } from '@/session/sessionInteraction'
 import { useAppShortcuts } from '@/composables/useAppShortcuts'
 import { APP_RENAME_SHORTCUT, type AppShortcutAction } from '@/config/appShortcuts'
 import { useUnifiedWorkspaceRuntime } from '@/composables/useUnifiedWorkspaceRuntime'
+import { useBackgroundUpdateCheck } from '@/composables/useBackgroundUpdateCheck'
 import { useLaunchConfigurationEditor } from '@/composables/useLaunchConfigurationEditor'
 import type { UnifiedTerminalHostPort } from '@/terminal/unifiedTerminalHost'
 import ProjectsView from '@/components/projects/ProjectsView.vue'
@@ -94,6 +95,7 @@ function confirmDiscoveredProgram(confirmation: ConfirmedLaunchProgram) {
 const sessionSidebar = ref<InstanceType<typeof SidebarPanel> | null>(null)
 const terminalHost = ref<UnifiedTerminalHostPort | null>(null)
 const runtime = useUnifiedWorkspaceRuntime(terminalHost)
+useBackgroundUpdateCheck()
 if (typeof runtime.historyWarningVisible === 'function') provide(SESSION_HISTORY_WARNING_VISIBLE, runtime.historyWarningVisible)
 const sourceNoticeArea = ref<HTMLElement | null>(null)
 const sourceDiagnosticsOpen = ref(false)

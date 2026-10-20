@@ -3,6 +3,8 @@ import { computed, getCurrentInstance } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useShellStore, type ShellSection } from '@/stores/shell'
 import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
+import { useUpdateStore } from '@/stores/update'
+import { useSidebarStore } from '@/stores/sidebar'
 import IconButton from '@/components/ui/IconButton.vue'
 import workspaceIcon from '@/assets/icons/sessions.svg'
 import projectsIcon from '@/assets/icons/folder.svg'
@@ -10,6 +12,7 @@ import settingsIcon from '@/assets/icons/settings.svg'
 
 const shell = useShellStore()
 const catalog = useUnifiedSessionsStore()
+const updates = useUpdateStore(), sidebar = useSidebarStore()
 const { t } = useI18n()
 const workspaceStatusDescriptionId = `workspace-status-${getCurrentInstance()!.uid}`
 const workspaceStatus = computed(() => {
@@ -30,6 +33,7 @@ const destinations = [
   { section: 'settings', label: 'settings', icon: settingsIcon },
 ] as const
 function navigate(section: ShellSection) {
+  if (section === 'settings' && updates.hasUpdate) sidebar.activeSettingsSection = 'update'
   shell.navigate(section)
   emit('navigate', section)
 }
@@ -39,11 +43,12 @@ function navigate(section: ShellSection) {
   <nav class="primary-nav" :aria-label="t('primaryNavigation')">
     <IconButton v-for="destination in destinations" :key="destination.section"
       class="primary-destination" :class="{ selected: shell.section === destination.section }"
-      :label="t(destination.label)" :data-primary-section="destination.section"
+      :label="destination.section === 'settings' && updates.hasUpdate ? t('settingsUpdateAvailableVersion', { version: updates.availableVersion }) : t(destination.label)" :data-primary-section="destination.section"
       :aria-describedby="destination.section === 'workspace' && workspaceStatus ? workspaceStatusDescriptionId : undefined"
       :aria-current="shell.section === destination.section ? 'page' : undefined"
       @click="navigate(destination.section)">
       <img :src="destination.icon" alt="" width="18" height="18" />
+      <span v-if="destination.section === 'settings' && updates.hasUpdate" class="settings-update-badge" data-settings-update-badge aria-hidden="true" />
       <span v-if="destination.section === 'workspace' && workspaceStatus" class="workspace-status-badge"
         :class="`workspace-status-badge--${workspaceStatus.kind}`" data-workspace-status-badge
         :data-status-kind="workspaceStatus.kind" aria-hidden="true" />
@@ -63,4 +68,6 @@ function navigate(section: ShellSection) {
   border-radius: 50%; pointer-events: none; }
 .workspace-status-badge--error { background: var(--status-error); }
 .workspace-status-badge--permission { background: var(--accent-gold); }
+.settings-update-badge { position: absolute; top: 2px; right: 2px; width: 8px; height: 8px;
+  border-radius: 50%; background: var(--status-info); pointer-events: none; }
 </style>

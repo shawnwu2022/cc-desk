@@ -54,6 +54,8 @@ export default {
   terminalPreviewOnly: "仅供预览，此处不会启动会话。",
   terminalPreview: "终端预览",
   settingsUpdateAvailable: '有可用更新',
+  settingsUpdateAvailableVersion: '设置，有可用更新 v{version}',
+  updateCheckBeforeInstall: '请重新检查更新，以确认当前版本可以安装。',
   settingsSaveUnconfirmed: '无法确认保存是否完成。已重新读取当前保存值，请检查后再决定是否重试。',
   settingsSaveReloadFailed: '无法确认保存是否完成，也未能重新读取已保存的设置。请先成功重新加载，再提交其他更改。',
   settingsSaveReadFailed: '未能读取已保存的设置，此次更改尚未提交。连接可用后可再次尝试。',
