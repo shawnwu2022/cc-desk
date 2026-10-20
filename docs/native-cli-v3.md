@@ -167,6 +167,45 @@ For a machine-specific investigation, collect only: CC Desk and CLI versions; ru
 - observer failure cannot kill, restart, or implicitly retry a CLI;
 - Codex/raw/shell launches never receive the Claude observer overlay.
 
+Structured Codex new/resume launches have a separate identity-only channel using
+official session hooks. The reservation winner adds per-launch `-c hooks.*` and
+exact handler hashes in the synthetic session-flags trust layer, before user
+profile/extra arguments. It never writes user configuration, overrides
+`features.hooks`, replaces `notify`, or stops a shared daemon. Codex 0.163 chooses
+its official embedded app-server when these flags cannot be forwarded to the
+implicit shared daemon; explicit user remote/disabled-hook configuration remains
+authoritative and may leave identity unavailable. Raw and unarchive actions do
+not receive this channel. The four Codex-specific environment values are stripped
+from inherited inputs and minted for the exact owned run, generation and document.
+Codex discovers disk configuration hooks separately in each configuration layer,
+so the added session-flags handlers coexist with user-file handlers. A later user
+`-c` override in the same session-flags layer retains its normal precedence.
+
+The bounded reporter forwards only a main-thread UUID and allowlisted
+SessionStart/UserPromptSubmit/Stop type. It never publishes prompt/response bodies
+or treats Stop as activity completion. Windows hook commands preserve raw UTF-8
+stdin across the CLI-selected shell, including executable paths with spaces.
+Only admitted startup/input metadata can establish an unknown identity; an old
+thread's asynchronous prompt/stop cannot replace a newer startup identity.
+Unknown, retired, replaced and closed attempts reject late events. The identity
+channel does not enable Claude activity observation for Codex.
+
+An exact observed Codex ID joins its opened owner to the same authorized history
+record, retaining one row across Refresh. Startup/input/stop invalidate only the
+affected Codex history context. Since Codex generates its first title in a
+separate hidden thread with hooks disabled, input/stop also schedule bounded
+read-only retries after 1, 2, 5 and 15 seconds; restart, close, context changes and
+replacement cancel pending work. Titles and cwd/time similarity never establish
+identity or authorize a rename.
+
+The Windows Codex 0.163 smoke uses the installed real TUI, bundled ConPTY and
+production reporter with temporary configuration/project data and a local synthetic
+Responses endpoint. It covers concurrent new identities, delayed automatic title
+readback, one survivor after another TUI closes, resume identity, and reporter
+paths containing spaces/non-ASCII characters. Host projection regressions separately
+cover Refresh deduplication and late-event retirement. These checks do not certify
+an installed WebView2 build or the account-backed D20 Layer-C matrix.
+
 ## Security and diagnostics
 
 Native UI surfaces are interpolation-only: no `v-html` / `innerHTML` execution path.
@@ -222,7 +261,7 @@ Opened Claude/Codex `resume-id` tabs may explicitly rename their retained histor
 source, using fresh profile history authority only after matching frozen run root,
 profile revision, registered project, native ID and source key. This target remains
 the resumed source even if the CLI switches threads. It is never a proof of the
-current terminal thread. A new Claude tab with a positively observed native ID
+current terminal thread. A new Claude or Codex tab with a positively observed native ID
 may explicitly target that historical record after the same fresh-root/profile/
 project/key checks. Raw/picker and unproven new identities cannot infer a target.
 `cli_rename_session` still rejects Run scopes. Codex official app-server

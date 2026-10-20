@@ -390,6 +390,10 @@ fn D13_Observer_ParentCapabilityNeverLeaksIntoAnotherRun_013() {
         ("CC_DESK_OBSERVER_RUN", "parent"),
         ("CC_DESK_OBSERVER_GENERATION", "1"),
         ("CC_BOX_HOOK_PORT", "4321"),
+        ("CC_DESK_CODEX_PORT", "4322"),
+        ("CC_DESK_CODEX_RUN", "parent-codex"),
+        ("CC_DESK_CODEX_GENERATION", "2"),
+        ("CC_DESK_CODEX_CAPABILITY", "private-codex-parent"),
         ("OPENAI_API_KEY", "user-owned"),
         ("KEEP", "yes"),
     ]);
@@ -398,6 +402,9 @@ fn D13_Observer_ParentCapabilityNeverLeaksIntoAnotherRun_013() {
         let result = build_environment(&inherited, &EnvMap::new(), &profile, None, None).unwrap();
         assert!(!result.contains_key(OsStr::new("CC_DESK_OBSERVER_CAPABILITY")));
         assert!(!result.contains_key(OsStr::new("CC_BOX_HOOK_PORT")));
+        for name in crate::cli::environment::CODEX_OBSERVER_ENV_NAMES {
+            assert!(!result.contains_key(OsStr::new(name)));
+        }
         assert_eq!(result[OsStr::new("OPENAI_API_KEY")], "user-owned");
         assert_eq!(result[OsStr::new("KEEP")], "yes");
     }

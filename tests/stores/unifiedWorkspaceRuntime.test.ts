@@ -10,7 +10,7 @@ import zh from '@/i18n/locales/zh'
 import LaunchConfigurationEditor from '@/components/settings/LaunchConfigurationEditor.vue'
 import { useUnifiedWorkspaceRuntime } from '@/composables/useUnifiedWorkspaceRuntime'
 import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
-import { useNativeTabsStore } from '@/stores/nativeTabs'
+import { captureNativeAttempt, useNativeTabsStore } from '@/stores/nativeTabs'
 import { useNativeHistoryStore } from '@/stores/nativeHistory'
 import { useNewSessionDraftStore } from '@/stores/newSessionDraft'
 import { useCliProfilesStore } from '@/stores/cliProfiles'
@@ -2130,4 +2130,45 @@ it('Runtime_RenameCapabilitySourceTransition_091', async () => {
   expect(catalog.sessions.find(row => row.runtime === 'native-cli')?.renameAvailable).toBe(false)
   entry.error = null; await flushPromises()
   expect(catalog.sessions.find(row => row.runtime === 'native-cli')?.renameAvailable).toBe(true)
+})
+
+// 同项目两个owned run按原生ID投影，首轮标题变化、关闭、恢复均不产生伪关闭行。
+it('CodexIdentity_ConcurrentTitleProjection_032', async () => {
+  const ids = ['00000000-0000-4000-8000-000000000041', '00000000-0000-4000-8000-000000000042']
+  let items: any[] = []
+  io.scope.mockImplementation(async target => ({ scopeId: 'scope', instanceId: 'instance', cli: 'codex', sourceRootKey: 'root', identityEpoch: '1', profileId: 'cx', profileRevision: '7', target, basis: 'configured-profile' }))
+  io.read.mockImplementation(async () => ({ state: 'ready', items: structuredClone(items), hasMore: false }))
+  render(); await flushPromises()
+  const tabs = useNativeTabsStore(), catalog = useUnifiedSessionsStore()
+  vi.useFakeTimers()
+  const opened = ids.map(() => { const created = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } }); const tab = tabs.tab(created.tabId)!; tab.status = 'running'; tab.launchRevision = '1'; return tab })
+  items = ids.map((id, index) => ({ type: 'session', projectId: 'project', sessionKey: JSON.stringify(['local', 'codex', 'root', id]), nativeSessionId: id, title: 'First prompt ' + index, titleSource: 'prompt', cwd: '/repo' }))
+  opened.forEach((tab, index) => expect(tabs.applyObservationIdentity(tab.tabId, tab, ids[index])).toBe(true))
+  await flushPromises(); await vi.advanceTimersByTimeAsync(250); await flushPromises()
+  expect(catalog.sessions).toHaveLength(2)
+  expect(catalog.sessions.filter(row => row.opened)).toHaveLength(2)
+  expect(catalog.sessions.find(row => row.nativeSessionId === ids[0])?.title).toBe('First prompt 0')
+  expect(catalog.sessions.find(row => row.nativeSessionId === ids[1])?.title).toBe('First prompt 1')
+  tabs.applyObservationIdentity(opened[0].tabId, opened[0], ids[0], 'userPromptSubmit')
+  await flushPromises(); await vi.advanceTimersByTimeAsync(250); await flushPromises()
+  items[0].title = 'First reply title'; items[0].titleSource = 'ai'
+  await vi.advanceTimersByTimeAsync(1_250); await flushPromises()
+  expect(catalog.sessions.find(row => row.nativeSessionId === ids[0])?.title).toBe('First reply title')
+  tabs.applyObservationIdentity(opened[0].tabId, opened[0], ids[0], 'stop')
+  await flushPromises(); await vi.advanceTimersByTimeAsync(250); await flushPromises()
+  await catalog.refresh(); await flushPromises()
+  expect(catalog.sessions).toHaveLength(2)
+  expect(catalog.sessions.find(row => row.nativeSessionId === ids[0])?.title).toBe('First reply title')
+  expect(catalog.sessions.every(row => row.renameAvailable)).toBe(true)
+  const old = captureNativeAttempt(opened[0])
+  opened[0].status = 'unknown'; await flushPromises()
+  expect(tabs.applyObservationIdentity(opened[0].tabId, old, ids[1], 'stop')).toBe(false)
+  opened[0].status = 'exited'; tabs.close(opened[0].tabId); await flushPromises()
+  expect(tabs.applyObservationIdentity(opened[0].tabId, old, ids[1])).toBe(false)
+  expect(catalog.sessions).toHaveLength(2)
+  const closed = catalog.sessions.find(row => row.nativeSessionId === ids[0])!
+  expect(closed.opened).toBe(false)
+  const resumed = await catalog.resumeCatalogSession(closed); await flushPromises()
+  expect(tabs.tab(resumed.adapterSessionId)?.action).toEqual({ kind: 'resume-id', nativeSessionId: ids[0] })
+  expect(catalog.sessions.filter(row => row.nativeSessionId === ids[0])).toHaveLength(1)
 })

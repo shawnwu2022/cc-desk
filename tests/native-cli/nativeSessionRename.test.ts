@@ -120,7 +120,7 @@ describe('Native session rename admission',()=>{
   })
   it.each(['new','raw','resume-picker'] as const)('Rename_UnknownSourceNeverGuesses_007 %s',async kind=>{
     const h=resumed();h.tab.action=kind==='raw'?{kind,argv:[]}:kind==='resume-picker'?{kind,scope:'current-project'}:{kind}
-    h.tab.observedSessionId='session'
+    if (kind !== 'new') h.tab.observedSessionId='session'
     await expect(h.adapter.renameSession(h.id,'No write')).rejects.toThrow('SESSION_IDENTITY_UNKNOWN')
     expect(h.load).not.toHaveBeenCalled();expect(h.rename).not.toHaveBeenCalled()
   })
@@ -188,8 +188,8 @@ describe('Native session rename admission',()=>{
     await expect(h.adapter.renameSession(h.id,'Already native')).rejects.toThrow('RENAME_DISPLAY_SYNC_FAILED')
     expect(h.rename).toHaveBeenCalledTimes(1);expect(h.load).toHaveBeenCalledTimes(2)
   })
-  it.each(['resume-id','new'] as const)('Rename_ClaudeVerifiedRecordNeverWritesTerminal_016 %s',async kind=>{
-    const h=resumed('claude')
+  it.each([['claude','resume-id'],['claude','new'],['codex','resume-id'],['codex','new']] as const)('Rename_VerifiedRecordNeverWritesTerminal_016 %s %s',async (cli,kind)=>{
+    const h=resumed(cli)
     if(kind==='new'){h.tab.action={kind:'new'};delete h.tab.sourceSessionKey;h.tab.observedSessionId='session'}
     await expect(h.adapter.renameSession(h.id,'Claude native')).resolves.toBe('native-title-saved')
     expect(h.rename).toHaveBeenCalledWith(expect.objectContaining({source:h.entry.source,sessionKey:h.entry.sessions[0].sessionKey,title:'Claude native'}))

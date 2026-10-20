@@ -45,6 +45,7 @@ pub(crate) struct LaunchSnapshot {
     skip_permissions: Option<bool>,
     observer_requested: bool,
     observer_plugin: Option<PathBuf>,
+    identity_args: Vec<OsString>,
 }
 
 impl std::fmt::Debug for LaunchSnapshot {
@@ -54,6 +55,33 @@ impl std::fmt::Debug for LaunchSnapshot {
 }
 
 impl LaunchSnapshot {
+    pub(crate) fn codex_identity_requested(&self) -> bool {
+        self.request.cli == CliKind::Codex
+            && matches!(
+                self.request.action,
+                LaunchAction::New
+                    | LaunchAction::ResumeId { .. }
+                    | LaunchAction::ResumePicker { .. }
+            )
+            && !self.default_args.iter().any(|arg| arg == "--")
+            && !self.extra_args.iter().any(|arg| arg == "--")
+    }
+    pub(crate) fn identity_args(&self) -> &[OsString] {
+        &self.identity_args
+    }
+    pub(crate) fn with_codex_identity(
+        &self,
+        observer: &ObserverEnv,
+        args: &[OsString],
+    ) -> Result<Self, SafeError> {
+        if !self.codex_identity_requested() {
+            return Err(error("OBSERVER_UNAVAILABLE"));
+        }
+        let mut next = self.clone();
+        next.environment = super::environment::overlay_codex_identity(&self.environment, observer)?;
+        next.identity_args = args.to_vec();
+        Ok(next)
+    }
     pub(crate) fn observer_requested(&self) -> bool {
         self.observer_requested
     }
@@ -271,6 +299,7 @@ pub(crate) fn freeze_launch(
             && !default_args.iter().any(|arg| arg == "--")
             && !request.extra_args.iter().any(|arg| arg == "--"),
         observer_plugin: None,
+        identity_args: Vec::new(),
         request: request.clone(),
         profile: profile.clone(),
         owner: caller.clone(),

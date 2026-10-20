@@ -144,7 +144,7 @@ function projectTab(tab: NativeCliTab, tabs?: NativeTabsPort): UnifiedSession {
     safeErrorCode: tab.errorCode,
     renameState: 'idle',
     ...(tab.action.kind === 'resume-id' && tab.sourceSessionKey ? { renameTarget: 'resume-source' as const }
-      : tab.cli === 'claude' && tab.action.kind === 'new' && tab.observedSessionId ? { renameTarget: 'history-record' as const } : {}),
+      : tab.action.kind === 'new' && tab.observedSessionId ? { renameTarget: 'history-record' as const } : {}),
   }
 }
 
@@ -641,7 +641,7 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
       const tab = { ...requireTab(id) }
       if (tab.cli === 'claude' && !deps.nativeRename) throw new Error('NATIVE_RENAME_UNSUPPORTED')
       const nativeSessionId = tab.action.kind === 'resume-id' && tab.sourceSessionKey ? tab.action.nativeSessionId
-        : tab.cli === 'claude' && tab.action.kind === 'new' ? tab.observedSessionId : undefined
+        : tab.action.kind === 'new' ? tab.observedSessionId : undefined
       if (!nativeSessionId || !deps.runSource || !deps.history.load) throw new Error('SESSION_IDENTITY_UNKNOWN')
       if (tab.action.kind === 'new') ownsRecord = () => deps.tabs.tabs.get(tab.tabId)?.observedSessionId === nativeSessionId
       const context = { cli:tab.cli, profileId:tab.profileId, profileRevision:tab.profileRevision, projectId:tab.projectId, projectPath:tab.projectPath }

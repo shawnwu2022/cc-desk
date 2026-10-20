@@ -15,6 +15,13 @@ pub(crate) const OBSERVER_ENV_NAMES: &[&str] = &[
     "CC_DESK_OBSERVER_GENERATION",
 ];
 
+pub(crate) const CODEX_OBSERVER_ENV_NAMES: &[&str] = &[
+    "CC_DESK_CODEX_PORT",
+    "CC_DESK_CODEX_RUN",
+    "CC_DESK_CODEX_GENERATION",
+    "CC_DESK_CODEX_CAPABILITY",
+];
+
 pub(crate) type EnvMap = BTreeMap<OsString, OsString>;
 
 /// Capture the host before a case-sensitive map can lose Windows aliases.
@@ -244,7 +251,9 @@ pub(crate) fn build_environment(
 
     // These names are Desk-issued capabilities, not user CLI credentials. Never
     // inherit an ancestor Desk run's observer authority into a new run.
-    result.retain(|name, _| !permitted(name, OBSERVER_ENV_NAMES));
+    result.retain(|name, _| {
+        !permitted(name, OBSERVER_ENV_NAMES) && !permitted(name, CODEX_OBSERVER_ENV_NAMES)
+    });
     if observer_enabled(profile) {
         if let Some(observer) = observer {
             let layer = validated_layer(&observer.values, false)?;
@@ -286,6 +295,22 @@ pub(crate) fn overlay_observer(
         ) {
             return Err(SafeError::invalid("observer.environment"));
         }
+    }
+    let mut next = frozen.clone();
+    merge(&mut next, &layer);
+    Ok(next)
+}
+
+pub(crate) fn overlay_codex_identity(
+    frozen: &EnvMap,
+    observer: &ObserverEnv,
+) -> Result<EnvMap, SafeError> {
+    let layer = validated_layer(&observer.values, false)?;
+    if layer
+        .keys()
+        .any(|name| !permitted(name, CODEX_OBSERVER_ENV_NAMES))
+    {
+        return Err(SafeError::invalid("observer.environment"));
     }
     let mut next = frozen.clone();
     merge(&mut next, &layer);

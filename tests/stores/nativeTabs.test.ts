@@ -254,3 +254,21 @@ describe('D22 native dual-CLI tab store', () => {
   })
 
 })
+
+// Codex 新TUI只能接收本attempt的认证主会话身份；旧线程Stop和关闭后事件不回绑。
+it('CodexIdentity_ExactAttemptAndRetirement_031', () => {
+  const store = useNativeTabsStore()
+  const a = store.create({ cli: 'codex', projectId: 'p', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+  const b = store.create({ cli: 'codex', projectId: 'p', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+  store.applyLaunchStatus(a.tabId, status(a)); store.applyLaunchStatus(b.tabId, status(b))
+  const first = '00000000-0000-4000-8000-000000000031', second = '00000000-0000-4000-8000-000000000032'
+  expect(store.applyObservationIdentity(a.tabId, captureNativeAttempt(a), first, 'stop')).toBe(false)
+  expect(store.applyObservationIdentity(a.tabId, captureNativeAttempt(a), first)).toBe(true)
+  expect(store.applyObservationIdentity(a.tabId, captureNativeAttempt(a), second, 'stop')).toBe(false)
+  expect(store.applyObservationIdentity(b.tabId, captureNativeAttempt(a), first)).toBe(false)
+  expect(store.tab(b.tabId)?.observedSessionId).toBeUndefined()
+  expect(store.applyObservationIdentity(b.tabId, captureNativeAttempt(b), second)).toBe(true)
+  store.applyLaunchStatus(a.tabId, status(a, 'exited'))
+  expect(store.applyObservationIdentity(a.tabId, captureNativeAttempt(a), second)).toBe(false)
+  expect(store.tab(a.tabId)?.observedSessionId).toBe(first)
+})

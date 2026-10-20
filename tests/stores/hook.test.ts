@@ -407,3 +407,20 @@ it('Subagent_NativeUnknownClears_013', async () => {
   expect(tabs.tab(tab.tabId)?.activityState).toBe('working')
   hooks.$dispose()
 })
+
+// 后端认证的Codex事件不能串入同项目另一个run，也不能重放或越过已释放订阅。
+it('CodexIdentity_AuthenticatedBusIsolation_033', () => {
+  setActivePinia(createPinia()); const store = useHookStore(), a = vi.fn(), b = vi.fn()
+  const one = { runId: 'codex-one', generation: 1, cli: 'codex' as const, enabled: true }
+  const two = { ...one, runId: 'codex-two' }
+  const stop = store.subscribeObservation(one, () => {}, { onIdentity: a })
+  const stopTwo = store.subscribeObservation(two, () => {}, { onIdentity: b })
+  const event: HookEventPayload = { ptyId: null, sessionId: '00000000-0000-4000-8000-000000000033', eventName: 'SessionStart', state: 'unknown', timestamp: 1, runId: one.runId, generation: 1, eventId: 'codex-event', observerSource: 'codex-hook', detail: { type: 'sessionStart', data: {} } }
+  capturedNative!(event); capturedNative!(event)
+  expect(a).toHaveBeenCalledExactlyOnceWith(event.sessionId, 'sessionStart'); expect(b).not.toHaveBeenCalled()
+  capturedNative!({ ...event, eventId: 'foreign-source', observerSource: 'claude-hook' })
+  capturedNative!({ ...event, eventId: 'foreign-generation', generation: 2 })
+  expect(a).toHaveBeenCalledTimes(1)
+  stop(); capturedNative!({ ...event, eventId: 'late' }); expect(a).toHaveBeenCalledTimes(1)
+  stopTwo(); store.$dispose()
+})

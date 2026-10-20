@@ -862,9 +862,10 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   let historyTimer: ReturnType<typeof setTimeout> | undefined
   let historyReading = false
   function historyCue(tab: NativeCliTab): { identity: string | null; reply: string | null; prompt: string | null; titleRevision: number } | null {
-    if (tab.cli !== 'claude' || tab.action.kind === 'raw' || tab.status !== 'running') return null
+    if (tab.action.kind === 'raw' || tab.status !== 'running') return null
+    if (tab.cli === 'codex' && !tab.observedSessionId && !tab.titleChangeRevision) return null
     const attempt = captureNativeAttempt(tab)
-    const observing = tab.observationState === 'active'
+    const observing = tab.cli === 'codex' ? !!tab.observedSessionId : tab.observationState === 'active'
     const notice = observing && native.hasOwnedObservationNotice(tab.tabId, attempt) ? tab.observationNotice : undefined
     const reply = notice?.recent?.kind === 'reply-ended' ? notice.recent : notice?.unreadReplyEnd
     const prompt = notice?.lastPromptSubmitted?.kind === 'prompt-submitted' ? notice.lastPromptSubmitted
@@ -873,9 +874,9 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     // 已冻结的恢复来源或本次运行已证明的身份足以处理 OSC；hook 事件仍要求观察已激活。
     return tab.sourceSessionKey || tab.observedSessionId || reply || prompt ? {
       identity: observing && tab.observedSessionId ? JSON.stringify([...key, tab.observedSessionId]) : null,
-      reply: reply ? JSON.stringify([...key, reply.eventId]) : null,
+      reply: tab.cli === 'codex' && tab.historyTitleRevision ? JSON.stringify([...key, 'codex', tab.historyTitleRevision]) : reply ? JSON.stringify([...key, reply.eventId]) : null,
       prompt: prompt ? JSON.stringify([...key, prompt.eventId]) : null,
-      titleRevision: tab.titleChangeRevision ?? 0,
+      titleRevision: (tab.titleChangeRevision ?? 0) + (tab.historyChangeRevision ?? 0),
     } : null
   }
   function scheduleHistoryRead() {
@@ -900,7 +901,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
         await Promise.all(reads.slice(index, index + 2).map(group => {
           // 前一批可能等待磁盘；每一组真正发起前重新核对冻结 owner/context。
           const current = group.filter(({ tab, attempt, context }) => native.tabs.get(tab.tabId) === tab
-            && matchesNativeAttempt(tab, attempt) && historyCue(tab) && context.cli === 'claude' && cliSupport.isEnabled('claude')
+            && matchesNativeAttempt(tab, attempt) && historyCue(tab) && cliSupport.isEnabled(context.cli)
             && tab.profileId === context.profileId && tab.profileRevision === context.profileRevision
             && tab.projectId === context.projectId && sameProjectPath(tab.projectPath, context.projectPath)
             && profiles.profile(context.profileId)?.revision === context.profileRevision
@@ -909,7 +910,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
           const context = current[0].context
           const projects = new Map(current.map(owner => [owner.context.projectId, { projectId: owner.context.projectId, projectPath: owner.context.projectPath }]))
           // 自动投影失败保留已有行，但 store 仍发布错误且撤销 absence 证明。
-          return history.loadGrouped({ cli: 'claude', profileId: context.profileId, profileRevision: context.profileRevision,
+          return history.loadGrouped({ cli: context.cli, profileId: context.profileId, profileRevision: context.profileRevision,
             projects: [...projects.values()] }, { force: true, retainOnFailure: true }).catch(() => undefined)
         }))
       }
@@ -949,7 +950,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
         return ['projectPath', 'projectId', 'profileId', 'profileRevision', 'cli', 'title', 'name', 'status',
           'requestId', 'runId', 'generation', 'ptyId', 'ptyGeneration', 'sessionId', 'observedSessionId',
           'activity', 'activityState', 'working', 'pending', 'attentionState', 'observation', 'observationState',
-          'observationNotice', 'observerEnabled', 'observerReasonCode', 'errorCode', 'sourceSessionKey', 'createdAt', 'usesDefaultClaudeRoot', 'titleChangeRevision']
+          'observationNotice', 'observerEnabled', 'observerReasonCode', 'errorCode', 'sourceSessionKey', 'createdAt', 'usesDefaultClaudeRoot', 'titleChangeRevision', 'historyChangeRevision', 'historyTitleRevision']
           .map(key => value[key])
       }, () => {
         const previousPath = owner.projectPath
@@ -975,6 +976,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
             return source === 'ai' || source === 'custom' ? JSON.stringify([source, session.lastKnownTitle ?? session.title]) : undefined
           }
           const previousTitle = explicitTitle()
+          const titleDelays = nativeTab.cli === 'codex' ? [1_000, 2_000, 5_000, 15_000] : lateTitleReadDelays
           const retryTitle = (index: number) => {
             owner.titleReadTimer = setTimeout(() => {
               owner.titleReadTimer = undefined
@@ -985,8 +987,8 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
               const title = explicitTitle()
               if (title !== undefined && title !== previousTitle) return
               queueHistory()
-              if (index + 1 < lateTitleReadDelays.length) retryTitle(index + 1)
-            }, lateTitleReadDelays[index])
+              if (index + 1 < titleDelays.length) retryTitle(index + 1)
+            }, titleDelays[index])
           }
           retryTitle(0)
         }
