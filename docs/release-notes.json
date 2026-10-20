@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "releases": {
-    "Unreleased": {
+    "0.23.4": {
       "en": "Added\n\n- Quiet background update checks, with a notification in Settings when an update is available. You still choose when to install.\n\nImproved\n\n- New configurations start with Claude Code and its activity updates enabled. Existing CLI and observation preferences are preserved.\n\nFixed\n\n- Restore Claude session activity updates and show Rename only for conversations that can be renamed.\n- Show Codex automatic conversation titles and keep one session entry after refreshing.\n- Keep dismissed history warnings consistent across the session list, notices and details.\n- Let F2 follow session-list focus, leaving terminal function keys to the CLI.\n\nImportant\n\n- Claude GUI rename requires Node.js 22.13 or newer on the launch configuration's PATH and readable local history. Codex title updates require compatible CLI support and may be unavailable when CLI hooks are disabled.\n- Historical-version switching supports the approved Windows releases. Shared CLI settings, conversation history and project files are not rolled back; back up important data before switching.",
       "zh": "新增\n\n- 后台安静检查更新，有可用更新时在设置入口提醒；仍由你决定何时安装。\n\n优化\n\n- 新配置默认启用 Claude Code 及其活动更新，保留已有的 CLI 启用状态和观察偏好。\n\n修复\n\n- 恢复 Claude 会话活动更新，仅对可以修改原会话名称的条目显示重命名。\n- 同步 Codex 自动生成的会话标题，刷新后不再多出一条关闭的会话。\n- 在会话列表、提示和详情中一致保留已忽略的历史警告。\n- F2 跟随会话列表焦点，终端功能键交给 CLI 处理。\n\n重要说明\n\n- Claude 界面重命名需要启动配置的 PATH 中已有 Node.js 22.13 或更新版本，并能读取本地历史。Codex 标题更新需要兼容的 CLI 支持，禁用 CLI hooks 时可能不可用。\n- 历史版本切换仅支持已准入的 Windows 版本，不会回滚共享的 CLI 设置、会话历史或项目文件；切换前请备份重要数据。"
     },

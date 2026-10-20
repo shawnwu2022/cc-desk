@@ -4,7 +4,7 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
-## [Unreleased]
+## [0.23.4]
 
 新增
 

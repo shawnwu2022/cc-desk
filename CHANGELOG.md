@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+## [0.23.4] - 2026-10-20
+
+### Added
+
+- Check for verified desktop updates quietly in the background and show available updates in Settings, while keeping installation user initiated
+- Maintain concise English and Chinese release highlights for the application and GitHub, with English as the publication default and complete technical validation disclosure retained in a collapsed section
+
+### Fixed
+
+- Enable Claude Code and its observer for new configurations while preserving saved CLI and observation preferences
+- Restore quoted-path Claude activity hooks and exact-source GUI rename admission, including readable conversations whose later working directory differs from their original project
+- Bind Codex session hooks to the owned run, synchronize automatic conversation titles and avoid duplicate closed history rows after refresh
+- Preserve dismissed history warnings consistently across session lists, notices and details, including partial source failures
+- Scope F2 rename and session-list navigation to the focused surface so terminal function keys reach the CLI, and hide Rename when its exact target cannot be modified
+
+Local validation passed 2,896 fast Vitest cases, type checking, strict Rust Clippy, 21 desktop-updater Rust cases, 82 release-policy cases and both English/Chinese production-CSP startup cases. Focused real-xterm keyboard checks passed; isolated real Claude and Codex CLI probes exercised production hooks and the bundled Windows ConPTY without changing user profiles or sessions. These checks do not establish installed Windows WebView2, account-backed D20 certification, unfiltered native All or installation/return acceptance. Publication still requires the exact merged-main ordinary CI, authenticated coverage and all three same-run signed updater payloads.
+
 ## [0.23.3] - 2026-10-19
 
 ### Fixed
