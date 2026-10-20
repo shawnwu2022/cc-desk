@@ -6,6 +6,7 @@ import { useI18n } from 'vue-i18n'
 import { getUpdaterSettings, saveUpdaterSettings, testUpdaterProxy, installDesktopUpdate } from '@/api/tauri'
 import { isOrdinaryUpdateEligible } from '@/utils/updatePolicy'
 import { updateFailure } from '@/utils/updateErrors'
+import { releaseNotesForLocale } from '@/utils/releaseNotes'
 import { useUpdateStore } from '@/stores/update'
 import { useOwnedSessionCounts } from '@/composables/useOwnedSessionCounts'
 import AppButton from '@/components/ui/AppButton.vue'
@@ -14,7 +15,8 @@ import AppDialog from '@/components/ui/AppDialog.vue'
 import InlineNotice from '@/components/ui/InlineNotice.vue'
 import HistoricalVersionsPanel from '@/components/settings/HistoricalVersionsPanel.vue'
 const props = withDefaults(defineProps<{ active?: boolean }>(), { active: true })
-const { t } = useI18n(), updates = useUpdateStore()
+const { t, locale } = useI18n(), updates = useUpdateStore()
+const releaseNotes = computed(() => releaseNotesForLocale(updates.updateInfo, locale.value))
 const counts = useOwnedSessionCounts(), checking = computed(() => updates.checking), error = ref<ReturnType<typeof updateFailure> | null>(null), reviewing = ref(false)
 const proxy = ref(''), savedProxy = ref(''), savingProxy = ref(false), loadingProxy = ref(true)
 const proxyUsername = ref(''), proxyPassword = ref(''), testingProxy = ref(false)
@@ -163,7 +165,7 @@ async function manualDownload() {
       <strong>{{ t('updateObservedPackage', { version: updates.updateInfo.version }) }}</strong>
       <span data-update-channel>{{ t(channelLabels[channel]) }}</span>
       <InlineNotice v-if="!eligible" :kind="eligibilityHint === 'updateCheckBeforeInstall' ? 'info' : 'warning'" :message="t(eligibilityHint)" />
-      <p v-if="updates.updateInfo.releaseNotes" class="release-notes">{{ updates.updateInfo.releaseNotes }}</p>
+      <p v-if="releaseNotes" class="release-notes">{{ releaseNotes }}</p>
       <AppButton data-update-review :disabled="!active" @click="reviewInstall">{{ t('updateReviewInstallation') }}</AppButton>
     </div>
     <p v-if="installing" role="status">{{ updates.downloadState === 'installing' ? t('updateInstalling') : t('updateDownloading', { percent: updates.downloadProgress.percent }) }}</p>

@@ -1,5 +1,7 @@
 # CC Desk
 
+[主要更新日志](RELEASE_NOTES_CN.md) · [English release highlights](RELEASE_NOTES.md)
+
 CC Desk 是面向 **Claude Code 与 Codex CLI** 的桌面工作台，技术栈为 Tauri 2、Vue 3、xterm.js 与 Rust。
 
 它不替代 CLI 的单会话交互，而是让真实 CLI 继续负责命令、权限、认证、MCP、扩展与未来版本行为；CC Desk 负责多项目、多会话、稳定运行身份、恢复、终端传输和只读资源投影。

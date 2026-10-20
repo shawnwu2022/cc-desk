@@ -25,6 +25,34 @@ afterEach(() => { wrappers.splice(0).forEach(wrapper => wrapper.unmount()); docu
 function render(component: any, props: Record<string, unknown> = {}) { const wrapper = mount(component, { props, attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en, zh } })] } }); wrappers.push(wrapper); return wrapper }
 const candidate = (channel: string) => ({ version: '0.99.0', currentVersion: '0.17.7', hasUpdate: true, releaseNotes: 'Notes', downloadUrl: '', platformAsset: null, channel, installEligible: false })
 describe('Remaining settings sections', () => {
+  // 即时切换只改变日志语言；缺失翻译回退英文，不把完整工程记录混入主要摘要。
+  it('ReleaseNotes_LocaleAndEnglishFallback_001', async () => {
+    const updates = useUpdateStore()
+    updates.setUpdateInfo({ ...candidate('stable'), channel: 'stable', releaseNotes: 'Source: technical-commit\nCI run: 123',
+      releaseNotesByLocale: { en: 'Fixed\n- Terminal keys follow focus.\nImportant\n- Back up shared data.', zh: '修复\n- 终端按键跟随焦点。\n重要说明\n- 请备份共享数据。' },
+    })
+    const wrapper = render(UpdateSection); await flushPromises()
+    expect(wrapper.get('.release-notes').text()).toContain('Terminal keys follow focus.')
+    expect(wrapper.get('.release-notes').text()).not.toMatch(/technical-commit|CI run/)
+    ;(wrapper.vm as any).$i18n.locale = 'zh'; await flushPromises()
+    expect(wrapper.get('.release-notes').text()).toContain('终端按键跟随焦点。')
+    expect(wrapper.get('.release-notes').text()).toContain('请备份共享数据。')
+    updates.setUpdateInfo({ ...candidate('stable'), channel: 'stable', releaseNotes: 'Legacy English notes', releaseNotesByLocale: { en: 'English fallback. Keep backups.' } })
+    await flushPromises(); expect(wrapper.get('.release-notes').text()).toBe('English fallback. Keep backups.')
+    updates.setUpdateInfo({ ...candidate('stable'), channel: 'stable', releaseNotes: 'Older notes: a backup is required.' })
+    await flushPromises(); expect(wrapper.get('.release-notes').text()).toBe('Older notes: a backup is required.')
+  })
+
+  it('ReleaseNotes_KnownLegacyVersionUsesCuratedHighlights_002', async () => {
+    useUpdateStore().setUpdateInfo({ ...candidate('stable'), channel: 'stable', version: '0.23.3', releaseNotes: 'Source: commit-id\nCI run: 123\nA long list of internal tests' })
+    const wrapper = render(UpdateSection); await flushPromises()
+    expect(wrapper.get('.release-notes').text()).toContain("terminal's last row")
+    expect(wrapper.get('.release-notes').text()).toContain('back up important data')
+    expect(wrapper.get('.release-notes').text()).not.toMatch(/commit-id|CI run|internal tests/)
+    ;(wrapper.vm as any).$i18n.locale = 'zh'; await flushPromises()
+    expect(wrapper.get('.release-notes').text()).toContain('终端最后一行')
+    expect(wrapper.get('.release-notes').text()).toContain('备份重要数据')
+  })
   // 代理地址可读，认证字段独立遮蔽；测试草稿不保存、不检查更新、不生成安装权限。
   it('Proxy_VisibleAddressMaskedAuth_001', async () => {
     io.settings.mockResolvedValue({ proxy: 'http://private-user:private-pass@localhost:1080/' })

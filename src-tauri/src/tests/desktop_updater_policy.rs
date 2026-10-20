@@ -25,6 +25,16 @@ fn official_release_passes_existing_contract() {
     assert_eq!(proof.source_sha, SHA);
     assert_eq!(proof.package.size, 10);
 }
+
+#[test]
+fn ReleaseNotes_DisclosureWrapperPreservesAdmission_002() {
+    let mut value = release();
+    let original = value["body"].as_str().unwrap();
+    value["body"] = json!(format!("Fixed\n- Better titles.\n\nImportant\n- Keep backups.\n\n<details>\n<summary>Technical validation details</summary>\n\n{original}\n</details>\n"));
+    assert!(admission(&value).is_ok());
+    value["body"] = json!("Fixed\n- Better titles.\n");
+    assert!(admission(&value).is_err());
+}
 #[test]
 fn draft_prerelease_and_candidate_metadata_never_admit() {
     for field in ["draft", "prerelease"] {
@@ -180,4 +190,31 @@ fn manifest_signature_is_bound_to_the_uploaded_signature_asset() {
     assert!(verify_signature_asset(signature, &asset, "fixture-base64-signature").is_ok());
     assert!(verify_signature_asset(signature, &asset, "other-signature").is_err());
     assert!(verify_signature_asset(b"other-signature\n", &asset, "other-signature").is_err());
+}
+#[test]
+fn ReleaseNotes_BoundedLocalesRetainImportantText_001() {
+    let notes = crate::updater_policy::localized_release_notes(&serde_json::json!({
+        "notes_i18n": {"en":" Important: back up shared data. ", "zh":"重要：备份共享数据。", "private":"must not pass"}
+    })).unwrap();
+    assert_eq!(notes.len(), 2);
+    assert_eq!(notes["en"], "Important: back up shared data.");
+    assert_eq!(notes["zh"], "重要：备份共享数据。");
+    assert!(crate::updater_policy::localized_release_notes(
+        &serde_json::json!({"notes":"Legacy notes"})
+    )
+    .is_none());
+    assert!(crate::updater_policy::localized_release_notes(
+        &serde_json::json!({"notes_i18n":{"zh":"无英文"}})
+    )
+    .is_none());
+    assert!(crate::updater_policy::localized_release_notes(
+        &serde_json::json!({"notes_i18n":{"en":"x".repeat(4001)}})
+    )
+    .is_none());
+    let english = crate::updater_policy::localized_release_notes(
+        &serde_json::json!({"notes_i18n":{"en":"Keep backups", "zh":"x".repeat(4001)}}),
+    )
+    .unwrap();
+    assert_eq!(english.len(), 1);
+    assert_eq!(english["en"], "Keep backups");
 }

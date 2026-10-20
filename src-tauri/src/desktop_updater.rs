@@ -30,6 +30,8 @@ pub(crate) struct UpdateSummary {
     current_version: String,
     has_update: bool,
     release_notes: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    release_notes_by_locale: Option<std::collections::BTreeMap<&'static str, String>>,
     channel: &'static str,
     install_eligible: bool,
     admission_id: Option<String>,
@@ -238,6 +240,7 @@ pub(crate) async fn check_desktop_update(
             current_version: current,
             has_update: false,
             release_notes: String::new(),
+            release_notes_by_locale: None,
             channel: "stable",
             install_eligible: false,
             admission_id: None,
@@ -259,6 +262,7 @@ pub(crate) async fn check_desktop_update(
             .chars()
             .take(4000)
             .collect(),
+        release_notes_by_locale: localized_release_notes(&update.raw_json),
         channel: "unverified",
         install_eligible: false,
         admission_id: None,
