@@ -5,7 +5,9 @@
 mod conpty_runtime;
 
 fn main() {
-    if cc_desk::run_codex_observer_entry() { return; }
+    if cc_desk::run_codex_observer_entry() {
+        return;
+    }
     #[cfg(windows)]
     match cc_desk::run_version_manager_entry() {
         Ok(true) => return,

@@ -17,7 +17,7 @@
 - Preserve dismissed history warnings consistently across session lists, notices and details, including partial source failures
 - Scope F2 rename and session-list navigation to the focused surface so terminal function keys reach the CLI, and hide Rename when its exact target cannot be modified
 
-Local validation passed 2,896 fast Vitest cases, type checking, strict Rust Clippy, 21 desktop-updater Rust cases, 82 release-policy cases and both English/Chinese production-CSP startup cases. Focused real-xterm keyboard checks passed; isolated real Claude and Codex CLI probes exercised production hooks and the bundled Windows ConPTY without changing user profiles or sessions. These checks do not establish installed Windows WebView2, account-backed D20 certification, unfiltered native All or installation/return acceptance. Publication still requires the exact merged-main ordinary CI, authenticated coverage and all three same-run signed updater payloads.
+Local validation passed the complete Vitest inventory (3,022 cases, two original skips), 66 visual-fixture cases, type checking, strict Rust Clippy, 21 desktop-updater Rust cases, 254 Node-policy cases (six platform-conditional skips) and both English/Chinese production-CSP startup cases. Focused real-xterm keyboard checks passed; isolated real Claude and Codex CLI probes exercised production hooks and the bundled Windows ConPTY without changing user profiles or sessions. These checks do not establish installed Windows WebView2, account-backed D20 certification, unfiltered native All or installation/return acceptance. Publication still requires the exact merged-main ordinary CI, authenticated coverage and all three same-run signed updater payloads.
 
 ## [0.23.3] - 2026-10-19
 

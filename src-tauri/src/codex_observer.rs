@@ -137,7 +137,7 @@ mod tests {
             .map(|arg| arg.into_string().unwrap())
             .collect();
         assert_eq!(args.len(), 8);
-        for pair in args.chunks_exact(2) {
+        for pair in args.as_chunks::<2>().0 {
             assert_eq!(pair[0], "-c");
         }
         let state = args
