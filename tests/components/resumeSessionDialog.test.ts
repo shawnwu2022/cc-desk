@@ -25,6 +25,7 @@ const NativeHost = defineComponent({ props: ['tabId'], setup(props, { expose }) 
 const wrappers: VueWrapper[] = []
 beforeEach(() => {
   setActivePinia(createPinia()); vi.clearAllMocks(); localStorage.clear()
+  localStorage.setItem('cc-desk-cli-support-v1', JSON.stringify({ claude: true, codex: true }))
   io.legacy.mockResolvedValue([])
   io.profile.mockResolvedValue({ revision: '7', profiles: [{ id: 'cx', revision: '7', cli: 'codex', name: 'Work config', launcher: { kind: 'native' }, programPath: { mode: 'inherit' }, defaultArgs: { mode: 'inherit' }, skipPermissions: { mode: 'inherit' }, observer: { mode: 'inherit' }, env: {} }] })
   io.read.mockReset().mockResolvedValue({ state: 'ready', items: [{ type: 'session', projectId: 'project', sessionKey: historyKey, nativeSessionId: 'history-id', title: 'Restore this', cwd: '/repo', updatedAt: '2026-09-30T00:00:00Z' }], hasMore: false })

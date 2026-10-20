@@ -54,6 +54,7 @@ vi.mock('@/composables/useUnifiedWorkspaceRuntime', async () => {
 const wrappers: VueWrapper[] = []
 let i18n: ReturnType<typeof createI18n>
 beforeEach(() => {
+  localStorage.setItem('cc-desk-cli-support-v1', JSON.stringify({ claude: true, codex: true }))
   vi.clearAllMocks(); host.callbacks.clear()
   host.focused = true
   host.getConfig.mockResolvedValue({ theme: 'dark', terminalTheme: 'cc-box-light', language: 'en', claudeEnvVars: { TEST: 'private' } })

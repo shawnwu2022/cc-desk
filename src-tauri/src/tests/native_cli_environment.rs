@@ -119,6 +119,7 @@ fn D08_Environment_ObserverIsOptInAndMinimal_06() {
         values: env(&[("CC_BOX_SESSION_ID", "run-only")]),
     };
     let mut profile = Profile::new("one", CliKind::Claude);
+    profile.observer = Override::Set(false);
     let off = build_environment(
         &EnvMap::new(),
         &EnvMap::new(),
@@ -283,7 +284,7 @@ fn D13_Observer_LegacyInheritanceNewDefaultAndCodexIsolation_012() {
     );
 
     let fresh = Profile::new("fresh-claude", CliKind::Claude);
-    let off = build_environment(
+    let default_on = build_environment(
         &EnvMap::new(),
         &EnvMap::new(),
         &fresh,
@@ -291,7 +292,10 @@ fn D13_Observer_LegacyInheritanceNewDefaultAndCodexIsolation_012() {
         Some(&observer),
     )
     .unwrap();
-    assert!(!off.contains_key(OsStr::new("CC_DESK_OBSERVER_CAPABILITY")));
+    assert_eq!(
+        default_on.get(OsStr::new("CC_DESK_OBSERVER_RUN")).unwrap(),
+        "run-current"
+    );
 
     let mut explicit = fresh;
     explicit.observer = Override::Set(true);
@@ -319,6 +323,64 @@ fn D13_Observer_LegacyInheritanceNewDefaultAndCodexIsolation_012() {
     )
     .unwrap();
     assert!(!isolated.contains_key(OsStr::new("CC_DESK_OBSERVER_CAPABILITY")));
+}
+
+// 缺失 observer 的 Claude 配置默认请求观察，Codex 和 Shell 仍保持隔离。
+#[test]
+fn Observer_MissingFieldDefault_021() {
+    let observer = ObserverEnv {
+        values: env(&[("CC_DESK_OBSERVER_RUN", "current")]),
+    };
+    for (cli, enabled) in [("claude", true), ("codex", false), ("shell", false)] {
+        let profile: Profile = serde_json::from_value(json!({
+            "id": "existing", "revision": "7", "name": "Existing", "cli": cli
+        }))
+        .unwrap();
+        let result = build_environment(
+            &EnvMap::new(),
+            &EnvMap::new(),
+            &profile,
+            None,
+            Some(&observer),
+        )
+        .unwrap();
+        assert_eq!(
+            result.contains_key(OsStr::new("CC_DESK_OBSERVER_RUN")),
+            enabled,
+            "{cli}"
+        );
+        assert_eq!(profile.revision.to_string(), "7");
+    }
+}
+
+// 保存的显式关闭与 unset 经反序列化和环境解析后仍关闭，不回写配置。
+#[test]
+fn Observer_SavedOverrides_022() {
+    let observer = ObserverEnv {
+        values: env(&[("CC_DESK_OBSERVER_RUN", "current")]),
+    };
+    for (value, enabled) in [
+        (json!({"mode":"set","value":false}), false),
+        (json!({"mode":"unset"}), false),
+        (json!({"mode":"set","value":true}), true),
+    ] {
+        let mut stored = serde_json::to_value(Profile::new("saved", CliKind::Claude)).unwrap();
+        stored["observer"] = value.clone();
+        let profile: Profile = serde_json::from_value(stored).unwrap();
+        let result = build_environment(
+            &EnvMap::new(),
+            &EnvMap::new(),
+            &profile,
+            None,
+            Some(&observer),
+        )
+        .unwrap();
+        assert_eq!(
+            result.contains_key(OsStr::new("CC_DESK_OBSERVER_RUN")),
+            enabled
+        );
+        assert_eq!(serde_json::to_value(profile).unwrap()["observer"], value);
+    }
 }
 
 #[test]

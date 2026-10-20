@@ -48,6 +48,7 @@ function workspaceFixture() {
   setActivePinia(createPinia())
   vi.stubGlobal('crypto', webcrypto)
   localStorage.clear()
+  localStorage.setItem('cc-desk-cli-support-v1', JSON.stringify({ claude: true, codex: true }))
   const fixture = {
     state: { pinnedProjects: [], archivedSessions: {}, displayNames: {}, sessionRecords: {}, launchPreferences: {} } as ProjectsState,
     config: { theme: 'light', terminalTheme: 'cc-box-light', language: 'en', hiddenProjects: [] } as Record<string, unknown>,

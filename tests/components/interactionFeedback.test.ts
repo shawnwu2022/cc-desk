@@ -28,6 +28,7 @@ const wrappers: VueWrapper[] = []
 beforeEach(() => {
   vi.stubGlobal('crypto', { getRandomValues: window.crypto.getRandomValues, randomUUID })
   setActivePinia(createPinia()); vi.clearAllMocks(); localStorage.clear()
+  localStorage.setItem('cc-desk-cli-support-v1', JSON.stringify({ claude: true, codex: true }))
   io.projects.mockResolvedValue([])
   io.scope.mockResolvedValue({ cli: 'codex' })
   io.sessions.mockResolvedValue([])

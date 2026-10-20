@@ -493,6 +493,7 @@ describe('native CLI adapter', () => {
   })
 
   it('NativeArchive_RefreshRestore_006', async () => {
+    localStorage.setItem('cc-desk-cli-support-v1', JSON.stringify({ claude: true, codex: true }))
     setActivePinia(createPinia())
     const { adapter } = setup([], [history('codex', '/root', 'session-1')])
     const store = useUnifiedSessionsStore()

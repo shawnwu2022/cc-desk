@@ -18,6 +18,7 @@ let wrapper: VueWrapper | undefined
 let profile: CliProfile
 beforeEach(() => {
   setActivePinia(createPinia()); vi.clearAllMocks(); localStorage.clear()
+  localStorage.setItem('cc-desk-cli-support-v1', JSON.stringify({ claude: true, codex: true }))
   profile = { id: 'p', revision: '2', cli: 'codex', name: 'Codex', launcher: { kind: 'native' }, programPath: { mode: 'inherit' }, defaultArgs: { mode: 'set', value: [] }, skipPermissions: { mode: 'inherit' }, observer: { mode: 'set', value: false }, env: {} }
   io.list.mockResolvedValue({ revision: '2', profiles: [profile] })
   io.patch.mockImplementation(async (_revision, patch) => ({ revision: '3', profiles: [{ ...profile, ...patch.changes, revision: '3' }] }))

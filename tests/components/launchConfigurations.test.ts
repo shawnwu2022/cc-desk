@@ -51,6 +51,22 @@ function button(selector: string) { const element = document.querySelector<HTMLB
 async function edit(w: VueWrapper, id = 'cc') { await w.get(`[data-launch-row="${id}"] [data-launch-edit]`).trigger('click'); await flushPromises() }
 async function menu(w: VueWrapper, id: string, action: string) { await w.get(`[data-launch-row="${id}"] [data-launch-menu]`).trigger('click'); await flushPromises(); button(`[data-item-id="${action}"]`).click(); await flushPromises() }
 async function input(selector: string, value: string) { const el = document.querySelector<HTMLInputElement>(selector); expect(el, selector).not.toBeNull(); el!.value = value; el!.dispatchEvent(new Event('input', { bubbles: true })); await flushPromises() }
+// 新建 Claude 配置默认开启观察，Codex 不开启 Claude 观察；实际保存请求携带对应值。
+it.each(['claude', 'codex'] as const)('LaunchSettings_ObserverDefault_019_%s', async cli => {
+  const w = await render()
+  await w.get(`[data-launch-group="${cli}"] [data-launch-create]`).trigger('click'); await flushPromises()
+  button('[data-launch-save]').click(); await flushPromises()
+  expect(writes).toEqual([expect.objectContaining({ op: 'create', profile: expect.objectContaining({ cli, observer: { mode: 'set', value: cli === 'claude' } }) })])
+})
+// 编辑和复制已明确关闭的 Claude 观察配置都保留关闭，不把新建默认应用到旧配置。
+it.each(['edit', 'copy'] as const)('LaunchSettings_ObserverSaved_020_%s', async action => {
+  const w = await render()
+  if (action === 'edit') await edit(w)
+  else await menu(w, 'cc', 'copy')
+  button('[data-launch-save]').click(); await flushPromises()
+  const patch = writes[0]
+  expect(patch.op === 'create' ? patch.profile.observer : patch.op === 'update' ? patch.changes.observer : undefined).toEqual({ mode: 'set', value: false })
+})
 // 真实设置页按工具分组，并使用现有全局默认偏好显示标记。
 it('LaunchSettings_GroupDefault_001', async () => {
   const w = await render()

@@ -296,6 +296,7 @@ it.each(['navigation', 'selection', 'revision', 'success'] as const)('confirmed 
 
 beforeEach(() => {
   vi.restoreAllMocks()
+  localStorage.setItem('cc-desk-cli-support-v1', JSON.stringify({ claude: true, codex: true }))
   setActivePinia(createPinia())
 })
 

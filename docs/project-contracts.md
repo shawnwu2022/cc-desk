@@ -318,6 +318,8 @@ npm run tauri:build        # 生产构建
 
 ### D13 observer isolation
 
+- Claude 配置的 `observer` 缺失或为 `inherit` 时默认开启，与前端新建配置一致；`set(false)`、`unset` 继续关闭。默认值解析不写回已保存配置。
+
 - `observer_registry`/`observer_http`/`observer_host` own a bounded, authenticated optional side channel. `/hook` is no longer an unauthenticated compatibility path; legacy Claude launches also mint per-PTY leases.
 - The native reservation winner adds verified observer plugin assets and a fresh capability to the frozen launch only when enabled. Newly auto-created safe Claude templates default **on**; Codex profiles and raw/Shell never receive the Claude overlay. Strip only Desk capability environment names from ambient inputs, never user API credentials. All saved overrides, including `observer: { mode: 'set', value: false }` on `desk-safe-claude`, remain authoritative. Refresh cannot distinguish an old template default from a user choice, so it performs no observer migration or profile revision write.
 - Observer leases follow exact run/document lifetime, never own process control. Dropping/invalidating a lease cannot kill or restart a CLI. The `NATIVE_RUNTIME_NOT_READY` gate is unchanged.

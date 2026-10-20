@@ -180,9 +180,8 @@ pub(crate) fn observer_enabled(profile: &Profile) -> bool {
     match &profile.observer {
         Override::Set(enabled) => *enabled,
         Override::Unset => false,
-        // The legacy Claude path historically installed the Desk hook monitor.
-        // Inherit preserves that behavior; independent profiles remain off.
-        Override::Inherit => profile.is_legacy_claude(),
+        // 缺省与继承使用 Claude 的活动观察默认值；显式关闭和 unset 保持权威。
+        Override::Inherit => true,
     }
 }
 

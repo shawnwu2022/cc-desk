@@ -42,7 +42,7 @@ function nativeHarness(entries: NativeHistoryEntry[]) {
   return catalog
 }
 
-beforeEach(() => { setActivePinia(createPinia()); useProjectsStateStore().loaded = true })
+beforeEach(() => { localStorage.setItem('cc-desk-cli-support-v1', JSON.stringify({ claude: true, codex: true })); setActivePinia(createPinia()); useProjectsStateStore().loaded = true })
 
 describe('projectGroups preserves unchanged row identity', () => {
   it('ProjectGroups_KeepsUnchangedRowIdentityOnScopedRefresh_070', async () => {

@@ -41,7 +41,7 @@ let persisted: ProjectsState
 const wrappers: VueWrapper[] = []
 beforeEach(() => {
   vi.stubGlobal('crypto', { getRandomValues: window.crypto.getRandomValues, randomUUID: () => 'legacy-tab-id' })
-  localStorage.clear(); setActivePinia(createPinia()); vi.clearAllMocks(); useProjectsStateStore().loaded = true
+  localStorage.clear(); localStorage.setItem('cc-desk-cli-support-v1', JSON.stringify({ claude: true, codex: true })); setActivePinia(createPinia()); vi.clearAllMocks(); useProjectsStateStore().loaded = true
   persisted = { pinnedProjects: [], archivedSessions: {}, launchPreferences: {} }
   io.getState.mockImplementation(async () => structuredClone(persisted))
   io.upsertRecord.mockImplementation(async (key, record) => { persisted.sessionRecords ??= {}; persisted.sessionRecords[key] = structuredClone(record); return structuredClone(persisted) })

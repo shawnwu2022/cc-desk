@@ -30,6 +30,7 @@ function group(sessions = [session()], extra: Partial<UnifiedProjectGroup> = {})
 const mounted: VueWrapper[] = []
 let i18n: ReturnType<typeof createI18n>
 beforeEach(() => {
+  localStorage.setItem('cc-desk-cli-support-v1', JSON.stringify({ claude: true, codex: true }))
   vi.useFakeTimers(); vi.setSystemTime(now)
   setActivePinia(createPinia())
   useProjectsStateStore().loaded = true
