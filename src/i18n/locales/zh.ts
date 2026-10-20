@@ -280,7 +280,7 @@ export default {
   historyIssueOpenProject: '打开项目目录',
   historySessionReadIssue: '此会话历史读取不完整：{code}；可在历史来源诊断中查看恢复建议。',
   historyIssuesIgnore: '忽略当前问题的重复提示',
-  historyIssuesIgnored: '已忽略已知问题的重复提示，详情仍保留；新的可识别问题会再次提示。',
+  historyIssuesIgnored: '已忽略已知问题，相关提示和警告标记已隐藏；新的可识别问题会再次提示。',
   historyRecoveryActionFailed: '操作未完成，请重新检查该来源后再试。',
   historyRecoveryUnsupported: '格式、版本或必要元数据不受支持。请在对应 CLI 中检查该历史来源及版本，核对启动配置；Desk 不会猜测记录身份或自动迁移原始历史。',
   historyRecoveryInvalid: '记录解析或文本校验失败。请先备份，再使用对应 CLI 检查记录；重新扫描只读数据，不会自动修改或删除历史。',

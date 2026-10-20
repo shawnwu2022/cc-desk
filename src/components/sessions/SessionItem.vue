@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { inject } from 'vue'
 import { SESSION_INTERACTION_OWNER } from '@/session/sessionInteraction'
+import { SESSION_HISTORY_WARNING_VISIBLE } from '@/utils/workspaceSourceWarnings'
 import { APP_RENAME_SHORTCUT, captureShortcut } from '@/config/appShortcuts'
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -33,6 +34,7 @@ const emit = defineEmits<{
 }>()
 const { t, locale } = useI18n()
 const captureInteractionOwner = inject(SESSION_INTERACTION_OWNER, null)
+const historyWarningVisible = inject(SESSION_HISTORY_WARNING_VISIBLE, (session: UnifiedSession) => Boolean(session.historyReadFailure))
 const renameShortcut = inject(APP_RENAME_SHORTCUT, computed(() => 'F2'))
 const now = useRelativeActivityClock()
 const row = ref<HTMLElement | null>(null)
@@ -216,7 +218,7 @@ function preventReferenceNativeDrag(event: DragEvent) {
       <AppTooltip v-else class="session-title-tooltip" :text="session.title">
         <span class="session-name" tabindex="0">{{ session.title }}</span>
       </AppTooltip>
-      <AppTooltip v-if="session.historyReadFailure" :text="t('historySessionReadIssue', { code: session.historyReadFailure })">
+      <AppTooltip v-if="historyWarningVisible(session)" :text="t('historySessionReadIssue', { code: session.historyReadFailure })">
         <span data-session-history-issue tabindex="0" :aria-label="t('historySessionReadIssue', { code: session.historyReadFailure })">!</span>
       </AppTooltip>
     </div>

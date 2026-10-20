@@ -280,7 +280,7 @@ export default {
   historyIssueOpenProject: 'Open project directory',
   historySessionReadIssue: 'Incomplete history read: {code}. See History source diagnostics for recovery guidance.',
   historyIssuesIgnore: 'Ignore repeat notices for current issues',
-  historyIssuesIgnored: 'Repeat notices for known issues are ignored. Details remain available; a newly identifiable issue will notify again.',
+  historyIssuesIgnored: 'Known issues are ignored. Their notices and warning markers are hidden; newly identifiable issues will notify again.',
   historyRecoveryActionFailed: 'The action did not complete. Check this source and try again.',
   historyRecoveryUnsupported: 'Unsupported format, version or required metadata. Check the history source and version in the corresponding CLI and review its launch configuration. Desk will not guess identities or migrate raw history.',
   historyRecoveryInvalid: 'Record parsing or text validation failed. Back up first and inspect it with the corresponding CLI. Rescanning only reads data; it does not edit or delete history.',
