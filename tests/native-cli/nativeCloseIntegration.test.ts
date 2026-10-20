@@ -24,7 +24,7 @@ vi.mock('@/api/tauri', async original => ({ ...await original<object>(),
   upsertSessionUiRecord: async (key: string, record: any) => { io.records[key] = { ...record }; return { pinnedProjects: [], archivedSessions: {}, sessionRecords: { ...io.records } } },
   getAppConfig: async () => ({ language: 'en', theme: 'light', terminalTheme: 'cc-box-light' }), updateAppConfig: async () => {}, onHookEvent: async () => () => {},
   createNativeProjectionClient: () => ({
-    scope: async (target: any) => ({ scopeId: 'scope-cx', instanceId: 'fixture-instance', cli: 'codex', sourceRootKey: 'root-cx', identityEpoch: '1', profileId: 'cx', profileRevision: '7', target, basis: target.kind === 'run' ? 'launch-environment' : 'configured-profile' }),
+    scope: async (target: any) => ({ scopeId: `scope-${target.profileId ?? 'cx'}`, instanceId: 'fixture-instance', cli: 'codex', sourceRootKey: 'root-cx', identityEpoch: '1', profileId: target.profileId ?? 'cx', profileRevision: target.expectedProfileRevision ?? '7', target, basis: target.kind === 'run' ? 'launch-environment' : 'configured-profile' }),
     read: io.historyRead,
   }),
 }))
@@ -160,8 +160,10 @@ it.each(['budget', 'navigation'] as const)('Native_AppRowResumeNoStaleAdmission_
     io.historyRead.mockImplementation(async request => response(request))
     await wrapper.get('[data-action-feedback] button').trigger('click'); await flushPromises()
     await vi.waitFor(() => expect(io.start).toHaveBeenCalledOnce())
-    expect(io.historyRead).toHaveBeenCalledTimes(2)
-    expect(io.historyRead.mock.calls[1][0]).toMatchObject({ source: { profileId: 'cx', profileRevision: '7', target: { profileId: 'cx', expectedProfileRevision: '7', projectIds: ['project'] } } })
+    // 新配置有自己的目录读取，显式 Retry 仍只使用原来的冻结来源。
+    const originalReads = io.historyRead.mock.calls.filter(([request]) => request.source.profileId === 'cx')
+    expect(originalReads).toHaveLength(2)
+    expect(originalReads[1][0]).toMatchObject({ source: { profileId: 'cx', profileRevision: '7', target: { profileId: 'cx', expectedProfileRevision: '7', projectIds: ['project'] } } })
     expect([...useNativeTabsStore().tabs.values()][0]).toMatchObject({ cli: 'codex', profileId: 'cx', profileRevision: '7', projectId: 'project', projectPath: '/repo', action: { kind: 'resume-id', nativeSessionId: 'saved' } })
     expect(io.stop).not.toHaveBeenCalled()
   } else expect(catalog.actionFeedback).toBeNull()

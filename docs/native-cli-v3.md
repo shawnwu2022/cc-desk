@@ -86,6 +86,15 @@ Important rules:
 - unknown schema-v1 extensions survive reads and writes;
 - legacy compatibility files may still exist, but new native writes do not mutate them.
 
+Adopting a changed or deleted profile immediately revokes its obsolete history
+contexts, including pending reads. The workspace reloads only changed profiles at
+their new revisions and refreshes availability without restarting the application.
+The successor read waits for existing background refresh batches and retired
+scans to finish, preserving the two-reader budget; successive saves keep only
+the still-current revision eligible for the queued read.
+Unchanged profiles retain their history; admitted tabs and runs keep their frozen
+identity. Saving alone never launches or replays a failed launch.
+
 ## Authenticated document and projection boundary
 
 Native frontend calls are admitted through the authenticated document bridge. Frontend-selected paths or opaque IDs alone never authorize filesystem access.
@@ -177,6 +186,17 @@ implicit shared daemon; explicit user remote/disabled-hook configuration remains
 authoritative and may leave identity unavailable. Raw and unarchive actions do
 not receive this channel. The four Codex-specific environment values are stripped
 from inherited inputs and minted for the exact owned run, generation and document.
+Before accepting an optional observer overlay, the host validates the complete
+invocation against the selected runner's argument and environment limits. An
+unrepresentable overlay is discarded together with its capability; the original
+frozen invocation still undergoes every ordinary launch check. In particular,
+Windows Cmd shims retain their strict CALL literal subset and size limits, so
+Codex hook TOML cannot prevent an otherwise valid new or resumed session from
+starting. This degradation leaves identity observation unavailable and never
+selects another executable or writes a configuration file. New Codex tabs then
+lack the hook-proven native ID: first-title synchronization and deduplication
+against that tab's newly discovered history cannot operate. Explicit-ID resume
+keeps its original frozen historical source; it does not gain hook observation.
 Codex discovers disk configuration hooks separately in each configuration layer,
 so the added session-flags handlers coexist with user-file handlers. A later user
 `-c` override in the same session-flags layer retains its normal precedence.
