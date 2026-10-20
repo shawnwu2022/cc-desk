@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -17,7 +17,7 @@ function bashQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`
 }
 
-function capture(auth: boolean, input: Buffer = Buffer.from('{"hook_event_name":"Stop"}')) {
+function capture(auth: boolean, input: Buffer = Buffer.from('{"hook_event_name":"Stop"}'), pluginDefinition = false) {
   const dir = mkdtempSync(join(tmpdir(), 'observer-reporter-'))
   const record = join(dir, 'record.json')
   try {
@@ -28,9 +28,13 @@ function capture(auth: boolean, input: Buffer = Buffer.from('{"hook_event_name":
       `#!/bin/bash\nnode "${toBashPath(captureScript)}" "$@"\n`,
       { mode: 0o700 },
     )
+    const pluginRoot = join(dir, 'Plugin With Spaces')
+    mkdirSync(join(pluginRoot, 'scripts'), { recursive: true })
+    writeFileSync(join(pluginRoot, 'scripts/report-hook.sh'), readFileSync(script), { mode: 0o700 })
+    const hook = JSON.parse(readFileSync('src-tauri/plugin/hooks/hooks.json', 'utf8')).hooks.SessionStart[0].hooks[0]
     const command = [
       `export PATH=${bashQuote(toBashPath(dir))}:"$PATH"`,
-      `exec ${bashQuote(toBashPath(resolve(script)))}`,
+      pluginDefinition ? hook.command.replaceAll('${CLAUDE_PLUGIN_ROOT}', pluginRoot) : `exec ${bashQuote(toBashPath(resolve(script)))}`,
     ].join('; ')
     // 测试只执行 reporter，不读取个人登录脚本或引入其输出与环境副作用。
     const result = spawnSync('bash', ['--noprofile', '--norc', '-c', command], {
@@ -53,6 +57,12 @@ function body(config: string): string {
 }
 it('D13_Reporter_EmptyCapabilityNeverUsesLegacyFallback_01', () => {
   expect(capture(false)).toBeNull()
+})
+// 执行真实 hook 定义，插件目录含空格或 Windows 反斜杠仍须到达 reporter。
+it('Observer_PluginCommandPath_006', () => {
+  const value = capture(true, Buffer.from('{"hook_event_name":"SessionStart"}'), true)
+  expect(value).not.toBeNull()
+  expect(body(value.config)).toBe('{"hook_event_name":"SessionStart"}')
 })
 // 真实子进程测试：满载下可超 vitest 默认 5s（单跑约 2.5s），放宽到 15s 消除负载抖动
 it('D13_Reporter_BoundsBodyAndDoesNotExposeTokenInCurlArgvOrEnvironment_02', () => {

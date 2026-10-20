@@ -3,6 +3,7 @@
 const fs = require('fs')
 const path = require('path')
 const { verifyUpdaterSignature } = require('./updater-signature.js')
+const { localizedNotes, readNotes } = require('./release-notes.js')
 
 const PLATFORM_MATCHERS = {
   'windows-x86_64': /-setup\.exe$/i,
@@ -18,7 +19,7 @@ function toPublishedAssetName(name) {
   return name.replaceAll(' ', '.')
 }
 
-function buildUpdaterManifest({ repository, tag, assets, pubkey, notes = '', pubDate = new Date().toISOString() }) {
+function buildUpdaterManifest({ repository, tag, assets, pubkey, notes = '', notesByLocale, pubDate = new Date().toISOString() }) {
   if (!repository || !tag) throw new Error('repository and tag are required')
   if (!/^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(tag)) {
     throw new Error(`invalid release tag: ${tag}`)
@@ -38,9 +39,11 @@ function buildUpdaterManifest({ repository, tag, assets, pubkey, notes = '', pub
     }
   }
 
+  const localized = notesByLocale ? localizedNotes(notesByLocale) : null
   return {
     version: tag.replace(/^v/, ''),
-    notes,
+    notes: localized?.en ?? notes,
+    ...(localized ? { notes_i18n: localized } : {}),
     pub_date: pubDate,
     platforms,
   }
@@ -76,6 +79,7 @@ function main() {
   const manifest = buildUpdaterManifest({
     repository,
     tag,
+    notesByLocale: readNotes(tag),
     assets: collectAssets(artifactsDir),
     pubkey: JSON.parse(fs.readFileSync(path.join(__dirname, '../src-tauri/tauri.conf.json'), 'utf8')).plugins.updater.pubkey,
   })

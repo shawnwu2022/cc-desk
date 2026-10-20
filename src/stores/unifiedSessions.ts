@@ -16,7 +16,7 @@ import type { SessionConfirmationRequest } from '@/types/confirmation'
 import { mapSafeUserError, safeUserErrorCode, type UserErrorPresentation } from '@/utils/userError'
 import { useNotificationsStore } from '@/stores/notifications'
 import type { ToastInput } from '@/stores/notifications'
-import { makeSessionCatalogKey, makeSessionRenameOwnerKey, nativeHistoryRecordKey } from '@/utils/sessionPresentation'
+import { canRenameSession, makeSessionCatalogKey, makeSessionRenameOwnerKey, nativeHistoryRecordKey } from '@/utils/sessionPresentation'
 import { matchesSessionMetadata } from '@/session/sessionMetadata'
 import type { SessionUiRecord } from '@/types/app'
 import { nativeHistoryContextKey } from '@/stores/nativeHistory'
@@ -88,7 +88,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     return { controller: new AbortController(), key: makeSessionRenameOwnerKey(row), owns: adapters.find(adapter => adapter.runtime === row.runtime)?.captureOwnership?.(row.id) ?? (() => true), state }
   }
   function ownsRename(owner: RenameOwner, row: UnifiedSession | undefined) {
-    return !!row && owner.key === makeSessionRenameOwnerKey(row) && owner.owns()
+    return !!row && (owner.issued || canRenameSession(row)) && owner.key === makeSessionRenameOwnerKey(row) && owner.owns()
   }
   function revokeUnissuedRenames(selectedId: string | null) {
     const revoked = new Set<string>()
@@ -924,7 +924,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
 
   function beginRename(id: string) {
     const row = sessions.value.find(value => value.id === id)
-    if (!row || (row.opened !== false && activeSessionId.value !== id) || row.archived || row.renameState === 'saving' || (pendingRenames.get(id) ?? 0) > 0 || isPreparingSession(id)) return
+    if (!row || !canRenameSession(row) || (row.opened !== false && activeSessionId.value !== id) || row.renameState === 'saving' || (pendingRenames.get(id) ?? 0) > 0 || isPreparingSession(id)) return
     const current = renameOwners.get(id)
     if (!current || !ownsRename(current, row)) {
       current?.controller.abort()
@@ -943,6 +943,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
   }
   function renameSession(id: string, title: string, requireEditor = false): Promise<'input-written' | 'display-name-saved' | 'native-title-saved' | void> {
     const session = requireSession(id)
+    if (!canRenameSession(session)) return Promise.reject(new Error('NATIVE_RENAME_UNSUPPORTED'))
     const adapter = adapterForRuntime(session.runtime)
     const current = renameOwners.get(id)
     if ((requireEditor && (!current || current.state !== 'editing' || (session.opened !== false && activeSessionId.value !== id))) || (current && !ownsRename(current, session))) {

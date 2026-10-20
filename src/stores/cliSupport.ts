@@ -13,11 +13,12 @@ type CliSupport = Record<UnifiedCliKind, boolean>
 function readSupport(): CliSupport {
   try {
     const value = JSON.parse(localStorage.getItem(storageKey) ?? 'null')
-    if (value && typeof value.claude === 'boolean' && typeof value.codex === 'boolean') {
-      return { claude: value.claude, codex: value.codex }
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      return { claude: typeof value.claude === 'boolean' ? value.claude : true,
+        codex: typeof value.codex === 'boolean' ? value.codex : false }
     }
   } catch { /* Optional UI preference storage must never block startup. */ }
-  return { claude: true, codex: true }
+  return { claude: true, codex: false }
 }
 
 export const useCliSupportStore = defineStore('cli-support', () => {

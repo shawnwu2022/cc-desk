@@ -22,6 +22,7 @@ const source = (id: string): NativeHistoryEntry => ({ key: id,
   loaded: true, loading: false, error: null, requestEpoch: '1' })
 
 beforeEach(() => {
+  localStorage.setItem('cc-desk-cli-support-v1', JSON.stringify({ claude: true, codex: true }))
   setActivePinia(createPinia()); clearMocks(); time = 1000; writes.length = 0; failMetadataWrites = false
   vi.spyOn(Date, 'now').mockImplementation(() => time)
   let uuid = 0

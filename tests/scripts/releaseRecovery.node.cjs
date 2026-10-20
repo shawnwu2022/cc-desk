@@ -168,7 +168,11 @@ test('ReleaseRecovery_ActualManifestCLI_013', () => {
   const root = mkdtempSync(resolve(tmpdir(), 'ccdesk-recovery-fixture-'))
   try {
     mkdirSync(resolve(root, 'scripts')); mkdirSync(resolve(root, 'src-tauri')); mkdirSync(resolve(root, 'artifacts'))
-    for (const file of ['generate-updater-manifest.js', 'updater-signature.js']) copyFileSync(resolve(__dirname, '../../scripts', file), resolve(root, 'scripts', file))
+    for (const file of ['generate-updater-manifest.js', 'updater-signature.js', 'release-notes.js']) copyFileSync(resolve(__dirname, '../../scripts', file), resolve(root, 'scripts', file))
+    mkdirSync(resolve(root, 'docs'))
+    writeFileSync(resolve(root, 'docs/release-notes.json'), JSON.stringify({ schemaVersion: 1, releases: {
+      '1.2.3': { en: 'Important: keep backups.', zh: '重要：保留备份。' },
+    } }))
     writeFileSync(resolve(root, 'src-tauri/tauri.conf.json'), JSON.stringify({ plugins: { updater: { pubkey } } }))
     const value = input()
     for (const asset of value.assets) {
@@ -181,5 +185,6 @@ test('ReleaseRecovery_ActualManifestCLI_013', () => {
     assert.ifError(result.error); assert.equal(result.status, 0, result.stderr)
     const manifest = JSON.parse(readFileSync(resolve(root, 'latest.json'), 'utf8'))
     assert.equal(manifest.version, '1.2.3'); assert.equal(Object.keys(manifest.platforms).length, 3)
+    assert.equal(manifest.notes, 'Important: keep backups.'); assert.equal(manifest.notes_i18n.zh, '重要：保留备份。')
   } finally { rmSync(root, { recursive: true, force: true }) }
 })

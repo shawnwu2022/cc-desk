@@ -96,11 +96,12 @@ pub(crate) fn build_invocation<'a>(
     {
         return Err(error("LEGACY_ARGUMENTS_REQUIRE_MIGRATION"));
     }
-    let mut args = match request.cli {
+    let mut args = snapshot.identity_args().to_vec();
+    args.extend(match request.cli {
         CliKind::Claude => super::claude::action_args(snapshot)?,
         CliKind::Codex => super::codex::action_args(snapshot)?,
         CliKind::Shell => super::shell::action_args(snapshot)?,
-    };
+    });
     // No quoting, parsing or deduplication. Explicit caller flags and positionals
     // retain native parser semantics; raw provides exact full-command ordering.
     args.extend_from_slice(snapshot.default_args());

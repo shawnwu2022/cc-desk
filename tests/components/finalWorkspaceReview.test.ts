@@ -25,7 +25,7 @@ let persisted: ProjectsState
 const wrappers: VueWrapper[] = []
 beforeEach(() => {
   vi.stubGlobal('crypto', { getRandomValues: window.crypto.getRandomValues, randomUUID: () => 'legacy-tab-id' })
-  localStorage.clear(); setActivePinia(createPinia()); vi.clearAllMocks(); useProjectsStateStore().loaded = true
+  localStorage.clear(); localStorage.setItem('cc-desk-cli-support-v1', JSON.stringify({ claude: true, codex: true })); setActivePinia(createPinia()); vi.clearAllMocks(); useProjectsStateStore().loaded = true
   io.getConfig.mockResolvedValue({ theme: 'light', terminalTheme: 'cc-box-light', language: 'en' })
   persisted = { pinnedProjects: [], archivedSessions: {}, launchPreferences: {} }
   io.getState.mockImplementation(async () => structuredClone(persisted))
@@ -37,7 +37,7 @@ beforeEach(() => {
   io.profiles.mockResolvedValue({ revision: '7', profiles: [{ id: 'cx', revision: '7', cli: 'codex', name: 'CX', launcher: { kind: 'native' }, programPath: { mode: 'inherit' }, defaultArgs: { mode: 'inherit' }, skipPermissions: { mode: 'inherit' }, observer: { mode: 'inherit' }, env: {} }] })
   io.registered.mockResolvedValue({ revision: '1', projects: [{ projectId: 'project', hostId: 'host', sourcePathKey: 'source', selectedPath: '/repo', canonicalPath: '/repo', alias: { mode: 'inherit' }, pinned: { mode: 'inherit' }, hidden: { mode: 'inherit' } }] })
   io.register.mockImplementation(async path => ({ revision: '2', projectId: 'registered-new', projects: [{ projectId: 'registered-new', hostId: 'host', sourcePathKey: 'source-new', selectedPath: path, canonicalPath: path, alias: { mode: 'inherit' }, pinned: { mode: 'inherit' }, hidden: { mode: 'inherit' } }] }))
-  io.scope.mockResolvedValue({ cli: 'codex' }); io.read.mockResolvedValue({ state: 'ready', items: [{ type: 'session', projectId: 'project', sessionKey: 'root-key', nativeSessionId: 'history-id', title: 'History', cwd: '/repo' }] })
+  io.scope.mockImplementation(async target => ({ scopeId: 'scope', instanceId: 'instance', cli: 'codex', sourceRootKey: 'root', identityEpoch: '1', profileId: 'cx', profileRevision: '7', target, basis: target.kind === 'run' ? 'launch-environment' : 'configured-profile' })); io.read.mockResolvedValue({ state: 'ready', items: [{ type: 'session', projectId: 'project', sessionKey: 'root-key', nativeSessionId: 'history-id', title: 'History', cwd: '/repo' }] })
 })
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.unstubAllGlobals(); vi.restoreAllMocks() })
 
@@ -49,10 +49,10 @@ function renderApp() {
   const w = mount(App, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { NativeCliTerminal: child, TerminalView: true, SettingsView: true } } });
   wrappers.push(w); return w
 }
-async function openNativeRow(w: VueWrapper) {
+async function openNativeRow(w: VueWrapper, bound = false) {
   await flushPromises()
   const tabs = useNativeTabsStore()
-  const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+  const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: bound ? { kind: 'resume-id', nativeSessionId: 'history-id' } : { kind: 'new' }, ...(bound ? { sourceSessionKey: 'root-key' } : {}) })
   tabs.tab(tab.tabId)!.status = 'running'; tabs.tab(tab.tabId)!.launchRevision = '1'
   await flushPromises()
   await useUnifiedSessionsStore().activateSession(`native-tab:${tab.tabId}`); await flushPromises()
@@ -69,7 +69,8 @@ describe('Final workspace review regressions', () => {
     expect(document.querySelector('[role="dialog"]'), 'diagnostics detail surface').not.toBeNull()
   })
   it('RENAME: row F2 draft must be invalidated when exact Native attempt changes', async () => {
-    const w = renderApp(); const { row, tabs, tab } = await openNativeRow(w)
+    const w = renderApp(); const { row, tabs, tab } = await openNativeRow(w, true)
+    ;(row.element as HTMLElement).focus()
     await row.trigger('keydown', { key: 'F2', code: 'F2' }); await flushPromises()
     await row.get('input').setValue('Old attempt draft')
     tabs.tab(tab.tabId)!.status = 'exited'
@@ -80,7 +81,7 @@ describe('Final workspace review regressions', () => {
     expect(io.upsertRecord, 'old draft must not write metadata after replacement attempt').not.toHaveBeenCalled()
   })
   it('RENAME: menu entry must capture canonical edit ownership before Save', async () => {
-    const w = renderApp(); const { row, tab } = await openNativeRow(w)
+    const w = renderApp(); const { row, tab } = await openNativeRow(w, true)
     await row.get('.session-overflow-trigger button').trigger('click'); await flushPromises()
     document.querySelector<HTMLElement>('[data-item-id="rename"]')!.click(); await flushPromises()
     expect(useUnifiedSessionsStore().sessions.find(s => s.id === `native-tab:${tab.tabId}`)?.renameState).toBe('editing')
@@ -170,7 +171,8 @@ describe('Final workspace review regressions', () => {
   })
   // 已取消的编辑不能通过迟到 Save 被解释为新的尝试。
   it('Rename_CancelRejectsLateSave_003', async () => {
-    const w = renderApp(); const { row, tab } = await openNativeRow(w)
+    const w = renderApp(); const { row, tab } = await openNativeRow(w, true)
+    ;(row.element as HTMLElement).focus()
     await row.trigger('keydown', { key: 'F2', code: 'F2' }); await flushPromises()
     await row.get('input').setValue('Discarded')
     await row.get('input').trigger('keydown', { key: 'Escape' }); await flushPromises()
@@ -203,6 +205,7 @@ describe('Final workspace review regressions', () => {
   it('Keyboard_FilteredHistory_005', async () => {
     const w = renderApp(); await openNativeRow(w)
     const search = w.get('.search-input')
+    ;(search.element as HTMLElement).focus()
     await search.setValue('History'); await search.trigger('keydown', { key: 'ArrowDown' }); await flushPromises()
     const first = document.activeElement as HTMLElement
     expect(first.classList.contains('project-row')).toBe(true)
@@ -304,6 +307,7 @@ describe('Final workspace review regressions', () => {
     await flushPromises()
     const project = w.get('[data-project-key="/legacy"]')
     expect(project.attributes('aria-expanded')).toBe('false')
+    ;(project.element as HTMLElement).focus()
     await project.trigger('keydown', { key: 'Enter' }); await flushPromises()
     expect(project.attributes('aria-expanded')).toBe('true')
     expect(useUnifiedSessionsStore().activeSessionId).toBe(selected)

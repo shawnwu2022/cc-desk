@@ -1,5 +1,13 @@
 # Ordinary desktop updater
 
+Release notes are presentation-only metadata, independent of install admission.
+The host forwards only bounded `en`/`zh` text from `notes_i18n`, requiring English
+for the localized envelope. The update page follows its interface language and
+falls back to English; known old versions can use bundled curated highlights,
+while unknown older notes remain intact. Text is interpolated, never executed as
+HTML. The manifest's plain `notes` stays English for older clients. See
+[release highlights maintenance](release-process.md#user-facing-release-highlights).
+
 The 0.18.2 patch keeps the existing fixed official GitHub endpoint and Minisign public key. Optional `updaterProxy` applies to both manifest/package requests and provenance requests. Empty settings preserve process/system proxy inheritance; CLI profile or legacy launch environment settings are never copied into the updater.
 
 The Rust host checks the public non-draft, non-prerelease release, exact version/tag/source, the release body's existing validation policy and source line, tag resolution, and the source configuration's version and trust key. The selected package and `.sig` must be unique uploaded official assets with bounded sizes and SHA-256 digests. The manifest signature must match the uploaded signature asset. Candidate/test-only/non-publication markers still exclude a package. This uses the existing official repository/TLS and published signature trust; it does not introduce another signing key or promotion service.

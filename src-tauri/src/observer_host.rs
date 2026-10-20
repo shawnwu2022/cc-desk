@@ -15,6 +15,7 @@ pub(crate) struct PreparedObservation {
     pub(crate) lease: ObserverLease,
     pub(crate) environment: ObserverEnv,
     pub(crate) plugin_dir: PathBuf,
+    pub(crate) codex_args: Option<Vec<std::ffi::OsString>>,
 }
 impl ObserverHost {
     pub(crate) fn new(
@@ -63,6 +64,40 @@ impl ObserverHost {
             lease,
             environment,
             plugin_dir: self.plugin_dir.clone(),
+            codex_args: None,
+        })
+    }
+    pub(crate) fn prepare_codex(
+        &self,
+        run: ObserverRun,
+        delivery: ObserverDelivery,
+        authorize: Arc<dyn Fn() -> bool + Send + Sync>,
+    ) -> Result<PreparedObservation, SafeError> {
+        let port = (self.port)()
+            .filter(|port| *port != 0)
+            .ok_or_else(|| error("OBSERVER_SERVICE_UNAVAILABLE"))?;
+        let args = crate::codex_observer::hook_args(
+            &std::env::current_exe().map_err(|_| error("OBSERVER_PREPARE_FAILED"))?,
+        )?;
+        let lease = self.registry.lease_source(
+            run,
+            delivery,
+            authorize,
+            crate::observer_registry::ObserverSource::CodexHook,
+        )?;
+        let binding = lease.binding();
+        let names = crate::codex_observer::ENV_NAMES;
+        let values = EnvMap::from([
+            (names[0].into(), port.to_string().into()),
+            (names[1].into(), binding.run.run_id.clone().into()),
+            (names[2].into(), binding.run.generation.to_string().into()),
+            (names[3].into(), binding.capability.clone().into()),
+        ]);
+        Ok(PreparedObservation {
+            lease,
+            environment: ObserverEnv { values },
+            plugin_dir: PathBuf::new(),
+            codex_args: Some(args),
         })
     }
 }

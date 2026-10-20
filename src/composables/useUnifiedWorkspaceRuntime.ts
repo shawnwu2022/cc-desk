@@ -18,7 +18,7 @@ import { useShellStore, type WorkspaceRequest } from '@/stores/shell'
 import { useHookStore } from '@/stores/hook'
 import { useAttentionStore } from '@/stores/attention'
 import { createLegacyClaudeAdapter } from '@/session/adapters/legacyClaudeAdapter'
-import { createNativeCliAdapter, type NativeRuntimeCreateInput, type NativeRestartContinuation } from '@/session/adapters/nativeCliAdapter'
+import { nativeHistoryRenameReady, createNativeCliAdapter, type NativeRuntimeCreateInput, type NativeRestartContinuation } from '@/session/adapters/nativeCliAdapter'
 import { mapSafeUserError, safeUserErrorCode } from '@/utils/userError'
 import { projectSessionDiagnostics } from '@/utils/sessionDiagnostics'
 import { normalizePath, sameProjectPath } from '@/utils/path'
@@ -92,17 +92,19 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   const sourceConfigurationOwners = ref<Omit<WorkspaceSourceConfiguration, 'name'>[]>([])
   const sourceWarningConfigurations = computed<WorkspaceSourceConfiguration[]>(() => sourceConfigurationOwners.value.flatMap(owner => {
     const profile = profiles.profile(owner.profileId)
-    return profile && profile.revision === owner.profileRevision ? [{ ...owner, name: profile.name }] : []
+    return profile && profile.revision === owner.profileRevision && sourceWarningObservations.value.some(observation => observation.profileId === owner.profileId
+      && observation.profileRevision === owner.profileRevision && workspaceWarningKey(observation.warning) === owner.warningKey
+      && !acknowledgedSourceWarnings.value.has(observation.key)) ? [{ ...owner, name: profile.name }] : []
   }))
   const acknowledgedSourceWarnings = ref(new Set<string>())
   const acknowledgedHistoryWarnings = ref(new Set<string>())
   // Replaced per owned refresh, deduped per canonical profile and fixed triple.
   // Never accumulate historical profiles or raw errors, including omitted rows.
   const sourceNoticeKeys = ref<string[]>([])
-  const sourceNoticeDismissed = computed(() => sourceNoticeKeys.value.length > 0
-    && sourceNoticeKeys.value.every(key => acknowledgedSourceWarnings.value.has(key)))
+  const sourceNoticeDismissed = computed(() => sourceWarningObservations.value.length > 0
+    && sourceWarningObservations.value.every(observation => acknowledgedSourceWarnings.value.has(observation.key)))
   function dismissSourceNotice() {
-    acknowledgedSourceWarnings.value = new Set(sourceNoticeKeys.value)
+    acknowledgedSourceWarnings.value = new Set([...acknowledgedSourceWarnings.value, ...sourceWarningObservations.value.map(observation => observation.key)])
     acknowledgedHistoryWarnings.value = new Set([...acknowledgedHistoryWarnings.value, ...historyNoticeKeys.value])
   }
 
@@ -114,41 +116,76 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   // 正常扫描都标成“可能不完整”会让横幅变成常驻噪音（实测 48/50 行如此）。
   // metadataIncomplete 仍继续承担缺席证据抑制，二者语义在此分叉。
   const historyMetadataPartial = computed(() => currentHistoryEntries.value.some(entry => (entry.readFailures?.length ?? 0) > 0))
+  function historyWarningNoticeKey(entry: NativeHistoryEntry, code: string, sessionKey?: string) {
+    return JSON.stringify([entry.key, entry.sourceRootKey ?? null, code, sessionKey ?? null])
+  }
   const historyReadWarnings = computed(() => {
     const warnings = createWorkspaceSourceWarnings()
-    for (const entry of currentHistoryEntries.value) for (const code of entry.readFailures ?? []) {
-      warnings.add(entry.context.cli === 'claude' ? 'claude-history' : 'codex-history', { code, stage: 'read-source-enumeration' })
+    for (const entry of currentHistoryEntries.value) {
+      const add = (code: string, sessionKey?: string) => {
+        if (!acknowledgedHistoryWarnings.value.has(historyWarningNoticeKey(entry, code, sessionKey))) {
+          warnings.add(entry.context.cli === 'claude' ? 'claude-history' : 'codex-history', { code, stage: 'read-source-enumeration' })
+        }
+      }
+      for (const code of entry.readFailures ?? []) add(code)
+      for (const row of entry.sessions) if (row.readFailure) add(row.readFailure, row.sessionKey)
     }
     return warnings.items
   })
   // Fixed diagnostics + canonical context/root identity, never raw transcript data.
   // Project navigation does not reset this workspace-owned acknowledgement.
   const historyNoticeKeys = computed(() => currentHistoryEntries.value.flatMap(entry => [
-    ...(entry.readFailures ?? []).map(code => JSON.stringify([entry.key, entry.sourceRootKey ?? null, code, 'source'])),
-    ...entry.sessions.filter(row => row.readFailure).map(row => JSON.stringify([entry.key, entry.sourceRootKey ?? null, row.readFailure, row.sessionKey])),
+    ...(entry.readFailures ?? []).map(code => historyWarningNoticeKey(entry, code)),
+    ...entry.sessions.filter(row => row.readFailure).map(row => historyWarningNoticeKey(entry, row.readFailure!, row.sessionKey)),
   ]))
   const historyNoticeDismissed = computed(() => historyNoticeKeys.value.length > 0
     && historyNoticeKeys.value.every(key => acknowledgedHistoryWarnings.value.has(key)))
   // Adapter-owned forced reads (close/resume) can finish outside refresh(). Keep
   // their authenticated fixed diagnostics discoverable, never infer health from
   // their absence in the positive-session projection.
-  const sourceDiagnostics = computed(() => {
-    const warnings = createWorkspaceSourceWarnings(sourceWarnings.value, sourceWarningsTruncated.value)
-    for (const entry of relevantHistoryEntries.value) if (!entry.loading && entry.error) {
-      warnings.add(entry.context.cli === 'claude' ? 'claude-history' : 'codex-history', { code: entry.error, stage: entry.diagnosticStage })
+  function sourceHistoryNoticeKey(entry: NativeHistoryEntry) {
+    const warningKey = workspaceWarningKey({ source: entry.context.cli === 'claude' ? 'claude-history' : 'codex-history', code: entry.error!, stage: entry.diagnosticStage })
+    return JSON.stringify([warningKey, entry.context.profileId, entry.context.profileRevision, entry.sourceRootKey ?? null])
+  }
+  const sourceWarningObservations = computed(() => {
+    const observations = new Map<string, { key: string; warning: WorkspaceSourceWarning; profileId?: string; profileRevision?: string }>()
+    // 身份来自本 runtime 的固定诊断键；先过滤完整身份集合，再应用十二项展示上限。
+    for (const key of sourceNoticeKeys.value) {
+      if (key === 'truncated') continue
+      const identity = JSON.parse(key) as string[]
+      const profileOwned = identity[0].startsWith('[')
+      const [source, code, stage] = (profileOwned ? JSON.parse(identity[0]) : identity) as [WorkspaceWarningSource, string, WorkspaceSourceWarning['stage']]
+      // 完成的 adapter 读取取代旧 refresh 快照；读取中的暂时空态不能证明恢复。
+      const entries = profileOwned ? relevantHistoryEntries.value.filter(entry => entry.context.profileId === identity[1] && entry.context.profileRevision === identity[2]) : []
+      if (entries.length && entries.every(entry => !entry.loading && (entry.loaded || entry.error))) continue
+      observations.set(key, { key, warning: { source, code, ...(stage ? { stage } : {}) },
+        ...(profileOwned ? { profileId: identity[1], profileRevision: identity[2] } : {}) })
     }
+    for (const entry of relevantHistoryEntries.value) if (!entry.loading && entry.error) {
+      const key = sourceHistoryNoticeKey(entry)
+      observations.set(key, { key, warning: { source: entry.context.cli === 'claude' ? 'claude-history' : 'codex-history', code: entry.error, stage: entry.diagnosticStage },
+        profileId: entry.context.profileId, profileRevision: entry.context.profileRevision })
+    }
+    return [...observations.values()]
+  })
+  const sourceDiagnostics = computed(() => {
+    const warnings = createWorkspaceSourceWarnings()
+    for (const observation of sourceWarningObservations.value) if (!acknowledgedSourceWarnings.value.has(observation.key)) warnings.add(observation.warning.source, observation.warning)
     return { warnings: warnings.items, truncated: warnings.truncated }
   })
   const sourceDiagnosticsWarnings = computed(() => sourceDiagnostics.value.warnings)
   const sourceDiagnosticsTruncated = computed(() => sourceDiagnostics.value.truncated)
-  const sourceIssuesAvailable = computed(() => sourceDiagnosticsWarnings.value.length > 0 || historyMetadataPartial.value)
-  const allHistoryIssues = computed<WorkspaceHistoryIssue[]>(() => relevantHistoryEntries.value.flatMap(entry => {
+  const sourceIssuesAvailable = computed(() => sourceDiagnosticsWarnings.value.length > 0 || historyReadWarnings.value.length > 0)
+  type AcknowledgableHistoryIssue = WorkspaceHistoryIssue & { noticeKey: string; sourceFailure: boolean }
+  const allHistoryIssues = computed<AcknowledgableHistoryIssue[]>(() => relevantHistoryEntries.value.flatMap(entry => {
     if (entry.loading) return []
     const source = entry.context.cli === 'claude' ? 'claude-history' as const : 'codex-history' as const
     const configurationName = profiles.profile(entry.context.profileId)?.name ?? ''
     const stage = entry.error ? entry.diagnosticStage : 'read-source-enumeration' as const
-    const issue = (code: string, session?: NativeHistoryEntry['sessions'][number]): WorkspaceHistoryIssue => ({
+    const issue = (code: string, session?: NativeHistoryEntry['sessions'][number]): AcknowledgableHistoryIssue => ({
       key: JSON.stringify([entry.key, entry.sourceRootKey ?? null, code, stage, session?.sessionKey ?? null]),
+      noticeKey: entry.error ? sourceHistoryNoticeKey(entry) : historyWarningNoticeKey(entry, code, session?.sessionKey),
+      sourceFailure: Boolean(entry.error),
       entryKey: entry.key, warningKey: workspaceWarningKey({ source, code, stage }), source, code, stage,
       configurationName, projectPath: entry.context.projectPath,
       ...(session ? { sessionId: session.nativeSessionId, sessionTitle: session.lastKnownTitle || session.title } : {}),
@@ -157,8 +194,14 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     return [...(entry.error ? [issue(entry.error)] : (entry.readFailures ?? []).map(code => issue(code))),
       ...(!entry.error ? entry.sessions.filter(row => row.readFailure).map(row => issue(row.readFailure!, row)) : [])]
   }).sort((a, b) => a.key.localeCompare(b.key, 'en')))
-  const historyIssues = computed(() => allHistoryIssues.value.slice(0, 48))
-  const historyIssuesTruncated = computed(() => allHistoryIssues.value.length > 48)
+  const visibleHistoryIssues = computed(() => allHistoryIssues.value.filter(issue => !(issue.sourceFailure ? acknowledgedSourceWarnings : acknowledgedHistoryWarnings).value.has(issue.noticeKey)))
+  const historyIssues = computed(() => visibleHistoryIssues.value.slice(0, 48))
+  const historyIssuesTruncated = computed(() => visibleHistoryIssues.value.length > 48)
+  function historyWarningVisible(session: UnifiedSession) {
+    if (!session.historyReadFailure) return false
+    if (!session.nativeOrigin || !session.nativeHistorySessionKey) return true
+    return !acknowledgedHistoryWarnings.value.has(JSON.stringify([nativeHistoryContextKey(session.nativeOrigin), session.nativeRootKey ?? null, session.historyReadFailure, session.nativeHistorySessionKey]))
+  }
   const historyRecoveryError = ref(false)
   const historyRecoveryOwners = new Set<string>()
   function currentHistoryIssue(key: string) {
@@ -189,8 +232,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     sourceConfigurationOwners.value = owners
     sourceNoticeKeys.value = warnings.identityKeys().flatMap(key => [...(identities.get(key) ?? [key])])
     if (warnings.truncated) sourceNoticeKeys.value.push('truncated')
-    const currentKeys = new Set(sourceNoticeKeys.value)
-    acknowledgedSourceWarnings.value = new Set([...acknowledgedSourceWarnings.value].filter(key => currentKeys.has(key)))
+    retireSourceAcknowledgements()
     error.value = warnings.items.length && !fatal.value ? 'workspaceRuntimePartial' : null
   }
   async function retryHistoryIssue(key: string) {
@@ -217,11 +259,26 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   }
   function retireHistoryAcknowledgements() {
     const current = new Set(historyNoticeKeys.value)
-    acknowledgedHistoryWarnings.value = new Set([...acknowledgedHistoryWarnings.value].filter(key => current.has(key)))
+    const entries = new Map(relevantHistoryEntries.value.map(entry => [entry.key, entry]))
+    acknowledgedHistoryWarnings.value = new Set([...acknowledgedHistoryWarnings.value].filter(key => {
+      if (current.has(key)) return true
+      const entry = entries.get((JSON.parse(key) as [string])[0])
+      // 失败和读取中都没有恢复证据；上下文移除或成功观察到问题消失才退休。
+      return entry && (entry.loading || entry.error || !entry.loaded || entry.metadataIncomplete || entry.readFailures?.length)
+    }))
+  }
+  function retireSourceAcknowledgements() {
+    // 前置读取失败时历史可能没有重扫，完整投影仍保留那些尚未恢复的来源。
+    const current = new Set(sourceWarningObservations.value.map(observation => observation.key))
+    acknowledgedSourceWarnings.value = new Set([...acknowledgedSourceWarnings.value].filter(key => current.has(key)))
   }
   // A forced read temporarily removes loaded entries. Do not treat that as health.
   watch(historyNoticeKeys, () => {
     if (!loading.value && !history.all().some(entry => entry.loading)) retireHistoryAcknowledgements()
+  }, { flush: 'post' })
+  watch(sourceWarningObservations, () => {
+    if (loading.value || history.all().some(entry => entry.loading)) return
+    retireSourceAcknowledgements()
   }, { flush: 'post' })
   const ready = ref(false)
   const loading = ref(false)
@@ -537,8 +594,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     if (warnings.truncated) sourceNoticeKeys.value.push('truncated')
     // Only a completed owned check retires acknowledgements. Loading's temporary
     // error=null and background catalog publication cannot resurrect a notice.
-    const currentKeys = new Set(sourceNoticeKeys.value)
-    acknowledgedSourceWarnings.value = new Set([...acknowledgedSourceWarnings.value].filter(key => currentKeys.has(key)))
+    retireSourceAcknowledgements()
     retireHistoryAcknowledgements()
     error.value = warnings.items.length && !fatal.value ? 'workspaceRuntimePartial' : null
   }
@@ -806,9 +862,10 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   let historyTimer: ReturnType<typeof setTimeout> | undefined
   let historyReading = false
   function historyCue(tab: NativeCliTab): { identity: string | null; reply: string | null; prompt: string | null; titleRevision: number } | null {
-    if (tab.cli !== 'claude' || tab.action.kind === 'raw' || tab.status !== 'running') return null
+    if (tab.action.kind === 'raw' || tab.status !== 'running') return null
+    if (tab.cli === 'codex' && !tab.observedSessionId && !tab.titleChangeRevision) return null
     const attempt = captureNativeAttempt(tab)
-    const observing = tab.observationState === 'active'
+    const observing = tab.cli === 'codex' ? !!tab.observedSessionId : tab.observationState === 'active'
     const notice = observing && native.hasOwnedObservationNotice(tab.tabId, attempt) ? tab.observationNotice : undefined
     const reply = notice?.recent?.kind === 'reply-ended' ? notice.recent : notice?.unreadReplyEnd
     const prompt = notice?.lastPromptSubmitted?.kind === 'prompt-submitted' ? notice.lastPromptSubmitted
@@ -817,9 +874,9 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     // 已冻结的恢复来源或本次运行已证明的身份足以处理 OSC；hook 事件仍要求观察已激活。
     return tab.sourceSessionKey || tab.observedSessionId || reply || prompt ? {
       identity: observing && tab.observedSessionId ? JSON.stringify([...key, tab.observedSessionId]) : null,
-      reply: reply ? JSON.stringify([...key, reply.eventId]) : null,
+      reply: tab.cli === 'codex' && tab.historyTitleRevision ? JSON.stringify([...key, 'codex', tab.historyTitleRevision]) : reply ? JSON.stringify([...key, reply.eventId]) : null,
       prompt: prompt ? JSON.stringify([...key, prompt.eventId]) : null,
-      titleRevision: tab.titleChangeRevision ?? 0,
+      titleRevision: (tab.titleChangeRevision ?? 0) + (tab.historyChangeRevision ?? 0),
     } : null
   }
   function scheduleHistoryRead() {
@@ -844,7 +901,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
         await Promise.all(reads.slice(index, index + 2).map(group => {
           // 前一批可能等待磁盘；每一组真正发起前重新核对冻结 owner/context。
           const current = group.filter(({ tab, attempt, context }) => native.tabs.get(tab.tabId) === tab
-            && matchesNativeAttempt(tab, attempt) && historyCue(tab) && context.cli === 'claude' && cliSupport.isEnabled('claude')
+            && matchesNativeAttempt(tab, attempt) && historyCue(tab) && cliSupport.isEnabled(context.cli)
             && tab.profileId === context.profileId && tab.profileRevision === context.profileRevision
             && tab.projectId === context.projectId && sameProjectPath(tab.projectPath, context.projectPath)
             && profiles.profile(context.profileId)?.revision === context.profileRevision
@@ -853,7 +910,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
           const context = current[0].context
           const projects = new Map(current.map(owner => [owner.context.projectId, { projectId: owner.context.projectId, projectPath: owner.context.projectPath }]))
           // 自动投影失败保留已有行，但 store 仍发布错误且撤销 absence 证明。
-          return history.loadGrouped({ cli: 'claude', profileId: context.profileId, profileRevision: context.profileRevision,
+          return history.loadGrouped({ cli: context.cli, profileId: context.profileId, profileRevision: context.profileRevision,
             projects: [...projects.values()] }, { force: true, retainOnFailure: true }).catch(() => undefined)
         }))
       }
@@ -893,7 +950,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
         return ['projectPath', 'projectId', 'profileId', 'profileRevision', 'cli', 'title', 'name', 'status',
           'requestId', 'runId', 'generation', 'ptyId', 'ptyGeneration', 'sessionId', 'observedSessionId',
           'activity', 'activityState', 'working', 'pending', 'attentionState', 'observation', 'observationState',
-          'observationNotice', 'observerEnabled', 'observerReasonCode', 'errorCode', 'sourceSessionKey', 'createdAt', 'usesDefaultClaudeRoot', 'titleChangeRevision']
+          'observationNotice', 'observerEnabled', 'observerReasonCode', 'errorCode', 'sourceSessionKey', 'createdAt', 'usesDefaultClaudeRoot', 'titleChangeRevision', 'historyChangeRevision', 'historyTitleRevision']
           .map(key => value[key])
       }, () => {
         const previousPath = owner.projectPath
@@ -919,6 +976,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
             return source === 'ai' || source === 'custom' ? JSON.stringify([source, session.lastKnownTitle ?? session.title]) : undefined
           }
           const previousTitle = explicitTitle()
+          const titleDelays = nativeTab.cli === 'codex' ? [1_000, 2_000, 5_000, 15_000] : lateTitleReadDelays
           const retryTitle = (index: number) => {
             owner.titleReadTimer = setTimeout(() => {
               owner.titleReadTimer = undefined
@@ -929,8 +987,8 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
               const title = explicitTitle()
               if (title !== undefined && title !== previousTitle) return
               queueHistory()
-              if (index + 1 < lateTitleReadDelays.length) retryTitle(index + 1)
-            }, lateTitleReadDelays[index])
+              if (index + 1 < titleDelays.length) retryTitle(index + 1)
+            }, titleDelays[index])
           }
           retryTitle(0)
         }
@@ -975,7 +1033,10 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
         nextIdProjects.set(row.nativeSessionId, identity)
       }
       // 标题来自 CLI，可能包含任意分隔符；结构编码避免不同字段组合撞签名。
+      // 来源读取结果影响改名能力；loading/requestEpoch 仍不属于目录投影。
+      if (entry.loading && historySignatures.has(entry.key)) continue
       const signature = JSON.stringify([entry.sourceRootKey ?? '', entry.sessions.map(row => [
+        nativeHistoryRenameReady(entry, row),
         row.sessionKey, row.nativeSessionId, row.archived ? 1 : 0, row.title,
         row.titleSource ?? '', row.lastKnownTitle ?? '', row.lastKnownTitleSource ?? '',
         row.updatedAt ?? '', row.lastKnownActivityAt ?? '', row.truncated ? 1 : 0,
@@ -1073,5 +1134,5 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     }
     catalogOwnerWatches.clear(); pendingCatalogProjects.clear()
   })
-  return { historyIssues, historyIssuesTruncated, historyRecoveryError, retryHistoryIssue, openHistoryIssueProject, diagnostics, closeDiagnostics, openSessions, cliAvailability, cliProblems, fatal, ready, loading, error, sourceWarnings, sourceWarningsTruncated, sourceWarningConfigurations, sourceNoticeDismissed, historyNoticeDismissed, sourceIssuesAvailable, sourceDiagnosticsWarnings, sourceDiagnosticsTruncated, sourceChecksPending, dismissSourceNotice, historyMetadataPartial, historyReadWarnings, refresh, retryAction }
+  return { historyWarningVisible, historyIssues, historyIssuesTruncated, historyRecoveryError, retryHistoryIssue, openHistoryIssueProject, diagnostics, closeDiagnostics, openSessions, cliAvailability, cliProblems, fatal, ready, loading, error, sourceWarnings, sourceWarningsTruncated, sourceWarningConfigurations, sourceNoticeDismissed, historyNoticeDismissed, sourceIssuesAvailable, sourceDiagnosticsWarnings, sourceDiagnosticsTruncated, sourceChecksPending, dismissSourceNotice, historyMetadataPartial, historyReadWarnings, refresh, retryAction }
 }

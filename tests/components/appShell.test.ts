@@ -54,6 +54,7 @@ vi.mock('@/composables/useUnifiedWorkspaceRuntime', async () => {
 const wrappers: VueWrapper[] = []
 let i18n: ReturnType<typeof createI18n>
 beforeEach(() => {
+  localStorage.setItem('cc-desk-cli-support-v1', JSON.stringify({ claude: true, codex: true }))
   vi.clearAllMocks(); host.callbacks.clear()
   host.focused = true
   host.getConfig.mockResolvedValue({ theme: 'dark', terminalTheme: 'cc-box-light', language: 'en', claudeEnvVars: { TEST: 'private' } })
@@ -479,7 +480,7 @@ describe('Unified application shell', () => {
 describe('Task 20 normal app shortcut integration', () => {
   it('App_ShortcutUsesUnifiedSelection_032', async () => {
     const sessions = useUnifiedSessionsStore(), shell = useShellStore()
-    sessions.sessions = [{ id: 'native-tab:active', projectKey: '/selected', projectPath: '/selected', cli: 'codex', runtime: 'native-cli', title: 'Selected session', processState: 'running', attentionState: 'none', lastActivityAt: 1, archived: false, resumable: false, adapterSessionId: 'active' }]
+    sessions.sessions = [{ id: 'native-tab:active', renameAvailable: true, projectKey: '/selected', projectPath: '/selected', cli: 'codex', runtime: 'native-cli', title: 'Selected session', processState: 'running', attentionState: 'none', lastActivityAt: 1, archived: false, resumable: false, adapterSessionId: 'active' }]
     sessions.activeSessionId = 'native-tab:active'
     const wrapper = render(App); await flushPromises()
     const key = (value: string, code: string, ctrl = true) => window.dispatchEvent(new KeyboardEvent('keydown', { key: value, code, ctrlKey: ctrl, bubbles: true, cancelable: true }))
@@ -492,8 +493,14 @@ describe('Task 20 normal app shortcut integration', () => {
     expect(document.activeElement).toBe(wrapper.get('.search-input').element)
     key(',', 'Comma'); await flushPromises(); expect(shell.section).toBe('settings')
     key('F2', 'F2', false); await flushPromises()
-    expect(shell.section).toBe('workspace'); expect(shell.sidebarVisible).toBe(true)
-    expect(sessions.activeSession?.renameState).toBe('editing')
-    expect(wrapper.find('.session-item.editing input').exists()).toBe(true)
+    expect(shell.section).toBe('settings'); expect(sessions.activeSession?.renameState).not.toBe('editing')
+    key(',', 'Comma'); await flushPromises()
+    await wrapper.get('[data-project-key="/selected"] .expand-arrow').trigger('click')
+    const row = wrapper.get('[data-session-row="native-tab:active"]')
+    ;(row.element as HTMLElement).focus()
+    await row.trigger('keydown', { key: 'F2', code: 'F2' }); await flushPromises()
+    expect(shell.section).toBe('workspace')
+    expect(wrapper.emitted('workspace-request')?.filter(([request]) => (request as { action?: string }).action === 'rename'))
+      .toEqual([[{ kind: 'menu-action', sessionId: 'native-tab:active', action: 'rename' }]])
   })
 })

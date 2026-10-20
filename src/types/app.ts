@@ -107,6 +107,7 @@ export interface UpdateInfo {
   currentVersion: string
   hasUpdate: boolean
   releaseNotes: string
+  releaseNotesByLocale?: Partial<Record<'en' | 'zh', string>> | null
   downloadUrl: string
   platformAsset: PlatformAsset | null
 }

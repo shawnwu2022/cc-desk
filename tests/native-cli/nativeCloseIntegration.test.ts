@@ -65,6 +65,7 @@ function deferred<T>() {
 }
 beforeEach(() => {
   setActivePinia(createPinia()); vi.clearAllMocks(); io.terms.length = 0; io.stopped.clear(); io.records = {}; localStorage.clear()
+  localStorage.setItem('cc-desk-cli-support-v1', JSON.stringify({ claude: true, codex: true }))
   vi.stubGlobal('crypto', { getRandomValues: window.crypto.getRandomValues, randomUUID })
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
   vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { callback(0); return 1 })

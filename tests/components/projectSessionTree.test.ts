@@ -18,7 +18,7 @@ import type { SessionAdapter, UnifiedProjectGroup, UnifiedSession } from '@/type
 
 const now = new Date(2026, 8, 30, 9, 0).getTime()
 function session(extra: Partial<UnifiedSession> = {}): UnifiedSession {
-  return { id: 'claude-1', projectKey: '/work/game', projectPath: '/work/game', cli: 'claude',
+  return { id: 'claude-1', renameAvailable: true, projectKey: '/work/game', projectPath: '/work/game', cli: 'claude',
     runtime: 'legacy-claude', title: 'Claude work', processState: 'running', attentionState: 'none',
     lastActivityAt: now - 60_000, archived: false, opened: true, resumable: true, adapterSessionId: 'adapter-1', ...extra }
 }
@@ -30,6 +30,7 @@ function group(sessions = [session()], extra: Partial<UnifiedProjectGroup> = {})
 const mounted: VueWrapper[] = []
 let i18n: ReturnType<typeof createI18n>
 beforeEach(() => {
+  localStorage.setItem('cc-desk-cli-support-v1', JSON.stringify({ claude: true, codex: true }))
   vi.useFakeTimers(); vi.setSystemTime(now)
   setActivePinia(createPinia())
   useProjectsStateStore().loaded = true
@@ -422,6 +423,7 @@ describe('Unified project session tree', () => {
     const wrapper = node(group([session({ attentionState: 'needs-user' })]), { expanded: false })
     expect(wrapper.findAllComponents(SessionItem)).toHaveLength(0)
     expect(wrapper.get('[data-project-attention]').attributes('aria-label')).toBe('Needs your reply: 1')
+    ;(wrapper.get('.project-main').element as HTMLElement).focus()
     await wrapper.get('.project-main').trigger('keydown', { key: 'Enter' })
     expect(wrapper.emitted('toggle-expand')).toEqual([['/work/game']])
     await wrapper.setProps({ expanded: true })
@@ -546,12 +548,15 @@ describe('Unified project session tree', () => {
   })
 
   // Menus in the modal drawer must stay inside its focus boundary rather than being teleported outside it.
-  it('Tree_DrawerMenuFocusBoundary_012', async () => {
+  it.each(['pointer', 'ContextMenu', 'Shift+F10'])('Tree_DrawerMenuFocusBoundary_012 %s', async input => {
     const wrapper = mount(ArchivedSessionsDrawer, { attachTo: document.body,
       props: { open: true, sessions: [session({ archived: true, processState: 'stopped' })] }, global: { plugins: [i18n] } })
     mounted.push(wrapper)
     await nextTick(); await nextTick()
-    await wrapper.getComponent(SessionItem).trigger('contextmenu')
+    const row = wrapper.getComponent(SessionItem)
+    ;(row.element as HTMLElement).focus()
+    if (input === 'pointer') await row.trigger('contextmenu')
+    else await row.trigger('keydown', { key: input === 'ContextMenu' ? 'ContextMenu' : 'F10', shiftKey: input === 'Shift+F10' })
     await nextTick(); await nextTick()
     const menu = document.querySelector<HTMLElement>('[role="menu"]')!
     expect(document.querySelector('[role="dialog"]')!.contains(menu)).toBe(true)
@@ -648,18 +653,21 @@ describe('Unified project session tree', () => {
     await wrapper.get('.project-main').trigger('click')
     await wrapper.get('.project-overflow-trigger button').trigger('keydown', { key: 'Enter' })
     expect(wrapper.findAll('.session-item')).toHaveLength(1)
+    ;(wrapper.get('.session-item').element as HTMLElement).focus()
     await wrapper.get('.session-item').trigger('keydown', { key: 'F2' })
     await wrapper.setProps({ projectGroups: [group([session({ renameState: 'editing' })])] })
     const input = wrapper.get('.session-name-wrapper input')
     await input.setValue('New name'); await input.trigger('keydown', { key: 'Enter' })
     expect(wrapper.emitted('rename-commit')).toEqual([['claude-1', 'New name']])
     await wrapper.setProps({ projectGroups: [group()] })
+    ;(wrapper.get('.session-item').element as HTMLElement).focus()
     await wrapper.get('.session-item').trigger('keydown', { key: 'F2' })
     await wrapper.setProps({ projectGroups: [group([session({ renameState: 'editing' })])] })
     await wrapper.get('.session-name-wrapper input').trigger('keydown', { key: 'Escape' })
     await wrapper.setProps({ projectGroups: [group()] })
     expect(wrapper.emitted('close')).toBeUndefined()
     expect(wrapper.findAll('.session-item')).toHaveLength(1)
+    ;(wrapper.get('.project-main').element as HTMLElement).focus()
     await wrapper.get('.project-main').trigger('keydown', { key: ' ' })
     expect(wrapper.findAll('.session-item')).toHaveLength(0)
   })
@@ -683,7 +691,32 @@ describe('Unified project session tree', () => {
     await nextTick()
     expect(document.querySelector('[role="menu"]')).toBeNull()
     expect(wrapper.emitted('close')).toBeUndefined()
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    const search = wrapper.get('.search-input').element as HTMLElement
+    // 冻结时钟下 Vue 的 capture/bubble 事件时间戳仍须晚于监听器挂载。
+    vi.setSystemTime(now + 1)
+    search.focus(); search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
     expect(wrapper.emitted('close')).toEqual([[]])
+  })
+
+  it('Tree_EscapeBelongsToFocusedList_028', async () => {
+    const wrapper = panel({ projectGroups: [group()], archivedSessions: [] })
+    const terminal = document.createElement('textarea'); terminal.className = 'xterm-helper-textarea'; document.body.append(terminal); terminal.focus()
+    const event = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+    terminal.dispatchEvent(event)
+    expect(event.defaultPrevented).toBe(false); expect(wrapper.emitted('close')).toBeUndefined()
+    const search = wrapper.get('.search-input').element as HTMLElement; search.focus()
+    vi.setSystemTime(now + 1)
+    search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, isComposing: true }))
+    expect(wrapper.emitted('close')).toBeUndefined()
+    search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    expect(wrapper.emitted('close')).toEqual([[]])
+  })
+
+  it('Tree_ComposingProjectKeysStayUnclaimed_029', async () => {
+    const wrapper = node()
+    const main = wrapper.get('.project-main').element as HTMLElement; main.focus()
+    const event = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true, isComposing: true })
+    main.dispatchEvent(event)
+    expect(event.defaultPrevented).toBe(false); expect(wrapper.emitted('toggle-expand')).toBeUndefined()
   })
 })

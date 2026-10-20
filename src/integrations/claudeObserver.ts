@@ -2,18 +2,18 @@ import type { HookEventPayload, NotificationData } from '@/types/hook'
 import { validObservationAgentId, type ObservationEvent } from './registry'
 
 function validAuthenticatedMetadata(
-  payload: HookEventPayload,
+  payload: HookEventPayload, source: 'claude-hook' | 'codex-hook' = 'claude-hook',
 ): payload is HookEventPayload & {
   runId: string
   generation: number
   eventId: string
-  observerSource: 'claude-hook'
+  observerSource: 'claude-hook' | 'codex-hook'
 } {
   return (
     payload !== null && typeof payload === 'object' && !Array.isArray(payload) &&
     payload.detail !== null && typeof payload.detail === 'object' &&
     payload.detail.data !== null && typeof payload.detail.data === 'object' && !Array.isArray(payload.detail.data) &&
-    payload.observerSource === 'claude-hook' &&
+    payload.observerSource === source &&
     typeof payload.runId === 'string' &&
     payload.runId.length > 0 && payload.runId.length <= 128 &&
     !/[\u0000-\u001f\u007f]/.test(payload.runId) &&
@@ -72,4 +72,10 @@ export function fromClaudeHook(payload: HookEventPayload): ObservationEvent | nu
     generation: payload.generation,
     eventId: payload.eventId,
   }
+}
+
+/** Codex身份信号独立于Claude活动语义，只接受后端认证的主会话生命周期。 */
+export function fromCodexHook(payload: HookEventPayload): ObservationEvent | null {
+  if (!validAuthenticatedMetadata(payload, 'codex-hook') || !['sessionStart', 'userPromptSubmit', 'stop', 'sessionEnd'].includes(payload.detail.type)) return null
+  return { kind: 'unknown', runId: payload.runId, generation: payload.generation, eventId: payload.eventId }
 }

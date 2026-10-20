@@ -405,12 +405,12 @@ async function startAttempt(attempt: NativeAttemptIdentity): Promise<void> {
   // Only its ordered projection can claim attention, never a raw hook event kind.
   try {
     stopObservation = useHookStore().subscribeObservation({ cli: tab.cli, runId, generation, enabled: true }, (_event, state) => {
-      if (runToken === token && attemptIsCurrent(attempt)) tabs.applyObservation(props.tabId, attempt, state)
+      if (tab.cli === 'claude' && runToken === token && attemptIsCurrent(attempt)) tabs.applyObservation(props.tabId, attempt, state)
     }, { onNotice: notice => {
       if (runToken === token && attemptIsCurrent(attempt)) tabs.applyObservationNotice(props.tabId, attempt, notice)
-    }, onIdentity: sessionId => {
+    }, onIdentity: (sessionId, eventType) => {
       // 认证 hook 的会话身份让运行中 tab 可认领自己的历史行，消除活动/历史双行。
-      if (runToken === token && attemptIsCurrent(attempt)) tabs.applyObservationIdentity(props.tabId, attempt, sessionId)
+      if (runToken === token && attemptIsCurrent(attempt)) tabs.applyObservationIdentity(props.tabId, attempt, sessionId, eventType)
     }
     })
   } catch { /* Optional observation must never block the authoritative terminal. */ }

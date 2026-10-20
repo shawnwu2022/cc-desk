@@ -39,6 +39,9 @@ export interface NativeCliTab {
   title: string
   /** 当前解析器的标题失效序号，仅触发已证明来源的只读补读。 */
   titleChangeRevision?: number
+  /** 认证身份事件触发同源历史补读；标题序号额外覆盖异步自动命名。 */
+  historyChangeRevision?: number
+  historyTitleRevision?: number
   createdAt: number
   lastActivityAt: number
   attentionState?: 'none' | 'needs-user'
@@ -292,11 +295,18 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
   }
 
   /** 认证观察回填运行中会话的 CLI 身份；同 run 幂等覆盖，随 attempt 精确校验。 */
-  function applyObservationIdentity(tabId: string, attempt: NativeAttemptIdentity, sessionId: string): boolean {
+  function applyObservationIdentity(tabId: string, attempt: NativeAttemptIdentity, sessionId: string, eventType = 'sessionStart'): boolean {
     const value = tabs.get(tabId)
     const identity = sessionId.trim()
     if (!identity || identity.includes('\0')) return false
-    if (!value || !matchesNativeAttempt(value, attempt) || value.cli !== 'claude' || value.action.kind === 'raw') return false
+    if (!value || !matchesNativeAttempt(value, attempt) || value.action.kind === 'raw' || !['starting', 'running'].includes(value.status)) return false
+    if (value.cli === 'codex') {
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(identity)) return false
+      if (!value.observedSessionId && eventType !== 'sessionStart' && eventType !== 'userPromptSubmit') return false
+      if (value.observedSessionId && value.observedSessionId !== identity && eventType !== 'sessionStart') return false
+      value.historyChangeRevision = (value.historyChangeRevision ?? 0) + 1
+      if (eventType === 'stop' || eventType === 'userPromptSubmit') value.historyTitleRevision = value.historyChangeRevision
+    }
     if (value.observedSessionId !== identity) {
       value.observedSessionId = identity
       value.lastActivityAt = Date.now()
@@ -490,6 +500,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     value.observationState = 'off'
     delete value.observerReasonCode
     delete value.observedSessionId
+    delete value.historyChangeRevision; delete value.historyTitleRevision
     value.errorCode = null
     value.launchRevision = null
     pendingAttention.delete(tabId)

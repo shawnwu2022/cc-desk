@@ -8,6 +8,7 @@ import SessionCliGroup from './SessionCliGroup.vue'
 import NewSessionMenu from './NewSessionMenu.vue'
 import { useNewSessionDraftStore } from '@/stores/newSessionDraft'
 import { summarizeSessionStatus } from '@/utils/sessionStatusBadge'
+import { ownsListKeyboardEvent } from '@/utils/keyboardScope'
 import type {
   ProjectActionRequest, ProjectMenuAction, SessionMenuAction, SessionPrimaryAction,
   SessionTreeConfirmationRequest, UnifiedCliKind, UnifiedProjectGroup, UnifiedProjectIdentity, UnifiedSession, NewSessionRequest,
@@ -108,7 +109,7 @@ function openContext(event: MouseEvent) {
   menuOpen.value = true
 }
 function onRowKeydown(event: KeyboardEvent) {
-  if (!props.surfaceActive) return
+  if (!props.surfaceActive || !ownsListKeyboardEvent(event, row.value) || event.repeat) return
   if (event.target !== event.currentTarget) return
   if (event.key === 'ContextMenu' || (event.key === 'F10' && event.shiftKey)) {
     newMenuOpen.value = false
@@ -119,6 +120,11 @@ function onRowKeydown(event: KeyboardEvent) {
   } else if (event.key === 'Enter' || event.key === ' ') {
     event.preventDefault(); toggle()
   }
+}
+function onMainKeydown(event: KeyboardEvent) {
+  if (!props.surfaceActive || !ownsListKeyboardEvent(event, row.value) || event.repeat
+    || event.target !== event.currentTarget || !['Enter', ' '].includes(event.key)) return
+  event.preventDefault(); event.stopPropagation(); toggle()
 }
 function projectAction(id: string) {
   const item = menuItems.value.find(item => item.id === id)
@@ -167,7 +173,7 @@ onBeforeUnmount(() => { window.removeEventListener('resize', placeMenu) })
         <svg aria-hidden="true" focusable="false" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="9 6 15 12 9 18" /></svg>
       </AppButton>
       <div class="project-main" role="button" tabindex="0" :aria-label="project.name" :aria-description="project.projectPath" :aria-expanded="expanded"
-        @click.stop="toggle" @keydown.enter.self.prevent.stop="toggle" @keydown.space.self.prevent.stop="toggle">
+        @click.stop="toggle" @keydown="onMainKeydown">
         <span class="project-name">{{ project.name }}</span>
         <span v-if="project.pinned" class="pin-mark" :aria-label="t('pinned')">⌖</span>
       </div>

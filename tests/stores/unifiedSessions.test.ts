@@ -24,7 +24,7 @@ const LEGACY_ROOT = 'local:windows:1:2:3'
 
 function session(overrides: Partial<UnifiedSession> = {}): UnifiedSession {
   return {
-    id: 'legacy-1',
+    id: 'legacy-1', renameAvailable: true,
     projectKey: '/repo',
     projectPath: '/repo',
     cli: 'claude',
@@ -296,6 +296,7 @@ it.each(['navigation', 'selection', 'revision', 'success'] as const)('confirmed 
 
 beforeEach(() => {
   vi.restoreAllMocks()
+  localStorage.setItem('cc-desk-cli-support-v1', JSON.stringify({ claude: true, codex: true }))
   setActivePinia(createPinia())
 })
 

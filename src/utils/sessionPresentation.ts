@@ -145,6 +145,9 @@ export function selectSessionPrimaryAction(session: UnifiedSession): SessionPrim
 interface MenuActionRule extends SessionMenuActionDefinition {
   visible: (session: UnifiedSession) => boolean
 }
+export function canRenameSession(session: UnifiedSession): boolean {
+  return session.renameAvailable === true && !session.preparationState && !session.archived
+}
 const isOpened = (session: UnifiedSession) => !session.archived && session.opened === true
 const isState = (...states: UnifiedSession['processState'][]) =>
   (session: UnifiedSession) => !session.archived && states.includes(session.processState)
@@ -152,7 +155,7 @@ const isState = (...states: UnifiedSession['processState'][]) =>
 /** Both menu entry points consume this one allowlisted action model. */
 export const SESSION_MENU_ACTION_DEFINITIONS: readonly MenuActionRule[] = [
   { id: 'clear-unread', labelKey: 'sessionActionClearUnread', visible: session => !session.opened && !!session.observationNotice?.unreadReplyEnd },
-  { id: 'rename', labelKey: 'sessionActionRename', visible: (session) => !session.preparationState && !session.archived },
+  { id: 'rename', labelKey: 'sessionActionRename', visible: canRenameSession },
   { id: 'cancel-start', labelKey: 'sessionActionCancelStart', danger: true, visible: isState('starting') },
   { id: 'stop', labelKey: 'sessionActionStop', danger: true, visible: () => false },
   { id: 'confirm-status', labelKey: 'sessionActionConfirmStatus', visible: isState('unknown') },

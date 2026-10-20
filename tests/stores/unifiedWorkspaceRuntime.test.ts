@@ -10,7 +10,7 @@ import zh from '@/i18n/locales/zh'
 import LaunchConfigurationEditor from '@/components/settings/LaunchConfigurationEditor.vue'
 import { useUnifiedWorkspaceRuntime } from '@/composables/useUnifiedWorkspaceRuntime'
 import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
-import { useNativeTabsStore } from '@/stores/nativeTabs'
+import { captureNativeAttempt, useNativeTabsStore } from '@/stores/nativeTabs'
 import { useNativeHistoryStore } from '@/stores/nativeHistory'
 import { useNewSessionDraftStore } from '@/stores/newSessionDraft'
 import { useCliProfilesStore } from '@/stores/cliProfiles'
@@ -41,7 +41,7 @@ let persisted: ProjectsState
 const wrappers: VueWrapper[] = []
 beforeEach(() => {
   vi.stubGlobal('crypto', { getRandomValues: window.crypto.getRandomValues, randomUUID: () => 'legacy-tab-id' })
-  localStorage.clear(); setActivePinia(createPinia()); vi.clearAllMocks(); useProjectsStateStore().loaded = true
+  localStorage.clear(); localStorage.setItem('cc-desk-cli-support-v1', JSON.stringify({ claude: true, codex: true })); setActivePinia(createPinia()); vi.clearAllMocks(); useProjectsStateStore().loaded = true
   persisted = { pinnedProjects: [], archivedSessions: {}, launchPreferences: {} }
   io.getState.mockImplementation(async () => structuredClone(persisted))
   io.upsertRecord.mockImplementation(async (key, record) => { persisted.sessionRecords ??= {}; persisted.sessionRecords[key] = structuredClone(record); return structuredClone(persisted) })
@@ -105,6 +105,131 @@ it('Restart_NewObservedConversationKeepsNativeIdAcrossGeneration_068', async()=>
   scope.mockRestore()
 })
 describe('Workspace source warning diagnostics', () => {
+  // 忽略只影响同一问题的展示，底层失败和不完整证据仍保留。
+  it('Warnings_IgnoreAllSurfaces_086', async () => {
+    io.scope.mockResolvedValue({ cli: 'codex', sourceRootKey: 'root-one' })
+    const item = { type: 'session', projectId: 'project', sessionKey: 'one', nativeSessionId: 'one', title: 'Known', cwd: '/repo', metadataIncomplete: true, readFailure: 'SOURCE_INVALID' }
+    const partial = { state: 'ready', items: [item], hasMore: false, historyMetadataIncomplete: true, historyReadFailures: ['SOURCE_INVALID'] }
+    io.read.mockResolvedValue(partial)
+    const w = mount(App, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en, zh } })], stubs: { NativeCliTerminal: true, SettingsView: true } } })
+    wrappers.push(w); await flushPromises()
+    await w.get('[data-project-key="/repo"] .expand-arrow').trigger('click'); await flushPromises()
+    expect(w.find('[data-session-history-issue]').exists()).toBe(true)
+    await w.get('[data-history-source-entry]').trigger('click'); await flushPromises()
+    const ignore = document.querySelector('[data-source-diagnostics-ignore]') as HTMLElement
+    ignore.focus(); ignore.click(); await flushPromises()
+    expect(w.find('[data-history-source-entry]').exists()).toBe(false)
+    expect(w.find('[data-session-history-issue]').exists()).toBe(false)
+    expect(document.activeElement).toBe(document.querySelector('[data-source-warning-retry]'))
+    expect(document.querySelector('[data-history-source-dialog]')?.textContent).not.toContain('SOURCE_INVALID')
+    expect(useNativeHistoryStore().all()[0]).toMatchObject({ metadataIncomplete: true, readFailures: ['SOURCE_INVALID'] })
+    expect(useUnifiedSessionsStore().sessions.find(row => row.nativeSessionId === 'one')?.historyReadFailure).toBe('SOURCE_INVALID')
+    useShellStore().requestWorkspaceAction({ kind: 'refresh' }); await flushPromises()
+    expect(w.find('[data-history-source-entry]').exists()).toBe(false)
+    expect(w.find('[data-session-history-issue]').exists()).toBe(false)
+    io.read.mockResolvedValue({ ...partial, items: [item, { ...item, sessionKey: 'two', nativeSessionId: 'two' }] })
+    useShellStore().requestWorkspaceAction({ kind: 'refresh' }); await flushPromises()
+    expect(w.find('[data-history-source-entry]').exists()).toBe(true)
+    expect(w.findAll('[data-session-history-issue]')).toHaveLength(1)
+    expect(document.querySelectorAll('[data-session-id="one"]')).toHaveLength(0)
+    expect(document.querySelectorAll('[data-session-id="two"]')).toHaveLength(1)
+  })
+
+  // 后台 adapter 的失败也能被忽略；同码的另一个配置必须独立显示。
+  it('Warnings_IgnoreBackgroundExactOwner_087', async () => {
+    const original = await io.profiles()
+    io.profiles.mockResolvedValue({ ...original, profiles: [...original.profiles, { ...original.profiles[0], id: 'other', name: 'Other' }] })
+    const { runtime } = render(); await flushPromises()
+    const entries = useNativeHistoryStore().all()
+    entries[0].error = 'SOURCE_CHANGED'; entries[0].diagnosticStage = 'read-source-enumeration'
+    await flushPromises(); runtime.dismissSourceNotice(); await flushPromises()
+    expect(runtime.sourceIssuesAvailable.value).toBe(false)
+    expect(runtime.sourceDiagnosticsWarnings.value).toEqual([])
+    entries[1].error = 'SOURCE_CHANGED'; entries[1].diagnosticStage = 'read-source-enumeration'
+    await flushPromises()
+    expect(runtime.sourceIssuesAvailable.value).toBe(true)
+    expect(runtime.historyIssues.value.map(issue => issue.entryKey)).toEqual([entries[1].key])
+    expect(entries[0].error).toBe('SOURCE_CHANGED')
+  })
+
+  // 后台完整读取确认恢复后，同一来源再次失败应视为新的问题。
+  it.each([false, true])('Warnings_IgnoreBackgroundRecovery_088 startupFailure=%s', async startupFailure => {
+    if (startupFailure) io.read.mockResolvedValue({ state: 'unavailable', reason: 'SOURCE_CHANGED', items: [], hasMore: false })
+    const { runtime } = render(); await flushPromises()
+    const history = useNativeHistoryStore(), context = { ...history.all()[0].context, force: true }
+    io.read.mockResolvedValue({ state: 'unavailable', reason: 'SOURCE_CHANGED', items: [], hasMore: false })
+    await history.load(context); await flushPromises()
+    runtime.dismissSourceNotice()
+    expect(runtime.sourceIssuesAvailable.value).toBe(false)
+    io.read.mockResolvedValue({ state: 'ready', items: [], hasMore: false })
+    await history.load(context); await flushPromises()
+    io.read.mockResolvedValue({ state: 'unavailable', reason: 'SOURCE_CHANGED', items: [], hasMore: false })
+    await history.load(context); await flushPromises()
+    expect(runtime.sourceIssuesAvailable.value).toBe(true)
+  })
+
+  // 匿名失败与同名字面 sessionKey 必须属于两个不同的忽略身份。
+  it('Warnings_IgnoreAnonymousSessionKey_089', async () => {
+    const partial = { state: 'ready', items: [], hasMore: false, historyMetadataIncomplete: true, historyReadFailures: ['SOURCE_INVALID'] }
+    io.read.mockResolvedValue(partial)
+    const { runtime } = render(); await flushPromises(); runtime.dismissSourceNotice()
+    io.read.mockResolvedValue({ ...partial, items: [{ type: 'session', projectId: 'project', sessionKey: 'source', nativeSessionId: 'new', title: 'New', cwd: '/repo', metadataIncomplete: true, readFailure: 'SOURCE_INVALID' }] })
+    await runtime.refresh()
+    expect(runtime.sourceIssuesAvailable.value).toBe(true)
+    expect(runtime.historyIssues.value.map(issue => issue.sessionId)).toEqual(['new'])
+    expect(runtime.historyWarningVisible(useUnifiedSessionsStore().sessions.find(row => row.nativeSessionId === 'new')!)).toBe(true)
+  })
+
+  // 读取失败不能证明旧的条目问题已恢复，之后相同观察不应重新提醒。
+  it('Warnings_IgnorePartialFailedRetry_090', async () => {
+    const partial = { state: 'ready', items: [], hasMore: false, historyMetadataIncomplete: true, historyReadFailures: ['SOURCE_INVALID'] }
+    io.read.mockResolvedValue(partial)
+    const { runtime } = render(); await flushPromises(); runtime.dismissSourceNotice()
+    io.read.mockResolvedValue({ state: 'unavailable', reason: 'SOURCE_BUSY', items: [], hasMore: false })
+    await runtime.refresh()
+    expect(runtime.sourceDiagnosticsWarnings.value.map(row => row.code)).toEqual(['SOURCE_BUSY'])
+    io.read.mockResolvedValue(partial); await runtime.refresh()
+    expect(runtime.historyReadWarnings.value).toEqual([])
+    expect(runtime.sourceIssuesAvailable.value).toBe(false)
+  })
+
+  // 前置配置读取失败没有重扫历史，不能清除仍存在的旧来源问题的忽略。
+  it.each(['profiles', 'registered'] as const)('Warnings_IgnoreUnobservedSource_091 %s', async dependency => {
+    io.read.mockResolvedValue({ state: 'unavailable', reason: 'SOURCE_CHANGED', items: [], hasMore: false })
+    const { runtime } = render(); await flushPromises(); runtime.dismissSourceNotice()
+    expect(runtime.sourceDiagnosticsWarnings.value).toEqual([])
+    io[dependency].mockRejectedValueOnce({ code: 'SOURCE_BUSY' })
+    io.read.mockClear()
+    await runtime.refresh()
+    expect(io.read).not.toHaveBeenCalled()
+    expect(useNativeHistoryStore().all()[0].error).toBe('SOURCE_CHANGED')
+    expect(runtime.sourceDiagnosticsWarnings.value.map(warning => warning.code)).toEqual(['SOURCE_BUSY'])
+    expect(runtime.historyIssues.value).toEqual([])
+    await runtime.refresh()
+    expect(runtime.sourceIssuesAvailable.value).toBe(false)
+  })
+
+  // 部分枚举漏掉坏行并不是恢复证据；完整观察确认恢复之后才允许同码复发提醒。
+  it('Warnings_IgnoreOmittedPartialRow_092', async () => {
+    io.scope.mockResolvedValue({ cli: 'codex', sourceRootKey: 'known-root' })
+    const item = { type: 'session', projectId: 'project', sessionKey: 'known', nativeSessionId: 'known', title: 'Known', cwd: '/repo', metadataIncomplete: true, readFailure: 'SOURCE_INVALID' }
+    const partial = { state: 'ready', items: [item], hasMore: false, historyMetadataIncomplete: true, historyReadFailures: ['SOURCE_INVALID'] }
+    io.read.mockResolvedValue(partial)
+    const { runtime } = render(); await flushPromises(); runtime.dismissSourceNotice()
+    io.read.mockResolvedValue({ ...partial, items: [] }); await runtime.refresh()
+    expect(useNativeHistoryStore().all()[0]).toMatchObject({ metadataIncomplete: true, readFailures: ['SOURCE_INVALID'], sessions: [{ nativeSessionId: 'known' }] })
+    expect(useNativeHistoryStore().all()[0].sessions[0].readFailure).toBeUndefined()
+    io.read.mockResolvedValue(partial); await runtime.refresh()
+    expect(runtime.historyReadWarnings.value).toEqual([])
+    expect(runtime.historyIssues.value).toEqual([])
+    expect(runtime.historyWarningVisible(useUnifiedSessionsStore().sessions.find(row => row.nativeSessionId === 'known')!)).toBe(false)
+    io.read.mockResolvedValue({ state: 'ready', items: [{ ...item, metadataIncomplete: undefined, readFailure: undefined }], hasMore: false })
+    await runtime.refresh()
+    io.read.mockResolvedValue(partial); await runtime.refresh()
+    expect(runtime.sourceIssuesAvailable.value).toBe(true)
+    expect(runtime.historyWarningVisible(useUnifiedSessionsStore().sessions.find(row => row.nativeSessionId === 'known')!)).toBe(true)
+  })
+
   // 无身份的来源错误不能冒认会话；明确会话错误则精确定位，忽略后新问题再次提示。
   it('HistoryRecovery_ExactAndUnknown_080', async () => {
     const item = { type: 'session', projectId: 'project', sessionKey: 'root-key', nativeSessionId: 'history-id', title: 'Known', cwd: '/repo', readFailure: 'SOURCE_INVALID' }
@@ -158,7 +283,8 @@ describe('Workspace source warning diagnostics', () => {
     runtime.dismissSourceNotice()
     io.read.mockResolvedValue({ ...response, items: [{ ...response.items[0], readFailure: undefined }, response.items[1]] })
     await runtime.refresh()
-    expect(runtime.historyIssues.value.filter(row => row.sessionId).map(row => row.sessionId)).toEqual(['two'])
+    expect(runtime.historyIssues.value).toEqual([])
+    expect(useNativeHistoryStore().all()[0].sessions.filter(row => row.readFailure).map(row => row.nativeSessionId)).toEqual(['two'])
     expect(runtime.historyNoticeDismissed.value).toBe(true)
   })
   // 后台只改变诊断字段仍须发布受影响项目；恢复时同一列表标记随之撤销。
@@ -260,7 +386,7 @@ describe('Workspace source warning diagnostics', () => {
     io.profiles.mockResolvedValue({ ...original, profiles: [...original.profiles, { ...original.profiles[0], id: 'cx-second', name: 'Second CX' }] })
     await runtime.refresh()
     expect(runtime.sourceNoticeDismissed.value).toBe(false)
-    expect(runtime.sourceWarningConfigurations.value.map(row => row.name)).toEqual(['Renamed CX', 'Second CX'])
+    expect(runtime.sourceWarningConfigurations.value.map(row => row.name)).toEqual(['Second CX'])
     expect(runtime.sourceWarnings.value).toEqual([{ source: 'codex-history', code: 'SCOPE_UNKNOWN', stage: 'scope-profile-validation' }])
   })
 
@@ -313,6 +439,8 @@ describe('Workspace source warning diagnostics', () => {
     io.profiles.mockResolvedValue({ ...original, profiles: profiles.slice(0, 14) }); await runtime.refresh()
     expect(runtime.sourceWarnings.value).toEqual(visible)
     expect(runtime.sourceNoticeDismissed.value).toBe(false)
+    expect(runtime.sourceDiagnosticsWarnings.value.map(row => row.code)).toEqual(['SOURCE_TOO_MANY_ENTRIES'])
+    expect(runtime.historyIssues.value.map(row => row.configurationName)).toEqual(['Configuration 13'])
     runtime.dismissSourceNotice()
     io.profiles.mockResolvedValue({ ...original, profiles }); await runtime.refresh()
     expect(runtime.sourceWarnings.value).toEqual(visible)
@@ -326,7 +454,7 @@ describe('Workspace source warning diagnostics', () => {
     expect(runtime.sourceWarnings.value).toEqual(visible)
   })
 
-  // Dismiss removes terminal notices, retaining an explicit source entry and dialog.
+  // 忽略后所有展示一致收起；切换语言和导航不会让同一问题重新出现。
   it('Warnings_AppDismissLocale_004', async () => {
     io.scope.mockRejectedValue({ code: 'SCOPE_UNKNOWN', stage: 'scope-profile-validation', field: '/private/path', name: 'raw-secret' })
     const i18n = createI18n({ legacy: false, locale: 'en', messages: { en, zh } })
@@ -334,32 +462,30 @@ describe('Workspace source warning diagnostics', () => {
     wrappers.push(w); await flushPromises()
     expect(w.find('[data-workspace-source-notice]').exists()).toBe(true)
     expect(w.find('[data-workspace-source-details]').text()).toContain('CX')
-    ;(w.find('[data-dismiss-source-notice]').element as HTMLElement).focus()
-    await w.find('[data-dismiss-source-notice]').trigger('click'); await flushPromises()
-    expect(w.find('[data-workspace-source-notice]').exists()).toBe(false)
-    expect(w.find('[data-workspace-source-compact]').exists()).toBe(false)
-    expect(w.find('[data-workspace-source-details]').exists()).toBe(false)
     const entry = w.find('[data-history-source-entry]')
     expect(entry.exists()).toBe(true)
-    expect(document.activeElement).toBe(entry.element)
     await entry.trigger('click'); await flushPromises()
     const dialog = () => document.querySelector('[data-history-source-dialog]')!
     expect(dialog().textContent).toContain('SCOPE_UNKNOWN')
     expect(dialog().textContent).not.toMatch(/raw-secret|private\/path/)
     i18n.global.locale.value = 'zh'; await flushPromises()
     expect(dialog().textContent).toContain(zh.sourceWarningScopeUnknown)
-    ;(dialog().querySelector('[data-source-warning-retry]') as HTMLElement).click(); await flushPromises()
-    expect(w.find('[data-workspace-source-notice]').exists()).toBe(false)
     ;(dialog().querySelector('[data-source-warning-configuration]') as HTMLElement).click(); await flushPromises()
     expect(w.findComponent(LaunchConfigurationEditor).props('request')).toEqual({ kind: 'edit', profileId: 'cx' })
+    w.findComponent(LaunchConfigurationEditor).vm.$emit('close'); await flushPromises()
+    await w.find('[data-history-source-entry]').trigger('click'); await flushPromises()
+    ;(dialog().querySelector('[data-source-diagnostics-ignore]') as HTMLElement).click(); await flushPromises()
+    expect(w.find('[data-workspace-source-notice]').exists()).toBe(false)
+    expect(w.find('[data-history-source-entry]').exists()).toBe(false)
+    expect(dialog().textContent).not.toContain('SCOPE_UNKNOWN')
+    expect(dialog().textContent).toContain(zh.historyIssuesIgnored)
+    ;(dialog().querySelector('[data-source-warning-retry]') as HTMLElement).click(); await flushPromises()
+    expect(w.find('[data-history-source-entry]').exists()).toBe(false)
     useShellStore().navigate('projects'); await flushPromises()
     expect(document.querySelector('[data-history-source-dialog]')).toBeNull()
     useShellStore().navigate('workspace'); await flushPromises()
     expect(w.find('[data-workspace-source-notice]').exists()).toBe(false)
-    await w.find('[data-history-source-entry]').trigger('click'); await flushPromises()
-    expect(dialog().textContent).toContain('SCOPE_UNKNOWN')
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await flushPromises()
-    expect(document.querySelector('[data-history-source-dialog]')).toBeNull()
+    expect(w.find('[data-history-source-entry]').exists()).toBe(false)
   })
 
   it('HistoryPartial_DismissRetryNavigation_003', async () => {
@@ -375,8 +501,7 @@ describe('Workspace source warning diagnostics', () => {
     expect(w.find('[data-history-metadata-partial]').exists()).toBe(false)
     useShellStore().navigate('projects'); useShellStore().navigate('workspace'); await flushPromises()
     expect(w.find('[data-history-metadata-partial]').exists()).toBe(false)
-    await w.find('[data-history-source-entry]').trigger('click'); await flushPromises()
-    expect(document.querySelector('[data-history-source-dialog]')?.textContent).toContain('SOURCE_UNSUPPORTED')
+    expect(w.find('[data-history-source-entry]').exists()).toBe(false)
     io.read.mockResolvedValue({ state: 'ready', items: [], hasMore: false, historyMetadataIncomplete: true, historyReadFailures: ['SOURCE_INVALID'] })
     useShellStore().requestWorkspaceAction({ kind: 'refresh' }); await flushPromises()
     expect(w.find('[data-history-metadata-partial]').exists()).toBe(true)
@@ -398,7 +523,8 @@ describe('Workspace source warning diagnostics', () => {
     expect(runtime.historyNoticeDismissed.value).toBe(true)
     finish({ ...partial, historyReadFailures: ['SOURCE_INVALID'] }); await old; await flushPromises()
     expect(runtime.historyNoticeDismissed.value).toBe(true)
-    expect(runtime.historyReadWarnings.value[0].code).toBe('SOURCE_UNSUPPORTED')
+    expect(runtime.historyReadWarnings.value).toEqual([])
+    expect(useNativeHistoryStore().all()[0].readFailures).toEqual(['SOURCE_UNSUPPORTED'])
     io.read.mockResolvedValue({ state: 'ready', items: [], hasMore: false })
     await runtime.refresh()
     expect(runtime.sourceIssuesAvailable.value).toBe(false)
@@ -417,13 +543,15 @@ describe('Workspace source warning diagnostics', () => {
     wrappers.push(w); await flushPromises()
     expect(w.find('[data-workspace-source-details]').text()).toContain('five-second time budget')
     expect(w.find('[data-history-metadata-partial]').exists()).toBe(true)
-    await w.find('[data-dismiss-source-notice]').trigger('click'); await flushPromises()
-    expect(w.find('[data-workspace-source-notice]').exists()).toBe(false)
-    expect(w.find('[data-history-metadata-partial]').exists()).toBe(false)
-    expect(w.find('[data-history-read-details]').exists()).toBe(false)
     await w.find('[data-history-source-entry]').trigger('click'); await flushPromises()
     expect(document.querySelector('[data-history-source-dialog]')?.textContent).toContain('SOURCE_BUDGET_EXCEEDED')
     expect(document.querySelector('[data-history-source-dialog]')?.textContent).toContain('SOURCE_UNSUPPORTED')
+    ;(document.querySelector('[data-source-diagnostics-ignore]') as HTMLElement).click(); await flushPromises()
+    expect(w.find('[data-workspace-source-notice]').exists()).toBe(false)
+    expect(w.find('[data-history-metadata-partial]').exists()).toBe(false)
+    expect(w.find('[data-history-read-details]').exists()).toBe(false)
+    expect(w.find('[data-history-source-entry]').exists()).toBe(false)
+    expect(document.querySelector('[data-history-source-dialog]')?.textContent).not.toMatch(/SOURCE_BUDGET_EXCEEDED|SOURCE_UNSUPPORTED/)
   })
 
   it('HistoryPartial_LastKnownActivity_006', async () => {
@@ -479,8 +607,8 @@ describe('Workspace source warning diagnostics', () => {
     io.read.mockResolvedValue(partial)
     const w = mount(App, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { NativeCliTerminal: true, SettingsView: true } } })
     wrappers.push(w); await flushPromises()
-    await w.find('[data-dismiss-history-notice]').trigger('click'); await flushPromises()
     await w.find('[data-history-source-entry]').trigger('click'); await flushPromises()
+    ;(document.querySelector('[data-source-diagnostics-ignore]') as HTMLElement).click(); await flushPromises()
     let finish!: (value: unknown) => void
     io.read.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
     ;(document.querySelector('[data-source-warning-retry]') as HTMLElement).click(); await flushPromises()
@@ -505,6 +633,9 @@ describe('Workspace source warning diagnostics', () => {
     await w.find('[data-dismiss-source-notice]').trigger('click'); await flushPromises()
     expect(document.activeElement).toBe(w.find('[data-primary-section="workspace"]').element)
     useShellStore().sidebarVisible = true; await flushPromises()
+    expect(w.find('[data-history-source-entry]').exists()).toBe(false)
+    io.read.mockResolvedValue({ state: 'unavailable', reason: 'SOURCE_CHANGED', items: [], hasMore: false })
+    useShellStore().requestWorkspaceAction({ kind: 'refresh' }); await flushPromises()
     await w.find('[data-history-source-entry]').trigger('click'); await flushPromises()
     expect(document.querySelector('[data-history-source-dialog]')).not.toBeNull()
     useShellStore().sidebarVisible = false; await flushPromises()
@@ -878,7 +1009,7 @@ describe('Unified production runtime', () => {
     useUnifiedSessionsStore().beginRename(opened.id)
     useShellStore().requestWorkspaceAction({ kind: 'rename', sessionId: opened.id, title: 'Unified name' }); await flushPromises()
     expect(tabsTitle()).toBe('Codex CLI'); expect(useShellStore().pendingRequest).toBeNull()
-    expect(unified.actionFeedback?.detailCode).toBe('SESSION_IDENTITY_UNKNOWN')
+    expect(unified.actionFeedback?.detailCode).toBe('NATIVE_RENAME_UNSUPPORTED')
     function tabsTitle() { return useNativeTabsStore().tab(opened.adapterSessionId)?.title }
   })
 
@@ -1208,16 +1339,12 @@ it('Runtime_RowDoubleClickSelection_028', async () => {
   expect(w.emitted('workspace-request')?.filter(([request]) => (request as { kind: string }).kind === 'activate')).toHaveLength(1)
   row.element.dispatchEvent(new MouseEvent('click', { detail: 1, bubbles: true })); await flushPromises()
   row.element.dispatchEvent(new MouseEvent('click', { detail: 2, bubbles: true })); await flushPromises(); row.element.dispatchEvent(new MouseEvent('dblclick', { detail: 2, bubbles: true })); await flushPromises()
-  expect(row.find('input').exists()).toBe(true)
-  await row.get('input').setValue('Renamed by double click')
-  await row.get('input').trigger('keydown', { key: 'Enter' }); await flushPromises()
-  expect(tabs.tab(opened.adapterSessionId)?.title).toBe('Codex CLI')
-  expect(row.get('input').element.value).toBe('Renamed by double click')
-  expect(catalog.actionFeedback?.detailCode).toBe('SESSION_IDENTITY_UNKNOWN')
+  expect(row.find('input').exists()).toBe(false)
+  expect(catalog.sessions.find(session => session.id === opened.id)?.renameAvailable).toBe(false)
   expect(tabs.tab(opened.adapterSessionId)?.status).toBe('exited')
   expect(tabs.tab(opened.adapterSessionId)?.generation).toBe(1)
   window.dispatchEvent(new KeyboardEvent('keydown', { key: 'F2', code: 'F2', bubbles: true })); await flushPromises()
-  expect(row.find('input').exists()).toBe(true)
+  expect(row.find('input').exists()).toBe(false)
   expect(tabs.tabs.size).toBe(1)
   expect(io.ptySpawn).not.toHaveBeenCalled()
 })
@@ -1503,10 +1630,11 @@ it('Catalog_UnmountRevokesQueue_004', async () => {
 
 // 同一真实尝试的只读目录刷新不能打断当前行双击重命名。
 it('Runtime_DoubleClickSurvivesRefresh_032', async () => {
+  io.scope.mockImplementation(async target => ({ scopeId: 'scope', instanceId: 'instance', cli: 'codex', sourceRootKey: 'root', identityEpoch: '1', profileId: 'cx', profileRevision: '7', target, basis: 'configured-profile' }))
   const terminal = defineComponent({ props: ['tabId'], setup(_props, { expose }) { expose({ focus() {}, fitVisible() {}, async stop() {}, async recover() {} }); return () => h('div') } })
   const w = mount(App, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { NativeCliTerminal: terminal, SettingsView: true } } }); wrappers.push(w); await flushPromises()
   const catalog = useUnifiedSessionsStore()
-  const opened = await catalog.createSession({ cli: 'codex', projectKey: '/repo', projectPath: '/repo' }); await flushPromises()
+  const opened = await catalog.resumeCatalogSession(catalog.sessions.find(row => row.nativeSessionId === 'history-id')!); await flushPromises()
   await w.get('.search-input').setValue('/repo'); await flushPromises()
   const row = w.get(`[data-session-row="${opened.id}"]`)
   row.element.dispatchEvent(new MouseEvent('click', { detail: 1, bubbles: true })); await flushPromises()
@@ -1518,21 +1646,25 @@ it('Runtime_DoubleClickSurvivesRefresh_032', async () => {
 
 // 实际App切换到另一会话立即移走旧编辑器，迟到的旧提交不写metadata也不抢回选择。
 it('Runtime_SwitchRevokesRowEditor_033', async () => {
+  io.scope.mockImplementation(async target => ({ scopeId: 'scope', instanceId: 'instance', cli: 'codex', sourceRootKey: 'root', identityEpoch: '1', profileId: 'cx', profileRevision: '7', target, basis: 'configured-profile' }))
   const terminal = defineComponent({ props: ['tabId'], setup(_props, { expose }) { expose({ focus() {}, fitVisible() {}, async stop() {}, async recover() {} }); return () => h('div') } })
   const w = mount(App, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { NativeCliTerminal: terminal, SettingsView: true } } }); wrappers.push(w); await flushPromises()
   const catalog = useUnifiedSessionsStore()
-  const first = await catalog.createSession({ cli: 'codex', projectKey: '/repo', projectPath: '/repo', title: 'First' })
+  const sourceId = catalog.sessions.find(row => row.nativeSessionId === 'history-id')!.id
+  const first = await catalog.resumeCatalogSession(catalog.sessions.find(row => row.id === sourceId)!)
   const second = await catalog.createSession({ cli: 'codex', projectKey: '/repo', projectPath: '/repo', title: 'Second' }); await flushPromises()
   // Opening-order persistence is not a manual rename; source display titles remain intact.
-  expect(catalog.sessions.find(row => row.id === first.id)?.title).toBe('First')
+  expect(catalog.sessions.find(row => row.id === first.id)?.title).toBe('History')
   expect(catalog.sessions.find(row => row.id === second.id)?.title).toBe('Second')
   expect(io.upsertRecord).toHaveBeenCalledTimes(2)
-  expect(io.upsertRecord).toHaveBeenNthCalledWith(1, first.id, expect.objectContaining({ title: '', lastOpenedAt: expect.any(Number) }), true)
+  expect(io.upsertRecord).toHaveBeenNthCalledWith(1, sourceId, expect.objectContaining({ title: '', lastOpenedAt: expect.any(Number) }), true)
   expect(io.upsertRecord).toHaveBeenNthCalledWith(2, second.id, expect.objectContaining({ title: '', lastOpenedAt: expect.any(Number) }), true)
   io.upsertRecord.mockClear()
   await catalog.activateSession(first.id)
-  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'F2', code: 'F2', bubbles: true })); await flushPromises()
+  await w.get('.search-input').setValue('/repo'); await flushPromises()
   const firstRow = w.get(`[data-session-row="${first.id}"]`)
+  ;(firstRow.element as HTMLElement).focus()
+  await firstRow.trigger('keydown', { key: 'F2', code: 'F2' }); await flushPromises()
   await firstRow.get('input').setValue('Old draft')
   await w.get(`[data-session-row="${second.id}"]`).trigger('click'); await flushPromises()
   expect(catalog.activeSessionId).toBe(second.id)
@@ -1541,7 +1673,7 @@ it('Runtime_SwitchRevokesRowEditor_033', async () => {
   useShellStore().requestWorkspaceAction({ kind: 'rename', sessionId: first.id, title: 'Stale submit' }); await flushPromises()
   expect(io.upsertRecord).not.toHaveBeenCalled()
   expect(catalog.activeSessionId).toBe(second.id)
-  expect(catalog.sessions.find(row => row.id === first.id)?.title).toBe('First')
+  expect(catalog.sessions.find(row => row.id === first.id)?.title).toBe('History')
 })
 
 // 启动时已停用的 CLI 在启用后必须重新加载历史：catalog.refresh 只读缓存，
@@ -1984,4 +2116,61 @@ it('Warnings_SourceEntryFollowsPanelTitle_069', async () => {
   // 入口是通往诊断抽屉的唯一路径，必须仍能打开抽屉。
   await entry.trigger('click'); await flushPromises()
   expect(document.querySelector('[data-history-source-dialog]')).not.toBeNull()
+})
+
+// 来源错误与恢复即使行序列相同，也必须重算改名能力；读取进度不刷新目录。
+it('Runtime_RenameCapabilitySourceTransition_091', async () => {
+  io.scope.mockImplementation(async target => ({ scopeId: 'scope', instanceId: 'instance', cli: 'codex', sourceRootKey: 'root', identityEpoch: '1', profileId: 'cx', profileRevision: '7', target, basis: 'configured-profile' }))
+  render(); await flushPromises()
+  const catalog = useUnifiedSessionsStore(), history = useNativeHistoryStore()
+  const entry = history.all()[0]
+  expect(catalog.sessions.find(row => row.runtime === 'native-cli')?.renameAvailable).toBe(true)
+  const refresh = vi.spyOn(catalog, 'refresh')
+  entry.loading = true; entry.loaded = false; entry.requestEpoch = 'next'; await flushPromises()
+  expect(refresh).not.toHaveBeenCalled()
+  entry.loading = false; entry.loaded = true; entry.error = 'SOURCE_CHANGED'; await flushPromises()
+  expect(catalog.sessions.find(row => row.runtime === 'native-cli')?.renameAvailable).toBe(false)
+  entry.error = null; await flushPromises()
+  expect(catalog.sessions.find(row => row.runtime === 'native-cli')?.renameAvailable).toBe(true)
+})
+
+// 同项目两个owned run按原生ID投影，首轮标题变化、关闭、恢复均不产生伪关闭行。
+it('CodexIdentity_ConcurrentTitleProjection_032', async () => {
+  const ids = ['00000000-0000-4000-8000-000000000041', '00000000-0000-4000-8000-000000000042']
+  let items: any[] = []
+  io.scope.mockImplementation(async target => ({ scopeId: 'scope', instanceId: 'instance', cli: 'codex', sourceRootKey: 'root', identityEpoch: '1', profileId: 'cx', profileRevision: '7', target, basis: 'configured-profile' }))
+  io.read.mockImplementation(async () => ({ state: 'ready', items: structuredClone(items), hasMore: false }))
+  render(); await flushPromises()
+  const tabs = useNativeTabsStore(), catalog = useUnifiedSessionsStore()
+  vi.useFakeTimers()
+  const opened = ids.map(() => { const created = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } }); const tab = tabs.tab(created.tabId)!; tab.status = 'running'; tab.launchRevision = '1'; return tab })
+  items = ids.map((id, index) => ({ type: 'session', projectId: 'project', sessionKey: JSON.stringify(['local', 'codex', 'root', id]), nativeSessionId: id, title: 'First prompt ' + index, titleSource: 'prompt', cwd: '/repo' }))
+  opened.forEach((tab, index) => expect(tabs.applyObservationIdentity(tab.tabId, tab, ids[index])).toBe(true))
+  await flushPromises(); await vi.advanceTimersByTimeAsync(250); await flushPromises()
+  expect(catalog.sessions).toHaveLength(2)
+  expect(catalog.sessions.filter(row => row.opened)).toHaveLength(2)
+  expect(catalog.sessions.find(row => row.nativeSessionId === ids[0])?.title).toBe('First prompt 0')
+  expect(catalog.sessions.find(row => row.nativeSessionId === ids[1])?.title).toBe('First prompt 1')
+  tabs.applyObservationIdentity(opened[0].tabId, opened[0], ids[0], 'userPromptSubmit')
+  await flushPromises(); await vi.advanceTimersByTimeAsync(250); await flushPromises()
+  items[0].title = 'First reply title'; items[0].titleSource = 'ai'
+  await vi.advanceTimersByTimeAsync(1_250); await flushPromises()
+  expect(catalog.sessions.find(row => row.nativeSessionId === ids[0])?.title).toBe('First reply title')
+  tabs.applyObservationIdentity(opened[0].tabId, opened[0], ids[0], 'stop')
+  await flushPromises(); await vi.advanceTimersByTimeAsync(250); await flushPromises()
+  await catalog.refresh(); await flushPromises()
+  expect(catalog.sessions).toHaveLength(2)
+  expect(catalog.sessions.find(row => row.nativeSessionId === ids[0])?.title).toBe('First reply title')
+  expect(catalog.sessions.every(row => row.renameAvailable)).toBe(true)
+  const old = captureNativeAttempt(opened[0])
+  opened[0].status = 'unknown'; await flushPromises()
+  expect(tabs.applyObservationIdentity(opened[0].tabId, old, ids[1], 'stop')).toBe(false)
+  opened[0].status = 'exited'; tabs.close(opened[0].tabId); await flushPromises()
+  expect(tabs.applyObservationIdentity(opened[0].tabId, old, ids[1])).toBe(false)
+  expect(catalog.sessions).toHaveLength(2)
+  const closed = catalog.sessions.find(row => row.nativeSessionId === ids[0])!
+  expect(closed.opened).toBe(false)
+  const resumed = await catalog.resumeCatalogSession(closed); await flushPromises()
+  expect(tabs.tab(resumed.adapterSessionId)?.action).toEqual({ kind: 'resume-id', nativeSessionId: ids[0] })
+  expect(catalog.sessions.filter(row => row.nativeSessionId === ids[0])).toHaveLength(1)
 })

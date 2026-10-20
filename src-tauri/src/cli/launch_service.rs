@@ -315,7 +315,9 @@ impl LaunchService {
                 let prepared = self
                     .observer
                     .as_ref()
-                    .filter(|_| snapshot.observer_requested())
+                    .filter(|_| {
+                        snapshot.observer_requested() || snapshot.codex_identity_requested()
+                    })
                     .and_then(|host| {
                         let registry = Arc::downgrade(self.registry());
                         let owner = caller.clone();
@@ -335,7 +337,13 @@ impl LaunchService {
                                 })
                             })
                         });
-                        match host.prepare(
+                        let prepare = if snapshot.codex_identity_requested() {
+                            crate::observer_host::ObserverHost::prepare_codex
+                        } else {
+                            crate::observer_host::ObserverHost::prepare
+                        };
+                        match prepare(
+                            host,
                             crate::observer_registry::ObserverRun {
                                 run_id: request.run_id.clone(),
                                 generation: request.generation,
@@ -361,7 +369,13 @@ impl LaunchService {
                     });
                 let (snapshot, observer) = match prepared {
                     Some(prepared) => {
-                        match snapshot.with_observer(&prepared.environment, &prepared.plugin_dir) {
+                        let overlaid = match &prepared.codex_args {
+                            Some(args) => snapshot.with_codex_identity(&prepared.environment, args),
+                            None => {
+                                snapshot.with_observer(&prepared.environment, &prepared.plugin_dir)
+                            }
+                        };
+                        match overlaid {
                             Ok(next) => (next, Some(prepared.lease)),
                             Err(_) => {
                                 observer_failure = Some("OBSERVER_PREPARE_FAILED");

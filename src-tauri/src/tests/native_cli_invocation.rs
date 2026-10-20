@@ -9,6 +9,78 @@ use std::fs;
 
 const LOCATOR: &str = "11111111-2222-4333-8444-555555555555";
 
+// 身份通道只叠加本次启动数据，用户 flags 顺序、关闭选择与 raw 完整字节保持原义。
+#[test]
+fn CodexIdentity_LaunchFlagsAndEnvironmentIsolation_034() {
+    let mut fixture = Fixture::new(CliKind::Codex, resume(LOCATOR));
+    fixture.profile.observer = Override::Set(false);
+    fixture.profile.default_args = Override::Set(vec!["-c".into(), "hooks.SessionStart=[]".into()]);
+    fixture.request.extra_args = vec!["--model".into(), "user-model".into()];
+    fixture
+        .inherited
+        .insert("CC_DESK_CODEX_CAPABILITY".into(), "parent".into());
+    fixture
+        .inherited
+        .insert("OPENAI_API_KEY".into(), "user-owned".into());
+    let snapshot = fixture.freeze();
+    assert!(snapshot.codex_identity_requested());
+    let observer = ObserverEnv {
+        values: EnvMap::from([
+            ("CC_DESK_CODEX_PORT".into(), "1234".into()),
+            ("CC_DESK_CODEX_RUN".into(), "run-one".into()),
+            ("CC_DESK_CODEX_GENERATION".into(), "7".into()),
+            ("CC_DESK_CODEX_CAPABILITY".into(), "fresh".into()),
+        ]),
+    };
+    let prepared = snapshot
+        .with_codex_identity(
+            &observer,
+            &words(&["-c", "hooks.SessionStart=[{hooks=[]}]"]),
+        )
+        .unwrap();
+    let invocation = build_invocation(&fixture.request, &prepared).unwrap();
+    assert_eq!(
+        invocation.args(),
+        words(&[
+            "-c",
+            "hooks.SessionStart=[{hooks=[]}]",
+            "resume",
+            LOCATOR,
+            "-c",
+            "hooks.SessionStart=[]",
+            "--model",
+            "user-model"
+        ])
+    );
+    assert!(!snapshot
+        .environment()
+        .contains_key(OsStr::new("CC_DESK_CODEX_CAPABILITY")));
+    assert_eq!(
+        invocation.environment()[OsStr::new("CC_DESK_CODEX_CAPABILITY")],
+        "fresh"
+    );
+    assert_eq!(
+        invocation.environment()[OsStr::new("OPENAI_API_KEY")],
+        "user-owned"
+    );
+    let forbidden = ObserverEnv {
+        values: EnvMap::from([("CC_BOX_HOOK_PORT".into(), "1234".into())]),
+    };
+    assert!(snapshot.with_codex_identity(&forbidden, &[]).is_err());
+    fixture.request.extra_args.push("--".into());
+    assert!(!fixture.freeze().codex_identity_requested());
+    for action in [
+        LaunchAction::Raw {
+            argv: vec!["--future".into()],
+        },
+        unarchive(LOCATOR),
+    ] {
+        let raw = Fixture::new(CliKind::Codex, action).freeze();
+        assert!(!raw.codex_identity_requested());
+        assert!(raw.with_codex_identity(&observer, &[]).is_err());
+    }
+}
+
 fn words(values: &[&str]) -> Vec<OsString> {
     values.iter().map(OsString::from).collect()
 }

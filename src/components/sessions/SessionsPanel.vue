@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
 import { useProjectsStateStore } from '@/stores/projectsState'
 import { matchProjectQuery, projectBasename } from '@/utils/displayName'
 import { normalizePath, sameProjectPath } from '@/utils/path'
 import { compareProjectGroups } from '@/utils/projectGroupOrder'
+import { isTextEditingTarget, ownsListKeyboardEvent } from '@/utils/keyboardScope'
 import AppInput from '@/components/ui/AppInput.vue'
 import AppButton from '@/components/ui/AppButton.vue'
 import IconButton from '@/components/ui/IconButton.vue'
@@ -179,12 +180,12 @@ function projectAction(request: ProjectActionRequest) {
   emit('project-action', request)
 }
 function onTreeKeydown(event: KeyboardEvent) {
-  if (!props.active || event.defaultPrevented || event.isComposing || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey
-    || archivedOpen.value || document.querySelector('[role="dialog"][aria-modal="true"]')) return
+  if (!props.active || !ownsListKeyboardEvent(event, panel.value) || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey
+    || archivedOpen.value) return
   const target = event.target instanceof HTMLElement ? event.target : null
   if (!target || target.closest('[role="menu"]')) return
   const search = target.matches('.search-input')
-  if (!search && target.closest('input, textarea, select, [contenteditable="true"], button')) return
+  if (!search && (isTextEditingTarget(target) || target.closest('button'))) return
   const rows = [...(panel.value?.querySelectorAll<HTMLElement>('.panel-content .project-row, .panel-content [data-session-row]') ?? [])]
     .filter(element => {
       // 折叠组保留常驻行；方向键只能落在可见列表中的行。
@@ -204,15 +205,16 @@ function onTreeKeydown(event: KeyboardEvent) {
   if (rows[next]) { event.preventDefault(); event.stopPropagation(); rows[next].focus(); rows[next].scrollIntoView?.({ block: 'nearest' }) }
 }
 function onKeydown(event: KeyboardEvent) {
-  if (!props.active || event.defaultPrevented || archivedOpen.value) return
-  if (event.key === 'Escape') { quickSwitch.value = false; emit('close') }
+  if (!props.active || !ownsListKeyboardEvent(event, panel.value) || archivedOpen.value || event.repeat
+    || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return
+  const target = event.target instanceof Element ? event.target : null
+  if (target?.closest('[role="menu"]') || isTextEditingTarget(target) && !target?.matches('.search-input')) return
+  if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); quickSwitch.value = false; emit('close') }
 }
-onMounted(() => { window.addEventListener('keydown', onKeydown) })
-onUnmounted(() => { window.removeEventListener('keydown', onKeydown) })
 </script>
 
 <template>
-  <div ref="panel" class="sessions-panel" @keydown.capture="onTreeKeydown">
+  <div ref="panel" class="sessions-panel" @keydown.capture="onTreeKeydown" @keydown="onKeydown">
     <PanelHeader :title="t('sessions')" @close="emit('close')">
       <template #title-trailing><slot name="title-trailing" /></template>
       <template #actions>

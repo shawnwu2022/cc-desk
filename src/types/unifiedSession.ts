@@ -110,6 +110,8 @@ export interface UnifiedSession {
   /** Allowlisted preflight code only; never raw errors or configuration values. */
   preparationIssueCode?: string | null
   renameState?: SessionRenameState
+  /** adapter 根据当前精确来源投影的展示能力；执行时仍重新核验授权与身份。 */
+  renameAvailable?: boolean
   /** 仅标明编辑目标；不能证明当前终端仍停留在恢复来源会话。 */
   renameTarget?: 'resume-source' | 'history-record'
 }

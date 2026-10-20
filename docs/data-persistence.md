@@ -73,6 +73,19 @@ Important separation rules:
 
 ## Compatible application preferences
 
+CLI support is a GUI-only preference in localStorage `cc-desk-cli-support-v1`.
+New installations enable Claude Code and disable Codex CLI. Missing or invalid
+fields fall back independently to those defaults; saved booleans, including both
+tools disabled, are retained. Loading does not rewrite this preference. It has no
+backend AppConfig counterpart or separate reset command.
+
+Claude launch-configuration `observer` defaults to enabled when missing or
+`inherit`, matching the new-configuration editor and safe-template creation.
+Explicit `set(false)` and `unset` stay disabled; loading, editing, copying and
+refreshing never migrate saved overrides. There is no observer reset command;
+choosing `inherit` explicitly restores the default. Codex and Shell do not receive
+the Claude observer overlay.
+
 `config.json` retains old/future keys through the existing raw incremental writer.
 Optional read DTO fields add GUI mode/density/sidebar width/startup destination/default
 CLI, terminal font/line-height/cursor/renderer, and configurable shortcut bindings.

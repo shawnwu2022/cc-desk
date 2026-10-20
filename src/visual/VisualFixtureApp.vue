@@ -26,6 +26,7 @@ import { useCliProfilesStore } from '@/stores/cliProfiles'
 import { useSidebarStore } from '@/stores/sidebar'
 import { useProjectResourcesStore } from '@/stores/projectResources'
 import { useNewSessionDraftStore } from '@/stores/newSessionDraft'
+import { useCliSupportStore } from '@/stores/cliSupport'
 import { fixtureSessions, fixtureProfiles, fixtureResources, longProjectName, projectPaths } from './fixtures'
 import { blockedHostCalls } from './tauriStub'
 import { installHistoryFixture } from './historyFixture'
@@ -39,6 +40,9 @@ if (scenario === 'historical-versions') onBeforeUnmount(installHistoryFixture(pa
 const { locale, t } = useI18n()
 locale.value = parameters.get('locale') === 'zh' ? 'zh' : 'en'
 const app = useAppStore(), shell = useShellStore(), catalog = useUnifiedSessionsStore()
+// 合成证据始终展示两类 CLI，不受新用户默认开关或先前场景偏好影响。
+const cliSupport = useCliSupportStore()
+cliSupport.setCliEnabled('claude', true); cliSupport.setCliEnabled('codex', true)
 const metadata = useProjectsStateStore(), profiles = useCliProfilesStore(), sidebar = useSidebarStore()
 app.theme = parameters.get('gui') === 'dark' ? 'dark' : 'light'
 app.terminalTheme = resolveTerminalThemeId(parameters.get('terminal') ?? 'cc-box-dark', app.theme)

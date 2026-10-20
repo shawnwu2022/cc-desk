@@ -15,7 +15,7 @@ import type { SessionMenuAction, UnifiedSession } from '@/types/unifiedSession'
 const body = new DOMWrapper(document.body)
 const now = new Date(2026, 8, 30, 9, 0).getTime()
 const base: UnifiedSession = {
-  id: 'catalog-codex-1', projectKey: '/work/game', projectPath: '/work/game',
+  id: 'catalog-codex-1', renameAvailable: true, projectKey: '/work/game', projectPath: '/work/game',
   cli: 'codex', runtime: 'native-cli', title: 'Fix a very long login title',
   processState: 'running', attentionState: 'none', lastActivityAt: now - 6 * 60_000,
   archived: false, opened: true, resumable: true, adapterSessionId: 'run-1', nativeSessionId: 'native-1',
@@ -41,9 +41,49 @@ function row(session = base, extra: Record<string, unknown> = {}) {
   mounted.push(wrapper)
   return wrapper
 }
+async function rowKey(wrapper: VueWrapper, options: Record<string, unknown>) {
+  ;(wrapper.element as HTMLElement).focus()
+  await wrapper.trigger('keydown', options)
+}
 function menuIds() {
   return Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]'), (item) => item.dataset.itemId)
 }
+
+// 键盘归属来自真实焦点；不支持的动作不得提前截断终端或编辑控件的事件。
+it.each(['unfocused', 'unavailable', 'unselected', 'input', 'textarea', 'editable', 'modal', 'composition'])('Row_RenameFocusAdmission_050 %s', async reason => {
+  const wrapper = row({ ...base, renameAvailable: reason !== 'unavailable' }, { selected: reason !== 'unselected' })
+  const element = wrapper.element as HTMLElement
+  element.focus()
+  let target = element
+  if (reason === 'unfocused') {
+    const terminal = document.createElement('textarea'); terminal.className = 'xterm-helper-textarea'
+    document.body.append(terminal); terminal.focus()
+  } else if (['input', 'textarea', 'editable'].includes(reason)) {
+    target = document.createElement(reason === 'editable' ? 'span' : reason)
+    if (reason === 'editable') { target.setAttribute('contenteditable', ''); target.tabIndex = 0 }
+    element.append(target); target.focus()
+  } else if (reason === 'modal') {
+    const dialog = document.createElement('div'); dialog.setAttribute('role', 'dialog'); dialog.setAttribute('aria-modal', 'true'); document.body.append(dialog)
+  }
+  const event = new KeyboardEvent('keydown', { key: 'F2', code: 'F2', bubbles: true, cancelable: true, isComposing: reason === 'composition' })
+  target.dispatchEvent(event); await nextTick()
+  expect(wrapper.emitted('menu-action')).toBeUndefined()
+  expect(event.defaultPrevented).toBe(false)
+})
+
+it('Row_RenameFocusSwitchAndSingleDispatch_051', async () => {
+  const wrapper = row(base, { selected: true }), element = wrapper.element as HTMLElement
+  const terminal = document.createElement('textarea'); terminal.className = 'xterm-helper-textarea'; document.body.append(terminal)
+  for (const target of [terminal, element, terminal, element]) {
+    target.focus(); target.dispatchEvent(new KeyboardEvent('keydown', { key: 'F2', code: 'F2', bubbles: true, cancelable: true }))
+    await nextTick()
+  }
+  expect(wrapper.emitted('menu-action')).toEqual([[base.id, 'rename'], [base.id, 'rename']])
+  const repeated = new KeyboardEvent('keydown', { key: 'F2', code: 'F2', bubbles: true, cancelable: true, repeat: true })
+  element.dispatchEvent(repeated)
+  expect(repeated.defaultPrevented).toBe(false)
+  expect(wrapper.emitted('menu-action')).toHaveLength(2)
+})
 
 it.each(['en', 'zh'] as const)('Row_ResumeSourceRenameNamesItsTarget_049 %s', async locale => {
   i18n.global.locale.value = locale
@@ -133,8 +173,8 @@ describe('Unified SessionItem', () => {
     wrapper.element.dispatchEvent(new MouseEvent('click', { detail: 2, bubbles: true }))
     wrapper.element.dispatchEvent(new MouseEvent('dblclick', { detail: 2, bubbles: true }))
     await nextTick()
-    await wrapper.trigger('keydown', { key: 'Enter' })
-    await wrapper.trigger('keydown', { key: ' ' })
+    await rowKey(wrapper, { key: 'Enter' })
+    await rowKey(wrapper, { key: ' ' })
     expect(wrapper.emitted('activate')).toBeUndefined()
     expect(wrapper.emitted('primary-action')).toEqual([[base.id, 'resume'], [base.id, 'resume'], [base.id, 'resume']])
     expect(wrapper.find('[data-session-launch]').exists()).toBe(false)
@@ -147,10 +187,10 @@ describe('Unified SessionItem', () => {
   it('Row_ResumePendingAndInactive_040', async () => {
     const wrapper = row({ ...base, opened: false, processState: 'stopped', resumePending: true })
     expect(wrapper.attributes('aria-busy')).toBe('true')
-    await wrapper.trigger('click'); await wrapper.trigger('keydown', { key: 'Enter' })
+    await wrapper.trigger('click'); await rowKey(wrapper, { key: 'Enter' })
     expect(wrapper.emitted('primary-action')).toBeUndefined()
     await wrapper.setProps({ session: { ...base, opened: false, processState: 'stopped' }, surfaceActive: false })
-    await wrapper.trigger('click'); await wrapper.trigger('keydown', { key: ' ' })
+    await wrapper.trigger('click'); await rowKey(wrapper, { key: ' ' })
     expect(wrapper.emitted('primary-action')).toBeUndefined()
   })
 
@@ -185,7 +225,7 @@ describe('Unified SessionItem', () => {
       await button.trigger('click')
       expect(wrapper.emitted('primary-action')).toEqual([[base.id, 'close']])
       expect(wrapper.emitted('activate')).toBeUndefined()
-      await wrapper.trigger('keydown', { key: 'F10', shiftKey: true })
+      await rowKey(wrapper, { key: 'F10', shiftKey: true })
       expect(menuIds()).not.toContain('close')
       expect(menuIds()).not.toContain('stop')
       if (processState === 'running') expect(menuIds()).not.toContain('archive')
@@ -273,8 +313,8 @@ describe('Unified SessionItem', () => {
     expect(wrapper.classes('active')).toBe(true)
     expect(wrapper.attributes('aria-selected')).toBe('true')
     await wrapper.trigger('click')
-    await wrapper.trigger('keydown', { key: 'Enter' })
-    await wrapper.trigger('keydown', { key: ' ' })
+    await rowKey(wrapper, { key: 'Enter' })
+    await rowKey(wrapper, { key: ' ' })
     expect(wrapper.emitted('activate')).toEqual([[base.id], [base.id], [base.id]])
     await wrapper.get('.session-overflow-trigger button').trigger('click')
     expect(wrapper.emitted('activate')).toHaveLength(3)
@@ -283,7 +323,7 @@ describe('Unified SessionItem', () => {
   // F2 在标题原列编辑，保存仅提交显示名称，不触发激活或进程动作。
   it('Row_F2RenameCommit_012', async () => {
     const wrapper = row(base, { selected: true })
-    await wrapper.trigger('keydown', { key: 'F2' })
+    await rowKey(wrapper, { key: 'F2' })
     expect(wrapper.emitted('menu-action')?.slice(-1)[0]).toEqual([base.id, 'rename'])
     await wrapper.setProps({ session: { ...base, renameState: 'editing' } })
     await nextTick()
@@ -304,7 +344,7 @@ describe('Unified SessionItem', () => {
   // Escape 取消一次；空名与控制字符不保存；保存按钮点击不会被 input blur 抢先取消。
   it('Row_RenameCancelAndSaveButton_013', async () => {
     const wrapper = row(base, { selected: true })
-    await wrapper.trigger('keydown', { key: 'F2' })
+    await rowKey(wrapper, { key: 'F2' })
     expect(wrapper.emitted('menu-action')?.slice(-1)[0]).toEqual([base.id, 'rename'])
     await wrapper.setProps({ session: { ...base, renameState: 'editing' } })
     await nextTick()
@@ -313,7 +353,7 @@ describe('Unified SessionItem', () => {
     expect(wrapper.emitted('rename-cancel')).toEqual([[base.id]])
     await wrapper.setProps({ session: { ...base, renameState: 'idle' } })
     expect(wrapper.emitted('rename-commit')).toBeUndefined()
-    await wrapper.trigger('keydown', { key: 'F2' })
+    await rowKey(wrapper, { key: 'F2' })
     expect(wrapper.emitted('menu-action')?.slice(-1)[0]).toEqual([base.id, 'rename'])
     await wrapper.setProps({ session: { ...base, renameState: 'editing' } })
     await nextTick()
@@ -336,7 +376,7 @@ describe('Unified SessionItem', () => {
     expect(wrapper.get('input').attributes('disabled')).toBeDefined()
     expect(wrapper.get('.session-primary-action button').attributes('disabled')).toBeDefined()
     await wrapper.setProps({ session: { ...base, renameState: 'idle' } })
-    await wrapper.trigger('keydown', { key: 'F2' })
+    await rowKey(wrapper, { key: 'F2' })
     expect(wrapper.emitted('menu-action')?.slice(-1)[0]).toEqual([base.id, 'rename'])
     await wrapper.setProps({ session: { ...base, renameState: 'editing' } })
     await nextTick()
@@ -370,7 +410,7 @@ describe('Unified SessionItem', () => {
     expect(wrapper.emitted('menu-action')).toEqual([[base.id, 'copy-session-id']])
     expect(wrapper.emitted('activate')).toBeUndefined()
     expect(document.querySelector('[role="menu"]')).toBeNull()
-    await wrapper.trigger('keydown', { key: 'F10', shiftKey: true })
+    await rowKey(wrapper, { key: 'F10', shiftKey: true })
     await nextTick()
     expect(menuIds()).toEqual(overflowIds)
   })
@@ -400,7 +440,7 @@ describe('Unified SessionItem', () => {
     const wrapper = row(base, { menuActionVisibility: { rename: true } })
     await wrapper.trigger('contextmenu')
     expect(menuIds()).not.toContain('rename')
-    await wrapper.trigger('keydown', { key: 'F2' })
+    await rowKey(wrapper, { key: 'F2' })
     expect(wrapper.emitted('menu-action')).toBeUndefined()
     await wrapper.setProps({ selected: true })
     expect(menuIds()).toContain('rename')
@@ -577,6 +617,7 @@ describe('SessionList unified boundary', () => {
     mounted.push(wrapper)
     const rows = wrapper.findAllComponents(SessionItem)
     expect(rows).toHaveLength(2)
+    ;(rows[0].element as HTMLElement).focus()
     await rows[0].trigger('keydown', { key: 'F2' })
     await wrapper.setProps({ sessions: [{ ...base, renameState: 'editing' }, history] })
     await rows[0].get('input').setValue('Renamed session')
@@ -596,10 +637,11 @@ describe('SessionList unified boundary', () => {
 
 // 自定义重命名键也传到同一行编辑器，旧F2不再是绕过用户配置的第二个入口。
 it('Row_ConfiguredRenameShortcut_033', async () => {
-  const wrapper = mount(SessionItem, { props: { session: base, selected: true }, global: { plugins: [i18n], provide: { [Symbol.for('cc-desk.rename-shortcut')]: computed(() => 'Mod+KeyK') } } })
+  const wrapper = mount(SessionItem, { attachTo: document.body, props: { session: base, selected: true }, global: { plugins: [i18n], provide: { [Symbol.for('cc-desk.rename-shortcut')]: computed(() => 'Mod+KeyK') } } })
   mounted.push(wrapper)
-  await wrapper.trigger('keydown', { key: 'F2', code: 'F2' }); expect(wrapper.find('input').exists()).toBe(false)
-  await wrapper.trigger('keydown', { key: 'k', code: 'KeyK', ctrlKey: true })
+  ;(wrapper.element as HTMLElement).focus()
+  await rowKey(wrapper, { key: 'F2', code: 'F2' }); expect(wrapper.find('input').exists()).toBe(false)
+  await rowKey(wrapper, { key: 'k', code: 'KeyK', ctrlKey: true })
   expect(wrapper.emitted('menu-action')).toEqual([[base.id, 'rename']])
   expect(wrapper.find('input').exists()).toBe(false)
   await wrapper.setProps({ session: { ...base, renameState: 'editing' } })
@@ -728,4 +770,16 @@ it('Row_DragSuppressedWhileRenaming_061', async () => {
   Object.defineProperties(event, { pointerId: { value: 1 }, isPrimary: { value: true }, pointerType: { value: 'mouse' } })
   wrapper.get('input').element.dispatchEvent(event)
   expect(event.defaultPrevented).toBe(false)
+})
+
+// 能力失效时菜单与快捷键同时撤销，旧编辑草稿不能提交。
+it('Rename_CapabilityRevoked_062', async () => {
+  const wrapper = row(base, { selected: true })
+  await wrapper.setProps({ session: { ...base, renameState: 'editing' } })
+  expect(wrapper.find('input.rename-input').exists()).toBe(true)
+  await wrapper.setProps({ session: { ...base, renameState: 'editing', renameAvailable: false } })
+  expect(wrapper.find('input.rename-input').exists()).toBe(false)
+  await rowKey(wrapper, { key: 'F2' })
+  expect(wrapper.emitted('menu-action')).toBeUndefined()
+  expect(selectSessionMenuActions({ ...base, renameAvailable: false }).some(action => action.id === 'rename')).toBe(false)
 })

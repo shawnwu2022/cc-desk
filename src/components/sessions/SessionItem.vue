@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { inject } from 'vue'
 import { SESSION_INTERACTION_OWNER } from '@/session/sessionInteraction'
+import { SESSION_HISTORY_WARNING_VISIBLE } from '@/utils/workspaceSourceWarnings'
 import { APP_RENAME_SHORTCUT, captureShortcut } from '@/config/appShortcuts'
+import { isTextEditingTarget, ownsListKeyboardEvent } from '@/utils/keyboardScope'
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppInput from '@/components/ui/AppInput.vue'
@@ -9,7 +11,7 @@ import AppTooltip from '@/components/ui/AppTooltip.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import SessionAppIcon from './SessionAppIcon.vue'
 import SessionOverflowMenu from './SessionOverflowMenu.vue'
-import { deriveSessionVisualState, makeSessionRenameOwnerKey, selectSessionMenuActions, selectSessionArchiveAction, selectSessionPrimaryAction, selectSessionObservationNotice, sessionActionLabelKey } from '@/utils/sessionPresentation'
+import { canRenameSession, deriveSessionVisualState, makeSessionRenameOwnerKey, selectSessionMenuActions, selectSessionArchiveAction, selectSessionPrimaryAction, selectSessionObservationNotice, sessionActionLabelKey } from '@/utils/sessionPresentation'
 import { formatRelativeActivity, useRelativeActivityClock } from '@/utils/relativeTime'
 import { buildSessionDragPayload } from '@/utils/sessionReference'
 import { startSessionReferenceDrag } from '@/session/sessionReferenceDrag'
@@ -33,6 +35,7 @@ const emit = defineEmits<{
 }>()
 const { t, locale } = useI18n()
 const captureInteractionOwner = inject(SESSION_INTERACTION_OWNER, null)
+const historyWarningVisible = inject(SESSION_HISTORY_WARNING_VISIBLE, (session: UnifiedSession) => Boolean(session.historyReadFailure))
 const renameShortcut = inject(APP_RENAME_SHORTCUT, computed(() => 'F2'))
 const now = useRelativeActivityClock()
 const row = ref<HTMLElement | null>(null)
@@ -44,7 +47,7 @@ const menuOpen = ref(false)
 let firstClick: { session: UnifiedSession; owner: string; owns: (() => boolean) | null; selected: boolean } | null = null
 const menuAnchor = ref({ x: 8, y: 8 })
 let cancelReferenceDrag: (() => void) | undefined
-const isRenaming = computed(() => (props.selected || props.session.opened === false) && (localRename.value || props.session.renameState === 'editing' || (props.selected && props.session.renameState === 'saving')))
+const isRenaming = computed(() => (props.selected || props.session.opened === false) && (canRenameSession(props.session) || props.session.renameState === 'saving') && (localRename.value || props.session.renameState === 'editing' || (props.selected && props.session.renameState === 'saving')))
 const isSaving = computed(() => props.session.renameState === 'saving')
 const visualState = computed(() => deriveSessionVisualState(props.session, props.session.opened === true))
 const observationNotice = computed(() => selectSessionObservationNotice(props.session))
@@ -52,7 +55,7 @@ const receiptId = computed(() => {
   const notice = props.session.observationNotice?.unreadReplyEnd
   return notice ? JSON.stringify([notice.runId, notice.generation, notice.eventId]) : undefined
 })
-const canRename = computed(() => (props.selected || props.session.opened === false) && !props.session.archived && !props.session.preparationState && props.menuActionVisibility?.rename !== false)
+const canRename = computed(() => (props.selected || props.session.opened === false) && canRenameSession(props.session) && props.menuActionVisibility?.rename !== false)
 const actions = computed(() => selectSessionMenuActions(props.session, { ...props.menuActionVisibility, rename: canRename.value }))
 const archive = computed(() => selectSessionArchiveAction(props.session, props.menuActionVisibility))
 const requestedPrimary = computed(() => isRenaming.value ? 'save-rename'
@@ -170,9 +173,13 @@ function openContext(event: MouseEvent) {
   menuOpen.value = true
 }
 function onKeydown(event: KeyboardEvent) {
-  if (!props.surfaceActive) return
-  if (event.target instanceof HTMLInputElement) return
-  if (renameShortcut.value && captureShortcut(event) === renameShortcut.value) { event.preventDefault(); event.stopPropagation(); startRename() }
+  if (!props.surfaceActive || !ownsListKeyboardEvent(event, row.value) || event.repeat
+    || isTextEditingTarget(event.target) || isTextEditingTarget(document.activeElement)
+    || event.target instanceof Element && event.target.closest('[role="menu"]')) return
+  if (renameShortcut.value && captureShortcut(event) === renameShortcut.value) {
+    if (!canRename.value || isSaving.value || isRenaming.value) return
+    event.preventDefault(); event.stopPropagation(); startRename()
+  }
   else if (event.key === 'ContextMenu' || (event.key === 'F10' && event.shiftKey)) {
     if (!actions.value.length || isRenaming.value) return
     event.preventDefault(); event.stopPropagation()
@@ -216,7 +223,7 @@ function preventReferenceNativeDrag(event: DragEvent) {
       <AppTooltip v-else class="session-title-tooltip" :text="session.title">
         <span class="session-name" tabindex="0">{{ session.title }}</span>
       </AppTooltip>
-      <AppTooltip v-if="session.historyReadFailure" :text="t('historySessionReadIssue', { code: session.historyReadFailure })">
+      <AppTooltip v-if="historyWarningVisible(session)" :text="t('historySessionReadIssue', { code: session.historyReadFailure })">
         <span data-session-history-issue tabindex="0" :aria-label="t('historySessionReadIssue', { code: session.historyReadFailure })">!</span>
       </AppTooltip>
     </div>

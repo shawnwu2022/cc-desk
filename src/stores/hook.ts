@@ -4,7 +4,7 @@ import type { HookEventPayload, HookEventDetail } from '@/types/hook'
 import type { CliKind } from '@/types/cli'
 import { onHookEvent } from '@/api/tauri'
 import { onNativeObservation } from '@/api/observer'
-import { fromClaudeHook } from '@/integrations/claudeObserver'
+import { fromClaudeHook, fromCodexHook } from '@/integrations/claudeObserver'
 import { fromNativeObservationNotice } from '@/integrations/nativeObservationNotice'
 import type { NativeObservationNotice } from '@/types/nativeObservationNotice'
 import { createObservationRegistry, type ObservationEvent, type ObservationState, type RunRef } from '@/integrations/registry'
@@ -13,7 +13,7 @@ export type HookEventType = HookEventDetail['type']
 export type HookEventHandler = (payload: HookEventPayload) => void
 export type ObservationHandler = (event: ObservationEvent, state: ObservationState) => void
 export type ObservationNoticeHandler = (notice: NativeObservationNotice) => void
-export type ObservationIdentityHandler = (sessionId: string) => void
+export type ObservationIdentityHandler = (sessionId: string, eventType?: HookEventDetail['type']) => void
 export interface ObservationTarget extends RunRef { cli: CliKind; enabled: boolean }
 
 /** 订阅后允许首个观察事件到达的窗口；超时按 unavailable 处理。 */
@@ -24,7 +24,7 @@ const TURN_IDLE_TIMEOUT_MS = 90_000
 export const useHookStore = defineStore('hook', () => {
   const subscribers = new Map<HookEventType, Set<HookEventHandler>>()
   const observations = createObservationRegistry()
-  const targets = new Map<string, { run: RunRef; handlers: Set<ObservationHandler>; notices: Set<ObservationNoticeHandler>; identities: Set<ObservationIdentityHandler>; seenNotices: Set<string>; timer: ReturnType<typeof setTimeout> }>()
+  const targets = new Map<string, { run: RunRef; cli: CliKind; handlers: Set<ObservationHandler>; notices: Set<ObservationNoticeHandler>; identities: Set<ObservationIdentityHandler>; seenNotices: Set<string>; timer: ReturnType<typeof setTimeout> }>()
   const key = (run: RunRef) => JSON.stringify([run.runId, run.generation])
   let disposed = false
   let legacyPending: Promise<void> | null = null
@@ -71,17 +71,21 @@ export const useHookStore = defineStore('hook', () => {
   }
   function dispatchNative(payload: HookEventPayload) {
     if (disposed) return
-    const event = fromClaudeHook(payload)
+    const event = fromClaudeHook(payload) ?? fromCodexHook(payload)
     if (!event) return
     const target = targets.get(key(event))
-    if (!target) return
+    if (!target || (payload.observerSource === 'codex-hook' ? target.cli !== 'codex' : target.cli !== 'claude')) return
+    if (target.cli === 'codex') {
+      if (target.seenNotices.has(event.eventId!) || target.seenNotices.size >= 1024) return
+      target.seenNotices.add(event.eventId!)
+    }
     clearTimeout(target.timer)
     publish(event)
     // 认证 envelope 的 CLI 会话身份：仅在有订阅者时回填，不参与活动/notice 去重。
     const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId.trim() : ''
     if (sessionId) for (const handler of [...target.identities]) {
       if (!target.identities.has(handler) || targets.get(key(event)) !== target) continue
-      try { handler(sessionId) } catch { /* optional observer consumers are isolated */ }
+      try { if (target.cli === 'codex') handler(sessionId, payload.detail.type); else handler(sessionId) } catch { /* optional observer consumers are isolated */ }
     }
     // 每个已接受的事件重设粗粒度静默窗口；空闲会话因此回落而不是停留在过期活动。
     armTimer(target, TURN_IDLE_TIMEOUT_MS)
@@ -104,15 +108,16 @@ export const useHookStore = defineStore('hook', () => {
     }).finally(() => { nativePending = null })
   }
   function subscribeObservation(target: ObservationTarget, handler: ObservationHandler, options: { onNotice?: ObservationNoticeHandler; onIdentity?: ObservationIdentityHandler } = {}): () => void {
-    if (disposed || target.cli !== 'claude' || !target.enabled) return () => {}
+    if (disposed || !['claude', 'codex'].includes(target.cli) || !target.enabled) return () => {}
     const noticeHandler = options.onNotice
     const identityHandler = options.onIdentity
     const run = { runId: target.runId, generation: target.generation }
     let entry = targets.get(key(run))
+    if (entry && entry.cli !== target.cli) return () => {}
     if (!entry) {
       const reducer = observations.attach(run)
       reducer.accept({ kind: 'connecting', ...run })
-      entry = { run, handlers: new Set(), notices: new Set(), identities: new Set(), seenNotices: new Set(), timer: setTimeout(() => {}, 0) }
+      entry = { run, cli: target.cli, handlers: new Set(), notices: new Set(), identities: new Set(), seenNotices: new Set(), timer: setTimeout(() => {}, 0) }
       armTimer(entry, CONNECT_TIMEOUT_MS)
       targets.set(key(run), entry)
     }

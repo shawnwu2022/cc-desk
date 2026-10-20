@@ -3,10 +3,10 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { open } from '@tauri-apps/plugin-shell'
 import { useI18n } from 'vue-i18n'
-import { checkForUpdates, getUpdaterSettings, saveUpdaterSettings, testUpdaterProxy, installDesktopUpdate } from '@/api/tauri'
+import { getUpdaterSettings, saveUpdaterSettings, testUpdaterProxy, installDesktopUpdate } from '@/api/tauri'
 import { isOrdinaryUpdateEligible } from '@/utils/updatePolicy'
 import { updateFailure } from '@/utils/updateErrors'
-import { useSidebarStore } from '@/stores/sidebar'
+import { releaseNotesForLocale } from '@/utils/releaseNotes'
 import { useUpdateStore } from '@/stores/update'
 import { useOwnedSessionCounts } from '@/composables/useOwnedSessionCounts'
 import AppButton from '@/components/ui/AppButton.vue'
@@ -15,8 +15,9 @@ import AppDialog from '@/components/ui/AppDialog.vue'
 import InlineNotice from '@/components/ui/InlineNotice.vue'
 import HistoricalVersionsPanel from '@/components/settings/HistoricalVersionsPanel.vue'
 const props = withDefaults(defineProps<{ active?: boolean }>(), { active: true })
-const { t } = useI18n(), sidebar = useSidebarStore(), updates = useUpdateStore()
-const counts = useOwnedSessionCounts(), checking = ref(false), error = ref<ReturnType<typeof updateFailure> | null>(null), reviewing = ref(false)
+const { t, locale } = useI18n(), updates = useUpdateStore()
+const releaseNotes = computed(() => releaseNotesForLocale(updates.updateInfo, locale.value))
+const counts = useOwnedSessionCounts(), checking = computed(() => updates.checking), error = ref<ReturnType<typeof updateFailure> | null>(null), reviewing = ref(false)
 const proxy = ref(''), savedProxy = ref(''), savingProxy = ref(false), loadingProxy = ref(true)
 const proxyUsername = ref(''), proxyPassword = ref(''), testingProxy = ref(false)
 const originalUserinfo = ref('')
@@ -54,12 +55,13 @@ const proxyValue = computed(() => {
 const currentVersion = __APP_VERSION__
 const installing = computed(() => ['downloading', 'installing'].includes(updates.downloadState))
 const eligible = computed(() => isOrdinaryUpdateEligible(updates.updateInfo))
+const eligibilityHint = computed(() => updates.hasUpdate && updates.updateInfo?.version === updates.availableVersion ? 'updateCheckBeforeInstall' : 'updateSourceUnverified')
 const sessionsBusy = computed(() => counts.value.running + counts.value.starting + counts.value.unknown > 0)
-const channel = computed(() => eligible.value ? 'stable' : ['candidate', 'test-only'].includes(updates.updateInfo?.channel ?? '') ? updates.updateInfo!.channel! : 'unverified')
+const channel = computed(() => eligible.value || updates.hasUpdate && updates.updateInfo?.version === updates.availableVersion ? 'stable' : ['candidate', 'test-only'].includes(updates.updateInfo?.channel ?? '') ? updates.updateInfo!.channel! : 'unverified')
 const channelLabels = { stable: 'updateStable', candidate: 'updateCandidate', 'test-only': 'updateTestOnly', unverified: 'updateUnverified' }
 let owner = 0, proxyOwner = 0, disposed = false, unlisten: UnlistenFn | undefined
 function invalidateProxy() { ++proxyOwner; proxyResult.value = null }
-function invalidate() { ++owner; checking.value = false; reviewing.value = false; error.value = null; invalidateProxy() }
+function invalidate() { ++owner; reviewing.value = false; error.value = null; invalidateProxy() }
 watch([proxy, proxyUsername, proxyPassword, originalUserinfo], invalidateProxy, { flush: 'sync' })
 watch(() => props.active, active => { if (!active) invalidate() }, { flush: 'sync' })
 onBeforeUnmount(() => { disposed = true; unlisten?.(); invalidate() })
@@ -85,12 +87,13 @@ async function saveProxy() {
   if (!props.active || loadingProxy.value || checking.value || savingProxy.value || installing.value || testingProxy.value) return
   const version = owner, value = proxyValue.value
   savingProxy.value = true; error.value = null
-  updates.setUpdateInfo(null); sidebar.setUpdateInfo(null)
+  const resumeChecks = updates.suspendChecks()
+  updates.setUpdateInfo(null)
   try {
     await saveUpdaterSettings(value || null)
     if (!disposed && owner === version) savedProxy.value = value
   } catch (cause) { if (!disposed && owner === version && props.active) error.value = updateFailure(cause) }
-  finally { savingProxy.value = false }
+  finally { savingProxy.value = false; resumeChecks() }
 }
 async function testProxy() {
   if (!props.active || loadingProxy.value || checking.value || savingProxy.value || installing.value || testingProxy.value) return
@@ -107,15 +110,10 @@ async function testProxy() {
 }
 async function checkUpdate() {
   if (!props.active || loadingProxy.value || checking.value || savingProxy.value || installing.value || testingProxy.value) return
-  const version = ++owner; checking.value = true; error.value = null
-  updates.setUpdateInfo(null)
-  sidebar.setUpdateInfo(null)
+  const version = ++owner; error.value = null
   try {
-    const info = await checkForUpdates()
-    if (owner !== version || !props.active) return
-    updates.setUpdateInfo(info); sidebar.setUpdateInfo(info)
+    await updates.checkForUpdate(() => !disposed && owner === version && props.active)
   } catch (cause) { if (owner === version && props.active) error.value = updateFailure(cause) }
-  finally { if (owner === version) checking.value = false }
 }
 function reviewInstall() { if (props.active && !installing.value && updates.updateInfo?.hasUpdate) reviewing.value = true }
 async function installUpdate() {
@@ -126,8 +124,7 @@ async function installUpdate() {
   catch (cause) {
     updates.setDownloadState('error')
     if (updates.updateInfo?.admissionId === info.admissionId) {
-      const revoked = { ...info, admissionId: null, installEligible: false }
-      updates.setUpdateInfo(revoked); sidebar.setUpdateInfo(revoked)
+      updates.revokeInstallAdmission()
     }
     if (!disposed && owner === version && props.active) error.value = updateFailure(cause)
   }
@@ -167,8 +164,8 @@ async function manualDownload() {
     <div v-if="updates.updateInfo?.hasUpdate" class="package-summary" data-update-package>
       <strong>{{ t('updateObservedPackage', { version: updates.updateInfo.version }) }}</strong>
       <span data-update-channel>{{ t(channelLabels[channel]) }}</span>
-      <InlineNotice v-if="!eligible" kind="warning" :message="t('updateSourceUnverified')" />
-      <p v-if="updates.updateInfo.releaseNotes" class="release-notes">{{ updates.updateInfo.releaseNotes }}</p>
+      <InlineNotice v-if="!eligible" :kind="eligibilityHint === 'updateCheckBeforeInstall' ? 'info' : 'warning'" :message="t(eligibilityHint)" />
+      <p v-if="releaseNotes" class="release-notes">{{ releaseNotes }}</p>
       <AppButton data-update-review :disabled="!active" @click="reviewInstall">{{ t('updateReviewInstallation') }}</AppButton>
     </div>
     <p v-if="installing" role="status">{{ updates.downloadState === 'installing' ? t('updateInstalling') : t('updateDownloading', { percent: updates.downloadProgress.percent }) }}</p>
@@ -180,7 +177,7 @@ async function manualDownload() {
       <p data-update-unknown-count>{{ t('updateUnknownCount', { count: counts.unknown }) }}</p>
       <InlineNotice kind="warning" :message="t('updateInstallImpact')" />
       <InlineNotice v-if="sessionsBusy" :message="t('updateSessionsBusy')" />
-      <InlineNotice v-if="!eligible" :message="t('updateSourceUnverified')" />
+      <InlineNotice v-if="!eligible" :message="t(eligibilityHint)" />
       <template #footer><AppButton :disabled="installing" @click="reviewing = false">{{ t('cancel') }}</AppButton><AppButton data-update-confirm-install data-danger="true" :disabled="!eligible || sessionsBusy || installing || !active" @click="installUpdate">{{ t('updateRestartInstall') }}</AppButton></template>
     </AppDialog>
   </section>
