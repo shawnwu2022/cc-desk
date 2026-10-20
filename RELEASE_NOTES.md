@@ -4,6 +4,19 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
+## [0.23.5]
+
+Fixed
+
+- Restore new and resumed Codex sessions launched through Windows npm command wrappers.
+- Keep automatic Codex titles and a single history entry when using the supported official npm wrapper.
+- Apply launch-configuration changes without restarting CC Desk.
+
+Important
+
+- Codex title synchronization supports the official npm 0.163.0 wrapper at its direct path, with NODE_OPTIONS unset or empty. Other wrappers or Node options can still launch, but title synchronization and history deduplication may be unavailable.
+- Historical-version rollback failures remain under investigation.
+
 ## [0.23.4]
 
 Added

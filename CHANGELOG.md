@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [0.23.5] - 2026-10-20
+
+### Fixed
+
+- Keep optional Codex observation from blocking Windows Cmd launches for new or resumed sessions, while retaining strict original argument and environment validation
+- Forward authenticated Codex hooks outside Cmd CALL for the audited official npm 0.163.0 wrapper, preserving the selected launcher and user arguments; synchronize automatic titles and deduplicate exact native history identities
+- Reload history against updated launch-profile revisions without requiring an application restart, while preserving frozen running attempts and rejecting stale reads
+
+The argv transport supports audited direct wrapper paths with absent/empty NODE_OPTIONS; unsupported wrappers, paths or Node options retain the original launch without identity observation. Local checks passed 172 affected frontend cases, type checking, six Codex-identity Rust cases, strict Clippy and a normal debug binary build. Real Codex 0.163.0 probes covered concurrent TUI answers, automatic title readback, ten history refreshes, close-survivor isolation and exact-ID resume, including a shared-home/shared-project variant; model responses used a local synthetic endpoint. Captured safe history/event metadata also passed frontend projection deduplication. These checks do not establish installed Windows WebView2, account-backed D20, unfiltered native All or installation/return acceptance. Historical-version rollback failures remain unresolved. Publication requires exact merged-main CI, authenticated coverage and three same-run signed updater payloads.
+
 ## [0.23.4] - 2026-10-20
 
 ### Added
