@@ -677,7 +677,14 @@ fn D09_UnarchiveRequest_ValidatesAndConverts_019() {
 fn CodexIdentity_CmdNpmForwardsHooksOutsideCall_047() {
     // CALL仍只接收用户安全参数；TOML由已识别的Node入口转发给原生CLI。
     let mut f = Fixture::new(CliKind::Codex, resume(LOCATOR));
-    let npm = f.root.path().join("中文 空格");
+    // 宿主 TEMP 可能带短名或 junction；成功场景显式选直接路径，别名拒绝仍在下方验证。
+    let canonical_root = fs::canonicalize(f.root.path()).unwrap();
+    let direct_root = canonical_root
+        .to_str()
+        .unwrap()
+        .strip_prefix(r"\\?\")
+        .unwrap();
+    let npm = std::path::Path::new(direct_root).join("中文 空格");
     let package = npm.join("node_modules/@openai/codex");
     fs::create_dir_all(package.join("bin")).unwrap();
     let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -844,7 +851,7 @@ fn CodexIdentity_CmdNpmForwardsHooksOutsideCall_047() {
         !loader.exists(),
         "owned snapshot releases its temporary artifact"
     );
-    let alias = f.root.path().join("npm-junction");
+    let alias = std::path::Path::new(direct_root).join("npm-junction");
     let link = std::process::Command::new(std::env::var_os("COMSPEC").unwrap())
         .args(["/D", "/C", "mklink", "/J"])
         .arg(&alias)
