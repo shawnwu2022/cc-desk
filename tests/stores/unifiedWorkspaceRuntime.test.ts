@@ -8,6 +8,8 @@ import { createI18n } from 'vue-i18n'
 import en from '@/i18n/locales/en'
 import zh from '@/i18n/locales/zh'
 import LaunchConfigurationEditor from '@/components/settings/LaunchConfigurationEditor.vue'
+import GeneralSection from '@/components/settings/sections/GeneralSection.vue'
+import SessionList from '@/components/sessions/SessionList.vue'
 import { useUnifiedWorkspaceRuntime, historyWarningSource } from '@/composables/useUnifiedWorkspaceRuntime'
 import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
 import { captureNativeAttempt, useNativeTabsStore } from '@/stores/nativeTabs'
@@ -1908,53 +1910,120 @@ it('Runtime_SwitchRevokesRowEditor_033', async () => {
 
 // 启动时已停用的 CLI 在启用后必须重新加载历史：catalog.refresh 只读缓存，
 // 组合根对支持开关的 watch 必须触发完整刷新（含历史观察组重装载）。
-it('HistorySupport_ColdEnableReloadsHistory_059', async () => {
-  localStorage.setItem('cc-desk-cli-support-v1', JSON.stringify({ claude: true, codex: false }))
+it.each(['codex', 'opencode'] as const)('HistorySupport_SettingsRefreshListWithoutRetiringOpenRun_099 %s', async cli => {
+  const configured = await io.profiles()
+  io.profiles.mockResolvedValue({ ...configured, profiles: configured.profiles.map((profile: object) => ({ ...profile, cli })) })
+  io.scope.mockResolvedValue({ cli })
+  const { runtime, port } = render()
+  const runtimeOwner = wrappers[wrappers.length - 1]
+  await runtime.refresh(); await flushPromises()
+  const catalog = useUnifiedSessionsStore(), tabs = useNativeTabsStore()
+  const tab = tabs.create({ cli, profileId: 'cx', profileRevision: '7', projectId: 'project', projectPath: '/repo', action: { kind: 'new' } })
+  tabs.applyLaunchStatus(tab.tabId, { instanceId: 'fixture', requestId: tab.requestId, run: { runId: tab.runId, generation: tab.generation }, revision: '1', phase: 'running', failure: null })
+  await flushPromises()
+  const view = mount(defineComponent({ setup: () => () => h('div', [h(GeneralSection), h(SessionList, { sessions: catalog.sessions })]) }),
+    { global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en, zh } })] } })
+  wrappers.push(view)
+  const toggle = view.get(`[data-cli-support=${cli}]`)
+  const openedId = `native-tab:${tab.tabId}`
+  catalog.activeSessionId = openedId
+  expect(view.findAll('[data-session-row]')).toHaveLength(2)
+  await toggle.trigger('click'); await flushPromises()
+  expect(view.findAll('[data-session-row]').map(row => row.attributes('data-session-row'))).toEqual([openedId])
+  expect(captureNativeAttempt(tabs.tab(tab.tabId)!)).toEqual(captureNativeAttempt(tab))
+  expect(tabs.tab(tab.tabId)?.status).toBe('running')
+  expect(catalog.activeSessionId).toBe(openedId)
+  await toggle.trigger('click'); await flushPromises()
+  expect(view.findAll('[data-session-row]')).toHaveLength(2)
+  expect(port.stopNative).not.toHaveBeenCalled()
+  expect(port.stopLegacy).not.toHaveBeenCalled()
+  expect(io.ptyKill).not.toHaveBeenCalled()
+  runtimeOwner.unmount()
+  const rows = catalog.sessions, reads = io.scope.mock.calls.length
+  await toggle.trigger('click'); await flushPromises()
+  await toggle.trigger('click'); await flushPromises()
+  expect(io.scope).toHaveBeenCalledTimes(reads)
+  expect(catalog.sessions).toBe(rows)
+})
+
+it.each(['codex', 'opencode'] as const)('HistorySupport_ColdEnableReloadsHistory_059 %s', async cli => {
+  localStorage.setItem('cc-desk-cli-support-v1', JSON.stringify({ claude: true, codex: false, opencode: false }))
+  const configured = await io.profiles()
+  io.profiles.mockResolvedValue({ ...configured, profiles: configured.profiles.map((profile: object) => ({ ...profile, cli })) })
+  io.scope.mockResolvedValue({ cli })
   const { runtime } = render()
   await runtime.refresh()
   const catalog = useUnifiedSessionsStore()
-  expect(catalog.sessions.filter(row => row.cli === 'codex')).toHaveLength(0)
+  expect(catalog.sessions.filter(row => row.cli === cli)).toHaveLength(0)
   expect(io.read).not.toHaveBeenCalled()
   const { useCliSupportStore } = await import('@/stores/cliSupport')
-  useCliSupportStore().setCliEnabled('codex', true)
-  await vi.waitFor(() => expect(catalog.sessions.some(row => row.cli === 'codex' && row.nativeSessionId === 'history-id')).toBe(true))
+  useCliSupportStore().setCliEnabled(cli, true)
+  await vi.waitFor(() => expect(catalog.sessions.some(row => row.cli === cli && row.nativeSessionId === 'history-id')).toBe(true))
+  useCliSupportStore().setCliEnabled(cli, false)
+  await flushPromises()
+  expect(catalog.sessions.filter(row => row.cli === cli)).toHaveLength(0)
 })
 
 // 工具开关只改变对应来源，不重扫另一个 CLI 或重新验证其折叠 lease。
-it('HistorySupport_CodexToggleDoesNotReloadClaude_086', async () => {
+it.each(['codex', 'opencode'] as const)('HistorySupport_OptionalCliToggleDoesNotReloadClaude_086 %s', async cli => {
   persisted.archivedSessions = { '/repo': ['codex'] }
   useProjectsStateStore().archivedSessions.set('/repo', ['codex'])
   const configured = await io.profiles()
-  io.profiles.mockResolvedValue({ ...configured, profiles: [...configured.profiles, { ...configured.profiles[0], id: 'cl', cli: 'claude' }] })
-  io.scope.mockImplementation(async target => ({ cli: target.profileId === 'cl' ? 'claude' : 'codex', sourceRootKey: 'root', profileId: target.profileId }))
+  io.profiles.mockResolvedValue({ ...configured, profiles: [{ ...configured.profiles[0], cli }, { ...configured.profiles[0], id: 'cl', cli: 'claude' }] })
+  io.scope.mockImplementation(async target => ({ cli: target.profileId === 'cl' ? 'claude' : cli, sourceRootKey: 'root', profileId: target.profileId }))
   io.read.mockImplementation(async query => ({ state: 'ready', items: [{ type: 'session', projectId: 'project', sessionKey: query.source.cli, nativeSessionId: query.source.cli, title: query.source.cli + ' title', cwd: '/repo' }], hasMore: false }))
   const { runtime } = render(); await runtime.refresh(); await flushPromises()
   const before = useUnifiedSessionsStore().sessions.filter(row => row.cli === 'claude')
   const { useCliSupportStore } = await import('@/stores/cliSupport')
   vi.clearAllMocks()
-  useCliSupportStore().setCliEnabled('codex', false); await flushPromises()
+  useCliSupportStore().setCliEnabled(cli, false); await flushPromises()
   expect(io.projects).not.toHaveBeenCalled(); expect(io.profiles).not.toHaveBeenCalled()
   expect(io.scope).not.toHaveBeenCalled(); expect(io.legacyRoot).not.toHaveBeenCalled()
   expect(useUnifiedSessionsStore().sessions.filter(row => row.cli === 'claude')).toEqual(before)
-  useCliSupportStore().setCliEnabled('codex', true); await flushPromises()
+  useCliSupportStore().setCliEnabled(cli, true); await flushPromises()
   expect(io.scope.mock.calls.map(([target]) => target.profileId)).toEqual(['cx'])
   expect(io.legacyRoot).not.toHaveBeenCalled()
-  expect(useUnifiedSessionsStore().sessions.some(row => row.cli === 'codex')).toBe(true)
+  expect(useUnifiedSessionsStore().sessions.some(row => row.cli === cli)).toBe(true)
 })
 
 // 开启尚未返回时再次关闭，旧 scope/read 完成不能复活已停用的历史。
-it('HistorySupport_RapidToggleRejectsLateSource_087', async () => {
-  localStorage.setItem('cc-desk-cli-support-v1',JSON.stringify({ claude:true,codex:false }))
+it.each(['codex', 'opencode'] as const)('HistorySupport_RapidToggleRejectsLateSource_087 %s', async cli => {
+  localStorage.setItem('cc-desk-cli-support-v1',JSON.stringify({ claude:true,codex:false,opencode:false }))
+  const configured = await io.profiles()
+  io.profiles.mockResolvedValue({ ...configured, profiles: configured.profiles.map((profile: object) => ({ ...profile, cli })) })
   const { runtime } = render(); await runtime.refresh(); await flushPromises()
   let release!: (value: unknown) => void
   io.scope.mockImplementation(() => new Promise(resolve => { release = resolve }))
   const { useCliSupportStore } = await import('@/stores/cliSupport')
-  useCliSupportStore().setCliEnabled('codex',true); await flushPromises()
+  useCliSupportStore().setCliEnabled(cli,true); await flushPromises()
   expect(io.scope).toHaveBeenCalledTimes(1)
-  useCliSupportStore().setCliEnabled('codex',false); await flushPromises()
-  release({ cli:'codex',sourceRootKey:'root' }); await flushPromises(); await flushPromises()
-  expect(useUnifiedSessionsStore().sessions.filter(row => row.cli === 'codex')).toEqual([])
+  useCliSupportStore().setCliEnabled(cli,false); await flushPromises()
+  release({ cli,sourceRootKey:'root' }); await flushPromises(); await flushPromises()
+  expect(useUnifiedSessionsStore().sessions.filter(row => row.cli === cli)).toEqual([])
+  expect(useNativeHistoryStore().all().filter(entry => entry.context.cli === cli)).toEqual([])
+  expect(io.read).not.toHaveBeenCalled()
   expect(io.ptyKill).not.toHaveBeenCalled()
+})
+
+it.each(['codex', 'opencode'] as const)('HistorySupport_RapidReenableKeepsLatestSource_100 %s', async cli => {
+  localStorage.setItem('cc-desk-cli-support-v1', JSON.stringify({ claude: true, codex: false, opencode: false }))
+  const configured = await io.profiles()
+  io.profiles.mockResolvedValue({ ...configured, profiles: configured.profiles.map((profile: object) => ({ ...profile, cli })) })
+  const { runtime } = render(); await runtime.refresh(); await flushPromises()
+  let release!: (value: unknown) => void
+  io.scope.mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
+  const { useCliSupportStore } = await import('@/stores/cliSupport')
+  const support = useCliSupportStore()
+  support.setCliEnabled(cli, true); await flushPromises()
+  support.setCliEnabled(cli, false); await flushPromises()
+  io.scope.mockResolvedValue({ cli, sourceRootKey: 'new-root' })
+  support.setCliEnabled(cli, true); await flushPromises()
+  const before = useUnifiedSessionsStore().sessions
+  expect(before.some(row => row.cli === cli)).toBe(true)
+  release({ cli, sourceRootKey: 'old-root' }); await flushPromises(); await flushPromises()
+  expect(useUnifiedSessionsStore().sessions).toBe(before)
+  expect(useNativeHistoryStore().all().filter(entry => entry.context.cli === cli).map(entry => entry.sourceRootKey)).toEqual(['new-root'])
+  expect(io.read).toHaveBeenCalledTimes(1)
 })
 
 // 单个配置读取失败不能吞掉同轮已成功来源和 Legacy 历史的目录发布。

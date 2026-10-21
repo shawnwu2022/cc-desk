@@ -1,6 +1,42 @@
 import { test, expect } from '@playwright/test'
 import { expandFixtureProjects, clearFixtureSetupFocus } from './fixtureActions'
 
+for (const gui of ['light', 'dark']) test(`compact tool support brightness ${gui}`, async ({ page }, testInfo) => {
+  await page.goto(`/__visual__/?scenario=launch-configurations&gui=${gui}&locale=zh`)
+  await expect(page.locator('[data-visual-ready]')).toHaveAttribute('data-visual-ready', 'true')
+  await page.locator('[data-settings-section="general"]').click()
+  const group = page.locator('[data-settings-general] [role="group"]')
+  const buttons = group.locator('[data-cli-support]')
+  await expect(buttons).toHaveCount(3)
+  for (const button of await buttons.all()) {
+    if (await button.getAttribute('aria-pressed') === 'true') await button.click()
+    await expect(button).toHaveText('')
+    const size = await button.evaluate(el => ({ width: el.getBoundingClientRect().width, height: el.getBoundingClientRect().height, compact: Number.parseFloat(getComputedStyle(el).getPropertyValue('--control-height-compact')) }))
+    expect(size.width).toBe(size.compact)
+    expect(size.height).toBe(size.compact)
+    await expect(button).toHaveCSS('opacity', '0.5')
+  }
+  const opencode = group.locator('[data-cli-support="opencode"]')
+  const image = opencode.locator('.cli-app-icon__image:visible')
+  await expect(image).toHaveAttribute('src', new RegExp(gui === 'dark' ? 'opencode-dark\\.svg' : 'opencode\\.svg'))
+  await expect(image).toHaveCSS('filter', 'none')
+  await page.mouse.move(0, 0)
+  await page.keyboard.press('Escape')
+  await group.screenshot({ path: testInfo.outputPath(`tool-support-off-${gui}.png`) })
+  await opencode.focus()
+  await page.keyboard.press('Space')
+  await expect(opencode).toHaveAttribute('aria-pressed', 'true')
+  await expect(opencode).toHaveCSS('opacity', '1')
+  await expect(opencode).toHaveAttribute('aria-label', /停用/)
+  await page.keyboard.press('Escape')
+  await group.screenshot({ path: testInfo.outputPath(`tool-support-on-${gui}.png`) })
+  await opencode.click()
+  await expect(opencode).toHaveAttribute('aria-pressed', 'false')
+  await expect(opencode).toHaveCSS('opacity', '0.5')
+  await expect(opencode).toHaveAttribute('aria-label', /启用/)
+  await expect(page.locator('[data-blocked-host-calls]')).toHaveAttribute('data-blocked-host-calls', '0')
+})
+
 // 生产组件的合成状态投影验收；不连接 CLI、用户数据或安装包 WebView。
 const cliName = (cli: string) => cli === 'claude' ? 'Claude Code' : cli === 'codex' ? 'Codex CLI' : 'opencode'
 for (const gui of ['light', 'dark']) for (const cli of ['claude', 'codex', 'opencode']) {

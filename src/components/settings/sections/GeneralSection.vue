@@ -3,6 +3,7 @@ import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { useCliSupportStore } from '@/stores/cliSupport'
 import AppSelect from '@/components/ui/AppSelect.vue'
+import IconButton from '@/components/ui/IconButton.vue'
 import InlineNotice from '@/components/ui/InlineNotice.vue'
 import AppButton from '@/components/ui/AppButton.vue'
 import { useSessionIndexMaintenanceStore } from '@/stores/sessionIndexMaintenance'
@@ -31,15 +32,13 @@ const cliName = { claude: 'Claude Code', codex: 'Codex CLI', opencode: 'opencode
     <div class="setting-field">
       <span class="ui-field-label">{{ t('settingsCliSupport') }}</span>
       <div class="cli-support-row" role="group" :aria-label="t('settingsCliSupport')">
-        <AppButton v-for="cli in (['claude', 'codex', 'opencode'] as const)" :key="cli" :data-cli-support="cli"
-          :aria-label="t(support.isEnabled(cli) ? 'settingsCliClickToDisable' : 'settingsCliClickToEnable', { cli: cliName[cli] })"
+        <IconButton v-for="cli in (['claude', 'codex', 'opencode'] as const)" :key="cli" :data-cli-support="cli"
+          :label="t(support.isEnabled(cli) ? 'settingsCliClickToDisable' : 'settingsCliClickToEnable', { cli: cliName[cli] })"
           :aria-pressed="support.isEnabled(cli)" class="cli-support-toggle"
           :class="{ 'cli-support-toggle--off': !support.isEnabled(cli) }"
           @click="support.setCliEnabled(cli, !support.isEnabled(cli))">
           <CliAppIcon :cli="cli" decorative />
-          <span>{{ cliName[cli] }}</span>
-          <span class="cli-support-state">{{ t(support.isEnabled(cli) ? 'settingsCliEnabled' : 'settingsCliDisabled') }}</span>
-        </AppButton>
+        </IconButton>
       </div>
       <p>{{ t('settingsCliSupportHint') }}</p>
     </div>
@@ -63,8 +62,7 @@ h2 { font-size: 20px; font-weight: 600; color: var(--text-primary); }
 h3 { font-size: 13px; font-weight: 500; color: var(--text-primary); }
 .setting-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 p { font-size: 12px; line-height: 1.5; color: var(--text-secondary); overflow-wrap: anywhere; }
-.cli-support-row { display: flex; flex-wrap: wrap; gap: 10px; }
-.cli-support-toggle { gap: 8px; }
-.cli-support-toggle[aria-pressed="true"] { border-color: var(--accent-primary); background: var(--accent-light); }
-.cli-support-state { font-size: 11px; color: var(--text-secondary); }
+.cli-support-row { display: flex; gap: 10px; }
+/* IconButton 将 class 转发到内部 button，需穿过 Tooltip 的 scoped 边界。 */
+.cli-support-row :deep(.cli-support-toggle--off) { opacity: 0.5; }
 </style>
