@@ -607,8 +607,8 @@ fn D09_UnarchiveRequest_ValidatesAndConverts_019() {
 fn Opencode_ArgvMappingFollowsSpecMatrix_01() {
     let f = Fixture::new(CliKind::Opencode, LaunchAction::New);
     let snapshot = f.freeze();
-    let error = build_invocation(&f.request, &snapshot).unwrap_err();
-    assert_eq!(error.code, "OPENCODE_SESSION_PREPARE_REQUIRED");
+    let invocation = build_invocation(&f.request, &snapshot).unwrap();
+    assert_eq!(invocation.args(), words(&[]).as_slice());
 
     let f = Fixture::new(
         CliKind::Opencode,
@@ -636,6 +636,24 @@ fn Opencode_ArgvMappingFollowsSpecMatrix_01() {
         let err = build_invocation(&f.request, &snapshot).unwrap_err();
         assert_eq!(err.code, "UNSUPPORTED_ACTION");
     }
+}
+
+#[test]
+fn Opencode_PreparationFallbackPreservesNativeArguments_092() {
+    let mut f = Fixture::new(CliKind::Opencode, LaunchAction::New);
+    f.profile.default_args = Override::Set(vec![
+        "--model".into(),
+        "provider/model".into(),
+        "--future".into(),
+    ]);
+    f.request.extra_args = vec!["exact value".into()];
+    let snapshot = f.freeze();
+    let invocation = build_invocation(&f.request, &snapshot).unwrap();
+    assert_eq!(
+        invocation.args(),
+        words(&["--model", "provider/model", "--future", "exact value"]).as_slice()
+    );
+    assert!(invocation.requested_session_id().is_none());
 }
 
 // Raw 走公共 builder 透传（raw_args 提前返回），这是真实契约而非拒绝。

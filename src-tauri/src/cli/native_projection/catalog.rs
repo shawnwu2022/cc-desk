@@ -107,7 +107,9 @@ pub(crate) fn read(
         if options.kind != ResourceKind::History {
             return Err("SOURCE_UNSUPPORTED");
         }
-        let items = super::opencode_db::read_history(catalog.root, catalog.projects)?;
+        let items = super::opencode_db::read_history_with_budget(catalog.root, catalog.projects, budget)?;
+        catalog.check()?;
+        budget.checkpoint()?;
         return Ok(items);
     }
     let result = match options.kind {

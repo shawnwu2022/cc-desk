@@ -403,3 +403,153 @@ fn Opencode_ExclusiveWriterMapsSourceBusy_10() {
     writer.execute_batch("ROLLBACK").unwrap();
     assert_eq!(error, "SOURCE_BUSY");
 }
+
+#[test]
+#[allow(non_snake_case)]
+fn Opencode_GlobalDirectoryIsFilteredBeforeLimit_16() {
+    let f = Fixture::new();
+    let conn = f.conn();
+    conn.execute("INSERT INTO project (id, worktree, time_created, time_updated, sandboxes) VALUES ('global', '/', 1, 1, '[]')", []).unwrap();
+    seed(&conn, "ses_target", "global", &f.project.to_string_lossy(), "target", 1, None);
+    for index in 0..2100 {
+        seed(&conn, &format!("foreign_{index}"), "global", "C:/foreign", "foreign", index + 100, None);
+    }
+    let items = read_history(&Root::open(&f.root).unwrap(), &[f.project_ref()]).unwrap();
+    assert_eq!(items.len(), 1);
+    assert!(matches!(&items[0], ResourceItem::Session { native_session_id, .. } if native_session_id == "ses_target"));
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn Opencode_NulTextCannotPoisonProjection_17() {
+    let f = Fixture::new();
+    let conn = f.conn();
+    f.register_project(&conn, "p1");
+    seed(&conn, "ses_title", "p1", &f.project.to_string_lossy(), "before\0after", 2, None);
+    seed(&conn, "invalid\0identity", "p1", &f.project.to_string_lossy(), "bad", 1, None);
+    let items = read_history(&Root::open(&f.root).unwrap(), &[f.project_ref()]).unwrap();
+    assert_eq!(items.len(), 1);
+    match &items[0] {
+        ResourceItem::Session { title, title_unknown, metadata_incomplete, .. } => {
+            assert!(!title.contains('\0'));
+            assert_eq!(*title_unknown, Some(true));
+            assert_eq!(*metadata_incomplete, Some(true));
+        }
+        _ => panic!("session expected"),
+    }
+}
+
+#[cfg(windows)]
+#[test]
+#[allow(non_snake_case)]
+fn Opencode_CheckpointCannotSplitPrivateSnapshot_18() {
+    let f = Fixture::new();
+    let conn = f.conn();
+    conn.busy_timeout(std::time::Duration::ZERO).unwrap();
+    f.register_project(&conn, "p1");
+    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)").unwrap();
+    seed(&conn, "ses_wal", "p1", &f.project.to_string_lossy(), "WAL", 1, None);
+    let root = Root::open(&f.root).unwrap();
+    let snapshot = super::private_sqlite_snapshot_during(&root, || {
+        let busy: i64 = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get(0)).unwrap();
+        assert_eq!(busy, 1, "checkpoint must not rewrite DB between DB and WAL copies");
+    }).unwrap();
+    let copy = super::open_read_only(&snapshot.directory.path().join("opencode.db")).unwrap();
+    let count: i64 = copy.query_row("SELECT count(*) FROM session", [], |row| row.get(0)).unwrap();
+    assert_eq!(count, 1);
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn Opencode_EmptyOmittedHistoryReportsIncomplete_19() {
+    let f = Fixture::new();
+    let conn = f.conn();
+    f.register_project(&conn, "p1");
+    seed(&conn, &"x".repeat(300), "p1", &f.project.to_string_lossy(), "bad", 1, None);
+    let mut budget = crate::cli::native_projection::scoped_fs::Budget::new(Default::default());
+    let items = super::read_history_with_budget(&Root::open(&f.root).unwrap(), &[f.project_ref()], &mut budget).unwrap();
+    assert!(items.is_empty());
+    assert!(budget.history_metadata_incomplete());
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn Opencode_CatalogRetainsEmptyPartialAndRechecksGrant_20() {
+    use crate::cli::native_projection::catalog::{read, Catalog, Options};
+    use crate::cli::native_projection::scoped_fs::Budget;
+    use crate::cli::native_projection::wire::ResourceKind;
+    let f = Fixture::new();
+    let conn = f.conn();
+    f.register_project(&conn, "p1");
+    seed(&conn, &"x".repeat(300), "p1", &f.project.to_string_lossy(), "bad", 1, None);
+    let root = Root::open(&f.root).unwrap();
+    let projects = [f.project_ref()];
+    let options = Options { kind: ResourceKind::History, query: None, session_id: None };
+    let mut budget = Budget::new(Default::default());
+    let items = read(&Catalog { cli: crate::cli::types::CliKind::Opencode, root: &root,
+        projects: &projects, user_config: None, check: &|| Ok(()) }, &options, &mut budget).unwrap();
+    assert!(items.is_empty());
+    assert!(budget.history_metadata_incomplete());
+    let checks = std::cell::Cell::new(0);
+    let check = || { checks.set(checks.get() + 1); if checks.get() > 1 { Err("SCOPE_REVOKED") } else { Ok(()) } };
+    let error = read(&Catalog { cli: crate::cli::types::CliKind::Opencode, root: &root,
+        projects: &projects, user_config: None, check: &check }, &options, &mut Budget::new(Default::default())).unwrap_err();
+    assert_eq!(error, "SCOPE_REVOKED");
+}
+
+#[cfg(windows)]
+#[test]
+#[allow(non_snake_case)]
+fn Opencode_GlobalDirectorySpellingMatchesExistingWindowsRules_21() {
+    let f = Fixture::new();
+    let conn = f.conn();
+    conn.execute("INSERT INTO project (id, worktree, time_created, time_updated, sandboxes) VALUES ('global', '/', 1, 1, '[]')", []).unwrap();
+    let directory = f.project.to_string_lossy().replace('\\', "/").to_ascii_uppercase();
+    seed(&conn, "ses_alias", "global", &directory, "alias", 1, None);
+    let items = read_history(&Root::open(&f.root).unwrap(), &[f.project_ref()]).unwrap();
+    assert_eq!(items.len(), 1);
+}
+
+#[cfg(windows)]
+#[test]
+#[allow(non_snake_case)]
+fn Opencode_WalResetCannotReplaceFramesDuringSnapshot_22() {
+    let f = Fixture::new();
+    let conn = f.conn();
+    conn.busy_timeout(std::time::Duration::ZERO).unwrap();
+    f.register_project(&conn, "p1");
+    seed(&conn, "ses_before", "p1", &f.project.to_string_lossy(), "before", 1, None);
+    let busy: i64 = conn.query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |row| row.get(0)).unwrap();
+    assert_eq!(busy, 0);
+    let wal = f.root.join("opencode.db-wal");
+    let salts = std::fs::read(&wal).unwrap()[16..24].to_vec();
+    let root = Root::open(&f.root).unwrap();
+    let snapshot = super::private_sqlite_snapshot_during(&root, || {
+        seed(&conn, "ses_after", "p1", &f.project.to_string_lossy(), "after", 2, None);
+        assert_eq!(&std::fs::read(&wal).unwrap()[16..24], salts.as_slice(), "READ(1) must prevent resetting the existing WAL");
+    }).unwrap();
+    let copy = super::open_read_only(&snapshot.directory.path().join("opencode.db")).unwrap();
+    let count: i64 = copy.query_row("SELECT count(*) FROM session", [], |row| row.get(0)).unwrap();
+    assert_eq!(count, 2);
+}
+
+#[cfg(windows)]
+#[test]
+#[allow(non_snake_case)]
+fn Opencode_WithoutShmBlocksNewConnectionOnlyDuringCopy_23() {
+    let f = Fixture::new();
+    assert!(!f.root.join("opencode.db-shm").exists());
+    let root = Root::open(&f.root).unwrap();
+    let snapshot = super::private_sqlite_snapshot_during(&root, || {
+        let other = f.conn();
+        other.busy_timeout(std::time::Duration::ZERO).unwrap();
+        let error = other.query_row("SELECT count(*) FROM session", [], |row| row.get::<_, i64>(0)).unwrap_err();
+        assert_eq!(super::sqlite_code(error), "SOURCE_BUSY");
+    }).unwrap();
+    let other = f.conn();
+    f.register_project(&other, "p1");
+    drop(other);
+    let copy = super::open_read_only(&snapshot.directory.path().join("opencode.db")).unwrap();
+    let count: i64 = copy.query_row("SELECT count(*) FROM session", [], |row| row.get(0)).unwrap();
+    assert_eq!(count, 0);
+}

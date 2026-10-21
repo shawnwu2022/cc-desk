@@ -99,6 +99,17 @@ fn opencode_locations(env: &EnvMap) -> ReadResult<Locations> {
     };
     let root = base.join("opencode");
     valid(&root)?;
+    if let Some(database) = lookup(env, OsStr::new("OPENCODE_DB")) {
+        let database = database.to_str().ok_or("SCOPE_UNKNOWN")?;
+        // 上游非空 override 可以是内存库或数据根相对/绝对文件；本 reader
+        // 目前只授权固定 basename。不能拿默认库冒充自定义库的历史。
+        if !database.is_empty() && database != "opencode.db" {
+            let candidate = PathBuf::from(database);
+            if !candidate.is_absolute() || candidate != root.join("opencode.db") {
+                return Err("SCOPE_UNKNOWN");
+            }
+        }
+    }
     Ok(Locations { root, user_config: None })
 }
 fn valid(path: &std::path::Path) -> ReadResult<()> {

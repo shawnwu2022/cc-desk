@@ -756,6 +756,27 @@ describe('Unified production runtime', () => {
     await expect(useUnifiedSessionsStore().createSession({ cli: 'opencode', projectKey: '/repo', projectPath: '/repo' })).rejects.toBeDefined()
     expect(useNativeTabsStore().tabs.size).toBe(0)
   })
+  it.each(['OPENCODE_SESSION_PREPARE_UNSUPPORTED', 'OPENCODE_SESSION_PREPARE_UNAVAILABLE_BEFORE_CREATE'])(
+    'Runtime_OpencodeOptionalPreparationDegradesBeforePost_089: %s', async code => {
+      io.profiles.mockResolvedValue({ revision: '7', profiles: [{ id: 'oc', revision: '7', cli: 'opencode',
+        name: 'OpenCode', launcher: { kind: 'native' }, programPath: { mode: 'set', value: '/tools/opencode' },
+        defaultArgs: { mode: 'set', value: ['--future-option'] }, skipPermissions: { mode: 'inherit' }, observer: { mode: 'inherit' }, env: {} }] })
+      io.prepare.mockRejectedValue({ code })
+      render(); await flushPromises()
+      const created = await useUnifiedSessionsStore().createSession({ cli: 'opencode', projectKey: '/repo', projectPath: '/repo' })
+      expect(useNativeTabsStore().tab(created.adapterSessionId)?.action).toEqual({ kind: 'new' })
+      expect(io.prepare).toHaveBeenCalledOnce()
+    })
+  it('Runtime_OpencodeUnknownPreparationNeverStartsAnotherCli_090', async () => {
+    io.profiles.mockResolvedValue({ revision: '7', profiles: [{ id: 'oc', revision: '7', cli: 'opencode',
+      name: 'OpenCode', launcher: { kind: 'native' }, programPath: { mode: 'set', value: '/tools/opencode' },
+      defaultArgs: { mode: 'inherit' }, skipPermissions: { mode: 'inherit' }, observer: { mode: 'inherit' }, env: {} }] })
+    io.prepare.mockRejectedValue({ code: 'OPENCODE_SESSION_OUTCOME_UNKNOWN' })
+    render(); await flushPromises()
+    await expect(useUnifiedSessionsStore().createSession({ cli: 'opencode', projectKey: '/repo', projectPath: '/repo' })).rejects.toBeDefined()
+    expect(useNativeTabsStore().tabs.size).toBe(0)
+    expect(io.prepare).toHaveBeenCalledOnce()
+  })
   it('Runtime_OpencodePreparationDoesNotPublishAnonymousTab_088', async () => {
     io.profiles.mockResolvedValue({ revision: '7', profiles: [{ id: 'oc', revision: '7', cli: 'opencode',
       name: 'OpenCode', launcher: { kind: 'native' }, programPath: { mode: 'set', value: '/tools/opencode' },

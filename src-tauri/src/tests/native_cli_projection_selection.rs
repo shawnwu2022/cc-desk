@@ -233,3 +233,17 @@ fn Opencode_ReadScopeKnownMatrix_03() {
         ));
     }
 }
+
+#[test]
+#[allow(non_snake_case)]
+fn Opencode_CustomDatabaseNeverReadsDefault_04() {
+    let t = tempfile::tempdir().unwrap();
+    let mut env = EnvMap::new();
+    env.insert(home().into(), t.path().into());
+    for value in ["custom.db", ":memory:", "../elsewhere.db"] {
+        env.insert("OPENCODE_DB".into(), value.into());
+        assert!(locations(CliKind::Opencode, &env).is_err(), "{value}");
+    }
+    env.insert("OPENCODE_DB".into(), "opencode.db".into());
+    assert!(locations(CliKind::Opencode, &env).is_ok());
+}

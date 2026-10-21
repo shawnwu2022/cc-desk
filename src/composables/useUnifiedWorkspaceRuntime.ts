@@ -308,19 +308,27 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     if (input.cli === 'opencode' && action.kind === 'new') {
       preparedIdentity = { tabId: createNativeId('tab'), requestId: createNativeId('request'),
         runId: createNativeId('run') }
-      const nativeSessionId = await nativePrepareOpencodeSession({
-        ...preparedIdentity, generation: 1, profileId: profile.id,
-        expectedProfileRevision: profile.revision, cli: input.cli,
-        launchCwd: matches[0].selectedPath, action: { kind: 'new' },
-        extraArgs: [], cols: 80, rows: 24,
-      })
+      let nativeSessionId: string | undefined
+      try {
+        nativeSessionId = await nativePrepareOpencodeSession({
+          ...preparedIdentity, generation: 1, profileId: profile.id,
+          expectedProfileRevision: profile.revision, cli: input.cli,
+          launchCwd: matches[0].selectedPath, action: { kind: 'new' },
+          extraArgs: [], cols: 80, rows: 24,
+        })
+      } catch (failure) {
+        const code = failure && typeof failure === 'object' && 'code' in failure ? failure.code : undefined
+        // 只有后端明确保证尚未发送创建请求，才能降级到原生交互；未知结果不能再启动一次。
+        if (code !== 'OPENCODE_SESSION_PREPARE_UNSUPPORTED'
+          && code !== 'OPENCODE_SESSION_PREPARE_UNAVAILABLE_BEFORE_CREATE') throw failure
+      }
       if (disposed || app.isProjectAdmissionBlocked(input.projectPath)
         || profiles.profile(profile.id)?.revision !== profile.revision
         || !workspace.projects.some(project => project.projectId === matches[0].projectId
           && sameProjectPath(project.selectedPath, matches[0].selectedPath))) {
         throw new Error('STALE_NATIVE_ATTEMPT')
       }
-      action = { kind: 'resume-id', nativeSessionId }
+      if (nativeSessionId) action = { kind: 'resume-id', nativeSessionId }
     }
     const tab = native.create({ cli: input.cli, projectId: matches[0].projectId, projectPath: matches[0].selectedPath,
       profileId: profile.id, profileRevision: profile.revision, action, preparedIdentity,

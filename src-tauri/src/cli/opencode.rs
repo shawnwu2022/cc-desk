@@ -7,9 +7,9 @@ use std::ffi::OsString;
 
 pub(super) fn action_args(snapshot: &LaunchSnapshot) -> Result<Vec<OsString>, SafeError> {
     match &snapshot.request().action {
-        // 直接无参 TUI 无法回填会话身份；结构化新建先走官方 API，再以
-        // 已创建的 ID 进入 ResumeId。显式 Raw 仍可请求原生无参行为。
-        LaunchAction::New => Err(error("OPENCODE_SESSION_PREPARE_REQUIRED")),
+        // 可选身份准备在尚未创建时不可用，允许原生启动；身份保持未知。
+        // 原样保留 profile/extra argv，不猜测最近会话，也不改变原生参数语义。
+        LaunchAction::New => Ok(Vec::new()),
         LaunchAction::ResumeId { native_session_id } => {
             validate_locator(native_session_id)?;
             // opencode resume 忽略 launch cwd（实测改用会话记录目录）；

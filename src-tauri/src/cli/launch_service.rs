@@ -29,7 +29,12 @@ pub(crate) struct FrozenPty {
     pub(crate) observer_failure: Option<&'static str>,
 }
 pub(crate) type NativeRun = RoutedResource<FrozenPty, OutputRoute<OutputFrame>>;
-type OpencodePreparation = (CallerIdentity, LaunchRequest, Result<String, SafeError>);
+struct OpencodePreparation {
+    owner: CallerIdentity,
+    request: LaunchRequest,
+    result: Mutex<Option<Result<String, SafeError>>>,
+    settled: Condvar,
+}
 
 /// D14/D15 supply a backend consumer. It must retain/reap its owned run and
 /// implement bounded output/drain policy. This interface is never deserialized.
@@ -84,7 +89,7 @@ pub(crate) struct LaunchService {
     observer: Option<Arc<crate::observer_host::ObserverHost>>,
     shutting_down: Arc<RwLock<bool>>,
     command_owners: Arc<CommandOwners>,
-    opencode_preparations: Mutex<Vec<OpencodePreparation>>,
+    opencode_preparations: Mutex<Vec<Arc<OpencodePreparation>>>,
 }
 impl LaunchService {
     pub(crate) fn rename_metadata(
@@ -261,33 +266,62 @@ impl LaunchService {
         if request.cli != CliKind::Opencode || request.action != LaunchAction::New {
             return Err(error("UNSUPPORTED_ACTION"));
         }
-        let mut preparations = self.opencode_preparations.lock();
-        if let Some((_, old, result)) = preparations
-            .iter()
-            .find(|(owner, old, _)| owner == caller && old.request_id == request.request_id)
-        {
-            return if old == request {
-                result.clone()
+        let (preparation, owns_creation) = {
+            let mut preparations = self.opencode_preparations.lock();
+            // 未完成项仍拥有潜在副作用；活跃文档的未知结果也不能因容量压力而被重放。
+            preparations.retain(|old| {
+                old.result.lock().is_none() || self.registry().check_caller(&old.owner).is_ok()
+            });
+            if let Some(old) = preparations
+                .iter()
+                .find(|old| old.owner == *caller && old.request.request_id == request.request_id)
+            {
+                if old.request != *request {
+                    return Err(error("LAUNCH_REQUEST_ID_CONFLICT"));
+                }
+                (old.clone(), false)
             } else {
-                Err(error("LAUNCH_REQUEST_ID_CONFLICT"))
-            };
+                if preparations.len() >= 4096 {
+                    // 已有收据仍优先；新请求尚未创建，可安全跳过可选准备，保留有界容量。
+                    return Err(error("OPENCODE_SESSION_PREPARE_UNAVAILABLE_BEFORE_CREATE"));
+                }
+                let preparation = Arc::new(OpencodePreparation {
+                    owner: caller.clone(),
+                    request: request.clone(),
+                    result: Mutex::new(None),
+                    settled: Condvar::new(),
+                });
+                preparations.push(preparation.clone());
+                (preparation, true)
+            }
+        };
+        if !owns_creation {
+            let mut result = preparation.result.lock();
+            while result.is_none() {
+                preparation.settled.wait(&mut result);
+            }
+            self.registry().check_caller(caller)?;
+            return result.as_ref().unwrap().clone();
         }
-        if preparations.len() >= 4096 {
-            return Err(error("REGISTRY_CAPACITY"));
-        }
-        let result = (|| {
+        let current = || {
             if *self.shutting_down.read() {
                 return Err(error("RUN_SUPERVISOR_STOPPING"));
             }
+            self.registry().check_caller(caller)
+        };
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            current()?;
             let profile = self.repository.get_profile(&request.profile_id)?;
             if !request.extra_args.is_empty()
-                || matches!(&profile.default_args, Override::Set(args) if !args.is_empty()) {
+                || matches!(&profile.default_args, Override::Set(args) if !args.is_empty())
+            {
                 return Err(error("OPENCODE_SESSION_PREPARE_UNSUPPORTED"));
             }
-            let legacy = profile
-                .read_legacy(&self.repository.metadata_directory().join("config.json"))?;
+            let legacy =
+                profile.read_legacy(&self.repository.metadata_directory().join("config.json"))?;
             let inherited = self.inherited_environment()?;
-            let port = super::opencode_prepare::select_port()?;
+            let port = super::opencode_prepare::select_port()
+                .map_err(|_| error("OPENCODE_SESSION_PREPARE_UNAVAILABLE_BEFORE_CREATE"))?;
             let mut server_request = request.clone();
             server_request.action = LaunchAction::Raw {
                 argv: vec![
@@ -318,12 +352,16 @@ impl LaunchService {
                 std::path::Path::new(&request.launch_cwd),
                 port,
                 admission,
+                &current,
             );
             let mut owner = owner;
             owner.settled = true;
             result
-        })();
-        preparations.push((caller.clone(), request.clone(), result.clone()));
+        }))
+        .unwrap_or_else(|_| Err(error("OPENCODE_SESSION_OUTCOME_UNKNOWN")));
+        *preparation.result.lock() = Some(result.clone());
+        preparation.settled.notify_all();
+        current()?;
         result
     }
     pub(crate) fn start(
@@ -743,3 +781,7 @@ impl RunAccess {
         Ok(self.resource.process.snapshot.clone())
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/native_cli_opencode_preparations.rs"]
+mod opencode_preparation_tests;
