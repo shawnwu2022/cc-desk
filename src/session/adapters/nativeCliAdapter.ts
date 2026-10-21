@@ -112,9 +112,9 @@ function projectNotice(tab: NativeCliTab, tabs: NativeTabsPort): NativeObservati
 function projectTab(tab: NativeCliTab, tabs?: NativeTabsPort): UnifiedSession {
   const nativeSessionId = tabNativeSessionId(tab)
   // Codex 的终端快照与 Claude 认证 hook 分开投影，不产生回合完成或授权原因。
-  const claudeObservation = tab.cli === 'claude' && tab.action.kind !== 'raw'
+  const hookObservation = (tab.cli === 'claude' || tab.cli === 'opencode') && tab.action.kind !== 'raw'
   const codexObservation = tab.cli === 'codex' && tab.action.kind !== 'raw'
-  const activeObservation = claudeObservation && tab.status === 'running' && tab.observationState === 'active'
+  const activeObservation = hookObservation && tab.status === 'running' && tab.observationState === 'active'
   const codexStatus = codexObservation && tab.status === 'running' ? tab.codexProgramStatus : undefined
   const codexActivity = codexStatus === 'working' ? 'working' : codexStatus === 'blocked' ? 'waiting' : codexStatus === 'idle' ? 'idle' : 'unknown'
   const observationNotice = tabs && projectNotice(tab, tabs)
@@ -128,9 +128,9 @@ function projectTab(tab: NativeCliTab, tabs?: NativeTabsPort): UnifiedSession {
     processState: tab.status === 'stopped' && tab.launchRevision === null ? 'starting' : processState(tab.status),
     attentionState: activeObservation ? tab.attentionState ?? 'none' : codexActivity === 'waiting' ? 'needs-user' : 'none',
     activityState: activeObservation ? tab.activityState ?? 'unknown' : codexActivity,
-    observationState: claudeObservation ? tab.observationState ?? 'off' : codexObservation ? codexActivity === 'unknown' ? 'unavailable' : 'active' : 'off',
+    observationState: hookObservation ? tab.observationState ?? 'off' : codexObservation ? codexActivity === 'unknown' ? 'unavailable' : 'active' : 'off',
     ...(codexObservation ? codexActivity === 'unknown' ? { observerReasonCode: 'OBSERVER_UNAVAILABLE' as const } : {}
-      : !claudeObservation ? { observerReasonCode: 'OBSERVER_UNSUPPORTED' as const }
+      : !hookObservation ? { observerReasonCode: 'OBSERVER_UNSUPPORTED' as const }
       : tab.observerReasonCode ? { observerReasonCode: tab.observerReasonCode } : {}),
     ...(observationNotice ? { observationNotice } : {}),
     lastActivityAt: tab.lastActivityAt,

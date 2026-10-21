@@ -4,7 +4,7 @@ import type { HookEventPayload, HookEventDetail } from '@/types/hook'
 import type { CliKind } from '@/types/cli'
 import { onHookEvent } from '@/api/tauri'
 import { onNativeObservation } from '@/api/observer'
-import { fromClaudeHook, fromCodexHook } from '@/integrations/claudeObserver'
+import { fromClaudeHook, fromCodexHook, fromOpencodeHook } from '@/integrations/claudeObserver'
 import { fromNativeObservationNotice } from '@/integrations/nativeObservationNotice'
 import type { NativeObservationNotice } from '@/types/nativeObservationNotice'
 import { createObservationRegistry, type ObservationEvent, type ObservationState, type RunRef } from '@/integrations/registry'
@@ -31,12 +31,14 @@ export const useHookStore = defineStore('hook', () => {
   let nativePending: Promise<void> | null = null
   let legacyStop: (() => void) | undefined
   let nativeStop: (() => void) | undefined
-  function armTimer(entry: { run: RunRef; timer: ReturnType<typeof setTimeout> }, delay: number) {
+  function armTimer(entry: { run: RunRef; timer: ReturnType<typeof setTimeout>; cli?: CliKind }, delay: number) {
     clearTimeout(entry.timer)
     entry.timer = setTimeout(() => {
       // 连接期超时宣称 unavailable；已收到事件后的静默只回落粗粒度活动。
-      const connecting = observations.get(entry.run)?.state().observation === 'connecting'
-      publish(connecting ? { kind: 'timeout', ...entry.run } : { kind: 'turn-idle-timeout', ...entry.run })
+      const state = observations.get(entry.run)?.state()
+      if (entry.cli === 'opencode' && state?.observation === 'active' && ['waiting_permission', 'waiting_input', 'error'].includes(state.activity)) return
+      const connecting = state?.observation === 'connecting'
+      publish(connecting || entry.cli === 'opencode' ? { kind: 'timeout', ...entry.run } : { kind: 'turn-idle-timeout', ...entry.run })
     }, delay)
   }
 
@@ -71,10 +73,15 @@ export const useHookStore = defineStore('hook', () => {
   }
   function dispatchNative(payload: HookEventPayload) {
     if (disposed) return
-    const event = fromClaudeHook(payload) ?? fromCodexHook(payload)
+    const event = fromClaudeHook(payload) ?? fromCodexHook(payload) ?? fromOpencodeHook(payload)
     if (!event) return
     const target = targets.get(key(event))
-    if (!target || (payload.observerSource === 'codex-hook' ? target.cli !== 'codex' : target.cli !== 'claude')) return
+    const cli=payload.observerSource === 'opencode-hook' ? 'opencode' : payload.observerSource === 'codex-hook' ? 'codex' : 'claude'
+    if (!target || target.cli !== cli) return
+    if (target.cli === 'opencode') {
+      if (target.codexReplay.floor !== null && event.eventId! <= target.codexReplay.floor) return
+      target.codexReplay.floor=event.eventId!
+    }
     if (target.cli === 'codex') {
       const id = event.eventId!
       if (/^m[0-9a-f]{32}-[0-9a-f]{32}$/.test(id)) {
@@ -122,7 +129,7 @@ export const useHookStore = defineStore('hook', () => {
     }).finally(() => { nativePending = null })
   }
   function subscribeObservation(target: ObservationTarget, handler: ObservationHandler, options: { onNotice?: ObservationNoticeHandler; onIdentity?: ObservationIdentityHandler } = {}): () => void {
-    if (disposed || !['claude', 'codex'].includes(target.cli) || !target.enabled) return () => {}
+    if (disposed || !['claude', 'codex', 'opencode'].includes(target.cli) || !target.enabled) return () => {}
     const noticeHandler = options.onNotice
     const identityHandler = options.onIdentity
     const run = { runId: target.runId, generation: target.generation }

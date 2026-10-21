@@ -27,15 +27,17 @@ for (const gui of ['light', 'dark']) for (const cli of ['claude', 'codex', 'open
       await expect(image).toHaveAttribute('src', new RegExp(cli + (cli === 'opencode' && gui === 'dark' ? '-dark' : '') + '\\.svg'))
       expect(await image.evaluate(el => (el as HTMLImageElement).naturalWidth)).toBe(16)
     }
-    await expect(idle.locator('[data-session-badge]')).toHaveCount(cli === 'codex' ? 1 : 0)
+    await expect(idle.locator('[data-session-badge]')).toHaveCount(cli === 'claude' ? 0 : 1)
     await expect(closed.locator('[data-session-badge]')).toHaveCount(0)
     await expect(closed).toHaveAttribute('aria-label', `${cliName(cli)}; Closed`)
-    if (cli === 'codex') {
-      await expect(idle).toHaveAttribute('aria-label', 'Codex CLI; Idle')
+    if (cli !== 'claude') {
+      await expect(idle).toHaveAttribute('aria-label', `${cliName(cli)}; Idle`)
       await expect(idle.locator('[data-session-badge]')).toHaveAttribute('data-session-badge', 'running')
       await expect(idle.locator('.session-status-icon')).toHaveCSS('color', gui === 'light' ? 'rgb(61, 140, 110)' : 'rgb(93, 173, 142)')
       await expect(idle.locator('.session-status-icon__shape')).toHaveCSS('animation-name', 'none')
       await expect(idle.locator('.session-app-icon__app')).toHaveCSS('opacity', '1')
+    }
+    if (cli === 'codex') {
       const closedApp = closed.locator('.session-app-icon__app')
       expect(Number(await closedApp.evaluate(el => getComputedStyle(el).opacity))).toBeLessThanOrEqual(.55)
       await expect(closed.locator('img')).toHaveCSS('filter', gui === 'dark' ? 'invert(1)' : 'none')

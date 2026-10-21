@@ -92,6 +92,44 @@ pub(crate) struct LaunchService {
     opencode_preparations: Mutex<Vec<Arc<OpencodePreparation>>>,
 }
 impl LaunchService {
+    fn opencode_observer_supported(
+        &self,
+        caller: &CallerIdentity,
+        snapshot: &LaunchSnapshot,
+    ) -> bool {
+        let probe = || -> Result<bool, SafeError> {
+            let mut request = snapshot.request().clone();
+            request.action = LaunchAction::Raw {
+                argv: vec!["--version".into()],
+            };
+            request.extra_args.clear();
+            let profile = self.repository.get_profile(&request.profile_id)?;
+            let legacy =
+                profile.read_legacy(&self.repository.metadata_directory().join("config.json"))?;
+            let frozen = freeze_launch(
+                &request,
+                &profile,
+                caller,
+                &FreezeContext {
+                    inherited: snapshot.environment(),
+                    terminal: &EnvMap::new(),
+                    legacy: legacy.as_ref(),
+                    observer: None,
+                },
+            )?;
+            if frozen.program() != snapshot.program() || frozen.runner() != snapshot.runner() {
+                return Ok(false);
+            }
+            let spec = resolve_process(&build_invocation(&request, &frozen)?)?;
+            let (admission, mut owner) = self.admit_owned_command()?;
+            let current = || self.registry().check_caller(caller);
+            let supported =
+                super::opencode_prepare::probe_observer_version(&spec, admission, &current);
+            owner.settled = true;
+            supported
+        };
+        probe().unwrap_or(false)
+    }
     pub(crate) fn rename_metadata(
         &self,
         caller: &CallerIdentity,
@@ -565,6 +603,12 @@ impl LaunchService {
                         snapshot.observer_requested() || snapshot.codex_identity_requested()
                     })
                     .and_then(|host| {
+                        if snapshot.request().cli == CliKind::Opencode
+                            && !self.opencode_observer_supported(caller, snapshot)
+                        {
+                            observer_failure = Some("OBSERVER_UNSUPPORTED");
+                            return None;
+                        }
                         let registry = Arc::downgrade(self.registry());
                         let owner = caller.clone();
                         let request_id = request.request_id.clone();
@@ -583,7 +627,9 @@ impl LaunchService {
                                 })
                             })
                         });
-                        let prepare = if snapshot.codex_identity_requested() {
+                        let prepare = if snapshot.request().cli == CliKind::Opencode {
+                            crate::observer_host::ObserverHost::prepare_opencode
+                        } else if snapshot.codex_identity_requested() {
                             crate::observer_host::ObserverHost::prepare_codex
                         } else {
                             crate::observer_host::ObserverHost::prepare
@@ -615,10 +661,15 @@ impl LaunchService {
                     });
                 let (snapshot, observer) = match prepared {
                     Some(prepared) => {
-                        let overlaid = match &prepared.codex_args {
-                            Some(args) => snapshot.with_codex_identity(&prepared.environment, args),
-                            None => {
-                                snapshot.with_observer(&prepared.environment, &prepared.plugin_dir)
+                        let overlaid = if let Some(plugin) = &prepared.opencode_plugin {
+                            snapshot.with_opencode_observer(&prepared.environment, plugin)
+                        } else {
+                            match &prepared.codex_args {
+                                Some(args) => {
+                                    snapshot.with_codex_identity(&prepared.environment, args)
+                                }
+                                None => snapshot
+                                    .with_observer(&prepared.environment, &prepared.plugin_dir),
                             }
                         };
                         // 可选覆盖必须能由已选择的 runner 完整表示；失败仅撤销覆盖，

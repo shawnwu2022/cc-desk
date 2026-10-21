@@ -2,12 +2,12 @@ import type { HookEventPayload, NotificationData } from '@/types/hook'
 import { validObservationAgentId, type ObservationEvent } from './registry'
 
 function validAuthenticatedMetadata(
-  payload: HookEventPayload, source: 'claude-hook' | 'codex-hook' = 'claude-hook',
+  payload: HookEventPayload, source: 'claude-hook' | 'codex-hook' | 'opencode-hook' = 'claude-hook',
 ): payload is HookEventPayload & {
   runId: string
   generation: number
   eventId: string
-  observerSource: 'claude-hook' | 'codex-hook'
+  observerSource: 'claude-hook' | 'codex-hook' | 'opencode-hook'
 } {
   return (
     payload !== null && typeof payload === 'object' && !Array.isArray(payload) &&
@@ -78,4 +78,15 @@ export function fromClaudeHook(payload: HookEventPayload): ObservationEvent | nu
 export function fromCodexHook(payload: HookEventPayload): ObservationEvent | null {
   if (!validAuthenticatedMetadata(payload, 'codex-hook') || !['sessionStart', 'userPromptSubmit', 'stop', 'sessionEnd'].includes(payload.detail.type)) return null
   return { kind: 'unknown', runId: payload.runId, generation: payload.generation, eventId: payload.eventId }
+}
+
+export function fromOpencodeHook(payload: HookEventPayload): ObservationEvent | null {
+  if (!validAuthenticatedMetadata(payload, 'opencode-hook') || !/^o[0-9]{16}$/.test(payload.eventId)
+    || typeof payload.sessionId !== 'string' || !/^ses_[A-Za-z0-9_]+$/.test(payload.sessionId) || payload.sessionId.length > 256) return null
+  if (payload.detail.type !== 'notification' && payload.detail.type !== 'sessionStart') return null
+  const raw = payload.detail.type === 'notification' ? payload.detail.data.notificationType : undefined
+  const value = typeof raw === 'string' && raw.startsWith('opencode_') ? raw.slice('opencode_'.length) : 'unknown'
+  const status = ['idle','busy','retry','permission','question','error'].includes(value ?? '') ? value as import('./registry').OpencodeStatus : 'unknown'
+  return { kind:'opencode-status', status, runId:payload.runId, generation:payload.generation, eventId:payload.eventId,
+    sourceSequence:payload.eventId.slice(1).replace(/^0+(?=\d)/,'') }
 }

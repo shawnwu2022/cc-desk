@@ -14,6 +14,18 @@ import type { UnifiedSession } from '@/types/unifiedSession'
 
 afterEach(() => { document.body.innerHTML = ''; vi.unstubAllGlobals(); clearMocks() })
 describe('Merged session app status', () => {
+  it('Opencode_UnsupportedObserverKeepsNeutralRunning_009', () => {
+    const wrapper=mount(SessionAppIcon,{props:{cli:'opencode',state:'running',activityState:'unknown',observationState:'off',observerReasonCode:'OBSERVER_UNSUPPORTED'},global:{plugins:[createI18n({legacy:false,locale:'en',messages:{en,zh}})]}})
+    expect(wrapper.get('[data-session-badge]').attributes('data-session-badge')).toBe('running')
+    expect(wrapper.get('.session-app-icon').attributes('aria-label')).toBe('opencode; Running')
+    wrapper.unmount()
+  })
+  it('Opencode_ObservedIdleAndUnknownHaveHonestBadges_008', () => {
+    const wrapper=mount(SessionAppIcon,{props:{cli:'opencode',state:'running',activityState:'idle',observationState:'active'},global:{plugins:[createI18n({legacy:false,locale:'en',messages:{en,zh}})]}})
+    expect(wrapper.get('[data-session-badge]').attributes('data-session-badge')).toBe('running')
+    expect(wrapper.get('.session-app-icon').attributes('aria-label')).toBe('opencode; Idle')
+    wrapper.unmount()
+  })
   // 认证身份 hook 不产生 TUI 活动；尚未收到原生状态时不能伪装成空闲或工作。
   it.each([
     ['new', 'en', 'Activity unknown', 'Closed'], ['resume-id', 'en', 'Activity unknown', 'Closed'],
@@ -157,7 +169,8 @@ describe('Merged session app status', () => {
   // opencode 的可访问名同样来自完整工具名，不能落回 “Codex CLI”。
   it('AppIcon_OpencodeAccessibleName_007', () => {
     const wrapper = mount(SessionAppIcon, { props: { cli: 'opencode', state: 'running' }, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en, zh } })] } })
-    expect(wrapper.get('.session-app-icon').attributes('aria-label')).toBe('opencode; Running')
+    expect(wrapper.get('.session-app-icon').attributes('aria-label')).toBe('opencode; Activity unknown')
+    expect(wrapper.get('[data-session-badge]').attributes('data-session-badge')).toBe('unknown')
     wrapper.unmount()
   })
 })

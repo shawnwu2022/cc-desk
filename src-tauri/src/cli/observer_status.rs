@@ -26,7 +26,7 @@ pub(crate) fn installation_reason(
     installed: bool,
     failure: Option<&'static str>,
 ) -> &'static str {
-    if snapshot.request().cli != CliKind::Claude
+    if !matches!(snapshot.request().cli, CliKind::Claude | CliKind::Opencode)
         || matches!(snapshot.request().action, LaunchAction::Raw { .. })
     {
         "OBSERVER_UNSUPPORTED"

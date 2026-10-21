@@ -45,6 +45,14 @@ Its localized accessible description remains outside the decorative icon glyph.
 
 ## Sources and ownership
 
+- Structured OpenCode 1.19.0 uses its own optional official plugin event channel,
+  isolated to the owned run. Busy/retry map to working, idle stays idle, outstanding
+  permission/question requests retain their distinct waiting causes, and error remains
+  visible across the official error-then-idle sequence until busy/retry. Unknown never
+  becomes completion. Waiting survives a 90-second pause; other stale activity becomes
+  unknown. Unsupported versions/raw/off launches retain neutral running presentation.
+  See [OpenCode observer boundaries](native-cli-v3.md#opencode-optional-activity-observer).
+
 - The Legacy adapter preserves existing `tab.working` when no explicit unknown
   activity overrides it and observation is not disabled/unavailable, and consumes the injected attention store's exact PTY
   item. A known session-ID mismatch is rejected. Stopped tabs and history rows

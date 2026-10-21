@@ -435,3 +435,63 @@ The existing title receipt and affected-source refresh path synchronizes list al
 Official OpenCode 1.19.0 was checked through isolated PATCH/list/server-restart and
 fresh CLI list reads without model calls. This evidence does not certify a logged-in
 interactive model turn or unrelated external/unregistered sessions.
+
+## OpenCode optional activity observer
+
+Structured OpenCode runs can load a private, per-owned-run plugin through the official
+`OPENCODE_CONFIG_CONTENT.plugin` tuple mechanism. It preserves existing inline settings
+and user plugins; it does not install a plugin globally, inject Claude flags, poll an
+unrelated `serve` process or change native input. The selected executable/runner has a
+bounded, isolated, owned `--version` probe. Only the examined **1.19.0** contract is
+enabled; older, future, unrecognized or unavailable versions retain their original
+basic CLI launch with an unsupported optional observer. Explicit observer off/unset,
+raw launches and `OPENCODE_PURE=true/1` do not receive an enabled observation channel.
+Invalid/oversized inline configuration or an unrepresentable optional overlay also
+falls back to the original frozen launch once, without loosening admission checks.
+
+The plugin uses the SDK passed by the actual CLI instance. It verifies main-session
+metadata, excludes subagents and foreign IDs, and binds the requested resume ID or the
+first verified main-session ID in the selected new-run directory. Initialization
+returns hooks before querying the instance API, avoiding an initialization self-wait.
+Official `dispose` clears initialization and prevents pending metadata callbacks from
+publishing after instance disposal. The observer lease owns and removes the private
+plugin directory, and exact caller/run/generation/capability still authorize delivery.
+Only allowlisted session identity and status metadata enter the public DTO; prompts,
+tool arguments, retry/error messages and credentials are excluded.
+
+| Official event evidence | Desk activity | Completion claim |
+| --- | --- | --- |
+| `session.status` busy / retry | working | None |
+| `session.status` idle / deprecated `session.idle` | idle | None |
+| `permission.asked` with an outstanding request ID | waiting_permission | None |
+| `question.asked` with an outstanding request ID | waiting_input | None |
+| `permission.replied`, `question.replied/rejected` | Remaining requests, then last known status | None |
+| `session.error` | error, retained across the following idle until busy/retry | None |
+| Missing/future status | unknown | None |
+
+The verified 1.19 cancellation path removes pending requests without a reply event and
+publishes idle; idle retires this turn's request IDs. Error causes remain independent
+because the official processor also emits error followed immediately by idle. Waiting
+does not expire merely because the user takes over 90 seconds to respond. Other stale
+OpenCode activity becomes unavailable/unknown after 90 seconds; silence never invents
+idle, success or completion. Closed/restarted/invalidated run owners reject late events.
+
+Only relevant event types enter the serial queue; token deltas are ignored. The queue
+and pending sets are bounded at 128, opaque upstream replay and retired-request ledgers
+at 4096. Exhaustion stops this optional channel with unknown status instead of evicting
+old identities and accepting replay. Authenticated published events carry a monotone
+per-run sequence; backend and frontend reject late/duplicate delivery beyond 1024 events.
+All providers reuse `SessionAppIcon` and `SessionStatusIcon`; observed OpenCode idle gets
+a static badge, unknown a neutral question, permission/input/error their shared shapes.
+Raw and explicitly unsupported/off channels keep neutral running presentation.
+
+Evidence: official source commit
+[`733b2c6`](https://github.com/anomalyco/opencode/tree/733b2c627e5aec39cb33cc22373bdce33053ef2c),
+particularly `plugin/index.ts`, SDK v1 `sdk.gen.ts`, `session/run-state.ts`,
+`session/processor.ts`, `permission/index.ts` and `question/index.ts`. The explicit
+`node tests/scripts/opencodeObserver.real.mjs <installed-opencode.exe>` fixture ran the
+installed 1.19.0 CLI and production plugin in private HOME/XDG roots: real creation,
+identity isolation, abort/idle, HTTP rename, server restart and persistent title passed
+without model calls. Request/error/reordering/overflow/dispose cases are isolated
+production-plugin tests; they are not authenticated model-turn evidence. Browser
+light/dark status rendering is synthetic Chrome evidence, not native Windows WebView2.
