@@ -561,12 +561,10 @@ fn D12_Production_RunSnapshotSurvivesProfileDeleteButNotDocumentRevoke_006() {
     }
 }
 
-// opencode 无 rename 动词：必须在 scope 准入与任何 spawn 之前拒绝（spec §2）。
-// scope_id 故意编造：拿到 NATIVE_RENAME_UNSUPPORTED 而非 SCOPE_UNKNOWN，
-// 证明拒绝发生在 authorize_rename 之前，而非准入失败的附带结果。
+// 官方 HTTP 改名仍须通过真实 scope 授权，不能用伪造来源启动服务。
 #[test]
 #[allow(non_snake_case)]
-fn Opencode_RenameRejectedBeforeScopeAdmission_01() {
+fn Opencode_RenameRejectsInventedScopeBeforeSpawn_01() {
     use crate::cli::native_projection::wire::{ScopeTarget, SourceBasis, SourceRef};
     use crate::cli::types::{CliKind, WireU64};
     let f = Fixture::new();
@@ -593,6 +591,6 @@ fn Opencode_RenameRejectedBeforeScopeAdmission_01() {
     };
     assert_eq!(
         f.service.rename(&f.caller, request).err().unwrap().code,
-        "NATIVE_RENAME_UNSUPPORTED"
+        "SCOPE_UNKNOWN"
     );
 }

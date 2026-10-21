@@ -224,6 +224,7 @@ function parseHistoryId(id: string): { adapterSessionId: string; nativeSessionId
 
 export function nativeHistoryRenameReady(entry: NativeHistoryEntry, item: NativeHistoryEntry['sessions'][number]): boolean {
   return entry.loaded && !entry.loading && !entry.error && !item.readFailure
+    && (entry.context.cli !== 'opencode' || !entry.metadataIncomplete && !item.metadataIncomplete && !item.truncated)
     && !!entry.source && !!entry.sourceRootKey && entry.source.sourceRootKey === entry.sourceRootKey
     && entry.source.target?.kind === 'profile' && entry.source.cli === entry.context.cli
     && entry.source.profileId === entry.context.profileId && entry.source.profileRevision === entry.context.profileRevision
@@ -303,7 +304,7 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
   function projectActive(tab: NativeCliTab) {
     const row = projectTab(tab, deps.tabs)
     const renameMatches = historyForTab(tab)
-    row.renameAvailable = tab.cli !== 'opencode' && !!deps.nativeRename && !!deps.runSource && !!deps.history.load
+    row.renameAvailable = !!deps.nativeRename && !!deps.runSource && !!deps.history.load
       && !!row.renameTarget && renameMatches.length === 1
       && displayRenameSourceReady(renameMatches[0].entry, renameMatches[0].item)
     let identity = tabDisplayIdentity(tab)
@@ -459,7 +460,7 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
         const claim = historyId(entry, item.sessionKey, item.nativeSessionId)
         if (!claimed.has(claim)) sessions.push({
           ...withSessionDisplayName(projectHistory(entry, item), deps.metadata),
-          renameAvailable: entry.context.cli !== 'opencode' && !!deps.nativeRename && displayRenameSourceReady(entry, item),
+          renameAvailable: !!deps.nativeRename && displayRenameSourceReady(entry, item),
           ...archiveState(entry, item, legacyRoot),
           ...(closedNotices.has(claim) ? { observationNotice: { recent: { ...closedNotices.get(claim)!.recent! }, unreadReplyEnd: { ...closedNotices.get(claim)!.unreadReplyEnd! } } } : {}),
         })

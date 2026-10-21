@@ -6,7 +6,7 @@
 
 CC Desk is a desktop workspace for **Claude Code, Codex CLI and opencode**. The native path runs the real CLI process in an owned PTY and keeps the CLI responsible for its own interaction model, commands, permissions, authentication, MCP/runtime behavior, skills/agents/plugins, editors, and future CLI features.
 
-opencode's history is not per-project files but a selected SQLite store under the OpenCode data root, or the exact file named by `OPENCODE_DB`. Its projection runs through a dedicated read-only reader (`cli/native_projection/opencode_db.rs`), not the file-walking catalog path; attribution matches `project.worktree` (named projects) or `session.directory` (the drifting `global` bucket) by normalized spelling, and sessions with a non-null `parent_id` (subagents) are excluded. The CLI has no picker/rename/archive verbs, so those capabilities are explicitly unsupported (`UNSUPPORTED_ACTION` / `NATIVE_RENAME_UNSUPPORTED`) and never silently degraded. Known inherited defect: `session.directory` is never updated when a project directory is renamed (upstream anomalyco/opencode#23248, verified), so sessions recorded under the old path stay invisible after a rename; Desk neither moves nor guesses. Resume (`-s <id>`) ignores the launch cwd and re-enters the session's recorded directory, so `effective_cwd` stays Unknown. Layer C (real logged-in opencode four-cell: create/resume/stop/restart-continue) remains BLOCKED like the other CLIs.
+opencode's history is not per-project files but a selected SQLite store under the OpenCode data root, or the exact file named by `OPENCODE_DB`. Its projection runs through a dedicated read-only reader (`cli/native_projection/opencode_db.rs`), not the file-walking catalog path; attribution matches `project.worktree` (named projects) or `session.directory` (the drifting `global` bucket) by normalized spelling, and sessions with a non-null `parent_id` (subagents) are excluded. The CLI has no picker/rename/archive verbs. Picker/archive CLI actions remain explicitly unsupported; list rename uses the official scoped HTTP metadata API described below. Known inherited defect: `session.directory` is never updated when a project directory is renamed (upstream anomalyco/opencode#23248, verified), so sessions recorded under the old path stay invisible after a rename; Desk neither moves nor guesses. Resume (`-s <id>`) ignores the launch cwd and re-enters the session's recorded directory, so `effective_cwd` stays Unknown. Layer C (real logged-in opencode four-cell: create/resume/stop/restart-continue) remains BLOCKED like the other CLIs.
 
 The SQLite reader rejects linked or non-regular selected database, `-wal`, and `-shm` entries. On Windows, where SQLite's VFS can follow a sidecar link, Desk opens the database and WAL through the retained root capability, copies them into a private temporary directory, and pins the private db/WAL/SHM files while SQLite reads only that copy. A shared source lock preserves the exclusive-writer `SOURCE_BUSY` boundary; a changed file fails the snapshot. The copy is capped at 1 GiB and may return `SOURCE_TOO_LARGE`. On Unix, SQLite's VFS uses `NOFOLLOW` for these files; before opening, Desk resolves only the already authorized root directory and rechecks its held identity so a symlink in an authorized ancestor (such as macOS `/var`) does not block normal reads. The database and both sidecars remain subject to the no-link checks, and root path replacement still fails closed. The `global` project ID is excluded from named-project worktree matching; its sessions are attributed only by their own directory.
 
@@ -419,3 +419,19 @@ refreshes every matching physical-source projection and clears only still-matchi
 tab aliases; a Legacy alias additionally requires a fresh same-root proof.
 
 Exact run receipts retain a backend-only source provenance separate from PTY resources: CLI, profile revision and already-selected configuration/project paths, without env, argv or process handles. It is published atomically with the existing launch completion and only authorizes read scopes for the same caller/document/run/generation. Retirement still invalidates all old process-control and snapshot handles. Revoke, document reload and mismatched generations reject retained source access. This lets explicit structured restarts verify their original physical root after exit; raw restarts keep their explicit rerun semantics.
+
+## OpenCode HTTP title updates
+
+List rename targets a freshly revalidated configured-profile history source, never a
+Run scope or a guessed newest session. Opened resume/new records require their exact
+frozen root, profile revision, project, native ID and source key; unbound/raw, archived,
+failed-read and incomplete OpenCode sources hide Rename, F2 and double-click editing.
+The backend rechecks the selected SQLite filename/channel and source-sidecar boundary,
+then starts an owned private authenticated loopback server from the selected CLI and
+frozen environment. Only official GET/PATCH/GET session metadata calls update the
+title, with exact ID/directory and title readback. PATCH is issued once; uncertain
+results never replay or fall back to direct SQLite writes or a Desk-only alias.
+The existing title receipt and affected-source refresh path synchronizes list aliases.
+Official OpenCode 1.19.0 was checked through isolated PATCH/list/server-restart and
+fresh CLI list reads without model calls. This evidence does not certify a logged-in
+interactive model turn or unrelated external/unregistered sessions.

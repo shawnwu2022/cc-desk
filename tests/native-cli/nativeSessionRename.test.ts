@@ -6,7 +6,7 @@ import type { NativeCliTab } from '@/stores/nativeTabs'
 import { selectSessionMenuActions } from '@/utils/sessionPresentation'
 
 const source: SourceRef = { scopeId:'scope',instanceId:'instance',cli:'codex',sourceRootKey:'root',identityEpoch:'1',profileId:'profile',profileRevision:'1',basis:'configured-profile',target:{kind:'profile',profileId:'profile',expectedProfileRevision:'1',projectIds:['project']} }
-function fixture(cli:'claude'|'codex'='codex') {
+function fixture(cli:'claude'|'codex'|'opencode'='codex') {
   const key=JSON.stringify(['local',cli,'root','session'])
   const entry:NativeHistoryEntry={key:'entry',context:{cli,profileId:'profile',profileRevision:'1',projectId:'project',projectPath:'/repo'},sessions:[{type:'session',sessionKey:key,nativeSessionId:'session',title:'Old title',titleSource:'custom',truncated:false,archived:false,cwd:'/repo',updatedAt:null}],loading:false,loaded:true,error:null,requestEpoch:'1',sourceRootKey:'root',source:{...source,cli}}
   const records=new Map(),write=vi.fn(async(id,record,before)=>{before?.();records.set(id,record)})
@@ -18,7 +18,7 @@ function fixture(cli:'claude'|'codex'='codex') {
   const adapter=createNativeCliAdapter({tabs:{tabs,activeTabId:null,setActive:vi.fn(),close:vi.fn(),rename:vi.fn()},history:{all:()=>entries,load},runtime,archive:{getArchivedSessions:()=>[],archiveSession:vi.fn(),restoreSession:vi.fn()},metadata:{sessionRecords:records,upsertSessionRecord:write},nativeRename:{rename},runSource,legacyClaudeRootKey:legacyRoot})
   return {adapter,entry,entries,rename,load,write,records,tabs,runSource,runtime,legacyRoot}
 }
-function resumed(cli:'claude'|'codex'='codex') {
+function resumed(cli:'claude'|'codex'|'opencode'='codex') {
   const h=fixture(cli)
   const tab:NativeCliTab={tabId:'tab',cli,projectId:'project',projectPath:'/repo',profileId:'profile',profileRevision:'1',requestId:'request',runId:'run',generation:1,action:{kind:'resume-id',nativeSessionId:'session'},sourceSessionKey:h.entry.sessions[0].sessionKey,status:'running',errorCode:null,launchRevision:'1',title:'Old title',createdAt:1,lastActivityAt:1}
   h.tabs.set('tab',tab)
@@ -41,7 +41,7 @@ describe('Native session rename admission',()=>{
     expect(h.rename).not.toHaveBeenCalled()
   })
   // 两种 CLI 的已绑定活动来源与关闭记录使用相同的菜单能力，来源失败立即隐藏入口。
-  it.each(['claude', 'codex'] as const)('Rename_CapabilityMatrix_021_%s', async cli => {
+  it.each(['claude', 'codex', 'opencode'] as const)('Rename_CapabilityMatrix_021_%s', async cli => {
     const h = resumed(cli)
     const opened = (await h.adapter.listSessions()).find(row => row.opened)!
     expect(opened.renameAvailable).toBe(true)
@@ -188,7 +188,7 @@ describe('Native session rename admission',()=>{
     await expect(h.adapter.renameSession(h.id,'Already native')).rejects.toThrow('RENAME_DISPLAY_SYNC_FAILED')
     expect(h.rename).toHaveBeenCalledTimes(1);expect(h.load).toHaveBeenCalledTimes(2)
   })
-  it.each([['claude','resume-id'],['claude','new'],['codex','resume-id'],['codex','new']] as const)('Rename_VerifiedRecordNeverWritesTerminal_016 %s %s',async (cli,kind)=>{
+  it.each([['claude','resume-id'],['claude','new'],['codex','resume-id'],['codex','new'],['opencode','resume-id'],['opencode','new']] as const)('Rename_VerifiedRecordNeverWritesTerminal_016 %s %s',async (cli,kind)=>{
     const h=resumed(cli)
     if(kind==='new'){h.tab.action={kind:'new'};delete h.tab.sourceSessionKey;h.tab.observedSessionId='session'}
     await expect(h.adapter.renameSession(h.id,'Claude native')).resolves.toBe('native-title-saved')

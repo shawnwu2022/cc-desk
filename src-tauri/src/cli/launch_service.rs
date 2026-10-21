@@ -121,6 +121,59 @@ impl LaunchService {
         if selected.root != authority.root_path() {
             return Err(error("SCOPE_STALE"));
         }
+        if request.cli == CliKind::Opencode {
+            let selected = if selected.sqlite_file.is_some() {
+                selected
+            } else {
+                let path = self.probe_opencode_database(
+                    caller,
+                    &profile,
+                    std::path::Path::new(&request.launch_cwd),
+                    snapshot.environment(),
+                )?;
+                selected.with_probed_database(&path).map_err(error)?
+            };
+            if selected.open_root(CliKind::Opencode).map_err(error)?.key() != authority.root_key() {
+                return Err(error("SCOPE_STALE"));
+            }
+            let port = super::opencode_prepare::select_port()?;
+            let mut server_request = request.clone();
+            server_request.action = LaunchAction::Raw {
+                argv: vec![
+                    "serve".into(),
+                    "--hostname".into(),
+                    "127.0.0.1".into(),
+                    "--port".into(),
+                    port.to_string(),
+                ],
+            };
+            let server_snapshot = freeze_launch(
+                &server_request,
+                &profile,
+                caller,
+                &FreezeContext {
+                    inherited: &inherited,
+                    terminal: &EnvMap::new(),
+                    legacy: legacy.as_ref(),
+                    observer: None,
+                },
+            )?;
+            let spec = resolve_process(&build_invocation(&server_request, &server_snapshot)?)?;
+            let current = || {
+                if *self.shutting_down.read() {
+                    return Err(error("RUN_SUPERVISOR_STOPPING"));
+                }
+                self.registry().check_caller(caller)?;
+                authority.verify_opencode_source()
+            };
+            current()?;
+            let (admission, mut owner) = self.admit_owned_command()?;
+            let result = super::opencode_prepare::rename_session(
+                &spec, port, admission, &authority, &title, &current,
+            );
+            owner.settled = true;
+            return result;
+        }
         let private = if request.cli == super::types::CliKind::Claude {
             Some(authority.prepare_claude()?)
         } else {

@@ -271,8 +271,20 @@ pub(crate) fn create_session(
     spec: &ProcessLaunchSpec,
     cwd: &Path,
     port: u16,
+    admission: PreparingStart,
+    current: &impl Fn() -> Result<(), SafeError>,
+) -> Result<String, SafeError> {
+    with_server(spec, port, admission, current, |client, base, password| {
+        post_session(client, base, password, cwd, current)
+    })
+}
+
+fn with_server(
+    spec: &ProcessLaunchSpec,
+    port: u16,
     mut admission: PreparingStart,
     current: &impl Fn() -> Result<(), SafeError>,
+    operation: impl FnOnce(&reqwest::blocking::Client, &str, &str) -> Result<String, SafeError>,
 ) -> Result<String, SafeError> {
     let password = uuid::Uuid::new_v4().simple().to_string();
     let mut command = spec.metadata_command()?;
@@ -342,8 +354,7 @@ pub(crate) fn create_session(
         }
         std::thread::sleep(Duration::from_millis(100));
     }
-    // POST 只发送一次：响应丢失时不能盲重放并制造第二个会话。
-    let id = post_session(&client, &base, &password, cwd, current)?;
+    let id = operation(&client, &base, &password)?;
     drop(child);
     let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
     for _ in 0..10 {
@@ -354,6 +365,98 @@ pub(crate) fn create_session(
         std::thread::sleep(Duration::from_millis(100));
     }
     Err(error("OPENCODE_SESSION_OUTCOME_UNKNOWN"))
+}
+
+pub(crate) fn rename_session(
+    spec: &ProcessLaunchSpec,
+    port: u16,
+    admission: PreparingStart,
+    authority: &super::native_projection::registry::RenameAuthority,
+    title: &str,
+    current: &impl Fn() -> Result<(), SafeError>,
+) -> Result<(), SafeError> {
+    with_server(spec, port, admission, current, |client, base, password| {
+        rename_http(
+            client,
+            base,
+            password,
+            &authority.native_id,
+            Path::new(&authority.cwd),
+            title,
+            current,
+        )
+    })
+    .map(|_| ())
+    .map_err(|failure| match failure.code.as_str() {
+        "OPENCODE_SESSION_PREPARE_UNAVAILABLE_BEFORE_CREATE" => error("NATIVE_RENAME_UNSUPPORTED"),
+        "OPENCODE_SESSION_OUTCOME_UNKNOWN" => error("RENAME_OUTCOME_UNKNOWN"),
+        _ => failure,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn rename_http(
+    client: &reqwest::blocking::Client,
+    base: &str,
+    password: &str,
+    id: &str,
+    cwd: &Path,
+    title: &str,
+    current: &impl Fn() -> Result<(), SafeError>,
+) -> Result<String, SafeError> {
+    #[derive(Deserialize)]
+    struct Metadata {
+        id: String,
+        directory: String,
+        title: String,
+    }
+    let check = |value: &Metadata| {
+        if value.id != id || !same_directory(&value.directory, cwd) {
+            return Err(error("SESSION_ORIGIN_AMBIGUOUS"));
+        }
+        current()
+    };
+    let url = format!("{base}/session/{id}");
+    current()?;
+    let before = client
+        .get(&url)
+        .basic_auth("opencode", Some(password))
+        .timeout(CREATE_TIMEOUT)
+        .send()
+        .and_then(|r| r.error_for_status())
+        .map_err(|_| error("NATIVE_RENAME_UNSUPPORTED"))?;
+    let before: Metadata =
+        bounded_json(before, 32768).ok_or_else(|| error("NATIVE_RENAME_UNSUPPORTED"))?;
+    check(&before)?;
+    // PATCH 仅发一次。未知写入结果不自动重放，也不退回 SQLite 或显示别名。
+    let changed = client
+        .patch(&url)
+        .basic_auth("opencode", Some(password))
+        .timeout(CREATE_TIMEOUT)
+        .json(&serde_json::json!({"title":title}))
+        .send()
+        .and_then(|r| r.error_for_status())
+        .map_err(|_| error("RENAME_OUTCOME_UNKNOWN"))?;
+    let changed: Metadata =
+        bounded_json(changed, 32768).ok_or_else(|| error("RENAME_OUTCOME_UNKNOWN"))?;
+    check(&changed)?;
+    if changed.title != title {
+        return Err(error("RENAME_OUTCOME_UNKNOWN"));
+    }
+    let after = client
+        .get(&url)
+        .basic_auth("opencode", Some(password))
+        .timeout(CREATE_TIMEOUT)
+        .send()
+        .and_then(|r| r.error_for_status())
+        .map_err(|_| error("RENAME_OUTCOME_UNKNOWN"))?;
+    let after: Metadata =
+        bounded_json(after, 32768).ok_or_else(|| error("RENAME_OUTCOME_UNKNOWN"))?;
+    check(&after)?;
+    if after.title != title {
+        return Err(error("RENAME_OUTCOME_UNKNOWN"));
+    }
+    Ok(id.to_owned())
 }
 
 fn post_session(
@@ -382,6 +485,114 @@ fn post_session(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[allow(non_snake_case)]
+    fn Opencode_RenameHttpChecksIdentityAndNeverReplaysPatch_096() {
+        use std::io::Write;
+        for mode in [
+            "success",
+            "wrong-id",
+            "wrong-directory",
+            "wrong-patch-title",
+            "wrong-readback",
+            "redirect",
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let address = listener.local_addr().unwrap();
+            let count = if mode == "wrong-id" || mode == "wrong-directory" {
+                1
+            } else if mode == "wrong-patch-title" || mode == "redirect" {
+                2
+            } else {
+                3
+            };
+            let worker = std::thread::spawn(move || {
+                let mut methods = Vec::new();
+                let deadline = Instant::now() + Duration::from_secs(3);
+                while methods.len() < count && Instant::now() < deadline {
+                    let Ok((mut stream, _)) = listener.accept() else {
+                        std::thread::sleep(Duration::from_millis(5));
+                        continue;
+                    };
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(1)))
+                        .unwrap();
+                    let mut bytes = Vec::new();
+                    let mut buffer = [0; 4096];
+                    loop {
+                        let n = stream.read(&mut buffer).unwrap();
+                        if n == 0 {
+                            break;
+                        }
+                        bytes.extend_from_slice(&buffer[..n]);
+                        if let Some(end) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                            let header = String::from_utf8_lossy(&bytes[..end]).to_lowercase();
+                            let length = header
+                                .lines()
+                                .find_map(|l| {
+                                    l.strip_prefix("content-length: ")
+                                        .and_then(|x| x.parse::<usize>().ok())
+                                })
+                                .unwrap_or(0);
+                            if bytes.len() >= end + 4 + length {
+                                break;
+                            }
+                        }
+                    }
+                    let request = String::from_utf8(bytes).unwrap();
+                    methods.push(request.split_whitespace().next().unwrap().to_owned());
+                    assert!(request.contains("/session/ses_fixture HTTP/1.1"));
+                    assert!(request.to_lowercase().contains("authorization: basic "));
+                    if methods.len() == 2 {
+                        assert!(request.ends_with("{\"title\":\"New title\"}"));
+                    }
+                    let mut body = serde_json::json!({"id":"ses_fixture","directory":"/fixture","title":if methods.len()==1 {"Old"} else {"New title"},"future":true});
+                    if mode == "wrong-id" {
+                        body["id"] = "ses_foreign".into();
+                    }
+                    if mode == "wrong-directory" {
+                        body["directory"] = "/foreign".into();
+                    }
+                    if (mode == "wrong-patch-title" && methods.len() == 2)
+                        || (mode == "wrong-readback" && methods.len() == 3)
+                    {
+                        body["title"] = "Old".into();
+                    }
+                    let status = if mode == "redirect" && methods.len() == 2 {
+                        "307 Temporary Redirect\r\nLocation: /session/ses_fixture"
+                    } else {
+                        "200 OK"
+                    };
+                    let body = body.to_string();
+                    write!(stream,"HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
+                }
+                methods
+            });
+            let result = rename_http(
+                &http_client().unwrap(),
+                &format!("http://{address}"),
+                "fixture-secret",
+                "ses_fixture",
+                Path::new("/fixture"),
+                "New title",
+                &|| Ok(()),
+            );
+            let methods = worker.join().unwrap();
+            assert_eq!(methods.len(), count, "{mode}");
+            assert_eq!(
+                methods.iter().filter(|m| m.as_str() == "PATCH").count(),
+                usize::from(count > 1)
+            );
+            match mode {
+                "success" => assert_eq!(result.unwrap(), "ses_fixture"),
+                "wrong-id" | "wrong-directory" => {
+                    assert_eq!(result.unwrap_err().code, "SESSION_ORIGIN_AMBIGUOUS")
+                }
+                _ => assert_eq!(result.unwrap_err().code, "RENAME_OUTCOME_UNKNOWN"),
+            }
+        }
+    }
     use std::io::Write;
 
     fn mock_creation_server(
