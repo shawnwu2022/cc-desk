@@ -7,6 +7,8 @@ mod cache;
 mod catalog;
 #[path = "../../../src-tauri/src/cli/environment.rs"]
 mod environment;
+#[path = "../../../src-tauri/src/cli/native_projection/opencode_db.rs"]
+mod opencode_db;
 #[path = "../../../src-tauri/src/cli/profiles.rs"]
 mod profiles;
 #[path = "../../../src-tauri/src/cli/native_projection/registry.rs"]
@@ -48,7 +50,7 @@ mod version_history {
 
 mod native_projection {
     #[allow(unused_imports)]
-    pub(crate) use crate::{cache, registry, scoped_fs, wire};
+    pub(crate) use crate::{cache, opencode_db, registry, scoped_fs, wire};
 }
 mod cli {
     #[allow(unused_imports)]
