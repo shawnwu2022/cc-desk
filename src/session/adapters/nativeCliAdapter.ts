@@ -9,6 +9,7 @@ import type {
   SessionAdapter,
   SessionRenameResult,
   UnifiedSession,
+  UnifiedCliKind,
 } from '@/types/unifiedSession'
 import { makeSessionCatalogKey, nativeHistoryRecordKey } from '@/utils/sessionPresentation'
 import { normalizePath } from '@/utils/path'
@@ -52,7 +53,7 @@ export interface NativeRuntimePort {
 export interface NativeArchivePort {
   getArchivedSessions(projectPath: string): string[]
   archiveSession(projectPath: string, sessionId: string, beforeMutation?: () => void): Promise<unknown>
-  restoreSession(projectPath: string, sessionId: string): Promise<unknown>
+  restoreSession(projectPath: string, sessionId: string, beforeMutation?: () => void, prepareMutation?: () => Promise<void>): Promise<unknown>
 }
 
 /// CLI 自身归档容器（codex archived_sessions）的恢复端口。Desk 不搬动 CLI 文件，
@@ -73,6 +74,7 @@ export interface NativeCliAdapterDeps {
   /** legacy 固定根（`~/.claude`）的目录身份 key；仅在该根被证明时才接管 legacy 的裸 ID 归档。
    *  每次投影及恢复都重新验证，根替换后不能复用旧的归属证明。 */
   legacyClaudeRootKey?: () => string | undefined | Promise<string | undefined>
+  historyEnabled?(cli: UnifiedCliKind): boolean
 }
 
 function processState(status: NativeCliTab['status']): UnifiedSession['processState'] {
@@ -109,10 +111,12 @@ function projectNotice(tab: NativeCliTab, tabs: NativeTabsPort): NativeObservati
 
 function projectTab(tab: NativeCliTab, tabs?: NativeTabsPort): UnifiedSession {
   const nativeSessionId = tabNativeSessionId(tab)
-  // The existing optional observer is a Claude-only non-raw side channel.
-  // Missing/inactive observations cannot establish current turn activity.
+  // Codex 的终端快照与 Claude 认证 hook 分开投影，不产生回合完成或授权原因。
   const claudeObservation = tab.cli === 'claude' && tab.action.kind !== 'raw'
+  const codexObservation = tab.cli === 'codex' && tab.action.kind !== 'raw'
   const activeObservation = claudeObservation && tab.status === 'running' && tab.observationState === 'active'
+  const codexStatus = codexObservation && tab.status === 'running' ? tab.codexProgramStatus : undefined
+  const codexActivity = codexStatus === 'working' ? 'working' : codexStatus === 'blocked' ? 'waiting' : codexStatus === 'idle' ? 'idle' : 'unknown'
   const observationNotice = tabs && projectNotice(tab, tabs)
   return {
     id: activeId(tab.tabId),
@@ -122,10 +126,11 @@ function projectTab(tab: NativeCliTab, tabs?: NativeTabsPort): UnifiedSession {
     runtime: 'native-cli',
     title: tab.title,
     processState: tab.status === 'stopped' && tab.launchRevision === null ? 'starting' : processState(tab.status),
-    attentionState: activeObservation ? tab.attentionState ?? 'none' : 'none',
-    activityState: activeObservation ? tab.activityState ?? 'unknown' : 'unknown',
-    observationState: claudeObservation ? tab.observationState ?? 'off' : 'off',
-    ...(!claudeObservation ? { observerReasonCode: 'OBSERVER_UNSUPPORTED' as const }
+    attentionState: activeObservation ? tab.attentionState ?? 'none' : codexActivity === 'waiting' ? 'needs-user' : 'none',
+    activityState: activeObservation ? tab.activityState ?? 'unknown' : codexActivity,
+    observationState: claudeObservation ? tab.observationState ?? 'off' : codexObservation ? codexActivity === 'unknown' ? 'unavailable' : 'active' : 'off',
+    ...(codexObservation ? codexActivity === 'unknown' ? { observerReasonCode: 'OBSERVER_UNAVAILABLE' as const } : {}
+      : !claudeObservation ? { observerReasonCode: 'OBSERVER_UNSUPPORTED' as const }
       : tab.observerReasonCode ? { observerReasonCode: tab.observerReasonCode } : {}),
     ...(observationNotice ? { observationNotice } : {}),
     lastActivityAt: tab.lastActivityAt,
@@ -142,7 +147,7 @@ function projectTab(tab: NativeCliTab, tabs?: NativeTabsPort): UnifiedSession {
     safeErrorCode: tab.errorCode,
     renameState: 'idle',
     ...(tab.action.kind === 'resume-id' && tab.sourceSessionKey ? { renameTarget: 'resume-source' as const }
-      : tab.cli === 'claude' && tab.action.kind === 'new' && tab.observedSessionId ? { renameTarget: 'history-record' as const } : {}),
+      : tab.action.kind === 'new' && tab.observedSessionId ? { renameTarget: 'history-record' as const } : {}),
   }
 }
 
@@ -217,7 +222,21 @@ function parseHistoryId(id: string): { adapterSessionId: string; nativeSessionId
   return { projectPath, adapterSessionId, nativeSessionId }
 }
 
+export function nativeHistoryRenameReady(entry: NativeHistoryEntry, item: NativeHistoryEntry['sessions'][number]): boolean {
+  return entry.loaded && !entry.loading && !entry.error && !item.readFailure
+    && !!entry.source && !!entry.sourceRootKey && entry.source.sourceRootKey === entry.sourceRootKey
+    && entry.source.target?.kind === 'profile' && entry.source.cli === entry.context.cli
+    && entry.source.profileId === entry.context.profileId && entry.source.profileRevision === entry.context.profileRevision
+    && entry.source.target.profileId === entry.context.profileId
+    && entry.source.target.expectedProfileRevision === entry.context.profileRevision
+    && Array.isArray(entry.source.target.projectIds) && entry.source.target.projectIds.includes(entry.context.projectId)
+}
+
 export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapter {
+  let legacyArchiveDisplayRoot: string | undefined
+  // 仅显示快照：不能用它补出运行 scope、归档或改名授权。
+  const titleSnapshots = new WeakMap<NativeCliTab, { owner: string; identity: UnifiedSession }>()
+  const renameCapabilities = new WeakMap<NativeHistoryEntry['sessions'][number], { entry: string; root?: string; ready: boolean }>()
   // 仅内存展示快照：不跨应用重启、不赋予资源/进程授权；满额不淘汰既有未读。
   const closedNotices = new Map<string, NativeObservationNoticeState>()
   const closingNoticeOwners = new Map<string, { latest: symbol; order: number; pending: number }>()
@@ -283,14 +302,33 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
   }
   function projectActive(tab: NativeCliTab) {
     const row = projectTab(tab, deps.tabs)
-    const identity = tabDisplayIdentity(tab)
+    const renameMatches = historyForTab(tab)
+    row.renameAvailable = tab.cli !== 'opencode' && !!deps.nativeRename && !!deps.runSource && !!deps.history.load
+      && !!row.renameTarget && renameMatches.length === 1
+      && displayRenameSourceReady(renameMatches[0].entry, renameMatches[0].item)
+    let identity = tabDisplayIdentity(tab)
+    // 精确错误只来自当前匹配行，标题快照不能回放旧诊断。
+    const currentReadFailure = identity.historyReadFailure
+    const observedHistory = Boolean(identity.nativeRootKey)
+    const owner = JSON.stringify([captureNativeAttempt(tab), tab.cli, tab.projectId, tab.projectPath,
+      tab.profileId, tab.profileRevision, tab.action, tab.sourceSessionKey, tabNativeSessionId(tab)])
+    const snapshot = titleSnapshots.get(tab)
+    const contexts = deps.history.all().filter(entry => entry.context.cli === tab.cli && entry.context.profileId === tab.profileId
+      && entry.context.profileRevision === tab.profileRevision && entry.context.projectId === tab.projectId
+      && normalizePath(entry.context.projectPath) === normalizePath(tab.projectPath))
+    if (identity.nativeRootKey) titleSnapshots.set(tab, { owner, identity })
+    else if (snapshot?.owner === owner && !contexts.some(entry => entry.sourceRootKey && entry.sourceRootKey !== snapshot.identity.nativeRootKey)) {
+      // 来源撤销时只保留名称/创建时间与精确显示覆盖键，不发布旧根为当前权限证据。
+      identity = snapshot.identity
+    } else titleSnapshots.delete(tab)
     // 唯一历史对应存在时（观察器回填身份后），活动行跟随 CLI 记录的标题
     // （首条消息 / AI 摘要 / 手动改名），而不是停留在本地占位名 "Claude Code"。
     // 保存的 Desk 显示名在 withSessionDisplayName 内仍优先于 CLI 标题。
     // 创建时间同样继承历史身份：resume/激活不改变会话的创建序位置。
     const titled = identity.id.startsWith(HISTORY_PREFIX)
       ? { ...row, title: identity.title,
-          ...(identity.nativeRootKey ? { nativeRootKey: identity.nativeRootKey, nativeHistorySessionKey:identity.adapterSessionId } : {}),
+          ...(currentReadFailure ? { historyReadFailure: currentReadFailure } : {}),
+          ...(observedHistory ? { nativeRootKey: identity.nativeRootKey, nativeHistorySessionKey: identity.adapterSessionId } : {}),
           ...(identity.createdAt !== undefined ? { createdAt: identity.createdAt } : {}) }
       : row
     // 首次认证身份晚于用户改名时，未知身份下保存的名称仍属于这个 tab。
@@ -343,20 +381,27 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
   // 出现在普通列表，恢复动作也不会清除该条目。裸 ID 只有在**根身份已证明为
   // legacy 固定根**、且本适配器内唯一匹配时才归属到该行；否则保持不识别。
   function bareIdMatches(nativeSessionId: string) {
-    return deps.history.all().flatMap(entry => entry.sessions.filter(item => item.nativeSessionId === nativeSessionId)
+    return deps.history.all().filter(entry => entry.context.cli === 'claude').flatMap(entry => entry.sessions.filter(item => item.nativeSessionId === nativeSessionId)
       .map(item => ({ entry, item })))
+  }
+  function uniqueBareIdSource(nativeSessionId: string) {
+    const matches = bareIdMatches(nativeSessionId)
+    if (matches.length === 1) return true
+    const records = matches.map(({ entry, item }) => nativeHistoryRecordKey(projectHistory(entry, item)))
+    return records.length > 0 && records.every(record => record !== null) && new Set(records).size === 1
   }
   function archiveState(entry: NativeHistoryEntry, item: NativeHistoryEntry['sessions'][number], legacyRoot: string | undefined) {
     const keys = deps.archive.getArchivedSessions(entry.context.projectPath)
     const old = oldHistoryId(entry, item.sessionKey, item.nativeSessionId)
     const legacy = keys.includes(old)
-    const sameLegacyRoot = legacyRoot !== undefined && entry.sourceRootKey === legacyRoot
+    const sameLegacyRoot = entry.context.cli === 'claude' && entry.sourceRootKey !== undefined && entry.sourceRootKey === (legacyRoot ?? legacyArchiveDisplayRoot)
     const bare = sameLegacyRoot && keys.includes(item.nativeSessionId)
-    const bareAmbiguous = bare && bareIdMatches(item.nativeSessionId).length !== 1
+    const bareAmbiguous = bare && !uniqueBareIdSource(item.nativeSessionId)
     // archived=true 也来自 CLI 自身的归档容器（codex 会把会话移进
     // archived_sessions/，与 sessions/ 零重叠），不只来自 Desk 的归档注册表。
     return { archived: item.archived === true || keys.includes(historyId(entry, item.sessionKey, item.nativeSessionId)) || legacy || bare,
-      safeErrorCode: (legacy && oldKeyMatches(old).length !== 1) || bareAmbiguous ? 'SESSION_ORIGIN_AMBIGUOUS' : null }
+      safeErrorCode: (legacy && oldKeyMatches(old).length !== 1) || bareAmbiguous ? 'SESSION_ORIGIN_AMBIGUOUS'
+        : bare && legacyRoot === undefined ? 'SOURCE_UNAVAILABLE' : null }
   }
 
   function requireTab(id: string): NativeCliTab {
@@ -376,10 +421,26 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
     })
   }
 
-  async function listSessions(projectKey?: string): Promise<UnifiedSession[]> {
-    const legacyRoot = await deps.legacyClaudeRootKey?.()
+  function displayRenameSourceReady(entry: NativeHistoryEntry, item: NativeHistoryEntry['sessions'][number]): boolean {
+    // 强制预检保留旧行；读取中沿用最后已验证的展示能力，避免保存被自身预检取消。
+    if (entry.loading) {
+      const previous = renameCapabilities.get(item)
+      return previous?.entry === entry.key && previous.root === entry.sourceRootKey && previous.ready
+    }
+    const ready = nativeHistoryRenameReady(entry, item)
+    renameCapabilities.set(item, { entry: entry.key, root: entry.sourceRootKey, ready })
+    return ready
+  }
+
+
+  async function listSessions(projectKey?: string, cli?: UnifiedCliKind): Promise<UnifiedSession[]> {
     const wanted = projectKey == null ? null : normalizePath(projectKey)
-    const tabs = [...deps.tabs.tabs.values()].filter(tab => wanted == null || normalizePath(tab.projectPath) === wanted)
+    const hasClaudeHistory = deps.history.all().some(entry => entry.context.cli === 'claude'
+      && (wanted == null || normalizePath(entry.context.projectPath) === wanted))
+    const legacyRoot = cli === 'codex' || deps.historyEnabled?.('claude') === false || !hasClaudeHistory
+      ? undefined : await deps.legacyClaudeRootKey?.()
+    if (!legacyArchiveDisplayRoot && legacyRoot) legacyArchiveDisplayRoot = legacyRoot
+    const tabs = [...deps.tabs.tabs.values()].filter(tab => (!cli || tab.cli === cli) && (wanted == null || normalizePath(tab.projectPath) === wanted))
     // Transfer the original accepted time when an exact history key becomes
     // available. Activity does not generate a new time or another saved write.
     await Promise.all(tabs.map(transferOpen))
@@ -391,11 +452,14 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
     }))
     const sessions = tabs.map(projectActive)
     for (const entry of deps.history.all()) {
+      if (deps.historyEnabled?.(entry.context.cli) === false) continue
+      if (cli && entry.context.cli !== cli) continue
       if (wanted != null && normalizePath(entry.context.projectPath) !== wanted) continue
       for (const item of entry.sessions) {
         const claim = historyId(entry, item.sessionKey, item.nativeSessionId)
         if (!claimed.has(claim)) sessions.push({
           ...withSessionDisplayName(projectHistory(entry, item), deps.metadata),
+          renameAvailable: entry.context.cli !== 'opencode' && !!deps.nativeRename && displayRenameSourceReady(entry, item),
           ...archiveState(entry, item, legacyRoot),
           ...(closedNotices.has(claim) ? { observationNotice: { recent: { ...closedNotices.get(claim)!.recent! }, unreadReplyEnd: { ...closedNotices.get(claim)!.unreadReplyEnd! } } } : {}),
         })
@@ -584,7 +648,7 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
       const tab = { ...requireTab(id) }
       if (tab.cli === 'claude' && !deps.nativeRename) throw new Error('NATIVE_RENAME_UNSUPPORTED')
       const nativeSessionId = tab.action.kind === 'resume-id' && tab.sourceSessionKey ? tab.action.nativeSessionId
-        : tab.cli === 'claude' && tab.action.kind === 'new' ? tab.observedSessionId : undefined
+        : tab.action.kind === 'new' ? tab.observedSessionId : undefined
       if (!nativeSessionId || !deps.runSource || !deps.history.load) throw new Error('SESSION_IDENTITY_UNKNOWN')
       if (tab.action.kind === 'new') ownsRecord = () => deps.tabs.tabs.get(tab.tabId)?.observedSessionId === nativeSessionId
       const context = { cli:tab.cli, profileId:tab.profileId, profileRevision:tab.profileRevision, projectId:tab.projectId, projectPath:tab.projectPath }
@@ -612,7 +676,8 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
       target = matches[0]
     }
     const { entry, item } = target
-    if (!entry.source || entry.error || !entry.loaded || !deps.nativeRename) throw new Error('NATIVE_RENAME_UNSUPPORTED')
+    if (!nativeHistoryRenameReady(entry, item) || !deps.nativeRename) throw new Error('NATIVE_RENAME_UNSUPPORTED')
+    if (!entry.source) throw new Error('NATIVE_RENAME_UNSUPPORTED')
     const source = { ...entry.source, target:entry.source.target.kind === 'profile'
       ? { ...entry.source.target, projectIds:[...entry.source.target.projectIds] } : { ...entry.source.target } }
     const request = { operationId:createNativeId('rename'), source, sessionKey:item.sessionKey, title:value }
@@ -691,13 +756,22 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
   }
   async function restoreArchivedSession(id: string): Promise<void> {
     const history = parseHistoryId(id)
-    const legacyRoot = await deps.legacyClaudeRootKey?.()
     const match = deps.history.all().flatMap(entry => entry.sessions.filter(item => historyId(entry, item.sessionKey, item.nativeSessionId) === id).map(item => ({ entry, item })))[0]
     const keys = deps.archive.getArchivedSessions(history.projectPath)
+    const legacyRoot = match?.entry.context.cli === 'claude' && keys.includes(match.item.nativeSessionId)
+      ? await deps.legacyClaudeRootKey?.() : undefined
+    const physical = match ? nativeHistoryRecordKey(projectHistory(match.entry, match.item)) : null
+    const sourceRoot = match?.entry.sourceRootKey
+    const exactAliases = new Set<string>()
     // 所有来源歧义必须在第一次写操作之前判定完毕：先删掉一个 key 再报歧义会让
     // 归档元数据部分改变，达不到「歧义时保留」的语义。
     const pending: string[] = []
     if (match) {
+      if (physical) for (const entry of deps.history.all()) for (const item of entry.sessions) {
+        if (nativeHistoryRecordKey(projectHistory(entry, item)) !== physical) continue
+        const alias = historyId(entry, item.sessionKey, item.nativeSessionId)
+        if (keys.includes(alias)) { pending.push(alias); exactAliases.add(alias) }
+      }
       const old = oldHistoryId(match.entry, match.item.sessionKey, match.item.nativeSessionId)
       if (keys.includes(old)) {
         if (oldKeyMatches(old).length !== 1) throw new Error('SESSION_ORIGIN_AMBIGUOUS')
@@ -707,12 +781,33 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
       // 与 archiveState 同一门槛：只在根身份证明为 legacy 固定根且唯一匹配时清除，
       // 否则保留并如实报歧义，不猜测归属。
       const bare = match.item.nativeSessionId
-      if (legacyRoot !== undefined && match.entry.sourceRootKey === legacyRoot && keys.includes(bare)) {
-        if (bareIdMatches(bare).length !== 1) throw new Error('SESSION_ORIGIN_AMBIGUOUS')
+      if (match.entry.context.cli === 'claude' && keys.includes(bare) && match.entry.sourceRootKey === legacyArchiveDisplayRoot && legacyRoot !== legacyArchiveDisplayRoot) {
+        throw new Error('SESSION_ORIGIN_AMBIGUOUS')
+      }
+      if (match.entry.context.cli === 'claude' && legacyRoot !== undefined && match.entry.sourceRootKey === legacyRoot && keys.includes(bare)) {
+        if (!uniqueBareIdSource(bare)) throw new Error('SESSION_ORIGIN_AMBIGUOUS')
         pending.push(bare)
       }
     }
     if (keys.includes(id)) pending.push(id)
+    const requireCurrent = (key: string) => {
+      // 队列等待和强制重读都可能撤销来源，保留的旧行不能授权清理归档键。
+      if (match) {
+        const current = findHistory(id)
+        if (current.length !== 1 || current[0].entry.loading || current[0].entry.error || !current[0].entry.loaded
+          || current[0].entry.sourceRootKey !== sourceRoot
+          || nativeHistoryRecordKey(projectHistory(current[0].entry, current[0].item)) !== physical) throw new Error('STALE_SESSION_ATTEMPT')
+        if (exactAliases.has(key)) {
+          const aliases = findHistory(key)
+          if (aliases.length !== 1 || aliases[0].entry.loading || aliases[0].entry.error || !aliases[0].entry.loaded
+            || nativeHistoryRecordKey(projectHistory(aliases[0].entry, aliases[0].item)) !== physical) throw new Error('STALE_SESSION_ATTEMPT')
+        }
+        if (key === match.item.nativeSessionId && !uniqueBareIdSource(key)) {
+          throw new Error('SESSION_ORIGIN_AMBIGUOUS')
+        }
+      }
+    }
+    for (const key of new Set(pending)) requireCurrent(key)
     // CLI 取消归档必须在清注册表之前：codex unarchive 是可能失败的外部副作用，
     // 先清应用侧标记会留下「注册表已清、CLI 仍归档」的部分状态变更。失败时这里
     // 尚未发生任何写操作，整体失败，重试自洽。
@@ -730,7 +825,9 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
         await deps.history.load?.({ ...match.entry.context, force: true, retainOnFailure: true })
       }
     }
-    for (const key of pending) await deps.archive.restoreSession(history.projectPath, key)
+    for (const key of new Set(pending)) await deps.archive.restoreSession(history.projectPath, key, () => requireCurrent(key), match && key === match.item.nativeSessionId ? async () => {
+      if (await deps.legacyClaudeRootKey?.() !== sourceRoot) throw new Error('SESSION_ORIGIN_AMBIGUOUS')
+    } : undefined)
     if (match) {
       await saveSessionOpenedAt(deps.metadata, projectHistory(match.entry, match.item), Date.now(),
         () => findHistory(id).length === 1).catch(() => {})

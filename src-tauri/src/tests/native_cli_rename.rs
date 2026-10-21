@@ -2,6 +2,33 @@
 use super::*;
 use serde_json::json;
 
+// Claude 当轮 cwd 可进入子目录；改名仍绑定首个 cwd，并拒绝错项目和混入的会话身份。
+#[test]
+fn NativeRename_ClaudeCwdChanges_020() {
+    use crate::cli::native_projection::scoped_fs::Root;
+    let temp = tempfile::tempdir().unwrap();
+    let root = Root::open(temp.path()).unwrap();
+    let id = "00000000-0000-4000-8000-000000000020";
+    let path = format!("{id}.jsonl");
+    for (first, later_id, accepted) in [
+        ("/repo", id, true),
+        ("/other", id, false),
+        ("/repo", "00000000-0000-4000-8000-000000000099", false),
+    ] {
+        std::fs::write(
+            temp.path().join(&path),
+            format!(
+                "{}\n{}\n",
+                json!({"type":"user","sessionId":id,"cwd":first}),
+                json!({"type":"assistant","sessionId":later_id,"cwd":"/repo/subdir"})
+            ),
+        )
+        .unwrap();
+        let transcript = root.pin_transcript(&path).unwrap();
+        assert_eq!(transcript.verify(id, "/repo", None).is_ok(), accepted);
+    }
+}
+
 #[test]
 fn NativeRename_OfficialProtocolConfirmsWithoutTurn_001() {
     let mut sent = Vec::new();

@@ -47,6 +47,8 @@ function workspaceFixture() {
   setActivePinia(createPinia())
   vi.stubGlobal('crypto', webcrypto)
   localStorage.clear()
+  // 压力库存固定包含两类 CLI，不依赖新用户的默认开关。
+  localStorage.setItem('cc-desk-cli-support-v1', JSON.stringify({ claude: true, codex: true }))
   const fixture = {
     state: { pinnedProjects: [], archivedSessions: {}, displayNames: {}, sessionRecords: {}, launchPreferences: {} } as ProjectsState,
     config: { theme: 'light', terminalTheme: 'cc-box-light', language: 'en', hiddenProjects: [] } as Record<string, unknown>,

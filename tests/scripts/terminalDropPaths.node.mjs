@@ -27,7 +27,7 @@ function loadSource(filename) {
   return m.exports
 }
 const { relativizePath } = loadSource(resolve('src/utils/path.ts'))
-const { selectSessionMenuActions } = loadSource(resolve('src/utils/sessionPresentation.ts'))
+const { canRenameSession, selectSessionMenuActions } = loadSource(resolve('src/utils/sessionPresentation.ts'))
 const { formatDroppedPaths } = loadSource(resolve('src/utils/terminalDropPaths.ts'))
 
 function controller(kind, projectPath = '/repo') {
@@ -68,9 +68,9 @@ for (const kind of ['native', 'legacy']) {
 }
 
 test('Rename_ClosedHistoryMenuRetainsMetadataAction_004', () => {
-  const row = { opened: false, archived: false, processState: 'stopped', resumable: true }
+  const row = { opened: false, archived: false, processState: 'stopped', resumable: true, renameAvailable: true }
   assert.ok(selectSessionMenuActions(row).some(action => action.id === 'rename'))
-  for (const blocked of [{ ...row, archived: true }, { ...row, preparationState: 'preparing' }]) {
+  for (const blocked of [{ ...row, archived: true }, { ...row, preparationState: 'preparing' }, { ...row, renameAvailable: false }, { ...row, renameAvailable: undefined }]) {
     assert.ok(!selectSessionMenuActions(blocked).some(action => action.id === 'rename'))
   }
 })
@@ -79,13 +79,13 @@ test('Rename_ClosedHistoryEditorDoesNotSelectTerminal_005', () => {
   const source = readFileSync('src/stores/unifiedSessions.ts', 'utf8')
   const body = source.match(/  function beginRename\(id: string\) \{([\s\S]*?)\n  \}/)?.[1]
   assert.ok(body)
-  const sessions = { value: [{ id: 'history', opened: false, archived: false, renameState: 'idle' }] }
+  const sessions = { value: [{ id: 'history', opened: false, archived: false, renameAvailable: true, renameState: 'idle' }] }
   const selection = { value: 'live-terminal' }
   const owners = new Map()
   const begin = Function('sessions', 'activeSessionId', 'pendingRenames', 'isPreparingSession',
-    'renameOwners', 'ownsRename', 'captureRenameOwner', 'return function(id){' + body + '}')(
+    'renameOwners', 'ownsRename', 'captureRenameOwner', 'canRenameSession', 'return function(id){' + body + '}')(
     sessions, selection, new Map(), () => false, owners, () => true,
-    () => ({ controller: new AbortController() }))
+    () => ({ controller: new AbortController() }), canRenameSession)
   begin('history')
   assert.equal(sessions.value[0].renameState, 'editing')
   assert.equal(selection.value, 'live-terminal')
@@ -94,15 +94,15 @@ test('Rename_ClosedHistoryEditorDoesNotSelectTerminal_005', () => {
 
 test('Rename_ClosedHistorySfcAdmitsAndRendersEditor_006', () => {
   const source = readFileSync('src/components/sessions/SessionItem.vue', 'utf8')
-  const props = { selected: false, session: { opened: false, archived: false, renameState: 'editing' } }
+  const props = { selected: false, session: { opened: false, archived: false, renameAvailable: true, renameState: 'editing' } }
   for (const name of ['canRename', 'isRenaming']) {
     const expression = source.match(new RegExp('const ' + name + ' = computed\\(\\(\\) => (.+)\\)'))?.[1]
     assert.ok(expression)
-    assert.equal(Function('props', 'localRename', 'return ' + expression)(props, { value: false }), true, name)
+    assert.equal(Function('props', 'localRename', 'canRenameSession', 'return ' + expression)(props, { value: false }, canRenameSession), true, name)
   }
   const expression = source.match(/const isRenaming = computed\(\(\) => (.+)\)/)?.[1]
-  const render = (selected, opened, state, local) => Function('props', 'localRename', 'return ' + expression)(
-    { selected, session: { opened, renameState: state } }, { value: local })
+  const render = (selected, opened, state, local) => Function('props', 'localRename', 'canRenameSession', 'return ' + expression)(
+    { selected, session: { opened, renameState: state, renameAvailable: true } }, { value: local }, canRenameSession)
   // 后台保存只禁用 Archive；已进入的编辑器和选中运行行保存仍保持编辑器。
   assert.equal(render(false, false, 'saving', false), false)
   assert.equal(render(false, false, 'saving', true), true)

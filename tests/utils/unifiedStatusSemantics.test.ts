@@ -30,7 +30,7 @@ describe('Unified historical status semantics', () => {
       expect(deriveSessionVisualState(row({ runtime:'native-cli', observationState, activityState:'unknown' }))).toBe(expected)
     }
     expect(deriveSessionVisualState(row({ runtime:'native-cli',observationState:'active',activityState:'idle' }))).toBe('running')
-    expect(deriveSessionVisualState(row({ cli:'codex',runtime:'native-cli',observationState:'off',activityState:'unknown' }))).toBe('running')
+    expect(deriveSessionVisualState(row({ cli:'codex',runtime:'native-cli',observationState:'unavailable',activityState:'unknown' }))).toBe('unknown')
   })
   // 删除活动/关注原因投影会使这些边界断言失败，进程运行不能代替回合活动。
   // 无观察通道（observationState 未激活）的 unknown 是"无从得知"，显示中性

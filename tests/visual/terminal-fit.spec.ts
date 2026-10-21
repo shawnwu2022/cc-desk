@@ -2,6 +2,36 @@ import { expect, test } from '@playwright/test'
 import { writeFile } from 'node:fs/promises'
 import type {} from './terminal-fit/entry'
 
+// 真实 NativeCliTerminal+xterm 的按键编码；只在宿主/PTY边界收集字节，不启动真实CLI。
+test('TerminalFocus_RenameFollowsFocus_003', async ({ page }) => {
+  await page.goto('/tests/visual/terminal-fit/index.html?focus=1')
+  const terminal = page.locator('.xterm-helper-textarea'), row = page.locator('[data-session-row="focus-row"]')
+  await terminal.focus(); await page.keyboard.press('F2')
+  await expect.poll(() => page.evaluate(() => window.terminalFit.focus.inputEvents)).toEqual(['\x1bOQ'])
+  expect(await page.evaluate(() => window.terminalFit.focus.renameRequests)).toBe(0)
+  await row.focus(); await page.keyboard.press('F2')
+  await expect(row.locator('input')).toBeFocused()
+  expect(await page.evaluate(() => window.terminalFit.focus.renameRequests)).toBe(1)
+  await page.keyboard.press('F2')
+  expect(await page.evaluate(() => window.terminalFit.focus.renameRequests)).toBe(1)
+  await page.keyboard.press('Escape'); await terminal.focus(); await page.keyboard.press('F2')
+  await expect.poll(() => page.evaluate(() => window.terminalFit.focus.inputEvents)).toEqual(['\x1bOQ', '\x1bOQ'])
+  await page.evaluate(() => window.terminalFit.show(false))
+  await terminal.focus(); await page.keyboard.press('F2')
+  expect(await page.evaluate(() => window.terminalFit.focus.inputEvents)).toEqual(['\x1bOQ', '\x1bOQ'])
+  expect(await page.evaluate(() => window.terminalFit.focus.renameRequests)).toBe(1)
+  await page.evaluate(() => window.terminalFit.show(true))
+  await page.evaluate(() => { window.terminalFit.focus.session.renameAvailable = false })
+  await row.focus(); await page.keyboard.press('F2'); await expect(row.locator('input')).toHaveCount(0)
+  await page.evaluate(() => { window.terminalFit.focus.session.renameAvailable = true; window.terminalFit.focus.dialog.value = true })
+  await page.getByRole('textbox', { name: 'Dialog field' }).focus(); await page.keyboard.press('F2')
+  expect(await page.evaluate(() => window.terminalFit.focus.renameRequests)).toBe(1)
+  await page.keyboard.press('Escape'); await terminal.focus(); await page.keyboard.press('Control+,')
+  await expect(page.getByRole('textbox', { name: 'Settings field' })).toBeVisible()
+  await page.getByRole('textbox', { name: 'Settings field' }).focus(); await page.keyboard.press('F2')
+  expect(await page.evaluate(() => window.terminalFit.focus.renameRequests)).toBe(1)
+})
+
 for (const dpr of [1, 1.25, 1.5]) {
   test.describe(`DPR ${dpr}`, () => {
     test.use({ deviceScaleFactor: dpr })

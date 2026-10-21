@@ -11,6 +11,25 @@ pub(crate) const REPOSITORY: &str = "shawnwu2022/cc-desk";
 pub(crate) const MAX_PACKAGE_BYTES: u64 = 256 * 1024 * 1024;
 pub(crate) const MAX_SIGNATURE_BYTES: u64 = 16 * 1024;
 
+pub(crate) fn localized_release_notes(
+    manifest: &Value,
+) -> Option<std::collections::BTreeMap<&'static str, String>> {
+    fn text(value: Option<&Value>) -> Option<String> {
+        let value = value?.as_str()?;
+        if value.chars().take(4001).count() > 4000 || value.contains('\0') {
+            return None;
+        }
+        let value = value.trim();
+        (!value.is_empty()).then(|| value.to_owned())
+    }
+    let values = manifest.get("notes_i18n")?.as_object()?;
+    let mut notes = std::collections::BTreeMap::from([("en", text(values.get("en"))?)]);
+    if let Some(chinese) = text(values.get("zh")) {
+        notes.insert("zh", chinese);
+    }
+    Some(notes)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(crate) struct UpdateFailure {
     pub(crate) code: &'static str,

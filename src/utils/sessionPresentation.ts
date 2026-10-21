@@ -75,11 +75,11 @@ export function deriveSessionVisualState(session: UnifiedSession, selected = fal
   if (session.attentionKind === 'completed') return 'completed'
   if (session.attentionState === 'needs-user' || activity === 'waiting' || activity === 'waiting_input') return 'needs-user'
   if (activity === 'idle') return 'running'
-  if (activity === 'unknown' && session.cli === 'claude' && session.runtime === 'native-cli'
+  if (activity === 'unknown' && session.runtime === 'native-cli'
     && session.observationState && session.observerReasonCode !== 'OBSERVER_UNSUPPORTED') {
     return session.observationState === 'connecting' ? 'confirming' : 'unknown'
   }
-  // 不支持观察通道（codex、raw）时无从得知 turn 状态；进程仍在
+  // 不支持观察通道（raw）时无从得知 turn 状态；进程仍在
   // 运行,显示中性运行态而不是看似异常的"活动未知"。
   if (activity === 'unknown' && session.observationState !== 'active') return 'running'
   return 'unknown'
@@ -145,6 +145,9 @@ export function selectSessionPrimaryAction(session: UnifiedSession): SessionPrim
 interface MenuActionRule extends SessionMenuActionDefinition {
   visible: (session: UnifiedSession) => boolean
 }
+export function canRenameSession(session: UnifiedSession): boolean {
+  return session.cli !== 'opencode' && session.renameAvailable === true && !session.preparationState && !session.archived
+}
 const isOpened = (session: UnifiedSession) => !session.archived && session.opened === true
 const isState = (...states: UnifiedSession['processState'][]) =>
   (session: UnifiedSession) => !session.archived && states.includes(session.processState)
@@ -152,8 +155,7 @@ const isState = (...states: UnifiedSession['processState'][]) =>
 /** Both menu entry points consume this one allowlisted action model. */
 export const SESSION_MENU_ACTION_DEFINITIONS: readonly MenuActionRule[] = [
   { id: 'clear-unread', labelKey: 'sessionActionClearUnread', visible: session => !session.opened && !!session.observationNotice?.unreadReplyEnd },
-  // opencode 后端拒绝原生 rename（NATIVE_RENAME_UNSUPPORTED），仅对支持的 CLI 暴露该动作。
-  { id: 'rename', labelKey: 'sessionActionRename', visible: (session) => session.cli !== 'opencode' && !session.preparationState && !session.archived },
+  { id: 'rename', labelKey: 'sessionActionRename', visible: canRenameSession },
   { id: 'cancel-start', labelKey: 'sessionActionCancelStart', danger: true, visible: isState('starting') },
   { id: 'stop', labelKey: 'sessionActionStop', danger: true, visible: () => false },
   { id: 'confirm-status', labelKey: 'sessionActionConfirmStatus', visible: isState('unknown') },

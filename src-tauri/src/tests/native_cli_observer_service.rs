@@ -4,6 +4,78 @@ use crate::observer_host::ObserverHost;
 use crate::observer_registry::{ObserverBinding, ObserverRegistry, ObserverRun, ObserverSource};
 use std::ffi::OsStr;
 
+#[cfg(windows)]
+#[test]
+fn CodexIdentity_CmdShimOptionalHooksNeverBlockNewOrResume_046() {
+    use crate::cli::profiles::{Dialect, Launcher};
+    // 可选 hook 不可让原本可表示的 npm cmd 启动失败；保留严格 CALL 参数限制。
+    for action in [
+        LaunchAction::New,
+        LaunchAction::ResumeId {
+            native_session_id: "00000000-0000-4000-8000-000000000009".into(),
+        },
+    ] {
+        let mut fixture = Fixture::new(false);
+        let node = crate::platform::find_executable("node").unwrap();
+        let probe = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("tests/fixtures/native-cli/owned-probe.mjs");
+        let shim = fixture.root.path().join("codex.cmd");
+        fs::write(
+            &shim,
+            format!("@\"{node}\" \"{}\" hold %*\r\n", probe.display()),
+        )
+        .unwrap();
+        let document = fixture.repository.read().unwrap();
+        let updated = fixture.repository.apply(document.revision, Patch::Update {
+            id: fixture.request.profile_id.clone(),
+            changes: serde_json::from_value(serde_json::json!({
+                "programPath": {"mode":"set", "value":shim},
+                "launcher": Launcher::Shim { runner: std::env::var("COMSPEC").unwrap(), dialect: Dialect::Cmd }
+            })).unwrap(),
+        }).unwrap();
+        fixture.request.expected_profile_revision =
+            updated.profiles[&fixture.request.profile_id].revision;
+        fixture.request.action = action;
+        let host = Arc::new(ObserverHost::new(
+            Arc::new(ObserverRegistry::new()),
+            fixture.root.path().join("unused-plugin"),
+            Arc::new(|| Some(12345)),
+        ));
+        fixture.service = Arc::new(
+            LaunchService::new(
+                fixture.repository.clone(),
+                Some(fixture.service.inherited_environment().unwrap()),
+                Some(fixture.consumer.clone()),
+            )
+            .with_observer(host),
+        );
+        fixture.caller = fixture.service.registry().activate_window("main").unwrap();
+        let status = fixture
+            .start()
+            .expect("optional Codex hooks must not block cmd launch");
+        assert_eq!(status.phase, LaunchPhase::Running);
+        fixture.ready();
+        let snapshot = fixture
+            .service
+            .access(&fixture.caller, &status.run)
+            .unwrap()
+            .snapshot()
+            .unwrap();
+        assert!(!snapshot
+            .environment()
+            .contains_key(OsStr::new("CC_DESK_CODEX_CAPABILITY")));
+        let invocation =
+            crate::cli::invocation::build_invocation(&fixture.request, &snapshot).unwrap();
+        assert!(!invocation
+            .args()
+            .iter()
+            .any(|arg| arg.to_string_lossy().starts_with("hooks.")));
+        assert_eq!(fixture.children(), 1);
+    }
+}
+
 fn observed_fixture(enabled: bool) -> (Fixture, Arc<ObserverRegistry>) {
     let mut fixture = Fixture::new(false);
     let plugin = fixture.root.path().join("observer-plugin");

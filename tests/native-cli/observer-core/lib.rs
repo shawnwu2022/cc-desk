@@ -23,6 +23,8 @@ mod environment_tests;
 mod http_tests;
 #[path = "../../../src-tauri/src/observer_host.rs"]
 mod observer_host;
+#[path = "../../../src-tauri/src/codex_observer.rs"]
+mod codex_observer;
 #[path = "../../../src-tauri/src/observer_http.rs"]
 mod observer_http;
 #[cfg(test)]

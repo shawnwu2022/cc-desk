@@ -13,12 +13,13 @@ type CliSupport = Record<UnifiedCliKind, boolean>
 function readSupport(): CliSupport {
   try {
     const value = JSON.parse(localStorage.getItem(storageKey) ?? 'null')
-    if (value && typeof value.claude === 'boolean' && typeof value.codex === 'boolean') {
-      // 旧数据没有 opencode 键：默认启用，保留用户已有的 claude/codex 偏好。
-      return { claude: value.claude, codex: value.codex, opencode: value.opencode !== false }
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      return { claude: typeof value.claude === 'boolean' ? value.claude : true,
+        codex: typeof value.codex === 'boolean' ? value.codex : false,
+        opencode: typeof value.opencode === 'boolean' ? value.opencode : true }
     }
   } catch { /* Optional UI preference storage must never block startup. */ }
-  return { claude: true, codex: true, opencode: true }
+  return { claude: true, codex: false, opencode: true }
 }
 
 export const useCliSupportStore = defineStore('cli-support', () => {

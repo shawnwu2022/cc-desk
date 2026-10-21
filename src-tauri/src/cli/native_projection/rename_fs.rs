@@ -229,7 +229,8 @@ impl PinnedTranscript {
                 return Err("SOURCE_AMBIGUOUS");
             }
             if let Some(observed) = value["cwd"].as_str() {
-                if observed != cwd {
+                // 与历史解析一致：首个 cwd 决定会话归属，后续进入子目录不改变来源。
+                if !found_cwd && observed != cwd {
                     return Err("SOURCE_AMBIGUOUS");
                 }
                 found_cwd = true;

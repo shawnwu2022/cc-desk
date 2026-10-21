@@ -109,6 +109,35 @@ not itself merge, start a formal release or change the live draft/tag.
 
 After public publication, do not delete/recreate or retarget an existing tag. A failed post-publication check is a failed release workflow requiring investigation; it must not be described as a verified updater channel. Prefer a separately verified new version for repair. No workflow can make the branch read, external release mutation and later verification atomic, so preserve the recorded source/run binding and investigate any concurrent external mutation.
 
+## User-facing release highlights
+
+Maintain the versioned English and Chinese summaries in `docs/release-notes.json`.
+Keep only major Added, Improved and Fixed changes plus important compatibility
+limits and required user actions. Do not put commit hashes, test counts, CI output
+or engineering diaries in these summaries. English is required; Chinese is
+optional and falls back to English. This language default applies to release notes
+only, not to the application's language preference.
+
+Run `node scripts/release-notes.js docs` after editing the source. It generates
+`RELEASE_NOTES.md` and `RELEASE_NOTES_CN.md`; `CHANGELOG.md` retains the complete
+existing engineering history. Keep both language entries aligned with the same
+version. Move `Unreleased` to the actual version as part of an authorized version
+change; publication never silently uses the unreleased draft for a missing version.
+
+Updater manifest generation puts the exact release's English highlights in
+`notes` for existing clients, and both available languages in `notes_i18n`.
+New clients use the interface language, then English. For older manifests, a
+bundled exact-version summary may be used; an unknown old release retains its
+original notes rather than guessing which warnings are safe to remove.
+
+Ordinary publication composes the English highlights and a source-pinned link to
+the Chinese document, followed by the **complete unchanged validation disclosure**
+inside a collapsed Technical validation details section. Automatic commit-list
+notes are disabled. The existing technical notes file, all source/coverage/signature
+checks and the exact recovery-draft transaction remain unchanged; body Source and
+Validation policy lines still have their original meaning. This does not edit any
+already-published release or authorize publication.
+
 ## Acceptance boundaries
 
 D20 real Claude Code/Codex CLI target certification remains separate and BLOCKED unless actual source-bound evidence exists. Local Node fixtures, isolated native diagnostics and runner registration are not hosted CI or D20 certification. Publication gating does not enable automatic client installation. Historical installation has a separate Windows x64 capability policy for the nine exact reviewed official packages; its normal coordinator and restricted return path retain all runtime admission and recovery checks. See [historical installation and return](historical-version-preparation.md) for supported scope and remaining native acceptance conditions. A complete-function release cannot describe a permanently disabled historical installation entry as delivered.

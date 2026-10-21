@@ -2,7 +2,7 @@
 
 ## 应用级快捷键与统一路由
 
-`config/appShortcuts.ts` 定义五项可配置应用动作，`useAppShortcuts` 在 window 的捕获阶段读取同一份已保存绑定。匹配后阻止事件继续进入终端，由 App 发统一动作请求；未匹配的输入交给实际终端。
+`config/appShortcuts.ts` 定义五项可配置动作。`useAppShortcuts` 在 window 捕获阶段只处理其中四项全局动作；重命名由拥有真实键盘焦点的会话行读取同一份绑定。只有确认动作归属与可用性后才阻止事件，其他输入交给实际终端或当前控件。
 
 | 默认绑定 | 应用动作 |
 |---|---|
@@ -10,9 +10,11 @@
 | Mod+W | 请求关闭当前会话，运行态使用精确所有权确认 |
 | Mod+P | 项目管理 |
 | Mod+, | 设置 |
-| F2 | 当前会话重命名 |
+| F2 | 聚焦且可改名的会话行重命名 |
 
-Mod 在 Windows/Linux 为 Ctrl，在 macOS 为 Cmd。设置中的快捷键编辑器支持取消绑定、冲突确认和恢复默认。普通编辑字段、IME、重复按键及共享模态框阻止全局捕获；终端 helper 输入遵循应用绑定。列表重命名使用同一绑定。旧兼容快捷键路由和独立标签切换已退役。
+Mod 在 Windows/Linux 为 Ctrl，在 macOS 为 Cmd。设置中的快捷键编辑器支持取消绑定、冲突确认和恢复默认。普通编辑字段（包括空值、继承及 plaintext-only 的 contenteditable）、IME、重复按键及共享模态框阻止应用快捷键误触发。终端 helper 输入保留四项全局绑定；F2 或用户自定义的重命名键由 CLI 自行处理，不跳回工作区、不展开列表、不对后台选择发起改名。列表只在焦点所在行可改名时消费该键，不可改名条目既不显示菜单项，也不提前 preventDefault/stopPropagation。
+
+列表 Escape 只在本面板聚焦时退出快速切换/关闭列表；行内编辑器、菜单和模态框先处理自己的 Escape，终端的 Escape 不关闭会话列表。箭头导航与项目/会话 Enter、Space、上下文菜单键同样遵守所属表面、文本编辑与 IME 边界。快捷键不改变全局新建、关闭会话、项目和设置动作的现有键位。旧兼容快捷键路由和独立标签切换已退役。
 
 ## 终端输入边界
 
@@ -126,13 +128,13 @@ Native Ctrl+V 在读取剪贴板前同步向当前 binding 预留输入 intent�
 
 codex 的 Ctrl+V 能力分版本：**≥0.163.0** 在 Windows 上对纯 Ctrl+V 构造 `PasteImage { text_fallback }`（`chatwidget/interaction.rs`，先尝试图片、无图时回退由 codex TUI 自行读系统剪贴板文本：`clipboard_paste/text.rs` 用 arboard，`app/clipboard.rs:23-52` 处理回退）；**0.162.x** 的 `chatwidget/clipboard.rs` 只处理图片、无文本回退，纯文本按键会被吞掉。
 
-因此 CC Desk 不能无条件转发：`cli_codex_native_paste_support`（`cli/paste_support.rs`）仅在接受探测的 Windows 上运行，按 profile 授权解析 `configured_program` 后运行 `codex --version`，输出必须携带 `codex-cli` 标识 token（裸 semver 如启动器 npx 打印的自身版本不算），版本 ≥0.163.0 才支持原生转发；探测有 5s 期限并回收挂起子进程，结果按可执行路径缓存进程生命周期，失败保守返回不支持。这是运行时能力查询，不属于 launch preflight（preflight 仍不 spawn CLI）。
+因此 CC Desk 不能无条件转发：`cli_codex_native_paste_support`（`cli/paste_support.rs`）仅在接受探测的 Windows 上运行，按 profile 授权解析 `configured_program` 后运行 `codex --version`，输出必须携带 `codex-cli` 标识 token（裸 semver 如启动器 npx 打印的自身版本不算），版本 ≥0.163.0 才支持原生转发；探测有 5s 期限并回收挂起子进程，每个启动 attempt 独立探测，失败仅令该运行回退 Desk 路径；不按路径或 profile revision 永久缓存，也不合并不同 attempt 尚未完成的查询。这是运行时能力查询，不属于 launch preflight（preflight 仍不 spawn CLI）。
 
 Ctrl+V keydown 仍先**同步** `reserveUserPaste` 保持输入排序契约；producer 内等待探测结果：支持时返回 1 字节 `\x16`（Ctrl+V 控制字符），由 codex 原生读剪贴板处理文本和图片；不支持时回退 Desk 剪贴板读取路径（文本构造 bracketed frame、图片走键位分流）。
 
 为什么转发：CC Desk 原路径（读剪贴板 IPC → 构造 76011 字节 bracketed frame → 分块 IPC 上传 → 一次 `write_all` 进 ConPTY）端到端约 150ms，但 codex 侧的 paste burst 启发式（`paste_burst.rs`，Windows 上无 bracketed paste 事件只能靠 `PASTE_BURST_CHAR_INTERVAL=8ms` 的字符间隔判定）在大 payload 时 burst 断裂，导致 codex **逐字插入**而非折叠——29198 字符的逐字插入是 O(n²) 的 textarea 编辑，耗时 3.7–10+ 秒且部分展开。转发 `\x16` 绕过整个问题链：codex 收到的是一次完整粘贴事件，自行读剪贴板、自行折叠。
 
-约束与限制：仅适用于 codex（Claude Code 无等效的 Ctrl+V 剪贴板读取键位，仍走剪贴板插件读取路径）。转发分支由 codex 自行处理内容（无 LF 规范化、无 atomic write_all 保证）。codex 升级后需重启 CC Desk 才会重新探测（按路径缓存）。Claude Code 在 Windows 上仍有同样的 bracketed paste 限制（上游未修），大段粘贴建议用 `@路径` 或 `Ctrl+G`。
+约束与限制：仅适用于 codex（Claude Code 无等效的 Ctrl+V 剪贴板读取键位，仍走剪贴板插件读取路径）。转发分支由 codex 自行处理内容（无 LF 规范化、无 atomic write_all 保证）。能力 Promise 固定到准确 run/generation，运行中不重新查询已替换的程序；新建或重启终端会重新探测，同路径升降级不需要重启 CC Desk。Claude Code 在 Windows 上仍有同样的 bracketed paste 限制（上游未修），大段粘贴建议用 `@路径` 或 `Ctrl+G`。
 
 ### 图片粘贴分流
 

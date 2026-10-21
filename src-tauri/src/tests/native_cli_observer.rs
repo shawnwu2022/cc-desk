@@ -647,3 +647,118 @@ fn D13_Observer_HostPreparesOnlyVerifiedPluginAndDropsAuthority_015() {
         )
         .is_ok());
 }
+
+#[test]
+fn CodexIdentity_AuthenticatedSource_031() {
+    let mut headers = HeaderMap::new();
+    for (name, value) in [
+        ("x-cc-desk-run", "codex-owned"),
+        ("x-cc-desk-generation", "1"),
+        ("x-cc-desk-capability", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        ("x-cc-desk-event", "event-1"),
+        ("x-cc-desk-observer-source", "codex-hook"),
+    ] {
+        headers.insert(
+            axum::http::header::HeaderName::from_bytes(name.as_bytes()).unwrap(),
+            value.parse().unwrap(),
+        );
+    }
+    assert!(parse_observer_headers(&headers).is_ok());
+}
+
+// 新版 reporter 的单调 nonce 让窗口可收缩，同时永久拒绝窗口以下的旧身份事件。
+#[test]
+fn CodexCompatibility_ReplayWindowDoesNotEndRunObservation_035() {
+    let registry = ObserverRegistry::new();
+    let binding = registry
+        .attach(
+            run("long-codex", 1),
+            "a".repeat(32),
+            ObserverSource::CodexHook,
+        )
+        .unwrap();
+    let body = br#"{"hook_event_name":"SessionStart","session_id":"00000000-0000-4000-8000-000000000035"}"#;
+    let id = |n: u128| format!("m{n:032x}-{}", "a".repeat(32));
+    for n in 1..=2050 {
+        assert!(matches!(
+            registry.accept_event(&binding, &id(n), body).unwrap(),
+            ObserverAccept::Accepted(_)
+        ));
+    }
+    assert_eq!(
+        registry.accept_event(&binding, &id(1), body).unwrap(),
+        ObserverAccept::Duplicate
+    );
+    assert_eq!(
+        registry.accept_event(&binding, &id(2050), body).unwrap(),
+        ObserverAccept::Duplicate
+    );
+    assert!(matches!(
+        registry.accept_event(&binding, &id(2052), body).unwrap(),
+        ObserverAccept::Accepted(_)
+    ));
+    assert!(matches!(
+        registry.accept_event(&binding, &id(2051), body).unwrap(),
+        ObserverAccept::Accepted(_)
+    ));
+    assert_eq!(
+        registry.accept_event(&binding, &id(2051), body).unwrap(),
+        ObserverAccept::Duplicate
+    );
+}
+
+#[test]
+fn CodexIdentity_SourceIsolationAndRetirement_032() {
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+    let registry = Arc::new(ObserverRegistry::new());
+    let alive = Arc::new(AtomicBool::new(true));
+    let check = alive.clone();
+    let first = registry
+        .lease_source(
+            run("codex-first", 1),
+            crate::observer_registry::ObserverDelivery::native("main"),
+            Arc::new(move || check.load(Ordering::SeqCst)),
+            ObserverSource::CodexHook,
+        )
+        .unwrap();
+    let second = registry
+        .lease_source(
+            run("codex-second", 1),
+            crate::observer_registry::ObserverDelivery::native("main"),
+            Arc::new(|| true),
+            ObserverSource::CodexHook,
+        )
+        .unwrap();
+    let body = br#"{"hook_event_name":"SessionStart","session_id":"00000000-0000-4000-8000-000000000032","prompt":"PRIVATE","cwd":"PRIVATE"}"#;
+    let ObserverAccept::Accepted(event) = registry
+        .accept_event(first.binding(), "first", body)
+        .unwrap()
+    else {
+        panic!("expected event")
+    };
+    let safe = serde_json::to_value(HookPayload::from_validated(event)).unwrap();
+    assert_eq!(safe["observerSource"], "codex-hook");
+    assert!(!safe.to_string().contains("PRIVATE"));
+    let mut crossed = first.binding().clone();
+    crossed.run = second.binding().run.clone();
+    assert!(registry.accept_event(&crossed, "crossed", body).is_err());
+    crossed = first.binding().clone();
+    crossed.source = ObserverSource::ClaudeHook;
+    assert!(registry.accept_event(&crossed, "source", body).is_err());
+    for (index, field) in ["agent_id", "agent_type"].iter().enumerate() {
+        let body = serde_json::to_vec(&serde_json::json!({"hook_event_name":"UserPromptSubmit","session_id":"00000000-0000-4000-8000-000000000032",*field:"subagent"})).unwrap();
+        assert!(registry
+            .accept_event(first.binding(), &format!("agent-{index}"), &body)
+            .is_err());
+    }
+    alive.store(false, Ordering::SeqCst);
+    assert!(registry
+        .accept_event(first.binding(), "late", body)
+        .is_err());
+    assert!(registry
+        .accept_event(second.binding(), "still-owned", body)
+        .is_ok());
+}

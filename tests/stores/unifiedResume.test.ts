@@ -10,7 +10,7 @@ import type { NativeHistoryEntry } from '@/stores/nativeHistory'
 import { mockIPC, clearMocks } from '@tauri-apps/api/mocks'
 
 afterEach(() => vi.unstubAllGlobals())
-beforeEach(() => { vi.stubGlobal('crypto', { getRandomValues: window.crypto.getRandomValues, randomUUID: () => 'legacy-tab' }); clearMocks(); setActivePinia(createPinia()); useProjectsStateStore().loaded = true })
+beforeEach(() => { localStorage.setItem('cc-desk-cli-support-v1', JSON.stringify({ claude: true, codex: true })); vi.stubGlobal('crypto', { getRandomValues: window.crypto.getRandomValues, randomUUID: () => 'legacy-tab' }); clearMocks(); setActivePinia(createPinia()); useProjectsStateStore().loaded = true })
 const sourceKey = JSON.stringify(['local', 'codex', 'root', 'same-id'])
 const entry = (profileId = 'cx', revision = '7'): NativeHistoryEntry => ({ key: profileId + revision,
   context: { cli: 'codex', profileId, profileRevision: revision, projectId: 'project', projectPath: '/repo' },

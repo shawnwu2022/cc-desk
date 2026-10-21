@@ -12,6 +12,7 @@ import contracts from '../fixtures/native-cli/launch-preflight.json'
 let rows: CliProfile[], commands: string[]
 beforeEach(() => {
   localStorage.clear(); setActivePinia(createPinia()); clearMocks(); rows = []; commands = []
+  localStorage.setItem('cc-desk-cli-support-v1', JSON.stringify({ claude: true, codex: true }))
   mockIPC((command, payload: any) => {
     commands.push(command)
     if (command === 'get_projects_state') return { pinnedProjects: [], archivedSessions: {} }

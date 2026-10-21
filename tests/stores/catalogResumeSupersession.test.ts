@@ -107,7 +107,7 @@ function legacyHarness(latency = 120) {
   return catalog
 }
 
-beforeEach(() => { setActivePinia(createPinia()); useProjectsStateStore().loaded = true })
+beforeEach(() => { localStorage.setItem('cc-desk-cli-support-v1', JSON.stringify({ claude: true, codex: true })); setActivePinia(createPinia()); useProjectsStateStore().loaded = true })
 
 describe('opened row supersedes its history row', () => {
   it('ResumeCatalog_NativeNeverPublishesSourceAndOpenedTogether_068', async () => {

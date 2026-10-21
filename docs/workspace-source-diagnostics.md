@@ -43,8 +43,9 @@ same current registered project through the existing file-manager API; it is
 not presented as the historical file's location. Existing configuration editing
 remains available for whole-source errors.
 
-Ignoring current problems suppresses their repeated banners, not their details
-or the source failure itself. Acknowledgements are individual context/root/code
+Ignoring current problems suppresses their repeated banners, drawer details,
+session-row warning markers and sidebar summary icon consistently. The source
+failure and incompleteness evidence remain unchanged. Acknowledgements are individual context/root/code
 keys, plus sessionKey for known row failures. Removing or repairing one problem
 does not alert again for another unchanged acknowledged problem. New code,
 root/revision or known-session identity alerts again; a successful complete
@@ -53,6 +54,12 @@ context/root/code cannot be distinguished by the current DTO and remain the
 same acknowledged issue until a successful observation or identifiable change.
 This acknowledgement is in memory for the workspace runtime, not persistent
 suppression across application restarts.
+
+Warnings are filtered by their complete identity before aggregation and the
+twelve-warning/48-card display limits. A new configuration or session with the
+same code remains visible without redisplaying the acknowledged target. Current
+adapter-owned forced-read errors participate in the same ignore action. An open
+drawer may show the acknowledgement and Retry without claiming recovery.
 
 The history projection signature includes `readFailure`, so a backend observation
 that changes only a diagnostic also updates the corresponding list marker.

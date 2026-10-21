@@ -50,6 +50,38 @@ it.each(['root', 'session'])('History_PartialTimestampKeepsExactIdentity_026 %s'
   expect((await store.load({ ...context, force: true })).sessions[0].lastKnownActivityAt).toBeUndefined()
 })
 
+it.each(['SOURCE_TOO_LARGE', 'SOURCE_INVALID_TEXT'])('History_RetainedRowsClearOldExactFailure_028 %s', async aggregateFailure => {
+  const context = { cli: 'claude' as const, profileId: 'p', profileRevision: '1', projectId: 'x', projectPath: '/repo' }
+  const item = { type: 'session', sessionKey: 'key', nativeSessionId: 'id', title: 'Known', archived: false, readFailure: 'SOURCE_INVALID_TEXT' }
+  for (const response of [
+    { state: 'ready', items: [item], hasMore: false, historyReadFailures: ['SOURCE_INVALID_TEXT'] },
+    { state: 'ready', items: [], hasMore: false, historyReadFailures: [aggregateFailure] },
+    { state: 'ready', items: [item], hasMore: false, historyReadFailures: ['SOURCE_INVALID_TEXT'] },
+  ]) clients.push({ scope: vi.fn().mockResolvedValue(source('claude', 'p', '1', 'x')), read: vi.fn().mockResolvedValue(response) })
+  const store = useNativeHistoryStore()
+  expect((await store.load(context)).sessions[0].readFailure).toBe('SOURCE_INVALID_TEXT')
+  const current = await store.load({ ...context, force: true, retainOnFailure: true })
+  expect(current.sessions[0]).toMatchObject({ sessionKey: 'key', nativeSessionId: 'id', title: 'Known' })
+  expect(current.sessions[0].readFailure).toBeUndefined()
+  expect(current.readFailures).toEqual([aggregateFailure])
+  expect((await store.load({ ...context, force: true })).sessions[0].readFailure).toBe('SOURCE_INVALID_TEXT')
+})
+
+it.each(['scope', 'read', 'unavailable'] as const)('History_SourceFailureClearsRetainedExactDiagnostic_029 %s', async failure => {
+  const context = { cli: 'claude' as const, profileId: 'p', profileRevision: '1', projectId: 'x', projectPath: '/repo' }
+  const item = { type: 'session', sessionKey: 'key', nativeSessionId: 'id', title: 'Known', archived: false, readFailure: 'SOURCE_INVALID_TEXT' }
+  clients.push({ scope: vi.fn().mockResolvedValue(source('claude', 'p', '1', 'x')), read: vi.fn().mockResolvedValue({ state: 'ready', items: [item], hasMore: false }) })
+  clients.push({ scope: failure === 'scope' ? vi.fn().mockRejectedValue({ code: 'SOURCE_BUSY' }) : vi.fn().mockResolvedValue(source('claude', 'p', '1', 'x')),
+    read: failure === 'read' ? vi.fn().mockRejectedValue({ code: 'SOURCE_BUSY' }) : vi.fn().mockResolvedValue({ state: 'unavailable', reason: 'SOURCE_BUSY', items: [], hasMore: false }) })
+  const store = useNativeHistoryStore(); const previous = await store.load(context)
+  await store.load({ ...context, force: true, retainOnFailure: true }).catch(() => {})
+  const current = store.get(context)!
+  expect(current.error).toBe('SOURCE_BUSY')
+  expect(current.sessions[0]).toMatchObject({ sessionKey: 'key', nativeSessionId: 'id', title: 'Known' })
+  expect(current.sessions[0].readFailure).toBeUndefined()
+  expect(previous.sessions[0].readFailure).toBe('SOURCE_INVALID_TEXT')
+})
+
 describe('native history cache', () => {
   // 同一上下文加载未完成时普通读取共享它，不再重复提交扫描。
   it('History_SharePendingContext_001', async () => {

@@ -38,7 +38,7 @@ export interface LegacyClaudeStorePort {
   closeTab(tabId: string): Promise<void>
   updateTabName(tabId: string, name: string): void
   archiveSession(projectPath: string, sessionId: string, beforeMutation?: () => void): Promise<void>
-  restoreSession(projectPath: string, sessionId: string): Promise<void>
+  restoreSession(projectPath: string, sessionId: string, beforeMutation?: () => void, prepareMutation?: () => Promise<void>): Promise<void>
 }
 
 export interface LegacyClaudeRuntimePort {
@@ -59,6 +59,9 @@ export interface LegacyClaudeAdapterDeps {
   captureProjectAdmission?(projectPath: string): () => boolean
   /** 验证本 runtime 冻结的默认根；失败后不得从默认历史借用运行行标题。 */
   validateHistoryRoot?(): Promise<string | undefined>
+  historyEnabled?(): boolean
+  /** 已撤销不同于首次证明未知；冷停用后也不能发布替换根的缓存行。 */
+  historyRootRetired?(): boolean
 }
 
 function activeId(tabId: string): string {
@@ -161,6 +164,21 @@ function requireClaude(input: { cli: string }): void {
 
 export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): SessionAdapter {
   const { store, runtime } = deps
+  let provenHistoryRoot: string | undefined
+  let historyRootRetired = false
+  async function currentHistoryRoot() {
+    let root: string | undefined
+    try { root = await deps.validateHistoryRoot?.() }
+    catch { if (provenHistoryRoot) historyRootRetired = true }
+    if (deps.historyRootRetired?.()) historyRootRetired = true
+    if (provenHistoryRoot && root !== provenHistoryRoot) historyRootRetired = true
+    if (!provenHistoryRoot && root) provenHistoryRoot = root
+    return historyRootRetired ? undefined : root
+  }
+  async function requireHistoryRoot() {
+    const root = await currentHistoryRoot()
+    if (historyRootRetired || (deps.validateHistoryRoot !== undefined && !root)) throw new Error('SOURCE_UNAVAILABLE')
+  }
   function tabDisplayIdentity(tab: TerminalTab) {
     const row = projectActiveTab(tab)
     return tab.sessionId ? { ...row, id: historyId(tab.projectPath, tab.sessionId), adapterSessionId: tab.sessionId } : row
@@ -208,10 +226,13 @@ export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): Sessio
     return paths
   }
 
-  async function listSessions(projectKey?: string): Promise<UnifiedSession[]> {
+  async function listSessions(projectKey?: string, cli?: 'claude' | 'codex'): Promise<UnifiedSession[]> {
+    if (cli && cli !== 'claude') return []
     const wanted = projectKey === undefined ? null : normalizeProjectIdentity(projectKey)
+    if (wanted !== null && !knownProjects().has(wanted)) return []
     const sessions: UnifiedSession[] = []
-    const historyRoot = await deps.validateHistoryRoot?.()
+    const includeHistory = deps.historyEnabled?.() !== false
+    const historyRoot = includeHistory ? await currentHistoryRoot() : undefined
 
     for (const [key, projectPath] of knownProjects()) {
       if (wanted !== null && key !== wanted) continue
@@ -230,6 +251,7 @@ export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): Sessio
         return projectActive(tab, matches.length === 1 ? matches[0].name : undefined)
       }))
       for (const history of store.getCatalogHistoryFor(projectPath)) {
+        if (!includeHistory || historyRootRetired) continue
         if (claimed.has(history.sessionId)) continue
         sessions.push({ ...withSessionDisplayName(projectHistorySession(projectPath, history), deps.metadata), archived: archived.has(history.sessionId) })
       }
@@ -275,9 +297,11 @@ export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): Sessio
     return ownResult(task)
   }
   async function verifyHistory(input: ResumeUnifiedSessionInput, missing: boolean) {
+    await requireHistoryRoot()
     const result = store.loadHistoryFor ? await store.loadHistoryFor(input.projectPath, true)
       : { ok: true as const, sessions: store.getCatalogHistoryFor(input.projectPath) }
     if (!result.ok) throw new Error('SOURCE_UNAVAILABLE')
+    await requireHistoryRoot()
     const present = result.sessions.some(row => row.sessionId === (input.nativeSessionId ?? input.adapterSessionId))
     const open = [...store.tabs.values()].some(tab => isLegacyClaudeTab(tab) && sameProjectIdentity(tab.projectPath, input.projectPath) && tab.sessionId === (input.nativeSessionId ?? input.adapterSessionId))
     if (missing ? present || open : !present) throw new Error(missing ? 'SESSION_EXISTS' : 'SESSION_NOT_FOUND')
@@ -320,7 +344,7 @@ export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): Sessio
   function captureOwnership(id: string): () => boolean {
     if (!id.startsWith(ACTIVE_PREFIX)) {
       const history = parseHistoryId(id)
-      return () => store.getCatalogHistoryFor(history.projectPath).some(row => row.sessionId === history.sessionId)
+      return () => !historyRootRetired && store.getCatalogHistoryFor(history.projectPath).some(row => row.sessionId === history.sessionId)
     }
     const tab = requireTab(id)
     const generation = tab.ptyGeneration ?? 0
@@ -389,8 +413,11 @@ export function createLegacyClaudeAdapter(deps: LegacyClaudeAdapterDeps): Sessio
   }
 
   async function restoreArchivedSession(id: string): Promise<void> {
+    await requireHistoryRoot()
     const history = parseHistoryId(id)
-    await store.restoreSession(history.projectPath, history.sessionId)
+    await store.restoreSession(history.projectPath, history.sessionId, () => {
+      if (historyRootRetired) throw new Error('SOURCE_UNAVAILABLE')
+    }, requireHistoryRoot)
     const item = store.getCatalogHistoryFor(history.projectPath).find(row => row.sessionId === history.sessionId)
     if (item) await saveSessionOpenedAt(deps.metadata, projectHistorySession(history.projectPath, item), Date.now(),
       () => store.getCatalogHistoryFor(history.projectPath).some(row => row.sessionId === history.sessionId)).catch(() => {})

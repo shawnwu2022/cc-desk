@@ -306,6 +306,11 @@ jobs:
             --coverage-artifact-id "${{ steps.coverage.outputs.coverage_artifact_id }}" \
             --coverage-artifact-name "${{ steps.coverage.outputs.coverage_artifact_name }}" \
             --notes release-validation-notes.md
+      - name: Compose English release highlights with complete technical disclosure
+        if: steps.promotion.outputs.recovery_draft == ''
+        run: >-
+          node scripts/release-notes.js compose --tag "${{ needs.preflight.outputs.tag }}"
+          --technical release-validation-notes.md --output release-notes.md
       - name: Publish ordinary unused-version GitHub Release
         if: steps.promotion.outputs.recovery_draft == ''
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
@@ -316,8 +321,8 @@ jobs:
           draft: false
           prerelease: false
           make_latest: true
-          generate_release_notes: true
-          body_path: release-validation-notes.md
+          generate_release_notes: false
+          body_path: release-notes.md
           fail_on_unmatched_files: true
           files: |
             artifacts/**/*.exe

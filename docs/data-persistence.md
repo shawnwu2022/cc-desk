@@ -73,6 +73,19 @@ Important separation rules:
 
 ## Compatible application preferences
 
+CLI support is a GUI-only preference in localStorage `cc-desk-cli-support-v1`.
+New installations enable Claude Code and disable Codex CLI. Missing or invalid
+fields fall back independently to those defaults; saved booleans, including both
+tools disabled, are retained. Loading does not rewrite this preference. It has no
+backend AppConfig counterpart or separate reset command.
+
+Claude launch-configuration `observer` defaults to enabled when missing or
+`inherit`, matching the new-configuration editor and safe-template creation.
+Explicit `set(false)` and `unset` stay disabled; loading, editing, copying and
+refreshing never migrate saved overrides. There is no observer reset command;
+choosing `inherit` explicitly restores the default. Codex and Shell do not receive
+the Claude observer overlay.
+
 `config.json` retains old/future keys through the existing raw incremental writer.
 Optional read DTO fields add GUI mode/density/sidebar width/startup destination/default
 CLI, terminal font/line-height/cursor/renderer, and configurable shortcut bindings.
@@ -110,6 +123,15 @@ the representative rollout's container still supplies the archive flag. Both
 formats use the same session identity, project association, filtering and thread
 deduplication. Reads never unpack files onto disk or change native history.
 
+Codex `session_index.jsonl` names follow the last valid append for each ID,
+matching the upstream reverse scan; timestamps can repeat or move backward and
+do not override append order. Malformed/partial records are skipped. Automatic
+history exclusion requires structured session metadata (`exec`, subagent,
+guardian review or security-scan source). Manual or unknown sources remain
+discoverable when a prompt resembles automation instructions, including partial
+observations. Prompt text is not provenance. The derived title cache schema is
+8 so older title extraction is not silently reused.
+
 Compressed reads stream through the held source capability, charge compressed
 input and decoded output against the existing aggregate budget, cap each side at
 the existing per-file limit, and limit the decoder window to 8 MiB. History reads
@@ -120,6 +142,11 @@ and partial observation remains explicitly incomplete on cold and cached reads.
 Full message/search reads retain the decoded per-file limit. Decoding failures
 observed in corrupt or truncated entries are reported as individual history read
 failures; a partial read does not certify unread frame tails.
+The frontend may retain display rows after a whole-source failure or same-root
+rows omitted by a later partial failed scan.
+Those cached rows retain identity/title/time, but an exact `readFailure` must be
+emitted by the current response; an aggregate failure alone cannot identify that
+cached session as a current recovery target, even when the error code matches.
 
 Raw values that may contain credentials—environment values, headers, arbitrary configuration blobs—must not be projected.
 
@@ -175,15 +202,24 @@ Legacy exact-key fallback; it never scans saved records by UUID/project or
 reconstructs another profile, revision, root or registration's history identity.
 
 Display-only folding across profiles requires full CLI/root/registered-project/path/
-native-ID/session-key identity and the same archive state. Opened owners remain
-separate. Native rename clears aliases and refreshes all exact physical projections;
+native-ID/session-key identity. Closed archived projections take precedence over
+ordinary closed twins; opened owners remain separate. Explicit archive restore clears
+all exact full-key aliases after rechecking current source identity in the metadata
+writer queue. Loading or failed retained entries cannot authorize those writes.
+Native rename clears aliases and refreshes all exact physical projections;
 each opened companion must still own that same record. A Legacy historical alias
 clears only after fresh proof that its root is the renamed physical Claude root.
 
 Legacy folding revalidates the runtime's initial physical root key for each
-catalog projection and Native bare-ID archive restore. A changed, unavailable or
+Claude catalog projection, Legacy history admission/restore and Native bare-ID archive restore. A changed, unavailable or
 unverifiable root retires that folding lease until a fresh runtime is created;
 existing terminal and cached-history proofs are never rebound to a new directory.
+The production workspace supplies a root validator; an initially unknown or failed
+proof rejects that history operation even before any lease can be retired.
+Closed Legacy cache rows stop publishing after lease retirement; positive Native
+archive display proof remains marked unavailable and cannot authorize a restore.
+Bare Legacy archive IDs apply only to Claude, with complete physical aliases counted
+as one source; unknown or distinct physical sources remain ambiguous.
 Multiple Native candidates or an ambiguous replacement keep the Legacy archive
 restore owner visible. A new Legacy PTY generation clears its previous proof
 before publishing the new generation; only its own PTY receipt can set it again.

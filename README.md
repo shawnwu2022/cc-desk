@@ -1,5 +1,7 @@
 # CC Desk
 
+[Release highlights](RELEASE_NOTES.md) · [中文更新日志](RELEASE_NOTES_CN.md)
+
 CC Desk is a desktop workspace for **Claude Code, Codex CLI and opencode** built with Tauri 2, Vue 3, xterm.js, and Rust.
 
 It keeps the real CLI in charge of the interactive session and adds the host capabilities that become awkward in a normal terminal: multi-project navigation, multiple concurrent sessions, stable run identity, recovery, bounded terminal transport, and read-only native-resource projection.

@@ -1,6 +1,8 @@
 pub(crate) mod availability;
 pub(crate) mod claude;
 pub(crate) mod codex;
+#[cfg(windows)]
+pub(crate) mod codex_cmd;
 pub(crate) mod commands;
 pub(crate) mod document;
 pub(crate) mod environment;

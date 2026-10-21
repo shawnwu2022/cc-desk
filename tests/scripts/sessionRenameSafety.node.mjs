@@ -5,6 +5,10 @@ import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
 const { transpileProductionSource } = require('../../.github/scripts/transpile_production_source.cjs')
+const renameAdmissionBody = readFileSync('src/utils/sessionPresentation.ts', 'utf8')
+  .match(/export function canRenameSession\([^]*?\): boolean \{([\s\S]*?)\n\}/)?.[1]
+assert.ok(renameAdmissionBody)
+const canRenameSession = Function('session', renameAdmissionBody)
 
 // 执行 adapter 与 metadata writer 的真实函数体；已有 CLI 草稿由独立 writer 模型持有。
 const metadataSource = readFileSync('src/session/sessionMetadata.ts', 'utf8')
@@ -72,7 +76,7 @@ for (const kind of ['native', 'legacy']) {
 
 function catalogRenameHarness(owns = () => true) {
   const source = readFileSync('src/stores/unifiedSessions.ts', 'utf8')
-  const sessions = { value: [{ id: 'history', title: 'Old title', opened: false, renameState: 'idle' }] }
+  const sessions = { value: [{ id: 'history', title: 'Old title', opened: false, renameAvailable: true, renameState: 'idle' }] }
   const renameOwners = new Map(), pendingRenames = new Map()
   const captureRenameOwner = (_row, state) => ({ controller: new AbortController(), state, owns })
   const ownsRename = (owner, row) => !!row && owner.owns()
@@ -81,13 +85,13 @@ function catalogRenameHarness(owns = () => true) {
   const renameBody = source.match(/  function renameSession\([^]*?\): Promise<[^]*?> \{([\s\S]*?)\n  \}/)?.[1]
   assert.ok(beginBody && cancelBody && renameBody)
   const cancel = Function('pendingRenames', 'renameOwners', 'sessions', 'return function(id){' + cancelBody + '}')(pendingRenames, renameOwners, sessions)
-  const begin = Function('sessions', 'activeSessionId', 'pendingRenames', 'isPreparingSession', 'renameOwners', 'ownsRename', 'captureRenameOwner',
-    'return function(id){' + beginBody + '}')(sessions, { value: 'live' }, pendingRenames, () => false, renameOwners, ownsRename, captureRenameOwner)
+  const begin = Function('sessions', 'activeSessionId', 'pendingRenames', 'isPreparingSession', 'renameOwners', 'ownsRename', 'captureRenameOwner', 'canRenameSession',
+    'return function(id){' + beginBody + '}')(sessions, { value: 'live' }, pendingRenames, () => false, renameOwners, ownsRename, captureRenameOwner, canRenameSession)
   const adapter = { async renameSession() { throw Error('REVISION_CONFLICT') } }
-  const rename = Function('requireSession', 'adapterForRuntime', 'renameOwners', 'pendingRenames', 'activeSessionId', 'ownsRename', 'sessions', 'captureRenameOwner', 'enqueue', 'refresh', 'cancelRename',
+  const rename = Function('requireSession', 'adapterForRuntime', 'renameOwners', 'pendingRenames', 'activeSessionId', 'ownsRename', 'sessions', 'captureRenameOwner', 'enqueue', 'refresh', 'cancelRename', 'canRenameSession',
     'return function(id,title,requireEditor=false){' + renameBody + '}')(
     id => sessions.value.find(row => row.id === id), () => adapter, renameOwners, pendingRenames, { value: 'live' }, ownsRename, sessions, captureRenameOwner,
-    async (_id, operation, publish) => { const result = await operation(); await publish(result); return result }, async () => {}, cancel)
+    async (_id, operation, publish) => { const result = await operation(); await publish(result); return result }, async () => {}, cancel, canRenameSession)
   return { sessions, begin, rename, renameOwners }
 }
 

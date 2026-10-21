@@ -110,6 +110,8 @@ export interface UnifiedSession {
   /** Allowlisted preflight code only; never raw errors or configuration values. */
   preparationIssueCode?: string | null
   renameState?: SessionRenameState
+  /** adapter 根据当前精确来源投影的展示能力；执行时仍重新核验授权与身份。 */
+  renameAvailable?: boolean
   /** 仅标明编辑目标；不能证明当前终端仍停留在恢复来源会话。 */
   renameTarget?: 'resume-source' | 'history-record'
 }
@@ -169,7 +171,7 @@ export interface SessionAdapter {
   readonly runtime: SessionRuntimeKind
   /** Freeze process ownership at admission, before a queued async action starts. */
   captureOwnership?(id: string, operation?: 'close' | 'archive'): () => boolean
-  listSessions(projectKey?: string): Promise<UnifiedSession[]>
+  listSessions(projectKey?: string, cli?: UnifiedCliKind): Promise<UnifiedSession[]>
   /** 新建独立运行 owner 后可提前交接显示行；回调不代表 CLI 成功，也不授予操作权限。 */
   createSession(input: CreateUnifiedSessionInput, canAdmit?: () => boolean, onAdmitted?: (session: UnifiedSession) => void): Promise<UnifiedSession>
   resumeSession(input: ResumeUnifiedSessionInput, canAdmit?: () => boolean): Promise<UnifiedSession>

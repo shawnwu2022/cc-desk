@@ -25,7 +25,57 @@ function status(tab: any, phase: LaunchStatus['phase'] = 'running'): LaunchStatu
 beforeEach(() => setActivePinia(createPinia()))
 afterEach(() => vi.restoreAllMocks())
 
+// 丢失 SessionStart 时只允许主线程提示建立初始身份，普通工具/结束事件不建立或切换身份。
+it('ClaudeIdentity_OnlyExplicitStartChangesObservedSession_026', () => {
+  const tabs = useNativeTabsStore()
+  const tab = tabs.create({ cli: 'claude', projectId: 'p', projectPath: '/repo',
+    profileId: 'cc', profileRevision: '1', action: { kind: 'new' } })
+  tabs.applyLaunchStatus(tab.tabId, status(tab))
+  const attempt = captureNativeAttempt(tab)
+  expect(tabs.applyObservationIdentity(tab.tabId, attempt, 'first', 'stop')).toBe(false)
+  expect(tabs.applyObservationIdentity(tab.tabId, attempt, 'first', 'postToolUse')).toBe(false)
+  expect(tabs.applyObservationIdentity(tab.tabId, attempt, 'first', 'userPromptSubmit')).toBe(true)
+  expect(tabs.applyObservationIdentity(tab.tabId, attempt, 'second', 'userPromptSubmit')).toBe(false)
+  expect(tabs.applyObservationIdentity(tab.tabId, attempt, 'second', 'sessionStart')).toBe(true)
+  expect(tabs.applyObservationIdentity(tab.tabId, attempt, 'first', 'stop')).toBe(false)
+  expect(tabs.tab(tab.tabId)?.observedSessionId).toBe('second')
+  expect(tabs.applyObservationIdentity(tab.tabId, attempt, 'second', 'stop')).toBe(true)
+})
+
 describe('D22 native dual-CLI tab store', () => {
+  // 终端视觉提示按完整 attempt 绑定，启动未确认时不改变进程状态，失效边界丢弃提示。
+  it('Codex_ProgramStatusLifetime_023', () => {
+    const tabs = useNativeTabsStore()
+    const tab = tabs.create({ cli: 'codex', projectId: 'p', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+    const owner = captureNativeAttempt(tab)
+    tabs.applyCodexProgramStatus(tab.tabId, owner, 'working')
+    expect(tabs.tab(tab.tabId)?.codexProgramStatus).toBeUndefined()
+    tabs.markStarting(tab.tabId)
+    tabs.applyCodexProgramStatus(tab.tabId, owner, 'blocked')
+    expect(tabs.tab(tab.tabId)).toMatchObject({ status: 'starting', codexProgramStatus: 'blocked', attentionState: 'none' })
+    tabs.applyLaunchStatus(tab.tabId, status(tab))
+    for (const foreign of [{ ...owner, requestId: 'other' }, { ...owner, runId: 'other' }, { ...owner, generation: 2 }]) {
+      tabs.applyCodexProgramStatus(tab.tabId, foreign, 'idle')
+      expect(tabs.tab(tab.tabId)?.codexProgramStatus).toBe('blocked')
+    }
+    tabs.markUnknown(tab.tabId)
+    tabs.applyCodexProgramStatus(tab.tabId, owner, 'working')
+    expect(tabs.tab(tab.tabId)?.codexProgramStatus).toBeUndefined()
+    tabs.applyLaunchStatus(tab.tabId, status(tab))
+    tabs.applyCodexProgramStatus(tab.tabId, owner, 'working')
+    tabs.applyLaunchStatus(tab.tabId, status(tab, 'exited'))
+    expect(tabs.tab(tab.tabId)?.codexProgramStatus).toBeUndefined()
+    const next = tabs.restart(tab.tabId, { profileId: 'cx', profileRevision: '7' })
+    tabs.markStarting(next.tabId)
+    tabs.applyCodexProgramStatus(next.tabId, owner, 'blocked')
+    expect(tabs.tab(next.tabId)?.codexProgramStatus).toBeUndefined()
+    tabs.applyCodexProgramStatus(next.tabId, captureNativeAttempt(next), 'idle')
+    tabs.markError(next.tabId, 'NATIVE_LAUNCH_FAILED')
+    expect(tabs.tab(next.tabId)?.codexProgramStatus).toBeUndefined()
+    tabs.close(next.tabId)
+    tabs.applyCodexProgramStatus(next.tabId, captureNativeAttempt(next), 'working')
+    expect(tabs.tab(next.tabId)).toBeUndefined()
+  })
   it('Observer_InstallationReceiptCannotOverwriteActivityOrNewAttempt_022', () => {
     const store=useNativeTabsStore(),tab=store.create({cli:'claude',projectId:'p',projectPath:'/repo',profileId:'cc',profileRevision:'7',action:{kind:'new'}})
     const owner=captureNativeAttempt(tab)
@@ -253,4 +303,22 @@ describe('D22 native dual-CLI tab store', () => {
     expect(store.applyObservationIdentity(claude.tabId, captureNativeAttempt(claude), '  ')).toBe(false)
   })
 
+})
+
+// Codex 新TUI只能接收本attempt的认证主会话身份；旧线程Stop和关闭后事件不回绑。
+it('CodexIdentity_ExactAttemptAndRetirement_031', () => {
+  const store = useNativeTabsStore()
+  const a = store.create({ cli: 'codex', projectId: 'p', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+  const b = store.create({ cli: 'codex', projectId: 'p', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+  store.applyLaunchStatus(a.tabId, status(a)); store.applyLaunchStatus(b.tabId, status(b))
+  const first = '00000000-0000-4000-8000-000000000031', second = '00000000-0000-4000-8000-000000000032'
+  expect(store.applyObservationIdentity(a.tabId, captureNativeAttempt(a), first, 'stop')).toBe(false)
+  expect(store.applyObservationIdentity(a.tabId, captureNativeAttempt(a), first)).toBe(true)
+  expect(store.applyObservationIdentity(a.tabId, captureNativeAttempt(a), second, 'stop')).toBe(false)
+  expect(store.applyObservationIdentity(b.tabId, captureNativeAttempt(a), first)).toBe(false)
+  expect(store.tab(b.tabId)?.observedSessionId).toBeUndefined()
+  expect(store.applyObservationIdentity(b.tabId, captureNativeAttempt(b), second)).toBe(true)
+  store.applyLaunchStatus(a.tabId, status(a, 'exited'))
+  expect(store.applyObservationIdentity(a.tabId, captureNativeAttempt(a), second)).toBe(false)
+  expect(store.tab(a.tabId)?.observedSessionId).toBe(first)
 })

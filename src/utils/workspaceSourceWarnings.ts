@@ -1,4 +1,9 @@
 import { projectionErrorCode, projectionErrorStage, type ProjectionStage } from '@/api/nativeProjection'
+import type { InjectionKey } from 'vue'
+import type { UnifiedSession } from '@/types/unifiedSession'
+
+/** 只控制警告展示，不提供读取、恢复或运行权限。 */
+export const SESSION_HISTORY_WARNING_VISIBLE: InjectionKey<(session: UnifiedSession) => boolean> = Symbol('session-history-warning-visible')
 
 export const workspaceSourceLabels = {
   'project-metadata': 'sourceWarningProjectMetadata',

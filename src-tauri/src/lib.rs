@@ -1,11 +1,14 @@
 mod checks;
 mod cli;
+mod codex_observer;
+mod codex_observer_reporter;
 mod commands;
 mod desktop_updater;
 mod hook_config;
 mod hook_events;
 mod hook_server;
 mod logger;
+pub use codex_observer_reporter::run_entry as run_codex_observer_entry;
 mod observer_host;
 mod observer_http;
 mod observer_registry;

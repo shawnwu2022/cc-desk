@@ -16,7 +16,7 @@ import type { SessionConfirmationRequest } from '@/types/confirmation'
 import { mapSafeUserError, safeUserErrorCode, type UserErrorPresentation } from '@/utils/userError'
 import { useNotificationsStore } from '@/stores/notifications'
 import type { ToastInput } from '@/stores/notifications'
-import { makeSessionCatalogKey, makeSessionRenameOwnerKey, nativeHistoryRecordKey } from '@/utils/sessionPresentation'
+import { canRenameSession, makeSessionCatalogKey, makeSessionRenameOwnerKey, nativeHistoryRecordKey } from '@/utils/sessionPresentation'
 import { matchesSessionMetadata } from '@/session/sessionMetadata'
 import type { SessionUiRecord } from '@/types/app'
 import { nativeHistoryContextKey } from '@/stores/nativeHistory'
@@ -88,7 +88,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     return { controller: new AbortController(), key: makeSessionRenameOwnerKey(row), owns: adapters.find(adapter => adapter.runtime === row.runtime)?.captureOwnership?.(row.id) ?? (() => true), state }
   }
   function ownsRename(owner: RenameOwner, row: UnifiedSession | undefined) {
-    return !!row && owner.key === makeSessionRenameOwnerKey(row) && owner.owns()
+    return !!row && (owner.issued || canRenameSession(row)) && owner.key === makeSessionRenameOwnerKey(row) && owner.owns()
   }
   function revokeUnissuedRenames(selectedId: string | null) {
     const revoked = new Set<string>()
@@ -325,8 +325,10 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
   }
   let refreshVersion = 0
   let fullRefreshVersion = 0
+  const cliRefreshVersions = new Map<UnifiedSession['cli'], number>()
   let pendingRefreshes = 0
   const projectRefreshVersions = new Map<string, number>()
+  const projectCliRefreshVersions = new Map<string, number>()
   let selectionEpoch = 0
   // Selection intent is distinct from lifecycle invalidation: closing an unrelated
   // row must not revoke the selected preparation's eventual identity transfer.
@@ -437,38 +439,43 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     return adapterForRuntime(matches[0]?.runtime ?? input.runtime ?? 'native-cli')
   }
 
-  async function refresh(projectKey?: string, options: { background?: boolean } = {}): Promise<void> {
+  async function refresh(projectKey?: string, options: { background?: boolean; cli?: UnifiedSession['cli'] } = {}): Promise<void> {
     const version = ++refreshVersion
     const key = projectKey === undefined ? undefined : normalizePath(projectKey)
-    if (key === undefined) fullRefreshVersion = version
+    if (key === undefined && options.cli) cliRefreshVersions.set(options.cli, version)
+    else if (key === undefined) fullRefreshVersion = version
+    else if (options.cli) projectCliRefreshVersions.set(JSON.stringify([key, options.cli]), version)
     else projectRefreshVersions.set(key, version)
     const visible = !options.background
     if (visible) ++pendingRefreshes
     loading.value = pendingRefreshes > 0
     error.value = null
 
-    const ownsProject = (candidate: string): boolean =>
+    const ownsProject = (candidate: string, cli?: UnifiedSession['cli']): boolean =>
       fullRefreshVersion <= version
       && (projectRefreshVersions.get(candidate) ?? 0) <= version
+      && (!cli || ((cliRefreshVersions.get(cli) ?? 0) <= version
+        && (projectCliRefreshVersions.get(JSON.stringify([candidate, cli])) ?? 0) <= version))
 
     try {
-      const lists = await Promise.all(adapters.map(adapter => adapter.listSessions(projectKey)))
-      const provenLegacyRoot = validateLegacyClaudeRoot ? await validateLegacyClaudeRoot() : legacyClaudeRoot
-      if (fullRefreshVersion > version || (key !== undefined && !ownsProject(key))) return
+      const lists = await Promise.all(adapters.map(adapter => adapter.listSessions(projectKey, options.cli)))
+      const hasClaudeRows = lists.some(rows => rows.some(row => row.cli === 'claude'))
+      const provenLegacyRoot = options.cli === 'codex' || !cliSupport.isEnabled('claude') || !hasClaudeRows ? undefined : validateLegacyClaudeRoot ? await validateLegacyClaudeRoot() : legacyClaudeRoot
+      if (fullRefreshVersion > version || (key !== undefined && !ownsProject(key, options.cli))) return
 
       // Replace only the requested project. A full read also preserves scopes
       // refreshed after it began, regardless of completion order.
       const byId = new Map<string, UnifiedSession>(sessions.value
         .filter(session => {
           const sessionKey = normalizePath(session.projectPath)
-          return key !== undefined ? sessionKey !== key : !ownsProject(sessionKey)
+          return (options.cli && session.cli !== options.cli) || (key !== undefined && sessionKey !== key) || !ownsProject(sessionKey, session.cli)
         })
         .map(session => [session.id, session]),
       )
       for (const creation of creations.values()) byId.set(creation.row.id, creation.row)
       for (const session of lists.flat()) {
         const sessionKey = normalizePath(session.projectPath)
-        if ((key !== undefined && key !== sessionKey) || !ownsProject(sessionKey)) continue
+        if ((options.cli && session.cli !== options.cli) || (key !== undefined && key !== sessionKey) || !ownsProject(sessionKey, session.cli)) continue
         // 支持开关关闭的 CLI 不列出其历史行；已打开终端是活进程，保留可选中与关闭。
         if (!cliSupport.isEnabled(session.cli) && session.opened !== true) continue
         byId.set(session.id, mergeDuplicateSession(byId.get(session.id), session))
@@ -478,7 +485,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
       for (const row of byId.values()) {
         const record = nativeHistoryRecordKey(row)
         if (!record || row.safeErrorCode === 'SESSION_ORIGIN_AMBIGUOUS') continue
-        const key = JSON.stringify([record, row.archived])
+        const key = record
         const rows = physicalRecords.get(key)
         if (rows) rows.push(row)
         else physicalRecords.set(key, [row])
@@ -487,8 +494,11 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
         if (rows.length < 2) continue
         const opened = rows.filter(row => row.opened === true)
         // 两个终端仍各有进程 owner；这里只移除同物理记录的关闭投影。
-        const retained = opened.length ? opened : [rows.find(row => row.id === activeSessionId.value)
-          ?? rows.find(row => previousIds.has(row.id)) ?? rows[0]]
+        const archived = rows.filter(row => row.archived && row.opened !== true)
+        const representative = (candidates: UnifiedSession[]) => candidates.find(row => row.id === activeSessionId.value)
+          ?? candidates.find(row => previousIds.has(row.id)) ?? candidates[0]
+        const retained = opened.length ? [...opened, ...(archived.length ? [representative(archived)] : [])]
+          : [representative(archived.length ? archived : rows)]
         for (const row of rows) if (!retained.includes(row)) byId.delete(row.id)
       }
       // legacy 与 native 历史扫描同一 CLI 默认数据源,同一会话会各投影一行；以
@@ -914,9 +924,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
 
   function beginRename(id: string) {
     const row = sessions.value.find(value => value.id === id)
-    // 菜单入口已按能力隐藏 opencode rename；双击/F2/全局快捷键也必须在此收口，
-    // 否则用户输入完标题才撞上后端 NATIVE_RENAME_UNSUPPORTED。
-    if (!row || row.cli === 'opencode' || (row.opened !== false && activeSessionId.value !== id) || row.archived || row.renameState === 'saving' || (pendingRenames.get(id) ?? 0) > 0 || isPreparingSession(id)) return
+    if (!row || !canRenameSession(row) || (row.opened !== false && activeSessionId.value !== id) || row.renameState === 'saving' || (pendingRenames.get(id) ?? 0) > 0 || isPreparingSession(id)) return
     const current = renameOwners.get(id)
     if (!current || !ownsRename(current, row)) {
       current?.controller.abort()
@@ -935,6 +943,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
   }
   function renameSession(id: string, title: string, requireEditor = false): Promise<'input-written' | 'display-name-saved' | 'native-title-saved' | void> {
     const session = requireSession(id)
+    if (!canRenameSession(session)) return Promise.reject(new Error('NATIVE_RENAME_UNSUPPORTED'))
     const adapter = adapterForRuntime(session.runtime)
     const current = renameOwners.get(id)
     if ((requireEditor && (!current || current.state !== 'editing' || (session.opened !== false && activeSessionId.value !== id))) || (current && !ownsRename(current, session))) {
@@ -996,7 +1005,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     if (existing) return existing
     const adapter = adapterForRuntime(session.runtime)
     pendingArchiveKeys.value = new Set([...pendingArchiveKeys.value, key])
-    const task = enqueue(id, () => adapter.restoreArchivedSession(id), () => refresh(session.projectKey))
+    const task = enqueue(id, () => adapter.restoreArchivedSession(id), () => refresh(session.projectKey, { cli: session.cli }))
     pendingArchiveRestores.set(key, task)
     void task.finally(() => {
       if (pendingArchiveRestores.get(key) !== task) return

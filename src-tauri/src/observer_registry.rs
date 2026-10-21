@@ -18,6 +18,7 @@ pub(crate) struct ObserverRun {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ObserverSource {
     ClaudeHook,
+    CodexHook,
     Unknown,
 }
 
@@ -58,6 +59,7 @@ struct ObserverSlot {
     capability: String,
     source: ObserverSource,
     seen: HashSet<String>,
+    codex_replay: crate::codex_observer::ReplayWindow,
     delivery: ObserverDelivery,
     authorize: Arc<dyn Fn() -> bool + Send + Sync>,
 }
@@ -156,6 +158,15 @@ impl ObserverRegistry {
         delivery: ObserverDelivery,
         authorize: Arc<dyn Fn() -> bool + Send + Sync>,
     ) -> Result<ObserverLease, SafeError> {
+        self.lease_source(run, delivery, authorize, ObserverSource::ClaudeHook)
+    }
+    pub(crate) fn lease_source(
+        self: &Arc<Self>,
+        run: ObserverRun,
+        delivery: ObserverDelivery,
+        authorize: Arc<dyn Fn() -> bool + Send + Sync>,
+        source: ObserverSource,
+    ) -> Result<ObserverLease, SafeError> {
         if !authorize() {
             return Err(error("OBSERVER_FORBIDDEN"));
         }
@@ -183,7 +194,7 @@ impl ObserverRegistry {
         let binding = self.insert(
             run,
             uuid::Uuid::new_v4().simple().to_string(),
-            ObserverSource::ClaudeHook,
+            source,
             delivery,
             authorize,
         )?;
@@ -205,7 +216,10 @@ impl ObserverRegistry {
     ) -> Result<ObserverBinding, SafeError> {
         validate_observer_run(&run)?;
         validate_capability(&capability)?;
-        if source != ObserverSource::ClaudeHook {
+        if !matches!(
+            source,
+            ObserverSource::ClaudeHook | ObserverSource::CodexHook
+        ) {
             return Err(error("OBSERVER_SOURCE_UNSUPPORTED"));
         }
 
@@ -229,6 +243,7 @@ impl ObserverRegistry {
                 capability: capability.clone(),
                 source,
                 seen: HashSet::new(),
+                codex_replay: Default::default(),
                 delivery,
                 authorize,
             },
@@ -249,7 +264,10 @@ impl ObserverRegistry {
         payload: &[u8],
     ) -> Result<ObserverAccept, SafeError> {
         validate_observer_run(&binding.run)?;
-        if binding.source != ObserverSource::ClaudeHook {
+        if !matches!(
+            binding.source,
+            ObserverSource::ClaudeHook | ObserverSource::CodexHook
+        ) {
             return Err(error("OBSERVER_SOURCE_UNSUPPORTED"));
         }
         validate_event_id(event_id)?;
@@ -269,7 +287,11 @@ impl ObserverRegistry {
             return Err(error("OBSERVER_INVALID_EVENT"));
         }
 
-        let event = sanitize_event(event)?;
+        let event = if binding.source == ObserverSource::CodexHook {
+            crate::codex_observer::metadata(&event)?
+        } else {
+            sanitize_event(event)?
+        };
         self.check_binding(binding)?;
         let mut slots = self.slots.lock();
         let slot = slots
@@ -279,13 +301,21 @@ impl ObserverRegistry {
         {
             return Err(error("OBSERVER_FORBIDDEN"));
         }
-        if slot.seen.contains(event_id) {
-            return Ok(ObserverAccept::Duplicate);
+        if binding.source == ObserverSource::CodexHook
+            && crate::codex_observer::ordered_event_id(event_id)
+        {
+            if !slot.codex_replay.accept(event_id, Self::MAX_SEEN_EVENTS) {
+                return Ok(ObserverAccept::Duplicate);
+            }
+        } else {
+            if slot.seen.contains(event_id) {
+                return Ok(ObserverAccept::Duplicate);
+            }
+            if slot.seen.len() >= Self::MAX_SEEN_EVENTS {
+                return Err(error("OBSERVER_EVENT_CAPACITY"));
+            }
+            slot.seen.insert(event_id.to_string());
         }
-        if slot.seen.len() >= Self::MAX_SEEN_EVENTS {
-            return Err(error("OBSERVER_EVENT_CAPACITY"));
-        }
-        slot.seen.insert(event_id.to_string());
 
         Ok(ObserverAccept::Accepted(ValidatedObserverEvent {
             run: binding.run.clone(),
@@ -359,6 +389,7 @@ pub(crate) fn parse_observer_headers(
     let event_id = observer_header(headers, "x-cc-desk-event")?.to_string();
     let source = match observer_header(headers, "x-cc-desk-observer-source")? {
         "claude-hook" => ObserverSource::ClaudeHook,
+        "codex-hook" => ObserverSource::CodexHook,
         _ => ObserverSource::Unknown,
     };
     if source == ObserverSource::Unknown {

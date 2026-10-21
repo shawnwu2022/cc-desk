@@ -25,6 +25,7 @@ import { SESSION_INTERACTION_OWNER } from '@/session/sessionInteraction'
 import { useAppShortcuts } from '@/composables/useAppShortcuts'
 import { APP_RENAME_SHORTCUT, type AppShortcutAction } from '@/config/appShortcuts'
 import { useUnifiedWorkspaceRuntime } from '@/composables/useUnifiedWorkspaceRuntime'
+import { useBackgroundUpdateCheck } from '@/composables/useBackgroundUpdateCheck'
 import { useLaunchConfigurationEditor } from '@/composables/useLaunchConfigurationEditor'
 import type { UnifiedTerminalHostPort } from '@/terminal/unifiedTerminalHost'
 import ProjectsView from '@/components/projects/ProjectsView.vue'
@@ -43,6 +44,7 @@ import { applyThemeToDom } from '@/utils/theme'
 import { projectBasename } from '@/utils/displayName'
 import { mapSafeUserError } from '@/utils/userError'
 import { sameProjectPath } from '@/utils/path'
+import { SESSION_HISTORY_WARNING_VISIBLE } from '@/utils/workspaceSourceWarnings'
 import { onMenuSettings, onMenuShortcuts, onConfigFontSize, onOpenDirectory, onTerminalRestart } from '@/api/tauri'
 import type { NewSessionRequest, SessionMenuAction, UnifiedProjectIdentity } from '@/types/unifiedSession'
 
@@ -93,6 +95,8 @@ function confirmDiscoveredProgram(confirmation: ConfirmedLaunchProgram) {
 const sessionSidebar = ref<InstanceType<typeof SidebarPanel> | null>(null)
 const terminalHost = ref<UnifiedTerminalHostPort | null>(null)
 const runtime = useUnifiedWorkspaceRuntime(terminalHost)
+useBackgroundUpdateCheck()
+if (typeof runtime.historyWarningVisible === 'function') provide(SESSION_HISTORY_WARNING_VISIBLE, runtime.historyWarningVisible)
 const sourceNoticeArea = ref<HTMLElement | null>(null)
 const sourceDiagnosticsOpen = ref(false)
 watch(() => [shell.section, shell.sidebarVisible], () => {
@@ -109,11 +113,13 @@ function editSourceConfiguration(profileId: string) {
 }
 async function dismissSourceNotice() {
   const restoreFocus = sourceNoticeArea.value?.contains(document.activeElement) ?? false
+  const restoreDrawerFocus = Boolean(document.activeElement?.closest('[data-source-diagnostics-ignore]'))
   runtime.dismissSourceNotice()
   await nextTick()
+  if (restoreDrawerFocus && sourceDiagnosticsOpen.value) document.querySelector<HTMLElement>('[data-source-warning-retry]')?.focus()
   if (restoreFocus && shell.section === 'workspace') {
-    const target = shell.sidebarVisible ? '[data-history-source-entry]' : '[data-primary-section="workspace"]'
-    document.querySelector<HTMLElement>(target)?.focus()
+    const target = shell.sidebarVisible ? document.querySelector<HTMLElement>('[data-history-source-entry]') : null
+    ;(target ?? document.querySelector<HTMLElement>('[data-primary-section="workspace"]'))?.focus()
   }
 }
 const configFailed = ref(false)
@@ -219,11 +225,11 @@ function shortcutAction(action: AppShortcutAction) {
     request(selected ? { kind: 'new-session', project: selected } : { kind: 'add-project' })
     return
   }
+  if (action !== 'close-session') return
   const selected = sessions.activeSession
   if (!selected) return
   shell.navigate('workspace')
-  if (action === 'close-session') request({ kind: 'menu-action', sessionId: selected.id, action: 'close' })
-  else if (!sessions.isPreparingSession(selected.id)) { shell.sidebarVisible = true; sessions.beginRename(selected.id) }
+  request({ kind: 'menu-action', sessionId: selected.id, action: 'close' })
 }
 const shortcuts = useAppShortcuts({ onAction: shortcutAction })
 
@@ -277,9 +283,7 @@ onUnmounted(() => {
         @confirmation-request="request({ kind: 'confirmation', request: $event })"
         @restore-request="request({ kind: 'restore-archive', sessionId: $event })">
         <template #title-trailing>
-          <!-- 来源问题只在有实际故障时出现；它是通往诊断抽屉的唯一入口，所以必须常驻可达。
-               挂在面板标题而不是会话行：警告是来源级的（整个 Claude/Codex 历史源），
-               且引导期来源（项目元数据/配置/目录）失败时列表为空，没有行可承接。 -->
+          <!-- 未忽略的来源问题共享汇总入口；匿名故障可能没有可承接的会话行。 -->
           <span v-if="runtime.sourceIssuesAvailable?.value" class="source-issue-entry"
             :inert="shell.section !== 'workspace' || !shell.sidebarVisible || undefined">
             <IconButton data-history-source-entry :label="t('historySourceIssues')" @click="sourceDiagnosticsOpen = true">
@@ -303,13 +307,13 @@ onUnmounted(() => {
         <InlineNotice v-if="runtime.error.value && runtime.error.value !== 'workspaceRuntimePartial'" kind="warning" :message="t(runtime.error.value)"
           :action-label="t('retry')" @action="request({ kind: 'refresh' })" />
         <div v-if="!runtime.fatal?.value" ref="sourceNoticeArea" :inert="configurationEditorOpening || undefined">
-          <InlineNotice v-if="runtime.sourceWarnings?.value.length && !runtime.sourceNoticeDismissed?.value" data-workspace-source-notice class="workspace-source-notice" kind="warning" :message="t('workspaceRuntimePartial')"
+          <InlineNotice v-if="runtime.sourceDiagnosticsWarnings?.value.length" data-workspace-source-notice class="workspace-source-notice" kind="warning" :message="t('workspaceRuntimePartial')"
             :action-label="t('retry')" @action="request({ kind: 'refresh' })">
             <IconButton data-dismiss-source-notice :label="t('sourceWarningDismiss')" @click="dismissSourceNotice"><span>×</span></IconButton>
-            <WorkspaceSourceDetails :warnings="runtime.sourceWarnings.value" :truncated="runtime.sourceWarningsTruncated.value"
+            <WorkspaceSourceDetails :warnings="runtime.sourceDiagnosticsWarnings.value" :truncated="runtime.sourceDiagnosticsTruncated.value"
               :configurations="runtime.sourceWarningConfigurations?.value ?? []" @configure="editSourceConfiguration" />
           </InlineNotice>
-          <template v-if="runtime.historyMetadataPartial?.value && !runtime.historyNoticeDismissed?.value">
+          <template v-if="runtime.historyReadWarnings?.value.length">
             <InlineNotice data-history-metadata-partial kind="info" :message="t('workspaceHistoryMetadataPartial')">
               <IconButton data-dismiss-history-notice :label="t('sourceWarningDismiss')" @click="dismissSourceNotice"><span>×</span></IconButton>
             </InlineNotice>
@@ -350,7 +354,7 @@ onUnmounted(() => {
         <WorkspaceSourceDetails compact :warnings="runtime.sourceDiagnosticsWarnings.value" :truncated="runtime.sourceDiagnosticsTruncated.value || runtime.historyIssuesTruncated.value"
           :configurations="runtime.sourceWarningConfigurations?.value ?? []" :issues="runtime.historyIssues.value" :busy="runtime.sourceChecksPending.value"
           @configure="editSourceConfiguration" @retry="runtime.retryHistoryIssue" @open-project="runtime.openHistoryIssueProject" />
-        <InlineNotice v-if="runtime.historyMetadataPartial?.value" kind="info" :message="t('workspaceHistoryMetadataPartial')" />
+        <InlineNotice v-if="runtime.historyReadWarnings?.value.length" kind="info" :message="t('workspaceHistoryMetadataPartial')" />
         <WorkspaceSourceDetails compact partial :warnings="runtime.historyReadWarnings.value" :truncated="runtime.historyIssuesTruncated.value"
           :issues="runtime.historyIssues.value" :busy="runtime.sourceChecksPending.value" @retry="runtime.retryHistoryIssue" @open-project="runtime.openHistoryIssueProject" />
         <InlineNotice v-if="runtime.historyRecoveryError.value" kind="warning" :message="t('historyRecoveryActionFailed')" />

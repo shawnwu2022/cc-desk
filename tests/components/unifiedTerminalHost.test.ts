@@ -164,7 +164,7 @@ describe('Unified terminal host', () => {
   it('Host_ClickAndRenameAdmission_014', async () => {
     const w = render(); await flushPromises()
     const source = mount(SessionItem, { attachTo: document.body, props: { session: {
-      id: 'source', projectKey: '/repo', projectPath: '/repo', title: 'Source session', cli: 'claude',
+      id: 'source', renameAvailable: true, projectKey: '/repo', projectPath: '/repo', title: 'Source session', cli: 'claude',
       runtime: 'native-cli', processState: 'stopped', attentionState: 'none', lastActivityAt: 0,
       archived: false, opened: false, resumable: true, adapterSessionId: 'source', nativeSessionId: 'session-1',
     } satisfies UnifiedSession }, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { TerminalView: Child, NativeCliTerminal: Child } } })

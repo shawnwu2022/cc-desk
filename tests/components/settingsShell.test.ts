@@ -107,6 +107,8 @@ describe('Unified settings shell', () => {
   })
   // 默认新建CLI影响现有选择器/高级表单，不会创建或启动任何会话。
   it('Settings_DefaultToolIsPresentation_009', async () => {
+    const { useCliSupportStore } = await import('@/stores/cliSupport')
+    useCliSupportStore().setCliEnabled('codex', true)
     const app = useAppStore() as any; expect(typeof app.setDefaultNewCli).toBe('function')
     await app.setDefaultNewCli('codex')
     useNewSessionDraftStore().open({ projectKey: '/repo', projectPath: '/repo' })
@@ -316,15 +318,15 @@ it('Settings_CliSupportIconTogglesPersist_020', async () => {
   const claude = wrapper.find('[data-cli-support=claude]')
   const codex = wrapper.find('[data-cli-support=codex]')
   expect(claude.attributes('aria-pressed')).toBe('true')
-  expect(codex.classes()).not.toContain('cli-support-toggle--off')
+  expect(codex.classes()).toContain('cli-support-toggle--off')
   await codex.trigger('click'); await flushPromises()
   const support = useCliSupportStore()
-  expect(support.isEnabled('codex')).toBe(false)
-  expect(wrapper.find('[data-cli-support=codex]').attributes('aria-pressed')).toBe('false')
-  expect(wrapper.find('[data-cli-support=codex]').classes()).toContain('cli-support-toggle--off')
-  expect(JSON.parse(localStorage.getItem('cc-desk-cli-support-v1')!)).toEqual({ claude: true, codex: false, opencode: true })
-  await wrapper.find('[data-cli-support=codex]').trigger('click'); await flushPromises()
   expect(support.isEnabled('codex')).toBe(true)
+  expect(wrapper.find('[data-cli-support=codex]').attributes('aria-pressed')).toBe('true')
+  expect(wrapper.find('[data-cli-support=codex]').classes()).not.toContain('cli-support-toggle--off')
+  expect(JSON.parse(localStorage.getItem('cc-desk-cli-support-v1')!)).toEqual({ claude: true, codex: true, opencode: true })
+  await wrapper.find('[data-cli-support=codex]').trigger('click'); await flushPromises()
+  expect(support.isEnabled('codex')).toBe(false)
 })
 
 // opencode 开关与既有两键同排；停用持久化只翻转自身键。
@@ -336,5 +338,5 @@ it('Settings_OpencodeSupportToggle_021', async () => {
   expect(opencode.find('.cli-app-icon__image').attributes('src')).toContain('/cli/opencode.svg')
   expect(opencode.find('.cli-app-icon').attributes('aria-hidden')).toBe('true')
   await opencode.trigger('click'); await flushPromises()
-  expect(JSON.parse(localStorage.getItem('cc-desk-cli-support-v1')!)).toEqual({ claude: true, codex: true, opencode: false })
+  expect(JSON.parse(localStorage.getItem('cc-desk-cli-support-v1')!)).toEqual({ claude: true, codex: false, opencode: false })
 })

@@ -386,7 +386,9 @@ test('DraftRecovery_RoutingUsesFreshWriteJobObservation_020', () => {
   const workflow = readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8')
   assert.doesNotMatch(workflow, /needs\.preflight\.outputs\.recovery_draft/)
   assert.match(workflow, /name: Recheck main, required CI, coverage and same-run platform artifacts\r?\n\s+id: promotion/)
-  assert.equal((workflow.match(/if: steps\.promotion\.outputs\.recovery_draft/g) ?? []).length, 10)
+  assert.equal((workflow.match(/if: steps\.promotion\.outputs\.recovery_draft/g) ?? []).length, 11)
+  assert.match(workflow, /name: Compose English release highlights with complete technical disclosure\r?\n\s+if: steps\.promotion\.outputs\.recovery_draft == ''/)
+  assert.match(workflow, /generate_release_notes: false\r?\n\s+body_path: release-notes\.md/)
   assert.match(workflow, /contents: write/)
 })
 

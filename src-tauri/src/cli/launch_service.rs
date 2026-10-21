@@ -432,7 +432,9 @@ impl LaunchService {
                 let prepared = self
                     .observer
                     .as_ref()
-                    .filter(|_| snapshot.observer_requested())
+                    .filter(|_| {
+                        snapshot.observer_requested() || snapshot.codex_identity_requested()
+                    })
                     .and_then(|host| {
                         let registry = Arc::downgrade(self.registry());
                         let owner = caller.clone();
@@ -452,7 +454,13 @@ impl LaunchService {
                                 })
                             })
                         });
-                        match host.prepare(
+                        let prepare = if snapshot.codex_identity_requested() {
+                            crate::observer_host::ObserverHost::prepare_codex
+                        } else {
+                            crate::observer_host::ObserverHost::prepare
+                        };
+                        match prepare(
+                            host,
                             crate::observer_registry::ObserverRun {
                                 run_id: request.run_id.clone(),
                                 generation: request.generation,
@@ -478,7 +486,25 @@ impl LaunchService {
                     });
                 let (snapshot, observer) = match prepared {
                     Some(prepared) => {
-                        match snapshot.with_observer(&prepared.environment, &prepared.plugin_dir) {
+                        let overlaid = match &prepared.codex_args {
+                            Some(args) => snapshot.with_codex_identity(&prepared.environment, args),
+                            None => {
+                                snapshot.with_observer(&prepared.environment, &prepared.plugin_dir)
+                            }
+                        };
+                        // 可选覆盖必须能由已选择的 runner 完整表示；失败仅撤销覆盖，
+                        // 原始快照仍走同一严格校验，不能放宽 cmd 转义或更换启动器。
+                        let overlaid = overlaid.and_then(|next| {
+                            let invocation = build_invocation(next.request(), &next)?;
+                            resolve_process(&invocation)?;
+                            if let Some(args) = &prepared.codex_args {
+                                if !super::codex::identity_hooks_supported(snapshot, args) {
+                                    return Err(error("OBSERVER_UNAVAILABLE"));
+                                }
+                            }
+                            Ok(next)
+                        });
+                        match overlaid {
                             Ok(next) => (next, Some(prepared.lease)),
                             Err(_) => {
                                 observer_failure = Some("OBSERVER_PREPARE_FAILED");

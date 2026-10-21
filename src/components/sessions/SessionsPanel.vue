@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
 import { useProjectsStateStore } from '@/stores/projectsState'
 import { matchProjectQuery, projectBasename } from '@/utils/displayName'
 import { normalizePath, sameProjectPath } from '@/utils/path'
 import { compareProjectGroups } from '@/utils/projectGroupOrder'
+import { isTextEditingTarget, ownsListKeyboardEvent } from '@/utils/keyboardScope'
 import AppInput from '@/components/ui/AppInput.vue'
 import AppButton from '@/components/ui/AppButton.vue'
 import IconButton from '@/components/ui/IconButton.vue'
@@ -48,6 +49,7 @@ const { t } = useI18n()
 const store = useUnifiedSessionsStore()
 const projects = useProjectsStateStore()
 const searchQuery = ref('')
+const activeSessionsOnly = ref(false)
 const panel = ref<HTMLElement | null>(null)
 const searchInput = ref<InstanceType<typeof AppInput> | null>(null)
 const quickSwitch = ref(false)
@@ -137,10 +139,22 @@ const allGroups = computed<UnifiedProjectGroup[]>(() => {
   }
   return groups.sort(compareProjectGroups)
 })
+const activeGroupsCache = new WeakMap<UnifiedProjectGroup, UnifiedProjectGroup>()
 const displayedGroups = computed(() => {
   const query = searchQuery.value.trim().toLowerCase()
-  if (!query) return allGroups.value
-  return allGroups.value.flatMap(group => {
+  // opened 由 adapter 的实际 tab 生命周期投影；空闲或已结束但未关闭仍属于打开会话。
+  const groups = activeSessionsOnly.value ? allGroups.value.flatMap(group => {
+    const sessions = group.sessions.filter(session => session.opened === true)
+    if (!sessions.length) return []
+    const cached = activeGroupsCache.get(group)
+    if (cached && cached.sessions.length === sessions.length
+      && sessions.every((row, index) => row === cached.sessions[index])) return [cached]
+    const output = { ...group, sessions }
+    activeGroupsCache.set(group, output)
+    return [output]
+  }) : allGroups.value
+  if (!query) return groups
+  return groups.flatMap(group => {
     if (matchProjectQuery(group.name, projectBasename(group.projectPath), group.projectPath, query)) return [group]
     const sessions = group.sessions.filter(session => session.title.toLowerCase().includes(query) || session.renameState === 'editing' || session.renameState === 'saving')
     return sessions.length ? [{ ...group, sessions }] : []
@@ -179,12 +193,12 @@ function projectAction(request: ProjectActionRequest) {
   emit('project-action', request)
 }
 function onTreeKeydown(event: KeyboardEvent) {
-  if (!props.active || event.defaultPrevented || event.isComposing || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey
-    || archivedOpen.value || document.querySelector('[role="dialog"][aria-modal="true"]')) return
+  if (!props.active || !ownsListKeyboardEvent(event, panel.value) || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey
+    || archivedOpen.value) return
   const target = event.target instanceof HTMLElement ? event.target : null
   if (!target || target.closest('[role="menu"]')) return
   const search = target.matches('.search-input')
-  if (!search && target.closest('input, textarea, select, [contenteditable="true"], button')) return
+  if (!search && (isTextEditingTarget(target) || target.closest('button'))) return
   const rows = [...(panel.value?.querySelectorAll<HTMLElement>('.panel-content .project-row, .panel-content [data-session-row]') ?? [])]
     .filter(element => {
       // 折叠组保留常驻行；方向键只能落在可见列表中的行。
@@ -204,15 +218,16 @@ function onTreeKeydown(event: KeyboardEvent) {
   if (rows[next]) { event.preventDefault(); event.stopPropagation(); rows[next].focus(); rows[next].scrollIntoView?.({ block: 'nearest' }) }
 }
 function onKeydown(event: KeyboardEvent) {
-  if (!props.active || event.defaultPrevented || archivedOpen.value) return
-  if (event.key === 'Escape') { quickSwitch.value = false; emit('close') }
+  if (!props.active || !ownsListKeyboardEvent(event, panel.value) || archivedOpen.value || event.repeat
+    || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return
+  const target = event.target instanceof Element ? event.target : null
+  if (target?.closest('[role="menu"]') || isTextEditingTarget(target) && !target?.matches('.search-input')) return
+  if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); quickSwitch.value = false; emit('close') }
 }
-onMounted(() => { window.addEventListener('keydown', onKeydown) })
-onUnmounted(() => { window.removeEventListener('keydown', onKeydown) })
 </script>
 
 <template>
-  <div ref="panel" class="sessions-panel" @keydown.capture="onTreeKeydown">
+  <div ref="panel" class="sessions-panel" @keydown.capture="onTreeKeydown" @keydown="onKeydown">
     <PanelHeader :title="t('sessions')" @close="emit('close')">
       <template #title-trailing><slot name="title-trailing" /></template>
       <template #actions>
@@ -233,6 +248,10 @@ onUnmounted(() => { window.removeEventListener('keydown', onKeydown) })
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 6 12 12M18 6 6 18" /></svg>
       </IconButton>
     </div>
+    <div class="session-filters">
+      <AppButton data-active-session-filter variant="ghost" size="compact" :aria-pressed="activeSessionsOnly"
+        :disabled="!active" @click="activeSessionsOnly = !activeSessionsOnly">{{ t('activeSessionsOnly') }}</AppButton>
+    </div>
     <div class="panel-content" role="tree" :aria-label="t('sessions')">
       <div v-if="stateError" class="state-hint">
         <span>{{ t('projectsLoadFailed') }}</span>
@@ -249,7 +268,7 @@ onUnmounted(() => { window.removeEventListener('keydown', onKeydown) })
           @menu-action="(id, action) => emit('menu-action', id, action)"
           @rename-commit="(id, title) => emit('rename-commit', id, title)" @rename-cancel="emit('rename-cancel', $event)"
           @confirmation-request="emit('confirmation-request', $event)" />
-        <div v-if="displayedGroups.length === 0 && !loading" class="empty-hint">{{ t(searching ? 'noSessionsFound' : 'noProjectsYet') }}</div>
+        <div v-if="displayedGroups.length === 0 && !loading" class="empty-hint" role="status">{{ t(searching ? 'noSessionsFound' : activeSessionsOnly ? 'noActiveSessions' : 'noProjectsYet') }}</div>
         <div v-if="loading && displayedGroups.length === 0" class="loading-indicator">{{ t('loading') }}</div>
       </template>
     </div>
@@ -264,6 +283,8 @@ onUnmounted(() => { window.removeEventListener('keydown', onKeydown) })
 .search-box { display: flex; align-items: center; gap: 4px; padding: 8px 12px; }
 .search-box :deep(.ui-field) { flex: 1; min-width: 0; }
 .search-box :deep(.search-input) { width: 100%; }
+.session-filters { display: flex; padding: 0 12px 8px; }
+.session-filters [aria-pressed="true"] { color: var(--text-primary); border-color: var(--selected-border); background: var(--selected-bg); }
 .panel-content { flex: 1; overflow-y: auto; padding: 0 8px; min-height: 0; min-width: 0; }
 .empty-hint, .loading-indicator { text-align: center; padding: 12px 8px; font-size: 12px; color: var(--text-secondary); }
 .state-hint { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px; color: var(--text-secondary); }

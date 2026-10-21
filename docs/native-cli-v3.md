@@ -92,6 +92,15 @@ Important rules:
 - unknown schema-v1 extensions survive reads and writes;
 - legacy compatibility files may still exist, but new native writes do not mutate them.
 
+Adopting a changed or deleted profile immediately revokes its obsolete history
+contexts, including pending reads. The workspace reloads only changed profiles at
+their new revisions and refreshes availability without restarting the application.
+The successor read waits for existing background refresh batches and retired
+scans to finish, preserving the two-reader budget; successive saves keep only
+the still-current revision eligible for the queued read.
+Unchanged profiles retain their history; admitted tabs and runs keep their frozen
+identity. Saving alone never launches or replays a failed launch.
+
 ## Authenticated document and projection boundary
 
 Native frontend calls are admitted through the authenticated document bridge. Frontend-selected paths or opaque IDs alone never authorize filesystem access.
@@ -173,6 +182,122 @@ For a machine-specific investigation, collect only: CC Desk and CLI versions; ru
 - observer failure cannot kill, restart, or implicitly retry a CLI;
 - Codex/raw/shell launches never receive the Claude observer overlay.
 
+Structured Codex new/resume launches have a separate identity-only channel using
+official session hooks. The reservation winner adds per-launch `-c hooks.*` and
+exact handler hashes in the synthetic session-flags trust layer, before user
+profile/extra arguments. It never writes user configuration, overrides
+`features.hooks`, replaces `notify`, or stops a shared daemon. Codex 0.163 chooses
+its official embedded app-server when these flags cannot be forwarded to the
+implicit shared daemon; explicit user remote/disabled-hook configuration remains
+authoritative and may leave identity unavailable. Raw and unarchive actions do
+not receive this channel. The four Codex-specific environment values are stripped
+from inherited inputs and minted for the exact owned run, generation and document.
+Before accepting an optional observer overlay, the host validates the complete
+invocation against the selected runner's argument and environment limits. An
+unrepresentable overlay is discarded together with its capability; the original
+frozen invocation still undergoes every ordinary launch check. In particular,
+Windows Cmd shims retain their strict CALL literal subset and size limits, so
+Codex hook TOML cannot prevent an otherwise valid new or resumed session from
+starting. The audited official npm Codex 0.163.0 Cmd wrapper has a separate
+per-launch argv transport: the selected Cmd runner and wrapper still execute,
+while Node's supported `NODE_OPTIONS --require` preloads a fixed CJS module before
+the official npm entry point. That module prepends only the four backend-generated
+hook configuration pairs to `process.argv`; the official wrapper then forwards
+them directly to its selected native Codex binary. Hook TOML never enters CALL.
+The module first restores the original absent/empty `NODE_OPTIONS` and removes
+the two internal `CC_DESK_CODEX_ARGV`/`CC_DESK_CODEX_NODE_OPTIONS` values, so neither
+the native CLI nor subsequent Node tools inherit the preload. Both internal names
+are stripped from inherited/profile inputs, including Windows case aliases.
+
+This transport requires matching audited wrapper/entry bytes and npm package
+name, version and bin metadata. Selected and entry paths must have direct canonical
+spellings: junction/short-name aliases are not adapted. The backend holds the
+audited files and their parent directories against writing/deletion, rechecks
+paths and actual file identities after opening, and retains a private fixed-code
+preload with the owned snapshot until run retirement. It does not change global
+configuration or persistent permissions. The existing locked `tempfile`
+dependency also owns isolated capability-probe configuration roots.
+
+Nonempty user `NODE_OPTIONS` are deliberately left untouched: Node permission or
+loader options can fail before CJS executes. Unknown/custom wrappers, different
+versions, nonliteral paths, preparation failures and size limits retain the
+original frozen launch without this transport. This degradation leaves identity
+observation unavailable and never selects another executable or writes a Codex
+configuration file. A degraded new tab lacks the hook-proven native ID, so its
+first-title synchronization and history deduplication cannot operate. Explicit-ID
+resume keeps its original frozen historical source without gaining observation.
+Codex discovers disk configuration hooks separately in each configuration layer,
+so the added session-flags handlers coexist with user-file handlers. A later user
+`-c` override in the same session-flags layer retains its normal precedence.
+
+Native Node interpreter launches do not receive Codex flags before their script
+argument. Native identity enhancement is separately admitted using verified
+executable bytes and an isolated `app-server` `hooks/list` exchange, never a model
+turn or a user configuration write. Currently only the audited Windows x64
+0.163.0 native SHA256 is admitted for that probe. Unknown/native replacement
+bytes, other platforms, custom wrappers and unsupported metadata disable only
+identity enhancement; the original frozen new/resume invocation is used once.
+This conservative boundary avoids executing an unknown wrapper as a capability
+probe, which could ignore metadata arguments or leave unowned descendants.
+The probe inherits only launch-essential environment entries, uses temporary
+home/config/cwd, caps stdout at 64 KiB/128 lines, polls the pipe without a reader
+thread for at most four seconds and reaps its direct child. All three trusted,
+enabled session-flags command handlers must be present. Unknown extra fields are
+ignored; unknown required trust/schema values are unsupported. This is optional
+launch preparation, not availability preflight. Extending audited probe targets
+requires real process-lifecycle and hook evidence for the new bytes/platform;
+unknown versions remain usable with reduced identity features. OSC status has
+independent admission and remains available.
+
+The bounded reporter forwards only a main-thread UUID and allowlisted
+SessionStart/UserPromptSubmit/Stop type. It never publishes prompt/response bodies
+or treats Stop as activity completion. Windows hook commands preserve raw UTF-8
+stdin across the CLI-selected shell, including executable paths with spaces.
+Only admitted startup/input metadata can establish an unknown identity; an old
+thread's asynchronous prompt/stop cannot replace a newer startup identity.
+Unknown, retired, replaced and closed attempts reject late events. The identity
+channel does not enable Claude activity observation for Codex.
+
+The Desk-owned Codex reporter emits fixed-width boot-monotonic replay IDs with a
+random suffix. Backend and tab keep at most 1024 recent IDs plus an eviction
+floor: new IDs continue beyond 1024; duplicates and IDs at/below the floor are
+rejected. Late IDs inside the retained window remain acceptable. These IDs are
+not a CLI turn sequence and do not establish event causality. Legacy opaque
+Codex IDs retain the conservative lifetime cap, while Claude replay and occurrence
+notice contracts remain unchanged. Run/generation/document replacement discards
+the corresponding window and rejects the old capability independently.
+
+Codex TUI activity has a separate passive source: its native OSC 7501 program
+status (`working`, `blocked`, `idle`, `clear`). The 0.163.0 TUI emits it on any
+TTY; Desk does not require iTerm2-only OSC 21337 or alter terminal environment,
+launch arguments, hooks or configuration. The existing exact-run contiguous
+output stream and xterm parser deliver only allowlisted status enums to that
+attempt. Background terminals keep observing; parser handoff/clear, output
+degradation, unknown/end/restart/disposal invalidate the hint. Missing and unknown
+payloads remain unknown. `blocked` is generic needs-action, and `idle` never proves
+completion. These untrusted terminal snapshots have no thread/turn ID and never
+authorize input, processes, history identity, permission decisions, unread replies
+or taskbar receipts. See [status semantics](session-status-semantics.md).
+
+An exact observed Codex ID joins its opened owner to the same authorized history
+record, retaining one row across Refresh. Startup/input/stop invalidate only the
+affected Codex history context. Since Codex generates its first title in a
+separate hidden thread with hooks disabled, input/stop also schedule bounded
+read-only retries after 1, 2, 5 and 15 seconds; restart, close, context changes and
+replacement cancel pending work. Titles and cwd/time similarity never establish
+identity or authorize a rename.
+
+The Windows Codex 0.163 smoke uses the installed real TUI, bundled ConPTY and
+production reporter with temporary configuration/project data and a local synthetic
+Responses endpoint. It covers concurrent new identities, delayed automatic title
+readback, one survivor after another TUI closes, resume identity, and reporter
+paths containing spaces/non-ASCII characters. A shared-home, shared-project variant
+checks ten production history refreshes with exactly one record per native UUID.
+Host projection regressions replay its captured safe IDs, titles and authenticated
+event metadata to check Refresh deduplication and late-event retirement. These
+checks do not certify an installed WebView2 build or the account-backed D20 Layer-C
+matrix.
+
 ## Security and diagnostics
 
 Native UI surfaces are interpolation-only: no `v-html` / `innerHTML` execution path.
@@ -228,7 +353,7 @@ Opened Claude/Codex `resume-id` tabs may explicitly rename their retained histor
 source, using fresh profile history authority only after matching frozen run root,
 profile revision, registered project, native ID and source key. This target remains
 the resumed source even if the CLI switches threads. It is never a proof of the
-current terminal thread. A new Claude tab with a positively observed native ID
+current terminal thread. A new Claude or Codex tab with a positively observed native ID
 may explicitly target that historical record after the same fresh-root/profile/
 project/key checks. Raw/picker and unproven new identities cannot infer a target.
 `cli_rename_session` still rejects Run scopes. Codex official app-server
@@ -245,6 +370,14 @@ failures on the requested ID still reject rename. Full-source duplicate checks,
 file pinning, project/cwd/root checks and official readback remain mandatory.
 The menu uses the single **Rename** action; resumed-source/history-record target
 details remain in the editor tooltip.
+The adapter exposes rename capability only for an exact, readable source with a
+current profile revision and registered project. Menu, F2, double-click and store
+admission share that capability; execution still reacquires and validates source
+authority. Unbound new/raw/picker sessions and unreadable sources omit Rename.
+Claude project identity follows the first transcript cwd; later cwd changes do
+not change the project, while a different first cwd or any different session ID
+still rejects the target. Plugin hook commands quote the complete script path so
+Windows configuration directories containing spaces preserve observer delivery.
 
 2026-10-19 WSK-MSI regression: a valid Claude target plus an unrelated canonical
 empty transcript reproduced `SESSION_ORIGIN_AMBIGUOUS` before the fix. The fixed

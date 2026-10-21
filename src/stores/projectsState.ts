@@ -135,11 +135,12 @@ export const useProjectsStateStore = defineStore('projects-state', () => {
     return enqueue(reloadNow)
   }
 
-  function mutate(operation: () => Promise<ProjectsState>, reconcileFailure = false, beforeMutation?: () => void): Promise<ProjectsState> {
+  function mutate(operation: () => Promise<ProjectsState>, reconcileFailure = false, beforeMutation?: () => void, prepareMutation?: () => Promise<void>): Promise<ProjectsState> {
     return enqueue(async () => {
       await ensureLoaded()
       // Waits in the canonical queue (including initial load) cannot preserve
       // admission. A rejected owner has issued no write and needs no recovery.
+      if (prepareMutation) await prepareMutation()
       beforeMutation?.()
       try {
         const next = await operation()
@@ -184,8 +185,8 @@ export const useProjectsStateStore = defineStore('projects-state', () => {
     return mutate(() => projectsApi.archiveSession(projectPath, sessionId), true, beforeMutation)
   }
 
-  function restoreSession(projectPath: string, sessionId: string): Promise<ProjectsState> {
-    return mutate(() => projectsApi.restoreSession(projectPath, sessionId), true)
+  function restoreSession(projectPath: string, sessionId: string, beforeMutation?: () => void, prepareMutation?: () => Promise<void>): Promise<ProjectsState> {
+    return mutate(() => projectsApi.restoreSession(projectPath, sessionId), true, beforeMutation, prepareMutation)
   }
 
   function upsertSessionRecord(key: string, record: SessionUiRecord, beforeMutation?: () => void): Promise<ProjectsState> {

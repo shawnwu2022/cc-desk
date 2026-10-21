@@ -7,6 +7,48 @@
 - Backend support for a third CLI, opencode: launch (new / resume by `-s <id>` / raw), SQLite-backed history projection, discovery, availability, and explicit capability gates (CLI-side picker/rename/archive are unsupported, not degraded). Creating an opencode launch configuration is a one-way upgrade: older app versions fail to read the workspace document (`WORKSPACE_INVALID`).
 - Frontend support for opencode: new-session entry, resume by session ID, per-project launch preference as a third key, `opencode-history` diagnostics source, OC glyph mark (official asset pending), capability-gated UI (picker/rename hidden), and docs updates. Old localStorage `cli-support` data migrates with opencode defaulting to enabled.
 
+## [0.23.5] - 2026-10-20
+
+### Fixed
+
+- Keep optional Codex observation from blocking Windows Cmd launches for new or resumed sessions, while retaining strict original argument and environment validation
+- Forward authenticated Codex hooks outside Cmd CALL for the audited official npm 0.163.0 wrapper, preserving the selected launcher and user arguments; synchronize automatic titles and deduplicate exact native history identities
+- Reload history against updated launch-profile revisions without requiring an application restart, while preserving frozen running attempts and rejecting stale reads
+
+The argv transport supports audited direct wrapper paths with absent/empty NODE_OPTIONS; unsupported wrappers, paths or Node options retain the original launch without identity observation. Local checks passed 172 affected frontend cases, type checking, six Codex-identity Rust cases, strict Clippy and a normal debug binary build. Real Codex 0.163.0 probes covered concurrent TUI answers, automatic title readback, ten history refreshes, close-survivor isolation and exact-ID resume, including a shared-home/shared-project variant; model responses used a local synthetic endpoint. Captured safe history/event metadata also passed frontend projection deduplication. These checks do not establish installed Windows WebView2, account-backed D20, unfiltered native All or installation/return acceptance. Historical-version rollback failures remain unresolved. Publication requires exact merged-main CI, authenticated coverage and three same-run signed updater payloads.
+
+## [0.23.4] - 2026-10-20
+
+### Added
+
+- Check for verified desktop updates quietly in the background and show available updates in Settings, while keeping installation user initiated
+- Maintain concise English and Chinese release highlights for the application and GitHub, with English as the publication default and complete technical validation disclosure retained in a collapsed section
+
+### Fixed
+
+- Enable Claude Code and its observer for new configurations while preserving saved CLI and observation preferences
+- Restore quoted-path Claude activity hooks and exact-source GUI rename admission, including readable conversations whose later working directory differs from their original project
+- Bind Codex session hooks to the owned run, synchronize automatic conversation titles and avoid duplicate closed history rows after refresh
+- Preserve dismissed history warnings consistently across session lists, notices and details, including partial source failures
+- Scope F2 rename and session-list navigation to the focused surface so terminal function keys reach the CLI, and hide Rename when its exact target cannot be modified
+
+Local validation passed the complete Vitest inventory (3,022 cases, two original skips), 66 visual-fixture cases, type checking, strict Rust Clippy, 21 desktop-updater Rust cases, 254 Node-policy cases (six platform-conditional skips) and both English/Chinese production-CSP startup cases. Focused real-xterm keyboard checks passed; isolated real Claude and Codex CLI probes exercised production hooks and the bundled Windows ConPTY without changing user profiles or sessions. These checks do not establish installed Windows WebView2, account-backed D20 certification, unfiltered native All or installation/return acceptance. Publication still requires the exact merged-main ordinary CI, authenticated coverage and all three same-run signed updater payloads.
+
+## [0.23.3] - 2026-10-19
+
+### Fixed
+
+- Fit the real Native CLI terminal inside its visible host so the last row remains complete across cell-height boundaries, fractional DPR, font changes, hide/show and window resizing
+- Configure the NSIS installer shell to use the approved application icon
+- Preserve actionable, bounded history-source diagnostics and recover readable history without exposing raw upstream errors
+- Restore exact-source native session rename admission and use one Rename action with precise target and failure messages
+- Refresh only the affected CLI when support is toggled, publish readable profiles despite another source's failure, update Legacy read warnings on failure/success/disable, retain opened terminal titles, and prevent late refreshes from reviving archived or duplicate history rows
+- Reload open-tab-only projects, refresh all Legacy projects on root retirement, keep disabled-source projections free of root validation, and discard stale exact diagnostics on retained cached history
+- Keep disabled-source warnings hidden across full refreshes and scope diagnostic retries, archive restores and recovery guidance to the original history source
+- Fold closed archive aliases only with complete physical-source proof, keep distinct opened owners, and preflight all archive aliases before per-write source ownership checks
+
+Local validation of the final repair chain passed 2,823 fast Vitest cases, type checking and the production build. Earlier focused validation passed the six real-xterm/FitAddon Chromium layout cases at DPR 1/1.25/1.5, 20 native rename cases and 172 projection cases; an uninstalled debug NSIS bundle's seven PE icon frames matched the approved ICO. These are source/component and synthetic-history checks, not installed Windows WebView2, live Claude/Codex last-row acceptance or native installation/return proof. Final source-bound required CI, authenticated coverage and all three same-run signed updater payloads remain mandatory before publication; unfiltered native All and D20 remain separately unverified.
+
 ## [0.23.2] - 2026-10-19
 
 ### Changed
