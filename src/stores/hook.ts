@@ -99,7 +99,7 @@ export const useHookStore = defineStore('hook', () => {
     const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId.trim() : ''
     if (sessionId) for (const handler of [...target.identities]) {
       if (!target.identities.has(handler) || targets.get(key(event)) !== target) continue
-      try { if (target.cli === 'codex') handler(sessionId, payload.detail.type); else handler(sessionId) } catch { /* optional observer consumers are isolated */ }
+      try { handler(sessionId, payload.detail.type) } catch { /* optional observer consumers are isolated */ }
     }
     // 每个已接受的事件重设粗粒度静默窗口；空闲会话因此回落而不是停留在过期活动。
     armTimer(target, TURN_IDLE_TIMEOUT_MS)

@@ -303,6 +303,11 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     const identity = sessionId.trim()
     if (!identity || identity.includes('\0')) return false
     if (!value || !matchesNativeAttempt(value, attempt) || value.action.kind === 'raw' || !['starting', 'running'].includes(value.status)) return false
+    if (value.cli === 'claude') {
+      // 结束/工具回执可能来自切换前的会话，不能仅凭同 run 认证回写新身份。
+      if (!value.observedSessionId && eventType !== 'sessionStart' && eventType !== 'userPromptSubmit') return false
+      if (value.observedSessionId && value.observedSessionId !== identity && eventType !== 'sessionStart') return false
+    }
     if (value.cli === 'codex') {
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(identity)) return false
       if (!value.observedSessionId && eventType !== 'sessionStart' && eventType !== 'userPromptSubmit') return false

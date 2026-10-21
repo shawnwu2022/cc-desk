@@ -25,6 +25,23 @@ function status(tab: any, phase: LaunchStatus['phase'] = 'running'): LaunchStatu
 beforeEach(() => setActivePinia(createPinia()))
 afterEach(() => vi.restoreAllMocks())
 
+// 丢失 SessionStart 时只允许主线程提示建立初始身份，普通工具/结束事件不建立或切换身份。
+it('ClaudeIdentity_OnlyExplicitStartChangesObservedSession_026', () => {
+  const tabs = useNativeTabsStore()
+  const tab = tabs.create({ cli: 'claude', projectId: 'p', projectPath: '/repo',
+    profileId: 'cc', profileRevision: '1', action: { kind: 'new' } })
+  tabs.applyLaunchStatus(tab.tabId, status(tab))
+  const attempt = captureNativeAttempt(tab)
+  expect(tabs.applyObservationIdentity(tab.tabId, attempt, 'first', 'stop')).toBe(false)
+  expect(tabs.applyObservationIdentity(tab.tabId, attempt, 'first', 'postToolUse')).toBe(false)
+  expect(tabs.applyObservationIdentity(tab.tabId, attempt, 'first', 'userPromptSubmit')).toBe(true)
+  expect(tabs.applyObservationIdentity(tab.tabId, attempt, 'second', 'userPromptSubmit')).toBe(false)
+  expect(tabs.applyObservationIdentity(tab.tabId, attempt, 'second', 'sessionStart')).toBe(true)
+  expect(tabs.applyObservationIdentity(tab.tabId, attempt, 'first', 'stop')).toBe(false)
+  expect(tabs.tab(tab.tabId)?.observedSessionId).toBe('second')
+  expect(tabs.applyObservationIdentity(tab.tabId, attempt, 'second', 'stop')).toBe(true)
+})
+
 describe('D22 native dual-CLI tab store', () => {
   // 终端视觉提示按完整 attempt 绑定，启动未确认时不改变进程状态，失效边界丢弃提示。
   it('Codex_ProgramStatusLifetime_023', () => {

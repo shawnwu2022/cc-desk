@@ -132,6 +132,15 @@ monotone sequence and explicit turn/reason evidence (see follow-up choices).
 New safe Claude templates enable observation; saved choices remain authoritative.
 Codex/raw/Shell launches receive no Claude overlay.
 
+Claude identity observations retain the authenticated hook type independently of
+that activity projection. SessionStart or UserPromptSubmit can establish the
+first observed historical session; only SessionStart can replace an existing
+identity. A late Stop, tool receipt, SessionEnd or prompt from a different
+session cannot overwrite it. Explicit native resume back to a previously seen
+session remains possible through SessionStart. No sequence is invented: a late
+SessionStart still cannot prove current TUI identity, and native rename keeps
+its existing exact-source historical-record checks.
+
 The Native row now shows a separate localized event marker. An unread `Stop`
 receipt is described as “Reply-end notice received (unread); current activity
 unverified”. It never becomes `attentionKind: completed` or changes the current
