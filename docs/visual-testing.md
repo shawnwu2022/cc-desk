@@ -321,8 +321,8 @@ installation with system dependencies, plus Noto core/CJK/emoji fonts. Browser a
 font package versions are recorded with source head and actual tested PR merge commit.
 
 The first full run uses `--update-snapshots=none`. Its logs/traces remain under
-`visual-evidence/verification.log` and `test-results/visual-verification/`. When all
-baselines are absent and this run fails, a separate snapshot-only run writes candidate
+`visual-evidence/verification.log` and `test-results/visual-verification/`. When
+verification fails, including stale or absent baselines, a separate snapshot-only run writes candidate
 PNGs with `--update-snapshots=all`. Copies in
 `visual-evidence/candidate-baselines-unapproved/` have dimensions/SHA256 recorded in
 `candidate-manifest.json` with `approved: false`. Capture failures also retain artifacts.
