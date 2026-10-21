@@ -61,7 +61,9 @@ pub(crate) fn read_history_with_budget(
     let snapshot = private_sqlite_snapshot(root)?;
     #[cfg(windows)]
     let database = snapshot.directory.path().join(DB_FILE);
-    #[cfg(not(windows))]
+    #[cfg(unix)]
+    let database = root.sqlite_canonical_directory()?.join(source_db);
+    #[cfg(not(any(unix, windows)))]
     let database = root.selected_path().join(source_db);
     let mut conn = open_read_only(&database)?;
     let tx = conn.transaction().map_err(|_| "SOURCE_BUSY")?;

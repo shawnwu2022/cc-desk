@@ -227,6 +227,19 @@ impl Root {
     pub(crate) fn sqlite_filename(&self) -> &str {
         self.sqlite_file.as_deref().unwrap_or("opencode.db")
     }
+    #[cfg(unix)]
+    pub(crate) fn sqlite_canonical_directory(&self) -> ReadResult<PathBuf> {
+        // SQLite NOFOLLOW 会拒绝祖先目录中的符号链接；只解析已授权的根，并重新核对 held 目录身份。
+        self.source_current()?;
+        let canonical = self.selected.canonicalize().map_err(|_| "SOURCE_CHANGED")?;
+        let resolved = Dir::open_ambient_dir(&canonical, cap_std::ambient_authority())
+            .map_err(|_| "SOURCE_CHANGED")?;
+        if directory_key(&resolved)? != self.identity {
+            return Err("SOURCE_CHANGED");
+        }
+        self.source_current()?;
+        Ok(canonical)
+    }
     pub(crate) fn key(&self) -> &str {
         &self.scope_key
     }

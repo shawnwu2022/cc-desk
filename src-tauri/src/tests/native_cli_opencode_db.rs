@@ -272,6 +272,32 @@ fn Opencode_LinkedWalFailsClosed_12() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+#[allow(non_snake_case)]
+fn Opencode_AuthorizedAncestorSymlinkReadsHistory_26() {
+    let f = Fixture::new();
+    let conn = f.conn();
+    f.register_project(&conn, "p1");
+    seed(
+        &conn,
+        "ses_alias",
+        "p1",
+        &f.project.to_string_lossy(),
+        "alias",
+        1,
+        None,
+    );
+    drop(conn);
+    let aliases = tempfile::tempdir().unwrap();
+    let selected = aliases.path().join("authorized-alias");
+    std::os::unix::fs::symlink(&f.root, &selected).unwrap();
+    let items = read_history(&Root::open(&selected).unwrap(), &[f.project_ref()]).unwrap();
+    assert!(
+        matches!(&items[..], [ResourceItem::Session { native_session_id, .. }] if native_session_id == "ses_alias")
+    );
+}
+
 #[cfg(windows)]
 #[test]
 #[allow(non_snake_case)]
