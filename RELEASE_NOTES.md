@@ -4,7 +4,7 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
-## [0.24.0-rc.1]
+## [0.24.0-rc.2]
 
 Test release
 

@@ -65,6 +65,16 @@ test('D02_ReleaseWorkflow_StillBuildsSignedCandidates_03', () => {
   assert.match(workflow, /actions\/upload-artifact@v4/)
 })
 
+test('D02_WindowsRcInstallerBuildsOnlyNsis_05', () => {
+  const workflow = readFileSync(releaseWorkflowPath, 'utf8')
+  const build = workflow.split(/^  build:\s*$/m)[1]?.split(/^  release:\s*$/m)[0]
+  assert.ok(build, 'signed build job must exist')
+  assert.match(build, /if \[ "\$\{\{ matrix\.name \}\}" = "windows" \]; then\s+npm run tauri -- build --bundles nsis/,
+    'RC Windows build must select the shipped NSIS target without attempting MSI')
+  assert.match(build, /elif \[ -n "\$\{\{ matrix\.target \}\}" \]; then\s+npm run tauri build -- --target "\$\{\{ matrix\.target \}\}"/,
+    'macOS target build must retain its target selection')
+})
+
 test('D28_TestPackageWorkflow_RemainsTestOnly_04', () => {
   const workflow = readFileSync(testPackageWorkflowPath, 'utf8')
 
