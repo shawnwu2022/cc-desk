@@ -14,11 +14,11 @@ import type { UnifiedSession } from '@/types/unifiedSession'
 
 afterEach(() => { document.body.innerHTML = ''; vi.unstubAllGlobals(); clearMocks() })
 describe('Merged session app status', () => {
-  // 真实投影的 Codex 只有进程运行证据；隐藏 running 会让整个运行期丢失角标。
+  // 认证身份 hook 不产生 TUI 活动；尚未收到原生状态时不能伪装成空闲或工作。
   it.each([
-    ['new', 'en', 'Running', 'Closed'], ['resume-id', 'en', 'Running', 'Closed'],
-    ['new', 'zh', '运行中', '已关闭'], ['resume-id', 'zh', '运行中', '已关闭'],
-  ] as const)('Codex_ProcessBadgeSurvivesIdentityReceipts_007 %s %s', async (kind, locale, runningLabel, closedLabel) => {
+    ['new', 'en', 'Activity unknown', 'Closed'], ['resume-id', 'en', 'Activity unknown', 'Closed'],
+    ['new', 'zh', '活动未知', '已关闭'], ['resume-id', 'zh', '活动未知', '已关闭'],
+  ] as const)('Codex_IdentityReceiptsCannotInventActivity_007 %s %s', async (kind, locale, runningLabel, closedLabel) => {
     setActivePinia(createPinia())
     mockIPC(() => undefined)
     const tabs = useNativeTabsStore()
@@ -37,9 +37,9 @@ describe('Merged session app status', () => {
     expect(wrapper.get('[data-session-badge]').attributes('data-session-badge')).toBe('starting')
     tabs.applyLaunchStatus(tab.tabId, launch('running', '1'))
     const running = await project()
-    expect(running).toMatchObject({ processState: 'running', activityState: 'unknown', observationState: 'off', attentionState: 'none' })
+    expect(running).toMatchObject({ processState: 'running', activityState: 'unknown', observationState: 'unavailable', attentionState: 'none' })
     await wrapper.setProps({ session: running })
-    expect(wrapper.find('[data-session-badge="running"]').exists()).toBe(true)
+    expect(wrapper.find('[data-session-badge="unknown"]').exists()).toBe(true)
     expect(wrapper.get('.session-app-icon').attributes('aria-label')).toBe(`Codex CLI; ${runningLabel}`)
     for (const event of ['sessionStart', 'userPromptSubmit', 'stop']) {
       expect(tabs.applyObservationIdentity(tab.tabId, owner, nativeSessionId, event)).toBe(true)
@@ -49,7 +49,7 @@ describe('Merged session app status', () => {
       expect(session.attentionKind).toBeUndefined()
       expect(session.observationNotice).toBeUndefined()
       await wrapper.setProps({ session, selected: true })
-      expect(wrapper.find('[data-session-badge="running"]').exists()).toBe(true)
+      expect(wrapper.find('[data-session-badge="unknown"]').exists()).toBe(true)
       expect(wrapper.find('[data-completion-entry]').exists()).toBe(false)
     }
     expect(tabs.applyObservationIdentity(tab.tabId, { ...owner, generation: owner.generation + 1 }, nativeSessionId)).toBe(false)

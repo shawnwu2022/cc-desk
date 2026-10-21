@@ -269,7 +269,7 @@ describe('Unified SessionItem', () => {
     const wrapper = row({ ...base, activityState: 'idle' })
     expect(wrapper.get('.session-time').text()).toBe('6m')
     expect(wrapper.get('.session-name').text()).toBe(base.title)
-    expect(wrapper.get('.session-app-icon').attributes('aria-label')).toBe('Codex CLI; Running')
+    expect(wrapper.get('.session-app-icon').attributes('aria-label')).toBe('Codex CLI; Idle')
     expect(wrapper.get('[data-session-badge]').attributes('data-session-badge')).toBe('running')
     expect(wrapper.get('.session-status-icon').attributes('aria-hidden')).toBe('true')
     expect(wrapper.get('.cli-app-icon').attributes('aria-hidden')).toBe('true')

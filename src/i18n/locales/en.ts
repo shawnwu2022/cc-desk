@@ -587,6 +587,8 @@ export default {
   sessionActionDiagnostics: 'View diagnostics',
   sessionStatusStarting: 'Starting',
   sessionStatusRunning: 'Running',
+  sessionStatusIdle: 'Idle',
+  sessionStatusNeedsAction: 'Needs action',
   observerDisabled: 'Activity observation disabled',
   indexRebuildTitle: 'Rebuild session index',
   indexRebuildHint: 'Regenerate display caches only. Original history, archive state, names, pins and project settings are preserved.',

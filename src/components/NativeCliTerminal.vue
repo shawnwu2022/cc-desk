@@ -22,6 +22,7 @@ import { createDeskNativeTerminalBinding } from '@/terminal/deskNativeTerminal'
 import type { NativeTerminalBinding } from '@/terminal/nativeTerminalBinding'
 import { createXtermModeEpoch, type XtermModeEpoch } from '@/terminal/modeEpoch'
 import { observeTerminalTitleChanges } from '@/terminal/titleRefresh'
+import { observeCodexProgramStatus } from '@/terminal/codexProgramStatus'
 import { buildPastePayload, imagePasteBytes } from '@/utils/pasteText'
 import { classifyClipboardSnapshot, createImeInputPolicy, readClipboardSnapshot } from '@/terminal/inputPolicy'
 import { platform } from '@/utils/platform'
@@ -67,6 +68,7 @@ let launched = false
 let inputEnabled = false
 let stopObservation: (() => void) | null = null
 let stopTitleObservation: (() => void) | null = null
+let stopProgramObservation: (() => void) | null = null
 let statusTimer: ReturnType<typeof setInterval> | null = null
 let statusSyncInFlight: object | null = null
 let disposed = false
@@ -122,6 +124,7 @@ function disposeRunBinding() {
   stopStatusSync()
   stopObservation?.(); stopObservation = null
   stopTitleObservation?.(); stopTitleObservation = null
+  stopProgramObservation?.(); stopProgramObservation = null
   binding?.dispose()
   binding = null
   modeTracker?.dispose()
@@ -418,6 +421,14 @@ async function startAttempt(attempt: NativeAttemptIdentity): Promise<void> {
   try {
     const tracker = createXtermModeEpoch(target)
     modeTracker = tracker
+    if (tab.cli === 'codex' && tab.action.kind !== 'raw') {
+      try {
+        const stop = observeCodexProgramStatus(target, status => {
+          if (runToken === token && term === target && attemptIsCurrent(attempt)) tabs.applyCodexProgramStatus(props.tabId, attempt, status)
+        })
+        stopProgramObservation = () => { stop(); tabs.applyCodexProgramStatus(props.tabId, attempt, 'unknown') }
+      } catch { /* 可选状态观察失败不影响原生终端启动或交互。 */ }
+    }
     if (tab.cli === 'claude' && tab.action.kind !== 'raw') {
       stopTitleObservation = observeTerminalTitleChanges(target, () => () => {
         if (runToken !== token || !attemptIsCurrent(attempt)) return
@@ -443,6 +454,7 @@ async function startAttempt(attempt: NativeAttemptIdentity): Promise<void> {
       onDegraded: reason => {
         const live = tabs.tab(props.tabId)
         if (runToken === token && live?.runId === runId && live.generation === generation) {
+          if (reason !== 'NATIVE_INPUT_PAUSED') { stopProgramObservation?.(); stopProgramObservation = null }
           tabs.setDiagnostic(props.tabId, reason)
         }
       },

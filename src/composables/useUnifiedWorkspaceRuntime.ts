@@ -995,7 +995,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
         const value = tab as unknown as Record<string, unknown>
         return ['projectPath', 'projectId', 'profileId', 'profileRevision', 'cli', 'title', 'name', 'status',
           'requestId', 'runId', 'generation', 'ptyId', 'ptyGeneration', 'sessionId', 'observedSessionId',
-          'activity', 'activityState', 'working', 'pending', 'attentionState', 'observation', 'observationState',
+          'activity', 'activityState', 'codexProgramStatus', 'working', 'pending', 'attentionState', 'observation', 'observationState',
           'observationNotice', 'observerEnabled', 'observerReasonCode', 'errorCode', 'sourceSessionKey', 'createdAt', 'usesDefaultClaudeRoot', 'titleChangeRevision', 'historyChangeRevision', 'historyTitleRevision']
           .map(key => value[key])
       }, () => {

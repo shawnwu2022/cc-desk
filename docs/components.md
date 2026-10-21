@@ -298,9 +298,11 @@ Native Claude 的活动观察与进程运行分开呈现：已知 idle 保持无
 independent occurrence-notice description. It reserves one 20px slot and combines
 the real 16px application mark with a solid lower-right badge (10px SVG box,
 approximately 8px colored backplate). Known Claude idle has no badge and keeps native
-artwork static. Codex's process-running projection retains the static green running
-badge: its identity-only hooks provide no turn activity, permission or completion
-evidence. The badge does not claim that Codex is working or idle. Closed/stopped
+artwork static. Codex passively observes its native TUI's OSC 7501 snapshots:
+working uses the work glyph, blocked uses the generic needs-user glyph and
+“Needs action” label, and idle retains a static green dot labeled “Idle”. Missing,
+cleared or unsupported snapshots show unknown activity. Its identity-only hooks
+remain separate and never produce permission or completion evidence. Closed/stopped
 marks use a recognizable neutral-gray treatment.
 Codex retains its black/white brand artwork, with closed-treatment opacity tokens
 of 0.48 in light and 0.44 in dark GUI themes. Closed rows never render a badge,

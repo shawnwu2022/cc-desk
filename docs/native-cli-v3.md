@@ -233,6 +233,18 @@ thread's asynchronous prompt/stop cannot replace a newer startup identity.
 Unknown, retired, replaced and closed attempts reject late events. The identity
 channel does not enable Claude activity observation for Codex.
 
+Codex TUI activity has a separate passive source: its native OSC 7501 program
+status (`working`, `blocked`, `idle`, `clear`). The 0.163.0 TUI emits it on any
+TTY; Desk does not require iTerm2-only OSC 21337 or alter terminal environment,
+launch arguments, hooks or configuration. The existing exact-run contiguous
+output stream and xterm parser deliver only allowlisted status enums to that
+attempt. Background terminals keep observing; parser handoff/clear, output
+degradation, unknown/end/restart/disposal invalidate the hint. Missing and unknown
+payloads remain unknown. `blocked` is generic needs-action, and `idle` never proves
+completion. These untrusted terminal snapshots have no thread/turn ID and never
+authorize input, processes, history identity, permission decisions, unread replies
+or taskbar receipts. See [status semantics](session-status-semantics.md).
+
 An exact observed Codex ID joins its opened owner to the same authorized history
 record, retaining one row across Refresh. Startup/input/stop invalidate only the
 affected Codex history context. Since Codex generates its first title in a

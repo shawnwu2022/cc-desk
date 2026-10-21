@@ -75,11 +75,11 @@ export function deriveSessionVisualState(session: UnifiedSession, selected = fal
   if (session.attentionKind === 'completed') return 'completed'
   if (session.attentionState === 'needs-user' || activity === 'waiting' || activity === 'waiting_input') return 'needs-user'
   if (activity === 'idle') return 'running'
-  if (activity === 'unknown' && session.cli === 'claude' && session.runtime === 'native-cli'
+  if (activity === 'unknown' && session.runtime === 'native-cli'
     && session.observationState && session.observerReasonCode !== 'OBSERVER_UNSUPPORTED') {
     return session.observationState === 'connecting' ? 'confirming' : 'unknown'
   }
-  // 不支持观察通道（codex、raw）时无从得知 turn 状态；进程仍在
+  // 不支持观察通道（raw）时无从得知 turn 状态；进程仍在
   // 运行,显示中性运行态而不是看似异常的"活动未知"。
   if (activity === 'unknown' && session.observationState !== 'active') return 'running'
   return 'unknown'

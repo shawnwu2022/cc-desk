@@ -111,10 +111,12 @@ function projectNotice(tab: NativeCliTab, tabs: NativeTabsPort): NativeObservati
 
 function projectTab(tab: NativeCliTab, tabs?: NativeTabsPort): UnifiedSession {
   const nativeSessionId = tabNativeSessionId(tab)
-  // The existing optional observer is a Claude-only non-raw side channel.
-  // Missing/inactive observations cannot establish current turn activity.
+  // Codex 的终端快照与 Claude 认证 hook 分开投影，不产生回合完成或授权原因。
   const claudeObservation = tab.cli === 'claude' && tab.action.kind !== 'raw'
+  const codexObservation = tab.cli === 'codex' && tab.action.kind !== 'raw'
   const activeObservation = claudeObservation && tab.status === 'running' && tab.observationState === 'active'
+  const codexStatus = codexObservation && tab.status === 'running' ? tab.codexProgramStatus : undefined
+  const codexActivity = codexStatus === 'working' ? 'working' : codexStatus === 'blocked' ? 'waiting' : codexStatus === 'idle' ? 'idle' : 'unknown'
   const observationNotice = tabs && projectNotice(tab, tabs)
   return {
     id: activeId(tab.tabId),
@@ -124,10 +126,11 @@ function projectTab(tab: NativeCliTab, tabs?: NativeTabsPort): UnifiedSession {
     runtime: 'native-cli',
     title: tab.title,
     processState: tab.status === 'stopped' && tab.launchRevision === null ? 'starting' : processState(tab.status),
-    attentionState: activeObservation ? tab.attentionState ?? 'none' : 'none',
-    activityState: activeObservation ? tab.activityState ?? 'unknown' : 'unknown',
-    observationState: claudeObservation ? tab.observationState ?? 'off' : 'off',
-    ...(!claudeObservation ? { observerReasonCode: 'OBSERVER_UNSUPPORTED' as const }
+    attentionState: activeObservation ? tab.attentionState ?? 'none' : codexActivity === 'waiting' ? 'needs-user' : 'none',
+    activityState: activeObservation ? tab.activityState ?? 'unknown' : codexActivity,
+    observationState: claudeObservation ? tab.observationState ?? 'off' : codexObservation ? codexActivity === 'unknown' ? 'unavailable' : 'active' : 'off',
+    ...(codexObservation ? codexActivity === 'unknown' ? { observerReasonCode: 'OBSERVER_UNAVAILABLE' as const } : {}
+      : !claudeObservation ? { observerReasonCode: 'OBSERVER_UNSUPPORTED' as const }
       : tab.observerReasonCode ? { observerReasonCode: tab.observerReasonCode } : {}),
     ...(observationNotice ? { observationNotice } : {}),
     lastActivityAt: tab.lastActivityAt,

@@ -27,6 +27,7 @@ for (const gui of ['light', 'dark']) for (const cli of ['claude', 'codex']) {
     await expect(closed.locator('[data-session-badge]')).toHaveCount(0)
     await expect(closed).toHaveAttribute('aria-label', `${cli === 'claude' ? 'Claude Code' : 'Codex CLI'}; Closed`)
     if (cli === 'codex') {
+      await expect(idle).toHaveAttribute('aria-label', 'Codex CLI; Idle')
       await expect(idle.locator('[data-session-badge]')).toHaveAttribute('data-session-badge', 'running')
       await expect(idle.locator('.session-status-icon')).toHaveCSS('color', gui === 'light' ? 'rgb(61, 140, 110)' : 'rgb(93, 173, 142)')
       await expect(idle.locator('.session-status-icon__shape')).toHaveCSS('animation-name', 'none')

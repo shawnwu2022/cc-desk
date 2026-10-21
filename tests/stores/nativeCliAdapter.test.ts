@@ -425,7 +425,7 @@ describe('native CLI adapter', () => {
     const value = tab({ cli: cli as NativeCliTab['cli'], action: action as NativeCliTab['action'],
       activityState: 'waiting', observationState: 'active', attentionState: 'needs-user' })
     const { adapter } = setup([value], [])
-    expect((await adapter.listSessions())[0]).toMatchObject({ activityState: 'unknown', observationState: 'off', attentionState: 'none' })
+    expect((await adapter.listSessions())[0]).toMatchObject({ activityState: 'unknown', observationState: cli === 'codex' ? 'unavailable' : 'off', attentionState: 'none' })
   })
   it('NativeObservation_RawClaudeHasNoUnavailableBadge_046', async () => {
     const { adapter } = setup([tab({ cli: 'claude', action: { kind: 'raw', argv: [] },

@@ -57,9 +57,9 @@ it('A11y_ViewportBoundTooltip_003', async () => {
 it.each(['en', 'zh'] as const)('A11y_RowKeyboard_004_%s', async locale => {
   i18n.global.locale.value = locale
   const w = mount(SessionItem, { attachTo: document.body, global: { plugins: [i18n] }, props: { selected: true, session: { id: 'row', renameAvailable: true, cli: 'codex', runtime: 'native-cli', adapterSessionId: 'tab', projectKey: '/repo', projectPath: '/repo', title: 'A'.repeat(200), processState: 'running', activityState: 'idle', attentionState: 'none', archived: false, opened: true, resumable: true, lastActivityAt: Date.now() } } }); wrappers.push(w)
-  expect(w.text()).not.toContain(locale === 'en' ? en.sessionStatusRunning : zh.sessionStatusRunning)
+  expect(w.text()).not.toContain(locale === 'en' ? en.sessionStatusIdle : zh.sessionStatusIdle)
   const icon = w.get('.session-app-icon'); (icon.element as HTMLElement).focus(); await flushPromises()
-  expect(body.get('[role="tooltip"]').text()).toBe('Codex CLI; ' + (locale === 'en' ? en.sessionStatusRunning : zh.sessionStatusRunning))
+  expect(body.get('[role="tooltip"]').text()).toBe('Codex CLI; ' + (locale === 'en' ? en.sessionStatusIdle : zh.sessionStatusIdle))
   await icon.trigger('keydown', { key: 'Escape' }); await w.trigger('keydown', { key: 'ContextMenu' }); await flushPromises()
   const menu = document.querySelector<HTMLElement>('[role="menu"]')!
   expect(menu).not.toBeNull(); menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true, cancelable: true }))

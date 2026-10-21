@@ -587,6 +587,8 @@ export default {
   sessionActionDiagnostics: '查看诊断信息',
   sessionStatusStarting: '启动中',
   sessionStatusRunning: '运行中',
+  sessionStatusIdle: '空闲',
+  sessionStatusNeedsAction: '等待操作',
   observerDisabled: '活动观察已关闭',
   indexRebuildTitle: '重建会话索引',
   indexRebuildHint: '仅重新生成显示缓存。原始历史、归档状态、名称、置顶和项目配置保持不变。',

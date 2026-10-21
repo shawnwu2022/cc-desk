@@ -33,7 +33,7 @@ it.each(matrix)('Layout_Matrix_001_$label', async ({ width, height, scale, local
   expect(columns.style.getPropertyValue('--context-column-width')).toBe(mode === 'wide' ? '344px' : '0px')
   expect(columns.style.getPropertyValue('--session-column-width')).toBe(mode === 'compact' ? '0px' : '288px')
   const item = w.get('[data-session-row]')
-  expect(item.get('.session-app-icon').attributes('aria-label')).toBe('Codex CLI; ' + (locale === 'zh' ? zh.sessionStatusRunning : en.sessionStatusRunning))
+  expect(item.get('.session-app-icon').attributes('aria-label')).toBe('Codex CLI; ' + (locale === 'zh' ? zh.sessionStatusIdle : en.sessionStatusIdle))
   expect(item.find('.cli-app-icon').exists()).toBe(true); expect(item.get('.session-name').text()).toHaveLength(200)
   expect(item.get('.session-time').text()).toBe('1m'); expect(item.find('.session-overflow-trigger button').exists()).toBe(true)
   expect(w.get('.project-name').text()).toHaveLength(80)
