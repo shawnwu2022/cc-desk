@@ -218,7 +218,7 @@ for (const [variantIndex, variant] of ['native-claude', 'native-codex', 'legacy-
         await expect(primary.getByRole('button')).toHaveCount(1)
         await expect(close).toBeEnabled()
         await expect(close.locator('svg path')).toHaveAttribute('d', 'm6 6 12 12M18 6 6 18')
-        if (state === 'running') await expect(row.locator('[data-session-badge]')).toHaveCount(0)
+        if (state === 'running' && variant !== 'native-codex') await expect(row.locator('[data-session-badge]')).toHaveCount(0)
         else await expect(row.locator('[data-session-badge]')).toHaveAttribute('data-session-badge', state === 'unknown' ? 'confirming' : state)
         await expect(row.locator('.session-app-icon')).toHaveAttribute('aria-label', new RegExp('^' + (variant === 'native-codex' ? 'Codex CLI' : 'Claude Code') + '; '))
 
