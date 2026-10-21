@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-## [0.24.0-rc.1] - 2026-10-21
+## [0.24.0-rc.2] - 2026-10-21
 
 ### Added
 
@@ -14,6 +14,7 @@
 - Pin OpenCode database, WAL and SHM reads to the selected exact file and a coherent Windows snapshot. Custom `OPENCODE_DB` paths are supported; compiled channel filenames are taken from a bounded official `db path` probe within the admitted data root.
 - Keep bounded OpenCode history and invalid metadata from silently hiding earlier sessions or poisoning the whole projection. Retain safe launch behavior when optional preparation is unsupported or unavailable before creation, without replaying an uncertain POST.
 - Prevent late Claude Stop hooks from replacing a newer SessionStart identity, preserve Codex wrapper and title fixes, and keep active-session filtering, source warnings and keyboard focus behavior consistent after integration.
+- Package the prerelease Windows installer as NSIS without attempting an MSI build that rejects the `rc.N` version.
 
 This release candidate is a prerelease and does not replace the stable Latest release or updater endpoint. Official OpenCode 1.19.0 no-model CLI creation, database-path and readback were verified in isolation; account-backed Layer C and installed Windows WebView acceptance remain separate. Unknown CLI versions or database schemas safely disable optional history/title capabilities while basic CLI launch remains available. Publication still requires the exact protected-main CI, authenticated coverage and three signed platform payloads.
 

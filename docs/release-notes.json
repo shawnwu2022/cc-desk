@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "releases": {
-    "0.24.0-rc.1": {
+    "0.24.0-rc.2": {
       "en": "Test release\n\n- Add OpenCode as a third native CLI with owned terminal launches, exact-ID resume and project-scoped SQLite history.\n- Improve Claude Code session identity after delayed hooks, Codex command-wrapper compatibility, active session filtering and focused keyboard shortcuts.\n- Keep optional OpenCode session preparation and history safe when the CLI, database schema or capability probe is unavailable.\n\nImportant\n\n- This is a prerelease test package. Download and run it explicitly; the stable updater channel remains on the latest stable release.\n- OpenCode integration was checked against official CLI 1.19.0 without paid model calls. Account-backed create/resume and installed Windows WebView acceptance remain separate checks. Older or future CLI versions may lose optional history or title features while basic terminal launch remains available.",
       "zh": "测试版本\n\n- 新增 OpenCode 原生终端启动、按准确会话 ID 恢复，以及按项目归属读取 SQLite 历史。\n- 改进 Claude Code 迟到 hook 的会话身份、Codex 命令包装器兼容性、活跃会话筛选和焦点快捷键。\n- OpenCode 会话预备、历史读取或能力探测不可用时安全降级。\n\n重要说明\n\n- 这是预发布测试包，需要主动下载运行；稳定版自动更新通道仍指向最新稳定版。\n- OpenCode 已针对官方 CLI 1.19.0 验证，未调用付费模型。登录账号后的创建和恢复、已安装 Windows WebView 验收仍需单独验证。旧版或未来版本可能失去可选历史或标题增强，但基础终端启动仍可使用。"
     },
