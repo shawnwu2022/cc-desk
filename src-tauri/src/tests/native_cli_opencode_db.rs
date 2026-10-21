@@ -90,6 +90,23 @@ fn Opencode_DbHistoryAttributesByProjectId_01() {
     assert_eq!(ids, vec!["ses_a", "ses_b"]); // updated DESC；ses_x 不归属
 }
 
+#[test]
+#[allow(non_snake_case)]
+fn Opencode_CustomDbReadsOnlySelectedFile_25() {
+    let f = Fixture::new();
+    let custom = f.root.join("custom.db");
+    let conn = Connection::open(&custom).unwrap();
+    conn.execute_batch(SCHEMA).unwrap();
+    f.register_project(&conn, "p1");
+    seed(&conn, "ses_custom", "p1", &f.project.to_string_lossy(), "custom", 1, None);
+    drop(conn);
+    let root = Root::open_sqlite(&f.root, "custom.db").unwrap();
+    let items = read_history(&root, &[f.project_ref()]).unwrap();
+    assert_eq!(items.len(), 1);
+    assert!(matches!(&items[0], ResourceItem::Session { native_session_id, .. } if native_session_id == "ses_custom"));
+    assert_ne!(root.key(), Root::open(&f.root).unwrap().key());
+}
+
 // global 行永不按 worktree 匹配，只按 directory canonical 比对（spec §5.3）。
 #[test]
 #[allow(non_snake_case)]

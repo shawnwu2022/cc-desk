@@ -39,6 +39,26 @@ impl<R> LaunchCoordinator<R> {
         C: FnOnce(&LaunchStatus) -> Result<(), SafeError>,
         S: FnOnce(&LaunchSnapshot) -> Result<R, SafeError>,
     {
+        self.start_with_source(caller, request, prepare, connect, spawn, |snapshot| {
+            super::source_provenance::SourceProvenance::freeze(snapshot)
+        })
+    }
+
+    pub(crate) fn start_with_source<P, C, S, O>(
+        &self,
+        caller: &CallerIdentity,
+        request: &LaunchRequest,
+        prepare: P,
+        connect: C,
+        spawn: S,
+        source: O,
+    ) -> Result<LaunchStatus, SafeError>
+    where
+        P: FnOnce() -> Result<LaunchSnapshot, SafeError>,
+        C: FnOnce(&LaunchStatus) -> Result<(), SafeError>,
+        S: FnOnce(&LaunchSnapshot) -> Result<R, SafeError>,
+        O: FnOnce(&LaunchSnapshot) -> super::source_provenance::SourceProvenance,
+    {
         // A retry must not need a profile that may have been edited or deleted.
         if let Some(status) = self.registry.existing(caller, request)? {
             return Ok(status);
@@ -67,9 +87,7 @@ impl<R> LaunchCoordinator<R> {
         if !ticket.begin() {
             return Ok(ticket.status());
         }
-        let source = Arc::new(super::source_provenance::SourceProvenance::freeze(
-            &snapshot,
-        ));
+        let source = Arc::new(source(&snapshot));
         match spawn(&snapshot) {
             Ok(resource) => Ok(ticket.complete_with_source(resource, source)),
             Err(_) => Ok(ticket.fail(LaunchFailure::ProcessStartFailed)),

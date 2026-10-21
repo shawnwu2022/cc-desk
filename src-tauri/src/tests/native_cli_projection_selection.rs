@@ -181,6 +181,40 @@ fn Opencode_LocationsResolveXdgDataRoot_01() {
     assert!(with_xdg.user_config.is_none());
 }
 
+#[test]
+#[allow(non_snake_case)]
+fn Opencode_DbOverrideSelectsExactFile_05() {
+    let t = tempfile::tempdir().unwrap();
+    let mut env = EnvMap::new();
+    env.insert(home().into(), t.path().into());
+    let data = t.path().join(".local").join("share").join("opencode");
+    env.insert("OPENCODE_DB".into(), "nested/custom.db".into());
+    let relative = locations(CliKind::Opencode, &env).unwrap();
+    assert_eq!(relative.root, data.join("nested"));
+    assert_eq!(relative.sqlite_file.as_deref(), Some("custom.db"));
+    let external = t.path().join("external.db");
+    env.insert("OPENCODE_DB".into(), external.clone().into_os_string());
+    let absolute = locations(CliKind::Opencode, &env).unwrap();
+    assert_eq!(absolute.root, t.path());
+    assert_eq!(absolute.sqlite_file.as_deref(), Some("external.db"));
+    env.insert("OPENCODE_DB".into(), ":memory:".into());
+    assert!(locations(CliKind::Opencode, &env).is_err());
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn Opencode_CompiledChannelUsesOnlyProbedDataRoot_06() {
+    let t = tempfile::tempdir().unwrap();
+    let data = t.path().join("data");
+    std::fs::create_dir(&data).unwrap();
+    let selection = Locations { root: data.clone(), user_config: None, sqlite_file: None };
+    let channel = selection.with_probed_database(&data.join("opencode-local.db").to_string_lossy()).unwrap();
+    assert_eq!(channel.sqlite_file.as_deref(), Some("opencode-local.db"));
+    assert!(selection.with_probed_database(&t.path().join("outside.db").to_string_lossy()).is_err());
+    assert!(selection.with_probed_database(&data.join("random.db").to_string_lossy()).is_err());
+    assert!(selection.with_probed_database("opencode.db\nother").is_err());
+}
+
 // 空/非法 XDG 覆盖不得回退默认根（fail-closed，与既有 CODEX_HOME 语义一致）。
 #[test]
 #[allow(non_snake_case)]
@@ -240,10 +274,13 @@ fn Opencode_CustomDatabaseNeverReadsDefault_04() {
     let t = tempfile::tempdir().unwrap();
     let mut env = EnvMap::new();
     env.insert(home().into(), t.path().into());
-    for value in ["custom.db", ":memory:", "../elsewhere.db"] {
+    for value in ["custom.db", "../elsewhere.db"] {
         env.insert("OPENCODE_DB".into(), value.into());
-        assert!(locations(CliKind::Opencode, &env).is_err(), "{value}");
+        let selection = locations(CliKind::Opencode, &env).unwrap();
+        assert_ne!(selection.root.join(selection.sqlite_file.as_ref().unwrap()), t.path().join(".local/share/opencode/opencode.db"));
     }
+    env.insert("OPENCODE_DB".into(), ":memory:".into());
+    assert!(locations(CliKind::Opencode, &env).is_err());
     env.insert("OPENCODE_DB".into(), "opencode.db".into());
     assert!(locations(CliKind::Opencode, &env).is_ok());
 }

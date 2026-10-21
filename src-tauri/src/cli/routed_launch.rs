@@ -54,8 +54,28 @@ impl<P, L> LaunchCoordinator<RoutedResource<P, L>> {
         C: FnOnce(&LaunchStatus) -> Result<L, SafeError>,
         S: FnOnce(&LaunchSnapshot) -> Result<P, SafeError>,
     {
+        self.start_routed_with_source(caller, request, prepare, connect, spawn, |snapshot| {
+            super::source_provenance::SourceProvenance::freeze(snapshot)
+        })
+    }
+
+    pub(crate) fn start_routed_with_source<F, C, S, O>(
+        &self,
+        caller: &CallerIdentity,
+        request: &LaunchRequest,
+        prepare: F,
+        connect: C,
+        spawn: S,
+        source: O,
+    ) -> Result<LaunchStatus, SafeError>
+    where
+        F: FnOnce() -> Result<LaunchSnapshot, SafeError>,
+        C: FnOnce(&LaunchStatus) -> Result<L, SafeError>,
+        S: FnOnce(&LaunchSnapshot) -> Result<P, SafeError>,
+        O: FnOnce(&LaunchSnapshot) -> super::source_provenance::SourceProvenance,
+    {
         let lease: RefCell<Option<Arc<L>>> = RefCell::new(None);
-        self.start(
+        self.start_with_source(
             caller,
             request,
             prepare,
@@ -74,6 +94,7 @@ impl<P, L> LaunchCoordinator<RoutedResource<P, L>> {
                 let process = spawn(snapshot)?;
                 Ok(RoutedResource { process, route })
             },
+            source,
         )
     }
 }

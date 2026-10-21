@@ -1,6 +1,7 @@
 //! Read-only directory capabilities. Ambient paths are accepted only at backend root admission.
 //! Every descendant open is relative to the retained cap-std handle, never path.join + fs::read.
 use cap_std::fs::{Dir, OpenOptions};
+use sha2::{Digest, Sha256};
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -144,6 +145,8 @@ pub(crate) struct Root {
     dir: Dir,
     selected: PathBuf,
     identity: String,
+    scope_key: String,
+    sqlite_file: Option<String>,
 }
 impl std::fmt::Debug for Root {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -175,6 +178,8 @@ impl Root {
             dir: self.dir.try_clone().map_err(read_error)?,
             selected: self.selected.clone(),
             identity: self.identity.clone(),
+            scope_key: self.scope_key.clone(),
+            sqlite_file: self.sqlite_file.clone(),
         };
         copy.source_current()?;
         Ok(copy)
@@ -190,13 +195,37 @@ impl Root {
         let root = Self {
             dir,
             selected: path.to_owned(),
+            scope_key: identity.clone(),
             identity,
+            sqlite_file: None,
         };
         root.current()?;
         Ok(root)
     }
+    pub(crate) fn open_sqlite(path: &Path, file: &str) -> ReadResult<Self> {
+        if file.is_empty()
+            || file.contains('\0')
+            || (cfg!(windows) && file.contains(':'))
+            || Path::new(file).components().count() != 1
+            || !matches!(Path::new(file).components().next(), Some(Component::Normal(_)))
+        {
+            return Err("SCOPE_UNKNOWN");
+        }
+        let mut root = Self::open(path)?;
+        let mut digest = Sha256::new();
+        digest.update(b"cc-desk-opencode-sqlite-scope-v1\0");
+        digest.update(root.identity.as_bytes());
+        digest.update(b"\0");
+        digest.update(file.as_bytes());
+        root.scope_key = format!("{:x}", digest.finalize());
+        root.sqlite_file = Some(file.to_owned());
+        Ok(root)
+    }
+    pub(crate) fn sqlite_filename(&self) -> &str {
+        self.sqlite_file.as_deref().unwrap_or("opencode.db")
+    }
     pub(crate) fn key(&self) -> &str {
-        &self.identity
+        &self.scope_key
     }
     pub(crate) fn descendant(&self, path: &Path) -> ReadResult<String> {
         let path = path

@@ -20,6 +20,13 @@ pub(crate) struct SourceProvenance {
 }
 impl SourceProvenance {
     pub(crate) fn freeze(snapshot: &LaunchSnapshot) -> Self {
+        Self::freeze_with_database(snapshot, Ok(None))
+    }
+
+    pub(crate) fn freeze_with_database(
+        snapshot: &LaunchSnapshot,
+        database: Result<Option<String>, SafeError>,
+    ) -> Self {
         let known = snapshot.raw_args().is_none()
             && read_scope_known(
                 snapshot.request().cli,
@@ -31,10 +38,15 @@ impl SourceProvenance {
                 .is_none_or(|args| args.is_empty());
         let selection = if known {
             (|| -> Result<SourceSelection, SafeError> {
-                let locations =
+                let mut locations =
                     locations(snapshot.request().cli, snapshot.environment()).map_err(error)?;
+                if snapshot.request().cli == CliKind::Opencode && locations.sqlite_file.is_none() {
+                    locations = locations
+                        .with_probed_database(&database?.ok_or_else(|| error("SCOPE_UNKNOWN"))?)
+                        .map_err(error)?;
+                }
                 let selected = SourceSelection {
-                    root: Root::open(&locations.root).map_err(error)?,
+                    root: locations.open_root(snapshot.request().cli).map_err(error)?,
                     user_config: locations
                         .user_config
                         .as_ref()

@@ -27,11 +27,14 @@ pub(crate) fn read_history_with_budget(root: &Root, projects: &[ProjectRef<'_>],
         // Run/root-wide 观察不接 opencode：归属必须落在已 admitted 的项目上。
         return Err("SOURCE_UNSUPPORTED");
     }
+    let source_db = root.sqlite_filename();
+    let source_wal = format!("{source_db}-wal");
+    let source_shm = format!("{source_db}-shm");
     // Windows SQLite VFS 不保证侧车 NOFOLLOW；其路径只指向下面的能力句柄私有副本。
     // Unix VFS 自身对 db/WAL/SHM 使用 NOFOLLOW；两端仍复核源文件类型。
-    for name in std::iter::once(DB_FILE).chain(SIDECAR_FILES.iter().copied()) {
+    for name in [source_db, source_wal.as_str(), source_shm.as_str()] {
         let present = root.sqlite_file_present(Path::new(name))?;
-        if name == DB_FILE && !present {
+        if name == source_db && !present {
             return Err("SOURCE_UNSUPPORTED");
         }
     }
@@ -40,7 +43,7 @@ pub(crate) fn read_history_with_budget(root: &Root, projects: &[ProjectRef<'_>],
     #[cfg(windows)]
     let database = snapshot.directory.path().join(DB_FILE);
     #[cfg(not(windows))]
-    let database = root.selected_path().join(DB_FILE);
+    let database = root.selected_path().join(source_db);
     let mut conn = open_read_only(&database)?;
     let tx = conn.transaction().map_err(|_| "SOURCE_BUSY")?;
     probe_schema(&tx)?;
@@ -51,9 +54,9 @@ pub(crate) fn read_history_with_budget(root: &Root, projects: &[ProjectRef<'_>],
         append_project(&tx, root, project, &worktrees, &mut items, budget)?;
     }
     tx.commit().map_err(|_| "SOURCE_BUSY")?;
-    for name in std::iter::once(DB_FILE).chain(SIDECAR_FILES.iter().copied()) {
+    for name in [source_db, source_wal.as_str(), source_shm.as_str()] {
         let present = root.sqlite_file_present(Path::new(name))?;
-        if name == DB_FILE && !present {
+        if name == source_db && !present {
             return Err("SOURCE_CHANGED");
         }
     }
@@ -186,9 +189,9 @@ fn private_sqlite_snapshot_during(root: &Root, after_database: impl FnOnce()) ->
     // SQLite 的 Windows VFS 会沿路径打开 -wal/-shm。仅复制能力目录中的 db/WAL，
     // 私有目录中的 SHM 由 SQLite 根据 WAL 重建，避免它触碰原始侧车路径。
     let database = root
-        .sqlite_source_file(Path::new(DB_FILE))?
+        .sqlite_source_file(Path::new(root.sqlite_filename()))?
         .ok_or("SOURCE_UNSUPPORTED")?;
-    let source_shm = root.sqlite_source_file(Path::new(SIDECAR_FILES[1]))?;
+    let source_shm = root.sqlite_source_file(Path::new(&format!("{}-shm", root.sqlite_filename())))?;
     // SQLite Unix/Windows WAL 协议：CKPT(121) 阻止回写 DB，READ(1)(124)
     // 阻止 writer 重置已有 WAL；允许追加，复制过程中变化仍由长度/mtime 拒绝。
     // 无 SHM 时独占整个 DB 锁区，避免新连接在两次复制之间创建/恢复 WAL。
@@ -207,7 +210,7 @@ fn private_sqlite_snapshot_during(root: &Root, after_database: impl FnOnce()) ->
     let mut remaining = SNAPSHOT_LIMIT;
     let database = copy_sqlite_file(&database, &snapshot.path().join(DB_FILE), &mut remaining)?;
     after_database();
-    let wal = if let Some(source) = root.sqlite_source_file(Path::new(SIDECAR_FILES[0]))? {
+    let wal = if let Some(source) = root.sqlite_source_file(Path::new(&format!("{}-wal", root.sqlite_filename())))? {
         copy_sqlite_file(&source, &snapshot.path().join(SIDECAR_FILES[0]), &mut remaining)?
     } else {
         create_private_file(&snapshot.path().join(SIDECAR_FILES[0]))?

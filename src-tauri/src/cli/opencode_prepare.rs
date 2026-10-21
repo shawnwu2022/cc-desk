@@ -5,7 +5,7 @@ use crate::platform::launch::ProcessLaunchSpec;
 use crate::version_history::maintenance::{OwnedChildTicket, PreparingStart};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::Path;
 use std::process::{Child, Stdio};
@@ -14,6 +14,72 @@ use std::time::{Duration, Instant};
 const PREPARE_TIMEOUT: Duration = Duration::from_secs(5);
 const HEALTH_TIMEOUT: Duration = Duration::from_millis(700);
 const CREATE_TIMEOUT: Duration = Duration::from_secs(5);
+const DB_PATH_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The official `db path` command has no session creation action. Its bounded
+/// stdout is used only to narrow the already selected XDG data directory.
+pub(crate) fn probe_database_path(
+    spec: &ProcessLaunchSpec,
+    mut admission: PreparingStart,
+    current: &impl Fn() -> Result<(), SafeError>,
+) -> Result<String, SafeError> {
+    let mut command = spec.metadata_command().map_err(|_| error("SCOPE_UNKNOWN"))?;
+    let mut output = tempfile::tempfile().map_err(|_| error("SCOPE_UNKNOWN"))?;
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(output.try_clone().map_err(|_| error("SCOPE_UNKNOWN"))?))
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    let job = server_job::Job::new().map_err(|_| error("SCOPE_UNKNOWN"))?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000 | 0x0000_0004);
+    }
+    current()?;
+    let ticket = admission.begin_creation();
+    let spawned = match command.spawn() {
+        Ok(child) => child,
+        Err(_) => {
+            ticket.no_child_created();
+            return Err(error("SCOPE_UNKNOWN"));
+        }
+    };
+    let child = ServerChild {
+        child: spawned,
+        ticket: Some(ticket.child_created()),
+        #[cfg(windows)]
+        job: Some(job),
+    };
+    let mut child = child;
+    #[cfg(windows)]
+    child.job.as_ref().unwrap().assign_and_resume(&child.child).map_err(|_| error("SCOPE_UNKNOWN"))?;
+    let deadline = Instant::now() + DB_PATH_TIMEOUT;
+    loop {
+        current()?;
+        if let Some(status) = child.child.try_wait().map_err(|_| error("SCOPE_UNKNOWN"))? {
+            if !status.success() {
+                return Err(error("SCOPE_UNKNOWN"));
+            }
+            break;
+        }
+        if Instant::now() >= deadline {
+            return Err(error("SCOPE_UNKNOWN"));
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    if output.metadata().map_err(|_| error("SCOPE_UNKNOWN"))?.len() > 4096 {
+        return Err(error("SCOPE_UNKNOWN"));
+    }
+    output.seek(SeekFrom::Start(0)).map_err(|_| error("SCOPE_UNKNOWN"))?;
+    let mut bytes = Vec::new();
+    output.take(4097).read_to_end(&mut bytes).map_err(|_| error("SCOPE_UNKNOWN"))?;
+    if bytes.len() > 4096 {
+        return Err(error("SCOPE_UNKNOWN"));
+    }
+    current()?;
+    String::from_utf8(bytes).map_err(|_| error("SCOPE_UNKNOWN"))
+}
 
 fn http_client() -> Result<reqwest::blocking::Client, SafeError> {
     reqwest::blocking::Client::builder()
@@ -593,6 +659,21 @@ mod tests {
             .preparing();
         let id = create_session(&spec, root.path(), port, admission, &|| Ok(())).unwrap();
         assert!(id.starts_with("ses_"));
+        let mut path_request = request.clone();
+        path_request.action = LaunchAction::Raw { argv: vec!["db".into(), "path".into()] };
+        let path_snapshot = freeze_launch(
+            &path_request, &profile,
+            &CallerIdentity {
+                instance_id: "opencode-test-instance".into(),
+                window_label: "main".into(),
+                webview_epoch: WireU64::parse("1").unwrap(),
+            },
+            &FreezeContext { inherited: &inherited, terminal: &EnvMap::new(), legacy: None, observer: None },
+        ).unwrap();
+        let path_spec = resolve_process(&build_invocation(&path_request, &path_snapshot).unwrap()).unwrap();
+        let path_admission = AdmissionGate::new().begin_start(RuntimeKind::Native).unwrap().preparing();
+        let path = probe_database_path(&path_spec, path_admission, &|| Ok(())).unwrap();
+        assert!(same_directory(path.trim(), &root.path().join("data/opencode/opencode.db")));
         assert!(root.path().join("data/opencode/opencode.db").is_file());
         let data_root = crate::cli::native_projection::scoped_fs::Root::open(
             &root.path().join("data/opencode"),

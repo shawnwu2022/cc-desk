@@ -9,7 +9,7 @@ use crate::cli::launch_service::LaunchService;
 use crate::cli::profiles::{error, Override, Profile};
 use crate::cli::run_registry::RunKey;
 use crate::cli::snapshot::CallerIdentity;
-use crate::cli::types::{LaunchAction, SafeError};
+use crate::cli::types::{CliKind, LaunchAction, SafeError};
 use crate::cli::workspace::RegisteredProject;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -119,7 +119,19 @@ impl ProjectionService {
                 if profile.revision != *expected_profile_revision {
                     return Err(error("REVISION_CONFLICT"));
                 }
-                let (env, selected) = profile_locations_diagnosed(&self.launch, &profile, stage)?;
+                let (env, configured) = profile_locations_diagnosed(&self.launch, &profile, stage)?;
+                let selected = if profile.cli == CliKind::Opencode && configured.sqlite_file.is_none() {
+                    let project_id = project_ids.first().ok_or_else(|| error("SCOPE_UNKNOWN"))?;
+                    let project = document.registered_projects.get(project_id)
+                        .ok_or_else(|| error("PROJECT_NOT_FOUND"))?;
+                    let _ = admit_project(project)?;
+                    let output = self.launch.probe_opencode_database(
+                        caller, &profile, &project.selected_path, &env,
+                    )?;
+                    configured.with_probed_database(&output).map_err(error)?
+                } else {
+                    configured.clone()
+                };
                 drop(env); // Never retain an ambient environment snapshot in an IPC DTO.
                 *stage = ProjectionStage::ScopeProjectRegistration;
                 // 一次观察可覆盖多个已注册项目；每个项目仍逐个 admission，集合不是授权捷径。
@@ -141,7 +153,7 @@ impl ProjectionService {
                 }
                 let service = Arc::downgrade(&self.launch);
                 let expected_profile = profile.clone();
-                let expected_locations = selected.clone();
+                let expected_locations = configured;
                 let authority = caller.clone();
                 let check = Arc::new(move || -> ReadResult<()> {
                     let service = service.upgrade().ok_or("SCOPE_REVOKED")?;
@@ -185,7 +197,7 @@ impl ProjectionService {
                     profile_revision: profile.revision,
                     target: target.clone(),
                     basis: SourceBasis::ConfiguredProfile,
-                    root: Root::open(&selected.root).map_err(error)?,
+                    root: selected.open_root(profile.cli).map_err(error)?,
                     user_config: selected
                         .user_config
                         .as_ref()
