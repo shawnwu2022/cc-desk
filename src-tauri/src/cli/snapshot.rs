@@ -59,6 +59,10 @@ impl std::fmt::Debug for LaunchSnapshot {
 impl LaunchSnapshot {
     pub(crate) fn codex_identity_requested(&self) -> bool {
         self.request.cli == CliKind::Codex
+            // Node 的脚本路径属于解释器参数，不能在它前面插入 Codex flags。
+            && !(matches!(self.launcher(), Launcher::Native)
+                && self.program.file_name().and_then(OsStr::to_str).is_some_and(|name|
+                    name.eq_ignore_ascii_case("node") || name.eq_ignore_ascii_case("node.exe")))
             && matches!(
                 self.request.action,
                 LaunchAction::New

@@ -1,6 +1,7 @@
 //! Read-only directory capabilities. Ambient paths are accepted only at backend root admission.
 //! Every descendant open is relative to the retained cap-std handle, never path.join + fs::read.
 use cap_std::fs::{Dir, OpenOptions};
+use sha2::{Digest, Sha256};
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -144,6 +145,8 @@ pub(crate) struct Root {
     dir: Dir,
     selected: PathBuf,
     identity: String,
+    scope_key: String,
+    sqlite_file: Option<String>,
 }
 impl std::fmt::Debug for Root {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -175,6 +178,8 @@ impl Root {
             dir: self.dir.try_clone().map_err(read_error)?,
             selected: self.selected.clone(),
             identity: self.identity.clone(),
+            scope_key: self.scope_key.clone(),
+            sqlite_file: self.sqlite_file.clone(),
         };
         copy.source_current()?;
         Ok(copy)
@@ -190,13 +195,53 @@ impl Root {
         let root = Self {
             dir,
             selected: path.to_owned(),
+            scope_key: identity.clone(),
             identity,
+            sqlite_file: None,
         };
         root.current()?;
         Ok(root)
     }
+    pub(crate) fn open_sqlite(path: &Path, file: &str) -> ReadResult<Self> {
+        if file.is_empty()
+            || file.contains('\0')
+            || (cfg!(windows) && file.contains(':'))
+            || Path::new(file).components().count() != 1
+            || !matches!(
+                Path::new(file).components().next(),
+                Some(Component::Normal(_))
+            )
+        {
+            return Err("SCOPE_UNKNOWN");
+        }
+        let mut root = Self::open(path)?;
+        let mut digest = Sha256::new();
+        digest.update(b"cc-desk-opencode-sqlite-scope-v1\0");
+        digest.update(root.identity.as_bytes());
+        digest.update(b"\0");
+        digest.update(file.as_bytes());
+        root.scope_key = format!("{:x}", digest.finalize());
+        root.sqlite_file = Some(file.to_owned());
+        Ok(root)
+    }
+    pub(crate) fn sqlite_filename(&self) -> &str {
+        self.sqlite_file.as_deref().unwrap_or("opencode.db")
+    }
+    #[cfg(unix)]
+    pub(crate) fn sqlite_canonical_directory(&self) -> ReadResult<PathBuf> {
+        // SQLite NOFOLLOW 会拒绝祖先目录中的符号链接；只解析已授权的根，并重新核对 held 目录身份。
+        self.source_current()?;
+        let canonical = self.selected.canonicalize().map_err(|_| "SOURCE_CHANGED")?;
+        let resolved = Dir::open_ambient_dir(&canonical, cap_std::ambient_authority())
+            .map_err(|_| "SOURCE_CHANGED")?;
+        if directory_key(&resolved)? != self.identity {
+            return Err("SOURCE_CHANGED");
+        }
+        self.source_current()?;
+        Ok(canonical)
+    }
     pub(crate) fn key(&self) -> &str {
-        &self.identity
+        &self.scope_key
     }
     pub(crate) fn descendant(&self, path: &Path) -> ReadResult<String> {
         let path = path
@@ -442,6 +487,44 @@ impl Root {
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(read_error(e)),
         }
+    }
+    /// 校验 SQLite 来源文件；必须区分缺失与链接/非普通文件。
+    pub(crate) fn sqlite_file_present(&self, path: &Path) -> ReadResult<bool> {
+        relative(path, false)?;
+        self.current()?;
+        match self.dir.symlink_metadata(path) {
+            Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => Ok(true),
+            Ok(_) => Err("SOURCE_NOT_REGULAR"),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(read_error(error)),
+        }
+    }
+    /// Windows SQLite VFS 不对 WAL 使用 NOFOLLOW；复制前只交出能力目录内的普通文件句柄。
+    #[cfg(windows)]
+    pub(crate) fn sqlite_source_file(&self, path: &Path) -> ReadResult<Option<std::fs::File>> {
+        use cap_std::fs::OpenOptionsExt;
+        use windows::Win32::Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE};
+
+        relative(path, false)?;
+        self.current()?;
+        let metadata = match self.dir.symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(read_error(error)),
+        };
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return Err("SOURCE_NOT_REGULAR");
+        }
+        let mut options = OpenOptions::new();
+        options
+            .read(true)
+            .share_mode(FILE_SHARE_READ.0 | FILE_SHARE_WRITE.0);
+        let file = self.dir.open_with(path, &options).map_err(read_error)?;
+        if !file.metadata().map_err(read_error)?.is_file() {
+            return Err("SOURCE_NOT_REGULAR");
+        }
+        self.current()?;
+        Ok(Some(file.into_std()))
     }
     pub(crate) fn history_until(
         &self,

@@ -45,6 +45,102 @@ fn frozen(root: &std::path::Path, cwd: &std::path::Path) -> LaunchSnapshot {
     )
     .unwrap()
 }
+
+#[test]
+fn SourceProvenance_OpencodeDefaultNeedsExactProbeForRestart_004() {
+    let temp = tempfile::tempdir().unwrap();
+    let data = temp.path().join("data");
+    let root = data.join("opencode");
+    std::fs::create_dir_all(&root).unwrap();
+    let mut profile = Profile::new("opencode-provenance", CliKind::Opencode);
+    profile.program_path = Override::Set(std::env::current_exe().unwrap().to_str().unwrap().into());
+    let revision = WireU64::parse("0").unwrap();
+    let caller = CallerIdentity {
+        instance_id: "fixture".into(),
+        window_label: "main".into(),
+        webview_epoch: WireU64::parse("1").unwrap(),
+    };
+    let request = LaunchRequest {
+        request_id: "opencode-request".into(),
+        tab_id: "tab".into(),
+        run_id: "run".into(),
+        generation: 1,
+        profile_id: profile.id.clone(),
+        expected_profile_revision: revision,
+        cli: CliKind::Opencode,
+        launch_cwd: temp.path().to_str().unwrap().into(),
+        action: LaunchAction::New,
+        extra_args: vec![],
+        cols: 80,
+        rows: 24,
+    };
+    let environment = EnvMap::from([("XDG_DATA_HOME".into(), data.as_os_str().into())]);
+    let snapshot = freeze_launch(
+        &request,
+        &profile,
+        &caller,
+        &FreezeContext {
+            inherited: &environment,
+            terminal: &EnvMap::new(),
+            legacy: None,
+            observer: None,
+        },
+    )
+    .unwrap();
+    assert!(SourceProvenance::needs_database_probe(&snapshot));
+    let raw = freeze_launch(
+        &LaunchRequest {
+            action: LaunchAction::Raw {
+                argv: vec!["--help".into()],
+            },
+            ..request.clone()
+        },
+        &profile,
+        &caller,
+        &FreezeContext {
+            inherited: &environment,
+            terminal: &EnvMap::new(),
+            legacy: None,
+            observer: None,
+        },
+    )
+    .unwrap();
+    assert!(!SourceProvenance::needs_database_probe(&raw));
+    assert_eq!(
+        SourceProvenance::freeze(&snapshot)
+            .selection()
+            .err()
+            .unwrap()
+            .code,
+        "SCOPE_UNKNOWN"
+    );
+    let exact = root.join("opencode-beta.db");
+    let source = SourceProvenance::freeze_with_database(
+        &snapshot,
+        Ok(Some(exact.to_str().unwrap().to_owned())),
+    );
+    assert_eq!(
+        source.selection().unwrap().root.sqlite_filename(),
+        "opencode-beta.db"
+    );
+    assert!(SourceProvenance::freeze_with_database(
+        &snapshot,
+        Ok(Some(
+            temp.path()
+                .join("unrelated.db")
+                .to_str()
+                .unwrap()
+                .to_owned()
+        )),
+    )
+    .selection()
+    .is_err());
+    assert!(
+        SourceProvenance::freeze_with_database(&snapshot, Err(error("SCOPE_UNKNOWN")))
+            .selection()
+            .is_err()
+    );
+}
 #[test]
 fn SourceProvenance_ReplacedRootCannotBecomeOriginalSource_001() {
     let temp = tempfile::tempdir().unwrap();

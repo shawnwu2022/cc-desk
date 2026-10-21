@@ -2,12 +2,14 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { clearMocks, mockIPC } from '@tauri-apps/api/mocks'
 import { useCliProfilesStore } from '@/stores/cliProfiles'
+import type { CliProfile } from '@/types/profile'
 
-function profile(id: string, cli: 'claude' | 'codex', revision = '1') {
+function profile(id: string, cli: string, revision = '1') {
   return {
     id,
     revision,
-    cli,
+    // 测试需传入 opencode/futurecli 等值验证运行时白名单，不受编译期 CliKind 限制。
+    cli: cli as CliProfile['cli'],
     name: id,
     launcher: { kind: 'native' as const },
     programPath: { mode: 'inherit' as const },
@@ -191,6 +193,19 @@ describe('D22 dual-CLI profile store', () => {
       expectedRevision: '9',
       patch: { op: 'update', id: 'claude-main', changes: { name: 'Renamed' } },
     })
+  })
+
+  // 后端 CliKind 已扩至 opencode：profile 行解析白名单必须接受，未知 CLI 仍
+  // 让整个列表拒绝且不部分采纳。
+  it('D22_Profiles_AcceptsOpencodeAndRejectsUnknownCli_014', async () => {
+    mockIPC(() => ({ revision: '1', profiles: [profile('oc', 'opencode')] }))
+    const store = useCliProfilesStore()
+    await store.load()
+    expect(store.profile('oc')?.cli).toBe('opencode')
+
+    mockIPC(() => ({ revision: '2', profiles: [profile('future', 'futurecli')] }))
+    await expect(store.load()).rejects.toMatchObject({ code: 'INVALID_PROFILE_RESPONSE', retryable: false })
+    expect(store.profile('future')).toBeUndefined()
   })
 })
 

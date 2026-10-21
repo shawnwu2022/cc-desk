@@ -1,6 +1,6 @@
 import { computed, shallowRef, nextTick, onMounted, onUnmounted, ref, watch, type Ref } from 'vue'
 import { writeText } from '@tauri-apps/plugin-clipboard-manager'
-import { openInFileManager, nativeUnarchiveSession, nativeRenameSession, nativeGetScope, legacyClaudeRootKey, getSessions } from '@/api/tauri'
+import { openInFileManager, nativeUnarchiveSession, nativeRenameSession, nativePrepareOpencodeSession, nativeGetScope, legacyClaudeRootKey, getSessions } from '@/api/tauri'
 import { useSessionIndexMaintenanceStore } from '@/stores/sessionIndexMaintenance'
 import { useLegacyHistoryRefresh } from '@/composables/useLegacyHistoryRefresh'
 import { createNativeId } from '@/utils/nativeId'
@@ -25,6 +25,15 @@ import { normalizePath, sameProjectPath } from '@/utils/path'
 import { createWorkspaceSourceWarnings, workspaceWarningKey, type WorkspaceHistoryIssue, type WorkspaceSourceConfiguration, type WorkspaceSourceWarning, type WorkspaceWarningSource } from '@/utils/workspaceSourceWarnings'
 import type { OpenTerminalSession, UnifiedTerminalHostPort } from '@/terminal/unifiedTerminalHost'
 import type { UnifiedCliKind, UnifiedSession } from '@/types/unifiedSession'
+
+/** 历史读取失败的警告源按发起读取的 CLI 归属，不能把非 Claude 失败一律归给 Codex。
+ * 用 Record 而非链式三元：新增 CLI 时由编译器强制补映射，避免静默落入他人来源。 */
+const historyWarningSources: Record<UnifiedCliKind, WorkspaceWarningSource> = {
+  claude: 'claude-history',
+  codex: 'codex-history',
+  opencode: 'opencode-history',
+}
+export const historyWarningSource = (cli: UnifiedCliKind): WorkspaceWarningSource => historyWarningSources[cli]
 
 /** Normal App composition root. Read-only bootstrap is independent per source;
  * only explicitly admitted operations can enter the existing runtime owners. */
@@ -124,7 +133,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     for (const entry of currentHistoryEntries.value) {
       const add = (code: string, sessionKey?: string) => {
         if (!acknowledgedHistoryWarnings.value.has(historyWarningNoticeKey(entry, code, sessionKey))) {
-          warnings.add(entry.context.cli === 'claude' ? 'claude-history' : 'codex-history', { code, stage: 'read-source-enumeration' })
+          warnings.add(historyWarningSource(entry.context.cli), { code, stage: 'read-source-enumeration' })
         }
       }
       for (const code of entry.readFailures ?? []) add(code)
@@ -144,7 +153,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   // their authenticated fixed diagnostics discoverable, never infer health from
   // their absence in the positive-session projection.
   function sourceHistoryNoticeKey(entry: NativeHistoryEntry) {
-    const warningKey = workspaceWarningKey({ source: entry.context.cli === 'claude' ? 'claude-history' : 'codex-history', code: entry.error!, stage: entry.diagnosticStage })
+    const warningKey = workspaceWarningKey({ source: historyWarningSource(entry.context.cli), code: entry.error!, stage: entry.diagnosticStage })
     return JSON.stringify([warningKey, entry.context.profileId, entry.context.profileRevision, entry.sourceRootKey ?? null])
   }
   const sourceWarningObservations = computed(() => {
@@ -179,7 +188,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   type AcknowledgableHistoryIssue = WorkspaceHistoryIssue & { noticeKey: string; sourceFailure: boolean }
   const allHistoryIssues = computed<AcknowledgableHistoryIssue[]>(() => relevantHistoryEntries.value.flatMap(entry => {
     if (entry.loading) return []
-    const source = entry.context.cli === 'claude' ? 'claude-history' as const : 'codex-history' as const
+    const source = historyWarningSource(entry.context.cli)
     const configurationName = profiles.profile(entry.context.profileId)?.name ?? ''
     const stage = entry.error ? entry.diagnosticStage : 'read-source-enumeration' as const
     const issue = (code: string, session?: NativeHistoryEntry['sessions'][number]): AcknowledgableHistoryIssue => ({
@@ -210,7 +219,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     return issue && entry ? { issue, entry } : undefined
   }
   function reconcileHistoryWarningSnapshot(legacyWarnings?: readonly WorkspaceSourceWarning[]) {
-    const isHistory = (source: WorkspaceWarningSource) => source === 'claude-history' || source === 'codex-history'
+    const isHistory = (source: WorkspaceWarningSource) => source === 'claude-history' || source === 'codex-history' || source === 'opencode-history'
     const warnings = createWorkspaceSourceWarnings(sourceWarnings.value.filter(row => !isHistory(row.source)
       && !(legacyWarnings && row.source === 'legacy-history')), sourceWarningsTruncated.value)
     if (legacyWarnings) {
@@ -220,7 +229,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     const owners: Omit<WorkspaceSourceConfiguration, 'name'>[] = []
     const identities = new Map<string, Set<string>>()
     for (const entry of relevantHistoryEntries.value) if (entry.error) {
-      const warning = warnings.add(entry.context.cli === 'claude' ? 'claude-history' : 'codex-history', { code: entry.error, stage: entry.diagnosticStage })
+      const warning = warnings.add(historyWarningSource(entry.context.cli), { code: entry.error, stage: entry.diagnosticStage })
       const key = workspaceWarningKey(warning)
       const set = identities.get(key) ?? new Set<string>()
       set.add(JSON.stringify([key, entry.context.profileId, entry.context.profileRevision, entry.sourceRootKey ?? null]))
@@ -289,7 +298,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     && !profiles.profiles.length && !workspace.projects.length && !projects.pinnedProjects.length)
   let retryRequest: { request: WorkspaceRequest; owns: () => boolean; resumeTarget?: UnifiedSession } | null = null
   let retryResumeTarget: { sequence: number; target: UnifiedSession } | null = null
-  const cliProblems = computed(() => (['claude', 'codex'] as const).flatMap(cli => {
+  const cliProblems = computed(() => (['claude', 'codex', 'opencode'] as const).flatMap(cli => {
     const latest = [...native.tabs.values()].reverse().filter(tab => tab.cli === cli).sort((a, b) => b.lastActivityAt - a.lastActivityAt)[0]
     const failed = latest?.status === 'failed' ? latest : null
     const code = latest?.status === 'running' ? null : failed?.errorCode === 'AUTH_REQUIRED' ? 'AUTH_REQUIRED'
@@ -351,7 +360,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     if (disposed || !host.value) throw new Error('TERMINAL_HOST_NOT_READY')
     return host.value
   }
-  function createNativeTab(input: NativeRuntimeCreateInput) {
+  async function createNativeTab(input: NativeRuntimeCreateInput) {
     if (app.isProjectAdmissionBlocked(input.projectPath)) throw new Error('PROJECT_REMOVAL_IN_PROGRESS')
     const source = input.sourceContext
     const profile = input.launchConfigId ? profiles.profile(input.launchConfigId) : profiles.selected[input.cli]
@@ -369,8 +378,35 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
       throw new Error(source ? 'PROJECT_IDENTITY_CHANGED' : 'PROJECT_NOT_FOUND')
     }
     // Paths selected by the frontend do not create registration or bridge authority.
+    let action = input.action
+    let preparedIdentity: { tabId: string; requestId: string; runId: string } | undefined
+    if (input.cli === 'opencode' && action.kind === 'new') {
+      preparedIdentity = { tabId: createNativeId('tab'), requestId: createNativeId('request'),
+        runId: createNativeId('run') }
+      let nativeSessionId: string | undefined
+      try {
+        nativeSessionId = await nativePrepareOpencodeSession({
+          ...preparedIdentity, generation: 1, profileId: profile.id,
+          expectedProfileRevision: profile.revision, cli: input.cli,
+          launchCwd: matches[0].selectedPath, action: { kind: 'new' },
+          extraArgs: [], cols: 80, rows: 24,
+        })
+      } catch (failure) {
+        const code = failure && typeof failure === 'object' && 'code' in failure ? failure.code : undefined
+        // 只有后端明确保证尚未发送创建请求，才能降级到原生交互；未知结果不能再启动一次。
+        if (code !== 'OPENCODE_SESSION_PREPARE_UNSUPPORTED'
+          && code !== 'OPENCODE_SESSION_PREPARE_UNAVAILABLE_BEFORE_CREATE') throw failure
+      }
+      if (disposed || app.isProjectAdmissionBlocked(input.projectPath)
+        || profiles.profile(profile.id)?.revision !== profile.revision
+        || !workspace.projects.some(project => project.projectId === matches[0].projectId
+          && sameProjectPath(project.selectedPath, matches[0].selectedPath))) {
+        throw new Error('STALE_NATIVE_ATTEMPT')
+      }
+      if (nativeSessionId) action = { kind: 'resume-id', nativeSessionId }
+    }
     const tab = native.create({ cli: input.cli, projectId: matches[0].projectId, projectPath: matches[0].selectedPath,
-      profileId: profile.id, profileRevision: profile.revision, action: input.action,
+      profileId: profile.id, profileRevision: profile.revision, action, preparedIdentity,
       title: input.title, sourceSessionKey: input.sourceSessionKey })
     if (!source) awaitingSuccess.set(tab.tabId, { attempt: captureNativeAttempt(tab), projectPath: tab.projectPath,
       cli: tab.cli, profileId: tab.profileId, profileRevision: tab.profileRevision })
@@ -513,7 +549,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     const historyWarningIdentities = new Map<string, Set<string>>()
     const addHistoryWarning = (context: { cli: UnifiedCliKind; profileId: string; profileRevision: string; sourceRootKey?: string }, failure: unknown) => {
       if (profiles.profile(context.profileId)?.revision !== context.profileRevision) return
-      const warning = warnings.add(context.cli === 'claude' ? 'claude-history' : 'codex-history', failure)
+      const warning = warnings.add(historyWarningSource(context.cli), failure)
       const warningKey = workspaceWarningKey(warning)
       const identities = historyWarningIdentities.get(warningKey) ?? new Set<string>()
       identities.add(JSON.stringify([warningKey, context.profileId, context.profileRevision, context.sourceRootKey ?? null]))
@@ -710,7 +746,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
       const { intent, ...project } = request.project
       if (intent === 'restore') {
         shell.requestWorkspaceAction({ kind: 'restore-session', project, mode: 'history' })
-      } else if (intent === 'claude' || intent === 'codex') {
+      } else if (intent === 'claude' || intent === 'codex' || intent === 'opencode') {
         await catalog.createSession({ ...project, cli: intent, action: { kind: 'new' } })
       } else if (intent === 'options') draft.open(project)
       else draft.openChooser(project)
@@ -906,6 +942,10 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   let historyTimer: ReturnType<typeof setTimeout> | undefined
   let historyReading = false
   function historyCue(tab: NativeCliTab): { identity: string | null; reply: string | null; prompt: string | null; titleRevision: number } | null {
+    if (tab.cli === 'opencode' && tab.action.kind === 'resume-id') {
+      return { identity: JSON.stringify([tab.requestId, tab.runId, tab.generation, tab.action.nativeSessionId, tab.status]),
+        reply: null, prompt: null, titleRevision: tab.titleChangeRevision ?? 0 }
+    }
     if (tab.action.kind === 'raw' || tab.status !== 'running') return null
     if (tab.cli === 'codex' && !tab.observedSessionId && !tab.titleChangeRevision) return null
     const attempt = captureNativeAttempt(tab)
@@ -934,7 +974,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     if (disposed || historyReading || loading.value || !ready.value) return
     const groups = new Map<string, HistoryOwner[]>()
     for (const owner of pendingHistoryOwners.values()) {
-      const key = JSON.stringify([owner.context.profileId, owner.context.profileRevision])
+      const key = JSON.stringify([owner.context.cli, owner.context.profileId, owner.context.profileRevision])
       const group = groups.get(key) ?? []
       group.push(owner)
       groups.set(key, group)
@@ -995,7 +1035,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
         const value = tab as unknown as Record<string, unknown>
         return ['projectPath', 'projectId', 'profileId', 'profileRevision', 'cli', 'title', 'name', 'status',
           'requestId', 'runId', 'generation', 'ptyId', 'ptyGeneration', 'sessionId', 'observedSessionId',
-          'activity', 'activityState', 'working', 'pending', 'attentionState', 'observation', 'observationState',
+          'activity', 'activityState', 'codexProgramStatus', 'working', 'pending', 'attentionState', 'observation', 'observationState',
           'observationNotice', 'observerEnabled', 'observerReasonCode', 'errorCode', 'sourceSessionKey', 'createdAt', 'usesDefaultClaudeRoot', 'titleChangeRevision', 'historyChangeRevision', 'historyTitleRevision']
           .map(key => value[key])
       }, () => {

@@ -70,7 +70,8 @@ it.each(['edit', 'copy'] as const)('LaunchSettings_ObserverSaved_020_%s', async 
 // 真实设置页按工具分组，并使用现有全局默认偏好显示标记。
 it('LaunchSettings_GroupDefault_001', async () => {
   const w = await render()
-  expect(w.findAll('[data-launch-group]').map(group => group.attributes('data-launch-group'))).toEqual(['claude', 'codex'])
+  expect(w.findAll('[data-launch-group]').map(group => group.attributes('data-launch-group'))).toEqual(['claude', 'codex', 'opencode'])
+  expect(w.get('[data-launch-group="opencode"] .cli-app-icon__image').attributes('src')).toContain('/cli/opencode.svg')
   expect(w.get('[data-launch-row="cc"]').text()).toContain('Default')
   expect(w.get('[data-launch-row="cx"]').text()).toContain('Default')
   expect(w.get('[data-launch-row="cc"]').findAll('[data-launch-edit]')).toHaveLength(1)

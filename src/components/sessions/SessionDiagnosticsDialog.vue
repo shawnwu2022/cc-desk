@@ -14,7 +14,7 @@ const { t } = useI18n()
   <AppDialog :open="!!diagnostics" :title="t('sessionActionDiagnostics')" data-session-diagnostics @close="emit('close')">
     <template v-if="diagnostics">
       <dl class="session-diagnostics-summary">
-        <dt>{{ t('sessionDiagnosticsTool') }}</dt><dd>{{ diagnostics.cli === 'claude' ? 'Claude Code' : 'Codex CLI' }}</dd>
+        <dt>{{ t('sessionDiagnosticsTool') }}</dt><dd>{{ diagnostics.cli === 'claude' ? 'Claude Code' : diagnostics.cli === 'codex' ? 'Codex CLI' : 'opencode' }}</dd>
         <dt>{{ t('sessionDiagnosticsState') }}</dt><dd>{{ t(diagnostics.stateKey) }}</dd>
         <dt>{{ t('sessionDiagnosticsLocation') }}</dt><dd>{{ t(diagnostics.preparing ? 'sessionDiagnosticsPreparing' : diagnostics.open ? 'sessionDiagnosticsOpen' : 'sessionDiagnosticsHistory') }}</dd>
       </dl>

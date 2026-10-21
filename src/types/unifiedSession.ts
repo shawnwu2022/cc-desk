@@ -1,6 +1,6 @@
 import type { NativeObservationNoticeState } from './nativeObservationNotice'
 
-export type UnifiedCliKind = 'claude' | 'codex'
+export type UnifiedCliKind = 'claude' | 'codex' | 'opencode'
 export type SessionRuntimeKind = 'legacy-claude' | 'native-cli'
 export type SessionProcessState = 'starting' | 'running' | 'unknown' | 'stopped' | 'failed'
 export type SessionAttentionState = 'none' | 'needs-user'

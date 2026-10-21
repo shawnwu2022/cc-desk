@@ -297,8 +297,13 @@ Native Claude 的活动观察与进程运行分开呈现：已知 idle 保持无
 `SessionAppIcon.vue` takes CLI, visual/activity state, archive context and an
 independent occurrence-notice description. It reserves one 20px slot and combines
 the real 16px application mark with a solid lower-right badge (10px SVG box,
-approximately 8px colored backplate). Known idle has no badge and keeps native
-artwork static; closed/stopped marks use a recognizable neutral-gray treatment.
+approximately 8px colored backplate). Known Claude idle has no badge and keeps native
+artwork static. Codex passively observes its native TUI's OSC 7501 snapshots:
+working uses the work glyph, blocked uses the generic needs-user glyph and
+“Needs action” label, and idle retains a static green dot labeled “Idle”. Missing,
+cleared or unsupported snapshots show unknown activity. Its identity-only hooks
+remain separate and never produce permission or completion evidence. Closed/stopped
+marks use a recognizable neutral-gray treatment.
 Codex retains its black/white brand artwork, with closed-treatment opacity tokens
 of 0.48 in light and 0.44 in dark GUI themes. Closed rows never render a badge,
 including unread receipts and archive context; their full accessible name,
@@ -437,7 +442,7 @@ persisted. Canonical project/CLI last-success preferences are read from
 `setLaunchPreference` action and projects.json single writer. The draft waits for
 canonical metadata before automatic selection; a not-yet-loaded automatic draft
 does not freeze a fallback configuration prematurely. The setter merges the other
-CLI field inside the serialized mutation, after previous snapshots are adopted.
+CLI fields inside the serialized mutation, after previous snapshots are adopted.
 Only the separate global CLI default selection uses optional local UI storage with
 an in-memory fallback; local project history is ignored. A failed metadata save
 leaves the running session intact, reloads within canonical writer queue ownership
@@ -769,6 +774,19 @@ The dialog copies the selected record and native origin before confirmation. It 
 Isolated bilingual `resume-session` and `resume-history` visual scenarios use a read-only in-memory history adapter. Every mutation fails closed. Their screenshots and cancellation checks demonstrate the rendered distinction, not a real CLI launch or native Windows acceptance.
 
 ## Next session-list interaction contract
+
+`SessionsPanel` 在搜索框下提供“仅显示活跃会话”快捷按钮，默认关闭，
+仅在当前面板生命周期内保留选择。开启后仅展示 adapter 明确投影 `opened === true`
+的非归档会话：包括空闲、运行、等待权限、启动中和已结束但尚未关闭的终端，
+不根据当前选择、标题、活动时间或生成状态推断。关闭/打开后的目录投影实时更新结果。
+过滤先作用于现有项目/CLI 可见投影，再组合项目名/路径与会话标题搜索；
+过滤后没有会话的项目不显示。项目置顶、CLI 分组、冻结创建序和展开状态保持原有规则。
+关闭过滤后恢复全部现有可见会话，不重置搜索。无结果区分“暂无活跃会话”
+与搜索无匹配；按钮使用共享 `AppButton`、原生键盘语义及 `aria-pressed`，
+不注册应用级快捷键，不改变选择或运行所有权。
+回归入口为 `tests/components/activeSessionFilter.test.ts`；浏览器 Enter/Space、
+焦点与双语明暗布局检查收在现有 `tests/visual/unified-workspace.spec.ts` 的
+`ActiveFilter_KeyboardLayout_001`，由普通视觉入口及 CI 显式清单一并执行。
 
 An open row selects its already-owned terminal. Closed history ignores row click,
 double click, Enter and Space; the separate native Resume button is its only launch

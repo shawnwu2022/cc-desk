@@ -40,7 +40,7 @@ describe.each(lineEndings)('Final visual workflow policy ($name)', ({ value: lin
     const capture = source.indexOf('--update-snapshots=all')
     expect(verify).toBeGreaterThan(0)
     expect(capture).toBeGreaterThan(verify)
-    expect(source).toContain("steps.baselines.outputs.absent == 'true'")
+    expect(source).not.toContain("steps.baselines.outputs.absent == 'true'")
     expect(source).toContain("steps.verify.outcome == 'failure'")
     expect(source).toContain('candidate-baselines-unapproved')
     expect(source).toContain('EXPECTED_BASELINE_COUNT: 13')

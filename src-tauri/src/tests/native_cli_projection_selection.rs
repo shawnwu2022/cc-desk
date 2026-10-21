@@ -159,3 +159,143 @@ fn ScopeArgs_RejectConflictingFlags_004() {
         assert!(!read_scope_known(CliKind::Codex, &Launcher::Native, args));
     }
 }
+
+// 数据根：XDG_DATA_HOME 优先；否则 HOME/.local/share/opencode（Windows 同规则，已实测）。
+#[test]
+#[allow(non_snake_case)]
+fn Opencode_LocationsResolveXdgDataRoot_01() {
+    let t = tempfile::tempdir().unwrap();
+    let mut env = EnvMap::new();
+    env.insert(home().into(), t.path().into());
+    let base = locations(CliKind::Opencode, &env).unwrap();
+    assert_eq!(
+        base.root,
+        t.path().join(".local").join("share").join("opencode")
+    );
+    assert!(base.user_config.is_none());
+
+    let xdg = t.path().join("xdg");
+    env.insert("XDG_DATA_HOME".into(), xdg.clone().into_os_string());
+    let with_xdg = locations(CliKind::Opencode, &env).unwrap();
+    assert_eq!(with_xdg.root, xdg.join("opencode"));
+    assert!(with_xdg.user_config.is_none());
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn Opencode_DbOverrideSelectsExactFile_05() {
+    let t = tempfile::tempdir().unwrap();
+    let mut env = EnvMap::new();
+    env.insert(home().into(), t.path().into());
+    let data = t.path().join(".local").join("share").join("opencode");
+    env.insert("OPENCODE_DB".into(), "nested/custom.db".into());
+    let relative = locations(CliKind::Opencode, &env).unwrap();
+    assert_eq!(relative.root, data.join("nested"));
+    assert_eq!(relative.sqlite_file.as_deref(), Some("custom.db"));
+    let external = t.path().join("external.db");
+    env.insert("OPENCODE_DB".into(), external.clone().into_os_string());
+    let absolute = locations(CliKind::Opencode, &env).unwrap();
+    assert_eq!(absolute.root, t.path());
+    assert_eq!(absolute.sqlite_file.as_deref(), Some("external.db"));
+    env.insert("OPENCODE_DB".into(), ":memory:".into());
+    assert!(locations(CliKind::Opencode, &env).is_err());
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn Opencode_CompiledChannelUsesOnlyProbedDataRoot_06() {
+    let t = tempfile::tempdir().unwrap();
+    let data = t.path().join("data");
+    std::fs::create_dir(&data).unwrap();
+    let selection = Locations {
+        root: data.clone(),
+        user_config: None,
+        sqlite_file: None,
+    };
+    let channel = selection
+        .with_probed_database(&data.join("opencode-local.db").to_string_lossy())
+        .unwrap();
+    assert_eq!(channel.sqlite_file.as_deref(), Some("opencode-local.db"));
+    assert!(selection
+        .with_probed_database(&t.path().join("outside.db").to_string_lossy())
+        .is_err());
+    assert!(selection
+        .with_probed_database(&data.join("random.db").to_string_lossy())
+        .is_err());
+    assert!(selection
+        .with_probed_database("opencode.db\nother")
+        .is_err());
+}
+
+// 空/非法 XDG 覆盖不得回退默认根（fail-closed，与既有 CODEX_HOME 语义一致）。
+#[test]
+#[allow(non_snake_case)]
+fn Opencode_InvalidXdgOverrideNeverFallsBackToHome_02() {
+    let t = tempfile::tempdir().unwrap();
+    let mut env = EnvMap::new();
+    env.insert(home().into(), t.path().into());
+    for value in ["", "relative", "nul\0root"] {
+        env.insert("XDG_DATA_HOME".into(), value.into());
+        assert!(locations(CliKind::Opencode, &env).is_err());
+    }
+}
+
+// read_scope_known：空参 true（New 场景），任何非空参一律 false。
+// 不给 --auto 开白名单：flag 存在已实测，但"不改 cwd/config root"未证实，
+// 未证实的语义不进白名单（spec §6.1 对抗修订）。用户配了就无历史投影，属有意 fail-closed。
+#[test]
+#[allow(non_snake_case)]
+fn Opencode_ReadScopeKnownMatrix_03() {
+    assert!(read_scope_known(
+        CliKind::Opencode,
+        &Launcher::Native,
+        std::iter::empty::<&str>()
+    ));
+    for args in [
+        ["--auto"].as_slice(),
+        ["--model", "x/y"].as_slice(),
+        ["--mini"].as_slice(),
+    ] {
+        assert!(
+            !read_scope_known(CliKind::Opencode, &Launcher::Native, args),
+            "非空参必须 false：{:?}",
+            args
+        );
+    }
+    for launcher in [
+        Launcher::Shell {
+            program: "bash".into(),
+            dialect: Dialect::Bash,
+        },
+        Launcher::Shim {
+            runner: "pwsh".into(),
+            dialect: Dialect::PowerShell,
+        },
+    ] {
+        assert!(!read_scope_known(
+            CliKind::Opencode,
+            &launcher,
+            std::iter::empty::<&str>()
+        ));
+    }
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn Opencode_CustomDatabaseNeverReadsDefault_04() {
+    let t = tempfile::tempdir().unwrap();
+    let mut env = EnvMap::new();
+    env.insert(home().into(), t.path().into());
+    for value in ["custom.db", "../elsewhere.db"] {
+        env.insert("OPENCODE_DB".into(), value.into());
+        let selection = locations(CliKind::Opencode, &env).unwrap();
+        assert_ne!(
+            selection.root.join(selection.sqlite_file.as_ref().unwrap()),
+            t.path().join(".local/share/opencode/opencode.db")
+        );
+    }
+    env.insert("OPENCODE_DB".into(), ":memory:".into());
+    assert!(locations(CliKind::Opencode, &env).is_err());
+    env.insert("OPENCODE_DB".into(), "opencode.db".into());
+    assert!(locations(CliKind::Opencode, &env).is_ok());
+}

@@ -5,6 +5,7 @@ import { mayPublish, sourceChecksPassed, coverageChecksPassed, requiredChecksPas
 import { OLD_DRAFT_ID, backupArtifactName, recoveryCandidateChecks, assertReviewedOldDraft, assertReviewedPreparedDraft, preparedRecoveryBackup, validatePreparedRecoveryBackup, assertPreparedDraft, assertRepairablePreparedDraft, assertStagedRelease, collectStageFiles, verifyStagedReleaseBytes, validationNotes, stagedValidationNotes } from './release-draft-recovery.mjs'
 import { REPORT_FILENAME, VALIDATION_POLICY } from './windows-native-validation.mjs'
 import { fetchCoverageArchive, validateFetchedCoverage } from './release-coverage-archive.mjs'
+import { releaseChannel } from './release-version.mjs'
 
 const { GITHUB_REPOSITORY: repository, GITHUB_SHA: sha, GITHUB_REF: ref, GITHUB_EVENT_NAME: event, GITHUB_TOKEN: token } = process.env
 if (!/^[-\w.]+\/[-\w.]+$/.test(repository ?? '') || !token) throw new Error('workflow repository/token required')
@@ -152,7 +153,7 @@ if (args.has('--resolve-coverage')) {
   }
   if (args.has('--notes')) writeFileSync(args.get('--notes'), repairPhase ? prepared.binding.body : expectedNotes)
   if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT,
-    `version=${packageVersion}\ntag=${tag}\nci_run=${ci.id}\nrecovery_draft=${args.has('--prepare-draft-recovery') && context.releaseExists ? OLD_DRAFT_ID : ''}\n` +
+    `version=${packageVersion}\ntag=${tag}\nchannel=${releaseChannel(packageVersion)}\nci_run=${ci.id}\nrecovery_draft=${args.has('--prepare-draft-recovery') && context.releaseExists ? OLD_DRAFT_ID : ''}\n` +
     `recovery_mode=${recoveryMode}\nrecovery_backup_id=${recoveryBackup?.id ?? ''}\nrecovery_backup_run=${recoveryBackup?.runId ?? ''}\n`)
   console.log(`${args.has('--prepare-draft-recovery') ? 'Read-only recovery candidate' : 'Release'} preflight passed for ${sha}, CI run ${ci.id}, attempt ${ci.run_attempt}, ${tag}; ${summary.counts.executed} native tests executed, ${summary.counts.ignored} original ignored, ${summary.unverifiedNames.length} unverified; native All ${summary.nativeAllStatus}`)
 }

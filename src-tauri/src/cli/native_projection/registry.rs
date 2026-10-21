@@ -248,7 +248,9 @@ impl ScopeRegistry {
         if matches!(source.target, ScopeTarget::Run { .. }) {
             return Err(safe("SESSION_IDENTITY_UNKNOWN"));
         }
-        if source.cli == CliKind::Shell {
+        // opencode 无 rename 动词。此处 source.cli 已与存储 grant 等值校验，
+        // 是权威判断；前端伪造字段只会得到 SCOPE_STALE，拿不到别名写入权。
+        if matches!(source.cli, CliKind::Opencode | CliKind::Shell) {
             return Err(safe("NATIVE_RENAME_UNSUPPORTED"));
         }
         let g = &scope.grant;

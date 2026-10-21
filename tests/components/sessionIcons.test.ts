@@ -221,6 +221,7 @@ describe('SessionIcons', () => {
   it.each([
     { name: 'Cli_ClaudeAccessible_018', cli: 'claude', label: 'Claude Code' },
     { name: 'Cli_CodexAccessible_019', cli: 'codex', label: 'Codex CLI' },
+    { name: 'Cli_OpencodeAccessible_032', cli: 'opencode', label: 'opencode' },
   ] as const)('$name', async ({ cli, label }) => {
     const wrapper = mount(CliAppIcon, { attachTo: document.body, props: { cli } })
     mounted.push(wrapper)
@@ -248,6 +249,7 @@ describe('SessionIcons', () => {
   it.each([
     { name: 'Cli_ClaudeErrorFallback_020', cli: 'claude', label: 'Claude Code', fallback: 'CC' },
     { name: 'Cli_CodexErrorFallback_021', cli: 'codex', label: 'Codex CLI', fallback: 'CX' },
+    { name: 'Cli_OpencodeErrorFallback_035', cli: 'opencode', label: 'opencode', fallback: 'OC' },
   ] as const)('$name', async ({ cli, label, fallback }) => {
     const wrapper = mount(CliAppIcon, { props: { cli } })
     mounted.push(wrapper)
@@ -326,7 +328,7 @@ describe('SessionIcons', () => {
         expect(notice).toContain('Blossom_Light.svg')
         expect(notice).not.toContain('self-owned project artwork')
       }
-      const names = directory === 'cli' ? ['claude', 'codex'] : ['starting', 'running', 'working', 'permission', 'completed', 'stopped', 'closed', 'unknown', 'needs-user', 'confirming', 'ended', 'failed', 'thinking', 'tool-executing', 'subagent', 'compacting', 'waiting-input', 'archived']
+      const names = directory === 'cli' ? ['claude', 'codex', 'opencode', 'opencode-dark'] : ['starting', 'running', 'working', 'permission', 'completed', 'stopped', 'closed', 'unknown', 'needs-user', 'confirming', 'ended', 'failed', 'thinking', 'tool-executing', 'subagent', 'compacting', 'waiting-input', 'archived']
       for (const name of names) {
         const source = readFileSync(resolve(`src/assets/icons/${directory}/${name}.svg`), 'utf8')
         const svg = new DOMParser().parseFromString(source, 'image/svg+xml').documentElement
@@ -373,6 +375,38 @@ describe('SessionIcons', () => {
         }
       }
     }
+  })
+
+  // 官方双主题资产保留相同几何与原配色，GUI 切换只显示对应的一张图。
+  it('Cli_OpencodePairedThemes_036', async () => {
+    const source = readFileSync(resolve('src/components/sessions/CliAppIcon.vue'), 'utf8')
+    const style = document.createElement('style')
+    style.dataset.testSessionIcons = ''
+    style.textContent = compileStyle({ filename: 'CliAppIcon.vue', source: source.match(/<style[^>]*>([\s\S]*?)<\/style>/)![1], id: (CliAppIcon as unknown as { __scopeId: string }).__scopeId, scoped: true }).code
+    document.head.append(style)
+    const wrapper = mount(CliAppIcon, { attachTo: document.body, props: { cli: 'opencode' } })
+    mounted.push(wrapper)
+    for (const [theme, name, colors] of [
+      ['light', 'opencode', ['#CFCECD', '#211E1E']],
+      ['dark', 'opencode-dark', ['#4B4646', '#F1ECEC']],
+    ] as const) {
+      document.documentElement.dataset.theme = theme
+      const shown = wrapper.findAll('img').filter(image => getComputedStyle(image.element).display !== 'none')
+      expect(shown).toHaveLength(1)
+      expect(shown[0].attributes('src')).toContain(`/cli/${name}.svg`)
+      expect(getComputedStyle(shown[0].element).filter).toBe('none')
+      const svg = new DOMParser().parseFromString(readFileSync(resolve(`src/assets/icons/cli/${name}.svg`), 'utf8'), 'image/svg+xml').documentElement
+      expect(svg.getAttribute('viewBox')).toBe('0 0 240 300')
+      const paths = Array.from(svg.querySelectorAll('path'))
+      expect(paths.map(path => path.getAttribute('fill'))).toEqual(colors)
+      expect(createHash('sha256').update(paths.map(path => path.getAttribute('d')).join('\n')).digest('hex')).toBe('6509feb0ebe1401aee4d187f51e7cf7a94ac19bd88377e59a0c3b6224658a20e')
+    }
+    const oldDark = wrapper.get('.cli-app-icon__image--dark').element
+    await wrapper.setProps({ cli: 'codex' })
+    oldDark.dispatchEvent(new Event('error'))
+    await nextTick()
+    expect(wrapper.find('.cli-app-icon__fallback').exists()).toBe(false)
+    expect(wrapper.findAll('img')).toHaveLength(1)
   })
 
   // Codex 按用户偏好采用官方 ChatGPT/OpenAI 花结；防止回退到终端字形或自绘图案。

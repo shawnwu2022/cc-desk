@@ -2,11 +2,11 @@
 
 [Release highlights](RELEASE_NOTES.md) · [中文更新日志](RELEASE_NOTES_CN.md)
 
-CC Desk is a desktop workspace for **Claude Code and Codex CLI** built with Tauri 2, Vue 3, xterm.js, and Rust.
+CC Desk is a desktop workspace for **Claude Code, Codex CLI and opencode** built with Tauri 2, Vue 3, xterm.js, and Rust.
 
 It keeps the real CLI in charge of the interactive session and adds the host capabilities that become awkward in a normal terminal: multi-project navigation, multiple concurrent sessions, stable run identity, recovery, bounded terminal transport, and read-only native-resource projection.
 
-> Native CLI v3 is currently code-complete through D27 on the development stack. Real Claude Code / Codex CLI Layer-C certification (D20) still requires an authorized target environment. Do not treat host CI as real-CLI certification.
+> Native CLI v3 is currently code-complete through D27 on the development stack. Real CLI Layer-C certification still requires an authorized target environment: D20 covers Claude Code / Codex CLI, and opencode — which ships in this release — has no Layer-C certification at all. Do not treat host CI as real-CLI certification.
 
 ## What CC Desk does
 
@@ -31,7 +31,7 @@ CC Desk does **not** own Provider/API-key switching or native CLI configuration 
 ## Unified workspace
 
 The three main destinations are **Workspace**, **Projects** and **Settings**. One
-project/session tree mixes Claude Code and Codex CLI sessions below each project.
+project/session tree mixes Claude Code, Codex CLI and opencode sessions below each project.
 The contextual resource drawer shows instructions, settings, MCP, skills, agents
 and plugins as structured read-only content.
 
@@ -42,18 +42,20 @@ Switching views or colors preserves running sessions and terminal scrollback.
 
 The unified workspace supports:
 
-| Capability | Claude Code | Codex CLI |
-|---|---:|---:|
-| New session | Yes | Yes |
-| Native resume picker | Yes | Yes |
-| Known session-ID resume | Yes | Yes |
-| Exact raw argv | Yes | Yes |
-| Registered project selection | Yes | Yes |
-| Independent launch configuration selection | Yes | Yes |
-| Read-only native resource projection | Yes | Yes |
-| Ordered staged input | Yes | Yes |
-| Bounded output + ACK | Yes | Yes |
-| Optional Claude observer overlay | Yes | No |
+| Capability | Claude Code | Codex CLI | opencode |
+|---|---:|---:|---:|
+| New session | Yes | Yes | Yes |
+| Native resume picker | Yes | Yes | No |
+| Known session-ID resume | Yes | Yes | Yes |
+| Exact raw argv | Yes | Yes | Yes |
+| Registered project selection | Yes | Yes | Yes |
+| Independent launch configuration selection | Yes | Yes | Yes |
+| Read-only native resource projection | Yes | Yes | History only |
+| Ordered staged input | Yes | Yes | Yes |
+| Bounded output + ACK | Yes | Yes | Yes |
+| Optional Claude observer overlay | Yes | No | No |
+
+opencode history is read directly from its local SQLite store (read-only). CLI-side picker/rename/unarchive are unsupported and their UI entries are hidden, not degraded. Creating an opencode launch configuration is a one-way upgrade for older app versions.
 
 Existing Claude history and sessions remain supported through the Legacy adapter in the same shell. New Claude/Codex sessions use the authenticated Native adapter. There is no separate Native product page or Legacy startup route, and Native operations never fall back to Legacy PTY APIs.
 

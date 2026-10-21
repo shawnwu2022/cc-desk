@@ -1,7 +1,7 @@
 # CC Desk roadmap
 
 The current product is the unified Workspace / Projects / Settings shell for real
-Claude Code and Codex CLI sessions. Provider CRUD, bundled CLI installation and an
+Claude Code, Codex CLI and opencode sessions. Provider CRUD, bundled CLI installation and an
 independent MCP client remain out of scope.
 
 ## Current milestone: source integrated, acceptance incomplete

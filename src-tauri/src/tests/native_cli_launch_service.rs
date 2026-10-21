@@ -52,6 +52,66 @@ struct Fixture {
     routes: OutputRoutes,
 }
 
+#[test]
+#[allow(non_snake_case)]
+fn Opencode_PreparationReclaimsOnlyRevokedReceipts_091() {
+    let f = Fixture::new(false);
+    let mut profile = Profile::new("opencode-preparation-budget", CliKind::Opencode);
+    profile.default_args = Override::Set(vec!["--future-option".into()]);
+    let document = f.repository.read().unwrap();
+    let document = f
+        .repository
+        .apply(
+            document.revision,
+            Patch::Create {
+                profile: profile.clone(),
+            },
+        )
+        .unwrap();
+    let service = LaunchService::new(f.repository.clone(), Some(EnvMap::new()), None);
+    let caller = service.registry().activate_window("main").unwrap();
+    let mut request = f.request.clone();
+    request.cli = CliKind::Opencode;
+    request.action = LaunchAction::New;
+    request.profile_id = profile.id.clone();
+    request.expected_profile_revision = document.profiles[&profile.id].revision;
+    for index in 0..4096 {
+        request.request_id = format!("preparation-{index}");
+        assert_eq!(
+            service
+                .prepare_opencode_session(&caller, &request)
+                .unwrap_err()
+                .code,
+            "OPENCODE_SESSION_PREPARE_UNSUPPORTED"
+        );
+    }
+    // 活跃 document 的未知/失败收据仍固定；不能靠容量回收而重发同一个创建。
+    request.request_id = "over-capacity".into();
+    assert_eq!(
+        service
+            .prepare_opencode_session(&caller, &request)
+            .unwrap_err()
+            .code,
+        "OPENCODE_SESSION_PREPARE_UNAVAILABLE_BEFORE_CREATE"
+    );
+    service.registry().revoke_window(&caller).unwrap();
+    let replacement = service.registry().activate_window("main").unwrap();
+    assert_eq!(
+        service
+            .prepare_opencode_session(&replacement, &request)
+            .unwrap_err()
+            .code,
+        "OPENCODE_SESSION_PREPARE_UNSUPPORTED"
+    );
+    assert_eq!(
+        service
+            .prepare_opencode_session(&caller, &request)
+            .unwrap_err()
+            .code,
+        "FORBIDDEN"
+    );
+}
+
 fn metadata_fixture(
     hang: bool,
 ) -> (

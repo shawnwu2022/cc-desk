@@ -4,7 +4,15 @@
 
 ## Product boundary
 
-CC Desk is a desktop workspace for **Claude Code and Codex CLI**. The native path runs the real CLI process in an owned PTY and keeps the CLI responsible for its own interaction model, commands, permissions, authentication, MCP/runtime behavior, skills/agents/plugins, editors, and future CLI features.
+CC Desk is a desktop workspace for **Claude Code, Codex CLI and opencode**. The native path runs the real CLI process in an owned PTY and keeps the CLI responsible for its own interaction model, commands, permissions, authentication, MCP/runtime behavior, skills/agents/plugins, editors, and future CLI features.
+
+opencode's history is not per-project files but a selected SQLite store under the OpenCode data root, or the exact file named by `OPENCODE_DB`. Its projection runs through a dedicated read-only reader (`cli/native_projection/opencode_db.rs`), not the file-walking catalog path; attribution matches `project.worktree` (named projects) or `session.directory` (the drifting `global` bucket) by normalized spelling, and sessions with a non-null `parent_id` (subagents) are excluded. The CLI has no picker/rename/archive verbs, so those capabilities are explicitly unsupported (`UNSUPPORTED_ACTION` / `NATIVE_RENAME_UNSUPPORTED`) and never silently degraded. Known inherited defect: `session.directory` is never updated when a project directory is renamed (upstream anomalyco/opencode#23248, verified), so sessions recorded under the old path stay invisible after a rename; Desk neither moves nor guesses. Resume (`-s <id>`) ignores the launch cwd and re-enters the session's recorded directory, so `effective_cwd` stays Unknown. Layer C (real logged-in opencode four-cell: create/resume/stop/restart-continue) remains BLOCKED like the other CLIs.
+
+The SQLite reader rejects linked or non-regular selected database, `-wal`, and `-shm` entries. On Windows, where SQLite's VFS can follow a sidecar link, Desk opens the database and WAL through the retained root capability, copies them into a private temporary directory, and pins the private db/WAL/SHM files while SQLite reads only that copy. A shared source lock preserves the exclusive-writer `SOURCE_BUSY` boundary; a changed file fails the snapshot. The copy is capped at 1 GiB and may return `SOURCE_TOO_LARGE`. On Unix, SQLite's VFS uses `NOFOLLOW` for these files; before opening, Desk resolves only the already authorized root directory and rechecks its held identity so a symlink in an authorized ancestor (such as macOS `/var`) does not block normal reads. The database and both sidecars remain subject to the no-link checks, and root path replacement still fails closed. The `global` project ID is excluded from named-project worktree matching; its sessions are attributed only by their own directory.
+
+For OpenCode history, a nonempty `OPENCODE_DB` selects that exact absolute file or a path relative to the OpenCode data root. `:memory:` has no file projection. Without an override, a profile scope probes the selected CLI using its official read-only `db path` command with the frozen profile environment, a bounded owned helper, and an admitted project cwd. A structured run probes the same exact frozen launch environment before creating its PTY and binds that selected database to run-source provenance, so later restart checks retain the original source. Only an `opencode.db` or `opencode-<channel>.db` file inside the already selected data root is accepted. The explicit `OPENCODE_DISABLE_CHANNEL_DB=1|true` override proves the default filename without a probe. Unknown versions, failed probes, unexpected output, missing first-run data roots, and unproven run scopes report `SCOPE_UNKNOWN` for optional history or restart; the normal CLI launch remains available. Source keys include the selected filename, so two databases in one directory cannot share a history scope.
+
+For a structured new opencode tab, the authenticated backend first uses the selected frozen profile and its environment to start a short-lived, password-protected loopback `opencode serve`, calls the official `POST /session` once, checks the returned ID and directory, then reaps the helper tree. When preparation succeeds, the tab starts the real TUI through `-s <id>`; its history row can then supply the current title and survive restart. An authenticated OSC title change or run exit refreshes that exact admitted project's history. A lost create response is not replayed under the same request ID. Preparation rejects nonempty extra/default arguments because their effect on the TUI's project directory cannot be inferred during API preparation. That explicit unsupported outcome, or the fixed `OPENCODE_SESSION_PREPARE_UNAVAILABLE_BEFORE_CREATE` code proving no creation request was sent, permits a native New launch with the original default/extra argv and unknown identity. Generic failures, unknown outcomes, validation and authority failures never permit this fallback. Health probes have a short read timeout; creation has a separate bounded timeout and never retries or follows redirects. Pending receipts are retained, active-document outcomes remain pinned, and only settled receipts from revoked documents can be reclaimed. Raw launches keep their explicit argv semantics and do not claim this identity.
 
 CC Desk adds the host capabilities that a normal terminal does not provide well:
 
@@ -209,8 +217,8 @@ spellings: junction/short-name aliases are not adapted. The backend holds the
 audited files and their parent directories against writing/deletion, rechecks
 paths and actual file identities after opening, and retains a private fixed-code
 preload with the owned snapshot until run retirement. It does not change global
-configuration or persistent permissions. Windows builds declare the existing
-locked `tempfile` dependency for this production artifact lifetime.
+configuration or persistent permissions. The existing locked `tempfile`
+dependency also owns isolated capability-probe configuration roots.
 
 Nonempty user `NODE_OPTIONS` are deliberately left untouched: Node permission or
 loader options can fail before CJS executes. Unknown/custom wrappers, different
@@ -224,6 +232,25 @@ Codex discovers disk configuration hooks separately in each configuration layer,
 so the added session-flags handlers coexist with user-file handlers. A later user
 `-c` override in the same session-flags layer retains its normal precedence.
 
+Native Node interpreter launches do not receive Codex flags before their script
+argument. Native identity enhancement is separately admitted using verified
+executable bytes and an isolated `app-server` `hooks/list` exchange, never a model
+turn or a user configuration write. Currently only the audited Windows x64
+0.163.0 native SHA256 is admitted for that probe. Unknown/native replacement
+bytes, other platforms, custom wrappers and unsupported metadata disable only
+identity enhancement; the original frozen new/resume invocation is used once.
+This conservative boundary avoids executing an unknown wrapper as a capability
+probe, which could ignore metadata arguments or leave unowned descendants.
+The probe inherits only launch-essential environment entries, uses temporary
+home/config/cwd, caps stdout at 64 KiB/128 lines, polls the pipe without a reader
+thread for at most four seconds and reaps its direct child. All three trusted,
+enabled session-flags command handlers must be present. Unknown extra fields are
+ignored; unknown required trust/schema values are unsupported. This is optional
+launch preparation, not availability preflight. Extending audited probe targets
+requires real process-lifecycle and hook evidence for the new bytes/platform;
+unknown versions remain usable with reduced identity features. OSC status has
+independent admission and remains available.
+
 The bounded reporter forwards only a main-thread UUID and allowlisted
 SessionStart/UserPromptSubmit/Stop type. It never publishes prompt/response bodies
 or treats Stop as activity completion. Windows hook commands preserve raw UTF-8
@@ -232,6 +259,27 @@ Only admitted startup/input metadata can establish an unknown identity; an old
 thread's asynchronous prompt/stop cannot replace a newer startup identity.
 Unknown, retired, replaced and closed attempts reject late events. The identity
 channel does not enable Claude activity observation for Codex.
+
+The Desk-owned Codex reporter emits fixed-width boot-monotonic replay IDs with a
+random suffix. Backend and tab keep at most 1024 recent IDs plus an eviction
+floor: new IDs continue beyond 1024; duplicates and IDs at/below the floor are
+rejected. Late IDs inside the retained window remain acceptable. These IDs are
+not a CLI turn sequence and do not establish event causality. Legacy opaque
+Codex IDs retain the conservative lifetime cap, while Claude replay and occurrence
+notice contracts remain unchanged. Run/generation/document replacement discards
+the corresponding window and rejects the old capability independently.
+
+Codex TUI activity has a separate passive source: its native OSC 7501 program
+status (`working`, `blocked`, `idle`, `clear`). The 0.163.0 TUI emits it on any
+TTY; Desk does not require iTerm2-only OSC 21337 or alter terminal environment,
+launch arguments, hooks or configuration. The existing exact-run contiguous
+output stream and xterm parser deliver only allowlisted status enums to that
+attempt. Background terminals keep observing; parser handoff/clear, output
+degradation, unknown/end/restart/disposal invalidate the hint. Missing and unknown
+payloads remain unknown. `blocked` is generic needs-action, and `idle` never proves
+completion. These untrusted terminal snapshots have no thread/turn ID and never
+authorize input, processes, history identity, permission decisions, unread replies
+or taskbar receipts. See [status semantics](session-status-semantics.md).
 
 An exact observed Codex ID joins its opened owner to the same authorized history
 record, retaining one row across Refresh. Startup/input/stop invalidate only the
@@ -270,7 +318,7 @@ Evidence is intentionally split:
 
 - **Layer A** — pure/frontend/unit contracts.
 - **Layer B** — host/runtime integration on CI targets.
-- **Layer C** — real installed Claude Code / Codex CLI behavior using an authorized test account.
+- **Layer C** — real installed CLI behavior using an authorized test account. D20 scopes the four-cell matrix to Claude Code / Codex CLI; opencode has no Layer-C certification yet.
 
 Layer A/B cannot be promoted to Layer C.
 

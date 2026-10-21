@@ -49,6 +49,7 @@ const { t } = useI18n()
 const store = useUnifiedSessionsStore()
 const projects = useProjectsStateStore()
 const searchQuery = ref('')
+const activeSessionsOnly = ref(false)
 const panel = ref<HTMLElement | null>(null)
 const searchInput = ref<InstanceType<typeof AppInput> | null>(null)
 const quickSwitch = ref(false)
@@ -138,17 +139,29 @@ const allGroups = computed<UnifiedProjectGroup[]>(() => {
   }
   return groups.sort(compareProjectGroups)
 })
+const activeGroupsCache = new WeakMap<UnifiedProjectGroup, UnifiedProjectGroup>()
 const displayedGroups = computed(() => {
   const query = searchQuery.value.trim().toLowerCase()
-  if (!query) return allGroups.value
-  return allGroups.value.flatMap(group => {
+  // opened 由 adapter 的实际 tab 生命周期投影；空闲或已结束但未关闭仍属于打开会话。
+  const groups = activeSessionsOnly.value ? allGroups.value.flatMap(group => {
+    const sessions = group.sessions.filter(session => session.opened === true)
+    if (!sessions.length) return []
+    const cached = activeGroupsCache.get(group)
+    if (cached && cached.sessions.length === sessions.length
+      && sessions.every((row, index) => row === cached.sessions[index])) return [cached]
+    const output = { ...group, sessions }
+    activeGroupsCache.set(group, output)
+    return [output]
+  }) : allGroups.value
+  if (!query) return groups
+  return groups.flatMap(group => {
     if (matchProjectQuery(group.name, projectBasename(group.projectPath), group.projectPath, query)) return [group]
     const sessions = group.sessions.filter(session => session.title.toLowerCase().includes(query) || session.renameState === 'editing' || session.renameState === 'saving')
     return sessions.length ? [{ ...group, sessions }] : []
   })
 })
 function newSessionRequest(request: NewSessionRequest) {
-  if (request.intent === 'claude' || request.intent === 'codex') {
+  if (request.intent === 'claude' || request.intent === 'codex' || request.intent === 'opencode') {
     expandedKeys.value = new Set([...expandedKeys.value, request.projectKey])
     // 目标 CLI 组折叠时新建行不可见，取消/重试入口也随之隐藏，必须一并展开。
     collapsedCliGroups.value = new Set([...collapsedCliGroups.value].filter(key => key !== `${request.projectKey}::${request.intent}`))
@@ -235,6 +248,10 @@ function onKeydown(event: KeyboardEvent) {
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 6 12 12M18 6 6 18" /></svg>
       </IconButton>
     </div>
+    <div class="session-filters">
+      <AppButton data-active-session-filter variant="ghost" size="compact" :aria-pressed="activeSessionsOnly"
+        :disabled="!active" @click="activeSessionsOnly = !activeSessionsOnly">{{ t('activeSessionsOnly') }}</AppButton>
+    </div>
     <div class="panel-content" role="tree" :aria-label="t('sessions')">
       <div v-if="stateError" class="state-hint">
         <span>{{ t('projectsLoadFailed') }}</span>
@@ -251,7 +268,7 @@ function onKeydown(event: KeyboardEvent) {
           @menu-action="(id, action) => emit('menu-action', id, action)"
           @rename-commit="(id, title) => emit('rename-commit', id, title)" @rename-cancel="emit('rename-cancel', $event)"
           @confirmation-request="emit('confirmation-request', $event)" />
-        <div v-if="displayedGroups.length === 0 && !loading" class="empty-hint">{{ t(searching ? 'noSessionsFound' : 'noProjectsYet') }}</div>
+        <div v-if="displayedGroups.length === 0 && !loading" class="empty-hint" role="status">{{ t(searching ? 'noSessionsFound' : activeSessionsOnly ? 'noActiveSessions' : 'noProjectsYet') }}</div>
         <div v-if="loading && displayedGroups.length === 0" class="loading-indicator">{{ t('loading') }}</div>
       </template>
     </div>
@@ -266,6 +283,8 @@ function onKeydown(event: KeyboardEvent) {
 .search-box { display: flex; align-items: center; gap: 4px; padding: 8px 12px; }
 .search-box :deep(.ui-field) { flex: 1; min-width: 0; }
 .search-box :deep(.search-input) { width: 100%; }
+.session-filters { display: flex; padding: 0 12px 8px; }
+.session-filters [aria-pressed="true"] { color: var(--text-primary); border-color: var(--selected-border); background: var(--selected-bg); }
 .panel-content { flex: 1; overflow-y: auto; padding: 0 8px; min-height: 0; min-width: 0; }
 .empty-hint, .loading-indicator { text-align: center; padding: 12px 8px; font-size: 12px; color: var(--text-secondary); }
 .state-hint { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px; color: var(--text-secondary); }

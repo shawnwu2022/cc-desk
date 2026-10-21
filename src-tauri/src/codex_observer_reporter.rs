@@ -31,7 +31,10 @@ fn report() -> Result<(), ()> {
         ("x-cc-desk-run", run),
         ("x-cc-desk-generation", generation),
         ("x-cc-desk-capability", capability),
-        ("x-cc-desk-event", uuid::Uuid::new_v4().simple().to_string()),
+        (
+            "x-cc-desk-event",
+            crate::codex_observer::event_id().map_err(|_| ())?,
+        ),
         ("x-cc-desk-observer-source", "codex-hook".into()),
     ] {
         headers.insert(

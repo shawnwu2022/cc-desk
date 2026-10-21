@@ -112,7 +112,7 @@ describe('New session draft', () => {
     const profiles = useCliProfilesStore(); profiles.profiles = [config('cx'), config('cc', 'claude')]; profiles.status = 'loaded'
     io.availability.mockImplementation(async (id, revision) => ({ profileId: id, profileRevision: revision, cli: id === 'cx' ? 'codex' : 'claude', state: id === 'cx' ? 'unavailable' : 'available-unverified', hostStatus: 'available', certified: false, ...(id === 'cx' ? { issue: { code: 'PROGRAM_UNAVAILABLE', retryable: false } } : {}) }))
     const draft = useNewSessionDraftStore(); await draft.refreshAvailability()
-    expect(draft.cliAvailability).toEqual({ claude: 'unknown', codex: 'unavailable' })
+    expect(draft.cliAvailability).toEqual({ claude: 'unknown', codex: 'unavailable', opencode: 'unknown' })
     expect(localStorage.getItem('cc-desk-launch-preferences-v1')).toBeNull()
     profiles.profiles[0].revision = '2'
     expect(draft.cliAvailability.codex).toBe('unknown')
@@ -148,7 +148,7 @@ describe('New session draft', () => {
     await useProjectsStateStore().load()
     const draft = useNewSessionDraftStore(); await draft.recordSuccess('/repo', 'codex', 'success')
     expect(io.setPreference).toHaveBeenCalledOnce()
-    expect(persisted.launchPreferences?.['/repo']).toEqual({ lastCli: 'codex', claudeLaunchConfigId: 'existing-claude', codexLaunchConfigId: 'success' })
+    expect(persisted.launchPreferences?.['/repo']).toEqual({ lastCli: 'codex', claudeLaunchConfigId: 'existing-claude', codexLaunchConfigId: 'success', opencodeLaunchConfigId: null })
     expect(useProjectsStateStore().launchPreferences.get('/repo')?.codexLaunchConfigId).toBe('success')
     expect(localStorage.getItem('cc-desk-launch-preferences-v1')).toBeNull()
   })
@@ -169,7 +169,7 @@ describe('New session draft', () => {
     releaseRecovery(structuredClone(persisted)); const settled = await results
     expect(writesBeforeRecovery).toBe(1)
     expect(settled.map(result => result.status)).toEqual(['rejected', 'fulfilled'])
-    expect(persisted.launchPreferences?.['/repo']).toEqual({ lastCli: 'codex', claudeLaunchConfigId: 'cc', codexLaunchConfigId: 'cx' })
+    expect(persisted.launchPreferences?.['/repo']).toEqual({ lastCli: 'codex', claudeLaunchConfigId: 'cc', codexLaunchConfigId: 'cx', opencodeLaunchConfigId: null })
     expect(io.setPreference).toHaveBeenCalledTimes(2)
   })
   it('Draft_UnverifiedRecoveryBlocksQueuedPreferenceWrite_012', async () => {

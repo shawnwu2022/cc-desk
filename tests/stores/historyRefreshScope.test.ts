@@ -11,7 +11,7 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { useUnifiedWorkspaceRuntime } from '@/composables/useUnifiedWorkspaceRuntime'
 import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
 import { useNativeHistoryStore } from '@/stores/nativeHistory'
-import { useNativeTabsStore } from '@/stores/nativeTabs'
+import { captureNativeAttempt, useNativeTabsStore } from '@/stores/nativeTabs'
 import { useProjectsStateStore } from '@/stores/projectsState'
 import { createNativeCliAdapter } from '@/session/adapters/nativeCliAdapter'
 
@@ -54,6 +54,33 @@ beforeEach(() => {
   })), hasMore: false })
 })
 afterEach(() => { wrapper?.unmount(); wrapper = undefined })
+
+// 独立终端状态必须经 owner 监听刷新所在项目，不能依赖输入输出时间或历史补读。
+it('Codex_ProgramStatusRefreshesOnlyOwnedProject_077', async () => {
+  wrapper = mount(defineComponent({ setup() { useUnifiedWorkspaceRuntime(ref(null)); return () => null } }))
+  await flushPromises()
+  const tabs = useNativeTabsStore(), catalog = useUnifiedSessionsStore()
+  const owners = [0, 1].map(i => {
+    const tab = tabs.create({ cli: 'codex', projectId: `p${i}`, projectPath: `/p${i}`, profileId: 'cx', profileRevision: '1', action: { kind: 'new' } })
+    tabs.applyLaunchStatus(tab.tabId, { instanceId: 'host', requestId: tab.requestId, run: { runId: tab.runId, generation: tab.generation }, phase: 'running', revision: '1', failure: null })
+    return tab
+  })
+  await flushPromises()
+  const refresh = vi.spyOn(catalog, 'refresh')
+  io.read.mockClear()
+  tabs.applyCodexProgramStatus(owners[0].tabId, captureNativeAttempt(owners[0]), 'blocked')
+  await flushPromises()
+  expect(catalog.sessions.find(row => row.adapterSessionId === owners[0].tabId)).toMatchObject({ activityState: 'waiting', attentionState: 'needs-user' })
+  expect(catalog.sessions.find(row => row.adapterSessionId === owners[1].tabId)).toMatchObject({ activityState: 'unknown', attentionState: 'none' })
+  expect(refresh.mock.calls.map(([path]) => path)).toEqual(['/p0'])
+  expect(io.read).not.toHaveBeenCalled()
+  const published = catalog.sessions
+  refresh.mockClear()
+  tabs.applyCodexProgramStatus(owners[0].tabId, captureNativeAttempt(owners[0]), 'blocked')
+  await flushPromises()
+  expect(refresh).not.toHaveBeenCalled()
+  expect(catalog.sessions).toBe(published)
+})
 
 // 单项目读取只允许刷新该项目：loading/scope 等读取进度不得把其余项目反复入队。
 it('History_SingleProjectReadRefreshesOnlyThatProject_067', async () => {

@@ -292,6 +292,26 @@ describe('D12 authenticated projection API', () => {
     const q = request(); q.requestEpoch = r.requestEpoch
     expect((await createProjectionClient({ instanceId: 'instance', invoke: async () => r }).read(q)).state).toBe('unavailable')
   })
+
+  // 后端 CliKind 已扩至 opencode（serde "opencode"）：前端 SourceRef 白名单必须
+  // 接受，否则后端成功的投影整体被判 INVALID_PROJECTION；白名单语义不变，
+  // 未知 CLI 一律在请求校验阶段拒绝且不触达桥。
+  const opencodeCli = 'opencode' as unknown as SourceRef['cli']
+  it('NativeProjection_AcceptsOpencodeSourceRef_01', async () => {
+    const opencodeSource = { ...source, cli: opencodeCli }
+    const client = createProjectionClient({ instanceId: 'instance', invoke: async () => ({ ...response(), source: structuredClone(opencodeSource) }) })
+    const result = await client.read({ ...request(), source: structuredClone(opencodeSource) })
+    expect(result.state).toBe('ready')
+    expect(result.source).toEqual(opencodeSource)
+  })
+  it('NativeProjection_RejectsUnknownCli_02', async () => {
+    const futureCli = 'futurecli' as unknown as SourceRef['cli']
+    const invoke = vi.fn(async () => response())
+    await expect(createProjectionClient({ instanceId: 'instance', invoke })
+      .read({ ...request(), source: { ...source, cli: futureCli } }))
+      .rejects.toMatchObject({ code: 'INVALID_PROJECTION' })
+    expect(invoke).not.toHaveBeenCalled()
+  })
 })
 
 const unarchive = () => ({ requestId: 'request-1', cli: 'codex' as const, profileId: 'p', expectedProfileRevision: '1', projectPath: 'C:\\repo', nativeSessionId: 'session-9' })

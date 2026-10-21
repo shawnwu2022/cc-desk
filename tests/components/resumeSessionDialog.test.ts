@@ -407,3 +407,11 @@ it.each(['configuration', 'navigation', 'replacement'] as const)('Resume_TargetR
   else expect(catalog.actionFeedback).toBeNull()
   if (change === 'replacement') expect(catalog.resumeDialog?.mode).toBe('history')
 })
+
+// 原生 picker 只对 claude/codex 开放：工具选择不含 opencode，避免准备出后端必拒的 picker。
+it('Resume_PickerHidesUnsupportedCli_021', async () => {
+  const w = mount(App, { attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: { SettingsView: true } } }); wrappers.push(w); await flushPromises()
+  useShellStore().requestWorkspaceAction({ kind: 'restore-session', project: { projectKey: '/repo', projectPath: '/repo' }, cli: 'codex', mode: 'resume-picker' }); await flushPromises()
+  const select = document.querySelector('[data-resume-cli]') as HTMLSelectElement
+  expect([...select.options].map(option => option.value)).toEqual(['claude', 'codex'])
+})

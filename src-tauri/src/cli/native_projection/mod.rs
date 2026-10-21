@@ -2,6 +2,7 @@
 pub(crate) mod cache;
 pub(crate) mod catalog;
 pub(crate) mod diagnostics;
+pub(crate) mod opencode_db;
 pub(crate) mod registry;
 pub(crate) mod scoped_fs;
 pub(crate) mod selection;

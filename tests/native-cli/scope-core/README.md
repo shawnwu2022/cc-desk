@@ -12,3 +12,7 @@
 官方 SDK bundle 由同一准备脚本生成，构建脚本仅复制这些字节到本 harness 的生成目录，满足生产 `include_bytes!` 的 manifest 相对路径。其测试调用真实 Node 与官方 SDK，只使用临时夹具。生成目录不进入版本控制。
 
 三平台矩阵仍分别执行完整测试及严格 all-target Clippy。本地 Windows 成功不能代替 Linux/macOS CI 或安装包 WebView/真实忙碌 CLI 验收。
+
+# OpenCode history coverage
+
+The harness compiles the production `native_projection/opencode_db.rs` module and runs its SQLite history tests alongside the existing scoped reader tests. Its `rusqlite` dependency uses the same bundled SQLite version and feature as the application. Removing the module from this harness must fail the cross-platform compile gate rather than silently dropping OpenCode history coverage.

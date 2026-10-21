@@ -65,6 +65,52 @@ impl Fixture {
         }
     }
 }
+
+#[test]
+#[allow(non_snake_case)]
+fn Opencode_ProfileScopeBindsExactDatabaseFilename_025() {
+    let f = Fixture::new();
+    let project_path = f._temp.path().join("project");
+    fs::create_dir(&project_path).unwrap();
+    let project = crate::cli::workspace::register_project(&f.repo, &project_path).unwrap();
+    let data = f._temp.path().join("data");
+    fs::create_dir(&data).unwrap();
+    let mut keys = Vec::new();
+    for (id, filename) in [("one", "one.db"), ("two", "two.db")] {
+        let mut profile = Profile::new(id, CliKind::Opencode);
+        profile.env.insert(
+            "XDG_DATA_HOME".into(),
+            Override::Set(EnvValue::Literal {
+                value: data.to_string_lossy().into(),
+                non_secret: true,
+            }),
+        );
+        profile.env.insert(
+            "OPENCODE_DB".into(),
+            Override::Set(EnvValue::Literal {
+                value: data.join(filename).to_string_lossy().into(),
+                non_secret: true,
+            }),
+        );
+        let document = f
+            .repo
+            .apply(f.repo.read().unwrap().revision, Patch::Create { profile })
+            .unwrap();
+        let source = f
+            .service
+            .scope(
+                &f.caller,
+                &ScopeTarget::Profile {
+                    profile_id: id.into(),
+                    expected_profile_revision: document.profiles[id].revision,
+                    project_ids: vec![project.project_id.clone()],
+                },
+            )
+            .unwrap();
+        keys.push(source.source_root_key);
+    }
+    assert_ne!(keys[0], keys[1]);
+}
 fn req(source: SourceRef) -> ReadRequest {
     ReadRequest {
         source,
@@ -513,4 +559,40 @@ fn D12_Production_RunSnapshotSurvivesProfileDeleteButNotDocumentRevoke_006() {
         let _ = r.process.pty.terminate_root();
         r.process.pty.wait().unwrap();
     }
+}
+
+// opencode 无 rename 动词：必须在 scope 准入与任何 spawn 之前拒绝（spec §2）。
+// scope_id 故意编造：拿到 NATIVE_RENAME_UNSUPPORTED 而非 SCOPE_UNKNOWN，
+// 证明拒绝发生在 authorize_rename 之前，而非准入失败的附带结果。
+#[test]
+#[allow(non_snake_case)]
+fn Opencode_RenameRejectedBeforeScopeAdmission_01() {
+    use crate::cli::native_projection::wire::{ScopeTarget, SourceBasis, SourceRef};
+    use crate::cli::types::{CliKind, WireU64};
+    let f = Fixture::new();
+    let source = SourceRef {
+        scope_id: "fixture-scope".into(),
+        instance_id: "fixture-instance".into(),
+        cli: CliKind::Opencode,
+        source_root_key: "fixture-root-key".into(),
+        identity_epoch: WireU64::parse("1").unwrap(),
+        profile_id: "fixture-profile".into(),
+        profile_revision: WireU64::parse("1").unwrap(),
+        target: ScopeTarget::Profile {
+            profile_id: "fixture-profile".into(),
+            expected_profile_revision: WireU64::parse("1").unwrap(),
+            project_ids: vec![],
+        },
+        basis: SourceBasis::ConfiguredProfile,
+    };
+    let request = crate::cli::native_rename::RenameRequest {
+        operation_id: "opencode-rename".into(),
+        source,
+        session_key: "fixture-key".into(),
+        title: "fixture-title".into(),
+    };
+    assert_eq!(
+        f.service.rename(&f.caller, request).err().unwrap().code,
+        "NATIVE_RENAME_UNSUPPORTED"
+    );
 }

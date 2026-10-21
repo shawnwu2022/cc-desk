@@ -3,11 +3,9 @@
 //! Windows 上 codex 的 Ctrl+V 文本回退于 0.163.0 加入：chatwidget/interaction.rs
 //! 对纯 Ctrl+V 构造 `PasteImage { text_fallback }`，无图时回退读剪贴板文本；
 //! 0.162.x 的 `paste_image` 只处理图片，纯文本按键被吞。CC Desk 转发 `\x16`
-//! 前必须确认该能力，否则用户文本无法粘贴。结果按可执行路径缓存进程生命周期。
+//! 前必须确认该能力，否则用户文本无法粘贴。同路径升降级后新运行必须重新探测。
 
-use std::collections::HashMap;
 use std::io::Read;
-use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use super::profile_service::authorize_profile_window;
@@ -82,20 +80,8 @@ pub(crate) fn native_paste_support(
 const MIN_TEXT_FALLBACK_VERSION: (u64, u64, u64) = (0, 163, 0);
 
 fn probe_program_cached(program: &str) -> bool {
-    static CACHE: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    let cached = match cache.lock() {
-        Ok(guard) => guard.get(program).copied(),
-        Err(_) => None,
-    };
-    if let Some(supported) = cached {
-        return supported;
-    }
-    let supported = run_version_probe(program).unwrap_or(false);
-    if let Ok(mut guard) = cache.lock() {
-        guard.insert(program.to_owned(), supported);
-    }
-    supported
+    // 路径不代表二进制版本；同路径升降级后必须重新探测。
+    run_version_probe(program).unwrap_or(false)
 }
 
 fn run_version_probe(program: &str) -> Option<bool> {
@@ -148,7 +134,7 @@ fn run_version_probe(program: &str) -> Option<bool> {
         .then(|| parse_text_fallback_support(&String::from_utf8_lossy(&output)))
 }
 
-/// 探测期限：只发生一次（结果按路径缓存），失败即永久走 Desk 剪贴板路径。
+/// 每次启动独立探测；失败仅令本次运行回退 Desk 文本路径。
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// 输出必须携带 `codex-cli` 标识 token 才接受版本；裸 semver（如启动器 npx --version
@@ -180,6 +166,20 @@ fn parse_codex_version(version_output: &str) -> Option<(u64, u64, u64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    #[allow(non_snake_case)]
+    fn CodexCompatibility_PasteProbeSeesSamePathReplacement_074() {
+        let temp = tempfile::tempdir().unwrap();
+        let program = temp.path().join("codex.cmd");
+        std::fs::write(&program, "@echo codex-cli 0.163.0\r\n").unwrap();
+        assert!(probe_program_cached(program.to_str().unwrap()));
+        std::fs::write(&program, "@echo codex-cli 0.162.0\r\n").unwrap();
+        assert!(!probe_program_cached(program.to_str().unwrap()));
+        std::fs::write(&program, "@echo codex-cli 0.164.0\r\n").unwrap();
+        assert!(probe_program_cached(program.to_str().unwrap()));
+    }
 
     #[test]
     fn parses_exact_minimum_version() {

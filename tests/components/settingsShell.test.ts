@@ -324,7 +324,19 @@ it('Settings_CliSupportIconTogglesPersist_020', async () => {
   expect(support.isEnabled('codex')).toBe(true)
   expect(wrapper.find('[data-cli-support=codex]').attributes('aria-pressed')).toBe('true')
   expect(wrapper.find('[data-cli-support=codex]').classes()).not.toContain('cli-support-toggle--off')
-  expect(JSON.parse(localStorage.getItem('cc-desk-cli-support-v1')!)).toEqual({ claude: true, codex: true })
+  expect(JSON.parse(localStorage.getItem('cc-desk-cli-support-v1')!)).toEqual({ claude: true, codex: true, opencode: true })
   await wrapper.find('[data-cli-support=codex]').trigger('click'); await flushPromises()
   expect(support.isEnabled('codex')).toBe(false)
+})
+
+// opencode 开关与既有两键同排；停用持久化只翻转自身键。
+it('Settings_OpencodeSupportToggle_021', async () => {
+  const wrapper = render()
+  await flushPromises()
+  const opencode = wrapper.find('[data-cli-support=opencode]')
+  expect(opencode.attributes('aria-pressed')).toBe('true')
+  expect(opencode.find('.cli-app-icon__image').attributes('src')).toContain('/cli/opencode.svg')
+  expect(opencode.find('.cli-app-icon').attributes('aria-hidden')).toBe('true')
+  await opencode.trigger('click'); await flushPromises()
+  expect(JSON.parse(localStorage.getItem('cc-desk-cli-support-v1')!)).toEqual({ claude: true, codex: false, opencode: false })
 })

@@ -81,7 +81,7 @@ pub(crate) async fn cli_discover_programs(
     .map_err(|_| error("DISCOVERY_UNAVAILABLE"))?
 }
 
-// 运行时能力查询：codex Ctrl+V 是否原生回退读文本。探测按 program 缓存。
+// 运行时能力查询：每次启动独立确认 codex Ctrl+V 文本回退，不缓存程序路径。
 #[tauri::command]
 pub(crate) async fn cli_codex_native_paste_support(
     window: WebviewWindow,
@@ -109,6 +109,15 @@ pub(crate) async fn cli_start(
     runtime: State<'_, Arc<NativeRuntime>>,
 ) -> Result<LaunchStatus, SafeError> {
     runtime.start(webview, request).await
+}
+
+#[tauri::command]
+pub(crate) async fn cli_prepare_opencode_session(
+    webview: Webview,
+    request: Request<'_>,
+    runtime: State<'_, Arc<NativeRuntime>>,
+) -> Result<String, SafeError> {
+    runtime.prepare_opencode_session(webview, request).await
 }
 
 #[tauri::command]

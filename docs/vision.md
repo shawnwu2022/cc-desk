@@ -2,11 +2,11 @@
 
 ## One-line vision
 
-A native desktop workspace for **Claude Code and Codex CLI** that makes multi-project and multi-session work manageable without replacing the terminal-native experience.
+A native desktop workspace for **Claude Code, Codex CLI and opencode** that makes multi-project and multi-session work manageable without replacing the terminal-native experience.
 
 ## Who it is for
 
-Developers who already rely on Claude Code, Codex CLI, or both and need several sessions running in parallel across multiple projects.
+Developers who already rely on Claude Code, Codex CLI, opencode, or any combination of them and need several sessions running in parallel across multiple projects.
 
 ## What becomes easier
 
@@ -20,7 +20,7 @@ Developers who already rely on Claude Code, Codex CLI, or both and need several 
 
 | System | Responsibility |
 |---|---|
-| Claude Code / Codex CLI | conversation, commands, permissions, authentication, MCP/runtime behavior, extensions, editors |
+| Claude Code / Codex CLI / opencode | conversation, commands, permissions, authentication, MCP/runtime behavior, extensions, editors |
 | cc-switch or other external config tools | Provider/API-key/configuration switching when the user chooses to use them |
 | CC Desk | desktop projects, tabs, owned PTYs, transport, recovery, scoped read projections, optional observer metadata |
 

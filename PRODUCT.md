@@ -10,7 +10,7 @@ Primary design target: Windows. macOS and Linux must remain functionally correct
 
 ## Users
 
-CC Desk is for developers who use **Claude Code and/or Codex CLI** heavily and need multiple projects or sessions visible at the same time.
+CC Desk is for developers who use **Claude Code, Codex CLI and/or opencode** heavily and need multiple projects or sessions visible at the same time.
 
 The target user already understands terminal-native workflows. CC Desk should reduce coordination overhead without replacing the CLI interaction model.
 
@@ -20,7 +20,7 @@ CC Desk is a native multi-project, multi-session host for real developer CLIs.
 
 Success means a user can:
 
-- keep several Claude/Codex sessions alive concurrently;
+- keep several Claude/Codex/opencode sessions alive concurrently;
 - switch project/session rows without losing terminal state;
 - start, resume, recover, stop, and explicitly restart an owned native run;
 - inspect useful native resources without giving the frontend arbitrary filesystem authority;
@@ -28,9 +28,9 @@ Success means a user can:
 
 ## Architecture direction
 
-There is one application shell: Workspace, Projects and Settings. The project/session tree mixes Claude Code and Codex CLI sessions and is the only tab system. Resources are six structured read-only context views, not global navigation.
+There is one application shell: Workspace, Projects and Settings. The project/session tree mixes Claude Code, Codex CLI and opencode sessions and is the only tab system. Resources are six structured read-only context views, not global navigation.
 
-Two runtime adapters share that shell: Legacy Claude preserves existing sessions/history, while Native CLI v3 is the authenticated forward path for all new Claude/Codex sessions. The old product pages and compatibility startup routing are retired.
+Two runtime adapters share that shell: Legacy Claude preserves existing sessions/history, while Native CLI v3 is the authenticated forward path for all new Claude/Codex/opencode sessions. The old product pages and compatibility startup routing are retired.
 
 The native workspace owns host mechanics only:
 
@@ -60,7 +60,7 @@ The CLI remains the capability owner.
 
 - Provider/API-key switching;
 - native CLI configuration mutation;
-- installation or replacement of Claude Code / Codex CLI binaries;
+- installation or replacement of Claude Code / Codex CLI / opencode binaries;
 - an independent MCP runtime;
 - reimplementation of slash commands, approval prompts, login flows, editors, or extension runtimes.
 

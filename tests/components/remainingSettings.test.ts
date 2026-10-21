@@ -297,8 +297,9 @@ describe('Remaining settings sections', () => {
     const text = io.write.mock.calls[0][0]; const summary = JSON.parse(text)
     expect(summary.product).toBe('CC Desk'); expect(summary.sessions.running).toBe(1)
     expect(text).not.toMatch(/PRIVATE_PATH|PROMPT_BODY|OUTPUT_BODY|RAW_ERROR|SECRET_VALUE|TOKEN/)
-    expect(wrapper.findAll('[data-about-link]')).toHaveLength(4)
+    expect(wrapper.findAll('[data-about-link]')).toHaveLength(5)
     await wrapper.get('[data-about-link="codex"]').trigger('click'); expect(io.open).toHaveBeenCalledWith('https://developers.openai.com/learn/codex')
+    await wrapper.get('[data-about-link="opencode"]').trigger('click'); expect(io.open).toHaveBeenCalledWith('https://opencode.ai/docs')
   })
   // 编辑必须先读取已有绑定，不能在加载时用默认值覆盖用户保存的绑定。
   it('Settings_ShortcutHydrationAdmission_007', async () => {

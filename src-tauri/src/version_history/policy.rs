@@ -42,17 +42,12 @@ pub(crate) fn version(tag: &str) -> Option<&str> {
     Some(value)
 }
 pub(crate) fn historical(value: &str) -> bool {
-    let numbers = |text: &str| -> Option<[u32; 3]> {
-        let parts: Vec<_> = text
-            .split('.')
-            .map(str::parse::<u32>)
-            .collect::<Result<_, _>>()
-            .ok()?;
-        parts.try_into().ok()
-    };
-    numbers(value)
-        .zip(numbers(env!("CARGO_PKG_VERSION")))
-        .is_some_and(|(target, current)| target < current)
+    semver::Version::parse(value)
+        .ok()
+        .zip(semver::Version::parse(env!("CARGO_PKG_VERSION")).ok())
+        .is_some_and(|(target, current)| {
+            target.pre.is_empty() && target.build.is_empty() && target < current
+        })
 }
 /// Existing trusted key is read from committed application configuration, never a release.
 pub(crate) fn trusted_public_key() -> String {

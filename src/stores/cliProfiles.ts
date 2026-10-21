@@ -107,7 +107,8 @@ function launcher(value: unknown): ProfileLauncher {
 
 function profile(value: unknown): CliProfile {
   const row = object(value)
-  if (row.cli !== 'claude' && row.cli !== 'codex') return invalid()
+  // opencode 由后端 CliKind 序列化引入；CliKind union 扩散属 Plan B，白名单通过后局部桥接。
+  if (row.cli !== 'claude' && row.cli !== 'codex' && row.cli !== 'opencode') return invalid()
 
   const envRow = object(row.env)
   const env: CliProfile['env'] = {}
@@ -119,7 +120,7 @@ function profile(value: unknown): CliProfile {
   return {
     id: text(row.id),
     revision: u64(row.revision),
-    cli: row.cli,
+    cli: row.cli as CliProfile['cli'],
     name: text(row.name),
     launcher: launcher(row.launcher),
     programPath: override(row.programPath, stringValue),
@@ -212,6 +213,7 @@ export const useCliProfilesStore = defineStore('cli-profiles', () => {
   const selectedIds = ref<Record<NativeCliKind, string | null>>({
     claude: null,
     codex: null,
+    opencode: null,
   })
 
   let epoch = 0
@@ -221,11 +223,13 @@ export const useCliProfilesStore = defineStore('cli-profiles', () => {
   const byCli = computed<Record<NativeCliKind, CliProfile[]>>(() => ({
     claude: profiles.value.filter(item => item.cli === 'claude'),
     codex: profiles.value.filter(item => item.cli === 'codex'),
+    opencode: profiles.value.filter(item => item.cli === 'opencode'),
   }))
 
   const selected = computed<Record<NativeCliKind, CliProfile | null>>(() => ({
     claude: selectedProfile('claude'),
     codex: selectedProfile('codex'),
+    opencode: selectedProfile('opencode'),
   }))
 
   function selectedProfile(cli: NativeCliKind): CliProfile | null {
@@ -235,7 +239,7 @@ export const useCliProfilesStore = defineStore('cli-profiles', () => {
   }
 
   function reconcileSelection() {
-    for (const cli of ['claude', 'codex'] as const) {
+    for (const cli of ['claude', 'codex', 'opencode'] as const) {
       const rows = profiles.value.filter(item => item.cli === cli)
       const current = selectedIds.value[cli]
       selectedIds.value[cli] = rows.some(item => item.id === current)

@@ -1,10 +1,10 @@
 //! Resolve only backend-owned launch environment. An empty/invalid explicit root is not a default.
-use super::scoped_fs::ReadResult;
+use super::scoped_fs::{ReadResult, Root};
 use crate::cli::environment::{lookup, EnvMap};
 use crate::cli::profiles::{Dialect, Launcher};
 use crate::cli::types::CliKind;
 use std::ffi::OsStr;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 
 // This admits a read observation of the backend-selected root, not proof of
 // effective CLI state or launcher certification. Explicit Cmd shims (including
@@ -56,28 +56,72 @@ where
 pub(crate) struct Locations {
     pub root: PathBuf,
     pub user_config: Option<PathBuf>,
+    pub sqlite_file: Option<String>,
+}
+impl Locations {
+    pub(crate) fn open_root(&self, cli: CliKind) -> ReadResult<Root> {
+        if cli == CliKind::Opencode {
+            Root::open_sqlite(
+                &self.root,
+                self.sqlite_file.as_deref().ok_or("SCOPE_UNKNOWN")?,
+            )
+        } else {
+            Root::open(&self.root)
+        }
+    }
+    pub(crate) fn with_probed_database(&self, output: &str) -> ReadResult<Self> {
+        if self.sqlite_file.is_some() {
+            return Err("SCOPE_UNKNOWN");
+        }
+        let output = output.trim_end_matches(['\r', '\n']);
+        if output.contains(['\r', '\n']) {
+            return Err("SCOPE_UNKNOWN");
+        }
+        let database = Path::new(output);
+        valid(database)?;
+        let file = database
+            .file_name()
+            .and_then(OsStr::to_str)
+            .ok_or("SCOPE_UNKNOWN")?;
+        let channel = file
+            .strip_prefix("opencode-")
+            .and_then(|name| name.strip_suffix(".db"));
+        if file != "opencode.db"
+            && !channel.is_some_and(|value| {
+                !value.is_empty()
+                    && value
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
+            })
+        {
+            return Err("SCOPE_UNKNOWN");
+        }
+        let parent = database.parent().ok_or("SCOPE_UNKNOWN")?;
+        if Root::open(parent)?.key() != Root::open(&self.root)?.key() {
+            return Err("SCOPE_UNKNOWN");
+        }
+        let mut selected = self.clone();
+        selected.sqlite_file = Some(file.to_owned());
+        Ok(selected)
+    }
 }
 pub(crate) fn locations(cli: CliKind, env: &EnvMap) -> ReadResult<Locations> {
     let (key, default) = match cli {
         CliKind::Claude => ("CLAUDE_CONFIG_DIR", ".claude"),
         CliKind::Codex => ("CODEX_HOME", ".codex"),
+        // opencode 数据根由 XDG 决定，覆盖键就是 XDG_DATA_HOME 本身。
+        CliKind::Opencode => return opencode_locations(env),
         CliKind::Shell => return Err("SCOPE_UNKNOWN"),
     };
     let explicit = lookup(env, OsStr::new(key));
-    let home = || -> ReadResult<PathBuf> {
-        let key = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
-        let value = lookup(env, OsStr::new(key)).ok_or("SCOPE_UNKNOWN")?;
-        let path = PathBuf::from(value);
-        valid(&path)?;
-        Ok(path)
-    };
     let result = if let Some(root) = explicit {
         Locations {
             root: PathBuf::from(root),
             user_config: None,
+            sqlite_file: None,
         }
     } else {
-        let home = home()?;
+        let home = home(env)?;
         Locations {
             root: home.join(default),
             user_config: if cli == CliKind::Claude {
@@ -85,10 +129,73 @@ pub(crate) fn locations(cli: CliKind, env: &EnvMap) -> ReadResult<Locations> {
             } else {
                 None
             },
+            sqlite_file: None,
         }
     };
     valid(&result.root)?;
     Ok(result)
+}
+fn home(env: &EnvMap) -> ReadResult<PathBuf> {
+    let key = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+    let value = lookup(env, OsStr::new(key)).ok_or("SCOPE_UNKNOWN")?;
+    let path = PathBuf::from(value);
+    valid(&path)?;
+    Ok(path)
+}
+fn opencode_locations(env: &EnvMap) -> ReadResult<Locations> {
+    let base = match lookup(env, OsStr::new("XDG_DATA_HOME")) {
+        Some(xdg) => PathBuf::from(xdg),
+        None => home(env)?.join(".local").join("share"),
+    };
+    let root = base.join("opencode");
+    valid(&root)?;
+    let explicit = lookup(env, OsStr::new("OPENCODE_DB"))
+        .map(|value| value.to_str().ok_or("SCOPE_UNKNOWN"))
+        .transpose()?
+        .filter(|value| !value.is_empty());
+    let database = match explicit {
+        Some(":memory:") => return Err("SCOPE_UNKNOWN"),
+        Some(value) => {
+            let value = Path::new(value);
+            if value.is_absolute() {
+                value.to_path_buf()
+            } else {
+                root.join(value)
+            }
+        }
+        None if lookup(env, OsStr::new("OPENCODE_DISABLE_CHANNEL_DB"))
+            .is_some_and(|value| value == "1" || value == "true") =>
+        {
+            root.join("opencode.db")
+        }
+        None => {
+            return Ok(Locations {
+                root,
+                user_config: None,
+                sqlite_file: None,
+            })
+        }
+    };
+    valid(&database)?;
+    let file = match database.file_name().and_then(OsStr::to_str) {
+        Some(name)
+            if !name.is_empty()
+                && (!cfg!(windows) || !name.contains(':'))
+                && Path::new(name)
+                    .components()
+                    .all(|part| matches!(part, Component::Normal(_))) =>
+        {
+            name.to_owned()
+        }
+        _ => return Err("SCOPE_UNKNOWN"),
+    };
+    let parent = database.parent().ok_or("SCOPE_UNKNOWN")?.to_path_buf();
+    valid(&parent)?;
+    Ok(Locations {
+        root: parent,
+        user_config: None,
+        sqlite_file: Some(file),
+    })
 }
 fn valid(path: &std::path::Path) -> ReadResult<()> {
     let value = path.to_str().ok_or("SCOPE_UNKNOWN")?;

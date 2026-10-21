@@ -132,6 +132,15 @@ monotone sequence and explicit turn/reason evidence (see follow-up choices).
 New safe Claude templates enable observation; saved choices remain authoritative.
 Codex/raw/Shell launches receive no Claude overlay.
 
+Claude identity observations retain the authenticated hook type independently of
+that activity projection. SessionStart or UserPromptSubmit can establish the
+first observed historical session; only SessionStart can replace an existing
+identity. A late Stop, tool receipt, SessionEnd or prompt from a different
+session cannot overwrite it. Explicit native resume back to a previously seen
+session remains possible through SessionStart. No sequence is invented: a late
+SessionStart still cannot prove current TUI identity, and native rename keeps
+its existing exact-source historical-record checks.
+
 The Native row now shows a separate localized event marker. An unread `Stop`
 receipt is described as “Reply-end notice received (unread); current activity
 unverified”. It never becomes `attentionKind: completed` or changes the current
@@ -144,17 +153,45 @@ templates default the observer on (it backs session status, rename follow-throug
 claiming); Codex profiles never receive the Claude overlay, an explicit user
 `observer: false` is respected, including existing `desk-safe-claude` templates.
 Their old default cannot be distinguished from an explicit user choice, so refresh
-never rewrites them or bumps their revision. Sessions without an observation channel (observer off, Codex,
+never rewrites them or bumps their revision. Sessions without an observation channel (observer off,
 connecting) now project a neutral running state instead of “Activity unknown”;
 an observed `unknown` remains genuinely unknown.
+
+### Codex native TUI program status
+
+Structured Codex terminals consume the native OSC 7501 protocol emitted by
+[`rust-v0.163.0`'s TUI](https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/tui/src/terminal_program_status.rs).
+Every ordinary TTY receives it; iTerm2-only OSC 21337 is not required. No launch
+flag, terminal identity, user configuration, hook or app-server connection changes.
+
+| Native snapshot | Projection | Meaning and limit |
+| --- | --- | --- |
+| `state=working:app=codex` | Working | Native TUI busy, including startup/background exec; not necessarily model reasoning |
+| `state=blocked:app=codex` | Needs action | Generic user interaction; not specifically permission, input or authentication |
+| `state=idle:app=codex` | Idle, static green dot | Native TUI not busy; not successful completion |
+| `state=clear`, missing or unknown Codex payload | Activity unknown | Handoff, no evidence or unsupported vocabulary; never invent idle/completed |
+
+The existing authenticated output transport admits exact run/generation/stream
+and contiguous bytes; xterm parses across frame boundaries. State is scoped to
+the owning attempt and parser lifetime, survives view/focus changes, and publishes
+only after a running launch receipt. Exit, uncertainty, restart, output degradation
+and disposal discard the hint. Owner changes refresh only the affected catalog
+project, and duplicate snapshots do not republish or advance activity.
+
+This channel describes the TUI's current displayed chat and has no thread/turn
+ID. Child output can spoof terminal protocols. It is a passive visual hint, not
+authenticated provider state, history identity, permission authority or a reply-end
+receipt. It cannot generate a permission-specific badge, completion check, unread
+notice or taskbar attention. Identity hooks remain independent. Claude's known-idle
+presentation and the closed-row no-badge rule are unchanged.
 
 ## Smallest follow-up choices
 
 The remaining gap is at the producer/DTO boundary, not at the icon renderer:
 `HookEventPayload` has authenticated run/generation/event ID but no source order;
 `claudeObserver` still maps `stopFailure` to coarse unknown and drops the
-reason; `ObservationState` has no turn identifier or attention cause. Codex/raw/
-Shell have no Claude source and must keep their own capability boundary.
+reason; `ObservationState` has no turn identifier or attention cause. Codex's native
+program-status hint and raw/Shell have no Claude source and retain separate boundaries.
 
 1. **Restore accurate current turn state:** require a certified producer with an
    authenticated exact-run identity, source-owned monotone sequence, explicit

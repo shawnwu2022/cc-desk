@@ -6,28 +6,28 @@
 
 > **当前架构权威入口**：[docs/native-cli-v3.md](../docs/native-cli-v3.md)。Native CLI v3 代码侧已完成到 D27；D20 真实 Claude Code / Codex CLI Layer-C 认证仍需授权目标环境。Provider 管理、bundled CLI installer、独立 MCP runtime 等旧文档口径均已废弃。
 
-面向 Claude Code 与 Codex CLI 的多项目、多会话桌面工作台。Tauri 2 + Vue 3 + xterm.js + Rust 负责宿主、终端与运行生命周期，真实 CLI 继续负责交互语义。
+面向 Claude Code、Codex CLI 与 opencode 的多项目、多会话桌面工作台。Tauri 2 + Vue 3 + xterm.js + Rust 负责宿主、终端与运行生命周期，真实 CLI 继续负责交互语义。
 
 ## 核心思想
 
-**面向 Claude Code / Codex CLI 重度用户的多会话工作台。GUI 做宿主增强，不重做 CLI 已经拥有的能力。**
+**面向 Claude Code / Codex CLI / opencode 重度用户的多会话工作台。GUI 做宿主增强，不重做 CLI 已经拥有的能力。**
 
 ### 产品定位
 
-- **面向谁**：已熟练使用 Claude Code、Codex CLI 或两者的开发者，尤其是需要同时管理多个会话、多个项目的重度用户
+- **面向谁**：已熟练使用 Claude Code、Codex CLI、opencode 或其中若干的开发者，尤其是需要同时管理多个会话、多个项目的重度用户
 - **解决什么问题**：CLI 在单会话交互上已经足够好，但在多会话并行、信息总览、跨会话状态追踪上力不从心
 - **核心价值**：
-  1. **多会话并行管理** — 一个窗口内同时运行多个 Claude/Codex 会话，快速切换、互不干扰
+  1. **多会话并行管理** — 一个窗口内同时运行多个 Claude/Codex/opencode 会话，快速切换、互不干扰
   2. **信息可视化增强** — MCP 工具详情等 CLI 不方便展示的信息，通过侧边栏面板呈现
   3. **工作流加速** — 快捷命令、prompt 片段、项目预设等 CLI 之外的外围辅助
 
 ### 设计原则
 
-- **CLI 优先，GUI 增强** — Native CLI v3 直接运行真实 Claude Code / Codex CLI；GUI 负责宿主能力，交互语义仍归 CLI
+- **CLI 优先，GUI 增强** — Native CLI v3 直接运行真实 Claude Code / Codex CLI / opencode；GUI 负责宿主能力，交互语义仍归 CLI
 - **轻量透明** — 原生 CLI 资源默认只读投影；Native workspace 使用独立 revision/CAS 存储，兼容旧 `~/.cc-box/` 数据但不让旧状态覆盖新状态
 - **功能边界** — CLI 里已经很好用的功能（对话交互、slash 命令、快捷键、模型切换），不在 GUI 里重复实现；GUI 专注于管理、可视化、辅助三类增强
 - **可逆性** — 用户可随时回到纯 CLI；CC Desk 不拥有 Provider/API Key 配置，不把 native resource projection 变成第二个配置写入器
-- **最小依赖** — 不依赖 Claude/Codex 内部 SDK；Claude 更名仅使用固定版本官方公开 Agent SDK 的本地元数据 API，不接管原生 TUI 或模型调用。版本相关能力必须通过真实 CLI/公开契约验证，不能把宿主测试冒充真实 CLI 认证
+- **最小依赖** — 不依赖 Claude/Codex/opencode 内部 SDK；Claude 更名仅使用固定版本官方公开 Agent SDK 的本地元数据 API，不接管原生 TUI 或模型调用。版本相关能力必须通过真实 CLI/公开契约验证，不能把宿主测试冒充真实 CLI 认证
 
 ### 不做什么
 
@@ -43,7 +43,7 @@ Tauri 2.x (Rust) + Vue 3 + TypeScript + Vite + xterm.js + portable-pty + Pinia +
 
 ## 项目架构
 
-> Native CLI v3 的权威边界见 [docs/native-cli-v3.md](../docs/native-cli-v3.md)。旧 Claude runtime 通过统一 adapter 保持兼容；新的双 CLI 功能不得借道旧 PTY/API。
+> Native CLI v3 的权威边界见 [docs/native-cli-v3.md](../docs/native-cli-v3.md)。旧 Claude runtime 通过统一 adapter 保持兼容；新的 CLI 功能不得借道旧 PTY/API。
 
 ```text
 cc-desk/
@@ -87,7 +87,7 @@ NativeCliTerminal
   ↕ authenticated document bridge
 cli launch / terminal_input / terminal_transport
   ↕ owned PTY
-Claude Code | Codex CLI
+Claude Code | Codex CLI | opencode
 ```
 
 - launch 绑定 cli/project/profile revision/request/run/generation/action；
@@ -102,7 +102,7 @@ Claude Code | Codex CLI
 XTermTerminal ←→ legacy Tauri IPC ←→ pty.rs ←→ Claude Code
 ```
 
-Legacy 路径继续维护兼容性，但不是新的双 CLI 架构扩展点。
+Legacy 路径继续维护兼容性，但不是新 CLI 架构的扩展点。
 
 Legacy `customArgs` 统一解析成 argv：单/双引号包围的空格、空参数及引号转义保持参数边界，Windows 路径分隔符保留；未闭合引号拒绝启动。变量和 shell 操作符按字面值传递，不执行 shell 表达式。Desk 历史恢复使用独立、冻结的 `resumeSessionId`，仅该 locator 按会话文件名组件校验并由后端生成 `--resume <id>`；用户 argv 的裸 `--resume`、`-r`、会话名及转录路径交由 CLI 解释，不套用文件名白名单。Native profile 的结构化参数与迁移约束不变。
 
@@ -218,7 +218,7 @@ npm run tauri:build        # 生产构建
 |--------------------------------------------------------------|-------------------------------------------------------|
 | [docs/测试编写原则.md](../docs/测试编写原则.md)   | 项目如何编写测试                                              |
 | [docs/manual-test-cases.md](../docs/manual-test-cases.md)   | **手动测试条目**：自动化无法覆盖的 UI 交互与端到端测试                  |
-| [docs/native-cli-v3.md](../docs/native-cli-v3.md)               | **Native CLI v3 权威架构**：双 CLI、鉴权、输入输出、证据与发布边界        |
+| [docs/native-cli-v3.md](../docs/native-cli-v3.md)               | **Native CLI v3 权威架构**：多 CLI、鉴权、输入输出、证据与发布边界        |
 | [docs/terminal-integration.md](../docs/terminal-integration.md) | 终端集成架构、PTY 生命周期、IPC 命令与事件对照                           |
 | [docs/hook-monitor.md](../docs/hook-monitor.md)                 | **Hook 监控系统**：Plugin 注入、事件采集、状态机、多终端区分                |
 | [docs/layout-design.md](../docs/layout-design.md)               | 布局设计、窗口结构、色彩系统、排版规范                                   |
@@ -305,7 +305,7 @@ npm run tauri:build        # 生产构建
 - 派生名称索引 schema v2 使用 CLI、已验证 sourceRootKey、identityEpoch 和项目目录身份组成的缓存键；旧 v1 缓存重建，不跨根命中。未知目录身份跳过缓存，不猜测默认根。
 - 旧 Claude 项目映射按来源根与路径分区，最多保留 64 个派生分区；显式根扫描不得覆盖默认根，失效操作清空所有分区。
 - 配置面板请求用本地选择所有权拒绝迟到的成功/失败/finally；清空与切换立即隐藏旧配置，不记录原始异常载荷。
-- `SourcePartition` 只是缓存身份，不是授权 SourceScope / 文件系统沙箱。鉴权读取已由下节 `native_get_scope`、`native_list_resources` 与 `cli/native_projection` 实现；不要重复实现或让新双 CLI UI 借道旧默认根读取。
+- `SourcePartition` 只是缓存身份，不是授权 SourceScope / 文件系统沙箱。鉴权读取已由下节 `native_get_scope`、`native_list_resources` 与 `cli/native_projection` 实现；不要重复实现或让新 CLI UI 借道旧默认根读取。
 - D11 的 `NATIVE_RUNTIME_NOT_READY` 保持关闭，详见 `docs/superpowers/execution/D12.md`。
 
 ### D12 authenticated native projections
@@ -313,7 +313,7 @@ npm run tauri:build        # 生产构建
 - New native reads go through `native_get_scope` / `native_list_resources`, D11 document admission, and `cli/native_projection` held directory capabilities. A frontend path/owner or an opaque scope ID alone never authorizes a read.
 - `SourceRef.basis` is an observation source, not effective CLI state. Keep shell/raw/unknown-argument roots unknown. Never authorize transcript cwd or plugin install paths outside a granted root.
 - Return only the kind-specific projection DTO; do not add raw config/env/argv/headers to resource items or error logs. Scan failure must not remove registered projects.
-- D22-D24 已完成 Native Claude/Codex UI adoption。新的双 CLI 代码必须继续使用 authenticated API/store，不得 fallback 到 legacy root/delete/PTY commands。
+- D22-D24 已完成 Native Claude/Codex UI adoption。新 CLI 代码必须继续使用 authenticated API/store，不得 fallback 到 legacy root/delete/PTY commands。
 - Run the committed `tests/native-cli/scope-core` harness (actual production sources), frontend tests/build, and Windows production/live WebView tests. Headless core success is not real CLI or package certification.
 
 ### D13 observer isolation
@@ -326,7 +326,7 @@ npm run tauri:build        # 生产构建
 - The native reservation winner adds verified observer plugin assets and a fresh capability to the frozen launch only when enabled. Newly auto-created safe Claude templates default **on**; Codex profiles and raw/Shell never receive the Claude overlay. Strip only Desk capability environment names from ambient inputs, never user API credentials. All saved overrides, including `observer: { mode: 'set', value: false }` on `desk-safe-claude`, remain authoritative. Refresh cannot distinguish an old template default from a user choice, so it performs no observer migration or profile revision write.
 - Observer leases follow exact run/document lifetime, never own process control. Dropping/invalidating a lease cannot kill or restart a CLI. The `NATIVE_RUNTIME_NOT_READY` gate is unchanged.
 - Only bounded allowlisted metadata reaches the owner WebView; prompt/assistant/error/env bodies and capabilities are not published. No sequence is invented for parallel Claude hooks: general turn activity remains unknown even while the process runs, apart from the bounded causal subagent exception below.
-- New UI consumers use exact-run `subscribeObservation(target, handler)` and its projected state, not raw event kind as a current activity claim. General turn order remains unknown; the bounded first-invocation subagent lifecycle exception below uses authenticated agent identity and never fabricates a sequence. Native 与 legacy event topic 分离；D22-D24 的双 CLI UI adoption 已完成。无观察通道时的投影（观察器关闭、Codex、连接期）显示中性运行态而非“活动未知”，避免把“无从得知”误报为异常；观察已激活时的 `unknown` 仍是真实未知。
+- New UI consumers use exact-run `subscribeObservation(target, handler)` and its projected state, not raw event kind as a current activity claim. General turn order remains unknown; the bounded first-invocation subagent lifecycle exception below uses authenticated agent identity and never fabricates a sequence. Native 与 legacy event topic 分离；D22-D24 的双 CLI UI adoption 已完成。Claude 观察器关闭时显示中性运行态；观察已激活时的 `unknown` 仍是真实未知。Structured Codex TUI observes its own OSC 7501 visual snapshots; absent/cleared/unrecognized snapshots remain unknown, without a Claude overlay.
 - Verification, recovery history and limitations: `docs/superpowers/execution/D13.md`; final-head CI evidence belongs in PR #20.
 
 ### Unified workspace session facade
@@ -348,6 +348,7 @@ npm run tauri:build        # 生产构建
 
 ### Shared session icon contract
 
+- Codex 的结构化 TUI 会话以原生 OSC 7501 快照呈现工作中、等待操作与空闲；未收到、clear、未知协议、输出失效及 owner 失效均降级未知。blocked 不是特定授权原因，idle 不是成功完成。提示按既有 request/run/generation/stream 绑定且只作显示，不授予输入/进程/历史权限，不生成完成通知。Claude 已知 idle 继续无角标，关闭行继续仅用应用图标明暗区分。
 - Closed rows never add a corner badge, including unread/archive context. Codex's
   bundled black/white mark uses paired light/dark closed-opacity tokens (0.48/0.44)
   to distinguish it from the full-contrast normal mark. Complete accessible names,
@@ -356,7 +357,7 @@ npm run tauri:build        # 生产构建
 - `SessionAppIcon` combines a recognizable bundled CLI mark and an approximately 8px solid lower-right status badge within one fixed 20px row slot. Known idle keeps native artwork static; closed/stopped marks are neutral gray. Working uses only a 2.6-second opacity cycle, with distinct static working/thinking/tool/subagent/compacting shapes. Permission uses an amber lock, input a blue bubble, error a red exclamation, unknown a neutral question; starting/confirming/stopped/archive retain their own labels and shapes. Completion brightens once for 650ms on a new state/receipt and stays static. Selection/refresh/remount never replay it; reduced-motion disables all motion. Embedded `CliAppIcon`/`SessionStatusIcon` are decorative inside one fully named shared Tooltip trigger, without row status text.
 - Authenticated Native reply-end notices remain occurrence facts, never current completion claims. Their unread badge is a green check only when no newer known work/permission/error/start cause has priority; the combined accessible name retains the current state and honest receipt description. Actual-window-focus, visible-content and exact active-tab ACK conditions remain required, including retained ended terminals. Mere row selection and re-opening a closed history record do not acknowledge the closed receipt.
 - Native close/archive retains only privately proven unread reply-end facts under the complete historical source identity in the adapter's application-lifetime memory cache. The 1024-source cap never evicts existing unread entries; a new source beyond capacity is not retained, and clearing a cached source frees its slot. First close may resolve a unique complete source after its forced history refresh, fenced against newer closes; ambiguous/unavailable identity is not guessed. A closed-menu Clear unread request freezes event/run/generation/receipt time at click and compares it with the current cache, so a delayed old request cannot clear a newer receipt. No snapshot survives application restart and no history file or persistence protocol is changed.
-- `CliAppIcon` consumes `claude | codex`, shows corresponding Claude and Codex application marks at 16px with full CLI names in its Tooltip/accessible label. Brand artwork remains independent of session state; Claude retains its official starburst color, and Codex uses theme-appropriate monochrome contrast. `CC`/`CX` appear only after the current SVG image fails; CLI changes clear the failure and detached image errors are ignored.
+- `CliAppIcon` consumes `claude | codex | opencode`, shows corresponding Claude, Codex and OpenCode application marks at 16px with full CLI names in its Tooltip/accessible label. Brand artwork remains independent of session state; Claude retains its official starburst color, Codex uses theme-appropriate monochrome contrast, and OpenCode uses official paired light/dark artwork. `CC`/`CX`/`OC` appear only after a current SVG image fails; CLI changes clear the failure and detached image errors are ignored. The quick-new menu shares the same decorative component.
 - Assets and provenance/ownership notes are in `src/assets/icons/cli/` and `src/assets/icons/session-status/`; third-party application marks are attributed separately from CC Desk-owned status artwork. Regression gate: `npm test -- tests/components/sessionIcons.test.ts && npm run typecheck`. Windows/scaling and rendered-screen-reader checks remain final platform gates.
 
 ### Unified session row and menu contract
@@ -570,7 +571,7 @@ npm run tauri:build        # 生产构建
 ### Session behavior repair for 0.18.3
 
 - Archive is an external trailing quick button only for ended/failed non-archived rows without preparation ownership. Overflow/context menus omit it. Existing typed running archive requests still require the original exact-owner stop-and-archive confirmation.
-- Preserve complete historical status detail/cause vocabulary and row/project priority; missing/unordered activity remains explicitly unknown. Legacy uses exact-PTY explicit attention receipts; Native uses only existing exact-run ordered activity projections. No completion from Stop, exit, silence or output; newly auto-created safe Claude templates default the observer on (see the D13 observer isolation section), an explicit user override is respected, and raw/Codex/Shell receive no Claude overlay. Sessions without an observation channel show a neutral running state rather than “Activity unknown”. See `docs/session-status-semantics.md`.
+- Preserve complete historical status detail/cause vocabulary and row/project priority; missing/unordered activity remains explicitly unknown. Legacy uses exact-PTY explicit attention receipts; Native uses only existing exact-run ordered activity projections. No completion from Stop, exit, silence or output; newly auto-created safe Claude templates default the observer on (see the D13 observer isolation section), an explicit user override is respected, and raw/Codex/Shell receive no Claude overlay. Raw/Shell and explicitly unsupported observation channels retain neutral running presentation. Structured Codex TUI without a valid OSC 7501 snapshot shows unknown activity; its idle snapshot never implies completion. See `docs/session-status-semantics.md`.
 - Native Claude recent/unread notices are independent receipt observations from the existing authenticated optional hook bus. Keep fixed kinds/IDs/receipt time only, private exact request/run/generation proof and bounded non-evicting deduplication; publish starting receipts only after that owner's running launch receipt. Unknown/failure/restart invalidate live notices. Ended owners retain privately proven unread reply-end facts; close/archive transfers only those facts into the complete-source, bounded application-lifetime cache described above, preserving exact provenance/generation and ACK fences. Only actual visible/selected/focused ownership acknowledges an unread reply-end ID; inactive observation cannot initiate a new flash. Never promote a Stop receipt to current completed or alter profile defaults/CLI flags to provide this feature.
 - Unified terminal host owns one window focus subscription and attention coordinator. Actual visible/selected/focused ownership acknowledges permission/completion, never sticky errors; initial unproven focus cannot acknowledge, and late subscription registration disposes after unmount. Selection alone never proves acknowledgment.
 - A Native generation change detaches old provenance/ACK before a bounded byte CAN+RIS parser fence, verifies attempt/term/token/publication ownership, resets and installs new bindings only afterward. Partial VT/UTF-8, queued old protocol replies, canceled/unmounted/superseded parser preparation cannot contaminate or launch the new attempt. Recover/activate/hide/theme do not reset.

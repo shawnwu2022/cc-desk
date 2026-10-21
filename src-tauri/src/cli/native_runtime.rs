@@ -171,6 +171,19 @@ impl NativeRuntime {
     ) -> Result<LaunchStatus, SafeError> {
         self.binding()?.query_native(webview, request)
     }
+    pub(crate) async fn prepare_opencode_session<T: Runtime>(
+        &self,
+        webview: Webview<T>,
+        request: Request<'_>,
+    ) -> Result<String, SafeError> {
+        let (caller, launch) = self.binding()?.start_native(&webview, &request)?;
+        let service = self.service.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            service.prepare_opencode_session(&caller, &launch)
+        })
+        .await
+        .map_err(|_| error("OPENCODE_SESSION_OUTCOME_UNKNOWN"))?
+    }
     pub(crate) fn cancel_launch<T: Runtime>(
         &self,
         webview: &Webview<T>,

@@ -123,6 +123,15 @@ the representative rollout's container still supplies the archive flag. Both
 formats use the same session identity, project association, filtering and thread
 deduplication. Reads never unpack files onto disk or change native history.
 
+Codex `session_index.jsonl` names follow the last valid append for each ID,
+matching the upstream reverse scan; timestamps can repeat or move backward and
+do not override append order. Malformed/partial records are skipped. Automatic
+history exclusion requires structured session metadata (`exec`, subagent,
+guardian review or security-scan source). Manual or unknown sources remain
+discoverable when a prompt resembles automation instructions, including partial
+observations. Prompt text is not provenance. The derived title cache schema is
+8 so older title extraction is not silently reused.
+
 Compressed reads stream through the held source capability, charge compressed
 input and decoded output against the existing aggregate budget, cap each side at
 the existing per-file limit, and limit the decoder window to 8 MiB. History reads

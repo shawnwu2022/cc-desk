@@ -68,6 +68,7 @@ export interface ProjectLaunchPreference {
   lastCli: UnifiedCliKind
   claudeLaunchConfigId?: string | null
   codexLaunchConfigId?: string | null
+  opencodeLaunchConfigId?: string | null
 }
 
 export interface ProjectsState {

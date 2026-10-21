@@ -4,6 +4,19 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
+## [0.24.0-rc.1]
+
+Test release
+
+- Add OpenCode as a third native CLI with owned terminal launches, exact-ID resume and project-scoped SQLite history.
+- Improve Claude Code session identity after delayed hooks, Codex command-wrapper compatibility, active session filtering and focused keyboard shortcuts.
+- Keep optional OpenCode session preparation and history safe when the CLI, database schema or capability probe is unavailable.
+
+Important
+
+- This is a prerelease test package. Download and run it explicitly; the stable updater channel remains on the latest stable release.
+- OpenCode integration was checked against official CLI 1.19.0 without paid model calls. Account-backed create/resume and installed Windows WebView acceptance remain separate checks. Older or future CLI versions may lose optional history or title features while basic terminal launch remains available.
+
 ## [0.23.5]
 
 Fixed

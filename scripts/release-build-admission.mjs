@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { appendFileSync, readFileSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 import { ciWaitState } from './release-wait-for-ci.mjs'
+import { releaseChannel } from './release-version.mjs'
 
 // Candidate build admission only. This never establishes CI coverage, verifies
 // release assets, changes a tag/draft, or grants publication authority.
@@ -14,7 +15,7 @@ export function assertBuildAdmission(context) {
   }
   if (!Array.isArray(c.versions) || c.versions.length !== 3
     || !c.versions.every(version => typeof version === 'string' && version === c.versions[0] && version === version.trim())
-    || !/^\d+\.\d+\.\d+$/.test(c.versions[0] ?? '')) {
+    || !releaseChannel(c.versions[0])) {
     throw new Error('build admission blocked: matching package/Cargo/Tauri versions required')
   }
 }

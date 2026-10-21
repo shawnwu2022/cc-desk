@@ -43,6 +43,7 @@ jobs:
     outputs:
       version: ${{ steps.gate.outputs.version }}
       tag: ${{ steps.gate.outputs.tag }}
+      channel: ${{ steps.gate.outputs.channel }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -319,8 +320,8 @@ jobs:
           target_commitish: ${{ github.sha }}
           name: CC Desk ${{ needs.preflight.outputs.version }}
           draft: false
-          prerelease: false
-          make_latest: true
+          prerelease: ${{ needs.preflight.outputs.channel == 'prerelease' }}
+          make_latest: ${{ needs.preflight.outputs.channel == 'stable' }}
           generate_release_notes: false
           body_path: release-notes.md
           fail_on_unmatched_files: true
@@ -335,4 +336,8 @@ jobs:
             latest.json
             coverage/windows-native-coverage.json
       - name: Verify published update channel bytes and signatures
+        if: needs.preflight.outputs.channel == 'stable'
         run: node scripts/verify-updater-manifest.js "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest.json" "${{ needs.preflight.outputs.version }}"
+      - name: Verify published test package bytes and signatures
+        if: needs.preflight.outputs.channel == 'prerelease'
+        run: node scripts/verify-updater-manifest.js "https://github.com/${GITHUB_REPOSITORY}/releases/download/${{ needs.preflight.outputs.tag }}/latest.json" "${{ needs.preflight.outputs.version }}"

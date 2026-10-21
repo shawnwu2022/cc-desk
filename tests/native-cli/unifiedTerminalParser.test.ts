@@ -6,6 +6,11 @@ import XTermTerminal from '@/components/XTermTerminal.vue'
 import { useNativeTabsStore } from '@/stores/nativeTabs'
 import { useSessionStore } from '@/stores/session'
 import { useCliProfilesStore } from '@/stores/cliProfiles'
+import { createNativeCliAdapter } from '@/session/adapters/nativeCliAdapter'
+import SessionItem from '@/components/sessions/SessionItem.vue'
+import { createI18n } from 'vue-i18n'
+import en from '@/i18n/locales/en'
+import zh from '@/i18n/locales/zh'
 
 const io = vi.hoisted(() => ({
   terminals: [] as import('@xterm/xterm').Terminal[], channels: [] as any[],
@@ -76,6 +81,110 @@ beforeEach(() => {
 afterEach(() => { wrapper?.unmount(); wrapper = null; Reflect.deleteProperty(window, '__CC_DESK_DOCUMENT__'); vi.unstubAllGlobals(); vi.useRealTimers(); document.body.innerHTML = ''; if (vi.isMockFunction(Date.now)) vi.mocked(Date.now).mockRestore() })
 
 describe('Unified host with pinned real xterm parser', () => {
+  // 原生输出快照必须穿过真实 parser/store/adapter；进程 running 本身不构成工作证据。
+  it.each(['en', 'zh'] as const)('Codex_ProgramStatusChangesActualRow_040 %s', async locale => {
+    const tabs = useNativeTabsStore()
+    const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+    wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: false } }); await flushPromises()
+    const adapter = createNativeCliAdapter({ tabs, history: { all: () => [] },
+      runtime: { createTab: () => tab, restartTab: () => tab, stopTab: async () => {}, renameTab: async () => {} },
+      archive: { getArchivedSessions: () => [], archiveSession: async () => {}, restoreSession: async () => {} } })
+    const project = async () => (await adapter.listSessions())[0]
+    const row = mount(SessionItem, { props: { session: await project() }, global: { plugins: [createI18n({ legacy: false, locale, messages: { en, zh } })] } })
+    let offset = 0
+    const output = async (text: string) => {
+      const bytes = [...new TextEncoder().encode(text)]
+      io.channels[0].channel.onmessage({ runId: tab.runId, generation: 1, streamEpoch: '1', offset: String(offset), bytes })
+      offset += bytes.length
+      await vi.waitFor(() => expect(io.ack).toHaveBeenLastCalledWith({ runId: tab.runId, generation: 1, streamEpoch: '1', throughOffset: String(offset) }))
+      await row.setProps({ session: await project() })
+    }
+    try {
+      for (const [state, badge, label] of [
+        ['working', 'working', locale === 'en' ? 'Working' : '工作中'], ['blocked', 'needs-user', locale === 'en' ? 'Needs action' : '等待操作'],
+        ['idle', 'running', locale === 'en' ? 'Idle' : '空闲'], ['clear', 'unknown', locale === 'en' ? 'Activity unknown' : '活动未知'],
+      ]) {
+        const payload = state === 'clear' ? 'state=clear' : `state=${state}:app=codex`
+        await output(`\x1b]7501;${payload}\x1b\\`)
+        expect(row.get('[data-session-badge]').attributes('data-session-badge')).toBe(badge)
+        expect(row.get('.session-app-icon').attributes('aria-label')).toBe(`Codex CLI; ${label}`)
+        expect((await project()).attentionKind).toBeUndefined()
+        expect((await project()).observationNotice).toBeUndefined()
+      }
+      expect(tabs.tab(tab.tabId)?.status).toBe('running')
+    } finally { row.unmount() }
+  })
+
+  // 跨帧交给真实 xterm 解析；新协议未知状态不能保留过期的 working。
+  it('Codex_ProgramStatusFramingAndUnknown_041', async () => {
+    const tabs = useNativeTabsStore()
+    const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+    wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } }); await flushPromises()
+    let offset = 0
+    const output = async (text: string) => {
+      const bytes = [...new TextEncoder().encode(text)]
+      io.channels[0].channel.onmessage({ runId: tab.runId, generation: 1, streamEpoch: '1', offset: String(offset), bytes })
+      offset += bytes.length
+      await vi.waitFor(() => expect(io.ack).toHaveBeenLastCalledWith({ runId: tab.runId, generation: 1, streamEpoch: '1', throughOffset: String(offset) }))
+    }
+    await output('\x1b]7501;state=work')
+    expect(tabs.tab(tab.tabId)?.codexProgramStatus).toBeUndefined()
+    await output('ing:app=codex\x1b')
+    expect(tabs.tab(tab.tabId)?.codexProgramStatus).toBe('working')
+    await output('\\')
+    expect(tabs.tab(tab.tabId)?.codexProgramStatus).toBe('working')
+    await output('\x1b]7501;state=blocked:app=other\x07')
+    expect(tabs.tab(tab.tabId)?.codexProgramStatus).toBe('working')
+    await output('\x1b]7501;state=done:app=codex\x07')
+    expect(tabs.tab(tab.tabId)?.codexProgramStatus).toBe('unknown')
+    await output('\x1b]7501;state=idle:app=codex\x07')
+    expect(tabs.tab(tab.tabId)?.codexProgramStatus).toBe('idle')
+    await output('\x1b]7501;state=blocked:kind=permission:app=codex\x07')
+    expect(tabs.tab(tab.tabId)?.codexProgramStatus).toBe('unknown')
+    await output('state=working:app=codex')
+    expect(tabs.tab(tab.tabId)?.codexProgramStatus).toBe('unknown')
+  })
+
+  // 同一 WebView 的其它会话、Claude/raw 和卸载后的旧输出不能发布当前状态。
+  it.each(['claude', 'raw', 'codex'] as const)('Codex_ProgramStatusOwnerIsolation_042 %s', async other => {
+    const tabs = useNativeTabsStore()
+    useCliProfilesStore().profiles.push({ ...useCliProfilesStore().profiles[0], id: 'cc', cli: 'claude' })
+    const first = tabs.create({ cli: 'codex', projectId: 'p', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+    const second = tabs.create({ cli: other === 'claude' ? 'claude' : 'codex', projectId: 'p', projectPath: '/repo', profileId: other === 'claude' ? 'cc' : 'cx', profileRevision: '7',
+      action: other === 'raw' ? { kind: 'raw', argv: [] } : { kind: 'new' } })
+    wrapper = mount(NativeCliTerminal, { props: { tabId: first.tabId, active: false } }); await flushPromises()
+    const otherTerminal = mount(NativeCliTerminal, { props: { tabId: second.tabId, active: true } }); await flushPromises()
+    try {
+      for (const [index, tab] of [first, second].entries()) {
+        const bytes = [...new TextEncoder().encode(`\x1b]7501;state=${index === 0 ? 'blocked' : 'idle'}:app=codex\x1b\\`)]
+        io.channels[index].channel.onmessage({ runId: tab.runId, generation: 1, streamEpoch: '1', offset: '0', bytes })
+      }
+      await vi.waitFor(() => expect(tabs.tab(first.tabId)?.codexProgramStatus).toBe('blocked'))
+      if (other === 'codex') await vi.waitFor(() => expect(tabs.tab(second.tabId)?.codexProgramStatus).toBe('idle'))
+      else expect(tabs.tab(second.tabId)?.codexProgramStatus).toBeUndefined()
+      expect(tabs.tab(second.tabId)?.attentionState).toBe('none')
+      wrapper.unmount(); wrapper = null
+      expect(tabs.tab(first.tabId)?.codexProgramStatus).toBe('unknown')
+      await new Promise<void>(resolve => io.terminals[0].write('\x1b]7501;state=working:app=codex\x07', resolve))
+      expect(tabs.tab(first.tabId)?.codexProgramStatus).toBe('unknown')
+    } finally { otherTerminal.unmount() }
+  })
+
+  // 输出序列有缺口后立即撤销提示，已排队的旧 parser 写入也不能复活它。
+  it('Codex_ProgramStatusOutputGapInvalidates_043', async () => {
+    const tabs = useNativeTabsStore()
+    const tab = tabs.create({ cli: 'codex', projectId: 'p', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+    wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } }); await flushPromises()
+    const bytes = [...new TextEncoder().encode('\x1b]7501;state=working:app=codex\x07')]
+    io.channels[0].channel.onmessage({ runId: tab.runId, generation: 1, streamEpoch: '1', offset: '0', bytes })
+    await vi.waitFor(() => expect(tabs.tab(tab.tabId)?.codexProgramStatus).toBe('working'))
+    io.channels[0].channel.onmessage({ runId: tab.runId, generation: 1, streamEpoch: '1', offset: String(bytes.length + 1), bytes })
+    expect(tabs.tab(tab.tabId)?.codexProgramStatus).toBe('unknown')
+    await new Promise<void>(resolve => io.terminals[0].write(Uint8Array.from(bytes), resolve))
+    expect(tabs.tab(tab.tabId)?.codexProgramStatus).toBe('unknown')
+    expect(tabs.tab(tab.tabId)?.status).toBe('running')
+  })
+
   // 真实host→现有Native bus→mapper→store；通知不把无序activity变成completed。
   it('Native_ReceiptCompositionOwnsExactAttempt_018', async () => {
     useCliProfilesStore().profiles = [{ ...useCliProfilesStore().profiles[0], id: 'claude-main', cli: 'claude' }]
@@ -633,7 +742,7 @@ it('Native_RestartFencesPendingParser_023', async () => {
   let release!: (value: boolean) => void
   let entered = false
   const handler = term.parser.registerOscHandler(777, () => { entered = true; return new Promise<boolean>(resolve => { release = resolve }) })
-  const bytes = [...new TextEncoder().encode('\x1b]777;hold\x07\x1b[6n\x1b[?1049h\x1b[?2004hOLD-QUEUED')]
+  const bytes = [...new TextEncoder().encode('\x1b]777;hold\x07\x1b]7501;state=blocked:app=codex\x1b\\\x1b[6n\x1b[?1049h\x1b[?2004hOLD-QUEUED')]
   io.channels[0].channel.onmessage({ runId: tab.runId, generation: 1, streamEpoch: '1', offset: '0', bytes })
   await vi.waitFor(() => expect(entered).toBe(true))
   tabs.tab(tab.tabId)!.status = 'exited'
@@ -649,13 +758,15 @@ it('Native_RestartFencesPendingParser_023', async () => {
   expect(io.user).not.toHaveBeenCalled()
   expect(term.buffer.active.type).toBe('normal')
   expect(term.modes.bracketedPasteMode).toBe(false)
-  const fresh = [...new TextEncoder().encode('NEW\x1b[6n')]
+  expect(tabs.tab(tab.tabId)!.codexProgramStatus).toBeUndefined()
+  const fresh = [...new TextEncoder().encode('NEW\x1b]7501;state=working:app=codex\x1b\\\x1b[6n')]
   io.channels[1].channel.onmessage({ runId: restarted.runId, generation: 2, streamEpoch: '1', offset: '0', bytes: fresh })
   await vi.waitFor(() => expect(io.protocol).toHaveBeenCalledTimes(1))
   await vi.waitFor(() => expect(io.ack).toHaveBeenCalledTimes(1))
   expect(io.protocol.mock.calls[0][0]).toEqual({ runId: restarted.runId, generation: 2 })
   expect(io.ack.mock.calls[0][0]).toMatchObject({ runId: restarted.runId, generation: 2 })
   expect(term.buffer.active.getLine(0)!.translateToString(true)).toBe('NEW')
+  expect(tabs.tab(tab.tabId)!.codexProgramStatus).toBe('working')
   handler.dispose()
 })
 

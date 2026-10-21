@@ -43,7 +43,7 @@ describe('CC Desk product boundary', () => {
     expect(app).not.toContain('decideStartupView')
     expect(app).not.toContain('startProjectSession')
     const workspace = read('src/components/workspace/WorkspaceView.vue')
-    expect(workspace).toContain("['claude', 'codex']")
+    expect(workspace).toContain("['claude', 'codex', 'opencode']")
     expect(workspace).toContain("cliAvailability[cli] === 'unavailable'")
     expect(workspace).not.toContain('check-failed-overlay')
     expect(workspace).not.toContain('ptySpawn')
@@ -144,15 +144,16 @@ describe('CC Desk product boundary', () => {
     expect(docs).toContain('protected main')
     expect(docs).toContain('full CI')
   })
-  test('package and installer metadata describe the dual-CLI product', () => {
+  test('package and installer metadata describe the three-CLI product', () => {
     const packageJson = JSON.parse(read('package.json')) as {
       description?: string
       keywords?: string[]
     }
     const tauri = read('src-tauri/tauri.conf.json')
-    expect(packageJson.description).toContain('Claude Code and Codex CLI')
+    expect(packageJson.description).toContain('Claude Code, Codex CLI, and OpenCode')
     expect(packageJson.keywords).toContain('codex-cli')
-    expect(tauri).toContain('Claude Code and Codex CLI')
+    expect(packageJson.keywords).toContain('opencode')
+    expect(tauri).toContain('Claude Code, Codex CLI, and OpenCode')
   })
 
   // 所有构建只保留统一入口；不能恢复旧产品页、第二套标签或资源导航。

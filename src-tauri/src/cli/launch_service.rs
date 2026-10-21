@@ -4,12 +4,12 @@ use super::environment::EnvMap;
 use super::invocation::build_invocation;
 use super::launch::LaunchCoordinator;
 use super::output_route::OutputRoute;
-use super::profiles::error;
+use super::profiles::{error, Override};
 use super::routed_launch::RoutedResource;
 use super::run_registry::{LaunchPhase, LaunchStatus, RunKey, RunRegistry};
 use super::snapshot::{freeze_launch, CallerIdentity, FreezeContext, LaunchSnapshot};
 use super::storage::WorkspaceRepository;
-use super::types::{LaunchRequest, SafeError};
+use super::types::{CliKind, LaunchAction, LaunchRequest, SafeError};
 use crate::platform::launch::resolve_process;
 use crate::platform::owned_pty::OwnedPty;
 use crate::terminal_transport::OutputFrame;
@@ -29,6 +29,12 @@ pub(crate) struct FrozenPty {
     pub(crate) observer_failure: Option<&'static str>,
 }
 pub(crate) type NativeRun = RoutedResource<FrozenPty, OutputRoute<OutputFrame>>;
+struct OpencodePreparation {
+    owner: CallerIdentity,
+    request: LaunchRequest,
+    result: Mutex<Option<Result<String, SafeError>>>,
+    settled: Condvar,
+}
 
 /// D14/D15 supply a backend consumer. It must retain/reap its owned run and
 /// implement bounded output/drain policy. This interface is never deserialized.
@@ -83,6 +89,7 @@ pub(crate) struct LaunchService {
     observer: Option<Arc<crate::observer_host::ObserverHost>>,
     shutting_down: Arc<RwLock<bool>>,
     command_owners: Arc<CommandOwners>,
+    opencode_preparations: Mutex<Vec<Arc<OpencodePreparation>>>,
 }
 impl LaunchService {
     pub(crate) fn rename_metadata(
@@ -228,6 +235,7 @@ impl LaunchService {
             observer: None,
             shutting_down: Arc::new(RwLock::new(false)),
             command_owners: Arc::new(CommandOwners::default()),
+            opencode_preparations: Mutex::new(Vec::new()),
         }
     }
     pub(crate) fn with_observer(mut self, host: Arc<crate::observer_host::ObserverHost>) -> Self {
@@ -246,6 +254,185 @@ impl LaunchService {
     }
     pub(crate) fn registry(&self) -> &Arc<RunRegistry<NativeRun>> {
         self.coordinator.registry()
+    }
+    /// 同一文档与 requestId 的准备只执行一次；未知结果也不能重放 POST。
+    pub(crate) fn prepare_opencode_session(
+        &self,
+        caller: &CallerIdentity,
+        request: &LaunchRequest,
+    ) -> Result<String, SafeError> {
+        self.registry().check_caller(caller)?;
+        request.validate()?;
+        if request.cli != CliKind::Opencode || request.action != LaunchAction::New {
+            return Err(error("UNSUPPORTED_ACTION"));
+        }
+        let (preparation, owns_creation) = {
+            let mut preparations = self.opencode_preparations.lock();
+            // 未完成项仍拥有潜在副作用；活跃文档的未知结果也不能因容量压力而被重放。
+            preparations.retain(|old| {
+                old.result.lock().is_none() || self.registry().check_caller(&old.owner).is_ok()
+            });
+            if let Some(old) = preparations
+                .iter()
+                .find(|old| old.owner == *caller && old.request.request_id == request.request_id)
+            {
+                if old.request != *request {
+                    return Err(error("LAUNCH_REQUEST_ID_CONFLICT"));
+                }
+                (old.clone(), false)
+            } else {
+                if preparations.len() >= 4096 {
+                    // 已有收据仍优先；新请求尚未创建，可安全跳过可选准备，保留有界容量。
+                    return Err(error("OPENCODE_SESSION_PREPARE_UNAVAILABLE_BEFORE_CREATE"));
+                }
+                let preparation = Arc::new(OpencodePreparation {
+                    owner: caller.clone(),
+                    request: request.clone(),
+                    result: Mutex::new(None),
+                    settled: Condvar::new(),
+                });
+                preparations.push(preparation.clone());
+                (preparation, true)
+            }
+        };
+        if !owns_creation {
+            let mut result = preparation.result.lock();
+            while result.is_none() {
+                preparation.settled.wait(&mut result);
+            }
+            self.registry().check_caller(caller)?;
+            return result.as_ref().unwrap().clone();
+        }
+        let current = || {
+            if *self.shutting_down.read() {
+                return Err(error("RUN_SUPERVISOR_STOPPING"));
+            }
+            self.registry().check_caller(caller)
+        };
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            current()?;
+            let profile = self.repository.get_profile(&request.profile_id)?;
+            if !request.extra_args.is_empty()
+                || matches!(&profile.default_args, Override::Set(args) if !args.is_empty())
+            {
+                return Err(error("OPENCODE_SESSION_PREPARE_UNSUPPORTED"));
+            }
+            let legacy =
+                profile.read_legacy(&self.repository.metadata_directory().join("config.json"))?;
+            let inherited = self.inherited_environment()?;
+            let port = super::opencode_prepare::select_port()
+                .map_err(|_| error("OPENCODE_SESSION_PREPARE_UNAVAILABLE_BEFORE_CREATE"))?;
+            let mut server_request = request.clone();
+            server_request.action = LaunchAction::Raw {
+                argv: vec![
+                    "serve".into(),
+                    "--hostname".into(),
+                    "127.0.0.1".into(),
+                    "--port".into(),
+                    port.to_string(),
+                ],
+            };
+            let snapshot = freeze_launch(
+                &server_request,
+                &profile,
+                caller,
+                &FreezeContext {
+                    inherited: &inherited,
+                    terminal: &EnvMap::new(),
+                    legacy: legacy.as_ref(),
+                    observer: None,
+                },
+            )?;
+            let invocation = build_invocation(&server_request, &snapshot)?;
+            let spec = resolve_process(&invocation)?;
+            let (admission, owner) = self.admit_owned_command()?;
+            let result = super::opencode_prepare::create_session(
+                &spec,
+                std::path::Path::new(&request.launch_cwd),
+                port,
+                admission,
+                &current,
+            );
+            let mut owner = owner;
+            owner.settled = true;
+            result
+        }))
+        .unwrap_or_else(|_| Err(error("OPENCODE_SESSION_OUTCOME_UNKNOWN")));
+        *preparation.result.lock() = Some(result.clone());
+        preparation.settled.notify_all();
+        current()?;
+        result
+    }
+    pub(crate) fn probe_opencode_database(
+        &self,
+        caller: &CallerIdentity,
+        profile: &super::profiles::Profile,
+        cwd: &std::path::Path,
+        expected_environment: &EnvMap,
+    ) -> Result<String, SafeError> {
+        self.registry().check_caller(caller)?;
+        if profile.cli != CliKind::Opencode || self.repository.get_profile(&profile.id)? != *profile
+        {
+            return Err(error("SCOPE_UNKNOWN"));
+        }
+        let request = LaunchRequest {
+            request_id: format!("db-path-{}", uuid::Uuid::new_v4()),
+            tab_id: "metadata".into(),
+            run_id: "metadata".into(),
+            generation: 1,
+            profile_id: profile.id.clone(),
+            expected_profile_revision: profile.revision,
+            cli: CliKind::Opencode,
+            launch_cwd: cwd
+                .to_str()
+                .ok_or_else(|| error("SCOPE_UNKNOWN"))?
+                .to_owned(),
+            action: LaunchAction::Raw {
+                argv: vec!["db".into(), "path".into()],
+            },
+            extra_args: vec![],
+            cols: 80,
+            rows: 24,
+        };
+        let legacy =
+            profile.read_legacy(&self.repository.metadata_directory().join("config.json"))?;
+        let inherited = self.inherited_environment()?;
+        let snapshot = freeze_launch(
+            &request,
+            profile,
+            caller,
+            &FreezeContext {
+                inherited: &inherited,
+                terminal: &EnvMap::new(),
+                legacy: legacy.as_ref(),
+                observer: None,
+            },
+        )
+        .map_err(|_| error("SCOPE_UNKNOWN"))?;
+        if snapshot.environment() != expected_environment {
+            return Err(error("SCOPE_UNKNOWN"));
+        }
+        let invocation =
+            build_invocation(&request, &snapshot).map_err(|_| error("SCOPE_UNKNOWN"))?;
+        let spec = resolve_process(&invocation).map_err(|_| error("SCOPE_UNKNOWN"))?;
+        let (admission, mut owner) = self
+            .admit_owned_command()
+            .map_err(|_| error("SCOPE_UNKNOWN"))?;
+        let current = || {
+            if *self.shutting_down.read() {
+                return Err(error("SCOPE_UNKNOWN"));
+            }
+            self.registry()
+                .check_caller(caller)
+                .map_err(|_| error("SCOPE_UNKNOWN"))
+        };
+        let result = super::opencode_prepare::probe_database_path(&spec, admission, &current);
+        owner.settled = true;
+        current()?;
+        if self.repository.get_profile(&profile.id)? != *profile {
+            return Err(error("SCOPE_UNKNOWN"));
+        }
+        result
     }
     pub(crate) fn start(
         &self,
@@ -267,6 +454,12 @@ impl LaunchService {
             .preparing())
     }
 
+    fn admit_owned_command(&self) -> Result<(PreparingStart, CommandOwner), SafeError> {
+        let admission = self.admit_start()?;
+        let owner = self.command_owners.register()?;
+        Ok((admission, owner))
+    }
+
     pub(crate) fn start_admitted(
         &self,
         mut admission: PreparingStart,
@@ -279,7 +472,7 @@ impl LaunchService {
         // synchronously round-trip through the Tauri main event loop.
         let handoff_guard = RefCell::new(None);
         let spawned = Cell::new(false);
-        let status = self.coordinator.start_routed(
+        let status = self.coordinator.start_routed_with_source(
             caller,
             request,
             || {
@@ -380,6 +573,11 @@ impl LaunchService {
                         let overlaid = overlaid.and_then(|next| {
                             let invocation = build_invocation(next.request(), &next)?;
                             resolve_process(&invocation)?;
+                            if let Some(args) = &prepared.codex_args {
+                                if !super::codex::identity_hooks_supported(snapshot, args) {
+                                    return Err(error("OBSERVER_UNAVAILABLE"));
+                                }
+                            }
                             Ok(next)
                         });
                         match overlaid {
@@ -418,6 +616,24 @@ impl LaunchService {
                     observer,
                     observer_failure,
                 })
+            },
+            |snapshot| {
+                let database =
+                    if super::source_provenance::SourceProvenance::needs_database_probe(snapshot) {
+                        (|| -> Result<Option<String>, SafeError> {
+                            let profile = self.repository.get_profile(&request.profile_id)?;
+                            self.probe_opencode_database(
+                                caller,
+                                &profile,
+                                std::path::Path::new(&request.launch_cwd),
+                                snapshot.environment(),
+                            )
+                            .map(Some)
+                        })()
+                    } else {
+                        Ok(None)
+                    };
+                super::source_provenance::SourceProvenance::freeze_with_database(snapshot, database)
             },
         )?;
         if spawned.get() {
@@ -683,5 +899,34 @@ impl RunAccess {
     pub(crate) fn snapshot(&self) -> Result<Arc<LaunchSnapshot>, SafeError> {
         self.check()?;
         Ok(self.resource.process.snapshot.clone())
+    }
+}
+
+#[cfg(test)]
+#[path = "../tests/native_cli_opencode_preparations.rs"]
+mod opencode_preparation_tests;
+
+#[cfg(test)]
+mod owned_command_tests {
+    use super::*;
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn Opencode_DeniedProbeCreatesNoCommandOwner_094() {
+        let temp = tempfile::tempdir().unwrap();
+        let repository =
+            WorkspaceRepository::open(temp.path().join("metadata/workspace.json")).unwrap();
+        let service = LaunchService::new(repository.clone(), Some(EnvMap::new()), None);
+        let frozen = repository
+            .admission()
+            .freeze(&uuid::Uuid::new_v4().to_string())
+            .unwrap();
+        assert_eq!(
+            service.admit_owned_command().err().unwrap().code,
+            "HISTORY_MAINTENANCE_ACTIVE"
+        );
+        assert_eq!(*service.command_owners.active.lock(), 0);
+        service.wait_for_commands();
+        frozen.release_review().unwrap();
     }
 }

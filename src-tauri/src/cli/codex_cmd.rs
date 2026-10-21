@@ -135,6 +135,34 @@ fn matches_hash(text: &str, expected: &str) -> bool {
     format!("{:x}", Sha256::digest(text.replace("\r\n", "\n"))) == expected
 }
 
+/// 可选原生能力探测只执行这个保持打开且身份核实过的直接路径。
+pub(crate) fn hold_probe_target(path: &Path) -> Result<Vec<File>, SafeError> {
+    let canonical = literal_path(path)?;
+    let mut guards = Vec::new();
+    hold_parent(&canonical, &mut guards)?;
+    let file = OpenOptions::new()
+        .read(true)
+        .share_mode(1)
+        .open(path)
+        .map_err(|_| unavailable())?;
+    if !file.metadata().map_err(|_| unavailable())?.is_file()
+        || !dos_path(path)?.eq_ignore_ascii_case(&dos_path(&final_path(&file)?)?)
+    {
+        return Err(unavailable());
+    }
+    let current = literal_path(path)?;
+    let check = OpenOptions::new()
+        .read(true)
+        .share_mode(1)
+        .open(&current)
+        .map_err(|_| unavailable())?;
+    if canonical != current || identity(&file)? != identity(&check)? {
+        return Err(unavailable());
+    }
+    guards.push(file);
+    Ok(guards)
+}
+
 pub(crate) fn prepare(
     program: &Path,
     args: &[OsString],

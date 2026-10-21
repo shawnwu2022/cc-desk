@@ -2,10 +2,11 @@ import { describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { useNativeTabsStore } from '@/stores/nativeTabs'
 import type { CliProfile } from '@/types/profile'
+import type { NativeCliKind } from '@/types/cli'
 import type { LaunchAttempt, LaunchStatus } from '@/api/cliLaunchAttempt'
 import { createNativeLaunchEntry } from '@/terminal/nativeLaunchEntry'
 
-function profile(id: string, cli: 'claude' | 'codex', revision = '7'): CliProfile {
+function profile(id: string, cli: NativeCliKind, revision = '7'): CliProfile {
   return {
     id,
     revision,
@@ -49,7 +50,7 @@ function input(overrides: Record<string, unknown> = {}) {
 
 describe('D23 native launch/recovery user entry', () => {
   // NativeCliTerminal 传入真实 Pinia tab.action；代理对象必须经过字段校验生成独立请求。
-  it.each(['claude', 'codex'] as const)('Launch_RealStoreAction_010: %s', async cli => {
+  it.each(['claude', 'codex', 'opencode'] as const)('Launch_RealStoreAction_010: %s', async cli => {
     setActivePinia(createPinia())
     const tabs = useNativeTabsStore()
     const created = tabs.create({ cli, projectId: 'project', projectPath: 'C:\\repo', profileId: `${cli}-main`, profileRevision: '7', action: { kind: 'new' } })
@@ -63,6 +64,7 @@ describe('D23 native launch/recovery user entry', () => {
       .resolves.toMatchObject({ phase: 'running', requestId: tab.requestId })
     expect(captured).toEqual({ kind: 'new' })
     expect(captured).not.toBe(tab.action)
+    expect(created.title).toBe(cli === 'claude' ? 'Claude Code' : cli === 'codex' ? 'Codex CLI' : 'opencode')
   })
   // raw argv 从响应式数组复制后，后续界面更改不能改变已冻结的启动请求。
   it('Launch_ReactiveArgvSnapshot_011', async () => {
@@ -80,7 +82,11 @@ describe('D23 native launch/recovery user entry', () => {
     expect(captured).toEqual({ kind: 'raw', argv: ['two words', '', '--literal= x'] })
   })
   it('D23_Launch_FreezesSelectedProfileRevisionIntoOneAttempt_01', async () => {
-    const selected = { claude: profile('claude-main', 'claude', '9'), codex: profile('codex-main', 'codex', '4') }
+    const selected: Record<NativeCliKind, CliProfile> = {
+      claude: profile('claude-main', 'claude', '9'),
+      codex: profile('codex-main', 'codex', '4'),
+      opencode: profile('opencode-main', 'opencode', '3'),
+    }
     let captured: any
     const attempt: LaunchAttempt = {
       start: vi.fn(async () => running('request-1', 'run-1', 1)),

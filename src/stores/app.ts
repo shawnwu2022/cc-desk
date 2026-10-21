@@ -169,7 +169,7 @@ export const useAppStore = defineStore('app', () => {
       guiDensity: config.guiDensity === 'compact' ? 'compact' : 'standard', sidebarWidth: widthValue(config.sidebarWidth),
       language: config.language === 'zh' || config.language === 'en' ? config.language : detectSystemLocale(),
       startupDestination: config.startupDestination === 'projects' ? 'projects' : 'workspace',
-      defaultNewCli: config.defaultNewCli === 'codex' ? 'codex' : 'claude',
+      defaultNewCli: config.defaultNewCli === 'claude' || config.defaultNewCli === 'codex' || config.defaultNewCli === 'opencode' ? config.defaultNewCli : 'claude',
       ...terminalValues,
     }
     const next = simpleSettings()
@@ -624,7 +624,7 @@ export const useAppStore = defineStore('app', () => {
     if (!validShortcutBindings(value)) { settingsErrors.value = { ...settingsErrors.value, shortcutBindings: 'shortcutBindingInvalid' }; return Promise.resolve(false) }
     return saveSimpleSetting('shortcutBindings', readShortcutBindings(value))
   }
-  function setDefaultNewCli(value: string): Promise<boolean> { return saveSimpleSetting('defaultNewCli', value === 'codex' ? 'codex' : 'claude') }
+  function setDefaultNewCli(value: string): Promise<boolean> { return saveSimpleSetting('defaultNewCli', value === 'claude' || value === 'codex' || value === 'opencode' ? value : 'claude') }
 
   function setTerminalTheme(id: string): Promise<boolean> { return saveSimpleSetting('terminalTheme', normalizeTerminalThemeId(id)) }
   function setFontSize(size: number): Promise<boolean> { return saveSimpleSetting('fontSize', normalizeTerminalFontSize(size)) }

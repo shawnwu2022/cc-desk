@@ -636,7 +636,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     const id = retryId ?? createNativeId('preparing')
     const owner = {}
     const row: UnifiedSession = { id, projectKey: normalizePath(input.projectPath), projectPath: input.projectPath,
-      cli: input.cli, runtime: 'native-cli', title: input.title || (input.cli === 'claude' ? 'Claude Code' : 'Codex CLI'),
+      cli: input.cli, runtime: 'native-cli', title: input.title || (input.cli === 'claude' ? 'Claude Code' : input.cli === 'codex' ? 'Codex CLI' : 'opencode'),
       processState: 'starting', attentionState: 'none', lastActivityAt: Date.now(), lastOpenedAt: Date.now(), archived: false, opened: false, preparationState: 'pending', resumable: false, adapterSessionId: id }
     const creation = { input: copyInput(input), row, owner, preparing: true, selectionIntentEpoch: intentEpoch }
     creations.set(id, creation)

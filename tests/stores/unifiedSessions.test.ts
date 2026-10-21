@@ -267,6 +267,12 @@ it('Rename_ClosedHistoryEditsWithoutResume_013', async () => {
   store.activeSessionId = live.id
   store.beginRename(history.id)
   expect(store.sessions.find(row => row.id === history.id)?.renameState).toBe('editing')
+  // opencode 行即使从双击/F2/全局快捷键进入也不得打开改名编辑器（后端无 rename 动词）。
+  const opencodeRow = session({ id: 'oc-row', opened: false, processState: 'stopped', cli: 'opencode' })
+  fakeAdapter('legacy-claude', [opencodeRow])
+  store.sessions = [...store.sessions, opencodeRow]
+  store.beginRename(opencodeRow.id)
+  expect(store.sessions.find(row => row.id === opencodeRow.id)?.renameState).toBe('idle')
   await store.renameSession(history.id, 'History display name', true)
   expect(store.sessions.find(row => row.id === history.id)?.title).toBe('History display name')
   expect(store.activeSessionId).toBe(live.id)
@@ -1205,6 +1211,30 @@ it('Unified_BothArchivesKeepOwners_030', async () => {
   await store.refresh()
   expect(store.sessions.some(row => row.archived)).toBe(false)
   expect(store.projectGroups[0].sessions.map(row => row.id)).toEqual(['native-history:profile-a'])
+})
+
+// 旧存储值没有 opencode 键：迁移默认启用，既有的 claude/codex 偏好保持不变。
+it('CliSupport_LegacyStorageDefaultsOpencode_01', async () => {
+  localStorage.setItem('cc-desk-cli-support-v1', JSON.stringify({ claude: true, codex: false }))
+  try {
+    const { useCliSupportStore } = await import('@/stores/cliSupport')
+    const store = useCliSupportStore()
+    expect(store.isEnabled('opencode')).toBe(true)
+    expect(store.isEnabled('codex')).toBe(false)
+    expect(store.isEnabled('claude')).toBe(true)
+  } finally {
+    localStorage.removeItem('cc-desk-cli-support-v1')
+  }
+})
+
+// opencode 准备行使用自己的显示名，不能落回 Codex CLI 的兜底分支。
+it('Unified_OpencodePreparingRowTitle_01', async () => {
+  localStorage.removeItem('cc-desk-cli-support-v1')
+  const store = useUnifiedSessionsStore()
+  store.configureAdapters([fakeAdapter('native-cli').adapter])
+  store.configureCreationPreparer(() => new Promise<CreateUnifiedSessionInput>(() => {}))
+  void store.createSession({ cli: 'opencode', projectKey: '/repo', projectPath: '/repo' })
+  expect(store.sessions[0]?.title).toBe('opencode')
 })
 
 // CLI 支持开关关闭的 CLI 不列出历史行；已打开终端是活进程，保留可选中与关闭。

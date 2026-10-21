@@ -100,6 +100,7 @@ pub(crate) fn build_invocation<'a>(
     args.extend(match request.cli {
         CliKind::Claude => super::claude::action_args(snapshot)?,
         CliKind::Codex => super::codex::action_args(snapshot)?,
+        CliKind::Opencode => super::opencode::action_args(snapshot)?,
         CliKind::Shell => super::shell::action_args(snapshot)?,
     });
     // No quoting, parsing or deduplication. Explicit caller flags and positionals

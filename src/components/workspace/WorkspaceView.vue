@@ -17,7 +17,7 @@ const props = withDefaults(defineProps<{
 }>(), { project: null, projectTitle: '', activeSession: null, cliAvailability: () => ({}), requestPending: false })
 const emit = defineEmits<{ 'new-session-request': [project: UnifiedProjectIdentity]; 'add-project': [] }>()
 const { t } = useI18n()
-const clis = ['claude', 'codex'] as const
+const clis = ['claude', 'codex', 'opencode'] as const
 function requestSession() {
   if (props.project) emit('new-session-request', props.project)
   else emit('add-project')
@@ -30,7 +30,7 @@ function requestSession() {
       :has-project="!!project" @new-session-request="requestSession" @add-project="emit('add-project')" />
     <div class="workspace-content">
       <InlineNotice v-for="cli in clis.filter(cli => cliAvailability[cli] === 'unavailable')" :key="cli"
-        :data-cli-unavailable="cli" kind="warning" :message="t('cliUnavailable', { cli: cli === 'claude' ? 'Claude Code' : 'Codex CLI' })" />
+        :data-cli-unavailable="cli" kind="warning" :message="t('cliUnavailable', { cli: cli === 'claude' ? 'Claude Code' : cli === 'codex' ? 'Codex CLI' : 'opencode' })" />
       <InlineNotice v-if="requestPending" :message="t('workspaceActionPending')" />
       <!-- Task 11 fills this single host slot. Section switching must never unmount it. -->
       <div class="workspace-terminal-host" data-workspace-terminal-host>

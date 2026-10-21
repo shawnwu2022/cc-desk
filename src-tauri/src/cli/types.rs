@@ -106,6 +106,7 @@ impl WireBytes {
 pub(crate) enum CliKind {
     Claude,
     Codex,
+    Opencode,
     Shell,
 }
 
@@ -114,6 +115,7 @@ impl CliKind {
         match self {
             Self::Claude => "claude",
             Self::Codex => "codex",
+            Self::Opencode => "opencode",
             Self::Shell => "shell",
         }
     }

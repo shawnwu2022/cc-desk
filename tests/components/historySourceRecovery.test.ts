@@ -31,6 +31,15 @@ describe('Actionable history diagnostics', () => {
     expect(rows[1].get('[data-history-issue-retry]').attributes('disabled')).toBeDefined()
     view.unmount()
   })
+  // opencode 历史失败必须显示自己的来源名，并与其他历史源同样保留未知范围。
+  it('HistoryRecovery_OpencodeSource_003', () => {
+    const warning = { source: 'opencode-history' as const, code: 'SOURCE_BUSY', stage: 'read-source-enumeration' as const }
+    const view = mount(WorkspaceSourceDetails, { props: { warnings: [warning], truncated: false, partial: true, issues: [] }, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en, zh } })] } })
+    expect(view.text()).toContain(en.sourceWarningOpencodeHistory)
+    expect(view.text()).toContain(en.historyIssueUnknownScope)
+    expect(view.text()).toContain(en.historyRecoveryTemporary)
+    view.unmount()
+  })
   // 只在明确错误码支持时提供对应解释，不把泛化读取失败宣称为权限或文件损坏。
   it('HistoryRecovery_HonestReasons_002', () => {
     expect(historyRecoveryHint('SOURCE_READ_FORBIDDEN')).toBe('historyRecoveryPermission')

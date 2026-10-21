@@ -21,3 +21,10 @@ it.each(['relative/codex', 'C:\\Tools\\codex\0.exe'])('ProgramDiscoveryApi_Rejec
   mockIPC(() => ({ ...response(), candidates: [{ programPath, launcher: { kind: 'native' } }] }))
   await expect(cliDiscoverPrograms('p', '2', 'project')).rejects.toThrow('DISCOVERY_UNAVAILABLE')
 })
+// 后端 CliKind 已扩至 opencode：discovery 白名单必须接受，未知 CLI 仍整体拒绝。
+it('ProgramDiscoveryApi_AcceptsOpencodeAndRejectsUnknownCli_004', async () => {
+  mockIPC(() => ({ ...response(), cli: 'opencode' }))
+  expect((await cliDiscoverPrograms('p', '2', 'project')).cli).toBe('opencode')
+  mockIPC(() => ({ ...response(), cli: 'futurecli' }))
+  await expect(cliDiscoverPrograms('p', '2', 'project')).rejects.toThrow('DISCOVERY_UNAVAILABLE')
+})

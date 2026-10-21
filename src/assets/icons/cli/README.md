@@ -3,7 +3,8 @@
 These bundled assets identify the application behind each session. They are
 third-party brand assets, not CC Desk artwork, and are not relicensed under the
 repository's MIT license. Their use does not imply endorsement or affiliation.
-Both were checked against the official sources on 2026-10-01.
+Claude and Codex assets were checked against official sources on 2026-10-01.
+OpenCode assets were checked on 2026-10-20.
 
 ## Claude Code
 
@@ -40,14 +41,34 @@ Both were checked against the official sources on 2026-10-01.
   from public availability; OpenAI retains its rights in the mark. It identifies
   the OpenAI CLI inside CC Desk and is not CC Desk's own branding.
 
+## OpenCode
+
+- Owner: Anomaly Innovations, Inc.
+- Official brand page: https://opencode.ai/brand
+- Source SVGs: `packages/console/app/src/asset/brand/opencode-logo-light.svg`
+  and `opencode-logo-dark.svg` in the official repository, pinned to commit
+  `a62028dd2aa6c6fc1788dddb57bf6745fc2eb905`:
+  https://github.com/anomalyco/opencode/tree/a62028dd2aa6c6fc1788dddb57bf6745fc2eb905/packages/console/app/src/asset/brand
+- `opencode.svg` / `opencode-dark.svg` preserve both visible paths, their
+  original 240 × 300 coordinates and original paired colors unchanged. The
+  full-canvas clipping/mask wrappers are omitted; the mark fits proportionally
+  in a 16 × 16 CSS-pixel box. GUI theme changes select the official light/dark
+  artwork without recoloring it or relying on the OS theme.
+- Combined path SHA-256 (path data joined by LF, both assets):
+  `6509feb0ebe1401aee4d187f51e7cf7a94ac19bd88377e59a0c3b6224658a20e`
+- Repository license: https://github.com/anomalyco/opencode/blob/a62028dd2aa6c6fc1788dddb57bf6745fc2eb905/LICENSE
+  OpenCode retains its brand rights; public availability does not imply
+  endorsement, affiliation or additional trademark permission.
+
 ## Accessibility and rendering
 
 The shared component keeps the full accessible names “Claude Code” / “Codex
-CLI”, keyboard focus and tooltips. Decorative images have empty alt text so
-screen readers do not announce the application twice. `CC` / `CX` are only
-image-loading-error fallbacks. Codex's monochrome contrast is tested against
-both themes and selected rows; Claude retains the official brand color rather
-than claiming the previous neutral-ink 3:1 guarantee for its logo.
+CLI” / “opencode”, keyboard focus and tooltips. Decorative images have empty
+alt text so screen readers do not announce the application twice. `CC` / `CX` /
+`OC` appear only as image-loading-error fallbacks. Codex's monochrome contrast
+is tested against both themes and selected
+rows; Claude retains the official brand color rather than claiming the previous
+neutral-ink 3:1 guarantee for its logo.
 
 Assets are local and contain only static SVG geometry; rendering does not
 request provider sites or execute SVG code.

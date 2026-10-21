@@ -3,10 +3,11 @@ import { expandFixtureProjects, clearFixtureSetupFocus, openFixtureSessionMenu }
 import { captureFixtureEvidence } from './fixtureEvidence'
 
 const browserErrors = new WeakMap<Page, string[]>()
-test.beforeEach(async ({ page }) => {
+test.beforeEach(async ({ page, baseURL }) => {
   const errors: string[] = []; browserErrors.set(page, errors)
   page.on('pageerror', error => errors.push(error.message))
-  await page.route('**/*', route => new URL(route.request().url()).origin === 'http://127.0.0.1:4174' ? route.continue() : route.abort())
+  const fixtureOrigin = new URL(baseURL ?? 'http://127.0.0.1:4174').origin
+  await page.route('**/*', route => new URL(route.request().url()).origin === fixtureOrigin ? route.continue() : route.abort())
 })
 test.afterEach(async ({ page }) => {
   expect(browserErrors.get(page)).toEqual([])
@@ -217,7 +218,7 @@ for (const [variantIndex, variant] of ['native-claude', 'native-codex', 'legacy-
         await expect(primary.getByRole('button')).toHaveCount(1)
         await expect(close).toBeEnabled()
         await expect(close.locator('svg path')).toHaveAttribute('d', 'm6 6 12 12M18 6 6 18')
-        if (state === 'running') await expect(row.locator('[data-session-badge]')).toHaveCount(0)
+        if (state === 'running' && variant !== 'native-codex') await expect(row.locator('[data-session-badge]')).toHaveCount(0)
         else await expect(row.locator('[data-session-badge]')).toHaveAttribute('data-session-badge', state === 'unknown' ? 'confirming' : state)
         await expect(row.locator('.session-app-icon')).toHaveAttribute('aria-label', new RegExp('^' + (variant === 'native-codex' ? 'Codex CLI' : 'Claude Code') + '; '))
 
@@ -597,3 +598,37 @@ test.describe('archive touch discovery', () => {
     await expect(page.locator('[data-blocked-host-calls]')).toHaveAttribute('data-blocked-host-calls', '0')
   })
 })
+
+// 合成生命周期用于浏览器键盘与布局检查，不连接 CLI 或用户会话。
+for (const locale of ['en', 'zh']) for (const gui of ['light', 'dark']) {
+  test(`ActiveFilter_KeyboardLayout_001 ${locale} ${gui}`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 1024, height: 640 })
+    const errors: string[] = []
+    page.on('pageerror', error => errors.push(error.message))
+    await page.goto(`/__visual__/?scenario=session-status&locale=${locale}&gui=${gui}`)
+    await expect(page.locator('[data-visual-ready]')).toHaveAttribute('data-visual-ready', 'true')
+    await expandFixtureProjects(page)
+    const filter = page.getByRole('button', { name: locale === 'zh' ? '仅显示活跃会话' : 'Active sessions only', exact: true })
+    const rows = page.locator('[data-session-row]')
+    await expect(filter).toHaveAttribute('aria-pressed', 'false')
+    await expect(rows).toHaveCount(17)
+    await filter.focus()
+    await page.keyboard.press('Enter')
+    await expect(filter).toHaveAttribute('aria-pressed', 'true')
+    await expect(filter).toBeFocused()
+    await expect(rows).toHaveCount(16)
+    for (const index of [0, 1, 8, 15]) await expect(page.locator(`[data-session-row="visual-status-${index}"]`)).toHaveCount(1)
+    await expect(page.locator('[data-session-row="visual-status-16"]')).toHaveCount(0)
+    const box = (await filter.boundingBox())!
+    const panel = (await page.locator('.sessions-panel').boundingBox())!
+    expect(box.height).toBeGreaterThanOrEqual(28)
+    expect(box.x).toBeGreaterThanOrEqual(panel.x)
+    expect(box.x + box.width).toBeLessThanOrEqual(panel.x + panel.width)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    await page.screenshot({ path: testInfo.outputPath(`active-filter-${locale}-${gui}.png`) })
+    await page.keyboard.press('Space')
+    await expect(filter).toHaveAttribute('aria-pressed', 'false')
+    await expect(rows).toHaveCount(17)
+    expect(errors).toEqual([])
+  })
+}

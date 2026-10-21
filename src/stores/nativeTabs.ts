@@ -9,6 +9,7 @@ import { createNativeId } from '@/utils/nativeId'
 import type { NativeObservationNotice, NativeObservationNoticeState } from '@/types/nativeObservationNotice'
 import { nativeNoticeReasonCode } from '@/types/nativeObservationNotice'
 import { useHookStore } from './hook'
+import type { CodexProgramStatus } from '@/terminal/codexProgramStatus'
 
 export type NativeTabStatus =
   | 'stopped'
@@ -49,6 +50,8 @@ export interface NativeCliTab {
   observationState?: ObservationState['observation']
   observerReasonCode?: ObserverReasonCode
   observationNotice?: NativeObservationNoticeState
+  /** 当前 owned TUI 的 OSC 7501 提示，不与认证 hook 或历史回合事实混用。 */
+  codexProgramStatus?: CodexProgramStatus
 }
 
 export interface NativeAttemptIdentity {
@@ -58,6 +61,7 @@ export interface NativeAttemptIdentity {
 }
 
 export interface NativeTabCreate {
+  preparedIdentity?: { tabId: string; requestId: string; runId: string }
   sourceSessionKey?: string
   cli: NativeCliKind
   projectId: string
@@ -241,10 +245,14 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
   }
 
   function create(input: NativeTabCreate): NativeCliTab {
-    if (input.cli !== 'claude' && input.cli !== 'codex') {
+    if (input.cli !== 'claude' && input.cli !== 'codex' && input.cli !== 'opencode') {
       throw new Error('NATIVE_CLI_REQUIRED')
     }
-    const tabId = id('tab')
+    const tabId = input.preparedIdentity?.tabId ?? id('tab')
+    if (tabs.has(tabId)) throw new Error('TAB_ID_CONFLICT')
+    if (input.preparedIdentity && Object.values(input.preparedIdentity).some(value => !value || value.includes('\0'))) {
+      throw new Error('INVALID_REQUEST')
+    }
     const value: NativeCliTab = {
       tabId,
       ...(input.sourceSessionKey ? { sourceSessionKey: input.sourceSessionKey } : {}),
@@ -253,14 +261,14 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
       projectPath: text(input.projectPath, 'PROJECT_PATH_REQUIRED'),
       profileId: text(input.profileId, 'PROFILE_ID_REQUIRED'),
       profileRevision: revision(input.profileRevision),
-      requestId: id('request'),
-      runId: id('run'),
+      requestId: input.preparedIdentity?.requestId ?? id('request'),
+      runId: input.preparedIdentity?.runId ?? id('run'),
       generation: 1,
       action: copyAction(input.action),
       status: 'stopped',
       errorCode: null,
       launchRevision: null,
-      title: input.title?.trim() || (input.cli === 'claude' ? 'Claude Code' : 'Codex CLI'),
+      title: input.title?.trim() || (input.cli === 'claude' ? 'Claude Code' : input.cli === 'codex' ? 'Codex CLI' : 'opencode'),
       createdAt: Date.now(),
       lastActivityAt: Date.now(),
       attentionState: 'none',
@@ -300,6 +308,11 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     const identity = sessionId.trim()
     if (!identity || identity.includes('\0')) return false
     if (!value || !matchesNativeAttempt(value, attempt) || value.action.kind === 'raw' || !['starting', 'running'].includes(value.status)) return false
+    if (value.cli === 'claude') {
+      // 结束/工具回执可能来自切换前的会话，不能仅凭同 run 认证回写新身份。
+      if (!value.observedSessionId && eventType !== 'sessionStart' && eventType !== 'userPromptSubmit') return false
+      if (value.observedSessionId && value.observedSessionId !== identity && eventType !== 'sessionStart') return false
+    }
     if (value.cli === 'codex') {
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(identity)) return false
       if (!value.observedSessionId && eventType !== 'sessionStart' && eventType !== 'userPromptSubmit') return false
@@ -312,6 +325,15 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
       value.lastActivityAt = Date.now()
     }
     return true
+  }
+
+  function applyCodexProgramStatus(tabId: string, attempt: NativeAttemptIdentity, status: CodexProgramStatus): void {
+    const value = tabs.get(tabId)
+    if (!value || !matchesNativeAttempt(value, attempt) || value.cli !== 'codex' || value.action.kind === 'raw'
+      || !['starting', 'running'].includes(value.status) || !['idle', 'working', 'blocked', 'unknown'].includes(status)) return
+    if (value.codexProgramStatus === status) return
+    value.codexProgramStatus = status
+    value.lastActivityAt = Date.now()
   }
 
   function applyObservation(tabId: string, attempt: NativeAttemptIdentity, state: ObservationState): void {
@@ -377,6 +399,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     value.observationState = 'off'
     value.errorCode = null
     delete value.observerReasonCode
+    delete value.codexProgramStatus
   }
 
   function markUnknown(tabId: string): void {
@@ -391,6 +414,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     value.activityState = 'unknown'
     value.observationState = 'off'
     value.errorCode = 'LAUNCH_STATE_UNKNOWN'
+    delete value.codexProgramStatus
     useHookStore().invalidateObservation(value)
   }
 
@@ -407,6 +431,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     value.activityState = 'unknown'
     value.observationState = 'off'
     value.errorCode = next
+    delete value.codexProgramStatus
     useHookStore().invalidateObservation(value)
   }
 
@@ -434,6 +459,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     const changed = value.launchRevision === null || value.status !== next.status
       || next.errorCode !== null && value.errorCode !== next.errorCode
     value.status = next.status
+    if (!['starting', 'running'].includes(next.status)) delete value.codexProgramStatus
     const pending = pendingAttention.get(tabId)
     if (next.status === 'running' && pending && matchesNativeAttempt(value, pending.attempt)) {
       value.activityState = pending.state.activity
@@ -499,6 +525,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     value.activityState = 'unknown'
     value.observationState = 'off'
     delete value.observerReasonCode
+    delete value.codexProgramStatus
     delete value.observedSessionId
     delete value.historyChangeRevision; delete value.historyTitleRevision
     value.errorCode = null
@@ -554,6 +581,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     setDiagnostic,
     touch,
     applyObservation,
+    applyCodexProgramStatus,
     applyObservationIdentity,
     applyObservationNotice,
     ackReplyEndNotice,

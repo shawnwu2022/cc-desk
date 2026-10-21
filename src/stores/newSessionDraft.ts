@@ -18,7 +18,7 @@ function readPreferences(): Preferences {
   try {
     const value = JSON.parse(localStorage.getItem(preferenceKey) ?? 'null')
     if (value && typeof value.defaults === 'object' && value.defaults) {
-      return { defaults: Object.fromEntries(Object.entries(value.defaults).filter(([cli, id]) => ['claude', 'codex'].includes(cli) && typeof id === 'string')) }
+      return { defaults: Object.fromEntries(Object.entries(value.defaults).filter(([cli, id]) => ['claude', 'codex', 'opencode'].includes(cli) && typeof id === 'string')) }
     }
   } catch { /* Optional UI preference storage must never prevent a launch. */ }
   return { defaults: {} }
@@ -68,7 +68,8 @@ export const useNewSessionDraftStore = defineStore('new-session-draft', () => {
   function savePreferences() { try { localStorage.setItem(preferenceKey, JSON.stringify(preferences.value)) } catch { /* In-memory preferences remain usable. */ } }
   function preferred(identity: Pick<UnifiedProjectIdentity, 'projectPath'>, tool: UnifiedCliKind): CliProfile | null {
     const canonical = projects.launchPreferences.get(normalizePath(identity.projectPath))
-    const recent = tool === 'claude' ? canonical?.claudeLaunchConfigId : canonical?.codexLaunchConfigId
+    const perCli = { claude: canonical?.claudeLaunchConfigId, codex: canonical?.codexLaunchConfigId, opencode: canonical?.opencodeLaunchConfigId } as const
+    const recent = perCli[tool]
     const ids = [recent, preferences.value.defaults[tool]]
     for (const id of ids) {
       const found = id ? profiles.profile(id) : undefined
@@ -85,7 +86,7 @@ export const useNewSessionDraftStore = defineStore('new-session-draft', () => {
     return selected?.cli === tool ? selected : profiles.selected[tool]
   }
   function forgetDefault(id: string): void {
-    for (const tool of ['claude', 'codex'] as const) {
+    for (const tool of ['claude', 'codex', 'opencode'] as const) {
       if (preferences.value.defaults[tool] !== id) continue
       const replacement = profiles.byCli[tool].find(row => row.id !== id)
       if (replacement) preferences.value.defaults[tool] = replacement.id
@@ -102,7 +103,7 @@ export const useNewSessionDraftStore = defineStore('new-session-draft', () => {
       throw new Error('NEW_SESSION_PREFERENCE_SAVE_FAILED')
     }
   }
-  function availabilityFor(identity?: Pick<UnifiedProjectIdentity, 'projectPath'>) { return Object.fromEntries((['claude', 'codex'] as const).map(tool => {
+  function availabilityFor(identity?: Pick<UnifiedProjectIdentity, 'projectPath'>) { return Object.fromEntries((['claude', 'codex', 'opencode'] as const).map(tool => {
     const config = identity ? preferred(identity, tool) : profiles.selected[tool]
     const evidence = [...tabs.tabs.values()].reverse().filter(tab => tab.cli === tool && tab.profileId === config?.id && tab.profileRevision === config?.revision)
       .sort((a, b) => b.lastActivityAt - a.lastActivityAt)
@@ -158,7 +159,7 @@ export const useNewSessionDraftStore = defineStore('new-session-draft', () => {
       }
       if (!selected) {
         const safe: CliProfile = { id: `desk-safe-${input.cli}`, revision: '0', cli: input.cli,
-          name: input.cli === 'claude' ? 'Claude Code' : 'Codex CLI', launcher: { kind: 'native' },
+          name: input.cli === 'claude' ? 'Claude Code' : input.cli === 'codex' ? 'Codex CLI' : 'opencode', launcher: { kind: 'native' },
           programPath: { mode: 'inherit' }, defaultArgs: { mode: 'set', value: [] },
           skipPermissions: input.cli === 'claude' ? { mode: 'set', value: false } : { mode: 'inherit' },
           // 观察器是会话状态、改名跟随与行认领的基础；hook 只在 Desk 启动的

@@ -1,6 +1,6 @@
 export type U64String = string
 
-export type CliKind = 'claude' | 'codex' | 'shell'
+export type CliKind = 'claude' | 'codex' | 'opencode' | 'shell'
 export type NativeCliKind = Exclude<CliKind, 'shell'>
 export type ResumeScope = 'current-project' | 'all'
 

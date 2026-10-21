@@ -191,6 +191,7 @@ dependencies = [
  "base64",
  "chrono",
  "dirs",
+ "libc",
  "log",
  "once_cell",
  "parking_lot",

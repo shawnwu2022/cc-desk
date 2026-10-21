@@ -15,10 +15,11 @@ function readSupport(): CliSupport {
     const value = JSON.parse(localStorage.getItem(storageKey) ?? 'null')
     if (value && typeof value === 'object' && !Array.isArray(value)) {
       return { claude: typeof value.claude === 'boolean' ? value.claude : true,
-        codex: typeof value.codex === 'boolean' ? value.codex : false }
+        codex: typeof value.codex === 'boolean' ? value.codex : false,
+        opencode: typeof value.opencode === 'boolean' ? value.opencode : true }
     }
   } catch { /* Optional UI preference storage must never block startup. */ }
-  return { claude: true, codex: false }
+  return { claude: true, codex: false, opencode: true }
 }
 
 export const useCliSupportStore = defineStore('cli-support', () => {
@@ -30,10 +31,11 @@ export const useCliSupportStore = defineStore('cli-support', () => {
     support.value = { ...support.value, [cli]: enabled }
     try { localStorage.setItem(storageKey, JSON.stringify(support.value)) } catch { /* In-memory preference remains usable. */ }
   }
-  /** 关闭的默认 CLI 回落到仍启用的 CLI；两者都关闭时保持原值（入口已全部隐藏）。 */
+  /** 关闭的默认 CLI 回落到仍启用的 CLI；全部关闭时保持原值（入口已全部隐藏）。 */
   function fallbackDefault(preferred: UnifiedCliKind): UnifiedCliKind {
     if (support.value[preferred]) return preferred
-    return preferred === 'claude' ? (support.value.codex ? 'codex' : 'claude') : (support.value.claude ? 'claude' : 'codex')
+    const rest = (['claude', 'codex', 'opencode'] as const).filter(cli => cli !== preferred)
+    return rest.find(cli => support.value[cli]) ?? preferred
   }
   return { support, isEnabled, setCliEnabled, fallbackDefault }
 })

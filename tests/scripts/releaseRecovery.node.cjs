@@ -76,6 +76,24 @@ test('ReleaseRecovery_ExactMainCI_008', async () => {
     v => { v.jobs.pop() }, v => { v.ci.run_attempt = 0 },
   ]) { const value = context(); mutate(value); assert.equal(requiredChecksPassed(value), false, JSON.stringify(value)) }
 })
+
+test('ReleaseRecovery_ReleaseCandidateKeepsExactMainGates_020', async () => {
+  const { requiredChecksPassed } = await policy()
+  const candidate = context()
+  candidate.versions = ['0.24.0-rc.1', '0.24.0-rc.1', '0.24.0-rc.1']
+  candidate.tag = 'v0.24.0-rc.1'
+  assert.equal(requiredChecksPassed(candidate), true)
+  candidate.main.protected = false
+  assert.equal(requiredChecksPassed(candidate), false)
+  candidate.main.protected = true
+  candidate.tag = 'v0.24.0'
+  assert.equal(requiredChecksPassed(candidate), false)
+  for (const invalid of ['0.24.0-rc.0', '0.24.0-rc.01', '0.24.0-beta.1', '0.24.0-rc.1\noutput=bad']) {
+    candidate.versions = [invalid, invalid, invalid]
+    candidate.tag = `v${invalid}`
+    assert.equal(requiredChecksPassed(candidate), false, invalid)
+  }
+})
 test('ReleaseRecovery_ArtifactRunBinding_009', async () => {
   const { validateArtifacts } = await policy()
   const artifacts = ['windows', 'macos', 'linux'].map(platform => ({ name: `cc-desk-candidate-${sha}-${platform}`, expired: false, workflow_run: { id: 42, head_sha: sha, head_branch: 'main' } }))
@@ -119,6 +137,16 @@ test('ReleaseRecovery_PublicationRequiresSuccessfulBuildsAndPreflight_016', () =
     assert.doesNotMatch(releaseJob(name), /^    (?:continue-on-error:|if:.*(?:always\(|cancelled\(|failure\())/m,
       'failed or cancelled prerequisites must not admit publication')
   }
+})
+
+test('ReleaseRecovery_ReleaseCandidateNeverReplacesStableLatest_021', () => {
+  const preflight = releaseJob('preflight')
+  const release = releaseJob('release')
+  assert.match(preflight, /channel: \$\{\{ steps\.gate\.outputs\.channel \}\}/)
+  assert.match(release, /prerelease: \$\{\{ needs\.preflight\.outputs\.channel == 'prerelease' \}\}/)
+  assert.match(release, /make_latest: \$\{\{ needs\.preflight\.outputs\.channel == 'stable' \}\}/)
+  assert.match(release, /releases\/download\/\$\{\{ needs\.preflight\.outputs\.tag \}\}\/latest\.json/)
+  assert.match(release, /releases\/latest\/download\/latest\.json/)
 })
 test('ReleaseRecovery_DownloadedSignatures_011', async () => {
   const value = input()

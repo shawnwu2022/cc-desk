@@ -117,7 +117,7 @@ describe('Isolated production-component fixture', () => {
     expect(view.findAll('[data-session-row]')).toHaveLength(1)
     const row = view.get('[data-session-row]')
     expect(row.attributes('data-session-row')).toBe(`visual-close-${variant}-${state}`)
-    if (state === 'running') expect(row.find('[data-session-badge]').exists()).toBe(false)
+    if (state === 'running') expect(row.find('[data-session-badge]').exists()).toBe(cli === 'codex')
     else expect(row.get('[data-session-badge]').attributes('data-session-badge')).toBe(state === 'unknown' ? 'confirming' : state)
     const close = row.get('.session-primary-action button')
     expect(row.findAll('.session-primary-action button')).toHaveLength(1)
@@ -173,7 +173,10 @@ describe('Isolated production-component fixture', () => {
     expect(longProjectName).toHaveLength(80); expect(longSessionTitle).toHaveLength(200)
     if (scenario === 'resources') expect(document.querySelectorAll('.resource-card')).toHaveLength(3)
     if (scenario === 'new-session' || scenario === 'confirmation' || scenario === 'archived') expect(document.querySelector('[role="dialog"]')).not.toBeNull()
-    if (scenario === 'launch-configurations') expect(view.findAll('[data-launch-row]')).toHaveLength(4)
+    if (scenario === 'launch-configurations') {
+      expect(view.findAll('[data-launch-row]')).toHaveLength(6)
+      expect(view.get('[data-launch-row="visual-opencode-0"] .cli-app-icon__image').attributes('src')).toContain('/cli/opencode.svg')
+    }
   })
   // 空工作区经过真实宿主的布局边界，但不挂载 Native/Legacy 终端或调用宿主。
   it.each(['empty', 'empty-project'])('Fixture_EmptyUsesActualHost_006: %s', async scenario => {

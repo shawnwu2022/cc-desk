@@ -258,6 +258,7 @@ fn run_ordinary(initial_dir: Option<String>, #[cfg(windows)] startup: DesktopSta
             commands::native_unarchive_session,
             commands::legacy_claude_root_key,
             cli::commands::cli_start,
+            cli::commands::cli_prepare_opencode_session,
             cli::commands::cli_get_launch_status,
             cli::commands::cli_get_observer_status,
             cli::commands::cli_rename_session,

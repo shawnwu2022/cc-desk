@@ -30,7 +30,7 @@ const emit = defineEmits<{
 }>()
 const { t } = useI18n()
 // 与 CliAppIcon / NewSessionMenu 同一约定：显示名是硬编码产品名，不进 i18n。
-const CLI_NAMES: Record<UnifiedCliKind, string> = { claude: 'Claude Code', codex: 'Codex CLI' }
+const CLI_NAMES: Record<UnifiedCliKind, string> = { claude: 'Claude Code', codex: 'Codex CLI', opencode: 'opencode' }
 // aria-controls 必须落在常驻 DOM 的 SessionList 根元素上，所以 id 加在列表而非包裹层。
 const listId = useId()
 const hidden = computed(() => props.showHeader && !props.toggleDisabled && props.collapsed)

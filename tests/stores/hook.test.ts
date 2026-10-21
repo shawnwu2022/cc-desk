@@ -210,7 +210,7 @@ describe('useHookStore', () => {
       timestamp: 1, runId: 'run-claude', generation: 3, eventId: 'event-1', observerSource: 'claude-hook',
       detail: { type: 'userPromptSubmit', data: {} },
     })
-    expect(identity).toHaveBeenCalledExactlyOnceWith('native-session')
+    expect(identity).toHaveBeenCalledExactlyOnceWith('native-session', 'userPromptSubmit')
     // 无 sessionId 的认证事件不触发身份回调
     capturedNative!({
       ptyId: null, sessionId: null, eventName: 'Stop', state: 'idle',
@@ -423,4 +423,61 @@ it('CodexIdentity_AuthenticatedBusIsolation_033', () => {
   expect(a).toHaveBeenCalledTimes(1)
   stop(); capturedNative!({ ...event, eventId: 'late' }); expect(a).toHaveBeenCalledTimes(1)
   stopTwo(); store.$dispose()
+})
+
+// 单调 nonce 仅用于有界重放隔离，不宣称 CLI 回合顺序；老于窗口的身份事件不能复活。
+it('CodexCompatibility_IdentityContinuesBeyondReplayWindow_034', async () => {
+  setActivePinia(createPinia())
+  const store = useHookStore(), identity = vi.fn()
+  const target = { runId: 'long-codex', generation: 1, cli: 'codex' as const, enabled: true }
+  const stop = store.subscribeObservation(target, () => {}, { onIdentity: identity })
+  await Promise.resolve()
+  const eventId = (n: number) => `m${n.toString(16).padStart(32, '0')}-${'a'.repeat(32)}`
+  const event: HookEventPayload = { ptyId: null, sessionId: '00000000-0000-4000-8000-000000000033', eventName: 'SessionStart', state: 'unknown', timestamp: 1, runId: target.runId, generation: 1, observerSource: 'codex-hook', detail: { type: 'sessionStart', data: {} } }
+  for (let n = 1; n <= 2050; n++) capturedNative!({ ...event, eventId: eventId(n) })
+  expect(identity).toHaveBeenCalledTimes(2050)
+  capturedNative!({ ...event, eventId: eventId(1), sessionId: '00000000-0000-4000-8000-000000000034' })
+  capturedNative!({ ...event, eventId: eventId(2050) })
+  expect(identity).toHaveBeenCalledTimes(2050)
+  stop(); store.$dispose()
+})
+
+// 同一运行可原生切换会话；旧会话的迟到工具/结束回执不能回写新身份。
+it('ClaudeIdentity_SessionStartSurvivesLateReceipts_035', async () => {
+  const { useNativeTabsStore, captureNativeAttempt } = await import('@/stores/nativeTabs')
+  setActivePinia(createPinia())
+  const tabs = useNativeTabsStore()
+  const tab = tabs.create({ cli: 'claude', projectId: 'p', projectPath: '/audit',
+    profileId: 'cc', profileRevision: '1', action: { kind: 'new' } })
+  const attempt = captureNativeAttempt(tab)
+  tabs.applyLaunchStatus(tab.tabId, { instanceId: 'audit', requestId: tab.requestId,
+    run: { runId: tab.runId, generation: tab.generation }, revision: '1', phase: 'running', failure: null })
+  const hooks = useHookStore()
+  const stop = hooks.subscribeObservation({ ...attempt, cli: 'claude', enabled: true }, () => {}, {
+    onIdentity: (id, type) => tabs.applyObservationIdentity(tab.tabId, attempt, id, type),
+  })
+  const first = '11111111-1111-4111-8111-111111111111'
+  const second = '22222222-2222-4222-8222-222222222222'
+  let sequence = 0
+  const send = (id: string, type: HookEventDetail['type'], generation = tab.generation) => capturedNative!({
+    ptyId: null, sessionId: id, eventName: type, state: 'unknown', timestamp: 1,
+    runId: tab.runId, generation, eventId: `claude-${++sequence}`, observerSource: 'claude-hook',
+    detail: { type, data: {} } as HookEventDetail,
+  })
+  try {
+    send(first, 'sessionStart')
+    send(second, 'sessionStart')
+    for (const type of ['stop', 'postToolUse', 'sessionEnd', 'userPromptSubmit'] as const) {
+      send(first, type)
+      expect(tabs.tab(tab.tabId)?.observedSessionId).toBe(second)
+    }
+    send(first, 'sessionStart', tab.generation + 1)
+    expect(tabs.tab(tab.tabId)?.observedSessionId).toBe(second)
+    // 用户显式 /resume 回到旧会话仍合法，不能按见过的 ID 永久封锁。
+    send(first, 'sessionStart')
+    expect(tabs.tab(tab.tabId)?.observedSessionId).toBe(first)
+    stop()
+    send(second, 'sessionStart')
+    expect(tabs.tab(tab.tabId)?.observedSessionId).toBe(first)
+  } finally { stop(); hooks.$dispose() }
 })

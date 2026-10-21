@@ -323,3 +323,34 @@ fn D25_Rollback_UnknownWorkspaceExtensionsSurviveMixedVersionWrites_03() {
         })
     );
 }
+
+// 新 variant 的往返必须无损；这是 wire 兼容的正向证明。
+#[test]
+fn Opencode_ProfileRoundTripSurvivesWorkspaceDocument_01() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("cli-workspace.v1.json");
+    let repo = WorkspaceRepository::open(path).unwrap();
+    repo.apply(
+        revision("0"),
+        Patch::Create {
+            profile: Profile::new("oc", CliKind::Opencode),
+        },
+    )
+    .unwrap();
+    let loaded = repo.get_profile("oc").unwrap();
+    assert_eq!(loaded.cli, CliKind::Opencode);
+    assert_eq!(loaded.cli.as_str(), "opencode");
+}
+
+// D25 边界：未知 cli variant 使旧版本整文档 WORKSPACE_INVALID（spec §8）。
+// 本测试钉住失败形态与错误码，防止未来有人加 #[serde(other)] 把失败局部化。
+#[test]
+fn Opencode_UnknownCliVariantFailsWholeDocument_02() {
+    let doc = json!({
+        "schemaVersion": 1, "revision": "1",
+        "profiles": {"oc": {"id":"oc","revision":"1","cli":"futurecli","name":"X"}}
+    });
+    let err =
+        crate::cli::storage::decode_workspace(&serde_json::to_vec(&doc).unwrap()).unwrap_err();
+    assert_eq!(err.code, "WORKSPACE_INVALID");
+}

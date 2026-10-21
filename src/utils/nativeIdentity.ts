@@ -54,7 +54,7 @@ function requireInteger(
 }
 
 function validateCliKind(value: unknown): CliKind {
-  if (value === 'claude' || value === 'codex' || value === 'shell') return value
+  if (value === 'claude' || value === 'codex' || value === 'opencode' || value === 'shell') return value
   return invalid('cli')
 }
 
