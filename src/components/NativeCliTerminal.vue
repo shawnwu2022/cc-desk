@@ -29,7 +29,7 @@ import { platform } from '@/utils/platform'
 import { formatDroppedPaths } from '@/utils/terminalDropPaths'
 import { publicNativeErrorCode } from '@/utils/nativeErrorCode'
 import { cliResize, cliStop, cliGetObserverStatus } from '@/api/tauri'
-import { codexNativeTextPasteCached } from '@/api/cliPasteSupport'
+import { codexNativeTextPasteForAttempt } from '@/api/cliPasteSupport'
 import type { OutputFrame } from '@/types/terminal'
 import { useHookStore } from '@/stores/hook'
 import { useAppStore } from '@/stores/app'
@@ -75,6 +75,7 @@ let disposed = false
 const needsFit = ref(true)
 let startedAttempt: NativeAttemptIdentity | null = null
 let startPromise: Promise<void> | null = null
+let codexPasteSupport: { attempt: NativeAttemptIdentity; promise: Promise<boolean> } | null = null
 let terminalGeneration: number | null = null
 let parserReset: { attempt: NativeAttemptIdentity; cancel: () => void } | null = null
 let stoppingAttempt: NativeAttemptIdentity | null = null
@@ -115,6 +116,7 @@ function stopStatusSync() {
 
 function disposeRunBinding() {
   runToken = {}
+  codexPasteSupport = null
   receiptPublication = {}
   parserReset?.cancel()
   parserReset = null
@@ -199,10 +201,10 @@ function bindClipboard() {
     // 无图时由 codex 自己读剪贴板文本；此时 producer 返回 1 字节 \x16 即一次完整
     // 粘贴事件，绕开 bracketed frame 传输与 paste burst 逐字插入。0.162.x 无文本
     // 回退（会吞掉纯文本按键），必须探测后再转发，否则回退 Desk 剪贴板路径。
-    const activeTab = tabs.tab(props.tabId)
-    const codexTextFallback = activeTab?.cli === 'codex'
-      ? codexNativeTextPasteCached(activeTab.profileId, activeTab.profileRevision)
-      : null
+    const codexTextFallback = codexPasteSupport
+      && codexPasteSupport.attempt.runId === attempt.runId
+      && codexPasteSupport.attempt.generation === attempt.generation
+      ? codexPasteSupport.promise : null
     // 先在当前 attempt/mode 同步预留 intent；异步剪贴板结果只能完成这个固定预留。
     const reserved = activeBinding.reserveUserPaste(async () => {
       if (codexTextFallback && await codexTextFallback) {
@@ -375,6 +377,9 @@ async function startAttempt(attempt: NativeAttemptIdentity): Promise<void> {
   const token = {}
   disposeRunBinding()
   runToken = token
+  // 能力证据绑定本次运行，重启重新探测；运行中不受同路径升级的查询污染。
+  codexPasteSupport = tab.cli === 'codex' && tab.action.kind !== 'raw'
+    ? { attempt, promise: codexNativeTextPasteForAttempt(tab.profileId, tab.profileRevision) } : null
   const publication = receiptPublication
 
   const runId = attempt.runId

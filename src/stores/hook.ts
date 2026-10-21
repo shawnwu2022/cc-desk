@@ -24,7 +24,7 @@ const TURN_IDLE_TIMEOUT_MS = 90_000
 export const useHookStore = defineStore('hook', () => {
   const subscribers = new Map<HookEventType, Set<HookEventHandler>>()
   const observations = createObservationRegistry()
-  const targets = new Map<string, { run: RunRef; cli: CliKind; handlers: Set<ObservationHandler>; notices: Set<ObservationNoticeHandler>; identities: Set<ObservationIdentityHandler>; seenNotices: Set<string>; timer: ReturnType<typeof setTimeout> }>()
+  const targets = new Map<string, { run: RunRef; cli: CliKind; handlers: Set<ObservationHandler>; notices: Set<ObservationNoticeHandler>; identities: Set<ObservationIdentityHandler>; seenNotices: Set<string>; codexReplay: { seen: Set<string>; floor: string | null }; timer: ReturnType<typeof setTimeout> }>()
   const key = (run: RunRef) => JSON.stringify([run.runId, run.generation])
   let disposed = false
   let legacyPending: Promise<void> | null = null
@@ -76,8 +76,22 @@ export const useHookStore = defineStore('hook', () => {
     const target = targets.get(key(event))
     if (!target || (payload.observerSource === 'codex-hook' ? target.cli !== 'codex' : target.cli !== 'claude')) return
     if (target.cli === 'codex') {
-      if (target.seenNotices.has(event.eventId!) || target.seenNotices.size >= 1024) return
-      target.seenNotices.add(event.eventId!)
+      const id = event.eventId!
+      if (/^m[0-9a-f]{32}-[0-9a-f]{32}$/.test(id)) {
+        const replay = target.codexReplay
+        if (replay.seen.has(id) || (replay.floor !== null && id <= replay.floor)) return
+        replay.seen.add(id)
+        if (replay.seen.size > 1024) {
+          const oldest = [...replay.seen].sort()[0]
+          replay.seen.delete(oldest)
+          replay.floor = oldest
+          if (oldest === id) return
+        }
+      } else {
+        // 旧 opaque nonce 没有可验证的窗口下界，保留其原有 fail-closed 上限。
+        if (target.seenNotices.has(id) || target.seenNotices.size >= 1024) return
+        target.seenNotices.add(id)
+      }
     }
     clearTimeout(target.timer)
     publish(event)
@@ -117,7 +131,7 @@ export const useHookStore = defineStore('hook', () => {
     if (!entry) {
       const reducer = observations.attach(run)
       reducer.accept({ kind: 'connecting', ...run })
-      entry = { run, cli: target.cli, handlers: new Set(), notices: new Set(), identities: new Set(), seenNotices: new Set(), timer: setTimeout(() => {}, 0) }
+      entry = { run, cli: target.cli, handlers: new Set(), notices: new Set(), identities: new Set(), seenNotices: new Set(), codexReplay: { seen: new Set(), floor: null }, timer: setTimeout(() => {}, 0) }
       armTimer(entry, CONNECT_TIMEOUT_MS)
       targets.set(key(run), entry)
     }

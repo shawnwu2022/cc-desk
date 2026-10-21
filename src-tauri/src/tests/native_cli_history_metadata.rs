@@ -1075,10 +1075,10 @@ fn HistoryCodex_AutoSessionsAreNotListed_046() {
 
 // codex 的自动评审/安全扫描插件把整段任务以 role=user 写进 rollout；由 codex exec
 // 或 SDK 驱动时 thread_source 仍记为 user，只能按实测包装前缀识别。只含包装的会话
-// 视为非用户创建而不列出；包装之后出现真实用户消息时仍列出，并以该消息为标题。
+// 人工正文的任务格式不能证明自动来源。
 #[test]
 #[allow(non_snake_case)]
-fn HistoryCodex_WrapperOnlySessionsAreNotListed_047() {
+fn HistoryCodex_ManualWrapperPromptsRemainDiscoverable_047() {
     let temp = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(temp.path().join("sessions/2026/10/04")).unwrap();
     let cwd = temp.path().to_str().unwrap().to_owned();
@@ -1095,7 +1095,7 @@ fn HistoryCodex_WrapperOnlySessionsAreNotListed_047() {
         )
     };
 
-    // 只有脚手架：不是用户主动创建的会话。
+    // 人工来源保留首条消息，部分观察也不按正文排除会话。
     std::fs::write(
         temp.path().join("sessions/2026/10/04/wrapper-only.jsonl"),
         format!(
@@ -1108,7 +1108,7 @@ fn HistoryCodex_WrapperOnlySessionsAreNotListed_047() {
         ),
     )
     .unwrap();
-    // 脚手架之后有真实消息：保留，并用真实消息作标题。
+    // 人工来源保留首条消息，部分观察也不按正文排除会话。
     std::fs::write(
         temp.path()
             .join("sessions/2026/10/04/wrapper-then-user.jsonl"),
@@ -1123,9 +1123,17 @@ fn HistoryCodex_WrapperOnlySessionsAreNotListed_047() {
 
     let items = read_codex_history_fixture(temp.path()).unwrap();
     let value = serde_json::to_value(&items).unwrap();
-    assert_eq!(items.len(), 1, "纯脚手架会话不列出");
-    assert_eq!(value[0]["nativeSessionId"], "wrapper-then-user");
-    assert_eq!(value[0]["title"], "审查这次改动");
+    assert_eq!(items.len(), 2, "人工来源不能由正文覆盖");
+    for row in value.as_array().unwrap() {
+        match row["nativeSessionId"].as_str().unwrap() {
+            "wrapper-only" => assert_eq!(
+                row["title"],
+                "Run one Standard security scan for the current source."
+            ),
+            "wrapper-then-user" => assert_eq!(row["title"], "## Code review guidelines:"),
+            id => panic!("unexpected fixture {id}"),
+        }
+    }
 }
 
 // codex 把用户设定的会话名写在 CODEX_HOME/session_index.jsonl（每行
@@ -1308,10 +1316,10 @@ fn HistoryCodex_CacheHitRetainsSourceIncompleteFlag_050() {
 
 // wrapper-only 且观察不完整的会话不列出：几乎全为 exec/SDK 自动会话，Untitled 行
 // 只是噪声；但前缀不能证明全会话只含包装，省略必须显式披露（来源不完整 + 读失败
-// 计数），不能伪装成无此会话，Messages 仍可按显式 id 读取。
+// 人工正文的任务格式不能证明自动来源。
 #[test]
 #[allow(non_snake_case)]
-fn HistoryCodex_PartialWrapperOnlyIsOmittedDisclosed_051() {
+fn HistoryCodex_PartialManualWrapperRemainsVisible_051() {
     let temp = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(temp.path().join("sessions/2026/10/04")).unwrap();
     let cwd = temp.path().to_str().unwrap().to_owned();
@@ -1327,7 +1335,7 @@ fn HistoryCodex_PartialWrapperOnlyIsOmittedDisclosed_051() {
             json!({"type":"session_meta","payload":{"id":id,"cwd":cwd,"thread_source":"user"}})
         )
     };
-    // 头窗口内只有评审包装；真实人工消息排在超长记录之后、窗口之外。
+    // 人工来源保留首条消息，部分观察也不按正文排除会话。
     let filler = format!(
         "{}\n",
         json!({"type":"response_item","timestamp":"2026-10-10T03:00:00Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"x".repeat(220 * 1024)}]}})
@@ -1364,21 +1372,11 @@ fn HistoryCodex_PartialWrapperOnlyIsOmittedDisclosed_051() {
         &mut budget,
     )
     .unwrap();
-    assert!(
-        items.is_empty(),
-        "wrapper-only 且部分观察的会话不占用列表行"
-    );
-    assert!(
-        budget.history_metadata_incomplete(),
-        "省略必须把来源标记为不完整"
-    );
-    assert!(
-        budget
-            .history_read_failures()
-            .contains(&"SOURCE_UNSUPPORTED"),
-        "省略必须计入读失败披露，而不是伪装成无此会话"
-    );
-    // 省略不改变按显式 id 的消息读取。
+    assert_eq!(items.len(), 1, "部分观察不能把人工正文判为自动来源");
+    assert!(budget.history_metadata_incomplete());
+    assert!(!budget
+        .history_read_failures()
+        .contains(&"SOURCE_UNSUPPORTED"));
     let messages = read(
         &Catalog {
             cli: CliKind::Codex,
@@ -1449,6 +1447,59 @@ fn read_codex_history_fixture(root_path: &Path) -> ReadResult<Vec<ResourceItem>>
         },
         &mut Budget::new(super::super::super::scoped_fs::Limits::default()),
     )
+}
+
+// 名称是 append-only 用户意图；时钟回拨、相同时间戳不能复活旧名，坏末行不遮住最新有效记录。
+#[test]
+#[allow(non_snake_case)]
+fn CodexCompatibility_NameIndexUsesAppendOrder_070() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = Root::open(temp.path()).unwrap();
+    let catalog = Catalog {
+        cli: CliKind::Codex,
+        root: &root,
+        projects: &[],
+        user_config: None,
+        check: &|| Ok(()),
+    };
+    for latest_stamp in ["2026-10-21T12:00:01Z", "2026-10-21T12:00:02Z", "unknown"] {
+        std::fs::write(temp.path().join("session_index.jsonl"), format!("{}\n{}\n{{partial", json!({"id":"thread","thread_name":"OLD","updated_at":"2026-10-21T12:00:02Z"}), json!({"id":"thread","thread_name":"NEW","updated_at":latest_stamp,"futureField":true}))).unwrap();
+        let names = codex_session_names(
+            &catalog,
+            &mut Budget::new(super::super::super::scoped_fs::Limits::default()),
+        );
+        assert_eq!(names.get("thread").map(String::as_str), Some("NEW"));
+    }
+}
+
+// 普通人工安全审查的正文与自动脚手架可以相同；只有结构化来源能授权隐藏。
+#[test]
+#[allow(non_snake_case)]
+fn CodexCompatibility_ManualPromptsNeverProveAutomaticOrigin_071() {
+    for source in [
+        json!({"source":"cli","thread_source":"user"}),
+        json!({"source":"future_cli","futureField":{}}),
+        json!({}),
+    ] {
+        for prompt in [
+            "Run one Standard security scan of this repository",
+            "## Code review guidelines:\nReview this patch",
+            "The following is the Codex agent history to review",
+        ] {
+            let mut meta = json!({"id":"manual","cwd":"/repo"});
+            for (key, value) in source.as_object().unwrap() {
+                meta[key] = value.clone();
+            }
+            let input = format!(
+                "{}\n{}\n",
+                json!({"type":"session_meta","payload":meta}),
+                json!({"type":"event_msg","payload":{"type":"user_message","message":prompt}})
+            );
+            let result = parse_codex_metadata(&input, None, true).unwrap();
+            assert!(!result.auto_session, "人工正文不能证明自动来源");
+            assert_eq!(result.title, display_title(prompt));
+        }
+    }
 }
 
 fn read_claude_history_fixture(

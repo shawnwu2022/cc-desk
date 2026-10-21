@@ -80,7 +80,7 @@ vi.mock('@xterm/addon-fit', () => ({ FitAddon: class { activate() {} dispose() {
 vi.mock('@tauri-apps/api/core', async original => ({ ...await original<object>(), Channel: class { onmessage: any } }))
 vi.mock('@/api/observer', () => ({ onNativeObservation: async () => () => {} }))
 vi.mock('@/api/cliPasteSupport', () => ({
-  codexNativeTextPasteCached: () => Promise.resolve(io.codexSupport),
+  codexNativeTextPasteForAttempt: () => Promise.resolve(io.codexSupport),
 }))
 vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({
   writeText: vi.fn().mockResolvedValue(undefined),
@@ -139,6 +139,32 @@ function pasteEvent(text: string): Event {
 }
 
 describe('NativeTerminalPaste_TextEventRoutesToBinding', () => {
+  it.each([[false, true], [true, false]])('CodexCompatibility_AttemptFreezesPasteCapability_076 (%s → %s)', async (before, after) => {
+    io.codexSupport = before
+    io.readText.mockResolvedValue('safe Desk paste')
+    const tabs = useNativeTabsStore()
+    const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+    wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } })
+    await vi.advanceTimersByTimeAsync(0)
+    io.codexSupport = after
+    const paste = async () => {
+      const active = io.binding
+      wrapper!.find('textarea').element.dispatchEvent(new KeyboardEvent('keydown', { key: 'v', ctrlKey: true, bubbles: true, cancelable: true }))
+      await vi.advanceTimersByTimeAsync(0)
+      return new TextDecoder().decode(await active.reserveUserPaste.mock.results.at(-1).value.produced)
+    }
+    expect(await paste()).toBe(before ? '\x16' : 'safe Desk paste')
+    tabs.applyLaunchStatus(tab.tabId, {
+      instanceId: 'test-backend', requestId: tab.requestId,
+      run: { runId: tab.runId, generation: tab.generation },
+      phase: 'exited', revision: '2', failure: null,
+    })
+    tabs.restart(tab.tabId, { profileId: 'cx', profileRevision: '7' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(await paste()).toBe(after ? '\x16' : 'safe Desk paste')
+    expect(io.starts).toHaveLength(2)
+  })
+
   it('Running_ActivePasteReachesBinding_001 — running 激活 tab 的文本 paste 到达 binding 且字节正确', async () => {
     const tabs = useNativeTabsStore()
     const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })

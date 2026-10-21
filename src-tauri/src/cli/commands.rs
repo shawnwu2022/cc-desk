@@ -81,7 +81,7 @@ pub(crate) async fn cli_discover_programs(
     .map_err(|_| error("DISCOVERY_UNAVAILABLE"))?
 }
 
-// 运行时能力查询：codex Ctrl+V 是否原生回退读文本。探测按 program 缓存。
+// 运行时能力查询：每次启动独立确认 codex Ctrl+V 文本回退，不缓存程序路径。
 #[tauri::command]
 pub(crate) async fn cli_codex_native_paste_support(
     window: WebviewWindow,

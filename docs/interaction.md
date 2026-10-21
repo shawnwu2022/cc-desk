@@ -128,13 +128,13 @@ Native Ctrl+V 在读取剪贴板前同步向当前 binding 预留输入 intent�
 
 codex 的 Ctrl+V 能力分版本：**≥0.163.0** 在 Windows 上对纯 Ctrl+V 构造 `PasteImage { text_fallback }`（`chatwidget/interaction.rs`，先尝试图片、无图时回退由 codex TUI 自行读系统剪贴板文本：`clipboard_paste/text.rs` 用 arboard，`app/clipboard.rs:23-52` 处理回退）；**0.162.x** 的 `chatwidget/clipboard.rs` 只处理图片、无文本回退，纯文本按键会被吞掉。
 
-因此 CC Desk 不能无条件转发：`cli_codex_native_paste_support`（`cli/paste_support.rs`）仅在接受探测的 Windows 上运行，按 profile 授权解析 `configured_program` 后运行 `codex --version`，输出必须携带 `codex-cli` 标识 token（裸 semver 如启动器 npx 打印的自身版本不算），版本 ≥0.163.0 才支持原生转发；探测有 5s 期限并回收挂起子进程，结果按可执行路径缓存进程生命周期，失败保守返回不支持。这是运行时能力查询，不属于 launch preflight（preflight 仍不 spawn CLI）。
+因此 CC Desk 不能无条件转发：`cli_codex_native_paste_support`（`cli/paste_support.rs`）仅在接受探测的 Windows 上运行，按 profile 授权解析 `configured_program` 后运行 `codex --version`，输出必须携带 `codex-cli` 标识 token（裸 semver 如启动器 npx 打印的自身版本不算），版本 ≥0.163.0 才支持原生转发；探测有 5s 期限并回收挂起子进程，每个启动 attempt 独立探测，失败仅令该运行回退 Desk 路径；不按路径或 profile revision 永久缓存，也不合并不同 attempt 尚未完成的查询。这是运行时能力查询，不属于 launch preflight（preflight 仍不 spawn CLI）。
 
 Ctrl+V keydown 仍先**同步** `reserveUserPaste` 保持输入排序契约；producer 内等待探测结果：支持时返回 1 字节 `\x16`（Ctrl+V 控制字符），由 codex 原生读剪贴板处理文本和图片；不支持时回退 Desk 剪贴板读取路径（文本构造 bracketed frame、图片走键位分流）。
 
 为什么转发：CC Desk 原路径（读剪贴板 IPC → 构造 76011 字节 bracketed frame → 分块 IPC 上传 → 一次 `write_all` 进 ConPTY）端到端约 150ms，但 codex 侧的 paste burst 启发式（`paste_burst.rs`，Windows 上无 bracketed paste 事件只能靠 `PASTE_BURST_CHAR_INTERVAL=8ms` 的字符间隔判定）在大 payload 时 burst 断裂，导致 codex **逐字插入**而非折叠——29198 字符的逐字插入是 O(n²) 的 textarea 编辑，耗时 3.7–10+ 秒且部分展开。转发 `\x16` 绕过整个问题链：codex 收到的是一次完整粘贴事件，自行读剪贴板、自行折叠。
 
-约束与限制：仅适用于 codex（Claude Code 无等效的 Ctrl+V 剪贴板读取键位，仍走剪贴板插件读取路径）。转发分支由 codex 自行处理内容（无 LF 规范化、无 atomic write_all 保证）。codex 升级后需重启 CC Desk 才会重新探测（按路径缓存）。Claude Code 在 Windows 上仍有同样的 bracketed paste 限制（上游未修），大段粘贴建议用 `@路径` 或 `Ctrl+G`。
+约束与限制：仅适用于 codex（Claude Code 无等效的 Ctrl+V 剪贴板读取键位，仍走剪贴板插件读取路径）。转发分支由 codex 自行处理内容（无 LF 规范化、无 atomic write_all 保证）。能力 Promise 固定到准确 run/generation，运行中不重新查询已替换的程序；新建或重启终端会重新探测，同路径升降级不需要重启 CC Desk。Claude Code 在 Windows 上仍有同样的 bracketed paste 限制（上游未修），大段粘贴建议用 `@路径` 或 `Ctrl+G`。
 
 ### 图片粘贴分流
 

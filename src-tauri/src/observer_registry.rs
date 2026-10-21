@@ -59,6 +59,7 @@ struct ObserverSlot {
     capability: String,
     source: ObserverSource,
     seen: HashSet<String>,
+    codex_replay: crate::codex_observer::ReplayWindow,
     delivery: ObserverDelivery,
     authorize: Arc<dyn Fn() -> bool + Send + Sync>,
 }
@@ -242,6 +243,7 @@ impl ObserverRegistry {
                 capability: capability.clone(),
                 source,
                 seen: HashSet::new(),
+                codex_replay: Default::default(),
                 delivery,
                 authorize,
             },
@@ -299,13 +301,21 @@ impl ObserverRegistry {
         {
             return Err(error("OBSERVER_FORBIDDEN"));
         }
-        if slot.seen.contains(event_id) {
-            return Ok(ObserverAccept::Duplicate);
+        if binding.source == ObserverSource::CodexHook
+            && crate::codex_observer::ordered_event_id(event_id)
+        {
+            if !slot.codex_replay.accept(event_id, Self::MAX_SEEN_EVENTS) {
+                return Ok(ObserverAccept::Duplicate);
+            }
+        } else {
+            if slot.seen.contains(event_id) {
+                return Ok(ObserverAccept::Duplicate);
+            }
+            if slot.seen.len() >= Self::MAX_SEEN_EVENTS {
+                return Err(error("OBSERVER_EVENT_CAPACITY"));
+            }
+            slot.seen.insert(event_id.to_string());
         }
-        if slot.seen.len() >= Self::MAX_SEEN_EVENTS {
-            return Err(error("OBSERVER_EVENT_CAPACITY"));
-        }
-        slot.seen.insert(event_id.to_string());
 
         Ok(ObserverAccept::Accepted(ValidatedObserverEvent {
             run: binding.run.clone(),

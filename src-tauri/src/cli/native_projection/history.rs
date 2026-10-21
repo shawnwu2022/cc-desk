@@ -293,10 +293,8 @@ pub(super) fn read(
 
 /// Codex 在 `session_index.jsonl` 里记录用户设定的会话名（每行
 /// `{id, thread_name, updated_at}`）。这是**用户意图**，优先级高于从 rollout 现抽
-/// 的标题；同一 id 出现多行时（实测 317 行里 10 个 id 有 2 行）取 `updated_at`
-/// 最大者，与"最后改名生效"一致。它是展示增强，不是完整性判据：文件只覆盖
-/// Desktop/CLI 记录过名字的会话（本机 418 个 rollout 里仅 34 个），缺失一律回落
-/// 到现抽标题；损坏行逐行跳过，整个文件不可用则等同于没有该文件。
+/// 的标题；同一 id 最后一个有效追加记录生效，不依赖可回拨时间戳。
+/// 不可用的索引和损坏行不影响 rollout 历史读取。
 fn codex_session_names(
     c: &Catalog<'_>,
     b: &mut Budget,
@@ -309,8 +307,7 @@ fn codex_session_names(
     let Ok(text) = text(&bytes) else {
         return HashMap::new();
     };
-    // id -> (updated_at, name)：只保留 updated_at 最大的一行。
-    let mut best: HashMap<String, (String, String)> = HashMap::new();
+    let mut best: HashMap<String, String> = HashMap::new();
     for line in text.lines() {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
@@ -333,20 +330,9 @@ fn codex_session_names(
         if display.is_empty() || display.chars().any(char::is_control) {
             continue;
         }
-        let stamp = value["updated_at"].as_str().unwrap_or_default().to_owned();
-        match best.get_mut(id) {
-            // 同一 id 多行：只有更新的行才能覆盖，否则保留先到的标题。
-            Some(entry) => {
-                if stamp > entry.0 {
-                    *entry = (stamp, display);
-                }
-            }
-            None => {
-                best.insert(id.to_owned(), (stamp, display));
-            }
-        }
+        best.insert(id.to_owned(), display);
     }
-    best.into_iter().map(|(id, (_, name))| (id, name)).collect()
+    best
 }
 
 /// Codex 缓存只复用显示字段：命中后仍从持有文件读取首个完整身份记录，
@@ -487,7 +473,6 @@ pub(super) fn codex_metadata_probe(
     let mut scanned = 0usize;
     let mut seen_meta = false;
     let mut seen_user = false;
-    let mut main_review = false;
     move |bytes: &[u8]| {
         for position in scanned..bytes.len() {
             if bytes[position] != b'\n' {
@@ -504,8 +489,6 @@ pub(super) fn codex_metadata_probe(
             match value["type"].as_str() {
                 Some("session_meta") => {
                     seen_meta = true;
-                    main_review = value["payload"]["thread_source"] == "code_review"
-                        && !is_auto_session(&value["payload"]);
                     if is_auto_session(&value["payload"]) {
                         auto.set(true);
                         return Ok(true);
@@ -513,22 +496,14 @@ pub(super) fn codex_metadata_probe(
                 }
                 Some("event_msg") if value["payload"]["type"] == "user_message" => {
                     let message = value["payload"]["message"].as_str().unwrap_or_default();
-                    if !message.is_empty()
-                        && !is_injected_user_context(message)
-                        && (main_review || !is_automation_wrapper(message))
-                    {
+                    if !message.is_empty() && !is_injected_user_context(message) {
                         seen_user = true;
                     }
                 }
                 Some("response_item") if value["payload"]["role"] == "user" => {
-                    // 注入的上下文（AGENTS.md/环境块）与自动评审/安全扫描的脚手架
-                    // 都不算标题来源，不能据此提前停止读取，否则真正的用户消息
-                    // （通常在其后）永远读不到。
+                    // 注入上下文不是标题；其他人工正文不作为自动来源证据。
                     let candidate = content(&value["payload"]["content"]);
-                    if !candidate.is_empty()
-                        && !is_injected_user_context(&candidate)
-                        && (main_review || !is_automation_wrapper(&candidate))
-                    {
+                    if !candidate.is_empty() && !is_injected_user_context(&candidate) {
                         seen_user = true;
                     }
                 }
@@ -568,23 +543,7 @@ fn is_injected_user_context(text: &str) -> bool {
         || head.starts_with("# Environment")
 }
 
-/// codex 的自动评审、代码评审与安全扫描插件把整段任务以 role=user 写进 rollout。
-/// 这些会话的 thread_source 通常已标为自动来源，但由 `codex exec`/SDK 驱动时仍会
-/// 记为 user，因此这里再按实测前缀识别：开头是这些包装、且窗口内没有任何真实用户
-/// 消息的会话视为非用户创建。只保留明确任务脚手架的前缀；未知包装最坏作为
-/// 会话名显示。普通人工文件引用、评审和限制说明不作为来源判据。
-// 文件引用、人工评审或读取限制可由普通用户直接输入，不能作为自动来源证据。
-fn is_automation_wrapper(text: &str) -> bool {
-    const WRAPPERS: [&str; 5] = [
-        "The following is the Codex agent history",
-        "## Code review guidelines:",
-        "Run one Standard security scan",
-        "You are the single serial semantic reducer",
-        "You are one independent discovery worker",
-    ];
-    let head = text.trim_start();
-    WRAPPERS.iter().any(|prefix| head.starts_with(prefix))
-}
+// 人工正文不能证明自动来源；过滤只使用 session_meta 的结构化来源。
 
 /// 展示标题：取首个非空行、折叠空白并限长。首条用户消息常是整段 prompt，
 /// 直接展示会是整屏文本；完整原文仍可经消息读取获得。
@@ -612,15 +571,13 @@ fn display_title(raw: &str) -> String {
 fn parse_codex_metadata(
     head: &str,
     tail: Option<&str>,
-    observed_completely: bool,
+    _observed_completely: bool,
 ) -> ReadResult<Transcript> {
     let mut id = None;
     let mut cwd = None;
     let mut title = None;
     let mut created: Option<String> = None;
     let mut auto_session = false;
-    let mut wrapper_only = false;
-    let mut main_review = false;
     for line in head.lines().filter(|line| !line.trim().is_empty()) {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
@@ -636,7 +593,6 @@ fn parse_codex_metadata(
                 id = Some(observed.to_owned());
                 auto_session = is_auto_session(&value["payload"]);
                 // 主线程 review 是用户动作；正文包装不能覆盖权威来源标记。
-                main_review = value["payload"]["thread_source"] == "code_review" && !auto_session;
                 cwd = value["payload"]["cwd"]
                     .as_str()
                     .filter(|path| !path.contains('\0'))
@@ -665,22 +621,14 @@ fn parse_codex_metadata(
                     .as_str()
                     .filter(|text| !text.contains('\0'))
                     .and_then(|text| {
-                        let display = if main_review && is_automation_wrapper(text) {
-                            display_title(text)
-                        } else {
-                            user_title(text, &mut wrapper_only)
-                        };
+                        let display = user_title(text);
                         (!display.is_empty()).then_some(display)
                     });
             }
             Some("response_item") if title.is_none() && value["payload"]["role"] == "user" => {
                 let candidate = content(&value["payload"]["content"]);
                 if !candidate.is_empty() && !candidate.contains('\0') {
-                    let display = if main_review && is_automation_wrapper(&candidate) {
-                        display_title(&candidate)
-                    } else {
-                        user_title(&candidate, &mut wrapper_only)
-                    };
+                    let display = user_title(&candidate);
                     if !display.is_empty() {
                         title = Some(display);
                     }
@@ -704,28 +652,18 @@ fn parse_codex_metadata(
         messages: Vec::new(),
         metadata_incomplete: false,
         title_priority,
-        // 只含自动评审/安全扫描脚手架、且观察到完整文件的会话，与 thread_source
-        // 已标记的自动会话同等处理。头窗口只是前缀：部分观察的 wrapper-only 不能
-        // 证明也不该直接列出——由调用方按省略披露处理。
-        auto_session: auto_session
-            || (wrapper_only && title_priority.is_none() && observed_completely),
-        unconfirmable_wrapper_only: wrapper_only
-            && title_priority.is_none()
-            && !observed_completely,
+        // 只有结构化来源有权排除自动会话。
+        auto_session,
+        unconfirmable_wrapper_only: false,
         envelope_only: false,
         source_path: String::new(),
         observation_bytes: 0,
     })
 }
 
-/// 展示标题候选：注入上下文与自动脚手架都不是标题来源，`wrapper_only` 记录本次
-/// 观察中是否只见到这两类记录（用于判定会话是否由用户主动创建）。
-fn user_title(text: &str, wrapper_only: &mut bool) -> String {
+/// 注入上下文不作为展示标题；普通人工正文保留首条消息语义。
+fn user_title(text: &str) -> String {
     if is_injected_user_context(text) {
-        return String::new();
-    }
-    if is_automation_wrapper(text) {
-        *wrapper_only = true;
         return String::new();
     }
     display_title(text)

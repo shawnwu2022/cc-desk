@@ -209,8 +209,8 @@ spellings: junction/short-name aliases are not adapted. The backend holds the
 audited files and their parent directories against writing/deletion, rechecks
 paths and actual file identities after opening, and retains a private fixed-code
 preload with the owned snapshot until run retirement. It does not change global
-configuration or persistent permissions. Windows builds declare the existing
-locked `tempfile` dependency for this production artifact lifetime.
+configuration or persistent permissions. The existing locked `tempfile`
+dependency also owns isolated capability-probe configuration roots.
 
 Nonempty user `NODE_OPTIONS` are deliberately left untouched: Node permission or
 loader options can fail before CJS executes. Unknown/custom wrappers, different
@@ -224,6 +224,25 @@ Codex discovers disk configuration hooks separately in each configuration layer,
 so the added session-flags handlers coexist with user-file handlers. A later user
 `-c` override in the same session-flags layer retains its normal precedence.
 
+Native Node interpreter launches do not receive Codex flags before their script
+argument. Native identity enhancement is separately admitted using verified
+executable bytes and an isolated `app-server` `hooks/list` exchange, never a model
+turn or a user configuration write. Currently only the audited Windows x64
+0.163.0 native SHA256 is admitted for that probe. Unknown/native replacement
+bytes, other platforms, custom wrappers and unsupported metadata disable only
+identity enhancement; the original frozen new/resume invocation is used once.
+This conservative boundary avoids executing an unknown wrapper as a capability
+probe, which could ignore metadata arguments or leave unowned descendants.
+The probe inherits only launch-essential environment entries, uses temporary
+home/config/cwd, caps stdout at 64 KiB/128 lines, polls the pipe without a reader
+thread for at most four seconds and reaps its direct child. All three trusted,
+enabled session-flags command handlers must be present. Unknown extra fields are
+ignored; unknown required trust/schema values are unsupported. This is optional
+launch preparation, not availability preflight. Extending audited probe targets
+requires real process-lifecycle and hook evidence for the new bytes/platform;
+unknown versions remain usable with reduced identity features. OSC status has
+independent admission and remains available.
+
 The bounded reporter forwards only a main-thread UUID and allowlisted
 SessionStart/UserPromptSubmit/Stop type. It never publishes prompt/response bodies
 or treats Stop as activity completion. Windows hook commands preserve raw UTF-8
@@ -232,6 +251,15 @@ Only admitted startup/input metadata can establish an unknown identity; an old
 thread's asynchronous prompt/stop cannot replace a newer startup identity.
 Unknown, retired, replaced and closed attempts reject late events. The identity
 channel does not enable Claude activity observation for Codex.
+
+The Desk-owned Codex reporter emits fixed-width boot-monotonic replay IDs with a
+random suffix. Backend and tab keep at most 1024 recent IDs plus an eviction
+floor: new IDs continue beyond 1024; duplicates and IDs at/below the floor are
+rejected. Late IDs inside the retained window remain acceptable. These IDs are
+not a CLI turn sequence and do not establish event causality. Legacy opaque
+Codex IDs retain the conservative lifetime cap, while Claude replay and occurrence
+notice contracts remain unchanged. Run/generation/document replacement discards
+the corresponding window and rejects the old capability independently.
 
 Codex TUI activity has a separate passive source: its native OSC 7501 program
 status (`working`, `blocked`, `idle`, `clear`). The 0.163.0 TUI emits it on any

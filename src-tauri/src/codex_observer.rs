@@ -12,6 +12,72 @@ const EVENTS: &[(&str, &str)] = &[
     ("Stop", "stop"),
 ];
 
+/// 单调 nonce 只约束重放窗口，不表示 CLI 回合、hook 因果或授权顺序。
+#[derive(Default)]
+pub(crate) struct ReplayWindow {
+    seen: std::collections::BTreeSet<String>,
+    floor: Option<String>,
+}
+
+pub(crate) fn ordered_event_id(value: &str) -> bool {
+    value.len() == 66
+        && value.starts_with('m')
+        && value.as_bytes()[33] == b'-'
+        && value.as_bytes()[1..33]
+            .iter()
+            .chain(&value.as_bytes()[34..])
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(b))
+}
+
+impl ReplayWindow {
+    pub(crate) fn accept(&mut self, event_id: &str, capacity: usize) -> bool {
+        if self.floor.as_deref().is_some_and(|floor| event_id <= floor)
+            || !self.seen.insert(event_id.to_owned())
+        {
+            return false;
+        }
+        if self.seen.len() > capacity {
+            let oldest = self.seen.pop_first().expect("nonempty replay window");
+            let retained = oldest != event_id;
+            self.floor = Some(oldest);
+            return retained;
+        }
+        true
+    }
+}
+
+pub(crate) fn event_id() -> Result<String, SafeError> {
+    // 跨 reporter 进程共享同一开机单调时钟，避免系统时间回拨冻结窗口。
+    #[cfg(windows)]
+    let ticks = {
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn QueryPerformanceCounter(value: *mut i64) -> i32;
+        }
+        let mut value = 0i64;
+        // 缓冲区在同步 Win32 调用期间有效；失败只关闭可选观察。
+        if unsafe { QueryPerformanceCounter(&mut value) } == 0 || value < 0 {
+            return Err(error("OBSERVER_UNAVAILABLE"));
+        }
+        value as u128
+    };
+    #[cfg(unix)]
+    let ticks = {
+        let mut value: libc::timespec = unsafe { std::mem::zeroed() };
+        // CLOCK_MONOTONIC 为同一主机所有进程提供相同时间基准。
+        if unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut value) } != 0
+            || value.tv_sec < 0
+        {
+            return Err(error("OBSERVER_UNAVAILABLE"));
+        }
+        value.tv_sec as u128 * 1_000_000_000 + value.tv_nsec as u128
+    };
+    #[cfg(not(any(windows, unix)))]
+    return Err(error("OBSERVER_UNAVAILABLE"));
+    #[cfg(any(windows, unix))]
+    Ok(format!("m{ticks:032x}-{}", uuid::Uuid::new_v4().simple()))
+}
+
 fn sorted(value: &mut Value) {
     match value {
         Value::Object(object) => {
@@ -125,6 +191,23 @@ pub(crate) fn metadata(input: &Value) -> Result<Value, SafeError> {
 #[allow(non_snake_case)]
 mod tests {
     use super::*;
+    #[test]
+    fn CodexCompatibility_ReporterUsesOrderedReplayIds_081() {
+        let mut ids = std::collections::BTreeSet::new();
+        for _ in 0..100 {
+            let id = event_id().expect("boot clock available");
+            assert!(ordered_event_id(&id));
+            assert!(ids.insert(id));
+        }
+        for invalid in [
+            "",
+            "m",
+            "opaque-legacy",
+            "m00000000000000000000000000000000-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        ] {
+            assert!(!ordered_event_id(invalid));
+        }
+    }
     #[test]
     fn CodexIdentity_HookArgumentsRetainNativePolicy_033() {
         #[cfg(windows)]

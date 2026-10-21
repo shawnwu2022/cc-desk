@@ -50,7 +50,7 @@ pub(crate) struct CachedMetadata {
 
 /// 当前缓存格式版本。缓存只保存用户主动创建的会话；标题来源规则或收录范围
 /// 变化时递增，旧文件按未命中处理，以免旧条目把已排除的会话重新列出来。
-const SCHEMA: u32 = 7;
+const SCHEMA: u32 = 8;
 
 #[derive(Default, Serialize, Deserialize)]
 struct CacheFile {

@@ -666,6 +666,47 @@ fn CodexIdentity_AuthenticatedSource_031() {
     assert!(parse_observer_headers(&headers).is_ok());
 }
 
+// 新版 reporter 的单调 nonce 让窗口可收缩，同时永久拒绝窗口以下的旧身份事件。
+#[test]
+fn CodexCompatibility_ReplayWindowDoesNotEndRunObservation_035() {
+    let registry = ObserverRegistry::new();
+    let binding = registry
+        .attach(
+            run("long-codex", 1),
+            "a".repeat(32),
+            ObserverSource::CodexHook,
+        )
+        .unwrap();
+    let body = br#"{"hook_event_name":"SessionStart","session_id":"00000000-0000-4000-8000-000000000035"}"#;
+    let id = |n: u128| format!("m{n:032x}-{}", "a".repeat(32));
+    for n in 1..=2050 {
+        assert!(matches!(
+            registry.accept_event(&binding, &id(n), body).unwrap(),
+            ObserverAccept::Accepted(_)
+        ));
+    }
+    assert_eq!(
+        registry.accept_event(&binding, &id(1), body).unwrap(),
+        ObserverAccept::Duplicate
+    );
+    assert_eq!(
+        registry.accept_event(&binding, &id(2050), body).unwrap(),
+        ObserverAccept::Duplicate
+    );
+    assert!(matches!(
+        registry.accept_event(&binding, &id(2052), body).unwrap(),
+        ObserverAccept::Accepted(_)
+    ));
+    assert!(matches!(
+        registry.accept_event(&binding, &id(2051), body).unwrap(),
+        ObserverAccept::Accepted(_)
+    ));
+    assert_eq!(
+        registry.accept_event(&binding, &id(2051), body).unwrap(),
+        ObserverAccept::Duplicate
+    );
+}
+
 #[test]
 fn CodexIdentity_SourceIsolationAndRetirement_032() {
     use std::sync::{

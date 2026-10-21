@@ -424,3 +424,20 @@ it('CodexIdentity_AuthenticatedBusIsolation_033', () => {
   stop(); capturedNative!({ ...event, eventId: 'late' }); expect(a).toHaveBeenCalledTimes(1)
   stopTwo(); store.$dispose()
 })
+
+// 单调 nonce 仅用于有界重放隔离，不宣称 CLI 回合顺序；老于窗口的身份事件不能复活。
+it('CodexCompatibility_IdentityContinuesBeyondReplayWindow_034', async () => {
+  setActivePinia(createPinia())
+  const store = useHookStore(), identity = vi.fn()
+  const target = { runId: 'long-codex', generation: 1, cli: 'codex' as const, enabled: true }
+  const stop = store.subscribeObservation(target, () => {}, { onIdentity: identity })
+  await Promise.resolve()
+  const eventId = (n: number) => `m${n.toString(16).padStart(32, '0')}-${'a'.repeat(32)}`
+  const event: HookEventPayload = { ptyId: null, sessionId: '00000000-0000-4000-8000-000000000033', eventName: 'SessionStart', state: 'unknown', timestamp: 1, runId: target.runId, generation: 1, observerSource: 'codex-hook', detail: { type: 'sessionStart', data: {} } }
+  for (let n = 1; n <= 2050; n++) capturedNative!({ ...event, eventId: eventId(n) })
+  expect(identity).toHaveBeenCalledTimes(2050)
+  capturedNative!({ ...event, eventId: eventId(1), sessionId: '00000000-0000-4000-8000-000000000034' })
+  capturedNative!({ ...event, eventId: eventId(2050) })
+  expect(identity).toHaveBeenCalledTimes(2050)
+  stop(); store.$dispose()
+})

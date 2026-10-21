@@ -380,6 +380,11 @@ impl LaunchService {
                         let overlaid = overlaid.and_then(|next| {
                             let invocation = build_invocation(next.request(), &next)?;
                             resolve_process(&invocation)?;
+                            if let Some(args) = &prepared.codex_args {
+                                if !super::codex::identity_hooks_supported(snapshot, args) {
+                                    return Err(error("OBSERVER_UNAVAILABLE"));
+                                }
+                            }
                             Ok(next)
                         });
                         match overlaid {

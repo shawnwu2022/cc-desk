@@ -85,6 +85,27 @@ fn words(values: &[&str]) -> Vec<OsString> {
     values.iter().map(OsString::from).collect()
 }
 
+// Node 自身不理解 Codex -c；可选身份增强不能把脚本路径前的参数交给解释器。
+#[test]
+fn CodexCompatibility_NodePrefixNeverReceivesHookFlags_073() {
+    let mut fixture = Fixture::new(CliKind::Codex, LaunchAction::New);
+    let program = fixture
+        .root
+        .path()
+        .join(if cfg!(windows) { "node.exe" } else { "node" });
+    fs::copy(std::env::current_exe().unwrap(), &program).unwrap();
+    fixture.profile.program_path = Override::Set(program.to_str().unwrap().into());
+    fixture.profile.default_args = Override::Set(vec!["official/codex.js".into()]);
+    let snapshot = fixture.freeze();
+    assert!(!snapshot.codex_identity_requested());
+    assert_eq!(
+        build_invocation(&fixture.request, &snapshot)
+            .unwrap()
+            .args(),
+        words(&["official/codex.js"])
+    );
+}
+
 struct Fixture {
     root: tempfile::TempDir,
     profile: Profile,

@@ -5,6 +5,7 @@ edition = "2021"
 [lib]
 path = "lib.rs"
 [dependencies]
+libc = "=0.2.186"
 sha2 = "=0.10.9"
 base64 = "=0.22.1"
 toml = "=0.9.12"
