@@ -426,6 +426,10 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
       }
       if (!owns()) throw new Error('RESTORE_CANCELLED')
       const tab = await deps.runtime.createTab({ ...input, action })
+      if (!owns()) {
+        if (deps.tabs.hasUnstartedAttempt?.(tab.tabId)) deps.tabs.close(tab.tabId)
+        throw new Error('RESTORE_CANCELLED')
+      }
       deps.tabs.setActive(tab.tabId)
       // 独立新建已获得明确 owner；元数据写入可以继续等待，但占位行应立即让位。
       // 合并恢复仍保留每个调用方在 coalesce 完成时的独立取消判定。

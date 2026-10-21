@@ -24,8 +24,8 @@ import { useProjectManagementStore } from '@/stores/projectManagement'
 import { useShellStore } from '@/stores/shell'
 import { useAttentionStore } from '@/stores/attention'
 
-const io = vi.hoisted(() => ({ projects: vi.fn(), sessions: vi.fn(), profiles: vi.fn(), registered: vi.fn(), register: vi.fn(), patchProfile: vi.fn(), getState: vi.fn(), upsertRecord: vi.fn(), setPreference: vi.fn(), scope: vi.fn(), read: vi.fn(), writeText: vi.fn(), archive: vi.fn(), restore: vi.fn(), open: vi.fn(), remove: vi.fn(), runChecks: vi.fn(), ptySpawn: vi.fn(), ptyInput: vi.fn(), ptyKill: vi.fn(), legacyRoot: vi.fn() }))
-vi.mock('@/api/tauri', async original => ({ ...await original<object>(), runChecks: io.runChecks, ptySpawn: io.ptySpawn, ptyInput: io.ptyInput, ptyKill: io.ptyKill, getProjectsState: io.getState, upsertSessionUiRecord: io.upsertRecord, setProjectLaunchPreference: io.setPreference, updateAppConfig: vi.fn().mockResolvedValue(undefined), getAppConfig: vi.fn().mockResolvedValue({ theme: 'light', terminalTheme: 'cc-box-light', language: 'en' }), archiveSession: io.archive, restoreSession: io.restore, getProjects: io.projects, getSessions: io.sessions, openInFileManager: io.open, createNativeProjectionClient: () => ({ scope: io.scope, read: io.read }), legacyClaudeRootKey: io.legacyRoot, onHookEvent: async () => () => {} }))
+const io = vi.hoisted(() => ({ projects: vi.fn(), sessions: vi.fn(), profiles: vi.fn(), registered: vi.fn(), register: vi.fn(), patchProfile: vi.fn(), getState: vi.fn(), upsertRecord: vi.fn(), setPreference: vi.fn(), scope: vi.fn(), read: vi.fn(), prepare: vi.fn(), writeText: vi.fn(), archive: vi.fn(), restore: vi.fn(), open: vi.fn(), remove: vi.fn(), runChecks: vi.fn(), ptySpawn: vi.fn(), ptyInput: vi.fn(), ptyKill: vi.fn(), legacyRoot: vi.fn() }))
+vi.mock('@/api/tauri', async original => ({ ...await original<object>(), runChecks: io.runChecks, ptySpawn: io.ptySpawn, ptyInput: io.ptyInput, ptyKill: io.ptyKill, getProjectsState: io.getState, upsertSessionUiRecord: io.upsertRecord, setProjectLaunchPreference: io.setPreference, updateAppConfig: vi.fn().mockResolvedValue(undefined), getAppConfig: vi.fn().mockResolvedValue({ theme: 'light', terminalTheme: 'cc-box-light', language: 'en' }), archiveSession: io.archive, restoreSession: io.restore, getProjects: io.projects, getSessions: io.sessions, openInFileManager: io.open, nativePrepareOpencodeSession: io.prepare, createNativeProjectionClient: () => ({ scope: io.scope, read: io.read }), legacyClaudeRootKey: io.legacyRoot, onHookEvent: async () => () => {} }))
 vi.mock('@/api/cli', () => ({ cliListProfiles: io.profiles, cliPatchProfile: io.patchProfile }))
 vi.mock('@/api/cliAvailability', () => ({ cliGetAvailability: async (profileId: string, profileRevision: string) => {
   const profile = useCliProfilesStore().profile(profileId)!
@@ -51,6 +51,7 @@ beforeEach(() => {
   io.registered.mockResolvedValue({ revision: '1', projects: [{ projectId: 'project', hostId: 'host', sourcePathKey: 'source', selectedPath: '/repo', canonicalPath: '/repo', alias: { mode: 'inherit' }, pinned: { mode: 'inherit' }, hidden: { mode: 'inherit' } }] })
   io.register.mockImplementation(async path => ({ revision: '2', projectId: 'registered-new', projects: [{ projectId: 'registered-new', hostId: 'host', sourcePathKey: 'source-new', selectedPath: path, canonicalPath: path, alias: { mode: 'inherit' }, pinned: { mode: 'inherit' }, hidden: { mode: 'inherit' } }] }))
   io.legacyRoot.mockResolvedValue({ rootKey: '', tabsUseDefaultRoot: false })
+  io.prepare.mockResolvedValue('ses_prepared')
   io.scope.mockResolvedValue({ cli: 'codex' }); io.read.mockReset().mockResolvedValue({ state: 'ready', items: [{ type: 'session', projectId: 'project', sessionKey: 'root-key', nativeSessionId: 'history-id', title: 'History', cwd: '/repo' }] })
 })
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.useRealTimers(); vi.unstubAllGlobals() })
@@ -709,6 +710,68 @@ describe('Workspace source warning diagnostics', () => {
 })
 
 describe('Unified production runtime', () => {
+  it('Runtime_OpencodeNewBindsOfficialIdBeforeLaunch_086', async () => {
+    io.profiles.mockResolvedValue({ revision: '7', profiles: [{ id: 'oc', revision: '7', cli: 'opencode',
+      name: 'OpenCode', launcher: { kind: 'native' }, programPath: { mode: 'set', value: '/tools/opencode' },
+      defaultArgs: { mode: 'inherit' }, skipPermissions: { mode: 'inherit' }, observer: { mode: 'inherit' }, env: {} }] })
+    io.scope.mockResolvedValue({ cli: 'opencode', sourceRootKey: 'root' })
+    io.read.mockResolvedValue({ state: 'ready', items: [], hasMore: false })
+    const { runtime } = render(); await flushPromises()
+    const catalog = useUnifiedSessionsStore()
+    const created = await catalog.createSession({ cli: 'opencode', projectKey: '/repo', projectPath: '/repo', action: { kind: 'new' } })
+    const active = useNativeTabsStore().tab(created.adapterSessionId)!
+    expect(io.prepare).toHaveBeenCalledWith(expect.objectContaining({ tabId: active.tabId, requestId: active.requestId,
+      runId: active.runId, profileId: 'oc', expectedProfileRevision: '7', action: { kind: 'new' } }))
+    expect(active.action).toEqual({ kind: 'resume-id', nativeSessionId: 'ses_prepared' })
+    io.read.mockResolvedValue({ state: 'ready', items: [{ type: 'session', projectId: 'project',
+      sessionKey: 'prepared-key', nativeSessionId: 'ses_prepared', title: 'CLI title', cwd: '/repo' }], hasMore: false })
+    await runtime.refresh()
+    const rows = catalog.sessions.filter(row => row.nativeSessionId === 'ses_prepared')
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ opened: true, title: 'CLI title', resumable: true })
+    const tabs = useNativeTabsStore()
+    tabs.markStarting(active.tabId)
+    tabs.applyLaunchStatus(active.tabId, { instanceId: 'backend', requestId: active.requestId,
+      run: { runId: active.runId, generation: active.generation }, phase: 'running', revision: '1', failure: null })
+    io.read.mockResolvedValue({ state: 'ready', items: [{ type: 'session', projectId: 'project',
+      sessionKey: 'prepared-key', nativeSessionId: 'ses_prepared', title: 'Updated CLI title', cwd: '/repo' }], hasMore: false })
+    tabs.tab(active.tabId)!.titleChangeRevision = 1
+    await new Promise(resolve => setTimeout(resolve, 400))
+    await flushPromises()
+    expect(catalog.sessions.find(row => row.nativeSessionId === 'ses_prepared')?.title).toBe('Updated CLI title')
+    io.read.mockResolvedValue({ state: 'ready', items: [{ type: 'session', projectId: 'project',
+      sessionKey: 'prepared-key', nativeSessionId: 'ses_prepared', title: 'Final CLI title', cwd: '/repo' }], hasMore: false })
+    tabs.applyLaunchStatus(active.tabId, { instanceId: 'backend', requestId: active.requestId,
+      run: { runId: active.runId, generation: active.generation }, phase: 'exited', revision: '2', failure: null })
+    await new Promise(resolve => setTimeout(resolve, 400))
+    await flushPromises()
+    expect(catalog.sessions.find(row => row.nativeSessionId === 'ses_prepared')?.title).toBe('Final CLI title')
+  })
+  it('Runtime_OpencodePrepareFailureLeavesNoAnonymousTab_087', async () => {
+    io.profiles.mockResolvedValue({ revision: '7', profiles: [{ id: 'oc', revision: '7', cli: 'opencode',
+      name: 'OpenCode', launcher: { kind: 'native' }, programPath: { mode: 'set', value: '/tools/opencode' },
+      defaultArgs: { mode: 'inherit' }, skipPermissions: { mode: 'inherit' }, observer: { mode: 'inherit' }, env: {} }] })
+    io.prepare.mockRejectedValue({ code: 'OPENCODE_SESSION_PREPARE_FAILED' })
+    render(); await flushPromises()
+    await expect(useUnifiedSessionsStore().createSession({ cli: 'opencode', projectKey: '/repo', projectPath: '/repo' })).rejects.toBeDefined()
+    expect(useNativeTabsStore().tabs.size).toBe(0)
+  })
+  it('Runtime_OpencodePreparationDoesNotPublishAnonymousTab_088', async () => {
+    io.profiles.mockResolvedValue({ revision: '7', profiles: [{ id: 'oc', revision: '7', cli: 'opencode',
+      name: 'OpenCode', launcher: { kind: 'native' }, programPath: { mode: 'set', value: '/tools/opencode' },
+      defaultArgs: { mode: 'inherit' }, skipPermissions: { mode: 'inherit' }, observer: { mode: 'inherit' }, env: {} }] })
+    let finish!: (id: string) => void
+    io.prepare.mockReturnValue(new Promise(resolve => { finish = resolve }))
+    render(); await flushPromises()
+    const creating = useUnifiedSessionsStore().createSession({ cli: 'opencode', projectKey: '/repo', projectPath: '/repo' })
+    await flushPromises()
+    expect(io.prepare).toHaveBeenCalledOnce()
+    expect(useNativeTabsStore().tabs.size).toBe(0)
+    finish('ses_prepared')
+    const created = await creating
+    expect(useNativeTabsStore().tab(created.adapterSessionId)?.action)
+      .toEqual({ kind: 'resume-id', nativeSessionId: 'ses_prepared' })
+  })
   // 配置与项目共用后端 workspace revision；注册项目后创建另一CLI配置须先读取当前CAS。
   it.each([['claude', 'codex'], ['codex', 'claude']] as const)('Runtime_SequentialCliDefaults_045: %s then %s', async (firstCli, secondCli) => {
     let revision = 0

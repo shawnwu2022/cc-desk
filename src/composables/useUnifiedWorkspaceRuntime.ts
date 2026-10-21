@@ -1,6 +1,6 @@
 import { computed, shallowRef, nextTick, onMounted, onUnmounted, ref, watch, type Ref } from 'vue'
 import { writeText } from '@tauri-apps/plugin-clipboard-manager'
-import { openInFileManager, nativeUnarchiveSession, nativeRenameSession, nativeGetScope, legacyClaudeRootKey, getSessions } from '@/api/tauri'
+import { openInFileManager, nativeUnarchiveSession, nativeRenameSession, nativePrepareOpencodeSession, nativeGetScope, legacyClaudeRootKey, getSessions } from '@/api/tauri'
 import { useSessionIndexMaintenanceStore } from '@/stores/sessionIndexMaintenance'
 import { useLegacyHistoryRefresh } from '@/composables/useLegacyHistoryRefresh'
 import { createNativeId } from '@/utils/nativeId'
@@ -285,7 +285,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     if (disposed || !host.value) throw new Error('TERMINAL_HOST_NOT_READY')
     return host.value
   }
-  function createNativeTab(input: NativeRuntimeCreateInput) {
+  async function createNativeTab(input: NativeRuntimeCreateInput) {
     if (app.isProjectAdmissionBlocked(input.projectPath)) throw new Error('PROJECT_REMOVAL_IN_PROGRESS')
     const source = input.sourceContext
     const profile = input.launchConfigId ? profiles.profile(input.launchConfigId) : profiles.selected[input.cli]
@@ -303,8 +303,27 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
       throw new Error(source ? 'PROJECT_IDENTITY_CHANGED' : 'PROJECT_NOT_FOUND')
     }
     // Paths selected by the frontend do not create registration or bridge authority.
+    let action = input.action
+    let preparedIdentity: { tabId: string; requestId: string; runId: string } | undefined
+    if (input.cli === 'opencode' && action.kind === 'new') {
+      preparedIdentity = { tabId: createNativeId('tab'), requestId: createNativeId('request'),
+        runId: createNativeId('run') }
+      const nativeSessionId = await nativePrepareOpencodeSession({
+        ...preparedIdentity, generation: 1, profileId: profile.id,
+        expectedProfileRevision: profile.revision, cli: input.cli,
+        launchCwd: matches[0].selectedPath, action: { kind: 'new' },
+        extraArgs: [], cols: 80, rows: 24,
+      })
+      if (disposed || app.isProjectAdmissionBlocked(input.projectPath)
+        || profiles.profile(profile.id)?.revision !== profile.revision
+        || !workspace.projects.some(project => project.projectId === matches[0].projectId
+          && sameProjectPath(project.selectedPath, matches[0].selectedPath))) {
+        throw new Error('STALE_NATIVE_ATTEMPT')
+      }
+      action = { kind: 'resume-id', nativeSessionId }
+    }
     const tab = native.create({ cli: input.cli, projectId: matches[0].projectId, projectPath: matches[0].selectedPath,
-      profileId: profile.id, profileRevision: profile.revision, action: input.action,
+      profileId: profile.id, profileRevision: profile.revision, action, preparedIdentity,
       title: input.title, sourceSessionKey: input.sourceSessionKey })
     if (!source) awaitingSuccess.set(tab.tabId, { attempt: captureNativeAttempt(tab), projectPath: tab.projectPath,
       cli: tab.cli, profileId: tab.profileId, profileRevision: tab.profileRevision })
@@ -754,6 +773,10 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   let historyTimer: ReturnType<typeof setTimeout> | undefined
   let historyReading = false
   function historyCue(tab: NativeCliTab): { identity: string | null; reply: string | null; prompt: string | null; titleRevision: number } | null {
+    if (tab.cli === 'opencode' && tab.action.kind === 'resume-id') {
+      return { identity: JSON.stringify([tab.requestId, tab.runId, tab.generation, tab.action.nativeSessionId, tab.status]),
+        reply: null, prompt: null, titleRevision: tab.titleChangeRevision ?? 0 }
+    }
     if (tab.cli !== 'claude' || tab.action.kind === 'raw' || tab.status !== 'running') return null
     const attempt = captureNativeAttempt(tab)
     const observing = tab.observationState === 'active'
@@ -779,7 +802,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     if (disposed || historyReading || loading.value || !ready.value) return
     const groups = new Map<string, HistoryOwner[]>()
     for (const owner of pendingHistoryOwners.values()) {
-      const key = JSON.stringify([owner.context.profileId, owner.context.profileRevision])
+      const key = JSON.stringify([owner.context.cli, owner.context.profileId, owner.context.profileRevision])
       const group = groups.get(key) ?? []
       group.push(owner)
       groups.set(key, group)
@@ -792,7 +815,8 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
         await Promise.all(reads.slice(index, index + 2).map(group => {
           // 前一批可能等待磁盘；每一组真正发起前重新核对冻结 owner/context。
           const current = group.filter(({ tab, attempt, context }) => native.tabs.get(tab.tabId) === tab
-            && matchesNativeAttempt(tab, attempt) && historyCue(tab) && context.cli === 'claude' && cliSupport.isEnabled('claude')
+            && matchesNativeAttempt(tab, attempt) && historyCue(tab)
+            && (context.cli === 'claude' || context.cli === 'opencode') && cliSupport.isEnabled(context.cli)
             && tab.profileId === context.profileId && tab.profileRevision === context.profileRevision
             && tab.projectId === context.projectId && sameProjectPath(tab.projectPath, context.projectPath)
             && profiles.profile(context.profileId)?.revision === context.profileRevision
@@ -801,7 +825,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
           const context = current[0].context
           const projects = new Map(current.map(owner => [owner.context.projectId, { projectId: owner.context.projectId, projectPath: owner.context.projectPath }]))
           // 自动投影失败保留已有行，但 store 仍发布错误且撤销 absence 证明。
-          return history.loadGrouped({ cli: 'claude', profileId: context.profileId, profileRevision: context.profileRevision,
+          return history.loadGrouped({ cli: context.cli, profileId: context.profileId, profileRevision: context.profileRevision,
             projects: [...projects.values()] }, { force: true, retainOnFailure: true }).catch(() => undefined)
         }))
       }

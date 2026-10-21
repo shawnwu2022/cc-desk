@@ -55,6 +55,7 @@ export interface NativeAttemptIdentity {
 }
 
 export interface NativeTabCreate {
+  preparedIdentity?: { tabId: string; requestId: string; runId: string }
   sourceSessionKey?: string
   cli: NativeCliKind
   projectId: string
@@ -241,7 +242,11 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     if (input.cli !== 'claude' && input.cli !== 'codex' && input.cli !== 'opencode') {
       throw new Error('NATIVE_CLI_REQUIRED')
     }
-    const tabId = id('tab')
+    const tabId = input.preparedIdentity?.tabId ?? id('tab')
+    if (tabs.has(tabId)) throw new Error('TAB_ID_CONFLICT')
+    if (input.preparedIdentity && Object.values(input.preparedIdentity).some(value => !value || value.includes('\0'))) {
+      throw new Error('INVALID_REQUEST')
+    }
     const value: NativeCliTab = {
       tabId,
       ...(input.sourceSessionKey ? { sourceSessionKey: input.sourceSessionKey } : {}),
@@ -250,8 +255,8 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
       projectPath: text(input.projectPath, 'PROJECT_PATH_REQUIRED'),
       profileId: text(input.profileId, 'PROFILE_ID_REQUIRED'),
       profileRevision: revision(input.profileRevision),
-      requestId: id('request'),
-      runId: id('run'),
+      requestId: input.preparedIdentity?.requestId ?? id('request'),
+      runId: input.preparedIdentity?.runId ?? id('run'),
       generation: 1,
       action: copyAction(input.action),
       status: 'stopped',

@@ -600,15 +600,15 @@ fn D09_UnarchiveRequest_ValidatesAndConverts_019() {
     }
 }
 
-// opencode：New 无参；resume-id 是 -s <id>；picker/unarchive 拒绝（spec §2）。
+// opencode：结构化 New 必须先由官方 API 预建；resume-id 是 -s <id>；picker/unarchive 拒绝。
 // Raw 不进断言矩阵：raw_args() 在客户端分发前整体接管（实测不可达），
 // opencode.rs 的 Raw arm 是与 claude.rs 同款的纵深防御，行为见 RawPassesThrough。
 #[test]
 fn Opencode_ArgvMappingFollowsSpecMatrix_01() {
     let f = Fixture::new(CliKind::Opencode, LaunchAction::New);
     let snapshot = f.freeze();
-    let invocation = build_invocation(&f.request, &snapshot).unwrap();
-    assert!(invocation.args().is_empty());
+    let error = build_invocation(&f.request, &snapshot).unwrap_err();
+    assert_eq!(error.code, "OPENCODE_SESSION_PREPARE_REQUIRED");
 
     let f = Fixture::new(
         CliKind::Opencode,

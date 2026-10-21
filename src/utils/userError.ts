@@ -19,6 +19,10 @@ type ErrorTemplate = Omit<UserErrorPresentation, 'context'>
 
 const KNOWN_ERRORS: Readonly<Record<string, ErrorTemplate>> = Object.freeze({
   NATIVE_RENAME_UNSUPPORTED: { messageKey:'errorNativeRenameUnsupported',actionKey:null,severity:'warning',retryable:false,detailCode:'NATIVE_RENAME_UNSUPPORTED' },
+  OPENCODE_SESSION_PREPARE_UNSUPPORTED: { messageKey:'errorOpencodePrepareUnsupported',actionKey:'launchConfigEditAction',severity:'warning',retryable:false,detailCode:'OPENCODE_SESSION_PREPARE_UNSUPPORTED' },
+  OPENCODE_SESSION_PREPARE_REQUIRED: { messageKey:'errorOpencodePrepareFailed',actionKey:'retry',severity:'warning',retryable:false,detailCode:'OPENCODE_SESSION_PREPARE_REQUIRED' },
+  OPENCODE_SESSION_PREPARE_FAILED: { messageKey:'errorOpencodePrepareFailed',actionKey:'retry',severity:'warning',retryable:true,detailCode:'OPENCODE_SESSION_PREPARE_FAILED' },
+  OPENCODE_SESSION_OUTCOME_UNKNOWN: { messageKey:'errorOpencodePrepareUnknown',actionKey:'refresh',severity:'warning',retryable:false,detailCode:'OPENCODE_SESSION_OUTCOME_UNKNOWN' },
   NODE_RUNTIME_UNAVAILABLE: { messageKey:'errorRenameNodeRuntime',actionKey:null,severity:'warning',retryable:false,detailCode:'NODE_RUNTIME_UNAVAILABLE' },
   SDK_HELPER_UNAVAILABLE: { messageKey:'errorRenameSdkHelper',actionKey:null,severity:'warning',retryable:false,detailCode:'SDK_HELPER_UNAVAILABLE' },
   SESSION_IDENTITY_UNKNOWN: { messageKey:'errorRenameIdentityUnknown',actionKey:null,severity:'warning',retryable:false,detailCode:'SESSION_IDENTITY_UNKNOWN' },

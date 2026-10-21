@@ -4,12 +4,12 @@ use super::environment::EnvMap;
 use super::invocation::build_invocation;
 use super::launch::LaunchCoordinator;
 use super::output_route::OutputRoute;
-use super::profiles::error;
+use super::profiles::{error, Override};
 use super::routed_launch::RoutedResource;
 use super::run_registry::{LaunchPhase, LaunchStatus, RunKey, RunRegistry};
 use super::snapshot::{freeze_launch, CallerIdentity, FreezeContext, LaunchSnapshot};
 use super::storage::WorkspaceRepository;
-use super::types::{LaunchRequest, SafeError};
+use super::types::{CliKind, LaunchAction, LaunchRequest, SafeError};
 use crate::platform::launch::resolve_process;
 use crate::platform::owned_pty::OwnedPty;
 use crate::terminal_transport::OutputFrame;
@@ -29,6 +29,7 @@ pub(crate) struct FrozenPty {
     pub(crate) observer_failure: Option<&'static str>,
 }
 pub(crate) type NativeRun = RoutedResource<FrozenPty, OutputRoute<OutputFrame>>;
+type OpencodePreparation = (CallerIdentity, LaunchRequest, Result<String, SafeError>);
 
 /// D14/D15 supply a backend consumer. It must retain/reap its owned run and
 /// implement bounded output/drain policy. This interface is never deserialized.
@@ -83,6 +84,7 @@ pub(crate) struct LaunchService {
     observer: Option<Arc<crate::observer_host::ObserverHost>>,
     shutting_down: Arc<RwLock<bool>>,
     command_owners: Arc<CommandOwners>,
+    opencode_preparations: Mutex<Vec<OpencodePreparation>>,
 }
 impl LaunchService {
     pub(crate) fn rename_metadata(
@@ -228,6 +230,7 @@ impl LaunchService {
             observer: None,
             shutting_down: Arc::new(RwLock::new(false)),
             command_owners: Arc::new(CommandOwners::default()),
+            opencode_preparations: Mutex::new(Vec::new()),
         }
     }
     pub(crate) fn with_observer(mut self, host: Arc<crate::observer_host::ObserverHost>) -> Self {
@@ -246,6 +249,82 @@ impl LaunchService {
     }
     pub(crate) fn registry(&self) -> &Arc<RunRegistry<NativeRun>> {
         self.coordinator.registry()
+    }
+    /// 同一文档与 requestId 的准备只执行一次；未知结果也不能重放 POST。
+    pub(crate) fn prepare_opencode_session(
+        &self,
+        caller: &CallerIdentity,
+        request: &LaunchRequest,
+    ) -> Result<String, SafeError> {
+        self.registry().check_caller(caller)?;
+        request.validate()?;
+        if request.cli != CliKind::Opencode || request.action != LaunchAction::New {
+            return Err(error("UNSUPPORTED_ACTION"));
+        }
+        let mut preparations = self.opencode_preparations.lock();
+        if let Some((_, old, result)) = preparations
+            .iter()
+            .find(|(owner, old, _)| owner == caller && old.request_id == request.request_id)
+        {
+            return if old == request {
+                result.clone()
+            } else {
+                Err(error("LAUNCH_REQUEST_ID_CONFLICT"))
+            };
+        }
+        if preparations.len() >= 4096 {
+            return Err(error("REGISTRY_CAPACITY"));
+        }
+        let result = (|| {
+            if *self.shutting_down.read() {
+                return Err(error("RUN_SUPERVISOR_STOPPING"));
+            }
+            let profile = self.repository.get_profile(&request.profile_id)?;
+            if !request.extra_args.is_empty()
+                || matches!(&profile.default_args, Override::Set(args) if !args.is_empty()) {
+                return Err(error("OPENCODE_SESSION_PREPARE_UNSUPPORTED"));
+            }
+            let legacy = profile
+                .read_legacy(&self.repository.metadata_directory().join("config.json"))?;
+            let inherited = self.inherited_environment()?;
+            let port = super::opencode_prepare::select_port()?;
+            let mut server_request = request.clone();
+            server_request.action = LaunchAction::Raw {
+                argv: vec![
+                    "serve".into(),
+                    "--hostname".into(),
+                    "127.0.0.1".into(),
+                    "--port".into(),
+                    port.to_string(),
+                ],
+            };
+            let snapshot = freeze_launch(
+                &server_request,
+                &profile,
+                caller,
+                &FreezeContext {
+                    inherited: &inherited,
+                    terminal: &EnvMap::new(),
+                    legacy: legacy.as_ref(),
+                    observer: None,
+                },
+            )?;
+            let invocation = build_invocation(&server_request, &snapshot)?;
+            let spec = resolve_process(&invocation)?;
+            let owner = self.command_owners.register()?;
+            let admission = self.admit_start()?;
+            let result = super::opencode_prepare::create_session(
+                &spec,
+                std::path::Path::new(&request.launch_cwd),
+                port,
+                admission,
+            );
+            let mut owner = owner;
+            owner.settled = true;
+            result
+        })();
+        preparations.push((caller.clone(), request.clone(), result.clone()));
+        result
     }
     pub(crate) fn start(
         &self,

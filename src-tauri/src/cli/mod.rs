@@ -11,6 +11,7 @@ pub(crate) mod native_projection;
 pub(crate) mod native_rename;
 pub(crate) mod native_runtime;
 pub(crate) mod opencode;
+pub(crate) mod opencode_prepare;
 pub(crate) mod observer_status;
 pub(crate) mod output_route;
 pub(crate) mod paste_support;

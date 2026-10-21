@@ -17,21 +17,26 @@ const TITLE_LIMIT: usize = 512;
 const PER_PROJECT_LIMIT: i64 = 2000;
 const GLOBAL_PROJECT_ID: &str = "global";
 
-pub(super) fn read_history(root: &Root, projects: &[ProjectRef<'_>]) -> ReadResult<Vec<ResourceItem>> {
+pub(crate) fn read_history(root: &Root, projects: &[ProjectRef<'_>]) -> ReadResult<Vec<ResourceItem>> {
     if projects.is_empty() {
         // Run/root-wide 观察不接 opencode：归属必须落在已 admitted 的项目上。
         return Err("SOURCE_UNSUPPORTED");
     }
-    // SQLite 只认路径、拿不到 cap-std 句柄，因此用 Root 自身的守卫预检 db 与
-    // -wal/-shm（拒 symlink/非 regular/相对越界），出口再 current() + stat 复核。
-    // 残余 TOCTOU 窗口与全库既有姿态一致：「检出替换，不是 race-free 读沙箱」。
+    // Windows SQLite VFS 不保证侧车 NOFOLLOW；其路径只指向下面的能力句柄私有副本。
+    // Unix VFS 自身对 db/WAL/SHM 使用 NOFOLLOW；两端仍复核源文件类型。
     for name in std::iter::once(DB_FILE).chain(SIDECAR_FILES.iter().copied()) {
-        let present = root.stat(Path::new(name))?;
-        if name == DB_FILE && present.is_none() {
+        let present = root.sqlite_file_present(Path::new(name))?;
+        if name == DB_FILE && !present {
             return Err("SOURCE_UNSUPPORTED");
         }
     }
-    let mut conn = open_read_only(&root.selected_path().join(DB_FILE))?;
+    #[cfg(windows)]
+    let snapshot = private_sqlite_snapshot(root)?;
+    #[cfg(windows)]
+    let database = snapshot.directory.path().join(DB_FILE);
+    #[cfg(not(windows))]
+    let database = root.selected_path().join(DB_FILE);
+    let mut conn = open_read_only(&database)?;
     let tx = conn.transaction().map_err(|_| "SOURCE_BUSY")?;
     probe_schema(&tx)?;
     let worktrees = read_worktrees(&tx)?;
@@ -40,11 +45,147 @@ pub(super) fn read_history(root: &Root, projects: &[ProjectRef<'_>]) -> ReadResu
         append_project(&tx, root, project, &worktrees, &mut items)?;
     }
     tx.commit().map_err(|_| "SOURCE_BUSY")?;
+    for name in std::iter::once(DB_FILE).chain(SIDECAR_FILES.iter().copied()) {
+        let present = root.sqlite_file_present(Path::new(name))?;
+        if name == DB_FILE && !present {
+            return Err("SOURCE_CHANGED");
+        }
+    }
     Ok(items)
 }
 
+#[cfg(windows)]
+const SNAPSHOT_LIMIT: u64 = 1024 * 1024 * 1024;
+
+#[cfg(windows)]
+struct PrivateSqliteSnapshot {
+    _database: std::fs::File,
+    _wal: std::fs::File,
+    _shm: std::fs::File,
+    directory: tempfile::TempDir,
+}
+
+#[cfg(windows)]
+struct SqliteSourceLock<'a> {
+    file: &'a std::fs::File,
+    offset: u32,
+}
+
+#[cfg(windows)]
+impl Drop for SqliteSourceLock<'_> {
+    fn drop(&mut self) {
+        use std::os::windows::io::AsRawHandle;
+        use windows::Win32::Foundation::HANDLE;
+        use windows::Win32::Storage::FileSystem::UnlockFileEx;
+        use windows::Win32::System::IO::OVERLAPPED;
+        let mut overlap = OVERLAPPED::default();
+        overlap.Anonymous.Anonymous.Offset = self.offset;
+        unsafe {
+            let _ = UnlockFileEx(HANDLE(self.file.as_raw_handle()), None, 1, 0, &mut overlap);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn lock_sqlite_source(file: &std::fs::File) -> ReadResult<SqliteSourceLock<'_>> {
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Foundation::{HANDLE, ERROR_LOCK_VIOLATION};
+    use windows::Win32::Storage::FileSystem::{LockFileEx, LOCKFILE_FAIL_IMMEDIATELY};
+    use windows::Win32::System::IO::OVERLAPPED;
+
+    // 与 SQLite Windows VFS 的 SHARED_FIRST/SHARED_SIZE 匹配；独占写事务锁住整个区间。
+    // 尝试各槽位避免与普通读者恰好占用同一字节时误报 BUSY。
+    for offset in 0x4000_0002..0x4000_0002 + 510 {
+        let mut overlap = OVERLAPPED::default();
+        overlap.Anonymous.Anonymous.Offset = offset;
+        match unsafe {
+            LockFileEx(
+                HANDLE(file.as_raw_handle()),
+                LOCKFILE_FAIL_IMMEDIATELY,
+                None,
+                1,
+                0,
+                &mut overlap,
+            )
+        } {
+            Ok(()) => return Ok(SqliteSourceLock { file, offset }),
+            Err(error) if error.code() == ERROR_LOCK_VIOLATION.to_hresult() => continue,
+            Err(_) => return Err("SOURCE_READ_FAILED"),
+        }
+    }
+    Err("SOURCE_BUSY")
+}
+
+#[cfg(windows)]
+fn copy_sqlite_file(
+    source: &std::fs::File,
+    destination: &Path,
+    remaining: &mut u64,
+) -> ReadResult<std::fs::File> {
+    use std::io::{Read, Write};
+    let before = source.metadata().map_err(|_| "SOURCE_READ_FAILED")?;
+    if !before.is_file() || before.len() > *remaining {
+        return Err("SOURCE_TOO_LARGE");
+    }
+    *remaining -= before.len();
+    let mut output = create_private_file(destination)?;
+    let copied = std::io::copy(&mut source.take(before.len() + 1), &mut output)
+        .map_err(|_| "SOURCE_READ_FAILED")?;
+    output.flush().map_err(|_| "SOURCE_READ_FAILED")?;
+    let after = source.metadata().map_err(|_| "SOURCE_READ_FAILED")?;
+    if copied != before.len()
+        || before.len() != after.len()
+        || before.modified().ok() != after.modified().ok()
+    {
+        return Err("SOURCE_CHANGED");
+    }
+    Ok(output)
+}
+
+#[cfg(windows)]
+fn create_private_file(path: &Path) -> ReadResult<std::fs::File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows::Win32::Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE};
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .share_mode(FILE_SHARE_READ.0 | FILE_SHARE_WRITE.0)
+        .open(path)
+        .map_err(|_| "SOURCE_READ_FAILED")
+}
+
+#[cfg(windows)]
+fn private_sqlite_snapshot(root: &Root) -> ReadResult<PrivateSqliteSnapshot> {
+    // SQLite 的 Windows VFS 会沿路径打开 -wal/-shm。仅复制能力目录中的 db/WAL，
+    // 私有目录中的 SHM 由 SQLite 根据 WAL 重建，避免它触碰原始侧车路径。
+    let database = root
+        .sqlite_source_file(Path::new(DB_FILE))?
+        .ok_or("SOURCE_UNSUPPORTED")?;
+    let _lock = lock_sqlite_source(&database)?;
+    let snapshot = tempfile::Builder::new()
+        .prefix("cc-desk-opencode-")
+        .tempdir()
+        .map_err(|_| "SOURCE_READ_FAILED")?;
+    let mut remaining = SNAPSHOT_LIMIT;
+    let database = copy_sqlite_file(&database, &snapshot.path().join(DB_FILE), &mut remaining)?;
+    let wal = if let Some(source) = root.sqlite_source_file(Path::new(SIDECAR_FILES[0]))? {
+        copy_sqlite_file(&source, &snapshot.path().join(SIDECAR_FILES[0]), &mut remaining)?
+    } else {
+        create_private_file(&snapshot.path().join(SIDECAR_FILES[0]))?
+    };
+    let shm = create_private_file(&snapshot.path().join(SIDECAR_FILES[1]))?;
+    root.current()?;
+    Ok(PrivateSqliteSnapshot {
+        _database: database,
+        _wal: wal,
+        _shm: shm,
+        directory: snapshot,
+    })
+}
+
 fn open_read_only(path: &Path) -> ReadResult<Connection> {
-    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NOFOLLOW)
         .map_err(|_| "SOURCE_UNSUPPORTED")?;
     conn.busy_timeout(std::time::Duration::from_millis(BUSY_TIMEOUT_MS))
         .map_err(|_| "SOURCE_BUSY")?;
@@ -124,7 +265,10 @@ fn append_project(
     // 伪造「项目无历史」（对抗审查实测：3000 条他项目 + 2 条本项目 → 命中 0）。
     let named: Vec<String> = worktrees
         .iter()
-        .filter(|(_, worktree)| {
+        .filter(|(id, worktree)| {
+            if id == GLOBAL_PROJECT_ID {
+                return false;
+            }
             let needle = spelling(worktree);
             project.paths.iter().any(|path| spelling(&path.to_string_lossy()) == needle)
         })

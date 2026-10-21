@@ -110,6 +110,78 @@ fn Opencode_GlobalProjectMatchesByDirectory_02() {
     }
 }
 
+#[test]
+#[allow(non_snake_case)]
+fn Opencode_GlobalWorktreeNeverClaimsForeignSessions_11() {
+    let f = Fixture::new();
+    let conn = f.conn();
+    conn.execute(
+        "INSERT INTO project (id, worktree, time_created, time_updated, sandboxes) VALUES ('global', ?1, 1, 1, '[]')",
+        [&f.project.to_string_lossy().as_ref()],
+    ).unwrap();
+    seed(&conn, "ses_here", "global", &f.project.to_string_lossy(), "here", 100, None);
+    seed(&conn, "ses_elsewhere", "global", "C:/somewhere/else", "elsewhere", 200, None);
+    let items = read_history(&Root::open(&f.root).unwrap(), &[f.project_ref()]).unwrap();
+    let ids: Vec<&str> = items.iter().map(|item| match item {
+        ResourceItem::Session { native_session_id, .. } => native_session_id.as_str(),
+        _ => panic!("session expected"),
+    }).collect();
+    assert_eq!(ids, ["ses_here"]);
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn Opencode_LinkedWalFailsClosed_12() {
+    let f = Fixture::new();
+    let outside = tempfile::tempdir().unwrap();
+    for sidecar in ["opencode.db-wal", "opencode.db-shm"] {
+        let target = outside.path().join(sidecar);
+        std::fs::write(&target, b"outside").unwrap();
+        let link = f.root.join(sidecar);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        #[cfg(windows)]
+        if let Err(error) = std::os::windows::fs::symlink_file(&target, &link) {
+            eprintln!("[SKIP] Opencode_LinkedWalFailsClosed_12: symlink unavailable: {error}");
+            return;
+        }
+        let error = read_history(&Root::open(&f.root).unwrap(), &[f.project_ref()]).unwrap_err();
+        assert_eq!(error, "SOURCE_NOT_REGULAR", "{sidecar}");
+        std::fs::remove_file(link).unwrap();
+    }
+}
+
+#[cfg(windows)]
+#[test]
+#[allow(non_snake_case)]
+fn Opencode_SourceHandlePinsWalAgainstReplacement_14() {
+    let f = Fixture::new();
+    let wal = f.root.join("opencode.db-wal");
+    let moved = f.root.join("moved-wal");
+    std::fs::write(&wal, b"inside").unwrap();
+    let root = Root::open(&f.root).unwrap();
+    let held = root.sqlite_source_file(std::path::Path::new("opencode.db-wal")).unwrap().unwrap();
+    assert!(std::fs::rename(&wal, &moved).is_err());
+    drop(held);
+    std::fs::rename(&wal, &moved).unwrap();
+}
+
+#[cfg(windows)]
+#[test]
+#[allow(non_snake_case)]
+fn Opencode_PrivateSnapshotPinsEverySqlitePath_15() {
+    let f = Fixture::new();
+    let root = Root::open(&f.root).unwrap();
+    let snapshot = super::private_sqlite_snapshot(&root).unwrap();
+    for name in ["opencode.db", "opencode.db-wal", "opencode.db-shm"] {
+        assert!(std::fs::rename(
+            snapshot.directory.path().join(name),
+            snapshot.directory.path().join(format!("moved-{name}")),
+        )
+        .is_err(), "{name}");
+    }
+}
+
 // parent_id 非空是 subagent 子会话，不进顶层列表（spec §5.5）。
 #[test]
 #[allow(non_snake_case)]
@@ -272,6 +344,41 @@ fn Opencode_ConcurrentWriterRemainsReadable_01() {
         crate::cli::native_projection::wire::ResourceItem::Session {
             native_session_id, ..
         } => assert_eq!(native_session_id, "ses_a"),
+        _ => panic!("session expected"),
+    }
+}
+
+// 不依赖宿主 Python：写者在 WAL 中留下未提交事务时，能力快照仍须读到旧提交行。
+#[cfg(windows)]
+#[test]
+#[allow(non_snake_case)]
+fn Opencode_UncommittedWalWriterKeepsCommittedHistory_13() {
+    let f = Fixture::new();
+    {
+        let conn = f.conn();
+        f.register_project(&conn, "p1");
+        seed(&conn, "ses_committed", "p1", &f.project.to_string_lossy(), "kept", 100, None);
+    }
+    let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
+    let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+    let database = f.root.join("opencode.db");
+    let directory = f.project.to_string_lossy().into_owned();
+    let writer = std::thread::spawn(move || {
+        let conn = Connection::open(database).unwrap();
+        conn.execute_batch("BEGIN IMMEDIATE").unwrap();
+        seed(&conn, "ses_uncommitted", "p1", &directory, "pending", 200, None);
+        ready_tx.send(()).unwrap();
+        release_rx.recv().unwrap();
+        conn.execute_batch("ROLLBACK").unwrap();
+    });
+    ready_rx.recv().unwrap();
+    let result = read_history(&Root::open(&f.root).unwrap(), &[f.project_ref()]);
+    release_tx.send(()).unwrap();
+    writer.join().unwrap();
+    let items = result.unwrap();
+    assert_eq!(items.len(), 1);
+    match &items[0] {
+        ResourceItem::Session { native_session_id, .. } => assert_eq!(native_session_id, "ses_committed"),
         _ => panic!("session expected"),
     }
 }

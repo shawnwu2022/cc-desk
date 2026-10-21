@@ -122,6 +122,9 @@ export default {
   errorAuthRequired: "此工具尚未登录。请先通过 CLI 登录后重试。",
   errorResourceUnavailable: "当前资源暂时不可用，请刷新后重试。",
   errorGenericUnavailable: "暂时无法安全完成此操作。请刷新当前状态后再试。",
+  errorOpencodePrepareUnsupported: "此 OpenCode 配置包含额外启动参数，无法安全预建新会话。请调整配置或使用原始命令启动。",
+  errorOpencodePrepareFailed: "未能创建 OpenCode 会话。请检查所选程序与配置后重试。",
+  errorOpencodePrepareUnknown: "OpenCode 会话可能已创建，但身份未得到确认。请刷新历史列表后再决定是否新建。",
   errorInvalidLaunchArguments: "自定义启动参数格式不正确，请修改后重试。",
   errorRecoveryUnavailable: "暂时无法检查最新状态。请先成功刷新，再重试此操作。",
 

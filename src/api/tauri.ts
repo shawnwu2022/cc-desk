@@ -363,6 +363,21 @@ export async function cliStart<E>(
   return nativeDocumentBridge().invoke('cli_start', request, channel);
 }
 
+/**
+ * 为同一次未启动的 opencode 请求创建官方会话；返回值只是身份，不是启动授权。
+ * @param request 冻结的启动请求。
+ * @returns 与请求目录绑定的原生会话 ID。
+ */
+export async function nativePrepareOpencodeSession(
+  request: import('@/types/cli').LaunchRequest,
+): Promise<string> {
+  const value = await nativeDocumentBridge().invoke('cli_prepare_opencode_session', request);
+  if (typeof value !== 'string' || !/^ses_[A-Za-z0-9_]+$/.test(value) || value.length > 256) {
+    throw new Error('INVALID_OPENCODE_SESSION_RESPONSE');
+  }
+  return value;
+}
+
 export async function cliGetLaunchStatus(requestId: string): Promise<unknown> {
   return nativeDocumentBridge().invoke('cli_get_launch_status', { requestId });
 }

@@ -122,6 +122,9 @@ export default {
   errorAuthRequired: "This tool is not signed in. Sign in through its CLI, then try again.",
   errorResourceUnavailable: "This resource is temporarily unavailable. Refresh to check again.",
   errorGenericUnavailable: "This action could not be completed safely. Refresh the current state before trying again.",
+  errorOpencodePrepareUnsupported: "This OpenCode profile has extra launch arguments, so a new session cannot be prepared safely. Adjust the profile or use a raw launch.",
+  errorOpencodePrepareFailed: "Could not create the OpenCode session. Check the selected program and configuration, then retry.",
+  errorOpencodePrepareUnknown: "OpenCode may have created the session, but its identity was not confirmed. Refresh history before deciding whether to create another.",
   errorInvalidLaunchArguments: "The custom launch arguments are invalid. Edit them before trying again.",
   errorRecoveryUnavailable: "The latest state could not be checked. Refresh successfully before trying the action again.",
 

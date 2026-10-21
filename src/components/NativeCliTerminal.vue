@@ -418,7 +418,7 @@ async function startAttempt(attempt: NativeAttemptIdentity): Promise<void> {
   try {
     const tracker = createXtermModeEpoch(target)
     modeTracker = tracker
-    if (tab.cli === 'claude' && tab.action.kind !== 'raw') {
+    if ((tab.cli === 'claude' || tab.cli === 'opencode') && tab.action.kind !== 'raw') {
       stopTitleObservation = observeTerminalTitleChanges(target, () => () => {
         if (runToken !== token || !attemptIsCurrent(attempt)) return
         tab.titleChangeRevision = (tab.titleChangeRevision ?? 0) + 1

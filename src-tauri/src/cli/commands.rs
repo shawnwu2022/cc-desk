@@ -112,6 +112,15 @@ pub(crate) async fn cli_start(
 }
 
 #[tauri::command]
+pub(crate) async fn cli_prepare_opencode_session(
+    webview: Webview,
+    request: Request<'_>,
+    runtime: State<'_, Arc<NativeRuntime>>,
+) -> Result<String, SafeError> {
+    runtime.prepare_opencode_session(webview, request).await
+}
+
+#[tauri::command]
 pub(crate) async fn cli_get_launch_status(
     webview: Webview,
     request: Request<'_>,

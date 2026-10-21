@@ -16,8 +16,8 @@ function tab(overrides: Partial<NativeCliTab> = {}): NativeCliTab {
   }
 }
 
-function history(cli: 'claude' | 'codex', root: string, nativeSessionId: string, projectPath = '/repo'): NativeHistoryEntry {
-  const profileId = cli === 'claude' ? 'claude-main' : 'codex-main'
+function history(cli: 'claude' | 'codex' | 'opencode', root: string, nativeSessionId: string, projectPath = '/repo'): NativeHistoryEntry {
+  const profileId = cli === 'claude' ? 'claude-main' : cli === 'codex' ? 'codex-main' : 'opencode-main'
   return {
     key: `${cli}:${root}`,
     context: { cli, profileId, profileRevision: '7', projectId: 'project-1', projectPath },
@@ -237,6 +237,28 @@ describe('native CLI adapter', () => {
     expect(matched[0]).toMatchObject({ opened: true })
     // 认领后活动行标题跟随 CLI 记录标题，不停留在本地占位名。
     expect(matched[0].title).toBe('claude-/root')
+  })
+  it('Opencode_PreparedIdentityClaimsTitleAndSurvivesRestart_040', async () => {
+    setActivePinia(createPinia())
+    const tabs = useNativeTabsStore()
+    const active = tabs.create({ cli: 'opencode', projectId: 'project-1', projectPath: '/repo',
+      profileId: 'opencode-main', profileRevision: '7',
+      preparedIdentity: { tabId: 'tab-prepared', requestId: 'request-prepared', runId: 'run-prepared' },
+      action: { kind: 'resume-id', nativeSessionId: 'ses_prepared' } })
+    const entry = history('opencode', '/root', 'ses_prepared')
+    const adapter = createNativeCliAdapter({ tabs, history: { all: () => [entry] },
+      runtime: { createTab: vi.fn(), restartTab: vi.fn(), stopTab: vi.fn(), renameTab: vi.fn() },
+      archive: { getArchivedSessions: () => [], archiveSession: vi.fn(), restoreSession: vi.fn() } })
+    expect(active).toMatchObject({ tabId: 'tab-prepared', requestId: 'request-prepared',
+      runId: 'run-prepared', action: { kind: 'resume-id', nativeSessionId: 'ses_prepared' } })
+    const rows = await adapter.listSessions()
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ opened: true, resumable: true, title: 'opencode-/root',
+      nativeSessionId: 'ses_prepared' })
+    tabs.applyLaunchStatus(active.tabId, { instanceId: 'backend', requestId: active.requestId,
+      run: { runId: active.runId, generation: active.generation }, phase: 'exited', revision: '1', failure: null })
+    expect(tabs.restart(active.tabId, { profileId: 'opencode-main', profileRevision: '7' }).action)
+      .toEqual({ kind: 'resume-id', nativeSessionId: 'ses_prepared' })
   })
 
   // 无观察身份时不猜测，活动行保持本地名（无唯一历史对应可跟随）。

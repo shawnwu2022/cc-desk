@@ -443,6 +443,44 @@ impl Root {
             Err(e) => Err(read_error(e)),
         }
     }
+    /// 校验 SQLite 来源文件；必须区分缺失与链接/非普通文件。
+    pub(crate) fn sqlite_file_present(&self, path: &Path) -> ReadResult<bool> {
+        relative(path, false)?;
+        self.current()?;
+        match self.dir.symlink_metadata(path) {
+            Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => Ok(true),
+            Ok(_) => Err("SOURCE_NOT_REGULAR"),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(read_error(error)),
+        }
+    }
+    /// Windows SQLite VFS 不对 WAL 使用 NOFOLLOW；复制前只交出能力目录内的普通文件句柄。
+    #[cfg(windows)]
+    pub(crate) fn sqlite_source_file(&self, path: &Path) -> ReadResult<Option<std::fs::File>> {
+        use cap_std::fs::OpenOptionsExt;
+        use windows::Win32::Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE};
+
+        relative(path, false)?;
+        self.current()?;
+        let metadata = match self.dir.symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(read_error(error)),
+        };
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return Err("SOURCE_NOT_REGULAR");
+        }
+        let mut options = OpenOptions::new();
+        options
+            .read(true)
+            .share_mode(FILE_SHARE_READ.0 | FILE_SHARE_WRITE.0);
+        let file = self.dir.open_with(path, &options).map_err(read_error)?;
+        if !file.metadata().map_err(read_error)?.is_file() {
+            return Err("SOURCE_NOT_REGULAR");
+        }
+        self.current()?;
+        Ok(Some(file.into_std()))
+    }
     pub(crate) fn history_until(
         &self,
         path: &Path,
