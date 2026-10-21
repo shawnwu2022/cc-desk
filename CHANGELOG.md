@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.24.0-rc.3] - 2026-10-22
+
+### Fixed
+
+- Default fresh or missing optional-tool preferences to Claude Code only while retaining explicit saved booleans. Restore the original compact icon toggles and target their internal buttons correctly for disabled opacity.
+- Refresh OpenCode history on support changes through the same owned, version-fenced path as other providers, without stopping opened terminals or reviving late reads.
+- Rename safely scoped OpenCode sessions through authenticated official GET/PATCH/GET metadata calls, with identity and persistent-title readback and no direct database writes.
+- Observe owned OpenCode 1.19.0 sessions through the official plugin event channel. Keep idle distinct from completion, retain outstanding permission/question and error causes, reject late/duplicate events, and revoke disposed plugins. Optional enhancement failures retain the original frozen CLI launch.
+
+This remains a prerelease. Unknown OpenCode versions do not receive the optional observer. Isolated no-model official CLI checks and synthetic browser evidence do not certify account-backed model turns or installed Windows WebView acceptance. Publication still requires exact protected-main CI, authenticated coverage and all three signed platform payloads.
+
 ## [0.24.0-rc.2] - 2026-10-21
 
 ### Added
