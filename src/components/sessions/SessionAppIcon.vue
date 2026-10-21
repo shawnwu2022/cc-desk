@@ -23,7 +23,8 @@ const badge = computed(() => {
   if (props.archived) return 'archived'
   // 未读是历史发生事实；已知的新活动、权限、错误及启动状态优先。
   if (props.notice?.unread && ['unknown', 'running', 'closed', 'stopped', 'ended', 'completed'].includes(props.state)) return 'completed'
-  return ['running', 'closed'].includes(props.state) ? null : props.state
+  // Codex 尚无回合活动观察；保留进程运行角标，避免整个运行期都没有状态提示。
+  return props.state === 'running' && props.cli !== 'codex' ? null : props.state
 })
 const completionEntry = ref(false)
 watch(() => [props.state, props.receiptId, props.archived] as const, (next, previous) => {

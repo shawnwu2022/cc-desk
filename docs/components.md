@@ -297,8 +297,11 @@ Native Claude 的活动观察与进程运行分开呈现：已知 idle 保持无
 `SessionAppIcon.vue` takes CLI, visual/activity state, archive context and an
 independent occurrence-notice description. It reserves one 20px slot and combines
 the real 16px application mark with a solid lower-right badge (10px SVG box,
-approximately 8px colored backplate). Known idle has no badge and keeps native
-artwork static; closed/stopped marks use a recognizable neutral-gray treatment.
+approximately 8px colored backplate). Known Claude idle has no badge and keeps native
+artwork static. Codex's process-running projection retains the static green running
+badge: its identity-only hooks provide no turn activity, permission or completion
+evidence. The badge does not claim that Codex is working or idle. Closed/stopped
+marks use a recognizable neutral-gray treatment.
 Codex retains its black/white brand artwork, with closed-treatment opacity tokens
 of 0.48 in light and 0.44 in dark GUI themes. Closed rows never render a badge,
 including unread receipts and archive context; their full accessible name,

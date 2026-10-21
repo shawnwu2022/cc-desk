@@ -148,6 +148,12 @@ never rewrites them or bumps their revision. Sessions without an observation cha
 connecting) now project a neutral running state instead of “Activity unknown”;
 an observed `unknown` remains genuinely unknown.
 
+Codex rows retain a static green process-running corner badge for that neutral
+projection. This distinguishes a confirmed running process from a closed row
+without claiming working, idle, permission or completion. Identity-only
+SessionStart/UserPromptSubmit/Stop receipts cannot change that meaning. Claude's
+known-idle presentation and the closed-row no-badge rule are unchanged.
+
 ## Smallest follow-up choices
 
 The remaining gap is at the producer/DTO boundary, not at the icon renderer:

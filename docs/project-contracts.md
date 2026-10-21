@@ -348,6 +348,7 @@ npm run tauri:build        # 生产构建
 
 ### Shared session icon contract
 
+- Codex 的中性 `running` 投影保留静态绿色运行角标，仅表示已确认的进程运行；身份 hook 不产生工作、空闲、权限或完成事实。Claude 已知 idle 继续无角标，关闭行继续仅用应用图标明暗区分。
 - Closed rows never add a corner badge, including unread/archive context. Codex's
   bundled black/white mark uses paired light/dark closed-opacity tokens (0.48/0.44)
   to distinguish it from the full-contrast normal mark. Complete accessible names,
