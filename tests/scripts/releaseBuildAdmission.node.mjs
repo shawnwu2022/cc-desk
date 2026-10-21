@@ -23,6 +23,17 @@ test('ReleaseBuildAdmission_ProtectedExactSource_001', async () => {
   assert.doesNotThrow(() => assertBuildAdmission({ ...admitted(), event: 'workflow_dispatch' }))
 })
 
+test('ReleaseBuildAdmission_ReleaseCandidateRequiresProtectedExactSource_020', async () => {
+  const { assertBuildAdmission } = await admission()
+  const candidate = { ...admitted(), versions: ['0.24.0-rc.1', '0.24.0-rc.1', '0.24.0-rc.1'] }
+  assert.doesNotThrow(() => assertBuildAdmission(candidate))
+  candidate.main = { ...candidate.main, protected: false }
+  assert.throws(() => assertBuildAdmission(candidate), /build admission blocked/)
+  candidate.main.protected = true
+  candidate.versions = ['0.24.0-rc.1', '0.24.0', '0.24.0-rc.1']
+  assert.throws(() => assertBuildAdmission(candidate), /build admission blocked/)
+})
+
 // Each refusal would fail if the corresponding source check were removed.
 for (const [name, mutate] of [
   ['main advanced', c => { c.main.sha = '2'.repeat(40) }],

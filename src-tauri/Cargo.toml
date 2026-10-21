@@ -1,7 +1,7 @@
 [package]
 name = "cc-desk"
-version = "0.23.5"
-description = "CC Desk - a multi-project, multi-session desktop workspace for Claude Code"
+version = "0.24.0-rc.1"
+description = "CC Desk - a multi-project, multi-session desktop workspace for Claude Code, Codex CLI, and OpenCode"
 authors = ["shawnwu2022"]
 license = "MIT"
 repository = "https://github.com/shawnwu2022/cc-desk"

@@ -1,4 +1,5 @@
 import { coverageArtifactName, validateNativeCoverage } from './windows-native-validation.mjs'
+import { releaseChannel } from './release-version.mjs'
 
 export const REQUIRED_CI_JOBS = Object.freeze(['Frontend checks', 'Rust checks',
   'Disposable roundtrip compile-only policy (no native acceptance)'])
@@ -8,7 +9,7 @@ export function sourceChecksPassed(context) {
   if (!c || !['push', 'workflow_dispatch'].includes(c.event) || c.ref !== 'refs/heads/main') return false
   if (!/^[a-f0-9]{40}$/.test(c.sha ?? '') || c.main?.protected !== true || c.main.sha !== c.sha) return false
   if (!Array.isArray(c.versions) || c.versions.length !== 3 || !c.versions.every(v => v === c.versions[0])) return false
-  if (!/^\d+\.\d+\.\d+$/.test(c.versions[0]) || c.tag !== `v${c.versions[0]}`) return false
+  if (!releaseChannel(c.versions[0]) || c.tag !== `v${c.versions[0]}`) return false
   const ci = c.ci
   if (!Number.isSafeInteger(ci?.id) || ci.id <= 0 || !Number.isSafeInteger(ci.run_attempt) || ci.run_attempt <= 0) return false
   if (!ci || ci.path !== '.github/workflows/ci.yml' || ci.head_sha !== c.sha || ci.head_branch !== 'main' || ci.event !== 'push') return false

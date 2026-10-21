@@ -2,10 +2,20 @@
 
 ## [Unreleased]
 
+## [0.24.0-rc.1] - 2026-10-21
+
 ### Added
 
-- Backend support for a third CLI, opencode: launch (new / resume by `-s <id>` / raw), SQLite-backed history projection, discovery, availability, and explicit capability gates (CLI-side picker/rename/archive are unsupported, not degraded). Creating an opencode launch configuration is a one-way upgrade: older app versions fail to read the workspace document (`WORKSPACE_INVALID`).
-- Frontend support for opencode: new-session entry, resume by session ID, per-project launch preference as a third key, `opencode-history` diagnostics source, OC glyph mark (official asset pending), capability-gated UI (picker/rename hidden), and docs updates. Old localStorage `cli-support` data migrates with opencode defaulting to enabled.
+- OpenCode as a third owned native CLI: new session, exact-ID resume, raw launch, SQLite history, an official application mark, and explicit capability gates for unsupported picker, rename and archive actions. Older CC Desk versions cannot read a workspace document after an OpenCode profile is saved (`WORKSPACE_INVALID`).
+- Per-project OpenCode preferences and history diagnostics. Existing Claude/Codex preferences are preserved; OpenCode defaults to enabled when the third setting is absent.
+
+### Fixed
+
+- Pin OpenCode database, WAL and SHM reads to the selected exact file and a coherent Windows snapshot. Custom `OPENCODE_DB` paths are supported; compiled channel filenames are taken from a bounded official `db path` probe within the admitted data root.
+- Keep bounded OpenCode history and invalid metadata from silently hiding earlier sessions or poisoning the whole projection. Retain safe launch behavior when optional preparation is unsupported or unavailable before creation, without replaying an uncertain POST.
+- Prevent late Claude Stop hooks from replacing a newer SessionStart identity, preserve Codex wrapper and title fixes, and keep active-session filtering, source warnings and keyboard focus behavior consistent after integration.
+
+This release candidate is a prerelease and does not replace the stable Latest release or updater endpoint. Official OpenCode 1.19.0 no-model CLI creation, database-path and readback were verified in isolation; account-backed Layer C and installed Windows WebView acceptance remain separate. Unknown CLI versions or database schemas safely disable optional history/title capabilities while basic CLI launch remains available. Publication still requires the exact protected-main CI, authenticated coverage and three signed platform payloads.
 
 ## [0.23.5] - 2026-10-20
 

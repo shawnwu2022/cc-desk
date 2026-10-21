@@ -4,6 +4,19 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
+## [0.24.0-rc.1]
+
+测试版本
+
+- 新增 OpenCode 原生终端启动、按准确会话 ID 恢复，以及按项目归属读取 SQLite 历史。
+- 改进 Claude Code 迟到 hook 的会话身份、Codex 命令包装器兼容性、活跃会话筛选和焦点快捷键。
+- OpenCode 会话预备、历史读取或能力探测不可用时安全降级。
+
+重要说明
+
+- 这是预发布测试包，需要主动下载运行；稳定版自动更新通道仍指向最新稳定版。
+- OpenCode 已针对官方 CLI 1.19.0 验证，未调用付费模型。登录账号后的创建和恢复、已安装 Windows WebView 验收仍需单独验证。旧版或未来版本可能失去可选历史或标题增强，但基础终端启动仍可使用。
+
 ## [0.23.5]
 
 修复
