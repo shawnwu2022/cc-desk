@@ -87,6 +87,25 @@ fn SourceProvenance_OpencodeDefaultNeedsExactProbeForRestart_004() {
         },
     )
     .unwrap();
+    assert!(SourceProvenance::needs_database_probe(&snapshot));
+    let raw = freeze_launch(
+        &LaunchRequest {
+            action: LaunchAction::Raw {
+                argv: vec!["--help".into()],
+            },
+            ..request.clone()
+        },
+        &profile,
+        &caller,
+        &FreezeContext {
+            inherited: &environment,
+            terminal: &EnvMap::new(),
+            legacy: None,
+            observer: None,
+        },
+    )
+    .unwrap();
+    assert!(!SourceProvenance::needs_database_probe(&raw));
     assert_eq!(
         SourceProvenance::freeze(&snapshot)
             .selection()

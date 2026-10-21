@@ -618,28 +618,21 @@ impl LaunchService {
                 })
             },
             |snapshot| {
-                let database = if snapshot.request().cli == CliKind::Opencode {
-                    (|| -> Result<Option<String>, SafeError> {
-                        let locations = super::native_projection::selection::locations(
-                            CliKind::Opencode,
-                            snapshot.environment(),
-                        )
-                        .map_err(error)?;
-                        if locations.sqlite_file.is_some() {
-                            return Ok(None);
-                        }
-                        let profile = self.repository.get_profile(&request.profile_id)?;
-                        self.probe_opencode_database(
-                            caller,
-                            &profile,
-                            std::path::Path::new(&request.launch_cwd),
-                            snapshot.environment(),
-                        )
-                        .map(Some)
-                    })()
-                } else {
-                    Ok(None)
-                };
+                let database =
+                    if super::source_provenance::SourceProvenance::needs_database_probe(snapshot) {
+                        (|| -> Result<Option<String>, SafeError> {
+                            let profile = self.repository.get_profile(&request.profile_id)?;
+                            self.probe_opencode_database(
+                                caller,
+                                &profile,
+                                std::path::Path::new(&request.launch_cwd),
+                                snapshot.environment(),
+                            )
+                            .map(Some)
+                        })()
+                    } else {
+                        Ok(None)
+                    };
                 super::source_provenance::SourceProvenance::freeze_with_database(snapshot, database)
             },
         )?;
