@@ -207,12 +207,24 @@ fn Opencode_CompiledChannelUsesOnlyProbedDataRoot_06() {
     let t = tempfile::tempdir().unwrap();
     let data = t.path().join("data");
     std::fs::create_dir(&data).unwrap();
-    let selection = Locations { root: data.clone(), user_config: None, sqlite_file: None };
-    let channel = selection.with_probed_database(&data.join("opencode-local.db").to_string_lossy()).unwrap();
+    let selection = Locations {
+        root: data.clone(),
+        user_config: None,
+        sqlite_file: None,
+    };
+    let channel = selection
+        .with_probed_database(&data.join("opencode-local.db").to_string_lossy())
+        .unwrap();
     assert_eq!(channel.sqlite_file.as_deref(), Some("opencode-local.db"));
-    assert!(selection.with_probed_database(&t.path().join("outside.db").to_string_lossy()).is_err());
-    assert!(selection.with_probed_database(&data.join("random.db").to_string_lossy()).is_err());
-    assert!(selection.with_probed_database("opencode.db\nother").is_err());
+    assert!(selection
+        .with_probed_database(&t.path().join("outside.db").to_string_lossy())
+        .is_err());
+    assert!(selection
+        .with_probed_database(&data.join("random.db").to_string_lossy())
+        .is_err());
+    assert!(selection
+        .with_probed_database("opencode.db\nother")
+        .is_err());
 }
 
 // 空/非法 XDG 覆盖不得回退默认根（fail-closed，与既有 CODEX_HOME 语义一致）。
@@ -277,7 +289,10 @@ fn Opencode_CustomDatabaseNeverReadsDefault_04() {
     for value in ["custom.db", "../elsewhere.db"] {
         env.insert("OPENCODE_DB".into(), value.into());
         let selection = locations(CliKind::Opencode, &env).unwrap();
-        assert_ne!(selection.root.join(selection.sqlite_file.as_ref().unwrap()), t.path().join(".local/share/opencode/opencode.db"));
+        assert_ne!(
+            selection.root.join(selection.sqlite_file.as_ref().unwrap()),
+            t.path().join(".local/share/opencode/opencode.db")
+        );
     }
     env.insert("OPENCODE_DB".into(), ":memory:".into());
     assert!(locations(CliKind::Opencode, &env).is_err());

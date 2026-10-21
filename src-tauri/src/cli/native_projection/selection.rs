@@ -61,7 +61,10 @@ pub(crate) struct Locations {
 impl Locations {
     pub(crate) fn open_root(&self, cli: CliKind) -> ReadResult<Root> {
         if cli == CliKind::Opencode {
-            Root::open_sqlite(&self.root, self.sqlite_file.as_deref().ok_or("SCOPE_UNKNOWN")?)
+            Root::open_sqlite(
+                &self.root,
+                self.sqlite_file.as_deref().ok_or("SCOPE_UNKNOWN")?,
+            )
         } else {
             Root::open(&self.root)
         }
@@ -76,10 +79,20 @@ impl Locations {
         }
         let database = Path::new(output);
         valid(database)?;
-        let file = database.file_name().and_then(OsStr::to_str).ok_or("SCOPE_UNKNOWN")?;
-        let channel = file.strip_prefix("opencode-").and_then(|name| name.strip_suffix(".db"));
+        let file = database
+            .file_name()
+            .and_then(OsStr::to_str)
+            .ok_or("SCOPE_UNKNOWN")?;
+        let channel = file
+            .strip_prefix("opencode-")
+            .and_then(|name| name.strip_suffix(".db"));
         if file != "opencode.db"
-            && !channel.is_some_and(|value| !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte)))
+            && !channel.is_some_and(|value| {
+                !value.is_empty()
+                    && value
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
+            })
         {
             return Err("SCOPE_UNKNOWN");
         }
@@ -144,22 +157,45 @@ fn opencode_locations(env: &EnvMap) -> ReadResult<Locations> {
         Some(":memory:") => return Err("SCOPE_UNKNOWN"),
         Some(value) => {
             let value = Path::new(value);
-            if value.is_absolute() { value.to_path_buf() } else { root.join(value) }
+            if value.is_absolute() {
+                value.to_path_buf()
+            } else {
+                root.join(value)
+            }
         }
         None if lookup(env, OsStr::new("OPENCODE_DISABLE_CHANNEL_DB"))
-            .is_some_and(|value| value == "1" || value == "true") => root.join("opencode.db"),
-        None => return Ok(Locations { root, user_config: None, sqlite_file: None }),
+            .is_some_and(|value| value == "1" || value == "true") =>
+        {
+            root.join("opencode.db")
+        }
+        None => {
+            return Ok(Locations {
+                root,
+                user_config: None,
+                sqlite_file: None,
+            })
+        }
     };
     valid(&database)?;
     let file = match database.file_name().and_then(OsStr::to_str) {
-        Some(name) if !name.is_empty()
-            && (!cfg!(windows) || !name.contains(':'))
-            && Path::new(name).components().all(|part| matches!(part, Component::Normal(_))) => name.to_owned(),
+        Some(name)
+            if !name.is_empty()
+                && (!cfg!(windows) || !name.contains(':'))
+                && Path::new(name)
+                    .components()
+                    .all(|part| matches!(part, Component::Normal(_))) =>
+        {
+            name.to_owned()
+        }
         _ => return Err("SCOPE_UNKNOWN"),
     };
     let parent = database.parent().ok_or("SCOPE_UNKNOWN")?.to_path_buf();
     valid(&parent)?;
-    Ok(Locations { root: parent, user_config: None, sqlite_file: Some(file) })
+    Ok(Locations {
+        root: parent,
+        user_config: None,
+        sqlite_file: Some(file),
+    })
 }
 fn valid(path: &std::path::Path) -> ReadResult<()> {
     let value = path.to_str().ok_or("SCOPE_UNKNOWN")?;

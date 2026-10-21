@@ -87,22 +87,40 @@ fn SourceProvenance_OpencodeDefaultNeedsExactProbeForRestart_004() {
         },
     )
     .unwrap();
-    assert_eq!(SourceProvenance::freeze(&snapshot).selection().err().unwrap().code, "SCOPE_UNKNOWN");
+    assert_eq!(
+        SourceProvenance::freeze(&snapshot)
+            .selection()
+            .err()
+            .unwrap()
+            .code,
+        "SCOPE_UNKNOWN"
+    );
     let exact = root.join("opencode-beta.db");
     let source = SourceProvenance::freeze_with_database(
         &snapshot,
         Ok(Some(exact.to_str().unwrap().to_owned())),
     );
-    assert_eq!(source.selection().unwrap().root.sqlite_filename(), "opencode-beta.db");
+    assert_eq!(
+        source.selection().unwrap().root.sqlite_filename(),
+        "opencode-beta.db"
+    );
     assert!(SourceProvenance::freeze_with_database(
         &snapshot,
-        Ok(Some(temp.path().join("unrelated.db").to_str().unwrap().to_owned())),
+        Ok(Some(
+            temp.path()
+                .join("unrelated.db")
+                .to_str()
+                .unwrap()
+                .to_owned()
+        )),
     )
     .selection()
     .is_err());
-    assert!(SourceProvenance::freeze_with_database(&snapshot, Err(error("SCOPE_UNKNOWN")))
-        .selection()
-        .is_err());
+    assert!(
+        SourceProvenance::freeze_with_database(&snapshot, Err(error("SCOPE_UNKNOWN")))
+            .selection()
+            .is_err()
+    );
 }
 #[test]
 fn SourceProvenance_ReplacedRootCannotBecomeOriginalSource_001() {

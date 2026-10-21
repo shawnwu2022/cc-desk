@@ -207,7 +207,10 @@ impl Root {
             || file.contains('\0')
             || (cfg!(windows) && file.contains(':'))
             || Path::new(file).components().count() != 1
-            || !matches!(Path::new(file).components().next(), Some(Component::Normal(_)))
+            || !matches!(
+                Path::new(file).components().next(),
+                Some(Component::Normal(_))
+            )
         {
             return Err("SCOPE_UNKNOWN");
         }

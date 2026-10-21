@@ -120,13 +120,20 @@ impl ProjectionService {
                     return Err(error("REVISION_CONFLICT"));
                 }
                 let (env, configured) = profile_locations_diagnosed(&self.launch, &profile, stage)?;
-                let selected = if profile.cli == CliKind::Opencode && configured.sqlite_file.is_none() {
+                let selected = if profile.cli == CliKind::Opencode
+                    && configured.sqlite_file.is_none()
+                {
                     let project_id = project_ids.first().ok_or_else(|| error("SCOPE_UNKNOWN"))?;
-                    let project = document.registered_projects.get(project_id)
+                    let project = document
+                        .registered_projects
+                        .get(project_id)
                         .ok_or_else(|| error("PROJECT_NOT_FOUND"))?;
                     let _ = admit_project(project)?;
                     let output = self.launch.probe_opencode_database(
-                        caller, &profile, &project.selected_path, &env,
+                        caller,
+                        &profile,
+                        &project.selected_path,
+                        &env,
                     )?;
                     configured.with_probed_database(&output).map_err(error)?
                 } else {

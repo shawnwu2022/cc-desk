@@ -371,7 +371,8 @@ impl LaunchService {
         expected_environment: &EnvMap,
     ) -> Result<String, SafeError> {
         self.registry().check_caller(caller)?;
-        if profile.cli != CliKind::Opencode || self.repository.get_profile(&profile.id)? != *profile {
+        if profile.cli != CliKind::Opencode || self.repository.get_profile(&profile.id)? != *profile
+        {
             return Err(error("SCOPE_UNKNOWN"));
         }
         let request = LaunchRequest {
@@ -382,29 +383,48 @@ impl LaunchService {
             profile_id: profile.id.clone(),
             expected_profile_revision: profile.revision,
             cli: CliKind::Opencode,
-            launch_cwd: cwd.to_str().ok_or_else(|| error("SCOPE_UNKNOWN"))?.to_owned(),
-            action: LaunchAction::Raw { argv: vec!["db".into(), "path".into()] },
+            launch_cwd: cwd
+                .to_str()
+                .ok_or_else(|| error("SCOPE_UNKNOWN"))?
+                .to_owned(),
+            action: LaunchAction::Raw {
+                argv: vec!["db".into(), "path".into()],
+            },
             extra_args: vec![],
             cols: 80,
             rows: 24,
         };
-        let legacy = profile.read_legacy(&self.repository.metadata_directory().join("config.json"))?;
+        let legacy =
+            profile.read_legacy(&self.repository.metadata_directory().join("config.json"))?;
         let inherited = self.inherited_environment()?;
-        let snapshot = freeze_launch(&request, profile, caller, &FreezeContext {
-            inherited: &inherited,
-            terminal: &EnvMap::new(),
-            legacy: legacy.as_ref(),
-            observer: None,
-        }).map_err(|_| error("SCOPE_UNKNOWN"))?;
+        let snapshot = freeze_launch(
+            &request,
+            profile,
+            caller,
+            &FreezeContext {
+                inherited: &inherited,
+                terminal: &EnvMap::new(),
+                legacy: legacy.as_ref(),
+                observer: None,
+            },
+        )
+        .map_err(|_| error("SCOPE_UNKNOWN"))?;
         if snapshot.environment() != expected_environment {
             return Err(error("SCOPE_UNKNOWN"));
         }
-        let invocation = build_invocation(&request, &snapshot).map_err(|_| error("SCOPE_UNKNOWN"))?;
+        let invocation =
+            build_invocation(&request, &snapshot).map_err(|_| error("SCOPE_UNKNOWN"))?;
         let spec = resolve_process(&invocation).map_err(|_| error("SCOPE_UNKNOWN"))?;
-        let (admission, mut owner) = self.admit_owned_command().map_err(|_| error("SCOPE_UNKNOWN"))?;
+        let (admission, mut owner) = self
+            .admit_owned_command()
+            .map_err(|_| error("SCOPE_UNKNOWN"))?;
         let current = || {
-            if *self.shutting_down.read() { return Err(error("SCOPE_UNKNOWN")); }
-            self.registry().check_caller(caller).map_err(|_| error("SCOPE_UNKNOWN"))
+            if *self.shutting_down.read() {
+                return Err(error("SCOPE_UNKNOWN"));
+            }
+            self.registry()
+                .check_caller(caller)
+                .map_err(|_| error("SCOPE_UNKNOWN"))
         };
         let result = super::opencode_prepare::probe_database_path(&spec, admission, &current);
         owner.settled = true;
@@ -620,9 +640,7 @@ impl LaunchService {
                 } else {
                     Ok(None)
                 };
-                super::source_provenance::SourceProvenance::freeze_with_database(
-                    snapshot, database,
-                )
+                super::source_provenance::SourceProvenance::freeze_with_database(snapshot, database)
             },
         )?;
         if spawned.get() {
@@ -903,10 +921,17 @@ mod owned_command_tests {
     #[allow(non_snake_case)]
     fn Opencode_DeniedProbeCreatesNoCommandOwner_094() {
         let temp = tempfile::tempdir().unwrap();
-        let repository = WorkspaceRepository::open(temp.path().join("metadata/workspace.json")).unwrap();
+        let repository =
+            WorkspaceRepository::open(temp.path().join("metadata/workspace.json")).unwrap();
         let service = LaunchService::new(repository.clone(), Some(EnvMap::new()), None);
-        let frozen = repository.admission().freeze(&uuid::Uuid::new_v4().to_string()).unwrap();
-        assert_eq!(service.admit_owned_command().err().unwrap().code, "HISTORY_MAINTENANCE_ACTIVE");
+        let frozen = repository
+            .admission()
+            .freeze(&uuid::Uuid::new_v4().to_string())
+            .unwrap();
+        assert_eq!(
+            service.admit_owned_command().err().unwrap().code,
+            "HISTORY_MAINTENANCE_ACTIVE"
+        );
         assert_eq!(*service.command_owners.active.lock(), 0);
         service.wait_for_commands();
         frozen.release_review().unwrap();

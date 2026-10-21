@@ -78,18 +78,35 @@ fn Opencode_ProfileScopeBindsExactDatabaseFilename_025() {
     let mut keys = Vec::new();
     for (id, filename) in [("one", "one.db"), ("two", "two.db")] {
         let mut profile = Profile::new(id, CliKind::Opencode);
-        profile.env.insert("XDG_DATA_HOME".into(), Override::Set(EnvValue::Literal {
-            value: data.to_string_lossy().into(), non_secret: true,
-        }));
-        profile.env.insert("OPENCODE_DB".into(), Override::Set(EnvValue::Literal {
-            value: data.join(filename).to_string_lossy().into(), non_secret: true,
-        }));
-        let document = f.repo.apply(f.repo.read().unwrap().revision, Patch::Create { profile }).unwrap();
-        let source = f.service.scope(&f.caller, &ScopeTarget::Profile {
-            profile_id: id.into(),
-            expected_profile_revision: document.profiles[id].revision,
-            project_ids: vec![project.project_id.clone()],
-        }).unwrap();
+        profile.env.insert(
+            "XDG_DATA_HOME".into(),
+            Override::Set(EnvValue::Literal {
+                value: data.to_string_lossy().into(),
+                non_secret: true,
+            }),
+        );
+        profile.env.insert(
+            "OPENCODE_DB".into(),
+            Override::Set(EnvValue::Literal {
+                value: data.join(filename).to_string_lossy().into(),
+                non_secret: true,
+            }),
+        );
+        let document = f
+            .repo
+            .apply(f.repo.read().unwrap().revision, Patch::Create { profile })
+            .unwrap();
+        let source = f
+            .service
+            .scope(
+                &f.caller,
+                &ScopeTarget::Profile {
+                    profile_id: id.into(),
+                    expected_profile_revision: document.profiles[id].revision,
+                    project_ids: vec![project.project_id.clone()],
+                },
+            )
+            .unwrap();
         keys.push(source.source_root_key);
     }
     assert_ne!(keys[0], keys[1]);
@@ -550,7 +567,7 @@ fn D12_Production_RunSnapshotSurvivesProfileDeleteButNotDocumentRevoke_006() {
 #[test]
 #[allow(non_snake_case)]
 fn Opencode_RenameRejectedBeforeScopeAdmission_01() {
-    use crate::cli::native_projection::wire::{SourceBasis, SourceRef, ScopeTarget};
+    use crate::cli::native_projection::wire::{ScopeTarget, SourceBasis, SourceRef};
     use crate::cli::types::{CliKind, WireU64};
     let f = Fixture::new();
     let source = SourceRef {

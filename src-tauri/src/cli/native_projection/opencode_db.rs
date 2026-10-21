@@ -10,7 +10,15 @@ use std::path::Path;
 
 const DB_FILE: &str = "opencode.db";
 const SIDECAR_FILES: &[&str] = &["opencode.db-wal", "opencode.db-shm"];
-const SESSION_COLUMNS: &[&str] = &["id", "project_id", "directory", "title", "time_created", "time_updated", "parent_id"];
+const SESSION_COLUMNS: &[&str] = &[
+    "id",
+    "project_id",
+    "directory",
+    "title",
+    "time_created",
+    "time_updated",
+    "parent_id",
+];
 const PROJECT_COLUMNS: &[&str] = &["id", "worktree"];
 const BUSY_TIMEOUT_MS: u64 = 2000;
 const TITLE_LIMIT: usize = 512;
@@ -18,11 +26,22 @@ const PER_PROJECT_LIMIT: i64 = 2000;
 const GLOBAL_PROJECT_ID: &str = "global";
 
 #[cfg(test)]
-pub(crate) fn read_history(root: &Root, projects: &[ProjectRef<'_>]) -> ReadResult<Vec<ResourceItem>> {
-    read_history_with_budget(root, projects, &mut super::scoped_fs::Budget::new(super::scoped_fs::Limits::default()))
+pub(crate) fn read_history(
+    root: &Root,
+    projects: &[ProjectRef<'_>],
+) -> ReadResult<Vec<ResourceItem>> {
+    read_history_with_budget(
+        root,
+        projects,
+        &mut super::scoped_fs::Budget::new(super::scoped_fs::Limits::default()),
+    )
 }
 
-pub(crate) fn read_history_with_budget(root: &Root, projects: &[ProjectRef<'_>], budget: &mut Budget) -> ReadResult<Vec<ResourceItem>> {
+pub(crate) fn read_history_with_budget(
+    root: &Root,
+    projects: &[ProjectRef<'_>],
+    budget: &mut Budget,
+) -> ReadResult<Vec<ResourceItem>> {
     if projects.is_empty() {
         // Run/root-wide 观察不接 opencode：归属必须落在已 admitted 的项目上。
         return Err("SOURCE_UNSUPPORTED");
@@ -91,7 +110,13 @@ impl Drop for SqliteSourceLock<'_> {
         let mut overlap = OVERLAPPED::default();
         overlap.Anonymous.Anonymous.Offset = self.offset;
         unsafe {
-            let _ = UnlockFileEx(HANDLE(self.file.as_raw_handle()), None, self.length, 0, &mut overlap);
+            let _ = UnlockFileEx(
+                HANDLE(self.file.as_raw_handle()),
+                None,
+                self.length,
+                0,
+                &mut overlap,
+            );
         }
     }
 }
@@ -99,7 +124,7 @@ impl Drop for SqliteSourceLock<'_> {
 #[cfg(windows)]
 fn lock_sqlite_source(file: &std::fs::File) -> ReadResult<SqliteSourceLock<'_>> {
     use std::os::windows::io::AsRawHandle;
-    use windows::Win32::Foundation::{HANDLE, ERROR_LOCK_VIOLATION};
+    use windows::Win32::Foundation::{ERROR_LOCK_VIOLATION, HANDLE};
     use windows::Win32::Storage::FileSystem::{LockFileEx, LOCKFILE_FAIL_IMMEDIATELY};
     use windows::Win32::System::IO::OVERLAPPED;
 
@@ -118,7 +143,13 @@ fn lock_sqlite_source(file: &std::fs::File) -> ReadResult<SqliteSourceLock<'_>> 
                 &mut overlap,
             )
         } {
-            Ok(()) => return Ok(SqliteSourceLock { file, offset, length: 1 }),
+            Ok(()) => {
+                return Ok(SqliteSourceLock {
+                    file,
+                    offset,
+                    length: 1,
+                })
+            }
             Err(error) if error.code() == ERROR_LOCK_VIOLATION.to_hresult() => continue,
             Err(_) => return Err("SOURCE_READ_FAILED"),
         }
@@ -127,17 +158,47 @@ fn lock_sqlite_source(file: &std::fs::File) -> ReadResult<SqliteSourceLock<'_>> 
 }
 
 #[cfg(windows)]
-fn lock_sqlite_range(file: &std::fs::File, offset: u32, length: u32, exclusive: bool) -> ReadResult<SqliteSourceLock<'_>> {
+fn lock_sqlite_range(
+    file: &std::fs::File,
+    offset: u32,
+    length: u32,
+    exclusive: bool,
+) -> ReadResult<SqliteSourceLock<'_>> {
     use std::os::windows::io::AsRawHandle;
-    use windows::Win32::Foundation::{HANDLE, ERROR_LOCK_VIOLATION};
-    use windows::Win32::Storage::FileSystem::{LockFileEx, LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY};
+    use windows::Win32::Foundation::{ERROR_LOCK_VIOLATION, HANDLE};
+    use windows::Win32::Storage::FileSystem::{
+        LockFileEx, LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY,
+    };
     use windows::Win32::System::IO::OVERLAPPED;
     let mut overlap = OVERLAPPED::default();
     overlap.Anonymous.Anonymous.Offset = offset;
-    let flags = if exclusive { LOCKFILE_FAIL_IMMEDIATELY | LOCKFILE_EXCLUSIVE_LOCK } else { LOCKFILE_FAIL_IMMEDIATELY };
-    unsafe { LockFileEx(HANDLE(file.as_raw_handle()), flags, None, length, 0, &mut overlap) }
-        .map_err(|error| if error.code() == ERROR_LOCK_VIOLATION.to_hresult() { "SOURCE_BUSY" } else { "SOURCE_READ_FAILED" })?;
-    Ok(SqliteSourceLock { file, offset, length })
+    let flags = if exclusive {
+        LOCKFILE_FAIL_IMMEDIATELY | LOCKFILE_EXCLUSIVE_LOCK
+    } else {
+        LOCKFILE_FAIL_IMMEDIATELY
+    };
+    unsafe {
+        LockFileEx(
+            HANDLE(file.as_raw_handle()),
+            flags,
+            None,
+            length,
+            0,
+            &mut overlap,
+        )
+    }
+    .map_err(|error| {
+        if error.code() == ERROR_LOCK_VIOLATION.to_hresult() {
+            "SOURCE_BUSY"
+        } else {
+            "SOURCE_READ_FAILED"
+        }
+    })?;
+    Ok(SqliteSourceLock {
+        file,
+        offset,
+        length,
+    })
 }
 
 #[cfg(windows)]
@@ -185,13 +246,17 @@ fn private_sqlite_snapshot(root: &Root) -> ReadResult<PrivateSqliteSnapshot> {
 }
 
 #[cfg(windows)]
-fn private_sqlite_snapshot_during(root: &Root, after_database: impl FnOnce()) -> ReadResult<PrivateSqliteSnapshot> {
+fn private_sqlite_snapshot_during(
+    root: &Root,
+    after_database: impl FnOnce(),
+) -> ReadResult<PrivateSqliteSnapshot> {
     // SQLite 的 Windows VFS 会沿路径打开 -wal/-shm。仅复制能力目录中的 db/WAL，
     // 私有目录中的 SHM 由 SQLite 根据 WAL 重建，避免它触碰原始侧车路径。
     let database = root
         .sqlite_source_file(Path::new(root.sqlite_filename()))?
         .ok_or("SOURCE_UNSUPPORTED")?;
-    let source_shm = root.sqlite_source_file(Path::new(&format!("{}-shm", root.sqlite_filename())))?;
+    let source_shm =
+        root.sqlite_source_file(Path::new(&format!("{}-shm", root.sqlite_filename())))?;
     // SQLite Unix/Windows WAL 协议：CKPT(121) 阻止回写 DB，READ(1)(124)
     // 阻止 writer 重置已有 WAL；允许追加，复制过程中变化仍由长度/mtime 拒绝。
     // 无 SHM 时独占整个 DB 锁区，避免新连接在两次复制之间创建/恢复 WAL。
@@ -201,8 +266,14 @@ fn private_sqlite_snapshot_during(root: &Root, after_database: impl FnOnce()) ->
     } else {
         lock_sqlite_range(&database, 0x4000_0000, 512, true)?
     };
-    let _checkpoint_lock = source_shm.as_ref().map(|file| lock_sqlite_range(file, 121, 1, false)).transpose()?;
-    let _reset_lock = source_shm.as_ref().map(|file| lock_sqlite_range(file, 124, 1, false)).transpose()?;
+    let _checkpoint_lock = source_shm
+        .as_ref()
+        .map(|file| lock_sqlite_range(file, 121, 1, false))
+        .transpose()?;
+    let _reset_lock = source_shm
+        .as_ref()
+        .map(|file| lock_sqlite_range(file, 124, 1, false))
+        .transpose()?;
     let snapshot = tempfile::Builder::new()
         .prefix("cc-desk-opencode-")
         .tempdir()
@@ -210,8 +281,14 @@ fn private_sqlite_snapshot_during(root: &Root, after_database: impl FnOnce()) ->
     let mut remaining = SNAPSHOT_LIMIT;
     let database = copy_sqlite_file(&database, &snapshot.path().join(DB_FILE), &mut remaining)?;
     after_database();
-    let wal = if let Some(source) = root.sqlite_source_file(Path::new(&format!("{}-wal", root.sqlite_filename())))? {
-        copy_sqlite_file(&source, &snapshot.path().join(SIDECAR_FILES[0]), &mut remaining)?
+    let wal = if let Some(source) =
+        root.sqlite_source_file(Path::new(&format!("{}-wal", root.sqlite_filename())))?
+    {
+        copy_sqlite_file(
+            &source,
+            &snapshot.path().join(SIDECAR_FILES[0]),
+            &mut remaining,
+        )?
     } else {
         create_private_file(&snapshot.path().join(SIDECAR_FILES[0]))?
     };
@@ -226,12 +303,16 @@ fn private_sqlite_snapshot_during(root: &Root, after_database: impl FnOnce()) ->
 }
 
 fn open_read_only(path: &Path) -> ReadResult<Connection> {
-    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NOFOLLOW)
-        .map_err(|_| "SOURCE_UNSUPPORTED")?;
+    let conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )
+    .map_err(|_| "SOURCE_UNSUPPORTED")?;
     conn.busy_timeout(std::time::Duration::from_millis(BUSY_TIMEOUT_MS))
         .map_err(|_| "SOURCE_BUSY")?;
     // 双保险：连接级只读，杜绝任何意外写入（WAL 下读者可安全并发）。
-    conn.pragma_update(None, "query_only", true).map_err(|_| "SOURCE_BUSY")?;
+    conn.pragma_update(None, "query_only", true)
+        .map_err(|_| "SOURCE_BUSY")?;
     Ok(conn)
 }
 
@@ -267,9 +348,13 @@ fn probe_schema(tx: &Connection) -> ReadResult<()> {
 type Worktrees = Vec<(String, String)>;
 
 fn read_worktrees(tx: &Connection) -> ReadResult<Worktrees> {
-    let mut stmt = tx.prepare("SELECT id, worktree FROM project").map_err(sqlite_code)?;
+    let mut stmt = tx
+        .prepare("SELECT id, worktree FROM project")
+        .map_err(sqlite_code)?;
     let rows = stmt
-        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
         .map_err(sqlite_code)?;
     let mut result = Vec::new();
     for row in rows {
@@ -312,7 +397,10 @@ fn append_project(
                 return false;
             }
             let needle = spelling(worktree);
-            project.paths.iter().any(|path| spelling(&path.to_string_lossy()) == needle)
+            project
+                .paths
+                .iter()
+                .any(|path| spelling(&path.to_string_lossy()) == needle)
         })
         .map(|(id, _)| id.clone())
         .collect();
@@ -321,16 +409,33 @@ fn append_project(
                ORDER BY time_updated DESC, id ASC LIMIT ?2";
     for project_id in &named {
         // SQL 多取一行：让 append_rows 能观察到「还有更多」，否则截断分支永不触发。
-        append_rows(tx, root, project, sql, &[project_id as &dyn rusqlite::ToSql, &(PER_PROJECT_LIMIT + 1)], out, budget)?;
+        append_rows(
+            tx,
+            root,
+            project,
+            sql,
+            &[project_id as &dyn rusqlite::ToSql, &(PER_PROJECT_LIMIT + 1)],
+            out,
+            budget,
+        )?;
     }
     // global 桶按已准入项目拼写过滤后再排序/截断，避免其他项目挤掉目标历史。
-    let spellings: Vec<String> = project.paths.iter().map(|path| spelling(&path.to_string_lossy())).collect();
-    if spellings.is_empty() { return Ok(()); }
+    let spellings: Vec<String> = project
+        .paths
+        .iter()
+        .map(|path| spelling(&path.to_string_lossy()))
+        .collect();
+    if spellings.is_empty() {
+        return Ok(());
+    }
     #[cfg(windows)]
     let directory = "lower(replace(directory, '/', char(92)))";
     #[cfg(not(windows))]
     let directory = "directory";
-    let placeholders = (2..2 + spellings.len()).map(|index| format!("?{index}")).collect::<Vec<_>>().join(",");
+    let placeholders = (2..2 + spellings.len())
+        .map(|index| format!("?{index}"))
+        .collect::<Vec<_>>()
+        .join(",");
     let sql = format!("SELECT id, title, directory, time_created, time_updated FROM session \
                       WHERE parent_id IS NULL AND project_id = ?1 AND {directory} IN ({placeholders}) \
                       ORDER BY time_updated DESC, id ASC LIMIT ?{}", spellings.len() + 2);
@@ -381,7 +486,9 @@ fn append_rows(
             budget.omit_history_entry("SOURCE_INVALID_TEXT");
             continue;
         }
-        push_session(root, project, out, id, title, directory, created_ms, updated_ms, budget);
+        push_session(
+            root, project, out, id, title, directory, created_ms, updated_ms, budget,
+        );
     }
     Ok(())
 }
@@ -389,8 +496,12 @@ fn append_rows(
 /// 行身份界与 Claude/Codex 解析路径一致（id ≤256 字节、directory ≤32768 字节）。
 /// 病理行选择逐行省略而非整包拒绝：一行脏数据不该让前端整个响应 INVALID_PROJECTION。
 fn bounded_identity(id: &str, directory: &str) -> bool {
-    !id.is_empty() && id.len() <= 256 && !id.contains('\0')
-        && !directory.is_empty() && directory.len() <= 32768 && !directory.contains('\0')
+    !id.is_empty()
+        && id.len() <= 256
+        && !id.contains('\0')
+        && !directory.is_empty()
+        && directory.len() <= 32768
+        && !directory.contains('\0')
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -406,9 +517,16 @@ fn push_session(
     budget: &mut Budget,
 ) {
     let invalid_title = title.contains('\0');
-    let (title, truncated) = if invalid_title { (String::new(), true) } else { bounded(&title, TITLE_LIMIT) };
-    if invalid_title { budget.omit_history_entry("SOURCE_INVALID_TEXT"); }
-    else if truncated { budget.retain_history_metadata_incomplete(); }
+    let (title, truncated) = if invalid_title {
+        (String::new(), true)
+    } else {
+        bounded(&title, TITLE_LIMIT)
+    };
+    if invalid_title {
+        budget.omit_history_entry("SOURCE_INVALID_TEXT");
+    } else if truncated {
+        budget.retain_history_metadata_incomplete();
+    }
     out.push(ResourceItem::Session {
         session_key: stable_key(root, &id),
         native_session_id: id,
@@ -429,8 +547,13 @@ fn push_session(
 }
 
 fn stable_key(root: &Root, native_id: &str) -> String {
-    serde_json::to_string(&["local", crate::cli::types::CliKind::Opencode.as_str(), root.key(), native_id])
-        .unwrap_or_default()
+    serde_json::to_string(&[
+        "local",
+        crate::cli::types::CliKind::Opencode.as_str(),
+        root.key(),
+        native_id,
+    ])
+    .unwrap_or_default()
 }
 
 fn rfc3339(millis: i64) -> Option<String> {
