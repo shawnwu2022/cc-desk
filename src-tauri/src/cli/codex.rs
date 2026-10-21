@@ -240,6 +240,29 @@ fn read_probe_output(_: &mut std::process::ChildStdout, _: &mut [u8]) -> std::io
     Err(std::io::ErrorKind::Unsupported.into())
 }
 
+pub(super) fn action_args(snapshot: &LaunchSnapshot) -> Result<Vec<OsString>, SafeError> {
+    match &snapshot.request().action {
+        LaunchAction::New => Ok(Vec::new()),
+        LaunchAction::ResumePicker {
+            scope: ResumeScope::CurrentProject,
+        } => Ok(vec!["resume".into()]),
+        LaunchAction::ResumePicker {
+            scope: ResumeScope::All,
+        } => Ok(vec!["resume".into(), "--all".into()]),
+        LaunchAction::ResumeId { native_session_id } => {
+            validate_locator(native_session_id)?;
+            Ok(vec!["resume".into(), native_session_id.into()])
+        }
+        // codex 拒绝 resume 自己归档的会话（要求先 unarchive），因此恢复 CLI 归档
+        // 会话必须走 codex 自己的 unarchive 子命令，而不是搬动 ~/.codex 下的文件。
+        LaunchAction::Unarchive { native_session_id } => {
+            validate_locator(native_session_id)?;
+            Ok(vec!["unarchive".into(), native_session_id.into()])
+        }
+        LaunchAction::Raw { .. } => Err(error("UNSUPPORTED_ACTION")),
+    }
+}
+
 #[cfg(test)]
 #[allow(non_snake_case)]
 mod compatibility_tests {
@@ -269,28 +292,5 @@ mod compatibility_tests {
             !probe_identity_hooks(&std::env::current_exe().unwrap(), &Default::default(), &[])
                 .unwrap_or(false)
         );
-    }
-}
-
-pub(super) fn action_args(snapshot: &LaunchSnapshot) -> Result<Vec<OsString>, SafeError> {
-    match &snapshot.request().action {
-        LaunchAction::New => Ok(Vec::new()),
-        LaunchAction::ResumePicker {
-            scope: ResumeScope::CurrentProject,
-        } => Ok(vec!["resume".into()]),
-        LaunchAction::ResumePicker {
-            scope: ResumeScope::All,
-        } => Ok(vec!["resume".into(), "--all".into()]),
-        LaunchAction::ResumeId { native_session_id } => {
-            validate_locator(native_session_id)?;
-            Ok(vec!["resume".into(), native_session_id.into()])
-        }
-        // codex 拒绝 resume 自己归档的会话（要求先 unarchive），因此恢复 CLI 归档
-        // 会话必须走 codex 自己的 unarchive 子命令，而不是搬动 ~/.codex 下的文件。
-        LaunchAction::Unarchive { native_session_id } => {
-            validate_locator(native_session_id)?;
-            Ok(vec!["unarchive".into(), native_session_id.into()])
-        }
-        LaunchAction::Raw { .. } => Err(error("UNSUPPORTED_ACTION")),
     }
 }

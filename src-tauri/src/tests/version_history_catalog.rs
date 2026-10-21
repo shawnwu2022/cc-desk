@@ -4,7 +4,7 @@ use crate::version_history::catalog::{
     classify_http_status, parse_catalog_page, parse_release, CatalogService, CatalogSource,
     ReleaseMetadata, CATALOG_PAGE_SIZE, MAX_CATALOG_BYTES, SELECTION_TTL,
 };
-use crate::version_history::policy::HostPlatform;
+use crate::version_history::policy::{historical, HostPlatform};
 use crate::version_history::types::{HistoryBlockReason, HistoryDataMode, HistoryVerification};
 use parking_lot::Mutex;
 use serde_json::{json, Value};
@@ -16,6 +16,16 @@ const OBSERVED: &[u8] = include_bytes!("../../../tests/fixtures/version-history-
 struct Source {
     list: Vec<ReleaseMetadata>,
     release: Mutex<ReleaseMetadata>,
+}
+
+#[test]
+fn HistoryCatalog_PrereleaseCurrentKeepsStableHistory_017() {
+    let current = semver::Version::parse(env!("CARGO_PKG_VERSION")).unwrap();
+    for value in ["0.14.0", "0.23.5", "0.24.0", "0.24.0-rc.0"] {
+        let target = semver::Version::parse(value).unwrap();
+        let expected = target.pre.is_empty() && target.build.is_empty() && target < current;
+        assert_eq!(historical(value), expected, "{value} relative to {current}");
+    }
 }
 impl CatalogSource for Source {
     fn list(&self, page: u16) -> Result<Vec<ReleaseMetadata>, SafeError> {
