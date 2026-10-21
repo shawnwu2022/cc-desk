@@ -50,7 +50,7 @@ mod version_history {
 
 mod native_projection {
     #[allow(unused_imports)]
-    pub(crate) use crate::{cache, opencode_db, registry, scoped_fs, wire};
+    pub(crate) use crate::{cache, catalog, opencode_db, registry, scoped_fs, wire};
 }
 mod cli {
     #[allow(unused_imports)]
