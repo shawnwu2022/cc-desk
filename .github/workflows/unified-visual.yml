@@ -32,6 +32,19 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - name: Prefer official Ubuntu HTTPS archive
+        working-directory: /etc/apt/sources.list.d
+        run: |
+          sudo -- "$(command -v node)" --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs'
+          const file = 'ubuntu.sources'
+          const source = readFileSync(file, 'utf8')
+          // 只替换已证实慢的官方镜像 URI，保留 suite、组件与签名信任字段。
+          const updated = source.replace(/^URIs:[^\r\n]*/gm, line => line.replace(
+            /(^|[ \t])https?:\/\/azure\.archive\.ubuntu\.com\/ubuntu(\/?)(?=[ \t]|$)/g,
+            '$1https://archive.ubuntu.com/ubuntu$2'))
+          if (updated !== source) writeFileSync(file, updated)
+          NODE
       - name: Install locked dependencies and official Chromium
         run: |
           npm ci

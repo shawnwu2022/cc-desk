@@ -34,6 +34,33 @@ describe.each(lineEndings)('Final visual workflow policy ($name)', ({ value: lin
     expect(source).toContain('git rev-parse HEAD')
     expect(source).toContain('environment.json')
   })
+  // 执行真实嵌入脚本，仅以临时 sources 文件替代 CI 的固定目录。
+  it('VisualWorkflow_OfficialArchivePreservesTrust_003', () => {
+    const step = workflow(lineEnding).split('      - name: ')
+      .find(block => block.startsWith('Prefer official Ubuntu HTTPS archive'))
+    const script = step?.match(/<<'NODE'\n([\s\S]*?)\n\s*NODE/)?.[1]
+    expect(script).toBeDefined()
+    const directory = mkdtempSync(join(tmpdir(), 'visual-apt-'))
+    const file = join(directory, 'ubuntu.sources')
+    try {
+      for (const uri of ['http://azure.archive.ubuntu.com/ubuntu/', 'https://azure.archive.ubuntu.com/ubuntu',
+        'https://archive.ubuntu.com/ubuntu/', 'http://azure.archive.ubuntu.com.evil/ubuntu/',
+        'http://azure.archive.ubuntu.com/ubuntu-other/']) {
+        const original = ['Types: deb', `URIs: ${uri} https://security.ubuntu.com/ubuntu/`,
+          'Suites: noble noble-updates', 'Components: main universe',
+          'Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg',
+          '# Keep existing trust and repository scope', ''].join(lineEnding)
+        writeFileSync(file, original)
+        const expected = original.replace(/https?:\/\/azure\.archive\.ubuntu\.com\/ubuntu(?=\/?\s)/,
+          'https://archive.ubuntu.com/ubuntu')
+        for (let attempt = 0; attempt < 2; attempt++) {
+          const result = spawnSync(process.execPath, ['--input-type=module', '-e', script!], { cwd: directory, encoding: 'utf8' })
+          expect(result.status, result.stderr).toBe(0)
+          expect(readFileSync(file, 'utf8')).toBe(expected)
+        }
+      }
+    } finally { rmSync(directory, { recursive: true, force: true }) }
+  })
   it('verifies before capturing unapproved candidates and propagates the original failure', () => {
     const source = workflow(lineEnding)
     const verify = source.indexOf('--update-snapshots=none')

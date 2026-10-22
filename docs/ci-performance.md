@@ -1372,3 +1372,27 @@ not a model-backed CLI or installed WebView result. The independent body-timeout
 coverage candidate remains separate; it is not declared a product defect.
 Formatting and `cargo clippy --locked --lib --tests -- -D warnings` also passed
 for this local fixture revision; no hosted result is inferred.
+
+### Official Ubuntu archive bandwidth (0.25.0 candidate)
+
+PR73 visual run `39808396089`, attempt 1, spent 29m08s installing its unchanged
+browser/font dependencies. Original logs show the Azure Ubuntu archive fetching
+19.5 MB in 9m10s (35.4 kB/s), followed by a delayed Noto download. APT's existing
+official HTTPS fallback fetched the 61.2 MB CJK package in about eight seconds.
+Installation ended at 16:19:29 UTC, but the 30-minute job boundary cancelled
+verification at 16:20:30 UTC. No completed screenshot acceptance exists for that
+attempt; it is not a product assertion failure or a passed visual gate.
+
+The visual job now prefers `https://archive.ubuntu.com/ubuntu` in the ephemeral
+Ubuntu 24.04 runner's existing `ubuntu.sources` URI fields. Suites, components,
+Signed-By, other hosts and repositories remain unchanged. The workflow retains
+the same locked browser, fonts, source/environment evidence, 13 baselines,
+zero-pixel tolerance and 30-minute budget. WSK-MSI system configuration is not
+changed. An extracted-script regression first failed without the step and checks
+LF/CRLF, idempotence, exact host/path matching and preservation of the complete
+APT trust/scope document. Hosted runtime and screenshot success remain required;
+the HTTPS preference alone is not evidence of a ten-minute end-to-end CI result.
+The source-file location is documented in the
+[Ubuntu 24.04 release notes](https://documentation.ubuntu.com/release-notes/24.04/);
+[Ubuntu archive verification](https://documentation.ubuntu.com/security/software-integrity/archive-verification/)
+describes the retained APT metadata/package integrity checks.
