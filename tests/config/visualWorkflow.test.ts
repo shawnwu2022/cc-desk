@@ -44,6 +44,7 @@ describe.each(lineEndings)('Final visual workflow policy ($name)', ({ value: lin
     const file = join(directory, 'ubuntu.sources')
     try {
       for (const uri of ['http://azure.archive.ubuntu.com/ubuntu/', 'https://azure.archive.ubuntu.com/ubuntu',
+        'mirror+file:/etc/apt/apt-mirrors.txt', 'mirror+file:/etc/apt/unrelated.txt',
         'https://archive.ubuntu.com/ubuntu/', 'http://azure.archive.ubuntu.com.evil/ubuntu/',
         'http://azure.archive.ubuntu.com/ubuntu-other/']) {
         const original = ['Types: deb', `URIs: ${uri} https://security.ubuntu.com/ubuntu/`,
@@ -51,7 +52,7 @@ describe.each(lineEndings)('Final visual workflow policy ($name)', ({ value: lin
           'Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg',
           '# Keep existing trust and repository scope', ''].join(lineEnding)
         writeFileSync(file, original)
-        const expected = original.replace(/https?:\/\/azure\.archive\.ubuntu\.com\/ubuntu(?=\/?\s)/,
+        const expected = original.replace(/(?:https?:\/\/azure\.archive\.ubuntu\.com\/ubuntu(?=\/?\s)|mirror\+file:\/etc\/apt\/apt-mirrors\.txt(?=\s))/,
           'https://archive.ubuntu.com/ubuntu')
         for (let attempt = 0; attempt < 2; attempt++) {
           const result = spawnSync(process.execPath, ['--input-type=module', '-e', script!], { cwd: directory, encoding: 'utf8' })

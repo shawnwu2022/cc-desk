@@ -1392,6 +1392,14 @@ changed. An extracted-script regression first failed without the step and checks
 LF/CRLF, idempotence, exact host/path matching and preservation of the complete
 APT trust/scope document. Hosted runtime and screenshot success remain required;
 the HTTPS preference alone is not evidence of a ten-minute end-to-end CI result.
+The actual `ubuntu24/20261021.345` image uses the exact
+`mirror+file:/etc/apt/apt-mirrors.txt` reference, with Azure at priority 1 and the
+official HTTPS archive at priority 2, as confirmed by its
+[source configuration script](https://github.com/actions/runner-images/blob/ubuntu24/20261021.345/images/ubuntu/scripts/build/configure-apt-sources.sh)
+and the retained `file:/etc/apt/apt-mirrors.txt Mirrorlist` log lines. Both that
+exact reference and direct Azure URIs are handled; unrelated file references are
+left untouched, and no mirror file is read or rewritten. The additional actual
+image case first failed under the direct-URI-only revision, before correction.
 The source-file location is documented in the
 [Ubuntu 24.04 release notes](https://documentation.ubuntu.com/release-notes/24.04/);
 [Ubuntu archive verification](https://documentation.ubuntu.com/security/software-integrity/archive-verification/)

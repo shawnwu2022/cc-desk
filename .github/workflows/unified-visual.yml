@@ -41,9 +41,10 @@ jobs:
           const source = readFileSync(file, 'utf8')
           // 只替换已证实慢的官方镜像 URI，保留 suite、组件与签名信任字段。
           const updated = source.replace(/^URIs:[^\r\n]*/gm, line => line.replace(
-            /(^|[ \t])https?:\/\/azure\.archive\.ubuntu\.com\/ubuntu(\/?)(?=[ \t]|$)/g,
+            /(^|[ \t])(?:https?:\/\/azure\.archive\.ubuntu\.com\/ubuntu(\/?)|mirror\+file:\/etc\/apt\/apt-mirrors\.txt)(?=[ \t]|$)/g,
             '$1https://archive.ubuntu.com/ubuntu$2'))
           if (updated !== source) writeFileSync(file, updated)
+          console.log(updated === source ? 'Visual APT source unchanged' : 'Visual APT official HTTPS archive selected')
           NODE
       - name: Install locked dependencies and official Chromium
         run: |
