@@ -168,6 +168,12 @@ The supervisor keeps the exact owned child and active run until a real PTY wait/
 
 After real reap, both the registry exit transition and resource retirement must succeed before the supervisor removes the active entry or drops its retained resource. Either registry step can be retried against the same run without spawning a process or replaying input. Only that completed registry convergence permits the supervisor entry to retire with lifecycle `Exited`; output drain and exact ACK remain independent. The registry keeps the retired receipt pinned against capacity eviction until the exact active supervisor state completes its terminal drain and marks retirement complete. Retirement cannot complete while process adoption is still installing the reader and stream. At terminal completion the supervisor first detaches that exact stream without progress callbacks, so retained reader or ACK references cannot occupy the reused run key or its output credit, and only then releases the active state and receipt.
 
+An active process snapshot can already report `Exited` while those registry steps
+are still converging. That observation is not an atomic registry-retirement
+receipt. Tests observe the exact registry resource independently, with a bounded
+deadline, before requiring its release without renderer ACK; a process snapshot
+alone cannot establish that condition.
+
 Caller stop carries `requestId` with the run identity. One registry lock admits that exact receipt, then the supervisor pins one active state and matches the receipt against its frozen request, owner, run and retained resource identity. A retired draining state remains bound to that pinned receipt, so delayed control from an old document or an evicted old request cannot be redirected to a newly adopted child that reuses the same run key.
 
 ## Observer boundary
