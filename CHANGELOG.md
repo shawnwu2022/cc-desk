@@ -2,7 +2,13 @@
 
 ## [Unreleased]
 
-## [0.24.0-rc.3] - 2026-10-22
+## [0.24.0-rc.4] - 2026-10-22
+
+- Continue the provider defaults, compact switches, immediate OpenCode history visibility, official metadata rename and scoped activity observation from the unpublished rc.3 candidate.
+- Make the real supervisor exit/EOF/ACK regression observe process exit and asynchronous registry retirement independently, with a controlled schedule and bounded convergence; preserve production ownership and every output/ACK assertion.
+- Retain protected-main CI/coverage and three-platform updater-signature gates, the unchanged stable channel, and the disclosed native acceptance boundaries.
+
+## [0.24.0-rc.3] - 2026-10-22 (unreleased test build)
 
 ### Fixed
 

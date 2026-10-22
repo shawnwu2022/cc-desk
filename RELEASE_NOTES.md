@@ -4,7 +4,7 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
-## [0.24.0-rc.3]
+## [0.24.0-rc.4]
 
 Fixed
 
@@ -18,6 +18,12 @@ Important
 - This is a prerelease test package; the stable updater channel remains unchanged.
 - Optional OpenCode activity observation is enabled only for the examined official CLI 1.19.0 contract. Unrecognized versions skip this enhancement without adding a launch requirement; compatibility with every future CLI is not guaranteed.
 - Isolated official CLI metadata/plugin checks did not call a paid model. Account-backed model turns and installed Windows WebView acceptance have not been certified for this source.
+
+## [0.24.0-rc.3]
+
+Unpublished candidate
+
+- This candidate was not released because its main CI did not pass. Its provider settings and OpenCode fixes continue in 0.24.0-rc.4.
 
 ## [0.24.0-rc.2]
 

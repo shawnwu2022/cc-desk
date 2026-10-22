@@ -4,7 +4,7 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
-## [0.24.0-rc.3]
+## [0.24.0-rc.4]
 
 修复
 
@@ -18,6 +18,12 @@
 - 这是预发布测试包，稳定版自动更新通道保持不变。
 - OpenCode 可选活动观察仅启用已核查的官方 CLI 1.19.0 契约。未知版本跳过该增强，不将它作为启动前提；不保证所有未来 CLI 都兼容。
 - 隔离的官方 CLI 元数据和插件验证未调用付费模型。本次源码尚未认证登录账号后的模型轮次及已安装 Windows WebView 验收。
+
+## [0.24.0-rc.3]
+
+未发布候选
+
+- 此候选因 main CI 未通过而未发布。工具设置和 OpenCode 修复继续于 0.24.0-rc.4。
 
 ## [0.24.0-rc.2]
 
