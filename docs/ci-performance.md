@@ -1,5 +1,36 @@
 # CI runtime work
 
+## v0.24.0 observed baseline (2026-10-22)
+
+The [source-bound run/job/step ledger](ci-runtime-v0240-baseline.json) was captured
+from GitHub metadata. Workflow intervals below use creation to last update, including
+queue/coordination; job intervals use actual start/end. These distinct sources and
+cache states are observations, not a controlled comparison, p95 or a ten-minute SLA.
+
+| Run/attempt | Source | Workflow interval | Critical observations |
+| --- | --- | ---: | --- |
+| [Stable PR CI 39717281444/1](https://github.com/shawnwu2022/cc-desk/actions/runs/39717281444) | PR head `6229bae`, tested merge `1890c374` | 13:41 | Producer 5:11; shard 6 8:10 |
+| [Stable main CI 39718592492/1](https://github.com/shawnwu2022/cc-desk/actions/runs/39718592492) | `24316ad9069df76f2de669fe7b17eeca2a2228be` | 11:24 | Producer 4:08; shard 6 6:55; aggregate 0:12 |
+| [Stable Release 39718592542/1](https://github.com/shawnwu2022/cc-desk/actions/runs/39718592542) | `24316ad9069df76f2de669fe7b17eeca2a2228be` | 12:20 | Windows 9:35, signed build step 8:15; exact-CI wait 1:35 |
+| [RC4 main CI 39704890833/1](https://github.com/shawnwu2022/cc-desk/actions/runs/39704890833) | `08261b92956f45cdde1740bfee470110f86f4bb4` | 11:25 | Producer 3:39; shard 6 6:26; shard scheduling delay about 0:54 |
+| [RC4 Release 39704890848/1](https://github.com/shawnwu2022/cc-desk/actions/runs/39704890848) | `08261b92956f45cdde1740bfee470110f86f4bb4` | 12:26 | Windows 10:14; signed build step 8:38; exact-CI wait 1:02 |
+
+The stable main producer's 17-second pinned-metadata preparation includes npm
+preparation; it is not all SDK compilation. Its original inventory compilation took
+103 seconds and doctest/inventory step 43 seconds. Shard 6's execution step took
+388 seconds. A late output line from one test is not an isolated duration.
+Removing the entire stable Release CI wait still leaves 10:45 of workflow time;
+rebalancing shards alone cannot establish a complete release below ten minutes.
+
+[PR 43](https://github.com/shawnwu2022/cc-desk/pull/43), head
+`56569595e15fd521f722c2d041726578404729ee`, has reusable calibration and validation
+ideas, but its single-sample timing table belongs to an older 1,361-name library
+inventory and toolchain/source. Its final CI interval was 10:58; the reported 7.3%
+weight estimate is not measured wall-time improvement. Do not merge its old runner
+or timing data over current source/upload-evidence bindings. Any adoption needs new
+exact-source executable/inventory evidence, conservation tests and a controlled
+hosted comparison; absent that evidence, retain the current placement policy.
+
 ## Post-0.23.1 CI efficiency batch (2026-10-19, local patch)
 
 Baseline source is main `37fef8b730660c42f0967fb3e0e0b93809174dd5`.
