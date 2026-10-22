@@ -25,6 +25,7 @@ beforeEach(() => {
 })
 afterEach(() => {
   vi.restoreAllMocks()
+  vi.unstubAllGlobals()
   mounted.splice(0).forEach((wrapper) => wrapper.unmount())
   document.body.innerHTML = ''
   document.documentElement.removeAttribute('data-theme')
@@ -159,7 +160,9 @@ describe('SessionIcons', () => {
 
   // 减弱动效的状态转换不保留待播放标记；动画取消也清除一次性过渡。
   it('Status_ReducedTransitionStatic_030', async () => {
-    const media = vi.spyOn(window, 'matchMedia').mockReturnValue({ matches: true } as MediaQueryList)
+    // jsdom 不实现 matchMedia；显式提供边界而不 spy 一个不存在的方法。
+    const media = vi.fn().mockReturnValue({ matches: true } as MediaQueryList)
+    vi.stubGlobal('matchMedia', media)
     const wrapper = mount(SessionStatusIcon, { props: { state: 'working' }, global: { plugins: [i18n] } })
     mounted.push(wrapper)
     await wrapper.setProps({ state: 'completed' })

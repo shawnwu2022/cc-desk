@@ -70,3 +70,34 @@ preview server after assertions; automatic teardown is not certified by that run
 No user window or CLI was stopped. This is browser evidence, not installed WebView.
 The remaining npm records are `@vitest/mocker`, `vitest`, `tinypool` (one moderate,
 two critical package classifications), pending the separate Vitest migration.
+
+## Batch 3: Vitest 4 without the old worker dependency
+
+Vitest and its internal family resolve to 4.1.12, with no `tinypool` left in the
+lockfile. Node 20/22/24 and Vite 6 remain compatible with the selected runner.
+The [version-specific migration guide](https://v4.vitest.dev/guide/migration.html)
+was checked; the four existing projects, file discovery, isolation, process tests,
+5,000-session stress workload, assertions and original skips remain unchanged.
+
+The initial full run had one failure: spying on jsdom's absent `matchMedia` method
+is now rejected. That test explicitly stubs the missing browser API and restores
+the global afterward, retaining reduced-motion and animation-cancellation assertions.
+The separate visual fixture had one remaining SVG filename assumption; it now also
+compares the exact imported resource, with no screenshot baseline update.
+
+Verification: full frontend 198 files / 3,128 passed / two original skips; visual
+unit 66 passed; original CI Node policy inventory 267 passed / six original skips;
+typechecking passed. The fixed official SDK metadata test passed under normal task
+permissions using only isolated synthetic JSONL and the owned helper; the restricted
+token's earlier `NATIVE_RENAME_UNSUPPORTED` remains a separate failed host result.
+No real user title or model turn was used.
+
+Production Rollup chunk-module observation (positive rendered lengths) found i18n
+core and message compiler in the shipped graph, while SSR/compiler-sfc, source-map-js,
+PostCSS/nanoid and the reviewed development-server/test dependencies had no rendered
+modules in that build. This is source/lock-bound build evidence, not proof about
+every alternate build or the reachability of an exploit sink.
+
+The final npm lockfile audit reports zero matching advisories at this observation.
+This does not certify Rust, native binaries, arbitrary development commands, future
+advisory databases or installed target behavior.

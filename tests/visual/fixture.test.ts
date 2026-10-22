@@ -8,6 +8,7 @@ import VisualFixtureApp from '@/visual/VisualFixtureApp.vue'
 import { FIXTURE_TIME, longProjectName, longSessionTitle } from '@/visual/fixtures'
 import { blockedHostCalls, invoke, listen, getCurrentWindow } from '@/visual/tauriStub'
 import en from '@/i18n/locales/en'
+import opencodeIcon from '@/assets/icons/cli/opencode.svg'
 import zh from '@/i18n/locales/zh'
 import { expandFixtureProjects, clearFixtureSetupFocus, openFixtureSessionMenu } from './fixtureActions'
 
@@ -175,7 +176,7 @@ describe('Isolated production-component fixture', () => {
     if (scenario === 'new-session' || scenario === 'confirmation' || scenario === 'archived') expect(document.querySelector('[role="dialog"]')).not.toBeNull()
     if (scenario === 'launch-configurations') {
       expect(view.findAll('[data-launch-row]')).toHaveLength(6)
-      expect(view.get('[data-launch-row="visual-opencode-0"] .cli-app-icon__image').attributes('src')).toContain('/cli/opencode.svg')
+      expect(view.get('[data-launch-row="visual-opencode-0"] .cli-app-icon__image').attributes('src')).toBe(opencodeIcon)
     }
   })
   // 空工作区经过真实宿主的布局边界，但不挂载 Native/Legacy 终端或调用宿主。
