@@ -10,6 +10,23 @@ import { parseLibtestListing, parseLibtestResult } from '../../scripts/windows-n
 const full = ['context_slow', 'bundle_slow', 'ordinary_new', 'worker'].map(name => ({ name, type: 'test' }));
 const h = { identity: { name: 'fixture', kind: 'lib' }, full, selected: full.map(t => t.name), ignored: ['worker'], excluded: [] };
 const listing = names => names.map(name => `${name}: test`).join('\n') + `\n${names.length} tests, 0 benchmarks\n`;
+// 实测只用于显式候选；未测新名称仍保守估计，不能改变默认库存或准入。
+test('WindowsRustShards_ExplicitWeights_010', () => {
+  const names = ['fixture::FastA', 'fixture::FastB', 'fixture::Slow'];
+  const original = partitionNames(names, 2);
+  const candidate = partitionNames(names, 2, { 'fixture::Slow': 10 });
+  assert.deepEqual(candidate, [['fixture::Slow'], ['fixture::FastA', 'fixture::FastB']]);
+  assert.deepEqual(partitionNames([...names].reverse(), 2, { 'fixture::Slow': 10 }), candidate);
+  assert.deepEqual(partitionNames(names, 2, {}), original);
+  assert.equal(new Set(candidate.flat()).size, names.length);
+  assert.deepEqual(new Set(candidate.flat()), new Set(names));
+  for (const weights of [null, [], { stale: 1 }, { 'fixture::Slow': 0 }, { 'fixture::Slow': -1 },
+    { 'fixture::Slow': NaN }, { 'fixture::Slow': Infinity }, { 'fixture::Slow': '10' },
+    { 'fixture::Slow': 1201 }, Object.create({ 'fixture::Slow': 10 })]) {
+    assert.throws(() => partitionNames(names, 2, weights), /weight/);
+  }
+});
+
 test('WindowsRustShards_MeasuredPlacement_008: real nested bundle and retained-custody names receive heavy placement', () => {
   const bundle = 'version_history::windows::context::bundle_restore::tests::BundleReturn_RestorePresentImage_002';
   const context = 'tests::version_history_context_windows::HistoryContext_ReturnMissingImage_036';

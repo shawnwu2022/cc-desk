@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "targets": [
+    "tests::version_history_context_windows::HistoryContext_FreshAbsentUdf_032",
+    "tests::version_history_context_windows::HistoryContext_ReturnMissingImage_036",
+    "version_history::windows::context::bundle_restore::tests::BundleReturn_FreshCopyMissing_003",
+    "version_history::windows::context::bundle_restore::tests::BundleReturn_RestorePresentImage_002",
+    "tests::version_history_context_windows::HistoryContext_ReturnLaterMoveLoss_036",
+    "tests::version_history_windows::HistoryWindows_CrashRecovery_026",
+    "version_history::windows::context::bundle_restore::tests::BundleReturn_RestoreMissingImage_002",
+    "tests::version_history_context_windows::HistoryContextWindows_RecoveryCopyDrift_027",
+    "tests::version_history_context_windows::HistoryContext_LaterReceiptLoss_034",
+    "tests::version_history_context_windows::HistoryContext_SourceMoveLoss_033",
+    "version_history::windows::context::bundle_restore::reopen_tests::BundleReturn_PreparedReopenRestores_010",
+    "version_history::windows::context::switching::preinstall_custody_tests::HistoryCustody_ReturnAbsentFresh_002",
+    "tests::version_history_context_windows::HistoryContextWindows_ReturnConflicts_038",
+    "tests::version_history_context_windows::HistoryContextWindows_LaterCompletionPublication_040",
+    "tests::version_history_registry_state_windows::HistoryRegistryState_AbsenceAndMissingTarget_006",
+    "tests::version_history_context_windows::HistoryContextWindows_PreinstallLaunchRefusal_037"
+  ]
+}

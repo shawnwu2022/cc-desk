@@ -31,6 +31,49 @@ or timing data over current source/upload-evidence bindings. Any adoption needs 
 exact-source executable/inventory evidence, conservation tests and a controlled
 hosted comparison; absent that evidence, retain the current placement policy.
 
+### Prepared exact-name calibration candidate
+
+The next-version candidate ports PR43's bounded measurement idea, not its stale
+weights or runner. `scripts/windows-rust-calibration.mjs` uses the current
+`verifyBundle` and `executeHarness`, preserving upload-evidence content hashes,
+exact checkout/source/run/attempt, four original inventories, executable bytes,
+compiler/profile/OS/architecture and actual Job/elevation observations. Calibration
+code and target-file bytes must also match their committed source. An incomplete,
+failed, ignored, timed-out or foreign result cannot supply a weight.
+
+Calibration is opt-in only: a CI dispatch with `calibrate_rust=true`, or a PR title
+containing `[calibrate-rust]`. The default is false. The existing first four shard
+jobs each run two of the eight advisory groups after ordinary execution and original
+evidence upload, with one shared eight-minute measurement window per pair. The
+original 30-minute job cap remains; a long ordinary job may therefore leave too
+little time for calibration, which is failure/incomplete evidence, never a weight.
+No extra skipped job is introduced: the unchanged release policy requires every CI
+job to succeed. At most four calibration processes run concurrently, and optional
+measurement does not debit the original 25-minute shard-execution window.
+This is warm measurement after ordinary work, not the old PR43 fresh-job condition.
+Each original name gets its own exact invocation; launch and complete shutdown
+are included in its duration.
+Raw listing/output hashes and actual executable identity are retained with the
+receipt. `readCalibrationWeights` rereads those logs rather than trusting summary
+counts. Its input plan must come from `verifyBundle`; structural JSON or synthetic
+parser tests are not authentic measurements.
+
+The 16 predefined names are candidates to remeasure, not evidence that their old
+durations remain valid. Current ordinary producer/verification calls continue to
+use the original two-argument `partitionNames` policy. A third argument supports
+explicit offline comparisons only, with stale/invalid weights rejected and
+unmeasured names still selected exactly once using the conservative heuristic.
+No measured table is adopted and no net speedup is claimed by this patch.
+
+The ordinary `Rust checks` gate still requires producer, static and all 16 shards;
+calibration is neither native coverage nor release admission. Its failed raw output
+uses the existing immutable upload helper. Hosted execution requires a separately
+authorized candidate push/PR; none has occurred in this local implementation.
+First compare one matched control/candidate pair, then at least three matched pairs
+within an approved runner budget if promising. Preserve source/run/attempt, queue
+and cold/warm distinctions. Retain the current placement unless the approved
+whole-path improvement and regression/runner-budget criteria are actually met.
+
 ## Post-0.23.1 CI efficiency batch (2026-10-19, local patch)
 
 Baseline source is main `37fef8b730660c42f0967fb3e0e0b93809174dd5`.

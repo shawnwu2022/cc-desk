@@ -35,6 +35,20 @@ gaps, plus a focus-aware sidebar shortcut. No push, merge, version bump or relea
 is authorized by that implementation scope. The shortcut may warrant a feature
 version (0.25.0); version selection remains a separate release decision.
 
+Retained work is reviewed by source, not blindly merged:
+
+| Material | Current disposition |
+| --- | --- |
+| Draft [PR43](https://github.com/shawnwu2022/cc-desk/pull/43), `56569595` | Bounded calibration idea reused in the local candidate; old weights/runner not adopted; retain its independent history until measured decisions are complete. |
+| `evidence/pr37-reviewed-baselines`, `728ae1fe` | Nine historical PNG/source-map files remain historical evidence; do not copy them over current source-bound visual baselines without review. |
+| `test/ci-upload-recovery-oct19`, `12b259b6` | Retain its unique advisory workflow while checking usefulness; current main already has immutable upload recovery. No automatic merge or deletion. |
+| Active-session-filter work and provider-defaults manual-test checkout | Delivered behavior is already in main. Preserve the user's live testing checkout/services and any unique local planning material. |
+
+Current candidate calibration remains advisory and disabled by default; exact hosted
+measurements and target acceptance are still required before claiming a release-ready
+performance result. No old source test, screenshot or timing becomes current evidence
+solely because its branch has been retained.
+
 ## Historical milestone: source integrated, acceptance incomplete (2026-10-01)
 
 Tasks 1–22 and 24 have source/host checkpoints. Task 23 has a reviewed fixture and
