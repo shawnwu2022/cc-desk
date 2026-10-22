@@ -13,6 +13,7 @@ import { useShellStore } from '@/stores/shell'
 import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
 import { useNewSessionDraftStore } from '@/stores/newSessionDraft'
 import en from '@/i18n/locales/en'
+import opencodeIcon from '@/assets/icons/cli/opencode.svg'
 import zh from '@/i18n/locales/zh'
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ isMaximized: async () => false, onResized: async () => () => {} }) }))
 const wrappers: VueWrapper[] = []
@@ -340,7 +341,7 @@ it('Settings_OpencodeSupportToggle_021', async () => {
   expect(opencode.classes()).toContain('ui-control--compact')
   expect(opencode.classes()).toContain('cli-support-toggle--off')
   expect(opencode.attributes('aria-label')).toContain('click to enable')
-  expect(opencode.find('.cli-app-icon__image').attributes('src')).toContain('/cli/opencode.svg')
+  expect(opencode.find('.cli-app-icon__image').attributes('src')).toBe(opencodeIcon)
   expect(opencode.find('.cli-app-icon').attributes('aria-hidden')).toBe('true')
   await opencode.trigger('click'); await flushPromises()
   expect(opencode.text()).toBe('')

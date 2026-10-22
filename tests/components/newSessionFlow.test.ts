@@ -9,6 +9,7 @@ import { useNewSessionDraftStore } from '@/stores/newSessionDraft'
 import { useCliProfilesStore } from '@/stores/cliProfiles'
 import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
 import en from '@/i18n/locales/en'
+import opencodeIcon from '@/assets/icons/cli/opencode.svg'
 import type { SessionAdapter, UnifiedProjectGroup } from '@/types/unifiedSession'
 const project: UnifiedProjectGroup = { projectKey: '/repo', projectPath: '/repo', name: 'Repo', sessions: [], pinned: false, hidden: false, runningCount: 0, needsUserCount: 0, lastActivityAt: 0 }
 const wrappers: VueWrapper[] = []
@@ -22,7 +23,7 @@ describe('New session flow', () => {
     expect(w.emitted('new-session-request')).toBeUndefined()
     expect(document.querySelectorAll('[role=menuitem]')).toHaveLength(5)
     const opencode = document.querySelector('[data-item-id=opencode]')!
-    expect(opencode.querySelector('img[src$="/opencode.svg"]')).not.toBeNull()
+    expect(opencode.querySelector('img')?.getAttribute('src')).toBe(opencodeIcon)
     expect(opencode.querySelector('.cli-app-icon')?.getAttribute('aria-hidden')).toBe('true')
     expect(opencode.textContent).toBe('opencode')
     ;(document.querySelector('[data-item-id=codex]') as HTMLButtonElement).click(); await flushPromises()

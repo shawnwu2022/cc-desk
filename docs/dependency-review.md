@@ -45,3 +45,28 @@ checkout removed only its own junction nonrecursively and installed its own lock
 dependencies with `npm ci --ignore-scripts`; it never installed through that junction.
 Raw audit/test/build logs remain in the ignored local execution cache. Final bundle
 reachability, toolchain migration and Rust advisory checks remain separate evidence.
+
+## Batch 2: Vite 6 and pinned esbuild
+
+Vite resolves to 6.4.4 and the direct metadata-helper compiler is pinned to esbuild
+0.25.12. The existing Vue plugin 5.2.4 supports Vite 5/6. Explicit production targets
+remain `es2021`, `chrome100`, `safari13`; SDK 0.3.301, its local-metadata-only bridge,
+LICENSE and NOTICE are retained. See the version-specific
+[Vite 5-to-6 migration guide](https://v6.vite.dev/guide/migration.html).
+
+The first full run retained 13 failures: nine assertions assumed SVG imports were
+file URLs, and four process tests exceeded five seconds during the initial parallel
+Rust compilation. Test assertions now compare exact imported SVG resources rather
+than filenames, retaining all theme/geometry/error/fallback checks and product code.
+All 106 scoped component tests passed; the four process files passed 28 tests with
+two original skips on recheck. The subsequent full run passed 3,128 tests across
+198 files with the same two skips. No test timeout or grouping was changed.
+Typechecking and pinned-helper preparation also passed.
+
+Both English/Chinese production-startup browser tests passed under the actual CSP
+using an isolated headless installed Chrome profile. The command's exit was zero,
+but this restricted Windows run needed cleanup of its positively identified owned
+preview server after assertions; automatic teardown is not certified by that run.
+No user window or CLI was stopped. This is browser evidence, not installed WebView.
+The remaining npm records are `@vitest/mocker`, `vitest`, `tinypool` (one moderate,
+two critical package classifications), pending the separate Vitest migration.
