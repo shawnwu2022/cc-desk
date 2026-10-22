@@ -1171,3 +1171,30 @@ native exclusions and signed protected-main promotion gates remain unchanged.
 `npm run typecheck` first builds Node composite declarations into ignored
 `.cache/typecheck-node`, then checks the application and tests; cold checkouts
 cannot substitute a preexisting local declaration cache for this step.
+
+## Image-fence fixture preparation (2026-10-22)
+
+PR #70 CI `39696755451/1` (head `cc9fc67`, tested merge `bd6f5f1`)
+retains a failed shard-14 receipt: `HistoryWindows_FenceAliases_021` reached
+`InitialExclusiveOpenBusy` before acquiring the third case's initial fence.
+The first two cases completed their safety probes. The holder is unknown;
+the error does not establish an antivirus or product-runtime defect.
+
+Only that fixture preparation now uses the existing `wait_for_preparation`
+with a 30-second deadline and the same frozen parent/name/identity/digest.
+Only the production-typed, effect-free initial exclusive-open conflict can
+wait; identity/content drift and all other errors fail immediately. Timeout
+remains failure. No post-acquisition verification, execution, read/write,
+alias, unlink or rename assertion is retried, skipped or relaxed. Production
+sharing, ACLs, acquisition behavior and CI exclusions are unchanged.
+
+Real NTFS regression `HistoryWindows_FencePreparationBusy_037` holds a reader,
+then releases it and checks exact admission or refusal of digest/identity
+drift. `_038` rejects an expired deadline before calling acquisition; `_039`
+keeps the reader held and requires timeout without changing the file. Local
+restricted-token NTAPI `ACCESS_DENIED` is a host limitation, not a pass; the
+normal-permission targeted run and the next exact-source CI remain separate
+evidence from the original failed receipt.
+WSK-MSI's normal-permission Rust 1.95.0 run executed all six `HistoryWindows_Fence`
+tests successfully (112.07 seconds, zero ignored), including all four original
+alias cases. This local result does not substitute for pinned Rust 1.98.1 CI.
