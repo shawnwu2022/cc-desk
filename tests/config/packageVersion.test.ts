@@ -2,6 +2,16 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 describe('prepared package version', () => {
+  // 官方构建准入要求 JS API 与 Rust 核心保持相同 major/minor，Cargo 单独通过不能代替。
+  it('PackageVersion_TauriBuildAdmission_005', () => {
+    const npmLock = JSON.parse(readFileSync('package-lock.json', 'utf8'))
+    const cargoLock = readFileSync('src-tauri/Cargo.lock', 'utf8')
+      .split('[[package]]').find(section => /^name = "tauri"$/m.test(section))
+    const rustVersion = cargoLock?.match(/^version = "([^"]+)"$/m)?.[1]
+    expect(npmLock.packages['node_modules/@tauri-apps/api'].version.split('.').slice(0, 2))
+      .toEqual(rustVersion?.split('.').slice(0, 2))
+  })
+
   // npm、Cargo 与 Tauri 必须标识同一个准备版本，不能混入依赖版本。
   it('PackageVersion_Identity_001', () => {
     const manifest = JSON.parse(readFileSync('package.json', 'utf8'))

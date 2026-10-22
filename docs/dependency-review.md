@@ -104,6 +104,14 @@ advisory databases or installed target behavior.
 
 ## Rust maintenance batch and remaining advisory inputs
 
+The first full desktop-build attempt subsequently caught a missed cross-ecosystem
+constraint: Rust Tauri 2.11.1 and the old npm API 2.10.1 fail the official CLI's
+major/minor admission check. The npm API is now exactly pinned to 2.11.1, following
+the [official dependency synchronization contract](https://v2.tauri.app/develop/updating-dependencies/).
+`PackageVersion_TauriBuildAdmission_005` first failed on the mismatched lockfiles;
+no `--ignore-version-mismatches` override is used. This correction updates one
+isolated npm package and does not change product version or permissions.
+
 The main package and all five independent test crates were queried against the
 public OSV crates.io API using exact locked package versions, pagination, and
 lockfile SHA-256 identities. This is an API observation, not a `cargo audit` run;
