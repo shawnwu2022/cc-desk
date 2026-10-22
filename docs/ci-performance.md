@@ -1304,3 +1304,22 @@ official CLI turns or installed WebView acceptance.
 Strict `cargo clippy --locked --lib --tests -- -D warnings` and formatting
 also passed for the corrected local source. Fresh hosted CI remains required;
 no result from the failed head is promoted.
+
+### Delayed redirect control (next-version local work)
+
+The current fixture had a separate observation defect: after its first 307 response
+it slept 500ms and performed only one nonblocking accept. A legitimate control
+following the redirect after that point could fail before its own request deadline.
+`Opencode_CreationFixtureAcceptsDelayedRedirect_098` uses actual loopback sockets
+and reqwest's redirect callback to delay that second POST by 650ms within a three-second
+request budget. Before the change it failed with one accepted request instead of two.
+
+Only the fixture now polls until its two-second redirect observation deadline.
+The original no-replay case retains its exact one-POST and unknown-outcome assertions,
+with a longer negative observation window; production redirects/timeouts/retries and
+authorization are unchanged. All eight current OpenCode preparation tests passed
+locally (2.22 seconds, no failures/ignores). This is isolated HTTP/shim evidence,
+not a model-backed CLI or installed WebView result. The independent body-timeout
+coverage candidate remains separate; it is not declared a product defect.
+Formatting and `cargo clippy --locked --lib --tests -- -D warnings` also passed
+for this local fixture revision; no hosted result is inferred.
