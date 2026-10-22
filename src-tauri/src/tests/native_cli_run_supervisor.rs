@@ -174,6 +174,40 @@ impl Fixture {
         }
     }
 
+    fn wait_registry_retired(&self) {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            assert!(
+                Instant::now() < deadline,
+                "D15 registry retirement timed out"
+            );
+            let resource = self
+                .service
+                .registry()
+                .resource(&self.caller, &self.request_run());
+            assert!(
+                Instant::now() < deadline,
+                "D15 registry read exceeded deadline"
+            );
+            match resource {
+                Err(failure) => {
+                    assert_eq!(failure.code, "RUN_NOT_READY");
+                    break;
+                }
+                Ok(resource) => drop(resource),
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(
+            self.service
+                .registry()
+                .status(&self.caller, &self.request.request_id)
+                .unwrap()
+                .phase,
+            LaunchPhase::Exited,
+        );
+    }
+
     fn child_reports(&self) -> usize {
         fs::read_dir(self.root.path().join("work"))
             .unwrap()
@@ -208,6 +242,15 @@ fn ack(run: &RunKey, epoch: &str, through: &str) -> OutputAck {
 #[test]
 fn D15_Supervisor_ProcessExitEofAndParsedAckAreIndependent_001() {
     let fixture = Fixture::new("exit");
+    struct RegistryStepsPause(Arc<NativeRunSupervisor>);
+    impl Drop for RegistryStepsPause {
+        fn drop(&mut self) {
+            self.0.release_registry_steps_for_test();
+        }
+    }
+    // 固定 reap 已发生但 registry 尚未收口的窗口，失败路径也释放阻塞。
+    fixture.supervisor.pause_registry_steps_for_test();
+    let registry_pause = RegistryStepsPause(fixture.supervisor.clone());
     let status = fixture.start();
     assert_eq!(status.phase, LaunchPhase::Running);
 
@@ -223,16 +266,42 @@ fn D15_Supervisor_ProcessExitEofAndParsedAckAreIndependent_001() {
         .unwrap()
         .release_review()
         .unwrap();
-    assert_eq!(
-        fixture
+    let resource = fixture
+        .service
+        .registry()
+        .resource(&fixture.caller, &status.run);
+    assert!(
+        resource.is_ok(),
+        "real reap can be observed before paused registry retirement"
+    );
+    drop(resource);
+    drop(registry_pause);
+    let retirement_deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        assert!(
+            Instant::now() < retirement_deadline,
+            "registry retirement did not converge without renderer ACK"
+        );
+        let resource = fixture
             .service
             .registry()
-            .resource(&fixture.caller, &status.run)
-            .unwrap_err()
-            .code,
-        "RUN_NOT_READY",
-        "root ownership should be released after wait/reap, not held until renderer ACK"
-    );
+            .resource(&fixture.caller, &status.run);
+        assert!(
+            Instant::now() < retirement_deadline,
+            "registry retirement returned after its deadline"
+        );
+        match resource {
+            Err(failure) => {
+                assert_eq!(
+                    failure.code, "RUN_NOT_READY",
+                    "root ownership should be released after wait/reap, not held until renderer ACK"
+                );
+                break;
+            }
+            Ok(resource) => drop(resource),
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
 
     let terminal = fixture.wait_lifecycle(|state| {
         state.final_offset().is_some() || state.output() == OutputLifecycle::Incomplete
@@ -503,6 +572,7 @@ fn D15_Supervisor_ShutdownBeforeAdoptStillOwnsAndReaps_007() {
     assert_eq!(status.phase, LaunchPhase::Running);
 
     let exited = fixture.wait_lifecycle(|state| state.process() == ProcessLifecycle::Exited);
+    fixture.wait_registry_retired();
     assert_eq!(exited.output(), OutputLifecycle::Incomplete);
     assert!(exited.can_retire());
     assert!(!exited.can_retire_as_complete());
@@ -554,6 +624,7 @@ fn D15_Supervisor_AttachFailureAfterSpawnStillStopsAndReaps_008() {
     assert_eq!(failure.code, "RUN_HANDOFF_FAILED");
 
     let exited = fixture.wait_lifecycle(|state| state.process() == ProcessLifecycle::Exited);
+    fixture.wait_registry_retired();
     assert_eq!(exited.output(), OutputLifecycle::Incomplete);
     assert!(exited.can_retire());
     assert!(!exited.can_retire_as_complete());
@@ -629,6 +700,7 @@ fn D15_WaitFail_StopReaps_010() {
 
     fixture.supervisor.stop(&fixture.caller, &status).unwrap();
     let exited = fixture.wait_lifecycle(|state| state.process() == ProcessLifecycle::Exited);
+    fixture.wait_registry_retired();
     assert_eq!(exited.output(), OutputLifecycle::Incomplete);
     assert_eq!(fixture.child_reports(), 1, "stop replayed the child");
     assert_eq!(
@@ -670,6 +742,7 @@ fn D15_WaitFail_ShutdownReaps_011() {
     fixture.supervisor.shutdown();
 
     let exited = fixture.wait_lifecycle(|state| state.process() == ProcessLifecycle::Exited);
+    fixture.wait_registry_retired();
     assert_eq!(exited.output(), OutputLifecycle::Incomplete);
     assert_eq!(fixture.child_reports(), 1, "shutdown replayed the child");
     assert_eq!(
@@ -774,6 +847,7 @@ fn D15_StopThenWaitFail_AutoRetries_013() {
 
     fixture.supervisor.stop(&fixture.caller, &status).unwrap();
     let exited = fixture.wait_lifecycle(|state| state.process() == ProcessLifecycle::Exited);
+    fixture.wait_registry_retired();
     assert_eq!(exited.output(), OutputLifecycle::Incomplete);
     assert_eq!(fixture.child_reports(), 1, "wait retry replayed the child");
     assert_eq!(
@@ -879,6 +953,7 @@ fn D15_ShutdownRetry_IsThrottled_015() {
         "failure notifications bypassed shutdown retry throttling"
     );
     let exited = fixture.wait_lifecycle(|state| state.process() == ProcessLifecycle::Exited);
+    fixture.wait_registry_retired();
     assert_eq!(exited.output(), OutputLifecycle::Incomplete);
     assert_eq!(
         fixture.child_reports(),

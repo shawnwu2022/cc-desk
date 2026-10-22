@@ -1198,3 +1198,40 @@ evidence from the original failed receipt.
 WSK-MSI's normal-permission Rust 1.95.0 run executed all six `HistoryWindows_Fence`
 tests successfully (112.07 seconds, zero ignored), including all four original
 alias cases. This local result does not substitute for pinned Rust 1.98.1 CI.
+
+## Supervisor retirement observation (2026-10-22)
+
+Main CI `39700647833/1`, source `f15df6e`, retains a shard-13 failure in
+`D15_Supervisor_ProcessExitEofAndParsedAckAreIndependent_001`: immediately after
+observing process `Exited`, the test expected the registry resource to be absent
+but observed its still-owned `RoutedResource`. Production performs real reap,
+lifecycle publication and registry convergence as separate steps; existing
+`D15_StopDuringRegistry_AutoRetries_016` deliberately tests the intermediate
+state. No failed process wait or fabricated completion was observed here.
+
+The original test now deterministically pauses only its own registry steps,
+observes real process exit and successful maintenance admission, then proves
+that the resource is still owned in that window. A local RAII guard releases
+the pause even on assertion failure. After release it requires exact
+`RUN_NOT_READY` within 15 seconds, before sending any renderer ACK. Unexpected
+errors and timeout fail; tail bytes, EOF, parsed-offset ACK and final-state
+assertions remain unchanged. The controlled schedule reproduced the same
+`RoutedResource` failure before this wait was added. This is test observation
+coordination, with no production lifecycle, admission or ownership change.
+
+The first RC4 local module run retained a second observation race in
+`D15_Supervisor_AttachFailureAfterSpawnStillStopsAndReaps_008`: 26 passed,
+one failed because the registry still reported `Running` immediately after
+the process snapshot reported `Exited`. That path, pre-adoption shutdown,
+and the explicit-stop/wait-retry/shutdown paths now wait at most
+15 seconds for exact `RUN_NOT_READY` and then still require registry
+`Exited`. Unexpected errors fail immediately; all original output, reap,
+no-replay and final registry assertions are retained. Shutdown itself has a
+five-second bound rather than an unconditional registry-completion promise;
+its tests use the same exact convergence check. Tests deliberately observing
+an incomplete registry step are unchanged.
+
+After those observation changes, WSK-MSI ran all 27 supervisor-module tests
+under the normal task permissions: 27 passed, zero failed/ignored, 7.96
+seconds. This includes real Node/ConPTY owned children and the controlled
+registry pause; it is not a logged-in model turn or native WebView result.

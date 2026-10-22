@@ -1,9 +1,13 @@
 {
   "schemaVersion": 1,
   "releases": {
-    "0.24.0-rc.3": {
+    "0.24.0-rc.4": {
       "en": "Fixed\n\n- Start fresh settings with only Claude Code enabled, while preserving every saved tool preference. Restore compact icon-only tool switches with reliable enabled/disabled brightness.\n- Apply OpenCode support changes to session history immediately, without refreshing or stopping open terminals.\n- Rename eligible OpenCode conversations through the official metadata API and retain their titles after restart. Hide rename actions when the source cannot be safely verified.\n- Show OpenCode activity through the shared session badges, distinguishing working, idle, permissions, questions, errors and unknown state. Preserve identity and status across delayed events and clean up disposed observers.\n\nImportant\n\n- This is a prerelease test package; the stable updater channel remains unchanged.\n- Optional OpenCode activity observation is enabled only for the examined official CLI 1.19.0 contract. Unrecognized versions skip this enhancement without adding a launch requirement; compatibility with every future CLI is not guaranteed.\n- Isolated official CLI metadata/plugin checks did not call a paid model. Account-backed model turns and installed Windows WebView acceptance have not been certified for this source.",
       "zh": "修复\n\n- 全新设置默认仅启用 Claude Code，保留所有已保存的工具偏好。恢复紧凑纯图标开关，正确显示启用和停用的明暗变化。\n- OpenCode 开关即时同步会话历史列表，无需手动刷新，也不停止已打开的终端。\n- 可安全验证来源的 OpenCode 会话可通过官方元数据接口改名，重启后保留标题；无法安全改名时隐藏入口。\n- OpenCode 接入统一会话角标，区分工作、空闲、权限等待、问题等待、错误和未知状态；处理迟到事件和观察器卸载，保留正确身份与状态。\n\n重要说明\n\n- 这是预发布测试包，稳定版自动更新通道保持不变。\n- OpenCode 可选活动观察仅启用已核查的官方 CLI 1.19.0 契约。未知版本跳过该增强，不将它作为启动前提；不保证所有未来 CLI 都兼容。\n- 隔离的官方 CLI 元数据和插件验证未调用付费模型。本次源码尚未认证登录账号后的模型轮次及已安装 Windows WebView 验收。"
+    },
+    "0.24.0-rc.3": {
+      "en": "Unpublished candidate\n\n- This candidate was not released because its main CI did not pass. Its provider settings and OpenCode fixes continue in 0.24.0-rc.4.",
+      "zh": "未发布候选\n\n- 此候选因 main CI 未通过而未发布。工具设置和 OpenCode 修复继续于 0.24.0-rc.4。"
     },
     "0.24.0-rc.2": {
       "en": "Test release\n\n- Add OpenCode as a third native CLI with owned terminal launches, exact-ID resume and project-scoped SQLite history.\n- Improve Claude Code session identity after delayed hooks, Codex command-wrapper compatibility, active session filtering and focused keyboard shortcuts.\n- Keep optional OpenCode session preparation and history safe when the CLI, database schema or capability probe is unavailable.\n\nImportant\n\n- This is a prerelease test package. Download and run it explicitly; the stable updater channel remains on the latest stable release.\n- OpenCode integration was checked against official CLI 1.19.0 without paid model calls. Account-backed create/resume and installed Windows WebView acceptance remain separate checks. Older or future CLI versions may lose optional history or title features while basic terminal launch remains available.",
