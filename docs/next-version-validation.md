@@ -18,7 +18,7 @@
 | 测试时序 | OpenCode redirect fixture 的真实延迟控制先 RED，再改为有界轮询 | 本地完成一项确证缺陷；生产 POST/PATCH 超时、未知结果不重试和安全校验不变。BodyTimeout 阶段覆盖候选未证实为产品故障，未据猜测改产品。 |
 | npm 15 条初始组件公告 | Vue/i18n 及兼容传递依赖、Vite 6/esbuild、Vitest 4 分批迁移 | 当前 lock 的 npm audit 零匹配；不等于所有生态或将来数据库无漏洞。 |
 | Rust 新查公告 | Tauri/TLS/根证书、OpenSSL、anyhow/serde_with/tar 兼容修补；独立 crate locks 同步；生成 ACL 与显式 deny 保持授权面 | 本地检查完成，剩余 glib 等输入逐项见 [依赖核查](dependency-review.md)。完整安全/平台验收尚未关闭。 |
-| PR43 / CI | 当前源码绑定的可选精确名称采集、负向控制、离线权重比较入口；原普通分片策略不变 | 候选完成。没有当前 hosted timing 或受控收益，未采用旧权重，十分钟目标未达到或声称达到。 |
+| PR43 / CI | 当前源码绑定的可选精确名称采集、负向控制、离线权重比较入口；原普通分片策略不变 | 候选完成。没有完整可采纳的 hosted 校准或受控收益，未采用旧权重，十分钟目标未达到或声称达到。 |
 | 真实目标验收 | 原始 nativeAll 宿主探测、D20 官方命令的安全阻断证据、正常生产 CSP 浏览器回归 | D20、原始 nativeAll、安装版 WebView 仍阻塞，具体如下。 |
 | 可选诊断 | 保留现有安全 reason code/observer 边界 | 没有证实必须新加诊断字段，故没有扩张产品；用户已撤回 Codex 角标疑似故障，未当作已确认 bug。 |
 
@@ -82,13 +82,13 @@ PR 标题已移除 opt-in，后续必要普通 CI 不再请求测量。最终 CI
 
 | 具体操作 / 目标 | 当前确定结果 | 后续最小条件 |
 | --- | --- | --- |
-| 发布候选分支到现有 GitHub 仓库并执行精确源码普通 CI/专项平台检查 | **已获授权，待执行**。用户已批准先验证后合并 main 并正式发布。历史 v0.24.0 绿色不覆盖本轮依赖、workflow 或产物。 | 准确候选 SHA 的 draft PR 运行原完整 gate 与一次 opt-in 校准；检查全部通过后才合并 main，正式发布仍须新 main 的精确 CI/coverage 与三平台签名。 |
-| hosted 校准与优化收益比较 | **未执行，依赖上项**；新脚本/策略单元负控通过不能代表受控 wall time。原始普通四 harness、16 片、25/30 分钟预算、完整名称/忽略集合和精确 coverage 不变。 | 经核对的候选 title 可带 `[calibrate-rust]`，首次只跑一轮有界采集；先审 raw bytes/source/run/attempt/executable 再离线比较。承诺收益前另批准至少三组可比 control/candidate 的 runner 预算。 |
+| 发布候选分支到现有 GitHub 仓库并执行精确源码普通 CI/专项平台检查 | **已执行，PR73 验证中**。`a86b6b46` 的普通 CI `39808396116` 已 23/23 成功，认证 coverage ZIP 与原始日志验证了 1658 执行通过、35 原忽略、22 明确未验证；后续 `8de7876` 的普通 CI 和六项专项/Windows 包同样通过，但视觉仍有一项失败。不同 SHA 的结果不替代最终候选。 | 当前 head 的全部适用检查通过后才合并 main；正式发布仍须新 main 的精确 CI/coverage 与三平台签名。视觉原基线/零容差保持不变，失败不能用人工像素审查替代。 |
+| hosted 校准与优化收益比较 | **唯一获批轮次已执行，但全组证据不完整**；run `39805351619` 的三个 pair 成功，另一 pair 因合法子进程嵌套摘要被 reader 拒绝，尚有 group 未测；实际测量步骤共 1018 秒，未采用任何新权重。已先 RED 再修 reader，但没有重跑校准。 | 现有原四 harness、16 片、25/30 分钟预算、名称/忽略集合和精确 coverage 不变。任何追加校准或受控 control/candidate 收益比较都需要另行批准资源；不宣称十分钟目标已达到。 |
 | 原始 `pwsh -NoProfile -File ../scripts/windows-rust-tests.ps1 -Action All`，WSK-MSI | **确定 exit 1，测试正文未执行**：`inJob=True elevated=False`，入口报 `Ordinary PowerShell is contained in an external Job; direct native tests are blocked`。这不是自动审批拒绝，也不是 nativeAll 通过。 | 项目许可的独立 Job-free、相应 token/权限目标；不从受限宿主 breakaway、不改门禁/ACL。先记录真实 Probe 再跑原入口。 |
 | D20 官方 `run-real-cli-certification.mjs --config …` | **确定 exit 2 / BLOCKED**：Claude、Codex 均 `AUTHORIZED_TEST_ACCOUNT_UNAVAILABLE`，recordPaths 空；在读取账户/env/binary 前停止，无模型调用。 | 明确授权的独立测试账户、实际四 lane driver/每 CLI 与预算；用户目前禁止未授权登录/付费调用。OpenCode 单独证据矩阵，不伪装成双 CLI D20。 |
 | 安装版 Windows WebView2、CLI/IME/粘贴/resize/多会话 | **未运行**；没有授权隔离用户/profile/目标安装安排，不动用户当前人工测试窗口。普通浏览器和 loader 测试不能代替。 | 专用可丢弃 profile/目标与相应安装/交互准入；保留用户正式版和真实会话。完整原始平台库存及当前三平台 required CI 仍需同源通过。 |
 
-已获批准的候选远端操作（**尚未执行**）：将核对过的本地 HEAD 推送到现有
+已获批准的候选远端操作（**已执行，以下保留原边界**）：将核对过的本地 HEAD 推送到现有
 `shawnwu2022/cc-desk` 的 `refs/heads/feat/next-version-stability`（非 force），
 创建 base `main` 的 draft PR，标题带 `[calibrate-rust]`。PR 首轮保留现有所有普通
 CI/专项 workflow，在前四个原 shard 各自完成原始证明和上传后才进行校准；

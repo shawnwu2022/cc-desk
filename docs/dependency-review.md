@@ -1,8 +1,9 @@
 # Dependency maintenance evidence (2026-10-22)
 
 Baseline: v0.24.0/main `24316ad9069df76f2de669fe7b17eeca2a2228be`.
-The approved maintenance scope permits isolated dependency updates and local commits;
-it does not authorize publication, paid model calls or new credentials.
+The approved maintenance scope permits isolated dependency updates and local commits.
+The later user instruction separately authorizes verification, protected-main merge
+and publication; paid model calls and new credentials remain outside that scope.
 
 ## Advisory interpretation
 
@@ -47,6 +48,9 @@ Raw audit/test/build logs remain in the ignored local execution cache. Final bun
 reachability, toolchain migration and Rust advisory checks remain separate evidence.
 
 ## Batch 2: Vite 6 and pinned esbuild
+
+The final batch-3 lock resolves Vite **6.4.5**; the 6.4.4 references below retain
+the version actually evaluated at the earlier batch-2 checkpoint.
 
 Vite resolves to 6.4.4 and the direct metadata-helper compiler is pinned to esbuild
 0.25.12. The existing Vue plugin 5.2.4 supports Vite 5/6. Explicit production targets
