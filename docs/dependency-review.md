@@ -101,3 +101,70 @@ every alternate build or the reachability of an exploit sink.
 The final npm lockfile audit reports zero matching advisories at this observation.
 This does not certify Rust, native binaries, arbitrary development commands, future
 advisory databases or installed target behavior.
+
+## Rust maintenance batch and remaining advisory inputs
+
+The main package and all five independent test crates were queried against the
+public OSV crates.io API using exact locked package versions, pagination, and
+lockfile SHA-256 identities. This is an API observation, not a `cargo audit` run;
+aliases and maintenance notices must not be counted as independent exploitable
+Desk vulnerabilities. Final local evidence covers 727 distinct package versions
+across six lockfiles. Its JSON and the initial result remain separately retained
+in `.cache/next-version-execution/rust-advisories{,-final}.json`.
+
+| Dependency | Locked change | Reason / verification boundary |
+| --- | --- | --- |
+| Tauri | 2.10.3 → 2.11.1 | [Upstream origin-confusion advisory](https://github.com/tauri-apps/tauri/security/advisories/GHSA-7gmj-67g7-phm9); exact navigation/document admission remains in place. No Desk-specific remote exploit was established. |
+| rustls | 0.23.40 → 0.23.46 | Covers the matched handshake, debug/session, compression and downgrade advisory versions; updater TLS is a real client path, but individual feature/sink prerequisites differ. |
+| rustls-webpki / webpki-root-certs | 0.103.13 → 0.103.16 / 1.0.7 → 1.0.10 | emSign distrust fixes. Linux system-root validation is relevant; the bundled-root edge was wasm-only in the observed graph, not the desktop root provider. |
+| openssl | 0.10.78 → 0.10.80 | Compatible patch covering all matched advisories; Linux native TLS is present, but the named AES-KW/OCSP sinks were not found in Desk/native-tls usage. |
+| anyhow / serde_with / tar | 1.0.102 → 1.0.103 / 3.18.0 → 3.21.0 / 0.4.45 → 0.4.46 | Compatible patches for downcast unsoundness, KeyValueMap panic and PAX handling. Independent test-crate pins/locks also updated. |
+
+The Tauri runtime/build family is selected with Cargo's per-command
+`resolver.incompatible-rust-versions="fallback"`, preserving declared Rust 1.89
+compatibility rather than adopting runtime/build releases requiring 1.90. Actual
+execution here used the installed newer compiler; an MSRV run is not claimed.
+TLS backends, certificate checks, official-domain rules, updater minisign checks,
+document proof, version-manager isolation and CLI process ownership are unchanged.
+The generated Tauri ACL/schema changes are retained; three newly default-granted,
+unused app/window queries are explicitly denied, as described in
+[capabilities](capabilities.md). No additional tray permission is granted.
+
+The old Tauri custom-protocol local-origin branch was affected upstream, but the
+registered-user-protocol precondition was not found in this Desk configuration.
+The built-in protocols are separate. Main and version-manager URL/document guards,
+default new-window handling and current capabilities further constrain the path;
+these are defense evidence, not a proof that every affected dependency is harmless.
+The upgraded upstream branch checks the full `.localhost` suffix. No production
+authorization was relaxed to keep an older dependency working.
+
+Remaining matching inputs require the following dispositions rather than a forced
+major-version override:
+
+| Input | Source-backed disposition and next step |
+| --- | --- |
+| glib 0.18.5, [RUSTSEC-2024-0429](https://rustsec.org/advisories/RUSTSEC-2024-0429.html) | `needs_review` on Linux. The affected `VariantStrIter` exists. Its constructor is reached through `Variant::array_iter_str`; no production calls were found in Desk or the exact GIO/GTK/GDK/GdkPixbuf/WebKit sources inspected. This limited search does not prove all Linux paths unreachable. A compatible GTK/WebKit family migration and Linux target checks are needed before closure. |
+| h2 0.3.27, [RUSTSEC-2026-0258](https://rustsec.org/advisories/RUSTSEC-2026-0258.html) | Present through reqwest 0.11/hyper 0.14. The observed native-TLS client lacks ALPN and manual HTTP/2 prior-knowledge usage; updater reqwest 0.13 also lacks its HTTP/2 feature. No affected network sink was established. Recheck when enabling those features; a major client migration cannot be replaced by forcing h2 0.4 underneath hyper 0.14. |
+| quick-xml 0.38.4, [0194](https://rustsec.org/advisories/RUSTSEC-2026-0194.html) / [0195](https://rustsec.org/advisories/RUSTSEC-2026-0195.html) | plist uses ordinary Reader without the affected attribute/namespace APIs in the inspected path. No user-supplied XML sink was established. |
+| quick-xml 0.39.2, same advisories | wayland-scanner 0.31.10 uses duplicate-checked attributes in a proc macro: the 0194 sink is reachable during builds when an attacker controls a protocol XML file. It is not runtime clipboard XML parsing. No NsReader/NamespaceResolver is used, so the 0195 API prerequisite is absent in this consumer. Track a compatible upstream scanner update; do not force quick-xml 0.40 into a 0.39 constraint. |
+| rand 0.7.3, [RUSTSEC-2026-0097](https://rustsec.org/advisories/RUSTSEC-2026-0097.html) | phf_generator build-time SmallRng with fixed seed, not the advisory's reentrant ThreadRng/logger path. No exploit path found; retain upstream migration tracking. |
+| zip 4.6.1, [0367](https://rustsec.org/advisories/RUSTSEC-2026-0367.html) / [0368](https://rustsec.org/advisories/RUSTSEC-2026-0368.html) / [0369](https://rustsec.org/advisories/RUSTSEC-2026-0369.html) | Windows updater optional ZIP extraction remains affected dependency code. Desk verifies official source/minisign and size/hash before the same bytes reach installation; arbitrary unsigned network ZIPs cannot reach this sink. Windows symlink behavior is relevant, so neither filename nor platform dismisses every issue. Upstream plugin constraint is zip 4; migrating to a fixed major requires compatible plugin work and installer regression. |
+| fxhash, proc-macro-error, rustls-pemfile, serial, unic-* | Maintenance/deprecation inputs retained separately from exploitable security findings; track replacement through their owning dependencies. No unsafe override or automatic suppression added. |
+
+Seven exact Linux source archives were fetched read-only from static.crates.io,
+checked against Cargo.lock SHA-256, and only bounded source files read from tar
+stdout. No crate was installed/executed. Their versions, URLs and hashes remain in
+`.cache/next-version-execution/locked-linux-sources/provenance.json`; this does not
+constitute a Linux runtime test. TLS and ZIP conclusions also depend on the current
+feature graph and existing updater signature-authority trust boundary.
+
+Verification after the Rust upgrade: 58 focused application tests passed
+(document/manager admission, startup, updater HTTP/policy/redirect/source rejection,
+official SDK metadata and OpenCode preparation); complete independent scope,
+observer, input, transport and updater crates passed 327 tests with one original
+observer ignore. Strict `cargo clippy --locked --all-targets -- -D warnings` and
+formatting passed. Cargo reported a nonfatal existing global-cache cleanup warning
+for a Windows `nul` filename; the cache/ACL was not modified. Installed WebView,
+original nativeAll, Linux/macOS execution and a native origin-confusion reproducer
+remain unverified, so complete target-level security verification is **blocked**,
+not a certified vulnerability closure.
