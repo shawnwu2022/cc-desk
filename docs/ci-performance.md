@@ -1235,3 +1235,41 @@ After those observation changes, WSK-MSI ran all 27 supervisor-module tests
 under the normal task permissions: 27 passed, zero failed/ignored, 7.96
 seconds. This includes real Node/ConPTY owned children and the controlled
 registry pause; it is not a logged-in model turn or native WebView result.
+
+## OpenCode HTTP fixture accepted-socket mode (2026-10-22)
+
+PR #72 CI `39715268295/1`, head `5814d8b` and tested merge `6e4b550`,
+retains a shard-13 failure in
+`Opencode_RenameHttpChecksIdentityAndNeverReplaysPatch_096`: the fixture
+worker first received Windows `10035/WouldBlock` at its request read; the
+worker join panic was secondary. That slice recorded 99 passed, one failed
+and three original ignores. Its raw archive SHA-256 is
+`ba5886ceeeece429a8d406d354b5234075f052bb94ff5c2b1ba752ee9eb44322`.
+The RC4 supervisor exit/EOF/ACK regression passed in this same slice.
+
+A real, isolated WSK-MSI TCP probe reproduced that a socket accepted from
+a nonblocking listener remains nonblocking even after setting a read timeout.
+Restoring blocking mode then waited for deliberately delayed bytes with the
+same timeout. This is an OS/fixture diagnostic, not official CLI or WebView
+acceptance. The updater HTTP fixture already uses this Winsock pattern.
+
+Only the two test-server accepted sockets now restore blocking before their
+existing bounded reads: the rename server and the creation redirect server,
+whose second accept can inherit nonblocking mode. The latter is a confirmed
+control-flow risk, not a second failure observed in this log. The listener
+deadlines, read timeouts, extra-POST observation window, identity/title
+checks, exact PATCH/POST counts and redirect controls remain unchanged.
+Production HTTP retries, timeouts, authorization and path checks are unchanged.
+
+The accepted-socket property inheritance is also specified by
+[Microsoft accept documentation](https://learn.microsoft.com/en-us/windows/win32/api/winsock2/nf-winsock2-accept).
+
+The corrected WSK-MSI target module executed seven tests successfully
+(2.21 seconds, zero failures or ignores), including the original HTTP rename
+regression and the legacy/production redirect and creation-timeout controls.
+These loopback HTTP and owned-shim results do not certify account-backed
+official CLI turns or installed WebView acceptance.
+
+Strict `cargo clippy --locked --lib --tests -- -D warnings` and formatting
+also passed for the corrected local source. Fresh hosted CI remains required;
+no result from the failed head is promoted.
