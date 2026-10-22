@@ -413,7 +413,7 @@ async function startAttempt(attempt: NativeAttemptIdentity): Promise<void> {
   // Only its ordered projection can claim attention, never a raw hook event kind.
   try {
     stopObservation = useHookStore().subscribeObservation({ cli: tab.cli, runId, generation, enabled: true }, (_event, state) => {
-      if (tab.cli === 'claude' && runToken === token && attemptIsCurrent(attempt)) tabs.applyObservation(props.tabId, attempt, state)
+      if (tab.cli !== 'codex' && runToken === token && attemptIsCurrent(attempt)) tabs.applyObservation(props.tabId, attempt, state)
     }, { onNotice: notice => {
       if (runToken === token && attemptIsCurrent(attempt)) tabs.applyObservationNotice(props.tabId, attempt, notice)
     }, onIdentity: (sessionId, eventType) => {

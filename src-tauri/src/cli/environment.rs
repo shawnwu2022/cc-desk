@@ -181,13 +181,13 @@ fn permitted(name: &OsStr, names: &[&str]) -> bool {
 }
 
 pub(crate) fn observer_enabled(profile: &Profile) -> bool {
-    if profile.cli != CliKind::Claude {
+    if !matches!(profile.cli, CliKind::Claude | CliKind::Opencode) {
         return false;
     }
     match &profile.observer {
         Override::Set(enabled) => *enabled,
         Override::Unset => false,
-        // 缺省与继承使用 Claude 的活动观察默认值；显式关闭和 unset 保持权威。
+        // 缺省与继承使用 Claude/OpenCode 的活动观察默认值；显式关闭和 unset 保持权威。
         Override::Inherit => true,
     }
 }

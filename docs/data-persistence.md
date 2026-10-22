@@ -73,6 +73,21 @@ Important separation rules:
 
 ## Compatible application preferences
 
+Tool support is a GUI-only preference stored under `cc-desk-cli-support-v1` in
+localStorage. First use, unavailable/malformed storage, and missing or invalid
+individual fields default to Claude Code enabled, Codex CLI and OpenCode disabled.
+Every existing boolean choice is preserved independently, including explicit
+OpenCode enablement from earlier versions; hydration does not rewrite storage.
+Settings keeps compact icon-only toggles: enabled is full opacity and disabled is
+half opacity. Tool name/action stays in the shared Tooltip and accessible label,
+with a matching accessible pressed state. Disabling filters creation/history while
+preserving already open terminals; it does not change provider files or profiles.
+All three providers use the same owned support-change refresh: disabling removes
+closed/history rows, enabling reloads available history without a manual refresh.
+An open terminal stays selectable and closable; support changes never stop its run.
+Per-provider refresh versions reject late results after another toggle, and the
+workspace component releases the support watcher when it unmounts.
+
 CLI support is a GUI-only preference in localStorage `cc-desk-cli-support-v1`.
 New installations enable Claude Code and disable Codex CLI. Missing or invalid
 fields fall back independently to those defaults; saved booleans, including both

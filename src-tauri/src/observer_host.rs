@@ -16,6 +16,7 @@ pub(crate) struct PreparedObservation {
     pub(crate) environment: ObserverEnv,
     pub(crate) plugin_dir: PathBuf,
     pub(crate) codex_args: Option<Vec<std::ffi::OsString>>,
+    pub(crate) opencode_plugin: Option<PathBuf>,
 }
 impl ObserverHost {
     pub(crate) fn new(
@@ -65,6 +66,7 @@ impl ObserverHost {
             environment,
             plugin_dir: self.plugin_dir.clone(),
             codex_args: None,
+            opencode_plugin: None,
         })
     }
     pub(crate) fn prepare_codex(
@@ -98,6 +100,52 @@ impl ObserverHost {
             environment: ObserverEnv { values },
             plugin_dir: PathBuf::new(),
             codex_args: Some(args),
+            opencode_plugin: None,
+        })
+    }
+
+    pub(crate) fn prepare_opencode(
+        &self,
+        run: ObserverRun,
+        delivery: ObserverDelivery,
+        authorize: Arc<dyn Fn() -> bool + Send + Sync>,
+    ) -> Result<PreparedObservation, SafeError> {
+        let port = (self.port)()
+            .filter(|p| *p != 0)
+            .ok_or_else(|| error("OBSERVER_SERVICE_UNAVAILABLE"))?;
+        let resource = tempfile::tempdir().map_err(|_| error("OBSERVER_PLUGIN_UNAVAILABLE"))?;
+        let path = resource.path().join("cc-desk-observer.mjs");
+        std::fs::write(&path, include_str!("opencode_observer.mjs"))
+            .map_err(|_| error("OBSERVER_PLUGIN_UNAVAILABLE"))?;
+        let mut lease = self.registry.lease_source(
+            run,
+            delivery,
+            authorize,
+            crate::observer_registry::ObserverSource::OpencodeHook,
+        )?;
+        let binding = lease.binding();
+        let values = EnvMap::from([
+            ("CC_BOX_HOOK_PORT".into(), port.to_string().into()),
+            (
+                "CC_DESK_OBSERVER_RUN".into(),
+                binding.run.run_id.clone().into(),
+            ),
+            (
+                "CC_DESK_OBSERVER_GENERATION".into(),
+                binding.run.generation.to_string().into(),
+            ),
+            (
+                "CC_DESK_OBSERVER_CAPABILITY".into(),
+                binding.capability.clone().into(),
+            ),
+        ]);
+        lease.keep_resource(resource);
+        Ok(PreparedObservation {
+            lease,
+            environment: ObserverEnv { values },
+            plugin_dir: PathBuf::new(),
+            codex_args: None,
+            opencode_plugin: Some(path),
         })
     }
 }

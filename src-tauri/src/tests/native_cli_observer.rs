@@ -762,3 +762,81 @@ fn CodexIdentity_SourceIsolationAndRetirement_032() {
         .accept_event(second.binding(), "still-owned", body)
         .is_ok());
 }
+#[test]
+#[allow(non_snake_case)]
+fn Opencode_ObserverSourceIsExactRedactedAndBoundedReplay_041() {
+    use crate::observer_registry::{ObserverAccept, ObserverRegistry, ObserverSource};
+    let registry = ObserverRegistry::new();
+    let binding = registry
+        .mint(run("opencode", 1), ObserverSource::OpencodeHook)
+        .unwrap();
+    for sequence in 1..=2050 {
+        let payload = serde_json::json!({"hook_event_name":"Notification","session_id":"ses_fixture","notification_type":"opencode_idle","prompt":"secret","cwd":"secret","model":"secret"});
+        let result = registry
+            .accept_event(
+                &binding,
+                &format!("o{sequence:016}"),
+                &serde_json::to_vec(&payload).unwrap(),
+            )
+            .unwrap();
+        let ObserverAccept::Accepted(event) = result else {
+            panic!("fresh event rejected");
+        };
+        assert_eq!(
+            event.event,
+            serde_json::json!({"hook_event_name":"Notification","session_id":"ses_fixture","notification_type":"opencode_idle"})
+        );
+    }
+    let body=br#"{"hook_event_name":"Notification","session_id":"ses_fixture","notification_type":"opencode_busy"}"#;
+    assert_eq!(
+        registry
+            .accept_event(&binding, "o0000000000000001", body)
+            .unwrap(),
+        ObserverAccept::Duplicate
+    );
+    let mut crossed = binding.clone();
+    crossed.source = ObserverSource::ClaudeHook;
+    assert!(registry
+        .accept_event(&crossed, "o0000000000002051", body)
+        .is_err());
+    assert!(registry
+        .accept_event(
+            &binding,
+            "o0000000000002051",
+            br#"{"hook_event_name":"Stop","session_id":"ses_fixture"}"#
+        )
+        .is_err());
+    assert!(registry.accept_event(&binding, "opaque", body).is_err());
+    assert!(registry
+        .accept_event(
+            &binding,
+            "o0000000000002052",
+            br#"{"hook_event_name":"SessionStart","session_id":"ses_"}"#
+        )
+        .is_err());
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn Opencode_ObserverLeaseCleansPrivatePluginAndRevokes_043() {
+    let registry = std::sync::Arc::new(ObserverRegistry::new());
+    let host = crate::observer_host::ObserverHost::new(
+        registry.clone(),
+        std::path::PathBuf::new(),
+        std::sync::Arc::new(|| Some(12345)),
+    );
+    let prepared = host
+        .prepare_opencode(
+            run("resource", 1),
+            crate::observer_registry::ObserverDelivery::native("main"),
+            std::sync::Arc::new(|| true),
+        )
+        .unwrap();
+    let plugin = prepared.opencode_plugin.as_ref().unwrap().clone();
+    let binding = prepared.lease.binding().clone();
+    assert!(plugin.is_file());
+    assert_eq!(binding.source, ObserverSource::OpencodeHook);
+    drop(prepared);
+    assert!(!plugin.exists());
+    assert!(registry.check_binding(&binding).is_err());
+}

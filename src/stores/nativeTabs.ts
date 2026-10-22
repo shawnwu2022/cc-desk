@@ -320,6 +320,12 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
       value.historyChangeRevision = (value.historyChangeRevision ?? 0) + 1
       if (eventType === 'stop' || eventType === 'userPromptSubmit') value.historyTitleRevision = value.historyChangeRevision
     }
+    if (value.cli === 'opencode') {
+      if (!/^ses_[A-Za-z0-9_]+$/.test(identity) || identity.length>256) return false
+      if (value.action.kind === 'resume-id' && identity !== value.action.nativeSessionId) return false
+      if (value.observedSessionId !== identity && eventType !== 'sessionStart') return false
+      if (eventType === 'sessionStart') value.historyChangeRevision=(value.historyChangeRevision ?? 0)+1
+    }
     if (value.observedSessionId !== identity) {
       value.observedSessionId = identity
       value.lastActivityAt = Date.now()
@@ -352,7 +358,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     }
     pendingAttention.delete(tabId)
     if (value.status !== 'running') return
-    const attention = projected.activity === 'waiting' ? 'needs-user' : 'none'
+    const attention = ['waiting','waiting_permission','waiting_input'].includes(projected.activity) ? 'needs-user' : 'none'
     if ((value.attentionState ?? 'none') !== attention || value.activityState !== projected.activity
       || value.observationState !== projected.observation) {
       value.attentionState = attention
@@ -464,7 +470,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     if (next.status === 'running' && pending && matchesNativeAttempt(value, pending.attempt)) {
       value.activityState = pending.state.activity
       value.observationState = pending.state.observation
-      value.attentionState = pending.state.activity === 'waiting' ? 'needs-user' : 'none'
+      value.attentionState = ['waiting','waiting_permission','waiting_input'].includes(pending.state.activity) ? 'needs-user' : 'none'
     } else if (next.status !== 'running') {
       value.attentionState = 'none'
       value.activityState = 'unknown'

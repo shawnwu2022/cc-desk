@@ -9,10 +9,13 @@ import type { SessionActivityState, SessionVisualState, UnifiedCliKind } from '@
 
 const props = defineProps<{ cli: UnifiedCliKind; state: SessionVisualState; activityState?: SessionActivityState; observationState?: string; observerReasonCode?: import('@/api/observer').ObserverReasonCode; archived?: boolean; notice?: { labelKey: string; unread: boolean; detailLabelKey?: string } | null; receiptId?: string }>()
 const { t } = useI18n()
+const opencodeUnknown = computed(() => props.cli === 'opencode' && props.state === 'running' && props.activityState !== 'idle'
+  && props.observerReasonCode !== 'OBSERVER_UNSUPPORTED' && props.observationState !== 'off')
 const statusLabel = computed(() => {
-  if (props.cli === 'codex' && !props.archived && props.state === 'running' && props.activityState === 'idle') return t('sessionStatusIdle')
+  if (opencodeUnknown.value && !props.archived) return t('sessionStatusUnknown')
+  if (props.cli !== 'claude' && !props.archived && props.state === 'running' && props.activityState === 'idle') return t('sessionStatusIdle')
   if (props.cli === 'codex' && !props.archived && props.state === 'needs-user' && props.activityState === 'waiting') return t('sessionStatusNeedsAction')
-  if (props.cli === 'claude' && !props.archived && ['unknown','confirming'].includes(props.state) && props.observationState !== 'active') {
+  if (props.cli !== 'codex' && !props.archived && ['unknown','confirming'].includes(props.state) && props.observationState !== 'active') {
     const reasons = { OBSERVER_DISABLED:'observerDisabled',OBSERVER_UNSUPPORTED:'observerUnsupported',OBSERVER_CONNECTING:'observerConnecting',OBSERVER_UNAVAILABLE:'observerUnavailable',OBSERVER_SERVICE_UNAVAILABLE:'observerServiceUnavailable',OBSERVER_PLUGIN_UNAVAILABLE:'observerPluginUnavailable',OBSERVER_PREPARE_FAILED:'observerPrepareFailed' }
     return t(props.observerReasonCode ? reasons[props.observerReasonCode] : props.observationState === 'connecting' ? 'observerConnecting' : 'observerUnavailable')
   }
@@ -27,7 +30,8 @@ const badge = computed(() => {
   // 未读是历史发生事实；已知的新活动、权限、错误及启动状态优先。
   if (props.notice?.unread && ['unknown', 'running', 'closed', 'stopped', 'ended', 'completed'].includes(props.state)) return 'completed'
   // Codex 的已观察空闲态复用静态运行图形，文案仍明确为空闲。
-  return props.state === 'running' && props.cli !== 'codex' ? null : props.state
+  if (opencodeUnknown.value) return 'unknown'
+  return props.state === 'running' && props.cli === 'claude' ? null : props.state
 })
 const completionEntry = ref(false)
 watch(() => [props.state, props.receiptId, props.archived] as const, (next, previous) => {

@@ -13,6 +13,70 @@ fn revision(value: &str) -> WireU64 {
     WireU64::parse(value).unwrap()
 }
 
+#[test]
+#[allow(non_snake_case)]
+fn Opencode_ObserverOverlayPreservesUserConfigAndOptionalFailure_042() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut profile = profile();
+    profile.cli = CliKind::Opencode;
+    let observer = ObserverEnv {
+        values: EnvMap::from([
+            ("CC_BOX_HOOK_PORT".into(), "12345".into()),
+            ("CC_DESK_OBSERVER_RUN".into(), "run".into()),
+            ("CC_DESK_OBSERVER_GENERATION".into(), "2".into()),
+            ("CC_DESK_OBSERVER_CAPABILITY".into(), "x".repeat(32).into()),
+        ]),
+    };
+    let plugin = temp.path().join("observer.mjs");
+    for original in [
+        r#"{"plugin":["user-plugin"],"future":{"keep":true}}"#,
+        "broken",
+        r#"{"plugin":true}"#,
+    ] {
+        let inherited = EnvMap::from([("OPENCODE_CONFIG_CONTENT".into(), original.into())]);
+        let snapshot = freeze_launch(
+            &request(
+                &profile,
+                temp.path(),
+                json!({"action":{"kind":"resume-id","nativeSessionId":"ses_fixture"}}),
+            ),
+            &profile,
+            &caller(),
+            &FreezeContext {
+                inherited: &inherited,
+                terminal: &EnvMap::new(),
+                legacy: None,
+                observer: None,
+            },
+        )
+        .unwrap();
+        let before = snapshot.environment().clone();
+        let updated = snapshot.with_opencode_observer(&observer, &plugin);
+        assert_eq!(snapshot.environment(), &before);
+        if original.starts_with("{\"plugin\":[") {
+            let updated = updated.unwrap();
+            let content: Value = serde_json::from_str(
+                updated
+                    .environment()
+                    .get(OsStr::new("OPENCODE_CONFIG_CONTENT"))
+                    .unwrap()
+                    .to_str()
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(content["future"]["keep"], true);
+            assert_eq!(content["plugin"][0], "user-plugin");
+            assert_eq!(content["plugin"][1][1]["sessionID"], "ses_fixture");
+            let invocation =
+                crate::cli::invocation::build_invocation(snapshot.request(), &updated).unwrap();
+            assert!(!invocation.args().iter().any(|arg| arg == "--plugin-dir"));
+        } else {
+            assert!(updated.is_err());
+        }
+        assert!(crate::cli::invocation::build_invocation(snapshot.request(), &snapshot).is_ok());
+    }
+}
+
 fn caller() -> CallerIdentity {
     CallerIdentity {
         instance_id: "backend-instance".into(),

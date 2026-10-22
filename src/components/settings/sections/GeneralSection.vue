@@ -63,6 +63,6 @@ h3 { font-size: 13px; font-weight: 500; color: var(--text-primary); }
 .setting-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 p { font-size: 12px; line-height: 1.5; color: var(--text-secondary); overflow-wrap: anywhere; }
 .cli-support-row { display: flex; gap: 10px; }
-/* 灰态 = 停用：图标已改由 CliAppIcon 渲染，停用态仅靠禁用控件透明度规范 .5 区分。 */
-.cli-support-toggle--off { opacity: 0.5; }
+/* IconButton 将 class 转发到内部 button，需穿过 Tooltip 的 scoped 边界。 */
+.cli-support-row :deep(.cli-support-toggle--off) { opacity: 0.5; }
 </style>

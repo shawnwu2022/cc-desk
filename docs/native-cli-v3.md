@@ -6,7 +6,7 @@
 
 CC Desk is a desktop workspace for **Claude Code, Codex CLI and opencode**. The native path runs the real CLI process in an owned PTY and keeps the CLI responsible for its own interaction model, commands, permissions, authentication, MCP/runtime behavior, skills/agents/plugins, editors, and future CLI features.
 
-opencode's history is not per-project files but a selected SQLite store under the OpenCode data root, or the exact file named by `OPENCODE_DB`. Its projection runs through a dedicated read-only reader (`cli/native_projection/opencode_db.rs`), not the file-walking catalog path; attribution matches `project.worktree` (named projects) or `session.directory` (the drifting `global` bucket) by normalized spelling, and sessions with a non-null `parent_id` (subagents) are excluded. The CLI has no picker/rename/archive verbs, so those capabilities are explicitly unsupported (`UNSUPPORTED_ACTION` / `NATIVE_RENAME_UNSUPPORTED`) and never silently degraded. Known inherited defect: `session.directory` is never updated when a project directory is renamed (upstream anomalyco/opencode#23248, verified), so sessions recorded under the old path stay invisible after a rename; Desk neither moves nor guesses. Resume (`-s <id>`) ignores the launch cwd and re-enters the session's recorded directory, so `effective_cwd` stays Unknown. Layer C (real logged-in opencode four-cell: create/resume/stop/restart-continue) remains BLOCKED like the other CLIs.
+opencode's history is not per-project files but a selected SQLite store under the OpenCode data root, or the exact file named by `OPENCODE_DB`. Its projection runs through a dedicated read-only reader (`cli/native_projection/opencode_db.rs`), not the file-walking catalog path; attribution matches `project.worktree` (named projects) or `session.directory` (the drifting `global` bucket) by normalized spelling, and sessions with a non-null `parent_id` (subagents) are excluded. The CLI has no picker/rename/archive verbs. Picker/archive CLI actions remain explicitly unsupported; list rename uses the official scoped HTTP metadata API described below. Known inherited defect: `session.directory` is never updated when a project directory is renamed (upstream anomalyco/opencode#23248, verified), so sessions recorded under the old path stay invisible after a rename; Desk neither moves nor guesses. Resume (`-s <id>`) ignores the launch cwd and re-enters the session's recorded directory, so `effective_cwd` stays Unknown. Layer C (real logged-in opencode four-cell: create/resume/stop/restart-continue) remains BLOCKED like the other CLIs.
 
 The SQLite reader rejects linked or non-regular selected database, `-wal`, and `-shm` entries. On Windows, where SQLite's VFS can follow a sidecar link, Desk opens the database and WAL through the retained root capability, copies them into a private temporary directory, and pins the private db/WAL/SHM files while SQLite reads only that copy. A shared source lock preserves the exclusive-writer `SOURCE_BUSY` boundary; a changed file fails the snapshot. The copy is capped at 1 GiB and may return `SOURCE_TOO_LARGE`. On Unix, SQLite's VFS uses `NOFOLLOW` for these files; before opening, Desk resolves only the already authorized root directory and rechecks its held identity so a symlink in an authorized ancestor (such as macOS `/var`) does not block normal reads. The database and both sidecars remain subject to the no-link checks, and root path replacement still fails closed. The `global` project ID is excluded from named-project worktree matching; its sessions are attributed only by their own directory.
 
@@ -419,3 +419,79 @@ refreshes every matching physical-source projection and clears only still-matchi
 tab aliases; a Legacy alias additionally requires a fresh same-root proof.
 
 Exact run receipts retain a backend-only source provenance separate from PTY resources: CLI, profile revision and already-selected configuration/project paths, without env, argv or process handles. It is published atomically with the existing launch completion and only authorizes read scopes for the same caller/document/run/generation. Retirement still invalidates all old process-control and snapshot handles. Revoke, document reload and mismatched generations reject retained source access. This lets explicit structured restarts verify their original physical root after exit; raw restarts keep their explicit rerun semantics.
+
+## OpenCode HTTP title updates
+
+List rename targets a freshly revalidated configured-profile history source, never a
+Run scope or a guessed newest session. Opened resume/new records require their exact
+frozen root, profile revision, project, native ID and source key; unbound/raw, archived,
+failed-read and incomplete OpenCode sources hide Rename, F2 and double-click editing.
+The backend rechecks the selected SQLite filename/channel and source-sidecar boundary,
+then starts an owned private authenticated loopback server from the selected CLI and
+frozen environment. Only official GET/PATCH/GET session metadata calls update the
+title, with exact ID/directory and title readback. PATCH is issued once; uncertain
+results never replay or fall back to direct SQLite writes or a Desk-only alias.
+The existing title receipt and affected-source refresh path synchronizes list aliases.
+Official OpenCode 1.19.0 was checked through isolated PATCH/list/server-restart and
+fresh CLI list reads without model calls. This evidence does not certify a logged-in
+interactive model turn or unrelated external/unregistered sessions.
+
+## OpenCode optional activity observer
+
+Structured OpenCode runs can load a private, per-owned-run plugin through the official
+`OPENCODE_CONFIG_CONTENT.plugin` tuple mechanism. It preserves existing inline settings
+and user plugins; it does not install a plugin globally, inject Claude flags, poll an
+unrelated `serve` process or change native input. The selected executable/runner has a
+bounded, isolated, owned `--version` probe. Only the examined **1.19.0** contract is
+enabled; older, future, unrecognized or unavailable versions retain their original
+basic CLI launch with an unsupported optional observer. Explicit observer off/unset,
+raw launches and `OPENCODE_PURE=true/1` do not receive an enabled observation channel.
+Invalid/oversized inline configuration or an unrepresentable optional overlay also
+falls back to the original frozen launch once, without loosening admission checks.
+
+The plugin uses the SDK passed by the actual CLI instance. It verifies main-session
+metadata, excludes subagents and foreign IDs, and binds the requested resume ID or the
+first verified main-session ID in the selected new-run directory. Initialization
+returns hooks before querying the instance API, avoiding an initialization self-wait.
+Official `dispose` clears initialization and prevents pending metadata callbacks from
+publishing after instance disposal. The observer lease owns and removes the private
+plugin directory, and exact caller/run/generation/capability still authorize delivery.
+Only allowlisted session identity and status metadata enter the public DTO; prompts,
+tool arguments, retry/error messages and credentials are excluded.
+
+| Official event evidence | Desk activity | Completion claim |
+| --- | --- | --- |
+| `session.status` busy / retry | working | None |
+| `session.status` idle / deprecated `session.idle` | idle | None |
+| `permission.asked` with an outstanding request ID | waiting_permission | None |
+| `question.asked` with an outstanding request ID | waiting_input | None |
+| `permission.replied`, `question.replied/rejected` | Remaining requests, then last known status | None |
+| `session.error` | error, retained across the following idle until busy/retry | None |
+| Missing/future status | unknown | None |
+
+The verified 1.19 cancellation path removes pending requests without a reply event and
+publishes idle; idle retires this turn's request IDs. Error causes remain independent
+because the official processor also emits error followed immediately by idle. Waiting
+does not expire merely because the user takes over 90 seconds to respond. Other stale
+OpenCode activity becomes unavailable/unknown after 90 seconds; silence never invents
+idle, success or completion. Closed/restarted/invalidated run owners reject late events.
+
+Only relevant event types enter the serial queue; token deltas are ignored. The queue
+and pending sets are bounded at 128, opaque upstream replay and retired-request ledgers
+at 4096. Exhaustion stops this optional channel with unknown status instead of evicting
+old identities and accepting replay. Authenticated published events carry a monotone
+per-run sequence; backend and frontend reject late/duplicate delivery beyond 1024 events.
+All providers reuse `SessionAppIcon` and `SessionStatusIcon`; observed OpenCode idle gets
+a static badge, unknown a neutral question, permission/input/error their shared shapes.
+Raw and explicitly unsupported/off channels keep neutral running presentation.
+
+Evidence: official source commit
+[`733b2c6`](https://github.com/anomalyco/opencode/tree/733b2c627e5aec39cb33cc22373bdce33053ef2c),
+particularly `plugin/index.ts`, SDK v1 `sdk.gen.ts`, `session/run-state.ts`,
+`session/processor.ts`, `permission/index.ts` and `question/index.ts`. The explicit
+`node tests/scripts/opencodeObserver.real.mjs <installed-opencode.exe>` fixture ran the
+installed 1.19.0 CLI and production plugin in private HOME/XDG roots: real creation,
+identity isolation, abort/idle, HTTP rename, server restart and persistent title passed
+without model calls. Request/error/reordering/overflow/dispose cases are isolated
+production-plugin tests; they are not authenticated model-turn evidence. Browser
+light/dark status rendering is synthetic Chrome evidence, not native Windows WebView2.

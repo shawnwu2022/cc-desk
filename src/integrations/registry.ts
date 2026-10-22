@@ -4,7 +4,8 @@ export interface RunRef {
 }
 
 export type ObservationStatus = 'off' | 'connecting' | 'active' | 'unavailable'
-export type ActivityStatus = 'unknown' | 'working' | 'waiting' | 'subagent_running' | 'idle'
+export type ActivityStatus = 'unknown' | 'working' | 'waiting' | 'subagent_running' | 'idle' | 'waiting_permission' | 'waiting_input' | 'error'
+export type OpencodeStatus = 'idle' | 'busy' | 'retry' | 'permission' | 'question' | 'error' | 'unknown'
 
 export interface ObservationState {
   observation: ObservationStatus
@@ -17,6 +18,7 @@ type ObservationEventBase = RunRef & {
 }
 
 export type ObservationEvent =
+  | (ObservationEventBase & { kind: 'opencode-status'; status: OpencodeStatus })
   | (ObservationEventBase & { kind: 'off' })
   | (ObservationEventBase & { kind: 'connecting' })
   | (ObservationEventBase & { kind: 'timeout' })
@@ -104,6 +106,14 @@ class RunObservationReducer implements ObservationReducer {
     }
 
     if (!event.eventId || event.eventId.length > 128 || !/^[A-Za-z0-9._:-]+$/.test(event.eventId)) return
+    if (event.kind === 'opencode-status') {
+      const sequence=event.sourceSequence
+      if (sequence === undefined || !canonicalU64(sequence) || this.lastSourceSequence !== null && compareU64(sequence,this.lastSourceSequence)<=0) return
+      this.lastSourceSequence=sequence
+      const activity: Record<OpencodeStatus,ActivityStatus>={idle:'idle',busy:'working',retry:'working',permission:'waiting_permission',question:'waiting_input',error:'error',unknown:'unknown'}
+      this.current={observation:'active',activity:activity[event.status] ?? 'unknown'}
+      return
+    }
     if (this.seen.has(event.eventId)) return
     if (this.seen.size >= 1024) {
       this.invalidateAgents()

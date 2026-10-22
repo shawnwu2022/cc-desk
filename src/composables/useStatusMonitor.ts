@@ -5,7 +5,11 @@ import { useSessionStore } from '@/stores/session'
 import { useAttentionStore } from '@/stores/attention'
 import type { HookEventPayload, NotificationData } from '@/types/hook'
 import { fromClaudeHook } from '@/integrations/claudeObserver'
-import { createObservationReducer, type ObservationReducer } from '@/integrations/registry'
+import { createObservationReducer, type ObservationReducer, type ActivityStatus } from '@/integrations/registry'
+
+function legacyActivity(activity: ActivityStatus) {
+  return activity === 'waiting_permission' || activity === 'waiting_input' || activity === 'error' ? 'unknown' : activity
+}
 
 const STATUS_EVENTS: HookEventType[] = [
   'sessionStart',
@@ -79,7 +83,7 @@ export function useStatusMonitor(options: { isFocused: Ref<boolean>; isTerminalV
     // 仅提示仍活跃时让 reducer 进入 unavailable，正常结束的 run 不补打 unavailable
     if (['working', 'subagent_running'].includes(run.reducer.state().activity)) {
       run.reducer.accept({ kind: 'timeout', runId: run.ptyId, generation: 1 })
-      tab.activity = run.reducer.state().activity
+      tab.activity = legacyActivity(run.reducer.state().activity)
     }
     tab.working = false
   }
@@ -132,7 +136,7 @@ export function useStatusMonitor(options: { isFocused: Ref<boolean>; isTerminalV
     run.reducer.accept(event)
     const state = run.reducer.state()
     tab.observation = state.observation
-    tab.activity = state.activity
+    tab.activity = legacyActivity(state.activity)
     armStaleTimer(tab.tabId, run)
 
     // 回合状态机自原通用分支逐事件迁移：通用分支因后端恒打标签在生产不可达。

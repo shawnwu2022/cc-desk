@@ -13,7 +13,7 @@ import type { SessionAdapter, UnifiedProjectGroup } from '@/types/unifiedSession
 const project: UnifiedProjectGroup = { projectKey: '/repo', projectPath: '/repo', name: 'Repo', sessions: [], pinned: false, hidden: false, runningCount: 0, needsUserCount: 0, lastActivityAt: 0 }
 const wrappers: VueWrapper[] = []
 const global = () => ({ plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })] })
-beforeEach(() => { localStorage.clear(); localStorage.setItem('cc-desk-cli-support-v1', JSON.stringify({ claude: true, codex: true })); setActivePinia(createPinia()) })
+beforeEach(() => { localStorage.clear(); localStorage.setItem('cc-desk-cli-support-v1', JSON.stringify({ claude: true, codex: true, opencode: true })); setActivePinia(createPinia()) })
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); document.body.innerHTML = '' })
 describe('New session flow', () => {
   it('NewSession_TwoClickMenu_001', async () => {

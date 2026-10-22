@@ -36,12 +36,16 @@ describe('session presentation', () => {
     expect(selectSessionPrimaryAction({ ...base, renameState: 'editing' })).toBe('save-rename')
   })
 
-  // opencode 后端拒绝原生 rename（NATIVE_RENAME_UNSUPPORTED），菜单不得出现该动作；
-  // 归档走 Desk 注册表保持可用，failed 态满足 archive 的菜单准入，断言才有意义。
+  // 没有来源改名能力时隐藏菜单；归档仍走 Desk 注册表，互不借用授权。
   test('SessionMenu_OpencodeRenameHidden_001', () => {
     const actions = selectSessionMenuActions({ ...base, cli: 'opencode', processState: 'failed' })
     expect(actions.some(action => action.id === 'rename')).toBe(false)
     expect(actions.some(action => action.id === 'archive')).toBe(true)
+  })
+
+  test('SessionMenu_OpencodeUsesVerifiedRenameCapability_002', () => {
+    expect(selectSessionMenuActions({ ...base, cli: 'opencode', renameAvailable: true }).some(action => action.id === 'rename')).toBe(true)
+    expect(selectSessionMenuActions({ ...base, cli: 'opencode', renameAvailable: true, archived: true }).some(action => action.id === 'rename')).toBe(false)
   })
 
   test('catalog identity contains runtime, cli, normalized project and adapter identities', () => {

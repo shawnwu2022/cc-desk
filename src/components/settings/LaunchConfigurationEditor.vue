@@ -34,7 +34,7 @@ const format = ref<'lines' | 'json'>(needsJson(initialArgs) ? 'json' : 'lines')
 const argsText = ref(format.value === 'json' ? JSON.stringify(initialArgs) : initialArgs.join('\n'))
 function booleanChoice(value?: ProfileOverride<boolean>): string { return value?.mode === 'set' ? String(value.value) : value?.mode ?? 'inherit' }
 const permission = ref(booleanChoice(original?.skipPermissions ?? (cli === 'claude' ? { mode: 'set', value: false } : undefined)))
-const observer = ref(booleanChoice(original?.observer ?? { mode: 'set', value: cli === 'claude' }))
+const observer = ref(booleanChoice(original?.observer ?? { mode: 'set', value: cli !== 'codex' }))
 const launcherKind = ref(original?.launcher.kind ?? 'native')
 const launcherProgram = ref(original?.launcher.kind === 'shell' ? original.launcher.program : original?.launcher.kind === 'shim' ? original.launcher.runner : '')
 const dialect = ref<ShellDialect>(original?.launcher.kind !== 'native' && original ? original.launcher.dialect : 'bash')

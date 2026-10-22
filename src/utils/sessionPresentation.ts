@@ -146,7 +146,7 @@ interface MenuActionRule extends SessionMenuActionDefinition {
   visible: (session: UnifiedSession) => boolean
 }
 export function canRenameSession(session: UnifiedSession): boolean {
-  return session.cli !== 'opencode' && session.renameAvailable === true && !session.preparationState && !session.archived
+  return session.renameAvailable === true && !session.preparationState && !session.archived
 }
 const isOpened = (session: UnifiedSession) => !session.archived && session.opened === true
 const isState = (...states: UnifiedSession['processState'][]) =>

@@ -16,10 +16,10 @@ function readSupport(): CliSupport {
     if (value && typeof value === 'object' && !Array.isArray(value)) {
       return { claude: typeof value.claude === 'boolean' ? value.claude : true,
         codex: typeof value.codex === 'boolean' ? value.codex : false,
-        opencode: typeof value.opencode === 'boolean' ? value.opencode : true }
+        opencode: typeof value.opencode === 'boolean' ? value.opencode : false }
     }
   } catch { /* Optional UI preference storage must never block startup. */ }
-  return { claude: true, codex: false, opencode: true }
+  return { claude: true, codex: false, opencode: false }
 }
 
 export const useCliSupportStore = defineStore('cli-support', () => {

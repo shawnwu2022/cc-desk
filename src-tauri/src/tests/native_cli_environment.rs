@@ -717,9 +717,13 @@ fn D08_Environment_ReservedWindowsOnly_020() {
     .is_err());
 }
 
-// 观察器 overlay 是 Claude-only；opencode profile 不得被注入（spec §2）。
+// OpenCode 缺省开启观察，用户显式关闭或 unset 始终优先。
 #[test]
-fn Opencode_ObserverOverlayIsDisabled_01() {
-    let profile = Profile::new("oc", CliKind::Opencode);
+fn Opencode_ObserverDefaultAndExplicitDisable_01() {
+    let mut profile = Profile::new("oc", CliKind::Opencode);
+    assert!(crate::cli::environment::observer_enabled(&profile));
+    profile.observer = Override::Set(false);
+    assert!(!crate::cli::environment::observer_enabled(&profile));
+    profile.observer = Override::Unset;
     assert!(!crate::cli::environment::observer_enabled(&profile));
 }

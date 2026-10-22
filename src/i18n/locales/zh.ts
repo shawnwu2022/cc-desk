@@ -70,6 +70,8 @@ export default {
   settingsDefaultCli: '默认新建工具',
   settingsDefaultCliHint: '在选择器中优先显示，并作为新建选项的默认工具。每个会话仍可选择其他工具。',
   settingsCliSupport: '工具支持',
+  settingsCliEnabled: '已启用',
+  settingsCliDisabled: '已停用',
   settingsCliClickToDisable: '{cli} 已启用 · 点击停用',
   settingsCliClickToEnable: '{cli} 已停用 · 点击启用',
   settingsCliSupportHint: '停用后不显示该工具的新建入口，也不加载与列出其历史会话；已打开的终端保留，可继续选择和关闭。',

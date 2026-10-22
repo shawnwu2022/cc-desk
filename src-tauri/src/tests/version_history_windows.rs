@@ -579,6 +579,23 @@ fn HistoryWindows_FenceAliases_021() {
     }
 }
 
+fn acquire_prepared_fixture_fence(
+    deadline: std::time::Instant,
+    mut acquire: impl FnMut() -> std::io::Result<ImageFence>,
+) -> std::io::Result<ImageFence> {
+    let mut fence = None;
+    // 只协调无副作用的初始独占打开；身份、内容及后续安全失败都不可重试。
+    super::fixture_process::wait_for_preparation(deadline, || match acquire() {
+        Ok(acquired) => {
+            fence = Some(acquired);
+            Ok(true)
+        }
+        Err(error) if ImageFence::is_acquisition_busy(&error) => Ok(false),
+        Err(error) => Err(error),
+    })?;
+    fence.ok_or_else(|| std::io::Error::other("fixture fence was not acquired"))
+}
+
 fn probe_fenced_unlink(standard_unlink: bool, remove_source: bool) {
     use std::os::windows::fs::OpenOptionsExt;
     use windows::Win32::Storage::FileSystem::{
@@ -622,8 +639,11 @@ fn probe_fenced_unlink(standard_unlink: bool, remove_source: bool) {
     drop(parent);
     std::fs::remove_file(&alias).unwrap();
     let parent = Directory::open_absolute(temporary.path()).unwrap();
-    let mut fence =
-        ImageFence::acquire(parent.clone(), name("image.exe"), &identity, &digest).unwrap();
+    let mut fence = acquire_prepared_fixture_fence(
+        std::time::Instant::now() + std::time::Duration::from_secs(30),
+        || ImageFence::acquire(parent.clone(), name("image.exe"), &identity, &digest),
+    )
+    .unwrap();
     fence
         .verify()
         .expect("unchanged single-link fence must verify");
@@ -2116,4 +2136,95 @@ fn HistoryWindows_FenceDrift_036() {
             assert_eq!(std::fs::read(&source).unwrap(), b"changed image fixture");
         }
     }
+}
+
+// 准备期只等待真实独占打开忙；释放读者后的内容漂移必须立即拒绝。
+#[test]
+fn HistoryWindows_FencePreparationBusy_037() {
+    for drift_after_busy in 0..3 {
+        let temporary = tempfile::tempdir().unwrap();
+        let source = temporary.path().join("image.exe");
+        std::fs::write(&source, b"original image fixture").unwrap();
+        let parent = Directory::open_absolute(temporary.path()).unwrap();
+        let reader = parent
+            .open_file(name("image.exe"), FileAccess::Read)
+            .unwrap();
+        let identity = reader.identity().clone();
+        let digest = reader.digest().unwrap();
+        let mut held_reader = Some(reader);
+        let mut attempts = 0;
+        let result = acquire_prepared_fixture_fence(
+            std::time::Instant::now() + std::time::Duration::from_secs(5),
+            || {
+                attempts += 1;
+                let result =
+                    ImageFence::acquire(parent.clone(), name("image.exe"), &identity, &digest);
+                if attempts == 1 {
+                    assert!(result.as_ref().is_err_and(ImageFence::is_acquisition_busy));
+                    drop(held_reader.take());
+                    match drift_after_busy {
+                        1 => std::fs::write(&source, b"changed image fixture").unwrap(),
+                        2 => {
+                            std::fs::rename(&source, temporary.path().join("retained.exe"))
+                                .unwrap();
+                            std::fs::write(&source, b"original image fixture").unwrap();
+                        }
+                        _ => {}
+                    }
+                }
+                result
+            },
+        );
+        if drift_after_busy != 0 {
+            let error = result.err().expect("changed fixture bytes must refuse");
+            assert!(!ImageFence::is_acquisition_busy(&error));
+        } else {
+            let fence = result.expect("released fixture reader must allow exact admission");
+            assert_eq!(fence.identity(), &identity);
+            fence.verify().unwrap();
+        }
+        assert_eq!(attempts, 2, "only the initial busy open can be repeated");
+        assert!(!temporary.path().join("sealed.exe").exists());
+    }
+}
+
+// 过期的准备期限不能再触发独占打开，即使调用方本可取得文件。
+#[test]
+fn HistoryWindows_FencePreparationExpired_038() {
+    let error = acquire_prepared_fixture_fence(std::time::Instant::now(), || {
+        panic!("expired preparation must not call acquisition")
+    })
+    .err()
+    .expect("expired preparation must fail");
+    assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+}
+
+// 未知读者一直持有时只允许准备超时，不能当作通过或改变文件授权。
+#[test]
+fn HistoryWindows_FencePreparationTimeout_039() {
+    let temporary = tempfile::tempdir().unwrap();
+    let source = temporary.path().join("image.exe");
+    std::fs::write(&source, b"held image fixture").unwrap();
+    let parent = Directory::open_absolute(temporary.path()).unwrap();
+    let reader = parent
+        .open_file(name("image.exe"), FileAccess::Read)
+        .unwrap();
+    let identity = reader.identity().clone();
+    let digest = reader.digest().unwrap();
+    let initial = ImageFence::acquire(parent.clone(), name("image.exe"), &identity, &digest)
+        .err()
+        .expect("held reader must exclude the fence");
+    assert!(ImageFence::is_acquisition_busy(&initial));
+    let error = acquire_prepared_fixture_fence(
+        std::time::Instant::now() + std::time::Duration::from_millis(100),
+        || ImageFence::acquire(parent.clone(), name("image.exe"), &identity, &digest),
+    )
+    .err()
+    .expect("a reader that never releases must time out");
+    assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+    assert_eq!(reader.identity(), &identity);
+    assert_eq!(reader.digest().unwrap(), digest);
+    assert!(source.exists());
+    drop(reader);
+    drop(parent);
 }

@@ -23,6 +23,28 @@ function status(tab: any, phase: LaunchStatus['phase'] = 'running'): LaunchStatu
 }
 
 beforeEach(() => setActivePinia(createPinia()))
+
+it.each(['new','resume-id'] as const)('Opencode_StatusAndIdentityKeepExactAttempt_030 %s',kind=>{
+  const tabs=useNativeTabsStore(),tab=tabs.create({cli:'opencode',projectId:'p',projectPath:'/repo',profileId:'oc',profileRevision:'1',action:kind==='new'?{kind}:{kind,nativeSessionId:'ses_main'}})
+  const owner=captureNativeAttempt(tab)
+  tabs.markStarting(tab.tabId)
+  expect(tabs.applyObservationIdentity(tab.tabId,owner,'ses_main','notification')).toBe(false)
+  expect(tabs.applyObservationIdentity(tab.tabId,owner,'ses_main','sessionStart')).toBe(true)
+  tabs.applyObservation(tab.tabId,owner,{observation:'active',activity:'waiting_permission'})
+  tabs.applyLaunchStatus(tab.tabId,status(tab))
+  expect(tabs.tab(tab.tabId)).toMatchObject({status:'running',activityState:'waiting_permission',attentionState:'needs-user'})
+  tabs.applyObservation(tab.tabId,owner,{observation:'active',activity:'idle'})
+  expect(tabs.tab(tab.tabId)).toMatchObject({activityState:'idle',attentionState:'none'})
+  if(kind==='resume-id')expect(tabs.applyObservationIdentity(tab.tabId,owner,'ses_foreign','sessionStart')).toBe(false)
+  tabs.applyLaunchStatus(tab.tabId,status(tab,'exited'))
+  tabs.restart(tab.tabId,{profileId:'oc',profileRevision:'1',cli:'opencode'})
+  tabs.applyObservation(tab.tabId,owner,{observation:'active',activity:'working'})
+  expect(tabs.applyObservationIdentity(tab.tabId,owner,'ses_main','sessionStart')).toBe(false)
+  expect(tabs.tab(tab.tabId)).toMatchObject({activityState:'unknown',observationState:'off'})
+  tabs.close(tab.tabId)
+  tabs.applyObservation(tab.tabId,owner,{observation:'active',activity:'error'})
+  expect(tabs.tab(tab.tabId)).toBeUndefined()
+})
 afterEach(() => vi.restoreAllMocks())
 
 // 丢失 SessionStart 时只允许主线程提示建立初始身份，普通工具/结束事件不建立或切换身份。

@@ -72,6 +72,25 @@ impl RenameAuthority {
     pub(crate) fn root_path(&self) -> &std::path::Path {
         self.scope.grant.root.selected_path()
     }
+    pub(crate) fn root_key(&self) -> &str {
+        self.scope.grant.root.key()
+    }
+    pub(crate) fn verify_opencode_source(&self) -> Result<(), SafeError> {
+        self.current()?;
+        let root = &self.scope.grant.root;
+        let file = root.sqlite_filename();
+        if !root
+            .sqlite_file_present(std::path::Path::new(file))
+            .map_err(safe)?
+        {
+            return Err(safe("SESSION_NOT_FOUND"));
+        }
+        for suffix in ["-wal", "-shm"] {
+            root.sqlite_file_present(std::path::Path::new(&format!("{file}{suffix}")))
+                .map_err(safe)?;
+        }
+        self.current()
+    }
     pub(crate) fn current(&self) -> Result<(), SafeError> {
         if self
             .scope
@@ -248,9 +267,7 @@ impl ScopeRegistry {
         if matches!(source.target, ScopeTarget::Run { .. }) {
             return Err(safe("SESSION_IDENTITY_UNKNOWN"));
         }
-        // opencode 无 rename 动词。此处 source.cli 已与存储 grant 等值校验，
-        // 是权威判断；前端伪造字段只会得到 SCOPE_STALE，拿不到别名写入权。
-        if matches!(source.cli, CliKind::Opencode | CliKind::Shell) {
+        if source.cli == CliKind::Shell {
             return Err(safe("NATIVE_RENAME_UNSUPPORTED"));
         }
         let g = &scope.grant;
@@ -317,10 +334,23 @@ impl ScopeRegistry {
         }
         g.current().map_err(safe)?;
         let (native_id, cwd) = matched.ok_or_else(|| safe("SESSION_NOT_FOUND"))?;
-        if budget.rename_target_may_be_omitted(&native_id) {
+        if if source.cli == CliKind::Opencode {
+            budget.history_metadata_incomplete()
+        } else {
+            budget.rename_target_may_be_omitted(&native_id)
+        } {
             return Err(safe("SESSION_ORIGIN_AMBIGUOUS"));
         }
-        if uuid::Uuid::parse_str(&native_id).is_err() {
+        let valid_id = if source.cli == CliKind::Opencode {
+            native_id.starts_with("ses_")
+                && native_id.len() <= 256
+                && native_id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        } else {
+            uuid::Uuid::parse_str(&native_id).is_ok()
+        };
+        if !valid_id {
             return Err(safe("SESSION_ORIGIN_AMBIGUOUS"));
         }
         let claude_file = if source.cli == CliKind::Claude {

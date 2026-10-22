@@ -112,9 +112,9 @@ function projectNotice(tab: NativeCliTab, tabs: NativeTabsPort): NativeObservati
 function projectTab(tab: NativeCliTab, tabs?: NativeTabsPort): UnifiedSession {
   const nativeSessionId = tabNativeSessionId(tab)
   // Codex 的终端快照与 Claude 认证 hook 分开投影，不产生回合完成或授权原因。
-  const claudeObservation = tab.cli === 'claude' && tab.action.kind !== 'raw'
+  const hookObservation = (tab.cli === 'claude' || tab.cli === 'opencode') && tab.action.kind !== 'raw'
   const codexObservation = tab.cli === 'codex' && tab.action.kind !== 'raw'
-  const activeObservation = claudeObservation && tab.status === 'running' && tab.observationState === 'active'
+  const activeObservation = hookObservation && tab.status === 'running' && tab.observationState === 'active'
   const codexStatus = codexObservation && tab.status === 'running' ? tab.codexProgramStatus : undefined
   const codexActivity = codexStatus === 'working' ? 'working' : codexStatus === 'blocked' ? 'waiting' : codexStatus === 'idle' ? 'idle' : 'unknown'
   const observationNotice = tabs && projectNotice(tab, tabs)
@@ -128,9 +128,9 @@ function projectTab(tab: NativeCliTab, tabs?: NativeTabsPort): UnifiedSession {
     processState: tab.status === 'stopped' && tab.launchRevision === null ? 'starting' : processState(tab.status),
     attentionState: activeObservation ? tab.attentionState ?? 'none' : codexActivity === 'waiting' ? 'needs-user' : 'none',
     activityState: activeObservation ? tab.activityState ?? 'unknown' : codexActivity,
-    observationState: claudeObservation ? tab.observationState ?? 'off' : codexObservation ? codexActivity === 'unknown' ? 'unavailable' : 'active' : 'off',
+    observationState: hookObservation ? tab.observationState ?? 'off' : codexObservation ? codexActivity === 'unknown' ? 'unavailable' : 'active' : 'off',
     ...(codexObservation ? codexActivity === 'unknown' ? { observerReasonCode: 'OBSERVER_UNAVAILABLE' as const } : {}
-      : !claudeObservation ? { observerReasonCode: 'OBSERVER_UNSUPPORTED' as const }
+      : !hookObservation ? { observerReasonCode: 'OBSERVER_UNSUPPORTED' as const }
       : tab.observerReasonCode ? { observerReasonCode: tab.observerReasonCode } : {}),
     ...(observationNotice ? { observationNotice } : {}),
     lastActivityAt: tab.lastActivityAt,
@@ -224,6 +224,7 @@ function parseHistoryId(id: string): { adapterSessionId: string; nativeSessionId
 
 export function nativeHistoryRenameReady(entry: NativeHistoryEntry, item: NativeHistoryEntry['sessions'][number]): boolean {
   return entry.loaded && !entry.loading && !entry.error && !item.readFailure
+    && (entry.context.cli !== 'opencode' || !entry.metadataIncomplete && !item.metadataIncomplete && !item.truncated)
     && !!entry.source && !!entry.sourceRootKey && entry.source.sourceRootKey === entry.sourceRootKey
     && entry.source.target?.kind === 'profile' && entry.source.cli === entry.context.cli
     && entry.source.profileId === entry.context.profileId && entry.source.profileRevision === entry.context.profileRevision
@@ -303,7 +304,7 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
   function projectActive(tab: NativeCliTab) {
     const row = projectTab(tab, deps.tabs)
     const renameMatches = historyForTab(tab)
-    row.renameAvailable = tab.cli !== 'opencode' && !!deps.nativeRename && !!deps.runSource && !!deps.history.load
+    row.renameAvailable = !!deps.nativeRename && !!deps.runSource && !!deps.history.load
       && !!row.renameTarget && renameMatches.length === 1
       && displayRenameSourceReady(renameMatches[0].entry, renameMatches[0].item)
     let identity = tabDisplayIdentity(tab)
@@ -459,7 +460,7 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
         const claim = historyId(entry, item.sessionKey, item.nativeSessionId)
         if (!claimed.has(claim)) sessions.push({
           ...withSessionDisplayName(projectHistory(entry, item), deps.metadata),
-          renameAvailable: entry.context.cli !== 'opencode' && !!deps.nativeRename && displayRenameSourceReady(entry, item),
+          renameAvailable: !!deps.nativeRename && displayRenameSourceReady(entry, item),
           ...archiveState(entry, item, legacyRoot),
           ...(closedNotices.has(claim) ? { observationNotice: { recent: { ...closedNotices.get(claim)!.recent! }, unreadReplyEnd: { ...closedNotices.get(claim)!.unreadReplyEnd! } } } : {}),
         })

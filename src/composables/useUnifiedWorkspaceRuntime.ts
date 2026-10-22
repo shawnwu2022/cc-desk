@@ -691,7 +691,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   watch(() => cliSupport.support, (next, previous) => {
     if (disposed) return
     if (!ready.value || loading.value) { void refresh(); return }
-    for (const cli of ['claude', 'codex'] as const) if (next[cli] !== previous[cli]) void refreshSupport(cli)
+    for (const cli of ['claude', 'codex', 'opencode'] as const) if (next[cli] !== previous[cli]) void refreshSupport(cli)
   })
 
   watch(() => profiles.profiles.map(profile => ({ id: profile.id, cli: profile.cli, revision: profile.revision })), (next, previous) => {

@@ -122,7 +122,7 @@ export interface HookEventPayload {
   runId?: string
   generation?: number
   eventId?: string
-  observerSource?: 'claude-hook' | 'codex-hook'
+  observerSource?: 'claude-hook' | 'codex-hook' | 'opencode-hook'
   detail: HookEventDetail
 }
 

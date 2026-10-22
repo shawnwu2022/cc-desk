@@ -124,6 +124,66 @@ impl LaunchSnapshot {
         Ok(next)
     }
 
+    pub(crate) fn with_opencode_observer(
+        &self,
+        observer: &ObserverEnv,
+        plugin: &Path,
+    ) -> Result<Self, SafeError> {
+        if self.request.cli != CliKind::Opencode || !self.observer_requested {
+            return Err(error("OBSERVER_UNAVAILABLE"));
+        }
+        if lookup(&self.environment, OsStr::new("OPENCODE_PURE"))
+            .and_then(|v| v.to_str())
+            .is_some_and(|value| matches!(value, "true" | "1"))
+        {
+            return Err(error("OBSERVER_UNSUPPORTED"));
+        }
+        let mut next = self.clone();
+        next.environment = overlay_observer(&self.environment, observer)?;
+        let original = super::environment::lookup(
+            &self.environment,
+            std::ffi::OsStr::new("OPENCODE_CONFIG_CONTENT"),
+        );
+        let mut content = if let Some(original) = original {
+            let text = original
+                .to_str()
+                .filter(|s| s.len() <= 65536)
+                .ok_or_else(|| error("OBSERVER_UNAVAILABLE"))?;
+            serde_json::from_str::<Value>(text).map_err(|_| error("OBSERVER_UNAVAILABLE"))?
+        } else {
+            serde_json::json!({})
+        };
+        let object = content
+            .as_object_mut()
+            .ok_or_else(|| error("OBSERVER_UNAVAILABLE"))?;
+        let plugins = object
+            .entry("plugin")
+            .or_insert_with(|| serde_json::json!([]))
+            .as_array_mut()
+            .ok_or_else(|| error("OBSERVER_UNAVAILABLE"))?;
+        let url =
+            reqwest::Url::from_file_path(plugin).map_err(|_| error("OBSERVER_UNAVAILABLE"))?;
+        let id = match &self.request.action {
+            LaunchAction::ResumeId { native_session_id } => Some(native_session_id.as_str()),
+            _ => None,
+        };
+        plugins.push(
+            serde_json::json!([url.as_str(),{"sessionID":id,"directory":self.request.launch_cwd}]),
+        );
+        let value = serde_json::to_string(&content).map_err(|_| error("OBSERVER_UNAVAILABLE"))?;
+        if value.len() > 65536 {
+            return Err(error("OBSERVER_UNAVAILABLE"));
+        }
+        next.environment.retain(|name, _| {
+            !name
+                .to_string_lossy()
+                .eq_ignore_ascii_case("OPENCODE_CONFIG_CONTENT")
+        });
+        next.environment
+            .insert("OPENCODE_CONFIG_CONTENT".into(), value.into());
+        Ok(next)
+    }
+
     pub(crate) fn environment(&self) -> &EnvMap {
         &self.environment
     }

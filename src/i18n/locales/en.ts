@@ -70,6 +70,8 @@ export default {
   settingsDefaultCli: 'Default new-session tool',
   settingsDefaultCliHint: 'Shown first in the chooser and selected in new-session options. You can still choose either tool for each session.',
   settingsCliSupport: 'Tool support',
+  settingsCliEnabled: 'Enabled',
+  settingsCliDisabled: 'Disabled',
   settingsCliClickToDisable: '{cli} enabled · click to disable',
   settingsCliClickToEnable: '{cli} disabled · click to enable',
   settingsCliSupportHint: 'A disabled tool loses its new-session entry and its history sessions are not loaded or listed; already open terminals remain selectable and closeable.',

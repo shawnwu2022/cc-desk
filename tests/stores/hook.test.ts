@@ -10,6 +10,37 @@ vi.mock('@/api/observer', () => ({ onNativeObservation: vi.fn((handler: (payload
 }) }))
 const observationTarget = { runId: 'run-claude', generation: 3, cli: 'claude' as const, enabled: true }
 
+it('Opencode_AuthenticatedStatusIsOrderedAndIdleIsNotCompletion_021', async () => {
+  setActivePinia(createPinia()); capturedNative = null; vi.useFakeTimers()
+  const store=useHookStore(), handler=vi.fn(), notice=vi.fn(), identity=vi.fn()
+  const stop=store.subscribeObservation({runId:'oc-run',generation:1,cli:'opencode',enabled:true},handler,{onNotice:notice,onIdentity:identity})
+  try {
+    await Promise.resolve()
+    expect(capturedNative).not.toBeNull()
+    const send=(n:number,status:string)=>capturedNative!({ptyId:null,sessionId:'ses_main',runId:'oc-run',generation:1,eventId:`o${String(n).padStart(16,'0')}`,observerSource:'opencode-hook',eventName:'Notification',state:'unknown',timestamp:1,detail:{type:'notification',data:{notificationType:`opencode_${status}`}}} as any)
+    for(const [n,status,activity] of [[1,'busy','working'],[2,'idle','idle'],[3,'permission','waiting_permission'],[4,'question','waiting_input'],[5,'retry','working'],[6,'error','error'],[7,'future','unknown']] as const) {
+      send(n,status)
+      expect(handler).toHaveBeenLastCalledWith(expect.anything(),{observation:'active',activity})
+    }
+    send(2,'busy')
+    expect(store.observationFor({runId:'oc-run',generation:1})).toEqual({observation:'active',activity:'unknown'})
+    expect(notice).not.toHaveBeenCalled()
+    send(8,'permission');vi.advanceTimersByTime(180_000)
+    expect(store.observationFor({runId:'oc-run',generation:1})).toEqual({observation:'active',activity:'waiting_permission'})
+    send(9,'question');vi.advanceTimersByTime(180_000)
+    expect(store.observationFor({runId:'oc-run',generation:1})).toEqual({observation:'active',activity:'waiting_input'})
+    send(10,'error');vi.advanceTimersByTime(180_000)
+    expect(store.observationFor({runId:'oc-run',generation:1})).toEqual({observation:'active',activity:'error'})
+    for(let i=10;i<2060;i++)send(i,'busy')
+    send(2060,'idle')
+    expect(store.observationFor({runId:'oc-run',generation:1})).toEqual({observation:'active',activity:'idle'})
+    send(2061,'busy');vi.advanceTimersByTime(90_000)
+    expect(store.observationFor({runId:'oc-run',generation:1})).toEqual({observation:'unavailable',activity:'unknown'})
+    expect(()=>capturedNative!({ptyId:null,sessionId:'ses_main',runId:'oc-run',generation:1,eventId:'o0000000000002062',observerSource:'opencode-hook',eventName:'Notification',state:'unknown',timestamp:1,detail:{type:'notification',data:{notificationType:42}}} as any)).not.toThrow()
+    expect(store.observationFor({runId:'oc-run',generation:1})).toEqual({observation:'active',activity:'unknown'})
+  } finally { stop();store.$dispose();vi.useRealTimers() }
+})
+
 // Mock @/api/tauri to capture the onHookEvent callback
 let capturedOnHookEventCallback: ((payload: HookEventPayload) => void) | null = null
 

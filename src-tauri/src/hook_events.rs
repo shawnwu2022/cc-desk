@@ -159,6 +159,7 @@ impl HookPayload {
             observer_source: Some(match validated.source {
                 ObserverSource::ClaudeHook => "claude-hook".to_string(),
                 ObserverSource::CodexHook => "codex-hook".to_string(),
+                ObserverSource::OpencodeHook => "opencode-hook".to_string(),
                 ObserverSource::Unknown => "unknown".to_string(),
             }),
             detail,
