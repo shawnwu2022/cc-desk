@@ -478,6 +478,29 @@ describe('Unified application shell', () => {
 
 // 默认快捷键由普通App真实项目/会话选择发出统一请求，运行关闭仍只请求既有确认流程。
 describe('Task 20 normal app shortcut integration', () => {
+  // 只改变既有会话栏可见性；宽屏/紧凑的选择分开保留，不写配置、不导航、不控制会话。
+  it('App_SidebarShortcutKeepsResponsiveChoices_042', async () => {
+    const shell = useShellStore(), sessions = useUnifiedSessionsStore()
+    const wrapper = render(App); await flushPromises(); shell.setViewportWidth(1280)
+    host.updateConfig.mockClear()
+    const selected = sessions.activeSessionId
+    const press = async () => { const event = new KeyboardEvent('keydown', { key: 'b', code: 'KeyB', ctrlKey: true, bubbles: true, cancelable: true }); window.dispatchEvent(event); await flushPromises(); return event }
+    expect(wrapper.get('[data-session-column]').isVisible()).toBe(true)
+    expect((await press()).defaultPrevented).toBe(true); expect(wrapper.get('[data-session-column]').isVisible()).toBe(false)
+    await press(); expect(wrapper.get('[data-session-column]').isVisible()).toBe(true)
+    await press(); shell.setViewportWidth(800); await flushPromises(); expect(shell.sidebarVisible).toBe(false)
+    await press(); expect(shell.sidebarVisible).toBe(true)
+    shell.setViewportWidth(1280); await flushPromises(); expect(shell.sidebarVisible).toBe(false)
+    await press(); expect(shell.sidebarVisible).toBe(true)
+    shell.setViewportWidth(800); await flushPromises(); expect(shell.sidebarVisible).toBe(true)
+    for (const section of ['settings', 'projects'] as const) {
+      shell.navigate(section); await flushPromises()
+      expect((await press()).defaultPrevented).toBe(false); expect(shell.section).toBe(section); expect(shell.sidebarVisible).toBe(true)
+    }
+    expect(sessions.activeSessionId).toBe(selected); expect(wrapper.emitted('workspace-request')).toBeUndefined()
+    expect(host.updateConfig).not.toHaveBeenCalled()
+  })
+
   it('App_ShortcutUsesUnifiedSelection_032', async () => {
     const sessions = useUnifiedSessionsStore(), shell = useShellStore()
     sessions.sessions = [{ id: 'native-tab:active', renameAvailable: true, projectKey: '/selected', projectPath: '/selected', cli: 'codex', runtime: 'native-cli', title: 'Selected session', processState: 'running', attentionState: 'none', lastActivityAt: 1, archived: false, resumable: false, adapterSessionId: 'active' }]

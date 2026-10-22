@@ -3,7 +3,7 @@ import { useAppStore } from '@/stores/app'
 import { isTextEditingTarget } from '@/utils/keyboardScope'
 
 /** Normal shell action routing. Consequential effects remain with the unified runtime. */
-export function useAppShortcuts(port: { onAction: (action: AppShortcutAction, event: KeyboardEvent) => void }) {
+export function useAppShortcuts(port: { onAction: (action: AppShortcutAction, event: KeyboardEvent) => void; onToggleSidebar?: () => boolean }) {
   const app = useAppStore()
   function handleKeydown(event: KeyboardEvent) {
     if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || event.repeat || document.querySelector('[role="dialog"][aria-modal="true"]')) return
@@ -12,6 +12,14 @@ export function useAppShortcuts(port: { onAction: (action: AppShortcutAction, ev
     const binding = captureShortcut(event)
     if (!binding) return
     const action = APP_SHORTCUT_ACTIONS.find(value => app.shortcutBindings[value] === binding)
+    if (!action && binding === 'Mod+KeyB') {
+      // 侧栏是 Workspace 的局部展示操作，不能抢占终端/编辑器，也不覆盖已保存的绑定。
+      if ([target, document.activeElement].some(element => isTextEditingTarget(element)
+        || element instanceof Element && element.closest('.xterm, .native-cli-terminal, .xterm-container'))
+        || port.onToggleSidebar?.() !== true) return
+      event.preventDefault(); event.stopImmediatePropagation()
+      return
+    }
     // 重命名只由聚焦的会话行认领；窗口捕获不能抢在 xterm/编辑控件之前消费。
     if (!action || action === 'rename') return
     event.preventDefault(); event.stopImmediatePropagation()

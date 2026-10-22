@@ -231,7 +231,11 @@ function shortcutAction(action: AppShortcutAction) {
   shell.navigate('workspace')
   request({ kind: 'menu-action', sessionId: selected.id, action: 'close' })
 }
-const shortcuts = useAppShortcuts({ onAction: shortcutAction })
+const shortcuts = useAppShortcuts({ onAction: shortcutAction, onToggleSidebar: () => {
+  if (shell.section !== 'workspace') return false
+  shell.toggleSidebar()
+  return true
+} })
 
 let disposed = false
 const unlisteners: Array<() => void> = []
