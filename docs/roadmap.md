@@ -35,6 +35,9 @@ gaps, plus a focus-aware sidebar shortcut. No push, merge, version bump or relea
 is authorized by that implementation scope. The shortcut may warrant a feature
 version (0.25.0); version selection remains a separate release decision.
 
+See [the local implementation and validation record](next-version-validation.md)
+for completed commits, retained failures and exact remaining authorization/host gaps.
+
 Retained work is reviewed by source, not blindly merged:
 
 | Material | Current disposition |

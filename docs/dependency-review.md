@@ -21,10 +21,10 @@ reachability evidence is neither an exploit confirmation nor proof of safety.
 | `postcss` 8.5.10 | Attacker-controlled CSS/sourceMappingURL during processing; compiler/build dependencies must be distinguished from rendered runtime. | 8.5.31 |
 | `source-map-js` 1.2.1 | Attacker-controlled indexed source-map offsets; Vue/i18n compiler and PostCSS dependency paths. | 1.2.2 |
 | `ws` 8.20.1 | Fragmented WebSocket input to an exposed server; inspected occurrence is jsdom tooling. | 8.22.0 |
-| `esbuild` 0.21.5 | Development-server advisory; pinned session metadata helper calls `build`, not `serve`. | Separate toolchain batch pending |
-| `vite` 5.4.21 | Dev-server/editor endpoint and platform-specific path prerequisites; default project server uses strict port 1420, without `host: true`. Alternate launches are not certified. | Separate toolchain batch pending |
-| `vitest`, `@vitest/mocker` 3.2.4 | UI/API/mock-server exposure and controlled mock input. Normal project command is `vitest run`; that fact does not certify every optional invocation. | Separate runner migration pending |
-| `tinypool` 1.1.1 | Upstream worker-option RCE gadgets additionally require prototype pollution/controlled options. Presence alone is not an exploit chain. | Remove through compatible runner migration; no cross-major forced override |
+| `esbuild` 0.21.5 | Development-server advisory; pinned session metadata helper calls `build`, not `serve`. | 0.25.12 in batch 2 |
+| `vite` 5.4.21 | Dev-server/editor endpoint and platform-specific path prerequisites; default project server uses strict port 1420, without `host: true`. Alternate launches are not certified. | 6.4.4 in batch 2 |
+| `vitest`, `@vitest/mocker` 3.2.4 | UI/API/mock-server exposure and controlled mock input. Normal project command is `vitest run`; that fact does not certify every optional invocation. | 4.1.12 in batch 3 |
+| `tinypool` 1.1.1 | Upstream worker-option RCE gadgets additionally require prototype pollution/controlled options. Presence alone is not an exploit chain. | Removed by batch 3; no cross-major forced override |
 
 ## Batch 1: compatible Vue/i18n and transitive fixes
 
