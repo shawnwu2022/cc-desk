@@ -2,9 +2,9 @@
 
 基线为 v0.24.0/main `24316ad9069df76f2de669fe7b17eeca2a2228be`。
 实施分支 `feat/next-version-stability`，独立工作树
-`.claude/worktrees/next-version-stability`。本轮只获准本地提交；没有推送、创建 PR、
-合并、发布或修改版本标签。产品版本仍为 0.24.0；因新增快捷键，建议发布决策时评估
-0.25.0，而非现在自动 bump 为规划原称的 0.24.1。
+`.claude/worktrees/next-version-stability`。用户后续已批准候选推送、draft PR、原 CI 和一次最多约 32 runner-minutes 的校准，
+并明确授权验证无问题后合并 main、正式发布。因新增快捷键，本轮准备版本为 0.25.0，
+而非规划原称的纯修复 0.24.1。远端验证结果须按精确 SHA/run/attempt 后续记录。
 
 原获批计划位于另一个保留工作树的
 `../next-version-planning/docs/superpowers/plans/2026-10-22-v0241-stability.md`。
@@ -72,21 +72,22 @@
 
 | 具体操作 / 目标 | 当前确定结果 | 后续最小条件 |
 | --- | --- | --- |
-| 发布候选分支到现有 GitHub 仓库并执行精确源码普通 CI/专项平台检查 | **待授权，未执行**。本轮明确无推送/PR/合并发布授权。历史 v0.24.0 绿色不覆盖本轮依赖、workflow 或产物。 | 明确批准推送准确候选 SHA、创建 draft PR 和运行现有 CI。先普通完整 gate，再 opt-in 校准；不触发正式发布。 |
+| 发布候选分支到现有 GitHub 仓库并执行精确源码普通 CI/专项平台检查 | **已获授权，待执行**。用户已批准先验证后合并 main 并正式发布。历史 v0.24.0 绿色不覆盖本轮依赖、workflow 或产物。 | 准确候选 SHA 的 draft PR 运行原完整 gate 与一次 opt-in 校准；检查全部通过后才合并 main，正式发布仍须新 main 的精确 CI/coverage 与三平台签名。 |
 | hosted 校准与优化收益比较 | **未执行，依赖上项**；新脚本/策略单元负控通过不能代表受控 wall time。原始普通四 harness、16 片、25/30 分钟预算、完整名称/忽略集合和精确 coverage 不变。 | 经核对的候选 title 可带 `[calibrate-rust]`，首次只跑一轮有界采集；先审 raw bytes/source/run/attempt/executable 再离线比较。承诺收益前另批准至少三组可比 control/candidate 的 runner 预算。 |
 | 原始 `pwsh -NoProfile -File ../scripts/windows-rust-tests.ps1 -Action All`，WSK-MSI | **确定 exit 1，测试正文未执行**：`inJob=True elevated=False`，入口报 `Ordinary PowerShell is contained in an external Job; direct native tests are blocked`。这不是自动审批拒绝，也不是 nativeAll 通过。 | 项目许可的独立 Job-free、相应 token/权限目标；不从受限宿主 breakaway、不改门禁/ACL。先记录真实 Probe 再跑原入口。 |
 | D20 官方 `run-real-cli-certification.mjs --config …` | **确定 exit 2 / BLOCKED**：Claude、Codex 均 `AUTHORIZED_TEST_ACCOUNT_UNAVAILABLE`，recordPaths 空；在读取账户/env/binary 前停止，无模型调用。 | 明确授权的独立测试账户、实际四 lane driver/每 CLI 与预算；用户目前禁止未授权登录/付费调用。OpenCode 单独证据矩阵，不伪装成双 CLI D20。 |
 | 安装版 Windows WebView2、CLI/IME/粘贴/resize/多会话 | **未运行**；没有授权隔离用户/profile/目标安装安排，不动用户当前人工测试窗口。普通浏览器和 loader 测试不能代替。 | 专用可丢弃 profile/目标与相应安装/交互准入；保留用户正式版和真实会话。完整原始平台库存及当前三平台 required CI 仍需同源通过。 |
 
-候选稳定后的最小远端操作建议（**未执行**）：将核对过的本地 HEAD 推送到现有
+已获批准的候选远端操作（**尚未执行**）：将核对过的本地 HEAD 推送到现有
 `shawnwu2022/cc-desk` 的 `refs/heads/feat/next-version-stability`（非 force），
 创建 base `main` 的 draft PR，标题带 `[calibrate-rust]`。PR 首轮保留现有所有普通
 CI/专项 workflow，在前四个原 shard 各自完成原始证明和上传后才进行校准；
 8 组总计 16 个精确测试，最多 4 个并行采集，每 pair 8 分钟，额外测量上限约
 32 runner-minutes，另有 artifact/协调耗时，仍受原 30 分钟 job 上限约束。
 这使用已有 GitHub hosted runner 配额，不创建付费模型请求、凭据或外部资源；
-是否产生 GitHub 计费取决于仓库现有配额，不能声称无成本。不会写入 main、tag、
-release、Latest/updater 或自动合并；普通 checks 失败仍阻止准入。
+是否产生 GitHub 计费取决于仓库现有配额，不能声称无成本。候选验证阶段不会写入
+main、tag 或 updater；用户另已批准验证后合并 main、正式发布。普通 checks 失败
+仍阻止准入，正式发布继续使用既有 protected-main promotion，不另建凭据。
 
 D20 最小目标需两套受授权的独立 Claude/Codex 账户及 CLI、真实 Desk/system-terminal
 lane driver，每 CLI 四格（off/on × Desk/系统终端），新鲜 testRoot 内包含 binary/driver/

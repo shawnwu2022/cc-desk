@@ -4,6 +4,22 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
+## [0.25.0]
+
+新增
+
+- Windows/Linux 可用 Ctrl+B、macOS 可用 Cmd+B 折叠或展开会话列表。终端、输入框及已有快捷键绑定优先，不抢占 CLI 输入。
+
+优化
+
+- 更新 Vue 界面及 Tauri/TLS 等原生依赖，保留紧凑控件、已保存设置和应用权限边界。
+- 完善自动回归和可选 CI 耗时测量，不减少必需测试库存。
+
+重要说明
+
+- 真实 CLI 的模型及 Provider 配置、原生会话所有权保持原有语义；可选增强仍取决于受支持的官方接口。
+- 本次源码尚未认证登录账号后的模型轮次、D20 Layer-C、原始 native All 或已安装 Windows WebView 验收。部分 Rust 依赖公告仍在核查，不宣称全面安全或永远兼容。
+
 ## [0.24.0]
 
 新增
