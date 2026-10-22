@@ -55,7 +55,10 @@ Each original name gets its own exact invocation; launch and complete shutdown
 are included in its duration.
 Raw listing/output hashes and actual executable identity are retained with the
 receipt. `readCalibrationWeights` rereads those logs rather than trusting summary
-counts. Its input plan must come from `verifyBundle`; structural JSON or synthetic
+counts. Both collection and import require one exact original `ok` completion line
+and a unique, complete terminal outer summary. Wrong names, appended partial output,
+truncated summaries and duplicate summaries are rejected even when their recorded
+hashes match. Its input plan must come from `verifyBundle`; structural JSON or synthetic
 parser tests are not authentic measurements.
 
 The 16 predefined names are candidates to remeasure, not evidence that their old

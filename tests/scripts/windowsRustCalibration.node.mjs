@@ -86,6 +86,23 @@ test('RustCalibration_RejectIncompleteOrForeignMeasurements_002', t => {
     return directory;
   });
   assert.deepEqual(readCalibrationWeights(plan, directories, { schema: 1, targets: names }, 'd'.repeat(64)), weights);
+  const first = receipts[0], measurement = first.measurements[0];
+  const originalOutput = fs.readFileSync(path.join(directories[0], measurement.logs.execution), 'utf8');
+  for (const malformed of [
+    originalOutput.replace(measurement.name, 'fixture::Unrelated'),
+    originalOutput + 'TRAILING PARTIAL OUTPUT\n',
+    originalOutput.replace('finished in 1.50s', 'finished in'),
+    originalOutput + originalOutput,
+  ]) {
+    // 同时更新摘要 hash，避免仅证明既有字节校验；实际执行名称和终止记录也必须成立。
+    fs.writeFileSync(path.join(directories[0], measurement.logs.execution), malformed);
+    measurement.logHash = hash(malformed);
+    fs.writeFileSync(path.join(directories[0], 'calibration-result.json'), JSON.stringify(first));
+    assert.throws(() => readCalibrationWeights(plan, directories, { schema: 1, targets: names }, 'd'.repeat(64)), /exact original completion|terminal outer summary/);
+  }
+  fs.writeFileSync(path.join(directories[0], measurement.logs.execution), originalOutput);
+  measurement.logHash = hash(originalOutput);
+  fs.writeFileSync(path.join(directories[0], 'calibration-result.json'), JSON.stringify(first));
   fs.appendFileSync(path.join(directories[0], 'logs/0-execution.log'), 'changed');
   assert.throws(() => readCalibrationWeights(plan, directories, { schema: 1, targets: names }, 'd'.repeat(64)), /logs changed/);
 });

@@ -24,6 +24,16 @@ export function calibrationGroups(value) {
   [...names].sort().forEach((name, index) => groups[index % groups.length].push(name));
   return groups;
 }
+// 汇总计数不证明目标真实完成；采集与导入必须拒绝错名、嵌套摘要或尾部残缺。
+function exactPassedResult(output, name) {
+  const text = output.replaceAll('\r\n', '\n');
+  const summaries = [...text.matchAll(/^test result:/gm)];
+  const terminal = /^test result: ok\. \d+ passed; \d+ failed; \d+ ignored; \d+ measured; \d+ filtered out; finished in \d+(?:\.\d+)?s\s*$/m.exec(text);
+  requireThat(summaries.length === 1 && terminal && !text.slice(terminal.index + terminal[0].length).trim(), 'terminal outer summary required');
+  const completed = [...text.matchAll(/^test (.+) \.\.\. (.+)$/gm)];
+  requireThat(completed.length === 1 && completed[0][1] === name && completed[0][2] === 'ok', 'exact original completion required');
+  return parseLibtestResult(text);
+}
 export function calibrationWeights(plan, receipts, targets, targetHash) {
   const groups = calibrationGroups(targets), weights = Object.create(null);
   requireThat(/^[a-f0-9]{64}$/.test(targetHash ?? ''), 'target file hash required');
@@ -77,7 +87,7 @@ export function readCalibrationWeights(plan, directories, targets, targetHash) {
     for (const m of r.measurements) {
       const listed = read(directory, m.logs?.selected, 64 * 1024), output = read(directory, m.logs?.execution, 64 * 1024 * 1024);
       requireThat(digest(listed) === m.listingHash && digest(output) === m.logHash, 'raw measurement logs changed');
-      const inventory = parseLibtestListing(listed.toString('utf8')), result = parseLibtestResult(output.toString('utf8'));
+      const inventory = parseLibtestListing(listed.toString('utf8')), result = exactPassedResult(output.toString('utf8'), m.name);
       requireThat(inventory.length === 1 && inventory[0].type === 'test' && inventory[0].name === m.name
         && Object.entries(result).every(([key, value]) => m.result?.[key] === value), 'raw original name/result differs');
     }
@@ -163,7 +173,7 @@ export async function runCalibration(options = {}) {
       });
       measurement.exitCode = invocation.exitCode; measurement.durationSeconds = invocation.durationSeconds;
       measurement.watchdog = { timedOut: invocation.timedOut, outputIncomplete: invocation.outputIncomplete };
-      measurement.result = parseLibtestResult(invocation.output);
+      measurement.result = exactPassedResult(invocation.output, name);
       measurement.logHash = digest(fs.readFileSync(path.join(output, executionPath)));
       const r = measurement.result;
       requireThat(invocation.exitCode === 0 && !invocation.error && !invocation.outputIncomplete && r.passed === 1 && r.failed === 0 && r.ignored === 0 && r.measured === 0 && r.filteredOut === h.full.length - 1, 'calibration requires one actual passed original test and complete exit');
