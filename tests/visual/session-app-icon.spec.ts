@@ -1,5 +1,11 @@
-import { test, expect } from '@playwright/test'
+import { test, expect, type Page } from '@playwright/test'
 import { expandFixtureProjects, clearFixtureSetupFocus } from './fixtureActions'
+
+// 经真实 Vite 浏览器导入核对精确品牌资源；SVG 内联与文件 URL 不改变图标身份。
+async function iconResource(page: Page, cli: string, gui: string) {
+  const file = cli + (cli === 'opencode' && gui === 'dark' ? '-dark' : '')
+  return page.evaluate(async pathname => (await import(pathname)).default as string, `/src/assets/icons/cli/${file}.svg?import`)
+}
 
 for (const gui of ['light', 'dark']) test(`compact tool support brightness ${gui}`, async ({ page }, testInfo) => {
   await page.goto(`/__visual__/?scenario=launch-configurations&gui=${gui}&locale=zh`)
@@ -18,7 +24,7 @@ for (const gui of ['light', 'dark']) test(`compact tool support brightness ${gui
   }
   const opencode = group.locator('[data-cli-support="opencode"]')
   const image = opencode.locator('.cli-app-icon__image:visible')
-  await expect(image).toHaveAttribute('src', new RegExp(gui === 'dark' ? 'opencode-dark\\.svg' : 'opencode\\.svg'))
+  await expect(image).toHaveAttribute('src', await iconResource(page, 'opencode', gui))
   await expect(image).toHaveCSS('filter', 'none')
   await page.mouse.move(0, 0)
   await page.keyboard.press('Escape')
@@ -54,13 +60,14 @@ for (const gui of ['light', 'dark']) for (const cli of ['claude', 'codex', 'open
     const permission = page.locator('[data-session-row="visual-status-8"] .session-app-icon')
     const waiting = page.locator('[data-session-row="visual-status-7"] .session-app-icon')
     const closed = page.locator('[data-session-row="visual-status-16"] .session-app-icon')
+    const expectedIcon = await iconResource(page, cli, gui)
     for (const row of await rows.all()) {
       await expect(row.locator('.session-app-icon')).toHaveCount(1)
       await expect(row).toHaveCSS('grid-template-columns', /20px .* 38px 20px 20px$/)
       await expect(row.locator('.session-app-icon')).toHaveCSS('width', '20px')
       const image = row.locator('.cli-app-icon__image:visible')
       await expect(image).toHaveCount(1)
-      await expect(image).toHaveAttribute('src', new RegExp(cli + (cli === 'opencode' && gui === 'dark' ? '-dark' : '') + '\\.svg'))
+      await expect(image).toHaveAttribute('src', expectedIcon)
       expect(await image.evaluate(el => (el as HTMLImageElement).naturalWidth)).toBe(16)
     }
     await expect(idle.locator('[data-session-badge]')).toHaveCount(cli === 'claude' ? 0 : 1)
@@ -122,11 +129,12 @@ for (const gui of ['light', 'dark']) for (const cli of ['claude', 'codex', 'open
 for (const gui of ['light', 'dark']) test(`OpenCode actual icon surfaces ${gui}`, async ({ page }, testInfo) => {
   const errors: string[] = []
   page.on('pageerror', error => errors.push(error.message))
+  // 本用例明确启用 OpenCode；默认禁用不能被当成创建菜单缺失或真实用户偏好。
+  await page.addInitScript(() => localStorage.setItem('cc-desk-cli-support-v1', JSON.stringify({ claude: true, codex: true, opencode: true })))
   await page.route('**/*', route => new URL(route.request().url()).origin === new URL(testInfo.project.use.baseURL!).origin ? route.continue() : route.abort())
-  const expected = gui === 'dark' ? 'opencode-dark.svg' : 'opencode.svg'
   const check = async (selector: string) => {
     const image = page.locator(selector).locator('.cli-app-icon__image:visible').first()
-    await expect(image).toHaveAttribute('src', new RegExp(expected.replace('.', '\\.')))
+    await expect(image).toHaveAttribute('src', await iconResource(page, 'opencode', gui))
     await expect(image).toHaveCSS('filter', 'none')
     expect(await image.evaluate(el => (el as HTMLImageElement).naturalWidth)).toBe(16)
     expect(await image.evaluate(el => (el as HTMLImageElement).complete)).toBe(true)
