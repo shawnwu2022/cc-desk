@@ -24,14 +24,16 @@ export function calibrationGroups(value) {
   [...names].sort().forEach((name, index) => groups[index % groups.length].push(name));
   return groups;
 }
-// 汇总计数不证明目标真实完成；采集与导入必须拒绝错名、嵌套摘要或尾部残缺。
+// 子进程可继承 stdout；只认末尾确切父测试的完成行与摘要，拒绝错名或尾部残缺。
 function exactPassedResult(output, name) {
   const text = output.replaceAll('\r\n', '\n');
-  const summaries = [...text.matchAll(/^test result:/gm)];
-  const terminal = /^test result: ok\. \d+ passed; \d+ failed; \d+ ignored; \d+ measured; \d+ filtered out; finished in \d+(?:\.\d+)?s\s*$/m.exec(text);
-  requireThat(summaries.length === 1 && terminal && !text.slice(terminal.index + terminal[0].length).trim(), 'terminal outer summary required');
+  const terminal = [...text.matchAll(/^test result: ok\. \d+ passed; \d+ failed; \d+ ignored; \d+ measured; \d+ filtered out; finished in \d+(?:\.\d+)?s[ \t]*(?:\n|$)/gm)].at(-1);
+  requireThat(terminal && !text.slice(terminal.index + terminal[0].length).trim(), 'terminal outer summary required');
   const completed = [...text.matchAll(/^test (.+) \.\.\. (.+)$/gm)];
-  requireThat(completed.length === 1 && completed[0][1] === name && completed[0][2] === 'ok', 'exact original completion required');
+  const original = completed.filter(line => line[1] === name);
+  requireThat(original.length === 1 && original[0][2] === 'ok' && completed.at(-1) === original[0]
+    && original[0].index < terminal.index
+    && !text.slice(original[0].index + original[0][0].length, terminal.index).trim(), 'exact original completion required');
   return parseLibtestResult(text);
 }
 export function calibrationWeights(plan, receipts, targets, targetHash) {
