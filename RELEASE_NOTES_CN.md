@@ -4,6 +4,26 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
+## [0.24.0]
+
+新增
+
+- OpenCode 与 Claude Code、Codex CLI 一起接入原生会话，支持新建、按确切会话恢复、项目偏好和本地历史；模型及 Provider 配置继续由原 CLI 管理。
+
+修复
+
+- 全新设置默认仅启用 Claude Code，保留已保存的工具偏好。恢复紧凑纯图标明暗开关，OpenCode 开关即时同步历史列表，不停止已打开的终端。
+- 可安全验证来源的 OpenCode 会话通过官方元数据接口改名并回读持久化标题；不可用时隐藏入口。复用统一状态角标，区分空闲、工作、权限等待、问题等待、错误和未知状态。
+- 一致读取 OpenCode SQLite 数据库及 WAL/SHM，支持经过作用域验证的自定义数据库；对不完整和异常来源明确拒绝，不静默丢失较早历史，也不重放结果不确定的会话创建请求。
+- 避免迟到的 Claude Stop 覆盖较新的 SessionStart 身份，保留 Codex 标题同步、确切身份去重、活动筛选及会话列表快捷键焦点修复。
+
+重要说明
+
+- 本次为 0.24.0 正式版，发现更新后仍由你决定是否安装。
+- 保存 OpenCode profile 会更新工作区文档；旧版 CC Desk 可能以 WORKSPACE_INVALID 拒绝读取。历史版本切换不会回滚共享 CLI 设置、会话历史或项目文件。
+- OpenCode 可选活动观察采用已核查的官方 CLI 1.19.0 契约。未知版本跳过该增强，不作为启动前提；不保证所有未来 CLI 均兼容。
+- 本次源码尚未认证登录账号后的模型轮次、D20 Layer-C、原始 native All 或已安装 Windows WebView 验收；本次发布准备未修复既有依赖安全公告。
+
 ## [0.24.0-rc.4]
 
 修复

@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-10-22
+
+### Added
+
+- Promote the reviewed OpenCode native integration, coherent scoped SQLite history and official metadata rename to the stable release alongside Claude Code and Codex CLI.
+
+### Fixed
+
+- Default new settings to Claude Code only while preserving saved choices; retain compact tool brightness and immediate OpenCode history filtering.
+- Keep supported OpenCode activity in the shared badges, retain newer Claude hook identities, and preserve Codex title/history, active filtering and keyboard-focus corrections.
+- Retain the RC4 supervisor registry-convergence regression without changing production ownership, output or ACK contracts.
+
+Stable packages are rebuilt from the exact merged main source with version 0.24.0, full required CI/coverage and three actual updater signatures. Saving an OpenCode profile changes the workspace schema; older versions may reject that workspace. The official OpenCode 1.19.0 optional-observer scope and all disclosed native/model/WebView evidence gaps remain. This preparation does not remediate existing dependency advisories.
+
 ## [0.24.0-rc.4] - 2026-10-22
 
 - Continue the provider defaults, compact switches, immediate OpenCode history visibility, official metadata rename and scoped activity observation from the unpublished rc.3 candidate.

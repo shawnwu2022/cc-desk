@@ -4,6 +4,26 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
+## [0.24.0]
+
+Added
+
+- Use OpenCode alongside Claude Code and Codex CLI for native new sessions, exact-session resume, project preferences and local history, while keeping CLI model and provider settings in the original tools.
+
+Fixed
+
+- Start fresh settings with only Claude Code enabled and retain saved tool preferences. Keep compact icon-only switches and apply OpenCode history visibility immediately without stopping open terminals.
+- Rename eligible OpenCode conversations through the official metadata API, verify the persisted title and hide unavailable rename actions. Show supported activity through the shared session badges, retaining distinct idle, working, permission, question, error and unknown states.
+- Read OpenCode SQLite history coherently with WAL/SHM and honor safely scoped custom databases. Reject incomplete or invalid sources without silently losing older history or replaying an uncertain session-creation request.
+- Keep newer Claude SessionStart identities when delayed Stop events arrive. Retain Codex title synchronization, exact history deduplication, active-session filtering and session-list keyboard focus fixes.
+
+Important
+
+- This is the stable 0.24.0 release. Installation remains your choice when an update is offered.
+- Saving an OpenCode profile updates the workspace document. Older CC Desk versions can reject that document with WORKSPACE_INVALID; historical-version switching does not roll back shared CLI settings, history or project files.
+- Optional OpenCode activity observation uses the examined official CLI 1.19.0 contract. Unrecognized versions skip it without making it a launch requirement; compatibility with every future CLI is not guaranteed.
+- Account-backed model turns, D20 Layer-C, original native All and installed Windows WebView acceptance have not been certified for this source. Existing dependency advisories are unchanged by this release preparation.
+
 ## [0.24.0-rc.4]
 
 Fixed
