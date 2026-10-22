@@ -40,6 +40,9 @@ exact checkout/source/run/attempt, four original inventories, executable bytes,
 compiler/profile/OS/architecture and actual Job/elevation observations. Calibration
 code and target-file bytes must also match their committed source. An incomplete,
 failed, ignored, timed-out or foreign result cannot supply a weight.
+Those two inputs have explicit LF checkout attributes, verified through a real
+temporary Git index/checkout with `core.autocrlf=true`; Windows newline conversion
+must not make a legitimate checkout fail its exact-blob check.
 
 Calibration is opt-in only: a CI dispatch with `calibrate_rust=true`, or a PR title
 containing `[calibrate-rust]`. The default is false. The existing first four shard

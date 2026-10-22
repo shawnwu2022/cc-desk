@@ -1,6 +1,10 @@
 src-tauri/plugin/scripts/report-hook.sh text eol=lf
 scripts/native-cli/*.mjs text eol=lf
 
+# 校准源码与目标清单直接校对 Git blob，Windows 检出也必须保持原始 LF 字节。
+scripts/windows-rust-calibration.mjs text eol=lf
+scripts/windows-rust-calibration-targets.json text eol=lf
+
 # Reviewed source snapshots are hashed as exact bytes on every platform.
 tests/fixtures/version-history-payload/v0.17.7-installer.nsh -text
 tests/fixtures/version-history-payload/v*-tauri.conf.json -text

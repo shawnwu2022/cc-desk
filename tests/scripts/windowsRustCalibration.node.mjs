@@ -4,7 +4,27 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { calibrationGroups, calibrationEnabled, calibrationWeights, readCalibrationWeights } from '../../scripts/windows-rust-calibration.mjs';
+
+test('RustCalibration_CheckoutPreservesExactSource_004', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rust-calibration-checkout-'));
+  t.after(() => { assert.equal(path.dirname(root), os.tmpdir()); fs.rmSync(root, { recursive: true, force: true }); });
+  const git = (...args) => {
+    const result = spawnSync('git', ['-C', root, '-c', 'core.autocrlf=true', ...args], { windowsHide: true, maxBuffer: 1024 * 1024 });
+    assert.equal(result.status, 0, result.stderr?.toString());
+    return result.stdout;
+  };
+  git('init', '--quiet');
+  const files = ['scripts/windows-rust-calibration.mjs', 'scripts/windows-rust-calibration-targets.json'];
+  fs.mkdirSync(path.join(root, 'scripts'));
+  for (const file of ['.gitattributes', ...files]) fs.copyFileSync(new URL(`../../${file}`, import.meta.url), path.join(root, file));
+  git('add', '--', '.gitattributes', ...files);
+  for (const file of files) fs.unlinkSync(path.join(root, file));
+  git('checkout-index', '--all');
+  // 真正经过 Windows 换行规则后仍须匹配 Git blob，不能把合法检出错判为源码篡改。
+  for (const file of files) assert.deepEqual(fs.readFileSync(path.join(root, file)), git('show', `:${file}`));
+});
 
 test('RustCalibration_OptInKeepsOriginalGate_003', () => {
   const yaml = fs.readFileSync(new URL('../../.github/workflows/ci.yml', import.meta.url), 'utf8').replaceAll('\r\n', '\n');
