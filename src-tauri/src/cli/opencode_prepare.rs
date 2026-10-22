@@ -647,6 +647,8 @@ mod tests {
                         std::thread::sleep(Duration::from_millis(5));
                         continue;
                     };
+                    // Winsock 继承 listener 的非阻塞模式，读取超时不会恢复阻塞。
+                    stream.set_nonblocking(false).unwrap();
                     stream
                         .set_read_timeout(Some(Duration::from_secs(1)))
                         .unwrap();
@@ -741,6 +743,8 @@ mod tests {
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
                     Err(error) => panic!("fixture accept: {error}"),
                 };
+                // redirect 的后续 accept 也必须保留有界的阻塞读取。
+                stream.set_nonblocking(false).unwrap();
                 stream
                     .set_read_timeout(Some(Duration::from_secs(2)))
                     .unwrap();
