@@ -1404,3 +1404,15 @@ The source-file location is documented in the
 [Ubuntu 24.04 release notes](https://documentation.ubuntu.com/release-notes/24.04/);
 [Ubuntu archive verification](https://documentation.ubuntu.com/security/software-integrity/archive-verification/)
 describes the retained APT metadata/package integrity checks.
+
+The next exact-head run `39814265516` completed 244 of 245 original visual cases;
+only `projects-150-percent.png` failed (863 thresholded pixels). Actual/expected
+inspection located the difference in native input/select text, shifted one device
+pixel vertically; other layout and the remaining twelve PNGs passed. A same-host
+Windows Chrome comparison of frozen v0.24.0 source/dependencies and this candidate
+produced identical DOM, computed control styles and four byte-identical first/later
+screenshots. This diagnostic does not certify Linux pixels or exclude a Linux-only
+dependency effect. Failure-only Linux evidence now captures that fixed published
+source and the candidate in the same browser, including control DOM/styles and text
+library versions. It never updates baselines, changes tolerance or admits a failed
+original verification; the original result and all evidence remain required.

@@ -122,6 +122,22 @@ jobs:
           })
           writeFileSync('visual-evidence/candidate-manifest.json', JSON.stringify({ sourceHead: process.env.SOURCE_HEAD, testedCommit: process.env.EVENT_COMMIT, approved: false, entries }, null, 2) + '\n')
           NODE
+      - name: Diagnose native control rasterization against stable source
+        if: ${{ !cancelled() && steps.verify.outcome == 'failure' }}
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          # 固定已发布源码在同一宿主/浏览器上对照；失败不能改变原始 verify 结果。
+          baseline=24316ad9069df76f2de669fe7b17eeca2a2228be
+          directory="$RUNNER_TEMP/ccdesk-visual-stable024"
+          mkdir -p "$directory"
+          git fetch --no-tags --depth=1 origin "$baseline"
+          git archive "$baseline" | tar -x -C "$directory"
+          (cd "$directory" && npm ci)
+          dpkg-query -W fontconfig libfreetype6 libpango-1.0-0 libharfbuzz0b > visual-evidence/text-libraries.txt
+          fc-match 'Noto Sans' > visual-evidence/font-match.txt
+          fc-match 'Noto Sans CJK SC' >> visual-evidence/font-match.txt
+          node scripts/diagnose-visual-controls.mjs "$directory"
       - name: Retain evidence even when verification or capture fails
         if: always()
         uses: actions/upload-artifact@v4
