@@ -4,13 +4,14 @@ import { clearMocks, mockIPC } from '@tauri-apps/api/mocks'
 import { flushPromises } from '@vue/test-utils'
 import { useAppShortcuts } from '@/composables/useAppShortcuts'
 import { useAppStore } from '@/stores/app'
+import { useShellStore } from '@/stores/shell'
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({}), currentMonitor: async () => null }))
 let cleanup: Array<() => void> = []
 beforeEach(() => { setActivePinia(createPinia()); mockIPC(command => command === 'get_app_config' ? { language: 'en', terminalTheme: 'cc-box-light' } : undefined) })
 afterEach(() => { cleanup.splice(0).forEach(fn => fn()); document.body.innerHTML = ''; clearMocks(); useAppStore().$dispose(); vi.restoreAllMocks() })
-function shortcuts() {
+function shortcuts(onToggleSidebar?: () => boolean) {
   const actions: string[] = []
-  cleanup = (useAppShortcuts as any)({ onAction: (action: string) => actions.push(action) }).setupShortcutListeners()
+  cleanup = (useAppShortcuts as any)({ onAction: (action: string) => actions.push(action), onToggleSidebar }).setupShortcutListeners()
   return actions
 }
 function key(key: string, options: KeyboardEventInit = {}, target: EventTarget = window) {
@@ -18,6 +19,42 @@ function key(key: string, options: KeyboardEventInit = {}, target: EventTarget =
   target.dispatchEvent(event); return event
 }
 describe('Normal app shortcut routing', () => {
+  // 捕获层必须把终端/编辑焦点的 Ctrl+B 原样留给所属控件，不能只看事件 target。
+  it.each(['input', 'select', 'textarea.xterm-helper-textarea', 'div[contenteditable=""]', 'div[contenteditable="plaintext-only"]', 'div.xterm', 'div.native-cli-terminal'])('Shortcuts_SidebarRetainsOwnedInput_009 %s', async selector => {
+    const shell = useShellStore()
+    shortcuts(() => { shell.toggleSidebar(); return true }); await flushPromises()
+    const holder = document.createElement('div')
+    holder.innerHTML = selector.startsWith('input') ? '<input>' : selector.startsWith('select') ? '<select><option>One</option></select>'
+      : selector.startsWith('textarea') ? '<textarea class="xterm-helper-textarea"></textarea>'
+      : selector.includes('contenteditable') ? `<div ${selector.slice(4, -1)} tabindex="0"><span>Editable</span></div>`
+      : `<div class="${selector.slice(4)}" tabindex="0"><span>Terminal</span></div>`
+    document.body.append(holder)
+    const focused = holder.firstElementChild as HTMLElement; focused.focus()
+    const received: KeyboardEvent[] = []; focused.addEventListener('keydown', event => received.push(event))
+    const event = key('b', { ctrlKey: true }, focused)
+    expect(event.defaultPrevented).toBe(false); expect(received).toEqual([event]); expect(shell.sidebarVisible).toBe(true)
+    expect(key('b', { ctrlKey: true }).defaultPrevented).toBe(false)
+    expect(shell.sidebarVisible).toBe(true)
+  })
+
+  it('Shortcuts_SidebarHonorsRepeatAndExistingBindings_010', async () => {
+    const shell = useShellStore(), app = useAppStore()
+    const actions = shortcuts(() => { shell.toggleSidebar(); return true }); await flushPromises()
+    expect(key('b', { ctrlKey: true }).defaultPrevented).toBe(true); expect(shell.sidebarVisible).toBe(false)
+    for (const options of [{ repeat: true }, { isComposing: true }, { keyCode: 229 }, { altKey: true }, { shiftKey: true }, { metaKey: true }]) {
+      expect(key('b', { ctrlKey: true, ...options }).defaultPrevented).toBe(false)
+      expect(shell.sidebarVisible).toBe(false)
+    }
+    const consumed = new KeyboardEvent('keydown', { key: 'b', code: 'KeyB', ctrlKey: true, cancelable: true }); consumed.preventDefault(); window.dispatchEvent(consumed)
+    expect(shell.sidebarVisible).toBe(false)
+    const modal = document.createElement('div'); modal.setAttribute('role', 'dialog'); modal.setAttribute('aria-modal', 'true'); document.body.append(modal)
+    expect(key('b', { ctrlKey: true }).defaultPrevented).toBe(false); expect(shell.sidebarVisible).toBe(false); modal.remove()
+    await app.setShortcutBindings({ ...app.shortcutBindings, projects: 'Mod+KeyB' })
+    key('b', { ctrlKey: true }); expect(actions).toEqual(['projects']); expect(shell.sidebarVisible).toBe(false)
+    cleanup.splice(0).forEach(fn => fn())
+    expect(key('b', { ctrlKey: true }).defaultPrevented).toBe(false)
+  })
+
   // 两个平台修饰键都进入统一操作端口，不借道旧PTY、标签或窗口重启。
   it.each(['ctrlKey', 'metaKey'])('Shortcuts_DefaultActions_%s_001', async modifier => {
     const actions = shortcuts(); await flushPromises()

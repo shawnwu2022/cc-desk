@@ -2,6 +2,13 @@
 
 权限配置文件：`src-tauri/capabilities/default.json`
 
+Tauri 2.11.1 升级时同步生成 ACL manifest/schema。上游 `core:app:default`
+新增 `supports_multiple_windows`，`core:window:default` 新增 `activity_name` /
+`scene_identifier`；CC Desk 当前未使用，主窗口显式 deny 这三个权限以保持既有授权面。
+版本管理窗口仍无插件权限。生成 manifest 中出现新接口不等于应用批准了它；
+`tests/config/tauriCapabilities.test.ts` 从实际 manifest 展开 default 并核对 allow/deny，
+它是配置边界证据，不替代安装版 WebView IPC 验收。
+
 ## 查询权限
 
 ### 查看 default 权限集包含哪些命令

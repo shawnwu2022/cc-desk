@@ -737,10 +737,17 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let worker = std::thread::spawn(move || {
             let mut count = 0;
+            let mut redirect_deadline = None;
             loop {
                 let (mut stream, _) = match listener.accept() {
                     Ok(value) => value,
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        if redirect_deadline.is_some_and(|deadline| Instant::now() < deadline) {
+                            std::thread::sleep(Duration::from_millis(5));
+                            continue;
+                        }
+                        break;
+                    }
                     Err(error) => panic!("fixture accept: {error}"),
                 };
                 // redirect 的后续 accept 也必须保留有界的阻塞读取。
@@ -784,8 +791,8 @@ mod tests {
                     break;
                 }
                 listener.set_nonblocking(true).unwrap();
-                // 给意外重定向第二次 POST 留出观察窗口。
-                std::thread::sleep(Duration::from_millis(500));
+                // 同时覆盖迟到的正向对照和禁止重放的负向观察，不只探测一次。
+                redirect_deadline = Some(Instant::now() + Duration::from_secs(2));
             }
             count
         });
@@ -820,6 +827,29 @@ mod tests {
         );
         assert_eq!(worker.join().unwrap(), 1);
         assert_eq!(result.unwrap(), "ses_fixture_1");
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn Opencode_CreationFixtureAcceptsDelayedRedirect_098() {
+        let (base, worker) = mock_creation_server(Duration::ZERO, true);
+        let client = reqwest::blocking::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(3))
+            .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                // 故意晚于旧 fixture 的单次 500ms accept，仍在请求期限内。
+                std::thread::sleep(Duration::from_millis(650));
+                attempt.follow()
+            }))
+            .build()
+            .unwrap();
+        let response = client
+            .post(format!("{base}/session"))
+            .json(&serde_json::json!({}))
+            .send();
+        let count = worker.join().unwrap();
+        assert_eq!(count, 2, "fixture closed before the permitted second POST");
+        assert!(response.unwrap().status().is_success());
     }
 
     #[test]

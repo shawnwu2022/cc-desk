@@ -8,7 +8,11 @@ export function visualFixturePlugin(root: string, enabled: boolean): Plugin {
     config() {
       // Like project names and time, the display version is fixed synthetic data.
       // Ordinary development and production retain the real package identity.
-      if (enabled) return { define: { __APP_VERSION__: JSON.stringify('0.18.1') } }
+      if (enabled) return {
+        define: { __APP_VERSION__: JSON.stringify('0.18.1') },
+        // 保留已审查 fixture 的外部资源加载方式；不改变普通开发或发布构建。
+        build: { assetsInlineLimit: 0 },
+      }
     },
     resolveId(source) {
       if (enabled && source.startsWith('@tauri-apps/')) return resolve(root, 'src/visual/tauriStub.ts')

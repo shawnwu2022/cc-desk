@@ -10,8 +10,13 @@ import en from '@/i18n/locales/en'
 import zh from '@/i18n/locales/zh'
 import SessionStatusIcon from '@/components/sessions/SessionStatusIcon.vue'
 import CliAppIcon from '@/components/sessions/CliAppIcon.vue'
+import claudeIcon from '@/assets/icons/cli/claude.svg'
+import codexIcon from '@/assets/icons/cli/codex.svg'
+import opencodeIcon from '@/assets/icons/cli/opencode.svg'
+import opencodeDarkIcon from '@/assets/icons/cli/opencode-dark.svg'
 import type { SessionVisualState, UnifiedCliKind } from '@/types/unifiedSession'
 
+const iconSources = { claude: claudeIcon, codex: codexIcon, opencode: opencodeIcon, 'opencode-dark': opencodeDarkIcon }
 const body = new DOMWrapper(document.body)
 const mounted: VueWrapper[] = []
 let i18n = createI18n({ legacy: false, locale: 'en', fallbackLocale: 'en', messages: { en, zh } })
@@ -20,6 +25,7 @@ beforeEach(() => {
 })
 afterEach(() => {
   vi.restoreAllMocks()
+  vi.unstubAllGlobals()
   mounted.splice(0).forEach((wrapper) => wrapper.unmount())
   document.body.innerHTML = ''
   document.documentElement.removeAttribute('data-theme')
@@ -154,7 +160,9 @@ describe('SessionIcons', () => {
 
   // 减弱动效的状态转换不保留待播放标记；动画取消也清除一次性过渡。
   it('Status_ReducedTransitionStatic_030', async () => {
-    const media = vi.spyOn(window, 'matchMedia').mockReturnValue({ matches: true } as MediaQueryList)
+    // jsdom 不实现 matchMedia；显式提供边界而不 spy 一个不存在的方法。
+    const media = vi.fn().mockReturnValue({ matches: true } as MediaQueryList)
+    vi.stubGlobal('matchMedia', media)
     const wrapper = mount(SessionStatusIcon, { props: { state: 'working' }, global: { plugins: [i18n] } })
     mounted.push(wrapper)
     await wrapper.setProps({ state: 'completed' })
@@ -229,7 +237,7 @@ describe('SessionIcons', () => {
     expect(trigger.attributes('aria-label')).toBe(label)
     expect(trigger.attributes('tabindex')).toBe('0')
     expect(wrapper.text()).toBe('')
-    expect(wrapper.get('img').attributes('src')).toContain(`/cli/${cli}.svg`)
+    expect(wrapper.get('img').attributes('src')).toBe(iconSources[cli])
     expect(wrapper.get('img').attributes('alt')).toBe('')
     expect(wrapper.get('img').attributes('aria-hidden')).toBe('true')
     await wrapper.get('img').trigger('load')
@@ -274,12 +282,12 @@ describe('SessionIcons', () => {
     expect(wrapper.get('[role="img"]').text()).toBe('CC')
     await wrapper.setProps({ cli: 'codex' })
     expect(wrapper.get('[role="img"]').text()).toBe('')
-    expect(wrapper.get('img').attributes('src')).toContain('/cli/codex.svg')
+    expect(wrapper.get('img').attributes('src')).toBe(codexIcon)
     await wrapper.get('img').trigger('error')
     expect(wrapper.get('[role="img"]').text()).toBe('CX')
     await wrapper.setProps({ cli: 'claude' })
     expect(wrapper.get('[role="img"]').text()).toBe('')
-    expect(wrapper.get('img').attributes('src')).toContain('/cli/claude.svg')
+    expect(wrapper.get('img').attributes('src')).toBe(claudeIcon)
   })
 
   // 切换后旧 DOM 图片的迟到失败不能覆盖当前 CLI 的加载状态。
@@ -292,7 +300,7 @@ describe('SessionIcons', () => {
     oldImage.dispatchEvent(new Event('error'))
     await nextTick()
     expect(wrapper.get('[role="img"]').text()).toBe('')
-    expect(wrapper.get('img').attributes('src')).toContain('/cli/codex.svg')
+    expect(wrapper.get('img').attributes('src')).toBe(codexIcon)
   })
 
   // 六种会话状态切换不会修改旁边 CLI 应用图标或品牌颜色。
@@ -393,7 +401,7 @@ describe('SessionIcons', () => {
       document.documentElement.dataset.theme = theme
       const shown = wrapper.findAll('img').filter(image => getComputedStyle(image.element).display !== 'none')
       expect(shown).toHaveLength(1)
-      expect(shown[0].attributes('src')).toContain(`/cli/${name}.svg`)
+      expect(shown[0].attributes('src')).toBe(iconSources[name])
       expect(getComputedStyle(shown[0].element).filter).toBe('none')
       const svg = new DOMParser().parseFromString(readFileSync(resolve(`src/assets/icons/cli/${name}.svg`), 'utf8'), 'image/svg+xml').documentElement
       expect(svg.getAttribute('viewBox')).toBe('0 0 240 300')

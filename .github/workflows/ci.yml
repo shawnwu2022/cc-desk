@@ -1,6 +1,12 @@
 name: CI
 
 on:
+  workflow_dispatch:
+    inputs:
+      calibrate_rust:
+        type: boolean
+        default: false
+        description: Collect advisory exact-name timings without changing ordinary gates
   pull_request:
   push:
     branches:
@@ -47,7 +53,7 @@ jobs:
         run: npm run test:ci
 
       - name: Run Node policy tests
-        run: node --test tests/scripts/releaseRecovery.node.cjs tests/scripts/nativeReleasePolicy.node.mjs tests/scripts/releaseCoverage.node.mjs tests/scripts/releaseDraftRecovery.node.mjs tests/scripts/windowsNativeValidation.node.mjs tests/scripts/historySignatureFixtures.node.mjs tests/scripts/historyRoundtripBuild.node.mjs tests/scripts/historyRoundtripDriver.node.mjs tests/scripts/historyPayloadPolicy.node.mjs tests/scripts/pasteAcceptance.node.cjs tests/scripts/pasteReleaseGate.node.cjs tests/scripts/pasteTrace.node.cjs tests/scripts/nativeLaunchDiagnostics.node.mjs tests/scripts/releaseBuildAdmission.node.mjs tests/scripts/windowsRustShards.node.mjs tests/scripts/windowsRustShardRunner.node.mjs tests/scripts/ownedJobDrain.node.mjs tests/scripts/ciRustWorkflow.node.mjs tests/scripts/ciBuildMetrics.node.mjs tests/scripts/sessionRenameSafety.node.mjs tests/scripts/opencodeObserver.node.mjs tests/scripts/terminalDropPaths.node.mjs
+        run: node --test tests/scripts/releaseRecovery.node.cjs tests/scripts/nativeReleasePolicy.node.mjs tests/scripts/releaseCoverage.node.mjs tests/scripts/releaseDraftRecovery.node.mjs tests/scripts/windowsNativeValidation.node.mjs tests/scripts/historySignatureFixtures.node.mjs tests/scripts/historyRoundtripBuild.node.mjs tests/scripts/historyRoundtripDriver.node.mjs tests/scripts/historyPayloadPolicy.node.mjs tests/scripts/pasteAcceptance.node.cjs tests/scripts/pasteReleaseGate.node.cjs tests/scripts/pasteTrace.node.cjs tests/scripts/nativeLaunchDiagnostics.node.mjs tests/scripts/releaseBuildAdmission.node.mjs tests/scripts/windowsRustShards.node.mjs tests/scripts/windowsRustShardRunner.node.mjs tests/scripts/windowsRustCalibration.node.mjs tests/scripts/ownedJobDrain.node.mjs tests/scripts/ciRustWorkflow.node.mjs tests/scripts/ciBuildMetrics.node.mjs tests/scripts/sessionRenameSafety.node.mjs tests/scripts/opencodeObserver.node.mjs tests/scripts/terminalDropPaths.node.mjs
 
       - name: Install production startup browser
         run: npx playwright install --with-deps chromium
@@ -347,6 +353,26 @@ jobs:
         with:
           name: windows-rust-shard-${{ matrix.shard }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: src-tauri/target/ci-rust-shard-${{ matrix.shard }}/
+          if-no-files-found: error
+          retention-days: 30
+
+      # 正式准入要求所有 job 成功，校准须留在原 job 内且不得消耗原测试预算。
+      - name: Measure optional exact-name calibration after original evidence
+        if: ${{ matrix.shard < 4 && ((github.event_name == 'workflow_dispatch' && inputs.calibrate_rust == true) || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[calibrate-rust]'))) }}
+        timeout-minutes: 9
+        run: |
+          $calibrationStartMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+          foreach ($group in @([int]${{ matrix.shard }}, ([int]${{ matrix.shard }} + 4))) {
+            node scripts/windows-rust-calibration.mjs run --index $group --job-start-ms "$calibrationStartMs" --in-job "${{ steps.host.outputs.job_free != 'true' }}" --elevated "${{ steps.host.outputs.elevated }}" --artifact-name windows-rust-bundle-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }} --output "src-tauri/target/ci-rust-calibration-pair-${{ matrix.shard }}/group-$group"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - name: Retain advisory calibration receipts and raw output
+        if: ${{ always() && matrix.shard < 4 && ((github.event_name == 'workflow_dispatch' && inputs.calibrate_rust == true) || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[calibrate-rust]'))) }}
+        timeout-minutes: 5
+        uses: ./.github/actions/upload-evidence
+        with:
+          name: windows-rust-calibration-pair-${{ matrix.shard }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: src-tauri/target/ci-rust-calibration-pair-${{ matrix.shard }}/
           if-no-files-found: error
           retention-days: 30
 

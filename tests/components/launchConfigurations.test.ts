@@ -10,6 +10,7 @@ import { useNewSessionDraftStore } from '@/stores/newSessionDraft'
 import { useAppStore } from '@/stores/app'
 import type { CliProfile, ProfilePatch } from '@/types/profile'
 import en from '@/i18n/locales/en'
+import opencodeIcon from '@/assets/icons/cli/opencode.svg'
 import zh from '@/i18n/locales/zh'
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ isMaximized: async () => false, onResized: async () => () => {} }) }))
 const wrappers: VueWrapper[] = []
@@ -71,7 +72,7 @@ it.each(['edit', 'copy'] as const)('LaunchSettings_ObserverSaved_020_%s', async 
 it('LaunchSettings_GroupDefault_001', async () => {
   const w = await render()
   expect(w.findAll('[data-launch-group]').map(group => group.attributes('data-launch-group'))).toEqual(['claude', 'codex', 'opencode'])
-  expect(w.get('[data-launch-group="opencode"] .cli-app-icon__image').attributes('src')).toContain('/cli/opencode.svg')
+  expect(w.get('[data-launch-group="opencode"] .cli-app-icon__image').attributes('src')).toBe(opencodeIcon)
   expect(w.get('[data-launch-row="cc"]').text()).toContain('Default')
   expect(w.get('[data-launch-row="cx"]').text()).toContain('Default')
   expect(w.get('[data-launch-row="cc"]').findAll('[data-launch-edit]')).toHaveLength(1)

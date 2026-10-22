@@ -4,6 +4,22 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
+## [0.25.0]
+
+Added
+
+- Toggle the session list with Ctrl+B on Windows/Linux or Cmd+B on macOS. Terminal input, editing fields and existing shortcut bindings keep priority.
+
+Improved
+
+- Update the Vue interface and native Tauri/TLS dependencies while preserving compact controls, saved settings and application permission boundaries.
+- Strengthen automated regression checks and optional CI timing measurement without reducing the required test inventory.
+
+Important
+
+- Existing CLI model/provider settings and native session ownership remain unchanged. Optional CLI enhancements still depend on supported official interfaces.
+- Account-backed model turns, D20 Layer-C, original native All and installed Windows WebView acceptance have not been certified for this source. Some Rust dependency advisories remain under review; no universal security or compatibility certification is claimed.
+
 ## [0.24.0]
 
 Added

@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-10-22
+
+### Added
+
+- Toggle the session sidebar with Ctrl+B on Windows/Linux or Cmd+B on macOS when workspace focus permits. Editing fields, terminals, IME composition, repeated keydown and existing bindings retain priority; existing wide/compact sidebar states are preserved.
+
+### Improved
+
+- Update Vue/i18n, Vite/esbuild and Vitest while preserving the full discovered test inventory and production browser targets.
+- Update compatible Tauri, TLS, certificate and native dependency patches. Align the JavaScript Tauri API with the Rust core and retain the effective application permission surface with explicit denials for newly unused defaults.
+- Add opt-in source-bound Rust timing calibration with exact executable, test-name and completion verification. Ordinary CI retains the original harness inventory and partition policy.
+
+### Fixed
+
+- Observe the actual OpenCode redirect fixture response with a bounded poll rather than a fixed sleep, without changing production timeout or uncertain-result retry policies.
+- Verify imported icon identity against the actual Vite resource, and explicitly configure OpenCode in isolated browser fixtures. Screenshot baselines and tolerances remain unchanged.
+
+The original native All, account-backed D20 model turns and installed Windows WebView acceptance remain unverified under the existing disclosed-host policy. Dependency upgrades reduce observed npm advisory matches but do not claim all Rust advisories are unreachable or resolved; see docs/dependency-review.md. No hosted CI speedup or universal future CLI compatibility is claimed.
+
 ## [0.24.0] - 2026-10-22
 
 ### Added

@@ -18,14 +18,20 @@ export function estimatedWeight(name) {
   if (/Webview|WebView|Channel_Native|Launch_Native/.test(name)) return 60;
   return 1;
 }
-export function partitionNames(names, count) {
+export function partitionNames(names, count, measuredWeights = {}) {
   unique(names);
   requireThat(Number.isInteger(count) && count >= 1 && count <= 16, 'invalid shard count');
+  // 只有显式离线候选传入实测值；普通 producer/验证仍用原启发式。
+  requireThat(measuredWeights && typeof measuredWeights === 'object' && !Array.isArray(measuredWeights)
+    && [Object.prototype, null].includes(Object.getPrototypeOf(measuredWeights)), 'invalid measured weights');
+  requireThat(Object.entries(measuredWeights).every(([name, seconds]) => names.includes(name)
+    && typeof seconds === 'number' && Number.isFinite(seconds) && seconds > 0 && seconds <= 1200), 'invalid or stale measured weight');
+  const weight = name => Object.hasOwn(measuredWeights, name) ? measuredWeights[name] : estimatedWeight(name);
   const shards = Array.from({ length: count }, () => []), loads = Array(count).fill(0);
-  const sorted = [...names].sort((a, b) => estimatedWeight(b) - estimatedWeight(a) || (a < b ? -1 : a > b ? 1 : 0));
+  const sorted = [...names].sort((a, b) => weight(b) - weight(a) || (a < b ? -1 : a > b ? 1 : 0));
   for (const name of sorted) {
     const index = loads.indexOf(Math.min(...loads));
-    shards[index].push(name); loads[index] += estimatedWeight(name);
+    shards[index].push(name); loads[index] += weight(name);
   }
   shards.forEach(s => s.sort());
   validatePartition(names, shards);

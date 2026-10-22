@@ -565,8 +565,8 @@ pub(crate) fn take_main_config(config: &mut Config) -> Result<WindowConfig, Safe
     Ok(original)
 }
 
-/// Mirrors pinned Tauri 2.10.3 desktop App URL resolution, including its special
-/// index.html base-URL rule. Nonlocal external windows cannot become main here.
+/// 对照已锁定 Tauri 2.11.1 的桌面 App URL 解析，保留 index.html 的基准 URL 特例。
+/// 外部页面不能在这里成为受信任的主窗口。
 fn expected_main_url(config: &Config, window: &WindowConfig, dev: bool) -> Result<Url, SafeError> {
     let WebviewUrl::App(path) = &window.url else {
         return Err(error("FORBIDDEN"));

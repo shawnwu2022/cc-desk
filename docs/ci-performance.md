@@ -1,5 +1,85 @@
 # CI runtime work
 
+## v0.24.0 observed baseline (2026-10-22)
+
+The [source-bound run/job/step ledger](ci-runtime-v0240-baseline.json) was captured
+from GitHub metadata. Workflow intervals below use creation to last update, including
+queue/coordination; job intervals use actual start/end. These distinct sources and
+cache states are observations, not a controlled comparison, p95 or a ten-minute SLA.
+
+| Run/attempt | Source | Workflow interval | Critical observations |
+| --- | --- | ---: | --- |
+| [Stable PR CI 39717281444/1](https://github.com/shawnwu2022/cc-desk/actions/runs/39717281444) | PR head `6229bae`, tested merge `1890c374` | 13:41 | Producer 5:11; shard 6 8:10 |
+| [Stable main CI 39718592492/1](https://github.com/shawnwu2022/cc-desk/actions/runs/39718592492) | `24316ad9069df76f2de669fe7b17eeca2a2228be` | 11:24 | Producer 4:08; shard 6 6:55; aggregate 0:12 |
+| [Stable Release 39718592542/1](https://github.com/shawnwu2022/cc-desk/actions/runs/39718592542) | `24316ad9069df76f2de669fe7b17eeca2a2228be` | 12:20 | Windows 9:35, signed build step 8:15; exact-CI wait 1:35 |
+| [RC4 main CI 39704890833/1](https://github.com/shawnwu2022/cc-desk/actions/runs/39704890833) | `08261b92956f45cdde1740bfee470110f86f4bb4` | 11:25 | Producer 3:39; shard 6 6:26; shard scheduling delay about 0:54 |
+| [RC4 Release 39704890848/1](https://github.com/shawnwu2022/cc-desk/actions/runs/39704890848) | `08261b92956f45cdde1740bfee470110f86f4bb4` | 12:26 | Windows 10:14; signed build step 8:38; exact-CI wait 1:02 |
+
+The stable main producer's 17-second pinned-metadata preparation includes npm
+preparation; it is not all SDK compilation. Its original inventory compilation took
+103 seconds and doctest/inventory step 43 seconds. Shard 6's execution step took
+388 seconds. A late output line from one test is not an isolated duration.
+Removing the entire stable Release CI wait still leaves 10:45 of workflow time;
+rebalancing shards alone cannot establish a complete release below ten minutes.
+
+[PR 43](https://github.com/shawnwu2022/cc-desk/pull/43), head
+`56569595e15fd521f722c2d041726578404729ee`, has reusable calibration and validation
+ideas, but its single-sample timing table belongs to an older 1,361-name library
+inventory and toolchain/source. Its final CI interval was 10:58; the reported 7.3%
+weight estimate is not measured wall-time improvement. Do not merge its old runner
+or timing data over current source/upload-evidence bindings. Any adoption needs new
+exact-source executable/inventory evidence, conservation tests and a controlled
+hosted comparison; absent that evidence, retain the current placement policy.
+
+### Prepared exact-name calibration candidate
+
+The next-version candidate ports PR43's bounded measurement idea, not its stale
+weights or runner. `scripts/windows-rust-calibration.mjs` uses the current
+`verifyBundle` and `executeHarness`, preserving upload-evidence content hashes,
+exact checkout/source/run/attempt, four original inventories, executable bytes,
+compiler/profile/OS/architecture and actual Job/elevation observations. Calibration
+code and target-file bytes must also match their committed source. An incomplete,
+failed, ignored, timed-out or foreign result cannot supply a weight.
+Those two inputs have explicit LF checkout attributes, verified through a real
+temporary Git index/checkout with `core.autocrlf=true`; Windows newline conversion
+must not make a legitimate checkout fail its exact-blob check.
+
+Calibration is opt-in only: a CI dispatch with `calibrate_rust=true`, or a PR title
+containing `[calibrate-rust]`. The default is false. The existing first four shard
+jobs each run two of the eight advisory groups after ordinary execution and original
+evidence upload, with one shared eight-minute measurement window per pair. The
+original 30-minute job cap remains; a long ordinary job may therefore leave too
+little time for calibration, which is failure/incomplete evidence, never a weight.
+No extra skipped job is introduced: the unchanged release policy requires every CI
+job to succeed. At most four calibration processes run concurrently, and optional
+measurement does not debit the original 25-minute shard-execution window.
+This is warm measurement after ordinary work, not the old PR43 fresh-job condition.
+Each original name gets its own exact invocation; launch and complete shutdown
+are included in its duration.
+Raw listing/output hashes and actual executable identity are retained with the
+receipt. `readCalibrationWeights` rereads those logs rather than trusting summary
+counts. Both collection and import require one exact original `ok` completion line
+and a unique, complete terminal outer summary. Wrong names, appended partial output,
+truncated summaries and duplicate summaries are rejected even when their recorded
+hashes match. Its input plan must come from `verifyBundle`; structural JSON or synthetic
+parser tests are not authentic measurements.
+
+The 16 predefined names are candidates to remeasure, not evidence that their old
+durations remain valid. Current ordinary producer/verification calls continue to
+use the original two-argument `partitionNames` policy. A third argument supports
+explicit offline comparisons only, with stale/invalid weights rejected and
+unmeasured names still selected exactly once using the conservative heuristic.
+No measured table is adopted and no net speedup is claimed by this patch.
+
+The ordinary `Rust checks` gate still requires producer, static and all 16 shards;
+calibration is neither native coverage nor release admission. Its failed raw output
+uses the existing immutable upload helper. Hosted execution requires a separately
+authorized candidate push/PR; none has occurred in this local implementation.
+First compare one matched control/candidate pair, then at least three matched pairs
+within an approved runner budget if promising. Preserve source/run/attempt, queue
+and cold/warm distinctions. Retain the current placement unless the approved
+whole-path improvement and regression/runner-budget criteria are actually met.
+
 ## Post-0.23.1 CI efficiency batch (2026-10-19, local patch)
 
 Baseline source is main `37fef8b730660c42f0967fb3e0e0b93809174dd5`.
@@ -1273,3 +1353,101 @@ official CLI turns or installed WebView acceptance.
 Strict `cargo clippy --locked --lib --tests -- -D warnings` and formatting
 also passed for the corrected local source. Fresh hosted CI remains required;
 no result from the failed head is promoted.
+
+### Delayed redirect control (next-version local work)
+
+The current fixture had a separate observation defect: after its first 307 response
+it slept 500ms and performed only one nonblocking accept. A legitimate control
+following the redirect after that point could fail before its own request deadline.
+`Opencode_CreationFixtureAcceptsDelayedRedirect_098` uses actual loopback sockets
+and reqwest's redirect callback to delay that second POST by 650ms within a three-second
+request budget. Before the change it failed with one accepted request instead of two.
+
+Only the fixture now polls until its two-second redirect observation deadline.
+The original no-replay case retains its exact one-POST and unknown-outcome assertions,
+with a longer negative observation window; production redirects/timeouts/retries and
+authorization are unchanged. All eight current OpenCode preparation tests passed
+locally (2.22 seconds, no failures/ignores). This is isolated HTTP/shim evidence,
+not a model-backed CLI or installed WebView result. The independent body-timeout
+coverage candidate remains separate; it is not declared a product defect.
+Formatting and `cargo clippy --locked --lib --tests -- -D warnings` also passed
+for this local fixture revision; no hosted result is inferred.
+
+### Official Ubuntu archive bandwidth (0.25.0 candidate)
+
+PR73 visual run `39808396089`, attempt 1, spent 29m08s installing its unchanged
+browser/font dependencies. Original logs show the Azure Ubuntu archive fetching
+19.5 MB in 9m10s (35.4 kB/s), followed by a delayed Noto download. APT's existing
+official HTTPS fallback fetched the 61.2 MB CJK package in about eight seconds.
+Installation ended at 16:19:29 UTC, but the 30-minute job boundary cancelled
+verification at 16:20:30 UTC. No completed screenshot acceptance exists for that
+attempt; it is not a product assertion failure or a passed visual gate.
+
+The visual job now prefers `https://archive.ubuntu.com/ubuntu` in the ephemeral
+Ubuntu 24.04 runner's existing `ubuntu.sources` URI fields. Suites, components,
+Signed-By, other hosts and repositories remain unchanged. The workflow retains
+the same locked browser, fonts, source/environment evidence, 13 baselines,
+zero-pixel tolerance and 30-minute budget. WSK-MSI system configuration is not
+changed. An extracted-script regression first failed without the step and checks
+LF/CRLF, idempotence, exact host/path matching and preservation of the complete
+APT trust/scope document. Hosted runtime and screenshot success remain required;
+the HTTPS preference alone is not evidence of a ten-minute end-to-end CI result.
+The actual `ubuntu24/20261021.345` image uses the exact
+`mirror+file:/etc/apt/apt-mirrors.txt` reference, with Azure at priority 1 and the
+official HTTPS archive at priority 2, as confirmed by its
+[source configuration script](https://github.com/actions/runner-images/blob/ubuntu24/20261021.345/images/ubuntu/scripts/build/configure-apt-sources.sh)
+and the retained `file:/etc/apt/apt-mirrors.txt Mirrorlist` log lines. Both that
+exact reference and direct Azure URIs are handled; unrelated file references are
+left untouched, and no mirror file is read or rewritten. The additional actual
+image case first failed under the direct-URI-only revision, before correction.
+The source-file location is documented in the
+[Ubuntu 24.04 release notes](https://documentation.ubuntu.com/release-notes/24.04/);
+[Ubuntu archive verification](https://documentation.ubuntu.com/security/software-integrity/archive-verification/)
+describes the retained APT metadata/package integrity checks.
+
+The next exact-head run `39814265516` completed 244 of 245 original visual cases;
+only `projects-150-percent.png` failed (863 thresholded pixels). Actual/expected
+inspection located the difference in native input/select text, shifted one device
+pixel vertically; other layout and the remaining twelve PNGs passed. A same-host
+Windows Chrome comparison of frozen v0.24.0 source/dependencies and this candidate
+produced identical DOM, computed control styles and four byte-identical first/later
+screenshots. This diagnostic does not certify Linux pixels or exclude a Linux-only
+dependency effect. Failure-only Linux evidence now captures that fixed published
+source and the candidate in the same browser, including control DOM/styles and text
+library versions. It never updates baselines, changes tolerance or admits a failed
+original verification; the original result and all evidence remain required.
+
+### Native control comparison after the Vite migration
+
+The temporary same-host diagnostic in [run 39819830345](https://github.com/shawnwu2022/cc-desk/actions/runs/39819830345),
+source `d913b28d0e2bae119b83cc56b3247d02b7e97380`, retained artifact
+`12444840787` (33,743,683 bytes, SHA-256
+`233c3c92699ffcf6b1f4365cea7d6ee24fdc89d4ef0cb3594a122e571e9812ad`).
+All cases used the same Linux browser, fonts, DPR and fixture data:
+
+| Dependency/fixture variant | Actual project PNG SHA-256 |
+| --- | --- |
+| Frozen published 0.24.0 source and dependencies | `2c74784b725e3d92e05e2adda461822a3c72a7f59e19570ccff9337b8d69537d` (exact approved baseline) |
+| Current candidate | `33daf5e067a7334c2ac5d17ab2125849feb39be999437ea62e6230442d6f56ac` |
+| Candidate with Vite 5 and its matching plugin helpers; current Vue compiler/runtime retained | `2c74784b725e3d92e05e2adda461822a3c72a7f59e19570ccff9337b8d69537d` |
+| Candidate with Vue 3.5.33 compiler/runtime; current Vite retained | `33daf5e067a7334c2ac5d17ab2125849feb39be999437ea62e6230442d6f56ac` |
+| Candidate with fixture CSS imports moved earlier | `33daf5e067a7334c2ac5d17ab2125849feb39be999437ea62e6230442d6f56ac` |
+
+All computed control property values and actual font/glyph selections matched.
+The unmodified candidate's 42 stylesheet texts and their order also matched the original source. The
+remaining DOM differences were Vite-generated stylesheet paths and four SVG
+`img.src` values: external URLs under Vite 5 versus data URIs under Vite 6.
+[Vite 6's official asset implementation](https://github.com/vitejs/vite/blob/v6.4.5/packages/vite/src/node/plugins/asset.ts)
+now applies SVG inlining during serve mode, using `build.assetsInlineLimit`.
+
+The explicit visual serve fixture now sets that limit to zero to retain the
+reviewed external-asset loading behavior. Ordinary development and all builds
+retain Vite's default; no production import, CSS, pixel baseline, assertion or
+tolerance changes. Real Vite transform tests first reproduced the unwanted inline
+result, then verify the enabled fixture URL and normal-development inline result.
+The five existing serve/build/mode/flag boundaries also check the resolved limit.
+Fresh complete no-update hosted verification is still required; neither the
+cross-comparison nor that API test explains Chromium's internal text raster logic
+or substitutes for the original screenshot gate. The one-off diagnostic step and
+script are removed after retaining their source-bound evidence, not kept as an
+extra old-dependency installation on future failures.
