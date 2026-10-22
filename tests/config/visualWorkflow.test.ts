@@ -76,16 +76,6 @@ describe.each(lineEndings)('Final visual workflow policy ($name)', ({ value: lin
     expect(source).toContain('VERIFY_OUTCOME: ${{ steps.verify.outcome }}')
     expect(source).toContain('if: always()')
   })
-  it('VisualWorkflow_ControlDiagnosticsCannotAdmitFailure_004', () => {
-    const source = workflow(lineEnding)
-    const step = source.split('      - name: ').find(block => block.startsWith('Diagnose native control rasterization'))
-    expect(step).toBeDefined()
-    expect(step).toContain("steps.verify.outcome == 'failure'")
-    expect(step).toContain('timeout-minutes: 5')
-    expect(step).toContain('24316ad9069df76f2de669fe7b17eeca2a2228be')
-    expect(step).not.toMatch(/update-snapshots|GITHUB_OUTPUT|sudo|continue-on-error/)
-    expect(source).toContain("process.exit(process.env.VERIFY_OUTCOME === 'success' ? 0 : 1)")
-  })
   it('retains traces and failure output and never relaxes production screenshot policy', () => {
     const source = workflow(lineEnding)
     expect(source).toContain('actions/upload-artifact@v4')

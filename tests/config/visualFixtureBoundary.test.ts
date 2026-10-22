@@ -1,11 +1,27 @@
 import { describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { readFileSync, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { visualFixturePlugin } from '../../build/visualFixture'
 
 // 真实插件路由和模块解析必须在普通开发/生产关闭；不调用Vite内部或真实宿主。
 describe('Visual fixture module boundary', () => {
+  it.each([false, true])('VisualGate_ReviewedAssetLoadingIsFixtureOnly_006: enabled=%s', fixture => {
+    const cache = mkdtempSync(join(tmpdir(), 'visual-asset-'))
+    try {
+      const code = execFileSync(process.execPath, ['--input-type=module', '-e', `
+        import { createServer } from 'vite';
+        const server = await createServer({ configFile: 'vite.config.ts', mode: 'visual', cacheDir: process.argv[1],
+          server: { middlewareMode: true, hmr: false, watch: null } });
+        try { console.log((await server.transformRequest('/src/assets/icons/folder.svg?import')).code) }
+        finally { await server.close() }
+      `, cache], { encoding: 'utf8', timeout: 15000, env: { ...process.env, CC_DESK_VISUAL_FIXTURE: fixture ? '1' : '0' } })
+      const url = JSON.parse(code.match(/export default ("[^"\n]*")/)![1]) as string
+      expect(url.startsWith('/src/assets/icons/folder.svg')).toBe(fixture)
+      expect(url.startsWith('data:image/svg+xml,')).toBe(!fixture)
+    } finally { rmSync(cache, { recursive: true, force: true }) }
+  })
   it.each([
     { command: 'serve' as const, mode: 'visual', flag: '1', fixture: true },
     { command: 'serve' as const, mode: 'visual', flag: '0', fixture: false },
@@ -14,13 +30,14 @@ describe('Visual fixture module boundary', () => {
     { command: 'build' as const, mode: 'production', flag: '1', fixture: false },
   ])('VisualGate_VersionIsFrozenOnlyInsideExplicitFixture_005: $command $mode $flag', async ({ command, mode, flag, fixture }) => {
     // Run the actual Vite resolver in Node, independently of jsdom's typed-array realm.
-    const definitions = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', `
+    const resolved = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', `
       import { resolveConfig } from 'vite';
       const config = await resolveConfig({ configFile: 'vite.config.ts', mode: process.argv[2] }, process.argv[1], process.argv[2]);
-      console.log(JSON.stringify(config.define));
+      console.log(JSON.stringify({ definitions: config.define, assetLimit: config.build.assetsInlineLimit }));
     `, command, mode], { encoding: 'utf8', timeout: 10000, env: { ...process.env, CC_DESK_VISUAL_FIXTURE: flag } }))
     const actualVersion = JSON.parse(readFileSync('package.json', 'utf8')).version
-    expect(definitions.__APP_VERSION__).toBe(JSON.stringify(fixture ? '0.18.1' : actualVersion))
+    expect(resolved.definitions.__APP_VERSION__).toBe(JSON.stringify(fixture ? '0.18.1' : actualVersion))
+    expect(resolved.assetLimit).toBe(fixture ? 0 : 4096)
   })
   it('VisualGate_RequiresServeModeAndFlag_001', () => {
     const source = readFileSync('vite.config.ts', 'utf8')

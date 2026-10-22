@@ -26,6 +26,15 @@ Normal `App.vue` and `main.ts` contain no fixture routing. The visual server ref
 normal App/main entry requests, so the fake host graph cannot stand in for the
 product. No release or updater policy changes are involved.
 
+The explicit visual serve mode keeps imported SVG assets as external URLs with
+`build.assetsInlineLimit: 0`, retaining the reviewed Vite 5 fixture loading behavior
+after Vite 6 began inlining SVG during development. Ordinary development and all
+builds retain their default asset handling. This does not alter production imports,
+CSS, screenshot pixels, masks or tolerances. Actual Vite transform tests cover both
+the isolated URL and normal inline result; source-bound same-Linux comparisons and
+the required fresh original screenshot gate are recorded in
+[CI performance](ci-performance.md#native-control-comparison-after-the-vite-migration).
+
 Fixture component tests have a dedicated `vitest.visual.config.ts`; the ordinary
 unit suite excludes `tests/visual/` and keeps its real API/module boundaries.
 Playwright discovers only `*.spec.ts` there.

@@ -1416,3 +1416,38 @@ dependency effect. Failure-only Linux evidence now captures that fixed published
 source and the candidate in the same browser, including control DOM/styles and text
 library versions. It never updates baselines, changes tolerance or admits a failed
 original verification; the original result and all evidence remain required.
+
+### Native control comparison after the Vite migration
+
+The temporary same-host diagnostic in [run 39819830345](https://github.com/shawnwu2022/cc-desk/actions/runs/39819830345),
+source `d913b28d0e2bae119b83cc56b3247d02b7e97380`, retained artifact
+`12444840787` (33,743,683 bytes, SHA-256
+`233c3c92699ffcf6b1f4365cea7d6ee24fdc89d4ef0cb3594a122e571e9812ad`).
+All cases used the same Linux browser, fonts, DPR and fixture data:
+
+| Dependency/fixture variant | Actual project PNG SHA-256 |
+| --- | --- |
+| Frozen published 0.24.0 source and dependencies | `2c74784b725e3d92e05e2adda461822a3c72a7f59e19570ccff9337b8d69537d` (exact approved baseline) |
+| Current candidate | `33daf5e067a7334c2ac5d17ab2125849feb39be999437ea62e6230442d6f56ac` |
+| Candidate with Vite 5 and its matching plugin helpers; current Vue compiler/runtime retained | `2c74784b725e3d92e05e2adda461822a3c72a7f59e19570ccff9337b8d69537d` |
+| Candidate with Vue 3.5.33 compiler/runtime; current Vite retained | `33daf5e067a7334c2ac5d17ab2125849feb39be999437ea62e6230442d6f56ac` |
+| Candidate with fixture CSS imports moved earlier | `33daf5e067a7334c2ac5d17ab2125849feb39be999437ea62e6230442d6f56ac` |
+
+All computed control property values and actual font/glyph selections matched.
+The unmodified candidate's 42 stylesheet texts and their order also matched the original source. The
+remaining DOM differences were Vite-generated stylesheet paths and four SVG
+`img.src` values: external URLs under Vite 5 versus data URIs under Vite 6.
+[Vite 6's official asset implementation](https://github.com/vitejs/vite/blob/v6.4.5/packages/vite/src/node/plugins/asset.ts)
+now applies SVG inlining during serve mode, using `build.assetsInlineLimit`.
+
+The explicit visual serve fixture now sets that limit to zero to retain the
+reviewed external-asset loading behavior. Ordinary development and all builds
+retain Vite's default; no production import, CSS, pixel baseline, assertion or
+tolerance changes. Real Vite transform tests first reproduced the unwanted inline
+result, then verify the enabled fixture URL and normal-development inline result.
+The five existing serve/build/mode/flag boundaries also check the resolved limit.
+Fresh complete no-update hosted verification is still required; neither the
+cross-comparison nor that API test explains Chromium's internal text raster logic
+or substitutes for the original screenshot gate. The one-off diagnostic step and
+script are removed after retaining their source-bound evidence, not kept as an
+extra old-dependency installation on future failures.
