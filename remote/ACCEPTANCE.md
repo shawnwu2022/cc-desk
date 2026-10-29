@@ -1,11 +1,27 @@
 # Remote integration evidence ledger
 
-## Active composition gate: RED (2026-10-29)
+## Restricted Primary DA composition (2026-10-29)
 
-The last committed pipe/journal slice passed173 tests under its explicit task-owned
-test root. That result is historical once the new PTY composition is added. The
-new, uncommitted `actual_owned_pty_uses_the_same_durable_single_writer_without_reply_bypass`
-case fails: HostWritten receipts are returned but the fixed fixture effect is absent;
+The retained real-PTY RED below has turned GREEN through the private production
+query parser and the same writer. The reader holds only an exclusive output
+capability, not a PTY writer; no TEST_ONLY reply payload or reader-side bypass was
+added. The fixed fixture effect is observed once despite duplicate input, then
+seal/root stop/EOF/join are separately observed. Internal replies never allocate
+user sequences or receipts. This is the first static-DA E04/E09 subset, not full
+canonical terminal state, a real AI CLI, remote listener or production admission.
+
+The component uses32 queries/batch and32 logical reply commits per rolling second,
+not32 underlying Write calls or a physical bandwidth guarantee. Stateful replies
+remain unsupported. Backpressure may block synchronous user IO and therefore delay
+queued replies; no general startup/reply deadline, full-pipe progress or IO-retirement
+guarantee is established. Default-rootOS5 and historical86->97 remain OPEN.
+
+### Retained prior RED evidence
+
+The earlier committed pipe/journal slice passed173 tests under its explicit task-owned
+test root. At that prior snapshot the then-uncommitted
+`actual_owned_pty_uses_the_same_durable_single_writer_without_reply_bypass`
+case failed: HostWritten receipts returned but the fixed fixture effect was absent;
 the exact root is still alive,23 output bytes include DA, and no DSR is observed.
 Root stop, output EOF and reader join complete before the failure is reported.
 This does not contradict the limited HostWritten meaning or prove DA is the sole
@@ -15,22 +31,22 @@ runtime cmd fixture's TEST_ONLY direct DA/CPR responses cannot qualify the Host 
 
 The verified native PTY custody wrapper remains default-off, with four scoped cases
 passing and one separately supervised worker intentionally ignored in the parent
-harness. The failing Host test is retained separately and is not a passed/committed
-fix. Do not enable control, bypass its only writer, turn protocol replies into user
-input or claim the current composed workspace is green.
+harness. The prior failure logs remain; the same case now uses the private static-DA
+path above. Do not enable remote control or treat this as full E04/E09 completion.
 
-Next required product work is the existing E04/E09 internal-reply contract: bounded
-canonical parser queries, generation-bound internal capabilities and commit-time
-encoding through the same private writer, separate from user receipts. Stop/unknown
-must invalidate queued replies; only then rerun the retained end-to-end test. Exact
-full-suite results for this snapshot are kept in the external evidence report.
+The initial static-DA subset of the E04/E09 internal-reply contract is now implemented
+and the retained test rerun successfully. Stateful canonical replies and the full
+Host actor remain subsequent product work. The reviewed current workspace passes
+198/198 plus one intentionally ignored supervised worker; strict Clippy/fmt pass.
+These results remain conditional on the explicit task-owned storage root.
 
 A subsequent full runtime run failed the existing20-cycle handle probe (86->97,
 unchanged+4 limit). Its existing SERIAL mutex excludes other test bodies but not
 all harness/lazy process activity; no root cause is established. An added per-cycle
 observation then passed all four job cases, with before91/after90 and twenty90
-samples. This is not a claimed leak fix. The observation stays uncommitted with
-the failing Host link. Typed-PTY scoped4/4 evidence does not waive this additional
+samples. This is not a claimed leak fix. Only that runtime observation stays
+uncommitted; the former failing Host link is now part of the static-DA regression.
+Typed-PTY scoped4/4 evidence does not waive this additional
 runtime qualification gate.
 
 ## Current-main candidate (2026-10-29)

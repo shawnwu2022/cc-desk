@@ -1,5 +1,8 @@
 //! 默认关闭的本地 pipe 写入前置；不提供远程授权、PTY 或启动策略。
 use crate::journal::*;
+#[path = "local_writer_replies.rs"]
+mod replies;
+use replies::{HostOutputHandle, OutputRequest, OutputResult, ReplyState};
 use std::{
     io::Write,
     sync::{
@@ -47,6 +50,7 @@ pub enum Reject {
     Closed,
     Unsupported,
     Thread,
+    Rate,
 }
 #[derive(Debug, PartialEq, Eq)]
 pub enum WriteResult {
@@ -84,9 +88,13 @@ struct Request {
     // 声明在最后，保证元数据/payload/channel 先释放，再归还资格。
     _credit: Arc<Credit>,
 }
+enum Command {
+    Input(Request),
+    Output(OutputRequest),
+}
 #[derive(Clone)]
 pub struct LocalInputHandle {
-    tx: mpsc::SyncSender<Request>,
+    tx: mpsc::SyncSender<Command>,
     target: Arc<Target>,
     device: [u8; 32],
     epoch: u64,
@@ -128,10 +136,12 @@ impl LocalInputHandle {
             _credit: credit,
         };
         after_copy();
-        self.tx.try_send(request).map_err(|e| match e {
-            mpsc::TrySendError::Full(_) => Reject::Full,
-            mpsc::TrySendError::Disconnected(_) => Reject::Closed,
-        })?;
+        self.tx
+            .try_send(Command::Input(request))
+            .map_err(|e| match e {
+                mpsc::TrySendError::Full(_) => Reject::Full,
+                mpsc::TrySendError::Disconnected(_) => Reject::Closed,
+            })?;
         Ok(pending)
     }
     fn check(&self, key: &OperationKey, epoch: u64, len: usize) -> Result<(), Reject> {
@@ -173,11 +183,12 @@ pub struct LocalWriter {
     terminal: Option<Result<(), Reject>>,
 }
 #[derive(Default)]
-struct Hooks {
+struct WriterConfig {
+    replies: Option<Arc<()>>,
     #[cfg(test)]
     after_write: Option<Box<dyn FnOnce() + Send>>,
 }
-impl Hooks {
+impl WriterConfig {
     fn after_write(&mut self) {
         #[cfg(test)]
         if let Some(f) = self.after_write.take() {
@@ -194,7 +205,42 @@ impl LocalWriter {
         epoch: u64,
         key: DigestKey,
     ) -> Result<Self, Reject> {
-        Self::start_with(journal, stdin, target, device, epoch, key, Hooks::default())
+        Self::start_with(
+            journal,
+            stdin,
+            target,
+            device,
+            epoch,
+            key,
+            WriterConfig::default(),
+        )
+    }
+    /// Private backend factory. The reader gets only the output capability;
+    /// this worker alone retains the PTY writer and its immutable exact target.
+    pub(crate) fn start_terminal(
+        journal: Journal,
+        stdin: impl Write + Send + 'static,
+        target: Target,
+        device: [u8; 32],
+        epoch: u64,
+        key: DigestKey,
+    ) -> Result<(Self, HostOutputHandle), Reject> {
+        let context = Arc::new(());
+        let writer = Self::start_with(
+            journal,
+            stdin,
+            target,
+            device,
+            epoch,
+            key,
+            WriterConfig {
+                replies: Some(context.clone()),
+                #[cfg(test)]
+                after_write: None,
+            },
+        )?;
+        let output = HostOutputHandle::new(&writer.handle, context);
+        Ok((writer, output))
     }
     fn start_with(
         mut journal: Journal,
@@ -203,7 +249,7 @@ impl LocalWriter {
         device: [u8; 32],
         epoch: u64,
         key: DigestKey,
-        mut hooks: Hooks,
+        mut config: WriterConfig,
     ) -> Result<Self, Reject> {
         if target.run.is_empty() || target.run.len() > 128 {
             return Err(Reject::Bounds);
@@ -212,7 +258,7 @@ impl LocalWriter {
             run: target.run.as_str().to_owned(),
             ..target
         };
-        let (tx, rx) = mpsc::sync_channel::<Request>(QUEUE);
+        let (tx, rx) = mpsc::sync_channel::<Command>(QUEUE);
         let sealed = Arc::new(AtomicBool::new(false));
         let target = Arc::new(target);
         let handle = LocalInputHandle {
@@ -226,15 +272,27 @@ impl LocalWriter {
         let worker = std::thread::Builder::new()
             .name("cc-local-writer".into())
             .spawn(move || {
+                let mut replies = config.replies.take().map(ReplyState::new);
                 loop {
                     if sealed.load(Ordering::Acquire) {
                         reject_queued(&rx);
                         break;
                     }
-                    let request = match rx.recv_timeout(Duration::from_millis(10)) {
+                    let command = match rx.recv_timeout(Duration::from_millis(10)) {
                         Ok(r) => r,
                         Err(mpsc::RecvTimeoutError::Timeout) => continue,
                         Err(_) => break,
+                    };
+                    let request = match command {
+                        Command::Input(request) => request,
+                        Command::Output(request) => {
+                            let result = match &mut replies {
+                                Some(state) => state.process(&request, &mut stdin, &sealed),
+                                None => OutputResult::Rejected(Reject::Unsupported),
+                            };
+                            let _ = request.reply.try_send(result);
+                            continue;
+                        }
                     };
                     if let Err(reason) = validate(
                         &target,
@@ -256,7 +314,7 @@ impl LocalWriter {
                         }
                         let result = write_once(&mut stdin, &request.bytes);
                         if result == Outcome::HostWritten {
-                            hooks.after_write();
+                            config.after_write();
                         }
                         result
                     });
@@ -324,9 +382,16 @@ impl Drop for LocalWriter {
         self.seal(); /* 不阻塞 Drop，也不把 detach 冒充 join。 */
     }
 }
-fn reject_queued(rx: &mpsc::Receiver<Request>) {
+fn reject_queued(rx: &mpsc::Receiver<Command>) {
     for r in rx.try_iter() {
-        let _ = r.reply.try_send(WriteResult::Rejected(Reject::Sealed));
+        match r {
+            Command::Input(r) => {
+                let _ = r.reply.try_send(WriteResult::Rejected(Reject::Sealed));
+            }
+            Command::Output(r) => {
+                let _ = r.reply.try_send(OutputResult::Rejected(Reject::Sealed));
+            }
+        }
     }
 }
 fn validate(
@@ -366,6 +431,8 @@ fn digest(key: &DigestKey, operation: &OperationKey, epoch: u64, bytes: &[u8]) -
 }
 fn write_once(stdin: &mut impl Write, bytes: &[u8]) -> Outcome {
     let mut written = 0;
+    // Bound retry-loop CPU, not the duration of a synchronous native call.
+    let mut interrupted_left = 16;
     while written < bytes.len() {
         match stdin.write(&bytes[written..]) {
             Ok(0) => {
@@ -376,7 +443,10 @@ fn write_once(stdin: &mut impl Write, bytes: &[u8]) -> Outcome {
                 };
             }
             Ok(n) => written += n,
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted && interrupted_left > 0 => {
+                interrupted_left -= 1;
+                continue;
+            }
             Err(_) => {
                 return if written == 0 {
                     Outcome::Unknown
@@ -392,6 +462,9 @@ fn write_once(stdin: &mut impl Write, bytes: &[u8]) -> Outcome {
         Outcome::HostWritten
     }
 }
+#[cfg(all(test, windows))]
+#[path = "local_writer_reply_tests.rs"]
+mod reply_tests;
 #[cfg(all(test, windows))]
 #[path = "local_writer_tests.rs"]
 mod tests;

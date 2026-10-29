@@ -3,7 +3,16 @@
 In the default feature profile, TerminalParser consumes the explicit vendored
 vte0.15.0 path with std only; no registry fallback or ansi/log feature is enabled.
 Official package checksum/licenses and patch provenance are in
-remote/vendor/vte/CC-DESK-PROVENANCE.md. No real PTY is attached.
+remote/vendor/vte/CC-DESK-PROVENANCE.md. The default parser does not own a PTY.
+
+TerminalQueries is a separate bounded, persistent reply-only syntax adapter. It
+returns only typed Primary DA for complete ESC[c/ESC[0c, never arbitrary reply
+payloads. All other queries remain unanswered; it does not model canonical cursor,
+color or dimensions, and it does not change TerminalCore control eligibility.
+It limits feeds to16384 bytes and queries to32/batch before returning anything;
+oversize/OSC overflow/query overflow become sticky with their original safe code.
+The Host private writer consumes these events under its own activation/rate/stop
+checks and performs all actual IO. No clipboard/navigation/native event is executed.
 
 The std parser budgets4096 OSC payload bytes before append, including otherwise
 ignored controls/separators.4097 marks overflow, clears retained bytes, discards raw

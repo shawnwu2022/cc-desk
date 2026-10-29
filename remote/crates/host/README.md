@@ -2,7 +2,8 @@
 
 This backend-only crate stores bounded operation metadata, never terminal input,
 argv/env, session titles or model output. It has no listener, endpoint enrollment,
-grant validation, PTY, automatic retry or desktop integration. `run_once` requires a
+grant validation, automatic retry or desktop integration. The journal owns no PTY;
+the default-off writer adapter accepts a backend-owned IO stream. `run_once` requires a
 trusted backend actor to supply an already-authorized exact OperationKey and keyed
 request digest; its callback is not a network tool-execution API. HostWritten records
 Host write acknowledgement, not CLI completion. Shared wire DTO freeze remains E01.
@@ -82,12 +83,38 @@ never automatic repetition. HostWritten still means only the Host write complete
 
 Fixed Windows10 pipe/SQLite tests cover duplicate/lost feedback, changed bytes,
 identity/epoch/size refusal, seal, queue pressure and post-effect storage failure.
-Resize and terminal replies remain Unsupported; there is no PTY, remote grant,
+Resize and the user-facing raw terminal-reply entry remain Unsupported; there is no remote grant,
 network listener or active-desktop migration. Seal requests refusal and cannot undo
 an already-started write. Drop requests seal but does not certify thread retirement;
 the backend must stop its owned process and observe actual thread/IO completion.
 This single-journal writer is not the future shared multi-session actor and does
 not establish cross-session progress or a general synchronous-write deadline.
+
+### Restricted internal Primary DA replies
+
+The private start_terminal factory mints one non-Clone output capability for the
+immutable target and a fresh opaque parser activation. Its feed(&mut self) requires
+an exclusive producer borrow; the reader receives no PTY writer and cannot submit
+reply bytes. Actual output becomes a typed Primary DA event through the persistent
+patched-vte adapter. The single worker validates activation, complete batch and
+budgets, then encodes static ESC[?6c at its atomic commit point. This matches the
+locked Alacritty primary-identity response, not a full VT compatibility attestation.
+
+Limits:16384 bytes/feed,32 queries/batch,32 logical reply commits/rolling second,
+5 response bytes/query. Input/output share8 slots and9 active/result credits.
+These do not mean32 native Write calls or physical160B/s. Internal replies have no
+user operation, sequence, journal fsync pair or ReceiptEnvelope. Lost results never
+authorize retry. Parser/rate exhaustion or partial/unknown IO seals the writer.
+Stop discards uncommitted replies; stop after part of a batch reports Partial.
+Already committed IO still needs owned termination/observation before any new
+generation is admitted. The shared write loop permits at most16 Interrupted retries
+per logical write, then Unknown/Partial without repeating already written bytes.
+This bounds retry-loop CPU, not a blocked native Write/flush or Windows destruction.
+
+A blocked user write can still delay a queued DA reply. Full-pipe startup/global
+progress, stateful DSR/color/size replies, canonical display state and complete
+E04/E09 remain OPEN. This reply-only parser executes no clipboard, title, URI, file
+or unknown native events. The default-off remote/control gate is unchanged.
 
 The internal schema is now version2. New databases persist independent admission and
 settled floors plus the latest bounded ACK witness. Existing version1 databases are

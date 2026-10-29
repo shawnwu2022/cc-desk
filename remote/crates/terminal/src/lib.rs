@@ -7,6 +7,7 @@ mod budget;
 #[cfg(feature = "experimental-emulator")]
 mod emulator;
 mod parser;
+mod queries;
 
 pub use budget::OSC_PAYLOAD_LIMIT;
 #[cfg(feature = "experimental-emulator")]
@@ -15,3 +16,4 @@ pub use emulator::{
     TerminalCoreError, TerminalEventSink,
 };
 pub use parser::{TerminalFault, TerminalParser, TerminalSafeCode};
+pub use queries::{TerminalQueries, TerminalQuery};

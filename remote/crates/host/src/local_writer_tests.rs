@@ -122,6 +122,137 @@ fn next(sequence: u64) -> OperationKey {
     k.operation = [sequence as u8; 16];
     k
 }
+
+#[test]
+fn actual_owned_pty_uses_the_same_durable_single_writer_without_reply_bypass() {
+    if !supervision::run(
+        "actual_owned_pty_uses_the_same_durable_single_writer_without_reply_bypass",
+    ) {
+        return;
+    }
+    use cc_desk_native_runtime::{BackendPtyLaunch, NativeOwnedPtyRun, NativePtySize};
+    use std::io::Read;
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("public-pty-effects");
+    let executable = std::env::current_exe()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("local-writer-fixture.exe");
+    let recipe = BackendPtyLaunch::from_backend_recipe(
+        executable,
+        dir.path().to_owned(),
+        vec!["TEST_ONLY_PIPE".into(), marker.as_os_str().to_owned()],
+        Vec::new(),
+    )
+    .unwrap();
+    let end = Instant::now() + Duration::from_secs(6);
+    let mut run =
+        NativeOwnedPtyRun::launch(recipe, NativePtySize::new(24, 80).unwrap(), end).unwrap();
+    let mut output = run.take_reader().unwrap();
+    let journal = Journal::open(&dir.path().join("journal.sqlite")).unwrap();
+    let (mut writer, mut output_capability) = LocalWriter::start_terminal(
+        journal,
+        run.take_writer().unwrap(),
+        key().target(),
+        key().device,
+        9,
+        DigestKey::from_backend_bytes([0x5a; 32]),
+    )
+    .unwrap();
+    let (done_tx, done_rx) = mpsc::sync_channel(1);
+    let reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let mut buf = [0; 4096];
+        let mut forwarding = true;
+        // Reader owns no writer and supplies no reply bytes. It forwards actual
+        // output through the private production parser capability; after seal it
+        // only drains to real EOF, never reopens a parser or input route.
+        let result = (|| {
+            loop {
+                let n = output.read(&mut buf)?;
+                if n == 0 {
+                    break Ok(bytes);
+                }
+                if bytes.len() + n > 65536 {
+                    break Err(std::io::Error::other("PUBLIC_TEST_ONLY_OUTPUT_CAP"));
+                }
+                bytes.extend_from_slice(&buf[..n]);
+                if forwarding {
+                    match output_capability.feed(buf[..n].to_vec()) {
+                        Ok(pending) => match pending.wait(Duration::from_secs(1)) {
+                            Ok(OutputResult::Processed { .. }) => {}
+                            Ok(OutputResult::Rejected(Reject::Sealed)) => forwarding = false,
+                            _ => {
+                                break Err(std::io::Error::other(
+                                    "PUBLIC_TEST_ONLY_OUTPUT_NOT_ACCEPTED",
+                                ));
+                            }
+                        },
+                        Err(Reject::Sealed) => forwarding = false,
+                        Err(_) => {
+                            break Err(std::io::Error::other("PUBLIC_TEST_ONLY_OUTPUT_REFUSED"));
+                        }
+                    }
+                }
+            }
+        })();
+        let _ = done_tx.send(result);
+    });
+    assert!(run.take_writer().is_none());
+    let handle = writer.handle();
+    for _ in 0..2 {
+        let reply = handle
+            .submit(key(), 9, b"PUBLIC_TEST_ONLY\r".to_vec())
+            .unwrap()
+            .wait(Duration::from_secs(1))
+            .unwrap();
+        assert!(matches!(
+            reply,
+            WriteResult::Receipt(ReceiptEnvelope {
+                outcome: Outcome::HostWritten,
+                receipt_proof: Some(_),
+                ..
+            })
+        ));
+    }
+    // Receipt above is not CLI completion; observe the independent public fixture.
+    let effect_end = Instant::now() + Duration::from_secs(2);
+    while !marker.exists() && Instant::now() < effect_end {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    std::thread::sleep(Duration::from_millis(25));
+    let effect = std::fs::read(&marker).ok();
+    let root_before_stop = run.try_wait_root().unwrap();
+    writer.seal();
+    assert!(matches!(
+        handle.submit(next(2), 9, b"PUBLIC_TEST_ONLY\r".to_vec()),
+        Err(Reject::Sealed)
+    ));
+    joined(&mut writer);
+    assert_ne!(run.stop_root_until(end).unwrap().exit_code, 90);
+    drop(run);
+    let output = done_rx
+        .recv_timeout(end.saturating_duration_since(Instant::now()))
+        .unwrap()
+        .unwrap();
+    while !reader.is_finished() {
+        assert!(Instant::now() < end);
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    reader.join().unwrap();
+    assert!(Instant::now() < end);
+    assert_eq!(
+        effect.as_deref(),
+        Some(&b"x"[..]),
+        "fixed PTY effect not observed: root_before_stop={root_before_stop:?}; captured_bytes={}; dsr={}; da={}; cleanup_root_eof_join=true",
+        output.len(),
+        output.windows(4).any(|x| x == b"\x1b[6n"),
+        output.windows(3).any(|x| x == b"\x1b[c") || output.windows(4).any(|x| x == b"\x1b[0c")
+    );
+}
 fn effects(path: &Path, count: usize) {
     let end = Instant::now() + Duration::from_secs(2);
     loop {
@@ -167,7 +298,9 @@ fn unit_compacts_envelopes_before_queue() {
     request.run = oversized;
     let old_run = request.run.as_ptr();
     let _pending = source.submit(request, 9, payload).unwrap();
-    let compact = rx.try_recv().unwrap();
+    let Command::Input(compact) = rx.try_recv().unwrap() else {
+        panic!("expected user input");
+    };
     assert_ne!(
         compact.bytes.as_ptr(),
         old_payload,
@@ -287,7 +420,7 @@ fn unit_concurrent_full_submissions_never_allocate_before_capacity_admission() {
     assert_eq!(returned, 20);
 }
 
-fn unit_source() -> (LocalInputHandle, mpsc::Receiver<Request>) {
+fn unit_source() -> (LocalInputHandle, mpsc::Receiver<Command>) {
     let (tx, rx) = mpsc::sync_channel(QUEUE);
     (
         LocalInputHandle {
@@ -309,7 +442,9 @@ fn unit_credit_covers_unread_and_consumed_but_retained_feedback() {
         let p = source
             .submit(next(sequence), 9, vec![b'x'; MAX_INPUT])
             .unwrap();
-        let request = rx.try_recv().unwrap();
+        let Command::Input(request) = rx.try_recv().unwrap() else {
+            panic!("expected user input");
+        };
         request
             .reply
             .try_send(WriteResult::Rejected(Reject::Unsupported))
@@ -338,7 +473,9 @@ fn unit_credit_covers_unread_and_consumed_but_retained_feedback() {
     drop(pending);
     assert_eq!(source.credits.used.load(Ordering::Acquire), 0);
     let p = source.submit(key(), 9, b"x\n".to_vec()).unwrap();
-    let request = rx.try_recv().unwrap();
+    let Command::Input(request) = rx.try_recv().unwrap() else {
+        panic!("expected user input");
+    };
     drop(p);
     assert_eq!(
         source.credits.used.load(Ordering::Acquire),
@@ -439,11 +576,12 @@ fn actual_pipe_guard_bounds_and_queue_are_fail_closed() {
         key().device,
         9,
         DigestKey::from_backend_bytes([0x5a; 32]),
-        Hooks {
+        WriterConfig {
             after_write: Some(Box::new(move || {
                 tx.send(()).unwrap();
                 wait.recv_timeout(Duration::from_secs(2)).unwrap();
             })),
+            ..WriterConfig::default()
         },
     )
     .unwrap();
@@ -575,8 +713,9 @@ fn actual_writer_panic_retains_terminal_join_error_and_unknown_intent() {
         key().device,
         9,
         DigestKey::from_backend_bytes([0x5a; 32]),
-        Hooks {
+        WriterConfig {
             after_write: Some(Box::new(|| panic!("TEST_ONLY_AFTER_REAL_PIPE_WRITE"))),
+            ..WriterConfig::default()
         },
     )
     .unwrap();
@@ -637,11 +776,12 @@ fn actual_pipe_effect_then_storage_failure_reopens_only_as_unknown() {
         key().device,
         9,
         DigestKey::from_backend_bytes([0x5a; 32]),
-        Hooks {
+        WriterConfig {
             after_write: Some(Box::new(move || {
                 tx.send(()).unwrap();
                 wait.recv_timeout(Duration::from_secs(2)).unwrap();
             })),
+            ..WriterConfig::default()
         },
     )
     .unwrap();

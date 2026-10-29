@@ -94,12 +94,13 @@ fn capture(
 }
 
 pub(super) fn run(case: &str) -> bool {
-    const CASES: [&str; 5] = [
+    const CASES: [&str; 6] = [
         "fresh_owned_pipe_launch_phase_probe",
         "actual_owned_pipe_is_committed_through_durable_single_writer",
         "actual_pipe_guard_bounds_and_queue_are_fail_closed",
         "actual_writer_panic_retains_terminal_join_error_and_unknown_intent",
         "actual_pipe_effect_then_storage_failure_reopens_only_as_unknown",
+        "actual_owned_pty_uses_the_same_durable_single_writer_without_reply_bypass",
     ];
     assert!(CASES.contains(&case));
     if let Some(sentinel) = std::env::var_os("CC_DESK_TEST_ONLY_WRITER_WORKER") {

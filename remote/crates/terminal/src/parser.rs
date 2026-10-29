@@ -7,6 +7,7 @@ pub enum TerminalSafeCode {
     UnsupportedSequence,
     CombiningScalar,
     InputBatchExceeded,
+    ReplyQueryBudgetExceeded,
 }
 
 /// A parser fault that makes the current terminal state unsafe for control.

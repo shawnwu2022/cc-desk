@@ -124,6 +124,7 @@ name = "cc-desk-remote-host"
 version = "0.1.0"
 dependencies = [
  "cc-desk-native-runtime",
+ "cc-desk-remote-terminal",
  "ring",
  "rusqlite",
  "subtle",
