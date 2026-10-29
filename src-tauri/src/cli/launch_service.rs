@@ -686,7 +686,13 @@ impl LaunchService {
                         });
                         match overlaid {
                             Ok(next) => (next, Some(prepared.lease)),
-                            Err(_) => {
+                            Err(failure) => {
+                                if snapshot.request().cli == CliKind::Codex {
+                                    log::warn!(
+                                        "Codex identity hook unavailable: stage={}",
+                                        identity_failure_stage(&failure)
+                                    );
+                                }
                                 observer_failure = Some("OBSERVER_PREPARE_FAILED");
                                 (snapshot.clone(), None)
                             }
@@ -1006,6 +1012,17 @@ impl RunAccess {
     }
 }
 
+// Fixed diagnostic vocabulary; never return a parser/manifest field verbatim.
+fn identity_failure_stage(failure: &SafeError) -> &'static str {
+    if failure.code == "OBSERVER_PREPARE_FAILED"
+        && failure.field.as_deref() == Some("codexPackageVersion")
+    {
+        "unsupported-npm-version"
+    } else {
+        "identity-prepare"
+    }
+}
+
 #[cfg(test)]
 #[path = "../tests/native_cli_opencode_preparations.rs"]
 mod opencode_preparation_tests;
@@ -1013,6 +1030,23 @@ mod opencode_preparation_tests;
 #[cfg(test)]
 mod owned_command_tests {
     use super::*;
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn CodexIdentity_FailureDiagnosticNeverLeaksPayload_085() {
+        let mut failure = error("OBSERVER_PREPARE_FAILED");
+        assert_eq!(identity_failure_stage(&failure), "identity-prepare");
+        failure.field = Some("codexPackageVersion".into());
+        assert_eq!(identity_failure_stage(&failure), "unsupported-npm-version");
+        for (code, field) in [
+            ("raw-token-secret", "codexPackageVersion"),
+            ("OBSERVER_PREPARE_FAILED", "C:/private/prompt-token-secret"),
+        ] {
+            failure.code = code.into();
+            failure.field = Some(field.into());
+            assert_eq!(identity_failure_stage(&failure), "identity-prepare");
+        }
+    }
 
     #[test]
     #[allow(non_snake_case)]

@@ -193,11 +193,18 @@ pub(crate) fn prepare(
     let manifest: serde_json::Value =
         serde_json::from_str(&held_text(&package.join("package.json"), &mut guards)?)
             .map_err(|_| unavailable())?;
-    if manifest["name"] != "@openai/codex"
-        || !matches!(manifest["version"].as_str(), Some("0.163.0" | "0.164.0"))
-        || manifest["bin"]["codex"] != "bin/codex.js"
-    {
+    if manifest["name"] != "@openai/codex" || manifest["bin"]["codex"] != "bin/codex.js" {
         return Err(unavailable());
+    }
+    // Package versions also gate hook protocol admission; matching wrapper bytes
+    // alone never grants an unreviewed native core the authenticated environment.
+    if !matches!(
+        manifest["version"].as_str(),
+        Some("0.163.0" | "0.164.0" | "0.165.0")
+    ) {
+        let mut failure = unavailable();
+        failure.field = Some("codexPackageVersion".into());
+        return Err(failure);
     }
     let args = args
         .iter()
@@ -254,6 +261,15 @@ mod tests {
 
     #[test]
     fn CodexIdentity_Npm164PreservesAuthenticatedTransport_082() {
+        npm_transport_replay("0.164.0");
+    }
+
+    #[test]
+    fn CodexIdentity_Npm165PreservesAuthenticatedTransport_083() {
+        npm_transport_replay("0.165.0");
+    }
+
+    fn npm_fixture(version: &str) -> (tempfile::TempDir, PathBuf, PathBuf) {
         let root = tempfile::tempdir().unwrap();
         let canonical = std::fs::canonicalize(root.path()).unwrap();
         let npm = PathBuf::from(dos_path(&canonical).unwrap()).join("npm");
@@ -272,9 +288,14 @@ mod tests {
         .unwrap();
         std::fs::write(
             package.join("package.json"),
-            r#"{"name":"@openai/codex","version":"0.164.0","bin":{"codex":"bin/codex.js"}}"#,
+            serde_json::to_vec(&serde_json::json!({"name":"@openai/codex","version":version,"bin":{"codex":"bin/codex.js"}})).unwrap(),
         )
         .unwrap();
+        (root, program, package)
+    }
+
+    fn npm_transport_replay(version: &str) {
+        let (_root, program, package) = npm_fixture(version);
         let mut environment = EnvMap::new();
         let args = [
             "-c",
@@ -314,9 +335,97 @@ mod tests {
         // 相同包装不代表任意未来版本都已验证。
         std::fs::write(
             package.join("package.json"),
-            r#"{"name":"@openai/codex","version":"0.165.0","bin":{"codex":"bin/codex.js"}}"#,
+            r#"{"name":"@openai/codex","version":"0.166.0","bin":{"codex":"bin/codex.js"}}"#,
         )
         .unwrap();
         assert!(prepare(&program, &args, &mut EnvMap::new()).is_err());
+    }
+
+    fn fixture_args() -> [OsString; 8] {
+        [
+            "-c",
+            "hooks.SessionStart=[]",
+            "-c",
+            "hooks.UserPromptSubmit=[]",
+            "-c",
+            "hooks.Stop=[]",
+            "-c",
+            "hooks.state={}",
+        ]
+        .map(OsString::from)
+    }
+
+    #[test]
+    fn CodexIdentity_NpmUnknownVersionHasFixedReason_085() {
+        let (_root, program, _package) = npm_fixture("0.166.0");
+        let failure = prepare(&program, &fixture_args(), &mut EnvMap::new())
+            .err()
+            .expect("unreviewed version must fail closed");
+        assert_eq!(failure.code, "OBSERVER_PREPARE_FAILED");
+        assert_eq!(failure.field.as_deref(), Some("codexPackageVersion"));
+    }
+
+    #[test]
+    fn CodexIdentity_NpmKnownVersionRejectsTampering_084() {
+        for target in ["shim", "entry"] {
+            let (_root, program, package) = npm_fixture("0.164.0");
+            drop(
+                prepare(&program, &fixture_args(), &mut EnvMap::new())
+                    .expect("known-version control must pass before tamper"),
+            );
+            let path = if target == "shim" {
+                program.clone()
+            } else {
+                package.join("bin/codex.js")
+            };
+            let mut bytes = std::fs::read(&path).unwrap();
+            bytes.extend_from_slice(b"\nchanged bytes\n");
+            std::fs::write(path, bytes).unwrap();
+            let mut env = EnvMap::new();
+            let failure = prepare(&program, &fixture_args(), &mut env)
+                .err()
+                .expect("changed audited bytes must be rejected");
+            assert_eq!(failure.code, "OBSERVER_PREPARE_FAILED");
+            assert!(failure.field.is_none());
+            assert!(env.is_empty());
+        }
+        for (field, value) in [
+            ("name", serde_json::json!("@other/codex")),
+            ("bin", serde_json::json!({"codex":"bin/other.js"})),
+            ("bin", serde_json::json!("bin/codex.js")),
+            ("bin", serde_json::json!({"codex":5})),
+        ] {
+            let (_root, program, package) = npm_fixture("0.164.0");
+            drop(
+                prepare(&program, &fixture_args(), &mut EnvMap::new())
+                    .expect("known-version control must pass before manifest mutation"),
+            );
+            let mut manifest = serde_json::json!({"name":"@openai/codex", "version":"0.164.0", "bin":{"codex":"bin/codex.js"}});
+            manifest[field] = value;
+            std::fs::write(
+                package.join("package.json"),
+                serde_json::to_vec(&manifest).unwrap(),
+            )
+            .unwrap();
+            let mut env = EnvMap::new();
+            let failure = prepare(&program, &fixture_args(), &mut env)
+                .err()
+                .expect("manifest identity must remain exact");
+            assert_eq!(failure.code, "OBSERVER_PREPARE_FAILED");
+            assert!(failure.field.is_none());
+            assert!(env.is_empty());
+        }
+        let (_root, program, _package) = npm_fixture("0.164.0");
+        drop(
+            prepare(&program, &fixture_args(), &mut EnvMap::new())
+                .expect("known-version control must pass before NODE_OPTIONS mutation"),
+        );
+        let mut env = EnvMap::from([("node_options".into(), "--require user-owned.cjs".into())]);
+        let before = env.clone();
+        let failure = prepare(&program, &fixture_args(), &mut env)
+            .err()
+            .expect("nonempty NODE_OPTIONS must remain user-owned");
+        assert!(failure.field.is_none());
+        assert!(env == before);
     }
 }

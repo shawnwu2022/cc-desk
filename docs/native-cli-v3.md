@@ -226,13 +226,39 @@ preload with the owned snapshot until run retirement. It does not change global
 configuration or persistent permissions. The existing locked `tempfile`
 dependency also owns isolated capability-probe configuration roots.
 
-The audited npm transport admits exactly 0.163.0 and 0.164.0, with the same
-normalized shim and entry SHA256 checks for both versions. The installed 0.164.0
+The audited npm transport admits exactly 0.163.0, 0.164.0 and 0.165.0, with the same
+normalized shim and entry SHA256 checks for these versions. The installed 0.164.0
 package's entry bytes match 0.163.0; an isolated, credential-free `hooks/list`
 exchange confirmed all three enabled/trusted session-flags command handlers.
 This restores the authenticated identity path after that package upgrade;
 titles, timestamps and newly discovered history never establish identity.
 The native executable probe below retains its separate exact-byte policy.
+
+The installed Windows x64 npm 0.165.0 entry and normalized shim also match these
+audited hashes. Its native executable SHA256 is
+`d4b2e6a054ea1dfe53217f9d8942c5f8a9f4b76171a1e0bb76ced5759915300a`;
+an isolated, credential-free `hooks/list` exchange confirmed all three enabled,
+trusted sessionFlags command handlers. This is exact-version compatibility
+evidence, not certification of installed UI behavior, real AI naming or any
+future version. Wrapper bytes alone cannot establish native protocol support;
+unknown versions remain rejected. The Cmd route's protocol admission still
+depends on this reviewed exact-version policy and is not a general probe.
+The isolated app-server `thread/start` audit created a thread but did not produce
+a hook receipt. Actual 0.165.0 TUI handler-to-reporter-to-registry delivery and
+its installed UI title behavior remain unverified; metadata success is not that
+acceptance result.
+The native hash above records the tested artifact; the Cmd route does not enforce
+or hold that native hash at runtime. Its held-file checks cover the wrapper/entry.
+
+On rejected identity-overlay preparation, the local application log records only
+`Codex identity hook unavailable: stage=unsupported-npm-version` for the fixed
+package-version rejection, or `stage=identity-prepare` for other failures. It
+never includes the manifest value, path, IDs, nonce, environment or raw error.
+The original CLI launch and exact attempt/source authorization remain unchanged.
+An already running new session that missed its startup identity cannot acquire
+it through Refresh alone; a future authenticated prompt identity may link it,
+otherwise a supported new launch/resume is needed. Desk never stops that session
+or merges unidentified rows by title/time.
 
 Nonempty user `NODE_OPTIONS` are deliberately left untouched: Node permission or
 loader options can fail before CJS executes. Unknown/custom wrappers, different

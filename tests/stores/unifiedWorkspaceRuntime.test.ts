@@ -2542,6 +2542,52 @@ it('CodexIdentity_ConcurrentTitleProjection_032', async () => {
   expect(catalog.sessions.filter(row => row.nativeSessionId === ids[0])).toHaveLength(1)
 })
 
+// A terminal idle/title cue cannot supply identity. This sequence intentionally
+// starts without a receipt, then delivers the exact owned identity late.
+it('CodexIdentity_LateReceiptTitleRefreshCloseResume_103', async () => {
+  const ids = ['00000000-0000-4000-8000-000000000061', '00000000-0000-4000-8000-000000000062']
+  let title = 'First prompt'
+  io.scope.mockImplementation(async target => ({ scopeId: 'scope', instanceId: 'instance', cli: 'codex', sourceRootKey: 'root', identityEpoch: '1', profileId: 'cx', profileRevision: '7', target, basis: 'configured-profile' }))
+  io.read.mockImplementation(async () => ({ state: 'ready', hasMore: false, items: ids.map(id => ({ type: 'session', projectId: 'project', sessionKey: JSON.stringify(['local', 'codex', 'root', id]), nativeSessionId: id, title, titleSource: title === 'First prompt' ? 'prompt' : 'ai', cwd: '/repo' })) }))
+  const { runtime } = render(); await flushPromises()
+  vi.useFakeTimers()
+  const tabs = useNativeTabsStore(), catalog = useUnifiedSessionsStore()
+  const created = await catalog.createSession({ cli: 'codex', projectKey: '/repo', projectPath: '/repo', action: { kind: 'new' } })
+  const tab = tabs.tab(created.adapterSessionId)!
+  const openedAt = tab.createdAt
+  tabs.markStarting(tab.tabId)
+  tabs.applyLaunchStatus(tab.tabId, { instanceId: 'backend', requestId: tab.requestId, run: { runId: tab.runId, generation: tab.generation }, phase: 'running', revision: '1', failure: null })
+  tabs.applyCodexProgramStatus(tab.tabId, tab, 'idle')
+  await runtime.refresh(); await flushPromises()
+  // Neither same title nor time can safely merge an unidentified active row.
+  expect(catalog.sessions).toHaveLength(3)
+  expect(catalog.sessions.find(row => row.opened)?.nativeSessionId).toBeNull()
+  const attempt = captureNativeAttempt(tab)
+  expect(tabs.applyObservationIdentity(tab.tabId, attempt, ids[0], 'userPromptSubmit')).toBe(true)
+  await flushPromises(); await vi.advanceTimersByTimeAsync(250); await flushPromises()
+  title = 'Shared AI title'
+  tabs.applyCodexProgramStatus(tab.tabId, attempt, 'working')
+  tabs.applyCodexProgramStatus(tab.tabId, attempt, 'idle')
+  await flushPromises(); await vi.advanceTimersByTimeAsync(1500); await flushPromises()
+  for (let n = 0; n < 3; n++) {
+    await runtime.refresh(); await flushPromises()
+    expect(catalog.sessions).toHaveLength(2)
+    expect(catalog.sessions.filter(row => row.title === title)).toHaveLength(2)
+    expect(catalog.sessions.filter(row => row.nativeSessionId === ids[0])).toHaveLength(1)
+    expect(catalog.sessions.find(row => row.nativeSessionId === ids[0])).toMatchObject({ opened: true, title, lastOpenedAt: openedAt })
+  }
+  tab.status = 'exited'
+  await catalog.closeSession('native-tab:' + tab.tabId); await flushPromises()
+  const closed = catalog.sessions.find(row => row.nativeSessionId === ids[0])!
+  expect(closed).toMatchObject({ opened: false, title })
+  const restored = await catalog.resumeCatalogSession(closed); await flushPromises()
+  expect(tabs.tab(restored.adapterSessionId)?.action).toEqual({ kind: 'resume-id', nativeSessionId: ids[0] })
+  expect(tabs.applyObservationIdentity(tab.tabId, attempt, ids[1], 'stop')).toBe(false)
+  await runtime.refresh(); await flushPromises()
+  expect(catalog.sessions).toHaveLength(2)
+  expect(catalog.sessions.find(row => row.nativeSessionId === ids[0])).toMatchObject({ opened: true, title })
+})
+
 // 数据来自 Windows 真实 cmd 双 TUI，共用临时 root；只替换测试项目映射，不构造 UUID/标题。
 it('CodexIdentity_CapturedCmdHistoryRefresh_048', async () => {
   const rows = cmdHistoryCapture.nativeHistoryRows.map(row => ({ ...row, type: 'session', projectId: 'project', cwd: '/repo' }))
