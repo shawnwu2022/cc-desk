@@ -61,6 +61,12 @@ impl Rights {
     }
 }
 pub(crate) trait Host {
+    fn permits_attach_recovery(&self) -> bool {
+        false
+    }
+    fn poll_attach(&mut self) -> Result<(), Code> {
+        Ok(())
+    }
     fn completion_backend_id(&self) -> Option<[u8; 32]> {
         None
     }
@@ -235,6 +241,14 @@ impl<B: Host> Router<B> {
     }
 }
 impl<B: Host> Router<crate::lifecycle_durable::Durable<B>> {
+    #[cfg(test)]
+    pub(crate) fn inspect_backend(&self) -> &B {
+        self.backend.inspect_backend()
+    }
+    #[cfg(test)]
+    pub(crate) fn inspect_backend_mut(&mut self) -> &mut B {
+        self.backend.inspect_backend_mut()
+    }
     pub(crate) fn complete_attach(&mut self) -> Result<bool, Code> {
         let Some(event) = self.backend.complete_attach()? else {
             return Ok(false);

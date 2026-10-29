@@ -1,6 +1,8 @@
 //! One backend writer resource owner, not endpoint identity or authorization.
 use super::*;
 use std::sync::{Mutex, OnceLock, Weak};
+#[path = "local_writer_attach.rs"]
+pub(super) mod attach;
 #[path = "local_writer_authorized.rs"]
 pub(super) mod authorized;
 const MAX_ACTIVE_WRITERS: usize = 12;

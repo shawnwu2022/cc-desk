@@ -150,6 +150,9 @@ struct Fake {
     unknown: bool,
 }
 impl Host for Fake {
+    fn permits_attach_recovery(&self) -> bool {
+        true
+    } // Reviewed fake reconstruction fixture only.
     fn completion_backend_id(&self) -> Option<[u8; 32]> {
         Some([0x61; 32])
     }

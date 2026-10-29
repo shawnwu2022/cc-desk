@@ -1,7 +1,9 @@
 # Internal fake Attach completion candidate
 
-No native backend, wire change, real database migration or remote enablement.
-New candidate test stores use schema2 with atomic typed result persistence.
+No production native registration, wire change, real database migration or remote
+enablement. The private existing-writer adapter is memory-qualified separately in
+[NATIVE-WRITER-ATTACH.md](NATIVE-WRITER-ATTACH.md). New candidate test stores use
+schema2 with atomic typed result persistence.
 
 A private bounded mailbox holds one exact result. Captured binding includes the
 full request (operation, sequence, generation, before-fence/epochs), resource

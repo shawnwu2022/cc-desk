@@ -56,6 +56,14 @@ fn resource(c: &Context<'_>, key: &DigestKey) -> Result<[u8; 32], Code> {
     key.lifecycle_scope(&bytes).map_err(|_| Code::Malformed)
 }
 impl<B: Host> Durable<B> {
+    #[cfg(test)]
+    pub(crate) fn inspect_backend(&self) -> &B {
+        &self.backend
+    }
+    #[cfg(test)]
+    pub(crate) fn inspect_backend_mut(&mut self) -> &mut B {
+        &mut self.backend
+    }
     pub(crate) fn new(store: Store, key: DigestKey, backend: B) -> Self {
         Self {
             store,
@@ -205,6 +213,12 @@ impl<B: Host> Durable<B> {
     pub(crate) fn complete_attach(
         &mut self,
     ) -> Result<Option<crate::lifecycle_completion::Applied>, Code> {
+        if self.backend.poll_attach().is_err() {
+            if let Some(ticket) = &self.pending {
+                let _ = self.store.transition(ticket, Phase::Uncertain);
+            }
+            return Err(Code::Backend);
+        }
         let Some((receiver, digest)) = &self.completion else {
             return Ok(None);
         };
@@ -239,6 +253,9 @@ impl<B: Host> Host for Durable<B> {
         c: &Context<'_>,
         r: &Request,
     ) -> Result<Option<crate::lifecycle_completion::Applied>, Code> {
+        if !self.backend.permits_attach_recovery() {
+            return Ok(None);
+        }
         c.proof.check().map_err(|_| Code::Unauthorized)?;
         if self.backend.resource_identity()
             != Some(&crate::lifecycle_router::ResourceIdentity::from_proof(
