@@ -358,7 +358,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
       if (pending && matchesNativeAttempt(value, pending.attempt)) pending.state.lastPromptSubmitted = null
     }
     const projected: ObservationState = { observation: state.observation,
-      activity: state.observation === 'active' ? state.activity : 'unknown' }
+      activity: value.cli !== 'codex' && state.observation === 'active' ? state.activity : 'unknown' }
     if (value.status === 'starting') {
       pendingAttention.set(tabId, { attempt: captureNativeAttempt(value), state: projected })
       return

@@ -9,6 +9,23 @@ use std::fs;
 
 const LOCATOR: &str = "11111111-2222-4333-8444-555555555555";
 
+#[test]
+fn CodexAdapter_StatusReportsPreparedIdentityWithoutVersionClaim_108() {
+    let snapshot = Fixture::new(CliKind::Codex, LaunchAction::New).freeze();
+    assert_eq!(
+        crate::cli::observer_status::installation_reason(&snapshot, true, None),
+        "OBSERVER_CONNECTING"
+    );
+    assert_eq!(
+        crate::cli::observer_status::installation_reason(
+            &snapshot,
+            false,
+            Some("OBSERVER_PREPARE_FAILED")
+        ),
+        "OBSERVER_PREPARE_FAILED"
+    );
+}
+
 // 身份通道只叠加本次启动数据，用户 flags 顺序、关闭选择与 raw 完整字节保持原义。
 #[test]
 fn CodexIdentity_LaunchFlagsAndEnvironmentIsolation_034() {
@@ -799,17 +816,23 @@ fn Opencode_InitialIdentityKeepsEffectiveCwdUnknown_04() {
 #[cfg(windows)]
 #[test]
 fn CodexIdentity_CmdNpmForwardsHooksOutsideCall_047() {
-    codex_cmd_npm_forwards_hooks("0.163.0");
+    codex_cmd_npm_forwards_hooks("0.163.0", false);
 }
 
 #[cfg(windows)]
 #[test]
 fn CodexIdentity_CmdNpm164ForwardsHooksOutsideCall_082() {
-    codex_cmd_npm_forwards_hooks("0.164.0");
+    codex_cmd_npm_forwards_hooks("0.164.0", false);
 }
 
 #[cfg(windows)]
-fn codex_cmd_npm_forwards_hooks(version: &str) {
+#[test]
+fn CodexAdapter_UserSessionHooksSurviveSameRunTransport_104() {
+    codex_cmd_npm_forwards_hooks("future-protocol-compatible", true);
+}
+
+#[cfg(windows)]
+fn codex_cmd_npm_forwards_hooks(version: &str, user_hooks: bool) {
     // CALL仍只接收用户安全参数；TOML由已识别的Node入口转发给原生CLI。
     let mut f = Fixture::new(CliKind::Codex, resume(LOCATOR));
     // 宿主 TEMP 可能带短名或 junction；成功场景显式选直接路径，别名拒绝仍在下方验证。
@@ -827,7 +850,10 @@ fn codex_cmd_npm_forwards_hooks(version: &str) {
         .unwrap()
         .join("tests/fixtures/native-cli/codex-npm-0.163.0");
     fs::copy(fixtures.join("codex.cmd"), npm.join("codex.cmd")).unwrap();
-    fs::copy(fixtures.join("codex.js"), package.join("bin/codex.js")).unwrap();
+    // Owned normal-file Node fixture; never executes an installed CLI/core.
+    let script = "process.stdout.write(JSON.stringify({argv:process.argv.slice(2),options:process.env.NODE_OPTIONS??null,transport:process.env.CC_DESK_CODEX_ARGV??null,capability:process.env.CC_DESK_CODEX_CAPABILITY??null}))";
+    fs::write(package.join("bin/codex.js"), script).unwrap();
+    fs::write(npm.join("wrong.js"), script).unwrap();
     fs::write(
         package.join("package.json"),
         serde_json::to_vec(
@@ -842,6 +868,17 @@ fn codex_cmd_npm_forwards_hooks(version: &str) {
         dialect: Dialect::Cmd,
     };
     f.profile.default_args = Override::Set(vec!["--model".into(), "user-model".into()]);
+    if user_hooks {
+        f.profile.default_args = Override::Set(vec![
+            "--model".into(),
+            "user-model".into(),
+            "-c".into(),
+            r#"hooks.SessionStart=[{hooks=[{type="command",command="user-owned",timeout=1}]}]"#
+                .into(),
+            "-c".into(),
+            r#"hooks.state={user-key={enabled=false,trusted_hash="user-trust"}}"#.into(),
+        ]);
+    }
     f.inherited
         .insert("cc_desk_codex_argv".into(), "ancestor-transport".into());
     // Windows Node 的系统随机源初始化需要 SystemRoot；不是待测参数层的一部分。
@@ -853,7 +890,10 @@ fn codex_cmd_npm_forwards_hooks(version: &str) {
             ("CC_DESK_CODEX_PORT".into(), "1234".into()),
             ("CC_DESK_CODEX_RUN".into(), "run-one".into()),
             ("CC_DESK_CODEX_GENERATION".into(), "7".into()),
-            ("CC_DESK_CODEX_CAPABILITY".into(), "fresh".into()),
+            (
+                "CC_DESK_CODEX_CAPABILITY".into(),
+                "0123456789abcdef0123456789abcdef".into(),
+            ),
         ]),
     };
     let hooks = crate::codex_observer::hook_args(std::path::Path::new(
@@ -861,6 +901,54 @@ fn codex_cmd_npm_forwards_hooks(version: &str) {
     ))
     .unwrap();
     let prepared = original.with_codex_identity(&observer, &hooks).unwrap();
+    if user_hooks {
+        let envelope: Value = serde_json::from_str(
+            prepared.environment()[OsStr::new("CC_DESK_CODEX_ARGV")]
+                .to_str()
+                .unwrap(),
+        )
+        .unwrap();
+        let merged_arg = envelope["args"][1].as_str().unwrap();
+        assert!(
+            merged_arg.starts_with("hooks="),
+            "same-layer user hooks must be combined with the Desk handler before transport"
+        );
+        let merged = merged_arg.strip_prefix("hooks=").unwrap();
+        let document: toml::Table = format!("hooks={merged}").parse().unwrap();
+        let groups = document["hooks"]["SessionStart"].as_array().unwrap();
+        assert_eq!(groups.len(), 2);
+        assert_eq!(
+            groups[0]["hooks"][0]["command"].as_str(),
+            Some("user-owned")
+        );
+        let original_group: toml::Table = format!(
+            "value={}",
+            hooks[1]
+                .to_str()
+                .unwrap()
+                .strip_prefix("hooks.SessionStart=")
+                .unwrap()
+        )
+        .parse()
+        .unwrap();
+        assert_eq!(
+            &groups[1], &original_group["value"][0],
+            "append the exact Desk handler, including encoded safe paths"
+        );
+        assert_eq!(
+            document["hooks"]["state"]["user-key"]["enabled"].as_bool(),
+            Some(false)
+        );
+        assert_eq!(
+            document["hooks"]["state"]["user-key"]["trusted_hash"].as_str(),
+            Some("user-trust")
+        );
+        assert!(document["hooks"]["state"]
+            .as_table()
+            .unwrap()
+            .keys()
+            .any(|key| key.ends_with(":session_start:1:0")));
+    }
     let invocation = build_invocation(&f.request, &prepared).unwrap();
     assert!(
         crate::platform::launch::resolve_process(&invocation).is_ok(),
@@ -874,11 +962,9 @@ fn codex_cmd_npm_forwards_hooks(version: &str) {
         .to_string_lossy()
         .eq_ignore_ascii_case("CC_DESK_CODEX_ARGV")));
     let node = crate::platform::find_executable("node").unwrap();
-    let script = "process.stdout.write(JSON.stringify({argv:process.argv.slice(2),options:process.env.NODE_OPTIONS??null,transport:process.env.CC_DESK_CODEX_ARGV??null}))";
     let output = std::process::Command::new(&node)
         .env_clear()
         .envs(prepared.environment())
-        .args(["-e", script])
         .arg(package.join("bin/codex.js"))
         .args(invocation.args())
         .output()
@@ -889,9 +975,17 @@ fn codex_cmd_npm_forwards_hooks(version: &str) {
         String::from_utf8_lossy(&output.stderr)
     );
     let observed: Value = serde_json::from_slice(&output.stdout).unwrap();
-    let mut expected = hooks
+    let envelope: Value = serde_json::from_str(
+        prepared.environment()[OsStr::new("CC_DESK_CODEX_ARGV")]
+            .to_str()
+            .unwrap(),
+    )
+    .unwrap();
+    let mut expected = envelope["args"]
+        .as_array()
+        .unwrap()
         .iter()
-        .map(|v| v.to_str().unwrap().to_owned())
+        .map(|v| v.as_str().unwrap().to_owned())
         .collect::<Vec<_>>();
     expected.extend(
         invocation
@@ -903,9 +997,13 @@ fn codex_cmd_npm_forwards_hooks(version: &str) {
     assert!(observed["options"].is_null());
     assert!(observed["transport"].is_null());
     let read_back = |environment: &EnvMap, main: &std::path::Path| -> Value {
-        let output = std::process::Command::new(&node).env_clear().envs(environment)
-            .args(["-e", "process.stdout.write(JSON.stringify({argv:process.argv.slice(2),options:process.env.NODE_OPTIONS??null,transport:process.env.CC_DESK_CODEX_ARGV??null,capability:process.env.CC_DESK_CODEX_CAPABILITY??null}))"])
-            .arg(main).args(invocation.args()).output().unwrap();
+        let output = std::process::Command::new(&node)
+            .env_clear()
+            .envs(environment)
+            .arg(main)
+            .args(invocation.args())
+            .output()
+            .unwrap();
         assert!(
             output.status.success(),
             "fixed Node transport probe must finish"
@@ -913,21 +1011,63 @@ fn codex_cmd_npm_forwards_hooks(version: &str) {
         serde_json::from_slice(&output.stdout).unwrap()
     };
     // 错入口和损坏载荷都必须还原环境、保留原参数并移除观察能力。
-    for (wrong_entry, corrupt_payload) in [(true, false), (false, true)] {
+    for (wrong_entry, corrupt_payload, missing_binding) in [
+        (true, false, false),
+        (false, true, false),
+        (false, false, true),
+    ] {
         let mut environment = prepared.environment().clone();
         if corrupt_payload {
             environment.insert("CC_DESK_CODEX_ARGV".into(), "not-json".into());
         }
+        if missing_binding {
+            environment.remove(OsStr::new("CC_DESK_CODEX_GENERATION"));
+        }
         let main = if wrong_entry {
-            npm.join("codex.cmd")
+            npm.join("wrong.js")
         } else {
             package.join("bin/codex.js")
         };
+        if user_hooks && wrong_entry {
+            let output = std::process::Command::new(&node)
+                .env_clear()
+                .envs(&environment)
+                .arg(&main)
+                .args(invocation.args())
+                .output()
+                .unwrap();
+            assert!(
+                !output.status.success(),
+                "never execute an unbound entry after removing user hook policy"
+            );
+            assert!(
+                output.stdout.is_empty(),
+                "wrong entry marker must not execute"
+            );
+            continue;
+        }
         let result = read_back(&environment, &main);
-        assert_eq!(
-            result["argv"],
-            json!(["resume", LOCATOR, "--model", "user-model"])
-        );
+        if user_hooks {
+            assert_eq!(
+                result["argv"],
+                json!([
+                    "resume",
+                    LOCATOR,
+                    "--model",
+                    "user-model",
+                    "-c",
+                    r#"hooks.SessionStart=[{hooks=[{type="command",command="user-owned",timeout=1}]}]"#,
+                    "-c",
+                    r#"hooks.state={user-key={enabled=false,trusted_hash="user-trust"}}"#
+                ]),
+                "runtime enhancement failure must restore every original user policy argument"
+            );
+        } else {
+            assert_eq!(
+                result["argv"],
+                json!(["resume", LOCATOR, "--model", "user-model"])
+            );
+        }
         assert!(result["options"].is_null());
         assert!(result["transport"].is_null());
         assert!(result["capability"].is_null());
@@ -953,7 +1093,11 @@ fn codex_cmd_npm_forwards_hooks(version: &str) {
     drop(unsafe_snapshot);
     f.request.extra_args.clear();
     let mut oversized = hooks.clone();
-    oversized[1] = format!("hooks.SessionStart={}", "x".repeat(9000)).into();
+    oversized[1] = format!(
+        "hooks.SessionStart=[{{hooks=[{{type=\"command\",command=\"{}\"}}]}}]",
+        "x".repeat(9000)
+    )
+    .into();
     let oversized = f
         .freeze()
         .with_codex_identity(&observer, &oversized)

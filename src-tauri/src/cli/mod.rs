@@ -3,6 +3,8 @@ pub(crate) mod claude;
 pub(crate) mod codex;
 #[cfg(windows)]
 pub(crate) mod codex_cmd;
+#[cfg(windows)]
+mod codex_cmd_route;
 pub(crate) mod commands;
 pub(crate) mod document;
 pub(crate) mod environment;

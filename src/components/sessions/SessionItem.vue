@@ -213,7 +213,7 @@ function preventReferenceNativeDrag(event: DragEvent) {
     role="treeitem" :data-session-row="session.id" :aria-selected="selected" :aria-label="session.title" :aria-busy="session.resumePending || undefined" tabindex="0"
     draggable="false" @pointerdown="onReferencePointerdown" @dragstart="preventReferenceNativeDrag"
     @click="onClick" @dblclick="onDoubleClick" @keydown="onKeydown" @contextmenu="openContext">
-    <SessionAppIcon :cli="session.cli" :state="visualState" :activity-state="session.activityState" :observation-state="session.observationState" :observer-reason-code="session.observerReasonCode" :archived="session.archived" :notice="observationNotice" :receipt-id="receiptId" />
+    <SessionAppIcon :cli="session.cli" :state="visualState" :activity-state="session.activityState" :observation-state="session.observationState" :observer-reason-code="session.observerReasonCode" :identity-association="session.identityAssociation" :archived="session.archived" :notice="observationNotice" :receipt-id="receiptId" />
     <div class="session-name-wrapper">
       <AppTooltip v-if="isRenaming" class="session-title-tooltip" :text="session.renameTarget ? t(session.renameTarget === 'resume-source' ? 'sessionRenameResumeSourceHint' : 'sessionRenameHistoryRecordHint', { id: session.nativeSessionId }) : ''">
         <AppInput ref="renameInput" v-model="renameValue" class="rename-input" size="compact"

@@ -206,53 +206,52 @@ unrepresentable overlay is discarded together with its capability; the original
 frozen invocation still undergoes every ordinary launch check. In particular,
 Windows Cmd shims retain their strict CALL literal subset and size limits, so
 Codex hook TOML cannot prevent an otherwise valid new or resumed session from
-starting. The audited official npm Codex 0.163.0 Cmd wrapper has a separate
+starting. The npm Codex Cmd route has a separate
 per-launch argv transport: the selected Cmd runner and wrapper still execute,
 while Node's supported `NODE_OPTIONS --require` preloads a fixed CJS module before
-the official npm entry point. That module prepends only the four backend-generated
-hook configuration pairs to `process.argv`; the official wrapper then forwards
+the selected npm entry point. That module prepends only the backend-generated
+hook configuration pairs to `process.argv`; the selected wrapper then forwards
 them directly to its selected native Codex binary. Hook TOML never enters CALL.
 The module first restores the original absent/empty `NODE_OPTIONS` and removes
 the two internal `CC_DESK_CODEX_ARGV`/`CC_DESK_CODEX_NODE_OPTIONS` values, so neither
 the native CLI nor subsequent Node tools inherit the preload. Both internal names
 are stripped from inherited/profile inputs, including Windows case aliases.
 
-This transport requires matching audited wrapper/entry bytes and npm package
-name, version and bin metadata. Selected and entry paths must have direct canonical
-spellings: junction/short-name aliases are not adapted. The backend holds the
-audited files and their parent directories against writing/deletion, rechecks
-paths and actual file identities after opening, and retains a private fixed-code
-preload with the owned snapshot until run retirement. It does not change global
-configuration or persistent permissions. The existing locked `tempfile`
-dependency also owns isolated capability-probe configuration roots.
+This route does not admit or reject package versions or release hashes. A bounded
+parser proves the selected npm Cmd wrapper's complete file-entry forwarding
+grammar, including its local Node/PATH selection and a single unchanged `%*`
+argument tail. It does not execute wrappers to discover behavior. Unknown
+statements, variable capture, changed SET values, eval/print entry modes and
+unproven routes fail closed for integration, while retaining the original CLI
+launch. Valid generator comments/spacing and selected entry byte changes are not
+release-version barriers. Package name/bin metadata must agree with that route.
+The original wrapper, Node selection, core dispatch, cwd and business argv remain
+user-owned; Desk never resolves a different native binary as a shortcut.
 
-The audited npm transport admits exactly 0.163.0, 0.164.0 and 0.165.0, with the same
-normalized shim and entry SHA256 checks for these versions. The installed 0.164.0
-package's entry bytes match 0.163.0; an isolated, credential-free `hooks/list`
-exchange confirmed all three enabled/trusted session-flags command handlers.
-This restores the authenticated identity path after that package upgrade;
-titles, timestamps and newly discovered history never establish identity.
-The native executable probe below retains its separate exact-byte policy.
+Selected and entry paths retain direct canonical spellings and held file/parent
+guards, final-path and file-identity rechecks. The private fixed-code preload also
+checks the normal Node file-entry mode, the exact entry's Windows dev/ino and the
+nonempty run/generation binding before injecting typed argv. It restores absent/
+empty NODE_OPTIONS and clears transport env before the entry starts. Missing or
+malformed binding, wrong entry and malformed payload do not inject; failure
+removes observer env in that process. No new observer HTTP message is introduced.
 
-The installed Windows x64 npm 0.165.0 entry and normalized shim also match these
-audited hashes. Its native executable SHA256 is
-`d4b2e6a054ea1dfe53217f9d8942c5f8a9f4b76171a1e0bb76ced5759915300a`;
-an isolated, credential-free `hooks/list` exchange confirmed all three enabled,
-trusted sessionFlags command handlers. This is exact-version compatibility
-evidence, not certification of installed UI behavior, real AI naming or any
-future version. Wrapper bytes alone cannot establish native protocol support;
-unknown versions remain rejected. The Cmd route's protocol admission still
-depends on this reviewed exact-version policy and is not a general probe.
-The isolated app-server `thread/start` audit created a thread but did not produce
-a hook receipt. Actual 0.165.0 TUI handler-to-reporter-to-registry delivery and
-its installed UI title behavior remain unverified; metadata success is not that
-acceptance result.
-The native hash above records the tested artifact; the Cmd route does not enforce
-or hold that native hash at runtime. Its held-file checks cover the wrapper/entry.
+The trusted telemetry subject is the user's selected current run-tree, not an
+official core signature. It can report its own metadata; authentication cannot
+prove a malicious selected program honest. Nonce/source/run/generation/replay
+checks and separately authorized history roots still constrain every accepted
+event and read. Only an actual authenticated identity event establishes the
+current session; preparing a loader, metadata probes, terminal titles and history
+alone do not. This implementation does not certify all future hook protocols or
+installed TUI behavior. The earlier isolated 0.165 metadata query succeeded, but
+its TUI observation timed out without a receipt; real TUI delivery remains an
+explicit acceptance gap. The separate native-executable probe policy below is
+unchanged by this npm-only adaptation.
 
 On rejected identity-overlay preparation, the local application log records only
-`Codex identity hook unavailable: stage=unsupported-npm-version` for the fixed
-package-version rejection, or `stage=identity-prepare` for other failures. It
+`Codex identity hook unavailable: stage=transport-route` for a rejected route,
+`stage=hook-configuration` for an unrepresentable user hook combination, or
+`stage=identity-prepare` for other failures. It
 never includes the manifest value, path, IDs, nonce, environment or raw error.
 The original CLI launch and exact attempt/source authorization remain unchanged.
 An already running new session that missed its startup identity cannot acquire
@@ -261,16 +260,41 @@ otherwise a supported new launch/resume is needed. Desk never stops that session
 or merges unidentified rows by title/time.
 
 Nonempty user `NODE_OPTIONS` are deliberately left untouched: Node permission or
-loader options can fail before CJS executes. Unknown/custom wrappers, different
-versions, nonliteral paths, preparation failures and size limits retain the
+loader options can fail before CJS executes. Unproven wrapper grammar,
+nonliteral paths, preparation failures and size limits retain the
 original frozen launch without this transport. This degradation leaves identity
 observation unavailable and never selects another executable or writes a Codex
 configuration file. A degraded new tab lacks the hook-proven native ID, so its
 first-title synchronization and history deduplication cannot operate. Explicit-ID
 resume keeps its original frozen historical source without gaining observation.
 Codex discovers disk configuration hooks separately in each configuration layer,
-so the added session-flags handlers coexist with user-file handlers. A later user
-`-c` override in the same session-flags layer retains its normal precedence.
+so added session-flags handlers coexist with user-file handlers. For the npm Cmd
+route, explicit user hook assignments in the same session-flags layer are combined
+in original order, preserving user handlers, disablement and trust. Desk appends
+its own group and computes only its own exact content trust key at the actual
+group index. Other config/business arguments are untouched. An explicit state
+collision or unrepresentable hook syntax is reported, never silently discarded or
+made trusted. No user config file is read or rewritten to perform that combination.
+Argument consumption is tracked across default/extra boundaries; known value
+options retain their values, including hyphen-prefixed values. Unknown arity in
+a hook-rewrite request is a configuration conflict, not permission to swallow
+business arguments. Both `-c=` and ordinary config forms are accounted for.
+When user hooks must leave CALL, the held private loader contains a base64/JSON
+copy of the complete original argv and immutable entry identity. If enhancement
+fails, it restores argv[2..] only for that independently verified normal file
+entry, clears observer authority, and never appends/reinterprets arguments.
+If the original entry cannot be proven, startup fails before entry code instead
+of continuing without user policy. This is not a successful compatibility result.
+Private rollback arguments are never logged or included in delivery artifacts.
+
+Codex installation status is scoped to the exact admitted run and reports prepared
+or unavailable, never installed-native capability. The UI separately projects
+waiting for identity, waiting for matching history, linked and unavailable. A
+retained title snapshot does not certify a current history link, and neither hook
+observation nor its timeout invents Codex TUI working/idle/permission activity.
+Unavailability is a compatibility defect to resolve, not successful full-feature
+delivery. Observer failures never restart a CLI; an incompatible parser error in
+the user's single startup stays visible rather than triggering a second launch.
 
 Native Node interpreter launches do not receive Codex flags before their script
 argument. Native identity enhancement is separately admitted using verified

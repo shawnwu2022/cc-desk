@@ -5,9 +5,9 @@ import AppTooltip from '@/components/ui/AppTooltip.vue'
 import CliAppIcon from './CliAppIcon.vue'
 import SessionStatusIcon from './SessionStatusIcon.vue'
 import { sessionVisualLabelKey } from '@/utils/sessionPresentation'
-import type { SessionActivityState, SessionVisualState, UnifiedCliKind } from '@/types/unifiedSession'
+import type { SessionActivityState, SessionVisualState, UnifiedCliKind, UnifiedSession } from '@/types/unifiedSession'
 
-const props = defineProps<{ cli: UnifiedCliKind; state: SessionVisualState; activityState?: SessionActivityState; observationState?: string; observerReasonCode?: import('@/api/observer').ObserverReasonCode; archived?: boolean; notice?: { labelKey: string; unread: boolean; detailLabelKey?: string } | null; receiptId?: string }>()
+const props = defineProps<{ cli: UnifiedCliKind; state: SessionVisualState; activityState?: SessionActivityState; observationState?: string; observerReasonCode?: import('@/api/observer').ObserverReasonCode; identityAssociation?: UnifiedSession['identityAssociation']; archived?: boolean; notice?: { labelKey: string; unread: boolean; detailLabelKey?: string } | null; receiptId?: string }>()
 const { t } = useI18n()
 const opencodeUnknown = computed(() => props.cli === 'opencode' && props.state === 'running' && props.activityState !== 'idle'
   && props.observerReasonCode !== 'OBSERVER_UNSUPPORTED' && props.observationState !== 'off')
@@ -22,7 +22,12 @@ const statusLabel = computed(() => {
   return t(sessionVisualLabelKey(props.state, props.activityState, props.archived))
 })
 const CLI_NAMES: Record<UnifiedCliKind, string> = { claude: 'Claude Code', codex: 'Codex CLI', opencode: 'opencode' }
-const label = computed(() => [CLI_NAMES[props.cli], statusLabel.value, props.notice && t(props.notice.labelKey), props.notice?.detailLabelKey && t(props.notice.detailLabelKey)].filter(Boolean).join('; '))
+const identityLabel = computed(() => {
+  if (props.cli !== 'codex' || props.archived || !props.identityAssociation) return ''
+  const keys = { 'awaiting-identity': 'sessionIdentityPending', 'awaiting-history': 'sessionIdentityHistoryPending', linked: 'sessionIdentityLinked', unavailable: 'sessionIdentityUnavailable' }
+  return t(keys[props.identityAssociation])
+})
+const label = computed(() => [CLI_NAMES[props.cli], statusLabel.value, identityLabel.value, props.notice && t(props.notice.labelKey), props.notice?.detailLabelKey && t(props.notice.detailLabelKey)].filter(Boolean).join('; '))
 const badge = computed(() => {
   // 关闭仅由应用图标本身的明暗区分；回执仍保留在可访问名称和 Tooltip 中。
   if (props.state === 'closed') return null

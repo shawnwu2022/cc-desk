@@ -94,11 +94,32 @@ impl LaunchSnapshot {
                 ..
             }
         ) {
-            next.codex_cmd = Some(std::sync::Arc::new(super::codex_cmd::prepare(
-                &self.program,
+            let overlay = crate::codex_observer::cmd_hook_overlay(
                 args,
-                &mut next.environment,
-            )?));
+                &self.default_args,
+                &self.extra_args,
+            )?;
+            let moved =
+                overlay.default_args != self.default_args || overlay.extra_args != self.extra_args;
+            let original_args = if moved {
+                Some(
+                    super::invocation::build_invocation(self.request(), self)?
+                        .args()
+                        .to_vec(),
+                )
+            } else {
+                None
+            };
+            next.default_args = overlay.default_args;
+            next.extra_args = overlay.extra_args;
+            next.codex_cmd = Some(std::sync::Arc::new(
+                super::codex_cmd::prepare_with_original(
+                    &self.program,
+                    &overlay.hook_args,
+                    &mut next.environment,
+                    original_args.as_deref(),
+                )?,
+            ));
             next.identity_args.clear();
         }
         Ok(next)

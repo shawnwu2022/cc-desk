@@ -1014,12 +1014,10 @@ impl RunAccess {
 
 // Fixed diagnostic vocabulary; never return a parser/manifest field verbatim.
 fn identity_failure_stage(failure: &SafeError) -> &'static str {
-    if failure.code == "OBSERVER_PREPARE_FAILED"
-        && failure.field.as_deref() == Some("codexPackageVersion")
-    {
-        "unsupported-npm-version"
-    } else {
-        "identity-prepare"
+    match (failure.code.as_str(), failure.field.as_deref()) {
+        ("OBSERVER_PREPARE_FAILED", Some("codexTransportRoute")) => "transport-route",
+        ("OBSERVER_PREPARE_FAILED", Some("codexHookConfiguration")) => "hook-configuration",
+        _ => "identity-prepare",
     }
 }
 
@@ -1036,10 +1034,12 @@ mod owned_command_tests {
     fn CodexIdentity_FailureDiagnosticNeverLeaksPayload_085() {
         let mut failure = error("OBSERVER_PREPARE_FAILED");
         assert_eq!(identity_failure_stage(&failure), "identity-prepare");
-        failure.field = Some("codexPackageVersion".into());
-        assert_eq!(identity_failure_stage(&failure), "unsupported-npm-version");
+        failure.field = Some("codexTransportRoute".into());
+        assert_eq!(identity_failure_stage(&failure), "transport-route");
+        failure.field = Some("codexHookConfiguration".into());
+        assert_eq!(identity_failure_stage(&failure), "hook-configuration");
         for (code, field) in [
-            ("raw-token-secret", "codexPackageVersion"),
+            ("raw-token-secret", "codexTransportRoute"),
             ("OBSERVER_PREPARE_FAILED", "C:/private/prompt-token-secret"),
         ] {
             failure.code = code.into();

@@ -77,6 +77,8 @@ export interface UnifiedSession {
   activityState?: SessionActivityState
   observationState?: SessionObservationState
   observerReasonCode?: import('@/api/observer').ObserverReasonCode
+  /** Display association only; never grants process or history access. */
+  identityAssociation?: 'awaiting-identity' | 'awaiting-history' | 'linked' | 'unavailable'
   /** An explicit attention cause; completion must come from a completion event. */
   attentionKind?: SessionAttentionKind
   /** Authenticated recent/unread event receipts, never a current activity claim. */

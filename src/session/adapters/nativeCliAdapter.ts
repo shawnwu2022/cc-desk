@@ -311,6 +311,16 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
     // 精确错误只来自当前匹配行，标题快照不能回放旧诊断。
     const currentReadFailure = identity.historyReadFailure
     const observedHistory = Boolean(identity.nativeRootKey)
+    if (tab.cli === 'codex' && tab.action.kind !== 'raw' && ['starting', 'running'].includes(tab.status)) {
+      const source = renameMatches.length === 1 && renameMatches[0].item.nativeSessionId === tab.observedSessionId
+        ? renameMatches[0].entry : undefined
+      // Current source only: a retained title/root snapshot cannot certify a link.
+      row.identityAssociation = tab.observedSessionId
+        ? source?.error || currentReadFailure ? 'unavailable'
+          : source?.loaded && !source.loading && source.sourceRootKey ? 'linked' : 'awaiting-history'
+        : tab.observationState === 'unavailable' || tab.observerReasonCode === 'OBSERVER_UNSUPPORTED'
+          || tab.observerReasonCode === 'OBSERVER_DISABLED' ? 'unavailable' : 'awaiting-identity'
+    }
     const owner = JSON.stringify([captureNativeAttempt(tab), tab.cli, tab.projectId, tab.projectPath,
       tab.profileId, tab.profileRevision, tab.action, tab.sourceSessionKey, tabNativeSessionId(tab)])
     const snapshot = titleSnapshots.get(tab)

@@ -26,6 +26,15 @@ pub(crate) fn installation_reason(
     installed: bool,
     failure: Option<&'static str>,
 ) -> &'static str {
+    if snapshot.request().cli == CliKind::Codex {
+        return if !snapshot.codex_identity_requested() {
+            "OBSERVER_UNSUPPORTED"
+        } else if installed {
+            "OBSERVER_CONNECTING"
+        } else {
+            failure.unwrap_or("OBSERVER_SERVICE_UNAVAILABLE")
+        };
+    }
     if !matches!(snapshot.request().cli, CliKind::Claude | CliKind::Opencode)
         || matches!(snapshot.request().action, LaunchAction::Raw { .. })
     {
