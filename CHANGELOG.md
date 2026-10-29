@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.25.2] - 2026-10-29
+
+### Fixed
+
+- Refresh authenticated Codex session titles on idle using bounded history rereads.
+- Decode title-index records independently and read oversized indexes through the existing bounded held-root window; preserve exact-source names across partial close reads.
+- Keep title-based identity merging disabled. Cold tail-external and SQLite-only names remain unsupported; installed-app and real AI naming acceptance remain unverified.
+
 ## [0.25.1] - 2026-10-29
 
 ### Fixed
