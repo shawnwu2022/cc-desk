@@ -17,8 +17,15 @@ use crate::{TerminalFault, TerminalParser, TerminalSafeCode};
 mod canonical;
 pub use canonical::{CanonicalEvent, CanonicalFeedError, CanonicalQuery, TerminalReply};
 use canonical::{QueryMark, ReplyCapture};
+#[path = "projection.rs"]
+mod projection;
+pub use projection::{
+    BufferKind, CellRole, ProjectionError, SemanticCell, SemanticColor, SemanticCursor,
+    SemanticCursorShape, SemanticSnapshot, SemanticStyle, Underline,
+};
 
 pub const MAX_TERMINAL_COLUMNS: usize = 240;
+pub const MIN_TERMINAL_COLUMNS: usize = alacritty_terminal::term::MIN_COLUMNS;
 pub const MAX_TERMINAL_ROWS: usize = 100;
 pub const MAX_TERMINAL_FEED_BYTES: usize = 16_384;
 
@@ -26,6 +33,7 @@ pub const MAX_TERMINAL_FEED_BYTES: usize = 16_384;
 pub enum TerminalCoreError {
     ZeroRows,
     ZeroColumns,
+    ColumnsBelowMinimum { requested: usize, minimum: usize },
     RowsExceeded { requested: usize, maximum: usize },
     ColumnsExceeded { requested: usize, maximum: usize },
 }
@@ -275,6 +283,12 @@ fn validate_size(rows: usize, columns: usize) -> Result<TerminalSize, TerminalCo
     }
     if columns == 0 {
         return Err(TerminalCoreError::ZeroColumns);
+    }
+    if columns < MIN_TERMINAL_COLUMNS {
+        return Err(TerminalCoreError::ColumnsBelowMinimum {
+            requested: columns,
+            minimum: MIN_TERMINAL_COLUMNS,
+        });
     }
     if rows > MAX_TERMINAL_ROWS {
         return Err(TerminalCoreError::RowsExceeded {

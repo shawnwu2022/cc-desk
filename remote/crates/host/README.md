@@ -120,7 +120,7 @@ or unknown native events. The default-off remote/control gate is unchanged.
 
 The additional default-off `experimental-canonical-replies` feature offers a private
 `start_canonical_terminal` factory. A non-clone fresh `CanonicalStart` validates
-startup geometry (1..100 rows,1..240 columns) before worker creation. The backend
+startup geometry (1..100 rows,2..240 columns) before worker creation. The backend
 must use that exact PTY geometry; resize and mode-epoch publication are not yet
 implemented. It does not replace or silently enable the static reply factory.
 

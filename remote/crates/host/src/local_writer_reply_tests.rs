@@ -200,6 +200,7 @@ fn canonical_prefix_replies_use_the_same_writer_and_no_user_journal_operation() 
         ReceiptLookup::Missing
     );
     assert!(matches!(CanonicalStart::new(0, 10), Err(Reject::Bounds)));
+    assert!(matches!(CanonicalStart::new(3, 1), Err(Reject::Bounds)));
 }
 
 #[cfg(feature = "experimental-canonical-replies")]

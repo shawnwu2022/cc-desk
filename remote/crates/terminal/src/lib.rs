@@ -12,9 +12,11 @@ mod queries;
 pub use budget::OSC_PAYLOAD_LIMIT;
 #[cfg(feature = "experimental-emulator")]
 pub use emulator::{
-    CanonicalEvent, CanonicalFeedError, CanonicalQuery, MAX_TERMINAL_COLUMNS,
-    MAX_TERMINAL_FEED_BYTES, MAX_TERMINAL_ROWS, RejectedEvents, TerminalCore, TerminalCoreError,
-    TerminalEventSink, TerminalReply,
+    BufferKind, CanonicalEvent, CanonicalFeedError, CanonicalQuery, CellRole, MAX_TERMINAL_COLUMNS,
+    MAX_TERMINAL_FEED_BYTES, MAX_TERMINAL_ROWS, MIN_TERMINAL_COLUMNS, ProjectionError,
+    RejectedEvents, SemanticCell, SemanticColor, SemanticCursor, SemanticCursorShape,
+    SemanticSnapshot, SemanticStyle, TerminalCore, TerminalCoreError, TerminalEventSink,
+    TerminalReply, Underline,
 };
 pub use parser::{TerminalFault, TerminalParser, TerminalSafeCode};
 pub use queries::{TerminalQueries, TerminalQuery};

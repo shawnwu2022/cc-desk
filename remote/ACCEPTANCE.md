@@ -1,6 +1,38 @@
 # Remote integration evidence ledger
 
-## Private output-continuity checkpoint (2026-10-29)
+## Bounded semantic-view / safety checkpoint (2026-10-29)
+
+Current final workspace230 passed,0 failed,2 ignored; strict Clippy/fmt pass.
+The immutable active-grid view copies at most24000 finite cells with Host wide/
+spacer/wrap roles, styles/colors,cursor and buffer, with payload-redacted Debug.
+It refuses unmodeled state and freezes instead of presenting a valid-looking stale
+view. Both buffers/parser remain on Host; this is not a serialized full emulator,
+wire snapshot, revision/epoch barrier or control eligibility. Host queue capture,
+two-frame credits,wire/reducer/renderer and complete E05 remain subsequent work.
+
+Independent review found and execution reproduced two real preconditions:
+one-column wide input panicked in the locked emulator and one-column resize hung;
+the shared Core geometry guard now enforces upstream MIN_COLUMNS=2 before new/resize.
+This is explicit compatibility narrowing, not silent clamping. Native PTY general
+size validation is separate. A malformed first-column cursor spacer also panicked
+before old renderer normalization; projection now validates raw cursor and performs
+checked normalization, rejecting/freezing invalid state. The own hung test was
+identified by exact executable path/start time, stopped and confirmed exited; no
+user process, global CIM scan, ACL or privilege change was used.
+
+The first two whole-workspace attempts were226 passed/1 failed/2 ignored. Their
+pressure worker failed PROGRESS_UNREADABLE after the resume predicate had succeeded:
+reporting reread a counter file during its fixture truncate/update gap. The reviewed
+TEST_ONLY fix reports the accepted sample itself, preserving both+64KiB thresholds,
+the original2s observation interval,two300ms stalls and cleanup assertions. Three
+new tests cover a real temporary-file gap,late sample refusal and thresholds/overflow;
+the5 real lifecycle cases and final complete workspace pass. This does not establish
+a general native hard deadline or repair the unrelated historical handle probe.
+
+All default-root OS5,storage conditions,handle-cause,full VT/IME,Win11/mobile,real AI,
+Host actor/lease and release gates below remain OPEN; remote control stays disabled.
+
+## Historical private output-continuity checkpoint (2026-10-29,2fb2ace)
 
 The actual private reader/writer entry now requires a native byte offset; no
 implicit append API remains. Activation/seal precede exact offset and overflow

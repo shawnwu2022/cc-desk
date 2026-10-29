@@ -60,8 +60,26 @@ The default feature set remains this parser-only profile. The default-off
 Its dependency on vte0.15.0 is forced through the workspace crates.io patch to the
 same vendored source above. `TerminalCore` validates all input with the bounded
 parser before applying a batch to a persistent Alacritty `Term`. Construction and
-resize reject zero geometry and anything above240 columns by100 rows before calling
+resize require at least2 columns (the locked emulator's minimum), reject zero rows
+and anything above240 columns by100 rows before calling
 Alacritty allocation code. This software-only slice uses `scrolling_history=0`.
+
+The explicit `semantic_snapshot` API copies the complete active row-major grid,
+Host-decided wide/spacer/wrap roles, finite colors/styles, cursor and buffer kind.
+It does not use trimmed row_text, clone CellExtra or serialize the Term/parser.
+Its no-Clone/no-Serialize view has at most24000 fixed-size cells and redacts payload
+Debug. Unmodeled extras/flags/palette/modes or invalid cursor roles fail and freeze
+the core; degraded state cannot publish a stale-looking valid view. A minimum-width
+regression reproduced a one-column wide-character panic and resize hang before
+the shared pre-allocation geometry guard was corrected. Raw cursor checks precede
+renderer-like spacer normalization, with checked subtraction. The native PTY's
+general size API is separate; canonical construction independently requires2 cols.
+
+This first view is not an emulator recovery checkpoint, revision/dimension/mode
+epoch, Host sync/barrier or wire DTO. Both buffers and parser continuation stay on
+Host. Same-writer offset/revision capture, two-snapshot memory credits,128-cell/
+32KiB encoding,reducer/renderer and input eligibility are subsequent integration
+work; this API alone does not complete E05 or allow remote control.
 
 The experimental input gate currently admits printable non-combining Unicode,
 CR/LF, cursor-home CSI, bounded basic SGR colors/flags/reset, and exact alternate-buffer
