@@ -94,13 +94,15 @@ fn capture(
 }
 
 pub(super) fn run(case: &str) -> bool {
-    const CASES: [&str; 6] = [
+    const CASES: [&str; 8] = [
         "fresh_owned_pipe_launch_phase_probe",
         "actual_owned_pipe_is_committed_through_durable_single_writer",
         "actual_pipe_guard_bounds_and_queue_are_fail_closed",
         "actual_writer_panic_retains_terminal_join_error_and_unknown_intent",
         "actual_pipe_effect_then_storage_failure_reopens_only_as_unknown",
         "actual_owned_pty_uses_the_same_durable_single_writer_without_reply_bypass",
+        "actual_owned_pty_uses_canonical_writer_without_reply_bypass",
+        "cli_tests::installed_codex_help_uses_empty_home_and_private_pty_reply_gate",
     ];
     assert!(CASES.contains(&case));
     if let Some(sentinel) = std::env::var_os("CC_DESK_TEST_ONLY_WRITER_WORKER") {
@@ -131,6 +133,19 @@ pub(super) fn run(case: &str) -> bool {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .creation_flags(0x00000008);
+    if case == "cli_tests::installed_codex_help_uses_empty_home_and_private_pty_reply_gate" {
+        command.arg("--ignored");
+        for name in [
+            "SystemRoot",
+            "CC_DESK_TEST_ONLY_CODEX_EXE",
+            "CC_DESK_TEST_ONLY_CODEX_SHA256",
+        ] {
+            command.env(
+                name,
+                std::env::var_os(name).expect("explicit reviewed CLI fixture metadata required"),
+            );
+        }
+    }
     let mut owner = Supervisor {
         child: command.spawn().unwrap(),
         outer: Some(outer),

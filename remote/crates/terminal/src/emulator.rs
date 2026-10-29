@@ -1,6 +1,6 @@
 use std::fmt;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use alacritty_terminal::Term;
 use alacritty_terminal::event::{Event, EventListener};
@@ -13,6 +13,10 @@ use alacritty_terminal::vte::ansi::Processor;
 use unicode_width::UnicodeWidthChar;
 
 use crate::{TerminalFault, TerminalParser, TerminalSafeCode};
+#[path = "canonical.rs"]
+mod canonical;
+pub use canonical::{CanonicalEvent, CanonicalFeedError, CanonicalQuery, TerminalReply};
+use canonical::{QueryMark, ReplyCapture};
 
 pub const MAX_TERMINAL_COLUMNS: usize = 240;
 pub const MAX_TERMINAL_ROWS: usize = 100;
@@ -40,14 +44,14 @@ struct EventCounters {
     native_effects: AtomicU64,
 }
 
-/// A fail-closed listener which drops every emulator event.
+/// A fail-closed listener which drops events except a scoped pure query encoding.
 ///
-/// It records only counters, never event payloads. In particular, terminal
-/// replies are not connected to a PTY and clipboard requests have no native
-/// side effects.
+/// Outside that private scope it records counters only. The bounded query scope
+/// retains at most one ten-byte response. No PTY or clipboard API is connected.
 #[derive(Clone, Default)]
 pub struct TerminalEventSink {
     counters: Arc<EventCounters>,
+    capture: Arc<Mutex<ReplyCapture>>,
 }
 
 impl TerminalEventSink {
@@ -64,7 +68,19 @@ impl EventListener for TerminalEventSink {
     fn send_event(&self, event: Event) {
         let counter = match event {
             Event::ClipboardStore(..) | Event::ClipboardLoad(..) => &self.counters.clipboard,
-            Event::PtyWrite(..) => &self.counters.pty_writes,
+            Event::PtyWrite(bytes) => {
+                if let Ok(mut capture) = self.capture.lock()
+                    && capture.active
+                {
+                    if capture.bytes.is_some() || bytes.len() > 10 {
+                        capture.failed = true;
+                    } else {
+                        capture.bytes = Some(bytes.into_bytes());
+                    }
+                    return;
+                }
+                &self.counters.pty_writes
+            }
             Event::MouseCursorDirty | Event::CursorBlinkingChange | Event::Wakeup => return,
             Event::Title(..)
             | Event::ResetTitle
@@ -149,6 +165,16 @@ impl TerminalCore {
     /// the patched 4096-byte bound, the core becomes degraded and the failing
     /// batch is never applied to the Alacritty state.
     pub fn feed(&mut self, bytes: &[u8]) -> Result<(), TerminalFault> {
+        self.validate_batch(bytes, false)?;
+        self.processor.advance(&mut self.term, bytes);
+        Ok(())
+    }
+
+    fn validate_batch(
+        &mut self,
+        bytes: &[u8],
+        marked: bool,
+    ) -> Result<Vec<QueryMark>, TerminalFault> {
         if let Some(code) = self.degraded {
             return Err(TerminalFault::Degraded(code));
         }
@@ -159,8 +185,26 @@ impl TerminalCore {
             ));
         }
 
+        self.input_gate.queries.clear();
+        self.input_gate.record_queries = marked;
         let blocked_osc52 = self.validator.blocked_osc52_count();
-        self.validator.feed(&mut self.input_gate, bytes)?;
+        let validation = (|| {
+            if marked {
+                for (index, byte) in bytes.iter().enumerate() {
+                    self.input_gate.offset = index + 1;
+                    self.validator
+                        .feed(&mut self.input_gate, std::slice::from_ref(byte))?;
+                }
+                Ok(())
+            } else {
+                self.validator.feed(&mut self.input_gate, bytes)
+            }
+        })();
+        self.input_gate.record_queries = false;
+        if let Err(error @ TerminalFault::Degraded(code)) = validation {
+            self.degraded = Some(code);
+            return Err(error);
+        }
 
         let rejected = if self.validator.take_string_sequence_entered()
             || self.validator.blocked_osc52_count() != blocked_osc52
@@ -174,8 +218,7 @@ impl TerminalCore {
             return Err(TerminalFault::Degraded(code));
         }
 
-        self.processor.advance(&mut self.term, bytes);
-        Ok(())
+        Ok(std::mem::take(&mut self.input_gate.queries))
     }
 
     pub fn resize(&mut self, rows: usize, columns: usize) -> Result<(), TerminalCoreError> {
@@ -252,9 +295,28 @@ fn validate_size(rows: usize, columns: usize) -> Result<TerminalSize, TerminalCo
 #[derive(Default)]
 struct RestrictedInputGate {
     rejected: Option<TerminalSafeCode>,
+    allow_queries: bool,
+    record_queries: bool,
+    offset: usize,
+    queries: Vec<QueryMark>,
 }
 
 impl RestrictedInputGate {
+    fn conpty_compatibility_control(
+        params: &alacritty_terminal::vte::Params,
+        intermediates: &[u8],
+        action: char,
+    ) -> bool {
+        // Exact, reviewed startup subset only. CSI1t is intentionally inert in
+        // the locked Processor (never a native window activation). Focus is a
+        // bounded TermMode flag. Win32-input-mode is explicitly unsupported:
+        // Microsoft's ConPTY spec permits terminals to ignore this optional
+        // request and retain legacy VT input; do not claim KEY_EVENT fidelity.
+        (intermediates.is_empty() && action == 't' && params.iter().eq([&[1][..]]))
+            || (intermediates == b"?"
+                && matches!(action, 'h' | 'l')
+                && (params.iter().eq([&[1004][..]]) || params.iter().eq([&[9001][..]])))
+    }
     fn reject(&mut self, code: TerminalSafeCode) {
         self.rejected.get_or_insert(code);
     }
@@ -333,6 +395,24 @@ impl Perform for RestrictedInputGate {
         ignore: bool,
         action: char,
     ) {
+        if self.allow_queries && !ignore {
+            if let Some(kind) = canonical::recognize(params, intermediates, action) {
+                if self.record_queries {
+                    if self.queries.len() == 32 {
+                        self.reject(TerminalSafeCode::ReplyQueryBudgetExceeded);
+                    } else {
+                        self.queries.push(QueryMark {
+                            offset: self.offset,
+                            kind,
+                        });
+                    }
+                }
+                return;
+            }
+            if Self::conpty_compatibility_control(params, intermediates, action) {
+                return;
+            }
+        }
         if ignore || !Self::allowed_csi(params, intermediates, action) {
             self.reject(TerminalSafeCode::UnsupportedSequence);
         }

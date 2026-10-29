@@ -9,6 +9,187 @@ fn output_chunk_submission_requires_an_exclusive_producer_borrow() {
     ) -> Result<replies::PendingOutput, Reject> = HostOutputHandle::feed;
 }
 
+#[cfg(feature = "experimental-canonical-replies")]
+#[test]
+fn canonical_prefix_replies_use_the_same_writer_and_no_user_journal_operation() {
+    let dir = tempfile::tempdir().unwrap();
+    let sink = Sink::default();
+    let observed = sink.clone();
+    let (mut writer, mut cap) = LocalWriter::start_canonical_terminal(
+        Journal::open(&dir.path().join("journal.sqlite")).unwrap(),
+        sink,
+        operation().target(),
+        operation().device,
+        9,
+        DigestKey::from_backend_bytes([0x5a; 32]),
+        CanonicalStart::new(3, 10).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        feed(&mut cap, b"abc\x1b[6n\x1b[2;5HZ\x1b[6n"),
+        OutputResult::Processed { replies: 2 }
+    );
+    finish(&mut writer);
+    assert_eq!(&*observed.0.lock().unwrap(), b"\x1b[1;4R\x1b[2;6R");
+    assert_eq!(
+        Journal::open(&dir.path().join("journal.sqlite"))
+            .unwrap()
+            .query(&operation())
+            .unwrap(),
+        ReceiptLookup::Missing
+    );
+    assert!(matches!(CanonicalStart::new(0, 10), Err(Reject::Bounds)));
+}
+
+#[cfg(feature = "experimental-canonical-replies")]
+#[test]
+fn canonical_bad_tail_and_rate_overflow_do_not_emit_unvalidated_replies() {
+    for flood in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let sink = Sink::default();
+        let observed = sink.clone();
+        let (mut writer, mut cap) = LocalWriter::start_canonical_terminal(
+            Journal::open(&dir.path().join("journal.sqlite")).unwrap(),
+            sink,
+            operation().target(),
+            operation().device,
+            9,
+            DigestKey::from_backend_bytes([0x5a; 32]),
+            CanonicalStart::new(3, 10).unwrap(),
+        )
+        .unwrap();
+        if flood {
+            assert_eq!(
+                feed(&mut cap, &b"\x1b[6n".repeat(32)),
+                OutputResult::Processed { replies: 32 }
+            );
+            assert_eq!(
+                feed(&mut cap, b"\x1b[6n"),
+                OutputResult::Rejected(Reject::Rate)
+            );
+            assert_eq!(observed.0.lock().unwrap().len(), 32 * 6);
+        } else {
+            assert_eq!(
+                feed(&mut cap, b"abc\x1b[6n\x1b]52;c;x\x07"),
+                OutputResult::Rejected(Reject::Unsupported)
+            );
+            assert!(observed.0.lock().unwrap().is_empty());
+        }
+        assert!(matches!(cap.feed(b"\x1b[6n".to_vec()), Err(Reject::Sealed)));
+        finish(&mut writer);
+    }
+}
+
+#[cfg(feature = "experimental-canonical-replies")]
+#[test]
+fn canonical_stale_activation_and_stop_between_queries_never_reopen_the_writer() {
+    struct Stop {
+        sealed: Arc<Mutex<Option<Arc<AtomicBool>>>>,
+        sink: Sink,
+    }
+    impl io::Write for Stop {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            let n = self.sink.write(bytes)?;
+            self.sealed
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .store(true, Ordering::Release);
+            Ok(n)
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let sink = Sink::default();
+    let observed = sink.clone();
+    let sealed = Arc::new(Mutex::new(None));
+    let (mut writer, mut cap) = LocalWriter::start_canonical_terminal(
+        Journal::open(&dir.path().join("journal.sqlite")).unwrap(),
+        Stop {
+            sealed: sealed.clone(),
+            sink,
+        },
+        operation().target(),
+        operation().device,
+        9,
+        DigestKey::from_backend_bytes([0x5a; 32]),
+        CanonicalStart::new(3, 10).unwrap(),
+    )
+    .unwrap();
+    *sealed.lock().unwrap() = Some(writer.handle.sealed.clone());
+    let actual = cap.context.clone();
+    cap.context = Arc::new(());
+    assert_eq!(
+        feed(&mut cap, b"abc\x1b[6n"),
+        OutputResult::Rejected(Reject::Epoch)
+    );
+    assert!(observed.0.lock().unwrap().is_empty());
+    cap.context = actual;
+    assert_eq!(feed(&mut cap, b"ab\x1b[6nZ\x1b[6n"), OutputResult::Partial);
+    assert_eq!(&*observed.0.lock().unwrap(), b"\x1b[1;3R");
+    assert!(matches!(cap.feed(b"\x1b[6n".to_vec()), Err(Reject::Sealed)));
+    finish(&mut writer);
+}
+
+#[cfg(feature = "experimental-canonical-replies")]
+#[test]
+fn canonical_partial_or_unknown_io_remains_sealed_without_user_receipts() {
+    struct Fail {
+        progress: bool,
+        bytes: Vec<u8>,
+    }
+    impl io::Write for Fail {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            if self.progress {
+                self.progress = false;
+                self.bytes.push(bytes[0]);
+                Ok(1)
+            } else {
+                Err(io::Error::other("PUBLIC_TEST_ONLY_CANONICAL_FAILURE"))
+            }
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    for progress in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut writer, mut cap) = LocalWriter::start_canonical_terminal(
+            Journal::open(&dir.path().join("journal.sqlite")).unwrap(),
+            Fail {
+                progress,
+                bytes: Vec::new(),
+            },
+            operation().target(),
+            operation().device,
+            9,
+            DigestKey::from_backend_bytes([0x5a; 32]),
+            CanonicalStart::new(3, 10).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            feed(&mut cap, b"abc\x1b[6n"),
+            if progress {
+                OutputResult::Partial
+            } else {
+                OutputResult::Unknown
+            }
+        );
+        assert!(matches!(cap.feed(b"\x1b[6n".to_vec()), Err(Reject::Sealed)));
+        finish(&mut writer);
+        assert_eq!(
+            Journal::open(&dir.path().join("journal.sqlite"))
+                .unwrap()
+                .query(&operation())
+                .unwrap(),
+            ReceiptLookup::Missing
+        );
+    }
+}
+
 #[test]
 fn interrupted_io_has_a_finite_retry_budget_and_never_replays_partial_bytes() {
     struct Interrupt {

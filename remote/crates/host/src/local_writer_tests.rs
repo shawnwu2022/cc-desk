@@ -1,3 +1,5 @@
+#[path = "local_writer_cli_tests.rs"]
+mod cli_tests;
 #[path = "local_writer_supervisor.rs"]
 mod supervision;
 use super::*;
@@ -130,6 +132,19 @@ fn actual_owned_pty_uses_the_same_durable_single_writer_without_reply_bypass() {
     ) {
         return;
     }
+    actual_owned_pty_writer(false);
+}
+
+#[cfg(feature = "experimental-canonical-replies")]
+#[test]
+fn actual_owned_pty_uses_canonical_writer_without_reply_bypass() {
+    if !supervision::run("actual_owned_pty_uses_canonical_writer_without_reply_bypass") {
+        return;
+    }
+    actual_owned_pty_writer(true);
+}
+
+fn actual_owned_pty_writer(canonical: bool) {
     use cc_desk_native_runtime::{BackendPtyLaunch, NativeOwnedPtyRun, NativePtySize};
     use std::io::Read;
     let dir = tempfile::tempdir().unwrap();
@@ -153,20 +168,48 @@ fn actual_owned_pty_uses_the_same_durable_single_writer_without_reply_bypass() {
         NativeOwnedPtyRun::launch(recipe, NativePtySize::new(24, 80).unwrap(), end).unwrap();
     let mut output = run.take_reader().unwrap();
     let journal = Journal::open(&dir.path().join("journal.sqlite")).unwrap();
-    let (mut writer, mut output_capability) = LocalWriter::start_terminal(
-        journal,
-        run.take_writer().unwrap(),
-        key().target(),
-        key().device,
-        9,
-        DigestKey::from_backend_bytes([0x5a; 32]),
-    )
-    .unwrap();
+    let stdin = run.take_writer().unwrap();
+    #[cfg(feature = "experimental-canonical-replies")]
+    let pair = if canonical {
+        LocalWriter::start_canonical_terminal(
+            journal,
+            stdin,
+            key().target(),
+            key().device,
+            9,
+            DigestKey::from_backend_bytes([0x5a; 32]),
+            CanonicalStart::new(24, 80).unwrap(),
+        )
+    } else {
+        LocalWriter::start_terminal(
+            journal,
+            stdin,
+            key().target(),
+            key().device,
+            9,
+            DigestKey::from_backend_bytes([0x5a; 32]),
+        )
+    };
+    #[cfg(not(feature = "experimental-canonical-replies"))]
+    let pair = {
+        assert!(!canonical);
+        LocalWriter::start_terminal(
+            journal,
+            stdin,
+            key().target(),
+            key().device,
+            9,
+            DigestKey::from_backend_bytes([0x5a; 32]),
+        )
+    };
+    let (mut writer, mut output_capability) = pair.unwrap();
     let (done_tx, done_rx) = mpsc::sync_channel(1);
     let reader = std::thread::spawn(move || {
         let mut bytes = Vec::new();
         let mut buf = [0; 4096];
         let mut forwarding = true;
+        let mut refusal = None;
+        let mut reply_count = 0;
         // Reader owns no writer and supplies no reply bytes. It forwards actual
         // output through the private production parser capability; after seal it
         // only drains to real EOF, never reopens a parser or input route.
@@ -174,7 +217,7 @@ fn actual_owned_pty_uses_the_same_durable_single_writer_without_reply_bypass() {
             loop {
                 let n = output.read(&mut buf)?;
                 if n == 0 {
-                    break Ok(bytes);
+                    break Ok((bytes, refusal, reply_count));
                 }
                 if bytes.len() + n > 65536 {
                     break Err(std::io::Error::other("PUBLIC_TEST_ONLY_OUTPUT_CAP"));
@@ -183,11 +226,17 @@ fn actual_owned_pty_uses_the_same_durable_single_writer_without_reply_bypass() {
                 if forwarding {
                     match output_capability.feed(buf[..n].to_vec()) {
                         Ok(pending) => match pending.wait(Duration::from_secs(1)) {
-                            Ok(OutputResult::Processed { .. }) => {}
+                            Ok(OutputResult::Processed { replies }) => {
+                                reply_count += u32::from(replies)
+                            }
                             Ok(OutputResult::Rejected(Reject::Sealed)) => forwarding = false,
-                            _ => {
+                            Ok(other) => {
+                                refusal = Some(other);
+                                forwarding = false;
+                            }
+                            Err(_) => {
                                 break Err(std::io::Error::other(
-                                    "PUBLIC_TEST_ONLY_OUTPUT_NOT_ACCEPTED",
+                                    "PUBLIC_TEST_ONLY_OUTPUT_UNCERTAIN",
                                 ));
                             }
                         },
@@ -203,20 +252,15 @@ fn actual_owned_pty_uses_the_same_durable_single_writer_without_reply_bypass() {
     });
     assert!(run.take_writer().is_none());
     let handle = writer.handle();
+    let mut results = Vec::new();
     for _ in 0..2 {
-        let reply = handle
-            .submit(key(), 9, b"PUBLIC_TEST_ONLY\r".to_vec())
-            .unwrap()
-            .wait(Duration::from_secs(1))
-            .unwrap();
-        assert!(matches!(
-            reply,
-            WriteResult::Receipt(ReceiptEnvelope {
-                outcome: Outcome::HostWritten,
-                receipt_proof: Some(_),
-                ..
-            })
-        ));
+        match handle.submit(key(), 9, b"PUBLIC_TEST_ONLY\r".to_vec()) {
+            Ok(pending) => results.push(pending.wait(Duration::from_secs(1))),
+            Err(error) => {
+                results.push(Ok(WriteResult::Rejected(error)));
+                break;
+            }
+        }
     }
     // Receipt above is not CLI completion; observe the independent public fixture.
     let effect_end = Instant::now() + Duration::from_secs(2);
@@ -234,7 +278,7 @@ fn actual_owned_pty_uses_the_same_durable_single_writer_without_reply_bypass() {
     joined(&mut writer);
     assert_ne!(run.stop_root_until(end).unwrap().exit_code, 90);
     drop(run);
-    let output = done_rx
+    let (output, refusal, reply_count) = done_rx
         .recv_timeout(end.saturating_duration_since(Instant::now()))
         .unwrap()
         .unwrap();
@@ -244,6 +288,33 @@ fn actual_owned_pty_uses_the_same_durable_single_writer_without_reply_bypass() {
     }
     reader.join().unwrap();
     assert!(Instant::now() < end);
+    assert_eq!(
+        refusal,
+        None,
+        "fixed public fixture output refused; clear2J={}; eraseK={}; cursor_visibility={}; query14t={}; query18t={}; cleanup_root_eof_join=true",
+        output.windows(4).any(|w| w == b"\x1b[2J"),
+        output.windows(3).any(|w| w == b"\x1b[K"),
+        output
+            .windows(6)
+            .any(|w| w == b"\x1b[?25h" || w == b"\x1b[?25l"),
+        output.windows(5).any(|w| w == b"\x1b[14t"),
+        output.windows(5).any(|w| w == b"\x1b[18t")
+    );
+    assert!(
+        reply_count > 0,
+        "actual PTY must traverse the private reply encoder"
+    );
+    assert_eq!(results.len(), 2);
+    for reply in results {
+        assert!(matches!(
+            reply,
+            Ok(WriteResult::Receipt(ReceiptEnvelope {
+                outcome: Outcome::HostWritten,
+                receipt_proof: Some(_),
+                ..
+            }))
+        ));
+    }
     assert_eq!(
         effect.as_deref(),
         Some(&b"x"[..]),

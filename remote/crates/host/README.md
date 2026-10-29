@@ -112,9 +112,48 @@ per logical write, then Unknown/Partial without repeating already written bytes.
 This bounds retry-loop CPU, not a blocked native Write/flush or Windows destruction.
 
 A blocked user write can still delay a queued DA reply. Full-pipe startup/global
-progress, stateful DSR/color/size replies, canonical display state and complete
+progress, color/size replies, canonical display projection and complete
 E04/E09 remain OPEN. This reply-only parser executes no clipboard, title, URI, file
 or unknown native events. The default-off remote/control gate is unchanged.
+
+### Experimental canonical-prefix replies
+
+The additional default-off `experimental-canonical-replies` feature offers a private
+`start_canonical_terminal` factory. A non-clone fresh `CanonicalStart` validates
+startup geometry (1..100 rows,1..240 columns) before worker creation. The backend
+must use that exact PTY geometry; resize and mode-epoch publication are not yet
+implemented. It does not replace or silently enable the static reply factory.
+
+The single writer owns the locked emulator, validates the entire output batch,
+checks the same activation and stop commit point, and only then consumes a borrowed
+query encoder at its exact canonical prefix. It supports Primary DA, status DSR5
+and cursor DSR6, with at most10 bytes/reply and32 logical reply commits/rolling
+second (up to320 logical response bytes, not a physical throughput guarantee).
+Malformed/unsupported tails and batch/rate overflow emit no replies from that batch.
+Stop between replies reports Partial; partial/unknown IO seals without replay or
+a user receipt. A callback failure or panic permanently degrades that core.
+
+This is still the restricted emulator input profile, not arbitrary CLI VT support.
+It rejects unsupported modes/strings/combining characters, retains zero history,
+and always reports remote_control_eligible=false. Unit fake-IO evidence establishes
+prefix encoding and writer guards, not real CLI compatibility, renderer fidelity,
+multi-client resize authority, reconnect or remote production acceptance.
+The trusted single PTY reader must forward each fresh output byte exactly once.
+This local capability does not carry an output-offset/ACK and cannot detect replay
+of an already-consumed output batch. Reconnect/replay must use a separate projection
+path and must not feed prior output back into this reply authority; its end-to-end
+offset/continuity gate remains an explicit integration requirement.
+
+A Windows10 fixed public Rust fixture also traverses this canonical factory and
+the actual ConPTY reader/same-writer path. Its duplicate CR-line operation has one
+independent effect; root stop, output EOF and reader/writer joins are observed.
+The startup DA response traverses the private encoder. Stateful CPR prefix accuracy
+is separately tested with synthetic output; the native fixture does not establish
+real CLI CPR/full-screen behavior. Precise startup1t/1004 and declined9001 handling
+is described in the terminal README; this is legacy VT qualification, not complete
+Win32 key-event compatibility. An explicit ignored installed-Codex `--help` test
+uses a reviewed executable hash and fresh empty private profile with no account
+credentials; it qualifies offline help/startup only, never an AI session.
 
 The internal schema is now version2. New databases persist independent admission and
 settled floors plus the latest bounded ACK witness. Existing version1 databases are

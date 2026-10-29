@@ -12,8 +12,9 @@ mod queries;
 pub use budget::OSC_PAYLOAD_LIMIT;
 #[cfg(feature = "experimental-emulator")]
 pub use emulator::{
-    MAX_TERMINAL_COLUMNS, MAX_TERMINAL_FEED_BYTES, MAX_TERMINAL_ROWS, RejectedEvents, TerminalCore,
-    TerminalCoreError, TerminalEventSink,
+    CanonicalEvent, CanonicalFeedError, CanonicalQuery, MAX_TERMINAL_COLUMNS,
+    MAX_TERMINAL_FEED_BYTES, MAX_TERMINAL_ROWS, RejectedEvents, TerminalCore, TerminalCoreError,
+    TerminalEventSink, TerminalReply,
 };
 pub use parser::{TerminalFault, TerminalParser, TerminalSafeCode};
 pub use queries::{TerminalQueries, TerminalQuery};

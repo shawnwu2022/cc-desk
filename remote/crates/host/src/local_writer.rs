@@ -2,6 +2,8 @@
 use crate::journal::*;
 #[path = "local_writer_replies.rs"]
 mod replies;
+#[cfg(feature = "experimental-canonical-replies")]
+use replies::CanonicalStart;
 use replies::{HostOutputHandle, OutputRequest, OutputResult, ReplyState};
 use std::{
     io::Write,
@@ -184,7 +186,7 @@ pub struct LocalWriter {
 }
 #[derive(Default)]
 struct WriterConfig {
-    replies: Option<Arc<()>>,
+    replies: Option<ReplyState>,
     #[cfg(test)]
     after_write: Option<Box<dyn FnOnce() + Send>>,
 }
@@ -234,7 +236,34 @@ impl LocalWriter {
             epoch,
             key,
             WriterConfig {
-                replies: Some(context.clone()),
+                replies: Some(ReplyState::new(context.clone())),
+                #[cfg(test)]
+                after_write: None,
+            },
+        )?;
+        let output = HostOutputHandle::new(&writer.handle, context);
+        Ok((writer, output))
+    }
+    #[cfg(feature = "experimental-canonical-replies")]
+    pub(crate) fn start_canonical_terminal(
+        journal: Journal,
+        stdin: impl Write + Send + 'static,
+        target: Target,
+        device: [u8; 32],
+        epoch: u64,
+        key: DigestKey,
+        start: CanonicalStart,
+    ) -> Result<(Self, HostOutputHandle), Reject> {
+        let context = Arc::new(());
+        let writer = Self::start_with(
+            journal,
+            stdin,
+            target,
+            device,
+            epoch,
+            key,
+            WriterConfig {
+                replies: Some(ReplyState::canonical(context.clone(), start)),
                 #[cfg(test)]
                 after_write: None,
             },
@@ -272,7 +301,7 @@ impl LocalWriter {
         let worker = std::thread::Builder::new()
             .name("cc-local-writer".into())
             .spawn(move || {
-                let mut replies = config.replies.take().map(ReplyState::new);
+                let mut replies = config.replies.take();
                 loop {
                     if sealed.load(Ordering::Acquire) {
                         reject_queued(&rx);

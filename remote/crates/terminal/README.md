@@ -14,6 +14,32 @@ oversize/OSC overflow/query overflow become sticky with their original safe code
 The Host private writer consumes these events under its own activation/rate/stop
 checks and performs all actual IO. No clipboard/navigation/native event is executed.
 
+With `experimental-emulator`, explicit `TerminalCore::new_with_queries` adds a
+restricted canonical profile for Primary DA, DSR5 and DSR6. Ordinary construction
+still denies queries. `feed_with_queries` validates the full batch first, advances
+the mature emulator only to each query prefix, and lends a consumed encoder to the
+trusted backend callback. The callback must check its stop/fence/capability before
+encoding. Responses use the locked Alacritty handlers, not sampled batch-tail or
+hardcoded cursor state. Each response is capped at10 bytes for the bounded geometry;
+each batch has at most32 queries and16384 input bytes. Other native events remain
+denied. Callback failure/panic freezes the continuation so validator/canonical
+divergence cannot reopen a later feed. This does not implement full VT, snapshots,
+remote eligibility, resize authority or a PTY connection in this crate.
+On a query-enabled core, ordinary `feed` is state consumption with replies dropped;
+it has no query callback/reply-completeness guarantee. The Host canonical writer
+exclusively uses `feed_with_queries`; callers must not mix the entry points to
+claim that every terminal query was answered.
+
+Only this explicit query profile also consumes exact ConPTY startup CSI1t as inert
+(no window activation), and exact DECSET/DECRST1004 through the mature focus flag.
+It explicitly declines optional Win32-input-mode9001 and retains legacy VT input;
+it does not claim to have enabled the extension or complete KEY_EVENT fidelity.
+The [Microsoft compatibility contract](https://github.com/microsoft/terminal/blob/main/doc/specs/%234999%20-%20Improved%20keyboard%20handling%20in%20Conpty.md#terminals-that-dont-support-9001h)
+permits unsupported terminals to ignore that always-issued startup request.
+Other window/mode operations and multi/subparameter variants remain rejected.
+No focus event is synthesized from output. Full key modifiers, key-up, IME and
+input-mode publication/encoding remain separate acceptance requirements.
+
 The std parser budgets4096 OSC payload bytes before append, including otherwise
 ignored controls/separators.4097 marks overflow, clears retained bytes, discards raw
 input through BEL or ST, and never dispatches a truncated command. The adapter stops

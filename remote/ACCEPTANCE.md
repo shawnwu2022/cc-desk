@@ -1,6 +1,42 @@
 # Remote integration evidence ledger
 
-## Restricted Primary DA composition (2026-10-29)
+## Canonical-prefix / native PTY checkpoint (2026-10-29)
+
+Latest reviewed component snapshot:212 passed,0 failed,2 explicitly ignored in the
+all-features workspace. Strict workspace Clippy and formatting pass after a
+collapsible-if style correction. All runs retain the process-local task-owned
+TEMP/TMP condition described below. The two ignored entries are the supervised
+native worker and the separately invoked installed-Codex offline-help qualification;
+do not count child/parent re-exec output twice.
+
+The default-off canonical factory now uses mature DA/DSR5/DSR6 encoding at each
+exact output prefix through the same private writer. Nine terminal cases include
+every stream split,10-byte maximum CPR,whole-batch refusal and Query-callback panic
+freeze. Four fake-IO Host cases cover prefixes,stale activation,stop,rate and unknown/
+partial writes. The real Win10 ConPTY fixed-line test also passes with duplicate
+operation producing one independently observed effect, an actual private DA reply,
+root stop, output EOF and both reader/writer joins. Its initial RED is retained:
+ConPTY startup1t/1004/9001 previously sealed the restricted profile. The precise
+compatibility fix executes no window operation, uses the mature focus flag and
+explicitly declines optional Win32-input-mode in favor of legacy VT as Microsoft
+permits. It is not full KEY_EVENT/IME/modifier compatibility or real CLI CPR proof.
+
+An installed Codex0.164.0 `--help` run independently qualifies actual CLI startup
+with a reviewed executable hash, empty private config/home and no account inputs.
+It uses the static DA factory and does not qualify interactive AI, canonical full
+VT, reconnection or remote authorization. See Host/terminal README contracts.
+
+The previous handle-probe failures remain OPEN despite this run passing. Its
+additional diagnostic edits were archived outside the repository then restored;
+no handle-leak fix is claimed. Default-root OS5, bounded full VT/projection,
+output-offset continuity, single Host actor/lease/resize, true retirement, Win11,
+mobile, real AI interaction and capacity/operations acceptance remain OPEN.
+
+This isolated branch still has base9743fdafd58ffef9b058b0826a9c13b5696d7b92.
+Published0.25.2 main/tagc7fc6b0fc5e6517ed667ccee59c6c0976045f565 must be retained at
+later integration; this checkpoint does not update main or establish release admission.
+
+## Historical restricted Primary DA composition (2026-10-29,54d7998)
 
 The retained real-PTY RED below has turned GREEN through the private production
 query parser and the same writer. The reader holds only an exclusive output
@@ -36,7 +72,7 @@ path above. Do not enable remote control or treat this as full E04/E09 completio
 
 The initial static-DA subset of the E04/E09 internal-reply contract is now implemented
 and the retained test rerun successfully. Stateful canonical replies and the full
-Host actor remain subsequent product work. The reviewed current workspace passes
+Host actor remain subsequent product work. That reviewed historical workspace passes
 198/198 plus one intentionally ignored supervised worker; strict Clippy/fmt pass.
 These results remain conditional on the explicit task-owned storage root.
 
