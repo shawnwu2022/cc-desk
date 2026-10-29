@@ -56,6 +56,12 @@ fn resource(c: &Context<'_>, key: &DigestKey) -> Result<[u8; 32], Code> {
     key.lifecycle_scope(&bytes).map_err(|_| Code::Malformed)
 }
 impl<B: Host> Durable<B> {
+    pub(crate) fn publish_attach(
+        &mut self,
+        event: &crate::lifecycle_completion::Applied,
+    ) -> Result<(), Code> {
+        self.backend.publish_attach(event)
+    }
     #[cfg(test)]
     pub(crate) fn inspect_backend(&self) -> &B {
         &self.backend

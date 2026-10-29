@@ -61,6 +61,12 @@ impl Rights {
     }
 }
 pub(crate) trait Host {
+    fn publish_attach(
+        &mut self,
+        _event: &crate::lifecycle_completion::Applied,
+    ) -> Result<(), Code> {
+        Ok(())
+    }
     fn permits_attach_recovery(&self) -> bool {
         false
     }
@@ -242,6 +248,10 @@ impl<B: Host> Router<B> {
 }
 impl<B: Host> Router<crate::lifecycle_durable::Durable<B>> {
     #[cfg(test)]
+    pub(crate) fn interrupt_publication_for_test(&mut self) {
+        self.interrupt_completion = true;
+    }
+    #[cfg(test)]
     pub(crate) fn inspect_backend(&self) -> &B {
         self.backend.inspect_backend()
     }
@@ -269,7 +279,12 @@ impl<B: Host> Router<crate::lifecycle_durable::Durable<B>> {
         }
         self.state = event.after;
         self.pending = false;
-        self.attached = Some(event);
+        self.attached = Some(event.clone());
+        if let Err(e) = self.backend.publish_attach(&event) {
+            self.pending = true;
+            self.attached = None;
+            return Err(e);
+        }
         Ok(true)
     }
     pub(crate) fn attached(&self) -> Result<Option<crate::lifecycle_completion::Applied>, Code> {

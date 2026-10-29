@@ -5,6 +5,8 @@ use crate::lifecycle_router::{Context, Host, ResourceIdentity};
 use authorized::{AuthorizedPeer, AuthorizedPendingRebind};
 use cc_desk_remote_record::lifecycle::{Code, Request as LifecycleRequest, State, Status};
 use std::time::Instant;
+#[path = "local_writer_attach_connection.rs"]
+mod connection;
 fn hex(b: &[u8]) -> String {
     b.iter().map(|n| format!("{n:02x}")).collect()
 }
@@ -27,10 +29,26 @@ pub(super) struct AttachBackend {
     pending: Option<Pending>,
     peer: Option<AuthorizedPeer>,
     failed: bool,
+    verified: Option<crate::lifecycle_completion::Applied>,
+    authority: Option<cc_desk_remote_security::BoundDataAuthority>,
+    ready: bool,
+    connection_taken: bool,
     #[cfg(test)]
     expire_before_publish: bool,
 }
 impl AttachBackend {
+    pub(super) fn connection(&mut self) -> Result<connection::Connection<'_>, Reject> {
+        if !self.ready || self.failed || self.connection_taken {
+            return Err(Reject::Pending);
+        }
+        let c = connection::Connection::new(
+            self.peer.as_ref().ok_or(Reject::Closed)?,
+            self.authority.as_ref().ok_or(Reject::Policy)?.clone(),
+            self.verified.as_ref().ok_or(Reject::Pending)?.after.fence,
+        )?;
+        self.connection_taken = true;
+        Ok(c)
+    }
     pub(super) fn new(
         owner: Arc<Mutex<WriterHostOwner>>,
         target: Target,
@@ -75,12 +93,23 @@ impl AttachBackend {
             pending: None,
             peer: None,
             failed: false,
+            verified: None,
+            authority: None,
+            ready: false,
+            connection_taken: false,
             #[cfg(test)]
             expire_before_publish: false,
         })
     }
 }
 impl Host for AttachBackend {
+    fn publish_attach(&mut self, event: &crate::lifecycle_completion::Applied) -> Result<(), Code> {
+        if self.failed || self.peer.is_none() || self.verified.as_ref() != Some(event) {
+            return Err(Code::Conflict);
+        }
+        self.ready = true;
+        Ok(())
+    }
     fn permits_attach_recovery(&self) -> bool {
         false
     } // Native ownership recovery is not admitted.
@@ -121,6 +150,7 @@ impl Host for AttachBackend {
             Err(_) => return Status::Rejected(Code::Backend),
         };
         drop(owner);
+        self.authority = Some(c.proof.clone());
         self.pending = Some(Pending {
             native: Some(native),
             projection: None,
@@ -193,6 +223,12 @@ impl Host for AttachBackend {
             return Err(Code::Backend);
         }
         let result = job.sender.complete(&job.request, &self.identity, after);
+        if result.is_ok() {
+            self.verified = Some(crate::lifecycle_completion::Applied {
+                request: job.request.clone(),
+                after,
+            });
+        }
         self.pending = None;
         if result.is_err() {
             self.failed = true;

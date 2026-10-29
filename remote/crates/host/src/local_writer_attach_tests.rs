@@ -6,6 +6,8 @@ use crate::{
 };
 use cc_desk_remote_record::lifecycle::{Kind, Request, encode};
 use std::sync::atomic::AtomicU64;
+#[path = "local_writer_attach_connection_tests.rs"]
+mod connection_tests;
 #[test]
 fn native_attach_memory_default_denies_history() {
     struct Unopted;
@@ -13,12 +15,14 @@ fn native_attach_memory_default_denies_history() {
     assert!(!Unopted.permits_attach_recovery());
 }
 struct TestIo {
+    writes: Arc<AtomicUsize>,
     entered: mpsc::SyncSender<()>,
     release: mpsc::Receiver<()>,
     block: bool,
 }
 impl Write for TestIo {
     fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+        self.writes.fetch_add(1, Ordering::AcqRel);
         if self.block {
             self.block = false;
             self.entered.send(()).unwrap();
@@ -34,8 +38,9 @@ impl Write for TestIo {
 }
 #[tokio::test]
 async fn native_attach_memory_installs_peer_without_snapshot_ack() {
-    for drift in [0, 1, 2, 3, 4, 5, 6, 7, 8] {
+    for drift in 0..=18 {
         let now = Arc::new(AtomicU64::new(1000));
+        let writes = Arc::new(AtomicUsize::new(0));
         let (c, h, mut gate, _cancel, grant) = support::channels(now.clone()).await;
         let (entered_tx, entered_rx) = mpsc::sync_channel(1);
         let (release_tx, release_rx) = mpsc::sync_channel(1);
@@ -54,17 +59,18 @@ async fn native_attach_memory_installs_peer_without_snapshot_ack() {
             .start_authorized(
                 Journal::open(&inputdir.path().join("input.sqlite")).unwrap(),
                 TestIo {
+                    writes: writes.clone(),
                     entered: entered_tx,
                     release: release_rx,
-                    block: drift == 3 || drift == 4,
+                    block: drift == 3 || drift == 4 || (13..=15).contains(&drift),
                 },
                 SessionStart {
                     target: target.clone(),
                     device: support::device(),
                     writer_epoch: 9,
                     key: DigestKey::from_backend_bytes([0x5a; 32]),
-                    rows: 3,
-                    columns: 10,
+                    rows: if (9..=12).contains(&drift) { 64 } else { 3 },
+                    columns: if (9..=12).contains(&drift) { 160 } else { 10 },
                 },
                 h.authority(),
                 [8; 16],
@@ -79,6 +85,7 @@ async fn native_attach_memory_installs_peer_without_snapshot_ack() {
             .unwrap()
             .unwrap();
         let stamp = frame.issued_stamp().unwrap();
+        let stale = stamp.clone();
         let mut baseline = State {
             generation: 3,
             fence: 4,
@@ -198,6 +205,10 @@ async fn native_attach_memory_installs_peer_without_snapshot_ack() {
                 router.inspect_backend_mut().expire_before_publish = true;
             }
             assert!(!router.inspect_backend().permits_attach_recovery());
+            assert!(matches!(
+                router.inspect_backend_mut().connection(),
+                Err(Reject::Pending)
+            ));
             let mut next = r.clone();
             next.sequence = 2;
             next.operation = [8; 16];
@@ -233,7 +244,7 @@ async fn native_attach_memory_installs_peer_without_snapshot_ack() {
                 ));
             }
             let end = Instant::now() + Duration::from_secs(1);
-            if drift != 0 {
+            if (1..=8).contains(&drift) {
                 loop {
                     match router.complete_attach() {
                         Err(Code::Backend) => break,
@@ -260,6 +271,24 @@ async fn native_attach_memory_installs_peer_without_snapshot_ack() {
                     .unwrap();
                 assert_eq!(status.fence, if drift == 4 || drift == 5 { 4 } else { 5 });
             } else {
+                if drift == 18 {
+                    router.interrupt_publication_for_test();
+                    let end = Instant::now() + Duration::from_secs(1);
+                    loop {
+                        match router.complete_attach() {
+                            Ok(false) => {
+                                assert!(Instant::now() < end);
+                                tokio::task::yield_now().await;
+                            }
+                            Err(Code::Backend) => break,
+                            v => panic!("publication cut: {v:?}"),
+                        }
+                    }
+                    assert!(matches!(
+                        router.inspect_backend_mut().connection(),
+                        Err(Reject::Pending)
+                    ));
+                }
                 while !router.complete_attach().unwrap() {
                     assert!(Instant::now() < end);
                     tokio::task::yield_now().await;
@@ -297,6 +326,32 @@ async fn native_attach_memory_installs_peer_without_snapshot_ack() {
                         .is_err()
                 );
                 drop(frame);
+                drop(record);
+                drop(rec);
+                drop(next_record);
+                let mut connection = router.inspect_backend_mut().connection().unwrap();
+                connection_tests::connection_flow(
+                    &mut connection,
+                    connection_tests::Flow {
+                        c: &c2,
+                        h: &h2,
+                        writes: &writes,
+                        now: &now,
+                        gate: &mut gate,
+                        output: &mut started.output,
+                        entered: &entered_rx,
+                        release: &release_tx,
+                        grant: &grant,
+                        stale: &stale,
+                    },
+                    drift,
+                )
+                .await;
+                drop(connection);
+                assert!(matches!(
+                    router.inspect_backend_mut().connection(),
+                    Err(Reject::Pending)
+                ));
             }
         }
         drop(router);

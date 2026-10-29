@@ -32,7 +32,9 @@ no input window and does not make the peer synchronized or input-eligible.
 
 Only then does the private Sender deposit installation evidence; Durable commits
 the sealed typed result before Router state/cache and authorized disclosure.
-No production getter exposes the retained peer. Generic history recovery defaults
+The private single-use connection in [POST-ATTACH-CONNECTION.md](POST-ATTACH-CONNECTION.md)
+is released after cache publication; it still requires delivery/ACK/window.
+No production getter exposes the raw peer. Generic history recovery defaults
 deny; reviewed fake recovery explicitly opts in, and this native adapter stays
 deny. Historical SQL cannot prove a real peer or writer has been recovered.
 
@@ -50,7 +52,8 @@ the durable/pending fail-closed state.
 
 ## Executed boundary matrix
 
-One memory-writer test runs9 cases: successful install with premature ACK refused;
+The original memory-writer test ran9 cases, now extended to19 with the connection
+chain in POST-ATTACH-CONNECTION.md: successful install with premature ACK refused;
 extra native capture; supported focus-mode epoch drift; blocked fake IO followed
 by timeout and demonstrated late fence5 install; queued revocation leaving fence4;
 stale expected fence leaving fence4; expired grant before admission; owner lock
