@@ -52,8 +52,10 @@ durable adapter, its distinct local metadata store and backend-owned immutable
 ResourceIdentity. The cache itself remains per-router; the separate journal
 prevents a recreated fake router from requeueing the same unresolved operation.
 Reopened Prepared/InFlight/Accepted become Uncertain, not retryable. Accepted
-is queue admission only; native completion/reconciliation is still unimplemented,
-so accepted operations continue to block new work. Resume cannot bypass this.
+is queue admission only; native completion/reconciliation is still unimplemented.
+Only the internal fake Attach channel in ATTACH-COMPLETION.md can release the
+same live router's pending gate after durable completion. Other accepted operations
+continue to block new work. Resume cannot bypass this.
 No real process-crash, power-loss or native at-most-once claim is made.
 
 ## Strict candidate wire contract

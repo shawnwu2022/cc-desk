@@ -61,6 +61,14 @@ impl Rights {
     }
 }
 pub(crate) trait Host {
+    fn attach_with_completion(
+        &mut self,
+        c: &Context<'_>,
+        r: &Request,
+        _completion: crate::lifecycle_completion::Sender,
+    ) -> Status {
+        self.attach(c, r)
+    }
     fn resource_identity(&self) -> Option<&ResourceIdentity> {
         None
     }
@@ -88,6 +96,9 @@ pub(crate) struct Router<B> {
     last: u64,
     cached: Option<Reply>,
     pending: bool,
+    attached: Option<crate::lifecycle_completion::Applied>,
+    #[cfg(test)]
+    interrupt_completion: bool,
 }
 impl<B: Host> Router<B> {
     #[cfg(test)]
@@ -127,6 +138,9 @@ impl<B: Host> Router<B> {
             last: 0,
             cached: None,
             pending: false,
+            attached: None,
+            #[cfg(test)]
+            interrupt_completion: false,
         })
     }
     pub fn dispatch(&mut self, record: &DataRecord) -> Result<Reply, Code> {
@@ -165,6 +179,7 @@ impl<B: Host> Router<B> {
         // Reserve before trusted queue submission. If it unwinds after an effect,
         // exact duplicates observe Unknown and no distinct operation is admitted.
         self.pending = true;
+        self.attached = None;
         self.cached = Some(Reply {
             request: r.clone(),
             status: Status::Unknown,
@@ -187,6 +202,33 @@ impl<B: Host> Router<B> {
     }
 }
 impl<B: Host> Router<crate::lifecycle_durable::Durable<B>> {
+    pub(crate) fn complete_attach(&mut self) -> Result<bool, Code> {
+        let Some(event) = self.backend.complete_attach()? else {
+            return Ok(false);
+        };
+        #[cfg(test)]
+        if std::mem::take(&mut self.interrupt_completion) {
+            return Err(Code::Backend);
+        }
+        if self.attached.as_ref() == Some(&event) {
+            return Ok(false);
+        }
+        if self
+            .cached
+            .as_ref()
+            .is_none_or(|r| r.request != event.request || r.status != Status::Accepted)
+        {
+            return Err(Code::Conflict);
+        }
+        self.state = event.after;
+        self.pending = false;
+        self.attached = Some(event);
+        Ok(true)
+    }
+    pub(crate) fn attached(&self) -> Result<Option<crate::lifecycle_completion::Applied>, Code> {
+        self.proof.check().map_err(|_| Code::Unauthorized)?;
+        Ok(self.attached.clone())
+    }
     pub(crate) fn durable(
         proof: BoundDataAuthority,
         expected: Expected,
@@ -203,6 +245,9 @@ impl<B: Host> Router<crate::lifecycle_durable::Durable<B>> {
         )
     }
 }
+#[cfg(all(test, windows))]
+#[path = "lifecycle_attach_tests.rs"]
+mod attach_tests;
 #[cfg(test)]
 #[path = "lifecycle_router_tests.rs"]
 mod tests;

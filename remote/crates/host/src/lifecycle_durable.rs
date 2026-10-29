@@ -12,6 +12,8 @@ pub(crate) struct Durable<B> {
     backend: B,
     resource: Option<[u8; 32]>,
     pending: Option<Ticket>,
+    instance: std::sync::Arc<()>,
+    completion: Option<(crate::lifecycle_completion::Receiver, [u8; 32])>,
     #[cfg(test)]
     before_backend: Option<Box<dyn FnOnce() + Send>>,
 }
@@ -60,6 +62,8 @@ impl<B: Host> Durable<B> {
             backend,
             resource: None,
             pending: None,
+            instance: std::sync::Arc::new(()),
+            completion: None,
             #[cfg(test)]
             before_backend: None,
         }
@@ -116,6 +120,7 @@ impl<B: Host> Durable<B> {
             return Status::Unknown;
         }
         self.pending = Some(ticket);
+        self.completion = None;
         #[cfg(test)]
         if let Some(f) = self.before_backend.take() {
             f();
@@ -137,7 +142,18 @@ impl<B: Host> Durable<B> {
         // No SQL transaction is held during the trusted nonblocking queue call.
         let status = match kind {
             Kind::Create => self.backend.create(c, r),
-            Kind::Attach => self.backend.attach(c, r),
+            Kind::Attach => {
+                let Ok((sender, receiver)) = crate::lifecycle_completion::channel(
+                    r.clone(),
+                    crate::lifecycle_router::ResourceIdentity::from_proof(c.proof),
+                    digest,
+                    self.instance.clone(),
+                ) else {
+                    return Status::Unknown;
+                };
+                self.completion = Some((receiver, digest));
+                self.backend.attach_with_completion(c, r, sender)
+            }
             Kind::Resize => self.backend.resize(c, r),
             Kind::Resume => self.backend.resume(c, r),
             Kind::Close => self.backend.close(c, r),
@@ -167,6 +183,30 @@ impl<B: Host> Durable<B> {
         )?;
         self.pending.take();
         Ok(())
+    }
+    pub(crate) fn complete_attach(
+        &mut self,
+    ) -> Result<Option<crate::lifecycle_completion::Applied>, Code> {
+        let Some((receiver, digest)) = &self.completion else {
+            return Ok(None);
+        };
+        receiver.check_identity(self.backend.resource_identity())?;
+        let Some(event) = receiver.evidence(*digest, &self.instance)? else {
+            return Ok(None);
+        };
+        // Authenticated historical evidence may be recorded after revocation;
+        // disclosing it is a separate live-authority check in the router.
+        self.store
+            .transition(
+                self.pending.as_ref().ok_or(Code::Conflict)?,
+                Phase::Completed,
+            )
+            .map_err(|_| Code::Backend)?;
+        Ok(Some(event))
+    }
+    #[cfg(test)]
+    pub(crate) fn fail_completion_for_test(&mut self) {
+        self.store.fault = Some(crate::lifecycle_journal::Cut::BeforeTransition);
     }
 }
 impl<B: Host> Host for Durable<B> {

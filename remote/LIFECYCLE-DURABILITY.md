@@ -37,7 +37,7 @@ responsibility of the future native owner; this is not atomic distributed revoca
 | Trusted no-effect rejection | Rejected(code) committed | Exact replay returns rejection; next sequence can be considered |
 | Effect uncertain, panic or storage error | Unknown response / unresolved durable row | Never auto-retry or infer no effect |
 | Store reopen | Prepared/InFlight/Accepted become Uncertain | Exact replay returns Unknown; distinct work remains blocked |
-| Trusted completion | Completed terminal state | Only a test fixture hook exists; no product completion API is admitted |
+| Trusted completion | Completed terminal state | Internal fake Attach channel only; see ATTACH-COMPLETION.md; no native backend admitted |
 
 Exact operation/sequence/payload replays never mint a second execution ticket.
 Same operation or sequence with altered content conflicts. One unresolved record
@@ -48,7 +48,8 @@ Commit failure or injected commit-cut errors poison that Store; callers reconcil
 of continuing an uncertain connection. No record deletion, compaction, floor reset
 or timeout-based unblocking is implemented.
 
-The Accepted gate is intentionally incomplete for native use: there is currently
+An internal fake Attach completion channel is described in
+[ATTACH-COMPLETION.md](ATTACH-COMPLETION.md). The Accepted gate remains incomplete for native use: there is currently
 no production completion/reconciliation path, so successful queue admission may
 keep the resource blocked indefinitely. A durable authenticated completion contract
 and recovery policy are required before wiring any real lifecycle backend. The
