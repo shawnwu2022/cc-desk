@@ -329,8 +329,33 @@ handling still seals the writer. A backward/error clock sample closes the
 native peer permanently. Wall/phone clocks are not accepted.
 
 This is a first-lease prerequisite, not completed E09: verified grant/IO
-admission, suspend notification, single unresolved sent-operation reconciliation,
+admission, suspend notification, cross-peer pending-operation recovery,
 wire mutation decoding, multi-device takeover/new fence, policy replacement,
 rebind and native mobile evidence remain required. Software monotonic-clock
 tests do not prove Windows suspend behavior. No CLI software version admission
 floor is introduced; protocol validation is separate from CLI versions.
+
+The owner-managed `start_controlled` path now supplies this policy to the same
+HeldIo writer and shared projection budget; it does not instantiate a second
+writer. One unacknowledged admitted mutation is retained in control state.
+Only durable prepare/known-row admission occupies that slot; an unadmitted
+future sequence cannot poison it. Exact duplicates may recover the same
+receipt, but another operation is refused. Expiry/renewal/timeout/drop of a
+local response does not clear it. Unknown/Partial still freezes further IO.
+
+Native query and receipt settlement commands share the writer queue. They
+bind exact current peer/device/target and unexpired data grant, independently
+of the short input-window deadline. Query returns the existing durable row
+without settling it. Only an exact opaque receipt proof verified by the
+existing Journal ACK transaction can release the slot. The durable settled
+floor precedes release. Lost ACK responses use the existing idempotent batch
+witness; an old ACK cannot clear a newer pending operation. Query/settlement
+storage failure closes the peer. There is still no network decoder, real data
+authorization factory, reconnect or post-retirement query owner in this slice.
+
+Controlled startup also imports the exact single durable unsettled row for its
+target/device before creating the writer. A known-but-unACKed row must be
+queried/settled before another operation; an Unknown row stays unprovable and
+cannot permit the next effect. Multiple unsettled legacy rows or missing/inexact
+metadata fail construction closed rather than resetting the pipeline. This
+does not fabricate a successful historical effect or erase its receipt evidence.

@@ -75,6 +75,7 @@ pub enum Reject {
     Continuity,
     Sync,
     Policy,
+    Pending,
 }
 #[derive(Debug, PartialEq, Eq)]
 pub enum WriteResult {
@@ -433,7 +434,7 @@ impl LocalWriter {
                             } else if let Some(gate) = &mut view_gate {
                                 if let Some(epochs) = replies.as_ref().and_then(ReplyState::epochs)
                                 {
-                                    request.process(gate, epochs);
+                                    request.process(gate, epochs, &mut journal);
                                 } else {
                                     request.reject(Reject::Sync);
                                 }
@@ -483,24 +484,52 @@ impl LocalWriter {
                     } else {
                         digest
                     };
-                    let outcome = journal.run_once(&request.key, &digest, || {
-                        // 意图已持久化后、真正写入前再次采样封存。当前在途写不能靠 seal 撤销。
-                        if sealed.load(Ordering::Acquire) {
-                            return Outcome::Rejected;
-                        }
-                        let mut effect = || {
-                            let result = write_once(&mut stdin, &request.bytes);
-                            if result == Outcome::HostWritten {
-                                config.after_write();
+                    #[cfg(feature = "experimental-host-owner")]
+                    if let Some(gate) = &view_gate
+                        && let Err(error) = gate.can_admit(&request.key, &digest)
+                    {
+                        let _ = request.reply.try_send(error.feedback());
+                        continue;
+                    }
+                    let outcome = match journal.prepare(&request.key, &digest) {
+                        Ok(PrepareDecision::Recorded(outcome)) => {
+                            #[cfg(feature = "experimental-host-owner")]
+                            if let Some(gate) = &mut view_gate {
+                                gate.note_admitted(&request.key, &digest);
                             }
-                            result
-                        };
-                        #[cfg(feature = "experimental-host-owner")]
-                        if let Some(gate) = &view_gate {
-                            return gate.effect_if_current(&request, replies.as_ref(), effect);
+                            Ok(outcome)
                         }
-                        effect()
-                    });
+                        Ok(PrepareDecision::Prepared(intent)) => {
+                            #[cfg(feature = "experimental-host-owner")]
+                            if let Some(gate) = &mut view_gate {
+                                gate.note_admitted(&request.key, &digest);
+                            }
+                            let effect_outcome = (|| {
+                                // 意图已持久化后、真正写入前再次采样封存。当前在途写不能靠 seal 撤销。
+                                if sealed.load(Ordering::Acquire) {
+                                    return Outcome::Rejected;
+                                }
+                                let mut effect = || {
+                                    let result = write_once(&mut stdin, &request.bytes);
+                                    if result == Outcome::HostWritten {
+                                        config.after_write();
+                                    }
+                                    result
+                                };
+                                #[cfg(feature = "experimental-host-owner")]
+                                if let Some(gate) = &view_gate {
+                                    return gate.effect_if_current(
+                                        &request,
+                                        replies.as_ref(),
+                                        effect,
+                                    );
+                                }
+                                effect()
+                            })();
+                            journal.finalize(intent, effect_outcome)
+                        }
+                        Err(error) => Err(error),
+                    };
                     let feedback = match outcome {
                         Ok(Outcome::Partial) => {
                             sealed.store(true, Ordering::Release);

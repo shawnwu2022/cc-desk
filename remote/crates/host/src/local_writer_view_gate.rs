@@ -220,10 +220,13 @@ impl LocalWriter {
         key: DigestKey,
         start: ControlStart,
     ) -> Result<(Self, HostOutputHandle, PeerViewHandle), Reject> {
-        let policy = start
+        let mut policy = start
             .policy
             .map(|(clock, grant)| control::ControlState::new(clock, grant))
             .transpose()?;
+        if let Some(policy) = &mut policy {
+            policy.restore_pending(&journal, &target, &device)?;
+        }
         let start = start.view;
         let control = PeerControl::new(target.clone(), device, start.binding, start.minor)?;
         let mut gate = ViewGate::new(control.scope.clone());
@@ -263,6 +266,20 @@ pub(super) struct ViewGate {
     control: Option<control::ControlState>,
 }
 impl ViewGate {
+    pub(super) fn can_admit(
+        &self,
+        key: &OperationKey,
+        digest: &KeyedDigest,
+    ) -> Result<(), control::AdmissionError> {
+        self.control
+            .as_ref()
+            .map_or(Ok(()), |c| c.can_admit(key, digest))
+    }
+    pub(super) fn note_admitted(&mut self, key: &OperationKey, digest: &KeyedDigest) {
+        if let Some(control) = &mut self.control {
+            control.note_admitted(key, digest);
+        }
+    }
     pub(super) fn effect_if_current(
         &self,
         request: &Request,

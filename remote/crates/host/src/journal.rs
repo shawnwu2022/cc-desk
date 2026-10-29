@@ -461,6 +461,65 @@ impl Journal {
         self.receipt(key)
     }
 
+    /// Native controlled admission must recover the durable unsettled prefix,
+    /// not infer an empty pipeline from freshly allocated process memory.
+    #[cfg(feature = "experimental-host-owner")]
+    pub(crate) fn single_unsettled(
+        &self,
+        target: &Target,
+        device: &[u8; 32],
+    ) -> Result<Option<(OperationKey, KeyedDigest)>, JournalError> {
+        use rusqlite::params;
+        if self.poisoned {
+            return Err(JournalError::Storage);
+        }
+        self.check_storage()?;
+        crate::journal_storage::verify(&self.connection)?;
+        let scope = scope_for(target, device)?;
+        let (admitted, settled) = read_floor(&self.connection, &scope)?
+            .map(|f| (f.admitted, f.settled))
+            .unwrap_or((0, 0));
+        if admitted != settled && settled.checked_add(1) != Some(admitted) {
+            return Err(JournalError::Sequence);
+        }
+        let mut statement=self.connection.prepare("SELECT op,seq,digest,state,proof FROM operations WHERE scope=?1 AND seq>?2 ORDER BY seq LIMIT 2").map_err(storage)?;
+        let mut rows = statement
+            .query(params![&scope, &settled.to_be_bytes()[..]])
+            .map_err(storage)?;
+        let Some(row) = rows.next().map_err(storage)? else {
+            return if admitted == settled {
+                Ok(None)
+            } else {
+                Err(JournalError::Storage)
+            };
+        };
+        if admitted == settled {
+            return Err(JournalError::Storage);
+        }
+        let op: Vec<u8> = row.get(0).map_err(storage)?;
+        let seq: Vec<u8> = row.get(1).map_err(storage)?;
+        let digest: Vec<u8> = row.get(2).map_err(storage)?;
+        let state: u32 = row.get(3).map_err(storage)?;
+        let proof: Option<Vec<u8>> = row.get(4).map_err(storage)?;
+        decode_row(state, proof.as_deref())?;
+        if seq != admitted.to_be_bytes() || rows.next().map_err(storage)?.is_some() {
+            return Err(JournalError::Storage);
+        }
+        Ok(Some((
+            OperationKey {
+                host: target.host,
+                session: target.session,
+                run: target.run.as_str().to_owned(),
+                generation: target.generation,
+                incarnation: target.incarnation,
+                device: *device,
+                operation: op.try_into().map_err(|_| JournalError::Storage)?,
+                sequence: admitted,
+            },
+            KeyedDigest(digest.try_into().map_err(|_| JournalError::Storage)?),
+        )))
+    }
+
     /// `expected_authenticated_device` must come from a future authenticated outer
     /// Host actor. This crate does not authenticate it and never derives it from the ACK.
     /// Only the latest committed ACK batch has a retained hash for exact lost-response

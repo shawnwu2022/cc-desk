@@ -1,9 +1,11 @@
 use super::*;
 use std::sync::Mutex;
+#[path = "local_writer_control_receipts.rs"]
+mod receipts;
 
 // This native-only input is supplied by a future verified data-authority factory,
 // never directly deserialized from a peer. It does not authenticate a grant.
-pub(super) trait HostClock: Send + Sync {
+pub(in crate::local_writer) trait HostClock: Send + Sync {
     fn now_ms(&self) -> Result<u64, Reject>;
 }
 impl<F: Fn() -> Result<u64, Reject> + Send + Sync> HostClock for F {
@@ -11,19 +13,29 @@ impl<F: Fn() -> Result<u64, Reject> + Send + Sync> HostClock for F {
         self()
     }
 }
-pub(super) struct GrantContext {
-    pub(super) challenge_ms: u64,
-    pub(super) grant: [u8; 32],
-    pub(super) lease: [u8; 16],
-    pub(super) fence: u64,
-    pub(super) policy: u64,
+pub(in crate::local_writer) struct GrantContext {
+    pub(in crate::local_writer) challenge_ms: u64,
+    pub(in crate::local_writer) grant: [u8; 32],
+    pub(in crate::local_writer) lease: [u8; 16],
+    pub(in crate::local_writer) fence: u64,
+    pub(in crate::local_writer) policy: u64,
+}
+pub(in crate::local_writer) struct ControlAdmission {
+    pub(in crate::local_writer) binding: [u8; 32],
+    pub(in crate::local_writer) minor: u16,
+    pub(in crate::local_writer) clock: Arc<dyn HostClock>,
+    pub(in crate::local_writer) grant: GrantContext,
 }
 pub(in crate::local_writer) struct ControlStart {
     pub(super) view: ViewStart,
     pub(super) policy: Option<(Arc<dyn HostClock>, GrantContext)>,
 }
 impl ControlStart {
-    pub(super) fn new(view: ViewStart, clock: Arc<dyn HostClock>, grant: GrantContext) -> Self {
+    pub(in crate::local_writer) fn new(
+        view: ViewStart,
+        clock: Arc<dyn HostClock>,
+        grant: GrantContext,
+    ) -> Self {
         Self {
             view,
             policy: Some((clock, grant)),
@@ -81,6 +93,19 @@ pub(super) struct ControlState {
     renew_sequence: u64,
     next_window: u64,
     windows: Vec<Arc<InputWindow>>,
+    pending: Option<(OperationKey, [u8; 32])>,
+}
+pub(in crate::local_writer) enum AdmissionError {
+    Pending,
+    Conflict,
+}
+impl AdmissionError {
+    pub(in crate::local_writer) fn feedback(self) -> WriteResult {
+        match self {
+            Self::Pending => WriteResult::Rejected(Reject::Pending),
+            Self::Conflict => WriteResult::Journal(JournalError::Conflict),
+        }
+    }
 }
 impl ControlState {
     pub(super) fn new(clock: Arc<dyn HostClock>, grant: GrantContext) -> Result<Self, Reject> {
@@ -120,7 +145,44 @@ impl ControlState {
             renew_sequence: 0,
             next_window: 0,
             windows: Vec::with_capacity(2),
+            pending: None,
         })
+    }
+    pub(super) fn can_admit(
+        &self,
+        key: &OperationKey,
+        digest: &KeyedDigest,
+    ) -> Result<(), AdmissionError> {
+        use subtle::ConstantTimeEq;
+        if let Some((old, old_digest)) = &self.pending {
+            if old != key {
+                return Err(AdmissionError::Pending);
+            }
+            if !bool::from(old_digest.ct_eq(&digest.0)) {
+                return Err(AdmissionError::Conflict);
+            }
+        }
+        Ok(())
+    }
+    pub(super) fn note_admitted(&mut self, key: &OperationKey, digest: &KeyedDigest) {
+        if self.pending.is_none() {
+            self.pending = Some((key.clone(), digest.0));
+        }
+    }
+    pub(super) fn restore_pending(
+        &mut self,
+        journal: &Journal,
+        target: &Target,
+        device: &[u8; 32],
+    ) -> Result<(), Reject> {
+        self.pending = journal
+            .single_unsettled(target, device)
+            .map_err(|error| match error {
+                JournalError::Sequence => Reject::Pending,
+                _ => Reject::Closed,
+            })?
+            .map(|(key, digest)| (key, digest.0));
+        Ok(())
     }
     fn sample(&self, scope: &PeerScope) -> Result<u64, Reject> {
         let result = (|| {
@@ -235,6 +297,14 @@ pub(super) enum ControlAction {
         sequence: u64,
         reply: mpsc::SyncSender<Result<u64, Reject>>,
     },
+    Query {
+        key: OperationKey,
+        reply: mpsc::SyncSender<Result<ReceiptLookup, receipts::ControlError>>,
+    },
+    Settle {
+        proof: ReceiptProof,
+        reply: mpsc::SyncSender<Result<AckDecision, receipts::ControlError>>,
+    },
 }
 pub(in crate::local_writer) struct ControlRequest {
     pub(super) scope: Arc<PeerScope>,
@@ -250,14 +320,57 @@ impl ControlRequest {
             ControlAction::Renew { reply, .. } => {
                 let _ = reply.try_send(Err(error));
             }
+            ControlAction::Query { reply, .. } => {
+                let _ = reply.try_send(Err(receipts::ControlError::Rejected(error)));
+            }
+            ControlAction::Settle { reply, .. } => {
+                let _ = reply.try_send(Err(receipts::ControlError::Rejected(error)));
+            }
         }
     }
-    pub(in crate::local_writer) fn process(self, gate: &mut ViewGate, epochs: TerminalEpochs) {
+    pub(in crate::local_writer) fn process(
+        self,
+        gate: &mut ViewGate,
+        epochs: TerminalEpochs,
+        journal: &mut Journal,
+    ) {
         if !Arc::ptr_eq(&self.scope, &gate.scope) || !self.scope.is_active() {
             self.reject(Reject::Policy);
             return;
         }
         match self.action {
+            ControlAction::Query { key, reply } => {
+                let result = gate
+                    .control
+                    .as_ref()
+                    .ok_or(receipts::ControlError::Rejected(Reject::Unsupported))
+                    .and_then(|c| c.query_receipt(&self.scope, &key, journal));
+                if matches!(
+                    result,
+                    Err(receipts::ControlError::Journal(
+                        JournalError::Storage | JournalError::Schema
+                    ))
+                ) {
+                    self.scope.close();
+                }
+                let _ = reply.try_send(result);
+            }
+            ControlAction::Settle { proof, reply } => {
+                let result = gate
+                    .control
+                    .as_mut()
+                    .ok_or(receipts::ControlError::Rejected(Reject::Unsupported))
+                    .and_then(|c| c.settle(&self.scope, proof, journal));
+                if matches!(
+                    result,
+                    Err(receipts::ControlError::Journal(
+                        JournalError::Storage | JournalError::Schema
+                    ))
+                ) {
+                    self.scope.close();
+                }
+                let _ = reply.try_send(result);
+            }
             ControlAction::Window { view, reply } => {
                 let result = gate.check(&view, &self.scope.device, epochs).and_then(|_| {
                     gate.control
@@ -283,12 +396,15 @@ impl ControlRequest {
         }
     }
 }
-pub(super) struct PendingLease {
+pub(in crate::local_writer) struct PendingLease {
     reply: mpsc::Receiver<Result<u64, Reject>>,
     _credit: Arc<Credit>,
 }
 impl PendingLease {
-    pub(super) fn wait(&self, budget: Duration) -> Result<Result<u64, Reject>, WaitError> {
+    pub(in crate::local_writer) fn wait(
+        &self,
+        budget: Duration,
+    ) -> Result<Result<u64, Reject>, WaitError> {
         self.reply.recv_timeout(budget).map_err(|e| match e {
             mpsc::RecvTimeoutError::Timeout => WaitError::Uncertain,
             mpsc::RecvTimeoutError::Disconnected => WaitError::Closed,
@@ -296,7 +412,10 @@ impl PendingLease {
     }
 }
 impl PeerViewHandle {
-    pub(super) fn input_window(&self, view: &SyncedView) -> Result<PendingViewAck, Reject> {
+    pub(in crate::local_writer) fn input_window(
+        &self,
+        view: &SyncedView,
+    ) -> Result<PendingViewAck, Reject> {
         let credit = self.input.credits.reserve()?;
         let (tx, rx) = mpsc::sync_channel(1);
         self.send_control(ControlRequest {
@@ -312,7 +431,7 @@ impl PeerViewHandle {
             _credit: credit,
         })
     }
-    pub(super) fn renew_lease(
+    pub(in crate::local_writer) fn renew_lease(
         &self,
         lease: [u8; 16],
         fence: u64,
@@ -427,6 +546,78 @@ mod tests {
                 ControlState::new(Arc::new(|| Ok(0)), invalid),
                 Err(Reject::Policy)
             ));
+        }
+    }
+    #[cfg(windows)]
+    #[test]
+    fn startup_refuses_multiple_or_missing_unsettled_metadata() {
+        for missing in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("journal.sqlite");
+            let mut journal = Journal::open(&path).unwrap();
+            let target = Target {
+                host: [1; 32],
+                session: [2; 16],
+                run: "TEST_ONLY_RESTORE".into(),
+                generation: 3,
+                incarnation: 4,
+            };
+            for sequence in 1..=if missing { 1 } else { 2 } {
+                let key = OperationKey {
+                    host: target.host,
+                    session: target.session,
+                    run: target.run.clone(),
+                    generation: 3,
+                    incarnation: 4,
+                    device: [5; 32],
+                    operation: [sequence as u8; 16],
+                    sequence,
+                };
+                assert_eq!(
+                    journal
+                        .run_once(&key, &KeyedDigest([0x71; 32]), || Outcome::HostWritten)
+                        .unwrap(),
+                    Outcome::HostWritten
+                );
+            }
+            if missing {
+                let fault = rusqlite::Connection::open(&path).unwrap();
+                fault.execute("DELETE FROM operations", []).unwrap();
+            }
+            let result = LocalWriter::start_control_guarded(
+                journal,
+                std::io::sink(),
+                target,
+                [5; 32],
+                9,
+                DigestKey::from_backend_bytes([0x5a; 32]),
+                ControlStart::new(
+                    ViewStart {
+                        terminal: CanonicalStart::new(3, 10, &HostViewBudget::new()).unwrap(),
+                        binding: [0x33; 32],
+                        minor: 1,
+                    },
+                    Arc::new(|| Ok(0)),
+                    grant(0),
+                ),
+            );
+            match result {
+                Err(error) => assert_eq!(
+                    error,
+                    if missing {
+                        Reject::Closed
+                    } else {
+                        Reject::Pending
+                    }
+                ),
+                Ok((mut writer, _, _)) => {
+                    writer.seal();
+                    while !writer.try_join().unwrap() {
+                        std::thread::yield_now();
+                    }
+                    panic!("unsettled state was reset");
+                }
+            }
         }
     }
 }

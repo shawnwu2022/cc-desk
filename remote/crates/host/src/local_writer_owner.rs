@@ -35,6 +35,10 @@ struct SessionWriter {
     target: Target,
     writer: LocalWriter,
 }
+enum GuardSpec {
+    View([u8; 32], u16),
+    Control(view_gate::control::ControlAdmission),
+}
 /// Sole owner-managed canonical writer factory. One admission per process;
 /// existing non-owner static/local qualification paths remain separate. It does
 /// not own a PTY Job/reader or supply persistent identity/enrollment/grants.
@@ -61,6 +65,15 @@ impl<W: Write> Write for HeldIo<W> {
     }
 }
 impl WriterHostOwner {
+    pub(super) fn start_controlled(
+        &mut self,
+        journal: Journal,
+        stdin: impl Write + Send + 'static,
+        start: SessionStart,
+        admission: view_gate::control::ControlAdmission,
+    ) -> Result<StartedWriter, OwnerError> {
+        self.start_inner(journal, stdin, start, Some(GuardSpec::Control(admission)))
+    }
     pub(super) fn start_guarded(
         &mut self,
         journal: Journal,
@@ -69,7 +82,7 @@ impl WriterHostOwner {
         binding: [u8; 32],
         minor: u16,
     ) -> Result<StartedWriter, OwnerError> {
-        self.start_inner(journal, stdin, start, Some((binding, minor)))
+        self.start_inner(journal, stdin, start, Some(GuardSpec::View(binding, minor)))
     }
     pub(super) fn new(host: [u8; 32], incarnation: u64) -> Result<Self, OwnerError> {
         Self::from_registry(OWNER.get_or_init(OwnerRegistry::default), host, incarnation)
@@ -111,7 +124,7 @@ impl WriterHostOwner {
         journal: Journal,
         stdin: impl Write + Send + 'static,
         start: SessionStart,
-        binding: Option<([u8; 32], u16)>,
+        binding: Option<GuardSpec>,
     ) -> Result<StartedWriter, OwnerError> {
         let t = &start.target;
         if t.host != self.host
@@ -138,20 +151,40 @@ impl WriterHostOwner {
             _activation: self.activation.clone(),
         };
         let (writer, output, peer) = match binding {
-            Some((binding, minor)) => {
-                let (w, o, p) = LocalWriter::start_view_guarded(
-                    journal,
-                    stdin,
-                    start.target.clone(),
-                    start.device,
-                    start.writer_epoch,
-                    start.key,
-                    view_gate::ViewStart {
-                        terminal: canonical,
-                        binding,
-                        minor,
-                    },
-                )
+            Some(spec) => {
+                let (binding, minor) = match &spec {
+                    GuardSpec::View(binding, minor) => (*binding, *minor),
+                    GuardSpec::Control(admission) => (admission.binding, admission.minor),
+                };
+                let view = view_gate::ViewStart {
+                    terminal: canonical,
+                    binding,
+                    minor,
+                };
+                let (w, o, p) = match spec {
+                    GuardSpec::View(..) => LocalWriter::start_view_guarded(
+                        journal,
+                        stdin,
+                        start.target.clone(),
+                        start.device,
+                        start.writer_epoch,
+                        start.key,
+                        view,
+                    ),
+                    GuardSpec::Control(admission) => LocalWriter::start_control_guarded(
+                        journal,
+                        stdin,
+                        start.target.clone(),
+                        start.device,
+                        start.writer_epoch,
+                        start.key,
+                        view_gate::control::ControlStart::new(
+                            view,
+                            admission.clock,
+                            admission.grant,
+                        ),
+                    ),
+                }
                 .map_err(OwnerError::Writer)?;
                 (w, o, Some(p))
             }
