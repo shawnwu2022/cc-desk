@@ -36,9 +36,12 @@ The consumer requires a separately verified exact barrier announcement before
 snapshot parts. It installs complete views atomically, retains old display as
 historical on gaps, and emits no ACK while unsynchronized. ACK is a local install
 stamp, not proof of pixels, a Host acceptance decision, a lease or an input grant.
-Native HostOwner issuance, per-peer ACK validation, fencing and reconnect
-eligibility are E09 work and remain disabled. No network dispatch selects the
-private local writer or internal-reply path.
+The shared control payload is `{message:"ProjectionAck",profile:1,stamp:...}`,
+<=16384UTF8bytes, exact selected minor0/1. Mandatory kind prevents confusing an
+unrelated control object with an ACK. Native issued/delivered/ACK queue checks
+exist as an opt-in prerequisite; endpoint authorization, fences/leases and
+reconnect remain OPEN. No network dispatch selects the private local writer or
+internal-reply path. A native install proof must not be used as a data grant.
 
 `test-vectors/projection-snapshot.json` is consumed by Rust codec and TS tests.
 `remote/ui-terminal` has no npm dependencies and uses installed Node24's type

@@ -4,7 +4,7 @@
 
 `experimental-host-owner` adds a private `WriterHostOwner` over the actual
 canonical LocalWriter factory. One process-lifetime admission covers all its
-factories and their shared two-view budget. IO custody and retained view credits
+factories and their shared two-view budget. IO custody, capture-pool handles and retained view credits
 hold that activation; dropping/sealing the owner cannot create a new owner while
 an old write or view is still live (`Busy`). Once those references are gone,
 reconstruction remains permanently `Closed` in that process, including a changed
@@ -23,7 +23,8 @@ namespaces, restart tasks or erase journal uncertainty. These are bounded
 resource prerequisites, not a measured concurrency/capacity guarantee.
 
 This owner does not own the Job/reader, persist startup identity, enroll a peer,
-validate a grant, accept a projection ACK or issue an input lease. It does not
+validate a grant or issue an input lease. The guarded native ACK prerequisite
+below supplies synchronization evidence only. The owner does not
 make an IO join into whole process-tree/old-reader retirement evidence. Those
 E08/E09 integration and policy gates remain OPEN. Backend raw identifiers and
 digest fixture bytes are not endpoint credentials or authorization. No public
@@ -200,8 +201,8 @@ credentials; it qualifies offline help/startup only, never an AI session.
 
 ### Serialized read-only projection capture
 
-CanonicalStart additionally requires an explicit shared HostViewBudget. The future
-unique HostOwner must create one pool and pass it to all session factories; it is
+CanonicalStart additionally requires an explicit shared HostViewBudget. The
+private resource owner now creates one pool for its session factories; it is
 resource accounting, not Host identity/authorization. Each shared pool admits two
 snapshot leases across writers. The fixed-cell view is statically bounded below
 4MiB logical allocation/frame, hence8MiB/pool; this is not a process RSS claim.
@@ -222,10 +223,59 @@ is refused. Neither result grants input or permission to send data to a remote p
 Actual Win10 fixed-PTY tests capture a valid output prefix before stopping and then
 observe root exit/EOF/join. The prefix is not represented as the entire EOF tail.
 
-This capture has no mode_epoch,dimension_epoch or Host sync/barrier/ACK authority.
-writer_epoch is the existing local writer scope, not a substitute for those fields.
-Unique HostOwner budget wiring,authenticated observer transport,128-cell/32KiB
-encoding,revision reducer/renderer,full E05 and the E09 actor remain required.
+The view exposes exact Core mode/dimension/structure epochs. Ordinary capture
+still has no Host sync/barrier/ACK authority; writer_epoch is its separate local
+writer scope. Shared128-cell/32KiB encoding and the trial TS consumer now exist.
+Authenticated observer transport, full E05 and the E09 actor remain required.
+
+### Guarded native snapshot/ACK prerequisite
+
+`WriterHostOwner::start_guarded` is opt-in/default-off over the same queue, IO and
+journal. It accepts only a trusted backend's local target/device/channel context;
+there is no network admission factory. The ordinary raw submit handle refuses
+guarded input, and the worker independently refuses missing or stale view proof.
+The existing non-guarded local/desktop prerequisites are not migrated or remotely
+selectable. No CLI version gate is introduced: protocol minors and fixed manual
+CLI fixture hashes are separate from native CLI launch/version compatibility.
+
+A queued guarded capture issues an exact new barrier/sync counter for its native
+peer activation. Consuming the captured frame through the existing async
+RecordWriter is the only way to mark it delivered: all parts and flushes must
+finish under one absolute transfer deadline, capped at30s. Once native sending
+begins, timeout, failure or future cancellation closes the peer scope and drops the supplied writer adapter;
+already encoded/partially written data is uncertain, never a successful install.
+Native close wakes blocked sends and invalidates queued input independently of
+the potentially blocked stdin writer. Shared/split IO still requires its enclosing
+authenticated channel owner to cancel both physical directions.
+Never-polled sends or pre-IO budget/minor refusal remain unconfirmed and cannot
+be ACKed. The enclosing channel owner must serialize sends; before replacing a
+barrier during a send, cancel and await that send. Replacement alone revokes the
+old record but does not wake blocked IO immediately; its eventual failure closes
+that peer scope. Concurrent lossless view replacement is not implemented.
+
+The ACK is a bounded shared control codec with mandatory ProjectionAck kind and
+the full exact stamp. It enters the SAME writer queue and must match its issued,
+fully delivered record, native peer activation and current Core epochs. Then an
+opaque local installed-view proof can accompany input. This proof is checked on
+dequeue and again after durable intent immediately before the actual write.
+Revocation before that commit produces durable no-effect Rejected when an intent
+already exists; an already committed IO may finish. Early native policy failures
+are not falsely presented as durable operation receipts. Full remote admission/
+rejection/sequence normalization is still a later authorization-actor gate.
+
+Ordinary contiguous cell output does not demand an always-latest grid ACK. Actual
+mode changes, structural replacement, a new barrier or disconnect invalidate old
+proofs. Current recovery uses a fresh full snapshot; a correctly coalesced Host
+delta/mode-only publisher, leases/fences/InputWindows and rebind remain OPEN.
+The keyed input digest includes the exact installed context, so a new view cannot
+reuse an old operation with substituted context and call it the same request.
+
+Native peer IDs and a raw RecordWriter do NOT authenticate an endpoint or prove
+that transport belongs to that peer. Before network dispatch exists, a verified
+E2E data-channel factory must bind IO, identity, authorization and this native
+scope; ManagementOnly cannot be substituted. These tests use public synthetic
+data and memory pipes plus self-owned fixture processes, not real TLS/phone/AI
+CLI acceptance. Nothing here enables remote data or permission merely from ACK.
 
 The internal schema is now version2. New databases persist independent admission and
 settled floors plus the latest bounded ACK witness. Existing version1 databases are

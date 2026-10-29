@@ -53,6 +53,64 @@ pub struct Stamp {
     pub structure_epoch: String,
     pub sync_epoch: String,
 }
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "AckEnvelope", into = "AckEnvelope")]
+pub struct Ack {
+    pub profile: u16,
+    pub stamp: Stamp,
+}
+#[derive(Serialize, Deserialize)]
+enum AckKind {
+    ProjectionAck,
+}
+#[derive(Serialize, Deserialize)]
+struct AckEnvelope {
+    message: AckKind,
+    profile: u16,
+    stamp: Stamp,
+}
+impl From<Ack> for AckEnvelope {
+    fn from(a: Ack) -> Self {
+        Self {
+            message: AckKind::ProjectionAck,
+            profile: a.profile,
+            stamp: a.stamp,
+        }
+    }
+}
+impl From<AckEnvelope> for Ack {
+    fn from(a: AckEnvelope) -> Self {
+        Self {
+            profile: a.profile,
+            stamp: a.stamp,
+        }
+    }
+}
+pub fn decode_ack(payload: &[u8], negotiated_minor: u16) -> Result<Ack, Error> {
+    if payload.len() > 16384 {
+        return Err(Error::Length);
+    }
+    if negotiated_minor > 1 {
+        return Err(Error::Version);
+    }
+    let ack: Ack = serde_json::from_slice(payload).map_err(|_| Error::Json)?;
+    if ack.profile != 1 {
+        return Err(Error::Version);
+    }
+    stamp(&ack.stamp)?;
+    Ok(ack)
+}
+pub fn encode_ack(ack: &Ack, negotiated_minor: u16) -> Result<Vec<u8>, Error> {
+    if negotiated_minor > 1 || ack.profile != 1 {
+        return Err(Error::Version);
+    }
+    stamp(&ack.stamp)?;
+    let bytes = serde_json::to_vec(ack).map_err(|_| Error::Json)?;
+    if bytes.len() > 16384 {
+        return Err(Error::Length);
+    }
+    Ok(bytes)
+}
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Buffer {
     Normal,

@@ -94,10 +94,11 @@ fn capture(
 }
 
 pub(super) fn run(case: &str) -> bool {
-    const CASES: [&str; 9] = [
+    const CASES: [&str; 10] = [
         "fresh_owned_pipe_launch_phase_probe",
         "actual_owned_pipe_is_committed_through_durable_single_writer",
         "actual_owner_factory_pipe_deduplicates_receipt_and_retires_writer",
+        "actual_guarded_owner_pipe_rejects_stale_view_and_disconnected_input",
         "actual_pipe_guard_bounds_and_queue_are_fail_closed",
         "actual_writer_panic_retains_terminal_join_error_and_unknown_intent",
         "actual_pipe_effect_then_storage_failure_reopens_only_as_unknown",

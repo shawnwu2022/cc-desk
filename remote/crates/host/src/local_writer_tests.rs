@@ -183,6 +183,187 @@ fn actual_owner_factory_pipe_deduplicates_receipt_and_retires_writer() {
         Err(OwnerError::Closed)
     ));
 }
+#[cfg(feature = "experimental-host-owner")]
+#[test]
+fn actual_guarded_owner_pipe_rejects_stale_view_and_disconnected_input() {
+    if !supervision::run("actual_guarded_owner_pipe_rejects_stale_view_and_disconnected_input") {
+        return;
+    }
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            use super::owner::{SessionStart, WriterHostOwner};
+            use cc_desk_remote_record::projection::Ack;
+            use cc_desk_remote_transport::records::{RecordReader, RecordWriter};
+            let dir = tempfile::tempdir().unwrap();
+            let marker = dir.path().join("public-guarded-effects");
+            let mut run = fixture(&marker);
+            let mut owner = WriterHostOwner::new([1; 32], 4).unwrap();
+            let mut started = owner
+                .start_guarded(
+                    Journal::open(&dir.path().join("journal.sqlite")).unwrap(),
+                    run.take_stdin().unwrap(),
+                    SessionStart {
+                        target: key().target(),
+                        device: key().device,
+                        writer_epoch: 9,
+                        key: DigestKey::from_backend_bytes([0x5a; 32]),
+                        rows: 3,
+                        columns: 10,
+                    },
+                    [0x33; 32],
+                    1,
+                )
+                .unwrap();
+            let peer = started.peer.take().unwrap();
+            assert!(matches!(
+                started
+                    .input
+                    .submit(key(), 9, b"PUBLIC_TEST_ONLY\n".to_vec()),
+                Err(Reject::Sync)
+            ));
+            let mut obsolete = started.input.clone();
+            obsolete.view_scope = None;
+            assert_eq!(
+                obsolete
+                    .submit(key(), 9, b"PUBLIC_TEST_ONLY\n".to_vec())
+                    .unwrap()
+                    .wait(Duration::from_secs(2))
+                    .unwrap(),
+                WriteResult::Rejected(Reject::Sync)
+            );
+            let frame = peer
+                .capture()
+                .unwrap()
+                .wait(Duration::from_secs(2))
+                .unwrap()
+                .unwrap();
+            let ack = Ack {
+                profile: 1,
+                stamp: frame.issued_stamp().unwrap().clone(),
+            };
+            assert!(matches!(
+                peer.acknowledge(ack.clone())
+                    .unwrap()
+                    .wait(Duration::from_secs(2))
+                    .unwrap(),
+                Err(Reject::Sync)
+            ));
+            let (host, client) = tokio::io::duplex(32768);
+            let mut reader = RecordReader::new(client, 1).unwrap();
+            let _stream = frame
+                .deliver(RecordWriter::new(host, 1).unwrap(), Duration::from_secs(1))
+                .await
+                .unwrap();
+            assert!(reader.read(Duration::from_secs(1)).await.unwrap().is_some());
+            let installed = peer
+                .acknowledge(ack)
+                .unwrap()
+                .wait(Duration::from_secs(2))
+                .unwrap()
+                .unwrap();
+            for _ in 0..2 {
+                assert!(matches!(
+                    peer.submit(&installed, key(), 9, b"PUBLIC_TEST_ONLY\n".to_vec())
+                        .unwrap()
+                        .wait(Duration::from_secs(2))
+                        .unwrap(),
+                    WriteResult::Receipt(ReceiptEnvelope {
+                        outcome: Outcome::HostWritten,
+                        ..
+                    })
+                ));
+            }
+            effects(&marker, 1);
+            assert_eq!(
+                started
+                    .output
+                    .feed_at(0, b"ordinary".to_vec())
+                    .unwrap()
+                    .wait(Duration::from_secs(2))
+                    .unwrap(),
+                OutputResult::Processed { replies: 0 }
+            );
+            assert!(matches!(
+                peer.submit(&installed, next(2), 9, b"PUBLIC_TEST_ONLY\n".to_vec())
+                    .unwrap()
+                    .wait(Duration::from_secs(2))
+                    .unwrap(),
+                WriteResult::Receipt(ReceiptEnvelope {
+                    outcome: Outcome::HostWritten,
+                    ..
+                })
+            ));
+            effects(&marker, 2); // cell-only output does not require an always-latest grid ACK
+            let modes = b"\x1b[?1004h\x1b[?1004l";
+            assert_eq!(
+                started
+                    .output
+                    .feed_at(8, modes.to_vec())
+                    .unwrap()
+                    .wait(Duration::from_secs(2))
+                    .unwrap(),
+                OutputResult::Processed { replies: 0 }
+            );
+            assert_eq!(
+                peer.submit(&installed, next(3), 9, b"PUBLIC_TEST_ONLY\n".to_vec())
+                    .unwrap()
+                    .wait(Duration::from_secs(2))
+                    .unwrap(),
+                WriteResult::Rejected(Reject::Sync)
+            );
+            assert_eq!(std::fs::read(&marker).unwrap().len(), 2);
+            let frame = peer
+                .capture()
+                .unwrap()
+                .wait(Duration::from_secs(2))
+                .unwrap()
+                .unwrap();
+            let fresh_ack = Ack {
+                profile: 1,
+                stamp: frame.issued_stamp().unwrap().clone(),
+            };
+            assert_eq!(fresh_ack.stamp.mode_epoch, "2");
+            let _stream = frame
+                .deliver(_stream, Duration::from_secs(1))
+                .await
+                .unwrap();
+            assert!(reader.read(Duration::from_secs(1)).await.unwrap().is_some());
+            let fresh = peer
+                .acknowledge(fresh_ack)
+                .unwrap()
+                .wait(Duration::from_secs(2))
+                .unwrap()
+                .unwrap();
+            // Deterministic enqueue boundary: authorization was live at precheck,
+            // then native disconnect occurs before the command reaches the worker.
+            let queued = super::view_gate::tests::submit_observed(
+                &peer,
+                &fresh,
+                next(3),
+                9,
+                b"PUBLIC_TEST_ONLY\n".to_vec(),
+                || peer.close(),
+            )
+            .unwrap();
+            assert_eq!(
+                queued.wait(Duration::from_secs(2)).unwrap(),
+                WriteResult::Rejected(Reject::Sync)
+            );
+            assert_eq!(std::fs::read(&marker).unwrap().len(), 2);
+            owner.seal(&key().target()).unwrap();
+            let end = Instant::now() + Duration::from_secs(2);
+            while !owner.try_reap(&key().target()).unwrap() {
+                assert!(Instant::now() < end);
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            let exit = run.stop(Instant::now() + Duration::from_secs(2)).unwrap();
+            assert_ne!(exit.exit_code, 90);
+            assert_eq!(std::fs::read(&marker).unwrap().len(), 2);
+        });
+}
 fn next(sequence: u64) -> OperationKey {
     let mut k = key();
     k.sequence = sequence;
@@ -445,6 +626,7 @@ fn unit_compacts_envelopes_before_queue() {
         device: key().device,
         epoch: 9,
         sealed: Arc::new(AtomicBool::new(false)),
+        view_scope: None,
         credits: Arc::new(Credits::default()),
     };
     let mut payload = Vec::with_capacity(MAX_INPUT * 2);
@@ -479,6 +661,7 @@ fn unit_join_panic_is_a_sticky_terminal_result() {
         device: key().device,
         epoch: 9,
         sealed: Arc::new(AtomicBool::new(false)),
+        view_scope: None,
         credits: Arc::new(Credits::default()),
     };
     let mut owner = LocalWriter {
@@ -513,6 +696,7 @@ fn unit_concurrent_full_submissions_never_allocate_before_capacity_admission() {
         device: key().device,
         epoch: 9,
         sealed: Arc::new(AtomicBool::new(false)),
+        view_scope: None,
         credits: Arc::new(Credits::default()),
     };
     let first = source.submit(key(), 9, vec![b'x'; MAX_INPUT]).unwrap();
@@ -589,6 +773,7 @@ fn unit_source() -> (LocalInputHandle, mpsc::Receiver<Command>) {
             device: key().device,
             epoch: 9,
             sealed: Arc::new(AtomicBool::new(false)),
+            view_scope: None,
             credits: Arc::new(Credits::default()),
         },
         rx,

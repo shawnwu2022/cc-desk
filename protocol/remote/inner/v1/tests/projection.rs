@@ -67,6 +67,25 @@ fn projection_worst_cell_and_metadata_representation_fits_full_grid_transfer_bud
     // This is a wire-size upper bound, not a claim that arbitrary role layouts install.
 }
 #[test]
+fn projection_ack_is_a_bounded_exact_control_stamp_not_a_revision_number() {
+    use cc_desk_remote_record::projection::{decode_ack, encode_ack};
+    let v = json!({"message":"ProjectionAck","profile":1,"stamp":sample()["body"]["stamp"]});
+    for minor in [0, 1] {
+        let ack = decode_ack(&serde_json::to_vec(&v).unwrap(), minor).unwrap();
+        assert_eq!(ack.stamp.revision, "18446744073709551615");
+        assert!(decode_ack(&encode_ack(&ack, minor).unwrap(), minor).unwrap() == ack);
+    }
+    assert!(decode_ack(&vec![b' '; 16385], 0).is_err());
+    let mut bad = v.clone();
+    bad["stamp"]["binding"] = json!("f".repeat(63));
+    assert!(decode_ack(&serde_json::to_vec(&bad).unwrap(), 0).is_err());
+    assert!(decode_ack(b"{\"profile\":1,\"revision\":\"1\"}", 0).is_err());
+    assert!(decode_ack(&serde_json::to_vec(&v).unwrap(), 2).is_err());
+    let mut wrong = v.clone();
+    wrong["message"] = json!("LeaseRenewal");
+    assert!(decode_ack(&serde_json::to_vec(&wrong).unwrap(), 0).is_err());
+}
+#[test]
 fn projection_refuses_size_cell_count_geometry_scalar_and_color_before_admission() {
     assert!(decode(&vec![b' '; 32769], 0).is_err());
     let mut v = sample();

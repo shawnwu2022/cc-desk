@@ -136,6 +136,13 @@ impl CanonicalStart {
     }
 }
 impl ReplyState {
+    #[cfg(feature = "experimental-host-owner")]
+    pub(super) fn epochs(&self) -> Option<cc_desk_remote_terminal::TerminalEpochs> {
+        match &self.parser {
+            ReplyParser::Canonical(core) if !core.is_degraded() => Some(core.epochs()),
+            _ => None,
+        }
+    }
     pub(super) fn new(context: Arc<()>) -> Self {
         Self {
             context,

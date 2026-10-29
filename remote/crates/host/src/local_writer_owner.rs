@@ -29,6 +29,7 @@ pub(super) struct SessionStart {
 pub(super) struct StartedWriter {
     pub(super) input: LocalInputHandle,
     pub(super) output: HostOutputHandle,
+    pub(super) peer: Option<view_gate::PeerViewHandle>,
 }
 struct SessionWriter {
     target: Target,
@@ -60,6 +61,16 @@ impl<W: Write> Write for HeldIo<W> {
     }
 }
 impl WriterHostOwner {
+    pub(super) fn start_guarded(
+        &mut self,
+        journal: Journal,
+        stdin: impl Write + Send + 'static,
+        start: SessionStart,
+        binding: [u8; 32],
+        minor: u16,
+    ) -> Result<StartedWriter, OwnerError> {
+        self.start_inner(journal, stdin, start, Some((binding, minor)))
+    }
     pub(super) fn new(host: [u8; 32], incarnation: u64) -> Result<Self, OwnerError> {
         Self::from_registry(OWNER.get_or_init(OwnerRegistry::default), host, incarnation)
     }
@@ -93,6 +104,15 @@ impl WriterHostOwner {
         stdin: impl Write + Send + 'static,
         start: SessionStart,
     ) -> Result<StartedWriter, OwnerError> {
+        self.start_inner(journal, stdin, start, None)
+    }
+    fn start_inner(
+        &mut self,
+        journal: Journal,
+        stdin: impl Write + Send + 'static,
+        start: SessionStart,
+        binding: Option<([u8; 32], u16)>,
+    ) -> Result<StartedWriter, OwnerError> {
         let t = &start.target;
         if t.host != self.host
             || t.incarnation != self.incarnation
@@ -113,25 +133,52 @@ impl WriterHostOwner {
         }
         let canonical = CanonicalStart::new(start.rows, start.columns, &self.budget)
             .map_err(OwnerError::Writer)?;
-        let (writer, output) = LocalWriter::start_canonical_terminal(
-            journal,
-            HeldIo {
-                inner: stdin,
-                _activation: self.activation.clone(),
-            },
-            start.target.clone(),
-            start.device,
-            start.writer_epoch,
-            start.key,
-            canonical,
-        )
-        .map_err(OwnerError::Writer)?;
+        let stdin = HeldIo {
+            inner: stdin,
+            _activation: self.activation.clone(),
+        };
+        let (writer, output, peer) = match binding {
+            Some((binding, minor)) => {
+                let (w, o, p) = LocalWriter::start_view_guarded(
+                    journal,
+                    stdin,
+                    start.target.clone(),
+                    start.device,
+                    start.writer_epoch,
+                    start.key,
+                    view_gate::ViewStart {
+                        terminal: canonical,
+                        binding,
+                        minor,
+                    },
+                )
+                .map_err(OwnerError::Writer)?;
+                (w, o, Some(p))
+            }
+            None => {
+                let (w, o) = LocalWriter::start_canonical_terminal(
+                    journal,
+                    stdin,
+                    start.target.clone(),
+                    start.device,
+                    start.writer_epoch,
+                    start.key,
+                    canonical,
+                )
+                .map_err(OwnerError::Writer)?;
+                (w, o, None)
+            }
+        };
         let input = writer.handle();
         self.active.push(SessionWriter {
             target: start.target,
             writer,
         });
-        Ok(StartedWriter { input, output })
+        Ok(StartedWriter {
+            input,
+            output,
+            peer,
+        })
     }
     fn find(&self, t: &Target) -> Result<&LocalWriter, OwnerError> {
         self.active

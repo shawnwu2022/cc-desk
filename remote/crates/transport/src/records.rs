@@ -93,6 +93,9 @@ pub struct RecordWriter<W> {
     minor: u16,
 }
 impl<W> RecordWriter<W> {
+    pub fn selected_minor(&self) -> u16 {
+        self.minor
+    }
     pub fn new(io: W, minor: u16) -> Result<Self, RecordError> {
         if minor > 1 {
             return Err(RecordError::Limit);

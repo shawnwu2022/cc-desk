@@ -126,10 +126,12 @@ dependencies = [
  "cc-desk-native-runtime",
  "cc-desk-remote-record",
  "cc-desk-remote-terminal",
+ "cc-desk-remote-transport",
  "ring",
  "rusqlite",
  "subtle",
  "tempfile",
+ "tokio",
  "windows",
 ]
 

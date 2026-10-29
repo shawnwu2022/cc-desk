@@ -8,6 +8,17 @@ use replies::{HostOutputHandle, OutputRequest, OutputResult, ReplyState};
 #[cfg(feature = "experimental-host-owner")]
 #[path = "local_writer_owner.rs"]
 mod owner;
+#[cfg(feature = "experimental-host-owner")]
+#[path = "local_writer_view_gate.rs"]
+mod view_gate;
+#[cfg(feature = "experimental-host-owner")]
+type InputView = view_gate::SyncedView;
+#[cfg(not(feature = "experimental-host-owner"))]
+type InputView = ();
+#[cfg(feature = "experimental-host-owner")]
+type InputPeerScope = view_gate::PeerScope;
+#[cfg(not(feature = "experimental-host-owner"))]
+type InputPeerScope = ();
 #[cfg(feature = "experimental-canonical-replies")]
 #[path = "local_writer_projection.rs"]
 mod projection;
@@ -62,6 +73,7 @@ pub enum Reject {
     Thread,
     Rate,
     Continuity,
+    Sync,
 }
 #[derive(Debug, PartialEq, Eq)]
 pub enum WriteResult {
@@ -95,6 +107,8 @@ struct Request {
     key: OperationKey,
     epoch: u64,
     bytes: Box<[u8]>,
+    view: Option<InputView>,
+    source_scope: Option<Arc<InputPeerScope>>,
     reply: mpsc::SyncSender<WriteResult>,
     // 声明在最后，保证元数据/payload/channel 先释放，再归还资格。
     _credit: Arc<Credit>,
@@ -104,6 +118,8 @@ enum Command {
     Output(OutputRequest),
     #[cfg(feature = "experimental-canonical-replies")]
     Projection(ProjectionRequest),
+    #[cfg(feature = "experimental-host-owner")]
+    ViewAck(view_gate::ViewAckRequest),
 }
 #[derive(Clone)]
 pub struct LocalInputHandle {
@@ -113,6 +129,7 @@ pub struct LocalInputHandle {
     epoch: u64,
     sealed: Arc<AtomicBool>,
     credits: Arc<Credits>,
+    view_scope: Option<Arc<InputPeerScope>>,
 }
 impl LocalInputHandle {
     pub fn submit(
@@ -125,12 +142,29 @@ impl LocalInputHandle {
     }
     fn submit_observed(
         &self,
-        mut key: OperationKey,
+        key: OperationKey,
         epoch: u64,
         bytes: Vec<u8>,
         after_copy: impl FnOnce(),
     ) -> Result<PendingInput, Reject> {
+        self.submit_inner(key, epoch, bytes, None, after_copy)
+    }
+    fn submit_inner(
+        &self,
+        mut key: OperationKey,
+        epoch: u64,
+        bytes: Vec<u8>,
+        view: Option<InputView>,
+        after_copy: impl FnOnce(),
+    ) -> Result<PendingInput, Reject> {
         self.check(&key, epoch, bytes.len())?;
+        if self.view_scope.is_some() && view.is_none() {
+            return Err(Reject::Sync);
+        }
+        #[cfg(feature = "experimental-host-owner")]
+        if self.view_scope.as_ref().is_some_and(|s| !s.is_active()) {
+            return Err(Reject::Sync);
+        }
         // 资格覆盖 compact copy、pre-send、队列、当前写及尚未释放的反馈。
         let credit = self.credits.reserve()?;
         // 不保留 caller 大 capacity；在旧 allocation 仍存活时新建有界紧凑副本。
@@ -141,6 +175,8 @@ impl LocalInputHandle {
             key,
             epoch,
             bytes,
+            view,
+            source_scope: self.view_scope.clone(),
             reply: tx,
             _credit: credit.clone(),
         };
@@ -200,6 +236,8 @@ pub struct LocalWriter {
 #[derive(Default)]
 struct WriterConfig {
     replies: Option<ReplyState>,
+    #[cfg(feature = "experimental-host-owner")]
+    view_gate: Option<view_gate::ViewGate>,
     #[cfg(test)]
     after_write: Option<Box<dyn FnOnce() + Send>>,
 }
@@ -250,6 +288,8 @@ impl LocalWriter {
             key,
             WriterConfig {
                 replies: Some(ReplyState::new(context.clone())),
+                #[cfg(feature = "experimental-host-owner")]
+                view_gate: None,
                 #[cfg(test)]
                 after_write: None,
             },
@@ -278,6 +318,8 @@ impl LocalWriter {
             key,
             WriterConfig {
                 replies: Some(ReplyState::canonical(context.clone(), start)),
+                #[cfg(feature = "experimental-host-owner")]
+                view_gate: None,
                 #[cfg(test)]
                 after_write: None,
             },
@@ -309,6 +351,10 @@ impl LocalWriter {
         let (tx, rx) = mpsc::sync_channel::<Command>(QUEUE);
         let sealed = Arc::new(AtomicBool::new(false));
         let target = Arc::new(target);
+        #[cfg(feature = "experimental-host-owner")]
+        let view_scope = config.view_gate.as_ref().map(|g| g.scope().clone());
+        #[cfg(not(feature = "experimental-host-owner"))]
+        let view_scope = None;
         let handle = LocalInputHandle {
             tx,
             target: target.clone(),
@@ -316,11 +362,14 @@ impl LocalWriter {
             epoch,
             sealed: sealed.clone(),
             credits: Arc::new(Credits::default()),
+            view_scope,
         };
         let worker = std::thread::Builder::new()
             .name("cc-local-writer".into())
             .spawn(move || {
                 let mut replies = config.replies.take();
+                #[cfg(feature = "experimental-host-owner")]
+                let mut view_gate = config.view_gate.take();
                 loop {
                     if sealed.load(Ordering::Acquire) {
                         reject_queued(&rx);
@@ -339,6 +388,36 @@ impl LocalWriter {
                                     state.capture(&request, target.clone(), epoch, &sealed)
                                 }
                                 None => Err(Reject::Unsupported),
+                            };
+                            #[cfg(feature = "experimental-host-owner")]
+                            let result = if let Some(peer) = &request.peer {
+                                result.and_then(|frame| {
+                                    view_gate
+                                        .as_mut()
+                                        .ok_or(Reject::Unsupported)?
+                                        .issue(frame, peer)
+                                })
+                            } else {
+                                result
+                            };
+                            let _ = request.reply.try_send(result);
+                            continue;
+                        }
+                        #[cfg(feature = "experimental-host-owner")]
+                        Command::ViewAck(request) => {
+                            let result = if sealed.load(Ordering::Acquire) {
+                                Err(Reject::Sealed)
+                            } else {
+                                view_gate
+                                    .as_mut()
+                                    .ok_or(Reject::Unsupported)
+                                    .and_then(|gate| {
+                                        let epochs = replies
+                                            .as_ref()
+                                            .and_then(ReplyState::epochs)
+                                            .ok_or(Reject::Sync)?;
+                                        gate.acknowledge(&request.scope, &request.ack, epochs)
+                                    })
                             };
                             let _ = request.reply.try_send(result);
                             continue;
@@ -365,17 +444,43 @@ impl LocalWriter {
                         let _ = request.reply.try_send(WriteResult::Rejected(reason));
                         continue;
                     }
+                    #[cfg(feature = "experimental-host-owner")]
+                    if let Some(gate) = &view_gate
+                        && let Err(error) = gate.check_request(&request, replies.as_ref())
+                    {
+                        let _ = request.reply.try_send(WriteResult::Rejected(error));
+                        continue;
+                    }
                     let digest = digest(&key, &request.key, epoch, &request.bytes);
+                    #[cfg(feature = "experimental-host-owner")]
+                    let digest = if let Some(view) = &request.view {
+                        match view.digest(&key, &request.key, epoch, &request.bytes) {
+                            Ok(d) => d,
+                            Err(e) => {
+                                let _ = request.reply.try_send(WriteResult::Rejected(e));
+                                continue;
+                            }
+                        }
+                    } else {
+                        digest
+                    };
                     let outcome = journal.run_once(&request.key, &digest, || {
                         // 意图已持久化后、真正写入前再次采样封存。当前在途写不能靠 seal 撤销。
                         if sealed.load(Ordering::Acquire) {
                             return Outcome::Rejected;
                         }
-                        let result = write_once(&mut stdin, &request.bytes);
-                        if result == Outcome::HostWritten {
-                            config.after_write();
+                        let mut effect = || {
+                            let result = write_once(&mut stdin, &request.bytes);
+                            if result == Outcome::HostWritten {
+                                config.after_write();
+                            }
+                            result
+                        };
+                        #[cfg(feature = "experimental-host-owner")]
+                        if let Some(gate) = &view_gate {
+                            return gate.effect_if_current(&request, replies.as_ref(), effect);
                         }
-                        result
+                        effect()
                     });
                     let feedback = match outcome {
                         Ok(Outcome::Partial) => {
@@ -426,6 +531,10 @@ impl LocalWriter {
     }
     /// 仅封存新提交/请求停止；不声称当前 write 已结束或允许换 generation。
     pub fn seal(&self) {
+        #[cfg(feature = "experimental-host-owner")]
+        if let Some(scope) = &self.handle.view_scope {
+            scope.close();
+        }
         self.handle.sealed.store(true, Ordering::Release);
     }
     pub fn try_join(&mut self) -> Result<bool, Reject> {
@@ -453,6 +562,10 @@ impl Drop for LocalWriter {
 fn reject_queued(rx: &mpsc::Receiver<Command>) {
     for r in rx.try_iter() {
         match r {
+            #[cfg(feature = "experimental-host-owner")]
+            Command::ViewAck(r) => {
+                let _ = r.reply.try_send(Err(Reject::Sealed));
+            }
             #[cfg(feature = "experimental-canonical-replies")]
             Command::Projection(r) => {
                 let _ = r.reply.try_send(Err(Reject::Sealed));

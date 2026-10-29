@@ -222,3 +222,56 @@ fn owner_enforces_active_and_lifetime_session_caps_without_eviction() {
     drop(owner);
     closed(&registry);
 }
+#[test]
+fn owner_guarded_factory_uses_its_shared_budget_and_does_not_return_a_raw_input_bypass() {
+    let _serial = SERIAL.lock().unwrap();
+    let registry = OwnerRegistry::default();
+    let mut owner = fresh_owner(&registry);
+    let dir = tempfile::tempdir().unwrap();
+    let started = owner
+        .start_guarded(
+            Journal::open(&dir.path().join("journal.sqlite")).unwrap(),
+            io::sink(),
+            config(target(1)),
+            [0x33; 32],
+            1,
+        )
+        .unwrap();
+    let key = OperationKey {
+        host: [1; 32],
+        session: [1; 16],
+        run: target(1).run,
+        generation: 1,
+        incarnation: 4,
+        device: [5; 32],
+        operation: [6; 16],
+        sequence: 1,
+    };
+    assert!(matches!(
+        started.input.submit(key, 9, b"x".to_vec()),
+        Err(Reject::Sync)
+    ));
+    let peer = started.peer.unwrap();
+    let a = peer
+        .capture()
+        .unwrap()
+        .wait(Duration::from_secs(2))
+        .unwrap()
+        .unwrap();
+    let b = owner
+        .capture(&target(1))
+        .unwrap()
+        .wait(Duration::from_secs(2))
+        .unwrap()
+        .unwrap();
+    assert!(a.issued_stamp().is_ok());
+    assert!(matches!(peer.capture(), Err(Reject::Full)));
+    reap(&mut owner, &target(1));
+    assert!(matches!(peer.capture(), Err(Reject::Sync)));
+    drop(a);
+    drop(b);
+    // The closed producer retains its capture pool until the fixture drops it.
+    drop(peer);
+    drop(owner);
+    closed(&registry);
+}

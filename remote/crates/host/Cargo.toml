@@ -8,9 +8,11 @@ publish.workspace = true
 default = []
 experimental-local-writer = ["dep:cc-desk-remote-terminal"]
 experimental-canonical-replies = ["experimental-local-writer", "cc-desk-remote-terminal/experimental-emulator", "dep:cc-desk-remote-record"]
-experimental-host-owner = ["experimental-canonical-replies"]
+experimental-host-owner = ["experimental-canonical-replies", "dep:cc-desk-remote-transport", "dep:tokio"]
 
 [dependencies]
+cc-desk-remote-transport = { path = "../transport", optional = true }
+tokio = { version = "=1.52.1", optional = true, features = ["io-util", "sync", "time", "rt-multi-thread", "macros"] }
 cc-desk-remote-record = { path = "../../../protocol/remote/inner/v1", optional = true }
 rusqlite = { version = "=0.40.2", default-features = false, features = ["bundled"] }
 ring = "=0.17.14"
@@ -21,6 +23,7 @@ cc-desk-remote-terminal = { path = "../terminal", optional = true }
 windows = { version = "=0.61.3", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_JobObjects", "Win32_System_Threading"] }
 
 [dev-dependencies]
+tokio = { version = "=1.52.1", features = ["test-util"] }
 tempfile = "=3.27.0"
 cc-desk-native-runtime = { path = "../runtime", features = ["conpty-qualification"] }
 

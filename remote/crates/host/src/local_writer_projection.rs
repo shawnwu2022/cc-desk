@@ -57,6 +57,8 @@ pub(crate) struct CapturedProjection {
     revision: u64,
     view: SemanticSnapshot,
     _credit: Arc<ViewCredit>,
+    #[cfg(feature = "experimental-host-owner")]
+    pub(super) issued: Option<Arc<view_gate::IssuedView>>,
 }
 /// Host-issued channel barrier context; fixed test bytes in qualification only.
 /// Construction does not authenticate a peer or confer remote access.
@@ -72,29 +74,31 @@ impl CapturedProjection {
         minor: u16,
     ) -> Result<cc_desk_remote_terminal::SnapshotEncoder<'_>, cc_desk_remote_terminal::EncodingError>
     {
+        cc_desk_remote_terminal::SnapshotEncoder::new(&self.view, self.stamp(context), minor)
+    }
+    pub(super) fn stamp(
+        &self,
+        context: &ProjectionContext,
+    ) -> cc_desk_remote_record::projection::Stamp {
         use cc_desk_remote_record::projection::{Stamp, Target as WireTarget};
         let hex = |bytes: &[u8]| bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
         let e = self.view.epochs();
-        cc_desk_remote_terminal::SnapshotEncoder::new(
-            &self.view,
-            Stamp {
-                target: WireTarget {
-                    host: hex(&self.target.host),
-                    session: hex(&self.target.session),
-                    run: self.target.run.clone(),
-                    generation: self.target.generation.to_string(),
-                    incarnation: self.target.incarnation.to_string(),
-                },
-                binding: hex(&context.binding),
-                barrier: hex(&context.barrier),
-                revision: self.revision.to_string(),
-                dimension_epoch: e.dimension_epoch.to_string(),
-                mode_epoch: e.mode_epoch.to_string(),
-                structure_epoch: e.structure_epoch.to_string(),
-                sync_epoch: context.sync_epoch.to_string(),
+        Stamp {
+            target: WireTarget {
+                host: hex(&self.target.host),
+                session: hex(&self.target.session),
+                run: self.target.run.clone(),
+                generation: self.target.generation.to_string(),
+                incarnation: self.target.incarnation.to_string(),
             },
-            minor,
-        )
+            binding: hex(&context.binding),
+            barrier: hex(&context.barrier),
+            revision: self.revision.to_string(),
+            dimension_epoch: e.dimension_epoch.to_string(),
+            mode_epoch: e.mode_epoch.to_string(),
+            structure_epoch: e.structure_epoch.to_string(),
+            sync_epoch: context.sync_epoch.to_string(),
+        }
     }
     pub(crate) fn target(&self) -> &Target {
         &self.target
@@ -126,6 +130,8 @@ impl CapturedProjection {
             revision,
             view,
             _credit: request.credit.clone(),
+            #[cfg(feature = "experimental-host-owner")]
+            issued: None,
         }
     }
 }
@@ -147,8 +153,10 @@ impl PendingProjection {
 pub(super) struct ProjectionRequest {
     pub(super) context: Arc<()>,
     pub(super) reply: mpsc::SyncSender<Result<CapturedProjection, Reject>>,
+    pub(super) peer: Option<Arc<InputPeerScope>>,
     credit: Arc<ViewCredit>,
 }
+#[derive(Clone)]
 pub(super) struct ProjectionHandle {
     tx: mpsc::SyncSender<Command>,
     context: Arc<()>,
@@ -165,6 +173,12 @@ impl ProjectionHandle {
         }
     }
     pub(super) fn capture(&self) -> Result<PendingProjection, Reject> {
+        self.capture_inner(None)
+    }
+    pub(super) fn capture_inner(
+        &self,
+        peer: Option<Arc<InputPeerScope>>,
+    ) -> Result<PendingProjection, Reject> {
         if self.sealed.load(Ordering::Acquire) {
             return Err(Reject::Sealed);
         }
@@ -174,6 +188,7 @@ impl ProjectionHandle {
             .try_send(Command::Projection(ProjectionRequest {
                 context: self.context.clone(),
                 reply: tx,
+                peer,
                 credit: credit.clone(),
             }))
             .map_err(|e| match e {
