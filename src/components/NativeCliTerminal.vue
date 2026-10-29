@@ -197,10 +197,9 @@ function bindClipboard() {
       if (!cancelReservation?.()) throw new Error('NATIVE_PASTE_CANCEL_FAILED')
       return new Uint8Array()
     }
-    // codex ≥0.163.0 在 Windows 上对纯 Ctrl+V 构造 PasteImage{text_fallback}，
-    // 无图时由 codex 自己读剪贴板文本；此时 producer 返回 1 字节 \x16 即一次完整
-    // 粘贴事件，绕开 bracketed frame 传输与 paste burst 逐字插入。0.162.x 无文本
-    // 回退（会吞掉纯文本按键），必须探测后再转发，否则回退 Desk 剪贴板路径。
+    // Only a confirmed native text-paste capability may receive Ctrl-V.
+    // A version string or bracketed-paste mode is not that evidence; otherwise
+    // use the existing clipboard path and its captured terminal mode.
     const codexTextFallback = codexPasteSupport
       && codexPasteSupport.attempt.runId === attempt.runId
       && codexPasteSupport.attempt.generation === attempt.generation

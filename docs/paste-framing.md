@@ -1,5 +1,22 @@
 # DevTools JSON 粘贴完整性修复
 
+## Version-independent Codex text paste
+
+Text Ctrl-V routing does not run the selected CLI with `--version` or infer an
+input capability from its version. No passive native text Ctrl-V contract is
+currently available, so the existing paste-support DTO reports
+`nativeTextPaste=false` (unconfirmed capability, not an unsupported CLI version).
+The caller/window and profile revision checks remain required.
+
+The terminal retains clipboard classification, the current attempt, input
+reservation and mode epoch. Text contents change only through CR/CRLF to LF
+normalization; current bracketed-paste mode determines framing. No Enter is
+appended. Newlines already in the text remain CLI-interpreted input; this does
+not certify that every CLI can never submit them. Positive image evidence keeps
+its existing image route. No probe input is sent to a user terminal, and
+bracketed-paste mode does not prove native Ctrl-V text fallback. CLI installation,
+identity/nonce, permissions and configuration remain unchanged.
+
 ## 问题
 
 Windows 版 CC Desk 在 Claude Code 输入框粘贴较大的 Chrome DevTools JSON 时，曾出现三类现象：

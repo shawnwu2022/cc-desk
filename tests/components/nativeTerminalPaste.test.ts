@@ -139,6 +139,30 @@ function pasteEvent(text: string): Event {
 }
 
 describe('NativeTerminalPaste_TextEventRoutesToBinding', () => {
+  it.each([
+    ['plain', false, 'hello π🙂', 'hello π🙂'],
+    ['multiline', true, 'a\r\nb\rc\n', '\x1b[200~a\nb\nc\n\x1b[201~'],
+    ['controls', true, 'a\t\0\x03b', '\x1b[200~a\t\0\x03b\x1b[201~'],
+    ['unbracketed', false, 'a\r\nb', 'a\nb'],
+  ] as const)('C5_NoNativeEvidenceUsesCurrentTextMode_003 %s', async (_name, bracketed, text, expected) => {
+    io.codexSupport = false
+    io.readText.mockResolvedValue(text)
+    const tabs = useNativeTabsStore()
+    const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+    wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } })
+    await vi.advanceTimersByTimeAsync(0)
+    io.terminals[0].write(bracketed ? '\x1b[?2004h' : '\x1b[?2004l')
+    await vi.advanceTimersByTimeAsync(20)
+    expect(io.terminals[0].modes.bracketedPasteMode).toBe(bracketed)
+    wrapper.find('textarea').element.dispatchEvent(new KeyboardEvent('keydown', { key: 'v', ctrlKey: true, bubbles: true, cancelable: true }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(io.binding.reserveUserPaste).toHaveBeenCalledOnce()
+    const produced = await io.binding.reserveUserPaste.mock.results[0].value.produced
+    expect(new TextDecoder().decode(produced)).toBe(expected)
+    expect(io.binding.sendUserText).not.toHaveBeenCalled()
+    expect(io.readImage).not.toHaveBeenCalled()
+  })
+
   it.each([[false, true], [true, false]])('CodexCompatibility_AttemptFreezesPasteCapability_076 (%s → %s)', async (before, after) => {
     io.codexSupport = before
     io.readText.mockResolvedValue('safe Desk paste')
