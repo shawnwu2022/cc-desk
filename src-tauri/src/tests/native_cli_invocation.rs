@@ -9,6 +9,83 @@ use std::fs;
 
 const LOCATOR: &str = "11111111-2222-4333-8444-555555555555";
 
+// 只创建文件，不执行合成 image；包契约而非版本文本决定同次投递路线。
+#[cfg(windows)]
+#[test]
+fn NativePackage_DirectArgumentsWithoutAuxiliaryProbe_129() {
+    for action in [
+        LaunchAction::New,
+        resume(LOCATOR),
+        picker(ResumeScope::CurrentProject),
+        picker(ResumeScope::All),
+    ] {
+        for version in ["0.1", "future", "", "broken version"] {
+            let mut f = Fixture::new(CliKind::Codex, action.clone());
+            let package = f.root.path().join("package");
+            fs::create_dir_all(package.join("bin")).unwrap();
+            let program = package.join("bin/codex.exe");
+            fs::write(&program, "fixture never executed").unwrap();
+            fs::write(package.join("codex-package.json"), json!({"variant":"codex","entrypoint":"bin/codex.exe","version":version,"newField":true}).to_string()).unwrap();
+            f.profile.program_path = Override::Set(program.to_str().unwrap().into());
+            f.profile.default_args = Override::Set(vec![
+                "-c".into(),
+                "hooks.SessionStart=[]".into(),
+                "--model".into(),
+                "user-model".into(),
+            ]);
+            f.request.extra_args = vec!["two words".into()];
+            let observer = ObserverEnv {
+                values: EnvMap::from([
+                    ("CC_DESK_CODEX_PORT".into(), "1234".into()),
+                    ("CC_DESK_CODEX_RUN".into(), f.request.run_id.clone().into()),
+                    (
+                        "CC_DESK_CODEX_GENERATION".into(),
+                        f.request.generation.to_string().into(),
+                    ),
+                    ("CC_DESK_CODEX_CAPABILITY".into(), "a".repeat(32).into()),
+                ]),
+            };
+            let hooks =
+                crate::codex_observer::hook_args(&std::env::current_exe().unwrap()).unwrap();
+            let original = f.freeze();
+            let next = original.with_codex_identity(&observer, &hooks).unwrap();
+            assert!(next.codex_direct_core());
+            assert!(!crate::cli::codex::test_identity_gate(&original, &hooks));
+            assert!(crate::cli::codex::test_identity_gate(&next, &hooks));
+            let invocation = build_invocation(&f.request, &next).unwrap();
+            assert_eq!(invocation.program(), program);
+            assert_eq!(invocation.args()[0], "-c");
+            assert!(invocation.args()[1].to_str().unwrap().starts_with("hooks="));
+            let tail = match &action {
+                LaunchAction::New => words(&[]),
+                LaunchAction::ResumeId { .. } => words(&["resume", LOCATOR]),
+                LaunchAction::ResumePicker {
+                    scope: ResumeScope::All,
+                } => words(&["resume", "--all"]),
+                _ => words(&["resume"]),
+            };
+            assert_eq!(&invocation.args()[2..2 + tail.len()], tail);
+            assert_eq!(
+                &invocation.args()[2 + tail.len()..],
+                words(&["--model", "user-model", "two words"])
+            );
+            let mut stale = f.request.clone();
+            stale.generation += 1;
+            assert!(invocation.recipe().arguments(&stale).is_err());
+            // 本 run 的 owned snapshot 保持 image/manifest，禁止原路径被替换或改写。
+            assert!(fs::write(&program, "replacement").is_err());
+            assert!(fs::write(package.join("codex-package.json"), "{}").is_err());
+            drop(invocation);
+            let retained = next.clone();
+            drop(next);
+            assert!(fs::write(&program, "still held").is_err());
+            drop(retained);
+            fs::write(&program, "released").unwrap();
+            fs::write(package.join("codex-package.json"), "{}").unwrap();
+        }
+    }
+}
+
 // 已证明的 npm 文件入口独占 CLI tail；真实自有 Cmd/Node 输出不得把 action/hooks 交给解释器。
 #[cfg(windows)]
 #[test]

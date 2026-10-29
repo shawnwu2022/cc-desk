@@ -609,3 +609,32 @@ identity isolation, abort/idle, HTTP rename, server restart and persistent title
 without model calls. Request/error/reordering/overflow/dispose cases are isolated
 production-plugin tests; they are not authenticated model-turn evidence. Browser
 light/dark status rendering is synthetic Chrome evidence, not native Windows WebView2.
+
+### Windows canonical Codex package entry
+
+The selected physical `bin/codex.exe` can supply a DirectCore recipe when the adjacent
+package root has a bounded regular `codex-package.json` declaring exactly
+`variant: codex` and `entrypoint: bin/codex.exe`. Version text is ignored. This uses
+the existing official package layout; the manifest declares argument ownership,
+not publisher authenticity, official executable bytes, or additional authority.
+Unknown fields remain bounded JSON; duplicate consumed fields, malformed input,
+path alternatives, aliases and inconsistent held identities cannot enable this route.
+
+The snapshot retains the selected image, metadata and parent guards through the owned
+run. Its recipe places temporary hook configuration at the CLI argument boundary,
+before the unchanged structured action and ordered business arguments. The existing
+SessionFlags merge preserves user hook entries and trust/disable state. Lower config
+layers remain the CLI's responsibility; this adapter does not read account config,
+enable the hooks feature, or change model/sandbox/approval policy. The prepared
+snapshot bypasses the auxiliary app-server capability probe: only the user's one
+requested launch runs. Preparation means awaiting an authenticated event, not linked
+identity or proven runtime compatibility. Source/run/generation/nonce/replay/history
+root authorization and title/refresh/close behavior remain on the existing event path.
+
+Default discovery already resolves the installer's visible junction to a physical
+package entry. Manually selected aliases, old standalone layouts, arbitrary wrappers,
+Unix and existing opaque/raw/npm routes retain their prior behavior. In particular,
+this does not remove the old auxiliary admission for unmigrated native layouts or
+silently select a different installation after an upgrade. Fixtures cover argument
+ownership and held-file protection; real native TUI hook delivery, installed package
+layout and field automatic title synchronization remain unaccepted.

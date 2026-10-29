@@ -48,6 +48,8 @@ pub(crate) struct LaunchSnapshot {
     identity_args: Vec<OsString>,
     #[cfg(windows)]
     codex_cmd: Option<std::sync::Arc<super::codex_cmd::Transport>>,
+    #[cfg(windows)]
+    codex_native: Option<std::sync::Arc<super::codex_native_route::NativePackageEntry>>,
 }
 
 impl std::fmt::Debug for LaunchSnapshot {
@@ -57,6 +59,16 @@ impl std::fmt::Debug for LaunchSnapshot {
 }
 
 impl LaunchSnapshot {
+    pub(crate) fn codex_direct_core(&self) -> bool {
+        #[cfg(windows)]
+        {
+            self.codex_native.is_some()
+        }
+        #[cfg(not(windows))]
+        {
+            false
+        }
+    }
     #[cfg(windows)]
     pub(crate) fn codex_npm_entry(&self) -> Option<&super::codex_cmd::ProvenNpmEntry> {
         self.codex_cmd
@@ -92,6 +104,20 @@ impl LaunchSnapshot {
         let mut next = self.clone();
         next.environment = super::environment::overlay_codex_identity(&self.environment, observer)?;
         next.identity_args = args.to_vec();
+        #[cfg(windows)]
+        if matches!(self.launcher(), Launcher::Native) {
+            if let Some(entry) = super::codex_native_route::prepare(&self.program)? {
+                let overlay = crate::codex_observer::cmd_hook_overlay(
+                    args,
+                    &self.default_args,
+                    &self.extra_args,
+                )?;
+                next.identity_args = overlay.hook_args;
+                next.default_args = overlay.default_args;
+                next.extra_args = overlay.extra_args;
+                next.codex_native = Some(std::sync::Arc::new(entry));
+            }
+        }
         #[cfg(windows)]
         if matches!(
             self.launcher(),
@@ -410,6 +436,8 @@ pub(crate) fn freeze_launch(
         identity_args: Vec::new(),
         #[cfg(windows)]
         codex_cmd: None,
+        #[cfg(windows)]
+        codex_native: None,
         request: request.clone(),
         profile: profile.clone(),
         owner: caller.clone(),

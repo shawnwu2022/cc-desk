@@ -16,6 +16,7 @@ pub(crate) struct LaunchRecipe<'a> {
 
 enum HookDelivery<'a> {
     PreservedOuter(&'a [OsString]),
+    DirectCore(&'a [OsString]),
     #[cfg(windows)]
     NpmPreload(&'a super::codex_cmd::ProvenNpmEntry),
 }
@@ -44,7 +45,11 @@ impl<'a> LaunchRecipe<'a> {
                 CliKind::Shell => super::shell::action_args(snapshot)?,
             }
         };
-        let hooks = HookDelivery::PreservedOuter(snapshot.identity_args());
+        let hooks = if snapshot.codex_direct_core() {
+            HookDelivery::DirectCore(snapshot.identity_args())
+        } else {
+            HookDelivery::PreservedOuter(snapshot.identity_args())
+        };
         #[cfg(windows)]
         let hooks = if let Some(entry) = snapshot.codex_npm_entry() {
             // 已有 npm 计划必须独占投递；冲突不得靠丢弃外层参数隐式修复。
@@ -97,7 +102,7 @@ impl<'a> LaunchRecipe<'a> {
         }
         // npm 的 hooks 由已有 loader 在文件入口后投递；外层 shim 只拿 CLI tail。
         let mut args = match &self.hooks {
-            HookDelivery::PreservedOuter(args) => args.to_vec(),
+            HookDelivery::PreservedOuter(args) | HookDelivery::DirectCore(args) => args.to_vec(),
             #[cfg(windows)]
             HookDelivery::NpmPreload(_) => Vec::new(),
         };

@@ -125,7 +125,7 @@ fn hold_parent(path: &Path, guards: &mut Vec<File>) -> Result<(), SafeError> {
     Ok(())
 }
 
-fn held_text(path: &Path, guards: &mut Vec<File>) -> Result<String, SafeError> {
+pub(super) fn held_text(path: &Path, guards: &mut Vec<File>) -> Result<String, SafeError> {
     let canonical = literal_path(path)?;
     hold_parent(&canonical, guards)?;
     let mut file = OpenOptions::new()
@@ -161,8 +161,8 @@ fn held_text(path: &Path, guards: &mut Vec<File>) -> Result<String, SafeError> {
     Ok(text)
 }
 
-/// 可选原生能力探测只执行这个保持打开且身份核实过的直接路径。
-pub(crate) fn hold_probe_target(path: &Path) -> Result<Vec<File>, SafeError> {
+/// 只持有所选直接路径，不执行程序或证明 CLI 协议能力。
+pub(crate) fn hold_selected_target(path: &Path) -> Result<Vec<File>, SafeError> {
     let canonical = literal_path(path)?;
     let mut guards = Vec::new();
     hold_parent(&canonical, &mut guards)?;
