@@ -330,8 +330,8 @@ native peer permanently. Wall/phone clocks are not accepted.
 
 This is a first-lease prerequisite, not completed E09: verified grant/IO
 admission, suspend notification, cross-peer pending-operation recovery,
-wire mutation decoding, multi-device takeover/new fence, policy replacement,
-rebind and native mobile evidence remain required. Software monotonic-clock
+wire mutation decoding, verified peer takeover admission, policy replacement,
+transport reconnect and native mobile evidence remain required. Software monotonic-clock
 tests do not prove Windows suspend behavior. No CLI software version admission
 floor is introduced; protocol validation is separate from CLI versions.
 
@@ -351,7 +351,7 @@ existing Journal ACK transaction can release the slot. The durable settled
 floor precedes release. Lost ACK responses use the existing idempotent batch
 witness; an old ACK cannot clear a newer pending operation. Query/settlement
 storage failure closes the peer. There is still no network decoder, real data
-authorization factory, reconnect or post-retirement query owner in this slice.
+authorization factory, transport reconnect or post-retirement query owner in this slice.
 
 Controlled startup also imports the exact single durable unsettled row for its
 target/device before creating the writer. A known-but-unACKed row must be
@@ -359,3 +359,27 @@ queried/settled before another operation; an Unknown row stays unprovable and
 cannot permit the next effect. Multiple unsettled legacy rows or missing/inexact
 metadata fail construction closed rather than resetting the pipeline. This
 does not fabricate a successful historical effect or erase its receipt evidence.
+
+The native owner can now queue a rebind/transfer on the existing writer, behind
+any in-flight IO. It requires exact old fence, checked next fence, same runtime
+clock object/origin and policy epoch, and different current binding/lease IDs.
+Changing device requires its distinct preverified native grant and refuses an
+old pending operation. Same-device replacement imports the exact durable pending
+row for query/proof settlement; it never replays or renumbers the operation.
+Fresh view delivery/ACK/window is required before new input. Sync counter does
+not reset. Old handles, scopes, ACKs and input contexts stay invalid.
+
+Reusing the same accepted grant requires its original device and Host challenge
+creation time, retains its original expiry, and does not reapply the initial
+30s response deadline. A different grant still requires a live30s challenge.
+This is native fixture policy; real signed grant/IO verification remains required.
+
+Per-peer disconnect is separate from the sticky writer-stop signal shared by
+all peer incarnations. Owner seal, clock error/rollback and fence overflow stop
+that namespace and wake replacement sends. Closing an old peer cannot close a
+new peer. Native status is serialized for reconciling an Uncertain transition;
+its `active` flag describes scope lifetime, never data/lease authority. A lost
+rebind response drops/closes the newly returned scope; native backend must inspect
+the outcome before explicitly creating another context, not blindly resend.
+General lost-device administrative recovery, policy change, suspend integration,
+post-retirement queries and authenticated transport admission remain OPEN.

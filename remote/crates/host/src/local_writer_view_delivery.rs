@@ -50,6 +50,7 @@ impl projection::CapturedProjection {
             completed: false,
         };
         let mut closed = record.scope.closed.subscribe();
+        let mut writer_closed = record.scope.writer_closed.subscribe();
         let encoder = cc_desk_remote_terminal::SnapshotEncoder::new(
             self.view(),
             record.stamp.clone(),
@@ -67,6 +68,7 @@ impl projection::CapturedProjection {
                 .ok_or(Reject::Continuity)?;
             tokio::select! {
                 _=closed.changed()=>return Err(Reject::Sync),
+                _=writer_closed.changed()=>return Err(Reject::Sync),
                 result=tokio::time::timeout_at(end,writer.write(Kind::Projection,&payload,remaining))=>{
                     result.map_err(|_|Reject::Continuity)?.map_err(|_|Reject::Continuity)?;
                 }

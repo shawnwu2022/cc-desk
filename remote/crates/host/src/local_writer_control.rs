@@ -2,6 +2,8 @@ use super::*;
 use std::sync::Mutex;
 #[path = "local_writer_control_receipts.rs"]
 mod receipts;
+#[path = "local_writer_control_transition.rs"]
+mod transition;
 
 // This native-only input is supplied by a future verified data-authority factory,
 // never directly deserialized from a peer. It does not authenticate a grant.
@@ -13,6 +15,7 @@ impl<F: Fn() -> Result<u64, Reject> + Send + Sync> HostClock for F {
         self()
     }
 }
+#[derive(Clone, Copy)]
 pub(in crate::local_writer) struct GrantContext {
     pub(in crate::local_writer) challenge_ms: u64,
     pub(in crate::local_writer) grant: [u8; 32],
@@ -110,6 +113,14 @@ impl AdmissionError {
 impl ControlState {
     pub(super) fn new(clock: Arc<dyn HostClock>, grant: GrantContext) -> Result<Self, Reject> {
         let now = clock.now_ms()?;
+        Self::at(clock, grant, now, true)
+    }
+    fn at(
+        clock: Arc<dyn HostClock>,
+        grant: GrantContext,
+        now: u64,
+        require_response: bool,
+    ) -> Result<Self, Reject> {
         let response_deadline = grant
             .challenge_ms
             .checked_add(30_000)
@@ -119,7 +130,8 @@ impl ControlState {
             .checked_add(900_000)
             .ok_or(Reject::Policy)?;
         if now < grant.challenge_ms
-            || now >= response_deadline
+            || (require_response && now >= response_deadline)
+            || now >= grant_deadline
             || grant.fence == 0
             || grant.policy == 0
             || grant.grant == [0; 32]
@@ -169,6 +181,14 @@ impl ControlState {
             self.pending = Some((key.clone(), digest.0));
         }
     }
+    pub(super) fn status(&self, scope: &PeerScope) -> rebind::ControlStatus {
+        rebind::ControlStatus {
+            fence: self.identity.fence,
+            device: scope.device,
+            active: scope.is_active(),
+            pending: self.pending.as_ref().map(|(key, _)| key.clone()),
+        }
+    }
     pub(super) fn restore_pending(
         &mut self,
         journal: &Journal,
@@ -195,7 +215,7 @@ impl ControlState {
             Ok(now)
         })();
         if result.is_err() {
-            scope.close();
+            scope.close_writer();
         }
         result
     }

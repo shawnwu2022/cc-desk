@@ -65,6 +65,23 @@ impl<W: Write> Write for HeldIo<W> {
     }
 }
 impl WriterHostOwner {
+    pub(super) fn control_status(
+        &self,
+        t: &Target,
+    ) -> Result<view_gate::rebind::PendingStatus, OwnerError> {
+        self.find(t)?.control_status().map_err(OwnerError::Writer)
+    }
+    pub(super) fn rebind(
+        &self,
+        t: &Target,
+        device: [u8; 32],
+        expected_fence: u64,
+        admission: view_gate::control::ControlAdmission,
+    ) -> Result<view_gate::rebind::PendingRebind, OwnerError> {
+        self.find(t)?
+            .rebind(device, expected_fence, admission)
+            .map_err(OwnerError::Writer)
+    }
     pub(super) fn start_controlled(
         &mut self,
         journal: Journal,

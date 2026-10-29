@@ -124,6 +124,10 @@ enum Command {
     ViewAck(view_gate::ViewAckRequest),
     #[cfg(feature = "experimental-host-owner")]
     Control(view_gate::control::ControlRequest),
+    #[cfg(feature = "experimental-host-owner")]
+    Rebind(Box<view_gate::rebind::RebindRequest>),
+    #[cfg(feature = "experimental-host-owner")]
+    ControlStatus(view_gate::rebind::StatusRequest),
 }
 #[derive(Clone)]
 pub struct LocalInputHandle {
@@ -428,6 +432,28 @@ impl LocalWriter {
                         }
                         Command::Input(request) => request,
                         #[cfg(feature = "experimental-host-owner")]
+                        Command::ControlStatus(request) => {
+                            if sealed.load(Ordering::Acquire) {
+                                request.reject(Reject::Sealed);
+                            } else if let Some(gate) = &view_gate {
+                                request.process(gate);
+                            } else {
+                                request.reject(Reject::Unsupported);
+                            }
+                            continue;
+                        }
+                        #[cfg(feature = "experimental-host-owner")]
+                        Command::Rebind(request) => {
+                            if sealed.load(Ordering::Acquire) {
+                                request.reject(Reject::Sealed);
+                            } else if let Some(gate) = &mut view_gate {
+                                request.process(gate, &journal);
+                            } else {
+                                request.reject(Reject::Unsupported);
+                            }
+                            continue;
+                        }
+                        #[cfg(feature = "experimental-host-owner")]
                         Command::Control(request) => {
                             if sealed.load(Ordering::Acquire) {
                                 request.reject(Reject::Sealed);
@@ -452,9 +478,15 @@ impl LocalWriter {
                             continue;
                         }
                     };
+                    #[cfg(feature = "experimental-host-owner")]
+                    let current_device = view_gate
+                        .as_ref()
+                        .map_or(&device, view_gate::ViewGate::device);
+                    #[cfg(not(feature = "experimental-host-owner"))]
+                    let current_device = &device;
                     if let Err(reason) = validate(
                         &target,
-                        &device,
+                        current_device,
                         epoch,
                         &request.key,
                         request.epoch,
@@ -581,7 +613,7 @@ impl LocalWriter {
     pub fn seal(&self) {
         #[cfg(feature = "experimental-host-owner")]
         if let Some(scope) = &self.handle.view_scope {
-            scope.close();
+            scope.close_writer();
         }
         self.handle.sealed.store(true, Ordering::Release);
     }
@@ -612,6 +644,10 @@ fn reject_queued(rx: &mpsc::Receiver<Command>) {
         match r {
             #[cfg(feature = "experimental-host-owner")]
             Command::Control(r) => r.reject(Reject::Sealed),
+            #[cfg(feature = "experimental-host-owner")]
+            Command::Rebind(r) => r.reject(Reject::Sealed),
+            #[cfg(feature = "experimental-host-owner")]
+            Command::ControlStatus(r) => r.reject(Reject::Sealed),
             #[cfg(feature = "experimental-host-owner")]
             Command::ViewAck(r) => {
                 let _ = r.reply.try_send(Err(Reject::Sealed));

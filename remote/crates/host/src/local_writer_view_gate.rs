@@ -7,6 +7,8 @@ use std::sync::atomic::AtomicU8;
 #[path = "local_writer_control.rs"]
 pub(super) mod control;
 use control::ControlStart;
+#[path = "local_writer_rebind.rs"]
+pub(super) mod rebind;
 const ISSUED: u8 = 0;
 const SENDING: u8 = 1;
 const DELIVERED: u8 = 2;
@@ -18,14 +20,19 @@ pub(super) struct PeerScope {
     minor: u16,
     active: AtomicBool,
     closed: tokio::sync::watch::Sender<bool>,
+    writer_closed: Arc<tokio::sync::watch::Sender<bool>>,
 }
 impl PeerScope {
     pub(super) fn is_active(&self) -> bool {
-        self.active.load(Ordering::Acquire)
+        self.active.load(Ordering::Acquire) && !*self.writer_closed.borrow()
     }
     pub(super) fn close(&self) {
         self.active.store(false, Ordering::Release);
         self.closed.send_replace(true);
+    }
+    pub(super) fn close_writer(&self) {
+        self.writer_closed.send_replace(true);
+        self.close();
     }
 }
 pub(super) struct PeerControl {
@@ -37,6 +44,16 @@ impl PeerControl {
         device: [u8; 32],
         binding: [u8; 32],
         minor: u16,
+    ) -> Result<Arc<Self>, Reject> {
+        let (writer_closed, _) = tokio::sync::watch::channel(false);
+        Self::on_writer(target, device, binding, minor, Arc::new(writer_closed))
+    }
+    fn on_writer(
+        target: Target,
+        device: [u8; 32],
+        binding: [u8; 32],
+        minor: u16,
+        writer_closed: Arc<tokio::sync::watch::Sender<bool>>,
     ) -> Result<Arc<Self>, Reject> {
         if minor > 1 {
             return Err(Reject::Bounds);
@@ -50,6 +67,7 @@ impl PeerControl {
                 minor,
                 active: AtomicBool::new(true),
                 closed,
+                writer_closed,
             }),
         }))
     }
@@ -266,6 +284,9 @@ pub(super) struct ViewGate {
     control: Option<control::ControlState>,
 }
 impl ViewGate {
+    pub(super) fn device(&self) -> &[u8; 32] {
+        &self.scope.device
+    }
     pub(super) fn can_admit(
         &self,
         key: &OperationKey,
@@ -417,7 +438,7 @@ impl ViewGate {
 }
 impl Drop for ViewGate {
     fn drop(&mut self) {
-        self.scope.close();
+        self.scope.close_writer();
     }
 }
 #[path = "local_writer_view_delivery.rs"]

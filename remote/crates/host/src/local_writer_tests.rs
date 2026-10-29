@@ -3,6 +3,9 @@ mod cli_tests;
 #[cfg(feature = "experimental-host-owner")]
 #[path = "local_writer_control_io_tests.rs"]
 mod control_tests;
+#[cfg(feature = "experimental-host-owner")]
+#[path = "local_writer_rebind_tests.rs"]
+mod rebind_tests;
 #[path = "local_writer_supervisor.rs"]
 mod supervision;
 use super::*;
