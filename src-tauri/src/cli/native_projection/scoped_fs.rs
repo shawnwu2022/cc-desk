@@ -550,7 +550,25 @@ impl Root {
         header_bytes: usize,
         budget: &mut Budget,
     ) -> ReadResult<Option<TitleTail>> {
-        if !budget.optional_title_available(header_bytes, CLAUDE_TITLE_TAIL) {
+        self.title_window(path, header_bytes, CLAUDE_TITLE_TAIL, budget)
+    }
+    /// Optional append-only metadata uses the existing file cap as a tail cap.
+    /// A partial window never proves that an older name is absent.
+    pub(crate) fn history_jsonl_tail(
+        &self,
+        path: &Path,
+        budget: &mut Budget,
+    ) -> ReadResult<Option<TitleTail>> {
+        self.title_window(path, 0, budget.file_bytes, budget)
+    }
+    fn title_window(
+        &self,
+        path: &Path,
+        header_bytes: usize,
+        window: usize,
+        budget: &mut Budget,
+    ) -> ReadResult<Option<TitleTail>> {
+        if !budget.optional_title_available(header_bytes, window) {
             return Ok(None);
         }
         relative(path, false)?;
@@ -593,10 +611,9 @@ impl Root {
         budget.bytes_left = budget.bytes_left.saturating_sub(header.len());
         read.map_err(read_error)?;
         budget.checkpoint()?;
-        // 尾窗按 CLAUDE_TITLE_TAIL 读取；CLI 的 ai-title/custom-title 写在末尾附近，
-        // 4KiB 不足以覆盖实测 p90（33KiB）。调用方已在 optional_title_available
-        // 里按同一常量预付预算，这里不再重复校验。
-        let tail_bytes = before.len().min(CLAUDE_TITLE_TAIL as u64);
+        // The chosen window was checked against both file and aggregate caps.
+        // Claude titles use 64KiB; the optional Codex index retains the file cap.
+        let tail_bytes = before.len().min(window as u64);
         (&file)
             .seek(SeekFrom::End(-(tail_bytes as i64)))
             .map_err(read_error)?;

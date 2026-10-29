@@ -2446,6 +2446,62 @@ it('Runtime_RenameCapabilitySourceTransition_091', async () => {
 })
 
 // 同项目两个owned run按原生ID投影，首轮标题变化、关闭、恢复均不产生伪关闭行。
+it('CodexTitle_IdleRefreshesDelayedNameWithoutStopHook_101', async () => {
+  const id = '00000000-0000-4000-8000-000000000051'
+  let title = 'First prompt'
+  io.scope.mockImplementation(async target => ({ scopeId: 'scope', instanceId: 'instance', cli: 'codex', sourceRootKey: 'root', identityEpoch: '1', profileId: 'cx', profileRevision: '7', target, basis: 'configured-profile' }))
+  io.read.mockImplementation(async () => ({ state: 'ready', items: [{ type: 'session', projectId: 'project', sessionKey: 'root-key', nativeSessionId: id, title, titleSource: title === 'First prompt' ? 'prompt' : 'ai', cwd: '/repo' }], hasMore: false }))
+  render(); await flushPromises()
+  vi.useFakeTimers()
+  const tabs = useNativeTabsStore(), catalog = useUnifiedSessionsStore()
+  const created = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+  const tab = tabs.tab(created.tabId)!
+  tab.status = 'running'; tab.launchRevision = '1'
+  tabs.applyObservationIdentity(tab.tabId, tab, id)
+  await flushPromises(); await vi.advanceTimersByTimeAsync(250); await flushPromises()
+  tabs.applyCodexProgramStatus(tab.tabId, tab, 'working')
+  tabs.applyCodexProgramStatus(tab.tabId, tab, 'idle')
+  await flushPromises(); await vi.advanceTimersByTimeAsync(250); await flushPromises()
+  title = 'Delayed AI title'
+  await vi.advanceTimersByTimeAsync(1250); await flushPromises()
+  expect(catalog.sessions).toHaveLength(1)
+  expect(catalog.sessions[0]).toMatchObject({ title, opened: true, nativeSessionId: id })
+  const reads = io.read.mock.calls.length
+  await vi.advanceTimersByTimeAsync(60000); await flushPromises()
+  expect(io.read.mock.calls.length).toBe(reads)
+  // Close performs a fresh source read. A partial index is not proof that the
+  // exact record's previously observed name disappeared.
+  io.read.mockResolvedValue({ state: 'ready', hasMore: false, historyMetadataIncomplete: true,
+    items: [{ type: 'session', projectId: 'project', sessionKey: 'root-key', nativeSessionId: id,
+      title: 'Untitled', titleUnknown: true, metadataIncomplete: true, cwd: '/repo' }] })
+  tab.status = 'exited'
+  await catalog.closeSession('native-tab:' + tab.tabId); await flushPromises()
+  expect(catalog.sessions[0]).toMatchObject({ title, opened: false })
+})
+
+it.each(['close', 'restart', 'unmount'] as const)('CodexTitle_IdleRetryRetiresWithOwner_102 %s', async retirement => {
+  render(); await flushPromises()
+  vi.useFakeTimers()
+  const tabs = useNativeTabsStore()
+  const created = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+  const tab = tabs.tab(created.tabId)!
+  tab.status = 'running'; tab.launchRevision = '1'
+  tabs.applyObservationIdentity(tab.tabId, tab, '00000000-0000-4000-8000-000000000052')
+  tabs.applyCodexProgramStatus(tab.tabId, tab, 'working')
+  tabs.applyCodexProgramStatus(tab.tabId, tab, 'idle')
+  await flushPromises(); await vi.advanceTimersByTimeAsync(250); await flushPromises()
+  if (retirement === 'unmount') wrappers.pop()!.unmount()
+  else {
+    tab.status = 'exited'
+    if (retirement === 'close') tabs.close(tab.tabId)
+    else tabs.restart(tab.tabId, { profileId: 'cx', profileRevision: '7' })
+  }
+  await flushPromises()
+  const reads = io.read.mock.calls.length
+  await vi.advanceTimersByTimeAsync(60000); await flushPromises()
+  expect(io.read.mock.calls.length).toBe(reads)
+})
+
 it('CodexIdentity_ConcurrentTitleProjection_032', async () => {
   const ids = ['00000000-0000-4000-8000-000000000041', '00000000-0000-4000-8000-000000000042']
   let items: any[] = []

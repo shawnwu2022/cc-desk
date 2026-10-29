@@ -339,6 +339,13 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
       || !['starting', 'running'].includes(value.status) || !['idle', 'working', 'blocked', 'unknown'].includes(status)) return
     if (value.codexProgramStatus === status) return
     value.codexProgramStatus = status
+    // The terminal's idle cue may precede the asynchronous title write, even
+    // when no Stop hook arrives. Reuse the bounded exact-attempt history reads;
+    // status is a refresh cue, never a title or session identity source.
+    if (status === 'idle' && value.observedSessionId) {
+      value.historyChangeRevision = (value.historyChangeRevision ?? 0) + 1
+      value.historyTitleRevision = value.historyChangeRevision
+    }
     value.lastActivityAt = Date.now()
   }
 

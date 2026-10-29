@@ -4,6 +4,19 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
+## [0.25.2]
+
+Fixed
+
+- Refresh Codex history titles after an idle transition, including delayed naming when no Stop hook arrives.
+- Preserve readable names when a Codex title index has a partially appended record or exceeds the normal read limit; retain already observed same-source titles during incomplete close-time reads.
+
+Important
+
+- Identity hooks and supported launcher requirements remain unchanged. Sessions missing startup identity still require a supported launch or resume.
+- Cold reads cannot recover older names outside the bounded large-index tail, or names saved only in Codex SQLite after index persistence fails. Title writes beyond the bounded retry window require another refresh cue.
+- The reported field trigger, complete installed-app behavior and real AI automatic naming have not been certified.
+
 ## [0.25.1]
 
 Fixed
