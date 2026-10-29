@@ -4,6 +4,18 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
+## [0.25.1]
+
+Fixed
+
+- Restore authenticated session identity for the audited official Windows npm Codex CLI 0.164.0 wrapper, allowing newly started sessions to follow CLI history titles and fold their exact history entry.
+
+Important
+
+- Start a new Codex session after updating. Existing sessions launched without identity hooks cannot acquire them by refreshing the list.
+- Identity synchronization requires the supported direct-path npm 0.163.0 or 0.164.0 wrapper, enabled CLI hooks, and NODE_OPTIONS unset or empty. Native-executable and custom-launcher admission remains unchanged.
+- Complete installed-app behavior and real AI automatic naming have not been certified for this patch.
+
 ## [0.25.0]
 
 Added

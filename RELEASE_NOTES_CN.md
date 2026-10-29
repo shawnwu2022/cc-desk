@@ -4,6 +4,18 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
+## [0.25.1]
+
+修复
+
+- 恢复已核对的 Windows 官方 npm Codex CLI 0.164.0 包装器的认证会话身份，使新启动会话可跟随 CLI 历史标题，并合并确切身份对应的历史条目。
+
+重要说明
+
+- 更新后请新建 Codex 会话。已在缺少身份 hook 时启动的会话，不能仅靠刷新列表补入 hook。
+- 身份同步要求受支持的直接路径 npm 0.163.0 或 0.164.0 包装器、已启用的 CLI hooks，且 NODE_OPTIONS 未设置或为空。原生可执行文件及自定义启动器的准入范围保持原样。
+- 本补丁尚未认证完整安装应用行为或真实 AI 自动命名。
+
 ## [0.25.0]
 
 新增
