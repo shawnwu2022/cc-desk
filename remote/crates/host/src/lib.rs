@@ -7,6 +7,12 @@ pub mod journal_digest;
 mod journal_storage;
 #[cfg(feature = "experimental-host-owner")]
 #[allow(dead_code)]
+mod lifecycle_durable;
+#[cfg(feature = "experimental-host-owner")]
+#[allow(dead_code)]
+mod lifecycle_journal;
+#[cfg(feature = "experimental-host-owner")]
+#[allow(dead_code)]
 mod lifecycle_router;
 #[cfg(feature = "experimental-local-writer")]
 #[allow(

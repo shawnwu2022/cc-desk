@@ -106,7 +106,7 @@ pub fn open(path: &std::path::Path) -> Result<(Connection, Guards), JournalError
     verify(&c)?;
     Ok((c, guards))
 }
-fn qualify() -> Result<(), JournalError> {
+pub(crate) fn qualify() -> Result<(), JournalError> {
     use rusqlite::ffi;
     if rusqlite::version_number() != 3_053_002 || unsafe { ffi::sqlite3_threadsafe() } == 0 {
         return Err(JournalError::UnsupportedSqlite);

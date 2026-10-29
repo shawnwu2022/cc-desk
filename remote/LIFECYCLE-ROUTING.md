@@ -1,6 +1,7 @@
 # Independent lifecycle dispatch candidate — memory qualification only
 
-This module closes a bounded codec/dispatch seam. It registers no native backend,
+This module closes a bounded codec/dispatch seam. The default-off durable candidate
+is specified in [LIFECYCLE-DURABILITY.md](LIFECYCLE-DURABILITY.md). It registers no native backend,
 listener or phone entry. Existing writer-router WIP and real PTY/handle gates are
 not accepted by these tests. No CLI version is constrained; profile1 is a wire
 schema profile. Complete RemoteMutation/protocol freeze remains OPEN.
@@ -46,12 +47,14 @@ backend unwind cannot reopen admission or lose the exact retry's Unknown state.
 Rejected is a trusted no-effect result; only then may a new sequence be admitted.
 No operation is automatically retried and no current epoch replaces an old one.
 
-This cache is not a durable journal or global single-owner authority. Rebuilding a
-router/rebinding/crashing must reconcile with the actual Host's durable owner and
-operation records before admitting work. No across-router at-most-once claim is
-made; native integration is blocked until that is enforced. The test fake records
-method calls, not runtime lifecycle completion. Resume does not bypass a pending
-operation in this candidate; a real reconciliation API remains OPEN.
+The memory-only constructor is test-only. Product construction now requires the
+durable adapter, its distinct local metadata store and backend-owned immutable
+ResourceIdentity. The cache itself remains per-router; the separate journal
+prevents a recreated fake router from requeueing the same unresolved operation.
+Reopened Prepared/InFlight/Accepted become Uncertain, not retryable. Accepted
+is queue admission only; native completion/reconciliation is still unimplemented,
+so accepted operations continue to block new work. Resume cannot bypass this.
+No real process-crash, power-loss or native at-most-once claim is made.
 
 ## Strict candidate wire contract
 

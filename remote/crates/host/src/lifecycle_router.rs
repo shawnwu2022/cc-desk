@@ -13,6 +13,28 @@ pub(crate) struct Expected {
     pub scope: cc_desk_remote_record::grant::SessionScope,
     pub state: State,
 }
+/// Immutable queue identity supplied by its owner, never by a remote request.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ResourceIdentity {
+    pub host: String,
+    pub session: String,
+    pub run: String,
+    pub generation: String,
+    pub incarnation: String,
+    pub principal: [u8; 32],
+}
+impl ResourceIdentity {
+    pub(crate) fn from_proof(p: &BoundDataAuthority) -> Self {
+        Self {
+            host: p.context().host_endpoint_id.clone(),
+            session: p.scope().session.clone(),
+            run: p.scope().run.clone(),
+            generation: p.scope().generation.clone(),
+            incarnation: p.context().incarnation.clone(),
+            principal: p.principal_id(),
+        }
+    }
+}
 /// Local policy only. A Controller grant does not itself permit new lifecycle
 /// operations. No Deserialize or allow-all constructor exists in product code.
 #[derive(Default)]
@@ -39,6 +61,9 @@ impl Rights {
     }
 }
 pub(crate) trait Host {
+    fn resource_identity(&self) -> Option<&ResourceIdentity> {
+        None
+    }
     fn create(&mut self, _c: &Context<'_>, _r: &Request) -> Status {
         Status::Rejected(Code::Unsupported)
     }
@@ -65,7 +90,16 @@ pub(crate) struct Router<B> {
     pending: bool,
 }
 impl<B: Host> Router<B> {
+    #[cfg(test)]
     pub fn new(
+        proof: BoundDataAuthority,
+        expected: Expected,
+        rights: Rights,
+        backend: B,
+    ) -> Result<Self, Code> {
+        Self::validated(proof, expected, rights, backend)
+    }
+    fn validated(
         proof: BoundDataAuthority,
         expected: Expected,
         rights: Rights,
@@ -150,6 +184,23 @@ impl<B: Host> Router<B> {
         let reply = Reply { request: r, status };
         self.cached = Some(reply.clone());
         Ok(reply)
+    }
+}
+impl<B: Host> Router<crate::lifecycle_durable::Durable<B>> {
+    pub(crate) fn durable(
+        proof: BoundDataAuthority,
+        expected: Expected,
+        rights: Rights,
+        store: crate::lifecycle_journal::Store,
+        key: crate::journal_digest::DigestKey,
+        backend: B,
+    ) -> Result<Self, Code> {
+        Self::validated(
+            proof,
+            expected,
+            rights,
+            crate::lifecycle_durable::Durable::new(store, key, backend),
+        )
     }
 }
 #[cfg(test)]
