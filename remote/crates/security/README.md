@@ -1,5 +1,47 @@
 # E02 candidate: async mutual RPK transport authentication
 
+The following earlier checkpoints retain their stated scope. The subsequent
+native grant/data owner below adds software data IO, without completing Host
+enrollment, mobile keys or actual PTY authorization.
+
+## Native scoped grant and concurrent data owner
+
+`bind_host_channel` / `bind_client_channel` reuse the real mutual RPK and four-step
+AppBind handshake, require mutually selected candidate minor1 and derive a fresh
+exporter binding. Legacy `BoundManagement` remains unchanged/minor0. No raw IO,
+AsyncRead/AsyncWrite adapter or caller-supplied TLS config is exported.
+
+`GrantGate::for_binding` accepts trusted native issuer/principal/clock policy;
+it is not enrollment, persistence or a user-presence API. It creates one pending
+challenge plus one accepted grant, verifies exact canonical COSE using coset0.4.2
+and ring ES256, enforces30s response/900s maximum original expiry, locks on any
+clock error/rollback and supports sticky native revocation. Issuer key selection
+never comes from untrusted kid. See shared GRANTS-CANDIDATE.md for exact fields,
+domains and minor1 framing. Accepted grant reuse never resets its expiry.
+
+After native installation, `ManagedChannel::start` transfers TLS into exactly one
+private task. `RunningChannel` polls read/write in bounded turns without splitting
+or exposing halves. Tx has4 total credits covering current and queued records,
+reserved before copying; Rx has4 credits covering queued and consumer-retained
+records. Ingress backpressure does not prevent output. No full record exceeds
+its Control/Projection budget including the114-byte binding envelope.
+
+Caller receive cancellation/timeout does not abandon owner IO or consume a queued
+record. Caller send wait timeout/disconnection is Uncertain, never permission to
+resend a mutation. Admitted sends continue under their original finite deadline;
+late queued commands emit no bytes. Partial records have one10s deadline bounded
+by original grant expiry. Cancel/revoke/close/expiry wake the private owner even
+when handles are idle. `close`/`wait_closed` await the actual JoinHandle after IO
+and engine drop. Drop requests shutdown; it does not claim synchronous join.
+Final public checks reject buffered payload after cancellation/stop or expiry.
+
+Tests use openly published/nonsecret P256 fixtures, real TLS over memory streams
+and native in-memory policy capabilities. Sharing a grant capability/watch in one
+test process does not prove mobile revocation propagation or network renewal.
+Actual Host fence/window/mode/operation/receipt and PTY adapter remains required;
+DataRecord payload is untrusted. OS5/WebView/general IO retirement/platform and
+production gates are not closed by this component. No remote listener is enabled.
+
 This crate exposes no endpoint API with its empty default feature set. The explicit
 experimental feature enables a fixed software transport-authentication component.
 It grants no Host/session permission and cannot be attached to a real terminal.

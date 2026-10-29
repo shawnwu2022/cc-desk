@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_identities as identities;
 use crate::{
     CancelHandle, LocalIdentity, P256Spki, PeerPin, Unbound, accept, cancellation, connect,
 };
@@ -6,9 +7,6 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
-#[path = "../tests/support/identities.rs"]
-#[allow(dead_code)]
-mod identities;
 fn local(client: bool) -> LocalIdentity {
     let (k, p) = identities::identity(client, false);
     LocalIdentity::new(

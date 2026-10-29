@@ -60,6 +60,9 @@ impl std::fmt::Debug for BoundContext {
     }
 }
 impl BoundContext {
+    pub(crate) fn raw(&self) -> &Context {
+        &self.0
+    }
     pub fn policy_epoch(&self) -> &str {
         &self.0.policy_epoch
     }
@@ -288,6 +291,23 @@ async fn bind_host_with<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     snapshot: HostSnapshot,
     hooks: Hooks,
 ) -> Result<BoundManagement, BindError> {
+    let e = establish_host(pending, snapshot, hooks, vec![0]).await?;
+    owner(e.io, e.token, e.deadline, e.context, e.selection)
+}
+struct Established<S> {
+    io: tokio_rustls::TlsStream<S>,
+    token: CancelToken,
+    deadline: Instant,
+    context: Context,
+    selection: HostSelection,
+    binding: [u8; 32],
+}
+async fn establish_host<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
+    pending: Pending<S>,
+    snapshot: HostSnapshot,
+    hooks: Hooks,
+    minors: Vec<u16>,
+) -> Result<Established<S>, BindError> {
     let (host_id, client_id) = projected(&pending)?;
     if pending._context.0 != Role::Host {
         return Err(BindError::Context);
@@ -311,11 +331,11 @@ async fn bind_host_with<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
         host_nonce: hooks.nonce()?,
         profile: 1,
         major: 1,
-        minors: vec![0],
+        minors,
         minimum_security: "1".into(),
         required_capabilities: vec!["canonical-json".into()],
     };
-    let (context, selection) = within(deadline, &mut token, async {
+    let (context, selection, binding) = within(deadline, &mut token, async {
         send_with(&mut io, &hooks, Message::HostOffer(h.clone())).await?;
         let c = match receive(&mut io).await? {
             Message::ClientOffer(c) => c,
@@ -339,10 +359,18 @@ async fn bind_host_with<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
             _ => return Err(BindError::Order),
         };
         verify(&key, false, &t, &confirm.mac)?;
-        Ok((h.context.clone(), selection))
+        let binding = data_binding(&io, &t)?;
+        Ok((h.context.clone(), selection, binding))
     })
     .await?;
-    owner(io, token, deadline, context, selection)
+    Ok(Established {
+        io,
+        token,
+        deadline,
+        context,
+        selection,
+        binding,
+    })
 }
 pub async fn bind_client<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     pending: Pending<S>,
@@ -355,6 +383,15 @@ async fn bind_client_with<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     trust: ClientTrust,
     hooks: Hooks,
 ) -> Result<BoundManagement, BindError> {
+    let e = establish_client(pending, trust, hooks, vec![0]).await?;
+    owner(e.io, e.token, e.deadline, e.context, e.selection)
+}
+async fn establish_client<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
+    pending: Pending<S>,
+    trust: ClientTrust,
+    hooks: Hooks,
+    minors: Vec<u16>,
+) -> Result<Established<S>, BindError> {
     let (host_id, client_id) = projected(&pending)?;
     if pending._context.0 != Role::Client {
         return Err(BindError::Context);
@@ -362,7 +399,7 @@ async fn bind_client_with<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     let deadline = pending._deadline;
     let mut token = pending._cancel;
     let mut io = pending._io;
-    let (context, selection) = within(deadline, &mut token, async {
+    let (context, selection, binding) = within(deadline, &mut token, async {
         let h = match receive(&mut io).await? {
             Message::HostOffer(h) => h,
             _ => return Err(BindError::Order),
@@ -381,7 +418,7 @@ async fn bind_client_with<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
             client_nonce: hooks.nonce()?,
             profile: 1,
             major: 1,
-            minors: vec![0],
+            minors,
             minimum_security: "1".into(),
             required_capabilities: vec!["canonical-json".into()],
             requested_role: RequestedRole::ManagementOnly,
@@ -407,10 +444,72 @@ async fn bind_client_with<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
             }),
         )
         .await?;
-        Ok((h.context, selection))
+        let binding = data_binding(&io, &t)?;
+        Ok((h.context, selection, binding))
     })
     .await?;
-    owner(io, token, deadline, context, selection)
+    Ok(Established {
+        io,
+        token,
+        deadline,
+        context,
+        selection,
+        binding,
+    })
+}
+
+fn data_binding<S>(
+    io: &tokio_rustls::TlsStream<S>,
+    transcript: &[u8; 32],
+) -> Result<[u8; 32], BindError> {
+    let label = b"EXPORTER-CC-DESK-DATA-BIND-v1";
+    match io {
+        tokio_rustls::TlsStream::Client(s) => {
+            s.get_ref()
+                .1
+                .export_keying_material([0; 32], label, Some(transcript))
+        }
+        tokio_rustls::TlsStream::Server(s) => {
+            s.get_ref()
+                .1
+                .export_keying_material([0; 32], label, Some(transcript))
+        }
+    }
+    .map_err(|_| BindError::Mac)
+}
+pub async fn bind_host_channel<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
+    pending: Pending<S>,
+    snapshot: HostSnapshot,
+) -> Result<crate::ManagedChannel<S>, BindError> {
+    let e = establish_host(pending, snapshot, Hooks::default(), vec![0, 1]).await?;
+    eligible(e.deadline, &e.token)?;
+    if e.selection.minor != 1 {
+        return Err(BindError::Unsupported);
+    }
+    Ok(crate::ManagedChannel::new(
+        e.io,
+        e.token,
+        BoundContext(e.context),
+        e.binding,
+        Role::Host,
+    ))
+}
+pub async fn bind_client_channel<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
+    pending: Pending<S>,
+    trust: ClientTrust,
+) -> Result<crate::ManagedChannel<S>, BindError> {
+    let e = establish_client(pending, trust, Hooks::default(), vec![0, 1]).await?;
+    eligible(e.deadline, &e.token)?;
+    if e.selection.minor != 1 {
+        return Err(BindError::Unsupported);
+    }
+    Ok(crate::ManagedChannel::new(
+        e.io,
+        e.token,
+        BoundContext(e.context),
+        e.binding,
+        Role::Client,
+    ))
 }
 
 // No test-support feature or public bypass: all non-default hook fields exist only

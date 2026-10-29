@@ -1,11 +1,13 @@
 //! Inner framing only; bytes are untrusted and this crate grants no authority.
 pub mod appbind;
+pub mod grant;
 pub mod projection;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     Control,
     Projection,
     AppBind,
+    Data,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
@@ -31,6 +33,7 @@ impl Header {
             2 => Kind::Control,
             3 => Kind::Projection,
             4 => Kind::AppBind,
+            5 => Kind::Data,
             _ => return Err(Error::Kind),
         };
         let minor = u16::from_be_bytes(bytes[6..].try_into().unwrap());
@@ -39,7 +42,7 @@ impl Header {
         } else {
             expected_minor
         };
-        if expected_minor > 1 || minor != required_minor {
+        if expected_minor > 1 || minor != required_minor || (kind == Kind::Data && minor != 1) {
             return Err(Error::Version);
         }
         let payload_len = usize::try_from(length - 4).map_err(|_| Error::Length)?;
@@ -57,7 +60,7 @@ impl Kind {
     pub const fn limit(self) -> usize {
         match self {
             Self::Control | Self::AppBind => 16384,
-            Self::Projection => 32768,
+            Self::Projection | Self::Data => 32768,
         }
     }
     const fn code(self) -> u16 {
@@ -65,12 +68,13 @@ impl Kind {
             Self::Control => 2,
             Self::Projection => 3,
             Self::AppBind => 4,
+            Self::Data => 5,
         }
     }
 }
 /// Encode bounded opaque bytes. This does not validate JSON, AppBind or authority.
 pub fn encode(kind: Kind, minor: u16, payload: &[u8]) -> Result<Vec<u8>, Error> {
-    if minor > 1 || (kind == Kind::AppBind && minor != 0) {
+    if minor > 1 || (kind == Kind::AppBind && minor != 0) || (kind == Kind::Data && minor != 1) {
         return Err(Error::Version);
     }
     if payload.len() > kind.limit() {

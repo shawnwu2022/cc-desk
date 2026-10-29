@@ -6,16 +6,18 @@ publish = false
 
 [features]
 default = []
-experimental = []
+experimental = ["dep:coset"]
 
 [dependencies]
 tokio = { version = "=1.52.1", features = ["io-util", "sync", "time", "net", "rt-multi-thread", "macros"] }
 tokio-rustls = { version = "=0.26.4", default-features = false, features = ["ring"] }
 rustls = { version = "=0.23.46", default-features = false, features = ["std", "ring"] }
 ring = "=0.17.14"
+coset = { version = "=0.4.2", optional = true }
 cc-desk-remote-record = { path = "../../../protocol/remote/inner/v1" }
 
 [dev-dependencies]
+tokio = { version = "=1.52.1", features = ["test-util"] }
 base64 = "=0.22.1"
 serde_json = "=1.0.150"
 cc-desk-remote-transport = { path = "../transport" }

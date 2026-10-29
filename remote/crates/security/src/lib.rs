@@ -13,3 +13,23 @@ pub use cancellation::{CancelHandle, CancelToken, cancellation};
 mod bind;
 #[cfg(feature = "experimental")]
 pub use bind::*;
+#[cfg(feature = "experimental")]
+mod grant;
+#[cfg(feature = "experimental")]
+pub use grant::{GrantClock, GrantError, GrantGate, VerifiedGrant};
+#[cfg(feature = "experimental")]
+mod data;
+#[cfg(feature = "experimental")]
+pub use data::{DataError, DataRecord, ManagedChannel};
+#[cfg(feature = "experimental")]
+mod data_owner;
+#[cfg(feature = "experimental")]
+pub use data_owner::{DATA_QUEUE_SLOTS, RunningChannel};
+#[cfg(all(test, feature = "experimental"))]
+mod data_tests;
+#[cfg(all(test, feature = "experimental"))]
+mod grant_tests;
+#[cfg(all(test, feature = "experimental"))]
+#[path = "../tests/support/identities.rs"]
+#[allow(dead_code)]
+mod test_identities;

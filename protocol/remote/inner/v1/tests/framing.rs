@@ -55,7 +55,7 @@ fn malformed_lengths_unknown_types_and_unnegotiated_minor_reject() {
     for len in [0, 1, 2, 3, 32773, u32::MAX] {
         assert_eq!(Header::decode(header(len, 2, 0), 0), Err(Error::Length));
     }
-    for kind in [0, 1, 5, u16::MAX] {
+    for kind in [0, 1, 6, u16::MAX] {
         assert_eq!(Header::decode(header(4, kind, 0), 0), Err(Error::Kind));
     }
     for (wire, expected) in [(1, 0), (0, 1), (2, 2), (u16::MAX, 0)] {
@@ -65,6 +65,8 @@ fn malformed_lengths_unknown_types_and_unnegotiated_minor_reject() {
         );
     }
     assert_eq!(encode(Kind::Control, 2, b""), Err(Error::Version));
+    assert_eq!(Header::decode(header(4, 5, 0), 0), Err(Error::Version));
+    assert_eq!(Header::decode(header(4, 5, 1), 1).unwrap().kind, Kind::Data);
     assert_eq!(encode(Kind::AppBind, 1, b"{}"), Err(Error::Version));
     assert_eq!(Header::decode(header(6, 4, 1), 1), Err(Error::Version));
 }

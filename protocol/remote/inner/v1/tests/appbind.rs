@@ -3,6 +3,27 @@ fn oracle() -> serde_json::Value {
     serde_json::from_slice(include_bytes!("../vectors/appbind-independent.json")).unwrap()
 }
 #[test]
+fn minor_one_data_extension_negotiates_without_downgrading_old_binding() {
+    let v = oracle();
+    let Message::HostOffer(mut h) =
+        decode(v["canonicalParts"][0].as_str().unwrap().as_bytes()).unwrap()
+    else {
+        panic!()
+    };
+    let Message::ClientOffer(mut c) =
+        decode(v["canonicalParts"][1].as_str().unwrap().as_bytes()).unwrap()
+    else {
+        panic!()
+    };
+    h.minors = vec![0, 1];
+    c.minors = vec![0, 1];
+    assert_eq!(negotiate(&h, &c).unwrap().minor, 1);
+    c.minors = vec![0];
+    assert_eq!(negotiate(&h, &c).unwrap().minor, 0);
+    c.minors = vec![2];
+    assert!(negotiate(&h, &c).is_err());
+}
+#[test]
 fn appbind_independent_exact_bytes_and_transcript() {
     let v = oracle();
     let h = v["canonicalParts"][0].as_str().unwrap().as_bytes();

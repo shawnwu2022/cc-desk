@@ -190,7 +190,7 @@ fn hex32(value: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
-fn decimal(value: &str) -> Result<u64, CodecError> {
+pub(crate) fn decimal(value: &str) -> Result<u64, CodecError> {
     if value.is_empty()
         || value.len() > 20
         || !value.bytes().all(|b| b.is_ascii_digit())
@@ -200,7 +200,7 @@ fn decimal(value: &str) -> Result<u64, CodecError> {
     }
     value.parse().map_err(|_| CodecError::Field)
 }
-fn context(c: &Context) -> Result<(), CodecError> {
+pub(crate) fn context(c: &Context) -> Result<(), CodecError> {
     if !hex32(&c.host_endpoint_id) || !hex32(&c.client_endpoint_id) || !hex32(&c.activation) {
         return Err(CodecError::Field);
     }
@@ -274,7 +274,7 @@ fn valid(m: &Message) -> Result<(), CodecError> {
         }
     }
 }
-fn depth(bytes: &[u8]) -> Result<(), CodecError> {
+pub(crate) fn depth(bytes: &[u8]) -> Result<(), CodecError> {
     let (mut in_string, mut escaped, mut depth) = (false, false, 0usize);
     for b in bytes {
         if in_string {
@@ -320,7 +320,7 @@ fn sorted(value: serde_json::Value) -> serde_json::Value {
         v => v,
     }
 }
-fn canonical<T: Serialize>(value: &T) -> Result<Vec<u8>, CodecError> {
+pub(crate) fn canonical<T: Serialize>(value: &T) -> Result<Vec<u8>, CodecError> {
     let value = serde_json::to_value(value).map_err(|_| CodecError::Json)?;
     let bytes = serde_json::to_vec(&sorted(value)).map_err(|_| CodecError::Json)?;
     if bytes.len() > MAX_JSON {
@@ -382,8 +382,6 @@ pub fn negotiate(h: &HostOffer, c: &ClientOffer) -> Result<HostSelection, CodecE
         || c.requested_role != RequestedRole::ManagementOnly
         || decimal(&h.minimum_security)? > 1
         || decimal(&c.minimum_security)? > 1
-        || !h.minors.contains(&0)
-        || !c.minors.contains(&0)
         || h.required_capabilities.as_slice() != ["canonical-json"]
         || c.required_capabilities.as_slice() != ["canonical-json"]
         || h.required_capabilities
@@ -393,10 +391,14 @@ pub fn negotiate(h: &HostOffer, c: &ClientOffer) -> Result<HostSelection, CodecE
     {
         return Err(CodecError::Unsupported);
     }
+    let minor = [1, 0]
+        .into_iter()
+        .find(|m| h.minors.contains(m) && c.minors.contains(m))
+        .ok_or(CodecError::Unsupported)?;
     Ok(HostSelection {
         profile: 1,
         major: 1,
-        minor: 0,
+        minor,
         security_version: "1".into(),
         requested_role: RequestedRole::ManagementOnly,
     })

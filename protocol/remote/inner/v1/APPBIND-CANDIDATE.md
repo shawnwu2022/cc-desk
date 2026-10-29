@@ -34,7 +34,9 @@ requiredCapabilities. It contains no prediction of requestedRole.
 
 ClientOffer: context, hostNonce, clientNonce, profile, major, minors, minimumSecurity,
 requiredCapabilities, requestedRole. Role names: ManagementOnly, Observer, Controller;
-only ManagementOnly is supported by this candidate, others explicitly reject.
+Only ManagementOnly is supported by AppBind itself; other requested roles reject.
+The additional minor1 native data-channel candidate and separately verified
+session grant are specified in GRANTS-CANDIDATE.md. Legacy factories retain0.
 
 HostSelection: profile, major, minor, securityVersion, requestedRole.
 HostConfirm: selection, mac. ClientConfirm: mac.
