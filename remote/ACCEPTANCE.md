@@ -58,6 +58,17 @@ fixture now observes its exact parent event, without relaxing production inherit
 This fixes an identified test defect; it does not prove the intermittent failure had
 no other cause.
 
+### Internal pipe/journal composition (2026-10-29)
+
+The default-off internal local_writer and keyed request digest are migrated without
+exposing a raw IO factory. Current Host50/50 pass under the explicit task-owned test
+root. This includes real fixed-process pipe effects and actual SQLite receipt/no-retry
+cuts; it is not a real AI CLI, PTY or remote end-to-end run. Two new digest tests bind
+every target/operation field, epoch, bytes and key and check variable-field bounds.
+Only the already-locked local runtime dev-dependency is added to the lockfile.
+Full production admission, multi-client fencing, resize/reply authority, process/IO
+retirement and a shared multi-session actor still require subsequent integration.
+
 Source: reviewed v0.5 roadmap E01/E02/E11; base68cc31b. Eight isolated experiments
 are supporting evidence only. New product crates are incrementally integrated here;
 desktop startup stays unchanged/default-off. No SDK chat replacement or system VPN.

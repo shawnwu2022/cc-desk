@@ -123,6 +123,7 @@ dependencies = [
 name = "cc-desk-remote-host"
 version = "0.1.0"
 dependencies = [
+ "cc-desk-native-runtime",
  "ring",
  "rusqlite",
  "subtle",

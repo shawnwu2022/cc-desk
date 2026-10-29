@@ -68,6 +68,27 @@ that wrapper still holds the Mutex during the callback; a Host actor must use sh
 prepare/finalize lock scopes and perform blocking IO outside that lock. No production
 actor or PTY integration is established by the split journal tests.
 
+## Default-off local input prerequisite
+
+`experimental-local-writer` adds an internal, crate-only constructor for one owned
+pipe writer and its Journal. This is not exported as a raw IO enrollment API. Each
+submission binds the full target/run/generation/incarnation, device, operation,
+sequence, epoch and payload to a keyed digest. The key supplied by a future trusted
+backend is not endpoint identity or authorization; tests use explicitly public keys.
+Inputs are nonempty and at most16384 bytes. Eight queue slots plus one active/result
+credit bound retained requests, including pre-send copies and unconsumed feedback.
+Unknown/Partial seals the writer; dropped feedback permits exact receipt lookup,
+never automatic repetition. HostWritten still means only the Host write completed.
+
+Fixed Windows10 pipe/SQLite tests cover duplicate/lost feedback, changed bytes,
+identity/epoch/size refusal, seal, queue pressure and post-effect storage failure.
+Resize and terminal replies remain Unsupported; there is no PTY, remote grant,
+network listener or active-desktop migration. Seal requests refusal and cannot undo
+an already-started write. Drop requests seal but does not certify thread retirement;
+the backend must stop its owned process and observe actual thread/IO completion.
+This single-journal writer is not the future shared multi-session actor and does
+not establish cross-session progress or a general synchronous-write deadline.
+
 The internal schema is now version2. New databases persist independent admission and
 settled floors plus the latest bounded ACK witness. Existing version1 databases are
 rejected read-only before mutable PRAGMAs; there is no silent migration or deletion.
