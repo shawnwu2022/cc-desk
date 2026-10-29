@@ -1,5 +1,8 @@
 //! 默认关闭的本地 pipe 写入前置；不提供远程授权、PTY 或启动策略。
 use crate::journal::*;
+#[cfg(all(test, feature = "experimental-host-owner"))]
+#[path = "local_writer_diagnostics.rs"]
+mod diagnostics;
 #[path = "local_writer_replies.rs"]
 mod replies;
 #[cfg(feature = "experimental-canonical-replies")]
@@ -493,6 +496,8 @@ impl LocalWriter {
                         request.bytes.len(),
                         &sealed,
                     ) {
+                        #[cfg(all(test,feature="experimental-host-owner"))]
+                        diagnostics::emit(&request,diagnostics::Stage::Validate,diagnostics::Decision::Reject(reason),replies.as_ref(),&journal);
                         let _ = request.reply.try_send(WriteResult::Rejected(reason));
                         continue;
                     }
@@ -500,6 +505,8 @@ impl LocalWriter {
                     if let Some(gate) = &view_gate
                         && let Err(error) = gate.check_request(&request, replies.as_ref())
                     {
+                        #[cfg(test)]
+                        diagnostics::emit(&request,diagnostics::Stage::View,diagnostics::Decision::Reject(error),replies.as_ref(),&journal);
                         let _ = request.reply.try_send(WriteResult::Rejected(error));
                         continue;
                     }
@@ -509,6 +516,8 @@ impl LocalWriter {
                         match view.digest(&key, &request.key, epoch, &request.bytes) {
                             Ok(d) => d,
                             Err(e) => {
+                                #[cfg(test)]
+                                diagnostics::emit(&request,diagnostics::Stage::Validate,diagnostics::Decision::Reject(e),replies.as_ref(),&journal);
                                 let _ = request.reply.try_send(WriteResult::Rejected(e));
                                 continue;
                             }
@@ -520,6 +529,10 @@ impl LocalWriter {
                     if let Some(gate) = &view_gate
                         && let Err(error) = gate.can_admit(&request.key, &digest)
                     {
+                        #[cfg(test)]{
+                            let decision=match &error{view_gate::control::AdmissionError::Pending=>diagnostics::Decision::Reject(Reject::Pending),view_gate::control::AdmissionError::Conflict=>diagnostics::Decision::Journal(JournalError::Conflict)};
+                            diagnostics::emit(&request,diagnostics::Stage::View,decision,replies.as_ref(),&journal);
+                        }
                         let _ = request.reply.try_send(error.feedback());
                         continue;
                     }
@@ -586,6 +599,11 @@ impl LocalWriter {
                         }
                     };
                     // 每次反馈独立一槽，接收方消失或不读都不能阻塞唯一 writer。
+                    #[cfg(all(test,feature="experimental-host-owner"))]
+                    if !matches!(&feedback,WriteResult::Receipt(r) if r.outcome==Outcome::HostWritten){
+                        let decision=match &feedback{WriteResult::Rejected(r)=>diagnostics::Decision::Reject(*r),WriteResult::Receipt(r)=>diagnostics::Decision::Outcome(r.outcome),WriteResult::Journal(e)=>diagnostics::Decision::Journal(*e),WriteResult::Partial=>diagnostics::Decision::Partial,WriteResult::Unknown=>diagnostics::Decision::Unknown};
+                        diagnostics::emit(&request,diagnostics::Stage::Final,decision,replies.as_ref(),&journal);
+                    }
                     let _ = request.reply.try_send(feedback);
                 }
                 // stdin、Journal、摘要 key 只由本线程持有；退出才释放。

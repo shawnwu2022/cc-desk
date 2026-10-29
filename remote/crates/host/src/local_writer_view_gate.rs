@@ -98,6 +98,10 @@ pub(super) struct SyncedView {
     window: Option<Arc<control::InputWindow>>,
 }
 impl SyncedView {
+    #[cfg(test)]
+    pub(super) fn diagnostic_epochs(&self) -> TerminalEpochs {
+        self.record.epochs
+    }
     pub(super) fn digest(
         &self,
         key: &DigestKey,
