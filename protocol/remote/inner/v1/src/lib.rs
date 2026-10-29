@@ -1,5 +1,6 @@
 //! Inner framing only; bytes are untrusted and this crate grants no authority.
 pub mod appbind;
+pub mod projection;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     Control,

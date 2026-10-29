@@ -2,7 +2,9 @@
 
 Shared endpoint framing lives in the main cc-desk repository. The relay consumes
 only the existing outer bundle; it must not link this crate or parse inner records.
-This dependency-free crate is consumed by the actual async transport adapter.
+The framing API is consumed by the actual async transport adapter. The separate
+AppBind and [projection trial codec](PROJECTION.md) validate bounded payload
+syntax; none of these modules grants endpoint authority.
 
 Byte layout: `length:BEu32 | type:BEu16 | minor:BEu16 | opaque payload`.
 Length counts type+minor+payload, excluding its own prefix. Type2 Control and type4

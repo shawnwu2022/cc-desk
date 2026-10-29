@@ -8,6 +8,8 @@ pub enum TerminalSafeCode {
     CombiningScalar,
     InputBatchExceeded,
     ReplyQueryBudgetExceeded,
+    CanonicalEventBudgetExceeded,
+    StateVersionExceeded,
 }
 
 /// A parser fault that makes the current terminal state unsafe for control.

@@ -124,6 +124,7 @@ name = "cc-desk-remote-host"
 version = "0.1.0"
 dependencies = [
  "cc-desk-native-runtime",
+ "cc-desk-remote-record",
  "cc-desk-remote-terminal",
  "ring",
  "rusqlite",
@@ -167,6 +168,7 @@ name = "cc-desk-remote-terminal"
 version = "0.1.0"
 dependencies = [
  "alacritty_terminal",
+ "cc-desk-remote-record",
  "unicode-width",
  "vte",
 ]

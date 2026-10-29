@@ -16,7 +16,7 @@ use crate::{TerminalFault, TerminalParser, TerminalSafeCode};
 #[path = "canonical.rs"]
 mod canonical;
 pub use canonical::{CanonicalEvent, CanonicalFeedError, CanonicalQuery, TerminalReply};
-use canonical::{QueryMark, ReplyCapture};
+use canonical::{CanonicalMark, MarkKind, ReplyCapture};
 #[path = "projection.rs"]
 mod projection;
 pub use projection::{
@@ -28,9 +28,19 @@ pub const MAX_TERMINAL_COLUMNS: usize = 240;
 pub const MIN_TERMINAL_COLUMNS: usize = alacritty_terminal::term::MIN_COLUMNS;
 pub const MAX_TERMINAL_ROWS: usize = 100;
 pub const MAX_TERMINAL_FEED_BYTES: usize = 16_384;
+pub const MAX_CANONICAL_MARKS: usize = 256;
+/// Local terminal counters only; Host peer sync/barrier authority is separate.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TerminalEpochs {
+    pub dimension_epoch: u64,
+    pub mode_epoch: u64,
+    pub structure_epoch: u64,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TerminalCoreError {
+    Degraded,
+    EpochOverflow,
     ZeroRows,
     ZeroColumns,
     ColumnsBelowMinimum { requested: usize, minimum: usize },
@@ -134,6 +144,7 @@ pub struct TerminalCore {
     processor: Processor,
     term: Term<TerminalEventSink>,
     event_sink: TerminalEventSink,
+    epochs: TerminalEpochs,
 }
 
 impl fmt::Debug for TerminalCore {
@@ -164,6 +175,7 @@ impl TerminalCore {
             processor: Processor::new(),
             term,
             event_sink,
+            epochs: TerminalEpochs::default(),
         })
     }
 
@@ -173,16 +185,14 @@ impl TerminalCore {
     /// the patched 4096-byte bound, the core becomes degraded and the failing
     /// batch is never applied to the Alacritty state.
     pub fn feed(&mut self, bytes: &[u8]) -> Result<(), TerminalFault> {
-        self.validate_batch(bytes, false)?;
-        self.processor.advance(&mut self.term, bytes);
-        Ok(())
+        match self.feed_internal(bytes, false, |_| Ok::<(), std::convert::Infallible>(())) {
+            Ok(()) => Ok(()),
+            Err(CanonicalFeedError::Terminal(error)) => Err(error),
+            Err(CanonicalFeedError::Sink(impossible)) => match impossible {},
+        }
     }
 
-    fn validate_batch(
-        &mut self,
-        bytes: &[u8],
-        marked: bool,
-    ) -> Result<Vec<QueryMark>, TerminalFault> {
+    fn validate_batch(&mut self, bytes: &[u8]) -> Result<Vec<CanonicalMark>, TerminalFault> {
         if let Some(code) = self.degraded {
             return Err(TerminalFault::Degraded(code));
         }
@@ -193,22 +203,17 @@ impl TerminalCore {
             ));
         }
 
-        self.input_gate.queries.clear();
-        self.input_gate.record_queries = marked;
+        self.input_gate.marks.clear();
+        self.input_gate.query_count = 0;
         let blocked_osc52 = self.validator.blocked_osc52_count();
         let validation = (|| {
-            if marked {
-                for (index, byte) in bytes.iter().enumerate() {
-                    self.input_gate.offset = index + 1;
-                    self.validator
-                        .feed(&mut self.input_gate, std::slice::from_ref(byte))?;
-                }
-                Ok(())
-            } else {
-                self.validator.feed(&mut self.input_gate, bytes)
+            for (index, byte) in bytes.iter().enumerate() {
+                self.input_gate.offset = index + 1;
+                self.validator
+                    .feed(&mut self.input_gate, std::slice::from_ref(byte))?;
             }
+            Ok(())
         })();
-        self.input_gate.record_queries = false;
         if let Err(error @ TerminalFault::Degraded(code)) = validation {
             self.degraded = Some(code);
             return Err(error);
@@ -226,13 +231,39 @@ impl TerminalCore {
             return Err(TerminalFault::Degraded(code));
         }
 
-        Ok(std::mem::take(&mut self.input_gate.queries))
+        Ok(std::mem::take(&mut self.input_gate.marks))
     }
 
     pub fn resize(&mut self, rows: usize, columns: usize) -> Result<(), TerminalCoreError> {
+        if self.is_degraded() {
+            return Err(TerminalCoreError::Degraded);
+        }
         let size = validate_size(rows, columns)?;
+        if rows == self.term.screen_lines() && columns == self.term.columns() {
+            return Ok(());
+        }
+        let epochs = match (
+            self.epochs.dimension_epoch.checked_add(1),
+            self.epochs.structure_epoch.checked_add(1),
+        ) {
+            (Some(dimension_epoch), Some(structure_epoch)) => TerminalEpochs {
+                dimension_epoch,
+                structure_epoch,
+                ..self.epochs
+            },
+            _ => {
+                self.degraded = Some(TerminalSafeCode::StateVersionExceeded);
+                return Err(TerminalCoreError::EpochOverflow);
+            }
+        };
+        self.degraded = Some(TerminalSafeCode::UnsupportedSequence);
         self.term.resize(size);
+        self.epochs = epochs;
+        self.degraded = None;
         Ok(())
+    }
+    pub fn epochs(&self) -> TerminalEpochs {
+        self.epochs
     }
 
     /// Read-only backend access for local diagnostics and projection work.
@@ -310,12 +341,22 @@ fn validate_size(rows: usize, columns: usize) -> Result<TerminalSize, TerminalCo
 struct RestrictedInputGate {
     rejected: Option<TerminalSafeCode>,
     allow_queries: bool,
-    record_queries: bool,
     offset: usize,
-    queries: Vec<QueryMark>,
+    query_count: usize,
+    marks: Vec<CanonicalMark>,
 }
 
 impl RestrictedInputGate {
+    fn mark(&mut self, kind: MarkKind) {
+        if self.marks.len() == MAX_CANONICAL_MARKS {
+            self.reject(TerminalSafeCode::CanonicalEventBudgetExceeded);
+        } else {
+            self.marks.push(CanonicalMark {
+                offset: self.offset,
+                kind,
+            });
+        }
+    }
     fn conpty_compatibility_control(
         params: &alacritty_terminal::vte::Params,
         intermediates: &[u8],
@@ -411,24 +452,25 @@ impl Perform for RestrictedInputGate {
     ) {
         if self.allow_queries && !ignore {
             if let Some(kind) = canonical::recognize(params, intermediates, action) {
-                if self.record_queries {
-                    if self.queries.len() == 32 {
-                        self.reject(TerminalSafeCode::ReplyQueryBudgetExceeded);
-                    } else {
-                        self.queries.push(QueryMark {
-                            offset: self.offset,
-                            kind,
-                        });
-                    }
+                if self.query_count == 32 {
+                    self.reject(TerminalSafeCode::ReplyQueryBudgetExceeded);
+                } else {
+                    self.query_count += 1;
+                    self.mark(MarkKind::Query(kind));
                 }
                 return;
             }
             if Self::conpty_compatibility_control(params, intermediates, action) {
+                if let Some(mode) = canonical::mode_mutation(params, intermediates, action) {
+                    self.mark(MarkKind::Mode(mode));
+                }
                 return;
             }
         }
         if ignore || !Self::allowed_csi(params, intermediates, action) {
             self.reject(TerminalSafeCode::UnsupportedSequence);
+        } else if let Some(mode) = canonical::mode_mutation(params, intermediates, action) {
+            self.mark(MarkKind::Mode(mode));
         }
     }
 

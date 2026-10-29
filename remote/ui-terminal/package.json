@@ -1,0 +1,1 @@
+{"name":"@cc-desk/remote-terminal","version":"0.1.0","private":true,"type":"module","engines":{"node":">=24.18.0"},"scripts":{"test":"node --experimental-strip-types --test src/*.test.ts","test:native":"node --experimental-strip-types --test src/native.integration.ts"}}

@@ -45,6 +45,40 @@ fn projection_capture_is_ordered_with_actual_output_and_exact_target() {
 }
 
 #[test]
+fn projection_encoder_uses_the_captured_target_revision_and_core_epochs() {
+    use cc_desk_remote_record::projection::{Content, decode};
+    let dir = tempfile::tempdir().unwrap();
+    let (mut writer, mut cap) = canonical(&dir, Sink::default());
+    assert_eq!(
+        feed(&mut cap, 0, b"ok\x1b[?1004h"),
+        OutputResult::Processed { replies: 0 }
+    );
+    let frame = writer
+        .capture()
+        .unwrap()
+        .wait(Duration::from_secs(2))
+        .unwrap()
+        .unwrap();
+    let context = projection::ProjectionContext {
+        binding: [0x33; 32],
+        barrier: [0x44; 16],
+        sync_epoch: 7,
+    };
+    let encoded = frame.encoder(&context, 1).unwrap().next().unwrap().unwrap();
+    let message = decode(&encoded, 1).unwrap();
+    let Content::SnapshotPart(p) = message.content else {
+        panic!("snapshot")
+    };
+    assert_eq!(p.stamp.target.host, "01".repeat(32));
+    assert_eq!(p.stamp.target.run, operation().run);
+    assert_eq!(p.stamp.revision, "1");
+    assert_eq!(p.stamp.mode_epoch, "1");
+    assert_eq!(p.stamp.sync_epoch, "7");
+    assert_eq!(p.cells[0].scalar, 'o');
+    finish(&mut writer);
+}
+
+#[test]
 fn projection_capture_credits_cover_pending_and_consumed_but_retained_frames() {
     let dir = tempfile::tempdir().unwrap();
     let (mut writer, _) = canonical(&dir, Sink::default());

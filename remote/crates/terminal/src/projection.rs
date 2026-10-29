@@ -87,6 +87,7 @@ pub struct SemanticSnapshot {
     cursor: SemanticCursor,
     cells: Vec<SemanticCell>,
     focus_reporting: bool,
+    epochs: TerminalEpochs,
 }
 impl fmt::Debug for SemanticSnapshot {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -100,6 +101,9 @@ impl fmt::Debug for SemanticSnapshot {
     }
 }
 impl SemanticSnapshot {
+    pub fn epochs(&self) -> TerminalEpochs {
+        self.epochs
+    }
     pub fn rows(&self) -> u16 {
         self.rows
     }
@@ -287,6 +291,7 @@ impl TerminalCore {
             },
             cells,
             focus_reporting: mode.contains(TermMode::FOCUS_IN_OUT),
+            epochs: self.epochs,
         })
     }
 }

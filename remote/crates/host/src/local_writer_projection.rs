@@ -48,7 +48,44 @@ pub(crate) struct CapturedProjection {
     view: SemanticSnapshot,
     _credit: Arc<ViewCredit>,
 }
+/// Host-issued channel barrier context; fixed test bytes in qualification only.
+/// Construction does not authenticate a peer or confer remote access.
+pub(crate) struct ProjectionContext {
+    pub(crate) binding: [u8; 32],
+    pub(crate) barrier: [u8; 16],
+    pub(crate) sync_epoch: u64,
+}
 impl CapturedProjection {
+    pub(crate) fn encoder(
+        &self,
+        context: &ProjectionContext,
+        minor: u16,
+    ) -> Result<cc_desk_remote_terminal::SnapshotEncoder<'_>, cc_desk_remote_terminal::EncodingError>
+    {
+        use cc_desk_remote_record::projection::{Stamp, Target as WireTarget};
+        let hex = |bytes: &[u8]| bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
+        let e = self.view.epochs();
+        cc_desk_remote_terminal::SnapshotEncoder::new(
+            &self.view,
+            Stamp {
+                target: WireTarget {
+                    host: hex(&self.target.host),
+                    session: hex(&self.target.session),
+                    run: self.target.run.clone(),
+                    generation: self.target.generation.to_string(),
+                    incarnation: self.target.incarnation.to_string(),
+                },
+                binding: hex(&context.binding),
+                barrier: hex(&context.barrier),
+                revision: self.revision.to_string(),
+                dimension_epoch: e.dimension_epoch.to_string(),
+                mode_epoch: e.mode_epoch.to_string(),
+                structure_epoch: e.structure_epoch.to_string(),
+                sync_epoch: context.sync_epoch.to_string(),
+            },
+            minor,
+        )
+    }
     pub(crate) fn target(&self) -> &Target {
         &self.target
     }

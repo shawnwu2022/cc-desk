@@ -6,9 +6,10 @@ publish.workspace = true
 
 [features]
 default = []
-experimental-emulator = ["dep:alacritty_terminal", "dep:unicode-width"]
+experimental-emulator = ["dep:alacritty_terminal", "dep:unicode-width", "dep:cc-desk-remote-record"]
 
 [dependencies]
+cc-desk-remote-record = { path = "../../../protocol/remote/inner/v1", optional = true }
 alacritty_terminal = { version = "=0.26.0", optional = true, default-features = false }
 unicode-width = { version = "=0.2.2", optional = true }
 vte = { path = "../../vendor/vte", default-features = false, features = ["std"] }
