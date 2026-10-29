@@ -297,11 +297,25 @@ or taskbar receipts. See [status semantics](session-status-semantics.md).
 
 An exact observed Codex ID joins its opened owner to the same authorized history
 record, retaining one row across Refresh. Startup/input/stop invalidate only the
-affected Codex history context. Since Codex generates its first title in a
-separate hidden thread with hooks disabled, input/stop also schedule bounded
+affected Codex history context. An exact-attempt terminal idle transition with an
+already authenticated session ID also invalidates that context and schedules the
+same bounded title reads, even if no Stop hook arrives. This is only a read cue;
+it does not establish completion, identity or a title from terminal content.
+Since Codex generates its first title in a separate hidden thread with hooks
+disabled, input/stop and that idle transition schedule bounded
 read-only retries after 1, 2, 5 and 15 seconds; restart, close, context changes and
 replacement cancel pending work. Titles and cwd/time similarity never establish
 identity or authorize a rename.
+
+Codex history reads `session_index.jsonl` names independently of rollout cache
+hits, including after a rollout moves to `archived_sessions`. Records are decoded
+individually, so a partially written UTF-8 record cannot discard earlier names.
+Indexes within the existing 2 MiB file limit are read in full; larger append-only
+indexes use a bounded 2 MiB tail through the same held-root file checks. A cut or
+damaged index is reported as incomplete, including on unnamed rows, so an existing
+same-source title can be retained for display. A cold read cannot recover older
+names outside that tail. SQLite-only names after Codex's best-effort index write
+fails remain unavailable; this projection does not add a SQLite title source.
 
 The Windows Codex 0.163 smoke uses the installed real TUI, bundled ConPTY and
 production reporter with temporary configuration/project data and a local synthetic

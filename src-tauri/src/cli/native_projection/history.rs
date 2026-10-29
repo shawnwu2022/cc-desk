@@ -55,6 +55,7 @@ pub(super) fn read(
     } else {
         std::collections::HashMap::new()
     };
+    let names_incomplete = c.cli == CliKind::Codex && b.history_metadata_incomplete();
     let mut files = Vec::new();
     match c.cli {
         CliKind::Claude => walk(c, "projects", 2, o.kind, b, &mut files)?,
@@ -155,6 +156,9 @@ pub(super) fn read(
             // 头窗口是否覆盖用户消息影响。
             transcript.title = name.clone();
             transcript.title_priority = Some(TitlePriority::Custom);
+        } else if names_incomplete {
+            // An optional index window cannot disprove a previously observed name.
+            transcript.metadata_incomplete = true;
         }
         // 一次观察服务多个已注册项目：cwd 唯一归属一个项目；无归属行不进入任何项目。
         let owner = if c.projects.is_empty() {
@@ -303,15 +307,31 @@ fn codex_session_names(
 ) -> std::collections::HashMap<String, String> {
     use std::collections::HashMap;
     // 身份文件本身不可读（CLI 版本没有该文件）不是历史读取失败。
-    let Ok(Some(bytes)) = c.bytes(c.root, "session_index.jsonl", b) else {
-        return HashMap::new();
-    };
-    let Ok(text) = text(&bytes) else {
-        return HashMap::new();
+    let (bytes, cut_first) = match c.bytes(c.root, "session_index.jsonl", b) {
+        Ok(Some(bytes)) => (bytes, false),
+        Ok(None) => return HashMap::new(),
+        Err("SOURCE_TOO_LARGE") => {
+            b.retain_history_metadata_incomplete();
+            match c
+                .root
+                .history_jsonl_tail(Path::new("session_index.jsonl"), b)
+            {
+                Ok(Some((_, tail, cut))) if c.check().is_ok() => (tail, cut),
+                _ => return HashMap::new(),
+            }
+        }
+        Err(_) => {
+            b.retain_history_metadata_incomplete();
+            return HashMap::new();
+        }
     };
     let mut best: HashMap<String, String> = HashMap::new();
-    for line in text.lines() {
-        let Ok(value) = serde_json::from_str::<Value>(line) else {
+    for (index, line) in bytes.split(|byte| *byte == b'\n').enumerate() {
+        if (cut_first && index == 0) || line.is_empty() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_slice::<Value>(line) else {
+            b.retain_history_metadata_incomplete();
             continue;
         };
         let Some(id) = value["id"]

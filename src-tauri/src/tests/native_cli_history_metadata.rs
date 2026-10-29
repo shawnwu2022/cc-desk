@@ -1,6 +1,158 @@
 use super::*;
 use serde_json::json;
 
+#[test]
+#[allow(non_snake_case)]
+fn HistoryCodex_NamesSurviveWarmColdAndArchiveReads_092() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("sessions/2026/10/29")).unwrap();
+    std::fs::create_dir_all(temp.path().join("archived_sessions")).unwrap();
+    let root = Root::open(temp.path()).unwrap();
+    let mut index = String::new();
+    for id in ["first", "second"] {
+        let relative = PathBuf::from(format!("sessions/2026/10/29/rollout-{id}.jsonl"));
+        std::fs::write(temp.path().join(&relative), format!("{}\n{}\n",
+            json!({"type":"session_meta","payload":{"id":id,"cwd":temp.path().to_str().unwrap()}}),
+            json!({"type":"event_msg","payload":{"type":"user_message","message":"First prompt"}}))).unwrap();
+        let (len, modified) = root.stat(&relative).unwrap().unwrap();
+        cache::with(|cache| {
+            cache.record(
+                cache::key(root.key(), "codex", &relative),
+                cache::Stamps::from_system(len, modified).unwrap(),
+                cache::CachedMetadata {
+                    native_id: id.into(),
+                    cwd: Some(temp.path().to_str().unwrap().into()),
+                    title: "Cached first prompt".into(),
+                    title_priority: Some(0),
+                    updated: None,
+                    metadata_incomplete: false,
+                },
+            )
+        });
+        index.push_str(&format!(
+            "{}\n",
+            json!({"id":id,"thread_name":"Same generated title"})
+        ));
+    }
+    std::fs::write(temp.path().join("session_index.jsonl"), index).unwrap();
+    for archived in [false, true] {
+        if archived {
+            for id in ["first", "second"] {
+                let relative = PathBuf::from(format!("sessions/2026/10/29/rollout-{id}.jsonl"));
+                cache::with(|cache| cache.forget(&cache::key(root.key(), "codex", &relative)));
+                std::fs::rename(
+                    temp.path().join(relative),
+                    temp.path()
+                        .join(format!("archived_sessions/rollout-{id}.jsonl")),
+                )
+                .unwrap();
+            }
+        }
+        for _ in 0..2 {
+            // The fixture creates a new held Root/Catalog, independently of any UI title cache.
+            let rows =
+                serde_json::to_value(read_codex_history_fixture(temp.path()).unwrap()).unwrap();
+            let rows = rows.as_array().unwrap();
+            assert_eq!(
+                rows.len(),
+                2,
+                "equal names do not merge distinct identities"
+            );
+            for row in rows {
+                assert_eq!(row["title"], "Same generated title");
+                assert_eq!(row["titleSource"], "custom");
+                assert_eq!(row["archived"], archived);
+            }
+        }
+    }
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn HistoryCodex_IndexAppendPreservesCompleteNames_090() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = Root::open(temp.path()).unwrap();
+    let catalog = Catalog {
+        root: &root,
+        cli: CliKind::Codex,
+        projects: &[],
+        user_config: None,
+        check: &|| Ok(()),
+    };
+    let record = format!(
+        "{}\n",
+        json!({"id":"named-thread", "thread_name":"Generated title"})
+    );
+    let mut bytes = record.as_bytes().to_vec();
+    bytes.extend_from_slice(b"{\"id\":\"next\",\"thread_name\":\"");
+    bytes.extend_from_slice(&[0xe4, 0xb8]);
+    std::fs::write(temp.path().join("session_index.jsonl"), bytes).unwrap();
+    assert_eq!(
+        codex_session_names(
+            &catalog,
+            &mut Budget::new(super::super::super::scoped_fs::Limits::default())
+        )
+        .get("named-thread")
+        .map(String::as_str),
+        Some("Generated title")
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn HistoryCodex_LargeIndexKeepsLatestNames_091() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = Root::open(temp.path()).unwrap();
+    let catalog = Catalog {
+        root: &root,
+        cli: CliKind::Codex,
+        projects: &[],
+        user_config: None,
+        check: &|| Ok(()),
+    };
+    let mut bytes = vec![b' '; 2 * 1024 * 1024];
+    bytes.push(b'\n');
+    bytes.extend_from_slice(
+        format!(
+            "{}\n",
+            json!({"id":"named-thread", "thread_name":"Generated title"})
+        )
+        .as_bytes(),
+    );
+    std::fs::write(temp.path().join("session_index.jsonl"), bytes).unwrap();
+    assert_eq!(
+        codex_session_names(
+            &catalog,
+            &mut Budget::new(super::super::super::scoped_fs::Limits::default())
+        )
+        .get("named-thread")
+        .map(String::as_str),
+        Some("Generated title")
+    );
+    std::fs::create_dir_all(temp.path().join("sessions/2026/10/29")).unwrap();
+    for id in ["outside-window", "named-thread"] {
+        std::fs::write(temp.path().join(format!("sessions/2026/10/29/rollout-{id}.jsonl")), format!("{}\n{}\n",
+            json!({"type":"session_meta","payload":{"id":id,"cwd":temp.path().to_str().unwrap()}}),
+            json!({"type":"event_msg","payload":{"type":"user_message","message":"First prompt"}}))).unwrap();
+    }
+    let rows = serde_json::to_value(read_codex_history_fixture(temp.path()).unwrap()).unwrap();
+    let rows = rows.as_array().unwrap();
+    let old = rows
+        .iter()
+        .find(|row| row["nativeSessionId"] == "outside-window")
+        .unwrap();
+    assert_eq!(
+        old["metadataIncomplete"], true,
+        "a bounded name window cannot prove old names absent"
+    );
+    let latest = rows
+        .iter()
+        .find(|row| row["nativeSessionId"] == "named-thread")
+        .unwrap();
+    assert_eq!(latest["title"], "Generated title");
+    assert_eq!(latest["titleSource"], "custom");
+}
+
 fn granted<'a>(root: &'a Root, paths: &'a [PathBuf]) -> Vec<ProjectRef<'a>> {
     vec![ProjectRef {
         id: "test-project",
