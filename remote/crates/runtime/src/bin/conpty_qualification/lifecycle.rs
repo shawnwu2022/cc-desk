@@ -1,4 +1,6 @@
 //! Private TEST_ONLY supervision/IO probes. No public Host or arbitrary launch API.
+#[path = "resume_observation.rs"]
+mod resume_observation;
 use std::{
     io::{BufRead, Read, Write},
     os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle},
@@ -407,15 +409,17 @@ pub(super) fn run(mode: &str, marker: &Path) -> Result<(), &'static str> {
     ))?;
     let read_before = state.total.load(Ordering::Acquire);
     state.pause_at.store(u64::MAX, Ordering::Release);
-    until(Instant::now() + Duration::from_secs(2), || {
-        counter(&marker.with_extension("progress")).is_some_and(|n| n >= first.0 + 64 * 1024)
-            && state.total.load(Ordering::Acquire) >= read_before + 64 * 1024
-    })?;
-    event(&format!(
-        "PRESSURE:RESUMED:read={}:written={}",
-        state.total.load(Ordering::Acquire),
-        counter(&marker.with_extension("progress")).ok_or("PROGRESS_UNREADABLE")?
-    ))?;
+    let resumed = resume_observation::wait_for_resume(
+        Instant::now() + Duration::from_secs(2),
+        read_before,
+        first.0,
+        64 * 1024,
+        || {
+            counter(&marker.with_extension("progress"))
+                .map(|written| (state.total.load(Ordering::Acquire), written))
+        },
+    )?;
+    event(&resume_observation::resume_report(resumed))?;
     state.pause_at.store(
         state.total.load(Ordering::Acquire) + 64 * 1024,
         Ordering::Release,

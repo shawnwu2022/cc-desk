@@ -311,6 +311,10 @@ fn real_output_stall_recovers_with_drain_and_stops_while_stalled() {
     while let Some(line) = supervisor.next() {
         events.push(line);
     }
+    // Keep bounded control events and worker stderr even when an assertion fails.
+    // These are fixed fixture counters/status codes, never terminal payloads.
+    println!("{}", events.join("\n"));
+    supervisor.finish(true);
     assert!(
         events.iter().any(|s| s.starts_with("PRESSURE:STALLED1:")),
         "no measured first output stall"
@@ -332,8 +336,6 @@ fn real_output_stall_recovers_with_drain_and_stops_while_stalled() {
         90,
         "natural fixture watchdog is not pressure cleanup"
     );
-    println!("{}", events.join("\n"));
-    supervisor.finish(true);
 }
 #[test]
 fn abrupt_worker_exit_signals_exact_root_and_known_grandchild_separately() {

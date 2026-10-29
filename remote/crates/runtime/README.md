@@ -230,3 +230,13 @@ that bypass currently fails its independent effect observation; see ACCEPTANCE.m
 The wrapper neither proves complete OpenConsole/tree/old-IO retirement nor preempts
 synchronous Win32 calls or master destruction. No desktop or remote endpoint is
 enabled by this wrapper.
+
+### Pressure-probe observation consistency
+
+The TEST_ONLY lifecycle-pressure report consumes the same accepted read/written
+sample that met both+64KiB resume thresholds. It no longer rereads a progress file
+which the public fixture may be truncating/updating. The2s phase interval,two300ms
+stall observations and owned cleanup conditions are unchanged. A real temporary-file
+gap regression,late-sample refusal and checked-counter tests qualify this observer;
+they do not prove a general hard deadline for blocking Windows IO. Fixed control
+events and worker stderr are emitted before assertions so failures remain visible.
