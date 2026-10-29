@@ -29,6 +29,7 @@ async fn ControlWindow_ActualWriter_001() {
         Arc::new(move || Ok(clock.load(Ordering::Acquire))),
         control::GrantContext {
             challenge_ms: 1000,
+            expires_host_ms: 901000,
             grant: [7; 32],
             lease: [8; 16],
             fence: 4,
@@ -137,6 +138,7 @@ async fn ControlWindow_RenewalRetirement_002() {
             Arc::new(move || Ok(clock.load(Ordering::Acquire))),
             control::GrantContext {
                 challenge_ms: 1000,
+                expires_host_ms: 901000,
                 grant: [7; 32],
                 lease: [8; 16],
                 fence: 4,
@@ -328,6 +330,7 @@ async fn ControlWindow_PostIntentClock_003() {
             Arc::new(move || Ok(clock.load(Ordering::Acquire))),
             control::GrantContext {
                 challenge_ms: 1000,
+                expires_host_ms: 901000,
                 grant: [7; 32],
                 lease: [8; 16],
                 fence: 4,
@@ -475,6 +478,7 @@ async fn ControlWindow_ActualPostIntent_004() {
             }),
             control::GrantContext {
                 challenge_ms: 1000,
+                expires_host_ms: 901000,
                 grant: [7; 32],
                 lease: [8; 16],
                 fence: 4,

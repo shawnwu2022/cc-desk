@@ -312,8 +312,11 @@ Only the native backend supplies the clock and preverified grant context;
 the factory itself does not verify signatures, authenticate a data role or
 bind RecordWriter IO to an endpoint. No listener or remote entry is enabled.
 
-The challenge response is accepted strictly before Host challenge+30s; grant
-expiry is challenge+900s. First lease and renewal are at most15s and bounded
+The challenge response is accepted strictly before Host challenge+30s. Native
+admission requires an explicit Host-monotonic grant expiry, strictly later than
+challenge creation and no later than checked challenge+900s; invalid bounds
+reject rather than clamp. Shorter grants stay shorter. First lease and renewal
+are at most15s and bounded
 by that grant. A window expires at min(issue+5s, current lease, grant).
 Its exact immutable IDs, fence/policy and deadline enter the keyed request
 digest. The same serialized writer checks it both before durable admission
@@ -369,10 +372,17 @@ row for query/proof settlement; it never replays or renumbers the operation.
 Fresh view delivery/ACK/window is required before new input. Sync counter does
 not reset. Old handles, scopes, ACKs and input contexts stay invalid.
 
-Reusing the same accepted grant requires its original device and Host challenge
-creation time, retains its original expiry, and does not reapply the initial
+Reusing the same accepted grant requires its original device, exact Host challenge
+creation time and exact explicit expiry, and does not reapply the initial
 30s response deadline. A different grant still requires a live30s challenge.
 This is native fixture policy; real signed grant/IO verification remains required.
+
+The expiry value is mandatory and backend-only; it is not a phone timestamp or
+a duration restarted at arrival/reconnect. The future verified signed-grant
+adapter must supply the exact expiry in that same Host clock namespace, and
+cannot rely on this component to authenticate it. Expired receipt queries or
+settlement reject without clearing the pending operation. A distinct freshly
+verified grant may later recover it; expiry never erases journal evidence.
 
 Per-peer disconnect is separate from the sticky writer-stop signal shared by
 all peer incarnations. Owner seal, clock error/rollback and fence overflow stop

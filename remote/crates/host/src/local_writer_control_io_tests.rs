@@ -5,7 +5,7 @@ fn OwnerControl_RealPipe_001() {
     if !supervision::run("control_tests::OwnerControl_RealPipe_001") {
         return;
     }
-    real_pipe(None);
+    real_pipe(None, 901000);
 }
 #[allow(non_snake_case)]
 #[test]
@@ -13,7 +13,7 @@ fn OwnerControl_RecoveredPending_002() {
     if !supervision::run("control_tests::OwnerControl_RecoveredPending_002") {
         return;
     }
-    real_pipe(Some(Outcome::HostWritten));
+    real_pipe(Some(Outcome::HostWritten), 901000);
 }
 #[allow(non_snake_case)]
 #[test]
@@ -21,9 +21,17 @@ fn OwnerControl_RecoveredUnknown_003() {
     if !supervision::run("control_tests::OwnerControl_RecoveredUnknown_003") {
         return;
     }
-    real_pipe(Some(Outcome::Unknown));
+    real_pipe(Some(Outcome::Unknown), 901000);
 }
-fn real_pipe(seed: Option<Outcome>) {
+#[allow(non_snake_case)]
+#[test]
+fn OwnerControl_ShortGrant_004() {
+    if !supervision::run("control_tests::OwnerControl_ShortGrant_004") {
+        return;
+    }
+    real_pipe(None, 4000);
+}
+fn real_pipe(seed: Option<Outcome>, expires_host_ms: u64) {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -71,6 +79,7 @@ fn real_pipe(seed: Option<Outcome>) {
                         clock: Arc::new(move || Ok(clock.load(Ordering::Acquire))),
                         grant: GrantContext {
                             challenge_ms: 1000,
+                            expires_host_ms,
                             grant: [7; 32],
                             lease: [8; 16],
                             fence: 4,
@@ -183,7 +192,10 @@ fn real_pipe(seed: Option<Outcome>) {
                     .unwrap(),
                 WriteResult::Rejected(Reject::Pending)
             );
-            now.store(6000, Ordering::Release);
+            now.store(
+                if expires_host_ms == 4000 { 4000 } else { 6000 },
+                Ordering::Release,
+            );
             assert_eq!(
                 peer.submit(&window, next(2), 9, b"PUBLIC_TEST_ONLY\n".to_vec())
                     .unwrap()
@@ -191,6 +203,51 @@ fn real_pipe(seed: Option<Outcome>) {
                     .unwrap(),
                 WriteResult::Rejected(Reject::Policy)
             );
+            if expires_host_ms == 4000 {
+                assert_eq!(
+                    peer.renew_lease([8; 16], 4, 1)
+                        .unwrap()
+                        .wait(Duration::from_secs(2))
+                        .unwrap(),
+                    Err(Reject::Policy)
+                );
+                assert!(matches!(
+                    peer.input_window(&view)
+                        .unwrap()
+                        .wait(Duration::from_secs(2))
+                        .unwrap(),
+                    Err(Reject::Policy)
+                ));
+                assert!(
+                    peer.pending_receipt(key())
+                        .unwrap()
+                        .wait(Duration::from_secs(2))
+                        .unwrap()
+                        .is_err()
+                );
+                owner.seal(&key().target()).unwrap();
+                let end = Instant::now() + Duration::from_secs(2);
+                while !owner.try_reap(&key().target()).unwrap() {
+                    assert!(Instant::now() < end);
+                    std::thread::yield_now();
+                }
+                assert_ne!(
+                    run.stop(Instant::now() + Duration::from_secs(2))
+                        .unwrap()
+                        .exit_code,
+                    90
+                );
+                assert_eq!(std::fs::read(&marker).unwrap().len(), 1);
+                let reopened = Journal::open(&journal_path).unwrap();
+                assert!(matches!(
+                    reopened.query(&key()).unwrap(),
+                    ReceiptLookup::Known(ReceiptEnvelope {
+                        outcome: Outcome::HostWritten,
+                        ..
+                    })
+                ));
+                return;
+            }
             assert_eq!(
                 peer.renew_lease([8; 16], 4, 1)
                     .unwrap()

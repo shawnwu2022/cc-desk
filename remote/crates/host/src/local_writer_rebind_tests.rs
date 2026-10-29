@@ -11,6 +11,7 @@ fn admission(clock: Arc<dyn HostClock>, fence: u64, binding: u8, grant: u8) -> C
         clock,
         grant: GrantContext {
             challenge_ms: 1000,
+            expires_host_ms: 901000,
             grant: [grant; 32],
             lease: [binding; 16],
             fence,

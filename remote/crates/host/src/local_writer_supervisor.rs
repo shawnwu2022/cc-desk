@@ -94,7 +94,7 @@ fn capture(
 }
 
 pub(super) fn run(case: &str) -> bool {
-    const CASES: [&str; 15] = [
+    const CASES: [&str; 16] = [
         "fresh_owned_pipe_launch_phase_probe",
         "actual_owned_pipe_is_committed_through_durable_single_writer",
         "actual_owner_factory_pipe_deduplicates_receipt_and_retires_writer",
@@ -102,6 +102,7 @@ pub(super) fn run(case: &str) -> bool {
         "control_tests::OwnerControl_RealPipe_001",
         "control_tests::OwnerControl_RecoveredPending_002",
         "control_tests::OwnerControl_RecoveredUnknown_003",
+        "control_tests::OwnerControl_ShortGrant_004",
         "rebind_tests::OwnerRebind_RealPipe_001",
         "rebind_tests::OwnerRebind_BlockedAndUncertain_002",
         "actual_pipe_guard_bounds_and_queue_are_fail_closed",

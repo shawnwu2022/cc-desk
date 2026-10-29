@@ -18,6 +18,8 @@ impl<F: Fn() -> Result<u64, Reject> + Send + Sync> HostClock for F {
 #[derive(Clone, Copy)]
 pub(in crate::local_writer) struct GrantContext {
     pub(in crate::local_writer) challenge_ms: u64,
+    // Same trusted Host monotonic origin; never a client wall-clock timestamp.
+    pub(in crate::local_writer) expires_host_ms: u64,
     pub(in crate::local_writer) grant: [u8; 32],
     pub(in crate::local_writer) lease: [u8; 16],
     pub(in crate::local_writer) fence: u64,
@@ -91,6 +93,7 @@ pub(super) struct ControlState {
     clock: Arc<dyn HostClock>,
     last_ms: Mutex<u64>,
     identity: Arc<Identity>,
+    challenge_ms: u64,
     grant_deadline: u64,
     lease_deadline: u64,
     renew_sequence: u64,
@@ -125,11 +128,14 @@ impl ControlState {
             .challenge_ms
             .checked_add(30_000)
             .ok_or(Reject::Policy)?;
-        let grant_deadline = grant
+        let maximum_deadline = grant
             .challenge_ms
             .checked_add(900_000)
             .ok_or(Reject::Policy)?;
+        let grant_deadline = grant.expires_host_ms;
         if now < grant.challenge_ms
+            || grant_deadline <= grant.challenge_ms
+            || grant_deadline > maximum_deadline
             || (require_response && now >= response_deadline)
             || now >= grant_deadline
             || grant.fence == 0
@@ -152,6 +158,7 @@ impl ControlState {
                 fence: grant.fence,
                 policy: grant.policy,
             }),
+            challenge_ms: grant.challenge_ms,
             grant_deadline,
             lease_deadline,
             renew_sequence: 0,
@@ -498,10 +505,55 @@ mod tests {
     fn grant(challenge_ms: u64) -> GrantContext {
         GrantContext {
             challenge_ms,
+            expires_host_ms: challenge_ms.saturating_add(900_000),
             grant: [7; 32],
             lease: [8; 16],
             fence: 4,
             policy: 5,
+        }
+    }
+    #[test]
+    fn explicit_short_grant_caps_lease_and_cannot_be_reopened_at_expiry() {
+        let now = Arc::new(AtomicU64::new(1000));
+        let sampled = now.clone();
+        let mut short = grant(1000);
+        short.expires_host_ms = 5000;
+        let mut state =
+            ControlState::new(Arc::new(move || Ok(sampled.load(Ordering::Acquire))), short)
+                .unwrap();
+        assert_eq!(state.grant_deadline, 5000);
+        assert_eq!(state.lease_deadline, 5000);
+        let peer = PeerControl::new(
+            Target {
+                host: [1; 32],
+                session: [2; 16],
+                run: "TEST_ONLY_SHORT_GRANT".into(),
+                generation: 3,
+                incarnation: 4,
+            },
+            [5; 32],
+            [0x33; 32],
+            1,
+        )
+        .unwrap();
+        now.store(4999, Ordering::Release);
+        assert_eq!(state.renew(&peer.scope, [8; 16], 4, 1), Ok(5000));
+        now.store(5000, Ordering::Release);
+        assert_eq!(state.renew(&peer.scope, [8; 16], 4, 1), Err(Reject::Policy));
+        assert_eq!(state.renew(&peer.scope, [8; 16], 4, 2), Err(Reject::Policy));
+    }
+    #[test]
+    fn explicit_grant_deadline_rejects_invalid_bounds_instead_of_clamping() {
+        for expiry in [0, 999, 1000, 1001, 901001, u64::MAX] {
+            let mut invalid = grant(1000);
+            invalid.expires_host_ms = expiry;
+            assert!(
+                matches!(
+                    ControlState::new(Arc::new(|| Ok(1001)), invalid),
+                    Err(Reject::Policy)
+                ),
+                "{expiry}"
+            );
         }
     }
     #[test]
