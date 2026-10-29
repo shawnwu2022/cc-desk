@@ -11,6 +11,31 @@ impl ControlState {
         if *scope.writer_closed.borrow() {
             return Err(Reject::Sealed);
         }
+        if self.authority.is_some() != admission.authority.is_some() {
+            return Err(Reject::Policy);
+        }
+        if let (Some(old), Some(authority)) = (&self.authority, &admission.authority) {
+            authority.check().map_err(|_| Reject::Policy)?;
+            let hex = |b: &[u8]| b.iter().map(|n| format!("{n:02x}")).collect::<String>();
+            if authority.local_role() != cc_desk_remote_security::Role::Host
+                || authority.data_role() != cc_desk_remote_record::grant::DataRole::Controller
+                || old.principal_id() != authority.principal_id()
+                || !owner::authorized::same_host(old, authority)
+                || !old.clock_domain().same_origin(&authority.clock_domain())
+                || authority.context().client_endpoint_id != hex(&device)
+                || authority.scope().session != hex(&scope.target.session)
+                || authority.scope().run != scope.target.run
+                || authority.scope().generation != scope.target.generation.to_string()
+                || authority.binding_id() != admission.binding
+                || admission.minor != 1
+                || authority.grant_id() != admission.grant.grant
+                || authority.created_host_ms() != admission.grant.challenge_ms
+                || authority.expires_host_ms() != admission.grant.expires_host_ms
+                || authority.context().policy_epoch != admission.grant.policy.to_string()
+            {
+                return Err(Reject::Policy);
+            }
+        }
         if expected_fence != self.identity.fence {
             return Err(Reject::Epoch);
         }
@@ -46,6 +71,7 @@ impl ControlState {
         // The old output owner can sample until its scope is closed. Preserve
         // the same writer's shared watermark rather than copying a stale value.
         replacement.last_ms = self.last_ms.clone();
+        replacement.authority = admission.authority.clone();
         if let Err(error) = replacement.restore_pending(journal, &scope.target, &device) {
             if error == Reject::Closed {
                 scope.close_writer();
@@ -91,6 +117,7 @@ mod tests {
         let journal = Journal::open(&dir.path().join("journal.sqlite")).unwrap();
         now.store(40000, Ordering::Release);
         let next = ControlAdmission {
+            authority: None,
             binding: [0x44; 32],
             minor: 1,
             clock,
@@ -107,6 +134,7 @@ mod tests {
         assert_eq!(accepted.lease_deadline, 50000);
         for (challenge_ms, expires_host_ms) in [(1000, 49999), (1000, 50001), (1001, 50000)] {
             let changed = ControlAdmission {
+                authority: None,
                 binding: next.binding,
                 minor: 1,
                 clock: next.clock.clone(),
@@ -153,6 +181,7 @@ mod tests {
         let journal = Journal::open(&dir.path().join("journal.sqlite")).unwrap();
         now.store(40000, Ordering::Release);
         let next = ControlAdmission {
+            authority: None,
             binding: [0x44; 32],
             minor: 1,
             clock: clock.clone(),
@@ -202,6 +231,7 @@ mod tests {
         let journal = Journal::open(&dir.path().join("journal.sqlite")).unwrap();
         for case in 0..8 {
             let mut next = ControlAdmission {
+                authority: None,
                 binding: [0x44; 32],
                 minor: 1,
                 clock: clock.clone(),
@@ -265,6 +295,7 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let journal = Journal::open(&dir.path().join("journal.sqlite")).unwrap();
             let next = ControlAdmission {
+                authority: None,
                 binding: [0x44; 32],
                 minor: 1,
                 clock,

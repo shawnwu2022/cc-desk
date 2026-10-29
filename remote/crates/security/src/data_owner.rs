@@ -58,6 +58,7 @@ impl Reading {
     }
 }
 pub struct RunningChannel {
+    authority: crate::BoundDataAuthority,
     cancel: CancelToken,
     access: VerifiedGrant,
     role: Role,
@@ -71,6 +72,9 @@ pub struct RunningChannel {
     exit: watch::Receiver<Option<DataError>>,
 }
 impl RunningChannel {
+    pub fn authority(&self) -> crate::BoundDataAuthority {
+        self.authority.clone()
+    }
     pub fn binding_id(&self) -> [u8; 32] {
         self.binding
     }
@@ -229,6 +233,7 @@ enum Event {
     Written,
 }
 struct Engine<S> {
+    authority: Arc<crate::BoundDataAuthority>,
     io: tokio_rustls::TlsStream<S>,
     access: VerifiedGrant,
     role: Role,
@@ -331,6 +336,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Engine<S> {
                 self.read = Reading::new();
                 self.write_turn = true;
                 return Poll::Ready(Ok(Event::Incoming(DataRecord {
+                    source: self.authority.clone(),
                     scope: self.access.scope().clone(),
                     fence: h.fence,
                     sequence: h.sequence,
@@ -372,11 +378,21 @@ pub(super) fn start<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     let (exit_tx, exit) = watch::channel(None);
     let public_access = access.clone();
     let public_cancel = cancel.clone();
+    let authority = crate::BoundDataAuthority::new(
+        access.clone(),
+        active.clone(),
+        cancel.clone(),
+        stop.clone(),
+        binding,
+        role,
+    );
+    let public_authority = authority.clone();
     let a = active.clone();
     let task = tokio::spawn(async move {
         let (mut revoked, mut superseded) = access.revoked();
         let mut end = Instant::now() + Duration::from_millis(remaining);
         let mut engine = Engine {
+            authority: Arc::new(authority),
             io,
             access,
             role,
@@ -438,6 +454,7 @@ pub(super) fn start<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
         result
     });
     Ok(RunningChannel {
+        authority: public_authority,
         cancel: public_cancel,
         access: public_access,
         role,

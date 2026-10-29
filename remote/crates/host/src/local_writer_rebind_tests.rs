@@ -6,6 +6,7 @@ use cc_desk_remote_transport::records::RecordWriter;
 
 fn admission(clock: Arc<dyn HostClock>, fence: u64, binding: u8, grant: u8) -> ControlAdmission {
     ControlAdmission {
+        authority: None,
         binding: [binding; 32],
         minor: 1,
         clock,

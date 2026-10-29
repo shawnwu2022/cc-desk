@@ -73,6 +73,15 @@ impl std::fmt::Debug for VerifiedGrant {
     }
 }
 impl VerifiedGrant {
+    pub(crate) fn principal_id(&self) -> [u8; 32] {
+        hex_id(&self.0.payload.principal_id)
+    }
+    pub(crate) fn created_host_ms(&self) -> u64 {
+        self.0.payload.created_host_ms.parse().unwrap()
+    }
+    pub(crate) fn clock_domain(&self) -> crate::GrantClockDomain {
+        crate::GrantClockDomain::new(self.0.state.clock.clone())
+    }
     pub fn scope(&self) -> &SessionScope {
         &self.0.payload.scope
     }

@@ -146,7 +146,16 @@ impl RebindRequest {
                 gate.scope.writer_closed.clone(),
             )?;
             if let Some(current) = &gate.current {
+                // Install the successor's proof before publishing it; old
+                // scope retirement cancels only the old TLS owner.
                 current.phase.store(REVOKED, Ordering::Release);
+            }
+            if let Some(authority) = &replacement.authority {
+                control
+                    .scope
+                    .authority
+                    .set(authority.clone())
+                    .map_err(|_| Reject::Policy)?;
             }
             gate.scope.close();
             gate.scope = control.scope.clone();

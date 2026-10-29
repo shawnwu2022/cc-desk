@@ -74,6 +74,7 @@ fn real_pipe(seed: Option<Outcome>, expires_host_ms: u64) {
                         columns: 10,
                     },
                     ControlAdmission {
+                        authority: None,
                         binding: [0x33; 32],
                         minor: 1,
                         clock: Arc::new(move || Ok(clock.load(Ordering::Acquire))),

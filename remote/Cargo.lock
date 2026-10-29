@@ -123,12 +123,17 @@ dependencies = [
 name = "cc-desk-remote-host"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "cc-desk-native-runtime",
  "cc-desk-remote-record",
+ "cc-desk-remote-security",
  "cc-desk-remote-terminal",
  "cc-desk-remote-transport",
+ "coset",
  "ring",
  "rusqlite",
+ "rustls",
+ "serde_json",
  "subtle",
  "tempfile",
  "tokio",
@@ -143,6 +148,7 @@ version = "0.1.0"
 name = "cc-desk-remote-record"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "serde",
  "serde_json",
  "url",

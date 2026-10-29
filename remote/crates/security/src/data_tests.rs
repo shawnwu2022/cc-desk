@@ -136,6 +136,47 @@ async fn real_bound_io_requires_exact_signed_grant_and_scope() {
     );
 }
 #[tokio::test]
+async fn received_record_retains_exact_live_host_channel_proof() {
+    let (mut c, mut h, _cancel) = pair().await;
+    let mut gate =
+        GrantGate::for_binding(h.context(), admin(), [4; 32], Arc::new(|| Ok(1000))).unwrap();
+    let p = gate
+        .challenge(scope(), DataRole::Controller, Duration::from_secs(4))
+        .unwrap();
+    let g = gate.accept(&signed(&p, gate.issuer_kid())).unwrap();
+    c.install(&g).unwrap();
+    h.install(&g).unwrap();
+    let c = c.start().unwrap();
+    let h = h.start().unwrap();
+    let proof = h.authority();
+    assert_eq!(proof.local_role(), Role::Host);
+    assert_eq!(proof.principal_id(), [4; 32]);
+    assert!(proof.check().is_ok());
+    let target = scope();
+    c.send_control(&target, 4, b"proof", Duration::from_secs(1))
+        .await
+        .unwrap();
+    let record = h.receive(&target, 4, Duration::from_secs(1)).await.unwrap();
+    assert!(record.source().same_channel(&proof));
+    let (mut c2, mut h2, _cancel2) = pair().await;
+    c2.install(&g).unwrap();
+    h2.install(&g).unwrap();
+    let c2 = c2.start().unwrap();
+    let h2 = h2.start().unwrap();
+    assert!(!record.source().same_channel(&h2.authority()));
+    assert!(
+        proof
+            .clock_domain()
+            .same_origin(&h2.authority().clock_domain())
+    );
+    h.close().await;
+    assert!(proof.check().is_err());
+    assert!(record.source().check().is_err());
+    c.wait_closed().await;
+    h2.close().await;
+    c2.wait_closed().await;
+}
+#[tokio::test]
 async fn observer_revocation_and_fresh_binding_do_not_inherit_old_stream_permission() {
     let (mut c, mut h, _cancel) = pair().await;
     let now = Arc::new(AtomicU64::new(1000));

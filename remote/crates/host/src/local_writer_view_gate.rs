@@ -14,6 +14,7 @@ const SENDING: u8 = 1;
 const DELIVERED: u8 = 2;
 const REVOKED: u8 = 3;
 pub(super) struct PeerScope {
+    authority: std::sync::OnceLock<cc_desk_remote_security::BoundDataAuthority>,
     target: Target,
     device: [u8; 32],
     binding: [u8; 32],
@@ -28,6 +29,9 @@ impl PeerScope {
     }
     pub(super) fn close(&self) {
         self.active.store(false, Ordering::Release);
+        if let Some(authority) = self.authority.get() {
+            authority.request_close();
+        }
         self.closed.send_replace(true);
     }
     pub(super) fn close_writer(&self) {
@@ -61,6 +65,7 @@ impl PeerControl {
         let (closed, _) = tokio::sync::watch::channel(false);
         Ok(Arc::new(Self {
             scope: Arc::new(PeerScope {
+                authority: std::sync::OnceLock::new(),
                 target,
                 device,
                 binding,
@@ -144,6 +149,27 @@ impl PendingViewAck {
     }
 }
 impl PeerViewHandle {
+    pub(super) fn device(&self) -> [u8; 32] {
+        self.control.scope.device
+    }
+    pub(super) fn submit_bound(
+        &self,
+        view: &SyncedView,
+        key: OperationKey,
+        bytes: Vec<u8>,
+    ) -> Result<PendingInput, Reject> {
+        self.submit(view, key, self.input.epoch, bytes)
+    }
+    pub(super) fn wire_window(&self, view: &SyncedView) -> Result<([u8; 32], u64), Reject> {
+        if !Arc::ptr_eq(&view.record.scope, &self.control.scope) || !self.control.scope.is_active()
+        {
+            return Err(Reject::Sync);
+        }
+        view.window
+            .as_ref()
+            .map(|w| (w.wire_token, w.deadline_ms))
+            .ok_or(Reject::Policy)
+    }
     pub(super) fn capture(&self) -> Result<PendingProjection, Reject> {
         if !self.control.scope.is_active() {
             return Err(Reject::Sync);
@@ -225,6 +251,7 @@ impl LocalWriter {
             epoch,
             key,
             ControlStart {
+                authority: None,
                 view: start,
                 policy: None,
             },
@@ -244,10 +271,21 @@ impl LocalWriter {
             .map(|(clock, grant)| control::ControlState::new(clock, grant))
             .transpose()?;
         if let Some(policy) = &mut policy {
+            policy.authority = start.authority;
             policy.restore_pending(&journal, &target, &device)?;
         }
         let start = start.view;
         let control = PeerControl::new(target.clone(), device, start.binding, start.minor)?;
+        if let Some(authority) = policy.as_ref().and_then(|p| p.authority.as_ref()) {
+            control
+                .scope
+                .authority
+                .set(authority.clone())
+                .map_err(|_| Reject::Policy)?;
+        }
+        if let Some(policy) = &policy {
+            policy.authorized(&control.scope)?;
+        }
         let mut gate = ViewGate::new(control.scope.clone());
         gate.control = policy;
         let budget = start.terminal.budget.clone();

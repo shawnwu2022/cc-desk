@@ -94,7 +94,11 @@ fn capture(
 }
 
 pub(super) fn run(case: &str) -> bool {
-    const CASES: [&str; 16] = [
+    const CASES: [&str; 20] = [
+        "authorized_pty_tests::AuthorizedBound_AdmissionExpiry_004",
+        "authorized_pty_tests::AuthorizedBound_Backpressure_002",
+        "authorized_pty_tests::AuthorizedBound_QueuedRevoke_003",
+        "authorized_pty_tests::AuthorizedPty_BoundIo_001",
         "fresh_owned_pipe_launch_phase_probe",
         "actual_owned_pipe_is_committed_through_durable_single_writer",
         "actual_owner_factory_pipe_deduplicates_receipt_and_retires_writer",

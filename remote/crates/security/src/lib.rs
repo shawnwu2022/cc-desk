@@ -25,6 +25,10 @@ pub use data::{DataError, DataRecord, ManagedChannel};
 mod data_owner;
 #[cfg(feature = "experimental")]
 pub use data_owner::{DATA_QUEUE_SLOTS, RunningChannel};
+#[cfg(feature = "experimental")]
+mod data_authority;
+#[cfg(feature = "experimental")]
+pub use data_authority::{BoundDataAuthority, GrantClockDomain};
 #[cfg(all(test, feature = "experimental"))]
 mod data_tests;
 #[cfg(all(test, feature = "experimental"))]

@@ -1,6 +1,8 @@
 //! One backend writer resource owner, not endpoint identity or authorization.
 use super::*;
 use std::sync::{Mutex, OnceLock, Weak};
+#[path = "local_writer_authorized.rs"]
+pub(super) mod authorized;
 const MAX_ACTIVE_WRITERS: usize = 12;
 const MAX_LIFETIME_SESSIONS: usize = 4096;
 pub(super) struct OwnerActivation;
@@ -43,6 +45,9 @@ enum GuardSpec {
 /// existing non-owner static/local qualification paths remain separate. It does
 /// not own a PTY Job/reader or supply persistent identity/enrollment/grants.
 pub(super) struct WriterHostOwner {
+    principal: Option<[u8; 32]>,
+    remote_clock: Option<Arc<authorized::VerifiedClock>>,
+    remote_policy: Option<cc_desk_remote_security::BoundDataAuthority>,
     host: [u8; 32],
     incarnation: u64,
     activation: Arc<OwnerActivation>,
@@ -120,6 +125,9 @@ impl WriterHostOwner {
         let activation = Arc::new(OwnerActivation);
         *current = Some(Arc::downgrade(&activation));
         Ok(Self {
+            principal: None,
+            remote_clock: None,
+            remote_policy: None,
             host,
             incarnation,
             budget: HostViewBudget::for_owner(activation.clone()),
@@ -141,8 +149,37 @@ impl WriterHostOwner {
         journal: Journal,
         stdin: impl Write + Send + 'static,
         start: SessionStart,
-        binding: Option<GuardSpec>,
+        mut binding: Option<GuardSpec>,
     ) -> Result<StartedWriter, OwnerError> {
+        if self.principal.is_some() {
+            let Some(GuardSpec::Control(admission)) = binding.as_ref() else {
+                return Err(OwnerError::Writer(Reject::Policy));
+            };
+            let authority = admission
+                .authority
+                .as_ref()
+                .ok_or(OwnerError::Writer(Reject::Policy))?
+                .clone();
+            let checked = self.authorized_admission(
+                &start.target,
+                start.device,
+                &authority,
+                admission.grant.lease,
+                admission.grant.fence,
+            )?;
+            // Raw qualification metadata can never override a verified proof.
+            if admission.binding != checked.binding
+                || admission.minor != checked.minor
+                || admission.grant.grant != checked.grant.grant
+                || admission.grant.challenge_ms != checked.grant.challenge_ms
+                || admission.grant.expires_host_ms != checked.grant.expires_host_ms
+                || admission.grant.policy != checked.grant.policy
+                || !Arc::ptr_eq(&admission.clock, &checked.clock)
+            {
+                return Err(OwnerError::Writer(Reject::Policy));
+            }
+            binding = Some(GuardSpec::Control(checked));
+        }
         let t = &start.target;
         if t.host != self.host
             || t.incarnation != self.incarnation
@@ -199,7 +236,8 @@ impl WriterHostOwner {
                             view,
                             admission.clock,
                             admission.grant,
-                        ),
+                        )
+                        .with_authority(admission.authority),
                     ),
                 }
                 .map_err(OwnerError::Writer)?;

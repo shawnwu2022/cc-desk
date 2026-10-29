@@ -33,6 +33,7 @@ pub enum DataError {
     Uncertain,
 }
 pub struct DataRecord {
+    pub(super) source: Arc<crate::BoundDataAuthority>,
     pub(super) scope: SessionScope,
     pub(super) fence: u64,
     pub(super) sequence: u64,
@@ -45,6 +46,9 @@ impl std::fmt::Debug for DataRecord {
     }
 }
 impl DataRecord {
+    pub fn source(&self) -> &crate::BoundDataAuthority {
+        &self.source
+    }
     pub fn scope(&self) -> &SessionScope {
         &self.scope
     }

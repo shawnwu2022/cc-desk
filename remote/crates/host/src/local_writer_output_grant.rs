@@ -1,6 +1,9 @@
 //! Immutable native data-output bound, not a signature verifier or a writer lease.
 use super::*;
 pub(in crate::local_writer::view_gate) struct ReadGrant {
+    pub(in crate::local_writer::view_gate) fence: u64,
+    pub(in crate::local_writer::view_gate) authority:
+        Option<cc_desk_remote_security::BoundDataAuthority>,
     clock: Arc<dyn HostClock>,
     last_ms: Arc<Mutex<u64>>,
     deadline_ms: u64,
@@ -29,6 +32,10 @@ impl ReadGrant {
         &self,
         scope: &PeerScope,
     ) -> Result<Duration, Reject> {
+        if self.authority.as_ref().is_some_and(|a| a.check().is_err()) {
+            scope.close();
+            return Err(Reject::Policy);
+        }
         let now = sample(self.clock.as_ref(), &self.last_ms, scope)?;
         if !scope.is_active() || now >= self.deadline_ms {
             scope.close();
@@ -43,6 +50,8 @@ impl ControlState {
         scope: &PeerScope,
     ) -> Result<ReadGrant, Reject> {
         let grant = ReadGrant {
+            fence: self.identity.fence,
+            authority: self.authority.clone(),
             clock: self.clock.clone(),
             last_ms: self.last_ms.clone(),
             deadline_ms: self.grant_deadline,
@@ -87,6 +96,7 @@ mod tests {
                 [5; 32],
                 4,
                 &ControlAdmission {
+                    authority: None,
                     binding: [0x44; 32],
                     minor: 1,
                     clock,

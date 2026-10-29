@@ -1,4 +1,4 @@
-//! Host components; no listener, endpoint enrollment or terminal admission exists.
+//! Host components; default-off native adapter, no listener or endpoint enrollment.
 pub mod journal;
 pub mod journal_digest;
 mod journal_storage;

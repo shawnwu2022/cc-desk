@@ -8,9 +8,10 @@ publish.workspace = true
 default = []
 experimental-local-writer = ["dep:cc-desk-remote-terminal"]
 experimental-canonical-replies = ["experimental-local-writer", "cc-desk-remote-terminal/experimental-emulator", "dep:cc-desk-remote-record"]
-experimental-host-owner = ["experimental-canonical-replies", "dep:cc-desk-remote-transport", "dep:tokio"]
+experimental-host-owner = ["experimental-canonical-replies", "dep:cc-desk-remote-transport", "dep:tokio", "dep:cc-desk-remote-security"]
 
 [dependencies]
+cc-desk-remote-security = { path = "../security", optional = true, features = ["experimental"] }
 cc-desk-remote-transport = { path = "../transport", optional = true }
 tokio = { version = "=1.52.1", optional = true, features = ["io-util", "sync", "time", "rt-multi-thread", "macros"] }
 cc-desk-remote-record = { path = "../../../protocol/remote/inner/v1", optional = true }
@@ -23,6 +24,10 @@ cc-desk-remote-terminal = { path = "../terminal", optional = true }
 windows = { version = "=0.61.3", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_JobObjects", "Win32_System_Threading"] }
 
 [dev-dependencies]
+rustls = { version = "=0.23.46", default-features = false, features = ["std", "ring"] }
+base64 = "=0.22.1"
+serde_json = "=1.0.150"
+coset = "=0.4.2"
 tokio = { version = "=1.52.1", features = ["test-util"] }
 tempfile = "=3.27.0"
 cc-desk-native-runtime = { path = "../runtime", features = ["conpty-qualification"] }

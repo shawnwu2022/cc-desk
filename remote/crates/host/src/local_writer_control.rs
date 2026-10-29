@@ -7,8 +7,9 @@ mod receipts;
 #[path = "local_writer_control_transition.rs"]
 mod transition;
 pub(super) use output::ReadGrant;
+pub(in crate::local_writer) use receipts::PendingValue;
 
-// This native-only input is supplied by a future verified data-authority factory,
+// Native-only input; authorized owners derive it through the live-proof factory,
 // never directly deserialized from a peer. It does not authenticate a grant.
 pub(in crate::local_writer) trait HostClock: Send + Sync {
     fn now_ms(&self) -> Result<u64, Reject>;
@@ -29,12 +30,14 @@ pub(in crate::local_writer) struct GrantContext {
     pub(in crate::local_writer) policy: u64,
 }
 pub(in crate::local_writer) struct ControlAdmission {
+    pub(in crate::local_writer) authority: Option<cc_desk_remote_security::BoundDataAuthority>,
     pub(in crate::local_writer) binding: [u8; 32],
     pub(in crate::local_writer) minor: u16,
     pub(in crate::local_writer) clock: Arc<dyn HostClock>,
     pub(in crate::local_writer) grant: GrantContext,
 }
 pub(in crate::local_writer) struct ControlStart {
+    pub(super) authority: Option<cc_desk_remote_security::BoundDataAuthority>,
     pub(super) view: ViewStart,
     pub(super) policy: Option<(Arc<dyn HostClock>, GrantContext)>,
 }
@@ -45,9 +48,17 @@ impl ControlStart {
         grant: GrantContext,
     ) -> Self {
         Self {
+            authority: None,
             view,
             policy: Some((clock, grant)),
         }
+    }
+    pub(in crate::local_writer) fn with_authority(
+        mut self,
+        authority: Option<cc_desk_remote_security::BoundDataAuthority>,
+    ) -> Self {
+        self.authority = authority;
+        self
     }
 }
 
@@ -74,11 +85,12 @@ struct Identity {
     policy: u64,
 }
 pub(super) struct InputWindow {
+    pub(super) wire_token: [u8; 32],
     identity: Arc<Identity>,
     view: Arc<IssuedView>,
     id: [u8; 16],
     issued_ms: u64,
-    deadline_ms: u64,
+    pub(super) deadline_ms: u64,
 }
 impl InputWindow {
     pub(super) fn append_digest(&self, bytes: &mut Vec<u8>) {
@@ -93,6 +105,7 @@ impl InputWindow {
     }
 }
 pub(super) struct ControlState {
+    pub(super) authority: Option<cc_desk_remote_security::BoundDataAuthority>,
     clock: Arc<dyn HostClock>,
     last_ms: Arc<Mutex<u64>>,
     identity: Arc<Identity>,
@@ -153,6 +166,7 @@ impl ControlState {
             .ok_or(Reject::Policy)?
             .min(grant_deadline);
         Ok(Self {
+            authority: None,
             clock,
             last_ms: Arc::new(Mutex::new(now)),
             identity: Arc::new(Identity {
@@ -218,11 +232,19 @@ impl ControlState {
         output::sample(self.clock.as_ref(), &self.last_ms, scope)
     }
     fn eligible(&self, scope: &PeerScope) -> Result<u64, Reject> {
+        self.authorized(scope)?;
         let now = self.sample(scope)?;
         if !scope.is_active() || now >= self.lease_deadline || now >= self.grant_deadline {
             return Err(Reject::Policy);
         }
         Ok(now)
+    }
+    pub(super) fn authorized(&self, scope: &PeerScope) -> Result<(), Reject> {
+        if self.authority.as_ref().is_some_and(|a| a.check().is_err()) {
+            scope.close();
+            return Err(Reject::Policy);
+        }
+        Ok(())
     }
     pub(super) fn issue(
         &mut self,
@@ -249,9 +271,18 @@ impl ControlState {
             return Err(Reject::Policy);
         }
         let mut id = [0; 16];
+        use ring::rand::SecureRandom;
+        let mut wire_token = [0; 32];
+        ring::rand::SystemRandom::new()
+            .fill(&mut wire_token)
+            .map_err(|_| Reject::Policy)?;
+        if wire_token == [0; 32] {
+            return Err(Reject::Policy);
+        }
         id[..8].copy_from_slice(&self.identity.fence.to_be_bytes());
         id[8..].copy_from_slice(&next.to_be_bytes());
         let window = Arc::new(InputWindow {
+            wire_token,
             identity: self.identity.clone(),
             view: view.record.clone(),
             id,

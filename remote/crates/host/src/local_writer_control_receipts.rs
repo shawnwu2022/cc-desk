@@ -64,6 +64,7 @@ fn compact_key(key: &mut OperationKey) -> Result<(), Reject> {
 }
 impl ControlState {
     fn query_authority(&self, scope: &PeerScope, key: &OperationKey) -> Result<(), ControlError> {
+        self.authorized(scope).map_err(ControlError::Rejected)?;
         let now = self.sample(scope).map_err(ControlError::Rejected)?;
         if !scope.is_active()
             || now >= self.grant_deadline

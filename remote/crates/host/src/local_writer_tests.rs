@@ -1,3 +1,6 @@
+#[cfg(feature = "experimental-host-owner")]
+#[path = "local_writer_authorized_pty_tests.rs"]
+mod authorized_pty_tests;
 #[path = "local_writer_cli_tests.rs"]
 mod cli_tests;
 #[cfg(feature = "experimental-host-owner")]
