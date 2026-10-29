@@ -92,44 +92,6 @@ pub(crate) struct LaunchService {
     opencode_preparations: Mutex<Vec<Arc<OpencodePreparation>>>,
 }
 impl LaunchService {
-    fn opencode_observer_supported(
-        &self,
-        caller: &CallerIdentity,
-        snapshot: &LaunchSnapshot,
-    ) -> bool {
-        let probe = || -> Result<bool, SafeError> {
-            let mut request = snapshot.request().clone();
-            request.action = LaunchAction::Raw {
-                argv: vec!["--version".into()],
-            };
-            request.extra_args.clear();
-            let profile = self.repository.get_profile(&request.profile_id)?;
-            let legacy =
-                profile.read_legacy(&self.repository.metadata_directory().join("config.json"))?;
-            let frozen = freeze_launch(
-                &request,
-                &profile,
-                caller,
-                &FreezeContext {
-                    inherited: snapshot.environment(),
-                    terminal: &EnvMap::new(),
-                    legacy: legacy.as_ref(),
-                    observer: None,
-                },
-            )?;
-            if frozen.program() != snapshot.program() || frozen.runner() != snapshot.runner() {
-                return Ok(false);
-            }
-            let spec = resolve_process(&build_invocation(&request, &frozen)?)?;
-            let (admission, mut owner) = self.admit_owned_command()?;
-            let current = || self.registry().check_caller(caller);
-            let supported =
-                super::opencode_prepare::probe_observer_version(&spec, admission, &current);
-            owner.settled = true;
-            supported
-        };
-        probe().unwrap_or(false)
-    }
     pub(crate) fn rename_metadata(
         &self,
         caller: &CallerIdentity,
@@ -603,12 +565,6 @@ impl LaunchService {
                         snapshot.observer_requested() || snapshot.codex_identity_requested()
                     })
                     .and_then(|host| {
-                        if snapshot.request().cli == CliKind::Opencode
-                            && !self.opencode_observer_supported(caller, snapshot)
-                        {
-                            observer_failure = Some("OBSERVER_UNSUPPORTED");
-                            return None;
-                        }
                         let registry = Arc::downgrade(self.registry());
                         let owner = caller.clone();
                         let request_id = request.request_id.clone();

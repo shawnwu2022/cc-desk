@@ -135,3 +135,93 @@ test('Opencode_PluginOverflowCannotPublishAnUnverifiedRequestedId_009',()=>fixtu
   await Promise.all(Array.from({length:129},()=>emit(plugin,'session.status',{sessionID:'ses_unverified',status:{type:'busy'}})))
   assert.equal(sent.length,0)
 }))
+
+// 缺少上下文/选项契约时不得抛错影响原生启动，也不得推导身份。
+test('Opencode_RejectsMalformedContext_010',()=>fixture(async sent=>{
+  for(const input of [undefined,null,[],{}, {client,directory:7}, {client,directory:'/bad\nroot'}]) {
+    assert.deepEqual(await CCDeskObserver(input,{directory:'/fixture'}),{})
+  }
+  for(const options of [null,[],{directory:7},{directory:'/bad\nroot'}]) {
+    assert.deepEqual(await CCDeskObserver({client,directory:'/fixture'},options),{})
+  }
+  assert.equal(sent.length,0)
+}))
+
+// 主会话 metadata 的 parentID 只能缺省或为空；false/0/空串不能冒充主会话。
+test('Opencode_RejectsMalformedMainInfo_011',()=>fixture(async sent=>{
+  for(const parentID of [false,0,'']) {
+    const plugin=await CCDeskObserver({client,directory:'/fixture'},{directory:'/fixture'})
+    await emit(plugin,'session.created',{info:{id:'ses_wrong',directory:'/fixture',parentID}})
+    assert.equal(sent.length,0,`parentID ${JSON.stringify(parentID)} certified a main session`)
+    plugin.dispose()
+  }
+}))
+
+// 不认识的事件封装不进入状态机；同协议新增字段不影响已认证主会话。
+test('Opencode_ValidatesEventEnvelope_012',()=>fixture(async sent=>{
+  const plugin=await CCDeskObserver({client,directory:'/fixture'},{directory:'/fixture'})
+  for(const message of [null,undefined,{}, {event:null}, {event:[]}, {event:{id:'bad',type:'session.created',properties:[]}}]) {
+    await plugin.event(message)
+  }
+  assert.equal(sent.length,0)
+  await emit(plugin,'session.created',{info:{...metadata('ses_main'),future:{ignored:true}}})
+  await emit(plugin,'session.status',{sessionID:'ses_main',status:{type:'busy',future:'ignored'},future:'ignored'})
+  assert.equal(sent.at(-1).body.notification_type,'opencode_busy')
+  plugin.dispose()
+}))
+
+// resume 可进入记录目录，但同 ID 的 metadata 仍须匹配本次 CLI 实例的实际目录。
+test('Opencode_ResumeChecksInstanceDirectory_013',()=>fixture(async sent=>{
+  const plugin=await CCDeskObserver({client,directory:'/recorded'},{sessionID:'ses_main',directory:'/launch'})
+  await emit(plugin,'session.created',{info:{id:'ses_main',directory:'/foreign'}})
+  assert.equal(sent.length,0,'a matching requested ID bypassed actual instance directory validation')
+  await emit(plugin,'session.created',{info:{id:'ses_main',directory:'/recorded'}})
+  assert.equal(sent[0].body.hook_event_name,'SessionStart')
+  plugin.dispose()
+}))
+
+// SDK 即使忽略 AbortSignal，单 ID metadata 查询也必须有实际时间上限。
+test('Opencode_BoundsMetadataWait_014',()=>fixture(async sent=>{
+  const plugin=await CCDeskObserver({client:{session:{get:()=>new Promise(()=>{})}},directory:'/fixture'},{directory:'/fixture'})
+  try {
+    const completed=await Promise.race([
+      emit(plugin,'session.status',{sessionID:'ses_main',status:{type:'busy'}}).then(()=>true),
+      new Promise(resolve=>setTimeout(()=>resolve(false),1500)),
+    ])
+    assert.equal(completed,true,'metadata lookup ignored its one-second timeout')
+    assert.equal(sent.length,0)
+  } finally { plugin.dispose() }
+}))
+
+// 实际事件已给合法主会话 metadata 时不需要 SDK get 能力；缺失时不猜身份。
+test('Opencode_UsesOfferedMetadata_015',()=>fixture(async sent=>{
+  const plugin=await CCDeskObserver({client:{},directory:'/fixture'},{directory:'/fixture'})
+  await emit(plugin,'session.status',{sessionID:'ses_main',status:{type:'busy'}})
+  assert.equal(sent.length,0)
+  await emit(plugin,'session.created',{info:metadata('ses_main')})
+  await emit(plugin,'session.status',{sessionID:'ses_main',status:{type:'busy'}})
+  assert.equal(sent[0].body.hook_event_name,'SessionStart')
+  assert.equal(sent.at(-1).body.notification_type,'opencode_busy')
+  plugin.dispose()
+}))
+
+// 每个插件实例仅保留单个未决 SDK 请求；合法事件 metadata 不受阻，释放后迟到结果不发布。
+test('Opencode_BoundsOutstandingLookup_016',()=>fixture(async sent=>{
+  const resolvers=[]
+  const plugin=await CCDeskObserver({client:{session:{get:()=>new Promise(resolve=>resolvers.push(resolve))}},directory:'/fixture'},{directory:'/fixture'})
+  let count
+  try {
+    await emit(plugin,'session.status',{sessionID:'ses_main',status:{type:'busy'}})
+    await emit(plugin,'session.status',{sessionID:'ses_main',status:{type:'idle'}})
+    assert.equal(resolvers.length,1,'a timed-out pending SDK lookup was invoked again')
+    await emit(plugin,'session.created',{info:metadata('ses_main')})
+    await emit(plugin,'session.status',{sessionID:'ses_main',status:{type:'busy'}})
+    assert.equal(sent.at(-1).body.notification_type,'opencode_busy')
+    count=sent.length
+  } finally {
+    plugin.dispose()
+    resolvers.forEach(resolve=>resolve({data:metadata('ses_main')}))
+    await new Promise(resolve=>setImmediate(resolve))
+  }
+  assert.equal(sent.length,count,'late SDK metadata published after dispose')
+}))

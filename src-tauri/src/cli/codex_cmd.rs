@@ -667,17 +667,13 @@ process.stdout.write(JSON.stringify({ argv: process.argv.slice(2), receivedLengt
 
     #[test]
     fn CodexIdentity_NpmKnownVersionRejectsTampering_084() {
-        for target in ["shim"] {
-            let (_root, program, package) = npm_fixture("0.164.0");
+        {
+            let (_root, program, _package) = npm_fixture("0.164.0");
             drop(
                 prepare(&program, &fixture_args(), &mut EnvMap::new())
                     .expect("known-version control must pass before tamper"),
             );
-            let path = if target == "shim" {
-                program.clone()
-            } else {
-                package.join("bin/codex.js")
-            };
+            let path = program.clone();
             let mut bytes = std::fs::read(&path).unwrap();
             bytes.extend_from_slice(b"\nchanged bytes\n");
             std::fs::write(path, bytes).unwrap();

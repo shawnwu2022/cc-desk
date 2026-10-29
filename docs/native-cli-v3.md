@@ -519,17 +519,29 @@ interactive model turn or unrelated external/unregistered sessions.
 Structured OpenCode runs can load a private, per-owned-run plugin through the official
 `OPENCODE_CONFIG_CONTENT.plugin` tuple mechanism. It preserves existing inline settings
 and user plugins; it does not install a plugin globally, inject Claude flags, poll an
-unrelated `serve` process or change native input. The selected executable/runner has a
-bounded, isolated, owned `--version` probe. Only the examined **1.19.0** contract is
-enabled; older, future, unrecognized or unavailable versions retain their original
-basic CLI launch with an unsupported optional observer. Explicit observer off/unset,
+unrelated `serve` process or change native input. Observer preparation does not execute
+an auxiliary `--version` probe or use version text as an admission gate. It offers the
+same temporary plugin to the user-requested run; only accepted, authenticated events
+with supported metadata shapes establish observation. The plugin tuple/options contract
+is evidenced by the [official loader](https://github.com/anomalyco/opencode/blob/v1.19.0/packages/opencode/src/plugin/index.ts)
+and [configuration schema](https://opencode.ai/config.json); the examined release is
+protocol evidence, not a supported-version list. Future breaking protocols still require
+adaptation and real CLI acceptance; local fixtures do not certify every CLI version.
+Explicit observer off/unset,
 raw launches and `OPENCODE_PURE=true/1` do not receive an enabled observation channel.
 Invalid/oversized inline configuration or an unrepresentable optional overlay also
 falls back to the original frozen launch once, without loosening admission checks.
 
 The plugin uses the SDK passed by the actual CLI instance. It verifies main-session
-metadata, excludes subagents and foreign IDs, and binds the requested resume ID or the
+metadata, rejects malformed contexts/options/event envelopes, excludes subagents and foreign IDs, and binds the requested resume ID or the
 first verified main-session ID in the selected new-run directory. Initialization
+requires metadata to match the actual instance directory even when a resume ID was
+requested. Resume may enter its recorded directory rather than the launch cwd; this
+does not authorize a new history root. Valid offered metadata is used directly; only
+missing metadata triggers the existing single-ID instance API call. A local one-second
+deadline bounds the wait even when an SDK ignores its cancellation signal; at most one
+unsettled lookup exists per plugin instance, and later offered metadata remains usable. Late results
+cannot publish after disposal. Initialization
 returns hooks before querying the instance API, avoiding an initialization self-wait.
 Official `dispose` clears initialization and prevents pending metadata callbacks from
 publishing after instance disposal. The observer lease owns and removes the private
