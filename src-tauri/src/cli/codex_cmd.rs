@@ -295,6 +295,108 @@ mod tests {
     use super::*;
 
     #[test]
+    fn CodexAdapter_RuntimePayloadLimitRestoresOriginalPolicy_119() {
+        // Construct oversized data inside an owned Node fixture: passing it at
+        // CreateProcess would test Windows env limits, not this runtime guard.
+        for length in [65536usize, 65537, 131072] {
+            let (_root, program, package) = npm_fixture("future-protocol-compatible");
+            let entry = package.join("bin/codex.js");
+            std::fs::write(&entry, r#"
+const data = JSON.parse(process.env.CC_DESK_CODEX_ARGV);
+const prefix = 'hooks.SessionStart=';
+data.args[1] = prefix + 'x'.repeat(Number(process.env.OWN_TEST_LENGTH) - prefix.length);
+process.env.CC_DESK_CODEX_ARGV = JSON.stringify(data);
+const receivedLength = JSON.parse(process.env.CC_DESK_CODEX_ARGV).args[1].length;
+require(process.env.OWN_TEST_LOADER);
+process.stdout.write(JSON.stringify({ argv: process.argv.slice(2), receivedLength,
+  authority: ['PORT','RUN','GENERATION','CAPABILITY'].map(key => process.env['CC_DESK_CODEX_' + key] ?? null),
+  options: process.env.NODE_OPTIONS ?? null, transport: process.env.CC_DESK_CODEX_ARGV ?? null }));
+"#).unwrap();
+            let original = [
+                "resume",
+                "exact-thread",
+                "-c",
+                "hooks.SessionStart=[{hooks=[{type=\"command\",command=\"user guard\"}]}]",
+                "--model",
+                "中文 空格 & | < > % ! $() ` 引号\"\n\t",
+                "duplicate",
+                "duplicate",
+            ]
+            .map(OsString::from);
+            let mut environment = EnvMap::new();
+            for (key, value) in [
+                ("RUN", "owned-run"),
+                ("GENERATION", "1"),
+                ("PORT", "1234"),
+                ("CAPABILITY", "0123456789abcdef0123456789abcdef"),
+            ] {
+                environment.insert(format!("CC_DESK_CODEX_{key}").into(), value.into());
+            }
+            let transport =
+                prepare_with_original(&program, &fixture_args(), &mut environment, Some(&original))
+                    .unwrap();
+            let options = environment.remove(OsStr::new("NODE_OPTIONS")).unwrap();
+            let loader = PathBuf::from(
+                options
+                    .to_str()
+                    .unwrap()
+                    .strip_prefix("--require \"")
+                    .unwrap()
+                    .strip_suffix('"')
+                    .unwrap(),
+            );
+            environment.insert("OWN_TEST_LOADER".into(), loader.as_os_str().to_owned());
+            environment.insert("OWN_TEST_LENGTH".into(), length.to_string().into());
+            if let Some(system_root) = std::env::var_os("SystemRoot") {
+                environment.insert("SystemRoot".into(), system_root);
+            }
+            let output = std::process::Command::new("node")
+                .env_clear()
+                .envs(&environment)
+                .arg(&entry)
+                .args(["resume", "exact-thread", "remaining-business"])
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "owned runtime fixture must finish: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let observed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(
+                observed["receivedLength"], length,
+                "runtime input must arrive intact, not be truncated/rejected by OS env assignment"
+            );
+            assert!(observed["options"].is_null());
+            assert!(observed["transport"].is_null());
+            if length == 65536 {
+                assert_eq!(observed["argv"].as_array().unwrap().len(), 11);
+                assert_eq!(observed["argv"][0], "-c");
+                assert_eq!(observed["argv"][1].as_str().unwrap().len(), 65536);
+                assert_eq!(observed["argv"][8], "resume");
+                assert_eq!(observed["argv"][10], "remaining-business");
+                assert_eq!(observed["authority"][3], "0123456789abcdef0123456789abcdef");
+            } else {
+                let expected: Vec<_> = original
+                    .iter()
+                    .map(|value| value.to_str().unwrap())
+                    .collect();
+                assert_eq!(observed["argv"], serde_json::json!(expected));
+                assert_eq!(
+                    observed["authority"],
+                    serde_json::json!([null, null, null, null])
+                );
+            }
+            assert!(loader.is_file());
+            drop(transport);
+            assert!(
+                !loader.exists(),
+                "private rollback artifact must retire with its transport"
+            );
+        }
+    }
+
+    #[test]
     fn CodexAdapter_VersionIndependentTransport_101() {
         for version in ["0.1.0", "0.166.0", "99.0.0-next", "", "not-semver"] {
             let (_root, program, _package) = npm_fixture(version);
