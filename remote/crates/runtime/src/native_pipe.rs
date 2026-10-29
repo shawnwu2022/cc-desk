@@ -16,6 +16,10 @@ pub struct BackendPipeLaunch {
     command: portable_pty::CommandBuilder,
 }
 impl BackendPipeLaunch {
+    // Consuming backend-only handoff; PTY shares the bounded recipe validator.
+    pub(crate) fn into_command(self) -> portable_pty::CommandBuilder {
+        self.command
+    }
     pub fn from_backend_recipe(
         program: PathBuf,
         cwd: PathBuf,

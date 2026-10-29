@@ -1,5 +1,38 @@
 # Remote integration evidence ledger
 
+## Active composition gate: RED (2026-10-29)
+
+The last committed pipe/journal slice passed173 tests under its explicit task-owned
+test root. That result is historical once the new PTY composition is added. The
+new, uncommitted `actual_owned_pty_uses_the_same_durable_single_writer_without_reply_bypass`
+case fails: HostWritten receipts are returned but the fixed fixture effect is absent;
+the exact root is still alive,23 output bytes include DA, and no DSR is observed.
+Root stop, output EOF and reader join complete before the failure is reported.
+This does not contradict the limited HostWritten meaning or prove DA is the sole
+cause. It exposes an unfinished PTY integration gate: local_writer rejects terminal
+replies and the canonical terminal currently rejects/drops them. The independent
+runtime cmd fixture's TEST_ONLY direct DA/CPR responses cannot qualify the Host path.
+
+The verified native PTY custody wrapper remains default-off, with four scoped cases
+passing and one separately supervised worker intentionally ignored in the parent
+harness. The failing Host test is retained separately and is not a passed/committed
+fix. Do not enable control, bypass its only writer, turn protocol replies into user
+input or claim the current composed workspace is green.
+
+Next required product work is the existing E04/E09 internal-reply contract: bounded
+canonical parser queries, generation-bound internal capabilities and commit-time
+encoding through the same private writer, separate from user receipts. Stop/unknown
+must invalidate queued replies; only then rerun the retained end-to-end test. Exact
+full-suite results for this snapshot are kept in the external evidence report.
+
+A subsequent full runtime run failed the existing20-cycle handle probe (86->97,
+unchanged+4 limit). Its existing SERIAL mutex excludes other test bodies but not
+all harness/lazy process activity; no root cause is established. An added per-cycle
+observation then passed all four job cases, with before91/after90 and twenty90
+samples. This is not a claimed leak fix. The observation stays uncommitted with
+the failing Host link. Typed-PTY scoped4/4 evidence does not waive this additional
+runtime qualification gate.
+
 ## Current-main candidate (2026-10-29)
 
 The delivery candidate is based on published main9743fdafd58ffef9b058b0826a9c13b5696d7b92,

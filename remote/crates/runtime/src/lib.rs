@@ -1,6 +1,14 @@
 //! Backend-only process ownership primitives; no authorization or network entry.
 use std::process::Command;
 #[cfg(all(windows, feature = "conpty-qualification"))]
+mod native_pty;
+#[cfg(all(windows, feature = "conpty-qualification"))]
+#[allow(dead_code)]
+#[path = "../../../../src-tauri/src/conpty_runtime.rs"]
+mod pinned;
+#[cfg(all(windows, feature = "conpty-qualification"))]
+pub use native_pty::*;
+#[cfg(all(windows, feature = "conpty-qualification"))]
 mod native_pipe;
 #[cfg(all(windows, feature = "conpty-qualification"))]
 pub use native_pipe::*;

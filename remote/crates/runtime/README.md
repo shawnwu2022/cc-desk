@@ -211,3 +211,22 @@ event after child exit. Positive API sensitivity and an unrelated-event negative
 control are checked separately. This proves only that the fixed child did not signal
 that canary, not absence of every possible inherited handle. The original intermittent
 failure's complete cause is not established by one later successful diagnostic run.
+
+### Typed PTY custody prerequisite
+
+The qualification-only NativeOwnedPtyRun reuses the same bounded backend recipe,
+initializes the app-local pinned loader before allocating a PTY and transfers its
+reader/writer at most once. Root stop uses the retained process handle and does not
+take the transferred writer's lock. Four scoped cases pass, including a fixed cmd
+PTY roundtrip and a Preparation classification when pinned resources are absent.
+Source ordering places pinning before PTY allocation; the missing-resource case
+does not supply an independent target-process creation witness.
+The separately supervised TEST_ONLY worker is ignored by the parent test harness
+and invoked explicitly under its private outer Job.
+
+That cmd fixture contains direct DA/CPR startup responses. This is a fixture facility,
+not an admitted Host response path. The new Host single-writer composition without
+that bypass currently fails its independent effect observation; see ACCEPTANCE.md.
+The wrapper neither proves complete OpenConsole/tree/old-IO retirement nor preempts
+synchronous Win32 calls or master destruction. No desktop or remote endpoint is
+enabled by this wrapper.

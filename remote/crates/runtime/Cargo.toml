@@ -47,3 +47,7 @@ required-features = ["conpty-qualification"]
 [[test]]
 name = "native_pipe"
 required-features = ["conpty-qualification"]
+
+[[test]]
+name = "native_pty"
+required-features = ["conpty-qualification"]
