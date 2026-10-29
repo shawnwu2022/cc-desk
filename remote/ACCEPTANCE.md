@@ -1,8 +1,29 @@
 # Remote integration evidence ledger
 
-## Canonical-prefix / native PTY checkpoint (2026-10-29)
+## Private output-continuity checkpoint (2026-10-29)
 
-Latest reviewed component snapshot:212 passed,0 failed,2 explicitly ignored in the
+The actual private reader/writer entry now requires a native byte offset; no
+implicit append API remains. Activation/seal precede exact offset and overflow
+checks in the SAME worker. Only fully Processed batches advance. Duplicate,
+overlap,gap or overflow seals; lost feedback cannot authorize retransmission.
+The native fixed PTY and installed-Codex reader now supply their local byte count.
+This is trusted backend provenance, not protection against malicious renumbering
+of old bytes, durable state, projection ACK or complete remote reconnection.
+
+Final current workspace:218 passed,0 failed,2 ignored; strict all-target Clippy
+and fmt pass. The separately invoked offline Codex help case passes1/1 on this
+snapshot (6480 bytes,one DA,root exit0,EOF/join; no account inputs). Six new offset
+cases cover replay/overlap/gap,split/old activation,queued in-flight duplicate,
+lost feedback,canonical replay,and u64 overflow before parser/IO. A deliberate
+temporary mutation removing the continuity check produced a real second reply
+and the expected test failure; original bytes were restored before final tests.
+
+All conditional storage/platform/handle boundaries below remain OPEN. This is
+not a lease/resize/session actor, subscriber replay service or remote control grant.
+
+## Historical canonical-prefix / native PTY checkpoint (2026-10-29,bedc6ca)
+
+That reviewed component snapshot:212 passed,0 failed,2 explicitly ignored in the
 all-features workspace. Strict workspace Clippy and formatting pass after a
 collapsible-if style correction. All runs retain the process-local task-owned
 TEMP/TMP condition described below. The two ignored entries are the supervised

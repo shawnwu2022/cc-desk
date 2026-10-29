@@ -224,7 +224,7 @@ fn actual_owned_pty_writer(canonical: bool) {
                 }
                 bytes.extend_from_slice(&buf[..n]);
                 if forwarding {
-                    match output_capability.feed(buf[..n].to_vec()) {
+                    match output_capability.feed_at((bytes.len() - n) as u64, buf[..n].to_vec()) {
                         Ok(pending) => match pending.wait(Duration::from_secs(1)) {
                             Ok(OutputResult::Processed { replies }) => {
                                 reply_count += u32::from(replies)

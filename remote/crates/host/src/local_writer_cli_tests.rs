@@ -108,7 +108,7 @@ fn installed_codex_help_uses_empty_home_and_private_pty_reply_gate() {
                     ready.store(true, Ordering::Release);
                 }
                 if forward {
-                    match cap.feed(buf[..n].to_vec()) {
+                    match cap.feed_at((bytes.len() - n) as u64, buf[..n].to_vec()) {
                         Ok(p) => match p.wait(Duration::from_secs(1)) {
                             Ok(OutputResult::Processed { replies }) => {
                                 reply_count.fetch_add(usize::from(replies), Ordering::Relaxed);

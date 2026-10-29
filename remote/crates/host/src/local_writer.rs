@@ -53,6 +53,7 @@ pub enum Reject {
     Unsupported,
     Thread,
     Rate,
+    Continuity,
 }
 #[derive(Debug, PartialEq, Eq)]
 pub enum WriteResult {

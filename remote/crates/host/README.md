@@ -93,7 +93,7 @@ not establish cross-session progress or a general synchronous-write deadline.
 ### Restricted internal Primary DA replies
 
 The private start_terminal factory mints one non-Clone output capability for the
-immutable target and a fresh opaque parser activation. Its feed(&mut self) requires
+immutable target and a fresh opaque parser activation. Its feed_at(&mut self,offset,bytes) requires
 an exclusive producer borrow; the reader receives no PTY writer and cannot submit
 reply bytes. Actual output becomes a typed Primary DA event through the persistent
 patched-vte adapter. The single worker validates activation, complete batch and
@@ -138,11 +138,16 @@ It rejects unsupported modes/strings/combining characters, retains zero history,
 and always reports remote_control_eligible=false. Unit fake-IO evidence establishes
 prefix encoding and writer guards, not real CLI compatibility, renderer fidelity,
 multi-client resize authority, reconnect or remote production acceptance.
-The trusted single PTY reader must forward each fresh output byte exactly once.
-This local capability does not carry an output-offset/ACK and cannot detect replay
-of an already-consumed output batch. Reconnect/replay must use a separate projection
-path and must not feed prior output back into this reply authority; its end-to-end
-offset/continuity gate remains an explicit integration requirement.
+The trusted single PTY reader supplies its native byte offset through the only
+`feed_at` entry. The SAME worker checks activation,seal,exact next offset and checked
+end before parser or reply IO. Only a fully Processed batch advances the cursor.
+Duplicate/overlap/gap/overflow seals the activation; dropped feedback cannot authorize
+resending. Old activation rejection does not consume or alter the current cursor.
+This is an ephemeral trusted-reader provenance check, not persistent state, content
+authentication, a remote Projection ACK or a complete reconnect protocol. It cannot
+identify old bytes deliberately relabeled with a fresh next offset by a malicious
+backend. Network/subscriber replay has no access to this capability and must use a
+separate projection path; full actor/source/attach integration remains required.
 
 A Windows10 fixed public Rust fixture also traverses this canonical factory and
 the actual ConPTY reader/same-writer path. Its duplicate CR-line operation has one

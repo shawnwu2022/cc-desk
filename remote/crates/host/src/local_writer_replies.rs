@@ -25,6 +25,7 @@ impl PendingOutput {
 }
 pub(super) struct OutputRequest {
     context: Arc<()>,
+    offset: u64,
     bytes: Box<[u8]>,
     pub(super) reply: mpsc::SyncSender<OutputResult>,
     _credit: Arc<Credit>,
@@ -46,7 +47,9 @@ impl HostOutputHandle {
             credits: input.credits.clone(),
         }
     }
-    pub(crate) fn feed(&mut self, bytes: Vec<u8>) -> Result<PendingOutput, Reject> {
+    /// Fresh native-reader provenance, never subscriber/display replay. Once a
+    /// chunk is queued, lost feedback does not authorize resending its offset.
+    pub(crate) fn feed_at(&mut self, offset: u64, bytes: Vec<u8>) -> Result<PendingOutput, Reject> {
         if bytes.is_empty() || bytes.len() > MAX_INPUT {
             return Err(Reject::Bounds);
         }
@@ -58,6 +61,7 @@ impl HostOutputHandle {
         let (tx, rx) = mpsc::sync_channel(1);
         let request = OutputRequest {
             context: self.context.clone(),
+            offset,
             bytes,
             reply: tx,
             _credit: credit.clone(),
@@ -101,6 +105,7 @@ impl Rate {
 }
 pub(super) struct ReplyState {
     context: Arc<()>,
+    next_offset: u64,
     parser: ReplyParser,
     rate: Rate,
 }
@@ -123,6 +128,7 @@ impl ReplyState {
     pub(super) fn new(context: Arc<()>) -> Self {
         Self {
             context,
+            next_offset: 0,
             parser: ReplyParser::Static(Box::default()),
             rate: Rate::default(),
         }
@@ -131,6 +137,7 @@ impl ReplyState {
     pub(super) fn canonical(context: Arc<()>, start: CanonicalStart) -> Self {
         Self {
             context,
+            next_offset: 0,
             parser: ReplyParser::Canonical(start.0),
             rate: Rate::default(),
         }
@@ -147,7 +154,15 @@ impl ReplyState {
         if sealed.load(Ordering::Acquire) {
             return OutputResult::Rejected(Reject::Sealed);
         }
-        match &mut self.parser {
+        if request.offset != self.next_offset {
+            sealed.store(true, Ordering::Release);
+            return OutputResult::Rejected(Reject::Continuity);
+        }
+        let Some(end_offset) = request.offset.checked_add(request.bytes.len() as u64) else {
+            sealed.store(true, Ordering::Release);
+            return OutputResult::Rejected(Reject::Bounds);
+        };
+        let result = match &mut self.parser {
             ReplyParser::Static(parser) => {
                 process_static(parser, &mut self.rate, request, stdin, sealed)
             }
@@ -155,7 +170,11 @@ impl ReplyState {
             ReplyParser::Canonical(core) => {
                 process_canonical(core, &mut self.rate, request, stdin, sealed)
             }
+        };
+        if matches!(result, OutputResult::Processed { .. }) {
+            self.next_offset = end_offset;
         }
+        result
     }
 }
 fn process_static(
@@ -281,6 +300,33 @@ fn process_canonical(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn output_offset_overflow_seals_before_parsing_or_native_io() {
+        let context = Arc::new(());
+        let mut state = ReplyState::new(context.clone());
+        state.next_offset = u64::MAX - 1;
+        let (reply, _) = mpsc::sync_channel(1);
+        let request = OutputRequest {
+            context,
+            offset: u64::MAX - 1,
+            bytes: b"\x1b[".as_slice().into(),
+            reply,
+            _credit: Arc::new(Credits::default()).reserve().unwrap(),
+        };
+        let sealed = AtomicBool::new(false);
+        let mut observed = Vec::new();
+        assert_eq!(
+            state.process(&request, &mut observed, &sealed),
+            OutputResult::Rejected(Reject::Bounds)
+        );
+        assert!(observed.is_empty());
+        assert!(sealed.load(Ordering::Acquire));
+        assert_eq!(state.next_offset, u64::MAX - 1);
+        assert_eq!(
+            state.process(&request, &mut observed, &sealed),
+            OutputResult::Rejected(Reject::Sealed)
+        );
+    }
     #[test]
     fn reply_rate_does_not_reset_early_or_with_a_regressed_sample() {
         let now = Instant::now();

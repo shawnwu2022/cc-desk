@@ -5,8 +5,169 @@ use std::{io, sync::Mutex, time::Instant};
 fn output_chunk_submission_requires_an_exclusive_producer_borrow() {
     let _single_producer: fn(
         &mut HostOutputHandle,
+        u64,
         Vec<u8>,
-    ) -> Result<replies::PendingOutput, Reject> = HostOutputHandle::feed;
+    ) -> Result<replies::PendingOutput, Reject> = HostOutputHandle::feed_at;
+}
+
+#[test]
+fn output_offsets_refuse_replay_overlap_and_gap_before_any_second_reply() {
+    for invalid_offset in [0, 1, 4] {
+        let dir = tempfile::tempdir().unwrap();
+        let sink = Sink::default();
+        let observed = sink.clone();
+        let (mut writer, mut cap) = start(sink, &dir);
+        assert_eq!(
+            cap.feed_at(0, b"\x1b[c".to_vec())
+                .unwrap()
+                .wait(Duration::from_secs(2))
+                .unwrap(),
+            OutputResult::Processed { replies: 1 }
+        );
+        assert_eq!(
+            cap.feed_at(invalid_offset, b"\x1b[c".to_vec())
+                .unwrap()
+                .wait(Duration::from_secs(2))
+                .unwrap(),
+            OutputResult::Rejected(Reject::Continuity)
+        );
+        assert!(matches!(
+            cap.feed_at(3, b"\x1b[c".to_vec()),
+            Err(Reject::Sealed)
+        ));
+        assert!(matches!(
+            writer
+                .handle()
+                .submit(operation(), 9, b"DO_NOT_TYPE".to_vec()),
+            Err(Reject::Sealed)
+        ));
+        finish(&mut writer);
+        assert_eq!(&*observed.0.lock().unwrap(), b"\x1b[?6c");
+    }
+}
+
+#[test]
+fn output_offsets_follow_native_bytes_across_split_queries_and_stale_activation() {
+    let dir = tempfile::tempdir().unwrap();
+    let sink = Sink::default();
+    let observed = sink.clone();
+    let (mut writer, mut cap) = start(sink, &dir);
+    let actual = cap.context.clone();
+    cap.context = Arc::new(());
+    assert_eq!(
+        cap.feed_at(999, b"\x1b[c".to_vec())
+            .unwrap()
+            .wait(Duration::from_secs(2))
+            .unwrap(),
+        OutputResult::Rejected(Reject::Epoch)
+    );
+    cap.context = actual;
+    assert_eq!(
+        cap.feed_at(0, b"\x1b[".to_vec())
+            .unwrap()
+            .wait(Duration::from_secs(2))
+            .unwrap(),
+        OutputResult::Processed { replies: 0 }
+    );
+    assert_eq!(
+        cap.feed_at(2, b"c".to_vec())
+            .unwrap()
+            .wait(Duration::from_secs(2))
+            .unwrap(),
+        OutputResult::Processed { replies: 1 }
+    );
+    finish(&mut writer);
+    assert_eq!(&*observed.0.lock().unwrap(), b"\x1b[?6c");
+}
+
+#[test]
+fn output_offsets_lost_feedback_does_not_authorize_resending_the_same_chunk() {
+    let dir = tempfile::tempdir().unwrap();
+    let sink = Sink::default();
+    let observed = sink.clone();
+    let (mut writer, mut cap) = start(sink, &dir);
+    drop(cap.feed_at(0, b"\x1b[c".to_vec()).unwrap());
+    assert_eq!(
+        feed(&mut cap, 0, b"\x1b[c"),
+        OutputResult::Rejected(Reject::Continuity)
+    );
+    finish(&mut writer);
+    assert_eq!(&*observed.0.lock().unwrap(), b"\x1b[?6c");
+}
+
+#[test]
+fn output_offsets_queued_duplicate_cannot_repeat_an_in_flight_reply() {
+    struct Block {
+        entered: mpsc::SyncSender<()>,
+        release: mpsc::Receiver<()>,
+        sink: Sink,
+    }
+    impl io::Write for Block {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.entered.send(()).unwrap();
+            self.release.recv_timeout(Duration::from_secs(2)).unwrap();
+            self.sink.write(bytes)
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let sink = Sink::default();
+    let observed = sink.clone();
+    let (entered, wait) = mpsc::sync_channel(1);
+    let (release, blocked) = mpsc::sync_channel(1);
+    let (mut writer, mut cap) = start(
+        Block {
+            entered,
+            release: blocked,
+            sink,
+        },
+        &dir,
+    );
+    let first = cap.feed_at(0, b"\x1b[c".to_vec()).unwrap();
+    wait.recv_timeout(Duration::from_secs(2)).unwrap();
+    let replay = cap.feed_at(0, b"\x1b[c".to_vec()).unwrap();
+    release.send(()).unwrap();
+    assert_eq!(
+        first.wait(Duration::from_secs(2)).unwrap(),
+        OutputResult::Processed { replies: 1 }
+    );
+    assert_eq!(
+        replay.wait(Duration::from_secs(2)).unwrap(),
+        OutputResult::Rejected(Reject::Continuity)
+    );
+    finish(&mut writer);
+    assert_eq!(&*observed.0.lock().unwrap(), b"\x1b[?6c");
+}
+
+#[cfg(feature = "experimental-canonical-replies")]
+#[test]
+fn output_offsets_canonical_replay_does_not_apply_the_prefix_or_reply_twice() {
+    let dir = tempfile::tempdir().unwrap();
+    let sink = Sink::default();
+    let observed = sink.clone();
+    let (mut writer, mut cap) = LocalWriter::start_canonical_terminal(
+        Journal::open(&dir.path().join("journal.sqlite")).unwrap(),
+        sink,
+        operation().target(),
+        operation().device,
+        9,
+        DigestKey::from_backend_bytes([0x5a; 32]),
+        CanonicalStart::new(3, 10).unwrap(),
+    )
+    .unwrap();
+    let bytes = b"ab\x1b[6n";
+    assert_eq!(
+        feed(&mut cap, 0, bytes),
+        OutputResult::Processed { replies: 1 }
+    );
+    assert_eq!(
+        feed(&mut cap, 0, bytes),
+        OutputResult::Rejected(Reject::Continuity)
+    );
+    finish(&mut writer);
+    assert_eq!(&*observed.0.lock().unwrap(), b"\x1b[1;3R");
 }
 
 #[cfg(feature = "experimental-canonical-replies")]
@@ -26,7 +187,7 @@ fn canonical_prefix_replies_use_the_same_writer_and_no_user_journal_operation() 
     )
     .unwrap();
     assert_eq!(
-        feed(&mut cap, b"abc\x1b[6n\x1b[2;5HZ\x1b[6n"),
+        feed(&mut cap, 0, b"abc\x1b[6n\x1b[2;5HZ\x1b[6n"),
         OutputResult::Processed { replies: 2 }
     );
     finish(&mut writer);
@@ -60,22 +221,25 @@ fn canonical_bad_tail_and_rate_overflow_do_not_emit_unvalidated_replies() {
         .unwrap();
         if flood {
             assert_eq!(
-                feed(&mut cap, &b"\x1b[6n".repeat(32)),
+                feed(&mut cap, 0, &b"\x1b[6n".repeat(32)),
                 OutputResult::Processed { replies: 32 }
             );
             assert_eq!(
-                feed(&mut cap, b"\x1b[6n"),
+                feed(&mut cap, 128, b"\x1b[6n"),
                 OutputResult::Rejected(Reject::Rate)
             );
             assert_eq!(observed.0.lock().unwrap().len(), 32 * 6);
         } else {
             assert_eq!(
-                feed(&mut cap, b"abc\x1b[6n\x1b]52;c;x\x07"),
+                feed(&mut cap, 0, b"abc\x1b[6n\x1b]52;c;x\x07"),
                 OutputResult::Rejected(Reject::Unsupported)
             );
             assert!(observed.0.lock().unwrap().is_empty());
         }
-        assert!(matches!(cap.feed(b"\x1b[6n".to_vec()), Err(Reject::Sealed)));
+        assert!(matches!(
+            cap.feed_at(0, b"\x1b[6n".to_vec()),
+            Err(Reject::Sealed)
+        ));
         finish(&mut writer);
     }
 }
@@ -123,14 +287,20 @@ fn canonical_stale_activation_and_stop_between_queries_never_reopen_the_writer()
     let actual = cap.context.clone();
     cap.context = Arc::new(());
     assert_eq!(
-        feed(&mut cap, b"abc\x1b[6n"),
+        feed(&mut cap, 0, b"abc\x1b[6n"),
         OutputResult::Rejected(Reject::Epoch)
     );
     assert!(observed.0.lock().unwrap().is_empty());
     cap.context = actual;
-    assert_eq!(feed(&mut cap, b"ab\x1b[6nZ\x1b[6n"), OutputResult::Partial);
+    assert_eq!(
+        feed(&mut cap, 0, b"ab\x1b[6nZ\x1b[6n"),
+        OutputResult::Partial
+    );
     assert_eq!(&*observed.0.lock().unwrap(), b"\x1b[1;3R");
-    assert!(matches!(cap.feed(b"\x1b[6n".to_vec()), Err(Reject::Sealed)));
+    assert!(matches!(
+        cap.feed_at(0, b"\x1b[6n".to_vec()),
+        Err(Reject::Sealed)
+    ));
     finish(&mut writer);
 }
 
@@ -171,14 +341,17 @@ fn canonical_partial_or_unknown_io_remains_sealed_without_user_receipts() {
         )
         .unwrap();
         assert_eq!(
-            feed(&mut cap, b"abc\x1b[6n"),
+            feed(&mut cap, 0, b"abc\x1b[6n"),
             if progress {
                 OutputResult::Partial
             } else {
                 OutputResult::Unknown
             }
         );
-        assert!(matches!(cap.feed(b"\x1b[6n".to_vec()), Err(Reject::Sealed)));
+        assert!(matches!(
+            cap.feed_at(0, b"\x1b[6n".to_vec()),
+            Err(Reject::Sealed)
+        ));
         finish(&mut writer);
         assert_eq!(
             Journal::open(&dir.path().join("journal.sqlite"))
@@ -274,8 +447,8 @@ fn start(
     )
     .unwrap()
 }
-fn feed(cap: &mut HostOutputHandle, bytes: &[u8]) -> OutputResult {
-    cap.feed(bytes.to_vec())
+fn feed(cap: &mut HostOutputHandle, offset: u64, bytes: &[u8]) -> OutputResult {
+    cap.feed_at(offset, bytes.to_vec())
         .unwrap()
         .wait(Duration::from_secs(2))
         .unwrap()
@@ -288,10 +461,13 @@ fn internal_da_is_same_writer_io_without_consuming_user_sequence() {
     let observed = sink.clone();
     let (mut writer, mut cap) = start(sink, &dir);
     assert_eq!(
-        feed(&mut cap, b"\x1b["),
+        feed(&mut cap, 0, b"\x1b["),
         OutputResult::Processed { replies: 0 }
     );
-    assert_eq!(feed(&mut cap, b"c"), OutputResult::Processed { replies: 1 });
+    assert_eq!(
+        feed(&mut cap, 2, b"c"),
+        OutputResult::Processed { replies: 1 }
+    );
     assert!(matches!(
         writer
             .handle()
@@ -324,7 +500,7 @@ fn wrong_parser_activation_and_user_raw_reply_cannot_write() {
     let real = cap.context.clone();
     cap.context = Arc::new(());
     assert_eq!(
-        feed(&mut cap, b"\x1b[c"),
+        feed(&mut cap, 0, b"\x1b[c"),
         OutputResult::Rejected(Reject::Epoch)
     );
     assert_eq!(
@@ -336,7 +512,7 @@ fn wrong_parser_activation_and_user_raw_reply_cannot_write() {
     assert!(observed.0.lock().unwrap().is_empty());
     cap.context = real;
     assert_eq!(
-        feed(&mut cap, b"\x1b[c"),
+        feed(&mut cap, 0, b"\x1b[c"),
         OutputResult::Processed { replies: 1 }
     );
     finish(&mut writer);
@@ -358,22 +534,25 @@ fn query_flood_and_rate_exhaustion_seal_without_partial_batch_replies() {
         let (mut writer, mut cap) = start(sink, &dir);
         if flood {
             assert_eq!(
-                feed(&mut cap, &b"\x1b[c".repeat(33)),
+                feed(&mut cap, 0, &b"\x1b[c".repeat(33)),
                 OutputResult::Rejected(Reject::Unsupported)
             );
             assert!(observed.0.lock().unwrap().is_empty());
         } else {
             assert_eq!(
-                feed(&mut cap, &b"\x1b[c".repeat(32)),
+                feed(&mut cap, 0, &b"\x1b[c".repeat(32)),
                 OutputResult::Processed { replies: 32 }
             );
             assert_eq!(
-                feed(&mut cap, b"\x1b[c"),
+                feed(&mut cap, 96, b"\x1b[c"),
                 OutputResult::Rejected(Reject::Rate)
             );
             assert_eq!(observed.0.lock().unwrap().len(), 160);
         }
-        assert!(matches!(cap.feed(b"\x1b[c".to_vec()), Err(Reject::Sealed)));
+        assert!(matches!(
+            cap.feed_at(0, b"\x1b[c".to_vec()),
+            Err(Reject::Sealed)
+        ));
         finish(&mut writer);
     }
 }
@@ -383,21 +562,27 @@ fn pending_output_feedback_shares_the_input_credit_budget() {
     let dir = tempfile::tempdir().unwrap();
     let (mut writer, mut cap) = start(Sink::default(), &dir);
     let mut pending = Vec::new();
-    for _ in 0..MAX_CREDITS {
-        let p = cap.feed(vec![b'x']).unwrap();
+    for offset in 0..MAX_CREDITS {
+        let p = cap.feed_at(offset as u64, vec![b'x']).unwrap();
         assert_eq!(
             p.wait(Duration::from_secs(2)).unwrap(),
             OutputResult::Processed { replies: 0 }
         );
         pending.push(p);
     }
-    assert!(matches!(cap.feed(vec![b'x']), Err(Reject::Full)));
+    assert!(matches!(
+        cap.feed_at(MAX_CREDITS as u64, vec![b'x']),
+        Err(Reject::Full)
+    ));
     assert!(matches!(
         writer.handle().submit(operation(), 9, vec![b'x']),
         Err(Reject::Full)
     ));
     drop(pending);
-    assert_eq!(feed(&mut cap, b"x"), OutputResult::Processed { replies: 0 });
+    assert_eq!(
+        feed(&mut cap, MAX_CREDITS as u64, b"x"),
+        OutputResult::Processed { replies: 0 }
+    );
     finish(&mut writer);
 }
 
@@ -431,11 +616,14 @@ fn stop_rejects_queued_reply_while_an_already_committed_write_is_blocked() {
         },
         &dir,
     );
-    let committed = cap.feed(b"\x1b[c".to_vec()).unwrap();
+    let committed = cap.feed_at(0, b"\x1b[c".to_vec()).unwrap();
     rx.recv_timeout(Duration::from_secs(2)).unwrap();
-    let queued = cap.feed(b"\x1b[c".to_vec()).unwrap();
+    let queued = cap.feed_at(3, b"\x1b[c".to_vec()).unwrap();
     writer.seal();
-    assert!(matches!(cap.feed(b"\x1b[c".to_vec()), Err(Reject::Sealed)));
+    assert!(matches!(
+        cap.feed_at(0, b"\x1b[c".to_vec()),
+        Err(Reject::Sealed)
+    ));
     release.send(()).unwrap();
     assert_eq!(
         committed.wait(Duration::from_secs(2)).unwrap(),
@@ -469,14 +657,17 @@ fn partial_or_unknown_reply_io_seals_and_does_not_create_a_user_receipt() {
         let dir = tempfile::tempdir().unwrap();
         let (mut writer, mut cap) = start(Fail(partial), &dir);
         assert_eq!(
-            feed(&mut cap, b"\x1b[c"),
+            feed(&mut cap, 0, b"\x1b[c"),
             if partial {
                 OutputResult::Partial
             } else {
                 OutputResult::Unknown
             }
         );
-        assert!(matches!(cap.feed(b"\x1b[c".to_vec()), Err(Reject::Sealed)));
+        assert!(matches!(
+            cap.feed_at(0, b"\x1b[c".to_vec()),
+            Err(Reject::Sealed)
+        ));
         finish(&mut writer);
         assert_eq!(
             Journal::open(&dir.path().join("journal.sqlite"))
@@ -521,7 +712,7 @@ fn stop_between_replies_reports_partial_instead_of_no_effect_rejection() {
         &dir,
     );
     *sealed.lock().unwrap() = Some(writer.handle.sealed.clone());
-    assert_eq!(feed(&mut cap, b"\x1b[c\x1b[c"), OutputResult::Partial);
+    assert_eq!(feed(&mut cap, 0, b"\x1b[c\x1b[c"), OutputResult::Partial);
     finish(&mut writer);
     assert_eq!(&*observed.0.lock().unwrap(), b"\x1b[?6c");
 }
