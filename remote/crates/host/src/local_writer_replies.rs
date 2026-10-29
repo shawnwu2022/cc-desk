@@ -137,6 +137,30 @@ impl CanonicalStart {
 }
 impl ReplyState {
     #[cfg(feature = "experimental-host-owner")]
+    pub(super) fn resize_preflight(
+        &self,
+        rows: u16,
+        columns: u16,
+    ) -> Result<(bool, cc_desk_remote_terminal::TerminalEpochs), Reject> {
+        let ReplyParser::Canonical(core) = &self.parser else {
+            return Err(Reject::Unsupported);
+        };
+        let size = (usize::from(rows), usize::from(columns));
+        let after = core.resize_preflight(size.0, size.1).map_err(|e| match e {
+            cc_desk_remote_terminal::TerminalCoreError::EpochOverflow => Reject::Epoch,
+            _ => Reject::Bounds,
+        })?;
+        Ok((core.dimensions() != size, after))
+    }
+    #[cfg(feature = "experimental-host-owner")]
+    pub(super) fn resize_commit(&mut self, rows: u16, columns: u16) -> Result<(), Reject> {
+        let ReplyParser::Canonical(core) = &mut self.parser else {
+            return Err(Reject::Unsupported);
+        };
+        core.resize(usize::from(rows), usize::from(columns))
+            .map_err(|_| Reject::Continuity)
+    }
+    #[cfg(feature = "experimental-host-owner")]
     pub(super) fn epochs(&self) -> Option<cc_desk_remote_terminal::TerminalEpochs> {
         match &self.parser {
             ReplyParser::Canonical(core) if !core.is_degraded() => Some(core.epochs()),

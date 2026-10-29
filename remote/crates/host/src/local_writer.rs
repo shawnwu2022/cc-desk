@@ -12,6 +12,9 @@ use replies::{HostOutputHandle, OutputRequest, OutputResult, ReplyState};
 #[path = "local_writer_owner.rs"]
 mod owner;
 #[cfg(feature = "experimental-host-owner")]
+#[path = "local_writer_resize.rs"]
+mod resize;
+#[cfg(feature = "experimental-host-owner")]
 #[path = "local_writer_view_gate.rs"]
 mod view_gate;
 #[cfg(feature = "experimental-host-owner")]
@@ -119,6 +122,8 @@ struct Request {
     _credit: Arc<Credit>,
 }
 enum Command {
+    #[cfg(feature = "experimental-host-owner")]
+    Resize(resize::Request),
     Input(Request),
     Output(OutputRequest),
     #[cfg(feature = "experimental-canonical-replies")]
@@ -246,6 +251,8 @@ pub struct LocalWriter {
 }
 #[derive(Default)]
 struct WriterConfig {
+    #[cfg(feature = "experimental-host-owner")]
+    resize: Option<resize::State>,
     replies: Option<ReplyState>,
     #[cfg(feature = "experimental-host-owner")]
     view_gate: Option<view_gate::ViewGate>,
@@ -300,6 +307,8 @@ impl LocalWriter {
             WriterConfig {
                 replies: Some(ReplyState::new(context.clone())),
                 #[cfg(feature = "experimental-host-owner")]
+                resize: None,
+                #[cfg(feature = "experimental-host-owner")]
                 view_gate: None,
                 #[cfg(test)]
                 after_write: None,
@@ -329,6 +338,8 @@ impl LocalWriter {
             key,
             WriterConfig {
                 replies: Some(ReplyState::canonical(context.clone(), start)),
+                #[cfg(feature = "experimental-host-owner")]
+                resize: None,
                 #[cfg(feature = "experimental-host-owner")]
                 view_gate: None,
                 #[cfg(test)]
@@ -382,6 +393,10 @@ impl LocalWriter {
                 #[cfg(feature = "experimental-host-owner")]
                 let mut view_gate = config.view_gate.take();
                 loop {
+                    #[cfg(feature = "experimental-host-owner")]
+                    if view_gate.as_ref().is_some_and(view_gate::ViewGate::resize_expired) {
+                        sealed.store(true,Ordering::Release);
+                    }
                     if sealed.load(Ordering::Acquire) {
                         reject_queued(&rx);
                         break;
@@ -391,7 +406,19 @@ impl LocalWriter {
                         Err(mpsc::RecvTimeoutError::Timeout) => continue,
                         Err(_) => break,
                     };
+                    #[cfg(feature = "experimental-host-owner")]
+                    if view_gate.as_ref().is_some_and(view_gate::ViewGate::resize_expired) {
+                        sealed.store(true, Ordering::Release);
+                        reject_command(command);
+                        reject_queued(&rx);
+                        break;
+                    }
                     let request = match command {
+                        #[cfg(feature = "experimental-host-owner")]
+                        Command::Resize(request) => {
+                            request.process(config.resize.as_mut(), &mut replies, &mut view_gate, &sealed);
+                            continue;
+                        }
                         #[cfg(feature = "experimental-canonical-replies")]
                         Command::Projection(request) => {
                             let result = match &mut replies {
@@ -659,27 +686,32 @@ impl Drop for LocalWriter {
 }
 fn reject_queued(rx: &mpsc::Receiver<Command>) {
     for r in rx.try_iter() {
-        match r {
-            #[cfg(feature = "experimental-host-owner")]
-            Command::Control(r) => r.reject(Reject::Sealed),
-            #[cfg(feature = "experimental-host-owner")]
-            Command::Rebind(r) => r.reject(Reject::Sealed),
-            #[cfg(feature = "experimental-host-owner")]
-            Command::ControlStatus(r) => r.reject(Reject::Sealed),
-            #[cfg(feature = "experimental-host-owner")]
-            Command::ViewAck(r) => {
-                let _ = r.reply.try_send(Err(Reject::Sealed));
-            }
-            #[cfg(feature = "experimental-canonical-replies")]
-            Command::Projection(r) => {
-                let _ = r.reply.try_send(Err(Reject::Sealed));
-            }
-            Command::Input(r) => {
-                let _ = r.reply.try_send(WriteResult::Rejected(Reject::Sealed));
-            }
-            Command::Output(r) => {
-                let _ = r.reply.try_send(OutputResult::Rejected(Reject::Sealed));
-            }
+        reject_command(r);
+    }
+}
+fn reject_command(r: Command) {
+    match r {
+        #[cfg(feature = "experimental-host-owner")]
+        Command::Resize(r) => r.reject(Reject::Sealed),
+        #[cfg(feature = "experimental-host-owner")]
+        Command::Control(r) => r.reject(Reject::Sealed),
+        #[cfg(feature = "experimental-host-owner")]
+        Command::Rebind(r) => r.reject(Reject::Sealed),
+        #[cfg(feature = "experimental-host-owner")]
+        Command::ControlStatus(r) => r.reject(Reject::Sealed),
+        #[cfg(feature = "experimental-host-owner")]
+        Command::ViewAck(r) => {
+            let _ = r.reply.try_send(Err(Reject::Sealed));
+        }
+        #[cfg(feature = "experimental-canonical-replies")]
+        Command::Projection(r) => {
+            let _ = r.reply.try_send(Err(Reject::Sealed));
+        }
+        Command::Input(r) => {
+            let _ = r.reply.try_send(WriteResult::Rejected(Reject::Sealed));
+        }
+        Command::Output(r) => {
+            let _ = r.reply.try_send(OutputResult::Rejected(Reject::Sealed));
         }
     }
 }

@@ -231,13 +231,16 @@ impl ControlState {
     fn sample(&self, scope: &PeerScope) -> Result<u64, Reject> {
         output::sample(self.clock.as_ref(), &self.last_ms, scope)
     }
-    fn eligible(&self, scope: &PeerScope) -> Result<u64, Reject> {
+    pub(super) fn eligible(&self, scope: &PeerScope) -> Result<u64, Reject> {
         self.authorized(scope)?;
         let now = self.sample(scope)?;
         if !scope.is_active() || now >= self.lease_deadline || now >= self.grant_deadline {
             return Err(Reject::Policy);
         }
         Ok(now)
+    }
+    pub(super) fn revoke_windows_for_resize(&mut self) {
+        self.windows.clear();
     }
     pub(super) fn authorized(&self, scope: &PeerScope) -> Result<(), Reject> {
         if self.authority.as_ref().is_some_and(|a| a.check().is_err()) {

@@ -153,6 +153,13 @@ impl PendingViewAck {
     }
 }
 impl PeerViewHandle {
+    pub(super) fn resize_candidate(
+        &self,
+        request: cc_desk_remote_record::lifecycle::Request,
+        budget: Duration,
+    ) -> Result<super::resize::Pending, Reject> {
+        super::resize::enqueue(&self.input, self.control.scope.clone(), request, budget)
+    }
     pub(super) fn device(&self) -> [u8; 32] {
         self.control.scope.device
     }
@@ -270,6 +277,18 @@ impl LocalWriter {
         key: DigestKey,
         start: ControlStart,
     ) -> Result<(Self, HostOutputHandle, PeerViewHandle), Reject> {
+        Self::start_guarded_with(journal, stdin, target, device, epoch, key, (start, None))
+    }
+    fn start_guarded_with(
+        journal: Journal,
+        stdin: impl Write + Send + 'static,
+        target: Target,
+        device: [u8; 32],
+        epoch: u64,
+        key: DigestKey,
+        configured: (ControlStart, Option<super::resize::State>),
+    ) -> Result<(Self, HostOutputHandle, PeerViewHandle), Reject> {
+        let (start, resize) = configured;
         let mut policy = start
             .policy
             .map(|(clock, grant)| control::ControlState::new(clock, grant))
@@ -304,6 +323,7 @@ impl LocalWriter {
             WriterConfig {
                 replies: Some(ReplyState::canonical(context.clone(), start.terminal)),
                 view_gate: Some(gate),
+                resize,
                 #[cfg(test)]
                 after_write: None,
             },
@@ -325,8 +345,57 @@ pub(super) struct ViewGate {
     current: Option<Arc<IssuedView>>,
     accepted: bool,
     control: Option<control::ControlState>,
+    pub(super) resize_feedback: Option<(std::time::Instant, Arc<AtomicBool>)>,
 }
 impl ViewGate {
+    pub(super) fn resize_expired(&self) -> bool {
+        self.resize_feedback
+            .as_ref()
+            .is_some_and(|(end, observed)| {
+                !observed.load(Ordering::Acquire) && std::time::Instant::now() >= *end
+            })
+    }
+    pub(super) fn resize_ready(&self) -> Result<(), Reject> {
+        if self.resize_expired() {
+            self.scope.close_writer();
+            return Err(Reject::Sealed);
+        }
+        if self
+            .resize_feedback
+            .as_ref()
+            .is_some_and(|(_, observed)| !observed.load(Ordering::Acquire))
+        {
+            return Err(Reject::Pending);
+        }
+        Ok(())
+    }
+    pub(super) fn resize_state(
+        &self,
+        scope: &Arc<PeerScope>,
+        epochs: TerminalEpochs,
+    ) -> Result<cc_desk_remote_record::lifecycle::State, Reject> {
+        if !Arc::ptr_eq(scope, &self.scope) || !scope.is_active() {
+            return Err(Reject::Policy);
+        }
+        let control = self.control.as_ref().ok_or(Reject::Unsupported)?;
+        control.eligible(scope)?;
+        Ok(cc_desk_remote_record::lifecycle::State {
+            generation: self.scope.target.generation,
+            fence: control.status(scope).fence,
+            mode: epochs.mode_epoch,
+            dimension: epochs.dimension_epoch,
+            sync: self.next_sync,
+        })
+    }
+    pub(super) fn invalidate_for_resize(&mut self) {
+        if let Some(old) = self.current.take() {
+            old.phase.store(REVOKED, Ordering::Release);
+        }
+        self.accepted = false;
+        if let Some(control) = &mut self.control {
+            control.revoke_windows_for_resize();
+        }
+    }
     pub(super) fn device(&self) -> &[u8; 32] {
         &self.scope.device
     }
@@ -364,6 +433,7 @@ impl ViewGate {
         request: &Request,
         replies: Option<&ReplyState>,
     ) -> Result<(), Reject> {
+        self.resize_ready()?;
         if request
             .source_scope
             .as_ref()
@@ -389,6 +459,7 @@ impl ViewGate {
             current: None,
             accepted: false,
             control: None,
+            resize_feedback: None,
         }
     }
     pub(super) fn issue(
@@ -396,6 +467,7 @@ impl ViewGate {
         mut frame: projection::CapturedProjection,
         scope: &Arc<PeerScope>,
     ) -> Result<projection::CapturedProjection, Reject> {
+        self.resize_ready()?;
         if !Arc::ptr_eq(scope, &self.scope)
             || !scope.is_active()
             || frame.target() != &scope.target
@@ -450,6 +522,7 @@ impl ViewGate {
         ack: &Ack,
         epochs: TerminalEpochs,
     ) -> Result<SyncedView, Reject> {
+        self.resize_ready()?;
         let record = self.current.as_ref().ok_or(Reject::Sync)?;
         if !Arc::ptr_eq(scope, &self.scope)
             || !scope.is_active()
@@ -475,6 +548,7 @@ impl ViewGate {
         device: &[u8; 32],
         epochs: TerminalEpochs,
     ) -> Result<(), Reject> {
+        self.resize_ready()?;
         let current = self.current.as_ref().ok_or(Reject::Sync)?;
         if !self.accepted
             || !Arc::ptr_eq(&view.record, current)
@@ -495,6 +569,9 @@ impl Drop for ViewGate {
 }
 #[path = "local_writer_view_delivery.rs"]
 mod delivery;
+#[cfg(test)]
+#[path = "local_writer_resize_tests.rs"]
+mod resize_tests;
 #[cfg(all(test, windows))]
 #[path = "local_writer_view_gate_tests.rs"]
 pub(super) mod tests;

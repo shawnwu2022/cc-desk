@@ -306,6 +306,12 @@ mod version_tests {
             } else {
                 core.epochs.dimension_epoch = u64::MAX;
             }
+            assert_eq!(
+                core.resize_preflight(4, 12),
+                Err(TerminalCoreError::EpochOverflow)
+            );
+            assert_eq!(core.dimensions(), (3, 10));
+            assert!(!core.is_degraded());
             assert_eq!(core.resize(4, 12), Err(TerminalCoreError::EpochOverflow));
             assert_eq!(core.term.screen_lines(), 3);
             assert_eq!(core.term.columns(), 10);

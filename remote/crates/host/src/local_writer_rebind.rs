@@ -124,6 +124,7 @@ impl RebindRequest {
     }
     pub(in crate::local_writer) fn process(self, gate: &mut ViewGate, journal: &Journal) {
         let result = (|| {
+            gate.resize_ready()?;
             if self.input.target.as_ref() != &gate.scope.target {
                 return Err(Reject::Target);
             }

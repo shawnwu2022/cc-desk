@@ -262,6 +262,32 @@ impl TerminalCore {
         self.degraded = None;
         Ok(())
     }
+    /// Side-effect-free preflight; callers must serialize it with resize/feed.
+    pub fn resize_preflight(
+        &self,
+        rows: usize,
+        columns: usize,
+    ) -> Result<TerminalEpochs, TerminalCoreError> {
+        if self.is_degraded() {
+            return Err(TerminalCoreError::Degraded);
+        }
+        validate_size(rows, columns)?;
+        let mut after = self.epochs;
+        if self.dimensions() != (rows, columns) {
+            after.dimension_epoch = after
+                .dimension_epoch
+                .checked_add(1)
+                .ok_or(TerminalCoreError::EpochOverflow)?;
+            after.structure_epoch = after
+                .structure_epoch
+                .checked_add(1)
+                .ok_or(TerminalCoreError::EpochOverflow)?;
+        }
+        Ok(after)
+    }
+    pub fn dimensions(&self) -> (usize, usize) {
+        (self.term.screen_lines(), self.term.columns())
+    }
     pub fn epochs(&self) -> TerminalEpochs {
         self.epochs
     }
