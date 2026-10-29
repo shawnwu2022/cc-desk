@@ -106,6 +106,7 @@ impl Rate {
 pub(super) struct ReplyState {
     context: Arc<()>,
     next_offset: u64,
+    revision: u64,
     parser: ReplyParser,
     rate: Rate,
 }
@@ -115,12 +116,22 @@ enum ReplyParser {
     Canonical(Box<cc_desk_remote_terminal::TerminalCore>),
 }
 #[cfg(feature = "experimental-canonical-replies")]
-pub(crate) struct CanonicalStart(Box<cc_desk_remote_terminal::TerminalCore>);
+pub(crate) struct CanonicalStart {
+    core: Box<cc_desk_remote_terminal::TerminalCore>,
+    pub(super) budget: super::projection::HostViewBudget,
+}
 #[cfg(feature = "experimental-canonical-replies")]
 impl CanonicalStart {
-    pub(crate) fn new(rows: usize, columns: usize) -> Result<Self, Reject> {
+    pub(crate) fn new(
+        rows: usize,
+        columns: usize,
+        budget: &super::HostViewBudget,
+    ) -> Result<Self, Reject> {
         cc_desk_remote_terminal::TerminalCore::new_with_queries(rows, columns)
-            .map(|core| Self(Box::new(core)))
+            .map(|core| Self {
+                core: Box::new(core),
+                budget: budget.clone(),
+            })
             .map_err(|_| Reject::Bounds)
     }
 }
@@ -129,6 +140,7 @@ impl ReplyState {
         Self {
             context,
             next_offset: 0,
+            revision: 0,
             parser: ReplyParser::Static(Box::default()),
             rate: Rate::default(),
         }
@@ -138,7 +150,8 @@ impl ReplyState {
         Self {
             context,
             next_offset: 0,
-            parser: ReplyParser::Canonical(start.0),
+            revision: 0,
+            parser: ReplyParser::Canonical(start.core),
             rate: Rate::default(),
         }
     }
@@ -162,6 +175,10 @@ impl ReplyState {
             sealed.store(true, Ordering::Release);
             return OutputResult::Rejected(Reject::Bounds);
         };
+        let Some(revision) = self.revision.checked_add(1) else {
+            sealed.store(true, Ordering::Release);
+            return OutputResult::Rejected(Reject::Bounds);
+        };
         let result = match &mut self.parser {
             ReplyParser::Static(parser) => {
                 process_static(parser, &mut self.rate, request, stdin, sealed)
@@ -173,8 +190,42 @@ impl ReplyState {
         };
         if matches!(result, OutputResult::Processed { .. }) {
             self.next_offset = end_offset;
+            self.revision = revision;
         }
         result
+    }
+    #[cfg(feature = "experimental-canonical-replies")]
+    pub(super) fn capture(
+        &mut self,
+        request: &super::projection::ProjectionRequest,
+        target: Arc<Target>,
+        epoch: u64,
+        sealed: &AtomicBool,
+    ) -> Result<super::projection::CapturedProjection, Reject> {
+        if !Arc::ptr_eq(&request.context, &self.context) {
+            return Err(Reject::Epoch);
+        }
+        if sealed
+            .compare_exchange(false, false, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return Err(Reject::Sealed);
+        }
+        let ReplyParser::Canonical(core) = &mut self.parser else {
+            return Err(Reject::Unsupported);
+        };
+        let view = core.semantic_snapshot().map_err(|_| {
+            sealed.store(true, Ordering::Release);
+            Reject::Unsupported
+        })?;
+        Ok(super::projection::CapturedProjection::new(
+            request,
+            target,
+            epoch,
+            self.next_offset,
+            self.revision,
+            view,
+        ))
     }
 }
 fn process_static(
@@ -300,6 +351,40 @@ fn process_canonical(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "experimental-canonical-replies")]
+    #[test]
+    fn projection_semantic_fault_seals_the_actual_worker_without_a_valid_frame() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut start = CanonicalStart::new(3, 10, &super::super::HostViewBudget::new()).unwrap();
+        assert!(start.core.feed(b"\x1b]52;c;x\x07").is_err());
+        let target = Target {
+            host: [1; 32],
+            session: [2; 16],
+            run: "PUBLIC_TEST_ONLY_CAPTURE".into(),
+            generation: 1,
+            incarnation: 1,
+        };
+        let (mut writer, _) = LocalWriter::start_canonical_terminal(
+            Journal::open(&dir.path().join("journal.sqlite")).unwrap(),
+            Vec::<u8>::new(),
+            target,
+            [3; 32],
+            1,
+            DigestKey::from_backend_bytes([0x5a; 32]),
+            start,
+        )
+        .unwrap();
+        assert!(matches!(
+            writer.capture().unwrap().wait(Duration::from_secs(2)),
+            Ok(Err(Reject::Unsupported))
+        ));
+        assert!(writer.handle.sealed.load(Ordering::Acquire));
+        let end = Instant::now() + Duration::from_secs(2);
+        while !writer.try_join().unwrap() {
+            assert!(Instant::now() < end);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
     #[test]
     fn output_offset_overflow_seals_before_parsing_or_native_io() {
         let context = Arc::new(());
@@ -326,6 +411,30 @@ mod tests {
             state.process(&request, &mut observed, &sealed),
             OutputResult::Rejected(Reject::Sealed)
         );
+    }
+    #[test]
+    fn projection_revision_overflow_cannot_parse_or_write_another_batch() {
+        let context = Arc::new(());
+        let mut state = ReplyState::new(context.clone());
+        state.revision = u64::MAX;
+        let (reply, _) = mpsc::sync_channel(1);
+        let request = OutputRequest {
+            context,
+            offset: 0,
+            bytes: b"\x1b[c".as_slice().into(),
+            reply,
+            _credit: Arc::new(Credits::default()).reserve().unwrap(),
+        };
+        let sealed = AtomicBool::new(false);
+        let mut observed = Vec::new();
+        assert_eq!(
+            state.process(&request, &mut observed, &sealed),
+            OutputResult::Rejected(Reject::Bounds)
+        );
+        assert!(sealed.load(Ordering::Acquire));
+        assert!(observed.is_empty());
+        assert_eq!(state.next_offset, 0);
+        assert_eq!(state.revision, u64::MAX);
     }
     #[test]
     fn reply_rate_does_not_reset_early_or_with_a_regressed_sample() {

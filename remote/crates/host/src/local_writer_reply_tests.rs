@@ -1,5 +1,8 @@
 use super::*;
 use std::{io, sync::Mutex, time::Instant};
+#[cfg(feature = "experimental-canonical-replies")]
+#[path = "local_writer_projection_tests.rs"]
+mod projection_tests;
 
 #[test]
 fn output_chunk_submission_requires_an_exclusive_producer_borrow() {
@@ -154,7 +157,7 @@ fn output_offsets_canonical_replay_does_not_apply_the_prefix_or_reply_twice() {
         operation().device,
         9,
         DigestKey::from_backend_bytes([0x5a; 32]),
-        CanonicalStart::new(3, 10).unwrap(),
+        CanonicalStart::new(3, 10, &HostViewBudget::new()).unwrap(),
     )
     .unwrap();
     let bytes = b"ab\x1b[6n";
@@ -183,7 +186,7 @@ fn canonical_prefix_replies_use_the_same_writer_and_no_user_journal_operation() 
         operation().device,
         9,
         DigestKey::from_backend_bytes([0x5a; 32]),
-        CanonicalStart::new(3, 10).unwrap(),
+        CanonicalStart::new(3, 10, &HostViewBudget::new()).unwrap(),
     )
     .unwrap();
     assert_eq!(
@@ -199,8 +202,14 @@ fn canonical_prefix_replies_use_the_same_writer_and_no_user_journal_operation() 
             .unwrap(),
         ReceiptLookup::Missing
     );
-    assert!(matches!(CanonicalStart::new(0, 10), Err(Reject::Bounds)));
-    assert!(matches!(CanonicalStart::new(3, 1), Err(Reject::Bounds)));
+    assert!(matches!(
+        CanonicalStart::new(0, 10, &HostViewBudget::new()),
+        Err(Reject::Bounds)
+    ));
+    assert!(matches!(
+        CanonicalStart::new(3, 1, &HostViewBudget::new()),
+        Err(Reject::Bounds)
+    ));
 }
 
 #[cfg(feature = "experimental-canonical-replies")]
@@ -217,7 +226,7 @@ fn canonical_bad_tail_and_rate_overflow_do_not_emit_unvalidated_replies() {
             operation().device,
             9,
             DigestKey::from_backend_bytes([0x5a; 32]),
-            CanonicalStart::new(3, 10).unwrap(),
+            CanonicalStart::new(3, 10, &HostViewBudget::new()).unwrap(),
         )
         .unwrap();
         if flood {
@@ -281,7 +290,7 @@ fn canonical_stale_activation_and_stop_between_queries_never_reopen_the_writer()
         operation().device,
         9,
         DigestKey::from_backend_bytes([0x5a; 32]),
-        CanonicalStart::new(3, 10).unwrap(),
+        CanonicalStart::new(3, 10, &HostViewBudget::new()).unwrap(),
     )
     .unwrap();
     *sealed.lock().unwrap() = Some(writer.handle.sealed.clone());
@@ -338,7 +347,7 @@ fn canonical_partial_or_unknown_io_remains_sealed_without_user_receipts() {
             operation().device,
             9,
             DigestKey::from_backend_bytes([0x5a; 32]),
-            CanonicalStart::new(3, 10).unwrap(),
+            CanonicalStart::new(3, 10, &HostViewBudget::new()).unwrap(),
         )
         .unwrap();
         assert_eq!(

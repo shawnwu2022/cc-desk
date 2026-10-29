@@ -178,7 +178,7 @@ fn actual_owned_pty_writer(canonical: bool) {
             key().device,
             9,
             DigestKey::from_backend_bytes([0x5a; 32]),
-            CanonicalStart::new(24, 80).unwrap(),
+            CanonicalStart::new(24, 80, &HostViewBudget::new()).unwrap(),
         )
     } else {
         LocalWriter::start_terminal(
@@ -270,6 +270,16 @@ fn actual_owned_pty_writer(canonical: bool) {
     std::thread::sleep(Duration::from_millis(25));
     let effect = std::fs::read(&marker).ok();
     let root_before_stop = run.try_wait_root().unwrap();
+    #[cfg(feature = "experimental-canonical-replies")]
+    let captured = if canonical {
+        Some(
+            writer
+                .capture()
+                .map(|pending| pending.wait(Duration::from_secs(1))),
+        )
+    } else {
+        None
+    };
     writer.seal();
     assert!(matches!(
         handle.submit(next(2), 9, b"PUBLIC_TEST_ONLY\r".to_vec()),
@@ -288,6 +298,18 @@ fn actual_owned_pty_writer(canonical: bool) {
     }
     reader.join().unwrap();
     assert!(Instant::now() < end);
+    #[cfg(feature = "experimental-canonical-replies")]
+    if let Some(result) = captured {
+        let captured = result.unwrap().unwrap().unwrap();
+        assert_eq!(captured.target(), &key().target());
+        assert_eq!(captured.writer_epoch(), 9);
+        assert_eq!(
+            (captured.view().rows(), captured.view().columns()),
+            (24, 80)
+        );
+        assert!(captured.through_offset() > 0 && captured.through_offset() <= output.len() as u64);
+        assert!(captured.revision() > 0);
+    }
     assert_eq!(
         refusal,
         None,
@@ -398,6 +420,8 @@ fn unit_join_panic_is_a_sticky_terminal_result() {
         handle,
         worker: Some(std::thread::spawn(|| panic!("TEST_ONLY_JOIN_CLASSIFIER"))),
         terminal: None,
+        #[cfg(feature = "experimental-canonical-replies")]
+        projection: None,
     };
     let end = Instant::now() + Duration::from_secs(1);
     loop {

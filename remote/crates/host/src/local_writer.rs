@@ -5,6 +5,11 @@ mod replies;
 #[cfg(feature = "experimental-canonical-replies")]
 use replies::CanonicalStart;
 use replies::{HostOutputHandle, OutputRequest, OutputResult, ReplyState};
+#[cfg(feature = "experimental-canonical-replies")]
+#[path = "local_writer_projection.rs"]
+mod projection;
+#[cfg(feature = "experimental-canonical-replies")]
+use projection::{HostViewBudget, PendingProjection, ProjectionHandle, ProjectionRequest};
 use std::{
     io::Write,
     sync::{
@@ -94,6 +99,8 @@ struct Request {
 enum Command {
     Input(Request),
     Output(OutputRequest),
+    #[cfg(feature = "experimental-canonical-replies")]
+    Projection(ProjectionRequest),
 }
 #[derive(Clone)]
 pub struct LocalInputHandle {
@@ -184,6 +191,8 @@ pub struct LocalWriter {
     handle: LocalInputHandle,
     worker: Option<JoinHandle<()>>,
     terminal: Option<Result<(), Reject>>,
+    #[cfg(feature = "experimental-canonical-replies")]
+    projection: Option<ProjectionHandle>,
 }
 #[derive(Default)]
 struct WriterConfig {
@@ -255,8 +264,9 @@ impl LocalWriter {
         key: DigestKey,
         start: CanonicalStart,
     ) -> Result<(Self, HostOutputHandle), Reject> {
+        let budget = start.budget.clone();
         let context = Arc::new(());
-        let writer = Self::start_with(
+        let mut writer = Self::start_with(
             journal,
             stdin,
             target,
@@ -269,6 +279,11 @@ impl LocalWriter {
                 after_write: None,
             },
         )?;
+        writer.projection = Some(ProjectionHandle::new(
+            &writer.handle,
+            context.clone(),
+            budget,
+        ));
         let output = HostOutputHandle::new(&writer.handle, context);
         Ok((writer, output))
     }
@@ -314,6 +329,17 @@ impl LocalWriter {
                         Err(_) => break,
                     };
                     let request = match command {
+                        #[cfg(feature = "experimental-canonical-replies")]
+                        Command::Projection(request) => {
+                            let result = match &mut replies {
+                                Some(state) => {
+                                    state.capture(&request, target.clone(), epoch, &sealed)
+                                }
+                                None => Err(Reject::Unsupported),
+                            };
+                            let _ = request.reply.try_send(result);
+                            continue;
+                        }
                         Command::Input(request) => request,
                         Command::Output(request) => {
                             let result = match &mut replies {
@@ -381,10 +407,19 @@ impl LocalWriter {
             handle,
             worker: Some(worker),
             terminal: None,
+            #[cfg(feature = "experimental-canonical-replies")]
+            projection: None,
         })
     }
     pub fn handle(&self) -> LocalInputHandle {
         self.handle.clone()
+    }
+    #[cfg(feature = "experimental-canonical-replies")]
+    pub(crate) fn capture(&self) -> Result<PendingProjection, Reject> {
+        self.projection
+            .as_ref()
+            .ok_or(Reject::Unsupported)?
+            .capture()
     }
     /// 仅封存新提交/请求停止；不声称当前 write 已结束或允许换 generation。
     pub fn seal(&self) {
@@ -415,6 +450,10 @@ impl Drop for LocalWriter {
 fn reject_queued(rx: &mpsc::Receiver<Command>) {
     for r in rx.try_iter() {
         match r {
+            #[cfg(feature = "experimental-canonical-replies")]
+            Command::Projection(r) => {
+                let _ = r.reply.try_send(Err(Reject::Sealed));
+            }
             Command::Input(r) => {
                 let _ = r.reply.try_send(WriteResult::Rejected(Reject::Sealed));
             }

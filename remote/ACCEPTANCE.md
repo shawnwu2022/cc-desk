@@ -1,8 +1,29 @@
 # Remote integration evidence ledger
 
-## Bounded semantic-view / safety checkpoint (2026-10-29)
+## Same-writer projection-capture checkpoint (2026-10-29)
 
-Current final workspace230 passed,0 failed,2 ignored; strict Clippy/fmt pass.
+The final current component workspace passes238 tests,0 failed,2 ignored; strict
+Clippy passes. Six new capture cases plus revision-overflow and real-worker view
+fault cases cover ordering/exact offset,target,retained frame credits,shared two-
+session budget,stale context,lost feedback,timeout/queued seal and fault freezing.
+The real ConPTY case now captures a view from that SAME worker/Core before stop,
+and verifies metadata only after root stop/EOF/join. It is an applied output prefix,
+not a claim that every byte in the final EOF tail was projected.
+
+No implicit per-session snapshot pool remains: CanonicalStart requires an explicit
+shared HostViewBudget, with two leases and<=8MiB fixed-view logical allocation per
+pool. The future unique HostOwner must wire one pool across its sessions. Pending
+and retained results hold credit; a wait timeout does not cancel. Pre-seal committed
+capture may return historical read-only state later; queued uncommitted capture
+refuses. Local batch revision/writer_epoch/raw offset are not mode/dimension/sync
+epochs,client ACK,input eligibility or authenticated remote disclosure authority.
+
+Unique HostOwner,full modes/structural versions,wire chunks,reducer/renderer,full
+E05/E09,interactive AI,Win11/mobile,capacity and all existing OPEN gates remain.
+
+## Historical bounded semantic-view / safety checkpoint (2026-10-29,c8f0273)
+
+That final workspace230 passed,0 failed,2 ignored; strict Clippy/fmt pass.
 The immutable active-grid view copies at most24000 finite cells with Host wide/
 spacer/wrap roles, styles/colors,cursor and buffer, with payload-redacted Debug.
 It refuses unmodeled state and freezes instead of presenting a valid-looking stale

@@ -77,9 +77,11 @@ general size API is separate; canonical construction independently requires2 col
 
 This first view is not an emulator recovery checkpoint, revision/dimension/mode
 epoch, Host sync/barrier or wire DTO. Both buffers and parser continuation stay on
-Host. Same-writer offset/revision capture, two-snapshot memory credits,128-cell/
-32KiB encoding,reducer/renderer and input eligibility are subsequent integration
-work; this API alone does not complete E05 or allow remote control.
+Host. The private Host writer now captures this view at its serialized offset/
+revision barrier with an explicit shared two-snapshot budget; see Host README.
+Unique HostOwner wiring,128-cell/32KiB encoding,reducer/renderer,mode/dimension/
+sync authority and input eligibility remain subsequent integration work; this API
+alone does not complete E05 or allow remote control.
 
 The experimental input gate currently admits printable non-combining Unicode,
 CR/LF, cursor-home CSI, bounded basic SGR colors/flags/reset, and exact alternate-buffer

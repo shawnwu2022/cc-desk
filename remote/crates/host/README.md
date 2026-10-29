@@ -160,6 +160,35 @@ Win32 key-event compatibility. An explicit ignored installed-Codex `--help` test
 uses a reviewed executable hash and fresh empty private profile with no account
 credentials; it qualifies offline help/startup only, never an AI session.
 
+### Serialized read-only projection capture
+
+CanonicalStart additionally requires an explicit shared HostViewBudget. The future
+unique HostOwner must create one pool and pass it to all session factories; it is
+resource accounting, not Host identity/authorization. Each shared pool admits two
+snapshot leases across writers. The fixed-cell view is statically bounded below
+4MiB logical allocation/frame, hence8MiB/pool; this is not a process RSS claim.
+Requests,pending feedback and consumed-but-retained frames hold the SAME credit
+until their last owner drops. Queue refusal/closed delivery returns its lease.
+
+The canonical factory alone mints a private capture handle. Command::Projection
+uses the same bounded queue and worker as output and input. It checks activation
+and seal at its atomic commit point, then copies the SAME Core at that barrier with
+the worker's real applied-through native offset,target,writer_epoch and local batch
+revision. Only a completely Processed output batch increments revision; capture
+itself does not. Overflow freezes before parsing/IO. No second parser or user
+operation/receipt/fsync pair is introduced. A semantic-view failure seals the worker.
+
+A wait timeout is Uncertain, not cancellation. A capture committed before seal can
+return an earlier historical read-only view after seal; one still queued at seal
+is refused. Neither result grants input or permission to send data to a remote peer.
+Actual Win10 fixed-PTY tests capture a valid output prefix before stopping and then
+observe root exit/EOF/join. The prefix is not represented as the entire EOF tail.
+
+This capture has no mode_epoch,dimension_epoch or Host sync/barrier/ACK authority.
+writer_epoch is the existing local writer scope, not a substitute for those fields.
+Unique HostOwner budget wiring,authenticated observer transport,128-cell/32KiB
+encoding,revision reducer/renderer,full E05 and the E09 actor remain required.
+
 The internal schema is now version2. New databases persist independent admission and
 settled floors plus the latest bounded ACK witness. Existing version1 databases are
 rejected read-only before mutable PRAGMAs; there is no silent migration or deletion.
