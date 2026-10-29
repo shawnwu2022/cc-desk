@@ -1,5 +1,43 @@
 # Host journal: first E07 component, not a running remote Host
 
+## Default-off E09 writer resource owner
+
+`experimental-host-owner` adds a private `WriterHostOwner` over the actual
+canonical LocalWriter factory. One process-lifetime admission covers all its
+factories and their shared two-view budget. IO custody and retained view credits
+hold that activation; dropping/sealing the owner cannot create a new owner while
+an old write or view is still live (`Busy`). Once those references are gone,
+reconstruction remains permanently `Closed` in that process, including a changed
+Host/incarnation argument. Dropping the owner never resets tombstones/admission
+capacity for another owner. A new Host process and its separately proven locked
+startup/enrollment contract are required; no automatic restart is performed.
+A thread join is checked nonblocking; panic
+or a still-running write is never reported as a completed retirement.
+
+Admission checks exact Host/incarnation and unique session ID, bounds active
+writers to12 and lifetime session IDs to4096 without eviction. Pending input
+and output remain on the existing serialized IO/journal path. Retired session
+IDs cannot be reused within that process even at a higher generation until a
+separate true runtime retirement protocol exists. Exhaustion refuses admission; it does not rotate
+namespaces, restart tasks or erase journal uncertainty. These are bounded
+resource prerequisites, not a measured concurrency/capacity guarantee.
+
+This owner does not own the Job/reader, persist startup identity, enroll a peer,
+validate a grant, accept a projection ACK or issue an input lease. It does not
+make an IO join into whole process-tree/old-reader retirement evidence. Those
+E08/E09 integration and policy gates remain OPEN. Backend raw identifiers and
+digest fixture bytes are not endpoint credentials or authorization. No public
+remote/session factory, listener or ordinary desktop migration is enabled.
+The singleton constrains owner-managed canonical writers; pre-existing static
+and non-owner local qualification paths are not globally enrolled by this flag.
+
+Tests exercise held frames, an actually blocked Write, finite slot refusal,
+cross-target admission and a contained real self-owned pipe: duplicate operation
+receipts cause one fixture effect, then sealed handles reject further input.
+The fixed pipe fixture is not an AI CLI or PTY/phone qualification.
+
+## Journal and existing local writer boundary
+
 This backend-only crate stores bounded operation metadata, never terminal input,
 argv/env, session titles or model output. It has no listener, endpoint enrollment,
 grant validation, automatic retry or desktop integration. The journal owns no PTY;

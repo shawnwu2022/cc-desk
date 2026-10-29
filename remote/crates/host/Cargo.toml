@@ -8,6 +8,7 @@ publish.workspace = true
 default = []
 experimental-local-writer = ["dep:cc-desk-remote-terminal"]
 experimental-canonical-replies = ["experimental-local-writer", "cc-desk-remote-terminal/experimental-emulator", "dep:cc-desk-remote-record"]
+experimental-host-owner = ["experimental-canonical-replies"]
 
 [dependencies]
 cc-desk-remote-record = { path = "../../../protocol/remote/inner/v1", optional = true }

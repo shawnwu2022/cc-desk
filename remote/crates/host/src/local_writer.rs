@@ -5,6 +5,9 @@ mod replies;
 #[cfg(feature = "experimental-canonical-replies")]
 use replies::CanonicalStart;
 use replies::{HostOutputHandle, OutputRequest, OutputResult, ReplyState};
+#[cfg(feature = "experimental-host-owner")]
+#[path = "local_writer_owner.rs"]
+mod owner;
 #[cfg(feature = "experimental-canonical-replies")]
 #[path = "local_writer_projection.rs"]
 mod projection;
@@ -255,7 +258,7 @@ impl LocalWriter {
         Ok((writer, output))
     }
     #[cfg(feature = "experimental-canonical-replies")]
-    pub(crate) fn start_canonical_terminal(
+    fn start_canonical_terminal(
         journal: Journal,
         stdin: impl Write + Send + 'static,
         target: Target,

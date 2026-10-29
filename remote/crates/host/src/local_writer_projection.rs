@@ -13,14 +13,24 @@ const _: () = assert!(
 #[derive(Default)]
 struct ViewCredits {
     used: AtomicUsize,
+    #[cfg(feature = "experimental-host-owner")]
+    _owner: Option<Arc<owner::OwnerActivation>>,
 }
 /// Created once by a trusted Host owner and shared across its session factories.
 /// Resource accounting only; this is not a Host identity or authorization token.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub(crate) struct HostViewBudget(Arc<ViewCredits>);
 impl HostViewBudget {
+    #[cfg(test)]
     pub(crate) fn new() -> Self {
-        Self::default()
+        Self(Arc::new(ViewCredits::default()))
+    }
+    #[cfg(feature = "experimental-host-owner")]
+    pub(super) fn for_owner(owner: Arc<owner::OwnerActivation>) -> Self {
+        Self(Arc::new(ViewCredits {
+            used: AtomicUsize::new(0),
+            _owner: Some(owner),
+        }))
     }
 }
 struct ViewCredit(Arc<ViewCredits>);

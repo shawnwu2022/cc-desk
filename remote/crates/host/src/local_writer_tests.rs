@@ -118,6 +118,71 @@ fn actual_owned_pipe_is_committed_through_durable_single_writer() {
     let exit = run.stop(Instant::now() + Duration::from_secs(2)).unwrap();
     assert_ne!(exit.exit_code, 90);
 }
+#[cfg(feature = "experimental-host-owner")]
+#[test]
+fn actual_owner_factory_pipe_deduplicates_receipt_and_retires_writer() {
+    if !supervision::run("actual_owner_factory_pipe_deduplicates_receipt_and_retires_writer") {
+        return;
+    }
+    use super::owner::{OwnerError, SessionStart, WriterHostOwner};
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("public-owner-pipe-effects");
+    let mut run = fixture(&marker);
+    let mut owner = WriterHostOwner::new([1; 32], 4).unwrap();
+    let started = owner
+        .start(
+            Journal::open(&dir.path().join("journal.sqlite")).unwrap(),
+            run.take_stdin().unwrap(),
+            SessionStart {
+                target: key().target(),
+                device: key().device,
+                writer_epoch: 9,
+                key: DigestKey::from_backend_bytes([0x5a; 32]),
+                rows: 3,
+                columns: 10,
+            },
+        )
+        .unwrap();
+    assert!(matches!(
+        WriterHostOwner::new([1; 32], 4),
+        Err(OwnerError::Busy)
+    ));
+    for _ in 0..2 {
+        assert!(matches!(
+            started
+                .input
+                .submit(key(), 9, b"PUBLIC_TEST_ONLY\n".to_vec())
+                .unwrap()
+                .wait(Duration::from_secs(2))
+                .unwrap(),
+            WriteResult::Receipt(ReceiptEnvelope {
+                outcome: Outcome::HostWritten,
+                receipt_proof: Some(_),
+                ..
+            })
+        ));
+    }
+    effects(&marker, 1);
+    assert_eq!(std::fs::read(&marker).unwrap().len(), 1);
+    owner.seal(&key().target()).unwrap();
+    let end = Instant::now() + Duration::from_secs(2);
+    while !owner.try_reap(&key().target()).unwrap() {
+        assert!(Instant::now() < end);
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(matches!(
+        started.input.submit(next(2), 9, b"late\n".to_vec()),
+        Err(Reject::Sealed)
+    ));
+    let exit = run.stop(Instant::now() + Duration::from_secs(2)).unwrap();
+    assert_ne!(exit.exit_code, 90);
+    assert_eq!(std::fs::read(&marker).unwrap().len(), 1);
+    drop(owner);
+    assert!(matches!(
+        WriterHostOwner::new([1; 32], 4),
+        Err(OwnerError::Closed)
+    ));
+}
 fn next(sequence: u64) -> OperationKey {
     let mut k = key();
     k.sequence = sequence;
