@@ -29,6 +29,19 @@ Real CLI, a production Host actor, renderer/snapshot consistency, native persist
 keys/authorization, mobile signing/background and multi-Host/capacity/operations
 gates remain OPEN. No publication, push or protected-main change occurred.
 
+### Single-owner split journal follow-up (2026-10-29)
+
+An actual SQLite regression first reproduced a second cooperating Journal owner
+being admitted (RED). The reviewed follow-up holds a checked per-directory owner
+lease before database creation, and carries it through an uncloneable prepare token
+while database transactions are released around the effect. Unknown is not replayed.
+Host35/35 and current all-features workspace147/147 pass with the same explicit
+task-owned process-local TEMP/TMP condition. Two 8.3 short-alias subcases could not
+run because this fixture volume did not provide aliases; they remain OPEN even
+though their containing test returned ok. These are real temporary SQLite tests,
+not a production actor, PTY integration or global-lock-freedom proof for run_once.
+The default-root OS5 remains OPEN and is not a tool-approval denial.
+
 Source: reviewed v0.5 roadmap E01/E02/E11; base68cc31b. Eight isolated experiments
 are supporting evidence only. New product crates are incrementally integrated here;
 desktop startup stays unchanged/default-off. No SDK chat replacement or system VPN.

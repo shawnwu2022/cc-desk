@@ -1,12 +1,24 @@
 //! Windows local metadata containment. Backend directory must be private/trusted;
 //! this is not a sandbox against another process running as the Host's user.
 use crate::journal::JournalError;
-use std::{fs::File, path::Path};
+use std::{fs::File, path::Path, sync::Arc};
+#[cfg(windows)]
+const OWNER_NAME: &str = ".cc-desk-journal.owner";
+pub(crate) struct Ownership {
+    _directories: Vec<File>,
+    _lock: File,
+}
 pub struct Guards {
     _files: Vec<File>,
+    owner: Arc<Ownership>,
+}
+impl Guards {
+    pub(crate) fn ownership(&self) -> Arc<Ownership> {
+        self.owner.clone()
+    }
 }
 #[cfg(windows)]
-fn open_directory(p: &Path) -> std::io::Result<File> {
+fn open_attributes(p: &Path) -> std::io::Result<File> {
     use std::os::windows::{ffi::OsStrExt, io::FromRawHandle};
     use windows::{
         Win32::Storage::FileSystem::{
@@ -47,7 +59,7 @@ mod diagnostics {
             if i == 0 || i == components.len() - 1 {
                 continue;
             }
-            match super::open_directory(&current) {
+            match super::open_attributes(&current) {
                 Ok(_) => eprintln!("TEST_GUARD_DIR index={i} ok"),
                 Err(e) => panic!("TEST_GUARD_DIR index={i} os={:?}", e.raw_os_error()),
             }
@@ -80,15 +92,27 @@ pub fn acquire(path: &Path) -> Result<(Guards, bool), JournalError> {
             .custom_flags(FLAGS)
             .open(p)
     }
+    fn information(f: &File) -> Result<BY_HANDLE_FILE_INFORMATION, JournalError> {
+        let mut info = BY_HANDLE_FILE_INFORMATION::default();
+        unsafe { GetFileInformationByHandle(HANDLE(f.as_raw_handle()), &mut info) }
+            .map_err(|_| JournalError::Storage)?;
+        Ok(info)
+    }
+    fn identity(f: &File) -> Result<(u32, u32, u32), JournalError> {
+        let info = information(f)?;
+        Ok((
+            info.dwVolumeSerialNumber,
+            info.nFileIndexHigh,
+            info.nFileIndexLow,
+        ))
+    }
     fn check(f: &File, dir: bool) -> Result<(), JournalError> {
         let m = f.metadata().map_err(|_| JournalError::Storage)?;
         if m.file_attributes() & REPARSE != 0 || m.is_dir() != dir {
             return Err(JournalError::Bounds);
         }
         if !dir {
-            let mut info = BY_HANDLE_FILE_INFORMATION::default();
-            unsafe { GetFileInformationByHandle(HANDLE(f.as_raw_handle()), &mut info) }
-                .map_err(|_| JournalError::Storage)?;
+            let info = information(f)?;
             if info.nNumberOfLinks != 1 {
                 return Err(JournalError::Bounds);
             }
@@ -100,6 +124,13 @@ pub fn acquire(path: &Path) -> Result<(Guards, bool), JournalError> {
         || components.len() > 64
         || !matches!(components[0],Component::Prefix(p) if matches!(p.kind(),Prefix::Disk(_)|Prefix::VerbatimDisk(_)))
         || !matches!(components[1], Component::RootDir)
+    {
+        return Err(JournalError::Bounds);
+    }
+    if path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case(OWNER_NAME))
     {
         return Err(JournalError::Bounds);
     }
@@ -135,10 +166,56 @@ pub fn acquire(path: &Path) -> Result<(Guards, bool), JournalError> {
         if i == 0 || i == components.len() - 1 {
             continue;
         }
-        let f = open_directory(&current).map_err(|_| JournalError::Storage)?;
+        let f = open_attributes(&current).map_err(|_| JournalError::Storage)?;
         check(&f, true)?;
         files.push(f);
     }
+    // 必须先获得同一目录中被固定的 owner 锁，再创建或判断 DB 是否新建。
+    let owner_path = path.parent().ok_or(JournalError::Bounds)?.join(OWNER_NAME);
+    let owner_path = owner_path.as_path();
+    let owner_file = match open(owner_path, true, true) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            open(owner_path, true, false).map_err(|_| JournalError::Storage)?
+        }
+        Err(_) => return Err(JournalError::Storage),
+    };
+    check(&owner_file, false)?;
+    if owner_file
+        .metadata()
+        .map_err(|_| JournalError::Storage)?
+        .len()
+        != 0
+    {
+        return Err(JournalError::Bounds);
+    }
+    // owner 创建后再查目标：短名称可能恰好在此次创建后指向 owner 本身。
+    // 仅查询自有路径 attributes，不创建/跟随 reparse，也不读取 DB 内容。
+    let existing = match open_attributes(path) {
+        Ok(file) => {
+            check(&file, false)?;
+            Some(file)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(_) => return Err(JournalError::Storage),
+    };
+    if let Some(file) = &existing
+        && identity(file)? == identity(&owner_file)?
+    {
+        return Err(JournalError::Bounds);
+    }
+    match owner_file.try_lock() {
+        Ok(()) => {}
+        Err(std::fs::TryLockError::WouldBlock) => return Err(JournalError::OwnerBusy),
+        Err(_) => return Err(JournalError::Storage),
+    }
+    check(&owner_file, false)?;
+    let owner = Arc::new(Ownership {
+        _directories: files,
+        _lock: owner_file,
+    });
+    // 每个 permit 只共享此 Arc，不复制 OS handle；owner 文件不锁 SQLite 自身字节。
+    let mut files = Vec::with_capacity(4);
     let (db, created) = match open(path, true, true) {
         Ok(f) => (f, true),
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => (
@@ -190,7 +267,13 @@ pub fn acquire(path: &Path) -> Result<(Guards, bool), JournalError> {
             Err(_) => return Err(JournalError::Storage),
         }
     }
-    Ok((Guards { _files: files }, created))
+    Ok((
+        Guards {
+            _files: files,
+            owner,
+        },
+        created,
+    ))
 }
 #[cfg(not(windows))]
 pub fn acquire(_path: &Path) -> Result<(Guards, bool), JournalError> {

@@ -46,9 +46,27 @@ Actual tests use owned temporary SQLite files and harmless process exits at befo
 effect/after-effect/after-result cuts, independently counted effect markers. Storage/
 trigger corruption, malformed rows/proofs, foreign and false-schema files, cap limits,
 real junction/hardlink and handle pinning are covered. Process exit is not power loss.
-Tests need standard-user ancestor attribute access; the Codex restricted token denied
-one ancestor. Regular tool approval allowed the same read-only test outside that
-sandbox; administrator-role check was false. No administrator or ACL workaround used.
+Tests need standard-user ancestor attribute access. On the current WSK-MSI candidate,
+the default temporary-root probe returns Windows OS5 from CreateFileW requesting
+FILE_READ_ATTRIBUTES on ancestor index3, before SQLite. This is an OS API failure
+propagated by the guard, not a tool-approval refusal; its permission/environment cause
+is unresolved. No ACL or alternate API bypass is used. Tests with process-local
+TEMP/TMP under the writable task directory provide conditional fixture evidence only.
+They do not qualify the default root or select a production storage directory.
+
+The split API commits intent in `prepare`, releases the database transaction, then
+accepts a consumed, non-cloneable `PreparedOperation` in `finalize`. Its token binds
+the exact live Journal, operation scope/sequence/digest and retains the cooperative
+directory owner lease. Dropping the Journal while an effect is in flight cannot
+admit a replacement owner until the token is gone; reopening preserves Unknown
+instead of repeating an uncertain effect. One checked empty owner sidecar locks the
+trusted backend directory before any database is created. This is cooperative
+single-owner protection, not a sandbox against malicious same-user code.
+
+`run_once` remains a compatibility wrapper. A caller holding its own Mutex around
+that wrapper still holds the Mutex during the callback; a Host actor must use short
+prepare/finalize lock scopes and perform blocking IO outside that lock. No production
+actor or PTY integration is established by the split journal tests.
 
 The internal schema is now version2. New databases persist independent admission and
 settled floors plus the latest bounded ACK witness. Existing version1 databases are

@@ -1,4 +1,5 @@
 //! Backend metadata only. A journal decision never grants endpoint authorization.
+use std::sync::{Arc, Weak};
 
 const MAX_OPERATIONS: u32 = 4096;
 const MAX_SCOPES: u32 = 4096;
@@ -144,6 +145,25 @@ pub enum JournalError {
     Sequence,
     Schema,
     UnsupportedPlatform,
+    OwnerBusy,
+}
+
+/// 此 token 只证明当前 Journal 已提交 intent，不授予设备或输入权限。
+#[must_use = "dropping an unfinalized intent leaves Unknown; never replay its effect"]
+pub struct PreparedOperation {
+    identity: Weak<()>,
+    _ownership: Arc<crate::path_guard::Ownership>,
+    metadata: Box<PreparedMetadata>,
+}
+struct PreparedMetadata {
+    key: OperationKey,
+    scope: Vec<u8>,
+    digest: [u8; 32],
+}
+#[must_use]
+pub enum PrepareDecision {
+    Recorded(Outcome),
+    Prepared(PreparedOperation),
 }
 
 pub struct Journal {
@@ -151,25 +171,30 @@ pub struct Journal {
     path: std::path::PathBuf,
     poisoned: bool,
     _guards: crate::path_guard::Guards,
+    identity: Arc<()>,
+    // connection/DB guards 先 drop；在途 token 另持有此 owner lease。
+    ownership: Arc<crate::path_guard::Ownership>,
 }
 
 impl Journal {
     pub fn open(path: &std::path::Path) -> Result<Self, JournalError> {
         let (connection, guards) = crate::journal_storage::open(path)?;
+        let ownership = guards.ownership();
         Ok(Self {
             connection,
             path: path.to_owned(),
             poisoned: false,
             _guards: guards,
+            identity: Arc::new(()),
+            ownership,
         })
     }
 
-    pub fn run_once(
+    pub fn prepare(
         &mut self,
         key: &OperationKey,
         digest: &KeyedDigest,
-        effect: impl FnOnce() -> Outcome,
-    ) -> Result<Outcome, JournalError> {
+    ) -> Result<PrepareDecision, JournalError> {
         use rusqlite::{OptionalExtension, TransactionBehavior, params};
         use subtle::ConstantTimeEq;
         if self.poisoned {
@@ -198,7 +223,7 @@ impl Journal {
             if seq != key.sequence.to_be_bytes() || !bool::from(stored.ct_eq(&digest.0[..])) {
                 return Err(JournalError::Conflict);
             }
-            return Ok(recorded);
+            return Ok(PrepareDecision::Recorded(recorded));
         }
         let floor = read_floor(&tx, &scope)?;
         let last = match floor {
@@ -252,9 +277,55 @@ impl Journal {
             return Err(JournalError::Storage);
         }
         tx.commit().map_err(storage)?;
+        Ok(PrepareDecision::Prepared(PreparedOperation {
+            identity: Arc::downgrade(&self.identity),
+            _ownership: self.ownership.clone(),
+            metadata: Box::new(PreparedMetadata {
+                key: OperationKey {
+                    host: key.host,
+                    session: key.session,
+                    run: key.run.as_str().to_owned(),
+                    generation: key.generation,
+                    incarnation: key.incarnation,
+                    device: key.device,
+                    operation: key.operation,
+                    sequence: key.sequence,
+                },
+                scope,
+                digest: digest.0,
+            }),
+        }))
+    }
 
-        // Durable intent precedes every externally supplied effect. No automatic retry.
-        let outcome = effect();
+    /// 兼容旧调用：此 wrapper 自身仍跨 effect 借用 Journal，不能释放调用者的 Mutex。
+    pub fn run_once(
+        &mut self,
+        key: &OperationKey,
+        digest: &KeyedDigest,
+        effect: impl FnOnce() -> Outcome,
+    ) -> Result<Outcome, JournalError> {
+        match self.prepare(key, digest)? {
+            PrepareDecision::Recorded(outcome) => Ok(outcome),
+            PrepareDecision::Prepared(prepared) => self.finalize(prepared, effect()),
+        }
+    }
+
+    pub fn finalize(
+        &mut self,
+        prepared: PreparedOperation,
+        outcome: Outcome,
+    ) -> Result<Outcome, JournalError> {
+        use rusqlite::{TransactionBehavior, params};
+        use subtle::ConstantTimeEq;
+        if !Weak::ptr_eq(&prepared.identity, &Arc::downgrade(&self.identity)) {
+            return Err(JournalError::Conflict);
+        }
+        if self.poisoned {
+            return Ok(Outcome::Unknown);
+        }
+        let key = &prepared.metadata.key;
+        let scope = &prepared.metadata.scope;
+        let digest = &prepared.metadata.digest;
         let state = encode_outcome(outcome);
         let persisted = (|| -> Result<(), JournalError> {
             let proof = if matches!(outcome, Outcome::HostWritten | Outcome::Rejected) {
@@ -272,8 +343,22 @@ impl Journal {
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .map_err(storage)?;
             crate::journal_storage::verify(&tx)?;
-            let admitted = read_floor(&tx, &scope)?.ok_or(JournalError::Storage)?;
+            let admitted = read_floor(&tx, scope)?.ok_or(JournalError::Storage)?;
             if admitted.admitted != key.sequence {
+                return Err(JournalError::Storage);
+            }
+            let pending = tx
+                .query_row(
+                    "SELECT seq,digest,state,proof FROM operations WHERE scope=?1 AND op=?2",
+                    params![&scope, &key.operation[..]],
+                    read_operation,
+                )
+                .map_err(storage)?;
+            if pending.0 != key.sequence.to_be_bytes()
+                || !bool::from(pending.1.ct_eq(&digest[..]))
+                || pending.2 != 0
+                || pending.3.is_some()
+            {
                 return Err(JournalError::Storage);
             }
             let changed = tx
@@ -293,7 +378,7 @@ impl Journal {
                 )
                 .map_err(storage)?;
             if actual.0 != key.sequence.to_be_bytes()
-                || !bool::from(actual.1.ct_eq(&digest.0[..]))
+                || !bool::from(actual.1.ct_eq(&digest[..]))
                 || actual.2 != state
                 || actual.3 != proof
             {
@@ -634,7 +719,7 @@ fn read_operation(row: &rusqlite::Row<'_>) -> rusqlite::Result<OperationRow> {
 }
 
 fn scope(key: &OperationKey) -> Result<Vec<u8>, JournalError> {
-    if key.sequence == 0 {
+    if key.sequence == 0 || key.run.is_empty() || key.run.len() > 128 {
         return Err(JournalError::Bounds);
     }
     scope_for(&key.target(), &key.device)
