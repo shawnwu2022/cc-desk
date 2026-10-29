@@ -1,12 +1,11 @@
 use super::*;
+use crate::bound_test_support as support;
 use cc_desk_remote_record::{
     input,
     projection::{self as wire, Ack, Content},
 };
 use cc_desk_remote_security::{DataRecord, RunningChannel};
 use owner::authorized::AuthorizedPeer;
-#[path = "local_writer_authorized_test_support.rs"]
-mod support;
 const B: Duration = Duration::from_secs(1);
 #[test]
 #[allow(non_snake_case)]

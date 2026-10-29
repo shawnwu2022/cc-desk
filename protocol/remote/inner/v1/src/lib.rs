@@ -3,6 +3,7 @@ pub mod appbind;
 pub mod command;
 pub mod grant;
 pub mod input;
+pub mod lifecycle;
 pub mod projection;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
