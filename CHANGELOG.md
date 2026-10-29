@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [0.25.1] - 2026-10-29
+
+### Fixed
+
+- Admit the audited official npm Codex 0.164.0 wrapper for authenticated identity hooks while retaining shim/entry hashes, held-file checks and environment boundaries. Newly launched supported sessions can again follow their exact historical title and fold their history projection.
+- Cover late identity, repeated refresh, idle/working, same-title distinct IDs, close/resumed projections and real Node hook-argument forwarding.
+
+CLI hooks must be enabled; existing fallback sessions cannot gain absent startup hooks by refresh. Native executable policy is unchanged. Full installed WebView behavior and real AI automatic naming remain unverified.
+
 ## [0.25.0] - 2026-10-22
 
 ### Added

@@ -12,7 +12,8 @@ use std::path::{Path, PathBuf};
 
 pub(crate) const ENV_NAMES: &[&str] = &["CC_DESK_CODEX_ARGV", "CC_DESK_CODEX_NODE_OPTIONS"];
 
-// 只支持实际验收过的 npm 0.163.0 包装；换版或自定义包装保留普通启动降级。
+// 0.164.0 的入口与 shim 字节和 0.163.0 相同，且已验证 session-flags hook 元数据。
+// 版本与字节必须同时命中；未来或自定义包装仍保留普通启动降级。
 const SHIM_HASH: &str = "0fd52614bcc23d6bf2ef74408a948452157d6ab77c02db200a351a499a3df5e6";
 const ENTRY_HASH: &str = "61b0194f3bb6534439c8d26a3ed57d0805f84b884588b761795323eeb92fcf70";
 
@@ -193,7 +194,7 @@ pub(crate) fn prepare(
         serde_json::from_str(&held_text(&package.join("package.json"), &mut guards)?)
             .map_err(|_| unavailable())?;
     if manifest["name"] != "@openai/codex"
-        || manifest["version"] != "0.163.0"
+        || !matches!(manifest["version"].as_str(), Some("0.163.0" | "0.164.0"))
         || manifest["bin"]["codex"] != "bin/codex.js"
     {
         return Err(unavailable());
@@ -244,4 +245,78 @@ pub(crate) fn prepare(
         if original_empty { "empty" } else { "unset" }.into(),
     );
     Ok(transport)
+}
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn CodexIdentity_Npm164PreservesAuthenticatedTransport_082() {
+        let root = tempfile::tempdir().unwrap();
+        let canonical = std::fs::canonicalize(root.path()).unwrap();
+        let npm = PathBuf::from(dos_path(&canonical).unwrap()).join("npm");
+        let package = npm.join("node_modules/@openai/codex");
+        std::fs::create_dir_all(package.join("bin")).unwrap();
+        let program = npm.join("codex.cmd");
+        std::fs::write(
+            &program,
+            include_str!("../../../tests/fixtures/native-cli/codex-npm-0.163.0/codex.cmd"),
+        )
+        .unwrap();
+        std::fs::write(
+            package.join("bin/codex.js"),
+            include_str!("../../../tests/fixtures/native-cli/codex-npm-0.163.0/codex.js"),
+        )
+        .unwrap();
+        std::fs::write(
+            package.join("package.json"),
+            r#"{"name":"@openai/codex","version":"0.164.0","bin":{"codex":"bin/codex.js"}}"#,
+        )
+        .unwrap();
+        let mut environment = EnvMap::new();
+        let args = [
+            "-c",
+            "hooks.SessionStart=[]",
+            "-c",
+            "hooks.UserPromptSubmit=[]",
+            "-c",
+            "hooks.Stop=[]",
+            "-c",
+            "hooks.state={}",
+        ]
+        .map(OsString::from);
+        let transport = prepare(&program, &args, &mut environment)
+            .expect("已审核的相同 npm 包装升级后仍应传输认证身份 hooks");
+        assert!(lookup(&environment, OsStr::new("CC_DESK_CODEX_ARGV")).is_some());
+        assert!(lookup(&environment, OsStr::new("NODE_OPTIONS")).is_some());
+        if let Some(system_root) = std::env::var_os("SystemRoot") {
+            environment.insert("SystemRoot".into(), system_root);
+        }
+        let output = std::process::Command::new("node")
+            .env_clear()
+            .envs(&environment)
+            .args(["-e", "process.stdout.write(JSON.stringify({argv:process.argv.slice(2),options:process.env.NODE_OPTIONS??null,transport:process.env.CC_DESK_CODEX_ARGV??null}))"])
+            .arg(package.join("bin/codex.js"))
+            .arg("resume")
+            .arg("exact-thread")
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let observed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let mut expected = args.iter().map(|v| v.to_str().unwrap()).collect::<Vec<_>>();
+        expected.extend(["resume", "exact-thread"]);
+        assert_eq!(observed["argv"], serde_json::json!(expected));
+        assert!(observed["options"].is_null());
+        assert!(observed["transport"].is_null());
+        drop(transport);
+        // 相同包装不代表任意未来版本都已验证。
+        std::fs::write(
+            package.join("package.json"),
+            r#"{"name":"@openai/codex","version":"0.165.0","bin":{"codex":"bin/codex.js"}}"#,
+        )
+        .unwrap();
+        assert!(prepare(&program, &args, &mut EnvMap::new()).is_err());
+    }
 }

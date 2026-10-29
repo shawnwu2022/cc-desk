@@ -5,6 +5,9 @@
 mod cache;
 #[path = "../../../src-tauri/src/cli/native_projection/catalog.rs"]
 mod catalog;
+#[cfg(windows)]
+#[path = "../../../src-tauri/src/cli/codex_cmd.rs"]
+mod codex_cmd;
 #[path = "../../../src-tauri/src/cli/environment.rs"]
 mod environment;
 #[path = "../../../src-tauri/src/cli/native_projection/opencode_db.rs"]

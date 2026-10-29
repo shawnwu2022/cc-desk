@@ -226,6 +226,14 @@ preload with the owned snapshot until run retirement. It does not change global
 configuration or persistent permissions. The existing locked `tempfile`
 dependency also owns isolated capability-probe configuration roots.
 
+The audited npm transport admits exactly 0.163.0 and 0.164.0, with the same
+normalized shim and entry SHA256 checks for both versions. The installed 0.164.0
+package's entry bytes match 0.163.0; an isolated, credential-free `hooks/list`
+exchange confirmed all three enabled/trusted session-flags command handlers.
+This restores the authenticated identity path after that package upgrade;
+titles, timestamps and newly discovered history never establish identity.
+The native executable probe below retains its separate exact-byte policy.
+
 Nonempty user `NODE_OPTIONS` are deliberately left untouched: Node permission or
 loader options can fail before CJS executes. Unknown/custom wrappers, different
 versions, nonliteral paths, preparation failures and size limits retain the

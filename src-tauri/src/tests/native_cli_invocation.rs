@@ -799,6 +799,17 @@ fn Opencode_InitialIdentityKeepsEffectiveCwdUnknown_04() {
 #[cfg(windows)]
 #[test]
 fn CodexIdentity_CmdNpmForwardsHooksOutsideCall_047() {
+    codex_cmd_npm_forwards_hooks("0.163.0");
+}
+
+#[cfg(windows)]
+#[test]
+fn CodexIdentity_CmdNpm164ForwardsHooksOutsideCall_082() {
+    codex_cmd_npm_forwards_hooks("0.164.0");
+}
+
+#[cfg(windows)]
+fn codex_cmd_npm_forwards_hooks(version: &str) {
     // CALL仍只接收用户安全参数；TOML由已识别的Node入口转发给原生CLI。
     let mut f = Fixture::new(CliKind::Codex, resume(LOCATOR));
     // 宿主 TEMP 可能带短名或 junction；成功场景显式选直接路径，别名拒绝仍在下方验证。
@@ -819,7 +830,10 @@ fn CodexIdentity_CmdNpmForwardsHooksOutsideCall_047() {
     fs::copy(fixtures.join("codex.js"), package.join("bin/codex.js")).unwrap();
     fs::write(
         package.join("package.json"),
-        r#"{"name":"@openai/codex","version":"0.163.0","bin":{"codex":"bin/codex.js"}}"#,
+        serde_json::to_vec(
+            &json!({"name":"@openai/codex","version":version,"bin":{"codex":"bin/codex.js"}}),
+        )
+        .unwrap(),
     )
     .unwrap();
     f.profile.program_path = Override::Set(npm.join("codex.cmd").to_str().unwrap().into());
