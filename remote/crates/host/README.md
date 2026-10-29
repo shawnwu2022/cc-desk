@@ -393,3 +393,20 @@ rebind response drops/closes the newly returned scope; native backend must inspe
 the outcome before explicitly creating another context, not blindly resend.
 General lost-device administrative recovery, policy change, suspend integration,
 post-retirement queries and authenticated transport admission remain OPEN.
+
+Controlled projection capture now carries an immutable native read-grant bound.
+The same serialized monotonic sample guard is shared by input and emission;
+clock error/rollback freezes the writer namespace. Capture, projection ACK,
+each encoded record and final delivered publication require a live grant.
+The short writer lease is deliberately not required for reading. A grant-expired
+data scope closes without terminating the underlying CLI; renewal/recovery must
+use a separate authenticated management route and a new verified admission.
+
+Once output starts, one absolute IO deadline is also capped by the remaining
+native grant lifetime. A later sample may shorten that cap, never extend or
+restart it per record. Blocked/partial output or cancellation drops the supplied
+record adapter, closes the data scope and cannot produce install evidence.
+Already committed bytes cannot be withdrawn. Native clock callbacks must be
+trusted, bounded clock reads; these checks do not make a blocking arbitrary
+callback preemptible. Software clock tests do not prove platform suspend,
+physical transport-alias teardown or real signed grant verification.

@@ -43,6 +43,9 @@ impl ControlState {
             previous,
             admission.grant.grant != self.identity.grant,
         )?;
+        // The old output owner can sample until its scope is closed. Preserve
+        // the same writer's shared watermark rather than copying a stale value.
+        replacement.last_ms = self.last_ms.clone();
         if let Err(error) = replacement.restore_pending(journal, &scope.target, &device) {
             if error == Reject::Closed {
                 scope.close_writer();

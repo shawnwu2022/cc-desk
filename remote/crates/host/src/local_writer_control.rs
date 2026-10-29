@@ -1,9 +1,12 @@
 use super::*;
 use std::sync::Mutex;
+#[path = "local_writer_output_grant.rs"]
+mod output;
 #[path = "local_writer_control_receipts.rs"]
 mod receipts;
 #[path = "local_writer_control_transition.rs"]
 mod transition;
+pub(super) use output::ReadGrant;
 
 // This native-only input is supplied by a future verified data-authority factory,
 // never directly deserialized from a peer. It does not authenticate a grant.
@@ -91,7 +94,7 @@ impl InputWindow {
 }
 pub(super) struct ControlState {
     clock: Arc<dyn HostClock>,
-    last_ms: Mutex<u64>,
+    last_ms: Arc<Mutex<u64>>,
     identity: Arc<Identity>,
     challenge_ms: u64,
     grant_deadline: u64,
@@ -151,7 +154,7 @@ impl ControlState {
             .min(grant_deadline);
         Ok(Self {
             clock,
-            last_ms: Mutex::new(now),
+            last_ms: Arc::new(Mutex::new(now)),
             identity: Arc::new(Identity {
                 grant: grant.grant,
                 lease: grant.lease,
@@ -212,19 +215,7 @@ impl ControlState {
         Ok(())
     }
     fn sample(&self, scope: &PeerScope) -> Result<u64, Reject> {
-        let result = (|| {
-            let now = self.clock.now_ms()?;
-            let mut last = self.last_ms.lock().map_err(|_| Reject::Policy)?;
-            if now < *last {
-                return Err(Reject::Policy);
-            }
-            *last = now;
-            Ok(now)
-        })();
-        if result.is_err() {
-            scope.close_writer();
-        }
-        result
+        output::sample(self.clock.as_ref(), &self.last_ms, scope)
     }
     fn eligible(&self, scope: &PeerScope) -> Result<u64, Reject> {
         let now = self.sample(scope)?;

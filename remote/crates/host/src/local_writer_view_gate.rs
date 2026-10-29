@@ -85,6 +85,7 @@ pub(super) struct IssuedView {
     stamp: Stamp,
     epochs: TerminalEpochs,
     phase: AtomicU8,
+    read_grant: Option<control::ReadGrant>,
 }
 #[derive(Clone)]
 pub(super) struct SyncedView {
@@ -360,6 +361,11 @@ impl ViewGate {
         {
             return Err(Reject::Sync);
         }
+        let read_grant = self
+            .control
+            .as_ref()
+            .map(|c| c.read_grant(scope))
+            .transpose()?;
         let next = self.next_sync.checked_add(1).ok_or_else(|| {
             scope.close();
             Reject::Bounds
@@ -388,6 +394,7 @@ impl ViewGate {
             stamp,
             epochs: frame.view().epochs(),
             phase: AtomicU8::new(ISSUED),
+            read_grant,
         });
         self.next_sync = next;
         self.accepted = false;
@@ -410,6 +417,9 @@ impl ViewGate {
             || ack.stamp != record.stamp
         {
             return Err(Reject::Sync);
+        }
+        if let Some(grant) = &record.read_grant {
+            grant.remaining(scope)?;
         }
         self.accepted = true;
         Ok(SyncedView {

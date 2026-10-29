@@ -13,6 +13,20 @@ impl Drop for SendingGuard {
         }
     }
 }
+impl IssuedView {
+    fn emission_deadline(&self, end: tokio::time::Instant) -> Result<tokio::time::Instant, Reject> {
+        match &self.read_grant {
+            None => Ok(end),
+            Some(grant) => {
+                let remaining = grant.remaining(&self.scope)?;
+                let grant_end = tokio::time::Instant::now()
+                    .checked_add(remaining)
+                    .ok_or(Reject::Bounds)?;
+                Ok(end.min(grant_end))
+            }
+        }
+    }
+}
 impl projection::CapturedProjection {
     pub(in crate::local_writer) fn issued_stamp(&self) -> Result<&Stamp, Reject> {
         self.issued
@@ -41,6 +55,7 @@ impl projection::CapturedProjection {
         if writer.selected_minor() != record.scope.minor || !record.scope.is_active() {
             return Err(Reject::Sync);
         }
+        let mut end = record.emission_deadline(end)?;
         record
             .phase
             .compare_exchange(ISSUED, SENDING, Ordering::AcqRel, Ordering::Acquire)
@@ -62,24 +77,27 @@ impl projection::CapturedProjection {
                 return Err(Reject::Sync);
             }
             let payload = part.map_err(|_| Reject::Bounds)?;
-            let remaining = end
+            end = record.emission_deadline(end)?;
+            let part_end = end;
+            let remaining = part_end
                 .checked_duration_since(tokio::time::Instant::now())
                 .filter(|b| !b.is_zero())
                 .ok_or(Reject::Continuity)?;
             tokio::select! {
                 _=closed.changed()=>return Err(Reject::Sync),
                 _=writer_closed.changed()=>return Err(Reject::Sync),
-                result=tokio::time::timeout_at(end,writer.write(Kind::Projection,&payload,remaining))=>{
+                result=tokio::time::timeout_at(part_end,writer.write(Kind::Projection,&payload,remaining))=>{
                     result.map_err(|_|Reject::Continuity)?.map_err(|_|Reject::Continuity)?;
                 }
             }
-            if tokio::time::Instant::now() >= end {
+            if tokio::time::Instant::now() >= part_end {
                 return Err(Reject::Continuity);
             }
         }
         if !record.scope.is_active() {
             return Err(Reject::Sync);
         }
+        record.emission_deadline(end)?;
         record
             .phase
             .compare_exchange(SENDING, DELIVERED, Ordering::AcqRel, Ordering::Acquire)

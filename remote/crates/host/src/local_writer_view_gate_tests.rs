@@ -2,6 +2,8 @@ use super::*;
 use cc_desk_remote_record::projection::{Ack, Content, decode};
 use cc_desk_remote_transport::records::{RecordReader, RecordWriter};
 use std::io;
+#[path = "local_writer_view_grant_tests.rs"]
+mod grant_output_tests;
 
 #[allow(non_snake_case)]
 #[tokio::test]
@@ -453,6 +455,8 @@ async fn ControlWindow_ActualPostIntent_004() {
     }
     let samples = Arc::new(AtomicUsize::new(0));
     let clock = samples.clone();
+    let armed = Arc::new(AtomicBool::new(false));
+    let commit_phase = armed.clone();
     let dir = tempfile::tempdir().unwrap();
     let sink = Sink::default();
     let observed = sink.clone();
@@ -470,11 +474,15 @@ async fn ControlWindow_ActualPostIntent_004() {
                 minor: 1,
             },
             Arc::new(move || {
-                Ok(if clock.fetch_add(1, Ordering::AcqRel) < 3 {
-                    1000
-                } else {
-                    6000
-                })
+                Ok(
+                    if !commit_phase.load(Ordering::Acquire)
+                        || clock.fetch_add(1, Ordering::AcqRel) == 0
+                    {
+                        1000
+                    } else {
+                        6000
+                    },
+                )
             }),
             control::GrantContext {
                 challenge_ms: 1000,
@@ -524,6 +532,7 @@ async fn ControlWindow_ActualPostIntent_004() {
         operation: [6; 16],
         sequence: 1,
     };
+    armed.store(true, Ordering::Release);
     let result = peer
         .submit(&window, op.clone(), 9, b"must-not-write".to_vec())
         .unwrap()
@@ -540,7 +549,7 @@ async fn ControlWindow_ActualPostIntent_004() {
         ),
         "{result:?}"
     );
-    assert_eq!(samples.load(Ordering::Acquire), 4); // startup, issue, dequeue, post-intent
+    assert_eq!(samples.load(Ordering::Acquire), 2); // actual dequeue and post-intent only
     assert!(observed.0.lock().unwrap().is_empty());
     finish(&mut native);
     let journal = Journal::open(&dir.path().join("journal.sqlite")).unwrap();
