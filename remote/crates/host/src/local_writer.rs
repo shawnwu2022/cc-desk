@@ -74,6 +74,7 @@ pub enum Reject {
     Rate,
     Continuity,
     Sync,
+    Policy,
 }
 #[derive(Debug, PartialEq, Eq)]
 pub enum WriteResult {
@@ -120,6 +121,8 @@ enum Command {
     Projection(ProjectionRequest),
     #[cfg(feature = "experimental-host-owner")]
     ViewAck(view_gate::ViewAckRequest),
+    #[cfg(feature = "experimental-host-owner")]
+    Control(view_gate::control::ControlRequest),
 }
 #[derive(Clone)]
 pub struct LocalInputHandle {
@@ -423,6 +426,22 @@ impl LocalWriter {
                             continue;
                         }
                         Command::Input(request) => request,
+                        #[cfg(feature = "experimental-host-owner")]
+                        Command::Control(request) => {
+                            if sealed.load(Ordering::Acquire) {
+                                request.reject(Reject::Sealed);
+                            } else if let Some(gate) = &mut view_gate {
+                                if let Some(epochs) = replies.as_ref().and_then(ReplyState::epochs)
+                                {
+                                    request.process(gate, epochs);
+                                } else {
+                                    request.reject(Reject::Sync);
+                                }
+                            } else {
+                                request.reject(Reject::Unsupported);
+                            }
+                            continue;
+                        }
                         Command::Output(request) => {
                             let result = match &mut replies {
                                 Some(state) => state.process(&request, &mut stdin, &sealed),
@@ -562,6 +581,8 @@ impl Drop for LocalWriter {
 fn reject_queued(rx: &mpsc::Receiver<Command>) {
     for r in rx.try_iter() {
         match r {
+            #[cfg(feature = "experimental-host-owner")]
+            Command::Control(r) => r.reject(Reject::Sealed),
             #[cfg(feature = "experimental-host-owner")]
             Command::ViewAck(r) => {
                 let _ = r.reply.try_send(Err(Reject::Sealed));

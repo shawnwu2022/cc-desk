@@ -4,6 +4,9 @@ use cc_desk_remote_record::projection::{Ack, Stamp, encode_ack};
 use cc_desk_remote_terminal::TerminalEpochs;
 
 use std::sync::atomic::AtomicU8;
+#[path = "local_writer_control.rs"]
+pub(super) mod control;
+use control::ControlStart;
 const ISSUED: u8 = 0;
 const SENDING: u8 = 1;
 const DELIVERED: u8 = 2;
@@ -68,6 +71,7 @@ pub(super) struct IssuedView {
 #[derive(Clone)]
 pub(super) struct SyncedView {
     record: Arc<IssuedView>,
+    window: Option<Arc<control::InputWindow>>,
 }
 impl SyncedView {
     pub(super) fn digest(
@@ -77,7 +81,7 @@ impl SyncedView {
         epoch: u64,
         bytes: &[u8],
     ) -> Result<KeyedDigest, Reject> {
-        let context = encode_ack(
+        let mut context = encode_ack(
             &Ack {
                 profile: 1,
                 stamp: self.record.stamp.clone(),
@@ -85,6 +89,9 @@ impl SyncedView {
             self.record.scope.minor,
         )
         .map_err(|_| Reject::Bounds)?;
+        if let Some(window) = &self.window {
+            window.append_digest(&mut context);
+        }
         key.input_in_context(operation, epoch, bytes, self.record.scope.minor, &context)
             .map_err(|_| Reject::Bounds)
     }
@@ -171,6 +178,17 @@ impl PeerViewHandle {
     }
 }
 impl LocalWriter {
+    pub(super) fn start_control_guarded(
+        journal: Journal,
+        stdin: impl Write + Send + 'static,
+        target: Target,
+        device: [u8; 32],
+        epoch: u64,
+        key: DigestKey,
+        start: ControlStart,
+    ) -> Result<(Self, HostOutputHandle, PeerViewHandle), Reject> {
+        Self::start_guarded_inner(journal, stdin, target, device, epoch, key, start)
+    }
     pub(super) fn start_view_guarded(
         journal: Journal,
         stdin: impl Write + Send + 'static,
@@ -180,7 +198,36 @@ impl LocalWriter {
         key: DigestKey,
         start: ViewStart,
     ) -> Result<(Self, HostOutputHandle, PeerViewHandle), Reject> {
+        Self::start_guarded_inner(
+            journal,
+            stdin,
+            target,
+            device,
+            epoch,
+            key,
+            ControlStart {
+                view: start,
+                policy: None,
+            },
+        )
+    }
+    fn start_guarded_inner(
+        journal: Journal,
+        stdin: impl Write + Send + 'static,
+        target: Target,
+        device: [u8; 32],
+        epoch: u64,
+        key: DigestKey,
+        start: ControlStart,
+    ) -> Result<(Self, HostOutputHandle, PeerViewHandle), Reject> {
+        let policy = start
+            .policy
+            .map(|(clock, grant)| control::ControlState::new(clock, grant))
+            .transpose()?;
+        let start = start.view;
         let control = PeerControl::new(target.clone(), device, start.binding, start.minor)?;
+        let mut gate = ViewGate::new(control.scope.clone());
+        gate.control = policy;
         let budget = start.terminal.budget.clone();
         let context = Arc::new(());
         let mut writer = Self::start_with(
@@ -192,7 +239,7 @@ impl LocalWriter {
             key,
             WriterConfig {
                 replies: Some(ReplyState::canonical(context.clone(), start.terminal)),
-                view_gate: Some(ViewGate::new(control.scope.clone())),
+                view_gate: Some(gate),
                 #[cfg(test)]
                 after_write: None,
             },
@@ -213,6 +260,7 @@ pub(super) struct ViewGate {
     next_sync: u64,
     current: Option<Arc<IssuedView>>,
     accepted: bool,
+    control: Option<control::ControlState>,
 }
 impl ViewGate {
     pub(super) fn effect_if_current(
@@ -242,11 +290,16 @@ impl ViewGate {
         {
             return Err(Reject::Sync);
         }
+        let view = request.view.as_ref().ok_or(Reject::Sync)?;
         self.check(
-            request.view.as_ref().ok_or(Reject::Sync)?,
+            view,
             &request.key.device,
             replies.and_then(ReplyState::epochs).ok_or(Reject::Sync)?,
-        )
+        )?;
+        if let Some(control) = &self.control {
+            control.check(&self.scope, view)?;
+        }
+        Ok(())
     }
     pub(super) fn new(scope: Arc<PeerScope>) -> Self {
         Self {
@@ -254,6 +307,7 @@ impl ViewGate {
             next_sync: 0,
             current: None,
             accepted: false,
+            control: None,
         }
     }
     pub(super) fn issue(
@@ -322,6 +376,7 @@ impl ViewGate {
         self.accepted = true;
         Ok(SyncedView {
             record: record.clone(),
+            window: None,
         })
     }
     pub(super) fn check(

@@ -303,3 +303,34 @@ Windows11/NVMe latency, single Host session actor/fencing, true IO/tree quiescen
 native policy/keys and E08 admitted launch bridge. Do not enable remote control from
 this component alone. journal-crash-fixture is test-only and must not be distributed
 as a Host executable; release artifact allowlisting remains a separate gate.
+# Native first-lease control window prerequisite
+
+The additional private `start_control_guarded` factory requires an issued
+InputWindow as well as delivered/ACKed view evidence. The existing sync-only
+qualification factory remains separate and is not remote data admission.
+Only the native backend supplies the clock and preverified grant context;
+the factory itself does not verify signatures, authenticate a data role or
+bind RecordWriter IO to an endpoint. No listener or remote entry is enabled.
+
+The challenge response is accepted strictly before Host challenge+30s; grant
+expiry is challenge+900s. First lease and renewal are at most15s and bounded
+by that grant. A window expires at min(issue+5s, current lease, grant).
+Its exact immutable IDs, fence/policy and deadline enter the keyed request
+digest. The same serialized writer checks it both before durable admission
+and immediately after intent, before IO. Expiry equality rejects. Renewal
+uses exact native peer/lease/fence and consecutive sequence; retrying the
+latest renewal returns its prior deadline and never extends old windows.
+
+At most two window records are retained. Only expired eligibility is retired;
+the checked window counter never resets, old objects are not reinserted, and
+receipt/sequence/Unknown evidence is untouched. Actor serialization prevents
+new issuance while an old write has not returned; existing Unknown/Partial
+handling still seals the writer. A backward/error clock sample closes the
+native peer permanently. Wall/phone clocks are not accepted.
+
+This is a first-lease prerequisite, not completed E09: verified grant/IO
+admission, suspend notification, single unresolved sent-operation reconciliation,
+wire mutation decoding, multi-device takeover/new fence, policy replacement,
+rebind and native mobile evidence remain required. Software monotonic-clock
+tests do not prove Windows suspend behavior. No CLI software version admission
+floor is introduced; protocol validation is separate from CLI versions.

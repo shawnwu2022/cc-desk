@@ -2,6 +2,423 @@ use super::*;
 use cc_desk_remote_record::projection::{Ack, Content, decode};
 use cc_desk_remote_transport::records::{RecordReader, RecordWriter};
 use std::io;
+
+#[allow(non_snake_case)]
+#[tokio::test]
+async fn ControlWindow_ActualWriter_001() {
+    use std::sync::atomic::AtomicU64;
+    #[derive(Clone, Default)]
+    struct Sink(Arc<std::sync::Mutex<Vec<u8>>>);
+    impl io::Write for Sink {
+        fn write(&mut self, b: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    let now = Arc::new(AtomicU64::new(1000));
+    let clock = now.clone();
+    let start = ControlStart::new(
+        ViewStart {
+            terminal: CanonicalStart::new(3, 10, &HostViewBudget::new()).unwrap(),
+            binding: [0x33; 32],
+            minor: 1,
+        },
+        Arc::new(move || Ok(clock.load(Ordering::Acquire))),
+        control::GrantContext {
+            challenge_ms: 1000,
+            grant: [7; 32],
+            lease: [8; 16],
+            fence: 4,
+            policy: 5,
+        },
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let sink = Sink::default();
+    let observed = sink.clone();
+    let (mut native, _output, peer) = LocalWriter::start_control_guarded(
+        Journal::open(&dir.path().join("journal.sqlite")).unwrap(),
+        sink,
+        target(),
+        [5; 32],
+        9,
+        DigestKey::from_backend_bytes([0x5a; 32]),
+        start,
+    )
+    .unwrap();
+    let frame = peer
+        .capture()
+        .unwrap()
+        .wait(Duration::from_secs(2))
+        .unwrap()
+        .unwrap();
+    let ack = Ack {
+        profile: 1,
+        stamp: frame.issued_stamp().unwrap().clone(),
+    };
+    let (host, _client) = tokio::io::duplex(32768);
+    let _stream = frame
+        .deliver(RecordWriter::new(host, 1).unwrap(), Duration::from_secs(1))
+        .await
+        .unwrap();
+    let view = peer
+        .acknowledge(ack)
+        .unwrap()
+        .wait(Duration::from_secs(2))
+        .unwrap()
+        .unwrap();
+    let operation = |seq| OperationKey {
+        host: target().host,
+        session: target().session,
+        run: target().run,
+        generation: 3,
+        incarnation: 4,
+        device: [5; 32],
+        operation: [seq as u8; 16],
+        sequence: seq,
+    };
+    assert_eq!(
+        peer.submit(&view, operation(1), 9, b"bad".to_vec())
+            .unwrap()
+            .wait(Duration::from_secs(2))
+            .unwrap(),
+        WriteResult::Rejected(Reject::Policy)
+    );
+    let window = peer
+        .input_window(&view)
+        .unwrap()
+        .wait(Duration::from_secs(2))
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        peer.submit(&window, operation(1), 9, b"one".to_vec())
+            .unwrap()
+            .wait(Duration::from_secs(2))
+            .unwrap(),
+        WriteResult::Receipt(ReceiptEnvelope {
+            outcome: Outcome::HostWritten,
+            ..
+        })
+    ));
+    now.store(6000, Ordering::Release);
+    assert_eq!(
+        peer.submit(&window, operation(2), 9, b"late".to_vec())
+            .unwrap()
+            .wait(Duration::from_secs(2))
+            .unwrap(),
+        WriteResult::Rejected(Reject::Policy)
+    );
+    assert_eq!(&*observed.0.lock().unwrap(), b"one");
+    finish(&mut native);
+}
+
+#[allow(non_snake_case)]
+#[tokio::test]
+async fn ControlWindow_RenewalRetirement_002() {
+    use std::sync::atomic::AtomicU64;
+    let now = Arc::new(AtomicU64::new(1000));
+    let clock = now.clone();
+    let dir = tempfile::tempdir().unwrap();
+    let (mut native, _output, peer) = LocalWriter::start_control_guarded(
+        Journal::open(&dir.path().join("journal.sqlite")).unwrap(),
+        io::sink(),
+        target(),
+        [5; 32],
+        9,
+        DigestKey::from_backend_bytes([0x5a; 32]),
+        ControlStart::new(
+            ViewStart {
+                terminal: CanonicalStart::new(3, 10, &HostViewBudget::new()).unwrap(),
+                binding: [0x33; 32],
+                minor: 1,
+            },
+            Arc::new(move || Ok(clock.load(Ordering::Acquire))),
+            control::GrantContext {
+                challenge_ms: 1000,
+                grant: [7; 32],
+                lease: [8; 16],
+                fence: 4,
+                policy: 5,
+            },
+        ),
+    )
+    .unwrap();
+    let frame = peer
+        .capture()
+        .unwrap()
+        .wait(Duration::from_secs(2))
+        .unwrap()
+        .unwrap();
+    let ack = Ack {
+        profile: 1,
+        stamp: frame.issued_stamp().unwrap().clone(),
+    };
+    let (host, _client) = tokio::io::duplex(32768);
+    let _stream = frame
+        .deliver(RecordWriter::new(host, 1).unwrap(), Duration::from_secs(1))
+        .await
+        .unwrap();
+    let view = peer
+        .acknowledge(ack.clone())
+        .unwrap()
+        .wait(Duration::from_secs(2))
+        .unwrap()
+        .unwrap();
+    let first = peer
+        .input_window(&view)
+        .unwrap()
+        .wait(Duration::from_secs(2))
+        .unwrap()
+        .unwrap();
+    let _second = peer
+        .input_window(&view)
+        .unwrap()
+        .wait(Duration::from_secs(2))
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        peer.input_window(&view)
+            .unwrap()
+            .wait(Duration::from_secs(2))
+            .unwrap(),
+        Err(Reject::Full)
+    ));
+    now.store(5000, Ordering::Release);
+    for (lease, fence, sequence) in [
+        ([9; 16], 4, 1),
+        ([8; 16], 5, 1),
+        ([8; 16], 4, 2),
+        ([8; 16], 4, 0),
+    ] {
+        assert_eq!(
+            peer.renew_lease(lease, fence, sequence)
+                .unwrap()
+                .wait(Duration::from_secs(2))
+                .unwrap(),
+            Err(Reject::Policy)
+        );
+    }
+    assert_eq!(
+        peer.renew_lease([8; 16], 4, 1)
+            .unwrap()
+            .wait(Duration::from_secs(2))
+            .unwrap(),
+        Ok(20000)
+    );
+    now.store(6000, Ordering::Release);
+    assert_eq!(
+        peer.renew_lease([8; 16], 4, 1)
+            .unwrap()
+            .wait(Duration::from_secs(2))
+            .unwrap(),
+        Ok(20000)
+    ); // idempotent, not 21000
+    let op = OperationKey {
+        host: target().host,
+        session: target().session,
+        run: target().run,
+        generation: 3,
+        incarnation: 4,
+        device: [5; 32],
+        operation: [6; 16],
+        sequence: 1,
+    };
+    assert_eq!(
+        peer.submit(&first, op.clone(), 9, b"expired".to_vec())
+            .unwrap()
+            .wait(Duration::from_secs(2))
+            .unwrap(),
+        WriteResult::Rejected(Reject::Policy)
+    );
+    // Expired eligibility can retire without discarding any durable receipt.
+    let third = peer
+        .input_window(&view)
+        .unwrap()
+        .wait(Duration::from_secs(2))
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        peer.submit(&third, op.clone(), 9, b"current".to_vec())
+            .unwrap()
+            .wait(Duration::from_secs(2))
+            .unwrap(),
+        WriteResult::Receipt(ReceiptEnvelope {
+            outcome: Outcome::HostWritten,
+            ..
+        })
+    ));
+    let fourth = peer
+        .input_window(&view)
+        .unwrap()
+        .wait(Duration::from_secs(2))
+        .unwrap()
+        .unwrap();
+    assert_ne!(
+        first
+            .digest(
+                &DigestKey::from_backend_bytes([0x5a; 32]),
+                &op,
+                9,
+                b"current"
+            )
+            .unwrap()
+            .0,
+        third
+            .digest(
+                &DigestKey::from_backend_bytes([0x5a; 32]),
+                &op,
+                9,
+                b"current"
+            )
+            .unwrap()
+            .0
+    );
+    assert_eq!(
+        peer.submit(&fourth, op, 9, b"current".to_vec())
+            .unwrap()
+            .wait(Duration::from_secs(2))
+            .unwrap(),
+        WriteResult::Journal(JournalError::Conflict)
+    );
+    let repeated_ack = peer
+        .acknowledge(ack)
+        .unwrap()
+        .wait(Duration::from_secs(2))
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        peer.input_window(&repeated_ack)
+            .unwrap()
+            .wait(Duration::from_secs(2))
+            .unwrap(),
+        Err(Reject::Full)
+    )); // old ACK cannot reopen slots
+    now.store(20000, Ordering::Release);
+    assert_eq!(
+        peer.renew_lease([8; 16], 4, 2)
+            .unwrap()
+            .wait(Duration::from_secs(2))
+            .unwrap(),
+        Err(Reject::Policy)
+    );
+    assert!(matches!(
+        peer.input_window(&view)
+            .unwrap()
+            .wait(Duration::from_secs(2))
+            .unwrap(),
+        Err(Reject::Policy)
+    )); // renewal cannot resurrect an expired lease
+    finish(&mut native);
+}
+
+#[allow(non_snake_case)]
+#[tokio::test]
+async fn ControlWindow_PostIntentClock_003() {
+    use std::sync::atomic::AtomicU64;
+    let now = Arc::new(AtomicU64::new(1000));
+    let clock = now.clone();
+    let dir = tempfile::tempdir().unwrap();
+    let (mut native, frame) = captured(&dir);
+    let peer = PeerControl::new(target(), [5; 32], [0x33; 32], 1).unwrap();
+    let mut gate = ViewGate::new(peer.scope.clone());
+    gate.control = Some(
+        control::ControlState::new(
+            Arc::new(move || Ok(clock.load(Ordering::Acquire))),
+            control::GrantContext {
+                challenge_ms: 1000,
+                grant: [7; 32],
+                lease: [8; 16],
+                fence: 4,
+                policy: 5,
+            },
+        )
+        .unwrap(),
+    );
+    let frame = gate.issue(frame, &peer.scope).unwrap();
+    let epochs = frame.view().epochs();
+    let ack = Ack {
+        profile: 1,
+        stamp: frame.issued_stamp().unwrap().clone(),
+    };
+    let (host, _client) = tokio::io::duplex(32768);
+    let _stream = frame
+        .deliver(RecordWriter::new(host, 1).unwrap(), Duration::from_secs(1))
+        .await
+        .unwrap();
+    let installed = gate.acknowledge(&peer.scope, &ack, epochs).unwrap();
+    let view = gate
+        .control
+        .as_mut()
+        .unwrap()
+        .issue(&peer.scope, &installed)
+        .unwrap();
+    let key = OperationKey {
+        host: target().host,
+        session: target().session,
+        run: target().run,
+        generation: 3,
+        incarnation: 4,
+        device: [5; 32],
+        operation: [6; 16],
+        sequence: 1,
+    };
+    let digest = view
+        .digest(&DigestKey::from_backend_bytes([0x5a; 32]), &key, 9, b"late")
+        .unwrap();
+    let (tx, _rx) = mpsc::sync_channel(1);
+    let request = Request {
+        key: key.clone(),
+        epoch: 9,
+        bytes: b"late".as_slice().into(),
+        view: Some(view),
+        source_scope: Some(peer.scope.clone()),
+        reply: tx,
+        _credit: Arc::new(Credits::default()).reserve().unwrap(),
+    };
+    let state = ReplyState::canonical(
+        Arc::new(()),
+        CanonicalStart::new(3, 10, &HostViewBudget::new()).unwrap(),
+    );
+    assert_eq!(gate.check_request(&request, Some(&state)), Ok(()));
+    finish(&mut native); // relinquish the original directory owner before reopening
+    let mut journal = Journal::open(&dir.path().join("journal.sqlite")).unwrap();
+    let PrepareDecision::Prepared(intent) = journal.prepare(&key, &digest).unwrap() else {
+        panic!("intent");
+    };
+    now.store(6000, Ordering::Release);
+    let marker = dir.path().join("must-not-write");
+    let outcome = gate.effect_if_current(&request, Some(&state), || {
+        std::fs::write(&marker, b"late").unwrap();
+        Outcome::HostWritten
+    });
+    assert_eq!(
+        journal.finalize(intent, outcome).unwrap(),
+        Outcome::Rejected
+    );
+    assert!(!marker.exists());
+    assert!(matches!(
+        journal.receipt(&key).unwrap(),
+        ReceiptLookup::Known(ReceiptEnvelope {
+            outcome: Outcome::Rejected,
+            receipt_proof: Some(_),
+            ..
+        })
+    ));
+    now.store(999, Ordering::Release);
+    assert_eq!(
+        gate.check_request(&request, Some(&state)),
+        Err(Reject::Policy)
+    );
+    assert!(!peer.scope.is_active());
+    now.store(1001, Ordering::Release);
+    assert_eq!(
+        gate.check_request(&request, Some(&state)),
+        Err(Reject::Sync)
+    );
+    finish(&mut native);
+}
 pub(in crate::local_writer) fn submit_observed(
     peer: &PeerViewHandle,
     view: &SyncedView,
@@ -15,6 +432,122 @@ pub(in crate::local_writer) fn submit_observed(
 }
 fn captured(dir: &tempfile::TempDir) -> (LocalWriter, projection::CapturedProjection) {
     captured_size(dir, 3, 10)
+}
+
+#[allow(non_snake_case)]
+#[tokio::test]
+async fn ControlWindow_ActualPostIntent_004() {
+    #[derive(Clone, Default)]
+    struct Sink(Arc<std::sync::Mutex<Vec<u8>>>);
+    impl io::Write for Sink {
+        fn write(&mut self, b: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    let samples = Arc::new(AtomicUsize::new(0));
+    let clock = samples.clone();
+    let dir = tempfile::tempdir().unwrap();
+    let sink = Sink::default();
+    let observed = sink.clone();
+    let (mut native, _output, peer) = LocalWriter::start_control_guarded(
+        Journal::open(&dir.path().join("journal.sqlite")).unwrap(),
+        sink,
+        target(),
+        [5; 32],
+        9,
+        DigestKey::from_backend_bytes([0x5a; 32]),
+        ControlStart::new(
+            ViewStart {
+                terminal: CanonicalStart::new(3, 10, &HostViewBudget::new()).unwrap(),
+                binding: [0x33; 32],
+                minor: 1,
+            },
+            Arc::new(move || {
+                Ok(if clock.fetch_add(1, Ordering::AcqRel) < 3 {
+                    1000
+                } else {
+                    6000
+                })
+            }),
+            control::GrantContext {
+                challenge_ms: 1000,
+                grant: [7; 32],
+                lease: [8; 16],
+                fence: 4,
+                policy: 5,
+            },
+        ),
+    )
+    .unwrap();
+    let frame = peer
+        .capture()
+        .unwrap()
+        .wait(Duration::from_secs(2))
+        .unwrap()
+        .unwrap();
+    let ack = Ack {
+        profile: 1,
+        stamp: frame.issued_stamp().unwrap().clone(),
+    };
+    let (host, _client) = tokio::io::duplex(32768);
+    let _stream = frame
+        .deliver(RecordWriter::new(host, 1).unwrap(), Duration::from_secs(1))
+        .await
+        .unwrap();
+    let installed = peer
+        .acknowledge(ack)
+        .unwrap()
+        .wait(Duration::from_secs(2))
+        .unwrap()
+        .unwrap();
+    let window = peer
+        .input_window(&installed)
+        .unwrap()
+        .wait(Duration::from_secs(2))
+        .unwrap()
+        .unwrap();
+    let op = OperationKey {
+        host: target().host,
+        session: target().session,
+        run: target().run,
+        generation: 3,
+        incarnation: 4,
+        device: [5; 32],
+        operation: [6; 16],
+        sequence: 1,
+    };
+    let result = peer
+        .submit(&window, op.clone(), 9, b"must-not-write".to_vec())
+        .unwrap()
+        .wait(Duration::from_secs(2))
+        .unwrap();
+    assert!(
+        matches!(
+            result,
+            WriteResult::Receipt(ReceiptEnvelope {
+                outcome: Outcome::Rejected,
+                receipt_proof: Some(_),
+                ..
+            })
+        ),
+        "{result:?}"
+    );
+    assert_eq!(samples.load(Ordering::Acquire), 4); // startup, issue, dequeue, post-intent
+    assert!(observed.0.lock().unwrap().is_empty());
+    finish(&mut native);
+    let journal = Journal::open(&dir.path().join("journal.sqlite")).unwrap();
+    assert!(matches!(
+        journal.receipt(&op).unwrap(),
+        ReceiptLookup::Known(ReceiptEnvelope {
+            outcome: Outcome::Rejected,
+            receipt_proof: Some(_),
+            ..
+        })
+    ));
 }
 fn captured_size(
     dir: &tempfile::TempDir,
