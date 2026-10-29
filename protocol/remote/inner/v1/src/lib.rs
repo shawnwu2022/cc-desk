@@ -1,5 +1,6 @@
 //! Inner framing only; bytes are untrusted and this crate grants no authority.
 pub mod appbind;
+pub mod command;
 pub mod grant;
 pub mod input;
 pub mod projection;

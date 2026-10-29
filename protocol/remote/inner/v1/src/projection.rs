@@ -32,7 +32,7 @@ pub enum Content {
     Delta(Delta),
 }
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Target {
     pub host: String,
     pub session: String,
@@ -42,7 +42,7 @@ pub struct Target {
 }
 /// All counters use canonical decimal strings to preserve u64 across JS runtimes.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Stamp {
     pub target: Target,
     pub binding: String,
@@ -64,6 +64,7 @@ enum AckKind {
     ProjectionAck,
 }
 #[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct AckEnvelope {
     message: AckKind,
     profile: u16,

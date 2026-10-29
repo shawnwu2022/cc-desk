@@ -48,7 +48,7 @@ fn unhex<const N: usize>(s: &str) -> Result<[u8; N], Error> {
         return Err(Error);
     }
     let mut out = [0; N];
-    for (i, pair) in s.as_bytes().chunks_exact(2).enumerate() {
+    for (i, pair) in s.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         out[i] = u8::from_str_radix(std::str::from_utf8(pair).map_err(|_| Error)?, 16)
             .map_err(|_| Error)?
     }
