@@ -1,0 +1,19 @@
+[package]
+name = "cc-desk-remote-transport"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+cc-desk-remote-protocol = { path = "../../../protocol/remote/v1" }
+cc-desk-remote-record = { path = "../../../protocol/remote/inner/v1" }
+tokio = { version = "=1.52.1", features = ["io-util", "sync", "time", "net", "rt-multi-thread", "macros"] }
+futures-util = { version = "=0.3.32", features = ["sink"] }
+tokio-tungstenite = { version = "=0.29.0", default-features = false, features = ["handshake"] }
+tokio-rustls = { version = "=0.26.4", default-features = false, features = ["ring"] }
+rustls = { version = "=0.23.46", default-features = false, features = ["std", "ring"] }
+webpki-roots = "=1.0.7"
+url = "=2.5.8"
+
+[dev-dependencies]
+rustls-pemfile = "=1.0.4"

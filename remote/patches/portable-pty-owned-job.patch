@@ -1,0 +1,194 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index e9c2695..06f6601 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -78,6 +78,7 @@ version = "0.1"
+ [target."cfg(windows)".dependencies.winapi]
+ version = "0.3"
+ features = [
++    "jobapi2",
+     "winuser",
+     "consoleapi",
+     "handleapi",
+diff --git a/src/lib.rs b/src/lib.rs
+index 6d1136f..cd563fb 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -157,6 +157,36 @@ pub trait ChildKiller: std::fmt::Debug {
+ pub trait SlavePty {
+     /// Spawns the command specified by the provided CommandBuilder
+     fn spawn_command(&self, cmd: CommandBuilder) -> Result<Box<dyn Child + Send + Sync>, Error>;
++    /// CC Desk qualification seam. The borrowed Job is owned by the backend.
++    /// No PID lookup or remote authorization is performed here.
++    #[cfg(windows)]
++    fn spawn_command_in_job(
++        &self,
++        _cmd: CommandBuilder,
++        _job: std::os::windows::io::BorrowedHandle<'_>,
++    ) -> Result<Box<dyn Child + Send + Sync>, JobSpawnError> {
++        Err(JobSpawnError::KnownNotStarted {
++            phase: JobSpawnPhase::Preparation,
++        })
++    }
++}
++
++/// Fixed, non-sensitive classification of the qualification launch path.
++#[cfg(windows)]
++#[derive(Clone, Copy, Debug, Eq, PartialEq)]
++pub enum JobSpawnError {
++    /// Preparation/CreateProcess rejection, or failed assignment before resume
++    /// with our suspended root's termination and wait both confirmed.
++    KnownNotStarted { phase: JobSpawnPhase },
++    /// May have executed, or cleanup could not establish even root termination.
++    OutcomeUnknown,
++}
++#[cfg(windows)]
++#[derive(Clone, Copy, Debug, Eq, PartialEq)]
++pub enum JobSpawnPhase {
++    Preparation,
++    CreateRejected,
++    AssignmentReaped,
+ }
+ 
+ /// Represents the exit status of a child process.
+diff --git a/src/win/conpty.rs b/src/win/conpty.rs
+index 0e9a18c..f5b328e 100644
+--- a/src/win/conpty.rs
++++ b/src/win/conpty.rs
+@@ -109,6 +109,21 @@ impl MasterPty for ConPtyMasterPty {
+ }
+ 
+ impl SlavePty for ConPtySlavePty {
++    fn spawn_command_in_job(
++        &self,
++        cmd: CommandBuilder,
++        job: std::os::windows::io::BorrowedHandle<'_>,
++    ) -> Result<Box<dyn Child + Send + Sync>, crate::JobSpawnError> {
++        let inner = self
++            .inner
++            .lock()
++            .map_err(|_| crate::JobSpawnError::KnownNotStarted {
++                phase: crate::JobSpawnPhase::Preparation,
++            })?;
++        let child = inner.con.spawn_command_in_job(cmd, job)?;
++        Ok(Box::new(child))
++    }
++
+     fn spawn_command(&self, cmd: CommandBuilder) -> anyhow::Result<Box<dyn Child + Send + Sync>> {
+         let inner = self.inner.lock().unwrap();
+         let child = inner.con.spawn_command(cmd)?;
+diff --git a/src/win/psuedocon.rs b/src/win/psuedocon.rs
+index 48e10c0..58f215a 100644
+--- a/src/win/psuedocon.rs
++++ b/src/win/psuedocon.rs
+@@ -76,6 +76,110 @@ impl Drop for PsuedoCon {
+ }
+ 
+ impl PsuedoCon {
++    /// CC Desk qualification only. Original upstream spawn_command is unchanged.
++    /// All process/thread operations below use handles returned by our CreateProcessW.
++    pub fn spawn_command_in_job(
++        &self,
++        cmd: CommandBuilder,
++        job: std::os::windows::io::BorrowedHandle<'_>,
++    ) -> Result<WinChild, crate::JobSpawnError> {
++        use crate::JobSpawnError::{KnownNotStarted, OutcomeUnknown};
++        use crate::JobSpawnPhase;
++        let preparation = KnownNotStarted {
++            phase: JobSpawnPhase::Preparation,
++        };
++        use winapi::um::winbase::{CREATE_SUSPENDED, WAIT_OBJECT_0};
++        use winapi::um::{jobapi2::AssignProcessToJobObject, synchapi::WaitForSingleObject};
++        // RAII starts immediately after successful CreateProcessW, before any other
++        // fallible step. Cleanup is finite and only proves this root has exited.
++        struct Created {
++            proc: Option<OwnedHandle>,
++            thread: OwnedHandle,
++            cleanup: bool,
++        }
++        impl Created {
++            fn reap(&mut self) -> bool {
++                let process = self.proc.as_ref().unwrap().as_raw_handle() as HANDLE;
++                let killed = unsafe { TerminateProcess(process, 1) } != 0;
++                let exited = unsafe { WaitForSingleObject(process, 500) } == WAIT_OBJECT_0;
++                if exited {
++                    self.cleanup = false;
++                }
++                killed && exited
++            }
++        }
++        impl Drop for Created {
++            fn drop(&mut self) {
++                if self.cleanup {
++                    let _ = self.reap();
++                }
++            }
++        }
++        let mut si: STARTUPINFOEXW = unsafe { mem::zeroed() };
++        si.StartupInfo.cb = mem::size_of::<STARTUPINFOEXW>() as u32;
++        si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
++        si.StartupInfo.hStdInput = INVALID_HANDLE_VALUE;
++        si.StartupInfo.hStdOutput = INVALID_HANDLE_VALUE;
++        si.StartupInfo.hStdError = INVALID_HANDLE_VALUE;
++        let mut attrs = ProcThreadAttributeList::with_capacity(1).map_err(|_| preparation)?;
++        attrs.set_pty(self.con).map_err(|_| preparation)?;
++        si.lpAttributeList = attrs.as_mut_ptr();
++        // Use upstream quoting, path lookup, cwd and full environment encoding.
++        // The caller is trusted backend code; this API confers no authorization.
++        let (mut exe, mut cmdline) = cmd.cmdline().map_err(|_| preparation)?;
++        let cwd = cmd.current_directory();
++        let mut env = cmd.environment_block();
++        // Upstream emits only one terminator when env_clear() is empty. Win32
++        // requires two for an empty Unicode block; keep original spawn unchanged.
++        if env.len() == 1 {
++            env.push(0);
++        }
++        let mut pi: PROCESS_INFORMATION = unsafe { mem::zeroed() };
++        let created = unsafe {
++            CreateProcessW(
++                exe.as_mut_ptr(),
++                cmdline.as_mut_ptr(),
++                ptr::null_mut(),
++                ptr::null_mut(),
++                0,
++                EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | CREATE_SUSPENDED,
++                env.as_mut_ptr().cast(),
++                cwd.as_ref().map(|c| c.as_ptr()).unwrap_or(ptr::null()),
++                &mut si.StartupInfo,
++                &mut pi,
++            )
++        };
++        if created == 0 {
++            return Err(KnownNotStarted {
++                phase: JobSpawnPhase::CreateRejected,
++            });
++        }
++        let mut owned = Created {
++            proc: Some(unsafe { OwnedHandle::from_raw_handle(pi.hProcess as _) }),
++            thread: unsafe { OwnedHandle::from_raw_handle(pi.hThread as _) },
++            cleanup: true,
++        };
++        let process = owned.proc.as_ref().unwrap().as_raw_handle() as HANDLE;
++        if unsafe { AssignProcessToJobObject(job.as_raw_handle() as _, process) } == 0 {
++            return Err(if owned.reap() {
++                KnownNotStarted {
++                    phase: JobSpawnPhase::AssignmentReaped,
++                }
++            } else {
++                OutcomeUnknown
++            });
++        }
++        // A count other than exactly one is not evidence of no execution.
++        if unsafe { ResumeThread(owned.thread.as_raw_handle() as _) } != 1 {
++            let _ = owned.reap();
++            return Err(OutcomeUnknown);
++        }
++        owned.cleanup = false;
++        Ok(WinChild {
++            proc: Mutex::new(owned.proc.take().unwrap()),
++        })
++    }
++
+     pub fn new(size: COORD, input: FileDescriptor, output: FileDescriptor) -> Result<Self, Error> {
+         let mut con: HPCON = INVALID_HANDLE_VALUE;
+         let result = unsafe {

@@ -19,3 +19,11 @@ tests/fixtures/version-history-minisign/* -text
 
 # 已批准图标交付件按原始字节校验，禁止跨平台换行转换。
 src-tauri/icons/source/** -text
+
+# Audited vendor/patch hashes are byte-exact. Patch context blank lines contain
+# a required space marker; that data is not a source-code whitespace defect.
+/remote/vendor/vte/** -text
+/remote/patches/vte-osc-bound.patch -text whitespace=-blank-at-eol
+/remote/vendor/portable-pty/** -text
+/remote/vendor/portable-pty-upstream.json -text
+/remote/patches/portable-pty-owned-job.patch -text whitespace=-blank-at-eol

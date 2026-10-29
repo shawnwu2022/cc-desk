@@ -1,0 +1,133 @@
+{
+  "crate": "portable-pty",
+  "version": "0.8.1",
+  "license": "MIT",
+  "source": "https://crates.io/api/v1/crates/portable-pty/0.8.1/download",
+  "files": [
+    {
+      "path": ".cargo_vcs_info.json",
+      "sha256": "2e25e93ef8b1b94fa0cbe403f75e0063d58fc151afde609bb6a7ffe726edb545"
+    },
+    {
+      "path": "Cargo.lock",
+      "sha256": "0bd88c8890f27f37eba62c3da7351b59edd8383b010ac772ce89a8b15969acdc"
+    },
+    {
+      "path": "Cargo.toml",
+      "sha256": "2f85f261801b817fbcc6a58c374803376803153ad6ddea9c228071c413c9a9fc"
+    },
+    {
+      "path": "Cargo.toml.orig",
+      "sha256": "bd23e8014d3a9d5c2b4711967f590c1ab0adfdf15e51d30756d0da3fe286b607"
+    },
+    {
+      "path": "examples/whoami_async.rs",
+      "sha256": "c89932053c4f407353d2159f9a40f794cc52e46da745cf1ed2e3c79a54a72791"
+    },
+    {
+      "path": "examples/whoami.rs",
+      "sha256": "a6504d8f5c98d8ec50b88975f3f3b59573d0da1d914ef1d05bc550960e69ec4b"
+    },
+    {
+      "path": "LICENSE.md",
+      "sha256": "191c46fcf52061382b1c51a70311eb9081381cc158e5899f3739473a9432185b"
+    },
+    {
+      "path": "src/cmdbuilder.rs",
+      "sha256": "3661f914e2af4608ec343f352a0d05fda3f7f3fc9be9261a6b4e73b81b81827e"
+    },
+    {
+      "path": "src/lib.rs",
+      "sha256": "a324d731c9ef1a756feb8b36428599385f627891c3033093bf3226512845105b"
+    },
+    {
+      "path": "src/serial.rs",
+      "sha256": "9baa8a3e6838b8d1d02b086d01c53c4687f79732017276e21fccdb27819e11b0"
+    },
+    {
+      "path": "src/unix.rs",
+      "sha256": "62fb48d3af26faec2293041b7e6e390f58c2bb0eacbfaadfeb3f36195d9a8955"
+    },
+    {
+      "path": "src/win/conpty.rs",
+      "sha256": "8af0d7654aad62aaa67685b7b8550bc638b732360f7de1357cc5b0a35bc47ca1"
+    },
+    {
+      "path": "src/win/mod.rs",
+      "sha256": "c983e63d15800f73ac05105a69ec2b53fea482c066ea5559682bd024561f999a"
+    },
+    {
+      "path": "src/win/procthreadattr.rs",
+      "sha256": "0483a5b43794181f02b20175ba15dc4e913663208d94e4a48aa9cc2cd77fdb1c"
+    },
+    {
+      "path": "src/win/psuedocon.rs",
+      "sha256": "483f5abcda72e1b264541d6faf29ac3c61b901ee5cc6aff46934b82f5e29c179"
+    }
+  ],
+  "crateSha256": "806ee80c2a03dbe1a9fb9534f8d19e4c0546b790cde8fd1fea9d6390644cb0be",
+  "vcsCommit": "4afedd626dadd15d9c2929bab0e2063b54f61393",
+  "patchSha256": "e615c69094885aa60f44c110679b12a12ce607450a63bb64fe91652c9c0799d8",
+  "patchedFiles": [
+    {
+      "path": ".cargo_vcs_info.json",
+      "sha256": "2e25e93ef8b1b94fa0cbe403f75e0063d58fc151afde609bb6a7ffe726edb545"
+    },
+    {
+      "path": "Cargo.lock",
+      "sha256": "0bd88c8890f27f37eba62c3da7351b59edd8383b010ac772ce89a8b15969acdc"
+    },
+    {
+      "path": "Cargo.toml",
+      "sha256": "6f73f6200dacac77b58fdc57506d11f298bde1552a3cfd94dc2b6d5ab8b67fac"
+    },
+    {
+      "path": "Cargo.toml.orig",
+      "sha256": "bd23e8014d3a9d5c2b4711967f590c1ab0adfdf15e51d30756d0da3fe286b607"
+    },
+    {
+      "path": "examples/whoami_async.rs",
+      "sha256": "c89932053c4f407353d2159f9a40f794cc52e46da745cf1ed2e3c79a54a72791"
+    },
+    {
+      "path": "examples/whoami.rs",
+      "sha256": "a6504d8f5c98d8ec50b88975f3f3b59573d0da1d914ef1d05bc550960e69ec4b"
+    },
+    {
+      "path": "LICENSE.md",
+      "sha256": "191c46fcf52061382b1c51a70311eb9081381cc158e5899f3739473a9432185b"
+    },
+    {
+      "path": "src/cmdbuilder.rs",
+      "sha256": "3661f914e2af4608ec343f352a0d05fda3f7f3fc9be9261a6b4e73b81b81827e"
+    },
+    {
+      "path": "src/lib.rs",
+      "sha256": "8e0fdf231a4448c90bfdeb71d945840ab08dbfdcc43452a2bc218758f11e53d6"
+    },
+    {
+      "path": "src/serial.rs",
+      "sha256": "9baa8a3e6838b8d1d02b086d01c53c4687f79732017276e21fccdb27819e11b0"
+    },
+    {
+      "path": "src/unix.rs",
+      "sha256": "62fb48d3af26faec2293041b7e6e390f58c2bb0eacbfaadfeb3f36195d9a8955"
+    },
+    {
+      "path": "src/win/conpty.rs",
+      "sha256": "4ea32ff1f323ea58b5a8c838194c67b4d1f6693ac4bb2211b6e3936d4a97fc91"
+    },
+    {
+      "path": "src/win/mod.rs",
+      "sha256": "c983e63d15800f73ac05105a69ec2b53fea482c066ea5559682bd024561f999a"
+    },
+    {
+      "path": "src/win/procthreadattr.rs",
+      "sha256": "0483a5b43794181f02b20175ba15dc4e913663208d94e4a48aa9cc2cd77fdb1c"
+    },
+    {
+      "path": "src/win/psuedocon.rs",
+      "sha256": "e8ed5ca94a00d105c6e067514611158617d032e063c9f67f25dd2713b5cb204e"
+    }
+  ]
+}

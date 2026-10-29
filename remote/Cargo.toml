@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+members = ["crates/transport", "crates/runtime", "crates/host", "crates/terminal", "crates/security"]
+exclude = ["vendor/vte", "vendor/portable-pty"]
+
+[patch.crates-io]
+vte = { path = "vendor/vte" }
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+publish = false
