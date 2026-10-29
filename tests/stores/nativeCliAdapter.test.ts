@@ -90,6 +90,37 @@ function setup(tabs: NativeCliTab[], entries: NativeHistoryEntry[], legacyRoot?:
   return { adapter, map, runtime, archive, cliUnarchive, setActive, archived, historyLoad, metadata }
 }
 
+// 身份来自认证通道；标题和忙闲状态都不能成为临时行迁移的匹配键。
+it.each(['working', 'idle'] as const)('CodexIdentity_TitleRefreshKeepsOpenedOwner_083 %s', async activity => {
+  const active = tab({ action: { kind: 'new' }, title: 'Codex CLI', codexProgramStatus: activity });
+  const entry = history('codex', 'root', 'session-1'); entry.sourceRootKey = 'root';
+  entry.sessions[0].createdAt = '2026-09-28T00:00:00Z';
+  const entries: NativeHistoryEntry[] = [];
+  const state = setup([active], entries);
+  const original = (await state.adapter.listSessions())[0];
+  entries.push(entry);
+  active.observedSessionId = 'session-1';
+  const sibling = { ...entry.sessions[0], nativeSessionId: 'different-id', sessionKey: 'different-key' };
+  entry.sessions.push(sibling);
+  for (const title of ['Prompt title', 'AI title', 'AI title']) {
+    entry.sessions[0].title = sibling.title = title;
+    const rows = await state.adapter.listSessions();
+    expect(rows).toHaveLength(2);
+    const opened = rows.find(row => row.opened)!;
+    expect(opened).toMatchObject({ id: original.id, title, nativeSessionId: 'session-1', activityState: activity,
+      createdAt: Date.parse('2026-09-28T00:00:00Z') });
+    expect(rows.filter(row => !row.opened).map(row => row.nativeSessionId)).toEqual(['different-id']);
+  }
+  state.map.delete(active.tabId);
+  const closed = (await state.adapter.listSessions()).find(row => row.nativeSessionId === 'session-1')!;
+  expect(closed).toMatchObject({ title: 'AI title', opened: false });
+  state.map.set(active.tabId, { ...active, action: { kind: 'resume-id', nativeSessionId: 'session-1' },
+    sourceSessionKey: entry.sessions[0].sessionKey });
+  const resumed = await state.adapter.listSessions();
+  expect(resumed).toHaveLength(2);
+  expect(resumed.find(row => row.opened)).toMatchObject({ title: 'AI title', createdAt: closed.createdAt });
+});
+
 // 实际两个 adapter 使用不同历史键；原生行不能接管未知来源的 Legacy 归档或恢复。
 it('History_KeepLegacyArchiveOwner_037', async () => {
   setActivePinia(createPinia())
