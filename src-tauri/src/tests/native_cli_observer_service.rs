@@ -8,8 +8,23 @@ use std::ffi::OsStr;
 #[cfg(windows)]
 #[test]
 fn Opencode_SameRunWithoutVersionProbe_125() {
+    opencode_same_run_fixture(
+        &[(0, "1.18.0"), (1, "1.19.0"), (2, "future+shape"), (3, "")],
+        Duration::ZERO,
+    );
+}
+
+// 单次响应低于生产 700ms 期限；完整序列不能被更短的无关总表杀掉。
+#[cfg(windows)]
+#[test]
+fn Opencode_SameRunBoundedResponses_132() {
+    opencode_same_run_fixture(&[(3, "")], Duration::from_millis(550));
+}
+
+#[cfg(windows)]
+fn opencode_same_run_fixture(cases: &[(usize, &str)], response_delay: Duration) {
     use crate::cli::profiles::{Dialect, Launcher};
-    for (index, version) in ["1.18.0", "1.19.0", "future+shape", ""].iter().enumerate() {
+    for (index, version) in cases {
         let mut f = Fixture::new(false);
         let script = f.root.path().join("owned-opencode.mjs");
         fs::write(&script, r#"
@@ -18,20 +33,32 @@ import assert from 'node:assert/strict';
 import {join} from 'node:path';
 const root=process.env.CC_DESK_TEST_ROOT;
 assert(root && fs.realpathSync(root)===fs.realpathSync(process.cwd()));
+let phase='configuration', requests=0;
+const startedAt=performance.now(), statuses=[], elapsedMs=[];
+// 自有 fixture 的固定阶段/数字；不记录环境、argv、nonce 或请求正文。
+process.once('exit',code=>fs.writeFileSync(join(root,'diagnostic.json'),JSON.stringify({code,phase,requests,statuses,elapsedMs,totalMs:Math.round(performance.now()-startedAt),nodeVersion:process.versions.node})));
+const originalFetch=globalThis.fetch;
+globalThis.fetch=async (...args)=>{ requests++; const start=performance.now();try { const response=await originalFetch(...args);statuses.push(response.status);return response } catch(error) { statuses.push(0);throw error } finally { elapsedMs.push(Math.round(performance.now()-start)) } };
 fs.appendFileSync(join(root,'calls.log'),JSON.stringify(process.argv.slice(2))+'\n');
 if(process.argv.includes('--version')) { process.stdout.write(process.env.C4_VERSION); process.exit(0); }
-const timeout=setTimeout(()=>process.exit(42),5000); timeout.unref();
+// 固定9个事件产生10次串行发送；按10×700ms预算另加5s宿主调度余量。
+// 5s沿用旧总保护数值，不代表已有独立阶段合同或产品 SLA。
+// 这是 fixture 防挂保护，不改变生产单请求期限或成功断言。
+const fixtureBudgetMs=5000+10*700;
+const timeout=setTimeout(()=>process.exit(42),fixtureBudgetMs); timeout.unref();
 const config=JSON.parse(process.env.OPENCODE_CONFIG_CONTENT ?? '{}');
 assert.equal(config.future.keep,true);
 assert.deepEqual(config.plugin[0],['user-kept',{enabled:false,nested:{keep:true}}]);
 assert.equal(config.plugin[1],'second-kept');
 assert.equal(config.plugin.length,3);
 const [url,options]=config.plugin[2];
+phase='import';
 const mod=await import(url);
 const id=options.sessionID ?? 'ses_same_run';
 const metadata={id,directory:options.directory};
+phase='initialization';
 const plugin=await mod.CCDeskObserver({directory:options.directory,client:{session:{get:async()=>({data:metadata})}}},options);
-const emit=(type,properties,key=type)=>plugin.event({event:{id:key,type,properties}});
+const emit=(type,properties,key=type)=>{phase=key;return plugin.event({event:{id:key,type,properties}})};
 await emit('session.created',{info:{...metadata,future:'ignored'}});
 await emit('session.status',{sessionID:id,status:{type:'busy'}},'busy');
 await emit('permission.asked',{sessionID:id,id:'permission'});
@@ -42,6 +69,7 @@ await emit('session.error',{sessionID:id});
 await emit('session.status',{sessionID:id,status:{type:'idle'}},'idle');
 await emit('session.status',{sessionID:id,status:{type:'retry'}},'retry');
 plugin.dispose();
+phase='done';
 process.exit(0);
 "#).unwrap();
         let program = f.root.path().join("owned-opencode.cmd");
@@ -88,7 +116,19 @@ process.exit(0);
                 Ok(())
             }),
         );
+        let app = if response_delay.is_zero() {
+            app
+        } else {
+            app.layer(axum::middleware::from_fn(
+                move |request: axum::extract::Request, next: axum::middleware::Next| async move {
+                    let response = next.run(request).await;
+                    tokio::time::sleep(response_delay).await;
+                    response
+                },
+            ))
+        };
         let runtime = tokio::runtime::Builder::new_multi_thread()
+            // 保持原测试的两个 HTTP worker，不借故改变调度或生产期限。
             .worker_threads(2)
             .enable_all()
             .build()
@@ -142,6 +182,9 @@ process.exit(0);
         let exit = child.process.pty.wait().unwrap();
         let _ = shutdown.send(());
         runtime.block_on(server).unwrap();
+        let diagnostic =
+            fs::read_to_string(Path::new(&f.request.launch_cwd).join("diagnostic.json"))
+                .unwrap_or_else(|_| "missing".into());
         let snapshot = f
             .service
             .access(&f.caller, &status.run)
@@ -156,8 +199,14 @@ process.exit(0);
         );
         assert!(
             exit.success(),
-            "owned plugin fixture did not complete for version text {version:?}"
+            "owned plugin fixture did not complete for version text {version:?}: {exit:?}; diagnostic={}",
+            diagnostic
         );
+        let diagnostic: serde_json::Value = serde_json::from_str(&diagnostic).unwrap();
+        assert_eq!(diagnostic["code"], 0);
+        assert_eq!(diagnostic["phase"], "done");
+        assert_eq!(diagnostic["requests"], 10);
+        assert_eq!(diagnostic["statuses"], serde_json::json!(vec![200; 10]));
         let calls = fs::read_to_string(Path::new(&f.request.launch_cwd).join("calls.log")).unwrap();
         assert_eq!(
             calls.lines().count(),
