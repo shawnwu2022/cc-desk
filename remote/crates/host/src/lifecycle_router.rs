@@ -61,6 +61,16 @@ impl Rights {
     }
 }
 pub(crate) trait Host {
+    fn completion_backend_id(&self) -> Option<[u8; 32]> {
+        None
+    }
+    fn restored_attach(
+        &mut self,
+        _c: &Context<'_>,
+        _r: &Request,
+    ) -> Result<Option<crate::lifecycle_completion::Applied>, Code> {
+        Ok(None)
+    }
     fn attach_with_completion(
         &mut self,
         c: &Context<'_>,
@@ -157,6 +167,29 @@ impl<B: Host> Router<B> {
         };
         if !self.rights.permits(r.kind) {
             return reject(Code::Unauthorized);
+        }
+        if r.kind == Kind::Attach && !self.pending && (self.last == 0 || self.last == r.sequence) {
+            let c = Context {
+                proof: &self.proof,
+                state: self.state,
+            };
+            if let Some(event) = self.backend.restored_attach(&c, &r)? {
+                self.proof.check().map_err(|_| Code::Unauthorized)?;
+                if event.request != r
+                    || record.fence() != r.state.fence
+                    || (self.state != r.state && self.state != event.after)
+                {
+                    return reject(Code::Stale);
+                }
+                self.state = event.after;
+                self.last = r.sequence;
+                self.attached = Some(event);
+                self.cached = Some(Reply {
+                    request: r.clone(),
+                    status: Status::Accepted,
+                });
+                return Ok(self.cached.clone().unwrap());
+            }
         }
         if record.fence() != self.state.fence {
             return reject(Code::Stale);

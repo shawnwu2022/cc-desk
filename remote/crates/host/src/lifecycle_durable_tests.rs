@@ -320,7 +320,7 @@ async fn lifecycle_durable_adapter_reopen_does_not_requeue_accepted_or_panicked_
     }
 }
 #[tokio::test]
-async fn lifecycle_durable_fake_completion_is_recorded_without_claiming_wire_completion() {
+async fn lifecycle_durable_incomplete_completion_reopens_uncertain_and_blocks() {
     let (c, h, _gate, _cancel, _grant) = support::channels(Arc::new(AtomicU64::new(1000))).await;
     let proof = h.authority();
     let ctx = Context {
@@ -343,13 +343,13 @@ async fn lifecycle_durable_fake_completion_is_recorded_without_claiming_wire_com
         key(),
         bound_fake(n.clone(), false, &proof),
     );
-    assert_eq!(a.create(&ctx, &request()), Status::Accepted);
+    assert_eq!(a.create(&ctx, &request()), Status::Unknown);
     assert_eq!(n.load(Ordering::Acquire), 1);
     let mut next = request();
     next.sequence = 2;
     next.operation = [8; 16];
-    assert_eq!(a.create(&ctx, &next), Status::Accepted);
-    assert_eq!(n.load(Ordering::Acquire), 2);
+    assert_eq!(a.create(&ctx, &next), Status::Rejected(Code::Pending));
+    assert_eq!(n.load(Ordering::Acquire), 1);
     drop(a);
     h.close().await;
     c.close().await;

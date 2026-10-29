@@ -16,12 +16,14 @@ use std::{
 };
 // Existing guard recognizes the CC Desk application family. Version+SQL below identify this candidate only.
 const APP: i64 = 0x43434452;
-const VERSION: i64 = 0x4c4a0001;
-const SQL: [&str; 4] = [
+const LEGACY_VERSION: i64 = 0x4c4a0001;
+const VERSION: i64 = 0x4c4a0002;
+const SQL: [&str; 5] = [
     "CREATE TABLE binding(id INTEGER NOT NULL PRIMARY KEY CHECK(id=1),witness BLOB NOT NULL CHECK(length(witness)=32)) STRICT",
     "CREATE TABLE floors(scope BLOB NOT NULL PRIMARY KEY CHECK(length(scope)=32),seq BLOB NOT NULL CHECK(length(seq)=8)) STRICT",
     "CREATE TABLE ops(scope BLOB NOT NULL CHECK(length(scope)=32),op BLOB NOT NULL CHECK(length(op)=16),seq BLOB NOT NULL CHECK(length(seq)=8),digest BLOB NOT NULL CHECK(length(digest)=32),state INTEGER NOT NULL CHECK(state BETWEEN 0 AND 5),code INTEGER,PRIMARY KEY(scope,op),UNIQUE(scope,seq),CHECK((state=5 AND code BETWEEN 0 AND 6) OR (state<>5 AND code IS NULL))) STRICT",
     "CREATE UNIQUE INDEX unresolved ON ops(scope) WHERE state IN (0,1,2,4)",
+    "CREATE TABLE results(scope BLOB NOT NULL CHECK(length(scope)=32),op BLOB NOT NULL CHECK(length(op)=16),backend BLOB NOT NULL CHECK(length(backend)=32),payload BLOB NOT NULL CHECK(length(payload) BETWEEN 48 AND 4096),seal BLOB NOT NULL CHECK(length(seal)=32),PRIMARY KEY(scope,op)) STRICT",
 ];
 pub(super) struct Ticket {
     owner: Weak<()>,
@@ -42,6 +44,7 @@ pub(super) struct Store {
     owner: Arc<()>,
     ownership: Arc<crate::path_guard::Ownership>,
     poisoned: bool,
+    legacy: bool,
     #[cfg(test)]
     pub fault: Option<Cut>,
 }
@@ -84,7 +87,7 @@ fn verify(db: &Connection) -> Result<(), Error> {
     let version: i64 = db
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .map_err(storage)?;
-    if app != APP || version != VERSION {
+    if app != APP || ![LEGACY_VERSION, VERSION].contains(&version) {
         return Err(Error::Schema);
     }
     let mut stmt = db
@@ -95,7 +98,10 @@ fn verify(db: &Connection) -> Result<(), Error> {
         .map_err(storage)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(storage)?;
-    let mut wanted = SQL.map(str::to_owned).to_vec();
+    let mut wanted = SQL[..if version == LEGACY_VERSION { 4 } else { 5 }]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect::<Vec<_>>();
     wanted.sort();
     if actual != wanted {
         return Err(Error::Schema);
@@ -105,6 +111,18 @@ fn verify(db: &Connection) -> Result<(), Error> {
 impl Store {
     pub fn bind_key(&mut self, witness: [u8; 32]) -> Result<(), Error> {
         self.check()?;
+        if self.legacy {
+            let old: Vec<u8> = self
+                .db
+                .query_row("SELECT witness FROM binding WHERE id=1", [], |r| r.get(0))
+                .map_err(storage)?;
+            use subtle::ConstantTimeEq;
+            return if bool::from(old.ct_eq(&witness)) {
+                Ok(())
+            } else {
+                Err(Error::Conflict)
+            };
+        }
         let tx = self
             .db
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -154,6 +172,23 @@ impl Store {
             let ro = Connection::open_with_flags(p, flags | OpenFlags::SQLITE_OPEN_READ_ONLY)
                 .map_err(storage)?;
             verify(&ro)?;
+            let version: i64 = ro
+                .query_row("PRAGMA user_version", [], |r| r.get(0))
+                .map_err(storage)?;
+            if version == LEGACY_VERSION {
+                let ownership = guards.ownership();
+                return Ok(Self {
+                    db: ro,
+                    path: p.to_owned(),
+                    _guards: guards,
+                    owner: Arc::new(()),
+                    ownership,
+                    poisoned: false,
+                    legacy: true,
+                    #[cfg(test)]
+                    fault: None,
+                });
+            }
         }
         let mut db = Connection::open_with_flags(p, flags | OpenFlags::SQLITE_OPEN_READ_WRITE)
             .map_err(storage)?;
@@ -187,6 +222,7 @@ impl Store {
                 [],
             )
             .map_err(storage)?;
+            tx.execute("UPDATE ops SET state=4,code=NULL WHERE state=3 AND NOT EXISTS(SELECT 1 FROM results r WHERE r.scope=ops.scope AND r.op=ops.op)",[]).map_err(storage)?;
         }
         tx.commit().map_err(storage)?;
         if created {
@@ -206,6 +242,7 @@ impl Store {
             owner: Arc::new(()),
             ownership,
             poisoned: false,
+            legacy: false,
             #[cfg(test)]
             fault: None,
         })
@@ -240,7 +277,11 @@ impl Store {
         }
         let tx = self
             .db
-            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .transaction_with_behavior(if self.legacy {
+                TransactionBehavior::Deferred
+            } else {
+                TransactionBehavior::Immediate
+            })
             .map_err(storage)?;
         let row = tx
             .query_row(
@@ -262,7 +303,17 @@ impl Store {
             if old != seq.to_be_bytes() || !bool::from(hash.ct_eq(&digest)) {
                 return Err(Error::Conflict);
             }
-            return Ok(Prepare::Recorded(phase(s, c)?));
+            let p = phase(s, c)?;
+            return Ok(Prepare::Recorded(
+                if self.legacy && !matches!(p, Phase::Rejected(_)) {
+                    Phase::Uncertain
+                } else {
+                    p
+                },
+            ));
+        }
+        if self.legacy {
+            return Err(Error::Sequence);
         }
         let sequence_exists: bool = tx
             .query_row(
@@ -363,6 +414,9 @@ impl Store {
     }
     pub fn transition(&mut self, t: &Ticket, next: Phase) -> Result<(), Error> {
         self.check()?;
+        if self.legacy {
+            return Err(Error::Schema);
+        }
         if !Weak::ptr_eq(&t.owner, &Arc::downgrade(&self.owner)) {
             return Err(Error::Conflict);
         }
@@ -440,6 +494,11 @@ impl Store {
         Ok(())
     }
 }
+#[cfg(all(test, windows))]
+#[path = "lifecycle_recovery_tests.rs"]
+mod recovery_tests;
+#[path = "lifecycle_journal_results.rs"]
+mod results;
 #[cfg(all(test, windows))]
 #[path = "lifecycle_journal_tests.rs"]
 mod tests;

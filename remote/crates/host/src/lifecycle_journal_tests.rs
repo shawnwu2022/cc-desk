@@ -103,7 +103,7 @@ fn lifecycle_durable_all_recovery_phases_are_monotone() {
         drop(t);
         drop(s);
         let mut s = Store::open(&p).unwrap();
-        let want = if matches!(stop, Phase::Completed | Phase::Rejected(_)) {
+        let want = if matches!(stop, Phase::Rejected(_)) {
             stop
         } else {
             Phase::Uncertain
@@ -159,9 +159,7 @@ fn lifecycle_durable_commit_cuts_never_issue_a_second_execution() {
             drop(t);
             drop(s);
             let mut s = Store::open(&p).unwrap();
-            let want = if cut == Cut::AfterTransition
-                && matches!(phase, Phase::Completed | Phase::Rejected(_))
-            {
+            let want = if cut == Cut::AfterTransition && matches!(phase, Phase::Rejected(_)) {
                 phase
             } else {
                 Phase::Uncertain

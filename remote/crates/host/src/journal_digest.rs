@@ -7,6 +7,10 @@ pub enum DigestError {
 }
 impl DigestKey {
     #[cfg(feature = "experimental-host-owner")]
+    pub(crate) fn lifecycle_result(&self, b: &[u8]) -> Result<[u8; 32], DigestError> {
+        self.lifecycle_mac(b"CC-DESK-LIFECYCLE-RESULT-v2\0", b)
+    }
+    #[cfg(feature = "experimental-host-owner")]
     pub(crate) fn lifecycle_key_id(&self) -> [u8; 32] {
         self.lifecycle_mac(b"CC-DESK-LIFECYCLE-KEY-ID-v1\0", b"journal binding")
             .unwrap()

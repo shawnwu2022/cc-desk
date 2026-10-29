@@ -65,10 +65,11 @@ The guard uses one owner lock per directory: lifecycle metadata needs a separate
 trusted private metadata subdirectory from a simultaneously open input journal.
 Same-directory access fails OwnerBusy; the guard was not weakened.
 
-Application-family ID is 0x43434452; lifecycle schema version 0x4c4a0001 and exact
-SQL fingerprint distinguish it from input-journal version2. Existing foreign or
-input schema is checked read-only and rejected before writable PRAGMAs. No production
-database is opened or migrated by the tests. WAL + synchronous FULL, page4096,
+Application-family ID is 0x43434452; new lifecycle schema version0x4c4a0002 adds
+sealed typed Attach results. Legacy0x4c4a0001 is exact-fingerprint/read-only and
+unresolved, never auto-migrated. Both differ from input-journal version2. Foreign
+or unknown schema rejects before writable PRAGMAs. No production database is
+opened or migrated by the tests. WAL + synchronous FULL, page4096,
 max4096 pages, 4096 operations, 1024 resource floors, and 16MiB DB/WAL checks bound
 this candidate. Capacity exhaustion fails closed; retention/retirement is OPEN.
 Private trusted local storage is required; restoring old DB backups, cloning or

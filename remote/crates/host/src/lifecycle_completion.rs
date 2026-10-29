@@ -7,6 +7,55 @@ pub(crate) struct Applied {
     pub request: Request,
     pub after: State,
 }
+impl Applied {
+    pub(crate) fn encode_stored(&self) -> Result<Vec<u8>, Code> {
+        if self.after != successor(&self.request)? {
+            return Err(Code::Conflict);
+        }
+        let r = encode(&self.request)?;
+        let mut b = b"ATC2".to_vec();
+        b.extend_from_slice(&(r.len() as u32).to_be_bytes());
+        b.extend(r);
+        for n in [
+            self.after.generation,
+            self.after.fence,
+            self.after.mode,
+            self.after.dimension,
+            self.after.sync,
+        ] {
+            b.extend(n.to_be_bytes())
+        }
+        if b.len() > 4096 {
+            return Err(Code::Malformed);
+        }
+        Ok(b)
+    }
+    pub(crate) fn decode_stored(b: &[u8]) -> Result<Self, Code> {
+        if b.len() < 48 || b.len() > 4096 || &b[..4] != b"ATC2" {
+            return Err(Code::Malformed);
+        }
+        let n = u32::from_be_bytes(b[4..8].try_into().unwrap()) as usize;
+        if n != b.len() - 48 {
+            return Err(Code::Malformed);
+        }
+        let request = decode(&b[8..8 + n])?;
+        let mut values = [0; 5];
+        for (i, v) in values.iter_mut().enumerate() {
+            *v = u64::from_be_bytes(b[8 + n + i * 8..16 + n + i * 8].try_into().unwrap())
+        }
+        let after = State {
+            generation: values[0],
+            fence: values[1],
+            mode: values[2],
+            dimension: values[3],
+            sync: values[4],
+        };
+        if after != successor(&request)? {
+            return Err(Code::Conflict);
+        }
+        Ok(Self { request, after })
+    }
+}
 struct Slot {
     active: bool,
     request: Request,

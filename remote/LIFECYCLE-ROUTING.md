@@ -1,4 +1,4 @@
-# Independent lifecycle dispatch candidate — memory qualification only
+# Independent lifecycle dispatch candidate - fake Host qualification
 
 This module closes a bounded codec/dispatch seam. The default-off durable candidate
 is specified in [LIFECYCLE-DURABILITY.md](LIFECYCLE-DURABILITY.md). It registers no native backend,
@@ -44,7 +44,7 @@ router lifetime. Same op or sequence with altered contents conflicts. Exact retr
 returns its cached reply after live authorization checks. Accepted/Unknown allow
 no distinct request. Unknown/pending is reserved before calling the backend; a
 backend unwind cannot reopen admission or lose the exact retry's Unknown state.
-Rejected is a trusted no-effect result; only then may a new sequence be admitted.
+A trusted no-effect Rejected or verified completed Attach may permit a new sequence.
 No operation is automatically retried and no current epoch replaces an old one.
 
 The memory-only constructor is test-only. Product construction now requires the
@@ -54,7 +54,8 @@ prevents a recreated fake router from requeueing the same unresolved operation.
 Reopened Prepared/InFlight/Accepted become Uncertain, not retryable. Accepted
 is queue admission only; native completion/reconciliation is still unimplemented.
 Only the internal fake Attach channel in ATTACH-COMPLETION.md can release the
-same live router's pending gate after durable completion. Other accepted operations
+same live router's pending gate, or restore its exact sealed schema2 result on
+reconstruction. This is fakeHost qualification, not native runtime recovery. Other accepted operations
 continue to block new work. Resume cannot bypass this.
 No real process-crash, power-loss or native at-most-once claim is made.
 

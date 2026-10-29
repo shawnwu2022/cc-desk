@@ -1,5 +1,26 @@
 use super::*;
 #[test]
+fn lifecycle_stored_attach_codec_rejects_truncation_and_changed_state() {
+    let (r, _, a) = fixture();
+    let event = Applied {
+        request: r,
+        after: a,
+    };
+    let b = event.encode_stored().unwrap();
+    assert_eq!(Applied::decode_stored(&b).unwrap(), event);
+    for n in 0..b.len() {
+        assert!(Applied::decode_stored(&b[..n]).is_err())
+    }
+    let mut wrong = b.clone();
+    wrong[0] = 0;
+    assert!(Applied::decode_stored(&wrong).is_err());
+    let last = wrong.len() - 1;
+    wrong = b;
+    wrong[last] ^= 1;
+    assert!(Applied::decode_stored(&wrong).is_err());
+    assert!(Applied::decode_stored(&vec![0; 4097]).is_err());
+}
+#[test]
 fn attach_completion_dropped_owner_rejects_old_capability() {
     let (r, i, a) = fixture();
     let (s, p) = channel(r.clone(), i.clone(), [9; 32], Arc::new(())).unwrap();

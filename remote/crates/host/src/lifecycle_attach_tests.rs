@@ -1,62 +1,140 @@
 use super::*;
 #[tokio::test]
-async fn attach_completion_rebuilt_router_is_fail_closed_without_result_recovery() {
-    let (c, h, _gate, _cancel, _grant) = support::channels(Arc::new(AtomicU64::new(1000))).await;
-    let identity = ResourceIdentity::from_proof(&h.authority());
-    let sender = Arc::new(Mutex::new(None));
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("attach.sqlite");
-    let r = req();
-    let build = || {
-        let mut rights = Rights::default();
-        rights.allow(Kind::Attach);
-        Router::durable(
-            h.authority(),
-            Expected {
-                context: h.authority().context().clone(),
-                principal: [4; 32],
-                scope: support::scope(),
-                state: r.state,
-            },
-            rights,
-            Store::open(&path).unwrap(),
-            DigestKey::from_backend_bytes([0x5a; 32]),
-            Fake {
-                identity: identity.clone(),
-                sender: sender.clone(),
-                early: true,
-                unknown: false,
-            },
-        )
-        .unwrap()
-    };
-    let mut router = build();
-    c.send_control(
-        &support::scope(),
-        4,
-        &encode(&r).unwrap(),
-        std::time::Duration::from_secs(1),
-    )
-    .await
-    .unwrap();
-    let record = h
-        .receive(&support::scope(), 4, std::time::Duration::from_secs(1))
-        .await
-        .unwrap();
-    assert_eq!(router.dispatch(&record).unwrap().status, Status::Accepted);
-    assert_eq!(router.complete_attach(), Ok(true));
-    let old = sender.lock().unwrap().take().unwrap();
-    drop(router);
-    let mut rebuilt = build();
-    assert_eq!(rebuilt.dispatch(&record).unwrap().status, Status::Accepted);
-    assert!(sender.lock().unwrap().is_none());
-    assert_eq!(rebuilt.complete_attach(), Ok(false));
-    assert_eq!(rebuilt.attached().unwrap(), None);
-    assert!(rebuilt.pending);
-    assert_eq!(old.complete(&r, &identity, after(&r)), Err(Code::Stale));
-    drop(rebuilt);
-    h.close().await;
-    c.close().await;
+async fn attach_completion_rebuilt_router_recovers_exact_result_without_execution() {
+    for interrupted in [false, true] {
+        for corrupt in [false, true] {
+            let (c, h, mut gate, _cancel, _grant) =
+                support::channels(Arc::new(AtomicU64::new(1000))).await;
+            let identity = ResourceIdentity::from_proof(&h.authority());
+            let sender = Arc::new(Mutex::new(None));
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("attach.sqlite");
+            let r = req();
+            let build = || {
+                let mut rights = Rights::default();
+                rights.allow(Kind::Attach);
+                Router::durable(
+                    h.authority(),
+                    Expected {
+                        context: h.authority().context().clone(),
+                        principal: [4; 32],
+                        scope: support::scope(),
+                        state: r.state,
+                    },
+                    rights,
+                    Store::open(&path).unwrap(),
+                    DigestKey::from_backend_bytes([0x5a; 32]),
+                    Fake {
+                        identity: identity.clone(),
+                        sender: sender.clone(),
+                        early: true,
+                        unknown: false,
+                    },
+                )
+                .unwrap()
+            };
+            let mut router = build();
+            c.send_control(
+                &support::scope(),
+                4,
+                &encode(&r).unwrap(),
+                std::time::Duration::from_secs(1),
+            )
+            .await
+            .unwrap();
+            let record = h
+                .receive(&support::scope(), 4, std::time::Duration::from_secs(1))
+                .await
+                .unwrap();
+            assert_eq!(router.dispatch(&record).unwrap().status, Status::Accepted);
+            router.interrupt_completion = interrupted;
+            assert_eq!(
+                router.complete_attach(),
+                if interrupted {
+                    Err(Code::Backend)
+                } else {
+                    Ok(true)
+                }
+            );
+            let old = sender.lock().unwrap().take().unwrap();
+            drop(router);
+            if corrupt {
+                let db = rusqlite::Connection::open(&path).unwrap();
+                db.execute("UPDATE results SET seal=zeroblob(32)", [])
+                    .unwrap();
+            }
+            let mut rebuilt = build();
+            if corrupt {
+                assert_eq!(rebuilt.dispatch(&record), Err(Code::Conflict));
+                let mut next = r.clone();
+                next.operation = [8; 16];
+                next.sequence = 2;
+                c.send_control(
+                    &support::scope(),
+                    4,
+                    &encode(&next).unwrap(),
+                    std::time::Duration::from_secs(1),
+                )
+                .await
+                .unwrap();
+                let rec = h
+                    .receive(&support::scope(), 4, std::time::Duration::from_secs(1))
+                    .await
+                    .unwrap();
+                assert_eq!(rebuilt.dispatch(&rec), Err(Code::Conflict));
+                assert!(sender.lock().unwrap().is_none());
+                drop(rebuilt);
+                h.close().await;
+                c.close().await;
+                continue;
+            }
+            assert_eq!(rebuilt.dispatch(&record).unwrap().status, Status::Accepted);
+            assert!(sender.lock().unwrap().is_none());
+            assert_eq!(rebuilt.complete_attach(), Ok(false));
+            assert_eq!(
+                rebuilt.attached().unwrap(),
+                Some(Applied {
+                    request: r.clone(),
+                    after: after(&r)
+                })
+            );
+            assert!(!rebuilt.pending);
+            assert_eq!(rebuilt.dispatch(&record).unwrap().status, Status::Accepted);
+            assert!(sender.lock().unwrap().is_none());
+            let mut next = r.clone();
+            next.operation = [8; 16];
+            next.sequence = 2;
+            next.state = after(&r);
+            c.send_control(
+                &support::scope(),
+                5,
+                &encode(&next).unwrap(),
+                std::time::Duration::from_secs(1),
+            )
+            .await
+            .unwrap();
+            let rec = h
+                .receive(&support::scope(), 5, std::time::Duration::from_secs(1))
+                .await
+                .unwrap();
+            assert_eq!(rebuilt.dispatch(&rec).unwrap().status, Status::Accepted);
+            assert_eq!(rebuilt.complete_attach(), Ok(true));
+            assert_eq!(
+                rebuilt.attached().unwrap(),
+                Some(Applied {
+                    request: next.clone(),
+                    after: after(&next)
+                })
+            );
+            gate.revoke();
+            assert_eq!(rebuilt.attached(), Err(Code::Unauthorized));
+            assert_eq!(rebuilt.dispatch(&record), Err(Code::Unauthorized));
+            assert_eq!(old.complete(&r, &identity, after(&r)), Err(Code::Stale));
+            drop(rebuilt);
+            h.close().await;
+            c.close().await;
+        }
+    }
 }
 use crate::{
     bound_test_support as support,
@@ -72,6 +150,9 @@ struct Fake {
     unknown: bool,
 }
 impl Host for Fake {
+    fn completion_backend_id(&self) -> Option<[u8; 32]> {
+        Some([0x61; 32])
+    }
     fn resource_identity(&self) -> Option<&ResourceIdentity> {
         Some(&self.identity)
     }

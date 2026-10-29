@@ -1,7 +1,7 @@
 # Internal fake Attach completion candidate
 
-No native backend, wire change, database schema change/migration or remote
-enablement. Existing lifecycle Store::transition is reused unchanged.
+No native backend, wire change, real database migration or remote enablement.
+New candidate test stores use schema2 with atomic typed result persistence.
 
 A private bounded mailbox holds one exact result. Captured binding includes the
 full request (operation, sequence, generation, before-fence/epochs), resource
@@ -15,22 +15,41 @@ It may precede the Accepted write. Owner polls after dispatch, checks current
 backend identity, and commits Accepted -> Completed through the original ticket
 before changing router cache/state/admission. Duplicate evidence is idempotent;
 conflicts cannot replace the first fact. Uncertain cannot be completed by callback.
-Store failure leaves pending/cache closed. Existing journal transition enforces
-these states; no schema or input receipt interpretation changes.
+Store failure leaves pending/cache closed. Result and Completed are written in
+one transaction. Input receipt interpretation is unchanged.
 
 An interruption after commit/before cache can be retried on the same live owner.
 Historical fact recording is separate from attached() disclosure, which requires
 current live authority. New admission clears previous result and retires its
 mailbox; Receiver Drop rejects old cloned senders. No wire delivery is implemented.
 
-## Recovery limit: OPEN P2
+## Typed result recovery: P2 closed for fakeHost only
 
-This is not full crash recovery. SQL stores Completed without a full typed result
-or current backend state. Exact completed replay on a reconstructed router retains
-historical queue Accepted, calls no backend, creates no mailbox, and stays pending
-without an attached result. A specific test pins this fail-closed limitation.
-Future owner-derived state plus durable reconciliation/query is required; no
-automatic epoch reconstruction, migration or relaunch is introduced here.
+Schema0x4c4a0002 adds results: bounded ATC2 payload contains the full canonical
+Attach request and all five after-state fields; backend32 and a domain-separated
+HMAC bind payload to resource scope, operation, sequence and request digest.
+Both historical reads and new admission authenticate prior Completed results.
+Corrupt results block the resource; they never become retry eligibility.
+
+Exact replay on reconstruction recovers the same authorized internal Applied
+result with no backend call/mailbox, then permits next-sequence progress. Wire
+reply stays historical queue Accepted; typed result is internal attached() only.
+Live source/scope, per-operation Rights, backend/resource identity and before/after
+state checks remain required; disclosure rechecks authority. Old capabilities
+remain stale and cannot complete the reconstructed Store.
+
+Schema0x4c4a0001 is recognized by exact SQL fingerprint and opened read-only.
+No DDL or automatic upgrade occurs; old incomplete completion remains Uncertain
+and cannot admit new work. New schema2 Completed without a result is demoted to
+Uncertain on reopen. Unknown schema rejects before writable opening. No production
+database was read/migrated, and no migration command is provided.
+
+Stable backend ID is an owner-supplied identifier for the SAME surviving or
+independently reconciled queue, never a library/CLI version or regenerated ID.
+Public fake ID is not an access credential. Persisted history is not proof a real
+PTY survived. Real registration needs owner-derived runtime state, persistent
+identity/key policy, reviewed migration/backup recovery and platform crash testing.
+Tests simulate drop/reopen, including commit-before-cache; no process/power cut.
 
 Create/Resize/Resume/Close completion are outside this channel. Native runtime is
 still only a Host dev-dependency. Desktop WebView CallerIdentity cannot be forged

@@ -14,6 +14,7 @@ pub(crate) struct Durable<B> {
     pending: Option<Ticket>,
     instance: std::sync::Arc<()>,
     completion: Option<(crate::lifecycle_completion::Receiver, [u8; 32])>,
+    completion_backend: Option<[u8; 32]>,
     #[cfg(test)]
     before_backend: Option<Box<dyn FnOnce() + Send>>,
 }
@@ -64,6 +65,7 @@ impl<B: Host> Durable<B> {
             pending: None,
             instance: std::sync::Arc::new(()),
             completion: None,
+            completion_backend: None,
             #[cfg(test)]
             before_backend: None,
         }
@@ -74,6 +76,14 @@ impl<B: Host> Durable<B> {
         }
         if r.kind != kind || r.state != c.state {
             return Status::Rejected(Code::Stale);
+        }
+        if kind == Kind::Attach
+            && self
+                .backend
+                .completion_backend_id()
+                .is_none_or(|id| id == [0; 32])
+        {
+            return Status::Rejected(Code::Unsupported);
         }
         if self.backend.resource_identity()
             != Some(&crate::lifecycle_router::ResourceIdentity::from_proof(
@@ -93,6 +103,13 @@ impl<B: Host> Durable<B> {
             return Status::Rejected(Code::Unauthorized);
         }
         self.resource = Some(scope);
+        if self
+            .store
+            .validate_results(scope, self.backend.completion_backend_id(), &self.key)
+            .is_err()
+        {
+            return Status::Unknown;
+        }
         let mut bytes = scope.to_vec();
         bytes.extend_from_slice(c.proof.context().client_endpoint_id.as_bytes());
         match encode(r) {
@@ -152,6 +169,7 @@ impl<B: Host> Durable<B> {
                     return Status::Unknown;
                 };
                 self.completion = Some((receiver, digest));
+                self.completion_backend = self.backend.completion_backend_id();
                 self.backend.attach_with_completion(c, r, sender)
             }
             Kind::Resize => self.backend.resize(c, r),
@@ -196,10 +214,16 @@ impl<B: Host> Durable<B> {
         };
         // Authenticated historical evidence may be recorded after revocation;
         // disclosing it is a separate live-authority check in the router.
+        let backend = self.completion_backend.ok_or(Code::Conflict)?;
+        if self.backend.completion_backend_id() != Some(backend) {
+            return Err(Code::Conflict);
+        }
         self.store
-            .transition(
+            .record_attach(
                 self.pending.as_ref().ok_or(Code::Conflict)?,
-                Phase::Completed,
+                backend,
+                &event,
+                &self.key,
             )
             .map_err(|_| Code::Backend)?;
         Ok(Some(event))
@@ -210,6 +234,40 @@ impl<B: Host> Durable<B> {
     }
 }
 impl<B: Host> Host for Durable<B> {
+    fn restored_attach(
+        &mut self,
+        c: &Context<'_>,
+        r: &Request,
+    ) -> Result<Option<crate::lifecycle_completion::Applied>, Code> {
+        c.proof.check().map_err(|_| Code::Unauthorized)?;
+        if self.backend.resource_identity()
+            != Some(&crate::lifecycle_router::ResourceIdentity::from_proof(
+                c.proof,
+            ))
+        {
+            return Err(Code::Unauthorized);
+        }
+        let Some(backend) = self.backend.completion_backend_id() else {
+            return Ok(None);
+        };
+        self.store
+            .bind_key(self.key.lifecycle_key_id())
+            .map_err(|_| Code::Backend)?;
+        let scope = resource(c, &self.key)?;
+        self.store
+            .validate_results(scope, Some(backend), &self.key)
+            .map_err(|_| Code::Conflict)?;
+        let mut bytes = scope.to_vec();
+        bytes.extend_from_slice(c.proof.context().client_endpoint_id.as_bytes());
+        bytes.extend(encode(r)?);
+        let digest = self
+            .key
+            .lifecycle_request(&bytes)
+            .map_err(|_| Code::Malformed)?;
+        self.store
+            .restore_attach(scope, r.operation, r.sequence, digest, backend, &self.key)
+            .map_err(|_| Code::Conflict)
+    }
     fn create(&mut self, c: &Context<'_>, r: &Request) -> Status {
         self.apply(c, r, Kind::Create)
     }
