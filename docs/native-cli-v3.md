@@ -103,6 +103,30 @@ the still-current revision eligible for the queued read.
 Unchanged profiles retain their history; admitted tabs and runs keep their frozen
 identity. Saving alone never launches or replays a failed launch.
 
+## Frozen launch recipe
+
+The backend builds `LaunchRecipe` from the same immutable launch snapshot and
+unchanged CLI action mapping. The recipe borrows that snapshot, retaining its
+transport/held-file lifetime, and checks the complete request before rendering.
+Program, runner, action and user argument layers remain separate. No profile,
+request wire field, discovery permission or persistent setting is added.
+
+Only the existing admitted Windows npm Cmd transport contributes a proven file
+entry: its wrapper still chooses adjacent Node or PATH Node, with the same empty
+interpreter prefix. Hooks belong to its preload delivery, while New/ResumeId/
+ResumePicker and user arguments belong to the CLI tail after the file entry.
+External wrapper argv never duplicates the preload's hooks. The planned entry
+argv is backend-only evidence of composition, not a new process specification,
+publisher authentication or observed hook capability.
+
+Raw and unproven routes preserve their original argv and expose no proven entry.
+In particular, this stage does not infer a script boundary from flat defaultArgs,
+repair ambiguous interpreter profiles by guessing, enable an unproven native
+observer, alter the native probe chain, or introduce a Unix holder. Those explicit
+capability gaps do not block the equivalent mapping of already proven routes.
+Version text is not used by the recipe. User hook policy, terminators, argument
+order, original error boundaries and request/profile/run binding remain intact.
+
 ## Authenticated document and projection boundary
 
 Native frontend calls are admitted through the authenticated document bridge. Frontend-selected paths or opaque IDs alone never authorize filesystem access.

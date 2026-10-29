@@ -57,6 +57,12 @@ impl std::fmt::Debug for LaunchSnapshot {
 }
 
 impl LaunchSnapshot {
+    #[cfg(windows)]
+    pub(crate) fn codex_npm_entry(&self) -> Option<&super::codex_cmd::ProvenNpmEntry> {
+        self.codex_cmd
+            .as_deref()
+            .map(super::codex_cmd::Transport::entry)
+    }
     pub(crate) fn codex_identity_requested(&self) -> bool {
         self.request.cli == CliKind::Codex
             // Node 的脚本路径属于解释器参数，不能在它前面插入 Codex flags。

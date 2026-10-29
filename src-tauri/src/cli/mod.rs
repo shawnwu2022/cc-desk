@@ -10,6 +10,7 @@ pub(crate) mod document;
 pub(crate) mod environment;
 pub(crate) mod invocation;
 pub(crate) mod launch;
+pub(crate) mod launch_recipe;
 pub(crate) mod launch_service;
 pub(crate) mod native_projection;
 pub(crate) mod native_rename;

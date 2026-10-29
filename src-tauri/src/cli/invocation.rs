@@ -2,9 +2,10 @@
 #![allow(dead_code)] // The production launch route is switched in D10/D11.
 
 use super::environment::EnvMap;
+use super::launch_recipe::LaunchRecipe;
 use super::profiles::{error, Launcher};
 use super::snapshot::{CallerIdentity, LaunchSnapshot};
-use super::types::{CliKind, LaunchAction, LaunchRequest, RunPublicIdentity, SafeError};
+use super::types::{LaunchAction, LaunchRequest, RunPublicIdentity, SafeError};
 use std::ffi::OsString;
 use std::path::Path;
 
@@ -13,6 +14,7 @@ use std::path::Path;
 pub(crate) struct CliInvocation<'a> {
     snapshot: &'a LaunchSnapshot,
     args: Vec<OsString>,
+    recipe: LaunchRecipe<'a>,
 }
 
 impl std::fmt::Debug for CliInvocation<'_> {
@@ -23,7 +25,7 @@ impl std::fmt::Debug for CliInvocation<'_> {
 
 impl CliInvocation<'_> {
     pub(crate) fn program(&self) -> &Path {
-        self.snapshot.program()
+        self.recipe.program()
     }
 
     pub(crate) fn args(&self) -> &[OsString] {
@@ -45,7 +47,11 @@ impl CliInvocation<'_> {
     }
 
     pub(crate) fn runner(&self) -> Option<&Path> {
-        self.snapshot.runner()
+        self.recipe.runner()
+    }
+
+    pub(crate) fn recipe(&self) -> &LaunchRecipe<'_> {
+        &self.recipe
     }
 
     pub(crate) fn owner(&self) -> &CallerIdentity {
@@ -84,32 +90,11 @@ pub(crate) fn build_invocation<'a>(
         return Err(error("REQUEST_SNAPSHOT_MISMATCH"));
     }
     request.validate()?;
-    if let Some(args) = snapshot.raw_args() {
-        return Ok(CliInvocation {
-            snapshot,
-            args: args.to_vec(),
-        });
-    }
-    if snapshot
-        .legacy_default_args()
-        .is_some_and(|text| !text.is_empty())
-    {
-        return Err(error("LEGACY_ARGUMENTS_REQUIRE_MIGRATION"));
-    }
-    let mut args = snapshot.identity_args().to_vec();
-    args.extend(match request.cli {
-        CliKind::Claude => super::claude::action_args(snapshot)?,
-        CliKind::Codex => super::codex::action_args(snapshot)?,
-        CliKind::Opencode => super::opencode::action_args(snapshot)?,
-        CliKind::Shell => super::shell::action_args(snapshot)?,
-    });
-    // No quoting, parsing or deduplication. Explicit caller flags and positionals
-    // retain native parser semantics; raw provides exact full-command ordering.
-    args.extend_from_slice(snapshot.default_args());
-    if let Some(plugin) = snapshot.observer_plugin() {
-        args.push("--plugin-dir".into());
-        args.push(plugin.as_os_str().to_owned());
-    }
-    args.extend_from_slice(snapshot.extra_args());
-    Ok(CliInvocation { snapshot, args })
+    let recipe = LaunchRecipe::from_snapshot(snapshot)?;
+    let args = recipe.arguments(request)?;
+    Ok(CliInvocation {
+        snapshot,
+        args,
+        recipe,
+    })
 }

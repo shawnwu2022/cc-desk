@@ -8,6 +8,9 @@ mod catalog;
 #[cfg(windows)]
 #[path = "../../../src-tauri/src/cli/codex_cmd.rs"]
 mod codex_cmd;
+#[cfg(windows)]
+#[path = "../../../src-tauri/src/cli/codex_cmd_route.rs"]
+mod codex_cmd_route;
 #[path = "../../../src-tauri/src/cli/environment.rs"]
 mod environment;
 #[path = "../../../src-tauri/src/cli/native_projection/opencode_db.rs"]

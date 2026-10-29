@@ -15,6 +15,41 @@ pub(crate) struct Transport {
     // 先释放禁止写删的句柄，再清理临时目录；跟随实际 owned snapshot 生命周期。
     _guards: Vec<File>,
     _temp: tempfile::TempDir,
+    entry: ProvenNpmEntry,
+}
+
+/// 仅由完整 forwarding/package/held-file 检查建立；不是 CLI 能力或发行认证。
+pub(crate) struct ProvenNpmEntry {
+    entry: PathBuf,
+    adjacent_interpreter: PathBuf,
+    fallback_interpreter: OsString,
+    interpreter_prefix: Vec<OsString>,
+    hooks: Vec<OsString>,
+}
+impl ProvenNpmEntry {
+    pub(crate) fn entry(&self) -> &Path {
+        &self.entry
+    }
+    // 语法证明保留“相邻 Node，否则 PATH node”分派；这里不解析或改选 Node。
+    #[allow(dead_code)]
+    pub(crate) fn adjacent_interpreter(&self) -> &Path {
+        &self.adjacent_interpreter
+    }
+    #[allow(dead_code)]
+    pub(crate) fn fallback_interpreter(&self) -> &OsStr {
+        &self.fallback_interpreter
+    }
+    pub(crate) fn interpreter_prefix(&self) -> &[OsString] {
+        &self.interpreter_prefix
+    }
+    pub(crate) fn hook_args(&self) -> &[OsString] {
+        &self.hooks
+    }
+}
+impl Transport {
+    pub(crate) fn entry(&self) -> &ProvenNpmEntry {
+        &self.entry
+    }
 }
 
 fn unavailable() -> SafeError {
@@ -255,6 +290,13 @@ pub(crate) fn prepare_with_original(
     let mut transport = Transport {
         _guards: guards,
         _temp: temp,
+        entry: ProvenNpmEntry {
+            entry,
+            adjacent_interpreter: npm.join("node.exe"),
+            fallback_interpreter: "node".into(),
+            interpreter_prefix: Vec::new(),
+            hooks: args.iter().map(OsString::from).collect(),
+        },
     };
     let loader = std::fs::canonicalize(transport._temp.path())
         .map_err(|_| unavailable())?

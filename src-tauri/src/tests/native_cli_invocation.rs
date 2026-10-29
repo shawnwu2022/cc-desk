@@ -9,6 +9,171 @@ use std::fs;
 
 const LOCATOR: &str = "11111111-2222-4333-8444-555555555555";
 
+// 已证明的 npm 文件入口独占 CLI tail；真实自有 Cmd/Node 输出不得把 action/hooks 交给解释器。
+#[cfg(windows)]
+#[test]
+fn Recipe_NpmEntryOwnsActionTail_127() {
+    for (action, action_words) in [
+        (LaunchAction::New, vec![]),
+        (resume(LOCATOR), vec!["resume", LOCATOR]),
+        (picker(ResumeScope::CurrentProject), vec!["resume"]),
+        (picker(ResumeScope::All), vec!["resume", "--all"]),
+    ] {
+        let mut f = Fixture::new(CliKind::Codex, action);
+        let npm = f.root.path().join("npm");
+        let package = npm.join("node_modules/@openai/codex");
+        fs::create_dir_all(package.join("bin")).unwrap();
+        let program = npm.join("codex.cmd");
+        fs::write(
+            &program,
+            include_str!("../../../tests/fixtures/native-cli/codex-npm-0.163.0/codex.cmd"),
+        )
+        .unwrap();
+        fs::write(
+            package.join("package.json"),
+            r#"{"name":"@openai/codex","version":"future-layout","bin":{"codex":"bin/codex.js"}}"#,
+        )
+        .unwrap();
+        fs::write(
+            package.join("bin/codex.js"),
+            "process.stdout.write(JSON.stringify(process.argv.slice(2)))",
+        )
+        .unwrap();
+        f.profile.program_path = Override::Set(program.to_str().unwrap().into());
+        f.profile.launcher = Launcher::Shim {
+            runner: std::env::var("COMSPEC").unwrap(),
+            dialect: Dialect::Cmd,
+        };
+        f.profile.default_args = Override::Set(vec!["--model".into(), "user-model".into()]);
+        f.request.extra_args = vec!["two words".into(), "中文".into()];
+        for key in ["PATH", "SystemRoot", "ComSpec", "PATHEXT", "TEMP", "TMP"] {
+            if let Some(value) = std::env::var_os(key) {
+                f.inherited.insert(key.into(), value);
+            }
+        }
+        let observer = ObserverEnv {
+            values: EnvMap::from([
+                ("CC_DESK_CODEX_PORT".into(), "1234".into()),
+                ("CC_DESK_CODEX_RUN".into(), f.request.run_id.clone().into()),
+                (
+                    "CC_DESK_CODEX_GENERATION".into(),
+                    f.request.generation.to_string().into(),
+                ),
+                ("CC_DESK_CODEX_CAPABILITY".into(), "a".repeat(32).into()),
+            ]),
+        };
+        let hooks = crate::codex_observer::hook_args(&std::env::current_exe().unwrap()).unwrap();
+        let frozen = f.freeze();
+        let prepared = frozen.with_codex_identity(&observer, &hooks).unwrap();
+        let invocation = build_invocation(&f.request, &prepared).unwrap();
+        let recipe = invocation.recipe();
+        let entry = recipe
+            .npm_entry()
+            .expect("held forwarding proof must supply the file entry");
+        assert_eq!(entry.entry(), package.join("bin/codex.js"));
+        assert_eq!(entry.adjacent_interpreter(), npm.join("node.exe"));
+        assert_eq!(entry.fallback_interpreter(), "node");
+        assert!(entry.interpreter_prefix().is_empty());
+        let mut tail = words(&action_words);
+        tail.extend(words(&["--model", "user-model", "two words", "中文"]));
+        assert_eq!(recipe.arguments(&f.request).unwrap(), tail);
+        let expected = recipe.planned_entry_argv(&f.request).unwrap().unwrap();
+        assert_eq!(
+            std::path::Path::new(&expected[0]),
+            package.join("bin/codex.js")
+        );
+        assert_eq!(&expected[expected.len() - tail.len()..], tail);
+        assert_eq!(expected[1], "-c");
+        let spec = crate::platform::launch::resolve_process(&invocation).unwrap();
+        let output = spec.metadata_command().unwrap().output().unwrap();
+        assert!(output.status.success(), "owned Cmd/Node fixture failed");
+        let actual: Vec<String> = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            actual.iter().map(OsString::from).collect::<Vec<_>>(),
+            expected[1..]
+        );
+        let mut stale = f.request.clone();
+        stale.generation += 1;
+        assert_eq!(
+            recipe.arguments(&stale).unwrap_err().code,
+            "REQUEST_SNAPSHOT_MISMATCH"
+        );
+        // 未知参数 arity 与 hooks 冲突不得被配方迁移或猜测消费。
+        f.profile.default_args = Override::Set(vec![
+            "--future-option".into(),
+            "-chooks.SessionStart=[]".into(),
+        ]);
+        let conflict = f.freeze();
+        assert!(conflict.with_codex_identity(&observer, &hooks).is_err());
+        let original = build_invocation(&f.request, &conflict).unwrap();
+        assert!(original
+            .recipe()
+            .planned_entry_argv(&f.request)
+            .unwrap()
+            .is_none());
+        let mut expected = words(&action_words);
+        expected.extend(words(&[
+            "--future-option",
+            "-chooks.SessionStart=[]",
+            "two words",
+            "中文",
+        ]));
+        assert_eq!(original.args(), expected);
+        // 终止符的原生语义保留；不强行投递 hooks。
+        f.request.extra_args.push("--".into());
+        let terminated = f.freeze();
+        assert!(!terminated.codex_identity_requested());
+        assert!(terminated.with_codex_identity(&observer, &hooks).is_err());
+        expected.push("--".into());
+        assert_eq!(
+            build_invocation(&f.request, &terminated).unwrap().args(),
+            expected
+        );
+    }
+}
+
+// 旧平面解释器和 raw 保持原 argv，并明确不提供已证明入口；冻结绑定不能跨 revision/run/action。
+#[test]
+fn Recipe_OpaqueAndRawKeepExactArgs_128() {
+    for action in [
+        resume(LOCATOR),
+        LaunchAction::Raw {
+            argv: vec!["--".into(), "".into(), "\n".into()],
+        },
+    ] {
+        let mut f = Fixture::new(CliKind::Codex, action);
+        f.profile.default_args = Override::Set(vec!["wrapper.py".into()]);
+        f.request.extra_args = if matches!(f.request.action, LaunchAction::Raw { .. }) {
+            vec![]
+        } else {
+            vec!["--".into(), "two words".into()]
+        };
+        let frozen = f.freeze();
+        let invocation = build_invocation(&f.request, &frozen).unwrap();
+        let recipe = invocation.recipe();
+        assert!(recipe.planned_entry_argv(&f.request).unwrap().is_none());
+        let expected = if matches!(f.request.action, LaunchAction::Raw { .. }) {
+            words(&["--", "", "\n"])
+        } else {
+            words(&["resume", LOCATOR, "wrapper.py", "--", "two words"])
+        };
+        assert_eq!(recipe.arguments(&f.request).unwrap(), expected);
+        for field in ["revision", "run", "action"] {
+            let mut changed = f.request.clone();
+            match field {
+                "revision" => changed.expected_profile_revision = WireU64::parse("99").unwrap(),
+                "run" => changed.run_id = "other-run".into(),
+                _ => changed.action = LaunchAction::New,
+            }
+            assert_eq!(
+                recipe.arguments(&changed).unwrap_err().code,
+                "REQUEST_SNAPSHOT_MISMATCH"
+            );
+        }
+        assert_eq!(invocation.program(), frozen.program());
+    }
+}
+
 #[test]
 fn CodexAdapter_StatusReportsPreparedIdentityWithoutVersionClaim_108() {
     let snapshot = Fixture::new(CliKind::Codex, LaunchAction::New).freeze();
