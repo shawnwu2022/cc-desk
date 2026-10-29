@@ -49,6 +49,8 @@ use std::os::windows::prelude::{AsRawHandle, RawHandle};
 
 pub mod cmdbuilder;
 pub use cmdbuilder::CommandBuilder;
+#[cfg(windows)]
+pub use win::native_pipe::{spawn_pipe_in_job, NativePipeChild, NativePipeInput, NativePipeOutput};
 
 #[cfg(unix)]
 pub mod unix;

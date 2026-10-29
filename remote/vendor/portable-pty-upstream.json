@@ -67,7 +67,7 @@
   ],
   "crateSha256": "806ee80c2a03dbe1a9fb9534f8d19e4c0546b790cde8fd1fea9d6390644cb0be",
   "vcsCommit": "4afedd626dadd15d9c2929bab0e2063b54f61393",
-  "patchSha256": "e615c69094885aa60f44c110679b12a12ce607450a63bb64fe91652c9c0799d8",
+  "patchSha256": "8dfc89b9bedabc23a37612dd6b4fe941073f19e5305a55ab98aa177258245c0f",
   "patchedFiles": [
     {
       "path": ".cargo_vcs_info.json",
@@ -79,23 +79,23 @@
     },
     {
       "path": "Cargo.toml",
-      "sha256": "6f73f6200dacac77b58fdc57506d11f298bde1552a3cfd94dc2b6d5ab8b67fac"
+      "sha256": "457018a975ed8cbbabeb70e0e4fdf53e97e37a459ebe2a6ba12d41bd3776033c"
     },
     {
       "path": "Cargo.toml.orig",
-      "sha256": "bd23e8014d3a9d5c2b4711967f590c1ab0adfdf15e51d30756d0da3fe286b607"
+      "sha256": "dd7073e76e9d692032a65d8510db2c6c6630cfd3b5fc93f3e3b8f17b0469f3e4"
     },
     {
-      "path": "examples/whoami_async.rs",
-      "sha256": "c89932053c4f407353d2159f9a40f794cc52e46da745cf1ed2e3c79a54a72791"
+      "path": "LICENSE.md",
+      "sha256": "191c46fcf52061382b1c51a70311eb9081381cc158e5899f3739473a9432185b"
     },
     {
       "path": "examples/whoami.rs",
       "sha256": "a6504d8f5c98d8ec50b88975f3f3b59573d0da1d914ef1d05bc550960e69ec4b"
     },
     {
-      "path": "LICENSE.md",
-      "sha256": "191c46fcf52061382b1c51a70311eb9081381cc158e5899f3739473a9432185b"
+      "path": "examples/whoami_async.rs",
+      "sha256": "c89932053c4f407353d2159f9a40f794cc52e46da745cf1ed2e3c79a54a72791"
     },
     {
       "path": "src/cmdbuilder.rs",
@@ -103,7 +103,7 @@
     },
     {
       "path": "src/lib.rs",
-      "sha256": "8e0fdf231a4448c90bfdeb71d945840ab08dbfdcc43452a2bc218758f11e53d6"
+      "sha256": "608ca03c83d70df4574b70ad96d694295c167bcf145229a770a3af03678f8498"
     },
     {
       "path": "src/serial.rs",
@@ -119,11 +119,15 @@
     },
     {
       "path": "src/win/mod.rs",
-      "sha256": "c983e63d15800f73ac05105a69ec2b53fea482c066ea5559682bd024561f999a"
+      "sha256": "eb9606398b8bea7f5cec512250b23cd88b6296d289e15b44bfe6c635878fd497"
+    },
+    {
+      "path": "src/win/native_pipe.rs",
+      "sha256": "5c42b0c0ec94ae94d89239578fd4168a69854ca7d292d22b57217a35301ac41b"
     },
     {
       "path": "src/win/procthreadattr.rs",
-      "sha256": "0483a5b43794181f02b20175ba15dc4e913663208d94e4a48aa9cc2cd77fdb1c"
+      "sha256": "c637199de3e4286223ade5030b83ca37838d3076033d6bf1359e316e5e99c6cc"
     },
     {
       "path": "src/win/psuedocon.rs",

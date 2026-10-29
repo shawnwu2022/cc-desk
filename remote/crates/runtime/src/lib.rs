@@ -1,5 +1,9 @@
 //! Backend-only process ownership primitives; no authorization or network entry.
 use std::process::Command;
+#[cfg(all(windows, feature = "conpty-qualification"))]
+mod native_pipe;
+#[cfg(all(windows, feature = "conpty-qualification"))]
+pub use native_pipe::*;
 mod owned_run;
 #[cfg(windows)]
 mod windows_job;

@@ -12,6 +12,25 @@ pub struct ProcThreadAttributeList {
 }
 
 impl ProcThreadAttributeList {
+    /// 列表及三个句柄必须保持存活到 CreateProcessW 返回。
+    pub(crate) fn set_pipe_handles(
+        &mut self,
+        handles: &mut [winapi::um::winnt::HANDLE; 3],
+    ) -> Result<(), Error> {
+        let result = unsafe {
+            UpdateProcThreadAttribute(
+                self.as_mut_ptr(),
+                0,
+                0x00020002,
+                handles.as_mut_ptr().cast(),
+                mem::size_of_val(handles),
+                ptr::null_mut(),
+                ptr::null_mut(),
+            )
+        };
+        ensure!(result != 0, "UpdateProcThreadAttribute handle-list failed");
+        Ok(())
+    }
     pub fn with_capacity(num_attributes: DWORD) -> Result<Self, Error> {
         let mut bytes_required: usize = 0;
         unsafe {

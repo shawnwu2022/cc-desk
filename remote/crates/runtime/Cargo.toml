@@ -33,3 +33,17 @@ required-features = ["conpty-qualification"]
 [[test]]
 name = "conpty_lifecycle"
 required-features = ["conpty-qualification"]
+
+[[bin]]
+name = "native-pipe-fixture"
+test = false
+required-features = ["conpty-qualification"]
+
+[[bin]]
+name = "native-pipe-qualification-worker"
+test = false
+required-features = ["conpty-qualification"]
+
+[[test]]
+name = "native_pipe"
+required-features = ["conpty-qualification"]

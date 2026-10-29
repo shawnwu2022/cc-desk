@@ -12,6 +12,7 @@ use winapi::um::synchapi::WaitForSingleObject;
 use winapi::um::winbase::INFINITE;
 
 pub mod conpty;
+pub mod native_pipe;
 mod procthreadattr;
 mod psuedocon;
 

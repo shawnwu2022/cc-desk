@@ -183,3 +183,31 @@ A clean remote target previously had no adjacent bundle: all five lifecycle test
 exited before their first witness. After this fix, the same five and the full
 16-case feature suite pass, including two manifest-preflight cases. This remains
 fixed-fixture Windows10 evidence, not real AI CLI or complete old-IO retirement.
+
+### Explicit native pipe custody prerequisite
+
+The same default-off qualification feature now exposes a bounded backend recipe
+and a native pipe owner for the next durable-input integration slice. It uses the
+exact CreateProcessW primary-thread handle, assigns the suspended process to its
+owned Job, requires ResumeThread=1 and restricts inheritance to three stdio handles.
+It has no network admission, remote grants or desktop launch integration. Its
+500ms qualification interval starts after CreateProcessW returns; it does not bound
+that synchronous call. The broker design needed for a general launch deadline is
+still OPEN and has not been implemented as part of this migration.
+
+Eleven current-candidate cases cover explicit environment/argv/cwd, native IO, five
+concurrent launches, assignment refusal before fixture entry, root stop/stream EOF,
+unrelated inheritable-handle exclusion and harness error/budget boundaries. These
+are fixed self-owned Windows10 fixtures, not PTY semantics or the three AI CLIs.
+The existing portable-pty0.8.1 archive, source inventory and cumulative patch replay
+are verified byte-for-byte; no new dependency version, global cache patch or desktop
+behavior change is implied.
+
+An integrated regression caught an intermittent empty-output canary failure. The
+old fixture assumed a valid numeric child handle meant the parent object leaked;
+a deterministic unrelated-child-event test reproduced that oracle defect. The
+corrected fixture attempts to signal the number and checks the exact retained parent
+event after child exit. Positive API sensitivity and an unrelated-event negative
+control are checked separately. This proves only that the fixed child did not signal
+that canary, not absence of every possible inherited handle. The original intermittent
+failure's complete cause is not established by one later successful diagnostic run.

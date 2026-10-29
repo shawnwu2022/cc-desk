@@ -42,6 +42,22 @@ though their containing test returned ok. These are real temporary SQLite tests,
 not a production actor, PTY integration or global-lock-freedom proof for run_once.
 The default-root OS5 remains OPEN and is not a tool-approval denial.
 
+### Native pipe custody migration (2026-10-29)
+
+The existing fixed-fixture native pipe slice is now isolated on this current-main
+candidate: explicit backend recipe, exact primary-thread handoff, suspended Job
+assignment and three-handle stdio inheritance. Its eleven cases pass; missing candidate
+APIs were first recorded as a compile RED, not a reproduced runtime defect. The
+registry archive checksum, exact upstream inventory and cumulative vendor patch
+replay pass. Qualification starts after CreateProcessW returns, so synchronous
+creation remains outside its deadline. A production launch broker, PTY attachment,
+durable input actor and actual CLI acceptance are not established by this slice.
+The first integrated run failed the old numeric-handle canary (9/10); that failure is
+retained. A deterministic negative control exposed a faulty identity oracle and the
+fixture now observes its exact parent event, without relaxing production inheritance.
+This fixes an identified test defect; it does not prove the intermittent failure had
+no other cause.
+
 Source: reviewed v0.5 roadmap E01/E02/E11; base68cc31b. Eight isolated experiments
 are supporting evidence only. New product crates are incrementally integrated here;
 desktop startup stays unchanged/default-off. No SDK chat replacement or system VPN.
