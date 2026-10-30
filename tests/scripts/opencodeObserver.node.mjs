@@ -211,7 +211,11 @@ test('Opencode_BoundsOutstandingLookup_016',()=>fixture(async sent=>{
   const plugin=await CCDeskObserver({client:{session:{get:()=>new Promise(resolve=>resolvers.push(resolve))}},directory:'/fixture'},{directory:'/fixture'})
   let count
   try {
-    await emit(plugin,'session.status',{sessionID:'ses_main',status:{type:'busy'}})
+    const completed=await Promise.race([
+      emit(plugin,'session.status',{sessionID:'ses_main',status:{type:'busy'}}).then(()=>true),
+      new Promise(resolve=>setTimeout(()=>resolve(false),1500)),
+    ])
+    assert.equal(completed,true,'metadata lookup ignored its one-second timeout')
     await emit(plugin,'session.status',{sessionID:'ses_main',status:{type:'idle'}})
     assert.equal(resolvers.length,1,'a timed-out pending SDK lookup was invoked again')
     await emit(plugin,'session.created',{info:metadata('ses_main')})
