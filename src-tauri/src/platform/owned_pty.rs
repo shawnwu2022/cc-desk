@@ -26,9 +26,10 @@ unsafe extern "system" {
 /// D14/D15 supply autonomous waiting, output draining and explicit stop policy.
 /// In particular, releasing these handles is not a claim that output was parsed.
 pub(crate) struct OwnedPty {
-    master: Mutex<Box<dyn MasterPty + Send>>,
+    mutation: Mutex<PtyMutation>,
+    #[cfg(test)]
+    mutation_barrier: Mutex<Option<mutation_test::Hook>>,
     reader: Mutex<Option<Box<dyn Read + Send>>>,
-    writer: Mutex<Box<dyn Write + Send>>,
     child: Mutex<AdmittedChild>,
     #[cfg(not(windows))]
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
@@ -37,6 +38,14 @@ pub(crate) struct OwnedPty {
     // it does not own it. Every use borrows Self and therefore pins its owner.
     #[cfg(windows)]
     process_handle: AtomicPtr<std::ffi::c_void>,
+}
+
+// The original handles stay in one per-PTY mutation owner. A complete user or
+// protocol frame and native resize cannot run concurrently. Reader and root
+// control deliberately do not acquire this potentially blocking region.
+struct PtyMutation {
+    master: Box<dyn MasterPty + Send>,
+    writer: Box<dyn Write + Send>,
 }
 
 impl std::fmt::Debug for OwnedPty {
@@ -117,9 +126,13 @@ impl OwnedPty {
         // Do not retain the parent's slave endpoint and prevent stream EOF.
         drop(pair.slave);
         Ok(Self {
-            master: Mutex::new(pair.master),
+            mutation: Mutex::new(PtyMutation {
+                master: pair.master,
+                writer,
+            }),
+            #[cfg(test)]
+            mutation_barrier: Mutex::new(None),
             reader: Mutex::new(Some(reader)),
-            writer: Mutex::new(writer),
             child: Mutex::new(child),
             #[cfg(not(windows))]
             killer: Mutex::new(killer),
@@ -139,7 +152,9 @@ impl OwnedPty {
         &self,
         operation: impl FnOnce(&mut (dyn Write + Send)) -> io::Result<T>,
     ) -> io::Result<T> {
-        operation(self.writer.lock().as_mut())
+        #[cfg(test)]
+        mutation_test::before_lock(self);
+        operation(self.mutation.lock().writer.as_mut())
     }
 
     pub(crate) fn try_wait(&self) -> Result<Option<ExitStatus>, SafeError> {
@@ -191,7 +206,7 @@ impl OwnedPty {
         self.resize_checked(size, || Ok(()))
     }
 
-    /// Revalidate a caller after waiting for the master lock, immediately before
+    /// Revalidate a caller after waiting for the mutation lock, immediately before
     /// the native effect. Internal lifecycle users use resize with no wire owner.
     pub(crate) fn resize_checked(
         &self,
@@ -199,9 +214,14 @@ impl OwnedPty {
         authorize: impl FnOnce() -> Result<(), SafeError>,
     ) -> Result<(), SafeError> {
         validate_size(size)?;
-        let master = self.master.lock();
+        #[cfg(test)]
+        mutation_test::before_lock(self);
+        let mutation = self.mutation.lock();
         authorize()?;
-        master.resize(size).map_err(|_| error("HOST_RESIZE_FAILED"))
+        mutation
+            .master
+            .resize(size)
+            .map_err(|_| error("HOST_RESIZE_FAILED"))
     }
 }
 
@@ -217,3 +237,7 @@ fn validate_size(size: PtySize) -> Result<(), SafeError> {
 #[cfg(all(test, windows))]
 #[path = "../tests/native_cli_owned_pty_barrier.rs"]
 pub(crate) mod test_barrier;
+
+#[cfg(test)]
+#[path = "../tests/native_cli_mutation_barrier.rs"]
+pub(crate) mod mutation_test;

@@ -476,6 +476,24 @@ impl<R> RunRegistry<R> {
             .ok_or_else(|| error("RUN_NOT_READY"))
     }
 
+    /// External mutations need a live run, unlike resource() used for retained
+    /// output drain. Call again after waiting for the PTY mutation owner.
+    pub(crate) fn mutation_resource(
+        &self,
+        caller: &CallerIdentity,
+        run: &RunKey,
+    ) -> Result<Arc<R>, SafeError> {
+        let state = self.state.lock();
+        let record = self.checked_run_record(&state, caller, run)?;
+        if record.status.phase != LaunchPhase::Running {
+            return Err(error("RUN_NOT_READY"));
+        }
+        record
+            .resource
+            .clone()
+            .ok_or_else(|| error("RUN_NOT_READY"))
+    }
+
     /// 只读来源证明随 exact receipt 保留；它不包含进程、环境或 argv 能力。
     pub(crate) fn source_provenance(
         &self,

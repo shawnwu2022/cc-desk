@@ -59,6 +59,19 @@ pub(crate) struct NativeRuntime {
     inputs: Arc<InputStager>,
     supervisor: Option<Arc<NativeRunSupervisor>>,
 }
+
+pub(crate) async fn resize_native_run(
+    access: RunAccess,
+    size: portable_pty::PtySize,
+) -> Result<(), SafeError> {
+    // The shared mutation owner may be held by a blocking native write. Never
+    // consume an async worker while waiting; retain this exact access in the
+    // original blocking task, including if its observer is dropped.
+    tauri::async_runtime::spawn_blocking(move || access.resize(size))
+        .await
+        .map_err(|_| error("RESIZE_TASK_FAILED"))?
+}
+
 impl NativeRuntime {
     #[allow(dead_code)] // Staged native WebView harnesses construct isolated runtimes.
     pub(crate) fn new(service: Arc<LaunchService>) -> Self {
@@ -472,7 +485,7 @@ impl NativeRuntime {
         .map_err(|_| error("INPUT_TASK_FAILED"))?
     }
 
-    pub(crate) fn resize<T: Runtime>(
+    pub(crate) async fn resize<T: Runtime>(
         &self,
         webview: &Webview<T>,
         request: &Request<'_>,
@@ -484,12 +497,16 @@ impl NativeRuntime {
         }
         let run = input_run_key(&input.run_id, input.generation)?;
         let access = self.service.access(&caller, &run)?;
-        access.resize(portable_pty::PtySize {
-            rows: input.rows,
-            cols: input.cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
+        resize_native_run(
+            access,
+            portable_pty::PtySize {
+                rows: input.rows,
+                cols: input.cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            },
+        )
+        .await
     }
 
     pub(crate) fn stop<T: Runtime>(

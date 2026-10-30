@@ -48,3 +48,27 @@ constructor, production database migration, CLI version restriction, network
 listener or deployment is introduced here. The staged native adoption seam
 currently admits one exact live supervisor/run scope and is not a product
 capacity promise.
+
+The ordinary desktop paths now converge on the original `OwnedPty` mutation
+owner: `NativeRuntime::input_commit` and `input_protocol` use
+`RunAccess::with_writer`; `NativeRuntime::resize` uses `RunAccess::resize`.
+Original writer and master handles share one mutation mutex. A logical frame
+(including flush) excludes resize, while reader and root-stop locks remain
+independent. Exact document/run/resource identity and Running phase are checked
+again after waiting; Exited resources remain available for snapshot/output drain,
+but cannot admit new write or resize effects. Revocation after admission does not
+roll back an already executing effect. Existing input receipts/no-replay and
+nonzero desktop dimensions remain unchanged.
+
+The resize IPC awaits a blocking task just like the existing input paths, so
+waiting for a logical write does not synchronously occupy an async worker.
+Dropping the awaiting future does not cancel or replay an admitted native effect;
+the original blocking task retains the same access and performs its lock-time
+authorization check. No timeout is turned into a successful resize.
+
+This is local serialization, not remote ownership transfer. It promises neither
+FIFO among not-yet-admitted calls nor a deadline/preemption for blocking native
+write or resize. The authenticated remote actor is still not installed as this
+owner, and no parallel remote writer is exposed. A production provider must route
+or reject the desktop authority at its actual handoff; this patch alone does not
+solve that gate or complete PTY/Job retirement.

@@ -225,7 +225,7 @@ pub(crate) async fn cli_resize(
     request: Request<'_>,
     runtime: State<'_, Arc<NativeRuntime>>,
 ) -> Result<(), SafeError> {
-    runtime.resize(&webview, &request)
+    runtime.resize(&webview, &request).await
 }
 
 #[tauri::command]

@@ -966,6 +966,13 @@ impl std::fmt::Debug for RunAccess {
     }
 }
 impl RunAccess {
+    fn check_mutation(&self) -> Result<(), SafeError> {
+        let current = self.registry.mutation_resource(&self.caller, &self.run)?;
+        if !Arc::ptr_eq(&current, &self.resource) {
+            return Err(error("FORBIDDEN"));
+        }
+        Ok(())
+    }
     fn check(&self) -> Result<(), SafeError> {
         let current = self.registry.resource(&self.caller, &self.run)?;
         if !Arc::ptr_eq(&current, &self.resource) {
@@ -977,24 +984,24 @@ impl RunAccess {
         &self,
         operation: impl FnOnce(&mut (dyn Write + Send)) -> io::Result<T>,
     ) -> Result<T, SafeError> {
-        self.check()?;
+        self.check_mutation()?;
         self.resource
             .process
             .pty
             .with_writer(|writer| {
-                // Revalidate after waiting for the per-PTY writer, not only before.
+                // Revalidate after the shared write/resize mutation region.
                 Ok(self
-                    .check()
+                    .check_mutation()
                     .and_then(|()| operation(writer).map_err(|_| error("PTY_WRITE_FAILED"))))
             })
             .map_err(|_| error("PTY_WRITE_FAILED"))?
     }
     pub(crate) fn resize(&self, size: PtySize) -> Result<(), SafeError> {
-        self.check()?;
+        self.check_mutation()?;
         self.resource
             .process
             .pty
-            .resize_checked(size, || self.check())
+            .resize_checked(size, || self.check_mutation())
     }
     pub(crate) fn terminate_root(&self) -> Result<(), SafeError> {
         self.check()?;
