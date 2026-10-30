@@ -4,6 +4,20 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
+## [0.26.0-rc.1]
+
+Preview release
+
+- Keep Codex identity pending until an authenticated event arrives, so a delayed first event does not falsely report that session linking is unavailable. Preserve exact-ID titles and history projection during refresh and close; restored runs still need a new authenticated event.
+- Adapt the supported Windows Codex npm and canonical native launch routes by their same-run structure and authenticated events instead of a CLI version string. Observe OpenCode in the selected run without a version probe; retry at most twice after transient loopback transport failures using the same authenticated event ID.
+- Declare the interactive PTY's terminal capability to avoid an inherited TERM=dumb warning. Keep Claude Code behavior unchanged.
+
+Important
+
+- This is a prerelease test package. It does not become the stable Latest release or an automatic stable update.
+- The earlier field report of two rows with different native IDs is not root-caused or certified fixed. Never merge sessions by matching title or time. A diagnostic build completed one new-session title, refresh, close and restore sequence; the restored run's identity event, full installed-app flow and real AI automatic naming remain unverified.
+- Arbitrary custom wrappers, legacy native layouts, Unix identity enhancement and future incompatible CLI protocols are not newly certified. An unsupported identity capability remains visible rather than silently inventing an association.
+
 ## [0.25.2]
 
 Fixed

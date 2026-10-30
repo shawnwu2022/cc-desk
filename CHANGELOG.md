@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [0.26.0-rc.1] - 2026-10-30
+
+### Fixed
+
+- Keep delayed Codex identity pending until an authenticated first event arrives, retain exact-ID title and history projection, and record bounded privacy-filtered identity diagnostics.
+- Adapt supported Windows Codex npm and canonical native launch paths without version-string admission; separate launcher and CLI argument ownership. Observe OpenCode without an auxiliary version probe, with at most two same-ID transport retries per run.
+- Declare the interactive PTY terminal capability so inherited `TERM=dumb` does not interrupt Codex startup. Preserve Claude Code behavior.
+
+This is a prerelease. The earlier field report of two rows with different native IDs is not root-caused or certified fixed; the restored run's authenticated identity and full installed-app AI naming flow remain unverified. Arbitrary wrappers, legacy native layouts, Unix identity enhancement and future incompatible CLI protocols are not newly certified. Stable Latest remains unchanged.
+
 ## [0.25.2] - 2026-10-29
 
 ### Fixed
