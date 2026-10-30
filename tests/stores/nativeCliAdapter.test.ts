@@ -26,6 +26,43 @@ function history(cli: 'claude' | 'codex' | 'opencode', root: string, nativeSessi
   }
 }
 
+it('CodexAdapter_IdentityLinkIsSeparateFromTerminalActivity_107', async () => {
+  const id = '11111111-2222-4333-8444-555555555555'
+  const active = tab({ action: { kind: 'new' }, title: 'Codex CLI', codexProgramStatus: 'idle',
+    observationState: 'connecting', observerReasonCode: 'OBSERVER_CONNECTING' })
+  const entries: NativeHistoryEntry[] = []
+  const state = setup([active], entries)
+  const original = (await state.adapter.listSessions())[0]
+  expect(original).toMatchObject({ activityState: 'idle', identityAssociation: 'awaiting-identity' })
+  active.observedSessionId = id
+  expect((await state.adapter.listSessions())[0]).toMatchObject({ identityAssociation: 'awaiting-history' })
+  const entry = history('codex', 'root', id); entry.sourceRootKey = 'root'
+  entry.sessions[0].title = 'AI title'
+  const other = { ...entry.sessions[0], nativeSessionId: '99999999-2222-4333-8444-555555555555', sessionKey: 'other' }
+  entry.sessions.push(other); entries.push(entry)
+  for (let refresh = 0; refresh < 3; refresh++) {
+    const rows = await state.adapter.listSessions()
+    expect(rows).toHaveLength(2)
+    expect(rows.find(row => row.opened)).toMatchObject({ id: original.id, title: 'AI title', identityAssociation: 'linked', activityState: 'idle' })
+  }
+  // A title snapshot is not current source/association authority.
+  entries.splice(0)
+  expect((await state.adapter.listSessions())[0]).toMatchObject({ title: 'AI title', identityAssociation: 'awaiting-history' })
+  active.observedSessionId = undefined
+  active.observationState = 'unavailable'
+  expect((await state.adapter.listSessions())[0]).toMatchObject({ identityAssociation: 'unavailable' })
+})
+
+it('CodexAdapter_RequestedLocatorCannotCertifyDifferentObservedId_114', async () => {
+  const requested = '11111111-2222-4333-8444-555555555555'
+  const observed = '99999999-2222-4333-8444-555555555555'
+  const entry = history('codex', 'root', requested); entry.sourceRootKey = 'root'
+  const active = tab({ action: { kind: 'resume-id', nativeSessionId: requested },
+    observedSessionId: observed, sourceSessionKey: entry.sessions[0].sessionKey })
+  const { adapter } = setup([active], [entry])
+  expect((await adapter.listSessions())[0]).toMatchObject({ identityAssociation: 'awaiting-history' })
+})
+
 it('CodexArchive_RestoreDoesNotValidateClaude_050', async () => {
   setActivePinia(createPinia())
   const entry = history('codex', '/root', 'session-9'); entry.sourceRootKey = '/root'

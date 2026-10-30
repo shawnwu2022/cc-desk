@@ -6,6 +6,7 @@ import { parseU64 } from '@/utils/nativeIdentity'
 import type { ObservationState } from '@/integrations/registry'
 import type { ObserverInstallation, ObserverReasonCode } from '@/api/observer'
 import { createNativeId } from '@/utils/nativeId'
+import { logMessage } from '@/api/tauri'
 import type { NativeObservationNotice, NativeObservationNoticeState } from '@/types/nativeObservationNotice'
 import { nativeNoticeReasonCode } from '@/types/nativeObservationNotice'
 import { useHookStore } from './hook'
@@ -303,7 +304,39 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
   }
 
   /** 认证观察回填运行中会话的 CLI 身份；同 run 幂等覆盖，随 attempt 精确校验。 */
+  const identityDiagnostics = new WeakMap<NativeCliTab, { count: number; last: string }>()
+  let identityDiagnosticCount = 0
   function applyObservationIdentity(tabId: string, attempt: NativeAttemptIdentity, sessionId: string, eventType = 'sessionStart'): boolean {
+    const value = tabs.get(tabId)
+    const eligible = value?.cli === 'codex' && matchesNativeAttempt(value, attempt)
+      && value.action.kind !== 'raw' && ['starting', 'running'].includes(value.status)
+      && ['sessionStart', 'userPromptSubmit', 'stop', 'sessionEnd'].includes(eventType)
+      && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(sessionId.trim())
+    const printableId = (id: unknown): string | null => typeof id === 'string'
+      && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id) ? id : null
+    const before = printableId(value?.observedSessionId)
+    const accepted = adoptObservationIdentity(tabId, attempt, sessionId, eventType)
+    if (eligible && value) {
+      // A local store decision is not proof of backend authentication/delivery.
+      const after = printableId(value.observedSessionId)
+      const ledger = identityDiagnostics.get(value) ?? { count: 0, last: '' }
+      const fields = {
+        run: /^run-[0-9a-f]{32}$/.test(value.runId) ? value.runId : 'redacted', generation: value.generation,
+        event: eventType, outcome: accepted ? 'adopted' : 'rejected',
+        reason: accepted ? before === after ? 'same-id' : before ? 'changed-id' : 'first-id'
+          : before ? 'identity-mismatch' : 'initial-event', before, after }
+      const record = JSON.stringify({ layer: 'frontend-identity', ...fields })
+      if (identityDiagnosticCount < 128 && ledger.count < 16 && ledger.last !== record) {
+        ledger.count++; identityDiagnosticCount++; ledger.last = record
+        identityDiagnostics.set(value, ledger)
+        try { void logMessage('info', JSON.stringify({ schema: 'codex-identity-v1', ...fields })).catch(() => {}) }
+        catch { /* Logging cannot change adoption, even if the bridge is absent. */ }
+        try { console.info('CC_DESK_CODEX_IDENTITY', record) } catch { /* Diagnostics cannot change adoption. */ }
+      }
+    }
+    return accepted
+  }
+  function adoptObservationIdentity(tabId: string, attempt: NativeAttemptIdentity, sessionId: string, eventType: string): boolean {
     const value = tabs.get(tabId)
     const identity = sessionId.trim()
     if (!identity || identity.includes('\0')) return false
@@ -358,7 +391,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
       if (pending && matchesNativeAttempt(value, pending.attempt)) pending.state.lastPromptSubmitted = null
     }
     const projected: ObservationState = { observation: state.observation,
-      activity: state.observation === 'active' ? state.activity : 'unknown' }
+      activity: value.cli !== 'codex' && state.observation === 'active' ? state.activity : 'unknown' }
     if (value.status === 'starting') {
       pendingAttention.set(tabId, { attempt: captureNativeAttempt(value), state: projected })
       return

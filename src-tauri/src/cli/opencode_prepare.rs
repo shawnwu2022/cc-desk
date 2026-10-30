@@ -23,55 +23,17 @@ pub(crate) fn probe_database_path(
     admission: PreparingStart,
     current: &impl Fn() -> Result<(), SafeError>,
 ) -> Result<String, SafeError> {
-    probe_output(spec, admission, current, None)
-}
-
-pub(crate) fn probe_observer_version(
-    spec: &ProcessLaunchSpec,
-    admission: PreparingStart,
-    current: &impl Fn() -> Result<(), SafeError>,
-) -> Result<bool, SafeError> {
-    let isolated = tempfile::tempdir().map_err(|_| error("OBSERVER_UNAVAILABLE"))?;
-    let version = probe_output(spec, admission, current, Some(isolated.path()))?;
-    // 仅认证已核查插件契约的版本；其他版本保留原 CLI，不注入猜测的配置。
-    Ok(version.trim() == "1.19.0")
+    probe_output(spec, admission, current)
 }
 
 fn probe_output(
     spec: &ProcessLaunchSpec,
     mut admission: PreparingStart,
     current: &impl Fn() -> Result<(), SafeError>,
-    isolated: Option<&Path>,
 ) -> Result<String, SafeError> {
     let mut command = spec
         .metadata_command()
         .map_err(|_| error("SCOPE_UNKNOWN"))?;
-    if let Some(isolated) = isolated {
-        for key in [
-            "HOME",
-            "USERPROFILE",
-            "APPDATA",
-            "LOCALAPPDATA",
-            "XDG_CONFIG_HOME",
-            "XDG_DATA_HOME",
-            "XDG_CACHE_HOME",
-            "XDG_STATE_HOME",
-        ] {
-            let path = isolated.join(key);
-            std::fs::create_dir_all(&path).map_err(|_| error("OBSERVER_UNAVAILABLE"))?;
-            command.env(key, path);
-        }
-        for key in ["OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR"] {
-            command.env_remove(key);
-        }
-        command
-            .env("OPENCODE_CONFIG_CONTENT", "{}")
-            .env("OPENCODE_PURE", "true")
-            .env("OPENCODE_DISABLE_AUTOUPDATE", "true")
-            .env("OPENCODE_DISABLE_MODELS_FETCH", "true")
-            .env("OPENCODE_DISABLE_DEFAULT_PLUGINS", "true")
-            .env("OPENCODE_DISABLE_EXTERNAL_SKILLS", "true");
-    }
     let mut output = tempfile::tempfile().map_err(|_| error("SCOPE_UNKNOWN"))?;
     command
         .stdin(Stdio::null())
@@ -531,92 +493,6 @@ fn post_session(
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    #[allow(non_snake_case)]
-    fn Opencode_ObserverVersionProbeIsIsolatedBoundedAndOwned_097() {
-        use crate::cli::environment::EnvMap;
-        use crate::cli::invocation::build_invocation;
-        use crate::cli::profiles::{Override, Profile};
-        use crate::cli::snapshot::{freeze_launch, CallerIdentity, FreezeContext};
-        use crate::cli::types::{CliKind, LaunchAction, LaunchRequest, WireU64};
-        use crate::platform::launch::resolve_process;
-        use crate::version_history::maintenance::{AdmissionGate, RuntimeKind};
-        let root = tempfile::tempdir().unwrap();
-        let mut profile = Profile::new("observer-version-fixture", CliKind::Opencode);
-        profile.program_path = Override::Set(crate::platform::find_executable("node").unwrap());
-        let caller = CallerIdentity {
-            instance_id: "fixture".into(),
-            window_label: "main".into(),
-            webview_epoch: WireU64::parse("1").unwrap(),
-        };
-        let mut inherited = EnvMap::new();
-        for name in [
-            "PATH",
-            "SystemRoot",
-            "WINDIR",
-            "ComSpec",
-            "PATHEXT",
-            "TEMP",
-            "TMP",
-        ] {
-            if let Some(value) = std::env::var_os(name) {
-                inherited.insert(name.into(), value);
-            }
-        }
-        inherited.insert("OPENCODE_CONFIG".into(), "must-not-load".into());
-        inherited.insert("OPENCODE_CONFIG_DIR".into(), "must-not-load".into());
-        for (output, expected) in [
-            ("1.19.0", Some(true)),
-            ("1.18.0", Some(false)),
-            ("1.20.0", Some(false)),
-            ("future", Some(false)),
-            (&"x".repeat(4097), None),
-        ] {
-            let script = format!(
-                r#"const a=require('node:assert/strict');const e=process.env;a.equal(e.OPENCODE_CONFIG,undefined);a.equal(e.OPENCODE_CONFIG_DIR,undefined);a.equal(e.OPENCODE_CONFIG_CONTENT,'{{}}');a.equal(e.OPENCODE_PURE,'true');for(const key of ['HOME','USERPROFILE','APPDATA','LOCALAPPDATA','XDG_DATA_HOME'])a(require('node:fs').statSync(e[key]).isDirectory());process.stdout.write({});"#,
-                serde_json::to_string(output).unwrap()
-            );
-            let request = LaunchRequest {
-                request_id: "probe".into(),
-                tab_id: "probe".into(),
-                run_id: "probe".into(),
-                generation: 1,
-                profile_id: profile.id.clone(),
-                expected_profile_revision: profile.revision,
-                cli: CliKind::Opencode,
-                launch_cwd: root.path().to_string_lossy().into(),
-                action: LaunchAction::Raw {
-                    argv: vec!["-e".into(), script],
-                },
-                extra_args: vec![],
-                cols: 80,
-                rows: 24,
-            };
-            let snapshot = freeze_launch(
-                &request,
-                &profile,
-                &caller,
-                &FreezeContext {
-                    inherited: &inherited,
-                    terminal: &EnvMap::new(),
-                    legacy: None,
-                    observer: None,
-                },
-            )
-            .unwrap();
-            let spec = resolve_process(&build_invocation(&request, &snapshot).unwrap()).unwrap();
-            let gate = AdmissionGate::new();
-            let admission = gate.begin_start(RuntimeKind::Native).unwrap().preparing();
-            let result = probe_observer_version(&spec, admission, &|| Ok(()));
-            match expected {
-                Some(expected) => assert_eq!(result.unwrap(), expected),
-                None => assert!(result.is_err()),
-            }
-            // 真正子进程已回收，而非仅从 UI owner 表中移除。
-            let transaction = uuid::Uuid::new_v4().to_string();
-            assert!(gate.freeze(&transaction).is_ok());
-        }
-    }
     #[test]
     #[allow(non_snake_case)]
     fn Opencode_RenameHttpChecksIdentityAndNeverReplaysPatch_096() {

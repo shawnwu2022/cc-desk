@@ -38,7 +38,7 @@ vi.mock('@xterm/xterm', async original => {
   } }
 })
 vi.mock('@tauri-apps/api/core', async original => ({ ...await original<object>(), Channel: class { onmessage: any } }))
-vi.mock('@/api/observer', () => ({ onNativeObservation: async (handler: typeof io.observation) => { io.observation = handler; return () => {} } }))
+vi.mock('@/api/observer', async original => ({ ...await original<object>(), onNativeObservation: async (handler: typeof io.observation) => { io.observation = handler; return () => {} } }))
 vi.mock('@xterm/addon-fit', () => ({ FitAddon: class { activate() {} dispose() {} fit() {} } }))
 vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({ readText: vi.fn(), readImage: vi.fn(), writeText: vi.fn().mockResolvedValue(undefined) }))
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ onResized: async () => () => {}, isMinimized: async () => false }) }))
@@ -65,6 +65,9 @@ beforeEach(() => {
       if (command === 'cli_get_launch_status') {
         const original = io.channels.find(value => value.input.requestId === input.requestId).input
         return { instanceId: 'test-backend', requestId: input.requestId, run: { runId: original.runId, generation: original.generation }, phase: 'running', revision: '2', failure: null }
+      }
+      if (command === 'cli_get_observer_status') {
+        return { requestId: input.requestId, run: { runId: input.runId, generation: input.generation }, state: 'connecting', reasonCode: 'OBSERVER_CONNECTING' }
       }
       throw new Error('UNEXPECTED_BRIDGE_COMMAND')
     },
@@ -107,7 +110,7 @@ describe('Unified host with pinned real xterm parser', () => {
         const payload = state === 'clear' ? 'state=clear' : `state=${state}:app=codex`
         await output(`\x1b]7501;${payload}\x1b\\`)
         expect(row.get('[data-session-badge]').attributes('data-session-badge')).toBe(badge)
-        expect(row.get('.session-app-icon').attributes('aria-label')).toBe(`Codex CLI; ${label}`)
+        expect(row.get('.session-app-icon').attributes('aria-label')).toBe(`Codex CLI; ${label}; ${locale === 'en' ? 'Waiting for session identity' : '正在等待会话身份'}`)
         expect((await project()).attentionKind).toBeUndefined()
         expect((await project()).observationNotice).toBeUndefined()
       }

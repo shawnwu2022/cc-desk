@@ -10,6 +10,52 @@ vi.mock('@/api/observer', () => ({ onNativeObservation: vi.fn((handler: (payload
 }) }))
 const observationTarget = { runId: 'run-claude', generation: 3, cli: 'claude' as const, enabled: true }
 
+it.each(['new', 'resume-id'] as const)('Codex_DeferredFirstTurnDoesNotDeclareUnavailable_036_%s', async kind => {
+  const { captureNativeAttempt, useNativeTabsStore } = await import('@/stores/nativeTabs')
+  setActivePinia(createPinia()); capturedNative = null; vi.useFakeTimers()
+  const hooks = useHookStore(), tabs = useNativeTabsStore()
+  const sessionId = '01a18b79-a0e4-7500-a093-a330a459ecff'
+  const tab = tabs.create({ cli: 'codex', projectId: 'p', projectPath: '/fixture', profileId: 'codex', profileRevision: '1',
+    action: kind === 'new' ? { kind } : { kind, nativeSessionId: sessionId } })
+  const attempt = captureNativeAttempt(tab)
+  tabs.applyLaunchStatus(tab.tabId, { instanceId: 'fixture', requestId: tab.requestId,
+    run: { runId: tab.runId, generation: tab.generation }, revision: '1', phase: 'running', failure: null })
+  const stop = hooks.subscribeObservation({ ...attempt, cli: 'codex', enabled: true }, (_event, state) => {
+    tabs.applyObservation(tab.tabId, attempt, state)
+  }, { onIdentity: (id, type) => tabs.applyObservationIdentity(tab.tabId, attempt, id, type) })
+  try {
+    await Promise.resolve()
+    vi.advanceTimersByTime(10 * 60_000)
+    expect(tabs.tab(tab.tabId)).toMatchObject({ observationState: 'connecting', observerReasonCode: 'OBSERVER_CONNECTING' })
+    expect(tabs.tab(tab.tabId)?.observedSessionId).toBeUndefined()
+    tabs.applyObserverInstallation(tab.tabId, attempt, { requestId: attempt.requestId,
+      run: { runId: attempt.runId, generation: attempt.generation }, state: 'unavailable', reasonCode: 'OBSERVER_PREPARE_FAILED' })
+    vi.advanceTimersByTime(60_000)
+    expect(tabs.tab(tab.tabId)).toMatchObject({ observationState: 'unavailable', observerReasonCode: 'OBSERVER_PREPARE_FAILED' })
+    capturedNative!({ ptyId: null, sessionId, eventName: 'SessionStart', state: 'unknown', timestamp: 1,
+      runId: tab.runId, generation: tab.generation, eventId: 'deferred-start', observerSource: 'codex-hook',
+      detail: { type: 'sessionStart', data: {} } })
+    expect(tabs.tab(tab.tabId)).toMatchObject({ observationState: 'active', observedSessionId: sessionId })
+    vi.advanceTimersByTime(90_000)
+    expect(tabs.tab(tab.tabId)?.observationState).toBe('active')
+    hooks.invalidateObservation(attempt)
+    expect(tabs.tab(tab.tabId)?.observationState).toBe('unavailable')
+  } finally { stop(); hooks.$dispose(); tabs.$dispose(); vi.useRealTimers() }
+})
+
+it('Codex_ListenerFailureStillDeclaresUnavailable_037', async () => {
+  const { onNativeObservation } = await import('@/api/observer')
+  vi.mocked(onNativeObservation).mockRejectedValueOnce(new Error('fixture-listener-failure'))
+  setActivePinia(createPinia()); vi.useFakeTimers()
+  const hooks = useHookStore(), target = { runId: 'codex-listener-failure', generation: 1, cli: 'codex' as const, enabled: true }
+  const stop = hooks.subscribeObservation(target, () => {})
+  try {
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve()
+    vi.advanceTimersByTime(60_000)
+    expect(hooks.observationFor(target)).toEqual({ observation: 'unavailable', activity: 'unknown' })
+  } finally { stop(); hooks.$dispose(); vi.useRealTimers() }
+})
+
 it('Opencode_AuthenticatedStatusIsOrderedAndIdleIsNotCompletion_021', async () => {
   setActivePinia(createPinia()); capturedNative = null; vi.useFakeTimers()
   const store=useHookStore(), handler=vi.fn(), notice=vi.fn(), identity=vi.fn()

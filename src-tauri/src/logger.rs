@@ -158,6 +158,152 @@ pub(crate) fn frontend_message_summary(message: &str) -> String {
     format!("redacted bytes={}", message.len())
 }
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FrontendIdentityRecord {
+    schema: IdentitySchema,
+    run: String,
+    generation: u32,
+    event: IdentityEvent,
+    outcome: IdentityOutcome,
+    reason: IdentityReason,
+    before: serde_json::Value,
+    after: serde_json::Value,
+}
+#[derive(serde::Deserialize)]
+enum IdentitySchema {
+    #[serde(rename = "codex-identity-v1")]
+    V1,
+}
+#[derive(Clone, Copy, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+enum IdentityEvent {
+    SessionStart,
+    UserPromptSubmit,
+    Stop,
+    SessionEnd,
+}
+#[derive(Clone, Copy, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+enum IdentityOutcome {
+    Adopted,
+    Rejected,
+}
+#[derive(Clone, Copy, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum IdentityReason {
+    FirstId,
+    SameId,
+    ChangedId,
+    IdentityMismatch,
+    InitialEvent,
+}
+
+#[derive(Default)]
+struct FrontendIdentityBudget {
+    total: usize,
+    runs: std::collections::HashMap<(String, u32), (usize, String)>,
+}
+fn canonical_session(value: &serde_json::Value) -> Option<Option<String>> {
+    match value {
+        serde_json::Value::Null => Some(None),
+        serde_json::Value::String(text) => uuid::Uuid::parse_str(text)
+            .ok()
+            .filter(|id| id.to_string() == *text)
+            .map(|_| Some(text.clone())),
+        _ => None,
+    }
+}
+impl FrontendIdentityBudget {
+    fn format(&mut self, caller: &str, message: &str) -> Option<String> {
+        if caller != "main" || message.len() > 1024 || self.total >= 128 {
+            return None;
+        }
+        let record: FrontendIdentityRecord = serde_json::from_str(message).ok()?;
+        let _ = record.schema;
+        let suffix = record.run.strip_prefix("run-")?;
+        if suffix.len() != 32
+            || uuid::Uuid::parse_str(suffix).ok()?.simple().to_string() != suffix
+            || record.generation == 0
+        {
+            return None;
+        }
+        let before = canonical_session(&record.before)?;
+        let after = canonical_session(&record.after)?;
+        let valid = match (record.outcome, record.reason) {
+            (IdentityOutcome::Adopted, IdentityReason::FirstId) => {
+                before.is_none()
+                    && after.is_some()
+                    && matches!(
+                        record.event,
+                        IdentityEvent::SessionStart | IdentityEvent::UserPromptSubmit
+                    )
+            }
+            (IdentityOutcome::Adopted, IdentityReason::SameId) => {
+                before.is_some() && before == after
+            }
+            (IdentityOutcome::Adopted, IdentityReason::ChangedId) => {
+                before.is_some()
+                    && after.is_some()
+                    && before != after
+                    && record.event == IdentityEvent::SessionStart
+            }
+            (IdentityOutcome::Rejected, IdentityReason::IdentityMismatch) => {
+                before.is_some() && before == after && record.event != IdentityEvent::SessionStart
+            }
+            (IdentityOutcome::Rejected, IdentityReason::InitialEvent) => {
+                before.is_none()
+                    && after.is_none()
+                    && matches!(
+                        record.event,
+                        IdentityEvent::Stop | IdentityEvent::SessionEnd
+                    )
+            }
+            _ => false,
+        };
+        if !valid {
+            return None;
+        }
+        // Reconstruct explicit fields. Caller strings never select a destination,
+        // severity, backend-authentication label or extra log content.
+        let line = serde_json::json!({"layer":"frontend-untrusted-identity", "run":record.run,
+            "generation":record.generation,"event":record.event,"outcome":record.outcome,
+            "reason":record.reason,"before":before,"after":after})
+        .to_string();
+        let entry = self
+            .runs
+            .entry((record.run, record.generation))
+            .or_default();
+        if entry.0 >= 16 || entry.1 == line {
+            return None;
+        }
+        entry.0 += 1;
+        entry.1 = line.clone();
+        self.total += 1;
+        Some(line)
+    }
+}
+static FRONTEND_IDENTITY_BUDGET: std::sync::LazyLock<Mutex<FrontendIdentityBudget>> =
+    std::sync::LazyLock::new(|| Mutex::new(FrontendIdentityBudget::default()));
+
+pub(crate) fn log_frontend_message(caller: &str, level: &str, message: &str) {
+    let structured = FRONTEND_IDENTITY_BUDGET
+        .lock()
+        .ok()
+        .and_then(|mut budget| budget.format(caller, message));
+    if let Some(record) = structured {
+        log::info!("CC_DESK_CODEX_IDENTITY {record}");
+        return;
+    }
+    let summary = frontend_message_summary(message);
+    match level {
+        "error" => log::error!("[Frontend] {summary}"),
+        "warn" => log::warn!("[Frontend] {summary}"),
+        "debug" => log::debug!("[Frontend] {summary}"),
+        _ => log::info!("[Frontend] {summary}"),
+    }
+}
+
 /// 初始化日志系统，在 Tauri setup 阶段调用
 pub fn init() {
     let prefix = date_prefix();
@@ -206,3 +352,7 @@ pub fn init() {
 #[cfg(test)]
 #[path = "tests/updater_logging.rs"]
 mod updater_log_tests;
+
+#[cfg(test)]
+#[path = "tests/frontend_identity_logging.rs"]
+mod identity_log_tests;

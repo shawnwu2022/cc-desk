@@ -1,18 +1,10 @@
-//! Codex Ctrl+V 原生文本粘贴能力探测（运行时查询，非 launch preflight）。
-//!
-//! Windows 上 codex 的 Ctrl+V 文本回退于 0.163.0 加入：chatwidget/interaction.rs
-//! 对纯 Ctrl+V 构造 `PasteImage { text_fallback }`，无图时回退读剪贴板文本；
-//! 0.162.x 的 `paste_image` 只处理图片，纯文本按键被吞。CC Desk 转发 `\x16`
-//! 前必须确认该能力，否则用户文本无法粘贴。同路径升降级后新运行必须重新探测。
-
-use std::io::Read;
-use std::time::Duration;
+//! Native text-paste capability policy. Version strings are not capability evidence.
+//! Without an advertised text Ctrl-V contract, retain Desk's mode-bound text path.
 
 use super::profile_service::authorize_profile_window;
 use super::profiles::error;
-use super::snapshot::configured_program;
 use super::storage::WorkspaceRepository;
-use super::types::{CliKind, SafeError, WireU64};
+use super::types::{SafeError, WireU64};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Deserialize)]
@@ -55,163 +47,91 @@ pub(crate) fn native_paste_support(
     if profile.revision != request.expected_revision {
         return Err(error("REVISION_CONFLICT"));
     }
-    // codex 的 Ctrl+V 文本回退本身是 cfg!(windows) 编译期分支（chatwidget/interaction.rs）；
-    // 非 Windows 上纯 Ctrl+V 只触发图片粘贴，转发 \x16 对纯文本无效，恒走 Desk 剪贴板路径。
-    let native_text_paste = if !cfg!(windows) {
-        false
-    } else if profile.cli == CliKind::Codex {
-        let legacy = profile.read_legacy(&repository.metadata_directory().join("config.json"))?;
-        // 未配置或不可用的 program 无法运行，也就没有可转发目标。
-        configured_program(&profile, legacy.as_ref())
-            .ok()
-            .and_then(|program| program.to_str().map(str::to_owned))
-            .map(|program| probe_program_cached(&program))
-            .unwrap_or(false)
-    } else {
-        false
-    };
+    // No passive Ctrl-V text capability is currently advertised. Do not infer
+    // it from a version, executable path or bracketed-paste mode, and do not
+    // execute the selected CLI merely to decide a local clipboard route.
+    let native_text_paste = false;
     Ok(CodexNativePasteSupport {
         profile_id: profile.id,
         native_text_paste,
     })
 }
 
-/// Windows Ctrl+V 文本回退要求 codex ≥ 0.163.0。
-const MIN_TEXT_FALLBACK_VERSION: (u64, u64, u64) = (0, 163, 0);
-
-fn probe_program_cached(program: &str) -> bool {
-    // 路径不代表二进制版本；同路径升降级后必须重新探测。
-    run_version_probe(program).unwrap_or(false)
-}
-
-fn run_version_probe(program: &str) -> Option<bool> {
-    let mut child = crate::platform::new_command(program)
-        .arg("--version")
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .ok()?;
-    let mut stdout = child.stdout.take()?;
-    // 独立线程读输出：管道写满会卡住子进程，必须边等退出边读。版本在首行，4KB 封顶。
-    let (sender, receiver) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let mut collected = Vec::new();
-        let mut chunk = [0u8; 1024];
-        loop {
-            match stdout.read(&mut chunk) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    collected.extend_from_slice(&chunk[..n]);
-                    if collected.len() >= 4096 {
-                        break;
-                    }
-                }
-            }
-        }
-        let _ = sender.send(collected);
-    });
-    // 有界等待：wrapper 忽略 --version 或挂起时终止并回收子进程，前端 producer
-    // 等到确定结果后才能回退剪贴板路径，不能无限阻塞输入队列队首。
-    let deadline = std::time::Instant::now() + PROBE_TIMEOUT;
-    let exited = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break Some(status),
-            Ok(None) if std::time::Instant::now() < deadline => {
-                std::thread::sleep(Duration::from_millis(50));
-            }
-            _ => break None,
-        }
-    };
-    if exited.is_none() {
-        let _ = child.kill();
-        let _ = child.wait();
-    }
-    // 孙进程可能继承管道让 read 不返回：取不到结果就放弃（线程随后自行结束）。
-    let output = receiver.recv_timeout(Duration::from_secs(1)).ok()?;
-    exited?
-        .success()
-        .then(|| parse_text_fallback_support(&String::from_utf8_lossy(&output)))
-}
-
-/// 每次启动独立探测；失败仅令本次运行回退 Desk 文本路径。
-const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// 输出必须携带 `codex-cli` 标识 token 才接受版本；裸 semver（如启动器 npx --version
-/// 打印的自身版本）不代表目标 Codex 的能力，一律视为不支持。
-fn parse_text_fallback_support(version_output: &str) -> bool {
-    parse_codex_version(version_output)
-        .map(|version| version >= MIN_TEXT_FALLBACK_VERSION)
-        .unwrap_or(false)
-}
-
-fn parse_codex_version(version_output: &str) -> Option<(u64, u64, u64)> {
-    let mut tokens = version_output.split_whitespace();
-    while let Some(token) = tokens.next() {
-        if token == "codex-cli" {
-            let version = tokens.next()?;
-            let mut parts = version.split('.');
-            let major = parts.next()?.parse().ok()?;
-            let minor = parts.next()?.parse().ok()?;
-            let patch = parts.next()?.parse().ok()?;
-            if parts.next().is_some() {
-                return None;
-            }
-            return Some((major, minor, patch));
-        }
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn fixture(
+        program: &std::path::Path,
+    ) -> (tempfile::TempDir, WorkspaceRepository, PasteSupportRequest) {
+        use super::super::profiles::{Override, Profile};
+        use super::super::storage::Patch;
+        let root = tempfile::tempdir().unwrap();
+        let repository = WorkspaceRepository::open(root.path().join("workspace.json")).unwrap();
+        let mut profile = Profile::new("paste-test", super::super::types::CliKind::Codex);
+        profile.program_path = Override::Set(program.to_str().unwrap().into());
+        let document = repository
+            .apply(WireU64::parse("0").unwrap(), Patch::Create { profile })
+            .unwrap();
+        let request = PasteSupportRequest {
+            profile_id: "paste-test".into(),
+            expected_revision: document.profiles["paste-test"].revision,
+        };
+        (root, repository, request)
+    }
+
     #[cfg(windows)]
     #[test]
     #[allow(non_snake_case)]
-    fn CodexCompatibility_PasteProbeSeesSamePathReplacement_074() {
-        let temp = tempfile::tempdir().unwrap();
-        let program = temp.path().join("codex.cmd");
-        std::fs::write(&program, "@echo codex-cli 0.163.0\r\n").unwrap();
-        assert!(probe_program_cached(program.to_str().unwrap()));
-        std::fs::write(&program, "@echo codex-cli 0.162.0\r\n").unwrap();
-        assert!(!probe_program_cached(program.to_str().unwrap()));
-        std::fs::write(&program, "@echo codex-cli 0.164.0\r\n").unwrap();
-        assert!(probe_program_cached(program.to_str().unwrap()));
+    fn C5_NoEvidenceNeverUsesVersionOrExecutesProgram_001() {
+        for version in ["0.163.0", "0.162.0", "9.99.99", "", "unknown", "0.163"] {
+            let root = tempfile::tempdir().unwrap();
+            let program = root.path().join("codex.cmd");
+            let marker = root.path().join("executed.txt");
+            std::fs::write(
+                &program,
+                format!(
+                    "@echo off\r\n@echo executed > \"{}\"\r\n@echo codex-cli {version}\r\n",
+                    marker.display()
+                ),
+            )
+            .unwrap();
+            let (_metadata, repository, request) = fixture(&program);
+            let support = native_paste_support(&repository, "main", &request).unwrap();
+            assert!(
+                !support.native_text_paste,
+                "a version string is not input-capability evidence: {version}"
+            );
+            assert!(
+                !marker.exists(),
+                "querying paste support must not execute the selected CLI"
+            );
+        }
     }
 
     #[test]
-    fn parses_exact_minimum_version() {
-        assert!(parse_text_fallback_support("codex-cli 0.163.0\n"));
-    }
-
-    #[test]
-    fn rejects_version_without_text_fallback() {
-        assert!(!parse_text_fallback_support("codex-cli 0.162.1\n"));
-    }
-
-    #[test]
-    fn accepts_newer_version() {
-        assert!(parse_text_fallback_support("codex-cli 1.0.0\n"));
-    }
-
-    #[test]
-    fn rejects_unparseable_output() {
-        assert!(!parse_text_fallback_support(""));
-        assert!(!parse_text_fallback_support("internal error"));
-        assert!(!parse_text_fallback_support("codex-cli 0.163"));
-    }
-
-    #[test]
-    fn rejects_bare_semver_from_launcher_tools() {
-        // npx.cmd --version 打印自身版本；启动器不是 Codex，不得据此放行转发。
-        assert!(!parse_text_fallback_support("11.14.1\n"));
-        assert!(!parse_text_fallback_support("my-codex-cli 11.14.1\n"));
-    }
-
-    #[test]
-    fn accepts_exact_marker_before_version() {
-        assert!(parse_text_fallback_support("codex-cli 0.163.0 (rc 1)\n"));
+    #[allow(non_snake_case)]
+    fn C5_ProfileAuthorizationAndRevisionRemainRequired_002() {
+        let (_root, repository, mut request) = fixture(std::path::Path::new("/unused/program"));
+        assert_eq!(
+            native_paste_support(&repository, "other-window", &request)
+                .unwrap_err()
+                .code,
+            "FORBIDDEN"
+        );
+        request.expected_revision = WireU64::parse("99").unwrap();
+        assert_eq!(
+            native_paste_support(&repository, "main", &request)
+                .unwrap_err()
+                .code,
+            "REVISION_CONFLICT"
+        );
+        request.profile_id = "../private".into();
+        assert_eq!(
+            native_paste_support(&repository, "main", &request)
+                .unwrap_err()
+                .code,
+            "INVALID_REQUEST"
+        );
     }
 }

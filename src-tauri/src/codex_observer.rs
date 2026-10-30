@@ -167,6 +167,249 @@ pub(crate) fn hook_args(executable: &Path) -> Result<Vec<OsString>, SafeError> {
     Ok(args)
 }
 
+/// Only the npm Cmd route needs hook TOML kept outside CALL's literal subset.
+#[cfg(windows)]
+pub(crate) struct CmdHookOverlay {
+    pub(crate) hook_args: Vec<OsString>,
+    pub(crate) default_args: Vec<OsString>,
+    pub(crate) extra_args: Vec<OsString>,
+}
+
+#[cfg(windows)]
+fn hook_configuration_error() -> SafeError {
+    SafeError {
+        field: Some("codexHookConfiguration".into()),
+        ..error("OBSERVER_PREPARE_FAILED")
+    }
+}
+
+#[cfg(windows)]
+fn config_value(value: &str) -> Result<toml::Value, SafeError> {
+    if value.len() > 64 * 1024 {
+        return Err(hook_configuration_error());
+    }
+    let mut document: toml::Table = format!("value={value}")
+        .parse()
+        .map_err(|_| hook_configuration_error())?;
+    if document.len() != 1 {
+        return Err(hook_configuration_error());
+    }
+    document
+        .remove("value")
+        .ok_or_else(hook_configuration_error)
+}
+
+#[cfg(windows)]
+fn collect_session_hooks(
+    args: &[OsString],
+    hooks: &mut toml::Table,
+    changed: &mut bool,
+) -> Result<Vec<(usize, OsString)>, SafeError> {
+    let hook_assignment = |value: &str| {
+        value
+            .split_once('=')
+            .is_some_and(|(key, _)| key.trim() == "hooks" || key.trim().starts_with("hooks."))
+    };
+    let has_hooks = args.iter().enumerate().any(|(index, arg)| {
+        arg.to_str().is_some_and(|arg| {
+            matches!(arg, "-c" | "--config")
+                && args
+                    .get(index + 1)
+                    .and_then(|v| v.to_str())
+                    .is_some_and(hook_assignment)
+                || arg
+                    .strip_prefix("--config=")
+                    .or_else(|| {
+                        arg.strip_prefix("-c")
+                            .map(|v| v.strip_prefix('=').unwrap_or(v))
+                    })
+                    .is_some_and(hook_assignment)
+        })
+    });
+    if !has_hooks {
+        return Ok(args.iter().cloned().enumerate().collect());
+    }
+    let mut remaining = Vec::new();
+    let mut index = 0;
+    while index < args.len() {
+        let arg = args[index].to_str().ok_or_else(hook_configuration_error)?;
+        let (assignment, count) = if matches!(arg, "-c" | "--config") {
+            (
+                args.get(index + 1)
+                    .and_then(|v| v.to_str())
+                    .ok_or_else(hook_configuration_error)?,
+                2,
+            )
+        } else if let Some(value) = arg.strip_prefix("--config=").or_else(|| {
+            arg.strip_prefix("-c")
+                .filter(|v| !v.is_empty())
+                .map(|v| v.strip_prefix('=').unwrap_or(v))
+        }) {
+            (value, 1)
+        } else {
+            // Only known single-value options establish consumption. Unknown
+            // syntax cannot authorize moving something that may be a value.
+            let value_flags = [
+                "--model",
+                "-m",
+                "--profile",
+                "-p",
+                "--cd",
+                "-C",
+                "--sandbox",
+                "-s",
+                "--ask-for-approval",
+                "-a",
+            ];
+            let count = if value_flags.contains(&arg) {
+                if index + 1 >= args.len() {
+                    return Err(hook_configuration_error());
+                }
+                2
+            } else if arg
+                .split_once('=')
+                .is_some_and(|(key, _)| value_flags.contains(&key))
+                || !arg.starts_with('-')
+            {
+                1
+            } else {
+                return Err(hook_configuration_error());
+            };
+            remaining.extend((index..index + count).map(|i| (i, args[i].clone())));
+            index += count;
+            continue;
+        };
+        let Some((key, value)) = assignment.split_once('=') else {
+            remaining.extend((index..index + count).map(|i| (i, args[i].clone())));
+            index += count;
+            continue;
+        };
+        let key = key.trim();
+        if key != "hooks" && !key.starts_with("hooks.") {
+            remaining.extend((index..index + count).map(|i| (i, args[i].clone())));
+            index += count;
+            continue;
+        }
+        let value = config_value(value)?;
+        if key == "hooks" {
+            *hooks = value
+                .as_table()
+                .ok_or_else(hook_configuration_error)?
+                .clone();
+        } else {
+            // Quoted dotted trust keys are not the CLI override parser's syntax.
+            // Preserve them in an inline hooks.state table instead of guessing.
+            let field = key
+                .strip_prefix("hooks.")
+                .ok_or_else(hook_configuration_error)?;
+            if field.is_empty()
+                || !field
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+            {
+                return Err(hook_configuration_error());
+            }
+            hooks.insert(field.to_owned(), value);
+        }
+        *changed = true;
+        index += count;
+    }
+    Ok(remaining)
+}
+
+#[cfg(windows)]
+pub(crate) fn cmd_hook_overlay(
+    desk_args: &[OsString],
+    defaults: &[OsString],
+    extras: &[OsString],
+) -> Result<CmdHookOverlay, SafeError> {
+    let mut user = toml::Table::new();
+    let mut changed = false;
+    let combined: Vec<_> = defaults.iter().chain(extras).cloned().collect();
+    let remaining = collect_session_hooks(&combined, &mut user, &mut changed)?;
+    let (default_args, extra_args): (Vec<_>, Vec<_>) = remaining
+        .into_iter()
+        .partition(|(index, _)| *index < defaults.len());
+    let default_args = default_args.into_iter().map(|(_, value)| value).collect();
+    let extra_args = extra_args.into_iter().map(|(_, value)| value).collect();
+    if !changed {
+        return Ok(CmdHookOverlay {
+            hook_args: desk_args.to_vec(),
+            default_args,
+            extra_args,
+        });
+    }
+    if desk_args.len() != 8 {
+        return Err(hook_configuration_error());
+    }
+    let mut desk = toml::Table::new();
+    for pair in desk_args.as_chunks::<2>().0 {
+        if pair[0] != "-c" {
+            return Err(hook_configuration_error());
+        }
+        let (key, value) = pair[1]
+            .to_str()
+            .and_then(|v| v.split_once('='))
+            .ok_or_else(hook_configuration_error)?;
+        desk.insert(
+            key.strip_prefix("hooks.")
+                .ok_or_else(hook_configuration_error)?
+                .to_owned(),
+            config_value(value)?,
+        );
+    }
+    let mut states = match user.remove("state") {
+        Some(value) => value
+            .as_table()
+            .ok_or_else(hook_configuration_error)?
+            .clone(),
+        None => toml::Table::new(),
+    };
+    let desk_states = desk
+        .get("state")
+        .and_then(toml::Value::as_table)
+        .ok_or_else(hook_configuration_error)?;
+    for (event, label) in EVENTS {
+        let mut groups = match user.remove(*event) {
+            Some(value) => value
+                .as_array()
+                .ok_or_else(hook_configuration_error)?
+                .clone(),
+            None => Vec::new(),
+        };
+        let additions = desk
+            .get(*event)
+            .and_then(toml::Value::as_array)
+            .filter(|values| values.len() == 1)
+            .ok_or_else(hook_configuration_error)?;
+        let suffix = format!(":{label}:0:0");
+        let (original, state) = desk_states
+            .iter()
+            .find(|(key, _)| key.ends_with(&suffix))
+            .ok_or_else(hook_configuration_error)?;
+        let prefix = original
+            .strip_suffix(":0:0")
+            .ok_or_else(hook_configuration_error)?;
+        let key = format!("{prefix}:{}:0", groups.len());
+        // Never override an explicit user's enablement/trust entry, even for Desk.
+        if states.contains_key(&key) {
+            return Err(hook_configuration_error());
+        }
+        states.insert(key, state.clone());
+        groups.extend_from_slice(additions);
+        user.insert((*event).to_owned(), toml::Value::Array(groups));
+    }
+    user.insert("state".into(), toml::Value::Table(states));
+    Ok(CmdHookOverlay {
+        hook_args: vec![
+            "-c".into(),
+            format!("hooks={}", toml::Value::Table(user)).into(),
+        ],
+        default_args,
+        extra_args,
+    })
+}
+
 pub(crate) fn metadata(input: &Value) -> Result<Value, SafeError> {
     let event = input
         .get("hook_event_name")
@@ -191,6 +434,117 @@ pub(crate) fn metadata(input: &Value) -> Result<Value, SafeError> {
 #[allow(non_snake_case)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn CodexAdapter_AmbiguousBusinessValuesDoNotBecomeHooks_115() {
+        let desk = hook_args(&std::env::current_exe().unwrap()).unwrap();
+        let defaults = ["--future-option", "-chooks.SessionStart=[]"].map(OsString::from);
+        assert!(
+            cmd_hook_overlay(&desk, &defaults, &[]).is_err(),
+            "unknown value arity cannot authorize rewriting argv"
+        );
+        let defaults = ["--future-option"].map(OsString::from);
+        let extras = ["-chooks.SessionStart=[]"].map(OsString::from);
+        assert!(
+            cmd_hook_overlay(&desk, &defaults, &extras).is_err(),
+            "default/extra boundary is not a CLI parser boundary"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn CodexAdapter_ConfigEqualsFormPreservesUserHook_116() {
+        let desk = hook_args(&std::env::current_exe().unwrap()).unwrap();
+        let defaults =
+            [r#"-c=hooks.SessionStart=[{hooks=[{type="command",command="user-owned"}]}]"#]
+                .map(OsString::from);
+        let overlay = cmd_hook_overlay(&desk, &defaults, &[]).unwrap();
+        assert!(
+            overlay.default_args.is_empty(),
+            "recognized global hook assignment must not override the composed plan later"
+        );
+        let hooks = overlay.hook_args[1]
+            .to_str()
+            .unwrap()
+            .strip_prefix("hooks=")
+            .unwrap();
+        let document: toml::Table = format!("hooks={hooks}").parse().unwrap();
+        assert_eq!(
+            document["hooks"]["SessionStart"].as_array().unwrap().len(),
+            2
+        );
+        assert_eq!(
+            document["hooks"]["SessionStart"][0]["hooks"][0]["command"].as_str(),
+            Some("user-owned")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn CodexAdapter_UserStateKeysAndDeskCollisionStayUntrusted_118() {
+        let desk = hook_args(&std::env::current_exe().unwrap()).unwrap();
+        let original: toml::Table = format!(
+            "state={}",
+            desk[7]
+                .to_str()
+                .unwrap()
+                .strip_prefix("hooks.state=")
+                .unwrap()
+        )
+        .parse()
+        .unwrap();
+        let key = original["state"]
+            .as_table()
+            .unwrap()
+            .keys()
+            .find(|key| key.ends_with(":session_start:0:0"))
+            .unwrap();
+        let user_state = toml::Value::Table(toml::Table::from_iter([(
+            key.clone(),
+            toml::Value::Table(toml::Table::from_iter([
+                ("enabled".into(), toml::Value::Boolean(false)),
+                (
+                    "trusted_hash".into(),
+                    toml::Value::String("user-trust".into()),
+                ),
+            ])),
+        )]));
+        let flags = [
+            "-c".into(),
+            "hooks.SessionStart=[{hooks=[{type=\"command\",command=\"user-owned\"}]}]".into(),
+            "-c".into(),
+            format!("hooks.state={user_state}").into(),
+        ];
+        let overlay = cmd_hook_overlay(&desk, &flags, &[]).unwrap();
+        let merged: toml::Table = format!(
+            "hooks={}",
+            overlay.hook_args[1]
+                .to_str()
+                .unwrap()
+                .strip_prefix("hooks=")
+                .unwrap()
+        )
+        .parse()
+        .unwrap();
+        assert_eq!(
+            merged["hooks"]["state"][key]["enabled"].as_bool(),
+            Some(false)
+        );
+        assert_eq!(
+            merged["hooks"]["state"][key]["trusted_hash"].as_str(),
+            Some("user-trust")
+        );
+        assert!(merged["hooks"]["state"]
+            .as_table()
+            .unwrap()
+            .contains_key(&key.replace(":0:0", ":1:0")));
+        let conflict = ["-c".into(), format!("hooks.state={user_state}").into()];
+        assert!(
+            cmd_hook_overlay(&desk, &conflict, &[]).is_err(),
+            "Desk must not override an explicit disabled entry at its own target index"
+        );
+    }
     #[test]
     fn CodexCompatibility_ReporterUsesOrderedReplayIds_081() {
         let mut ids = std::collections::BTreeSet::new();

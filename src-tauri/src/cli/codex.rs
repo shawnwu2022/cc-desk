@@ -7,8 +7,12 @@ use super::snapshot::LaunchSnapshot;
 use super::types::{LaunchAction, ResumeScope, SafeError};
 use std::ffi::OsString;
 
-/// 可选 hook 先在隔离配置中询问真实能力；不启动模型、不重试用户会话。
+/// 包契约仅准入同次投递；旧路线仍沿用隔离探测，真实身份另由事件确认。
 pub(super) fn identity_hooks_supported(snapshot: &LaunchSnapshot, args: &[OsString]) -> bool {
+    // 入口布局只准备用本次启动投递；真实能力由认证事件确认，不执行辅助探测。
+    if snapshot.codex_direct_core() {
+        return true;
+    }
     #[cfg(windows)]
     use super::profiles::Dialect;
     use super::profiles::Launcher;
@@ -43,6 +47,12 @@ fn hook_metadata_supported(value: &serde_json::Value) -> bool {
                         && hook["enabled"] == true
                 })
         })
+}
+
+// 测试调用实际 gate；生产接口仍限 cli 模块，不新增前端或运行权限。
+#[cfg(test)]
+pub(crate) fn test_identity_gate(snapshot: &LaunchSnapshot, args: &[OsString]) -> bool {
+    identity_hooks_supported(snapshot, args)
 }
 
 fn probe_identity_hooks(
@@ -158,7 +168,7 @@ fn audited_probe_target(program: &std::path::Path) -> Option<Vec<std::fs::File>>
     use sha2::{Digest, Sha256};
     use std::io::Read;
     {
-        let mut guards = super::codex_cmd::hold_probe_target(program).ok()?;
+        let mut guards = super::codex_cmd::hold_selected_target(program).ok()?;
         let file = guards.last_mut()?;
         // 官方 Windows 可执行文件包含符号；先按已核实的大小拒绝未知目标，
         // 再对保持打开的完整字节核对 hash，不能误把 128 MiB 当作其大小上限。

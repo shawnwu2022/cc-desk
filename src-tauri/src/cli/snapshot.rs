@@ -48,6 +48,8 @@ pub(crate) struct LaunchSnapshot {
     identity_args: Vec<OsString>,
     #[cfg(windows)]
     codex_cmd: Option<std::sync::Arc<super::codex_cmd::Transport>>,
+    #[cfg(windows)]
+    codex_native: Option<std::sync::Arc<super::codex_native_route::NativePackageEntry>>,
 }
 
 impl std::fmt::Debug for LaunchSnapshot {
@@ -57,6 +59,22 @@ impl std::fmt::Debug for LaunchSnapshot {
 }
 
 impl LaunchSnapshot {
+    pub(crate) fn codex_direct_core(&self) -> bool {
+        #[cfg(windows)]
+        {
+            self.codex_native.is_some()
+        }
+        #[cfg(not(windows))]
+        {
+            false
+        }
+    }
+    #[cfg(windows)]
+    pub(crate) fn codex_npm_entry(&self) -> Option<&super::codex_cmd::ProvenNpmEntry> {
+        self.codex_cmd
+            .as_deref()
+            .map(super::codex_cmd::Transport::entry)
+    }
     pub(crate) fn codex_identity_requested(&self) -> bool {
         self.request.cli == CliKind::Codex
             // Node 的脚本路径属于解释器参数，不能在它前面插入 Codex flags。
@@ -87,6 +105,20 @@ impl LaunchSnapshot {
         next.environment = super::environment::overlay_codex_identity(&self.environment, observer)?;
         next.identity_args = args.to_vec();
         #[cfg(windows)]
+        if matches!(self.launcher(), Launcher::Native) {
+            if let Some(entry) = super::codex_native_route::prepare(&self.program)? {
+                let overlay = crate::codex_observer::cmd_hook_overlay(
+                    args,
+                    &self.default_args,
+                    &self.extra_args,
+                )?;
+                next.identity_args = overlay.hook_args;
+                next.default_args = overlay.default_args;
+                next.extra_args = overlay.extra_args;
+                next.codex_native = Some(std::sync::Arc::new(entry));
+            }
+        }
+        #[cfg(windows)]
         if matches!(
             self.launcher(),
             super::profiles::Launcher::Shim {
@@ -94,11 +126,32 @@ impl LaunchSnapshot {
                 ..
             }
         ) {
-            next.codex_cmd = Some(std::sync::Arc::new(super::codex_cmd::prepare(
-                &self.program,
+            let overlay = crate::codex_observer::cmd_hook_overlay(
                 args,
-                &mut next.environment,
-            )?));
+                &self.default_args,
+                &self.extra_args,
+            )?;
+            let moved =
+                overlay.default_args != self.default_args || overlay.extra_args != self.extra_args;
+            let original_args = if moved {
+                Some(
+                    super::invocation::build_invocation(self.request(), self)?
+                        .args()
+                        .to_vec(),
+                )
+            } else {
+                None
+            };
+            next.default_args = overlay.default_args;
+            next.extra_args = overlay.extra_args;
+            next.codex_cmd = Some(std::sync::Arc::new(
+                super::codex_cmd::prepare_with_original(
+                    &self.program,
+                    &overlay.hook_args,
+                    &mut next.environment,
+                    original_args.as_deref(),
+                )?,
+            ));
             next.identity_args.clear();
         }
         Ok(next)
@@ -383,6 +436,8 @@ pub(crate) fn freeze_launch(
         identity_args: Vec::new(),
         #[cfg(windows)]
         codex_cmd: None,
+        #[cfg(windows)]
+        codex_native: None,
         request: request.clone(),
         profile: profile.clone(),
         owner: caller.clone(),

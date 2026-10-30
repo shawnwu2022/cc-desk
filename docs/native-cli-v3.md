@@ -103,6 +103,30 @@ the still-current revision eligible for the queued read.
 Unchanged profiles retain their history; admitted tabs and runs keep their frozen
 identity. Saving alone never launches or replays a failed launch.
 
+## Frozen launch recipe
+
+The backend builds `LaunchRecipe` from the same immutable launch snapshot and
+unchanged CLI action mapping. The recipe borrows that snapshot, retaining its
+transport/held-file lifetime, and checks the complete request before rendering.
+Program, runner, action and user argument layers remain separate. No profile,
+request wire field, discovery permission or persistent setting is added.
+
+Only the existing admitted Windows npm Cmd transport contributes a proven file
+entry: its wrapper still chooses adjacent Node or PATH Node, with the same empty
+interpreter prefix. Hooks belong to its preload delivery, while New/ResumeId/
+ResumePicker and user arguments belong to the CLI tail after the file entry.
+External wrapper argv never duplicates the preload's hooks. The planned entry
+argv is backend-only evidence of composition, not a new process specification,
+publisher authentication or observed hook capability.
+
+Raw and unproven routes preserve their original argv and expose no proven entry.
+In particular, this stage does not infer a script boundary from flat defaultArgs,
+repair ambiguous interpreter profiles by guessing, enable an unproven native
+observer, alter the native probe chain, or introduce a Unix holder. Those explicit
+capability gaps do not block the equivalent mapping of already proven routes.
+Version text is not used by the recipe. User hook policy, terminators, argument
+order, original error boundaries and request/profile/run binding remain intact.
+
 ## Authenticated document and projection boundary
 
 Native frontend calls are admitted through the authenticated document bridge. Frontend-selected paths or opaque IDs alone never authorize filesystem access.
@@ -178,6 +202,14 @@ Caller stop carries `requestId` with the run identity. One registry lock admits 
 
 ## Observer boundary
 
+Codex identity events may be deferred until the first user turn, including after
+an explicit resume. Silence before that event remains `connecting` (identity
+pending); the shared 30-second first-event timer is not a Codex installation
+failure signal. Listener failure, explicit installation failure and host
+invalidation still report unavailable. Neither elapsed time nor a requested
+resume locator establishes an observed session identity. Claude and OpenCode
+retain their existing first-event timeout policies.
+
 Observer delivery is optional metadata, not process ownership.
 
 `cli_get_observer_status` uses the authenticated document and exact request/run/generation. Its safe DTO reports `off`, `connecting` or `unavailable` plus a fixed reason: disabled/unsupported, waiting for events, missing service, unavailable plugin, preparation failure or generic unavailable. It describes the frozen installation result; only accepted hook events establish active observation. Frontend subscription immediately publishes the current state. Query failure cannot fail a successful launch, and a delayed query cannot replace newer activity. New Claude configurations default to observation enabled; explicit off and the original profile of resumed history remain authoritative.
@@ -206,45 +238,95 @@ unrepresentable overlay is discarded together with its capability; the original
 frozen invocation still undergoes every ordinary launch check. In particular,
 Windows Cmd shims retain their strict CALL literal subset and size limits, so
 Codex hook TOML cannot prevent an otherwise valid new or resumed session from
-starting. The audited official npm Codex 0.163.0 Cmd wrapper has a separate
+starting. The npm Codex Cmd route has a separate
 per-launch argv transport: the selected Cmd runner and wrapper still execute,
 while Node's supported `NODE_OPTIONS --require` preloads a fixed CJS module before
-the official npm entry point. That module prepends only the four backend-generated
-hook configuration pairs to `process.argv`; the official wrapper then forwards
+the selected npm entry point. That module prepends only the backend-generated
+hook configuration pairs to `process.argv`; the selected wrapper then forwards
 them directly to its selected native Codex binary. Hook TOML never enters CALL.
 The module first restores the original absent/empty `NODE_OPTIONS` and removes
 the two internal `CC_DESK_CODEX_ARGV`/`CC_DESK_CODEX_NODE_OPTIONS` values, so neither
 the native CLI nor subsequent Node tools inherit the preload. Both internal names
 are stripped from inherited/profile inputs, including Windows case aliases.
 
-This transport requires matching audited wrapper/entry bytes and npm package
-name, version and bin metadata. Selected and entry paths must have direct canonical
-spellings: junction/short-name aliases are not adapted. The backend holds the
-audited files and their parent directories against writing/deletion, rechecks
-paths and actual file identities after opening, and retains a private fixed-code
-preload with the owned snapshot until run retirement. It does not change global
-configuration or persistent permissions. The existing locked `tempfile`
-dependency also owns isolated capability-probe configuration roots.
+This route does not admit or reject package versions or release hashes. A bounded
+parser proves the selected npm Cmd wrapper's complete file-entry forwarding
+grammar, including its local Node/PATH selection and a single unchanged `%*`
+argument tail. It does not execute wrappers to discover behavior. Unknown
+statements, variable capture, changed SET values, eval/print entry modes and
+unproven routes fail closed for integration, while retaining the original CLI
+launch. Valid generator comments/spacing and selected entry byte changes are not
+release-version barriers. Package name/bin metadata must agree with that route.
+The original wrapper, Node selection, core dispatch, cwd and business argv remain
+user-owned; Desk never resolves a different native binary as a shortcut.
 
-The audited npm transport admits exactly 0.163.0 and 0.164.0, with the same
-normalized shim and entry SHA256 checks for both versions. The installed 0.164.0
-package's entry bytes match 0.163.0; an isolated, credential-free `hooks/list`
-exchange confirmed all three enabled/trusted session-flags command handlers.
-This restores the authenticated identity path after that package upgrade;
-titles, timestamps and newly discovered history never establish identity.
-The native executable probe below retains its separate exact-byte policy.
+Selected and entry paths retain direct canonical spellings and held file/parent
+guards, final-path and file-identity rechecks. The private fixed-code preload also
+checks the normal Node file-entry mode, the exact entry's Windows dev/ino and the
+nonempty run/generation binding before injecting typed argv. It restores absent/
+empty NODE_OPTIONS and clears transport env before the entry starts. Missing or
+malformed binding, wrong entry and malformed payload do not inject; failure
+removes observer env in that process. No new observer HTTP message is introduced.
+
+The trusted telemetry subject is the user's selected current run-tree, not an
+official core signature. It can report its own metadata; authentication cannot
+prove a malicious selected program honest. Nonce/source/run/generation/replay
+checks and separately authorized history roots still constrain every accepted
+event and read. Only an actual authenticated identity event establishes the
+current session; preparing a loader, metadata probes, terminal titles and history
+alone do not. This implementation does not certify all future hook protocols or
+installed TUI behavior. The earlier isolated 0.165 metadata query succeeded, but
+its TUI observation timed out without a receipt; real TUI delivery remains an
+explicit acceptance gap. The separate native-executable probe policy below is
+unchanged by this npm-only adaptation.
+
+On rejected identity-overlay preparation, the local application log records only
+`Codex identity hook unavailable: stage=transport-route` for a rejected route,
+`stage=hook-configuration` for an unrepresentable user hook combination, or
+`stage=identity-prepare` for other failures. It
+never includes the manifest value, path, IDs, nonce, environment or raw error.
+The original CLI launch and exact attempt/source authorization remain unchanged.
+An already running new session that missed its startup identity cannot acquire
+it through Refresh alone; a future authenticated prompt identity may link it,
+otherwise a supported new launch/resume is needed. Desk never stops that session
+or merges unidentified rows by title/time.
 
 Nonempty user `NODE_OPTIONS` are deliberately left untouched: Node permission or
-loader options can fail before CJS executes. Unknown/custom wrappers, different
-versions, nonliteral paths, preparation failures and size limits retain the
+loader options can fail before CJS executes. Unproven wrapper grammar,
+nonliteral paths, preparation failures and size limits retain the
 original frozen launch without this transport. This degradation leaves identity
 observation unavailable and never selects another executable or writes a Codex
 configuration file. A degraded new tab lacks the hook-proven native ID, so its
 first-title synchronization and history deduplication cannot operate. Explicit-ID
 resume keeps its original frozen historical source without gaining observation.
 Codex discovers disk configuration hooks separately in each configuration layer,
-so the added session-flags handlers coexist with user-file handlers. A later user
-`-c` override in the same session-flags layer retains its normal precedence.
+so added session-flags handlers coexist with user-file handlers. For the npm Cmd
+route, explicit user hook assignments in the same session-flags layer are combined
+in original order, preserving user handlers, disablement and trust. Desk appends
+its own group and computes only its own exact content trust key at the actual
+group index. Other config/business arguments are untouched. An explicit state
+collision or unrepresentable hook syntax is reported, never silently discarded or
+made trusted. No user config file is read or rewritten to perform that combination.
+Argument consumption is tracked across default/extra boundaries; known value
+options retain their values, including hyphen-prefixed values. Unknown arity in
+a hook-rewrite request is a configuration conflict, not permission to swallow
+business arguments. Both `-c=` and ordinary config forms are accounted for.
+When user hooks must leave CALL, the held private loader contains a base64/JSON
+copy of the complete original argv and immutable entry identity. If enhancement
+fails, it restores argv[2..] only for that independently verified normal file
+entry, clears observer authority, and never appends/reinterprets arguments.
+If the original entry cannot be proven, startup fails before entry code instead
+of continuing without user policy. This is not a successful compatibility result.
+Private rollback arguments are never logged or included in delivery artifacts.
+
+Codex installation status is scoped to the exact admitted run and reports prepared
+or unavailable, never installed-native capability. The UI separately projects
+waiting for identity, waiting for matching history, linked and unavailable. A
+retained title snapshot does not certify a current history link, and neither hook
+observation nor its timeout invents Codex TUI working/idle/permission activity.
+Unavailability is a compatibility defect to resolve, not successful full-feature
+delivery. Observer failures never restart a CLI; an incompatible parser error in
+the user's single startup stays visible rather than triggering a second launch.
 
 Native Node interpreter launches do not receive Codex flags before their script
 argument. Native identity enhancement is separately admitted using verified
@@ -469,17 +551,29 @@ interactive model turn or unrelated external/unregistered sessions.
 Structured OpenCode runs can load a private, per-owned-run plugin through the official
 `OPENCODE_CONFIG_CONTENT.plugin` tuple mechanism. It preserves existing inline settings
 and user plugins; it does not install a plugin globally, inject Claude flags, poll an
-unrelated `serve` process or change native input. The selected executable/runner has a
-bounded, isolated, owned `--version` probe. Only the examined **1.19.0** contract is
-enabled; older, future, unrecognized or unavailable versions retain their original
-basic CLI launch with an unsupported optional observer. Explicit observer off/unset,
+unrelated `serve` process or change native input. Observer preparation does not execute
+an auxiliary `--version` probe or use version text as an admission gate. It offers the
+same temporary plugin to the user-requested run; only accepted, authenticated events
+with supported metadata shapes establish observation. The plugin tuple/options contract
+is evidenced by the [official loader](https://github.com/anomalyco/opencode/blob/v1.19.0/packages/opencode/src/plugin/index.ts)
+and [configuration schema](https://opencode.ai/config.json); the examined release is
+protocol evidence, not a supported-version list. Future breaking protocols still require
+adaptation and real CLI acceptance; local fixtures do not certify every CLI version.
+Explicit observer off/unset,
 raw launches and `OPENCODE_PURE=true/1` do not receive an enabled observation channel.
 Invalid/oversized inline configuration or an unrepresentable optional overlay also
 falls back to the original frozen launch once, without loosening admission checks.
 
 The plugin uses the SDK passed by the actual CLI instance. It verifies main-session
-metadata, excludes subagents and foreign IDs, and binds the requested resume ID or the
+metadata, rejects malformed contexts/options/event envelopes, excludes subagents and foreign IDs, and binds the requested resume ID or the
 first verified main-session ID in the selected new-run directory. Initialization
+requires metadata to match the actual instance directory even when a resume ID was
+requested. Resume may enter its recorded directory rather than the launch cwd; this
+does not authorize a new history root. Valid offered metadata is used directly; only
+missing metadata triggers the existing single-ID instance API call. A local one-second
+deadline bounds the wait even when an SDK ignores its cancellation signal; at most one
+unsettled lookup exists per plugin instance, and later offered metadata remains usable. Late results
+cannot publish after disposal. Initialization
 returns hooks before querying the instance API, avoiding an initialization self-wait.
 Official `dispose` clears initialization and prevents pending metadata callbacks from
 publishing after instance disposal. The observer lease owns and removes the private
@@ -523,3 +617,32 @@ identity isolation, abort/idle, HTTP rename, server restart and persistent title
 without model calls. Request/error/reordering/overflow/dispose cases are isolated
 production-plugin tests; they are not authenticated model-turn evidence. Browser
 light/dark status rendering is synthetic Chrome evidence, not native Windows WebView2.
+
+### Windows canonical Codex package entry
+
+The selected physical `bin/codex.exe` can supply a DirectCore recipe when the adjacent
+package root has a bounded regular `codex-package.json` declaring exactly
+`variant: codex` and `entrypoint: bin/codex.exe`. Version text is ignored. This uses
+the existing official package layout; the manifest declares argument ownership,
+not publisher authenticity, official executable bytes, or additional authority.
+Unknown fields remain bounded JSON; duplicate consumed fields, malformed input,
+path alternatives, aliases and inconsistent held identities cannot enable this route.
+
+The snapshot retains the selected image, metadata and parent guards through the owned
+run. Its recipe places temporary hook configuration at the CLI argument boundary,
+before the unchanged structured action and ordered business arguments. The existing
+SessionFlags merge preserves user hook entries and trust/disable state. Lower config
+layers remain the CLI's responsibility; this adapter does not read account config,
+enable the hooks feature, or change model/sandbox/approval policy. The prepared
+snapshot bypasses the auxiliary app-server capability probe: only the user's one
+requested launch runs. Preparation means awaiting an authenticated event, not linked
+identity or proven runtime compatibility. Source/run/generation/nonce/replay/history
+root authorization and title/refresh/close behavior remain on the existing event path.
+
+Default discovery already resolves the installer's visible junction to a physical
+package entry. Manually selected aliases, old standalone layouts, arbitrary wrappers,
+Unix and existing opaque/raw/npm routes retain their prior behavior. In particular,
+this does not remove the old auxiliary admission for unmigrated native layouts or
+silently select a different installation after an upgrade. Fixtures cover argument
+ownership and held-file protection; real native TUI hook delivery, installed package
+layout and field automatic title synchronization remain unaccepted.

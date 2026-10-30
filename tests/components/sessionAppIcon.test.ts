@@ -14,6 +14,17 @@ import type { UnifiedSession } from '@/types/unifiedSession'
 
 afterEach(() => { document.body.innerHTML = ''; vi.unstubAllGlobals(); clearMocks() })
 describe('Merged session app status', () => {
+  it('CodexAdapter_AssociationDiagnosticPreservesActivity_109', async () => {
+    const session: UnifiedSession = { id: 'one', projectKey: '/repo', projectPath: '/repo', cli: 'codex', runtime: 'native-cli',
+      title: 'One', processState: 'running', activityState: 'idle', attentionState: 'none', opened: true, archived: false,
+      resumable: true, adapterSessionId: 'one', lastActivityAt: 1, identityAssociation: 'awaiting-identity' }
+    const wrapper = mount(SessionItem, { props: { session }, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en, zh } })] } })
+    expect(wrapper.get('.session-app-icon').attributes('aria-label')).toBe('Codex CLI; Idle; Waiting for session identity')
+    await wrapper.setProps({ session: { ...session, identityAssociation: 'linked' } })
+    expect(wrapper.get('.session-app-icon').attributes('aria-label')).toBe('Codex CLI; Idle; Session history linked')
+    expect(wrapper.find('[data-session-badge="completed"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
   it('Opencode_UnsupportedObserverKeepsNeutralRunning_009', () => {
     const wrapper=mount(SessionAppIcon,{props:{cli:'opencode',state:'running',activityState:'unknown',observationState:'off',observerReasonCode:'OBSERVER_UNSUPPORTED'},global:{plugins:[createI18n({legacy:false,locale:'en',messages:{en,zh}})]}})
     expect(wrapper.get('[data-session-badge]').attributes('data-session-badge')).toBe('running')
@@ -52,7 +63,7 @@ describe('Merged session app status', () => {
     expect(running).toMatchObject({ processState: 'running', activityState: 'unknown', observationState: 'unavailable', attentionState: 'none' })
     await wrapper.setProps({ session: running })
     expect(wrapper.find('[data-session-badge="unknown"]').exists()).toBe(true)
-    expect(wrapper.get('.session-app-icon').attributes('aria-label')).toBe(`Codex CLI; ${runningLabel}`)
+    expect(wrapper.get('.session-app-icon').attributes('aria-label')).toBe(`Codex CLI; ${runningLabel}; ${locale === 'en' ? 'Waiting for session identity' : '正在等待会话身份'}`)
     for (const event of ['sessionStart', 'userPromptSubmit', 'stop']) {
       expect(tabs.applyObservationIdentity(tab.tabId, owner, nativeSessionId, event)).toBe(true)
       const session = await project()

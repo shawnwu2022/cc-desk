@@ -92,44 +92,6 @@ pub(crate) struct LaunchService {
     opencode_preparations: Mutex<Vec<Arc<OpencodePreparation>>>,
 }
 impl LaunchService {
-    fn opencode_observer_supported(
-        &self,
-        caller: &CallerIdentity,
-        snapshot: &LaunchSnapshot,
-    ) -> bool {
-        let probe = || -> Result<bool, SafeError> {
-            let mut request = snapshot.request().clone();
-            request.action = LaunchAction::Raw {
-                argv: vec!["--version".into()],
-            };
-            request.extra_args.clear();
-            let profile = self.repository.get_profile(&request.profile_id)?;
-            let legacy =
-                profile.read_legacy(&self.repository.metadata_directory().join("config.json"))?;
-            let frozen = freeze_launch(
-                &request,
-                &profile,
-                caller,
-                &FreezeContext {
-                    inherited: snapshot.environment(),
-                    terminal: &EnvMap::new(),
-                    legacy: legacy.as_ref(),
-                    observer: None,
-                },
-            )?;
-            if frozen.program() != snapshot.program() || frozen.runner() != snapshot.runner() {
-                return Ok(false);
-            }
-            let spec = resolve_process(&build_invocation(&request, &frozen)?)?;
-            let (admission, mut owner) = self.admit_owned_command()?;
-            let current = || self.registry().check_caller(caller);
-            let supported =
-                super::opencode_prepare::probe_observer_version(&spec, admission, &current);
-            owner.settled = true;
-            supported
-        };
-        probe().unwrap_or(false)
-    }
     pub(crate) fn rename_metadata(
         &self,
         caller: &CallerIdentity,
@@ -461,6 +423,22 @@ impl LaunchService {
         cwd: &std::path::Path,
         expected_environment: &EnvMap,
     ) -> Result<String, SafeError> {
+        self.probe_opencode_database_with_terminal(
+            caller,
+            profile,
+            cwd,
+            expected_environment,
+            &EnvMap::new(),
+        )
+    }
+    fn probe_opencode_database_with_terminal(
+        &self,
+        caller: &CallerIdentity,
+        profile: &super::profiles::Profile,
+        cwd: &std::path::Path,
+        expected_environment: &EnvMap,
+        terminal: &EnvMap,
+    ) -> Result<String, SafeError> {
         self.registry().check_caller(caller)?;
         if profile.cli != CliKind::Opencode || self.repository.get_profile(&profile.id)? != *profile
         {
@@ -494,7 +472,7 @@ impl LaunchService {
             caller,
             &FreezeContext {
                 inherited: &inherited,
-                terminal: &EnvMap::new(),
+                terminal,
                 legacy: legacy.as_ref(),
                 observer: None,
             },
@@ -563,6 +541,9 @@ impl LaunchService {
         // synchronously round-trip through the Tauri main event loop.
         let handoff_guard = RefCell::new(None);
         let spawned = Cell::new(false);
+        // This route owns the xterm frontend and PTY, independently of the
+        // desktop launcher's terminal. Explicit profile env still wins in D08.
+        let terminal = EnvMap::from([("TERM".into(), "xterm-256color".into())]);
         let status = self.coordinator.start_routed_with_source(
             caller,
             request,
@@ -585,7 +566,7 @@ impl LaunchService {
                     caller,
                     &FreezeContext {
                         inherited: &inherited,
-                        terminal: &EnvMap::new(),
+                        terminal: &terminal,
                         legacy: legacy.as_ref(),
                         observer: None,
                     },
@@ -603,12 +584,6 @@ impl LaunchService {
                         snapshot.observer_requested() || snapshot.codex_identity_requested()
                     })
                     .and_then(|host| {
-                        if snapshot.request().cli == CliKind::Opencode
-                            && !self.opencode_observer_supported(caller, snapshot)
-                        {
-                            observer_failure = Some("OBSERVER_UNSUPPORTED");
-                            return None;
-                        }
                         let registry = Arc::downgrade(self.registry());
                         let owner = caller.clone();
                         let request_id = request.request_id.clone();
@@ -678,7 +653,7 @@ impl LaunchService {
                             let invocation = build_invocation(next.request(), &next)?;
                             resolve_process(&invocation)?;
                             if let Some(args) = &prepared.codex_args {
-                                if !super::codex::identity_hooks_supported(snapshot, args) {
+                                if !super::codex::identity_hooks_supported(&next, args) {
                                     return Err(error("OBSERVER_UNAVAILABLE"));
                                 }
                             }
@@ -686,7 +661,13 @@ impl LaunchService {
                         });
                         match overlaid {
                             Ok(next) => (next, Some(prepared.lease)),
-                            Err(_) => {
+                            Err(failure) => {
+                                if snapshot.request().cli == CliKind::Codex {
+                                    log::warn!(
+                                        "Codex identity hook unavailable: stage={}",
+                                        identity_failure_stage(&failure)
+                                    );
+                                }
                                 observer_failure = Some("OBSERVER_PREPARE_FAILED");
                                 (snapshot.clone(), None)
                             }
@@ -726,11 +707,15 @@ impl LaunchService {
                     if super::source_provenance::SourceProvenance::needs_database_probe(snapshot) {
                         (|| -> Result<Option<String>, SafeError> {
                             let profile = self.repository.get_profile(&request.profile_id)?;
-                            self.probe_opencode_database(
+                            // Revalidate the exact run environment. This existing
+                            // metadata helper remains noninteractive; TERM alone
+                            // does not claim that its stdio is a TTY.
+                            self.probe_opencode_database_with_terminal(
                                 caller,
                                 &profile,
                                 std::path::Path::new(&request.launch_cwd),
                                 snapshot.environment(),
+                                &terminal,
                             )
                             .map(Some)
                         })()
@@ -1006,6 +991,15 @@ impl RunAccess {
     }
 }
 
+// Fixed diagnostic vocabulary; never return a parser/manifest field verbatim.
+fn identity_failure_stage(failure: &SafeError) -> &'static str {
+    match (failure.code.as_str(), failure.field.as_deref()) {
+        ("OBSERVER_PREPARE_FAILED", Some("codexTransportRoute")) => "transport-route",
+        ("OBSERVER_PREPARE_FAILED", Some("codexHookConfiguration")) => "hook-configuration",
+        _ => "identity-prepare",
+    }
+}
+
 #[cfg(test)]
 #[path = "../tests/native_cli_opencode_preparations.rs"]
 mod opencode_preparation_tests;
@@ -1013,6 +1007,109 @@ mod opencode_preparation_tests;
 #[cfg(test)]
 mod owned_command_tests {
     use super::*;
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn TerminalContract_OpenCodeProbePreservesEnvironmentAndNonTty_106() {
+        use crate::cli::environment::build_environment;
+        use crate::cli::profiles::Profile;
+        use crate::cli::storage::Patch;
+        let root = tempfile::tempdir().unwrap();
+        let repository = WorkspaceRepository::open(root.path().join("workspace.json")).unwrap();
+        let mut profile = Profile::new("terminal-probe", CliKind::Opencode);
+        profile.program_path = Override::Set(crate::platform::find_executable("node").unwrap());
+        let document = repository.read().unwrap();
+        repository
+            .apply(
+                document.revision,
+                Patch::Create {
+                    profile: profile.clone(),
+                },
+            )
+            .unwrap();
+        let profile = repository.get_profile(&profile.id).unwrap();
+        std::fs::write(root.path().join("db"), "require('node:fs').writeFileSync('probe.json',JSON.stringify({term:process.env.TERM,stdinIsTTY:!!process.stdin.isTTY,stdoutIsTTY:!!process.stdout.isTTY}));process.stdout.write('fixture-db\\n')").unwrap();
+        let mut inherited = EnvMap::from([("TERM".into(), "dumb".into())]);
+        if let Some(value) = std::env::var_os("SystemRoot") {
+            inherited.insert("SystemRoot".into(), value);
+        }
+        let service = LaunchService::new(repository, Some(inherited.clone()), None);
+        let caller = service.registry().activate_window("main").unwrap();
+        let terminal = EnvMap::from([("TERM".into(), "xterm-256color".into())]);
+        let run_environment =
+            build_environment(&inherited, &terminal, &profile, None, None).unwrap();
+        assert_eq!(
+            service
+                .probe_opencode_database(&caller, &profile, root.path(), &run_environment)
+                .unwrap_err()
+                .code,
+            "SCOPE_UNKNOWN"
+        );
+        assert!(!root.path().join("probe.json").exists());
+        assert_eq!(
+            service
+                .probe_opencode_database_with_terminal(
+                    &caller,
+                    &profile,
+                    root.path(),
+                    &run_environment,
+                    &terminal
+                )
+                .unwrap(),
+            "fixture-db\n"
+        );
+        let report: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(root.path().join("probe.json")).unwrap())
+                .unwrap();
+        assert_eq!(report["term"], "xterm-256color");
+        assert_eq!(report["stdinIsTTY"], false);
+        assert_eq!(report["stdoutIsTTY"], false);
+        let original = build_environment(&inherited, &EnvMap::new(), &profile, None, None).unwrap();
+        service
+            .probe_opencode_database(&caller, &profile, root.path(), &original)
+            .unwrap();
+        let before = std::fs::read(root.path().join("probe.json")).unwrap();
+        let report: serde_json::Value = serde_json::from_slice(&before).unwrap();
+        assert_eq!(report["term"], "dumb");
+        let mut tampered = run_environment;
+        tampered.insert("UNEXPECTED_FIXTURE_VALUE".into(), "rejected".into());
+        assert_eq!(
+            service
+                .probe_opencode_database_with_terminal(
+                    &caller,
+                    &profile,
+                    root.path(),
+                    &tampered,
+                    &terminal
+                )
+                .unwrap_err()
+                .code,
+            "SCOPE_UNKNOWN"
+        );
+        assert_eq!(
+            std::fs::read(root.path().join("probe.json")).unwrap(),
+            before
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn CodexIdentity_FailureDiagnosticNeverLeaksPayload_085() {
+        let mut failure = error("OBSERVER_PREPARE_FAILED");
+        assert_eq!(identity_failure_stage(&failure), "identity-prepare");
+        failure.field = Some("codexTransportRoute".into());
+        assert_eq!(identity_failure_stage(&failure), "transport-route");
+        failure.field = Some("codexHookConfiguration".into());
+        assert_eq!(identity_failure_stage(&failure), "hook-configuration");
+        for (code, field) in [
+            ("raw-token-secret", "codexTransportRoute"),
+            ("OBSERVER_PREPARE_FAILED", "C:/private/prompt-token-secret"),
+        ] {
+            failure.code = code.into();
+            failure.field = Some(field.into());
+            assert_eq!(identity_failure_stage(&failure), "identity-prepare");
+        }
+    }
 
     #[test]
     #[allow(non_snake_case)]

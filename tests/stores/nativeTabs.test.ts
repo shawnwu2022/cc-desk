@@ -24,6 +24,20 @@ function status(tab: any, phase: LaunchStatus['phase'] = 'running'): LaunchStatu
 
 beforeEach(() => setActivePinia(createPinia()))
 
+it('CodexAdapter_ObserverTimeoutNeverInventsTuiActivity_110', () => {
+  const tabs = useNativeTabsStore()
+  const tab = tabs.create({ cli: 'codex', projectId: 'p', projectPath: '/repo', profileId: 'cx', profileRevision: '1', action: { kind: 'new' } })
+  tabs.applyLaunchStatus(tab.tabId, status(tab))
+  const owner = captureNativeAttempt(tab)
+  tabs.applyCodexProgramStatus(tab.tabId, owner, 'idle')
+  tabs.applyObservation(tab.tabId, owner, { observation: 'active', activity: 'waiting_permission' })
+  expect(tabs.tab(tab.tabId)).toMatchObject({ codexProgramStatus: 'idle', activityState: 'unknown', attentionState: 'none', observationState: 'active' })
+  tabs.applyObservation(tab.tabId, owner, { observation: 'unavailable', activity: 'working' })
+  expect(tabs.tab(tab.tabId)).toMatchObject({ codexProgramStatus: 'idle', activityState: 'unknown', attentionState: 'none', observationState: 'unavailable' })
+  tabs.applyObservation(tab.tabId, { ...owner, generation: owner.generation + 1 }, { observation: 'active', activity: 'working' })
+  expect(tabs.tab(tab.tabId)?.observationState).toBe('unavailable')
+})
+
 it.each(['new','resume-id'] as const)('Opencode_StatusAndIdentityKeepExactAttempt_030 %s',kind=>{
   const tabs=useNativeTabsStore(),tab=tabs.create({cli:'opencode',projectId:'p',projectPath:'/repo',profileId:'oc',profileRevision:'1',action:kind==='new'?{kind}:{kind,nativeSessionId:'ses_main'}})
   const owner=captureNativeAttempt(tab)

@@ -3,11 +3,16 @@ pub(crate) mod claude;
 pub(crate) mod codex;
 #[cfg(windows)]
 pub(crate) mod codex_cmd;
+#[cfg(windows)]
+mod codex_cmd_route;
+#[cfg(windows)]
+mod codex_native_route;
 pub(crate) mod commands;
 pub(crate) mod document;
 pub(crate) mod environment;
 pub(crate) mod invocation;
 pub(crate) mod launch;
+pub(crate) mod launch_recipe;
 pub(crate) mod launch_service;
 pub(crate) mod native_projection;
 pub(crate) mod native_rename;

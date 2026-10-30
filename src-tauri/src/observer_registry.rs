@@ -63,11 +63,57 @@ struct ObserverSlot {
     codex_replay: crate::codex_observer::ReplayWindow,
     delivery: ObserverDelivery,
     authorize: Arc<dyn Fn() -> bool + Send + Sync>,
+    identity_diagnostics: CodexIdentityDiagnostics,
+}
+
+/// Receipt diagnostics only, never a second frontend adoption state machine.
+#[derive(Default)]
+struct CodexIdentityDiagnostics {
+    emitted: u8,
+    last: Option<(String, uuid::Uuid, bool)>,
+    reported: Option<uuid::Uuid>,
+}
+impl CodexIdentityDiagnostics {
+    fn receipt(&mut self, run: &ObserverRun, event: &Value, duplicate: bool) -> Option<String> {
+        let kind = event.get("hook_event_name")?.as_str()?;
+        if !matches!(kind, "SessionStart" | "UserPromptSubmit" | "Stop") {
+            return None;
+        }
+        let id = uuid::Uuid::parse_str(event.get("session_id")?.as_str()?).ok()?;
+        let before = self.reported;
+        if !duplicate {
+            self.reported = Some(id);
+        }
+        let signature = (kind.to_owned(), id, duplicate);
+        if self.emitted >= 16 || self.last.as_ref() == Some(&signature) {
+            return None;
+        }
+        self.last = Some(signature);
+        self.emitted += 1;
+        // Only normal Desk-generated routing IDs are printable. Never echo an
+        // arbitrary caller string that happened to pass routing validation.
+        let safe_run = run
+            .run_id
+            .strip_prefix("run-")
+            .filter(|s| {
+                s.len() == 32
+                    && s.bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            })
+            .map(|_| run.run_id.as_str())
+            .unwrap_or("redacted");
+        Some(serde_json::json!({"layer":"backend-receipt","run":safe_run,"generation":run.generation,
+            "event":kind,"outcome":if duplicate {"duplicate"} else {"backend-authenticated"},
+            "reason":if duplicate {"replay"} else {"auth-shape-replay-passed"},
+            "beforeReported":before.map(|v|v.to_string()),"afterReported":self.reported.map(|v|v.to_string()),
+            "frontendAdoption":"unknown"}).to_string())
+    }
 }
 
 pub(crate) struct ObserverRegistry {
     slots: SyncMutex<HashMap<ObserverRun, ObserverSlot>>,
     capacity: usize,
+    diagnostic_emitted: std::sync::atomic::AtomicUsize,
 }
 
 #[derive(Clone, Debug)]
@@ -129,6 +175,7 @@ impl ObserverRegistry {
         Self {
             slots: SyncMutex::new(HashMap::new()),
             capacity,
+            diagnostic_emitted: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
@@ -252,6 +299,7 @@ impl ObserverRegistry {
                 codex_replay: Default::default(),
                 delivery,
                 authorize,
+                identity_diagnostics: Default::default(),
             },
         );
         drop(slots);
@@ -351,10 +399,26 @@ impl ObserverRegistry {
                 && crate::codex_observer::ordered_event_id(event_id)
         {
             if !slot.codex_replay.accept(event_id, Self::MAX_SEEN_EVENTS) {
+                let diagnostic = (binding.source == ObserverSource::CodexHook)
+                    .then(|| {
+                        slot.identity_diagnostics
+                            .receipt(&binding.run, &event, true)
+                    })
+                    .flatten();
+                drop(slots);
+                self.log_identity_diagnostic(diagnostic);
                 return Ok(ObserverAccept::Duplicate);
             }
         } else {
             if slot.seen.contains(event_id) {
+                let diagnostic = (binding.source == ObserverSource::CodexHook)
+                    .then(|| {
+                        slot.identity_diagnostics
+                            .receipt(&binding.run, &event, true)
+                    })
+                    .flatten();
+                drop(slots);
+                self.log_identity_diagnostic(diagnostic);
                 return Ok(ObserverAccept::Duplicate);
             }
             if slot.seen.len() >= Self::MAX_SEEN_EVENTS {
@@ -363,6 +427,14 @@ impl ObserverRegistry {
             slot.seen.insert(event_id.to_string());
         }
 
+        let diagnostic = (binding.source == ObserverSource::CodexHook)
+            .then(|| {
+                slot.identity_diagnostics
+                    .receipt(&binding.run, &event, false)
+            })
+            .flatten();
+        drop(slots);
+        self.log_identity_diagnostic(diagnostic);
         Ok(ObserverAccept::Accepted(ValidatedObserverEvent {
             run: binding.run.clone(),
             event_id: event_id.to_string(),
@@ -371,6 +443,21 @@ impl ObserverRegistry {
         }))
     }
 
+    fn log_identity_diagnostic(&self, record: Option<String>) {
+        if let Some(record) = record {
+            if self
+                .diagnostic_emitted
+                .fetch_update(
+                    std::sync::atomic::Ordering::Relaxed,
+                    std::sync::atomic::Ordering::Relaxed,
+                    |count| (count < 128).then_some(count + 1),
+                )
+                .is_ok()
+            {
+                log::info!("CC_DESK_CODEX_IDENTITY {record}");
+            }
+        }
+    }
     pub(crate) fn check_binding(&self, binding: &ObserverBinding) -> Result<(), SafeError> {
         let authorize = {
             let slots = self.slots.lock();
@@ -504,6 +591,129 @@ fn validate_capability(value: &str) -> Result<(), SafeError> {
         return Err(SafeError::invalid("capability"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod identity_diagnostic_tests {
+    use super::*;
+    const A: &str = "01a18afd-4f1f-7df1-98b7-93534352dc84";
+    const B: &str = "01a18aff-66df-79f1-ba6b-cba3ff004b65";
+    fn input(event: &str, id: &str) -> Value {
+        serde_json::json!({"hook_event_name":event,"session_id":id,"prompt":"PRIVATE_TOKEN", "cwd":"PRIVATE_PATH", "argv":["PRIVATE_ARG"]})
+    }
+    #[test]
+    fn codex_diagnostic_receipt_is_not_adoption_and_redacts_input_001() {
+        let run = ObserverRun {
+            run_id: "PRIVATE_PATH_TOKEN".into(),
+            generation: 1,
+        };
+        let mut trace = CodexIdentityDiagnostics::default();
+        let first = trace
+            .receipt(&run, &input("SessionStart", A), false)
+            .unwrap();
+        assert!(!first.contains("PRIVATE"));
+        let first: Value = serde_json::from_str(&first).unwrap();
+        assert_eq!(first["run"], "redacted");
+        assert_eq!(first["afterReported"], A);
+        let next: Value =
+            serde_json::from_str(&trace.receipt(&run, &input("Stop", B), false).unwrap()).unwrap();
+        assert_eq!(next["beforeReported"], A);
+        assert_eq!(next["afterReported"], B);
+        assert_eq!(next["outcome"], "backend-authenticated");
+        assert_eq!(next["frontendAdoption"], "unknown");
+        assert!(trace.receipt(&run, &input("Stop", B), false).is_none());
+        assert!(trace
+            .receipt(&run, &input("PRIVATE_EVENT", A), false)
+            .is_none());
+        assert!(trace
+            .receipt(&run, &input("Stop", "PRIVATE_ID"), false)
+            .is_none());
+        for i in 0..100 {
+            let _ = trace.receipt(
+                &run,
+                &input("SessionStart", if i % 2 == 0 { A } else { B }),
+                false,
+            );
+        }
+        assert_eq!(trace.emitted, 16);
+    }
+    #[test]
+    fn codex_diagnostic_auth_generation_replay_and_retirement_remain_authoritative_002() {
+        let registry = ObserverRegistry::new();
+        let run = ObserverRun {
+            run_id: format!("run-{}", "a".repeat(32)),
+            generation: 1,
+        };
+        let binding = registry
+            .mint(run.clone(), ObserverSource::CodexHook)
+            .unwrap();
+        let bytes = serde_json::to_vec(&input("SessionStart", A)).unwrap();
+        let mut wrong = binding.clone();
+        wrong.capability = "b".repeat(32);
+        assert!(registry.accept_event(&wrong, "wrong-auth", &bytes).is_err());
+        wrong = binding.clone();
+        wrong.run.generation = 2;
+        assert!(registry.accept_event(&wrong, "wrong-gen", &bytes).is_err());
+        assert_eq!(registry.slots.lock()[&run].identity_diagnostics.emitted, 0);
+        assert!(matches!(
+            registry.accept_event(&binding, "first", &bytes).unwrap(),
+            ObserverAccept::Accepted(_)
+        ));
+        assert_eq!(
+            registry.accept_event(&binding, "first", &bytes).unwrap(),
+            ObserverAccept::Duplicate
+        );
+        let stop = serde_json::to_vec(&input("Stop", B)).unwrap();
+        // The registry must not copy the frontend's mismatched-ID rejection.
+        assert!(matches!(
+            registry.accept_event(&binding, "stop", &stop).unwrap(),
+            ObserverAccept::Accepted(_)
+        ));
+        assert_eq!(
+            registry.slots.lock()[&run]
+                .identity_diagnostics
+                .reported
+                .unwrap()
+                .to_string(),
+            B
+        );
+        let claude = registry
+            .mint(
+                ObserverRun {
+                    run_id: "claude-private".into(),
+                    generation: 1,
+                },
+                ObserverSource::ClaudeHook,
+            )
+            .unwrap();
+        registry.accept_event(&claude, "claude", &bytes).unwrap();
+        assert_eq!(
+            registry.slots.lock()[&claude.run]
+                .identity_diagnostics
+                .emitted,
+            0
+        );
+        registry.revoke(&binding);
+        let count = registry
+            .diagnostic_emitted
+            .load(std::sync::atomic::Ordering::Relaxed);
+        assert!(registry.accept_event(&binding, "retired", &bytes).is_err());
+        assert_eq!(
+            registry
+                .diagnostic_emitted
+                .load(std::sync::atomic::Ordering::Relaxed),
+            count
+        );
+        for _ in 0..200 {
+            registry.log_identity_diagnostic(Some("fixed-test-record".into()));
+        }
+        assert_eq!(
+            registry
+                .diagnostic_emitted
+                .load(std::sync::atomic::Ordering::Relaxed),
+            128
+        );
+    }
 }
 
 fn validate_event_id(value: &str) -> Result<(), SafeError> {
