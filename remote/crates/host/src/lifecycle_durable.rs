@@ -40,7 +40,7 @@ fn decode(c: u8) -> Code {
         _ => Code::Backend,
     }
 }
-fn resource(c: &Context<'_>, key: &DigestKey) -> Result<[u8; 32], Code> {
+pub(crate) fn resource(c: &Context<'_>, key: &DigestKey) -> Result<[u8; 32], Code> {
     let mut bytes = Vec::new();
     for s in [
         &c.proof.context().host_endpoint_id,

@@ -18,6 +18,7 @@ use std::{
 const APP: i64 = 0x43434452;
 const LEGACY_VERSION: i64 = 0x4c4a0001;
 const VERSION: i64 = 0x4c4a0002;
+const RESIZE_VERSION: i64 = 0x4c4a0003;
 const SQL: [&str; 5] = [
     "CREATE TABLE binding(id INTEGER NOT NULL PRIMARY KEY CHECK(id=1),witness BLOB NOT NULL CHECK(length(witness)=32)) STRICT",
     "CREATE TABLE floors(scope BLOB NOT NULL PRIMARY KEY CHECK(length(scope)=32),seq BLOB NOT NULL CHECK(length(seq)=8)) STRICT",
@@ -45,6 +46,8 @@ pub(super) struct Store {
     ownership: Arc<crate::path_guard::Ownership>,
     poisoned: bool,
     legacy: bool,
+    readonly: bool,
+    candidate: bool,
     #[cfg(test)]
     pub fault: Option<Cut>,
 }
@@ -81,13 +84,19 @@ fn phase(s: i64, c: Option<u8>) -> Result<Phase, Error> {
     }
 }
 fn verify(db: &Connection) -> Result<(), Error> {
+    verify_format(db, false)
+}
+fn verify_format(db: &Connection, candidate: bool) -> Result<(), Error> {
     let app: i64 = db
         .query_row("PRAGMA application_id", [], |r| r.get(0))
         .map_err(storage)?;
     let version: i64 = db
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .map_err(storage)?;
-    if app != APP || ![LEGACY_VERSION, VERSION].contains(&version) {
+    if app != APP
+        || (![LEGACY_VERSION, VERSION].contains(&version)
+            && !(candidate && version == RESIZE_VERSION))
+    {
         return Err(Error::Schema);
     }
     let mut stmt = db
@@ -109,9 +118,20 @@ fn verify(db: &Connection) -> Result<(), Error> {
     Ok(())
 }
 impl Store {
+    fn resize_format(&self) -> bool {
+        self.candidate
+            && self
+                .db
+                .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .ok()
+                == Some(RESIZE_VERSION)
+    }
+    pub(crate) fn resize_writable(&self) -> bool {
+        self.resize_format() && !self.readonly
+    }
     pub fn bind_key(&mut self, witness: [u8; 32]) -> Result<(), Error> {
         self.check()?;
-        if self.legacy {
+        if self.readonly {
             let old: Vec<u8> = self
                 .db
                 .query_row("SELECT witness FROM binding WHERE id=1", [], |r| r.get(0))
@@ -165,17 +185,24 @@ impl Store {
         Ok(())
     }
     pub fn open(p: &Path) -> Result<Self, Error> {
+        Self::open_inner(p, false)
+    }
+    #[cfg(test)]
+    pub(crate) fn open_resize_candidate(p: &Path) -> Result<Self, Error> {
+        Self::open_inner(p, true)
+    }
+    fn open_inner(p: &Path, candidate: bool) -> Result<Self, Error> {
         crate::journal_storage::qualify()?;
         let (guards, created) = crate::path_guard::acquire(p)?;
         let flags = OpenFlags::SQLITE_OPEN_NO_MUTEX | OpenFlags::SQLITE_OPEN_NOFOLLOW;
         if !created {
             let ro = Connection::open_with_flags(p, flags | OpenFlags::SQLITE_OPEN_READ_ONLY)
                 .map_err(storage)?;
-            verify(&ro)?;
+            verify_format(&ro, candidate)?;
             let version: i64 = ro
                 .query_row("PRAGMA user_version", [], |r| r.get(0))
                 .map_err(storage)?;
-            if version == LEGACY_VERSION {
+            if version == LEGACY_VERSION || candidate {
                 let ownership = guards.ownership();
                 return Ok(Self {
                     db: ro,
@@ -184,7 +211,9 @@ impl Store {
                     owner: Arc::new(()),
                     ownership,
                     poisoned: false,
-                    legacy: true,
+                    legacy: version == LEGACY_VERSION,
+                    readonly: true,
+                    candidate,
                     #[cfg(test)]
                     fault: None,
                 });
@@ -213,10 +242,14 @@ impl Store {
             }
             tx.pragma_update(None, "application_id", APP)
                 .map_err(storage)?;
-            tx.pragma_update(None, "user_version", VERSION)
-                .map_err(storage)?;
+            tx.pragma_update(
+                None,
+                "user_version",
+                if candidate { RESIZE_VERSION } else { VERSION },
+            )
+            .map_err(storage)?;
         } else {
-            verify(&tx)?;
+            verify_format(&tx, candidate)?;
             tx.execute(
                 "UPDATE ops SET state=4,code=NULL WHERE state IN (0,1,2)",
                 [],
@@ -233,7 +266,7 @@ impl Store {
                 return Err(Error::Storage);
             }
         }
-        verify(&db)?;
+        verify_format(&db, candidate)?;
         let ownership = guards.ownership();
         Ok(Self {
             db,
@@ -243,6 +276,8 @@ impl Store {
             ownership,
             poisoned: false,
             legacy: false,
+            readonly: false,
+            candidate,
             #[cfg(test)]
             fault: None,
         })
@@ -251,7 +286,7 @@ impl Store {
         if self.poisoned {
             return Err(Error::Storage);
         }
-        verify(&self.db)?;
+        verify_format(&self.db, self.candidate)?;
         for (suffix, limit) in [("", 16 * 1024 * 1024), ("-wal", 16 * 1024 * 1024)] {
             let mut p = self.path.as_os_str().to_owned();
             p.push(suffix);
@@ -277,7 +312,7 @@ impl Store {
         }
         let tx = self
             .db
-            .transaction_with_behavior(if self.legacy {
+            .transaction_with_behavior(if self.readonly {
                 TransactionBehavior::Deferred
             } else {
                 TransactionBehavior::Immediate
@@ -305,14 +340,17 @@ impl Store {
             }
             let p = phase(s, c)?;
             return Ok(Prepare::Recorded(
-                if self.legacy && !matches!(p, Phase::Rejected(_)) {
+                if (self.legacy && !matches!(p, Phase::Rejected(_)))
+                    || (self.readonly
+                        && matches!(p, Phase::Prepared | Phase::InFlight | Phase::Accepted))
+                {
                     Phase::Uncertain
                 } else {
                     p
                 },
             ));
         }
-        if self.legacy {
+        if self.readonly {
             return Err(Error::Sequence);
         }
         let sequence_exists: bool = tx
@@ -414,7 +452,7 @@ impl Store {
     }
     pub fn transition(&mut self, t: &Ticket, next: Phase) -> Result<(), Error> {
         self.check()?;
-        if self.legacy {
+        if self.readonly {
             return Err(Error::Schema);
         }
         if !Weak::ptr_eq(&t.owner, &Arc::downgrade(&self.owner)) {
@@ -497,6 +535,9 @@ impl Store {
 #[cfg(all(test, windows))]
 #[path = "lifecycle_recovery_tests.rs"]
 mod recovery_tests;
+#[cfg(test)]
+#[path = "lifecycle_resize_journal_tests.rs"]
+mod resize_tests;
 #[path = "lifecycle_journal_results.rs"]
 mod results;
 #[cfg(all(test, windows))]

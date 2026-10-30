@@ -19,6 +19,64 @@ fn seal(
 }
 type StoredRow = (i64, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>);
 impl Store {
+    pub(crate) fn record_resize(
+        &mut self,
+        t: &Ticket,
+        backend: [u8; 32],
+        resource: &crate::lifecycle_router::ResourceIdentity,
+        event: &crate::lifecycle_resize_completion::Fact,
+        key: &DigestKey,
+    ) -> Result<(), Error> {
+        if !self.resize_writable()
+            || event.backend != backend
+            || &event.resource != resource
+            || event.digest != t.digest
+            || event.request.operation != t.op
+            || event.request.sequence != t.seq
+        {
+            return Err(Error::Conflict);
+        }
+        self.record_payload(
+            t,
+            backend,
+            event.encode_stored().map_err(|_| Error::Bounds)?,
+            key,
+        )
+    }
+    pub(crate) fn restore_resize(
+        &self,
+        scope: [u8; 32],
+        request: &cc_desk_remote_record::lifecycle::Request,
+        digest: [u8; 32],
+        backend: [u8; 32],
+        resource: &crate::lifecycle_router::ResourceIdentity,
+        key: &DigestKey,
+    ) -> Result<Option<crate::lifecycle_resize_completion::Fact>, Error> {
+        if !self.resize_format() {
+            return Err(Error::Schema);
+        }
+        let Some(payload) = self.restore_payload(
+            scope,
+            request.operation,
+            request.sequence,
+            digest,
+            backend,
+            key,
+        )?
+        else {
+            return Ok(None);
+        };
+        let fact = crate::lifecycle_resize_completion::Fact::decode_stored(&payload)
+            .map_err(|_| Error::Schema)?;
+        if fact.request != *request
+            || fact.digest != digest
+            || fact.backend != backend
+            || &fact.resource != resource
+        {
+            return Err(Error::Conflict);
+        }
+        Ok(Some(fact))
+    }
     pub(crate) fn validate_results(
         &self,
         scope: [u8; 32],
@@ -49,10 +107,24 @@ impl Store {
             let op: [u8; 16] = op.try_into().map_err(|_| Error::Schema)?;
             let seq = u64::from_be_bytes(seq.try_into().map_err(|_| Error::Schema)?);
             let digest = digest.try_into().map_err(|_| Error::Schema)?;
-            let event = self
-                .restore_attach(scope, op, seq, digest, backend.ok_or(Error::Conflict)?, key)?
+            let payload = self
+                .restore_payload(scope, op, seq, digest, backend.ok_or(Error::Conflict)?, key)?
                 .ok_or(Error::Schema)?;
-            if event.request.operation != op || event.request.sequence != seq {
+            let request = if payload.starts_with(b"ATC2") {
+                Applied::decode_stored(&payload)
+                    .map_err(|_| Error::Schema)?
+                    .request
+            } else if self.resize_format() && payload.starts_with(b"RSC1") {
+                let fact = crate::lifecycle_resize_completion::Fact::decode_stored(&payload)
+                    .map_err(|_| Error::Schema)?;
+                if fact.digest != digest || Some(fact.backend) != backend {
+                    return Err(Error::Conflict);
+                }
+                fact.request
+            } else {
+                return Err(Error::Schema);
+            };
+            if request.operation != op || request.sequence != seq {
                 return Err(Error::Conflict);
             }
         }
@@ -65,15 +137,24 @@ impl Store {
         event: &Applied,
         key: &DigestKey,
     ) -> Result<(), Error> {
+        let payload = event.encode_stored().map_err(|_| Error::Bounds)?;
+        if event.request.operation != t.op || event.request.sequence != t.seq {
+            return Err(Error::Conflict);
+        }
+        self.record_payload(t, backend, payload, key)
+    }
+    fn record_payload(
+        &mut self,
+        t: &Ticket,
+        backend: [u8; 32],
+        payload: Vec<u8>,
+        key: &DigestKey,
+    ) -> Result<(), Error> {
         self.check()?;
-        if self.legacy
+        if self.readonly
             || backend == [0; 32]
             || !Weak::ptr_eq(&t.owner, &Arc::downgrade(&self.owner))
         {
-            return Err(Error::Conflict);
-        }
-        let payload = event.encode_stored().map_err(|_| Error::Bounds)?;
-        if event.request.operation != t.op || event.request.sequence != t.seq {
             return Err(Error::Conflict);
         }
         let tag = seal(key, t.scope, t.op, t.seq, t.digest, backend, &payload)?;
@@ -154,6 +235,19 @@ impl Store {
         backend: [u8; 32],
         key: &DigestKey,
     ) -> Result<Option<Applied>, Error> {
+        self.restore_payload(scope, op, seq, digest, backend, key)?
+            .map(|p| Applied::decode_stored(&p).map_err(|_| Error::Schema))
+            .transpose()
+    }
+    fn restore_payload(
+        &self,
+        scope: [u8; 32],
+        op: [u8; 16],
+        seq: u64,
+        digest: [u8; 32],
+        backend: [u8; 32],
+        key: &DigestKey,
+    ) -> Result<Option<Vec<u8>>, Error> {
         self.check()?;
         if self.legacy {
             return Ok(None);
@@ -169,6 +263,6 @@ impl Store {
         if !bool::from(tag.ct_eq(&seal(key, scope, op, seq, digest, backend, &p)?)) {
             return Err(Error::Conflict);
         }
-        Ok(Some(Applied::decode_stored(&p).map_err(|_| Error::Schema)?))
+        Ok(Some(p))
     }
 }

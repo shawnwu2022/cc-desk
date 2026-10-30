@@ -16,6 +16,12 @@ mod lifecycle_durable;
 mod lifecycle_journal;
 #[cfg(feature = "experimental-host-owner")]
 #[allow(dead_code)]
+mod lifecycle_resize_completion;
+#[cfg(feature = "experimental-host-owner")]
+#[allow(dead_code)]
+mod lifecycle_resize_durable;
+#[cfg(feature = "experimental-host-owner")]
+#[allow(dead_code)]
 mod lifecycle_router;
 #[cfg(feature = "experimental-local-writer")]
 #[allow(
