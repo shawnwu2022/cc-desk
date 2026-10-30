@@ -71,6 +71,12 @@ export class ProjectionReceiver {
   }
   get frame():Frame|undefined {return this.#frame;}
   get synchronized():boolean {return this.#synchronized;}
+  // A native channel rebind changes context, never the installed continuity
+  // baseline. Its old frame stays historical and cannot ACK in the new channel.
+  rebind(binding:string):void {
+    if (!hex(binding,64)) throw Error('invalid binding');
+    this.disconnect();this.#binding=binding;
+  }
   // Called only for an exact verified Host barrier announcement. Frames cannot
   // select their own target/binding/barrier and enable an unsolicited install.
   begin(s:Stamp):void {
