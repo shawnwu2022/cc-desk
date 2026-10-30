@@ -34,6 +34,16 @@ fn own(handle: HANDLE) -> OwnedHandle {
 }
 impl Job {
     #[cfg(feature = "conpty-qualification")]
+    pub(crate) fn request_termination(&self, exit_code: u32) -> Result<(), RuntimeError> {
+        unsafe {
+            windows::Win32::System::JobObjects::TerminateJobObject(
+                HANDLE(self.0.as_raw_handle()),
+                exit_code,
+            )
+        }
+        .map_err(|_| RuntimeError::OutcomeUnknown)
+    }
+    #[cfg(feature = "conpty-qualification")]
     pub(crate) fn active_processes(&self) -> Result<u32, RuntimeError> {
         use windows::Win32::System::JobObjects::{
             JobObjectBasicAccountingInformation, QueryInformationJobObject,
@@ -168,6 +178,16 @@ pub(crate) fn non_job_for_activity_test() -> Job {
 #[cfg(all(test, feature = "conpty-qualification"))]
 mod activity_tests {
     use super::*;
+    #[test]
+    fn job_stop_owned_empty_and_wrong_object() {
+        let job = Job::new().unwrap();
+        job.request_termination(1).unwrap();
+        assert_eq!(job.active_processes(), Ok(0));
+        assert_eq!(
+            non_job_for_activity_test().request_termination(1),
+            Err(RuntimeError::OutcomeUnknown)
+        );
+    }
     use windows::Win32::System::JobObjects::{
         JobObjectExtendedLimitInformation, QueryInformationJobObject,
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION,

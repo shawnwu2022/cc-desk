@@ -542,7 +542,16 @@ fn actual_owned_pty_writer(canonical: bool) {
         Err(Reject::Sealed)
     ));
     joined(&mut writer);
-    assert_ne!(run.stop_root_until(end).unwrap().exit_code, 90);
+    let job_exit = if canonical {
+        let stopped = run.stop_owned_job_until(end).unwrap();
+        assert_eq!(stopped.observed_active_processes(), 0);
+        assert_eq!(run.try_wait_root().unwrap(), Some(stopped.root_exit));
+        assert_ne!(stopped.root_exit.exit_code, 90);
+        true
+    } else {
+        assert_ne!(run.stop_root_until(end).unwrap().exit_code, 90);
+        false
+    };
     let job_after_stop = run.job_active_processes();
     drop(run);
     let (output, refusal, reply_count) = done_rx
@@ -559,6 +568,7 @@ fn actual_owned_pty_writer(canonical: bool) {
     eprintln!(
         "TEST_ONLY_PTY_JOB before={job_before_stop:?}; after_stop={job_after_stop:?}; scope=owned_job_snapshot_only"
     );
+    eprintln!("TEST_ONLY_JOB_ZERO_CONFIRMED={job_exit}; excludes=master_console_io");
     #[cfg(feature = "experimental-canonical-replies")]
     if let Some(result) = captured {
         let captured = result.unwrap().unwrap().unwrap();

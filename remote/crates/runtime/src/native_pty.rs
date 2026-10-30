@@ -28,7 +28,8 @@ impl NativePtySize {
     }
 }
 pub struct NativeOwnedPtyRun {
-    child: Box<dyn portable_pty::Child + Send + Sync>,
+    child: Option<Box<dyn portable_pty::Child + Send + Sync>>,
+    root_exit: Option<crate::NativeRootExitOnly>,
     job: Option<crate::windows_job::Job>,
     _master: Box<dyn portable_pty::MasterPty + Send>,
     reader: Option<Box<dyn Read + Send>>,
@@ -39,7 +40,67 @@ fn preparation() -> NativePtyError {
         phase: NativePtyPhase::Preparation,
     }
 }
+/// Only this owned Job's queried zero-member fact; excludes master/console/IO.
+#[derive(Clone, Copy, Debug)]
+pub struct NativeJobExitOnly {
+    pub root_exit: crate::NativeRootExitOnly,
+    active_processes: u32,
+}
+impl NativeJobExitOnly {
+    pub fn observed_active_processes(&self) -> u32 {
+        self.active_processes
+    }
+}
 impl NativeOwnedPtyRun {
+    /// Opt-in explicit termination. The absolute deadline qualifies evidence,
+    /// not syscall/Child-handle destruction preemption. Unknown runs old cleanup.
+    pub fn stop_owned_job_until(
+        &mut self,
+        end: Instant,
+    ) -> Result<NativeJobExitOnly, NativePtyError> {
+        let result = (|| {
+            if Instant::now() >= end {
+                return Err(NativePtyError::OutcomeUnknown);
+            }
+            self.job
+                .as_ref()
+                .ok_or(NativePtyError::OutcomeUnknown)?
+                .request_termination(1)
+                .map_err(|_| NativePtyError::OutcomeUnknown)?;
+            let root = loop {
+                if Instant::now() >= end {
+                    return Err(NativePtyError::OutcomeUnknown);
+                }
+                if let Some(root) = self.try_wait_root()? {
+                    break root;
+                }
+                std::thread::sleep(
+                    Duration::from_millis(1).min(end.saturating_duration_since(Instant::now())),
+                );
+            };
+            self.root_exit = Some(root);
+            // The pinned Windows child owns a process handle, with no custom
+            // wait-on-drop. Handle close remains synchronous; sample time after it.
+            drop(self.child.take());
+            let job = self.job.as_ref().ok_or(NativePtyError::OutcomeUnknown)?;
+            let active_processes = wait_job_empty(end, || {
+                job.active_processes()
+                    .map_err(|_| NativePtyError::OutcomeUnknown)
+            })?;
+            drop(self.job.take());
+            if Instant::now() >= end {
+                return Err(NativePtyError::OutcomeUnknown);
+            }
+            Ok(NativeJobExitOnly {
+                root_exit: root,
+                active_processes,
+            })
+        })();
+        if result.is_err() {
+            self.request_stop();
+        }
+        result
+    }
     /// Instantaneous count for this run's still-owned Job only. None means the
     /// Job handle was released, not zero active processes. Errors remain unknown.
     /// This borrows the handle without extending its lifetime or changing stop;
@@ -87,7 +148,8 @@ impl NativeOwnedPtyRun {
             .spawn_command_in_job(recipe.into_command(), job.borrowed())?;
         drop(pair.slave);
         let mut run = Self {
-            child,
+            child: Some(child),
+            root_exit: None,
             job: Some(job),
             _master: pair.master,
             reader: Some(reader),
@@ -107,12 +169,17 @@ impl NativeOwnedPtyRun {
     }
     fn root_handle(&self) -> Result<HANDLE, NativePtyError> {
         self.child
+            .as_ref()
+            .ok_or(NativePtyError::OutcomeUnknown)?
             .as_raw_handle()
             .map(HANDLE)
             .ok_or(NativePtyError::OutcomeUnknown)
     }
     /// Exact retained root signal only; EOF, a kill request and tree state are distinct.
     pub fn try_wait_root(&self) -> Result<Option<crate::NativeRootExitOnly>, NativePtyError> {
+        if let Some(root) = self.root_exit {
+            return Ok(Some(root));
+        }
         let handle = self.root_handle()?;
         match unsafe { WaitForSingleObject(handle, 0) } {
             WAIT_OBJECT_0 => {
@@ -149,6 +216,26 @@ impl NativeOwnedPtyRun {
         Err(NativePtyError::OutcomeUnknown)
     }
 }
+fn wait_job_empty(
+    end: Instant,
+    mut query: impl FnMut() -> Result<u32, NativePtyError>,
+) -> Result<u32, NativePtyError> {
+    loop {
+        if Instant::now() >= end {
+            return Err(NativePtyError::OutcomeUnknown);
+        }
+        let active = query()?;
+        if Instant::now() >= end {
+            return Err(NativePtyError::OutcomeUnknown);
+        }
+        if active == 0 {
+            return Ok(active);
+        }
+        std::thread::sleep(
+            Duration::from_millis(1).min(end.saturating_duration_since(Instant::now())),
+        );
+    }
+}
 impl Drop for NativeOwnedPtyRun {
     fn drop(&mut self) {
         self.request_stop(); /* no wait/IO join claim; master Drop may block on Windows10 */
@@ -166,6 +253,32 @@ fn observe_job_activity(
 #[cfg(test)]
 mod activity_tests {
     use super::*;
+    #[test]
+    fn job_stop_wait_errors_timeout_and_late_zero_are_unknown() {
+        let mut samples = [1, 0].into_iter();
+        assert_eq!(
+            wait_job_empty(Instant::now() + Duration::from_secs(1), || Ok(samples
+                .next()
+                .unwrap())),
+            Ok(0)
+        );
+        assert!(wait_job_empty(Instant::now() + Duration::from_secs(1), || Ok(0)).is_ok());
+        assert!(wait_job_empty(Instant::now(), || panic!("expired must not query")).is_err());
+        assert!(wait_job_empty(Instant::now() + Duration::from_millis(5), || Ok(1)).is_err());
+        assert!(
+            wait_job_empty(Instant::now() + Duration::from_secs(1), || Err(
+                NativePtyError::OutcomeUnknown
+            ))
+            .is_err()
+        );
+        assert!(
+            wait_job_empty(Instant::now() + Duration::from_millis(5), || {
+                std::thread::sleep(Duration::from_millis(10));
+                Ok(0)
+            })
+            .is_err()
+        );
+    }
     #[test]
     fn job_activity_released_handle_cannot_claim_empty() {
         let mut job = Some(crate::windows_job::Job::new().unwrap());
