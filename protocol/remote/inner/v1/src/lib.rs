@@ -3,6 +3,7 @@ pub mod appbind;
 pub mod command;
 pub mod control_io;
 pub mod grant;
+pub mod grant_management;
 pub mod input;
 pub mod lifecycle;
 pub mod projection;

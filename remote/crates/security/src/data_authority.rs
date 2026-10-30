@@ -1,5 +1,5 @@
 //! Native live-channel proof; neither a wire DTO nor a user/issuer enrollment API.
-use crate::{CancelToken, DataError, GrantClock, GrantError, Role, VerifiedGrant};
+use crate::{CancelToken, DataError, GrantClock, GrantError, Role};
 use cc_desk_remote_record::{
     appbind::Context,
     grant::{DataRole, SessionScope},
@@ -24,7 +24,7 @@ impl GrantClockDomain {
 }
 #[derive(Clone)]
 pub struct BoundDataAuthority {
-    grant: VerifiedGrant,
+    grant: crate::data::ChannelGrant,
     active: Arc<AtomicBool>,
     cancel: CancelToken,
     stop: watch::Sender<bool>,
@@ -38,7 +38,7 @@ impl std::fmt::Debug for BoundDataAuthority {
 }
 impl BoundDataAuthority {
     pub(crate) fn new(
-        grant: VerifiedGrant,
+        grant: crate::data::ChannelGrant,
         active: Arc<AtomicBool>,
         cancel: CancelToken,
         stop: watch::Sender<bool>,

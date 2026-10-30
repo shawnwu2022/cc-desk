@@ -1,6 +1,6 @@
 //! One private task polls both directions; public waits never own TLS futures.
 use crate::{
-    CancelToken, GrantError, Role, VerifiedGrant,
+    CancelToken, GrantError, Role,
     data::{DataError, DataRecord},
 };
 use cc_desk_remote_record::{
@@ -60,7 +60,7 @@ impl Reading {
 pub struct RunningChannel {
     authority: crate::BoundDataAuthority,
     cancel: CancelToken,
-    access: VerifiedGrant,
+    access: crate::data::ChannelGrant,
     role: Role,
     binding: [u8; 32],
     out: mpsc::Sender<SendRequest>,
@@ -235,7 +235,7 @@ enum Event {
 struct Engine<S> {
     authority: Arc<crate::BoundDataAuthority>,
     io: tokio_rustls::TlsStream<S>,
-    access: VerifiedGrant,
+    access: crate::data::ChannelGrant,
     role: Role,
     binding: [u8; 32],
     read: Reading,
@@ -361,11 +361,14 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Engine<S> {
 pub(super) fn start<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     io: tokio_rustls::TlsStream<S>,
     mut cancel: CancelToken,
-    access: VerifiedGrant,
+    access: crate::data::ChannelGrant,
     role: Role,
     binding: [u8; 32],
     active: Arc<AtomicBool>,
 ) -> Result<RunningChannel, DataError> {
+    if access.is_remote() && role != Role::Client {
+        return Err(DataError::Role);
+    }
     let remaining = access.check().map_err(DataError::Grant)?;
     if cancel.is_cancelled() {
         return Err(DataError::Cancelled);

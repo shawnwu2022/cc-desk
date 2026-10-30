@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/transport", "crates/runtime", "crates/host", "crates/terminal", "crates/security"]
+members = ["crates/transport", "crates/runtime", "crates/host", "crates/terminal", "crates/security", "crates/client"]
 exclude = ["vendor/vte", "vendor/portable-pty"]
 
 [patch.crates-io]

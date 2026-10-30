@@ -20,7 +20,10 @@ pub use grant::{GrantClock, GrantError, GrantGate, VerifiedGrant};
 #[cfg(feature = "experimental")]
 mod data;
 #[cfg(feature = "experimental")]
-pub use data::{DataError, DataRecord, ManagedChannel};
+pub use data::{
+    ClientGrantState, ClientGrantTrust, DataError, DataRecord, ManagedChannel, NativeGrantPolicy,
+    NativeGrantSigner, RemoteGrant, VerifiedCanonicalGrant,
+};
 #[cfg(feature = "experimental")]
 mod data_owner;
 #[cfg(feature = "experimental")]

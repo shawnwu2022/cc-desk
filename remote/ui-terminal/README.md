@@ -28,7 +28,9 @@ encoding test of the same tree and that variable; it uses create_new and never
 overwrites prior evidence. This verifies actual Rust Core encoder bytes into
 the TS reducer, not a phone, network, renderer pixels or an AI CLI session.
 
-No native bridge, enrollment, secret storage or remote control entry is wired.
+The portable Rust native bridge is in `remote/crates/client`, with its UI
+adapter in `src/native.ts`. No shell IPC registration, enrollment, secret
+storage or remote control entry is wired.
 Per-Host/peer client memory accounting, Host-issued barriers/ACKs and E09 control
 authority remain required before the package can enable a product input UI.
 
@@ -48,6 +50,14 @@ to the reducer have no JSON lexeme evidence; wire parity applies to the codec pa
 verified mutual-RPK/AppBind channel and validate original received DataRecord
 direction, channel, grant/scope and fence. `connect` supplies that dependency;
 it does not authenticate a peer. No production adapter or app route is registered.
+`nativeConnection(port)` is the concrete portable adapter for the Rust owner's
+snapshot/exchange operations. Its port must be supplied by an authenticated
+native shell resource; dependency injection does not authenticate that resource.
+It validates and bounds native outputs, permits no concurrent queue, uses a
+monotonic completion deadline and closes on error/cancellation. `waitClosed`
+retains native retirement failure instead of interpreting close initiation as
+retirement. Original-document admission and actual platform IPC registration
+remain required; this module does not implement a browser cryptographic fallback.
 The native snapshot method streams its verified barrier and bounded parts and
 resolves only after Host full delivery completion. The controller installs through
 the reducer, sends the exact ACK, validates ProjectionAcknowledged, obtains

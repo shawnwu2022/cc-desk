@@ -403,3 +403,19 @@ pub fn negotiate(h: &HostOffer, c: &ClientOffer) -> Result<HostSelection, CodecE
         requested_role: RequestedRole::ManagementOnly,
     })
 }
+
+/// Explicit opt-in mode: neither a legacy offer nor a common minor0 is enough.
+pub fn negotiate_grant(h: &HostOffer, c: &ClientOffer) -> Result<HostSelection, CodecError> {
+    let required = ["canonical-json", crate::grant_management::CAPABILITY];
+    if h.required_capabilities != required || c.required_capabilities != required {
+        return Err(CodecError::Unsupported);
+    }
+    let (mut h, mut c) = (h.clone(), c.clone());
+    h.required_capabilities = vec!["canonical-json".into()];
+    c.required_capabilities = h.required_capabilities.clone();
+    let selected = negotiate(&h, &c)?;
+    if selected.minor != 1 {
+        return Err(CodecError::Unsupported);
+    }
+    Ok(selected)
+}

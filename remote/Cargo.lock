@@ -120,6 +120,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "cc-desk-remote-client"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "cc-desk-remote-record",
+ "cc-desk-remote-security",
+ "coset",
+ "ring",
+ "rustls",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "cc-desk-remote-host"
 version = "0.1.0"
 dependencies = [

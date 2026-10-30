@@ -131,14 +131,14 @@ pub struct GrantGate {
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
-fn hex_id(text: &str) -> [u8; 32] {
+pub(crate) fn hex_id(text: &str) -> [u8; 32] {
     let mut id = [0; 32];
     for (i, b) in id.iter_mut().enumerate() {
         *b = u8::from_str_radix(&text[i * 2..i * 2 + 2], 16).unwrap()
     }
     id
 }
-fn fresh() -> Result<String, GrantError> {
+pub(crate) fn fresh() -> Result<String, GrantError> {
     let mut id = [0; 32];
     ring::rand::SystemRandom::new()
         .fill(&mut id)
@@ -148,7 +148,7 @@ fn fresh() -> Result<String, GrantError> {
     }
     Ok(hex(&id))
 }
-fn signature(
+pub(crate) fn signature(
     bytes: &[u8],
     payload: &CanonicalGrant,
     issuer: &P256Spki,
@@ -229,6 +229,62 @@ impl GrantGate {
             pending: None,
             accepted: None,
         })
+    }
+    pub(crate) fn matches_context(&self, context: &Context) -> bool {
+        self.context == *context
+    }
+    // Management must not let the legacy accepted-grant fast path choose this
+    // exchange's policy or substitute old approval for a newly issued challenge.
+    pub(crate) fn verify_management(
+        &mut self,
+        bytes: &[u8],
+        scope: &SessionScope,
+        role: DataRole,
+        duration: Duration,
+        issued: Option<&CanonicalGrant>,
+    ) -> Result<(), GrantError> {
+        let result = (|| {
+            let maximum = u64::try_from(duration.as_millis()).map_err(|_| GrantError::Bounds)?;
+            if maximum == 0 || maximum > 900000 {
+                return Err(GrantError::Bounds);
+            }
+            let payload = issued
+                .into_iter()
+                .chain(self.accepted.as_ref().map(|g| &g.0.payload))
+                .chain(self.pending.as_ref().map(|(g, _)| g))
+                .find(|g| signature(bytes, g, &self.issuer, self.kid).is_ok())
+                .ok_or(GrantError::Signature)?;
+            let start: u64 = payload
+                .created_host_ms
+                .parse()
+                .map_err(|_| GrantError::Encoding)?;
+            let end: u64 = payload
+                .expires_host_ms
+                .parse()
+                .map_err(|_| GrantError::Encoding)?;
+            // A valid approval for another native policy is not a failed signature.
+            if payload.scope != *scope
+                || payload.role != role
+                || end.checked_sub(start).is_none_or(|n| n == 0 || n > maximum)
+            {
+                return Err(GrantError::Policy);
+            }
+            if issued.is_some_and(|expected| expected != payload) {
+                return Err(GrantError::Encoding);
+            }
+            Ok(())
+        })();
+        // Preserve the existing pending challenge budget across management
+        // reconnects without invoking accept's old-grant success fast path.
+        if matches!(result, Err(GrantError::Signature | GrantError::Encoding))
+            && let Some((_, attempts)) = &mut self.pending
+        {
+            *attempts += 1;
+            if *attempts == 3 {
+                self.pending = None;
+            }
+        }
+        result
     }
     pub fn issuer_kid(&self) -> [u8; 32] {
         self.kid

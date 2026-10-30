@@ -165,3 +165,22 @@ fixed Unsupported reason. close().await confirms owned task termination; Drop re
 stop/abort and does not claim synchronous join. Generic physical aliases and
 non-returning synchronous callbacks remain outside the cleanup guarantee. The setup
 deadline is not repurposed as a10-second data grant or online-status promise.
+
+## Opt-in remote grant delivery
+
+The `grant-management-v1` bind factories add one bounded, consuming management
+exchange before starting the existing data owner. See the shared
+`protocol/remote/inner/v1/GRANTS-CANDIDATE.md` ledger for exact Request/Challenge/
+binary-COSE/Accepted phases. Client state is now a distinct opaque RemoteGrant,
+verified over actual TLS delivery and anchored before its original request; it is
+never a cloned Host GrantGate clock/watch. Lost ACK and ordinary reconnect retain
+that anchor and frozen signed material. Only the exact accepted Client binding can
+install it; Host admission rejects Client-role authority. Legacy native installation
+APIs remain for existing fixtures, while opt-in Client mode refuses that shortcut.
+
+NativeGrantSigner and ClientGrantState's clock are trusted native interfaces, not
+platform implementations or JS-auth booleans. Future construction/poll/drop must
+be nonblocking/cooperative; async budgets cannot preempt blocking native presence.
+Same-channel renewal is not implemented: expiry closes data ownership. Native
+signing/enrollment, suspend-clock qualification and persistent reset/recovery remain
+release gates. No account, persistent key, network service or app route is created.

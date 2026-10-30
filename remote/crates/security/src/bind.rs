@@ -291,7 +291,7 @@ async fn bind_host_with<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     snapshot: HostSnapshot,
     hooks: Hooks,
 ) -> Result<BoundManagement, BindError> {
-    let e = establish_host(pending, snapshot, hooks, vec![0]).await?;
+    let e = establish_host(pending, snapshot, hooks, vec![0], false).await?;
     owner(e.io, e.token, e.deadline, e.context, e.selection)
 }
 struct Established<S> {
@@ -307,6 +307,7 @@ async fn establish_host<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     snapshot: HostSnapshot,
     hooks: Hooks,
     minors: Vec<u16>,
+    grant_management: bool,
 ) -> Result<Established<S>, BindError> {
     let (host_id, client_id) = projected(&pending)?;
     if pending._context.0 != Role::Host {
@@ -333,7 +334,7 @@ async fn establish_host<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
         major: 1,
         minors,
         minimum_security: "1".into(),
-        required_capabilities: vec!["canonical-json".into()],
+        required_capabilities: management_capabilities(grant_management),
     };
     let (context, selection, binding) = within(deadline, &mut token, async {
         send_with(&mut io, &hooks, Message::HostOffer(h.clone())).await?;
@@ -341,7 +342,8 @@ async fn establish_host<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
             Message::ClientOffer(c) => c,
             _ => return Err(BindError::Order),
         };
-        let selection = hooks.selection(appbind::negotiate(&h, &c).map_err(codec)?);
+        let selection =
+            hooks.selection(management_negotiate(&h, &c, grant_management).map_err(codec)?);
         let t = hash(&h, &c, &selection)?;
         hooks.observe(&h, &c, &selection, &t);
         let key = exporter(&io, &t)?;
@@ -383,7 +385,7 @@ async fn bind_client_with<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     trust: ClientTrust,
     hooks: Hooks,
 ) -> Result<BoundManagement, BindError> {
-    let e = establish_client(pending, trust, hooks, vec![0]).await?;
+    let e = establish_client(pending, trust, hooks, vec![0], false).await?;
     owner(e.io, e.token, e.deadline, e.context, e.selection)
 }
 async fn establish_client<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
@@ -391,6 +393,7 @@ async fn establish_client<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     trust: ClientTrust,
     hooks: Hooks,
     minors: Vec<u16>,
+    grant_management: bool,
 ) -> Result<Established<S>, BindError> {
     let (host_id, client_id) = projected(&pending)?;
     if pending._context.0 != Role::Client {
@@ -420,10 +423,10 @@ async fn establish_client<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
             major: 1,
             minors,
             minimum_security: "1".into(),
-            required_capabilities: vec!["canonical-json".into()],
+            required_capabilities: management_capabilities(grant_management),
             requested_role: RequestedRole::ManagementOnly,
         };
-        let selection = appbind::negotiate(&h, &c).map_err(codec)?;
+        let selection = management_negotiate(&h, &c, grant_management).map_err(codec)?;
         send_with(&mut io, &hooks, Message::ClientOffer(c.clone())).await?;
         let confirm = match receive(&mut io).await? {
             Message::HostConfirm(h) => h,
@@ -481,7 +484,7 @@ pub async fn bind_host_channel<S: AsyncRead + AsyncWrite + Unpin + Send + 'stati
     pending: Pending<S>,
     snapshot: HostSnapshot,
 ) -> Result<crate::ManagedChannel<S>, BindError> {
-    let e = establish_host(pending, snapshot, Hooks::default(), vec![0, 1]).await?;
+    let e = establish_host(pending, snapshot, Hooks::default(), vec![0, 1], false).await?;
     eligible(e.deadline, &e.token)?;
     if e.selection.minor != 1 {
         return Err(BindError::Unsupported);
@@ -498,7 +501,7 @@ pub async fn bind_client_channel<S: AsyncRead + AsyncWrite + Unpin + Send + 'sta
     pending: Pending<S>,
     trust: ClientTrust,
 ) -> Result<crate::ManagedChannel<S>, BindError> {
-    let e = establish_client(pending, trust, Hooks::default(), vec![0, 1]).await?;
+    let e = establish_client(pending, trust, Hooks::default(), vec![0, 1], false).await?;
     eligible(e.deadline, &e.token)?;
     if e.selection.minor != 1 {
         return Err(BindError::Unsupported);
@@ -592,3 +595,55 @@ impl Hooks {
 #[cfg(test)]
 #[path = "bind_tests.rs"]
 mod tests;
+
+fn management_capabilities(enabled: bool) -> Vec<String> {
+    if enabled {
+        vec![
+            "canonical-json".into(),
+            cc_desk_remote_record::grant_management::CAPABILITY.into(),
+        ]
+    } else {
+        vec!["canonical-json".into()]
+    }
+}
+fn management_negotiate(
+    h: &HostOffer,
+    c: &ClientOffer,
+    enabled: bool,
+) -> Result<HostSelection, CodecError> {
+    if enabled {
+        appbind::negotiate_grant(h, c)
+    } else {
+        appbind::negotiate(h, c)
+    }
+}
+pub async fn bind_host_grant_channel<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
+    pending: Pending<S>,
+    snapshot: HostSnapshot,
+) -> Result<crate::ManagedChannel<S>, BindError> {
+    let e = establish_host(pending, snapshot, Hooks::default(), vec![1], true).await?;
+    eligible(e.deadline, &e.token)?;
+    Ok(crate::ManagedChannel::new(
+        e.io,
+        e.token,
+        BoundContext(e.context),
+        e.binding,
+        Role::Host,
+    )
+    .with_grant_management())
+}
+pub async fn bind_client_grant_channel<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
+    pending: Pending<S>,
+    trust: ClientTrust,
+) -> Result<crate::ManagedChannel<S>, BindError> {
+    let e = establish_client(pending, trust, Hooks::default(), vec![1], true).await?;
+    eligible(e.deadline, &e.token)?;
+    Ok(crate::ManagedChannel::new(
+        e.io,
+        e.token,
+        BoundContext(e.context),
+        e.binding,
+        Role::Client,
+    )
+    .with_grant_management())
+}
