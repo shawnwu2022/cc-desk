@@ -40,6 +40,13 @@ fn preparation() -> NativePtyError {
     }
 }
 impl NativeOwnedPtyRun {
+    /// Instantaneous count for this run's still-owned Job only. None means the
+    /// Job handle was released, not zero active processes. Errors remain unknown.
+    /// This borrows the handle without extending its lifetime or changing stop;
+    /// it is neither a hard-deadline wait nor a master/OpenConsole/IO barrier.
+    pub fn job_active_processes(&self) -> Result<Option<u32>, NativePtyError> {
+        observe_job_activity(self.job.as_ref())
+    }
     /// No vendor PTY allocation/lazy resolver may run until app-local pinning succeeds.
     /// Error classification concerns the target root, not proof of OpenConsole quiescence.
     pub fn launch(
@@ -145,5 +152,33 @@ impl NativeOwnedPtyRun {
 impl Drop for NativeOwnedPtyRun {
     fn drop(&mut self) {
         self.request_stop(); /* no wait/IO join claim; master Drop may block on Windows10 */
+    }
+}
+fn observe_job_activity(
+    job: Option<&crate::windows_job::Job>,
+) -> Result<Option<u32>, NativePtyError> {
+    job.map(|job| {
+        job.active_processes()
+            .map_err(|_| NativePtyError::OutcomeUnknown)
+    })
+    .transpose()
+}
+#[cfg(test)]
+mod activity_tests {
+    use super::*;
+    #[test]
+    fn job_activity_released_handle_cannot_claim_empty() {
+        let mut job = Some(crate::windows_job::Job::new().unwrap());
+        assert!(matches!(observe_job_activity(job.as_ref()), Ok(Some(0))));
+        drop(job.take());
+        assert!(matches!(observe_job_activity(job.as_ref()), Ok(None)));
+    }
+    #[test]
+    fn job_activity_owner_does_not_turn_native_error_into_empty() {
+        let job = crate::windows_job::non_job_for_activity_test();
+        assert!(matches!(
+            observe_job_activity(Some(&job)),
+            Err(NativePtyError::OutcomeUnknown)
+        ));
     }
 }
