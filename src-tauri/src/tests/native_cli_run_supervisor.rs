@@ -1370,13 +1370,15 @@ fn RemoteShutdown_OriginalPublicationAndOwnedIoMustFinish_002() {
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
         let observed = shutdown.observe_run(&status.run);
-        if observed
-            == (crate::run_supervisor::NativeShutdownObservation::Unknown {
+        if matches!(
+            observed,
+            crate::run_supervisor::NativeShutdownObservation::Unknown {
                 direct_child_reaped: true,
                 io_threads_joined: false,
                 stop_job_joined: true,
-            })
-        {
+                ..
+            }
+        ) {
             break;
         }
         assert!(
@@ -1390,4 +1392,74 @@ fn RemoteShutdown_OriginalPublicationAndOwnedIoMustFinish_002() {
         1,
         "shutdown must not relaunch the fixture"
     );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn RemoteShutdown_OutputCallbackDoesNotProveReaderJoined_005() {
+    use crate::run_supervisor::NativeShutdownObservation;
+    let fixture = Fixture::new("hold");
+    fixture.supervisor.pause_reader_exit_for_test();
+    struct Release<'a>(&'a NativeRunSupervisor);
+    impl Drop for Release<'_> {
+        fn drop(&mut self) {
+            self.0.release_reader_exit_for_test();
+        }
+    }
+    let release = Release(&fixture.supervisor);
+    let status = fixture.start();
+    let end = Instant::now() + Duration::from_secs(15);
+    while fixture.child_reports() == 0 {
+        assert!(Instant::now() < end);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let pin = fixture.supervisor.pin_shutdown(&status.run);
+    let mut stopped = fixture.supervisor.begin_shutdown_owned(vec![pin]).unwrap();
+    while !fixture.supervisor.reader_exit_waiting_for_test() {
+        assert!(Instant::now() < end);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    loop {
+        match stopped.observe_run(&status.run) {
+            NativeShutdownObservation::Pending => {
+                assert!(Instant::now() < end);
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            NativeShutdownObservation::Unknown {
+                output_reader_joined,
+                io_threads_joined,
+                ..
+            } => {
+                assert!(!output_reader_joined);
+                assert!(!io_threads_joined);
+                break;
+            }
+        }
+    }
+    #[cfg(feature = "remote-host")]
+    assert_eq!(
+        stopped.observe_all(),
+        Some(NativeShutdownObservation::Pending),
+        "application must keep observing original reader even after root/EOF callbacks"
+    );
+    drop(release);
+    let joined = loop {
+        if let NativeShutdownObservation::Unknown {
+            output_reader_joined: true,
+            io_threads_joined: false,
+            ..
+        } = stopped.observe_run(&status.run)
+        {
+            break true;
+        }
+        if Instant::now() >= end {
+            break false;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    assert!(
+        joined,
+        "original reader JoinHandle was never joined; EOF is insufficient"
+    );
+    assert_eq!(fixture.child_reports(), 1);
 }

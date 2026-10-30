@@ -83,6 +83,12 @@ struct SupervisorCore {
     adoption_setup_waiting: AtomicBool,
     #[cfg(test)]
     adoption_setup_changed: Condvar,
+    #[cfg(test)]
+    reader_exit_paused: Mutex<bool>,
+    #[cfg(test)]
+    reader_exit_waiting: AtomicBool,
+    #[cfg(test)]
+    reader_exit_changed: Condvar,
 }
 
 pub(crate) struct NativeRunSupervisor {
@@ -132,6 +138,12 @@ impl NativeRunSupervisor {
                 adoption_setup_waiting: AtomicBool::new(false),
                 #[cfg(test)]
                 adoption_setup_changed: Condvar::new(),
+                #[cfg(test)]
+                reader_exit_paused: Mutex::new(false),
+                #[cfg(test)]
+                reader_exit_waiting: AtomicBool::new(false),
+                #[cfg(test)]
+                reader_exit_changed: Condvar::new(),
             }),
         }
     }
@@ -196,6 +208,20 @@ impl NativeRunSupervisor {
     pub(crate) fn release_registry_steps_for_test(&self) {
         *self.core.registry_steps_paused.lock() = false;
         self.core.registry_steps_changed.notify_all();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pause_reader_exit_for_test(&self) {
+        *self.core.reader_exit_paused.lock() = true;
+    }
+    #[cfg(test)]
+    pub(crate) fn release_reader_exit_for_test(&self) {
+        *self.core.reader_exit_paused.lock() = false;
+        self.core.reader_exit_changed.notify_all();
+    }
+    #[cfg(test)]
+    pub(crate) fn reader_exit_waiting_for_test(&self) -> bool {
+        self.core.reader_exit_waiting.load(Ordering::SeqCst)
     }
 
     #[cfg(test)]
@@ -371,25 +397,55 @@ impl RunSupervisor for NativeRunSupervisor {
         )?;
         state.set_stream(stream.clone())?;
 
+        #[cfg(any(test, feature = "remote-host"))]
+        {
+            if !state.output_reader.lock().reserve() {
+                return Err(error("RUN_SUPERVISOR_FAILED"));
+            }
+        }
         let reader_state = state.clone();
-        if std::thread::Builder::new()
+        let reader_worker = std::thread::Builder::new()
             .name("native-output-reader".into())
-            .spawn(move || loop {
-                match stream.pump_once_with_end(&mut *reader, crate::pty::is_pty_stream_end) {
-                    Ok(0) => {
-                        reader_state.output_end(stream.stream_epoch(), stream.sent_offset());
-                        break;
-                    }
-                    Ok(_) => {}
-                    Err(_) => {
-                        reader_state.reader_failed();
-                        break;
+            .spawn(move || {
+                loop {
+                    match stream.pump_once_with_end(&mut *reader, crate::pty::is_pty_stream_end) {
+                        Ok(0) => {
+                            reader_state.output_end(stream.stream_epoch(), stream.sent_offset());
+                            break;
+                        }
+                        Ok(_) => {}
+                        Err(_) => {
+                            reader_state.reader_failed();
+                            break;
+                        }
                     }
                 }
-            })
-            .is_err()
-        {
-            return Err(error("RUN_SUPERVISOR_FAILED"));
+                #[cfg(test)]
+                if let Some(core) = reader_state.core.upgrade() {
+                    let mut paused = core.reader_exit_paused.lock();
+                    core.reader_exit_waiting.store(true, Ordering::SeqCst);
+                    while *paused {
+                        core.reader_exit_changed.wait(&mut paused);
+                    }
+                    core.reader_exit_waiting.store(false, Ordering::SeqCst);
+                }
+            });
+        match reader_worker {
+            Ok(worker) => {
+                #[cfg(any(test, feature = "remote-host"))]
+                {
+                    *state.output_reader.lock() = OutputReaderJoin::Running(worker);
+                }
+                #[cfg(not(any(test, feature = "remote-host")))]
+                drop(worker);
+            }
+            Err(_) => {
+                #[cfg(any(test, feature = "remote-host"))]
+                {
+                    *state.output_reader.lock() = OutputReaderJoin::Unknown;
+                }
+                return Err(error("RUN_SUPERVISOR_FAILED"));
+            }
         }
 
         // Close the shutdown-vs-adopt race. shutdown() may have taken its active
@@ -434,6 +490,39 @@ impl Drop for AdoptionGuard {
     }
 }
 
+/// Exactly one existing output reader; never a claim about waiter/master/tree.
+#[cfg(any(test, feature = "remote-host"))]
+enum OutputReaderJoin {
+    Unstarted,
+    Publishing,
+    Running(std::thread::JoinHandle<()>),
+    Joined,
+    Unknown,
+}
+#[cfg(any(test, feature = "remote-host"))]
+impl OutputReaderJoin {
+    fn reserve(&mut self) -> bool {
+        if !matches!(self, Self::Unstarted) {
+            return false;
+        }
+        *self = Self::Publishing;
+        true
+    }
+    fn observe(&mut self) -> bool {
+        if matches!(self,Self::Running(worker) if worker.is_finished()) {
+            let Self::Running(worker) = std::mem::replace(self, Self::Unknown) else {
+                unreachable!()
+            };
+            *self = if worker.join().is_ok() {
+                Self::Joined
+            } else {
+                Self::Unknown
+            };
+        }
+        matches!(self, Self::Joined)
+    }
+}
+
 struct SupervisedRun {
     core: Weak<SupervisorCore>,
     registry: Arc<RunRegistry<NativeRun>>,
@@ -450,6 +539,8 @@ struct SupervisedRun {
     registry_retired: AtomicBool,
     adoption_complete: AtomicBool,
     automatic_retry_used: AtomicBool,
+    #[cfg(any(test, feature = "remote-host"))]
+    output_reader: Mutex<OutputReaderJoin>,
     changed: Condvar,
 }
 
@@ -480,6 +571,8 @@ impl SupervisedRun {
             registry_retired: AtomicBool::new(false),
             adoption_complete: AtomicBool::new(false),
             automatic_retry_used: AtomicBool::new(false),
+            #[cfg(any(test, feature = "remote-host"))]
+            output_reader: Mutex::new(OutputReaderJoin::Unstarted),
             changed: Condvar::new(),
         }))
     }
@@ -1079,6 +1172,7 @@ mod remote_shutdown_observation_tests {
             }),
             NativeShutdownObservation::Unknown {
                 direct_child_reaped: false,
+                output_reader_joined: false,
                 io_threads_joined: false,
                 stop_job_joined: false
             }
@@ -1090,6 +1184,7 @@ mod remote_shutdown_observation_tests {
             }),
             NativeShutdownObservation::Unknown {
                 direct_child_reaped: false,
+                output_reader_joined: false,
                 io_threads_joined: false,
                 stop_job_joined: false
             }
@@ -1136,6 +1231,7 @@ pub(crate) enum NativeShutdownObservation {
     Pending,
     Unknown {
         direct_child_reaped: bool,
+        output_reader_joined: bool,
         io_threads_joined: bool,
         stop_job_joined: bool,
     },
@@ -1235,8 +1331,9 @@ impl NativeRunSupervisor {
 #[cfg(any(test, feature = "remote-host"))]
 impl NativeShutdown {
     pub(crate) fn observe_run(&mut self, run: &RunKey) -> NativeShutdownObservation {
-        let unknown = |reaped, joined| NativeShutdownObservation::Unknown {
+        let unknown = |reaped, joined, reader| NativeShutdownObservation::Unknown {
             direct_child_reaped: reaped,
+            output_reader_joined: reader,
             io_threads_joined: false,
             stop_job_joined: joined,
         };
@@ -1245,11 +1342,13 @@ impl NativeShutdown {
             .iter_mut()
             .find(|entry| identity(&entry.pin.run) == identity(run))
         else {
-            return unknown(false, false);
+            return unknown(false, false, false);
         };
         let Some(state) = entry.pin.state.as_ref() else {
-            return unknown(false, false);
+            return unknown(false, false, false);
         };
+        // Observe the original reader even while stop/root publication is pending.
+        let reader_joined = state.output_reader.lock().observe();
         if let Some(job) = entry.job.as_ref() {
             if !job.is_finished() {
                 return NativeShutdownObservation::Pending;
@@ -1260,7 +1359,7 @@ impl NativeShutdown {
         }
         let reaped = state.reaped.load(Ordering::SeqCst);
         if entry.failed {
-            return unknown(reaped, entry.joined);
+            return unknown(reaped, entry.joined, reader_joined);
         }
         if !entry.joined
             || !reaped
@@ -1271,7 +1370,7 @@ impl NativeShutdown {
         }
         // No old completed-cache record, empty active count or root-process wait
         // attests reader/waiter joins or PTY descendants. Preserve that Unknown.
-        unknown(reaped, entry.joined)
+        unknown(reaped, entry.joined, reader_joined)
     }
 
     #[cfg(feature = "remote-host")]
@@ -1284,7 +1383,20 @@ impl NativeShutdown {
         let mut result = None;
         for key in keys {
             let observed = self.observe_run(&key);
-            if result.is_none() || observed == NativeShutdownObservation::Pending {
+            let reader_pending = self
+                .entries
+                .iter()
+                .find(|entry| identity(&entry.pin.run) == identity(&key))
+                .and_then(|entry| entry.pin.state.as_ref())
+                .is_some_and(|state| {
+                    matches!(
+                        *state.output_reader.lock(),
+                        OutputReaderJoin::Publishing | OutputReaderJoin::Running(_)
+                    )
+                });
+            if reader_pending || observed == NativeShutdownObservation::Pending {
+                result = Some(NativeShutdownObservation::Pending);
+            } else if result.is_none() {
                 result = Some(observed);
             }
         }
@@ -1296,5 +1408,53 @@ impl NativeShutdown {
 impl NativeRunPin {
     pub(crate) fn key(&self) -> &RunKey {
         &self.run
+    }
+}
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod output_reader_join_tests {
+    use super::*;
+    #[test]
+    fn ReaderJoin_UnstartedPublishingAndUnknownNeverAttestJoin_006() {
+        let mut slot = OutputReaderJoin::Unstarted;
+        assert!(!slot.observe());
+        assert!(slot.reserve());
+        assert!(!slot.observe());
+        assert!(!slot.reserve());
+        slot = OutputReaderJoin::Unknown;
+        assert!(!slot.observe());
+        assert!(!slot.reserve());
+    }
+    #[test]
+    fn ReaderJoin_OriginalHandleCannotBeReplacedAndFinishedJoinIsCached_007() {
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let mut slot = OutputReaderJoin::Running(std::thread::spawn(move || {
+            let _ = rx.recv_timeout(Duration::from_secs(2));
+        }));
+        assert!(!slot.reserve());
+        assert!(!slot.observe());
+        tx.send(()).unwrap();
+        let end = Instant::now() + Duration::from_secs(2);
+        while !slot.observe() {
+            assert!(Instant::now() < end);
+            std::thread::yield_now();
+        }
+        assert!(slot.observe());
+        assert!(!slot.reserve());
+    }
+    #[test]
+    fn ReaderJoin_PanicConsumesOriginalHandleButRemainsUnknown_008() {
+        let mut slot =
+            OutputReaderJoin::Running(std::thread::spawn(|| panic!("TEST_ONLY_READER_PANIC")));
+        let end = Instant::now() + Duration::from_secs(2);
+        while matches!(slot, OutputReaderJoin::Running(_)) {
+            assert!(!slot.observe());
+            assert!(Instant::now() < end);
+            std::thread::yield_now();
+        }
+        assert!(matches!(slot, OutputReaderJoin::Unknown));
+        assert!(!slot.observe());
+        assert!(!slot.reserve());
     }
 }
