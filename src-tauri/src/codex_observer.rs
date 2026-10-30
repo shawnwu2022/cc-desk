@@ -343,7 +343,7 @@ pub(crate) fn cmd_hook_overlay(
         return Err(hook_configuration_error());
     }
     let mut desk = toml::Table::new();
-    for pair in desk_args.chunks_exact(2) {
+    for pair in desk_args.as_chunks::<2>().0 {
         if pair[0] != "-c" {
             return Err(hook_configuration_error());
         }
