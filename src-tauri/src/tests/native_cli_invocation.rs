@@ -9,6 +9,17 @@ use std::fs;
 
 const LOCATOR: &str = "11111111-2222-4333-8444-555555555555";
 
+#[cfg(windows)]
+fn literal_fixture_path(path: &std::path::Path) -> std::path::PathBuf {
+    let canonical = fs::canonicalize(path).unwrap();
+    let text = canonical.to_str().unwrap();
+    if let Some(unc) = text.strip_prefix(r"\\?\UNC\") {
+        std::path::PathBuf::from(format!(r"\\{unc}"))
+    } else {
+        std::path::PathBuf::from(text.strip_prefix(r"\\?\").unwrap_or(text))
+    }
+}
+
 // 只创建文件，不执行合成 image；包契约而非版本文本决定同次投递路线。
 #[cfg(windows)]
 #[test]
@@ -21,7 +32,7 @@ fn NativePackage_DirectArgumentsWithoutAuxiliaryProbe_129() {
     ] {
         for version in ["0.1", "future", "", "broken version"] {
             let mut f = Fixture::new(CliKind::Codex, action.clone());
-            let package = f.root.path().join("package");
+            let package = literal_fixture_path(f.root.path()).join("package");
             fs::create_dir_all(package.join("bin")).unwrap();
             let program = package.join("bin/codex.exe");
             fs::write(&program, "fixture never executed").unwrap();
@@ -45,8 +56,10 @@ fn NativePackage_DirectArgumentsWithoutAuxiliaryProbe_129() {
                     ("CC_DESK_CODEX_CAPABILITY".into(), "a".repeat(32).into()),
                 ]),
             };
-            let hooks =
-                crate::codex_observer::hook_args(&std::env::current_exe().unwrap()).unwrap();
+            let hooks = crate::codex_observer::hook_args(&literal_fixture_path(
+                &std::env::current_exe().unwrap(),
+            ))
+            .unwrap();
             let original = f.freeze();
             let next = original.with_codex_identity(&observer, &hooks).unwrap();
             assert!(next.codex_direct_core());
@@ -97,7 +110,7 @@ fn Recipe_NpmEntryOwnsActionTail_127() {
         (picker(ResumeScope::All), vec!["resume", "--all"]),
     ] {
         let mut f = Fixture::new(CliKind::Codex, action);
-        let npm = f.root.path().join("npm");
+        let npm = literal_fixture_path(f.root.path()).join("npm");
         let package = npm.join("node_modules/@openai/codex");
         fs::create_dir_all(package.join("bin")).unwrap();
         let program = npm.join("codex.cmd");
@@ -139,7 +152,10 @@ fn Recipe_NpmEntryOwnsActionTail_127() {
                 ("CC_DESK_CODEX_CAPABILITY".into(), "a".repeat(32).into()),
             ]),
         };
-        let hooks = crate::codex_observer::hook_args(&std::env::current_exe().unwrap()).unwrap();
+        let hooks = crate::codex_observer::hook_args(&literal_fixture_path(
+            &std::env::current_exe().unwrap(),
+        ))
+        .unwrap();
         let frozen = f.freeze();
         let prepared = frozen.with_codex_identity(&observer, &hooks).unwrap();
         let invocation = build_invocation(&f.request, &prepared).unwrap();

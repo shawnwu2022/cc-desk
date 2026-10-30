@@ -56,6 +56,16 @@ pub(crate) fn prepare(program: &Path) -> Result<Option<NativePackageEntry>, Safe
 mod tests {
     use super::*;
 
+    fn literal_fixture_path(path: &Path) -> std::path::PathBuf {
+        let canonical = std::fs::canonicalize(path).unwrap();
+        let text = canonical.to_str().unwrap();
+        if let Some(unc) = text.strip_prefix(r"\\?\UNC\") {
+            std::path::PathBuf::from(format!(r"\\{unc}"))
+        } else {
+            std::path::PathBuf::from(text.strip_prefix(r"\\?\").unwrap_or(text))
+        }
+    }
+
     #[test]
     fn NativePackage_MalformedMetadataCannotAuthorizeEntry_130() {
         for text in [
@@ -92,10 +102,11 @@ mod tests {
                 .to_string(),
         ]) {
             let root = tempfile::tempdir().unwrap();
-            std::fs::create_dir(root.path().join("bin")).unwrap();
-            let program = root.path().join("bin/codex.exe");
+            let literal = literal_fixture_path(root.path());
+            std::fs::create_dir(literal.join("bin")).unwrap();
+            let program = literal.join("bin/codex.exe");
             std::fs::write(&program, "not executed").unwrap();
-            std::fs::write(root.path().join("codex-package.json"), text).unwrap();
+            std::fs::write(literal.join("codex-package.json"), text).unwrap();
             assert!(prepare(&program).is_err());
             // 失败释放守卫，不遗留对自有 fixture 的写锁。
             std::fs::write(program, "released").unwrap();
@@ -105,33 +116,34 @@ mod tests {
     #[test]
     fn NativePackage_AbsentOrInterpreterLayoutStaysOpaque_131() {
         let root = tempfile::tempdir().unwrap();
-        std::fs::create_dir(root.path().join("bin")).unwrap();
+        // The positive case uses the final literal path; the explicit ../ case below
+        // continues to prove that aliases cannot authorize an entry.
+        let literal = literal_fixture_path(root.path());
+        std::fs::create_dir(literal.join("bin")).unwrap();
         for name in ["codex.exe", "python.exe", "pwsh.exe", "node.exe"] {
-            let program = root.path().join("bin").join(name);
+            let program = literal.join("bin").join(name);
             std::fs::write(&program, "not executed").unwrap();
             assert!(prepare(&program).unwrap().is_none());
         }
         std::fs::write(
-            root.path().join("codex-package.json"),
+            literal.join("codex-package.json"),
             r#"{"variant":"codex","entrypoint":"bin/codex.exe"}"#,
         )
         .unwrap();
         for name in ["python.exe", "pwsh.exe", "node.exe"] {
-            assert!(prepare(&root.path().join("bin").join(name))
-                .unwrap()
-                .is_none());
+            assert!(prepare(&literal.join("bin").join(name)).unwrap().is_none());
         }
-        let program = root.path().join("bin/codex.exe");
-        assert!(prepare(&root.path().join("bin/../bin/codex.exe")).is_err());
+        let program = literal.join("bin/codex.exe");
+        assert!(prepare(&literal.join("bin/../bin/codex.exe")).is_err());
         let held = prepare(&program).unwrap().unwrap();
-        assert!(std::fs::rename(&program, root.path().join("moved.exe")).is_err());
-        assert!(std::fs::rename(root.path().join("bin"), root.path().join("moved")).is_err());
+        assert!(std::fs::rename(&program, literal.join("moved.exe")).is_err());
+        assert!(std::fs::rename(literal.join("bin"), literal.join("moved")).is_err());
         assert!(std::fs::rename(
-            root.path().join("codex-package.json"),
-            root.path().join("moved.json")
+            literal.join("codex-package.json"),
+            literal.join("moved.json")
         )
         .is_err());
         drop(held);
-        std::fs::rename(program, root.path().join("moved.exe")).unwrap();
+        std::fs::rename(program, literal.join("moved.exe")).unwrap();
     }
 }

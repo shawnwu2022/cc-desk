@@ -146,6 +146,20 @@ process.exit(0);
                 .await
                 .unwrap();
         });
+        // Prove the loopback server has answered a request before the timed
+        // plugin sequence begins. GET is method-rejected and cannot publish.
+        let ready = runtime.block_on(async {
+            reqwest::Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(3))
+                .build()
+                .unwrap()
+                .get(format!("http://127.0.0.1:{port}/observer"))
+                .send()
+                .await
+                .unwrap()
+        });
+        assert_eq!(ready.status(), reqwest::StatusCode::METHOD_NOT_ALLOWED);
         let host = Arc::new(ObserverHost::new(
             registry,
             f.root.path().join("unused"),
