@@ -14,18 +14,28 @@ export const CCDeskObserver = async (input, options = {}) => {
   let selected = options.sessionID ?? null, busy = 'unknown', failed = false, halted = false, disposed = false, pending = 0, announced = false
   const metadata = new Map(), permissions = new Set(), questions = new Set(), retired = new Set(), seen = new Set()
   const counterKey = Symbol.for(`cc-desk-opencode-sequence:${run}:${generation}`)
-  const counter = globalThis[counterKey] ??= { value: 0 }
+  const counter = globalThis[counterKey] ??= { value: 0, transportRetries: 2 }
   let queue = Promise.resolve(), lookup = null
   async function send(status, start = false, final = false) {
     if (disposed || halted && !final || !announced || !selected || !Number.isSafeInteger(counter.value) || counter.value >= Number.MAX_SAFE_INTEGER) return
     const eventID = `o${String(++counter.value).padStart(16, '0')}`
-    try {
-      await fetch(`http://127.0.0.1:${port}/observer`, { method: 'POST', redirect: 'error', signal: AbortSignal.timeout(700),
-        headers: { 'content-type': 'application/json', 'x-cc-desk-run': run, 'x-cc-desk-generation': generation,
-          'x-cc-desk-capability': capability, 'x-cc-desk-event': eventID, 'x-cc-desk-observer-source': 'opencode-hook' },
-        body: JSON.stringify(start ? { hook_event_name: 'SessionStart', session_id: selected }
-          : { hook_event_name: 'Notification', session_id: selected, notification_type: `opencode_${status}` }) })
-    } catch { /* 可选观察失败不阻断 CLI，也不自动重发过期状态。 */ }
+    const url = `http://127.0.0.1:${port}/observer`
+    const headers = { 'content-type': 'application/json', 'x-cc-desk-run': run, 'x-cc-desk-generation': generation,
+      'x-cc-desk-capability': capability, 'x-cc-desk-event': eventID, 'x-cc-desk-observer-source': 'opencode-hook' }
+    const body = JSON.stringify(start ? { hook_event_name: 'SessionStart', session_id: selected }
+      : { hook_event_name: 'Notification', session_id: selected, notification_type: `opencode_${status}` })
+    for (;;) {
+      try {
+        await fetch(url, { method: 'POST', redirect: 'error', signal: AbortSignal.timeout(700), headers, body })
+        return
+      } catch {
+        // A timed-out response has unknown delivery state. Reuse the exact event ID;
+        // the authenticated server replay window accepts it at most once.
+        if (disposed || halted && !final || !Number.isSafeInteger(counter.transportRetries)
+          || counter.transportRetries < 1 || counter.transportRetries > 2) return
+        counter.transportRetries--
+      }
+    }
   }
   async function info(id, offered) {
     if (halted || !validID(id) || selected && id !== selected) return null

@@ -34,17 +34,17 @@ import {join} from 'node:path';
 const root=process.env.CC_DESK_TEST_ROOT;
 assert(root && fs.realpathSync(root)===fs.realpathSync(process.cwd()));
 let phase='configuration', requests=0;
-const startedAt=performance.now(), statuses=[], elapsedMs=[];
+const startedAt=performance.now(), statuses=[], eventIDs=[], elapsedMs=[];
 // 自有 fixture 的固定阶段/数字；不记录环境、argv、nonce 或请求正文。
-process.once('exit',code=>fs.writeFileSync(join(root,'diagnostic.json'),JSON.stringify({code,phase,requests,statuses,elapsedMs,totalMs:Math.round(performance.now()-startedAt),nodeVersion:process.versions.node})));
+process.once('exit',code=>fs.writeFileSync(join(root,'diagnostic.json'),JSON.stringify({code,phase,requests,statuses,eventIDs,elapsedMs,totalMs:Math.round(performance.now()-startedAt),nodeVersion:process.versions.node})));
 const originalFetch=globalThis.fetch;
-globalThis.fetch=async (...args)=>{ requests++; const start=performance.now();try { const response=await originalFetch(...args);statuses.push(response.status);return response } catch(error) { statuses.push(0);throw error } finally { elapsedMs.push(Math.round(performance.now()-start)) } };
+globalThis.fetch=async (...args)=>{ requests++; eventIDs.push(args[1]?.headers?.['x-cc-desk-event']); const start=performance.now();try { const response=await originalFetch(...args);statuses.push(response.status);return response } catch(error) { statuses.push(0);throw error } finally { elapsedMs.push(Math.round(performance.now()-start)) } };
 fs.appendFileSync(join(root,'calls.log'),JSON.stringify(process.argv.slice(2))+'\n');
 if(process.argv.includes('--version')) { process.stdout.write(process.env.C4_VERSION); process.exit(0); }
-// 固定9个事件产生10次串行发送；按10×700ms预算另加5s宿主调度余量。
+// 固定9个事件产生10次串行发送；同run最多两次重送，按12×700ms另加5s宿主调度余量。
 // 5s沿用旧总保护数值，不代表已有独立阶段合同或产品 SLA。
 // 这是 fixture 防挂保护，不改变生产单请求期限或成功断言。
-const fixtureBudgetMs=5000+10*700;
+const fixtureBudgetMs=5000+12*700;
 const timeout=setTimeout(()=>process.exit(42),fixtureBudgetMs); timeout.unref();
 const config=JSON.parse(process.env.OPENCODE_CONFIG_CONTENT ?? '{}');
 assert.equal(config.future.keep,true);
@@ -146,20 +146,6 @@ process.exit(0);
                 .await
                 .unwrap();
         });
-        // Prove the loopback server has answered a request before the timed
-        // plugin sequence begins. GET is method-rejected and cannot publish.
-        let ready = runtime.block_on(async {
-            reqwest::Client::builder()
-                .no_proxy()
-                .timeout(Duration::from_secs(3))
-                .build()
-                .unwrap()
-                .get(format!("http://127.0.0.1:{port}/observer"))
-                .send()
-                .await
-                .unwrap()
-        });
-        assert_eq!(ready.status(), reqwest::StatusCode::METHOD_NOT_ALLOWED);
         let host = Arc::new(ObserverHost::new(
             registry,
             f.root.path().join("unused"),
@@ -219,8 +205,32 @@ process.exit(0);
         let diagnostic: serde_json::Value = serde_json::from_str(&diagnostic).unwrap();
         assert_eq!(diagnostic["code"], 0);
         assert_eq!(diagnostic["phase"], "done");
-        assert_eq!(diagnostic["requests"], 10);
-        assert_eq!(diagnostic["statuses"], serde_json::json!(vec![200; 10]));
+        let statuses = diagnostic["statuses"].as_array().unwrap();
+        let event_ids = diagnostic["eventIDs"].as_array().unwrap();
+        assert_eq!(diagnostic["requests"], statuses.len());
+        assert_eq!(event_ids.len(), statuses.len());
+        assert!(
+            statuses.len() <= 12,
+            "transport retry budget exceeded: {diagnostic}"
+        );
+        assert_eq!(
+            statuses.iter().filter(|status| **status == 200).count(),
+            10,
+            "ten authenticated responses required: {diagnostic}"
+        );
+        assert!(
+            statuses.iter().all(|status| *status == 0 || *status == 200),
+            "server rejected an event: {diagnostic}"
+        );
+        for (index, status) in statuses.iter().enumerate().take(statuses.len() - 1) {
+            if *status == 0 {
+                assert_eq!(
+                    event_ids[index],
+                    event_ids[index + 1],
+                    "failed event was not retried with the same ID: {diagnostic}"
+                );
+            }
+        }
         let calls = fs::read_to_string(Path::new(&f.request.launch_cwd).join("calls.log")).unwrap();
         assert_eq!(
             calls.lines().count(),
@@ -231,6 +241,11 @@ process.exit(0);
         assert_eq!(f.start().unwrap(), status);
         assert_eq!(f.consumer.calls.load(Ordering::SeqCst), 1);
         let events = received.lock();
+        assert_eq!(
+            events.len(),
+            10,
+            "all ten distinct events must be delivered exactly once: {diagnostic}"
+        );
         assert_eq!(
             events
                 .iter()

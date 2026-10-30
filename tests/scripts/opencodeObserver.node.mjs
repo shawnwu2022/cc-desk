@@ -14,6 +14,99 @@ const metadata=id=>({id,directory:'/fixture',parentID:id==='ses_child'?'ses_main
 const client={session:{get:async request=>({data:metadata(request.path.id)})}}
 const emit=(plugin,type,properties,id=randomUUID())=>plugin.event({event:{id,type,properties}})
 
+test('Opencode_TransientTransportFailureRetriesSameEventOnly_017',()=>fixture(async sent=>{
+  const originalFetch=globalThis.fetch, attempts=[]
+  globalThis.fetch=async(url,request)=>{
+    attempts.push(request.headers['x-cc-desk-event'])
+    if(attempts.length<=2)throw Error('transient transport failure')
+    return originalFetch(url,request)
+  }
+  const plugin=await CCDeskObserver({client,directory:'/fixture'},{directory:'/fixture'})
+  await emit(plugin,'session.created',{info:metadata('ses_main')})
+  assert.deepEqual(attempts.slice(0,3),[attempts[0],attempts[0],attempts[0]])
+  assert.equal(sent.length,2)
+  assert.equal(sent[0].body.hook_event_name,'SessionStart')
+  await emit(plugin,'session.status',{sessionID:'ses_main',status:{type:'busy'}})
+  assert.equal(sent.length,3)
+  assert.notEqual(sent[2].headers['x-cc-desk-event'],attempts[0])
+}))
+
+test('Opencode_TransportRetryBudgetAndHttpRejectionStayBounded_018',()=>fixture(async sent=>{
+  const originalFetch=globalThis.fetch, attempts=[]
+  globalThis.fetch=async(url,request)=>{
+    attempts.push(request.headers['x-cc-desk-event'])
+    if(attempts.length<=4)throw Error('persistent transport failure')
+    if(attempts.length===5)return {ok:false,status:401}
+    return originalFetch(url,request)
+  }
+  const plugin=await CCDeskObserver({client,directory:'/fixture'},{directory:'/fixture'})
+  await emit(plugin,'session.created',{info:metadata('ses_main')})
+  assert.deepEqual(attempts.slice(0,3),[attempts[0],attempts[0],attempts[0]])
+  assert.equal(attempts.length,4)
+  await emit(plugin,'session.status',{sessionID:'ses_main',status:{type:'busy'}})
+  assert.equal(attempts.length,5)
+  assert.equal(sent.length,0)
+  await emit(plugin,'session.status',{sessionID:'ses_main',status:{type:'idle'}})
+  assert.equal(attempts.length,6)
+  assert.equal(sent.length,1)
+  assert.equal(sent[0].body.notification_type,'opencode_idle')
+}))
+
+test('Opencode_LostResponseReusesExactAuthenticatedRequest_019',()=>fixture(async()=>{
+  const deliveries=new Set(), attempts=[]
+  globalThis.fetch=async(url,request)=>{
+    assert.equal(url,'http://127.0.0.1:12345/observer')
+    attempts.push({headers:{...request.headers},body:request.body})
+    const id=request.headers['x-cc-desk-event']
+    if(!deliveries.has(id))deliveries.add(id)
+    if(attempts.length===1)throw Error('response lost after server accepted')
+    return {ok:true,status:200}
+  }
+  const plugin=await CCDeskObserver({client,directory:'/fixture'},{directory:'/fixture'})
+  await emit(plugin,'session.created',{info:metadata('ses_main')})
+  assert.deepEqual(attempts[1],attempts[0])
+  assert.equal(deliveries.size,2)
+  assert.equal(attempts.length,3)
+}))
+
+test('Opencode_DisposeDuringFailedSendDoesNotRetry_020',()=>fixture(async()=>{
+  let reject, attempts=0
+  globalThis.fetch=async()=>{attempts++;return new Promise((_,fail)=>{reject=fail})}
+  const plugin=await CCDeskObserver({client,directory:'/fixture'},{directory:'/fixture'})
+  const pending=emit(plugin,'session.created',{info:metadata('ses_main')})
+  await new Promise(resolve=>setImmediate(resolve))
+  assert.equal(attempts,1)
+  plugin.dispose()
+  reject(Error('connection closed'))
+  await pending
+  assert.equal(attempts,1)
+}))
+
+test('Opencode_ReloadKeepsRunRetryBudgetAndNewRunGetsOwn_021',()=>fixture(async()=>{
+  const attempts=[], counts=new Map(), initialRun=process.env.CC_DESK_OBSERVER_RUN
+  globalThis.fetch=async(_url,request)=>{
+    const run=request.headers['x-cc-desk-run']
+    attempts.push({run,id:request.headers['x-cc-desk-event']})
+    counts.set(run,(counts.get(run)??0)+1)
+    if(run===initialRun || counts.get(run)<=2)throw Error('offline')
+    return {ok:true,status:200}
+  }
+  const first=await CCDeskObserver({client,directory:'/fixture'},{directory:'/fixture'})
+  await emit(first,'session.created',{info:metadata('ses_main')})
+  assert.equal(attempts.length,4)
+  const second=await CCDeskObserver({client,directory:'/fixture'},{directory:'/fixture'})
+  await emit(second,'session.created',{info:metadata('ses_main')})
+  assert.equal(attempts.length,6)
+  assert.notEqual(attempts[4].id,attempts[5].id)
+  process.env.CC_DESK_OBSERVER_RUN=randomUUID()
+  const third=await CCDeskObserver({client,directory:'/fixture'},{directory:'/fixture'})
+  await emit(third,'session.created',{info:metadata('ses_main')})
+  assert.equal(attempts.length,10)
+  assert.notEqual(attempts[5].run,attempts[6].run)
+  assert.equal(attempts[6].id,attempts[7].id)
+  assert.equal(attempts[7].id,attempts[8].id)
+}))
+
 test('Opencode_PluginPreservesStatusAndPendingRequestSemantics_001',()=>fixture(async sent=>{
   const plugin=await CCDeskObserver({client,directory:'/fixture'},{sessionID:'ses_main',directory:'/fixture'})
   await emit(plugin,'session.updated',{info:metadata('ses_main')})
