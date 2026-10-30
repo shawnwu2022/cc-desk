@@ -2,12 +2,18 @@
 use super::*;
 use cc_desk_remote_record::projection::Stamp;
 use cc_desk_remote_security::{BoundDataAuthority, DataRecord, RunningChannel};
+#[cfg(test)]
+#[path = "local_writer_control_reply_tests.rs"]
+mod control_reply_tests;
+#[path = "local_writer_control_reply.rs"]
+mod reply;
 pub(in crate::local_writer::owner) struct Connection<'a> {
     peer: &'a AuthorizedPeer,
     proof: BoundDataAuthority,
     fence: u64,
     last: u64,
     busy: bool,
+    pending_input: Option<([u8; 16], u64)>,
     delivered: Option<Stamp>,
     view: Option<view_gate::SyncedView>,
 }
@@ -24,6 +30,7 @@ impl<'a> Connection<'a> {
             fence,
             last: 0,
             busy: false,
+            pending_input: None,
             delivered: None,
             view: None,
         })
@@ -70,7 +77,7 @@ async fn wait<T: Send + 'static>(
     value
 }
 impl Connection<'_> {
-    fn record(&self, r: &DataRecord) -> Result<(), Reject> {
+    fn context(&self, r: &DataRecord) -> Result<(), Reject> {
         self.proof.check().map_err(|_| Reject::Policy)?;
         if !r.source().same_channel(&self.proof)
             || r.scope() != self.proof.scope()
@@ -78,6 +85,10 @@ impl Connection<'_> {
         {
             return Err(Reject::Target);
         }
+        Ok(())
+    }
+    fn record(&self, r: &DataRecord) -> Result<(), Reject> {
+        self.context(r)?;
         if self.busy {
             return Err(Reject::Pending);
         }
@@ -174,10 +185,14 @@ impl Connection<'_> {
         let view = self.view.as_ref().ok_or(Reject::Sync)?;
         self.busy = true;
         let pending = self.peer.submit_received(r, view)?;
+        let command =
+            cc_desk_remote_record::input::decode(r.payload()).map_err(|_| Reject::Bounds)?;
+        self.pending_input = Some((command.operation, command.sequence));
         let value = wait(deadline, move |left| pending.wait(left).map(Ok)).await?;
         self.proof.check().map_err(|_| Reject::Policy)?;
         if matches!(value, WriteResult::Receipt(_) | WriteResult::Rejected(_)) {
-            self.busy = false
+            self.busy = false;
+            self.pending_input = None;
         }
         Ok(value)
     }

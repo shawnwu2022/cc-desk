@@ -31,8 +31,10 @@ then consumes frame.deliver_bound. Only after the complete multipart write and
 live-authority/deadline checks is its exact stamp eligible for ACK. No manual
 delivered flag exists. ACK requires that exact stamp once and the actor's current
 epoch/source/delivery checks. Window requires the returned SyncedView and existing
-lease/grant/epoch checks; its token/deadline descriptor is internal, not a new
-mobile reply schema. Attach completion alone supplies neither view nor window.
+lease/grant/epoch checks. The descriptor and exact receipt query/settlement now
+have bounded shared [control replies](../protocol/remote/inner/v1/CONTROL-IO-CANDIDATE.md)
+and internal native dispatch. No production/mobile bridge is enabled by that
+codec. Attach completion alone supplies neither view nor window.
 
 Input requires that window, exact source/fence/token/deadline and existing native
 single-writer journal checks. HostWritten is host IO acceptance only, not CLI

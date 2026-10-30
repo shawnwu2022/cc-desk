@@ -20,8 +20,10 @@ unimplemented and must not dispatch staging fragments through this adapter.
 The opaque32 token is generated once by the native writer when issuing a window,
 in addition to its existing16-byte v0.5 internal WindowId. It identifies the exact
 stored window, not a portable grant or a substitute for endpoint authorization.
-It is returned through a native API only; a network window descriptor/renewal and
-receipt command router remain OPEN. A final shared RemoteMutation schema must
+Its bounded serialized descriptor and receipt query/settlement syntax are now in
+[CONTROL-IO-CANDIDATE.md](CONTROL-IO-CANDIDATE.md), with internal native dispatch.
+Production network registration, renewal and mobile native bridge remain OPEN.
+A final shared RemoteMutation schema must
 freeze explicit v0.5 identities/epochs before protocol release. This compact
 candidate does not authorize a protocol migration or erase that gate.
 

@@ -85,6 +85,13 @@ pub struct ReceiptEnvelope {
 }
 
 impl ReceiptEnvelope {
+    #[cfg(feature = "experimental-host-owner")]
+    pub(crate) fn wire_token(&self) -> Option<[u8; 32]> {
+        if !matches!(self.outcome, Outcome::HostWritten | Outcome::Rejected) {
+            return None;
+        }
+        self.receipt_proof.as_ref().map(|token| token.0)
+    }
     pub fn into_proof(self) -> Option<ReceiptProof> {
         if !matches!(self.outcome, Outcome::HostWritten | Outcome::Rejected) {
             return None;
@@ -102,6 +109,25 @@ pub struct ReceiptProof {
     pub key: OperationKey,
     pub outcome: Outcome,
     proof: ReceiptToken,
+}
+#[cfg(feature = "experimental-host-owner")]
+impl ReceiptProof {
+    /// Untrusted ACK candidate, not a verified receipt. Journal::acknowledge
+    /// still checks exact target/device, durable row/floor, outcome and token.
+    pub(crate) fn wire_candidate(
+        key: OperationKey,
+        outcome: Outcome,
+        token: [u8; 32],
+    ) -> Option<Self> {
+        if !matches!(outcome, Outcome::HostWritten | Outcome::Rejected) || token == [0; 32] {
+            return None;
+        }
+        Some(Self {
+            key,
+            outcome,
+            proof: ReceiptToken(token),
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
