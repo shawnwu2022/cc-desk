@@ -20,6 +20,7 @@ pub(super) struct PeerScope {
     binding: [u8; 32],
     minor: u16,
     active: AtomicBool,
+    publication_gate: std::sync::Mutex<()>,
     closed: tokio::sync::watch::Sender<bool>,
     writer_closed: Arc<tokio::sync::watch::Sender<bool>>,
 }
@@ -28,6 +29,13 @@ impl PeerScope {
         self.active.load(Ordering::Acquire) && !*self.writer_closed.borrow()
     }
     pub(super) fn close(&self) {
+        let _guard = self
+            .publication_gate
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        self.close_locked();
+    }
+    fn close_locked(&self) {
         self.active.store(false, Ordering::Release);
         if let Some(authority) = self.authority.get() {
             authority.request_close();
@@ -35,8 +43,22 @@ impl PeerScope {
         self.closed.send_replace(true);
     }
     pub(super) fn close_writer(&self) {
+        let _guard = self
+            .publication_gate
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
         self.writer_closed.send_replace(true);
-        self.close();
+        self.close_locked();
+    }
+    pub(super) fn with_publication<T>(
+        &self,
+        f: impl FnOnce() -> Result<T, Reject>,
+    ) -> Result<T, Reject> {
+        let _guard = self.publication_gate.lock().map_err(|_| Reject::Thread)?;
+        if !self.is_active() {
+            return Err(Reject::Closed);
+        }
+        f()
     }
 }
 pub(super) struct PeerControl {
@@ -71,6 +93,7 @@ impl PeerControl {
                 binding,
                 minor,
                 active: AtomicBool::new(true),
+                publication_gate: std::sync::Mutex::new(()),
                 closed,
                 writer_closed,
             }),
@@ -153,6 +176,12 @@ impl PendingViewAck {
     }
 }
 impl PeerViewHandle {
+    pub(super) fn prepare_durable_resize(
+        &self,
+        request: super::resize::durable::Prepare,
+    ) -> Result<super::resize::durable::Pending<super::resize::durable::Prepared>, Reject> {
+        super::resize::durable::prepare(&self.input, self.control.scope.clone(), request)
+    }
     pub(super) fn resize_candidate(
         &self,
         request: cc_desk_remote_record::lifecycle::Request,
@@ -340,6 +369,7 @@ impl LocalWriter {
     }
 }
 pub(super) struct ViewGate {
+    pub(super) durable_resize: Option<Arc<super::resize::durable::Reservation>>,
     scope: Arc<PeerScope>,
     next_sync: u64,
     current: Option<Arc<IssuedView>>,
@@ -349,6 +379,9 @@ pub(super) struct ViewGate {
 }
 impl ViewGate {
     pub(super) fn resize_expired(&self) -> bool {
+        if self.durable_resize.as_ref().is_some_and(|r| r.expired()) {
+            return true;
+        }
         self.resize_feedback
             .as_ref()
             .is_some_and(|(end, observed)| {
@@ -356,6 +389,9 @@ impl ViewGate {
             })
     }
     pub(super) fn resize_ready(&self) -> Result<(), Reject> {
+        if let Some(reservation) = &self.durable_resize {
+            reservation.ready()?;
+        }
         if self.resize_expired() {
             self.scope.close_writer();
             return Err(Reject::Sealed);
@@ -386,6 +422,37 @@ impl ViewGate {
             dimension: epochs.dimension_epoch,
             sync: self.next_sync,
         })
+    }
+    pub(super) fn resize_proof(
+        &self,
+        scope: &Arc<PeerScope>,
+        proof: &cc_desk_remote_security::BoundDataAuthority,
+    ) -> Result<(), Reject> {
+        if !Arc::ptr_eq(scope, &self.scope) || !scope.is_active() {
+            return Err(Reject::Policy);
+        }
+        proof.check().map_err(|_| Reject::Policy)?;
+        let hex = |b: &[u8]| b.iter().map(|n| format!("{n:02x}")).collect::<String>();
+        if proof.local_role() != cc_desk_remote_security::Role::Host
+            || proof.data_role() != cc_desk_remote_record::grant::DataRole::Controller
+            || proof.context().host_endpoint_id != hex(&scope.target.host)
+            || proof.context().client_endpoint_id != hex(&scope.device)
+            || proof.scope().session != hex(&scope.target.session)
+            || proof.scope().run != scope.target.run
+            || proof.scope().generation != scope.target.generation.to_string()
+            || proof.context().incarnation != scope.target.incarnation.to_string()
+        {
+            return Err(Reject::Policy);
+        }
+        let authority = self
+            .control
+            .as_ref()
+            .and_then(|c| c.authority.as_ref())
+            .ok_or(Reject::Policy)?;
+        if !authority.same_channel(proof) {
+            return Err(Reject::Policy);
+        }
+        Ok(())
     }
     pub(super) fn invalidate_for_resize(&mut self) {
         if let Some(old) = self.current.take() {
@@ -454,6 +521,7 @@ impl ViewGate {
     }
     pub(super) fn new(scope: Arc<PeerScope>) -> Self {
         Self {
+            durable_resize: None,
             scope,
             next_sync: 0,
             current: None,
@@ -569,6 +637,9 @@ impl Drop for ViewGate {
 }
 #[path = "local_writer_view_delivery.rs"]
 mod delivery;
+#[cfg(test)]
+#[path = "local_writer_resize_durable_tests.rs"]
+mod durable_resize_tests;
 #[cfg(test)]
 #[path = "local_writer_resize_tests.rs"]
 mod resize_tests;

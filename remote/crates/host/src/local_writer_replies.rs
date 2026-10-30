@@ -137,6 +137,19 @@ impl CanonicalStart {
 }
 impl ReplyState {
     #[cfg(feature = "experimental-host-owner")]
+    pub(super) fn resize_baseline(
+        &self,
+    ) -> Result<((u16, u16), cc_desk_remote_terminal::TerminalEpochs), Reject> {
+        let ReplyParser::Canonical(core) = &self.parser else {
+            return Err(Reject::Unsupported);
+        };
+        if core.is_degraded() {
+            return Err(Reject::Sync);
+        }
+        let (rows, columns) = core.dimensions();
+        Ok(((rows as u16, columns as u16), core.epochs()))
+    }
+    #[cfg(feature = "experimental-host-owner")]
     pub(super) fn resize_preflight(
         &self,
         rows: u16,

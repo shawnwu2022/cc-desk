@@ -123,6 +123,8 @@ struct Request {
 }
 enum Command {
     #[cfg(feature = "experimental-host-owner")]
+    DurableResize(Box<resize::durable::Command>),
+    #[cfg(feature = "experimental-host-owner")]
     Resize(resize::Request),
     Input(Request),
     Output(OutputRequest),
@@ -401,6 +403,12 @@ impl LocalWriter {
                         reject_queued(&rx);
                         break;
                     }
+                    #[cfg(feature = "experimental-host-owner")]
+                    if let Some(request)=config.resize.as_mut().and_then(|s|s.next_output(&view_gate)) {
+                        let result=replies.as_mut().map_or(OutputResult::Rejected(Reject::Unsupported),|state|state.process(&request,&mut stdin,&sealed));
+                        let _=request.reply.try_send(result);
+                        continue;
+                    }
                     let command = match rx.recv_timeout(Duration::from_millis(10)) {
                         Ok(r) => r,
                         Err(mpsc::RecvTimeoutError::Timeout) => continue,
@@ -414,6 +422,11 @@ impl LocalWriter {
                         break;
                     }
                     let request = match command {
+                        #[cfg(feature = "experimental-host-owner")]
+                        Command::DurableResize(request) => {
+                            request.process(config.resize.as_mut(),&mut replies,&mut view_gate,&sealed);
+                            continue;
+                        }
                         #[cfg(feature = "experimental-host-owner")]
                         Command::Resize(request) => {
                             request.process(config.resize.as_mut(), &mut replies, &mut view_gate, &sealed);
@@ -500,6 +513,10 @@ impl LocalWriter {
                             continue;
                         }
                         Command::Output(request) => {
+                            #[cfg(feature = "experimental-host-owner")]
+                            let request=if let Some(state)=&mut config.resize {
+                                let Some(request)=state.hold_output(request,&view_gate) else {continue;};request
+                            }else{request};
                             let result = match &mut replies {
                                 Some(state) => state.process(&request, &mut stdin, &sealed),
                                 None => OutputResult::Rejected(Reject::Unsupported),
@@ -691,6 +708,8 @@ fn reject_queued(rx: &mpsc::Receiver<Command>) {
 }
 fn reject_command(r: Command) {
     match r {
+        #[cfg(feature = "experimental-host-owner")]
+        Command::DurableResize(r) => r.reject(Reject::Sealed),
         #[cfg(feature = "experimental-host-owner")]
         Command::Resize(r) => r.reject(Reject::Sealed),
         #[cfg(feature = "experimental-host-owner")]

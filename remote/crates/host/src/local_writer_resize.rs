@@ -2,6 +2,8 @@
 use super::*;
 use cc_desk_remote_record::lifecycle::{Request as Operation, State as Epochs};
 use std::time::Instant;
+#[path = "local_writer_resize_durable.rs"]
+pub(super) mod durable;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Size {
@@ -21,6 +23,8 @@ pub(super) struct State {
     backend: Box<dyn Backend>,
     records: Vec<(Operation, Arc<view_gate::PeerScope>, Result<Applied, Error>)>,
     floor: u64,
+    durable_only: bool,
+    held: std::collections::VecDeque<OutputRequest>,
 }
 impl State {
     #[cfg(test)]
@@ -29,7 +33,15 @@ impl State {
             backend: Box::new(backend),
             records: Vec::new(),
             floor: 0,
+            durable_only: false,
+            held: std::collections::VecDeque::new(),
         }
+    }
+    #[cfg(test)]
+    pub(super) fn fake_durable(backend: impl Backend + 'static) -> Self {
+        let mut state = Self::fake(backend);
+        state.durable_only = true;
+        state
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -135,6 +147,9 @@ impl Request {
     ) {
         let result = (|| {
             let state = state.ok_or(Error::Rejected(Reject::Unsupported))?;
+            if state.durable_only {
+                return Err(Error::Rejected(Reject::Unsupported));
+            }
             let replies = replies
                 .as_mut()
                 .ok_or(Error::Rejected(Reject::Unsupported))?;
