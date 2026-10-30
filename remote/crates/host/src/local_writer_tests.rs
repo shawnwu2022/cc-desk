@@ -525,6 +525,7 @@ fn actual_owned_pty_writer(canonical: bool) {
     std::thread::sleep(Duration::from_millis(25));
     let effect = std::fs::read(&marker).ok();
     let root_before_stop = run.try_wait_root().unwrap();
+    let job_before_stop = run.job_active_processes();
     #[cfg(feature = "experimental-canonical-replies")]
     let captured = if canonical {
         Some(
@@ -542,6 +543,7 @@ fn actual_owned_pty_writer(canonical: bool) {
     ));
     joined(&mut writer);
     assert_ne!(run.stop_root_until(end).unwrap().exit_code, 90);
+    let job_after_stop = run.job_active_processes();
     drop(run);
     let (output, refusal, reply_count) = done_rx
         .recv_timeout(end.saturating_duration_since(Instant::now()))
@@ -553,6 +555,10 @@ fn actual_owned_pty_writer(canonical: bool) {
     }
     reader.join().unwrap();
     assert!(Instant::now() < end);
+    check_fixture_job_observation(&job_before_stop, &job_after_stop).unwrap();
+    eprintln!(
+        "TEST_ONLY_PTY_JOB before={job_before_stop:?}; after_stop={job_after_stop:?}; scope=owned_job_snapshot_only"
+    );
     #[cfg(feature = "experimental-canonical-replies")]
     if let Some(result) = captured {
         let captured = result.unwrap().unwrap().unwrap();
@@ -600,6 +606,31 @@ fn actual_owned_pty_writer(canonical: bool) {
         output.windows(4).any(|x| x == b"\x1b[6n"),
         output.windows(3).any(|x| x == b"\x1b[c") || output.windows(4).any(|x| x == b"\x1b[0c")
     );
+}
+#[test]
+fn job_observation_guard_refuses_unknown_empty_or_still_owned_results() {
+    use cc_desk_native_runtime::NativePtyError::OutcomeUnknown;
+    assert!(check_fixture_job_observation(&Ok(Some(1)), &Ok(None)).is_ok());
+    for (before, after) in [
+        (Ok(Some(0)), Ok(None)),
+        (Ok(None), Ok(None)),
+        (Ok(Some(1)), Ok(Some(0))),
+        (Ok(Some(1)), Ok(Some(1))),
+        (Err(OutcomeUnknown), Ok(None)),
+        (Ok(Some(1)), Err(OutcomeUnknown)),
+    ] {
+        assert!(check_fixture_job_observation(&before, &after).is_err());
+    }
+}
+fn check_fixture_job_observation(
+    before: &Result<Option<u32>, cc_desk_native_runtime::NativePtyError>,
+    after: &Result<Option<u32>, cc_desk_native_runtime::NativePtyError>,
+) -> Result<(), &'static str> {
+    match (before, after) {
+        (Ok(Some(active)), Ok(None)) if *active > 0 => Ok(()),
+        (Err(_), _) | (_, Err(_)) => Err("JOB_OBSERVATION_UNKNOWN"),
+        _ => Err("JOB_LIFECYCLE_NOT_OBSERVED"),
+    }
 }
 fn effects(path: &Path, count: usize) {
     let end = Instant::now() + Duration::from_secs(2);
