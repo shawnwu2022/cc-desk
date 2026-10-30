@@ -212,3 +212,19 @@ fn LegacyRootProof_ConfiguredRedirectPreservesAppliedEnvironment_06() {
         assert_eq!(cmd.get_env(key), Some(std::ffi::OsStr::new(value)));
     }
 }
+
+#[test]
+fn TerminalContract_LegacyExplicitEnvironmentKeepsPriority_105() {
+    let mut command = portable_pty::CommandBuilder::new("fixture-not-executed");
+    command.env("TERM", "xterm-256color");
+    let configured =
+        std::collections::HashMap::from([("TERM".to_owned(), "profile-term".to_owned())]);
+    assert!(apply_configured_claude_environment(
+        &mut command,
+        &configured
+    ));
+    assert_eq!(
+        command.get_env("TERM"),
+        Some(std::ffi::OsStr::new("profile-term"))
+    );
+}

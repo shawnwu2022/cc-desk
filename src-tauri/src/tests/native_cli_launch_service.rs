@@ -448,6 +448,121 @@ fn size() -> PtySize {
     }
 }
 
+// Exercise the application launch path and inspect the environment received by
+// a disposable Node child inside the real PTY, rather than a detached helper.
+fn terminal_fixture(
+    inherited_term: Option<(&str, &str)>,
+    configured: Option<crate::cli::profiles::Override<crate::cli::profiles::EnvValue>>,
+) -> Fixture {
+    let mut f = Fixture::new(false);
+    let mut profile = Profile::new("terminal-contract", CliKind::Codex);
+    profile.program_path = f
+        .repository
+        .get_profile(&f.request.profile_id)
+        .unwrap()
+        .program_path;
+    if let Some(value) = configured {
+        profile.env.insert("TERM".into(), value);
+    }
+    let document = f.repository.read().unwrap();
+    let document = f
+        .repository
+        .apply(
+            document.revision,
+            Patch::Create {
+                profile: profile.clone(),
+            },
+        )
+        .unwrap();
+    f.request.profile_id = profile.id.clone();
+    f.request.expected_profile_revision = document.profiles[&profile.id].revision;
+    f.request.action = LaunchAction::Raw { argv: vec!["-e".into(),
+        "require('node:fs').writeFileSync('terminal.json',JSON.stringify({term:process.env.TERM??null,stdinIsTTY:!!process.stdin.isTTY,stdoutIsTTY:!!process.stdout.isTTY}))".into()] };
+    let mut inherited = EnvMap::new();
+    if let Some(value) = std::env::var_os("SystemRoot") {
+        inherited.insert("SystemRoot".into(), value);
+    }
+    if let Some((name, value)) = inherited_term {
+        inherited.insert(name.into(), value.into());
+    }
+    f.service = Arc::new(LaunchService::new(
+        f.repository.clone(),
+        Some(inherited),
+        Some(f.consumer.clone()),
+    ));
+    f.caller = f.service.registry().activate_window("main").unwrap();
+    f
+}
+
+fn terminal_report(f: &Fixture) -> serde_json::Value {
+    f.ready();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    for run in f.consumer.runs.lock().iter() {
+        while run.process.pty.try_wait().unwrap().is_none() {
+            assert!(Instant::now() < deadline, "terminal fixture did not exit");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+    serde_json::from_slice(&fs::read(f.root.path().join("work/terminal.json")).unwrap()).unwrap()
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TerminalContract_NativePtyOverridesHostDumbOrAbsent_101() {
+    for inherited in [None, Some(("TERM", "dumb")), Some(("TERM", "screen"))] {
+        let f = terminal_fixture(inherited, None);
+        f.start().unwrap();
+        let report = terminal_report(&f);
+        assert_eq!(report["term"], "xterm-256color");
+        assert_eq!(report["stdinIsTTY"], true);
+        assert_eq!(report["stdoutIsTTY"], true);
+    }
+}
+
+#[cfg(windows)]
+#[test]
+#[allow(non_snake_case)]
+fn TerminalContract_NativePtyReplacesWindowsAlias_102() {
+    let f = terminal_fixture(Some(("tErM", "dumb")), None);
+    f.start().unwrap();
+    assert_eq!(terminal_report(&f)["term"], "xterm-256color");
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TerminalContract_NativePtyKeepsExplicitProfilePriority_103() {
+    use crate::cli::profiles::EnvValue;
+    for (change, expected) in [
+        (
+            Override::Set(EnvValue::Literal {
+                value: "profile-term".into(),
+                non_secret: true,
+            }),
+            serde_json::json!("profile-term"),
+        ),
+        (Override::Unset, serde_json::Value::Null),
+        (
+            Override::Set(EnvValue::HostRef {
+                name: "TERM".into(),
+            }),
+            serde_json::json!("dumb"),
+        ),
+    ] {
+        let f = terminal_fixture(Some(("TERM", "dumb")), Some(change));
+        f.start().unwrap();
+        assert_eq!(terminal_report(&f)["term"], expected);
+    }
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TerminalContract_OneShotCommandDoesNotClaimInteractiveTerminal_104() {
+    let f = terminal_fixture(Some(("TERM", "dumb")), None);
+    f.service.run_command(&f.caller, &f.request).unwrap();
+    f.service.wait_for_commands();
+    assert_eq!(terminal_report(&f)["term"], "dumb");
+}
+
 // 正式服务并发一百次仍只创建一个实际 Node/PTY，不以计数 mock 替代。
 #[test]
 fn D11_Service_ConcurrentRealChildAndLostReceipt_001() {

@@ -423,6 +423,22 @@ impl LaunchService {
         cwd: &std::path::Path,
         expected_environment: &EnvMap,
     ) -> Result<String, SafeError> {
+        self.probe_opencode_database_with_terminal(
+            caller,
+            profile,
+            cwd,
+            expected_environment,
+            &EnvMap::new(),
+        )
+    }
+    fn probe_opencode_database_with_terminal(
+        &self,
+        caller: &CallerIdentity,
+        profile: &super::profiles::Profile,
+        cwd: &std::path::Path,
+        expected_environment: &EnvMap,
+        terminal: &EnvMap,
+    ) -> Result<String, SafeError> {
         self.registry().check_caller(caller)?;
         if profile.cli != CliKind::Opencode || self.repository.get_profile(&profile.id)? != *profile
         {
@@ -456,7 +472,7 @@ impl LaunchService {
             caller,
             &FreezeContext {
                 inherited: &inherited,
-                terminal: &EnvMap::new(),
+                terminal,
                 legacy: legacy.as_ref(),
                 observer: None,
             },
@@ -525,6 +541,9 @@ impl LaunchService {
         // synchronously round-trip through the Tauri main event loop.
         let handoff_guard = RefCell::new(None);
         let spawned = Cell::new(false);
+        // This route owns the xterm frontend and PTY, independently of the
+        // desktop launcher's terminal. Explicit profile env still wins in D08.
+        let terminal = EnvMap::from([("TERM".into(), "xterm-256color".into())]);
         let status = self.coordinator.start_routed_with_source(
             caller,
             request,
@@ -547,7 +566,7 @@ impl LaunchService {
                     caller,
                     &FreezeContext {
                         inherited: &inherited,
-                        terminal: &EnvMap::new(),
+                        terminal: &terminal,
                         legacy: legacy.as_ref(),
                         observer: None,
                     },
@@ -688,11 +707,15 @@ impl LaunchService {
                     if super::source_provenance::SourceProvenance::needs_database_probe(snapshot) {
                         (|| -> Result<Option<String>, SafeError> {
                             let profile = self.repository.get_profile(&request.profile_id)?;
-                            self.probe_opencode_database(
+                            // Revalidate the exact run environment. This existing
+                            // metadata helper remains noninteractive; TERM alone
+                            // does not claim that its stdio is a TTY.
+                            self.probe_opencode_database_with_terminal(
                                 caller,
                                 &profile,
                                 std::path::Path::new(&request.launch_cwd),
                                 snapshot.environment(),
+                                &terminal,
                             )
                             .map(Some)
                         })()
@@ -984,6 +1007,90 @@ mod opencode_preparation_tests;
 #[cfg(test)]
 mod owned_command_tests {
     use super::*;
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn TerminalContract_OpenCodeProbePreservesEnvironmentAndNonTty_106() {
+        use crate::cli::environment::build_environment;
+        use crate::cli::profiles::Profile;
+        use crate::cli::storage::Patch;
+        let root = tempfile::tempdir().unwrap();
+        let repository = WorkspaceRepository::open(root.path().join("workspace.json")).unwrap();
+        let mut profile = Profile::new("terminal-probe", CliKind::Opencode);
+        profile.program_path = Override::Set(crate::platform::find_executable("node").unwrap());
+        let document = repository.read().unwrap();
+        repository
+            .apply(
+                document.revision,
+                Patch::Create {
+                    profile: profile.clone(),
+                },
+            )
+            .unwrap();
+        let profile = repository.get_profile(&profile.id).unwrap();
+        std::fs::write(root.path().join("db"), "require('node:fs').writeFileSync('probe.json',JSON.stringify({term:process.env.TERM,stdinIsTTY:!!process.stdin.isTTY,stdoutIsTTY:!!process.stdout.isTTY}));process.stdout.write('fixture-db\\n')").unwrap();
+        let mut inherited = EnvMap::from([("TERM".into(), "dumb".into())]);
+        if let Some(value) = std::env::var_os("SystemRoot") {
+            inherited.insert("SystemRoot".into(), value);
+        }
+        let service = LaunchService::new(repository, Some(inherited.clone()), None);
+        let caller = service.registry().activate_window("main").unwrap();
+        let terminal = EnvMap::from([("TERM".into(), "xterm-256color".into())]);
+        let run_environment =
+            build_environment(&inherited, &terminal, &profile, None, None).unwrap();
+        assert_eq!(
+            service
+                .probe_opencode_database(&caller, &profile, root.path(), &run_environment)
+                .unwrap_err()
+                .code,
+            "SCOPE_UNKNOWN"
+        );
+        assert!(!root.path().join("probe.json").exists());
+        assert_eq!(
+            service
+                .probe_opencode_database_with_terminal(
+                    &caller,
+                    &profile,
+                    root.path(),
+                    &run_environment,
+                    &terminal
+                )
+                .unwrap(),
+            "fixture-db\n"
+        );
+        let report: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(root.path().join("probe.json")).unwrap())
+                .unwrap();
+        assert_eq!(report["term"], "xterm-256color");
+        assert_eq!(report["stdinIsTTY"], false);
+        assert_eq!(report["stdoutIsTTY"], false);
+        let original = build_environment(&inherited, &EnvMap::new(), &profile, None, None).unwrap();
+        service
+            .probe_opencode_database(&caller, &profile, root.path(), &original)
+            .unwrap();
+        let before = std::fs::read(root.path().join("probe.json")).unwrap();
+        let report: serde_json::Value = serde_json::from_slice(&before).unwrap();
+        assert_eq!(report["term"], "dumb");
+        let mut tampered = run_environment;
+        tampered.insert("UNEXPECTED_FIXTURE_VALUE".into(), "rejected".into());
+        assert_eq!(
+            service
+                .probe_opencode_database_with_terminal(
+                    &caller,
+                    &profile,
+                    root.path(),
+                    &tampered,
+                    &terminal
+                )
+                .unwrap_err()
+                .code,
+            "SCOPE_UNKNOWN"
+        );
+        assert_eq!(
+            std::fs::read(root.path().join("probe.json")).unwrap(),
+            before
+        );
+    }
 
     #[test]
     #[allow(non_snake_case)]
