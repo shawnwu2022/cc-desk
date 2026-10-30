@@ -202,6 +202,14 @@ Caller stop carries `requestId` with the run identity. One registry lock admits 
 
 ## Observer boundary
 
+Codex identity events may be deferred until the first user turn, including after
+an explicit resume. Silence before that event remains `connecting` (identity
+pending); the shared 30-second first-event timer is not a Codex installation
+failure signal. Listener failure, explicit installation failure and host
+invalidation still report unavailable. Neither elapsed time nor a requested
+resume locator establishes an observed session identity. Claude and OpenCode
+retain their existing first-event timeout policies.
+
 Observer delivery is optional metadata, not process ownership.
 
 `cli_get_observer_status` uses the authenticated document and exact request/run/generation. Its safe DTO reports `off`, `connecting` or `unavailable` plus a fixed reason: disabled/unsupported, waiting for events, missing service, unavailable plugin, preparation failure or generic unavailable. It describes the frozen installation result; only accepted hook events establish active observation. Frontend subscription immediately publishes the current state. Query failure cannot fail a successful launch, and a delayed query cannot replace newer activity. New Claude configurations default to observation enabled; explicit off and the original profile of resumed history remain authoritative.

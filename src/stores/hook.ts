@@ -16,7 +16,7 @@ export type ObservationNoticeHandler = (notice: NativeObservationNotice) => void
 export type ObservationIdentityHandler = (sessionId: string, eventType?: HookEventDetail['type']) => void
 export interface ObservationTarget extends RunRef { cli: CliKind; enabled: boolean }
 
-/** 订阅后允许首个观察事件到达的窗口；超时按 unavailable 处理。 */
+/** Claude/OpenCode first-event deadline; Codex may wait for its first turn. */
 const CONNECT_TIMEOUT_MS = 30_000
 /** 粗粒度 turn 活动的静默上界：working/subagent_running 回落 idle，waiting 不受影响。 */
 const TURN_IDLE_TIMEOUT_MS = 90_000
@@ -38,6 +38,10 @@ export const useHookStore = defineStore('hook', () => {
       const state = observations.get(entry.run)?.state()
       if (entry.cli === 'opencode' && state?.observation === 'active' && ['waiting_permission', 'waiting_input', 'error'].includes(state.activity)) return
       const connecting = state?.observation === 'connecting'
+      // Codex may defer SessionStart until its first turn, including resume.
+      // Silence is not evidence that installation or identity delivery failed.
+      // Listener/installation failures and host invalidation remain explicit.
+      if (entry.cli === 'codex' && connecting) return
       publish(connecting || entry.cli === 'opencode' ? { kind: 'timeout', ...entry.run } : { kind: 'turn-idle-timeout', ...entry.run })
     }, delay)
   }
