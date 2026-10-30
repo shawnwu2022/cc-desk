@@ -189,6 +189,7 @@ dependencies = [
  "cc-desk-remote-protocol",
  "cc-desk-remote-record",
  "futures-util",
+ "ring",
  "rustls",
  "rustls-pemfile",
  "tokio",

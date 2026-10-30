@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
+[features]
+default = []
+test-only-loopback = ["dep:rustls-pemfile"]
+
 [dependencies]
 cc-desk-remote-protocol = { path = "../../../protocol/remote/v1" }
 cc-desk-remote-record = { path = "../../../protocol/remote/inner/v1" }
@@ -14,6 +18,8 @@ tokio-rustls = { version = "=0.26.4", default-features = false, features = ["rin
 rustls = { version = "=0.23.46", default-features = false, features = ["std", "ring"] }
 webpki-roots = "=1.0.7"
 url = "=2.5.8"
+rustls-pemfile = { version = "=1.0.4", optional = true }
 
 [dev-dependencies]
+ring = "=0.17.14"
 rustls-pemfile = "=1.0.4"

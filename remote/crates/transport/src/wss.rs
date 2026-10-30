@@ -5,6 +5,8 @@ pub enum ConnectError {
     Limit,
     Deadline,
     Transport,
+    Admission,
+    Signer,
 }
 pub async fn connect(
     origin: &str,
@@ -217,3 +219,11 @@ mod tests {
         );
     }
 }
+
+#[path = "wss_admission.rs"]
+mod admission;
+#[cfg(any(test, feature = "test-only-loopback"))]
+pub use admission::test_only_connect_admitted_loopback;
+pub use admission::{
+    RelayAdmissionIdentity, RelayRole, RelaySigner, SignError, SigningRequest, connect_admitted,
+};

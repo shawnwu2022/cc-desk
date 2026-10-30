@@ -45,5 +45,39 @@ preempted and sent bytes cannot be rolled back.
 Actual TEST_ONLY loopback WSS tests cover valid chain/name/upgrade, normal production
 roots rejecting the public test CA, wrong hostname and HTTP403. Public official test
 keys/CA are cfg(test) only, never installed/enrolled. No real public origin, relay,
-mobile or inner authentication acceptance is inferred. Relay admission and inner
-RPK/AppBind/Host integration remain mandatory before remote data can be enabled.
+mobile or inner authentication acceptance is inferred. Relay admission and inner RPK/AppBind/Host integration remain mandatory before remote data can be enabled.
+
+## Experimental native relay admission
+
+`wss::connect_admitted(origin, address, budget, &RelayAdmissionIdentity)` retains the
+production Mozilla-root TLS1.3 chain/hostname verification of `connect`, then performs
+the experimental relay profile before returning a socket to `drive`. The existing
+plain `connect` behavior is unchanged. The exact canonical ASCII wss endpoint is <=512
+bytes; userinfo/query/fragment/percent escapes/backslashes and mismatched ports reject.
+The same monotonic absolute budget covers TCP, TLS, HTTP, challenge, async signature,
+proof write and success acknowledgement. Post-sign deadline checks prevent a delayed
+ready signer result from authorizing a later write. CPU work cannot be preempted.
+
+`RelayAdmissionIdentity::new(keyID16, RelayRole::{Host,Phone}, Arc<dyn RelaySigner>)`
+is a separate native signer interface. The application supplies a signer dedicated to
+relay admission; endpoint RPK and grant authority keys are never imported or selected
+automatically. `SigningRequest` exposes immutable origin/keyID/role/transcript getters
+for signer policy checks. `RelaySigner::sign` returns a bounded async future producing
+raw P-256 ECDSA/SHA256 r||s64, or fixed SignError. No key generation, enrollment,
+persistence, bearer tokens, renderer bridge or listener is added.
+
+Wire: challenge `[1,0,nonce32,binding32]` (66 bytes), proof `[1,1,keyID16,role1,sig64]`
+(83 bytes), accepted `[1,2]`. Transcript is ASCII `CC_DESK_RELAY_ADMISSION`, NUL,
+profile byte1, origin length u16 BE, exact origin bytes, nonce32, binding32, keyID16,
+role1. The binding is a server-issued random connection identifier, not a TLS exporter.
+Unexpected message type/version/length/status, signer refusal/error/stall, close and
+expired budget drop the socket. Returning a socket means relay admission only;
+endpoint mutual RPK, AppBind, signed grants and exact live session scope still apply.
+
+The explicit `test-only-loopback` feature is off by default and is not production
+configuration. Its doc-hidden helper accepts only numeric loopback addresses with
+exact fixture hostname foobar.com and matching port, validates TLS1.3 using the fixed
+public fixture CA, and accepts no caller roots/config. Only tests and finite local
+cross-repository qualification use it. Production `connect`/`connect_admitted` always
+use Mozilla roots, including when this test feature is compiled. Never enable it in
+a shipping app. No public origin, mobile bridge or release acceptance is inferred.
