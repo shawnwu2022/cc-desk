@@ -229,3 +229,14 @@ async fn native_bridge_cancelled_wait_closes_original_channel_and_concurrent_cal
     native.close().await;
     h.close().await;
 }
+
+#[tokio::test]
+async fn request_close_invalidates_original_native_owner_synchronously() {
+    let now = Arc::new(AtomicU64::new(1000));
+    let (c, h, _gate, _cancel) = channels(now).await;
+    let client = NativeClient::new(c, 4).unwrap();
+    client.request_close();
+    assert!(client.channel.authority().check().is_err());
+    client.close().await;
+    h.wait_closed().await;
+}

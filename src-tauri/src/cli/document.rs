@@ -44,6 +44,10 @@ struct DocumentState {
     phase: Phase,
     attached: bool,
     handoff: Option<String>,
+    #[cfg(feature = "remote-client-ipc")]
+    revoke_hook: Option<(u64, Arc<dyn Fn() + Send + Sync>)>,
+    #[cfg(feature = "remote-client-ipc")]
+    next_hook: u64,
 }
 
 pub(crate) struct DocumentAuthority<R> {
@@ -209,6 +213,10 @@ impl<R> DocumentAuthority<R> {
                 phase: Phase::Created,
                 attached: false,
                 handoff: None,
+                #[cfg(feature = "remote-client-ipc")]
+                revoke_hook: None,
+                #[cfg(feature = "remote-client-ipc")]
+                next_hook: 0,
             }),
         }))
     }
@@ -256,11 +264,25 @@ impl<R> DocumentAuthority<R> {
     }
 
     pub(crate) fn revoke(&self) {
-        self.state.lock().phase = Phase::Revoked;
+        #[cfg(feature = "remote-client-ipc")]
+        let hook = {
+            let mut state = self.state.lock();
+            state.phase = Phase::Revoked;
+            state.revoke_hook.take()
+        };
+        #[cfg(not(feature = "remote-client-ipc"))]
+        {
+            self.state.lock().phase = Phase::Revoked;
+        }
         // Only this exact epoch can be revoked. A late old-window callback
-        // cannot revoke a newer main window. No resource is retired or killed.
+        // cannot revoke a newer main window. Owned native runs are not killed;
+        // the optional remote-client hook retires only its original channel.
         let _ = self.registry.revoke_window(&self.caller);
         self.output_routes.revoke();
+        #[cfg(feature = "remote-client-ipc")]
+        if let Some((_, hook)) = hook {
+            hook();
+        }
     }
 
     pub(crate) fn attach(
@@ -551,5 +573,112 @@ mod proof_tests {
             b"0123456789abcdef0123456789abcdeff"
         ));
         assert!(!same_proof(b"", b"0"));
+    }
+}
+
+#[cfg(all(test, feature = "remote-client-ipc"))]
+mod revoke_hook_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    fn ready() -> (Arc<DocumentAuthority<()>>, DocumentBinding<()>) {
+        let url: Url = "http://tauri.localhost/".parse().unwrap();
+        let a = DocumentAuthority::new(Arc::new(RunRegistry::new(8)), url.clone()).unwrap();
+        let mut table = ResourceTable::default();
+        let b = a.attach(&mut table).unwrap();
+        a.started(&url);
+        a.finished(&url);
+        (a, b)
+    }
+    #[test]
+    fn document_revoke_hook_is_bounded_idempotent_and_runs_outside_state_lock() {
+        let (a, b) = ready();
+        let caller = a.caller.clone();
+        let count = Arc::new(AtomicUsize::new(0));
+        let weak = Arc::downgrade(&a);
+        let c = count.clone();
+        let _ticket = b
+            .on_revoke(
+                &caller,
+                Arc::new(move || {
+                    assert!(weak.upgrade().unwrap().state.try_lock().is_some());
+                    c.fetch_add(1, Ordering::AcqRel);
+                }),
+            )
+            .unwrap();
+        assert!(b.on_revoke(&caller, Arc::new(|| {})).is_err());
+        a.revoke();
+        a.revoke();
+        assert_eq!(count.load(Ordering::Acquire), 1);
+        assert!(b.on_revoke(&caller, Arc::new(|| {})).is_err());
+    }
+    #[test]
+    fn document_revoke_ticket_removes_only_its_original_registration() {
+        let (a, b) = ready();
+        let caller = a.caller.clone();
+        let ticket = b.on_revoke(&caller, Arc::new(|| {})).unwrap();
+        drop(ticket);
+        let count = Arc::new(AtomicUsize::new(0));
+        let c = count.clone();
+        let _next = b
+            .on_revoke(
+                &caller,
+                Arc::new(move || {
+                    c.fetch_add(1, Ordering::AcqRel);
+                }),
+            )
+            .unwrap();
+        a.revoke();
+        assert_eq!(count.load(Ordering::Acquire), 1);
+    }
+}
+
+#[cfg(feature = "remote-client-ipc")]
+pub(crate) struct DocumentRevocation<R> {
+    authority: std::sync::Weak<DocumentAuthority<R>>,
+    id: u64,
+}
+#[cfg(feature = "remote-client-ipc")]
+impl<R> Drop for DocumentRevocation<R> {
+    fn drop(&mut self) {
+        if let Some(a) = self.authority.upgrade() {
+            let mut state = a.state.lock();
+            if state
+                .revoke_hook
+                .as_ref()
+                .is_some_and(|(id, _)| *id == self.id)
+            {
+                state.revoke_hook = None;
+            }
+        }
+    }
+}
+#[cfg(feature = "remote-client-ipc")]
+impl<R> DocumentBinding<R> {
+    pub(crate) fn check_admitted(&self, caller: &CallerIdentity) -> Result<(), SafeError> {
+        if caller != &self.authority.caller || self.authority.state.lock().phase != Phase::Ready {
+            return Err(error("FORBIDDEN"));
+        }
+        self.authority.registry.check_caller(caller)
+    }
+    pub(crate) fn on_revoke(
+        &self,
+        caller: &CallerIdentity,
+        hook: Arc<dyn Fn() + Send + Sync>,
+    ) -> Result<DocumentRevocation<R>, SafeError> {
+        self.check_admitted(caller)?;
+        let mut state = self.authority.state.lock();
+        if state.phase != Phase::Ready || state.revoke_hook.is_some() {
+            return Err(error("FORBIDDEN"));
+        }
+        let id = state
+            .next_hook
+            .checked_add(1)
+            .ok_or_else(|| error("DOCUMENT_RESOURCE_FULL"))?;
+        state.next_hook = id;
+        state.revoke_hook = Some((id, hook));
+        Ok(DocumentRevocation {
+            authority: Arc::downgrade(&self.authority),
+            id,
+        })
     }
 }

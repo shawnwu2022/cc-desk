@@ -49,15 +49,20 @@ to the reducer have no JSON lexeme evidence; wire parity applies to the codec pa
 `TerminalClient` consumes an injected `NativeConnection` that must own the
 verified mutual-RPK/AppBind channel and validate original received DataRecord
 direction, channel, grant/scope and fence. `connect` supplies that dependency;
-it does not authenticate a peer. No production adapter or app route is registered.
+it does not authenticate a peer. The application has default-off
+`remote-client-ipc` command registration and `documentClientPort` supplies its
+bounded byte DTO adapter through the original document bootstrap. It accepts
+only a native-installed resource; no application connection factory or native
+key provider is enabled, and actual WebView/phone acceptance remains open.
 `nativeConnection(port)` is the concrete portable adapter for the Rust owner's
 snapshot/exchange operations. Its port must be supplied by an authenticated
 native shell resource; dependency injection does not authenticate that resource.
 It validates and bounds native outputs, permits no concurrent queue, uses a
 monotonic completion deadline and closes on error/cancellation. `waitClosed`
 retains native retirement failure instead of interpreting close initiation as
-retirement. Original-document admission and actual platform IPC registration
-remain required; this module does not implement a browser cryptographic fallback.
+retirement. The optional application IPC checks the retained original document and actual
+WebView before request decoding and after awaits. This module does not implement
+a browser cryptographic fallback.
 The native snapshot method streams its verified barrier and bounded parts and
 resolves only after Host full delivery completion. The controller installs through
 the reducer, sends the exact ACK, validates ProjectionAcknowledged, obtains

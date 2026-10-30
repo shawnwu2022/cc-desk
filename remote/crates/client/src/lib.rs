@@ -2,7 +2,8 @@
 //! client channel, never a JS identity, connection label or authorization flag.
 //! No IPC registration, listener, enrollment or automatic retry is installed.
 use cc_desk_remote_record::{command, control_io as wire, grant::SessionScope, projection};
-use cc_desk_remote_security::{BoundDataAuthority, DataError, Role, RunningChannel};
+pub use cc_desk_remote_security::DataError;
+use cc_desk_remote_security::{BoundDataAuthority, Role, RunningChannel};
 use std::time::Duration;
 use tokio::{sync::Mutex, time::Instant};
 const MAX_SNAPSHOT_BYTES: usize = 4 * 1024 * 1024;
@@ -256,6 +257,10 @@ impl NativeClient {
                 });
             }
         }
+    }
+    /// Invalidates this exact channel synchronously; close() still joins it.
+    pub fn request_close(&self) {
+        self.channel.authority().request_close();
     }
     pub async fn close(&self) -> DataError {
         self.channel.close().await

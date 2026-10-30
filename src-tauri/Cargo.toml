@@ -13,6 +13,7 @@ tauri-build = { version = "2", features = [] }
 serde_json = "1"
 
 [dependencies]
+cc-desk-remote-client = { path = "../remote/crates/client", optional = true }
 base64 = "=0.22.1"
 minisign-verify = "=0.2.5"
 sha2 = "=0.10.9"
@@ -55,6 +56,7 @@ zstd = { version = "=0.13.3", default-features = false }
 default = ["sqlite"]
 sqlite = ["rusqlite"]
 history-roundtrip-acceptance = []
+remote-client-ipc = ["dep:cc-desk-remote-client"]
 
 [target.'cfg(target_os = "windows")'.dependencies]
 tempfile = "3"

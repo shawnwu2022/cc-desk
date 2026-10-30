@@ -8,6 +8,8 @@ mod hook_config;
 mod hook_events;
 mod hook_server;
 mod logger;
+#[cfg(feature = "remote-client-ipc")]
+mod remote_client_ipc;
 pub use codex_observer_reporter::run_entry as run_codex_observer_entry;
 mod observer_host;
 mod observer_http;
@@ -129,6 +131,10 @@ fn run_ordinary(initial_dir: Option<String>, #[cfg(windows)] startup: DesktopSta
     let native_shutdown = native_runtime.clone();
     let native_exit_shutdown = native_runtime.clone();
     let builder = tauri::Builder::default();
+    #[cfg(feature = "remote-client-ipc")]
+    let builder = builder.manage(std::sync::Arc::new(
+        remote_client_ipc::RemoteClientService::default(),
+    ));
     #[cfg(windows)]
     let builder = builder.manage(startup.admission);
     let app = builder
@@ -239,6 +245,12 @@ fn run_ordinary(initial_dir: Option<String>, #[cfg(windows)] startup: DesktopSta
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            #[cfg(feature = "remote-client-ipc")]
+            remote_client_ipc::remote_client_snapshot,
+            #[cfg(feature = "remote-client-ipc")]
+            remote_client_ipc::remote_client_exchange,
+            #[cfg(feature = "remote-client-ipc")]
+            remote_client_ipc::remote_client_close,
             desktop_updater::get_updater_settings,
             desktop_updater::save_updater_settings,
             desktop_updater::test_updater_proxy,
@@ -325,13 +337,42 @@ fn run_ordinary(initial_dir: Option<String>, #[cfg(windows)] startup: DesktopSta
         .build(context)
         .expect("error while building tauri application");
     app.run(move |_app_handle, event| {
-        if let tauri::RunEvent::ExitRequested { ref api, .. } = event {
+        if let tauri::RunEvent::ExitRequested {
+            ref api,
+            code: _code,
+            ..
+        } = event
+        {
             if native_exit_shutdown
                 .binding()
                 .is_ok_and(|binding| binding.blocks_handoff_exit())
             {
                 api.prevent_exit();
                 return;
+            }
+            #[cfg(feature = "remote-client-ipc")]
+            {
+                let service = _app_handle
+                    .state::<std::sync::Arc<remote_client_ipc::RemoteClientService>>()
+                    .inner()
+                    .clone();
+                match service.request_exit(_code.unwrap_or(0)) {
+                    remote_client_ipc::ExitDecision::Proceed => (),
+                    remote_client_ipc::ExitDecision::Prevent => {
+                        api.prevent_exit();
+                        return;
+                    }
+                    remote_client_ipc::ExitDecision::Wait(code) => {
+                        api.prevent_exit();
+                        let app = _app_handle.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let _ = service
+                                .shutdown_and_exit(code, move |original| app.exit(original))
+                                .await;
+                        });
+                        return;
+                    }
+                }
             }
         }
         if matches!(
