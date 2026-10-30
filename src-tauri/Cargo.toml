@@ -49,7 +49,7 @@ once_cell = "1"
 tempfile = "3"
 axum = "0.7"
 tower = "0.5"
-rusqlite = { version = "0.31", features = ["bundled"], optional = true }
+rusqlite = { version = "=0.40.2", default-features = false, features = ["bundled"], optional = true }
 zstd = { version = "=0.13.3", default-features = false }
 
 [features]

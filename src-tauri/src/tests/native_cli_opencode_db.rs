@@ -966,3 +966,81 @@ fn Opencode_WithoutShmBlocksNewConnectionOnlyDuringCopy_23() {
         .unwrap();
     assert_eq!(count, 0);
 }
+
+#[test]
+#[allow(non_snake_case)]
+fn Opencode_BundledSqliteMatchesQualifiedHost_27() {
+    assert_eq!(
+        rusqlite::version_number(),
+        3_053_002,
+        "application and Host must use the same qualified bundled engine"
+    );
+    let conn = Connection::open_in_memory().unwrap();
+    let source: String = conn
+        .query_row("SELECT sqlite_source_id()", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(
+        source,
+        "2026-06-03 19:12:13 d6e03d8c777cfa2d35e3b60d8ec3e0187f3e9f99d8e2ee9cac695fd6fcdf1a24"
+    );
+    for (option, expected) in [
+        ("THREADSAFE=1", 1),
+        ("NO_SYNC", 0),
+        ("OMIT_WAL", 0),
+        ("OMIT_DISKIO", 0),
+        ("OMIT_COMPILEOPTION_DIAGS", 0),
+    ] {
+        let actual: i32 = conn
+            .query_row("SELECT sqlite_compileoption_used(?1)", [option], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(actual, expected, "qualified engine compile option {option}");
+    }
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn Opencode_PrivateWalReadLeavesOriginalDatabaseBytesUnchanged_28() {
+    let f = Fixture::new();
+    let conn = f.conn();
+    f.register_project(&conn, "p1");
+    seed(
+        &conn,
+        "ses_readonly",
+        "p1",
+        &f.project.to_string_lossy(),
+        "kept",
+        100,
+        None,
+    );
+    let db = f.root.join("opencode.db");
+    let wal = f.root.join("opencode.db-wal");
+    let before_db = std::fs::read(&db).unwrap();
+    let before_wal = std::fs::read(&wal).unwrap();
+    let read_only = super::open_read_only(&db).unwrap();
+    let query_only: i32 = read_only
+        .query_row("PRAGMA query_only", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(query_only, 1);
+    let denied = read_only.execute_batch("DELETE FROM session").unwrap_err();
+    assert!(
+        matches!(denied, rusqlite::Error::SqliteFailure(code, _) if code.code == rusqlite::ErrorCode::ReadOnly)
+    );
+    drop(read_only);
+    assert!(
+        before_wal.len() > 32,
+        "committed rows must actually be present in WAL"
+    );
+    let result = read_history(&Root::open(&f.root).unwrap(), &[f.project_ref()]).unwrap();
+    assert_eq!(result.len(), 1);
+    match &result[0] {
+        ResourceItem::Session {
+            native_session_id, ..
+        } => assert_eq!(native_session_id, "ses_readonly"),
+        _ => panic!("session expected"),
+    }
+    assert_eq!(std::fs::read(db).unwrap(), before_db);
+    assert_eq!(std::fs::read(wal).unwrap(), before_wal);
+    drop(conn);
+}
