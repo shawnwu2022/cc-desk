@@ -93,7 +93,10 @@ fn capture(
 // Adapted from the reviewed OS cmd fixture supervisor; original source is unchanged.
 pub(super) fn run(mode: &str, worker: &str) {
     assert_eq!(worker, "fixed_pty_runtime_worker");
-    assert!(matches!(mode, "custody" | "loader-reject"));
+    assert!(matches!(
+        mode,
+        "custody" | "loader-reject" | "pressure-stop"
+    ));
     let temp = tempfile::tempdir().unwrap();
     let outer = job();
     let os_root = std::env::var_os("SystemRoot").unwrap();

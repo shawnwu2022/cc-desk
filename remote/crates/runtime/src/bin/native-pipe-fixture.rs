@@ -6,6 +6,29 @@ fn main() {
         time::Duration,
     };
     let args: Vec<_> = std::env::args_os().collect();
+    if args.len() == 3 && args[1] == "TEST_ONLY_PTY_OUTPUT" {
+        // Finite public output only. No stdin, account, subprocess or network.
+        std::thread::spawn(|| {
+            std::thread::sleep(Duration::from_secs(15));
+            std::process::exit(90);
+        });
+        let marker = std::path::PathBuf::from(&args[2]);
+        std::fs::write(marker.with_extension("entered"), b"0").unwrap();
+        std::fs::write(marker.with_extension("progress"), b"0").unwrap();
+        std::fs::write(&marker, b"TEST_ONLY_OUTPUT").unwrap();
+        while std::fs::read(marker.with_extension("go")).ok().as_deref() != Some(b"TEST_ONLY_GO") {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let mut out = std::io::stdout().lock();
+        for i in 1..=64 {
+            std::fs::write(marker.with_extension("entered"), i.to_string()).unwrap();
+            out.write_all(&[b'A'; 16384]).unwrap();
+            out.flush().unwrap();
+            std::fs::write(marker.with_extension("progress"), i.to_string()).unwrap();
+        }
+        std::thread::sleep(Duration::from_secs(15));
+        std::process::exit(90);
+    }
     if args.len() == 3 && args[1] == "TEST_ONLY_SLEEP" {
         std::fs::write(&args[2], b"entered").unwrap();
         std::thread::sleep(Duration::from_secs(10));
