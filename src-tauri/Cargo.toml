@@ -14,6 +14,7 @@ serde_json = "1"
 
 [dependencies]
 cc-desk-remote-client = { path = "../remote/crates/client", optional = true }
+cc-desk-remote-host = { path = "../remote/crates/host", optional = true, features = ["experimental-host-owner"] }
 base64 = "=0.22.1"
 minisign-verify = "=0.2.5"
 sha2 = "=0.10.9"
@@ -57,6 +58,7 @@ default = ["sqlite"]
 sqlite = ["rusqlite"]
 history-roundtrip-acceptance = []
 remote-client-ipc = ["dep:cc-desk-remote-client"]
+remote-host = ["remote-client-ipc", "dep:cc-desk-remote-host"]
 
 [target.'cfg(target_os = "windows")'.dependencies]
 tempfile = "3"
@@ -75,3 +77,7 @@ windows = { version = "0.61", features = [
 [profile.release]
 strip = true
 lto = true
+
+[patch.crates-io]
+# Keep Host's existing bounded OSC parser when consumed from this Cargo root.
+vte = { path = "../remote/vendor/vte" }

@@ -157,6 +157,7 @@ impl OwnedClient {
     }
 }
 #[derive(Clone, Copy)]
+#[cfg(any(test, not(feature = "remote-host")))]
 enum ExitIntent {
     Idle,
     Waiting(i32),
@@ -164,6 +165,7 @@ enum ExitIntent {
     Unknown,
 }
 #[derive(Debug, PartialEq, Eq)]
+#[cfg(any(test, not(feature = "remote-host")))]
 pub(crate) enum ExitDecision {
     Proceed,
     Wait(i32),
@@ -174,6 +176,7 @@ struct ServiceState {
     creating: bool,
     closing: bool,
     creation_unknown: bool,
+    #[cfg(any(test, not(feature = "remote-host")))]
     exit: ExitIntent,
     resource: Option<Arc<OwnedClient>>,
 }
@@ -189,6 +192,7 @@ impl Default for RemoteClientService {
                 creating: false,
                 closing: false,
                 creation_unknown: false,
+                #[cfg(any(test, not(feature = "remote-host")))]
                 exit: ExitIntent::Idle,
                 resource: None,
             }),
@@ -373,6 +377,7 @@ impl RemoteClientService {
     }
     /// Preserve the first exit intent even between creation completion and
     /// scheduling its sole waiter. Ready permits only that original code.
+    #[cfg(any(test, not(feature = "remote-host")))]
     pub(crate) fn request_exit(&self, code: i32) -> ExitDecision {
         let (decision, resource) = {
             let mut state = self.state.lock();
@@ -402,6 +407,7 @@ impl RemoteClientService {
         }
         decision
     }
+    #[cfg(any(test, not(feature = "remote-host")))]
     pub(crate) async fn shutdown_and_exit(
         &self,
         code: i32,

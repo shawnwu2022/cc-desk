@@ -5,6 +5,8 @@ use std::sync::{Mutex, OnceLock, Weak};
 pub(super) mod attach;
 #[path = "local_writer_authorized.rs"]
 pub(super) mod authorized;
+#[path = "local_writer_native_host.rs"]
+pub mod native_host;
 const MAX_ACTIVE_WRITERS: usize = 12;
 const MAX_LIFETIME_SESSIONS: usize = 4096;
 pub(super) struct OwnerActivation;

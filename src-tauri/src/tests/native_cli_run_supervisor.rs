@@ -1344,3 +1344,50 @@ fn D15_AdoptGate_ShutdownPinsState_021() {
     assert!(!fixture.supervisor.active_for_test(&fixture.request_run()));
     drop(fixture.attach_probe_stream(&fixture.request_run()));
 }
+
+#[test]
+#[allow(non_snake_case)]
+fn RemoteShutdown_OriginalPublicationAndOwnedIoMustFinish_002() {
+    let fixture = Fixture::new("hold");
+    fixture.supervisor.pause_retirement_publish_for_test();
+    let status = fixture.start();
+    let ready_end = Instant::now() + Duration::from_secs(15);
+    while fixture.child_reports() == 0 && Instant::now() < ready_end {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    if fixture.child_reports() == 0 {
+        fixture.supervisor.release_retirement_publish_for_test();
+        panic!("owned probe did not report ready");
+    }
+    let pin = fixture.supervisor.pin_shutdown(&status.run);
+    let mut shutdown = fixture.supervisor.begin_shutdown_owned(vec![pin]).unwrap();
+    let before = shutdown.observe_run(&status.run);
+    fixture.supervisor.release_retirement_publish_for_test();
+    assert_eq!(
+        before,
+        crate::run_supervisor::NativeShutdownObservation::Pending
+    );
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let observed = shutdown.observe_run(&status.run);
+        if observed
+            == (crate::run_supervisor::NativeShutdownObservation::Unknown {
+                direct_child_reaped: true,
+                io_threads_joined: false,
+                stop_job_joined: true,
+            })
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "owned stop/root observation never completed (whole PTY remains unknown): {observed:?}"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        fixture.child_reports(),
+        1,
+        "shutdown must not relaunch the fixture"
+    );
+}

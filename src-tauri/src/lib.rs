@@ -10,6 +10,8 @@ mod hook_server;
 mod logger;
 #[cfg(feature = "remote-client-ipc")]
 mod remote_client_ipc;
+#[cfg(feature = "remote-host")]
+mod remote_host;
 pub use codex_observer_reporter::run_entry as run_codex_observer_entry;
 mod observer_host;
 mod observer_http;
@@ -131,6 +133,10 @@ fn run_ordinary(initial_dir: Option<String>, #[cfg(windows)] startup: DesktopSta
     let native_shutdown = native_runtime.clone();
     let native_exit_shutdown = native_runtime.clone();
     let builder = tauri::Builder::default();
+    #[cfg(feature = "remote-host")]
+    let builder = builder.manage(std::sync::Arc::new(
+        remote_host::RemoteHostService::default(),
+    ));
     #[cfg(feature = "remote-client-ipc")]
     let builder = builder.manage(std::sync::Arc::new(
         remote_client_ipc::RemoteClientService::default(),
@@ -159,7 +165,18 @@ fn run_ordinary(initial_dir: Option<String>, #[cfg(windows)] startup: DesktopSta
                     api.prevent_close();
                     return;
                 }
+                #[cfg(feature = "remote-host")]
+                if window.label() == "main"
+                    && remote_host::request_app_exit(
+                        window.app_handle(),
+                        0,
+                        native_shutdown.clone(),
+                    )
+                {
+                    api.prevent_close();
+                }
             }
+            #[cfg(not(feature = "remote-host"))]
             if window.label() == "main"
                 && matches!(event, tauri::WindowEvent::CloseRequested { .. })
             {
@@ -350,7 +367,16 @@ fn run_ordinary(initial_dir: Option<String>, #[cfg(windows)] startup: DesktopSta
                 api.prevent_exit();
                 return;
             }
-            #[cfg(feature = "remote-client-ipc")]
+            #[cfg(feature = "remote-host")]
+            if remote_host::request_app_exit(
+                _app_handle,
+                _code.unwrap_or(0),
+                native_exit_shutdown.clone(),
+            ) {
+                api.prevent_exit();
+                return;
+            }
+            #[cfg(all(feature = "remote-client-ipc", not(feature = "remote-host")))]
             {
                 let service = _app_handle
                     .state::<std::sync::Arc<remote_client_ipc::RemoteClientService>>()
@@ -379,6 +405,7 @@ fn run_ordinary(initial_dir: Option<String>, #[cfg(windows)] startup: DesktopSta
             event,
             tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
         ) {
+            #[cfg(not(feature = "remote-host"))]
             native_exit_shutdown.shutdown();
             // 补齐不经窗口 CloseRequested 的退出路径（如更新安装后的退出）。
             // kill_all 先 drain 再逐个杀，窗口关闭路径已清理过时此处为空操作。

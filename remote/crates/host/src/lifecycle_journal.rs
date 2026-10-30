@@ -94,8 +94,7 @@ fn verify_format(db: &Connection, candidate: bool) -> Result<(), Error> {
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .map_err(storage)?;
     if app != APP
-        || (![LEGACY_VERSION, VERSION].contains(&version)
-            && !(candidate && version == RESIZE_VERSION))
+        || !([LEGACY_VERSION, VERSION].contains(&version) || candidate && version == RESIZE_VERSION)
     {
         return Err(Error::Schema);
     }

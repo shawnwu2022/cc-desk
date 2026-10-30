@@ -504,6 +504,73 @@ impl NativeRuntime {
             .stop(&caller, &receipt)
     }
 
+    /// A native provider must first obtain the existing exact run capability.
+    #[cfg(feature = "remote-host")]
+    #[allow(
+        dead_code,
+        reason = "native Host provider remains Locked; no JS pin factory"
+    )]
+    pub(crate) fn pin_remote_run(
+        &self,
+        caller: &CallerIdentity,
+        run: &RunKey,
+    ) -> Result<crate::run_supervisor::NativeRunPin, SafeError> {
+        let _access = self.service.access(caller, run)?;
+        Ok(self
+            .supervisor
+            .as_ref()
+            .ok_or_else(|| error("NATIVE_RUNTIME_NOT_READY"))?
+            .pin_shutdown(run))
+    }
+
+    #[cfg(feature = "remote-host")]
+    pub(crate) fn owns_remote_pin(&self, pin: &crate::run_supervisor::NativeRunPin) -> bool {
+        self.supervisor
+            .as_ref()
+            .is_some_and(|s| s.owns_live_pin(pin))
+    }
+
+    #[cfg(feature = "remote-host")]
+    pub(crate) fn begin_host_shutdown(
+        self: &Arc<Self>,
+        pins: Vec<crate::run_supervisor::NativeRunPin>,
+    ) -> HostNativeShutdown {
+        self.service.begin_shutdown();
+        if let Some(binding) = self.binding.lock().as_ref().cloned() {
+            binding.revoke();
+        }
+        let (stop, unknown) = if pins.is_empty() {
+            (None, false)
+        } else {
+            match self
+                .supervisor
+                .as_ref()
+                .ok_or_else(|| error("NATIVE_RUNTIME_NOT_READY"))
+                .and_then(|s| s.begin_shutdown_owned(pins))
+            {
+                Ok(stop) => (Some(stop), false),
+                Err(_) => (None, true),
+            }
+        };
+        // Retain the original legacy shutdown call; it can block and is never
+        // aborted. Its five-second return is NOT run/IO/command retirement proof.
+        // Any remote native pin therefore still yields Unknown below.
+        let original = self.clone();
+        let desktop = std::thread::Builder::new()
+            .name("remote-desktop-stop".into())
+            .spawn(move || original.shutdown());
+        let (desktop, failed) = match desktop {
+            Ok(job) => (Some(job), false),
+            Err(_) => (None, true),
+        };
+        HostNativeShutdown {
+            stop,
+            desktop,
+            joined: failed,
+            unknown: unknown || failed,
+        }
+    }
+
     pub(crate) fn shutdown(&self) {
         self.service.begin_shutdown();
         // Revoke document/output authority before waiting for process reaping.
@@ -516,6 +583,55 @@ impl NativeRuntime {
             supervisor.shutdown();
         }
         self.service.wait_for_commands();
+    }
+}
+
+#[cfg(feature = "remote-host")]
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum HostNativeObservation {
+    Pending,
+    NoRemoteNativeResources,
+    Unknown,
+}
+#[cfg(feature = "remote-host")]
+pub(crate) struct HostNativeShutdown {
+    stop: Option<crate::run_supervisor::NativeShutdown>,
+    desktop: Option<std::thread::JoinHandle<()>>,
+    joined: bool,
+    unknown: bool,
+}
+#[cfg(feature = "remote-host")]
+impl HostNativeShutdown {
+    #[cfg(test)]
+    pub(crate) fn from_owned_worker_for_test(worker: std::thread::JoinHandle<()>) -> Self {
+        Self {
+            stop: None,
+            desktop: Some(worker),
+            joined: false,
+            unknown: false,
+        }
+    }
+    pub(crate) fn observe(&mut self) -> HostNativeObservation {
+        if self.desktop.as_ref().is_some_and(|job| job.is_finished()) {
+            self.unknown |= self
+                .desktop
+                .take()
+                .expect("owned finished desktop stop")
+                .join()
+                .is_err();
+            self.joined = true;
+        }
+        // Poll all owned stop jobs even if another resource is already unknown.
+        let native = self.stop.as_mut().and_then(|stop| stop.observe_all());
+        if !self.joined || native == Some(crate::run_supervisor::NativeShutdownObservation::Pending)
+        {
+            return HostNativeObservation::Pending;
+        }
+        if self.unknown || native.is_some() {
+            HostNativeObservation::Unknown
+        } else {
+            HostNativeObservation::NoRemoteNativeResources
+        }
     }
 }
 

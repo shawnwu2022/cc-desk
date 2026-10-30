@@ -12,6 +12,8 @@ use replies::{HostOutputHandle, OutputRequest, OutputResult, ReplyState};
 #[path = "local_writer_owner.rs"]
 mod owner;
 #[cfg(feature = "experimental-host-owner")]
+pub use owner::native_host;
+#[cfg(feature = "experimental-host-owner")]
 #[path = "local_writer_resize.rs"]
 mod resize;
 #[cfg(feature = "experimental-host-owner")]

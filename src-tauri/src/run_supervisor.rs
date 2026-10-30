@@ -48,6 +48,8 @@ struct SupervisorCore {
     active: Mutex<HashMap<RunIdentity, Arc<SupervisedRun>>>,
     completed: Mutex<CompletedRuns>,
     shutting_down: AtomicBool,
+    #[cfg(any(test, feature = "remote-host"))]
+    owned_shutdown_started: AtomicBool,
     settled: Condvar,
     #[cfg(test)]
     fail_next_wait: AtomicBool,
@@ -95,6 +97,8 @@ impl NativeRunSupervisor {
                 active: Mutex::new(HashMap::new()),
                 completed: Mutex::new(CompletedRuns::default()),
                 shutting_down: AtomicBool::new(false),
+                #[cfg(any(test, feature = "remote-host"))]
+                owned_shutdown_started: AtomicBool::new(false),
                 settled: Condvar::new(),
                 #[cfg(test)]
                 fail_next_wait: AtomicBool::new(false),
@@ -1027,5 +1031,270 @@ mod convergence_tests {
         assert_eq!(completed.records.len(), 1);
         assert_eq!(completed.order.len(), 1);
         assert_eq!(completed.order.front(), Some(&key));
+    }
+}
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod remote_shutdown_observation_tests {
+    use super::*;
+    #[test]
+    fn RemoteShutdown_EvictedLegacyRecordIsUnknown_001() {
+        let supervisor = NativeRunSupervisor::new(Arc::new(TerminalTransports::new()));
+        for index in 0..=SUPERVISOR_COMPLETED_MAX {
+            let key = RunKey {
+                run_id: format!("TEST_ONLY_EVICTED_{index}"),
+                generation: 1,
+            };
+            let mut record = LifecycleRecord::new(key.clone());
+            record.process_running().unwrap();
+            record.output_started("1").unwrap();
+            record.process_exited().unwrap();
+            record.output_end("0").unwrap();
+            record.parsed_through("0").unwrap();
+            record_completed(
+                &mut supervisor.core.completed.lock(),
+                identity(&key),
+                record,
+            );
+        }
+        let absent = RunKey {
+            run_id: "TEST_ONLY_ABSENT".into(),
+            generation: 1,
+        };
+        let evicted = RunKey {
+            run_id: "TEST_ONLY_EVICTED_0".into(),
+            generation: 1,
+        };
+        let mut shutdown = supervisor
+            .begin_shutdown_owned(vec![
+                supervisor.pin_shutdown(&absent),
+                supervisor.pin_shutdown(&evicted),
+            ])
+            .unwrap();
+        assert_eq!(
+            shutdown.observe_run(&RunKey {
+                run_id: "TEST_ONLY_EVICTED_0".into(),
+                generation: 1
+            }),
+            NativeShutdownObservation::Unknown {
+                direct_child_reaped: false,
+                io_threads_joined: false,
+                stop_job_joined: false
+            }
+        );
+        assert_eq!(
+            shutdown.observe_run(&RunKey {
+                run_id: "TEST_ONLY_ABSENT".into(),
+                generation: 1
+            }),
+            NativeShutdownObservation::Unknown {
+                direct_child_reaped: false,
+                io_threads_joined: false,
+                stop_job_joined: false
+            }
+        );
+    }
+
+    #[test]
+    fn RemoteShutdown_DuplicateAndSecondInvocationAreRejected_003() {
+        let supervisor = NativeRunSupervisor::new(Arc::new(TerminalTransports::new()));
+        let run = RunKey {
+            run_id: "TEST_ONLY_DUPLICATE".into(),
+            generation: 1,
+        };
+        assert!(supervisor
+            .begin_shutdown_owned(vec![
+                supervisor.pin_shutdown(&run),
+                supervisor.pin_shutdown(&run)
+            ])
+            .is_err());
+        assert!(!supervisor.core.shutting_down.load(Ordering::SeqCst));
+        let _held = supervisor
+            .begin_shutdown_owned(vec![supervisor.pin_shutdown(&run)])
+            .unwrap();
+        assert!(supervisor.begin_shutdown_owned(Vec::new()).is_err());
+    }
+
+    #[test]
+    fn RemoteShutdown_ForeignSupervisorPinRejectedBeforeStop_004() {
+        let original = NativeRunSupervisor::new(Arc::new(TerminalTransports::new()));
+        let foreign = NativeRunSupervisor::new(Arc::new(TerminalTransports::new()));
+        let pin = original.pin_shutdown(&RunKey {
+            run_id: "TEST_ONLY_PROVENANCE".into(),
+            generation: 1,
+        });
+        assert!(foreign.begin_shutdown_owned(vec![pin]).is_err());
+        assert!(!foreign.core.shutting_down.load(Ordering::SeqCst));
+    }
+}
+
+/// Narrow observations only: OwnedPty currently proves a direct child, not its tree.
+#[cfg(any(test, feature = "remote-host"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NativeShutdownObservation {
+    Pending,
+    Unknown {
+        direct_child_reaped: bool,
+        io_threads_joined: bool,
+        stop_job_joined: bool,
+    },
+}
+/// Native-only pin. A missing/evicted run never becomes evidence of retirement.
+#[cfg(any(test, feature = "remote-host"))]
+pub(crate) struct NativeRunPin {
+    run: RunKey,
+    origin: Weak<SupervisorCore>,
+    state: Option<Arc<SupervisedRun>>,
+}
+#[cfg(any(test, feature = "remote-host"))]
+struct NativeStopEntry {
+    pin: NativeRunPin,
+    job: Option<std::thread::JoinHandle<Result<(), SafeError>>>,
+    joined: bool,
+    failed: bool,
+}
+#[must_use = "Retain the real stop jobs until observed; dropping is not retirement"]
+#[cfg(any(test, feature = "remote-host"))]
+pub(crate) struct NativeShutdown {
+    entries: Vec<NativeStopEntry>,
+}
+#[cfg(any(test, feature = "remote-host"))]
+impl NativeRunSupervisor {
+    pub(crate) fn pin_shutdown(&self, run: &RunKey) -> NativeRunPin {
+        NativeRunPin {
+            run: run.clone(),
+            origin: Arc::downgrade(&self.core),
+            state: self.core.active.lock().get(&identity(run)).cloned(),
+        }
+    }
+    /// Explicit application shutdown only. Never use for phone disconnection.
+    #[cfg(feature = "remote-host")]
+    pub(crate) fn owns_live_pin(&self, pin: &NativeRunPin) -> bool {
+        pin.state.is_some()
+            && pin
+                .origin
+                .upgrade()
+                .is_some_and(|origin| Arc::ptr_eq(&origin, &self.core))
+    }
+
+    /// Explicit application shutdown only. Never use for phone disconnection.
+    pub(crate) fn begin_shutdown_owned(
+        &self,
+        pins: Vec<NativeRunPin>,
+    ) -> Result<NativeShutdown, SafeError> {
+        if pins.len() > 16 {
+            return Err(error("REMOTE_RESOURCE_CAPACITY"));
+        }
+        for (index, pin) in pins.iter().enumerate() {
+            if !pin
+                .origin
+                .upgrade()
+                .is_some_and(|origin| Arc::ptr_eq(&origin, &self.core))
+            {
+                return Err(error("REMOTE_RESOURCE_ORIGIN"));
+            }
+            if pins[..index]
+                .iter()
+                .any(|other| identity(&other.run) == identity(&pin.run))
+            {
+                return Err(error("REMOTE_DUPLICATE_RESOURCE"));
+            }
+        }
+        if self
+            .core
+            .owned_shutdown_started
+            .swap(true, Ordering::SeqCst)
+        {
+            return Err(error("REMOTE_SHUTDOWN_ALREADY_STARTED"));
+        }
+        self.core.shutting_down.store(true, Ordering::SeqCst);
+        let mut entries = Vec::with_capacity(pins.len());
+        for pin in pins {
+            let job = pin.state.as_ref().map(|state| {
+                let original = state.clone();
+                std::thread::Builder::new()
+                    .name("remote-native-stop".into())
+                    .spawn(move || original.request_stop())
+            });
+            let (job, failed) = match job {
+                Some(Ok(job)) => (Some(job), false),
+                Some(Err(_)) => (None, true),
+                None => (None, false),
+            };
+            entries.push(NativeStopEntry {
+                pin,
+                job,
+                joined: false,
+                failed,
+            });
+        }
+        Ok(NativeShutdown { entries })
+    }
+}
+#[cfg(any(test, feature = "remote-host"))]
+impl NativeShutdown {
+    pub(crate) fn observe_run(&mut self, run: &RunKey) -> NativeShutdownObservation {
+        let unknown = |reaped, joined| NativeShutdownObservation::Unknown {
+            direct_child_reaped: reaped,
+            io_threads_joined: false,
+            stop_job_joined: joined,
+        };
+        let Some(entry) = self
+            .entries
+            .iter_mut()
+            .find(|entry| identity(&entry.pin.run) == identity(run))
+        else {
+            return unknown(false, false);
+        };
+        let Some(state) = entry.pin.state.as_ref() else {
+            return unknown(false, false);
+        };
+        if let Some(job) = entry.job.as_ref() {
+            if !job.is_finished() {
+                return NativeShutdownObservation::Pending;
+            }
+            let result = entry.job.take().expect("observed owned stop job").join();
+            entry.joined = true;
+            entry.failed = !matches!(result, Ok(Ok(())));
+        }
+        let reaped = state.reaped.load(Ordering::SeqCst);
+        if entry.failed {
+            return unknown(reaped, entry.joined);
+        }
+        if !entry.joined
+            || !reaped
+            || !state.adoption_complete.load(Ordering::SeqCst)
+            || !state.registry_retired.load(Ordering::SeqCst)
+        {
+            return NativeShutdownObservation::Pending;
+        }
+        // No old completed-cache record, empty active count or root-process wait
+        // attests reader/waiter joins or PTY descendants. Preserve that Unknown.
+        unknown(reaped, entry.joined)
+    }
+
+    #[cfg(feature = "remote-host")]
+    pub(crate) fn observe_all(&mut self) -> Option<NativeShutdownObservation> {
+        let keys: Vec<_> = self
+            .entries
+            .iter()
+            .map(|entry| entry.pin.run.clone())
+            .collect();
+        let mut result = None;
+        for key in keys {
+            let observed = self.observe_run(&key);
+            if result.is_none() || observed == NativeShutdownObservation::Pending {
+                result = Some(observed);
+            }
+        }
+        result
+    }
+}
+
+#[cfg(feature = "remote-host")]
+impl NativeRunPin {
+    pub(crate) fn key(&self) -> &RunKey {
+        &self.run
     }
 }

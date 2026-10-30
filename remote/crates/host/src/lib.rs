@@ -30,3 +30,5 @@ mod lifecycle_router;
 )]
 mod local_writer;
 mod path_guard;
+#[cfg(feature = "experimental-host-owner")]
+pub use local_writer::native_host;
