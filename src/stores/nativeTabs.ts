@@ -6,6 +6,7 @@ import { parseU64 } from '@/utils/nativeIdentity'
 import type { ObservationState } from '@/integrations/registry'
 import type { ObserverInstallation, ObserverReasonCode } from '@/api/observer'
 import { createNativeId } from '@/utils/nativeId'
+import { logMessage } from '@/api/tauri'
 import type { NativeObservationNotice, NativeObservationNoticeState } from '@/types/nativeObservationNotice'
 import { nativeNoticeReasonCode } from '@/types/nativeObservationNotice'
 import { useHookStore } from './hook'
@@ -319,14 +320,17 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
       // A local store decision is not proof of backend authentication/delivery.
       const after = printableId(value.observedSessionId)
       const ledger = identityDiagnostics.get(value) ?? { count: 0, last: '' }
-      const record = JSON.stringify({ layer: 'frontend-identity',
+      const fields = {
         run: /^run-[0-9a-f]{32}$/.test(value.runId) ? value.runId : 'redacted', generation: value.generation,
         event: eventType, outcome: accepted ? 'adopted' : 'rejected',
         reason: accepted ? before === after ? 'same-id' : before ? 'changed-id' : 'first-id'
-          : before ? 'identity-mismatch' : 'initial-event', before, after })
+          : before ? 'identity-mismatch' : 'initial-event', before, after }
+      const record = JSON.stringify({ layer: 'frontend-identity', ...fields })
       if (identityDiagnosticCount < 128 && ledger.count < 16 && ledger.last !== record) {
         ledger.count++; identityDiagnosticCount++; ledger.last = record
         identityDiagnostics.set(value, ledger)
+        try { void logMessage('info', JSON.stringify({ schema: 'codex-identity-v1', ...fields })).catch(() => {}) }
+        catch { /* Logging cannot change adoption, even if the bridge is absent. */ }
         try { console.info('CC_DESK_CODEX_IDENTITY', record) } catch { /* Diagnostics cannot change adoption. */ }
       }
     }

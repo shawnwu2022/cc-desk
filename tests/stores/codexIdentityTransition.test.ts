@@ -1,6 +1,7 @@
 import { expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { captureNativeAttempt, useNativeTabsStore } from '@/stores/nativeTabs'
+import * as tauri from '@/api/tauri'
 
 // Characterize the candidate policy; this is not a field-event reconstruction.
 it('CodexIdentity_SameRunSessionStartCanReplaceIdentity_001', () => {
@@ -27,6 +28,7 @@ it('CodexIdentity_SameRunSessionStartCanReplaceIdentity_001', () => {
 
 it('CodexIdentity_DiagnosticsDescribeActualStoreDecisionAndStayBounded_002', () => {
   const output = vi.spyOn(console, 'info').mockImplementation(() => {})
+  const transport = vi.spyOn(tauri, 'logMessage').mockResolvedValue(undefined)
   try {
     setActivePinia(createPinia())
     const store = useNativeTabsStore()
@@ -44,6 +46,11 @@ it('CodexIdentity_DiagnosticsDescribeActualStoreDecisionAndStayBounded_002', () 
       { layer: 'frontend-identity', outcome: 'rejected', reason: 'identity-mismatch', before: a, after: a, event: 'stop' },
       { layer: 'frontend-identity', outcome: 'adopted', reason: 'changed-id', before: a, after: b, event: 'sessionStart' },
     ])
+    expect(transport.mock.calls).toHaveLength(3)
+    const fileRecords = transport.mock.calls.map(call => JSON.parse(call[1]))
+    expect(fileRecords[0]).toEqual({ schema: 'codex-identity-v1', run: tab.runId, generation: 1,
+      event: 'sessionStart', outcome: 'adopted', reason: 'first-id', before: null, after: a })
+    expect(fileRecords.every(record => !('layer' in record))).toBe(true)
     const count = output.mock.calls.length
     store.applyObservationIdentity(tab.tabId, { ...owner, generation: 99 }, a, 'sessionStart')
     store.applyObservationIdentity(tab.tabId, owner, 'PRIVATE_TOKEN', 'sessionStart')
@@ -62,7 +69,7 @@ it('CodexIdentity_DiagnosticsDescribeActualStoreDecisionAndStayBounded_002', () 
       run: { runId: claude.runId, generation: claude.generation }, revision: '2', phase: 'running', failure: null })
     store.applyObservationIdentity(claude.tabId, captureNativeAttempt(claude), 'PRIVATE_CLAUDE', 'sessionStart')
     expect(output.mock.calls).toHaveLength(beforeRetire)
-  } finally { output.mockRestore() }
+  } finally { output.mockRestore(); transport.mockRestore() }
 })
 
 it('CodexIdentity_DiagnosticFailureDoesNotChangeAdoption_003', () => {
