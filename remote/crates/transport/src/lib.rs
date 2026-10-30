@@ -142,6 +142,10 @@ where
                     }
                     Ok(Some(Ok(Message::Pong(_))))=>{}
                     Ok(Some(Ok(Message::Close(_))))|Ok(None)=>break Err(TransportError::Closed),
+                    Ok(Some(Err(tokio_tungstenite::tungstenite::Error::ConnectionClosed
+                        |tokio_tungstenite::tungstenite::Error::AlreadyClosed
+                        |tokio_tungstenite::tungstenite::Error::Protocol(tokio_tungstenite::tungstenite::error::ProtocolError::ResetWithoutClosingHandshake))))=>break Err(TransportError::Closed),
+                    Ok(Some(Err(tokio_tungstenite::tungstenite::Error::Io(_))))=>break Err(TransportError::Io),
                     _=>break Err(TransportError::Wire),
                 }
             }
@@ -192,6 +196,29 @@ fn deliver(bytes: &[u8], incoming: &Routes) -> Result<(), TransportError> {
 mod tests {
     use super::*;
     use cc_desk_remote_protocol::{Subframe, encode_outer};
+    #[tokio::test]
+    async fn abrupt_owned_websocket_peer_exit_is_closed_not_malformed_wire() {
+        let (client, peer) = tokio::io::duplex(65536);
+        let ws = tokio_tungstenite::WebSocketStream::from_raw_socket(
+            client,
+            tokio_tungstenite::tungstenite::protocol::Role::Client,
+            Some(websocket_config()),
+        )
+        .await;
+        let (_app, route) = bounded_tunnel();
+        let (_stop, token) = tokio::sync::watch::channel(false);
+        drop(peer);
+        assert_eq!(
+            drive(
+                ws,
+                std::collections::HashMap::from([([9; 16], route)]),
+                token,
+                std::time::Duration::from_secs(1)
+            )
+            .await,
+            Err(TransportError::Closed)
+        );
+    }
     #[test]
     fn full_later_queue_cannot_partially_deliver_earlier_frame() {
         let (a, mut ar) = tokio::sync::mpsc::channel(4);
