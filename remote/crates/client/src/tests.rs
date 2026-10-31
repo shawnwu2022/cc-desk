@@ -18,7 +18,7 @@ impl NativeGrantSigner for PublicSigner {
         Box::pin(async move { Ok(support::signed(request.payload(), request.issuer_kid())) })
     }
 }
-async fn channels(
+pub(super) async fn channels(
     now: Arc<AtomicU64>,
 ) -> (RunningChannel, RunningChannel, GrantGate, CancelHandle) {
     let local = |client| {

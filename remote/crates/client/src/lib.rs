@@ -2,6 +2,9 @@
 //! client channel, never a JS identity, connection label or authorization flag.
 //! No IPC registration, listener, enrollment or automatic retry is installed.
 use cc_desk_remote_record::{command, control_io as wire, grant::SessionScope, projection};
+pub use cc_desk_remote_record::{
+    grant::DataRole as ClientRole, projection::Target as ClientTarget,
+};
 pub use cc_desk_remote_security::DataError;
 use cc_desk_remote_security::{BoundDataAuthority, Role, RunningChannel};
 use std::time::Duration;
@@ -12,6 +15,12 @@ pub struct NativeClient {
     scope: SessionScope,
     fence: u64,
     pending: Mutex<()>,
+}
+/// Safe display metadata from one installed live authority; never connection inputs.
+pub struct ClientDescriptor {
+    pub target: ClientTarget,
+    pub binding: String,
+    pub role: ClientRole,
 }
 /// Bounded opaque wire parts. The UI reducer must still install the complete
 /// semantic frame; returning these bytes never authorizes input or an ACK.
@@ -152,6 +161,30 @@ impl NativeClient {
     }
     pub fn binding_id(&self) -> [u8; 32] {
         self.channel.binding_id()
+    }
+    pub fn descriptor(&self) -> Result<ClientDescriptor, DataError> {
+        let authority = self.channel.authority();
+        authority.check()?;
+        if !self.channel.peer_install_enabled() || self.channel.installed_fence()? != self.fence {
+            return Err(DataError::Context);
+        }
+        let descriptor = ClientDescriptor {
+            target: ClientTarget {
+                host: authority.context().host_endpoint_id.clone(),
+                session: self.scope.session.clone(),
+                run: self.scope.run.clone(),
+                generation: self.scope.generation.clone(),
+                incarnation: authority.context().incarnation.clone(),
+            },
+            binding: authority
+                .binding_id()
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect(),
+            role: authority.data_role(),
+        };
+        authority.check()?;
+        Ok(descriptor)
     }
     fn record(&self, record: &cc_desk_remote_security::DataRecord) -> Result<(), DataError> {
         let authority = self.channel.authority();

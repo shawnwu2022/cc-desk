@@ -31,6 +31,29 @@ remote endpoint, native key provider or production connection factory is enabled
 here. The native-only `install_native` entry has no application caller yet; there
 is no JavaScript connect, grant or pairing command and no signed phone shell.
 
+The default-off feature also registers `remote_client_current` with a strictly
+empty raw JSON object request. Actual WebView and original document admission run
+before decoding and before returning the safe status. It returns `{ "state":
+"Locked" }` until that exact document owns a live registered native client whose
+peer installation fence is verified. Ready adds only `resourceId`, `target`
+(`host`, `session`, `run`, `generation`, `incarnation`), hex `binding`, and `role`
+(`Controller` or `Viewer`, the display name for Observer). Expired, closed,
+unregistered, legacy fence-only and shutting-down resources cannot advertise
+Ready. This is display metadata, not authority for subsequent calls; every
+operation still checks the original resource/document/channel. Viewer status
+does not add snapshot or control permissions to the existing protocol.
+
+`NativeClient::descriptor()` derives this metadata from its original channel and
+live grant; it accepts no caller-supplied target, role, origin or key reference.
+The getter creates no connection. Production wiring still needs an authenticated
+native connection factory calling `install_native`, enrolled role-specific relay
+and endpoint identities/pins, native administrative grant confirmation/signing,
+and a qualified native clock. `RelaySigner` and `NativeGrantSigner` currently have
+fixture implementations only. A blocking CNG presence/sign operation cannot meet
+their cooperative deadline/drop contract by detaching a thread or merely timing
+out a future. A real implementation needs separately qualified owned native
+isolation and cleanup before production connection support can be claimed.
+
 App exit seals native admission atomically, retains the original exit code and
 waits for any original native creation reservation before joining its resource.
 One tracked waiter may remain pending if a synchronous native factory does not

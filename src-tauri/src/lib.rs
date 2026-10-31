@@ -263,6 +263,8 @@ fn run_ordinary(initial_dir: Option<String>, #[cfg(windows)] startup: DesktopSta
         })
         .invoke_handler(tauri::generate_handler![
             #[cfg(feature = "remote-client-ipc")]
+            remote_client_ipc::remote_client_current,
+            #[cfg(feature = "remote-client-ipc")]
             remote_client_ipc::remote_client_snapshot,
             #[cfg(feature = "remote-client-ipc")]
             remote_client_ipc::remote_client_exchange,

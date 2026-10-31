@@ -8,7 +8,7 @@ use crate::cli::{
     types::SafeError,
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use cc_desk_remote_client::NativeClient;
+use cc_desk_remote_client::{ClientRole, ClientTarget, NativeClient};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::sync::{
@@ -32,6 +32,33 @@ struct WireRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct CloseRequest {
     resource_id: u32,
+}
+struct CurrentRequest {}
+impl<'de> Deserialize<'de> for CurrentRequest {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // Serde's empty struct visitor also accepts []; the wire contract is {}.
+        let fields = serde_json::Map::<String, serde_json::Value>::deserialize(deserializer)?;
+        if !fields.is_empty() {
+            return Err(serde::de::Error::custom("empty object required"));
+        }
+        Ok(Self {})
+    }
+}
+#[derive(Serialize)]
+#[serde(tag = "state", rename_all_fields = "camelCase")]
+pub(crate) enum CurrentReply {
+    Locked,
+    Ready {
+        resource_id: u32,
+        target: ClientTarget,
+        binding: String,
+        role: CurrentRole,
+    },
+}
+#[derive(Serialize)]
+pub(crate) enum CurrentRole {
+    Controller,
+    Viewer,
 }
 #[derive(Serialize)]
 pub(crate) struct ByteReply {
@@ -220,6 +247,44 @@ impl Drop for CreationGuard<'_> {
     }
 }
 impl RemoteClientService {
+    fn current(
+        &self,
+        caller: &CallerIdentity,
+        binding: &Arc<DocumentBinding<NativeRun>>,
+    ) -> Result<CurrentReply, SafeError> {
+        binding.check_admitted(caller)?;
+        let state = self.state.lock();
+        if state.closing || state.creating || state.creation_unknown {
+            return Ok(CurrentReply::Locked);
+        }
+        let Some(resource) = &state.resource else {
+            return Ok(CurrentReply::Locked);
+        };
+        if resource.caller != *caller
+            || !resource
+                .binding
+                .upgrade()
+                .is_some_and(|original| Arc::ptr_eq(&original, binding))
+        {
+            return Err(error("FORBIDDEN"));
+        }
+        if resource.closed.load(Ordering::Acquire) || resource.ticket.lock().is_none() {
+            return Ok(CurrentReply::Locked);
+        }
+        let Ok(descriptor) = resource.client.descriptor() else {
+            return Ok(CurrentReply::Locked);
+        };
+        resource.check()?;
+        Ok(CurrentReply::Ready {
+            resource_id: resource.id,
+            target: descriptor.target,
+            binding: descriptor.binding,
+            role: match descriptor.role {
+                ClientRole::Controller => CurrentRole::Controller,
+                ClientRole::Observer => CurrentRole::Viewer,
+            },
+        })
+    }
     fn begin_create(&self) -> Result<CreationGuard<'_>, SafeError> {
         let mut state = self.state.lock();
         if state.closing {
@@ -458,6 +523,19 @@ fn admission(
     Ok((binding, caller))
 }
 #[tauri::command]
+pub(crate) fn remote_client_current(
+    webview: Webview,
+    request: Request<'_>,
+    runtime: State<'_, Arc<NativeRuntime>>,
+    service: State<'_, Arc<RemoteClientService>>,
+) -> Result<CurrentReply, SafeError> {
+    let (binding, caller) = admission(&runtime, &webview, &request)?;
+    let _: CurrentRequest = decode(request.body(), 128)?;
+    let reply = service.current(&caller, &binding)?;
+    binding.check_admitted(&caller)?;
+    Ok(reply)
+}
+#[tauri::command]
 pub(crate) async fn remote_client_exchange(
     webview: Webview,
     request: Request<'_>,
@@ -541,6 +619,9 @@ pub(crate) async fn remote_client_close(
     binding.check_admitted(&caller)
 }
 #[cfg(test)]
+#[path = "tests/native_cli_remote_channels.rs"]
+mod current_test_channels;
+#[cfg(test)]
 mod tests {
     use super::*;
     #[test]
@@ -561,6 +642,104 @@ mod tests {
         assert_eq!(id, 1);
         assert_eq!(b, [1, 2, 3]);
         assert_eq!(budget, Duration::from_secs(1));
+    }
+    #[test]
+    fn current_request_accepts_only_empty_raw_object() {
+        assert!(decode::<CurrentRequest>(&InvokeBody::Raw(b"{}".to_vec()), 128).is_ok());
+        for raw in [
+            b"null".as_slice(),
+            b"[]",
+            b"{\"resourceId\":1}",
+            b"{\"state\":\"Ready\"}",
+        ] {
+            assert!(decode::<CurrentRequest>(&InvokeBody::Raw(raw.to_vec()), 128).is_err());
+        }
+        assert!(decode::<CurrentRequest>(&InvokeBody::Json(serde_json::json!({})), 128).is_err());
+    }
+    #[test]
+    fn current_without_resource_is_locked_and_revoked_document_is_rejected() {
+        use crate::cli::{document::DocumentAuthority, run_registry::RunRegistry};
+        let registry = Arc::new(RunRegistry::<NativeRun>::new(2));
+        let url = "http://tauri.localhost/index.html".parse().unwrap();
+        let authority = DocumentAuthority::new(registry, url).unwrap();
+        let caller = authority.test_caller();
+        let mut table = tauri::ResourceTable::default();
+        let binding = Arc::new(authority.attach(&mut table).unwrap());
+        let url = "http://tauri.localhost/index.html".parse().unwrap();
+        authority.started(&url);
+        authority.finished(&url);
+        let service = RemoteClientService::default();
+        assert_eq!(
+            serde_json::to_value(service.current(&caller, &binding).unwrap()).unwrap(),
+            serde_json::json!({"state":"Locked"})
+        );
+        authority.revoke();
+        assert!(service.current(&caller, &binding).is_err());
+    }
+    #[tokio::test]
+    async fn current_exposes_only_original_installed_live_resource() {
+        use crate::cli::{document::DocumentAuthority, run_registry::RunRegistry};
+        let scope = cc_desk_remote_record::grant::SessionScope {
+            session: "02".repeat(16),
+            run: "TEST_ONLY_CURRENT".into(),
+            generation: "3".into(),
+        };
+        let (c, h, _gate, _cancel) = current_test_channels::channels(scope).await;
+        let r = h.host_install_request().await.unwrap();
+        let (proof, done) = tokio::join!(c.client_installed(), h.complete_host_install(r, 7));
+        done.unwrap();
+        let client = NativeClient::from_installed(c, proof.unwrap()).unwrap();
+        let expected = client.descriptor().unwrap();
+        let registry = Arc::new(RunRegistry::<NativeRun>::new(2));
+        let url = "http://tauri.localhost/index.html".parse().unwrap();
+        let authority = DocumentAuthority::new(registry, url).unwrap();
+        let caller = authority.test_caller();
+        let mut table = tauri::ResourceTable::default();
+        let binding = Arc::new(authority.attach(&mut table).unwrap());
+        let url = "http://tauri.localhost/index.html".parse().unwrap();
+        authority.started(&url);
+        authority.finished(&url);
+        let service = RemoteClientService::default();
+        let resource = OwnedClient::new(1, caller.clone(), &binding, client);
+        service.state.lock().resource = Some(resource.clone());
+        // Publication without the original revocation registration is not Ready.
+        assert!(matches!(
+            service.current(&caller, &binding).unwrap(),
+            CurrentReply::Locked
+        ));
+        let weak = Arc::downgrade(&resource);
+        *resource.ticket.lock() = Some(
+            binding
+                .on_revoke(
+                    &caller,
+                    Arc::new(move || {
+                        if let Some(resource) = weak.upgrade() {
+                            resource.retire();
+                        }
+                    }),
+                )
+                .unwrap(),
+        );
+        let reply = serde_json::to_value(service.current(&caller, &binding).unwrap()).unwrap();
+        assert_eq!(
+            reply,
+            serde_json::json!({
+                "state":"Ready", "resourceId":1, "target":expected.target,
+                "binding":expected.binding, "role":"Controller",
+            })
+        );
+        let foreign_registry = Arc::new(RunRegistry::<NativeRun>::new(2));
+        let foreign_authority = DocumentAuthority::new(foreign_registry, url.clone()).unwrap();
+        let foreign_caller = foreign_authority.test_caller();
+        let mut foreign_table = tauri::ResourceTable::default();
+        let foreign_binding = Arc::new(foreign_authority.attach(&mut foreign_table).unwrap());
+        foreign_authority.started(&url);
+        foreign_authority.finished(&url);
+        assert!(service.current(&foreign_caller, &foreign_binding).is_err());
+        authority.revoke();
+        assert!(service.current(&caller, &binding).is_err());
+        service.shutdown().await.unwrap();
+        h.close().await;
     }
 }
 
