@@ -99,6 +99,14 @@ impl NativeRuntime {
             supervisor,
         }
     }
+    #[cfg(all(test, feature = "remote-host"))]
+    pub(crate) fn with_owned_components_for_test(
+        service: Arc<LaunchService>,
+        transports: Arc<TerminalTransports>,
+        supervisor: Arc<NativeRunSupervisor>,
+    ) -> Self {
+        Self::with_components(service, transports, Some(supervisor))
+    }
 
     pub(crate) fn production(
         admission: crate::version_history::maintenance::AdmissionGate,

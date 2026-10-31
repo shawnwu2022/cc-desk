@@ -5,6 +5,7 @@ use crate::remote_client_ipc::RemoteClientService;
 use crate::run_supervisor::NativeRunPin;
 use cc_desk_remote_host::native_host::{NativeHost, WriterRetirement};
 use parking_lot::Mutex;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::Manager;
@@ -41,6 +42,24 @@ enum ExitIntent {
     Ready(i32),
     Unknown,
 }
+/// Original per-channel task custody. Cancelling a join observer leaves the
+/// original JoinHandle in its slot; a panic remains Unknown rather than retired.
+struct PeerPump {
+    join: tokio::sync::Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
+    joined: AtomicU8,
+}
+impl PeerPump {
+    async fn join(&self) -> bool {
+        let mut slot = self.join.lock().await;
+        if let Some(worker) = slot.as_mut() {
+            let success = worker.await.is_ok();
+            *slot = None;
+            self.joined
+                .store(if success { 1 } else { 2 }, Ordering::Release);
+        }
+        self.joined.load(Ordering::Acquire) == 1
+    }
+}
 struct ServiceState {
     // Locked/off: no JS registration or production provider factory is exposed.
     host: Option<NativeHost>,
@@ -50,6 +69,7 @@ struct ServiceState {
     retired: bool,
     exit: ExitIntent,
     waiter: Option<tauri::async_runtime::JoinHandle<()>>,
+    peer_pump: Option<Arc<PeerPump>>,
 }
 pub(crate) struct RemoteHostService {
     state: Mutex<ServiceState>,
@@ -65,6 +85,7 @@ impl Default for RemoteHostService {
                 retired: false,
                 exit: ExitIntent::Idle,
                 waiter: None,
+                peer_pump: None,
             }),
         }
     }
@@ -77,7 +98,7 @@ impl RemoteHostService {
         reason = "production native provider/identity bootstrap remains Locked"
     )]
     pub(crate) fn adopt_native(
-        &self,
+        self: &Arc<Self>,
         runtime: &NativeRuntime,
         webview: &tauri::Webview,
         headers: &tauri::http::HeaderMap,
@@ -99,8 +120,8 @@ impl RemoteHostService {
                 Box::new((error, Some(original)))
             })
     }
-    fn adopt_admitted(
-        &self,
+    pub(crate) fn adopt_admitted(
+        self: &Arc<Self>,
         admission: crate::run_supervisor::NativeRunAdmission,
         channel: Arc<cc_desk_remote_host::native_host::NativeChannel>,
         runtime: &NativeRuntime,
@@ -129,12 +150,122 @@ impl RemoteHostService {
         }
         let pin = admission.adopt(
             state.host.as_mut().expect("retained original Host"),
-            channel,
+            channel.clone(),
         )?;
         // Successful admission consumption drops its extra RunAccess/original Arc;
         // shutdown retains only the original lifetime pin and Host-owned pending.
         state.pins.push(pin);
+        let original = self.clone();
+        let worker = tauri::async_runtime::spawn(async move {
+            original.pump_peer(channel).await;
+        });
+        // Publish the original handle while the service lock is still held.
+        // The worker cannot observe its Host before this custody is registered.
+        state.peer_pump = Some(Arc::new(PeerPump {
+            join: tokio::sync::Mutex::new(Some(worker)),
+            joined: AtomicU8::new(0),
+        }));
         Ok(())
+    }
+    async fn pump_peer(&self, channel: Arc<cc_desk_remote_host::native_host::NativeChannel>) {
+        let mut connection = loop {
+            if channel.authority().check().is_err() {
+                break None;
+            }
+            let (closing, connection) = {
+                let mut state = self.state.lock();
+                let closing = state.closing;
+                let connection = if closing {
+                    None
+                } else {
+                    state.host.as_mut().and_then(|host| {
+                        host.drive_peer_installs();
+                        host.peer_connection(&channel).ok()
+                    })
+                };
+                (closing, connection)
+            };
+            if closing {
+                break None;
+            }
+            if let Some(connection) = connection {
+                break Some(connection);
+            }
+            if channel
+                .peer_install_deadline()
+                .is_none_or(|end| tokio::time::Instant::now() >= end)
+            {
+                break None;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+        if let Some(connection) = connection.as_mut() {
+            let scope = channel.authority().scope().clone();
+            if let Ok(fence) = channel.installed_fence() {
+                loop {
+                    if self.state.lock().closing || channel.authority().check().is_err() {
+                        break;
+                    }
+                    match channel.receive(&scope, fence, Duration::from_secs(1)).await {
+                        Ok(record) => {
+                            if connection
+                                .dispatch_received(&record, Duration::from_secs(1))
+                                .await
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
+                        // Receive leaves its original bounded inbox intact on a
+                        // no-effect idle timeout. Writes/dispatch are NEVER retried.
+                        Err(cc_desk_remote_client::DataError::Deadline) => continue,
+                        Err(_) => break,
+                    }
+                }
+            }
+        }
+        drop(connection);
+        channel.authority().request_close();
+        let _ = channel.wait_closed().await;
+        // Phone/channel loss never seals the native writer or stops its process.
+    }
+    async fn join_peer_pump(&self) -> bool {
+        let pump = self.state.lock().peer_pump.clone();
+        if let Some(pump) = pump {
+            pump.join().await
+        } else {
+            true
+        }
+    }
+    #[cfg(test)]
+    pub(crate) fn test_begin_host_shutdown(&self) {
+        let mut state = self.state.lock();
+        state.closing = true;
+        if let Some(host) = &mut state.host {
+            host.begin_shutdown();
+        }
+    }
+    #[cfg(test)]
+    pub(crate) fn test_writer_retirement(&self) -> WriterRetirement {
+        self.state
+            .lock()
+            .host
+            .as_mut()
+            .map_or(WriterRetirement::Joined, NativeHost::observe_shutdown)
+    }
+    #[cfg(test)]
+    pub(crate) async fn test_join_network(&self) -> bool {
+        let joined = self.join_peer_pump().await;
+        let network = self
+            .state
+            .lock()
+            .host
+            .as_ref()
+            .and_then(NativeHost::network_retirement);
+        if let Some(network) = network {
+            network.wait().await;
+        }
+        joined
     }
     pub(crate) fn request_exit(&self, code: i32, maintenance_blocked: bool) -> ExitDecision {
         // A maintenance refusal cannot seal admission or replace the first code.
@@ -195,16 +326,17 @@ impl RemoteHostService {
     ) -> tauri::async_runtime::JoinHandle<()> {
         let original = self.clone();
         tauri::async_runtime::spawn(async move {
-            let (client_result, (), owned_known) = tokio::join!(
+            let (client_result, (), owned_known, pump_known) = tokio::join!(
                 client.shutdown(),
                 async move {
                     if let Some(networks) = networks {
                         networks.wait().await;
                     }
                 },
-                original.observe_owned()
+                original.observe_owned(),
+                original.join_peer_pump()
             );
-            if client_result.is_err() || !owned_known {
+            if client_result.is_err() || !owned_known || !pump_known {
                 original.mark_unknown();
                 return;
             }
@@ -245,6 +377,28 @@ impl RemoteHostService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn cancelling_peer_join_keeps_the_original_owned_task() {
+        let (release, wait) = tokio::sync::oneshot::channel();
+        let completed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let observed = completed.clone();
+        let worker = tauri::async_runtime::spawn(async move {
+            let _ = wait.await;
+            observed.store(true, Ordering::Release);
+        });
+        let pump = PeerPump {
+            join: tokio::sync::Mutex::new(Some(worker)),
+            joined: AtomicU8::new(0),
+        };
+        assert!(tokio::time::timeout(Duration::from_millis(10), pump.join())
+            .await
+            .is_err());
+        assert!(pump.join.lock().await.is_some());
+        assert!(!completed.load(Ordering::Acquire));
+        release.send(()).unwrap();
+        assert!(pump.join().await);
+        assert!(completed.load(Ordering::Acquire));
+    }
     #[test]
     fn exit_keeps_first_code_and_maintenance_refusal_does_not_seal() {
         let service = RemoteHostService::default();

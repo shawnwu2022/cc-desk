@@ -17,6 +17,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tauri::ipc::{Channel, InvokeResponseBody};
 
+#[cfg(feature = "remote-host")]
+#[path = "native_cli_remote_composition.rs"]
+mod remote_composition;
+
 #[cfg(windows)]
 #[allow(dead_code, clippy::duplicate_mod)]
 #[path = "../conpty_runtime.rs"]

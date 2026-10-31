@@ -60,6 +60,14 @@ history-roundtrip-acceptance = []
 remote-client-ipc = ["dep:cc-desk-remote-client"]
 remote-host = ["remote-client-ipc", "dep:cc-desk-remote-host"]
 
+[dev-dependencies]
+# Public TEST_ONLY vector channels for the original-resource composition test.
+cc-desk-remote-security = { path = "../remote/crates/security", features = ["experimental"] }
+cc-desk-remote-record = { path = "../protocol/remote/inner/v1" }
+rustls = { version = "=0.23.46", default-features = false, features = ["std", "ring"] }
+ring = "=0.17.14"
+coset = "=0.4.2"
+
 [target.'cfg(target_os = "windows")'.dependencies]
 tempfile = "3"
 webview2-com = "0.38"

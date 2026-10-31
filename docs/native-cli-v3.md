@@ -186,6 +186,18 @@ through cancellation/expiry. It compares the adapter-reported size before publis
 ConPTY's cached size is not independent OS evidence. The actual provider connection
 entry and wire lifecycle route remain Locked/unregistered until their native adapters
 are connected and qualified.
+
+The native service retains one original per-channel pump for install coordination
+and the existing snapshot/ACK/window/input dispatcher. A receive-only idle deadline
+is a bounded poll; native writes and dispatch are never automatically retried.
+Channel loss closes its authority and pump while local input/process ownership
+continues. Explicit app exit signals exact channels first and awaits the original
+pump join before retirement; existing unknown native IO/Job gates remain unchanged.
+The app composition fixture uses real RPK TLS/AppBind/grant exchange over bounded
+duplex with public TEST_ONLY vectors and a fresh owned Node: three remote bytes,
+original receipt/query/settlement, pre-ACK replay denial and three local bytes are
+observed as exactly six child-consumed bytes. This is not phone/WebView/enrolled-key
+or process-tree qualification.
 These capture facts are not remote admission. Identity provisioning, the production
 verified connection entry and complete Job/process-tree retirement remain separate
 release gates; this bridge does not enroll credentials or enable remote access.
