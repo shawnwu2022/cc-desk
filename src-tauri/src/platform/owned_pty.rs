@@ -13,6 +13,11 @@ use portable_pty::{native_pty_system, CommandBuilder, ExitStatus, MasterPty, Pty
 use std::io::{self, Read, Write};
 #[cfg(windows)]
 use std::sync::atomic::{AtomicPtr, Ordering};
+#[cfg(any(test, feature = "remote-host"))]
+use std::sync::{
+    atomic::{AtomicU8, Ordering as DropOrdering},
+    Arc,
+};
 
 #[cfg(windows)]
 #[link(name = "kernel32")]
@@ -26,6 +31,8 @@ unsafe extern "system" {
 /// D14/D15 supply autonomous waiting, output draining and explicit stop policy.
 /// In particular, releasing these handles is not a claim that output was parsed.
 pub(crate) struct OwnedPty {
+    #[cfg(any(test, feature = "remote-host"))]
+    io_drop: IoDropWitness,
     mutation: Mutex<PtyMutation>,
     #[cfg(test)]
     mutation_barrier: Mutex<Option<mutation_test::Hook>>,
@@ -40,12 +47,116 @@ pub(crate) struct OwnedPty {
     process_handle: AtomicPtr<std::ffi::c_void>,
 }
 
+/// Rust-owner destructor return only, not kernel close or process/IO retirement.
+#[cfg(any(test, feature = "remote-host"))]
+#[derive(Clone, Default)]
+pub(crate) struct IoDropWitness(Arc<AtomicU8>);
+#[cfg(any(test, feature = "remote-host"))]
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum IoDropState {
+    Pending,
+    Returned,
+    Unknown,
+}
+#[cfg(any(test, feature = "remote-host"))]
+impl IoDropWitness {
+    pub(crate) fn observe(&self) -> IoDropState {
+        let bits = self.0.load(DropOrdering::Acquire);
+        let returned = bits & 7;
+        let failed = (bits >> 3) & 7;
+        if (returned | failed) != 7 {
+            IoDropState::Pending
+        } else if failed != 0 {
+            IoDropState::Unknown
+        } else {
+            IoDropState::Returned
+        }
+    }
+    pub(crate) fn all_returned(&self) -> bool {
+        self.0.load(DropOrdering::Acquire) == 7
+    }
+}
+
+#[cfg(any(test, feature = "remote-host"))]
+struct TrackedDrop<T> {
+    inner: Option<T>,
+    witness: IoDropWitness,
+    bit: u8,
+}
+#[cfg(any(test, feature = "remote-host"))]
+impl<T> TrackedDrop<T> {
+    fn new(inner: T, witness: IoDropWitness, bit: u8) -> Self {
+        Self {
+            inner: Some(inner),
+            witness,
+            bit,
+        }
+    }
+}
+#[cfg(any(test, feature = "remote-host"))]
+impl<T> std::ops::Deref for TrackedDrop<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        self.inner
+            .as_ref()
+            .expect("original I/O owner exists until Drop")
+    }
+}
+#[cfg(any(test, feature = "remote-host"))]
+impl<T> std::ops::DerefMut for TrackedDrop<T> {
+    fn deref_mut(&mut self) -> &mut T {
+        self.inner
+            .as_mut()
+            .expect("original I/O owner exists until Drop")
+    }
+}
+#[cfg(any(test, feature = "remote-host"))]
+impl<T: Read> Read for TrackedDrop<T> {
+    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        self.inner.as_mut().expect("original reader").read(bytes)
+    }
+}
+// This guard records FAILURE on unwind, never success from a later field Drop.
+#[cfg(any(test, feature = "remote-host"))]
+struct DropFailure<'a> {
+    witness: &'a IoDropWitness,
+    bit: u8,
+    returned: bool,
+}
+#[cfg(any(test, feature = "remote-host"))]
+impl Drop for DropFailure<'_> {
+    fn drop(&mut self) {
+        if !self.returned {
+            self.witness
+                .0
+                .fetch_or(self.bit << 3, DropOrdering::Release);
+        }
+    }
+}
+#[cfg(any(test, feature = "remote-host"))]
+impl<T> Drop for TrackedDrop<T> {
+    fn drop(&mut self) {
+        let mut failure = DropFailure {
+            witness: &self.witness,
+            bit: self.bit,
+            returned: false,
+        };
+        drop(self.inner.take());
+        failure.returned = true;
+        self.witness.0.fetch_or(self.bit, DropOrdering::Release);
+    }
+}
+#[cfg(any(test, feature = "remote-host"))]
+type IoOwner<T> = TrackedDrop<T>;
+#[cfg(not(any(test, feature = "remote-host")))]
+type IoOwner<T> = T;
+
 // The original handles stay in one per-PTY mutation owner. A complete user or
 // protocol frame and native resize cannot run concurrently. Reader and root
 // control deliberately do not acquire this potentially blocking region.
 struct PtyMutation {
-    master: Box<dyn MasterPty + Send>,
-    writer: Box<dyn Write + Send>,
+    master: IoOwner<Box<dyn MasterPty + Send>>,
+    writer: IoOwner<Box<dyn Write + Send>>,
 }
 
 impl std::fmt::Debug for OwnedPty {
@@ -96,14 +207,21 @@ impl OwnedPty {
         mut admission: PreparingStart,
         native: bool,
     ) -> Result<Self, SafeError> {
+        #[cfg(any(test, feature = "remote-host"))]
+        let io_drop = IoDropWitness::default();
         let reader = pair
             .master
             .try_clone_reader()
             .map_err(|_| error("HOST_READER_UNAVAILABLE"))?;
+        // Allocate the transferred wrapper before any child can be created.
+        #[cfg(any(test, feature = "remote-host"))]
+        let reader: Box<dyn Read + Send> = Box::new(TrackedDrop::new(reader, io_drop.clone(), 1));
         let writer = pair
             .master
             .take_writer()
             .map_err(|_| error("HOST_WRITER_UNAVAILABLE"))?;
+        #[cfg(any(test, feature = "remote-host"))]
+        let writer = TrackedDrop::new(writer, io_drop.clone(), 2);
         let ticket = admission.begin_creation();
         let child = if native {
             AdmittedChild::spawn_native(pair.slave.as_ref(), command, ticket)
@@ -125,11 +243,14 @@ impl OwnedPty {
         let process_handle = AtomicPtr::new(child.raw_handle());
         // Do not retain the parent's slave endpoint and prevent stream EOF.
         drop(pair.slave);
+        #[cfg(any(test, feature = "remote-host"))]
+        let master = TrackedDrop::new(pair.master, io_drop.clone(), 4);
+        #[cfg(not(any(test, feature = "remote-host")))]
+        let master = pair.master;
         Ok(Self {
-            mutation: Mutex::new(PtyMutation {
-                master: pair.master,
-                writer,
-            }),
+            #[cfg(any(test, feature = "remote-host"))]
+            io_drop,
+            mutation: Mutex::new(PtyMutation { master, writer }),
             #[cfg(test)]
             mutation_barrier: Mutex::new(None),
             reader: Mutex::new(Some(reader)),
@@ -146,6 +267,10 @@ impl OwnedPty {
             .lock()
             .take()
             .ok_or_else(|| error("HOST_READER_ALREADY_TAKEN"))
+    }
+    #[cfg(any(test, feature = "remote-host"))]
+    pub(crate) fn io_drop_witness(&self) -> IoDropWitness {
+        self.io_drop.clone()
     }
 
     pub(crate) fn with_writer<T>(
@@ -241,3 +366,7 @@ pub(crate) mod test_barrier;
 #[cfg(test)]
 #[path = "../tests/native_cli_mutation_barrier.rs"]
 pub(crate) mod mutation_test;
+
+#[cfg(test)]
+#[path = "../tests/native_cli_io_drop.rs"]
+mod io_drop_tests;

@@ -1581,3 +1581,58 @@ fn RemoteShutdown_OriginalRetryHandleAlsoMustJoin_010() {
     }
     assert_eq!(fixture.child_reports(), 1);
 }
+
+#[test]
+#[allow(non_snake_case)]
+fn RemoteShutdown_OriginalIoDropRequiresLastResourceRelease_014() {
+    use crate::run_supervisor::NativeShutdownObservation;
+    let fixture = Fixture::new("hold");
+    let status = fixture.start();
+    let end = Instant::now() + Duration::from_secs(20);
+    while fixture.child_reports() == 0 {
+        assert!(Instant::now() < end);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let access = fixture
+        .service
+        .access(&fixture.caller, &status.run)
+        .unwrap();
+    let pin = fixture.supervisor.pin_shutdown(&status.run);
+    let mut shutdown = fixture.supervisor.begin_shutdown_owned(vec![pin]).unwrap();
+    loop {
+        if let NativeShutdownObservation::Unknown {
+            wait_workers_joined: true,
+            original_io_drop_returned,
+            ..
+        } = shutdown.observe_run(&status.run)
+        {
+            assert!(
+                !original_io_drop_returned,
+                "retained original I/O was falsely released"
+            );
+            break;
+        }
+        assert!(Instant::now() < end);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    drop(access);
+    loop {
+        if matches!(
+            shutdown.observe_run(&status.run),
+            NativeShutdownObservation::Unknown {
+                original_io_drop_returned: true,
+                output_reader_joined: true,
+                io_threads_joined: false,
+                ..
+            }
+        ) {
+            break;
+        }
+        assert!(
+            Instant::now() < end,
+            "original I/O destructors never reported their return"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(fixture.child_reports(), 1);
+}

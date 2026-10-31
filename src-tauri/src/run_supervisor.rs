@@ -624,6 +624,8 @@ struct SupervisedRun {
     output_reader: Mutex<OutputReaderJoin>,
     #[cfg(any(test, feature = "remote-host"))]
     wait_workers: Mutex<WaitWorkers>,
+    #[cfg(any(test, feature = "remote-host"))]
+    io_drop: crate::platform::owned_pty::IoDropWitness,
     changed: Condvar,
 }
 
@@ -638,6 +640,8 @@ impl SupervisedRun {
         lifecycle.process_running()?;
         let owner = resource.process.snapshot.owner().clone();
         let request_id = resource.process.snapshot.request().request_id.clone();
+        #[cfg(any(test, feature = "remote-host"))]
+        let io_drop = resource.process.pty.io_drop_witness();
         Ok(Arc::new(Self {
             core,
             registry,
@@ -658,6 +662,8 @@ impl SupervisedRun {
             output_reader: Mutex::new(OutputReaderJoin::Unstarted),
             #[cfg(any(test, feature = "remote-host"))]
             wait_workers: Mutex::new(WaitWorkers::default()),
+            #[cfg(any(test, feature = "remote-host"))]
+            io_drop,
             changed: Condvar::new(),
         }))
     }
@@ -1310,6 +1316,7 @@ mod remote_shutdown_observation_tests {
                 direct_child_reaped: false,
                 output_reader_joined: false,
                 wait_workers_joined: false,
+                original_io_drop_returned: false,
                 io_threads_joined: false,
                 stop_job_joined: false
             }
@@ -1323,6 +1330,7 @@ mod remote_shutdown_observation_tests {
                 direct_child_reaped: false,
                 output_reader_joined: false,
                 wait_workers_joined: false,
+                original_io_drop_returned: false,
                 io_threads_joined: false,
                 stop_job_joined: false
             }
@@ -1371,6 +1379,7 @@ pub(crate) enum NativeShutdownObservation {
         direct_child_reaped: bool,
         output_reader_joined: bool,
         wait_workers_joined: bool,
+        original_io_drop_returned: bool,
         io_threads_joined: bool,
         stop_job_joined: bool,
     },
@@ -1470,22 +1479,24 @@ impl NativeRunSupervisor {
 #[cfg(any(test, feature = "remote-host"))]
 impl NativeShutdown {
     pub(crate) fn observe_run(&mut self, run: &RunKey) -> NativeShutdownObservation {
-        let unknown = |reaped, joined, reader, workers| NativeShutdownObservation::Unknown {
-            direct_child_reaped: reaped,
-            output_reader_joined: reader,
-            wait_workers_joined: workers,
-            io_threads_joined: false,
-            stop_job_joined: joined,
-        };
+        let unknown =
+            |reaped, joined, reader, workers, io_drop| NativeShutdownObservation::Unknown {
+                direct_child_reaped: reaped,
+                output_reader_joined: reader,
+                wait_workers_joined: workers,
+                original_io_drop_returned: io_drop,
+                io_threads_joined: false,
+                stop_job_joined: joined,
+            };
         let Some(entry) = self
             .entries
             .iter_mut()
             .find(|entry| identity(&entry.pin.run) == identity(run))
         else {
-            return unknown(false, false, false, false);
+            return unknown(false, false, false, false, false);
         };
         let Some(state) = entry.pin.state.as_ref() else {
-            return unknown(false, false, false, false);
+            return unknown(false, false, false, false, false);
         };
         // Observe the original reader even while stop/root publication is pending.
         let reader_joined = state.output_reader.lock().observe();
@@ -1507,7 +1518,13 @@ impl NativeShutdown {
         }
         let reaped = state.reaped.load(Ordering::SeqCst);
         if entry.failed {
-            return unknown(reaped, entry.joined, reader_joined, workers_joined);
+            return unknown(
+                reaped,
+                entry.joined,
+                reader_joined,
+                workers_joined,
+                state.io_drop.all_returned(),
+            );
         }
         if !entry.joined
             || !reaped
@@ -1519,7 +1536,13 @@ impl NativeShutdown {
         }
         // These original thread joins do not attest remaining I/O, master or
         // PTY descendants. Keep the whole-resource result Unknown.
-        unknown(reaped, entry.joined, reader_joined, workers_joined)
+        unknown(
+            reaped,
+            entry.joined,
+            reader_joined,
+            workers_joined,
+            state.io_drop.all_returned(),
+        )
     }
 
     #[cfg(feature = "remote-host")]
@@ -1555,7 +1578,19 @@ impl NativeShutdown {
                         .map(|mut workers| workers.observe() == WaitWorkersState::Pending)
                         .unwrap_or(true)
                 });
-            if reader_pending || workers_pending || observed == NativeShutdownObservation::Pending {
+            let io_pending = self
+                .entries
+                .iter()
+                .find(|entry| identity(&entry.pin.run) == identity(&key))
+                .and_then(|entry| entry.pin.state.as_ref())
+                .is_some_and(|state| {
+                    state.io_drop.observe() == crate::platform::owned_pty::IoDropState::Pending
+                });
+            if reader_pending
+                || workers_pending
+                || io_pending
+                || observed == NativeShutdownObservation::Pending
+            {
                 result = Some(NativeShutdownObservation::Pending);
             } else if result.is_none() {
                 result = Some(observed);
@@ -1652,6 +1687,7 @@ mod wait_worker_join_tests {
             automatic_retry_used: AtomicBool::new(false),
             output_reader: Mutex::new(OutputReaderJoin::Unstarted),
             wait_workers: Mutex::new(WaitWorkers::default()),
+            io_drop: crate::platform::owned_pty::IoDropWitness::default(),
             changed: Condvar::new(),
         })
     }
