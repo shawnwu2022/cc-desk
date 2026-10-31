@@ -50,6 +50,24 @@ impl AdmittedChild {
         self.child.as_raw_handle().unwrap_or(std::ptr::null_mut())
     }
 
+    #[cfg(all(windows, any(test, feature = "remote-host")))]
+    pub(crate) fn observe_exact_root(&mut self) -> io::Result<bool> {
+        let handle = self.raw_handle();
+        if handle.is_null() {
+            return Err(io::Error::other("original root missing"));
+        }
+        match unsafe { wait_for_single_object(handle, 0) } {
+            0 => {
+                if let Some(ticket) = self.ticket.take() {
+                    ticket.reaped();
+                }
+                Ok(true)
+            }
+            258 => Ok(false),
+            _ => Err(io::Error::last_os_error()),
+        }
+    }
+
     fn settle_terminal(&mut self, blocking: bool) {
         #[cfg(windows)]
         {

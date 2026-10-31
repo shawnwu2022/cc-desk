@@ -51,6 +51,8 @@ pub mod cmdbuilder;
 pub use cmdbuilder::CommandBuilder;
 #[cfg(windows)]
 pub use win::native_pipe::{spawn_pipe_in_job, NativePipeChild, NativePipeInput, NativePipeOutput};
+#[cfg(windows)]
+pub use win::{OwnedJobSpawnFailure, PendingJobChild};
 
 #[cfg(unix)]
 pub mod unix;
@@ -159,6 +161,18 @@ pub trait ChildKiller: std::fmt::Debug {
 pub trait SlavePty {
     /// Spawns the command specified by the provided CommandBuilder
     fn spawn_command(&self, cmd: CommandBuilder) -> Result<Box<dyn Child + Send + Sync>, Error>;
+    #[cfg(windows)]
+    fn spawn_command_in_owned_job(
+        &self,
+        _cmd: CommandBuilder,
+        _job: std::os::windows::io::BorrowedHandle<'_>,
+    ) -> Result<Box<dyn Child + Send + Sync>, OwnedJobSpawnFailure> {
+        Err(OwnedJobSpawnFailure::before_create(
+            JobSpawnError::KnownNotStarted {
+                phase: JobSpawnPhase::Preparation,
+            },
+        ))
+    }
     /// CC Desk qualification seam. The borrowed Job is owned by the backend.
     /// No PID lookup or remote authorization is performed here.
     #[cfg(windows)]

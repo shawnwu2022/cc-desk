@@ -51,6 +51,8 @@ pub(crate) fn decode_stop_query(body: &InvokeBody) -> Result<(String, RunKey), S
 }
 
 pub(crate) struct NativeRuntime {
+    #[cfg(all(windows, feature = "remote-host"))]
+    owned_job_starts: Arc<crate::platform::owned_job_launch::OwnedJobLaunchSlot>,
     service: Arc<LaunchService>,
     projections: Arc<super::native_projection::service::ProjectionService>,
     binding: Mutex<Option<Arc<DocumentBinding<NativeRun>>>>,
@@ -84,6 +86,8 @@ impl NativeRuntime {
         supervisor: Option<Arc<NativeRunSupervisor>>,
     ) -> Self {
         Self {
+            #[cfg(all(windows, feature = "remote-host"))]
+            owned_job_starts: Arc::new(Default::default()),
             projections: Arc::new(super::native_projection::service::ProjectionService::new(
                 service.clone(),
             )),
@@ -120,6 +124,25 @@ impl NativeRuntime {
             transports,
             Some(supervisor),
         ))
+    }
+    /// Backend-only staging seam: not a JS/IPC registration or an authority
+    /// factory. No ordinary launch is switched into Job mode here.
+    #[cfg(all(windows, feature = "remote-host"))]
+    #[allow(dead_code)]
+    pub(crate) fn stage_owned_job_start(
+        &self,
+        pair: portable_pty::PtyPair,
+        command: portable_pty::CommandBuilder,
+        ticket: crate::version_history::maintenance::StartTicket,
+        job: std::os::windows::io::OwnedHandle,
+    ) -> crate::platform::owned_job_launch::JobLaunchObservation {
+        self.owned_job_starts.launch(pair, command, ticket, job)
+    }
+    #[cfg(all(windows, feature = "remote-host", test))]
+    pub(crate) fn owned_job_slot_for_test(
+        &self,
+    ) -> &crate::platform::owned_job_launch::OwnedJobLaunchSlot {
+        &self.owned_job_starts
     }
     pub(crate) fn initialize_main<T: Runtime, M: Manager<T>>(
         &self,
@@ -553,6 +576,8 @@ impl NativeRuntime {
         pins: Vec<crate::run_supervisor::NativeRunPin>,
     ) -> HostNativeShutdown {
         self.service.begin_shutdown();
+        #[cfg(windows)]
+        self.owned_job_starts.close_admission();
         if let Some(binding) = self.binding.lock().as_ref().cloned() {
             binding.revoke();
         }
@@ -581,6 +606,8 @@ impl NativeRuntime {
             Err(_) => (None, true),
         };
         HostNativeShutdown {
+            #[cfg(windows)]
+            owned_job_starts: self.owned_job_starts.clone(),
             stop,
             desktop,
             joined: failed,
@@ -590,6 +617,8 @@ impl NativeRuntime {
 
     pub(crate) fn shutdown(&self) {
         self.service.begin_shutdown();
+        #[cfg(all(windows, feature = "remote-host"))]
+        self.owned_job_starts.close_admission();
         // Revoke document/output authority before waiting for process reaping.
         // A closing main-thread WebView must not be required to service new
         // url/resource-table getters from an output sender while shutdown waits.
@@ -600,6 +629,14 @@ impl NativeRuntime {
             supervisor.shutdown();
         }
         self.service.wait_for_commands();
+        #[cfg(all(windows, feature = "remote-host"))]
+        // The existing owned blocking stop worker keeps this exact runtime.
+        // Unknown stays registered; a timeout is never converted into no-owner.
+        while self.owned_job_starts.cleanup_step()
+            == crate::platform::owned_job_launch::JobLaunchObservation::Pending
+        {
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
     }
 }
 
@@ -612,6 +649,8 @@ pub(crate) enum HostNativeObservation {
 }
 #[cfg(feature = "remote-host")]
 pub(crate) struct HostNativeShutdown {
+    #[cfg(windows)]
+    owned_job_starts: Arc<crate::platform::owned_job_launch::OwnedJobLaunchSlot>,
     stop: Option<crate::run_supervisor::NativeShutdown>,
     desktop: Option<std::thread::JoinHandle<()>>,
     joined: bool,
@@ -622,6 +661,8 @@ impl HostNativeShutdown {
     #[cfg(test)]
     pub(crate) fn from_owned_worker_for_test(worker: std::thread::JoinHandle<()>) -> Self {
         Self {
+            #[cfg(windows)]
+            owned_job_starts: Arc::new(Default::default()),
             stop: None,
             desktop: Some(worker),
             joined: false,
@@ -629,6 +670,8 @@ impl HostNativeShutdown {
         }
     }
     pub(crate) fn observe(&mut self) -> HostNativeObservation {
+        #[cfg(windows)]
+        let job_start = self.owned_job_starts.observe();
         if self.desktop.as_ref().is_some_and(|job| job.is_finished()) {
             self.unknown |= self
                 .desktop
@@ -640,11 +683,23 @@ impl HostNativeShutdown {
         }
         // Poll all owned stop jobs even if another resource is already unknown.
         let native = self.stop.as_mut().and_then(|stop| stop.observe_all());
-        if !self.joined || native == Some(crate::run_supervisor::NativeShutdownObservation::Pending)
+        #[cfg(windows)]
+        let job_pending =
+            job_start == crate::platform::owned_job_launch::JobLaunchObservation::Pending;
+        #[cfg(not(windows))]
+        let job_pending = false;
+        if !self.joined
+            || job_pending
+            || native == Some(crate::run_supervisor::NativeShutdownObservation::Pending)
         {
             return HostNativeObservation::Pending;
         }
-        if self.unknown || native.is_some() {
+        #[cfg(windows)]
+        let job_unknown =
+            job_start != crate::platform::owned_job_launch::JobLaunchObservation::Empty;
+        #[cfg(not(windows))]
+        let job_unknown = false;
+        if self.unknown || job_unknown || native.is_some() {
             HostNativeObservation::Unknown
         } else {
             HostNativeObservation::NoRemoteNativeResources

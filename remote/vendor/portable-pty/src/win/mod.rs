@@ -12,9 +12,11 @@ use winapi::um::synchapi::WaitForSingleObject;
 use winapi::um::winbase::INFINITE;
 
 pub mod conpty;
+mod job_spawn_owned;
 pub mod native_pipe;
 mod procthreadattr;
 mod psuedocon;
+pub use job_spawn_owned::{OwnedJobSpawnFailure, PendingJobChild};
 
 use filedescriptor::OwnedHandle;
 

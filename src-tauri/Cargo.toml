@@ -81,3 +81,5 @@ lto = true
 [patch.crates-io]
 # Keep Host's existing bounded OSC parser when consumed from this Cargo root.
 vte = { path = "../remote/vendor/vte" }
+# Same upstream version/ordinary spawn; additive exact-Job ownership API.
+portable-pty = { path = "../remote/vendor/portable-pty" }

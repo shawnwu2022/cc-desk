@@ -42,6 +42,8 @@ mod native_cli_observer;
 mod native_cli_output_edges;
 #[cfg(test)]
 mod native_cli_output_route;
+#[cfg(windows)]
+mod native_cli_owned_job;
 #[cfg(test)]
 mod native_cli_owned_pty;
 #[cfg(test)]

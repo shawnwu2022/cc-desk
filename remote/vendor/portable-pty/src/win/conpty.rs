@@ -109,6 +109,19 @@ impl MasterPty for ConPtyMasterPty {
 }
 
 impl SlavePty for ConPtySlavePty {
+    fn spawn_command_in_owned_job(
+        &self,
+        cmd: CommandBuilder,
+        job: std::os::windows::io::BorrowedHandle<'_>,
+    ) -> Result<Box<dyn Child + Send + Sync>, crate::OwnedJobSpawnFailure> {
+        let inner = self.inner.lock().map_err(|_| {
+            crate::OwnedJobSpawnFailure::before_create(crate::JobSpawnError::KnownNotStarted {
+                phase: crate::JobSpawnPhase::Preparation,
+            })
+        })?;
+        let child = inner.con.spawn_command_in_owned_job(cmd, job)?;
+        Ok(Box::new(child))
+    }
     fn spawn_command_in_job(
         &self,
         cmd: CommandBuilder,

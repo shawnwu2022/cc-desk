@@ -78,55 +78,43 @@ impl Drop for PsuedoCon {
 impl PsuedoCon {
     /// CC Desk qualification only. Original upstream spawn_command is unchanged.
     /// All process/thread operations below use handles returned by our CreateProcessW.
+    /// Compatibility-only Copy classification; product callers need the owned API.
     pub fn spawn_command_in_job(
         &self,
         cmd: CommandBuilder,
         job: std::os::windows::io::BorrowedHandle<'_>,
     ) -> Result<WinChild, crate::JobSpawnError> {
+        self.spawn_command_in_owned_job(cmd, job)
+            .map_err(|failure| failure.classification())
+    }
+
+    pub fn spawn_command_in_owned_job(
+        &self,
+        cmd: CommandBuilder,
+        job: std::os::windows::io::BorrowedHandle<'_>,
+    ) -> Result<WinChild, super::OwnedJobSpawnFailure> {
         use crate::JobSpawnError::{KnownNotStarted, OutcomeUnknown};
         use crate::JobSpawnPhase;
-        let preparation = KnownNotStarted {
-            phase: JobSpawnPhase::Preparation,
+        let preparation = || {
+            super::OwnedJobSpawnFailure::before_create(KnownNotStarted {
+                phase: JobSpawnPhase::Preparation,
+            })
         };
-        use winapi::um::winbase::{CREATE_SUSPENDED, WAIT_OBJECT_0};
-        use winapi::um::{jobapi2::AssignProcessToJobObject, synchapi::WaitForSingleObject};
-        // RAII starts immediately after successful CreateProcessW, before any other
-        // fallible step. Cleanup is finite and only proves this root has exited.
-        struct Created {
-            proc: Option<OwnedHandle>,
-            thread: OwnedHandle,
-            cleanup: bool,
-        }
-        impl Created {
-            fn reap(&mut self) -> bool {
-                let process = self.proc.as_ref().unwrap().as_raw_handle() as HANDLE;
-                let killed = unsafe { TerminateProcess(process, 1) } != 0;
-                let exited = unsafe { WaitForSingleObject(process, 500) } == WAIT_OBJECT_0;
-                if exited {
-                    self.cleanup = false;
-                }
-                killed && exited
-            }
-        }
-        impl Drop for Created {
-            fn drop(&mut self) {
-                if self.cleanup {
-                    let _ = self.reap();
-                }
-            }
-        }
+        use super::{OwnedJobSpawnFailure, PendingJobChild};
+        use winapi::um::jobapi2::AssignProcessToJobObject;
+        use winapi::um::winbase::CREATE_SUSPENDED;
         let mut si: STARTUPINFOEXW = unsafe { mem::zeroed() };
         si.StartupInfo.cb = mem::size_of::<STARTUPINFOEXW>() as u32;
         si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
         si.StartupInfo.hStdInput = INVALID_HANDLE_VALUE;
         si.StartupInfo.hStdOutput = INVALID_HANDLE_VALUE;
         si.StartupInfo.hStdError = INVALID_HANDLE_VALUE;
-        let mut attrs = ProcThreadAttributeList::with_capacity(1).map_err(|_| preparation)?;
-        attrs.set_pty(self.con).map_err(|_| preparation)?;
+        let mut attrs = ProcThreadAttributeList::with_capacity(1).map_err(|_| preparation())?;
+        attrs.set_pty(self.con).map_err(|_| preparation())?;
         si.lpAttributeList = attrs.as_mut_ptr();
         // Use upstream quoting, path lookup, cwd and full environment encoding.
         // The caller is trusted backend code; this API confers no authorization.
-        let (mut exe, mut cmdline) = cmd.cmdline().map_err(|_| preparation)?;
+        let (mut exe, mut cmdline) = cmd.cmdline().map_err(|_| preparation())?;
         let cwd = cmd.current_directory();
         let mut env = cmd.environment_block();
         // Upstream emits only one terminator when env_clear() is empty. Win32
@@ -150,31 +138,30 @@ impl PsuedoCon {
             )
         };
         if created == 0 {
-            return Err(KnownNotStarted {
+            return Err(OwnedJobSpawnFailure::before_create(KnownNotStarted {
                 phase: JobSpawnPhase::CreateRejected,
-            });
+            }));
         }
-        let mut owned = Created {
+        let mut owned = PendingJobChild {
             proc: Some(unsafe { OwnedHandle::from_raw_handle(pi.hProcess as _) }),
             thread: unsafe { OwnedHandle::from_raw_handle(pi.hThread as _) },
             cleanup: true,
+            assigned: false,
+            resume_attempted: false,
         };
         let process = owned.proc.as_ref().unwrap().as_raw_handle() as HANDLE;
         if unsafe { AssignProcessToJobObject(job.as_raw_handle() as _, process) } == 0 {
-            return Err(if owned.reap() {
+            let classification = if owned.reap() {
                 KnownNotStarted {
                     phase: JobSpawnPhase::AssignmentReaped,
                 }
             } else {
                 OutcomeUnknown
-            });
+            };
+            return Err(OwnedJobSpawnFailure::after_create(classification, owned));
         }
-        // A count other than exactly one is not evidence of no execution.
-        if unsafe { ResumeThread(owned.thread.as_raw_handle() as _) } != 1 {
-            let _ = owned.reap();
-            return Err(OutcomeUnknown);
-        }
-        owned.cleanup = false;
+        owned.assigned = true;
+        let mut owned = owned.resume_once()?;
         Ok(WinChild {
             proc: Mutex::new(owned.proc.take().unwrap()),
         })
