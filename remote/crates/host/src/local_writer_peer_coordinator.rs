@@ -37,6 +37,7 @@ enum Stage {
     Failed,
 }
 pub(super) struct Coordinator {
+    native_attempt: Option<InstallAttempt>,
     target: Target,
     device: [u8; 32],
     expected: u64,
@@ -56,6 +57,26 @@ impl Coordinator {
     }
 }
 impl NativeHost {
+    pub(super) fn register_native_attempt(
+        &mut self,
+        target: Target,
+        device: [u8; 32],
+        lease: [u8; 16],
+        channel: Arc<RunningChannel>,
+        attempt: InstallAttempt,
+    ) {
+        let owned = channel.clone();
+        let task = tokio::spawn(async move { owned.host_install_request().await });
+        self.peer_installs.push(Coordinator {
+            native_attempt: Some(attempt),
+            target,
+            device,
+            expected: 0,
+            lease,
+            channel,
+            stage: Stage::Request(task),
+        });
+    }
     /// Locally selected target/expected/lease only. No peer-supplied success/fence.
     /// Caller cancellation cannot drop the request task or original native pending.
     pub fn begin_peer_rebind(
@@ -82,6 +103,7 @@ impl NativeHost {
         let owned = channel.clone();
         let task = tokio::spawn(async move { owned.host_install_request().await });
         self.peer_installs.push(Coordinator {
+            native_attempt: None,
             target,
             device,
             expected,
@@ -103,13 +125,18 @@ impl NativeHost {
                     Some(Ok(Ok(request)))
                         if !self.closing && job.channel.authority().check().is_ok() =>
                     {
-                        match self.begin_rebind(
-                            &job.target,
-                            job.device,
-                            job.expected,
-                            job.channel.clone(),
-                            job.lease,
-                        ) {
+                        let native = if let Some(attempt) = job.native_attempt {
+                            Ok(attempt)
+                        } else {
+                            self.begin_rebind(
+                                &job.target,
+                                job.device,
+                                job.expected,
+                                job.channel.clone(),
+                                job.lease,
+                            )
+                        };
+                        match native {
                             Ok(attempt) => Stage::Native {
                                 attempt,
                                 request: Some(request),

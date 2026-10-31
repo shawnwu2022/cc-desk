@@ -23,6 +23,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 pub(crate) struct FrozenPty {
+    #[cfg(feature = "remote-host")]
+    pub(crate) native_stream:
+        std::sync::OnceLock<std::sync::Weak<crate::terminal_transport::TerminalStream>>,
+    #[cfg(feature = "remote-host")]
+    native_input: std::sync::OnceLock<cc_desk_remote_host::native_host::NativeLocalInput>,
     pub(crate) pty: OwnedPty,
     pub(crate) snapshot: Arc<LaunchSnapshot>,
     pub(crate) observer: Option<crate::observer_registry::ObserverLease>,
@@ -715,6 +720,10 @@ impl LaunchService {
                 )?;
                 spawned.set(true);
                 Ok(FrozenPty {
+                    #[cfg(feature = "remote-host")]
+                    native_stream: Default::default(),
+                    #[cfg(feature = "remote-host")]
+                    native_input: Default::default(),
                     pty,
                     snapshot: frozen,
                     observer,
@@ -954,6 +963,7 @@ impl LaunchService {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct RunAccess {
     registry: Arc<RunRegistry<NativeRun>>,
     caller: CallerIdentity,
@@ -984,6 +994,16 @@ impl RunAccess {
         &self,
         operation: impl FnOnce(&mut (dyn Write + Send)) -> io::Result<T>,
     ) -> Result<T, SafeError> {
+        #[cfg(feature = "remote-host")]
+        if self.resource.process.native_input.get().is_some() {
+            return Err(error("NATIVE_WRITER_ADOPTED"));
+        }
+        self.with_original_writer(operation)
+    }
+    fn with_original_writer<T>(
+        &self,
+        operation: impl FnOnce(&mut (dyn Write + Send)) -> io::Result<T>,
+    ) -> Result<T, SafeError> {
         self.check_mutation()?;
         self.resource
             .process
@@ -996,12 +1016,136 @@ impl RunAccess {
             })
             .map_err(|_| error("PTY_WRITE_FAILED"))?
     }
+    pub(crate) fn write_frame(
+        &self,
+        bytes: &[u8],
+    ) -> Result<crate::terminal_input::HostWriteResult, SafeError> {
+        self.check_mutation()?;
+        #[cfg(feature = "remote-host")]
+        if let Some(input) = self.resource.process.native_input.get() {
+            let current = self.clone();
+            let result = input
+                .commit(bytes, move || current.check_mutation().is_ok())
+                .map_err(|_| error("PTY_WRITE_FAILED"))?;
+            return Ok(crate::terminal_input::HostWriteResult {
+                state: if result.complete {
+                    crate::terminal_input::InputWriteState::HostWritten
+                } else {
+                    crate::terminal_input::InputWriteState::PartialOrUnknown
+                },
+                confirmed_bytes: result.confirmed_bytes,
+            });
+        }
+        self.with_original_writer(|writer| {
+            Ok(crate::terminal_input::write_host_frame(writer, bytes))
+        })
+    }
+    pub(crate) fn protocol_frame(
+        &self,
+        bytes: &[u8],
+        source: Option<&crate::terminal_input::ProtocolSource>,
+    ) -> Result<crate::terminal_input::ProtocolWriteReceipt, SafeError> {
+        self.check_mutation()?;
+        #[cfg(feature = "remote-host")]
+        if let Some(input) = self.resource.process.native_input.get() {
+            if let Some(source) = source {
+                self.check_protocol_source(source)?;
+            }
+            let current = self.clone();
+            let context = source.cloned();
+            let result = input
+                .protocol_from_source(bytes, source.map(|s| s.through_offset.get()), move || {
+                    current.check_mutation().is_ok()
+                        && context
+                            .as_ref()
+                            .is_none_or(|source| current.check_protocol_source(source).is_ok())
+                })
+                .map_err(|_| error("NATIVE_PROTOCOL_SOURCE_REJECTED"))?;
+            return Ok(match result {
+                cc_desk_remote_host::native_host::NativeProtocolResult::NativeOwned => {
+                    crate::terminal_input::ProtocolWriteReceipt::native_owned(
+                        &self.run,
+                        source.cloned(),
+                    )
+                }
+                cc_desk_remote_host::native_host::NativeProtocolResult::Written(result) => {
+                    crate::terminal_input::ProtocolWriteReceipt::from_host(
+                        crate::terminal_input::HostWriteResult {
+                            state: if result.complete {
+                                crate::terminal_input::InputWriteState::HostWritten
+                            } else {
+                                crate::terminal_input::InputWriteState::PartialOrUnknown
+                            },
+                            confirmed_bytes: result.confirmed_bytes,
+                        },
+                    )
+                }
+            });
+        }
+        #[cfg(not(feature = "remote-host"))]
+        let _ = source;
+        self.with_original_writer(|writer| {
+            Ok(crate::terminal_input::ProtocolWriteReceipt::from_host(
+                crate::terminal_input::write_host_frame(writer, bytes),
+            ))
+        })
+    }
+    #[cfg(feature = "remote-host")]
+    fn check_protocol_source(
+        &self,
+        source: &crate::terminal_input::ProtocolSource,
+    ) -> Result<(), SafeError> {
+        self.check_mutation()?;
+        let stream = self
+            .resource
+            .process
+            .native_stream
+            .get()
+            .and_then(std::sync::Weak::upgrade)
+            .ok_or_else(|| error("NATIVE_PROTOCOL_SOURCE_REJECTED"))?;
+        if source.stream_epoch != stream.stream_epoch()
+            || source.through_offset.get() == 0
+            || source.through_offset.get() > stream.sent_offset().get()
+        {
+            return Err(error("NATIVE_PROTOCOL_SOURCE_REJECTED"));
+        }
+        Ok(())
+    }
     pub(crate) fn resize(&self, size: PtySize) -> Result<(), SafeError> {
         self.check_mutation()?;
+        #[cfg(feature = "remote-host")]
+        if let Some(input) = self.resource.process.native_input.get() {
+            let current = self.clone();
+            return input
+                .resize(size.rows, size.cols, move || {
+                    current.check_mutation().is_ok()
+                })
+                .map_err(|_| error("HOST_RESIZE_FAILED"));
+        }
         self.resource
             .process
             .pty
             .resize_checked(size, || self.check_mutation())
+    }
+    pub(crate) fn resize_receipt(&self) -> crate::terminal_input::NativeResizeReceipt {
+        let status = "unavailable";
+        #[cfg(feature = "remote-host")]
+        let status = self
+            .resource
+            .process
+            .native_input
+            .get()
+            .map_or(status, |input| match input.canonical_status() {
+                cc_desk_remote_host::native_host::NativeCanonicalStatus::Complete => "complete",
+                cc_desk_remote_host::native_host::NativeCanonicalStatus::LocalOnly => "local-only",
+                cc_desk_remote_host::native_host::NativeCanonicalStatus::Unavailable => {
+                    "unavailable"
+                }
+            });
+        crate::terminal_input::NativeResizeReceipt {
+            state: "resized",
+            canonical_output: status,
+        }
     }
     pub(crate) fn terminate_root(&self) -> Result<(), SafeError> {
         self.check()?;
@@ -1011,6 +1155,155 @@ impl RunAccess {
         self.check()?;
         Ok(self.resource.process.snapshot.clone())
     }
+}
+
+#[cfg(feature = "remote-host")]
+pub(crate) struct NativeCanonicalRun {
+    pub(crate) producer: Option<cc_desk_remote_host::native_host::NativeRunProducer>,
+    input: cc_desk_remote_host::native_host::NativeLocalInput,
+    _directory: tempfile::TempDir,
+}
+#[cfg(feature = "remote-host")]
+impl NativeCanonicalRun {
+    pub(crate) fn stop(&self) {
+        self.input.stop();
+    }
+    pub(crate) fn observe_writer(
+        &mut self,
+        budget: Duration,
+    ) -> cc_desk_remote_host::native_host::NativeWriterRetirement {
+        if let Some(producer) = self.producer.as_mut() {
+            let _ = producer.join(budget);
+        }
+        self.input.retirement()
+    }
+}
+#[cfg(feature = "remote-host")]
+struct OriginalNativeWriter {
+    resource: Arc<NativeRun>,
+    authority: crate::run_supervisor::NativeRunAuthority,
+}
+#[cfg(feature = "remote-host")]
+impl cc_desk_remote_host::native_host::NativeOriginalIo for OriginalNativeWriter {
+    fn frame(
+        &mut self,
+        bytes: &[u8],
+        authorize: Box<dyn FnOnce() -> bool + Send>,
+    ) -> Result<
+        cc_desk_remote_host::native_host::NativeFrameResult,
+        cc_desk_remote_host::native_host::NativeIoError,
+    > {
+        use cc_desk_remote_host::native_host::{NativeFrameResult, NativeIoError as Reject};
+        // Hold the ORIGINAL mutation region for the complete frame+flush. Both
+        // resource lifetime and the operation's own authority are checked here.
+        self.resource
+            .process
+            .pty
+            .with_writer(|writer| {
+                if self.authority.check(&self.resource).is_err() || !authorize() {
+                    return Ok(Err(Reject::Policy));
+                }
+                let mut offset = 0;
+                let mut interrupted = 16;
+                while offset < bytes.len() {
+                    match writer.write(&bytes[offset..]) {
+                        Ok(n) if n > 0 && n <= bytes.len() - offset => offset += n,
+                        Err(e) if e.kind() == io::ErrorKind::Interrupted && interrupted > 0 => {
+                            interrupted -= 1
+                        }
+                        _ => break,
+                    }
+                }
+                Ok(Ok(NativeFrameResult {
+                    complete: offset == bytes.len() && writer.flush().is_ok(),
+                    confirmed_bytes: offset as u64,
+                }))
+            })
+            .map_err(|_| Reject::Continuity)?
+    }
+    fn resize(
+        &mut self,
+        rows: u16,
+        columns: u16,
+        authorize: Box<dyn FnOnce() -> bool + Send>,
+    ) -> Result<(), cc_desk_remote_host::native_host::NativeIoError> {
+        use cc_desk_remote_host::native_host::NativeIoError as Reject;
+        self.resource
+            .process
+            .pty
+            .resize_checked(
+                PtySize {
+                    rows,
+                    cols: columns,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                },
+                || {
+                    self.authority.check(&self.resource)?;
+                    if !authorize() {
+                        return Err(error("FORBIDDEN"));
+                    }
+                    Ok(())
+                },
+            )
+            .map_err(|e| {
+                if e.code == "HOST_RESIZE_FAILED" {
+                    Reject::Continuity
+                } else {
+                    Reject::Policy
+                }
+            })
+    }
+}
+#[cfg(feature = "remote-host")]
+pub(crate) fn prepare_native_canonical(
+    run: &RunKey,
+    resource: Arc<NativeRun>,
+    authority: crate::run_supervisor::NativeRunAuthority,
+) -> Result<
+    (
+        NativeCanonicalRun,
+        cc_desk_remote_host::native_host::NativeOutputIngress,
+    ),
+    SafeError,
+> {
+    authority.check(&resource)?;
+    let directory = tempfile::Builder::new()
+        .prefix("cc-native-canonical-")
+        .tempdir()
+        .map_err(|_| error("NATIVE_CANONICAL_STORAGE"))?;
+    let journal = cc_desk_remote_host::journal::Journal::open(&directory.path().join("run.sqlite"))
+        .map_err(|_| error("NATIVE_CANONICAL_STORAGE"))?;
+    let request = resource.process.snapshot.request();
+    let mut producer = cc_desk_remote_host::native_host::NativeRunProducer::start_resource(
+        journal,
+        OriginalNativeWriter {
+            resource: resource.clone(),
+            authority,
+        },
+        run.run_id.clone(),
+        run.generation,
+        usize::from(request.rows),
+        usize::from(request.cols),
+    )
+    .map_err(|_| error("NATIVE_CANONICAL_UNAVAILABLE"))?;
+    let output = producer
+        .take_output()
+        .map_err(|_| error("NATIVE_CANONICAL_UNAVAILABLE"))?;
+    let input = producer.local_input();
+    resource
+        .process
+        .native_input
+        .set(input.clone())
+        .map_err(|_| error("NATIVE_CANONICAL_ALREADY_OWNED"))?;
+    Ok((
+        NativeCanonicalRun {
+            producer: Some(producer),
+            input,
+            _directory: directory,
+        },
+        output,
+    ))
 }
 
 #[cfg(test)]

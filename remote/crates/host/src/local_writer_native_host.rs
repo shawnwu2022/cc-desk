@@ -3,6 +3,13 @@ use super::*;
 use attach::connection::{Connection, custody};
 use authorized::{AuthorizedPeer, AuthorizedPendingRebind};
 use cc_desk_remote_security::{BoundDataAuthority, Role, RunningChannel};
+#[path = "local_writer_native_producer.rs"]
+pub(in crate::local_writer) mod producer;
+pub use crate::local_writer::Reject as NativeIoError;
+pub use producer::{
+    NativeCanonicalStatus, NativeFrameResult, NativeLocalInput, NativeOriginalIo,
+    NativeOutputIngress, NativeProtocolResult, NativeRunProducer, NativeWriterRetirement,
+};
 
 const MAX_ATTEMPTS: usize = 64;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,6 +64,96 @@ pub struct NativeHost {
     peer_installs: Vec<peer_coordinator::Coordinator>,
 }
 impl NativeHost {
+    pub fn adopt_native_producer(
+        &mut self,
+        producer: NativeRunProducer,
+        channel: Arc<RunningChannel>,
+        authorize: Box<dyn FnOnce() -> bool + Send>,
+    ) -> Result<InstallAttempt, Box<(NativeHostError, NativeRunProducer)>> {
+        let prepared = (|| {
+            if self.closing || self.attempts.len() >= MAX_ATTEMPTS || self.owner.active.len() >= 12
+            {
+                return Err(NativeHostError::Capacity);
+            }
+            let a = channel.authority();
+            if !channel.peer_install_enabled()
+                || a.local_role() != Role::Host
+                || a.check().is_err()
+                || !producer.complete_from_zero()
+                || producer.native_scope() != *a.scope()
+            {
+                return Err(NativeHostError::Authority);
+            }
+            if !self
+                .anchor
+                .as_ref()
+                .is_some_and(|original| original.authority().same_channel(&a))
+            {
+                return Err(NativeHostError::Authority);
+            }
+            fn decode<const N: usize>(s: &str) -> Result<[u8; N], NativeHostError> {
+                if s.len() != N * 2 {
+                    return Err(NativeHostError::Authority);
+                }
+                let mut bytes = [0; N];
+                for (i, pair) in s.as_bytes().chunks_exact(2).enumerate() {
+                    bytes[i] = u8::from_str_radix(
+                        std::str::from_utf8(pair).map_err(|_| NativeHostError::Authority)?,
+                        16,
+                    )
+                    .map_err(|_| NativeHostError::Authority)?;
+                }
+                Ok(bytes)
+            }
+            let target = Target {
+                host: self.owner.host,
+                incarnation: self.owner.incarnation,
+                session: decode(&a.scope().session)?,
+                run: a.scope().run.clone(),
+                generation: a
+                    .scope()
+                    .generation
+                    .parse()
+                    .map_err(|_| NativeHostError::Authority)?,
+            };
+            let device = decode(&a.context().client_endpoint_id)?;
+            let mut lease = [0; 16];
+            use ring::rand::SecureRandom;
+            ring::rand::SystemRandom::new()
+                .fill(&mut lease)
+                .map_err(|_| NativeHostError::Rejected)?;
+            let admission = self
+                .owner
+                .authorized_admission(&target, device, &a, lease, 1)
+                .map_err(|_| NativeHostError::Authority)?;
+            let pending = producer
+                .bind(target.clone(), device, admission, authorize)
+                .map_err(|_| NativeHostError::Rejected)?;
+            Ok((target, device, lease, a, pending))
+        })();
+        let (target, device, lease, authority, pending) = match prepared {
+            Ok(value) => value,
+            Err(error) => return Err(Box::new((error, producer))),
+        };
+        producer.retain_authority(authority.clone());
+        let id = InstallAttempt(self.attempts.len() as u64 + 1);
+        let pending =
+            AuthorizedPendingRebind::from_native(pending, authority.clone(), target.clone());
+        self.owner.active.push(SessionWriter {
+            target: target.clone(),
+            writer: producer.writer,
+        });
+        self.attempts.push(Attempt {
+            id,
+            channel: channel.clone(),
+            authority,
+            next_fence: 1,
+            connection_taken: false,
+            state: InstallState::Pending(pending),
+        });
+        self.register_native_attempt(target, device, lease, channel, id);
+        Ok(id)
+    }
     /// Native live authority only. No endpoint enrollment, raw peer or IO factory.
     pub fn from_channel(channel: Arc<RunningChannel>) -> Result<Self, NativeHostError> {
         let authority = channel.authority();

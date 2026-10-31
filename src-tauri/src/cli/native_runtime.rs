@@ -9,8 +9,8 @@ use super::storage::WorkspaceRepository;
 use super::types::SafeError;
 use crate::run_supervisor::NativeRunSupervisor;
 use crate::terminal_input::{
-    write_host_frame, InputAbortRequest, InputBeginRequest, InputChunkRequest, InputCommitRequest,
-    InputStager, InputWriteReceipt, ProtocolInputRequest, ProtocolWriteReceipt,
+    InputAbortRequest, InputBeginRequest, InputChunkRequest, InputCommitRequest, InputStager,
+    InputWriteReceipt, ProtocolInputRequest, ProtocolWriteReceipt,
 };
 use crate::terminal_transport::{OutputAck, OutputFrame, TerminalTransports};
 use parking_lot::Mutex;
@@ -482,7 +482,7 @@ impl NativeRuntime {
         let inputs = self.inputs.clone();
         tauri::async_runtime::spawn_blocking(move || {
             inputs.commit(&caller, &input, |bytes| {
-                let result = access.with_writer(|writer| Ok(write_host_frame(writer, bytes)))?;
+                let result = access.write_frame(bytes)?;
                 Ok(result)
             })
         })
@@ -501,8 +501,7 @@ impl NativeRuntime {
         let run = input_run_key(&input.run_id, input.generation)?;
         let access = self.service.access(&caller, &run)?;
         tauri::async_runtime::spawn_blocking(move || {
-            let result = access.with_writer(|writer| Ok(write_host_frame(writer, &input.bytes)))?;
-            Ok(ProtocolWriteReceipt::from_host(result))
+            access.protocol_frame(&input.bytes, input.protocol_source.as_ref())
         })
         .await
         .map_err(|_| error("INPUT_TASK_FAILED"))?
@@ -512,7 +511,7 @@ impl NativeRuntime {
         &self,
         webview: &Webview<T>,
         request: &Request<'_>,
-    ) -> Result<(), SafeError> {
+    ) -> Result<crate::terminal_input::NativeResizeReceipt, SafeError> {
         let caller = self.binding()?.admit_native(webview, request.headers())?;
         let input: ResizeRequest = decode_projection(request.body(), 4096)?;
         if input.generation == 0 || input.cols == 0 || input.rows == 0 {
@@ -520,6 +519,7 @@ impl NativeRuntime {
         }
         let run = input_run_key(&input.run_id, input.generation)?;
         let access = self.service.access(&caller, &run)?;
+        let current = access.clone();
         resize_native_run(
             access,
             portable_pty::PtySize {
@@ -529,7 +529,8 @@ impl NativeRuntime {
                 pixel_height: 0,
             },
         )
-        .await
+        .await?;
+        Ok(current.resize_receipt())
     }
 
     pub(crate) fn stop<T: Runtime>(

@@ -88,7 +88,7 @@ impl WriterHostOwner {
         admission: view_gate::control::ControlAdmission,
     ) -> Result<view_gate::rebind::PendingRebind, OwnerError> {
         self.find(t)?
-            .rebind(device, expected_fence, admission)
+            .rebind_target(t, device, expected_fence, admission)
             .map_err(OwnerError::Writer)
     }
     pub(super) fn start_controlled(

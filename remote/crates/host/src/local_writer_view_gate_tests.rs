@@ -388,10 +388,24 @@ async fn ControlWindow_PostIntentClock_003() {
     );
     assert_eq!(gate.check_request(&request, Some(&state)), Ok(()));
     finish(&mut native); // relinquish the original directory owner before reopening
+    let mut effect_state = ReplyState::canonical(
+        Arc::new(()),
+        CanonicalStart::new(3, 10, &HostViewBudget::new()).unwrap(),
+    );
+    let native_effect = gate
+        .native_effect_guard(&request, Some(&effect_state))
+        .unwrap();
+    effect_state.resize_commit(4, 10).unwrap();
+    assert!(
+        !native_effect(),
+        "native effect must reject a canonical epoch change before its physical commit point"
+    );
     let mut journal = Journal::open(&dir.path().join("journal.sqlite")).unwrap();
     let PrepareDecision::Prepared(intent) = journal.prepare(&key, &digest).unwrap() else {
         panic!("intent");
     };
+    gate.note_admitted(&key, &digest);
+    assert_eq!(gate.native_local_takeover(&journal), Err(Reject::Pending));
     now.store(6000, Ordering::Release);
     let marker = dir.path().join("must-not-write");
     let outcome = gate.effect_if_current(&request, Some(&state), || {
@@ -422,6 +436,21 @@ async fn ControlWindow_PostIntentClock_003() {
         gate.check_request(&request, Some(&state)),
         Err(Reject::Sync)
     );
+    assert!(
+        gate.native_local_takeover(&journal).is_ok(),
+        "a known no-effect original receipt must not strand the current local owner"
+    );
+    assert_eq!(
+        gate.control.as_ref().unwrap().status(&peer.scope).pending,
+        Some(key.clone())
+    );
+    assert!(matches!(
+        journal.receipt(&key).unwrap(),
+        ReceiptLookup::Known(ReceiptEnvelope {
+            outcome: Outcome::Rejected,
+            ..
+        })
+    ));
     finish(&mut native);
 }
 pub(in crate::local_writer) fn submit_observed(

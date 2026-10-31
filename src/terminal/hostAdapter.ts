@@ -28,8 +28,8 @@ export function classifyXtermData(data: string): ClassifiedHostInput {
 
 /**
  * xterm documents onBinary as raw 8-bit terminal data (currently legacy mouse
- * reports). Preserve byte semantics and keep it off the ordered user-intent
- * lane so an unresolved clipboard read cannot block a terminal response.
+ * reports). This is human input, not an automatic parser reply. Preserve raw
+ * bytes on the user-intent lane without UTF-8 or bracketed-paste conversion.
  */
 export function classifyXtermBinary(data: string): ClassifiedHostInput {
   const bytes = new Uint8Array(data.length)
@@ -37,7 +37,7 @@ export function classifyXtermBinary(data: string): ClassifiedHostInput {
     bytes[index] = data.charCodeAt(index) & 0xff
   }
   return {
-    route: 'protocol-bypass',
+    route: 'user-queue',
     source: 'xterm-binary',
     bytes,
   }

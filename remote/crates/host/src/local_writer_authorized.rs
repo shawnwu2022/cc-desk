@@ -163,6 +163,18 @@ pub(in crate::local_writer) struct AuthorizedPendingRebind {
     fence: u64,
 }
 impl AuthorizedPendingRebind {
+    pub(in crate::local_writer) fn from_native(
+        pending: view_gate::rebind::PendingRebind,
+        authority: BoundDataAuthority,
+        target: Target,
+    ) -> Self {
+        Self {
+            pending,
+            authority,
+            target,
+            fence: 1,
+        }
+    }
     pub(in crate::local_writer) fn wait(
         &self,
         budget: Duration,

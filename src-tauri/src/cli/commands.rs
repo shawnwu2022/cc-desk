@@ -224,7 +224,7 @@ pub(crate) async fn cli_resize(
     webview: Webview,
     request: Request<'_>,
     runtime: State<'_, Arc<NativeRuntime>>,
-) -> Result<(), SafeError> {
+) -> Result<crate::terminal_input::NativeResizeReceipt, SafeError> {
     runtime.resize(&webview, &request).await
 }
 

@@ -6,7 +6,11 @@ use std::{collections::VecDeque, time::Instant};
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum OutputResult {
-    Processed { replies: u8 },
+    Processed {
+        replies: u8,
+    },
+    #[cfg(feature = "experimental-host-owner")]
+    LocalOnly,
     Rejected(Reject),
     Partial,
     Unknown,
@@ -39,6 +43,10 @@ pub(crate) struct HostOutputHandle {
     credits: Arc<Credits>,
 }
 impl HostOutputHandle {
+    #[cfg(feature = "experimental-host-owner")]
+    pub(super) fn seal(&self) {
+        self.sealed.store(true, Ordering::Release);
+    }
     pub(super) fn new(input: &LocalInputHandle, context: Arc<()>) -> Self {
         Self {
             tx: input.tx.clone(),
@@ -104,6 +112,11 @@ impl Rate {
     }
 }
 pub(super) struct ReplyState {
+    #[cfg(feature = "experimental-host-owner")]
+    pub(super) native_epochs:
+        Arc<std::sync::Mutex<Option<cc_desk_remote_terminal::TerminalEpochs>>>,
+    #[cfg(feature = "experimental-host-owner")]
+    pub(super) native_io: Option<owner::native_host::producer::NativeStart>,
     context: Arc<()>,
     next_offset: u64,
     revision: u64,
@@ -117,11 +130,23 @@ enum ReplyParser {
 }
 #[cfg(feature = "experimental-canonical-replies")]
 pub(crate) struct CanonicalStart {
+    #[cfg(feature = "experimental-host-owner")]
+    native_io: Option<owner::native_host::producer::NativeStart>,
     core: Box<cc_desk_remote_terminal::TerminalCore>,
     pub(super) budget: super::projection::HostViewBudget,
 }
 #[cfg(feature = "experimental-canonical-replies")]
 impl CanonicalStart {
+    #[cfg(feature = "experimental-host-owner")]
+    pub(super) fn native(
+        mut self,
+        original: Box<dyn owner::native_host::producer::NativeOriginalIo>,
+        complete: Arc<AtomicBool>,
+        peer_close: Arc<std::sync::Mutex<Option<cc_desk_remote_security::BoundDataAuthority>>>,
+    ) -> Self {
+        self.native_io = Some((original, complete, peer_close));
+        self
+    }
     pub(crate) fn new(
         rows: usize,
         columns: usize,
@@ -129,6 +154,8 @@ impl CanonicalStart {
     ) -> Result<Self, Reject> {
         cc_desk_remote_terminal::TerminalCore::new_with_queries(rows, columns)
             .map(|core| Self {
+                #[cfg(feature = "experimental-host-owner")]
+                native_io: None,
                 core: Box::new(core),
                 budget: budget.clone(),
             })
@@ -136,6 +163,15 @@ impl CanonicalStart {
     }
 }
 impl ReplyState {
+    #[cfg(feature = "experimental-host-owner")]
+    fn publish_native_epochs(&self) -> Result<(), Reject> {
+        *self.native_epochs.lock().map_err(|_| Reject::Thread)? = self.epochs();
+        Ok(())
+    }
+    #[cfg(feature = "experimental-host-owner")]
+    pub(super) fn through_offset(&self) -> u64 {
+        self.next_offset
+    }
     #[cfg(feature = "experimental-host-owner")]
     pub(super) fn resize_baseline(
         &self,
@@ -171,7 +207,8 @@ impl ReplyState {
             return Err(Reject::Unsupported);
         };
         core.resize(usize::from(rows), usize::from(columns))
-            .map_err(|_| Reject::Continuity)
+            .map_err(|_| Reject::Continuity)?;
+        self.publish_native_epochs()
     }
     #[cfg(feature = "experimental-host-owner")]
     pub(super) fn epochs(&self) -> Option<cc_desk_remote_terminal::TerminalEpochs> {
@@ -182,6 +219,10 @@ impl ReplyState {
     }
     pub(super) fn new(context: Arc<()>) -> Self {
         Self {
+            #[cfg(feature = "experimental-host-owner")]
+            native_epochs: Arc::new(std::sync::Mutex::new(None)),
+            #[cfg(feature = "experimental-host-owner")]
+            native_io: None,
             context,
             next_offset: 0,
             revision: 0,
@@ -191,7 +232,13 @@ impl ReplyState {
     }
     #[cfg(feature = "experimental-canonical-replies")]
     pub(super) fn canonical(context: Arc<()>, start: CanonicalStart) -> Self {
+        #[cfg(feature = "experimental-host-owner")]
+        let native_epochs = Arc::new(std::sync::Mutex::new(Some(start.core.epochs())));
         Self {
+            #[cfg(feature = "experimental-host-owner")]
+            native_epochs,
+            #[cfg(feature = "experimental-host-owner")]
+            native_io: start.native_io,
             context,
             next_offset: 0,
             revision: 0,
@@ -235,6 +282,11 @@ impl ReplyState {
         if matches!(result, OutputResult::Processed { .. }) {
             self.next_offset = end_offset;
             self.revision = revision;
+        }
+        #[cfg(feature = "experimental-host-owner")]
+        if self.publish_native_epochs().is_err() {
+            sealed.store(true, Ordering::Release);
+            return OutputResult::Unknown;
         }
         result
     }

@@ -46,6 +46,14 @@ impl Fixture {
         supervisor: Arc<NativeRunSupervisor>,
         transports: Arc<TerminalTransports>,
     ) -> Self {
+        Self::with_runtime_environment(mode, supervisor, transports, false)
+    }
+    fn with_runtime_environment(
+        mode: &str,
+        supervisor: Arc<NativeRunSupervisor>,
+        transports: Arc<TerminalTransports>,
+        isolated: bool,
+    ) -> Self {
         #[cfg(windows)]
         bundled_runtime::initialize().unwrap();
 
@@ -85,7 +93,38 @@ impl Fixture {
             cols: 80,
             rows: 24,
         };
-        let mut inherited: EnvMap = std::env::vars_os().collect();
+        let mut inherited: EnvMap = if isolated {
+            let mut env = EnvMap::new();
+            for key in ["SystemRoot", "WINDIR", "COMSPEC", "PATHEXT"] {
+                if let Some(value) = std::env::var_os(key) {
+                    env.insert(key.into(), value);
+                }
+            }
+            let home = root.path().join("own-home");
+            let temp = root.path().join("own-temp");
+            fs::create_dir_all(&home).unwrap();
+            fs::create_dir_all(&temp).unwrap();
+            for key in [
+                "USERPROFILE",
+                "HOME",
+                "APPDATA",
+                "LOCALAPPDATA",
+                "XDG_CONFIG_HOME",
+                "XDG_DATA_HOME",
+                "CODEX_HOME",
+                "CLAUDE_CONFIG_DIR",
+            ] {
+                env.insert(key.into(), home.as_os_str().to_owned());
+            }
+            for key in ["TEMP", "TMP"] {
+                env.insert(key.into(), temp.as_os_str().to_owned());
+            }
+            // No inherited NODE_OPTIONS/preloads, API credentials, user PATH,
+            // settings or account namespace enters this task-owned Node probe.
+            env
+        } else {
+            std::env::vars_os().collect()
+        };
         inherited.insert("CC_DESK_TEST_ROOT".into(), cwd.as_os_str().to_owned());
 
         let service = Arc::new(LaunchService::new(
@@ -237,6 +276,160 @@ fn ack(run: &RunKey, epoch: &str, through: &str) -> OutputAck {
         "throughOffset": through,
     }))
     .unwrap()
+}
+
+#[cfg(feature = "remote-host")]
+#[test]
+fn NativeBridge_OriginalProductCallpointOwnsSingleWriterAndOwnProbeInput_001() {
+    // Installed before launch. It controls only this fixture's supervisor and
+    // its original creation-owned resource, including assertion failure paths.
+    struct Cleanup {
+        supervisor: Arc<NativeRunSupervisor>,
+        run: RunKey,
+        pin: Option<crate::run_supervisor::NativeRunPin>,
+    }
+    impl Cleanup {
+        fn close(&mut self) -> bool {
+            let pin = self
+                .pin
+                .take()
+                .unwrap_or_else(|| self.supervisor.pin_shutdown(&self.run));
+            let Ok(mut shutdown) = self.supervisor.begin_shutdown_owned(vec![pin]) else {
+                return false;
+            };
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while Instant::now() < deadline {
+                if matches!(
+                    shutdown.observe_run(&self.run),
+                    crate::run_supervisor::NativeShutdownObservation::Unknown {
+                        direct_child_reaped: true,
+                        output_reader_joined: true,
+                        wait_workers_joined: true,
+                        original_io_drop_returned: true,
+                        stop_job_joined: true,
+                        ..
+                    }
+                ) {
+                    return true;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            false
+        }
+    }
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            if self.pin.is_some() {
+                let _ = self.close();
+            } else {
+                self.supervisor.shutdown();
+            }
+        }
+    }
+    let transports = Arc::new(TerminalTransports::new());
+    let supervisor = Arc::new(NativeRunSupervisor::new(transports.clone()));
+    let fixture = Fixture::with_runtime_environment("input", supervisor, transports, true);
+    let mut cleanup = Cleanup {
+        supervisor: fixture.supervisor.clone(),
+        run: fixture.request_run(),
+        pin: None,
+    };
+    let status = fixture.start();
+    cleanup.pin = Some(fixture.supervisor.pin_shutdown(&status.run));
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while fixture.child_reports() == 0 || fixture.events.lock().is_empty() {
+        assert!(Instant::now() < deadline, "own worker did not initialize");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let access = fixture
+        .service
+        .access(&fixture.caller, &status.run)
+        .unwrap();
+    assert_eq!(
+        access
+            .with_writer(|_| -> std::io::Result<()> {
+                panic!("raw writer must be inaccessible after native adoption")
+            })
+            .unwrap_err()
+            .code,
+        "NATIVE_WRITER_ADOPTED"
+    );
+    let first = fixture.events.lock()[0].clone();
+    let source:crate::terminal_input::ProtocolSource=serde_json::from_value(json!({"streamEpoch":first["streamEpoch"],"throughOffset":(first["offset"].as_str().unwrap().parse::<u64>().unwrap()+first["bytes"].as_array().unwrap().len() as u64).to_string()})).unwrap();
+    let owned = access
+        .protocol_frame(b"DESKTOP_REPLY_MUST_NOT_REACH_CHILD", Some(&source))
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(owned).unwrap(),
+        json!({"state":"native-owned","confirmedBytes":"0","runId":status.run.run_id,"generation":status.run.generation,"protocolSource":{"streamEpoch":source.stream_epoch,"throughOffset":source.through_offset}})
+    );
+    let wrong_source: crate::terminal_input::ProtocolSource =
+        serde_json::from_value(json!({"streamEpoch":"999999","throughOffset":"1"})).unwrap();
+    assert_eq!(
+        access
+            .protocol_frame(b"wrong", Some(&wrong_source))
+            .unwrap_err()
+            .code,
+        "NATIVE_PROTOCOL_SOURCE_REJECTED"
+    );
+    access
+        .resize(portable_pty::PtySize {
+            rows: 101,
+            cols: 500,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .unwrap();
+    let late = access
+        .protocol_frame(b"DELAYED_NATIVE_PREFIX_MUST_NOT_WRITE", Some(&source))
+        .unwrap();
+    assert_eq!(
+        late.state,
+        crate::terminal_input::ProtocolWriteState::NativeOwned
+    );
+    let receipt = access.write_frame(b"native").unwrap();
+    assert_eq!(
+        receipt.state,
+        crate::terminal_input::InputWriteState::HostWritten
+    );
+    assert_eq!(receipt.confirmed_bytes, 6);
+    drop(access);
+    fixture.wait_lifecycle(|state| state.process() == ProcessLifecycle::Exited);
+    let reports: Vec<Value> = fs::read_dir(fixture.root.path().join("work"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|e| e.path().extension().is_some_and(|e| e == "json"))
+        .map(|e| serde_json::from_slice(&fs::read(e.path()).unwrap()).unwrap())
+        .collect();
+    assert!(
+        reports
+            .iter()
+            .any(|r| r["input"] == json!(b"native".to_vec())),
+        "original native input was not consumed exactly"
+    );
+    assert!(
+        reports
+            .iter()
+            .any(|r| r["columns"] == 500 && r["rows"] == 101),
+        "own worker did not observe the original Master's full 101x500 console"
+    );
+    let terminal = fixture.wait_lifecycle(|state| {
+        state.final_offset().is_some() || state.output() == OutputLifecycle::Incomplete
+    });
+    if let Some(offset) = terminal.final_offset() {
+        let epoch = fixture.events.lock()[0]["streamEpoch"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        fixture
+            .transports
+            .ack(
+                &fixture.caller,
+                &ack(&status.run, &epoch, &offset.to_string()),
+            )
+            .unwrap();
+    }
+    assert!(cleanup.close(),"own original reader/writer/root/IO-drop cleanup did not settle; no Job-tree claim is implied");
 }
 
 #[test]

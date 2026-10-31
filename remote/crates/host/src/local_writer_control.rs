@@ -130,6 +130,28 @@ impl AdmissionError {
     }
 }
 impl ControlState {
+    pub(super) fn native_guard(
+        &self,
+        scope: Arc<PeerScope>,
+        view: &SyncedView,
+    ) -> Result<Box<dyn FnOnce() -> bool + Send>, Reject> {
+        self.check(&scope, view)?;
+        let deadline = self
+            .lease_deadline
+            .min(self.grant_deadline)
+            .min(view.window.as_ref().ok_or(Reject::Policy)?.deadline_ms);
+        let clock = self.clock.clone();
+        let last = self.last_ms.clone();
+        let authority = self.authority.clone();
+        Ok(Box::new(move || {
+            if authority.as_ref().is_some_and(|a| a.check().is_err()) {
+                scope.close();
+                return false;
+            }
+            output::sample(clock.as_ref(), &last, &scope)
+                .is_ok_and(|now| scope.is_active() && now < deadline)
+        }))
+    }
     pub(super) fn new(clock: Arc<dyn HostClock>, grant: GrantContext) -> Result<Self, Reject> {
         let now = clock.now_ms()?;
         Self::at(clock, grant, now, true)
@@ -364,6 +386,9 @@ pub(in crate::local_writer) struct ControlRequest {
     pub(super) _credit: Arc<Credit>,
 }
 impl ControlRequest {
+    pub(in crate::local_writer) fn is_factual_query(&self) -> bool {
+        matches!(self.action, ControlAction::Query { .. })
+    }
     pub(in crate::local_writer) fn reject(self, error: Reject) {
         match self.action {
             ControlAction::Window { reply, .. } => {

@@ -58,6 +58,15 @@ pub(crate) struct ProtocolInputRequest {
     pub(crate) run_id: String,
     pub(crate) generation: u32,
     pub(crate) bytes: Vec<u8>,
+    #[serde(default)]
+    pub(crate) protocol_source: Option<ProtocolSource>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ProtocolSource {
+    pub(crate) stream_epoch: WireU64,
+    pub(crate) through_offset: WireU64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -81,15 +90,55 @@ pub(crate) struct InputWriteReceipt {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ProtocolWriteReceipt {
-    pub(crate) state: InputWriteState,
+    pub(crate) state: ProtocolWriteState,
     pub(crate) confirmed_bytes: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    run_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    generation: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    protocol_source: Option<ProtocolSource>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum ProtocolWriteState {
+    HostWritten,
+    PartialOrUnknown,
+    #[cfg(feature = "remote-host")]
+    NativeOwned,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct NativeResizeReceipt {
+    pub(crate) state: &'static str,
+    pub(crate) canonical_output: &'static str,
 }
 
 impl ProtocolWriteReceipt {
+    #[cfg(feature = "remote-host")]
+    pub(crate) fn native_owned(
+        run: &crate::cli::run_registry::RunKey,
+        source: Option<ProtocolSource>,
+    ) -> Self {
+        Self {
+            state: ProtocolWriteState::NativeOwned,
+            confirmed_bytes: "0".into(),
+            run_id: Some(run.run_id.clone()),
+            generation: Some(run.generation),
+            protocol_source: source,
+        }
+    }
     pub(crate) fn from_host(result: HostWriteResult) -> Self {
         Self {
-            state: result.state,
+            state: match result.state {
+                InputWriteState::HostWritten => ProtocolWriteState::HostWritten,
+                InputWriteState::PartialOrUnknown => ProtocolWriteState::PartialOrUnknown,
+            },
             confirmed_bytes: result.confirmed_bytes.to_string(),
+            run_id: None,
+            generation: None,
+            protocol_source: None,
         }
     }
 }

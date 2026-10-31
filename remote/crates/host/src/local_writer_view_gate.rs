@@ -25,6 +25,9 @@ pub(super) struct PeerScope {
     writer_closed: Arc<tokio::sync::watch::Sender<bool>>,
 }
 impl PeerScope {
+    pub(super) fn target(&self) -> &Target {
+        &self.target
+    }
     pub(super) fn is_active(&self) -> bool {
         self.active.load(Ordering::Acquire) && !*self.writer_closed.borrow()
     }
@@ -377,6 +380,48 @@ pub(super) struct ViewGate {
     control: Option<control::ControlState>,
     pub(super) resize_feedback: Option<(std::time::Instant, Arc<AtomicBool>)>,
 }
+impl super::owner::native_host::producer::NativeBindRequest {
+    pub(in crate::local_writer) fn process(self, native: &Target, gate: &mut Option<ViewGate>) {
+        let result = (|| {
+            if gate.is_some()
+                || native.run != self.target.run
+                || native.generation != self.target.generation
+                || !self.complete.load(Ordering::Acquire)
+                || !(self.authorize)()
+            {
+                return Err(Reject::Policy);
+            }
+            let authority = self.admission.authority.as_ref().ok_or(Reject::Policy)?;
+            authority.check().map_err(|_| Reject::Policy)?;
+            let mut control =
+                control::ControlState::new(self.admission.clock, self.admission.grant)?;
+            control.authority = Some(authority.clone());
+            let peer = PeerControl::new(
+                self.target.clone(),
+                self.device,
+                self.admission.binding,
+                self.admission.minor,
+            )?;
+            peer.scope
+                .authority
+                .set(authority.clone())
+                .map_err(|_| Reject::Policy)?;
+            let mut input = self.input;
+            input.target = Arc::new(self.target);
+            input.device = self.device;
+            input.view_scope = Some(peer.scope.clone());
+            let mut installed = ViewGate::new(peer.scope.clone());
+            installed.control = Some(control);
+            *gate = Some(installed);
+            Ok(PeerViewHandle {
+                input,
+                projection: self.projection,
+                control: peer,
+            })
+        })();
+        let _ = self.reply.try_send(result);
+    }
+}
 impl ViewGate {
     pub(super) fn resize_expired(&self) -> bool {
         if self.durable_resize.as_ref().is_some_and(|r| r.expired()) {
@@ -491,6 +536,57 @@ impl ViewGate {
         } else {
             effect()
         }
+    }
+    pub(super) fn native_effect_guard(
+        &self,
+        request: &Request,
+        replies: Option<&ReplyState>,
+    ) -> Result<Box<dyn FnOnce() -> bool + Send>, Reject> {
+        self.check_request(request, replies)?;
+        let view = request.view.as_ref().ok_or(Reject::Sync)?;
+        let record = view.record.clone();
+        let epochs = replies.ok_or(Reject::Sync)?.native_epochs.clone();
+        let guard = self
+            .control
+            .as_ref()
+            .ok_or(Reject::Policy)?
+            .native_guard(self.scope.clone(), view)?;
+        Ok(Box::new(move || {
+            // Only immutable epoch metadata crosses threads. TerminalCore stays
+            // exclusively on its original actor; this short check is the IO
+            // commit point, never a mutex held across the native write.
+            epochs
+                .lock()
+                .is_ok_and(|current| *current == Some(record.epochs))
+                && record.phase.load(Ordering::Acquire) == DELIVERED
+                && guard()
+        }))
+    }
+    pub(super) fn bound_authority(&self) -> Option<cc_desk_remote_security::BoundDataAuthority> {
+        self.scope.authority.get().cloned()
+    }
+    pub(super) fn native_local_takeover(&mut self, journal: &Journal) -> Result<(), Reject> {
+        // An explicit current native caller may take local control only after
+        // the original mutation has a durable Written/Rejected terminal fact.
+        // Its unacknowledged receipt, sequence floor and fence remain intact;
+        // this explicit local transition revokes the old lease without an ACK.
+        if let Some(key) = self
+            .control
+            .as_ref()
+            .and_then(|c| c.status(&self.scope).pending)
+            && !matches!(
+                journal.receipt(&key),
+                Ok(ReceiptLookup::Known(ReceiptEnvelope {
+                    outcome: Outcome::HostWritten | Outcome::Rejected,
+                    ..
+                }))
+            )
+        {
+            return Err(Reject::Pending);
+        }
+        self.scope.close();
+        self.invalidate_for_resize();
+        Ok(())
     }
     pub(super) fn scope(&self) -> &Arc<PeerScope> {
         &self.scope

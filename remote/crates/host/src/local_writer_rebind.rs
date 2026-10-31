@@ -88,6 +88,15 @@ pub(in crate::local_writer) struct PendingRebind {
     _credit: Arc<Credit>,
 }
 impl PendingRebind {
+    pub(in crate::local_writer) fn from_native(
+        reply: mpsc::Receiver<Result<PeerViewHandle, Reject>>,
+        credit: Arc<Credit>,
+    ) -> Self {
+        Self {
+            reply,
+            _credit: credit,
+        }
+    }
     pub(in crate::local_writer) fn wait(
         &self,
         budget: Duration,
@@ -126,11 +135,25 @@ impl LocalWriter {
         expected_fence: u64,
         admission: ControlAdmission,
     ) -> Result<PendingRebind, Reject> {
+        self.rebind_target(&self.handle.target, device, expected_fence, admission)
+    }
+    pub(in crate::local_writer) fn rebind_target(
+        &self,
+        target: &Target,
+        device: [u8; 32],
+        expected_fence: u64,
+        admission: ControlAdmission,
+    ) -> Result<PendingRebind, Reject> {
         if self.handle.sealed.load(Ordering::Acquire) {
             return Err(Reject::Sealed);
         }
         let projection = self.projection.as_ref().ok_or(Reject::Unsupported)?.clone();
         let credit = self.handle.credits.reserve()?;
+        let mut input = self.handle.clone();
+        // Only the already-owned session index supplies this peer alias. The
+        // actor still checks exact current Target and verified admission. Its
+        // original local namespace/physical IO object is never relabelled.
+        input.target = Arc::new(target.clone());
         let (tx, rx) = mpsc::sync_channel(1);
         self.handle
             .tx
@@ -138,7 +161,7 @@ impl LocalWriter {
                 device,
                 expected_fence,
                 admission,
-                input: self.handle.clone(),
+                input,
                 projection,
                 reply: tx,
                 _credit: credit.clone(),
@@ -225,6 +248,7 @@ impl RebindRequest {
             gate.current = None;
             gate.accepted = false;
             let mut input = self.input;
+            input.target = Arc::new(gate.scope.target.clone());
             input.device = self.device;
             input.view_scope = Some(control.scope.clone());
             Ok(PeerViewHandle {

@@ -148,6 +148,38 @@ Key properties:
 - partial/unknown writes are never replayed automatically;
 - ambiguous `onData` bytes are never guessed to be terminal protocol replies.
 
+Legacy mouse `onBinary` events are human input. Their unchanged eight-bit bytes
+use the authenticated user-intent/staging path and the current input-allowed gate;
+they are never suppressed as native-generated parser replies or paste-wrapped.
+
+With the default-off `remote-host` build, supervisor adoption initializes the native
+canonical producer before the original output reader's first read. The same actor
+keeps canonical state and short journal transactions; one owned physical-IO worker
+retains the original PTY mutation region for each complete frame or resize. While
+IO is pending, canonical output and factual queries can progress, but snapshots,
+input eligibility, resize and control transitions cannot overtake that mutation.
+Stop retains the original result and worker join; it does not manufacture retirement.
+
+The authenticated protocol route can return `state: "native-owned"` with zero
+confirmed bytes and the exact run/generation. This means the browser reply had no
+physical effect. New clients retain the original parsed frame's `streamEpoch` and
+`throughOffset` as `protocolSource`, including across an asynchronous input wait;
+the backend rechecks that source against the original run stream. An oversized
+valid local resize is applied in full, without raising the remote terminal bounds.
+Pure canonical/projection loss also revokes the peer and enters irreversible
+local-only mode. The original canonical output cut suppresses delayed browser
+replies for the native prefix; later authenticated desktop replies use the same
+physical worker. Missing or mismatched source information fails closed in that
+mode. Local input may continue after a durable Written/Rejected original outcome;
+unacknowledged receipts, sequence floors and fences remain intact. Actual partial
+native IO, source discontinuity and journal failure retain their fail-closed rules.
+
+Resize returns `state: "resized"` and `canonicalOutput` (`complete`, `local-only`
+or `unavailable`); the local-only diagnostic does not disable ordinary local input.
+These capture facts are not remote admission. Identity provisioning, the production
+verified connection entry and complete Job/process-tree retirement remain separate
+release gates; this bridge does not enroll credentials or enable remote access.
+
 ## Output path
 
 Native output uses a bounded stream with explicit offsets and acknowledgements.

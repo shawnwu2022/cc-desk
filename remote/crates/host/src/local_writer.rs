@@ -125,6 +125,14 @@ struct Request {
 }
 enum Command {
     #[cfg(feature = "experimental-host-owner")]
+    NativeLocal(owner::native_host::producer::NativeLocalRequest),
+    #[cfg(feature = "experimental-host-owner")]
+    NativeResize(owner::native_host::producer::NativeResizeRequest),
+    #[cfg(feature = "experimental-host-owner")]
+    NativeWake,
+    #[cfg(feature = "experimental-host-owner")]
+    NativeBind(owner::native_host::producer::NativeBindRequest),
+    #[cfg(feature = "experimental-host-owner")]
     DurableResize(Box<resize::durable::Command>),
     #[cfg(feature = "experimental-host-owner")]
     Resize(resize::Request),
@@ -247,6 +255,8 @@ impl LocalInputHandle {
 /// 单个 stdin 的唯一 writer。创建者仍须提供已准入的后端 IO；此类型不认证它。
 #[must_use = "保留 owner，直到 try_join 确认实际线程退出；seal 不是 IO 退休证明"]
 pub struct LocalWriter {
+    #[cfg(feature = "experimental-host-owner")]
+    native_joined: Option<Arc<std::sync::atomic::AtomicU8>>,
     handle: LocalInputHandle,
     worker: Option<JoinHandle<()>>,
     terminal: Option<Result<(), Reject>>,
@@ -360,7 +370,7 @@ impl LocalWriter {
     }
     fn start_with(
         mut journal: Journal,
-        mut stdin: impl Write + Send + 'static,
+        stdin: impl Write + Send + 'static,
         target: Target,
         device: [u8; 32],
         epoch: u64,
@@ -394,15 +404,28 @@ impl LocalWriter {
             .name("cc-local-writer".into())
             .spawn(move || {
                 let mut replies = config.replies.take();
+                let mut stdin:Box<dyn Write+Send>=Box::new(stdin);
+                #[cfg(feature = "experimental-host-owner")]
+                let mut native_io=if let Some(start)=replies.as_mut().and_then(|r|r.native_io.take()){
+                    match owner::native_host::producer::NativeIoState::start(start){Ok(io)=>Some(io),Err(_)=>{sealed.store(true,Ordering::Release);reject_queued(&rx);return;}}
+                }else{None};
                 #[cfg(feature = "experimental-host-owner")]
                 let mut view_gate = config.view_gate.take();
                 loop {
+                    #[cfg(feature = "experimental-host-owner")]
+                    if let Some(io)=&mut native_io{io.poll(&mut journal,&sealed,replies.as_mut());}
                     #[cfg(feature = "experimental-host-owner")]
                     if view_gate.as_ref().is_some_and(view_gate::ViewGate::resize_expired) {
                         sealed.store(true,Ordering::Release);
                     }
                     if sealed.load(Ordering::Acquire) {
+                        #[cfg(feature = "experimental-host-owner")]
+                        if let Some(gate)=&view_gate {gate.scope().close_writer();}
                         reject_queued(&rx);
+                        #[cfg(feature = "experimental-host-owner")]
+                        if native_io.as_ref().is_some_and(|io|io.busy()){
+                            std::thread::park_timeout(Duration::from_millis(1));continue;
+                        }
                         break;
                     }
                     #[cfg(feature = "experimental-host-owner")]
@@ -414,8 +437,19 @@ impl LocalWriter {
                     let command = match rx.recv_timeout(Duration::from_millis(10)) {
                         Ok(r) => r,
                         Err(mpsc::RecvTimeoutError::Timeout) => continue,
-                        Err(_) => break,
+                        Err(_) => {
+                            #[cfg(feature = "experimental-host-owner")]
+                            if native_io.as_ref().is_some_and(|io|io.busy()){continue;}
+                            break;
+                        },
                     };
+                    #[cfg(feature = "experimental-host-owner")]
+                    if native_io.as_ref().is_some_and(|io|io.busy())
+                        && !matches!(&command,Command::Output(_)|Command::ControlStatus(_)|Command::NativeWake)
+                        && !matches!(&command,Command::NativeLocal(r) if r.is_protocol())
+                        && !matches!(&command,Command::Control(r) if r.is_factual_query()) {
+                        reject_with(command,Reject::Pending);continue;
+                    }
                     #[cfg(feature = "experimental-host-owner")]
                     if view_gate.as_ref().is_some_and(view_gate::ViewGate::resize_expired) {
                         sealed.store(true, Ordering::Release);
@@ -424,6 +458,22 @@ impl LocalWriter {
                         break;
                     }
                     let request = match command {
+                        #[cfg(feature = "experimental-host-owner")]
+                        Command::NativeLocal(request) => {
+                            if let Some(io)=&mut native_io{io.local(request,sealed.clone(),view_gate.as_mut(),&journal);}
+                            else{request.reject(Reject::Unsupported);}
+                            continue;
+                        }
+                        #[cfg(feature = "experimental-host-owner")]
+                        Command::NativeResize(request)=>{
+                            if let Some(io)=&mut native_io{io.resize(request,sealed.clone(),view_gate.as_mut(),replies.as_ref(),&journal);}
+                            else{request.reject(Reject::Unsupported);}
+                            continue;
+                        }
+                        #[cfg(feature = "experimental-host-owner")]
+                        Command::NativeWake => continue,
+                        #[cfg(feature = "experimental-host-owner")]
+                        Command::NativeBind(request)=>{request.process(&target,&mut view_gate);if let Some(io)=&native_io{io.track_authority(view_gate.as_ref());}continue;}
                         #[cfg(feature = "experimental-host-owner")]
                         Command::DurableResize(request) => {
                             request.process(config.resize.as_mut(),&mut replies,&mut view_gate,&sealed);
@@ -436,12 +486,26 @@ impl LocalWriter {
                         }
                         #[cfg(feature = "experimental-canonical-replies")]
                         Command::Projection(request) => {
+                            #[cfg(feature="experimental-host-owner")]
+                            if native_io.as_ref().is_some_and(|io|!io.qualified()){let _=request.reply.try_send(Err(Reject::Unsupported));continue;}
+                            #[cfg(feature="experimental-host-owner")]
+                            let local_projection_seal=AtomicBool::new(sealed.load(Ordering::Acquire));
+                            #[cfg(feature="experimental-host-owner")]
+                            let capture_seal=if native_io.is_some(){&local_projection_seal}else{sealed.as_ref()};
+                            #[cfg(not(feature="experimental-host-owner"))]
+                            let capture_seal=sealed.as_ref();
                             let result = match &mut replies {
                                 Some(state) => {
-                                    state.capture(&request, target.clone(), epoch, &sealed)
+                                    #[cfg(feature = "experimental-host-owner")]
+                                    let capture_target=request.peer.as_ref().filter(|peer|view_gate.as_ref().is_some_and(|gate|Arc::ptr_eq(peer,gate.scope()))).map_or_else(||target.clone(),|peer|Arc::new(peer.target().clone()));
+                                    #[cfg(not(feature = "experimental-host-owner"))]
+                                    let capture_target=target.clone();
+                                    state.capture(&request, capture_target, epoch, capture_seal)
                                 }
                                 None => Err(Reject::Unsupported),
                             };
+                            #[cfg(feature="experimental-host-owner")]
+                            if matches!(result,Err(Reject::Unsupported))&&let(Some(io),Some(state))=(native_io.as_mut(),replies.as_ref()){io.local_only(state,view_gate.as_mut());}
                             #[cfg(feature = "experimental-host-owner")]
                             let result = if let Some(peer) = &request.peer {
                                 result.and_then(|frame| {
@@ -489,10 +553,12 @@ impl LocalWriter {
                         }
                         #[cfg(feature = "experimental-host-owner")]
                         Command::Rebind(request) => {
+                            if native_io.as_ref().is_some_and(|io|!io.qualified()){request.reject(Reject::Unsupported);continue;}
                             if sealed.load(Ordering::Acquire) {
                                 request.reject(Reject::Sealed);
                             } else if let Some(gate) = &mut view_gate {
                                 request.process(gate, &journal);
+                                if let Some(io)=&native_io{io.track_authority(Some(gate));}
                             } else {
                                 request.reject(Reject::Unsupported);
                             }
@@ -519,6 +585,11 @@ impl LocalWriter {
                             let request=if let Some(state)=&mut config.resize {
                                 let Some(request)=state.hold_output(request,&view_gate) else {continue;};request
                             }else{request};
+                            #[cfg(feature = "experimental-host-owner")]
+                            if let Some(io)=&mut native_io {
+                                if let Some(state)=&mut replies{io.output(request,state,&sealed,view_gate.as_mut());}else{let _=request.reply.try_send(OutputResult::Rejected(Reject::Unsupported));}
+                                continue;
+                            }
                             let result = match &mut replies {
                                 Some(state) => state.process(&request, &mut stdin, &sealed),
                                 None => OutputResult::Rejected(Reject::Unsupported),
@@ -531,10 +602,14 @@ impl LocalWriter {
                     let current_device = view_gate
                         .as_ref()
                         .map_or(&device, view_gate::ViewGate::device);
+                    #[cfg(feature = "experimental-host-owner")]
+                    let current_target=view_gate.as_ref().map_or(target.as_ref(),|gate|gate.scope().target());
+                    #[cfg(not(feature = "experimental-host-owner"))]
+                    let current_target=target.as_ref();
                     #[cfg(not(feature = "experimental-host-owner"))]
                     let current_device = &device;
                     if let Err(reason) = validate(
-                        &target,
+                        current_target,
                         current_device,
                         epoch,
                         &request.key,
@@ -595,6 +670,18 @@ impl LocalWriter {
                             if let Some(gate) = &mut view_gate {
                                 gate.note_admitted(&request.key, &digest);
                             }
+                            #[cfg(feature = "experimental-host-owner")]
+                            if let Some(io)=&mut native_io {
+                                let guard=view_gate.as_ref().ok_or(Reject::Policy).and_then(|gate|gate.native_effect_guard(&request,replies.as_ref()));
+                                match guard {
+                                    Ok(guard)=>{io.remote(request,intent,guard,sealed.clone());continue;}
+                                    Err(_)=>{
+                                        let outcome=journal.finalize(intent,Outcome::Rejected);
+                                        let result=feedback(&journal,&request.key,outcome,&sealed);
+                                        let _=request.reply.try_send(result);continue;
+                                    }
+                                }
+                            }
                             let effect_outcome = (|| {
                                 // 意图已持久化后、真正写入前再次采样封存。当前在途写不能靠 seal 撤销。
                                 if sealed.load(Ordering::Acquire) {
@@ -652,10 +739,14 @@ impl LocalWriter {
                     }
                     let _ = request.reply.try_send(feedback);
                 }
+                #[cfg(feature = "experimental-host-owner")]
+                if let Some(io)=native_io{assert!(io.shutdown().is_ok(),"original native IO worker failed");}
                 // stdin、Journal、摘要 key 只由本线程持有；退出才释放。
             })
             .map_err(|_| Reject::Thread)?;
         Ok(Self {
+            #[cfg(feature = "experimental-host-owner")]
+            native_joined: None,
             handle,
             worker: Some(worker),
             terminal: None,
@@ -695,6 +786,10 @@ impl LocalWriter {
             .join()
             .map_err(|_| Reject::Thread);
         self.terminal = Some(result);
+        #[cfg(feature = "experimental-host-owner")]
+        if let Some(witness) = &self.native_joined {
+            witness.store(if result.is_ok() { 1 } else { 2 }, Ordering::Release);
+        }
         result.map(|_| true)
     }
 }
@@ -703,36 +798,77 @@ impl Drop for LocalWriter {
         self.seal(); /* 不阻塞 Drop，也不把 detach 冒充 join。 */
     }
 }
+fn feedback(
+    journal: &Journal,
+    key: &OperationKey,
+    outcome: Result<Outcome, JournalError>,
+    sealed: &AtomicBool,
+) -> WriteResult {
+    match outcome {
+        Ok(Outcome::Partial) => {
+            sealed.store(true, Ordering::Release);
+            WriteResult::Partial
+        }
+        Ok(Outcome::Unknown) => {
+            sealed.store(true, Ordering::Release);
+            WriteResult::Unknown
+        }
+        Ok(_) => match journal.receipt(key) {
+            Ok(ReceiptLookup::Known(r)) => WriteResult::Receipt(r),
+            _ => {
+                sealed.store(true, Ordering::Release);
+                WriteResult::Unknown
+            }
+        },
+        Err(error) => {
+            if matches!(error, JournalError::Storage | JournalError::Schema) {
+                sealed.store(true, Ordering::Release);
+            }
+            WriteResult::Journal(error)
+        }
+    }
+}
 fn reject_queued(rx: &mpsc::Receiver<Command>) {
     for r in rx.try_iter() {
         reject_command(r);
     }
 }
 fn reject_command(r: Command) {
+    reject_with(r, Reject::Sealed);
+}
+fn reject_with(r: Command, error: Reject) {
     match r {
         #[cfg(feature = "experimental-host-owner")]
-        Command::DurableResize(r) => r.reject(Reject::Sealed),
+        Command::NativeLocal(r) => r.reject(error),
         #[cfg(feature = "experimental-host-owner")]
-        Command::Resize(r) => r.reject(Reject::Sealed),
+        Command::NativeResize(r) => r.reject(error),
         #[cfg(feature = "experimental-host-owner")]
-        Command::Control(r) => r.reject(Reject::Sealed),
+        Command::NativeWake => (),
         #[cfg(feature = "experimental-host-owner")]
-        Command::Rebind(r) => r.reject(Reject::Sealed),
+        Command::NativeBind(r) => r.reject(error),
         #[cfg(feature = "experimental-host-owner")]
-        Command::ControlStatus(r) => r.reject(Reject::Sealed),
+        Command::DurableResize(r) => r.reject(error),
+        #[cfg(feature = "experimental-host-owner")]
+        Command::Resize(r) => r.reject(error),
+        #[cfg(feature = "experimental-host-owner")]
+        Command::Control(r) => r.reject(error),
+        #[cfg(feature = "experimental-host-owner")]
+        Command::Rebind(r) => r.reject(error),
+        #[cfg(feature = "experimental-host-owner")]
+        Command::ControlStatus(r) => r.reject(error),
         #[cfg(feature = "experimental-host-owner")]
         Command::ViewAck(r) => {
-            let _ = r.reply.try_send(Err(Reject::Sealed));
+            let _ = r.reply.try_send(Err(error));
         }
         #[cfg(feature = "experimental-canonical-replies")]
         Command::Projection(r) => {
-            let _ = r.reply.try_send(Err(Reject::Sealed));
+            let _ = r.reply.try_send(Err(error));
         }
         Command::Input(r) => {
-            let _ = r.reply.try_send(WriteResult::Rejected(Reject::Sealed));
+            let _ = r.reply.try_send(WriteResult::Rejected(error));
         }
         Command::Output(r) => {
-            let _ = r.reply.try_send(OutputResult::Rejected(Reject::Sealed));
+            let _ = r.reply.try_send(OutputResult::Rejected(error));
         }
     }
 }

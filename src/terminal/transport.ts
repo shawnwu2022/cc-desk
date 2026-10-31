@@ -3,7 +3,7 @@ import type { OutputAck, OutputFrame } from '@/types/terminal'
 const MAX_FRAME_BYTES = 16 * 1024
 const MAX_U64 = BigInt('18446744073709551615')
 
-type WriteTerminalBytes = (bytes: Uint8Array, parsed: () => void) => void
+type WriteTerminalBytes = (bytes: Uint8Array, parsed: () => void, source: import('@/types/terminal').ProtocolSource) => void
 type AckOutput = (ack: OutputAck) => Promise<unknown>
 
 export interface TerminalOutputTransportOptions {
@@ -148,7 +148,7 @@ export function createTerminalOutputTransport(
       nextOffset = end
 
       try {
-        options.write(Uint8Array.from(frame.bytes), () => parsed(entry))
+        options.write(Uint8Array.from(frame.bytes), () => parsed(entry), { streamEpoch: frame.streamEpoch, throughOffset: end.toString() })
       } catch {
         return fail('OUTPUT_WRITE_FAILED')
       }

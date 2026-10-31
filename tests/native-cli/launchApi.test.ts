@@ -91,6 +91,12 @@ it('D23_Api_ResizeUsesAuthenticatedNativeRunBoundary_007', async () => {
   ]]);
 });
 
+it('returns the explicit local-only canonical status after a full local resize', async () => {
+  const result={state:'resized',canonicalOutput:'local-only'};
+  bridge(vi.fn(async()=>result));
+  await expect(api.cliResize({runId:'run-resize',generation:3},500,101)).resolves.toEqual(result);
+});
+
 it('D23_Api_ResizeMissingDocumentNeverFallsBack_008', async () => {
   await expect(api.cliResize({ runId: 'run-resize', generation: 3 }, 80, 24))
     .rejects.toMatchObject({ code: 'DOCUMENT_BRIDGE_UNAVAILABLE' });

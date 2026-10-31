@@ -398,16 +398,16 @@ export async function cliResize(
   run: import('@/types/terminal').RunKey,
   cols: number,
   rows: number,
-): Promise<void> {
+): Promise<import('@/types/terminal').NativeResizeReceipt | void> {
   if (!Number.isInteger(cols) || cols <= 0 || cols > 65535
     || !Number.isInteger(rows) || rows <= 0 || rows > 65535) {
     throw new Error('INVALID_TERMINAL_SIZE')
   }
-  await nativeDocumentBridge().invoke('cli_resize', {
+  return await nativeDocumentBridge().invoke('cli_resize', {
     ...run,
     cols,
     rows,
-  })
+  }) as import('@/types/terminal').NativeResizeReceipt | void
 }
 
 
@@ -459,6 +459,7 @@ export async function cliWriteInput(
 export async function cliWriteProtocol(
   run: import('@/types/terminal').RunKey,
   bytes: Uint8Array,
+  source?: import('@/types/terminal').ProtocolSource,
 ): Promise<import('@/types/terminal').ProtocolWriteReceipt> {
   if (bytes.byteLength === 0 || bytes.byteLength > NATIVE_INPUT_UPLOAD_CHUNK_BYTES) {
     throw new Error('INVALID_PROTOCOL_INPUT_SIZE')
@@ -466,6 +467,7 @@ export async function cliWriteProtocol(
   return nativeDocumentBridge().invoke('cli_input_protocol', {
     ...run,
     bytes: Array.from(bytes),
+    ...(source ? { protocolSource: source } : {}),
   }) as Promise<import('@/types/terminal').ProtocolWriteReceipt>
 }
 

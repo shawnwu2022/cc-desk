@@ -20,6 +20,29 @@ use std::time::{Duration, Instant};
 
 type RunIdentity = (String, u32);
 
+#[cfg(feature = "remote-host")]
+struct CanonicalReader {
+    original: Box<dyn std::io::Read + Send>,
+    output: Option<cc_desk_remote_host::native_host::NativeOutputIngress>,
+    offset: u64,
+}
+#[cfg(feature = "remote-host")]
+impl std::io::Read for CanonicalReader {
+    fn read(&mut self, b: &mut [u8]) -> std::io::Result<usize> {
+        let count = self.original.read(b)?;
+        if count > 0 {
+            if let Some(output) = &mut self.output {
+                output.feed(self.offset, &b[..count]);
+            }
+            self.offset = self
+                .offset
+                .checked_add(count as u64)
+                .ok_or_else(|| std::io::Error::other("NATIVE_OFFSET_OVERFLOW"))?;
+        }
+        Ok(count)
+    }
+}
+
 // 诊断快照保留上限：超过后按完成顺序淘汰最老记录，避免 completed 无界增长。
 const SUPERVISOR_COMPLETED_MAX: usize = 256;
 const SUPERVISOR_RETRY_DELAY: Duration = Duration::from_millis(100);
@@ -479,7 +502,22 @@ impl RunSupervisor for NativeRunSupervisor {
                 .store(false, Ordering::SeqCst);
         }
 
-        let mut reader = resource.process.pty.take_reader()?;
+        let reader = resource.process.pty.take_reader()?;
+        #[cfg(feature = "remote-host")]
+        let mut native_output = match crate::cli::launch_service::prepare_native_canonical(
+            run,
+            resource.clone(),
+            NativeRunAuthority {
+                state: Arc::downgrade(&state),
+                resource: Arc::downgrade(&resource),
+            },
+        ) {
+            Ok((owned, output)) => {
+                *state.native_canonical.lock() = Some(owned);
+                Some(output)
+            }
+            Err(_) => None, // Ordinary local run remains available; no complete-state remote eligibility.
+        };
 
         let progress: Arc<dyn OutputProgress> = state.clone();
         let stream = self.core.transports.attach_observed(
@@ -489,6 +527,12 @@ impl RunSupervisor for NativeRunSupervisor {
             progress,
         )?;
         state.set_stream(stream.clone())?;
+        #[cfg(feature = "remote-host")]
+        resource
+            .process
+            .native_stream
+            .set(Arc::downgrade(&stream))
+            .map_err(|_| error("NATIVE_CANONICAL_ALREADY_OWNED"))?;
 
         #[cfg(any(test, feature = "remote-host"))]
         {
@@ -500,6 +544,14 @@ impl RunSupervisor for NativeRunSupervisor {
         let reader_worker = std::thread::Builder::new()
             .name("native-output-reader".into())
             .spawn(move || {
+                #[cfg(not(feature = "remote-host"))]
+                let mut reader = reader;
+                #[cfg(feature = "remote-host")]
+                let mut reader: Box<dyn std::io::Read + Send> = Box::new(CanonicalReader {
+                    original: reader,
+                    output: native_output.take(),
+                    offset: 0,
+                });
                 loop {
                     match stream.pump_once_with_end(&mut *reader, crate::pty::is_pty_stream_end) {
                         Ok(0) => {
@@ -654,6 +706,8 @@ impl WaitWorkers {
 }
 
 struct SupervisedRun {
+    #[cfg(feature = "remote-host")]
+    native_canonical: Mutex<Option<crate::cli::launch_service::NativeCanonicalRun>>,
     core: Weak<SupervisorCore>,
     registry: Arc<RunRegistry<NativeRun>>,
     run: RunKey,
@@ -692,6 +746,8 @@ impl SupervisedRun {
         #[cfg(any(test, feature = "remote-host"))]
         let io_drop = resource.process.pty.io_drop_witness();
         Ok(Arc::new(Self {
+            #[cfg(feature = "remote-host")]
+            native_canonical: Mutex::new(None),
             core,
             registry,
             run,
@@ -1020,6 +1076,10 @@ impl SupervisedRun {
     }
 
     fn request_stop(self: &Arc<Self>) -> Result<(), SafeError> {
+        #[cfg(feature = "remote-host")]
+        if let Some(native) = self.native_canonical.lock().as_ref() {
+            native.stop();
+        }
         // 每次显式控制允许一次延迟自动重试；连续底层错误仍保持未知并等待下一次控制。
         self.automatic_retry_used.store(false, Ordering::SeqCst);
         {
@@ -1075,6 +1135,11 @@ impl SupervisedRun {
             // ConPTY can keep its output pipe open after the root process exits.
             // Closing the owned PTY is the bounded convergence action. We do not
             // manufacture output-end/finalOffset, so this run remains incomplete.
+            #[cfg(feature = "remote-host")]
+            if !self.native_writer_retired(Duration::from_secs(1)) {
+                self.changed.notify_all();
+                return;
+            }
             self.resource.lock().take();
             self.changed.notify_all();
             self.finish_if_terminal();
@@ -1082,6 +1147,11 @@ impl SupervisedRun {
     }
 
     fn release_resource_if_transport_terminal(&self) {
+        self.release_resource_if_transport_terminal_with_budget(Duration::from_secs(1));
+    }
+    fn release_resource_if_transport_terminal_with_budget(&self, native_budget: Duration) {
+        #[cfg(not(feature = "remote-host"))]
+        let _ = native_budget;
         let release = {
             let lifecycle = self.lifecycle.lock();
             lifecycle.process() == crate::run_lifecycle::ProcessLifecycle::Exited
@@ -1092,6 +1162,10 @@ impl SupervisedRun {
                     ))
         };
         if release {
+            #[cfg(feature = "remote-host")]
+            if !self.native_writer_retired(native_budget) {
+                return;
+            }
             self.resource.lock().take();
         }
     }
@@ -1117,6 +1191,10 @@ impl SupervisedRun {
             }
             lifecycle.clone()
         };
+        #[cfg(feature = "remote-host")]
+        if !self.native_writer_retired(Duration::ZERO) {
+            return;
+        }
         let Some(core) = self.core.upgrade() else {
             return;
         };
@@ -1154,6 +1232,25 @@ impl SupervisedRun {
         self.resource.lock().take();
     }
 
+    #[cfg(feature = "remote-host")]
+    fn native_writer_retired(&self, budget: Duration) -> bool {
+        matches!(
+            self.native_writer_status(budget),
+            cc_desk_remote_host::native_host::NativeWriterRetirement::Joined
+        )
+    }
+    #[cfg(feature = "remote-host")]
+    fn native_writer_status(
+        &self,
+        budget: Duration,
+    ) -> cc_desk_remote_host::native_host::NativeWriterRetirement {
+        let mut native = self.native_canonical.lock();
+        let Some(native) = native.as_mut() else {
+            return cc_desk_remote_host::native_host::NativeWriterRetirement::Joined;
+        };
+        native.stop();
+        native.observe_writer(budget)
+    }
     fn notify_retryable(&self) {
         self.changed.notify_all();
         if let Some(core) = self.core.upgrade() {
@@ -1440,6 +1537,35 @@ pub(crate) struct NativeRunPin {
     origin: Weak<SupervisorCore>,
     state: Option<Arc<SupervisedRun>>,
 }
+/// Minted only by actual supervisor adoption. UI document revocation does not
+/// destroy this process owner; explicit native stop/reap/resource retirement do.
+#[cfg(feature = "remote-host")]
+pub(crate) struct NativeRunAuthority {
+    state: Weak<SupervisedRun>,
+    resource: Weak<NativeRun>,
+}
+#[cfg(feature = "remote-host")]
+impl NativeRunAuthority {
+    pub(crate) fn check(&self, resource: &Arc<NativeRun>) -> Result<(), SafeError> {
+        let state = self.state.upgrade().ok_or_else(|| error("RUN_NOT_READY"))?;
+        let original = self
+            .resource
+            .upgrade()
+            .ok_or_else(|| error("RUN_NOT_READY"))?;
+        if !Arc::ptr_eq(&original, resource)
+            || state.stop_requested.load(Ordering::SeqCst)
+            || state.reaped.load(Ordering::SeqCst)
+            || !state
+                .resource
+                .lock()
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(current, resource))
+        {
+            return Err(error("RUN_NOT_READY"));
+        }
+        Ok(())
+    }
+}
 #[cfg(any(test, feature = "remote-host"))]
 struct NativeStopEntry {
     pin: NativeRunPin,
@@ -1547,6 +1673,16 @@ impl NativeShutdown {
         let Some(state) = entry.pin.state.as_ref() else {
             return unknown(false, false, false, false, false);
         };
+        #[cfg(feature = "remote-host")]
+        {
+            state.release_resource_if_transport_terminal_with_budget(Duration::ZERO);
+            state.finish_if_terminal();
+            if state.native_writer_status(Duration::ZERO)
+                == cc_desk_remote_host::native_host::NativeWriterRetirement::Pending
+            {
+                return NativeShutdownObservation::Pending;
+            }
+        }
         // Observe the original reader even while stop/root publication is pending.
         let reader_joined = state.output_reader.lock().observe();
         // Never block the observer behind thread creation/publication.
@@ -1557,6 +1693,18 @@ impl NativeShutdown {
             .unwrap_or(WaitWorkersState::Pending);
         let workers_joined =
             workers == WaitWorkersState::Joined && state.registry_retired.load(Ordering::SeqCst);
+        #[cfg(feature = "remote-host")]
+        if state.native_writer_status(Duration::ZERO)
+            == cc_desk_remote_host::native_host::NativeWriterRetirement::Unknown
+        {
+            return unknown(
+                state.reaped.load(Ordering::SeqCst),
+                entry.joined,
+                reader_joined,
+                workers_joined,
+                state.io_drop.all_returned(),
+            );
+        }
         if let Some(job) = entry.job.as_ref() {
             if !job.is_finished() {
                 return NativeShutdownObservation::Pending;
@@ -1715,6 +1863,8 @@ mod wait_worker_join_tests {
             generation: 1,
         };
         Arc::new(SupervisedRun {
+            #[cfg(feature = "remote-host")]
+            native_canonical: Mutex::new(None),
             core: Weak::new(),
             registry: Arc::new(RunRegistry::new(1)),
             lifecycle: Mutex::new(LifecycleRecord::new(run.clone())),

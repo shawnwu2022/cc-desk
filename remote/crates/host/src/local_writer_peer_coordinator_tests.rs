@@ -1,4 +1,371 @@
 use super::*;
+
+#[test]
+fn native_ingress_continuity_partial_and_unknown_still_seal_original_writer() {
+    struct Fault {
+        kind: u8,
+        writes: Arc<std::sync::Mutex<Vec<u8>>>,
+    }
+    impl std::io::Write for Fault {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            if self.kind == 1 && self.writes.lock().unwrap().is_empty() {
+                self.writes.lock().unwrap().push(b[0]);
+                return Ok(1);
+            }
+            Err(std::io::ErrorKind::BrokenPipe.into())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    for kind in 0..3 {
+        let dir = tempfile::tempdir().unwrap();
+        let writes = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut producer = NativeRunProducer::start(
+            Journal::open(&dir.path().join("native.sqlite")).unwrap(),
+            Fault {
+                kind,
+                writes: writes.clone(),
+            },
+            "TEST_ONLY_INGRESS_TRUE_FAILURE".into(),
+            3,
+            3,
+            10,
+        )
+        .unwrap();
+        let input = producer.local_input();
+        let mut reader = producer.take_output().unwrap();
+        reader.feed(if kind == 0 { 1 } else { 0 }, b"\x1b[6n");
+        let end = std::time::Instant::now() + Duration::from_secs(1);
+        while input.canonical_status() != crate::native_host::NativeCanonicalStatus::Unavailable
+            && std::time::Instant::now() < end
+        {
+            std::thread::yield_now();
+        }
+        reader.feed(4, b"next");
+        let mode = input.canonical_status();
+        let rejected = input.commit(b"MUST_NOT_WRITE", || true);
+        producer.stop();
+        let retired = producer.join(Duration::from_secs(1));
+        assert!(retired.is_ok());
+        assert_eq!(mode, crate::native_host::NativeCanonicalStatus::Unavailable);
+        assert_eq!(rejected, Err(Reject::Sealed));
+        assert_eq!(writes.lock().unwrap().len(), usize::from(kind == 1));
+    }
+}
+
+#[tokio::test]
+async fn native_ingress_second_feed_keeps_original_worker_after_local_only_publication() {
+    struct Sink(Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for Sink {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    struct Release(std::sync::mpsc::SyncSender<()>);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            let _ = self.0.try_send(());
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let writes = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut producer = NativeRunProducer::start(
+        Journal::open(&dir.path().join("native.sqlite")).unwrap(),
+        Sink(writes.clone()),
+        "TEST_ONLY_INGRESS_INTERLEAVING".into(),
+        3,
+        3,
+        10,
+    )
+    .unwrap();
+    let original = producer.writer.worker.as_ref().unwrap().thread().id();
+    let input = producer.local_input();
+    let mut reader = producer.take_output().unwrap();
+    let scope = producer.native_scope();
+    let (c, h, _gate, _cancel) = peer_channels_scope(Arc::new(|| Ok(1000)), scope).await;
+    let h = Arc::new(h);
+    let mut owner =
+        WriterHostOwner::from_registry(&OwnerRegistry::default(), support::host(), 11).unwrap();
+    owner.principal = Some(h.authority().principal_id());
+    let mut host = NativeHost::from_owner(owner);
+    host.anchor = Some(h.clone());
+    let (entered_tx, entered) = std::sync::mpsc::sync_channel(1);
+    let (release, release_rx) = std::sync::mpsc::sync_channel(1);
+    let _release = Release(release.clone());
+    host.adopt_native_producer(
+        producer,
+        h.clone(),
+        Box::new(move || {
+            entered_tx.send(()).unwrap();
+            release_rx.recv_timeout(Duration::from_secs(2)).is_ok()
+        }),
+    )
+    .unwrap_or_else(|_| panic!("verified original admission"));
+    entered.recv_timeout(Duration::from_secs(1)).unwrap();
+    let bytes = b"\x1b]52;c;x\x07";
+    reader.feed(0, bytes);
+    let barrier_result = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let recorded = barrier_result.clone();
+    let barrier = input.clone();
+    reader.test_after_initial_load(move || {
+        release.send(()).unwrap();
+        // This actual no-effect request follows the original OutputRequest in
+        // the same actor and physical worker, proving its result was published.
+        recorded.store(
+            barrier.commit(b"DENIED_BARRIER", || false) == Err(Reject::Policy),
+            Ordering::Release,
+        );
+    });
+    reader.feed(bytes.len() as u64, b"next native read");
+    let mode = input.canonical_status();
+    let revoked = h.authority().check().is_err();
+    let same = host.owner.active[0]
+        .writer
+        .worker
+        .as_ref()
+        .unwrap()
+        .thread()
+        .id()
+        == original;
+    let protocol = input.protocol_from_source(b"DESKTOP_REPLY", Some(bytes.len() as u64), || true);
+    let local = input.commit(b"local", || true);
+    host.begin_shutdown();
+    host.retire_peer_installs().await;
+    let end = Instant::now() + Duration::from_secs(2);
+    while host.observe_shutdown() == WriterRetirement::Pending {
+        assert!(Instant::now() < end);
+        tokio::task::yield_now().await;
+    }
+    let retired = host.observe_shutdown();
+    host.network_retirement().unwrap().wait().await;
+    let not_ready = c.client_installed().await.is_err();
+    let _ = tokio::join!(c.wait_closed(), h.wait_closed());
+    // All owned threads/channels are retired before the behavioral RED assertion.
+    assert_eq!(retired, WriterRetirement::Joined);
+    assert!(barrier_result.load(Ordering::Acquire));
+    assert_eq!(mode, crate::native_host::NativeCanonicalStatus::LocalOnly);
+    assert!(same && revoked && not_ready);
+    assert!(protocol.is_ok() && local.is_ok());
+    assert_eq!(writes.lock().unwrap().as_slice(), b"DESKTOP_REPLYlocal");
+}
+
+#[test]
+fn native_projection_fault_preserves_authorized_local_io_without_duplicate_reply() {
+    struct Sink(Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for Sink {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let writes = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut producer = NativeRunProducer::start(
+        Journal::open(&dir.path().join("native.sqlite")).unwrap(),
+        Sink(writes.clone()),
+        "TEST_ONLY_NATIVE_PROJECTION_FAULT".into(),
+        3,
+        3,
+        10,
+    )
+    .unwrap();
+    let input = producer.local_input();
+    let mut reader = producer.take_output().unwrap();
+    let bytes = b"\x1b[6n\x1b]52;c;x\x07";
+    reader.feed(0, bytes);
+    let deadline = std::time::Instant::now() + Duration::from_secs(1);
+    while input.canonical_status() == crate::native_host::NativeCanonicalStatus::Complete
+        && std::time::Instant::now() < deadline
+    {
+        std::thread::yield_now();
+    }
+    let mode = input.canonical_status();
+    let protocol = input.protocol_from_source(b"DESKTOP_REPLY", Some(bytes.len() as u64), || true);
+    let local = input.commit(b"local", || true);
+    producer.stop();
+    producer.join(Duration::from_secs(1)).unwrap();
+    assert_eq!(mode, crate::native_host::NativeCanonicalStatus::LocalOnly);
+    assert!(protocol.is_ok());
+    assert!(local.is_ok());
+    assert_eq!(writes.lock().unwrap().as_slice(), b"DESKTOP_REPLYlocal");
+}
+
+#[test]
+fn native_local_resize_preserves_full_size_and_cuts_delayed_original_reply() {
+    use crate::native_host::{
+        NativeFrameResult, NativeOriginalIo, NativeProtocolResult, NativeWriterRetirement,
+    };
+    struct Original {
+        writes: Arc<std::sync::Mutex<Vec<u8>>>,
+        size: Arc<std::sync::Mutex<(u16, u16)>>,
+    }
+    impl NativeOriginalIo for Original {
+        fn frame(
+            &mut self,
+            bytes: &[u8],
+            authorize: Box<dyn FnOnce() -> bool + Send>,
+        ) -> Result<NativeFrameResult, Reject> {
+            if !authorize() {
+                return Err(Reject::Policy);
+            }
+            self.writes.lock().unwrap().extend_from_slice(bytes);
+            Ok(NativeFrameResult {
+                complete: true,
+                confirmed_bytes: bytes.len() as u64,
+            })
+        }
+        fn resize(
+            &mut self,
+            rows: u16,
+            columns: u16,
+            authorize: Box<dyn FnOnce() -> bool + Send>,
+        ) -> Result<(), Reject> {
+            if !authorize() {
+                return Err(Reject::Policy);
+            }
+            *self.size.lock().unwrap() = (rows, columns);
+            Ok(())
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let writes = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let size = Arc::new(std::sync::Mutex::new((3, 10)));
+    let mut producer = NativeRunProducer::start_resource(
+        Journal::open(&dir.path().join("native.sqlite")).unwrap(),
+        Original {
+            writes: writes.clone(),
+            size: size.clone(),
+        },
+        "TEST_ONLY_SOURCE_CUT".into(),
+        3,
+        3,
+        10,
+    )
+    .unwrap();
+    producer.output(0, b"\x1b[6n".to_vec()).unwrap();
+    let input = producer.local_input();
+    assert_eq!(
+        input
+            .protocol_from_source(b"OLD", Some(4), || true)
+            .unwrap(),
+        NativeProtocolResult::NativeOwned
+    );
+    input.resize(101, 500, || true).unwrap();
+    assert_eq!(*size.lock().unwrap(), (101, 500));
+    assert!(!producer.complete_from_zero());
+    let delayed = input.protocol_from_source(b"OLD", Some(4), || true);
+    let fresh = input.protocol_from_source(b"NEW", Some(5), || true);
+    let missing = input.protocol_from_source(b"MISSING", None, || true);
+    let denied = input.protocol_from_source(b"DENIED", Some(6), || false);
+    input.commit(b"local", || true).unwrap();
+    producer.stop();
+    producer.join(Duration::from_secs(1)).unwrap();
+    assert_eq!(input.retirement(), NativeWriterRetirement::Joined);
+    assert_eq!(delayed.unwrap(), NativeProtocolResult::NativeOwned);
+    assert!(matches!(
+        fresh,
+        Ok(NativeProtocolResult::Written(NativeFrameResult {
+            complete: true,
+            confirmed_bytes: 3
+        }))
+    ));
+    assert_eq!(missing, Err(Reject::Policy));
+    assert_eq!(denied, Err(Reject::Policy));
+    assert_eq!(writes.lock().unwrap().as_slice(), b"\x1b[1;1RNEWlocal");
+}
+
+#[test]
+fn native_blocked_original_write_still_processes_canonical_output() {
+    struct Blocked {
+        entered: std::sync::mpsc::SyncSender<()>,
+        release: std::sync::mpsc::Receiver<()>,
+    }
+    impl std::io::Write for Blocked {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.entered.send(()).unwrap();
+            self.release.recv().unwrap();
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (entered_tx, entered) = std::sync::mpsc::sync_channel(1);
+    let (release, release_rx) = std::sync::mpsc::sync_channel(1);
+    let mut producer = NativeRunProducer::start(
+        Journal::open(&dir.path().join("native.sqlite")).unwrap(),
+        Blocked {
+            entered: entered_tx,
+            release: release_rx,
+        },
+        "TEST_ONLY_BLOCKED_ORIGINAL".into(),
+        3,
+        3,
+        10,
+    )
+    .unwrap();
+    let input = producer.local_input();
+    let original = std::thread::spawn(move || input.commit(b"x", || true));
+    entered.recv_timeout(Duration::from_secs(1)).unwrap();
+    let pending = producer.test_output(0, b"abc".to_vec()).unwrap();
+    let before_release = pending.wait(Duration::from_millis(100));
+    // Release and join the original owned writer even when the assertion is RED.
+    release.send(()).unwrap();
+    assert_eq!(original.join().unwrap().unwrap().confirmed_bytes, 1);
+    let snapshot = producer
+        .writer
+        .capture()
+        .unwrap()
+        .wait(Duration::from_secs(1))
+        .unwrap()
+        .unwrap();
+    assert_eq!(snapshot.through_offset(), 3);
+    assert_eq!(snapshot.view().cell(0, 2).unwrap().scalar, 'c');
+    producer.stop();
+    producer.join(Duration::from_secs(1)).unwrap();
+    assert!(
+        matches!(before_release, Ok(OutputResult::Processed { replies: 0 })),
+        "canonical output stalled behind original native IO: {before_release:?}"
+    );
+}
+
+#[test]
+fn native_producer_before_peer_preserves_complete_canonical_output() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut producer = NativeRunProducer::start(
+        Journal::open(&dir.path().join("native.sqlite")).unwrap(),
+        Vec::<u8>::new(),
+        "TEST_ONLY_NATIVE_SOURCE".into(),
+        3,
+        3,
+        10,
+    )
+    .unwrap();
+    producer.output(0, b"abc".to_vec()).unwrap();
+    let captured = producer
+        .writer
+        .capture()
+        .unwrap()
+        .wait(Duration::from_secs(1))
+        .unwrap()
+        .unwrap();
+    assert_eq!((captured.view().rows(), captured.view().columns()), (3, 10));
+    assert_eq!(captured.through_offset(), 3);
+    assert_eq!(captured.view().cell(0, 0).unwrap().scalar, 'a');
+    assert_eq!(captured.view().cell(0, 2).unwrap().scalar, 'c');
+    assert!(producer.output(4, b"gap".to_vec()).is_err());
+    producer.stop();
+    assert!(producer.join(Duration::from_secs(1)).is_ok());
+}
 use crate::bound_test_support as support;
 use cc_desk_remote_record::control_io as wire;
 use cc_desk_remote_record::{appbind::CanonicalOrigin, grant::DataRole};
@@ -22,6 +389,12 @@ impl NativeGrantSigner for PublicSigner {
 }
 async fn peer_channels(
     clock: Arc<dyn GrantClock>,
+) -> (RunningChannel, RunningChannel, GrantGate, CancelHandle) {
+    peer_channels_scope(clock, support::scope()).await
+}
+async fn peer_channels_scope(
+    clock: Arc<dyn GrantClock>,
+    scope: cc_desk_remote_record::grant::SessionScope,
 ) -> (RunningChannel, RunningChannel, GrantGate, CancelHandle) {
     let local = |client| {
         let (k, p) = identities::identity(client, false);
@@ -82,11 +455,11 @@ async fn peer_channels(
     let trust = ClientGrantTrust {
         issuer: support::admin(),
         principal: [4; 32],
-        scope: support::scope(),
+        scope: scope.clone(),
         role: DataRole::Controller,
     };
     let policy = NativeGrantPolicy {
-        scope: support::scope(),
+        scope,
         role: DataRole::Controller,
         duration: Duration::from_secs(10),
     };
@@ -101,6 +474,199 @@ async fn peer_channels(
         gate,
         cancel,
     )
+}
+
+#[tokio::test]
+async fn native_producer_verified_install_keeps_original_prefix_and_denies_wrong_scope() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut producer = NativeRunProducer::start(
+        Journal::open(&dir.path().join("native.sqlite")).unwrap(),
+        Vec::<u8>::new(),
+        "TEST_ONLY_NATIVE_SOURCE".into(),
+        3,
+        3,
+        10,
+    )
+    .unwrap();
+    producer.output(0, b"abc".to_vec()).unwrap();
+    let original_worker = producer.writer.worker.as_ref().unwrap().thread().id();
+    let original_seal = producer.writer.handle.sealed.clone();
+    let scope = producer.native_scope();
+    let (c, h, _gate, _cancel) = peer_channels_scope(Arc::new(|| Ok(1000)), scope.clone()).await;
+    let h = Arc::new(h);
+    let mut host = NativeHost::from_channel(h.clone()).unwrap();
+    let wrong_dir = tempfile::tempdir().unwrap();
+    let wrong = NativeRunProducer::start(
+        Journal::open(&wrong_dir.path().join("wrong.sqlite")).unwrap(),
+        Vec::<u8>::new(),
+        "TEST_ONLY_WRONG_NATIVE_RESOURCE".into(),
+        3,
+        3,
+        10,
+    )
+    .unwrap();
+    let wrong_worker = wrong.writer.worker.as_ref().unwrap().thread().id();
+    let mut wrong = match host.adopt_native_producer(wrong, h.clone(), Box::new(|| true)) {
+        Err(rejected) => rejected.1,
+        Ok(_) => panic!("wrong verified resource scope must reject before custody moves"),
+    };
+    assert_eq!(
+        wrong.writer.worker.as_ref().unwrap().thread().id(),
+        wrong_worker
+    );
+    wrong.stop();
+    wrong.join(BUDGET).unwrap();
+    assert!(
+        h.authority().check().is_ok(),
+        "the SAME Host/channel must remain available for legitimate retry"
+    );
+    host.adopt_native_producer(producer, h.clone(), Box::new(|| true))
+        .unwrap_or_else(|_| panic!("actual original producer must be installed"));
+    let end = Instant::now() + BUDGET;
+    while !matches!(host.peer_installs[0].stage, Stage::Done(_)) {
+        host.drive_peer_installs();
+        assert!(Instant::now() < end);
+        tokio::task::yield_now().await;
+    }
+    let proof = c.client_installed().await.unwrap();
+    assert_eq!(proof.consume_for(&c).unwrap(), 1);
+    assert_eq!(host.attempts.len(), 1);
+    assert!(matches!(
+        host.attempts[0].state,
+        InstallState::Installed { fence: 1, .. }
+    ));
+    assert_eq!(
+        host.owner.active[0]
+            .writer
+            .worker
+            .as_ref()
+            .unwrap()
+            .thread()
+            .id(),
+        original_worker
+    );
+    assert!(Arc::ptr_eq(
+        &host.owner.active[0].writer.handle.sealed,
+        &original_seal
+    ));
+    let InstallState::Installed { peer, .. } = &host.attempts[0].state else {
+        panic!("installed peer");
+    };
+    let prefix = peer.capture().unwrap().wait(BUDGET).unwrap().unwrap();
+    assert_eq!(prefix.through_offset(), 3);
+    assert_eq!(prefix.view().cell(0, 0).unwrap().scalar, 'a');
+    assert_eq!(prefix.view().cell(0, 2).unwrap().scalar, 'c');
+    host.begin_shutdown();
+    host.retire_peer_installs().await;
+    while host.observe_shutdown() == WriterRetirement::Pending {
+        assert!(Instant::now() < end);
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(host.observe_shutdown(), WriterRetirement::Joined);
+    host.network_retirement().unwrap().wait().await;
+    let _ = tokio::join!(c.wait_closed(), h.wait_closed());
+}
+
+#[tokio::test]
+async fn native_rebind_cannot_revive_local_only_and_stop_closes_current_authority() {
+    for fault in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut producer = NativeRunProducer::start(
+            Journal::open(&dir.path().join("native.sqlite")).unwrap(),
+            Vec::<u8>::new(),
+            "TEST_ONLY_NATIVE_REBIND".into(),
+            3,
+            3,
+            10,
+        )
+        .unwrap();
+        let input = producer.local_input();
+        let mut output = producer.take_output().unwrap();
+        let scope = producer.native_scope();
+        let clock: Arc<dyn GrantClock> = Arc::new(|| Ok(1000));
+        let (c, h, _gate, _cancel) = peer_channels_scope(clock.clone(), scope.clone()).await;
+        let h = Arc::new(h);
+        // Supplemental actor scenarios use the existing isolated owner fixture.
+        // The public permanent process-admission factory is proven once above.
+        let mut owner =
+            WriterHostOwner::from_registry(&OwnerRegistry::default(), support::host(), 11).unwrap();
+        owner.principal = Some(h.authority().principal_id());
+        let mut host = NativeHost::from_owner(owner);
+        host.anchor = Some(h.clone());
+        host.adopt_native_producer(producer, h.clone(), Box::new(|| true))
+            .unwrap_or_else(|_| panic!("native initial install"));
+        let end = Instant::now() + Duration::from_secs(3);
+        while !matches!(host.peer_installs[0].stage, Stage::Done(_)) {
+            host.drive_peer_installs();
+            assert!(Instant::now() < end);
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            c.client_installed().await.unwrap().consume_for(&c).unwrap(),
+            1
+        );
+        let target = host.owner.active[0].target.clone();
+        if fault {
+            output.feed(0, b"\x1b]52;c;x\x07");
+            while input.canonical_status() == crate::native_host::NativeCanonicalStatus::Complete
+                || h.authority().check().is_ok()
+            {
+                assert!(Instant::now() < end);
+                tokio::task::yield_now().await;
+            }
+            assert_eq!(
+                input.canonical_status(),
+                crate::native_host::NativeCanonicalStatus::LocalOnly
+            );
+        }
+        let (c2, h2, _gate2, _cancel2) = peer_channels_scope(clock, scope).await;
+        let h2 = Arc::new(h2);
+        assert!(
+            h2.authority().check().is_ok(),
+            "fresh verified grant must be live before refusal"
+        );
+        host.begin_peer_rebind(target, support::device(), 1, h2.clone(), [9; 16])
+            .unwrap();
+        while !matches!(host.peer_installs[1].stage, Stage::Done(_) | Stage::Failed) {
+            host.drive_peer_installs();
+            assert!(Instant::now() < end);
+            tokio::task::yield_now().await;
+        }
+        if fault {
+            assert!(matches!(host.peer_installs[1].stage, Stage::Failed));
+            assert!(c2.client_installed().await.is_err());
+            assert!(input.commit(b"local", || true).unwrap().complete);
+        } else {
+            assert_eq!(
+                c2.client_installed()
+                    .await
+                    .unwrap()
+                    .consume_for(&c2)
+                    .unwrap(),
+                2
+            );
+            input.stop();
+            assert!(
+                h2.authority().check().is_err(),
+                "Stop must close the CURRENT original authority synchronously"
+            );
+            assert!(h.authority().check().is_err(), "old scope cannot revive");
+        }
+        host.begin_shutdown();
+        host.retire_peer_installs().await;
+        while host.observe_shutdown() == WriterRetirement::Pending {
+            assert!(Instant::now() < end);
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(host.observe_shutdown(), WriterRetirement::Joined);
+        host.network_retirement().unwrap().wait().await;
+        let _ = tokio::join!(
+            c.wait_closed(),
+            h.wait_closed(),
+            c2.wait_closed(),
+            h2.wait_closed()
+        );
+    }
 }
 
 #[tokio::test]
@@ -570,6 +1136,7 @@ async fn peer_install_cancelled_retire_keeps_original_controlled_response_task_i
     });
     let task_id = task.id();
     host.peer_installs.push(Coordinator {
+        native_attempt: None,
         target: Target {
             host: support::host(),
             incarnation: 11,

@@ -715,6 +715,8 @@ fn unit_join_panic_is_a_sticky_terminal_result() {
         credits: Arc::new(Credits::default()),
     };
     let mut owner = LocalWriter {
+        #[cfg(feature = "experimental-host-owner")]
+        native_joined: None,
         handle,
         worker: Some(std::thread::spawn(|| panic!("TEST_ONLY_JOIN_CLASSIFIER"))),
         terminal: None,

@@ -10,13 +10,15 @@ import type {
   InputWriteReceipt,
   NativeInputFrame,
   ProtocolWriteReceipt,
+  ProtocolSource,
   RunKey,
 } from '@/types/terminal'
 
 export interface NativeTerminalHostProtocolOptions extends RunKey {
   currentTarget: () => InputTarget
   writeUser: (frame: NativeInputFrame) => Promise<InputWriteReceipt>
-  writeProtocol: (run: RunKey, bytes: Uint8Array) => Promise<ProtocolWriteReceipt>
+  writeProtocol: (run: RunKey, bytes: Uint8Array, source?: ProtocolSource) => Promise<ProtocolWriteReceipt>
+  currentProtocolSource?: () => ProtocolSource | undefined
 }
 
 export interface NativeTerminalHostProtocol {
@@ -74,7 +76,8 @@ function scopedDepth(
  * source from the payload itself. Callers must bracket the synchronous operation
  * that can emit onData with either beginUserEvent() or beginParserOutput().
  *
- * onBinary is documented raw 8-bit terminal traffic and remains a protocol lane.
+ * onBinary carries legacy mouse reports: authenticated human input whose raw
+ * bytes use the existing user-intent queue without UTF-8/paste conversion.
  */
 export function createTerminalHostProtocol(
   options: NativeTerminalHostProtocolOptions,
@@ -105,7 +108,16 @@ export function createTerminalHostProtocol(
       const receipt = await options.writeProtocol(
         { runId: input.runId, generation: input.generation },
         input.bytes,
+        input.protocolSource,
       )
+      if (receipt?.state === 'native-owned') {
+        if (receipt.runId !== input.runId || receipt.generation !== input.generation || receipt.confirmedBytes !== '0'
+          || (input.protocolSource && (receipt.protocolSource?.streamEpoch !== input.protocolSource.streamEpoch
+            || receipt.protocolSource?.throughOffset !== input.protocolSource.throughOffset))) {
+          throw new Error('NATIVE_PROTOCOL_OWNERSHIP_MISMATCH')
+        }
+        return
+      }
       requireExactHostWrite(receipt, expectedBytes)
     },
   })
@@ -133,7 +145,7 @@ export function createTerminalHostProtocol(
       if (!user && !parser) throw new Error('AMBIGUOUS_XTERM_DATA_SOURCE')
 
       if (parser) {
-        await queue.sendProtocol(new TextEncoder().encode(data))
+        await queue.sendProtocol(new TextEncoder().encode(data), options.currentProtocolSource?.())
         return
       }
 
@@ -149,7 +161,9 @@ export function createTerminalHostProtocol(
 
     async handleBinary(data) {
       const classified = classifyXtermBinary(data)
-      await queue.sendProtocol(classified.bytes)
+      const target=options.currentTarget()
+      const receipt=queue.enqueueConfirmed({source:'user-binary',modeEpoch:target.modeEpoch,bytes:classified.bytes})
+      await receipt.settled
     },
 
     async sendUserText(data, admission) {

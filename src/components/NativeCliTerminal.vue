@@ -331,7 +331,9 @@ async function resizeNative(cols: number, rows: number) {
     { runId: tab.runId, generation: tab.generation },
     cols,
     rows,
-  ).catch(() => {
+  ).then(receipt => {
+    if (receipt?.canonicalOutput === 'local-only') tabs.setDiagnostic(props.tabId, 'REMOTE_CANONICAL_UNAVAILABLE')
+  }).catch(() => {
     // Resize loss is visible via later terminal/run state; never reroute through legacy PTY.
   })
 }
