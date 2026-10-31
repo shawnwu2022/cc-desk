@@ -411,6 +411,22 @@ impl RestrictedInputGate {
         intermediates: &[u8],
         action: char,
     ) -> bool {
+        // Pure grid operations handled by the existing bounded Term. No input
+        // modes, scrolling region, saved history or native effects are admitted.
+        if intermediates.is_empty() && matches!(action, 'A' | 'B' | 'C' | 'D' | 'J' | 'K') {
+            return params.iter().count() <= 1
+                && params.iter().all(|param| {
+                    param.len() == 1
+                        && match action {
+                            // Locked Alacritty's erase-above skips the preceding row
+                            // at Line(1); refuse that subprofile instead of showing
+                            // an incorrectly synchronized grid.
+                            'J' => matches!(param[0], 0 | 2),
+                            'K' => param[0] <= 2,
+                            _ => true,
+                        }
+                });
+        }
         if intermediates.is_empty() && action == 'm' {
             // Only fixed-size cell colors/flags; no extended colors, subparameters,
             // strings or native effects enter this deliberately narrow profile.

@@ -64,6 +64,18 @@ resize require at least2 columns (the locked emulator's minimum), reject zero ro
 and anything above240 columns by100 rows before calling
 Alacritty allocation code. This software-only slice uses `scrolling_history=0`.
 
+The reviewed pure-grid subset also accepts CSI A/B/C/D with zero or one simple
+numeric parameter, CSI J with zero or one parameter in {0,2}, and CSI K in 0..=2. The existing
+Alacritty handlers perform clamped cursor movement and visible-grid erasure;
+erase-above (J1), saved-history erase (J3), private/intermediate/subparameter/multiple-parameter
+variants remain refused before a batch is applied. This removes a concrete
+redraw compatibility obstruction without opening modes, native effects, OSC or
+input permission. Four-way cursor/erase correctness and all stream splits are
+software evidence only, not qualification of a real Claude/Codex/OpenCode TUI.
+The locked Alacritty erase-above handler retains the preceding row when its
+zero-based cursor line is1. A deterministic fixture reproduced this; J1 remains
+fail-closed until that upstream semantic defect is safely corrected and verified.
+
 The explicit `semantic_snapshot` API copies the complete active row-major grid,
 Host-decided wide/spacer/wrap roles, finite colors/styles, cursor and buffer kind.
 It does not use trimmed row_text, clone CellExtra or serialize the Term/parser.
