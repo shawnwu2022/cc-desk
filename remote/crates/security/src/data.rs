@@ -72,6 +72,7 @@ pub struct ManagedChannel<S> {
     access: Option<ChannelGrant>,
     grant_management: bool,
     management_used: bool,
+    peer_install: bool,
     transferred: bool,
 
     active: Arc<AtomicBool>,
@@ -93,6 +94,7 @@ impl<S> ManagedChannel<S> {
             access: None,
             grant_management: false,
             management_used: false,
+            peer_install: false,
             transferred: false,
 
             active: Arc::new(AtomicBool::new(true)),
@@ -100,6 +102,10 @@ impl<S> ManagedChannel<S> {
     }
     pub(crate) fn with_grant_management(mut self) -> Self {
         self.grant_management = true;
+        self
+    }
+    pub(crate) fn with_peer_install(mut self) -> Self {
+        self.peer_install = true;
         self
     }
     pub fn grant_management_enabled(&self) -> bool {
@@ -155,6 +161,25 @@ impl<S> Drop for ManagedChannel<S> {
 }
 impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> ManagedChannel<S> {
     pub fn start(&mut self) -> Result<crate::RunningChannel, DataError> {
+        if self.peer_install {
+            return Err(DataError::Context);
+        }
+        self.start_mode(None)
+    }
+    /// Creates the original owner, with Data still denied. D is fixed before spawn.
+    pub fn start_peer_pending(
+        &mut self,
+        caller_end: tokio::time::Instant,
+    ) -> Result<crate::RunningChannel, DataError> {
+        if !self.peer_install || !self.grant_management {
+            return Err(DataError::Context);
+        }
+        self.start_mode(Some(caller_end))
+    }
+    fn start_mode(
+        &mut self,
+        peer_end: Option<tokio::time::Instant>,
+    ) -> Result<crate::RunningChannel, DataError> {
         let access = self
             .access
             .as_ref()
@@ -174,6 +199,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> ManagedChannel<S> {
             self.role,
             self.binding,
             self.active.clone(),
+            peer_end,
         )?;
         self.transferred = true;
         Ok(owner)
@@ -279,3 +305,7 @@ impl ChannelGrant {
 #[cfg(test)]
 #[path = "grant_exchange_tests.rs"]
 mod grant_exchange_tests;
+
+#[cfg(test)]
+#[path = "peer_install_tests.rs"]
+pub(crate) mod peer_install_tests;

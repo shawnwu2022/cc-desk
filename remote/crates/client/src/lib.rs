@@ -121,6 +121,19 @@ fn remaining(end: Instant) -> Result<Duration, DataError> {
 }
 impl NativeClient {
     pub fn new(channel: RunningChannel, fence: u64) -> Result<Self, DataError> {
+        if channel.peer_install_enabled() {
+            return Err(DataError::Context);
+        }
+        Self::construct(channel, fence)
+    }
+    pub fn from_installed(
+        channel: RunningChannel,
+        proof: cc_desk_remote_security::ClientInstalledPeer,
+    ) -> Result<Self, DataError> {
+        let fence = proof.consume_for(&channel)?;
+        Self::construct(channel, fence)
+    }
+    fn construct(channel: RunningChannel, fence: u64) -> Result<Self, DataError> {
         let authority = channel.authority();
         if authority.local_role() != Role::Client {
             return Err(DataError::Role);
@@ -268,3 +281,6 @@ impl NativeClient {
 }
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod peer_proof_tests;

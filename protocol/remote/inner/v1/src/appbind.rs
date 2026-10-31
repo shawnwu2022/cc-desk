@@ -419,3 +419,19 @@ pub fn negotiate_grant(h: &HostOffer, c: &ClientOffer) -> Result<HostSelection, 
     }
     Ok(selected)
 }
+
+/// Separate required capability. Legacy/grant peers must fail rather than skip installation.
+pub fn negotiate_peer(h: &HostOffer, c: &ClientOffer) -> Result<HostSelection, CodecError> {
+    let required = [
+        "canonical-json",
+        crate::grant_management::CAPABILITY,
+        crate::peer_install::CAPABILITY,
+    ];
+    if h.required_capabilities != required || c.required_capabilities != required {
+        return Err(CodecError::Unsupported);
+    }
+    let (mut h, mut c) = (h.clone(), c.clone());
+    h.required_capabilities.pop();
+    c.required_capabilities.pop();
+    negotiate_grant(&h, &c)
+}

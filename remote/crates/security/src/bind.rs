@@ -291,7 +291,7 @@ async fn bind_host_with<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     snapshot: HostSnapshot,
     hooks: Hooks,
 ) -> Result<BoundManagement, BindError> {
-    let e = establish_host(pending, snapshot, hooks, vec![0], false).await?;
+    let e = establish_host(pending, snapshot, hooks, vec![0], 0).await?;
     owner(e.io, e.token, e.deadline, e.context, e.selection)
 }
 struct Established<S> {
@@ -307,7 +307,7 @@ async fn establish_host<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     snapshot: HostSnapshot,
     hooks: Hooks,
     minors: Vec<u16>,
-    grant_management: bool,
+    grant_management: u8,
 ) -> Result<Established<S>, BindError> {
     let (host_id, client_id) = projected(&pending)?;
     if pending._context.0 != Role::Host {
@@ -385,7 +385,7 @@ async fn bind_client_with<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     trust: ClientTrust,
     hooks: Hooks,
 ) -> Result<BoundManagement, BindError> {
-    let e = establish_client(pending, trust, hooks, vec![0], false).await?;
+    let e = establish_client(pending, trust, hooks, vec![0], 0).await?;
     owner(e.io, e.token, e.deadline, e.context, e.selection)
 }
 async fn establish_client<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
@@ -393,7 +393,7 @@ async fn establish_client<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     trust: ClientTrust,
     hooks: Hooks,
     minors: Vec<u16>,
-    grant_management: bool,
+    grant_management: u8,
 ) -> Result<Established<S>, BindError> {
     let (host_id, client_id) = projected(&pending)?;
     if pending._context.0 != Role::Client {
@@ -484,7 +484,7 @@ pub async fn bind_host_channel<S: AsyncRead + AsyncWrite + Unpin + Send + 'stati
     pending: Pending<S>,
     snapshot: HostSnapshot,
 ) -> Result<crate::ManagedChannel<S>, BindError> {
-    let e = establish_host(pending, snapshot, Hooks::default(), vec![0, 1], false).await?;
+    let e = establish_host(pending, snapshot, Hooks::default(), vec![0, 1], 0).await?;
     eligible(e.deadline, &e.token)?;
     if e.selection.minor != 1 {
         return Err(BindError::Unsupported);
@@ -501,7 +501,7 @@ pub async fn bind_client_channel<S: AsyncRead + AsyncWrite + Unpin + Send + 'sta
     pending: Pending<S>,
     trust: ClientTrust,
 ) -> Result<crate::ManagedChannel<S>, BindError> {
-    let e = establish_client(pending, trust, Hooks::default(), vec![0, 1], false).await?;
+    let e = establish_client(pending, trust, Hooks::default(), vec![0, 1], 0).await?;
     eligible(e.deadline, &e.token)?;
     if e.selection.minor != 1 {
         return Err(BindError::Unsupported);
@@ -596,8 +596,14 @@ impl Hooks {
 #[path = "bind_tests.rs"]
 mod tests;
 
-fn management_capabilities(enabled: bool) -> Vec<String> {
-    if enabled {
+fn management_capabilities(enabled: u8) -> Vec<String> {
+    if enabled == 2 {
+        vec![
+            "canonical-json".into(),
+            "grant-management-v1".into(),
+            "peer-install-v1".into(),
+        ]
+    } else if enabled == 1 {
         vec![
             "canonical-json".into(),
             cc_desk_remote_record::grant_management::CAPABILITY.into(),
@@ -609,9 +615,11 @@ fn management_capabilities(enabled: bool) -> Vec<String> {
 fn management_negotiate(
     h: &HostOffer,
     c: &ClientOffer,
-    enabled: bool,
+    enabled: u8,
 ) -> Result<HostSelection, CodecError> {
-    if enabled {
+    if enabled == 2 {
+        appbind::negotiate_peer(h, c)
+    } else if enabled == 1 {
         appbind::negotiate_grant(h, c)
     } else {
         appbind::negotiate(h, c)
@@ -621,7 +629,7 @@ pub async fn bind_host_grant_channel<S: AsyncRead + AsyncWrite + Unpin + Send + 
     pending: Pending<S>,
     snapshot: HostSnapshot,
 ) -> Result<crate::ManagedChannel<S>, BindError> {
-    let e = establish_host(pending, snapshot, Hooks::default(), vec![1], true).await?;
+    let e = establish_host(pending, snapshot, Hooks::default(), vec![1], 1).await?;
     eligible(e.deadline, &e.token)?;
     Ok(crate::ManagedChannel::new(
         e.io,
@@ -636,7 +644,7 @@ pub async fn bind_client_grant_channel<S: AsyncRead + AsyncWrite + Unpin + Send 
     pending: Pending<S>,
     trust: ClientTrust,
 ) -> Result<crate::ManagedChannel<S>, BindError> {
-    let e = establish_client(pending, trust, Hooks::default(), vec![1], true).await?;
+    let e = establish_client(pending, trust, Hooks::default(), vec![1], 1).await?;
     eligible(e.deadline, &e.token)?;
     Ok(crate::ManagedChannel::new(
         e.io,
@@ -646,4 +654,128 @@ pub async fn bind_client_grant_channel<S: AsyncRead + AsyncWrite + Unpin + Send 
         Role::Client,
     )
     .with_grant_management())
+}
+
+/// Opt-in authenticated peer installation; no fallback through another factory.
+pub async fn bind_host_peer_channel<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
+    pending: Pending<S>,
+    snapshot: HostSnapshot,
+) -> Result<crate::ManagedChannel<S>, BindError> {
+    let e = establish_host(pending, snapshot, Hooks::default(), vec![1], 2).await?;
+    eligible(e.deadline, &e.token)?;
+    Ok(crate::ManagedChannel::new(
+        e.io,
+        e.token,
+        BoundContext(e.context),
+        e.binding,
+        Role::Host,
+    )
+    .with_grant_management()
+    .with_peer_install())
+}
+pub async fn bind_client_peer_channel<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
+    pending: Pending<S>,
+    trust: ClientTrust,
+) -> Result<crate::ManagedChannel<S>, BindError> {
+    let e = establish_client(pending, trust, Hooks::default(), vec![1], 2).await?;
+    eligible(e.deadline, &e.token)?;
+    Ok(crate::ManagedChannel::new(
+        e.io,
+        e.token,
+        BoundContext(e.context),
+        e.binding,
+        Role::Client,
+    )
+    .with_grant_management()
+    .with_peer_install())
+}
+
+#[cfg(test)]
+mod peer_negotiation_refusal_tests {
+    use super::*;
+    use crate::{LocalIdentity, P256Spki, PeerPin, Unbound, accept, cancellation, connect};
+    fn local(client: bool) -> LocalIdentity {
+        let (k, p) = crate::test_identities::identity(client, false);
+        LocalIdentity::new(
+            if client { Role::Client } else { Role::Host },
+            P256Spki::new(&p).unwrap(),
+            k.key.clone(),
+        )
+        .unwrap()
+    }
+    fn pin(client: bool) -> PeerPin {
+        let (_, p) = crate::test_identities::identity(client, false);
+        PeerPin::new(
+            if client { Role::Client } else { Role::Host },
+            P256Spki::new(&p).unwrap(),
+        )
+    }
+    #[tokio::test]
+    async fn peer_install_authenticated_offer_stripped_capability_and_minor_zero_refused_both_directions()
+     {
+        for client_side in [true, false] {
+            for minor_zero in [true, false] {
+                let (c, h) = tokio::io::duplex(65536);
+                let (_cancel, t) = cancellation();
+                let budget = std::time::Duration::from_secs(1);
+                let (c, h) = tokio::join!(
+                    connect(Unbound::new(c), local(true), pin(false), budget, t.clone()),
+                    accept(Unbound::new(h), local(false), pin(true), budget, t)
+                );
+                let origin = CanonicalOrigin::trusted("wss://relay.invalid/").unwrap();
+                let trust = ClientTrust {
+                    host_key_epoch: 5,
+                    client_key_epoch: 7,
+                    origin: origin.clone(),
+                };
+                let snapshot = HostSnapshot {
+                    host_key_epoch: 5,
+                    client_key_epoch: 7,
+                    activation: [0x33; 32],
+                    incarnation: 11,
+                    policy_epoch: 13,
+                    issuer_epoch: 17,
+                    origin,
+                };
+                let hooks = Hooks {
+                    alter: Some(std::sync::Arc::new(move |mut m| {
+                        match &mut m {
+                            Message::ClientOffer(c) => {
+                                if minor_zero {
+                                    c.minors = vec![0]
+                                } else {
+                                    c.required_capabilities.pop();
+                                }
+                            }
+                            Message::HostOffer(h) => {
+                                if minor_zero {
+                                    h.minors = vec![0]
+                                } else {
+                                    h.required_capabilities.pop();
+                                }
+                            }
+                            _ => (),
+                        }
+                        m
+                    })),
+                    ..Hooks::default()
+                };
+                let (c, h) = if client_side {
+                    tokio::join!(
+                        establish_client(c.unwrap(), trust, hooks, vec![1], 2),
+                        establish_host(h.unwrap(), snapshot, Hooks::default(), vec![1], 2)
+                    )
+                } else {
+                    tokio::join!(
+                        establish_client(c.unwrap(), trust, Hooks::default(), vec![1], 2),
+                        establish_host(h.unwrap(), snapshot, hooks, vec![1], 2)
+                    )
+                };
+                assert!(
+                    c.is_err() || h.is_err(),
+                    "tampered authenticated offer accepted"
+                );
+            }
+        }
+    }
 }

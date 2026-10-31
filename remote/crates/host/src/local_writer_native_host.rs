@@ -54,6 +54,7 @@ pub struct NativeHost {
     pending: Arc<custody::Owner>,
     closing: bool,
     unknown: bool,
+    peer_installs: Vec<peer_coordinator::Coordinator>,
 }
 impl NativeHost {
     /// Native live authority only. No endpoint enrollment, raw peer or IO factory.
@@ -100,6 +101,7 @@ impl NativeHost {
             pending: Arc::new(custody::Owner::new()),
             closing: false,
             unknown: false,
+            peer_installs: Vec::new(),
         }
     }
     /// Native provider lifetime binding; not an input permission or wire API.
@@ -229,6 +231,9 @@ impl NativeHost {
         for attempt in &self.attempts {
             attempt.authority.request_close();
         }
+        for job in &self.peer_installs {
+            job.channel().authority().request_close();
+        }
         // Signal before inspecting pending replies: a pending operation may need
         // this very stop to become terminal. Never wait under a database lock.
         for session in &self.owner.active {
@@ -244,6 +249,7 @@ impl NativeHost {
             .iter()
             .cloned()
             .chain(self.attempts.iter().map(|a| a.channel.clone()))
+            .chain(self.peer_installs.iter().map(|job| job.channel()))
             .collect();
         Some(NetworkRetirement { channels })
     }
@@ -251,7 +257,8 @@ impl NativeHost {
         if !self.closing {
             return WriterRetirement::Pending;
         }
-        let mut pending = false;
+        self.drive_peer_installs();
+        let mut pending = self.peer_installs.iter().any(|job| job.pending());
         match self.pending.observe() {
             custody::Observation::Pending => pending = true,
             custody::Observation::Unknown => self.unknown = true,
@@ -498,3 +505,6 @@ mod tests {
         );
     }
 }
+
+#[path = "local_writer_peer_coordinator.rs"]
+mod peer_coordinator;

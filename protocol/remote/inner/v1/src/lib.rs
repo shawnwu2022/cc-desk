@@ -6,6 +6,7 @@ pub mod grant;
 pub mod grant_management;
 pub mod input;
 pub mod lifecycle;
+pub mod peer_install;
 pub mod projection;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -92,3 +93,6 @@ pub fn encode(kind: Kind, minor: u16, payload: &[u8]) -> Result<Vec<u8>, Error> 
     bytes.extend_from_slice(payload);
     Ok(bytes)
 }
+
+#[cfg(test)]
+mod peer_install_tests;

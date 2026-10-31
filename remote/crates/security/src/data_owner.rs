@@ -29,6 +29,7 @@ struct Inbox {
 }
 struct SendRequest {
     fence: u64,
+    admitted_peer_fence: Option<u64>,
     body: Vec<u8>,
     end: Instant,
     reply: oneshot::Sender<Result<(), DataError>>,
@@ -70,6 +71,7 @@ pub struct RunningChannel {
     active: Arc<AtomicBool>,
     task: Mutex<Option<JoinHandle<DataError>>>,
     exit: watch::Receiver<Option<DataError>>,
+    pub(crate) peer: Arc<crate::peer_install::Shared>,
 }
 impl RunningChannel {
     pub fn authority(&self) -> crate::BoundDataAuthority {
@@ -80,6 +82,13 @@ impl RunningChannel {
     }
     pub fn is_closed(&self) -> bool {
         !self.active.load(Ordering::Acquire)
+    }
+    pub fn peer_install_enabled(&self) -> bool {
+        self.peer.enabled()
+    }
+    pub fn installed_fence(&self) -> Result<u64, DataError> {
+        self.authority.check()?;
+        self.peer.fence()
     }
     fn check(
         &self,
@@ -102,6 +111,7 @@ impl RunningChannel {
         if fence == 0 {
             return Err(DataError::Fence);
         }
+        self.peer.check_data(fence)?;
         if budget.is_zero() || budget > Duration::from_secs(10) {
             return Err(DataError::Bounds);
         }
@@ -162,6 +172,7 @@ impl RunningChannel {
         self.out
             .try_send(SendRequest {
                 fence,
+                admitted_peer_fence: self.peer.admission_stamp(fence)?,
                 body: bytes.to_vec(),
                 end,
                 reply: tx,
@@ -243,9 +254,15 @@ struct Engine<S> {
     sent: u64,
     received: u64,
     write_turn: bool,
+    peer: Arc<crate::peer_install::Shared>,
 }
 impl<S: AsyncRead + AsyncWrite + Unpin> Engine<S> {
     fn poll(&mut self, cx: &mut Context<'_>) -> Poll<Result<Event, DataError>> {
+        self.authority.check()?;
+        if let Some(w) = &self.writing {
+            self.peer
+                .check_queued(w.request.fence, w.request.admitted_peer_fence)?;
+        }
         let mut progress = false;
         let mut written = false;
         let mut timer_started = false;
@@ -328,6 +345,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Engine<S> {
                 if kind == Kind::Control && self.access.role() != DataRole::Controller {
                     return Poll::Ready(Err(DataError::Role));
                 }
+                self.peer.check_data(h.fence)?;
                 self.received = next;
                 let n = bytes.len() - grant::DATA_PREFIX;
                 bytes.copy_within(grant::DATA_PREFIX.., 0);
@@ -365,6 +383,7 @@ pub(super) fn start<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     role: Role,
     binding: [u8; 32],
     active: Arc<AtomicBool>,
+    peer_end: Option<Instant>,
 ) -> Result<RunningChannel, DataError> {
     if access.is_remote() && role != Role::Client {
         return Err(DataError::Role);
@@ -373,6 +392,16 @@ pub(super) fn start<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     if cancel.is_cancelled() {
         return Err(DataError::Cancelled);
     }
+    let fixed_end = peer_end.map(|caller| {
+        caller
+            .min(Instant::now() + Duration::from_secs(10))
+            .min(Instant::now() + Duration::from_millis(remaining))
+    });
+    if fixed_end.is_some_and(|end| end <= Instant::now()) {
+        return Err(DataError::Deadline);
+    }
+    let (peer, bootstrap) = crate::peer_install::Shared::new(fixed_end);
+    let public_peer = peer.clone();
     let (out, mut requests) = mpsc::channel::<SendRequest>(DATA_QUEUE_SLOTS);
     let (in_tx, in_rx) = mpsc::channel(DATA_QUEUE_SLOTS);
     let credits = Arc::new(Semaphore::new(DATA_QUEUE_SLOTS));
@@ -405,9 +434,46 @@ pub(super) fn start<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
             sent: 0,
             received: 0,
             write_turn: false,
+            peer: peer.clone(),
         };
+        // The same task and TLS object complete bootstrap before ordinary framing.
+        // Subscribe first, then check the CURRENT cancellation/stop/grant state.
+        let boot_result = if let Some(d) = fixed_end {
+            let boot = async {
+                engine.authority.check()?;
+                crate::peer_install::bootstrap(
+                    &mut engine.io,
+                    &engine.authority,
+                    &engine.access,
+                    role,
+                    peer.clone(),
+                    bootstrap,
+                )
+                .await
+            };
+            tokio::select! { biased;
+                _ = cancel.cancelled() => Err(DataError::Cancelled),
+                _ = stopped.changed() => Err(DataError::Closed),
+                _ = revoked.changed() => Err(DataError::Grant(GrantError::Revoked)),
+                _ = superseded.changed() => Err(DataError::Grant(GrantError::Revoked)),
+                _ = tokio::time::sleep_until(d) => Err(DataError::Deadline),
+                r = boot => r,
+            }
+        } else {
+            Ok(())
+        };
+        if let Err(error) = boot_result {
+            peer.terminal();
+            a.store(false, Ordering::Release);
+            drop(engine);
+            exit_tx.send_replace(Some(error));
+            return error;
+        }
         let mut pending = None;
         let result = loop {
+            if let Err(e) = engine.authority.check() {
+                break e;
+            }
             let left = match engine.access.check() {
                 Ok(ms) => ms,
                 Err(e) => break DataError::Grant(e),
@@ -430,6 +496,7 @@ pub(super) fn start<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
                             credit=read_credits.clone().acquire_owned(),if engine.read.credit.is_none()&&pending.is_none()=>{engine.read.credit=Some(credit.unwrap());},
                             request=requests.recv(),if engine.writing.is_none()=>{
                                 let Some(request)=request else{break DataError::Closed};if Instant::now()>=request.end{let _=request.reply.send(Err(DataError::Deadline));continue}
+                                if let Err(e)=engine.peer.check_queued(request.fence,request.admitted_peer_fence){let _=request.reply.send(Err(e));break e}
                                 let Some(sequence)=engine.sent.checked_add(1)else{break DataError::Replay};
                                 let kind=if role==Role::Host{Kind::Projection}else{Kind::Control};
                                 let header=DataHeader{binding,grant:engine.access.id(),scope:engine.access.scope_digest(),fence:request.fence,sequence,kind};
@@ -448,6 +515,7 @@ pub(super) fn start<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
                             }}
                         }
         };
+        peer.terminal();
         drop(engine);
         drop(pending);
         drop(requests);
@@ -472,6 +540,7 @@ pub(super) fn start<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
         active,
         task: Mutex::new(Some(task)),
         exit,
+        peer: public_peer,
     })
 }
 
@@ -570,5 +639,48 @@ mod tests {
             h.wait_closed().await;
             c.wait_closed().await;
         }
+    }
+}
+
+#[cfg(test)]
+mod peer_engine_admission_tests {
+    use super::*;
+    #[tokio::test]
+    async fn peer_install_pending_queue_injection_cannot_be_adopted_after_ready() {
+        let (mut c, mut h, _cancel, _gate) = crate::data::peer_install_tests::granted().await;
+        let d = Instant::now() + Duration::from_secs(2);
+        let c = c.start_peer_pending(d).unwrap();
+        let h = h.start_peer_pending(d).unwrap();
+        let (reply, result) = oneshot::channel();
+        let permit = h.send_credits.clone().try_acquire_owned().unwrap();
+        // Private owner-level injection deliberately lacks a Ready admission stamp.
+        // It must not become eligible merely because bootstrap later commits Ready.
+        assert!(
+            h.out
+                .try_send(SendRequest {
+                    fence: 7,
+                    admitted_peer_fence: None,
+                    body: b"MUST_NEVER_WRITE".to_vec(),
+                    end: d,
+                    reply,
+                    _credit: permit
+                })
+                .is_ok()
+        );
+        let request = h.host_install_request().await.unwrap();
+        let (proof, complete) =
+            tokio::join!(c.client_installed(), h.complete_host_install(request, 7));
+        // Terminal queue rejection may race historical bootstrap proof delivery.
+        drop(proof);
+        assert!(matches!(complete, Ok(()) | Err(DataError::Closed)));
+        assert_eq!(result.await.unwrap(), Err(DataError::Context));
+        assert_eq!(h.wait_closed().await, DataError::Context);
+        assert!(
+            c.receive(h.authority().scope(), 7, Duration::from_secs(1))
+                .await
+                .is_err(),
+            "pre-Ready queued bytes escaped"
+        );
+        c.wait_closed().await;
     }
 }

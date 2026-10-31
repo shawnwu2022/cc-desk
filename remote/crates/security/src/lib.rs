@@ -40,3 +40,8 @@ mod grant_tests;
 #[path = "../tests/support/identities.rs"]
 #[allow(dead_code)]
 mod test_identities;
+
+#[cfg(feature = "experimental")]
+mod peer_install;
+#[cfg(feature = "experimental")]
+pub use peer_install::{ClientInstalledPeer, HostInstallRequest};

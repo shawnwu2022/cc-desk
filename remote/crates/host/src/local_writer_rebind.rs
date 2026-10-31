@@ -1,5 +1,66 @@
 use super::*;
 use control::ControlAdmission;
+// Only the exact test operation can hold its original successful reply after
+// actor mutation. The production actor and authority checks are unchanged.
+#[cfg(test)]
+struct InstallReplyHold {
+    binding: [u8; 32],
+    expected: u64,
+    reached: mpsc::SyncSender<(std::time::Instant, u64)>,
+    release: mpsc::Receiver<()>,
+    published: Arc<std::sync::Mutex<Option<std::time::Instant>>>,
+}
+#[cfg(test)]
+static INSTALL_REPLY_HOLD: std::sync::Mutex<Option<InstallReplyHold>> = std::sync::Mutex::new(None);
+#[cfg(test)]
+pub(in crate::local_writer) struct InstallReplyBarrier {
+    reached: mpsc::Receiver<(std::time::Instant, u64)>,
+    release: mpsc::SyncSender<()>,
+    pub(in crate::local_writer) published: Arc<std::sync::Mutex<Option<std::time::Instant>>>,
+}
+#[cfg(test)]
+impl InstallReplyBarrier {
+    pub(in crate::local_writer) fn arm(binding: [u8; 32], expected: u64) -> Self {
+        let (reached_tx, reached) = mpsc::sync_channel(1);
+        let (release, release_rx) = mpsc::sync_channel(1);
+        let published = Arc::new(std::sync::Mutex::new(None));
+        let mut slot = INSTALL_REPLY_HOLD.lock().unwrap();
+        assert!(slot.is_none(), "one exact original install may be held");
+        *slot = Some(InstallReplyHold {
+            binding,
+            expected,
+            reached: reached_tx,
+            release: release_rx,
+            published: published.clone(),
+        });
+        Self {
+            reached,
+            release,
+            published,
+        }
+    }
+    pub(in crate::local_writer) fn installed(&self) -> (std::time::Instant, u64) {
+        self.reached
+            .recv_timeout(Duration::from_secs(1))
+            .expect("original actor must reach successful reply publication barrier")
+    }
+    pub(in crate::local_writer) fn release(&self) {
+        self.release.try_send(()).unwrap();
+    }
+}
+#[cfg(test)]
+impl Drop for InstallReplyBarrier {
+    fn drop(&mut self) {
+        let _ = self.release.try_send(());
+        let mut slot = INSTALL_REPLY_HOLD.lock().unwrap();
+        if slot
+            .as_ref()
+            .is_some_and(|hold| Arc::ptr_eq(&hold.published, &self.published))
+        {
+            slot.take();
+        }
+    }
+}
 pub(in crate::local_writer) struct ControlStatus {
     pub(in crate::local_writer) fence: u64,
     pub(in crate::local_writer) device: [u8; 32],
@@ -172,6 +233,36 @@ impl RebindRequest {
                 control,
             })
         })();
-        let _ = self.reply.try_send(result);
+        #[cfg(test)]
+        let hold = {
+            let mut slot = INSTALL_REPLY_HOLD.lock().unwrap();
+            if result.is_ok()
+                && slot.as_ref().is_some_and(|hold| {
+                    hold.binding == self.admission.binding && hold.expected == self.expected_fence
+                })
+            {
+                slot.take()
+            } else {
+                None
+            }
+        };
+        #[cfg(test)]
+        if let Some(hold) = &hold {
+            let actual = gate.control.as_ref().unwrap().status(&gate.scope).fence;
+            hold.reached
+                .send((std::time::Instant::now(), actual))
+                .unwrap();
+            hold.release
+                .recv_timeout(Duration::from_secs(4))
+                .expect("test must release original install result");
+        }
+        let published = self.reply.try_send(result);
+        #[cfg(test)]
+        if let Some(hold) = hold {
+            assert!(published.is_ok(), "original pending receiver was lost");
+            *hold.published.lock().unwrap() = Some(std::time::Instant::now());
+        }
+        #[cfg(not(test))]
+        let _ = published;
     }
 }
