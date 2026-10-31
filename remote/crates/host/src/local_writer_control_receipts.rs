@@ -20,6 +20,21 @@ impl<T> PendingValue<T> {
     }
 }
 impl PeerViewHandle {
+    pub(in crate::local_writer) fn input_cursor(
+        &self,
+    ) -> Result<PendingValue<InputCursor>, Reject> {
+        let credit = self.input.credits.reserve()?;
+        let (tx, rx) = mpsc::sync_channel(1);
+        self.send_control(ControlRequest {
+            scope: self.control.scope.clone(),
+            action: ControlAction::Cursor { reply: tx },
+            _credit: credit.clone(),
+        })?;
+        Ok(PendingValue {
+            reply: rx,
+            _credit: credit,
+        })
+    }
     pub(in crate::local_writer) fn pending_receipt(
         &self,
         mut key: OperationKey,
@@ -63,6 +78,20 @@ fn compact_key(key: &mut OperationKey) -> Result<(), Reject> {
     Ok(())
 }
 impl ControlState {
+    pub(super) fn input_cursor(
+        &self,
+        scope: &PeerScope,
+        journal: &Journal,
+    ) -> Result<InputCursor, ControlError> {
+        self.authorized(scope).map_err(ControlError::Rejected)?;
+        let now = self.sample(scope).map_err(ControlError::Rejected)?;
+        if !scope.is_active() || now >= self.grant_deadline {
+            return Err(ControlError::Rejected(Reject::Policy));
+        }
+        journal
+            .input_cursor(&scope.target, &scope.device)
+            .map_err(ControlError::Journal)
+    }
     fn query_authority(&self, scope: &PeerScope, key: &OperationKey) -> Result<(), ControlError> {
         self.authorized(scope).map_err(ControlError::Rejected)?;
         let now = self.sample(scope).map_err(ControlError::Rejected)?;

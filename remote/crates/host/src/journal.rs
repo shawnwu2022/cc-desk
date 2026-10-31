@@ -1,5 +1,8 @@
 //! Backend metadata only. A journal decision never grants endpoint authorization.
 use std::sync::{Arc, Weak};
+#[cfg(all(test, feature = "experimental-host-owner"))]
+#[path = "journal_cursor_tests.rs"]
+mod cursor_tests;
 
 const MAX_OPERATIONS: u32 = 4096;
 const MAX_SCOPES: u32 = 4096;
@@ -159,6 +162,11 @@ pub enum ReceiptLookup {
     Known(ReceiptEnvelope),
     Missing,
     TooOld,
+}
+#[cfg(feature = "experimental-host-owner")]
+pub(crate) struct InputCursor {
+    pub(crate) next_sequence: Option<u64>,
+    pub(crate) pending: Option<ReceiptEnvelope>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -485,6 +493,33 @@ impl Journal {
 
     pub fn query(&self, key: &OperationKey) -> Result<ReceiptLookup, JournalError> {
         self.receipt(key)
+    }
+    /// Factual metadata only. Called in the same writer actor order as prepare
+    /// and settlement; no transaction survives this synchronous read.
+    #[cfg(feature = "experimental-host-owner")]
+    pub(crate) fn input_cursor(
+        &self,
+        target: &Target,
+        device: &[u8; 32],
+    ) -> Result<InputCursor, JournalError> {
+        if let Some((key, _)) = self.single_unsettled(target, device)? {
+            let ReceiptLookup::Known(pending) = self.receipt(&key)? else {
+                return Err(JournalError::Storage);
+            };
+            return Ok(InputCursor {
+                next_sequence: None,
+                pending: Some(pending),
+            });
+        }
+        let floor = read_floor(&self.connection, &scope_for(target, device)?)?;
+        let next = floor
+            .map_or(0, |f| f.admitted)
+            .checked_add(1)
+            .ok_or(JournalError::Sequence)?;
+        Ok(InputCursor {
+            next_sequence: Some(next),
+            pending: None,
+        })
     }
 
     /// Native controlled admission must recover the durable unsettled prefix,

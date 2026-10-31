@@ -37,6 +37,7 @@ impl Drop for CancelOnDrop {
     }
 }
 enum Expected {
+    Cursor(String),
     Window(String),
     Ack(Box<projection::Stamp>),
     Input(String, String),
@@ -54,6 +55,7 @@ fn expected(bytes: &[u8]) -> Result<Expected, DataError> {
         )),
         Ok(_) => Err(DataError::Codec),
         Err(_) => match wire::decode(bytes).map_err(|_| DataError::Codec)? {
+            wire::Message::InputCursor { request, .. } => Ok(Expected::Cursor(request)),
             wire::Message::ReceiptQuery {
                 request,
                 operation,
@@ -74,6 +76,7 @@ fn expected(bytes: &[u8]) -> Result<Expected, DataError> {
 impl Expected {
     fn matches(&self, reply: &wire::Message) -> bool {
         match (self, reply) {
+            (Self::Cursor(a), wire::Message::InputCursorState { request, .. }) => a == request,
             (Self::Window(a), wire::Message::WindowGranted { request, .. }) => a == request,
             (Self::Ack(a), wire::Message::ProjectionAcknowledged { stamp, .. }) => {
                 a.as_ref() == stamp

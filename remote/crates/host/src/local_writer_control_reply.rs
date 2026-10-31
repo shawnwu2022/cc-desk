@@ -140,6 +140,37 @@ impl Connection<'_> {
                 return Ok(());
             }
             Err(_) => match wire::decode(r.payload()).map_err(|_| Reject::Bounds)? {
+                wire::Message::InputCursor { request, .. } => {
+                    self.counter(request.parse().map_err(|_| Reject::Bounds)?)?;
+                    let reservation = reserve(&self.custody)?;
+                    let pending = self.peer.input_cursor()?;
+                    let cursor = retained_wait(deadline, reservation, move |b| {
+                        pending.wait(b).map(|r| r.map_err(|_| Reject::Continuity))
+                    })
+                    .await?;
+                    let pending = if let Some(envelope) = cursor.pending {
+                        if envelope.key
+                            != self.operation_key(envelope.key.operation, envelope.key.sequence)?
+                        {
+                            return Err(Reject::Target);
+                        }
+                        let (outcome, proof) = receipt(&envelope)?;
+                        Some(wire::PendingInput {
+                            operation: hex(&envelope.key.operation),
+                            sequence: envelope.key.sequence.to_string(),
+                            outcome,
+                            proof,
+                        })
+                    } else {
+                        None
+                    };
+                    Some(wire::Message::InputCursorState {
+                        profile: 1,
+                        request,
+                        next_sequence: cursor.next_sequence.map(|n| n.to_string()),
+                        pending,
+                    })
+                }
                 wire::Message::ReceiptQuery {
                     request,
                     operation,

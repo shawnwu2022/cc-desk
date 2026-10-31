@@ -190,6 +190,12 @@ impl AuthorizedPendingRebind {
     }
 }
 impl AuthorizedPeer {
+    pub(in crate::local_writer) fn input_cursor(
+        &self,
+    ) -> Result<view_gate::control::PendingValue<InputCursor>, Reject> {
+        self.authority.check().map_err(|_| Reject::Policy)?;
+        self.inner.input_cursor()
+    }
     fn operation(&self, operation: [u8; 16], sequence: u64) -> OperationKey {
         OperationKey {
             host: self.target.host,
