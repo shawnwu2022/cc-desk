@@ -17,6 +17,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tauri::ipc::{Channel, InvokeResponseBody};
 
+#[cfg(all(windows, feature = "remote-host"))]
+#[path = "native_cli_managed_job.rs"]
+mod managed_job;
 #[cfg(feature = "remote-host")]
 #[path = "native_cli_remote_composition.rs"]
 mod remote_composition;

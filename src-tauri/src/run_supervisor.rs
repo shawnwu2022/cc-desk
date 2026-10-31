@@ -477,6 +477,15 @@ impl RunSupervisor for NativeRunSupervisor {
             if active.contains_key(&identity(run)) {
                 return Err(error("RUN_SUPERVISOR_BUSY"));
             }
+            #[cfg(all(windows, feature = "remote-host"))]
+            if let Some(job) = &resource.process.managed_job {
+                job.register(run, &resource, || {
+                    active.insert(identity(run), state.clone());
+                })?;
+            } else {
+                active.insert(identity(run), state.clone());
+            }
+            #[cfg(not(all(windows, feature = "remote-host")))]
             active.insert(identity(run), state.clone());
         }
         let mut adoption = AdoptionGuard::new(state.clone());
@@ -599,9 +608,23 @@ impl RunSupervisor for NativeRunSupervisor {
         if self.core.shutting_down.load(Ordering::SeqCst) {
             state.request_stop()?;
         }
+        #[cfg(all(windows, feature = "remote-host"))]
+        let closed_claim = state
+            .managed_job
+            .as_ref()
+            .is_some_and(|job| job.is_closed());
+        #[cfg(not(all(windows, feature = "remote-host")))]
+        let closed_claim = false;
+        if closed_claim {
+            state.request_stop()?;
+        }
 
         adoption.complete();
-        Ok(())
+        if closed_claim {
+            Err(error("MANAGED_START_CANCELLED"))
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -706,6 +729,8 @@ impl WaitWorkers {
 }
 
 struct SupervisedRun {
+    #[cfg(all(windows, feature = "remote-host"))]
+    managed_job: Option<Arc<crate::platform::owned_job_launch::ManagedJob>>,
     #[cfg(feature = "remote-host")]
     native_canonical: Mutex<Option<crate::cli::launch_service::NativeCanonicalRun>>,
     core: Weak<SupervisorCore>,
@@ -733,6 +758,12 @@ struct SupervisedRun {
 }
 
 impl SupervisedRun {
+    #[cfg(all(windows, feature = "remote-host"))]
+    fn managed_job_quiescent(&self) -> bool {
+        self.managed_job
+            .as_ref()
+            .is_none_or(|job| job.active_processes() == Ok(0))
+    }
     fn new(
         core: Weak<SupervisorCore>,
         registry: Arc<RunRegistry<NativeRun>>,
@@ -746,6 +777,8 @@ impl SupervisedRun {
         #[cfg(any(test, feature = "remote-host"))]
         let io_drop = resource.process.pty.io_drop_witness();
         Ok(Arc::new(Self {
+            #[cfg(all(windows, feature = "remote-host"))]
+            managed_job: resource.process.managed_job.clone(),
             #[cfg(feature = "remote-host")]
             native_canonical: Mutex::new(None),
             core,
@@ -1090,6 +1123,10 @@ impl SupervisedRun {
         {
             let _control = self.stop_control.lock();
             if !self.stop_requested.load(Ordering::SeqCst) {
+                #[cfg(all(windows, feature = "remote-host"))]
+                if let Some(job) = &self.managed_job {
+                    job.request_stop()?;
+                }
                 if !self.reaped.load(Ordering::SeqCst) {
                     let resource = self
                         .resource
@@ -1097,6 +1134,11 @@ impl SupervisedRun {
                         .clone()
                         .ok_or_else(|| error("RUN_NOT_READY"))?;
                     // 只在系统接受 terminate 后发布 stop_requested，避免并发 stop 误报成功。
+                    #[cfg(all(windows, feature = "remote-host"))]
+                    if self.managed_job.is_none() {
+                        resource.process.pty.terminate_root()?;
+                    }
+                    #[cfg(not(all(windows, feature = "remote-host")))]
                     resource.process.pty.terminate_root()?;
                 }
                 // 真实 reap 已知时无需 terminate；两种成功控制路径都登记后续有界重试。
@@ -1135,6 +1177,10 @@ impl SupervisedRun {
             // ConPTY can keep its output pipe open after the root process exits.
             // Closing the owned PTY is the bounded convergence action. We do not
             // manufacture output-end/finalOffset, so this run remains incomplete.
+            #[cfg(all(windows, feature = "remote-host"))]
+            if !self.managed_job_quiescent() {
+                return;
+            }
             #[cfg(feature = "remote-host")]
             if !self.native_writer_retired(Duration::from_secs(1)) {
                 self.changed.notify_all();
@@ -1150,6 +1196,10 @@ impl SupervisedRun {
         self.release_resource_if_transport_terminal_with_budget(Duration::from_secs(1));
     }
     fn release_resource_if_transport_terminal_with_budget(&self, native_budget: Duration) {
+        #[cfg(all(windows, feature = "remote-host"))]
+        if !self.managed_job_quiescent() {
+            return;
+        }
         #[cfg(not(feature = "remote-host"))]
         let _ = native_budget;
         let release = {
@@ -1178,6 +1228,18 @@ impl SupervisedRun {
     }
 
     fn finish_if_terminal(&self) {
+        #[cfg(all(windows, feature = "remote-host"))]
+        if !self.managed_job_quiescent() {
+            return;
+        }
+        #[cfg(all(windows, feature = "remote-host"))]
+        if self.managed_job.is_some()
+            && (!self.io_drop.all_returned()
+                || !self.output_reader.lock().observe()
+                || self.wait_workers.lock().observe() != WaitWorkersState::Joined)
+        {
+            return;
+        }
         if !self.adoption_complete.load(Ordering::SeqCst) {
             return;
         }
@@ -1728,8 +1790,47 @@ struct NativeStopEntry {
 pub(crate) struct NativeShutdown {
     entries: Vec<NativeStopEntry>,
 }
+/// Facts about this exact owned Job and Rust/native owners. Internal ConPTY
+/// server/thread exit is deliberately not inferred from master destruction.
+#[cfg(all(windows, feature = "remote-host"))]
+#[derive(Debug)]
+pub(crate) struct ManagedRetirementFacts {
+    pub(crate) job_active_processes: Option<u32>,
+    pub(crate) direct_child_reaped: bool,
+    pub(crate) output_reader_joined: bool,
+    pub(crate) wait_workers_joined: bool,
+    pub(crate) physical_writer_joined: bool,
+    pub(crate) original_io_drop_returned: bool,
+    pub(crate) stop_job_joined: bool,
+}
+#[cfg(all(windows, feature = "remote-host"))]
+impl ManagedRetirementFacts {
+    pub(crate) fn original_resources_retired(&self) -> bool {
+        self.job_active_processes == Some(0)
+            && self.direct_child_reaped
+            && self.output_reader_joined
+            && self.wait_workers_joined
+            && self.physical_writer_joined
+            && self.original_io_drop_returned
+            && self.stop_job_joined
+    }
+}
 #[cfg(any(test, feature = "remote-host"))]
 impl NativeRunSupervisor {
+    #[cfg(all(windows, feature = "remote-host"))]
+    pub(crate) fn managed_shutdown_pins(&self) -> Vec<NativeRunPin> {
+        self.core
+            .active
+            .lock()
+            .values()
+            .filter(|state| state.managed_job.is_some())
+            .map(|state| NativeRunPin {
+                run: state.run.clone(),
+                origin: Arc::downgrade(&self.core),
+                state: Some(state.clone()),
+            })
+            .collect()
+    }
     pub(crate) fn pin_shutdown(&self, run: &RunKey) -> NativeRunPin {
         NativeRunPin {
             run: run.clone(),
@@ -1803,6 +1904,25 @@ impl NativeRunSupervisor {
 }
 #[cfg(any(test, feature = "remote-host"))]
 impl NativeShutdown {
+    #[cfg(all(windows, feature = "remote-host"))]
+    pub(crate) fn managed_retirement(&mut self, run: &RunKey) -> Option<ManagedRetirementFacts> {
+        let _ = self.observe_run(run);
+        let entry = self
+            .entries
+            .iter()
+            .find(|entry| identity(&entry.pin.run) == identity(run))?;
+        let state = entry.pin.state.as_ref()?;
+        let job = state.managed_job.as_ref()?;
+        Some(ManagedRetirementFacts {
+            job_active_processes: job.active_processes().ok(),
+            direct_child_reaped: state.reaped.load(Ordering::SeqCst),
+            output_reader_joined: state.output_reader.lock().observe(),
+            wait_workers_joined: state.wait_workers.lock().observe() == WaitWorkersState::Joined,
+            physical_writer_joined: state.native_writer_retired(Duration::ZERO),
+            original_io_drop_returned: state.io_drop.all_returned(),
+            stop_job_joined: entry.joined && !entry.failed,
+        })
+    }
     pub(crate) fn observe_run(&mut self, run: &RunKey) -> NativeShutdownObservation {
         let unknown =
             |reaped, joined, reader, workers, io_drop| NativeShutdownObservation::Unknown {
@@ -1902,6 +2022,13 @@ impl NativeShutdown {
         let mut result = None;
         for key in keys {
             let observed = self.observe_run(&key);
+            #[cfg(windows)]
+            let managed_pending = self.managed_retirement(&key).is_some_and(|facts| {
+                facts.job_active_processes.is_some_and(|active| active > 0)
+                    && !facts.original_resources_retired()
+            });
+            #[cfg(not(windows))]
+            let managed_pending = false;
             let reader_pending = self
                 .entries
                 .iter()
@@ -1933,7 +2060,8 @@ impl NativeShutdown {
                 .is_some_and(|state| {
                     state.io_drop.observe() == crate::platform::owned_pty::IoDropState::Pending
                 });
-            if reader_pending
+            if managed_pending
+                || reader_pending
                 || workers_pending
                 || io_pending
                 || observed == NativeShutdownObservation::Pending
@@ -2013,6 +2141,8 @@ mod wait_worker_join_tests {
             generation: 1,
         };
         Arc::new(SupervisedRun {
+            #[cfg(all(windows, feature = "remote-host"))]
+            managed_job: None,
             #[cfg(feature = "remote-host")]
             native_canonical: Mutex::new(None),
             core: Weak::new(),
