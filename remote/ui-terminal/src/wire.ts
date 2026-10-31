@@ -99,7 +99,7 @@ export type Reply=
   | {message:'ReceiptStatus';profile:1;request:string;operation:string;sequence:string;status:'Known'|'Missing'|'TooOld';outcome:Outcome|null;proof:string|null}
   | {message:'ReceiptSettled';profile:1;request:string;operation:string;sequence:string;outcome:'HostWritten'|'Rejected';disposition:'Advanced'|'AlreadySettled'|'Rejected'};
 function shape(value:unknown,keys:readonly string[]):asserts value is Record<string,any>{
-  if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).length!==keys.length||keys.some(k=>!Object.hasOwn(value,k)))throw Error('reply shape');
+  if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).length!==keys.length||keys.some(k=>!Object.prototype.hasOwnProperty.call(value,k)))throw Error('reply shape');
 }
 function receiptFields(value:Record<string,any>,finalOnly=false):void {
   hex(value.operation,16,true);counter(value.sequence);

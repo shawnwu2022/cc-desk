@@ -1,5 +1,5 @@
 import type {NativeClientPort} from './native.ts';
-import {ProjectionReceiver,type Stamp} from './reducer.ts';
+import {ProjectionReceiver,type Stamp,type Target} from './reducer.ts';
 type Bridge={readonly instanceId:string;invoke(command:string,payload:unknown):Promise<unknown>};
 function bridge():Bridge{
  const value=typeof window==='undefined'?undefined:(window as Window&{__CC_DESK_DOCUMENT__?:Bridge}).__CC_DESK_DOCUMENT__;
@@ -12,6 +12,22 @@ function decode(value:unknown,limit:number):Uint8Array{
  const bytes=Uint8Array.from(raw,c=>c.charCodeAt(0));if(bytes.length>limit||encode(bytes)!==value)throw Error('native byte encoding');return bytes;
 }
 function object(value:unknown):Record<string,unknown>{if(!value||typeof value!=='object'||Array.isArray(value))throw Error('native response');return value as Record<string,unknown>;}
+export type ClientStatus=Readonly<{state:'Locked'}>|Readonly<{state:'Ready';resourceId:number;target:Readonly<Target>;binding:string;role:'Controller'|'Viewer'}>;
+/** Discovery never constructs a channel or accepts an identity supplied by JS. */
+export async function documentClientStatus():Promise<ClientStatus>{
+ const original=bridge(),instance=original.instanceId;
+ if(typeof instance!=='string'||instance.length<1||instance.length>128)throw Error('original document instance unavailable');
+ const value=object(await original.invoke('remote_client_current',{}));
+ if(bridge()!==original||original.instanceId!==instance)throw Error('original document changed');
+ if(value.state==='Locked'&&Object.keys(value).length===1)return Object.freeze({state:'Locked'});
+ if(value.state!=='Ready'||Object.keys(value).sort().join(',')!=='binding,resourceId,role,state,target'||
+  !Number.isInteger(value.resourceId)||(value.resourceId as number)<1||(value.resourceId as number)>4294967295||
+  !['Controller','Viewer'].includes(value.role as string))throw Error('native session response');
+ const target=object(value.target);
+ if(Object.keys(target).sort().join(',')!=='generation,host,incarnation,run,session')throw Error('native target response');
+ new ProjectionReceiver(target as Target,value.binding as string);
+ return Object.freeze({state:'Ready',resourceId:value.resourceId as number,target:Object.freeze({...target}) as Readonly<Target>,binding:value.binding as string,role:value.role as 'Controller'|'Viewer'});
+}
 export function documentClientPort(resourceId:number):NativeClientPort{
  if(!Number.isInteger(resourceId)||resourceId<1||resourceId>4294967295)throw Error('native resource id');
  const original=bridge(),instance=original.instanceId;let closed=false,retired:Promise<void>|undefined;

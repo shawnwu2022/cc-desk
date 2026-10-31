@@ -1,4 +1,12 @@
 export default {
+  remoteTerminalTitle: "Remote terminal",
+  remoteTerminalLocked: "Locked — no native connection is installed.",
+  remoteTerminalSynced: "Snapshot verified and acknowledged.",
+  remoteTerminalUnavailable: "Remote connection unavailable; no input was sent.",
+  remoteTerminalPreviewHint: "Shows an existing authenticated native connection. Connection setup and terminal input are not yet available here.",
+  remoteTerminalRefresh: "Refresh snapshot",
+  remoteTerminalDisconnect: "Disconnect",
+  remoteTerminalOutput: "Verified remote terminal snapshot",
   launchConfigEditAction: "Edit",
   launchConfigCopySuffix: "copy",
   launchConfigRename: "Rename",

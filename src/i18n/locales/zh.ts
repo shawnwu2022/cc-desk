@@ -1,4 +1,12 @@
 export default {
+  remoteTerminalTitle: "远程终端",
+  remoteTerminalLocked: "已锁定：尚未安装原生连接。",
+  remoteTerminalSynced: "快照已验证并确认。",
+  remoteTerminalUnavailable: "远程连接不可用；未发送输入。",
+  remoteTerminalPreviewHint: "显示已有的原生认证连接。此处尚不支持建立连接或终端输入。",
+  remoteTerminalRefresh: "刷新快照",
+  remoteTerminalDisconnect: "断开连接",
+  remoteTerminalOutput: "已验证的远程终端快照",
   launchConfigEditAction: "编辑",
   launchConfigCopySuffix: "副本",
   launchConfigRename: "重命名",
