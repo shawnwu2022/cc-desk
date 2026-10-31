@@ -147,11 +147,12 @@ impl Connection<'_> {
                     ..
                 } => {
                     self.counter(request.parse().map_err(|_| Reject::Bounds)?)?;
+                    let reservation = reserve(&self.custody)?;
                     let pending = self.peer.pending_receipt(
                         decode_hex(&operation)?,
                         sequence.parse().map_err(|_| Reject::Bounds)?,
                     )?;
-                    let found = wait(deadline, move |b| {
+                    let found = retained_wait(deadline, reservation, move |b| {
                         pending.wait(b).map(|r| r.map_err(|_| Reject::Continuity))
                     })
                     .await?;
@@ -198,8 +199,9 @@ impl Connection<'_> {
                         decode_hex(&proof)?,
                     )
                     .ok_or(Reject::Bounds)?;
+                    let reservation = reserve(&self.custody)?;
                     let pending = self.peer.settle_receipt(candidate)?;
-                    let decision = wait(deadline, move |b| {
+                    let decision = retained_wait(deadline, reservation, move |b| {
                         pending.wait(b).map(|r| r.map_err(|_| Reject::Continuity))
                     })
                     .await?;

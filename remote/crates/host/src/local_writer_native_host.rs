@@ -1,5 +1,6 @@
 //! Application custody of the original writer and pending install; not a listener.
 use super::*;
+use attach::connection::{Connection, custody};
 use authorized::{AuthorizedPeer, AuthorizedPendingRebind};
 use cc_desk_remote_security::{BoundDataAuthority, Role, RunningChannel};
 
@@ -31,7 +32,10 @@ pub enum WriterRetirement {
 }
 enum InstallState {
     Pending(AuthorizedPendingRebind),
-    Installed { _peer: AuthorizedPeer, fence: u64 },
+    Installed {
+        peer: Arc<AuthorizedPeer>,
+        fence: u64,
+    },
     Rejected,
     Unknown,
 }
@@ -40,12 +44,14 @@ struct Attempt {
     channel: Arc<RunningChannel>,
     authority: BoundDataAuthority,
     next_fence: u64,
+    connection_taken: bool,
     state: InstallState,
 }
 pub struct NativeHost {
     owner: WriterHostOwner,
     anchor: Option<Arc<RunningChannel>>,
     attempts: Vec<Attempt>,
+    pending: Arc<custody::Owner>,
     closing: bool,
     unknown: bool,
 }
@@ -91,6 +97,7 @@ impl NativeHost {
             owner,
             anchor: None,
             attempts: Vec::new(),
+            pending: Arc::new(custody::Owner::new()),
             closing: false,
             unknown: false,
         }
@@ -132,6 +139,7 @@ impl NativeHost {
             channel,
             authority,
             next_fence,
+            connection_taken: false,
             state: InstallState::Pending(pending),
         });
         Ok(id)
@@ -158,13 +166,48 @@ impl NativeHost {
         };
         attempt.state = match pending.wait(Duration::ZERO) {
             Ok(Ok(peer)) => InstallState::Installed {
-                _peer: peer,
+                peer: Arc::new(peer),
                 fence: attempt.next_fence,
             },
             Ok(Err(_)) => InstallState::Rejected,
             Err(WaitError::Closed) => InstallState::Unknown,
             Err(WaitError::Uncertain) => return,
         };
+    }
+    /// Existing installed peer only. The token cannot choose authority or fence.
+    /// No native IO factory, bootstrap, Data grant installation or listener.
+    pub fn connection(&mut self, id: InstallAttempt) -> Result<NativeConnection, NativeHostError> {
+        if self.closing {
+            return Err(NativeHostError::Closed);
+        }
+        let attempt = self
+            .attempts
+            .iter_mut()
+            .find(|a| a.id == id)
+            .ok_or(NativeHostError::Unknown)?;
+        Self::poll(attempt);
+        if attempt.connection_taken {
+            return Err(NativeHostError::Rejected);
+        }
+        attempt
+            .authority
+            .check()
+            .map_err(|_| NativeHostError::Authority)?;
+        let InstallState::Installed { peer, fence } = &attempt.state else {
+            return Err(NativeHostError::Rejected);
+        };
+        let inner = Connection::new_owned(
+            peer.clone(),
+            attempt.authority.clone(),
+            *fence,
+            self.pending.clone(),
+        )
+        .map_err(|_| NativeHostError::Rejected)?;
+        attempt.connection_taken = true;
+        Ok(NativeConnection {
+            inner,
+            channel: attempt.channel.clone(),
+        })
     }
     /// Phone loss only invalidates its exact original channel. It does not stop a
     /// user's task or seal the writer. Network join belongs to its network owner.
@@ -178,6 +221,7 @@ impl NativeHost {
         Ok(())
     }
     pub fn begin_shutdown(&mut self) {
+        self.pending.seal();
         self.closing = true;
         if let Some(anchor) = &self.anchor {
             anchor.authority().request_close();
@@ -208,6 +252,11 @@ impl NativeHost {
             return WriterRetirement::Pending;
         }
         let mut pending = false;
+        match self.pending.observe() {
+            custody::Observation::Pending => pending = true,
+            custody::Observation::Unknown => self.unknown = true,
+            custody::Observation::Drained => (),
+        }
         for attempt in &mut self.attempts {
             Self::poll(attempt);
             pending |= matches!(attempt.state, InstallState::Pending(_));
@@ -231,6 +280,29 @@ impl NativeHost {
     }
 }
 
+/// Owned API shell around the EXISTING wire dispatcher. Dropping a request or
+/// this shell closes its authority, but original native replies stay in Host.
+pub struct NativeConnection {
+    inner: Connection<'static>,
+    channel: Arc<RunningChannel>,
+}
+impl NativeConnection {
+    pub async fn dispatch_received(
+        &mut self,
+        record: &cc_desk_remote_security::DataRecord,
+        budget: Duration,
+    ) -> Result<(), Reject> {
+        self.inner
+            .dispatch_wire(record, &self.channel, budget)
+            .await
+    }
+}
+impl Drop for NativeConnection {
+    fn drop(&mut self) {
+        self.channel.authority().request_close();
+    }
+}
+
 /// Owns exactly the retained network owners. Await proves their tasks were joined,
 /// not that the protocol ended normally (RunningChannel folds its JoinError).
 pub struct NetworkRetirement {
@@ -243,6 +315,9 @@ impl NetworkRetirement {
         }
     }
 }
+#[cfg(test)]
+#[path = "local_writer_native_connection_tests.rs"]
+mod native_connection_tests;
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -6,7 +6,7 @@ use authorized::{AuthorizedPeer, AuthorizedPendingRebind};
 use cc_desk_remote_record::lifecycle::{Code, Request as LifecycleRequest, State, Status};
 use std::time::Instant;
 #[path = "local_writer_attach_connection.rs"]
-mod connection;
+pub(super) mod connection;
 fn hex(b: &[u8]) -> String {
     b.iter().map(|n| format!("{n:02x}")).collect()
 }

@@ -5,10 +5,27 @@ use cc_desk_remote_security::{BoundDataAuthority, DataRecord, RunningChannel};
 #[cfg(test)]
 #[path = "local_writer_control_reply_tests.rs"]
 mod control_reply_tests;
+#[path = "local_writer_connection_pending.rs"]
+pub(in crate::local_writer::owner) mod custody;
 #[path = "local_writer_control_reply.rs"]
 mod reply;
+
+enum PeerRef<'a> {
+    Borrowed(&'a AuthorizedPeer),
+    Owned(Arc<AuthorizedPeer>),
+}
+impl std::ops::Deref for PeerRef<'_> {
+    type Target = AuthorizedPeer;
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Borrowed(peer) => peer,
+            Self::Owned(peer) => peer.as_ref(),
+        }
+    }
+}
 pub(in crate::local_writer::owner) struct Connection<'a> {
-    peer: &'a AuthorizedPeer,
+    peer: PeerRef<'a>,
+    custody: Option<Arc<custody::Owner>>,
     proof: BoundDataAuthority,
     fence: u64,
     last: u64,
@@ -25,7 +42,8 @@ impl<'a> Connection<'a> {
     ) -> Result<Self, Reject> {
         proof.check().map_err(|_| Reject::Policy)?;
         Ok(Self {
-            peer,
+            peer: PeerRef::Borrowed(peer),
+            custody: None,
             proof,
             fence,
             last: 0,
@@ -36,6 +54,55 @@ impl<'a> Connection<'a> {
         })
     }
 }
+
+impl Connection<'static> {
+    pub(in crate::local_writer::owner) fn new_owned(
+        peer: Arc<AuthorizedPeer>,
+        proof: BoundDataAuthority,
+        fence: u64,
+        custody: Arc<custody::Owner>,
+    ) -> Result<Self, Reject> {
+        proof.check().map_err(|_| Reject::Policy)?;
+        Ok(Self {
+            peer: PeerRef::Owned(peer),
+            custody: Some(custody),
+            proof,
+            fence,
+            last: 0,
+            busy: false,
+            pending_input: None,
+            delivered: None,
+            view: None,
+        })
+    }
+}
+fn reserve<T: Send + 'static>(
+    owner: &Option<Arc<custody::Owner>>,
+) -> Result<Option<custody::Reservation<T>>, Reject> {
+    owner.as_ref().map(|owner| owner.reserve()).transpose()
+}
+// A normal function: bind BEFORE returning a discardable future.
+fn retained_wait<T: Send + 'static>(
+    deadline: tokio::time::Instant,
+    reservation: Option<custody::Reservation<T>>,
+    f: impl FnMut(Duration) -> Result<Result<T, Reject>, WaitError> + Send + 'static,
+) -> impl std::future::Future<Output = Result<T, Reject>> {
+    enum Mode<T: Send + 'static, F> {
+        Owned(custody::Wait<T>),
+        Legacy(F),
+    }
+    let mode = match reservation {
+        Some(reservation) => Mode::Owned(reservation.bind(f)),
+        None => Mode::Legacy(f),
+    };
+    async move {
+        match mode {
+            Mode::Owned(waiter) => waiter.until(deadline).await,
+            Mode::Legacy(f) => wait(deadline, f).await,
+        }
+    }
+}
+
 fn end(b: Duration) -> Result<tokio::time::Instant, Reject> {
     if b.is_zero() || b > Duration::from_secs(1) {
         return Err(Reject::Bounds);
@@ -121,8 +188,9 @@ impl Connection<'_> {
         self.busy = true;
         self.view = None;
         self.delivered = None;
+        let reservation = reserve(&self.custody)?;
         let pending = self.peer.capture()?;
-        let frame = wait(deadline, move |left| pending.wait(left)).await?;
+        let frame = retained_wait(deadline, reservation, move |left| pending.wait(left)).await?;
         let stamp = frame.issued_stamp()?.clone();
         let left = deadline.saturating_duration_since(tokio::time::Instant::now());
         if left.is_zero() {
@@ -146,8 +214,9 @@ impl Connection<'_> {
             return Err(Reject::Sync);
         }
         self.busy = true;
+        let reservation = reserve(&self.custody)?;
         let pending = self.peer.acknowledge_received(r)?;
-        let view = wait(deadline, move |left| pending.wait(left)).await?;
+        let view = retained_wait(deadline, reservation, move |left| pending.wait(left)).await?;
         self.proof.check().map_err(|_| Reject::Policy)?;
         self.view = Some(view);
         self.busy = false;
@@ -168,8 +237,9 @@ impl Connection<'_> {
         self.counter(n)?;
         let view = self.view.as_ref().ok_or(Reject::Sync)?;
         self.busy = true;
+        let reservation = reserve(&self.custody)?;
         let pending = self.peer.input_window(view)?;
-        let next = wait(deadline, move |left| pending.wait(left)).await?;
+        let next = retained_wait(deadline, reservation, move |left| pending.wait(left)).await?;
         let descriptor = self.peer.window_token(&next)?;
         self.view = Some(next);
         self.busy = false;
@@ -184,11 +254,15 @@ impl Connection<'_> {
         self.record(r)?;
         let view = self.view.as_ref().ok_or(Reject::Sync)?;
         self.busy = true;
-        let pending = self.peer.submit_received(r, view)?;
         let command =
             cc_desk_remote_record::input::decode(r.payload()).map_err(|_| Reject::Bounds)?;
+        let reservation = reserve(&self.custody)?;
+        let pending = self.peer.submit_received(r, view)?;
         self.pending_input = Some((command.operation, command.sequence));
-        let value = wait(deadline, move |left| pending.wait(left).map(Ok)).await?;
+        let value = retained_wait(deadline, reservation, move |left| {
+            pending.wait(left).map(Ok)
+        })
+        .await?;
         self.proof.check().map_err(|_| Reject::Policy)?;
         if matches!(value, WriteResult::Receipt(_) | WriteResult::Rejected(_)) {
             self.busy = false;
