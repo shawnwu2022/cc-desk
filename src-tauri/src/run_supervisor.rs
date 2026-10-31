@@ -1537,6 +1537,156 @@ pub(crate) struct NativeRunPin {
     origin: Weak<SupervisorCore>,
     state: Option<Arc<SupervisedRun>>,
 }
+#[cfg(feature = "remote-host")]
+impl NativeRunPin {
+    pub(crate) fn native_scope(
+        &self,
+    ) -> Result<cc_desk_remote_host::native_host::NativeSessionScope, SafeError> {
+        let state = self.state.as_ref().ok_or_else(|| error("RUN_NOT_READY"))?;
+        if state.stop_requested.load(Ordering::SeqCst) || state.reaped.load(Ordering::SeqCst) {
+            return Err(error("RUN_NOT_READY"));
+        }
+        let native = state.native_canonical.lock();
+        let native = native
+            .as_ref()
+            .ok_or_else(|| error("NATIVE_CANONICAL_UNAVAILABLE"))?;
+        native.remote_scope()
+    }
+}
+/// Current document/run admission plus original lifetime custody. A shutdown pin
+/// alone cannot construct this capability or authorize a producer handoff.
+#[cfg(feature = "remote-host")]
+pub(crate) struct NativeRunAdmission {
+    pin: NativeRunPin,
+    access: crate::cli::launch_service::RunAccess,
+    original: Arc<NativeRun>,
+    authority: NativeRunAuthority,
+}
+#[cfg(feature = "remote-host")]
+impl NativeRunAdmission {
+    pub(crate) fn scope(
+        &self,
+    ) -> Result<cc_desk_remote_host::native_host::NativeSessionScope, SafeError> {
+        self.validate()?;
+        let scope = self.pin.native_scope()?;
+        if scope.run != self.pin.key().run_id
+            || scope.generation != self.pin.key().generation.to_string()
+        {
+            return Err(error("FORBIDDEN"));
+        }
+        Ok(scope)
+    }
+    fn validate(&self) -> Result<(), SafeError> {
+        self.access.check_remote_admission(&self.original)?;
+        self.authority.check(&self.original)
+    }
+    pub(crate) fn create_host(
+        &self,
+        channel: Arc<cc_desk_remote_host::native_host::NativeChannel>,
+    ) -> Result<cc_desk_remote_host::native_host::NativeHost, SafeError> {
+        self.validate()?;
+        let state = self
+            .pin
+            .state
+            .as_ref()
+            .ok_or_else(|| error("RUN_NOT_READY"))?;
+        let native = state.native_canonical.lock();
+        let producer = native
+            .as_ref()
+            .and_then(|n| n.producer.as_ref())
+            .ok_or_else(|| error("REMOTE_PRODUCER_OWNED"))?;
+        self.validate()?;
+        cc_desk_remote_host::native_host::NativeHost::for_native_resource(channel, producer)
+            .map_err(|_| error("REMOTE_HOST_AUTHORITY"))
+    }
+    pub(crate) fn adopt(
+        self,
+        host: &mut cc_desk_remote_host::native_host::NativeHost,
+        channel: Arc<cc_desk_remote_host::native_host::NativeChannel>,
+    ) -> Result<NativeRunPin, Box<(SafeError, Self)>> {
+        match self.adopt_inner(host, channel) {
+            Ok(()) => Ok(self.into_pin()),
+            Err(error) => Err(Box::new((error, self))),
+        }
+    }
+    fn adopt_inner(
+        &self,
+        host: &mut cc_desk_remote_host::native_host::NativeHost,
+        channel: Arc<cc_desk_remote_host::native_host::NativeChannel>,
+    ) -> Result<(), SafeError> {
+        self.scope()?;
+        let state = self
+            .pin
+            .state
+            .as_ref()
+            .ok_or_else(|| error("RUN_NOT_READY"))?;
+        let mut native = state.native_canonical.lock();
+        let native = native
+            .as_mut()
+            .ok_or_else(|| error("NATIVE_CANONICAL_UNAVAILABLE"))?;
+        self.validate()?;
+        let producer = native
+            .producer
+            .take()
+            .ok_or_else(|| error("REMOTE_PRODUCER_OWNED"))?;
+        let access = self.access.clone();
+        let original = self.original.clone();
+        let authority = NativeRunAuthority {
+            state: self.authority.state.clone(),
+            resource: self.authority.resource.clone(),
+        };
+        match host.adopt_native_producer(
+            producer,
+            channel,
+            Box::new(move || {
+                access.check_remote_admission(&original).is_ok()
+                    && authority.check(&original).is_ok()
+            }),
+        ) {
+            Ok(_) => Ok(()),
+            Err(rejected) => {
+                native.producer = Some(rejected.1);
+                Err(error("REMOTE_HOST_AUTHORITY"))
+            }
+        }
+    }
+    pub(crate) fn is_owned_by(&self, runtime: &crate::cli::native_runtime::NativeRuntime) -> bool {
+        runtime.owns_remote_pin(&self.pin)
+    }
+    fn into_pin(self) -> NativeRunPin {
+        self.pin
+    }
+}
+#[cfg(feature = "remote-host")]
+impl NativeRunSupervisor {
+    pub(crate) fn admit_remote_run(
+        &self,
+        access: crate::cli::launch_service::RunAccess,
+        run: &RunKey,
+    ) -> Result<NativeRunAdmission, SafeError> {
+        let pin = self.pin_shutdown(run);
+        let state = pin.state.as_ref().ok_or_else(|| error("RUN_NOT_READY"))?;
+        let original = state
+            .resource
+            .lock()
+            .clone()
+            .ok_or_else(|| error("RUN_NOT_READY"))?;
+        access.check_remote_admission(&original)?;
+        let authority = NativeRunAuthority {
+            state: Arc::downgrade(state),
+            resource: Arc::downgrade(&original),
+        };
+        authority.check(&original)?;
+        let admission = NativeRunAdmission {
+            pin,
+            access,
+            original,
+            authority,
+        };
+        admission.scope()?;
+        Ok(admission)
+    }
+}
 /// Minted only by actual supervisor adoption. UI document revocation does not
 /// destroy this process owner; explicit native stop/reap/resource retirement do.
 #[cfg(feature = "remote-host")]

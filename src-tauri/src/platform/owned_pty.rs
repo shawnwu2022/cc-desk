@@ -399,6 +399,29 @@ impl OwnedPty {
             .resize(size)
             .map_err(|_| error("HOST_RESIZE_FAILED"))
     }
+    /// Read the adapter-reported size under the SAME original mutation region.
+    /// ConPTY caches this value; independent OS evidence requires child observation.
+    /// A failed report after resize is an unknown effect.
+    #[cfg(feature = "remote-host")]
+    pub(crate) fn resize_checked_reported(
+        &self,
+        size: PtySize,
+        authorize: impl FnOnce() -> Result<(), SafeError>,
+    ) -> Result<PtySize, SafeError> {
+        validate_size(size)?;
+        #[cfg(test)]
+        mutation_test::before_lock(self);
+        let mutation = self.mutation.lock();
+        authorize()?;
+        mutation
+            .master
+            .resize(size)
+            .map_err(|_| error("HOST_RESIZE_FAILED"))?;
+        mutation
+            .master
+            .get_size()
+            .map_err(|_| error("HOST_RESIZE_OBSERVATION_UNKNOWN"))
+    }
 }
 
 fn validate_size(size: PtySize) -> Result<(), SafeError> {

@@ -345,6 +345,23 @@ fn NativeBridge_OriginalProductCallpointOwnsSingleWriterAndOwnProbeInput_001() {
         .service
         .access(&fixture.caller, &status.run)
         .unwrap();
+    let admitted = fixture
+        .supervisor
+        .admit_remote_run(access.clone(), &status.run)
+        .unwrap();
+    let original_scope = admitted.scope().unwrap();
+    assert_eq!(original_scope.run, status.run.run_id);
+    assert_eq!(original_scope.generation, status.run.generation.to_string());
+    assert!(fixture
+        .supervisor
+        .admit_remote_run(
+            access.clone(),
+            &RunKey {
+                generation: status.run.generation + 1,
+                ..status.run.clone()
+            }
+        )
+        .is_err());
     assert_eq!(
         access
             .with_writer(|_| -> std::io::Result<()> {
@@ -380,6 +397,7 @@ fn NativeBridge_OriginalProductCallpointOwnsSingleWriterAndOwnProbeInput_001() {
             pixel_height: 0,
         })
         .unwrap();
+    let local_only_admission_closed = admitted.scope().is_err();
     let late = access
         .protocol_frame(b"DELAYED_NATIVE_PREFIX_MUST_NOT_WRITE", Some(&source))
         .unwrap();
@@ -429,7 +447,18 @@ fn NativeBridge_OriginalProductCallpointOwnsSingleWriterAndOwnProbeInput_001() {
             )
             .unwrap();
     }
+    fixture
+        .service
+        .registry()
+        .revoke_window(&fixture.caller)
+        .unwrap();
+    let stale_document = admitted.scope().unwrap_err().code;
+    // This untransferred admission still owns the original resource Arc. Release
+    // it before asking shutdown to observe native IO destruction.
+    drop(admitted);
     assert!(cleanup.close(),"own original reader/writer/root/IO-drop cleanup did not settle; no Job-tree claim is implied");
+    assert!(local_only_admission_closed,"local-only canonical loss must close native remote admission before any connection/key use");
+    assert_eq!(stale_document, "FORBIDDEN");
 }
 
 #[test]

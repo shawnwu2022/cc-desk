@@ -411,9 +411,11 @@ impl LocalWriter {
                 }else{None};
                 #[cfg(feature = "experimental-host-owner")]
                 let mut view_gate = config.view_gate.take();
+                #[cfg(feature = "experimental-host-owner")]
+                if native_io.is_some() { config.resize=Some(resize::State::native()); }
                 loop {
                     #[cfg(feature = "experimental-host-owner")]
-                    if let Some(io)=&mut native_io{io.poll(&mut journal,&sealed,replies.as_mut());}
+                    if let Some(io)=&mut native_io{io.poll(&mut journal,&sealed,replies.as_mut(),config.resize.as_mut());}
                     #[cfg(feature = "experimental-host-owner")]
                     if view_gate.as_ref().is_some_and(view_gate::ViewGate::resize_expired) {
                         sealed.store(true,Ordering::Release);
@@ -430,8 +432,13 @@ impl LocalWriter {
                     }
                     #[cfg(feature = "experimental-host-owner")]
                     if let Some(request)=config.resize.as_mut().and_then(|s|s.next_output(&view_gate)) {
-                        let result=replies.as_mut().map_or(OutputResult::Rejected(Reject::Unsupported),|state|state.process(&request,&mut stdin,&sealed));
-                        let _=request.reply.try_send(result);
+                        if let Some(io)=&mut native_io {
+                            if let Some(state)=&mut replies{io.output(request,state,&sealed,view_gate.as_mut());}
+                            else{let _=request.reply.try_send(OutputResult::Rejected(Reject::Unsupported));}
+                        }else{
+                            let result=replies.as_mut().map_or(OutputResult::Rejected(Reject::Unsupported),|state|state.process(&request,&mut stdin,&sealed));
+                            let _=request.reply.try_send(result);
+                        }
                         continue;
                     }
                     let command = match rx.recv_timeout(Duration::from_millis(10)) {
@@ -476,7 +483,7 @@ impl LocalWriter {
                         Command::NativeBind(request)=>{request.process(&target,&mut view_gate);if let Some(io)=&native_io{io.track_authority(view_gate.as_ref());}continue;}
                         #[cfg(feature = "experimental-host-owner")]
                         Command::DurableResize(request) => {
-                            request.process(config.resize.as_mut(),&mut replies,&mut view_gate,&sealed);
+                            request.process(config.resize.as_mut(),&mut replies,&mut view_gate,&sealed,native_io.as_mut());
                             continue;
                         }
                         #[cfg(feature = "experimental-host-owner")]

@@ -59,7 +59,7 @@ pub trait NativeOriginalIo: Send {
         _rows: u16,
         _columns: u16,
         _authorize: Box<dyn FnOnce() -> bool + Send>,
-    ) -> Result<(), Reject> {
+    ) -> Result<(u16, u16), Reject> {
         Err(Reject::Unsupported)
     }
 }
@@ -109,7 +109,7 @@ impl NativeLocalRequest {
 // Exactly one worker owns the original physical writer. The canonical actor
 // keeps each request/credit/intent and only polls its original result. No IO
 // timeout transfers custody, and actor retirement joins this worker explicitly.
-type NativeWork =
+pub(in crate::local_writer) type NativeWork =
     Box<dyn FnOnce(&mut dyn NativeOriginalIo) -> Result<NativeFrameResult, Reject> + Send>;
 pub(in crate::local_writer) type NativeStart = (
     Box<dyn NativeOriginalIo>,
@@ -132,6 +132,7 @@ enum NativeCompletion {
     Resize {
         request: NativeResizeRequest,
     },
+    DurableResize(super::super::super::resize::durable::NativeExecution),
 }
 pub(in crate::local_writer) struct NativeIoState {
     tx: Option<mpsc::SyncSender<NativeWork>>,
@@ -331,11 +332,14 @@ impl NativeIoState {
         let (rows, columns) = (request.rows, request.columns);
         self.submit(
             Box::new(move |writer| {
-                writer.resize(
+                let actual = writer.resize(
                     rows,
                     columns,
                     Box::new(move || !sealed.load(Ordering::Acquire) && authorize()),
                 )?;
+                if actual != (rows, columns) {
+                    return Err(Reject::Continuity);
+                }
                 // Internal unit completion only; no input receipt is minted.
                 Ok(NativeFrameResult {
                     complete: true,
@@ -344,6 +348,13 @@ impl NativeIoState {
             }),
             NativeCompletion::Resize { request },
         );
+    }
+    pub(in crate::local_writer) fn durable_resize(
+        &mut self,
+        execution: super::super::super::resize::durable::NativeExecution,
+    ) {
+        let work = execution.work();
+        self.submit(work, NativeCompletion::DurableResize(execution));
     }
     pub(in crate::local_writer) fn output(
         &mut self,
@@ -418,6 +429,7 @@ impl NativeIoState {
         journal: &mut Journal,
         sealed: &AtomicBool,
         replies: Option<&mut ReplyState>,
+        resize: Option<&mut super::super::super::resize::State>,
     ) {
         if self.pending.is_some() {
             let result = match self.rx.try_recv() {
@@ -480,6 +492,9 @@ impl NativeIoState {
                             sealed.store(true, Ordering::Release);
                         }
                         let _ = request.reply.try_send(result);
+                    }
+                    NativeCompletion::DurableResize(execution) => {
+                        execution.complete(result, resize, replies, sealed);
                     }
                 }
             }

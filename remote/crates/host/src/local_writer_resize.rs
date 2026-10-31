@@ -20,17 +20,26 @@ pub(super) trait Backend: Send {
     fn resize(&mut self, size: Size) -> Result<Size, Fault>;
 }
 pub(super) struct State {
-    backend: Box<dyn Backend>,
+    backend: Option<Box<dyn Backend>>,
     records: Vec<(Operation, Arc<view_gate::PeerScope>, Result<Applied, Error>)>,
     floor: u64,
     durable_only: bool,
     held: std::collections::VecDeque<OutputRequest>,
 }
 impl State {
+    pub(super) fn native() -> Self {
+        Self {
+            backend: None,
+            records: Vec::new(),
+            floor: 0,
+            durable_only: true,
+            held: std::collections::VecDeque::new(),
+        }
+    }
     #[cfg(test)]
     pub(super) fn fake(backend: impl Backend + 'static) -> Self {
         Self {
-            backend: Box::new(backend),
+            backend: Some(Box::new(backend)),
             records: Vec::new(),
             floor: 0,
             durable_only: false,
@@ -227,7 +236,11 @@ impl Request {
                 return Err(Error::Uncertain);
             }
             let effect = if changed {
-                state.backend.resize(size)
+                state
+                    .backend
+                    .as_mut()
+                    .ok_or(Error::Rejected(Reject::Unsupported))?
+                    .resize(size)
             } else {
                 Ok(size)
             };

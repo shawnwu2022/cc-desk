@@ -2,6 +2,8 @@
 use super::*;
 use attach::connection::{Connection, custody};
 use authorized::{AuthorizedPeer, AuthorizedPendingRebind};
+pub use cc_desk_remote_record::grant::SessionScope as NativeSessionScope;
+pub use cc_desk_remote_security::RunningChannel as NativeChannel;
 use cc_desk_remote_security::{BoundDataAuthority, Role, RunningChannel};
 #[path = "local_writer_native_producer.rs"]
 pub(in crate::local_writer) mod producer;
@@ -64,6 +66,20 @@ pub struct NativeHost {
     peer_installs: Vec<peer_coordinator::Coordinator>,
 }
 impl NativeHost {
+    /// Validate the original producer before consuming the process admission.
+    pub fn for_native_resource(
+        channel: Arc<RunningChannel>,
+        producer: &NativeRunProducer,
+    ) -> Result<Self, NativeHostError> {
+        let proof = channel.authority();
+        if !channel.peer_install_enabled()
+            || !producer.complete_from_zero()
+            || producer.native_scope() != *proof.scope()
+        {
+            return Err(NativeHostError::Authority);
+        }
+        Self::from_channel(channel)
+    }
     pub fn adopt_native_producer(
         &mut self,
         producer: NativeRunProducer,

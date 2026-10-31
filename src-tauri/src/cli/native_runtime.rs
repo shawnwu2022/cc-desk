@@ -563,6 +563,22 @@ impl NativeRuntime {
             .ok_or_else(|| error("NATIVE_RUNTIME_NOT_READY"))?
             .pin_shutdown(run))
     }
+    /// Native provider callers must present the actual current document request;
+    /// no IPC field, shutdown pin or metadata can mint this admission.
+    #[cfg(feature = "remote-host")]
+    pub(crate) fn admit_remote_run<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        headers: &HeaderMap,
+        body: &InvokeBody,
+    ) -> Result<crate::run_supervisor::NativeRunAdmission, SafeError> {
+        let (caller, run) = self.admit_run_key(webview, headers, body)?;
+        let access = self.service.access(&caller, &run)?;
+        self.supervisor
+            .as_ref()
+            .ok_or_else(|| error("NATIVE_RUNTIME_NOT_READY"))?
+            .admit_remote_run(access, &run)
+    }
 
     #[cfg(feature = "remote-host")]
     pub(crate) fn owns_remote_pin(&self, pin: &crate::run_supervisor::NativeRunPin) -> bool {

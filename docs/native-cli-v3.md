@@ -176,6 +176,16 @@ native IO, source discontinuity and journal failure retain their fail-closed rul
 
 Resize returns `state: "resized"` and `canonicalOutput` (`complete`, `local-only`
 or `unavailable`); the local-only diagnostic does not disable ordinary local input.
+
+Native remote admission retains the exact current RunAccess, original resource Arc
+and supervisor authority; a shutdown pin alone grants no admission. Successful
+handoff consumes this temporary admission and registers the original lifetime pin;
+rejection returns admission and producer custody while retaining the same Host.
+The durable remote resize actor can retain a physical resize on its sole IO worker
+through cancellation/expiry. It compares the adapter-reported size before publishing;
+ConPTY's cached size is not independent OS evidence. The actual provider connection
+entry and wire lifecycle route remain Locked/unregistered until their native adapters
+are connected and qualified.
 These capture facts are not remote admission. Identity provisioning, the production
 verified connection entry and complete Job/process-tree retirement remain separate
 release gates; this bridge does not enroll credentials or enable remote access.

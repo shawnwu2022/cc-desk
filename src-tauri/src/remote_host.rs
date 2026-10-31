@@ -70,29 +70,70 @@ impl Default for RemoteHostService {
     }
 }
 impl RemoteHostService {
-    // Native-only staging seam. Rejected custody is returned intact; nothing is
-    // dropped or turned into an implicit authorized resource. No public caller yet.
+    // Native provider entry. It accepts only an opaque original document/run
+    // admission and a real verified channel, never a shutdown pin or JS authority.
     #[allow(
         dead_code,
         reason = "production native provider/identity bootstrap remains Locked"
     )]
-    fn adopt_native(
+    pub(crate) fn adopt_native(
         &self,
-        host: NativeHost,
-        pins: Vec<NativeRunPin>,
         runtime: &NativeRuntime,
-    ) -> Result<(), Box<(NativeHost, Vec<NativeRunPin>)>> {
+        webview: &tauri::Webview,
+        headers: &tauri::http::HeaderMap,
+        body: &tauri::ipc::InvokeBody,
+        channel: Arc<cc_desk_remote_host::native_host::NativeChannel>,
+    ) -> Result<
+        (),
+        Box<(
+            crate::cli::types::SafeError,
+            Option<crate::run_supervisor::NativeRunAdmission>,
+        )>,
+    > {
+        let admission = runtime
+            .admit_remote_run(webview, headers, body)
+            .map_err(|error| Box::new((error, None)))?;
+        self.adopt_admitted(admission, channel, runtime)
+            .map_err(|rejected| {
+                let (error, original) = *rejected;
+                Box::new((error, Some(original)))
+            })
+    }
+    fn adopt_admitted(
+        &self,
+        admission: crate::run_supervisor::NativeRunAdmission,
+        channel: Arc<cc_desk_remote_host::native_host::NativeChannel>,
+        runtime: &NativeRuntime,
+    ) -> Result<
+        (),
+        Box<(
+            crate::cli::types::SafeError,
+            crate::run_supervisor::NativeRunAdmission,
+        )>,
+    > {
         let mut state = self.state.lock();
-        if state.closing
-            || state.host.is_some()
-            || pins.len() != 1
-            || !runtime.owns_remote_pin(&pins[0])
-            || !host.owns_run_scope(&pins[0].key().run_id, pins[0].key().generation)
-        {
-            return Err(Box::new((host, pins)));
+        if state.closing || !state.pins.is_empty() || !admission.is_owned_by(runtime) {
+            return Err(Box::new((
+                crate::cli::profiles::error("REMOTE_HOST_CLOSED"),
+                admission,
+            )));
         }
-        state.host = Some(host);
-        state.pins = pins;
+        if state.host.is_none() {
+            let host = match admission.create_host(channel.clone()) {
+                Ok(host) => host,
+                Err(error) => return Err(Box::new((error, admission))),
+            };
+            // Keep this SAME permanent-admission Host even if the following
+            // handoff rejects. Never drop/recreate it on a wrong-resource retry.
+            state.host = Some(host);
+        }
+        let pin = admission.adopt(
+            state.host.as_mut().expect("retained original Host"),
+            channel,
+        )?;
+        // Successful admission consumption drops its extra RunAccess/original Arc;
+        // shutdown retains only the original lifetime pin and Host-owned pending.
+        state.pins.push(pin);
         Ok(())
     }
     pub(crate) fn request_exit(&self, code: i32, maintenance_blocked: bool) -> ExitDecision {

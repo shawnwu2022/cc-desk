@@ -227,12 +227,12 @@ fn native_local_resize_preserves_full_size_and_cuts_delayed_original_reply() {
             rows: u16,
             columns: u16,
             authorize: Box<dyn FnOnce() -> bool + Send>,
-        ) -> Result<(), Reject> {
+        ) -> Result<(u16, u16), Reject> {
             if !authorize() {
                 return Err(Reject::Policy);
             }
             *self.size.lock().unwrap() = (rows, columns);
-            Ok(())
+            Ok(*self.size.lock().unwrap())
         }
     }
     let dir = tempfile::tempdir().unwrap();
@@ -494,7 +494,6 @@ async fn native_producer_verified_install_keeps_original_prefix_and_denies_wrong
     let scope = producer.native_scope();
     let (c, h, _gate, _cancel) = peer_channels_scope(Arc::new(|| Ok(1000)), scope.clone()).await;
     let h = Arc::new(h);
-    let mut host = NativeHost::from_channel(h.clone()).unwrap();
     let wrong_dir = tempfile::tempdir().unwrap();
     let wrong = NativeRunProducer::start(
         Journal::open(&wrong_dir.path().join("wrong.sqlite")).unwrap(),
@@ -506,6 +505,11 @@ async fn native_producer_verified_install_keeps_original_prefix_and_denies_wrong
     )
     .unwrap();
     let wrong_worker = wrong.writer.worker.as_ref().unwrap().thread().id();
+    assert!(
+        NativeHost::for_native_resource(h.clone(), &wrong).is_err(),
+        "wrong resource must reject before consuming permanent process admission"
+    );
+    let mut host = NativeHost::for_native_resource(h.clone(), &producer).unwrap();
     let mut wrong = match host.adopt_native_producer(wrong, h.clone(), Box::new(|| true)) {
         Err(rejected) => rejected.1,
         Ok(_) => panic!("wrong verified resource scope must reject before custody moves"),
@@ -1181,4 +1185,243 @@ async fn peer_install_cancelled_retire_keeps_original_controlled_response_task_i
     assert_eq!(host.observe_shutdown(), WriterRetirement::Joined);
     host.network_retirement().unwrap().wait().await;
     let _ = tokio::join!(c.wait_closed(), h.wait_closed());
+}
+
+#[tokio::test]
+async fn native_remote_resize_reserves_on_original_canonical_actor() {
+    use cc_desk_remote_record::lifecycle::{
+        Kind, Request as ResizeOperation, State as ResizeState,
+    };
+    for mode in 0..7 {
+        struct Original {
+            calls: Arc<std::sync::Mutex<Vec<(u16, u16)>>>,
+            mode: u8,
+            entered: std::sync::mpsc::SyncSender<()>,
+            release: std::sync::mpsc::Receiver<()>,
+        }
+        impl crate::native_host::NativeOriginalIo for Original {
+            fn frame(
+                &mut self,
+                _: &[u8],
+                authorize: Box<dyn FnOnce() -> bool + Send>,
+            ) -> Result<crate::native_host::NativeFrameResult, Reject> {
+                if !authorize() {
+                    return Err(Reject::Policy);
+                }
+                Ok(crate::native_host::NativeFrameResult {
+                    complete: true,
+                    confirmed_bytes: 0,
+                })
+            }
+            fn resize(
+                &mut self,
+                rows: u16,
+                columns: u16,
+                authorize: Box<dyn FnOnce() -> bool + Send>,
+            ) -> Result<(u16, u16), Reject> {
+                if !authorize() {
+                    return Err(Reject::Policy);
+                }
+                self.calls.lock().unwrap().push((rows, columns));
+                if matches!(self.mode, 3 | 5) {
+                    self.entered.send(()).unwrap();
+                    self.release
+                        .recv_timeout(Duration::from_secs(3))
+                        .map_err(|_| Reject::Thread)?;
+                }
+                Ok((rows, columns + u16::from(self.mode == 4)))
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (entered_tx, entered) = std::sync::mpsc::sync_channel(1);
+        let (release, release_rx) = std::sync::mpsc::sync_channel(1);
+        let mut producer = NativeRunProducer::start_resource(
+            Journal::open(&dir.path().join("native.sqlite")).unwrap(),
+            Original {
+                calls: calls.clone(),
+                mode,
+                entered: entered_tx,
+                release: release_rx,
+            },
+            "TEST_ONLY_NATIVE_REMOTE_RESIZE".into(),
+            3,
+            3,
+            10,
+        )
+        .unwrap();
+        let original = producer.writer.worker.as_ref().unwrap().thread().id();
+        let scope = producer.native_scope();
+        let (c, h, _gate, _cancel) =
+            peer_channels_scope(Arc::new(|| Ok(1000)), scope.clone()).await;
+        let proof = h.authority();
+        let mut owner =
+            WriterHostOwner::from_registry(&OwnerRegistry::default(), support::host(), 11).unwrap();
+        owner.principal = Some(proof.principal_id());
+        let mut session = [0; 16];
+        for (i, pair) in scope.session.as_bytes().chunks_exact(2).enumerate() {
+            session[i] = u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap();
+        }
+        let target = Target {
+            host: support::host(),
+            incarnation: 11,
+            session,
+            run: scope.run,
+            generation: 3,
+        };
+        let admission = owner
+            .authorized_admission(&target, support::device(), &proof, [8; 16], 1)
+            .unwrap();
+        let peer = producer
+            .bind(target, support::device(), admission, Box::new(|| true))
+            .unwrap()
+            .wait(BUDGET)
+            .unwrap()
+            .unwrap();
+        let frame = peer.capture().unwrap().wait(BUDGET).unwrap().unwrap();
+        let stamp = frame.issued_stamp().unwrap();
+        let operation = ResizeOperation {
+            kind: Kind::Resize,
+            operation: [5; 16],
+            sequence: 1,
+            state: ResizeState {
+                generation: 3,
+                fence: 1,
+                mode: stamp.mode_epoch.parse().unwrap(),
+                dimension: stamp.dimension_epoch.parse().unwrap(),
+                sync: stamp.sync_epoch.parse().unwrap(),
+            },
+            size: Some((4, 12)),
+        };
+        drop(frame);
+        let epochs = cc_desk_remote_terminal::TerminalEpochs::default();
+        let current = crate::lifecycle_resize_completion::Fact {
+            request: ResizeOperation {
+                size: Some((3, 10)),
+                ..operation.clone()
+            },
+            resource: crate::lifecycle_router::ResourceIdentity::from_proof(&proof),
+            backend: [6; 32],
+            digest: [7; 32],
+            before_size: (3, 10),
+            after_size: (3, 10),
+            before_terminal: epochs,
+            after_terminal: epochs,
+            after: operation.state,
+            outcome: crate::lifecycle_resize_completion::Outcome::Applied,
+        };
+        let result_dir = dir.path().join("result");
+        std::fs::create_dir(&result_dir).unwrap();
+        let durable = crate::lifecycle_resize_durable::Owner::fake(
+            crate::lifecycle_journal::Store::open_resize_candidate(
+                &result_dir.join("resize.sqlite"),
+            )
+            .unwrap(),
+            DigestKey::from_backend_bytes([0x5a; 32]),
+            proof.clone(),
+            current,
+            true,
+        )
+        .unwrap();
+        let mut coordinator =
+            crate::local_writer::resize::durable::Coordinator::fake(peer, durable);
+        let budget = if mode == 5 {
+            Duration::from_millis(200)
+        } else {
+            BUDGET
+        };
+        let result = coordinator.begin(operation.clone(), budget);
+        let reentry = if mode == 6 && result.is_ok() {
+            Some(coordinator.reservation().test_cross_native_guard_deadline())
+        } else {
+            None
+        };
+        if result.is_ok() {
+            if mode == 1 {
+                coordinator.reservation().cancel();
+            }
+            if mode == 2 {
+                proof.request_close();
+            }
+        }
+        let completed = if result.is_ok() {
+            let executed = if matches!(mode, 3 | 5) {
+                let reservation = coordinator.reservation();
+                let worker = std::thread::spawn(move || {
+                    let result = coordinator.execute();
+                    (coordinator, result)
+                });
+                let reached = entered.recv_timeout(Duration::from_secs(1));
+                if mode == 3 {
+                    reservation.cancel();
+                } else {
+                    std::thread::sleep(Duration::from_millis(220));
+                }
+                let _ = release.try_send(());
+                let (returned, result) = worker.join().unwrap();
+                coordinator = returned;
+                if reached.is_err() {
+                    Err(Reject::Thread)
+                } else {
+                    result
+                }
+            } else {
+                coordinator.execute()
+            };
+            executed.and_then(|f| {
+                let stored = coordinator.record()?;
+                if stored != f {
+                    return Err(Reject::Continuity);
+                }
+                coordinator.publish()?;
+                Ok(f)
+            })
+        } else {
+            Err(Reject::Unsupported)
+        };
+        let replay = if completed.is_ok() {
+            coordinator.begin(operation, BUDGET)
+        } else {
+            Err(Reject::Unsupported)
+        };
+        let ready = coordinator.reservation().ready();
+        let same = producer.writer.worker.as_ref().unwrap().thread().id() == original;
+        producer.stop();
+        let retired = producer.join(BUDGET);
+        h.authority().request_close();
+        c.authority().request_close();
+        let _ = tokio::join!(h.wait_closed(), c.wait_closed());
+        assert!(retired.is_ok() && same);
+        assert!(
+            result.is_ok(),
+            "native remote Resize must reserve on the SAME canonical actor: {:?}",
+            result.err()
+        );
+        if mode == 0 {
+            assert!(
+                completed.is_ok(),
+                "original native effect must finalize and publish: {:?}",
+                completed.err()
+            );
+            assert!(
+                replay.unwrap().is_some(),
+                "durable replay is a fact lookup, never another effect"
+            );
+            assert!(ready.is_ok());
+        } else {
+            assert!(
+                completed.is_err() && ready.is_err(),
+                "failed/cancelled resize must never become Ready: mode{mode}"
+            );
+        }
+        assert_eq!(
+            calls.lock().unwrap().len(),
+            usize::from(!matches!(mode, 1 | 2 | 6)),
+            "mode{mode}"
+        );
+        assert!(
+            !reentry.is_some_and(|probe| probe.load(Ordering::Acquire)),
+            "native IO cancellation must not reenter its original publication guard"
+        );
+    }
 }

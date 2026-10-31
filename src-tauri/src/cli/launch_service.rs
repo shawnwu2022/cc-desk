@@ -976,6 +976,17 @@ impl std::fmt::Debug for RunAccess {
     }
 }
 impl RunAccess {
+    #[cfg(feature = "remote-host")]
+    pub(crate) fn check_remote_admission(
+        &self,
+        original: &Arc<NativeRun>,
+    ) -> Result<(), SafeError> {
+        self.check_mutation()?;
+        if !Arc::ptr_eq(&self.resource, original) {
+            return Err(error("FORBIDDEN"));
+        }
+        Ok(())
+    }
     fn check_mutation(&self) -> Result<(), SafeError> {
         let current = self.registry.mutation_resource(&self.caller, &self.run)?;
         if !Arc::ptr_eq(&current, &self.resource) {
@@ -1162,9 +1173,20 @@ pub(crate) struct NativeCanonicalRun {
     pub(crate) producer: Option<cc_desk_remote_host::native_host::NativeRunProducer>,
     input: cc_desk_remote_host::native_host::NativeLocalInput,
     _directory: tempfile::TempDir,
+    pub(crate) scope: cc_desk_remote_host::native_host::NativeSessionScope,
 }
 #[cfg(feature = "remote-host")]
 impl NativeCanonicalRun {
+    pub(crate) fn remote_scope(
+        &self,
+    ) -> Result<cc_desk_remote_host::native_host::NativeSessionScope, SafeError> {
+        if self.input.canonical_status()
+            != cc_desk_remote_host::native_host::NativeCanonicalStatus::Complete
+        {
+            return Err(error("NATIVE_CANONICAL_UNAVAILABLE"));
+        }
+        Ok(self.scope.clone())
+    }
     pub(crate) fn stop(&self) {
         self.input.stop();
     }
@@ -1226,12 +1248,12 @@ impl cc_desk_remote_host::native_host::NativeOriginalIo for OriginalNativeWriter
         rows: u16,
         columns: u16,
         authorize: Box<dyn FnOnce() -> bool + Send>,
-    ) -> Result<(), cc_desk_remote_host::native_host::NativeIoError> {
+    ) -> Result<(u16, u16), cc_desk_remote_host::native_host::NativeIoError> {
         use cc_desk_remote_host::native_host::NativeIoError as Reject;
         self.resource
             .process
             .pty
-            .resize_checked(
+            .resize_checked_reported(
                 PtySize {
                     rows,
                     cols: columns,
@@ -1246,12 +1268,10 @@ impl cc_desk_remote_host::native_host::NativeOriginalIo for OriginalNativeWriter
                     Ok(())
                 },
             )
-            .map_err(|e| {
-                if e.code == "HOST_RESIZE_FAILED" {
-                    Reject::Continuity
-                } else {
-                    Reject::Policy
-                }
+            .map(|actual| (actual.rows, actual.cols))
+            .map_err(|e| match e.code.as_str() {
+                "FORBIDDEN" | "RUN_NOT_READY" => Reject::Policy,
+                _ => Reject::Continuity,
             })
     }
 }
@@ -1298,6 +1318,7 @@ pub(crate) fn prepare_native_canonical(
         .map_err(|_| error("NATIVE_CANONICAL_ALREADY_OWNED"))?;
     Ok((
         NativeCanonicalRun {
+            scope: producer.native_scope(),
             producer: Some(producer),
             input,
             _directory: directory,

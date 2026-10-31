@@ -19,6 +19,10 @@ pub(in crate::local_writer) struct Prepare {
 pub(in crate::local_writer) struct Reservation {
     #[cfg(test)]
     before_claim: std::sync::Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    #[cfg(test)]
+    before_native_admit: std::sync::Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    #[cfg(test)]
+    cancel_reentry: std::sync::Mutex<Option<Arc<dyn Fn() -> bool + Send + Sync>>>,
     phase: AtomicU8,
     end: Instant,
     sealed: Arc<AtomicBool>,
@@ -32,11 +36,50 @@ pub(in crate::local_writer) struct Reservation {
     index: usize,
 }
 impl Reservation {
+    /// Force the actual native claim across its deadline while holding the
+    /// publication guard. The exact-reservation probe detects recursive cancel
+    /// and uses its lock-free form so a RED cannot leave an unjoinable thread.
+    #[cfg(test)]
+    pub(in crate::local_writer) fn test_cross_native_guard_deadline(&self) -> Arc<AtomicBool> {
+        let reentered = Arc::new(AtomicBool::new(false));
+        let owner = Arc::new(std::sync::Mutex::new(None));
+        let entered = owner.clone();
+        let end = self.end;
+        *self.before_native_admit.lock().unwrap() = Some(Box::new(move || {
+            *entered.lock().unwrap() = Some(std::thread::current().id());
+            std::thread::sleep(
+                end.saturating_duration_since(Instant::now()) + Duration::from_millis(1),
+            );
+        }));
+        let observed = reentered.clone();
+        *self.cancel_reentry.lock().unwrap() = Some(Arc::new(move || {
+            let same = owner
+                .lock()
+                .unwrap()
+                .is_some_and(|id| id == std::thread::current().id());
+            if same {
+                observed.store(true, Ordering::Release);
+            }
+            same
+        }));
+        reentered
+    }
     #[cfg(test)]
     pub(in crate::local_writer) fn test_before_claim(&self, hook: impl FnOnce() + Send + 'static) {
         *self.before_claim.lock().unwrap() = Some(Box::new(hook));
     }
     pub(in crate::local_writer) fn cancel(&self) {
+        #[cfg(test)]
+        if self
+            .cancel_reentry
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|probe| probe())
+        {
+            self.cancel_locked();
+            return;
+        }
         if self
             .scope
             .with_publication(|| {
@@ -161,6 +204,123 @@ enum Action {
     },
 }
 pub(in crate::local_writer) struct Command(Action);
+/// Retained by the original canonical actor while its sole IO worker owns the
+/// physical effect. The original sender/result is never replaced by a timeout.
+pub(in crate::local_writer) struct NativeExecution {
+    prepared: Prepared,
+    sender: crate::lifecycle_resize_durable::Sender,
+    reply: mpsc::SyncSender<Result<Fact, Reject>>,
+}
+impl NativeExecution {
+    pub(in crate::local_writer) fn work(&self) -> owner::native_host::producer::NativeWork {
+        let p = self.prepared.clone();
+        let sender = self.sender.clone();
+        Box::new(move |writer| {
+            let fact = p.fact.clone();
+            let cap = p.cap.clone();
+            let same_size = fact.before_size == fact.after_size;
+            let authorize = Box::new(move || {
+                sender
+                    .claim(&fact, &cap.identity, &cap.proof, || {
+                        cap.scope
+                            .with_publication(|| {
+                                #[cfg(test)]
+                                if let Some(hook) = cap.before_native_admit.lock().unwrap().take() {
+                                    hook();
+                                }
+                                // This scope's publication guard is already held.
+                                // alive/expired/cancel would reacquire that SAME
+                                // non-reentrant gate when the deadline crosses.
+                                if cap.sealed.load(Ordering::Acquire)
+                                    || Instant::now() >= cap.end
+                                    || cap.phase.load(Ordering::Acquire) != EXECUTING
+                                {
+                                    cap.cancel_locked();
+                                    return Err(Reject::Sealed);
+                                }
+                                cap.proof.check().map_err(|_| Reject::Policy)
+                            })
+                            .map_err(|_| cc_desk_remote_record::lifecycle::Code::Stale)
+                    })
+                    .is_ok()
+            });
+            if same_size {
+                if !authorize() {
+                    return Err(Reject::Policy);
+                }
+            } else {
+                let actual = writer.resize(p.fact.after_size.0, p.fact.after_size.1, authorize)?;
+                if actual != p.fact.after_size {
+                    return Err(Reject::Continuity);
+                }
+            }
+            Ok(owner::native_host::NativeFrameResult {
+                complete: true,
+                confirmed_bytes: 0,
+            })
+        })
+    }
+    pub(in crate::local_writer) fn complete(
+        self,
+        result: Result<owner::native_host::NativeFrameResult, Reject>,
+        state: Option<&mut State>,
+        replies: Option<&mut ReplyState>,
+        sealed: &AtomicBool,
+    ) {
+        let p = &self.prepared;
+        let result = (|| {
+            let state = state.ok_or(Reject::Unsupported)?;
+            let replies = replies.ok_or(Reject::Unsupported)?;
+            let mut fact = p.fact.clone();
+            match result {
+                Ok(r) if r.complete => {
+                    replies.resize_commit(fact.after_size.0, fact.after_size.1)?
+                }
+                Err(Reject::Policy) => {
+                    fact.outcome = Outcome::NotApplied;
+                    fact.after = fact.request.state;
+                    fact.after_size = fact.before_size;
+                    fact.after_terminal = fact.before_terminal;
+                }
+                _ => return Err(Reject::Continuity),
+            }
+            let (actual, epochs) = replies.resize_baseline()?;
+            if actual != fact.after_size || epochs != fact.after_terminal {
+                return Err(Reject::Continuity);
+            }
+            fact.encode_stored().map_err(|_| Reject::Bounds)?;
+            self.sender
+                .complete(fact.clone())
+                .map_err(|_| Reject::Continuity)?;
+            *p.cap.result.lock().map_err(|_| Reject::Thread)? = Some(fact.clone());
+            state.records[p.cap.index].2 = if fact.outcome == Outcome::Applied {
+                Ok(Applied {
+                    request: fact.request.clone(),
+                    after: fact.after,
+                    size: Size {
+                        rows: actual.0,
+                        columns: actual.1,
+                    },
+                })
+            } else {
+                Err(Error::NotApplied)
+            };
+            p.cap.alive()?;
+            p.cap
+                .phase
+                .compare_exchange(EXECUTING, EFFECT, Ordering::AcqRel, Ordering::Acquire)
+                .map_err(|_| Reject::Sealed)?;
+            Ok(fact)
+        })();
+        if result.is_err() {
+            p.cancel();
+            sealed.store(true, Ordering::Release);
+        }
+        if self.reply.try_send(result).is_err() {
+            p.cancel();
+        }
+    }
+}
 pub(in crate::local_writer) struct Pending<T> {
     reply: mpsc::Receiver<Result<T, Reject>>,
     end: Instant,
@@ -302,6 +462,7 @@ impl Command {
         replies: &mut Option<ReplyState>,
         gate: &mut Option<view_gate::ViewGate>,
         sealed: &Arc<AtomicBool>,
+        native: Option<&mut owner::native_host::producer::NativeIoState>,
     ) {
         let (Some(state), Some(replies), Some(gate)) = (state, replies.as_mut(), gate.as_mut())
         else {
@@ -373,6 +534,10 @@ impl Command {
                     let cap = Arc::new(Reservation {
                         #[cfg(test)]
                         before_claim: std::sync::Mutex::new(None),
+                        #[cfg(test)]
+                        before_native_admit: std::sync::Mutex::new(None),
+                        #[cfg(test)]
+                        cancel_reentry: std::sync::Mutex::new(None),
                         phase: AtomicU8::new(RESERVED),
                         end: input.end,
                         sealed: sealed.clone(),
@@ -401,6 +566,31 @@ impl Command {
                 sender,
                 reply,
             } => {
+                if let Some(native) = native {
+                    let result = validate(&p, gate, replies).and_then(|()| {
+                        p.cap
+                            .phase
+                            .compare_exchange(
+                                RESERVED,
+                                EXECUTING,
+                                Ordering::AcqRel,
+                                Ordering::Acquire,
+                            )
+                            .map_err(|_| Reject::Pending)?;
+                        gate.resize_proof(&p.cap.scope, &p.cap.proof)
+                    });
+                    if let Err(error) = result {
+                        p.cancel();
+                        let _ = reply.try_send(Err(error));
+                    } else {
+                        native.durable_resize(NativeExecution {
+                            prepared: p,
+                            sender,
+                            reply,
+                        });
+                    }
+                    return;
+                }
                 let result = (|| {
                     validate(&p, gate, replies)?;
                     p.cap
@@ -437,7 +627,11 @@ impl Command {
                     let effect = if fact.before_size == fact.after_size {
                         Ok(size)
                     } else {
-                        state.backend.resize(size)
+                        state
+                            .backend
+                            .as_mut()
+                            .ok_or(Reject::Unsupported)?
+                            .resize(size)
                     };
                     match effect {
                         Ok(actual) if actual == size => {
