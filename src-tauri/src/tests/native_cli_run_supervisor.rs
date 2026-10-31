@@ -1463,3 +1463,121 @@ fn RemoteShutdown_OutputCallbackDoesNotProveReaderJoined_005() {
     );
     assert_eq!(fixture.child_reports(), 1);
 }
+
+#[test]
+#[allow(non_snake_case)]
+fn RemoteShutdown_ReapAndCallbackDoNotProveWaiterJoined_009() {
+    use crate::run_supervisor::NativeShutdownObservation;
+    let fixture = Fixture::new("hold");
+    fixture.supervisor.pause_wait_exit_for_test();
+    struct Release<'a>(&'a NativeRunSupervisor);
+    impl Drop for Release<'_> {
+        fn drop(&mut self) {
+            self.0.release_wait_exit_for_test();
+        }
+    }
+    let release = Release(&fixture.supervisor);
+    let status = fixture.start();
+    let end = Instant::now() + Duration::from_secs(15);
+    while fixture.child_reports() == 0 {
+        assert!(Instant::now() < end);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let pin = fixture.supervisor.pin_shutdown(&status.run);
+    let mut shutdown = fixture.supervisor.begin_shutdown_owned(vec![pin]).unwrap();
+    while !fixture.supervisor.wait_exit_waiting_for_test() {
+        assert!(
+            Instant::now() < end,
+            "real waiter never reached its return barrier"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    if let NativeShutdownObservation::Unknown {
+        wait_workers_joined,
+        ..
+    } = shutdown.observe_run(&status.run)
+    {
+        assert!(
+            !wait_workers_joined,
+            "callback was mistaken for original-thread return"
+        );
+    }
+    drop(release);
+    loop {
+        if matches!(
+            shutdown.observe_run(&status.run),
+            NativeShutdownObservation::Unknown {
+                direct_child_reaped: true,
+                wait_workers_joined: true,
+                io_threads_joined: false,
+                ..
+            }
+        ) {
+            break;
+        }
+        assert!(
+            Instant::now() < end,
+            "original native waiter handle was never actually joined"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(fixture.child_reports(), 1);
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn RemoteShutdown_OriginalRetryHandleAlsoMustJoin_010() {
+    use crate::run_supervisor::NativeShutdownObservation;
+    let fixture = Fixture::new("hold");
+    fixture.supervisor.fail_wait_after_stop_for_test();
+    fixture.supervisor.pause_automatic_retry_for_test();
+    struct Release<'a>(&'a NativeRunSupervisor);
+    impl Drop for Release<'_> {
+        fn drop(&mut self) {
+            self.0.release_automatic_retry_for_test();
+        }
+    }
+    let release = Release(&fixture.supervisor);
+    let status = fixture.start();
+    let end = Instant::now() + Duration::from_secs(15);
+    while fixture.child_reports() == 0 {
+        assert!(Instant::now() < end);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    fixture.supervisor.stop(&fixture.caller, &status).unwrap();
+    while !fixture
+        .supervisor
+        .retry_handle_waiting_for_test(&status.run)
+    {
+        assert!(
+            Instant::now() < end,
+            "original retry handle not retained at its real barrier"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let pin = fixture.supervisor.pin_shutdown(&status.run);
+    let mut shutdown = fixture.supervisor.begin_shutdown_owned(vec![pin]).unwrap();
+    assert_eq!(
+        shutdown.observe_run(&status.run),
+        NativeShutdownObservation::Pending
+    );
+    drop(release);
+    loop {
+        if matches!(
+            shutdown.observe_run(&status.run),
+            NativeShutdownObservation::Unknown {
+                wait_workers_joined: true,
+                io_threads_joined: false,
+                ..
+            }
+        ) {
+            break;
+        }
+        assert!(
+            Instant::now() < end,
+            "waiter/retry original handles did not join"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(fixture.child_reports(), 1);
+}

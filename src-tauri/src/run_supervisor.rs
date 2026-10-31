@@ -68,6 +68,8 @@ struct SupervisorCore {
     #[cfg(test)]
     automatic_retry_paused: Mutex<bool>,
     #[cfg(test)]
+    automatic_retry_waiting: AtomicBool,
+    #[cfg(test)]
     automatic_retry_changed: Condvar,
     #[cfg(test)]
     registry_steps_paused: Mutex<bool>,
@@ -89,6 +91,12 @@ struct SupervisorCore {
     reader_exit_waiting: AtomicBool,
     #[cfg(test)]
     reader_exit_changed: Condvar,
+    #[cfg(test)]
+    wait_exit_paused: Mutex<bool>,
+    #[cfg(test)]
+    wait_exit_waiting: AtomicBool,
+    #[cfg(test)]
+    wait_exit_changed: Condvar,
 }
 
 pub(crate) struct NativeRunSupervisor {
@@ -123,6 +131,8 @@ impl NativeRunSupervisor {
                 #[cfg(test)]
                 automatic_retry_paused: Mutex::new(false),
                 #[cfg(test)]
+                automatic_retry_waiting: AtomicBool::new(false),
+                #[cfg(test)]
                 automatic_retry_changed: Condvar::new(),
                 #[cfg(test)]
                 registry_steps_paused: Mutex::new(false),
@@ -144,6 +154,12 @@ impl NativeRunSupervisor {
                 reader_exit_waiting: AtomicBool::new(false),
                 #[cfg(test)]
                 reader_exit_changed: Condvar::new(),
+                #[cfg(test)]
+                wait_exit_paused: Mutex::new(false),
+                #[cfg(test)]
+                wait_exit_waiting: AtomicBool::new(false),
+                #[cfg(test)]
+                wait_exit_changed: Condvar::new(),
             }),
         }
     }
@@ -187,6 +203,21 @@ impl NativeRunSupervisor {
     pub(crate) fn automatic_retry_calls_for_test(&self) -> usize {
         self.core.automatic_retry_calls.load(Ordering::SeqCst)
     }
+    #[cfg(test)]
+    pub(crate) fn retry_handle_waiting_for_test(&self, run: &RunKey) -> bool {
+        self.core.automatic_retry_waiting.load(Ordering::SeqCst)
+            && self
+                .core
+                .active
+                .lock()
+                .get(&identity(run))
+                .is_some_and(|state| {
+                    state.wait_workers.lock().handles.iter().any(|worker| {
+                        worker.thread().name() == Some("native-run-wait-retry")
+                            && !worker.is_finished()
+                    })
+                })
+    }
 
     #[cfg(test)]
     pub(crate) fn pause_automatic_retry_for_test(&self) {
@@ -213,6 +244,19 @@ impl NativeRunSupervisor {
     #[cfg(test)]
     pub(crate) fn pause_reader_exit_for_test(&self) {
         *self.core.reader_exit_paused.lock() = true;
+    }
+    #[cfg(test)]
+    pub(crate) fn pause_wait_exit_for_test(&self) {
+        *self.core.wait_exit_paused.lock() = true;
+    }
+    #[cfg(test)]
+    pub(crate) fn release_wait_exit_for_test(&self) {
+        *self.core.wait_exit_paused.lock() = false;
+        self.core.wait_exit_changed.notify_all();
+    }
+    #[cfg(test)]
+    pub(crate) fn wait_exit_waiting_for_test(&self) -> bool {
+        self.core.wait_exit_waiting.load(Ordering::SeqCst)
     }
     #[cfg(test)]
     pub(crate) fn release_reader_exit_for_test(&self) {
@@ -523,6 +567,43 @@ impl OutputReaderJoin {
     }
 }
 
+/// Only this run's original waiter/retry threads, never global process evidence.
+#[cfg(any(test, feature = "remote-host"))]
+#[derive(Default)]
+struct WaitWorkers {
+    handles: Vec<std::thread::JoinHandle<()>>,
+    started: bool,
+    panicked: bool,
+}
+#[cfg(any(test, feature = "remote-host"))]
+#[derive(PartialEq, Eq)]
+enum WaitWorkersState {
+    Pending,
+    Joined,
+    Unknown,
+}
+#[cfg(any(test, feature = "remote-host"))]
+impl WaitWorkers {
+    const MAX: usize = 64;
+    fn observe(&mut self) -> WaitWorkersState {
+        let mut index = 0;
+        while index < self.handles.len() {
+            if self.handles[index].is_finished() {
+                self.panicked |= self.handles.swap_remove(index).join().is_err();
+            } else {
+                index += 1;
+            }
+        }
+        if !self.handles.is_empty() {
+            WaitWorkersState::Pending
+        } else if self.started && !self.panicked {
+            WaitWorkersState::Joined
+        } else {
+            WaitWorkersState::Unknown
+        }
+    }
+}
+
 struct SupervisedRun {
     core: Weak<SupervisorCore>,
     registry: Arc<RunRegistry<NativeRun>>,
@@ -541,6 +622,8 @@ struct SupervisedRun {
     automatic_retry_used: AtomicBool,
     #[cfg(any(test, feature = "remote-host"))]
     output_reader: Mutex<OutputReaderJoin>,
+    #[cfg(any(test, feature = "remote-host"))]
+    wait_workers: Mutex<WaitWorkers>,
     changed: Condvar,
 }
 
@@ -573,8 +656,50 @@ impl SupervisedRun {
             automatic_retry_used: AtomicBool::new(false),
             #[cfg(any(test, feature = "remote-host"))]
             output_reader: Mutex::new(OutputReaderJoin::Unstarted),
+            #[cfg(any(test, feature = "remote-host"))]
+            wait_workers: Mutex::new(WaitWorkers::default()),
             changed: Condvar::new(),
         }))
+    }
+
+    fn spawn_wait_worker(
+        &self,
+        name: &str,
+        work: impl FnOnce() + Send + 'static,
+    ) -> Result<bool, SafeError> {
+        #[cfg(any(test, feature = "remote-host"))]
+        {
+            let mut workers = self.wait_workers.lock();
+            workers.observe();
+            // Recheck under the same lock used for publication and observation.
+            // Once registry retirement plus actual joins is observed, a starter
+            // delayed after its earlier check cannot create another thread.
+            if self.registry_retired.load(Ordering::SeqCst) {
+                drop(workers);
+                drop(work);
+                return Ok(false);
+            }
+            if workers.handles.len() >= WaitWorkers::MAX {
+                drop(workers);
+                drop(work);
+                return Err(error("RUN_SUPERVISOR_CAPACITY"));
+            }
+            let handle = std::thread::Builder::new()
+                .name(name.into())
+                .spawn(work)
+                .map_err(|_| error("RUN_SUPERVISOR_FAILED"))?;
+            workers.handles.push(handle);
+            workers.started = true;
+            Ok(true)
+        }
+        #[cfg(not(any(test, feature = "remote-host")))]
+        {
+            std::thread::Builder::new()
+                .name(name.into())
+                .spawn(work)
+                .map_err(|_| error("RUN_SUPERVISOR_FAILED"))?;
+            Ok(true)
+        }
     }
 
     fn start_waiter(self: &Arc<Self>) -> Result<(), SafeError> {
@@ -602,15 +727,25 @@ impl SupervisedRun {
             }
         };
         let state = self.clone();
-        if std::thread::Builder::new()
-            .name("native-run-waiter".into())
-            .spawn(move || state.wait_and_converge(resource))
-            .is_err()
-        {
+        let spawned = self.spawn_wait_worker("native-run-waiter", move || {
+            #[cfg(test)]
+            let finished = state.clone();
+            state.wait_and_converge(resource);
+            #[cfg(test)]
+            if let Some(core) = finished.core.upgrade() {
+                let mut paused = core.wait_exit_paused.lock();
+                core.wait_exit_waiting.store(true, Ordering::SeqCst);
+                while *paused {
+                    core.wait_exit_changed.wait(&mut paused);
+                }
+                core.wait_exit_waiting.store(false, Ordering::SeqCst);
+            }
+        });
+        if !matches!(spawned, Ok(true)) {
             self.waiter_running.store(false, Ordering::SeqCst);
             self.notify_retryable();
-            return Err(error("RUN_SUPERVISOR_FAILED"));
         }
+        spawned?;
         Ok(())
     }
 
@@ -984,9 +1119,8 @@ impl SupervisedRun {
             return;
         }
         let state = self.clone();
-        if std::thread::Builder::new()
-            .name("native-run-wait-retry".into())
-            .spawn(move || {
+        if self
+            .spawn_wait_worker("native-run-wait-retry", move || {
                 std::thread::sleep(SUPERVISOR_RETRY_DELAY);
                 if state
                     .core
@@ -998,9 +1132,11 @@ impl SupervisedRun {
                 #[cfg(test)]
                 if let Some(core) = state.core.upgrade() {
                     let mut paused = core.automatic_retry_paused.lock();
+                    core.automatic_retry_waiting.store(true, Ordering::SeqCst);
                     while *paused {
                         core.automatic_retry_changed.wait(&mut paused);
                     }
+                    core.automatic_retry_waiting.store(false, Ordering::SeqCst);
                     drop(paused);
                     core.automatic_retry_calls.fetch_add(1, Ordering::SeqCst);
                 }
@@ -1173,6 +1309,7 @@ mod remote_shutdown_observation_tests {
             NativeShutdownObservation::Unknown {
                 direct_child_reaped: false,
                 output_reader_joined: false,
+                wait_workers_joined: false,
                 io_threads_joined: false,
                 stop_job_joined: false
             }
@@ -1185,6 +1322,7 @@ mod remote_shutdown_observation_tests {
             NativeShutdownObservation::Unknown {
                 direct_child_reaped: false,
                 output_reader_joined: false,
+                wait_workers_joined: false,
                 io_threads_joined: false,
                 stop_job_joined: false
             }
@@ -1232,6 +1370,7 @@ pub(crate) enum NativeShutdownObservation {
     Unknown {
         direct_child_reaped: bool,
         output_reader_joined: bool,
+        wait_workers_joined: bool,
         io_threads_joined: bool,
         stop_job_joined: bool,
     },
@@ -1331,9 +1470,10 @@ impl NativeRunSupervisor {
 #[cfg(any(test, feature = "remote-host"))]
 impl NativeShutdown {
     pub(crate) fn observe_run(&mut self, run: &RunKey) -> NativeShutdownObservation {
-        let unknown = |reaped, joined, reader| NativeShutdownObservation::Unknown {
+        let unknown = |reaped, joined, reader, workers| NativeShutdownObservation::Unknown {
             direct_child_reaped: reaped,
             output_reader_joined: reader,
+            wait_workers_joined: workers,
             io_threads_joined: false,
             stop_job_joined: joined,
         };
@@ -1342,13 +1482,21 @@ impl NativeShutdown {
             .iter_mut()
             .find(|entry| identity(&entry.pin.run) == identity(run))
         else {
-            return unknown(false, false, false);
+            return unknown(false, false, false, false);
         };
         let Some(state) = entry.pin.state.as_ref() else {
-            return unknown(false, false, false);
+            return unknown(false, false, false, false);
         };
         // Observe the original reader even while stop/root publication is pending.
         let reader_joined = state.output_reader.lock().observe();
+        // Never block the observer behind thread creation/publication.
+        let workers = state
+            .wait_workers
+            .try_lock()
+            .map(|mut workers| workers.observe())
+            .unwrap_or(WaitWorkersState::Pending);
+        let workers_joined =
+            workers == WaitWorkersState::Joined && state.registry_retired.load(Ordering::SeqCst);
         if let Some(job) = entry.job.as_ref() {
             if !job.is_finished() {
                 return NativeShutdownObservation::Pending;
@@ -1359,18 +1507,19 @@ impl NativeShutdown {
         }
         let reaped = state.reaped.load(Ordering::SeqCst);
         if entry.failed {
-            return unknown(reaped, entry.joined, reader_joined);
+            return unknown(reaped, entry.joined, reader_joined, workers_joined);
         }
         if !entry.joined
             || !reaped
             || !state.adoption_complete.load(Ordering::SeqCst)
             || !state.registry_retired.load(Ordering::SeqCst)
+            || workers == WaitWorkersState::Pending
         {
             return NativeShutdownObservation::Pending;
         }
-        // No old completed-cache record, empty active count or root-process wait
-        // attests reader/waiter joins or PTY descendants. Preserve that Unknown.
-        unknown(reaped, entry.joined, reader_joined)
+        // These original thread joins do not attest remaining I/O, master or
+        // PTY descendants. Keep the whole-resource result Unknown.
+        unknown(reaped, entry.joined, reader_joined, workers_joined)
     }
 
     #[cfg(feature = "remote-host")]
@@ -1394,7 +1543,19 @@ impl NativeShutdown {
                         OutputReaderJoin::Publishing | OutputReaderJoin::Running(_)
                     )
                 });
-            if reader_pending || observed == NativeShutdownObservation::Pending {
+            let workers_pending = self
+                .entries
+                .iter()
+                .find(|entry| identity(&entry.pin.run) == identity(&key))
+                .and_then(|entry| entry.pin.state.as_ref())
+                .is_some_and(|state| {
+                    state
+                        .wait_workers
+                        .try_lock()
+                        .map(|mut workers| workers.observe() == WaitWorkersState::Pending)
+                        .unwrap_or(true)
+                });
+            if reader_pending || workers_pending || observed == NativeShutdownObservation::Pending {
                 result = Some(NativeShutdownObservation::Pending);
             } else if result.is_none() {
                 result = Some(observed);
@@ -1456,5 +1617,138 @@ mod output_reader_join_tests {
         assert!(matches!(slot, OutputReaderJoin::Unknown));
         assert!(!slot.observe());
         assert!(!slot.reserve());
+    }
+}
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod wait_worker_join_tests {
+    use super::*;
+    // Thread-custody fixture only: no NativeRun, PTY, credentials or provider.
+    fn owner() -> Arc<SupervisedRun> {
+        let run = RunKey {
+            run_id: "TEST_ONLY_THREADS".into(),
+            generation: 1,
+        };
+        Arc::new(SupervisedRun {
+            core: Weak::new(),
+            registry: Arc::new(RunRegistry::new(1)),
+            lifecycle: Mutex::new(LifecycleRecord::new(run.clone())),
+            run,
+            owner: CallerIdentity {
+                instance_id: "TEST_ONLY".into(),
+                window_label: "main".into(),
+                webview_epoch: WireU64::parse("1").unwrap(),
+            },
+            request_id: "TEST_ONLY".into(),
+            stream: Mutex::new(None),
+            resource: Mutex::new(None),
+            stop_control: Mutex::new(()),
+            stop_requested: AtomicBool::new(false),
+            waiter_running: AtomicBool::new(false),
+            reaped: AtomicBool::new(false),
+            registry_retired: AtomicBool::new(false),
+            adoption_complete: AtomicBool::new(false),
+            automatic_retry_used: AtomicBool::new(false),
+            output_reader: Mutex::new(OutputReaderJoin::Unstarted),
+            wait_workers: Mutex::new(WaitWorkers::default()),
+            changed: Condvar::new(),
+        })
+    }
+    struct Gate(Arc<(Mutex<bool>, Condvar)>);
+    impl Gate {
+        fn new() -> Self {
+            Self(Arc::new((Mutex::new(false), Condvar::new())))
+        }
+        fn work(&self) -> impl FnOnce() + Send + 'static {
+            let gate = self.0.clone();
+            move || {
+                let mut released = gate.0.lock();
+                let end = Instant::now() + Duration::from_secs(10);
+                while !*released && Instant::now() < end {
+                    gate.1.wait_for(&mut released, Duration::from_millis(50));
+                }
+            }
+        }
+    }
+    impl Drop for Gate {
+        fn drop(&mut self) {
+            *self.0 .0.lock() = true;
+            self.0 .1.notify_all();
+        }
+    }
+    fn finish(owner: &SupervisedRun) -> WaitWorkersState {
+        let end = Instant::now() + Duration::from_secs(3);
+        loop {
+            let observed = owner.wait_workers.lock().observe();
+            if observed != WaitWorkersState::Pending {
+                return observed;
+            }
+            assert!(Instant::now() < end);
+            std::thread::yield_now();
+        }
+    }
+    #[test]
+    fn WaitWorkers_CapacityRejectsWithoutLosingOriginals_011() {
+        let state = owner();
+        let gate = Gate::new();
+        for _ in 0..WaitWorkers::MAX {
+            assert!(state
+                .spawn_wait_worker("TEST_ONLY_HELD", gate.work())
+                .unwrap());
+        }
+        let rejected =
+            state.spawn_wait_worker("TEST_ONLY_REJECTED", || panic!("must never execute"));
+        let retained = state.wait_workers.lock().handles.len();
+        drop(gate);
+        assert_eq!(rejected.unwrap_err().code, "RUN_SUPERVISOR_CAPACITY");
+        assert_eq!(retained, WaitWorkers::MAX);
+        assert!(finish(&state) == WaitWorkersState::Joined);
+        assert!(state
+            .spawn_wait_worker("TEST_ONLY_AFTER_PRUNE", || {})
+            .unwrap());
+        assert!(finish(&state) == WaitWorkersState::Joined);
+    }
+    #[test]
+    fn WaitWorkers_LateStarterCannotCreateAfterRetirement_012() {
+        let state = owner();
+        let locked = state.wait_workers.lock();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let late = state.clone();
+        let worker = std::thread::spawn(move || {
+            tx.send(()).unwrap();
+            late.spawn_wait_worker("TEST_ONLY_LATE", || panic!("late work"))
+        });
+        rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        state.registry_retired.store(true, Ordering::SeqCst);
+        drop(locked);
+        assert!(!worker.join().unwrap().unwrap());
+        assert!(state.wait_workers.lock().handles.is_empty());
+        assert!(state.wait_workers.lock().observe() == WaitWorkersState::Unknown);
+    }
+    #[test]
+    fn WaitWorkers_PanicStaysUnknownAfterOtherOriginalReturns_013() {
+        let state = owner();
+        let gate = Gate::new();
+        state
+            .spawn_wait_worker("TEST_ONLY_PANIC", || panic!("TEST_ONLY_WAIT_PANIC"))
+            .unwrap();
+        state
+            .spawn_wait_worker("TEST_ONLY_HELD", gate.work())
+            .unwrap();
+        let end = Instant::now() + Duration::from_secs(3);
+        loop {
+            let mut workers = state.wait_workers.lock();
+            assert!(workers.observe() == WaitWorkersState::Pending);
+            if workers.panicked {
+                break;
+            }
+            drop(workers);
+            assert!(Instant::now() < end);
+            std::thread::yield_now();
+        }
+        drop(gate);
+        assert!(finish(&state) == WaitWorkersState::Unknown);
+        assert!(state.wait_workers.lock().observe() == WaitWorkersState::Unknown);
     }
 }

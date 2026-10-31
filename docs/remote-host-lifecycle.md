@@ -33,9 +33,23 @@ root/stop facts are already Unknown, so the application cannot stop observing it
 early. A thread panic stays Unknown, not Joined; a second reservation cannot
 replace an existing handle. No hard preemption or join deadline is promised.
 
+The native adapter also retains each original waiter/retry thread handle in a
+per-run bounded set in Host-enabled builds (64 unjoined handles maximum). Only
+finished original handles are joined; panic stays sticky Unknown while other
+live threads remain Pending. A full set rejects creation without losing custody;
+an explicit stop/shutdown may retry after finished handles are collected. This
+is a local custody bound, not a global capacity/DoS guarantee. Default-off
+non-test thread spawning behavior is unchanged.
+
+The final registry-retired check and new-thread publication share the custody
+lock. A late starter cannot create a thread after terminal joins. Observers use
+try_lock and report Pending during publication; no deadline for thread creation,
+join, or native calls is promised. wait_workers_joined requires successful real
+joins plus registry retirement, not waiter_running=false or a lifecycle callback.
+
 The current native adapter still deliberately reports overall Unknown for a
-tracked remote native run after output_reader_joined becomes true: waiter/retry,
-master, command-owner and whole-tree retirement witnesses remain unavailable.
+tracked remote native run after output_reader_joined and wait_workers_joined
+become true: master, command-owner and whole-tree retirement witnesses remain unavailable.
 io_threads_joined therefore stays false. Unknown prevents application exit in
 this opt-in mode and keeps custody. Default-off production reader behavior is
 unchanged; no new process, worker framework or stop policy is introduced.
