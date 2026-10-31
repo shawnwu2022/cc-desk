@@ -159,6 +159,89 @@ struct PtyMutation {
     writer: IoOwner<Box<dyn Write + Send>>,
 }
 
+/// The same original IO owners, prepared before any process-creation call.
+/// Slave is first so an abandoned preparation releases it before master.
+pub(crate) struct PreparedPtyIo {
+    slave: Option<Box<dyn portable_pty::SlavePty + Send>>,
+    master: IoOwner<Box<dyn MasterPty + Send>>,
+    writer: IoOwner<Box<dyn Write + Send>>,
+    reader: Option<Box<dyn Read + Send>>,
+    #[cfg(any(test, feature = "remote-host"))]
+    io_drop: IoDropWitness,
+}
+impl PreparedPtyIo {
+    pub(crate) fn new(pair: PtyPair) -> Result<Self, SafeError> {
+        #[cfg(any(test, feature = "remote-host"))]
+        let io_drop = IoDropWitness::default();
+        let reader = pair
+            .master
+            .try_clone_reader()
+            .map_err(|_| error("HOST_READER_UNAVAILABLE"))?;
+        #[cfg(any(test, feature = "remote-host"))]
+        let reader: Box<dyn Read + Send> = Box::new(TrackedDrop::new(reader, io_drop.clone(), 1));
+        let writer = pair
+            .master
+            .take_writer()
+            .map_err(|_| error("HOST_WRITER_UNAVAILABLE"))?;
+        #[cfg(any(test, feature = "remote-host"))]
+        let writer = TrackedDrop::new(writer, io_drop.clone(), 2);
+        #[cfg(any(test, feature = "remote-host"))]
+        let master = TrackedDrop::new(pair.master, io_drop.clone(), 4);
+        #[cfg(not(any(test, feature = "remote-host")))]
+        let master = pair.master;
+        Ok(Self {
+            slave: Some(pair.slave),
+            master,
+            writer,
+            reader: Some(reader),
+            #[cfg(any(test, feature = "remote-host"))]
+            io_drop,
+        })
+    }
+    pub(crate) fn slave(&self) -> &(dyn portable_pty::SlavePty + Send) {
+        self.slave
+            .as_deref()
+            .expect("original slave before creation")
+    }
+    #[cfg(all(windows, any(test, feature = "remote-host")))]
+    pub(crate) fn close_slave(&mut self) {
+        drop(self.slave.take());
+    }
+    #[cfg(all(windows, any(test, feature = "remote-host")))]
+    pub(crate) fn take_reader(&mut self) -> Result<Box<dyn Read + Send>, SafeError> {
+        self.reader
+            .take()
+            .ok_or_else(|| error("HOST_READER_ALREADY_TAKEN"))
+    }
+    #[cfg(all(windows, any(test, feature = "remote-host")))]
+    pub(crate) fn io_drop_witness(&self) -> IoDropWitness {
+        self.io_drop.clone()
+    }
+    pub(crate) fn finish(mut self, child: AdmittedChild) -> OwnedPty {
+        #[cfg(not(windows))]
+        let killer = child.clone_killer();
+        #[cfg(windows)]
+        let process_handle = AtomicPtr::new(child.raw_handle());
+        drop(self.slave.take());
+        OwnedPty {
+            #[cfg(any(test, feature = "remote-host"))]
+            io_drop: self.io_drop,
+            mutation: Mutex::new(PtyMutation {
+                master: self.master,
+                writer: self.writer,
+            }),
+            #[cfg(test)]
+            mutation_barrier: Mutex::new(None),
+            reader: Mutex::new(self.reader),
+            child: Mutex::new(child),
+            #[cfg(not(windows))]
+            killer: Mutex::new(killer),
+            #[cfg(windows)]
+            process_handle,
+        }
+    }
+}
+
 impl std::fmt::Debug for OwnedPty {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("OwnedPty(<redacted>)")
@@ -207,59 +290,20 @@ impl OwnedPty {
         mut admission: PreparingStart,
         native: bool,
     ) -> Result<Self, SafeError> {
-        #[cfg(any(test, feature = "remote-host"))]
-        let io_drop = IoDropWitness::default();
-        let reader = pair
-            .master
-            .try_clone_reader()
-            .map_err(|_| error("HOST_READER_UNAVAILABLE"))?;
-        // Allocate the transferred wrapper before any child can be created.
-        #[cfg(any(test, feature = "remote-host"))]
-        let reader: Box<dyn Read + Send> = Box::new(TrackedDrop::new(reader, io_drop.clone(), 1));
-        let writer = pair
-            .master
-            .take_writer()
-            .map_err(|_| error("HOST_WRITER_UNAVAILABLE"))?;
-        #[cfg(any(test, feature = "remote-host"))]
-        let writer = TrackedDrop::new(writer, io_drop.clone(), 2);
+        let prepared = PreparedPtyIo::new(pair)?;
         let ticket = admission.begin_creation();
         let child = if native {
-            AdmittedChild::spawn_native(pair.slave.as_ref(), command, ticket)
+            AdmittedChild::spawn_native(prepared.slave(), command, ticket)
                 .map_err(|_| error("PROCESS_START_FAILED"))?
         } else {
             // Arbitrary SlavePty adapters have no audited no-child-on-Err contract.
-            let child = pair
-                .slave
+            let child = prepared
+                .slave()
                 .spawn_command(command)
                 .map_err(|_| error("PROCESS_START_FAILED"))?;
             AdmittedChild::created(child, ticket)
         };
-        #[cfg(not(windows))]
-        let killer = child.clone_killer();
-        // portable-pty 0.8.1's WinChildKiller inverts TerminateProcess's BOOL.
-        // Keep the already-owned native handle, not that incorrect wrapper.
-        // Capturing it adds no fallible handle duplication after child creation.
-        #[cfg(windows)]
-        let process_handle = AtomicPtr::new(child.raw_handle());
-        // Do not retain the parent's slave endpoint and prevent stream EOF.
-        drop(pair.slave);
-        #[cfg(any(test, feature = "remote-host"))]
-        let master = TrackedDrop::new(pair.master, io_drop.clone(), 4);
-        #[cfg(not(any(test, feature = "remote-host")))]
-        let master = pair.master;
-        Ok(Self {
-            #[cfg(any(test, feature = "remote-host"))]
-            io_drop,
-            mutation: Mutex::new(PtyMutation { master, writer }),
-            #[cfg(test)]
-            mutation_barrier: Mutex::new(None),
-            reader: Mutex::new(Some(reader)),
-            child: Mutex::new(child),
-            #[cfg(not(windows))]
-            killer: Mutex::new(killer),
-            #[cfg(windows)]
-            process_handle,
-        })
+        Ok(prepared.finish(child))
     }
 
     pub(crate) fn take_reader(&self) -> Result<Box<dyn Read + Send>, SafeError> {
@@ -267,6 +311,13 @@ impl OwnedPty {
             .lock()
             .take()
             .ok_or_else(|| error("HOST_READER_ALREADY_TAKEN"))
+    }
+    #[cfg(all(windows, any(test, feature = "remote-host")))]
+    pub(crate) fn observe_exact_root(&self) -> io::Result<bool> {
+        let Some(mut child) = self.child.try_lock() else {
+            return Ok(false);
+        };
+        child.observe_exact_root()
     }
     #[cfg(any(test, feature = "remote-host"))]
     pub(crate) fn io_drop_witness(&self) -> IoDropWitness {

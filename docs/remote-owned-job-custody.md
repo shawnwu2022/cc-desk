@@ -20,6 +20,14 @@ same original Job is still held. Root signal and Job-member zero are independent
 facts. The original blocking application shutdown worker performs cleanup and
 PTY destruction; `HostNativeShutdown` retains/observes the same slot even when
 there are no published NativeRun pins. Busy/drop-in-progress remains Pending.
+The slot now uses the same pre-spawn `PreparedPtyIo` and original IO witnesses
+as ordinary `OwnedPty`. Shutdown publishes one original cleanup reader before
+stopping the process/Job. Its handoff owns only the reader, never its master.
+The original slave is released, and master/writer close only after positive
+root/Job facts. Exact EOF, successful original reader-thread join and all
+original IO destructor returns are additional requirements before clearing the
+slot. Known read error/panic prevents closing IO without a consumer; a later
+failure remains Unknown. No observer holds a reader mutex across blocking Read.
 Query/termination error remains Unknown, preserving resources and blocking exit.
 Explicit reconciliation may query originals again, but a termination request is
 not blindly reissued. A resolved cleanup does not rewrite an uncertain launch
@@ -31,15 +39,19 @@ resort is not retirement, recoverable coordination or a global resource budget.
 Normal application exit must pass the original owner gate instead.
 
 CreateProcess and ClosePseudoConsole are not covered by a preemptive deadline.
-This staged slot has no output-reader/drain handoff. Before live use, it must
-reuse the existing writer/reader/drain and original-I/O lifecycle; otherwise a
-large-output process can leave ClosePseudoConsole waiting while exit remains
-Pending. Job-member zero does not prove OpenConsole, broker/service, kernel I/O,
-terminal parsing, real AI CLI compatibility, or phone end-to-end acceptance.
+The cleanup reader discards unpublished output using one fixed 8192-byte scratch
+buffer and the existing PTY end-of-stream predicate. It is not a TerminalStream,
+replay store, parsed terminal or authorized output delivery; no invented caller
+identity is installed. Read errors are not EOF and are not blindly retried. A
+native close or reader can still block; the gate must stay Pending rather than
+claim a timeout guarantees cleanup. Before live use, connect the existing
+authenticated supervisor/terminal delivery path instead of discarding output.
+Job zero plus IO facts does not prove OpenConsole, broker/service, kernel-close
+success, real AI CLI compatibility or phone end-to-end acceptance.
 
 Qualification uses only newly created test executables and their fixed
 descendant, without user CLI/accounts, global process lookup or breakaway.
-Two ignored worker tests are entered only by the exact self-fixture. The native
+Ignored worker tests are entered only by the exact self-fixture. The native
 unexpected-resume test increases the original suspended **test** thread's count
 to two, then exercises the same production ResumeThread check: a real return of
 two must produce an owned Unknown and cannot become success. It does not claim

@@ -24,6 +24,55 @@ type RunIdentity = (String, u32);
 const SUPERVISOR_COMPLETED_MAX: usize = 256;
 const SUPERVISOR_RETRY_DELAY: Duration = Duration::from_millis(100);
 
+#[cfg(all(windows, any(test, feature = "remote-host")))]
+pub(crate) fn drain_unpublished_output(reader: &mut dyn std::io::Read) -> Result<u64, ()> {
+    // Shutdown-only discard, never an authorized TerminalStream or replay body.
+    let mut scratch = [0u8; 8192];
+    let mut count = 0u64;
+    loop {
+        match reader.read(&mut scratch) {
+            Ok(0) => return Ok(count),
+            Ok(bytes) => count = count.checked_add(bytes as u64).ok_or(())?,
+            Err(failure) if crate::pty::is_pty_stream_end(&failure) => return Ok(count),
+            Err(_) => return Err(()),
+        }
+    }
+}
+
+#[cfg(all(windows, test))]
+mod unpublished_drain_tests {
+    use super::drain_unpublished_output;
+    use std::io::{self, Cursor, Read};
+    #[test]
+    #[allow(non_snake_case)]
+    fn UnpublishedDrain_EofUsesBoundedScratch_001() {
+        struct Bounded(Cursor<Vec<u8>>);
+        impl Read for Bounded {
+            fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+                assert!(
+                    bytes.len() <= 8192,
+                    "unpublished output must not allocate an unbounded frame"
+                );
+                self.0.read(bytes)
+            }
+        }
+        let mut reader = Bounded(Cursor::new(vec![b'x'; 1024 * 1024]));
+        assert_eq!(drain_unpublished_output(&mut reader), Ok(1024 * 1024));
+        assert_eq!(reader.0.position(), 1024 * 1024);
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn UnpublishedDrain_ReadFailureIsNotEof_002() {
+        struct Failure;
+        impl Read for Failure {
+            fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+                Err(io::Error::other("TEST_ONLY_READ_FAILURE"))
+            }
+        }
+        assert_eq!(drain_unpublished_output(&mut Failure), Err(()));
+    }
+}
+
 #[derive(Default)]
 struct CompletedRuns {
     order: VecDeque<RunIdentity>,
@@ -536,7 +585,7 @@ impl Drop for AdoptionGuard {
 
 /// Exactly one existing output reader; never a claim about waiter/master/tree.
 #[cfg(any(test, feature = "remote-host"))]
-enum OutputReaderJoin {
+pub(crate) enum OutputReaderJoin {
     Unstarted,
     Publishing,
     Running(std::thread::JoinHandle<()>),
@@ -545,14 +594,14 @@ enum OutputReaderJoin {
 }
 #[cfg(any(test, feature = "remote-host"))]
 impl OutputReaderJoin {
-    fn reserve(&mut self) -> bool {
+    pub(crate) fn reserve(&mut self) -> bool {
         if !matches!(self, Self::Unstarted) {
             return false;
         }
         *self = Self::Publishing;
         true
     }
-    fn observe(&mut self) -> bool {
+    pub(crate) fn observe(&mut self) -> bool {
         if matches!(self,Self::Running(worker) if worker.is_finished()) {
             let Self::Running(worker) = std::mem::replace(self, Self::Unknown) else {
                 unreachable!()
