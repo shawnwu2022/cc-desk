@@ -91,7 +91,9 @@ export function input(operation:string,sequence:string,window:string,notAfterHos
 
 export type Outcome='HostWritten'|'Rejected'|'Partial'|'Unknown';
 export type Receipt={operation:string;sequence:string;outcome:Outcome;proof:string|null};
+export type InputCursorReply={message:'InputCursorState';profile:1;request:string;nextSequence:string|null;pending:Receipt|null};
 export type Reply=
+  | InputCursorReply
   | {message:'WindowGranted';profile:1;request:string;window:string;notAfterHostMs:string}
   | {message:'ProjectionAcknowledged';profile:1;stamp:Stamp}
   | ({message:'InputReceipt';profile:1}&Receipt)
@@ -116,6 +118,10 @@ export function decodeReply(payload:Uint8Array):Reply {
   const value:any=parseJson(payload,16270);
   integerLexeme(value,'profile');if(!value||value.profile!==1)throw Error('reply profile');
   switch(value.message){
+    case 'InputCursorState':
+      shape(value,['message','profile','request','nextSequence','pending']);counter(value.request);
+      if(value.pending===null)counter(value.nextSequence);
+      else{if(value.nextSequence!==null)throw Error('cursor state');shape(value.pending,['operation','sequence','outcome','proof']);receiptFields(value.pending);}break;
     case 'WindowGranted':shape(value,['message','profile','request','window','notAfterHostMs']);counter(value.request);hex(value.window,32,true);counter(value.notAfterHostMs);break;
     case 'ProjectionAcknowledged':shape(value,['message','profile','stamp']);stampShape(value.stamp);break;
     case 'InputReceipt':shape(value,['message','profile','operation','sequence','outcome','proof']);receiptFields(value);break;
@@ -133,6 +139,9 @@ export function decodeReply(payload:Uint8Array):Reply {
 }
 export function receiptQuery(request:string,operation:string,sequence:string):Uint8Array {
   counter(request);hex(operation,16,true);counter(sequence);return json({message:'ReceiptQuery',profile:1,request,operation,sequence});
+}
+export function inputCursor(request:string):Uint8Array {
+  counter(request);return json({message:'InputCursor',profile:1,request});
 }
 export function receiptAck(request:string,receipt:Receipt):Uint8Array {
   counter(request);receiptFields(receipt,true);return json({message:'ReceiptAck',profile:1,request,operation:receipt.operation,sequence:receipt.sequence,outcome:receipt.outcome,proof:receipt.proof});

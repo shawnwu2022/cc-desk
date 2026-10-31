@@ -1,11 +1,34 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {decodeRecord, encodeRecord, command, input, parseJson} from './wire.ts';
+import {decodeRecord, encodeRecord, command, input, parseJson, decodeReply} from './wire.ts';
 import {TerminalClient, type NativeConnection} from './client.ts';
 
 const fixture=()=>JSON.parse(readFileSync(new URL('../../../protocol/remote/inner/v1/test-vectors/projection-snapshot.json',import.meta.url),'utf8'));
 const utf8=new TextEncoder();
+test('Host input cursor is strictly decoded and never doubles as an input window',async()=>{
+  const {client,native}=setup();native.query=async bytes=>{const request=JSON.parse(new TextDecoder().decode(bytes));assert.equal(request.message,'InputCursor');return utf8.encode(JSON.stringify({message:'InputCursorState',profile:1,request:request.request,nextSequence:'37',pending:null}));};
+  client.connect(native);const cursor=await (client as any).cursor();assert.equal(cursor.nextSequence,'37');assert.equal(client.phase,'Idle');
+  await assert.rejects(client.submit('07'.repeat(16),'37',utf8.encode('x')));await assert.rejects(client.window());
+  for(const value of [
+    {nextSequence:'1',pending:{operation:'07'.repeat(16),sequence:'1',outcome:'Unknown',proof:null}},
+    {nextSequence:null,pending:null},
+    {nextSequence:'01',pending:null},
+    {nextSequence:null,pending:{operation:'07'.repeat(16),sequence:'1',outcome:'Unknown',proof:'aa'.repeat(32)}},
+  ])assert.throws(()=>decodeReply(utf8.encode(JSON.stringify({message:'InputCursorState',profile:1,request:'1',...value}))));
+});
+test('Host cursor recovers original unsettled receipt without re-executing and preserves unknown',async()=>{
+  const {client,native}=setup();let signed=false;
+  native.query=async bytes=>{const v=JSON.parse(new TextDecoder().decode(bytes));return utf8.encode(JSON.stringify({message:'InputCursorState',profile:1,request:v.request,nextSequence:null,pending:{operation:'07'.repeat(16),sequence:'19',outcome:signed?'HostWritten':'Unknown',proof:signed?'aa'.repeat(32):null}}));};
+  native.input=async()=>{throw Error('input must never run');};client.connect(native);
+  await (client as any).cursor();assert.equal(client.phase,'NeedsSettlement');await assert.rejects(client.snapshot());await assert.rejects(client.settle());
+  signed=true;await (client as any).cursor();await client.settle();assert.equal(client.phase,'Idle');
+});
+test('missing cursor pending cannot erase retained final proof or allow an unrelated operation',async()=>{
+  const {client,native}=setup();client.connect(native);await client.snapshot();await client.window();await client.submit('07'.repeat(16),'1',utf8.encode('x'));
+  native.query=async bytes=>{const v=JSON.parse(new TextDecoder().decode(bytes));return utf8.encode(JSON.stringify({message:'InputCursorState',profile:1,request:v.request,nextSequence:'2',pending:null}));};
+  await (client as any).cursor();assert.equal(client.phase,'NeedsSettlement');await assert.rejects(client.window());await client.settle();assert.equal(client.phase,'Idle');
+});
 test('Rust fixed framing oracle and command/input encoders preserve exact canonical bytes',()=>{
   assert.deepEqual([...encodeRecord(2,0,utf8.encode('{}'))],[0,0,0,6,0,2,0,0,123,125]);
   assert.equal(new TextDecoder().decode(command('Snapshot','1')),'{"message":"Snapshot","profile":1,"request":"1"}');

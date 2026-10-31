@@ -1,6 +1,6 @@
 import {ProjectionReceiver, type Stamp, type Target} from './reducer.ts';
 import {render} from './renderer.ts';
-import {command,input,projectionAck,decodeProjection,decodeReply,receiptQuery,receiptAck,type Receipt,type Reply} from './wire.ts';
+import {command,input,inputCursor,projectionAck,decodeProjection,decodeReply,receiptQuery,receiptAck,type Receipt,type Reply,type InputCursorReply} from './wire.ts';
 /** An injected native adapter must own the verified mutual-RPK/AppBind channel
  * and validate original received DataRecord direction/channel/scope/fence. These
  * methods return bounded JSON payloads, never authentication booleans. This
@@ -78,6 +78,26 @@ export class TerminalClient {
       const request=this.#next(),reply=decodeReply(await this.#wait(native.window(command('Window',request)),epoch));this.#check(epoch);
       if(reply.message!=='WindowGranted'||reply.request!==request)throw Error('window mismatch');
       this.#window={token:reply.window,notAfterHostMs:reply.notAfterHostMs};this.#phase='Ready';
+    }catch(error){this.#fail(epoch);throw error;}
+  }
+  /** Read original Host durable facts; never a replacement for snapshot/ACK/window.
+   * Missing Host pending state cannot erase an exact local settlement witness. */
+  async cursor():Promise<Readonly<InputCursorReply>> {
+    const {native,epoch}=this.#enter(['Idle','Synced','Ready','NeedsSettlement'],true);this.#window=undefined;
+    try{
+      const request=this.#next(),reply=decodeReply(await this.#wait(native.query(inputCursor(request)),epoch));this.#check(epoch);
+      if(reply.message!=='InputCursorState'||reply.request!==request)throw Error('cursor mismatch');
+      const found=reply.pending;
+      if(found){
+        if(this.#pending)this.#identity(found,this.#pending);
+        const old=this.#pending?.receipt;
+        if(old&&(old.outcome==='HostWritten'||old.outcome==='Rejected')&&
+          (found.outcome!==old.outcome||found.proof!==old.proof))throw Error('contradictory receipt');
+        this.#pending??={operation:found.operation,sequence:found.sequence};
+        if(found.outcome==='HostWritten'||found.outcome==='Rejected')this.#pending.receipt={...found};
+      }
+      this.#phase=this.#pending?'NeedsSettlement':this.#receiver.synchronized?'Synced':'Idle';
+      return Object.freeze({...reply,pending:found?Object.freeze({...found}):null});
     }catch(error){this.#fail(epoch);throw error;}
   }
   async submit(operation:string,sequence:string,bytes:Uint8Array):Promise<Extract<Reply,{message:'InputReceipt'|'InputNotAccepted'}>> {
