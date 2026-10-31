@@ -2,15 +2,19 @@
 #![allow(dead_code)] // No live/IPC entry is enabled by this staging seam.
 use super::admitted_child::AdmittedChild;
 use super::owned_pty::{IoDropState, IoDropWitness, OwnedPty, PreparedPtyIo};
+use crate::cli::{
+    launch_service::NativeRun, profiles::error, run_registry::RunKey, snapshot::LaunchSnapshot,
+    types::SafeError,
+};
 use crate::run_supervisor::{drain_unpublished_output, OutputReaderJoin};
 use crate::version_history::maintenance::{OwnedChildTicket, StartTicket};
 use parking_lot::Mutex;
 use portable_pty::{CommandBuilder, JobSpawnError, PendingJobChild, PtyPair};
 use std::io::Read;
-use std::os::windows::io::{AsHandle, AsRawHandle, OwnedHandle};
+use std::os::windows::io::{AsHandle, AsRawHandle, FromRawHandle, OwnedHandle};
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering},
-    Arc,
+    Arc, Weak,
 };
 use windows::Win32::{
     Foundation::HANDLE,
@@ -30,7 +34,140 @@ pub(crate) enum JobLaunchObservation {
 
 enum Root {
     Pending(PendingJobChild),
-    Started(OwnedPty),
+    Started(Arc<OwnedPty>),
+}
+pub(crate) struct ManagedStartAttempt {
+    identity: Arc<()>,
+    snapshot: Arc<LaunchSnapshot>,
+}
+enum ReaderOwner {
+    Claimed,
+    Returned,
+    Supervised {
+        resource: Weak<NativeRun>,
+        run: RunKey,
+    },
+}
+#[repr(u8)]
+enum JobStopState {
+    Idle,
+    InFlight,
+    Accepted,
+    Unknown,
+}
+#[cfg(test)]
+type StopEffect = Box<dyn FnOnce() -> Result<(), SafeError> + Send>;
+/// One original Job/PTY identity. This is lifetime custody, not remote authority.
+pub(crate) struct ManagedJob {
+    original: OwnedHandle,
+    pty: Weak<OwnedPty>,
+    snapshot: Arc<LaunchSnapshot>,
+    reader: Mutex<ReaderOwner>,
+    closed: Arc<AtomicBool>,
+    stop_state: AtomicU8,
+    #[cfg(test)]
+    stop_effect: Mutex<Option<StopEffect>>,
+}
+pub(crate) struct ManagedJobClaim {
+    pub(crate) pty: Arc<OwnedPty>,
+    pub(crate) job: Arc<ManagedJob>,
+}
+impl ManagedJobClaim {
+    pub(crate) fn snapshot(&self) -> Arc<LaunchSnapshot> {
+        self.job.snapshot.clone()
+    }
+}
+impl Drop for ManagedJobClaim {
+    fn drop(&mut self) {
+        let mut owner = self.job.reader.lock();
+        if matches!(*owner, ReaderOwner::Claimed) {
+            *owner = ReaderOwner::Returned;
+        }
+    }
+}
+impl ManagedJob {
+    pub(crate) fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::Acquire)
+    }
+    pub(crate) fn active_processes(&self) -> Result<u32, SafeError> {
+        let mut info = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
+        unsafe {
+            QueryInformationJobObject(
+                Some(HANDLE(self.original.as_raw_handle())),
+                JobObjectBasicAccountingInformation,
+                &mut info as *mut _ as _,
+                std::mem::size_of_val(&info) as u32,
+                None,
+            )
+        }
+        .map_err(|_| error("MANAGED_JOB_QUERY_UNKNOWN"))?;
+        Ok(info.ActiveProcesses)
+    }
+    pub(crate) fn request_stop(&self) -> Result<(), SafeError> {
+        match self.stop_state.compare_exchange(
+            JobStopState::Idle as u8,
+            JobStopState::InFlight as u8,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => {}
+            Err(state) if state == JobStopState::Accepted as u8 => return Ok(()),
+            Err(state) if state == JobStopState::InFlight as u8 => {
+                return Err(error("MANAGED_JOB_STOP_PENDING"))
+            }
+            Err(_) => return Err(error("MANAGED_JOB_STOP_UNKNOWN")),
+        }
+        let result = self.terminate_original();
+        self.stop_state.store(
+            if result.is_ok() {
+                JobStopState::Accepted as u8
+            } else {
+                JobStopState::Unknown as u8
+            },
+            Ordering::Release,
+        );
+        result
+    }
+    fn terminate_original(&self) -> Result<(), SafeError> {
+        #[cfg(test)]
+        {
+            let effect = self.stop_effect.lock().take();
+            if let Some(effect) = effect {
+                return effect();
+            }
+        }
+        unsafe { TerminateJobObject(HANDLE(self.original.as_raw_handle()), 1) }
+            .map_err(|_| error("MANAGED_JOB_STOP_UNKNOWN"))
+    }
+    /// Called at actual supervisor insertion, before it may take the sole reader.
+    pub(crate) fn register(
+        &self,
+        run: &RunKey,
+        resource: &Arc<NativeRun>,
+        insert: impl FnOnce(),
+    ) -> Result<(), SafeError> {
+        let mut owner = self.reader.lock();
+        // Closure revokes publication, not the obligation to register a cleanup
+        // owner for this exact already-created resource. The supervisor stops a
+        // closed claim and returns no successful launch response.
+        if !matches!(*owner, ReaderOwner::Claimed)
+            || !self
+                .pty
+                .upgrade()
+                .is_some_and(|pty| Arc::ptr_eq(&pty, &resource.process.pty))
+            || !Arc::ptr_eq(&self.snapshot, &resource.process.snapshot)
+            || run.run_id != self.snapshot.request().run_id
+            || run.generation != self.snapshot.request().generation
+        {
+            return Err(error("MANAGED_REGISTRATION_REJECTED"));
+        }
+        insert();
+        *owner = ReaderOwner::Supervised {
+            resource: Arc::downgrade(resource),
+            run: run.clone(),
+        };
+        Ok(())
+    }
 }
 #[derive(Default)]
 struct DrainFacts {
@@ -41,7 +178,10 @@ struct DrainFacts {
 // owner for a caller to accidentally drop or erase with map_err.
 struct Custody {
     prepared: Option<PreparedPtyIo>,
-    job: OwnedHandle,
+    job: Option<OwnedHandle>,
+    managed: Option<Arc<ManagedJob>>,
+    attempt: Option<Arc<()>>,
+    snapshot: Option<Arc<LaunchSnapshot>>,
     preparing: Option<StartTicket>,
     created: Option<OwnedChildTicket>,
     root: Option<Root>,
@@ -58,11 +198,140 @@ struct Custody {
 #[derive(Default)]
 pub(crate) struct OwnedJobLaunchSlot {
     custody: Mutex<Option<Custody>>,
-    closed: AtomicBool,
+    closed: Arc<AtomicBool>,
     retired_io: AtomicU8,
     drained_bytes: AtomicU64,
+    #[cfg(test)]
+    claim_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 impl OwnedJobLaunchSlot {
+    pub(crate) fn start_native(
+        &self,
+        snapshot: Arc<LaunchSnapshot>,
+        ticket: StartTicket,
+    ) -> Result<ManagedStartAttempt, SafeError> {
+        let mut preparation = ticket.preparing();
+        let request = snapshot.request();
+        let spec = super::launch::resolve_process(&crate::cli::invocation::build_invocation(
+            request, &snapshot,
+        )?)?;
+        let command = spec.command()?;
+        let pair = portable_pty::native_pty_system()
+            .openpty(portable_pty::PtySize {
+                rows: request.rows,
+                cols: request.cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|_| error("HOST_PTY_UNAVAILABLE"))?;
+        let handle = unsafe { windows::Win32::System::JobObjects::CreateJobObjectW(None, None) }
+            .map_err(|_| error("MANAGED_JOB_UNAVAILABLE"))?;
+        let job = unsafe { OwnedHandle::from_raw_handle(handle.0) };
+        let identity = Arc::new(());
+        let result = self.launch_bound(
+            pair,
+            command,
+            preparation.begin_creation(),
+            job,
+            Some((identity.clone(), snapshot.clone())),
+        );
+        let slot = self.custody.lock();
+        if result != JobLaunchObservation::Pending
+            || !slot.as_ref().is_some_and(|owned| {
+                owned
+                    .attempt
+                    .as_ref()
+                    .is_some_and(|id| Arc::ptr_eq(id, &identity))
+                    && owned.assigned
+                    && matches!(owned.root, Some(Root::Started(_)))
+            })
+        {
+            return Err(error("MANAGED_START_NOT_PUBLISHABLE"));
+        }
+        Ok(ManagedStartAttempt { identity, snapshot })
+    }
+    pub(crate) fn claim_for_native_run(
+        &self,
+        attempt: Option<ManagedStartAttempt>,
+    ) -> Result<ManagedJobClaim, SafeError> {
+        let attempt = attempt.ok_or_else(|| error("MANAGED_START_PROOF_REQUIRED"))?;
+        let mut slot = self.custody.lock();
+        let owned = slot
+            .as_mut()
+            .ok_or_else(|| error("MANAGED_START_MISSING"))?;
+        if self.closed.load(Ordering::Acquire)
+            || owned.failed
+            || owned.stop_requested
+            || owned.managed.is_some()
+            || !owned
+                .attempt
+                .as_ref()
+                .is_some_and(|id| Arc::ptr_eq(id, &attempt.identity))
+            || !owned
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| Arc::ptr_eq(s, &attempt.snapshot))
+            || !matches!(owned.reader_worker, OutputReaderJoin::Unstarted)
+        {
+            return Err(error("MANAGED_CLAIM_REJECTED"));
+        }
+        let Some(Root::Started(pty)) = owned.root.as_ref() else {
+            return Err(error("MANAGED_RESUME_UNKNOWN"));
+        };
+        let pty = pty.clone();
+        let job = owned
+            .job
+            .take()
+            .ok_or_else(|| error("MANAGED_JOB_MISSING"))?;
+        let job = Arc::new(ManagedJob {
+            original: job,
+            pty: Arc::downgrade(&pty),
+            snapshot: attempt.snapshot,
+            reader: Mutex::new(ReaderOwner::Claimed),
+            closed: self.closed.clone(),
+            stop_state: AtomicU8::new(JobStopState::Idle as u8),
+            #[cfg(test)]
+            stop_effect: Mutex::new(None),
+        });
+        owned.managed = Some(job.clone());
+        let claim = ManagedJobClaim { pty, job };
+        drop(slot);
+        #[cfg(test)]
+        {
+            let hook = self.claim_hook.lock().take();
+            if let Some(hook) = hook {
+                hook();
+            }
+        }
+        Ok(claim)
+    }
+    pub(crate) fn complete_native_transfer(
+        &self,
+        job: &Arc<ManagedJob>,
+        resource: &Arc<NativeRun>,
+    ) -> Result<(), SafeError> {
+        let mut slot = self.custody.lock();
+        let owned = slot
+            .as_ref()
+            .ok_or_else(|| error("MANAGED_START_MISSING"))?;
+        if !owned
+            .managed
+            .as_ref()
+            .is_some_and(|original| Arc::ptr_eq(original, job))
+        {
+            return Err(error("MANAGED_REGISTRATION_REJECTED"));
+        }
+        let registered = matches!(&*job.reader.lock(),ReaderOwner::Supervised{resource:original,run} if Weak::ptr_eq(original,&Arc::downgrade(resource))&&run.run_id==job.snapshot.request().run_id&&run.generation==job.snapshot.request().generation);
+        if !registered {
+            return Err(error("MANAGED_REGISTRATION_PENDING"));
+        }
+        drop(slot.take());
+        Ok(())
+    }
+    #[cfg(test)]
+    pub(crate) fn set_claim_hook_for_test(&self, hook: Box<dyn FnOnce() + Send>) {
+        *self.claim_hook.lock() = Some(hook);
+    }
     #[cfg(test)]
     pub(crate) fn io_retirement_for_test(&self) -> (bool, bool, bool) {
         let facts = self.retired_io.load(Ordering::Acquire);
@@ -84,6 +353,16 @@ impl OwnedJobLaunchSlot {
         ticket: StartTicket,
         job: OwnedHandle,
     ) -> JobLaunchObservation {
+        self.launch_bound(pair, command, ticket, job, None)
+    }
+    fn launch_bound(
+        &self,
+        pair: PtyPair,
+        command: CommandBuilder,
+        ticket: StartTicket,
+        job: OwnedHandle,
+        binding: Option<(Arc<()>, Arc<LaunchSnapshot>)>,
+    ) -> JobLaunchObservation {
         let mut preparation = ticket.preparing();
         let Some(mut slot) = self.custody.try_lock() else {
             return JobLaunchObservation::Rejected;
@@ -98,7 +377,10 @@ impl OwnedJobLaunchSlot {
         let io_drop = prepared.io_drop_witness();
         *slot = Some(Custody {
             prepared: Some(prepared),
-            job,
+            job: Some(job),
+            managed: None,
+            attempt: binding.as_ref().map(|b| b.0.clone()),
+            snapshot: binding.map(|b| b.1),
             preparing: Some(preparation.begin_creation()),
             created: None,
             root: None,
@@ -117,11 +399,13 @@ impl OwnedJobLaunchSlot {
             .as_ref()
             .unwrap()
             .slave()
-            .spawn_command_in_owned_job(command, owned.job.as_handle())
+            .spawn_command_in_owned_job(command, owned.job.as_ref().unwrap().as_handle())
         {
             Ok(child) => {
                 let child = AdmittedChild::created(child, owned.preparing.take().unwrap());
-                owned.root = Some(Root::Started(owned.prepared.take().unwrap().finish(child)));
+                owned.root = Some(Root::Started(Arc::new(
+                    owned.prepared.take().unwrap().finish(child),
+                )));
                 owned.assigned = true;
                 JobLaunchObservation::Pending
             }
@@ -173,7 +457,7 @@ impl OwnedJobLaunchSlot {
         let mut information = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
         unsafe {
             QueryInformationJobObject(
-                Some(HANDLE(owned.job.as_raw_handle())),
+                Some(owned.job_handle()),
                 JobObjectBasicAccountingInformation,
                 &mut information as *mut _ as _,
                 std::mem::size_of_val(&information) as u32,
@@ -193,6 +477,21 @@ impl OwnedJobLaunchSlot {
         let Some(owned) = slot.as_mut() else {
             return JobLaunchObservation::Empty;
         };
+        if let Some(job) = owned.managed.clone() {
+            // Claim, not registration, transfers sole-reader custody. A close
+            // in that gap may stop the Job but cannot start another reader.
+            let returned = matches!(*job.reader.lock(), ReaderOwner::Returned);
+            if !returned {
+                drop(slot);
+                return match job.request_stop() {
+                    Ok(()) => JobLaunchObservation::Pending,
+                    Err(failure) if failure.code == "MANAGED_JOB_STOP_PENDING" => {
+                        JobLaunchObservation::Pending
+                    }
+                    Err(_) => JobLaunchObservation::Unknown,
+                };
+            }
+        }
         // Publish the consumer before requesting stop: root exit itself may
         // depend on outstanding native output IO making progress.
         let drain_ready = owned.begin_drain();
@@ -226,7 +525,7 @@ impl OwnedJobLaunchSlot {
                 let mut information = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
                 if unsafe {
                     QueryInformationJobObject(
-                        Some(HANDLE(owned.job.as_raw_handle())),
+                        Some(owned.job_handle()),
                         JobObjectBasicAccountingInformation,
                         &mut information as *mut _ as _,
                         std::mem::size_of_val(&information) as u32,
@@ -247,8 +546,7 @@ impl OwnedJobLaunchSlot {
             } else if !owned.stop_requested {
                 owned.stop_requested = true;
                 let result = if owned.assigned {
-                    unsafe { TerminateJobObject(HANDLE(owned.job.as_raw_handle()), 1) }
-                        .map_err(|_| ())
+                    unsafe { TerminateJobObject(owned.job_handle(), 1) }.map_err(|_| ())
                 } else {
                     match owned.root.as_ref() {
                         Some(Root::Pending(root)) => {
@@ -297,7 +595,28 @@ impl OwnedJobLaunchSlot {
     }
 }
 impl Custody {
+    fn job_handle(&self) -> HANDLE {
+        HANDLE(
+            self.job
+                .as_ref()
+                .map(|job| job.as_raw_handle())
+                .unwrap_or_else(|| {
+                    self.managed
+                        .as_ref()
+                        .expect("original Job remains owned")
+                        .original
+                        .as_raw_handle()
+                }),
+        )
+    }
     fn begin_drain(&mut self) -> bool {
+        if self
+            .managed
+            .as_ref()
+            .is_some_and(|job| !matches!(*job.reader.lock(), ReaderOwner::Returned))
+        {
+            return false;
+        }
         if matches!(self.reader_worker, OutputReaderJoin::Unstarted) {
             let original = match self.root.as_ref() {
                 Some(Root::Started(pty)) => pty.take_reader(),
@@ -366,6 +685,182 @@ impl Drop for OwnedJobLaunchSlot {
 mod cleanup_error_tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;
+    #[test]
+    #[allow(non_snake_case)]
+    fn ManagedJob_EmptySlotCannotPublishNativeRun_010() {
+        let slot = OwnedJobLaunchSlot::default();
+        assert!(slot.claim_for_native_run(None).is_err());
+        assert_eq!(slot.observe(), JobLaunchObservation::Empty);
+    }
+    fn no_process_snapshot(cwd: &std::path::Path, program: String) -> Arc<LaunchSnapshot> {
+        use crate::cli::{
+            environment::EnvMap,
+            profiles::{Override, Profile},
+            snapshot::{freeze_launch, CallerIdentity, FreezeContext},
+            types::{CliKind, LaunchRequest, WireU64},
+        };
+        let mut profile = Profile::new("TEST_ONLY_MANAGED", CliKind::Codex);
+        profile.program_path = Override::Set(program);
+        let request:LaunchRequest=serde_json::from_value(serde_json::json!({"requestId":"TEST_ONLY_REQUEST","tabId":"TEST_ONLY_TAB","runId":"TEST_ONLY_RUN","generation":1,"profileId":profile.id,"expectedProfileRevision":"0","cli":"codex","launchCwd":cwd,"action":{"kind":"raw","argv":[]},"extraArgs":[],"cols":80,"rows":24})).unwrap();
+        let caller = CallerIdentity {
+            instance_id: "TEST_ONLY".into(),
+            window_label: "main".into(),
+            webview_epoch: WireU64::parse("1").unwrap(),
+        };
+        let empty = EnvMap::new();
+        Arc::new(
+            freeze_launch(
+                &request,
+                &profile,
+                &caller,
+                &FreezeContext {
+                    inherited: &empty,
+                    terminal: &empty,
+                    legacy: None,
+                    observer: None,
+                },
+            )
+            .unwrap(),
+        )
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn ManagedJob_PreCreateRejectionSettlesOriginalAdmission_012() {
+        use crate::version_history::maintenance::{AdmissionGate, RuntimeKind};
+        let temp = tempfile::tempdir().unwrap();
+        let program = temp.path().join("TEST_ONLY_NEVER_EXECUTED.ps1");
+        std::fs::write(
+            &program,
+            b"# no execution; Native launcher rejects this extension",
+        )
+        .unwrap();
+        let snapshot = no_process_snapshot(temp.path(), program.to_string_lossy().into_owned());
+        let gate = AdmissionGate::new();
+        let slot = OwnedJobLaunchSlot::default();
+        let result = slot.start_native(snapshot, gate.begin_start(RuntimeKind::Native).unwrap());
+        assert!(result.is_err());
+        assert_eq!(slot.observe(), JobLaunchObservation::Empty);
+        assert!(
+            gate.freeze(&uuid::Uuid::new_v4().to_string()).is_ok(),
+            "known pre-Create rejection poisoned admission"
+        );
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn ManagedJob_StopFailureAndInFlightNeverBecomeAccepted_013() {
+        let temp = tempfile::tempdir().unwrap();
+        let snapshot = no_process_snapshot(
+            temp.path(),
+            std::env::current_exe()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+        );
+        let raw =
+            unsafe { windows::Win32::System::JobObjects::CreateJobObjectW(None, None) }.unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed = calls.clone();
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let job = Arc::new(ManagedJob {
+            original: unsafe { OwnedHandle::from_raw_handle(raw.0) },
+            pty: Weak::new(),
+            snapshot,
+            reader: Mutex::new(ReaderOwner::Claimed),
+            closed: Arc::new(AtomicBool::new(false)),
+            stop_state: AtomicU8::new(JobStopState::Idle as u8),
+            stop_effect: Mutex::new(Some(Box::new(move || {
+                observed.fetch_add(1, Ordering::SeqCst);
+                entered_tx.send(()).unwrap();
+                let _ = release_rx.recv_timeout(std::time::Duration::from_secs(3));
+                Err(error("MANAGED_JOB_STOP_UNKNOWN"))
+            }))),
+        });
+        let original = job.clone();
+        let worker = std::thread::spawn(move || original.request_stop());
+        let entered = entered_rx
+            .recv_timeout(std::time::Duration::from_secs(3))
+            .is_ok();
+        let in_flight = job.request_stop();
+        let _ = release_tx.send(());
+        let failed = worker.join().unwrap();
+        let later = job.request_stop();
+        // Original thread is joined before any RED assertion; this empty Job
+        // and injected no-effect failure create no native process or hanging IO.
+        assert!(entered);
+        assert!(failed.is_err());
+        assert!(
+            in_flight.is_err(),
+            "an in-flight original stop became Accepted"
+        );
+        assert!(later.is_err(), "a failed original stop became Accepted");
+        assert_eq!(in_flight.unwrap_err().code, "MANAGED_JOB_STOP_PENDING");
+        assert_eq!(later.unwrap_err().code, "MANAGED_JOB_STOP_UNKNOWN");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "unknown stop must not be automatically reissued"
+        );
+        assert_eq!(job.active_processes(), Ok(0));
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn ManagedJob_ForeignAttemptAndClosedClaimKeepOriginalCustody_011() {
+        let temp = tempfile::tempdir().unwrap();
+        let snapshot = no_process_snapshot(
+            temp.path(),
+            std::env::current_exe()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+        );
+        let identity = Arc::new(());
+        let raw =
+            unsafe { windows::Win32::System::JobObjects::CreateJobObjectW(None, None) }.unwrap();
+        let job = unsafe { OwnedHandle::from_raw_handle(raw.0) };
+        let slot = OwnedJobLaunchSlot::default();
+        // No process/PTY exists in this fixture. The binding check must reject
+        // before inspecting or extracting a root/reader, even with equal DTOs.
+        *slot.custody.lock() = Some(Custody {
+            prepared: None,
+            job: Some(job),
+            managed: None,
+            attempt: Some(identity.clone()),
+            snapshot: Some(snapshot.clone()),
+            preparing: None,
+            created: None,
+            root: None,
+            assigned: false,
+            stop_requested: false,
+            failed: false,
+            process_quiescent: true,
+            io_drop: IoDropWitness::default(),
+            reader_handoff: Arc::new(Mutex::new(None)),
+            drain_facts: Arc::new(DrainFacts::default()),
+            reader_worker: OutputReaderJoin::Unstarted,
+        });
+        let wrong_attempt = slot.claim_for_native_run(Some(ManagedStartAttempt {
+            identity: Arc::new(()),
+            snapshot: snapshot.clone(),
+        }));
+        let same_dto_different_snapshot = slot.claim_for_native_run(Some(ManagedStartAttempt {
+            identity: identity.clone(),
+            snapshot: Arc::new((*snapshot).clone()),
+        }));
+        slot.close_admission();
+        let closed = slot.claim_for_native_run(Some(ManagedStartAttempt { identity, snapshot }));
+        let intact = slot.custody.lock().as_ref().is_some_and(|owned| {
+            owned.job.is_some()
+                && owned.managed.is_none()
+                && matches!(owned.reader_worker, OutputReaderJoin::Unstarted)
+        });
+        // Explicit no-process fixture teardown, never a native Unknown escape.
+        drop(slot.custody.lock().take());
+        assert!(wrong_attempt.is_err());
+        assert!(same_dto_different_snapshot.is_err());
+        assert!(closed.is_err());
+        assert!(intact);
+    }
     struct Master(Arc<AtomicUsize>);
     impl Drop for Master {
         fn drop(&mut self) {
@@ -429,7 +924,10 @@ mod cleanup_error_tests {
             let slot = OwnedJobLaunchSlot::default();
             *slot.custody.lock() = Some(Custody {
                 prepared: Some(prepared),
-                job,
+                job: Some(job),
+                managed: None,
+                attempt: None,
+                snapshot: None,
                 preparing: None,
                 created: None,
                 root: None,

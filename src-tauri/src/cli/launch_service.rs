@@ -28,7 +28,9 @@ pub(crate) struct FrozenPty {
         std::sync::OnceLock<std::sync::Weak<crate::terminal_transport::TerminalStream>>,
     #[cfg(feature = "remote-host")]
     native_input: std::sync::OnceLock<cc_desk_remote_host::native_host::NativeLocalInput>,
-    pub(crate) pty: OwnedPty,
+    pub(crate) pty: Arc<OwnedPty>,
+    #[cfg(all(windows, feature = "remote-host"))]
+    pub(crate) managed_job: Option<Arc<crate::platform::owned_job_launch::ManagedJob>>,
     pub(crate) snapshot: Arc<LaunchSnapshot>,
     pub(crate) observer: Option<crate::observer_registry::ObserverLease>,
     pub(crate) observer_failure: Option<&'static str>,
@@ -558,16 +560,42 @@ impl LaunchService {
 
     pub(crate) fn start_admitted(
         &self,
+        admission: PreparingStart,
+        caller: &CallerIdentity,
+        request: &LaunchRequest,
+        connect: impl FnOnce(&LaunchStatus) -> Result<OutputRoute<OutputFrame>, SafeError>,
+    ) -> Result<LaunchStatus, SafeError> {
+        self.start_admitted_mode(admission, caller, request, connect, None)
+    }
+    #[cfg(all(windows, feature = "remote-host"))]
+    pub(crate) fn start_managed_admitted(
+        &self,
+        admission: PreparingStart,
+        caller: &CallerIdentity,
+        request: &LaunchRequest,
+        connect: impl FnOnce(&LaunchStatus) -> Result<OutputRoute<OutputFrame>, SafeError>,
+        slot: &crate::platform::owned_job_launch::OwnedJobLaunchSlot,
+    ) -> Result<LaunchStatus, SafeError> {
+        self.start_admitted_mode(admission, caller, request, connect, Some(slot))
+    }
+    fn start_admitted_mode(
+        &self,
         mut admission: PreparingStart,
         caller: &CallerIdentity,
         request: &LaunchRequest,
         connect: impl FnOnce(&LaunchStatus) -> Result<OutputRoute<OutputFrame>, SafeError>,
+        #[cfg(all(windows, feature = "remote-host"))] managed: Option<
+            &crate::platform::owned_job_launch::OwnedJobLaunchSlot,
+        >,
+        #[cfg(not(all(windows, feature = "remote-host")))] _managed: Option<()>,
     ) -> Result<LaunchStatus, SafeError> {
         // The long-lived read guard is acquired only immediately before process
         // construction. Channel/document admission happens before it and may
         // synchronously round-trip through the Tauri main event loop.
         let handoff_guard = RefCell::new(None);
         let spawned = Cell::new(false);
+        #[cfg(all(windows, feature = "remote-host"))]
+        let managed_claim = RefCell::new(None);
         let status = self.coordinator.start_routed_with_source(
             caller,
             request,
@@ -708,7 +736,35 @@ impl LaunchService {
                 let frozen = Arc::new(snapshot);
                 let invocation = build_invocation(frozen.request(), &frozen)?;
                 let spec = resolve_process(&invocation)?;
-                let pty = OwnedPty::spawn_admitted(
+                #[cfg(all(windows, feature = "remote-host"))]
+                let claimed = if let Some(slot) = managed {
+                    let attempt = slot.start_native(frozen.clone(), admission.begin_creation())?;
+                    Some(slot.claim_for_native_run(Some(attempt))?)
+                } else {
+                    None
+                };
+                #[cfg(all(windows, feature = "remote-host"))]
+                let (pty, managed_job) = if let Some(claim) = claimed {
+                    let pair = (claim.pty.clone(), Some(claim.job.clone()));
+                    *managed_claim.borrow_mut() = Some(claim);
+                    pair
+                } else {
+                    (
+                        Arc::new(OwnedPty::spawn_admitted(
+                            &spec,
+                            PtySize {
+                                cols: request.cols,
+                                rows: request.rows,
+                                pixel_width: 0,
+                                pixel_height: 0,
+                            },
+                            admission.begin_creation(),
+                        )?),
+                        None,
+                    )
+                };
+                #[cfg(not(all(windows, feature = "remote-host")))]
+                let pty = Arc::new(OwnedPty::spawn_admitted(
                     &spec,
                     PtySize {
                         cols: request.cols,
@@ -717,7 +773,7 @@ impl LaunchService {
                         pixel_height: 0,
                     },
                     admission.begin_creation(),
-                )?;
+                )?);
                 spawned.set(true);
                 Ok(FrozenPty {
                     #[cfg(feature = "remote-host")]
@@ -725,6 +781,8 @@ impl LaunchService {
                     #[cfg(feature = "remote-host")]
                     native_input: Default::default(),
                     pty,
+                    #[cfg(all(windows, feature = "remote-host"))]
+                    managed_job,
                     snapshot: frozen,
                     observer,
                     observer_failure,
@@ -759,8 +817,14 @@ impl LaunchService {
                 .expect("prepare required supervisor");
             let registry = self.registry().clone();
             let adopted = catch_unwind(AssertUnwindSafe(|| {
-                supervisor.adopt(registry, &status.run, resource)
+                supervisor.adopt(registry, &status.run, resource.clone())
             }));
+            #[cfg(all(windows, feature = "remote-host"))]
+            if let (Some(slot), Some(claim)) = (managed, managed_claim.borrow().as_ref()) {
+                // Only the original supervisor's actual insertion can release
+                // unpublished custody, including adoption failures after insertion.
+                slot.complete_native_transfer(&claim.job, &resource)?;
+            }
             if !matches!(adopted, Ok(Ok(()))) {
                 return Err(error("RUN_HANDOFF_FAILED"));
             }

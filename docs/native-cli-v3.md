@@ -202,6 +202,29 @@ These capture facts are not remote admission. Identity provisioning, the product
 verified connection entry and complete Job/process-tree retirement remain separate
 release gates; this bridge does not enroll credentials or enable remote access.
 
+The Windows native backend also has an explicit managed **new-run** launch path;
+ordinary local launches retain their direct-root stop policy. A managed start
+creates an unrestricted owned Job, assigns its suspended original root before
+resume, and binds one nonclone claim to the successful attempt and exact frozen
+LaunchSnapshot. Claiming transfers sole-reader custody immediately; cancellation
+cannot start a competing unpublished drain. The unpublished slot is released
+only after the same NativeRun is registered with the real Supervisor. A closed
+claim still registers a cleanup owner and returns no successful launch response.
+No existing process tree is adopted, and a launch intent/status alone is not Job
+ownership or remote admission. Native profile/UI enablement remains a separate
+Locked gate.
+
+Managed stop controls that original Job even after its root has exited. Resource
+retirement separately checks Job ActiveProcesses zero, exact root reap, original
+reader and waiter joins, physical writer-worker join, and original IO destructor
+return. The fresh isolated Node fixture proves the same Job has two processes,
+then one after root exit, then zero after stop. Node's own child kill-on-close Job
+is avoided only in this fixture via its source-verified detached option, which
+does not use CREATE_BREAKAWAY_FROM_JOB. Neither master destruction nor these facts
+attest internal ConPTY/OpenConsole thread/process exit; the existing whole-native
+shutdown result remains Unknown for that unobservable boundary. UI closure or
+phone/channel loss does not terminate the managed task; explicit stop/app exit does.
+
 ## Output path
 
 Native output uses a bounded stream with explicit offsets and acknowledgements.

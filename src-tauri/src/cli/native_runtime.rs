@@ -180,6 +180,50 @@ impl NativeRuntime {
         webview: Webview<T>,
         request: Request<'_>,
     ) -> Result<LaunchStatus, SafeError> {
+        self.start_mode(webview, request, false).await
+    }
+    /// Explicit native managed NEW-run entry. Provider admission remains Locked;
+    /// this is not a JS flag and never adopts an already-running process tree.
+    #[cfg(all(windows, feature = "remote-host"))]
+    #[allow(dead_code)] // The native provider/UI enablement is a separate locked gate.
+    pub(crate) async fn start_managed<T: Runtime>(
+        &self,
+        webview: Webview<T>,
+        request: Request<'_>,
+    ) -> Result<LaunchStatus, SafeError> {
+        self.start_mode(webview, request, true).await
+    }
+    #[cfg(all(windows, feature = "remote-host"))]
+    #[allow(dead_code)] // Backend managed launcher awaits explicit native provider/UI admission.
+    pub(crate) fn start_managed_run(
+        &self,
+        caller: &CallerIdentity,
+        launch: &super::types::LaunchRequest,
+        connect: impl FnOnce(
+            &LaunchStatus,
+        )
+            -> Result<super::output_route::OutputRoute<OutputFrame>, SafeError>,
+    ) -> Result<LaunchStatus, SafeError> {
+        if self.supervisor.is_none() {
+            return Err(error("NATIVE_RUNTIME_NOT_READY"));
+        }
+        let admission = self.service.admit_start()?;
+        self.service.start_managed_admitted(
+            admission,
+            caller,
+            launch,
+            connect,
+            &self.owned_job_starts,
+        )
+    }
+    async fn start_mode<T: Runtime>(
+        &self,
+        webview: Webview<T>,
+        request: Request<'_>,
+        managed: bool,
+    ) -> Result<LaunchStatus, SafeError> {
+        #[cfg(not(all(windows, feature = "remote-host")))]
+        let _ = managed;
         let binding = self.binding()?;
         let (caller, launch) = binding.start_native(&webview, &request)?;
         if let Some(status) = self.service.registry().existing(&caller, &launch)? {
@@ -189,10 +233,12 @@ impl NativeRuntime {
         let descriptor = parse_channel(request.headers());
         let proof = request.headers()[DOCUMENT_HEADER].clone();
         let service = self.service.clone();
+        #[cfg(all(windows, feature = "remote-host"))]
+        let managed_slot = self.owned_job_starts.clone();
         // Keep only validated routing metadata, not the raw body or arbitrary
         // request headers. A replay never evaluates the connect closure.
         tauri::async_runtime::spawn_blocking(move || {
-            service.start_admitted(admission, &caller, &launch, |_| {
+            let connect = |_: &LaunchStatus| {
                 let id = descriptor?;
                 let mut headers = HeaderMap::new();
                 headers.insert(DOCUMENT_HEADER, proof);
@@ -203,7 +249,18 @@ impl NativeRuntime {
                         .map_err(|_| SafeError::invalid("outputChannel"))?,
                 );
                 binding.channel_native::<_, OutputFrame>(&webview, &headers)
-            })
+            };
+            #[cfg(all(windows, feature = "remote-host"))]
+            if managed {
+                return service.start_managed_admitted(
+                    admission,
+                    &caller,
+                    &launch,
+                    connect,
+                    &managed_slot,
+                );
+            }
+            service.start_admitted(admission, &caller, &launch, connect)
         })
         .await
         .map_err(|_| error("LAUNCH_STATE_UNKNOWN"))?
@@ -598,9 +655,17 @@ impl NativeRuntime {
     #[cfg(feature = "remote-host")]
     pub(crate) fn begin_host_shutdown(
         self: &Arc<Self>,
-        pins: Vec<crate::run_supervisor::NativeRunPin>,
+        mut pins: Vec<crate::run_supervisor::NativeRunPin>,
     ) -> HostNativeShutdown {
         self.service.begin_shutdown();
+        #[cfg(windows)]
+        if let Some(supervisor) = &self.supervisor {
+            for pin in supervisor.managed_shutdown_pins() {
+                if !pins.iter().any(|current| current.key() == pin.key()) {
+                    pins.push(pin);
+                }
+            }
+        }
         #[cfg(windows)]
         self.owned_job_starts.close_admission();
         if let Some(binding) = self.binding.lock().as_ref().cloned() {
