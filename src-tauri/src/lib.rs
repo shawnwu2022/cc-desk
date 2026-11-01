@@ -8,6 +8,11 @@ mod hook_config;
 mod hook_events;
 mod hook_server;
 mod logger;
+#[cfg(all(
+    windows,
+    any(test, feature = "remote-host", feature = "remote-client-ipc")
+))]
+mod native_crypto;
 #[cfg(feature = "remote-client-ipc")]
 mod remote_client_ipc;
 #[cfg(feature = "remote-host")]

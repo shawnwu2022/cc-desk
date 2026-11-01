@@ -225,6 +225,28 @@ attest internal ConPTY/OpenConsole thread/process exit; the existing whole-nativ
 shutdown result remains Unknown for that unobservable boundary. UI closure or
 phone/channel loss does not terminate the managed task; explicit stop/app exit does.
 
+The Windows CNG slice supplies a synchronous P256 primitive, with opaque native
+key custody, exact exported public SPKI matching, signing usage/algorithm/width
+checks and a fixed backend purpose. It hashes bounded messages with SHA256;
+fixed 64-byte signatures feed the existing COSE boundary, and Windows'
+CryptEncodeObjectEx handles DER encoding. No private import path is compiled for
+production. Native key selection/loading, profile approval and the TLS/grant
+worker adapters are separate gates; this primitive is not a JS signing bridge.
+
+CNG calls must run on the original dedicated native worker. Thread-bound custody
+does not make synchronous KSP calls preemptible, and no rustls/NativeGrantSigner
+async cancellation guarantee is supplied. Qualification uses only the existing
+public RFC6979 TEST_ONLY scalar and point: Microsoft Software KSP, nonopaque ECC
+private blob, NULL parameter list/name and only the silent flag. The documented
+unnamed import is ephemeral. Keys/providers must explicitly free successfully
+and the original worker must join before qualification passes; Unknown retains
+the original owner/JoinHandle and cannot become a successful Drop receipt. No
+existing user keys, naming/persistence, key generation or enrollment are tested.
+An admitted owner cannot be relabelled with another purpose or SPKI. This does
+not establish that future separately loaded role objects use different physical
+keys: production profile approval and cross-role public-SPKI deduplication remain
+separate enrollment gates.
+
 ## Output path
 
 Native output uses a bounded stream with explicit offsets and acknowledgements.
