@@ -3,6 +3,9 @@
 //! No IPC registration, listener, enrollment or automatic retry is installed.
 pub mod bootstrap;
 use cc_desk_remote_record::{command, control_io as wire, grant::SessionScope, projection};
+pub use cc_desk_remote_record::{
+    grant::DataRole as ClientRole, projection::Target as ClientTarget,
+};
 pub use cc_desk_remote_security::DataError;
 use cc_desk_remote_security::{BoundDataAuthority, Role, RunningChannel};
 use std::time::Duration;
@@ -15,6 +18,12 @@ pub struct NativeClient {
     pending: Mutex<()>,
     mux: Option<cc_desk_remote_transport::OwnedTunnel>,
     lifetime_cancel: Option<cc_desk_remote_security::CancelHandle>,
+}
+/// Safe display metadata from one installed live authority; never connection inputs.
+pub struct ClientDescriptor {
+    pub target: ClientTarget,
+    pub binding: String,
+    pub role: ClientRole,
 }
 /// Bounded opaque wire parts. The UI reducer must still install the complete
 /// semantic frame; returning these bytes never authorizes input or an ACK.
@@ -31,6 +40,7 @@ impl Drop for CancelOnDrop {
     }
 }
 enum Expected {
+    Cursor(String),
     Window(String),
     Ack(Box<projection::Stamp>),
     Input(String, String),
@@ -48,6 +58,7 @@ fn expected(bytes: &[u8]) -> Result<Expected, DataError> {
         )),
         Ok(_) => Err(DataError::Codec),
         Err(_) => match wire::decode(bytes).map_err(|_| DataError::Codec)? {
+            wire::Message::InputCursor { request, .. } => Ok(Expected::Cursor(request)),
             wire::Message::ReceiptQuery {
                 request,
                 operation,
@@ -68,6 +79,7 @@ fn expected(bytes: &[u8]) -> Result<Expected, DataError> {
 impl Expected {
     fn matches(&self, reply: &wire::Message) -> bool {
         match (self, reply) {
+            (Self::Cursor(a), wire::Message::InputCursorState { request, .. }) => a == request,
             (Self::Window(a), wire::Message::WindowGranted { request, .. }) => a == request,
             (Self::Ack(a), wire::Message::ProjectionAcknowledged { stamp, .. }) => {
                 a.as_ref() == stamp
@@ -184,6 +196,30 @@ impl NativeClient {
     }
     pub fn binding_id(&self) -> [u8; 32] {
         self.channel.binding_id()
+    }
+    pub fn descriptor(&self) -> Result<ClientDescriptor, DataError> {
+        let authority = self.channel.authority();
+        authority.check()?;
+        if !self.channel.peer_install_enabled() || self.channel.installed_fence()? != self.fence {
+            return Err(DataError::Context);
+        }
+        let descriptor = ClientDescriptor {
+            target: ClientTarget {
+                host: authority.context().host_endpoint_id.clone(),
+                session: self.scope.session.clone(),
+                run: self.scope.run.clone(),
+                generation: self.scope.generation.clone(),
+                incarnation: authority.context().incarnation.clone(),
+            },
+            binding: authority
+                .binding_id()
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect(),
+            role: authority.data_role(),
+        };
+        authority.check()?;
+        Ok(descriptor)
     }
     fn record(&self, record: &cc_desk_remote_security::DataRecord) -> Result<(), DataError> {
         let authority = self.channel.authority();

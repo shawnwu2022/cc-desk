@@ -201,3 +201,58 @@ async fn peer_install_old_constructor_refuses_pending_and_ready_and_proof_is_con
     client.close().await;
     h.wait_closed().await;
 }
+
+#[tokio::test]
+async fn native_descriptor_requires_actual_install_and_tracks_live_grant() {
+    let now = Arc::new(AtomicU64::new(1000));
+    let (c, h, _gate, _cancel) = peer_channels(now.clone()).await;
+    let authority = c.authority();
+    let r = h.host_install_request().await.unwrap();
+    let (proof, done) = tokio::join!(c.client_installed(), h.complete_host_install(r, 7));
+    done.unwrap();
+    let client = NativeClient::from_installed(c, proof.unwrap()).unwrap();
+    let descriptor = client.descriptor().unwrap();
+    assert_eq!(descriptor.target.host, authority.context().host_endpoint_id);
+    assert_eq!(descriptor.target.session, support::scope().session);
+    assert_eq!(descriptor.target.run, support::scope().run);
+    assert_eq!(descriptor.target.generation, "3");
+    assert_eq!(descriptor.target.incarnation, "11");
+    assert_eq!(
+        descriptor.binding,
+        authority
+            .binding_id()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    );
+    assert!(matches!(descriptor.role, DataRole::Controller));
+    now.store(11000, std::sync::atomic::Ordering::Release);
+    assert!(
+        client.descriptor().is_err(),
+        "expired grant must never advertise Ready"
+    );
+    client.close().await;
+    h.close().await;
+}
+
+#[tokio::test]
+async fn native_descriptor_refuses_legacy_uninstalled_and_closed_channels() {
+    let (c, h, _gate, _cancel) = super::tests::channels(Arc::new(AtomicU64::new(1000))).await;
+    let client = NativeClient::new(c, 7).unwrap();
+    assert!(
+        client.descriptor().is_err(),
+        "legacy fence is not installation proof"
+    );
+    client.close().await;
+    h.close().await;
+    let (c, h, _gate, _cancel) = peer_channels(Arc::new(AtomicU64::new(1000))).await;
+    let r = h.host_install_request().await.unwrap();
+    let (proof, done) = tokio::join!(c.client_installed(), h.complete_host_install(r, 7));
+    done.unwrap();
+    let client = NativeClient::from_installed(c, proof.unwrap()).unwrap();
+    assert!(client.descriptor().is_ok());
+    client.request_close();
+    assert!(client.descriptor().is_err());
+    client.close().await;
+    h.close().await;
+}

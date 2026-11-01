@@ -4,6 +4,156 @@ use crate::bound_test_support as support;
 use cc_desk_remote_record::{control_io as wire, input, projection as projection_wire};
 use std::sync::atomic::AtomicU64;
 
+#[tokio::test]
+async fn input_cursor_wire_recovers_pending_without_minting_input_permission() {
+    for seed in [
+        None,
+        Some(Outcome::HostWritten),
+        Some(Outcome::Rejected),
+        Some(Outcome::Partial),
+        Some(Outcome::Unknown),
+    ] {
+        let now = Arc::new(AtomicU64::new(1000));
+        let (c, h, _gate, _cancel, _grant) = support::channels(now.clone()).await;
+        let mut owner =
+            WriterHostOwner::from_registry(&OwnerRegistry::default(), support::host(), 11).unwrap();
+        owner.principal = Some([4; 32]);
+        let target = Target {
+            host: support::host(),
+            session: [2; 16],
+            run: support::scope().run,
+            generation: 3,
+            incarnation: 11,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let mut journal = Journal::open(&dir.path().join("cursor.sqlite")).unwrap();
+        let key = OperationKey {
+            host: target.host,
+            session: target.session,
+            run: target.run.clone(),
+            generation: 3,
+            incarnation: 11,
+            device: support::device(),
+            operation: [9; 16],
+            sequence: 1,
+        };
+        if let Some(outcome) = seed {
+            journal
+                .run_once(&key, &KeyedDigest([7; 32]), || outcome)
+                .unwrap();
+        }
+        let started = owner
+            .start_authorized(
+                journal,
+                std::io::sink(),
+                SessionStart {
+                    target: target.clone(),
+                    device: support::device(),
+                    writer_epoch: 9,
+                    key: DigestKey::from_backend_bytes([0x5a; 32]),
+                    rows: 3,
+                    columns: 10,
+                },
+                h.authority(),
+                [8; 16],
+                4,
+            )
+            .unwrap();
+        let mut conn = Connection::new(&started.peer, h.authority(), 4).unwrap();
+        let reply = exchange(
+            &mut conn,
+            &c,
+            &h,
+            br#"{"message":"InputCursor","profile":1,"request":"1"}"#,
+        )
+        .await;
+        let wire::Message::InputCursorState {
+            request,
+            next_sequence,
+            pending,
+            ..
+        } = reply
+        else {
+            panic!("cursor state");
+        };
+        assert_eq!(request, "1");
+        assert!(conn.view.is_none());
+        assert!(!conn.busy);
+        if let Some(outcome) = seed {
+            assert!(next_sequence.is_none());
+            let p = pending.unwrap();
+            assert_eq!(p.operation, "09".repeat(16));
+            assert_eq!(p.sequence, "1");
+            let expected = match outcome {
+                Outcome::HostWritten => wire::Outcome::HostWritten,
+                Outcome::Rejected => wire::Outcome::Rejected,
+                Outcome::Partial => wire::Outcome::Partial,
+                _ => wire::Outcome::Unknown,
+            };
+            assert_eq!(p.outcome, expected);
+            if let Some(proof) = p.proof {
+                let ack = wire::encode(&wire::Message::ReceiptAck {
+                    profile: 1,
+                    request: "2".into(),
+                    operation: p.operation,
+                    sequence: p.sequence,
+                    outcome: p.outcome,
+                    proof,
+                })
+                .unwrap();
+                assert!(matches!(
+                    exchange(&mut conn, &c, &h, &ack).await,
+                    wire::Message::ReceiptSettled {
+                        disposition: wire::Disposition::Advanced,
+                        ..
+                    }
+                ));
+                assert!(
+                    matches!(exchange(&mut conn,&c,&h,br#"{"message":"InputCursor","profile":1,"request":"3"}"#).await,wire::Message::InputCursorState{next_sequence:Some(n),pending:None,..} if n=="2")
+                );
+            } else {
+                assert!(matches!(outcome, Outcome::Partial | Outcome::Unknown));
+            }
+        } else {
+            assert_eq!(next_sequence.as_deref(), Some("1"));
+            assert!(pending.is_none());
+        }
+        let duplicate = received(
+            &c,
+            &h,
+            4,
+            br#"{"message":"InputCursor","profile":1,"request":"1"}"#,
+        )
+        .await;
+        let expected = if seed.is_none() {
+            now.store(11000, Ordering::Release);
+            Reject::Policy
+        } else if seed == Some(Outcome::Partial) {
+            h.authority().request_close();
+            Reject::Policy
+        } else if seed == Some(Outcome::Rejected) {
+            conn.fence = 5;
+            Reject::Target
+        } else {
+            Reject::Epoch
+        };
+        assert_eq!(
+            conn.dispatch_wire(&duplicate, &h, Duration::from_secs(1))
+                .await,
+            Err(expected)
+        );
+        drop(conn);
+        owner.seal(&target).unwrap();
+        let end = Instant::now() + Duration::from_secs(1);
+        while !owner.try_reap(&target).unwrap() {
+            assert!(Instant::now() < end);
+            tokio::task::yield_now().await;
+        }
+        h.close().await;
+        c.close().await;
+    }
+}
+
 async fn received(c: &RunningChannel, h: &RunningChannel, fence: u64, bytes: &[u8]) -> DataRecord {
     c.send_control(&support::scope(), fence, bytes, Duration::from_secs(1))
         .await

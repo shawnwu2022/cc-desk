@@ -21,10 +21,31 @@ pub enum Disposition {
     AlreadySettled,
     Rejected,
 }
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct PendingInput {
+    pub operation: String,
+    pub sequence: String,
+    pub outcome: Outcome,
+    #[serde(deserialize_with = "required_nullable")]
+    pub proof: Option<String>,
+}
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "message", deny_unknown_fields, rename_all_fields = "camelCase")]
 pub enum Message {
+    InputCursor {
+        profile: u16,
+        request: String,
+    },
+    InputCursorState {
+        profile: u16,
+        request: String,
+        #[serde(deserialize_with = "required_nullable")]
+        next_sequence: Option<String>,
+        #[serde(deserialize_with = "required_nullable")]
+        pending: Option<PendingInput>,
+    },
     WindowGranted {
         profile: u16,
         request: String,
@@ -120,6 +141,23 @@ fn identity(operation: &str, sequence: &str) -> bool {
 impl Message {
     fn valid(&self) -> bool {
         match self {
+            Self::InputCursor { profile, request } => *profile == 1 && counter(request),
+            Self::InputCursorState {
+                profile,
+                request,
+                next_sequence,
+                pending,
+            } => {
+                *profile == 1
+                    && counter(request)
+                    && match (next_sequence, pending) {
+                        (Some(next), None) => counter(next),
+                        (None, Some(p)) => {
+                            identity(&p.operation, &p.sequence) && receipt(p.outcome, &p.proof)
+                        }
+                        _ => false,
+                    }
+            }
             Self::WindowGranted {
                 profile,
                 request,

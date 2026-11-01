@@ -9,6 +9,7 @@ import AppSelect from '@/components/ui/AppSelect.vue'
 import AppInput from '@/components/ui/AppInput.vue'
 import InlineNotice from '@/components/ui/InlineNotice.vue'
 import TerminalThemePreview from '../TerminalThemePreview.vue'
+import RemoteTerminalPanel from '../RemoteTerminalPanel.vue'
 const { t } = useI18n()
 const app = useAppStore()
 const fonts = computed(() => TERMINAL_FONTS.map(value => ({ value, label: value === 'system' ? t('terminalSystemFont') : value })))
@@ -67,6 +68,7 @@ function commitHeight() {
     <AppSelect data-terminal-renderer :label="t('terminalRenderer')" :model-value="app.webglRenderer ? 'webgl' : 'dom'"
       :options="[{ value: 'dom', label: t('terminalRendererDom') }, { value: 'webgl', label: t('terminalRendererWebgl') }]" @update:model-value="app.setWebglRenderer($event === 'webgl')" />
     <InlineNotice :message="t('terminalRendererNextOpen')" />
+    <RemoteTerminalPanel />
   </section>
 </template>
 <style scoped>

@@ -90,3 +90,13 @@ authority, preserving its original approval/profile/presence/relay tuple and
 the profile's existing ClientGrantState/clock. No production profile source or
 presence approval is enabled. TEST_ONLY memory and self-owned loopback fixtures
 do not certify full production WSS-to-CNG, phone, actual WebView or real CLI.
+
+The default-off `remote_client_current` command accepts only an empty raw object.
+It authenticates the original document and exposes a safe descriptor only for
+the same published installed live owner. Private/creating/unknown/closed owners
+remain Locked. Descriptor grant-clock reads run outside the service state lock,
+including a final native check after the state recheck. Ready is advisory; each
+Data operation independently checks the original grant/document/fence. Discovery
+never creates a channel. The existing settings panel uses Host cursor facts,
+snapshot/ACK/window and exact receipts for bounded literal input; it never
+assumes sequence one, replays uncertain input or creates native authorization.

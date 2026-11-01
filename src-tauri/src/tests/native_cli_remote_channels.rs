@@ -35,6 +35,12 @@ impl NativeGrantSigner for PublicSigner {
 pub(crate) async fn channels(
     scope: SessionScope,
 ) -> (RunningChannel, RunningChannel, GrantGate, CancelHandle) {
+    channels_with_clock(scope, Arc::new(|| Ok(1000))).await
+}
+pub(crate) async fn channels_with_clock(
+    scope: SessionScope,
+    clock: Arc<dyn GrantClock>,
+) -> (RunningChannel, RunningChannel, GrantGate, CancelHandle) {
     let local = |client| {
         let (k, p) = identities::identity(client, false);
         LocalIdentity::new(
@@ -87,7 +93,6 @@ pub(crate) async fn channels(
         )
     );
     let (c, h) = (c.unwrap(), h.unwrap());
-    let clock: Arc<dyn GrantClock> = Arc::new(|| Ok(1000));
     let mut gate =
         GrantGate::for_binding(h.context(), support::admin(), [4; 32], clock.clone()).unwrap();
     let mut state = ClientGrantState::new(clock);

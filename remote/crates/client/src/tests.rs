@@ -5,6 +5,56 @@ use cc_desk_remote_security::*;
 use std::sync::{Arc, atomic::AtomicU64};
 mod support;
 const BUDGET: Duration = Duration::from_secs(1);
+
+#[tokio::test]
+async fn native_cursor_exchange_correlates_request_and_rejects_a_window_as_cursor() {
+    for wrong in [false, true] {
+        let (c, h, _gate, _cancel) = channels(Arc::new(AtomicU64::new(1000))).await;
+        let client = NativeClient::new(c, 4).unwrap();
+        let server = async {
+            h.receive(&support::scope(), 4, BUDGET).await.unwrap();
+            let response = if wrong {
+                wire::Message::WindowGranted {
+                    profile: 1,
+                    request: "1".into(),
+                    window: "09".repeat(32),
+                    not_after_host_ms: "2000".into(),
+                }
+            } else {
+                wire::Message::InputCursorState {
+                    profile: 1,
+                    request: "1".into(),
+                    next_sequence: Some("42".into()),
+                    pending: None,
+                }
+            };
+            h.send_projection(
+                &support::scope(),
+                4,
+                &wire::encode(&response).unwrap(),
+                BUDGET,
+            )
+            .await
+            .unwrap();
+        };
+        let (result, ()) = tokio::join!(
+            client.exchange(
+                br#"{"message":"InputCursor","profile":1,"request":"1"}"#,
+                BUDGET
+            ),
+            server
+        );
+        if wrong {
+            assert_eq!(result.unwrap_err(), DataError::Context);
+        } else {
+            assert!(
+                matches!(wire::decode(&result.unwrap()).unwrap(),wire::Message::InputCursorState{next_sequence:Some(n),..} if n=="42")
+            );
+        }
+        client.close().await;
+        h.close().await;
+    }
+}
 #[path = "../../security/tests/support/identities.rs"]
 #[allow(dead_code)]
 mod identities;
@@ -18,7 +68,7 @@ impl NativeGrantSigner for PublicSigner {
         Box::pin(async move { Ok(support::signed(request.payload(), request.issuer_kid())) })
     }
 }
-async fn channels(
+pub(super) async fn channels(
     now: Arc<AtomicU64>,
 ) -> (RunningChannel, RunningChannel, GrantGate, CancelHandle) {
     let local = |client| {

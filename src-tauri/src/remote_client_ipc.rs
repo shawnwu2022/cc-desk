@@ -11,7 +11,7 @@ use crate::cli::{
     types::SafeError,
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use cc_desk_remote_client::NativeClient;
+use cc_desk_remote_client::{ClientRole, ClientTarget, NativeClient};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::sync::{
@@ -59,6 +59,34 @@ struct WireRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct CloseRequest {
     resource_id: u32,
+}
+struct CurrentRequest {}
+impl<'de> Deserialize<'de> for CurrentRequest {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // Serde's empty struct visitor also accepts []; the wire contract is {}.
+        let fields = serde_json::Map::<String, serde_json::Value>::deserialize(deserializer)?;
+        if !fields.is_empty() {
+            return Err(serde::de::Error::custom("empty object required"));
+        }
+        Ok(Self {})
+    }
+}
+/// Advisory native authority snapshot; every Data operation rechecks its owner.
+#[derive(Serialize)]
+#[serde(tag = "state", rename_all_fields = "camelCase")]
+pub(crate) enum CurrentReply {
+    Locked,
+    Ready {
+        resource_id: u32,
+        target: ClientTarget,
+        binding: String,
+        role: CurrentRole,
+    },
+}
+#[derive(Serialize)]
+pub(crate) enum CurrentRole {
+    Controller,
+    Viewer,
 }
 #[derive(Serialize)]
 pub(crate) struct ByteReply {
@@ -294,6 +322,73 @@ impl Drop for CreationGuard<'_> {
     }
 }
 impl RemoteClientService {
+    fn current(
+        &self,
+        caller: &CallerIdentity,
+        binding: &Arc<DocumentBinding<NativeRun>>,
+    ) -> Result<CurrentReply, SafeError> {
+        binding.check_admitted(caller)?;
+        let resource = {
+            let state = self.state.lock();
+            if state.closing || state.creating || state.async_creating || state.creation_unknown {
+                return Ok(CurrentReply::Locked);
+            }
+            state.resource.clone()
+        };
+        let Some(resource) = resource else {
+            return Ok(CurrentReply::Locked);
+        };
+        if resource.caller != *caller
+            || !resource
+                .binding
+                .upgrade()
+                .is_some_and(|original| Arc::ptr_eq(&original, binding))
+        {
+            return Err(error("FORBIDDEN"));
+        }
+        if !resource.published.load(Ordering::Acquire)
+            || resource.closed.load(Ordering::Acquire)
+            || resource.ticket.lock().is_none()
+        {
+            return Ok(CurrentReply::Locked);
+        }
+        // Native grant clocks are consulted without the service publication lock.
+        if resource.client.descriptor().is_err() {
+            return Ok(CurrentReply::Locked);
+        }
+        resource.check()?;
+        {
+            let state = self.state.lock();
+            if state.closing
+                || state.creating
+                || state.async_creating
+                || state.creation_unknown
+                || !state
+                    .resource
+                    .as_ref()
+                    .is_some_and(|original| Arc::ptr_eq(original, &resource))
+            {
+                return Ok(CurrentReply::Locked);
+            }
+        }
+        // The final native authority read follows the service-state wait and
+        // linearizes this advisory snapshot without holding the service lock.
+        let Ok(descriptor) = resource.client.descriptor() else {
+            return Ok(CurrentReply::Locked);
+        };
+        binding.check_admitted(caller)?;
+        resource.check()?;
+        Ok(CurrentReply::Ready {
+            resource_id: resource.id,
+            target: descriptor.target,
+            binding: descriptor.binding,
+            role: match descriptor.role {
+                ClientRole::Controller => CurrentRole::Controller,
+                ClientRole::Observer => CurrentRole::Viewer,
+            },
+        })
+    }
+
     /// Only a backend-approved profile can reach this native entry. No IPC
     /// command or default profile source enables it.
     #[cfg(windows)]
@@ -1096,6 +1191,19 @@ fn admission(
     Ok((binding, caller))
 }
 #[tauri::command]
+pub(crate) fn remote_client_current(
+    webview: Webview,
+    request: Request<'_>,
+    runtime: State<'_, Arc<NativeRuntime>>,
+    service: State<'_, Arc<RemoteClientService>>,
+) -> Result<CurrentReply, SafeError> {
+    let (binding, caller) = admission(&runtime, &webview, &request)?;
+    let _: CurrentRequest = decode(request.body(), 128)?;
+    let reply = service.current(&caller, &binding)?;
+    binding.check_admitted(&caller)?;
+    Ok(reply)
+}
+#[tauri::command]
 pub(crate) async fn remote_client_exchange(
     webview: Webview,
     request: Request<'_>,
@@ -1382,5 +1490,266 @@ mod queued_exit_regression {
         assert_eq!(service.request_exit(17), ExitDecision::Prevent);
         assert_eq!(service.request_exit(0), ExitDecision::Prevent);
         assert!(service.begin_create().is_err());
+    }
+}
+
+#[cfg(test)]
+mod current_tests {
+    use super::*;
+    #[test]
+    fn current_request_accepts_only_empty_raw_object() {
+        assert!(decode::<CurrentRequest>(&InvokeBody::Raw(b"{}".to_vec()), 128).is_ok());
+        for raw in [
+            b"null".as_slice(),
+            b"[]",
+            b"{\"resourceId\":1}",
+            b"{\"state\":\"Ready\"}",
+        ] {
+            assert!(decode::<CurrentRequest>(&InvokeBody::Raw(raw.to_vec()), 128).is_err());
+        }
+        assert!(decode::<CurrentRequest>(&InvokeBody::Json(serde_json::json!({})), 128).is_err());
+    }
+    #[test]
+    fn current_without_resource_is_locked_and_revoked_document_is_rejected() {
+        use crate::cli::{document::DocumentAuthority, run_registry::RunRegistry};
+        let registry = Arc::new(RunRegistry::<NativeRun>::new(2));
+        let url = "http://tauri.localhost/index.html".parse().unwrap();
+        let authority = DocumentAuthority::new(registry, url).unwrap();
+        let caller = authority.test_caller();
+        let mut table = tauri::ResourceTable::default();
+        let binding = Arc::new(authority.attach(&mut table).unwrap());
+        let url = "http://tauri.localhost/index.html".parse().unwrap();
+        authority.started(&url);
+        authority.finished(&url);
+        let service = RemoteClientService::default();
+        assert_eq!(
+            serde_json::to_value(service.current(&caller, &binding).unwrap()).unwrap(),
+            serde_json::json!({"state":"Locked"})
+        );
+        authority.revoke();
+        assert!(service.current(&caller, &binding).is_err());
+    }
+    #[tokio::test]
+    async fn current_exposes_only_original_installed_live_resource() {
+        use crate::cli::{document::DocumentAuthority, run_registry::RunRegistry};
+        let scope = cc_desk_remote_record::grant::SessionScope {
+            session: "02".repeat(16),
+            run: "TEST_ONLY_CURRENT".into(),
+            generation: "3".into(),
+        };
+        let (c, h, _gate, _cancel) = current_test_channels::channels(scope).await;
+        let r = h.host_install_request().await.unwrap();
+        let (proof, done) = tokio::join!(c.client_installed(), h.complete_host_install(r, 7));
+        done.unwrap();
+        let client = NativeClient::from_installed(c, proof.unwrap()).unwrap();
+        let expected = client.descriptor().unwrap();
+        let registry = Arc::new(RunRegistry::<NativeRun>::new(2));
+        let url = "http://tauri.localhost/index.html".parse().unwrap();
+        let authority = DocumentAuthority::new(registry, url).unwrap();
+        let caller = authority.test_caller();
+        let mut table = tauri::ResourceTable::default();
+        let binding = Arc::new(authority.attach(&mut table).unwrap());
+        let url = "http://tauri.localhost/index.html".parse().unwrap();
+        authority.started(&url);
+        authority.finished(&url);
+        let service = RemoteClientService::default();
+        let resource = OwnedClient::new(1, caller.clone(), &binding, client);
+        service.state.lock().resource = Some(resource.clone());
+        // Publication without the original revocation registration is not Ready.
+        assert!(matches!(
+            service.current(&caller, &binding).unwrap(),
+            CurrentReply::Locked
+        ));
+        *resource.ticket.lock() = Some(binding.on_revoke(&caller, Arc::new(|| {})).unwrap());
+        assert!(
+            matches!(
+                service.current(&caller, &binding).unwrap(),
+                CurrentReply::Locked
+            ),
+            "registered private result must remain undiscoverable"
+        );
+        resource.ticket.lock().take();
+        service
+            .publish_owned(resource.clone(), &binding, CreationAuthority::TestOnly)
+            .unwrap();
+        let reply = serde_json::to_value(service.current(&caller, &binding).unwrap()).unwrap();
+        assert_eq!(
+            reply,
+            serde_json::json!({
+                "state":"Ready", "resourceId":1, "target":expected.target,
+                "binding":expected.binding, "role":"Controller",
+            })
+        );
+        for mode in 0..3 {
+            {
+                let mut state = service.state.lock();
+                state.creating = mode == 0;
+                state.async_creating = mode == 1;
+                state.creation_unknown = mode == 2;
+            }
+            assert!(matches!(
+                service.current(&caller, &binding).unwrap(),
+                CurrentReply::Locked
+            ));
+        }
+        {
+            let mut state = service.state.lock();
+            state.creating = false;
+            state.async_creating = false;
+            state.creation_unknown = false;
+        }
+        let foreign_registry = Arc::new(RunRegistry::<NativeRun>::new(2));
+        let foreign_authority = DocumentAuthority::new(foreign_registry, url.clone()).unwrap();
+        let foreign_caller = foreign_authority.test_caller();
+        let mut foreign_table = tauri::ResourceTable::default();
+        let foreign_binding = Arc::new(foreign_authority.attach(&mut foreign_table).unwrap());
+        foreign_authority.started(&url);
+        foreign_authority.finished(&url);
+        assert!(service.current(&foreign_caller, &foreign_binding).is_err());
+        authority.revoke();
+        assert!(service.current(&caller, &binding).is_err());
+        service.shutdown().await.unwrap();
+        h.close().await;
+    }
+}
+
+#[cfg(test)]
+mod current_clock_tests {
+    use super::*;
+    #[tokio::test]
+    async fn current_native_clock_runs_without_service_lock_and_invalidation_withholds_ready() {
+        use crate::cli::{document::DocumentAuthority, run_registry::RunRegistry};
+        let thread = std::thread::current().id();
+        type ClockHook = Option<Box<dyn FnOnce() + Send>>;
+        let hook: Arc<Mutex<ClockHook>> = Arc::new(Mutex::new(None));
+        let clock_hook = hook.clone();
+        let clock: Arc<dyn cc_desk_remote_security::GrantClock> = Arc::new(move || {
+            if std::thread::current().id() == thread {
+                let action = clock_hook.lock().take();
+                if let Some(action) = action {
+                    action();
+                }
+            }
+            Ok(1000)
+        });
+        let scope = cc_desk_remote_record::grant::SessionScope {
+            session: "02".repeat(16),
+            run: "TEST_ONLY_CURRENT_CLOCK".into(),
+            generation: "3".into(),
+        };
+        let (c, h, _gate, _cancel) = current_test_channels::channels_with_clock(scope, clock).await;
+        let request = h.host_install_request().await.unwrap();
+        let (proof, done) = tokio::join!(c.client_installed(), h.complete_host_install(request, 7));
+        done.unwrap();
+        let client = NativeClient::from_installed(c, proof.unwrap()).unwrap();
+        let url = "http://tauri.localhost/index.html".parse().unwrap();
+        let authority =
+            DocumentAuthority::new(Arc::new(RunRegistry::<NativeRun>::new(2)), url).unwrap();
+        let caller = authority.test_caller();
+        let mut table = tauri::ResourceTable::default();
+        let binding = Arc::new(authority.attach(&mut table).unwrap());
+        let url = "http://tauri.localhost/index.html".parse().unwrap();
+        authority.started(&url);
+        authority.finished(&url);
+        let service = Arc::new(RemoteClientService::default());
+        let resource = OwnedClient::new(1, caller.clone(), &binding, client);
+        service.state.lock().resource = Some(resource.clone());
+        service
+            .publish_owned(resource, &binding, CreationAuthority::TestOnly)
+            .unwrap();
+        for invalidate in [false, true] {
+            let original = service.clone();
+            *hook.lock() = Some(Box::new(move || {
+                let mut state = original
+                    .state
+                    .try_lock()
+                    .expect("native clock must not run under service publication lock");
+                if invalidate {
+                    state.async_creating = true;
+                }
+            }));
+            let reply = service.current(&caller, &binding).unwrap();
+            assert_eq!(matches!(reply, CurrentReply::Locked), invalidate);
+        }
+        service.state.lock().async_creating = false;
+        service.shutdown().await.unwrap();
+        h.close().await;
+    }
+}
+
+#[cfg(test)]
+mod current_expiry_tests {
+    use super::*;
+    #[tokio::test]
+    async fn current_waiting_for_final_state_check_cannot_publish_an_expired_grant() {
+        use crate::cli::{document::DocumentAuthority, run_registry::RunRegistry};
+        use std::sync::atomic::{AtomicU64, AtomicUsize};
+        let now = Arc::new(AtomicU64::new(1000));
+        let clock_now = now.clone();
+        let target = Arc::new(Mutex::new(None));
+        let clock_target = target.clone();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let clock_calls = calls.clone();
+        let (entered, arrival) = std::sync::mpsc::channel();
+        let (resume, released) = std::sync::mpsc::channel();
+        let released = Mutex::new(released);
+        let clock: Arc<dyn cc_desk_remote_security::GrantClock> = Arc::new(move || {
+            let stamp = clock_now.load(Ordering::Acquire);
+            if *clock_target.lock() == Some(std::thread::current().id())
+                && clock_calls.fetch_add(1, Ordering::AcqRel) == 2
+            {
+                // descriptor checks its authority before, during installed_fence,
+                // and after copying. Freeze that last native clock snapshot.
+                entered.send(()).unwrap();
+                released
+                    .lock()
+                    .recv_timeout(Duration::from_secs(2))
+                    .unwrap();
+            }
+            Ok(stamp)
+        });
+        let scope = cc_desk_remote_record::grant::SessionScope {
+            session: "02".repeat(16),
+            run: "TEST_ONLY_CURRENT_EXPIRED".into(),
+            generation: "3".into(),
+        };
+        let (c, h, _gate, _cancel) = current_test_channels::channels_with_clock(scope, clock).await;
+        let request = h.host_install_request().await.unwrap();
+        let (proof, done) = tokio::join!(c.client_installed(), h.complete_host_install(request, 7));
+        done.unwrap();
+        let client = NativeClient::from_installed(c, proof.unwrap()).unwrap();
+        let url = "http://tauri.localhost/index.html".parse().unwrap();
+        let authority =
+            DocumentAuthority::new(Arc::new(RunRegistry::<NativeRun>::new(2)), url).unwrap();
+        let caller = authority.test_caller();
+        let mut table = tauri::ResourceTable::default();
+        let binding = Arc::new(authority.attach(&mut table).unwrap());
+        let url = "http://tauri.localhost/index.html".parse().unwrap();
+        authority.started(&url);
+        authority.finished(&url);
+        let service = Arc::new(RemoteClientService::default());
+        let resource = OwnedClient::new(1, caller.clone(), &binding, client);
+        service.state.lock().resource = Some(resource.clone());
+        service
+            .publish_owned(resource, &binding, CreationAuthority::TestOnly)
+            .unwrap();
+        let original = service.clone();
+        let publication = std::thread::spawn(move || {
+            *target.lock() = Some(std::thread::current().id());
+            original.current(&caller, &binding)
+        });
+        arrival.recv_timeout(Duration::from_secs(2)).unwrap();
+        let held = service.state.lock();
+        resume.send(()).unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        now.store(11000, Ordering::Release);
+        drop(held);
+        let result = publication.join().unwrap();
+        service.shutdown().await.unwrap();
+        h.close().await;
+        assert!(
+            matches!(result, Ok(CurrentReply::Locked)),
+            "expiry during final service lock wait must not disclose stale Ready"
+        );
     }
 }

@@ -361,6 +361,9 @@ impl ControlState {
 }
 
 pub(super) enum ControlAction {
+    Cursor {
+        reply: mpsc::SyncSender<Result<InputCursor, receipts::ControlError>>,
+    },
     Window {
         view: SyncedView,
         reply: mpsc::SyncSender<Result<SyncedView, Reject>>,
@@ -387,10 +390,16 @@ pub(in crate::local_writer) struct ControlRequest {
 }
 impl ControlRequest {
     pub(in crate::local_writer) fn is_factual_query(&self) -> bool {
-        matches!(self.action, ControlAction::Query { .. })
+        matches!(
+            self.action,
+            ControlAction::Query { .. } | ControlAction::Cursor { .. }
+        )
     }
     pub(in crate::local_writer) fn reject(self, error: Reject) {
         match self.action {
+            ControlAction::Cursor { reply } => {
+                let _ = reply.try_send(Err(receipts::ControlError::Rejected(error)));
+            }
             ControlAction::Window { reply, .. } => {
                 let _ = reply.try_send(Err(error));
             }
@@ -416,6 +425,17 @@ impl ControlRequest {
             return;
         }
         match self.action {
+            ControlAction::Cursor { reply } => {
+                let result = gate
+                    .control
+                    .as_ref()
+                    .ok_or(receipts::ControlError::Rejected(Reject::Unsupported))
+                    .and_then(|c| c.input_cursor(&self.scope, journal));
+                if result.is_err() {
+                    self.scope.close();
+                }
+                let _ = reply.try_send(result);
+            }
             ControlAction::Query { key, reply } => {
                 let result = gate
                     .control
