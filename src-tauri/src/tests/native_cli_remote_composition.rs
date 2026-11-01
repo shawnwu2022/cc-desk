@@ -182,3 +182,177 @@ async fn NativeRemote_ActualAdmissionInstallsOriginalOwnNode_001() {
     );
     assert_eq!(outcome, Ok(()));
 }
+
+#[cfg(windows)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(non_snake_case)]
+async fn NativeRemote_ManagedOriginalJobAndRemoteOwnersRetireTogether_002() {
+    use crate::platform::owned_job_launch::JobLaunchObservation;
+    use cc_desk_remote_client::NativeClient;
+    // This guard precedes launch: a failed handoff still belongs to the
+    // runtime's original OwnedJobLaunchSlot, not merely a supervisor pin.
+    struct RuntimeStop(Arc<NativeRuntime>);
+    impl Drop for RuntimeStop {
+        fn drop(&mut self) {
+            self.0.shutdown();
+        }
+    }
+    let transports = Arc::new(TerminalTransports::new());
+    let supervisor = Arc::new(NativeRunSupervisor::new(transports.clone()));
+    let fixture = Fixture::with_runtime_environment("hold", supervisor, transports, true);
+    let host = Arc::new(RemoteHostService::default());
+    let runtime = Arc::new(NativeRuntime::with_owned_components_for_test(
+        fixture.service.clone(),
+        fixture.transports.clone(),
+        fixture.supervisor.clone(),
+    ));
+    let _original_runtime = RuntimeStop(runtime.clone());
+    let mut cleanup = Cleanup {
+        supervisor: fixture.supervisor.clone(),
+        host: host.clone(),
+        run: fixture.request_run(),
+        pin: None,
+        stop: None,
+        proofs: Vec::new(),
+    };
+    let events = fixture.events.clone();
+    let status = runtime
+        .start_managed_run(&fixture.caller, &fixture.request, |_| {
+            fixture.routes.bind(1, Box::new(|| Ok(())), || {
+                Ok(Channel::new(move |body| {
+                    if let InvokeResponseBody::Json(text) = body {
+                        events.lock().push(serde_json::from_str(&text).unwrap());
+                    }
+                    Ok(())
+                }))
+            })
+        })
+        .expect("fresh fixed managed Node fixture; original runtime guard already installed");
+    cleanup.pin = Some(fixture.supervisor.pin_shutdown(&status.run));
+    let transferred = runtime.owned_job_slot_for_test().observe() == JobLaunchObservation::Empty;
+    let mut original_client = None;
+    let mut client = None;
+    let mut original_host = None;
+    let mut grant = None;
+    let mut cancel = None;
+    let outcome: Result<(), &'static str> = async {
+        let until = Instant::now() + Duration::from_secs(10);
+        while fixture.child_reports() == 0 || fixture.events.lock().is_empty() {
+            if Instant::now() >= until {
+                return Err("own managed Node did not initialize");
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let access = fixture
+            .service
+            .access(&fixture.caller, &status.run)
+            .map_err(|_| "original managed access")?;
+        let admission = fixture
+            .supervisor
+            .admit_remote_run(access, &status.run)
+            .map_err(|_| "original managed admission")?;
+        let scope = admission.scope().map_err(|_| "original managed scope")?;
+        let (c, h, gate, stop) = channels::channels(scope).await;
+        cleanup.proofs.extend([c.authority(), h.authority()]);
+        original_client = Some(c);
+        original_host = Some(Arc::new(h));
+        grant = Some(gate);
+        cancel = Some(stop);
+        host.adopt_admitted(admission, original_host.as_ref().unwrap().clone(), &runtime)
+            .map_err(|rejected| {
+                let (_, original) = *rejected;
+                drop(original);
+                "same managed Host adoption"
+            })?;
+        let proof = original_client
+            .as_ref()
+            .unwrap()
+            .client_installed()
+            .await
+            .map_err(|_| "same managed install proof")?;
+        client = Some(
+            NativeClient::from_installed(original_client.take().unwrap(), proof)
+                .map_err(|_| "same installed managed client")?,
+        );
+        let snapshot = client
+            .as_ref()
+            .unwrap()
+            .snapshot(
+                br#"{"message":"Snapshot","profile":1,"request":"1"}"#,
+                Duration::from_secs(1),
+            )
+            .await
+            .map_err(|_| "same managed snapshot")?;
+        if snapshot.stamp.target.run != status.run.run_id
+            || snapshot.stamp.target.generation != status.run.generation.to_string()
+        {
+            return Err("managed snapshot owner mismatch");
+        }
+        Ok(())
+    }
+    .await;
+    let retired = cleanup.close();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let facts = loop {
+        // The original shutdown entry retains its original pin and Job object;
+        // neither a missing fact nor absence of a handle means Job zero.
+        let facts = cleanup
+            .stop
+            .as_mut()
+            .and_then(|stop| stop.managed_retirement(&cleanup.run));
+        if facts
+            .as_ref()
+            .is_some_and(|facts| facts.original_resources_retired())
+            || Instant::now() >= deadline
+        {
+            break facts;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    };
+    let network_joined = host.test_join_network().await;
+    if let Some(client) = &client {
+        let _ = client.close().await;
+    }
+    if let Some(channel) = &original_client {
+        let _ = channel.close().await;
+    }
+    if let Some(channel) = &original_host {
+        let _ = channel.wait_closed().await;
+    }
+    drop(grant);
+    drop(cancel);
+    let internal_console_unknown = matches!(
+        cleanup
+            .stop
+            .as_mut()
+            .map(|stop| stop.observe_run(&cleanup.run)),
+        Some(NativeShutdownObservation::Unknown {
+            io_threads_joined: false,
+            ..
+        })
+    );
+    eprintln!("TEST_ONLY_MANAGED_REMOTE_RETIREMENT transferred={transferred} host_writer_joined={retired} network_joined={network_joined} facts={facts:?} internal_console_unknown={internal_console_unknown}");
+    assert!(
+        retired && network_joined,
+        "original Host writer/network must join before assertion"
+    );
+    let facts = facts.expect("original managed retirement facts must remain present");
+    assert!(
+        facts.original_resources_retired(),
+        "same held Job and all six original owners must retire: {facts:?}"
+    );
+    assert_eq!(facts.job_active_processes, Some(0));
+    assert!(
+        facts.direct_child_reaped
+            && facts.output_reader_joined
+            && facts.wait_workers_joined
+            && facts.physical_writer_joined
+            && facts.original_io_drop_returned
+            && facts.stop_job_joined
+    );
+    assert!(
+        transferred && internal_console_unknown,
+        "registration transfers original custody; ConPTY internal exit remains unproven"
+    );
+    assert_eq!(outcome, Ok(()));
+}
