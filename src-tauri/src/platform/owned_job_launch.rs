@@ -102,6 +102,9 @@ impl Drop for ManagedJobClaim {
     }
 }
 impl ManagedJob {
+    pub(crate) fn original_pty(&self) -> Option<Arc<OwnedPty>> {
+        self.pty.upgrade() // Acquires custody only; absence is never retirement evidence.
+    }
     pub(crate) fn is_closed(&self) -> bool {
         self.closed.load(Ordering::Acquire)
     }
@@ -287,20 +290,18 @@ impl OwnedJobLaunchSlot {
             request, &snapshot,
         )?)?;
         let command = spec.command()?;
-        let pair = portable_pty::native_pty_system()
-            .openpty(portable_pty::PtySize {
-                rows: request.rows,
-                cols: request.cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .map_err(|_| error("HOST_PTY_UNAVAILABLE"))?;
+        let prepared = PreparedPtyIo::open_pinned_conpty(portable_pty::PtySize {
+            rows: request.rows,
+            cols: request.cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })?;
         let handle = unsafe { windows::Win32::System::JobObjects::CreateJobObjectW(None, None) }
             .map_err(|_| error("MANAGED_JOB_UNAVAILABLE"))?;
         let job = unsafe { OwnedHandle::from_raw_handle(handle.0) };
         let identity = Arc::new(());
         let result = self.launch_bound(
-            pair,
+            prepared,
             command,
             preparation.begin_creation(),
             job,
@@ -424,11 +425,15 @@ impl OwnedJobLaunchSlot {
         ticket: StartTicket,
         job: OwnedHandle,
     ) -> JobLaunchObservation {
-        self.launch_bound(pair, command, ticket, job, None)
+        let prepared = match PreparedPtyIo::new(pair) {
+            Ok(prepared) => prepared,
+            Err(_) => return JobLaunchObservation::Rejected,
+        };
+        self.launch_bound(prepared, command, ticket, job, None)
     }
     fn launch_bound(
         &self,
-        pair: PtyPair,
+        prepared: PreparedPtyIo,
         command: CommandBuilder,
         ticket: StartTicket,
         job: OwnedHandle,
@@ -441,10 +446,6 @@ impl OwnedJobLaunchSlot {
         if self.closed.load(Ordering::Acquire) || slot.is_some() {
             return JobLaunchObservation::Rejected;
         }
-        let prepared = match PreparedPtyIo::new(pair) {
-            Ok(prepared) => prepared,
-            Err(_) => return JobLaunchObservation::Rejected,
-        };
         let io_drop = prepared.io_drop_witness();
         *slot = Some(Custody {
             prepared: Some(prepared),

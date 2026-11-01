@@ -423,16 +423,20 @@ impl Drop for NativeConnection {
     }
 }
 
-/// Owns exactly the retained network owners. Await proves their tasks were joined,
-/// not that the protocol ended normally (RunningChannel folds its JoinError).
+/// Owns exactly the retained network owners and preserves unknown join outcomes.
 pub struct NetworkRetirement {
     channels: Vec<Arc<RunningChannel>>,
 }
 impl NetworkRetirement {
     pub async fn wait(self) {
+        let _ = self.wait_checked().await;
+    }
+    pub async fn wait_checked(self) -> Result<(), ()> {
+        let mut known = true;
         for channel in self.channels {
-            let _reason = channel.wait_closed().await;
+            known &= channel.wait_closed_checked().await.is_ok();
         }
+        if known { Ok(()) } else { Err(()) }
     }
 }
 #[cfg(test)]

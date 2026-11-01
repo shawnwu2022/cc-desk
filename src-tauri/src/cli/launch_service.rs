@@ -14,7 +14,7 @@ use crate::platform::launch::resolve_process;
 use crate::platform::owned_pty::OwnedPty;
 use crate::terminal_transport::OutputFrame;
 use crate::version_history::maintenance::{PreparingStart, RuntimeKind};
-use parking_lot::{Condvar, Mutex, RwLock};
+use parking_lot::{Condvar, Mutex, RwLock, RwLockReadGuard};
 use portable_pty::PtySize;
 use std::cell::{Cell, RefCell};
 use std::io::{self, Read, Write};
@@ -58,13 +58,75 @@ pub(crate) trait RunSupervisor: Send + Sync {
 struct CommandOwners {
     active: Mutex<usize>,
     settled: Condvar,
+    threads: Mutex<Vec<std::thread::JoinHandle<()>>>,
+    thread_failed: std::sync::atomic::AtomicBool,
+    #[cfg(test)]
+    fail_next_thread_spawn: std::sync::atomic::AtomicBool,
 }
 
 struct CommandOwner {
     owners: Arc<CommandOwners>,
     settled: bool,
 }
+#[cfg(feature = "remote-host")]
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum CommandShutdownObservation {
+    Pending,
+    Unknown,
+    Joined,
+}
 impl CommandOwners {
+    fn thread_not_created(&self) -> SafeError {
+        // Builder::spawn returned without a thread. Outer callers have not
+        // created a child; a nested drain caller separately marks its real PTY
+        // ownership Unknown. Do not poison an effect-free outer rejection.
+        error("COMMAND_THREAD_NOT_CREATED")
+    }
+    fn join_finished(&self, threads: &mut Vec<std::thread::JoinHandle<()>>) {
+        let mut index = 0;
+        while index < threads.len() {
+            if threads[index].is_finished() {
+                if threads.swap_remove(index).join().is_err() {
+                    self.thread_failed
+                        .store(true, std::sync::atomic::Ordering::Release);
+                }
+            } else {
+                index += 1;
+            }
+        }
+    }
+    fn spawn_admitted(
+        &self,
+        shutdown: &RwLockReadGuard<'_, bool>,
+        name: &str,
+        work: impl FnOnce() + Send + 'static,
+    ) -> Result<(), SafeError> {
+        if **shutdown {
+            return Err(error("RUN_SUPERVISOR_STOPPING"));
+        }
+        // The original shutdown read guard and this stock lock cover creation
+        // through publication. No observer can see an unregistered live task.
+        let mut threads = self.threads.lock();
+        self.join_finished(&mut threads);
+        if threads.len() >= 4096 {
+            return Err(error("REGISTRY_CAPACITY"));
+        }
+        #[cfg(test)]
+        if self
+            .fail_next_thread_spawn
+            .swap(false, std::sync::atomic::Ordering::AcqRel)
+        {
+            drop(work);
+            return Err(self.thread_not_created());
+        }
+        match std::thread::Builder::new().name(name.into()).spawn(work) {
+            Ok(worker) => {
+                threads.push(worker);
+                Ok(())
+            }
+            Err(_) => Err(self.thread_not_created()),
+        }
+    }
     fn register(self: &Arc<Self>) -> Result<CommandOwner, SafeError> {
         let mut active = self.active.lock();
         // 与 launch receipt 同量级的硬上限，关闭等待不维护无界 owner 清单。
@@ -248,9 +310,9 @@ impl LaunchService {
         let owners = self.command_owners.clone();
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         // 先建立独立 owner，再创建 child；IPC 取消不释放进程或维护 admission。
-        std::thread::Builder::new()
-            .name("native-rename-owner".into())
-            .spawn(move || {
+        let command_admission = self.shutting_down.read();
+        self.command_owners
+            .spawn_admitted(&command_admission, "native-rename-owner", move || {
                 let run = || -> Result<(), SafeError> {
                     let shutdown = shutting_down.read();
                     if *shutdown {
@@ -316,6 +378,7 @@ impl LaunchService {
                 }
             })
             .map_err(|_| error("RENAME_FAILED"))?;
+        drop(command_admission);
         receiver
             .recv()
             .map_err(|_| error("RENAME_OUTCOME_UNKNOWN"))?
@@ -845,8 +908,28 @@ impl LaunchService {
     /// owners settling; it does not join their operating-system threads.
     #[cfg(feature = "remote-host")]
     pub(crate) fn commands_settled_after_shutdown(&self) -> bool {
+        self.command_shutdown_observation() == CommandShutdownObservation::Joined
+    }
+    #[cfg(feature = "remote-host")]
+    pub(crate) fn command_shutdown_observation(&self) -> CommandShutdownObservation {
         let shutdown = self.shutting_down.read();
-        *shutdown && *self.command_owners.active.lock() == 0
+        if !*shutdown {
+            return CommandShutdownObservation::Pending;
+        }
+        let active = *self.command_owners.active.lock();
+        let mut threads = self.command_owners.threads.lock();
+        self.command_owners.join_finished(&mut threads);
+        if active != 0 || !threads.is_empty() {
+            CommandShutdownObservation::Pending
+        } else if self
+            .command_owners
+            .thread_failed
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            CommandShutdownObservation::Unknown
+        } else {
+            CommandShutdownObservation::Joined
+        }
     }
 
     /// 普通 run 与一次性 command 分别保有 child；退出必须等待两类 owner 收口。
@@ -909,9 +992,9 @@ impl LaunchService {
         };
         let (sender, receiver) = std::sync::mpsc::sync_channel::<Result<(), SafeError>>(1);
         // worker 先建立、child 后创建；线程创建失败时从未产生无 owner 的 child。
-        std::thread::Builder::new()
-            .name("native-command-owner".into())
-            .spawn(move || {
+        let command_admission = self.shutting_down.read();
+        self.command_owners
+            .spawn_admitted(&command_admission, "native-command-owner", move || {
                 let mut response = Some(sender);
                 let mut reply = |result| {
                     if let Some(sender) = response.take() {
@@ -946,39 +1029,51 @@ impl LaunchService {
                     }
                 };
                 // shutdown 的读门禁直到此 worker 已保有 child 才释放。
-                drop(shutdown);
                 let reader_failed = Arc::new(std::sync::atomic::AtomicBool::new(false));
                 let reader_state = reader_failed.clone();
+                let drain_owners = command_owners.clone();
                 let mut stopping = match pty.take_reader() {
                     Ok(mut reader) => {
-                        match std::thread::Builder::new()
-                            .name("native-command-drain".into())
-                            .spawn(move || {
+                        match command_owners.spawn_admitted(
+                            &shutdown,
+                            "native-command-drain",
+                            move || {
                                 let mut discard = [0u8; 4096];
                                 loop {
                                     match reader.read(&mut discard) {
                                         Ok(0) => break,
                                         Ok(_) => {}
                                         Err(_) => {
+                                            drain_owners
+                                                .thread_failed
+                                                .store(true, std::sync::atomic::Ordering::Release);
                                             reader_state
                                                 .store(true, std::sync::atomic::Ordering::Release);
                                             break;
                                         }
                                     }
                                 }
-                            }) {
+                            },
+                        ) {
                             Ok(_) => false,
                             Err(_) => {
+                                command_owners
+                                    .thread_failed
+                                    .store(true, std::sync::atomic::Ordering::Release);
                                 reply(Err(error("COMMAND_FAILED")));
                                 true
                             }
                         }
                     }
                     Err(failure) => {
+                        command_owners
+                            .thread_failed
+                            .store(true, std::sync::atomic::Ordering::Release);
                         reply(Err(failure));
                         true
                     }
                 };
+                drop(shutdown); // The original drain handle has now been published too.
                 let deadline = Instant::now() + Duration::from_secs(30);
                 loop {
                     match pty.try_wait() {
@@ -1021,6 +1116,7 @@ impl LaunchService {
                 }
             })
             .map_err(|_| error("PROCESS_START_FAILED"))?;
+        drop(command_admission);
         receiver.recv().map_err(|_| error("LAUNCH_STATE_UNKNOWN"))?
     }
 
@@ -1410,6 +1506,155 @@ mod opencode_preparation_tests;
 #[cfg(test)]
 mod owned_command_tests {
     use super::*;
+    #[cfg(feature = "remote-host")]
+    #[test]
+    #[allow(non_snake_case)]
+    fn CommandThreads_KnownNotCreatedFailureCreatesNoOwnerAndDoesNotPoisonExit_100() {
+        let temp = tempfile::tempdir().unwrap();
+        let repository =
+            WorkspaceRepository::open(temp.path().join("metadata/workspace.json")).unwrap();
+        let service = LaunchService::new(repository, Some(EnvMap::new()), None);
+        service
+            .command_owners
+            .fail_next_thread_spawn
+            .store(true, std::sync::atomic::Ordering::Release);
+        let result = service.command_owners.spawn_admitted(
+            &service.shutting_down.read(),
+            "TEST_ONLY_NOT_CREATED",
+            || panic!("known non-created task ran"),
+        );
+        service.begin_shutdown();
+        assert_eq!(result.unwrap_err().code, "COMMAND_THREAD_NOT_CREATED");
+        assert_eq!(*service.command_owners.active.lock(), 0);
+        assert!(service.command_owners.threads.lock().is_empty());
+        assert_eq!(
+            service.command_shutdown_observation(),
+            CommandShutdownObservation::Joined
+        );
+    }
+    #[cfg(feature = "remote-host")]
+    #[test]
+    #[allow(non_snake_case)]
+    fn CommandThreads_ShutdownCannotCrossSpawnPublicationAndClosedGateRejectsLateTask_099() {
+        let temp = tempfile::tempdir().unwrap();
+        let repository =
+            WorkspaceRepository::open(temp.path().join("metadata/workspace.json")).unwrap();
+        let service = Arc::new(LaunchService::new(repository, Some(EnvMap::new()), None));
+        let gate = service.shutting_down.read();
+        let (release, wait) = std::sync::mpsc::channel();
+        service
+            .command_owners
+            .spawn_admitted(&gate, "TEST_ONLY_COMMAND_STOCK", move || {
+                let _ = wait.recv_timeout(Duration::from_secs(3));
+            })
+            .unwrap();
+        let original = service.clone();
+        let (closed, done) = std::sync::mpsc::channel();
+        let shutdown = std::thread::spawn(move || {
+            original.begin_shutdown();
+            let _ = closed.send(());
+        });
+        let blocked = done.try_recv().is_err();
+        drop(gate);
+        let did_close = done.recv_timeout(Duration::from_secs(2)).is_ok();
+        shutdown.join().unwrap();
+        let pending = service.command_shutdown_observation();
+        let late = service.command_owners.spawn_admitted(
+            &service.shutting_down.read(),
+            "TEST_ONLY_LATE_REJECTED",
+            || panic!("late task created"),
+        );
+        let _ = release.send(());
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while service.command_shutdown_observation() == CommandShutdownObservation::Pending
+            && Instant::now() < deadline
+        {
+            std::thread::yield_now();
+        }
+        assert!(blocked && did_close);
+        assert_eq!(pending, CommandShutdownObservation::Pending);
+        assert_eq!(late.unwrap_err().code, "RUN_SUPERVISOR_STOPPING");
+        assert_eq!(
+            service.command_shutdown_observation(),
+            CommandShutdownObservation::Joined
+        );
+        assert!(service.command_owners.threads.lock().is_empty());
+    }
+    #[cfg(feature = "remote-host")]
+    #[test]
+    #[allow(non_snake_case)]
+    fn CommandThreads_ZeroOwnersCannotBypassOriginalWorkerJoin_097() {
+        let temp = tempfile::tempdir().unwrap();
+        let repository =
+            WorkspaceRepository::open(temp.path().join("metadata/workspace.json")).unwrap();
+        let service = LaunchService::new(repository, Some(EnvMap::new()), None);
+        let (release, wait) = std::sync::mpsc::channel();
+        service
+            .command_owners
+            .threads
+            .lock()
+            .push(std::thread::spawn(move || {
+                let _ = wait.recv_timeout(Duration::from_secs(3));
+            }));
+        service.begin_shutdown();
+        let before = service.commands_settled_after_shutdown();
+        let _ = release.send(());
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while service
+            .command_owners
+            .threads
+            .lock()
+            .iter()
+            .any(|worker| !worker.is_finished())
+            && Instant::now() < deadline
+        {
+            std::thread::yield_now();
+        }
+        let after = service.commands_settled_after_shutdown();
+        let observed_join = service.command_owners.threads.lock().is_empty();
+        for worker in service.command_owners.threads.lock().drain(..) {
+            let _ = worker.join();
+        }
+        assert!(!before, "counter zero bypassed the original held task");
+        assert!(after && observed_join, "finished is not joined");
+    }
+    #[cfg(feature = "remote-host")]
+    #[test]
+    #[allow(non_snake_case)]
+    fn CommandThreads_PanickedOriginalTaskStaysUnknownForLaterObservers_098() {
+        let temp = tempfile::tempdir().unwrap();
+        let repository =
+            WorkspaceRepository::open(temp.path().join("metadata/workspace.json")).unwrap();
+        let service = LaunchService::new(repository, Some(EnvMap::new()), None);
+        service
+            .command_owners
+            .threads
+            .lock()
+            .push(std::thread::spawn(|| {
+                panic!("TEST_ONLY_COMMAND_OWNER_PANIC")
+            }));
+        service.begin_shutdown();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while service
+            .command_owners
+            .threads
+            .lock()
+            .iter()
+            .any(|worker| !worker.is_finished())
+            && Instant::now() < deadline
+        {
+            std::thread::yield_now();
+        }
+        let first = service.commands_settled_after_shutdown();
+        let later = service.commands_settled_after_shutdown();
+        for worker in service.command_owners.threads.lock().drain(..) {
+            let _ = worker.join();
+        }
+        assert!(
+            !first && !later,
+            "a joined panic was forgotten by a later observer"
+        );
+    }
 
     #[cfg(feature = "remote-host")]
     #[test]

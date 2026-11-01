@@ -353,10 +353,15 @@ impl NativeClient {
     /// original JoinHandle retained in its owner slot.
     pub async fn retire(&self) -> Result<DataError, DataError> {
         self.request_close();
-        let reason = self.channel.wait_closed().await;
-        if let Some(mux) = &self.mux {
-            mux.wait_closed().await.map_err(|_| DataError::Uncertain)?;
-        }
+        let channel = self.channel.wait_closed_checked().await;
+        // Join every original owner even when a prior owner panicked/aborted.
+        let mux = if let Some(mux) = &self.mux {
+            mux.wait_closed().await.map_err(|_| DataError::Uncertain)
+        } else {
+            Ok(())
+        };
+        let reason = channel?;
+        mux?;
         Ok(reason)
     }
     pub async fn close(&self) -> DataError {

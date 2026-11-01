@@ -3,6 +3,11 @@ mod cli;
 mod codex_observer;
 mod codex_observer_reporter;
 mod commands;
+#[cfg(windows)]
+// Existing isolated fixtures source-reuse this module (and its unit tests).
+// Production main imports this single library runtime; it does not duplicate it.
+#[cfg_attr(test, allow(clippy::duplicate_mod))]
+pub mod conpty_runtime;
 mod desktop_updater;
 mod hook_config;
 mod hook_events;

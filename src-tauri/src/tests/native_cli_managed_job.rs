@@ -11,6 +11,88 @@ impl Drop for Cleanup {
 
 #[test]
 #[allow(non_snake_case)]
+fn OwnedStopSpawn_FailureRetainsOriginalPtyAfterNaturalWaiterHandoff_009() {
+    let transports = Arc::new(TerminalTransports::new());
+    let supervisor = Arc::new(NativeRunSupervisor::new(transports.clone()));
+    let fixture = Fixture::with_runtime_environment("hold", supervisor, transports, true);
+    let runtime = Arc::new(NativeRuntime::with_owned_components_for_test(
+        fixture.service.clone(),
+        fixture.transports.clone(),
+        fixture.supervisor.clone(),
+    ));
+    let _cleanup = Cleanup(runtime.clone());
+    let status = runtime
+        .start_managed_run(&fixture.caller, &fixture.request, |_| {
+            fixture
+                .routes
+                .bind(1, Box::new(|| Ok(())), || Ok(Channel::new(|_| Ok(()))))
+        })
+        .unwrap();
+    let original = fixture
+        .service
+        .registry()
+        .resource(&fixture.caller, &status.run)
+        .unwrap();
+    let job = original.process.managed_job.as_ref().unwrap().clone();
+    drop(original);
+    fixture.supervisor.pause_retirement_publish_for_test();
+    job.request_stop().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while fixture
+        .service
+        .registry()
+        .resource(&fixture.caller, &status.run)
+        .is_ok()
+    {
+        if Instant::now() >= deadline {
+            fixture.supervisor.release_retirement_publish_for_test();
+            panic!("original waiter did not reach retirement barrier");
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let waiter_joined = fixture
+        .supervisor
+        .arm_failed_stop_after_waiter_release_for_test(&status.run);
+    runtime.owned_job_slot_for_test().close_admission();
+    fixture.service.begin_shutdown();
+    let mut stop = fixture
+        .supervisor
+        .begin_shutdown_owned(vec![fixture.supervisor.pin_shutdown(&status.run)])
+        .unwrap();
+    let before = stop.managed_retirement(&status.run).unwrap();
+    // Teardown uses an explicit test-only original blocking owner after the
+    // injected *known non-started* worker, never automatic production retry.
+    fixture
+        .supervisor
+        .cleanup_injected_stop_failure_for_test(&status.run);
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let after = loop {
+        let after = stop.managed_retirement(&status.run).unwrap();
+        if after.original_io_drop_returned || Instant::now() >= deadline {
+            break after;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    assert!(waiter_joined.load(Ordering::Acquire));
+    assert!(
+        !before.pinned_conpty_close_returned,
+        "failed spawn dropped the last PTY on its caller: {before:?}"
+    );
+    assert!(
+        after.original_io_drop_returned && after.job_active_processes == Some(0),
+        "test cleanup did not settle original resources: {after:?}"
+    );
+    assert!(matches!(
+        stop.observe_run(&status.run),
+        crate::run_supervisor::NativeShutdownObservation::Unknown {
+            stop_job_joined: false,
+            ..
+        }
+    ));
+}
+
+#[test]
+#[allow(non_snake_case)]
 fn ManagedJob_ShutdownClosesOriginalHandleOnlyAfterAdmissionAndOwnersRetire_006() {
     let transports = Arc::new(TerminalTransports::new());
     let supervisor = Arc::new(NativeRunSupervisor::new(transports.clone()));
@@ -97,13 +179,22 @@ fn ManagedJob_ShutdownClosesOriginalHandleOnlyAfterAdmissionAndOwnersRetire_006(
     let history = stop.managed_retirement(&status.run).unwrap();
     assert!(history.job_query_is_historical && history.original_resources_retired());
     assert_eq!(history.job_active_processes, Some(0));
-    assert!(matches!(
+    assert_eq!(
         stop.observe_run(&status.run),
-        crate::run_supervisor::NativeShutdownObservation::Unknown {
-            io_threads_joined: false,
-            ..
-        }
-    ));
+        crate::run_supervisor::NativeShutdownObservation::OwnedSessionReleased
+    );
+    assert!(
+        history.pinned_conpty_close_returned
+            && history.original_reader_served_close
+            && history.stream_capacity_retired
+    );
+    assert_eq!(fixture.transports.budgeted_bytes(), 0);
+    let record = fixture.supervisor.snapshot(&status.run).unwrap();
+    assert_eq!(record.output(), OutputLifecycle::Incomplete);
+    assert!(
+        record.final_offset().is_none(),
+        "ambiguous ReadZero cannot create finalOffset"
+    );
 }
 
 #[test]
@@ -367,7 +458,16 @@ fn OutputReadObservation_ManagedNormalAndTransportFailureKeepOriginalProvenance_
                 && if mode == "normal" {
                     !fixture.events.lock().is_empty()
                 } else {
-                    observation.as_ref().is_some_and(|(joined, _)| *joined)
+                    fixture
+                        .supervisor
+                        .snapshot(&status.run)
+                        .is_some_and(|record| {
+                            matches!(
+                                record.output(),
+                                crate::run_lifecycle::OutputLifecycle::Degraded
+                                    | crate::run_lifecycle::OutputLifecycle::Incomplete
+                            )
+                        })
                 };
             if ready || Instant::now() >= until {
                 break (observation, ready);
@@ -428,17 +528,12 @@ fn OutputReadObservation_ManagedNormalAndTransportFailureKeepOriginalProvenance_
         );
         if mode != "normal" {
             assert!(
-                matches!(
-                    before,
-                    Some((true, OriginalOutputReadObservation::Unobserved))
-                ),
-                "transport failure joined its original reader while the raw outcome remained Unobserved"
+                matches!(before, Some((false, OriginalOutputReadObservation::Unobserved))),
+                "owned Close would have no original reader servicing it after a terminal route failure"
             );
-            assert_eq!(
-                facts.original_output_read,
-                OriginalOutputReadObservation::Unobserved,
-                "later stop/IO Drop cannot fabricate a read outcome after that reader joined"
-            );
+            // Old logs record the former joined-but-no-EOF counterexample.
+            // This contract now keeps that same reader alive for pinned Close;
+            // a later ReadZero remains diagnostic, never a closure certificate.
         }
         // Normal is observation-only: ReadZero cannot distinguish a zero-byte write from normalized ERROR_BROKEN_PIPE.
     }

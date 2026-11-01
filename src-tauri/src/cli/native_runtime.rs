@@ -660,7 +660,7 @@ impl NativeRuntime {
         self.service.begin_shutdown();
         #[cfg(windows)]
         if let Some(supervisor) = &self.supervisor {
-            for pin in supervisor.managed_shutdown_pins() {
+            for pin in supervisor.shutdown_inventory_pins() {
                 if !pins.iter().any(|current| current.key() == pin.key()) {
                     pins.push(pin);
                 }
@@ -697,6 +697,7 @@ impl NativeRuntime {
         };
         HostNativeShutdown {
             commands: Some(self.service.clone()),
+            inventory: self.supervisor.clone(),
             #[cfg(windows)]
             owned_job_starts: self.owned_job_starts.clone(),
             stop,
@@ -735,12 +736,14 @@ impl NativeRuntime {
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum HostNativeObservation {
     Pending,
+    OwnedSessionReleased,
     NoRemoteNativeResources,
     Unknown,
 }
 #[cfg(feature = "remote-host")]
 pub(crate) struct HostNativeShutdown {
     commands: Option<Arc<LaunchService>>,
+    inventory: Option<Arc<NativeRunSupervisor>>,
     #[cfg(windows)]
     owned_job_starts: Arc<crate::platform::owned_job_launch::OwnedJobLaunchSlot>,
     stop: Option<crate::run_supervisor::NativeShutdown>,
@@ -750,10 +753,18 @@ pub(crate) struct HostNativeShutdown {
 }
 #[cfg(feature = "remote-host")]
 impl HostNativeShutdown {
+    #[cfg(all(test, windows))]
+    pub(crate) fn test_original_managed_facts(
+        &mut self,
+        run: &RunKey,
+    ) -> Option<crate::run_supervisor::ManagedRetirementFacts> {
+        self.stop.as_mut()?.managed_retirement(run)
+    }
     #[cfg(test)]
     pub(crate) fn from_owned_worker_for_test(worker: std::thread::JoinHandle<()>) -> Self {
         Self {
             commands: None, // This fixture has no command service or child.
+            inventory: None,
             #[cfg(windows)]
             owned_job_starts: Arc::new(Default::default()),
             stop: None,
@@ -775,6 +786,10 @@ impl HostNativeShutdown {
         stop
     }
     pub(crate) fn observe(&mut self) -> HostNativeObservation {
+        let commands = self
+            .commands
+            .as_ref()
+            .map(|service| service.command_shutdown_observation());
         #[cfg(windows)]
         let job_start = self.owned_job_starts.observe();
         if self.desktop.as_ref().is_some_and(|job| job.is_finished()) {
@@ -794,10 +809,7 @@ impl HostNativeShutdown {
         #[cfg(not(windows))]
         let job_pending = false;
         if !self.joined
-            || self
-                .commands
-                .as_ref()
-                .is_some_and(|service| !service.commands_settled_after_shutdown())
+            || commands == Some(super::launch_service::CommandShutdownObservation::Pending)
             || job_pending
             || native == Some(crate::run_supervisor::NativeShutdownObservation::Pending)
         {
@@ -808,8 +820,23 @@ impl HostNativeShutdown {
             job_start != crate::platform::owned_job_launch::JobLaunchObservation::Empty;
         #[cfg(not(windows))]
         let job_unknown = false;
-        if self.unknown || job_unknown || native.is_some() {
+        if self.unknown
+            || commands == Some(super::launch_service::CommandShutdownObservation::Unknown)
+            || job_unknown
+            || matches!(
+                native,
+                Some(crate::run_supervisor::NativeShutdownObservation::Unknown { .. })
+            )
+            || self
+                .inventory
+                .as_ref()
+                .is_some_and(|supervisor| supervisor.has_unattested_native_inventory())
+        {
             HostNativeObservation::Unknown
+        } else if native
+            == Some(crate::run_supervisor::NativeShutdownObservation::OwnedSessionReleased)
+        {
+            HostNativeObservation::OwnedSessionReleased
         } else {
             HostNativeObservation::NoRemoteNativeResources
         }

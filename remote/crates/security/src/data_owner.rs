@@ -69,9 +69,15 @@ pub struct RunningChannel {
     send_credits: Arc<Semaphore>,
     stop: watch::Sender<bool>,
     active: Arc<AtomicBool>,
-    task: Mutex<Option<JoinHandle<DataError>>>,
+    task: Mutex<ChannelTask>,
     exit: watch::Receiver<Option<DataError>>,
     pub(crate) peer: Arc<crate::peer_install::Shared>,
+}
+// The original join and its outcome share one cancellation-safe custody slot.
+// Legacy observers cannot erase panic/abort evidence for a later checked wait.
+struct ChannelTask {
+    join: Option<JoinHandle<DataError>>,
+    outcome: Option<Result<DataError, DataError>>,
 }
 impl RunningChannel {
     pub fn authority(&self) -> crate::BoundDataAuthority {
@@ -223,13 +229,19 @@ impl RunningChannel {
         self.wait_closed().await
     }
     pub async fn wait_closed(&self) -> DataError {
+        self.wait_closed_checked()
+            .await
+            .unwrap_or(DataError::Uncertain)
+    }
+    pub async fn wait_closed_checked(&self) -> Result<DataError, DataError> {
         let mut task = self.task.lock().await;
-        if let Some(join) = task.as_mut() {
-            let result = join.await.unwrap_or(DataError::Closed);
-            task.take();
+        if let Some(join) = task.join.as_mut() {
+            let result = join.await.map_err(|_| DataError::Uncertain);
+            task.join.take();
+            task.outcome = Some(result);
             result
         } else {
-            self.exit.borrow().unwrap_or(DataError::Closed)
+            task.outcome.unwrap_or(Err(DataError::Uncertain))
         }
     }
 }
@@ -538,7 +550,10 @@ pub(super) fn start<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
         send_credits: credits,
         stop,
         active,
-        task: Mutex::new(Some(task)),
+        task: Mutex::new(ChannelTask {
+            join: Some(task),
+            outcome: None,
+        }),
         exit,
         peer: public_peer,
     })
@@ -553,6 +568,32 @@ mod tests {
         grant_tests::{admin, scope, signed},
     };
     use std::sync::atomic::AtomicU64;
+    #[tokio::test]
+    async fn channel_join_failure_is_not_closed_even_after_a_legacy_observer() {
+        let (mut c, mut h, _cancel) = pair().await;
+        let mut gate =
+            GrantGate::for_binding(h.context(), admin(), [4; 32], Arc::new(|| Ok(1000))).unwrap();
+        let challenge = gate
+            .challenge(scope(), DataRole::Controller, Duration::from_secs(900))
+            .unwrap();
+        let grant = gate.accept(&signed(&challenge, gate.issuer_kid())).unwrap();
+        c.install(&grant).unwrap();
+        h.install(&grant).unwrap();
+        let c = c.start().unwrap();
+        let h = h.start().unwrap();
+        h.task.lock().await.join.as_ref().unwrap().abort();
+        let first = h.wait_closed().await;
+        let later = h.wait_closed().await;
+        let checked = h.wait_closed_checked().await;
+        c.close().await;
+        assert_eq!(first, DataError::Uncertain);
+        assert_eq!(
+            later,
+            DataError::Uncertain,
+            "another observer lost the original JoinError"
+        );
+        assert_eq!(checked, Err(DataError::Uncertain));
+    }
     #[tokio::test]
     async fn expired_receive_wait_preserves_the_original_queued_record() {
         let (mut c, mut h, _cancel) = pair().await;

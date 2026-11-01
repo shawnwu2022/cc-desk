@@ -50,7 +50,7 @@ pub(crate) struct OwnedPty {
 /// Rust-owner destructor return only, not kernel close or process/IO retirement.
 #[cfg(any(test, feature = "remote-host"))]
 #[derive(Clone, Default)]
-pub(crate) struct IoDropWitness(Arc<AtomicU8>);
+pub(crate) struct IoDropWitness(Arc<AtomicU8>, bool);
 #[cfg(any(test, feature = "remote-host"))]
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum IoDropState {
@@ -74,6 +74,12 @@ impl IoDropWitness {
     }
     pub(crate) fn all_returned(&self) -> bool {
         self.0.load(DropOrdering::Acquire) == 7
+    }
+    pub(crate) fn is_pinned_conpty(&self) -> bool {
+        self.1
+    }
+    pub(crate) fn pinned_close_returned(&self) -> bool {
+        self.1 && self.0.load(DropOrdering::Acquire) & (4 | (4 << 3)) == 4
     }
 }
 
@@ -170,6 +176,20 @@ pub(crate) struct PreparedPtyIo {
     io_drop: IoDropWitness,
 }
 impl PreparedPtyIo {
+    /// This factory owns the actual production provider pair without exposing
+    /// either master/slave Arc. Independent reader/writer clones are plain FDs.
+    /// finish() drops the sole slave; final master Drop therefore calls the
+    /// pinned provider's HPCON Close before publishing its tracked return.
+    #[cfg(all(windows, any(test, feature = "remote-host")))]
+    pub(crate) fn open_pinned_conpty(size: PtySize) -> Result<Self, SafeError> {
+        crate::conpty_runtime::initialize().map_err(|_| error("HOST_PINNED_PTY_UNAVAILABLE"))?;
+        let pair = native_pty_system()
+            .openpty(size)
+            .map_err(|_| error("HOST_PTY_UNAVAILABLE"))?;
+        let mut prepared = Self::new(pair)?;
+        prepared.io_drop.1 = true;
+        Ok(prepared)
+    }
     pub(crate) fn new(pair: PtyPair) -> Result<Self, SafeError> {
         #[cfg(any(test, feature = "remote-host"))]
         let io_drop = IoDropWitness::default();

@@ -83,4 +83,9 @@ fn OriginalIo_TransferredReaderDelegatesAndRetainsOwnership_003() {
     );
     drop(reader);
     assert_eq!(witness.observe(), IoDropState::Returned);
+    assert!(!witness.is_pinned_conpty());
+    assert!(
+        !witness.pinned_close_returned(),
+        "generic tracked Drop cannot attest a production HPCON Close"
+    );
 }

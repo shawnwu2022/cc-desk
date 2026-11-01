@@ -1,7 +1,10 @@
 // Prevents additional console window on Windows in release
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-#[cfg(windows)]
+#[cfg(all(windows, not(test)))]
+use cc_desk::conpty_runtime;
+// Preserve the original binary qualification tests without a second production runtime.
+#[cfg(all(windows, test))]
 mod conpty_runtime;
 
 fn main() {

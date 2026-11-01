@@ -1650,6 +1650,10 @@ fn RemoteShutdown_OutputCallbackDoesNotProveReaderJoined_005() {
     }
     loop {
         match stopped.observe_run(&status.run) {
+            #[cfg(feature = "remote-host")]
+            NativeShutdownObservation::OwnedSessionReleased => {
+                panic!("unattested ordinary PTY must stay Unknown")
+            }
             NativeShutdownObservation::Pending => {
                 assert!(Instant::now() < end);
                 std::thread::sleep(Duration::from_millis(5));

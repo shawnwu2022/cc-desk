@@ -45,14 +45,14 @@ enum ExitIntent {
 /// Original per-channel task custody. Cancelling a join observer leaves the
 /// original JoinHandle in its slot; a panic remains Unknown rather than retired.
 struct PeerPump {
-    join: tokio::sync::Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
+    join: tokio::sync::Mutex<Option<tauri::async_runtime::JoinHandle<Result<(), ()>>>>,
     joined: AtomicU8,
 }
 impl PeerPump {
     async fn join(&self) -> bool {
         let mut slot = self.join.lock().await;
         if let Some(worker) = slot.as_mut() {
-            let success = worker.await.is_ok();
+            let success = matches!(worker.await, Ok(Ok(())));
             *slot = None;
             self.joined
                 .store(if success { 1 } else { 2 }, Ordering::Release);
@@ -93,6 +93,26 @@ impl Default for RemoteHostService {
     }
 }
 impl RemoteHostService {
+    #[cfg(all(test, windows))]
+    pub(crate) fn test_original_managed_facts(
+        &self,
+        run: &crate::cli::run_registry::RunKey,
+    ) -> Option<crate::run_supervisor::ManagedRetirementFacts> {
+        self.state
+            .lock()
+            .native
+            .as_mut()?
+            .test_original_managed_facts(run)
+    }
+    #[cfg(test)]
+    pub(crate) async fn test_join_exit_worker(&self) -> bool {
+        let worker = self.state.lock().waiter.take();
+        if let Some(worker) = worker {
+            worker.await.is_ok()
+        } else {
+            false
+        }
+    }
     // Native provider entry. It accepts only an opaque original document/run
     // admission and a real verified channel, never a shutdown pin or JS authority.
     #[allow(
@@ -158,9 +178,7 @@ impl RemoteHostService {
         // shutdown retains only the original lifetime pin and Host-owned pending.
         state.pins.push(pin);
         let original = self.clone();
-        let worker = tauri::async_runtime::spawn(async move {
-            original.pump_peer(channel).await;
-        });
+        let worker = tauri::async_runtime::spawn(async move { original.pump_peer(channel).await });
         // Publish the original handle while the service lock is still held.
         // The worker cannot observe its Host before this custody is registered.
         state.peer_pump = Some(Arc::new(PeerPump {
@@ -169,7 +187,10 @@ impl RemoteHostService {
         }));
         Ok(())
     }
-    async fn pump_peer(&self, channel: Arc<cc_desk_remote_host::native_host::NativeChannel>) {
+    async fn pump_peer(
+        &self,
+        channel: Arc<cc_desk_remote_host::native_host::NativeChannel>,
+    ) -> Result<(), ()> {
         let mut connection = loop {
             if channel.authority().check().is_err() {
                 break None;
@@ -228,8 +249,13 @@ impl RemoteHostService {
         }
         drop(connection);
         channel.authority().request_close();
-        let _ = channel.wait_closed().await;
+        let result = channel
+            .wait_closed_checked()
+            .await
+            .map(|_| ())
+            .map_err(|_| ());
         // Phone/channel loss never seals the native writer or stops its process.
+        result
     }
     async fn join_peer_pump(&self) -> bool {
         let pump = self.state.lock().peer_pump.clone();
@@ -265,7 +291,8 @@ impl RemoteHostService {
             .as_ref()
             .and_then(NativeHost::network_retirement);
         if let Some(network) = network {
-            network.wait().await;
+            let known = network.wait_checked().await.is_ok();
+            return joined && known;
         }
         joined
     }
@@ -336,17 +363,19 @@ impl RemoteHostService {
     ) -> tauri::async_runtime::JoinHandle<()> {
         let original = self.clone();
         tauri::async_runtime::spawn(async move {
-            let (client_result, (), owned_known, pump_known) = tokio::join!(
+            let (client_result, network_known, owned_known, pump_known) = tokio::join!(
                 client.shutdown(),
                 async move {
                     if let Some(networks) = networks {
-                        networks.wait().await;
+                        networks.wait_checked().await.is_ok()
+                    } else {
+                        true
                     }
                 },
                 original.observe_owned(),
                 original.join_peer_pump()
             );
-            if client_result.is_err() || !owned_known || !pump_known {
+            if client_result.is_err() || !network_known || !owned_known || !pump_known {
                 original.mark_unknown();
                 return;
             }
@@ -395,6 +424,7 @@ mod tests {
         let worker = tauri::async_runtime::spawn(async move {
             let _ = wait.await;
             observed.store(true, Ordering::Release);
+            Ok::<(), ()>(())
         });
         let pump = PeerPump {
             join: tokio::sync::Mutex::new(Some(worker)),

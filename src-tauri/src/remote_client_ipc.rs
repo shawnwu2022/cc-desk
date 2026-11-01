@@ -165,9 +165,8 @@ impl OwnedClient {
                 let _ = rx.changed().await;
             }
             owned.client.request_close();
-            // Completion proves the original owner task was awaited. The
-            // current channel API folds inner JoinError into Closed, so this
-            // does not attest normal protocol exit or absence of an inner panic.
+            // Checked retirement retains inner channel/mux join failure; it
+            // cannot become known merely because this outer worker returned.
             owned.client.retire().await.map(|_| ()).map_err(|_| ())
         });
         // Construction is synchronous; no command can observe the resource before
@@ -322,6 +321,20 @@ impl Drop for CreationGuard<'_> {
     }
 }
 impl RemoteClientService {
+    #[cfg(test)]
+    pub(crate) fn test_only_install_original_client(
+        &self,
+        caller: CallerIdentity,
+        binding: &Arc<DocumentBinding<NativeRun>>,
+        client: NativeClient,
+    ) -> Result<u32, SafeError> {
+        let mut reservation = self.begin_create()?;
+        let result = self.publish_reserved(reservation.id, caller, binding, client);
+        self.state.lock().creating = false;
+        reservation.published = true;
+        self.creation_finished.send_replace(());
+        result
+    }
     fn current(
         &self,
         caller: &CallerIdentity,

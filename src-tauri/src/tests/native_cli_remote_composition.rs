@@ -5,6 +5,193 @@ use crate::remote_host::RemoteHostService;
 use crate::run_supervisor::{NativeRunPin, NativeShutdown, NativeShutdownObservation};
 use crate::tests::remote_channels as channels;
 use cc_desk_remote_host::native_host::WriterRetirement;
+
+#[cfg(windows)]
+async fn owned_session_exit_joins_original_owners() {
+    use crate::cli::{document::DocumentAuthority, run_registry::RunRegistry};
+    use crate::platform::owned_job_launch::JobLaunchObservation;
+    use crate::remote_client_ipc::RemoteClientService;
+    use crate::remote_host::ExitDecision;
+    use cc_desk_remote_client::NativeClient;
+    struct RuntimeStop(Arc<NativeRuntime>);
+    impl Drop for RuntimeStop {
+        fn drop(&mut self) {
+            self.0.shutdown();
+        }
+    }
+    let transports = Arc::new(TerminalTransports::new());
+    let supervisor = Arc::new(NativeRunSupervisor::new(transports.clone()));
+    let fixture = Fixture::with_runtime_environment("hold", supervisor, transports, true);
+    let runtime = Arc::new(NativeRuntime::with_owned_components_for_test(
+        fixture.service.clone(),
+        fixture.transports.clone(),
+        fixture.supervisor.clone(),
+    ));
+    let _cleanup = RuntimeStop(runtime.clone()); // Original slot cleanup precedes launch.
+    let events = fixture.events.clone();
+    let status = runtime
+        .start_managed_run(&fixture.caller, &fixture.request, |_| {
+            fixture.routes.bind(1, Box::new(|| Ok(())), || {
+                Ok(Channel::new(move |body| {
+                    if let InvokeResponseBody::Json(text) = body {
+                        events.lock().push(serde_json::from_str(&text).unwrap());
+                    }
+                    Ok(())
+                }))
+            })
+        })
+        .unwrap();
+    assert_eq!(
+        runtime.owned_job_slot_for_test().observe(),
+        JobLaunchObservation::Empty,
+        "original Job/reader must transfer to supervisor before response"
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while fixture.child_reports() == 0 || fixture.events.lock().is_empty() {
+        assert!(Instant::now() < deadline);
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let admission = fixture
+        .supervisor
+        .admit_remote_run(
+            fixture
+                .service
+                .access(&fixture.caller, &status.run)
+                .unwrap(),
+            &status.run,
+        )
+        .unwrap();
+    let (c, h, _grant, _cancel) = channels::channels(admission.scope().unwrap()).await;
+    let c_authority = c.authority();
+    let h = Arc::new(h);
+    let host = Arc::new(RemoteHostService::default());
+    host.adopt_admitted(admission, h.clone(), &runtime)
+        .map_err(|rejected| {
+            let (error, original) = *rejected;
+            eprintln!(
+                "TEST_ONLY_ADOPT_FAILURE code={} scope_error={:?} authority={:?} output={:?}",
+                error.code,
+                original.scope().err().map(|failure| failure.code),
+                h.authority().check(),
+                fixture
+                    .supervisor
+                    .snapshot(&status.run)
+                    .map(|record| record.output())
+            );
+            error.code
+        })
+        .unwrap();
+    let proof = c.client_installed().await.unwrap();
+    let client = NativeClient::from_installed(c, proof).unwrap();
+    let snapshot = client
+        .snapshot(
+            br#"{"message":"Snapshot","profile":1,"request":"1"}"#,
+            Duration::from_secs(1),
+        )
+        .await
+        .unwrap();
+    assert_eq!(snapshot.stamp.target.run, status.run.run_id);
+    assert_eq!(
+        snapshot.stamp.target.generation,
+        status.run.generation.to_string()
+    );
+    // Explicit TEST_ONLY document fixture uses the existing original publication
+    // path; it does not bypass the production signer/profile factory.
+    let authority = DocumentAuthority::new(
+        Arc::new(RunRegistry::new(2)),
+        "http://tauri.localhost/index.html".parse().unwrap(),
+    )
+    .unwrap();
+    let caller = authority.test_caller();
+    let mut table = tauri::ResourceTable::default();
+    let binding = Arc::new(authority.attach(&mut table).unwrap());
+    let url = "http://tauri.localhost/index.html".parse().unwrap();
+    authority.started(&url);
+    authority.finished(&url);
+    let client_service = Arc::new(RemoteClientService::default());
+    client_service
+        .test_only_install_original_client(caller, &binding, client)
+        .unwrap();
+    // This real late access pins the original PTY after root/worker settlement.
+    let late_access = fixture
+        .service
+        .access(&fixture.caller, &status.run)
+        .unwrap();
+    assert_eq!(host.request_exit(83, false), ExitDecision::Wait(83));
+    let (tx, mut exited) = tokio::sync::oneshot::channel();
+    host.start_exit(83, runtime.clone(), client_service.clone(), move |code| {
+        let _ = tx.send(code);
+    });
+    assert_eq!(host.request_exit(84, false), ExitDecision::Prevent);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let held = loop {
+        let facts = host.test_original_managed_facts(&status.run);
+        if facts.as_ref().is_some_and(|facts| {
+            facts.direct_child_reaped && facts.wait_workers_joined && facts.physical_writer_joined
+        }) {
+            break facts.unwrap();
+        }
+        assert!(Instant::now() < deadline);
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    };
+    let prevented = exited.try_recv().is_err();
+    drop(late_access);
+    let code = tokio::time::timeout(Duration::from_secs(10), exited)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(host.test_join_exit_worker().await);
+    let facts = host.test_original_managed_facts(&status.run).unwrap();
+    assert!(
+        prevented && !held.pinned_conpty_close_returned && !held.stop_job_joined,
+        "late access was not retained: {held:?}"
+    );
+    assert_eq!(held.job_active_processes, Some(0));
+    assert!(!held.job_query_is_historical && !held.original_job_handle_closed);
+    assert_eq!(facts.job_active_processes, Some(0));
+    assert!(
+        facts.original_resources_retired()
+            && facts.original_job_handle_closed
+            && facts.job_query_is_historical
+    );
+    assert!(
+        facts.pinned_conpty_close_returned
+            && facts.original_reader_served_close
+            && facts.stream_capacity_retired
+    );
+    assert!(!fixture.supervisor.active_for_test(&status.run));
+    assert_eq!(fixture.transports.budgeted_bytes(), 0);
+    assert!(fixture
+        .service
+        .registry()
+        .resource(&fixture.caller, &status.run)
+        .is_err());
+    let record = fixture.supervisor.snapshot(&status.run).unwrap();
+    assert_eq!(record.output(), OutputLifecycle::Incomplete);
+    assert!(
+        record.final_offset().is_none(),
+        "ambiguous raw zero is not EOF/parsed ACK"
+    );
+    assert!(h.authority().check().is_err() && c_authority.check().is_err());
+    assert!(h.wait_closed_checked().await.is_ok());
+    assert!(client_service.shutdown().await.is_ok());
+    assert_eq!(code, 83);
+    assert_eq!(host.request_exit(83, false), ExitDecision::Proceed);
+    assert_eq!(host.request_exit(84, false), ExitDecision::Prevent);
+    let mut next = fixture.request.clone();
+    next.request_id = "TEST_ONLY_CLOSED_EXIT_REQUEST".into();
+    next.tab_id = "TEST_ONLY_CLOSED_EXIT_TAB".into();
+    next.run_id = "TEST_ONLY_CLOSED_EXIT_RUN".into();
+    assert!(runtime
+        .start_managed_run(&fixture.caller, &next, |_| panic!(
+            "closed admission reused retired capacity"
+        ))
+        .is_err());
+    host.start_exit(83, runtime, client_service, |_| {
+        panic!("duplicate exit callback")
+    });
+    eprintln!("TEST_ONLY_OWNED_SESSION_RELEASED held={held:?} final={facts:?} first_exit_code={code} host_client_network_joined=true capacity=0 incomplete=true");
+}
 struct Cleanup {
     supervisor: Arc<NativeRunSupervisor>,
     host: Arc<RemoteHostService>,
@@ -33,14 +220,15 @@ impl Cleanup {
             if writer == WriterRetirement::Joined
                 && matches!(
                     native,
-                    Some(NativeShutdownObservation::Unknown {
-                        direct_child_reaped: true,
-                        output_reader_joined: true,
-                        wait_workers_joined: true,
-                        original_io_drop_returned: true,
-                        stop_job_joined: true,
-                        ..
-                    })
+                    Some(NativeShutdownObservation::OwnedSessionReleased)
+                        | Some(NativeShutdownObservation::Unknown {
+                            direct_child_reaped: true,
+                            output_reader_joined: true,
+                            wait_workers_joined: true,
+                            original_io_drop_returned: true,
+                            stop_job_joined: true,
+                            ..
+                        })
                 )
             {
                 return true;
@@ -187,172 +375,7 @@ async fn NativeRemote_ActualAdmissionInstallsOriginalOwnNode_001() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[allow(non_snake_case)]
 async fn NativeRemote_ManagedOriginalJobAndRemoteOwnersRetireTogether_002() {
-    use crate::platform::owned_job_launch::JobLaunchObservation;
-    use cc_desk_remote_client::NativeClient;
-    // This guard precedes launch: a failed handoff still belongs to the
-    // runtime's original OwnedJobLaunchSlot, not merely a supervisor pin.
-    struct RuntimeStop(Arc<NativeRuntime>);
-    impl Drop for RuntimeStop {
-        fn drop(&mut self) {
-            self.0.shutdown();
-        }
-    }
-    let transports = Arc::new(TerminalTransports::new());
-    let supervisor = Arc::new(NativeRunSupervisor::new(transports.clone()));
-    let fixture = Fixture::with_runtime_environment("hold", supervisor, transports, true);
-    let host = Arc::new(RemoteHostService::default());
-    let runtime = Arc::new(NativeRuntime::with_owned_components_for_test(
-        fixture.service.clone(),
-        fixture.transports.clone(),
-        fixture.supervisor.clone(),
-    ));
-    let _original_runtime = RuntimeStop(runtime.clone());
-    let mut cleanup = Cleanup {
-        supervisor: fixture.supervisor.clone(),
-        host: host.clone(),
-        run: fixture.request_run(),
-        pin: None,
-        stop: None,
-        proofs: Vec::new(),
-    };
-    let events = fixture.events.clone();
-    let status = runtime
-        .start_managed_run(&fixture.caller, &fixture.request, |_| {
-            fixture.routes.bind(1, Box::new(|| Ok(())), || {
-                Ok(Channel::new(move |body| {
-                    if let InvokeResponseBody::Json(text) = body {
-                        events.lock().push(serde_json::from_str(&text).unwrap());
-                    }
-                    Ok(())
-                }))
-            })
-        })
-        .expect("fresh fixed managed Node fixture; original runtime guard already installed");
-    cleanup.pin = Some(fixture.supervisor.pin_shutdown(&status.run));
-    let transferred = runtime.owned_job_slot_for_test().observe() == JobLaunchObservation::Empty;
-    let mut original_client = None;
-    let mut client = None;
-    let mut original_host = None;
-    let mut grant = None;
-    let mut cancel = None;
-    let outcome: Result<(), &'static str> = async {
-        let until = Instant::now() + Duration::from_secs(10);
-        while fixture.child_reports() == 0 || fixture.events.lock().is_empty() {
-            if Instant::now() >= until {
-                return Err("own managed Node did not initialize");
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        let access = fixture
-            .service
-            .access(&fixture.caller, &status.run)
-            .map_err(|_| "original managed access")?;
-        let admission = fixture
-            .supervisor
-            .admit_remote_run(access, &status.run)
-            .map_err(|_| "original managed admission")?;
-        let scope = admission.scope().map_err(|_| "original managed scope")?;
-        let (c, h, gate, stop) = channels::channels(scope).await;
-        cleanup.proofs.extend([c.authority(), h.authority()]);
-        original_client = Some(c);
-        original_host = Some(Arc::new(h));
-        grant = Some(gate);
-        cancel = Some(stop);
-        host.adopt_admitted(admission, original_host.as_ref().unwrap().clone(), &runtime)
-            .map_err(|rejected| {
-                let (_, original) = *rejected;
-                drop(original);
-                "same managed Host adoption"
-            })?;
-        let proof = original_client
-            .as_ref()
-            .unwrap()
-            .client_installed()
-            .await
-            .map_err(|_| "same managed install proof")?;
-        client = Some(
-            NativeClient::from_installed(original_client.take().unwrap(), proof)
-                .map_err(|_| "same installed managed client")?,
-        );
-        let snapshot = client
-            .as_ref()
-            .unwrap()
-            .snapshot(
-                br#"{"message":"Snapshot","profile":1,"request":"1"}"#,
-                Duration::from_secs(1),
-            )
-            .await
-            .map_err(|_| "same managed snapshot")?;
-        if snapshot.stamp.target.run != status.run.run_id
-            || snapshot.stamp.target.generation != status.run.generation.to_string()
-        {
-            return Err("managed snapshot owner mismatch");
-        }
-        Ok(())
-    }
-    .await;
-    let retired = cleanup.close();
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let facts = loop {
-        // The original shutdown entry retains its original pin and Job object;
-        // neither a missing fact nor absence of a handle means Job zero.
-        let facts = cleanup
-            .stop
-            .as_mut()
-            .and_then(|stop| stop.managed_retirement(&cleanup.run));
-        if facts
-            .as_ref()
-            .is_some_and(|facts| facts.original_resources_retired())
-            || Instant::now() >= deadline
-        {
-            break facts;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    };
-    let network_joined = host.test_join_network().await;
-    if let Some(client) = &client {
-        let _ = client.close().await;
-    }
-    if let Some(channel) = &original_client {
-        let _ = channel.close().await;
-    }
-    if let Some(channel) = &original_host {
-        let _ = channel.wait_closed().await;
-    }
-    drop(grant);
-    drop(cancel);
-    let internal_console_unknown = matches!(
-        cleanup
-            .stop
-            .as_mut()
-            .map(|stop| stop.observe_run(&cleanup.run)),
-        Some(NativeShutdownObservation::Unknown {
-            io_threads_joined: false,
-            ..
-        })
-    );
-    eprintln!("TEST_ONLY_MANAGED_REMOTE_RETIREMENT transferred={transferred} host_writer_joined={retired} network_joined={network_joined} facts={facts:?} internal_console_unknown={internal_console_unknown}");
-    assert!(
-        retired && network_joined,
-        "original Host writer/network must join before assertion"
-    );
-    let facts = facts.expect("original managed retirement facts must remain present");
-    assert!(
-        facts.original_resources_retired(),
-        "same held Job and all six original owners must retire: {facts:?}"
-    );
-    assert_eq!(facts.job_active_processes, Some(0));
-    assert!(
-        facts.direct_child_reaped
-            && facts.output_reader_joined
-            && facts.wait_workers_joined
-            && facts.physical_writer_joined
-            && facts.original_io_drop_returned
-            && facts.stop_job_joined
-    );
-    assert!(
-        transferred && internal_console_unknown,
-        "registration transfers original custody; ConPTY internal exit remains unproven"
-    );
-    assert_eq!(outcome, Ok(()));
+    // One permanent Host admission per process: the complete approved exit
+    // scenario extends this original case instead of creating a second Host.
+    owned_session_exit_joins_original_owners().await;
 }
