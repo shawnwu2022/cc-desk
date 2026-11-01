@@ -126,6 +126,7 @@ dependencies = [
  "base64 0.22.1",
  "cc-desk-remote-record",
  "cc-desk-remote-security",
+ "cc-desk-remote-transport",
  "coset",
  "ring",
  "rustls",

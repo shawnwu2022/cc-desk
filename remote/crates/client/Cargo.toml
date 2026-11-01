@@ -5,11 +5,13 @@ edition = "2024"
 publish = false
 
 [dependencies]
+cc-desk-remote-transport = { path = "../transport" }
 cc-desk-remote-security = { path = "../security", features = ["experimental"] }
 cc-desk-remote-record = { path = "../../../protocol/remote/inner/v1" }
 tokio = { version = "=1.52.1", features = ["sync", "time"] }
 
 [dev-dependencies]
+cc-desk-remote-transport = { path = "../transport", features = ["test-only-loopback"] }
 tokio = { version = "=1.52.1", features = ["rt-multi-thread", "macros", "io-util"] }
 ring = "=0.17.14"
 rustls = { version = "=0.23.46", default-features = false, features = ["std", "ring"] }

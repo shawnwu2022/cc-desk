@@ -1,4 +1,7 @@
 //! Default-off original-document IPC. No JS connection/grant factory exists.
+#[cfg(test)]
+#[path = "remote_client_bootstrap_tests.rs"]
+mod bootstrap_tests;
 use crate::cli::{
     document::{DocumentBinding, DocumentRevocation},
     launch_service::NativeRun,
@@ -101,6 +104,7 @@ struct OwnedClient {
     caller: CallerIdentity,
     binding: Weak<DocumentBinding<NativeRun>>,
     client: Arc<NativeClient>,
+    published: AtomicBool,
     closed: AtomicBool,
     close_tx: watch::Sender<bool>,
     join: AsyncMutex<Option<tauri::async_runtime::JoinHandle<Result<(), ()>>>>,
@@ -120,6 +124,7 @@ impl OwnedClient {
             caller,
             binding: Arc::downgrade(binding),
             client: Arc::new(client),
+            published: AtomicBool::new(false),
             closed: AtomicBool::new(false),
             close_tx: tx,
             join: AsyncMutex::new(None),
@@ -135,8 +140,7 @@ impl OwnedClient {
             // Completion proves the original owner task was awaited. The
             // current channel API folds inner JoinError into Closed, so this
             // does not attest normal protocol exit or absence of an inner panic.
-            let _exit_reason = owned.client.close().await;
-            Ok(())
+            owned.client.retire().await.map(|_| ()).map_err(|_| ())
         });
         // Construction is synchronous; no command can observe the resource before
         // its join handle is retained. The worker also retains this exact resource.
@@ -152,6 +156,12 @@ impl OwnedClient {
         self.close_tx.send_replace(true);
     }
     fn check(&self) -> Result<(), SafeError> {
+        if !self.published.load(Ordering::Acquire) {
+            return Err(error("REMOTE_CLIENT_UNAVAILABLE"));
+        }
+        self.check_private()
+    }
+    fn check_private(&self) -> Result<(), SafeError> {
         if self.closed.load(Ordering::Acquire) {
             return Err(error("REMOTE_CLIENT_CLOSED"));
         }
@@ -206,6 +216,10 @@ struct ServiceState {
     creating: bool,
     closing: bool,
     creation_unknown: bool,
+    async_creating: bool,
+    creation_stop: Option<watch::Sender<bool>>,
+    creation_id: Option<u32>,
+    creation_result: Option<Result<(), SafeError>>,
     #[cfg(any(test, not(feature = "remote-host")))]
     exit: ExitIntent,
     resource: Option<Arc<OwnedClient>>,
@@ -225,6 +239,7 @@ impl ServiceState {
 pub(crate) struct RemoteClientService {
     state: Mutex<ServiceState>,
     creation_finished: watch::Sender<()>,
+    creation_join: AsyncMutex<Option<tauri::async_runtime::JoinHandle<Result<(), SafeError>>>>,
 }
 impl Default for RemoteClientService {
     fn default() -> Self {
@@ -240,13 +255,24 @@ impl Default for RemoteClientService {
                 creating: false,
                 closing: false,
                 creation_unknown: false,
+                async_creating: false,
+                creation_stop: None,
+                creation_id: None,
+                creation_result: None,
                 #[cfg(any(test, not(feature = "remote-host")))]
                 exit: ExitIntent::Idle,
                 resource: None,
             }),
             creation_finished: watch::channel(()).0,
+            creation_join: AsyncMutex::new(None),
         }
     }
+}
+enum CreationAuthority {
+    #[cfg(windows)]
+    Native(crate::native_crypto::owner::NativeSigningAttempt),
+    #[cfg(test)]
+    TestOnly,
 }
 struct CreationGuard<'a> {
     service: &'a RemoteClientService,
@@ -268,6 +294,246 @@ impl Drop for CreationGuard<'_> {
     }
 }
 impl RemoteClientService {
+    /// Only a backend-approved profile can reach this native entry. No IPC
+    /// command or default profile source enables it.
+    #[cfg(windows)]
+    #[allow(dead_code)]
+    pub(crate) fn install_profile(
+        self: &Arc<Self>,
+        binding: Arc<DocumentBinding<NativeRun>>,
+        webview: &Webview,
+        headers: &tauri::http::HeaderMap,
+        mut profile: cc_desk_remote_client::bootstrap::NativeProfile,
+    ) -> Result<u32, SafeError> {
+        let caller = binding.admit_native(webview, headers)?;
+        let authority = self
+            .state
+            .lock()
+            .signing
+            .clone()
+            .ok_or_else(|| error("NATIVE_PROFILE_UNAVAILABLE"))?;
+        if !authority.matches_origin(&profile.binding.origin) {
+            return Err(error("NATIVE_BINDING_INVALID"));
+        }
+        let signers =
+            self.fresh_native_signers(std::time::Instant::now() + Duration::from_secs(5))?;
+        let public = signers
+            .endpoint
+            .public_key()
+            .ok_or_else(|| error("NATIVE_PROFILE_INVALID"))?;
+        profile.local = cc_desk_remote_security::LocalIdentity::new(
+            cc_desk_remote_security::Role::Client,
+            cc_desk_remote_security::P256Spki::new(public.as_ref())
+                .map_err(|_| error("NATIVE_PROFILE_INVALID"))?,
+            signers.endpoint,
+        )
+        .map_err(|_| error("NATIVE_PROFILE_INVALID"))?;
+        profile.relay = signers.relay;
+        profile.signer = signers.grant;
+        self.start_owned_creation_checked(
+            binding,
+            caller,
+            CreationAuthority::Native(signers.attempt),
+            move |stop| async move {
+                cc_desk_remote_client::bootstrap::connect_native(profile, stop)
+                    .await
+                    .map_err(|e| {
+                        error(
+                        if e == cc_desk_remote_client::bootstrap::BootstrapError::RetirementUnknown
+                        {
+                            "REMOTE_CLIENT_RETIRE_UNKNOWN"
+                        } else {
+                            "REMOTE_CLIENT_BOOTSTRAP_FAILED"
+                        },
+                    )
+                    })
+            },
+        )
+    }
+    fn start_owned_creation_checked<F, U>(
+        self: &Arc<Self>,
+        binding: Arc<DocumentBinding<NativeRun>>,
+        caller: CallerIdentity,
+        authority: CreationAuthority,
+        create: F,
+    ) -> Result<u32, SafeError>
+    where
+        F: FnOnce(watch::Receiver<bool>) -> U + Send + 'static,
+        U: std::future::Future<Output = Result<NativeClient, SafeError>> + Send + 'static,
+    {
+        binding.check_admitted(&caller)?;
+        let mut slot = self
+            .creation_join
+            .try_lock()
+            .map_err(|_| error("REMOTE_CLIENT_BUSY"))?;
+        if slot.is_some() {
+            return Err(error("REMOTE_CLIENT_BUSY"));
+        }
+        let mut reservation = self.begin_create()?;
+        let id = reservation.id;
+        let (stop, rx) = watch::channel(false);
+        let revoked = stop.clone();
+        let original_service = Arc::downgrade(self);
+        let ticket = binding.on_revoke(
+            &caller,
+            Arc::new(move || {
+                revoked.send_replace(true);
+                if let Some(service) = original_service.upgrade() {
+                    service.begin_shutdown();
+                }
+            }),
+        )?;
+        {
+            let mut state = self.state.lock();
+            state.async_creating = true;
+            if state.closing {
+                stop.send_replace(true);
+            }
+            state.creation_stop = Some(stop);
+            state.creation_id = Some(id);
+            state.creation_result = None;
+        }
+        let (ready, start) = tokio::sync::oneshot::channel();
+        let service = self.clone();
+        let task = tauri::async_runtime::spawn(async move {
+            let outcome = if start.await.is_err() {
+                Err(error("REMOTE_CLIENT_CLOSED"))
+            } else {
+                let client = if service.state.lock().closing {
+                    Err(error("REMOTE_CLIENT_CLOSED"))
+                } else {
+                    create(rx).await
+                };
+                drop(ticket);
+                match client {
+                    Err(failure) => Err(failure),
+                    Ok(client) => {
+                        // Retain the exact result in the service before any check can fail.
+                        let resource = OwnedClient::new(id, caller.clone(), &binding, client);
+                        service.state.lock().resource = Some(resource.clone());
+                        let published =
+                            service.publish_owned(resource.clone(), &binding, authority);
+                        if published.is_err() || service.state.lock().closing {
+                            match service.close_resource(resource).await {
+                                Ok(()) => {
+                                    published.and_then(|_| Err(error("REMOTE_CLIENT_CLOSED")))
+                                }
+                                Err(failure) => Err(failure),
+                            }
+                        } else {
+                            Ok(())
+                        }
+                    }
+                }
+            };
+            {
+                let mut state = service.state.lock();
+                state.creating = false;
+                if outcome
+                    .as_ref()
+                    .is_err_and(|e| e.code == "REMOTE_CLIENT_RETIRE_UNKNOWN")
+                {
+                    state.creation_unknown = true;
+                    state.closing = true;
+                }
+            }
+            service.creation_finished.send_replace(());
+            outcome
+        });
+        *slot = Some(task);
+        reservation.published = true;
+        let _ = ready.send(());
+        Ok(id)
+    }
+    #[cfg(test)]
+    fn start_owned_creation<F, U>(
+        self: &Arc<Self>,
+        binding: Arc<DocumentBinding<NativeRun>>,
+        caller: CallerIdentity,
+        create: F,
+    ) -> Result<u32, SafeError>
+    where
+        F: FnOnce(watch::Receiver<bool>) -> U + Send + 'static,
+        U: std::future::Future<Output = Result<NativeClient, SafeError>> + Send + 'static,
+    {
+        self.start_owned_creation_checked(binding, caller, CreationAuthority::TestOnly, create)
+    }
+    fn publish_owned(
+        &self,
+        resource: Arc<OwnedClient>,
+        binding: &Arc<DocumentBinding<NativeRun>>,
+        authority: CreationAuthority,
+    ) -> Result<u32, SafeError> {
+        let weak = Arc::downgrade(&resource);
+        let ticket = binding.on_revoke(
+            &resource.caller,
+            Arc::new(move || {
+                if let Some(r) = weak.upgrade() {
+                    r.retire();
+                }
+            }),
+        )?;
+        *resource.ticket.lock() = Some(ticket);
+        let publish = |current: &dyn Fn() -> bool| {
+            let state = self.state.lock();
+            if state.closing {
+                return Err(error("REMOTE_CLIENT_CLOSED"));
+            }
+            resource.check_private()?;
+            if !current() {
+                return Err(error("NATIVE_SIGNING_ATTEMPT_INVALID"));
+            }
+            resource.published.store(true, Ordering::Release);
+            Ok(resource.id)
+        };
+        match authority {
+            #[cfg(windows)]
+            CreationAuthority::Native(attempt) => attempt
+                .publish_if_current(publish)
+                .map_err(|_| error("NATIVE_SIGNING_ATTEMPT_INVALID"))?,
+            #[cfg(test)]
+            CreationAuthority::TestOnly => publish(&|| true),
+        }
+    }
+    /// Observers borrow the original slot; dropping a wait never drops its task.
+    #[allow(dead_code)]
+    pub(crate) async fn wait_creation(&self, id: u32) -> Result<(), SafeError> {
+        let mut slot = self.creation_join.lock().await;
+        if self.state.lock().creation_id != Some(id) {
+            return Err(error("FORBIDDEN"));
+        }
+        if let Some(task) = slot.as_mut() {
+            let outcome = match task.await {
+                Ok(result) => result,
+                Err(_) => {
+                    let mut state = self.state.lock();
+                    state.creation_unknown = true;
+                    state.closing = true;
+                    Err(error("REMOTE_CLIENT_RETIRE_UNKNOWN"))
+                }
+            };
+            *slot = None;
+            let mut state = self.state.lock();
+            if outcome
+                .as_ref()
+                .is_err_and(|e| e.code == "REMOTE_CLIENT_RETIRE_UNKNOWN")
+            {
+                state.creation_unknown = true;
+                state.closing = true;
+            }
+            state.async_creating = false;
+            state.creating = false;
+            state.creation_stop = None;
+            state.creation_result = Some(outcome);
+            self.creation_finished.send_replace(());
+        }
+        let state = self.state.lock();
+        if state.creation_unknown {
+            return Err(error("REMOTE_CLIENT_RETIRE_UNKNOWN"));
+        }
+        state.creation_result.clone().unwrap_or(Ok(()))
+    }
+
     #[cfg(any(test, not(feature = "remote-host")))]
     pub(crate) fn start_exit_waiter(
         self: &Arc<Self>,
@@ -488,7 +754,7 @@ impl RemoteClientService {
     #[cfg(windows)]
     #[allow(
         dead_code,
-        reason = "async reconnect/provider integration is in the separately frozen bootstrap tree"
+        reason = "backend profile source and native presence remain unavailable"
     )]
     pub(crate) fn fresh_native_signers(
         &self,
@@ -565,7 +831,7 @@ impl RemoteClientService {
         if state.closing {
             return Err(error("REMOTE_CLIENT_CLOSED"));
         }
-        if state.creating || state.resource.is_some() {
+        if state.creating || state.async_creating || state.resource.is_some() {
             return Err(error("REMOTE_CLIENT_BUSY"));
         }
         let id = state
@@ -594,15 +860,25 @@ impl RemoteClientService {
         let mut reservation = self.begin_create()?;
         let id = reservation.id;
         let client = create()?;
-        let resource = OwnedClient::new(id, caller.clone(), &binding, client);
+        let result = self.publish_reserved(id, caller, &binding, client);
+        self.state.lock().creating = false;
+        reservation.published = true;
+        self.creation_finished.send_replace(());
+        result
+    }
+    fn publish_reserved(
+        &self,
+        id: u32,
+        caller: CallerIdentity,
+        binding: &Arc<DocumentBinding<NativeRun>>,
+        client: NativeClient,
+    ) -> Result<u32, SafeError> {
+        let resource = OwnedClient::new(id, caller.clone(), binding, client);
         let closing = {
             let mut state = self.state.lock();
-            state.creating = false;
             state.resource = Some(resource.clone());
             state.closing
         };
-        reservation.published = true;
-        self.creation_finished.send_replace(());
         if closing {
             resource.retire();
             return Err(error("REMOTE_CLIENT_CLOSED"));
@@ -627,10 +903,11 @@ impl RemoteClientService {
             resource.retire();
             return Err(error("REMOTE_CLIENT_CLOSED"));
         }
-        if let Err(failure) = resource.check() {
+        if let Err(failure) = resource.check_private() {
             resource.retire();
             return Err(failure);
         }
+        resource.published.store(true, Ordering::Release);
         Ok(id)
     }
     fn get(
@@ -659,23 +936,29 @@ impl RemoteClientService {
             return Err(error("FORBIDDEN"));
         }
         binding.check_admitted(caller)?;
+        resource.check()?;
         Ok(resource)
     }
     /// Seal native admission atomically with observing any original owner.
     /// Retirement notification runs outside the state lock.
     pub(crate) fn begin_shutdown(&self) -> bool {
-        let (waiting, resource) = {
+        let (waiting, resource, stop) = {
             let mut state = self.state.lock();
             state.closing = true;
             (
                 state.creating
+                    || state.async_creating
                     || state.creation_unknown
                     || state.resource.is_some()
                     || state.has_keys(),
                 state.resource.clone(),
+                state.creation_stop.clone(),
             )
         };
         self.signal_keys();
+        if let Some(stop) = stop {
+            stop.send_replace(true);
+        }
         if let Some(resource) = resource {
             resource.retire();
         }
@@ -688,6 +971,10 @@ impl RemoteClientService {
         // Subscribe before checking state so publication/drop cannot be lost.
         let mut finished = self.creation_finished.subscribe();
         self.begin_shutdown();
+        let creation = self.state.lock().creation_id;
+        if let Some(id) = creation {
+            let _ = self.wait_creation(id).await;
+        }
         let resource = loop {
             {
                 let state = self.state.lock();
@@ -733,7 +1020,10 @@ impl RemoteClientService {
                     ExitDecision::Prevent
                 }
                 ExitIntent::Idle
-                    if state.creating || state.resource.is_some() || state.has_keys() =>
+                    if state.creating
+                        || state.async_creating
+                        || state.resource.is_some()
+                        || state.has_keys() =>
                 {
                     state.exit = ExitIntent::Waiting(code);
                     ExitDecision::Wait(code)
@@ -888,6 +1178,8 @@ pub(crate) async fn remote_client_close(
     service.close_resource(resource).await?;
     binding.check_admitted(&caller)
 }
+#[cfg(test)]
+use crate::tests::remote_channels as current_test_channels;
 #[cfg(test)]
 mod tests {
     use super::*;

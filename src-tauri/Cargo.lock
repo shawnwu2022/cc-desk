@@ -517,6 +517,7 @@ version = "0.1.0"
 dependencies = [
  "cc-desk-remote-record",
  "cc-desk-remote-security",
+ "cc-desk-remote-transport",
  "tokio",
 ]
 

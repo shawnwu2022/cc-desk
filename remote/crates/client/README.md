@@ -75,3 +75,18 @@ $env:CARGO_INCREMENTAL='0'
 cargo test --offline --locked --manifest-path src-tauri/Cargo.toml --features remote-client-ipc --lib remote_client_ipc
 cargo test --offline --locked --manifest-path src-tauri/Cargo.toml --features remote-client-ipc --lib revoke_hook_tests
 ```
+
+The native-only `bootstrap::connect_native` composes existing WSS admission,
+mux, RPK TLS, AppBind, grant and installed-peer proof. NativeClient retains the
+original mux and cancellation owner, signals all owners before joining, and
+retains cleanup slots across native poll/clock panic. The application retains
+one original creation task; its private OwnedClient is visible only after
+document registration and exact current native signing-attempt publication.
+Late/stale results retire through that task; Unknown cleanup seals admission.
+The short signing horizon does not bound an installed channel lifetime.
+
+`install_profile` obtains all three signers from the service-owned native
+authority, preserving its original approval/profile/presence/relay tuple and
+the profile's existing ClientGrantState/clock. No production profile source or
+presence approval is enabled. TEST_ONLY memory and self-owned loopback fixtures
+do not certify full production WSS-to-CNG, phone, actual WebView or real CLI.

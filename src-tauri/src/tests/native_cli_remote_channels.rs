@@ -32,7 +32,7 @@ impl NativeGrantSigner for PublicSigner {
         Box::pin(async move { Ok(support::signed(request.payload(), request.issuer_kid())) })
     }
 }
-pub(super) async fn channels(
+pub(crate) async fn channels(
     scope: SessionScope,
 ) -> (RunningChannel, RunningChannel, GrantGate, CancelHandle) {
     let local = |client| {

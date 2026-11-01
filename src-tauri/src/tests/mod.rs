@@ -177,3 +177,7 @@ mod version_history_return_checkpoint;
 
 mod desktop_updater_http;
 mod desktop_updater_policy;
+
+#[cfg(feature = "remote-client-ipc")]
+#[path = "native_cli_remote_channels.rs"]
+pub(crate) mod remote_channels;

@@ -201,6 +201,9 @@ impl NativeSignerAuthority {
             approved_until,
         }))
     }
+    pub(crate) fn matches_origin(&self, origin: &CanonicalOrigin) -> bool {
+        self.origin == *origin
+    }
     pub(crate) fn assemble(&self, end: Instant) -> Result<NativeSignerSet, SignFailure> {
         let attempt = self
             .fence

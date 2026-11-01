@@ -3,9 +3,8 @@ use super::*;
 use crate::cli::native_runtime::NativeRuntime;
 use crate::remote_host::RemoteHostService;
 use crate::run_supervisor::{NativeRunPin, NativeShutdown, NativeShutdownObservation};
+use crate::tests::remote_channels as channels;
 use cc_desk_remote_host::native_host::WriterRetirement;
-#[path = "native_cli_remote_channels.rs"]
-mod channels;
 struct Cleanup {
     supervisor: Arc<NativeRunSupervisor>,
     host: Arc<RemoteHostService>,

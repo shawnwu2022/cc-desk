@@ -96,6 +96,22 @@ struct AttemptHooks {
     returned: Option<Box<dyn FnOnce() + Send>>,
 }
 impl NativeSigningAttempt {
+    /// Linearize first publication against signing generation and approval expiry.
+    #[cfg(feature = "remote-client-ipc")]
+    pub(crate) fn publish_if_current<T>(
+        &self,
+        publish: impl FnOnce(&dyn Fn() -> bool) -> T,
+    ) -> Result<T, SignFailure> {
+        let generation = self.fence.generation.lock();
+        if !self.valid_locked(*generation) {
+            return Err(SignFailure::Closed);
+        }
+        #[cfg(test)]
+        self.before_admission();
+        // The caller must revalidate immediately at its visibility store, after
+        // acquiring its own publication lock. The common fence stays held.
+        Ok(publish(&|| self.valid_locked(*generation)))
+    }
     pub(crate) fn is_current(&self) -> bool {
         self.valid_locked(*self.fence.generation.lock())
     }

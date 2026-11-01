@@ -1,6 +1,7 @@
 //! Native client data-owner bridge. Construct only from the original granted
 //! client channel, never a JS identity, connection label or authorization flag.
 //! No IPC registration, listener, enrollment or automatic retry is installed.
+pub mod bootstrap;
 use cc_desk_remote_record::{command, control_io as wire, grant::SessionScope, projection};
 pub use cc_desk_remote_security::DataError;
 use cc_desk_remote_security::{BoundDataAuthority, Role, RunningChannel};
@@ -12,6 +13,8 @@ pub struct NativeClient {
     scope: SessionScope,
     fence: u64,
     pending: Mutex<()>,
+    mux: Option<cc_desk_remote_transport::OwnedTunnel>,
+    lifetime_cancel: Option<cc_desk_remote_security::CancelHandle>,
 }
 /// Bounded opaque wire parts. The UI reducer must still install the complete
 /// semantic frame; returning these bytes never authorizes input or an ACK.
@@ -130,24 +133,53 @@ impl NativeClient {
         channel: RunningChannel,
         proof: cc_desk_remote_security::ClientInstalledPeer,
     ) -> Result<Self, DataError> {
-        let fence = proof.consume_for(&channel)?;
-        Self::construct(channel, fence)
+        Self::from_installed_retained(channel, proof).map_err(|original| original.0)
+    }
+    fn from_installed_retained(
+        channel: RunningChannel,
+        proof: cc_desk_remote_security::ClientInstalledPeer,
+    ) -> Result<Self, Box<(DataError, RunningChannel)>> {
+        let fence = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            proof.consume_for(&channel)
+        })) {
+            Ok(Ok(fence)) => fence,
+            Ok(Err(e)) => return Err(Box::new((e, channel))),
+            Err(_) => return Err(Box::new((DataError::Uncertain, channel))),
+        };
+        Self::construct_retained(channel, fence)
     }
     fn construct(channel: RunningChannel, fence: u64) -> Result<Self, DataError> {
-        let authority = channel.authority();
-        if authority.local_role() != Role::Client {
-            return Err(DataError::Role);
-        }
-        authority.check()?;
-        if fence == 0 {
-            return Err(DataError::Fence);
-        }
-        let scope = authority.scope().clone();
+        Self::construct_retained(channel, fence).map_err(|original| original.0)
+    }
+    fn construct_retained(
+        channel: RunningChannel,
+        fence: u64,
+    ) -> Result<Self, Box<(DataError, RunningChannel)>> {
+        // Validate while borrowing the original owner; native clock/provider
+        // panic cannot unwind a moved RunningChannel out of the cleanup slot.
+        let checked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let authority = channel.authority();
+            if authority.local_role() != Role::Client {
+                return Err(DataError::Role);
+            }
+            authority.check()?;
+            if fence == 0 {
+                return Err(DataError::Fence);
+            }
+            Ok(authority.scope().clone())
+        }));
+        let scope = match checked {
+            Ok(Ok(scope)) => scope,
+            Ok(Err(e)) => return Err(Box::new((e, channel))),
+            Err(_) => return Err(Box::new((DataError::Uncertain, channel))),
+        };
         Ok(Self {
             channel,
             scope,
             fence,
             pending: Mutex::new(()),
+            mux: None,
+            lifetime_cancel: None,
         })
     }
     pub fn binding_id(&self) -> [u8; 32] {
@@ -274,9 +306,25 @@ impl NativeClient {
     /// Invalidates this exact channel synchronously; close() still joins it.
     pub fn request_close(&self) {
         self.channel.authority().request_close();
+        if let Some(cancel) = &self.lifetime_cancel {
+            cancel.cancel();
+        }
+        if let Some(mux) = &self.mux {
+            mux.request_close();
+        }
+    }
+    /// Signal all owners before awaiting any; a cancelled observer leaves every
+    /// original JoinHandle retained in its owner slot.
+    pub async fn retire(&self) -> Result<DataError, DataError> {
+        self.request_close();
+        let reason = self.channel.wait_closed().await;
+        if let Some(mux) = &self.mux {
+            mux.wait_closed().await.map_err(|_| DataError::Uncertain)?;
+        }
+        Ok(reason)
     }
     pub async fn close(&self) -> DataError {
-        self.channel.close().await
+        self.retire().await.unwrap_or(DataError::Uncertain)
     }
 }
 #[cfg(test)]

@@ -24,6 +24,14 @@ impl NativeGrantSigner for PublicSigner {
 async fn peer_channels(
     now: Arc<AtomicU64>,
 ) -> (RunningChannel, RunningChannel, GrantGate, CancelHandle) {
+    peer_channels_clock(Arc::new(move || {
+        Ok(now.load(std::sync::atomic::Ordering::Acquire))
+    }))
+    .await
+}
+async fn peer_channels_clock(
+    clock: Arc<dyn GrantClock>,
+) -> (RunningChannel, RunningChannel, GrantGate, CancelHandle) {
     let local = |client| {
         let (k, p) = identities::identity(client, false);
         LocalIdentity::new(
@@ -76,8 +84,6 @@ async fn peer_channels(
         )
     );
     let (c, h) = (c.unwrap(), h.unwrap());
-    let clock: Arc<dyn GrantClock> =
-        Arc::new(move || Ok(now.load(std::sync::atomic::Ordering::Acquire)));
     let mut gate =
         GrantGate::for_binding(h.context(), support::admin(), [4; 32], clock.clone()).unwrap();
     let mut state = ClientGrantState::new(clock);
@@ -108,6 +114,60 @@ async fn peer_channels(
 
 // Fixture uses real mutually authenticated TLS and actual grant_client/grant_host.
 use super::*;
+#[tokio::test]
+async fn constructor_native_clock_panic_returns_original_owner_for_join() {
+    let panics = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = panics.clone();
+    let clock: Arc<dyn GrantClock> = Arc::new(move || {
+        assert!(
+            !flag.load(std::sync::atomic::Ordering::Acquire),
+            "TEST_ONLY constructor clock panic"
+        );
+        Ok(1000)
+    });
+    let (c, h, _gate, _cancel) = peer_channels_clock(clock).await;
+    let r = h.host_install_request().await.unwrap();
+    let (proof, done) = tokio::join!(c.client_installed(), h.complete_host_install(r, 7));
+    done.unwrap();
+    panics.store(true, std::sync::atomic::Ordering::Release);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        NativeClient::from_installed_retained(c, proof.unwrap())
+    }));
+    panics.store(false, std::sync::atomic::Ordering::Release);
+    let retained = match result {
+        Ok(Err(original)) => {
+            let (error, channel) = *original;
+            channel.close().await;
+            error == DataError::Uncertain
+        }
+        Ok(Ok(client)) => {
+            client.close().await;
+            false
+        }
+        Err(_) => false,
+    };
+    h.close().await;
+    assert!(
+        retained,
+        "native validation panic must return the exact original joinable channel"
+    );
+}
+
+#[tokio::test]
+async fn installed_constructor_failure_keeps_the_original_channel_joinable() {
+    let (c, h, _gate, _cancel) = peer_channels(Arc::new(AtomicU64::new(1000))).await;
+    let r = h.host_install_request().await.unwrap();
+    let (proof, done) = tokio::join!(c.client_installed(), h.complete_host_install(r, 7));
+    done.unwrap();
+    c.authority().request_close();
+    let rejected = match NativeClient::from_installed_retained(c, proof.unwrap()) {
+        Err(original) => original,
+        Ok(_) => panic!("closed owner accepted"),
+    };
+    let (_, original) = *rejected;
+    original.close().await;
+    h.close().await;
+}
 
 #[tokio::test]
 async fn peer_install_old_constructor_refuses_pending_and_ready_and_proof_is_consumed() {

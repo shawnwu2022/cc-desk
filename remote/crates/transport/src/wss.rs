@@ -225,5 +225,6 @@ mod admission;
 #[cfg(any(test, feature = "test-only-loopback"))]
 pub use admission::test_only_connect_admitted_loopback;
 pub use admission::{
-    RelayAdmissionIdentity, RelayRole, RelaySigner, SignError, SigningRequest, connect_admitted,
+    AdmittedSocket, RelayAdmissionIdentity, RelayRole, RelaySigner, SignError, SigningRequest,
+    connect_admitted,
 };

@@ -271,15 +271,20 @@ keys refuse renewal. Queued no-effect observer cancellation and discarded known
 Ready results do not close healthy keys; cancellation after Started keeps Unknown.
 Old objects/tickets cannot authorize a new generation or cancel its request.
 
-This is a native signing seam, not a connected application reconnect path. The
-primary tree still only has synchronous `install_native`; actual async
-`install_profile`/`bootstrap::connect_native` is in the separately frozen provider
-tree. Integrating its original NativeClient custody with an exact current-attempt
-publication gate remains OPEN; a before/after check is insufficient. No duplicate
-bootstrap or new install wrapper is supplied here. A short signing attempt never
-replaces an installed channel's original grant/document lifetime. Integration
-must retain its original ClientGrantState, GrantClock and monotonic anchor;
-fresh signer sets neither construct them nor restore them from signed COSE.
+The native-only async `install_profile` now reuses the original
+`bootstrap::connect_native` and retained creation task. It obtains signer objects
+from this service's original authority, checks the frozen origin and replaces
+endpoint/relay/grant signers together; the input profile's original
+ClientGrantState, GrantClock and monotonic anchor remain intact. The completed
+NativeClient first enters the service's private OwnedClient custody. Document
+registration and a common signing-fence publication gate precede visibility to
+get/Data; a stale or expired result is joined through the original creation task.
+Observer cancellation retains its original task and resource. Unknown cleanup
+seals admission. The short signing horizon only gates first publication; an
+installed channel keeps its original grant/document/fence lifetime. Fresh signer
+sets do not restore state from signed COSE. No production profile loader, native
+presence source or JS connection command is supplied; missing sources still fail
+closed. Current/descriptor UI wiring is separate from this native integration.
 No reconnect, stale-client publication or cross-connection replay qualification
 follows from the bounded in-memory RPK handshakes or equal wire expiry fixture.
 

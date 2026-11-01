@@ -1,5 +1,7 @@
 //! Bounded opaque transport. This module grants no endpoint or PTY authority.
 mod deadline;
+#[cfg(test)]
+mod owned_tests;
 pub mod records;
 pub mod wss;
 pub fn websocket_config() -> tokio_tungstenite::tungstenite::protocol::WebSocketConfig {
@@ -17,6 +19,119 @@ pub struct RouteEndpoint(tokio::io::DuplexStream);
 pub fn bounded_tunnel() -> (tokio::io::DuplexStream, RouteEndpoint) {
     let (app, route) = tokio::io::duplex(TUNNEL_BUFFER);
     (app, RouteEndpoint(route))
+}
+/// One original mux driver. Cancelling a wait leaves its JoinHandle in this slot.
+/// A successful wait attests task termination, not a normal protocol exit.
+pub struct OwnedTunnel {
+    stop: tokio::sync::watch::Sender<bool>,
+    join: tokio::sync::Mutex<Option<tokio::task::JoinHandle<Result<(), TransportError>>>>,
+    joined: std::sync::Arc<std::sync::atomic::AtomicU8>,
+}
+#[cfg(feature = "test-only-loopback")]
+#[doc(hidden)]
+pub struct TestOnlyTunnelRetirement(std::sync::Arc<std::sync::atomic::AtomicU8>);
+#[cfg(feature = "test-only-loopback")]
+impl TestOnlyTunnelRetirement {
+    pub fn known_joined(&self) -> bool {
+        self.0.load(std::sync::atomic::Ordering::Acquire) == 1
+    }
+}
+impl OwnedTunnel {
+    #[cfg(feature = "test-only-loopback")]
+    #[doc(hidden)]
+    pub fn test_only_retirement(&self) -> TestOnlyTunnelRetirement {
+        TestOnlyTunnelRetirement(self.joined.clone())
+    }
+    pub fn request_close(&self) {
+        self.stop.send_replace(true);
+    }
+    pub async fn wait_closed(&self) -> Result<(), TransportError> {
+        use std::sync::atomic::Ordering;
+        let mut slot = self.join.lock().await;
+        if let Some(task) = slot.as_mut() {
+            let known = task.await.is_ok();
+            *slot = None;
+            self.joined
+                .store(if known { 1 } else { 2 }, Ordering::Release);
+        }
+        if self.joined.load(Ordering::Acquire) == 1 {
+            Ok(())
+        } else {
+            Err(TransportError::Io)
+        }
+    }
+}
+impl Drop for OwnedTunnel {
+    fn drop(&mut self) {
+        self.request_close();
+    }
+}
+/// Production entry accepts only the original admitted WebSocket.
+pub fn start_admitted(
+    ws: wss::AdmittedSocket,
+    tunnel: [u8; 16],
+    budget: std::time::Duration,
+) -> Result<(tokio::io::DuplexStream, OwnedTunnel), TransportError> {
+    start_owned(ws, tunnel, budget)
+}
+/// In-memory outer WebSocket fixture; never a relay admission or production path.
+#[cfg(feature = "test-only-loopback")]
+#[doc(hidden)]
+pub async fn test_only_memory_mux_pair(
+    tunnel: [u8; 16],
+    budget: std::time::Duration,
+) -> Result<
+    (
+        (tokio::io::DuplexStream, OwnedTunnel),
+        (tokio::io::DuplexStream, OwnedTunnel),
+    ),
+    TransportError,
+> {
+    let (a, b) = tokio::io::duplex(TUNNEL_BUFFER);
+    let a = tokio_tungstenite::WebSocketStream::from_raw_socket(
+        a,
+        tokio_tungstenite::tungstenite::protocol::Role::Client,
+        Some(websocket_config()),
+    )
+    .await;
+    let b = tokio_tungstenite::WebSocketStream::from_raw_socket(
+        b,
+        tokio_tungstenite::tungstenite::protocol::Role::Server,
+        Some(websocket_config()),
+    )
+    .await;
+    Ok((
+        start_owned(a, tunnel, budget)?,
+        start_owned(b, tunnel, budget)?,
+    ))
+}
+fn start_owned<S>(
+    ws: tokio_tungstenite::WebSocketStream<S>,
+    tunnel: [u8; 16],
+    budget: std::time::Duration,
+) -> Result<(tokio::io::DuplexStream, OwnedTunnel), TransportError>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    if tunnel == [0; 16] || budget.is_zero() || budget > MAX_IO_BUDGET {
+        return Err(TransportError::Limit);
+    }
+    let (stream, route) = bounded_tunnel();
+    let (stop, rx) = tokio::sync::watch::channel(false);
+    let task = tokio::spawn(drive(
+        ws,
+        std::collections::HashMap::from([(tunnel, route)]),
+        rx,
+        budget,
+    ));
+    Ok((
+        stream,
+        OwnedTunnel {
+            stop,
+            join: tokio::sync::Mutex::new(Some(task)),
+            joined: std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0)),
+        },
+    ))
 }
 #[derive(Debug, PartialEq, Eq)]
 pub enum TransportError {
