@@ -220,3 +220,129 @@ fn ManagedJob_CloseAfterClaimCannotCompeteForOriginalReader_002() {
         JobLaunchObservation::Empty
     );
 }
+
+#[test]
+#[allow(non_snake_case)]
+fn OutputReadObservation_ManagedNormalAndTransportFailureKeepOriginalProvenance_005() {
+    use crate::run_supervisor::{NativeShutdownObservation, OriginalOutputReadObservation};
+    use crate::terminal_transport::TransportLimits;
+    for mode in ["normal", "route-error", "backpressure"] {
+        let transports = Arc::new(if mode == "backpressure" {
+            TerminalTransports::with_limits(
+                TransportLimits::with_ack_staleness(1, 1, 0, 1, Duration::from_millis(20)).unwrap(),
+            )
+        } else {
+            TerminalTransports::new()
+        });
+        let supervisor = Arc::new(NativeRunSupervisor::new(transports.clone()));
+        let fixture = Fixture::with_runtime_environment("hold", supervisor, transports, true);
+        let runtime = Arc::new(NativeRuntime::with_owned_components_for_test(
+            fixture.service.clone(),
+            fixture.transports.clone(),
+            fixture.supervisor.clone(),
+        ));
+        let _cleanup = Cleanup(runtime.clone());
+        let events = fixture.events.clone();
+        let reject = mode == "route-error";
+        let status = runtime
+            .start_managed_run(&fixture.caller, &fixture.request, |_| {
+                fixture.routes.bind(1, Box::new(|| Ok(())), || {
+                    Ok(Channel::new(move |body| {
+                        if reject {
+                            return Err(tauri::Error::Io(std::io::Error::other(
+                                "TEST_ONLY_ROUTE_REJECTED",
+                            )));
+                        }
+                        if let InvokeResponseBody::Json(text) = body {
+                            events.lock().push(serde_json::from_str(&text).unwrap());
+                        }
+                        Ok(())
+                    }))
+                })
+            })
+            .expect("fixed managed Node; original runtime cleanup precedes launch");
+        let until = Instant::now() + Duration::from_secs(10);
+        let (before, ready_reached) = loop {
+            let observation = fixture
+                .supervisor
+                .original_output_observation_for_test(&status.run);
+            let ready = fixture.child_reports() > 0
+                && if mode == "normal" {
+                    !fixture.events.lock().is_empty()
+                } else {
+                    observation.as_ref().is_some_and(|(joined, _)| *joined)
+                };
+            if ready || Instant::now() >= until {
+                break (observation, ready);
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        let original = fixture
+            .service
+            .registry()
+            .resource(&fixture.caller, &status.run)
+            .unwrap();
+        let active_before = original
+            .process
+            .managed_job
+            .as_ref()
+            .unwrap()
+            .active_processes()
+            .ok();
+        drop(original);
+        let mut stop = fixture
+            .supervisor
+            .begin_shutdown_owned(vec![fixture.supervisor.pin_shutdown(&status.run)])
+            .unwrap();
+        let until = Instant::now() + Duration::from_secs(10);
+        let facts = loop {
+            let facts = stop
+                .managed_retirement(&status.run)
+                .expect("same original managed pin remains present");
+            if facts.original_resources_retired() || Instant::now() >= until {
+                break facts;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        let still_unknown = matches!(
+            stop.observe_run(&status.run),
+            NativeShutdownObservation::Unknown {
+                io_threads_joined: false,
+                ..
+            }
+        );
+        eprintln!("TEST_ONLY_ORIGINAL_OUTPUT_READ mode={mode} ready_reached={ready_reached} before={before:?} active_before={active_before:?} facts={facts:?} whole_retirement_unknown={still_unknown}");
+        assert!(
+            ready_reached,
+            "fixed Node and requested reader readiness must be observed before stop"
+        );
+        assert!(
+            facts.original_resources_retired(),
+            "original Job and Rust owners must clean up before assertion: {facts:?}"
+        );
+        assert!(
+            still_unknown,
+            "raw pipe facts never release the whole-exit gate"
+        );
+        assert_eq!(
+            active_before,
+            Some(1),
+            "this original fixed Node must still be active before stop"
+        );
+        if mode != "normal" {
+            assert!(
+                matches!(
+                    before,
+                    Some((true, OriginalOutputReadObservation::Unobserved))
+                ),
+                "transport failure joined its original reader while the raw outcome remained Unobserved"
+            );
+            assert_eq!(
+                facts.original_output_read,
+                OriginalOutputReadObservation::Unobserved,
+                "later stop/IO Drop cannot fabricate a read outcome after that reader joined"
+            );
+        }
+        // Normal is observation-only: ReadZero cannot distinguish a zero-byte write from normalized ERROR_BROKEN_PIPE.
+    }
+}

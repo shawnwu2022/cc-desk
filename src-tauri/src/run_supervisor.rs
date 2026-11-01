@@ -20,16 +20,74 @@ use std::time::{Duration, Instant};
 
 type RunIdentity = (String, u32);
 
+/// Original Read outcome only. ReadZero is ambiguous: filedescriptor maps both
+/// a successful zero-byte read and Windows ERROR_BROKEN_PIPE to Ok(0).
+/// This observation never attests EOF or internal console/thread exit.
+#[cfg(feature = "remote-host")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub(crate) enum OriginalOutputReadObservation {
+    Unobserved = 0,
+    ReadZero = 1,
+    #[cfg(windows)]
+    RawBrokenPipe109 = 2,
+    ReadError = 3,
+    Panicked = 4,
+}
+#[cfg(feature = "remote-host")]
+impl OriginalOutputReadObservation {
+    #[cfg(any(windows, test))]
+    fn observe(end: &std::sync::atomic::AtomicU8) -> Self {
+        match end.load(Ordering::Acquire) {
+            0 => Self::Unobserved,
+            1 => Self::ReadZero,
+            #[cfg(windows)]
+            2 => Self::RawBrokenPipe109,
+            3 => Self::ReadError,
+            _ => Self::Panicked,
+        }
+    }
+}
+
 #[cfg(feature = "remote-host")]
 struct CanonicalReader {
     original: Box<dyn std::io::Read + Send>,
     output: Option<cc_desk_remote_host::native_host::NativeOutputIngress>,
     offset: u64,
+    observation: Arc<std::sync::atomic::AtomicU8>,
 }
 #[cfg(feature = "remote-host")]
 impl std::io::Read for CanonicalReader {
     fn read(&mut self, b: &mut [u8]) -> std::io::Result<usize> {
-        let count = self.original.read(b)?;
+        struct OriginalReadPanic<'a>(&'a std::sync::atomic::AtomicU8);
+        impl Drop for OriginalReadPanic<'_> {
+            fn drop(&mut self) {
+                if std::thread::panicking() {
+                    self.0.fetch_max(
+                        OriginalOutputReadObservation::Panicked as u8,
+                        Ordering::Release,
+                    );
+                }
+            }
+        }
+        let panic = OriginalReadPanic(&self.observation);
+        let result = self.original.read(b);
+        drop(panic); // Only the actual original Read is covered by this guard.
+        let observed = match &result {
+            Ok(0) if !b.is_empty() => Some(OriginalOutputReadObservation::ReadZero),
+            #[cfg(windows)]
+            Err(error) if !b.is_empty() && error.raw_os_error() == Some(109) => {
+                Some(OriginalOutputReadObservation::RawBrokenPipe109)
+            }
+            Err(_) => Some(OriginalOutputReadObservation::ReadError),
+            _ => None,
+        };
+        if let Some(observed) = observed {
+            // Errors/panics are sticky; later zero or raw 109 cannot reopen them.
+            self.observation
+                .fetch_max(observed as u8, Ordering::Release);
+        }
+        let count = result?;
         if count > 0 {
             if let Some(output) = &mut self.output {
                 output.feed(self.offset, &b[..count]);
@@ -381,6 +439,19 @@ impl NativeRunSupervisor {
         self.core.active.lock().contains_key(&identity(run))
     }
 
+    #[cfg(all(test, feature = "remote-host"))]
+    pub(crate) fn original_output_observation_for_test(
+        &self,
+        run: &RunKey,
+    ) -> Option<(bool, OriginalOutputReadObservation)> {
+        let state = self.core.active.lock().get(&identity(run)).cloned()?;
+        let joined = state.output_reader.lock().observe();
+        Some((
+            joined,
+            OriginalOutputReadObservation::observe(&state.output_read_observation),
+        ))
+    }
+
     #[cfg(test)]
     pub(crate) fn stream_for_test(&self, run: &RunKey) -> Option<Arc<TerminalStream>> {
         let state = self.core.active.lock().get(&identity(run)).cloned()?;
@@ -560,6 +631,7 @@ impl RunSupervisor for NativeRunSupervisor {
                     original: reader,
                     output: native_output.take(),
                     offset: 0,
+                    observation: reader_state.output_read_observation.clone(),
                 });
                 loop {
                     match stream.pump_once_with_end(&mut *reader, crate::pty::is_pty_stream_end) {
@@ -741,6 +813,8 @@ struct SupervisedRun {
     lifecycle: Mutex<LifecycleRecord>,
     stream: Mutex<Option<Arc<TerminalStream>>>,
     resource: Mutex<Option<Arc<NativeRun>>>,
+    #[cfg(feature = "remote-host")]
+    output_read_observation: Arc<std::sync::atomic::AtomicU8>,
     stop_control: Mutex<()>,
     stop_requested: AtomicBool,
     waiter_running: AtomicBool,
@@ -789,6 +863,10 @@ impl SupervisedRun {
             lifecycle: Mutex::new(lifecycle),
             stream: Mutex::new(None),
             resource: Mutex::new(Some(resource)),
+            #[cfg(feature = "remote-host")]
+            output_read_observation: Arc::new(std::sync::atomic::AtomicU8::new(
+                OriginalOutputReadObservation::Unobserved as u8,
+            )),
             stop_control: Mutex::new(()),
             stop_requested: AtomicBool::new(false),
             waiter_running: AtomicBool::new(false),
@@ -1796,6 +1874,11 @@ pub(crate) struct NativeShutdown {
 #[derive(Debug)]
 pub(crate) struct ManagedRetirementFacts {
     pub(crate) job_active_processes: Option<u32>,
+    #[allow(
+        dead_code,
+        reason = "Diagnostic only; deliberately does not unlock whole-resource retirement"
+    )]
+    pub(crate) original_output_read: OriginalOutputReadObservation,
     pub(crate) direct_child_reaped: bool,
     pub(crate) output_reader_joined: bool,
     pub(crate) wait_workers_joined: bool,
@@ -1915,6 +1998,9 @@ impl NativeShutdown {
         let job = state.managed_job.as_ref()?;
         Some(ManagedRetirementFacts {
             job_active_processes: job.active_processes().ok(),
+            original_output_read: OriginalOutputReadObservation::observe(
+                &state.output_read_observation,
+            ),
             direct_child_reaped: state.reaped.load(Ordering::SeqCst),
             output_reader_joined: state.output_reader.lock().observe(),
             wait_workers_joined: state.wait_workers.lock().observe() == WaitWorkersState::Joined,
@@ -2157,6 +2243,10 @@ mod wait_worker_join_tests {
             request_id: "TEST_ONLY".into(),
             stream: Mutex::new(None),
             resource: Mutex::new(None),
+            #[cfg(feature = "remote-host")]
+            output_read_observation: Arc::new(std::sync::atomic::AtomicU8::new(
+                OriginalOutputReadObservation::Unobserved as u8,
+            )),
             stop_control: Mutex::new(()),
             stop_requested: AtomicBool::new(false),
             waiter_running: AtomicBool::new(false),
@@ -2265,5 +2355,95 @@ mod wait_worker_join_tests {
         drop(gate);
         assert!(finish(&state) == WaitWorkersState::Unknown);
         assert!(state.wait_workers.lock().observe() == WaitWorkersState::Unknown);
+    }
+}
+
+#[cfg(all(test, feature = "remote-host"))]
+#[allow(non_snake_case)]
+mod raw_output_read_tests {
+    use super::*;
+    use std::io::{self, Read};
+    use std::sync::atomic::AtomicU8;
+    enum Step {
+        Zero,
+        Error(io::Error),
+        Panic,
+    }
+    struct Scripted(std::collections::VecDeque<Step>);
+    impl Read for Scripted {
+        fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+            match self.0.pop_front().unwrap_or(Step::Zero) {
+                Step::Zero => Ok(0),
+                Step::Error(e) => Err(e),
+                Step::Panic => panic!("TEST_ONLY_ORIGINAL_READ_PANIC"),
+            }
+        }
+    }
+    fn reader(steps: Vec<Step>) -> (CanonicalReader, Arc<AtomicU8>) {
+        let end = Arc::new(AtomicU8::new(0));
+        (
+            CanonicalReader {
+                original: Box::new(Scripted(steps.into())),
+                output: None,
+                offset: 0,
+                observation: end.clone(),
+            },
+            end,
+        )
+    }
+    #[test]
+    fn OutputReadObservation_ZeroIsAmbiguousAndEmptyBufferUnobserved_001() {
+        let (mut reader, end) = reader(vec![Step::Zero, Step::Zero]);
+        assert_eq!(reader.read(&mut []).unwrap(), 0);
+        assert_eq!(
+            OriginalOutputReadObservation::observe(&end),
+            OriginalOutputReadObservation::Unobserved
+        );
+        assert_eq!(reader.read(&mut [0]).unwrap(), 0);
+        assert_eq!(
+            OriginalOutputReadObservation::observe(&end),
+            OriginalOutputReadObservation::ReadZero
+        );
+    }
+    #[cfg(windows)]
+    #[test]
+    fn OutputReadObservation_ExactRawWindows109IsPreserved_002() {
+        let (mut reader, end) = reader(vec![Step::Error(io::Error::from_raw_os_error(109))]);
+        assert!(reader.read(&mut [0]).is_err());
+        assert_eq!(
+            OriginalOutputReadObservation::observe(&end),
+            OriginalOutputReadObservation::RawBrokenPipe109
+        );
+    }
+    #[test]
+    fn OutputReadObservation_ReadErrorsAndCancelStayFailedAfterLaterZero_003() {
+        for error in [
+            io::Error::from(io::ErrorKind::Interrupted),
+            io::Error::from(io::ErrorKind::UnexpectedEof),
+            io::Error::from(io::ErrorKind::BrokenPipe),
+            io::Error::from_raw_os_error(995),
+            io::Error::other("TEST_ONLY_READ_FAILURE"),
+        ] {
+            let (mut reader, end) = reader(vec![Step::Error(error), Step::Zero]);
+            assert!(reader.read(&mut [0]).is_err());
+            assert_eq!(reader.read(&mut [0]).unwrap(), 0);
+            assert_eq!(
+                OriginalOutputReadObservation::observe(&end),
+                OriginalOutputReadObservation::ReadError
+            );
+        }
+    }
+    #[test]
+    fn OutputReadObservation_PanicStaysFailedAfterLaterZero_004() {
+        let (mut reader, end) = reader(vec![Step::Panic, Step::Zero]);
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| reader.read(&mut [0])))
+                .is_err()
+        );
+        assert_eq!(reader.read(&mut [0]).unwrap(), 0);
+        assert_eq!(
+            OriginalOutputReadObservation::observe(&end),
+            OriginalOutputReadObservation::Panicked
+        );
     }
 }
