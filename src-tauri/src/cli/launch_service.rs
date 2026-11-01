@@ -553,6 +553,10 @@ impl LaunchService {
     }
 
     fn admit_owned_command(&self) -> Result<(PreparingStart, CommandOwner), SafeError> {
+        let shutdown = self.shutting_down.read();
+        if *shutdown {
+            return Err(error("RUN_SUPERVISOR_STOPPING"));
+        }
         let admission = self.admit_start()?;
         let owner = self.command_owners.register()?;
         Ok((admission, owner))
@@ -835,6 +839,14 @@ impl LaunchService {
 
     pub(crate) fn begin_shutdown(&self) {
         *self.shutting_down.write() = true;
+    }
+
+    /// Only meaningful after admission closure. This observes original command
+    /// owners settling; it does not join their operating-system threads.
+    #[cfg(feature = "remote-host")]
+    pub(crate) fn commands_settled_after_shutdown(&self) -> bool {
+        let shutdown = self.shutting_down.read();
+        *shutdown && *self.command_owners.active.lock() == 0
     }
 
     /// 普通 run 与一次性 command 分别保有 child；退出必须等待两类 owner 收口。
@@ -1398,6 +1410,75 @@ mod opencode_preparation_tests;
 #[cfg(test)]
 mod owned_command_tests {
     use super::*;
+
+    #[cfg(feature = "remote-host")]
+    #[test]
+    #[allow(non_snake_case)]
+    fn CommandShutdown_JoinedDesktopStillWaitsForOriginalCommandOwner_096() {
+        use super::super::native_runtime::{HostNativeObservation, HostNativeShutdown};
+        for unknown in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let repository =
+                WorkspaceRepository::open(temp.path().join("metadata/workspace.json")).unwrap();
+            let service = Arc::new(LaunchService::new(repository, Some(EnvMap::new()), None));
+            assert!(!service.commands_settled_after_shutdown());
+            let (_, mut owner) = service.admit_owned_command().unwrap();
+            let supervisor = crate::run_supervisor::NativeRunSupervisor::new(Arc::new(
+                crate::terminal_transport::TerminalTransports::new(),
+            ));
+            let native = unknown.then(|| {
+                let run = RunKey {
+                    run_id: "TEST_ONLY_ABSENT_COMMAND_SHUTDOWN".into(),
+                    generation: 1,
+                };
+                supervisor
+                    .begin_shutdown_owned(vec![supervisor.pin_shutdown(&run)])
+                    .unwrap()
+            });
+            let worker = std::thread::spawn(|| {});
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while !worker.is_finished() && Instant::now() < deadline {
+                std::thread::yield_now();
+            }
+            let finished = worker.is_finished();
+            let mut stop =
+                HostNativeShutdown::from_command_worker_for_test(service, worker, native);
+            let before = stop.observe(); // Joins the exact finished desktop worker.
+            owner.settled = true;
+            drop(owner); // This no-process owner is now positively settled.
+            let after = stop.observe();
+            assert!(finished);
+            assert_eq!(before, HostNativeObservation::Pending);
+            assert_eq!(
+                after,
+                if unknown {
+                    HostNativeObservation::Unknown
+                } else {
+                    HostNativeObservation::NoRemoteNativeResources
+                }
+            );
+        }
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn CommandShutdown_PrecheckedCommandCannotRegisterAfterClosure_095() {
+        let temp = tempfile::tempdir().unwrap();
+        let repository =
+            WorkspaceRepository::open(temp.path().join("metadata/workspace.json")).unwrap();
+        let service = LaunchService::new(repository, Some(EnvMap::new()), None);
+        // A probe's earlier current() result cannot authorize late registration.
+        assert!(!*service.shutting_down.read());
+        service.begin_shutdown();
+        let result = service.admit_owned_command();
+        let code = result.as_ref().err().map(|failure| failure.code.clone());
+        // Settle the no-process fixture before the RED assertion.
+        if let Ok((_, mut owner)) = result {
+            owner.settled = true;
+        }
+        assert_eq!(code, Some("RUN_SUPERVISOR_STOPPING".into()));
+        assert_eq!(*service.command_owners.active.lock(), 0);
+    }
 
     #[test]
     #[allow(non_snake_case)]

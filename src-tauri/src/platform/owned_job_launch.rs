@@ -11,13 +11,13 @@ use crate::version_history::maintenance::{OwnedChildTicket, StartTicket};
 use parking_lot::Mutex;
 use portable_pty::{CommandBuilder, JobSpawnError, PendingJobChild, PtyPair};
 use std::io::Read;
-use std::os::windows::io::{AsHandle, AsRawHandle, FromRawHandle, OwnedHandle};
+use std::os::windows::io::{AsHandle, AsRawHandle, FromRawHandle, IntoRawHandle, OwnedHandle};
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering},
     Arc, Weak,
 };
 use windows::Win32::{
-    Foundation::HANDLE,
+    Foundation::{CloseHandle, HANDLE},
     System::JobObjects::{
         JobObjectBasicAccountingInformation, QueryInformationJobObject, TerminateJobObject,
         JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
@@ -57,9 +57,25 @@ enum JobStopState {
 }
 #[cfg(test)]
 type StopEffect = Box<dyn FnOnce() -> Result<(), SafeError> + Send>;
+enum OriginalJobHandle {
+    Open(OwnedHandle),
+    // Opaque identity only. An uncertain raw value must never be used or dropped
+    // as an owned handle again: the numeric value may already have been reused.
+    CloseUnknown { _raw: usize },
+    Closed,
+}
+impl OriginalJobHandle {
+    fn open(&self) -> Result<&OwnedHandle, SafeError> {
+        match self {
+            Self::Open(handle) => Ok(handle),
+            Self::CloseUnknown { .. } => Err(error("MANAGED_JOB_CLOSE_UNKNOWN")),
+            Self::Closed => Err(error("MANAGED_JOB_HANDLE_CLOSED")),
+        }
+    }
+}
 /// One original Job/PTY identity. This is lifetime custody, not remote authority.
 pub(crate) struct ManagedJob {
-    original: OwnedHandle,
+    original: Mutex<OriginalJobHandle>,
     pty: Weak<OwnedPty>,
     snapshot: Arc<LaunchSnapshot>,
     reader: Mutex<ReaderOwner>,
@@ -90,19 +106,71 @@ impl ManagedJob {
         self.closed.load(Ordering::Acquire)
     }
     pub(crate) fn active_processes(&self) -> Result<u32, SafeError> {
-        let mut info = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
-        unsafe {
-            QueryInformationJobObject(
-                Some(HANDLE(self.original.as_raw_handle())),
-                JobObjectBasicAccountingInformation,
-                &mut info as *mut _ as _,
-                std::mem::size_of_val(&info) as u32,
-                None,
-            )
-        }
-        .map_err(|_| error("MANAGED_JOB_QUERY_UNKNOWN"))?;
-        Ok(info.ActiveProcesses)
+        self.with_job(query_active_processes)
     }
+    // Never let an unprotected raw handle escape this original ownership slot.
+    fn with_job<T>(
+        &self,
+        operation: impl FnOnce(HANDLE) -> Result<T, SafeError>,
+    ) -> Result<T, SafeError> {
+        let original = self.original.lock();
+        let handle = original.open()?;
+        operation(HANDLE(handle.as_raw_handle()))
+    }
+    /// The caller must already have joined all original owners and removed the
+    /// run from active/registry custody. Recheck this exact Job under its slot.
+    pub(crate) fn close_after_owners_retired(&self) -> Result<(), SafeError> {
+        self.close_original(|handle| {
+            unsafe { CloseHandle(handle) }.map_err(|_| error("MANAGED_JOB_CLOSE_UNKNOWN"))
+        })
+    }
+    fn close_original(
+        &self,
+        close: impl FnOnce(HANDLE) -> Result<(), SafeError>,
+    ) -> Result<(), SafeError> {
+        if !self.is_closed()
+            || self.stop_state.load(Ordering::Acquire) != JobStopState::Accepted as u8
+        {
+            return Err(error("MANAGED_JOB_CLOSE_PENDING"));
+        }
+        let mut original = self.original.lock();
+        let handle = original.open()?;
+        if query_active_processes(HANDLE(handle.as_raw_handle()))? != 0 {
+            return Err(error("MANAGED_JOB_CLOSE_PENDING"));
+        }
+        let OriginalJobHandle::Open(handle) =
+            std::mem::replace(&mut *original, OriginalJobHandle::Closed)
+        else {
+            unreachable!("queried open original Job")
+        };
+        let raw = handle.into_raw_handle();
+        // Poison before crossing the close boundary, including unwinding. Only
+        // a positively successful return may publish Closed under this lock.
+        *original = OriginalJobHandle::CloseUnknown { _raw: raw as usize };
+        if close(HANDLE(raw)).is_err() {
+            // Keep uncertain identity/custody, never reconstruct an OwnedHandle
+            // or query/terminate/retry this potentially reused numeric value.
+            return Err(error("MANAGED_JOB_CLOSE_UNKNOWN"));
+        }
+        *original = OriginalJobHandle::Closed;
+        Ok(())
+    }
+}
+fn query_active_processes(handle: HANDLE) -> Result<u32, SafeError> {
+    let mut info = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
+    unsafe {
+        QueryInformationJobObject(
+            Some(handle),
+            JobObjectBasicAccountingInformation,
+            &mut info as *mut _ as _,
+            std::mem::size_of_val(&info) as u32,
+            None,
+        )
+    }
+    .map_err(|_| error("MANAGED_JOB_QUERY_UNKNOWN"))?;
+    Ok(info.ActiveProcesses)
+}
+impl ManagedJob {
     pub(crate) fn request_stop(&self) -> Result<(), SafeError> {
         match self.stop_state.compare_exchange(
             JobStopState::Idle as u8,
@@ -111,7 +179,9 @@ impl ManagedJob {
             Ordering::Acquire,
         ) {
             Ok(_) => {}
-            Err(state) if state == JobStopState::Accepted as u8 => return Ok(()),
+            Err(state) if state == JobStopState::Accepted as u8 => {
+                return self.with_job(|_| Ok(()));
+            }
             Err(state) if state == JobStopState::InFlight as u8 => {
                 return Err(error("MANAGED_JOB_STOP_PENDING"))
             }
@@ -136,8 +206,9 @@ impl ManagedJob {
                 return effect();
             }
         }
-        unsafe { TerminateJobObject(HANDLE(self.original.as_raw_handle()), 1) }
-            .map_err(|_| error("MANAGED_JOB_STOP_UNKNOWN"))
+        self.with_job(|handle| {
+            unsafe { TerminateJobObject(handle, 1) }.map_err(|_| error("MANAGED_JOB_STOP_UNKNOWN"))
+        })
     }
     /// Called at actual supervisor insertion, before it may take the sole reader.
     pub(crate) fn register(
@@ -284,7 +355,7 @@ impl OwnedJobLaunchSlot {
             .take()
             .ok_or_else(|| error("MANAGED_JOB_MISSING"))?;
         let job = Arc::new(ManagedJob {
-            original: job,
+            original: Mutex::new(OriginalJobHandle::Open(job)),
             pty: Arc::downgrade(&pty),
             snapshot: attempt.snapshot,
             reader: Mutex::new(ReaderOwner::Claimed),
@@ -454,18 +525,8 @@ impl OwnedJobLaunchSlot {
             Root::Pending(root) => root.try_wait_root().unwrap(),
             Root::Started(root) => root.observe_exact_root().unwrap(),
         };
-        let mut information = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
-        unsafe {
-            QueryInformationJobObject(
-                Some(owned.job_handle()),
-                JobObjectBasicAccountingInformation,
-                &mut information as *mut _ as _,
-                std::mem::size_of_val(&information) as u32,
-                None,
-            )
-        }
-        .unwrap();
-        (signalled, information.ActiveProcesses)
+        let active = owned.with_job(query_active_processes).unwrap();
+        (signalled, active)
     }
     /// Call on the original blocking desktop-stop worker, never the UI/async
     /// observer. CreateProcess/ClosePseudoConsole are NOT preemptible deadlines.
@@ -522,22 +583,13 @@ impl OwnedJobLaunchSlot {
                 }
             }
             let active = if owned.assigned {
-                let mut information = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
-                if unsafe {
-                    QueryInformationJobObject(
-                        Some(owned.job_handle()),
-                        JobObjectBasicAccountingInformation,
-                        &mut information as *mut _ as _,
-                        std::mem::size_of_val(&information) as u32,
-                        None,
-                    )
+                match owned.with_job(query_active_processes) {
+                    Ok(active) => active,
+                    Err(_) => {
+                        owned.failed = true;
+                        return JobLaunchObservation::Unknown;
+                    }
                 }
-                .is_err()
-                {
-                    owned.failed = true;
-                    return JobLaunchObservation::Unknown;
-                }
-                information.ActiveProcesses
             } else {
                 0
             };
@@ -546,7 +598,12 @@ impl OwnedJobLaunchSlot {
             } else if !owned.stop_requested {
                 owned.stop_requested = true;
                 let result = if owned.assigned {
-                    unsafe { TerminateJobObject(owned.job_handle(), 1) }.map_err(|_| ())
+                    owned
+                        .with_job(|handle| {
+                            unsafe { TerminateJobObject(handle, 1) }
+                                .map_err(|_| error("MANAGED_JOB_STOP_UNKNOWN"))
+                        })
+                        .map_err(|_| ())
                 } else {
                     match owned.root.as_ref() {
                         Some(Root::Pending(root)) => {
@@ -595,19 +652,18 @@ impl OwnedJobLaunchSlot {
     }
 }
 impl Custody {
-    fn job_handle(&self) -> HANDLE {
-        HANDLE(
-            self.job
+    fn with_job<T>(
+        &self,
+        operation: impl FnOnce(HANDLE) -> Result<T, SafeError>,
+    ) -> Result<T, SafeError> {
+        if let Some(job) = self.job.as_ref() {
+            operation(HANDLE(job.as_raw_handle()))
+        } else {
+            self.managed
                 .as_ref()
-                .map(|job| job.as_raw_handle())
-                .unwrap_or_else(|| {
-                    self.managed
-                        .as_ref()
-                        .expect("original Job remains owned")
-                        .original
-                        .as_raw_handle()
-                }),
-        )
+                .ok_or_else(|| error("MANAGED_JOB_MISSING"))?
+                .with_job(operation)
+        }
     }
     fn begin_drain(&mut self) -> bool {
         if self
@@ -763,11 +819,13 @@ mod cleanup_error_tests {
         let (entered_tx, entered_rx) = std::sync::mpsc::channel();
         let (release_tx, release_rx) = std::sync::mpsc::channel();
         let job = Arc::new(ManagedJob {
-            original: unsafe { OwnedHandle::from_raw_handle(raw.0) },
+            original: Mutex::new(OriginalJobHandle::Open(unsafe {
+                OwnedHandle::from_raw_handle(raw.0)
+            })),
             pty: Weak::new(),
             snapshot,
             reader: Mutex::new(ReaderOwner::Claimed),
-            closed: Arc::new(AtomicBool::new(false)),
+            closed: Arc::new(AtomicBool::new(true)),
             stop_state: AtomicU8::new(JobStopState::Idle as u8),
             stop_effect: Mutex::new(Some(Box::new(move || {
                 observed.fetch_add(1, Ordering::SeqCst);
@@ -782,9 +840,11 @@ mod cleanup_error_tests {
             .recv_timeout(std::time::Duration::from_secs(3))
             .is_ok();
         let in_flight = job.request_stop();
+        let close_in_flight = job.close_after_owners_retired();
         let _ = release_tx.send(());
         let failed = worker.join().unwrap();
         let later = job.request_stop();
+        let close_failed = job.close_after_owners_retired();
         // Original thread is joined before any RED assertion; this empty Job
         // and injected no-effect failure create no native process or hanging IO.
         assert!(entered);
@@ -794,6 +854,7 @@ mod cleanup_error_tests {
             "an in-flight original stop became Accepted"
         );
         assert!(later.is_err(), "a failed original stop became Accepted");
+        assert!(close_in_flight.is_err() && close_failed.is_err());
         assert_eq!(in_flight.unwrap_err().code, "MANAGED_JOB_STOP_PENDING");
         assert_eq!(later.unwrap_err().code, "MANAGED_JOB_STOP_UNKNOWN");
         assert_eq!(
@@ -802,6 +863,67 @@ mod cleanup_error_tests {
             "unknown stop must not be automatically reissued"
         );
         assert_eq!(job.active_processes(), Ok(0));
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn ManagedJob_CloseUnknownNeverReusesUncertainRawHandle_014() {
+        let temp = tempfile::tempdir().unwrap();
+        let snapshot = no_process_snapshot(
+            temp.path(),
+            std::env::current_exe()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+        );
+        let raw =
+            unsafe { windows::Win32::System::JobObjects::CreateJobObjectW(None, None) }.unwrap();
+        let job = ManagedJob {
+            original: Mutex::new(OriginalJobHandle::Open(unsafe {
+                OwnedHandle::from_raw_handle(raw.0)
+            })),
+            pty: Weak::new(),
+            snapshot,
+            reader: Mutex::new(ReaderOwner::Returned),
+            closed: Arc::new(AtomicBool::new(true)),
+            stop_state: AtomicU8::new(JobStopState::Accepted as u8),
+            stop_effect: Mutex::new(None),
+        };
+        // Close THIS empty, self-owned Job, then inject an uncertain report.
+        // No unknown/external handle is ever passed to another native call.
+        let result = job.close_original(|handle| {
+            unsafe { CloseHandle(handle) }.unwrap();
+            Err(error("TEST_ONLY_CLOSE_OUTCOME_UNKNOWN"))
+        });
+        assert_eq!(result.unwrap_err().code, "MANAGED_JOB_CLOSE_UNKNOWN");
+        assert_eq!(
+            job.close_original(|_| panic!("uncertain close retried"))
+                .unwrap_err()
+                .code,
+            "MANAGED_JOB_CLOSE_UNKNOWN"
+        );
+        assert_eq!(
+            job.with_job::<()>(|_| panic!("uncertain raw reused"))
+                .unwrap_err()
+                .code,
+            "MANAGED_JOB_CLOSE_UNKNOWN"
+        );
+        assert_eq!(
+            job.active_processes().unwrap_err().code,
+            "MANAGED_JOB_CLOSE_UNKNOWN"
+        );
+        assert_eq!(
+            job.terminate_original().unwrap_err().code,
+            "MANAGED_JOB_CLOSE_UNKNOWN"
+        );
+        assert_eq!(
+            job.request_stop().unwrap_err().code,
+            "MANAGED_JOB_CLOSE_UNKNOWN"
+        );
+        // Dropping poisoned metadata cannot close a subsequently reused value.
+        assert!(matches!(
+            *job.original.lock(),
+            OriginalJobHandle::CloseUnknown { .. }
+        ));
     }
     #[test]
     #[allow(non_snake_case)]

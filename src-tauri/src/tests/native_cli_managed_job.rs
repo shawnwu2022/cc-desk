@@ -11,6 +11,103 @@ impl Drop for Cleanup {
 
 #[test]
 #[allow(non_snake_case)]
+fn ManagedJob_ShutdownClosesOriginalHandleOnlyAfterAdmissionAndOwnersRetire_006() {
+    let transports = Arc::new(TerminalTransports::new());
+    let supervisor = Arc::new(NativeRunSupervisor::new(transports.clone()));
+    let fixture = Fixture::with_runtime_environment("hold", supervisor, transports, true);
+    let runtime = Arc::new(NativeRuntime::with_owned_components_for_test(
+        fixture.service.clone(),
+        fixture.transports.clone(),
+        fixture.supervisor.clone(),
+    ));
+    let _cleanup = Cleanup(runtime.clone()); // Original cleanup exists before launch.
+    let events = fixture.events.clone();
+    let status = runtime
+        .start_managed_run(&fixture.caller, &fixture.request, |_| {
+            fixture.routes.bind(1, Box::new(|| Ok(())), || {
+                Ok(Channel::new(move |body| {
+                    if let InvokeResponseBody::Json(text) = body {
+                        events.lock().push(serde_json::from_str(&text).unwrap());
+                    }
+                    Ok(())
+                }))
+            })
+        })
+        .unwrap();
+    let resource = fixture
+        .service
+        .registry()
+        .resource(&fixture.caller, &status.run)
+        .unwrap();
+    let job = resource.process.managed_job.as_ref().unwrap().clone();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let ready = loop {
+        if fixture.child_reports() == 1 && !fixture.events.lock().is_empty() {
+            break true;
+        }
+        if Instant::now() >= deadline {
+            break false;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    let mut stop = fixture
+        .supervisor
+        .begin_shutdown_owned(vec![fixture.supervisor.pin_shutdown(&status.run)])
+        .unwrap();
+    drop(resource);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let facts = loop {
+        let facts = stop.managed_retirement(&status.run).unwrap();
+        if facts.original_resources_retired() || Instant::now() >= deadline {
+            break facts;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let held_before_admission_closed = job.active_processes();
+    let state_held_before = stop.retains_managed_state_for_test(&status.run);
+    runtime.owned_job_slot_for_test().close_admission();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let after = loop {
+        let after = stop.managed_retirement(&status.run).unwrap();
+        if job.active_processes().is_err() || Instant::now() >= deadline {
+            break after;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    // Cleanup/joins precede assertions, including the RED failure.
+    assert!(ready && facts.original_resources_retired(), "{facts:?}");
+    assert_eq!(held_before_admission_closed, Ok(0));
+    assert!(state_held_before);
+    assert!(
+        job.active_processes().is_err(),
+        "completed shutdown still owns original Job handle: {after:?}"
+    );
+    assert!(after.job_query_is_historical && after.original_job_handle_closed);
+    assert!(!stop.retains_managed_state_for_test(&status.run));
+    assert!(!fixture.supervisor.active_for_test(&status.run));
+    assert_eq!(after.job_active_processes, Some(0));
+    assert_eq!(
+        job.active_processes().unwrap_err().code,
+        "MANAGED_JOB_HANDLE_CLOSED"
+    );
+    assert_eq!(
+        job.request_stop().unwrap_err().code,
+        "MANAGED_JOB_HANDLE_CLOSED"
+    );
+    let history = stop.managed_retirement(&status.run).unwrap();
+    assert!(history.job_query_is_historical && history.original_resources_retired());
+    assert_eq!(history.job_active_processes, Some(0));
+    assert!(matches!(
+        stop.observe_run(&status.run),
+        crate::run_supervisor::NativeShutdownObservation::Unknown {
+            io_threads_joined: false,
+            ..
+        }
+    ));
+}
+
+#[test]
+#[allow(non_snake_case)]
 fn ManagedJob_RuntimeTransfersOriginalResourcesAndStopsTree_001() {
     let transports = Arc::new(TerminalTransports::new());
     let supervisor = Arc::new(NativeRunSupervisor::new(transports.clone()));

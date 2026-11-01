@@ -696,6 +696,7 @@ impl NativeRuntime {
             Err(_) => (None, true),
         };
         HostNativeShutdown {
+            commands: Some(self.service.clone()),
             #[cfg(windows)]
             owned_job_starts: self.owned_job_starts.clone(),
             stop,
@@ -739,6 +740,7 @@ pub(crate) enum HostNativeObservation {
 }
 #[cfg(feature = "remote-host")]
 pub(crate) struct HostNativeShutdown {
+    commands: Option<Arc<LaunchService>>,
     #[cfg(windows)]
     owned_job_starts: Arc<crate::platform::owned_job_launch::OwnedJobLaunchSlot>,
     stop: Option<crate::run_supervisor::NativeShutdown>,
@@ -751,6 +753,7 @@ impl HostNativeShutdown {
     #[cfg(test)]
     pub(crate) fn from_owned_worker_for_test(worker: std::thread::JoinHandle<()>) -> Self {
         Self {
+            commands: None, // This fixture has no command service or child.
             #[cfg(windows)]
             owned_job_starts: Arc::new(Default::default()),
             stop: None,
@@ -758,6 +761,18 @@ impl HostNativeShutdown {
             joined: false,
             unknown: false,
         }
+    }
+    #[cfg(test)]
+    pub(crate) fn from_command_worker_for_test(
+        service: Arc<LaunchService>,
+        worker: std::thread::JoinHandle<()>,
+        native: Option<crate::run_supervisor::NativeShutdown>,
+    ) -> Self {
+        service.begin_shutdown();
+        let mut stop = Self::from_owned_worker_for_test(worker);
+        stop.commands = Some(service);
+        stop.stop = native;
+        stop
     }
     pub(crate) fn observe(&mut self) -> HostNativeObservation {
         #[cfg(windows)]
@@ -779,6 +794,10 @@ impl HostNativeShutdown {
         #[cfg(not(windows))]
         let job_pending = false;
         if !self.joined
+            || self
+                .commands
+                .as_ref()
+                .is_some_and(|service| !service.commands_settled_after_shutdown())
             || job_pending
             || native == Some(crate::run_supervisor::NativeShutdownObservation::Pending)
         {

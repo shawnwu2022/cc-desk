@@ -1862,6 +1862,8 @@ struct NativeStopEntry {
     job: Option<std::thread::JoinHandle<Result<(), SafeError>>>,
     joined: bool,
     failed: bool,
+    #[cfg(all(windows, feature = "remote-host"))]
+    managed_history: Option<ManagedRetirementFacts>,
 }
 #[must_use = "Retain the real stop jobs until observed; dropping is not retirement"]
 #[cfg(any(test, feature = "remote-host"))]
@@ -1871,9 +1873,13 @@ pub(crate) struct NativeShutdown {
 /// Facts about this exact owned Job and Rust/native owners. Internal ConPTY
 /// server/thread exit is deliberately not inferred from master destruction.
 #[cfg(all(windows, feature = "remote-host"))]
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct ManagedRetirementFacts {
+    /// Last exact query, historical after the original handle has been closed.
+    /// A missing entry/state/query never supplies zero.
     pub(crate) job_active_processes: Option<u32>,
+    pub(crate) job_query_is_historical: bool,
+    pub(crate) original_job_handle_closed: bool,
     #[allow(
         dead_code,
         reason = "Diagnostic only; deliberately does not unlock whole-resource retirement"
@@ -1896,6 +1902,76 @@ impl ManagedRetirementFacts {
             && self.physical_writer_joined
             && self.original_io_drop_returned
             && self.stop_job_joined
+    }
+}
+#[cfg(all(windows, feature = "remote-host"))]
+impl NativeStopEntry {
+    fn managed_facts(&self) -> Option<ManagedRetirementFacts> {
+        if let Some(history) = self.managed_history {
+            return Some(history);
+        }
+        let state = self.pin.state.as_ref()?;
+        let job = state.managed_job.as_ref()?;
+        Some(ManagedRetirementFacts {
+            job_active_processes: job.active_processes().ok(),
+            job_query_is_historical: false,
+            original_job_handle_closed: false,
+            original_output_read: OriginalOutputReadObservation::observe(
+                &state.output_read_observation,
+            ),
+            direct_child_reaped: state.reaped.load(Ordering::SeqCst),
+            output_reader_joined: state.output_reader.lock().observe(),
+            wait_workers_joined: state.wait_workers.lock().observe() == WaitWorkersState::Joined,
+            physical_writer_joined: state.native_writer_retired(Duration::ZERO),
+            original_io_drop_returned: state.io_drop.all_returned(),
+            stop_job_joined: self.joined && !self.failed,
+        })
+    }
+    fn release_completed_managed_ownership(&mut self) {
+        let Some(mut facts) = self.managed_facts() else {
+            return;
+        };
+        if facts.job_query_is_historical || !facts.original_resources_retired() {
+            return;
+        }
+        let state = self
+            .pin
+            .state
+            .as_ref()
+            .expect("fresh managed facts retain original state");
+        if !state.registry_retired.load(Ordering::SeqCst)
+            || !state.adoption_complete.load(Ordering::SeqCst)
+        {
+            return;
+        }
+        let Some(core) = state.core.upgrade() else {
+            return;
+        };
+        if !core.shutting_down.load(Ordering::SeqCst) {
+            return;
+        }
+        let active = core.active.lock();
+        if active.contains_key(&identity(&self.pin.run)) {
+            return;
+        }
+        // The Job slot itself rechecks closed admission, accepted stop and the
+        // final exact Job0 query while protecting its original native handle.
+        if state
+            .managed_job
+            .as_ref()
+            .expect("managed facts")
+            .close_after_owners_retired()
+            .is_err()
+        {
+            return;
+        }
+        drop(active);
+        facts.job_query_is_historical = true;
+        facts.original_job_handle_closed = true;
+        self.managed_history = Some(facts);
+        // Every original JoinHandle was joined above. Keep bounded run/generation
+        // history, not the state/Job owner. Whole-resource exit stays Unknown.
+        self.pin.state.take();
     }
 }
 #[cfg(any(test, feature = "remote-host"))]
@@ -1980,6 +2056,8 @@ impl NativeRunSupervisor {
                 job,
                 joined: false,
                 failed,
+                #[cfg(all(windows, feature = "remote-host"))]
+                managed_history: None,
             });
         }
         Ok(NativeShutdown { entries })
@@ -1987,6 +2065,12 @@ impl NativeRunSupervisor {
 }
 #[cfg(any(test, feature = "remote-host"))]
 impl NativeShutdown {
+    #[cfg(all(test, windows, feature = "remote-host"))]
+    pub(crate) fn retains_managed_state_for_test(&self, run: &RunKey) -> bool {
+        self.entries
+            .iter()
+            .any(|entry| identity(&entry.pin.run) == identity(run) && entry.pin.state.is_some())
+    }
     #[cfg(all(windows, feature = "remote-host"))]
     pub(crate) fn managed_retirement(&mut self, run: &RunKey) -> Option<ManagedRetirementFacts> {
         let _ = self.observe_run(run);
@@ -1994,20 +2078,7 @@ impl NativeShutdown {
             .entries
             .iter()
             .find(|entry| identity(&entry.pin.run) == identity(run))?;
-        let state = entry.pin.state.as_ref()?;
-        let job = state.managed_job.as_ref()?;
-        Some(ManagedRetirementFacts {
-            job_active_processes: job.active_processes().ok(),
-            original_output_read: OriginalOutputReadObservation::observe(
-                &state.output_read_observation,
-            ),
-            direct_child_reaped: state.reaped.load(Ordering::SeqCst),
-            output_reader_joined: state.output_reader.lock().observe(),
-            wait_workers_joined: state.wait_workers.lock().observe() == WaitWorkersState::Joined,
-            physical_writer_joined: state.native_writer_retired(Duration::ZERO),
-            original_io_drop_returned: state.io_drop.all_returned(),
-            stop_job_joined: entry.joined && !entry.failed,
-        })
+        entry.managed_facts()
     }
     pub(crate) fn observe_run(&mut self, run: &RunKey) -> NativeShutdownObservation {
         let unknown =
@@ -2027,6 +2098,16 @@ impl NativeShutdown {
             return unknown(false, false, false, false, false);
         };
         let Some(state) = entry.pin.state.as_ref() else {
+            #[cfg(all(windows, feature = "remote-host"))]
+            if let Some(history) = entry.managed_history {
+                return unknown(
+                    history.direct_child_reaped,
+                    history.stop_job_joined,
+                    history.output_reader_joined,
+                    history.wait_workers_joined,
+                    history.original_io_drop_returned,
+                );
+            }
             return unknown(false, false, false, false, false);
         };
         #[cfg(feature = "remote-host")]
@@ -2089,13 +2170,16 @@ impl NativeShutdown {
         }
         // These original thread joins do not attest remaining I/O, master or
         // PTY descendants. Keep the whole-resource result Unknown.
-        unknown(
+        let observed = unknown(
             reaped,
             entry.joined,
             reader_joined,
             workers_joined,
             state.io_drop.all_returned(),
-        )
+        );
+        #[cfg(all(windows, feature = "remote-host"))]
+        entry.release_completed_managed_ownership();
+        observed
     }
 
     #[cfg(feature = "remote-host")]
