@@ -180,6 +180,13 @@ fn run_ordinary(initial_dir: Option<String>, #[cfg(windows)] startup: DesktopSta
                 {
                     api.prevent_close();
                 }
+                #[cfg(all(feature = "remote-client-ipc", not(feature = "remote-host")))]
+                if window.label() == "main"
+                    && remote_client_ipc::request_app_exit(window.app_handle(), 0)
+                {
+                    api.prevent_close();
+                    return;
+                }
             }
             #[cfg(not(feature = "remote-host"))]
             if window.label() == "main"
@@ -383,26 +390,9 @@ fn run_ordinary(initial_dir: Option<String>, #[cfg(windows)] startup: DesktopSta
             }
             #[cfg(all(feature = "remote-client-ipc", not(feature = "remote-host")))]
             {
-                let service = _app_handle
-                    .state::<std::sync::Arc<remote_client_ipc::RemoteClientService>>()
-                    .inner()
-                    .clone();
-                match service.request_exit(_code.unwrap_or(0)) {
-                    remote_client_ipc::ExitDecision::Proceed => (),
-                    remote_client_ipc::ExitDecision::Prevent => {
-                        api.prevent_exit();
-                        return;
-                    }
-                    remote_client_ipc::ExitDecision::Wait(code) => {
-                        api.prevent_exit();
-                        let app = _app_handle.clone();
-                        tauri::async_runtime::spawn(async move {
-                            let _ = service
-                                .shutdown_and_exit(code, move |original| app.exit(original))
-                                .await;
-                        });
-                        return;
-                    }
+                if remote_client_ipc::request_app_exit(_app_handle, _code.unwrap_or(0)) {
+                    api.prevent_exit();
+                    return;
                 }
             }
         }

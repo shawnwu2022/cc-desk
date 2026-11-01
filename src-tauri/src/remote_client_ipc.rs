@@ -19,6 +19,30 @@ use std::time::Duration;
 use tauri::ipc::{InvokeBody, Request};
 use tauri::{State, Webview};
 use tokio::sync::{watch, Mutex as AsyncMutex};
+/// Shared main-window / explicit-exit call point for the client-only feature.
+#[cfg(not(feature = "remote-host"))]
+pub(crate) fn request_app_exit(app: &tauri::AppHandle, code: i32) -> bool {
+    use tauri::Manager;
+    let service = app.state::<Arc<RemoteClientService>>().inner().clone();
+    match service.request_exit(code) {
+        ExitDecision::Proceed => false,
+        ExitDecision::Prevent => true,
+        ExitDecision::Wait(original) => {
+            let app = app.clone();
+            service.start_exit_waiter(original, move |code| app.exit(code));
+            true
+        }
+    }
+}
+#[cfg(windows)]
+use crate::native_crypto::{
+    owner::{KeyCustodian, KeyRequestHandle, KeyRetirement, KeyStart},
+    signers::{
+        NativeGrantPresence, NativeKeyProfile, NativeKeySlot, NativeSignerAuthority,
+        NativeSignerBinding, NativeSignerSet,
+    },
+    SigningPurpose,
+};
 const MAX_REQUEST: usize = 32768;
 const MAX_PAYLOAD: usize = 16270;
 #[derive(Deserialize)]
@@ -172,6 +196,12 @@ pub(crate) enum ExitDecision {
     Prevent,
 }
 struct ServiceState {
+    #[cfg(windows)]
+    signing: Option<Arc<NativeSignerAuthority>>,
+    #[cfg(any(test, not(feature = "remote-host")))]
+    exit_waiter: Option<tauri::async_runtime::JoinHandle<()>>,
+    #[cfg(windows)]
+    keys: Vec<Arc<NativeKeySlot>>,
     next_id: u32,
     creating: bool,
     closing: bool,
@@ -179,6 +209,18 @@ struct ServiceState {
     #[cfg(any(test, not(feature = "remote-host")))]
     exit: ExitIntent,
     resource: Option<Arc<OwnedClient>>,
+}
+impl ServiceState {
+    fn has_keys(&self) -> bool {
+        #[cfg(windows)]
+        {
+            !self.keys.is_empty()
+        }
+        #[cfg(not(windows))]
+        {
+            false
+        }
+    }
 }
 pub(crate) struct RemoteClientService {
     state: Mutex<ServiceState>,
@@ -188,6 +230,12 @@ impl Default for RemoteClientService {
     fn default() -> Self {
         Self {
             state: Mutex::new(ServiceState {
+                #[cfg(windows)]
+                signing: None,
+                #[cfg(any(test, not(feature = "remote-host")))]
+                exit_waiter: None,
+                #[cfg(windows)]
+                keys: Vec::new(),
                 next_id: 0,
                 creating: false,
                 closing: false,
@@ -220,6 +268,298 @@ impl Drop for CreationGuard<'_> {
     }
 }
 impl RemoteClientService {
+    #[cfg(any(test, not(feature = "remote-host")))]
+    pub(crate) fn start_exit_waiter(
+        self: &Arc<Self>,
+        code: i32,
+        exit: impl FnOnce(i32) + Send + 'static,
+    ) {
+        let mut state = self.state.lock();
+        if !matches!(state.exit,ExitIntent::Waiting(original) if original==code)
+            || state.exit_waiter.is_some()
+        {
+            return;
+        }
+        let original = self.clone();
+        state.exit_waiter = Some(tauri::async_runtime::spawn(async move {
+            let _ = original.shutdown_and_exit(code, exit).await;
+        }));
+    }
+    #[cfg(all(windows, test))]
+    pub(crate) fn install_key_profile(
+        &self,
+        profile: Option<Arc<dyn NativeKeyProfile>>,
+        purpose: SigningPurpose,
+    ) -> Result<KeyRequestHandle, SafeError> {
+        let profile =
+            profile.unwrap_or_else(|| Arc::new(crate::native_crypto::signers::UnavailableProfile));
+        self.install_key_profile_inner(profile, purpose, || {})
+    }
+    #[cfg(all(windows, test))]
+    pub(crate) fn install_key_profile_for_test(
+        &self,
+        profile: Arc<dyn NativeKeyProfile>,
+        purpose: SigningPurpose,
+        before_activate: impl FnOnce(),
+    ) -> Result<KeyRequestHandle, SafeError> {
+        self.install_key_profile_inner(profile, purpose, before_activate)
+    }
+    #[cfg(all(windows, test))]
+    fn install_key_profile_inner(
+        &self,
+        profile: Arc<dyn NativeKeyProfile>,
+        purpose: SigningPurpose,
+        before_activate: impl FnOnce(),
+    ) -> Result<KeyRequestHandle, SafeError> {
+        // Reuse the existing native creation reservation. Exit cannot pass an
+        // unpublished key worker, and its original handle remains local until
+        // registration or known no-key cleanup has completed.
+        let mut reservation = self.begin_create()?;
+        let spki = profile
+            .binding(purpose)
+            .map_err(|_| error("NATIVE_PROFILE_UNAVAILABLE"))?;
+        let (handle, start) = self.prepare_key(&reservation, profile, purpose, spki)?;
+        {
+            let mut state = self.state.lock();
+            state.creating = false;
+            reservation.published = true;
+        }
+        self.creation_finished.send_replace(());
+        before_activate();
+        start.release();
+        if self.state.lock().closing {
+            return Err(error("REMOTE_CLIENT_CLOSED"));
+        }
+        Ok(handle)
+    }
+    #[cfg(windows)]
+    fn prepare_key(
+        &self,
+        reservation: &CreationGuard<'_>,
+        profile: Arc<dyn NativeKeyProfile>,
+        purpose: SigningPurpose,
+        spki: Vec<u8>,
+    ) -> Result<(KeyRequestHandle, KeyStart), SafeError> {
+        if !std::ptr::eq(reservation.service, self) || reservation.published {
+            return Err(error("FORBIDDEN"));
+        }
+        {
+            let state = self.state.lock();
+            if state.keys.len() >= 3
+                || state.keys.iter().any(|key| {
+                    let (old_purpose, old_spki) = key.signal.binding();
+                    old_purpose == purpose || old_spki == spki
+                })
+            {
+                return Err(error("NATIVE_KEY_ROLE_CONFLICT"));
+            }
+        }
+        let (owner, handle, start) =
+            KeyCustodian::prepare(move || profile.open(purpose), purpose, spki)
+                .map_err(|_| error("NATIVE_KEY_UNAVAILABLE"))?;
+        let slot = Arc::new(NativeKeySlot::new(owner, handle.clone()));
+        let accepted = {
+            let mut state = self.state.lock();
+            if state.closing {
+                false
+            } else {
+                state.keys.push(slot.clone());
+                true
+            }
+        };
+        if !accepted {
+            // Unpublished cleanup remains covered by the original reservation.
+            // No service/global lock is held while waking or joining.
+            drop(start);
+            handle.shutdown();
+            drop(slot);
+            drop(handle);
+            return Err(error("REMOTE_CLIENT_CLOSED"));
+        }
+        Ok((handle, start))
+    }
+    #[cfg(windows)]
+    #[allow(
+        dead_code,
+        reason = "native provider requires explicitly approved profile and presence; no production credentials configured"
+    )]
+    pub(crate) fn native_signers(
+        &self,
+        profile: Option<Arc<dyn NativeKeyProfile>>,
+        binding: NativeSignerBinding,
+        presence: Option<Arc<dyn NativeGrantPresence>>,
+    ) -> Result<NativeSignerSet, SafeError> {
+        let profile = profile.ok_or_else(|| error("NATIVE_PROFILE_UNAVAILABLE"))?;
+        let presence = presence.ok_or_else(|| error("NATIVE_PRESENCE_UNAVAILABLE"))?;
+        let approval = binding
+            .approved_until
+            .ok_or_else(|| error("NATIVE_SIGNING_APPROVAL_MISSING"))?;
+        if approval <= std::time::Instant::now() {
+            return Err(error("NATIVE_SIGNING_APPROVAL_EXPIRED"));
+        }
+        if binding.relay_id == [0; 16]
+            || binding.origin.as_str().len() > 512
+            || binding
+                .tls_end
+                .checked_duration_since(std::time::Instant::now())
+                .is_none_or(|d| d > Duration::from_secs(5))
+        {
+            return Err(error("NATIVE_BINDING_INVALID"));
+        }
+        let mut reservation = self.begin_create()?;
+        if !self.state.lock().keys.is_empty() {
+            return Err(error("NATIVE_SIGNERS_ALREADY_OWNED"));
+        }
+        let mut metadata = Vec::new();
+        for purpose in [
+            SigningPurpose::Endpoint,
+            SigningPurpose::Relay,
+            SigningPurpose::Issuer,
+        ] {
+            let spki = profile
+                .binding(purpose)
+                .map_err(|_| error("NATIVE_PROFILE_UNAVAILABLE"))?;
+            cc_desk_remote_security::P256Spki::new(&spki)
+                .map_err(|_| error("NATIVE_PROFILE_INVALID"))?;
+            if metadata.iter().any(|(_, old)| old == &spki) {
+                return Err(error("NATIVE_KEY_ROLE_CONFLICT"));
+            }
+            metadata.push((purpose, spki));
+        }
+        let mut handles = Vec::new();
+        let mut starts = Vec::new();
+        for (purpose, spki) in metadata {
+            match self.prepare_key(&reservation, profile.clone(), purpose, spki) {
+                Ok((handle, start)) => {
+                    handles.push(handle);
+                    starts.push(start);
+                }
+                Err(error) => {
+                    for handle in &handles {
+                        handle.shutdown();
+                    }
+                    drop(starts);
+                    return Err(error);
+                }
+            }
+        }
+        let authority = NativeSignerAuthority::new(handles.clone(), &binding, presence, profile)
+            .map_err(|_| error("NATIVE_SIGNING_APPROVAL_INVALID"))?;
+        let result = authority
+            .assemble(binding.tls_end)
+            .map_err(|_| error("NATIVE_SIGNING_ATTEMPT_INVALID"));
+        let result = match result {
+            Ok(result) => result,
+            Err(error) => {
+                for handle in &handles {
+                    handle.shutdown();
+                }
+                drop(starts);
+                return Err(error);
+            }
+        };
+        let published = {
+            let mut state = self.state.lock();
+            if state.closing {
+                false
+            } else {
+                state.signing = Some(authority);
+                state.creating = false;
+                reservation.published = true;
+                true
+            }
+        };
+        if !published {
+            for handle in &handles {
+                handle.shutdown();
+            }
+            drop(starts);
+            return Err(error("REMOTE_CLIENT_CLOSED"));
+        }
+        self.creation_finished.send_replace(());
+        for start in starts {
+            start.release();
+        }
+        if self.state.lock().closing {
+            return Err(error("REMOTE_CLIENT_CLOSED"));
+        }
+        Ok(result)
+    }
+    #[cfg(windows)]
+    #[allow(
+        dead_code,
+        reason = "async reconnect/provider integration is in the separately frozen bootstrap tree"
+    )]
+    pub(crate) fn fresh_native_signers(
+        &self,
+        end: std::time::Instant,
+    ) -> Result<NativeSignerSet, SafeError> {
+        let mut reservation = self.begin_create()?;
+        let (authority, keys) = {
+            let state = self.state.lock();
+            (
+                state
+                    .signing
+                    .clone()
+                    .ok_or_else(|| error("NATIVE_PROFILE_UNAVAILABLE"))?,
+                state.keys.clone(),
+            )
+        };
+        if keys
+            .iter()
+            .any(|key| key.observe() != KeyRetirement::Pending)
+        {
+            return Err(error("NATIVE_SIGNER_UNHEALTHY"));
+        }
+        let result = authority
+            .assemble(end)
+            .map_err(|_| error("NATIVE_SIGNER_BUSY_EXPIRED_OR_UNKNOWN"))?;
+        {
+            let mut state = self.state.lock();
+            if state.closing {
+                return Err(error("REMOTE_CLIENT_CLOSED"));
+            }
+            state.creating = false;
+            reservation.published = true;
+        }
+        self.creation_finished.send_replace(());
+        Ok(result)
+    }
+    fn signal_keys(&self) {
+        #[cfg(windows)]
+        {
+            let keys = self.state.lock().keys.clone();
+            for key in keys {
+                key.signal.shutdown();
+            }
+        }
+    }
+    async fn join_keys(&self) -> Result<(), SafeError> {
+        #[cfg(windows)]
+        {
+            let keys = self.state.lock().keys.clone();
+            loop {
+                let mut pending = false;
+                for key in &keys {
+                    match key.observe() {
+                        KeyRetirement::Pending => pending = true,
+                        KeyRetirement::Unknown => return Err(error("NATIVE_KEY_RETIRE_UNKNOWN")),
+                        KeyRetirement::Retired | KeyRetirement::NoKeyCreated => (),
+                    }
+                }
+                if !pending {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }
+        Ok(())
+    }
+    #[cfg(all(windows, test))]
+    pub(crate) fn test_key_observations(&self) -> Vec<KeyRetirement> {
+        let keys = self.state.lock().keys.clone();
+        keys.iter().map(|key| key.observe()).collect()
+    }
     fn begin_create(&self) -> Result<CreationGuard<'_>, SafeError> {
         let mut state = self.state.lock();
         if state.closing {
@@ -328,10 +668,14 @@ impl RemoteClientService {
             let mut state = self.state.lock();
             state.closing = true;
             (
-                state.creating || state.creation_unknown || state.resource.is_some(),
+                state.creating
+                    || state.creation_unknown
+                    || state.resource.is_some()
+                    || state.has_keys(),
                 state.resource.clone(),
             )
         };
+        self.signal_keys();
         if let Some(resource) = resource {
             resource.retire();
         }
@@ -373,6 +717,7 @@ impl RemoteClientService {
                 state.resource = None;
             }
         }
+        self.join_keys().await?;
         Ok(())
     }
     /// Preserve the first exit intent even between creation completion and
@@ -387,7 +732,9 @@ impl RemoteClientService {
                     state.exit = ExitIntent::Unknown;
                     ExitDecision::Prevent
                 }
-                ExitIntent::Idle if state.creating || state.resource.is_some() => {
+                ExitIntent::Idle
+                    if state.creating || state.resource.is_some() || state.has_keys() =>
+                {
                     state.exit = ExitIntent::Waiting(code);
                     ExitDecision::Wait(code)
                 }
@@ -402,6 +749,7 @@ impl RemoteClientService {
             };
             (decision, state.resource.clone())
         };
+        self.signal_keys();
         if let Some(resource) = resource {
             resource.retire();
         }

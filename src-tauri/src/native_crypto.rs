@@ -304,3 +304,10 @@ fn fixed_to_der(fixed: &[u8]) -> Result<Vec<u8>, CryptoError> {
 #[cfg(test)]
 #[path = "native_crypto_tests.rs"]
 mod tests;
+
+#[path = "native_crypto_owner.rs"]
+pub(crate) mod owner;
+
+#[cfg(any(test, feature = "remote-client-ipc"))]
+#[path = "native_crypto_signers.rs"]
+pub(crate) mod signers;

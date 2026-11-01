@@ -37,6 +37,16 @@ impl std::fmt::Debug for VerifiedCanonicalGrant {
     }
 }
 impl VerifiedCanonicalGrant {
+    /// Read-only signing material from this already verified request. This
+    /// grants no constructor, presence approval or generic raw signing entry.
+    pub fn signing_parts(&self) -> Result<(coset::CoseSign1, Vec<u8>), GrantError> {
+        let candidate = crate::grant::signing_candidate(&self.payload, self.kid)?;
+        let tbs = candidate.tbs_data(crate::grant::AAD);
+        Ok((candidate, tbs))
+    }
+    pub fn is_issuer(&self, issuer: &P256Spki) -> bool {
+        self.kid == kid(issuer)
+    }
     pub fn payload(&self) -> &CanonicalGrant {
         &self.payload
     }

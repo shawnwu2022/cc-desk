@@ -13,6 +13,21 @@ use std::{
 use tokio::sync::watch;
 pub(crate) const CONTENT_TYPE: &str = "application/cc-desk-grant+json";
 pub(crate) const AAD: &[u8] = b"CC-DESK-DATA-GRANT-v1\0";
+pub(crate) fn signing_candidate(
+    payload: &CanonicalGrant,
+    kid: [u8; 32],
+) -> Result<coset::CoseSign1, GrantError> {
+    Ok(CoseSign1Builder::new()
+        .protected(
+            HeaderBuilder::new()
+                .algorithm(iana::Algorithm::ES256)
+                .content_type(CONTENT_TYPE.into())
+                .key_id(kid.to_vec())
+                .build(),
+        )
+        .payload(grant::encode(payload).map_err(|_| GrantError::Encoding)?)
+        .build())
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GrantError {
     Policy,
@@ -157,18 +172,8 @@ pub(crate) fn signature(
     if bytes.len() > 16384 || bytes.len() < 64 {
         return Err(GrantError::Bounds);
     }
-    let canonical = grant::encode(payload).map_err(|_| GrantError::Encoding)?;
-    let mut candidate = CoseSign1Builder::new()
-        .protected(
-            HeaderBuilder::new()
-                .algorithm(iana::Algorithm::ES256)
-                .content_type(CONTENT_TYPE.into())
-                .key_id(kid.to_vec())
-                .build(),
-        )
-        .payload(canonical)
-        .signature(vec![0; 64])
-        .build();
+    let mut candidate = signing_candidate(payload, kid)?;
+    candidate.signature = vec![0; 64];
     let expected = candidate
         .clone()
         .to_tagged_vec()

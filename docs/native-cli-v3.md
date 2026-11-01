@@ -230,22 +230,68 @@ key custody, exact exported public SPKI matching, signing usage/algorithm/width
 checks and a fixed backend purpose. It hashes bounded messages with SHA256;
 fixed 64-byte signatures feed the existing COSE boundary, and Windows'
 CryptEncodeObjectEx handles DER encoding. No private import path is compiled for
-production. Native key selection/loading, profile approval and the TLS/grant
-worker adapters are separate gates; this primitive is not a JS signing bridge.
+production. Native key selection/loading and profile approval remain separate
+gates; this primitive is not a JS signing bridge.
 
 CNG calls must run on the original dedicated native worker. Thread-bound custody
-does not make synchronous KSP calls preemptible, and no rustls/NativeGrantSigner
-async cancellation guarantee is supplied. Qualification uses only the existing
+does not make synchronous KSP calls preemptible. Qualification uses only the existing
 public RFC6979 TEST_ONLY scalar and point: Microsoft Software KSP, nonopaque ECC
 private blob, NULL parameter list/name and only the silent flag. The documented
 unnamed import is ephemeral. Keys/providers must explicitly free successfully
 and the original worker must join before qualification passes; Unknown retains
 the original owner/JoinHandle and cannot become a successful Drop receipt. No
 existing user keys, naming/persistence, key generation or enrollment are tested.
+The three-role bundle fixture additionally uses the repository's published
+scalar-one/generator and COSE-02 public pair, with distinct SPKIs across roles.
 An admitted owner cannot be relabelled with another purpose or SPKI. This does
 not establish that future separately loaded role objects use different physical
-keys: production profile approval and cross-role public-SPKI deduplication remain
-separate enrollment gates.
+keys: actual provisioned-key selection and approval remain enrollment gates.
+
+Private native adapters implement the existing RelaySigner, NativeGrantSigner
+and rustls SigningKey/Signer contracts using the same retained key worker.
+Relay signing binds the backend-approved canonical origin, key ID and role;
+SigningRequest keeps its original private authenticated-challenge construction.
+Grant signing uses the verified request's shared canonical COSE builder and
+requires native presence approval of its exact issuer-bound signing fingerprint.
+Missing profile or presence is Unavailable/Policy; public fixture approval is
+test-only. There is no production profile loader or JS arbitrary-sign operation.
+
+Relay/grant futures remain cooperative and Drop seals their original request;
+after claim, cancellation keeps Unknown and withholds late results. rustls signing
+is explicitly synchronous/blocking with one absolute provider/handshake horizon.
+Its observer can time out while native work remains owned; this does not qualify
+the enclosing async TLS timeout as preemptible or unblock an opaque KSP call.
+The native factory requires an explicit immutable backend signing-approval
+expiry, separately from each caller's absolute attempt horizon and from the
+wire grant's Host-clock expiry. `fresh_native_signers` reuses the same healthy
+owned keys, profile, presence and relay tuple; one short gate serializes new
+generation publication, request admission, physical claim and final delivery.
+All three signer traits use the same capped attempt end. Active/Unknown/closing
+keys refuse renewal. Queued no-effect observer cancellation and discarded known
+Ready results do not close healthy keys; cancellation after Started keeps Unknown.
+Old objects/tickets cannot authorize a new generation or cancel its request.
+
+This is a native signing seam, not a connected application reconnect path. The
+primary tree still only has synchronous `install_native`; actual async
+`install_profile`/`bootstrap::connect_native` is in the separately frozen provider
+tree. Integrating its original NativeClient custody with an exact current-attempt
+publication gate remains OPEN; a before/after check is insufficient. No duplicate
+bootstrap or new install wrapper is supplied here. A short signing attempt never
+replaces an installed channel's original grant/document lifetime. Integration
+must retain its original ClientGrantState, GrantClock and monotonic anchor;
+fresh signer sets neither construct them nor restore them from signed COSE.
+No reconnect, stale-client publication or cross-connection replay qualification
+follows from the bounded in-memory RPK handshakes or equal wire expiry fixture.
+
+RemoteClientService owns at most one key slot per purpose, rejects cross-purpose
+SPKI reuse before opening a key, and reuses its original creation reservation.
+The original key worker JoinHandle is registered before activation. Both explicit
+exit and client-only main-window close seal admission, signal outside application
+locks, and await original key retirement alongside the existing client/Host work.
+Cancelled preactivation reports NoKeyCreated plus original join, never a Free
+receipt. Unknown keeps the original owner and prevents exit; the first exit code
+is preserved. These source/fixture facts do not enable a real key profile, prove
+native-call preemption, or establish mobile/device or production enrollment.
 
 ## Output path
 

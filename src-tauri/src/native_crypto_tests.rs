@@ -1,5 +1,11 @@
 use super::*;
 
+#[path = "native_crypto_owner_tests.rs"]
+mod owner_tests;
+
+#[path = "native_crypto_signers_tests.rs"]
+mod signers_tests;
+
 fn hex(value: &str) -> Vec<u8> {
     (0..value.len())
         .step_by(2)
@@ -13,7 +19,25 @@ fn vector() -> serde_json::Value {
     .unwrap()
 }
 fn import_public_rfc6979_fixture(point: &[u8]) -> Result<NativeOwnedSoftwareKey, CryptoError> {
-    if point.len() != 65 || point[0] != 4 {
+    import_public_rfc6979_fixture_for(point, SigningPurpose::Endpoint)
+}
+fn import_public_rfc6979_fixture_for(
+    point: &[u8],
+    purpose: SigningPurpose,
+) -> Result<NativeOwnedSoftwareKey, CryptoError> {
+    import_known_public_fixture(
+        point,
+        &hex("c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721"),
+        purpose,
+    )
+}
+// Initial import of repository-published test parts only, never user keys.
+fn import_known_public_fixture(
+    point: &[u8],
+    scalar: &[u8],
+    purpose: SigningPurpose,
+) -> Result<NativeOwnedSoftwareKey, CryptoError> {
+    if point.len() != 65 || point[0] != 4 || scalar.len() != 32 {
         return Err(CryptoError::Key);
     }
     let mut approved_spki = [0; 91];
@@ -22,7 +46,7 @@ fn import_public_rfc6979_fixture(point: &[u8]) -> Result<NativeOwnedSoftwareKey,
     let mut owned = NativeOwnedSoftwareKey {
         provider: NCRYPT_PROV_HANDLE::default(),
         key: NCRYPT_KEY_HANDLE::default(),
-        approved_purpose: SigningPurpose::Endpoint,
+        approved_purpose: purpose,
         approved_spki,
         worker: std::thread::current().id(),
         unknown: false,
@@ -33,9 +57,8 @@ fn import_public_rfc6979_fixture(point: &[u8]) -> Result<NativeOwnedSoftwareKey,
         unsafe { NCryptOpenStorageProvider(&mut owned.provider, MS_KEY_STORAGE_PROVIDER, 0) }
             .map_err(|_| CryptoError::Native)?;
         eprintln!("TEST_ONLY_CNG_FIXED_SOFTWARE_PROVIDER_OPEN_OK");
-        // Existing openly published RFC6979 A.2.5 scalar from identities.rs.
-        // TEST_ONLY; no production import path, generated secret, name or store.
-        let scalar = hex("c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721");
+        // Repository-published TEST_ONLY fixture parts; no production import
+        // path, generated secret, name, existing user key or persistent store.
         if point.len() != 65 || point[0] != 4 {
             return Err(CryptoError::Key);
         }
@@ -43,7 +66,7 @@ fn import_public_rfc6979_fixture(point: &[u8]) -> Result<NativeOwnedSoftwareKey,
         blob.extend(BCRYPT_ECDSA_PRIVATE_P256_MAGIC.to_le_bytes());
         blob.extend(32u32.to_le_bytes());
         blob.extend(&point[1..]);
-        blob.extend(&scalar);
+        blob.extend(scalar);
         // Nonopaque blob, NULL import key/parameters/keyname. SILENT is the only
         // flag: no Machine/VBS/legacy/overwrite/no-validation/finalize flags.
         unsafe {
@@ -65,7 +88,7 @@ fn import_public_rfc6979_fixture(point: &[u8]) -> Result<NativeOwnedSoftwareKey,
         }
         return Err(error);
     }
-    eprintln!("TEST_ONLY_CNG_PUBLIC_RFC6979_UNNAMED_IMPORT_OK");
+    eprintln!("TEST_ONLY_CNG_KNOWN_PUBLIC_FIXTURE_UNNAMED_IMPORT_OK");
     Ok(owned)
 }
 #[test]

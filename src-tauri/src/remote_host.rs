@@ -69,6 +69,7 @@ struct ServiceState {
     retired: bool,
     exit: ExitIntent,
     waiter: Option<tauri::async_runtime::JoinHandle<()>>,
+    waiter_starting: bool,
     peer_pump: Option<Arc<PeerPump>>,
 }
 pub(crate) struct RemoteHostService {
@@ -85,6 +86,7 @@ impl Default for RemoteHostService {
                 retired: false,
                 exit: ExitIntent::Idle,
                 waiter: None,
+                waiter_starting: false,
                 peer_pump: None,
             }),
         }
@@ -304,18 +306,26 @@ impl RemoteHostService {
         let mut state = self.state.lock();
         if !matches!(state.exit,ExitIntent::Waiting(original) if original==code)
             || state.waiter.is_some()
+            || state.waiter_starting
         {
             return;
         }
+        state.waiter_starting = true;
         // All stops are signalled before awaiting a pending install or network IO.
         let networks = state.host.as_mut().and_then(|host| {
             host.begin_shutdown();
             host.network_retirement()
         });
-        client.begin_shutdown();
         let pins = std::mem::take(&mut state.pins);
-        state.native = Some(native.begin_host_shutdown(pins));
+        drop(state);
+        // New key stop notifications can run arbitrary Wakers. They must not
+        // execute under this Host lock or the Client service's state lock.
+        client.begin_shutdown();
+        let native = native.begin_host_shutdown(pins);
+        let mut state = self.state.lock();
+        state.native = Some(native);
         state.waiter = Some(self.spawn_waiter(code, client, networks, exit));
+        state.waiter_starting = false;
     }
     fn spawn_waiter(
         self: &Arc<Self>,
