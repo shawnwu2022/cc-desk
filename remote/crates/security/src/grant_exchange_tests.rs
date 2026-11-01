@@ -88,6 +88,63 @@ async fn bound_pair(
 struct PublicSigner {
     calls: usize,
 }
+struct PublicBrowserSigner;
+impl NativeGrantSigner for PublicBrowserSigner {
+    fn browser_profile(&self) -> Option<crate::BrowserProfile> {
+        Some(crate::browser_approval_tests::profile())
+    }
+    fn confirm_and_sign<'a>(
+        &'a mut self,
+        grant: &'a VerifiedCanonicalGrant,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>, GrantError>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            let challenge = grant.browser_challenge(&crate::browser_approval_tests::profile())?;
+            Ok(crate::browser_approval_tests::proof_challenge(
+                grant.payload(),
+                grant.issuer_kid(),
+                challenge,
+                0,
+            ))
+        })
+    }
+}
+#[tokio::test]
+async fn browser_approval_actual_rpk_appbind_grant_exchange_004() {
+    let (c, h, _cancel) = bound_pair(true, true).await;
+    let (c, h) = (c.unwrap(), h.unwrap());
+    let mut gate =
+        GrantGate::for_binding(h.context(), admin(), [4; 32], Arc::new(|| Ok(1000))).unwrap();
+    gate.require_browser(crate::browser_approval_tests::profile())
+        .unwrap();
+    let mut state = ClientGrantState::new(Arc::new(|| Ok(200)));
+    let mut signer = PublicBrowserSigner;
+    let client_trust = trust();
+    let (c, h) = tokio::join!(
+        c.grant_client(
+            &client_trust,
+            &mut signer,
+            &mut state,
+            Duration::from_secs(1)
+        ),
+        h.grant_host(&mut gate, policy(), Duration::from_secs(1))
+    );
+    let (c, h) = (c.unwrap().start().unwrap(), h.unwrap().start().unwrap());
+    let target = scope();
+    let (sent, received) = tokio::join!(
+        c.send_control(
+            &target,
+            4,
+            b"TEST_ONLY_BROWSER_APPROVED",
+            Duration::from_secs(1)
+        ),
+        h.receive(&target, 4, Duration::from_secs(1))
+    );
+    sent.unwrap();
+    assert_eq!(received.unwrap().payload(), b"TEST_ONLY_BROWSER_APPROVED");
+    c.close().await;
+    h.wait_closed().await;
+}
 impl NativeGrantSigner for PublicSigner {
     fn confirm_and_sign<'a>(
         &'a mut self,

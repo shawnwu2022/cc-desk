@@ -32,10 +32,16 @@ pub use data_owner::{DATA_QUEUE_SLOTS, RunningChannel};
 mod data_authority;
 #[cfg(feature = "experimental")]
 pub use data_authority::{BoundDataAuthority, GrantClockDomain};
+#[cfg(feature = "experimental")]
+mod browser_approval;
+#[cfg(all(test, feature = "experimental"))]
+mod browser_approval_tests;
 #[cfg(all(test, feature = "experimental"))]
 mod data_tests;
 #[cfg(all(test, feature = "experimental"))]
 mod grant_tests;
+#[cfg(feature = "experimental")]
+pub use browser_approval::BrowserProfile;
 #[cfg(all(test, feature = "experimental"))]
 #[path = "../tests/support/identities.rs"]
 #[allow(dead_code)]

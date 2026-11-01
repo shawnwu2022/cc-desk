@@ -102,7 +102,7 @@ fn context() -> Context {
         origin: CanonicalOrigin::trusted("wss://relay.invalid/").unwrap(),
     }
 }
-fn gate(now: Arc<AtomicU64>) -> GrantGate {
+pub(super) fn gate(now: Arc<AtomicU64>) -> GrantGate {
     GrantGate::new(
         context(),
         admin(),
@@ -110,6 +110,9 @@ fn gate(now: Arc<AtomicU64>) -> GrantGate {
         Arc::new(move || Ok(now.load(Ordering::Acquire))),
     )
     .unwrap()
+}
+pub(super) fn browser_test_gate() -> GrantGate {
+    gate(Arc::new(AtomicU64::new(1000)))
 }
 #[test]
 fn exact_real_signature_grant_is_reusable_without_resetting_deadline() {

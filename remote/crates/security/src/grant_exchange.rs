@@ -30,6 +30,7 @@ pub struct ClientGrantTrust {
 pub struct VerifiedCanonicalGrant {
     payload: CanonicalGrant,
     kid: [u8; 32],
+    attempt: ([u8; 32], [u8; 32]),
 }
 impl std::fmt::Debug for VerifiedCanonicalGrant {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -53,6 +54,12 @@ impl VerifiedCanonicalGrant {
     pub fn issuer_kid(&self) -> [u8; 32] {
         self.kid
     }
+    pub fn browser_challenge(
+        &self,
+        profile: &crate::BrowserProfile,
+    ) -> Result<[u8; 32], GrantError> {
+        profile.challenge(&self.payload, self.kid, self.attempt)
+    }
 }
 /// Trusted native administrative presence adapter, not an arbitrary signing API.
 /// Construction and every future poll must return promptly and never block the
@@ -61,6 +68,10 @@ impl VerifiedCanonicalGrant {
 /// Async deadlines cannot preempt blocking native callbacks. No such platform
 /// implementation or key provisioning is supplied by this software candidate.
 pub trait NativeGrantSigner: Send {
+    /// Explicit trusted profile selection; wire bytes never select this policy.
+    fn browser_profile(&self) -> Option<crate::BrowserProfile> {
+        None
+    }
     fn confirm_and_sign<'a>(
         &'a mut self,
         grant: &'a VerifiedCanonicalGrant,
@@ -276,6 +287,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> ManagedChannel<S> {
             let Message::Request { nonce, reuse } = decode(&receive(&mut io).await?)? else {
                 return Err(GrantError::Encoding);
             };
+            gate.browser_attempt(crate::grant::hex_id(&nonce), binding)?;
             let issued = if !reuse {
                 let grant = gate.challenge(policy.scope.clone(), policy.role, policy.duration)?;
                 let issued = grant.clone();
@@ -338,8 +350,11 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> ManagedChannel<S> {
             // This sample precedes the request, including any network or presence delay.
             let anchor = state.clock.now_ms()?;
             let nonce = crate::grant::fresh()?;
-            let reuse = state.candidate.is_some();
-            if let Some(old) = &state.candidate {
+            let browser = signer.browser_profile();
+            let reuse = state.candidate.is_some() && browser.is_none();
+            if let Some(old) = &state.candidate
+                && reuse
+            {
                 old.remaining()?;
                 if !matches(&old.0.payload, &context, trust) || old.0.issuer.0 != trust.issuer.0 {
                     return Err(GrantError::Context);
@@ -371,9 +386,20 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> ManagedChannel<S> {
                 let request = VerifiedCanonicalGrant {
                     payload: grant,
                     kid: kid(&trust.issuer),
+                    attempt: (crate::grant::hex_id(&nonce), binding),
                 };
                 let signed = signer.confirm_and_sign(&request).await?;
-                crate::grant::signature(&signed, &request.payload, &trust.issuer, request.kid)?;
+                if let Some(profile) = &browser {
+                    profile.verify(
+                        &signed,
+                        &request.payload,
+                        &trust.issuer,
+                        request.kid,
+                        request.attempt,
+                    )?;
+                } else {
+                    crate::grant::signature(&signed, &request.payload, &trust.issuer, request.kid)?;
+                }
                 let created = request
                     .payload
                     .created_host_ms

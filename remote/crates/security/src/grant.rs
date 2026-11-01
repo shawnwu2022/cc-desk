@@ -142,6 +142,9 @@ pub struct GrantGate {
     state: Arc<LivePolicy>,
     pending: Option<(CanonicalGrant, u8)>,
     accepted: Option<VerifiedGrant>,
+    browser: Option<crate::BrowserProfile>,
+    browser_attempt: Option<([u8; 32], [u8; 32])>,
+    accepted_approval: Option<Vec<u8>>,
 }
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
@@ -233,7 +236,67 @@ impl GrantGate {
             }),
             pending: None,
             accepted: None,
+            browser: None,
+            browser_attempt: None,
+            accepted_approval: None,
         })
+    }
+    /// Trusted enrollment owner only; immutable once any challenge has been issued.
+    pub fn require_browser(&mut self, profile: crate::BrowserProfile) -> Result<(), GrantError> {
+        if self.browser.is_some() || self.pending.is_some() || self.accepted.is_some() {
+            return Err(GrantError::Policy);
+        }
+        self.browser = Some(profile);
+        Ok(())
+    }
+    pub(crate) fn browser_attempt(
+        &mut self,
+        nonce: [u8; 32],
+        binding: [u8; 32],
+    ) -> Result<(), GrantError> {
+        if self.browser.is_none() {
+            return Ok(());
+        }
+        if nonce == [0; 32] || binding == [0; 32] {
+            return Err(GrantError::Context);
+        }
+        if self
+            .browser_attempt
+            .is_some_and(|old| old != (nonce, binding))
+        {
+            let now = self.state.sample()?;
+            if let Some((pending, _)) = &self.pending {
+                let start: u64 = pending
+                    .created_host_ms
+                    .parse()
+                    .map_err(|_| GrantError::Encoding)?;
+                let end: u64 = pending
+                    .expires_host_ms
+                    .parse()
+                    .map_err(|_| GrantError::Encoding)?;
+                if now < start.checked_add(30000).ok_or(GrantError::Bounds)? && now < end {
+                    return Err(GrantError::Busy);
+                }
+            }
+            // A fresh management request cannot reuse a prior presence ceremony.
+            self.pending = None;
+            self.accepted_approval = None;
+        }
+        self.browser_attempt = Some((nonce, binding));
+        Ok(())
+    }
+    fn approval_signature(&self, bytes: &[u8], payload: &CanonicalGrant) -> Result<(), GrantError> {
+        if let Some(profile) = &self.browser {
+            profile.verify(
+                bytes,
+                payload,
+                &self.issuer,
+                self.kid,
+                self.browser_attempt.ok_or(GrantError::Context)?,
+            )
+        } else {
+            signature(bytes, payload, &self.issuer, self.kid)
+        }
     }
     pub(crate) fn matches_context(&self, context: &Context) -> bool {
         self.context == *context
@@ -257,7 +320,7 @@ impl GrantGate {
                 .into_iter()
                 .chain(self.accepted.as_ref().map(|g| &g.0.payload))
                 .chain(self.pending.as_ref().map(|(g, _)| g))
-                .find(|g| signature(bytes, g, &self.issuer, self.kid).is_ok())
+                .find(|g| self.approval_signature(bytes, g).is_ok())
                 .ok_or(GrantError::Signature)?;
             let start: u64 = payload
                 .created_host_ms
@@ -305,6 +368,9 @@ impl GrantGate {
         duration: Duration,
     ) -> Result<CanonicalGrant, GrantError> {
         let now = self.state.sample()?;
+        if self.browser.is_some() && self.browser_attempt.is_none() {
+            return Err(GrantError::Context);
+        }
         if let Some((old, _)) = &self.pending {
             let start: u64 = old.created_host_ms.parse().unwrap();
             let end: u64 = old.expires_host_ms.parse().unwrap();
@@ -338,19 +404,21 @@ impl GrantGate {
     pub fn accept(&mut self, bytes: &[u8]) -> Result<VerifiedGrant, GrantError> {
         let now = self.state.sample()?;
         if let Some(old) = &self.accepted
-            && signature(bytes, &old.0.payload, &self.issuer, self.kid).is_ok()
+            && self.approval_signature(bytes, &old.0.payload).is_ok()
+            && (self.browser.is_none() || self.accepted_approval.as_deref() == Some(bytes))
         {
             old.check()?;
             return Ok(old.clone());
         }
-        let (pending, attempts) = self.pending.as_mut().ok_or(GrantError::Replay)?;
+        let (pending, _) = self.pending.as_ref().ok_or(GrantError::Replay)?;
         let created: u64 = pending.created_host_ms.parse().unwrap();
         let end: u64 = pending.expires_host_ms.parse().unwrap();
         if now >= created.checked_add(30000).ok_or(GrantError::Bounds)? || now >= end {
             self.pending = None;
             return Err(GrantError::Expired);
         }
-        if let Err(error) = signature(bytes, pending, &self.issuer, self.kid) {
+        if let Err(error) = self.approval_signature(bytes, pending) {
+            let (_, attempts) = self.pending.as_mut().unwrap();
             *attempts += 1;
             if *attempts == 3 {
                 self.pending = None
@@ -373,6 +441,7 @@ impl GrantGate {
             closed,
         }));
         self.accepted = Some(accepted.clone());
+        self.accepted_approval = self.browser.as_ref().map(|_| bytes.to_vec());
         Ok(accepted)
     }
 }
