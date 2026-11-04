@@ -103,3 +103,27 @@ it('CodexIdentity_DiagnosticsHaveStoreWideLimit_004', () => {
     expect(output.mock.calls).toHaveLength(128)
   } finally { output.mockRestore() }
 })
+
+// 2026-10-31 现场（run-f89657b7）：sessionStart 换采幽灵 id 后，Stop/UserPromptSubmit
+// 持续报回旧 id 被 identity-mismatch 拒绝，刷新 cue 一并丢失，标题永不更新。
+// 修复语义：mismatch 拒绝采纳，但 stop/userPromptSubmit 仍推动标题刷新 revision。
+it('CodexIdentity_MismatchedEventKeepsTitleRefreshCue_005', () => {
+  setActivePinia(createPinia())
+  const store = useNativeTabsStore()
+  const tab = store.create({ cli: 'codex', projectId: 'p', projectPath: '/fixture', profileId: 'cx', profileRevision: '1', action: { kind: 'new' } })
+  store.applyLaunchStatus(tab.tabId, { instanceId: 'fixture', requestId: tab.requestId,
+    run: { runId: tab.runId, generation: tab.generation }, revision: '2', phase: 'running', failure: null })
+  const attempt = captureNativeAttempt(tab)
+  const ghost = '01a18afd-4f1f-7df1-98b7-93534352dc84'
+  const earlier = '01a18aff-66df-79f1-ba6b-cba3ff004b65'
+  store.applyObservationIdentity(tab.tabId, attempt, earlier, 'userPromptSubmit')
+  const beforeTitle = store.tab(tab.tabId)?.historyTitleRevision
+  const beforeChange = store.tab(tab.tabId)?.historyChangeRevision
+  // 回报旧 id 的 stop：不采纳，但必须是有效的标题刷新信号
+  expect(store.applyObservationIdentity(tab.tabId, attempt, ghost, 'stop')).toBe(false)
+  const after = store.tab(tab.tabId)!
+  expect(after.observedSessionId).toBe(earlier)
+  expect(after.historyTitleRevision).not.toBe(beforeTitle)
+  expect(after.historyTitleRevision).toBe(after.historyChangeRevision)
+  expect(after.historyChangeRevision!).toBeGreaterThan(beforeChange ?? 0)
+})
