@@ -349,7 +349,16 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     if (value.cli === 'codex') {
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(identity)) return false
       if (!value.observedSessionId && eventType !== 'sessionStart' && eventType !== 'userPromptSubmit') return false
-      if (value.observedSessionId && value.observedSessionId !== identity && eventType !== 'sessionStart') return false
+      if (value.observedSessionId && value.observedSessionId !== identity && eventType !== 'sessionStart') {
+        // CLI 的 session_id 可能报回本 run 曾出现过的另一 thread（2026-10-31 现场日志证实）。
+        // 换采身份必须拒绝，但 stop/userPromptSubmit 的回合信号对已采纳身份仍是标题刷新 cue，
+        // 否则身份错位后标题永远停在旧快照。
+        if (eventType === 'stop' || eventType === 'userPromptSubmit') {
+          value.historyChangeRevision = (value.historyChangeRevision ?? 0) + 1
+          value.historyTitleRevision = value.historyChangeRevision
+        }
+        return false
+      }
       value.historyChangeRevision = (value.historyChangeRevision ?? 0) + 1
       if (eventType === 'stop' || eventType === 'userPromptSubmit') value.historyTitleRevision = value.historyChangeRevision
     }

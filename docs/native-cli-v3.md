@@ -210,6 +210,29 @@ invalidation still report unavailable. Neither elapsed time nor a requested
 resume locator establishes an observed session identity. Claude and OpenCode
 retain their existing first-event timeout policies.
 
+Deferred identity also shapes the session list projection: a new Codex run
+writes its rollout file immediately, so before the first authenticated identity
+event the tab row (badged "waiting for session identity") and the closed
+history row carrying the CLI/AI title are both honestly visible. The
+projection never folds them by title, creation time, or a "newest rollout in
+scope" guess — an external process such as Codex Desktop may create rollouts
+in the same project at any moment. When the authenticated event arrives, the
+tab claims the exact-ID history row and the projection collapses to one row;
+if hooks never fire, both rows remain with the pending badge. This window is
+the root cause behind the field report of two rows with different native IDs
+(regression: `CodexIdentity_DeferredWindowProjectsBothRowsThenMergesOnIdentity_115`).
+
+A 2026-10-31 field log (run-f89657b7, Codex 0.165.0) additionally showed the
+CLI reporting a session ID that never existed as a rollout (adopted via a
+`sessionStart` changed-id event), then reporting the earlier ID again on
+`Stop`/`UserPromptSubmit`. Codex 0.166's hook payload carries only
+`hook_event_name`, `session_id` and `cwd`, so Desk cannot classify the source
+thread. The adoption fence stays (a mismatched ID is never re-adopted), but a
+mismatched `stop`/`userPromptSubmit` still bumps the history refresh
+revisions for the already-adopted identity: the turn signal remains a title
+refresh cue even when its reported ID is stale
+(`CodexIdentity_MismatchedEventKeepsTitleRefreshCue_005`).
+
 Observer delivery is optional metadata, not process ownership.
 
 `cli_get_observer_status` uses the authenticated document and exact request/run/generation. Its safe DTO reports `off`, `connecting` or `unavailable` plus a fixed reason: disabled/unsupported, waiting for events, missing service, unavailable plugin, preparation failure or generic unavailable. It describes the frozen installation result; only accepted hook events establish active observation. Frontend subscription immediately publishes the current state. Query failure cannot fail a successful launch, and a delayed query cannot replace newer activity. New Claude configurations default to observation enabled; explicit off and the original profile of resumed history remain authoritative.
