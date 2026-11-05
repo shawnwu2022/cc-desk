@@ -67,12 +67,13 @@ pub(crate) fn read_history_with_budget(
     let database = root.selected_path().join(source_db);
     let mut conn = open_read_only(&database)?;
     let tx = conn.transaction().map_err(|_| "SOURCE_BUSY")?;
+    let table = session_table(&tx)?;
     probe_schema(&tx)?;
     let worktrees = read_worktrees(&tx)?;
     let mut items = Vec::new();
     for project in projects {
         budget.checkpoint()?;
-        append_project(&tx, root, project, &worktrees, &mut items, budget)?;
+        append_project(&tx, root, project, &worktrees, table, &mut items, budget)?;
     }
     tx.commit().map_err(|_| "SOURCE_BUSY")?;
     for name in [source_db, source_wal.as_str(), source_shm.as_str()] {
@@ -330,8 +331,11 @@ fn sqlite_code(error: rusqlite::Error) -> &'static str {
     }
 }
 
-fn probe_schema(tx: &Connection) -> ReadResult<()> {
-    for (table, required) in [("session", SESSION_COLUMNS), ("project", PROJECT_COLUMNS)] {
+/// v2 起会话写入 `session_v2`（列超集、title 可 NULL），v1 `session` 表停留迁移前镜像。
+/// 表存在即代表 opencode 已完成迁移，只读 v2，不与 v1 表合并去重——重复行比缺行更糟，
+/// 迁移完整性是 opencode 自己的职责。读取所需列两张表同名。
+fn session_table(tx: &Connection) -> ReadResult<&'static str> {
+    for (table, required) in [("session_v2", SESSION_COLUMNS), ("session", SESSION_COLUMNS)] {
         let mut stmt = tx
             .prepare(&format!("PRAGMA table_info({table})"))
             .map_err(sqlite_code)?;
@@ -340,9 +344,25 @@ fn probe_schema(tx: &Connection) -> ReadResult<()> {
             .map_err(sqlite_code)?
             .collect::<Result<_, _>>()
             .map_err(sqlite_code)?;
-        if !required.iter().all(|column| present.contains(*column)) {
-            return Err("SOURCE_UNSUPPORTED");
+        if required.iter().all(|column| present.contains(*column)) {
+            return Ok(table);
         }
+    }
+    Err("SOURCE_UNSUPPORTED")
+}
+
+fn probe_schema(tx: &Connection) -> ReadResult<()> {
+    session_table(tx)?;
+    let mut stmt = tx
+        .prepare("PRAGMA table_info(project)")
+        .map_err(sqlite_code)?;
+    let present: std::collections::BTreeSet<String> = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(sqlite_code)?
+        .collect::<Result<_, _>>()
+        .map_err(sqlite_code)?;
+    if !PROJECT_COLUMNS.iter().all(|column| present.contains(*column)) {
+        return Err("SOURCE_UNSUPPORTED");
     }
     Ok(())
 }
@@ -387,6 +407,7 @@ fn append_project(
     root: &Root,
     project: &ProjectRef<'_>,
     worktrees: &Worktrees,
+    table: &str,
     out: &mut Vec<ResourceItem>,
     budget: &mut Budget,
 ) -> ReadResult<()> {
@@ -406,16 +427,17 @@ fn append_project(
         })
         .map(|(id, _)| id.clone())
         .collect();
-    let sql = "SELECT id, title, directory, time_created, time_updated FROM session \
+    // 表名来自 session_table 的白名单二选一，不是外部输入。
+    let sql = format!("SELECT id, title, directory, time_created, time_updated FROM {table} \
                WHERE parent_id IS NULL AND project_id = ?1 \
-               ORDER BY time_updated DESC, id ASC LIMIT ?2";
+               ORDER BY time_updated DESC, id ASC LIMIT ?2");
     for project_id in &named {
         // SQL 多取一行：让 append_rows 能观察到「还有更多」，否则截断分支永不触发。
         append_rows(
             tx,
             root,
             project,
-            sql,
+            &sql,
             &[project_id as &dyn rusqlite::ToSql, &(PER_PROJECT_LIMIT + 1)],
             out,
             budget,
@@ -438,7 +460,7 @@ fn append_project(
         .map(|index| format!("?{index}"))
         .collect::<Vec<_>>()
         .join(",");
-    let sql = format!("SELECT id, title, directory, time_created, time_updated FROM session \
+    let sql = format!("SELECT id, title, directory, time_created, time_updated FROM {table} \
                       WHERE parent_id IS NULL AND project_id = ?1 AND {directory} IN ({placeholders}) \
                       ORDER BY time_updated DESC, id ASC LIMIT ?{}", spellings.len() + 2);
     let limit = PER_PROJECT_LIMIT + 1;
@@ -464,7 +486,8 @@ fn append_rows(
         .query_map(params, |row| {
             Ok((
                 row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
+                // session_v2 的 title 可为 NULL（未命名/失败会话），落为空串。
+                row.get::<_, Option<String>>(1)?.unwrap_or_default(),
                 row.get::<_, String>(2)?,
                 row.get::<_, i64>(3)?,
                 row.get::<_, i64>(4)?,
