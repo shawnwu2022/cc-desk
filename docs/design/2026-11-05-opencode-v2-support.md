@@ -25,12 +25,13 @@
 
 ## 适配方案（分层交付）
 
-- **L0 披露（先行）**：支持矩阵与 README 声明"已认证 v1.x；v2 已知断裂未支持"，列出用户可见症状与原因，避免静默失效被当 bug 追。
-- **L1 存储适配（比预想轻，主菜）**：读取器改读 `session_v2`（v1 列超集，`session` 表旧数据可继续读或按 v2 迁移语义处理）；归属逻辑（project/directory/`ses_` id）不变；`parent_id IS NULL` 语义需按 v2 复核（subagent 排除）；fixture 用 v2 真实 db dump。
-- **L2 prepare v2**：v2 serve/client 契约调研（`@opencode/client` 或直接 HTTP）；确认 Desk 私有 prepare 与 v2 背景服务（`--standalone`）的关系；保持"创建请求不重放"语义。
-- **L3 observer v2**：按 `Plugin.define` 包结构重写观察插件；hooks 列表调研（v2 文档 `/build/plugins/server` 子页）；保持"仅状态元数据、不读正文"的边界与 transport 重试语义。
-- **L4 rename v2**：v2 metadata API 契约适配。
+- **L1 存储适配（✅ 2026-11-05 已完成，106a3def）**：`session_table` 探测——`session_v2` 存在即代表迁移完成只读它，纯 v1 库回退 `session` 表；不与 v1 镜像合并去重（重复行比缺行更糟）；title 兼容 NULL 落空串。fixture 为本机 dump 的真实 v2 DDL；回归 27（迁移形态）/28（v1 回退）。
+- **L0 披露（随 L2/L3 一并）**：支持矩阵与 README 声明"已认证 v1.x；v2 历史读取已支持，prepare/观察/rename 待 L2-L4"。
+- **L2 prepare v2**：`POST /api/session`（OpenAPI 实测支持预指定 id、title、location，见 `docs/research/opencode-v2.2.5-openapi.json`）；v2 认证为 basic（用户名固定 `opencode`，serve 自动生成密码打印于 stderr）；保持"创建请求不重放"语义；确认 Desk 私有 prepare server 与 v2 背景服务（`--standalone`）的生命周期关系。
+- **L3 observer v2（方向已定：优先 API 事件流而非 plugin）**：`GET /api/event` 提供全量事件订阅（`session.created`、`session.rena*`、`location.shutdown` 等），相对 plugin 路线上游演进更稳——plugin API 在 v1→v2 已断一次，API 契约有 OpenAPI 版本化；`Plugin.define` 形态仅作 API 不可行时的备选。保持"仅状态元数据、不读正文"边界与 transport 重试语义。
+- **L4 rename v2**：`PATCH /api/session/{sessionID}`。
 - 每层独立验收；最终以真实 v2 CLI 的 Layer C 认证收口，Windows WebView 验收不可省。
+- **全 CLI 健壮性（用户 2026-11-05 要求，独立调研任务）**：参考同类开源项目的多版本兼容策略（10-23 调研已覆盖竞品定位，未覆盖其版本兼容机制）；核心方向是把对上游的依赖从易断的 plugin/hook 内部机制迁向带 OpenAPI 契约的公开 API，并保留契约探测与显式降级披露。
 
 ## 检测与披露原则
 
@@ -38,7 +39,6 @@
 
 ## 开放问题
 
-- v2 server plugin hooks 的完整列表与参数形态（`/build/plugins/server`）。
+- v2 server plugin hooks 的完整列表与参数形态（`/build/plugins/server`，仅当 API 事件流不可行才需要）。
 - v2 背景服务与 Desk 私有 prepare server 的生命周期交互。
-- 另一台机器"关闭消失"的确切归因（需那边版本与路径数据）。
 - v2 `session` 子命令（Manage sessions）是否提供比 HTTP API 更稳的受控面。
