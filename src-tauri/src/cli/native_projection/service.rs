@@ -124,13 +124,23 @@ impl ProjectionService {
                         .get(project_id)
                         .ok_or_else(|| error("PROJECT_NOT_FOUND"))?;
                     let _ = admit_project(project)?;
-                    let output = self.launch.probe_opencode_database(
-                        caller,
-                        &profile,
-                        &project.selected_path,
-                        &env,
-                    )?;
-                    configured.with_probed_database(&output).map_err(error)?
+                    // v2 重命名了 db 路径查询命令；探测失败或输出非法时回退数据根
+                    // 默认 opencode.db。读取期 sqlite_file_present 校验存在性，
+                    // 缺失显式 SOURCE_UNSUPPORTED，不因命令形态漂移硬失败 scope。
+                    match self
+                        .launch
+                        .probe_opencode_database(
+                            caller,
+                            &profile,
+                            &project.selected_path,
+                            &env,
+                        )
+                        .ok()
+                        .and_then(|output| configured.with_probed_database(&output).ok())
+                    {
+                        Some(selected) => selected,
+                        None => configured.clone(),
+                    }
                 } else {
                     configured.clone()
                 };
