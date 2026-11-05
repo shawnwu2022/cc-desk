@@ -439,6 +439,41 @@ impl LaunchService {
         expected_environment: &EnvMap,
         terminal: &EnvMap,
     ) -> Result<String, SafeError> {
+        // opencode v2 把 db 路径查询从 `db path` 挪到 `debug paths db`；对未知
+        // argv，两者都以 exit 0 打印多行帮助文本。先问 v2，输出含换行即视为
+        // 命令不存在再问 v1；输出是否为合法 db 路径仍由 with_probed_database
+        // 精校验，这里只按形态选择命令。
+        let v2 = self.probe_opencode_database_command(
+            caller,
+            profile,
+            cwd,
+            expected_environment,
+            terminal,
+            &["debug", "paths", "db"],
+        );
+        if v2.as_ref().is_ok_and(|output| !output.contains(['\r', '\n'])) {
+            return v2;
+        }
+        let v1 = self.probe_opencode_database_command(
+            caller,
+            profile,
+            cwd,
+            expected_environment,
+            terminal,
+            &["db", "path"],
+        );
+        v1.or(v2)
+    }
+
+    fn probe_opencode_database_command(
+        &self,
+        caller: &CallerIdentity,
+        profile: &super::profiles::Profile,
+        cwd: &std::path::Path,
+        expected_environment: &EnvMap,
+        terminal: &EnvMap,
+        argv: &[&str],
+    ) -> Result<String, SafeError> {
         self.registry().check_caller(caller)?;
         if profile.cli != CliKind::Opencode || self.repository.get_profile(&profile.id)? != *profile
         {
@@ -457,7 +492,7 @@ impl LaunchService {
                 .ok_or_else(|| error("SCOPE_UNKNOWN"))?
                 .to_owned(),
             action: LaunchAction::Raw {
-                argv: vec!["db".into(), "path".into()],
+                argv: argv.iter().map(|piece| (*piece).to_owned()).collect(),
             },
             extra_args: vec![],
             cols: 80,
