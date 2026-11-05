@@ -149,3 +149,162 @@ impl ObserverHost {
         })
     }
 }
+
+impl ObserverHost {
+    /// opencode v2 不加载 v1 观察插件，会话状态改由 CLI 直接写进 SQLite（title/
+    /// time_idle/time_busy）。此 watcher 以完全相同的 accept/delivery 校验路径，
+    /// 把「数据库文件变化」转换为一个有界 Notification 刷新 cue——它只是刷新
+    /// 信号，永远不是身份或标题来源；身份由 prepare 的精确会话 ID 提供。
+    /// db 路径取 Desk 进程的默认数据根；profile 显式覆盖 XDG_DATA_HOME 的场景
+    /// 拿不到 cue，退化为与「无观察」一致，不影响任何授权语义。
+    pub(crate) fn spawn_opencode_db_cue(
+        &self,
+        binding: crate::observer_registry::ObserverBinding,
+        authorize: Arc<dyn Fn() -> bool + Send + Sync>,
+        session_id: String,
+    ) {
+        let registry = self.registry.clone();
+        std::thread::Builder::new()
+            .name("opencode-db-cue".into())
+            .spawn(move || {
+                let Some(publish) = crate::hook_server::publisher() else {
+                    return;
+                };
+            let base = match std::env::var_os("XDG_DATA_HOME") {
+                Some(value) if !value.is_empty() => std::path::PathBuf::from(value),
+                _ => {
+                    let Some(home) = dirs::home_dir() else { return };
+                    home.join(".local").join("share")
+                }
+            };
+            let database = base.join("opencode").join("opencode.db");
+            let mut last: Option<std::time::SystemTime> = None;
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                if !authorize() {
+                    return;
+                }
+                let Ok(metadata) = std::fs::metadata(&database) else {
+                        continue;
+                    };
+                    let modified = metadata.modified().ok();
+                    // 首次读取只建立基线；启动即发的 cue 没有任何信息量。
+                    if modified.is_none() || modified == last {
+                        last = modified.or(last);
+                        continue;
+                    }
+                    let baseline = last;
+                    last = modified;
+                    if baseline.is_none() {
+                        continue;
+                    }
+                    // opencode 的 replay 窗口只按唯一性去重（不要求单调），毫秒级
+                    // 时间戳作为事件 ID 即可；重复收到的 Duplicate 会被安全忽略。
+                    let millis = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|elapsed| elapsed.as_millis() % 10_000_000_000_000_000)
+                        .unwrap_or(0);
+                    let event_id = format!("o{millis:016}");
+                    let payload = serde_json::json!({
+                        "hook_event_name": "Notification",
+                        "session_id": session_id,
+                        "notification_type": "opencode_unknown",
+                    });
+                    match registry
+                        .accept_event(&binding, &event_id, payload.to_string().as_bytes())
+                    {
+                        Ok(crate::observer_registry::ObserverAccept::Accepted(event)) => {
+                            let Ok(delivery) = registry.delivery(&binding) else {
+                                return;
+                            };
+                            let mut payload =
+                                crate::hook_events::HookPayload::from_validated(event);
+                            payload.pty_id = delivery.legacy_pty.clone();
+                            if publish(&delivery, payload).is_err() {
+                                return;
+                            }
+                        }
+                        // Duplicate 继续等下一次变化；FORBIDDEN 说明 run 已撤销。
+                        _ => {
+                            if !authorize() {
+                                return;
+                            }
+                        }
+                    }
+                }
+            })
+            .ok(); // 线程创建失败只是没有刷新 cue；启动本身不依赖观察。
+    }
+}
+
+#[cfg(test)]
+mod db_cue_tests {
+    use super::*;
+    use crate::observer_registry::{ObserverAccept, ObserverRun, ObserverSource};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Mutex;
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn Opencode_DbCueAcceptsBoundedNotificationOnMtimeChange_060() {
+        let guard = tempfile::tempdir().unwrap();
+        let database = guard.path().join("opencode").join("opencode.db");
+        std::fs::create_dir_all(database.parent().unwrap()).unwrap();
+        std::fs::write(&database, b"init").unwrap();
+        let db_path = database.clone();
+        // watcher 从进程默认根解析路径；测试用 XDG_DATA_HOME 指向临时目录。
+        std::env::set_var("XDG_DATA_HOME", guard.path());
+        let registry = Arc::new(ObserverRegistry::with_capacity(8));
+        let binding = registry
+            .mint(
+                ObserverRun { run_id: "run-opencode-cue".into(), generation: 1 },
+                ObserverSource::OpencodeHook,
+            )
+            .unwrap();
+        let received = Arc::new(AtomicUsize::new(0));
+        let last_id = Arc::new(Mutex::new(String::new()));
+        let received_for_publish = received.clone();
+        let last_for_publish = last_id.clone();
+        crate::hook_server::set_publisher_for_test(Arc::new(move |delivery, payload| {
+            assert_eq!(delivery.window_label, "main");
+            assert_eq!(payload.event_name, "Notification");
+            *last_for_publish.lock().unwrap() = payload.event_id.unwrap_or_default();
+            received_for_publish.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }));
+        let alive = Arc::new(AtomicBool::new(true));
+        let alive_for_watcher = alive.clone();
+        let host = ObserverHost::new(
+            registry.clone(),
+            PathBuf::new(),
+            Arc::new(|| None),
+        );
+        host.spawn_opencode_db_cue(
+            binding,
+            Arc::new(move || alive_for_watcher.load(Ordering::SeqCst)),
+            "ses_cue_fixture".into(),
+        );
+        // 首轮只建立基线；先等过基线窗口再改 mtime。
+        std::thread::sleep(std::time::Duration::from_millis(2600));
+        std::fs::write(&db_path, b"changed").unwrap();
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&db_path)
+            .unwrap();
+        let newer = std::time::SystemTime::now() + std::time::Duration::from_secs(2);
+        file.set_modified(newer).unwrap();
+        drop(file);
+        for _ in 0..40 {
+            if received.load(Ordering::SeqCst) >= 1 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+        assert!(
+            received.load(Ordering::SeqCst) >= 1,
+            "mtime change must deliver exactly the bounded Notification cue"
+        );
+        assert!(last_id.lock().unwrap().starts_with('o'));
+        alive.store(false, Ordering::SeqCst);
+    }
+}
