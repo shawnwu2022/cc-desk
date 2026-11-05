@@ -446,21 +446,6 @@ impl LaunchService {
     ) -> Result<String, SafeError> {
         // opencode v2 把 db 路径查询从 `db path` 挪到 `debug paths db`；对未知
         // argv，两者都以 exit 0 打印多行帮助文本。决议顺序记住后不再双 spawn。
-        let key = (profile.id.clone(), profile.revision.to_string());
-        let remembered = self.opencode_probe_argv.lock().get(&key).cloned();
-        if let Some(argv) = remembered {
-            let args: Vec<&str> = argv.iter().map(String::as_str).collect();
-            return self.probe_opencode_database_command(
-                caller,
-                profile,
-                cwd,
-                expected_environment,
-                terminal,
-                &args,
-            );
-        }
-        // 首次决议：先问 v2，单行输出视为命中再问 v1；合法路径仍由
-        // with_probed_database 精校验，这里只按形态选择命令。
         // 单行判定 trim 尾换行：CLI 输出必带 \n，不 trim 会把合法 v2 输出
         // 误判为帮助文本（2026-11-05 code-review 发现：修复前 v2 直取与
         // argv 记忆从未生效，全靠默认根回退兜底）。
@@ -469,10 +454,11 @@ impl LaunchService {
                 .as_ref()
                 .is_ok_and(|text| !text.trim_end_matches(['\r', '\n']).contains(['\r', '\n']))
         };
+        let key = (profile.id.clone(), profile.revision.to_string());
         let remembered = self.opencode_probe_argv.lock().get(&key).cloned();
         if let Some(argv) = remembered {
             let args: Vec<&str> = argv.iter().map(String::as_str).collect();
-            return self.probe_opencode_database_command(
+            let result = self.probe_opencode_database_command(
                 caller,
                 profile,
                 cwd,
@@ -480,7 +466,15 @@ impl LaunchService {
                 terminal,
                 &args,
             );
+            // 缓存失效（应用运行期间 CLI v1→v2 升级）：旧命令改打帮助文本，
+            // 清缓存重新决议，而不是让历史源静默错位。
+            if single_line(&result) {
+                return result;
+            }
+            self.opencode_probe_argv.lock().remove(&key);
         }
+        // 首次决议：先问 v2，单行输出视为命中再问 v1；合法路径仍由
+        // with_probed_database 精校验，这里只按形态选择命令。
         let v2 = self.probe_opencode_database_command(
             caller,
             profile,
@@ -512,6 +506,15 @@ impl LaunchService {
             key.clone(),
             argv.iter().map(|piece| (*piece).to_owned()).collect(),
         );
+    }
+
+    /// 该 profile 的 db 路径探测是否已决议为 v2 命令（`debug paths db`）。
+    /// 未决议（首次启动前）返回 false：watcher 属可选刷新 cue，缺失只延迟。
+    fn probe_argv_is_v2(&self, profile_id: &str, revision: &str) -> bool {
+        self.opencode_probe_argv
+            .lock()
+            .get(&(profile_id.to_owned(), revision.to_owned()))
+            .is_some_and(|argv| argv.as_slice() == ["debug", "paths", "db"])
     }
 
     fn probe_opencode_database_command(
@@ -713,31 +716,44 @@ impl LaunchService {
                                     native_session_id,
                                 } = &request.action
                                 {
-                                    // 与 scope/probe 同一规则解析 db 路径：冻结
-                                    // 环境优先，显式 OPENCODE_DB 命中则用它；channel
-                                    // 库在 prepare 阶段尚未决议，回退默认文件名。
-                                    let database =
-                                        crate::cli::native_projection::selection::locations(
-                                            CliKind::Opencode,
-                                            snapshot.environment(),
-                                        )
-                                        .ok()
-                                        .map(|locations| {
-                                            locations.root.join(
-                                                locations.sqlite_file.unwrap_or_else(|| {
-                                                    crate::cli::native_projection::scoped_fs::OPENCODE_DEFAULT_DB
-                                                        .into()
-                                                }),
+                                    // 仅 v2 决议（`debug paths db`）启用 watcher：
+                                    // v1 由原生 plugin 提供有序事件流，两套来源的
+                                    // event_id 序列互不相容（前端按 ID 单调过滤，
+                                    // 毫秒级 cue 会永久压低 plugin 序号）。
+                                    let profile_for_cue =
+                                        self.repository.get_profile(&request.profile_id);
+                                    if let Ok(profile) = profile_for_cue {
+                                    if self.probe_argv_is_v2(
+                                        &profile.id,
+                                        &profile.revision.to_string(),
+                                    ) {
+                                        // 与 scope/probe 同一规则解析 db 路径：冻结
+                                        // 环境优先，显式 OPENCODE_DB 命中则用它；channel
+                                        // 库在 prepare 阶段尚未决议，回退默认文件名。
+                                        let database =
+                                            crate::cli::native_projection::selection::locations(
+                                                CliKind::Opencode,
+                                                snapshot.environment(),
                                             )
-                                        });
-                                    if let Some(database) = database {
-                                        host.spawn_opencode_db_cue(
-                                            prepared.lease.binding().clone(),
-                                            authorize_cue,
-                                            native_session_id.clone(),
-                                            database,
-                                            std::time::Duration::from_secs(2),
-                                        );
+                                            .ok()
+                                            .map(|locations| {
+                                                locations.root.join(
+                                                    locations.sqlite_file.unwrap_or_else(|| {
+                                                        crate::cli::native_projection::scoped_fs::OPENCODE_DEFAULT_DB
+                                                            .into()
+                                                    }),
+                                                )
+                                            });
+                                        if let Some(database) = database {
+                                            host.spawn_opencode_db_cue(
+                                                prepared.lease.binding().clone(),
+                                                authorize_cue,
+                                                native_session_id.clone(),
+                                                database,
+                                                std::time::Duration::from_secs(2),
+                                            );
+                                        }
+                                    }
                                     }
                                 }
                                 Some(prepared)
