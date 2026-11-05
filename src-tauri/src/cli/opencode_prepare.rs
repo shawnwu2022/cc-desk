@@ -153,8 +153,8 @@ impl SessionOrigin {
 /// 本地 server 的 API 代次：由 with_server 的健康握手形态决议（v1 的
 /// /global/health JSON 或 v2 的 /health 网页 200），同一 server 生命周期内
 /// 不会变化，后续调用按它直选端点，不再逐请求嗅探路由。
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ApiFlavor {
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum ApiFlavor {
     V1,
     V2,
 }
@@ -334,19 +334,28 @@ pub(crate) fn select_port() -> Result<u16, SafeError> {
 }
 
 /// 从已冻结的 CLI profile 启动短命服务，仅接受同目录的官方会话 ID。
+pub(crate) type FlavorRecord = parking_lot::Mutex<std::collections::HashMap<String, ApiFlavor>>;
+
+/// 记录本 profile 最近一次 prepare 的 API 代次：显式 OPENCODE_DB 配置跳过
+/// db 路径探测，watcher 的 v2 判定只能依赖这里（CLI 代次与服务代次一致）。
 pub(crate) fn create_session(
     spec: &ProcessLaunchSpec,
     cwd: &Path,
     port: u16,
     admission: PreparingStart,
     current: &impl Fn() -> Result<(), SafeError>,
+    profile_id: &str,
+    flavor_record: &FlavorRecord,
 ) -> Result<String, SafeError> {
     with_server(
         spec,
         port,
         admission,
         current,
-        |client, base, password, flavor| post_session(client, base, password, cwd, flavor, current),
+        |client, base, password, flavor| {
+            flavor_record.lock().insert(profile_id.to_owned(), flavor);
+            post_session(client, base, password, cwd, flavor, current)
+        },
     )
 }
 
@@ -1069,7 +1078,18 @@ mod tests {
             .begin_start(RuntimeKind::Native)
             .unwrap()
             .preparing();
-        let id = create_session(&spec, root.path(), port, admission, &|| Ok(())).unwrap();
+        let flavors: FlavorRecord = parking_lot::Mutex::new(std::collections::HashMap::new());
+        let id = create_session(
+            &spec,
+            root.path(),
+            port,
+            admission,
+            &|| Ok(()),
+            "opencode-test",
+            &flavors,
+        )
+        .unwrap();
+        assert_eq!(flavors.lock().get("opencode-test"), Some(&ApiFlavor::V2));
         assert!(id.starts_with("ses_"));
         let mut path_request = request.clone();
         path_request.action = LaunchAction::Raw {

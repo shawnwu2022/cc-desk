@@ -378,7 +378,11 @@ it('OpencodeIdentity_NotificationBumpsHistoryRefreshCue_032', () => {
   expect(after.historyChangeRevision).toBe((beforeChange ?? 0) + 1)
   expect(after.historyTitleRevision).toBe(after.historyChangeRevision)
   expect(after.historyTitleRevision).not.toBe(beforeTitle)
+  // Notification 不是身份来源：locatorMatch 放行的 cue 只推进刷新，
+  // 不写入 observedSessionId（claim 由冻结 resume locator 承担）。
+  expect(after.observedSessionId).toBeUndefined()
   // 回报其他会话 ID 的 Notification 不被采纳，也不推进刷新
   expect(store.applyObservationIdentity(tab.tabId, captureNativeAttempt(tab), 'ses_other_1', 'notification')).toBe(false)
   expect(store.tab(tab.tabId)?.historyChangeRevision).toBe(after.historyChangeRevision)
+  expect(store.tab(tab.tabId)?.observedSessionId).toBeUndefined()
 })
