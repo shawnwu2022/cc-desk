@@ -4,6 +4,7 @@ use crate::cli::profiles::error;
 use crate::cli::types::SafeError;
 use crate::observer_registry::{ObserverDelivery, ObserverLease, ObserverRegistry, ObserverRun};
 use std::path::PathBuf;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 pub(crate) struct ObserverHost {
@@ -167,9 +168,12 @@ impl ObserverHost {
         interval: std::time::Duration,
     ) {
         let registry = self.registry.clone();
+        let cue_sequence = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let cue_sequence_for_thread = cue_sequence.clone();
         std::thread::Builder::new()
             .name("opencode-db-cue".into())
             .spawn(move || {
+                let cue_sequence = cue_sequence_for_thread;
                 let Some(publish) = crate::hook_server::publisher() else {
                     return;
                 };
@@ -194,13 +198,15 @@ impl ObserverHost {
                     if first_sample {
                         continue;
                     }
-                    // opencode 的 replay 窗口只按唯一性去重（不要求单调），毫秒级
-                    // 时间戳作为事件 ID 即可；重复收到的 Duplicate 会被安全忽略。
+                    // opencode 的 replay 窗口只按唯一性去重（不要求单调）。事件
+                    // ID = 毫秒时间戳（13 位）+ watcher 内 3 位序列：同毫秒内的
+                    // 连续两次 mtime 变化也各得唯一 ID，不会被 Duplicate 吞掉。
                     let millis = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
-                        .map(|elapsed| elapsed.as_millis() % 10_000_000_000_000_000)
+                        .map(|elapsed| elapsed.as_millis() % 10_000_000_000_000)
                         .unwrap_or(0);
-                    let event_id = format!("o{millis:016}");
+                    let sequence = cue_sequence.fetch_add(1, Ordering::Relaxed) % 1_000;
+                    let event_id = format!("o{millis:013}{sequence:03}");
                     let payload = serde_json::json!({
                         "hook_event_name": "Notification",
                         "session_id": session_id,

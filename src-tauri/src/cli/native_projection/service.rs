@@ -144,7 +144,10 @@ impl ProjectionService {
                                 "opencode database probe failed; falling back to default opencode.db"
                             );
                             let mut fallback = configured.clone();
-                            fallback.sqlite_file = Some("opencode.db".into());
+                            fallback.sqlite_file = Some(
+                                crate::cli::native_projection::scoped_fs::OPENCODE_DEFAULT_DB
+                                    .into(),
+                            );
                             fallback
                         })
                 } else {

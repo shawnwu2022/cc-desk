@@ -441,8 +441,7 @@ fn with_server(
         {
             flavor = Some(ApiFlavor::V2);
         }
-        if let Some(resolved) = flavor {
-            let _ = resolved;
+        if flavor.is_some() {
             break;
         }
         if Instant::now() >= deadline {

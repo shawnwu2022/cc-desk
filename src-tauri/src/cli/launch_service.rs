@@ -459,8 +459,28 @@ impl LaunchService {
                 &args,
             );
         }
-        // 首次决议：先问 v2，输出含换行即视为命令不存在再问 v1；合法路径仍由
+        // 首次决议：先问 v2，单行输出视为命中再问 v1；合法路径仍由
         // with_probed_database 精校验，这里只按形态选择命令。
+        // 单行判定 trim 尾换行：CLI 输出必带 \n，不 trim 会把合法 v2 输出
+        // 误判为帮助文本（2026-11-05 code-review 发现：修复前 v2 直取与
+        // argv 记忆从未生效，全靠默认根回退兜底）。
+        let single_line = |output: &Result<String, SafeError>| -> bool {
+            output
+                .as_ref()
+                .is_ok_and(|text| !text.trim_end_matches(['\r', '\n']).contains(['\r', '\n']))
+        };
+        let remembered = self.opencode_probe_argv.lock().get(&key).cloned();
+        if let Some(argv) = remembered {
+            let args: Vec<&str> = argv.iter().map(String::as_str).collect();
+            return self.probe_opencode_database_command(
+                caller,
+                profile,
+                cwd,
+                expected_environment,
+                terminal,
+                &args,
+            );
+        }
         let v2 = self.probe_opencode_database_command(
             caller,
             profile,
@@ -469,10 +489,7 @@ impl LaunchService {
             terminal,
             &["debug", "paths", "db"],
         );
-        if v2
-            .as_ref()
-            .is_ok_and(|output| !output.contains(['\r', '\n']))
-        {
+        if single_line(&v2) {
             self.remember_probe_argv(&key, &["debug", "paths", "db"]);
             return v2;
         }
@@ -484,10 +501,7 @@ impl LaunchService {
             terminal,
             &["db", "path"],
         );
-        if v1
-            .as_ref()
-            .is_ok_and(|output| !output.contains(['\r', '\n']))
-        {
+        if single_line(&v1) {
             self.remember_probe_argv(&key, &["db", "path"]);
         }
         v1.or(v2)
@@ -710,9 +724,10 @@ impl LaunchService {
                                         .ok()
                                         .map(|locations| {
                                             locations.root.join(
-                                                locations
-                                                    .sqlite_file
-                                                    .unwrap_or_else(|| "opencode.db".into()),
+                                                locations.sqlite_file.unwrap_or_else(|| {
+                                                    crate::cli::native_projection::scoped_fs::OPENCODE_DEFAULT_DB
+                                                        .into()
+                                                }),
                                             )
                                         });
                                     if let Some(database) = database {
