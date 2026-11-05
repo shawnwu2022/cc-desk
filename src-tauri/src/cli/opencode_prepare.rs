@@ -153,7 +153,7 @@ impl SessionOrigin {
 /// 本地 server 的 API 代次：由 with_server 的健康握手形态决议（v1 的
 /// /global/health JSON 或 v2 的 /health 网页 200），同一 server 生命周期内
 /// 不会变化，后续调用按它直选端点，不再逐请求嗅探路由。
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum ApiFlavor {
     V1,
     V2,
@@ -547,6 +547,8 @@ fn rename_http(
         Ok(metadata)
     };
     // PATCH 仅发一次。未知写入结果不自动重放，也不退回 SQLite 或显示别名。
+    // v2 契约：PATCH 成功返回 204 无正文（官方 OpenAPI 实测），此时「写入即
+    // 所见」由紧随的 GET 读回校验承担；v1 返回实体仍做逐字校验。
     let changed = client
         .patch(&url)
         .basic_auth("opencode", Some(password))
@@ -555,9 +557,11 @@ fn rename_http(
         .send()
         .and_then(|r| r.error_for_status())
         .map_err(|_| error("RENAME_OUTCOME_UNKNOWN"))?;
-    let changed = read_back(changed)?;
-    if changed.title != title {
-        return Err(error("RENAME_OUTCOME_UNKNOWN"));
+    if flavor == ApiFlavor::V1 {
+        let changed = read_back(changed)?;
+        if changed.title != title {
+            return Err(error("RENAME_OUTCOME_UNKNOWN"));
+        }
     }
     let after = client
         .get(&url)

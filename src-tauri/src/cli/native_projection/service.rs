@@ -124,32 +124,19 @@ impl ProjectionService {
                         .get(project_id)
                         .ok_or_else(|| error("PROJECT_NOT_FOUND"))?;
                     let _ = admit_project(project)?;
-                    // v2 重命名了 db 路径查询命令；探测失败或输出非法时显式落到
-                    // 数据根默认文件名——open_root 对 sqlite_file=None 硬性
-                    // SCOPE_UNKNOWN，这里的 Some 让回退真正生效。读取期的
-                    // sqlite_file_present 校验缺失时显式 SOURCE_UNSUPPORTED。
-                    // 披露：channel 用户（真实库为 opencode-<channel>.db）在探测
-                    // 失败时会看到默认库的旧投影，日志保留 WARN 供归因。
-                    self.launch
-                        .probe_opencode_database(
-                            caller,
-                            &profile,
-                            &project.selected_path,
-                            &env,
-                        )
-                        .ok()
-                        .and_then(|output| configured.with_probed_database(&output).ok())
-                        .unwrap_or_else(|| {
-                            log::warn!(
-                                "opencode database probe failed; falling back to default opencode.db"
-                            );
-                            let mut fallback = configured.clone();
-                            fallback.sqlite_file = Some(
-                                crate::cli::native_projection::scoped_fs::OPENCODE_DEFAULT_DB
-                                    .into(),
-                            );
-                            fallback
-                        })
+                    // v2 重命名了 db 路径查询命令；探测失败（或 CLI 再度改名）
+                    // 时**显式失败**而非回退默认库：channel 用户（真实库为
+                    // opencode-<channel>.db）的默认 opencode.db 若存在必是旧
+                    // 镜像，静默展示陈旧投影比可见的「来源不可用」更糟——
+                    // 前端将其呈现为 opencode-history 警告，保留归因日志。
+                    let output = self
+                        .launch
+                        .probe_opencode_database(caller, &profile, &project.selected_path, &env)
+                        .map_err(|failure| {
+                            log::warn!("opencode database probe failed: {}", failure.code);
+                            failure
+                        })?;
+                    configured.with_probed_database(&output).map_err(error)?
                 } else {
                     configured.clone()
                 };

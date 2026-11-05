@@ -183,10 +183,20 @@ impl ObserverHost {
                     if !authorize() {
                         return;
                     }
-                    let Ok(metadata) = std::fs::metadata(&database) else {
-                        continue;
-                    };
-                    let Ok(modified) = metadata.modified() else {
+                    // WAL 模式下提交通常只写 -wal，主库要 checkpoint 才动；
+                    // 取 db 与 wal 的最新 mtime 作为观察值，漏一侧就漏整个
+                    // 运行期 cue（cli/AGENTS.md 的 WAL 约束）。
+                    let mut wal = database.clone().into_os_string();
+                    wal.push("-wal");
+                    let observed = [
+                        std::fs::metadata(&database).ok(),
+                        std::fs::metadata(std::path::PathBuf::from(wal)).ok(),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|metadata| metadata.modified().ok())
+                    .max();
+                    let Ok(modified) = observed.ok_or("no source") else {
                         continue;
                     };
                     // 首次读取只建立基线；启动即发的 cue 没有任何信息量。
@@ -240,8 +250,12 @@ mod db_cue_tests {
         let guard = tempfile::tempdir().unwrap();
         let database = guard.path().join("opencode").join("opencode.db");
         let db_path = database.clone();
+        // 真实 opencode 是 WAL：提交易先写 -wal。测试模拟「主库不动、只有
+        // WAL 变化」的运行中会话形态（code-review P1）。
+        let wal_path = guard.path().join("opencode").join("opencode.db-wal");
         std::fs::create_dir_all(database.parent().unwrap()).unwrap();
         std::fs::write(&database, b"init").unwrap();
+        std::fs::write(&wal_path, b"wal").unwrap();
         // 路径与间隔已参数化：测试直接传临时文件与毫秒级轮询，无进程级 env 竞争。
         let registry = Arc::new(ObserverRegistry::with_capacity(8));
         let binding = registry
@@ -274,12 +288,12 @@ mod db_cue_tests {
             db_path,
             std::time::Duration::from_millis(20),
         );
-        // 首轮只建立基线；先等过基线窗口再改 mtime。
+        // 首轮只建立基线；先等过基线窗口再改 WAL 的 mtime（主库保持不动，
+        // 覆盖「正在运行的会话标题写入 WAL、主库等 checkpoint」的现场形态）。
         std::thread::sleep(std::time::Duration::from_millis(120));
-        std::fs::write(&database, b"changed").unwrap();
         let file = std::fs::OpenOptions::new()
             .write(true)
-            .open(&database)
+            .open(&wal_path)
             .unwrap();
         let newer = std::time::SystemTime::now() + std::time::Duration::from_secs(2);
         file.set_modified(newer).unwrap();

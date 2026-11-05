@@ -366,11 +366,13 @@ it('OpencodeIdentity_NotificationBumpsHistoryRefreshCue_032', () => {
   const id = 'ses_cue_01'
   const tab = store.create({ cli: 'opencode', projectId: 'p', projectPath: '/repo', profileId: 'oc', profileRevision: '7', action: { kind: 'resume-id', nativeSessionId: id } })
   store.applyLaunchStatus(tab.tabId, status(tab))
-  expect(store.applyObservationIdentity(tab.tabId, captureNativeAttempt(tab), id, 'sessionStart')).toBe(true)
-  const beforeChange = store.tab(tab.tabId)?.historyChangeRevision
-  const beforeTitle = store.tab(tab.tabId)?.historyTitleRevision
+  // v2 真实路径：plugin 不加载，prepared resume 的 tab 没有任何先导
+  // sessionStart，首个 cue 就是与冻结 locator 精确一致的 notification。
   // wire 契约：hook_events.rs 的 serde rename_all=camelCase 把变体 Notification
   // 序列化为 "notification"；大小写必须与分发链一致。
+  const beforeChange = store.tab(tab.tabId)?.historyChangeRevision
+  const beforeTitle = store.tab(tab.tabId)?.historyTitleRevision
+  expect(store.tab(tab.tabId)?.observedSessionId).toBeUndefined()
   expect(store.applyObservationIdentity(tab.tabId, captureNativeAttempt(tab), id, 'notification')).toBe(true)
   const after = store.tab(tab.tabId)!
   expect(after.historyChangeRevision).toBe((beforeChange ?? 0) + 1)
@@ -379,5 +381,4 @@ it('OpencodeIdentity_NotificationBumpsHistoryRefreshCue_032', () => {
   // 回报其他会话 ID 的 Notification 不被采纳，也不推进刷新
   expect(store.applyObservationIdentity(tab.tabId, captureNativeAttempt(tab), 'ses_other_1', 'notification')).toBe(false)
   expect(store.tab(tab.tabId)?.historyChangeRevision).toBe(after.historyChangeRevision)
-  expect(store.tab(tab.tabId)?.observedSessionId).toBe(id)
 })
