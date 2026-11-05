@@ -637,6 +637,7 @@ impl LaunchService {
                                 })
                             })
                         });
+                        let authorize_cue = authorize.clone();
                         let prepare = if snapshot.request().cli == CliKind::Opencode {
                             crate::observer_host::ObserverHost::prepare_opencode
                         } else if snapshot.codex_identity_requested() {
@@ -655,7 +656,22 @@ impl LaunchService {
                             ),
                             authorize,
                         ) {
-                            Ok(prepared) => Some(prepared),
+                            Ok(prepared) => {
+                                // v2 观察降级为 db 变化刷新 cue：仅当本次启动携带
+                                // 精确会话 ID（resume-id 预建链）时启用；身份与授权
+                                // 都来自同一 run 的同一 binding。
+                                if let crate::cli::types::LaunchAction::ResumeId {
+                                    native_session_id,
+                                } = &request.action
+                                {
+                                    host.spawn_opencode_db_cue(
+                                        prepared.lease.binding().clone(),
+                                        authorize_cue.clone(),
+                                        native_session_id.clone(),
+                                    );
+                                }
+                                Some(prepared)
+                            }
                             Err(failure) => {
                                 observer_failure = Some(match failure.code.as_str() {
                                     "OBSERVER_SERVICE_UNAVAILABLE" => {

@@ -358,3 +358,24 @@ it('CodexIdentity_ExactAttemptAndRetirement_031', () => {
   expect(store.applyObservationIdentity(a.tabId, captureNativeAttempt(a), second)).toBe(false)
   expect(store.tab(a.tabId)?.observedSessionId).toBe(first)
 })
+
+// v2 观察者的 db 变化 Notification（同一 prepare 精确 ID、认证 envelope）必须
+// 推进刷新 revision——它是历史重读 cue；错 ID 事件仍然拒绝，不改变身份。
+it('OpencodeIdentity_NotificationBumpsHistoryRefreshCue_032', () => {
+  const store = useNativeTabsStore()
+  const id = 'ses_cue_01'
+  const tab = store.create({ cli: 'opencode', projectId: 'p', projectPath: '/repo', profileId: 'oc', profileRevision: '7', action: { kind: 'resume-id', nativeSessionId: id } })
+  store.applyLaunchStatus(tab.tabId, status(tab))
+  expect(store.applyObservationIdentity(tab.tabId, captureNativeAttempt(tab), id, 'sessionStart')).toBe(true)
+  const beforeChange = store.tab(tab.tabId)?.historyChangeRevision
+  const beforeTitle = store.tab(tab.tabId)?.historyTitleRevision
+  expect(store.applyObservationIdentity(tab.tabId, captureNativeAttempt(tab), id, 'Notification')).toBe(true)
+  const after = store.tab(tab.tabId)!
+  expect(after.historyChangeRevision).toBe((beforeChange ?? 0) + 1)
+  expect(after.historyTitleRevision).toBe(after.historyChangeRevision)
+  expect(after.historyTitleRevision).not.toBe(beforeTitle)
+  // 回报其他会话 ID 的 Notification 不被采纳，也不推进刷新
+  expect(store.applyObservationIdentity(tab.tabId, captureNativeAttempt(tab), 'ses_other_1', 'Notification')).toBe(false)
+  expect(store.tab(tab.tabId)?.historyChangeRevision).toBe(after.historyChangeRevision)
+  expect(store.tab(tab.tabId)?.observedSessionId).toBe(id)
+})

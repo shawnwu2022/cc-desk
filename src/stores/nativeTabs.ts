@@ -366,7 +366,11 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
       if (!/^ses_[A-Za-z0-9_]+$/.test(identity) || identity.length>256) return false
       if (value.action.kind === 'resume-id' && identity !== value.action.nativeSessionId) return false
       if (value.observedSessionId !== identity && eventType !== 'sessionStart') return false
-      if (eventType === 'sessionStart') value.historyChangeRevision=(value.historyChangeRevision ?? 0)+1
+      // v2 观察者以 db 变化 Notification 作为刷新 cue（身份来自 prepare 的精确
+      // ID，envelope 已由 observer registry 认证）。它与 sessionStart 一样推进
+      // 刷新 revision；Notification 不是身份来源，只推进历史重读。
+      value.historyChangeRevision=(value.historyChangeRevision ?? 0)+1
+      if (eventType === 'sessionStart' || eventType === 'Notification') value.historyTitleRevision=value.historyChangeRevision
     }
     if (value.observedSessionId !== identity) {
       value.observedSessionId = identity
