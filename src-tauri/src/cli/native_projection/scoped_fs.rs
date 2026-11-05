@@ -158,6 +158,10 @@ pub(crate) struct Entry {
     pub is_dir: bool,
     pub is_file: bool,
 }
+
+/// opencode 默认数据库文件名：channel 未覆盖时的唯一合法回退值。
+pub(crate) const OPENCODE_DEFAULT_DB: &str = "opencode.db";
+
 impl Root {
     pub(crate) fn selected_path(&self) -> &Path {
         &self.selected
@@ -225,7 +229,7 @@ impl Root {
         Ok(root)
     }
     pub(crate) fn sqlite_filename(&self) -> &str {
-        self.sqlite_file.as_deref().unwrap_or("opencode.db")
+        self.sqlite_file.as_deref().unwrap_or(OPENCODE_DEFAULT_DB)
     }
     #[cfg(unix)]
     pub(crate) fn sqlite_canonical_directory(&self) -> ReadResult<PathBuf> {
