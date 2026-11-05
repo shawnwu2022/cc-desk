@@ -88,8 +88,7 @@ pub async fn init(app: AppHandle) {
     });
 }
 
-static PUBLISHER: std::sync::OnceLock<crate::observer_http::Publisher> =
-    std::sync::OnceLock::new();
+static PUBLISHER: std::sync::OnceLock<crate::observer_http::Publisher> = std::sync::OnceLock::new();
 
 /// 仅限同 run 认证 watcher 复用的发布通道；未初始化（早于 init）返回 None。
 pub(crate) fn publisher() -> Option<crate::observer_http::Publisher> {

@@ -72,16 +72,13 @@ async fn receive(State(state): State<Intake>, request: Request) -> Response {
     match state.registry.accept_event(&binding, &event_id, &body) {
         Ok(ObserverAccept::Duplicate) => Json(json!({"ok":true,"duplicate":true})).into_response(),
         Ok(ObserverAccept::Accepted(event)) => {
-            let delivery = match state.registry.delivery(&binding) {
-                Ok(value) => value,
-                Err(_) => return reject(StatusCode::UNAUTHORIZED, "OBSERVER_FORBIDDEN"),
-            };
-            let mut payload = HookPayload::from_validated(event);
-            payload.pty_id = delivery.legacy_pty.clone();
-            if (state.publish)(&delivery, payload).is_err() {
-                return reject(StatusCode::SERVICE_UNAVAILABLE, "OBSERVER_UNAVAILABLE");
+            match state.registry.deliver(&binding, event, &state.publish) {
+                Ok(()) => Json(json!({"ok":true})).into_response(),
+                Err(failure) if failure.code == "OBSERVER_UNAVAILABLE" => {
+                    reject(StatusCode::SERVICE_UNAVAILABLE, "OBSERVER_UNAVAILABLE")
+                }
+                Err(_) => reject(StatusCode::UNAUTHORIZED, "OBSERVER_FORBIDDEN"),
             }
-            Json(json!({"ok":true})).into_response()
         }
         Err(failure) => {
             let status = match failure.code.as_str() {

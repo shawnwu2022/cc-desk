@@ -1001,7 +1001,15 @@ fn Opencode_DbPrefersMigratedSessionV2_27() {
     let dir = f.project.to_string_lossy().to_string();
     seed_v2(&conn, "ses_v2a", "p1", &dir, Some("v2 会话标题"), 300, None);
     seed_v2(&conn, "ses_v2null", "p1", &dir, None, 290, None);
-    seed_v2(&conn, "ses_v2child", "p1", &dir, Some("子代理"), 280, Some("ses_v2a"));
+    seed_v2(
+        &conn,
+        "ses_v2child",
+        "p1",
+        &dir,
+        Some("子代理"),
+        280,
+        Some("ses_v2a"),
+    );
     // v1 表残留的同 id/旧数据必须被忽略：迁移后它只是历史镜像。
     seed(&conn, "ses_v1legacy", "p1", &dir, "v1 旧数据", 100, None);
     drop(conn);
@@ -1009,9 +1017,11 @@ fn Opencode_DbPrefersMigratedSessionV2_27() {
     let mut rows: Vec<_> = items
         .iter()
         .filter_map(|item| match item {
-            ResourceItem::Session { native_session_id, title, .. } => {
-                Some((native_session_id.as_str(), title.as_str()))
-            }
+            ResourceItem::Session {
+                native_session_id,
+                title,
+                ..
+            } => Some((native_session_id.as_str(), title.as_str())),
             _ => None,
         })
         .collect();
@@ -1037,7 +1047,9 @@ fn Opencode_DbKeepsV1TableWhenNoV2Migration_28() {
     let ids: Vec<_> = items
         .iter()
         .filter_map(|item| match item {
-            ResourceItem::Session { native_session_id, .. } => Some(native_session_id.as_str()),
+            ResourceItem::Session {
+                native_session_id, ..
+            } => Some(native_session_id.as_str()),
             _ => None,
         })
         .collect();

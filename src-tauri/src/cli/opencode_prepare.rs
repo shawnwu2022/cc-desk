@@ -122,6 +122,13 @@ struct Health {
 #[derive(Deserialize)]
 struct Session {
     id: String,
+    #[serde(flatten)]
+    origin: SessionOrigin,
+}
+
+/// v1/v2 两代目录字段的并集形状；`directory()` 是唯一的目录读取口。
+#[derive(Deserialize, Default)]
+struct SessionOrigin {
     #[serde(default)]
     directory: Option<String>,
     #[serde(default)]
@@ -134,7 +141,7 @@ struct LocationRef {
     directory: Option<String>,
 }
 
-impl Session {
+impl SessionOrigin {
     fn directory(&self) -> Option<&str> {
         self.location
             .as_ref()
@@ -143,16 +150,28 @@ impl Session {
     }
 }
 
-/// 有界读取会话响应，剥掉 v2 的 `data` 包装（v1 裸对象原样）。
-fn bounded_session<T: DeserializeOwned>(response: reqwest::blocking::Response) -> Option<T> {
-    let value: serde_json::Value = {
-        let mut bytes = Vec::new();
-        response.take(32769).read_to_end(&mut bytes).ok()?;
-        if bytes.len() > 32768 {
-            return None;
+/// 本地 server 的 API 代次：由 with_server 的健康握手形态决议（v1 的
+/// /global/health JSON 或 v2 的 /health 网页 200），同一 server 生命周期内
+/// 不会变化，后续调用按它直选端点，不再逐请求嗅探路由。
+#[derive(Clone, Copy)]
+enum ApiFlavor {
+    V1,
+    V2,
+}
+
+impl ApiFlavor {
+    fn session_url(self, base: &str, id: &str) -> String {
+        match self {
+            ApiFlavor::V1 => format!("{base}/session/{id}"),
+            ApiFlavor::V2 => format!("{base}/api/session/{id}"),
         }
-        serde_json::from_slice(&bytes).ok()?
-    };
+    }
+}
+
+/// 有界读取会话响应，剥掉 v2 的 `data` 包装（v1 裸对象原样）。
+/// 有界读取契约由 bounded_json 单点承担。
+fn bounded_session<T: DeserializeOwned>(response: reqwest::blocking::Response) -> Option<T> {
+    let value: serde_json::Value = bounded_json(response, 32768)?;
     let inner = value.get("data").cloned().unwrap_or(value);
     serde_json::from_value(inner).ok()
 }
@@ -275,6 +294,7 @@ fn validated_session_id(session: Session, cwd: &Path) -> Result<String, SafeErro
     // 目录证明是同目录契约的一部分：v1 顶层 directory、v2 location.directory，
     // 两者都缺失时不能承认这个会话 ID。
     let matches = session
+        .origin
         .directory()
         .is_some_and(|directory| same_directory(directory, cwd));
     if !session.id.starts_with("ses_")
@@ -321,9 +341,13 @@ pub(crate) fn create_session(
     admission: PreparingStart,
     current: &impl Fn() -> Result<(), SafeError>,
 ) -> Result<String, SafeError> {
-    with_server(spec, port, admission, current, |client, base, password| {
-        post_session(client, base, password, cwd, current)
-    })
+    with_server(
+        spec,
+        port,
+        admission,
+        current,
+        |client, base, password, flavor| post_session(client, base, password, cwd, flavor, current),
+    )
 }
 
 fn with_server(
@@ -331,7 +355,12 @@ fn with_server(
     port: u16,
     mut admission: PreparingStart,
     current: &impl Fn() -> Result<(), SafeError>,
-    operation: impl FnOnce(&reqwest::blocking::Client, &str, &str) -> Result<String, SafeError>,
+    operation: impl FnOnce(
+        &reqwest::blocking::Client,
+        &str,
+        &str,
+        ApiFlavor,
+    ) -> Result<String, SafeError>,
 ) -> Result<String, SafeError> {
     let password = uuid::Uuid::new_v4().simple().to_string();
     let mut command = spec.metadata_command()?;
@@ -377,6 +406,7 @@ fn with_server(
     let client = http_client()?;
     let base = format!("http://127.0.0.1:{port}");
     let deadline = Instant::now() + PREPARE_TIMEOUT;
+    let mut flavor = None;
     loop {
         current()?;
         if child
@@ -388,8 +418,9 @@ fn with_server(
             return Err(error("OPENCODE_SESSION_PREPARE_UNAVAILABLE_BEFORE_CREATE"));
         }
         // v1 健康是 /global/health 的 JSON {healthy:true}；v2 的 /health 返回
-        // 200 网页（无认证体）。任一端点 200 即服务就绪，按形态分别判定。
-        let healthy_v1 = client
+        // 200 网页（无认证体）。先问 v1，命中即短路；否则再问 v2——就绪轮
+        // 最多两个请求，同时握手的形态就是本次 server 的 API 代次。
+        if client
             .get(format!("{base}/global/health"))
             .timeout(HEALTH_TIMEOUT.min(deadline.saturating_duration_since(Instant::now())))
             .basic_auth("opencode", Some(&password))
@@ -397,15 +428,21 @@ fn with_server(
             .ok()
             .and_then(|response| response.error_for_status().ok())
             .and_then(|response| bounded_json::<Health>(response, 4096))
-            .is_some_and(|health| health.healthy);
-        let healthy_v2 = client
+            .is_some_and(|health| health.healthy)
+        {
+            flavor = Some(ApiFlavor::V1);
+        } else if client
             .get(format!("{base}/health"))
             .timeout(HEALTH_TIMEOUT.min(deadline.saturating_duration_since(Instant::now())))
             .send()
             .ok()
             .and_then(|response| response.error_for_status().ok())
-            .is_some();
-        if healthy_v1 || healthy_v2 {
+            .is_some()
+        {
+            flavor = Some(ApiFlavor::V2);
+        }
+        if let Some(resolved) = flavor {
+            let _ = resolved;
             break;
         }
         if Instant::now() >= deadline {
@@ -413,7 +450,8 @@ fn with_server(
         }
         std::thread::sleep(Duration::from_millis(100));
     }
-    let id = operation(&client, &base, &password)?;
+    // flavor 在健康握手中必然已决议（否则上面已超时返回）。
+    let id = operation(&client, &base, &password, flavor.unwrap_or(ApiFlavor::V1))?;
     drop(child);
     let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
     for _ in 0..10 {
@@ -434,17 +472,24 @@ pub(crate) fn rename_session(
     title: &str,
     current: &impl Fn() -> Result<(), SafeError>,
 ) -> Result<(), SafeError> {
-    with_server(spec, port, admission, current, |client, base, password| {
-        rename_http(
-            client,
-            base,
-            password,
-            &authority.native_id,
-            Path::new(&authority.cwd),
-            title,
-            current,
-        )
-    })
+    with_server(
+        spec,
+        port,
+        admission,
+        current,
+        |client, base, password, flavor| {
+            rename_http(
+                client,
+                base,
+                password,
+                &authority.native_id,
+                Path::new(&authority.cwd),
+                title,
+                flavor,
+                current,
+            )
+        },
+    )
     .map(|_| ())
     .map_err(|failure| match failure.code.as_str() {
         "OPENCODE_SESSION_PREPARE_UNAVAILABLE_BEFORE_CREATE" => error("NATIVE_RENAME_UNSUPPORTED"),
@@ -461,27 +506,19 @@ fn rename_http(
     id: &str,
     cwd: &Path,
     title: &str,
+    flavor: ApiFlavor,
     current: &impl Fn() -> Result<(), SafeError>,
 ) -> Result<String, SafeError> {
     #[derive(Deserialize)]
     struct Metadata {
         id: String,
-        #[serde(default)]
-        directory: Option<String>,
-        #[serde(default)]
-        location: Option<LocationRef>,
+        #[serde(flatten)]
+        origin: SessionOrigin,
         title: String,
-    }
-    impl Metadata {
-        fn directory(&self) -> Option<&str> {
-            self.location
-                .as_ref()
-                .and_then(|location| location.directory.as_deref())
-                .or(self.directory.as_deref())
-        }
     }
     let check = |value: &Metadata| {
         let matches = value
+            .origin
             .directory()
             .is_some_and(|directory| same_directory(directory, cwd));
         if value.id != id || !matches {
@@ -489,49 +526,24 @@ fn rename_http(
         }
         current()
     };
-    // 端点一次决议、整链一致：v2 在 /api/session/{id}（data 包装），v1 在
-    // /session/{id}（裸对象）。仅 v2 路由不存在（404/405）才切换，之后不再
-    // 混用；重定向与错误不触发第二端点。
+    // 端点由 with_server 的健康握手一次性决议，整链一致；不存在「会话缺失
+    // 被误判为代次切换」的歧义（那是路由嗅探的问题）。
     current()?;
-    let url = {
-        let probe = client
-            .get(format!("{base}/api/session/{id}"))
+    let url = flavor.session_url(base, id);
+    let before: Metadata = bounded_session(
+        client
+            .get(&url)
             .basic_auth("opencode", Some(password))
             .timeout(CREATE_TIMEOUT)
-            .send();
-        match probe {
-            Ok(response)
-                if !matches!(
-                    response.status(),
-                    reqwest::StatusCode::NOT_FOUND | reqwest::StatusCode::METHOD_NOT_ALLOWED
-                ) =>
-            {
-                let response = response
-                    .error_for_status()
-                    .map_err(|_| error("NATIVE_RENAME_UNSUPPORTED"))?;
-                let before: Metadata = bounded_session(response)
-                    .ok_or_else(|| error("NATIVE_RENAME_UNSUPPORTED"))?;
-                check(&before)?;
-                format!("{base}/api/session/{id}")
-            }
-            _ => {
-                let v1 = client
-                    .get(format!("{base}/session/{id}"))
-                    .basic_auth("opencode", Some(password))
-                    .timeout(CREATE_TIMEOUT)
-                    .send()
-                    .and_then(|r| r.error_for_status())
-                    .map_err(|_| error("NATIVE_RENAME_UNSUPPORTED"))?;
-                let before: Metadata = bounded_session(v1)
-                    .ok_or_else(|| error("NATIVE_RENAME_UNSUPPORTED"))?;
-                check(&before)?;
-                format!("{base}/session/{id}")
-            }
-        }
-    };
+            .send()
+            .and_then(|r| r.error_for_status())
+            .map_err(|_| error("NATIVE_RENAME_UNSUPPORTED"))?,
+    )
+    .ok_or_else(|| error("NATIVE_RENAME_UNSUPPORTED"))?;
+    check(&before)?;
     let read_back = |value: reqwest::blocking::Response| -> Result<Metadata, SafeError> {
-        let metadata: Metadata = bounded_session(value)
-            .ok_or_else(|| error("RENAME_OUTCOME_UNKNOWN"))?;
+        let metadata: Metadata =
+            bounded_session(value).ok_or_else(|| error("RENAME_OUTCOME_UNKNOWN"))?;
         check(&metadata)?;
         Ok(metadata)
     };
@@ -567,44 +579,25 @@ fn post_session(
     base: &str,
     password: &str,
     cwd: &Path,
+    flavor: ApiFlavor,
     current: &impl Fn() -> Result<(), SafeError>,
 ) -> Result<String, SafeError> {
     current()?;
-    // v2：POST /api/session 显式携带 location 目录，响应包 data。仅当 v2 路由
-    // 不存在（v1 serve 返回 404/405）才回退 v1 /session；重定向、服务错误与
-    // 连接失败一律按 OUTCOME_UNKNOWN 结束——创建请求绝不发第二次。
-    let v2_attempt = client
-        .post(format!("{base}/api/session"))
-        .timeout(CREATE_TIMEOUT)
-        .basic_auth("opencode", Some(password))
-        .json(&serde_json::json!({
-            "location": {"directory": cwd.to_string_lossy()}
-        }))
-        .send();
-    let created = match v2_attempt {
-        Ok(response)
-            if response.status() == reqwest::StatusCode::NOT_FOUND
-                || response.status() == reqwest::StatusCode::METHOD_NOT_ALLOWED =>
-        {
-            None
-        }
-        Ok(response) => Some(
-            response
-                .error_for_status()
-                .map_err(|_| error("OPENCODE_SESSION_OUTCOME_UNKNOWN"))?,
+    // 端点由健康握手决议。v2：POST /api/session 显式携带 location 目录，响应
+    // 包 data；v1：POST /session 从 serve cwd 推断目录。创建请求只发一次——
+    // 任何错误（重定向/服务错误/连接失败）都按 OUTCOME_UNKNOWN 结束，绝不重放。
+    let (url, body) = match flavor {
+        ApiFlavor::V2 => (
+            format!("{base}/api/session"),
+            serde_json::json!({"location": {"directory": cwd.to_string_lossy()}}),
         ),
-        Err(_) => return Err(error("OPENCODE_SESSION_OUTCOME_UNKNOWN")),
+        ApiFlavor::V1 => (format!("{base}/session"), serde_json::json!({})),
     };
-    if let Some(response) = created {
-        let session = bounded_session(response)
-            .ok_or_else(|| error("OPENCODE_SESSION_OUTCOME_UNKNOWN"))?;
-        return validated_session_id(session, cwd);
-    }
     let response = client
-        .post(format!("{base}/session"))
+        .post(url)
         .timeout(CREATE_TIMEOUT)
         .basic_auth("opencode", Some(password))
-        .json(&serde_json::json!({}))
+        .json(&body)
         .send()
         .map_err(|_| error("OPENCODE_SESSION_OUTCOME_UNKNOWN"))?;
     let response = response
@@ -711,6 +704,7 @@ mod tests {
                 "ses_fixture",
                 Path::new("/fixture"),
                 "New title",
+                ApiFlavor::V1,
                 &|| Ok(()),
             );
             let methods = worker.join().unwrap();
@@ -835,6 +829,7 @@ mod tests {
             &base,
             "fixture",
             Path::new("/fixture"),
+            ApiFlavor::V2,
             &|| Ok(()),
         );
         assert_eq!(worker.join().unwrap(), 1);
@@ -890,6 +885,7 @@ mod tests {
             &base,
             "fixture",
             Path::new("/fixture"),
+            ApiFlavor::V2,
             &|| Ok(()),
         );
         assert_eq!(worker.join().unwrap(), 1);
@@ -906,6 +902,7 @@ mod tests {
             &format!("http://{}", listener.local_addr().unwrap()),
             "fixture",
             Path::new("/fixture"),
+            ApiFlavor::V2,
             &|| Err(error("FORBIDDEN")),
         );
         assert_eq!(result.unwrap_err().code, "FORBIDDEN");
@@ -920,8 +917,10 @@ mod tests {
             validated_session_id(
                 Session {
                     id: "ses_valid_1".into(),
-                    directory: Some(cwd.to_string_lossy().into()),
-                    location: None
+                    origin: SessionOrigin {
+                        directory: Some(cwd.to_string_lossy().into()),
+                        location: None
+                    },
                 },
                 cwd
             )
@@ -932,8 +931,10 @@ mod tests {
             validated_session_id(
                 Session {
                     id: "ses_valid_1".into(),
-                    directory: Some("/other".into()),
-                    location: None
+                    origin: SessionOrigin {
+                        directory: Some("/other".into()),
+                        location: None
+                    },
                 },
                 cwd
             )
@@ -945,8 +946,10 @@ mod tests {
             validated_session_id(
                 Session {
                     id: "-bad".into(),
-                    directory: Some(cwd.to_string_lossy().into()),
-                    location: None
+                    origin: SessionOrigin {
+                        directory: Some(cwd.to_string_lossy().into()),
+                        location: None
+                    },
                 },
                 cwd
             )

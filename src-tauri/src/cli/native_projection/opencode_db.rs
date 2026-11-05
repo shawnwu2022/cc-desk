@@ -67,8 +67,7 @@ pub(crate) fn read_history_with_budget(
     let database = root.selected_path().join(source_db);
     let mut conn = open_read_only(&database)?;
     let tx = conn.transaction().map_err(|_| "SOURCE_BUSY")?;
-    let table = session_table(&tx)?;
-    probe_schema(&tx)?;
+    let table = probe_schema(&tx)?;
     let worktrees = read_worktrees(&tx)?;
     let mut items = Vec::new();
     for project in projects {
@@ -334,37 +333,41 @@ fn sqlite_code(error: rusqlite::Error) -> &'static str {
 /// v2 起会话写入 `session_v2`（列超集、title 可 NULL），v1 `session` 表停留迁移前镜像。
 /// 表存在即代表 opencode 已完成迁移，只读 v2，不与 v1 表合并去重——重复行比缺行更糟，
 /// 迁移完整性是 opencode 自己的职责。读取所需列两张表同名。
+fn table_columns(tx: &Connection, table: &str) -> ReadResult<std::collections::BTreeSet<String>> {
+    let mut stmt = tx
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .map_err(sqlite_code)?;
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(sqlite_code)?;
+    rows.collect::<Result<_, _>>().map_err(sqlite_code)
+}
+
 fn session_table(tx: &Connection) -> ReadResult<&'static str> {
-    for (table, required) in [("session_v2", SESSION_COLUMNS), ("session", SESSION_COLUMNS)] {
-        let mut stmt = tx
-            .prepare(&format!("PRAGMA table_info({table})"))
-            .map_err(sqlite_code)?;
-        let present: std::collections::BTreeSet<String> = stmt
-            .query_map([], |row| row.get::<_, String>(1))
-            .map_err(sqlite_code)?
-            .collect::<Result<_, _>>()
-            .map_err(sqlite_code)?;
-        if required.iter().all(|column| present.contains(*column)) {
+    for table in ["session_v2", "session"] {
+        let present = table_columns(tx, table)?;
+        if SESSION_COLUMNS
+            .iter()
+            .all(|column| present.contains(*column))
+        {
             return Ok(table);
         }
     }
     Err("SOURCE_UNSUPPORTED")
 }
 
-fn probe_schema(tx: &Connection) -> ReadResult<()> {
-    session_table(tx)?;
-    let mut stmt = tx
-        .prepare("PRAGMA table_info(project)")
-        .map_err(sqlite_code)?;
-    let present: std::collections::BTreeSet<String> = stmt
-        .query_map([], |row| row.get::<_, String>(1))
-        .map_err(sqlite_code)?
-        .collect::<Result<_, _>>()
-        .map_err(sqlite_code)?;
-    if !PROJECT_COLUMNS.iter().all(|column| present.contains(*column)) {
+/// 一次探测返回会话表名，顺带校验 project 表的必需列；调用方不再重复查
+/// 会话表（PRAGMA 全表扫描每次投影只跑一遍）。
+fn probe_schema(tx: &Connection) -> ReadResult<&'static str> {
+    let table = session_table(tx)?;
+    let present = table_columns(tx, "project")?;
+    if !PROJECT_COLUMNS
+        .iter()
+        .all(|column| present.contains(*column))
+    {
         return Err("SOURCE_UNSUPPORTED");
     }
-    Ok(())
+    Ok(table)
 }
 
 type Worktrees = Vec<(String, String)>;
@@ -428,9 +431,11 @@ fn append_project(
         .map(|(id, _)| id.clone())
         .collect();
     // 表名来自 session_table 的白名单二选一，不是外部输入。
-    let sql = format!("SELECT id, title, directory, time_created, time_updated FROM {table} \
+    let sql = format!(
+        "SELECT id, title, directory, time_created, time_updated FROM {table} \
                WHERE parent_id IS NULL AND project_id = ?1 \
-               ORDER BY time_updated DESC, id ASC LIMIT ?2");
+               ORDER BY time_updated DESC, id ASC LIMIT ?2"
+    );
     for project_id in &named {
         // SQL 多取一行：让 append_rows 能观察到「还有更多」，否则截断分支永不触发。
         append_rows(

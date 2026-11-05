@@ -369,13 +369,15 @@ it('OpencodeIdentity_NotificationBumpsHistoryRefreshCue_032', () => {
   expect(store.applyObservationIdentity(tab.tabId, captureNativeAttempt(tab), id, 'sessionStart')).toBe(true)
   const beforeChange = store.tab(tab.tabId)?.historyChangeRevision
   const beforeTitle = store.tab(tab.tabId)?.historyTitleRevision
-  expect(store.applyObservationIdentity(tab.tabId, captureNativeAttempt(tab), id, 'Notification')).toBe(true)
+  // wire 契约：hook_events.rs 的 serde rename_all=camelCase 把变体 Notification
+  // 序列化为 "notification"；大小写必须与分发链一致。
+  expect(store.applyObservationIdentity(tab.tabId, captureNativeAttempt(tab), id, 'notification')).toBe(true)
   const after = store.tab(tab.tabId)!
   expect(after.historyChangeRevision).toBe((beforeChange ?? 0) + 1)
   expect(after.historyTitleRevision).toBe(after.historyChangeRevision)
   expect(after.historyTitleRevision).not.toBe(beforeTitle)
   // 回报其他会话 ID 的 Notification 不被采纳，也不推进刷新
-  expect(store.applyObservationIdentity(tab.tabId, captureNativeAttempt(tab), 'ses_other_1', 'Notification')).toBe(false)
+  expect(store.applyObservationIdentity(tab.tabId, captureNativeAttempt(tab), 'ses_other_1', 'notification')).toBe(false)
   expect(store.tab(tab.tabId)?.historyChangeRevision).toBe(after.historyChangeRevision)
   expect(store.tab(tab.tabId)?.observedSessionId).toBe(id)
 })
