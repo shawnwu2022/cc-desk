@@ -250,12 +250,20 @@ mod db_cue_tests {
         let guard = tempfile::tempdir().unwrap();
         let database = guard.path().join("opencode").join("opencode.db");
         let db_path = database.clone();
-        // 真实 opencode 是 WAL：提交易先写 -wal。测试模拟「主库不动、只有
-        // WAL 变化」的运行中会话形态（code-review P1）。
-        let wal_path = guard.path().join("opencode").join("opencode.db-wal");
+        // 真实 opencode 是 WAL：提交易先写 -wal。先建真实 SQLite 库（WAL 模式、
+        // 预置探测表），模拟「主库不动、只有 WAL 变化」的运行中会话形态。
         std::fs::create_dir_all(database.parent().unwrap()).unwrap();
-        std::fs::write(&database, b"init").unwrap();
-        std::fs::write(&wal_path, b"wal").unwrap();
+        {
+            let init = rusqlite::Connection::open(&database).unwrap();
+            init.execute_batch(
+                "PRAGMA journal_mode=WAL; CREATE TABLE cue_probe(key TEXT PRIMARY KEY, value TEXT);",
+            )
+            .unwrap();
+            // 让既有基线覆盖 WAL 提交后的状态：checkpoint 一次再清空 WAL 尾巴，
+            // 避免测试启动即触发 cue。
+            init.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+                .unwrap();
+        }
         // 路径与间隔已参数化：测试直接传临时文件与毫秒级轮询，无进程级 env 竞争。
         let registry = Arc::new(ObserverRegistry::with_capacity(8));
         let binding = registry
@@ -288,16 +296,17 @@ mod db_cue_tests {
             db_path,
             std::time::Duration::from_millis(20),
         );
-        // 首轮只建立基线；先等过基线窗口再改 WAL 的 mtime（主库保持不动，
-        // 覆盖「正在运行的会话标题写入 WAL、主库等 checkpoint」的现场形态）。
+        // 首轮只建立基线；先等过基线窗口，再用**真实 SQLite WAL 提交**触发：
+        // 独立连接以 WAL 模式写一行（主库不 checkpoint，覆盖「正在运行的会话
+        // 标题写入 WAL」的现场形态——code-review 指出仅改普通文件时间不算
+        // 真实 WAL 提交证据）。
         std::thread::sleep(std::time::Duration::from_millis(120));
-        let file = std::fs::OpenOptions::new()
-            .write(true)
-            .open(&wal_path)
-            .unwrap();
-        let newer = std::time::SystemTime::now() + std::time::Duration::from_secs(2);
-        file.set_modified(newer).unwrap();
-        drop(file);
+        let conn = rusqlite::Connection::open(&database).unwrap();
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL; INSERT OR REPLACE INTO cue_probe(key) VALUES ('v');",
+        )
+        .unwrap();
+        drop(conn);
         for _ in 0..120 {
             if received.load(Ordering::SeqCst) >= 1 {
                 break;

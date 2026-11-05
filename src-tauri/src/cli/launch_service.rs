@@ -94,6 +94,7 @@ pub(crate) struct LaunchService {
     /// v1 上每次 scope/rename 都会先问 v2 再问 v1（两次子进程），记忆后固定
     /// 走已知 argv；profile 修订变化即自然失效。
     opencode_probe_argv: Mutex<std::collections::HashMap<(String, String), Vec<String>>>,
+    opencode_prepare_flavor: super::opencode_prepare::FlavorRecord,
 }
 impl LaunchService {
     pub(crate) fn rename_metadata(
@@ -294,6 +295,7 @@ impl LaunchService {
             command_owners: Arc::new(CommandOwners::default()),
             opencode_preparations: Mutex::new(Vec::new()),
             opencode_probe_argv: Mutex::new(std::collections::HashMap::new()),
+            opencode_prepare_flavor: Mutex::new(std::collections::HashMap::new()),
         }
     }
     pub(crate) fn with_observer(mut self, host: Arc<crate::observer_host::ObserverHost>) -> Self {
@@ -410,6 +412,8 @@ impl LaunchService {
                 port,
                 admission,
                 &current,
+                &request.profile_id,
+                &self.opencode_prepare_flavor,
             );
             let mut owner = owner;
             owner.settled = true;
@@ -446,14 +450,9 @@ impl LaunchService {
     ) -> Result<String, SafeError> {
         // opencode v2 把 db 路径查询从 `db path` 挪到 `debug paths db`；对未知
         // argv，两者都以 exit 0 打印多行帮助文本。决议顺序记住后不再双 spawn。
-        // 单行判定 trim 尾换行：CLI 输出必带 \n，不 trim 会把合法 v2 输出
-        // 误判为帮助文本（2026-11-05 code-review 发现：修复前 v2 直取与
-        // argv 记忆从未生效，全靠默认根回退兜底）。
-        let single_line = |output: &Result<String, SafeError>| -> bool {
-            output
-                .as_ref()
-                .is_ok_and(|text| !text.trim_end_matches(['\r', '\n']).contains(['\r', '\n']))
-        };
+        // 输出可采信性由 probe_output_plausible 判定（trim 尾换行 + 文件名形态）：
+        // CLI 输出必带 \n，不 trim 会把合法 v2 输出误判为帮助文本
+        // （2026-11-05 code-review 发现：修复前 v2 直取与 argv 记忆从未生效）。
         let key = (profile.id.clone(), profile.revision.to_string());
         let remembered = self.opencode_probe_argv.lock().get(&key).cloned();
         if let Some(argv) = remembered {
@@ -466,15 +465,17 @@ impl LaunchService {
                 terminal,
                 &args,
             );
-            // 缓存失效（应用运行期间 CLI v1→v2 升级）：旧命令改打帮助文本，
-            // 清缓存重新决议，而不是让历史源静默错位。
-            if single_line(&result) {
+            // 缓存失效：CLI v1→v2 升级后旧命令改打帮助文本；空输出、单行
+            // 错误文本同理——不是一条可采信的数据库路径就清缓存重新决议，
+            // 否则历史与重命名会随缓存一起持续不可用。
+            if super::native_projection::selection::Locations::probe_output_plausible(
+                result.as_deref().unwrap_or(""),
+            ) {
                 return result;
             }
             self.opencode_probe_argv.lock().remove(&key);
         }
-        // 首次决议：先问 v2，单行输出视为命中再问 v1；合法路径仍由
-        // with_probed_database 精校验，这里只按形态选择命令。
+        // 首次决议：先问 v2，输出为可采信的数据库路径再记忆；否则问 v1。
         let v2 = self.probe_opencode_database_command(
             caller,
             profile,
@@ -483,7 +484,9 @@ impl LaunchService {
             terminal,
             &["debug", "paths", "db"],
         );
-        if single_line(&v2) {
+        if super::native_projection::selection::Locations::probe_output_plausible(
+            v2.as_deref().unwrap_or(""),
+        ) {
             self.remember_probe_argv(&key, &["debug", "paths", "db"]);
             return v2;
         }
@@ -495,7 +498,9 @@ impl LaunchService {
             terminal,
             &["db", "path"],
         );
-        if single_line(&v1) {
+        if super::native_projection::selection::Locations::probe_output_plausible(
+            v1.as_deref().unwrap_or(""),
+        ) {
             self.remember_probe_argv(&key, &["db", "path"]);
         }
         v1.or(v2)
@@ -506,6 +511,23 @@ impl LaunchService {
             key.clone(),
             argv.iter().map(|piece| (*piece).to_owned()).collect(),
         );
+    }
+
+    /// watcher 的 v2 判定：prepare 握手代次优先（覆盖显式 OPENCODE_DB 等
+    /// 跳过 db 探测的配置），db 探测 argv 决议作为默认根场景的次要证据。
+    fn cue_watcher_eligible(&self, request: &LaunchRequest) -> bool {
+        if self
+            .opencode_prepare_flavor
+            .lock()
+            .get(&request.profile_id)
+            .is_some_and(|flavor| *flavor == super::opencode_prepare::ApiFlavor::V2)
+        {
+            return true;
+        }
+        let Ok(profile) = self.repository.get_profile(&request.profile_id) else {
+            return false;
+        };
+        self.probe_argv_is_v2(&profile.id, &profile.revision.to_string())
     }
 
     /// 该 profile 的 db 路径探测是否已决议为 v2 命令（`debug paths db`）。
@@ -720,13 +742,7 @@ impl LaunchService {
                                     // v1 由原生 plugin 提供有序事件流，两套来源的
                                     // event_id 序列互不相容（前端按 ID 单调过滤，
                                     // 毫秒级 cue 会永久压低 plugin 序号）。
-                                    let profile_for_cue =
-                                        self.repository.get_profile(&request.profile_id);
-                                    if let Ok(profile) = profile_for_cue {
-                                    if self.probe_argv_is_v2(
-                                        &profile.id,
-                                        &profile.revision.to_string(),
-                                    ) {
+                                    if self.cue_watcher_eligible(request) {
                                         // 与 scope/probe 同一规则解析 db 路径：冻结
                                         // 环境优先，显式 OPENCODE_DB 命中则用它；channel
                                         // 库在 prepare 阶段尚未决议，回退默认文件名。
@@ -753,7 +769,6 @@ impl LaunchService {
                                                 std::time::Duration::from_secs(2),
                                             );
                                         }
-                                    }
                                     }
                                 }
                                 Some(prepared)

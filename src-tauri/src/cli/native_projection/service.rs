@@ -132,9 +132,8 @@ impl ProjectionService {
                     let output = self
                         .launch
                         .probe_opencode_database(caller, &profile, &project.selected_path, &env)
-                        .map_err(|failure| {
+                        .inspect_err(|failure| {
                             log::warn!("opencode database probe failed: {}", failure.code);
-                            failure
                         })?;
                     configured.with_probed_database(&output).map_err(error)?
                 } else {

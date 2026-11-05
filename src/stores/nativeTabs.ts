@@ -377,8 +377,10 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
       // v2 观察者以 db 变化 Notification 作为刷新 cue（envelope 已由 observer
       // registry 认证；wire 序列化为 camelCase 的 "notification"）。它与
       // sessionStart 一样推进刷新 revision；Notification 不是身份来源，
-      // 只推进历史重读。
+      // 只推进历史重读。locatorMatch 放行的首 cue 到此为止——不写入
+      // observedSessionId（身份只来自 sessionStart；claim 由冻结 locator 承担）。
       bumpHistoryRefresh(value, eventType === 'sessionStart' || eventType === 'notification')
+      if (eventType === 'notification' && locatorMatch) return true
     }
     if (value.observedSessionId !== identity) {
       value.observedSessionId = identity
