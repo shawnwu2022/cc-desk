@@ -235,6 +235,22 @@ refresh cue even when its reported ID is stale
 
 Observer delivery is optional metadata, not process ownership.
 
+OpenCode v2 does not load the v1 observer plugin. While the design's SSE-based
+replacement (subscribing to a v2 server's `GET /api/event`) remains the planned
+mechanism, an interim authenticated watcher bridges the gap: for prepared
+resume-id launches it watches the opencode database file (resolved from the
+frozen launch environment through the same selection rules as scope/probe) and,
+on mtime change, injects one bounded `Notification` refresh cue through the
+same accept/delivery authentication path as the loopback intake. The cue is a
+refresh signal only — it never establishes identity or a title; identity comes
+from the prepared exact session ID. Known blind spots, all degrading to "no
+observation" without affecting authorization: channel-named databases are not
+resolved at prepare time (the default filename is watched), and profiles that
+disable the channel database are unaffected. Health and create/rename endpoints
+are selected by the API flavor resolved during the server health handshake
+(v1 `/global/health` JSON versus v2 `/health` page), not by route probing or
+version strings; the local server keeps one flavor for its whole lifetime.
+
 `cli_get_observer_status` uses the authenticated document and exact request/run/generation. Its safe DTO reports `off`, `connecting` or `unavailable` plus a fixed reason: disabled/unsupported, waiting for events, missing service, unavailable plugin, preparation failure or generic unavailable. It describes the frozen installation result; only accepted hook events establish active observation. Frontend subscription immediately publishes the current state. Query failure cannot fail a successful launch, and a delayed query cannot replace newer activity. New Claude configurations default to observation enabled; explicit off and the original profile of resumed history remain authoritative.
 
 For a machine-specific investigation, collect only: CC Desk and CLI versions; runtime/CLI kind; frozen profile revision and observer override mode/boolean; launch/run/generation matching booleans; installation state and fixed reason; listener readiness; whether an event was accepted, its allowlisted type and age; current observation/activity enums; plugin content-ready, service-ready and required shell-tool-available booleans; effective `disableAllHooks` boolean if independently verified. Do not collect transcript bodies, full settings/environment, arguments, port/capability values or secrets. A normal run on another machine does not certify the affected machine.

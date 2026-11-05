@@ -90,6 +90,10 @@ pub(crate) struct LaunchService {
     shutting_down: Arc<RwLock<bool>>,
     command_owners: Arc<CommandOwners>,
     opencode_preparations: Mutex<Vec<Arc<OpencodePreparation>>>,
+    /// 已决议的 opencode db 路径查询 argv，按 (profile_id, revision) 记忆：
+    /// v1 上每次 scope/rename 都会先问 v2 再问 v1（两次子进程），记忆后固定
+    /// 走已知 argv；profile 修订变化即自然失效。
+    opencode_probe_argv: Mutex<std::collections::HashMap<(String, String), Vec<String>>>,
 }
 impl LaunchService {
     pub(crate) fn rename_metadata(
@@ -289,6 +293,7 @@ impl LaunchService {
             shutting_down: Arc::new(RwLock::new(false)),
             command_owners: Arc::new(CommandOwners::default()),
             opencode_preparations: Mutex::new(Vec::new()),
+            opencode_probe_argv: Mutex::new(std::collections::HashMap::new()),
         }
     }
     pub(crate) fn with_observer(mut self, host: Arc<crate::observer_host::ObserverHost>) -> Self {
@@ -440,9 +445,22 @@ impl LaunchService {
         terminal: &EnvMap,
     ) -> Result<String, SafeError> {
         // opencode v2 把 db 路径查询从 `db path` 挪到 `debug paths db`；对未知
-        // argv，两者都以 exit 0 打印多行帮助文本。先问 v2，输出含换行即视为
-        // 命令不存在再问 v1；输出是否为合法 db 路径仍由 with_probed_database
-        // 精校验，这里只按形态选择命令。
+        // argv，两者都以 exit 0 打印多行帮助文本。决议顺序记住后不再双 spawn。
+        let key = (profile.id.clone(), profile.revision.to_string());
+        let remembered = self.opencode_probe_argv.lock().get(&key).cloned();
+        if let Some(argv) = remembered {
+            let args: Vec<&str> = argv.iter().map(String::as_str).collect();
+            return self.probe_opencode_database_command(
+                caller,
+                profile,
+                cwd,
+                expected_environment,
+                terminal,
+                &args,
+            );
+        }
+        // 首次决议：先问 v2，输出含换行即视为命令不存在再问 v1；合法路径仍由
+        // with_probed_database 精校验，这里只按形态选择命令。
         let v2 = self.probe_opencode_database_command(
             caller,
             profile,
@@ -451,7 +469,11 @@ impl LaunchService {
             terminal,
             &["debug", "paths", "db"],
         );
-        if v2.as_ref().is_ok_and(|output| !output.contains(['\r', '\n'])) {
+        if v2
+            .as_ref()
+            .is_ok_and(|output| !output.contains(['\r', '\n']))
+        {
+            self.remember_probe_argv(&key, &["debug", "paths", "db"]);
             return v2;
         }
         let v1 = self.probe_opencode_database_command(
@@ -462,7 +484,20 @@ impl LaunchService {
             terminal,
             &["db", "path"],
         );
+        if v1
+            .as_ref()
+            .is_ok_and(|output| !output.contains(['\r', '\n']))
+        {
+            self.remember_probe_argv(&key, &["db", "path"]);
+        }
         v1.or(v2)
+    }
+
+    fn remember_probe_argv(&self, key: &(String, String), argv: &[&str]) {
+        self.opencode_probe_argv.lock().insert(
+            key.clone(),
+            argv.iter().map(|piece| (*piece).to_owned()).collect(),
+        );
     }
 
     fn probe_opencode_database_command(
@@ -664,11 +699,31 @@ impl LaunchService {
                                     native_session_id,
                                 } = &request.action
                                 {
-                                    host.spawn_opencode_db_cue(
-                                        prepared.lease.binding().clone(),
-                                        authorize_cue.clone(),
-                                        native_session_id.clone(),
-                                    );
+                                    // 与 scope/probe 同一规则解析 db 路径：冻结
+                                    // 环境优先，显式 OPENCODE_DB 命中则用它；channel
+                                    // 库在 prepare 阶段尚未决议，回退默认文件名。
+                                    let database =
+                                        crate::cli::native_projection::selection::locations(
+                                            CliKind::Opencode,
+                                            snapshot.environment(),
+                                        )
+                                        .ok()
+                                        .map(|locations| {
+                                            locations.root.join(
+                                                locations
+                                                    .sqlite_file
+                                                    .unwrap_or_else(|| "opencode.db".into()),
+                                            )
+                                        });
+                                    if let Some(database) = database {
+                                        host.spawn_opencode_db_cue(
+                                            prepared.lease.binding().clone(),
+                                            authorize_cue,
+                                            native_session_id.clone(),
+                                            database,
+                                            std::time::Duration::from_secs(2),
+                                        );
+                                    }
                                 }
                                 Some(prepared)
                             }

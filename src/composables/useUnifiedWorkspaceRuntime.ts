@@ -943,8 +943,11 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   let historyReading = false
   function historyCue(tab: NativeCliTab): { identity: string | null; reply: string | null; prompt: string | null; titleRevision: number } | null {
     if (tab.cli === 'opencode' && tab.action.kind === 'resume-id') {
+      // 指纹必须包含 historyChangeRevision：v2 观察者的 db 变化 cue 只推进它，
+      // 不含它则 cue 永远到不了 queueHistory（对齐通用分支的合成公式）。
       return { identity: JSON.stringify([tab.requestId, tab.runId, tab.generation, tab.action.nativeSessionId, tab.status]),
-        reply: null, prompt: null, titleRevision: tab.titleChangeRevision ?? 0 }
+        reply: null, prompt: null,
+        titleRevision: (tab.titleChangeRevision ?? 0) + (tab.historyChangeRevision ?? 0) }
     }
     if (tab.action.kind === 'raw' || tab.status !== 'running') return null
     if (tab.cli === 'codex' && !tab.observedSessionId && !tab.titleChangeRevision) return null

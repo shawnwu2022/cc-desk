@@ -124,11 +124,13 @@ impl ProjectionService {
                         .get(project_id)
                         .ok_or_else(|| error("PROJECT_NOT_FOUND"))?;
                     let _ = admit_project(project)?;
-                    // v2 重命名了 db 路径查询命令；探测失败或输出非法时回退数据根
-                    // 默认 opencode.db。读取期 sqlite_file_present 校验存在性，
-                    // 缺失显式 SOURCE_UNSUPPORTED，不因命令形态漂移硬失败 scope。
-                    match self
-                        .launch
+                    // v2 重命名了 db 路径查询命令；探测失败或输出非法时显式落到
+                    // 数据根默认文件名——open_root 对 sqlite_file=None 硬性
+                    // SCOPE_UNKNOWN，这里的 Some 让回退真正生效。读取期的
+                    // sqlite_file_present 校验缺失时显式 SOURCE_UNSUPPORTED。
+                    // 披露：channel 用户（真实库为 opencode-<channel>.db）在探测
+                    // 失败时会看到默认库的旧投影，日志保留 WARN 供归因。
+                    self.launch
                         .probe_opencode_database(
                             caller,
                             &profile,
@@ -137,10 +139,14 @@ impl ProjectionService {
                         )
                         .ok()
                         .and_then(|output| configured.with_probed_database(&output).ok())
-                    {
-                        Some(selected) => selected,
-                        None => configured.clone(),
-                    }
+                        .unwrap_or_else(|| {
+                            log::warn!(
+                                "opencode database probe failed; falling back to default opencode.db"
+                            );
+                            let mut fallback = configured.clone();
+                            fallback.sqlite_file = Some("opencode.db".into());
+                            fallback
+                        })
                 } else {
                     configured.clone()
                 };
