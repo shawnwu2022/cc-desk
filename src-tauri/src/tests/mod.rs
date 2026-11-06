@@ -6,6 +6,8 @@
 pub(super) static NATIVE_WEBVIEW_TEST_LEASE: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 
 #[cfg(all(test, windows))]
+mod claude_delete_guards;
+#[cfg(all(test, windows))]
 pub(crate) mod fixture_process;
 
 #[cfg(test)]

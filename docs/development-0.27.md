@@ -165,3 +165,9 @@ B 获准只刷新本 clone origin/main 并获取对象：[风险分析](main-0.2
 实现提交 **`6de019a2ee22528d1c391e76c449c968c9846140`** 接通Windows授权profile下已原生归档Codex根的三阶段API、独立二次确认与双勾选、一次性票据、startup codexHome/rollout/header实核、容器句柄及整个own Job生命周期、unknown只读协调。确认范围是根及其原生动态子树，计数未知不编造；CLI关联维护、可能保留的数据与实际未跑边界明确。OpenCode/Claude执行和Unix分别关闭，不用旧隐藏/软归档或猜路径删除替代。
 
 最终固定1.98.1/CI debug0新Rust域7pass（1780过滤）、all-target Clippy/fmt、前端10文件408pass、Node安全9pass、typecheck及重建生产入口中英CSP2/2通过。独审P1派生进程逃逸、发送前失权、迟到预览、跨目标重新预览等均先RED再修复；原失败未覆盖。准确命令、源码tree/hash、失败/未跑项见 [完整审计](../.audit/v027-stage8-permanent-delete.md)；后续仅文档记录，不再更改已验证产品源码。没有新源完整16片/完整Vitest、真实CLI/WebView删除、真实签名候选往返或发布。
+
+## Claude / OpenCode 实际适配边界复核
+
+从 `3bdc96744df14727efd613322d749fa349c230b4` 开始，新增隔离 Windows/固定 Claude SDK 反例测试和 OpenCode 原样 remove generator 的合成 SQLite 算法实验，详情见 [阶段9审计](../.audit/v027-stage9-provider-delete.md)。Claude 原件来源映射已证实可行；文件分享锁可排同文件写者，却不封新 child/同名替换，fixture DACL 的创建保护仍允许旧 DELETE capability 将原件迁出。需要实际活动/namespace 维护及可靠恢复机制，不悄悄加入产品 ACL。
+
+OpenCode durable claim 不是互斥租约，CLI delete 默认/standalone 仍可能启动服务，Desk private server 操作后销毁；当前没有可直接复用的持久 HTTP owner 和覆盖并发启动/恢复的拒忙准入。5项算法观察并非真实服务验收。两家生产 mutation 仍关闭，Codex/共同双确认协议未修改；本轮按受影响新测试验证，不重复上一阶段全套或冒称整版P0完成。没有真实服务、用户会话、凭据或发布变更。

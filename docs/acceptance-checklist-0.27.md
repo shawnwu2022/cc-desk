@@ -37,7 +37,7 @@ Claude 当前官方 [配置路径说明](https://code.claude.com/docs/en/setting
 
 ## 明确未交付或未运行
 
-- 永久删除完整子会话枚举/冻结集合及独立逐后代结果未交付；当前 Codex 按用户新授权的根及原生子树语义执行，不一概要求上游任意 expected IDs API。OpenCode 缺已绑定服务来源和不中断外部活动的执行约束；Claude 缺原始源受限 SDK 适配/整个执行期间的活动保护，不能沿用 hardlink rename。见 [分别核实的事实](permanent-delete-0.27.md)。不是等待用户意图确认或自动审批拒绝。
+- 永久删除完整子会话枚举/冻结集合及独立逐后代结果未交付；当前 Codex 按用户新授权的根及原生子树语义执行，不一概要求上游任意 expected IDs API。OpenCode 缺已绑定持久服务来源和执行期间拒忙/阻止并发启动的约束；Claude private junction+受限 SDK 原件映射已在合成实验成立，产品仍缺动态 namespace/整个执行期间活动保护，不能沿用 hardlink rename 或把 fixture DACL 当生产恢复方案。见 [分别核实的事实](permanent-delete-0.27.md) 和 [阶段9反例](../.audit/v027-stage9-provider-delete.md)。不是等待用户意图确认或自动审批拒绝。
 - 真实签名 0.27 候选的 stable→RC→stable：缺正式晋升产物和可销毁的隔离安装环境/输入；此任务未获新发布或用户安装授权，详见 [待执行矩阵](acceptance-0.27.md)。未用测试签名代替。
 - Unix 验证：`wsl.exe --list --quiet` 被操作系统以 `E_ACCESS_DENIED` 拒绝，未证明可用隔离环境；未重试提权、安装或新建。
 - 当前源码的完整 Linux 受准像素 CI、macOS/Linux 安装、安装版 Windows WebView、真实 profile→诊断 IPC→CLI 端到端、三 CLI D20、双行现场/身份关联/AI 命名：环境、测试账号或真实现场输入未具备。定向 Windows 界面、只读版本及合成 Wry fixture 均不冒充这些验收。

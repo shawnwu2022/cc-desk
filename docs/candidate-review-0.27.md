@@ -60,7 +60,7 @@ Rust 1.98.1、CI dev/test debug=0，source `68fa6b3…` 的四个原 harness、1
 
 ## 可接受范围与不得发布的条件
 
-可接受为继续审阅的开发候选：以上已交付行为和限制明确，危险清理仍关闭，历史普通安装与严格返回分开陈述，所有原失败/skip/宿主限制可追溯；不宣称整版 P0、真实安装、D20 或 native All 已验收。候选产物准备前还须按实际新基线重新集成和核对，本文不自动授权合并。
+可接受为继续审阅的开发候选：以上已交付行为和限制明确，永久删除只开放已证明的 Codex 窄范围、其他提供方各自保持关闭，历史普通安装与严格返回分开陈述，所有原失败/skip/宿主限制可追溯；不宣称整版 P0、真实安装、D20 或 native All 已验收。候选产物准备前还须按实际新基线重新集成和核对，本文不自动授权合并。
 
 当前不得发布：没有此次发布授权，开发功能尚未合入受保护 main，缺该精确 merged-main 的现行普通 CI/coverage、三平台实际签名候选与发布后验证，也缺真实0.27 stable→RC→stable隔离往返和目标平台/现场验收。Codex窄永久删除已有实现；其他提供方、完整逐后代结果与真实CLI仍未补齐，不能以该切片宣称整版P0完成。
 
@@ -69,3 +69,5 @@ Rust 1.98.1、CI dev/test debug=0，source `68fa6b3…` 的四个原 harness、1
 有限切片的增量材料：[OpenCode 现有服务同源证明](opencode-service-source-proof-0.27.md) 保留该提供方的OS进程/实际DB/held source缺口；[0.26 main风险与后续实际整合](main-0.26-integration-risk-0.27.md) 区分分析阶段与后来授权的合并结果。已完成main→开发侧整合，尚未把开发功能合入main；本地结果不替代后续精确来源完整CI。后续方向已由用户改为真正永久删除，不能把隐藏/软归档当交付，当前窄实现与限制见新文档。
 
 后续实现索引：**`6de019a2ee22528d1c391e76c449c968c9846140`**，28文件，Codex永久删除三阶段及双确认/生命周期；产品tree `aeae3a67d369efdab26755aa4c15c8462bcaa265`。固定1.98.1新域7、all-target Clippy/fmt、前端408、Node安全9、类型/生产构建及CSP2/2通过；仅此范围，非新源全套。原失败、独审修复、源摘要和未运行项见 [阶段审计](../.audit/v027-stage8-permanent-delete.md)。可继续限定候选审阅/隔离准备，不创建发布。
+
+提供方后续：[阶段9反例与准入结论](../.audit/v027-stage9-provider-delete.md) 新增真实 Windows/固定 Claude SDK 合成实验，以及固定 OpenCode 原样 remove 在 SQLite 上的服务模型观察。Claude 原件映射可行，但 sharing/fixture DACL 尚不构成产品活动及恢复合同；OpenCode claim 非排他、Desk 无可复用持久 HTTP owner且删除会 interrupt。未增加两家产品 mutation、未改 Codex 或前端，也未重新宣称旧全套为新树验收。下一步需要具体维护/拒忙机制，不能用隐藏、二次风险确认或额外一次查询替代。

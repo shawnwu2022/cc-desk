@@ -65,7 +65,7 @@ Windows 还持有非 reparse 的 sessions/archived_sessions 容器句柄至整�
 
 本地包摘要：`sdk.mjs` SHA256 `6b963b3eb871949a14392bb35ff970a55e91e2edbe218c61cd9eed60e46cbe45`；`sdk.d.ts` SHA256 `26f9a0c91ad64e2020f0d3734932302e3cc09685bddf2b2f9ef60839ce278773`。SDK 的闭源部分与包实现不混称公开完整 CLI 源码。
 
-最小解阻条件是精确原始源的受限 SDK 权限适配，且能保护主记录和目录在确认至删除期间不被活动/新子会话写入。仅列出进程、确认时看似 idle 或用户风险确认本身不建立该保证；不能靠硬链接、全 projects 搜索或猜路径绕过。
+后续真实 Windows/SDK 实验已证明，private project junction 和受限 Node FS 权限可以映射并删除合成原件，因此来源适配本身有可行方向；尚未接入产品。当前最小缺口是保护主记录和动态子目录在确认至删除期间不受活动/新子会话写入，并准确核查原件而非仅看名字消失。仅列出进程、确认时看似 idle 或用户风险确认本身不建立该保证；不能靠硬链接、全 projects 搜索或猜路径绕过。
 
 ## 合成隔离实验与范围
 
@@ -87,3 +87,13 @@ fixture `v027-stage8-sdk-delete-AMYBUm` 和日志保留原状；脚本额外校�
 - Desk 标签/覆盖元数据可能保留；没有宣称清掉全局日志、外部附件、项目文件或远端副本。原生不返回失败时逐项清单，后代与关联数据仍标 unverified。
 
 OpenCode/Claude 的真实源/活动约束继续分别解阻，不将其误称无永久删除 API。当前不是等待产品意图确认或工具审批；用户已授权产品实现与隔离测试。真实 CLI / WebView、三平台签名候选及隔离升级恢复仍是尚未跑的交付证据，不新发布、不改用户安装。
+
+## 后续提供方适配：已完成的有界实验
+
+从 `3bdc9674` 继续，保留 Codex 和共同双确认/账本，增加 `claude_delete_guards.rs` 合成 OS/固定 SDK 实验及 OpenCode 官方 remove 原样函数体的合成 SQLite 观察。完整固定源码、MIT 许可、精确命令、原失败和最小条件见 [阶段9审计](../.audit/v027-stage9-provider-delete.md)。这轮不把观察用例通过说成两家产品能力已交付。
+
+Claude 同文件 READ/share READ|DELETE guard 确实拒绝旧/新 writer，但目录 sharing 不能冻结新 child；SDK unlink 后同名可重建。仅在新 fixture 上做的 deny WD/AD 能拒绝路径及旧 READ 目录句柄相对创建，SDK仍能真删；预先取得的 DELETE-only 句柄仍能经 classic/Ex rename 将原件迁出。受限 private junction 的来源映射可行，真实活动保护仍缺。若未来采用权限维护模式，必须另行说明并实现范围、旧能力、精确恢复及崩溃恢复；本轮没有产品 ACL 变更，不把它变成未说明的删除副作用。迁出反例也不意味着永远无法用 held-object 身份/删除状态核查结果。
+
+OpenCode 持久 `time_suspended` 是 write-ahead intent，claim 的零行 no-op 不建立排他权；本进程 active/jobs/transport 不涵盖其他实例。5项算法观察包括已提交外部 claim 仍删根、晚到 child 留存、已归档 child 纳入、不相关根保留、元数据相同的不同DB以及晚启动 execution 被 interrupt。替身 Set/服务不是另一真实 CLI 实例。官方 CLI delete 仍走 ServerConnection，默认/standalone 可能启动服务并触发调度；Desk 现有 private server 在操作后销毁，没有可直接借用的持久 HTTP owner。实际可行下一步是在正常授权生命周期保留该服务来源，并具备覆盖启动/恢复/调度的拒忙/维护准入；不是单纯再加一次 idle 查询或要求理想 expected-ID 集合。
+
+结论分别为：Codex Windows 窄能力保持；Claude 来源映射可行、活动/namespace 保护未交付；OpenCode 原生删除真实存在、现有服务来源及执行期间活动准入未接通。两家执行仍关闭，隐藏/软归档未作为替代。无新增服务、真实用户数据操作、push 或发布。

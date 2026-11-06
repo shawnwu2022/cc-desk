@@ -1,0 +1,153 @@
+{
+  "baseHead": "3bdc96744df14727efd613322d749fa349c230b4",
+  "branch": "feat/v0.27.0",
+  "compiler": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "profile": {
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_PROFILE_TEST_DEBUG": "0"
+  },
+  "node": "v24.18.0",
+  "rustSourceDigest": "2ea0632eadf7d1fa340359f23ceecef2fc36434ffd8062b7dc0b1e11fbd5953e",
+  "rustSources": [
+    {
+      "path": "src-tauri/src/tests/claude_delete_guards.rs",
+      "bytes": 27525,
+      "sha256": "56e53ef4ec77c729265b911ba5f796f81e43521b1d609308bbde1e10e324daaf"
+    },
+    {
+      "path": "src-tauri/src/tests/mod.rs",
+      "bytes": 3957,
+      "sha256": "50f65b08800a5a8b495d61faaa942fd418dadbbe29b398c28ed817cdbe1fcf7b"
+    }
+  ],
+  "experimentSources": [
+    {
+      "path": ".audit/v027-stage9-opencode-remove-experiments.mjs",
+      "bytes": 8300,
+      "sha256": "ee147b3f8c3f57958f506fd7472ace5cf0aa8ce9915eacc2f1940cf7f833144c"
+    },
+    {
+      "path": ".audit/v027-stage9-opencode-remove-source.mjs",
+      "bytes": 1936,
+      "sha256": "2d4d095e910980d1e5a8b50e0710db2e032208219fe74994269a3acc4a1d56ce"
+    }
+  ],
+  "evidence": [
+    {
+      "path": ".audit/v027-stage9-claude-guards-acl-restore-diagnostic-006.log",
+      "bytes": 1651,
+      "sha256": "ece55458bbe59e63d83315b766671165b5a22e8dcbd017e3826afb3f49b0c424"
+    },
+    {
+      "path": ".audit/v027-stage9-claude-guards-clippy-final.log",
+      "bytes": 139,
+      "sha256": "b6e5d0c93805b965dc77f1abf0725deb3b2945d798ce384d4fb8145babff595e"
+    },
+    {
+      "path": ".audit/v027-stage9-claude-guards-clippy-final2.log",
+      "bytes": 139,
+      "sha256": "72a0baa02895442eb43486e4803211604144baf29afd0da958c9680f5ceb798e"
+    },
+    {
+      "path": ".audit/v027-stage9-claude-guards-clippy.log",
+      "bytes": 1113,
+      "sha256": "9a324dfba2c07ecc9ae7afac6e175a4e10ca9cd378a433882e74580b0ef03fb3"
+    },
+    {
+      "path": ".audit/v027-stage9-claude-guards-compiler.log",
+      "bytes": 201,
+      "sha256": "67d86fbf74071a3c2fbf23eb9e4e28e3ecc0f81b6fce3d35f5bbc88b7de1ecfb"
+    },
+    {
+      "path": ".audit/v027-stage9-claude-guards-dacl-004.log",
+      "bytes": 3817,
+      "sha256": "7705b83246e56501dfbde63ea323ba9cb3894402c20e4253f7fecc8df00b9c2b"
+    },
+    {
+      "path": ".audit/v027-stage9-claude-guards-dacl-005.log",
+      "bytes": 3887,
+      "sha256": "9b62578d1b0713438a9aa4a67326311447cf35aca42d9793c6942d6d04300c12"
+    },
+    {
+      "path": ".audit/v027-stage9-claude-guards-dacl-007.log",
+      "bytes": 4008,
+      "sha256": "ad66b00c1f9605a4f0bdcf132beaba27077aa111007f57f93bcfdaff17a2ec92"
+    },
+    {
+      "path": ".audit/v027-stage9-claude-guards-final-008.log",
+      "bytes": 4008,
+      "sha256": "437e418ddec97c3b195462c7f7c2c272225d108fbee56531c3020f2b59001e59"
+    },
+    {
+      "path": ".audit/v027-stage9-claude-guards-final-009.log",
+      "bytes": 4008,
+      "sha256": "4bbecbf5ce49e2fbb1363fb1cae03da234cbddcc689ad4c73a5eb679fec2f63e"
+    },
+    {
+      "path": ".audit/v027-stage9-claude-guards-final-010.log",
+      "bytes": 4008,
+      "sha256": "992000689f52f6b704148d78cafd42fb85a2288ff089cc7542221aa8039ebea2"
+    },
+    {
+      "path": ".audit/v027-stage9-claude-guards-fmt-final2.log",
+      "bytes": 12,
+      "sha256": "e05222033cd2c7b46b6fad5ec87b44b62f844dbb6f004476498f71d0e3c9875b"
+    },
+    {
+      "path": ".audit/v027-stage9-claude-guards-fmt.log",
+      "bytes": 12,
+      "sha256": "e05222033cd2c7b46b6fad5ec87b44b62f844dbb6f004476498f71d0e3c9875b"
+    },
+    {
+      "path": ".audit/v027-stage9-claude-guards-hypothesis-001.log",
+      "bytes": 2725,
+      "sha256": "40c85addd304a7caca8b888a3fdb9a9e8d5769e6e9f69865fd383a804c789637"
+    },
+    {
+      "path": ".audit/v027-stage9-claude-guards-observations-002.log",
+      "bytes": 2433,
+      "sha256": "530c073b6a376449d37dd1c6c0586b4376cc24e65bf01cfd9e531495c065809b"
+    },
+    {
+      "path": ".audit/v027-stage9-claude-guards-observations-003.log",
+      "bytes": 2589,
+      "sha256": "07887479381a198238c65573b59c291733b0331500fe2250298e11dde7611093"
+    },
+    {
+      "path": ".audit/v027-stage9-opencode-remove-hypothesis-red.log",
+      "bytes": 3234,
+      "sha256": "d58658d22bd614b0b71d2121cf129380cebd000e16b31453a6eedbfd6b1c06d3"
+    },
+    {
+      "path": ".audit/v027-stage9-opencode-remove-hypothesis-red2.log",
+      "bytes": 4198,
+      "sha256": "04919ed2d8d931c1a2c80c111448c3e36f39ffc71240f0658597617f8c4bad55"
+    },
+    {
+      "path": ".audit/v027-stage9-opencode-remove-observations.log",
+      "bytes": 1290,
+      "sha256": "9e702ed66f93232c046dd531527eb364f186cf14e958507096958c811dedb168"
+    }
+  ],
+  "productionAndPolicyChanged": false,
+  "actualNativeCliOrHttpServiceStarted": false,
+  "qualification": {
+    "claudeOsAndSdkObservations": {
+      "passed": 10,
+      "failed": 0,
+      "ignored": 0,
+      "filtered": 1787,
+      "finalLog": "v027-stage9-claude-guards-final-010.log"
+    },
+    "openCodeAlgorithmModelObservations": {
+      "passed": 5,
+      "failed": 0,
+      "actualNativeRuntime": false
+    },
+    "allTargetClippy": "passed",
+    "fmt": "passed",
+    "fullRust16Shards": "not-run",
+    "node22": "not-run",
+    "productionClaudeOrOpenCodeDelete": "disabled"
+  }
+}
