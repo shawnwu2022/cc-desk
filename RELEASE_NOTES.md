@@ -4,6 +4,18 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
+## [0.26.0-rc.3]
+
+Fixed
+
+- Accept one leading UTF-8 BOM in Codex Hook reporter input, including the prefix observed in a Windows PowerShell transport. Keep the original raw 64 KiB input limit, JSON and metadata validation, authentication and privacy filtering.
+
+Important
+
+- This is a prerelease test package. Download it explicitly; stable Latest and the stable updater channel remain unchanged.
+- Regression checks exercise the production reporter, actual Windows PowerShell wrapper and authenticated local intake for SessionStart, UserPromptSubmit and Stop, including space, Chinese and apostrophe paths plus direct launch. This development host does not add a BOM itself; the observed prefix is supplied in synthetic input through the real chain.
+- No real user conversation, model call or installed application restart is used. The reported live duplicate-row case, full installed Windows WebView, D20 Layer-C, original unfiltered native All and real AI automatic naming remain unverified. This correction does not certify every cause of duplicate rows.
+
 ## [0.26.0-rc.2]
 
 Fixed

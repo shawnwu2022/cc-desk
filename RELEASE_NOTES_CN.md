@@ -4,6 +4,18 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
+## [0.26.0-rc.3]
+
+修复
+
+- Codex Hook reporter 兼容输入开头的单个 UTF-8 BOM，覆盖 Windows PowerShell 传输中已观测到的前缀。继续保留原始 64 KiB 输入上限、JSON 与元数据校验、认证及隐私过滤。
+
+重要说明
+
+- 本版本是预发布测试包，需要显式下载；稳定版 Latest 与稳定更新通道保持不变。
+- 回归使用生产 reporter、真实 Windows PowerShell wrapper 和认证的本地接收端，覆盖 SessionStart、UserPromptSubmit、Stop，包含空格、中文、单引号路径及直连启动。本研发机自身不会添加 BOM，因此将已观测前缀放入合成输入后通过真实链路验证。
+- 未使用真实用户对话、调用模型或重启已安装应用。反馈中的真实双行会话、完整安装版 Windows WebView、D20 Layer-C、原始未筛选 native All 和真实 AI 自动命名仍未验收；本修复不代表所有双行原因均已排除。
+
 ## [0.26.0-rc.2]
 
 修复
