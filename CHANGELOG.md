@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.26.0-rc.2] - 2026-11-06
+
+### Fixed
+
+- Keep Codex exact-ID title and history refresh alive across authenticated events that report a previous identity; never adopt a mismatched turn-event identity.
+- Read migrated OpenCode session_v2 history with nullable titles and preserve v1 compatibility. Resolve database paths through selected CLI v2/v1 commands, validate the frozen source and explicitly reject unresolved channel sources.
+- Adapt authenticated OpenCode prepare and rename to the official v2 metadata API. Permit absent initial titles, require exact ID/directory and title readback, and never replay an uncertain create or rename request.
+- Deliver bounded database/WAL refresh cues for eligible owned OpenCode v2 resume runs through the existing authenticated observer registry. Respect profile revisions, raw/unknown scope and OPENCODE_PURE; preserve exact locator and generation ownership.
+
+This is a prerelease. Stable Latest and the stable updater remain unchanged. Isolated official OpenCode 2.2.5 metadata checks do not certify paid model turns, live activity badges, D20 Layer-C, full installed Windows WebView or real AI automatic naming. The earlier distinct-native-ID field report is not fully certified fixed; no title/time identity merging is permitted.
+
 ## [0.26.0-rc.1] - 2026-10-30
 
 ### Fixed

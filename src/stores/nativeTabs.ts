@@ -336,6 +336,12 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     }
     return accepted
   }
+  /** 历史刷新 cue 的唯一落点：change 恒推进；advanceTitle 时标题读取跟随同值，
+   * 保证消费端 historyCue 指纹的 change/title 配对语义不漂移。 */
+  function bumpHistoryRefresh(value: NativeCliTab, advanceTitle: boolean): void {
+    value.historyChangeRevision = (value.historyChangeRevision ?? 0) + 1
+    if (advanceTitle) value.historyTitleRevision = value.historyChangeRevision
+  }
   function adoptObservationIdentity(tabId: string, attempt: NativeAttemptIdentity, sessionId: string, eventType: string): boolean {
     const value = tabs.get(tabId)
     const identity = sessionId.trim()
@@ -349,15 +355,32 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     if (value.cli === 'codex') {
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(identity)) return false
       if (!value.observedSessionId && eventType !== 'sessionStart' && eventType !== 'userPromptSubmit') return false
-      if (value.observedSessionId && value.observedSessionId !== identity && eventType !== 'sessionStart') return false
-      value.historyChangeRevision = (value.historyChangeRevision ?? 0) + 1
-      if (eventType === 'stop' || eventType === 'userPromptSubmit') value.historyTitleRevision = value.historyChangeRevision
+      const mismatch = value.observedSessionId !== undefined && value.observedSessionId !== identity && eventType !== 'sessionStart'
+      // 回合结束信号（stop/userPromptSubmit）即使回报了旧 ID 也推进刷新——cue
+      // 语义；sessionStart 的换采走下方采纳路径。bump 收敛到共享 helper。
+      const titleCue = !mismatch || eventType === 'stop' || eventType === 'userPromptSubmit'
+      bumpHistoryRefresh(value, titleCue)
+      if (mismatch) return false
     }
     if (value.cli === 'opencode') {
       if (!/^ses_[A-Za-z0-9_]+$/.test(identity) || identity.length>256) return false
+      // resume-id 的身份必须与冻结 locator 精确一致——任何其他 ID 连 sessionStart
+      // 都拒绝（身份绑定语义）；v2 下 plugin 不加载，prepared resume 的 tab 不会
+      // 先收到 sessionStart：与 locator 精确一致的 Notification 是合法首事件
+      // （身份来自 prepare 的 ID 本身，通知只是刷新 cue），放行到 bump；错 ID
+      // 仍拒绝。running 门保持 v1 契约：starting 阶段的通知不建立身份。
       if (value.action.kind === 'resume-id' && identity !== value.action.nativeSessionId) return false
-      if (value.observedSessionId !== identity && eventType !== 'sessionStart') return false
-      if (eventType === 'sessionStart') value.historyChangeRevision=(value.historyChangeRevision ?? 0)+1
+      const locatorMatch = value.action.kind === 'resume-id'
+        && identity === value.action.nativeSessionId
+        && value.status === 'running'
+      if (value.observedSessionId !== identity && eventType !== 'sessionStart' && !locatorMatch) return false
+      // v2 观察者以 db 变化 Notification 作为刷新 cue（envelope 已由 observer
+      // registry 认证；wire 序列化为 camelCase 的 "notification"）。它与
+      // sessionStart 一样推进刷新 revision；Notification 不是身份来源，
+      // 只推进历史重读。locatorMatch 放行的首 cue 到此为止——不写入
+      // observedSessionId（身份只来自 sessionStart；claim 由冻结 locator 承担）。
+      bumpHistoryRefresh(value, eventType === 'sessionStart' || eventType === 'notification')
+      if (eventType === 'notification' && locatorMatch) return true
     }
     if (value.observedSessionId !== identity) {
       value.observedSessionId = identity
@@ -375,10 +398,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
     // The terminal's idle cue may precede the asynchronous title write, even
     // when no Stop hook arrives. Reuse the bounded exact-attempt history reads;
     // status is a refresh cue, never a title or session identity source.
-    if (status === 'idle' && value.observedSessionId) {
-      value.historyChangeRevision = (value.historyChangeRevision ?? 0) + 1
-      value.historyTitleRevision = value.historyChangeRevision
-    }
+    if (status === 'idle' && value.observedSessionId) bumpHistoryRefresh(value, true)
     value.lastActivityAt = Date.now()
   }
 

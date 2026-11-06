@@ -156,8 +156,16 @@ impl LaunchSnapshot {
         }
         Ok(next)
     }
+    /// 冻结的 CLI 原生策略优先于 profile 请求，探测、准备和状态投影共用此准入。
     pub(crate) fn observer_requested(&self) -> bool {
-        self.observer_requested
+        self.observer_requested && !self.opencode_pure()
+    }
+
+    fn opencode_pure(&self) -> bool {
+        self.request.cli == CliKind::Opencode
+            && lookup(&self.environment, OsStr::new("OPENCODE_PURE"))
+                .and_then(|v| v.to_str())
+                .is_some_and(|value| matches!(value, "true" | "1"))
     }
     pub(crate) fn observer_plugin(&self) -> Option<&Path> {
         self.observer_plugin.as_deref()
@@ -185,10 +193,7 @@ impl LaunchSnapshot {
         if self.request.cli != CliKind::Opencode || !self.observer_requested {
             return Err(error("OBSERVER_UNAVAILABLE"));
         }
-        if lookup(&self.environment, OsStr::new("OPENCODE_PURE"))
-            .and_then(|v| v.to_str())
-            .is_some_and(|value| matches!(value, "true" | "1"))
-        {
+        if self.opencode_pure() {
             return Err(error("OBSERVER_UNSUPPORTED"));
         }
         let mut next = self.clone();

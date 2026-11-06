@@ -124,12 +124,17 @@ impl ProjectionService {
                         .get(project_id)
                         .ok_or_else(|| error("PROJECT_NOT_FOUND"))?;
                     let _ = admit_project(project)?;
-                    let output = self.launch.probe_opencode_database(
-                        caller,
-                        &profile,
-                        &project.selected_path,
-                        &env,
-                    )?;
+                    // v2 重命名了 db 路径查询命令；探测失败（或 CLI 再度改名）
+                    // 时**显式失败**而非回退默认库：channel 用户（真实库为
+                    // opencode-<channel>.db）的默认 opencode.db 若存在必是旧
+                    // 镜像，静默展示陈旧投影比可见的「来源不可用」更糟——
+                    // 前端将其呈现为 opencode-history 警告，保留归因日志。
+                    let output = self
+                        .launch
+                        .probe_opencode_database(caller, &profile, &project.selected_path, &env)
+                        .inspect_err(|failure| {
+                            log::warn!("opencode database probe failed: {}", failure.code);
+                        })?;
                     configured.with_probed_database(&output).map_err(error)?
                 } else {
                     configured.clone()

@@ -4,6 +4,7 @@ use crate::cli::profiles::error;
 use crate::cli::types::SafeError;
 use crate::observer_registry::{ObserverDelivery, ObserverLease, ObserverRegistry, ObserverRun};
 use std::path::PathBuf;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 pub(crate) struct ObserverHost {
@@ -147,5 +148,188 @@ impl ObserverHost {
             codex_args: None,
             opencode_plugin: Some(path),
         })
+    }
+}
+
+impl ObserverHost {
+    /// opencode v2 不加载 v1 观察插件，会话状态改由 CLI 直接写进 SQLite（title/
+    /// time_idle/time_busy）。此 watcher 以完全相同的 accept/delivery 校验路径，
+    /// 把「数据库文件变化」转换为一个有界 Notification 刷新 cue——它只是刷新
+    /// 信号，永远不是身份或标题来源；携带 ID 只绑定当前冻结的恢复 locator。
+    /// db 路径由当前冻结 run 的只读探测与来源校验决议；v1 不使用此 watcher，
+    /// 避免刷新事件的时间戳序号压过原生插件的计数序号。
+    pub(crate) fn spawn_opencode_db_cue(
+        &self,
+        binding: crate::observer_registry::ObserverBinding,
+        authorize: Arc<dyn Fn() -> bool + Send + Sync>,
+        session_id: String,
+        database: std::path::PathBuf,
+        interval: std::time::Duration,
+    ) {
+        let registry = self.registry.clone();
+        let cue_sequence = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let cue_sequence_for_thread = cue_sequence.clone();
+        std::thread::Builder::new()
+            .name("opencode-db-cue".into())
+            .spawn(move || {
+                let cue_sequence = cue_sequence_for_thread;
+                let Some(publish) = crate::observer_http::publisher() else {
+                    return;
+                };
+                let mut last: Option<std::time::SystemTime> = None;
+                loop {
+                    std::thread::sleep(interval);
+                    if !authorize() {
+                        return;
+                    }
+                    // WAL 模式下提交通常只写 -wal，主库要 checkpoint 才动；
+                    // 取 db 与 wal 的最新 mtime 作为观察值，漏一侧就漏整个
+                    // 运行期 cue（cli/AGENTS.md 的 WAL 约束）。
+                    let mut wal = database.clone().into_os_string();
+                    wal.push("-wal");
+                    let observed = [
+                        std::fs::metadata(&database).ok(),
+                        std::fs::metadata(std::path::PathBuf::from(wal)).ok(),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|metadata| metadata.modified().ok())
+                    .max();
+                    let Ok(modified) = observed.ok_or("no source") else {
+                        continue;
+                    };
+                    // 首次读取只建立基线；启动即发的 cue 没有任何信息量。
+                    if Some(modified) == last {
+                        continue;
+                    }
+                    let first_sample = last.is_none();
+                    last = Some(modified);
+                    if first_sample {
+                        continue;
+                    }
+                    // opencode 的 replay 窗口只按唯一性去重（不要求单调）。事件
+                    // ID = 毫秒时间戳（13 位）+ watcher 内 3 位序列：同毫秒内的
+                    // 连续两次 mtime 变化也各得唯一 ID，不会被 Duplicate 吞掉。
+                    let millis = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|elapsed| elapsed.as_millis() % 10_000_000_000_000)
+                        .unwrap_or(0);
+                    let sequence = cue_sequence.fetch_add(1, Ordering::Relaxed) % 1_000;
+                    let event_id = format!("o{millis:013}{sequence:03}");
+                    let payload = serde_json::json!({
+                        "hook_event_name": "Notification",
+                        "session_id": session_id,
+                        "notification_type": "opencode_unknown",
+                    });
+                    // Duplicate 静默等下一次变化；撤销由循环头的 authorize 检测，
+                    // Err（FORBIDDEN/容量）只损失一轮 cue，不改变授权语义。
+                    if let Ok(crate::observer_registry::ObserverAccept::Accepted(event)) =
+                        registry.accept_event(&binding, &event_id, payload.to_string().as_bytes())
+                    {
+                        if registry.deliver(&binding, event, &publish).is_err() {
+                            return;
+                        }
+                    }
+                }
+            })
+            .ok(); // 线程创建失败只是没有刷新 cue；启动本身不依赖观察。
+    }
+}
+
+#[cfg(test)]
+mod db_cue_tests {
+    use super::*;
+    use crate::observer_registry::{ObserverRun, ObserverSource};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Mutex;
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn Opencode_DbCueAcceptsBoundedNotificationOnMtimeChange_060() {
+        let guard = tempfile::tempdir().unwrap();
+        let database = guard.path().join("opencode").join("opencode.db");
+        let db_path = database.clone();
+        // 真实 opencode 是 WAL：提交易先写 -wal。先建真实 SQLite 库（WAL 模式、
+        // 预置探测表），模拟「主库不动、只有 WAL 变化」的运行中会话形态。
+        std::fs::create_dir_all(database.parent().unwrap()).unwrap();
+        {
+            let init = rusqlite::Connection::open(&database).unwrap();
+            init.execute_batch(
+                "PRAGMA journal_mode=WAL; CREATE TABLE cue_probe(key TEXT PRIMARY KEY, value TEXT);",
+            )
+            .unwrap();
+            // 让既有基线覆盖 WAL 提交后的状态：checkpoint 一次再清空 WAL 尾巴，
+            // 避免测试启动即触发 cue。
+            init.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+                .unwrap();
+        }
+        // 路径与间隔已参数化：测试直接传临时文件与毫秒级轮询，无进程级 env 竞争。
+        let registry = Arc::new(ObserverRegistry::with_capacity(8));
+        let binding = registry
+            .mint(
+                ObserverRun {
+                    run_id: "run-opencode-cue".into(),
+                    generation: 1,
+                },
+                ObserverSource::OpencodeHook,
+            )
+            .unwrap();
+        let received = Arc::new(AtomicUsize::new(0));
+        let last_id = Arc::new(Mutex::new(String::new()));
+        let received_for_publish = received.clone();
+        let last_for_publish = last_id.clone();
+        crate::observer_http::set_publisher(Arc::new(move |delivery, payload| {
+            assert_eq!(delivery.window_label, "main");
+            assert_eq!(payload.event_name, "Notification");
+            *last_for_publish.lock().unwrap() = payload.event_id.unwrap_or_default();
+            received_for_publish.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }));
+        let alive = Arc::new(AtomicBool::new(true));
+        let alive_for_watcher = alive.clone();
+        let host = ObserverHost::new(registry.clone(), PathBuf::new(), Arc::new(|| None));
+        host.spawn_opencode_db_cue(
+            binding,
+            Arc::new(move || alive_for_watcher.load(Ordering::SeqCst)),
+            "ses_cue_fixture".into(),
+            db_path,
+            std::time::Duration::from_millis(20),
+        );
+        // 首轮只建立基线；先等过基线窗口，再用**真实 SQLite WAL 提交**触发：
+        // 独立连接以 WAL 模式写一行（主库不 checkpoint，覆盖「正在运行的会话
+        // 标题写入 WAL」的现场形态——code-review 指出仅改普通文件时间不算
+        // 真实 WAL 提交证据）。
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        let database_modified = std::fs::metadata(&database).unwrap().modified().unwrap();
+        let conn = rusqlite::Connection::open(&database).unwrap();
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; INSERT OR REPLACE INTO cue_probe(key) VALUES ('v');",
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::metadata(&database).unwrap().modified().unwrap(),
+            database_modified,
+            "WAL regression must not modify the main database through a checkpoint"
+        );
+        let wal = database.with_file_name("opencode.db-wal");
+        assert!(std::fs::metadata(&wal).unwrap().len() > 0);
+        for _ in 0..120 {
+            if received.load(Ordering::SeqCst) >= 1 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(
+            received.load(Ordering::SeqCst) >= 1,
+            "mtime change must deliver exactly the bounded Notification cue"
+        );
+        assert!(last_id.lock().unwrap().starts_with('o'));
+        assert_eq!(
+            std::fs::metadata(&database).unwrap().modified().unwrap(),
+            database_modified
+        );
+        assert!(wal.is_file());
+        alive.store(false, Ordering::SeqCst);
+        drop(conn);
     }
 }

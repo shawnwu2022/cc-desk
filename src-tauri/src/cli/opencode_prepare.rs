@@ -117,10 +117,63 @@ struct Health {
     healthy: bool,
 }
 
+/// v2 的会话对象包在 `data` 里、目录在 `location.directory`；v1 是裸对象、
+/// 顶层 `directory`。按响应形态解析，不做版本探测。
 #[derive(Deserialize)]
 struct Session {
     id: String,
-    directory: String,
+    #[serde(flatten)]
+    origin: SessionOrigin,
+}
+
+/// v1/v2 两代目录字段的并集形状；`directory()` 是唯一的目录读取口。
+#[derive(Deserialize, Default)]
+struct SessionOrigin {
+    #[serde(default)]
+    directory: Option<String>,
+    #[serde(default)]
+    location: Option<LocationRef>,
+}
+
+#[derive(Deserialize)]
+struct LocationRef {
+    #[serde(default)]
+    directory: Option<String>,
+}
+
+impl SessionOrigin {
+    fn directory(&self) -> Option<&str> {
+        self.location
+            .as_ref()
+            .and_then(|location| location.directory.as_deref())
+            .or(self.directory.as_deref())
+    }
+}
+
+/// 本地 server 的 API 代次：由 with_server 的健康握手形态决议（v1 的
+/// /global/health JSON 或 v2 的 /health 网页 200），同一 server 生命周期内
+/// 不会变化，后续调用按它直选端点，不再逐请求嗅探路由。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum ApiFlavor {
+    V1,
+    V2,
+}
+
+impl ApiFlavor {
+    fn session_url(self, base: &str, id: &str) -> String {
+        match self {
+            ApiFlavor::V1 => format!("{base}/session/{id}"),
+            ApiFlavor::V2 => format!("{base}/api/session/{id}"),
+        }
+    }
+}
+
+/// 有界读取会话响应，剥掉 v2 的 `data` 包装（v1 裸对象原样）。
+/// 有界读取契约由 bounded_json 单点承担。
+fn bounded_session<T: DeserializeOwned>(response: reqwest::blocking::Response) -> Option<T> {
+    let value: serde_json::Value = bounded_json(response, 32768)?;
+    let inner = value.get("data").cloned().unwrap_or(value);
+    serde_json::from_value(inner).ok()
 }
 
 struct ServerChild {
@@ -238,13 +291,19 @@ fn same_directory(actual: &str, expected: &Path) -> bool {
 }
 
 fn validated_session_id(session: Session, cwd: &Path) -> Result<String, SafeError> {
+    // 目录证明是同目录契约的一部分：v1 顶层 directory、v2 location.directory，
+    // 两者都缺失时不能承认这个会话 ID。
+    let matches = session
+        .origin
+        .directory()
+        .is_some_and(|directory| same_directory(directory, cwd));
     if !session.id.starts_with("ses_")
         || session.id.len() > 256
         || !session
             .id
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
-        || !same_directory(&session.directory, cwd)
+        || !matches
     {
         return Err(error("OPENCODE_SESSION_OUTCOME_UNKNOWN"));
     }
@@ -282,9 +341,13 @@ pub(crate) fn create_session(
     admission: PreparingStart,
     current: &impl Fn() -> Result<(), SafeError>,
 ) -> Result<String, SafeError> {
-    with_server(spec, port, admission, current, |client, base, password| {
-        post_session(client, base, password, cwd, current)
-    })
+    with_server(
+        spec,
+        port,
+        admission,
+        current,
+        |client, base, password, flavor| post_session(client, base, password, cwd, flavor, current),
+    )
 }
 
 fn with_server(
@@ -292,11 +355,19 @@ fn with_server(
     port: u16,
     mut admission: PreparingStart,
     current: &impl Fn() -> Result<(), SafeError>,
-    operation: impl FnOnce(&reqwest::blocking::Client, &str, &str) -> Result<String, SafeError>,
+    operation: impl FnOnce(
+        &reqwest::blocking::Client,
+        &str,
+        &str,
+        ApiFlavor,
+    ) -> Result<String, SafeError>,
 ) -> Result<String, SafeError> {
     let password = uuid::Uuid::new_v4().simple().to_string();
     let mut command = spec.metadata_command()?;
     command
+        // v1 读 OPENCODE_SERVER_PASSWORD/USERNAME；v2 读 OPENCODE_PASSWORD 且
+        // 用户名固定 opencode（SERVER_USERNAME 被忽略）。双写保持 v1/v2 同密。
+        .env("OPENCODE_PASSWORD", &password)
         .env("OPENCODE_SERVER_PASSWORD", &password)
         .env("OPENCODE_SERVER_USERNAME", "opencode")
         .stdout(Stdio::null())
@@ -335,6 +406,7 @@ fn with_server(
     let client = http_client()?;
     let base = format!("http://127.0.0.1:{port}");
     let deadline = Instant::now() + PREPARE_TIMEOUT;
+    let mut flavor = None;
     loop {
         current()?;
         if child
@@ -345,6 +417,9 @@ fn with_server(
         {
             return Err(error("OPENCODE_SESSION_PREPARE_UNAVAILABLE_BEFORE_CREATE"));
         }
+        // v1 健康是 /global/health 的 JSON {healthy:true}；v2 的 /health 返回
+        // 200 网页（无认证体）。先问 v1，命中即短路；否则再问 v2——就绪轮
+        // 最多两个请求，同时握手的形态就是本次 server 的 API 代次。
         if client
             .get(format!("{base}/global/health"))
             .timeout(HEALTH_TIMEOUT.min(deadline.saturating_duration_since(Instant::now())))
@@ -355,6 +430,18 @@ fn with_server(
             .and_then(|response| bounded_json::<Health>(response, 4096))
             .is_some_and(|health| health.healthy)
         {
+            flavor = Some(ApiFlavor::V1);
+        } else if client
+            .get(format!("{base}/health"))
+            .timeout(HEALTH_TIMEOUT.min(deadline.saturating_duration_since(Instant::now())))
+            .send()
+            .ok()
+            .and_then(|response| response.error_for_status().ok())
+            .is_some()
+        {
+            flavor = Some(ApiFlavor::V2);
+        }
+        if flavor.is_some() {
             break;
         }
         if Instant::now() >= deadline {
@@ -362,7 +449,8 @@ fn with_server(
         }
         std::thread::sleep(Duration::from_millis(100));
     }
-    let id = operation(&client, &base, &password)?;
+    // flavor 在健康握手中必然已决议（否则上面已超时返回）。
+    let id = operation(&client, &base, &password, flavor.unwrap_or(ApiFlavor::V1))?;
     drop(child);
     let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
     for _ in 0..10 {
@@ -383,17 +471,24 @@ pub(crate) fn rename_session(
     title: &str,
     current: &impl Fn() -> Result<(), SafeError>,
 ) -> Result<(), SafeError> {
-    with_server(spec, port, admission, current, |client, base, password| {
-        rename_http(
-            client,
-            base,
-            password,
-            &authority.native_id,
-            Path::new(&authority.cwd),
-            title,
-            current,
-        )
-    })
+    with_server(
+        spec,
+        port,
+        admission,
+        current,
+        |client, base, password, flavor| {
+            rename_http(
+                client,
+                base,
+                password,
+                &authority.native_id,
+                Path::new(&authority.cwd),
+                title,
+                flavor,
+                current,
+            )
+        },
+    )
     .map(|_| ())
     .map_err(|failure| match failure.code.as_str() {
         "OPENCODE_SESSION_PREPARE_UNAVAILABLE_BEFORE_CREATE" => error("NATIVE_RENAME_UNSUPPORTED"),
@@ -410,33 +505,51 @@ fn rename_http(
     id: &str,
     cwd: &Path,
     title: &str,
+    flavor: ApiFlavor,
     current: &impl Fn() -> Result<(), SafeError>,
 ) -> Result<String, SafeError> {
     #[derive(Deserialize)]
     struct Metadata {
         id: String,
-        directory: String,
-        title: String,
+        #[serde(flatten)]
+        origin: SessionOrigin,
+        #[serde(default)]
+        title: Option<String>,
     }
     let check = |value: &Metadata| {
-        if value.id != id || !same_directory(&value.directory, cwd) {
+        let matches = value
+            .origin
+            .directory()
+            .is_some_and(|directory| same_directory(directory, cwd));
+        if value.id != id || !matches {
             return Err(error("SESSION_ORIGIN_AMBIGUOUS"));
         }
         current()
     };
-    let url = format!("{base}/session/{id}");
+    // 端点由 with_server 的健康握手一次性决议，整链一致；不存在「会话缺失
+    // 被误判为代次切换」的歧义（那是路由嗅探的问题）。
     current()?;
-    let before = client
-        .get(&url)
-        .basic_auth("opencode", Some(password))
-        .timeout(CREATE_TIMEOUT)
-        .send()
-        .and_then(|r| r.error_for_status())
-        .map_err(|_| error("NATIVE_RENAME_UNSUPPORTED"))?;
-    let before: Metadata =
-        bounded_json(before, 32768).ok_or_else(|| error("NATIVE_RENAME_UNSUPPORTED"))?;
+    let url = flavor.session_url(base, id);
+    let before: Metadata = bounded_session(
+        client
+            .get(&url)
+            .basic_auth("opencode", Some(password))
+            .timeout(CREATE_TIMEOUT)
+            .send()
+            .and_then(|r| r.error_for_status())
+            .map_err(|_| error("NATIVE_RENAME_UNSUPPORTED"))?,
+    )
+    .ok_or_else(|| error("NATIVE_RENAME_UNSUPPORTED"))?;
     check(&before)?;
+    let read_back = |value: reqwest::blocking::Response| -> Result<Metadata, SafeError> {
+        let metadata: Metadata =
+            bounded_session(value).ok_or_else(|| error("RENAME_OUTCOME_UNKNOWN"))?;
+        check(&metadata)?;
+        Ok(metadata)
+    };
     // PATCH 仅发一次。未知写入结果不自动重放，也不退回 SQLite 或显示别名。
+    // v2 契约：PATCH 成功返回 204 无正文（官方 OpenAPI 实测），此时「写入即
+    // 所见」由紧随的 GET 读回校验承担；v1 返回实体仍做逐字校验。
     let changed = client
         .patch(&url)
         .basic_auth("opencode", Some(password))
@@ -445,11 +558,11 @@ fn rename_http(
         .send()
         .and_then(|r| r.error_for_status())
         .map_err(|_| error("RENAME_OUTCOME_UNKNOWN"))?;
-    let changed: Metadata =
-        bounded_json(changed, 32768).ok_or_else(|| error("RENAME_OUTCOME_UNKNOWN"))?;
-    check(&changed)?;
-    if changed.title != title {
-        return Err(error("RENAME_OUTCOME_UNKNOWN"));
+    if flavor == ApiFlavor::V1 {
+        let changed = read_back(changed)?;
+        if changed.title.as_deref() != Some(title) {
+            return Err(error("RENAME_OUTCOME_UNKNOWN"));
+        }
     }
     let after = client
         .get(&url)
@@ -458,10 +571,8 @@ fn rename_http(
         .send()
         .and_then(|r| r.error_for_status())
         .map_err(|_| error("RENAME_OUTCOME_UNKNOWN"))?;
-    let after: Metadata =
-        bounded_json(after, 32768).ok_or_else(|| error("RENAME_OUTCOME_UNKNOWN"))?;
-    check(&after)?;
-    if after.title != title {
+    let after = read_back(after)?;
+    if after.title.as_deref() != Some(title) {
         return Err(error("RENAME_OUTCOME_UNKNOWN"));
     }
     Ok(id.to_owned())
@@ -472,21 +583,32 @@ fn post_session(
     base: &str,
     password: &str,
     cwd: &Path,
+    flavor: ApiFlavor,
     current: &impl Fn() -> Result<(), SafeError>,
 ) -> Result<String, SafeError> {
     current()?;
+    // 端点由健康握手决议。v2：POST /api/session 显式携带 location 目录，响应
+    // 包 data；v1：POST /session 从 serve cwd 推断目录。创建请求只发一次——
+    // 任何错误（重定向/服务错误/连接失败）都按 OUTCOME_UNKNOWN 结束，绝不重放。
+    let (url, body) = match flavor {
+        ApiFlavor::V2 => (
+            format!("{base}/api/session"),
+            serde_json::json!({"location": {"directory": cwd.to_string_lossy()}}),
+        ),
+        ApiFlavor::V1 => (format!("{base}/session"), serde_json::json!({})),
+    };
     let response = client
-        .post(format!("{base}/session"))
+        .post(url)
         .timeout(CREATE_TIMEOUT)
         .basic_auth("opencode", Some(password))
-        .json(&serde_json::json!({}))
+        .json(&body)
         .send()
         .map_err(|_| error("OPENCODE_SESSION_OUTCOME_UNKNOWN"))?;
     let response = response
         .error_for_status()
         .map_err(|_| error("OPENCODE_SESSION_OUTCOME_UNKNOWN"))?;
-    let session: Session =
-        bounded_json(response, 32768).ok_or_else(|| error("OPENCODE_SESSION_OUTCOME_UNKNOWN"))?;
+    let session =
+        bounded_session(response).ok_or_else(|| error("OPENCODE_SESSION_OUTCOME_UNKNOWN"))?;
     validated_session_id(session, cwd)
 }
 
@@ -504,13 +626,20 @@ mod tests {
             "wrong-patch-title",
             "wrong-readback",
             "redirect",
+            "v2-no-title",
+            "v2-null-title",
+            "v2-wrong-readback",
+            "v2-missing-readback",
+            "v2-patch-error",
         ] {
+            let v2 = mode.starts_with("v2-");
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             listener.set_nonblocking(true).unwrap();
             let address = listener.local_addr().unwrap();
             let count = if mode == "wrong-id" || mode == "wrong-directory" {
                 1
-            } else if mode == "wrong-patch-title" || mode == "redirect" {
+            } else if mode == "wrong-patch-title" || mode == "redirect" || mode == "v2-patch-error"
+            {
                 2
             } else {
                 3
@@ -552,12 +681,29 @@ mod tests {
                     }
                     let request = String::from_utf8(bytes).unwrap();
                     methods.push(request.split_whitespace().next().unwrap().to_owned());
-                    assert!(request.contains("/session/ses_fixture HTTP/1.1"));
+                    assert!(request.contains(if v2 {
+                        "/api/session/ses_fixture HTTP/1.1"
+                    } else {
+                        "/session/ses_fixture HTTP/1.1"
+                    }));
                     assert!(request.to_lowercase().contains("authorization: basic "));
                     if methods.len() == 2 {
                         assert!(request.ends_with("{\"title\":\"New title\"}"));
                     }
                     let mut body = serde_json::json!({"id":"ses_fixture","directory":"/fixture","title":if methods.len()==1 {"Old"} else {"New title"},"future":true});
+                    if v2 {
+                        body.as_object_mut().unwrap().remove("directory");
+                        body["location"] = serde_json::json!({"directory":"/fixture"});
+                        if methods.len() == 1 {
+                            body.as_object_mut().unwrap().remove("title");
+                            if mode == "v2-null-title" {
+                                body["title"] = serde_json::Value::Null;
+                            }
+                        }
+                        if mode == "v2-missing-readback" && methods.len() == 3 {
+                            body.as_object_mut().unwrap().remove("title");
+                        }
+                    }
                     if mode == "wrong-id" {
                         body["id"] = "ses_foreign".into();
                     }
@@ -565,16 +711,29 @@ mod tests {
                         body["directory"] = "/foreign".into();
                     }
                     if (mode == "wrong-patch-title" && methods.len() == 2)
-                        || (mode == "wrong-readback" && methods.len() == 3)
+                        || (matches!(mode, "wrong-readback" | "v2-wrong-readback")
+                            && methods.len() == 3)
                     {
                         body["title"] = "Old".into();
                     }
                     let status = if mode == "redirect" && methods.len() == 2 {
                         "307 Temporary Redirect\r\nLocation: /session/ses_fixture"
+                    } else if v2 && methods.len() == 2 {
+                        if mode == "v2-patch-error" {
+                            "500 Internal Server Error"
+                        } else {
+                            "204 No Content"
+                        }
                     } else {
                         "200 OK"
                     };
-                    let body = body.to_string();
+                    let body = if status == "204 No Content" {
+                        String::new()
+                    } else if v2 {
+                        serde_json::json!({"data":body}).to_string()
+                    } else {
+                        body.to_string()
+                    };
                     write!(stream,"HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
                 }
                 methods
@@ -586,6 +745,7 @@ mod tests {
                 "ses_fixture",
                 Path::new("/fixture"),
                 "New title",
+                if v2 { ApiFlavor::V2 } else { ApiFlavor::V1 },
                 &|| Ok(()),
             );
             let methods = worker.join().unwrap();
@@ -595,7 +755,9 @@ mod tests {
                 usize::from(count > 1)
             );
             match mode {
-                "success" => assert_eq!(result.unwrap(), "ses_fixture"),
+                "success" | "v2-no-title" | "v2-null-title" => {
+                    assert_eq!(result.unwrap(), "ses_fixture")
+                }
                 "wrong-id" | "wrong-directory" => {
                     assert_eq!(result.unwrap_err().code, "SESSION_ORIGIN_AMBIGUOUS")
                 }
@@ -637,8 +799,14 @@ mod tests {
                     stream.read_exact(&mut byte).unwrap();
                     request.push(byte[0]);
                 }
-                assert!(request.starts_with(b"POST /session HTTP/1.1\r\n"));
                 let headers = String::from_utf8(request).unwrap();
+                let request_line = headers.lines().next().unwrap_or("").to_owned();
+                assert!(
+                    request_line == "POST /api/session HTTP/1.1"
+                        || request_line == "POST /session HTTP/1.1",
+                    "unexpected request line: {request_line}"
+                );
+                let is_v2 = request_line.starts_with("POST /api/session");
                 let length: usize = headers
                     .lines()
                     .find_map(|line| {
@@ -654,7 +822,12 @@ mod tests {
                 if redirect && count == 1 {
                     write!(stream, "HTTP/1.1 307 Temporary Redirect\r\nLocation: /session\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
                 } else {
-                    let body = serde_json::json!({"id":"ses_fixture_1","directory":"/fixture","future":{"ignored":true}}).to_string();
+                    // v2 形态包 data、目录在 location；v1 是裸对象、顶层 directory。
+                    let body = if is_v2 {
+                        serde_json::json!({"data":{"id":"ses_fixture_1","location":{"directory":"/fixture"},"future":{"ignored":true}}}).to_string()
+                    } else {
+                        serde_json::json!({"id":"ses_fixture_1","directory":"/fixture","future":{"ignored":true}}).to_string()
+                    };
                     let _ = write!(
                         stream,
                         "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -699,6 +872,7 @@ mod tests {
             &base,
             "fixture",
             Path::new("/fixture"),
+            ApiFlavor::V2,
             &|| Ok(()),
         );
         assert_eq!(worker.join().unwrap(), 1);
@@ -754,6 +928,7 @@ mod tests {
             &base,
             "fixture",
             Path::new("/fixture"),
+            ApiFlavor::V2,
             &|| Ok(()),
         );
         assert_eq!(worker.join().unwrap(), 1);
@@ -770,6 +945,7 @@ mod tests {
             &format!("http://{}", listener.local_addr().unwrap()),
             "fixture",
             Path::new("/fixture"),
+            ApiFlavor::V2,
             &|| Err(error("FORBIDDEN")),
         );
         assert_eq!(result.unwrap_err().code, "FORBIDDEN");
@@ -784,7 +960,10 @@ mod tests {
             validated_session_id(
                 Session {
                     id: "ses_valid_1".into(),
-                    directory: cwd.to_string_lossy().into()
+                    origin: SessionOrigin {
+                        directory: Some(cwd.to_string_lossy().into()),
+                        location: None
+                    },
                 },
                 cwd
             )
@@ -795,7 +974,10 @@ mod tests {
             validated_session_id(
                 Session {
                     id: "ses_valid_1".into(),
-                    directory: "/other".into()
+                    origin: SessionOrigin {
+                        directory: Some("/other".into()),
+                        location: None
+                    },
                 },
                 cwd
             )
@@ -807,7 +989,10 @@ mod tests {
             validated_session_id(
                 Session {
                     id: "-bad".into(),
-                    directory: cwd.to_string_lossy().into()
+                    origin: SessionOrigin {
+                        directory: Some(cwd.to_string_lossy().into()),
+                        location: None
+                    },
                 },
                 cwd
             )
@@ -926,38 +1111,54 @@ mod tests {
             .preparing();
         let id = create_session(&spec, root.path(), port, admission, &|| Ok(())).unwrap();
         assert!(id.starts_with("ses_"));
-        let mut path_request = request.clone();
-        path_request.action = LaunchAction::Raw {
-            argv: vec!["db".into(), "path".into()],
-        };
-        let path_snapshot = freeze_launch(
-            &path_request,
-            &profile,
-            &CallerIdentity {
-                instance_id: "opencode-test-instance".into(),
-                window_label: "main".into(),
-                webview_epoch: WireU64::parse("1").unwrap(),
-            },
-            &FreezeContext {
-                inherited: &inherited,
-                terminal: &EnvMap::new(),
-                legacy: None,
-                observer: None,
-            },
-        )
-        .unwrap();
-        let path_spec =
-            resolve_process(&build_invocation(&path_request, &path_snapshot).unwrap()).unwrap();
-        let path_admission = AdmissionGate::new()
-            .begin_start(RuntimeKind::Native)
-            .unwrap()
-            .preparing();
-        let path = probe_database_path(&path_spec, path_admission, &|| Ok(())).unwrap();
+        // 复用生产决议，避免真实 v2 测试仍用已移除的 v1 命令。
+        let repository =
+            crate::cli::storage::WorkspaceRepository::open(root.path().join("desk/workspace.json"))
+                .unwrap();
+        repository
+            .apply(
+                repository.read().unwrap().revision,
+                crate::cli::storage::Patch::Create {
+                    profile: profile.clone(),
+                },
+            )
+            .unwrap();
+        let selected = repository.get_profile(&profile.id).unwrap();
+        let service =
+            crate::cli::launch_service::LaunchService::new(repository, Some(inherited), None);
+        let caller = service.registry().activate_window("main").unwrap();
+        let path = service
+            .probe_opencode_database(&caller, &selected, root.path(), snapshot.environment())
+            .unwrap();
         assert!(same_directory(
             path.trim(),
             &root.path().join("data/opencode/opencode.db")
         ));
         assert!(root.path().join("data/opencode/opencode.db").is_file());
+        let rename_admission = AdmissionGate::new()
+            .begin_start(RuntimeKind::Native)
+            .unwrap()
+            .preparing();
+        let title = "Official metadata rename";
+        with_server(
+            &spec,
+            port,
+            rename_admission,
+            &|| Ok(()),
+            |client, base, password, flavor| {
+                rename_http(
+                    client,
+                    base,
+                    password,
+                    &id,
+                    root.path(),
+                    title,
+                    flavor,
+                    &|| Ok(()),
+                )
+            },
+        )
+        .unwrap();
         let data_root = crate::cli::native_projection::scoped_fs::Root::open(
             &root.path().join("data/opencode"),
         )
@@ -974,8 +1175,8 @@ mod tests {
             .unwrap();
         assert!(rows.iter().any(|row| matches!(
             row,
-            crate::cli::native_projection::wire::ResourceItem::Session { native_session_id, .. }
-                if native_session_id == &id
+            crate::cli::native_projection::wire::ResourceItem::Session { native_session_id, title: actual_title, .. }
+                if native_session_id == &id && actual_title == title
         )));
     }
 }

@@ -477,6 +477,21 @@ impl ObserverRegistry {
         Ok(())
     }
 
+    /// 认证事件的唯一交付组装点：ValidatedObserverEvent → HookPayload（含
+    /// legacy pty 标记）。HTTP intake 与同 run 认证 watcher 共用，避免交付
+    /// 规则出现两份实现而漂移。
+    pub(crate) fn deliver(
+        &self,
+        binding: &ObserverBinding,
+        event: ValidatedObserverEvent,
+        publish: &crate::observer_http::Publisher,
+    ) -> Result<(), SafeError> {
+        let delivery = self.delivery(binding)?;
+        let mut payload = crate::hook_events::HookPayload::from_validated(event);
+        payload.pty_id = delivery.legacy_pty.clone();
+        publish(&delivery, payload).map_err(|_| error("OBSERVER_UNAVAILABLE"))
+    }
+
     pub(crate) fn delivery(
         &self,
         binding: &ObserverBinding,

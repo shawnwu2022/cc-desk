@@ -3,6 +3,7 @@
 use super::environment::EnvMap;
 use super::invocation::build_invocation;
 use super::launch::LaunchCoordinator;
+use super::opencode_prepare::ApiFlavor;
 use super::output_route::OutputRoute;
 use super::profiles::{error, Override};
 use super::routed_launch::RoutedResource;
@@ -34,6 +35,18 @@ struct OpencodePreparation {
     request: LaunchRequest,
     result: Mutex<Option<Result<String, SafeError>>>,
     settled: Condvar,
+}
+
+/// 路径和 API 代次只属于本次已完成且通过来源校验的探测。
+struct OpencodeDatabaseProbe {
+    output: String,
+    flavor: ApiFlavor,
+}
+
+impl std::fmt::Debug for OpencodeDatabaseProbe {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("OpencodeDatabaseProbe(<redacted>)")
+    }
 }
 
 /// D14/D15 supply a backend consumer. It must retain/reap its owned run and
@@ -90,6 +103,10 @@ pub(crate) struct LaunchService {
     shutting_down: Arc<RwLock<bool>>,
     command_owners: Arc<CommandOwners>,
     opencode_preparations: Mutex<Vec<Arc<OpencodePreparation>>>,
+    /// 已决议的 opencode db 路径查询 argv，按 (profile_id, revision) 记忆：
+    /// v1 上每次 scope/rename 都会先问 v2 再问 v1（两次子进程），记忆后固定
+    /// 走已知 argv；profile 修订变化即自然失效。
+    opencode_probe_argv: Mutex<std::collections::HashMap<(String, String), ApiFlavor>>,
 }
 impl LaunchService {
     pub(crate) fn rename_metadata(
@@ -289,6 +306,7 @@ impl LaunchService {
             shutting_down: Arc::new(RwLock::new(false)),
             command_owners: Arc::new(CommandOwners::default()),
             opencode_preparations: Mutex::new(Vec::new()),
+            opencode_probe_argv: Mutex::new(std::collections::HashMap::new()),
         }
     }
     pub(crate) fn with_observer(mut self, host: Arc<crate::observer_host::ObserverHost>) -> Self {
@@ -423,21 +441,121 @@ impl LaunchService {
         cwd: &std::path::Path,
         expected_environment: &EnvMap,
     ) -> Result<String, SafeError> {
-        self.probe_opencode_database_with_terminal(
-            caller,
-            profile,
-            cwd,
-            expected_environment,
-            &EnvMap::new(),
-        )
+        self.resolve_opencode_database(caller, profile, cwd, expected_environment, &EnvMap::new())
+            .map(|probe| probe.output)
     }
-    fn probe_opencode_database_with_terminal(
+
+    fn resolve_opencode_database(
         &self,
         caller: &CallerIdentity,
         profile: &super::profiles::Profile,
         cwd: &std::path::Path,
         expected_environment: &EnvMap,
         terminal: &EnvMap,
+    ) -> Result<OpencodeDatabaseProbe, SafeError> {
+        let selected =
+            super::native_projection::selection::locations(CliKind::Opencode, expected_environment)
+                .map_err(error)?;
+        let probe = |flavor| -> Result<OpencodeDatabaseProbe, SafeError> {
+            let args: &[&str] = match flavor {
+                ApiFlavor::V1 => &["db", "path"],
+                ApiFlavor::V2 => &["debug", "paths", "db"],
+            };
+            let output = self.probe_opencode_database_command(
+                caller,
+                profile,
+                cwd,
+                expected_environment,
+                terminal,
+                args,
+            )?;
+            selected.with_probed_database(&output).map_err(error)?;
+            Ok(OpencodeDatabaseProbe { output, flavor })
+        };
+        let key = (profile.id.clone(), profile.revision.to_string());
+        let remembered = self.opencode_probe_argv.lock().get(&key).copied();
+        if let Some(flavor) = remembered {
+            if let Ok(result) = probe(flavor) {
+                return Ok(result);
+            }
+            self.opencode_probe_argv.lock().remove(&key);
+        }
+        // 缓存仅优化命令顺序；每次都校验绝对路径、文件名和所选根身份。
+        for flavor in [ApiFlavor::V2, ApiFlavor::V1] {
+            if let Ok(result) = probe(flavor) {
+                self.opencode_probe_argv.lock().insert(key, flavor);
+                return Ok(result);
+            }
+        }
+        Err(error("SCOPE_UNKNOWN"))
+    }
+
+    /// 在 spawn 前冻结来源与可选 cue；显式库探测失败仅关闭观察，不覆盖已知来源。
+    fn freeze_run_source(
+        &self,
+        caller: &CallerIdentity,
+        snapshot: &LaunchSnapshot,
+        terminal: &EnvMap,
+    ) -> (
+        super::source_provenance::SourceProvenance,
+        Option<std::path::PathBuf>,
+    ) {
+        use super::source_provenance::SourceProvenance;
+        let needs_source = SourceProvenance::needs_database_probe(snapshot);
+        // OPENCODE_PURE 与 with_opencode_observer 的拒绝语义一致：纯净模式下
+        // 观察整链禁用，cue 判定也不得触发探测子进程。
+        let pure_mode = super::environment::lookup(
+            snapshot.environment(),
+            std::ffi::OsStr::new("OPENCODE_PURE"),
+        )
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| matches!(value, "true" | "1"));
+        let needs_cue = self.observer.is_some()
+            && snapshot.observer_requested()
+            && !pure_mode
+            && snapshot.request().cli == CliKind::Opencode
+            && matches!(snapshot.request().action, LaunchAction::ResumeId { .. })
+            && SourceProvenance::known_scope(snapshot);
+        if !needs_source && !needs_cue {
+            return (SourceProvenance::freeze(snapshot), None);
+        }
+        let probe = (|| {
+            let profile = self
+                .repository
+                .get_profile(&snapshot.request().profile_id)?;
+            if profile.revision != snapshot.profile_revision() {
+                return Err(error("SCOPE_UNKNOWN"));
+            }
+            self.resolve_opencode_database(
+                caller,
+                &profile,
+                std::path::Path::new(&snapshot.request().launch_cwd),
+                snapshot.environment(),
+                terminal,
+            )
+        })();
+        let cue = probe
+            .as_ref()
+            .ok()
+            .filter(|probe| needs_cue && probe.flavor == ApiFlavor::V2)
+            .map(|probe| std::path::PathBuf::from(probe.output.trim_end_matches(['\r', '\n'])));
+        if needs_cue && probe.is_err() {
+            log::warn!("OpenCode refresh cue unavailable: SCOPE_UNKNOWN");
+        }
+        (
+            SourceProvenance::freeze_with_database(snapshot, probe.map(|probe| Some(probe.output))),
+            cue,
+        )
+    }
+
+    fn probe_opencode_database_command(
+        &self,
+        caller: &CallerIdentity,
+        profile: &super::profiles::Profile,
+        cwd: &std::path::Path,
+        expected_environment: &EnvMap,
+        terminal: &EnvMap,
+        argv: &[&str],
     ) -> Result<String, SafeError> {
         self.registry().check_caller(caller)?;
         if profile.cli != CliKind::Opencode || self.repository.get_profile(&profile.id)? != *profile
@@ -457,7 +575,7 @@ impl LaunchService {
                 .ok_or_else(|| error("SCOPE_UNKNOWN"))?
                 .to_owned(),
             action: LaunchAction::Raw {
-                argv: vec!["db".into(), "path".into()],
+                argv: argv.iter().map(|piece| (*piece).to_owned()).collect(),
             },
             extra_args: vec![],
             cols: 80,
@@ -540,6 +658,7 @@ impl LaunchService {
         // construction. Channel/document admission happens before it and may
         // synchronously round-trip through the Tauri main event loop.
         let handoff_guard = RefCell::new(None);
+        let opencode_cue = RefCell::new(None);
         let spawned = Cell::new(false);
         // This route owns the xterm frontend and PTY, independently of the
         // desktop launcher's terminal. Explicit profile env still wins in D08.
@@ -602,6 +721,7 @@ impl LaunchService {
                                 })
                             })
                         });
+                        let authorize_cue = authorize.clone();
                         let prepare = if snapshot.request().cli == CliKind::Opencode {
                             crate::observer_host::ObserverHost::prepare_opencode
                         } else if snapshot.codex_identity_requested() {
@@ -620,7 +740,7 @@ impl LaunchService {
                             ),
                             authorize,
                         ) {
-                            Ok(prepared) => Some(prepared),
+                            Ok(prepared) => Some((host, prepared, authorize_cue)),
                             Err(failure) => {
                                 observer_failure = Some(match failure.code.as_str() {
                                     "OBSERVER_SERVICE_UNAVAILABLE" => {
@@ -635,7 +755,7 @@ impl LaunchService {
                         }
                     });
                 let (snapshot, observer) = match prepared {
-                    Some(prepared) => {
+                    Some((host, prepared, authorize_cue)) => {
                         let overlaid = if let Some(plugin) = &prepared.opencode_plugin {
                             snapshot.with_opencode_observer(&prepared.environment, plugin)
                         } else {
@@ -660,7 +780,23 @@ impl LaunchService {
                             Ok(next)
                         });
                         match overlaid {
-                            Ok(next) => (next, Some(prepared.lease)),
+                            Ok(next) => {
+                                // 覆盖成功才启动侧通道；失败降级不能留下无有效 lease 的线程。
+                                if let LaunchAction::ResumeId { native_session_id } =
+                                    &request.action
+                                {
+                                    if let Some(database) = opencode_cue.borrow_mut().take() {
+                                        host.spawn_opencode_db_cue(
+                                            prepared.lease.binding().clone(),
+                                            authorize_cue,
+                                            native_session_id.clone(),
+                                            database,
+                                            std::time::Duration::from_secs(2),
+                                        );
+                                    }
+                                }
+                                (next, Some(prepared.lease))
+                            }
                             Err(failure) => {
                                 if snapshot.request().cli == CliKind::Codex {
                                     log::warn!(
@@ -703,26 +839,9 @@ impl LaunchService {
                 })
             },
             |snapshot| {
-                let database =
-                    if super::source_provenance::SourceProvenance::needs_database_probe(snapshot) {
-                        (|| -> Result<Option<String>, SafeError> {
-                            let profile = self.repository.get_profile(&request.profile_id)?;
-                            // Revalidate the exact run environment. This existing
-                            // metadata helper remains noninteractive; TERM alone
-                            // does not claim that its stdio is a TTY.
-                            self.probe_opencode_database_with_terminal(
-                                caller,
-                                &profile,
-                                std::path::Path::new(&request.launch_cwd),
-                                snapshot.environment(),
-                                &terminal,
-                            )
-                            .map(Some)
-                        })()
-                    } else {
-                        Ok(None)
-                    };
-                super::source_provenance::SourceProvenance::freeze_with_database(snapshot, database)
+                let (source, cue) = self.freeze_run_source(caller, snapshot, &terminal);
+                *opencode_cue.borrow_mut() = cue;
+                source
             },
         )?;
         if spawned.get() {
@@ -1005,6 +1124,10 @@ fn identity_failure_stage(failure: &SafeError) -> &'static str {
 mod opencode_preparation_tests;
 
 #[cfg(test)]
+#[path = "../tests/native_cli_opencode_probe.rs"]
+mod opencode_probe_tests;
+
+#[cfg(test)]
 mod owned_command_tests {
     use super::*;
 
@@ -1028,8 +1151,16 @@ mod owned_command_tests {
             )
             .unwrap();
         let profile = repository.get_profile(&profile.id).unwrap();
-        std::fs::write(root.path().join("db"), "require('node:fs').writeFileSync('probe.json',JSON.stringify({term:process.env.TERM,stdinIsTTY:!!process.stdin.isTTY,stdoutIsTTY:!!process.stdout.isTTY}));process.stdout.write('fixture-db\\n')").unwrap();
-        let mut inherited = EnvMap::from([("TERM".into(), "dumb".into())]);
+        let database = root.path().join("data/opencode/opencode.db");
+        std::fs::create_dir_all(database.parent().unwrap()).unwrap();
+        std::fs::write(root.path().join("db"), format!("require('node:fs').writeFileSync('probe.json',JSON.stringify({{term:process.env.TERM,stdinIsTTY:!!process.stdin.isTTY,stdoutIsTTY:!!process.stdout.isTTY}}));process.stdout.write({}+'\\n')", serde_json::to_string(&database.to_string_lossy()).unwrap())).unwrap();
+        let mut inherited = EnvMap::from([
+            ("TERM".into(), "dumb".into()),
+            (
+                "XDG_DATA_HOME".into(),
+                root.path().join("data").into_os_string(),
+            ),
+        ]);
         if let Some(value) = std::env::var_os("SystemRoot") {
             inherited.insert("SystemRoot".into(), value);
         }
@@ -1048,15 +1179,17 @@ mod owned_command_tests {
         assert!(!root.path().join("probe.json").exists());
         assert_eq!(
             service
-                .probe_opencode_database_with_terminal(
+                .resolve_opencode_database(
                     &caller,
                     &profile,
                     root.path(),
                     &run_environment,
                     &terminal
                 )
-                .unwrap(),
-            "fixture-db\n"
+                .unwrap()
+                .output
+                .trim_end(),
+            database.to_str().unwrap()
         );
         let report: serde_json::Value =
             serde_json::from_slice(&std::fs::read(root.path().join("probe.json")).unwrap())
@@ -1075,13 +1208,7 @@ mod owned_command_tests {
         tampered.insert("UNEXPECTED_FIXTURE_VALUE".into(), "rejected".into());
         assert_eq!(
             service
-                .probe_opencode_database_with_terminal(
-                    &caller,
-                    &profile,
-                    root.path(),
-                    &tampered,
-                    &terminal
-                )
+                .resolve_opencode_database(&caller, &profile, root.path(), &tampered, &terminal)
                 .unwrap_err()
                 .code,
             "SCOPE_UNKNOWN"

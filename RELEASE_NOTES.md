@@ -4,6 +4,21 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
+## [0.26.0-rc.2]
+
+Fixed
+
+- Keep Codex title and history refresh active when an authenticated turn event reports a previous session ID, while retaining the current exact identity.
+- Read migrated OpenCode v2 session history, including unnamed sessions, and resolve the selected CLI's database path without silently showing an old channel database.
+- Create and rename supported OpenCode v2 sessions through the authenticated official metadata API. Accept an initially absent title and require exact title readback after a single rename request.
+- Refresh OpenCode v2 history after database or WAL changes for an eligible owned resumed session. Treat these changes only as refresh cues; optional observation remains disabled in pure mode.
+
+Important
+
+- This is a prerelease test package. Download it explicitly; the stable Latest release and stable updater channel remain unchanged.
+- OpenCode 2.2.5 metadata checks use isolated local roots without paid model calls. Database refresh cues do not certify live activity badges or account-backed model turns. Full installed Windows WebView, D20 Layer-C and real AI automatic naming remain unverified.
+- The earlier field report of two rows with distinct native IDs is not fully certified fixed. Session identity remains exact; titles and timestamps never merge different sessions. Unsupported or future CLI contracts may lose optional enhancements.
+
 ## [0.26.0-rc.1]
 
 Preview release

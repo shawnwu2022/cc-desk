@@ -791,3 +791,26 @@ describe('Native rename preserves the CLI editor', () => {
     expect(map.get('cx-1')?.title).toBe(codexTab.title)
   })
 })
+
+// 字段报告（两行不同 native ID）的根因回归：Codex 身份事件可延迟到首轮，
+// rollout 在启动时立即写入历史；AI 命名刷新使历史行显眼时，tab 尚无身份、
+// 无法 claim，两行并存是按结构如实投影——不用标题/时间折叠（外部进程如
+// Codex Desktop 可能在同项目随时产生新 rollout）。身份事件到达后必须收敛单行。
+it('CodexIdentity_DeferredWindowProjectsBothRowsThenMergesOnIdentity_115', async () => {
+  const id = '11111111-2222-4333-8444-555555555555'
+  const active = tab({ action: { kind: 'new' }, title: 'Codex CLI', codexProgramStatus: 'idle',
+    observationState: 'connecting', observerReasonCode: 'OBSERVER_CONNECTING' })
+  const entry = history('codex', 'root', id); entry.sourceRootKey = 'root'
+  entry.sessions[0].title = 'AI 命名标题'
+  const { adapter } = setup([active], [entry])
+  // 身份未回填的窗口期：tab 行（等待身份）与历史行（真实 ID）并存
+  const window = await adapter.listSessions()
+  expect(window).toHaveLength(2)
+  expect(window.find(row => row.opened)).toMatchObject({ nativeSessionId: null, title: 'Codex CLI', identityAssociation: 'awaiting-identity' })
+  expect(window.find(row => !row.opened)).toMatchObject({ nativeSessionId: id, title: 'AI 命名标题' })
+  // 首轮身份事件到达后：claim 历史行，收敛单行并继承 AI 标题
+  active.observedSessionId = id
+  const merged = await adapter.listSessions()
+  expect(merged).toHaveLength(1)
+  expect(merged[0]).toMatchObject({ opened: true, nativeSessionId: id, title: 'AI 命名标题', identityAssociation: 'linked' })
+})

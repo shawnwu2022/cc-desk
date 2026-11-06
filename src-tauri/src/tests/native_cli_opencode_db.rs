@@ -966,3 +966,92 @@ fn Opencode_WithoutShmBlocksNewConnectionOnlyDuringCopy_23() {
         .unwrap();
     assert_eq!(count, 0);
 }
+
+// v2 迁移形态（本机 2.2.5 实测 2026-11-05）：新会话写入 session_v2（列超集、title 可 NULL），
+// v1 session 表停留旧数据且已完整迁入 v2。读取器必须改读 session_v2；只读一张表，
+// 不做两表合并去重（迁移是 opencode 自己的职责，重复行比缺行更糟）。
+// 真实 DDL 见 fixtures/opencode-schema-v2-session.sql（由本机 db dump）。
+fn seed_v2(
+    conn: &Connection,
+    id: &str,
+    project_id: &str,
+    directory: &str,
+    title: Option<&str>,
+    updated: i64,
+    parent: Option<&str>,
+) {
+    conn.execute(
+        "INSERT INTO session_v2 (id, project_id, parent_id, slug, directory, title, version, cost, \
+         tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write, \
+         time_created, time_updated, resume_attempts) \
+         VALUES (?1,?2,?3,?4,?5,?6,'2.2.5',0,0,0,0,0,0,?7,?7,0)",
+        rusqlite::params![id, project_id, parent, id, directory, title, updated],
+    )
+    .unwrap();
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn Opencode_DbPrefersMigratedSessionV2_27() {
+    let f = Fixture::new();
+    let conn = f.conn();
+    f.register_project(&conn, "p1");
+    conn.execute_batch(include_str!("fixtures/opencode-schema-v2-session.sql"))
+        .unwrap();
+    let dir = f.project.to_string_lossy().to_string();
+    seed_v2(&conn, "ses_v2a", "p1", &dir, Some("v2 会话标题"), 300, None);
+    seed_v2(&conn, "ses_v2null", "p1", &dir, None, 290, None);
+    seed_v2(
+        &conn,
+        "ses_v2child",
+        "p1",
+        &dir,
+        Some("子代理"),
+        280,
+        Some("ses_v2a"),
+    );
+    // v1 表残留的同 id/旧数据必须被忽略：迁移后它只是历史镜像。
+    seed(&conn, "ses_v1legacy", "p1", &dir, "v1 旧数据", 100, None);
+    drop(conn);
+    let items = read_history(&Root::open(&f.root).unwrap(), &[f.project_ref()]).unwrap();
+    let mut rows: Vec<_> = items
+        .iter()
+        .filter_map(|item| match item {
+            ResourceItem::Session {
+                native_session_id,
+                title,
+                ..
+            } => Some((native_session_id.as_str(), title.as_str())),
+            _ => None,
+        })
+        .collect();
+    rows.sort();
+    assert_eq!(
+        rows,
+        vec![("ses_v2a", "v2 会话标题"), ("ses_v2null", "")],
+        "只读 session_v2：NULL title 落为空串、parent 行排除、v1 残留忽略"
+    );
+}
+
+// 纯 v1 库（无 session_v2 表）保持现状：读 session 表。
+#[test]
+#[allow(non_snake_case)]
+fn Opencode_DbKeepsV1TableWhenNoV2Migration_28() {
+    let f = Fixture::new();
+    let conn = f.conn();
+    f.register_project(&conn, "p1");
+    let dir = f.project.to_string_lossy().to_string();
+    seed(&conn, "ses_v1", "p1", &dir, "v1 会话", 100, None);
+    drop(conn);
+    let items = read_history(&Root::open(&f.root).unwrap(), &[f.project_ref()]).unwrap();
+    let ids: Vec<_> = items
+        .iter()
+        .filter_map(|item| match item {
+            ResourceItem::Session {
+                native_session_id, ..
+            } => Some(native_session_id.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ids, vec!["ses_v1"]);
+}

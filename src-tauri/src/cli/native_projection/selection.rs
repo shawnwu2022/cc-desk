@@ -69,15 +69,13 @@ impl Locations {
             Root::open(&self.root)
         }
     }
+    /// 校验探测路径与冻结环境的来源一致；显式库允许任意文件名，但不能换库。
     pub(crate) fn with_probed_database(&self, output: &str) -> ReadResult<Self> {
-        if self.sqlite_file.is_some() {
+        let trimmed = output.trim_end_matches(['\r', '\n']);
+        if trimmed.contains(['\r', '\n']) {
             return Err("SCOPE_UNKNOWN");
         }
-        let output = output.trim_end_matches(['\r', '\n']);
-        if output.contains(['\r', '\n']) {
-            return Err("SCOPE_UNKNOWN");
-        }
-        let database = Path::new(output);
+        let database = Path::new(trimmed);
         valid(database)?;
         let file = database
             .file_name()
@@ -86,7 +84,11 @@ impl Locations {
         let channel = file
             .strip_prefix("opencode-")
             .and_then(|name| name.strip_suffix(".db"));
-        if file != "opencode.db"
+        if let Some(expected) = &self.sqlite_file {
+            if file != expected {
+                return Err("SCOPE_UNKNOWN");
+            }
+        } else if file != "opencode.db"
             && !channel.is_some_and(|value| {
                 !value.is_empty()
                     && value

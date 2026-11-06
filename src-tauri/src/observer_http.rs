@@ -19,6 +19,19 @@ use tokio::sync::Semaphore;
 
 pub(crate) type Publisher =
     Arc<dyn Fn(&ObserverDelivery, HookPayload) -> Result<(), ()> + Send + Sync>;
+
+static PUBLISHER: std::sync::OnceLock<Publisher> = std::sync::OnceLock::new();
+
+/// 通道与观察核心同属一层，GUI 启动时注册；watcher 不依赖 GUI runtime。
+pub(crate) fn set_publisher(value: Publisher) {
+    let _ = PUBLISHER.set(value);
+}
+
+/// 仅供同 run 认证 watcher 复用；早于启动注册时返回 None。
+pub(crate) fn publisher() -> Option<Publisher> {
+    PUBLISHER.get().cloned()
+}
+
 #[derive(Clone)]
 struct Intake {
     registry: Arc<ObserverRegistry>,
@@ -72,16 +85,13 @@ async fn receive(State(state): State<Intake>, request: Request) -> Response {
     match state.registry.accept_event(&binding, &event_id, &body) {
         Ok(ObserverAccept::Duplicate) => Json(json!({"ok":true,"duplicate":true})).into_response(),
         Ok(ObserverAccept::Accepted(event)) => {
-            let delivery = match state.registry.delivery(&binding) {
-                Ok(value) => value,
-                Err(_) => return reject(StatusCode::UNAUTHORIZED, "OBSERVER_FORBIDDEN"),
-            };
-            let mut payload = HookPayload::from_validated(event);
-            payload.pty_id = delivery.legacy_pty.clone();
-            if (state.publish)(&delivery, payload).is_err() {
-                return reject(StatusCode::SERVICE_UNAVAILABLE, "OBSERVER_UNAVAILABLE");
+            match state.registry.deliver(&binding, event, &state.publish) {
+                Ok(()) => Json(json!({"ok":true})).into_response(),
+                Err(failure) if failure.code == "OBSERVER_UNAVAILABLE" => {
+                    reject(StatusCode::SERVICE_UNAVAILABLE, "OBSERVER_UNAVAILABLE")
+                }
+                Err(_) => reject(StatusCode::UNAUTHORIZED, "OBSERVER_FORBIDDEN"),
             }
-            Json(json!({"ok":true})).into_response()
         }
         Err(failure) => {
             let status = match failure.code.as_str() {
