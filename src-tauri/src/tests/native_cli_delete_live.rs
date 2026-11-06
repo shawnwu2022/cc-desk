@@ -61,6 +61,9 @@ const CODEX_BYTES: u64 = 369_062_704;
 const CODEX_VERSION: &str = "0.167.0";
 const OUTPUT_LIMIT: u64 = 1024 * 1024;
 
+#[path = "native_cli_delete_webview.rs"]
+mod webview;
+
 struct NativeWriterLock {
     file: File,
     directory: Root,
