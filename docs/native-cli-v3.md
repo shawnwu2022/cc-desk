@@ -406,6 +406,10 @@ silent hook failure behavior are unchanged. The PowerShell wrapper and shared
 console encoding are not modified. The Windows regression uses the production
 command generator and reporter with synthetic events through real direct and
 PowerShell processes, including space, Chinese and apostrophe paths.
+The fixture clears inherited environment, uses private HOME/USERPROFILE and limits
+PSModulePath to the selected Windows PowerShell installation's system Modules.
+This isolates hosted module discovery; it does not certify custom user modules or
+installed-application cold startup. Child deadlines and assertions stay unchanged.
 
 The bounded reporter forwards only a main-thread UUID and allowlisted
 SessionStart/UserPromptSubmit/Stop type. It never publishes prompt/response bodies
