@@ -175,3 +175,5 @@ mod version_history_return_checkpoint;
 
 mod desktop_updater_http;
 mod desktop_updater_policy;
+
+mod native_cli_version_parser;

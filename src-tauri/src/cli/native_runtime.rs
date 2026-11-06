@@ -131,6 +131,27 @@ impl NativeRuntime {
             .clone()
             .ok_or_else(|| error("FORBIDDEN"))
     }
+    pub(crate) async fn probe_cli_version<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        request: &Request<'_>,
+    ) -> Result<super::launch_service::diagnostic_versions::ProbeResult, SafeError> {
+        let caller = self.binding()?.admit_native(webview, request.headers())?;
+        let query = decode_projection(request.body(), 1024)?;
+        let service = self.service.clone();
+        tauri::async_runtime::spawn_blocking(move || service.probe_cli_version(&caller, query))
+            .await
+            .map_err(|_| error("PROBE_STATE_UNKNOWN"))?
+    }
+    pub(crate) fn cancel_cli_version<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        request: &Request<'_>,
+    ) -> Result<super::launch_service::diagnostic_versions::CancelResult, SafeError> {
+        let caller = self.binding()?.admit_native(webview, request.headers())?;
+        let query = decode_projection(request.body(), 1024)?;
+        self.service.cancel_cli_version(&caller, query)
+    }
     pub(crate) async fn start<T: Runtime>(
         &self,
         webview: Webview<T>,

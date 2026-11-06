@@ -256,6 +256,8 @@ fn run_ordinary(initial_dir: Option<String>, #[cfg(windows)] startup: DesktopSta
             version_history::commands::inspect_historical_install,
             version_history::commands::begin_historical_install,
             commands::native_get_scope,
+            commands::native_probe_cli_version,
+            commands::native_cancel_cli_version_probe,
             commands::native_list_resources,
             commands::native_unarchive_session,
             commands::legacy_claude_root_key,

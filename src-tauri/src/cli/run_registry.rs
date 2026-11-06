@@ -187,6 +187,16 @@ impl<R> RunRegistry<R> {
         self.authorize(&self.state.lock(), caller)
     }
 
+    /// Linearize a short process-creation commit with document revocation.
+    pub(crate) fn with_current_caller<T>(
+        &self,
+        caller: &CallerIdentity,
+        operation: impl FnOnce() -> T,
+    ) -> Result<T, SafeError> {
+        let state = self.state.lock();
+        self.authorize(&state, caller)?;
+        Ok(operation())
+    }
     pub(crate) fn revoke_window(&self, caller: &CallerIdentity) -> Result<(), SafeError> {
         let mut state = self.state.lock();
         self.authorize(&state, caller)?;

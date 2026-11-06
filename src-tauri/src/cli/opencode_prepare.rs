@@ -197,7 +197,7 @@ impl Drop for ServerChild {
 }
 
 #[cfg(windows)]
-mod server_job {
+pub(super) mod server_job {
     use super::{error, SafeError};
     use std::os::windows::io::AsRawHandle;
     use std::process::Child;
@@ -213,7 +213,7 @@ mod server_job {
     };
     use windows::Win32::System::Threading::{OpenThread, ResumeThread, THREAD_SUSPEND_RESUME};
 
-    pub(super) struct Job(HANDLE);
+    pub(crate) struct Job(HANDLE);
     impl Drop for Job {
         fn drop(&mut self) {
             unsafe {
@@ -222,7 +222,7 @@ mod server_job {
         }
     }
     impl Job {
-        pub(super) fn new() -> Result<Self, SafeError> {
+        pub(crate) fn new() -> Result<Self, SafeError> {
             let job = Self(
                 unsafe { CreateJobObjectW(None, PCWSTR::null()) }
                     .map_err(|_| error("OPENCODE_SESSION_PREPARE_FAILED"))?,
@@ -240,7 +240,7 @@ mod server_job {
             .map_err(|_| error("OPENCODE_SESSION_PREPARE_FAILED"))?;
             Ok(job)
         }
-        pub(super) fn assign_and_resume(&self, child: &Child) -> Result<(), SafeError> {
+        pub(crate) fn assign_and_resume(&self, child: &Child) -> Result<(), SafeError> {
             let process = HANDLE(child.as_raw_handle());
             unsafe { AssignProcessToJobObject(self.0, process) }
                 .map_err(|_| error("OPENCODE_SESSION_PREPARE_FAILED"))?;

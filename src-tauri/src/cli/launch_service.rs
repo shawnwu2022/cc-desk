@@ -94,7 +94,11 @@ impl Drop for CommandOwner {
     }
 }
 
+#[path = "diagnostic_versions.rs"]
+pub(crate) mod diagnostic_versions;
+
 pub(crate) struct LaunchService {
+    version_probes: diagnostic_versions::Probes,
     coordinator: LaunchCoordinator<NativeRun>,
     repository: WorkspaceRepository,
     inherited: Option<EnvMap>,
@@ -299,6 +303,7 @@ impl LaunchService {
     ) -> Self {
         Self {
             coordinator: LaunchCoordinator::new(4096),
+            version_probes: diagnostic_versions::Probes::default(),
             repository,
             inherited,
             supervisor,

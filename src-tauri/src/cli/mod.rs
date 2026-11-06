@@ -39,3 +39,5 @@ pub(crate) mod source_scope;
 pub(crate) mod storage;
 pub(crate) mod types;
 pub(crate) mod workspace;
+
+pub(crate) mod diagnostic_version_parser;
