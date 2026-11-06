@@ -108,7 +108,7 @@ pub struct Pending<S> {
     pub(crate) _io: tokio_rustls::TlsStream<S>,
     pub(crate) _context: (Role, [u8; 32], Role, [u8; 32]),
     pub(crate) _cancel: crate::CancelToken,
-    pub(crate) _deadline: tokio::time::Instant,
+    pub(crate) _deadline: crate::tls_clock::Deadline,
     evidence: TransportEvidence,
 }
 impl<S> Pending<S> {
@@ -161,17 +161,15 @@ fn evidence(
     }
     Ok(e)
 }
-fn end(budget: Duration) -> Result<tokio::time::Instant, SecurityError> {
+fn end(budget: Duration) -> Result<crate::tls_clock::Deadline, SecurityError> {
     if budget.is_zero() || budget > MAX_HANDSHAKE_BUDGET {
         return Err(SecurityError::Limit);
     }
-    tokio::time::Instant::now()
-        .checked_add(budget)
-        .ok_or(SecurityError::Limit)
+    crate::tls_clock::after(budget)
 }
 async fn bounded<F, T>(
     future: F,
-    deadline: tokio::time::Instant,
+    deadline: crate::tls_clock::Deadline,
     cancel: &mut crate::CancelToken,
 ) -> Result<T, SecurityError>
 where
@@ -182,17 +180,17 @@ where
     }
     tokio::select! {biased;
      _=cancel.cancelled()=>Err(SecurityError::Cancelled),
-     _=tokio::time::sleep_until(deadline)=>Err(SecurityError::Deadline),
-     r=future=>{if tokio::time::Instant::now()>=deadline{Err(SecurityError::Deadline)}else if cancel.is_cancelled(){Err(SecurityError::Cancelled)}else{r.map_err(|_|SecurityError::Tls)}}
+     _=crate::tls_clock::sleep(deadline)=>Err(SecurityError::Deadline),
+     r=future=>{if crate::tls_clock::expired(deadline){Err(SecurityError::Deadline)}else if cancel.is_cancelled(){Err(SecurityError::Cancelled)}else{r.map_err(|_|SecurityError::Tls)}}
     }
 }
 fn finish<T>(
-    deadline: tokio::time::Instant,
+    deadline: crate::tls_clock::Deadline,
     cancel: &crate::CancelToken,
     validate: impl FnOnce() -> Result<T, SecurityError>,
 ) -> Result<T, SecurityError> {
     let value = validate()?;
-    if tokio::time::Instant::now() >= deadline {
+    if crate::tls_clock::expired(deadline) {
         return Err(SecurityError::Deadline);
     }
     if cancel.is_cancelled() {

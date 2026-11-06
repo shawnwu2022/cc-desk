@@ -4,6 +4,8 @@ mod pin;
 #[cfg(feature = "experimental")]
 mod tls;
 #[cfg(feature = "experimental")]
+mod tls_clock;
+#[cfg(feature = "experimental")]
 pub use tls::*;
 #[cfg(feature = "experimental")]
 mod cancellation;
@@ -56,3 +58,10 @@ pub use peer_install::{ClientInstalledPeer, HostInstallRequest};
 mod browser_wasm_signer;
 #[cfg(all(feature = "experimental", target_arch = "wasm32", target_os = "unknown"))]
 pub use browser_wasm_signer::BrowserWasmSigningKey;
+
+#[cfg(all(feature = "experimental", target_arch = "wasm32", target_os = "unknown"))]
+mod browser_wasm_io;
+#[cfg(all(feature = "experimental", target_arch = "wasm32", target_os = "unknown"))]
+mod browser_wasm_owner;
+#[cfg(all(feature = "experimental", target_arch = "wasm32", target_os = "unknown"))]
+pub use browser_wasm_owner::{browser_tls_cancel, browser_tls_event, browser_tls_poll, browser_tls_start};

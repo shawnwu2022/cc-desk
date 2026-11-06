@@ -103,7 +103,8 @@ controlled worker origin must be supplied by a future deployment. There is no
 UI-thread wait or fallback. `sign(message)` either returns DER bytes or throws an
 Error that the future rustls adapter must propagate as TLS failure; it establishes
 no Ready, channel identity or grant. The WASM adapter below propagates failure as
-a rustls signing error; no full browser TLS owner is implemented.
+a rustls signing error. The TLS-only owner below adds the original connect call;
+the bound application/data owner remains unimplemented.
 
 The input is exactly 64 spaces, `TLS 1.3, client CertificateVerify`, one zero byte
 and a 32-byte transcript hash. This matches the existing SHA256-only cipher-suite
@@ -163,11 +164,11 @@ crypto Promise, then releases the gate. The unchanged V1 implementation returned
 `timed-out`; the repaired implementation returns `not-equal` without waiting for
 the original budget. The fixture still invokes the real native wait.
 
-Browser WebSocket IO, full TLS/runtime bindings and runtime/time driving, original
-TLS/AppBind/grant/peer-install ownership and the authenticated operation adapter
-remain unimplemented. Successful native fixtures, this Node bridge test or a wasm
-compile must not be presented as a functioning browser owner, app panel or phone
-end-to-end connection.
+Browser WebSocket/mux IO, AppBind/grant/peer-install browser ownership and the
+authenticated operation adapter remain unimplemented. Successful native fixtures,
+this Node bridge test or a wasm compile must not be presented as an app panel or
+phone end-to-end connection. The following TLS-only owner checkpoint adds its
+own explicitly bounded runtime/IO evidence.
 
 ## Rust WASM Signer ABI candidate
 
@@ -214,8 +215,9 @@ fails before changing the original owner. This also protects official generated
 glue's module-level wasm binding. The controlled Worker loader must keep one
 canonical adapter/glue module instance, raw Instance, memory, helper exports and
 allocators private. Untrusted UI must never receive them. This source slice has
-no general production loader; the Node fixture demonstrates that private calling
-boundary with fixed init/sign/grow/close test commands and bounded signature bytes.
+no general runtime loader. The TLS-only production entry below keeps the calling
+boundary private; the independent Signer fixture also demonstrates fixed
+init/sign/grow/close test commands and bounded signature bytes.
 
 The fixture at `crates/security/tests/fixtures/browser_tls_wasm_fixture.rs` is a
 thin wrapper around the production implementation and original LocalIdentity. It
@@ -266,9 +268,123 @@ Generated JS/WASM are build evidence, not checked-in product code. `test:wasm`
 requires explicit artifact paths and fails rather than silently skipping. Its
 negative cases cover purpose/bounds, wrong sequence, reentry, invalid return
 length/signature, wrong identity/key, shared/rebound memory, invalid/extended
-deadline and actual close/expiry with retained late crypto. Original native TLS,
-AppBind, grants, peer installation, browser runtime/IO and Panel integration still
-need their own callers and acceptance; this is a real Signer ABI slice, not a
-complete phone-to-Host TLS or application session.
+deadline and actual close/expiry with retained late crypto. AppBind, grants, peer
+installation, browser WebSocket/mux IO and Panel integration still need their own
+callers and acceptance; this is a real Signer ABI slice, not a complete
+phone-to-Host application session.
+
+## TLS-only controlled Worker owner
+
+`ui-terminal/src/browserTlsWorker.ts::startBrowserTlsWorker` is the production
+Worker entry. It privately instantiates the real module with unmodified official
+wasm-bindgen helpers, initializes that helper context once, and calls production
+`browser_tls_start`. The Rust owner in `browser_wasm_owner.rs` constructs the
+original LocalIdentity/PeerPin with explicit enrolled public metadata and calls
+the original `tls.rs::connect`. It retains the one future/Pending; the fixture
+does not implement or replace that owner. No TLS config, certificate verifier,
+negotiated evidence, Signer, RPK policy or role check is duplicated or relaxed.
+
+The four fixed owner exports are start(localRole, peerRole, remainingBudgetMs),
+poll(), cancel() and event(kind). The private `cc_desk_browser_owner_v1` imports
+provide fixed public-key slots, original deadline/real clock, scheduling, IO,
+timer and bounded evidence reporting. They are local implementation ABI, not a
+new network protocol. Raw instance, memory, allocators and helpers remain inside
+the controlled Worker. No plaintext, granted operation or native application IPC
+is exported. Role 0 means Client and role 1 means Host; other values reject.
+
+`tls_clock.rs` isolates only TLS setup timing. Native Deadline remains exactly a
+Tokio Instant, with the original checked budget, timer and final eligibility
+samples. On wasm32-unknown-unknown, it is a real monotonic absolute sample in the
+same performance clock domain as the existing signing bridge. One original
+deadline is captured before startup and cannot increase. A JS setTimeout wakes a
+registered real Rust Waker; timer callbacks recheck the absolute time and never
+refresh it for progress. Real IO/watch/timer wakers coalesce onto Worker
+microtasks without synchronously reentering poll. No Tokio WASM runtime,
+NoopWaker, periodic spin polling, fake time or replacement handshake is used.
+The actual RED entered original connect and trapped in std::time::Instant::now
+via Tokio; the clock seam fixes that actual target failure.
+
+`BrowserIo` implements the original AsyncRead/AsyncWrite bounds: one 16KiB RX
+slot, one 16KiB TX credit, at most one underlying read and one write Promise.
+RX empty is Pending; only explicit null from the transport is EOF. Reads can
+complete while a write is blocked. A write admits only the independently copied
+bytes held by that credit; poll_flush waits for the original transport.write
+Promise to complete. This must represent actual local IO completion, never only
+posting a message or enqueueing another unbounded work item. Partial writes or
+failed/cancelled completions do not authorize replay. The default test transport
+uses actual Node socket callbacks over loopback TCP.
+
+Shutdown is conservative full-duplex closure: drain the outstanding write, call
+the original transport.close, then wait for its actual waitClosed result and
+started read/write Promises before poll_shutdown can return success. Subsequent
+writes reject. Errors fail closed; cancellation/expiry can drop the Rust future
+but cannot pretend the outstanding JS operations were canceled or settled.
+The shutdown RED demonstrated premature success with the old flush-only method;
+the deterministic test holds the real close completion and proves no Rust
+shutdown completion until release.
+
+An AbortSignal is accepted before compilation begins. Pre-abort, the original
+SAB close flag and the original deadline are checked initially, after the
+original compile Promise and after the original instantiate Promise settle.
+Canceled or expired loading cannot start TLS, write ClientHello or publish
+evidence. The original loading Promises are awaited rather than abandoned in a
+timeout race. The metadata/key-capability descriptor and signal are captured
+before awaits. On final publication, Rust and JS recheck cancel/deadline; JS also
+refuses already closed/error/EOF IO. TEST_ONLY scheduling probes cancel or expire
+at the real evidence callback and verify that the consumer sees no success.
+
+The evidence Promise returns only the original TLS protocol/cipher/group/full
+handshake/RPK/ALPN/peer endpoint ID. It is historical transport proof, never
+AppBind, a grant, session authorization, online Ready or application authority.
+The owner continues to watch the original deadline, cancellation and raw EOF
+while retaining Pending. There is no browser AppBind owner in this checkpoint:
+both existing Bind establishment paths extract native deadlines, preserve native
+behavior, and consume a WASM Pending with Unsupported before within/tokio::spawn.
+Unsupported creates no bound owner, fallback, grant or authorization.
+
+Owner waitClosed waits for Rust future termination plus this entry's original
+transport read/write/retirement Promises. A never-settling Promise keeps it
+pending; runtime traps or failed transport retirement reject instead of claiming
+successful retirement. It is not a Worker-thread join or key destruction proof.
+The main-thread signing broker separately owns a started crypto Promise. The
+caller must close/cancel that broker too, await broker.waitClosed, await the
+Worker owner's waitClosed and finally terminate/join its owned Worker. This
+checkpoint's tests do all of those for their own resources only.
+
+The independent `npm run test:browser-tls` requires explicit paths in
+CC_DESK_TEST_ONLY_BROWSER_TLS_WASM, CC_DESK_TEST_ONLY_BROWSER_TLS_GLUE and
+CC_DESK_TEST_ONLY_BROWSER_TLS_HOST; it never silently skips. The host is a new
+ordinary owned fixture process with a single ephemeral 127.0.0.1 listener and
+bounded lifetime/output, using the original Rust accept and published TEST_ONLY
+keys. Wrong ALPN/cipher modes use explicitly malformed fixture-only rustls server
+configs; production connect remains unchanged. The Node Worker fixture supplies
+real TCP IO and browser-global shims, not a replacement Rust owner. A separate
+in-memory silent sink tests timing/cancellation only and supplies no TLS success
+evidence. These are not real browser WebSocket/mux, outer WSS, app or phone tests.
+
+Build the WASM as in the preceding reproducible Signer commands, substituting
+tests/fixtures/browser_tls_owner_fixture.rs and explicit exports
+browser_tls_start/browser_tls_poll/browser_tls_cancel/browser_tls_event plus
+the thin wrapper's one-line forwards. The production library retains all owner
+logic without forcing C exports/runtime imports into unrelated Signer bundles.
+Keep the same wasm and host dependency search directories, then
+run the matching official generator with --target bundler --keep-lld-exports
+--no-typescript --out-name fixture. To build the owned native host from the same
+tree, run the corresponding native cargo build --lib --all-features
+--message-format=json (no target flag), select its exact rlib artifact paths, and
+compile tests/fixtures/browser_tls_host_fixture.rs with rustc --edition=2024,
+-L dependency=<native target debug/deps>, and --extern entries for
+cc_desk_remote_security, rustls, tokio_rustls, tokio, serde_json, base64 and ring.
+Only that explicit output executable is passed to the test; no existing process,
+user CLI, credentials, installation or deployment is selected or modified.
+
+The TLS group covers both endpoint evidence and exact Host endpoint hash,
+wrong pin/roles/ALPN/cipher, EOF, absolute deadline, pre-start/loading cancellation,
+final ciphertext flush success/failure, simultaneous RX with blocked TX, retained
+in-flight IO/crypto, same-turn publication fences and shutdown retirement. The
+final-write gate observes real post-Signer poll_flush Pending rather than guessing
+a write ordinal: native accept must already have authenticated the client while
+its final write Promise is held, and client evidence remains unpublished until
+the original Promise resolves. Rejecting that Promise cannot succeed.
 
 Reference: [WebAuthn Level 3 assertion verification](https://www.w3.org/TR/webauthn-3/#sctn-verifying-assertion).

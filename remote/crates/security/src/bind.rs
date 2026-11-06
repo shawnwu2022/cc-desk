@@ -313,7 +313,7 @@ async fn establish_host<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     if pending._context.0 != Role::Host {
         return Err(BindError::Context);
     }
-    let deadline = pending._deadline;
+    let deadline = crate::tls_clock::native(pending._deadline).ok_or(BindError::Unsupported)?;
     let mut token = pending._cancel;
     let mut io = pending._io;
     let context = Context {
@@ -399,7 +399,7 @@ async fn establish_client<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     if pending._context.0 != Role::Client {
         return Err(BindError::Context);
     }
-    let deadline = pending._deadline;
+    let deadline = crate::tls_clock::native(pending._deadline).ok_or(BindError::Unsupported)?;
     let mut token = pending._cancel;
     let mut io = pending._io;
     let (context, selection, binding) = within(deadline, &mut token, async {
