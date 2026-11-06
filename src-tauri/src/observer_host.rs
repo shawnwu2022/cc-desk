@@ -173,7 +173,7 @@ impl ObserverHost {
             .name("opencode-db-cue".into())
             .spawn(move || {
                 let cue_sequence = cue_sequence_for_thread;
-                let Some(publish) = crate::hook_server::publisher() else {
+                let Some(publish) = crate::observer_http::publisher() else {
                     return;
                 };
                 let mut last: Option<std::time::SystemTime> = None;
@@ -278,7 +278,7 @@ mod db_cue_tests {
         let last_id = Arc::new(Mutex::new(String::new()));
         let received_for_publish = received.clone();
         let last_for_publish = last_id.clone();
-        crate::hook_server::set_publisher_for_test(Arc::new(move |delivery, payload| {
+        crate::observer_http::set_publisher(Arc::new(move |delivery, payload| {
             assert_eq!(delivery.window_label, "main");
             assert_eq!(payload.event_name, "Notification");
             *last_for_publish.lock().unwrap() = payload.event_id.unwrap_or_default();
