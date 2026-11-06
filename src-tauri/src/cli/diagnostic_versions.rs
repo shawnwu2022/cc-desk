@@ -55,6 +55,16 @@ struct EntryState {
 #[derive(Default)]
 pub(crate) struct Probes {
     entries: Mutex<Vec<Arc<Entry>>>,
+    profiles: Arc<Mutex<std::collections::HashSet<String>>>,
+}
+struct ProfileOwner {
+    profiles: Arc<Mutex<std::collections::HashSet<String>>>,
+    profile_id: String,
+}
+impl Drop for ProfileOwner {
+    fn drop(&mut self) {
+        self.profiles.lock().remove(&self.profile_id);
+    }
 }
 fn validate_id(id: &str) -> Result<(), SafeError> {
     if uuid::Uuid::parse_str(id).is_err() || id.len() != 36 {
@@ -63,6 +73,15 @@ fn validate_id(id: &str) -> Result<(), SafeError> {
     Ok(())
 }
 impl Probes {
+    fn claim_profile(&self, profile_id: &str) -> Option<ProfileOwner> {
+        if !self.profiles.lock().insert(profile_id.to_owned()) {
+            return None;
+        }
+        Some(ProfileOwner {
+            profiles: self.profiles.clone(),
+            profile_id: profile_id.into(),
+        })
+    }
     fn entry(
         &self,
         service: &LaunchService,
@@ -234,6 +253,10 @@ impl LaunchService {
             result.reason = Some("unsupported-launcher");
             return Ok(result);
         }
+        let Some(_profile_owner) = self.version_probes.claim_profile(&query.profile_id) else {
+            result.reason = Some("probe-in-progress");
+            return Ok(result);
+        };
         let prepare = || {
             // A private neutral cwd, never a project or user script input.
             let cwd = tempfile::tempdir().map_err(|_| error("UNAVAILABLE"))?;

@@ -401,3 +401,133 @@ fn CliVersion_CmdShimUsesFixedSafeArgv_018() {
         }
     }
 }
+
+// A controlled owner capability stands in for an exact child awaiting reap.
+// This injects the lifecycle boundary without claiming an OS termination failure.
+fn pending_owner(f: &Fixture) -> (ProfileOwner, Arc<Entry>) {
+    let owner = f
+        .service
+        .version_probes
+        .claim_profile(&f.query.profile_id)
+        .unwrap();
+    let entry = f
+        .service
+        .version_probes
+        .entry(&f.service, &f.caller, &f.query.request_id)
+        .unwrap();
+    let mut state = entry.state.lock();
+    state.request = Some(f.query.clone());
+    state.started = true;
+    state.result = Some(Ok(ProbeResult {
+        request_id: f.query.request_id.clone(),
+        profile_id: f.query.profile_id.clone(),
+        profile_revision: f.query.expected_profile_revision,
+        cli: CliKind::Codex,
+        state: "unknown",
+        version: None,
+        reason: Some("termination-unknown"),
+    }));
+    drop(state);
+    (owner, entry)
+}
+fn fresh_query(f: &Fixture) -> ProbeRequest {
+    let mut query = f.query.clone();
+    query.request_id = uuid::Uuid::new_v4().to_string();
+    query
+}
+#[test]
+fn CliVersion_PendingReapBlocksNewRequestUntilSettled_019() {
+    let f = Fixture::new("known", Launcher::Native);
+    let (owner, entry) = pending_owner(&f);
+    assert_eq!(f.probe().reason, Some("termination-unknown"));
+    assert_eq!(f.cancel().status, "requested");
+    let blocked = fresh_query(&f);
+    let result = f
+        .service
+        .probe_cli_version(&f.caller, blocked.clone())
+        .unwrap();
+    assert_eq!(result.reason, Some("probe-in-progress"));
+    assert_eq!(result.version, None);
+    assert!(!f.root.path().join("spawned").exists());
+    entry.state.lock().settled = true;
+    drop(owner);
+    assert_eq!(f.cancel().status, "settled");
+    assert_eq!(
+        f.service
+            .probe_cli_version(&f.caller, blocked)
+            .unwrap()
+            .reason,
+        Some("probe-in-progress")
+    );
+    assert_eq!(
+        f.service
+            .probe_cli_version(&f.caller, fresh_query(&f))
+            .unwrap()
+            .state,
+        "known"
+    );
+    assert_eq!(
+        std::fs::read_to_string(f.root.path().join("spawned")).unwrap(),
+        "spawn\n"
+    );
+}
+#[test]
+fn CliVersion_RevokedPendingOwnerBlocksSameProfileOnly_020() {
+    let f = Fixture::new("known", Launcher::Native);
+    let (owner, entry) = pending_owner(&f);
+    let caller = f.service.registry().activate_window("main").unwrap();
+    assert_eq!(
+        f.service
+            .probe_cli_version(&caller, fresh_query(&f))
+            .unwrap()
+            .reason,
+        Some("probe-in-progress")
+    );
+    assert!(!f.root.path().join("spawned").exists());
+    let mut other = Profile::new("other", CliKind::Codex);
+    other.program_path = Override::Set(executable().to_string_lossy().into_owned());
+    f.service
+        .repository
+        .apply(
+            f.service.repository.read().unwrap().revision,
+            Patch::Create { profile: other },
+        )
+        .unwrap();
+    let mut query = fresh_query(&f);
+    query.profile_id = "other".into();
+    query.expected_profile_revision = f.service.repository.get_profile("other").unwrap().revision;
+    assert_eq!(
+        f.service.probe_cli_version(&caller, query).unwrap().state,
+        "known"
+    );
+    entry.state.lock().settled = true;
+    drop(owner);
+    assert_eq!(
+        f.service
+            .probe_cli_version(&caller, fresh_query(&f))
+            .unwrap()
+            .state,
+        "known"
+    );
+    assert_eq!(
+        std::fs::read_to_string(f.root.path().join("spawned")).unwrap(),
+        "spawn\nspawn\n"
+    );
+}
+#[test]
+fn CliVersion_RealRunningChildBlocksFreshRequest_021() {
+    let f = Fixture::new("hang", Launcher::Native);
+    let worker = f.start();
+    f.wait_spawn();
+    let result = f
+        .service
+        .probe_cli_version(&f.caller, fresh_query(&f))
+        .unwrap();
+    f.cancel();
+    assert_eq!(worker.join().unwrap().unwrap().state, "cancelled");
+    assert_eq!(result.reason, Some("probe-in-progress"));
+    assert_eq!(
+        std::fs::read_to_string(f.root.path().join("spawned")).unwrap(),
+        "spawn\n"
+    );
+}
