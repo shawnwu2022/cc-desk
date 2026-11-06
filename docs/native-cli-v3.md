@@ -591,10 +591,17 @@ then starts an owned private authenticated loopback server from the selected CLI
 frozen environment. Only official GET/PATCH/GET session metadata calls update the
 title, with exact ID/directory and title readback. PATCH is issued once; uncertain
 results never replay or fall back to direct SQLite writes or a Desk-only alias.
+The initial v2 metadata may omit a title or carry null; renaming still requires
+the exact ID and directory. A successful v2 PATCH has no body (204), so the
+following GET must return the requested title exactly; an absent or mismatched
+readback is an unknown outcome, never permission to repeat the PATCH.
 The existing title receipt and affected-source refresh path synchronizes list aliases.
 Official OpenCode 1.19.0 was checked through isolated PATCH/list/server-restart and
-fresh CLI list reads without model calls. This evidence does not certify a logged-in
-interactive model turn or unrelated external/unregistered sessions.
+fresh CLI list reads without model calls. On Windows, OpenCode 2.2.5 also passed
+the isolated selected-shim create, database-path resolution, PATCH/GET rename and
+SQLite title projection checks, using private data/config roots and no model calls.
+This evidence does not certify a logged-in interactive model turn, WebView behavior
+or unrelated external/unregistered sessions.
 
 ## OpenCode optional activity observer
 

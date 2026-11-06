@@ -513,7 +513,8 @@ fn rename_http(
         id: String,
         #[serde(flatten)]
         origin: SessionOrigin,
-        title: String,
+        #[serde(default)]
+        title: Option<String>,
     }
     let check = |value: &Metadata| {
         let matches = value
@@ -559,7 +560,7 @@ fn rename_http(
         .map_err(|_| error("RENAME_OUTCOME_UNKNOWN"))?;
     if flavor == ApiFlavor::V1 {
         let changed = read_back(changed)?;
-        if changed.title != title {
+        if changed.title.as_deref() != Some(title) {
             return Err(error("RENAME_OUTCOME_UNKNOWN"));
         }
     }
@@ -571,7 +572,7 @@ fn rename_http(
         .and_then(|r| r.error_for_status())
         .map_err(|_| error("RENAME_OUTCOME_UNKNOWN"))?;
     let after = read_back(after)?;
-    if after.title != title {
+    if after.title.as_deref() != Some(title) {
         return Err(error("RENAME_OUTCOME_UNKNOWN"));
     }
     Ok(id.to_owned())
@@ -626,7 +627,9 @@ mod tests {
             "wrong-readback",
             "redirect",
             "v2-no-title",
+            "v2-null-title",
             "v2-wrong-readback",
+            "v2-missing-readback",
             "v2-patch-error",
         ] {
             let v2 = mode.starts_with("v2-");
@@ -693,6 +696,12 @@ mod tests {
                         body["location"] = serde_json::json!({"directory":"/fixture"});
                         if methods.len() == 1 {
                             body.as_object_mut().unwrap().remove("title");
+                            if mode == "v2-null-title" {
+                                body["title"] = serde_json::Value::Null;
+                            }
+                        }
+                        if mode == "v2-missing-readback" && methods.len() == 3 {
+                            body.as_object_mut().unwrap().remove("title");
                         }
                     }
                     if mode == "wrong-id" {
@@ -746,7 +755,9 @@ mod tests {
                 usize::from(count > 1)
             );
             match mode {
-                "success" | "v2-no-title" => assert_eq!(result.unwrap(), "ses_fixture"),
+                "success" | "v2-no-title" | "v2-null-title" => {
+                    assert_eq!(result.unwrap(), "ses_fixture")
+                }
                 "wrong-id" | "wrong-directory" => {
                     assert_eq!(result.unwrap_err().code, "SESSION_ORIGIN_AMBIGUOUS")
                 }
@@ -1135,11 +1146,6 @@ mod tests {
             rename_admission,
             &|| Ok(()),
             |client, base, password, flavor| {
-                    let metadata = client.get(flavor.session_url(base, &id)).basic_auth("opencode", Some(password)).send().unwrap();
-                    let status = metadata.status().as_u16();
-                    let metadata: serde_json::Value = bounded_json(metadata, 32768).unwrap();
-                    let metadata = metadata.get("data").unwrap_or(&metadata);
-                    eprintln!("Official metadata status={status} idMatch={} hasTitle={} titleNull={} hasLocation={}", metadata.get("id").and_then(|id| id.as_str()) == Some(id.as_str()), metadata.get("title").is_some(), metadata.get("title").is_some_and(|value| value.is_null()), metadata.get("location").is_some());
                 rename_http(
                     client,
                     base,
