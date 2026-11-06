@@ -13,6 +13,10 @@ mod types;
 mod cli {
     pub(crate) use crate::{environment, profiles, types};
 }
+#[path = "../../../src-tauri/src/codex_observer.rs"]
+mod codex_observer;
+#[path = "../../../src-tauri/src/codex_observer_reporter.rs"]
+mod codex_observer_reporter;
 #[path = "../../../src-tauri/src/cli/environment.rs"]
 mod environment;
 #[cfg(test)]
@@ -23,8 +27,11 @@ mod environment_tests;
 mod http_tests;
 #[path = "../../../src-tauri/src/observer_host.rs"]
 mod observer_host;
-#[path = "../../../src-tauri/src/codex_observer.rs"]
-mod codex_observer;
+#[cfg(windows)]
+pub mod reporter_fixture;
+pub fn run_reporter_entry() -> bool {
+    codex_observer_reporter::run_entry()
+}
 #[path = "../../../src-tauri/src/observer_http.rs"]
 mod observer_http;
 #[cfg(test)]
