@@ -29,7 +29,7 @@
 - 运行 owner 的状态/关注变化经现有 `catalog.refresh(projectPath)` 合并刷新受影响项目，跨项目移动同时刷新旧、新项目；替换、移除和卸载释放对应监听。历史与归档按投影签名刷新受影响项目，读取进度不触发刷新，行序列不变时不替换目录数组；项目请求版本继续拒绝迟到覆盖。这是 UI 投影优化，不能据此改变进程或授权所有权。回归与测量见 [CI 性能记录](docs/ci-performance.md)。
 - 请求、profile revision、run、generation、document 与 stream 必须精确绑定。输入 partial/unknown 不重放；输出有界并使用 exact ACK；原生 workspace 写入遵守 revision/CAS。
 - path、owner 或 opaque scope ID 本身不是授权。资源读取使用 backend-held scope 和 kind-specific safe DTO，不发布原始 env、argv、headers、凭证或异常载荷；路径只按对应 DTO 的授权与展示契约返回。Observer 是可选隔离侧通道，不拥有进程控制权。
-- Windows ConPTY、完整 bracketed-paste 字节与一次逻辑 `write_all` 契约不得为测试变绿而降级。实际 `UserPromptSubmit` 正文相等、真实 CLI 和 WebView/平台验收是独立证据。
+- ConPTY、bracketed-paste 整帧一次逻辑 `write_all` 不得降级。Codex 原生粘贴[禁止回退](docs/paste-framing.md)。真实 CLI、`UserPromptSubmit` 正文相等、WebView/平台须独立验收。
 - 新 Rust DTO 返回前端使用 `#[serde(rename_all = "camelCase")]`。新 Tauri command 按 `commands.rs` → `lib.rs` 注册 → `src/api/tauri.ts` 封装；新 JS API 写操作须核对 [capabilities](docs/capabilities.md)，不能假设 `<plugin>:default` 含全部权限。
 - 更新通道默认 stable，test/preview 必须显式保存并由后端发现及安装复核。candidate/test-only 与不可发布标记仍只证明排除，不能当用户通道或晋升依据。未知设置保存阻断全局检查和安装，直到只读协调成功；取消回执绑定准确准入与请求所有权。详见 [发布流程](docs/release-process.md)。
 - 视觉系统唯一规范为 [DESIGN.md](DESIGN.md)。颜色、字体、圆角和阴影使用 `src/styles/global.css` token，light/dark 成对维护；终端 `--terminal-*` 独立。复用共享 UI 控件，不另建菜单、弹窗、提示或反馈实现。

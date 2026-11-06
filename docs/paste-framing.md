@@ -1,21 +1,16 @@
 # DevTools JSON 粘贴完整性修复
 
-## Version-independent Codex text paste
+## Windows Codex 原生粘贴路由
 
-Text Ctrl-V routing does not run the selected CLI with `--version` or infer an
-input capability from its version. No passive native text Ctrl-V contract is
-currently available, so the existing paste-support DTO reports
-`nativeTextPaste=false` (unconfirmed capability, not an unsupported CLI version).
-The caller/window and profile revision checks remain required.
+Windows 的结构化 Codex 会话在启动 attempt 内冻结原生粘贴路由。Ctrl+V 和 DOM paste 均先同步预留当前 binding 的有序输入 intent，再提交一个 `0x16` 字节，由 Codex 读取系统剪贴板并处理文本或图片。宿主不读取、分类、编码或上传剪贴板正文，也不附加 Enter。过期 attempt 不能把快捷键写入新运行；写入失败或结果未知时不能改发正文或重放快捷键。
 
-The terminal retains clipboard classification, the current attempt, input
-reservation and mode epoch. Text contents change only through CR/CRLF to LF
-normalization; current bracketed-paste mode determines framing. No Enter is
-appended. Newlines already in the text remain CLI-interpreted input; this does
-not certify that every CLI can never submit them. Positive image evidence keeps
-its existing image route. No probe input is sent to a user terminal, and
-bracketed-paste mode does not prove native Ctrl-V text fallback. CLI installation,
-identity/nonce, permissions and configuration remain unchanged.
+这是用户选择 Codex 后的输入路由，不是 CLI 身份或能力认证。路由不执行 `--version`，不读取可变 profile 来重新判断，也不依赖可选 observer、npm 转发证明或 hook 能力。此前 `ab92f3c2` 因缺少被动能力接口把 `nativeTextPaste` 固定为 `false`，撤销了原生路由。禁止以相同理由再次静默退回宿主正文转发。
+
+官方 [0.163.0](https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/tui/src/chatwidget/interaction.rs) 和 [0.166.0](https://github.com/openai/codex/blob/rust-v0.166.0/codex-rs/tui/src/chatwidget/interaction.rs) 的 Windows Ctrl+V 均包含文本回退。旧 0.162 和不遵循此快捷键的自定义程序不在该原生文本粘贴兼容范围内；不能在快捷键发送后通过重发正文猜测它是否支持。真实 Codex 草稿完整性和已安装 Windows WebView2 仍须单独验收。
+
+其他 CLI、非 Windows 和 raw 会话保留宿主剪贴板路径。该路径只做 CR/CRLF 到 LF 的行尾规范化，按当前 bracketed-paste mode 加帧，不追加 Enter；正文原有换行仍由 CLI 解释。以下完整帧与一次逻辑 `write_all` 约束适用于此正文路径。
+
+回归必须直接运行生产组件，覆盖 Windows Codex 两个入口均只产生一个字节、宿主剪贴板 API 与 DOM 正文读取未调用、大于 128 KiB 的样本、平台和 raw 边界、过期 attempt、失败不回退。测试不能 mock 一个恒为 true 的“能力”来代替真实路由。
 
 ## 问题
 
