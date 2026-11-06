@@ -5,6 +5,9 @@ import { createI18n } from 'vue-i18n'
 import NativeSessionDeletePanel from '@/components/sessions/NativeSessionDeletePanel.vue'
 import { useNativeHistoryStore, nativeHistoryContextKey } from '@/stores/nativeHistory'
 import { useNativeSessionDeletesStore } from '@/stores/nativeSessionDeletes'
+import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
+import { useCliSupportStore } from '@/stores/cliSupport'
+import { createNativeCliAdapter } from '@/session/adapters/nativeCliAdapter'
 import type { UnifiedSession } from '@/types/unifiedSession'
 import type { SourceRef } from '@/types/nativeProjection'
 import en from '@/i18n/locales/en'
@@ -24,6 +27,8 @@ beforeEach(() => {
   useNativeHistoryStore().entries.set(nativeHistoryContextKey(context), { key: nativeHistoryContextKey(context), context, source, sourceRootKey: 'root', loaded: true, loading: false, error: null, requestEpoch: '1', sessions: [{ type: 'session', sessionKey: 'key', nativeSessionId: nativeId, projectId: 'project', title: 'Synthetic archived session', truncated: false, archived: true, cwd: context.projectPath, updatedAt: null }] })
   io.invoke.mockImplementation(async (command, request) => {
     if (command === 'cli_preview_session_delete') return { operationId: request.operationId, previewId, nativeSessionId: nativeId, cli: 'codex', state: 'ready', rootArchived: true, scope: 'native-subtree', knownDescendantCount: null, reason: null }
+    if (command === 'native_get_scope') return source
+    if (command === 'native_list_resources') return { source: request.source, resourceKind: 'history', requestEpoch: request.requestEpoch, observedAt: '1', state: 'ready', reason: null, items: [], hasMore: false }
     return { operationId: request.operationId, cli: 'codex', state: 'acknowledged', rootPresent: false, descendants: 'unverified', reason: null }
   })
 })
@@ -46,14 +51,43 @@ describe('native permanent deletion review and second confirmation', () => {
     expect(io.invoke.mock.calls.map(([command]) => command)).toEqual(['cli_preview_session_delete'])
   })
   it('PermanentDeleteUi_SecondConfirmationIssuesOneNativeMutation_002', async () => {
-    const invalidated = vi.spyOn(useNativeHistoryStore(), 'invalidate')
     await review(); element('[data-delete-next-confirm]').click(); await flushPromises()
     await acknowledge('[data-delete-ack-permanent]'); await acknowledge('[data-delete-ack-subtree]')
     const button = element('[data-delete-final]'); button.click(); button.click(); await flushPromises()
     expect(io.invoke.mock.calls.filter(([command]) => command === 'cli_confirm_session_delete')).toHaveLength(1)
     expect(element('[data-delete-result]').textContent).toContain('acknowledged')
     expect(element('[data-delete-result]').textContent).toContain('not independently verified')
-    expect(invalidated).toHaveBeenCalledTimes(1)
+    expect(io.invoke.mock.calls.filter(([command]) => command === 'native_list_resources')).toHaveLength(1)
+  })
+  it.each([false, true])('PermanentDeleteUi_ReReadsHistoryWithoutDiscardingOtherRows_010 (read failure=%s)', async readFailure => {
+    const history = useNativeHistoryStore(), catalog = useUnifiedSessionsStore()
+    useCliSupportStore().setCliEnabled('codex', true)
+    const controlId = '40000000-0000-4000-8000-000000000010'
+    const control = { ...history.get(context)!.sessions[0]!, sessionKey: JSON.stringify(['local', 'codex', 'root', controlId]), nativeSessionId: controlId, title: 'Unrelated synthetic session' }
+    history.get(context)!.sessions.push(control)
+    const unused = () => { throw new Error('unrelated native action') }
+    catalog.configureAdapters([createNativeCliAdapter({
+      tabs: { tabs: new Map(), activeTabId: null, setActive: unused, close: unused, rename: unused },
+      history,
+      runtime: { createTab: unused, restartTab: unused, stopTab: async () => unused(), renameTab: async () => unused() },
+      archive: { getArchivedSessions: () => [], archiveSession: async () => unused(), restoreSession: async () => unused() },
+    })])
+    await catalog.refresh(context.projectPath, { cli: 'codex' })
+    expect(catalog.sessions.map(row => row.nativeSessionId)).toContain(controlId)
+    const previous = io.invoke.getMockImplementation()!
+    io.invoke.mockImplementation(async (command, request) => {
+      if (command === 'native_get_scope' && readFailure) throw { code: 'SOURCE_UNAVAILABLE' }
+      if (command === 'native_list_resources') return { source: request.source, resourceKind: 'history', requestEpoch: request.requestEpoch, observedAt: '1', state: 'ready', reason: null, items: [control], hasMore: false }
+      return previous(command, request)
+    })
+    await review(); element('[data-delete-next-confirm]').click(); await flushPromises()
+    await acknowledge('[data-delete-ack-permanent]'); await acknowledge('[data-delete-ack-subtree]')
+    element('[data-delete-final]').click(); await flushPromises()
+    expect(io.invoke.mock.calls.filter(([command]) => command === 'native_get_scope')).toHaveLength(1)
+    expect(catalog.sessions.map(row => row.nativeSessionId)).toContain(controlId)
+    if (!readFailure) expect(catalog.sessions.map(row => row.nativeSessionId)).not.toContain(nativeId)
+    else expect(history.get(context)?.error).toBeTruthy()
+    expect(element('[data-delete-result]').textContent).toContain('acknowledged')
   })
   it('PermanentDeleteUi_SourceOrActivityChangeInvalidatesReview_003', async () => {
     const w = await review()

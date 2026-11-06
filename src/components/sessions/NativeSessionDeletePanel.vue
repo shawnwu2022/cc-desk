@@ -73,7 +73,8 @@ async function execute() {
   try {
     await operations.execute(requestKey, permanent.value, subtree.value, () => selectedKey.value === requestKey && ownsOperation.value && signature.value === original)
     if (operations.records.get(requestKey)?.receipt?.state === 'acknowledged') {
-      history.invalidate(current.origin)
+      // 先重读准确来源；只清缓存会让同来源的无关会话也从目录消失。
+      await history.load({ ...current.origin, force: true, retainOnFailure: true })
       await useUnifiedSessionsStore().refresh(current.origin.projectPath, { cli: 'codex' })
     }
   } catch { /* 后端结果保留在操作账本；前置失权不发送删除。 */ }
