@@ -224,6 +224,56 @@ impl NativeRuntime {
         let query = decode_projection(request.body(), 4096)?;
         self.service.observer_status(&caller, &query)
     }
+    pub(crate) async fn preview_session_delete<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        request: &Request<'_>,
+    ) -> Result<super::native_delete::Preview, SafeError> {
+        let caller = self.binding()?.admit_native(webview, request.headers())?;
+        let query: super::native_delete::PreviewRequest = decode_projection(request.body(), 32768)?;
+        query.validate()?;
+        let service = self.projections.clone();
+        let admitted = caller.clone();
+        let result =
+            tauri::async_runtime::spawn_blocking(move || service.preview_delete(&admitted, query))
+                .await
+                .map_err(|_| error("DELETE_UNAVAILABLE"))??;
+        self.service.registry().check_caller(&caller)?;
+        Ok(result)
+    }
+    pub(crate) async fn confirm_session_delete<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        request: &Request<'_>,
+    ) -> Result<super::native_delete::Receipt, SafeError> {
+        let caller = self.binding()?.admit_native(webview, request.headers())?;
+        let query: super::native_delete::ConfirmRequest = decode_projection(request.body(), 4096)?;
+        query.validate()?;
+        let service = self.projections.clone();
+        let admitted = caller.clone();
+        let result =
+            tauri::async_runtime::spawn_blocking(move || service.confirm_delete(&admitted, query))
+                .await
+                .map_err(|_| error("DELETE_OUTCOME_UNKNOWN"))??;
+        self.service.registry().check_caller(&caller)?;
+        Ok(result)
+    }
+    pub(crate) async fn inspect_session_delete<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        request: &Request<'_>,
+    ) -> Result<super::native_delete::Receipt, SafeError> {
+        let caller = self.binding()?.admit_native(webview, request.headers())?;
+        let query: super::native_delete::InspectRequest = decode_projection(request.body(), 4096)?;
+        let service = self.projections.clone();
+        let admitted = caller.clone();
+        let result =
+            tauri::async_runtime::spawn_blocking(move || service.inspect_delete(&admitted, query))
+                .await
+                .map_err(|_| error("DELETE_OUTCOME_UNKNOWN"))??;
+        self.service.registry().check_caller(&caller)?;
+        Ok(result)
+    }
     pub(crate) async fn rename_session<T: Runtime>(
         &self,
         webview: &Webview<T>,

@@ -55,6 +55,7 @@ pub(crate) struct Budget {
     history_read_failures: std::collections::BTreeSet<&'static str>,
     history_omitted_sessions: std::collections::BTreeSet<uuid::Uuid>,
     history_anonymous_omission: bool,
+    mutation_observations: Option<Sha256>,
 }
 impl Budget {
     pub(crate) fn new(limits: Limits) -> Self {
@@ -68,6 +69,7 @@ impl Budget {
             history_read_failures: Default::default(),
             history_omitted_sessions: Default::default(),
             history_anonymous_omission: false,
+            mutation_observations: None,
         }
     }
     pub(crate) fn checkpoint(&self) -> ReadResult<()> {
@@ -79,6 +81,28 @@ impl Budget {
             return Err("SOURCE_BUDGET_EXCEEDED");
         }
         Ok(())
+    }
+    pub(crate) fn observe_mutation_file(
+        &mut self,
+        path: &str,
+        stat: Option<(u64, Option<std::time::SystemTime>)>,
+    ) {
+        if let Some(digest) = &mut self.mutation_observations {
+            digest.update(path.as_bytes());
+            digest.update(format!("{stat:?}").as_bytes());
+        }
+    }
+    pub(crate) fn mutation_fingerprint(&self) -> Vec<u8> {
+        self.mutation_observations
+            .clone()
+            .map(|digest| digest.finalize().to_vec())
+            .unwrap_or_default()
+    }
+    pub(crate) fn track_mutations(&mut self) {
+        self.mutation_observations = Some(Sha256::new());
+    }
+    pub(crate) fn tracks_mutations(&self) -> bool {
+        self.mutation_observations.is_some()
     }
     pub(crate) fn history_metadata_incomplete(&self) -> bool {
         self.history_metadata_incomplete
@@ -132,6 +156,13 @@ impl Budget {
                 .map(|id| self.history_omitted_sessions.contains(&id))
                 .unwrap_or(true)
     }
+    pub(crate) fn retain_mutation_ambiguity(&mut self, id: &str) {
+        if let Ok(id) = uuid::Uuid::parse_str(id) {
+            self.history_omitted_sessions.insert(id);
+        } else {
+            self.history_anonymous_omission = true;
+        }
+    }
     fn entry(&mut self) -> ReadResult<()> {
         self.checkpoint()?;
         self.entries_left = self
@@ -163,6 +194,36 @@ pub(crate) struct Entry {
 pub(crate) const OPENCODE_DEFAULT_DB: &str = "opencode.db";
 
 impl Root {
+    pub(crate) fn pin_delete_containers(&self) -> ReadResult<Vec<Root>> {
+        #[cfg(not(windows))]
+        {
+            Err("DELETE_PLATFORM_UNSUPPORTED")
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            self.current()?;
+            let mut held = Vec::new();
+            for name in ["sessions", "archived_sessions"] {
+                let path = self.selected.join(name);
+                let check = || -> ReadResult<()> {
+                    self.current()?;
+                    let metadata = std::fs::symlink_metadata(&path).map_err(read_error)?;
+                    if !metadata.is_dir() || metadata.file_attributes() & 0x400 != 0 {
+                        return Err("DELETE_CONTAINER_UNSAFE");
+                    }
+                    Ok(())
+                };
+                check()?;
+                let container = Root::open(&path)?;
+                check()?;
+                container.current()?;
+                held.push(container);
+            }
+            self.current()?;
+            Ok(held)
+        }
+    }
     pub(crate) fn selected_path(&self) -> &Path {
         &self.selected
     }

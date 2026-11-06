@@ -1,4 +1,5 @@
 import { createProjectionClient } from './nativeProjection'
+import { createSessionDeleteClient } from './nativeSessionDelete'
 import { readObserverInstallation } from './observer'
 import { createHistoryClient } from './versionHistory'
 import { createLaunchAttempt } from './cliLaunchAttempt';
@@ -494,6 +495,10 @@ export function createCliLaunchAttempt<E>(
 export function createNativeProjectionClient(): import('./nativeProjection').ProjectionClient {
   const bridge = nativeDocumentBridge();
   return createProjectionClient(bridge, () => nativeDocumentBridge() === bridge);
+}
+export function createNativeSessionDeleteClient(): import('@/types/nativeSessionDelete').SessionDeleteClient {
+  const bridge = nativeDocumentBridge();
+  return createSessionDeleteClient(bridge, () => nativeDocumentBridge() === bridge);
 }
 export async function nativeGetScope(target: import('@/types/nativeProjection').ScopeTarget): Promise<import('@/types/nativeProjection').SourceRef> {
   return createNativeProjectionClient().scope(target);

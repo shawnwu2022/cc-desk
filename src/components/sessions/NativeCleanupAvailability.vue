@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import AppButton from '@/components/ui/AppButton.vue'
 import AppSelect from '@/components/ui/AppSelect.vue'
 import InlineNotice from '@/components/ui/InlineNotice.vue'
+import NativeSessionDeletePanel from './NativeSessionDeletePanel.vue'
 import type { UnifiedSession } from '@/types/unifiedSession'
 
 const props = defineProps<{ sessions: UnifiedSession[]; active: boolean }>()
@@ -16,7 +16,9 @@ const protectedTarget = computed(() => target.value && (target.value.opened === 
   || !!target.value.preparationState || target.value.processState === 'running' || target.value.processState === 'starting' || target.value.processState === 'unknown'))
 const reason = computed(() => target.value?.cli === 'claude' ? 'cleanupClaudeUnsupported'
   : target.value?.cli === 'opencode' ? 'cleanupOpencodeUnsafe' : 'cleanupCodexUnsafe')
-// 当前原生接口缺少预览集合与活动状态的原子条件。此组件仅解释能力，不发出 mutation。
+const scopeDescription = computed(() => target.value?.cli === 'claude' ? 'cleanupClaudeDeleteScope'
+  : target.value?.cli === 'opencode' ? 'cleanupOpencodeDeleteScope' : 'cleanupCodexDeleteScope')
+// 各提供方确有删除接口；此处解释当前适配的具体缺口，不把列表观察当执行授权。
 </script>
 
 <template>
@@ -33,14 +35,13 @@ const reason = computed(() => target.value?.cli === 'claude' ? 'cleanupClaudeUns
         <dt>{{ t('cleanupRootLabel') }}</dt><dd>{{ target.nativeRootKey || t('cleanupUnknown') }}</dd>
       </dl>
       <p>{{ t('cleanupIncompletePreview') }}</p>
+      <p data-cleanup-provider-scope>{{ t(scopeDescription) }}</p>
+      <p>{{ t('cleanupDeletionLimits') }}</p>
       <InlineNotice v-if="protectedTarget" kind="warning" :message="t('cleanupProtected')" />
       <InlineNotice kind="warning" :message="t(reason)" />
-      <p>{{ t('cleanupRecoveryUnknown') }}</p>
-      <div class="cleanup-actions">
-        <AppButton data-native-cleanup-archive disabled>{{ t('cleanupNativeArchive') }}</AppButton>
-        <AppButton data-native-cleanup-delete variant="danger" disabled>{{ t('cleanupNativeDelete') }}</AppButton>
-      </div>
+      <p>{{ t('cleanupDeletionConfirmation') }}</p>
     </div>
+    <NativeSessionDeletePanel :target="target || null" :active="active" />
   </details>
 </template>
 
@@ -50,5 +51,4 @@ summary { cursor: pointer; color: var(--text-primary); font-weight: 600; }
 p { margin: 10px 0; line-height: 1.6; }
 .cleanup-target { margin-top: 12px; } dl { display: grid; grid-template-columns: minmax(80px, auto) minmax(0, 1fr); gap: 6px 12px; line-height: 1.5; }
 dt { color: var(--text-secondary); } dd { margin: 0; overflow-wrap: anywhere; color: var(--text-primary); }
-.cleanup-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
 </style>

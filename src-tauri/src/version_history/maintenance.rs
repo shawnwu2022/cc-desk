@@ -47,6 +47,40 @@ impl std::fmt::Debug for AdmissionGate {
 }
 
 impl AdmissionGate {
+    pub(crate) fn check_metadata_idle(&self) -> Result<(), SafeError> {
+        let state = self.0.lock();
+        if state.frozen.is_some() || !state.children.is_empty() || !state.mutations.is_empty() {
+            return Err(error("SOURCE_BUSY"));
+        }
+        Ok(())
+    }
+    /// 元数据助手独占启动票据，同时冻结其他运行时启动与权威写入。
+    /// 调用方必须持有冻结状态，直到精确子进程及其受控后代全部收口。
+    pub(crate) fn begin_metadata(&self) -> Result<(FrozenAdmissions, PreparingStart), SafeError> {
+        let mut state = self.0.lock();
+        if state.frozen.is_some() || !state.children.is_empty() || !state.mutations.is_empty() {
+            return Err(error("SOURCE_BUSY"));
+        }
+        let id = uuid::Uuid::new_v4();
+        let transaction_id = id.to_string();
+        state.frozen = Some(transaction_id.clone());
+        state
+            .children
+            .insert(id, ChildState::Starting(RuntimeKind::Native));
+        Ok((
+            FrozenAdmissions {
+                gate: self.clone(),
+                transaction_id,
+                committed: false,
+            },
+            StartTicket {
+                gate: self.clone(),
+                id,
+                completed: false,
+            }
+            .preparing(),
+        ))
+    }
     pub(crate) fn new() -> Self {
         Self::default()
     }

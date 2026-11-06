@@ -113,6 +113,165 @@ pub(crate) struct LaunchService {
     opencode_probe_argv: Mutex<std::collections::HashMap<(String, String), ApiFlavor>>,
 }
 impl LaunchService {
+    pub(crate) fn delete_metadata(
+        &self,
+        caller: &CallerIdentity,
+        request: &LaunchRequest,
+        authority: super::native_projection::registry::SessionAuthority,
+        active: Arc<std::sync::atomic::AtomicBool>,
+        outcome: super::native_delete::OwnerOutcome,
+    ) -> Result<(), SafeError> {
+        self.registry().check_caller(caller)?;
+        let profile = self.repository.get_profile(&request.profile_id)?;
+        let legacy =
+            profile.read_legacy(&self.repository.metadata_directory().join("config.json"))?;
+        let inherited = self.inherited_environment()?;
+        let snapshot = freeze_launch(
+            request,
+            &profile,
+            caller,
+            &FreezeContext {
+                inherited: &inherited,
+                terminal: &EnvMap::new(),
+                legacy: legacy.as_ref(),
+                observer: None,
+            },
+        )?;
+        // 元数据助手拒绝可能覆盖原生根或运行模式的 profile 参数。
+        if matches!(&profile.default_args, super::profiles::Override::Set(args) if !args.is_empty())
+            || !snapshot.default_args().is_empty()
+            || snapshot
+                .legacy_default_args()
+                .is_some_and(|args| !args.is_empty())
+        {
+            return Err(error("DELETE_ARGUMENTS_UNSUPPORTED"));
+        }
+        let selected =
+            super::native_projection::selection::locations(request.cli, snapshot.environment())
+                .map_err(error)?;
+        if selected.root != authority.root_path()
+            || selected.open_root(CliKind::Codex).map_err(error)?.key() != authority.root_key()
+        {
+            return Err(error("SCOPE_STALE"));
+        }
+        let spec = resolve_process(&build_invocation(request, &snapshot)?)?;
+        let (frozen, mut admission) = self.repository.admission().begin_metadata()?;
+        let frozen = Arc::new(Mutex::new(Some(frozen)));
+        let worker_frozen = frozen.clone();
+        let registry = self.registry().clone();
+        let caller = caller.clone();
+        let shutting_down = self.shutting_down.clone();
+        let owners = self.command_owners.clone();
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        let worker = move || {
+            let mut run = || -> Result<(), SafeError> {
+                let shutdown = shutting_down.read();
+                if *shutdown {
+                    return Err(error("RUN_SUPERVISOR_STOPPING"));
+                }
+                registry.check_caller(&caller)?;
+                authority.current()?;
+                let mut command = spec.metadata_command()?;
+                #[cfg(windows)]
+                let job = super::opencode_prepare::server_job::Job::new()?;
+                #[cfg(windows)]
+                {
+                    use std::os::windows::process::CommandExt;
+                    command.creation_flags(0x08000000 | 0x4);
+                }
+                let mut owner = owners.register()?;
+                let deadline = Instant::now() + Duration::from_secs(30);
+                let ticket = admission.begin_creation();
+                let mut child = match registry.with_current_caller(&caller, || command.spawn()) {
+                    Ok(Ok(child)) => child,
+                    Ok(Err(_)) => {
+                        ticket.no_child_created();
+                        owner.settled = true;
+                        return Err(error("PROCESS_START_FAILED"));
+                    }
+                    Err(failure) => {
+                        ticket.no_child_created();
+                        owner.settled = true;
+                        return Err(failure);
+                    }
+                };
+                let ticket = ticket.child_created();
+                #[cfg(windows)]
+                let assigned = job.assign_and_resume(&child).is_ok();
+                #[cfg(not(windows))]
+                let assigned = true;
+                drop(shutdown);
+                let result = if assigned {
+                    catch_unwind(AssertUnwindSafe(|| {
+                        let current = || {
+                            if *shutting_down.read() {
+                                return Err(error("RUN_SUPERVISOR_STOPPING"));
+                            }
+                            registry.check_caller(&caller)?;
+                            authority.current()
+                        };
+                        super::native_delete::process(&mut child, &authority, &current)
+                    }))
+                    .unwrap_or_else(|_| Err(error("DELETE_OUTCOME_UNKNOWN")))
+                } else {
+                    Err(error("DELETE_UNAVAILABLE"))
+                };
+                let mut root_reaped = false;
+                loop {
+                    if !root_reaped {
+                        if let Ok(Some(_)) = child.try_wait() {
+                            root_reaped = true;
+                        }
+                    }
+                    #[cfg(windows)]
+                    let group_reaped = job.is_empty().unwrap_or(false);
+                    #[cfg(not(windows))]
+                    let group_reaped = root_reaped;
+                    if root_reaped && group_reaped {
+                        ticket.reaped();
+                        owner.settled = true;
+                        return result;
+                    }
+                    // RPC 收口会关闭 stdin，先允许官方助手按 EOF 正常退出。
+                    // 失败或总时限到期才终止本次 Job；整个进程组清空前继续保留所有权。
+                    if result.is_err() || Instant::now() >= deadline || *shutting_down.read() {
+                        #[cfg(windows)]
+                        let _ = job.terminate();
+                        let _ = child.kill();
+                    }
+                    std::thread::sleep(Duration::from_millis(25));
+                }
+            };
+            let result = run();
+            // 准备票据可证明尚未创建进程；已创建时只在整个 Job 收口后释放。
+            drop(admission);
+            let released = worker_frozen
+                .lock()
+                .take()
+                .ok_or_else(|| error("DELETE_UNAVAILABLE"))
+                .and_then(|frozen| frozen.release_review());
+            let result = result.and(released);
+            if let Ok(mut stored) = outcome.lock() {
+                *stored = Some(result.clone());
+            }
+            active.store(false, std::sync::atomic::Ordering::Release);
+            let _ = sender.send(result);
+        };
+        // 工作线程创建失败明确发生在 spawn 前，丢弃的准备票据没有子进程。
+        if std::thread::Builder::new()
+            .name("native-delete-owner".into())
+            .spawn(worker)
+            .is_err()
+        {
+            if let Some(frozen) = frozen.lock().take() {
+                frozen.release_review()?;
+            }
+            return Err(error("DELETE_UNAVAILABLE"));
+        }
+        receiver
+            .recv_timeout(Duration::from_secs(35))
+            .map_err(|_| error("DELETE_OWNER_PENDING"))?
+    }
     pub(crate) fn rename_metadata(
         &self,
         caller: &CallerIdentity,

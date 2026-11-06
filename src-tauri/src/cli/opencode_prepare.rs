@@ -222,6 +222,28 @@ pub(super) mod server_job {
         }
     }
     impl Job {
+        pub(crate) fn terminate(&self) -> Result<(), SafeError> {
+            unsafe { windows::Win32::System::JobObjects::TerminateJobObject(self.0, 1) }
+                .map_err(|_| error("DELETE_OWNER_PENDING"))
+        }
+        pub(crate) fn is_empty(&self) -> Result<bool, SafeError> {
+            use windows::Win32::System::JobObjects::{
+                JobObjectBasicAccountingInformation, QueryInformationJobObject,
+                JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
+            };
+            let mut information = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
+            unsafe {
+                QueryInformationJobObject(
+                    Some(self.0),
+                    JobObjectBasicAccountingInformation,
+                    (&mut information as *mut JOBOBJECT_BASIC_ACCOUNTING_INFORMATION).cast(),
+                    std::mem::size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>() as u32,
+                    None,
+                )
+            }
+            .map_err(|_| error("DELETE_OWNER_PENDING"))?;
+            Ok(information.ActiveProcesses == 0)
+        }
         pub(crate) fn new() -> Result<Self, SafeError> {
             let job = Self(
                 unsafe { CreateJobObjectW(None, PCWSTR::null()) }

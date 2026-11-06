@@ -18,8 +18,224 @@ pub(crate) struct ProjectionService {
     launch: Arc<LaunchService>,
     registry: ScopeRegistry,
     rename_operations: crate::cli::native_rename::Operations,
+    delete_operations: crate::cli::native_delete::Operations,
 }
 impl ProjectionService {
+    pub(crate) fn preview_delete(
+        &self,
+        caller: &CallerIdentity,
+        request: crate::cli::native_delete::PreviewRequest,
+    ) -> Result<crate::cli::native_delete::Preview, SafeError> {
+        self.launch.registry().check_caller(caller)?;
+        request.validate()?;
+        self.registry
+            .check_source(&owner(caller), &request.source)?;
+        if request.source.cli != CliKind::Codex {
+            return Ok(request.preview("unsupported", Some("NATIVE_DELETE_UNSUPPORTED")));
+        }
+        if !cfg!(windows) {
+            return Ok(request.preview("unsupported", Some("NATIVE_DELETE_UNSUPPORTED")));
+        }
+        if self
+            .launch
+            .repository()
+            .admission()
+            .check_metadata_idle()
+            .is_err()
+        {
+            return Ok(request.preview("blocked", Some("SOURCE_BUSY")));
+        }
+        let authority = match self.registry.authorize_session(
+            &owner(caller),
+            &request.source,
+            &request.session_key,
+        ) {
+            Ok(authority) => authority,
+            Err(_) => return Ok(request.preview("blocked", Some("DELETE_SOURCE_UNAVAILABLE"))),
+        };
+        if !authority.archived {
+            return Ok(request.preview("blocked", Some("DELETE_ROOT_NOT_ARCHIVED")));
+        }
+        let authority = match authority.pin_delete_containers() {
+            Ok(authority) => authority,
+            Err(_) => return Ok(request.preview("blocked", Some("DELETE_CONTAINER_UNSAFE"))),
+        };
+        self.delete_operations.register(
+            caller,
+            &request,
+            &authority.native_id,
+            authority.observation.clone(),
+        )
+    }
+    fn delete_root_present(
+        &self,
+        caller: &CallerIdentity,
+        request: &crate::cli::native_delete::PreviewRequest,
+    ) -> Option<bool> {
+        use super::wire::{ProjectionState, ResourceItem, ResourceKind};
+        static NEXT_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let epoch = crate::cli::types::WireU64::parse(
+            &NEXT_EPOCH
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                .to_string(),
+        )
+        .ok()?;
+        for offset in (0..16400).step_by(200) {
+            let result = self
+                .registry
+                .read(
+                    &owner(caller),
+                    &ReadRequest {
+                        source: request.source.clone(),
+                        resource_kind: ResourceKind::History,
+                        request_epoch: epoch,
+                        query: None,
+                        session_id: None,
+                        offset,
+                        limit: 200,
+                    },
+                )
+                .ok()?;
+            if result.state != ProjectionState::Ready
+                || result.history_metadata_incomplete == Some(true)
+                || !result.history_read_failures.is_empty()
+            {
+                return None;
+            }
+            if result.items.iter().any(|item| matches!(item,ResourceItem::Session {session_key,..} if session_key==&request.session_key)) {return Some(true);}
+            if !result.has_more {
+                return Some(false);
+            }
+        }
+        None
+    }
+    pub(crate) fn confirm_delete(
+        &self,
+        caller: &CallerIdentity,
+        request: crate::cli::native_delete::ConfirmRequest,
+    ) -> Result<crate::cli::native_delete::Receipt, SafeError> {
+        self.launch.registry().check_caller(caller)?;
+        request.validate()?;
+        let entry = self.delete_operations.get(caller, &request.operation_id)?;
+        self.registry
+            .check_source(&owner(caller), &entry.request.source)?;
+        if entry.confirmed.is_some() {
+            return self
+                .delete_operations
+                .begin(caller, &request, &entry.observation)?
+                .ok_or_else(|| error("DELETE_OUTCOME_UNKNOWN"));
+        }
+        let authority = match self.registry.authorize_session(
+            &owner(caller),
+            &entry.request.source,
+            &entry.request.session_key,
+        ) {
+            Ok(authority) if authority.archived => authority,
+            _ => {
+                self.delete_operations
+                    .invalidate(caller, &request.operation_id);
+                return Err(error("DELETE_PREVIEW_CHANGED"));
+            }
+        };
+        let authority = authority.pin_delete_containers()?;
+        if let Some(receipt) =
+            self.delete_operations
+                .begin(caller, &request, &authority.observation)?
+        {
+            return Ok(receipt);
+        }
+        let launch = crate::cli::types::LaunchRequest {
+            request_id: format!("delete-{}", request.operation_id),
+            tab_id: "metadata".into(),
+            run_id: "metadata".into(),
+            generation: 1,
+            profile_id: entry.request.source.profile_id.clone(),
+            expected_profile_revision: entry.request.source.profile_revision,
+            cli: CliKind::Codex,
+            launch_cwd: authority.cwd.clone(),
+            action: LaunchAction::Raw {
+                argv: vec!["app-server".into()],
+            },
+            extra_args: vec![],
+            cols: 80,
+            rows: 24,
+        };
+        let result = self.launch.delete_metadata(
+            caller,
+            &launch,
+            authority,
+            entry.active.clone(),
+            entry.outcome.clone(),
+        );
+        let root_present = self.delete_root_present(caller, &entry.request);
+        let receipt =
+            match result {
+                Ok(()) if root_present == Some(true) => {
+                    entry
+                        .request
+                        .receipt("partial", root_present, Some("DELETE_ROOT_PRESENT"))
+                }
+                Ok(()) => entry.request.receipt("acknowledged", root_present, None),
+                Err(failure) if failure.code == "SOURCE_BUSY" => {
+                    entry
+                        .request
+                        .receipt("blocked", root_present, Some("SOURCE_BUSY"))
+                }
+                Err(failure) if failure.code == "DELETE_ARGUMENTS_UNSUPPORTED" => {
+                    entry.request.receipt(
+                        "blocked",
+                        root_present,
+                        Some("DELETE_ARGUMENTS_UNSUPPORTED"),
+                    )
+                }
+                Err(failure) if failure.code == "DELETE_ROOT_NOT_ARCHIVED" => entry
+                    .request
+                    .receipt("blocked", root_present, Some("DELETE_ROOT_NOT_ARCHIVED")),
+                Err(failure) if failure.code == "DELETE_SOURCE_UNAVAILABLE" => entry
+                    .request
+                    .receipt("blocked", root_present, Some("DELETE_SOURCE_UNAVAILABLE")),
+                Err(failure) if failure.code == "DELETE_OWNER_PENDING" => {
+                    entry
+                        .request
+                        .receipt("unknown", None, Some("DELETE_OWNER_PENDING"))
+                }
+                Err(_) => {
+                    entry
+                        .request
+                        .receipt("unknown", root_present, Some("DELETE_OUTCOME_UNKNOWN"))
+                }
+            };
+        self.delete_operations
+            .finish(caller, &request.operation_id, receipt.clone());
+        self.launch.registry().check_caller(caller)?;
+        Ok(receipt)
+    }
+    pub(crate) fn inspect_delete(
+        &self,
+        caller: &CallerIdentity,
+        request: crate::cli::native_delete::InspectRequest,
+    ) -> Result<crate::cli::native_delete::Receipt, SafeError> {
+        self.launch.registry().check_caller(caller)?;
+        uuid::Uuid::parse_str(&request.operation_id)
+            .map_err(|_| SafeError::invalid("operationId"))?;
+        let entry = self.delete_operations.get(caller, &request.operation_id)?;
+        self.registry
+            .check_source(&owner(caller), &entry.request.source)?;
+        if entry.confirmed.is_none() {
+            return Err(error("DELETE_CONFIRMATION_REQUIRED"));
+        }
+        if entry.active.load(std::sync::atomic::Ordering::Acquire) {
+            return Ok(entry
+                .request
+                .receipt("unknown", None, Some("DELETE_OWNER_PENDING")));
+        }
+        let root = self.delete_root_present(caller, &entry.request);
+        let receipt = crate::cli::native_delete::reconcile(&entry, root);
+        self.delete_operations
+            .finish(caller, &request.operation_id, receipt.clone());
+        self.launch.registry().check_caller(caller)?;
+        Ok(receipt)
+    }
     pub(crate) fn rename(
         &self,
         caller: &CallerIdentity,
@@ -69,6 +285,7 @@ impl ProjectionService {
             launch,
             registry: ScopeRegistry::new(64),
             rename_operations: Default::default(),
+            delete_operations: Default::default(),
         }
     }
     #[cfg(test)]

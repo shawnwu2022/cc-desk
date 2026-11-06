@@ -1,10 +1,13 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createPinia } from 'pinia'
 import { mount, type VueWrapper } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
 import NativeCleanupAvailability from '@/components/sessions/NativeCleanupAvailability.vue'
 import type { UnifiedSession } from '@/types/unifiedSession'
 import en from '@/i18n/locales/en'
 import zh from '@/i18n/locales/zh'
+vi.mock('@tauri-apps/plugin-shell', () => ({ open: vi.fn() }))
+vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({}) }))
 let wrapper: VueWrapper | undefined
 afterEach(() => { wrapper?.unmount(); wrapper = undefined })
 const session = (cli: UnifiedSession['cli'], overrides: Partial<UnifiedSession> = {}): UnifiedSession => ({
@@ -14,7 +17,7 @@ const session = (cli: UnifiedSession['cli'], overrides: Partial<UnifiedSession> 
   nativeOrigin: { cli, profileId: 'fixture-profile', profileRevision: '7', projectId: 'project', projectPath: '/synthetic/project' }, ...overrides,
 })
 function render(sessions: UnifiedSession[]) {
-  wrapper = mount(NativeCleanupAvailability, { props: { sessions, active: true }, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en, zh } })] } })
+  wrapper = mount(NativeCleanupAvailability, { props: { sessions, active: true }, global: { plugins: [createPinia(), createI18n({ legacy: false, locale: 'en', messages: { en, zh } })] } })
   return wrapper
 }
 describe('native cleanup conservative capability check', () => {
@@ -25,9 +28,9 @@ describe('native cleanup conservative capability check', () => {
     expect(view.get('[data-cleanup-target]').text()).toContain('fixture-profile')
     expect(view.get('[data-cleanup-target]').text()).toContain('fixture-root')
     expect(view.text()).toContain('complete child-session range is unverified')
-    expect(view.text()).toContain('cannot lock the confirmed child-session range')
+    expect(view.text()).toContain('native subtree at execution')
     expect(view.get('[data-native-cleanup-delete]').attributes('disabled')).toBeDefined()
-    expect(view.get('[data-native-cleanup-archive]').attributes('disabled')).toBeDefined()
+    expect(view.find('[data-native-cleanup-archive]').exists()).toBe(false)
     expect(view.text()).toContain('Desk metadata')
     const eventsBefore = Object.keys(view.emitted())
     await view.get('[data-native-cleanup-delete]').trigger('click')
@@ -38,8 +41,22 @@ describe('native cleanup conservative capability check', () => {
     await view.get('select').setValue('opencode-desk')
     expect(view.text()).toContain('may interrupt active sessions')
     await view.get('select').setValue('claude-desk')
-    expect(view.text()).toContain('No verified single-session deletion interface')
+    expect(view.text()).toContain('Claude Agent SDK provides deleteSession')
+    expect(view.text()).toContain('active external writer')
     expect(view.text()).not.toContain('may interrupt active sessions')
+  })
+  it('PermanentDelete_ProviderScopesAreNativeAndNotDeskRemoval_004', async () => {
+    const view = render([session('codex'), session('opencode'), session('claude')])
+    await view.get('select').setValue('codex-desk')
+    expect(view.text()).toContain('spawned descendants')
+    expect(view.text()).toContain('writer locks')
+    expect(view.text()).toContain('External attachments, project files and remote copies are not verified by this assessment')
+    await view.get('select').setValue('opencode-desk')
+    expect(view.text()).toContain('interrupts work before recursively removing children')
+    await view.get('select').setValue('claude-desk')
+    expect(view.text()).toContain('transcript and subagent-transcript directory')
+    expect(view.text()).toContain('associated worktrees')
+    expect(view.get('[data-native-cleanup-delete]').attributes('disabled')).toBeDefined()
   })
   it('CleanupAvailability_ProtectsActiveAndRestoringAndClearsRemovedTarget_003', async () => {
     const view = render([session('codex', { processState: 'running', resumePending: true })])

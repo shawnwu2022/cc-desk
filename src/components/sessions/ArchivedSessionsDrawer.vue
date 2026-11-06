@@ -40,7 +40,7 @@ function menuAction(id: string, action: SessionMenuAction) {
       <SessionList v-if="archived.length" :sessions="archived" :menu-teleport="false" @primary-action="primaryAction" @menu-action="menuAction"
         @rename-commit="(id, title) => emit('rename-commit', id, title)" @rename-cancel="emit('rename-cancel', $event)" />
       <p v-else class="archived-empty">{{ t('noArchivedSessions') }}</p>
-      <NativeCleanupAvailability v-if="archived.length" :sessions="archived" :active="open" />
+      <NativeCleanupAvailability :sessions="archived" :active="open" />
     </div>
   </AppDrawer>
 </template>

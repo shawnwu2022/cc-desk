@@ -166,6 +166,31 @@ pub(crate) async fn cli_rename_session(
 }
 
 #[tauri::command]
+pub(crate) async fn cli_preview_session_delete(
+    webview: Webview,
+    request: Request<'_>,
+    runtime: State<'_, Arc<NativeRuntime>>,
+) -> Result<super::native_delete::Preview, SafeError> {
+    runtime.preview_session_delete(&webview, &request).await
+}
+#[tauri::command]
+pub(crate) async fn cli_confirm_session_delete(
+    webview: Webview,
+    request: Request<'_>,
+    runtime: State<'_, Arc<NativeRuntime>>,
+) -> Result<super::native_delete::Receipt, SafeError> {
+    runtime.confirm_session_delete(&webview, &request).await
+}
+#[tauri::command]
+pub(crate) async fn cli_inspect_session_delete(
+    webview: Webview,
+    request: Request<'_>,
+    runtime: State<'_, Arc<NativeRuntime>>,
+) -> Result<super::native_delete::Receipt, SafeError> {
+    runtime.inspect_session_delete(&webview, &request).await
+}
+
+#[tauri::command]
 pub(crate) async fn cli_ack_output(
     webview: Webview,
     request: Request<'_>,
