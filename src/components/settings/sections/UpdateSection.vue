@@ -65,8 +65,9 @@ const installing = computed(() => updates.busy)
 const settingsBlocked = computed(() => settingsUncertain.value || loadingProxy.value || checking.value || savingProxy.value || savingChannel.value || installing.value || testingProxy.value)
 const visibleFailure = computed(() => error.value ?? (['error', 'cancelled'].includes(updates.downloadState) ? updates.lastFailure : null))
 const canCancel = computed(() => ['downloading', 'verifying'].includes(updates.downloadState) && cancellation.value !== 'requested' && cancellation.value !== 'too-late')
-const eligible = computed(() => !settingsUncertain.value && isOrdinaryUpdateEligible(updates.updateInfo))
-const eligibilityHint = computed(() => updates.hasUpdate && updates.updateInfo?.version === updates.availableVersion ? 'updateCheckBeforeInstall' : 'updateSourceUnverified')
+const eligible = computed(() => !settingsUncertain.value && !updates.isCandidateIgnored && isOrdinaryUpdateEligible(updates.updateInfo))
+const eligibilityHint = computed(() => updates.availableVersion !== null && updates.updateInfo?.version === updates.availableVersion
+  ? updates.isCandidateIgnored ? 'updateCandidateIgnoredHint' : 'updateCheckBeforeInstall' : 'updateSourceUnverified')
 const sessionsBusy = computed(() => counts.value.running + counts.value.starting + counts.value.unknown > 0)
 const channel = computed(() => updates.updateInfo?.channel ?? 'unverified')
 const channelLabels = { stable: 'updateStable', beta: 'updateBeta', rc: 'updateRc', preview: 'updatePreview', candidate: 'updateCandidate', 'test-only': 'updateTestOnly', unverified: 'updateUnverified' }
@@ -159,10 +160,10 @@ async function checkUpdate() {
     await updates.checkForUpdate(() => !disposed && owner === version && props.active)
   } catch (cause) { if (owner === version && props.active) error.value = updateFailure(cause) }
 }
-function reviewInstall() { if (props.active && !installing.value && updates.updateInfo?.hasUpdate) reviewing.value = true }
+function reviewInstall() { if (props.active && !installing.value && !updates.isCandidateIgnored && updates.updateInfo?.hasUpdate) reviewing.value = true }
 async function installUpdate() {
   const info = updates.updateInfo, version = owner
-  if (!props.active || settingsUncertain.value || checking.value || savingProxy.value || savingChannel.value || installing.value || !isOrdinaryUpdateEligible(info) || !info?.admissionId || sessionsBusy.value) return
+  if (!props.active || settingsUncertain.value || updates.isCandidateIgnored || checking.value || savingProxy.value || savingChannel.value || installing.value || !isOrdinaryUpdateEligible(info) || !info?.admissionId || sessionsBusy.value) return
   reviewing.value = false
   ++cancelOwner; cancelling.value = false; cancellation.value = null
   updates.resetDownload(); updates.setDownloadState('downloading'); error.value = null
@@ -193,6 +194,9 @@ async function manualDownload() {
   try { await open('https://github.com/shawnwu2022/cc-desk/releases') }
   catch { if (version === owner && props.active) error.value = { code: 'UPDATER_FAILED', stage: 'unknown', key: 'settingsExternalLinkFailed' } }
 }
+function ignoreCandidate() { if (props.active && !settingsBlocked.value && updates.ignoreCurrentCandidate()) reviewing.value = false }
+function clearIgnoredCandidate() { if (props.active && !settingsBlocked.value) updates.clearIgnoredCandidate() }
+function historyTime(at: number) { return new Date(at).toLocaleString(locale.value === 'zh' ? 'zh-CN' : 'en-US') }
 </script>
 <template>
   <section class="remaining-settings" data-settings-update>
@@ -220,19 +224,39 @@ async function manualDownload() {
     </div>
     <InlineNotice data-update-policy kind="info" :message="t('updatePublicationBlocked')" />
     <InlineNotice v-if="visibleFailure" data-update-error kind="warning" :message="t(visibleFailure.key) + ' (' + visibleFailure.code + ' · ' + visibleFailure.stage + ')'" />
+    <AppButton v-if="visibleFailure" data-update-retry :disabled="settingsBlocked || !active" @click="checkUpdate">{{ t('updateRetryCheck') }}</AppButton>
+    <InlineNotice v-if="!updates.preferencesPersistent" kind="warning" :message="t('updatePreferencesMemoryOnly')" />
+    <div v-if="updates.ignoredCandidate" data-update-ignored class="actions">
+      <p>{{ t('updateIgnoredCandidate', { version: updates.ignoredCandidate.version }) }}</p>
+      <AppButton data-update-clear-ignore variant="ghost" :disabled="settingsBlocked || !active" @click="clearIgnoredCandidate">{{ t('updateClearIgnore') }}</AppButton>
+    </div>
     <p v-if="updates.updateInfo && !updates.updateInfo.hasUpdate">{{ t('upToDate') }}</p>
     <div v-if="updates.updateInfo?.hasUpdate" class="package-summary" data-update-package>
       <strong>{{ t('updateObservedPackage', { version: updates.updateInfo.version }) }}</strong>
       <span data-update-channel>{{ t(channelLabels[channel]) }}</span>
-      <InlineNotice v-if="!eligible" :kind="eligibilityHint === 'updateCheckBeforeInstall' ? 'info' : 'warning'" :message="t(eligibilityHint)" />
+      <InlineNotice v-if="!eligible" :kind="eligibilityHint === 'updateSourceUnverified' ? 'warning' : 'info'" :message="t(eligibilityHint)" />
       <p v-if="releaseNotes" class="release-notes">{{ releaseNotes }}</p>
-      <AppButton data-update-review :disabled="!active" @click="reviewInstall">{{ t('updateReviewInstallation') }}</AppButton>
+      <AppButton data-update-review :disabled="!active || updates.isCandidateIgnored" @click="reviewInstall">{{ t('updateReviewInstallation') }}</AppButton>
+      <AppButton v-if="!updates.isCandidateIgnored" data-update-ignore variant="ghost" :disabled="!eligible || settingsBlocked || !active" @click="ignoreCandidate">{{ t('updateIgnoreCandidate') }}</AppButton>
     </div>
     <p v-if="installing || updates.downloadState === 'cancelled'" data-update-progress role="status">{{ t(progressKey, { percent: updates.downloadProgress.percent }) }}</p>
     <AppButton v-if="canCancel" data-update-cancel :disabled="cancelling || !active" @click="cancelUpdate">{{ t('updateCancelDownload') }}</AppButton>
     <p v-if="installing && cancellation" data-update-cancel-status role="status">{{ t(cancellation === 'requested' ? 'updateCancelling' : 'updateCancelTooLate') }}</p>
     <div class="actions"><AppButton data-update-install :disabled="!eligible || installing || !active" @click="reviewInstall">{{ t('updateRestartInstall') }}</AppButton><AppButton variant="ghost" @click="manualDownload">{{ t('manualDownload') }}</AppButton></div>
     <AppButton data-update-recovery-guide variant="ghost" :disabled="!active" @click="recoveryGuide = true">{{ t('updateRecoveryGuide') }}</AppButton>
+    <details data-update-history class="update-history">
+      <summary>{{ t('updateHistoryTitle') }}</summary>
+      <p>{{ t('updateHistoryHint') }}</p>
+      <ul v-if="updates.history.length">
+        <li v-for="(entry, index) in updates.history" :key="index">
+          <time>{{ historyTime(entry.at) }}</time> · {{ t(`updateHistoryEvent_${entry.event}`) }}
+          <span v-if="entry.version"> · v{{ entry.version }}</span> · {{ t(entry.channel === 'stable' ? 'updateChannelStable' : entry.channel === 'test' ? 'updateChannelTest' : 'updateChannelPreview') }}
+          <span v-if="entry.failure"> · {{ entry.failure.code }} / {{ entry.failure.stage }}</span>
+        </li>
+      </ul>
+      <p v-else>{{ t('updateHistoryEmpty') }}</p>
+      <AppButton v-if="updates.history.length" data-update-clear-history variant="ghost" :disabled="!active" @click="updates.clearHistory">{{ t('updateHistoryClear') }}</AppButton>
+    </details>
     <HistoricalVersionsPanel :active="active" />
     <AppDialog :open="recoveryGuide && active" data-update-recovery-dialog :title="t('updateRecoveryGuide')" @close="recoveryGuide = false">
       <p>{{ t('updateRecoveryBeforeInstall') }}</p>
@@ -261,4 +285,7 @@ h2 { font-size: 20px; } .version-row, .actions, .channel-legend { display: flex;
 .proxy-settings { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
 .proxy-credentials { display: flex; flex-wrap: wrap; gap: 12px; }
 .proxy-settings p { color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
+.update-history { font-size: 12px; color: var(--text-secondary); line-height: 1.6; }
+.update-history summary { cursor: pointer; color: var(--text-primary); font-weight: 600; }
+.update-history ul { padding-left: 20px; overflow-wrap: anywhere; } .update-history p { margin: 8px 0; }
 </style>

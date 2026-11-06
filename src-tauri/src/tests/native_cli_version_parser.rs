@@ -1,6 +1,5 @@
 #![allow(non_snake_case)]
-#[path = "../cli/diagnostic_version_parser.rs"]
-mod parser;
+use crate::cli::diagnostic_version_parser as parser;
 #[test]
 fn CliVersion_CanonicalOnly_001() {
     for (cli, line, want) in [

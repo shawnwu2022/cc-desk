@@ -307,6 +307,27 @@ for (const locale of ['en', 'zh']) {
 // New history pixels are evidence for review, not automatically approved baselines.
 // Keep the existing committed snapshot inventory and all of its assertions intact.
 for (const locale of ['en', 'zh']) {
+  test(`update ignore and local history stay reachable ${locale}`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 1024, height: 640 })
+    await openFixture(page, { scenario: 'update-preferences', locale, gui: locale === 'zh' ? 'dark' : 'light' })
+    await page.locator('[data-update-ignore]').click()
+    await expect(page.locator('[data-update-ignored]')).toContainText('0.99.0')
+    await expect(page.locator('[data-update-install]')).toBeDisabled()
+    await expect(page.locator('[data-update-review]')).toBeDisabled()
+    await page.locator('[data-update-clear-ignore]').scrollIntoViewIfNeeded()
+    await captureFixtureEvidence(page, testInfo, `update-ignored-${locale}-unapproved`)
+    await page.locator('[data-update-clear-ignore]').click()
+    await expect(page.locator('[data-update-ignored]')).toHaveCount(0)
+    await expect(page.locator('[data-update-install]')).toBeDisabled()
+    const history = page.locator('[data-update-history]')
+    await history.locator('summary').click()
+    await expect(history).toContainText('UPDATER_REQUEST_FAILED')
+    await history.locator('[data-update-clear-history]').scrollIntoViewIfNeeded()
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    await captureFixtureEvidence(page, testInfo, `update-history-${locale}-unapproved`)
+    await history.locator('[data-update-clear-history]').click()
+    await expect(history.locator('li')).toHaveCount(0)
+  })
   test(`diagnostics and conservative cleanup stay reachable ${locale}`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width: 1024, height: 640 })
     await openFixture(page, { scenario: 'terminal-settings', locale, gui: locale === 'zh' ? 'dark' : 'light' })

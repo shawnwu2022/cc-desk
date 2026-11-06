@@ -10,11 +10,11 @@ import zh from '@/i18n/locales/zh'
 import type { UpdateInfo } from '@/types'
 
 type Progress = { payload: { admissionId: string; phase: string; downloaded: number; total: number } }
-const io = vi.hoisted(() => ({ settings: vi.fn(), save: vi.fn(), install: vi.fn(), cancel: vi.fn(), progress: null as null | ((event: Progress) => void) }))
+const io = vi.hoisted(() => ({ settings: vi.fn(), save: vi.fn(), install: vi.fn(), cancel: vi.fn(), check: vi.fn(), progress: null as null | ((event: Progress) => void) }))
 vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn(async (_event, handler) => { io.progress = handler; return vi.fn() }) }))
 vi.mock('@tauri-apps/plugin-shell', () => ({ open: vi.fn() }))
 vi.mock('@/api/tauri', async original => ({ ...await original<object>(), getUpdaterSettings: io.settings, saveUpdaterChannel: io.save,
-  installDesktopUpdate: io.install, cancelDesktopUpdate: io.cancel }))
+  installDesktopUpdate: io.install, cancelDesktopUpdate: io.cancel, checkForUpdates: io.check }))
 let wrapper: VueWrapper | undefined
 const official = (): UpdateInfo => ({ version: '0.27.0-rc.1', currentVersion: '0.26.0', hasUpdate: true, releaseNotes: 'Test notes', downloadUrl: '', platformAsset: null,
   selectedChannel: 'test', channel: 'rc', installEligible: true, admissionId: '00000000-0000-4000-8000-000000000001',
@@ -34,6 +34,33 @@ async function render() {
 }
 
 describe('update channel and lifecycle interaction', () => {
+  it('UpdatePreferences_IgnoreHistoryAndRetryRequireFreshCheck_009', async () => {
+    localStorage.clear()
+    const view = await render(), updates = useUpdateStore()
+    updates.setUpdateInfo(official()); await flushPromises()
+    await view.get('[data-update-ignore]').trigger('click'); await flushPromises()
+    expect(updates.isCandidateIgnored).toBe(true)
+    expect(view.get('[data-update-install]').attributes('disabled')).toBeDefined()
+    expect(view.get('[data-update-review]').attributes('disabled')).toBeDefined()
+    expect(view.get('[data-update-ignored]').text()).toContain('0.27.0-rc.1')
+    expect(view.get('[data-update-package]').text()).not.toContain(en.updateSourceUnverified)
+    await view.get('[data-update-clear-ignore]').trigger('click'); await flushPromises()
+    expect(updates.isCandidateIgnored).toBe(false); expect(updates.updateInfo?.admissionId).toBeNull()
+    updates.recordFailure({ code: 'UPDATER_INSTALL_OUTCOME_UNKNOWN', stage: 'install', raw: 'TOKEN /private' })
+    updates.setDownloadState('error'); await flushPromises()
+    expect(view.get('[data-update-retry]').text()).toContain('Check again')
+    io.check.mockResolvedValue({ ...official(), admissionId: '00000000-0000-4000-8000-000000000002' })
+    await view.get('[data-update-retry]').trigger('click'); await flushPromises()
+    expect(io.check).toHaveBeenCalledTimes(1)
+    expect(updates.updateInfo?.admissionId).toBe('00000000-0000-4000-8000-000000000002')
+    expect(io.install).not.toHaveBeenCalled()
+    const history = view.get('[data-update-history]')
+    expect(history.text()).toContain('UPDATER_INSTALL_OUTCOME_UNKNOWN')
+    expect(history.text()).not.toMatch(/TOKEN|private|SECRET/)
+    await view.get('[data-update-clear-history]').trigger('click'); await flushPromises()
+    expect(updates.history).toEqual([])
+    localStorage.clear()
+  })
   it('UpdateRecovery_ManualGuideHasNoInstallationEffects_005', async () => {
     const view = await render()
     await view.get('[data-update-recovery-guide]').trigger('click'); await flushPromises()

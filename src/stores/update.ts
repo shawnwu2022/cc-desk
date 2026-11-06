@@ -5,10 +5,15 @@ import type { DownloadProgress, UpdateInfo } from '@/types'
 import { checkForUpdates } from '@/api/tauri'
 import { useSidebarStore } from '@/stores/sidebar'
 import { updateFailure } from '@/utils/updateErrors'
+import { readUpdatePreferences, writeUpdatePreferences, safeHistoryEntry, type IgnoredCandidate, type UpdateHistoryEntry } from '@/utils/updatePreferences'
 
 export type DownloadState = 'idle' | 'downloading' | 'verifying' | 'installing' | 'restarting' | 'cancelled' | 'error'
 
 export const useUpdateStore = defineStore('update', () => {
+  const preferences = readUpdatePreferences()
+  const ignoredCandidate = ref<IgnoredCandidate | null>(preferences.value.ignored)
+  const history = ref<UpdateHistoryEntry[]>(preferences.value.history)
+  const preferencesPersistent = ref(preferences.persistent)
   const updateInfo = ref<UpdateInfo | null>(null)
   const confirmedUpdate = ref<UpdateInfo | null>(null)
   const checking = ref(false)
@@ -26,10 +31,37 @@ export const useUpdateStore = defineStore('update', () => {
   })
   const downloadError = ref('')
 
-  const hasUpdate = computed(() => confirmedUpdate.value !== null)
+  const isCandidateIgnored = computed(() => !!ignoredCandidate.value && !!updateInfo.value
+    && ignoredCandidate.value.version === updateInfo.value.version && ignoredCandidate.value.releaseId === updateInfo.value.officialRelease?.id
+    && ignoredCandidate.value.sourceSha === updateInfo.value.officialRelease?.sourceSha)
+  const hasUpdate = computed(() => confirmedUpdate.value !== null && !isCandidateIgnored.value)
   const availableVersion = computed(() => confirmedUpdate.value?.version ?? null)
   const busy = computed(() => ['downloading', 'verifying', 'installing', 'restarting'].includes(downloadState.value))
   const canCheck = computed(() => suspendedChecks.value === 0 && !busy.value && !settingsUncertain.value)
+  function persist() {
+    const saved = writeUpdatePreferences({ ignored: ignoredCandidate.value, history: history.value })
+    // 读入损坏已丢弃内容；后台写入成功不能悄悄抹去本窗口的丢失提示。
+    preferencesPersistent.value = saved && preferences.persistent
+  }
+  function addHistory(event: UpdateHistoryEntry['event'], failure: unknown = null) {
+    const entry = safeHistoryEntry({ at: Date.now(), event, version: updateInfo.value?.version ?? null, channel: selectedChannel.value, failure })
+    if (!entry) return
+    history.value = [entry, ...history.value].slice(0, 20); persist()
+  }
+  function syncIndicator() { useSidebarStore().setUpdateInfo(isCandidateIgnored.value ? null : confirmedUpdate.value ?? updateInfo.value) }
+  function ignoreCurrentCandidate(): boolean {
+    const info = updateInfo.value
+    if (busy.value || checking.value || !isOrdinaryUpdateEligible(info) || !info?.officialRelease) return false
+    ignoredCandidate.value = { version: info.version, releaseId: info.officialRelease.id, sourceSha: info.officialRelease.sourceSha }
+    revokeInstallAdmission(); syncIndicator(); addHistory('ignored')
+    return true
+  }
+  function clearIgnoredCandidate(): boolean {
+    if (busy.value || checking.value || !ignoredCandidate.value) return false
+    ignoredCandidate.value = null; revokeInstallAdmission(); syncIndicator(); addHistory('ignore-cleared')
+    return true
+  }
+  function clearHistory() { history.value = []; persist() }
 
   function setSettingsUncertain(value: boolean) {
     if (settingsUncertain.value === value) return
@@ -50,7 +82,7 @@ export const useUpdateStore = defineStore('update', () => {
     updateInfo.value = info
     confirmedUpdate.value = isOrdinaryUpdateEligible(info) ? info : null
     // 兼容设置页导航的纯展示状态；安装始终只使用当前 updateInfo 的后端准入。
-    useSidebarStore().setUpdateInfo(confirmedUpdate.value ?? info)
+    syncIndicator()
   }
 
   function revokeInstallAdmission() {
@@ -69,7 +101,9 @@ export const useUpdateStore = defineStore('update', () => {
     // 后端每次检查都会退休旧安装准入，版本提醒不因此消失。
     revokeInstallAdmission()
     const promise = Promise.resolve().then(checkForUpdates).then(info => {
-      if (revision === checkRevision && [...owners].some(owns => owns())) setUpdateInfo(info)
+      if (revision === checkRevision && [...owners].some(owns => owns())) {
+        setUpdateInfo(info); addHistory(info.hasUpdate ? 'available' : 'no-update')
+      }
       return info
     }).catch(cause => {
       if (revision === checkRevision && [...owners].some(owns => owns())) recordFailure(cause)
@@ -91,6 +125,9 @@ export const useUpdateStore = defineStore('update', () => {
   }
 
   function setDownloadState(state: DownloadState) {
+    if (downloadState.value !== state && ['downloading', 'verifying', 'installing', 'restarting', 'cancelled'].includes(state)) {
+      addHistory(state as 'downloading' | 'verifying' | 'installing' | 'restarting' | 'cancelled')
+    }
     downloadState.value = state
   }
 
@@ -102,7 +139,7 @@ export const useUpdateStore = defineStore('update', () => {
     downloadError.value = error
   }
 
-  function recordFailure(cause: unknown) { lastFailure.value = updateFailure(cause) }
+  function recordFailure(cause: unknown) { lastFailure.value = updateFailure(cause); if (lastFailure.value.code !== 'UPDATER_CANCELLED') addHistory('failed', cause) }
 
   function clearError() {
     downloadError.value = ''
@@ -115,6 +152,7 @@ export const useUpdateStore = defineStore('update', () => {
   }
 
   return {
+    ignoredCandidate, isCandidateIgnored, ignoreCurrentCandidate, clearIgnoredCandidate, history, clearHistory, preferencesPersistent,
     updateInfo,
     downloadState,
     downloadProgress,

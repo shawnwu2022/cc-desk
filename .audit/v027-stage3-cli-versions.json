@@ -1,0 +1,42 @@
+{
+  "localOnly": true,
+  "isolatedDataRelativePath": ".audit\\v027-stage3-isolated-cli-6n0xyu",
+  "inheritedCredentials": false,
+  "sessionCommands": false,
+  "productionBackendInvoked": false,
+  "results": [
+    {
+      "cli": "claude",
+      "profile": "isolated-claude",
+      "argv": [
+        "--version"
+      ],
+      "state": "known",
+      "version": "2.1.318",
+      "reason": null,
+      "executableUnchanged": true
+    },
+    {
+      "cli": "codex",
+      "profile": "isolated-codex",
+      "argv": [
+        "--version"
+      ],
+      "state": "known",
+      "version": "0.166.0",
+      "reason": null,
+      "executableUnchanged": true
+    },
+    {
+      "cli": "opencode",
+      "profile": "isolated-opencode",
+      "argv": [
+        "--version"
+      ],
+      "state": "known",
+      "version": "2.2.5",
+      "reason": null,
+      "executableUnchanged": true
+    }
+  ]
+}
