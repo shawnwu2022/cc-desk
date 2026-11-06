@@ -19,7 +19,7 @@ pub(crate) struct SourceProvenance {
     selection: Result<SourceSelection, SafeError>,
 }
 impl SourceProvenance {
-    fn known_scope(snapshot: &LaunchSnapshot) -> bool {
+    pub(crate) fn known_scope(snapshot: &LaunchSnapshot) -> bool {
         snapshot.raw_args().is_none()
             && read_scope_known(
                 snapshot.request().cli,

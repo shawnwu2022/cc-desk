@@ -4,6 +4,96 @@ use crate::observer_host::ObserverHost;
 use crate::observer_registry::{ObserverBinding, ObserverRegistry, ObserverRun, ObserverSource};
 use std::ffi::OsStr;
 
+#[cfg(windows)]
+#[test]
+fn Opencode_PureLaunchNeverPreparesObservation_115() {
+    use crate::cli::profiles::{Dialect, Launcher};
+    let mut f = Fixture::new(false);
+    let node = crate::platform::find_executable("node").unwrap();
+    let script = f.root.path().join("pure.mjs");
+    fs::write(&script, "import fs from 'node:fs';fs.appendFileSync('pure.calls','start\\n');fs.writeFileSync('pure.json',JSON.stringify({capability:!!process.env.CC_DESK_OBSERVER_CAPABILITY}));setInterval(()=>{},1000);").unwrap();
+    let shim = f.root.path().join("pure.cmd");
+    fs::write(&shim, format!("@\"{node}\" \"{}\"\r\n", script.display())).unwrap();
+    let mut profile = Profile::new("pure-launch", CliKind::Opencode);
+    profile.program_path = Override::Set(shim.to_str().unwrap().into());
+    profile.launcher = Launcher::Shim {
+        runner: std::env::var("COMSPEC").unwrap(),
+        dialect: Dialect::Cmd,
+    };
+    profile.observer = Override::Set(true);
+    let doc = f.repository.read().unwrap();
+    let doc = f
+        .repository
+        .apply(
+            doc.revision,
+            Patch::Create {
+                profile: profile.clone(),
+            },
+        )
+        .unwrap();
+    f.request.cli = CliKind::Opencode;
+    f.request.profile_id = profile.id.clone();
+    f.request.expected_profile_revision = doc.profiles[&profile.id].revision;
+    f.request.action = LaunchAction::ResumeId {
+        native_session_id: "ses_pure".into(),
+    };
+    f.request.extra_args.clear();
+    let prepare_calls = Arc::new(AtomicUsize::new(0));
+    let counted = prepare_calls.clone();
+    let host = ObserverHost::new(
+        Arc::new(ObserverRegistry::new()),
+        f.root.path().join("unused"),
+        Arc::new(move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+            None
+        }),
+    );
+    let mut env = EnvMap::new();
+    for key in [
+        "SystemRoot",
+        "WINDIR",
+        "ComSpec",
+        "PATH",
+        "PATHEXT",
+        "TEMP",
+        "TMP",
+    ] {
+        if let Some(value) = std::env::var_os(key) {
+            env.insert(key.into(), value);
+        }
+    }
+    env.insert("XDG_DATA_HOME".into(), f.root.path().as_os_str().into());
+    env.insert(
+        "OPENCODE_DB".into(),
+        f.root.path().join("custom.sqlite").into_os_string(),
+    );
+    env.insert("OPENCODE_PURE".into(), "1".into());
+    f.service = Arc::new(
+        LaunchService::new(f.repository.clone(), Some(env), Some(f.consumer.clone()))
+            .with_observer(Arc::new(host)),
+    );
+    f.caller = f.service.registry().activate_window("main").unwrap();
+    let status = f.start().unwrap();
+    f.ready();
+    assert_eq!(prepare_calls.load(Ordering::SeqCst), 0);
+    let cwd = Path::new(&f.request.launch_cwd);
+    assert_eq!(
+        fs::read_to_string(cwd.join("pure.calls")).unwrap(),
+        "start\n"
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&fs::read(cwd.join("pure.json")).unwrap()).unwrap();
+    assert_eq!(report["capability"], false);
+    let query = crate::cli::observer_status::ObserverStatusRequest {
+        request_id: status.request_id.clone(),
+        run_id: status.run.run_id.clone(),
+        generation: status.run.generation,
+    };
+    let projected = f.service.observer_status(&f.caller, &query).unwrap();
+    assert_eq!(projected.state, "off");
+    assert_eq!(projected.reason_code, "OBSERVER_DISABLED");
+}
+
 // 自有 shim 记录全部启动；不同版本文本不得触发额外探测，实际插件经真实 HTTP 鉴权交付。
 #[cfg(windows)]
 #[test]
@@ -70,7 +160,8 @@ await emit('session.status',{sessionID:id,status:{type:'idle'}},'idle');
 await emit('session.status',{sessionID:id,status:{type:'retry'}},'retry');
 plugin.dispose();
 phase='done';
-process.exit(0);
+// 成功路径自然结束，留给原生 HTTP 资源完成清理；退出成功断言仍由宿主核对。
+process.exitCode=0;
 "#).unwrap();
         let program = f.root.path().join("owned-opencode.cmd");
         let node = crate::platform::find_executable("node").unwrap();

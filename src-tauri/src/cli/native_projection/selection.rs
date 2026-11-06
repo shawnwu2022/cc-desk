@@ -69,36 +69,8 @@ impl Locations {
             Root::open(&self.root)
         }
     }
-    /// 探测输出是否「像一条数据库路径」：单行、非空、文件名符合
-    /// opencode.db / opencode-<channel>.db 形态。比 with_probed_database 轻
-    /// （无 root 身份绑定），供缓存命中后的失效判定使用——空输出、单行
-    /// 错误文本、帮助文本残留都不可信，必须重新决议。
-    pub(crate) fn probe_output_plausible(output: &str) -> bool {
-        let trimmed = output.trim_end_matches(['\r', '\n']);
-        if trimmed.is_empty() || trimmed.contains(['\r', '\n']) {
-            return false;
-        }
-        match Path::new(trimmed).file_name().and_then(OsStr::to_str) {
-            Some("opencode.db") => true,
-            Some(name) => name
-                .strip_prefix("opencode-")
-                .and_then(|channel| channel.strip_suffix(".db"))
-                .is_some_and(|channel| {
-                    !channel.is_empty()
-                        && channel
-                            .bytes()
-                            .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
-                }),
-            _ => false,
-        }
-    }
-
+    /// 校验探测路径与冻结环境的来源一致；显式库允许任意文件名，但不能换库。
     pub(crate) fn with_probed_database(&self, output: &str) -> ReadResult<Self> {
-        if self.sqlite_file.is_some() {
-            return Err("SCOPE_UNKNOWN");
-        }
-        // trim 尾换行后再判内部换行：CLI 输出必带 \n，用原始 output 判会把
-        // 合法单行路径误拒（与 probe 侧同一教训，2026-11-06 code-review）。
         let trimmed = output.trim_end_matches(['\r', '\n']);
         if trimmed.contains(['\r', '\n']) {
             return Err("SCOPE_UNKNOWN");
@@ -112,7 +84,11 @@ impl Locations {
         let channel = file
             .strip_prefix("opencode-")
             .and_then(|name| name.strip_suffix(".db"));
-        if file != "opencode.db"
+        if let Some(expected) = &self.sqlite_file {
+            if file != expected {
+                return Err("SCOPE_UNKNOWN");
+            }
+        } else if file != "opencode.db"
             && !channel.is_some_and(|value| {
                 !value.is_empty()
                     && value
