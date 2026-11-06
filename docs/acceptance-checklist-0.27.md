@@ -6,9 +6,11 @@
 | --- | --- | --- |
 | P0 stable/test/preview | `src-tauri/src/desktop_updater.rs`、`updater_policy.rs`、`scripts/release-version.mjs`、`src/stores/update.ts`、`UpdateSection.vue`：默认 stable、持久选择、官方目录与精确 tag 筛选；保留 release/source/资产/摘要/签名绑定及 candidate/test-only 隔离 | 本地源码/行为验证；没有真实签名 0.27 三通道候选。旧 stable latest 不收 RC、切回 stable 不自动降级为已实现策略，真实发布闭环尚未演练。 |
 | P0 可靠更新 | `desktop_updater.rs`、`updater_http.rs`、`UpdateSection.vue`：可观测下载/验签/安装/重启阶段、准确取消与安装 CAS、活动/未知会话 gate、出错撤销旧准入 | 取消/坏包/签名/网络/竞态合成验证；没有在真实安装上模拟失败。安装或重启交接不代表安装成功。 |
-| P0 历史恢复 | 既有 `src-tauri/src/version_history/`、`HistoricalVersionsPanel.vue`，本轮复用而未增加回滚引擎；更新页补手动恢复指南 | 已审核旧包范围仍为 Windows x64 九包；通用历史安装不是一键返回。真实 stable→0.27 RC→stable 仍缺正式签名候选及隔离安装验收。 |
+| P0 历史选择/签名准备 | 既有 `HistoricalVersionsPanel.vue` → store/API → `version_history/catalog.rs/download.rs/verified_package.rs`；已接通分页、筛选、选择及下载验签；`historicalVersions.test.ts`、Rust catalog/download 测试 | 只选比当前旧的官方 stable，Windows x64 NSIS；元数据可选和发布者验签不等于执行准入，准备不建返回点。macOS/Linux 执行未支持。 |
+| P0 历史安装/恢复执行 | 已有两条独立能力：普通签名历史安装不受九包表限制，完整源安装/注册/Desk/WebView 备份后 FreshSettings 交接安装器，人工恢复；严格切换/返回限 `payload_policy.rs` 九个精确版本/包/输出清单。`historicalInstall.test.ts`、`historicalSwitch.test.ts` 与 Rust ordinary/payload/context/return 回归 | 普通模式无自动 Return 或一键人工恢复，交接不代表安装完成；九包测量不等于真实往返。0.26 正式版不在九包严格返回表内。两条路径均保留未提权、Job-free、唯一安装/会话/所有权门禁。真实 stable→0.27 RC→stable 缺正式签名候选与隔离安装验收。 |
+| P0 恢复指南 | 本轮更新页新增手动恢复指南，`UpdateRecovery_ManualGuideHasNoInstallationEffects_005` 验证无安装副作用 | 指南不创建快照、不执行恢复、不扩大上述两类能力，也不能代替历史执行验收。 |
 | P0 本地诊断 | `diagnostic_versions.rs`、`cliVersionDiagnostics.ts`、`useCliVersionDiagnostics.ts`、`AboutSection.vue`：所选 profile 固定参数/有界探测、取消/迟到/revision、未知进程 owner、匿名来源和白名单复制 | 合成后端测试；本轮另完成三个真实 CLI 的隔离只读版本探测，不能混称生产后端端到端。未自动上传或扫描用户认证/聊天。 |
-| P0 原生归档清理 | `NativeCleanupAvailability.vue`：已观察身份、缺失/活动/恢复状态和明确能力拒绝；原生按钮关闭，无 mutation | **完整级联预览与执行未交付**。原生接口缺少预览集合与活动状态的原子条件，详见 `native-cleanup-blocker-0.27.md`；不是降低文案后算完成。 |
+| P0 原生归档清理 | `NativeCleanupAvailability.vue`：已观察身份、缺失/活动/恢复状态和明确能力拒绝；原生按钮关闭，无 mutation；增量只读复核确认公开关系 API 存在 | **完整级联预览与执行未交付**。读取侧的完整原生集合/同源授权缺口见 `native-cleanup-readonly-preview-0.27.md`；执行侧原子条件缺口见 `native-cleanup-blocker-0.27.md`，分别解阻，不因执行不安全一概否定只读能力。 |
 | P0 会话回归 | 既有新建/首事件/刷新/关闭/恢复/重命名/身份关联测试；本轮固定 1.98.1/CI profile 的本地四 harness/16 片及聚合通过 | 合成 fixture 或独立 Wry 边界，不等同真实安装版、真实 CLI 会话、用户双行现场或 AI 自动命名。未读取用户真实会话来验收。 |
 | P1 单候选忽略 | `updatePreferences.ts`、update store / 更新页：持久保存一个精确 version/releaseId/sourceSha 身份；忽略会撤销前端旧准入、隐藏更新提醒；后续版本仍提示，取消忽略需重新检查 | 只影响通知/选择，不产生后端安装权限；不按版本白名单限制 CLI。损坏数据丢弃并提示，存储失败仍可在内存使用。 |
 | P1 一键脱敏摘要 | 关于页显式复制应用/更新/所选 CLI 版本摘要 | 不含配置名、路径、原生 ID、凭据、正文、原始错误，无自动采集/上传。 |
@@ -41,3 +43,5 @@ Claude 当前官方 [配置路径说明](https://code.claude.com/docs/en/setting
 - 当前源码的完整 Linux 受准像素 CI、macOS/Linux 安装、安装版 Windows WebView、真实 profile→诊断 IPC→CLI 端到端、三 CLI D20、双行现场/身份关联/AI 命名：环境、测试账号或真实现场输入未具备。定向 Windows 界面、只读版本及合成 Wry fixture 均不冒充这些验收。
 
 可选后续为在合格 job-free 宿主补原始 native All，或在上游提供已证明的条件清理接口后恢复该功能研发；均不把当前未运行项改写为通过。当前分支不自动整合 0.26 main，不推送/发布。
+
+完整可读候选变更、两类历史执行能力、实现提交索引、验收摘要和不得发布条件见 [候选审阅材料](candidate-review-0.27.md)。本轮仅文档与来源一致性核对，没有重跑已通过套件或新增代码。

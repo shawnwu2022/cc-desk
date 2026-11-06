@@ -9,9 +9,9 @@
 | Codex archive / delete 参数 | `rust-v0.166.0` → [`6ff1e1ca3b30fc8b914720681fcf5fe62e95f856`](https://github.com/openai/codex/commit/6ff1e1ca3b30fc8b914720681fcf5fe62e95f856)，[参数定义](https://github.com/openai/codex/blob/6ff1e1ca3b30fc8b914720681fcf5fe62e95f856/codex-rs/app-server-protocol/src/protocol/v2/thread.rs#L716) | 只有 thread ID，没有确认集合、revision 或预约令牌。 |
 | Codex 执行范围 | [thread_delete](https://github.com/openai/codex/blob/6ff1e1ca3b30fc8b914720681fcf5fe62e95f856/codex-rs/app-server/src/request_processors/thread_delete.rs#L28) | 执行时重新计算 spawn 子树，之后准备及删除 IDs；没有比较 Desk 预览集合。 |
 | Codex 原生锁 | [WriterLockCoordinator](https://github.com/openai/codex/blob/6ff1e1ca3b30fc8b914720681fcf5fe62e95f856/codex-rs/rollout/src/writer_lock.rs#L44)、[delete_threads](https://github.com/openai/codex/blob/6ff1e1ca3b30fc8b914720681fcf5fe62e95f856/codex-rs/thread-store/src/local/delete_thread.rs#L123) | 确有跨进程 writer 锁和生命周期/引用复核；不能错误地说“没有锁”。这些锁维护存储一致性，没有绑定事前确认的集合。 |
-| Codex 已加载线程 | [prepare_thread_for_removal](https://github.com/openai/codex/blob/6ff1e1ca3b30fc8b914720681fcf5fe62e95f856/codex-rs/app-server/src/request_processors/thread_processor.rs#L1093) | 对服务中已加载线程可主动 shutdown，不是活动时必定无副作用拒绝。 |
-| OpenCode 删除协议 | `v2.2.5` → [`9bbb8ce18c80f099e0e448775f59d965ead40a21`](https://github.com/anomalyco/opencode/commit/9bbb8ce18c80f099e0e448775f59d965ead40a21)，[协议](https://github.com/anomalyco/opencode/blob/9bbb8ce18c80f099e0e448775f59d965ead40a21/packages/protocol/src/groups/session.ts#L235)、[handler](https://github.com/anomalyco/opencode/blob/9bbb8ce18c80f099e0e448775f59d965ead40a21/packages/server/src/handlers/session.ts#L181) | 仅 sessionID，没有确认范围/状态的条件参数，handler 直接调用 remove。 |
-| OpenCode 级联与活动 | [Session.remove](https://github.com/anomalyco/opencode/blob/9bbb8ce18c80f099e0e448775f59d965ead40a21/packages/core/src/session.ts#L382)、[SessionExecution](https://github.com/anomalyco/opencode/blob/9bbb8ce18c80f099e0e448775f59d965ead40a21/packages/core/src/session/execution.ts#L14) | 先中断、等待 idle、取消任务、关闭 transport，再动态枚举后代并递归删除；活动观察和中断仅限当前进程。 |
+| Codex 已加载线程 | [prepare_thread_for_removal](https://github.com/openai/codex/blob/6ff1e1ca3b30fc8b914720681fcf5fe62e95f856/codex-rs/app-server/src/request_processors/thread_processor.rs#L1165) | 对服务中已加载线程可主动 shutdown，不是活动时必定无副作用拒绝。 |
+| OpenCode 删除协议 | `v2.2.5` → [`9bbb8ce18c80f099e0e448775f59d965ead40a21`](https://github.com/anomalyco/opencode/commit/9bbb8ce18c80f099e0e448775f59d965ead40a21)，[协议](https://github.com/anomalyco/opencode/blob/9bbb8ce18c80f099e0e448775f59d965ead40a21/packages/protocol/src/groups/session.ts#L245)、[handler](https://github.com/anomalyco/opencode/blob/9bbb8ce18c80f099e0e448775f59d965ead40a21/packages/server/src/handlers/session.ts#L186) | 仅 sessionID，没有确认范围/状态的条件参数，handler 直接调用 remove。 |
+| OpenCode 级联与活动 | [Session.remove](https://github.com/anomalyco/opencode/blob/9bbb8ce18c80f099e0e448775f59d965ead40a21/packages/core/src/session.ts#L391)、[SessionExecution](https://github.com/anomalyco/opencode/blob/9bbb8ce18c80f099e0e448775f59d965ead40a21/packages/core/src/session/execution.ts#L14) | 先中断、等待 idle、取消任务、关闭 transport，再动态枚举后代并递归删除；活动观察和中断仅限当前进程。 |
 | Claude 单会话删除 | [CLI reference](https://code.claude.com/docs/en/cli-reference)（2026-11-06 查阅） | 未找到已验证的安全历史单会话接口。项目 purge 和后台/worktree rm 不是替代。闭源部分不能声称已做源码证明。 |
 
 ## 具体反例和未证明项
@@ -21,6 +21,8 @@ Desk 最后一次读取的确认集合为 S；外部 CLI 随后创建一个子�
 OpenCode 最后一次显示 idle 后可以开始活动，然后 remove 主动 interrupt。另一进程的活动还可能不在当前进程的 active 视图内。没有证据证明当前删除接口会在原子保护区间拒绝这些状态；不能把“先停止再删”伪装成“排除活动对象”。
 
 Desk 现有 ScopeRegistry 可验证文档、profile/revision、held Root 和准确身份；AdmissionGate 只约束 Desk 自身。可见历史刻意隐藏 Codex 自动子会话、OpenCode `parent_id IS NOT NULL` 记录，不能充当完整级联目录。当前尚未扩展该完整目录；不能因此在界面显示猜测的后代数量。
+
+只读读取与执行安全分别核对。公开的 Codex ancestor 关系查询和 OpenCode session list 确实存在，单次查询也有可证明的完整过滤集合边界；但 Codex 该集合不含原生级联另合并的 live 子树，OpenCode 当前缺 Desk held DB 与无启动副作用的同源只读服务绑定。详见 [只读预览窄范围复核](native-cleanup-readonly-preview-0.27.md)。不因 mutation 缺口一概否定读取，也不把持久关系或项目根列表当成完整原生子树。
 
 当前未找到公开可调用的条件 mutation 或覆盖预览至执行的原生租约。这里没有断言未来版本永远不支持，也没有按版本号封锁 CLI 的其他功能。自行占用原生 writer 文件锁再调用原生 delete 会与其内部锁冲突，不是经过证明的锁交接方案；不采用注入/修改原生库、直接 SQL DELETE、猜路径删除或终止外部用户进程来弥补。
 
