@@ -160,6 +160,40 @@ impl<S> Drop for ManagedChannel<S> {
     }
 }
 impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> ManagedChannel<S> {
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    pub(crate) fn browser_receipt(&self) -> Result<Vec<u8>, GrantError> {
+        if self.role != Role::Client
+            || !self.management_used
+            || self.io.is_none()
+            || self.cancel.is_cancelled()
+        {
+            return Err(GrantError::Closed);
+        }
+        let Some(ChannelGrant::Remote(grant)) = &self.access else {
+            return Err(GrantError::Policy);
+        };
+        grant.check()?;
+        if !grant.bound_to(self.binding) {
+            return Err(GrantError::Context);
+        }
+        serde_json::to_vec(&serde_json::json!({"kind":"GrantAccepted","grantId":grant.payload().grant_id,"principalId":grant.payload().principal_id,"scope":grant.scope(),"role":grant.role(),"expiresHostMs":grant.payload().expires_host_ms})).map_err(|_|GrantError::Encoding)
+    }
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    pub(crate) async fn browser_wait(&mut self) -> crate::OwnerExit {
+        match self.io.as_mut() {
+            Some(io) => crate::bind::management_read(io).await,
+            None => crate::OwnerExit::Io,
+        }
+    }
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    pub(crate) async fn browser_shutdown(&mut self) -> std::io::Result<()> {
+        use tokio::io::AsyncWriteExt;
+        self.io
+            .as_mut()
+            .ok_or(std::io::ErrorKind::NotConnected)?
+            .shutdown()
+            .await
+    }
     pub fn start(&mut self) -> Result<crate::RunningChannel, DataError> {
         if self.peer_install {
             return Err(DataError::Context);

@@ -464,3 +464,94 @@ with actual WASM Pending, observes Unsupported without runtime traps, and restor
 the exact production source before final codegen. No probe switch/API is shipped.
 The test IO is explicitly Node-owned ephemeral loopback TCP with browser-global
 shims; this is not real browser WebSocket/mux, outer WSS or phone end-to-end proof.
+
+## Browser grant-management checkpoint
+
+The optional `grantBridge` is a separate private capability created by
+`createBrowserGrantBroker`. Its configuration must explicitly supply the approved
+issuer SPKI, principal, SessionScope, Observer/Controller role, positive operation
+budget <=30000ms, and enrolled WebAuthn origin/RP ID/credential/public SPKI/backup
+policy. Public metadata comes from approved enrollment; private keys are never
+exported to derive it. The Window profile retains distinct non-exportable TLS and
+grant-signing keys. A trusted `present(verifiedGrant, signal)` callback is required
+to display and approve the full verified grant semantics before signing/presence.
+There is no default presenter, automatic approval, key provisioning or app UI.
+Missing/malformed grant configuration rejects startup and never selects plain
+ManagementOnly or a signer whose browser_profile is None. Existing plain0 mode
+and all eight public Native factories' WASM refusal remain unchanged.
+
+The browser's crate-private bind facade is fixed to minor1 and grant-management1.
+The same production Rust future owns the original ManagedChannel and invokes its
+original async `grant_client`; no spawn, copied exchange or new network protocol
+is introduced. The original Request/Challenge verification yields
+VerifiedCanonicalGrant. Its original signing_parts and browser_challenge provide
+only the validated candidate/TBS, exact payload and profile/nonce/TLS-binding
+challenge for one private request. Window uses original produceBrowserApproval
+and grantKey (never the TLS signing bridge), then awaits completeCose. Rust fills
+raw64 into the original coset candidate, serializes with coset and pre-verifies
+the declared issuer via original grant::signature before WebAuthn is requested.
+The original Rust BrowserProfile.verify and Host GrantGate.require_browser /
+grant_host still verify the complete COSE/WebAuthn envelope. Raw64 COSE,
+WebAuthn DER and TLS DER representations stay separate.
+
+completeCose accepts a Promise while retaining synchronous callback compatibility.
+After each await, including the COSE return trip, the original operation D,
+AbortSignal, secure context, top-level frame and exact enrolled origin are checked
+before entering credentials.get or returning a proof. One private MessagePort
+generation/sequence and fixed signature -> COSE -> approval phases permit one
+request, no retries or queue. Request JSON <=32768 contains bounded original TBS
+<=10000, canonical presentation <=8192 and challenge32; raw signature is64,
+COSE <=8192, original approval <=16384. Private WASM views are checked and rebuilt
+from nonshared current memory. Wrong phase/sequence/bounds/close is terminal.
+
+The grant operation gets its own absolute D once at original exchange_io, for a
+positive budget <=30s. Native retains original Tokio Instant behavior; WASM uses
+the existing real monotonic timer/waker seam with an explicit phase-bound capture.
+It is neither the TLS setup deadline nor a refreshed per-message budget.
+ClientDeadlineClock's original sample stays before Request; approval/Accepted
+never re-anchor it. All actual write/flush completion, Accepted nonce/binding/
+grantId/digest, final checks and install_remote must succeed before the separate
+grantAccepted Promise publishes a small historical GrantAccepted receipt. A
+candidate alone never succeeds. Completed opD is not a connection TTL. The
+original channel/RemoteGrant/state remain private until owner close; later Data
+and peer bytes remain unsupported. No data owner or RemoteReady is exposed.
+
+The browser monotonic source in this checkpoint has no qualified mobile suspend
+continuity claim. Callers must invalidate lifecycle discontinuity by closing the
+existing broker/owner; no live authority/data path is enabled from this source.
+Receipts are historical only. Host Gate expiry/revocation remains original;
+continuous revocation delivery, live grant expiry ownership, enrollment/recovery,
+actual browser/phone clock qualification and application integration remain open.
+
+Close/deadline seals the private phase and original IO/token. Window retains its
+original presentation, SubtleCrypto, COSE callback and credentials.get operation
+to real settlement even if Abort cannot preempt it. Worker waitClosed covers its
+IO custody, and grantBroker.waitClosed covers its own started Window work; neither
+proves Worker join or CryptoKey destruction. The caller closes both brokers,
+awaits their custody and the Worker owner, then terminates/awaits its owned Worker.
+
+`npm run test:browser-grant` requires explicit CC_DESK_TEST_ONLY_GRANT_WASM,
+CC_DESK_TEST_ONLY_GRANT_GLUE and CC_DESK_TEST_ONLY_GRANT_HOST, without silent skip.
+Build WASM/official glue exactly as the preceding owner commands. The Host is the
+current `cargo test --offline --locked --manifest-path remote/Cargo.toml -p
+cc-desk-remote-security --all-features --lib --no-run --message-format=json`
+test executable, selected from Cargo JSON. The test spawns only that owned Child
+with `--exact bind::browser_fixture::BrowserGrant_LoopbackFixture_002 --nocapture`
+and explicit TEST_ONLY mode. Without the environment variable, ordinary cargo
+test performs a genuine original Gate/COSE/WebAuthn acceptance selftest. Normal
+network fixture code calls original accept, public bind_host_grant_channel,
+GrantGate.require_browser and grant_host. Expiry/revoke and unsupported Data are
+test-only Native policy/peer behavior; production has no bypass.
+
+The group uses separate published TEST_ONLY scalars2/1/3 for TLS/issuer/credential,
+real SubtleCrypto and synthetic credentials.get with genuine credential signatures.
+No real WebAuthn prompt or account is used. Actual WASM loopback cases cover
+success, wrong grant key/endpoint issuer/scope/role, credential profile/signature,
+cross-TLS assertion replay, Host expiry/revoke, independent D/non-TTL, startup/load
+failure, retained presentation/crypto/get/IO operations, protocol-phase rejection,
+final proof flush success/failure/cancel and postaccept Data rejection. Separate
+direct producer tests reproduce and fix deadline/frame loss across COSE await.
+Original Native tests retain exhaustive Accepted-field, isolated exporter and
+grant-policy coverage; this matrix does not replace those tests or claim every
+Native mutation ran in WASM. All browser globals are Node shims and IO is owned
+loopback test TCP, not deployed WSS/WebSocket/mux or phone E2E.

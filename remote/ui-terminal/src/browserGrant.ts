@@ -1,0 +1,58 @@
+import {browserProfileBoundary,produceBrowserApproval,type BrowserProfile} from './browserApproval.ts';
+const now=()=>performance.timeOrigin+performance.now();
+const exact=(v:unknown,keys:string[]):v is Record<string,unknown>=>!!v&&typeof v==='object'&&Object.keys(v).length===keys.length&&keys.every(k=>Object.hasOwn(v,k));
+const bytes=(v:unknown,min:number,max:number):v is Uint8Array=>v instanceof Uint8Array&&v.length>=min&&v.length<=max;
+function encode(v:Uint8Array){return btoa(Array.from(v,b=>String.fromCharCode(b)).join('')).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');}
+function decode(v:unknown,max:number){if(typeof v!=='string'||v.length>Math.ceil(max/3)*4||!/^[A-Za-z0-9_-]*$/.test(v))throw Error('grant bytes');const result=Uint8Array.from(atob(v.replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0));if(result.length>max||encode(result)!==v)throw Error('grant bytes');return result;}
+export type BrowserGrantConfiguration=Readonly<{issuerSpki:Uint8Array;principal:string;scope:Readonly<{session:string;run:string;generation:string}>;role:'Observer'|'Controller';budgetMs:number;profile:Readonly<{origin:string;rpId:string;credentialId:Uint8Array;credentialSpki:Uint8Array;backupEligible:boolean;allowBackedUp:boolean}>}>;
+export type BrowserGrantBridge=Readonly<{port:MessagePort;generation:string;origin:string;configuration:Uint8Array}>;
+export type BrowserGrantBroker=Readonly<{worker:BrowserGrantBridge;close():void;waitClosed():Promise<void>}>;
+function frozen(value:unknown):unknown{if(value&&typeof value==='object'){for(const child of Object.values(value))frozen(child);Object.freeze(value);}return value;}
+/** 显式可信呈现能力；没有默认批准，也不复用TLS签名桥。 */
+export function createBrowserGrantBroker(profile:BrowserProfile,options:Readonly<{configuration:BrowserGrantConfiguration;present:(verified:Readonly<Record<string,unknown>>,signal:AbortSignal)=>Promise<void>;signal?:AbortSignal}>):BrowserGrantBroker{
+ let retained:BrowserProfile|undefined=browserProfileBoundary(profile),present:typeof options.present|undefined=options.present;const config=options.configuration;
+ if(typeof Window==='undefined'||!(globalThis instanceof Window)||globalThis.top!==globalThis.self||!globalThis.isSecureContext||location.origin!==retained.origin||typeof present!=='function'||options.signal?.aborted)throw Error('grant trusted presentation unavailable');
+ if(!config||!bytes(config.issuerSpki,91,91)||!bytes(config.profile?.credentialSpki,91,91)||!bytes(config.profile.credentialId,1,1024)||config.profile.origin!==retained.origin||config.profile.rpId!==retained.rpId||encode(config.profile.credentialId)!==encode(retained.credentialId)||!Number.isInteger(config.budgetMs)||config.budgetMs<1||config.budgetMs>30000)throw Error('grant configuration');
+ const origin=retained.origin,budgetMs=config.budgetMs,configuration=new TextEncoder().encode(JSON.stringify({...config,issuerSpki:encode(config.issuerSpki),profile:{...config.profile,credentialId:encode(config.profile.credentialId),credentialSpki:encode(config.profile.credentialSpki)}}));if(configuration.length>8192)throw Error('grant configuration bounds');
+ const channel=new MessageChannel(),port=channel.port1,generation=encode(crypto.getRandomValues(new Uint8Array(24))),controller=new AbortController(),signal=options.signal;
+ let closed=false,retired=false,phase='idle',deadline=0,pending:Promise<void>|undefined,timer:ReturnType<typeof setTimeout>|undefined,resolveCose:((v:Uint8Array)=>void)|undefined,rejectCose:((e:Error)=>void)|undefined;
+ let resolveClosed!:()=>void;const completion=new Promise<void>(resolve=>{resolveClosed=resolve;});
+ function retire(){if(!closed||pending||retired)return;retired=true;retained=undefined;present=undefined;resolveCose=undefined;rejectCose=undefined;signal?.removeEventListener('abort',close);port.onmessage=null;port.onmessageerror=null;port.close();resolveClosed();}
+ function close(){if(!closed){closed=true;phase='closed';controller.abort();if(timer!==undefined)clearTimeout(timer);rejectCose?.(Error('grant closed'));try{port.postMessage('close');}catch{/* 私有能力已失效。 */}}retire();}
+ const live=()=>!closed&&!controller.signal.aborted&&location.origin===origin&&globalThis.isSecureContext&&globalThis.top===globalThis.self&&now()<deadline;
+ port.onmessage=(event:MessageEvent<unknown>)=>{if(event.data==='close'){close();return;}try{
+  const value=event.data;
+  if(exact(value,['kind','generation','seq','deadline','cose'])&&value.kind==='cose'){
+   if(phase!=='cose'||value.generation!==generation||value.seq!==1||value.deadline!==deadline||!live()||!bytes(value.cose,1,8192))throw Error('grant COSE phase');phase='presence';const resolve=resolveCose;resolveCose=undefined;rejectCose=undefined;resolve?.(value.cose.slice());return;
+  }
+  if(!exact(value,['kind','generation','seq','deadline','challenge','tbs','presentation'])||value.kind!=='request'||phase!=='idle'||value.generation!==generation||value.seq!==1||typeof value.deadline!=='number'||!Number.isFinite(value.deadline)||value.deadline<=now()||value.deadline>now()+budgetMs||!bytes(value.challenge,32,32)||!bytes(value.tbs,1,10000)||!bytes(value.presentation,1,8192))throw Error('grant request phase');
+  deadline=value.deadline;phase='present';const challenge=value.challenge.slice(),tbs=value.tbs.slice(),presentation=frozen(JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(value.presentation))) as Readonly<Record<string,unknown>>;
+  const tick=()=>{if(!live()){close();return;}timer=setTimeout(tick,Math.max(0,deadline-now()));};timer=setTimeout(tick,Math.max(0,deadline-now()));
+  // 先登记原始总Promise，再进入可能同步close的呈现回调；Abort不证明任务结束。
+  const operation=Promise.resolve().then(async()=>{if(!live())throw Error('grant presentation cancelled');await present!(presentation,controller.signal);if(!live())throw Error('grant presentation cancelled');phase='sign';const proof=await produceBrowserApproval(retained!,{challenge,tbs,deadline,completeCose:signature=>{
+   if(phase!=='sign'||!live()||!bytes(signature,64,64))throw Error('grant signature phase');phase='cose';const result=new Promise<Uint8Array>((resolve,reject)=>{resolveCose=resolve;rejectCose=reject;});void result.catch(()=>{});port.postMessage({kind:'signature',generation,seq:1,deadline,signature:signature.slice()});return result;
+  }},controller.signal);if(!live()||phase!=='presence')throw Error('grant completion cancelled');phase='done';port.postMessage({kind:'approval',generation,seq:1,deadline,approval:proof.slice()});});pending=operation;
+  void operation.catch(()=>close()).finally(()=>{pending=undefined;if(timer!==undefined)clearTimeout(timer);retire();});
+ }catch{close();}};
+ port.onmessageerror=close;port.start();signal?.addEventListener('abort',close,{once:true});
+ return Object.freeze({worker:Object.freeze({port:channel.port2,generation,origin,configuration:configuration.slice()}),close,waitClosed:()=>completion});
+}
+const used=new WeakSet<MessagePort>();
+/** Worker私有固定阶段适配；只接收生产Rust验证请求，不提供任意签名API。 */
+export function createBrowserGrantWorker(bridge:BrowserGrantBridge,memory:()=>WebAssembly.Memory|undefined,deadline:()=>number|undefined,stopped:()=>boolean,wake:()=>void,terminate:()=>void){
+ const scope=globalThis as typeof globalThis&{DedicatedWorkerGlobalScope?:new()=>object};if(typeof scope.DedicatedWorkerGlobalScope!=='function'||!(globalThis instanceof scope.DedicatedWorkerGlobalScope)||typeof Window!=='undefined'||!globalThis.crossOriginIsolated||!globalThis.isSecureContext)throw Error('grant dedicated Worker required');
+ if(!exact(bridge,['port','generation','origin','configuration'])||!(bridge.port instanceof MessagePort)||used.has(bridge.port)||typeof bridge.generation!=='string'||!/^[A-Za-z0-9_-]{32}$/.test(bridge.generation)||bridge.origin!==location.origin||!bytes(bridge.configuration,1,8192))throw Error('grant Worker capability');used.add(bridge.port);
+ const configuration=bridge.configuration.slice();let phase='idle',closed=false,response:Uint8Array|undefined,operationDeadline:number|undefined;
+ function range(pointer:number,length:number){const m=memory();if(!m||m.buffer instanceof SharedArrayBuffer||!Number.isInteger(pointer)||pointer<0||!Number.isInteger(length)||length<0||pointer>m.buffer.byteLength-length)throw Error('grant memory');return new Uint8Array(m.buffer,pointer,length);}
+ const live=()=>!closed&&!stopped()&&operationDeadline!==undefined&&operationDeadline===deadline()&&now()<operationDeadline;
+ function close(){if(closed)return;closed=true;phase='closed';response=undefined;bridge.port.removeEventListener('message',message);bridge.port.removeEventListener('messageerror',broken);try{bridge.port.postMessage('close');}catch{/* 无待重用能力。 */}bridge.port.close();wake();}
+ function broken(){close();terminate();}
+ function message(event:MessageEvent<unknown>){if(event.data==='close'){broken();return;}try{const v=event.data;if(!live()||!v||typeof v!=='object')throw Error('grant response closed');const value=v as Record<string,unknown>;if(value.generation!==bridge.generation||value.seq!==1||value.deadline!==operationDeadline||response)throw Error('grant response fence');if(phase==='signature'&&exact(value,['kind','generation','seq','deadline','signature'])&&value.kind==='signature'&&bytes(value.signature,64,64)){response=value.signature.slice();phase='signature-ready';}else if(phase==='approval'&&exact(value,['kind','generation','seq','deadline','approval'])&&value.kind==='approval'&&bytes(value.approval,1,16384)){response=value.approval.slice();phase='approval-ready';}else throw Error('grant response phase');wake();}catch{broken();}}
+ bridge.port.addEventListener('message',message);bridge.port.addEventListener('messageerror',broken);bridge.port.start();
+ return Object.freeze({close,configuration,imports:{cc_desk_browser_grant_v1:{
+  begin:(pointer:number,length:number)=>{try{if(phase!=='idle'||stopped()||length<1||length>32768)throw Error('grant begin');operationDeadline=deadline();if(!live())throw Error('grant deadline');const v=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(range(pointer,length)));if(!exact(v,['challenge','tbs','presentation']))throw Error('grant DTO');const challenge=decode(v.challenge,32),tbs=decode(v.tbs,10000),presentation=decode(v.presentation,8192);if(challenge.length!==32||!tbs.length||!presentation.length)throw Error('grant DTO bounds');phase='signature';bridge.port.postMessage({kind:'request',generation:bridge.generation,seq:1,deadline:operationDeadline,challenge,tbs,presentation});return 1;}catch{broken();return -2;}},
+  read:(kind:number,pointer:number,capacity:number)=>{try{if(!live()||(kind===1?capacity!==64:kind===2?capacity!==16384:true))return -2;const expected=kind===1?'signature-ready':'approval-ready';if(phase===expected&&response){const result=response;range(pointer,result.length).set(result);response=undefined;phase=kind===1?'cose':'done';return result.length;}if(phase===(kind===1?'signature':'approval'))return -1;return -2;}catch{broken();return -2;}},
+  cose:(pointer:number,length:number)=>{try{if(!live()||phase!=='cose'||length<1||length>8192)throw Error('grant COSE state');const cose=range(pointer,length).slice();phase='approval';bridge.port.postMessage({kind:'cose',generation:bridge.generation,seq:1,deadline:operationDeadline,cose});return 1;}catch{broken();return -2;}},
+  cancel:close,
+ }}});
+}

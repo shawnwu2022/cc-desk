@@ -333,6 +333,22 @@ pub(crate) async fn browser_establish_client<S: AsyncRead + AsyncWrite + Unpin +
     establish_client(pending, trust, Hooks::default(), vec![0], 0).await
 }
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+pub(crate) async fn browser_grant_client<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
+    pending: Pending<S>,
+    trust: ClientTrust,
+) -> Result<crate::ManagedChannel<S>, BindError> {
+    let e = establish_client(pending, trust, Hooks::default(), vec![1], 1).await?;
+    eligible(e.deadline, &e.token)?;
+    Ok(crate::ManagedChannel::new(
+        e.io,
+        e.token,
+        BoundContext(e.context),
+        e.binding,
+        Role::Client,
+    )
+    .with_grant_management())
+}
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 pub(crate) fn browser_management_facts<S>(e: &Established<S>) -> Result<Vec<u8>, BindError> {
     eligible(e.deadline, &e.token)?;
     if e.selection.profile != 1

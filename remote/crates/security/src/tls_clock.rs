@@ -20,6 +20,10 @@ pub(crate) async fn sleep(deadline: Deadline) {
 pub(crate) fn native(deadline: Deadline) -> Option<tokio::time::Instant> {
     Some(deadline)
 }
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+pub(crate) fn exchange_after(budget: Duration) -> Result<Deadline, crate::GrantError> {
+    Ok(tokio::time::Instant::now() + budget)
+}
 
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 mod browser {
@@ -38,6 +42,7 @@ mod browser {
         fn deadline() -> f64;
         fn arm_timer(value: f64);
         fn disarm_timer();
+        fn grant_deadline(budget_ms: u32) -> f64;
     }
     static WAITER: Mutex<Option<Waker>> = Mutex::new(None);
     pub(crate) fn after(budget: Duration) -> Result<Deadline, SecurityError> {
@@ -60,6 +65,18 @@ mod browser {
     }
     pub(crate) fn native(_: Deadline) -> Option<tokio::time::Instant> {
         None
+    }
+    pub(crate) fn exchange_after(budget: Duration) -> Result<Deadline, crate::GrantError> {
+        let ms = budget.as_millis();
+        if ms == 0 || ms > 30000 {
+            return Err(crate::GrantError::Policy);
+        }
+        let end = unsafe { grant_deadline(ms as u32) };
+        let current = unsafe { now() };
+        if !current.is_finite() || !end.is_finite() || end <= current || end > current + ms as f64 {
+            return Err(crate::GrantError::Expired);
+        }
+        Ok(Deadline(end))
     }
     pub(crate) fn notify() {
         let wake = WAITER.lock().unwrap().take();

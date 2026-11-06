@@ -1,6 +1,7 @@
 //! One opt-in exchange on an owned verified TLS/AppBind channel. Dropping any
 //! exchange future drops its TLS owner; no public plaintext or signer bypass.
 use super::*;
+use crate::tls_clock::{self, Deadline};
 use crate::{GrantClock, GrantClockDomain, P256Spki};
 use cc_desk_remote_record::{
     Header, Kind,
@@ -13,7 +14,6 @@ use std::{future::Future, pin::Pin, sync::Mutex, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     sync::watch,
-    time::Instant,
 };
 
 pub struct NativeGrantPolicy {
@@ -239,15 +239,15 @@ fn decode(bytes: &[u8]) -> Result<Message, GrantError> {
     wire::decode(bytes).map_err(|_| GrantError::Encoding)
 }
 async fn within<T, F: Future<Output = Result<T, GrantError>>>(
-    deadline: Instant,
+    deadline: Deadline,
     token: &mut CancelToken,
     work: F,
 ) -> Result<T, GrantError> {
-    if token.is_cancelled() || Instant::now() >= deadline {
+    if token.is_cancelled() || tls_clock::expired(deadline) {
         return Err(GrantError::Closed);
     }
-    let result = tokio::select! {biased;_=token.cancelled()=>Err(GrantError::Closed),_=tokio::time::sleep_until(deadline)=>Err(GrantError::Expired),r=work=>r}?;
-    if token.is_cancelled() || Instant::now() >= deadline {
+    let result = tokio::select! {biased;_=token.cancelled()=>Err(GrantError::Closed),_=tls_clock::sleep(deadline)=>Err(GrantError::Expired),r=work=>r}?;
+    if token.is_cancelled() || tls_clock::expired(deadline) {
         return Err(GrantError::Closed);
     }
     Ok(result)
@@ -257,7 +257,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> ManagedChannel<S> {
         &mut self,
         role: Role,
         budget: Duration,
-    ) -> Result<(tokio_rustls::TlsStream<S>, Instant, CancelToken), GrantError> {
+    ) -> Result<(tokio_rustls::TlsStream<S>, Deadline, CancelToken), GrantError> {
         if !self.grant_management
             || self.management_used
             || self.role != role
@@ -269,7 +269,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> ManagedChannel<S> {
         }
         self.management_used = true;
         let io = self.io.take().ok_or(GrantError::Closed)?;
-        Ok((io, Instant::now() + budget, self.cancel.clone()))
+        Ok((io, tls_clock::exchange_after(budget)?, self.cancel.clone()))
     }
     pub async fn grant_host(
         mut self,

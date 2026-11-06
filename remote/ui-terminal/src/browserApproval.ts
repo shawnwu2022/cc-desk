@@ -21,22 +21,25 @@ function encode(bytes:Uint8Array):string{return btoa(Array.from(bytes,b=>String.
 export type BrowserGrantRequest=Readonly<{
  /** Supplied by the verified Rust management request, including nonce/binding/profile identity. */
  challenge:Uint8Array;tbs:Uint8Array;
+ /** 一次管理操作的原绝对截止；独立同步调用方仍可只用原AbortSignal。 */
+ deadline?:number;
  /** Rust completes the original COSE candidate; a callback never establishes channel authority. */
- completeCose(signature:Uint8Array):Uint8Array;
+ completeCose(signature:Uint8Array):Uint8Array|Promise<Uint8Array>;
 }>;
 /** Called only after displaying the verified grant semantics on the enrolled origin. */
 export async function produceBrowserApproval(profile:BrowserProfile,request:BrowserGrantRequest,signal:AbortSignal):Promise<Uint8Array>{
  const p=browserProfileBoundary(profile);
- if(!globalThis.isSecureContext||globalThis.location?.origin!==p.origin||globalThis.top!==globalThis.self||
-  !globalThis.crypto?.subtle||!globalThis.navigator?.credentials||signal.aborted)throw Error('browser approval unavailable');
+ const deadline=request.deadline;
+ const eligible=()=>globalThis.isSecureContext&&globalThis.location?.origin===p.origin&&globalThis.top===globalThis.self&&!!globalThis.crypto?.subtle&&!!globalThis.navigator?.credentials&&!signal.aborted&&(deadline===undefined||(Number.isFinite(deadline)&&performance.timeOrigin+performance.now()<deadline));
+ if(!eligible())throw Error('browser approval unavailable');
  if(!(request.challenge instanceof Uint8Array)||request.challenge.length!==32||!(request.tbs instanceof Uint8Array)||request.tbs.length<1||request.tbs.length>10000)throw Error('browser request bounds');
  const challenge=request.challenge.slice(),tbs=request.tbs.slice();
  const fixed=new Uint8Array(await crypto.subtle.sign({name:'ECDSA',hash:'SHA-256'},p.grantKey,tbs));
- if(signal.aborted||location.origin!==p.origin||fixed.length!==64)throw Error('browser approval cancelled');
- const cose=request.completeCose(fixed);
- if(!(cose instanceof Uint8Array)||cose.length>8192)throw Error('browser COSE bounds');
+ if(!eligible()||fixed.length!==64)throw Error('browser approval cancelled');
+ const cose=await request.completeCose(fixed);
+ if(!eligible()||!(cose instanceof Uint8Array)||cose.length>8192)throw Error('browser COSE bounds or cancelled');
  const result=await navigator.credentials.get({signal,publicKey:{challenge,rpId:p.rpId,allowCredentials:[{type:'public-key',id:p.credentialId.slice()}],userVerification:'required',timeout:30000}});
- if(signal.aborted||location.origin!==p.origin||!(result instanceof PublicKeyCredential)||result.type!=='public-key')throw Error('browser assertion unavailable');
+ if(!eligible()||!(result instanceof PublicKeyCredential)||result.type!=='public-key')throw Error('browser assertion unavailable');
  const response=result.response;
  if(!(response instanceof AuthenticatorAssertionResponse)||encode(new Uint8Array(result.rawId))!==encode(p.credentialId))throw Error('browser credential mismatch');
  const auth=new Uint8Array(response.authenticatorData),client=new Uint8Array(response.clientDataJSON),signature=new Uint8Array(response.signature);

@@ -14,12 +14,17 @@ use std::{
     time::Duration,
 };
 use tokio::io::AsyncWriteExt;
+#[path = "browser_grant.rs"]
+mod browser_grant;
 #[link(wasm_import_module = "cc_desk_browser_owner_v1")]
 unsafe extern "C" {
     fn public_key(which: u32, output: *mut u8, capacity: u32) -> i32;
     fn deadline() -> f64;
+    fn now() -> f64;
     fn schedule();
     fn client_trust(output: *mut u8, capacity: u32) -> i32;
+    fn grant_config(output: *mut u8, capacity: u32) -> i32;
+    fn grant_accepted(pointer: *const u8, length: u32);
     fn management(pointer: *const u8, length: u32);
     fn report(
         code: i32,
@@ -134,6 +139,19 @@ pub extern "C" fn browser_tls_start(local_role: u32, peer_role: u32, budget_ms: 
     }
     let setup = (|| {
         let trust = trust()?;
+        let mut config_bytes = [0u8; 8192];
+        let length = unsafe { grant_config(config_bytes.as_mut_ptr(), 8192) };
+        let grant = if length == 0 {
+            None
+        } else {
+            if length < 1 || length as usize > config_bytes.len() || trust.is_none() {
+                return Err(SecurityError::Identity);
+            }
+            Some(
+                browser_grant::Configuration::parse(&config_bytes[..length as usize])
+                    .map_err(|_| SecurityError::Identity)?,
+            )
+        };
         let public = key(0)?;
         let peer = key(1)?;
         let signing = Arc::new(BrowserWasmSigningKey::new(public.clone(), unsafe {
@@ -189,6 +207,22 @@ pub extern "C" fn browser_tls_start(local_role: u32, peer_role: u32, budget_ms: 
                     32,
                 )
             };
+            if let Some(mut config) = grant {
+                let channel = crate::bind::browser_grant_client(pending, trust.ok_or(-7)?)
+                    .await
+                    .map_err(bind_error)?;
+                let mut state = browser_grant::state();
+                let mut channel = channel
+                    .grant_client(&config.trust, &mut config.signer, &mut state, config.budget)
+                    .await
+                    .map_err(|_| -8)?;
+                let receipt = channel.browser_receipt().map_err(|_| -8)?;
+                if token.is_cancelled() {
+                    return Err(-3);
+                }
+                unsafe { grant_accepted(receipt.as_ptr(), receipt.len() as u32) };
+                return tokio::select! {biased;_=token.cancelled()=>Err(-3),_=shutdown_requested()=>tokio::select!{biased;_=token.cancelled()=>Err(-3),result=channel.browser_shutdown()=>result.map_err(|_|-1)},result=channel.browser_wait()=>match result{crate::OwnerExit::Unsupported=>Err(-6),_=>Err(-1)}};
+            }
             if let Some(trust) = trust {
                 let mut established = crate::bind::browser_establish_client(pending, trust)
                     .await
@@ -264,7 +298,9 @@ pub extern "C" fn browser_tls_cancel() {
     unsafe { schedule() };
 }
 pub extern "C" fn browser_tls_event(kind: u32) {
-    if kind == 1 || kind == 2 || kind == 4 {
+    if kind == 6 {
+        browser_grant::notify();
+    } else if kind == 1 || kind == 2 || kind == 4 {
         crate::browser_wasm_io::notify(kind);
     } else if kind == 3 {
         crate::tls_clock::notify();
