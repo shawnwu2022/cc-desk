@@ -1,0 +1,41 @@
+{
+  "branch": "feat/v0.27.0",
+  "implementationCommit": "6de019a2ee22528d1c391e76c449c968c9846140",
+  "implementationTree": "aeae3a67d369efdab26755aa4c15c8462bcaa265",
+  "frontendTree": "b4972f7bba826662b3ff295f320b6bae3f0909da",
+  "rustSourceTree": "88dcecde30d7470c7f986dc111aa7df717ed95d8",
+  "testsTree": "9a25ad4bd23b9260b4b40f74de0fc9e482232899",
+  "rustRaw13FileDigest": "b3eaa0d6fb4ca9764737cfbc6e71c3c50fedd6cb10cc1349cff12845075c5295",
+  "priorHead": "c58d590171bb05cd6d21b1016f5ae2fc2dd5ed82",
+  "integration": {
+    "before": "aaad3d2bf1c05c40c30ab03d9d46c38d05f7b4cc",
+    "fixedMain": "0aaaf2a171ced55ff2b4d7a3e1731027c45809df",
+    "merge": "89e30ff37ca51b29239c17abbc52f0dc85106390",
+    "testCommit": "68436f31dc8a6313e9d87ca9ab35717671edfcfd",
+    "conflicts": false
+  },
+  "rust": {
+    "toolchain": "1.98.1-x86_64-pc-windows-msvc",
+    "compilerCommit": "48a229ceaefd4985c50990b14116b6d856af0985",
+    "devDebug": "0",
+    "testDebug": "0",
+    "offline": true,
+    "filteredDomain": "NativeDelete_",
+    "passed": 7,
+    "failed": 0,
+    "ignored": 0,
+    "filtered": 1780,
+    "allTargetsClippy": true,
+    "fmt": true,
+    "fullFourHarness16ShardsOnThisSource": false
+  },
+  "frontend": { "files": 10, "passed": 408, "failed": 0, "typecheck": true, "productionBuild": true, "productionCspLanguagesPassed": 2, "fullSuiteOnThisSource": false },
+  "nodeSafety": { "passed": 9, "failed": 0 },
+  "claudeSdkFixture": { "version": "0.3.301", "casesPassed": 3, "nativeCliOrServiceStarted": false, "liveUserDataTouched": false },
+  "acceptance": { "realCodexDelete": false, "installedWebview": false, "unix": false, "signed027Roundtrip": false, "releaseAuthorized": false },
+  "protectedMaterials": {
+    "deskPatchSha256": "59ebd85c4f4df6fcf8359dfecbc8205a5c84c1d845044e40852d83ee9eb5a910",
+    "nativeArchivePatchSha256": "d692097086409d01aa798caad2d37847d9be485ea398b87a2d7c0756320f754b",
+    "originalTodoSha256": "6514a3f6eed0403586b6624fb62d519edd2fb01554e2d62fb6706621d9a27622"
+  }
+}

@@ -116,7 +116,7 @@ P1 包括忽略单个候选、复制摘要、更新记录及失败重试，不�
 
 关于页面由用户显式采集已启用 CLI 的所选 profile；刷新失败、来源/revision 变化和迟到结果均失效。固定版本参数、有界输出和超时、准确取消与未知 owner 保留、匿名来源白名单复制已接通。具体协议、固定源码依据及未证明项见 [CLI 诊断](cli-version-diagnostics-0.27.md)。
 
-清理已完成官方文档/固定源码交叉核查及归档抽屉只读拒绝说明。Codex 虽有 writer 锁但未绑定预览集合；OpenCode 会先中断并动态递归。当前不开放危险 mutation，不声称完整子树或完整清理链路已交付。准确 blocker、反例和解阻条件见 [原生清理能力阻塞](native-cleanup-blocker-0.27.md)。Claude 明确不支持已验证的单会话删除，未使用 purge、rm 或猜路径删除替代。
+当时完成清理官方文档/固定源码交叉核查及归档抽屉拒绝说明。此早期阶段没有开放 mutation；后来已查明 Claude 官方 SDK 确有 `deleteSession`，缺口在真实来源/活动适配，旧“无接口”结论已纠正。用户随后明确永久删除需求，当前 Codex 窄场景及其原生 writer/reference 保护、二次确认、动态子树风险见 [最新实现与证据](permanent-delete-0.27.md)，不以 purge、rm 或猜路径替代。
 
 隔离签名验收准备见 [矩阵](acceptance-0.27.md)，不是已运行记录。真实 0.27 签名候选仍缺，未新发布/安装。实际集成已通过 Rust 诊断域 21/21（1758 过滤）、check、strict Clippy、fmt；全量 Vitest 206 文件，3200 通过、2 原有跳过。最终构建/生产与界面结果和全部失败材料见 [.audit/v027-p0-validation.md](../.audit/v027-p0-validation.md)。
 
@@ -158,4 +158,10 @@ B 获准只刷新本 clone origin/main 并获取对象：[风险分析](main-0.2
 
 验证后测试提交 **`68436f31dc8a6313e9d87ca9ab35717671edfcfd`** / tree `acc7ec63f914b23f4388586e8d6f254d02ebbfd9` 增加0.26版本转换/通道回归；固定1.98.1及CI profile下Rust91、前端169、Node310/6原跳过、all-target Clippy/fmt、typecheck/build、生产CSP2/2均通过。六处应用身份0.26.0；历史普通安装与九包严格返回边界不变。新源完整16片/完整Vitest/hosted CI未跑，旧68fa全套证据仍按旧源保留。完整命令与未跑项见 [本轮验证](../.audit/v027-stage6-main-integration.md)。
 
-同源切片新增进程/连接及file witness的官方语义和双DB同进程反例，没有接真实服务。后续归档方向已另获分层实现授权：优先Desk纯元数据隐藏/撤销与可恢复原生archive/unarchive，永久删除独立关闭；低风险层不机械套用最强delete条件。先核对固定源码和当前适配层，再以合成fixture TDD、审查和针对性验证推进，不操作真实会话/库。
+同源切片新增进程/连接及file witness的官方语义和双DB同进程反例，没有接真实服务。此前优先隐藏/软归档的授权方向现已被永久删除要求替代；未提交片段完整保留为 `.audit/v027-stage7-superseded-*.patch`，再仅撤出自身改动。当前实际永久删除的窄场景、Claude SDK 合成反例与未交付边界见 [新文档](permanent-delete-0.27.md)。
+
+## 永久删除窄实现已本地提交
+
+实现提交 **`6de019a2ee22528d1c391e76c449c968c9846140`** 接通Windows授权profile下已原生归档Codex根的三阶段API、独立二次确认与双勾选、一次性票据、startup codexHome/rollout/header实核、容器句柄及整个own Job生命周期、unknown只读协调。确认范围是根及其原生动态子树，计数未知不编造；CLI关联维护、可能保留的数据与实际未跑边界明确。OpenCode/Claude执行和Unix分别关闭，不用旧隐藏/软归档或猜路径删除替代。
+
+最终固定1.98.1/CI debug0新Rust域7pass（1780过滤）、all-target Clippy/fmt、前端10文件408pass、Node安全9pass、typecheck及重建生产入口中英CSP2/2通过。独审P1派生进程逃逸、发送前失权、迟到预览、跨目标重新预览等均先RED再修复；原失败未覆盖。准确命令、源码tree/hash、失败/未跑项见 [完整审计](../.audit/v027-stage8-permanent-delete.md)；后续仅文档记录，不再更改已验证产品源码。没有新源完整16片/完整Vitest、真实CLI/WebView删除、真实签名候选往返或发布。

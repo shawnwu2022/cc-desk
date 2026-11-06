@@ -1,6 +1,8 @@
-# 原生清理的能力阻塞与拒绝路径
+# 原生清理的历史阻塞与当前窄场景
 
-此结论由独立只读安全审查交叉核对官方源码。没有执行真实归档、删除、purge、worktree rm 或目录删除，也没有读取用户认证或会话正文。当前归档抽屉只展示已观察目标及明确拒绝原因，原生归档和永久删除没有执行入口；这不是完整级联预览或清理功能交付。
+**最新范围见 [永久删除实现与证据](permanent-delete-0.27.md)。** 用户已明确要求真正永久删除及二次确认，后来允许按准确根及原生子树语义确认；不再以缺少任意 ID 集合参数单独阻塞 Codex。当前开发实现 Windows 下同授权 profile、已原生归档根的窄删除，并明确动态成员/关联维护风险。下面保留的是早期更强“冻结成员集合”设计的分析，不是当前所有 CLI 一律关闭的结论。OpenCode、Claude 的具体来源/活动约束仍分别处理，不用隐藏或软归档代替。
+
+以下是早期独立只读审查的历史记录：当时没有执行真实归档、删除、purge、worktree rm 或目录删除，也没有读取用户认证或会话正文；当时抽屉只有目标和拒绝原因，没有执行入口。这些事实不表示后来实现的Codex窄删除仍全局关闭，当前行为以页首新文档为准。
 
 ## 固定源码快照
 
@@ -12,7 +14,7 @@
 | Codex 已加载线程 | [prepare_thread_for_removal](https://github.com/openai/codex/blob/6ff1e1ca3b30fc8b914720681fcf5fe62e95f856/codex-rs/app-server/src/request_processors/thread_processor.rs#L1165) | 对服务中已加载线程可主动 shutdown，不是活动时必定无副作用拒绝。 |
 | OpenCode 删除协议 | `v2.2.5` → [`9bbb8ce18c80f099e0e448775f59d965ead40a21`](https://github.com/anomalyco/opencode/commit/9bbb8ce18c80f099e0e448775f59d965ead40a21)，[协议](https://github.com/anomalyco/opencode/blob/9bbb8ce18c80f099e0e448775f59d965ead40a21/packages/protocol/src/groups/session.ts#L245)、[handler](https://github.com/anomalyco/opencode/blob/9bbb8ce18c80f099e0e448775f59d965ead40a21/packages/server/src/handlers/session.ts#L186) | 仅 sessionID，没有确认范围/状态的条件参数，handler 直接调用 remove。 |
 | OpenCode 级联与活动 | [Session.remove](https://github.com/anomalyco/opencode/blob/9bbb8ce18c80f099e0e448775f59d965ead40a21/packages/core/src/session.ts#L391)、[SessionExecution](https://github.com/anomalyco/opencode/blob/9bbb8ce18c80f099e0e448775f59d965ead40a21/packages/core/src/session/execution.ts#L14) | 先中断、等待 idle、取消任务、关闭 transport，再动态枚举后代并递归删除；活动观察和中断仅限当前进程。 |
-| Claude 单会话删除 | [CLI reference](https://code.claude.com/docs/en/cli-reference)（2026-11-06 查阅） | 未找到已验证的安全历史单会话接口。项目 purge 和后台/worktree rm 不是替代。闭源部分不能声称已做源码证明。 |
+| Claude 单会话删除 | 已安装官方 Agent SDK `0.3.301` 的 `deleteSession`，固定包及官方 tag 见 [最新核对](permanent-delete-0.27.md) | 确有删除 transcript/子会话目录的接口；现有 rename 私有 hardlink namespace 不适用于删除原始历史。SDK 缺活动/预览集合参数，不能直接复用。项目 purge 和后台/worktree rm 不是替代。 |
 
 ## 具体反例和未证明项
 
@@ -32,4 +34,4 @@ Desk 现有 ScopeRegistry 可验证文档、profile/revision、held Root 和准�
 
 完整清理仍未实现：完整关系枚举、后端持有的一次性范围预约、逐项执行及结果协调。仅有这些 Desk 结构仍无法解决上述 native 条件接口缺口，所以没有构建会制造安全错觉的执行框架。
 
-接通前至少需要证明：原生执行点比较 expected 完整集合；在同一保护区间拒绝活动、恢复和新 admission；保护持续到 mutation 完成。之后才能实现范围确认、一次提交、部分失败、timeout 后只读查询且不盲重试，并用隔离合成 fixture 验证。该阻塞不通过扩大用户确认范围或降低活动保护要求解决。
+早期设计要求原生比较 expected 完整成员集合；这项强保证没有被证明。当前经授权的窄契约改为确认准确根及其原生子树，明确执行时动态成员风险，保留原生 writer/reference 保护与本机 owned-run admission。确认前已观察到来源/配置/根记录变化必须重新预览，未知结果不重放。具体实现、没有承诺的保证与测试结果以最新文档为准，不能把此历史要求当成唯一可接受的上游协议。

@@ -78,4 +78,4 @@ Microsoft 的 [TCP owner 结构](https://learn.microsoft.com/en-us/windows/win32
 
 现有 AdmittedChild/OwnedPty、ServerChild/Job 和 private SQLite snapshot 各自已有准确所有权/读保护；它们没有提供 HTTP request→SQLite connection→文件对象映射。文件锁成功/冲突也不能补这条关系。故本轮没有枚举真实连接/进程 handle、复制外部 fd 或生成伪 issuer。可在合成 fixture 验证同进程双 DB、连接池重连、端口复用等反例和两端 witness 正向对照，但对照通过仍不证明 OpenCode 原服务契约已具备。
 
-本节只约束“现有服务同源证明”切片。后续已获准分层推进 Desk 元数据隐藏/撤销和可恢复原生归档，应按各自真实副作用和现有授权链设计；不能把这里的强服务证明机械加到仅改 Desk 状态的低风险操作上，也不把软归档与永久删除混为同一能力。
+本节只约束“现有OpenCode服务同源证明”切片。此前优先隐藏/软归档的方向后来已被用户永久删除要求取代；[当前窄实现](permanent-delete-0.27.md) 按受控Codex助手、同精确profile原生store和物理rollout核验设计，不能用本节对其他HTTP服务的证明缺口一概否定它。也不能把软归档、删除副本或Desk隐藏当永久删除。
