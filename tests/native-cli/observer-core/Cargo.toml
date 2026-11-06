@@ -4,7 +4,12 @@ version = "0.0.0"
 edition = "2021"
 [lib]
 path = "lib.rs"
+[[bin]]
+name = "codex-observer-reporter-fixture"
+path = "reporter-main.rs"
+test = false
 [dependencies]
+reqwest = { version = "=0.11.27", default-features = false, features = ["json", "blocking"] }
 libc = "=0.2.186"
 sha2 = "=0.10.9"
 base64 = "=0.22.1"

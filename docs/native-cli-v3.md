@@ -397,6 +397,16 @@ requires real process-lifecycle and hook evidence for the new bytes/platform;
 unknown versions remain usable with reduced identity features. OSC status has
 independent admission and remains available.
 
+The Codex reporter admits at most 64 KiB of raw stdin, including any encoding
+prefix. At that input boundary only, it accepts one exact leading UTF-8 BOM
+(`EF BB BF`) before the existing JSON and metadata validation. Repeated, partial,
+nonleading or invalid BOMs remain invalid, and BOM removal cannot enlarge the raw
+input budget. Header/capability authentication, metadata-only forwarding and
+silent hook failure behavior are unchanged. The PowerShell wrapper and shared
+console encoding are not modified. The Windows regression uses the production
+command generator and reporter with synthetic events through real direct and
+PowerShell processes, including space, Chinese and apostrophe paths.
+
 The bounded reporter forwards only a main-thread UUID and allowlisted
 SessionStart/UserPromptSubmit/Stop type. It never publishes prompt/response bodies
 or treats Stop as activity completion. Windows hook commands preserve raw UTF-8
