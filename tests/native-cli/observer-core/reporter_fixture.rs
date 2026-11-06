@@ -499,6 +499,7 @@ fn diagnose(
         Some("PSModuleAnalysisCachePath"),
         Some("LOCALAPPDATA"),
         Some("APPDATA"),
+        Some("PSModulePath"),
     ] {
         let mut environment = environment.to_vec();
         let phase_path =
@@ -515,8 +516,13 @@ fn diagnose(
         ));
         let phase = phase_path.as_path();
         if let Some(variable) = variable {
-            let path = phase.parent().unwrap().join(variable);
-            if variable != "PSModuleAnalysisCachePath" {
+            let path = if variable == "PSModulePath" {
+                std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap())
+                    .join("System32/WindowsPowerShell/v1.0/Modules")
+            } else {
+                phase.parent().unwrap().join(variable)
+            };
+            if !matches!(variable, "PSModuleAnalysisCachePath" | "PSModulePath") {
                 std::fs::create_dir_all(&path).unwrap();
             }
             environment.push((variable.into(), path.to_string_lossy().into_owned()));
