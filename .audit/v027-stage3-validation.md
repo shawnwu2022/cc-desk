@@ -85,8 +85,62 @@ Node 政策沿用 `.audit/v027-p0-validation.md` 记载的完整 23 文件命令
 
 固定 1.98.1 / CI dev/test debug=0 的 `cargo clippy --manifest-path src-tauri/Cargo.toml --locked --offline --all-targets -- -D warnings` 和 `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` 均退出 0，见 `v027-stage3-pinned-{compiler,clippy,fmt}.log`。完整 pinned 四 harness/16片仍待下节收口，不以此替代。
 
-## 尚待最终更新
+## 固定工具链完整验证：已完成
 
-完整 **pinned** 本地 Rust 分片/聚合结果待实际完成写入。将以另一个本地命名空间 `2026110602/1`、固定工具链/profile 和精确实现提交重新编译并事先保存四 harness 文件摘要、plan摘要与 runner参数；不修改原 runner、不混合前一轮证据。
+本轮全部测试绑定实现提交 **`68fa6b3df0f34534bffd493173bdf8cfcc5b3ef3`**，测试期间没有修改源码或提交。实际编译器为 `rustc 1.98.1 (48a229cea 2026-09-01)`、host `x86_64-pc-windows-msvc`，CI dev/test debug 均为 0，只使用已安装工具链和缓存依赖。实际命令如下，环境仅在执行子进程设置：
 
-完整 P0/P1 状态、固定源码证据、真实安装/签名往返等阻塞见 `docs/acceptance-checklist-0.27.md`。原生清理仍关闭且完整预览/执行未交付；不会把能力说明当作原功能验收。
+```powershell
+# cwd repo
+$env:RUSTUP_TOOLCHAIN = '1.98.1-x86_64-pc-windows-msvc'
+$env:CARGO_PROFILE_DEV_DEBUG = '0'
+$env:CARGO_PROFILE_TEST_DEBUG = '0'
+$env:CARGO_NET_OFFLINE = 'true'
+rustc -Vv
+cargo clippy --manifest-path src-tauri/Cargo.toml --locked --offline --all-targets -- -D warnings
+cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+node scripts/prepare-conpty.mjs
+# cwd src-tauri
+pwsh -NoProfile -File ../scripts/windows-rust-tests.ps1 -Action Probe
+pwsh -NoProfile -File ../scripts/windows-rust-tests.ps1 -Action Compile
+# Compile 实际执行 cargo test --locked --no-run --message-format=json
+# cwd repo
+node .audit/v027-stage3-pinned-rust-driver.mjs 68fa6b3df0f34534bffd493173bdf8cfcc5b3ef3
+```
+
+编译 2m29s；无过滤 doctest 0 项、退出 0。执行前已生成并读取 [preflight JSON](v027-stage3-pinned-rust-preflight.json)，核对 source、compiler/profile、四 harness bytes/SHA256、Cargo JSON SHA256、原 runner 文件摘要、plan hash 与参数。另见 [执行前核对说明](v027-stage3-pinned-preflight-check.md)。一次额外校验的日志重定向被默认文件沙箱拒绝，未产生文件；未重试写入，改为无重定向只读确认成功。不是自动审批拒绝，不影响已有 preflight 或原 runner 校验。
+
+本地合成命名空间 **`2026110602/1`** 与旧轮分离，始终标明 `localOnly/notHostedCi`，不能用于发布 admission 或晋升成 hosted CI。plan SHA256 为 `9bf9c2e8b8ad5e945f9a7de91d5d84abc0e943c4fe4f528068e2a9380ac0349f`。harness 上限 1200000ms、分片上限 1500000ms、原 ignore、18 项宿主排除和断言均未改变；每片前原 runner 重新核对 source 及编译包摘要。
+
+**16/16 片和最终聚合均退出 0，无失败或超时。**
+
+| harness | 通过 | 原 ignore | 宿主排除 |
+| --- | ---: | ---: | ---: |
+| `cc_desk` lib | 1728 | 33 | 18 |
+| `cc-desk` bin | 6 | 0 | 0 |
+| `paste_transport` | 8 | 0 | 0 |
+| `paste_claude_e2e` | 2 | 3 | 0 |
+| 合计 | **1744** | **36** | **18** |
+
+host 查询成功，`inJob=true/elevated=false`。七项 `requiredSelectedTests` 在原执行日志全部为 `ok`，包括 Wry/native document/channel/launch/projection 和历史 WebView 退出；四项 unelevated 专项已执行。18 项 Job-free 因 external Job 未验证，按既有发布契约非阻断披露，没有计为通过。报告仍准确保留 `nativeAll.status=unverified`、`nativeAcceptanceProven=false`，不等于真实安装或现场验收。
+
+原始记录保留在 `v027-stage3-pinned-rust-run.log`、`v027-stage3-pinned-{source,host-probe,compile}.log`、`v027-stage3-pinned-rust-bundle/`、`v027-stage3-pinned-rust-shards/` 和 `v027-stage3-pinned-rust-coverage/`。聚合 `windows-native-coverage.json` 为 817906 bytes，SHA256 **`a481357b6ce39bf6b7b5052ee8e1471dbd986ce24b474ff020943814339cf01c`**。大二进制、库存和分片保留在任务目录，不纳入源码提交。
+
+原生结束后串行再执行 `npm run test:ci`，覆盖晚于前次完整前端检查的忽略提示修正；实现提交仍为 `68fa6b3…`。最终 **207 文件通过、3206 项通过、2 原跳过、0 失败、退出 0**，63.55s，原日志 `v027-stage3-final-frontend.log`。没有重复源码未变且已通过的 Node 23 文件、构建、生产 CSP 或 P1 界面检查。npm 既有未知 `auth/python` 配置警告及构建 chunk 体积提示保留，未修改用户配置。
+
+## 实现提交索引与交付边界
+
+| 精确提交 | 内容 |
+| --- | --- |
+| `65b6e7966635c615e02197bf5aaaff5466d39820` | 受信通道和可取消、有界更新后端 |
+| `6cf96b92fc83e9a0682c150465fe22ea1b3ea6fd` | 正式签名 beta/RC/preview 准入，保持隔离标签边界 |
+| `da8aaa6e0d2b8d4ea7ed198110e39bf0bb6f2dfd` | 更新 UI/竞态保护、诊断摘要和手动恢复指南 |
+| `50b353886fd21cbe6fb5c7f5acc1e82f225c35ff` | 所选 profile 的安全版本采集后端 |
+| `5d230917a938b50a0aaa489ea2e653b6006b7dea` | 未回收进程持有 profile 独占权 |
+| `09a7d4224c357b5fc0d85830b2844b5b1c12ae3f` | 诊断 UI、取消/迟到保护、清理拒绝及固定源码证据 |
+| `68fa6b3df0f34534bffd493173bdf8cfcc5b3ef3` | P1 忽略/记录/重试、最终 UI、计时 fixture 和 parser 测试修正 |
+
+之后仅提交验收文档和小型元数据，不改实现；已测 Rust subtree 为 `648bedfca595becfaf65af3c22f1f3e5dbdef01d`。最终交付 HEAD 见提交记录；不能把 source=68fa 的本地证据改写成新 HEAD 的 hosted CI。
+
+独立审查实际配置为 `gpt-6.1-sol/high`；全分支加 P1 审查未发现新 P0/P1，已修 P2 损坏存储提示，并独立复核 Storage seam 不吞应用 timer/取消。实际使用已有 superpowers TDD、系统调试、请求审查和完成前验证，以及 pstack 任务/证据组织和 domain/type 边界指导；没有安装新技能或重复完整方案流程。
+
+完整 P0/P1、固定源码证据与阻塞见 [验收清单](../docs/acceptance-checklist-0.27.md)。已有足够本地证据准备候选审阅材料和隔离矩阵；整版 P0 和发布验收尚未闭环。原生清理完整预览/执行仍关闭且未交付。当前无运行中长命令；没有推送、发布、main 合并、用户安装或真实会话 mutation。

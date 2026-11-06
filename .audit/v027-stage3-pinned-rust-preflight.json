@@ -1,0 +1,153 @@
+{
+  "localOnly": true,
+  "notHostedCi": true,
+  "syntheticRunBinding": "2026110602",
+  "sourceSha": "68fa6b3df0f34534bffd493173bdf8cfcc5b3ef3",
+  "inJob": true,
+  "elevated": false,
+  "planHash": "9bf9c2e8b8ad5e945f9a7de91d5d84abc0e943c4fe4f528068e2a9380ac0349f",
+  "compiler": {
+    "rustcVerbose": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-pc-windows-msvc\nrelease: 1.98.1\nLLVM version: 22.1.8",
+    "rustupToolchain": "1.98.1-x86_64-pc-windows-msvc",
+    "profileDevDebug": "0",
+    "profileTestDebug": "0",
+    "runnerOs": "win32",
+    "runnerArch": "x64",
+    "imageOs": null,
+    "imageVersion": null
+  },
+  "artifactName": "windows-rust-bundle-68fa6b3df0f34534bffd493173bdf8cfcc5b3ef3-2026110602-1",
+  "cargoJsonHash": "2e52ada072cc576c01931c619162d00fa906a5bb259bc3aab11fc9ce2465a103",
+  "runnerSources": [
+    {
+      "path": "scripts/windows-rust-tests.ps1",
+      "bytes": 19375,
+      "sha256": "6c3536f5343ad27087d90fd6e26b4af013a94438848ac58a68496544b3057dbd"
+    },
+    {
+      "path": "scripts/windows-rust-shard-runner.mjs",
+      "bytes": 43749,
+      "sha256": "1c72474c296d21417a12797f781c04a26b90eb95d705b20d5e72370344f94892"
+    },
+    {
+      "path": "scripts/windows-rust-shards.mjs",
+      "bytes": 10640,
+      "sha256": "14ecfd6772a282e38264fc8ea1eb6a4f94e136661f9179e381402adb3cd2308f"
+    },
+    {
+      "path": "scripts/windows-native-validation.mjs",
+      "bytes": 15359,
+      "sha256": "c3557d715aced1fadc2daccdb6f3d7f692bbcbd0e0700a47d35dbc2b7a9c6abb"
+    },
+    {
+      "path": "scripts/windows-native-scope.json",
+      "bytes": 3485,
+      "sha256": "249b7a2c1bf4c0a791a459080926f16e92adb97bc84b7b2b3a1da833f204c449"
+    }
+  ],
+  "runnerParameters": {
+    "indices": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15
+    ],
+    "harnessTimeoutMs": 1200000,
+    "shardBudgetMs": 1500000,
+    "originalIgnoredPreserved": true,
+    "localSequential": true
+  },
+  "harnesses": [
+    {
+      "identity": {
+        "name": "cc_desk",
+        "kind": "lib"
+      },
+      "executable": {
+        "path": "src-tauri/target/debug/deps/cc_desk-cecb03506bf4c578.exe",
+        "bytes": 61718016,
+        "sha256": "8c5c3d7d34e96db1e0da658e43314916fa24307478043bffea4de81c55fcc8a5"
+      },
+      "full": 1779,
+      "selected": 1761,
+      "ignored": 33,
+      "excluded": [
+        "version_history::windows::manager_process::tests::HistoryManagerProcess_SuspendedIdentity_001",
+        "version_history::windows::manager_process::tests::HistoryManagerProcess_ReadyChain_002",
+        "version_history::windows::manager_process::tests::HistoryManager_SourceCrash_004",
+        "version_history::windows::manager_process::tests::HistoryManager_ContainedSources_005",
+        "version_history::windows::manager_process::tests::HistoryManager_DisarmUnknown_006",
+        "version_history::windows::manager_process::tests::HistoryManager_JobCollision_007",
+        "version_history::windows::manager_process::tests::HistoryManager_UniqueJobs_008",
+        "version_history::windows::manager_process::tests::HistoryManager_RejectReceiptMix_009",
+        "version_history::windows::manager_process::tests::HistoryManager_AdmittedJob_010",
+        "version_history::windows::manager_process::tests::HistoryManager_TypedChildren_011",
+        "version_history::windows::manager_process::tests::HistoryManager_LifetimeCollision_012",
+        "version_history::windows::manager_process::tests::HistoryManager_ConcurrentHostJob_013",
+        "version_history::windows::manager_process::tests::typed_probe::HistoryManager_PrepareTimeout_015",
+        "version_history::windows::manager_process::tests::typed_probe::HistoryManager_MarkerTimeout_016",
+        "version_history::windows::manager_process::tests::typed_probe::HistoryManager_SuspendedFailure_017",
+        "version_history::windows::manager_process::tests::typed_probe::HistoryManager_RunningFailure_018",
+        "version_history::windows::manager_process::tests::typed_probe::HistoryManager_RejectFallback_019",
+        "version_history::windows::manager_process::tests::typed_probe::HistoryManager_RejectExit124_020"
+      ]
+    },
+    {
+      "identity": {
+        "name": "cc-desk",
+        "kind": "bin"
+      },
+      "executable": {
+        "path": "src-tauri/target/debug/deps/cc_desk-4f9fe593e0992cd8.exe",
+        "bytes": 3733504,
+        "sha256": "edda1431a4c57b782cf814aa673d639d1bd5b44117ea26c156d3b3788d75ca10"
+      },
+      "full": 6,
+      "selected": 6,
+      "ignored": 0,
+      "excluded": []
+    },
+    {
+      "identity": {
+        "name": "paste_transport",
+        "kind": "test"
+      },
+      "executable": {
+        "path": "src-tauri/target/debug/deps/paste_transport-86ca19b20662bbb8.exe",
+        "bytes": 1427456,
+        "sha256": "6dc3b748425958cdb46d884e8ded2a3e0c0ddbfd7e5bae844dde7e53bd233ad3"
+      },
+      "full": 8,
+      "selected": 8,
+      "ignored": 0,
+      "excluded": []
+    },
+    {
+      "identity": {
+        "name": "paste_claude_e2e",
+        "kind": "test"
+      },
+      "executable": {
+        "path": "src-tauri/target/debug/deps/paste_claude_e2e-7064814c2b4d0986.exe",
+        "bytes": 1439232,
+        "sha256": "caa61f90de1851eb1688fea6d9870b410563334ab37deeb676fb3870e3d53eed"
+      },
+      "full": 5,
+      "selected": 5,
+      "ignored": 3,
+      "excluded": []
+    }
+  ]
+}
