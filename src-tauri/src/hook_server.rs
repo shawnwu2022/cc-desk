@@ -79,23 +79,11 @@ pub async fn init(app: AppHandle) {
     );
     // 认证 watcher（同 run binding）复用同一发布通道；HTTP intake 是唯一入口的
     // 语义不变——watcher 与 loopback 调用方走完全相同的 accept/delivery 校验。
-    let _ = PUBLISHER.set(publish.clone());
+    crate::observer_http::set_publisher(publish.clone());
     let router = crate::observer_http::router(OBSERVERS.clone(), publish);
     tokio::spawn(async move {
         if axum::serve(listener, router).await.is_err() {
             log::warn!("Observer unavailable: server ended");
         }
     });
-}
-
-static PUBLISHER: std::sync::OnceLock<crate::observer_http::Publisher> = std::sync::OnceLock::new();
-
-/// 仅限同 run 认证 watcher 复用的发布通道；未初始化（早于 init）返回 None。
-pub(crate) fn publisher() -> Option<crate::observer_http::Publisher> {
-    PUBLISHER.get().cloned()
-}
-
-#[cfg(test)]
-pub(crate) fn set_publisher_for_test(value: crate::observer_http::Publisher) {
-    let _ = PUBLISHER.set(value);
 }
