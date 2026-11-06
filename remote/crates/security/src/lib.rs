@@ -51,3 +51,8 @@ mod test_identities;
 mod peer_install;
 #[cfg(feature = "experimental")]
 pub use peer_install::{ClientInstalledPeer, HostInstallRequest};
+
+#[cfg(all(feature = "experimental", target_arch = "wasm32", target_os = "unknown"))]
+mod browser_wasm_signer;
+#[cfg(all(feature = "experimental", target_arch = "wasm32", target_os = "unknown"))]
+pub use browser_wasm_signer::BrowserWasmSigningKey;

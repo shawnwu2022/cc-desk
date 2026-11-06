@@ -85,8 +85,8 @@ or browser bundle, running Tokio/browser clock or TLS session.
 
 ## Bounded TLS signing bridge
 
-`ui-terminal/src/browserTlsSigner.ts` adds the limited synchronous callback needed
-by a future rustls `Signer::sign` integration. `createBrowserTlsSignerBroker`
+`ui-terminal/src/browserTlsSigner.ts` supplies the synchronous Worker callback
+used by the limited Rust WASM Signer below. `createBrowserTlsSignerBroker`
 reuses `browserProfileBoundary` on the enrolled, top-level HTTPS Window and holds
 only its non-exportable `tlsKey`. It does not sign with `grantKey`, export a key,
 register a credential, request WebAuthn presence or implement another TLS stack.
@@ -102,7 +102,8 @@ or shared workers and missing capabilities fail closed. Isolation headers and a
 controlled worker origin must be supplied by a future deployment. There is no
 UI-thread wait or fallback. `sign(message)` either returns DER bytes or throws an
 Error that the future rustls adapter must propagate as TLS failure; it establishes
-no Ready, channel identity or grant. No Wasm ABI or Rust adapter is implemented.
+no Ready, channel identity or grant. The WASM adapter below propagates failure as
+a rustls signing error; no full browser TLS owner is implemented.
 
 The input is exactly 64 spaces, `TLS 1.3, client CertificateVerify`, one zero byte
 and a 32-byte transcript hash. This matches the existing SHA256-only cipher-suite
@@ -162,10 +163,112 @@ crypto Promise, then releases the gate. The unchanged V1 implementation returned
 `timed-out`; the repaired implementation returns `not-equal` without waiting for
 the original budget. The fixture still invokes the real native wait.
 
-Browser WebSocket IO, wasm bindings, runtime/time driving, original
+Browser WebSocket IO, full TLS/runtime bindings and runtime/time driving, original
 TLS/AppBind/grant/peer-install ownership and the authenticated operation adapter
 remain unimplemented. Successful native fixtures, this Node bridge test or a wasm
 compile must not be presented as a functioning browser owner, app panel or phone
 end-to-end connection.
+
+## Rust WASM Signer ABI candidate
+
+`BrowserWasmSigningKey` (experimental, wasm32-unknown-unknown only) implements the
+original rustls SigningKey/Signer traits. Construction requires a canonical P256
+SPKI from explicit trusted enrollment metadata and the original setup absolute
+deadline in the `performance.timeOrigin + performance.now()` clock domain.
+`BrowserProfile` still has no SPKI field; the caller supplies the separately
+enrolled public metadata. No key export, default identity, registration or new
+authorization stack is provided. The original `LocalIdentity::new` retains its
+exact algorithm/public-key/scheme checks. Rust also verifies each returned DER
+signature against the declared SPKI using ring before returning success.
+
+The versioned private import namespace is `cc_desk_browser_tls_v1`:
+
+| Import | Contract |
+| --- | --- |
+| `now() -> f64` | Same monotonic absolute clock; nonfinite/expired samples fail. |
+| `init(spkiPtr, 91, setupDeadline) -> i32` | One binding; exact enrolled public bytes and original deadline; 1 succeeds, -1 fails. |
+| `sign(seq, setupDeadline, messagePtr, 130, outputPtr, 72) -> i32` | One in flight, increasing positive int32 sequence; return 8..72 DER bytes or -1. |
+| `close()` | Sticky close of that bridge, never a CryptoKey-destruction or Worker-join receipt. |
+
+`browserTlsWasm.ts` creates the imports only inside a trusted DedicatedWorker and
+requires `broker.worker.setupDeadline`. The owner must pass that original deadline
+to `createBrowserTlsSignerBroker({ ...profile }, {timeoutMs, setupDeadline})` and
+`BrowserWasmSigningKey::new(public, setupDeadline)`. Repeated calls cannot extend
+it: Rust checks before/after the import, the adapter matches it exactly, and both
+Worker wait and Window broker enforce it while blocked. The older standalone
+bridge may omit this field for its per-sign fixture; the WASM edge cannot.
+NaN, infinity, expiry and attempted extension fail closed.
+
+Rust uses ordinary Arc/atomic state, no unsafe Send/Sync implementations and no
+lock held across JS. Temporary Signer handles created by LocalIdentity do not close
+the owner; explicit close or final Arc-state destruction does. Reentry, protocol
+failure, bad lengths, wrong signature, close or expiry seal the owner. The original
+Window broker still retains a started SubtleCrypto Promise until settlement.
+
+The adapter copies a fixed 130-byte input, requires a disjoint 72-byte output
+range, checks integer offsets before constructing views and takes a fresh view
+after the callback because memory.grow can replace the buffer. Shared memory and
+changing the bound WebAssembly.Memory object are refused. One adapter owner is
+claimed per Worker module lifetime, including after close; a duplicate factory
+fails before changing the original owner. This also protects official generated
+glue's module-level wasm binding. The controlled Worker loader must keep one
+canonical adapter/glue module instance, raw Instance, memory, helper exports and
+allocators private. Untrusted UI must never receive them. This source slice has
+no general production loader; the Node fixture demonstrates that private calling
+boundary with fixed init/sign/grow/close test commands and bounded signature bytes.
+
+The fixture at `crates/security/tests/fixtures/browser_tls_wasm_fixture.rs` is a
+thin wrapper around the production implementation and original LocalIdentity. It
+exports fixed TEST_ONLY cases and bounded signature bytes, not arbitrary pointers
+or memory read/write methods. Tests instantiate real compiled WASM in actual Node
+Workers with the existing MessagePort/SAB/SubtleCrypto broker and independently
+verify DER using Node crypto. Public scalar1 is imported into non-exportable
+handles; its opposite public point is used to reject key/metadata mismatch. No
+real enrollment or credentials are created. Browser platform globals remain
+explicit Node shims, not actual browser acceptance.
+
+The initial Cargo example attempt failed on native dev-dependency getrandom0.3.4;
+the fixture therefore uses the current production rlib directly, without changing
+RNG/dependencies. Direct linking also required Cargo's host proc-macro dependency
+directory. Raw output still contained wasm-bindgen descriptors and could not
+instantiate with private imports alone. Matching official wasm-bindgen0.2.129
+postprocessing and its unmodified generated JS provide the real helper runtime;
+no fake/empty upstream imports are used. The recorded target RED is distinct:
+after official processing, LocalIdentity construction succeeded and the actual
+Rust Signer returned its then-unimplemented error. GREEN executes the real import
+and verifies the signature, including after memory growth.
+
+From the repository root, with an existing wasm target, clang and the matching
+official generator, the independent test can be reproduced in PowerShell:
+
+```powershell
+$env:CARGO_BUILD_JOBS='2'
+$env:CC='<absolute path to existing clang.exe>'
+$env:CARGO_TARGET_DIR=Join-Path $PWD 'target-browser-profile'
+$artifactDir=Join-Path $env:TEMP 'cc-desk-test-only-wasm'
+New-Item -ItemType Directory -Force $artifactDir | Out-Null
+cargo build --offline --locked --manifest-path remote/Cargo.toml -p cc-desk-remote-security --all-features --target wasm32-unknown-unknown --lib --message-format=json > "$artifactDir/artifacts.jsonl"
+if ($LASTEXITCODE -ne 0) { throw 'Rust library build failed' }
+$rows=Get-Content "$artifactDir/artifacts.jsonl" | ForEach-Object { $_ | ConvertFrom-Json }
+$securityRlib=($rows | Where-Object { $_.reason -eq 'compiler-artifact' -and $_.target.name -eq 'cc_desk_remote_security' }).filenames | Where-Object { $_.EndsWith('.rlib') }
+$rustlsRlib=($rows | Where-Object { $_.reason -eq 'compiler-artifact' -and $_.target.name -eq 'rustls' }).filenames | Where-Object { $_.EndsWith('.rlib') }
+rustc --edition=2024 --crate-name=browser_tls_wasm_fixture --crate-type=bin --target=wasm32-unknown-unknown -L "dependency=$(Split-Path $rustlsRlib)" -L "dependency=$env:CARGO_TARGET_DIR/debug/deps" --extern "cc_desk_remote_security=$securityRlib" --extern "rustls=$rustlsRlib" remote/crates/security/tests/fixtures/browser_tls_wasm_fixture.rs -o "$artifactDir/fixture-raw.wasm" -C link-arg=--no-entry -C link-arg=--export-memory -C link-arg=--export=fixture_init -C link-arg=--export=fixture_sign -C link-arg=--export=fixture_signature_byte -C link-arg=--export=fixture_close -C link-arg=--export=fixture_grow
+if ($LASTEXITCODE -ne 0) { throw 'Fixture link failed' }
+& '<absolute path to official wasm-bindgen 0.2.129 executable>' --target bundler --keep-lld-exports --no-typescript --out-name fixture --out-dir "$artifactDir/generated" "$artifactDir/fixture-raw.wasm"
+if ($LASTEXITCODE -ne 0) { throw 'Official postprocess failed' }
+$env:CC_DESK_TEST_ONLY_TLS_WASM="$artifactDir/generated/fixture_bg.wasm"
+$env:CC_DESK_TEST_ONLY_TLS_WASM_GLUE="$artifactDir/generated/fixture_bg.js"
+Push-Location remote/ui-terminal
+try { npm run test:wasm } finally { Pop-Location }
+```
+
+Generated JS/WASM are build evidence, not checked-in product code. `test:wasm`
+requires explicit artifact paths and fails rather than silently skipping. Its
+negative cases cover purpose/bounds, wrong sequence, reentry, invalid return
+length/signature, wrong identity/key, shared/rebound memory, invalid/extended
+deadline and actual close/expiry with retained late crypto. Original native TLS,
+AppBind, grants, peer installation, browser runtime/IO and Panel integration still
+need their own callers and acceptance; this is a real Signer ABI slice, not a
+complete phone-to-Host TLS or application session.
 
 Reference: [WebAuthn Level 3 assertion verification](https://www.w3.org/TR/webauthn-3/#sctn-verifying-assertion).

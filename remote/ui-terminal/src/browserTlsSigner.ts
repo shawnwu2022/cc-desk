@@ -9,7 +9,7 @@ const MESSAGE_SIZE=64+context.length+1+32;
 const order=Uint8Array.from('ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551'.match(/../g)!,v=>parseInt(v,16));
 
 export type BrowserTlsWorkerBridge=Readonly<{
- port:MessagePort;shared:SharedArrayBuffer;generation:string;origin:string;timeoutMs:number;
+ port:MessagePort;shared:SharedArrayBuffer;generation:string;origin:string;timeoutMs:number;setupDeadline:number|undefined;
 }>;
 export type BrowserTlsSignerBroker=Readonly<{
  /** 仅转交给一个可信 DedicatedWorker，不广播端口或密钥。 */
@@ -57,16 +57,17 @@ function derSignature(raw:ArrayBuffer):Uint8Array{
 /** 主线程 broker；不生成/导出 key，不使用 grantKey，不提供通用签名入口。 */
 export function createBrowserTlsSignerBroker(profile:BrowserProfile,options:Readonly<{
  /** 必须取原 TLS setup 剩余预算，最多 10s；本桥不延长外层握手 deadline。 */
- timeoutMs:number;signal?:AbortSignal;
+ timeoutMs:number;signal?:AbortSignal;setupDeadline?:number;
 }>):BrowserTlsSignerBroker{
  const p=browserProfileBoundary(profile),timeoutMs=options.timeoutMs;
  if(typeof Window==='undefined'||!(globalThis instanceof Window)||globalThis.top!==globalThis.self||!atOrigin(p.origin)||!globalThis.crypto?.subtle)throw Error('TLS signer window unavailable');
  isolated();
  if(!budget(timeoutMs)||options.signal?.aborted)throw Error('TLS signer closed or invalid timeout');
- return broker(p.tlsKey,p.origin,timeoutMs,options.signal);
+ if(options.setupDeadline!==undefined&&(!Number.isFinite(options.setupDeadline)||options.setupDeadline<=now()||options.setupDeadline>now()+timeoutMs))throw Error('TLS setup deadline');
+ return broker(p.tlsKey,p.origin,timeoutMs,options.signal,options.setupDeadline);
 }
 
-function broker(key:CryptoKey|undefined,origin:string,timeoutMs:number,signal?:AbortSignal):BrowserTlsSignerBroker{
+function broker(key:CryptoKey|undefined,origin:string,timeoutMs:number,signal?:AbortSignal,setupDeadline?:number):BrowserTlsSignerBroker{
  const channel=new MessageChannel(),port=channel.port1,shared=new SharedArrayBuffer(SIZE);
  const control=new Int32Array(shared,0,WORDS),output=new Uint8Array(shared,WORDS*4,MAX_DER);
  const generation=Array.from(crypto.getRandomValues(new Uint8Array(16)),v=>v.toString(16).padStart(2,'0')).join('');
@@ -84,7 +85,7 @@ function broker(key:CryptoKey|undefined,origin:string,timeoutMs:number,signal?:A
   retire();
  }
  function live(deadline:number,seq:number):boolean{
-  return !closed&&Atomics.load(control,CLOSED)===0&&Atomics.load(control,ATTACHED)===1&&Atomics.load(control,SEQ)===seq&&Atomics.load(control,STATE)===WAITING&&atOrigin(origin)&&globalThis.crossOriginIsolated&&now()<deadline;
+  return !closed&&Atomics.load(control,CLOSED)===0&&Atomics.load(control,ATTACHED)===1&&Atomics.load(control,SEQ)===seq&&Atomics.load(control,STATE)===WAITING&&atOrigin(origin)&&globalThis.crossOriginIsolated&&now()<deadline&&(setupDeadline===undefined||deadline<=setupDeadline);
  }
  port.onmessage=(event:MessageEvent<unknown>)=>{
   if(event.data==='close'){close();return;}
@@ -117,7 +118,7 @@ function broker(key:CryptoKey|undefined,origin:string,timeoutMs:number,signal?:A
   }catch{close();}
  };
  port.onmessageerror=close;port.start();signal?.addEventListener('abort',close,{once:true});
- return Object.freeze({worker:Object.freeze({port:channel.port2,shared,generation,origin,timeoutMs}),close,waitClosed:()=>completion});
+ return Object.freeze({worker:Object.freeze({port:channel.port2,shared,generation,origin,timeoutMs,setupDeadline}),close,waitClosed:()=>completion});
 }
 
 /** 未来 rustls Signer 回调的同步端；没有 WASM ABI、TLS 状态机或 Ready 适配器。 */
@@ -125,8 +126,8 @@ export function createBrowserTlsWorkerSigner(bridge:BrowserTlsWorkerBridge):Brow
  const scope=globalThis as typeof globalThis&{DedicatedWorkerGlobalScope?:new()=>object};
  if(typeof scope.DedicatedWorkerGlobalScope!=='function'||!(globalThis instanceof scope.DedicatedWorkerGlobalScope)||typeof Window!=='undefined'||typeof document!=='undefined')throw Error('TLS signer dedicated worker required');
  isolated();
- if(!exact(bridge,['port','shared','generation','origin','timeoutMs'])||!(bridge.port instanceof MessagePort)||!(bridge.shared instanceof SharedArrayBuffer)||bridge.shared.byteLength!==SIZE||typeof bridge.generation!=='string'||!/^[0-9a-f]{32}$/.test(bridge.generation)||typeof bridge.origin!=='string'||!validOrigin(bridge.origin)||!atOrigin(bridge.origin)||!budget(bridge.timeoutMs))throw Error('TLS signer worker bridge bounds');
- const {port,shared,generation,origin,timeoutMs}=bridge;
+ if(!exact(bridge,['port','shared','generation','origin','timeoutMs','setupDeadline'])||!(bridge.port instanceof MessagePort)||!(bridge.shared instanceof SharedArrayBuffer)||bridge.shared.byteLength!==SIZE||typeof bridge.generation!=='string'||!/^[0-9a-f]{32}$/.test(bridge.generation)||typeof bridge.origin!=='string'||!validOrigin(bridge.origin)||!atOrigin(bridge.origin)||!budget(bridge.timeoutMs)||(bridge.setupDeadline!==undefined&&(!Number.isFinite(bridge.setupDeadline)||bridge.setupDeadline<=now()||bridge.setupDeadline>now()+bridge.timeoutMs)))throw Error('TLS signer worker bridge bounds');
+ const {port,shared,generation,origin,timeoutMs,setupDeadline}=bridge;
  const control=new Int32Array(shared,0,WORDS),output=new Uint8Array(shared,WORDS*4,MAX_DER);
  if(Atomics.compareExchange(control,ATTACHED,0,1)!==0||Atomics.load(control,CLOSED)!==0||Atomics.load(control,SEQ)!==0||Atomics.load(control,STATE)!==IDLE)throw Error('TLS signer worker bridge reused');
  let sequence=0,active=false;
@@ -139,7 +140,8 @@ export function createBrowserTlsWorkerSigner(bridge:BrowserTlsWorkerBridge):Brow
   try{
    if(active||Atomics.load(control,CLOSED)!==0)throw Error('TLS signer closed or concurrent');
    if(!atOrigin(origin)||!globalThis.crossOriginIsolated||sequence===MAX_SEQ)throw Error('TLS signer unavailable');
-   const deadline=now()+timeoutMs,message=tlsMessage(value),seq=++sequence;
+   const deadline=Math.min(now()+timeoutMs,setupDeadline??Infinity),message=tlsMessage(value),seq=++sequence;
+   if(now()>=deadline)throw Error('TLS signer setup timeout');
    active=true;Atomics.store(control,LENGTH,0);Atomics.store(control,SEQ,seq);
    // 关闭必须改变实际等待槽；正常转换不能把终止态写回可等待状态。
    if(Atomics.compareExchange(control,STATE,IDLE,WAITING)!==IDLE)throw Error('TLS signer closed or response state');
