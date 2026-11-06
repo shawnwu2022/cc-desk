@@ -1,3 +1,4 @@
+use crate::tls_clock::{self, Deadline};
 use crate::{CancelToken, Pending, Role};
 use cc_desk_remote_record::{
     Header, Kind,
@@ -7,11 +8,12 @@ use cc_desk_remote_record::{
     },
 };
 use ring::{hmac, rand::SecureRandom};
+#[cfg(test)]
+use tokio::time::Instant;
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     sync::oneshot,
     task::JoinHandle,
-    time::Instant,
 };
 #[derive(Clone)]
 pub struct HostSnapshot {
@@ -234,8 +236,8 @@ fn sign(key: &hmac::Key, host: bool, t: &[u8; 32]) -> Mac {
 fn verify(key: &hmac::Key, host: bool, t: &[u8; 32], mac: &Mac) -> Result<(), BindError> {
     hmac::verify(key, &mac_input(host, t), &mac.bytes().map_err(codec)?).map_err(|_| BindError::Mac)
 }
-fn eligible(deadline: Instant, token: &CancelToken) -> Result<(), BindError> {
-    if Instant::now() >= deadline {
+fn eligible(deadline: Deadline, token: &CancelToken) -> Result<(), BindError> {
+    if tls_clock::expired(deadline) {
         Err(BindError::Deadline)
     } else if token.is_cancelled() {
         Err(BindError::Cancelled)
@@ -243,33 +245,53 @@ fn eligible(deadline: Instant, token: &CancelToken) -> Result<(), BindError> {
         Ok(())
     }
 }
+fn native_factory() -> Result<(), BindError> {
+    if cfg!(all(target_arch = "wasm32", target_os = "unknown")) {
+        Err(BindError::Unsupported)
+    } else {
+        Ok(())
+    }
+}
+pub(crate) async fn management_read<S: AsyncRead + AsyncWrite + Unpin>(
+    io: &mut tokio_rustls::TlsStream<S>,
+) -> OwnerExit {
+    let mut byte = [0u8; 1];
+    match io.read(&mut byte).await {
+        Ok(0) => OwnerExit::PeerClosed,
+        Ok(_) => OwnerExit::Unsupported,
+        Err(_) => OwnerExit::Io,
+    }
+}
 async fn within<T, F: std::future::Future<Output = Result<T, BindError>>>(
-    deadline: Instant,
+    deadline: Deadline,
     token: &mut CancelToken,
     work: F,
 ) -> Result<T, BindError> {
     eligible(deadline, token)?;
-    let value = tokio::select! {biased;_=token.cancelled()=>Err(BindError::Cancelled),_=tokio::time::sleep_until(deadline)=>Err(BindError::Deadline),r=work=>r}?;
+    let value = tokio::select! {biased;_=token.cancelled()=>Err(BindError::Cancelled),_=tls_clock::sleep(deadline)=>Err(BindError::Deadline),r=work=>r}?;
     eligible(deadline, token)?;
     Ok(value)
 }
 fn owner<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     mut io: tokio_rustls::TlsStream<S>,
     mut token: CancelToken,
-    deadline: Instant,
+    deadline: Deadline,
     context: Context,
     selection: HostSelection,
 ) -> Result<BoundManagement, BindError> {
+    native_factory()?;
+    if tls_clock::native(deadline).is_none() {
+        return Err(BindError::Unsupported);
+    }
     let published = context.clone();
     let published_selection = selection.clone();
     eligible(deadline, &token)?;
     let (stop, mut stopped) = oneshot::channel();
     let task = tokio::spawn(async move {
-        let mut byte = [0; 1];
         tokio::select! {biased;
          _=token.cancelled()=>OwnerExit::Cancelled,
          _=&mut stopped=>OwnerExit::LocalClose,
-         r=io.read(&mut byte)=>match r{Ok(0)=>OwnerExit::PeerClosed,Ok(_)=>OwnerExit::Unsupported,Err(_)=>OwnerExit::Io},
+         r=management_read(&mut io)=>r,
         }
     });
     Ok(BoundManagement {
@@ -291,16 +313,35 @@ async fn bind_host_with<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     snapshot: HostSnapshot,
     hooks: Hooks,
 ) -> Result<BoundManagement, BindError> {
+    native_factory()?;
     let e = establish_host(pending, snapshot, hooks, vec![0], 0).await?;
     owner(e.io, e.token, e.deadline, e.context, e.selection)
 }
-struct Established<S> {
-    io: tokio_rustls::TlsStream<S>,
-    token: CancelToken,
-    deadline: Instant,
+pub(crate) struct Established<S> {
+    pub(crate) io: tokio_rustls::TlsStream<S>,
+    pub(crate) token: CancelToken,
+    pub(crate) deadline: Deadline,
     context: Context,
     selection: HostSelection,
     binding: [u8; 32],
+}
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+pub(crate) async fn browser_establish_client<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
+    pending: Pending<S>,
+    trust: ClientTrust,
+) -> Result<Established<S>, BindError> {
+    establish_client(pending, trust, Hooks::default(), vec![0], 0).await
+}
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+pub(crate) fn browser_management_facts<S>(e: &Established<S>) -> Result<Vec<u8>, BindError> {
+    eligible(e.deadline, &e.token)?;
+    if e.selection.profile != 1
+        || e.selection.minor != 0
+        || e.selection.requested_role != RequestedRole::ManagementOnly
+    {
+        return Err(BindError::Unsupported);
+    }
+    serde_json::to_vec(&serde_json::json!({"kind":"ManagementOnly","profile":e.selection.profile,"minor":e.selection.minor,"hostEndpointId":e.context.host_endpoint_id,"clientEndpointId":e.context.client_endpoint_id,"hostKeyEpoch":e.context.host_key_epoch,"clientKeyEpoch":e.context.client_key_epoch,"origin":e.context.origin.as_str()})).map_err(|_|BindError::Codec)
 }
 async fn establish_host<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     pending: Pending<S>,
@@ -313,7 +354,7 @@ async fn establish_host<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     if pending._context.0 != Role::Host {
         return Err(BindError::Context);
     }
-    let deadline = crate::tls_clock::native(pending._deadline).ok_or(BindError::Unsupported)?;
+    let deadline = pending._deadline;
     let mut token = pending._cancel;
     let mut io = pending._io;
     let context = Context {
@@ -385,6 +426,7 @@ async fn bind_client_with<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     trust: ClientTrust,
     hooks: Hooks,
 ) -> Result<BoundManagement, BindError> {
+    native_factory()?;
     let e = establish_client(pending, trust, hooks, vec![0], 0).await?;
     owner(e.io, e.token, e.deadline, e.context, e.selection)
 }
@@ -399,7 +441,7 @@ async fn establish_client<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     if pending._context.0 != Role::Client {
         return Err(BindError::Context);
     }
-    let deadline = crate::tls_clock::native(pending._deadline).ok_or(BindError::Unsupported)?;
+    let deadline = pending._deadline;
     let mut token = pending._cancel;
     let mut io = pending._io;
     let (context, selection, binding) = within(deadline, &mut token, async {
@@ -484,6 +526,7 @@ pub async fn bind_host_channel<S: AsyncRead + AsyncWrite + Unpin + Send + 'stati
     pending: Pending<S>,
     snapshot: HostSnapshot,
 ) -> Result<crate::ManagedChannel<S>, BindError> {
+    native_factory()?;
     let e = establish_host(pending, snapshot, Hooks::default(), vec![0, 1], 0).await?;
     eligible(e.deadline, &e.token)?;
     if e.selection.minor != 1 {
@@ -501,6 +544,7 @@ pub async fn bind_client_channel<S: AsyncRead + AsyncWrite + Unpin + Send + 'sta
     pending: Pending<S>,
     trust: ClientTrust,
 ) -> Result<crate::ManagedChannel<S>, BindError> {
+    native_factory()?;
     let e = establish_client(pending, trust, Hooks::default(), vec![0, 1], 0).await?;
     eligible(e.deadline, &e.token)?;
     if e.selection.minor != 1 {
@@ -592,6 +636,9 @@ impl Hooks {
         }
     }
 }
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "browser_appbind_fixture_tests.rs"]
+mod browser_fixture;
 #[cfg(test)]
 #[path = "bind_tests.rs"]
 mod tests;
@@ -629,6 +676,7 @@ pub async fn bind_host_grant_channel<S: AsyncRead + AsyncWrite + Unpin + Send + 
     pending: Pending<S>,
     snapshot: HostSnapshot,
 ) -> Result<crate::ManagedChannel<S>, BindError> {
+    native_factory()?;
     let e = establish_host(pending, snapshot, Hooks::default(), vec![1], 1).await?;
     eligible(e.deadline, &e.token)?;
     Ok(crate::ManagedChannel::new(
@@ -644,6 +692,7 @@ pub async fn bind_client_grant_channel<S: AsyncRead + AsyncWrite + Unpin + Send 
     pending: Pending<S>,
     trust: ClientTrust,
 ) -> Result<crate::ManagedChannel<S>, BindError> {
+    native_factory()?;
     let e = establish_client(pending, trust, Hooks::default(), vec![1], 1).await?;
     eligible(e.deadline, &e.token)?;
     Ok(crate::ManagedChannel::new(
@@ -661,6 +710,7 @@ pub async fn bind_host_peer_channel<S: AsyncRead + AsyncWrite + Unpin + Send + '
     pending: Pending<S>,
     snapshot: HostSnapshot,
 ) -> Result<crate::ManagedChannel<S>, BindError> {
+    native_factory()?;
     let e = establish_host(pending, snapshot, Hooks::default(), vec![1], 2).await?;
     eligible(e.deadline, &e.token)?;
     Ok(crate::ManagedChannel::new(
@@ -677,6 +727,7 @@ pub async fn bind_client_peer_channel<S: AsyncRead + AsyncWrite + Unpin + Send +
     pending: Pending<S>,
     trust: ClientTrust,
 ) -> Result<crate::ManagedChannel<S>, BindError> {
+    native_factory()?;
     let e = establish_client(pending, trust, Hooks::default(), vec![1], 2).await?;
     eligible(e.deadline, &e.token)?;
     Ok(crate::ManagedChannel::new(

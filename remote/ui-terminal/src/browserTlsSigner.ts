@@ -81,6 +81,7 @@ function broker(key:CryptoKey|undefined,origin:string,timeoutMs:number,signal?:A
  }
  function close(){
   closed=true;Atomics.store(control,CLOSED,1);Atomics.store(control,STATE,STOPPED);Atomics.notify(control,STATE);
+  try{port.postMessage('close');}catch{/* Worker仍会检查不可逆共享关闭标记。 */}
   if(timer!==undefined){clearTimeout(timer);timer=undefined;}
   retire();
  }

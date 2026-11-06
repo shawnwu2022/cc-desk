@@ -19,6 +19,8 @@ unsafe extern "C" {
     fn public_key(which: u32, output: *mut u8, capacity: u32) -> i32;
     fn deadline() -> f64;
     fn schedule();
+    fn client_trust(output: *mut u8, capacity: u32) -> i32;
+    fn management(pointer: *const u8, length: u32);
     fn report(
         code: i32,
         protocol: u32,
@@ -43,7 +45,7 @@ async fn shutdown_requested() {
     })
     .await;
 }
-type Task = Pin<Box<dyn Future<Output = Result<(), SecurityError>>>>;
+type Task = Pin<Box<dyn Future<Output = Result<(), i32>>>>;
 thread_local! {
     static TASK: RefCell<Option<Task>> = const { RefCell::new(None) };
     static CANCEL: RefCell<Option<CancelHandle>> = const { RefCell::new(None) };
@@ -73,6 +75,53 @@ fn key(which: u32) -> Result<P256Spki, SecurityError> {
     }
     P256Spki::new(&bytes)
 }
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct TrustInput {
+    host_key_epoch: String,
+    client_key_epoch: String,
+    origin: String,
+}
+fn trust() -> Result<Option<crate::ClientTrust>, SecurityError> {
+    let mut bytes = [0u8; 2304];
+    let length = unsafe { client_trust(bytes.as_mut_ptr(), bytes.len() as u32) };
+    if length == 0 {
+        return Ok(None);
+    }
+    if length < 1 || length as usize > bytes.len() {
+        return Err(SecurityError::Identity);
+    }
+    let wire: TrustInput =
+        serde_json::from_slice(&bytes[..length as usize]).map_err(|_| SecurityError::Identity)?;
+    fn epoch(value: &str) -> Result<u64, SecurityError> {
+        if value.is_empty()
+            || value.len() > 20
+            || (value.len() > 1 && value.starts_with('0'))
+            || !value.bytes().all(|c| c.is_ascii_digit())
+        {
+            return Err(SecurityError::Identity);
+        }
+        value.parse().map_err(|_| SecurityError::Identity)
+    }
+    let origin = cc_desk_remote_record::appbind::CanonicalOrigin::trusted(&wire.origin)
+        .map_err(|_| SecurityError::Identity)?;
+    if origin.as_str() != wire.origin {
+        return Err(SecurityError::Identity);
+    }
+    Ok(Some(crate::ClientTrust {
+        host_key_epoch: epoch(&wire.host_key_epoch)?,
+        client_key_epoch: epoch(&wire.client_key_epoch)?,
+        origin,
+    }))
+}
+fn bind_error(error: crate::BindError) -> i32 {
+    match error {
+        crate::BindError::Unsupported => -6,
+        crate::BindError::Deadline => -2,
+        crate::BindError::Cancelled => -3,
+        _ => -7,
+    }
+}
 /// 生产入口只接收固定枚举/预算；公开身份来自私有已登记元数据 import。
 pub extern "C" fn browser_tls_start(local_role: u32, peer_role: u32, budget_ms: u32) -> i32 {
     if STARTED.swap(true, Ordering::SeqCst)
@@ -84,6 +133,7 @@ pub extern "C" fn browser_tls_start(local_role: u32, peer_role: u32, budget_ms: 
         return -1;
     }
     let setup = (|| {
+        let trust = trust()?;
         let public = key(0)?;
         let peer = key(1)?;
         let signing = Arc::new(BrowserWasmSigningKey::new(public.clone(), unsafe {
@@ -117,12 +167,13 @@ pub extern "C" fn browser_tls_start(local_role: u32, peer_role: u32, budget_ms: 
                 Duration::from_millis(budget_ms as u64),
                 token.clone(),
             )
-            .await?;
+            .await
+            .map_err(error_code)?;
             if token.is_cancelled() {
-                return Err(SecurityError::Cancelled);
+                return Err(-3);
             }
             if crate::tls_clock::expired(pending._deadline) {
-                return Err(SecurityError::Deadline);
+                return Err(-2);
             }
             let e = pending.evidence();
             unsafe {
@@ -138,18 +189,38 @@ pub extern "C" fn browser_tls_start(local_role: u32, peer_role: u32, budget_ms: 
                     32,
                 )
             };
-            // 原Pending仍归本owner持有；暂不接AppBind，不发布应用权限。
+            if let Some(trust) = trust {
+                let mut established = crate::bind::browser_establish_client(pending, trust)
+                    .await
+                    .map_err(bind_error)?;
+                let facts =
+                    crate::bind::browser_management_facts(&established).map_err(bind_error)?;
+                if token.is_cancelled() {
+                    return Err(-3);
+                }
+                if crate::tls_clock::expired(established.deadline) {
+                    return Err(-2);
+                }
+                unsafe { management(facts.as_ptr(), facts.len() as u32) };
+                // 建立截止不是长期TTL；与原management owner共享读取/拒绝后续字节语义。
+                return tokio::select! {biased;
+                    _=token.cancelled()=>Err(-3),
+                    _=shutdown_requested()=>tokio::select!{biased;_=token.cancelled()=>Err(-3),result=established.io.shutdown()=>result.map_err(|_|-1)},
+                    result=crate::bind::management_read(&mut established.io)=>match result{crate::OwnerExit::Unsupported=>Err(-6),_=>Err(-1)},
+                };
+            }
+            // TLS-only模式仍保留原Pending语义。
             let result = tokio::select! { biased;
-                _=token.cancelled()=>Err(SecurityError::Cancelled),
-                _=crate::tls_clock::sleep(pending._deadline)=>Err(SecurityError::Deadline),
+                _=token.cancelled()=>Err(-3),
+                _=crate::tls_clock::sleep(pending._deadline)=>Err(-2),
                 _=shutdown_requested()=>{
                     tokio::select!{biased;
-                        _=token.cancelled()=>Err(SecurityError::Cancelled),
-                        _=crate::tls_clock::sleep(pending._deadline)=>Err(SecurityError::Deadline),
-                        result=pending._io.shutdown()=>result.map_err(|_|SecurityError::Tls),
+                        _=token.cancelled()=>Err(-3),
+                        _=crate::tls_clock::sleep(pending._deadline)=>Err(-2),
+                        result=pending._io.shutdown()=>result.map_err(|_|-1),
                     }
                 },
-                _=crate::browser_wasm_io::ended()=>Err(SecurityError::Tls),
+                _=crate::browser_wasm_io::ended()=>Err(-1),
             };
             drop(pending);
             result
@@ -179,17 +250,7 @@ pub extern "C" fn browser_tls_poll() {
             Poll::Ready(result) => {
                 drop(task);
                 CANCEL.with(|slot| slot.borrow_mut().take());
-                unsafe {
-                    report(
-                        result.err().map_or(-5, error_code),
-                        0,
-                        0,
-                        0,
-                        0,
-                        std::ptr::null(),
-                        0,
-                    )
-                };
+                unsafe { report(result.err().unwrap_or(-5), 0, 0, 0, 0, std::ptr::null(), 0) };
             }
         }
     }

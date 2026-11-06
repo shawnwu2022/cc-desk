@@ -292,7 +292,7 @@ new network protocol. Raw instance, memory, allocators and helpers remain inside
 the controlled Worker. No plaintext, granted operation or native application IPC
 is exported. Role 0 means Client and role 1 means Host; other values reject.
 
-`tls_clock.rs` isolates only TLS setup timing. Native Deadline remains exactly a
+`tls_clock.rs` isolates TLS and AppBind setup timing. Native Deadline remains exactly a
 Tokio Instant, with the original checked budget, timer and final eligibility
 samples. On wasm32-unknown-unknown, it is a real monotonic absolute sample in the
 same performance clock domain as the existing signing bridge. One original
@@ -336,11 +336,11 @@ at the real evidence callback and verify that the consumer sees no success.
 The evidence Promise returns only the original TLS protocol/cipher/group/full
 handshake/RPK/ALPN/peer endpoint ID. It is historical transport proof, never
 AppBind, a grant, session authorization, online Ready or application authority.
-The owner continues to watch the original deadline, cancellation and raw EOF
-while retaining Pending. There is no browser AppBind owner in this checkpoint:
-both existing Bind establishment paths extract native deadlines, preserve native
-behavior, and consume a WASM Pending with Unsupported before within/tokio::spawn.
-Unsupported creates no bound owner, fallback, grant or authorization.
+Without explicit ClientTrust the owner continues to watch the original deadline,
+cancellation and raw EOF while retaining Pending (the TLS-only mode).
+The optional AppBind mode below consumes Pending through original establishment.
+All eight existing public native Bind factories still reject WASM with Unsupported
+before establishment or tokio::spawn; Data/grant/peer capabilities remain closed.
 
 Owner waitClosed waits for Rust future termination plus this entry's original
 transport read/write/retirement Promises. A never-settling Promise keeps it
@@ -388,3 +388,79 @@ its final write Promise is held, and client evidence remains unpublished until
 the original Promise resolves. Rejecting that Promise cannot succeed.
 
 Reference: [WebAuthn Level 3 assertion verification](https://www.w3.org/TR/webauthn-3/#sctn-verifying-assertion).
+
+## Browser ManagementOnly AppBind checkpoint
+
+`startBrowserTlsWorker` accepts an optional explicit `clientTrust` object with
+`hostKeyEpoch` and `clientKeyEpoch` as canonical unsigned decimal u64 strings and
+`origin` as the already approved canonical relay WSS origin. For example, values
+above JavaScript's safe integer range remain strings throughout the boundary.
+No default epoch, origin, identity or authority is supplied. Rust validates the
+origin with the original `CanonicalOrigin::trusted` and requires exact canonical
+spelling. The Worker's HTTPS origin does not stand in for the relay WSS origin.
+Enrollment/configuration delivery of this trusted metadata remains a caller duty.
+
+With this configuration the production Rust single-future owner calls the original
+`establish_client` through a crate-private facade fixed to minor 0,
+ManagementOnly, and grant-management 0. Original canonical encoding, real random
+nonces, transcript, TLS exporter, directional HMAC, pinned identities, epochs and
+role checks run unchanged. Establishment uses the same captured absolute setup
+deadline through the clock seam. Progress does not refresh it. The last
+ClientConfirm write and flush must complete, followed by cancellation/deadline
+checks, before the separate `management` Promise can resolve. The TLS `evidence`
+Promise remains transport evidence alone. Startup failure rejects both Promises;
+loading cancellation retains the original compile/instantiate Promises to settle.
+
+Management facts expose only kind/profile/minor, verified endpoint IDs, exact
+epoch strings and relay origin. Raw context/binding/exporter, nonces, MACs,
+plaintext, memory and instance stay private. The owner retains original
+Established IO/context/binding until termination. Successful establishment ends
+the setup timer; it does not make setup D a connection lifetime or grant expiry.
+Afterward the same management-read behavior as Native waits for cancellation,
+local shutdown or peer input: EOF closes, and any unsupported post-bind plaintext
+byte rejects. It never dispatches Data or claims RemoteReady. No grant issuance,
+grant expiry/revocation, peer install, application operations or Panel is connected.
+Cancellation here is the existing owner/broker authority cancellation only.
+
+Closing the main broker first sets the irreversible SAB terminal state and then
+posts the fixed private MessagePort close notification. The active Worker listens
+and schedules original cancellation even when the bound peer is silent and no
+setup timer remains. SAB checks remain the second fence. Close/abort/shutdown
+during establishment prevents late management publication. Started IO and crypto
+Promises remain with their respective owners until actual settlement; neither
+waitClosed is a Worker join or CryptoKey destruction proof. Callers still own
+Worker termination and its awaited exit, including suspended-browser recovery.
+
+The independent `npm run test:browser-appbind` requires
+CC_DESK_TEST_ONLY_APPBIND_WASM, CC_DESK_TEST_ONLY_APPBIND_GLUE and
+CC_DESK_TEST_ONLY_APPBIND_HOST; missing artifacts fail explicitly. Build the first
+two exactly as the preceding TLS-owner lib -> thin rustc wrapper -> matching
+official wasm-bindgen commands. Build the Host test harness from current source:
+
+```powershell
+cargo test --offline --locked --manifest-path remote/Cargo.toml -p cc-desk-remote-security --all-features --lib --no-run --message-format=json
+```
+
+Select the executable of the `cc_desk_remote_security` test artifact from that
+Cargo JSON and set CC_DESK_TEST_ONLY_APPBIND_HOST to that exact path. The Node
+test spawns only this owned executable with
+`--exact bind::browser_fixture::BrowserAppBind_LoopbackFixture_001 --nocapture`
+and an explicit CC_DESK_TEST_ONLY_APPBIND_MODE. With no such environment variable,
+ordinary cargo test executes a genuine native in-memory original connect/accept
+and public bind_client/bind_host roundtrip instead of waiting for an external
+client or skipping. All mutation hooks are cfg(test) only. The normal loopback
+Host runs the original public bind_host with default Hooks.
+
+The actual WASM/Worker matrix checks original Host establishment, exact large
+epochs and endpoint facts, wrong identity/role/epochs/origin/MAC/direction,
+cross-TLS HostConfirm MAC replay, silence and encrypted byte progress under the
+original D, final ClientConfirm flush success/failure/cancel/late completion,
+same-turn publication fences, startup/load failures and custody, unsupported
+post-bind data, and main-broker-only cancellation of a silent bound owner after
+setup D. Cross-TLS replay also changes fresh transcript nonces; isolated exporter
+binding remains covered by original native binding tests. A separately recorded
+TEST_ONLY temporary qualification probe invokes all eight public native factories
+with actual WASM Pending, observes Unsupported without runtime traps, and restores
+the exact production source before final codegen. No probe switch/API is shipped.
+The test IO is explicitly Node-owned ephemeral loopback TCP with browser-global
+shims; this is not real browser WebSocket/mux, outer WSS or phone end-to-end proof.

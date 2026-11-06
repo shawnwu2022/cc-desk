@@ -6,10 +6,12 @@ export type BrowserTlsTransport=Readonly<{
  close():void;waitClosed():Promise<void>;
 }>;
 export type BrowserTlsEvidence=Readonly<{protocol:number;cipher:number;group:number;fullHandshake:boolean;rawPublicKey:boolean;alpnMatches:boolean;peerEndpointId:Uint8Array}>;
-export type BrowserTlsWorker=Readonly<{evidence:Promise<BrowserTlsEvidence>;close():void;shutdown():void;waitClosed():Promise<void>}>;
+export type BrowserClientTrust=Readonly<{hostKeyEpoch:string;clientKeyEpoch:string;origin:string}>;
+export type BrowserManagementFacts=Readonly<{kind:'ManagementOnly';hostEndpointId:string;clientEndpointId:string;hostKeyEpoch:string;clientKeyEpoch:string;origin:string;profile:number;minor:number}>;
+export type BrowserTlsWorker=Readonly<{evidence:Promise<BrowserTlsEvidence>;management:Promise<BrowserManagementFacts>|undefined;close():void;shutdown():void;waitClosed():Promise<void>}>;
 type Api={memory:WebAssembly.Memory;browser_tls_start(l:number,p:number,b:number):number;browser_tls_poll():void;browser_tls_cancel():void;browser_tls_event(k:number):void;__wbindgen_start():void};
 /** 只在可信DedicatedWorker启动一次；IO能力/官方glue/实例都不发布到Window。 */
-export async function startBrowserTlsWorker(options:Readonly<{wasm:BufferSource|WebAssembly.Module;glue:WebAssembly.ModuleImports;bridge:BrowserTlsWorkerBridge;localSpki:Uint8Array;peerSpki:Uint8Array;transport:BrowserTlsTransport;localRole?:number;peerRole?:number;signal?:AbortSignal}>):Promise<BrowserTlsWorker>{
+export async function startBrowserTlsWorker(options:Readonly<{wasm:BufferSource|WebAssembly.Module;glue:WebAssembly.ModuleImports;bridge:BrowserTlsWorkerBridge;localSpki:Uint8Array;peerSpki:Uint8Array;transport:BrowserTlsTransport;localRole?:number;peerRole?:number;signal?:AbortSignal;clientTrust?:BrowserClientTrust}>):Promise<BrowserTlsWorker>{
  const bridge=Object.freeze({...options.bridge}),transport=options.transport,signal=options.signal,wasm=options.wasm,glue=options.glue,suppliedDeadline=bridge.setupDeadline;
  const scope=globalThis as typeof globalThis&{DedicatedWorkerGlobalScope?:new()=>object};
  if(typeof scope.DedicatedWorkerGlobalScope!=='function'||!(globalThis instanceof scope.DedicatedWorkerGlobalScope)||!globalThis.crossOriginIsolated||!globalThis.isSecureContext||globalThis.location?.origin!==bridge.origin)throw Error('browser TLS trusted Worker required');
@@ -17,27 +19,33 @@ export async function startBrowserTlsWorker(options:Readonly<{wasm:BufferSource|
  const deadline=suppliedDeadline;
  const now=()=>performance.timeOrigin+performance.now();
  const localSpki=Uint8Array.from(options.localSpki),peerSpki=Uint8Array.from(options.peerSpki),localRole=options.localRole??0,peerRole=options.peerRole??1;
+ const trust=options.clientTrust===undefined?undefined:Object.freeze({...options.clientTrust});
+ let trustBytes:Uint8Array|undefined,managementBound=false;
  let api:Api|undefined,memory:WebAssembly.Memory|undefined,queued=false,rustDone=false,stopping=false,ioClosed=false,transportDone=false,retired=false,runtimeFailure:Error|undefined;
  let timer:ReturnType<typeof setTimeout>|undefined,timerEpoch=0,timerDeadline:number|undefined;
  let reading:Promise<Uint8Array|null>|undefined,writing:Promise<void>|undefined,rx:Uint8Array|undefined,rxOffset=0,eof=false,ioError=false;
  let resolveEvidence!:(value:BrowserTlsEvidence)=>void,rejectEvidence!:(error:Error)=>void,resolveClosed!:()=>void,rejectClosed!:(error:Error)=>void;
  const evidence=new Promise<BrowserTlsEvidence>((resolve,reject)=>{resolveEvidence=resolve;rejectEvidence=reject;});
+ let resolveManagement:((value:BrowserManagementFacts)=>void)|undefined,rejectManagement:((error:Error)=>void)|undefined;
+ const management=trust===undefined?undefined:new Promise<BrowserManagementFacts>((resolve,reject)=>{resolveManagement=resolve;rejectManagement=reject;});void management?.catch(()=>{});
+ function fail(error:Error){rejectEvidence(error);rejectManagement?.(error);}
  const closed=new Promise<void>((resolve,reject)=>{resolveClosed=resolve;rejectClosed=reject;});void evidence.catch(()=>{});void closed.catch(()=>{});
  let signer:ReturnType<typeof createBrowserTlsWasmImports>|undefined;
  const externallyStopped=()=>signal?.aborted===true||Atomics.load(new Int32Array(bridge.shared,0,1),0)!==0;
  function sealSigning(){if(signer)signer.close();else{const control=new Int32Array(bridge.shared,0,5);Atomics.store(control,0,1);Atomics.store(control,1,3);Atomics.notify(control,1);try{bridge.port.postMessage('close');}catch{/* 原主线程仍可看到共享关闭标记。 */}}}
- function retire(){if(rustDone&&transportDone&&!reading&&!writing&&!retired){retired=true;rx=undefined;disarm();signal?.removeEventListener('abort',close);if(runtimeFailure)rejectClosed(runtimeFailure);else resolveClosed();}}
- function schedule(){if(queued||rustDone||!api)return;queued=true;queueMicrotask(()=>{queued=false;if(rustDone||!api)return;try{if(externallyStopped())close();api.browser_tls_poll();}catch{rustDone=true;runtimeFailure=Error('browser TLS runtime failed');rejectEvidence(runtimeFailure);closeIo();sealSigning();retire();}});}
+ function retire(){if(rustDone&&transportDone&&!reading&&!writing&&!retired){retired=true;rx=undefined;disarm();signal?.removeEventListener('abort',close);bridge.port.removeEventListener('message',brokerClosed);bridge.port.removeEventListener('messageerror',close);if(runtimeFailure)rejectClosed(runtimeFailure);else resolveClosed();}}
+ function schedule(){if(queued||rustDone||!api)return;queued=true;queueMicrotask(()=>{queued=false;if(rustDone||!api)return;try{if(externallyStopped())close();api.browser_tls_poll();}catch{rustDone=true;runtimeFailure=Error('browser TLS runtime failed');fail(runtimeFailure);closeIo();sealSigning();retire();}});}
  function event(kind:number){if(!rustDone&&api){api.browser_tls_event(kind);schedule();}}
  function closeIo(){
   if(ioClosed)return;ioClosed=true;rx=undefined;
   try{transport.close();}catch{ioError=true;runtimeFailure=Error('browser transport close failed');}
   let operation:Promise<void>;try{operation=transport.waitClosed();}catch{runtimeFailure=Error('browser transport retirement failed');transportDone=true;event(2);retire();return;}
-  void operation.then(()=>{transportDone=true;event(2);retire();},()=>{runtimeFailure=Error('browser transport retirement failed');transportDone=true;event(2);rejectEvidence(runtimeFailure);retire();});
+  void operation.then(()=>{transportDone=true;event(2);retire();},()=>{runtimeFailure=Error('browser transport retirement failed');transportDone=true;event(2);fail(runtimeFailure);retire();});
  }
  function close(){if(stopping)return;stopping=true;sealSigning();if(api&&!rustDone)api.browser_tls_cancel();closeIo();schedule();}
- function shutdown(){if(api&&!rustDone){api.browser_tls_event(5);schedule();}}
- function stopLoading(){rustDone=true;rejectEvidence(Error(externallyStopped()||stopping?'browser TLS cancelled':'browser TLS deadline'));sealSigning();closeIo();retire();}
+ function shutdown(){if(trust&&!managementBound){close();return;}if(api&&!rustDone){api.browser_tls_event(5);schedule();}}
+ function brokerClosed(){close();}
+ function stopLoading(){rustDone=true;fail(Error(externallyStopped()||stopping?'browser TLS cancelled':'browser TLS deadline'));sealSigning();closeIo();retire();}
  function disarm(){timerEpoch++;if(timer!==undefined)clearTimeout(timer);timer=undefined;timerDeadline=undefined;}
  function arm(value:number){
   if(rustDone||!Number.isFinite(value)||value>deadline){close();return;}
@@ -57,6 +65,16 @@ export async function startBrowserTlsWorker(options:Readonly<{wasm:BufferSource|
   return new Uint8Array(memory.buffer,pointer,length);
  }
  function ownerImports(){return {cc_desk_browser_owner_v1:{
+  client_trust:(pointer:number,capacity:number)=>{if(!trustBytes)return 0;if(capacity!==2304||trustBytes.length>capacity)return -1;range(pointer,trustBytes.length).set(trustBytes);return trustBytes.length;},
+  management:(pointer:number,length:number)=>{
+   try{
+    if(!trust||managementBound||stopping||ioClosed||ioError||eof||externallyStopped()||now()>=deadline||length<1||length>4096)throw Error('browser management publication');
+    const value=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(range(pointer,length))) as BrowserManagementFacts;
+    const keys=['kind','profile','minor','hostEndpointId','clientEndpointId','hostKeyEpoch','clientKeyEpoch','origin'];
+    if(!value||Object.keys(value).length!==keys.length||!keys.every(key=>Object.hasOwn(value,key))||value.kind!=='ManagementOnly'||value.profile!==1||value.minor!==0||!/^[0-9a-f]{64}$/.test(value.hostEndpointId)||!/^[0-9a-f]{64}$/.test(value.clientEndpointId)||value.hostKeyEpoch!==trust.hostKeyEpoch||value.clientKeyEpoch!==trust.clientKeyEpoch||value.origin!==trust.origin)throw Error('browser management facts');
+    managementBound=true;resolveManagement?.(Object.freeze(value));
+   }catch{fail(Error('browser AppBind rejected'));close();}
+  },
   now,deadline:()=>externallyStopped()||stopping?NaN:deadline,schedule,arm_timer:arm,disarm_timer:disarm,
   public_key:(which:number,pointer:number,capacity:number)=>{try{const key=which===0?localSpki:which===1?peerSpki:undefined;if(capacity!==91||key?.length!==91)return -1;range(pointer,91).set(key);return 91;}catch{return -1;}},
   read:(pointer:number,capacity:number)=>{try{if(ioClosed||ioError||externallyStopped()||capacity<1||capacity>CAP)return -2;if(rx){const n=Math.min(capacity,rx.length-rxOffset);range(pointer,n).set(rx.subarray(rxOffset,rxOffset+n));rxOffset+=n;if(rxOffset===rx.length){rx=undefined;queueMicrotask(pumpRead);}return n;}if(eof)return 0;pumpRead();return -1;}catch{return -2;}},
@@ -66,25 +84,27 @@ export async function startBrowserTlsWorker(options:Readonly<{wasm:BufferSource|
   close_io:closeIo,
   report:(code:number,protocol:number,cipher:number,group:number,flags:number,pointer:number,length:number)=>{
    if(code===1){if(stopping||ioClosed||ioError||eof||Atomics.load(new Int32Array(bridge.shared,0,1),0)!==0||now()>=deadline||length!==32){close();return;}resolveEvidence(Object.freeze({protocol,cipher,group,fullHandshake:(flags&1)!==0,rawPublicKey:(flags&2)!==0,alpnMatches:(flags&4)!==0,peerEndpointId:range(pointer,32).slice()}));return;}
-   rustDone=true;rejectEvidence(Error(code===-2?'browser TLS deadline':code===-3?'browser TLS cancelled':code===-4?'browser TLS role':'browser TLS rejected'));sealSigning();closeIo();retire();
+   rustDone=true;const failure=Error(code===-6?'browser AppBind Unsupported':code===-7?'browser AppBind rejected':code===-2?'browser TLS deadline':code===-3?'browser TLS cancelled':code===-4?'browser TLS role':'browser TLS rejected');fail(failure);sealSigning();closeIo();retire();
   },
  }};}
  signal?.addEventListener('abort',close,{once:true});
+ bridge.port.addEventListener('message',brokerClosed);bridge.port.addEventListener('messageerror',close);bridge.port.start();
  try{
-  if(externallyStopped()||now()>=deadline){stopLoading();return Object.freeze({evidence,close,shutdown,waitClosed:()=>closed});}
-  if(!Number.isInteger(localRole)||!Number.isInteger(peerRole)||localRole<0||localRole>1||peerRole<0||peerRole>1){rustDone=true;rejectEvidence(Error('browser TLS role'));sealSigning();closeIo();retire();return Object.freeze({evidence,close,shutdown,waitClosed:()=>closed});}
+  if(externallyStopped()||now()>=deadline){stopLoading();return Object.freeze({evidence,management,close,shutdown,waitClosed:()=>closed});}
+  if(trust){const epoch=(value:unknown)=>typeof value==='string'&&/^(0|[1-9][0-9]{0,19})$/.test(value)&&BigInt(value)<=18446744073709551615n;if(Object.keys(trust).length!==3||!epoch(trust.hostKeyEpoch)||!epoch(trust.clientKeyEpoch)||typeof trust.origin!=='string'||trust.origin.length>2048)throw Error('browser AppBind trust');trustBytes=new TextEncoder().encode(JSON.stringify(trust));}
+  if(!Number.isInteger(localRole)||!Number.isInteger(peerRole)||localRole<0||localRole>1||peerRole<0||peerRole>1){rustDone=true;fail(Error('browser TLS role'));sealSigning();closeIo();retire();return Object.freeze({evidence,management,close,shutdown,waitClosed:()=>closed});}
   signer=createBrowserTlsWasmImports(bridge,localSpki,()=>memory);
   // 原始加载Promise由本函数持续持有到settle；取消不使用race丢弃迟到实例。
   const compilation=wasm instanceof WebAssembly.Module?undefined:WebAssembly.compile(wasm);
   const module=wasm instanceof WebAssembly.Module?wasm:await compilation!;
-  if(stopping||externallyStopped()||now()>=deadline){stopLoading();return Object.freeze({evidence,close,shutdown,waitClosed:()=>closed});}
+  if(stopping||externallyStopped()||now()>=deadline){stopLoading();return Object.freeze({evidence,management,close,shutdown,waitClosed:()=>closed});}
   const instantiation=WebAssembly.instantiate(module,{...signer.imports,'./fixture_bg.js':glue,...ownerImports()});
   const instance=await instantiation;
-  if(stopping||externallyStopped()||now()>=deadline){stopLoading();return Object.freeze({evidence,close,shutdown,waitClosed:()=>closed});}
+  if(stopping||externallyStopped()||now()>=deadline){stopLoading();return Object.freeze({evidence,management,close,shutdown,waitClosed:()=>closed});}
   api=instance.exports as unknown as Api;memory=api.memory;
   (glue.__wbg_set_wasm as (value:WebAssembly.Exports)=>void)(instance.exports);api.__wbindgen_start();
-  if(api.browser_tls_start(localRole,peerRole,Math.max(1,Math.ceil(deadline-now())))!==1){rustDone=true;rejectEvidence(Error('browser TLS startup rejected'));closeIo();sealSigning();retire();}
+  if(api.browser_tls_start(localRole,peerRole,Math.max(1,Math.ceil(deadline-now())))!==1){rustDone=true;fail(Error('browser TLS startup rejected'));closeIo();sealSigning();retire();}
   else{pumpRead();schedule();}
- }catch{rustDone=true;closeIo();sealSigning();rejectEvidence(Error('browser TLS startup failed'));retire();}
- return Object.freeze({evidence,close,shutdown,waitClosed:()=>closed});
+ }catch{rustDone=true;closeIo();sealSigning();fail(Error('browser TLS startup failed'));retire();}
+ return Object.freeze({evidence,management,close,shutdown,waitClosed:()=>closed});
 }
