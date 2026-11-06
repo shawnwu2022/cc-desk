@@ -2,7 +2,7 @@
 //! Candidate markers only exclude. The host retains the actual install capability.
 use base64::{engine::general_purpose::STANDARD, Engine};
 use minisign_verify::{PublicKey, Signature};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use url::Url;
@@ -10,6 +10,175 @@ use url::Url;
 pub(crate) const REPOSITORY: &str = "shawnwu2022/cc-desk";
 pub(crate) const MAX_PACKAGE_BYTES: u64 = 256 * 1024 * 1024;
 pub(crate) const MAX_SIGNATURE_BYTES: u64 = 16 * 1024;
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum UpdateChannel {
+    #[default]
+    Stable,
+    Test,
+    Preview,
+}
+impl UpdateChannel {
+    pub(crate) fn from_config(value: Option<&str>) -> Result<Self, UpdateFailure> {
+        match value {
+            None | Some("stable") => Ok(Self::Stable),
+            Some("test") => Ok(Self::Test),
+            Some("preview") => Ok(Self::Preview),
+            _ => Err(failure("UPDATER_CONFIGURATION_INVALID", "configuration")),
+        }
+    }
+    pub(crate) fn admits(self, release: ReleaseChannel) -> bool {
+        matches!(release, ReleaseChannel::Stable)
+            || matches!(self, Self::Test | Self::Preview)
+                && matches!(release, ReleaseChannel::Beta | ReleaseChannel::Rc)
+            || self == Self::Preview && release == ReleaseChannel::Preview
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReleaseChannel {
+    Stable,
+    Beta,
+    Rc,
+    Preview,
+}
+impl ReleaseChannel {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Stable => "stable",
+            Self::Beta => "beta",
+            Self::Rc => "rc",
+            Self::Preview => "preview",
+        }
+    }
+}
+
+pub(crate) fn release_channel(version: &str) -> Option<ReleaseChannel> {
+    let parsed = semver::Version::parse(version).ok()?;
+    if version.len() > 64 || parsed.to_string() != version || !parsed.build.is_empty() {
+        return None;
+    }
+    if parsed.pre.is_empty() {
+        return Some(ReleaseChannel::Stable);
+    }
+    let (label, sequence) = parsed
+        .pre
+        .as_str()
+        .split_once('.')
+        .map_or((parsed.pre.as_str(), None), |(label, sequence)| {
+            (label, Some(sequence))
+        });
+    if sequence.is_some_and(|sequence| {
+        sequence.is_empty() || !sequence.bytes().all(|b| b.is_ascii_digit())
+    }) {
+        return None;
+    }
+    match label {
+        "beta" => Some(ReleaseChannel::Beta),
+        "rc" => Some(ReleaseChannel::Rc),
+        "preview" => Some(ReleaseChannel::Preview),
+        _ => None,
+    }
+}
+
+pub(crate) fn published_release_channel(release: &Value) -> Option<ReleaseChannel> {
+    let version = release["tag_name"].as_str()?.strip_prefix('v')?;
+    let channel = release_channel(version)?;
+    if release["draft"] != false
+        || release["prerelease"] != (channel != ReleaseChannel::Stable)
+        || release["published_at"].as_str().is_none_or(str::is_empty)
+    {
+        return None;
+    }
+    Some(channel)
+}
+
+pub(crate) fn select_release<'a>(
+    releases: &'a [Value],
+    current: &str,
+    selected: UpdateChannel,
+) -> Result<Option<&'a Value>, UpdateFailure> {
+    let current = semver::Version::parse(current)
+        .map_err(|_| failure("UPDATER_CONFIGURATION_INVALID", "configuration"))?;
+    let mut best: Option<(&Value, semver::Version)> = None;
+    for release in releases {
+        let Some(channel) = published_release_channel(release) else {
+            continue;
+        };
+        if !selected.admits(channel) {
+            continue;
+        }
+        let version = release["tag_name"]
+            .as_str()
+            .and_then(|s| s.strip_prefix('v'))
+            .and_then(|s| semver::Version::parse(s).ok())
+            .ok_or_else(rejected)?;
+        if version <= current {
+            continue;
+        }
+        if let Some((previous, best_version)) = &best {
+            if version == *best_version && release != *previous {
+                return Err(rejected());
+            }
+            if version <= *best_version {
+                continue;
+            }
+        }
+        best = Some((release, version));
+    }
+    Ok(best.map(|(release, _)| release))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum CancelStatus {
+    Requested,
+    TooLate,
+}
+
+#[derive(Default)]
+pub(crate) struct InstallCancellation {
+    state: std::sync::atomic::AtomicU8,
+    notify: tokio::sync::Notify,
+}
+impl InstallCancellation {
+    pub(crate) fn request(&self) -> CancelStatus {
+        use std::sync::atomic::Ordering;
+        match self
+            .state
+            .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
+        {
+            Ok(_) | Err(1) => {
+                self.notify.notify_one();
+                CancelStatus::Requested
+            }
+            Err(_) => CancelStatus::TooLate,
+        }
+    }
+    pub(crate) fn check(&self) -> Result<(), UpdateFailure> {
+        if self.state.load(std::sync::atomic::Ordering::Acquire) == 1 {
+            Err(failure("UPDATER_CANCELLED", "download"))
+        } else {
+            Ok(())
+        }
+    }
+    pub(crate) fn commit(&self) -> Result<(), UpdateFailure> {
+        use std::sync::atomic::Ordering;
+        self.state
+            .compare_exchange(0, 2, Ordering::AcqRel, Ordering::Acquire)
+            .map(|_| ())
+            .map_err(|_| failure("UPDATER_CANCELLED", "download"))
+    }
+    pub(crate) async fn cancelled(&self) {
+        loop {
+            if self.check().is_err() {
+                return;
+            }
+            self.notify.notified().await;
+        }
+    }
+}
 
 pub(crate) fn localized_release_notes(
     manifest: &Value,
@@ -124,11 +293,10 @@ pub(crate) fn validate_official_release(
     platform: &str,
     download_url: &str,
     manifest: &Value,
+    selected: UpdateChannel,
 ) -> Result<OfficialRelease, UpdateFailure> {
-    let parsed = semver::Version::parse(version).map_err(|_| rejected())?;
-    if !parsed.pre.is_empty()
-        || parsed.to_string() != version
-        || version.len() > 64
+    let channel = release_channel(version).ok_or_else(rejected)?;
+    if !selected.admits(channel)
         || !manifest.is_object()
         || matches!(
             manifest["channel"].as_str(),
@@ -153,8 +321,7 @@ pub(crate) fn validate_official_release(
         .filter_map(|line| line.strip_prefix("Source: "))
         .collect();
     if release["draft"] != false
-        || release["prerelease"] != false
-        || release["published_at"].as_str().is_none()
+        || published_release_channel(release) != Some(channel)
         || release["tag_name"].as_str() != Some(tag.as_str())
         || release["html_url"].as_str()
             != Some(format!("https://github.com/{REPOSITORY}/releases/tag/{tag}").as_str())

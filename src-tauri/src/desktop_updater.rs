@@ -1,5 +1,5 @@
 //! Read-only discovery and one-shot, host-retained official update installation.
-use crate::updater_http::{bytes, http_client, probe_proxy, ProxyProbe};
+use crate::updater_http::{bytes, http_client, package_bytes, probe_proxy, ProxyProbe};
 use crate::updater_policy::*;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Serialize;
@@ -11,7 +11,29 @@ use tauri_plugin_updater::{Update, UpdaterExt};
 use tokio::sync::Mutex;
 
 #[derive(Default)]
-pub(crate) struct UpdaterService(Mutex<UpdaterState>);
+pub(crate) struct UpdaterService {
+    state: Mutex<UpdaterState>,
+    cancellation: std::sync::Mutex<Option<(String, Arc<InstallCancellation>)>>,
+}
+impl UpdaterService {
+    fn cancellation(&self, id: &str) -> Result<Arc<InstallCancellation>, UpdateFailure> {
+        self.cancellation
+            .lock()
+            .map_err(|_| failure("UPDATER_FAILED", "admission"))?
+            .as_ref()
+            .filter(|(current, _)| current == id)
+            .map(|(_, control)| control.clone())
+            .ok_or_else(|| failure("UPDATER_ADMISSION_STALE", "admission"))
+    }
+    fn set_cancellation(&self, id: Option<&str>) -> Result<(), UpdateFailure> {
+        *self
+            .cancellation
+            .lock()
+            .map_err(|_| failure("UPDATER_FAILED", "admission"))? =
+            id.map(|id| (id.to_owned(), Arc::new(InstallCancellation::default())));
+        Ok(())
+    }
+}
 #[derive(Default)]
 struct UpdaterState {
     pending: Option<PendingUpdate>,
@@ -22,6 +44,7 @@ struct PendingUpdate {
     update: Update,
     proof: OfficialRelease,
     proxy: Option<url::Url>,
+    selected_channel: UpdateChannel,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -33,6 +56,7 @@ pub(crate) struct UpdateSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     release_notes_by_locale: Option<std::collections::BTreeMap<&'static str, String>>,
     channel: &'static str,
+    selected_channel: UpdateChannel,
     install_eligible: bool,
     admission_id: Option<String>,
     official_release: Option<ReleaseSummary>,
@@ -56,6 +80,7 @@ struct AssetSummary {
 #[derive(Serialize)]
 pub(crate) struct UpdaterSettings {
     proxy: Option<String>,
+    channel: UpdateChannel,
 }
 fn main_window(window: &WebviewWindow) -> Result<(), UpdateFailure> {
     if window.label() != "main" {
@@ -99,6 +124,42 @@ fn configured_proxy() -> Result<Option<url::Url>, UpdateFailure> {
         .map_err(|_| failure("UPDATER_CONFIGURATION_INVALID", "configuration"))?;
     validated_proxy(config.updater_proxy.as_deref())
 }
+fn configured_channel() -> Result<UpdateChannel, UpdateFailure> {
+    let config = crate::store::get_app_config()
+        .map_err(|_| failure("UPDATER_CONFIGURATION_INVALID", "configuration"))?;
+    UpdateChannel::from_config(config.updater_channel.as_deref())
+}
+async fn release_selection(
+    client: &reqwest::Client,
+    current: &str,
+    selected: UpdateChannel,
+) -> Result<Option<(u64, String)>, UpdateFailure> {
+    let mut releases = Vec::new();
+    for page in 1..=10 {
+        let value = api(client, &format!("releases?per_page=25&page={page}")).await?;
+        let entries = value
+            .as_array()
+            .filter(|entries| entries.len() <= 25)
+            .ok_or_else(|| failure("UPDATER_MANIFEST_INVALID", "check"))?;
+        releases.extend(entries.iter().cloned());
+        if entries.len() < 25 {
+            return select_release(&releases, current, selected)?
+                .map(|release| {
+                    let id = release["id"]
+                        .as_u64()
+                        .filter(|id| *id > 0)
+                        .ok_or_else(|| failure("UPDATER_NOT_OFFICIAL", "provenance"))?;
+                    let version = release["tag_name"]
+                        .as_str()
+                        .and_then(|s| s.strip_prefix('v'))
+                        .ok_or_else(|| failure("UPDATER_NOT_OFFICIAL", "provenance"))?;
+                    Ok((id, version.to_owned()))
+                })
+                .transpose();
+        }
+    }
+    Err(failure("UPDATER_CATALOG_LIMIT", "check"))
+}
 async fn api(client: &reqwest::Client, path: &str) -> Result<Value, UpdateFailure> {
     serde_json::from_slice(
         &bytes(
@@ -114,6 +175,7 @@ async fn official_proof(
     client: &reqwest::Client,
     update: &Update,
     release_id: Option<u64>,
+    selected: UpdateChannel,
 ) -> Result<OfficialRelease, UpdateFailure> {
     let path = release_id.map_or_else(|| "releases/latest".into(), |id| format!("releases/{id}"));
     let release = api(client, &path).await?;
@@ -125,7 +187,11 @@ async fn official_proof(
         &platform,
         update.download_url.as_str(),
         &update.raw_json,
+        selected,
     )?;
+    if release_id.is_some_and(|id| id != proof.release_id) {
+        return Err(failure("UPDATER_NOT_OFFICIAL", "provenance"));
+    }
     let mut reference = api(client, &format!("git/ref/tags/v{}", proof.version)).await?;
     // Both official lightweight and annotated tags resolve to the exact source.
     for _ in 0..3 {
@@ -176,7 +242,10 @@ pub(crate) fn get_updater_settings(
     let proxy = configured_proxy()
         .map_err(report)?
         .map(|url| url.to_string());
-    Ok(UpdaterSettings { proxy })
+    Ok(UpdaterSettings {
+        proxy,
+        channel: configured_channel().map_err(report)?,
+    })
 }
 #[tauri::command]
 pub(crate) async fn test_updater_proxy(
@@ -193,7 +262,7 @@ pub(crate) async fn save_updater_settings(
     service: State<'_, UpdaterService>,
 ) -> Result<(), UpdateFailure> {
     main_window(&window)?;
-    let mut state = service.0.lock().await;
+    let mut state = service.state.lock().await;
     if state.install_started {
         return Err(report(failure(
             "UPDATER_INSTALL_OUTCOME_UNKNOWN",
@@ -204,7 +273,27 @@ pub(crate) async fn save_updater_settings(
         .map_err(report)?
         .map(|url| url.to_string());
     state.pending = None;
+    service.set_cancellation(None).map_err(report)?;
     crate::store::update_app_config(json!({ "updaterProxy": value }))
+        .map_err(|_| report(failure("UPDATER_SETTINGS_SAVE_FAILED", "configuration")))
+}
+#[tauri::command]
+pub(crate) async fn save_updater_channel(
+    window: WebviewWindow,
+    channel: UpdateChannel,
+    service: State<'_, UpdaterService>,
+) -> Result<(), UpdateFailure> {
+    main_window(&window)?;
+    let mut state = service.state.lock().await;
+    if state.install_started {
+        return Err(report(failure(
+            "UPDATER_INSTALL_OUTCOME_UNKNOWN",
+            "install",
+        )));
+    }
+    state.pending = None;
+    service.set_cancellation(None).map_err(report)?;
+    crate::store::update_app_config(json!({ "updaterChannel": channel }))
         .map_err(|_| report(failure("UPDATER_SETTINGS_SAVE_FAILED", "configuration")))
 }
 #[tauri::command]
@@ -214,7 +303,7 @@ pub(crate) async fn check_desktop_update(
     service: State<'_, UpdaterService>,
 ) -> Result<UpdateSummary, UpdateFailure> {
     main_window(&window)?;
-    let mut state = service.0.lock().await;
+    let mut state = service.state.lock().await;
     if state.install_started {
         return Err(report(failure(
             "UPDATER_INSTALL_OUTCOME_UNKNOWN",
@@ -222,19 +311,42 @@ pub(crate) async fn check_desktop_update(
         )));
     }
     state.pending = None;
+    service.set_cancellation(None).map_err(report)?;
     let current = app.package_info().version.to_string();
     let proxy = configured_proxy().map_err(report)?;
+    let selected = configured_channel().map_err(report)?;
+    let client = http_client(proxy.as_ref()).map_err(report)?;
+    let selection = if selected == UpdateChannel::Stable {
+        None
+    } else {
+        release_selection(&client, &current, selected)
+            .await
+            .map_err(report)?
+    };
     let mut builder = app.updater_builder().timeout(Duration::from_secs(20));
+    if let Some((_, version)) = &selection {
+        let endpoint =
+            format!("https://github.com/{REPOSITORY}/releases/download/v{version}/latest.json")
+                .parse()
+                .map_err(|_| report(failure("UPDATER_NOT_OFFICIAL", "provenance")))?;
+        builder = builder
+            .endpoints(vec![endpoint])
+            .map_err(|e| plugin_error(e, "check"))?;
+    }
     if let Some(proxy) = &proxy {
         builder = builder.proxy(proxy.clone());
     }
-    let update = builder
-        .build()
-        .map_err(|e| plugin_error(e, "check"))?
-        .check()
-        .await
-        .map_err(|e| plugin_error(e, "check"))?;
-    let Some(mut update) = update else {
+    let update = if selected != UpdateChannel::Stable && selection.is_none() {
+        None
+    } else {
+        builder
+            .build()
+            .map_err(|e| plugin_error(e, "check"))?
+            .check()
+            .await
+            .map_err(|e| plugin_error(e, "check"))?
+    };
+    let Some(update) = update else {
         return Ok(UpdateSummary {
             version: current.clone(),
             current_version: current,
@@ -242,6 +354,7 @@ pub(crate) async fn check_desktop_update(
             release_notes: String::new(),
             release_notes_by_locale: None,
             channel: "stable",
+            selected_channel: selected,
             install_eligible: false,
             admission_id: None,
             official_release: None,
@@ -250,7 +363,12 @@ pub(crate) async fn check_desktop_update(
             eligibility_reason: None,
         });
     };
-    update.timeout = Some(Duration::from_secs(180));
+    if selection
+        .as_ref()
+        .is_some_and(|(_, version)| *version != update.version)
+    {
+        return Err(report(failure("UPDATER_NOT_OFFICIAL", "provenance")));
+    }
     let mut summary = UpdateSummary {
         version: update.version.clone(),
         current_version: current,
@@ -264,6 +382,7 @@ pub(crate) async fn check_desktop_update(
             .collect(),
         release_notes_by_locale: localized_release_notes(&update.raw_json),
         channel: "unverified",
+        selected_channel: selected,
         install_eligible: false,
         admission_id: None,
         official_release: None,
@@ -282,8 +401,14 @@ pub(crate) async fn check_desktop_update(
     {
         return Ok(summary);
     }
-    let client = http_client(proxy.as_ref()).map_err(report)?;
-    let proof = match official_proof(&client, &update, None).await {
+    let proof = match official_proof(
+        &client,
+        &update,
+        selection.as_ref().map(|(id, _)| *id),
+        selected,
+    )
+    .await
+    {
         Ok(proof) => proof,
         Err(error)
             if error.code == "UPDATER_NOT_OFFICIAL"
@@ -296,7 +421,9 @@ pub(crate) async fn check_desktop_update(
         Err(error) => return Err(report(error)),
     };
     let id = uuid::Uuid::new_v4().to_string();
-    summary.channel = "stable";
+    summary.channel = release_channel(&proof.version)
+        .ok_or_else(|| report(failure("UPDATER_NOT_OFFICIAL", "provenance")))?
+        .as_str();
     summary.install_eligible = true;
     summary.eligibility_reason = None;
     summary.admission_id = Some(id.clone());
@@ -316,7 +443,11 @@ pub(crate) async fn check_desktop_update(
         update,
         proof,
         proxy,
+        selected_channel: selected,
     });
+    service
+        .set_cancellation(summary.admission_id.as_deref())
+        .map_err(report)?;
     Ok(summary)
 }
 #[derive(Clone, Serialize)]
@@ -327,6 +458,25 @@ struct UpdateProgress {
     downloaded: u64,
     total: u64,
 }
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CancelSummary {
+    status: CancelStatus,
+}
+#[tauri::command]
+pub(crate) fn cancel_desktop_update(
+    window: WebviewWindow,
+    admission_id: String,
+    service: State<'_, UpdaterService>,
+) -> Result<CancelSummary, UpdateFailure> {
+    main_window(&window)?;
+    Ok(CancelSummary {
+        status: service
+            .cancellation(&admission_id)
+            .map_err(report)?
+            .request(),
+    })
+}
 #[tauri::command]
 pub(crate) async fn install_desktop_update(
     app: AppHandle,
@@ -336,7 +486,7 @@ pub(crate) async fn install_desktop_update(
     gate: State<'_, crate::version_history::maintenance::AdmissionGate>,
 ) -> Result<(), UpdateFailure> {
     main_window(&window)?;
-    let mut state = service.0.lock().await;
+    let mut state = service.state.lock().await;
     if state.install_started {
         return Err(report(failure(
             "UPDATER_INSTALL_OUTCOME_UNKNOWN",
@@ -350,6 +500,8 @@ pub(crate) async fn install_desktop_update(
     {
         return Err(report(failure("UPDATER_ADMISSION_STALE", "admission")));
     }
+    let cancellation = service.cancellation(&admission_id).map_err(report)?;
+    cancellation.check().map_err(report)?;
     let runtime = app.state::<Arc<crate::cli::native_runtime::NativeRuntime>>();
     if runtime
         .binding()
@@ -367,61 +519,94 @@ pub(crate) async fn install_desktop_update(
         return Err(report(failure("UPDATER_SESSIONS_BUSY", "admission")));
     }
     let pending = state.pending.take().expect("checked under updater mutex");
-    let prepared: Result<Vec<u8>, UpdateFailure> = async {
+    let prepare = async {
         let client = http_client(pending.proxy.as_ref())?;
-        if official_proof(&client, &pending.update, Some(pending.proof.release_id)).await?
+        if configured_channel()? != pending.selected_channel {
+            return Err(failure("UPDATER_ADMISSION_STALE", "admission"));
+        }
+        if official_proof(
+            &client,
+            &pending.update,
+            Some(pending.proof.release_id),
+            pending.selected_channel,
+        )
+        .await?
             != pending.proof
         {
             return Err(failure("UPDATER_ADMISSION_STALE", "provenance"));
         }
-        let mut downloaded = 0u64;
-        let data = pending
-            .update
-            .download(
-                |chunk, _| {
-                    downloaded = downloaded.saturating_add(chunk as u64);
-                    let _ = app.emit(
-                        "desktop-update-progress",
-                        UpdateProgress {
-                            admission_id: admission_id.clone(),
-                            phase: "downloading",
-                            downloaded,
-                            total: pending.proof.package.size,
-                        },
-                    );
-                },
-                || {},
-            )
-            .await
-            .map_err(|e| plugin_error(e, "download"))?;
+        cancellation.check()?;
+        let data = package_bytes(
+            &client,
+            &pending.proof.package.url,
+            pending.proof.package.size,
+            |downloaded| {
+                let _ = app.emit(
+                    "desktop-update-progress",
+                    UpdateProgress {
+                        admission_id: admission_id.clone(),
+                        phase: "downloading",
+                        downloaded,
+                        total: pending.proof.package.size,
+                    },
+                );
+            },
+        )
+        .await?;
+        let _ = app.emit(
+            "desktop-update-progress",
+            UpdateProgress {
+                admission_id: admission_id.clone(),
+                phase: "verifying",
+                downloaded: data.len() as u64,
+                total: pending.proof.package.size,
+            },
+        );
         verify_package(
             &data,
             &pending.update.signature,
             &public_key()?,
             &pending.proof.package,
         )?;
+        cancellation.check()?;
+        if configured_channel()? != pending.selected_channel {
+            return Err(failure("UPDATER_ADMISSION_STALE", "admission"));
+        }
         frozen
             .verify_quiescent(&admission_id)
             .map_err(|_| failure("UPDATER_SESSIONS_BUSY", "admission"))?;
         Ok(data)
-    }
-    .await;
+    };
+    let prepared: Result<Vec<u8>, UpdateFailure> = tokio::select! {
+        _ = cancellation.cancelled() => Err(failure("UPDATER_CANCELLED", "download")),
+        result = prepare => result,
+    };
     let data = match prepared {
         Ok(data) => data,
         Err(error) => {
+            let retired = service.set_cancellation(None);
             frozen
                 .release_review()
                 .map_err(|_| report(failure("UPDATER_INSTALL_OUTCOME_UNKNOWN", "admission")))?;
+            retired.map_err(report)?;
             return Err(report(error));
         }
     };
+    if let Err(error) = cancellation.commit() {
+        let retired = service.set_cancellation(None);
+        frozen
+            .release_review()
+            .map_err(|_| report(failure("UPDATER_INSTALL_OUTCOME_UNKNOWN", "admission")))?;
+        retired.map_err(report)?;
+        return Err(report(error));
+    }
     // Consume the capability before entering the effectful installer. Unknown
     // receipts never reopen admission or invoke the installer a second time.
     state.install_started = true;
     let _ = app.emit(
         "desktop-update-progress",
         UpdateProgress {
-            admission_id,
+            admission_id: admission_id.clone(),
             phase: "installing",
             downloaded: pending.proof.package.size,
             total: pending.proof.package.size,
@@ -435,7 +620,55 @@ pub(crate) async fn install_desktop_update(
         .update
         .install(data)
         .map_err(|_| report(failure("UPDATER_INSTALL_OUTCOME_UNKNOWN", "install")))?;
+    let _ = app.emit(
+        "desktop-update-progress",
+        UpdateProgress {
+            admission_id,
+            phase: "restarting",
+            downloaded: pending.proof.package.size,
+            total: pending.proof.package.size,
+        },
+    );
     // Windows starts the official installer and exits in the Tauri plugin.
     // Other desktop platforms finish replacement before a normal app restart.
     app.restart();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn UpdateCancellation_RetiredAdmissionCannotAffectReplacement_009() {
+        let service = UpdaterService::default();
+        service.set_cancellation(Some("old-admission")).unwrap();
+        let old = service.cancellation("old-admission").unwrap();
+        service.set_cancellation(Some("new-admission")).unwrap();
+        assert_eq!(
+            service.cancellation("old-admission").err().unwrap().code,
+            "UPDATER_ADMISSION_STALE"
+        );
+        assert_eq!(old.request(), CancelStatus::Requested);
+        let replacement = service.cancellation("new-admission").unwrap();
+        replacement.commit().unwrap();
+        assert_eq!(replacement.request(), CancelStatus::TooLate);
+        service.set_cancellation(None).unwrap();
+        assert_eq!(
+            service.cancellation("new-admission").err().unwrap().code,
+            "UPDATER_ADMISSION_STALE"
+        );
+    }
+
+    #[tokio::test]
+    #[allow(non_snake_case)]
+    async fn UpdateCancellation_DownloadStateLockDoesNotBlockCancel_010() {
+        let service = UpdaterService::default();
+        service.set_cancellation(Some("admission")).unwrap();
+        let _held_download = service.state.lock().await;
+        assert_eq!(
+            service.cancellation("admission").unwrap().request(),
+            CancelStatus::Requested
+        );
+    }
 }

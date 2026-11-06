@@ -241,9 +241,11 @@ fn run_ordinary(initial_dir: Option<String>, #[cfg(windows)] startup: DesktopSta
         .invoke_handler(tauri::generate_handler![
             desktop_updater::get_updater_settings,
             desktop_updater::save_updater_settings,
+            desktop_updater::save_updater_channel,
             desktop_updater::test_updater_proxy,
             desktop_updater::check_desktop_update,
             desktop_updater::install_desktop_update,
+            desktop_updater::cancel_desktop_update,
             version_history::commands::list_history,
             version_history::commands::select_history,
             version_history::commands::begin_prepare_history,
