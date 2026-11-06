@@ -10,7 +10,7 @@ opencode's history is not per-project files but a selected SQLite store under th
 
 The SQLite reader rejects linked or non-regular selected database, `-wal`, and `-shm` entries. On Windows, where SQLite's VFS can follow a sidecar link, Desk opens the database and WAL through the retained root capability, copies them into a private temporary directory, and pins the private db/WAL/SHM files while SQLite reads only that copy. A shared source lock preserves the exclusive-writer `SOURCE_BUSY` boundary; a changed file fails the snapshot. The copy is capped at 1 GiB and may return `SOURCE_TOO_LARGE`. On Unix, SQLite's VFS uses `NOFOLLOW` for these files; before opening, Desk resolves only the already authorized root directory and rechecks its held identity so a symlink in an authorized ancestor (such as macOS `/var`) does not block normal reads. The database and both sidecars remain subject to the no-link checks, and root path replacement still fails closed. The `global` project ID is excluded from named-project worktree matching; its sessions are attributed only by their own directory.
 
-For OpenCode history, a nonempty `OPENCODE_DB` selects that exact absolute file or a path relative to the OpenCode data root. `:memory:` has no file projection. Without an override, a profile scope probes the selected CLI using its official read-only `db path` command with the frozen profile environment, a bounded owned helper, and an admitted project cwd. A structured run probes the same exact frozen launch environment before creating its PTY and binds that selected database to run-source provenance, so later restart checks retain the original source. Only an `opencode.db` or `opencode-<channel>.db` file inside the already selected data root is accepted. The explicit `OPENCODE_DISABLE_CHANNEL_DB=1|true` override proves the default filename without a probe. Unknown versions, failed probes, unexpected output, missing first-run data roots, and unproven run scopes report `SCOPE_UNKNOWN` for optional history or restart; the normal CLI launch remains available. Source keys include the selected filename, so two databases in one directory cannot share a history scope.
+For OpenCode history, a nonempty `OPENCODE_DB` selects that exact absolute file or a path relative to the OpenCode data root. `:memory:` has no file projection. Without an override, a profile scope probes the selected CLI using its official read-only `debug paths db` (v2) or `db path` (v1) command with the frozen profile environment, a bounded owned helper, and an admitted project cwd. The command-order cache is only an optimization: every result must pass absolute-path, filename and selected-root identity checks; failed commands or invalid paths invalidate the cache and retry resolution. A structured run probes the same exact frozen launch environment before creating its PTY and binds that selected database to run-source provenance, so later restart checks retain the original source. Only an `opencode.db` or `opencode-<channel>.db` file inside the already selected data root is accepted without an explicit file override. The explicit `OPENCODE_DISABLE_CHANNEL_DB=1|true` override proves the default filename without a history-source probe. An observer-enabled resume also probes explicit selections to resolve the current API generation for its optional watcher; failure only disables that cue and preserves the configured source. Unknown versions, failed probes, unexpected output, missing first-run data roots, and unproven run scopes report `SCOPE_UNKNOWN` for optional history or restart; the normal CLI launch remains available. Source keys include the selected filename, so two databases in one directory cannot share a history scope.
 
 For a structured new opencode tab, the authenticated backend first uses the selected frozen profile and its environment to start a short-lived, password-protected loopback `opencode serve`, calls the official `POST /session` once, checks the returned ID and directory, then reaps the helper tree. When preparation succeeds, the tab starts the real TUI through `-s <id>`; its history row can then supply the current title and survive restart. An authenticated OSC title change or run exit refreshes that exact admitted project's history. A lost create response is not replayed under the same request ID. Preparation rejects nonempty extra/default arguments because their effect on the TUI's project directory cannot be inferred during API preparation. That explicit unsupported outcome, or the fixed `OPENCODE_SESSION_PREPARE_UNAVAILABLE_BEFORE_CREATE` code proving no creation request was sent, permits a native New launch with the original default/extra argv and unknown identity. Generic failures, unknown outcomes, validation and authority failures never permit this fallback. Health probes have a short read timeout; creation has a separate bounded timeout and never retries or follows redirects. Pending receipts are retained, active-document outcomes remain pinned, and only settled receipts from revoked documents can be reclaimed. Raw launches keep their explicit argv semantics and do not claim this identity.
 
@@ -237,16 +237,27 @@ Observer delivery is optional metadata, not process ownership.
 
 OpenCode v2 does not load the v1 observer plugin. While the design's SSE-based
 replacement (subscribing to a v2 server's `GET /api/event`) remains the planned
-mechanism, an interim authenticated watcher bridges the gap: for prepared
-resume-id launches it watches the opencode database file (resolved from the
-frozen launch environment through the same selection rules as scope/probe) and,
-on mtime change, injects one bounded `Notification` refresh cue through the
+mechanism, an interim authenticated watcher bridges the gap: for observer-enabled
+resume-id launches it watches the exact database and its WAL. A fresh bounded
+database-path probe resolves both the path and API generation for the current
+frozen run before spawn, including direct history resumes and explicit database
+selections. The profile revision, environment and known-argument constraints
+must match; unknown arguments, disabled observation or a failed probe provide
+no watcher. Only a validated v2 result enables it, so a previous prepare or a
+cached v2 command cannot enable a watcher for a v1 run. On mtime change it
+injects one bounded `Notification` refresh cue through the
 same accept/delivery authentication path as the loopback intake. The cue is a
-refresh signal only — it never establishes identity or a title; identity comes
-from the prepared exact session ID. Known blind spots, all degrading to "no
-observation" without affecting authorization: channel-named databases are not
-resolved at prepare time (the default filename is watched), and profiles that
-disable the channel database are unaffected. Health and create/rename endpoints
+refresh signal only — it never establishes identity or a title and never writes
+`observedSessionId`. Its ID is the frozen resume locator; existing authorized
+history association remains independent. Channel-named databases and explicit files use
+the validated path rather than a default filename. The WAL regression keeps
+the writer open until delivery and verifies the main database has not changed
+through a checkpoint. `OPENCODE_PURE=1|true` is checked from the frozen environment
+before any observation-only probe or observer preparation, and reports the
+channel as off. Required default-database history probes remain independent.
+The watcher starts only after the optional launch overlay passes validation;
+rejected inline configuration or runner representation cannot leave a polling
+thread behind. Health and create/rename endpoints
 are selected by the API flavor resolved during the server health handshake
 (v1 `/global/health` JSON versus v2 `/health` page), not by route probing or
 version strings; the local server keeps one flavor for its whole lifetime.

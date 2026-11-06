@@ -334,28 +334,19 @@ pub(crate) fn select_port() -> Result<u16, SafeError> {
 }
 
 /// 从已冻结的 CLI profile 启动短命服务，仅接受同目录的官方会话 ID。
-pub(crate) type FlavorRecord = parking_lot::Mutex<std::collections::HashMap<String, ApiFlavor>>;
-
-/// 记录本 profile 最近一次 prepare 的 API 代次：显式 OPENCODE_DB 配置跳过
-/// db 路径探测，watcher 的 v2 判定只能依赖这里（CLI 代次与服务代次一致）。
 pub(crate) fn create_session(
     spec: &ProcessLaunchSpec,
     cwd: &Path,
     port: u16,
     admission: PreparingStart,
     current: &impl Fn() -> Result<(), SafeError>,
-    profile_id: &str,
-    flavor_record: &FlavorRecord,
 ) -> Result<String, SafeError> {
     with_server(
         spec,
         port,
         admission,
         current,
-        |client, base, password, flavor| {
-            flavor_record.lock().insert(profile_id.to_owned(), flavor);
-            post_session(client, base, password, cwd, flavor, current)
-        },
+        |client, base, password, flavor| post_session(client, base, password, cwd, flavor, current),
     )
 }
 
@@ -634,13 +625,18 @@ mod tests {
             "wrong-patch-title",
             "wrong-readback",
             "redirect",
+            "v2-no-title",
+            "v2-wrong-readback",
+            "v2-patch-error",
         ] {
+            let v2 = mode.starts_with("v2-");
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             listener.set_nonblocking(true).unwrap();
             let address = listener.local_addr().unwrap();
             let count = if mode == "wrong-id" || mode == "wrong-directory" {
                 1
-            } else if mode == "wrong-patch-title" || mode == "redirect" {
+            } else if mode == "wrong-patch-title" || mode == "redirect" || mode == "v2-patch-error"
+            {
                 2
             } else {
                 3
@@ -682,12 +678,23 @@ mod tests {
                     }
                     let request = String::from_utf8(bytes).unwrap();
                     methods.push(request.split_whitespace().next().unwrap().to_owned());
-                    assert!(request.contains("/session/ses_fixture HTTP/1.1"));
+                    assert!(request.contains(if v2 {
+                        "/api/session/ses_fixture HTTP/1.1"
+                    } else {
+                        "/session/ses_fixture HTTP/1.1"
+                    }));
                     assert!(request.to_lowercase().contains("authorization: basic "));
                     if methods.len() == 2 {
                         assert!(request.ends_with("{\"title\":\"New title\"}"));
                     }
                     let mut body = serde_json::json!({"id":"ses_fixture","directory":"/fixture","title":if methods.len()==1 {"Old"} else {"New title"},"future":true});
+                    if v2 {
+                        body.as_object_mut().unwrap().remove("directory");
+                        body["location"] = serde_json::json!({"directory":"/fixture"});
+                        if methods.len() == 1 {
+                            body.as_object_mut().unwrap().remove("title");
+                        }
+                    }
                     if mode == "wrong-id" {
                         body["id"] = "ses_foreign".into();
                     }
@@ -695,16 +702,29 @@ mod tests {
                         body["directory"] = "/foreign".into();
                     }
                     if (mode == "wrong-patch-title" && methods.len() == 2)
-                        || (mode == "wrong-readback" && methods.len() == 3)
+                        || (matches!(mode, "wrong-readback" | "v2-wrong-readback")
+                            && methods.len() == 3)
                     {
                         body["title"] = "Old".into();
                     }
                     let status = if mode == "redirect" && methods.len() == 2 {
                         "307 Temporary Redirect\r\nLocation: /session/ses_fixture"
+                    } else if v2 && methods.len() == 2 {
+                        if mode == "v2-patch-error" {
+                            "500 Internal Server Error"
+                        } else {
+                            "204 No Content"
+                        }
                     } else {
                         "200 OK"
                     };
-                    let body = body.to_string();
+                    let body = if status == "204 No Content" {
+                        String::new()
+                    } else if v2 {
+                        serde_json::json!({"data":body}).to_string()
+                    } else {
+                        body.to_string()
+                    };
                     write!(stream,"HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
                 }
                 methods
@@ -716,7 +736,7 @@ mod tests {
                 "ses_fixture",
                 Path::new("/fixture"),
                 "New title",
-                ApiFlavor::V1,
+                if v2 { ApiFlavor::V2 } else { ApiFlavor::V1 },
                 &|| Ok(()),
             );
             let methods = worker.join().unwrap();
@@ -726,7 +746,7 @@ mod tests {
                 usize::from(count > 1)
             );
             match mode {
-                "success" => assert_eq!(result.unwrap(), "ses_fixture"),
+                "success" | "v2-no-title" => assert_eq!(result.unwrap(), "ses_fixture"),
                 "wrong-id" | "wrong-directory" => {
                     assert_eq!(result.unwrap_err().code, "SESSION_ORIGIN_AMBIGUOUS")
                 }
@@ -1078,51 +1098,61 @@ mod tests {
             .begin_start(RuntimeKind::Native)
             .unwrap()
             .preparing();
-        let flavors: FlavorRecord = parking_lot::Mutex::new(std::collections::HashMap::new());
-        let id = create_session(
-            &spec,
-            root.path(),
-            port,
-            admission,
-            &|| Ok(()),
-            "opencode-test",
-            &flavors,
-        )
-        .unwrap();
-        assert_eq!(flavors.lock().get("opencode-test"), Some(&ApiFlavor::V2));
+        let id = create_session(&spec, root.path(), port, admission, &|| Ok(())).unwrap();
         assert!(id.starts_with("ses_"));
-        let mut path_request = request.clone();
-        path_request.action = LaunchAction::Raw {
-            argv: vec!["db".into(), "path".into()],
-        };
-        let path_snapshot = freeze_launch(
-            &path_request,
-            &profile,
-            &CallerIdentity {
-                instance_id: "opencode-test-instance".into(),
-                window_label: "main".into(),
-                webview_epoch: WireU64::parse("1").unwrap(),
-            },
-            &FreezeContext {
-                inherited: &inherited,
-                terminal: &EnvMap::new(),
-                legacy: None,
-                observer: None,
-            },
-        )
-        .unwrap();
-        let path_spec =
-            resolve_process(&build_invocation(&path_request, &path_snapshot).unwrap()).unwrap();
-        let path_admission = AdmissionGate::new()
-            .begin_start(RuntimeKind::Native)
-            .unwrap()
-            .preparing();
-        let path = probe_database_path(&path_spec, path_admission, &|| Ok(())).unwrap();
+        // 复用生产决议，避免真实 v2 测试仍用已移除的 v1 命令。
+        let repository =
+            crate::cli::storage::WorkspaceRepository::open(root.path().join("desk/workspace.json"))
+                .unwrap();
+        repository
+            .apply(
+                repository.read().unwrap().revision,
+                crate::cli::storage::Patch::Create {
+                    profile: profile.clone(),
+                },
+            )
+            .unwrap();
+        let selected = repository.get_profile(&profile.id).unwrap();
+        let service =
+            crate::cli::launch_service::LaunchService::new(repository, Some(inherited), None);
+        let caller = service.registry().activate_window("main").unwrap();
+        let path = service
+            .probe_opencode_database(&caller, &selected, root.path(), snapshot.environment())
+            .unwrap();
         assert!(same_directory(
             path.trim(),
             &root.path().join("data/opencode/opencode.db")
         ));
         assert!(root.path().join("data/opencode/opencode.db").is_file());
+        let rename_admission = AdmissionGate::new()
+            .begin_start(RuntimeKind::Native)
+            .unwrap()
+            .preparing();
+        let title = "Official metadata rename";
+        with_server(
+            &spec,
+            port,
+            rename_admission,
+            &|| Ok(()),
+            |client, base, password, flavor| {
+                    let metadata = client.get(flavor.session_url(base, &id)).basic_auth("opencode", Some(password)).send().unwrap();
+                    let status = metadata.status().as_u16();
+                    let metadata: serde_json::Value = bounded_json(metadata, 32768).unwrap();
+                    let metadata = metadata.get("data").unwrap_or(&metadata);
+                    eprintln!("Official metadata status={status} idMatch={} hasTitle={} titleNull={} hasLocation={}", metadata.get("id").and_then(|id| id.as_str()) == Some(id.as_str()), metadata.get("title").is_some(), metadata.get("title").is_some_and(|value| value.is_null()), metadata.get("location").is_some());
+                rename_http(
+                    client,
+                    base,
+                    password,
+                    &id,
+                    root.path(),
+                    title,
+                    flavor,
+                    &|| Ok(()),
+                )
+            },
+        )
+        .unwrap();
         let data_root = crate::cli::native_projection::scoped_fs::Root::open(
             &root.path().join("data/opencode"),
         )
@@ -1139,8 +1169,8 @@ mod tests {
             .unwrap();
         assert!(rows.iter().any(|row| matches!(
             row,
-            crate::cli::native_projection::wire::ResourceItem::Session { native_session_id, .. }
-                if native_session_id == &id
+            crate::cli::native_projection::wire::ResourceItem::Session { native_session_id, title: actual_title, .. }
+                if native_session_id == &id && actual_title == title
         )));
     }
 }

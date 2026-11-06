@@ -155,10 +155,9 @@ impl ObserverHost {
     /// opencode v2 不加载 v1 观察插件，会话状态改由 CLI 直接写进 SQLite（title/
     /// time_idle/time_busy）。此 watcher 以完全相同的 accept/delivery 校验路径，
     /// 把「数据库文件变化」转换为一个有界 Notification 刷新 cue——它只是刷新
-    /// 信号，永远不是身份或标题来源；身份由 prepare 的精确会话 ID 提供。
-    /// db 路径由调用方从冻结启动环境经 selection::locations 解析后传入（与
-    /// scope/probe 同一规则）；channel 命名库在 prepare 阶段尚未决议，此时传入
-    /// 默认文件名属已知盲区，退化为与「无观察」一致，不影响授权语义。
+    /// 信号，永远不是身份或标题来源；携带 ID 只绑定当前冻结的恢复 locator。
+    /// db 路径由当前冻结 run 的只读探测与来源校验决议；v1 不使用此 watcher，
+    /// 避免刷新事件的时间戳序号压过原生插件的计数序号。
     pub(crate) fn spawn_opencode_db_cue(
         &self,
         binding: crate::observer_registry::ObserverBinding,
@@ -301,12 +300,19 @@ mod db_cue_tests {
         // 标题写入 WAL」的现场形态——code-review 指出仅改普通文件时间不算
         // 真实 WAL 提交证据）。
         std::thread::sleep(std::time::Duration::from_millis(120));
+        let database_modified = std::fs::metadata(&database).unwrap().modified().unwrap();
         let conn = rusqlite::Connection::open(&database).unwrap();
         conn.execute_batch(
-            "PRAGMA journal_mode=WAL; INSERT OR REPLACE INTO cue_probe(key) VALUES ('v');",
+            "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; INSERT OR REPLACE INTO cue_probe(key) VALUES ('v');",
         )
         .unwrap();
-        drop(conn);
+        assert_eq!(
+            std::fs::metadata(&database).unwrap().modified().unwrap(),
+            database_modified,
+            "WAL regression must not modify the main database through a checkpoint"
+        );
+        let wal = database.with_file_name("opencode.db-wal");
+        assert!(std::fs::metadata(&wal).unwrap().len() > 0);
         for _ in 0..120 {
             if received.load(Ordering::SeqCst) >= 1 {
                 break;
@@ -318,6 +324,12 @@ mod db_cue_tests {
             "mtime change must deliver exactly the bounded Notification cue"
         );
         assert!(last_id.lock().unwrap().starts_with('o'));
+        assert_eq!(
+            std::fs::metadata(&database).unwrap().modified().unwrap(),
+            database_modified
+        );
+        assert!(wal.is_file());
         alive.store(false, Ordering::SeqCst);
+        drop(conn);
     }
 }
