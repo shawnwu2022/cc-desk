@@ -45,6 +45,16 @@ struct Wire {
     role: cc_desk_remote_record::grant::DataRole,
     budget_ms: u64,
     profile: Enrollment,
+    #[serde(default, deserialize_with = "peer_present")]
+    peer_install: Option<PeerInstall>,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PeerInstall {
+    budget_ms: u64,
+}
+fn peer_present<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<PeerInstall>, D::Error> {
+    PeerInstall::deserialize(d).map(Some)
 }
 fn decode(value: &str, max: usize) -> Result<Vec<u8>, GrantError> {
     if value.len() > max.div_ceil(3) * 4 {
@@ -60,6 +70,7 @@ pub(super) struct Configuration {
     pub trust: ClientGrantTrust,
     pub signer: Signer,
     pub budget: Duration,
+    pub peer_budget: Option<Duration>,
 }
 impl Configuration {
     pub fn parse(bytes: &[u8]) -> Result<Self, GrantError> {
@@ -67,6 +78,13 @@ impl Configuration {
             return Err(GrantError::Bounds);
         }
         let w: Wire = serde_json::from_slice(bytes).map_err(|_| GrantError::Encoding)?;
+        let peer_budget = match w.peer_install {
+            Some(p) if p.budget_ms > 0 && p.budget_ms <= 10000 => {
+                Some(Duration::from_millis(p.budget_ms))
+            }
+            Some(_) => return Err(GrantError::Policy),
+            None => None,
+        };
         if w.budget_ms == 0
             || w.budget_ms > 30000
             || w.principal.len() != 64
@@ -103,6 +121,7 @@ impl Configuration {
             },
             signer: Signer { profile, issuer },
             budget: Duration::from_millis(w.budget_ms),
+            peer_budget,
         })
     }
 }

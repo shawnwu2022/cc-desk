@@ -161,6 +161,39 @@ impl<S> Drop for ManagedChannel<S> {
 }
 impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> ManagedChannel<S> {
     #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    pub(crate) async fn browser_peer(
+        &mut self,
+        budget: std::time::Duration,
+    ) -> Result<crate::browser_wasm_owner::browser_peer::Installed, DataError> {
+        if !self.peer_install || !self.grant_management || self.role != Role::Client {
+            return Err(DataError::Context);
+        }
+        let access = self
+            .access
+            .as_ref()
+            .ok_or(DataError::Grant(GrantError::Closed))?
+            .clone();
+        access.check().map_err(DataError::Grant)?;
+        let (stop, stopped) = tokio::sync::watch::channel(false);
+        let authority = crate::BoundDataAuthority::new(
+            access.clone(),
+            self.active.clone(),
+            self.cancel.clone(),
+            stop,
+            self.binding,
+            self.role,
+        );
+        crate::browser_wasm_owner::browser_peer::run(
+            self.io.as_mut().ok_or(DataError::Closed)?,
+            authority,
+            access,
+            self.cancel.clone(),
+            stopped,
+            budget,
+        )
+        .await
+    }
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
     pub(crate) fn browser_receipt(&self) -> Result<Vec<u8>, GrantError> {
         if self.role != Role::Client
             || !self.management_used

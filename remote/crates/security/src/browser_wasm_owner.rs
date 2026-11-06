@@ -16,6 +16,8 @@ use std::{
 use tokio::io::AsyncWriteExt;
 #[path = "browser_grant.rs"]
 mod browser_grant;
+#[path = "browser_peer.rs"]
+pub(crate) mod browser_peer;
 #[link(wasm_import_module = "cc_desk_browser_owner_v1")]
 unsafe extern "C" {
     fn public_key(which: u32, output: *mut u8, capacity: u32) -> i32;
@@ -25,6 +27,7 @@ unsafe extern "C" {
     fn client_trust(output: *mut u8, capacity: u32) -> i32;
     fn grant_config(output: *mut u8, capacity: u32) -> i32;
     fn grant_accepted(pointer: *const u8, length: u32);
+    fn peer_installed(pointer: *const u8, length: u32);
     fn management(pointer: *const u8, length: u32);
     fn report(
         code: i32,
@@ -208,9 +211,13 @@ pub extern "C" fn browser_tls_start(local_role: u32, peer_role: u32, budget_ms: 
                 )
             };
             if let Some(mut config) = grant {
-                let channel = crate::bind::browser_grant_client(pending, trust.ok_or(-7)?)
-                    .await
-                    .map_err(bind_error)?;
+                let trust = trust.ok_or(-7)?;
+                let channel = if config.peer_budget.is_some() {
+                    crate::bind::browser_peer_client(pending, trust).await
+                } else {
+                    crate::bind::browser_grant_client(pending, trust).await
+                }
+                .map_err(bind_error)?;
                 let mut state = browser_grant::state();
                 let mut channel = channel
                     .grant_client(&config.trust, &mut config.signer, &mut state, config.budget)
@@ -221,6 +228,22 @@ pub extern "C" fn browser_tls_start(local_role: u32, peer_role: u32, budget_ms: 
                     return Err(-3);
                 }
                 unsafe { grant_accepted(receipt.as_ptr(), receipt.len() as u32) };
+                if let Some(budget) = config.peer_budget {
+                    let installed = channel.browser_peer(budget).await.map_err(|e| match e {
+                        crate::DataError::Deadline => -10,
+                        crate::DataError::Cancelled => -3,
+                        crate::DataError::Grant(_) => -11,
+                        _ => -9,
+                    })?;
+                    let receipt = installed.receipt().map_err(|_| -9)?;
+                    if token.is_cancelled() {
+                        return Err(-3);
+                    }
+                    unsafe { peer_installed(receipt.as_ptr(), receipt.len() as u32) };
+                    let (mut revoked, mut superseded) = installed.revoked();
+                    installed.check().map_err(|_| -9)?;
+                    return tokio::select! {biased;_=token.cancelled()=>Err(-3),_=shutdown_requested()=>tokio::select!{biased;_=token.cancelled()=>Err(-3),_=revoked.changed()=>Err(-11),_=superseded.changed()=>Err(-11),_=crate::tls_clock::sleep(installed.expiry)=>Err(-11),result=channel.browser_shutdown()=>result.map_err(|_|-1)},_=revoked.changed()=>Err(-11),_=superseded.changed()=>Err(-11),_=crate::tls_clock::sleep(installed.expiry)=>Err(-11),result=channel.browser_wait()=>match result{crate::OwnerExit::Unsupported=>Err(-6),_=>Err(-1)}};
+                }
                 return tokio::select! {biased;_=token.cancelled()=>Err(-3),_=shutdown_requested()=>tokio::select!{biased;_=token.cancelled()=>Err(-3),result=channel.browser_shutdown()=>result.map_err(|_|-1)},result=channel.browser_wait()=>match result{crate::OwnerExit::Unsupported=>Err(-6),_=>Err(-1)}};
             }
             if let Some(trust) = trust {

@@ -555,3 +555,72 @@ Original Native tests retain exhaustive Accepted-field, isolated exporter and
 grant-policy coverage; this matrix does not replace those tests or claim every
 Native mutation ran in WASM. All browser globals are Node shims and IO is owned
 loopback test TCP, not deployed WSS/WebSocket/mux or phone E2E.
+
+## Browser peer bootstrap checkpoint
+
+An explicit `peerInstall: {budgetMs}` in the approved grant configuration opts in
+to original minor1/grant-management2 negotiation. Budget is positive and <=10000ms.
+Plain0 and grant1 keep their original modes; grant1 exposes no pending
+peerInstalled interface. The eight public Native bind factories still refuse
+WASM. No NativeClient, data_owner task, RunningChannel join or data dispatcher is
+migrated or enabled by this checkpoint.
+
+Peer mode requires the broker's actual visible Document and Window lifecycle
+event sources. Missing Document/events, initial hidden state or invalid config
+rejects before work starts. The broker captures those sources and closes on
+visibilitychange, pagehide and freeze. It first writes a sticky peer-only SAB
+closed flag, then cancels and posts the original private close notification.
+This flag cancels; it cannot enable peer/Data authority. Worker IO and final peer
+publication sample the sticky flag, so a lifecycle close already issued in the
+Window cannot be hidden by later MessagePort delivery. The port still supplies
+the asynchronous wake. Original presentation/crypto/COSE/get Promises retain V17
+custody to actual settlement; closure is not CryptoKey destruction or Worker join.
+
+The same production Rust future retains the original ManagedChannel IO, active
+identity, CancelToken, RemoteGrant and request-time clock anchor. It invokes the
+original peer_install::bootstrap and takes its already completed oneshot result
+without another concurrent timeout. Only that original protocol can mint
+ClientInstalledPeer. Its common one-use validation is shared with Native
+consume_for and retains channel identity, local role, context, binding, grant,
+scope, clock-domain same-origin and installed fence/state checks. JS receives no
+proof constructor or live capability, only PeerInstalledHistorical with exact
+fence string, grant ID and scope after successful consumption.
+
+Shared's private installation deadline distinguishes Native Instant from Browser
+Deadline. Native constructors/public signatures/timeout/checked-join behavior
+remain unchanged. Browser captures one install D <= explicit budget,10s and the
+original grant's remaining lifetime. Before original access.check it captures a
+conservative floor sample in the same source domain: grant expiry never exceeds
+sampleBefore+remaining. A later import sample cannot renew it; no tolerance is
+added. One outer sleep uses the existing single Worker timer/Waker. After install,
+install D is not a connection TTL: the same owner waits under the fixed original
+grant expiry/revocation/cancel/IO boundaries and rejects further Data or replayed
+control bytes. Graceful shutdown still waits for actual TLS close-notify write,
+flush and underlying transport close completion; unfinished install cancels with
+terminal failure. No parallel timer framework or no-op runtime is added.
+
+The standalone `npm run test:browser-peer` requires explicit
+CC_DESK_TEST_ONLY_PEER_WASM/GLUE/HOST. Build the owner WASM and official glue with
+the preceding lib -> thin rustc wrapper -> official wasm-bindgen commands. Select
+the current security unit-test executable from Cargo JSON exactly as for the
+grant group; its owned process uses the original peer factory, grant_host,
+start_peer_pending, typed host_install_request and complete_host_install. Before
+completion it commits an actual record to a self-owned TEST_ONLY in-memory fake
+workload registry and derives its revision fence. This is fake installation
+coordination, not a real Host actor/process/PTY receipt. Installed/ACK success
+packets are produced by original bootstrap, never handwritten by JS or a fixture.
+Failure-only cfg(test) mutations alter one field of an originally encoded
+Installed frame or replay that original complete frame.
+
+Actual WASM/Worker tests distinguish missing peer config startup RED, grant
+completion, pending install, Installed field/order rejection, postinstall replay
+and Data refusal. The timing RED holds the real deadline import for40ms and
+exposes later-now+remaining renewal; the conservative before-sample fix passes
+that same boundary. Tests also cover lifecycle cancellation before publication,
+initial hidden/missing sources, original request flush holds/failure/cancel,
+postinstall expiry, shutdown write/close custody, and Window presentation custody.
+Document/browser globals are explicit Node EventTarget shims; loopback IO and fake
+workload are test-only. Browser/mobile suspend continuity remains unqualified,
+and no Data, input or RemoteReady authority is granted. Real lifecycle/clock,
+real actor installation, browser network/mux and application/phone acceptance
+remain separate work.

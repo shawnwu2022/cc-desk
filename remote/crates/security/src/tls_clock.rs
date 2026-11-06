@@ -43,6 +43,8 @@ mod browser {
         fn arm_timer(value: f64);
         fn disarm_timer();
         fn grant_deadline(budget_ms: u32) -> f64;
+        fn peer_deadline(budget_ms: u32, remaining_ms: u32, sample_before: f64) -> f64;
+        fn peer_expiry() -> f64;
     }
     static WAITER: Mutex<Option<Waker>> = Mutex::new(None);
     pub(crate) fn after(budget: Duration) -> Result<Deadline, SecurityError> {
@@ -83,6 +85,39 @@ mod browser {
         if let Some(wake) = wake {
             wake.wake();
         }
+    }
+    pub(crate) fn sample_floor() -> Result<f64, crate::DataError> {
+        let value = unsafe { now() };
+        if !value.is_finite() || !(0.0..=9007199254740991.0).contains(&value) {
+            return Err(crate::DataError::Deadline);
+        }
+        Ok(value.floor())
+    }
+    pub(crate) fn peer_times(
+        budget: Duration,
+        remaining: u64,
+        sample_before: f64,
+    ) -> Result<(Deadline, Deadline), crate::DataError> {
+        let ms = budget.as_millis();
+        if ms == 0 || ms > 10000 || remaining == 0 || remaining > 900000 {
+            return Err(crate::DataError::Bounds);
+        }
+        let end = unsafe { peer_deadline(ms as u32, remaining as u32, sample_before) };
+        let expiry = unsafe { peer_expiry() };
+        let current = unsafe { now() };
+        if !current.is_finite()
+            || !sample_before.is_finite()
+            || sample_before > current
+            || !end.is_finite()
+            || !expiry.is_finite()
+            || end <= current
+            || end > current + ms as f64
+            || end > expiry
+            || expiry > sample_before + remaining as f64
+        {
+            return Err(crate::DataError::Deadline);
+        }
+        Ok((Deadline(end), Deadline(expiry)))
     }
     pub(crate) struct Sleep {
         end: Deadline,

@@ -10,7 +10,8 @@ export type BrowserTlsEvidence=Readonly<{protocol:number;cipher:number;group:num
 export type BrowserClientTrust=Readonly<{hostKeyEpoch:string;clientKeyEpoch:string;origin:string}>;
 export type BrowserManagementFacts=Readonly<{kind:'ManagementOnly';hostEndpointId:string;clientEndpointId:string;hostKeyEpoch:string;clientKeyEpoch:string;origin:string;profile:number;minor:number}>;
 export type BrowserGrantReceipt=Readonly<{kind:'GrantAccepted';grantId:string;principalId:string;scope:Readonly<{session:string;run:string;generation:string}>;role:'Observer'|'Controller';expiresHostMs:string}>;
-export type BrowserTlsWorker=Readonly<{evidence:Promise<BrowserTlsEvidence>;management:Promise<BrowserManagementFacts>|undefined;grantAccepted:Promise<BrowserGrantReceipt>|undefined;close():void;shutdown():void;waitClosed():Promise<void>}>;
+export type BrowserPeerReceipt=Readonly<{kind:'PeerInstalledHistorical';fence:string;grantId:string;scope:BrowserGrantReceipt['scope']}>;
+export type BrowserTlsWorker=Readonly<{evidence:Promise<BrowserTlsEvidence>;management:Promise<BrowserManagementFacts>|undefined;grantAccepted:Promise<BrowserGrantReceipt>|undefined;peerInstalled:Promise<BrowserPeerReceipt>|undefined;close():void;shutdown():void;waitClosed():Promise<void>}>;
 type Api={memory:WebAssembly.Memory;browser_tls_start(l:number,p:number,b:number):number;browser_tls_poll():void;browser_tls_cancel():void;browser_tls_event(k:number):void;__wbindgen_start():void};
 /** 只在可信DedicatedWorker启动一次；IO能力/官方glue/实例都不发布到Window。 */
 export async function startBrowserTlsWorker(options:Readonly<{wasm:BufferSource|WebAssembly.Module;glue:WebAssembly.ModuleImports;bridge:BrowserTlsWorkerBridge;localSpki:Uint8Array;peerSpki:Uint8Array;transport:BrowserTlsTransport;localRole?:number;peerRole?:number;signal?:AbortSignal;clientTrust?:BrowserClientTrust;grantBridge?:BrowserGrantBridge}>):Promise<BrowserTlsWorker>{
@@ -24,6 +25,7 @@ export async function startBrowserTlsWorker(options:Readonly<{wasm:BufferSource|
  const trust=options.clientTrust===undefined?undefined:Object.freeze({...options.clientTrust});
  const grantBridge=options.grantBridge===undefined?undefined:Object.freeze({...options.grantBridge,configuration:options.grantBridge?.configuration?.slice()});
  let grantAdapter:ReturnType<typeof createBrowserGrantWorker>|undefined,managementDeadline:number|undefined;
+ let peerBudget:number|undefined,peerDeadline:number|undefined,peerExpiry:number|undefined,peerPublished=false,acceptedGrant:BrowserGrantReceipt|undefined;
  let trustBytes:Uint8Array|undefined,managementBound=false;
  let api:Api|undefined,memory:WebAssembly.Memory|undefined,queued=false,rustDone=false,stopping=false,ioClosed=false,transportDone=false,retired=false,runtimeFailure:Error|undefined;
  let timer:ReturnType<typeof setTimeout>|undefined,timerEpoch=0,timerDeadline:number|undefined;
@@ -34,10 +36,13 @@ export async function startBrowserTlsWorker(options:Readonly<{wasm:BufferSource|
  const management=trust===undefined||grantBridge!==undefined?undefined:new Promise<BrowserManagementFacts>((resolve,reject)=>{resolveManagement=resolve;rejectManagement=reject;});void management?.catch(()=>{});
  let resolveGrant:((value:BrowserGrantReceipt)=>void)|undefined,rejectGrant:((error:Error)=>void)|undefined;
  const grantAccepted=grantBridge===undefined?undefined:new Promise<BrowserGrantReceipt>((resolve,reject)=>{resolveGrant=resolve;rejectGrant=reject;});void grantAccepted?.catch(()=>{});
- function fail(error:Error){rejectEvidence(error);rejectManagement?.(error);rejectGrant?.(error);}
+ let resolvePeer:((value:BrowserPeerReceipt)=>void)|undefined,rejectPeer:((error:Error)=>void)|undefined;
+ const peerRequested=grantBridge!==undefined&&(()=>{try{return Object.hasOwn(JSON.parse(new TextDecoder().decode(grantBridge.configuration)),'peerInstall');}catch{return true;}})();
+ const peerInstalled=!peerRequested?undefined:new Promise<BrowserPeerReceipt>((resolve,reject)=>{resolvePeer=resolve;rejectPeer=reject;});void peerInstalled?.catch(()=>{});
+ function fail(error:Error){rejectEvidence(error);rejectManagement?.(error);rejectGrant?.(error);rejectPeer?.(error);}
  const closed=new Promise<void>((resolve,reject)=>{resolveClosed=resolve;rejectClosed=reject;});void evidence.catch(()=>{});void closed.catch(()=>{});
  let signer:ReturnType<typeof createBrowserTlsWasmImports>|undefined;
- const externallyStopped=()=>signal?.aborted===true||Atomics.load(new Int32Array(bridge.shared,0,1),0)!==0;
+ const externallyStopped=()=>signal?.aborted===true||Atomics.load(new Int32Array(bridge.shared,0,1),0)!==0||(grantBridge?.cancel instanceof SharedArrayBuffer&&grantBridge.cancel.byteLength===4&&Atomics.load(new Int32Array(grantBridge.cancel),0)!==0);
  function sealSigning(){if(signer)signer.close();else{const control=new Int32Array(bridge.shared,0,5);Atomics.store(control,0,1);Atomics.store(control,1,3);Atomics.notify(control,1);try{bridge.port.postMessage('close');}catch{/* 原主线程仍可看到共享关闭标记。 */}}}
  function sealGrant(){if(grantAdapter)grantAdapter.close();else if(grantBridge){try{grantBridge.port.postMessage('close');grantBridge.port.close();}catch{/* 无有效grant能力。 */}}}
  function retire(){if(rustDone&&transportDone&&!reading&&!writing&&!retired){retired=true;rx=undefined;disarm();sealGrant();signal?.removeEventListener('abort',close);bridge.port.removeEventListener('message',brokerClosed);bridge.port.removeEventListener('messageerror',close);if(runtimeFailure)rejectClosed(runtimeFailure);else resolveClosed();}}
@@ -55,7 +60,7 @@ export async function startBrowserTlsWorker(options:Readonly<{wasm:BufferSource|
  function stopLoading(){rustDone=true;fail(Error(externallyStopped()||stopping?'browser TLS cancelled':'browser TLS deadline'));sealSigning();sealGrant();closeIo();retire();}
  function disarm(){timerEpoch++;if(timer!==undefined)clearTimeout(timer);timer=undefined;timerDeadline=undefined;}
  function arm(value:number){
-  if(rustDone||!Number.isFinite(value)||value>(managementDeadline??deadline)){close();return;}
+  if(rustDone||!Number.isFinite(value)||value>(peerPublished?peerExpiry!:peerDeadline??managementDeadline??deadline)){close();return;}
   if(timer!==undefined&&timerDeadline===value)return;
   disarm();timerDeadline=value;const epoch=timerEpoch;
   const tick=()=>{if(epoch!==timerEpoch||rustDone)return;const remaining=value-now();if(remaining>0){timer=setTimeout(tick,remaining);return;}timer=undefined;event(3);};
@@ -73,8 +78,11 @@ export async function startBrowserTlsWorker(options:Readonly<{wasm:BufferSource|
  }
  function ownerImports(){return {cc_desk_browser_owner_v1:{
   grant_deadline:(budgetMs:number)=>{const current=now();if(!grantAdapter||managementDeadline!==undefined||stopping||ioClosed||externallyStopped()||current>=deadline||!Number.isInteger(budgetMs)||budgetMs<1||budgetMs>30000)return NaN;managementDeadline=current+budgetMs;return managementDeadline;},
+  peer_deadline:(budgetMs:number,remainingMs:number,sampleBefore:number)=>{const current=now();if(peerBudget===undefined||peerDeadline!==undefined||!acceptedGrant||stopping||ioClosed||externallyStopped()||!Number.isInteger(budgetMs)||budgetMs<1||budgetMs>peerBudget||budgetMs>10000||!Number.isInteger(remainingMs)||remainingMs<1||remainingMs>900000||!Number.isSafeInteger(sampleBefore)||sampleBefore<0||sampleBefore>current||sampleBefore+remainingMs<=current)return NaN;peerExpiry=sampleBefore+remainingMs;peerDeadline=Math.min(current+budgetMs,peerExpiry);return peerDeadline;},
+  peer_expiry:()=>peerExpiry??NaN,
+  peer_installed:(pointer:number,length:number)=>{try{if(peerBudget===undefined||peerPublished||!acceptedGrant||stopping||ioClosed||ioError||eof||externallyStopped()||peerDeadline===undefined||now()>=peerDeadline||length<1||length>4096)throw Error('peer publication');const value=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(range(pointer,length))) as BrowserPeerReceipt;if(!value||Object.keys(value).length!==4||value.kind!=='PeerInstalledHistorical'||typeof value.fence!=='string'||!/^[1-9][0-9]{0,19}$/.test(value.fence)||BigInt(value.fence)>18446744073709551615n||value.grantId!==acceptedGrant.grantId||value.scope?.session!==acceptedGrant.scope.session||value.scope.run!==acceptedGrant.scope.run||value.scope.generation!==acceptedGrant.scope.generation)throw Error('peer facts');peerPublished=true;resolvePeer?.(Object.freeze({...value,scope:Object.freeze(value.scope)}));}catch{fail(Error('browser peer rejected'));close();}},
   grant_config:(pointer:number,capacity:number)=>{if(!grantAdapter)return 0;if(capacity!==8192)return -1;const bytes=grantAdapter.configuration;range(pointer,bytes.length).set(bytes);return bytes.length;},
-  grant_accepted:(pointer:number,length:number)=>{try{if(!grantAdapter||managementBound||stopping||ioClosed||ioError||eof||externallyStopped()||managementDeadline===undefined||now()>=managementDeadline||length<1||length>4096)throw Error('grant publication');const value=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(range(pointer,length))) as BrowserGrantReceipt;if(!value||Object.keys(value).length!==6||value.kind!=='GrantAccepted'||!/^[0-9a-f]{64}$/.test(value.grantId)||!/^[0-9a-f]{64}$/.test(value.principalId)||!['Observer','Controller'].includes(value.role)||!value.scope||typeof value.expiresHostMs!=='string')throw Error('grant receipt');managementBound=true;resolveGrant?.(Object.freeze({...value,scope:Object.freeze(value.scope)}));}catch{fail(Error('browser grant rejected'));close();}},
+  grant_accepted:(pointer:number,length:number)=>{try{if(!grantAdapter||managementBound||stopping||ioClosed||ioError||eof||externallyStopped()||managementDeadline===undefined||now()>=managementDeadline||length<1||length>4096)throw Error('grant publication');const value=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(range(pointer,length))) as BrowserGrantReceipt;if(!value||Object.keys(value).length!==6||value.kind!=='GrantAccepted'||!/^[0-9a-f]{64}$/.test(value.grantId)||!/^[0-9a-f]{64}$/.test(value.principalId)||!['Observer','Controller'].includes(value.role)||!value.scope||typeof value.expiresHostMs!=='string')throw Error('grant receipt');managementBound=true;acceptedGrant=value;resolveGrant?.(Object.freeze({...value,scope:Object.freeze(value.scope)}));}catch{fail(Error('browser grant rejected'));close();}},
   client_trust:(pointer:number,capacity:number)=>{if(!trustBytes)return 0;if(capacity!==2304||trustBytes.length>capacity)return -1;range(pointer,trustBytes.length).set(trustBytes);return trustBytes.length;},
   management:(pointer:number,length:number)=>{
    try{
@@ -93,29 +101,29 @@ export async function startBrowserTlsWorker(options:Readonly<{wasm:BufferSource|
   shutdown:()=>{if(ioError||runtimeFailure)return -2;if(writing)return -1;closeIo();return transportDone&&!reading&&!writing?1:-1;},
   close_io:closeIo,
   report:(code:number,protocol:number,cipher:number,group:number,flags:number,pointer:number,length:number)=>{
-   if(code===1){if(stopping||ioClosed||ioError||eof||Atomics.load(new Int32Array(bridge.shared,0,1),0)!==0||now()>=deadline||length!==32){close();return;}resolveEvidence(Object.freeze({protocol,cipher,group,fullHandshake:(flags&1)!==0,rawPublicKey:(flags&2)!==0,alpnMatches:(flags&4)!==0,peerEndpointId:range(pointer,32).slice()}));return;}
-   rustDone=true;const failure=Error(code===-8?'browser grant rejected':code===-6?'browser AppBind Unsupported':code===-7?'browser AppBind rejected':code===-2?'browser TLS deadline':code===-3?'browser TLS cancelled':code===-4?'browser TLS role':'browser TLS rejected');fail(failure);sealSigning();grantAdapter?.close();closeIo();retire();
+   if(code===1){if(stopping||ioClosed||ioError||eof||externallyStopped()||now()>=deadline||length!==32){close();return;}resolveEvidence(Object.freeze({protocol,cipher,group,fullHandshake:(flags&1)!==0,rawPublicKey:(flags&2)!==0,alpnMatches:(flags&4)!==0,peerEndpointId:range(pointer,32).slice()}));return;}
+   rustDone=true;const failure=Error(code===-10?'browser peer deadline':code===-11?'browser peer invalidated':code===-9?'browser peer rejected':code===-8?'browser grant rejected':code===-6?'browser AppBind Unsupported':code===-7?'browser AppBind rejected':code===-2?'browser TLS deadline':code===-3?'browser TLS cancelled':code===-4?'browser TLS role':'browser TLS rejected');fail(failure);sealSigning();grantAdapter?.close();closeIo();retire();
   },
  }};}
  signal?.addEventListener('abort',close,{once:true});
  bridge.port.addEventListener('message',brokerClosed);bridge.port.addEventListener('messageerror',close);bridge.port.start();
  try{
-  if(externallyStopped()||now()>=deadline){stopLoading();return Object.freeze({evidence,management,grantAccepted,close,shutdown,waitClosed:()=>closed});}
+  if(externallyStopped()||now()>=deadline){stopLoading();return Object.freeze({evidence,management,grantAccepted,peerInstalled,close,shutdown,waitClosed:()=>closed});}
   if(trust){const epoch=(value:unknown)=>typeof value==='string'&&/^(0|[1-9][0-9]{0,19})$/.test(value)&&BigInt(value)<=18446744073709551615n;if(Object.keys(trust).length!==3||!epoch(trust.hostKeyEpoch)||!epoch(trust.clientKeyEpoch)||typeof trust.origin!=='string'||trust.origin.length>2048)throw Error('browser AppBind trust');trustBytes=new TextEncoder().encode(JSON.stringify(trust));}
-  if(!Number.isInteger(localRole)||!Number.isInteger(peerRole)||localRole<0||localRole>1||peerRole<0||peerRole>1){rustDone=true;fail(Error('browser TLS role'));sealSigning();closeIo();retire();return Object.freeze({evidence,management,grantAccepted,close,shutdown,waitClosed:()=>closed});}
+  if(!Number.isInteger(localRole)||!Number.isInteger(peerRole)||localRole<0||localRole>1||peerRole<0||peerRole>1){rustDone=true;fail(Error('browser TLS role'));sealSigning();closeIo();retire();return Object.freeze({evidence,management,grantAccepted,peerInstalled,close,shutdown,waitClosed:()=>closed});}
   signer=createBrowserTlsWasmImports(bridge,localSpki,()=>memory);
-  if(grantBridge){if(!trust)throw Error('grant requires ClientTrust');grantAdapter=createBrowserGrantWorker(grantBridge,()=>memory,()=>managementDeadline,()=>stopping||ioClosed||externallyStopped(),()=>event(6),close);}
+  if(grantBridge){if(!trust)throw Error('grant requires ClientTrust');grantAdapter=createBrowserGrantWorker(grantBridge,()=>memory,()=>managementDeadline,()=>stopping||ioClosed||externallyStopped(),()=>event(6),close);const config=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(grantAdapter.configuration));if(Object.hasOwn(config,'peerInstall')){if(!config.peerInstall||!Number.isInteger(config.peerInstall.budgetMs)||config.peerInstall.budgetMs<1||config.peerInstall.budgetMs>10000||!grantBridge.cancel)throw Error('peer configuration');peerBudget=config.peerInstall.budgetMs;}}
   // 原始加载Promise由本函数持续持有到settle；取消不使用race丢弃迟到实例。
   const compilation=wasm instanceof WebAssembly.Module?undefined:WebAssembly.compile(wasm);
   const module=wasm instanceof WebAssembly.Module?wasm:await compilation!;
-  if(stopping||externallyStopped()||now()>=deadline){stopLoading();return Object.freeze({evidence,management,grantAccepted,close,shutdown,waitClosed:()=>closed});}
+  if(stopping||externallyStopped()||now()>=deadline){stopLoading();return Object.freeze({evidence,management,grantAccepted,peerInstalled,close,shutdown,waitClosed:()=>closed});}
   const instantiation=WebAssembly.instantiate(module,{...signer.imports,'./fixture_bg.js':glue,...ownerImports(),...(grantAdapter?.imports??{cc_desk_browser_grant_v1:{begin:()=>-2,read:()=>-2,cose:()=>-2,cancel:()=>{}}})});
   const instance=await instantiation;
-  if(stopping||externallyStopped()||now()>=deadline){stopLoading();return Object.freeze({evidence,management,grantAccepted,close,shutdown,waitClosed:()=>closed});}
+  if(stopping||externallyStopped()||now()>=deadline){stopLoading();return Object.freeze({evidence,management,grantAccepted,peerInstalled,close,shutdown,waitClosed:()=>closed});}
   api=instance.exports as unknown as Api;memory=api.memory;
   (glue.__wbg_set_wasm as (value:WebAssembly.Exports)=>void)(instance.exports);api.__wbindgen_start();
   if(api.browser_tls_start(localRole,peerRole,Math.max(1,Math.ceil(deadline-now())))!==1){rustDone=true;fail(Error('browser TLS startup rejected'));closeIo();sealSigning();retire();}
   else{pumpRead();schedule();}
  }catch{rustDone=true;closeIo();sealSigning();sealGrant();fail(Error('browser TLS startup failed'));retire();}
- return Object.freeze({evidence,management,grantAccepted,close,shutdown,waitClosed:()=>closed});
+ return Object.freeze({evidence,management,grantAccepted,peerInstalled,close,shutdown,waitClosed:()=>closed});
 }

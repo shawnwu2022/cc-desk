@@ -15,9 +15,15 @@ enum Admission {
     Ready(u64),
     Terminal,
 }
+#[derive(Clone, Copy)]
+enum InstallEnd {
+    Native(Instant),
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    Browser(crate::tls_clock::Deadline),
+}
 pub(crate) struct Shared {
     admission: Mutex<Admission>,
-    end: Option<Instant>,
+    end: Option<InstallEnd>,
     client: tokio::sync::Mutex<Option<oneshot::Receiver<ClientInstalledPeer>>>,
     request: tokio::sync::Mutex<Option<oneshot::Receiver<HostInstallRequest>>>,
     complete: mpsc::Sender<Completion>,
@@ -34,6 +40,19 @@ struct Completion {
 }
 impl Shared {
     pub(crate) fn new(end: Option<Instant>) -> (Arc<Self>, Bootstrap) {
+        Self::create(end.map(InstallEnd::Native))
+    }
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    pub(crate) fn new_browser(end: crate::tls_clock::Deadline) -> (Arc<Self>, Bootstrap) {
+        Self::create(Some(InstallEnd::Browser(end)))
+    }
+    fn native_deadline(&self) -> Option<Instant> {
+        match self.end {
+            Some(InstallEnd::Native(end)) => Some(end),
+            _ => None,
+        }
+    }
+    fn create(end: Option<InstallEnd>) -> (Arc<Self>, Bootstrap) {
         let (ct, cr) = oneshot::channel();
         let (rt, rr) = oneshot::channel();
         let (tx, rx) = mpsc::channel(1);
@@ -87,9 +106,26 @@ impl Shared {
         Ok(())
     }
     fn commit(&self, authority: &BoundDataAuthority, fence: u64) -> Result<(), DataError> {
+        #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+        if let Some(InstallEnd::Browser(end)) = self.end {
+            // 固定clock import与grant检查均在admission锁外；同一非shared WASM owner发布。
+            authority.check()?;
+            if crate::tls_clock::expired(end) {
+                return Err(DataError::Deadline);
+            }
+            if fence == 0 {
+                return Err(DataError::Fence);
+            }
+            let mut state = self.admission.lock().map_err(|_| DataError::Closed)?;
+            if !matches!(*state, Admission::Pending) {
+                return Err(DataError::Closed);
+            }
+            *state = Admission::Ready(fence);
+            return Ok(());
+        }
         let mut state = self.admission.lock().map_err(|_| DataError::Closed)?;
         authority.check()?;
-        if Instant::now() >= self.end.ok_or(DataError::Context)? {
+        if Instant::now() >= self.native_deadline().ok_or(DataError::Context)? {
             return Err(DataError::Deadline);
         }
         if fence == 0 {
@@ -107,6 +143,16 @@ impl Shared {
             *state = Admission::Terminal;
         }
     }
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    pub(crate) fn completed_client(&self) -> Result<ClientInstalledPeer, DataError> {
+        let mut rx = self
+            .client
+            .try_lock()
+            .map_err(|_| DataError::Full)?
+            .take()
+            .ok_or(DataError::Full)?;
+        rx.try_recv().map_err(|_| DataError::Closed)
+    }
 }
 
 /// Opaque, non-Clone and non-deserializable. Only the authenticated IO owner mints it.
@@ -116,12 +162,18 @@ pub struct ClientInstalledPeer {
 }
 impl ClientInstalledPeer {
     pub fn consume_for(self, channel: &RunningChannel) -> Result<u64, DataError> {
-        let other = channel.authority();
+        self.consume_for_owner(&channel.authority(), &channel.peer)
+    }
+    pub(crate) fn consume_for_owner(
+        self,
+        other: &BoundDataAuthority,
+        peer: &Shared,
+    ) -> Result<u64, DataError> {
         self.authority.check()?;
         other.check()?;
-        if !channel.peer_install_enabled()
+        if !peer.enabled()
             || other.local_role() != Role::Client
-            || !self.authority.same_channel(&other)
+            || !self.authority.same_channel(other)
             || self.authority.binding_id() != other.binding_id()
             || self.authority.grant_id() != other.grant_id()
             || self.authority.scope() != other.scope()
@@ -131,7 +183,10 @@ impl ClientInstalledPeer {
                 .authority
                 .clock_domain()
                 .same_origin(&other.clock_domain())
-            || channel.installed_fence()? != self.fence
+            || {
+                other.check()?;
+                peer.fence()?
+            } != self.fence
         {
             return Err(DataError::Context);
         }
@@ -178,10 +233,11 @@ impl RunningChannel {
             .take()
             .ok_or(DataError::Full)?;
         let mut guard = CloseOnDrop(Some(self.authority()));
-        let proof = tokio::time::timeout_at(self.peer.end.unwrap(), rx)
-            .await
-            .map_err(|_| DataError::Deadline)?
-            .map_err(|_| DataError::Closed)?;
+        let proof =
+            tokio::time::timeout_at(self.peer.native_deadline().ok_or(DataError::Context)?, rx)
+                .await
+                .map_err(|_| DataError::Deadline)?
+                .map_err(|_| DataError::Closed)?;
         self.authority().check()?;
         self.peer.check_data(proof.fence)?;
         guard.0 = None;
@@ -199,10 +255,11 @@ impl RunningChannel {
             .take()
             .ok_or(DataError::Full)?;
         let mut guard = CloseOnDrop(Some(self.authority()));
-        let request = tokio::time::timeout_at(self.peer.end.unwrap(), rx)
-            .await
-            .map_err(|_| DataError::Deadline)?
-            .map_err(|_| DataError::Closed)?;
+        let request =
+            tokio::time::timeout_at(self.peer.native_deadline().ok_or(DataError::Context)?, rx)
+                .await
+                .map_err(|_| DataError::Deadline)?
+                .map_err(|_| DataError::Closed)?;
         self.authority().check()?;
         guard.0 = None;
         Ok(request)
@@ -234,7 +291,7 @@ impl RunningChannel {
                 mpsc::error::TrySendError::Full(_) => DataError::Full,
                 _ => DataError::Closed,
             })?;
-        tokio::time::timeout_at(self.peer.end.unwrap(), rx)
+        tokio::time::timeout_at(self.peer.native_deadline().ok_or(DataError::Context)?, rx)
             .await
             .map_err(|_| DataError::Deadline)?
             .map_err(|_| DataError::Closed)??;
@@ -244,7 +301,7 @@ impl RunningChannel {
     }
     /// Fixed at owner construction. This accessor cannot extend installation time.
     pub fn peer_install_deadline(&self) -> Option<Instant> {
-        self.peer.end
+        self.peer.native_deadline()
     }
 }
 fn hex(b: &[u8]) -> String {
@@ -267,9 +324,49 @@ async fn send<S: AsyncRead + AsyncWrite + Unpin>(
     let body = wire::encode(&m).map_err(|_| DataError::Codec)?;
     let bytes =
         cc_desk_remote_record::encode(Kind::Control, 1, &body).map_err(|_| DataError::Codec)?;
+    #[cfg(test)]
+    let bytes = fixture_mutate(bytes, &m)?;
     // Sequential write_all + flush deliberately pauses incoming parsing on BOTH sides.
     io.write_all(&bytes).await.map_err(|_| DataError::Io)?;
     io.flush().await.map_err(|_| DataError::Io)
+}
+#[cfg(test)]
+static FIXTURE_MUTATION: Mutex<Option<&'static str>> = Mutex::new(None);
+#[cfg(test)]
+pub(crate) fn fixture_mutation(mode: &'static str) {
+    *FIXTURE_MUTATION.lock().unwrap() = Some(mode);
+}
+#[cfg(test)]
+fn fixture_mutate(mut bytes: Vec<u8>, message: &wire::Message) -> Result<Vec<u8>, DataError> {
+    if !matches!(message, wire::Message::Installed { .. }) {
+        return Ok(bytes);
+    }
+    let Some(mode) = FIXTURE_MUTATION.lock().unwrap().take() else {
+        return Ok(bytes);
+    };
+    // 仅改原bootstrap已经编码的一个失败字段，或重放原完整帧；不另写成功协议。
+    if mode == "replay" {
+        let copy = bytes.clone();
+        bytes.extend_from_slice(&copy);
+        return Ok(bytes);
+    }
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&bytes[8..]).map_err(|_| DataError::Codec)?;
+    match mode {
+        "binding" => {
+            let old = value["binding"].as_str().ok_or(DataError::Codec)?;
+            let first = if old.starts_with('0') { '1' } else { '0' };
+            value["binding"] = format!("{first}{}", &old[1..]).into();
+        }
+        "fence" => value["fence"] = "0".into(),
+        "order" => {
+            value["message"] = "Request".into();
+            value.as_object_mut().unwrap().remove("fence");
+        }
+        _ => return Err(DataError::Context),
+    }
+    let body = serde_json::to_vec(&value).map_err(|_| DataError::Codec)?;
+    cc_desk_remote_record::encode(Kind::Control, 1, &body).map_err(|_| DataError::Codec)
 }
 async fn read<S: AsyncRead + AsyncWrite + Unpin>(
     io: &mut tokio_rustls::TlsStream<S>,

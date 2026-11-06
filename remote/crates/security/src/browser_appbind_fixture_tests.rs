@@ -88,7 +88,26 @@ async fn BrowserGrant_LoopbackFixture_002() {
         gate.accept(&proof).unwrap().check().unwrap();
         return;
     };
-    assert!(["normal", "expired", "revoked", "postdata"].contains(&mode.as_str()));
+    assert!(
+        [
+            "normal",
+            "expired",
+            "revoked",
+            "postdata",
+            "peer",
+            "peer-pending",
+            "peer-revoked",
+            "peer-expired",
+            "peer-after-expiry",
+            "peer-binding",
+            "peer-fence",
+            "peer-order",
+            "peer-replay",
+            "peer-data"
+        ]
+        .contains(&mode.as_str())
+    );
+    let peer_mode = mode.starts_with("peer");
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let (_, host_public) = crate::test_identities::identity(false, false);
     emit(
@@ -108,9 +127,12 @@ async fn BrowserGrant_LoopbackFixture_002() {
     )
     .await
     .unwrap();
-    let channel = crate::bind_host_grant_channel(pending, snapshot())
-        .await
-        .unwrap();
+    let channel = if peer_mode {
+        crate::bind_host_peer_channel(pending, snapshot()).await
+    } else {
+        crate::bind_host_grant_channel(pending, snapshot()).await
+    }
+    .unwrap();
     emit(serde_json::json!({"kind":"bound"}));
     let start = std::time::Instant::now();
     let clock: Arc<dyn crate::GrantClock> =
@@ -143,7 +165,11 @@ async fn BrowserGrant_LoopbackFixture_002() {
             crate::NativeGrantPolicy {
                 scope: crate::grant_tests::scope(),
                 role: cc_desk_remote_record::grant::DataRole::Controller,
-                duration: if mode == "expired" {
+                duration: if mode == "peer-after-expiry" {
+                    Duration::from_millis(600)
+                } else if mode == "peer-expired" {
+                    Duration::from_millis(300)
+                } else if mode == "expired" {
                     Duration::from_millis(50)
                 } else {
                     Duration::from_secs(4)
@@ -155,7 +181,85 @@ async fn BrowserGrant_LoopbackFixture_002() {
     match result {
         Ok(mut channel) => {
             emit(serde_json::json!({"kind":"grantAccepted"}));
-            if mode == "postdata" {
+            if peer_mode {
+                match mode.as_str() {
+                    "peer-binding" => crate::peer_install::fixture_mutation("binding"),
+                    "peer-fence" => crate::peer_install::fixture_mutation("fence"),
+                    "peer-order" => crate::peer_install::fixture_mutation("order"),
+                    "peer-replay" => crate::peer_install::fixture_mutation("replay"),
+                    _ => {}
+                }
+                let running = match channel
+                    .start_peer_pending(tokio::time::Instant::now() + Duration::from_secs(1))
+                {
+                    Ok(v) => v,
+                    Err(error) => {
+                        emit(
+                            serde_json::json!({"kind":"peerRejected","error":format!("{error:?}")}),
+                        );
+                        return;
+                    }
+                };
+                let request = match running.host_install_request().await {
+                    Ok(v) => v,
+                    Err(error) => {
+                        emit(
+                            serde_json::json!({"kind":"peerRejected","error":format!("{error:?}")}),
+                        );
+                        let _ = running.wait_closed_checked().await;
+                        return;
+                    }
+                };
+                emit(serde_json::json!({"kind":"installPending"}));
+                if mode == "peer-revoked" {
+                    gate.revoke();
+                    let _ = running.wait_closed_checked().await;
+                    emit(serde_json::json!({"kind":"peerRevoked"}));
+                    return;
+                }
+                if mode == "peer-pending" || mode == "peer-expired" {
+                    let _ = running.wait_closed_checked().await;
+                    return;
+                }
+                // 自有TEST_ONLY假工作负载先提交实际内存安装记录，再生成它的revision fence。
+                request.authority().check().unwrap();
+                let mut installed = std::collections::BTreeMap::new();
+                let scope = request.authority().scope().clone();
+                installed.insert(
+                    (scope.session, scope.run, scope.generation),
+                    (
+                        request.authority().binding_id(),
+                        request.authority().grant_id(),
+                    ),
+                );
+                let fence = u64::try_from(installed.len()).unwrap();
+                emit(
+                    serde_json::json!({"kind":"workloadInstalled","fence":fence.to_string(),"testOnly":true}),
+                );
+                match running.complete_host_install(request, fence).await {
+                    Ok(()) => emit(
+                        serde_json::json!({"kind":"transportInstalled","fence":fence.to_string()}),
+                    ),
+                    Err(error) => emit(
+                        serde_json::json!({"kind":"peerRejected","error":format!("{error:?}")}),
+                    ),
+                }
+                if mode == "peer-data" {
+                    running
+                        .send_projection(
+                            &crate::grant_tests::scope(),
+                            fence,
+                            b"PUBLIC_TEST_ONLY_UNSUPPORTED_DATA",
+                            Duration::from_secs(1),
+                        )
+                        .await
+                        .unwrap();
+                    emit(serde_json::json!({"kind":"postDataSent"}));
+                }
+                let result = running.wait_closed_checked().await;
+                emit(serde_json::json!({"kind":"peerClosed","result":format!("{result:?}")}));
+                drop(installed);
+            } else if mode == "postdata" {
                 let owner = channel.start().unwrap();
                 owner
                     .send_projection(
