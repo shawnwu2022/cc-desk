@@ -162,6 +162,8 @@ B 获准只刷新本 clone origin/main 并获取对象：[风险分析](main-0.2
 
 ## 永久删除窄实现已本地提交
 
+阶段10增量见 [真实CLI隔离审计](../.audit/v027-stage10-codex-live.md)：安装的Codex实际为0.167.0（没有升级），新增完全清空继承环境、独立sqlite_home和实际Job回收的合成源验收。新B002已真实删除单链接原件，三个控制记录保留，重复确认/inspect复用回执；旧B001 unknown不重放。对应自动认证、合法状态通知和未发送失败阶段有RED→GREEN与独审，仍不等同document IPC/可见UI/安装版或完整子树验收。Claude/OpenCode保持关闭，后续源/维护合同、生命周期、崩溃与部分失败设计见 [具体后续方案](provider-delete-maintenance-design-0.27.md)，不是已实现能力。
+
 实现提交 **`6de019a2ee22528d1c391e76c449c968c9846140`** 接通Windows授权profile下已原生归档Codex根的三阶段API、独立二次确认与双勾选、一次性票据、startup codexHome/rollout/header实核、容器句柄及整个own Job生命周期、unknown只读协调。确认范围是根及其原生动态子树，计数未知不编造；CLI关联维护、可能保留的数据与实际未跑边界明确。OpenCode/Claude执行和Unix分别关闭，不用旧隐藏/软归档或猜路径删除替代。
 
 最终固定1.98.1/CI debug0新Rust域7pass（1780过滤）、all-target Clippy/fmt、前端10文件408pass、Node安全9pass、typecheck及重建生产入口中英CSP2/2通过。独审P1派生进程逃逸、发送前失权、迟到预览、跨目标重新预览等均先RED再修复；原失败未覆盖。准确命令、源码tree/hash、失败/未跑项见 [完整审计](../.audit/v027-stage8-permanent-delete.md)；后续仅文档记录，不再更改已验证产品源码。没有新源完整16片/完整Vitest、真实CLI/WebView删除、真实签名候选往返或发布。

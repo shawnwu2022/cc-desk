@@ -1,0 +1,433 @@
+{
+  "baseHead": "25c37ac1b7ea2b6f63884a063da324e5e4f1562f",
+  "recordedAfterImplementationCommit": "515b75bb0488d69e04ba90f6f4051de4668863e8",
+  "branch": "feat/v0.27.0",
+  "compiler": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "profile": {
+    "RUSTUP_TOOLCHAIN": "1.98.1-x86_64-pc-windows-msvc",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_PROFILE_TEST_DEBUG": "0",
+    "CARGO_NET_OFFLINE": "true"
+  },
+  "node": "v24.18.0",
+  "installedCli": {
+    "path": "D:/nodejs/node_global/node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe",
+    "version": "0.167.0",
+    "bytes": 369062704,
+    "sha256": "edfdd48f8b458af0906e507b4cb05217b326c3d6e515e9f024e05e3b8d650f70",
+    "officialSourceCommit": "086ccc833bc9cf01024ad2dd6af7dbd421b6bf9a"
+  },
+  "sources": [
+    {
+      "path": "src-tauri/src/cli/launch_service.rs",
+      "bytes": 61616,
+      "sha256": "8266c1db7f212064920aae0574d221b897818b176236edec33808bd3b643df42"
+    },
+    {
+      "path": "src-tauri/src/cli/native_delete.rs",
+      "bytes": 17693,
+      "sha256": "6798b7519ac947e5248293fa0f9698adc49946fec903beb6bcdca7f4d802bcc0"
+    },
+    {
+      "path": "src-tauri/src/cli/native_projection/service.rs",
+      "bytes": 26426,
+      "sha256": "fc64d1caab3f7e8792d2ebbfc159e670fe7fd3cbe5c4ec3dbaf45bcb22f9a563"
+    },
+    {
+      "path": "src-tauri/src/tests/native_cli_delete.rs",
+      "bytes": 26856,
+      "sha256": "60a099f78a03b907ba0871b3c23ef52652bd90c140a366871c3bde3c56acbf6d"
+    },
+    {
+      "path": "src-tauri/src/tests/native_cli_delete_live.rs",
+      "bytes": 67380,
+      "sha256": "280f49c443d46f329d7cf729f1871a292a62a066877cf58ddd25677abd8da52b"
+    },
+    {
+      "path": "src-tauri/src/tests/mod.rs",
+      "bytes": 4012,
+      "sha256": "bb61c69a86de503bdae45f263ce538786340c9f49050aa2f4c4fefa30a861d52"
+    },
+    {
+      "path": "src/api/nativeSessionDelete.ts",
+      "bytes": 8160,
+      "sha256": "018fccd388661cd722a1712ba270ee175cb678e58b9f701fb5e95a133e6231dd"
+    },
+    {
+      "path": "tests/native-cli/nativeSessionDeleteApi.test.ts",
+      "bytes": 6450,
+      "sha256": "2179256e4398559ede86b5bce5953e1c44f07a031730b4c8dc8081d118e60a98"
+    }
+  ],
+  "rustSourceDigest": "43b4a0c19bd36d722bf5e3e5f59f8e1dd3dac3c9f310cf224068e9e8cc631505",
+  "documents": [
+    {
+      "path": "docs/permanent-delete-0.27.md",
+      "bytes": 19308,
+      "sha256": "e55efc1bdb874101e356cd276a618d47ad614c19eabe53ca3bf582c99c0d1ae2"
+    },
+    {
+      "path": "docs/provider-delete-maintenance-design-0.27.md",
+      "bytes": 8092,
+      "sha256": "62fd62faf52a31a6bdd414b06b89e856cb6a52029a5a83f1f384f050cc6feab0"
+    },
+    {
+      "path": "docs/development-0.27.md",
+      "bytes": 24605,
+      "sha256": "8ec4be201fd48b803493a75850ef93f63885f777127be8b04d48dac5ab7eb2bb"
+    },
+    {
+      "path": "docs/candidate-review-0.27.md",
+      "bytes": 15312,
+      "sha256": "53172083d2520ae740eed4053f03f829a510055eabb47ec61d128d865556a712"
+    },
+    {
+      "path": "docs/acceptance-checklist-0.27.md",
+      "bytes": 11637,
+      "sha256": "e361c903f205c1137b697c8652dff62839523e37c9b5f9ca4093bd42ff3f3318"
+    },
+    {
+      "path": ".audit/v027-stage10-codex-live.md",
+      "bytes": 26070,
+      "sha256": "3f0b365af9fc6d010dbcfa1cd54bf8d8cd7d738bb1ea172a46654868877d775f"
+    },
+    {
+      "path": ".audit/v027-stage10.todo.md",
+      "bytes": 3073,
+      "sha256": "29829b8c050c70f7c71fe679778026284c385ad8202ecc41896265683950d501"
+    },
+    {
+      "path": ".audit/v027-stage10-upstream-comparison.json",
+      "bytes": 4471,
+      "sha256": "2852102ce2166280830284fded3b7bba49a81c2b68d9575d45848ec9c1e87a42"
+    }
+  ],
+  "evidence": [
+    {
+      "path": ".audit/stage10-api-stage-red.log",
+      "bytes": 1216,
+      "sha256": "28dc435d867acacf97e9d618ad7f4cdb89940e9abae3357993c0468131474817"
+    },
+    {
+      "path": ".audit/stage10-auto-login-green.log",
+      "bytes": 1064,
+      "sha256": "1001bedccbefdb2494946ba54716a0e56753a10c319d69ec170aa2df607303f8"
+    },
+    {
+      "path": ".audit/stage10-auto-login-red.log",
+      "bytes": 1013,
+      "sha256": "28985933ae1e1b02e28ccc4d493131adc62bf33845984c82e970a9ec0ededa07"
+    },
+    {
+      "path": ".audit/stage10-backend-clippy-001.log",
+      "bytes": 139,
+      "sha256": "c254956461a32ab613c1083ead10a1b58f425a6cb1d344537719fdeff80db777"
+    },
+    {
+      "path": ".audit/stage10-backend-clippy-002.log",
+      "bytes": 139,
+      "sha256": "f33112c126458ab8ce7d193269ce02988343bf6ddbe7961332c23fa5b3d299a3"
+    },
+    {
+      "path": ".audit/stage10-backend-fmt-001.log",
+      "bytes": 13,
+      "sha256": "c1e97067c5f479a44a6f57297a0a8f87a59d181c3c529910f8bf059094bc3abb"
+    },
+    {
+      "path": ".audit/stage10-backend-fmt-002.log",
+      "bytes": 13,
+      "sha256": "c1e97067c5f479a44a6f57297a0a8f87a59d181c3c529910f8bf059094bc3abb"
+    },
+    {
+      "path": ".audit/stage10-backend-guards-001.log",
+      "bytes": 917,
+      "sha256": "9aa7670cc84882ce7f5f05e2356e7c28de45972fd51abb020cb35a05bf10fa08"
+    },
+    {
+      "path": ".audit/stage10-backend-guards-002.log",
+      "bytes": 550,
+      "sha256": "280a9d8cfd2d13201c173c81300047930c5b87dd434e0bdfcdf4f3899d12a7a8"
+    },
+    {
+      "path": ".audit/stage10-clippy-001.log",
+      "bytes": 821,
+      "sha256": "74739dd12a086ae4e4ebbe332dd6d15eeae549e3042da8c56e5b3a0d206f32e5"
+    },
+    {
+      "path": ".audit/stage10-clippy-002.log",
+      "bytes": 139,
+      "sha256": "79a4b35bcf79f337156f7bd6c2fe63847e5700c88c274cd5b0a4b614b93eb2c1"
+    },
+    {
+      "path": ".audit/stage10-clippy-final.log",
+      "bytes": 139,
+      "sha256": "9471f85266525021e81167032cea8da82b2e716f63eaa3c19fc7895df0170ee6"
+    },
+    {
+      "path": ".audit/stage10-clippy-final2.log",
+      "bytes": 139,
+      "sha256": "c6259341e3022053511c978c39a10c13d9a19f0e3fcb92ac063d1a713ad039a4"
+    },
+    {
+      "path": ".audit/stage10-clippy-final3.log",
+      "bytes": 139,
+      "sha256": "94e2f0261664c8a4e0d0ab7fcf354eec80eddb581e161b77a08ed96aaa4ca196"
+    },
+    {
+      "path": ".audit/stage10-clippy-final4.log",
+      "bytes": 139,
+      "sha256": "32a03c16ae959913ccc88ad91e22e3237962eedf768c4d0ba7559cd552259a5f"
+    },
+    {
+      "path": ".audit/stage10-final-clippy.log",
+      "bytes": 152,
+      "sha256": "fb979b788f3e4862fab523909b8059394fef2490f336c4a3f3630f3b091ffa7e"
+    },
+    {
+      "path": ".audit/stage10-final-format.log",
+      "bytes": 13,
+      "sha256": "c1e97067c5f479a44a6f57297a0a8f87a59d181c3c529910f8bf059094bc3abb"
+    },
+    {
+      "path": ".audit/stage10-final-native-delete.log",
+      "bytes": 4008,
+      "sha256": "d2f2934ae78a2fb1ef4f109d542341e7a3d413bf6984843709e0e5e4b8ba88cc"
+    },
+    {
+      "path": ".audit/stage10-fmt-final2.log",
+      "bytes": 293,
+      "sha256": "13a7769c1ace0607285495a5561c547e2371db17d80ed75cd49b7f8dd54d7893"
+    },
+    {
+      "path": ".audit/stage10-fmt-final3.log",
+      "bytes": 915,
+      "sha256": "dc34fd1d7fe2a26e9d049d2b28fe40fe9dd2a4c84e2dfd52ff75a37bba79dd94"
+    },
+    {
+      "path": ".audit/stage10-fmt-final4.log",
+      "bytes": 13,
+      "sha256": "c1e97067c5f479a44a6f57297a0a8f87a59d181c3c529910f8bf059094bc3abb"
+    },
+    {
+      "path": ".audit/stage10-frontend-stage-green.log",
+      "bytes": 703,
+      "sha256": "54b80d15f187fedc47fb0bbe8426feeb119b87dfd548c9bb6e7f9230b5472a37"
+    },
+    {
+      "path": ".audit/stage10-live-synthetic-001.log",
+      "bytes": 1390,
+      "sha256": "4a44f3c8d372ff8e67965e35b5633e951baf99cd0b2f5d71329b5ec75e428069"
+    },
+    {
+      "path": ".audit/stage10-live-synthetic-final.log",
+      "bytes": 1390,
+      "sha256": "26c862b9bca01626530f2693b3c15070a7a6cf9ffec2b225687898a94360c3bc"
+    },
+    {
+      "path": ".audit/stage10-live-synthetic-final2.log",
+      "bytes": 1390,
+      "sha256": "3669a5aa076db86638e4a9d1261c92e1dccfc4db1f1fd5f9badc31407baa2b43"
+    },
+    {
+      "path": ".audit/stage10-live-synthetic-final3.log",
+      "bytes": 1390,
+      "sha256": "2639a01d8f01e1d83cad407a73a9c377e7efaf18cc5b43c0509718d0a43ab417"
+    },
+    {
+      "path": ".audit/stage10-prespawn-red.log",
+      "bytes": 1412,
+      "sha256": "0ede3e02cd326cefca14a96ad603212dc5fb18be2f11df058fc3cd37e9214963"
+    },
+    {
+      "path": ".audit/stage10-protocol-clippy.log",
+      "bytes": 139,
+      "sha256": "ae6f6ef98eaf61c84aa9f307ccad14c941666c644b351d33e011c834b92b073b"
+    },
+    {
+      "path": ".audit/stage10-protocol-stage-green.log",
+      "bytes": 1356,
+      "sha256": "20554f0a374215e549dc9a82bc7d588b261e46feb12bf80fbda1894c4cab34d2"
+    },
+    {
+      "path": ".audit/stage10-protocol-stage-red.log",
+      "bytes": 2538,
+      "sha256": "5e6facc9ae8e6266539568f338354808d4e3cd758e5c9a12a086aac17662081c"
+    },
+    {
+      "path": ".audit/stage10-protocol-typecheck.log",
+      "bytes": 380,
+      "sha256": "298b718f155be87df417dfa7f314d305959c20a791143256aad2ec5f9d8275a0"
+    },
+    {
+      "path": ".audit/stage10-readonly-clippy-001.log",
+      "bytes": 139,
+      "sha256": "7dc51b46c9a03436a9535c03451ad3a5412a82a0ada2a1a706aba33c7125524e"
+    },
+    {
+      "path": ".audit/stage10-readonly-fmt-001.log",
+      "bytes": 13,
+      "sha256": "c1e97067c5f479a44a6f57297a0a8f87a59d181c3c529910f8bf059094bc3abb"
+    },
+    {
+      "path": ".audit/stage10-readonly-protocol-red.log",
+      "bytes": 1472,
+      "sha256": "85582b79702ba62eb8be990b1ba3f247c9da98e965b14eb88114b95a59bcd34c"
+    },
+    {
+      "path": ".audit/stage10-readonly-synthetic-001.log",
+      "bytes": 2137,
+      "sha256": "cc034cd3f1a0d25249ac06ef9ffd7bc34281d44ba96ab0315514a2074142449f"
+    },
+    {
+      "path": ".audit/stage10-real-readonly-001.log",
+      "bytes": 1824,
+      "sha256": "b4d12e8ce0db0475e13917bd5586b58266b67a635eba2253c63767794eee3f8d"
+    },
+    {
+      "path": ".audit/stage10-real-stage-a-001.log",
+      "bytes": 944,
+      "sha256": "17f822d92563f8779911c2c46fc5c415cc3414b84a3f18c96990b3b108bff3e8"
+    },
+    {
+      "path": ".audit/stage10-real-stage-a-002.log",
+      "bytes": 1197,
+      "sha256": "76f19bfda374fcb5e5aa1baf2dff4692ee76ed1f5a5e28aa27823d9c3153f482"
+    },
+    {
+      "path": ".audit/stage10-real-stage-a-003.log",
+      "bytes": 1639,
+      "sha256": "86990f506fcb1c8780642e2405355e2e0b26535d8633011ef3f4254937612fb5"
+    },
+    {
+      "path": ".audit/stage10-real-stage-b-001.log",
+      "bytes": 1908,
+      "sha256": "f49ef06a87a3274037b81699413a5ac907a313277e70af358dcd29a270d3f14c"
+    },
+    {
+      "path": ".audit/stage10-real-stage-b-002.log",
+      "bytes": 2422,
+      "sha256": "1c95d334135aa4083e89ba997d4e256691b8192cd5c8a9477e72c3dee3924535"
+    },
+    {
+      "path": ".audit/stage10-real-writer-lock-001.log",
+      "bytes": 3096,
+      "sha256": "8b541296a6eb2c57b3d6d8d048697cbbb3bdaf21ebd53f2620f14e56b1535c25"
+    },
+    {
+      "path": ".audit/stage10-send-boundary-red.log",
+      "bytes": 917,
+      "sha256": "4cf18370910fbd978060721a0366ab63b14cb8126ee9e8deadaf2fbd6ebfa0cb"
+    },
+    {
+      "path": ".audit/stage10-writer-lock-clippy-001.log",
+      "bytes": 139,
+      "sha256": "85a611f60fccbdef38c01e48cf6611519adcf3e5775efd655b9fe02ea2990232"
+    },
+    {
+      "path": ".audit/stage10-writer-lock-compile-002.log",
+      "bytes": 234,
+      "sha256": "a49a9f722a1dcb3ff5c65afc08e2c81a3f8ec9953e436178928bd39d0b3204e8"
+    },
+    {
+      "path": ".audit/stage10-writer-lock-fmt-001.log",
+      "bytes": 13,
+      "sha256": "c1e97067c5f479a44a6f57297a0a8f87a59d181c3c529910f8bf059094bc3abb"
+    },
+    {
+      "path": ".audit/stage10-writer-lock-green.log",
+      "bytes": 560,
+      "sha256": "d19ed7ca8884897f7f97e1c68804748a38a116e8cd1bedf6c6a12bf6301c22bf"
+    },
+    {
+      "path": ".audit/stage10-writer-lock-red.log",
+      "bytes": 1461,
+      "sha256": "dfdf6acdf707ffd3f5861a3261176ddf8ab38de3bca85d9a7e13ff5d919d30e5"
+    }
+  ],
+  "syntheticReports": [
+    {
+      "path": "C:/Users/wusha/AppData/Local/Temp/v027-codex-delete-live-Sn6sCD/reports/readonly-protocol.json",
+      "bytes": 1727,
+      "sha256": "ff32b29e29ee7fc5e8011767d9d7ed5e2c469cb696434b99d96deb63e0ce377c"
+    },
+    {
+      "path": "C:/Users/wusha/AppData/Local/Temp/v027-codex-delete-live-AbzPpB/reports/stage-b-result.json",
+      "bytes": 1094,
+      "sha256": "946733ff41be94043fcb7c60d38fca56ae438ab1117440453267d783b0095dec"
+    },
+    {
+      "path": "C:/Users/wusha/AppData/Local/Temp/v027-codex-delete-live-v6Nsyk/reports/stage-b-result.json",
+      "bytes": 1123,
+      "sha256": "84d329abcfccebd2f2a8c09a5538c67d8cf94519d1d14e4ec7ecd669dc57576a"
+    },
+    {
+      "path": "C:/Users/wusha/AppData/Local/Temp/v027-codex-delete-live-F7C8ky/reports/writer-lock-result.json",
+      "bytes": 1610,
+      "sha256": "343d6694fc8d8c2e17e2cda6264d986d23ee4bff844b82570cc882abd1c288f0"
+    },
+    {
+      "path": "C:/Users/wusha/AppData/Local/Temp/v027-codex-delete-live-svSo63/reports/prespawn-error.json",
+      "bytes": 315,
+      "sha256": "8dea0dec46b4cb23eb9de841c9fad410ec0cf6842e8066e0c2406e7457032ec0"
+    }
+  ],
+  "protectedMaterials": [
+    {
+      "path": ".audit/v027.todo.md",
+      "bytes": 481,
+      "sha256": "6514a3f6eed0403586b6624fb62d519edd2fb01554e2d62fb6706621d9a27622"
+    },
+    {
+      "path": ".audit/v027-stage7-superseded-desk-archive.patch",
+      "bytes": 18774,
+      "sha256": "59ebd85c4f4df6fcf8359dfecbc8205a5c84c1d845044e40852d83ee9eb5a910"
+    },
+    {
+      "path": ".audit/v027-stage7-superseded-native-archive.patch",
+      "bytes": 40373,
+      "sha256": "d692097086409d01aa798caad2d37847d9be485ea398b87a2d7c0756320f754b"
+    }
+  ],
+  "localDocumentLinks": {
+    "checked": 51,
+    "missing": 0
+  },
+  "results": {
+    "finalNativeDelete": {
+      "passed": 18,
+      "ignored": 5,
+      "failed": 0
+    },
+    "frontend": {
+      "files": 3,
+      "passed": 24,
+      "failed": 0
+    },
+    "realA003": "pass (remaining 3 probes); version separately A002 observed 0.167 then expected-version assertion failed",
+    "realReadOnly101": "pass",
+    "realB001": "unknown; failure retained; no replay; request phase not proven",
+    "realB002": "pass on implementation 515b75bb; fresh synthetic original deleted; direct Service not document IPC",
+    "realWriter102": "pass on final source digest; synthetic lock held; Desk obtained no success receipt, original retained; native RPC cause unproven",
+    "strictClippy": "pass final source",
+    "format": "pass final source",
+    "typecheck": "pass unchanged TS source"
+  },
+  "unrun": [
+    "current-source full 16 shards/full Vitest/build/CSP/hosted CI",
+    "real authenticated document IPC/visible Vue/installed WebView",
+    "native spawn/attached/history-reference/multiple-descendant partial failure/actual network timeout",
+    "Unix/live-user sessions/signed 0.27 installation roundtrip"
+  ],
+  "fastMode": {
+    "enabled": false,
+    "reason": "no current-thread service-tier or expiry control exposed",
+    "checkedUtc": "2026-11-06T14:38:43Z",
+    "userTimezone": "UTC+08:00",
+    "requestedExpiryUtc": "2026-11-06T16:00:00Z"
+  },
+  "testExecutable": {
+    "path": "src-tauri/target/debug/deps/cc_desk-e220344963676309.exe",
+    "bytes": 63837696,
+    "sha256": "74b72b4f9a3beedb796e6783201e5d7eaf5317f83b627d89a61c4ee90b03636b"
+  }
+}

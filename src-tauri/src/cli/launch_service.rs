@@ -121,41 +121,46 @@ impl LaunchService {
         active: Arc<std::sync::atomic::AtomicBool>,
         outcome: super::native_delete::OwnerOutcome,
     ) -> Result<(), SafeError> {
-        self.registry().check_caller(caller)?;
-        let profile = self.repository.get_profile(&request.profile_id)?;
-        let legacy =
-            profile.read_legacy(&self.repository.metadata_directory().join("config.json"))?;
-        let inherited = self.inherited_environment()?;
-        let snapshot = freeze_launch(
-            request,
-            &profile,
-            caller,
-            &FreezeContext {
-                inherited: &inherited,
-                terminal: &EnvMap::new(),
-                legacy: legacy.as_ref(),
-                observer: None,
-            },
-        )?;
-        // 元数据助手拒绝可能覆盖原生根或运行模式的 profile 参数。
-        if matches!(&profile.default_args, super::profiles::Override::Set(args) if !args.is_empty())
-            || !snapshot.default_args().is_empty()
-            || snapshot
-                .legacy_default_args()
-                .is_some_and(|args| !args.is_empty())
-        {
-            return Err(error("DELETE_ARGUMENTS_UNSUPPORTED"));
-        }
-        let selected =
-            super::native_projection::selection::locations(request.cli, snapshot.environment())
-                .map_err(error)?;
-        if selected.root != authority.root_path()
-            || selected.open_root(CliKind::Codex).map_err(error)?.key() != authority.root_key()
-        {
-            return Err(error("SCOPE_STALE"));
-        }
-        let spec = resolve_process(&build_invocation(request, &snapshot)?)?;
-        let (frozen, mut admission) = self.repository.admission().begin_metadata()?;
+        // 此准备段只冻结和验证输入，尚未创建原生进程，失败不能误报已发送删除。
+        let (spec, frozen, mut admission) = (|| -> Result<_, SafeError> {
+            self.registry().check_caller(caller)?;
+            let profile = self.repository.get_profile(&request.profile_id)?;
+            let legacy =
+                profile.read_legacy(&self.repository.metadata_directory().join("config.json"))?;
+            let inherited = self.inherited_environment()?;
+            let snapshot = freeze_launch(
+                request,
+                &profile,
+                caller,
+                &FreezeContext {
+                    inherited: &inherited,
+                    terminal: &EnvMap::new(),
+                    legacy: legacy.as_ref(),
+                    observer: None,
+                },
+            )?;
+            // 元数据助手拒绝可能覆盖原生根或运行模式的 profile 参数。
+            if matches!(&profile.default_args, super::profiles::Override::Set(args) if !args.is_empty())
+                || !snapshot.default_args().is_empty()
+                || snapshot
+                    .legacy_default_args()
+                    .is_some_and(|args| !args.is_empty())
+            {
+                return Err(error("DELETE_ARGUMENTS_UNSUPPORTED"));
+            }
+            let selected =
+                super::native_projection::selection::locations(request.cli, snapshot.environment())
+                    .map_err(error)?;
+            if selected.root != authority.root_path()
+                || selected.open_root(CliKind::Codex).map_err(error)?.key() != authority.root_key()
+            {
+                return Err(error("SCOPE_STALE"));
+            }
+            let spec = resolve_process(&build_invocation(request, &snapshot)?)?;
+            let (frozen, admission) = self.repository.admission().begin_metadata()?;
+            Ok((spec, frozen, admission))
+        })()
+        .map_err(super::native_delete::pre_dispatch_failure)?;
         let frozen = Arc::new(Mutex::new(Some(frozen)));
         let worker_frozen = frozen.clone();
         let registry = self.registry().clone();
@@ -249,17 +254,8 @@ impl LaunchService {
                 }
             };
             let result = run().map_err(|failure| {
-                if !delete_write_started
-                    && super::native_delete::pre_dispatch_reason(&failure.code).is_none()
-                    && !matches!(
-                        failure.code.as_str(),
-                        "SOURCE_BUSY"
-                            | "DELETE_ARGUMENTS_UNSUPPORTED"
-                            | "DELETE_ROOT_NOT_ARCHIVED"
-                            | "DELETE_SOURCE_UNAVAILABLE"
-                    )
-                {
-                    error("DELETE_PREPARE_FAILED")
+                if !delete_write_started {
+                    super::native_delete::pre_dispatch_failure(failure)
                 } else {
                     failure
                 }
@@ -285,9 +281,11 @@ impl LaunchService {
             .is_err()
         {
             if let Some(frozen) = frozen.lock().take() {
-                frozen.release_review()?;
+                frozen
+                    .release_review()
+                    .map_err(super::native_delete::pre_dispatch_failure)?;
             }
-            return Err(error("DELETE_UNAVAILABLE"));
+            return Err(error("DELETE_PREPARE_FAILED"));
         }
         receiver
             .recv_timeout(Duration::from_secs(35))

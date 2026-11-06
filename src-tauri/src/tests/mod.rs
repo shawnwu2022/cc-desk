@@ -24,6 +24,8 @@ mod hook_events;
 mod native_cli_availability;
 #[cfg(all(test, windows))]
 mod native_cli_channel_live;
+#[cfg(all(test, windows))]
+mod native_cli_delete_live;
 #[cfg(test)]
 mod native_cli_document;
 #[cfg(test)]

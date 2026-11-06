@@ -1,6 +1,6 @@
 # 0.27 永久删除：当前实现与明确缺口
 
-2026-11-06 用户明确要求永久删除来清理累计 session，并要求二次确认和风险提示。此要求替代此前优先隐藏/软归档的方向；隐藏、归档、备份都不作为永久删除交付。开发仅使用本任务合成数据，不删除真实用户数据，不连接真实 CLI 服务或申请凭据。
+2026-11-06 用户明确要求永久删除来清理累计 session，并要求二次确认和风险提示。此要求替代此前优先隐藏/软归档的方向；隐藏、归档、备份都不作为永久删除交付。开发仅使用本任务合成数据，不删除真实用户数据，不连接用户正在使用的服务或申请凭据。
 
 产品实现提交 `6de019a2ee22528d1c391e76c449c968c9846140`；最终命令、408项前端/7项Rust及独审与失败证据见 [阶段审计](../.audit/v027-stage8-permanent-delete.md)。
 
@@ -13,7 +13,7 @@
 - API 固定 document bridge；Pinia 账本跨弹窗关闭保留原操作。重复点击只发一次并只刷新一次来源历史；发送前失权不发 mutation；请求发出后的异常保守标 unknown，只读 inspect 不重放。不同目标不能借用原确认或清掉别的结果。
 - 直接调用固定 Claude SDK 的真实删除函数，对任务自建合成文件做隔离实验，实际证明硬链接适配不等于删除原数据，且 SDK 不拒绝已开放的 Node 写句柄。没有启动 Claude CLI、服务或模型请求。
 
-**实际交付范围是上述 Codex 窄场景的产品实现和隔离合成验证。** 尚未运行真实 Codex CLI 删除、安装版 WebView 或 Unix 验收；没有完整枚举/冻结后代清单或独立逐后代结果。原生 ACK 与本地根是否仍存在分别展示，不能把根消失说成全部关联数据都已清除。该切片不等于原先所有 CLI、所有平台的完整 P0。
+**实际交付范围是上述 Windows/Codex 窄场景的产品实现、合成回归及真实 CLI 隔离后端验收。** 阶段10已用现有0.167.0原生 initialize/read/delete 真正删除任务合成原件，取消/缺ack、换源/修订、重复和只读结果链有证据；首次unknown原记录未重放，详情见 [阶段10审计](../.audit/v027-stage10-codex-live.md)。这不是安装版 WebView、真实可见双确认或 Unix 验收；没有完整枚举/冻结后代清单或独立逐后代结果。原生 ACK 与本地根是否仍存在分别展示，不能把根消失说成全部关联数据都已清除。该切片不等于原先所有 CLI、所有平台的完整 P0。
 
 | 已保留片段 | SHA256 | 状态 |
 | --- | --- | --- |
@@ -22,14 +22,14 @@
 
 ## 三个提供方的真实接口与差异
 
-### Codex：有原生删除和外部 writer 保护，仍缺确认范围绑定
+### Codex：原生删除与外部 writer 保护，按根和动态子树确认
 
 固定 `rust-v0.167.0` / `086ccc833bc9cf01024ad2dd6af7dbd421b6bf9a`：
 
 - [`ThreadDeleteParams`](https://github.com/openai/codex/blob/086ccc833bc9cf01024ad2dd6af7dbd421b6bf9a/codex-rs/app-server-protocol/src/protocol/v2/thread.rs) 只有 `threadId`，成功 response 为空对象。没有 expected 子树或版本参数。
 - [`thread_delete`](https://github.com/openai/codex/blob/086ccc833bc9cf01024ad2dd6af7dbd421b6bf9a/codex-rs/app-server/src/request_processors/thread_delete.rs) 执行时重新计算 spawn 子树；检查 attached threads，准备删除，再以后代先、根最后的顺序调用 store。
 - [`delete_threads`](https://github.com/openai/codex/blob/086ccc833bc9cf01024ad2dd6af7dbd421b6bf9a/codex-rs/thread-store/src/local/delete_thread.rs#L114) 在任何 cleanup 前获取候选生命周期锁和跨进程 writer 锁，再检查 attached/external-history 引用。因此不能声称它没有外部活动保护。随后做 host 关联数据 cleanup、逐项 rollout/历史删除，全部 rollout 完成后才删 state rows；I/O 错误可能留下部分结果。
-- [`acquire_writer_locks`](https://github.com/openai/codex/blob/086ccc833bc9cf01024ad2dd6af7dbd421b6bf9a/codex-rs/thread-store/src/local/mod.rs) 逐项 acquire，任一失败退出；[`writer_lock`](https://github.com/openai/codex/blob/086ccc833bc9cf01024ad2dd6af7dbd421b6bf9a/codex-rs/rollout/src/writer_lock.rs#L44) 使用实际文件锁。短命 helper 不发送 resume/turn，可避免它自己加载活动线程；没有进行真实 CLI busy 演练。
+- [`acquire_writer_locks`](https://github.com/openai/codex/blob/086ccc833bc9cf01024ad2dd6af7dbd421b6bf9a/codex-rs/thread-store/src/local/mod.rs) 逐项 acquire，任一失败退出；[`writer_lock`](https://github.com/openai/codex/blob/086ccc833bc9cf01024ad2dd6af7dbd421b6bf9a/codex-rs/rollout/src/writer_lock.rs#L44) 使用实际文件锁。短命 helper 不发送 resume/turn，可避免它自己加载活动线程；阶段10已做持合成原生锁的真实CLI未取得成功回执/原件保留观察，未启动真实模型writer，不等同完整busy演练。
 - 协议源码确实提供实验性的 `parentThreadId`、`ancestorThreadId`、`attachedToThreadId`；生成 JSON schema 缺字段不证明接口不存在。可按实际能力校验做持久关系观察，但不能把两分区、多页查询当原子快照。预览后、请求重新求子树前发生的外部变化，仍可能扩大范围；writer 锁保证执行一致性，不是事前确认集合的 CAS。
 
 当前不再把缺少 expected IDs 单独当作永久阻塞。窄契约按准确根及原生子树确认；普通 resume/unarchive 先获取同一 thread writer 锁，spawn 先持久化关系边再创建 child 存储，可为活动/引用保护提供实际依据。但这不是未来 spawn 图的租约：外部 unarchive 若在最后复核后先完成并释放锁，删除可能处理其后的原生子树；不能承诺只处理预览时固定成员或根始终保持 archived。界面对此明确二次确认，已观察到变化则拒旧票据。没有自行占用 native writer 锁再与 CLI 抢同锁。
@@ -40,7 +40,9 @@ Windows 还持有非 reparse 的 sessions/archived_sessions 容器句柄至整�
 
 原生 [host cleanup](https://github.com/openai/codex/blob/086ccc833bc9cf01024ad2dd6af7dbd421b6bf9a/codex-rs/core/src/thread_manager.rs#L565) 正常按候选 ID 清消息板；但 [board 数据库损坏恢复](https://github.com/openai/codex/blob/086ccc833bc9cf01024ad2dd6af7dbd421b6bf9a/codex-rs/message-board/src/local/lifecycle.rs#L42) 会备份并重建共享库，可能影响其他会话 board 可用性。启动还可运行 migration/compression；“没有 resume/turn”不表示没有后台维护写。二次确认明确关联维护风险，正常 ACK 后先 EOF 收尾，原时限后只终止本次 Job，未 settled 不释放保护。错误不等于无改动；没有保证对同用户恶意任意文件改名的强原子隔离。
 
-已安装的 Codex 版本探测为 0.166.0；固定 `6ff1e1ca3b30fc8b914720681fcf5fe62e95f856` 的 delete_thread.rs、thread_delete.rs 与上述 0.167 文件逐字相同，两 tag 都有 camelCase codexHome。该结论仅是静态官方源码兼容依据，不是实际 0.166 二进制删除验收。
+早期阶段3安装版本探测为0.166.0；阶段10现有二进制实际探测为 **0.167.0**，SHA256 `edfdd48f8b458af0906e507b4cb05217b326c3d6e515e9f024e05e3b8d650f70`，本任务未安装或升级它。实际匹配上述086ccc来源，另核对关键配置/认证/初始化差异，未用旧0.166分析冒充当前行为。
+
+阶段10修复了两个真实边界：初始化显式 `explicitGatewayOauth:true` 以避免元数据助手触发自动认证；按 [官方通知定义](https://github.com/openai/codex/blob/086ccc833bc9cf01024ad2dd6af7dbd421b6bf9a/codex-rs/app-server-protocol/src/protocol/common.rs#L2081) 精确忽略无id、对象params的remoteControl/status/changed。其它工作通知和server request仍拒绝。初始化/读取或明确未开始delete写入的准备失败，收口后分别显示blocked和固定 `DELETE_INITIALIZE_FAILED` / `DELETE_READ_FAILED` / `DELETE_PREPARE_FAILED`；这只证明本helper未发送删除，不代表来源没有其他变化。实际删除写入开始后的错误/缺ACK仍unknown，只能核查，不自动重放。
 
 ### OpenCode：真实递归删除会先中断，不能套成单记录无副作用操作
 
@@ -97,3 +99,7 @@ Claude 同文件 READ/share READ|DELETE guard 确实拒绝旧/新 writer，但�
 OpenCode 持久 `time_suspended` 是 write-ahead intent，claim 的零行 no-op 不建立排他权；本进程 active/jobs/transport 不涵盖其他实例。5项算法观察包括已提交外部 claim 仍删根、晚到 child 留存、已归档 child 纳入、不相关根保留、元数据相同的不同DB以及晚启动 execution 被 interrupt。替身 Set/服务不是另一真实 CLI 实例。官方 CLI delete 仍走 ServerConnection，默认/standalone 可能启动服务并触发调度；Desk 现有 private server 在操作后销毁，没有可直接借用的持久 HTTP owner。实际可行下一步是在正常授权生命周期保留该服务来源，并具备覆盖启动/恢复/调度的拒忙/维护准入；不是单纯再加一次 idle 查询或要求理想 expected-ID 集合。
 
 结论分别为：Codex Windows 窄能力保持；Claude 来源映射可行、活动/namespace 保护未交付；OpenCode 原生删除真实存在、现有服务来源及执行期间活动准入未接通。两家执行仍关闭，隐藏/软归档未作为替代。无新增服务、真实用户数据操作、push 或发布。
+
+Claude/OpenCode 后续的具体来源、活动准入、正常生命周期、崩溃/部分失败、所需协议或用户动作及验证入口，单列在 [维护设计](provider-delete-maintenance-design-0.27.md)。这是待实现设计，不是两家永久删除交付，也不授权生产 ACL 或新服务启动。
+
+阶段10最终收口：受影响Rust域18 pass / 5按规定ignored，另显式A/101/B002/102均通过；前端3文件24项、类型检查、最终严格all-target Clippy/fmt和独审通过。仅B002是单根真实永久删除正向结果；102是持续占用合成原生锁的未取得成功回执/原件保留观察，无解锁重放。真实document IPC、可见安装版WebView、Unix、引用/多后代部分失败矩阵仍未验收，旧完整套件不冒称当前源全量结果。完整命令、源码摘要和保留失败见阶段10审计及索引。

@@ -128,6 +128,21 @@ pub(crate) fn pre_dispatch_reason(code: &str) -> Option<&'static str> {
         _ => None,
     }
 }
+pub(crate) fn pre_dispatch_failure(failure: SafeError) -> SafeError {
+    if pre_dispatch_reason(&failure.code).is_some()
+        || matches!(
+            failure.code.as_str(),
+            "SOURCE_BUSY"
+                | "DELETE_ARGUMENTS_UNSUPPORTED"
+                | "DELETE_ROOT_NOT_ARCHIVED"
+                | "DELETE_SOURCE_UNAVAILABLE"
+        )
+    {
+        failure
+    } else {
+        error("DELETE_PREPARE_FAILED")
+    }
+}
 pub(crate) fn reconcile(entry: &Entry, root: Option<bool>) -> Receipt {
     if entry.active.load(Ordering::Acquire) {
         return entry
