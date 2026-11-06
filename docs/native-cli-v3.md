@@ -172,6 +172,14 @@ Key properties:
 - partial/unknown writes are never replayed automatically;
 - ambiguous `onData` bytes are never guessed to be terminal protocol replies.
 
+Windows structured Codex attempts freeze the native clipboard route. Ctrl-V and
+DOM paste each reserve one ordered user-paste intent containing only `0x16`.
+Desk does not read clipboard contents or probe a CLI version for this route.
+Other CLIs, non-Windows platforms and raw actions retain the host text path.
+Missing optional identity evidence cannot disable native paste, and a failed or
+unknown shortcut write never falls back to sending text. This routing choice
+does not certify old or custom CLI implementations. See [paste contracts](paste-framing.md).
+
 ## Output path
 
 Native output uses a bounded stream with explicit offsets and acknowledgements.

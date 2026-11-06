@@ -272,6 +272,7 @@ npm run tauri:build        # 生产构建
 
 ### DevTools JSON 粘贴
 
+- Windows 结构化 Codex 会话的 Ctrl+V 与 DOM paste 使用 attempt 内冻结的原生 `0x16` 路由，不读取或转发宿主剪贴板正文。不得以缺少被动能力广告、版本探测或身份增强为由整体禁用；快捷键发送后不得自动补发正文。其他 CLI、非 Windows 和 raw 保持正文路径。兼容范围与回归要求见 [粘贴契约](paste-framing.md#windows-codex-原生粘贴路由)。
 - 实际粘贴不再自动压缩 JSON；只规范行尾。
 - Windows 完整粘贴帧保持原始 `ESC[200~…ESC[201~` 字节，通过一次逻辑 `write_all` 提交；不再使用旧版 ESC INPUT_RECORD 改写或 pipe drain 补丁。禁止用 sleep 或单行化代替完整性保证。
 - 前端各入口与生产 Rust writer 共享黄金样本；必须验证包含起止标记的完整正文。出现 Pasted text 折叠标签不算真实编辑器验收。见 docs/paste-framing.md。

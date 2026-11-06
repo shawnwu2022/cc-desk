@@ -29,7 +29,6 @@ import { platform } from '@/utils/platform'
 import { formatDroppedPaths } from '@/utils/terminalDropPaths'
 import { publicNativeErrorCode } from '@/utils/nativeErrorCode'
 import { cliResize, cliStop, cliGetObserverStatus } from '@/api/tauri'
-import { codexNativeTextPasteForAttempt } from '@/api/cliPasteSupport'
 import type { OutputFrame } from '@/types/terminal'
 import { useHookStore } from '@/stores/hook'
 import { useAppStore } from '@/stores/app'
@@ -75,7 +74,7 @@ let disposed = false
 const needsFit = ref(true)
 let startedAttempt: NativeAttemptIdentity | null = null
 let startPromise: Promise<void> | null = null
-let codexPasteSupport: { attempt: NativeAttemptIdentity; promise: Promise<boolean> } | null = null
+let nativeClipboardPaste = false
 let terminalGeneration: number | null = null
 let parserReset: { attempt: NativeAttemptIdentity; cancel: () => void } | null = null
 let stoppingAttempt: NativeAttemptIdentity | null = null
@@ -116,7 +115,7 @@ function stopStatusSync() {
 
 function disposeRunBinding() {
   runToken = {}
-  codexPasteSupport = null
+  nativeClipboardPaste = false
   receiptPublication = {}
   parserReset?.cancel()
   parserReset = null
@@ -139,6 +138,24 @@ function markInputFailure(attempt: NativeAttemptIdentity) {
   }
 }
 
+/** 原生剪贴板快捷键也先预留当前 intent；迟到的 producer 只能取消旧预留。 */
+function reserveNativeClipboardPaste(
+  attempt: NativeAttemptIdentity,
+  activeTerm: Terminal,
+  activeBinding: NativeTerminalBinding,
+) {
+  let cancelReservation: (() => boolean) | null = null
+  const reserved = activeBinding.reserveUserPaste(async () => {
+    if (!attemptIsCurrent(attempt) || binding !== activeBinding || term !== activeTerm) {
+      if (!cancelReservation?.()) throw new Error('NATIVE_PASTE_CANCEL_FAILED')
+      return new Uint8Array()
+    }
+    return Uint8Array.of(0x16)
+  })
+  cancelReservation = reserved.cancel
+  void reserved.settled.catch(() => markInputFailure(attempt))
+}
+
 function bindClipboard() {
   if (!container.value || !term) return
   const host = container.value
@@ -146,6 +163,13 @@ function bindClipboard() {
     if (!props.active || !inputEnabled || !term || !binding) return
     const target = event.target as Node | null
     if (!target || !term.element?.contains(target)) return
+
+    if (nativeClipboardPaste) {
+      event.preventDefault()
+      event.stopPropagation()
+      reserveNativeClipboardPaste(currentAttempt(), term, binding)
+      return
+    }
 
     const snapshot = classifyClipboardSnapshot({
       text: event.clipboardData?.getData('text/plain') ?? '',
@@ -177,7 +201,7 @@ function bindClipboard() {
   }
   host.addEventListener('paste', pasteListener, true)
   // WebView2 的 Ctrl+V 默认粘贴行为不派发 paste 事件（Runtime 行为，与加速键开关无关），
-  // 改在 keydown 捕获后手动读剪贴板路由；preventDefault 同时避免 paste 路径恢复后的双写。
+  // keydown 捕获后使用同一运行路由；preventDefault 避免 paste 路径恢复后的双写。
   pasteKeyDownListener = (event: KeyboardEvent) => {
     if (event.defaultPrevented || !event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return
     if (event.key.toLowerCase() !== 'v') return
@@ -190,6 +214,10 @@ function bindClipboard() {
     const attempt = currentAttempt()
     const activeTerm = term
     const activeBinding = binding
+    if (nativeClipboardPaste) {
+      reserveNativeClipboardPaste(attempt, activeTerm, activeBinding)
+      return
+    }
     const bracketedPasteMode = activeTerm.modes.bracketedPasteMode
     const ignoreBracketedPasteMode = activeTerm.options.ignoreBracketedPasteMode ?? false
     let cancelReservation: (() => boolean) | null = null
@@ -197,21 +225,8 @@ function bindClipboard() {
       if (!cancelReservation?.()) throw new Error('NATIVE_PASTE_CANCEL_FAILED')
       return new Uint8Array()
     }
-    // Only a confirmed native text-paste capability may receive Ctrl-V.
-    // A version string or bracketed-paste mode is not that evidence; otherwise
-    // use the existing clipboard path and its captured terminal mode.
-    const codexTextFallback = codexPasteSupport
-      && codexPasteSupport.attempt.runId === attempt.runId
-      && codexPasteSupport.attempt.generation === attempt.generation
-      ? codexPasteSupport.promise : null
     // 先在当前 attempt/mode 同步预留 intent；异步剪贴板结果只能完成这个固定预留。
     const reserved = activeBinding.reserveUserPaste(async () => {
-      if (codexTextFallback && await codexTextFallback) {
-        if (!attemptIsCurrent(attempt) || binding !== activeBinding || term !== activeTerm) {
-          return cancelNoop()
-        }
-        return new TextEncoder().encode('\x16')
-      }
       const clipboard = await readClipboardSnapshot(() => readText(), () => readImage())
       if (!attemptIsCurrent(attempt) || binding !== activeBinding || term !== activeTerm) {
         return cancelNoop()
@@ -376,9 +391,8 @@ async function startAttempt(attempt: NativeAttemptIdentity): Promise<void> {
   const token = {}
   disposeRunBinding()
   runToken = token
-  // 能力证据绑定本次运行，重启重新探测；运行中不受同路径升级的查询污染。
-  codexPasteSupport = tab.cli === 'codex' && tab.action.kind !== 'raw'
-    ? { attempt, promise: codexNativeTextPasteForAttempt(tab.profileId, tab.profileRevision) } : null
+  // 这是本次运行的输入路由策略，不是 CLI 能力或安装版本认证。
+  nativeClipboardPaste = platform === 'windows' && tab.cli === 'codex' && tab.action.kind !== 'raw'
   const publication = receiptPublication
 
   const runId = attempt.runId

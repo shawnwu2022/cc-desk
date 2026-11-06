@@ -21,7 +21,6 @@ pub(crate) mod observer_status;
 pub(crate) mod opencode;
 pub(crate) mod opencode_prepare;
 pub(crate) mod output_route;
-pub(crate) mod paste_support;
 pub(crate) mod profile_service;
 pub(crate) mod profiles;
 pub(crate) mod program_discovery;
