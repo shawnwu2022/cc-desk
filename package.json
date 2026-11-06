@@ -29,6 +29,7 @@
   "scripts": {
     "dev": "npm run prepare:session-sdk && vite",
     "build": "npm run prepare:session-sdk && vite build",
+    "build:browser": "node scripts/build-browser-runtime.mjs && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",

@@ -236,6 +236,17 @@ impl NativeHost {
         channel: Arc<RunningChannel>,
         lease: [u8; 16],
     ) -> Result<InstallAttempt, NativeHostError> {
+        self.begin_rebind_checked(target, device, expected, channel, lease, None)
+    }
+    fn begin_rebind_checked(
+        &mut self,
+        target: &Target,
+        device: [u8; 32],
+        expected: u64,
+        channel: Arc<RunningChannel>,
+        lease: [u8; 16],
+        authorize: Option<Box<dyn FnOnce() -> bool + Send>>,
+    ) -> Result<InstallAttempt, NativeHostError> {
         if self.closing {
             return Err(NativeHostError::Closed);
         }
@@ -246,7 +257,14 @@ impl NativeHost {
         let authority = channel.authority();
         let pending = self
             .owner
-            .rebind_authorized(target, device, expected, authority.clone(), lease)
+            .rebind_authorized_checked(
+                target,
+                device,
+                expected,
+                authority.clone(),
+                lease,
+                authorize,
+            )
             .map_err(|_| NativeHostError::Rejected)?;
         let id = InstallAttempt(self.attempts.len() as u64 + 1);
         self.attempts.push(Attempt {

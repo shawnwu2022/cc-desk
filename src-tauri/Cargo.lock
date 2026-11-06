@@ -518,6 +518,7 @@ dependencies = [
  "cc-desk-remote-record",
  "cc-desk-remote-security",
  "cc-desk-remote-transport",
+ "serde_json",
  "tokio",
 ]
 

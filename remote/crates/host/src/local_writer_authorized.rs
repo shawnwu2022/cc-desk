@@ -143,11 +143,26 @@ impl WriterHostOwner {
         authority: BoundDataAuthority,
         lease: [u8; 16],
     ) -> Result<AuthorizedPendingRebind, OwnerError> {
+        self.rebind_authorized_checked(target, device, expected, authority, lease, None)
+    }
+    pub(in crate::local_writer) fn rebind_authorized_checked(
+        &mut self,
+        target: &Target,
+        device: [u8; 32],
+        expected: u64,
+        authority: BoundDataAuthority,
+        lease: [u8; 16],
+        authorize: Option<Box<dyn FnOnce() -> bool + Send>>,
+    ) -> Result<AuthorizedPendingRebind, OwnerError> {
         let next = expected
             .checked_add(1)
             .ok_or(OwnerError::Writer(Reject::Epoch))?;
         let admission = self.authorized_admission(target, device, &authority, lease, next)?;
-        let pending = self.rebind(target, device, expected, admission)?;
+        let pending = if authorize.is_some() {
+            self.rebind_checked(target, device, expected, admission, authorize)?
+        } else {
+            self.rebind(target, device, expected, admission)?
+        };
         Ok(AuthorizedPendingRebind {
             pending,
             authority,

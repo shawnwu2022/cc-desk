@@ -299,7 +299,8 @@ async fn NativeRemote_ActualAdmissionInstallsOriginalOwnNode_001() {
             Ok(())=>return Err("wrong scope consumed native admission"),
         };
         check(admission.scope().map_err(|_|"rejected original scope")?==scope,"wrong scope changed original custody")?;
-        let(c,h,gate,stop)=channels::channels(scope).await;
+        let clock:Arc<dyn cc_desk_remote_security::GrantClock>=Arc::new(||Ok(1000));
+        let(c,h,gate,stop)=channels::channels_with_clock(scope.clone(),clock.clone()).await;
         cleanup.proofs.extend([c.authority(),h.authority()]);
         grant=Some(gate);cancel=Some(stop);original_client=Some(c);original_host=Some(Arc::new(h));
         host.adopt_admitted(admission,original_host.as_ref().unwrap().clone(),&runtime).map_err(|rejected|{
@@ -342,6 +343,17 @@ async fn NativeRemote_ActualAdmissionInstallsOriginalOwnNode_001() {
         // A new complete snapshot was delivered but has NOT been acknowledged.
         // Replaying the old original input must not reach physical IO.
         check(client.exchange(&frame,BUDGET).await.is_err(),"input before new exact ACK was accepted")?;
+        let access2=fixture.service.access(&fixture.caller,&status.run).map_err(|_|"fresh access")?;
+        let admission2=fixture.supervisor.admit_remote_run(access2,&status.run).map_err(|_|"fresh original admission")?;
+        let(c2,h2,_grant2,_cancel2)=channels::channels_with_clock(scope.clone(),clock).await;
+        let h2=Arc::new(h2);cleanup.proofs.extend([c2.authority(),h2.authority()]);
+        host.adopt_admitted(admission2,h2.clone(),&runtime).map_err(|_|"same original resource rebind")?;
+        let proof2=c2.client_installed().await.map_err(|_|"fresh original install")?;
+        let client2=NativeClient::from_installed(c2,proof2).map_err(|_|"fresh original client")?;
+        let snapshot2=client2.snapshot(br#"{"message":"Snapshot","profile":1,"request":"1"}"#,BUDGET).await.map_err(|_|"rebound snapshot")?;
+        check(snapshot2.stamp.target==snapshot.stamp.target && host.test_pin_count()==1,"same producer/one original pin")?;
+        check(client2.close().await!=cc_desk_remote_security::DataError::Uncertain,"fresh client close uncertain")?;
+        check(h2.wait_closed().await!=cc_desk_remote_security::DataError::Uncertain,"fresh Host channel close uncertain")?;
         check(original_host.as_ref().unwrap().authority().check().is_err(),"failed peer remains live")?;
         let local=access.write_frame(b"ive").map_err(|_|"phone loss stopped original local input")?;
         check(local.state==crate::terminal_input::InputWriteState::HostWritten && local.confirmed_bytes==3,"exact local continuation")?;

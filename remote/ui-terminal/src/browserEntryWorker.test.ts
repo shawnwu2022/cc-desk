@@ -1,0 +1,31 @@
+import {test} from 'node:test';import assert from 'node:assert/strict';
+import {runBrowserEntryWorker,type BrowserWorkerStart} from './browserEntry.worker.ts';
+import {serveBrowserTransport} from './browserTransport.ts';
+test('BrowserEntryWorker_OriginalDeadlineSealsFetchAndRetainsLateLoad_001',async()=>{
+ const saved=new Map<string,PropertyDescriptor|undefined>();class Scope{static [Symbol.hasInstance](v:unknown){return v===globalThis;}}
+ let requestSignal:AbortSignal|undefined,releaseFetch!:(v:Response)=>void,releaseWire!:()=>void;const physical=new Promise<void>(r=>{releaseWire=r;});
+ for(const[k,v]of Object.entries({DedicatedWorkerGlobalScope:Scope,isSecureContext:true,crossOriginIsolated:true,location:{origin:'https://desk.invalid'},fetch:async(_url:unknown,options:RequestInit)=>{requestSignal=options.signal!;return new Promise<Response>(r=>{releaseFetch=r;});}})){saved.set(k,Object.getOwnPropertyDescriptor(globalThis,k));Object.defineProperty(globalThis,k,{configurable:true,value:v});}
+ const channel=new MessageChannel(),app=new MessageChannel(),controller=new AbortController();const retired:any[]=[];let resolveApp!:(v:any)=>void;const appDone=new Promise<any>(r=>{resolveApp=r;});app.port1.onmessage=e=>{retired.push(e.data);if(e.data.kind==='retired')resolveApp(e.data);};
+ const owner=serveBrowserTransport(channel.port1,{read:async()=>null,write:async()=>{},close(){},waitClosed:()=>physical});
+ const init={kind:'start',origin:'https://desk.invalid',artifacts:{wasm:'https://desk.invalid/client.wasm',glue:'https://desk.invalid/client.js'},tls:{setupDeadline:performance.timeOrigin+performance.now()+25},transport:channel.port2,application:app.port2} as BrowserWorkerStart;
+ let complete=false;const work=runBrowserEntryWorker(init,controller.signal).then(()=>{complete=true;});void work.catch(()=>{});
+ try{await new Promise(r=>setTimeout(r,50));assert.equal(requestSignal?.aborted,true);assert.equal(complete,false);assert.equal(retired.length,0);releaseFetch(new Response(new Uint8Array([0])));await new Promise(r=>setImmediate(r));assert.equal(complete,false);releaseWire();await work;await owner.waitClosed();assert.equal((await appDone).uncertain,false);}
+ finally{controller.abort();releaseFetch?.(new Response(new Uint8Array([0])));releaseWire();await work.catch(()=>{});app.port1.close();app.port2.close();channel.port1.close();channel.port2.close();for(const[k,d]of saved){if(d)Object.defineProperty(globalThis,k,d);else Reflect.deleteProperty(globalThis,k);}}
+});
+test('BrowserEntryWorker_RetirementFailureStillRemovesOwnedListener_002',async()=>{
+ const saved=new Map<string,PropertyDescriptor|undefined>();class Scope{static [Symbol.hasInstance](v:unknown){return v===globalThis;}}
+ for(const[k,v]of Object.entries({DedicatedWorkerGlobalScope:Scope,isSecureContext:true,crossOriginIsolated:true,location:{origin:'https://desk.invalid'},fetch:async()=>new Response(new Uint8Array([0]))})){saved.set(k,Object.getOwnPropertyDescriptor(globalThis,k));Object.defineProperty(globalThis,k,{configurable:true,value:v});}
+ const io=new MessageChannel(),app=new MessageChannel(),controller=new AbortController();let removed=false,release!:()=>void;const physical=new Promise<void>((_resolve,reject)=>{release=()=>reject(Error('TEST_ONLY unknown physical retirement'));});void physical.catch(()=>{});
+ const remove=controller.signal.removeEventListener.bind(controller.signal);controller.signal.removeEventListener=((...args:Parameters<AbortSignal['removeEventListener']>)=>{removed=true;remove(...args);}) as AbortSignal['removeEventListener'];
+ const transport=serveBrowserTransport(io.port1,{read:async()=>null,write:async()=>{},close(){},waitClosed:()=>physical});let complete=false;const work=runBrowserEntryWorker({kind:'start',origin:'https://desk.invalid',artifacts:{wasm:'https://desk.invalid/client.wasm',glue:'https://desk.invalid/client.js'},tls:{setupDeadline:performance.timeOrigin+performance.now()+1000},transport:io.port2,application:app.port2} as BrowserWorkerStart,controller.signal).finally(()=>{complete=true;});void work.catch(()=>{});
+ try{await new Promise(r=>setTimeout(r,20));assert.equal(complete,false);release();await assert.rejects(work);await assert.rejects(transport.waitClosed());assert.equal(removed,true);}
+ finally{controller.abort();release();await work.catch(()=>{});app.port1.close();app.port2.close();io.port1.close();io.port2.close();for(const[k,d]of saved){if(d)Object.defineProperty(globalThis,k,d);else Reflect.deleteProperty(globalThis,k);}}
+});
+test('BrowserEntryWorker_ByteFragmentsDoNotAccumulatePerChunkMetadata_003',async()=>{
+ const saved=new Map<string,PropertyDescriptor|undefined>();class Scope{static [Symbol.hasInstance](v:unknown){return v===globalThis;}}let chunks=0,pushed=0;
+ for(const[k,v]of Object.entries({DedicatedWorkerGlobalScope:Scope,isSecureContext:true,crossOriginIsolated:true,location:{origin:'https://desk.invalid'},fetch:async()=>new Response(new ReadableStream<Uint8Array>({pull(c){if(chunks++<8192)c.enqueue(new Uint8Array([0]));else c.close();}}))})){saved.set(k,Object.getOwnPropertyDescriptor(globalThis,k));Object.defineProperty(globalThis,k,{configurable:true,value:v});}
+ const original=Array.prototype.push;Array.prototype.push=function(...values:any[]){if(values.some(v=>v instanceof Uint8Array&&v.length===1))pushed++;return original.apply(this,values);};
+ const io=new MessageChannel(),app=new MessageChannel(),controller=new AbortController(),transport=serveBrowserTransport(io.port1,{read:async()=>null,write:async()=>{},close(){},waitClosed:async()=>{}});
+ try{await runBrowserEntryWorker({kind:'start',origin:'https://desk.invalid',artifacts:{wasm:'https://desk.invalid/client.wasm',glue:'https://desk.invalid/client.js'},tls:{setupDeadline:performance.timeOrigin+performance.now()+1000},transport:io.port2,application:app.port2} as BrowserWorkerStart,controller.signal);await transport.waitClosed();assert.equal(chunks,8193);assert.ok(pushed<64,`unbounded per-chunk metadata: ${pushed}`);}
+ finally{Array.prototype.push=original;controller.abort();app.port1.close();app.port2.close();io.port1.close();io.port2.close();for(const[k,d]of saved){if(d)Object.defineProperty(globalThis,k,d);else Reflect.deleteProperty(globalThis,k);}}
+});

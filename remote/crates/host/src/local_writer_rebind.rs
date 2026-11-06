@@ -144,6 +144,16 @@ impl LocalWriter {
         expected_fence: u64,
         admission: ControlAdmission,
     ) -> Result<PendingRebind, Reject> {
+        self.rebind_target_checked(target, device, expected_fence, admission, None)
+    }
+    pub(in crate::local_writer) fn rebind_target_checked(
+        &self,
+        target: &Target,
+        device: [u8; 32],
+        expected_fence: u64,
+        admission: ControlAdmission,
+        authorize: Option<Box<dyn FnOnce() -> bool + Send>>,
+    ) -> Result<PendingRebind, Reject> {
         if self.handle.sealed.load(Ordering::Acquire) {
             return Err(Reject::Sealed);
         }
@@ -161,6 +171,7 @@ impl LocalWriter {
                 device,
                 expected_fence,
                 admission,
+                authorize,
                 input,
                 projection,
                 reply: tx,
@@ -197,6 +208,7 @@ pub(in crate::local_writer) struct RebindRequest {
     device: [u8; 32],
     expected_fence: u64,
     admission: ControlAdmission,
+    authorize: Option<Box<dyn FnOnce() -> bool + Send>>,
     input: LocalInputHandle,
     projection: ProjectionHandle,
     reply: mpsc::SyncSender<Result<PeerViewHandle, Reject>>,
@@ -206,11 +218,20 @@ impl RebindRequest {
     pub(in crate::local_writer) fn reject(self, error: Reject) {
         let _ = self.reply.try_send(Err(error));
     }
-    pub(in crate::local_writer) fn process(self, gate: &mut ViewGate, journal: &Journal) {
+    pub(in crate::local_writer) fn process(mut self, gate: &mut ViewGate, journal: &Journal) {
         let result = (|| {
             gate.resize_ready()?;
             if self.input.target.as_ref() != &gate.scope.target {
                 return Err(Reject::Target);
+            }
+            if self
+                .admission
+                .authority
+                .as_ref()
+                .is_some_and(|authority| authority.check().is_err())
+                || self.authorize.take().is_some_and(|authorize| !authorize())
+            {
+                return Err(Reject::Policy);
             }
             let replacement = gate
                 .control

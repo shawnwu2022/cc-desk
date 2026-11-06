@@ -5,6 +5,8 @@ import { documentClientPort, documentClientStatus } from '../../../remote/ui-ter
 import { nativeConnection, type RetirableNativeConnection } from '../../../remote/ui-terminal/src/native'
 import { TerminalClient } from '../../../remote/ui-terminal/src/client'
 import AppButton from '@/components/ui/AppButton.vue'
+import type { TerminalConnectionSource } from '../../../remote/ui-terminal/src/connectionSource'
+const props = defineProps<{ source?: TerminalConnectionSource }>()
 const { t } = useI18n()
 const state = ref<'Locked' | 'Synced' | 'Unavailable' | 'Uncertain'>('Locked')
 const busy = ref(false), output = ref<HTMLElement>()
@@ -12,8 +14,9 @@ const role = ref<'Controller' | 'Viewer'>('Viewer'), draft = ref('')
 const inputStatus = ref<'' | 'HostWritten' | 'Rejected' | 'TooLarge'>('')
 let connection: RetirableNativeConnection | undefined, client: TerminalClient | undefined
 let disposed = false, epoch = 0
+let opening: AbortController | undefined
 async function close() {
-  epoch++; client?.disconnect()
+  epoch++; opening?.abort(); client?.disconnect()
   const owned = connection
   if (owned) { owned.close(); await owned.waitClosed() }
   if (connection === owned) { connection = undefined; client = undefined; role.value = 'Viewer' }
@@ -33,12 +36,18 @@ async function refresh() {
   const current = epoch
   try {
     if (!client) {
-      const status = await documentClientStatus()
-      if (disposed || current !== epoch) return
-      if (status.state === 'Locked') { state.value = 'Locked'; return }
-      role.value = status.role
-      connection = nativeConnection(documentClientPort(status.resourceId))
-      client = new TerminalClient(status.target, status.binding)
+      opening = new AbortController()
+      const source = props.source
+      const found = source ? await source.open(opening.signal) : await (async () => {
+        const status = await documentClientStatus()
+        return status.state === 'Locked' ? undefined : { ...status, connection: nativeConnection(documentClientPort(status.resourceId)) }
+      })()
+      if (disposed || current !== epoch) { if (found) { found.connection.close(); await found.connection.waitClosed() }; return }
+      opening = undefined
+      if (!found) { state.value = 'Locked'; return }
+      role.value = found.role
+      connection = found.connection
+      client = new TerminalClient(found.target, found.binding)
       client.connect(connection)
     }
     await client.snapshot()
@@ -90,7 +99,7 @@ onBeforeUnmount(() => { disposed = true; void close().catch(() => {}) })
   <section class="remote-panel" :aria-label="t('remoteTerminalTitle')" data-remote-terminal>
     <h3>{{ t('remoteTerminalTitle') }}</h3>
     <p role="status">{{ t(`remoteTerminal${state}`) }}</p>
-    <p class="remote-hint">{{ t('remoteTerminalPreviewHint') }}</p>
+    <p class="remote-hint">{{ t(props.source ? 'remoteTerminalBrowserHint' : 'remoteTerminalPreviewHint') }}</p>
     <div class="remote-actions">
       <AppButton data-remote-refresh :disabled="busy || state === 'Uncertain'" @click="refresh">{{ t('remoteTerminalRefresh') }}</AppButton>
       <AppButton data-remote-disconnect :disabled="busy || state === 'Locked'" @click="disconnect">{{ t('remoteTerminalDisconnect') }}</AppButton>

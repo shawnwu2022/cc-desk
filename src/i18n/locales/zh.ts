@@ -5,6 +5,7 @@ export default {
   remoteTerminalUnavailable: "远程连接不可用；已禁用后续输入。",
   remoteTerminalUncertain: "输入结果不确定，已阻止新输入；不会自动重试。",
   remoteTerminalPreviewHint: "使用已有的原生认证连接，此处尚不支持建立连接。原样文本不添加回车、按键转换或粘贴边框。",
+  remoteTerminalBrowserHint: "刷新以使用已批准的配置连接，并确认连接详情。原样文本不添加回车、按键转换或粘贴边框。",
   remoteTerminalInput: "原样 UTF-8 文本（最多 8192 字节）",
   remoteTerminalSend: "发送原样文本",
   remoteTerminalHostWritten: "Host 写入已确认；不代表 CLI 已执行。",

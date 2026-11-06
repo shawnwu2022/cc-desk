@@ -5,6 +5,7 @@ export default {
   remoteTerminalUnavailable: "Remote connection unavailable; further input is disabled.",
   remoteTerminalUncertain: "An input outcome is uncertain. New input is blocked; nothing is retried automatically.",
   remoteTerminalPreviewHint: "Uses an existing authenticated native connection. Connection setup is not available here. Literal text adds no Enter, key translation or paste framing.",
+  remoteTerminalBrowserHint: "Refresh to connect using your approved profile and confirm the connection details. Literal text adds no Enter, key translation or paste framing.",
   remoteTerminalInput: "Literal UTF-8 text (maximum 8192 bytes)",
   remoteTerminalSend: "Send literal text",
   remoteTerminalHostWritten: "Host write confirmed; this does not confirm CLI execution.",

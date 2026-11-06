@@ -1,6 +1,6 @@
 import {browserProfileBoundary,produceBrowserApproval,type BrowserProfile} from './browserApproval.ts';
 const now=()=>performance.timeOrigin+performance.now();
-const exact=(v:unknown,keys:string[]):v is Record<string,unknown>=>!!v&&typeof v==='object'&&Object.keys(v).length===keys.length&&keys.every(k=>Object.hasOwn(v,k));
+const exact=(v:unknown,keys:string[]):v is Record<string,unknown>=>!!v&&typeof v==='object'&&Object.keys(v).length===keys.length&&keys.every(k=>Object.prototype.hasOwnProperty.call(v,k));
 const bytes=(v:unknown,min:number,max:number):v is Uint8Array=>v instanceof Uint8Array&&v.length>=min&&v.length<=max;
 function encode(v:Uint8Array){return btoa(Array.from(v,b=>String.fromCharCode(b)).join('')).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');}
 function decode(v:unknown,max:number){if(typeof v!=='string'||v.length>Math.ceil(max/3)*4||!/^[A-Za-z0-9_-]*$/.test(v))throw Error('grant bytes');const result=Uint8Array.from(atob(v.replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0));if(result.length>max||encode(result)!==v)throw Error('grant bytes');return result;}

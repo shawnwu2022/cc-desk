@@ -46,7 +46,7 @@ export async function startBrowserTlsWorker(options:Readonly<{wasm:BufferSource|
  let resolveGrant:((value:BrowserGrantReceipt)=>void)|undefined,rejectGrant:((error:Error)=>void)|undefined;
  const grantAccepted=grantBridge===undefined?undefined:new Promise<BrowserGrantReceipt>((resolve,reject)=>{resolveGrant=resolve;rejectGrant=reject;});void grantAccepted?.catch(()=>{});
  let resolvePeer:((value:BrowserPeerReceipt)=>void)|undefined,rejectPeer:((error:Error)=>void)|undefined;
- const peerRequested=grantBridge!==undefined&&(()=>{try{return Object.hasOwn(JSON.parse(new TextDecoder().decode(grantBridge.configuration)),'peerInstall');}catch{return true;}})();
+ const peerRequested=grantBridge!==undefined&&(()=>{try{return Object.prototype.hasOwnProperty.call(JSON.parse(new TextDecoder().decode(grantBridge.configuration)),'peerInstall');}catch{return true;}})();
  const peerInstalled=!peerRequested||dataRequested?undefined:new Promise<BrowserPeerReceipt>((resolve,reject)=>{resolvePeer=resolve;rejectPeer=reject;});void peerInstalled?.catch(()=>{});
  function fail(error:Error){rejectEvidence(error);rejectManagement?.(error);rejectGrant?.(error);rejectPeer?.(error);}
  const closed=new Promise<void>((resolve,reject)=>{resolveClosed=resolve;rejectClosed=reject;});void evidence.catch(()=>{});void closed.catch(()=>{});
@@ -100,7 +100,7 @@ export async function startBrowserTlsWorker(options:Readonly<{wasm:BufferSource|
     if(!trust||managementBound||stopping||ioClosed||ioError||eof||externallyStopped()||now()>=deadline||length<1||length>4096)throw Error('browser management publication');
     const value=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(range(pointer,length))) as BrowserManagementFacts;
     const keys=['kind','profile','minor','hostEndpointId','clientEndpointId','hostKeyEpoch','clientKeyEpoch','origin'];
-    if(!value||Object.keys(value).length!==keys.length||!keys.every(key=>Object.hasOwn(value,key))||value.kind!=='ManagementOnly'||value.profile!==1||value.minor!==0||!/^[0-9a-f]{64}$/.test(value.hostEndpointId)||!/^[0-9a-f]{64}$/.test(value.clientEndpointId)||value.hostKeyEpoch!==trust.hostKeyEpoch||value.clientKeyEpoch!==trust.clientKeyEpoch||value.origin!==trust.origin)throw Error('browser management facts');
+    if(!value||Object.keys(value).length!==keys.length||!keys.every(key=>Object.prototype.hasOwnProperty.call(value,key))||value.kind!=='ManagementOnly'||value.profile!==1||value.minor!==0||!/^[0-9a-f]{64}$/.test(value.hostEndpointId)||!/^[0-9a-f]{64}$/.test(value.clientEndpointId)||value.hostKeyEpoch!==trust.hostKeyEpoch||value.clientKeyEpoch!==trust.clientKeyEpoch||value.origin!==trust.origin)throw Error('browser management facts');
     managementBound=true;resolveManagement?.(Object.freeze(value));
    }catch{fail(Error('browser AppBind rejected'));close();}
   },
@@ -123,7 +123,7 @@ export async function startBrowserTlsWorker(options:Readonly<{wasm:BufferSource|
   if(trust){const epoch=(value:unknown)=>typeof value==='string'&&/^(0|[1-9][0-9]{0,19})$/.test(value)&&BigInt(value)<=18446744073709551615n;if(Object.keys(trust).length!==3||!epoch(trust.hostKeyEpoch)||!epoch(trust.clientKeyEpoch)||typeof trust.origin!=='string'||trust.origin.length>2048)throw Error('browser AppBind trust');trustBytes=new TextEncoder().encode(JSON.stringify(trust));}
   if(!Number.isInteger(localRole)||!Number.isInteger(peerRole)||localRole<0||localRole>1||peerRole<0||peerRole>1){rustDone=true;fail(Error('browser TLS role'));sealSigning();closeIo();retire();return Object.freeze({application,evidence,management,grantAccepted,peerInstalled,close,shutdown,waitClosed:()=>closed});}
   signer=createBrowserTlsWasmImports(bridge,localSpki,()=>memory);
-  if(grantBridge){if(!trust)throw Error('grant requires ClientTrust');grantAdapter=createBrowserGrantWorker(grantBridge,()=>memory,()=>managementDeadline,()=>stopping||ioClosed||externallyStopped(),()=>event(6),close);const config=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(grantAdapter.configuration));if(Object.hasOwn(config,'peerInstall')){if(!config.peerInstall||!Number.isInteger(config.peerInstall.budgetMs)||config.peerInstall.budgetMs<1||config.peerInstall.budgetMs>10000||!grantBridge.cancel)throw Error('peer configuration');peerBudget=config.peerInstall.budgetMs;}}
+  if(grantBridge){if(!trust)throw Error('grant requires ClientTrust');grantAdapter=createBrowserGrantWorker(grantBridge,()=>memory,()=>managementDeadline,()=>stopping||ioClosed||externallyStopped(),()=>event(6),close);const config=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(grantAdapter.configuration));if(Object.prototype.hasOwnProperty.call(config,'peerInstall')){if(!config.peerInstall||!Number.isInteger(config.peerInstall.budgetMs)||config.peerInstall.budgetMs<1||config.peerInstall.budgetMs>10000||!grantBridge.cancel)throw Error('peer configuration');peerBudget=config.peerInstall.budgetMs;}}
   // 原始加载Promise由本函数持续持有到settle；取消不使用race丢弃迟到实例。
   const compilation=wasm instanceof WebAssembly.Module?undefined:WebAssembly.compile(wasm);
   const module=wasm instanceof WebAssembly.Module?wasm:await compilation!;

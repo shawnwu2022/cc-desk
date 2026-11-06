@@ -2201,6 +2201,49 @@ impl NativeRunAdmission {
     pub(crate) fn is_owned_by(&self, runtime: &crate::cli::native_runtime::NativeRuntime) -> bool {
         runtime.owns_remote_pin(&self.pin)
     }
+    pub(crate) fn rebind(
+        self,
+        pin: &NativeRunPin,
+        host: &mut cc_desk_remote_host::native_host::NativeHost,
+        channel: Arc<cc_desk_remote_host::native_host::NativeChannel>,
+    ) -> Result<(), Box<(SafeError, Self)>> {
+        let result = (|| {
+            self.scope()?;
+            let same_state = self
+                .pin
+                .state
+                .as_ref()
+                .zip(pin.state.as_ref())
+                .is_some_and(|(a, b)| Arc::ptr_eq(a, b));
+            let same_resource = pin
+                .state
+                .as_ref()
+                .and_then(|s| s.resource.lock().clone())
+                .is_some_and(|resource| Arc::ptr_eq(&resource, &self.original));
+            if self.pin.run != pin.run
+                || !Weak::ptr_eq(&self.pin.origin, &pin.origin)
+                || !same_state
+                || !same_resource
+            {
+                return Err(error("REMOTE_HOST_AUTHORITY"));
+            }
+            let access = self.access.clone();
+            let original = self.original.clone();
+            let authority = NativeRunAuthority {
+                state: self.authority.state.clone(),
+                resource: self.authority.resource.clone(),
+            };
+            host.begin_native_resource_rebind(
+                channel,
+                Box::new(move || {
+                    access.check_remote_admission(&original).is_ok()
+                        && authority.check(&original).is_ok()
+                }),
+            )
+            .map_err(|_| error("REMOTE_HOST_AUTHORITY"))
+        })();
+        result.map_err(|error| Box::new((error, self)))
+    }
     fn into_pin(self) -> NativeRunPin {
         self.pin
     }

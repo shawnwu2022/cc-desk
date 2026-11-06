@@ -709,3 +709,81 @@ TLS/grant/proof/fence. No PTY/CLI or production database is run or changed.
 | Unknown/malformed schema | Original codec rejects; no default rights |
 | Create / Attach / Resize / Resume / Close lifecycle backend | Native backend remains OPEN/default deny per LIFECYCLE-ROUTING.md; not implemented or qualified here |
 | Real browser network, actor/PTY, phone, production enablement | Separate unverified gates; Node loopback and fake writer are not device evidence |
+
+## Stage2 controlled browser entry
+
+`browser-remote.html` is the ordinary browser entry. It mounts the original
+RemoteTerminalPanel through an explicit connection source; the desktop panel
+keeps its existing document IPC source by default. The panel still offers manual
+snapshots and bounded literal input, rather than continuous terminal deltas or a
+complete remote lifecycle UI.
+
+The controlled HTTPS deployment must serve COOP `same-origin` and COEP
+`require-corp`. The original top-level visible Document must remain secure and
+cross-origin isolated. A missing or ineligible source stays Locked. The fixed
+same-origin `/browser-profile.js` module may export only
+`readApprovedBrowserInputs(signal)`. Its approved result is the exact
+`ApprovedBrowserInputs` type in `ui-terminal/src/browserEntry.ts`: existing
+nonextractable P-256 TLS/grant CryptoKey handles, original profile/RP/credential
+metadata, exact Host pin, grant scope/principal, independent explicit relay
+identity/signer, artifact URLs and the original verified presenter. No production
+profile, enrollment, raw private-key JSON, persistent store or default identity
+is provided. This module is trusted deployment code, not a remotely supplied
+configuration document.
+
+Page/profile origins are HTTPS. The AppBind `trust.origin` is the exact canonical
+WSS relay endpoint, including its path. The original relay independently needs
+the exact Page Origin in its browser-origin allowlist; no relay change or
+wildcard is introduced. The browser sends the original first-binary admission
+proof and unchanged v1 outer framing. Inner TLS 1.3 RPK, AppBind, COSE/WebAuthn,
+grant, peer installation and Data remain in the original Rust/WASM implementation.
+
+One absolute setup deadline covers operator module load/read, relay admission,
+WASM/glue loading, TLS and the original application descriptor. Cancellation
+seals new work while retaining original import/read/sign/IO promises until they
+settle. Failed/uncertain retirement cannot create a second source to bypass its
+owner. Descriptor success ends the setup timer; it does not impose a connection
+TTL. Browser-owned pre-event networking allocation is outside JS queue limits.
+
+Run `npm run build:browser` with the already installed Rust wasm32 target,
+compatible clang and official wasm-bindgen 0.2.129 available on PATH (or set `CC`
+and `WASM_BINDGEN` for that command). The script builds offline/locked original
+libraries, links the six direct forwards in `remote/browser-runtime.rs`, then
+generates unmodified official glue and checks the exported ABI. Vite copies
+`public/remote-runtime` into `dist/remote-runtime`. The approved module may use
+same-origin `/remote-runtime/fixture_bg.wasm` and
+`/remote-runtime/fixture_bg.js`. The retained output basename is ABI naming;
+the production runtime has no `TEST_ONLY_*` export. Generated artifacts are
+ignored; their manifest records source, exact rlib and output hashes.
+
+Fresh native admission can now rebind the same application-owned Host resource:
+RunKey, SupervisorCore, SupervisedRun and original NativeRun identity must match
+the existing pin. The Host derives its own target and latest actual Installed
+fence. The original actor rechecks current local authority immediately before
+replacement; it never takes the producer again. All bounded peer pumps remain
+owned through join. Pending, Unknown, LocalOnly and latest Rejected attempts
+fail closed. In particular, this slice conservatively requires local recovery
+after a known Rejected installation; it does not search older fences to promise
+uninterrupted retry.
+
+The application native provider/identity/bootstrap registration remains Locked
+by default. Deployment still needs an approved operator module, trusted HTTPS/RP,
+relay browser-origin configuration, existing identities and a native provider
+that invokes the original admission path. The browser page does not create those
+authorities. Browser lifecycle Create/Attach/Resize/Resume/Close commands remain
+outside this entry; disconnect only retires its connection.
+
+The original relay library supplies the verified `Relay::serve` WSS path used
+by this slice. Its current binary does not yet expose a configured production
+TLS/WSS launcher or production policy source. Those are code integration gaps,
+separate from supplying a relay address/certificate or qualifying a device.
+
+Stage2 verification includes an actual Edge TEST_ONLY routed HTTPS/assets/WS
+fixture with the final product page/Worker/runtime, original loopback TLS WSS
+Relay, original Rust Host, synthetic assertion signatures verified by Rust,
+snapshot/exact ACK and one HostWritten effect. The WS bridge verifies a fixed
+public test CA/name and connects the Host only on the first actual client TLS
+bytes. This does not qualify browser WebPKI, real WebAuthn, phone suspend, or a
+real CLI. Separate application composition uses an explicitly self-owned test
+Node process and original native writer/pin/rebind/retirement. Its permanent
+process admission requires each exact composition test to run in a fresh process.

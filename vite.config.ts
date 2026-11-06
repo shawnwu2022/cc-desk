@@ -53,6 +53,7 @@ export default defineConfig(({ command, mode }) => ({
       input: {
         main: resolve(__dirname, 'index.html'),
         versionManager: resolve(__dirname, 'version-manager.html'),
+        browserRemote: resolve(__dirname, 'browser-remote.html'),
       },
       output: {
         manualChunks: manualChunkName

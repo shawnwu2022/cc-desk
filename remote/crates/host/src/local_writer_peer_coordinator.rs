@@ -37,6 +37,7 @@ enum Stage {
     Failed,
 }
 pub(super) struct Coordinator {
+    authorize: Option<Box<dyn FnOnce() -> bool + Send>>,
     native_attempt: Option<InstallAttempt>,
     target: Target,
     device: [u8; 32],
@@ -57,6 +58,81 @@ impl Coordinator {
     }
 }
 impl NativeHost {
+    /// Current native admission selects the same Host-owned resource internally.
+    pub fn begin_native_resource_rebind(
+        &mut self,
+        channel: Arc<RunningChannel>,
+        authorize: Box<dyn FnOnce() -> bool + Send>,
+    ) -> Result<(), NativeHostError> {
+        if self.closing || self.unknown {
+            return Err(NativeHostError::Closed);
+        }
+        self.drive_peer_installs();
+        if self.unknown {
+            return Err(NativeHostError::Unknown);
+        }
+        let authority = channel.authority();
+        authority.check().map_err(|_| NativeHostError::Authority)?;
+        let scope = authority.scope();
+        let mut matches = self.owner.active.iter().filter(|writer| {
+            writer.target.run == scope.run
+                && writer.target.generation.to_string() == scope.generation
+                && writer
+                    .target
+                    .session
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<String>()
+                    == scope.session
+        });
+        let target = matches
+            .next()
+            .ok_or(NativeHostError::Authority)?
+            .target
+            .clone();
+        if matches.next().is_some()
+            || self
+                .peer_installs
+                .iter()
+                .any(|job| job.target == target && job.pending())
+        {
+            return Err(NativeHostError::Rejected);
+        }
+        let latest = self
+            .attempts
+            .iter()
+            .rfind(|attempt| attempt.authority.scope() == scope)
+            .ok_or(NativeHostError::Authority)?;
+        let InstallState::Installed {
+            fence: expected, ..
+        } = latest.state
+        else {
+            return Err(NativeHostError::Unknown);
+        };
+        let text = authority.context().client_endpoint_id.as_bytes();
+        if text.len() != 64 {
+            return Err(NativeHostError::Authority);
+        }
+        let mut device = [0; 32];
+        for (i, pair) in text.chunks_exact(2).enumerate() {
+            device[i] = u8::from_str_radix(
+                std::str::from_utf8(pair).map_err(|_| NativeHostError::Authority)?,
+                16,
+            )
+            .map_err(|_| NativeHostError::Authority)?;
+        }
+        let mut lease = [0; 16];
+        use ring::rand::SecureRandom;
+        ring::rand::SystemRandom::new()
+            .fill(&mut lease)
+            .map_err(|_| NativeHostError::Rejected)?;
+        self.begin_peer_rebind(target, device, expected, channel, lease)?;
+        self.peer_installs
+            .last_mut()
+            .expect("registered original coordinator")
+            .authorize = Some(authorize);
+        Ok(())
+    }
     pub(super) fn register_native_attempt(
         &mut self,
         target: Target,
@@ -68,6 +144,7 @@ impl NativeHost {
         let owned = channel.clone();
         let task = tokio::spawn(async move { owned.host_install_request().await });
         self.peer_installs.push(Coordinator {
+            authorize: None,
             native_attempt: Some(attempt),
             target,
             device,
@@ -103,6 +180,7 @@ impl NativeHost {
         let owned = channel.clone();
         let task = tokio::spawn(async move { owned.host_install_request().await });
         self.peer_installs.push(Coordinator {
+            authorize: None,
             native_attempt: None,
             target,
             device,
@@ -128,12 +206,13 @@ impl NativeHost {
                         let native = if let Some(attempt) = job.native_attempt {
                             Ok(attempt)
                         } else {
-                            self.begin_rebind(
+                            self.begin_rebind_checked(
                                 &job.target,
                                 job.device,
                                 job.expected,
                                 job.channel.clone(),
                                 job.lease,
+                                job.authorize.take(),
                             )
                         };
                         match native {
@@ -152,7 +231,13 @@ impl NativeHost {
                             }
                         }
                     }
-                    _ => {
+                    result => {
+                        if matches!(result, Some(Err(_))) {
+                            self.unknown = true;
+                        }
+                        // The original request settled without handing this capability
+                        // to the actor. Keep the result/custody, release unused captures.
+                        job.authorize = None;
                         job.channel.authority().request_close();
                         Stage::Failed
                     }
@@ -255,6 +340,7 @@ impl NativeHost {
                 }
                 _ => (),
             }
+            job.authorize = None;
             job.stage = Stage::Failed;
         }
         // Native pending replies remain in attempts until observe_shutdown reaps them.

@@ -70,7 +70,7 @@ struct ServiceState {
     exit: ExitIntent,
     waiter: Option<tauri::async_runtime::JoinHandle<()>>,
     waiter_starting: bool,
-    peer_pump: Option<Arc<PeerPump>>,
+    peer_pumps: Vec<Arc<PeerPump>>,
 }
 pub(crate) struct RemoteHostService {
     state: Mutex<ServiceState>,
@@ -87,12 +87,16 @@ impl Default for RemoteHostService {
                 exit: ExitIntent::Idle,
                 waiter: None,
                 waiter_starting: false,
-                peer_pump: None,
+                peer_pumps: Vec::new(),
             }),
         }
     }
 }
 impl RemoteHostService {
+    #[cfg(test)]
+    pub(crate) fn test_pin_count(&self) -> usize {
+        self.state.lock().pins.len()
+    }
     #[cfg(all(test, windows))]
     pub(crate) fn test_original_managed_facts(
         &self,
@@ -155,7 +159,7 @@ impl RemoteHostService {
         )>,
     > {
         let mut state = self.state.lock();
-        if state.closing || !state.pins.is_empty() || !admission.is_owned_by(runtime) {
+        if state.closing || state.peer_pumps.len() >= 64 || !admission.is_owned_by(runtime) {
             return Err(Box::new((
                 crate::cli::profiles::error("REMOTE_HOST_CLOSED"),
                 admission,
@@ -170,18 +174,25 @@ impl RemoteHostService {
             // handoff rejects. Never drop/recreate it on a wrong-resource retry.
             state.host = Some(host);
         }
-        let pin = admission.adopt(
-            state.host.as_mut().expect("retained original Host"),
-            channel.clone(),
-        )?;
-        // Successful admission consumption drops its extra RunAccess/original Arc;
-        // shutdown retains only the original lifetime pin and Host-owned pending.
-        state.pins.push(pin);
+        if state.pins.is_empty() {
+            let pin = admission.adopt(
+                state.host.as_mut().expect("retained original Host"),
+                channel.clone(),
+            )?;
+            state.pins.push(pin);
+        } else {
+            let ServiceState { pins, host, .. } = &mut *state;
+            admission.rebind(
+                &pins[0],
+                host.as_mut().expect("retained original Host"),
+                channel.clone(),
+            )?;
+        }
         let original = self.clone();
         let worker = tauri::async_runtime::spawn(async move { original.pump_peer(channel).await });
         // Publish the original handle while the service lock is still held.
         // The worker cannot observe its Host before this custody is registered.
-        state.peer_pump = Some(Arc::new(PeerPump {
+        state.peer_pumps.push(Arc::new(PeerPump {
             join: tokio::sync::Mutex::new(Some(worker)),
             joined: AtomicU8::new(0),
         }));
@@ -258,12 +269,12 @@ impl RemoteHostService {
         result
     }
     async fn join_peer_pump(&self) -> bool {
-        let pump = self.state.lock().peer_pump.clone();
-        if let Some(pump) = pump {
-            pump.join().await
-        } else {
-            true
+        let pumps = self.state.lock().peer_pumps.clone();
+        let mut known = true;
+        for pump in pumps {
+            known &= pump.join().await;
         }
+        known
     }
     #[cfg(test)]
     pub(crate) fn test_begin_host_shutdown(&self) {

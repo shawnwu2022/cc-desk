@@ -1,6 +1,8 @@
 //! Bounded opaque transport. This module grants no endpoint or PTY authority.
 mod deadline;
 #[cfg(test)]
+mod browser_relay_fixture_tests;
+#[cfg(test)]
 mod owned_tests;
 pub mod records;
 pub mod wss;

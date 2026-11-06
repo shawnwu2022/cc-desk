@@ -30,7 +30,7 @@ function validOrigin(origin:string):boolean{
 function atOrigin(origin:string):boolean{return globalThis.isSecureContext===true&&globalThis.location?.origin===origin;}
 function budget(value:number):boolean{return Number.isInteger(value)&&value>=1&&value<=MAX_WAIT_MS;}
 function exact(value:unknown,keys:string[]):value is Record<string,unknown>{
- return !!value&&typeof value==='object'&&Object.keys(value).length===keys.length&&keys.every(k=>Object.hasOwn(value,k));
+ return !!value&&typeof value==='object'&&Object.keys(value).length===keys.length&&keys.every(k=>Object.prototype.hasOwnProperty.call(value,k));
 }
 function tlsMessage(value:unknown):Uint8Array{
  if(!(value instanceof Uint8Array)||value.length!==MESSAGE_SIZE)throw Error('TLS client CertificateVerify message bounds');
@@ -100,7 +100,7 @@ function broker(key:CryptoKey|undefined,origin:string,timeoutMs:number,signal?:A
    const expire=()=>{const remaining=deadline-now();if(remaining>0)timer=setTimeout(expire,remaining);else close();};
    timer=setTimeout(expire,Math.max(0,deadline-now()));
    // 原始 SubtleCrypto Promise 一直持有到 settle；close/timeout 不能假装取消运算。
-   const operation=crypto.subtle.sign({name:'ECDSA',hash:'SHA-256'},key!,message);
+   const operation=crypto.subtle.sign({name:'ECDSA',hash:'SHA-256'},key!,Uint8Array.from(message).buffer);
    pending=operation;
    void operation.then(raw=>{
     if(!live(deadline,seq as number)){close();return;}

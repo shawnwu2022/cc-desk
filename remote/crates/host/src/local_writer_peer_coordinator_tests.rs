@@ -573,7 +573,8 @@ async fn native_producer_verified_install_keeps_original_prefix_and_denies_wrong
 
 #[tokio::test]
 async fn native_rebind_cannot_revive_local_only_and_stop_closes_current_authority() {
-    for fault in [false, true] {
+    for scenario in 0..3 {
+        let fault = scenario == 1;
         let dir = tempfile::tempdir().unwrap();
         let mut producer = NativeRunProducer::start(
             Journal::open(&dir.path().join("native.sqlite")).unwrap(),
@@ -629,32 +630,59 @@ async fn native_rebind_cannot_revive_local_only_and_stop_closes_current_authorit
             h2.authority().check().is_ok(),
             "fresh verified grant must be live before refusal"
         );
-        host.begin_peer_rebind(target, support::device(), 1, h2.clone(), [9; 16])
-            .unwrap();
-        while !matches!(host.peer_installs[1].stage, Stage::Done(_) | Stage::Failed) {
-            host.drive_peer_installs();
-            assert!(Instant::now() < end);
-            tokio::task::yield_now().await;
-        }
-        if fault {
-            assert!(matches!(host.peer_installs[1].stage, Stage::Failed));
-            assert!(c2.client_installed().await.is_err());
-            assert!(input.commit(b"local", || true).unwrap().complete);
-        } else {
-            assert_eq!(
-                c2.client_installed()
-                    .await
-                    .unwrap()
-                    .consume_for(&c2)
-                    .unwrap(),
-                2
-            );
-            input.stop();
+        let _ = target;
+        if scenario == 2 {
+            let task = tokio::spawn(async {
+                panic!("TEST_ONLY original response task fault");
+                #[allow(unreachable_code)]
+                Ok(())
+            });
+            while !task.is_finished() {
+                tokio::task::yield_now().await;
+            }
+            host.peer_installs[0].stage = Stage::Response {
+                attempt: host.attempts[0].id,
+                task,
+            };
             assert!(
-                h2.authority().check().is_err(),
-                "Stop must close the CURRENT original authority synchronously"
+                host.begin_native_resource_rebind(h2.clone(), Box::new(|| true))
+                    .is_err(),
+                "drive-discovered Unknown must forbid a new admission"
             );
-            assert!(h.authority().check().is_err(), "old scope cannot revive");
+            assert!(host.unknown);
+            assert_eq!(
+                host.peer_installs.len(),
+                1,
+                "Unknown must not enqueue new work"
+            );
+        } else {
+            host.begin_native_resource_rebind(h2.clone(), Box::new(|| true))
+                .unwrap();
+            while !matches!(host.peer_installs[1].stage, Stage::Done(_) | Stage::Failed) {
+                host.drive_peer_installs();
+                assert!(Instant::now() < end);
+                tokio::task::yield_now().await;
+            }
+            if fault {
+                assert!(matches!(host.peer_installs[1].stage, Stage::Failed));
+                assert!(c2.client_installed().await.is_err());
+                assert!(input.commit(b"local", || true).unwrap().complete);
+            } else {
+                assert_eq!(
+                    c2.client_installed()
+                        .await
+                        .unwrap()
+                        .consume_for(&c2)
+                        .unwrap(),
+                    2
+                );
+                input.stop();
+                assert!(
+                    h2.authority().check().is_err(),
+                    "Stop must close the CURRENT original authority synchronously"
+                );
+                assert!(h.authority().check().is_err(), "old scope cannot revive");
+            }
         }
         host.begin_shutdown();
         host.retire_peer_installs().await;
@@ -662,7 +690,14 @@ async fn native_rebind_cannot_revive_local_only_and_stop_closes_current_authorit
             assert!(Instant::now() < end);
             tokio::task::yield_now().await;
         }
-        assert_eq!(host.observe_shutdown(), WriterRetirement::Joined);
+        assert_eq!(
+            host.observe_shutdown(),
+            if scenario == 2 {
+                WriterRetirement::Unknown
+            } else {
+                WriterRetirement::Joined
+            }
+        );
         host.network_retirement().unwrap().wait().await;
         let _ = tokio::join!(
             c.wait_closed(),
@@ -681,6 +716,11 @@ async fn peer_install_coordinator_original_native_pending_success_cancel_and_cas
 #[tokio::test]
 async fn peer_install_cancel_before_original_success_delivery_never_revives_ready() {
     coordinator_scenarios(6..7).await;
+}
+
+#[tokio::test]
+async fn native_rebind_local_admission_rechecked_after_original_actor_queue() {
+    coordinator_scenarios(7..8).await;
 }
 
 async fn coordinator_scenarios(modes: std::ops::Range<u8>) {
@@ -767,6 +807,13 @@ async fn coordinator_scenarios(modes: std::ops::Range<u8>) {
             [9; 16],
         )
         .unwrap();
+        let live = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        if mode == 7 {
+            let current = live.clone();
+            host.peer_installs[0].authorize = Some(Box::new(move || {
+                current.load(std::sync::atomic::Ordering::Acquire)
+            }));
+        }
         let end = Instant::now() + Duration::from_millis(700);
         loop {
             host.drive_peer_installs();
@@ -786,12 +833,32 @@ async fn coordinator_scenarios(modes: std::ops::Range<u8>) {
         if mode == 1 {
             h.authority().request_close();
         }
+        if mode == 7 {
+            live.store(false, std::sync::atomic::Ordering::Release);
+        }
         release.send(()).unwrap();
         assert!(matches!(
             output.wait(Duration::from_secs(1)).unwrap(),
             OutputResult::Processed { replies: 1 }
         ));
         let baseline_writes = writes.load(std::sync::atomic::Ordering::Acquire);
+        if mode == 7 {
+            let status = host.owner.active[0]
+                .writer
+                .control_status()
+                .unwrap()
+                .wait(BUDGET)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                status.fence, 4,
+                "rejected queued local authority must not increment the original fence"
+            );
+            assert!(
+                old_h.authority().check().is_ok(),
+                "rejected local authority must not revoke the original peer"
+            );
+        }
         if let Some(barrier) = &reply_barrier {
             let (native_effect, actual_fence) = barrier.installed();
             assert_eq!(
@@ -1140,6 +1207,7 @@ async fn peer_install_cancelled_retire_keeps_original_controlled_response_task_i
     });
     let task_id = task.id();
     host.peer_installs.push(Coordinator {
+        authorize: None,
         native_attempt: None,
         target: Target {
             host: support::host(),
@@ -1182,6 +1250,72 @@ async fn peer_install_cancelled_retire_keeps_original_controlled_response_task_i
     assert!(matches!(host.peer_installs[0].stage, Stage::Failed));
     assert!(h.installed_fence().is_err());
     host.begin_shutdown();
+    assert_eq!(host.observe_shutdown(), WriterRetirement::Joined);
+    host.network_retirement().unwrap().wait().await;
+    let _ = tokio::join!(c.wait_closed(), h.wait_closed());
+}
+
+#[tokio::test]
+async fn native_rebind_failed_request_releases_unused_local_authority_capture() {
+    let (c, h, _grant, _cancel) = peer_channels(Arc::new(|| Ok(1000))).await;
+    let h = Arc::new(h);
+    let owner =
+        WriterHostOwner::from_registry(&OwnerRegistry::default(), support::host(), 11).unwrap();
+    let mut host = NativeHost::from_owner(owner);
+    let witness = Arc::new(());
+    let weak = Arc::downgrade(&witness);
+    let called = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let invoked = called.clone();
+    let (release, hold) = tokio::sync::oneshot::channel();
+    let original = h.clone();
+    let task = tokio::spawn(async move {
+        hold.await.unwrap();
+        original.host_install_request().await
+    });
+    host.peer_installs.push(Coordinator {
+        authorize: Some(Box::new(move || {
+            invoked.store(true, std::sync::atomic::Ordering::Release);
+            drop(witness);
+            true
+        })),
+        native_attempt: None,
+        target: Target {
+            host: support::host(),
+            incarnation: 11,
+            session: [2; 16],
+            run: support::scope().run,
+            generation: 3,
+        },
+        device: support::device(),
+        expected: 1,
+        lease: [9; 16],
+        channel: h.clone(),
+        stage: Stage::Request(task),
+    });
+    h.authority().request_close();
+    host.drive_peer_installs();
+    assert!(
+        weak.upgrade().is_some(),
+        "pending original request must retain its capture"
+    );
+    release.send(()).unwrap();
+    let end = Instant::now() + BUDGET;
+    while !matches!(host.peer_installs[0].stage, Stage::Failed) {
+        host.drive_peer_installs();
+        assert!(Instant::now() < end);
+        tokio::task::yield_now().await;
+    }
+    assert!(!called.load(std::sync::atomic::Ordering::Acquire));
+    assert!(
+        host.attempts.is_empty(),
+        "failed request must never enter actor install"
+    );
+    assert!(
+        weak.upgrade().is_none(),
+        "terminal request must release unused native authority capture"
+    );
+    host.begin_shutdown();
+    host.retire_peer_installs().await;
     assert_eq!(host.observe_shutdown(), WriterRetirement::Joined);
     host.network_retirement().unwrap().wait().await;
     let _ = tokio::join!(c.wait_closed(), h.wait_closed());

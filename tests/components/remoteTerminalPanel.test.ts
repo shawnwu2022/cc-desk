@@ -5,6 +5,7 @@ import RemoteTerminalPanel from '@/components/settings/RemoteTerminalPanel.vue'
 import en from '@/i18n/locales/en'
 import zh from '@/i18n/locales/zh'
 import { readFileSync } from 'node:fs'
+import { nativeConnection } from '../../remote/ui-terminal/src/native'
 // jsdom's Uint8Array and Node's inherited TextEncoder live in different realms.
 // Match the browser's same-realm encoder without weakening production checks.
 const originalEncoder = vi.hoisted(() => {
@@ -17,6 +18,15 @@ const originalEncoder = vi.hoisted(() => {
 afterAll(() => { globalThis.TextEncoder = originalEncoder })
 let view: VueWrapper | undefined
 afterEach(() => { view?.unmount(); delete (window as any).__CC_DESK_DOCUMENT__ })
+it('RemoteTerminal_ExplicitBrowserSourceOriginalReducer_010', async () => {
+  const frame = JSON.parse(readFileSync('protocol/remote/inner/v1/test-vectors/projection-snapshot.json', 'utf8'))
+  let closed = 0, opened = 0, acknowledgements = 0
+  const connection = nativeConnection({snapshot: async () => ({stamp:frame.body.stamp,parts:[new TextEncoder().encode(JSON.stringify(frame))]}),exchange:async payload=>{const request=JSON.parse(new TextDecoder().decode(payload));expect(request.message).toBe('ProjectionAck');acknowledgements++;return new TextEncoder().encode(JSON.stringify({message:'ProjectionAcknowledged',profile:1,stamp:request.stamp}))},close:async()=>{closed++}})
+  view = mount(RemoteTerminalPanel, { props:{source:{open:async()=>{opened++;return{connection,target:frame.body.stamp.target,binding:frame.body.stamp.binding,role:'Viewer' as const}}}},global:{plugins:[createI18n({legacy:false,locale:'en',messages:{en,zh}})]} })
+  expect(opened).toBe(0);await view.get('[data-remote-refresh]').trigger('click');await flushPromises()
+  expect(opened).toBe(1);expect(acknowledgements).toBe(1);expect(view.find('[role="img"]').exists()).toBe(true)
+  await view.get('[data-remote-disconnect]').trigger('click');await flushPromises();expect(closed).toBe(1)
+})
 it('RemoteTerminal_LockedNoAutomaticConnect_001', async () => {
   let calls = 0
   ;(window as any).__CC_DESK_DOCUMENT__ = { instanceId: 'own', async invoke(command: string) { calls++; expect(command).toBe('remote_client_current'); return { state: 'Locked' } } }

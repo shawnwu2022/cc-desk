@@ -152,7 +152,10 @@ async fn BrowserData_OriginalHostFixture_001() {
                 incarnation: 11,
                 policy_epoch: 13,
                 issuer_epoch: 17,
-                origin: CanonicalOrigin::trusted("wss://relay.invalid/").unwrap(),
+                origin: CanonicalOrigin::trusted(
+                    &std::env::var("CC_DESK_TEST_ONLY_DATA_RELAY_ORIGIN")
+                        .unwrap_or_else(|_| "wss://relay.invalid/".into()),
+                ).unwrap(),
             },
         )
         .await

@@ -91,6 +91,18 @@ impl WriterHostOwner {
             .rebind_target(t, device, expected_fence, admission)
             .map_err(OwnerError::Writer)
     }
+    pub(super) fn rebind_checked(
+        &self,
+        t: &Target,
+        device: [u8; 32],
+        expected_fence: u64,
+        admission: view_gate::control::ControlAdmission,
+        authorize: Option<Box<dyn FnOnce() -> bool + Send>>,
+    ) -> Result<view_gate::rebind::PendingRebind, OwnerError> {
+        self.find(t)?
+            .rebind_target_checked(t, device, expected_fence, admission, authorize)
+            .map_err(OwnerError::Writer)
+    }
     pub(super) fn start_controlled(
         &mut self,
         journal: Journal,
