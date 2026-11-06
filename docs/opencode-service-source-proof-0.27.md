@@ -69,3 +69,13 @@ Desk 现有 `opencode_prepare.rs::with_server` 保留自己创建的 Child/私�
 5. 只有另行具备已证明的任务隔离实例和授权，才执行原 CLI 的真实只读验证；仍不调用 ensure/创建会话/归档/删除，不以真实用户数据或凭据代替输入。本轮未申请这些权限或账号。
 
 当前限制是技术契约不具备，不是工具审批拒绝或待用户批准的操作。完整预览与执行继续关闭；[mutation 原子条件](native-cleanup-blocker-0.27.md) 仍是独立边界。
+
+## 后续有界核对：进程/连接归属加文件身份仍缺一条边
+
+Microsoft 的 [TCP owner 结构](https://learn.microsoft.com/en-us/windows/win32/api/tcpmib/ns-tcpmib-mib_tcprow_owner_pid) 给出连接地址、端口和发起 context bind 的 PID，不含 DB 信息。[原始进程 handle](https://learn.microsoft.com/en-us/windows/win32/procthread/process-handles-and-identifiers) 在进程终止后仍可保持有效，PID 本身只在进程寿命内有相应保证，因此 retained handle 能加强生命周期识别，不能让重连/复用端口继承旧连接证明。[FILE_ID_INFO](https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_id_info) 的卷标识+file ID 可比较两个已打开 handle 是否指向同一物理文件，能加强 Desk 这端读取见证。
+
+这三种见证仍没有连接到“该次 HTTP 查询实际使用的 SQLite connection”。最小契约反例是：同一个受控进程 P 同时打开 A、B，TCP 确属 P，Desk 对 A 的 file witness 正确，但 HTTP SessionStore 查询 B。即使证明 P 也持有 A 的 handle，仍不能推出查询使用 A。这里是一般契约反例，不是声称已在真实 OpenCode 复现了该情形。
+
+现有 AdmittedChild/OwnedPty、ServerChild/Job 和 private SQLite snapshot 各自已有准确所有权/读保护；它们没有提供 HTTP request→SQLite connection→文件对象映射。文件锁成功/冲突也不能补这条关系。故本轮没有枚举真实连接/进程 handle、复制外部 fd 或生成伪 issuer。可在合成 fixture 验证同进程双 DB、连接池重连、端口复用等反例和两端 witness 正向对照，但对照通过仍不证明 OpenCode 原服务契约已具备。
+
+本节只约束“现有服务同源证明”切片。后续已获准分层推进 Desk 元数据隐藏/撤销和可恢复原生归档，应按各自真实副作用和现有授权链设计；不能把这里的强服务证明机械加到仅改 Desk 状态的低风险操作上，也不把软归档与永久删除混为同一能力。

@@ -1,6 +1,6 @@
 # 0.26 正式 main 与 0.27 分支的整合风险
 
-本轮只分析，不整合。比较目标固定为开发 HEAD `1c018f24bf52e6de421a84a397e28d052e1c5b8e` 和采样 main `0aaaf2a171ced55ff2b4d7a3e1731027c45809df`。只更新当前独立 clone 的 `origin/main`、获取对象；没有本地 main 分支可被改动，也没有 checkout、merge/merge-tree、rebase、cherry-pick、版本变更、推送或操作其他工作树。之后的提交只增加文档，不能被当作整合验证。
+前一分析阶段的比较目标固定为开发 HEAD `1c018f24bf52e6de421a84a397e28d052e1c5b8e` 和 main `0aaaf2a171ced55ff2b4d7a3e1731027c45809df`；该阶段仅更新远端跟踪信息、没有整合。**后续明确授权已取代“仅分析”限制：现在 main 已实际合入开发分支，见文末整合结果。** 原静态分析和证据仍按各自采样源保留，不能反向写成当时已做 merge。
 
 ## 引用和差异实测
 
@@ -75,3 +75,9 @@ main 全部变化为 57 additions / 13 deletions：
 4. 按真实改动跑受影响 frontend updater/history、Rust updater policy/HTTP/history scope、manifest/release admission/recovery/coverage/draft fixtures及必要 typecheck/build；全部绑定新整合源。
 5. 最终完整普通 CI 使用 Rust 1.98.1/CI profile、原四 harness/16片、原 ignore 和精确宿主限制披露，三个 required checks 同源闭环。不要把旧本地通过迁移成新 CI 通过。
 6. 将来发布须另有授权，先合受保护 main，再按实际 merged-main 重验 CI/coverage、同 release run 的三平台字节与签名。0.26 的签名与 CI 不给 0.27 晋升权。本轮不 bump、不发布、不发 PR。
+
+## 后续已授权的实际整合
+
+再次 fetch 后目标仍为 `0aaaf2a171ced55ff2b4d7a3e1731027c45809df`，十文件没有变化。合并前 HEAD `aaad3d2bf1c05c40c30ab03d9d46c38d05f7b4cc` 已保存在 `refs/codex/v0.27.0/pre-main-aaad3d2b`。实际 `--no-ff --no-commit` 合并无冲突，检查后 merge commit 为 **`89e30ff37ca51b29239c17abbc52f0dc85106390`**，两 parent 即上述开发 HEAD 和正式 main；没有改写历史或操作其他树。
+
+新增一个版本转换回归后，已验证的测试提交 **`68436f31dc8a6313e9d87ca9ab35717671edfcfd`** 对应 tree `acc7ec63f914b23f4388586e8d6f254d02ebbfd9`：固定1.98.1/CI profile的Rust受影响域91通过，前端14文件169、Node310/6原跳过、all-target Clippy/fmt、类型/构建和CSP2/2通过。实际应用版本0.26.0；未新增0.27版本号。详细命令、scope差异和未跑完整套件范围见 [整合验证](../.audit/v027-stage6-main-integration.md)。独立复核无新确定性回归，无依据要求重跑16片；新源完整CI和真实安装/往返仍未做。

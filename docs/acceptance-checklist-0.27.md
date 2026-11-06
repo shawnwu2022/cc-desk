@@ -1,6 +1,6 @@
 # 0.27 实现与验收清单
 
-本清单区分实现、隔离验证和发布验收。独立分支 `feat/v0.27.0` 沿用 RC3 `4d4674480849f1d4d8fb4edab095b388e769e189`；未整合并行 0.26 main，未推送/发布/安装。后续有限风险分析获准刷新了本 clone 的 origin/main，仅用于只读差异比较。各阶段精确提交与命令见 `.audit/v027-validation.md`、`.audit/v027-p0-validation.md` 及本轮最终验证记录。
+本清单区分实现、隔离验证和发布验收。独立分支 `feat/v0.27.0` 已在新授权下把正式 main `0aaaf2a171ced55ff2b4d7a3e1731027c45809df` 合入开发侧；共同祖先仍为 RC3 `4d4674480849f1d4d8fb4edab095b388e769e189`。实际 merge 为 `89e30ff37ca51b29239c17abbc52f0dc85106390`，无冲突；受影响验证后的测试提交为 `68436f31dc8a6313e9d87ca9ab35717671edfcfd`。当前应用身份是 0.26.0，未自行 bump 0.27、未推送/发布/用户安装。准确命令和新旧证据边界见 [本地整合验证](../.audit/v027-stage6-main-integration.md)。
 
 | 规划 | 实际实现和代码证据 | 验收边界 |
 | --- | --- | --- |
@@ -31,7 +31,7 @@ Claude 当前官方 [配置路径说明](https://code.claude.com/docs/en/setting
 
 实现提交 **`68fa6b3df0f34534bffd493173bdf8cfcc5b3ef3`** 已完成本轮可隔离推进的验证：固定 Rust 1.98.1、CI dev/test debug=0，四 harness/16 片及原聚合通过（1744 pass、36 原 ignore、18 宿主排除、0 fail/timeout）；最终完整前端 207 文件、3206 pass、2 原跳过。Node 政策 310 pass/6 原跳过、all-target Clippy/fmt、类型/构建、生产 CSP 中英 2/2、P1 界面中英 2/2 均通过。完整命令、各实现 SHA、独立复核与保留的原始失败见 [本轮验证记录](../.audit/v027-stage3-validation.md)。
 
-已有足够本地证据进入候选审阅材料和隔离矩阵准备；没有创建发布。本地四 harness 结果是 normal required scope，`nativeAll` 仍未验证，不能替代 exact-main hosted CI 或真实安装验收。当前没有正在运行的验证或等待批准的操作。
+上段完整套件是旧源 `68fa6b3…` 的证据。最新整合树 `68436f31…` 另通过 Rust 91、前端14文件169、Node310/6原跳过、固定工具链all-target Clippy/fmt、typecheck/build和生产CSP2/2；没有重跑新源完整16片或完整Vitest。已有足够本地证据继续候选审阅材料和隔离矩阵准备，没有创建发布。`nativeAll` 仍未验证，本地结果不能替代 exact-main hosted CI 或真实安装验收。当前无运行中验证或等待批准的操作。
 
 0.27 整版验收仍需真实签名候选的隔离升降级往返、目标平台安装与 WebView、D20/真实会话及现场回归证据。18 项 Job-free 专项按既有 [发布契约](release-process.md) 可在成功确认宿主限制后非阻断披露，不将其另立为新的发布阻断，也不计为通过；若要宣称原始 native All 已验收，仍需合格宿主的独立证据。原生清理完整功能仍被接口语义阻塞，必须继续明确为关闭/未交付范围，不以未来假设补齐。此处没有合并、签名、发布或真实用户安装授权。
 

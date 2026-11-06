@@ -151,3 +151,11 @@ P1 包括忽略单个候选、复制摘要、更新记录及失败重试，不�
 B 获准只刷新本 clone origin/main 并获取对象：[风险分析](main-0.26-integration-risk-0.27.md) 固定采样 main/tag 为 `0aaaf2a171ced55ff2b4d7a3e1731027c45809df`，merge-base 仍 RC3，开工 HEAD/main 独有 9/2 提交，改动文件 81/10、交集 0。仅预期文本冲突低，未做任何整合。正式 Release/CI 元数据及公开 coverage 字节绑定已核实，未重新下载/验签全部平台包；不会借用 0.26 证据晋升 0.27。
 
 当前版本身份、历史 scope、发布/消费 parser 范围与未来整合验证顺序均已列明。本回合只做文档及一致性验证；不重跑完整套件，不改版本/发布策略或任何其他工作树。
+
+## 正式 main 已整合到开发侧
+
+新授权明确允许 main→feat 本地合并。刷新后仍为正式 main `0aaaf2a171ced55ff2b4d7a3e1731027c45809df`、原十文件；恢复 ref `refs/codex/v0.27.0/pre-main-aaad3d2b` 保留合并前 `aaad3d2bf1c05c40c30ab03d9d46c38d05f7b4cc`。实际 merge **`89e30ff37ca51b29239c17abbc52f0dc85106390`** 无冲突，没有改写历史或向main合入开发代码。
+
+验证后测试提交 **`68436f31dc8a6313e9d87ca9ab35717671edfcfd`** / tree `acc7ec63f914b23f4388586e8d6f254d02ebbfd9` 增加0.26版本转换/通道回归；固定1.98.1及CI profile下Rust91、前端169、Node310/6原跳过、all-target Clippy/fmt、typecheck/build、生产CSP2/2均通过。六处应用身份0.26.0；历史普通安装与九包严格返回边界不变。新源完整16片/完整Vitest/hosted CI未跑，旧68fa全套证据仍按旧源保留。完整命令与未跑项见 [本轮验证](../.audit/v027-stage6-main-integration.md)。
+
+同源切片新增进程/连接及file witness的官方语义和双DB同进程反例，没有接真实服务。后续归档方向已另获分层实现授权：优先Desk纯元数据隐藏/撤销与可恢复原生archive/unarchive，永久删除独立关闭；低风险层不机械套用最强delete条件。先核对固定源码和当前适配层，再以合成fixture TDD、审查和针对性验证推进，不操作真实会话/库。

@@ -1,6 +1,6 @@
 # 0.27 候选审阅材料
 
-状态：开发审阅材料已准备，尚未生成或发布 0.27 候选安装包。本文基于独立分支 `feat/v0.27.0` 的文档 HEAD `3f60853a70ccf279c500c99d3cebb424e282f06a`，实现和完整验证绑定 `68fa6b3df0f34534bffd493173bdf8cfcc5b3ef3`；后续仅补文档，不改已测实现。基线仍为 RC3 `4d4674480849f1d4d8fb4edab095b388e769e189`，未整合并行 0.26 main。版本元数据保持 `0.26.0-rc.3`，本文不是 Release notes 的已发布声明。
+状态：开发审阅材料已准备，尚未生成或发布 0.27 候选安装包。最新已授权本地 merge `89e30ff37ca51b29239c17abbc52f0dc85106390` 把正式 main `0aaaf2a171ced55ff2b4d7a3e1731027c45809df` 合入 `feat/v0.27.0`，无冲突；受影响验证绑定测试提交 `68436f31dc8a6313e9d87ca9ab35717671edfcfd`/tree `acc7ec63f914b23f4388586e8d6f254d02ebbfd9`。当前应用身份为 **0.26.0**，不是自行 bump 的0.27。旧源 `68fa6b3df0f34534bffd493173bdf8cfcc5b3ef3` 的完整验证继续单独保留，不能晋升成整合后全量通过。本文不是已发布声明。
 
 ## 准确变更说明
 
@@ -17,7 +17,7 @@
 | P0 三通道 | `desktop_updater.rs`、`updater_policy.rs`、`src/stores/update.ts`、`UpdateSection.vue`；`desktop_updater_policy` 和 `updateChannels.test.ts` 覆盖准入、切换和失效；发布 parser/签名政策 Node 测试 | 真实签名 beta/RC/preview 分发和旧 stable latest 往返仍未做。须后续授权的 protected-main 候选与实际发布后验证，不能用 fixture 晋升。 |
 | P0 可靠更新 | `desktop_updater.rs`、`updater_http.rs` 与更新 UI；坏包/签名/取消/网络、准确 admission、并发检查/取消/安装及设置未知回归均在已执行套件 | 真实安装器失败、断网/取消、重启和旧安装保留尚待可销毁隔离安装环境及真实候选。只收到启动回执不等于成功。 |
 | P0 历史选择与准备 | 已有 `HistoricalVersionsPanel.vue` → `versionHistory.ts` store/API → `version_history/catalog.rs`、`download.rs`、`verified_package.rs`。可分页/过滤/选择官方历史 stable，Windows x64 精确 NSIS/签名身份后下载验签；`historicalVersions.test.ts`、Rust catalog/download/selection 测试 | 目录可选择不等于执行可用；准备只验发布者，不建返回点。macOS/Linux 执行关闭，未知/变更资产拒绝。执行仍须下一两行独立准入。 |
-| P0 普通历史安装及手动恢复 | 已有 `inspect_historical_install/begin_historical_install`、`ordinary_install.rs` 和 manager：签名包不受九包 REVIEWED 表限制，但要求比当前版本旧的正式版本、Windows x64、合法源安装/Job-free/未提权/会话/所有权等门禁；完整源安装/注册/快捷方式/Desk/WebView 备份后 FreshSettings，仅交接安装器。`historicalInstall.test.ts`、`HistoryOrdinary_SignedIdentityWithoutVersionTable_001` 等 | 没有自动 Return/历史应用启动或一键人工恢复工具；备份不是可随意覆盖的目录。真实安装/人工恢复尚待合格独立宿主与隔离输入。当前 RC3 不会把较新的 0.26 正式版当历史；未来 0.27 版本需按实际版本重新准入。 |
+| P0 普通历史安装及手动恢复 | 已有 `inspect_historical_install/begin_historical_install`、`ordinary_install.rs` 和 manager：签名包不受九包 REVIEWED 表限制，但要求比当前版本旧的正式版本、Windows x64、合法源安装/Job-free/未提权/会话/所有权等门禁；完整源安装/注册/快捷方式/Desk/WebView 备份后 FreshSettings，仅交接安装器。`historicalInstall.test.ts`、`HistoryOrdinary_SignedIdentityWithoutVersionTable_001` 等 | 没有自动 Return/历史应用启动或一键人工恢复工具；备份不是可随意覆盖的目录。真实安装/人工恢复尚待合格独立宿主与隔离输入。当前 0.26.0 不会把同版本当历史；未来 0.27 版本需按实际版本重新准入。 |
 | P0 已审核严格切换/返回 | 已有 `begin_switch`、`payload_policy.rs` 和 Windows context/manager/return checkpoint。九个精确包：0.14.0、0.15.0、0.16.0、0.17.0、0.17.1、0.17.2、0.17.5、0.17.6、0.17.7；绑定 digest/size/安装输出全清单，保存匹配上下文并在进程/job 真实终态后按确认返回。`historicalSwitch.test.ts`、payload/context/return/reopen/fault 测试 | 九包测量不是实际往返通过；上一 stable 0.26 不在九包严格返回范围内。0.27→0.26 可用性不得由此推出；需走普通安装/人工恢复的真实隔离验收，或另经授权审核扩展严格 payload 策略。保留当前共享数据模式关闭；外部 CLI 历史/认证/项目不回滚。 |
 | P0 本地诊断 | `diagnostic_versions.rs`、`cliVersionDiagnostics.ts`、`useCliVersionDiagnostics.ts`、关于页；Rust 21 项版本域、API/composable/UI/owner 回归和安全复制；另实际隔离执行 Claude 2.1.318、Codex 0.166.0、OpenCode 2.2.5 的只读版本探测 | 真实 profile→生产诊断 IPC→CLI 端到端、Unix、真实 OS 终止未知注入尚未验收。只读脚本不冒充生产链路；须已证明隔离的对应平台输入，不读取真实凭据。 |
 | P0 原生归档清理 | `NativeCleanupAvailability.vue` 显示观察身份、活动/恢复/未知提示，archive/delete 禁用且无 mutation；三项组件拒绝回归。只读关系能力另见 [窄范围复核](native-cleanup-readonly-preview-0.27.md) | 完整级联预览、范围预约、执行及部分失败/超时协调未交付。读取的完整性/同源契约与执行的原子条件缺口分别列明，不能因发现公开 list 就连 delete。 |
@@ -40,8 +40,14 @@
 | `09a7d4224c357b5fc0d85830b2844b5b1c12ae3f` | 诊断 UI/owner、原生清理拒绝和固定源码证据 |
 | `68fa6b3df0f34534bffd493173bdf8cfcc5b3ef3` | P1 忽略/记录/重试、UI 及 fixture/parser 修正 |
 | `3f60853a70ccf279c500c99d3cebb424e282f06a` | 固定工具链最终验收文档和小型元数据；实现未变 |
+| `1c018f24bf52e6de421a84a397e28d052e1c5b8e` | 完整候选清单及只读预览能力分解 |
+| `aaad3d2bf1c05c40c30ab03d9d46c38d05f7b4cc` | 服务信任根及main只读风险分析 |
+| `89e30ff37ca51b29239c17abbc52f0dc85106390` | 正式main合入开发侧，无冲突，版本身份0.26.0 |
+| `68436f31dc8a6313e9d87ca9ab35717671edfcfd` | 新树版本转换/通道回归；受影响验证已通过 |
 
 ## 固定工具链验收与保留失败
+
+最新整合树的针对性结果为 Rust **91**、前端 **14文件169**、Node **310/6原跳过**，all-target Clippy/fmt、类型/构建和生产CSP2/2均通过。源码树与验证后测试提交一致，详见 [本轮命令及日志](../.audit/v027-stage6-main-integration.md)。新源未运行完整16片、完整Vitest或hosted CI。以下完整套件结果属于旧源，范围不混用。
 
 Rust 1.98.1、CI dev/test debug=0，source `68fa6b3…` 的四个原 harness、16/16 片和原聚合全部退出 0：lib 1728/bin 6/paste_transport 8/paste_claude_e2e 2，共 **1744 pass、36 原 ignore、0 fail/timeout**；无过滤 doctest 0 项。实际 host `inJob=true/elevated=false`，18 项 Job-free 以 `external_job` 未验证，四项 unelevated 执行。18 项依既有契约非阻断披露，不扩排除、不算通过；原始 `nativeAll=unverified`、`nativeAcceptanceProven=false` 保持原义。
 
@@ -59,4 +65,4 @@ Rust 1.98.1、CI dev/test debug=0，source `68fa6b3…` 的四个原 harness、1
 
 最小外部输入是已授权发布流程产生的真实签名候选及可销毁的合格安装宿主、已授权 D20 测试输入，以及原生关系/活动/条件 mutation 的已证明契约。Unix `wsl.exe --list --quiet` 的 `E_ACCESS_DENIED` 不绕过。不申请测试账号或签名秘密，不变版本号、不建 tag、不推送、不发 PR/Release，不改用户安装或真实 CLI 数据。
 
-后续有限切片的增量材料：[OpenCode 现有服务同源证明](opencode-service-source-proof-0.27.md) 明确缺失的 OS 进程/实际 DB/held source 信任边，未新增伪能力；[0.26 main 整合风险](main-0.26-integration-risk-0.27.md) 已获准仅刷新本 clone 的远端跟踪信息并比较真实提交树，尚未整合。两者都是来源与风险分析，不能晋升此前本地验证或替代后续整合 CI。
+有限切片的增量材料：[OpenCode 现有服务同源证明](opencode-service-source-proof-0.27.md) 明确缺失的OS进程/实际DB/held source信任边，未新增伪能力；[0.26 main风险与后续实际整合](main-0.26-integration-risk-0.27.md) 分别保留分析阶段与后来授权的合并结果。已完成main→开发侧整合和针对性验证，尚未把开发功能合入main；本地结果不替代后续精确来源完整CI。归档分层实现是下一独立切片，不由本次材料宣称交付。
