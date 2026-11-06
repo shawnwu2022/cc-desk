@@ -35,7 +35,7 @@ mod browser {
         task::{Context, Poll, Waker},
     };
     #[derive(Clone, Copy)]
-    pub(crate) struct Deadline(f64);
+    pub(crate) struct Deadline(pub(crate) f64);
     #[link(wasm_import_module = "cc_desk_browser_owner_v1")]
     unsafe extern "C" {
         fn now() -> f64;
@@ -46,7 +46,33 @@ mod browser {
         fn peer_deadline(budget_ms: u32, remaining_ms: u32, sample_before: f64) -> f64;
         fn peer_expiry() -> f64;
     }
-    static WAITER: Mutex<Option<Waker>> = Mutex::new(None);
+    struct Slot {
+        generation: u64,
+        end: f64,
+        wake: Waker,
+    }
+    struct Registry {
+        slots: [Option<Slot>; 8],
+        next: u64,
+        failed: bool,
+    }
+    static WAITERS: Mutex<Registry> = Mutex::new(Registry {
+        slots: [const { None }; 8],
+        next: 1,
+        failed: false,
+    });
+    fn rearm() {
+        let next = {
+            let slots = WAITERS.lock().unwrap();
+            slots.slots.iter().flatten().map(|s| s.end).reduce(f64::min)
+        };
+        // 不持注册表锁进入受控JS；只保留最早的一个原timer。
+        if let Some(end) = next {
+            unsafe { arm_timer(end) };
+        } else {
+            unsafe { disarm_timer() };
+        }
+    }
     pub(crate) fn after(budget: Duration) -> Result<Deadline, SecurityError> {
         let current = unsafe { now() };
         let original = unsafe { deadline() };
@@ -63,7 +89,7 @@ mod browser {
     }
     pub(crate) fn expired(value: Deadline) -> bool {
         let current = unsafe { now() };
-        !current.is_finite() || current >= value.0
+        WAITERS.lock().unwrap().failed || !current.is_finite() || current >= value.0
     }
     pub(crate) fn native(_: Deadline) -> Option<tokio::time::Instant> {
         None
@@ -81,17 +107,31 @@ mod browser {
         Ok(Deadline(end))
     }
     pub(crate) fn notify() {
-        let wake = WAITER.lock().unwrap().take();
-        if let Some(wake) = wake {
+        let wakes: Vec<_> = WAITERS
+            .lock()
+            .unwrap()
+            .slots
+            .iter()
+            .flatten()
+            .map(|s| s.wake.clone())
+            .collect();
+        for wake in wakes {
             wake.wake();
         }
     }
     pub(crate) fn sample_floor() -> Result<f64, crate::DataError> {
         let value = unsafe { now() };
-        if !value.is_finite() || !(0.0..=9007199254740991.0).contains(&value) {
+        if WAITERS.lock().unwrap().failed
+            || !value.is_finite()
+            || !(0.0..=9007199254740991.0).contains(&value)
+        {
             return Err(crate::DataError::Deadline);
         }
         Ok(value.floor())
+    }
+    pub(crate) fn owner_limit(value: f64) -> Option<f64> {
+        let limit = unsafe { peer_expiry() };
+        (value.is_finite() && limit.is_finite()).then_some(value.min(limit))
     }
     pub(crate) fn peer_times(
         budget: Duration,
@@ -121,26 +161,71 @@ mod browser {
     }
     pub(crate) struct Sleep {
         end: Deadline,
+        slot: Option<(usize, u64)>,
     }
     pub(crate) fn sleep(end: Deadline) -> Sleep {
-        Sleep { end }
+        Sleep { end, slot: None }
     }
     impl Future for Sleep {
         type Output = ();
-        fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
             if expired(self.end) {
                 return Poll::Ready(());
             }
-            *WAITER.lock().unwrap() = Some(cx.waker().clone());
-            // 注册真实waker后才启动JS timer，不持锁跨入JS；醒后必须重新采样。
-            unsafe { arm_timer(self.end.0) };
-            Poll::Pending
+            let mut wakes = Vec::new();
+            let failed = {
+                let mut registry = WAITERS.lock().unwrap();
+                if let Some((index, generation)) = self.slot {
+                    match &mut registry.slots[index] {
+                        Some(slot) if slot.generation == generation => {
+                            slot.wake = cx.waker().clone()
+                        }
+                        _ => registry.failed = true,
+                    }
+                } else if let Some(index) = registry.slots.iter().position(Option::is_none) {
+                    if let Some(next) = registry.next.checked_add(1) {
+                        let generation = registry.next;
+                        registry.next = next;
+                        registry.slots[index] = Some(Slot {
+                            generation,
+                            end: self.end.0,
+                            wake: cx.waker().clone(),
+                        });
+                        self.slot = Some((index, generation));
+                    } else {
+                        registry.failed = true;
+                    }
+                } else {
+                    registry.failed = true;
+                }
+                if registry.failed {
+                    wakes.extend(registry.slots.iter().flatten().map(|s| s.wake.clone()));
+                }
+                registry.failed
+            };
+            for wake in wakes {
+                wake.wake();
+            }
+            rearm();
+            if failed || expired(self.end) {
+                Poll::Ready(())
+            } else {
+                Poll::Pending
+            }
         }
     }
     impl Drop for Sleep {
         fn drop(&mut self) {
-            WAITER.lock().unwrap().take();
-            unsafe { disarm_timer() };
+            if let Some((index, generation)) = self.slot {
+                let mut registry = WAITERS.lock().unwrap();
+                if registry.slots[index]
+                    .as_ref()
+                    .is_some_and(|s| s.generation == generation)
+                {
+                    registry.slots[index] = None;
+                }
+            }
+            rearm();
         }
     }
 }

@@ -5,10 +5,13 @@ edition = "2024"
 publish = false
 
 [dependencies]
-cc-desk-remote-transport = { path = "../transport" }
 cc-desk-remote-security = { path = "../security", features = ["experimental"] }
 cc-desk-remote-record = { path = "../../../protocol/remote/inner/v1" }
 tokio = { version = "=1.52.1", features = ["sync", "time"] }
+serde_json = "=1.0.150"
+
+[target.'cfg(not(all(target_arch = "wasm32", target_os = "unknown")))'.dependencies]
+cc-desk-remote-transport = { path = "../transport" }
 
 [dev-dependencies]
 cc-desk-remote-transport = { path = "../transport", features = ["test-only-loopback"] }

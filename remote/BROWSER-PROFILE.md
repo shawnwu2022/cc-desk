@@ -592,7 +592,7 @@ remain unchanged. Browser captures one install D <= explicit budget,10s and the
 original grant's remaining lifetime. Before original access.check it captures a
 conservative floor sample in the same source domain: grant expiry never exceeds
 sampleBefore+remaining. A later import sample cannot renew it; no tolerance is
-added. One outer sleep uses the existing single Worker timer/Waker. After install,
+added. One outer sleep shares the bounded eight-slot owner clock registry and its single earliest-deadline Worker timer. After install,
 install D is not a connection TTL: the same owner waits under the fixed original
 grant expiry/revocation/cancel/IO boundaries and rejects further Data or replayed
 control bytes. Graceful shutdown still waits for actual TLS close-notify write,
@@ -621,6 +621,91 @@ initial hidden/missing sources, original request flush holds/failure/cancel,
 postinstall expiry, shutdown write/close custody, and Window presentation custody.
 Document/browser globals are explicit Node EventTarget shims; loopback IO and fake
 workload are test-only. Browser/mobile suspend continuity remains unqualified,
-and no Data, input or RemoteReady authority is granted. Real lifecycle/clock,
+and this historical peer-only entry grants no Data, input or RemoteReady authority. The explicit application entry below is separate. Real lifecycle/clock,
 real actor installation, browser network/mux and application/phone acceptance
 remain separate work.
+
+
+## Explicit original application owner (default off)
+
+The opt-in Worker application entry requires all existing enrolled public metadata,
+ClientTrust, grant presentation capability and visible-document peer lifecycle
+capability. It calls the original connect/AppBind/grant/peer bootstrap. The Rust
+application factory receives the original RunningChannel; original
+NativeClient::from_installed consumes the opaque ClientInstalledPeer once. No JS
+DTO can construct a proof or choose an installed fence. This mode returns an
+application descriptor/NativeClientPort; its separate historical peerInstalled
+Promise is undefined. The original peer-only mode remains compatible.
+
+Security prepares the original Data Engine once. Native still spawns that same
+future and retains its JoinHandle. WASM polls both that owned driver and the
+original client application future under the existing root. The driver drops its
+inner future/IO before publishing local completion; dropping an incomplete
+driver records Uncertain. A watch notification is not an OS join. Operation
+Uncertain is retained as an operation error; checked retirement Unknown has a
+separate typed result and terminal classification. Window waitClosed rejects the
+latter, and waits for both original pending RPC settlement and root retirement.
+It does not join the browser Worker or destroy CryptoKeys; the caller still owns
+Worker termination and every main broker's waitClosed.
+
+Native clocks/timeouts remain Tokio aliases. Browser sleeps register at most
+eight generation-tagged slots and arm only the earliest deadline. Dropping one
+sleep cannot unregister another; exhaustion/generation overflow fails closed.
+Application requests carry one copied bounded payload and original absolute D
+(budget at most1s), clamped to the original grant expiry. Deadline propagation
+only tightens D, including Window-to-Worker queuing and each snapshot part/done.
+Grant Request anchoring, setup and installation deadlines are not refreshed.
+
+The controlled Worker samples real performance and wall clocks from fixed
+anchors. Elapsed time is their conservative cumulative maximum, with rollback,
+invalid samples or an unproved gap over1s causing sticky closure. A250ms sampling
+heartbeat shares the one earliest-deadline timer; it is not a lease or no-op
+runtime. Window visibility/pagehide/freeze closure and the original cancellation
+SAB seal admission. Invalidations clear the original TerminalClient window and
+synchronization immediately on observation, while retaining pending receipt or
+Unknown witnesses. Old-connection callbacks cannot invalidate a newer epoch.
+This is fail-closed code with explicit Node platform shims; real mobile suspend
+and clock qualification remains a target-device gate. Production UI stays
+Locked/off and no browser network/mux/enrollment entry is enabled here.
+
+browserClientPort/serveBrowserClient carry a private single-in-flight RPC to the
+Rust NativeClient; they do not implement a second application protocol. The
+original nativeConnection and TerminalClient install the complete snapshot before
+exact ACK, obtain the original Host window, and preserve original receipts,
+cursor/query/settlement and disconnect rules. On conflict or wrong sequence the
+original Host can return InputReceipt Unknown/null; this is not a no-effect
+promise and cannot unlock replay. A duplicate exact operation returns its
+original receipt without another writer effect.
+
+The actual test entry is npm run test:browser-data. Set explicit
+CC_DESK_TEST_ONLY_DATA_WASM, CC_DESK_TEST_ONLY_DATA_GLUE and
+CC_DESK_TEST_ONLY_DATA_HOST; missing artifacts fail rather than skip. Build the
+client library with cargo build --offline --locked --manifest-path remote/Cargo.toml
+-p cc-desk-remote-client --target wasm32-unknown-unknown --lib --message-format=json.
+Use that JSON's exact client/security/rustls rlibs, both target and host dependency
+directories, and the preceding rustc/no-entry/official wasm-bindgen procedure with
+remote/crates/client/tests/fixtures/browser_client_fixture.rs. Export the four
+browser_tls_* forwards and browser_client_start/browser_client_event. The
+TEST_ONLY_uncertain_start extra forward is a fixture classification probe and
+is never selected by the production Worker entry. Official generated JS is not
+patched; instance/memory/helpers remain private to the trusted Worker.
+
+Build the owned Host harness with cargo test --offline --locked --manifest-path
+remote/Cargo.toml -p cc-desk-remote-host --all-features --lib --no-run
+--message-format=json. Select its actual executable and run only
+browser_data_fixture_tests::BrowserData_OriginalHostFixture_001 with explicit
+CC_DESK_TEST_ONLY_DATA_MODE. It uses an ephemeral loopback endpoint, public
+TEST_ONLY identities and synthetic WebAuthn, a new temporary Journal and original
+NativeRunProducer with an actual in-memory writer. Original NativeHost coordinator
+completes installation; original dispatch_received handles every application
+request. Reconnection retains that same Host/producer/Journal and obtains fresh
+TLS/grant/proof/fence. No PTY/CLI or production database is run or changed.
+
+| Stage1 operation | Current boundary |
+| --- | --- |
+| Snapshot -> delivery -> exact ACK -> Window | Original full path executable in actual WASM/Worker and memory Host |
+| Input / receipt / Cursor / Query / Settle | Original HostWritten effect and exact facts; Unknown retained; no automatic replay |
+| Disconnect / reconnect | Original owners retire; same producer/Journal reconciles, no duplicate write |
+| Unknown/malformed schema | Original codec rejects; no default rights |
+| Create / Attach / Resize / Resume / Close lifecycle backend | Native backend remains OPEN/default deny per LIFECYCLE-ROUTING.md; not implemented or qualified here |
+| Real browser network, actor/PTY, phone, production enablement | Separate unverified gates; Node loopback and fake writer are not device evidence |

@@ -1,6 +1,10 @@
+import {serveBrowserClient} from './browserClient.ts';
 import {parentPort,workerData} from 'node:worker_threads';
 import {createConnection} from 'node:net';
 import {startBrowserTlsWorker,type BrowserTlsTransport,type BrowserTlsWorker} from './browserTlsWorker.ts';
+let perfOffset=0,wallOffset=0;
+const actualPerf=performance.now.bind(performance),actualWall=Date.now.bind(Date);Object.defineProperty(performance,'now',{value:()=>actualPerf()+perfOffset,configurable:true});Date.now=()=>Math.floor(actualWall()+wallOffset);
+let clockSample:(()=>number)|undefined;
 class DedicatedFixture {static [Symbol.hasInstance](value:unknown){return value===globalThis;}}
 Object.defineProperties(globalThis,{DedicatedWorkerGlobalScope:{value:DedicatedFixture},isSecureContext:{value:true},crossOriginIsolated:{value:true},location:{value:{origin:'https://desk.invalid'}}});
 if(workerData.traceRuntime)Error.stackTraceLimit=40;
@@ -12,6 +16,9 @@ const grantPort=workerData.grantBridge?.port,nativeGrantPost=grantPort?.postMess
 if(grantPort&&workerData.holdCose)grantPort.postMessage=(value:Record<string,unknown>,...transfer:unknown[])=>{if(value?.kind==='request')heldRequest=value;if(value?.kind==='cose'){heldCose=value;parentPort!.postMessage({kind:'coseHeld'});return;}nativeGrantPost(value,...transfer);};
 if(workerData.preAborted)controller.abort();
 parentPort!.on('message',message=>{
+ if(message.kind==='clockFault'){if(message.source==='perf')perfOffset-=10000;else if(message.source==='wall')wallOffset-=10000;else wallOffset+=1001;}
+ if(message.kind==='clockSteps'){const before=clockSample!();for(let i=0;i<10000;i++){perfOffset+=0.1;wallOffset+=0.1;clockSample!();}const after=clockSample!();parentPort!.postMessage({kind:'clockStepped',elapsed:after-before});}
+ if(message.kind==='holdNextWrite'){workerData.holdWrite=writeSequence+1;parentPort!.postMessage({kind:'holdingNext',sequence:writeSequence+1});}
  if(message.kind==='abort')controller.abort();
  if(message.kind==='close'){if(owner)owner.close();else controller.abort();}
  if(message.kind==='shutdown'){if(workerData.holdShutdownWrite)workerData.holdWrite=writeSequence+1;owner?.shutdown();}
@@ -28,6 +35,7 @@ function holdLoad(){parentPort!.postMessage({kind:'loadHeld'});return new Promis
 if(workerData.holdLoad==='compile')WebAssembly.compile=async(bytes)=>{const module=await nativeCompile(bytes);await holdLoad();return module;};
 WebAssembly.instantiate=(async(module:WebAssembly.Module,imports:WebAssembly.Imports)=>{
  const original=imports.cc_desk_browser_owner_v1 as Record<string,(...args:number[])=>void>;
+ clockSample=original.now as unknown as ()=>number;
  const signing=imports.cc_desk_browser_tls_v1 as Record<string,(...args:number[])=>number>;
  const peerHooks={peer_deadline:(...args:number[])=>{const observedBefore=Math.floor(performance.timeOrigin+performance.now());if(workerData.delayPeerCapture){const end=performance.now()+workerData.delayPeerCapture;while(performance.now()<end){}}const result=original.peer_deadline(...args) as unknown as number;peerStarted=Number.isFinite(result);parentPort!.postMessage({kind:'peerTiming',observedBefore,remaining:args[1],sampleBefore:args[2],expiry:original.peer_expiry()});return result;},peer_installed:(...args:number[])=>{if(workerData.holdPeerPublication){parentPort!.postMessage({kind:'peerPublicationHeld'});Atomics.wait(new Int32Array(workerData.holdPeerPublication),0,0,1000);}original.peer_installed(...args);}};
  const adjusted={...imports,cc_desk_browser_tls_v1:{...signing,sign:(...args:number[])=>{const result=signing.sign(...args);if(result>=8)signed=true;return result;}},cc_desk_browser_owner_v1:{...original,grant_deadline:(...args:number[])=>{const result=original.grant_deadline(...args) as unknown as number;grantStarted=true;grantDeadline=result;return result;},flush:()=>{const result=original.flush() as unknown as number;if(signed&&result===-1)finalFlushWrite=writeSequence;if(tlsReported&&result===-1){bindFlushWrites.add(writeSequence);if(bindFlushWrites.size===2)bindFinalWrite=writeSequence;}if(peerStarted&&result===-1&&peerFlushWrite===0)peerFlushWrite=writeSequence;if(grantStarted&&result===-1){grantFlushWrites.add(writeSequence);if(grantFlushWrites.size===2)grantFinalWrite=writeSequence;}return result;},write:(...args:number[])=>{probeWrite=()=>original.write(...args) as unknown as number;return original.write(...args);},management:(...args:number[])=>{
@@ -37,6 +45,7 @@ WebAssembly.instantiate=(async(module:WebAssembly.Module,imports:WebAssembly.Imp
  },report:(...args:number[])=>{
   if(args[0]===1)tlsReported=true;
   if(args[0]===1&&workerData.cancelPeerAtTlsEvidence){Atomics.store(new Int32Array(workerData.grantBridge.cancel),0,1);parentPort!.postMessage({kind:'peerCancelledAtTlsEvidence',peerClosed:Atomics.load(new Int32Array(workerData.grantBridge.cancel),0),tlsClosed:Atomics.load(new Int32Array(workerData.bridge.shared,0,1),0)});}
+  if(args[0]===1&&workerData.clockFaultAtEvidence){perfOffset-=10000;parentPort!.postMessage({kind:'clockFaultBeforeEvidence'});}
   if(args[0]===1&&workerData.cancelAtEvidence)controller.abort();
   if(args[0]===1&&workerData.expireAtEvidence)while(performance.timeOrigin+performance.now()<workerData.bridge.setupDeadline+1){}
   if(args[0]<0){terminalCode=args[0];parentPort!.postMessage({kind:'terminal',code:args[0]});}
@@ -45,6 +54,7 @@ WebAssembly.instantiate=(async(module:WebAssembly.Module,imports:WebAssembly.Imp
  Object.assign(adjusted.cc_desk_browser_owner_v1,peerHooks);
  const instance=await nativeInstantiate(module,adjusted);
  if(workerData.holdLoad==='instantiate')await holdLoad();
+ if(workerData.applicationUncertain){return {exports:{...instance.exports,browser_client_start:instance.exports.TEST_ONLY_uncertain_start}} as unknown as WebAssembly.Instance;}
  if(!workerData.traceRuntime&&!workerData.rejectStart)return instance;
  const poll=instance.exports.browser_tls_poll as ()=>void,start=instance.exports.browser_tls_start as (l:number,p:number,b:number)=>number;
  return {exports:{...instance.exports,browser_tls_start(l:number,p:number,b:number){return start(l,p,workerData.rejectStart?0:b);},browser_tls_poll(){try{poll();}catch(error){parentPort!.postMessage({kind:'runtimeTrace',trace:String((error as Error).stack).slice(0,8000)});throw error;}}}} as unknown as WebAssembly.Instance;
@@ -67,7 +77,8 @@ function socketTransport(port:number):BrowserTlsTransport{
 let releaseSilent!:()=>void;
 const silent:BrowserTlsTransport={read:()=>new Promise(resolve=>{releaseSilent=()=>resolve(null);}),write:async()=>{},close(){releaseSilent?.();},waitClosed:()=>workerData.holdClose?new Promise<void>(resolve=>{gate.set(0,resolve);parentPort!.postMessage({kind:'closeHeld'});}):Promise.resolve()};
 try{
- owner=await startBrowserTlsWorker({wasm:workerData.wasm,glue:await import(workerData.glueUrl),bridge:workerData.bridge,localSpki:workerData.localSpki,peerSpki:workerData.peerSpki,transport:workerData.port?socketTransport(workerData.port):silent,localRole:workerData.localRole,peerRole:workerData.peerRole,signal:controller.signal,clientTrust:workerData.clientTrust,grantBridge:workerData.grantBridge});
+ owner=await startBrowserTlsWorker({wasm:workerData.wasm,glue:await import(workerData.glueUrl),bridge:workerData.bridge,localSpki:workerData.localSpki,peerSpki:workerData.peerSpki,transport:workerData.port?socketTransport(workerData.port):silent,localRole:workerData.localRole,peerRole:workerData.peerRole,signal:controller.signal,clientTrust:workerData.clientTrust,grantBridge:workerData.grantBridge,application:workerData.application?true:undefined});
+ if(workerData.application){if(!owner.application)throw Error('original application missing');serveBrowserClient(workerData.application,owner.application.port,owner.application.descriptor,owner.close,owner.waitClosed,owner.application.limitDeadline);}
  parentPort!.postMessage({kind:'started',peerEnabled:owner.peerInstalled!==undefined});
  void owner.peerInstalled?.then(value=>{peerPublished=true;parentPort!.postMessage({kind:'peerInstalled',value});},error=>parentPort!.postMessage({kind:'peerError',error:(error as Error).message}));
  void owner.grantAccepted?.then(value=>parentPort!.postMessage({kind:'grantAccepted',value}),error=>parentPort!.postMessage({kind:'grantError',error:(error as Error).message}));

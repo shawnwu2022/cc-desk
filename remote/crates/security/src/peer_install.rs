@@ -17,6 +17,10 @@ enum Admission {
 }
 #[derive(Clone, Copy)]
 enum InstallEnd {
+    #[cfg_attr(
+        all(target_arch = "wasm32", target_os = "unknown"),
+        allow(dead_code, reason = "原Native公开类型在浏览器入口仍拒绝")
+    )]
     Native(Instant),
     #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
     Browser(crate::tls_clock::Deadline),
@@ -39,6 +43,23 @@ struct Completion {
     reply: oneshot::Sender<Result<(), DataError>>,
 }
 impl Shared {
+    fn owner_deadline(&self) -> Option<crate::owner_clock::Instant> {
+        #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+        {
+            self.native_deadline()
+        }
+        #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+        {
+            match self.end {
+                Some(InstallEnd::Browser(end)) => Some(crate::owner_clock::Instant(end.0)),
+                _ => None,
+            }
+        }
+    }
+    #[cfg_attr(
+        all(target_arch = "wasm32", target_os = "unknown"),
+        allow(dead_code, reason = "原Native工厂不在浏览器启动")
+    )]
     pub(crate) fn new(end: Option<Instant>) -> (Arc<Self>, Bootstrap) {
         Self::create(end.map(InstallEnd::Native))
     }
@@ -233,11 +254,13 @@ impl RunningChannel {
             .take()
             .ok_or(DataError::Full)?;
         let mut guard = CloseOnDrop(Some(self.authority()));
-        let proof =
-            tokio::time::timeout_at(self.peer.native_deadline().ok_or(DataError::Context)?, rx)
-                .await
-                .map_err(|_| DataError::Deadline)?
-                .map_err(|_| DataError::Closed)?;
+        let proof = crate::owner_clock::timeout_at(
+            self.peer.owner_deadline().ok_or(DataError::Context)?,
+            rx,
+        )
+        .await
+        .map_err(|_| DataError::Deadline)?
+        .map_err(|_| DataError::Closed)?;
         self.authority().check()?;
         self.peer.check_data(proof.fence)?;
         guard.0 = None;

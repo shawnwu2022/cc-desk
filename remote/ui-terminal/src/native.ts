@@ -5,6 +5,7 @@ import {decodeProjection,decodeReply} from './wire.ts';
  * is dependency injection, not authentication. A shell must admit its original
  * document on every call and revoke/retire its resource on document loss. */
 export interface NativeClientPort {
+  onInvalidate?(listener:()=>void):()=>void;
   snapshot(payload:Uint8Array,budgetMs:number):Promise<{stamp:Stamp;parts:readonly Uint8Array[]}>;
   exchange(payload:Uint8Array,budgetMs:number):Promise<Uint8Array>;
   close():Promise<void>;
@@ -13,13 +14,16 @@ export interface RetirableNativeConnection extends NativeConnection {waitClosed(
 export function nativeConnection(port:NativeClientPort,budgetMs=1000):RetirableNativeConnection {
   if(!Number.isInteger(budgetMs)||budgetMs<1||budgetMs>1000)throw Error('invalid native budget');
   let closed=false,busy=false,epoch=0,retired:Promise<void>|undefined;
+  const listeners=new Set<()=>void>();
   const close=()=>{
     if(closed)return;closed=true;epoch++;
+    for(const listener of [...listeners]){try{listener();}catch{/* 通知异常不能截断原任务关闭。 */}}listeners.clear();
     try{retired=Promise.resolve(port.close());}catch{retired=Promise.reject(Error('native close failed'));}
     // Preserve the rejected result for waitClosed without an unhandled rejection
     // from the synchronous NativeConnection.close contract.
     void retired.catch(()=>{});
   };
+  port.onInvalidate?.(close);
   const run=async<T>(work:(check:()=>void)=>Promise<T>):Promise<T>=>{
     if(closed||busy)throw Error('native unavailable');busy=true;const current=epoch;
     const end=performance.now()+budgetMs;
@@ -37,6 +41,7 @@ export function nativeConnection(port:NativeClientPort,budgetMs=1000):RetirableN
     decodeReply(reply);return reply.slice();
   });
   return {
+    onInvalidate(listener){if(closed){listener();return()=>{};}listeners.add(listener);return()=>listeners.delete(listener);},
     snapshot:(payload,sink)=>run(async check=>{
       const batch=await port.snapshot(payload.slice(),budgetMs);
       if(!batch||!Array.isArray(batch.parts)||batch.parts.length<1||batch.parts.length>24000)throw Error('native snapshot bounds');

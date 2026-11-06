@@ -2,6 +2,8 @@
 #[cfg(all(test, feature = "experimental-host-owner"))]
 #[path = "local_writer_authorized_test_support.rs"]
 pub(crate) mod bound_test_support;
+#[cfg(all(test, feature = "experimental-host-owner"))]
+mod browser_data_fixture_tests;
 pub mod journal;
 pub mod journal_digest;
 mod journal_storage;

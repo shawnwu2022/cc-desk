@@ -1,4 +1,5 @@
 //! One private task polls both directions; public waits never own TLS futures.
+use crate::owner_clock::{Instant, sleep_until, timeout_at};
 use crate::{
     CancelToken, GrantError, Role,
     data::{DataError, DataRecord},
@@ -20,7 +21,6 @@ use tokio::{
     io::{AsyncRead, AsyncWrite, ReadBuf},
     sync::{Mutex, OwnedSemaphorePermit, Semaphore, mpsc, oneshot, watch},
     task::JoinHandle,
-    time::Instant,
 };
 pub const DATA_QUEUE_SLOTS: usize = 4;
 struct Inbox {
@@ -78,6 +78,7 @@ pub struct RunningChannel {
 struct ChannelTask {
     join: Option<JoinHandle<DataError>>,
     outcome: Option<Result<DataError, DataError>>,
+    local: Option<watch::Receiver<Option<Result<DataError, DataError>>>>,
 }
 impl RunningChannel {
     pub fn authority(&self) -> crate::BoundDataAuthority {
@@ -188,7 +189,7 @@ impl RunningChannel {
                 mpsc::error::TrySendError::Full(_) => DataError::Full,
                 _ => DataError::Closed,
             })?;
-        tokio::time::timeout_at(end, rx)
+        timeout_at(end, rx)
             .await
             .map_err(|_| DataError::Uncertain)?
             .map_err(|_| DataError::Uncertain)?
@@ -222,7 +223,7 @@ impl RunningChannel {
             }
             Ok(inbox.head.take().unwrap())
         };
-        tokio::select! {biased;_=exit.changed()=>Err(exit.borrow().unwrap_or(DataError::Closed)),r=tokio::time::timeout_at(end,work)=>r.map_err(|_|DataError::Deadline)?}
+        tokio::select! {biased;_=exit.changed()=>Err(exit.borrow().unwrap_or(DataError::Closed)),r=timeout_at(end,work)=>r.map_err(|_|DataError::Deadline)?}
     }
     pub async fn close(&self) -> DataError {
         self.stop.send_replace(true);
@@ -240,6 +241,15 @@ impl RunningChannel {
             task.join.take();
             task.outcome = Some(result);
             result
+        } else if let Some(local) = &mut task.local {
+            loop {
+                if let Some(result) = *local.borrow() {
+                    return result;
+                }
+                if local.changed().await.is_err() {
+                    return Err(DataError::Uncertain);
+                }
+            }
         } else {
             task.outcome.unwrap_or(Err(DataError::Uncertain))
         }
@@ -388,7 +398,62 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Engine<S> {
         Poll::Pending
     }
 }
+pub(crate) struct OwnedDriver {
+    inner: Option<Pin<Box<dyn std::future::Future<Output = DataError> + Send>>>,
+    completed: watch::Sender<Option<Result<DataError, DataError>>>,
+    active: Arc<AtomicBool>,
+}
+impl std::future::Future for OwnedDriver {
+    type Output = DataError;
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<DataError> {
+        match self.inner.as_mut().unwrap().as_mut().poll(cx) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(reason) => {
+                // 必须先drop原inner/Engine/IO，再公布本地驱动终态。
+                self.inner.take();
+                self.completed.send_replace(Some(Ok(reason)));
+                Poll::Ready(reason)
+            }
+        }
+    }
+}
+impl Drop for OwnedDriver {
+    fn drop(&mut self) {
+        if self.inner.take().is_some() {
+            self.active.store(false, Ordering::Release);
+            self.completed.send_replace(Some(Err(DataError::Uncertain)));
+        }
+    }
+}
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 pub(super) fn start<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
+    io: tokio_rustls::TlsStream<S>,
+    cancel: CancelToken,
+    access: crate::data::ChannelGrant,
+    role: Role,
+    binding: [u8; 32],
+    active: Arc<AtomicBool>,
+    peer_end: Option<Instant>,
+) -> Result<RunningChannel, DataError> {
+    let (mut channel, driver) = prepare(io, cancel, access, role, binding, active, peer_end)?;
+    let task = channel.task.get_mut();
+    task.local = None;
+    task.join = Some(tokio::spawn(driver));
+    Ok(channel)
+}
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+pub(super) fn start<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
+    _: tokio_rustls::TlsStream<S>,
+    _: CancelToken,
+    _: crate::data::ChannelGrant,
+    _: Role,
+    _: [u8; 32],
+    _: Arc<AtomicBool>,
+    _: Option<tokio::time::Instant>,
+) -> Result<RunningChannel, DataError> {
+    Err(DataError::Context)
+}
+pub(crate) fn prepare<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     io: tokio_rustls::TlsStream<S>,
     mut cancel: CancelToken,
     access: crate::data::ChannelGrant,
@@ -396,7 +461,7 @@ pub(super) fn start<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     binding: [u8; 32],
     active: Arc<AtomicBool>,
     peer_end: Option<Instant>,
-) -> Result<RunningChannel, DataError> {
+) -> Result<(RunningChannel, OwnedDriver), DataError> {
     if access.is_remote() && role != Role::Client {
         return Err(DataError::Role);
     }
@@ -412,7 +477,12 @@ pub(super) fn start<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     if fixed_end.is_some_and(|end| end <= Instant::now()) {
         return Err(DataError::Deadline);
     }
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
     let (peer, bootstrap) = crate::peer_install::Shared::new(fixed_end);
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    let (peer, bootstrap) = crate::peer_install::Shared::new_browser(crate::tls_clock::Deadline(
+        fixed_end.ok_or(DataError::Context)?.0,
+    ));
     let public_peer = peer.clone();
     let (out, mut requests) = mpsc::channel::<SendRequest>(DATA_QUEUE_SLOTS);
     let (in_tx, in_rx) = mpsc::channel(DATA_QUEUE_SLOTS);
@@ -432,7 +502,9 @@ pub(super) fn start<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     );
     let public_authority = authority.clone();
     let a = active.clone();
-    let task = tokio::spawn(async move {
+    let (completion, local) = watch::channel(None);
+    let driver_active = active.clone();
+    let inner = Box::pin(async move {
         let (mut revoked, mut superseded) = access.revoked();
         let mut end = Instant::now() + Duration::from_millis(remaining);
         let mut engine = Engine {
@@ -468,7 +540,7 @@ pub(super) fn start<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
                 _ = stopped.changed() => Err(DataError::Closed),
                 _ = revoked.changed() => Err(DataError::Grant(GrantError::Revoked)),
                 _ = superseded.changed() => Err(DataError::Grant(GrantError::Revoked)),
-                _ = tokio::time::sleep_until(d) => Err(DataError::Deadline),
+                _ = sleep_until(d) => Err(DataError::Deadline),
                 r = boot => r,
             }
         } else {
@@ -501,7 +573,7 @@ pub(super) fn start<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
                             _=stopped.changed()=>break DataError::Closed,
                             _=revoked.changed()=>break DataError::Grant(GrantError::Revoked),
                             _=superseded.changed()=>break DataError::Grant(GrantError::Revoked),
-                            _=tokio::time::sleep_until(until)=>break DataError::Deadline,
+                            _=sleep_until(until)=>break DataError::Deadline,
                             permit=in_tx.reserve(),if pending.is_some()=>{if cancel.is_cancelled(){break DataError::Cancelled}
             if let Err(e)=engine.access.check(){break DataError::Grant(e)}
             match permit{Ok(p)=>p.send(pending.take().unwrap()),Err(_)=>break DataError::Closed}},
@@ -536,27 +608,35 @@ pub(super) fn start<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
         exit_tx.send_replace(Some(result));
         result
     });
-    Ok(RunningChannel {
-        authority: public_authority,
-        cancel: public_cancel,
-        access: public_access,
-        role,
-        binding,
-        out,
-        incoming: Mutex::new(Inbox {
-            rx: in_rx,
-            head: None,
-        }),
-        send_credits: credits,
-        stop,
-        active,
-        task: Mutex::new(ChannelTask {
-            join: Some(task),
-            outcome: None,
-        }),
-        exit,
-        peer: public_peer,
-    })
+    Ok((
+        RunningChannel {
+            authority: public_authority,
+            cancel: public_cancel,
+            access: public_access,
+            role,
+            binding,
+            out,
+            incoming: Mutex::new(Inbox {
+                rx: in_rx,
+                head: None,
+            }),
+            send_credits: credits,
+            stop,
+            active,
+            task: Mutex::new(ChannelTask {
+                join: None,
+                outcome: None,
+                local: Some(local),
+            }),
+            exit,
+            peer: public_peer,
+        },
+        OwnedDriver {
+            inner: Some(inner),
+            completed: completion,
+            active: driver_active,
+        },
+    ))
 }
 
 #[cfg(test)]

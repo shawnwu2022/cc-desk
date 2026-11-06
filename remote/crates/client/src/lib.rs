@@ -1,21 +1,26 @@
 //! Native client data-owner bridge. Construct only from the original granted
 //! client channel, never a JS identity, connection label or authorization flag.
 //! No IPC registration, listener, enrollment or automatic retry is installed.
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 pub mod bootstrap;
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+pub mod browser;
 use cc_desk_remote_record::{command, control_io as wire, grant::SessionScope, projection};
 pub use cc_desk_remote_record::{
     grant::DataRole as ClientRole, projection::Target as ClientTarget,
 };
 pub use cc_desk_remote_security::DataError;
+use cc_desk_remote_security::owner_clock::Instant;
 use cc_desk_remote_security::{BoundDataAuthority, Role, RunningChannel};
 use std::time::Duration;
-use tokio::{sync::Mutex, time::Instant};
+use tokio::sync::Mutex;
 const MAX_SNAPSHOT_BYTES: usize = 4 * 1024 * 1024;
 pub struct NativeClient {
     channel: RunningChannel,
     scope: SessionScope,
     fence: u64,
     pending: Mutex<()>,
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
     mux: Option<cc_desk_remote_transport::OwnedTunnel>,
     lifetime_cancel: Option<cc_desk_remote_security::CancelHandle>,
 }
@@ -190,6 +195,7 @@ impl NativeClient {
             scope,
             fence,
             pending: Mutex::new(()),
+            #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
             mux: None,
             lifetime_cancel: None,
         })
@@ -345,6 +351,7 @@ impl NativeClient {
         if let Some(cancel) = &self.lifetime_cancel {
             cancel.cancel();
         }
+        #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
         if let Some(mux) = &self.mux {
             mux.request_close();
         }
@@ -355,12 +362,14 @@ impl NativeClient {
         self.request_close();
         let channel = self.channel.wait_closed_checked().await;
         // Join every original owner even when a prior owner panicked/aborted.
+        #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
         let mux = if let Some(mux) = &self.mux {
             mux.wait_closed().await.map_err(|_| DataError::Uncertain)
         } else {
             Ok(())
         };
         let reason = channel?;
+        #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
         mux?;
         Ok(reason)
     }

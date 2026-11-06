@@ -161,6 +161,30 @@ impl<S> Drop for ManagedChannel<S> {
 }
 impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> ManagedChannel<S> {
     #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    pub(crate) fn browser_prepare_data(
+        &mut self,
+        budget: std::time::Duration,
+    ) -> Result<(crate::RunningChannel, crate::data_owner::OwnedDriver), DataError> {
+        if !self.peer_install || !self.grant_management || self.role != Role::Client {
+            return Err(DataError::Context);
+        }
+        let access = self.access.as_ref().ok_or(DataError::Context)?.clone();
+        let sample = crate::tls_clock::sample_floor()?;
+        let remaining = access.check().map_err(DataError::Grant)?;
+        let (end, _) = crate::tls_clock::peer_times(budget, remaining, sample)?;
+        let result = crate::data_owner::prepare(
+            self.io.take().ok_or(DataError::Closed)?,
+            self.cancel.clone(),
+            access,
+            self.role,
+            self.binding,
+            self.active.clone(),
+            Some(crate::owner_clock::Instant(end.0)),
+        )?;
+        self.transferred = true;
+        Ok(result)
+    }
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
     pub(crate) async fn browser_peer(
         &mut self,
         budget: std::time::Duration,
@@ -275,6 +299,102 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> ManagedChannel<S> {
 #[cfg(test)]
 #[path = "data_adversarial_tests.rs"]
 mod tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod local_driver_tests {
+    use super::*;
+    use cc_desk_remote_record::grant::DataRole;
+    #[tokio::test]
+    async fn owned_driver_drop_preserves_uncertain_and_original_io_retirement() {
+        let (mut client, mut host, _cancel) = crate::data_tests::pair().await;
+        let mut gate = crate::GrantGate::for_binding(
+            host.context(),
+            crate::grant_tests::admin(),
+            [4; 32],
+            Arc::new(|| Ok(1000)),
+        )
+        .unwrap();
+        let challenge = gate
+            .challenge(
+                crate::grant_tests::scope(),
+                DataRole::Controller,
+                Duration::from_secs(4),
+            )
+            .unwrap();
+        let grant = gate
+            .accept(&crate::grant_tests::signed(&challenge, gate.issuer_kid()))
+            .unwrap();
+        client.install(&grant).unwrap();
+        host.install(&grant).unwrap();
+        let (running, driver) = crate::data_owner::prepare(
+            client.io.take().unwrap(),
+            client.cancel.clone(),
+            client.access.clone().unwrap(),
+            client.role,
+            client.binding,
+            client.active.clone(),
+            None,
+        )
+        .unwrap();
+        client.transferred = true;
+        let host = host.start().unwrap();
+        drop(driver);
+        assert!(running.is_closed());
+        assert_eq!(
+            running.wait_closed_checked().await,
+            Err(DataError::Uncertain)
+        );
+        assert_eq!(
+            running.wait_closed_checked().await,
+            Err(DataError::Uncertain)
+        );
+        host.close().await;
+    }
+    #[tokio::test]
+    async fn owned_driver_checked_wait_cancellation_keeps_original_completion() {
+        let (mut client, mut host, _cancel) = crate::data_tests::pair().await;
+        let mut gate = crate::GrantGate::for_binding(
+            host.context(),
+            crate::grant_tests::admin(),
+            [4; 32],
+            Arc::new(|| Ok(1000)),
+        )
+        .unwrap();
+        let challenge = gate
+            .challenge(
+                crate::grant_tests::scope(),
+                DataRole::Controller,
+                Duration::from_secs(4),
+            )
+            .unwrap();
+        let grant = gate
+            .accept(&crate::grant_tests::signed(&challenge, gate.issuer_kid()))
+            .unwrap();
+        client.install(&grant).unwrap();
+        host.install(&grant).unwrap();
+        let (running, driver) = crate::data_owner::prepare(
+            client.io.take().unwrap(),
+            client.cancel.clone(),
+            client.access.clone().unwrap(),
+            client.role,
+            client.binding,
+            client.active.clone(),
+            None,
+        )
+        .unwrap();
+        client.transferred = true;
+        let host = host.start().unwrap();
+        let mut wait = Box::pin(running.wait_closed_checked());
+        assert!(futures_util::poll!(wait.as_mut()).is_pending());
+        drop(wait);
+        running.authority().request_close();
+        let (reason, closed) = tokio::join!(driver, running.wait_closed_checked());
+        assert_eq!(reason, DataError::Closed);
+        assert_eq!(closed, Ok(DataError::Closed));
+        assert_eq!(running.wait_closed_checked().await, closed);
+        host.close().await;
+    }
+}
 
 #[path = "grant_exchange.rs"]
 mod grant_exchange;

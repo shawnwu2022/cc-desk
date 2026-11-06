@@ -132,6 +132,31 @@ fn bind_error(error: crate::BindError) -> i32 {
 }
 /// 生产入口只接收固定枚举/预算；公开身份来自私有已登记元数据 import。
 pub extern "C" fn browser_tls_start(local_role: u32, peer_role: u32, budget_ms: u32) -> i32 {
+    start(local_role, peer_role, budget_ms, None)
+}
+pub enum BrowserApplicationFailure {
+    Operation(crate::DataError),
+    Retirement(crate::DataError),
+}
+pub type BrowserApplication =
+    fn(
+        crate::RunningChannel,
+    ) -> Pin<Box<dyn Future<Output = Result<(), BrowserApplicationFailure>>>>;
+/// 应用factory由Rust组合根提供，JS不能构造channel或opaque proof。
+pub fn browser_application_start(
+    local_role: u32,
+    peer_role: u32,
+    budget_ms: u32,
+    application: BrowserApplication,
+) -> i32 {
+    start(local_role, peer_role, budget_ms, Some(application))
+}
+fn start(
+    local_role: u32,
+    peer_role: u32,
+    budget_ms: u32,
+    application: Option<BrowserApplication>,
+) -> i32 {
     if STARTED.swap(true, Ordering::SeqCst)
         || budget_ms == 0
         || budget_ms > 10_000
@@ -229,6 +254,26 @@ pub extern "C" fn browser_tls_start(local_role: u32, peer_role: u32, budget_ms: 
                 }
                 unsafe { grant_accepted(receipt.as_ptr(), receipt.len() as u32) };
                 if let Some(budget) = config.peer_budget {
+                    if let Some(application) = application {
+                        let (running, driver) =
+                            channel.browser_prepare_data(budget).map_err(|_| -12)?;
+                        let work = async move {
+                            let (reason, application) = tokio::join!(driver, application(running));
+                            application.map_err(|e| match e {
+                                BrowserApplicationFailure::Retirement(_) => -13,
+                                BrowserApplicationFailure::Operation(_) => -12,
+                            })?;
+                            match reason {
+                                crate::DataError::Closed | crate::DataError::Cancelled => Ok(()),
+                                _ => Err(-12),
+                            }
+                        };
+                        tokio::pin!(work);
+                        return tokio::select! {biased;
+                            _=shutdown_requested()=>{if let Some(cancel)=CANCEL.with(|slot|slot.borrow().clone()){cancel.cancel();}work.await},
+                            result=&mut work=>result,
+                        };
+                    }
                     let installed = channel.browser_peer(budget).await.map_err(|e| match e {
                         crate::DataError::Deadline => -10,
                         crate::DataError::Cancelled => -3,

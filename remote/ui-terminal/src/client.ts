@@ -7,6 +7,7 @@ import {command,input,inputCursor,projectionAck,decodeProjection,decodeReply,rec
  * interface has no browser WebSocket implementation or plaintext fallback.
  */
 export interface NativeConnection {
+  onInvalidate?(listener:()=>void):()=>void;
   snapshot(command:Uint8Array,sink:{begin(stamp:Stamp):void;part(payload:Uint8Array):void}):Promise<void>;
   acknowledge(payload:Uint8Array):Promise<Uint8Array>;
   window(command:Uint8Array):Promise<Uint8Array>;
@@ -31,6 +32,7 @@ export class TerminalClient {
   #window:{token:string;notAfterHostMs:string}|undefined;
   #pending:Pending|undefined;
   #budget:number;
+  #unlisten:(()=>void)|undefined;
   constructor(target:Target,binding:string,budgetMs=1000){if(!Number.isInteger(budgetMs)||budgetMs<1||budgetMs>1000)throw Error('invalid deadline');this.#budget=budgetMs;this.#receiver=new ProjectionReceiver(target,binding);this.#binding=binding;}
   get phase():Phase{return this.#phase;}
   get frame(){return this.#receiver.frame;}
@@ -40,8 +42,11 @@ export class TerminalClient {
     if(!native||!['snapshot','acknowledge','window','input','query','settle','close'].every(k=>typeof (native as any)[k]==='function'))throw Error('native adapter required');
     if(binding!==this.#binding){this.#receiver.rebind(binding);this.#binding=binding;}
     this.#native=native;this.#epoch++;this.#request=0n;this.#phase=this.#pending?'NeedsSettlement':'Idle';
+    const epoch=this.#epoch;
+    this.#unlisten=native.onInvalidate?.(()=>{if(this.#native===native&&this.#epoch===epoch)this.disconnect();});
   }
   disconnect():void {
+    this.#unlisten?.();this.#unlisten=undefined;
     const native=this.#native;this.#epoch++;this.#native=undefined;this.#window=undefined;this.#receiver.disconnect();this.#phase='NotConnected';native?.close();
   }
   #enter(allowed:Phase[],reconcile=false):{native:NativeConnection;epoch:number}{

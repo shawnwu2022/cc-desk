@@ -1,4 +1,7 @@
 //! Experimental transport authentication only. Default feature exposes no endpoint API.
+#[doc(hidden)]
+#[cfg(feature = "experimental")]
+pub mod owner_clock;
 #[cfg(feature = "experimental")]
 mod pin;
 #[cfg(feature = "experimental")]
@@ -54,14 +57,42 @@ mod peer_install;
 #[cfg(feature = "experimental")]
 pub use peer_install::{ClientInstalledPeer, HostInstallRequest};
 
-#[cfg(all(feature = "experimental", target_arch = "wasm32", target_os = "unknown"))]
+#[cfg(all(
+    feature = "experimental",
+    target_arch = "wasm32",
+    target_os = "unknown"
+))]
 mod browser_wasm_signer;
-#[cfg(all(feature = "experimental", target_arch = "wasm32", target_os = "unknown"))]
+#[cfg(all(
+    feature = "experimental",
+    target_arch = "wasm32",
+    target_os = "unknown"
+))]
 pub use browser_wasm_signer::BrowserWasmSigningKey;
 
-#[cfg(all(feature = "experimental", target_arch = "wasm32", target_os = "unknown"))]
+#[cfg(all(
+    feature = "experimental",
+    target_arch = "wasm32",
+    target_os = "unknown"
+))]
 mod browser_wasm_io;
-#[cfg(all(feature = "experimental", target_arch = "wasm32", target_os = "unknown"))]
+#[cfg(all(
+    feature = "experimental",
+    target_arch = "wasm32",
+    target_os = "unknown"
+))]
 mod browser_wasm_owner;
-#[cfg(all(feature = "experimental", target_arch = "wasm32", target_os = "unknown"))]
-pub use browser_wasm_owner::{browser_tls_cancel, browser_tls_event, browser_tls_poll, browser_tls_start};
+#[cfg(all(
+    feature = "experimental",
+    target_arch = "wasm32",
+    target_os = "unknown"
+))]
+pub use browser_wasm_owner::{BrowserApplicationFailure, browser_application_start};
+#[cfg(all(
+    feature = "experimental",
+    target_arch = "wasm32",
+    target_os = "unknown"
+))]
+pub use browser_wasm_owner::{
+    browser_tls_cancel, browser_tls_event, browser_tls_poll, browser_tls_start,
+};
