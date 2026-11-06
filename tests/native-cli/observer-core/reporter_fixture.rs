@@ -1,5 +1,5 @@
 use crate::observer_registry::{ObserverDelivery, ObserverRegistry, ObserverRun, ObserverSource};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -20,8 +20,97 @@ fn command_for(executable: &Path, key: &str) -> String {
         .to_owned()
 }
 
-fn invoke(command: &str, executable: &Path, input: &[u8], environment: &[(String, String)]) {
+const MAX_DIAGNOSTICS: usize = 64 * 1024;
+
+struct Captured {
+    bytes: Vec<u8>,
+    total: usize,
+}
+
+struct Drain {
+    result: std::sync::mpsc::Receiver<std::io::Result<Captured>>,
+    count: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+fn drain(mut stream: impl Read + Send + 'static) -> Drain {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let observed = count.clone();
+    std::thread::spawn(move || {
+        let result = (|| {
+            let mut captured = Captured {
+                bytes: Vec::new(),
+                total: 0,
+            };
+            let mut chunk = [0u8; 4096];
+            loop {
+                let count = stream.read(&mut chunk)?;
+                if count == 0 {
+                    break;
+                }
+                captured.total = captured.total.saturating_add(count);
+                observed.store(captured.total, std::sync::atomic::Ordering::Relaxed);
+                let retained = count.min(MAX_DIAGNOSTICS.saturating_sub(captured.bytes.len()));
+                captured.bytes.extend_from_slice(&chunk[..retained]);
+            }
+            Ok(captured)
+        })();
+        let _ = sender.send(result);
+    });
+    Drain {
+        result: receiver,
+        count,
+    }
+}
+
+fn capture(mut process: Command, input: &[u8]) -> (std::process::ExitStatus, Captured, Captured) {
     use std::os::windows::process::CommandExt;
+    let mut child = process
+        .creation_flags(0x0800_0000)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(8);
+    // 先并发排空两条管道；只保留有界数据，超限也继续读取，避免宿主 progress 反压。
+    let stdout = drain(child.stdout.take().unwrap());
+    let stderr = drain(child.stderr.take().unwrap());
+    child.stdin.take().unwrap().write_all(input).unwrap();
+    loop {
+        if child.try_wait().unwrap().is_some() {
+            break;
+        }
+        if Instant::now() >= deadline {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            panic!(
+                "owned reporter fixture deadline exceeded; stdoutBytes={} stderrBytes={}",
+                stdout.count.load(std::sync::atomic::Ordering::Relaxed),
+                stderr.count.load(std::sync::atomic::Ordering::Relaxed)
+            );
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let status = child.wait().unwrap();
+    let receive = |drain: Drain| {
+        drain
+            .result
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .expect("owned reporter diagnostic drain deadline exceeded")
+            .expect("owned reporter diagnostic read failed")
+    };
+    let stdout = receive(stdout);
+    let stderr = receive(stderr);
+    (status, stdout, stderr)
+}
+
+fn invoke(
+    command: &str,
+    executable: &Path,
+    input: &[u8],
+    environment: &[(String, String)],
+) -> usize {
     let mut process = if let Some((shell, encoded)) =
         command.split_once(" -NoLogo -NoProfile -NonInteractive -EncodedCommand ")
     {
@@ -53,30 +142,15 @@ fn invoke(command: &str, executable: &Path, input: &[u8], environment: &[(String
         }
     }
     process.envs(environment.iter().map(|(key, value)| (key, value)));
-    let mut child = process
-        .creation_flags(0x0800_0000)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    child.stdin.take().unwrap().write_all(input).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(8);
-    loop {
-        if child.try_wait().unwrap().is_some() {
-            break;
-        }
-        if Instant::now() >= deadline {
-            child.kill().unwrap();
-            child.wait().unwrap();
-            panic!("owned reporter fixture deadline exceeded");
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    let result = child.wait_with_output().unwrap();
-    assert!(result.status.success());
-    assert!(result.stdout.is_empty(), "reporter must not emit stdout");
-    let stderr = String::from_utf8_lossy(&result.stderr);
+    let (status, stdout, stderr) = capture(process, input);
+    assert!(status.success());
+    assert!(
+        stdout.total <= MAX_DIAGNOSTICS && stderr.total <= MAX_DIAGNOSTICS,
+        "owned reporter diagnostics exceeded bounded retention"
+    );
+    assert_eq!(stdout.total, 0, "reporter must not emit stdout");
+    let stderr_bytes = stderr.total;
+    let stderr = String::from_utf8_lossy(&stderr.bytes);
     // Windows PowerShell 首次载入模块可发宿主 progress；直连 reporter 仍须完全静默。
     let host_progress = command.contains(" -EncodedCommand ")
         && stderr.starts_with("#< CLIXML\r\n")
@@ -90,6 +164,7 @@ fn invoke(command: &str, executable: &Path, input: &[u8], environment: &[(String
         "unexpected reporter or shell diagnostics"
     );
     assert!(!stderr.contains("SYNTHETIC_PRIVATE"));
+    stderr_bytes
 }
 
 fn fixture_root(original: &Path) -> tempfile::TempDir {
@@ -192,7 +267,7 @@ pub fn verify(original: &Path) {
         .unwrap();
         let command = command_for(&executable, "SessionStart");
         assert_eq!(command.contains(" -EncodedCommand "), route != "direct");
-        invoke(&command, &executable, &probe, &environment);
+        let stderr_bytes = invoke(&command, &executable, &probe, &environment);
         environment.pop();
         let captured = std::fs::read(capture).unwrap();
         let normalized = captured
@@ -203,7 +278,7 @@ pub fn verify(original: &Path) {
             "wrapper must preserve the synthetic UTF-8 payload"
         );
         eprintln!(
-            "WindowsReporter route={route} rawBytes={} bom={}",
+            "WindowsReporter route={route} rawBytes={} bom={} hostStderrBytes={stderr_bytes}",
             captured.len(),
             captured.starts_with(&[0xef, 0xbb, 0xbf])
         );
@@ -256,4 +331,37 @@ pub fn verify(original: &Path) {
     assert!(expected >= 15);
     lease.revoke();
     let _ = shutdown.send(());
+}
+
+pub fn verify_pipe_drain() {
+    use base64::Engine;
+    let shell = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap())
+        .join("System32/WindowsPowerShell/v1.0/powershell.exe");
+    // 超过管道容量仍须排空，内存只保留固定上限；此处只使用合成字符。
+    let script = "[Console]::Error.Write('x'*1048576);exit 0";
+    let bytes: Vec<_> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    let mut process = Command::new(shell);
+    process.args([
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-EncodedCommand",
+        &base64::engine::general_purpose::STANDARD.encode(bytes),
+    ]);
+    process.env_clear();
+    for name in ["SystemRoot", "WINDIR", "TEMP", "TMP", "ComSpec"] {
+        if let Some(value) = std::env::var_os(name) {
+            process.env(name, value);
+        }
+    }
+    let (status, stdout, stderr) = capture(process, b"");
+    assert!(status.success());
+    assert_eq!(stdout.total, 0);
+    assert_eq!(stderr.total, 1048576);
+    assert_eq!(stderr.bytes.len(), MAX_DIAGNOSTICS);
+    eprintln!(
+        "WindowsReporter drainedSyntheticBytes={} retainedBytes={}",
+        stderr.total,
+        stderr.bytes.len()
+    );
 }

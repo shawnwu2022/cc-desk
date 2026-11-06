@@ -6,3 +6,10 @@ fn CodexReporter_WindowsActualWrapperAndDirectRoutes_001() {
         "CARGO_BIN_EXE_codex-observer-reporter-fixture"
     )));
 }
+
+#[test]
+#[allow(non_snake_case)]
+#[cfg(windows)]
+fn CodexReporter_BoundedConcurrentPipes_002() {
+    d13_observer_core::reporter_fixture::verify_pipe_drain();
+}
