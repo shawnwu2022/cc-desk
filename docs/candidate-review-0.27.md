@@ -58,3 +58,5 @@ Rust 1.98.1、CI dev/test debug=0，source `68fa6b3…` 的四个原 harness、1
 当前不得发布：没有此次发布授权，代码尚未整合受保护 main，缺该精确 merged-main 的现行普通 CI/coverage、三平台实际签名候选与发布后验证，也缺真实 0.27 stable→RC→stable 隔离往返和目标平台/现场验收。完整原生清理仍是未交付 P0，不能用风险文案替代验收。后续是否明确缩减候选范围须由用户另行决定；本文不代为改变原规划。
 
 最小外部输入是已授权发布流程产生的真实签名候选及可销毁的合格安装宿主、已授权 D20 测试输入，以及原生关系/活动/条件 mutation 的已证明契约。Unix `wsl.exe --list --quiet` 的 `E_ACCESS_DENIED` 不绕过。不申请测试账号或签名秘密，不变版本号、不建 tag、不推送、不发 PR/Release，不改用户安装或真实 CLI 数据。
+
+后续有限切片的增量材料：[OpenCode 现有服务同源证明](opencode-service-source-proof-0.27.md) 明确缺失的 OS 进程/实际 DB/held source 信任边，未新增伪能力；[0.26 main 整合风险](main-0.26-integration-risk-0.27.md) 已获准仅刷新本 clone 的远端跟踪信息并比较真实提交树，尚未整合。两者都是来源与风险分析，不能晋升此前本地验证或替代后续整合 CI。
