@@ -4,6 +4,21 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
+## [0.26.0]
+
+Fixed
+
+- Retain pending Codex identity until an authenticated first event arrives, and preserve exact-ID title/history refresh when a later event reports a previous identity. Never merge sessions by matching titles or timestamps.
+- Accept one leading UTF-8 BOM at the Codex Hook reporter input boundary after the original raw 64 KiB limit. Preserve JSON/metadata validation, authentication and privacy filtering.
+- Adapt supported Windows Codex launch routes and terminal capability, and retain the OpenCode observer without an auxiliary version probe.
+- Read migrated OpenCode v2 history with nullable titles through the selected CLI database source. Create and rename supported sessions through authenticated official metadata APIs with exact readback, and refresh eligible history after database/WAL changes while respecting pure mode.
+
+Important
+
+- This stable release promotes the RC1-RC3 fixes to Latest and the stable updater as 0.26.0. The separately developed 0.27 update/recovery features and remote/mobile work are not included.
+- Windows Hook regression uses synthetic events through the actual PowerShell wrapper, production reporter and authenticated local intake. The observed BOM prefix is supplied in the synthetic input on this development host; hosted test subprocesses use system PowerShell Modules only.
+- Full installed Windows WebView, the original live duplicate-row case, account-backed model turns, D20 Layer-C, original unfiltered native All and real AI automatic naming remain unverified. Updater signatures do not certify Windows Authenticode or real installation/return acceptance. No universal duplicate-row fix or future CLI compatibility is claimed.
+
 ## [0.26.0-rc.3]
 
 Fixed
