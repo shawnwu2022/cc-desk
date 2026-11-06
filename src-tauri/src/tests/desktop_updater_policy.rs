@@ -494,3 +494,41 @@ async fn UpdateCancellation_AlreadyRequestedAndLiveWaitBothWake_008() {
     control.cancelled().await;
     assert!(control.commit().is_err());
 }
+
+#[test]
+#[allow(non_snake_case)]
+fn UpdateChannel_StableMainVersionTransition_009() {
+    let stable = versioned_release("0.26.0");
+    for channel in [
+        UpdateChannel::Stable,
+        UpdateChannel::Test,
+        UpdateChannel::Preview,
+    ] {
+        let releases = [stable.clone()];
+        assert_eq!(
+            select_release(&releases, "0.26.0-rc.3", channel)
+                .unwrap()
+                .unwrap()["tag_name"],
+            "v0.26.0"
+        );
+        for current in ["0.26.0", "0.27.0-rc.1"] {
+            assert!(select_release(&releases, current, channel)
+                .unwrap()
+                .is_none());
+        }
+    }
+    let mut rc = versioned_release("0.27.0-rc.1");
+    rc["id"] = json!(124);
+    let releases = [stable, rc];
+    assert!(select_release(&releases, "0.26.0", UpdateChannel::Stable)
+        .unwrap()
+        .is_none());
+    for channel in [UpdateChannel::Test, UpdateChannel::Preview] {
+        assert_eq!(
+            select_release(&releases, "0.26.0", channel)
+                .unwrap()
+                .unwrap()["tag_name"],
+            "v0.27.0-rc.1"
+        );
+    }
+}
