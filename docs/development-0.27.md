@@ -94,3 +94,30 @@ P1 包括忽略单个候选、复制摘要、更新记录及失败重试，不�
 实际使用已安装的 pstack `poteto-mode`、`figure-it-out`、`show-me-your-work` 组织分工和决策证据，并按 domain/type 与去冗余指导保持边界。使用 superpowers `systematic-debugging` 追溯状态流，`test-driven-development` 为最终两个竞态先保留 RED，再验证 GREEN；`verification-before-completion` 区分本地通过、失败与未验收。没有安装新技能，没有重复另起方案流程。
 
 剩余 P0 包括安全清理的完整级联预览及一次性执行、CLI 版本安全采集、签名 0.27 候选的隔离 Windows 往返。真实安装版 WebView、三 CLI D20、用户双行现场升级、身份关联及 AI 命名仍未验收，不能用本任务合成测试宣称已修复。P1 忽略单个候选、持久更新记录仍未实现。
+
+## 后续 P0 执行
+
+本轮从 `da8aaa6e0d2b8d4ea7ed198110e39bf0bb6f2dfd` 继续，保留原 todo 与失败材料。先完成选定 profile 的版本探测，再完成清理预约、级联预览、确认、执行与结果协调。签名候选与平台验收只准备隔离脚本及故障矩阵，不能阻断这两项独立开发。
+
+根代理负责前端、清理方案及集成；最多一个实现代理在新的独立辅助 checkout 顺序负责版本探测后端，再衔接清理后端。先固定下列版本探测接口，不同时修改同一工作区。阶段收口增加一个只读安全审查。
+
+### 版本探测接口
+
+- `native_probe_cli_version` 经原 authenticated document bridge 接收 `{ requestId, profileId, expectedProfileRevision }`，没有 argv、脚本、程序路径、URL 或环境输入。requestId 是 UUID，每次采集都绑定精确 profile revision。
+- 返回 `{ requestId, profileId, profileRevision, cli, state, version, reason }`。state 为 `known | unknown | cancelled`；只有 known 带严格版本字符串，unknown 带固定原因。原始输出及异常不返回前端。
+- `native_cancel_cli_version_probe` 接收 `{ requestId }`，返回 `{ status: 'requested' | 'settled' }`。取消先到也必须建立同文档 request fence；迟到开始不得启动进程。只有实际 child 已收口才发布 cancelled 终态。
+- 只使用已选 profile 受控冻结环境与已验证程序路线执行固定 `--version`，不带 profile 自定义参数、用户 prompt、observer 或 hooks，不解析任意脚本字符串。不能安全证明启动路线时返回 unknown 原因，不阻止原生启动能力。
+- 后端保留子进程/Job 所有权，设置超时和输出硬上限，取消后必须停止并回收准确 child；未知终止不能伪装 cancelled。文档撤销、profile 修改和退出会撤销新结果发布，但不能丢弃未收口 child。
+- UI 仅在用户明确采集后读取当前选定 profile，按 CLI 和精确 profile/revision 区分结果，切换后丢弃迟到结果。复制摘要只输出 CLI、临时 profile 槽位、版本或固定 unknown 原因，不输出 profile 名称、ID、路径、凭据或原始输出。版本不能作为功能白名单。
+
+## 后续 P0 本回合收口（2026-11-06）
+
+本节更新上方阶段性“尚未采集”状态；0.27 整版仍未验收。已集成 CLI 版本安全采集后端 `50b353886fd21cbe6fb5c7f5acc1e82f225c35ff` 和 profile 独占 owner 修复 `5d230917a938b50a0aaa489ea2e653b6006b7dea`，原辅助提交分别为 `0439a07379050f860dc969462ab86edf020fc73a`、`496bcded0a528e38c30c77f5bd87dd517db2c2f7`。
+
+关于页面由用户显式采集已启用 CLI 的所选 profile；刷新失败、来源/revision 变化和迟到结果均失效。固定版本参数、有界输出和超时、准确取消与未知 owner 保留、匿名来源白名单复制已接通。具体协议、固定源码依据及未证明项见 [CLI 诊断](cli-version-diagnostics-0.27.md)。
+
+清理已完成官方文档/固定源码交叉核查及归档抽屉只读拒绝说明。Codex 虽有 writer 锁但未绑定预览集合；OpenCode 会先中断并动态递归。当前不开放危险 mutation，不声称完整子树或完整清理链路已交付。准确 blocker、反例和解阻条件见 [原生清理能力阻塞](native-cleanup-blocker-0.27.md)。Claude 明确不支持已验证的单会话删除，未使用 purge、rm 或猜路径删除替代。
+
+隔离签名验收准备见 [矩阵](acceptance-0.27.md)，不是已运行记录。真实 0.27 签名候选仍缺，未新发布/安装。实际集成已通过 Rust 诊断域 21/21（1758 过滤）、check、strict Clippy、fmt；全量 Vitest 206 文件，3200 通过、2 原有跳过。最终构建/生产与界面结果和全部失败材料见 [.audit/v027-p0-validation.md](../.audit/v027-p0-validation.md)。
+
+只读记录远端 main 已到 `0aaaf2a171ced55ff2b4d7a3e1731027c45809df`，未 fetch/合入其 0.26 发布改动；本任务仍保留 RC3 基线与独立开发分支。原 todo、BodyTimeout 和六项旧超时失败未删除。

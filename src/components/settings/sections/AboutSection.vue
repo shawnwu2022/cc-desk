@@ -11,6 +11,9 @@ import { safeAppDiagnostics } from '@/utils/appDiagnostics'
 import { safeUpdateDiagnostics } from '@/utils/updateDiagnostics'
 import { useUpdateStore } from '@/stores/update'
 import { getUpdaterSettings } from '@/api/tauri'
+import { useCliProfilesStore } from '@/stores/cliProfiles'
+import { useCliSupportStore } from '@/stores/cliSupport'
+import { useCliVersionDiagnostics } from '@/composables/useCliVersionDiagnostics'
 import AppButton from '@/components/ui/AppButton.vue'
 import InlineNotice from '@/components/ui/InlineNotice.vue'
 const props = withDefaults(defineProps<{ active?: boolean }>(), { active: true })
@@ -24,9 +27,26 @@ const links = [
   { id: 'license', label: 'aboutLicense', url: 'https://github.com/shawnwu2022/cc-desk#license' },
 ]
 const error = ref<string | null>(null), copying = ref(false)
+const profiles = useCliProfilesStore(), support = useCliSupportStore(), loadingProfiles = ref(false)
+const versions = useCliVersionDiagnostics(() => (['claude', 'codex', 'opencode'] as const).flatMap(cli => {
+  const profile = profiles.selected[cli]
+  return support.isEnabled(cli) && profile ? [{ cli, id: profile.id, revision: profile.revision, name: profile.name }] : []
+}), () => props.active)
+let collectionOwner = 0
 let owner = 0
-function invalidate() { ++owner; error.value = null; copying.value = false }
+function invalidate() { ++owner; ++collectionOwner; error.value = null; copying.value = false; loadingProfiles.value = false }
 watch(() => props.active, active => { if (!active) invalidate() }, { flush: 'sync' }); onBeforeUnmount(invalidate)
+async function collectVersions() {
+  if (!props.active || loadingProfiles.value || versions.busy.value) return
+  const current = ++collectionOwner; loadingProfiles.value = true; error.value = null
+  versions.invalidate()
+  try {
+    await profiles.load()
+    if (current === collectionOwner && props.active) await versions.collect()
+  } catch { if (current === collectionOwner && props.active) { versions.invalidate('unavailable'); error.value = 'diagnosticsProfilesUnavailable' } }
+  finally { if (current === collectionOwner) loadingProfiles.value = false }
+}
+function cancelVersions() { ++collectionOwner; loadingProfiles.value = false; void versions.cancel() }
 async function external(id: string) {
   const link = links.find(item => item.id === id)
   if (!props.active || !link) return
@@ -46,7 +66,7 @@ async function copyDiagnostics() {
     try { channel = (await getUpdaterSettings()).channel } catch { /* 未取得配置时报告未知，不猜测所选通道。 */ }
     if (versionOwner !== owner || !props.active) return
     const summary = { ...appSummary, update: safeUpdateDiagnostics({ channel, state: updates.checking ? 'checking' : updates.downloadState,
-      candidate: updates.updateInfo?.version, failure: updates.lastFailure }) }
+      candidate: updates.updateInfo?.version, failure: updates.lastFailure, cliVersions: versions.summary.value }) }
     await writeText(JSON.stringify(summary, null, 2))
     if (versionOwner === owner && props.active) notifications.pushToast({ kind: 'success', messageKey: 'diagnosticsCopied' })
   } catch { if (versionOwner === owner && props.active) error.value = 'diagnosticsCopyFailed' }
@@ -61,6 +81,22 @@ async function copyDiagnostics() {
     <p>MIT · {{ t('aboutLicense') }}</p>
     <div class="about-links"><AppButton v-for="link in links" :key="link.id" :data-about-link="link.id" variant="ghost" @click="external(link.id)">{{ t(link.label) }} ↗</AppButton></div>
     <p class="settings-hint">{{ t('diagnosticsPrivacyHint') }}</p>
+    <div class="version-diagnostics" data-cli-version-diagnostics>
+      <h3>{{ t('diagnosticsCliTitle') }}</h3>
+      <p class="settings-hint">{{ t('diagnosticsCliHint') }}</p>
+      <ul v-if="versions.rows.value.length" aria-live="polite">
+        <li v-for="row in versions.rows.value" :key="row.cli" :data-cli-version="row.cli">
+          <strong>{{ row.cli }}</strong> · {{ row.name }}:
+          {{ row.state === 'known' ? row.version : t(`diagnosticsVersionState_${row.state}`) }}
+          <span v-if="row.reason"> — {{ t(`diagnosticsVersionReason_${row.reason}`) }}</span>
+        </li>
+      </ul>
+      <p v-else class="settings-hint">{{ t('diagnosticsCliNoSelection') }}</p>
+      <div class="about-links">
+        <AppButton data-collect-cli-versions :disabled="!active || loadingProfiles || versions.busy.value" @click="collectVersions">{{ t('diagnosticsCollectCli') }}</AppButton>
+        <AppButton v-if="loadingProfiles || versions.busy.value" data-cancel-cli-versions variant="ghost" @click="cancelVersions">{{ t('diagnosticsCancelCli') }}</AppButton>
+      </div>
+    </div>
     <AppButton data-copy-diagnostics :disabled="copying || !active" @click="copyDiagnostics">{{ t('copyDiagnostics') }}</AppButton>
     <InlineNotice v-if="error" kind="warning" :message="t(error)" />
   </section>
@@ -70,4 +106,6 @@ async function copyDiagnostics() {
 h2 { font-size: 20px; } .about-card { display: flex; gap: 16px; align-items: center; min-width: 0; } .about-card img { width: 56px; height: 56px; flex-shrink: 0; }
 .about-card p, .build-commit, .settings-hint { font-size: 12px; line-height: 1.6; color: var(--text-secondary); overflow-wrap: anywhere; }
 .about-links { display: flex; gap: 8px; flex-wrap: wrap; min-width: 0; } .about-links :deep(button) { white-space: normal; }
+.version-diagnostics { display: flex; flex-direction: column; gap: 8px; max-width: 100%; }
+.version-diagnostics h3 { font-size: 14px; } .version-diagnostics ul { padding-left: 20px; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
 </style>

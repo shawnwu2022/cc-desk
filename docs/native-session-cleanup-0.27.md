@@ -30,3 +30,17 @@ main 已有 Desk 归档、恢复与 Codex 原生 unarchive。此次更新器改�
 6. 开发验证只能创建和清理任务专属的合成源。要求覆盖活动子会话、跨来源同 ID、级联变化、重复点击、部分失败、超时与未知结果。
 
 这些条件仍是未完成开发项。恢复旧版、真实 CLI 删除、安装版 WebView、现场身份关联和 AI 命名的验收分别记录。
+
+## 原生级联的并发边界复核
+
+本轮读取了与本机观察版本对应的官方 tag 源码，而不只看命令名称：
+
+- [Codex 0.166.0 thread/delete](https://github.com/openai/codex/blob/rust-v0.166.0/codex-rs/app-server/src/request_processors/thread_delete.rs) 在请求执行时重新计算 spawn 子树，再逐项准备并交给原生 store 删除。原请求没有预览集合摘要。
+- [OpenCode 2.2.5 Session.remove](https://github.com/anomalyco/opencode/blob/v2.2.5/packages/core/src/session.ts) 会中断目标、等待 idle、取消任务、关闭 transport，再读取并递归删除子会话。
+- [OpenCode 2.2.5 HTTP handler](https://github.com/anomalyco/opencode/blob/v2.2.5/packages/server/src/handlers/session.ts) 仅按 sessionID 调用 remove，没有把预览 revision、子会话集合或状态条件传入该调用。
+
+因此调用一次原生命令本身不能证明只作用于预览时的准确集合。Desk 自己的互斥锁及维护 gate 只约束 Desk 进程，不约束其他 CLI 实例。重复查询能发现已经发生的变化，但不能替代原生 mutation 的条件比较；尤其不能把 OpenCode 的“先中断”误当“活动时拒绝”。此边界正在独立安全审视，尚未据此开放永久清理，不能把未知的原生保证写成已验证能力。
+
+## 后续已核实结论
+
+独立审查已完成，当前不开放原生归档或永久删除。归档抽屉新增只读身份与拒绝说明，不声称完整子树预览。固定源码 commit、原生锁的准确作用、动态级联/活动中断反例以及解阻条件见 [原生清理能力阻塞](native-cleanup-blocker-0.27.md)。上方尚待复核的状态以该证据结论为准，完整清理链路仍未交付。

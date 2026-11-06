@@ -14,4 +14,15 @@ describe('local update diagnostics', () => {
     expect(summary).toMatchObject({ selectedChannel: 'unknown', phase: 'unknown', candidateVersion: 'unknown', failure: { code: 'UPDATER_FAILED', stage: 'unknown' } })
     expect(JSON.stringify(summary)).not.toMatch(/TOKEN|PRIVATE_PATH|SECRET|PROMPT_BODY/)
   })
+  it('UpdateDiagnostics_CliVersionsKeepOnlySafeSelectedSource_003', () => {
+    const summary = safeUpdateDiagnostics({ channel: 'stable', state: 'idle', candidate: null, failure: null, cliVersions: {
+      codex: { source: 'selected-profile-2', state: 'known', version: '0.166.0', reason: null, profileId: 'SECRET', path: '/private' },
+      claude: { source: '/private', state: 'unknown', version: 'SECRET', reason: 'timeout' },
+      opencode: { source: 'selected-profile-3', state: 'unknown', version: null, reason: 'TOKEN' },
+    } })
+    expect(summary.cliVersions.codex).toEqual({ source: 'selected-profile-2', state: 'known', version: '0.166.0', reason: null })
+    expect(summary.cliVersions.claude).toEqual({ source: null, state: 'unknown', version: null, reason: 'timeout' })
+    expect(summary.cliVersions.opencode).toEqual({ source: 'selected-profile-3', state: 'unknown', version: null, reason: 'unavailable' })
+    expect(JSON.stringify(summary)).not.toMatch(/SECRET|TOKEN|private|profileId/)
+  })
 })

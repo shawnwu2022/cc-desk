@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppDrawer from '@/components/ui/AppDrawer.vue'
 import SessionList from './SessionList.vue'
+import NativeCleanupAvailability from './NativeCleanupAvailability.vue'
 import { normalizePath } from '@/utils/path'
 import { compareSessionOpenOrder } from '@/utils/sessionOpenOrder'
 import type { SessionMenuAction, SessionPrimaryAction, UnifiedProjectIdentity, UnifiedSession } from '@/types/unifiedSession'
@@ -39,6 +40,7 @@ function menuAction(id: string, action: SessionMenuAction) {
       <SessionList v-if="archived.length" :sessions="archived" :menu-teleport="false" @primary-action="primaryAction" @menu-action="menuAction"
         @rename-commit="(id, title) => emit('rename-commit', id, title)" @rename-cancel="emit('rename-cancel', $event)" />
       <p v-else class="archived-empty">{{ t('noArchivedSessions') }}</p>
+      <NativeCleanupAvailability v-if="archived.length" :sessions="archived" :active="open" />
     </div>
   </AppDrawer>
 </template>

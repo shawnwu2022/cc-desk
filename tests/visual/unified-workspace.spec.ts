@@ -307,6 +307,33 @@ for (const locale of ['en', 'zh']) {
 // New history pixels are evidence for review, not automatically approved baselines.
 // Keep the existing committed snapshot inventory and all of its assertions intact.
 for (const locale of ['en', 'zh']) {
+  test(`diagnostics and conservative cleanup stay reachable ${locale}`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 1024, height: 640 })
+    await openFixture(page, { scenario: 'terminal-settings', locale, gui: locale === 'zh' ? 'dark' : 'light' })
+    await page.locator('[data-settings-section="about"]').click()
+    await expect(page.locator('[data-cli-version]')).toHaveCount(2)
+    const collect = page.locator('[data-collect-cli-versions]')
+    await collect.scrollIntoViewIfNeeded(); await expect(collect).toBeInViewport({ ratio: 1 })
+    await page.locator('[data-copy-diagnostics]').scrollIntoViewIfNeeded()
+    await expect(page.locator('[data-copy-diagnostics]')).toBeInViewport({ ratio: 1 })
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    await captureFixtureEvidence(page, testInfo, `cli-version-diagnostics-${locale}-unapproved`)
+    await openFixture(page, { scenario: 'archived', locale, gui: locale === 'zh' ? 'dark' : 'light' })
+    const availability = page.locator('[data-cleanup-availability]')
+    await availability.locator('summary').click()
+    const select = availability.locator('select')
+    const value = await select.locator('option').nth(1).getAttribute('value')
+    await select.selectOption(value!)
+    await expect(availability.locator('[data-cleanup-target]')).toBeVisible()
+    await availability.locator('[data-native-cleanup-delete]').scrollIntoViewIfNeeded()
+    await expect(availability.locator('[data-native-cleanup-delete]')).toBeDisabled()
+    await expect(availability.locator('[data-native-cleanup-archive]')).toBeDisabled()
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    await captureFixtureEvidence(page, testInfo, `native-cleanup-blocked-${locale}-unapproved`)
+  })
+}
+
+for (const locale of ['en', 'zh']) {
   test.describe(`historical preparation evidence ${locale}`, () => {
     test.use({ viewport: { width: 1024, height: 640 }, deviceScaleFactor: 1.25 })
     for (const outcome of ['admitted', 'unknown', 'aborted']) {
