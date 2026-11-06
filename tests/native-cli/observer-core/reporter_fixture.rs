@@ -63,8 +63,48 @@ fn drain(mut stream: impl Read + Send + 'static) -> Drain {
     }
 }
 
+fn phase_description(path: Option<&Path>) -> &'static str {
+    let Some(path) = path else {
+        return "none";
+    };
+    let mut bytes = Vec::new();
+    let Ok(file) = std::fs::File::open(path) else {
+        return "none";
+    };
+    if file.take(4097).read_to_end(&mut bytes).is_err() || bytes.len() > 4096 {
+        return "unavailable";
+    }
+    let allowed = [
+        "reporter-entered",
+        "stdin-read",
+        "capture-written",
+        "ps-entered",
+        "ps-info-created",
+        "ps-process-created",
+        "ps-before-start",
+        "ps-started",
+        "ps-copied",
+        "ps-closed",
+        "ps-waited",
+        "ps-caught",
+    ];
+    String::from_utf8_lossy(&bytes)
+        .split(';')
+        .filter_map(|part| allowed.iter().copied().find(|value| *value == part))
+        .next_back()
+        .unwrap_or("none")
+}
+
 fn capture(mut process: Command, input: &[u8]) -> (std::process::ExitStatus, Captured, Captured) {
+    let phase = process
+        .get_envs()
+        .find(|(key, _)| *key == "CC_DESK_TEST_PHASE")
+        .and_then(|(_, value)| value.map(std::path::PathBuf::from));
     use std::os::windows::process::CommandExt;
+    let shell_phase = process
+        .get_envs()
+        .find(|(key, _)| *key == "CC_DESK_TEST_PS_PHASE")
+        .and_then(|(_, value)| value.map(std::path::PathBuf::from));
     let mut child = process
         .creation_flags(0x0800_0000)
         .stdin(Stdio::piped())
@@ -85,9 +125,11 @@ fn capture(mut process: Command, input: &[u8]) -> (std::process::ExitStatus, Cap
             child.kill().unwrap();
             child.wait().unwrap();
             panic!(
-                "owned reporter fixture deadline exceeded; stdoutBytes={} stderrBytes={}",
+                "owned reporter fixture deadline exceeded; stdoutBytes={} stderrBytes={} reporterPhase={} shellPhase={}",
                 stdout.count.load(std::sync::atomic::Ordering::Relaxed),
-                stderr.count.load(std::sync::atomic::Ordering::Relaxed)
+                stderr.count.load(std::sync::atomic::Ordering::Relaxed),
+                phase_description(phase.as_deref()),
+                phase_description(shell_phase.as_deref())
             );
         }
         std::thread::sleep(Duration::from_millis(10));
@@ -243,6 +285,11 @@ pub fn verify(original: &Path) {
         ),
     ];
     // direct 根只使用生产准入允许的字符；其他四种路径必须进入真实 PowerShell 分支。
+    let phase_path = root.path().join("phase.txt");
+    environment.push((
+        "CC_DESK_TEST_PHASE".into(),
+        phase_path.to_string_lossy().into_owned(),
+    ));
     let session = "11111111-2222-4333-8444-555555555555";
     let mut expected = 0;
     for (route, directory) in [
@@ -267,7 +314,19 @@ pub fn verify(original: &Path) {
         .unwrap();
         let command = command_for(&executable, "SessionStart");
         assert_eq!(command.contains(" -EncodedCommand "), route != "direct");
-        let stderr_bytes = invoke(&command, &executable, &probe, &environment);
+        std::fs::write(&phase_path, b"").unwrap();
+        let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            invoke(&command, &executable, &probe, &environment)
+        }));
+        let stderr_bytes = match attempt {
+            Ok(value) => value,
+            Err(error) => {
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    diagnose(&command, &executable, &probe, &environment, &phase_path)
+                }));
+                std::panic::resume_unwind(error);
+            }
+        };
         environment.pop();
         let captured = std::fs::read(capture).unwrap();
         let normalized = captured
@@ -364,4 +423,117 @@ pub fn verify_pipe_drain() {
         stderr.total,
         stderr.bytes.len()
     );
+}
+
+fn diagnose(
+    command: &str,
+    executable: &Path,
+    input: &[u8],
+    environment: &[(String, String)],
+    phase: &Path,
+) {
+    use base64::Engine;
+    let Some((shell, encoded)) =
+        command.split_once(" -NoLogo -NoProfile -NonInteractive -EncodedCommand ")
+    else {
+        return;
+    };
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .unwrap();
+    let words: Vec<_> = bytes
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .collect();
+    let mut script = String::from_utf16(&words).unwrap();
+    let mark =
+        |name: &str| format!("[IO.File]::AppendAllText($env:CC_DESK_TEST_PS_PHASE,'{name};');");
+    for (before, after) in [
+        ("try{".to_owned(), format!("try{{{}", mark("ps-entered"))),
+        (
+            "$i.FileName=".to_owned(),
+            format!("{}$i.FileName=", mark("ps-info-created")),
+        ),
+        (
+            "$p.StartInfo=".to_owned(),
+            format!("{}$p.StartInfo=", mark("ps-process-created")),
+        ),
+        (
+            "if($p.Start())".to_owned(),
+            format!("{}if($p.Start())", mark("ps-before-start")),
+        ),
+        (
+            "[Console]::OpenStandardInput()".to_owned(),
+            format!("{}[Console]::OpenStandardInput()", mark("ps-started")),
+        ),
+        (
+            "$p.StandardInput.Close();".to_owned(),
+            format!(
+                "{}$p.StandardInput.Close();{}",
+                mark("ps-copied"),
+                mark("ps-closed")
+            ),
+        ),
+        (
+            "$p.Dispose()".to_owned(),
+            format!("{}$p.Dispose()", mark("ps-waited")),
+        ),
+        (
+            "catch{}".to_owned(),
+            format!("catch{{{}}}", mark("ps-caught")),
+        ),
+    ] {
+        assert_eq!(script.matches(&before).count(), 1);
+        script = script.replace(&before, &after);
+    }
+    let bytes: Vec<_> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    let command = format!(
+        "{shell} -NoLogo -NoProfile -NonInteractive -EncodedCommand {}",
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    );
+    // 原始尝试已失败；只在失败后做私有环境对照，诊断结果不能把原失败转成通过。
+    for variable in [
+        None,
+        Some("PSModuleAnalysisCachePath"),
+        Some("LOCALAPPDATA"),
+        Some("APPDATA"),
+    ] {
+        let mut environment = environment.to_vec();
+        let phase_path =
+            phase.with_file_name(format!("probe-{}.txt", variable.unwrap_or("baseline")));
+        environment
+            .iter_mut()
+            .find(|(key, _)| key == "CC_DESK_TEST_PHASE")
+            .unwrap()
+            .1 = phase_path.to_string_lossy().into_owned();
+        let shell_phase_path = phase_path.with_extension("shell.txt");
+        environment.push((
+            "CC_DESK_TEST_PS_PHASE".into(),
+            shell_phase_path.to_string_lossy().into_owned(),
+        ));
+        let phase = phase_path.as_path();
+        if let Some(variable) = variable {
+            let path = phase.parent().unwrap().join(variable);
+            if variable != "PSModuleAnalysisCachePath" {
+                std::fs::create_dir_all(&path).unwrap();
+            }
+            environment.push((variable.into(), path.to_string_lossy().into_owned()));
+        }
+        std::fs::write(phase, b"").unwrap();
+        std::fs::write(&shell_phase_path, b"").unwrap();
+        let start = Instant::now();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            invoke(&command, executable, input, &environment)
+        }));
+        eprintln!(
+            "WindowsReporter postFailureProbe={} completed={} elapsedMs={} reporterPhase={} shellPhase={}",
+            variable.unwrap_or("baseline"),
+            result.is_ok(),
+            start.elapsed().as_millis(),
+            phase_description(Some(phase)),
+            phase_description(Some(&shell_phase_path))
+        );
+    }
 }
