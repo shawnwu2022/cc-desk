@@ -294,8 +294,12 @@ export { relaunch };
 export const checkForUpdates = (): Promise<UpdateInfo> =>
   invoke<UpdateInfo>('check_desktop_update');
 
-export const getUpdaterSettings = (): Promise<{ proxy: string | null }> =>
+export const getUpdaterSettings = (): Promise<{ proxy: string | null; channel: import('@/utils/updatePolicy').ReleaseChannel }> =>
   invoke('get_updater_settings');
+export const saveUpdaterChannel = (channel: import('@/utils/updatePolicy').ReleaseChannel): Promise<void> =>
+  invoke('save_updater_channel', { channel });
+export const cancelDesktopUpdate = (admissionId: string): Promise<{ status: 'requested' | 'too-late' }> =>
+  invoke('cancel_desktop_update', { admissionId });
 export const saveUpdaterSettings = (proxy: string | null): Promise<void> =>
   invoke('save_updater_settings', { proxy });
 export const testUpdaterProxy = (proxy: string | null): Promise<{ elapsedMs: number; mode: 'custom' | 'inherited' }> =>

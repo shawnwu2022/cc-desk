@@ -336,6 +336,23 @@ for (const locale of ['en', 'zh']) {
         await captureFixtureEvidence(page, testInfo, `history-${outcome}-inspected-${locale}-unapproved`)
       })
     }
+    test('update channels and recovery guide remain reachable', async ({ page }, testInfo) => {
+      await openFixture(page, { scenario: 'historical-versions', locale, gui: locale === 'zh' ? 'dark' : 'light' })
+      const select = page.locator('[data-update-channel-select]')
+      await expect(select).toHaveValue('stable')
+      await expect(select.locator('option')).toHaveCount(3)
+      expect(await select.locator('option').evaluateAll(options => options.map(option => option.getAttribute('value')))).toEqual(['stable', 'test', 'preview'])
+      await captureFixtureEvidence(page, testInfo, `update-channels-${locale}-unapproved`)
+      await page.locator('[data-update-recovery-guide]').click()
+      const dialog = page.locator('[data-update-recovery-dialog]')
+      await expect(dialog).toBeVisible()
+      await expect(dialog.locator('[data-update-recovery-releases]')).toBeInViewport({ ratio: 1 })
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+      await captureFixtureEvidence(page, testInfo, `update-recovery-${locale}-unapproved`)
+      await page.keyboard.press('Escape')
+      await expect(dialog).toHaveCount(0)
+      await expect(page.locator('[data-update-recovery-guide]')).toBeFocused()
+    })
     test('catalogue, selection and blocked preparation remain usable', async ({ page }, testInfo) => {
       await openFixture(page, { scenario: 'historical-versions', locale, gui: locale === 'zh' ? 'dark' : 'light' })
       await page.locator('[data-history-refresh]').click()

@@ -187,6 +187,12 @@ fn signed_bytes_and_official_digests_are_both_required_before_install() {
     assert_eq!(
         verify_package(b"evil", &signature, &key, &asset)
             .unwrap_err()
+            .stage,
+        "verify"
+    );
+    assert_eq!(
+        verify_package(b"evil", &signature, &key, &asset)
+            .unwrap_err()
             .code,
         "UPDATER_SIGNATURE_INVALID"
     );

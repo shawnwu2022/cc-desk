@@ -8,10 +8,13 @@ import { useNotificationsStore } from '@/stores/notifications'
 import { useOwnedSessionCounts } from '@/composables/useOwnedSessionCounts'
 import { platform } from '@/utils/platform'
 import { safeAppDiagnostics } from '@/utils/appDiagnostics'
+import { safeUpdateDiagnostics } from '@/utils/updateDiagnostics'
+import { useUpdateStore } from '@/stores/update'
+import { getUpdaterSettings } from '@/api/tauri'
 import AppButton from '@/components/ui/AppButton.vue'
 import InlineNotice from '@/components/ui/InlineNotice.vue'
 const props = withDefaults(defineProps<{ active?: boolean }>(), { active: true })
-const { t } = useI18n(); const app = useAppStore(), notifications = useNotificationsStore(), counts = useOwnedSessionCounts()
+const { t } = useI18n(); const app = useAppStore(), updates = useUpdateStore(), notifications = useNotificationsStore(), counts = useOwnedSessionCounts()
 const version = __APP_VERSION__, buildCommit = /^[0-9a-f]{40}$/.test(__APP_BUILD_COMMIT__) ? __APP_BUILD_COMMIT__ : 'unknown'
 const links = [
   { id: 'github', label: 'githubRepo', url: 'https://github.com/shawnwu2022/cc-desk' },
@@ -34,11 +37,16 @@ async function external(id: string) {
 async function copyDiagnostics() {
   if (!props.active || copying.value) return
   const versionOwner = ++owner; copying.value = true; error.value = null
-  const summary = safeAppDiagnostics({ version, commit: buildCommit, platform,
+  const appSummary = safeAppDiagnostics({ version, commit: buildCommit, platform,
     gui: { mode: app.guiThemeMode, density: app.guiDensity, sidebarWidth: app.sidebarWidth },
     terminal: { theme: app.terminalTheme, font: app.terminalFontFamily, size: app.fontSize, lineHeight: app.terminalLineHeight,
       cursor: app.terminalCursorStyle, blink: app.terminalCursorBlink, renderer: app.webglRenderer }, sessions: counts.value })
   try {
+    let channel: unknown = null
+    try { channel = (await getUpdaterSettings()).channel } catch { /* 未取得配置时报告未知，不猜测所选通道。 */ }
+    if (versionOwner !== owner || !props.active) return
+    const summary = { ...appSummary, update: safeUpdateDiagnostics({ channel, state: updates.checking ? 'checking' : updates.downloadState,
+      candidate: updates.updateInfo?.version, failure: updates.lastFailure }) }
     await writeText(JSON.stringify(summary, null, 2))
     if (versionOwner === owner && props.active) notifications.pushToast({ kind: 'success', messageKey: 'diagnosticsCopied' })
   } catch { if (versionOwner === owner && props.active) error.value = 'diagnosticsCopyFailed' }

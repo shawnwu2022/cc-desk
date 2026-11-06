@@ -31,6 +31,7 @@
 - path、owner 或 opaque scope ID 本身不是授权。资源读取使用 backend-held scope 和 kind-specific safe DTO，不发布原始 env、argv、headers、凭证或异常载荷；路径只按对应 DTO 的授权与展示契约返回。Observer 是可选隔离侧通道，不拥有进程控制权。
 - Windows ConPTY、完整 bracketed-paste 字节与一次逻辑 `write_all` 契约不得为测试变绿而降级。实际 `UserPromptSubmit` 正文相等、真实 CLI 和 WebView/平台验收是独立证据。
 - 新 Rust DTO 返回前端使用 `#[serde(rename_all = "camelCase")]`。新 Tauri command 按 `commands.rs` → `lib.rs` 注册 → `src/api/tauri.ts` 封装；新 JS API 写操作须核对 [capabilities](docs/capabilities.md)，不能假设 `<plugin>:default` 含全部权限。
+- 更新通道默认 stable，test/preview 必须显式保存并由后端发现及安装复核。candidate/test-only 与不可发布标记仍只证明排除，不能当用户通道或晋升依据。未知设置保存阻断全局检查和安装，直到只读协调成功；取消回执绑定准确准入与请求所有权。详见 [发布流程](docs/release-process.md)。
 - 视觉系统唯一规范为 [DESIGN.md](DESIGN.md)。颜色、字体、圆角和阴影使用 `src/styles/global.css` token，light/dark 成对维护；终端 `--terminal-*` 独立。复用共享 UI 控件，不另建菜单、弹窗、提示或反馈实现。
 
 ## 测试与验证入口

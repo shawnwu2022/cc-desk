@@ -1,4 +1,4 @@
-import type { UpdateChannel } from '@/utils/updatePolicy'
+import type { ReleaseChannel, UpdateChannel } from '@/utils/updatePolicy'
 import type { ShortcutBindings } from '@/config/appShortcuts'
 import type { SessionRuntimeKind, UnifiedCliKind } from './unifiedSession'
 
@@ -103,6 +103,7 @@ export interface UpdateInfo {
   officialRelease?: { id: number; tag: string; sourceSha: string } | null
   eligibilityReason?: string | null
   channel?: UpdateChannel
+  selectedChannel?: ReleaseChannel
   installEligible?: boolean
   version: string
   currentVersion: string

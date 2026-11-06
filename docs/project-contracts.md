@@ -206,7 +206,7 @@ npm run tauri:build        # 生产构建
 - `scripts/release-policy.mjs` 必须保持 fail-closed：版本一致、当前 protected main 的强制 CI 检查成功、tag/release/draft 无冲突，并在发布前重新检查。用户允许无法自然验证的宿主专项不阻断完整功能发布；仅源码审核的 18 个 Job-free 测试可在实际外部 Job 中明确列为未验证，其余原测试库存必须执行并核对。发布须验证同 SHA/run/attempt 的精确 CI artifact 实际字节、报告及原始日志；不得把正常套件成功宣称为原 All 或真实往返验收通过，不能使用调用者本地 JSON 或任意排除项替代证据。
 - 这次恢复依据用户明确授权；普通 PR、feature branch、失败或未完成的 CI 均不可发布。
 - 真实 Claude Code / Codex CLI Layer-C 证据属于 D20，和普通代码 CI 分层记录。
-- updater 必须验证三个实际文件的签名；既有 draft 替换要求 hash-verified backup 和明确 recovery transaction。客户端自动安装策略保持不变。
+- updater 必须验证三个实际文件的签名；既有 draft 替换要求 hash-verified backup 和明确 recovery transaction。用户更新通道默认 stable，可显式保存 test 或 preview。test 只接受官方正式、beta 和 RC，preview 额外接收明确 preview；发现和安装都复核通道与原有精确发行、源、资产及签名。切回 stable 不自动降级，旧客户端 latest 端点仍只接正式。candidate/test-only、publishable=false、updaterPublication=false 仍是排除证据，不能用作用户通道或晋升依据。安装前取消绑定准确准入 ID，与安装提交原子裁决；安装已开始或结果未知时不承诺取消或自动重放。
 - 0.18.1 精确恢复只认旧 draft `406663556` / source `5ed35db9a560e093a91a5ef32a1eb6dd171f27fd` 和五个固定资产。新三平台验签后先上传并独立下载复核同 run/attempt 备份，再将同一 draft 的 target_commitish 更新为实际 current main SHA、保留同一 v0.18.1 tag_name。旧五个资产只改为独立标注的 preserved .bin 名称，原 ID/字节保留；新九资产完整 staging、回下载核对哈希和三个 updater 签名，再重查 current main/CI/coverage 后发布原 draft ID。没有 archive tag、资产删除或自动重放未知回执。普通 unused-version gate 保留，read-only candidate recovery 不构成发布 waiver。详见发布流程。
 - 用户另授权对实际部分准备状态进行精确重新准备：只认 `scripts/release-prepared-recovery.json` 固定的完整旧快照、db517757/37899773556/attempt1 marker 和原备份 artifact11604434521 的不可变 ID/名称/大小/SHA。独立复核原备份 JSON/五资产字节与当前 snapshot 后，可保留五个原资产，将同一 draft 绑定新的实际 protected main 和新 release run 的完整九资产清单。旧失败 run/旧 CI/旧签名只证明旧状态来源，不得作为新 main 的通过证据；新完整 CI/coverage 和新同 run 三平台实际签名必须重新验证，最终 staging/bytes/signatures/source/tag 检查不变。未知写入不重放，未知/改变/已增加资产的部分状态仍拒绝。
 

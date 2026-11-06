@@ -423,9 +423,9 @@ pub(crate) fn verify_package(
         || expected.size > MAX_PACKAGE_BYTES
         || sha256(bytes) != expected.sha256
     {
-        return Err(failure("UPDATER_PACKAGE_MISMATCH", "download"));
+        return Err(failure("UPDATER_PACKAGE_MISMATCH", "verify"));
     }
-    let invalid = || failure("UPDATER_SIGNATURE_INVALID", "download");
+    let invalid = || failure("UPDATER_SIGNATURE_INVALID", "verify");
     if public_key.len() > 2048 || signature.len() > MAX_SIGNATURE_BYTES as usize {
         return Err(invalid());
     }

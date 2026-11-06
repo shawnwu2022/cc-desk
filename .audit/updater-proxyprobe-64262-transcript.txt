@@ -1,0 +1,89 @@
+TOOL OUTPUT TRANSCRIPTION, NOT A NATIVE CARGO LOG
+
+This file was transcribed after the run from the tool output retained in this
+agent conversation. No stdout/stderr file was saved during the original run.
+The local Codex transcript lookup by CODEX_THREAD_ID found no matching JSONL.
+No failure timestamp is asserted here.
+
+Original working directory:
+E:\Codex\2026-11-06\task-2\updater-backend
+
+Original exec_command cmd argument (two PowerShell commands):
+cargo fmt --manifest-path src-tauri/Cargo.toml --check
+cargo test --manifest-path tests/updater-core/Cargo.toml --locked --offline
+
+exec_command session_id: 64262
+write_stdin result chunk_id: 8f988a
+write_stdin result exit_code: 1
+The text below is the captured output payload.
+
+   Compiling cc-desk-updater-core-tests v0.1.0 (E:\Codex\2026-11-06\task-2\updater-backend\tests\updater-core)
+warning: function `ReleaseNotes_DisclosureWrapperPreservesAdmission_002` should have a snake case name
+  --> src\..\..\..\src-tauri\src\tests\desktop_updater_policy.rs:37:4
+   |
+37 | fn ReleaseNotes_DisclosureWrapperPreservesAdmission_002() {
+   |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to snake case: `release_notes_disclosure_wrapper_preserves_admission_002`
+   |
+   = note: `#[warn(non_snake_case)]` (part of `#[warn(nonstandard_style)]`) on by default
+
+warning: function `ReleaseNotes_BoundedLocalesRetainImportantText_001` should have a snake case name
+   --> src\..\..\..\src-tauri\src\tests\desktop_updater_policy.rs:208:4
+    |
+208 | fn ReleaseNotes_BoundedLocalesRetainImportantText_001() {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to snake case: `release_notes_bounded_locales_retain_important_text_001`
+
+warning: `cc-desk-updater-core-tests` (lib test) generated 2 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.72s
+     Running unittests src\lib.rs (tests\updater-core\target\debug\deps\cc_desk_updater_core_tests-6069e1d4ea5fbec0.exe)
+
+running 31 tests
+test tests::ReleaseNotes_BoundedLocalesRetainImportantText_001 ... ok
+test tests::UpdateCancellation_CommitIsOneShotAndCancellationIsFinal_006 ... ok
+test http_tests::ProxyProbe_InvalidDraft_005 ... ok
+test tests::UpdateChannel_AdmissionMatrix_001 ... ok
+test tests::UpdateChannel_ExclusionIsIndependentOfUserSelection_003 ... ok
+test http_tests::ProxyProbe_RequiresManifest_002 ... ok
+test tests::ReleaseNotes_DisclosureWrapperPreservesAdmission_002 ... ok
+test tests::UpdateCancellation_AlreadyRequestedAndLiveWaitBothWake_008 ... ok
+test http_tests::ProxyProbe_OfficialTarget_001 ... ok
+test tests::UpdateChannel_PreviewProofStillBindsSourceAssetsAndSignatures_005 ... ok
+test http_tests::explicit_proxy_is_used_for_the_real_http_request ... ok
+test tests::explicit_proxy_is_separate_from_cli_config_and_empty_means_inherit ... ok
+test tests::failures_serialize_only_fixed_code_and_stage ... ok
+test tests::UpdateChannel_UnknownVersionsAndInvalidSelection_002 ... ok
+test tests::draft_prerelease_and_candidate_metadata_never_admit ... ok
+test tests::signed_bytes_and_official_digests_are_both_required_before_install ... ok
+test tests::foreign_urls_duplicates_and_missing_digests_are_refused ... ok
+test tests::manifest_signature_is_bound_to_the_uploaded_signature_asset ... ok
+test http_tests::UpdatePackage_ExactBytesAndProgress_006 ... ok
+test tests::tag_version_body_source_and_published_state_must_match ... ok
+test tests::source_version_and_public_key_match_installed_trust_root ... ok
+test tests::UpdateChannel_SelectHighestSemverNeverDowngrade_004 ... ok
+test http_tests::inherited_proxy_is_used_by_the_update_client ... ok
+test tests::official_release_passes_existing_contract ... ok
+test tests::ref_is_exact_not_ancestor_or_recent_green ... ok
+test http_tests::proxy_fixture_waits_for_delayed_and_fragmented_headers ... ok
+test http_tests::http_limits_and_rejections_return_only_safe_codes ... ok
+test http_tests::UpdatePackage_RejectsOversizedShortAndBrokenBodies_007 ... ok
+test http_tests::ProxyProbe_RejectForeignRedirect_004 ... ok
+test tests::UpdateCancellation_RacingCancelAndInstallHaveOneWinner_007 ... ok
+test http_tests::ProxyProbe_BodyTimeout_003 ... FAILED
+
+failures:
+
+---- http_tests::ProxyProbe_BodyTimeout_003 stdout ----
+
+thread '<unnamed>' (64740) panicked at src\..\..\..\src-tauri\src\tests\desktop_updater_http.rs:287:21:
+body-timeout fixture never received a connection
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'http_tests::ProxyProbe_BodyTimeout_003' (56200) panicked at src\..\..\..\src-tauri\src\tests\desktop_updater_http.rs:309:19:
+called `Result::unwrap()` on an `Err` value: Any { .. }
+
+
+failures:
+    http_tests::ProxyProbe_BodyTimeout_003
+
+test result: FAILED. 30 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.32s
+
+error: test failed, to rerun pass `--lib`

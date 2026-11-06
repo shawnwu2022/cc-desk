@@ -268,7 +268,7 @@ test('ReleaseChannels_ExplicitCandidateIsolationCannotPromote_024', async () => 
   const { validateArtifacts } = await policy()
   const artifacts = ['windows', 'macos', 'linux'].map(platform => ({ name: 'cc-desk-candidate-' + sha + '-' + platform,
     expired: false, workflow_run: { id: 42, head_sha: sha, head_branch: 'main' } }))
-  for (const marker of [{ publishable: false }, { updaterPublication: false }, { channel: 'test-only' }]) {
+  for (const marker of [{ publishable: false }, { updaterPublication: false }, { channel: 'candidate' }, { channel: 'test-only' }]) {
     const value = structuredClone(artifacts)
     Object.assign(value[0], marker)
     assert.throws(() => validateArtifacts(value, sha, 42), /artifact/)
