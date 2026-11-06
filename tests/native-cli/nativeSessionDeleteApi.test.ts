@@ -12,6 +12,18 @@ const receipt = () => ({ operationId, cli: 'codex', state: 'acknowledged', rootP
 const confirmation = () => ({ operationId, previewId, acknowledgePermanentDelete: true as const, acknowledgeNativeSubtree: true as const })
 
 describe('permanent deletion authenticated protocol', () => {
+  it('PermanentDeleteApi_PreDispatchStageIsPreserved_008', async () => {
+    for (const reason of ['DELETE_INITIALIZE_FAILED', 'DELETE_READ_FAILED', 'DELETE_PREPARE_FAILED']) {
+      const blocked = { ...receipt(), state: 'blocked', rootPresent: true, reason }
+      const invoke = vi.fn(async (command: string) => command === 'cli_preview_session_delete' ? preview() : blocked)
+      const client = createSessionDeleteClient({ instanceId: 'instance', invoke })
+      await client.preview(request())
+      expect(await client.confirm(confirmation())).toEqual(blocked)
+      expect(await client.inspect({ operationId })).toEqual(blocked)
+      await expect(client.confirm(confirmation())).rejects.toThrow('DELETE_OUTCOME_UNKNOWN')
+      expect(invoke.mock.calls.map(([command]) => command)).toEqual(['cli_preview_session_delete', 'cli_confirm_session_delete', 'cli_inspect_session_delete'])
+    }
+  })
   it('PermanentDeleteApi_PreviewNeverConfirms_001', async () => {
     const invoke = vi.fn(async () => preview())
     const client = createSessionDeleteClient({ instanceId: 'instance', invoke })

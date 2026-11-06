@@ -239,6 +239,11 @@ fn NativeDelete_ProtocolNeverResumesAndOriginFailureNeverDeletes_003() {
         );
         assert_eq!(result.is_ok(), accept);
         assert_eq!(
+            sent[0]["params"]["capabilities"]["explicitGatewayOauth"],
+            json!(true),
+            "metadata deletion must never enable automatic gateway login"
+        );
+        assert_eq!(
             sent.iter()
                 .filter(|v| v["method"] == "thread/delete")
                 .count(),
@@ -248,6 +253,132 @@ fn NativeDelete_ProtocolNeverResumesAndOriginFailureNeverDeletes_003() {
             .iter()
             .any(|v| v["method"] == "thread/resume" || v["method"] == "turn/start"));
     }
+}
+#[test]
+fn NativeDelete_PreDispatchProtocolFailureRetainsStage_008() {
+    for phase in [1, 2, 3] {
+        for malformed in [false, true] {
+            let mut sent = Vec::new();
+            let failure = exchange(
+                "fixture",
+                &mut |v| {
+                    sent.push(v);
+                    Ok(())
+                },
+                &mut |id| {
+                    if id == phase {
+                        if malformed {
+                            Ok(json!({"id":id,"error":{"code":-32000,"message":"private fixture error"}}))
+                        } else {
+                            Err(error("DELETE_OUTCOME_UNKNOWN"))
+                        }
+                    } else {
+                        Ok(json!({"id":id,"result":{"thread":{}}}))
+                    }
+                },
+                &|_| Ok(()),
+                &|_| Ok(()),
+            )
+            .unwrap_err();
+            if phase < 3 {
+                assert_eq!(
+                    failure.code,
+                    if phase == 1 {
+                        "DELETE_INITIALIZE_FAILED"
+                    } else {
+                        "DELETE_READ_FAILED"
+                    }
+                );
+                assert!(!sent.iter().any(|v| v["method"] == "thread/delete"));
+            } else {
+                assert!(matches!(
+                    failure.code.as_str(),
+                    "DELETE_OUTCOME_UNKNOWN" | "DELETE_NOT_ACKNOWLEDGED"
+                ));
+                assert_eq!(
+                    sent.iter()
+                        .filter(|v| v["method"] == "thread/delete")
+                        .count(),
+                    1
+                );
+            }
+        }
+    }
+}
+#[test]
+fn NativeDelete_ReapedPreDispatchFailureRemainsBlocked_009() {
+    for stage in [
+        "DELETE_INITIALIZE_FAILED",
+        "DELETE_READ_FAILED",
+        "DELETE_PREPARE_FAILED",
+    ] {
+        let operations = Operations::default();
+        let request = request();
+        let caller = caller();
+        let preview = operations
+            .register(
+                &caller,
+                &request,
+                "00000000-0000-4000-8000-000000000004",
+                "before".into(),
+            )
+            .unwrap();
+        let confirm = ConfirmRequest {
+            operation_id: request.operation_id.clone(),
+            preview_id: preview.preview_id.unwrap(),
+            acknowledge_permanent_delete: true,
+            acknowledge_native_subtree: true,
+        };
+        operations.begin(&caller, &confirm, "before").unwrap();
+        let entry = operations.get(&caller, &request.operation_id).unwrap();
+        *entry.outcome.lock().unwrap() = Some(Err(error(stage)));
+        assert_eq!(reconcile(&entry, Some(true)).state, "unknown");
+        entry.active.store(false, Ordering::Release);
+        for present in [None, Some(true), Some(false)] {
+            let receipt = reconcile(&entry, present);
+            assert_eq!(receipt.state, "blocked");
+            assert_eq!(receipt.reason, Some(stage));
+        }
+    }
+}
+#[test]
+fn NativeDelete_PreWriteRevalidationFailureIsNotDispatch_010() {
+    let mut input = Vec::new();
+    let mut started = false;
+    let failure = send_packet(
+        &mut input,
+        &json!({"method":"thread/delete","id":3}),
+        &|| Err(error("SCOPE_STALE")),
+        &mut started,
+    )
+    .unwrap_err();
+    assert_eq!(failure.code, "SCOPE_STALE");
+    assert!(!started);
+    assert!(input.is_empty());
+    struct FailingWriter;
+    impl std::io::Write for FailingWriter {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("fixture write failed"))
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    assert_eq!(
+        send_packet(
+            &mut FailingWriter,
+            &json!({"method":"thread/delete","id":3}),
+            &|| Ok(()),
+            &mut started
+        )
+        .unwrap_err()
+        .code,
+        "DELETE_OUTCOME_UNKNOWN"
+    );
+    assert!(
+        started,
+        "write error cannot prove that no bytes reached the peer"
+    );
 }
 #[test]
 #[cfg(windows)]
@@ -284,7 +415,7 @@ fs.writeFileSync(marker+'.trace','started\n');readline.createInterface({{input:p
         id = json!(id),
         cwd = json!(project.to_str().unwrap())
     );
-    let script=script.replace("const m=JSON.parse(line);","const m=JSON.parse(line);if(m.method==='thread/read'){process.stdout.write(JSON.stringify({method:'configWarning',params:{message:'fixture'}})+'\\n');process.stdout.write(JSON.stringify({method:'account/updated',params:{type:'fixture'}})+'\\n');}");
+    let script=script.replace("const m=JSON.parse(line);","const m=JSON.parse(line);if(m.method==='thread/read'){process.stdout.write(JSON.stringify({method:'configWarning',params:{message:'fixture'}})+'\\n');process.stdout.write(JSON.stringify({method:'account/updated',params:{type:'fixture'}})+'\\n');process.stdout.write(JSON.stringify({method:'remoteControl/status/changed',params:{status:'disabled',serverName:'fixture',installationId:'fixture',environmentId:null}})+'\\n');}");
     std::fs::write(project.join("app-server"), &script).unwrap();
     let output = std::process::Command::new("node")
         .args(["-p", "process.execPath"])
@@ -489,7 +620,7 @@ fs.writeFileSync(marker+'.trace','started\n');readline.createInterface({{input:p
     let launcher=format!("require('node:child_process').spawn(process.execPath,['-e',{}],{{stdio:'inherit',detached:true}}).unref();setTimeout(()=>process.exit(0),2000);",json!(descendant_script));
     for (variant, expected, expected_calls, present) in [
         (foreign_script, "blocked", 1, true),
-        (script.replace("const m=JSON.parse(line);","const m=JSON.parse(line);if(m.method==='thread/read')process.stdout.write(JSON.stringify({method:'turn/started',params:{}})+'\\n');"),"unknown",1,true),
+        (script.replace("const m=JSON.parse(line);","const m=JSON.parse(line);if(m.method==='thread/read')process.stdout.write(JSON.stringify({method:'turn/started',params:{}})+'\\n');"),"blocked",1,true),
         (
             script.replace("fs.unlinkSync(file);", ""),
             "partial",

@@ -164,6 +164,7 @@ impl LaunchService {
         let owners = self.command_owners.clone();
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         let worker = move || {
+            let mut delete_write_started = false;
             let mut run = || -> Result<(), SafeError> {
                 let shutdown = shutting_down.read();
                 if *shutdown {
@@ -210,7 +211,12 @@ impl LaunchService {
                             registry.check_caller(&caller)?;
                             authority.current()
                         };
-                        super::native_delete::process(&mut child, &authority, &current)
+                        super::native_delete::process(
+                            &mut child,
+                            &authority,
+                            &current,
+                            &mut delete_write_started,
+                        )
                     }))
                     .unwrap_or_else(|_| Err(error("DELETE_OUTCOME_UNKNOWN")))
                 } else {
@@ -242,7 +248,22 @@ impl LaunchService {
                     std::thread::sleep(Duration::from_millis(25));
                 }
             };
-            let result = run();
+            let result = run().map_err(|failure| {
+                if !delete_write_started
+                    && super::native_delete::pre_dispatch_reason(&failure.code).is_none()
+                    && !matches!(
+                        failure.code.as_str(),
+                        "SOURCE_BUSY"
+                            | "DELETE_ARGUMENTS_UNSUPPORTED"
+                            | "DELETE_ROOT_NOT_ARCHIVED"
+                            | "DELETE_SOURCE_UNAVAILABLE"
+                    )
+                {
+                    error("DELETE_PREPARE_FAILED")
+                } else {
+                    failure
+                }
+            });
             // 准备票据可证明尚未创建进程；已创建时只在整个 Job 收口后释放。
             drop(admission);
             let released = worker_frozen

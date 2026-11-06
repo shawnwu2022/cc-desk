@@ -176,6 +176,15 @@ impl ProjectionService {
                         .receipt("partial", root_present, Some("DELETE_ROOT_PRESENT"))
                 }
                 Ok(()) => entry.request.receipt("acknowledged", root_present, None),
+                Err(failure)
+                    if crate::cli::native_delete::pre_dispatch_reason(&failure.code).is_some() =>
+                {
+                    entry.request.receipt(
+                        "blocked",
+                        root_present,
+                        crate::cli::native_delete::pre_dispatch_reason(&failure.code),
+                    )
+                }
                 Err(failure) if failure.code == "SOURCE_BUSY" => {
                     entry
                         .request

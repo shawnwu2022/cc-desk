@@ -120,11 +120,28 @@ pub(crate) struct Entry {
     pub outcome: OwnerOutcome,
 }
 pub(crate) type OwnerOutcome = Arc<Mutex<Option<Result<(), SafeError>>>>;
+pub(crate) fn pre_dispatch_reason(code: &str) -> Option<&'static str> {
+    match code {
+        "DELETE_INITIALIZE_FAILED" => Some("DELETE_INITIALIZE_FAILED"),
+        "DELETE_READ_FAILED" => Some("DELETE_READ_FAILED"),
+        "DELETE_PREPARE_FAILED" => Some("DELETE_PREPARE_FAILED"),
+        _ => None,
+    }
+}
 pub(crate) fn reconcile(entry: &Entry, root: Option<bool>) -> Receipt {
     if entry.active.load(Ordering::Acquire) {
         return entry
             .request
             .receipt("unknown", None, Some("DELETE_OWNER_PENDING"));
+    }
+    let stage = entry.outcome.lock().ok().and_then(|stored| {
+        stored
+            .as_ref()
+            .and_then(|result| result.as_ref().err())
+            .and_then(|failure| pre_dispatch_reason(&failure.code))
+    });
+    if let Some(stage) = stage {
+        return entry.request.receipt("blocked", root, Some(stage));
     }
     let old = entry.receipt.clone().unwrap_or_else(|| {
         entry
@@ -304,13 +321,21 @@ pub(crate) fn exchange(
             .cloned()
             .ok_or_else(|| error("DELETE_OUTCOME_UNKNOWN"))
     }
+    // 元数据删除不请求登录，初始化不能恢复原生自动认证。
     send(
-        json!({"id":1,"method":"initialize","params":{"clientInfo":{"name":"cc_desk","version":env!("CARGO_PKG_VERSION")}}}),
-    )?;
-    check_startup(&result(receive(1)?, 1)?).map_err(|_| error("DELETE_SOURCE_UNAVAILABLE"))?;
-    send(json!({"method":"initialized"}))?;
-    send(json!({"id":2,"method":"thread/read","params":{"threadId":id,"includeTurns":false}}))?;
-    check(&result(receive(2)?, 2)?["thread"]).map_err(|_| error("DELETE_SOURCE_UNAVAILABLE"))?;
+        json!({"id":1,"method":"initialize","params":{"clientInfo":{"name":"cc_desk","version":env!("CARGO_PKG_VERSION")},"capabilities":{"explicitGatewayOauth":true}}}),
+    ).map_err(|_| error("DELETE_INITIALIZE_FAILED"))?;
+    let startup = receive(1)
+        .and_then(|value| result(value, 1))
+        .map_err(|_| error("DELETE_INITIALIZE_FAILED"))?;
+    check_startup(&startup).map_err(|_| error("DELETE_SOURCE_UNAVAILABLE"))?;
+    send(json!({"method":"initialized"})).map_err(|_| error("DELETE_READ_FAILED"))?;
+    send(json!({"id":2,"method":"thread/read","params":{"threadId":id,"includeTurns":false}}))
+        .map_err(|_| error("DELETE_READ_FAILED"))?;
+    let thread = receive(2)
+        .and_then(|value| result(value, 2))
+        .map_err(|_| error("DELETE_READ_FAILED"))?;
+    check(&thread["thread"]).map_err(|_| error("DELETE_SOURCE_UNAVAILABLE"))?;
     send(json!({"id":3,"method":"thread/delete","params":{"threadId":id}}))
         .map_err(|_| error("DELETE_OUTCOME_UNKNOWN"))?;
     let response = result(receive(3).map_err(|_| error("DELETE_OUTCOME_UNKNOWN"))?, 3)?;
@@ -319,12 +344,30 @@ pub(crate) fn exchange(
     }
     Ok(())
 }
+fn send_packet(
+    input: &mut impl std::io::Write,
+    value: &serde_json::Value,
+    current: &dyn Fn() -> Result<(), SafeError>,
+    delete_write_started: &mut bool,
+) -> Result<(), SafeError> {
+    current()?;
+    // 验证失败尚未写入；一旦尝试序列化删除，即使写入报错也不能断言未发送。
+    if value["method"] == "thread/delete" {
+        *delete_write_started = true;
+    }
+    serde_json::to_writer(&mut *input, value).map_err(|_| error("DELETE_OUTCOME_UNKNOWN"))?;
+    input
+        .write_all(b"\n")
+        .and_then(|_| input.flush())
+        .map_err(|_| error("DELETE_OUTCOME_UNKNOWN"))
+}
 pub(crate) fn process(
     child: &mut std::process::Child,
     authority: &super::native_projection::registry::SessionAuthority,
     current: &dyn Fn() -> Result<(), SafeError>,
+    delete_write_started: &mut bool,
 ) -> Result<(), SafeError> {
-    use std::io::{BufRead, Read, Write};
+    use std::io::{BufRead, Read};
     let mut input = child
         .stdin
         .take()
@@ -358,15 +401,7 @@ pub(crate) fn process(
     let deadline = Instant::now() + Duration::from_secs(30);
     exchange(
         &authority.native_id,
-        &mut |value| {
-            current()?;
-            serde_json::to_writer(&mut input, &value)
-                .map_err(|_| error("DELETE_OUTCOME_UNKNOWN"))?;
-            input
-                .write_all(b"\n")
-                .and_then(|_| input.flush())
-                .map_err(|_| error("DELETE_OUTCOME_UNKNOWN"))
-        },
+        &mut |value| send_packet(&mut input, &value, current, delete_write_started),
         &mut |id| {
             for _ in 0..256 {
                 let value = loop {
@@ -389,7 +424,7 @@ pub(crate) fn process(
                 // 官方启动警告和账户路由仅作元数据跳过，不打印或返回其潜在敏感载荷。
                 if matches!(
                     value["method"].as_str(),
-                    Some("configWarning" | "account/updated")
+                    Some("configWarning" | "account/updated" | "remoteControl/status/changed")
                 ) && value["params"].is_object()
                 {
                     continue;
