@@ -88,7 +88,7 @@ test('ReleaseRecovery_ReleaseCandidateKeepsExactMainGates_020', async () => {
   candidate.main.protected = true
   candidate.tag = 'v0.24.0'
   assert.equal(requiredChecksPassed(candidate), false)
-  for (const invalid of ['0.24.0-rc.0', '0.24.0-rc.01', '0.24.0-beta.1', '0.24.0-rc.1\noutput=bad']) {
+  for (const invalid of ['0.24.0-rc.0', '0.24.0-rc.01', '0.24.0-alpha.1', '0.24.0-rc.1\noutput=bad']) {
     candidate.versions = [invalid, invalid, invalid]
     candidate.tag = `v${invalid}`
     assert.equal(requiredChecksPassed(candidate), false, invalid)
@@ -196,7 +196,7 @@ test('ReleaseRecovery_ActualManifestCLI_013', () => {
   const root = mkdtempSync(resolve(tmpdir(), 'ccdesk-recovery-fixture-'))
   try {
     mkdirSync(resolve(root, 'scripts')); mkdirSync(resolve(root, 'src-tauri')); mkdirSync(resolve(root, 'artifacts'))
-    for (const file of ['generate-updater-manifest.js', 'updater-signature.js', 'release-notes.js']) copyFileSync(resolve(__dirname, '../../scripts', file), resolve(root, 'scripts', file))
+    for (const file of ['generate-updater-manifest.js', 'updater-signature.js', 'release-notes.js', 'release-version.mjs']) copyFileSync(resolve(__dirname, '../../scripts', file), resolve(root, 'scripts', file))
     mkdirSync(resolve(root, 'docs'))
     writeFileSync(resolve(root, 'docs/release-notes.json'), JSON.stringify({ schemaVersion: 1, releases: {
       '1.2.3': { en: 'Important: keep backups.', zh: '重要：保留备份。' },
@@ -215,4 +215,62 @@ test('ReleaseRecovery_ActualManifestCLI_013', () => {
     assert.equal(manifest.version, '1.2.3'); assert.equal(Object.keys(manifest.platforms).length, 3)
     assert.equal(manifest.notes, 'Important: keep backups.'); assert.equal(manifest.notes_i18n.zh, '重要：保留备份。')
   } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+for (const version of ['0.27.0', '0.27.0-beta.1', '0.27.0-rc.2', '0.27.0-preview.3']) {
+  test('ReleaseChannels_CompleteGatesAndSignedManifest_' + version, async () => {
+    const { releaseChannel } = await import('../../scripts/release-version.mjs')
+    const { requiredChecksPassed, mayPublish, validateArtifacts } = await policy()
+    assert.equal(releaseChannel(version), version.includes('-') ? 'prerelease' : 'stable')
+    const value = context()
+    value.versions = [version, version, version]; value.tag = 'v' + version
+    assert.equal(requiredChecksPassed(value), true)
+    assert.equal(mayPublish(value), false, 'source checks never replace authenticated coverage')
+    for (const mutate of [c => { c.main.protected = false }, c => { c.main.sha = '2'.repeat(40) },
+      c => { c.versions[1] = '0.26.0' }, c => { c.tag = 'v0.26.0' }, c => { c.tagExists = true },
+      c => { c.releaseExists = true }, c => { c.ci.run_attempt = 0 }, c => { c.ci.conclusion = 'failure' },
+      c => { c.jobs.pop() }]) {
+      const bad = structuredClone(value); mutate(bad)
+      assert.equal(requiredChecksPassed(bad), false)
+    }
+    const signed = { ...input(), tag: 'v' + version }
+    const manifest = buildUpdaterManifest(signed)
+    assert.equal(manifest.version, version)
+    for (const entry of Object.values(manifest.platforms)) {
+      assert.ok(entry.url.includes('/releases/download/v' + version + '/'))
+      assert.ok(!entry.url.includes('/releases/latest/'))
+    }
+    await verifyUpdaterManifest(manifest, version, pubkey, signed.repository, async url => ({
+      ok: true, arrayBuffer: async () => signed.assets.find(asset => url.endsWith(asset.name)).data,
+    }))
+    for (let index = 0; index < 3; index++) {
+      const bad = { ...signed, assets: signed.assets.map((a, i) => i === index ? { ...a, data: Buffer.from('tampered') } : a) }
+      assert.throws(() => buildUpdaterManifest(bad), /signature/)
+    }
+    assert.throws(() => validateArtifacts([{ name: 'conpty-package-candidate-test-only',
+      publishable: false, updaterPublication: false }], sha, 42), /three platform artifacts/)
+  })
+}
+for (const version of ['0.27.0-alpha.1', '0.27.0-nightly.1', '0.27.0-candidate.1', '0.27.0-test-only.1',
+  '0.27.0-beta', '0.27.0-preview.0', '0.27.0-beta.01', '0.27.0-rc.1.2', '0.27.0-preview.1+build',
+  '0.27.0+build', '00.27.0', '0.027.0', '0.27.00', '0.27.0-rc.1\n', '0.27.0\n']) {
+  test('ReleaseChannels_UnknownOrNoncanonicalRefused_' + JSON.stringify(version), async () => {
+    const { releaseChannel } = await import('../../scripts/release-version.mjs')
+    const { requiredChecksPassed } = await policy()
+    assert.equal(releaseChannel(version), null)
+    const value = context(); value.versions = [version, version, version]; value.tag = 'v' + version
+    assert.equal(requiredChecksPassed(value), false)
+    assert.throws(() => buildUpdaterManifest({ ...input(), tag: 'v' + version }), /invalid release tag/)
+  })
+}
+
+test('ReleaseChannels_ExplicitCandidateIsolationCannotPromote_024', async () => {
+  const { validateArtifacts } = await policy()
+  const artifacts = ['windows', 'macos', 'linux'].map(platform => ({ name: 'cc-desk-candidate-' + sha + '-' + platform,
+    expired: false, workflow_run: { id: 42, head_sha: sha, head_branch: 'main' } }))
+  for (const marker of [{ publishable: false }, { updaterPublication: false }, { channel: 'test-only' }]) {
+    const value = structuredClone(artifacts)
+    Object.assign(value[0], marker)
+    assert.throws(() => validateArtifacts(value, sha, 42), /artifact/)
+  }
 })

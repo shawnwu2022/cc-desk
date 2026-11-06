@@ -84,7 +84,7 @@ function zip(entries, { method = 8, descriptor = true } = {}) {
   end.writeUInt32LE(central.length, 12); end.writeUInt32LE(offset, 16)
   return Buffer.concat([...chunks, central, end])
 }
-function preflight({ mutate = () => {}, mutateReport = () => {}, mutateLocal = () => {}, args, extraArgs = [], missingLog = false, stage = false, inPlace = true, preparedPhase = false, omitNotes = false } = {}) {
+function preflight({ version, mutate = () => {}, mutateReport = () => {}, mutateLocal = () => {}, args, extraArgs = [], missingLog = false, stage = false, inPlace = true, preparedPhase = false, omitNotes = false } = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'ccdesk-release-coverage-'))
   try {
     const c = context(), value = report()
@@ -148,6 +148,18 @@ function preflight({ mutate = () => {}, mutateReport = () => {}, mutateLocal = (
       }
       api.releases = [api.staged]
     }
+    if (version) {
+      assert.equal(stage, false, 'version fixture must never alter the fixed recovery transaction')
+      mkdirSync(join(directory, 'scripts')); mkdirSync(join(directory, 'src-tauri'))
+      for (const file of ['release-preflight.mjs', 'release-policy.mjs', 'release-version.mjs', 'windows-native-validation.mjs',
+        'windows-native-scope.json', 'windows-rust-shards.mjs', 'release-coverage-archive.mjs', 'release-draft-recovery.mjs',
+        'release-prepared-recovery.json', 'verify-updater-manifest.js', 'updater-signature.js']) {
+        copyFileSync(new URL('../../scripts/' + file, import.meta.url), join(directory, 'scripts', file))
+      }
+      writeFileSync(join(directory, 'package.json'), JSON.stringify({ version }))
+      writeFileSync(join(directory, 'src-tauri/Cargo.toml'), '[package]\nversion = "' + version + '"\n')
+      writeFileSync(join(directory, 'src-tauri/tauri.conf.json'), JSON.stringify({ version }))
+    }
     mutate(api); mutateLocal(directory)
     if (missingLog) rmSync(join(directory, value.harnesses[0].logs.execution))
     const bootstrap = `
@@ -180,7 +192,7 @@ function preflight({ mutate = () => {}, mutateReport = () => {}, mutateLocal = (
       '--coverage-artifact-id', '90', '--coverage-artifact-name', name, ...(omitNotes ? [] : ['--notes', join(directory, 'notes.md')])]
     const result = spawnSync(process.execPath, ['--import', `data:text/javascript;base64,${Buffer.from(bootstrap).toString('base64')}`,
       'scripts/release-preflight.mjs', ...selectedArgs, ...extraArgs], { encoding: 'utf8', timeout: 5000,
-      cwd: stage ? directory : fileURLToPath(new URL('../..', import.meta.url)), env: { ...process.env, GITHUB_OUTPUT: join(directory, 'outputs'),
+      cwd: stage || version ? directory : fileURLToPath(new URL('../..', import.meta.url)), env: { ...process.env, GITHUB_OUTPUT: join(directory, 'outputs'),
         GITHUB_REPOSITORY: 'shawnwu2022/cc-desk', GITHUB_SHA: sha, GITHUB_REF: 'refs/heads/main',
         GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_RUN_ID: '42', GITHUB_RUN_ATTEMPT: '1', GITHUB_TOKEN: 'synthetic-fixture-token',
         FIXTURE_API: JSON.stringify(api), FIXTURE_ARCHIVE: archive.toString('base64') } })
@@ -516,3 +528,28 @@ test('ReleaseCoverage_ArchiveUnsafeRedirectAndStreamingBound_018', async () => {
   await assert.rejects(fetchCoverageArchive({ repository: 'shawnwu2022/cc-desk', token: 'synthetic', artifact: artifact(),
     request: async () => { throw new Error('signed-url-or-token-must-not-escape') } }), /^Error: Coverage archive: download request failed$/)
 })
+
+for (const version of ['0.27.0', '0.27.0-beta.1', '0.27.0-rc.1', '0.27.0-preview.1']) {
+  test('ReleaseCoverage_PrereleaseFullPreflight_' + version, () => {
+    const good = preflight({ version, extraArgs: ['--artifacts'] })
+    assert.equal(good.status, 0, good.stderr)
+    assert.ok(good.outputs.includes('channel=' + (version.includes('-') ? 'prerelease' : 'stable') + '\n'))
+    assert.ok(good.outputs.includes('tag=v' + version + '\n'))
+    for (const mutate of [api => { api.main.protected = false }, api => { api.ci.conclusion = 'failure' },
+      api => { api.ci.run_attempt = 3 }, api => { api.artifacts[0].workflow_run.head_sha = '2'.repeat(40) },
+      api => { api.platformArtifacts[0].workflow_run.id = 43 }, api => { api.tagExists = true },
+      api => { api.releases = [{ tag_name: 'v' + version, draft: true }] }]) {
+      const bad = preflight({ version, extraArgs: ['--artifacts'], mutate })
+      assert.equal(bad.status, 1, bad.stdout)
+    }
+    const forged = preflight({ version, mutateLocal: directory => {
+      const path = join(directory, REPORT_FILENAME); writeFileSync(path, readFileSync(path) + '\n')
+    } })
+    assert.equal(forged.status, 1)
+    if (version.includes('-')) {
+      const recovery = preflight({ version, extraArgs: ['--prepare-draft-recovery'],
+        mutate: api => { api.releases = [{ tag_name: 'v' + version, id: OLD_DRAFT_ID, draft: true }] } })
+      assert.equal(recovery.status, 1, 'fixed stable draft recovery must never admit prereleases')
+    }
+  })
+}

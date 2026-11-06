@@ -66,7 +66,8 @@ export function validateArtifacts(artifacts, sha, runId) {
     const matches = artifacts.filter(a => a.name === name)
     if (matches.length !== 1) throw new Error(`missing or duplicate artifact: ${name}`)
     const artifact = matches[0]
-    if (artifact.expired !== false || artifact.workflow_run?.id !== runId || artifact.workflow_run?.head_sha !== sha || artifact.workflow_run?.head_branch !== 'main') {
+    if (artifact.publishable === false || artifact.updaterPublication === false || artifact.channel === 'test-only'
+      || artifact.expired !== false || artifact.workflow_run?.id !== runId || artifact.workflow_run?.head_sha !== sha || artifact.workflow_run?.head_branch !== 'main') {
       throw new Error(`artifact source/run binding failed: ${name}`)
     }
   }

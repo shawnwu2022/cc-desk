@@ -2,6 +2,7 @@
 
 const fs = require('fs')
 const path = require('path')
+const { releaseChannel } = require('./release-version.mjs')
 const { verifyUpdaterSignature } = require('./updater-signature.js')
 const { localizedNotes, readNotes } = require('./release-notes.js')
 
@@ -21,7 +22,7 @@ function toPublishedAssetName(name) {
 
 function buildUpdaterManifest({ repository, tag, assets, pubkey, notes = '', notesByLocale, pubDate = new Date().toISOString() }) {
   if (!repository || !tag) throw new Error('repository and tag are required')
-  if (!/^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(tag)) {
+  if (typeof tag !== 'string' || !tag.startsWith('v') || !releaseChannel(tag.slice(1))) {
     throw new Error(`invalid release tag: ${tag}`)
   }
 
