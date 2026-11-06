@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [0.26.0-rc.3] - 2026-11-06
+
+### Fixed
+
+- Accept exactly one leading UTF-8 BOM at the Codex reporter input boundary after enforcing the original raw 64 KiB cap. Preserve JSON/metadata admission, exact authenticated run identity, privacy filtering and silent failure.
+- Exercise actual Windows PowerShell transport and the production reporter through isolated authenticated local intake for all three Hook events and special-character installation paths, retaining direct launch and wrong-capability rejection.
+
+This is a prerelease; stable Latest and the stable updater remain unchanged. The development host does not automatically emit the faulting BOM, so the observed prefix is supplied in synthetic input through the real wrapper chain. Live duplicate-row acceptance, installed Windows WebView, D20 Layer-C, original unfiltered native All and real AI automatic naming remain unverified. No real user conversations or model calls are used.
+
 ## [0.26.0-rc.2] - 2026-11-06
 
 ### Fixed
