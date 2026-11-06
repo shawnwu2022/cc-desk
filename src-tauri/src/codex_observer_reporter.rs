@@ -43,16 +43,7 @@ fn report() -> Result<(), ()> {
         );
     }
     crate::observer_registry::parse_observer_headers(&headers).map_err(|_| ())?;
-    let mut bytes = Vec::new();
-    std::io::stdin()
-        .take(crate::observer_registry::MAX_OBSERVER_PAYLOAD as u64 + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|_| ())?;
-    if bytes.len() > crate::observer_registry::MAX_OBSERVER_PAYLOAD {
-        return Err(());
-    }
-    let input = serde_json::from_slice(&bytes).map_err(|_| ())?;
-    let safe = metadata(&input).map_err(|_| ())?;
+    let safe = read_metadata(std::io::stdin())?;
     let client = reqwest::blocking::Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
@@ -70,3 +61,22 @@ fn report() -> Result<(), ()> {
     request.send().map_err(|_| ())?;
     Ok(())
 }
+
+fn read_metadata(input: impl Read) -> Result<serde_json::Value, ()> {
+    let mut bytes = Vec::new();
+    input
+        .take(crate::observer_registry::MAX_OBSERVER_PAYLOAD as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| ())?;
+    if bytes.len() > crate::observer_registry::MAX_OBSERVER_PAYLOAD {
+        return Err(());
+    }
+    // 部分 Windows PowerShell 传输会附加 BOM；原始大小先准入，只去掉一个精确前缀。
+    let bytes = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(&bytes);
+    let input = serde_json::from_slice(bytes).map_err(|_| ())?;
+    metadata(&input).map_err(|_| ())
+}
+
+#[cfg(test)]
+#[path = "tests/codex_observer_reporter.rs"]
+mod tests;
