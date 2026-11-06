@@ -4,6 +4,21 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
+## [0.26.0]
+
+修复
+
+- Codex 首次认证事件到达前保留待关联状态；后续事件报告旧身份时，继续按当前精确 ID 刷新标题与历史。不会按相同标题或时间戳合并会话。
+- Codex Hook reporter 在原始 64 KiB 输入限制检查后兼容单个前导 UTF-8 BOM，保留 JSON/元数据校验、认证及隐私过滤。
+- 适配受支持的 Windows Codex 启动路径与终端能力；OpenCode 观察无需额外版本探测。
+- 通过所选 CLI 的数据库来源读取 OpenCode v2 迁移历史，兼容空标题；使用认证的官方元数据 API 创建、改名并精确回读，按数据库/WAL 变化刷新符合条件的历史，同时遵守纯净模式。
+
+重要说明
+
+- 本正式版将 RC1-RC3 修复发布为 0.26.0，并更新 Latest 与稳定更新通道。独立开发中的 0.27 更新/恢复功能及远程/手机端工作不包含在内。
+- Windows Hook 回归使用合成事件，通过真实 PowerShell wrapper、生产 reporter 与认证的本地接收端。本研发机通过合成输入提供已观测的 BOM 前缀；hosted 测试子进程仅使用系统自带 PowerShell Modules。
+- 完整安装版 Windows WebView、原现场双行会话、账户模型轮次、D20 Layer-C、原始未筛选 native All 和真实 AI 自动命名仍未验收。updater 签名不等于 Windows Authenticode，也不代表真实安装/返回验收。未宣称所有双行问题或未来 CLI 兼容性均已解决。
+
 ## [0.26.0-rc.3]
 
 修复

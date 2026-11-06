@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-11-06
+
+### Fixed
+
+- Promote the RC1-RC3 Codex identity/title/history, supported launcher and terminal-capability corrections. Preserve exact identity and never fold sessions by title or timestamp.
+- Accept exactly one leading UTF-8 BOM at the Codex Hook reporter boundary after the original raw 64 KiB cap; keep authentication, metadata/privacy filtering and failure behavior unchanged.
+- Retain OpenCode v2 migrated history, selected database-source resolution, authenticated metadata create/rename with exact readback, and eligible database/WAL refresh cues with pure-mode isolation.
+
+This is the stable promotion of the RC3 code, rebuilt from exact protected main with new CI/coverage and three platform updater signatures. Latest and the stable updater advance to 0.26.0; separate 0.27 update/recovery and remote/mobile development is excluded. Synthetic Windows Hook byte-chain regression is verified, but installed Windows WebView, live duplicate-row acceptance, account-backed turns, D20 Layer-C, original native All, real AI naming and installation/return acceptance remain unverified. Updater signing does not certify Windows Authenticode.
+
 ## [0.26.0-rc.3] - 2026-11-06
 
 ### Fixed
