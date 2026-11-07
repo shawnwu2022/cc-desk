@@ -1,5 +1,7 @@
 # 0.27 实现与验收清单
 
+2026-11-07现状核对起点为 `218979d05b499cb874d1aa4e7796e67806a12486`。阶段11增加刷新修复f8d8dd16和目录setter修复31cbc156，但唯一NoNative实际试验失败。目录修复只有lib-only检查与独审证据，真实document IPC及UI仍未通过。session71914没有完整收口回执，后续受限观察session11079在打开PID52908时被权限拒绝，没有进入PSS。本轮未再次观察实例。精确事实与独立工作边界见 [本轮盘点](../.audit/v027-stage12-independent-review.md)。
+
 本清单区分实现、隔离验证和发布验收。独立分支 `feat/v0.27.0` 已在新授权下把正式 main `0aaaf2a171ced55ff2b4d7a3e1731027c45809df` 合入开发侧；整合前 merge-base 为 RC3 `4d4674480849f1d4d8fb4edab095b388e769e189`，整合后该正式 main 已是开发分支祖先。实际 merge 为 `89e30ff37ca51b29239c17abbc52f0dc85106390`，无冲突；受影响验证后的测试提交为 `68436f31dc8a6313e9d87ca9ab35717671edfcfd`。永久删除窄实现提交 `6de019a2ee22528d1c391e76c449c968c9846140`，最后验证见 [本轮审计](../.audit/v027-stage8-permanent-delete.md)。当前应用身份仍0.26.0，未自行 bump 0.27、未推送/发布/用户安装；整合前后证据见 [整合记录](../.audit/v027-stage6-main-integration.md)。
 
 | 规划 | 实际实现和代码证据 | 验收边界 |
@@ -11,7 +13,7 @@
 | P0 恢复指南 | 本轮更新页新增手动恢复指南，`UpdateRecovery_ManualGuideHasNoInstallationEffects_005` 验证无安装副作用 | 指南不创建快照、不执行恢复、不扩大上述两类能力，也不能代替历史执行验收。 |
 | P0 本地诊断 | `diagnostic_versions.rs`、`cliVersionDiagnostics.ts`、`useCliVersionDiagnostics.ts`、`AboutSection.vue`：所选 profile 固定参数/有界探测、取消/迟到/revision、未知进程 owner、匿名来源和白名单复制 | 合成后端测试；本轮另完成三个真实 CLI 的隔离只读版本探测，不能混称生产后端端到端。未自动上传或扫描用户认证/聊天。 |
 | P0 永久删除 | 用户明确取代隐藏/软归档。`NativeSessionDeletePanel.vue`、nativeSessionDeletes store/API、`native_delete.rs`/projection service：Windows 已归档 Codex 根、只读预览、独立二次确认/双 ack、一次性票据、受控原生 thread/delete、Job/来源保护和只读结果核查 | **已交付 Codex 窄实现及合成验证**，范围为同 profile 原生根及动态子树，count=null，不声称冻结/完整枚举或独立逐后代结果。OpenCode/Claude 执行各自关闭；阶段10已完成真实0.167.0单根CLI隔离后端验收；document IPC、可见安装版WebView、Unix和完整子树仍未验收。详见 [新证据与边界](permanent-delete-0.27.md)。 |
-| P0 会话回归 | 既有新建/首事件/刷新/关闭/恢复/重命名/身份关联测试；本轮固定 1.98.1/CI profile 的本地四 harness/16 片及聚合通过 | 合成 fixture 或独立 Wry 边界，不等同真实安装版、真实 CLI 会话、用户双行现场或 AI 自动命名。未读取用户真实会话来验收。 |
+| P0 会话回归 | 既有新建/首事件/刷新/关闭/恢复/重命名/身份关联测试；历史基线68fa6b3完成固定1.98.1/CI profile四harness、16片及聚合，后续提交按各自定向证据陈述 | 当前源码未重跑完整套件。合成fixture或独立Wry边界不等同安装版、真实CLI、用户双行现场或AI命名。未读取真实会话来验收。 |
 | P1 单候选忽略 | `updatePreferences.ts`、update store / 更新页：持久保存一个精确 version/releaseId/sourceSha 身份；忽略会撤销前端旧准入、隐藏更新提醒；后续版本仍提示，取消忽略需重新检查 | 只影响通知/选择，不产生后端安装权限；不按版本白名单限制 CLI。损坏数据丢弃并提示，存储失败仍可在内存使用。 |
 | P1 一键脱敏摘要 | 关于页显式复制应用/更新/所选 CLI 版本摘要 | 不含配置名、路径、原生 ID、凭据、正文、原始错误，无自动采集/上传。 |
 | P1 更新记录 | `updatePreferences.ts`、update store / 更新页：最近 20 条白名单检查/阶段/错误事件，支持本地清空 | 本机浏览器偏好，最佳努力保存；不是可信审计或安装成功证明。不记录 URL、admission、会话数据或原始日志。 |
@@ -31,7 +33,7 @@ Claude 当前官方 [配置路径说明](https://code.claude.com/docs/en/setting
 
 实现提交 **`68fa6b3df0f34534bffd493173bdf8cfcc5b3ef3`** 已完成本轮可隔离推进的验证：固定 Rust 1.98.1、CI dev/test debug=0，四 harness/16 片及原聚合通过（1744 pass、36 原 ignore、18 宿主排除、0 fail/timeout）；最终完整前端 207 文件、3206 pass、2 原跳过。Node 政策 310 pass/6 原跳过、all-target Clippy/fmt、类型/构建、生产 CSP 中英 2/2、P1 界面中英 2/2 均通过。完整命令、各实现 SHA、独立复核与保留的原始失败见 [本轮验证记录](../.audit/v027-stage3-validation.md)。
 
-上段完整套件是旧源 `68fa6b3…` 的证据。最新整合树 `68436f31…` 另通过 Rust 91、前端14文件169、Node310/6原跳过、固定工具链all-target Clippy/fmt、typecheck/build和生产CSP2/2；没有重跑新源完整16片或完整Vitest。已有足够本地证据继续候选审阅材料和隔离矩阵准备，没有创建发布。`nativeAll` 仍未验证，本地结果不能替代 exact-main hosted CI 或真实安装验收。当前无运行中验证或等待批准的操作。
+上段完整套件属于旧源 `68fa6b3…`。整合阶段 `68436f31…` 另通过Rust91、前端14文件169、Node310/6原跳过、固定工具链all-target Clippy/fmt、typecheck/build和生产CSP2/2，没有重跑整合源完整16片或完整Vitest。当时可继续候选材料准备，未创建发布。`nativeAll`仍未验证，本地结果不能替代exact-main hosted CI或安装验收。后续阶段11实例没有完整收口证据，不能沿用整合阶段的空闲状态。
 
 0.27 整版验收仍需真实签名候选的隔离升降级往返、目标平台安装与 WebView、D20/真实会话及现场回归证据。18 项 Job-free 专项按既有 [发布契约](release-process.md) 可在成功确认宿主限制后非阻断披露，不另立新的发布阻断，也不计为通过。当前 Codex 窄删除有产品实现，不能用它补齐其他提供方、逐后代结果或真实 CLI 证据。此处没有向 main 合入、签名、发布或真实用户安装授权。
 

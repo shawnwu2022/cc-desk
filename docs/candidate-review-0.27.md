@@ -1,6 +1,8 @@
 # 0.27 候选审阅材料
 
-阶段10当前增量：[真实Codex隔离验收与修复](../.audit/v027-stage10-codex-live.md)。0.167.0真实CLI已在任务新源完成initialize/read/delete，原件明确NotFound且控制记录保留；首次unknown未重放。下文旧阶段的“真实CLI未验收”以此窄范围更新，仍不宣称document IPC、可见安装版界面、完整动态子树或全部提供方验收。Claude/OpenCode仅新增 [可执行的后续维护设计](provider-delete-maintenance-design-0.27.md)，生产删除继续关闭。当前仍不得发布。
+2026-11-07现状：盘点起点为 `218979d05b499cb874d1aa4e7796e67806a12486`。刷新修复f8d8dd16和目录setter修复31cbc156已保存。目录修复只有lib-only编译与独审证据，真实UDF回归未跑。唯一NoNative失败，session71914未获完整生命周期回执；随后一次受限观察在 `OpenProcess` 阶段返回拒绝访问。当前不恢复窗口，也不把资料准备写成UI、安装或发布通过。见 [当前阻塞与解阻输入](../.audit/v027-stage12-independent-review.md)。
+
+阶段10后端增量：[真实Codex隔离验收与修复](../.audit/v027-stage10-codex-live.md)。0.167.0真实CLI已在任务新源完成initialize/read/delete，原件明确NotFound且控制记录保留；首次unknown未重放。下文旧阶段的“真实CLI未验收”以此窄范围更新，仍不宣称document IPC、可见安装版界面、完整动态子树或全部提供方验收。Claude/OpenCode仅新增 [可执行的后续维护设计](provider-delete-maintenance-design-0.27.md)，生产删除继续关闭。当前仍不得发布。
 
 状态：开发审阅材料已准备，尚未生成或发布 0.27 候选安装包。最新已授权本地 merge `89e30ff37ca51b29239c17abbc52f0dc85106390` 把正式 main `0aaaf2a171ced55ff2b4d7a3e1731027c45809df` 合入 `feat/v0.27.0`，无冲突；受影响验证绑定测试提交 `68436f31dc8a6313e9d87ca9ab35717671edfcfd`/tree `acc7ec63f914b23f4388586e8d6f254d02ebbfd9`。当前应用身份为 **0.26.0**，不是自行 bump 的0.27。旧源 `68fa6b3df0f34534bffd493173bdf8cfcc5b3ef3` 的完整验证继续单独保留，不能晋升成整合后全量通过。本文不是已发布声明。
 
@@ -23,7 +25,7 @@
 | P0 普通历史安装及手动恢复 | 已有 `inspect_historical_install/begin_historical_install`、`ordinary_install.rs` 和 manager：签名包不受九包 REVIEWED 表限制，但要求比当前版本旧的正式版本、Windows x64、合法源安装/Job-free/未提权/会话/所有权等门禁；完整源安装/注册/快捷方式/Desk/WebView 备份后 FreshSettings，仅交接安装器。`historicalInstall.test.ts`、`HistoryOrdinary_SignedIdentityWithoutVersionTable_001` 等 | 没有自动 Return/历史应用启动或一键人工恢复工具；备份不是可随意覆盖的目录。真实安装/人工恢复尚待合格独立宿主与隔离输入。当前 0.26.0 不会把同版本当历史；未来 0.27 版本需按实际版本重新准入。 |
 | P0 已审核严格切换/返回 | 已有 `begin_switch`、`payload_policy.rs` 和 Windows context/manager/return checkpoint。九个精确包：0.14.0、0.15.0、0.16.0、0.17.0、0.17.1、0.17.2、0.17.5、0.17.6、0.17.7；绑定 digest/size/安装输出全清单，保存匹配上下文并在进程/job 真实终态后按确认返回。`historicalSwitch.test.ts`、payload/context/return/reopen/fault 测试 | 九包测量不是实际往返通过；上一 stable 0.26 不在九包严格返回范围内。0.27→0.26 可用性不得由此推出；需走普通安装/人工恢复的真实隔离验收，或另经授权审核扩展严格 payload 策略。保留当前共享数据模式关闭；外部 CLI 历史/认证/项目不回滚。 |
 | P0 本地诊断 | `diagnostic_versions.rs`、`cliVersionDiagnostics.ts`、`useCliVersionDiagnostics.ts`、关于页；Rust 21 项版本域、API/composable/UI/owner 回归和安全复制；另实际隔离执行 Claude 2.1.318、Codex 0.166.0、OpenCode 2.2.5 的只读版本探测 | 真实 profile→生产诊断 IPC→CLI 端到端、Unix、真实 OS 终止未知注入尚未验收。只读脚本不冒充生产链路；须已证明隔离的对应平台输入，不读取真实凭据。 |
-| P0 永久删除 | 用户已取代隐藏/软归档方向；当前开发 `NativeSessionDeletePanel.vue`、受认证 API 与后端三阶段链路，限定 Windows 授权 profile 的已原生归档 Codex 根，确认其原生子树并明确动态成员/关联维护风险。详见 [最新证据](permanent-delete-0.27.md) | OpenCode/Claude 执行仍分别关闭；不宣称完整枚举/冻结子树或原生实际 CLI 验收。旧只读拒绝阶段及原子 expected 集合要求为历史记录，不再一概阻塞窄场景。 |
+| P0 永久删除 | 已有受认证API及三阶段链路，限定Windows授权profile的已原生归档Codex根，明确动态子树与关联维护风险。阶段10完成当时真实0.167.0单根CLI后端验收，f8d8dd16修复删除后的准确来源刷新。见 [删除证据](permanent-delete-0.27.md) | OpenCode/Claude执行仍关闭，完整枚举/冻结子树未交付。阶段11没有真实document IPC、可见双确认或UI删除证据；目录setter修复尚未通过真实UDF回归。后端和模拟组件结果不能晋升为UI通过。 |
 | P0 会话回归 | 全部现行前端及 Rust normal required scope；七项 required native/Wry 用例和四项 unelevated 专项执行通过 | 新建/首事件/刷新/关闭/恢复/重命名/身份关联的真实三 CLI D20、安装版 WebView、双行现场和 AI 命名仍未验收。须授权测试输入和对应现场；合成 fixture 不替代。 |
 | P1 精确候选忽略 | `updatePreferences.ts`、update store/UI；精确 version/releaseId/sourceSha、未来版本继续提示、旧准入不复活、损坏/不可写存储回归 | 代码和本地测试完成；真实候选端到端跟随通道隔离验收。 |
 | P1 一键脱敏摘要 | 关于页和 `updateDiagnostics.ts`；仅白名单应用/通道/阶段/CLI 版本和匿名来源；API/composable/UI/复制回归 | 已完成；无上传、会话正文或原始日志采集，也未扩为完整日志导出器。 |
@@ -47,6 +49,9 @@
 | `aaad3d2bf1c05c40c30ab03d9d46c38d05f7b4cc` | 服务信任根及main只读风险分析 |
 | `89e30ff37ca51b29239c17abbc52f0dc85106390` | 正式main合入开发侧，无冲突，版本身份0.26.0 |
 | `68436f31dc8a6313e9d87ca9ab35717671edfcfd` | 新树版本转换/通道回归；受影响验证已通过 |
+| `f8d8dd16a0a168dfdaf377c7c1674bce527c6014` | 永久删除回执后重读准确来源并保留无关历史行 |
+| `31cbc156b2075a35901032f6d8066f0a53080887` | 显式目录setter；lib-only编译与独审通过，真实UDF回归未跑 |
+| `218979d05b499cb874d1aa4e7796e67806a12486` | 保存受阻NoNative设施、原始失败及证据归档 |
 
 ## 固定工具链验收与保留失败
 
