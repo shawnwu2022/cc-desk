@@ -57,3 +57,23 @@ test('committed Tauri publisher key has the expected public-key text envelope', 
   assert.equal(Buffer.from(lines[1], 'base64').length, 42)
   assert.notEqual(lines[1], read('public-key.pub').toString().trimEnd().split('\n')[1])
 })
+
+const auditIndexPath = '.audit/v027-stage11-source.json'
+const auditIndex = JSON.parse(readFileSync(new URL(`../../${auditIndexPath}`, import.meta.url)))
+const auditRecords = [
+  { path: auditIndexPath, sha256: '07842b7170eef162b2259bc36918d48eca9d302a8c5b93620b95d1783fa9d0d1' },
+  auditIndex.preserved.stage10Source,
+]
+for (const [position, record] of auditRecords.entries()) {
+  test(`AuditMetadata_CheckoutPreservesFrozenBytes_00${position + 1}`, () => {
+    const digest = bytes => createHash('sha256').update(bytes).digest('hex')
+    const repository = fileURLToPath(new URL('../../', import.meta.url))
+    assert.equal(digest(readFileSync(new URL(`../../${record.path}`, import.meta.url))), record.sha256)
+    const filter = execFileSync('git', ['check-attr', 'filter', '--', record.path], { cwd: repository, encoding: 'utf8', timeout: 10_000 })
+    assert.equal(filter.trim(), `${record.path}: filter: unspecified`)
+    for (const autocrlf of ['true', 'false', 'input']) {
+      const bytes = execFileSync('git', ['-c', `core.autocrlf=${autocrlf}`, 'cat-file', '--filters', `HEAD:${record.path}`], { cwd: repository, timeout: 10_000 })
+      assert.equal(digest(bytes), record.sha256, `${record.path}: core.autocrlf=${autocrlf}`)
+    }
+  })
+}
