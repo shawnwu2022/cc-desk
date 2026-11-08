@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+## [0.27.0-rc.1] - 2026-11-08
+
+### Added
+
+- Explicit Stable, Test and Preview update channels with persisted selection, exact published-release admission, candidate invalidation, bounded update stages and cancellation. Stable remains the default; switching back never silently downgrades.
+- Historical version selection and verified manual recovery guidance, local redacted diagnostics, exact-candidate ignore, local update history and retry controls.
+- Permanent-delete preview, two separate confirmations, risk disclosure and one-shot receipts for eligible archived Codex roots on Windows. The native root and its execution-time subtree are the scope; preview does not claim a frozen complete descendant inventory. Unknown outcomes require read-only verification rather than automatic replay.
+
+### Fixed
+
+- Verify Codex compressed histories when the native API reports the logical missing `.jsonl` path, preserving exact source/header identity and bounded reads. Metadata-only rename initialization requests explicit gateway login and adds no login or model call.
+- Refresh the exact source after an acknowledged permanent delete, explicitly forward an isolated WebView data directory and preserve frozen audit index bytes across Git checkout.
+
+Candidate limitations: Claude and OpenCode permanent delete remain disabled with provider-specific reasons. Real Codex 0.167 single-root backend deletion has isolated synthetic evidence; permanent-delete document IPC and visible WebView acceptance remain blocked by the retained stage11 instance. Full descendant/partial-failure, Unix, installed-app, account-backed D20, original native All and signed stable-to-RC-to-stable roundtrip acceptance are unverified. Required exact-main CI, coverage bytes and all three updater signatures remain publication gates. This RC must be a GitHub prerelease with `make_latest: false`; stable Latest must remain unchanged. Updater signing does not certify Windows Authenticode.
+
 ## [0.26.0] - 2026-11-06
 
 ### Fixed
