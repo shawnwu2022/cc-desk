@@ -370,6 +370,10 @@ impl FixtureDescriptor {
                 || dacl.is_null()
                 || GetSecurityDescriptorControl(self.value, &mut control, &mut revision).is_err()
             {
+                println!(
+                    "{}",
+                    serde_json::json!({"case":"fixture-dacl-restore-preflight-failed"})
+                );
                 return false;
             }
             let information = DACL_SECURITY_INFORMATION
@@ -378,7 +382,7 @@ impl FixtureDescriptor {
                 } else {
                     UNPROTECTED_DACL_SECURITY_INFORMATION
                 };
-            SetNamedSecurityInfoW(
+            let result = SetNamedSecurityInfoW(
                 PCWSTR(path.as_ptr()),
                 SE_FILE_OBJECT,
                 information,
@@ -386,10 +390,47 @@ impl FixtureDescriptor {
                 None,
                 Some(dacl.cast_const()),
                 None,
-            )
-            .ok()
-            .is_ok()
+            );
+            if result.0 != 0 {
+                println!(
+                    "{}",
+                    serde_json::json!({"case":"fixture-dacl-restore-call-failed","win32Code":result.0,"information":information.0})
+                );
+            }
+            result.ok().is_ok()
         }
+    }
+    fn diagnostic(&self) -> serde_json::Value {
+        let bytes = self.bytes();
+        let control = u16::from_le_bytes([bytes[2], bytes[3]]);
+        let offset = u32::from_le_bytes(bytes[16..20].try_into().unwrap()) as usize;
+        let Some(header) = bytes.get(offset..offset + 8).filter(|_| offset != 0) else {
+            return serde_json::json!({"length":bytes.len(),"control":control,"dacl":false});
+        };
+        let count = u16::from_le_bytes([header[4], header[5]]);
+        let mut rows = Vec::new();
+        let mut position = offset + 8;
+        for _ in 0..count.min(16) {
+            let Some(header) = bytes.get(position..position + 4) else {
+                break;
+            };
+            let length = u16::from_le_bytes([header[2], header[3]]) as usize;
+            let Some(ace) = bytes
+                .get(position..position + length)
+                .filter(|_| length >= 4)
+            else {
+                break;
+            };
+            let known = matches!(header[0], 0 | 1) && length >= 8;
+            rows.push(serde_json::json!({
+                "type":header[0],"flags":header[1],"bytes":length,
+                "mask":known.then(|| u32::from_le_bytes(ace[4..8].try_into().unwrap())),
+                "sidHash":known.then(|| format!("{:x}",Sha256::digest(&ace[8..]))),
+                "aceHash":format!("{:x}",Sha256::digest(ace)),
+            }));
+            position += length;
+        }
+        serde_json::json!({"length":bytes.len(),"control":control,"aceCount":count,"truncated":count>16,"aces":rows})
     }
 }
 impl Drop for FixtureDescriptor {
@@ -410,10 +451,18 @@ fn restored_fixture_acl_matches(expected: &str, actual: &str) -> bool {
     };
     // Windows 可在恢复时仅补 AUTO_INHERITED；复用已有的逐字节边界，不能
     // 排序 ACE、移除控制位或忽略 SID/权限差异。只比较任务合成 fixture 的 DACL。
-    crate::version_history::windows::security::restored_file_descriptor_matches(
+    let matches = crate::version_history::windows::security::restored_file_descriptor_matches(
         expected.bytes(),
         actual.bytes(),
-    )
+    );
+    if !matches {
+        // 只输出合成 fixture 的控制位/权限和有界 ACE 结构，SID 只留摘要。
+        println!(
+            "{}",
+            serde_json::json!({"case":"fixture-dacl-restore-mismatch","expected":expected.diagnostic(),"actual":actual.diagnostic()})
+        );
+    }
+    matches
 }
 
 #[test]
