@@ -44,10 +44,7 @@ impl Fixture {
         let helper = root.path().join("helper");
         fs::create_dir(&helper).unwrap();
         // 分片只下载已编译测试程序；固定 SDK 仅嵌入测试，不要求分片安装 node_modules。
-        let bytes = include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs"
-        ));
+        let bytes = include_bytes!("../../../node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs");
         assert_eq!(format!("{:x}", Sha256::digest(bytes)), SDK_HASH);
         fs::write(helper.join("sdk.mjs"), bytes).unwrap();
         Self {
@@ -303,8 +300,79 @@ impl FixtureCreationDeny {
                 .map(str::to_owned)
                 .collect()
         };
-        payload(&self.snapshot) == payload(&after)
+        restored_fixture_acl_matches(
+            &payload(&self.snapshot).join("\n"),
+            &payload(&after).join("\n"),
+        )
     }
+}
+fn restored_fixture_acl_matches(expected: &str, actual: &str) -> bool {
+    fn descriptor(text: &str) -> Option<Vec<u8>> {
+        use windows::{
+            core::PCWSTR,
+            Win32::{
+                Foundation::{LocalFree, HLOCAL},
+                Security::{
+                    Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW,
+                    GetSecurityDescriptorLength, IsValidSecurityDescriptor, PSECURITY_DESCRIPTOR,
+                },
+            },
+        };
+        if text.len() > 65536 || text.contains('\0') {
+            return None;
+        }
+        let text: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();
+        let mut value = PSECURITY_DESCRIPTOR::default();
+        unsafe {
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                PCWSTR(text.as_ptr()),
+                1,
+                &mut value,
+                None,
+            )
+            .ok()?;
+            let length = GetSecurityDescriptorLength(value) as usize;
+            let bytes =
+                if IsValidSecurityDescriptor(value).as_bool() && (20..=65536).contains(&length) {
+                    Some(std::slice::from_raw_parts(value.0.cast::<u8>(), length).to_vec())
+                } else {
+                    None
+                };
+            let _ = LocalFree(Some(HLOCAL(value.0)));
+            bytes
+        }
+    }
+    let (Some(expected), Some(actual)) = (descriptor(expected), descriptor(actual)) else {
+        return false;
+    };
+    // Windows 可在恢复时仅补 AUTO_INHERITED；复用已有的逐字节边界，不能
+    // 排序 ACE、移除控制位或忽略 SID/权限差异。只比较任务合成 fixture 的 DACL。
+    crate::version_history::windows::security::restored_file_descriptor_matches(&expected, &actual)
+}
+
+#[test]
+fn ClaudeDelete_FixtureRestorationAllowsOnlyDocumentedInheritanceFlag_011() {
+    let original = "D:(A;OICI;FA;;;SY)";
+    let inherited = "D:AI(A;OICI;FA;;;SY)";
+    assert!(restored_fixture_acl_matches(original, original));
+    assert!(restored_fixture_acl_matches(original, inherited));
+    assert!(!restored_fixture_acl_matches(inherited, original));
+    assert!(!restored_fixture_acl_matches(
+        "not a descriptor",
+        "not a descriptor"
+    ));
+    for changed in [
+        "D:AI(A;OICI;FR;;;SY)",
+        "D:PAI(A;OICI;FA;;;SY)",
+        "D:AI(A;OICI;FA;;;BA)",
+        "D:AI(A;;FA;;;SY)",
+        "D:AI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)",
+        "D:AI(A;OICI;FA;;;SY)\0ignored",
+        "not a security descriptor",
+    ] {
+        assert!(!restored_fixture_acl_matches(original, changed));
+    }
+    assert!(!restored_fixture_acl_matches(original, &"x".repeat(65537)));
 }
 impl Drop for FixtureCreationDeny {
     fn drop(&mut self) {
