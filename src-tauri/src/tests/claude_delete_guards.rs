@@ -23,13 +23,40 @@ struct Fixture {
     helper: PathBuf,
 }
 impl Fixture {
+    fn new_private_project() -> Self {
+        Self::create(true)
+    }
     fn new() -> Self {
+        Self::create(false)
+    }
+    fn create(private_project: bool) -> Self {
         let root = tempfile::Builder::new()
             .prefix("v027-claude-guard-")
             .tempdir()
             .unwrap();
         let configuration = root.path().join("configuration");
         let project = configuration.join("projects/authorized");
+        if private_project {
+            use crate::version_history::windows::{
+                files::{ComponentName, Directory, PrivateDirectory},
+                security::CurrentUser,
+            };
+            let parent_path = project.parent().unwrap();
+            fs::create_dir_all(parent_path).unwrap();
+            let parent = Directory::open_absolute(parent_path).unwrap();
+            let user = CurrentUser::capture().unwrap();
+            let private = PrivateDirectory::create_new(
+                parent,
+                ComponentName::new(std::ffi::OsStr::new("authorized")).unwrap(),
+                &user,
+            )
+            .unwrap();
+            private.verify(&user).unwrap();
+            // 在生成原件、取得旧 DELETE 句柄前固定权限起点；创建租约及时释放，
+            // 原实验后续的 writer guard / identity lease 顺序保持不变。
+            drop(private);
+            drop(user);
+        }
         let children = project.join(ID);
         fs::create_dir_all(&children).unwrap();
         let transcript = project.join(format!("{ID}.jsonl"));
@@ -638,10 +665,36 @@ fn ClaudeDelete_FixtureDaclAndOldDirectoryCapabilities_009() {
 }
 
 #[test]
+fn ClaudeDelete_PrivateSourceHasVerifiedOwnerAndProtectedAcl_013() {
+    use crate::version_history::windows::{
+        files::{ComponentName, Directory, PrivateDirectory},
+        security::CurrentUser,
+    };
+    let f = Fixture::new_private_project();
+    let parent = Directory::open_absolute(f.project.parent().unwrap()).unwrap();
+    let user = CurrentUser::capture().unwrap();
+    let private = PrivateDirectory::open_existing(
+        parent,
+        ComponentName::new(std::ffi::OsStr::new("authorized")).unwrap(),
+        &user,
+    )
+    .unwrap();
+    private.verify(&user).unwrap();
+    assert!(f.transcript.is_file());
+    assert!(f.children.is_dir());
+    assert!(fs::write(f.project.join("private-create.keep"), "synthetic\n").is_ok());
+    drop(private);
+    drop(user);
+}
+
+#[test]
 fn ClaudeDelete_OldDeleteHandleCanMoveOutsideProtectedSource_010() {
     use windows::Win32::Storage::FileSystem::DELETE;
     for extended in [false, true] {
-        let f = Fixture::new();
+        let f = Fixture::new_private_project();
+        let before_denial = f.project.join("before-denial.keep");
+        fs::write(&before_denial, "synthetic create before denial\n").unwrap();
+        fs::remove_file(&before_denial).unwrap();
         let outside = f.root.path().join("outside");
         fs::create_dir(&outside).unwrap();
         let old_delete = OpenOptions::new()
