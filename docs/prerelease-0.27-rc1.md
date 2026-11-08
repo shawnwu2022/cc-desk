@@ -57,6 +57,9 @@ date. Their literal target is synchronized to this authorized RC; equality,
 all six identity fields, Tauri major/minor admission, strict installed-version
 matching and the historical 0.18.0 roundtrip guard are unchanged. The original
 failure is retained in `.audit/v027-stage12-ci-failure.md` and GitHub job logs.
+The corrected `npx vitest run tests/config/packageVersion.test.ts` passed all
+5 tests, and independent review confirmed that only the pinned target literals
+changed. The new hosted source still requires its own complete CI result.
 
 Stage10 proved actual product-backend-to-Codex-0.167 single synthetic original
 deletion. Its B001 unknown was retained without replay. Stage11 did not prove
