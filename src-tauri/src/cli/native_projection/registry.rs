@@ -72,7 +72,7 @@ impl SessionAuthority {
         self.current()
     }
     pub(crate) fn check_delete_thread(&self, thread: &serde_json::Value) -> Result<(), SafeError> {
-        self.check_thread(thread)?;
+        self.check_thread_path(thread, false)?;
         let mut budget = super::scoped_fs::Budget::new(super::scoped_fs::Limits::default());
         let config = self
             .scope
@@ -166,6 +166,13 @@ impl SessionAuthority {
         Ok(())
     }
     pub(crate) fn check_thread(&self, thread: &serde_json::Value) -> Result<(), SafeError> {
+        self.check_thread_path(thread, true)
+    }
+    fn check_thread_path(
+        &self,
+        thread: &serde_json::Value,
+        compressed_fallback: bool,
+    ) -> Result<(), SafeError> {
         self.current()?;
         if thread["id"].as_str() != Some(self.native_id.as_str())
             || thread["cwd"].as_str() != Some(self.cwd.as_str())
@@ -182,13 +189,27 @@ impl SessionAuthority {
             .descendant(std::path::Path::new(path))
             .map_err(safe)?;
         let mut budget = super::scoped_fs::Budget::new(super::scoped_fs::Limits::default());
-        let (bytes, _) = self
+        let header = self
             .scope
             .grant
             .root
             .history_header(std::path::Path::new(&relative), &mut budget)
-            .map_err(safe)?
-            .ok_or_else(|| safe("SESSION_NOT_FOUND"))?;
+            .map_err(safe)?;
+        // Codex 0.167 对压缩历史返回逻辑路径；仅明确缺失时尝试精确同名压缩文件，
+        // 仍复用原 held Root 与读取预算，其他读取错误不得触发回退。
+        let header = if header.is_none() && compressed_fallback && relative.ends_with(".jsonl") {
+            self.scope
+                .grant
+                .root
+                .history_header(
+                    std::path::Path::new(&format!("{relative}.zst")),
+                    &mut budget,
+                )
+                .map_err(safe)?
+        } else {
+            header
+        };
+        let (bytes, _) = header.ok_or_else(|| safe("SESSION_NOT_FOUND"))?;
         let metadata = bytes
             .split(|byte| *byte == b'\n')
             .filter_map(|line| serde_json::from_slice::<serde_json::Value>(line).ok())
