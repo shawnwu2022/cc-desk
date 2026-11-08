@@ -275,15 +275,6 @@ impl FixtureCreationDeny {
         self.restored = true;
     }
     fn restore_fixture_deny(&self) -> bool {
-        // /restore 在当前普通 token 上返回 1300。这里只移除新 fixture 中本次新增的 deny，
-        // 随后逐字核对初始 DACL；不能把这种简化当作产品任意 ACL 的恢复协议。
-        if !acl_command(&self.path, &["/remove:d", "*S-1-1-0", "/Q"], None, &[]) {
-            return false;
-        }
-        let after = self.snapshot.with_extension("after");
-        if !acl_command(&self.path, &["/save"], Some(&after), &["/Q"]) {
-            return false;
-        }
         let payload = |path: &Path| -> Vec<String> {
             let bytes = fs::read(path).unwrap();
             let units: Vec<u16> = bytes
@@ -300,22 +291,34 @@ impl FixtureCreationDeny {
                 .map(str::to_owned)
                 .collect()
         };
-        restored_fixture_acl_matches(
-            &payload(&self.snapshot).join("\n"),
-            &payload(&after).join("\n"),
-        )
+        let original = payload(&self.snapshot).join("\n");
+        // icacls /deny 也会移除相同的显式 grant，/remove:d 不是其逆操作。
+        // 仅在自建 fixture 上还原已保存的完整 DACL；不设置 owner/group/SACL，
+        // 不申请额外 privilege。随后仍执行严格的原始描述符核对。
+        let Some(descriptor) = FixtureDescriptor::new(&original) else {
+            return false;
+        };
+        if !descriptor.restore(&self.path) {
+            return false;
+        }
+        let after = self.snapshot.with_extension("after");
+        if !acl_command(&self.path, &["/save"], Some(&after), &["/Q"]) {
+            return false;
+        }
+        restored_fixture_acl_matches(&original, &payload(&after).join("\n"))
     }
 }
-fn restored_fixture_acl_matches(expected: &str, actual: &str) -> bool {
-    fn descriptor(text: &str) -> Option<Vec<u8>> {
+struct FixtureDescriptor {
+    value: windows::Win32::Security::PSECURITY_DESCRIPTOR,
+    length: usize,
+}
+impl FixtureDescriptor {
+    fn new(text: &str) -> Option<Self> {
         use windows::{
             core::PCWSTR,
-            Win32::{
-                Foundation::{LocalFree, HLOCAL},
-                Security::{
-                    Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW,
-                    GetSecurityDescriptorLength, IsValidSecurityDescriptor, PSECURITY_DESCRIPTOR,
-                },
+            Win32::Security::{
+                Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW,
+                GetSecurityDescriptorLength, IsValidSecurityDescriptor, PSECURITY_DESCRIPTOR,
             },
         };
         if text.len() > 65536 || text.contains('\0') {
@@ -332,22 +335,85 @@ fn restored_fixture_acl_matches(expected: &str, actual: &str) -> bool {
             )
             .ok()?;
             let length = GetSecurityDescriptorLength(value) as usize;
-            let bytes =
-                if IsValidSecurityDescriptor(value).as_bool() && (20..=65536).contains(&length) {
-                    Some(std::slice::from_raw_parts(value.0.cast::<u8>(), length).to_vec())
-                } else {
-                    None
-                };
-            let _ = LocalFree(Some(HLOCAL(value.0)));
-            bytes
+            let descriptor = Self { value, length };
+            if IsValidSecurityDescriptor(value).as_bool() && (20..=65536).contains(&length) {
+                Some(descriptor)
+            } else {
+                None
+            }
         }
     }
-    let (Some(expected), Some(actual)) = (descriptor(expected), descriptor(actual)) else {
+    fn bytes(&self) -> &[u8] {
+        unsafe { std::slice::from_raw_parts(self.value.0.cast::<u8>(), self.length) }
+    }
+    fn restore(&self, path: &Path) -> bool {
+        use std::os::windows::ffi::OsStrExt;
+        use windows::{
+            core::{BOOL, PCWSTR},
+            Win32::Security::{
+                Authorization::{SetNamedSecurityInfoW, SE_FILE_OBJECT},
+                GetSecurityDescriptorControl, GetSecurityDescriptorDacl, ACL,
+                DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, SE_DACL_PROTECTED,
+                UNPROTECTED_DACL_SECURITY_INFORMATION,
+            },
+        };
+        let path: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+        let mut present = BOOL::default();
+        let mut defaulted = BOOL::default();
+        let mut dacl: *mut ACL = std::ptr::null_mut();
+        let mut control = 0;
+        let mut revision = 0;
+        unsafe {
+            if GetSecurityDescriptorDacl(self.value, &mut present, &mut dacl, &mut defaulted)
+                .is_err()
+                || !present.as_bool()
+                || dacl.is_null()
+                || GetSecurityDescriptorControl(self.value, &mut control, &mut revision).is_err()
+            {
+                return false;
+            }
+            let information = DACL_SECURITY_INFORMATION
+                | if control & SE_DACL_PROTECTED.0 != 0 {
+                    PROTECTED_DACL_SECURITY_INFORMATION
+                } else {
+                    UNPROTECTED_DACL_SECURITY_INFORMATION
+                };
+            SetNamedSecurityInfoW(
+                PCWSTR(path.as_ptr()),
+                SE_FILE_OBJECT,
+                information,
+                None,
+                None,
+                Some(dacl.cast_const()),
+                None,
+            )
+            .ok()
+            .is_ok()
+        }
+    }
+}
+impl Drop for FixtureDescriptor {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = windows::Win32::Foundation::LocalFree(Some(
+                windows::Win32::Foundation::HLOCAL(self.value.0),
+            ));
+        }
+    }
+}
+fn restored_fixture_acl_matches(expected: &str, actual: &str) -> bool {
+    let (Some(expected), Some(actual)) = (
+        FixtureDescriptor::new(expected),
+        FixtureDescriptor::new(actual),
+    ) else {
         return false;
     };
     // Windows 可在恢复时仅补 AUTO_INHERITED；复用已有的逐字节边界，不能
     // 排序 ACE、移除控制位或忽略 SID/权限差异。只比较任务合成 fixture 的 DACL。
-    crate::version_history::windows::security::restored_file_descriptor_matches(&expected, &actual)
+    crate::version_history::windows::security::restored_file_descriptor_matches(
+        expected.bytes(),
+        actual.bytes(),
+    )
 }
 
 #[test]
@@ -373,6 +439,21 @@ fn ClaudeDelete_FixtureRestorationAllowsOnlyDocumentedInheritanceFlag_011() {
         assert!(!restored_fixture_acl_matches(original, changed));
     }
     assert!(!restored_fixture_acl_matches(original, &"x".repeat(65537)));
+}
+
+#[test]
+fn ClaudeDelete_FixtureRestorationPreservesExistingExplicitGrants_012() {
+    let f = Fixture::new();
+    assert!(acl_command(
+        &f.project,
+        &["/grant", "*S-1-1-0:(WD,AD)", "/Q"],
+        None,
+        &[],
+    ));
+    let acl = FixtureCreationDeny::new(&f, &f.project);
+    assert!(fs::write(f.project.join("denied-create.jsonl"), "synthetic\n").is_err());
+    acl.restore();
+    assert!(fs::write(f.project.join("restored-create.jsonl"), "synthetic\n").is_ok());
 }
 impl Drop for FixtureCreationDeny {
     fn drop(&mut self) {
