@@ -352,23 +352,18 @@ impl FixtureDescriptor {
             core::{BOOL, PCWSTR},
             Win32::Security::{
                 Authorization::{SetNamedSecurityInfoW, SE_FILE_OBJECT},
-                GetSecurityDescriptorControl, GetSecurityDescriptorDacl, ACL,
-                DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, SE_DACL_PROTECTED,
-                UNPROTECTED_DACL_SECURITY_INFORMATION,
+                GetSecurityDescriptorDacl, ACL, DACL_SECURITY_INFORMATION,
             },
         };
         let path: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
         let mut present = BOOL::default();
         let mut defaulted = BOOL::default();
         let mut dacl: *mut ACL = std::ptr::null_mut();
-        let mut control = 0;
-        let mut revision = 0;
         unsafe {
             if GetSecurityDescriptorDacl(self.value, &mut present, &mut dacl, &mut defaulted)
                 .is_err()
                 || !present.as_bool()
                 || dacl.is_null()
-                || GetSecurityDescriptorControl(self.value, &mut control, &mut revision).is_err()
             {
                 println!(
                     "{}",
@@ -376,12 +371,9 @@ impl FixtureDescriptor {
                 );
                 return false;
             }
-            let information = DACL_SECURITY_INFORMATION
-                | if control & SE_DACL_PROTECTED.0 != 0 {
-                    PROTECTED_DACL_SECURITY_INFORMATION
-                } else {
-                    UNPROTECTED_DACL_SECURITY_INFORMATION
-                };
+            // /deny 未改变保护状态；不主动 unprotect，否则旧式 DACL 会额外
+            // 引入父级继承 ACE。只还原 ACL 内容，原控制位仍由后置严格核对约束。
+            let information = DACL_SECURITY_INFORMATION;
             let result = SetNamedSecurityInfoW(
                 PCWSTR(path.as_ptr()),
                 SE_FILE_OBJECT,
@@ -492,17 +484,25 @@ fn ClaudeDelete_FixtureRestorationAllowsOnlyDocumentedInheritanceFlag_011() {
 
 #[test]
 fn ClaudeDelete_FixtureRestorationPreservesExistingExplicitGrants_012() {
-    let f = Fixture::new();
-    assert!(acl_command(
-        &f.project,
-        &["/grant", "*S-1-1-0:(WD,AD)", "/Q"],
-        None,
-        &[],
-    ));
-    let acl = FixtureCreationDeny::new(&f, &f.project);
-    assert!(fs::write(f.project.join("denied-create.jsonl"), "synthetic\n").is_err());
-    acl.restore();
-    assert!(fs::write(f.project.join("restored-create.jsonl"), "synthetic\n").is_ok());
+    for protected in [false, true] {
+        let f = Fixture::new();
+        let inheritance = if protected {
+            "/inheritance:d"
+        } else {
+            "/inheritance:e"
+        };
+        assert!(acl_command(&f.project, &[inheritance, "/Q"], None, &[]));
+        assert!(acl_command(
+            &f.project,
+            &["/grant", "*S-1-1-0:(WD,AD)", "/Q"],
+            None,
+            &[],
+        ));
+        let acl = FixtureCreationDeny::new(&f, &f.project);
+        assert!(fs::write(f.project.join("denied-create.jsonl"), "synthetic\n").is_err());
+        acl.restore();
+        assert!(fs::write(f.project.join("restored-create.jsonl"), "synthetic\n").is_ok());
+    }
 }
 impl Drop for FixtureCreationDeny {
     fn drop(&mut self) {
