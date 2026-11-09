@@ -32,6 +32,29 @@ source and current ordinary CI run/attempt. No feature tag promotes this branch.
 - Stage11 acknowledged-delete refresh and explicit data-directory forwarding.
 - Stage12 Git checkout-byte integrity and Codex compressed-history rename fixes.
 
+## Preparation refresh on 2026-11-09
+
+The local `integration/v0.27-recovery` candidate adds the Windows structured
+Codex native-paste routing correction and the pre-dispatch blocked-delete receipt
+and original-source refresh corrections. Five workspace planning documents remain
+proposals and are not delivered features.
+
+Version `0.27.0-rc.1` remains the target. Current remote release and tag admission
+is recorded in `.audit/prerelease-027-remote-20261109.json` in the preparation
+workspace. The three local integration commits are not yet on PR #81 or protected
+main. Existing PR checks do not certify those commits or the new release notes.
+Fresh exact merged-main CI, authenticated coverage and three same-run updater
+signatures are still required. This preparation does not start publication.
+
+## Acceptance and prerelease on 2026-11-10
+
+The user requested prerelease publication after acceptance. This authorizes
+candidate submission and protected-main promotion after the required reviews and
+checks pass; earlier preparation-only statements describe their recorded stage.
+The RC remains `0.27.0-rc.1`, with the changelog date synchronized to 2026-11-10.
+No instruction waives exact-main CI, authenticated coverage, same-run platform
+signatures or the disclosed product acceptance limits below.
+
 ## Evidence and open conditions
 
 The full four-harness/16-shard local result belongs to old source `68fa6b3d` and

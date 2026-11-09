@@ -15,8 +15,9 @@ Added
 
 Fixed
 
+- Restore native Ctrl+V and paste handling in structured Windows Codex sessions without forwarding clipboard text or replaying uncertain input.
 - Validate compressed Codex history when the native API reports a missing logical .jsonl path, while preserving source and session identity. Metadata rename requests explicit login and makes no model call.
-- Refresh the acknowledged delete source and preserve unrelated history rows.
+- Keep invalidated delete previews queryable before dispatch. Refresh the original source after a delete is acknowledged, including through read-only reconciliation after switching targets, and preserve unrelated history rows.
 
 Important
 

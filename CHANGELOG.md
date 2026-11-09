@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-## [0.27.0-rc.1] - 2026-11-08
+## [0.27.0-rc.1] - 2026-11-10
 
 ### Added
 
@@ -12,6 +12,8 @@
 
 ### Fixed
 
+- Restore native Ctrl+V and DOM paste routing for structured Windows Codex sessions without forwarding clipboard text or replaying an uncertain input.
+- Retain queryable blocked receipts when permanent-delete previews become invalid before dispatch. After read-only reconciliation acknowledges a delete, refresh its original source even when the selected target has changed.
 - Verify Codex compressed histories when the native API reports the logical missing `.jsonl` path, preserving exact source/header identity and bounded reads. Metadata-only rename initialization requests explicit gateway login and adds no login or model call.
 - Refresh the exact source after an acknowledged permanent delete, explicitly forward an isolated WebView data directory and preserve frozen audit index bytes across Git checkout.
 

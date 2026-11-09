@@ -45,7 +45,7 @@ describe('prepared package version', () => {
     const changelog = readFileSync('CHANGELOG.md', 'utf8')
     const headings = [...changelog.matchAll(/^## \[([^\]]+)\] - (.+)$/gm)]
     expect(headings[0]?.[1]).toBe('0.27.0-rc.1')
-    expect(headings[0]?.[2]).toBe('2026-11-08')
+    expect(headings[0]?.[2]).toBe('2026-11-10')
     expect(headings.find(match => match[1] === '0.18.0')?.[2])
       .toBe('2026-10-01 (unreleased test build)')
   })
