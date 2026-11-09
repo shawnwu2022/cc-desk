@@ -85,7 +85,9 @@ fixture `v027-stage8-sdk-delete-AMYBUm` 和日志保留原状；脚本额外校�
 
 - `cli_preview_session_delete` 只读绑定 caller/document、profile/revision、held root、sessionKey/UUID 与当前观察；120 秒票据不等于冻结图。scope 明确 native-subtree，knownDescendantCount=null，不编造列表。
 - `cli_confirm_session_delete` 必须原 previewId、operationId 和两个 true ack；确认前 fresh 复核，变化消费旧票据。同 operationId/参数只返回原结果，不扩大范围；未知物理 Root+UUID 还跨 profile/caller/UUID 大小写保护，不可换配置盲重试。
+- 尚未 dispatch 时，来源、容器、观察或票据失效消费原预览并保存 `blocked / DELETE_PREVIEW_CHANGED` 回执，只读 inspect 可返回该结果。已经 claim 的操作不会被迟到失效改写为 blocked；必须保留已有回执或 unknown，不能重新发出删除。
 - `cli_inspect_session_delete` 只读查原操作，不调用删除。区分 acknowledged、partial、unknown、blocked、unsupported；native ACK 单独保存，owner settled 前仍不报完成。没有 ACK、根缺失仍 unknown；owner 已 settled 且根仍在可报告 partial，但只有只读检查后、用户主动新预览及再次双确认才可重试，不自动重放。
+- inspect 首次协调为 acknowledged 后，界面刷新操作最初保存的准确历史来源和项目；切换复核目标不改变刷新对象。历史读取失败保留最后完整缓存并显示错误，仍刷新对应目录，不把刷新失败改写为删除失败。
 - Desk 标签/覆盖元数据可能保留；没有宣称清掉全局日志、外部附件、项目文件或远端副本。原生不返回失败时逐项清单，后代与关联数据仍标 unverified。
 
 OpenCode/Claude 的真实源/活动约束继续分别解阻，不将其误称无永久删除 API。当前不是等待产品意图确认或工具审批；用户已授权产品实现与隔离测试。真实 CLI / WebView、三平台签名候选及隔离升级恢复仍是尚未跑的交付证据，不新发布、不改用户安装。

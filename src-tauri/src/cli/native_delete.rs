@@ -119,6 +119,19 @@ pub(crate) struct Entry {
     pub active: Arc<AtomicBool>,
     pub outcome: OwnerOutcome,
 }
+impl Entry {
+    fn block_before_dispatch(&mut self) -> Receipt {
+        debug_assert!(self.confirmed.is_none());
+        self.preview.preview_id = None;
+        self.preview.state = "blocked";
+        self.preview.reason = Some("DELETE_PREVIEW_CHANGED");
+        let receipt = self
+            .request
+            .receipt("blocked", None, Some("DELETE_PREVIEW_CHANGED"));
+        self.receipt = Some(receipt.clone());
+        receipt
+    }
+}
 pub(crate) type OwnerOutcome = Arc<Mutex<Option<Result<(), SafeError>>>>;
 pub(crate) fn pre_dispatch_reason(code: &str) -> Option<&'static str> {
     match code {
@@ -190,16 +203,20 @@ pub(crate) fn reconcile(entry: &Entry, root: Option<bool>) -> Receipt {
 #[derive(Default)]
 pub(crate) struct Operations(Mutex<Vec<Entry>>);
 impl Operations {
-    pub fn invalidate(&self, caller: &CallerIdentity, id: &str) {
-        if let Ok(mut entries) = self.0.lock() {
-            if let Some(entry) = entries.iter_mut().find(|e| {
-                &e.owner == caller && e.request.operation_id == id && e.confirmed.is_none()
-            }) {
-                entry.preview.preview_id = None;
-                entry.preview.state = "blocked";
-                entry.preview.reason = Some("DELETE_PREVIEW_CHANGED");
-            }
+    pub fn invalidate(&self, caller: &CallerIdentity, id: &str) -> Result<Receipt, SafeError> {
+        let mut entries = self.0.lock().map_err(|_| error("DELETE_UNAVAILABLE"))?;
+        let entry = entries
+            .iter_mut()
+            .find(|e| &e.owner == caller && e.request.operation_id == id)
+            .ok_or_else(|| error("DELETE_OPERATION_UNKNOWN"))?;
+        if entry.confirmed.is_some() {
+            return Ok(entry.receipt.clone().unwrap_or_else(|| {
+                entry
+                    .request
+                    .receipt("unknown", None, Some("DELETE_IN_PROGRESS"))
+            }));
         }
+        Ok(entry.block_before_dispatch())
     }
     pub fn register(
         &self,
@@ -272,7 +289,10 @@ impl Operations {
             .ok_or_else(|| error("DELETE_OPERATION_UNKNOWN"))?;
         let entry = &entries[index];
         if entry.preview.preview_id.as_deref() != Some(request.preview_id.as_str()) {
-            return Err(error("DELETE_PREVIEW_CHANGED"));
+            if entry.confirmed.is_some() {
+                return Err(error("DELETE_PREVIEW_CHANGED"));
+            }
+            return Ok(Some(entries[index].block_before_dispatch()));
         }
         if let Some(old) = &entry.confirmed {
             if old != request {
@@ -285,11 +305,7 @@ impl Operations {
             })));
         }
         if entry.created.elapsed() > Duration::from_secs(120) || entry.observation != observation {
-            let entry = &mut entries[index];
-            entry.preview.preview_id = None;
-            entry.preview.state = "blocked";
-            entry.preview.reason = Some("DELETE_PREVIEW_CHANGED");
-            return Err(error("DELETE_PREVIEW_CHANGED"));
+            return Ok(Some(entries[index].block_before_dispatch()));
         }
         if entries.iter().enumerate().any(|(i, e)| {
             i != index

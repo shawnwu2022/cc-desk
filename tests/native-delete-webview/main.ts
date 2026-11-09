@@ -111,7 +111,9 @@ host.__STAGE11__ = { async start() {
     const expiredPreview = await call('cli_preview_session_delete', { operationId: expiryOperation, source: freshSource, sessionKey: expiry.sessionKey })
     stage.value = 'Waiting for the production 120-second preview expiry; no CLI is active'
     await checkpoint('expiry-wait-started'); await new Promise(resolve => setTimeout(resolve, 121_000))
-    await expectCode(call('cli_confirm_session_delete', { operationId: expiryOperation, previewId: expiredPreview.previewId, acknowledgePermanentDelete: true, acknowledgeNativeSubtree: true }), ['DELETE_PREVIEW_CHANGED'])
+    const expiredReceipt = await call('cli_confirm_session_delete', { operationId: expiryOperation, previewId: expiredPreview.previewId, acknowledgePermanentDelete: true, acknowledgeNativeSubtree: true })
+    if (expiredReceipt.operationId !== expiryOperation || expiredReceipt.cli !== 'codex' || expiredReceipt.state !== 'blocked'
+      || expiredReceipt.reason !== 'DELETE_PREVIEW_CHANGED' || expiredReceipt.rootPresent !== null || expiredReceipt.descendants !== 'unverified') throw Error('EXPIRED_TICKET_NOT_BLOCKED')
     await checkpoint('expired-ticket')
     stage.value = 'Real document IPC, double confirmation and isolated CLI deletion passed'
     await call('s11_finish', { success: true })

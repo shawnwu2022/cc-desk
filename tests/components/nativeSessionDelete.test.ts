@@ -108,12 +108,66 @@ describe('native permanent deletion review and second confirmation', () => {
     expect(io.invoke.mock.calls.map(([command]) => command)).toEqual(['cli_preview_session_delete', 'cli_confirm_session_delete', 'cli_inspect_session_delete'])
     expect(element('[data-delete-result]').textContent).toContain('unknown')
   })
+  it.each([false, true])('PermanentDeleteUi_InspectedSuccessRefreshesOriginalSource_011 (read failure=%s)', async readFailure => {
+    const history = useNativeHistoryStore(), catalog = useUnifiedSessionsStore()
+    const controlId = '40000000-0000-4000-8000-000000000011'
+    const control = { ...history.get(context)!.sessions[0]!, sessionKey: JSON.stringify(['local', 'codex', 'root', controlId]), nativeSessionId: controlId }
+    history.get(context)!.sessions.push(control)
+    const refresh = vi.spyOn(catalog, 'refresh').mockResolvedValue(undefined)
+    const previous = io.invoke.getMockImplementation()!
+    let resolveInspect!: (value: unknown) => void
+    io.invoke.mockImplementation(async (command, request) => {
+      if (command === 'cli_confirm_session_delete') return { operationId: request.operationId, cli: 'codex', state: 'unknown', rootPresent: null, descendants: 'unverified', reason: 'DELETE_OWNER_PENDING' }
+      if (command === 'cli_inspect_session_delete') return new Promise(done => { resolveInspect = done })
+      if (command === 'native_get_scope' && readFailure) throw { code: 'SOURCE_UNAVAILABLE' }
+      if (command === 'native_list_resources') return { source: request.source, resourceKind: 'history', requestEpoch: request.requestEpoch, observedAt: '1', state: 'ready', reason: null, items: [control], hasMore: false }
+      return previous(command, request)
+    })
+    const w = await review(); element('[data-delete-next-confirm]').click(); await flushPromises()
+    await acknowledge('[data-delete-ack-permanent]'); await acknowledge('[data-delete-ack-subtree]')
+    element('[data-delete-final]').click(); await flushPromises()
+    const operationId = io.invoke.mock.calls.find(([command]) => command === 'cli_confirm_session_delete')![1].operationId
+    element('[data-delete-inspect]').click(); await flushPromises()
+    await w.setProps({ target: { ...target(), id: 'different-target', projectPath: '/synthetic/other', nativeOrigin: { ...context, projectId: 'other', projectPath: '/synthetic/other', profileId: 'other-profile' } } })
+    resolveInspect({ operationId, cli: 'codex', state: 'acknowledged', rootPresent: false, descendants: 'unverified', reason: null }); await flushPromises()
+    expect(refresh).toHaveBeenCalledExactlyOnceWith(context.projectPath, { cli: 'codex' })
+    expect(io.invoke.mock.calls.find(([command]) => command === 'native_get_scope')?.[1]).toMatchObject({ profileId: context.profileId, projectIds: [context.projectId] })
+    expect(history.get(context)!.sessions.map(row => row.nativeSessionId)).toContain(controlId)
+    if (readFailure) expect(history.get(context)?.error).toBeTruthy()
+    else expect(history.get(context)!.sessions.map(row => row.nativeSessionId)).not.toContain(nativeId)
+    expect(element('[data-delete-result]').textContent).toContain('acknowledged')
+    io.invoke.mockImplementation(async (command, request) => command === 'cli_inspect_session_delete'
+      ? { operationId, cli: 'codex', state: 'acknowledged', rootPresent: false, descendants: 'unverified', reason: null }
+      : previous(command, request))
+    element('[data-delete-inspect]').click(); await flushPromises()
+    expect(refresh).toHaveBeenCalledTimes(1)
+    expect(io.invoke.mock.calls.filter(([command]) => command === 'cli_confirm_session_delete')).toHaveLength(1)
+  })
   it('PermanentDeleteUi_DeskOnlyArchiveCannotAuthorizeNativeDeletion_005', async () => {
     useNativeHistoryStore().entries.get(nativeHistoryContextKey(context))!.sessions[0]!.archived = false
     const w = render()
     expect(w.get('[data-native-cleanup-delete]').attributes('disabled')).toBeDefined()
     await w.get('[data-native-cleanup-delete]').trigger('click')
     expect(io.invoke).not.toHaveBeenCalled()
+  })
+  it('PermanentDeleteUi_BlockedPreviewRequiresFreshTwoStepReview_012', async () => {
+    const previous = io.invoke.getMockImplementation()!
+    io.invoke.mockImplementation(async (command, request) => ['cli_confirm_session_delete', 'cli_inspect_session_delete'].includes(command)
+      ? { operationId: request.operationId, cli: 'codex', state: 'blocked', rootPresent: null, descendants: 'unverified', reason: 'DELETE_PREVIEW_CHANGED' }
+      : previous(command, request))
+    await review(); element('[data-delete-next-confirm]').click(); await flushPromises()
+    await acknowledge('[data-delete-ack-permanent]'); await acknowledge('[data-delete-ack-subtree]')
+    element('[data-delete-final]').click(); await flushPromises()
+    expect(element('[data-delete-result]').textContent).toContain('blocked')
+    element('[data-delete-inspect]').click(); await flushPromises()
+    element('[data-delete-review-again]').click(); await flushPromises()
+    const previews = io.invoke.mock.calls.filter(([command]) => command === 'cli_preview_session_delete')
+    expect(previews).toHaveLength(2)
+    expect(previews[0]![1].operationId).not.toBe(previews[1]![1].operationId)
+    expect(document.querySelector('[data-delete-final]')).toBeNull()
+    element('[data-delete-next-confirm]').click(); await flushPromises()
+    expect((element('[data-delete-final]') as HTMLButtonElement).disabled).toBe(true)
+    expect(io.invoke.mock.calls.filter(([command]) => command === 'cli_confirm_session_delete')).toHaveLength(1)
   })
   it('PermanentDeleteUi_MissingBridgeFailsBeforeMutation_006', async () => {
     delete (window as any).__CC_DESK_DOCUMENT__

@@ -59,7 +59,7 @@ async function review() {
   const requestKey = selectedKey.value
   open.value = true; permanent.value = false; subtree.value = false
   const originalSignature = signature.value
-  await operations.prepare(request, { title: props.target!.title, projectPath: current.origin.projectPath })
+  await operations.prepare(request, { title: props.target!.title, projectPath: current.origin.projectPath, origin: current.origin })
   // A 的迟到预览不能关闭后来已切换到 B 的窗口或取消 B 的票据。
   if (selectedKey.value !== requestKey || operation.value?.request.operationId !== request.operationId) return
   if (signature.value !== originalSignature) { close(); return }
@@ -72,12 +72,21 @@ async function execute() {
   const requestKey = selectedKey.value
   try {
     await operations.execute(requestKey, permanent.value, subtree.value, () => selectedKey.value === requestKey && ownsOperation.value && signature.value === original)
-    if (operations.records.get(requestKey)?.receipt?.state === 'acknowledged') {
-      // 先重读准确来源；只清缓存会让同来源的无关会话也从目录消失。
-      await history.load({ ...current.origin, force: true, retainOnFailure: true })
-      await useUnifiedSessionsStore().refresh(current.origin.projectPath, { cli: 'codex' })
-    }
+    await refreshAcknowledged(requestKey)
   } catch { /* 后端结果保留在操作账本；前置失权不发送删除。 */ }
+}
+async function refreshAcknowledged(key: string) {
+  const record = operations.records.get(key), origin = record?.display?.origin
+  if (record?.receipt?.state !== 'acknowledged' || !origin) return
+  try { await history.load({ ...origin, force: true, retainOnFailure: true }) }
+  finally { await useUnifiedSessionsStore().refresh(origin.projectPath, { cli: origin.cli }) }
+}
+async function inspect() {
+  const key = selectedKey.value, record = operations.records.get(key), previous = record?.receipt?.state
+  try {
+    await operations.inspect(key)
+    if (operations.records.get(key) === record && previous !== 'acknowledged') await refreshAcknowledged(key)
+  } catch { /* 重读失败保留缓存及错误，不改写删除回执。 */ }
 }
 function reopen(key: string) { selectedKey.value = key; open.value = true; permanent.value = false; subtree.value = false }
 async function reviewAgain() {
@@ -118,7 +127,7 @@ async function reviewAgain() {
           <p v-if="operation.receipt?.rootPresent === false">{{ t('deleteRootAbsent') }}</p>
           <p v-if="operation.receipt?.rootPresent === true">{{ t('deleteRootPresent') }}</p>
           <code v-if="operation.error || operation.receipt?.reason || operation.preview?.reason">{{ operation.error || operation.receipt?.reason || operation.preview?.reason }}</code>
-          <AppButton v-if="operation.receipt" data-delete-inspect @click="operations.inspect(selectedKey)">{{ t('deleteInspect') }}</AppButton>
+          <AppButton v-if="operation.receipt" data-delete-inspect @click="inspect">{{ t('deleteInspect') }}</AppButton>
           <AppButton v-if="sameTarget && operations.canReviewAgain(selectedKey)" data-delete-review-again @click="reviewAgain">{{ t('deleteReviewAgain') }}</AppButton>
         </div>
       </template>

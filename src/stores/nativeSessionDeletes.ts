@@ -3,6 +3,7 @@ import { reactive } from 'vue'
 import type { SessionDeleteClient, SessionDeletePreview, SessionDeletePreviewRequest, SessionDeleteReceipt } from '@/types/nativeSessionDelete'
 import { createNativeSessionDeleteClient } from '@/api/tauri'
 import { sessionDeleteErrorCode } from '@/api/nativeSessionDelete'
+import type { NativeHistoryContext } from './nativeHistory'
 
 export interface SessionDeleteOperation {
   request: SessionDeletePreviewRequest
@@ -12,7 +13,7 @@ export interface SessionDeleteOperation {
   error?: string
   inspected?: boolean
   /** 仅用于复核界面展示；不进入后端请求或提供任何授权。 */
-  display?: { title: string; projectPath: string }
+  display?: { title: string; projectPath: string; origin?: NativeHistoryContext }
 }
 export function sessionDeleteTargetKey(input: SessionDeletePreviewRequest): string { return JSON.stringify([input.source.instanceId, input.source.cli, input.source.profileId, input.source.profileRevision, input.source.sourceRootKey, input.sessionKey]) }
 export const useNativeSessionDeletesStore = defineStore('native-session-deletes', () => {
@@ -20,13 +21,13 @@ export const useNativeSessionDeletesStore = defineStore('native-session-deletes'
   const clients = new Map<string, SessionDeleteClient>()
   const executions = new Map<string, Promise<void>>()
   function unavailable(): never { throw new Error('DELETE_CONFIRMATION_REQUIRED') }
-  async function prepare(request: SessionDeletePreviewRequest, display?: { title: string; projectPath: string }): Promise<void> {
+  async function prepare(request: SessionDeletePreviewRequest, display?: SessionDeleteOperation['display']): Promise<void> {
     const key = sessionDeleteTargetKey(request), old = records.get(key)
     // 已发出的操作保留原来源与客户端，关闭抽屉或新 scope 不会清掉未知归属。
     if (old && (['executing', 'checking'].includes(old.phase) || old.phase === 'result' && old.receipt)) return
     if (old?.phase === 'previewing') return
     const frozen = JSON.parse(JSON.stringify(request)) as SessionDeletePreviewRequest
-    const record = reactive<SessionDeleteOperation>({ request: frozen, phase: 'previewing', ...(display ? { display: { ...display } } : {}) })
+    const record = reactive<SessionDeleteOperation>({ request: frozen, phase: 'previewing', ...(display ? { display: { ...display, ...(display.origin ? { origin: { ...display.origin } } : {}) } } : {}) })
     records.set(key, record)
     try {
       const client = createNativeSessionDeleteClient()

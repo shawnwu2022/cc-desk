@@ -46,22 +46,18 @@ fn NativeDelete_ChangedPreviewIsConsumedAndDuplicateNeverClaims_002() {
         acknowledge_permanent_delete: true,
         acknowledge_native_subtree: true,
     };
-    assert_eq!(
-        operations
-            .begin(&caller, &confirm, "changed")
-            .err()
+    for observation in ["changed", "before"] {
+        let receipt = operations
+            .begin(&caller, &confirm, observation)
             .unwrap()
-            .code,
-        "DELETE_PREVIEW_CHANGED"
-    );
-    assert_eq!(
-        operations
-            .begin(&caller, &confirm, "before")
-            .err()
-            .unwrap()
-            .code,
-        "DELETE_PREVIEW_CHANGED"
-    );
+            .unwrap();
+        assert_eq!(receipt.state, "blocked");
+        assert_eq!(receipt.reason, Some("DELETE_PREVIEW_CHANGED"));
+        let entry = operations.get(&caller, &request.operation_id).unwrap();
+        assert!(entry.confirmed.is_none());
+        assert!(!entry.active.load(Ordering::Acquire));
+        assert_eq!(entry.receipt.unwrap().state, "blocked");
+    }
     let operations = Operations::default();
     let preview = operations
         .register(
@@ -128,6 +124,62 @@ fn NativeDelete_ChangedPreviewIsConsumedAndDuplicateNeverClaims_002() {
 }
 
 #[test]
+fn NativeDelete_ExpiredPreviewIsBlockedBeforeClaimAndCanReviewAgain_011() {
+    let operations = Operations::default();
+    let caller = caller();
+    let request = request();
+    let preview = operations
+        .register(
+            &caller,
+            &request,
+            "00000000-0000-4000-8000-000000000004",
+            "before".into(),
+        )
+        .unwrap();
+    operations.0.lock().unwrap()[0].created = Instant::now() - Duration::from_secs(121);
+    let confirm = ConfirmRequest {
+        operation_id: request.operation_id.clone(),
+        preview_id: preview.preview_id.unwrap(),
+        acknowledge_permanent_delete: true,
+        acknowledge_native_subtree: true,
+    };
+    let receipt = operations
+        .begin(&caller, &confirm, "before")
+        .unwrap()
+        .unwrap();
+    assert_eq!(receipt.state, "blocked");
+    assert_eq!(receipt.reason, Some("DELETE_PREVIEW_CHANGED"));
+    let entry = operations.get(&caller, &request.operation_id).unwrap();
+    assert!(entry.confirmed.is_none());
+    assert!(!entry.active.load(Ordering::Acquire));
+    assert_eq!(entry.receipt.unwrap().state, "blocked");
+    assert_eq!(
+        operations
+            .begin(&caller, &confirm, "before")
+            .unwrap()
+            .unwrap()
+            .state,
+        "blocked"
+    );
+    let fresh = PreviewRequest {
+        operation_id: uuid::Uuid::new_v4().to_string(),
+        ..request
+    };
+    assert_eq!(
+        operations
+            .register(
+                &caller,
+                &fresh,
+                "00000000-0000-4000-8000-000000000004",
+                "before".into()
+            )
+            .unwrap()
+            .state,
+        "ready"
+    );
+}
+
+#[test]
 fn NativeDelete_UnknownPhysicalTargetLocksAcrossProfileAndUuidSpelling_006() {
     let operations = Operations::default();
     let caller = caller();
@@ -180,6 +232,63 @@ fn NativeDelete_UnknownPhysicalTargetLocksAcrossProfileAndUuidSpelling_006() {
             "second".into()
         )
         .is_ok());
+}
+
+#[test]
+fn NativeDelete_LateInvalidationCannotReclassifyClaimedOperation_012() {
+    let operations = Operations::default();
+    let caller = caller();
+    let request = request();
+    let preview = operations
+        .register(
+            &caller,
+            &request,
+            "00000000-0000-4000-8000-000000000004",
+            "before".into(),
+        )
+        .unwrap();
+    let confirm = ConfirmRequest {
+        operation_id: request.operation_id.clone(),
+        preview_id: preview.preview_id.unwrap(),
+        acknowledge_permanent_delete: true,
+        acknowledge_native_subtree: true,
+    };
+    assert!(operations
+        .begin(&caller, &confirm, "before")
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        operations
+            .invalidate(&caller, &request.operation_id)
+            .unwrap()
+            .state,
+        "unknown"
+    );
+    let entry = operations.get(&caller, &request.operation_id).unwrap();
+    assert!(entry.active.load(Ordering::Acquire));
+    assert!(entry.confirmed.is_some());
+    assert_eq!(
+        entry.preview.preview_id.as_deref(),
+        Some(confirm.preview_id.as_str())
+    );
+    assert!(entry.receipt.is_none());
+    let unknown = request.receipt("unknown", None, Some("DELETE_OUTCOME_UNKNOWN"));
+    operations.finish(&caller, &request.operation_id, unknown);
+    assert_eq!(
+        operations
+            .invalidate(&caller, &request.operation_id)
+            .unwrap()
+            .state,
+        "unknown"
+    );
+    assert_eq!(
+        operations
+            .begin(&caller, &confirm, "before")
+            .unwrap()
+            .unwrap()
+            .state,
+        "unknown"
+    );
 }
 
 #[test]
@@ -533,24 +642,32 @@ fs.writeFileSync(marker+'.trace','started\n');readline.createInterface({{input:p
         "# observed configuration changed\n",
     )
     .unwrap();
+    let blocked = service.confirm_delete(&caller, confirm.clone()).unwrap();
+    assert_eq!(blocked.state, "blocked");
+    assert_eq!(blocked.reason, Some("DELETE_PREVIEW_CHANGED"));
     assert_eq!(
         service
-            .confirm_delete(&caller, confirm.clone())
-            .err()
+            .inspect_delete(
+                &caller,
+                InspectRequest {
+                    operation_id: request.operation_id.clone()
+                }
+            )
             .unwrap()
-            .code,
-        "DELETE_PREVIEW_CHANGED"
+            .state,
+        "blocked"
     );
     assert!(!marker.exists());
+    assert!(!marker.with_extension("trace").exists());
     std::fs::remove_file(root.join("config.toml")).unwrap();
     assert_eq!(
         service
             .confirm_delete(&caller, confirm.clone())
-            .err()
             .unwrap()
-            .code,
-        "DELETE_PREVIEW_CHANGED"
+            .state,
+        "blocked"
     );
+    assert!(!marker.with_extension("trace").exists());
     let request = PreviewRequest {
         operation_id: uuid::Uuid::new_v4().to_string(),
         ..request

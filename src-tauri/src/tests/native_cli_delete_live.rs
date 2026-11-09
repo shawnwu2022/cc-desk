@@ -1340,19 +1340,17 @@ impl BackendFixture {
         assert_eq!(
             self.service
                 .confirm_delete(&self.caller, confirmation.clone())
-                .err()
                 .unwrap()
-                .code,
-            "DELETE_PREVIEW_CHANGED"
+                .reason,
+            Some("DELETE_PREVIEW_CHANGED")
         );
         fs::write(&self.rollout, &self.original).unwrap();
         assert_eq!(
             self.service
                 .confirm_delete(&self.caller, confirmation)
-                .err()
                 .unwrap()
-                .code,
-            "DELETE_PREVIEW_CHANGED"
+                .reason,
+            Some("DELETE_PREVIEW_CHANGED")
         );
         self.preserved();
         self.observations

@@ -132,12 +132,19 @@ impl ProjectionService {
         ) {
             Ok(authority) if authority.archived => authority,
             _ => {
-                self.delete_operations
+                return self
+                    .delete_operations
                     .invalidate(caller, &request.operation_id);
-                return Err(error("DELETE_PREVIEW_CHANGED"));
             }
         };
-        let authority = authority.pin_delete_containers()?;
+        let authority = match authority.pin_delete_containers() {
+            Ok(authority) => authority,
+            Err(_) => {
+                return self
+                    .delete_operations
+                    .invalidate(caller, &request.operation_id)
+            }
+        };
         if let Some(receipt) =
             self.delete_operations
                 .begin(caller, &request, &authority.observation)?
@@ -231,6 +238,9 @@ impl ProjectionService {
         self.registry
             .check_source(&owner(caller), &entry.request.source)?;
         if entry.confirmed.is_none() {
+            if let Some(receipt) = entry.receipt.filter(|receipt| receipt.state == "blocked") {
+                return Ok(receipt);
+            }
             return Err(error("DELETE_CONFIRMATION_REQUIRED"));
         }
         if entry.active.load(std::sync::atomic::Ordering::Acquire) {
