@@ -222,6 +222,28 @@ pub(super) mod server_job {
         }
     }
     impl Job {
+        #[cfg(test)]
+        pub(crate) fn duplicate_handle(
+            &self,
+        ) -> Result<std::os::windows::io::OwnedHandle, SafeError> {
+            use std::os::windows::io::FromRawHandle;
+            use windows::Win32::Foundation::{DuplicateHandle, DUPLICATE_SAME_ACCESS};
+            use windows::Win32::System::Threading::GetCurrentProcess;
+            let mut handle = HANDLE::default();
+            unsafe {
+                DuplicateHandle(
+                    GetCurrentProcess(),
+                    self.0,
+                    GetCurrentProcess(),
+                    &mut handle,
+                    0,
+                    false,
+                    DUPLICATE_SAME_ACCESS,
+                )
+            }
+            .map_err(|_| error("DELETE_OWNER_PENDING"))?;
+            Ok(unsafe { std::os::windows::io::OwnedHandle::from_raw_handle(handle.0) })
+        }
         pub(crate) fn terminate(&self) -> Result<(), SafeError> {
             unsafe { windows::Win32::System::JobObjects::TerminateJobObject(self.0, 1) }
                 .map_err(|_| error("DELETE_OWNER_PENDING"))

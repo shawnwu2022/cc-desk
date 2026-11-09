@@ -51,6 +51,10 @@ struct EntryState {
     started: bool,
     settled: bool,
     result: Option<Result<ProbeResult, SafeError>>,
+    #[cfg(all(test, windows))]
+    retain_job: bool,
+    #[cfg(all(test, windows))]
+    retained_job: Option<std::os::windows::io::OwnedHandle>,
 }
 #[derive(Default)]
 pub(crate) struct Probes {
@@ -316,7 +320,7 @@ impl LaunchService {
                 return Ok(result);
             }
         };
-        // Mark settled only after no child was created or the exact child reaped.
+        // Windows 的直接进程与整个 Job 都已收口，才可释放准入。
         let collected = (|| {
             let mut command = spec.metadata_command().map_err(|_| "program-unavailable")?;
             command
@@ -324,9 +328,15 @@ impl LaunchService {
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped());
             #[cfg(windows)]
-            let mut job = Some(
-                crate::cli::opencode_prepare::server_job::Job::new().map_err(|_| "unavailable")?,
-            );
+            let job =
+                crate::cli::opencode_prepare::server_job::Job::new().map_err(|_| "unavailable")?;
+            #[cfg(all(test, windows))]
+            {
+                let mut state = entry.state.lock();
+                if state.retain_job {
+                    state.retained_job = Some(job.duplicate_handle().map_err(|_| "unavailable")?);
+                }
+            }
             #[cfg(windows)]
             {
                 use std::os::windows::process::CommandExt;
@@ -369,7 +379,7 @@ impl LaunchService {
             let output = Arc::new(Mutex::new(Output::default()));
             let mut failure = None;
             #[cfg(windows)]
-            if job.as_ref().unwrap().assign_and_resume(&child).is_err() {
+            if job.assign_and_resume(&child).is_err() {
                 failure = Some("command-failed");
             }
             for (reader, stderr) in [
@@ -406,29 +416,36 @@ impl LaunchService {
                         .or_else(|| (Instant::now() >= deadline).then_some("timeout"));
                 }
                 if failure.is_some() {
-                    let since = stopping_since.get_or_insert_with(Instant::now);
-                    if since.elapsed() >= Duration::from_secs(2) {
-                        let mut state = entry.state.lock();
-                        if state.result.is_none() {
-                            let mut unknown = result.clone();
-                            unknown.reason = Some("termination-unknown");
-                            state.result = Some(Ok(unknown));
-                            entry.ready.notify_all();
-                        }
-                    }
+                    stopping_since.get_or_insert_with(Instant::now);
                     #[cfg(windows)]
-                    drop(job.take());
+                    let _ = job.terminate();
                     #[cfg(unix)]
                     unsafe {
                         libc::kill(-(child.id() as i32), libc::SIGKILL);
                     }
                     let _ = child.kill();
                 }
+                if stopping_since.is_some_and(|since| since.elapsed() >= Duration::from_secs(2)) {
+                    let mut state = entry.state.lock();
+                    if state.result.is_none() {
+                        let mut unknown = result.clone();
+                        unknown.reason = Some("termination-unknown");
+                        state.result = Some(Ok(unknown));
+                        entry.ready.notify_all();
+                    }
+                }
                 match child.try_wait() {
                     Ok(Some(status)) => {
-                        // Closing the retained Job also closes descendant pipe writers.
                         #[cfg(windows)]
-                        drop(job.take());
+                        {
+                            // 终止只是请求；查询失败或后代未退出时继续保留 owner 与票据。
+                            let _ = job.terminate();
+                            if !job.is_empty().unwrap_or(false) {
+                                stopping_since.get_or_insert_with(Instant::now);
+                                std::thread::sleep(Duration::from_millis(10));
+                                continue;
+                            }
+                        }
                         #[cfg(unix)]
                         unsafe {
                             libc::kill(-(child.id() as i32), libc::SIGKILL);

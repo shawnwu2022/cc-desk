@@ -18,12 +18,12 @@
 
 运行阶段限时 5 秒，stdout/stderr 合计最多 8 KiB。stderr 非空、额外正文、ANSI、多行、未知格式都只返回固定原因，原始内容不会进入日志、UI 或诊断摘要。准备配置和文件系统解析不声称具有独立的五秒总墙钟上限。
 
-请求绑定 document 身份、profile/revision 和 UUID。取消先到建立 fence，防止迟到开始。每个 profile 最多一个诊断 owner，跨 request 和文档生效；不同 profile 可独立运行。进程通过现有 admission、command owner 和 Windows Job 管理，只有准确 child 真实 reap 才释放。停止两秒仍无法确认时可以先返回 `termination-unknown`，后台保留 owner；新 ID 返回 `probe-in-progress`，不会再次 spawn。前端此时保留原 ID 与 busy，通过取消回执协调；`requested` 不等于已终止，`settled` 才解除。
+请求绑定 document 身份、profile/revision 和 UUID。取消先到建立 fence，防止迟到开始。每个 profile 最多一个诊断 owner，跨 request 和文档生效；不同 profile 可独立运行。进程通过现有 admission、command owner 和 Windows Job 管理，准确 child 真实 reap 后，Windows 还必须通过保留的 Job 句柄确认所有受控后代退出，才释放准入与 owner。取消、失败或根进程先退出时显式终止 Job；终止请求成功或关闭句柄不能代替 Job 清空证明，查询失败继续保留所有权。停止两秒仍无法确认时可以先返回 `termination-unknown`，后台保留 owner；新 ID 返回 `probe-in-progress`，不会再次 spawn。前端此时保留原 ID 与 busy，通过取消回执协调；`requested` 不等于已终止，`settled` 才解除。
 
 复制摘要白名单仅有 CLI、临时匿名来源编号、版本、状态及固定原因。配置名称、ID、revision、路径、环境、认证内容、requestId、终端输出和原始错误不复制，不上传。匿名编号只在当前页面实例区分已选来源，不是持久身份。
 
 ## 证据限制
 
-Rust 合成测试覆盖输出限制、超时、准确配置与不可用路径不 fallback、恶意默认参数不执行、取消先到/运行中、迟到结果、revision、文档撤销、跨 profile 与独占 owner。未知 reap 使用受控 owner fixture，尚未注入真实操作系统终止/等待失败。Windows 真实 Cmd Shim 使用合成脚本，不是用户 CLI 验收。
+Rust 合成测试覆盖输出限制、超时、准确配置与不可用路径不 fallback、恶意默认参数不执行、取消先到/运行中、迟到结果、revision、文档撤销、跨 profile 与独占 owner。Windows 后代回归使用额外保留的同一 Job 句柄、真实合成后代及其精确进程句柄，核对正常根退出和取消路径均在后代退出后才开放 metadata admission；额外 Job 句柄只属于测试，不用于生产授权。未知 reap 使用受控 owner fixture，尚未注入真实操作系统终止/等待失败。Windows 真实 Cmd Shim 使用合成脚本，不是用户 CLI 验收。
 
 完整命令、通过/失败/未运行分类和本地日志见 [本回合验证](../.audit/v027-p0-validation.md)。未验证 Unix 进程组、真实用户 CLI、安装版 WebView 或用户现场身份与自动命名，不以合成测试替代。

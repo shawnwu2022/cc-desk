@@ -20,11 +20,34 @@ fn executable() -> &'static PathBuf {
                 r#"
 use std::io::Write;
 fn main() {
+ if std::env::args().nth(1).as_deref() == Some("--descendant") {
+  let marker=std::env::var("FIXTURE_MARKER").unwrap();
+  std::fs::write(format!("{marker}.descendant"),std::process::id().to_string()).unwrap();
+  std::thread::sleep(std::time::Duration::from_secs(60));
+  return;
+ }
  assert_eq!(std::env::args().skip(1).collect::<Vec<_>>(),vec!["--version"]);
  let marker=std::env::var("FIXTURE_MARKER").unwrap();
  let mut f=std::fs::OpenOptions::new().create(true).append(true).open(&marker).unwrap();
  writeln!(f,"spawn").unwrap();
  match std::env::var("FIXTURE_MODE").unwrap().as_str() {
+  mode @ ("descendant" | "descendant-hang") => {
+   let _child=std::process::Command::new(std::env::current_exe().unwrap())
+    .arg("--descendant").stdin(std::process::Stdio::null())
+    .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().unwrap();
+   let ready=format!("{marker}.descendant");
+   let deadline=std::time::Instant::now()+std::time::Duration::from_secs(5);
+   while !std::path::Path::new(&ready).exists() {
+    assert!(std::time::Instant::now()<deadline);
+    std::thread::sleep(std::time::Duration::from_millis(5));
+   }
+   while !std::path::Path::new(&format!("{marker}.release")).exists() {
+    assert!(std::time::Instant::now()<deadline);
+    std::thread::sleep(std::time::Duration::from_millis(5));
+   }
+   if mode=="descendant-hang" { std::thread::sleep(std::time::Duration::from_secs(60)); }
+   println!("codex-cli 1.2.3");
+  },
   "hang" => std::thread::sleep(std::time::Duration::from_secs(60)),
   "cap" => { print!("{}", "x".repeat(9000)); },
   "stderr-cap" => { eprint!("{}", "x".repeat(9000)); },
@@ -530,4 +553,83 @@ fn CliVersion_RealRunningChildBlocksFreshRequest_021() {
         std::fs::read_to_string(f.root.path().join("spawned")).unwrap(),
         "spawn\n"
     );
+}
+
+#[cfg(windows)]
+#[test]
+fn CliVersion_RetainedJobWaitsForDescendantsBeforeMetadataAdmission_022() {
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use windows::Win32::Foundation::{HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT};
+    use windows::Win32::System::Threading::{
+        OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
+    };
+    for mode in ["descendant", "descendant-hang"] {
+        let f = Fixture::new(mode, Launcher::Native);
+        let entry = f
+            .service
+            .version_probes
+            .entry(&f.service, &f.caller, &f.query.request_id)
+            .unwrap();
+        // 额外持有同一 Job，使关闭生产句柄不能冒充已终止后代的证明。
+        entry.state.lock().retain_job = true;
+        let worker = f.start();
+        let marker = f.root.path().join("spawned.descendant");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !marker.exists() {
+            assert!(Instant::now() < deadline, "descendant failed to start");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let pid = loop {
+            if let Ok(pid) = std::fs::read_to_string(&marker).unwrap().parse::<u32>() {
+                break pid;
+            }
+            assert!(Instant::now() < deadline, "descendant PID not published");
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        let retained_job = entry.state.lock().retained_job.take().unwrap();
+        // 根等待测试握手，因此这里必须取得仍存活后代的精确句柄。
+        let descendant = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, pid) }
+            .map(|handle| unsafe { OwnedHandle::from_raw_handle(handle.0) })
+            .unwrap();
+        assert_eq!(
+            unsafe { WaitForSingleObject(HANDLE(descendant.as_raw_handle()), 0) },
+            WAIT_TIMEOUT
+        );
+        assert_eq!(
+            f.service
+                .repository
+                .admission()
+                .check_metadata_idle()
+                .unwrap_err()
+                .code,
+            "SOURCE_BUSY"
+        );
+        if mode == "descendant-hang" {
+            f.cancel();
+        } else {
+            std::fs::write(f.root.path().join("spawned.release"), b"release").unwrap();
+        }
+        let result = worker.join().unwrap().unwrap();
+        let exited =
+            unsafe { WaitForSingleObject(HANDLE(descendant.as_raw_handle()), 0) == WAIT_OBJECT_0 };
+        // 断言失败前先释放额外句柄，确保旧实现的反例也清理测试专属后代。
+        drop(retained_job);
+        assert!(
+            exited,
+            "probe released admission with a live descendant: {mode}"
+        );
+        assert_eq!(
+            result.state,
+            if mode == "descendant" {
+                "known"
+            } else {
+                "cancelled"
+            }
+        );
+        f.service
+            .repository
+            .admission()
+            .check_metadata_idle()
+            .unwrap();
+    }
 }
