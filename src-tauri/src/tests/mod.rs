@@ -6,6 +6,8 @@
 pub(super) static NATIVE_WEBVIEW_TEST_LEASE: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 
 #[cfg(all(test, windows))]
+mod claude_delete_guards;
+#[cfg(all(test, windows))]
 pub(crate) mod fixture_process;
 
 #[cfg(test)]
@@ -22,6 +24,8 @@ mod hook_events;
 mod native_cli_availability;
 #[cfg(all(test, windows))]
 mod native_cli_channel_live;
+#[cfg(all(test, windows))]
+mod native_cli_delete_live;
 #[cfg(test)]
 mod native_cli_document;
 #[cfg(test)]
@@ -175,3 +179,5 @@ mod version_history_return_checkpoint;
 
 mod desktop_updater_http;
 mod desktop_updater_policy;
+
+mod native_cli_version_parser;

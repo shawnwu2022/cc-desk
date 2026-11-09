@@ -1,0 +1,512 @@
+{
+  "schema": 1,
+  "recordedUtc": "2026-11-06T17:15:23.161Z",
+  "branch": "feat/v0.27.0",
+  "codeCommit": "31cbc156b2075a35901032f6d8066f0a53080887",
+  "result": "blocked-real-webview-acceptance",
+  "version": {
+    "repository": "0.26.0",
+    "testContext": "0.0.0",
+    "testIdentifier": "io.github.shawnwu2022.ccdesk.d11test",
+    "availableWebviewVersion": "147.0.3912.98",
+    "instanceVersionBinding": "unproven"
+  },
+  "toolchain": {
+    "rust": "1.98.1-x86_64-pc-windows-msvc",
+    "compiler": "rustc 1.98.1 (48a229cea 2026-09-01)",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_PROFILE_TEST_DEBUG": "0",
+    "CARGO_NET_OFFLINE": "true",
+    "node": "v24.18.0"
+  },
+  "commits": {
+    "historyRefresh": "f8d8dd16a0a168dfdaf377c7c1674bce527c6014",
+    "directorySetter": "31cbc156b2075a35901032f6d8066f0a53080887"
+  },
+  "sources": [
+    {
+      "path": "src-tauri/src/cli/document_tauri.rs",
+      "bytes": 7227,
+      "sha256": "c605f3f3417736b7bdaa0e17f044571306de2fe9ad1fa5ebbcdc96f67bc372d0"
+    },
+    {
+      "path": "src-tauri/src/tests/native_cli_delete_live.rs",
+      "bytes": 67435,
+      "sha256": "0157e267e3e98b38e7bed5deb89c039e5a14f8f6210fffbb64fa8628a29ca331"
+    },
+    {
+      "path": "src-tauri/src/tests/native_cli_delete_webview.rs",
+      "bytes": 55560,
+      "sha256": "307fa3038030865f46901f3602bfafc4ab5b58fedec4f9ea2a6b1dce0cde9ade"
+    },
+    {
+      "path": "src/components/sessions/NativeSessionDeletePanel.vue",
+      "bytes": 10200,
+      "sha256": "5aabb4a11f4f0a0c93e35315c9294912b0c1dcc1565e3a0388cd23f75518a57d"
+    },
+    {
+      "path": "tests/components/nativeSessionDelete.test.ts",
+      "bytes": 15211,
+      "sha256": "822244cb8af64f9ffd1c4a4f8978f4af8f38dd47338425fb9f8b3686cebf541b"
+    },
+    {
+      "path": "tests/native-cli/nativeDeleteWebviewBootstrap.test.ts",
+      "bytes": 702,
+      "sha256": "6a97ee00a7d502609ca95811b50383fccffdf2a8436dd04ba1d789ff636399aa"
+    },
+    {
+      "path": "tests/native-delete-webview/main.ts",
+      "bytes": 10580,
+      "sha256": "c18f638252ba8cda95514cc3c144d73877ddc44e00f53574bc873e057e5d20fa"
+    },
+    {
+      "path": "tests/native-delete-webview/index.html",
+      "bytes": 283,
+      "sha256": "2793fef6adb4f9316638d31681b372ef8bd273e806e7e4a49e0017963a2818a9"
+    },
+    {
+      "path": "scripts/build-native-delete-webview.mjs",
+      "bytes": 3324,
+      "sha256": "05ec7147922851f65b809c7376efc306298095e318126d168eeeddac3dcf4969"
+    },
+    {
+      "path": ".audit/stage11-observe-held-lifetime.ps1",
+      "bytes": 8637,
+      "sha256": "633d1a6228f0027e7e8c879e2b38199790e85a8e0331b5ecb3c9a79f2c003508"
+    }
+  ],
+  "publishedDependencySources": [
+    {
+      "crate": "tauri-runtime",
+      "version": "2.11.3",
+      "file": "src/webview.rs",
+      "bytes": 31396,
+      "sha256": "28455a172e4c4df42580d7a40c17105ebe4169cd2254a87ad14a1495dc1c5daf",
+      "vcs": {
+        "git": {
+          "sha1": "6f6ab1207bb3923c2721fbc67d2fdb1c8deb0c7a"
+        },
+        "path_in_vcs": "crates/tauri-runtime"
+      }
+    },
+    {
+      "crate": "tauri",
+      "version": "2.11.1",
+      "file": "src/webview/mod.rs",
+      "bytes": 81201,
+      "sha256": "954cf212cb79d6b566c10b76d2ff2da05bc637cfc9f666c2f03d4e3dddf35f1c",
+      "vcs": {
+        "git": {
+          "sha1": "e5ae5b93cdd310045191cc0526f253140ad64b87"
+        },
+        "path_in_vcs": "crates/tauri"
+      }
+    },
+    {
+      "crate": "tauri",
+      "version": "2.11.1",
+      "file": "src/webview/webview_window.rs",
+      "bytes": 92619,
+      "sha256": "00993e28209fe87fdeea148213f7572bcf2eecb4738bae69a711d4493b35b60e",
+      "vcs": {
+        "git": {
+          "sha1": "e5ae5b93cdd310045191cc0526f253140ad64b87"
+        },
+        "path_in_vcs": "crates/tauri"
+      }
+    },
+    {
+      "crate": "tauri",
+      "version": "2.11.1",
+      "file": "src/manager/webview.rs",
+      "bytes": 24154,
+      "sha256": "5b2610ddf033a646ab3e62ca6403d548ab111d9d1df967b81132f8bf17a87ff0",
+      "vcs": {
+        "git": {
+          "sha1": "e5ae5b93cdd310045191cc0526f253140ad64b87"
+        },
+        "path_in_vcs": "crates/tauri"
+      }
+    },
+    {
+      "crate": "tauri-runtime-wry",
+      "version": "2.11.4",
+      "file": "src/lib.rs",
+      "bytes": 167311,
+      "sha256": "7e713976f21bfbf138a0bbc59a8ef7ae72f29d09564474ca3d1640a4714afdbc",
+      "vcs": {
+        "git": {
+          "sha1": "ca90b46b2e2cbbc981dae1b809f4af4343fe0558"
+        },
+        "path_in_vcs": "crates/tauri-runtime-wry"
+      }
+    },
+    {
+      "crate": "wry",
+      "version": "0.55.1",
+      "file": "src/webview2/mod.rs",
+      "bytes": 56449,
+      "sha256": "f8abc032e2f0acdb04d865e5e88d0ec11e2841944e24dc7089cd4b55f140af20",
+      "vcs": {
+        "git": {
+          "sha1": "a5bf203a1c8dbb3583588382538d6521655222a8",
+          "dirty": true
+        },
+        "path_in_vcs": ""
+      }
+    }
+  ],
+  "assetManifest": {
+    "path": ".audit/v027-stage11-evidence/assets-manifest.json",
+    "bytes": 8220,
+    "sha256": "b6110a6f25583bcfda36d361ca677fcd0f46d96eaa383edba8542f6cc845acc3"
+  },
+  "immutableLogs": [
+    {
+      "path": ".audit/stage11-assets-green-001.log",
+      "bytes": 1301,
+      "sha256": "bd91bb6cb4d612ad9b12b52777e27f0343e4d2845cc8ef863665602164e393d0"
+    },
+    {
+      "path": ".audit/stage11-assets-red.log",
+      "bytes": 1085,
+      "sha256": "df9702e2a18d3a801b0f530fadc8775c732de3cd852d7242d98adfdd3f80d1ca"
+    },
+    {
+      "path": ".audit/stage11-bootstrap-ownership-green.log",
+      "bytes": 806,
+      "sha256": "4ac3361981a6f619474da2a33b683d251661e56e5ba368ff66e12aacad025968"
+    },
+    {
+      "path": ".audit/stage11-bootstrap-ownership-red.log",
+      "bytes": 2058,
+      "sha256": "dcc61fd6603f15d0fed65425b9483837002ec3f4b8c61fe20db171cde99e8d7b"
+    },
+    {
+      "path": ".audit/stage11-boundaries-red-002.log",
+      "bytes": 4401,
+      "sha256": "181127be709029fbd2913466f377ef662dd45a6e18f52dfdba999a899e197b6c"
+    },
+    {
+      "path": ".audit/stage11-creation-fmt-002.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": ".audit/stage11-creation-guards-001.log",
+      "bytes": 2167,
+      "sha256": "a8d6265606736ccd3d31e29c7c4e01068101fea490060d54fe232c5c7e0828c5"
+    },
+    {
+      "path": ".audit/stage11-creation-guards-002.log",
+      "bytes": 1773,
+      "sha256": "30269ac149fe1b55cdf6aae5d3c08c4f573c6b63bd4312f30746ec1602e1d0a3"
+    },
+    {
+      "path": ".audit/stage11-directory-check-001.log",
+      "bytes": 139,
+      "sha256": "d56e557d5b570a22c785e96dac332963a03157c79368cb9a418a8ac8e8e5bb59"
+    },
+    {
+      "path": ".audit/stage11-directory-clippy-lib-001.log",
+      "bytes": 139,
+      "sha256": "a7f20fecc99e3064e8f88c78f93fbf42f0e71ce09aa44f9db274668c268e9223"
+    },
+    {
+      "path": ".audit/stage11-directory-fmt-001.log",
+      "bytes": 13,
+      "sha256": "c1e97067c5f479a44a6f57297a0a8f87a59d181c3c529910f8bf059094bc3abb"
+    },
+    {
+      "path": ".audit/stage11-directory-prepare.log",
+      "bytes": 40,
+      "sha256": "742692a639739fefc7bd1c467ffea64aeecdc7e46d208832220c6c04cf740a30"
+    },
+    {
+      "path": ".audit/stage11-frontend-build-001.log",
+      "bytes": 620,
+      "sha256": "2a40c8da6c98864afbd7ebe17129de983f124bc8e717a5fb6159564646122697"
+    },
+    {
+      "path": ".audit/stage11-frontend-build-002.log",
+      "bytes": 620,
+      "sha256": "0dd095081753e45ddea8311af9e1b952ec7b7a05c357b90d3d6beb38a5425f7b"
+    },
+    {
+      "path": ".audit/stage11-frontend-build-003.log",
+      "bytes": 620,
+      "sha256": "35d834e6cace6eef954f68aa2ba3457d25fc75cfbe3fca9dfb31ec063ec2c374"
+    },
+    {
+      "path": ".audit/stage11-frontend-build-004.log",
+      "bytes": 620,
+      "sha256": "9c5bb6a09eb2d9d82ac7a94d42bca373539c787ece86f3a931750d3bdceefb3b"
+    },
+    {
+      "path": ".audit/stage11-frontend-build-005.log",
+      "bytes": 620,
+      "sha256": "5006fc1a53de5f4a6726af7749726b6cd4981f105de931311d84429ff405d3aa"
+    },
+    {
+      "path": ".audit/stage11-history-refresh-green.log",
+      "bytes": 752,
+      "sha256": "582a459287c118c69dbe4b2a614af2bbb56a828a819862328867942cef2410b7"
+    },
+    {
+      "path": ".audit/stage11-history-refresh-red.log",
+      "bytes": 3125,
+      "sha256": "d301fd96cdb4e8af9c7241b88e1096e86bd3fc25e5199c5496a8359e7263bdb8"
+    },
+    {
+      "path": ".audit/stage11-host-clippy-001.log",
+      "bytes": 1445,
+      "sha256": "94d8993f7f744f13560e2e99b6b99a729e1d09f8d2587bdf1ed75f70440500b5"
+    },
+    {
+      "path": ".audit/stage11-host-clippy-002.log",
+      "bytes": 139,
+      "sha256": "bff29b7629ac07ce570aed4d7ac248b5cae68fd4825905b2f4deee24c12d2e8d"
+    },
+    {
+      "path": ".audit/stage11-host-clippy-003.log",
+      "bytes": 139,
+      "sha256": "a8f3fd826888f093648d15643f7a850878596079fc2c0f512585dfe5394ae75f"
+    },
+    {
+      "path": ".audit/stage11-host-compile-001.log",
+      "bytes": 2746,
+      "sha256": "8c272c68898fb6211d563747da9665787fcbdb4abb138aebc306257820fe74e4"
+    },
+    {
+      "path": ".audit/stage11-host-compile-002.log",
+      "bytes": 1403,
+      "sha256": "dda498ba9405a898bbd99e7e83e20db23d4eb648bf7b16632368e9983770502a"
+    },
+    {
+      "path": ".audit/stage11-host-fmt-001.log",
+      "bytes": 13,
+      "sha256": "c1e97067c5f479a44a6f57297a0a8f87a59d181c3c529910f8bf059094bc3abb"
+    },
+    {
+      "path": ".audit/stage11-host-fmt-002.log",
+      "bytes": 13,
+      "sha256": "c1e97067c5f479a44a6f57297a0a8f87a59d181c3c529910f8bf059094bc3abb"
+    },
+    {
+      "path": ".audit/stage11-product-vite-build.log",
+      "bytes": 1908,
+      "sha256": "372b00a4d874a0f26c4b0ae77e2d312ded72d80339c39c4486b3fb3a43a91019"
+    },
+    {
+      "path": ".audit/stage11-server-red.log",
+      "bytes": 1965,
+      "sha256": "029aa6d7a52979b1a6831852a3d2775a56958fccf99ea6c0a9061b3947e2f52f"
+    },
+    {
+      "path": ".audit/stage11-server-split-red.log",
+      "bytes": 1189,
+      "sha256": "3c91caa70dcbcd35a040d5c3f6052d4a9098292517576355a9f8030477cb6710"
+    },
+    {
+      "path": ".audit/stage11-typecheck-001.log",
+      "bytes": 867,
+      "sha256": "5e4dee3bb620b5002c84383b35cd430369e4798044395afde650e14f77a5f85c"
+    },
+    {
+      "path": ".audit/stage11-typecheck-002.log",
+      "bytes": 393,
+      "sha256": "e179ff3826adbe3e820a3400b23803e5f894880b5605641b258962df5cf85dc8"
+    },
+    {
+      "path": ".audit/stage11-typecheck-003.log",
+      "bytes": 393,
+      "sha256": "e179ff3826adbe3e820a3400b23803e5f894880b5605641b258962df5cf85dc8"
+    }
+  ],
+  "evidence": [
+    {
+      "path": ".audit/v027-stage11-evidence/assets-manifest.json",
+      "bytes": 8220,
+      "sha256": "b6110a6f25583bcfda36d361ca677fcd0f46d96eaa383edba8542f6cc845acc3"
+    },
+    {
+      "path": ".audit/v027-stage11-evidence/delivery-check.txt",
+      "bytes": 636,
+      "sha256": "7b532880b1f6995b5c9925d80f646e73df4c3b47d9eab41dec7c622d3ddf3f14"
+    },
+    {
+      "path": ".audit/v027-stage11-evidence/held-lifetime-attempt.txt",
+      "bytes": 1493,
+      "sha256": "19b388d5809d9a80049dfa4894f7af0dceb8ff60a3b526b4eb8ba653df7bb0ff"
+    },
+    {
+      "path": ".audit/v027-stage11-evidence/no-native-001-parent-prefix.log",
+      "bytes": 5809,
+      "sha256": "a7053b2d30715b6b110f779e065d9ad0d38c8ac355e3d30460e9b284015284ee"
+    },
+    {
+      "path": ".audit/v027-stage11-evidence/no-native-001-result.json",
+      "bytes": 8334,
+      "sha256": "4ca6a33e6df12291ff60d7f21934ad06e9044b5c04066ebdb3ef4eae752f76e3"
+    },
+    {
+      "path": ".audit/v027-stage11-evidence/no-native-001-worker.log",
+      "bytes": 7689,
+      "sha256": "9c7cdaf9e6459dde1a140a6a09ad56f856ed0b407644be16d110ce65c47e0a13"
+    },
+    {
+      "path": ".audit/v027-stage11-evidence/verification-denied.txt",
+      "bytes": 692,
+      "sha256": "62ca8098c7bb842340e450c88430885c2b424ef79daa976ecfecf95b4bdd1427"
+    }
+  ],
+  "noNativeAttempt": {
+    "ordinal": 1,
+    "baseCommit": "f8d8dd16a0a168dfdaf377c7c1674bce527c6014",
+    "compiledOverrides": [
+      {
+        "path": "src-tauri/src/tests/native_cli_delete_live.rs",
+        "sha256": "0157e267e3e98b38e7bed5deb89c039e5a14f8f6210fffbb64fa8628a29ca331"
+      },
+      {
+        "path": "src-tauri/src/tests/native_cli_delete_webview.rs",
+        "sha256": "307fa3038030865f46901f3602bfafc4ab5b58fedec4f9ea2a6b1dce0cde9ade"
+      }
+    ],
+    "binary": {
+      "path": "src-tauri/target/debug/deps/cc_desk-e220344963676309.exe",
+      "sha256": "f2156e35da36bc88114ec08e68dbb7eb91070dc982c1ef459ae6baa488f7a044"
+    },
+    "sessionId": 71914,
+    "parentRoot": "C:/Users/wusha/AppData/Local/Temp/v027-codex-delete-live-Q8q5x9",
+    "workerRoot": "C:/Users/wusha/AppData/Local/Temp/v027-codex-delete-live-Q8q5x9/temporary/v027-codex-delete-live-9EZwNW",
+    "failure": "ACTUAL_UDF_OR_BROWSER_UNKNOWN",
+    "workerTestSummary": "1 failed, 2.04s",
+    "appRunReturnExit": 0,
+    "parentFinalExit": null,
+    "checkpoints": 0,
+    "confirmIpcCount": 0,
+    "inspectIpcCount": 0,
+    "actualUdfCount": 0,
+    "captures": 0,
+    "nativeCliStarted": false,
+    "native091": "not authorized or run",
+    "defaultUdf": "not inspected or cleaned; runtime side effects unproven",
+    "parentState": "pending, original leases retained",
+    "lastTaskLogObservationUtc": "2026-11-06T17:11:44.7895395Z",
+    "parentProcess": {
+      "pid": 52908,
+      "image": "E:/Codex/2026-11-06/task-2/cc-desk/src-tauri/target/debug/deps/cc_desk-e220344963676309.exe",
+      "createdUtc": "2026-11-06T16:41:05.3893493Z",
+      "observedUtc": "2026-11-06T16:56:13.5461785Z",
+      "hasExitedAtObservation": false
+    },
+    "retainedByDriver": [
+      "anonymous ProbeJob handle",
+      "std::Child process handle",
+      "workerRoot Root lease",
+      "workerRoot/codex-home Root lease",
+      "workerRoot/codex-home/sessions Root lease",
+      "workerRoot/codex-home/archived_sessions Root lease",
+      "workerRoot/webview-main Root lease",
+      "workerRoot/webview-peer Root lease"
+    ],
+    "notProven": [
+      "root child OS reap",
+      "Job active process count or empty",
+      "actual browser PID/Job attribution",
+      "browser or shared runtime exit",
+      "actual UDF physical identity"
+    ]
+  },
+  "validation": {
+    "frontend": "5 files / 61 passed; typecheck exit0",
+    "rustPureBeforeDirectoryFix": "6 passed / 3 ignored",
+    "allTargetClippyBeforeDirectoryFix": "exit0, historical pre-fix source only",
+    "directoryFix": "lib-only check and Clippy exit0; fmt exit0; independent diff review passed",
+    "actualUdfRegressionAfterFix": "not run",
+    "fullRust16AndFullVitest": "not rerun"
+  },
+  "denials": [
+    {
+      "kind": "OS permission denial",
+      "action": "Get-CimInstance -ClassName Win32_Process -Filter Name=cc_desk-e220344963676309.exe",
+      "target": "local WMI process query, intended exact task path/NoNative command-line filter",
+      "raw": "Get-CimInstance: 拒绝访问",
+      "exit": 1,
+      "recordsObtained": false,
+      "retried": false
+    },
+    {
+      "kind": "auto-review rejection before process creation",
+      "action": "serial prepare/check/all-target Clippy/fmt command",
+      "rejectedPart": "cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings",
+      "reason": "may compile/link the occupied PID-52908 test executable",
+      "executed": false,
+      "retried": false,
+      "alternative": "lib-only check/Clippy and fmt; passed"
+    },
+    {
+      "kind": "OS log-writing permission denial, native observation uncertain",
+      "sessionId": 11956,
+      "action": "single current-token PSS held-handle metadata observer, piped to Tee-Object",
+      "target": ".audit/stage11-held-lifetime-observation-001.log",
+      "raw": "Access to the path 'E:\\Codex\\2026-11-06\\task-2\\cc-desk\\.audit\\stage11-held-lifetime-observation-001.log' is denied.",
+      "exit": 1,
+      "nativeOutcome": "unknown; no JSON/native-stage receipt",
+      "retried": false,
+      "rights": "0x100440 requested, no VM_READ/debug/escalation",
+      "capture": "0x3c requested; handle metadata only"
+    }
+  ],
+  "preserved": {
+    "stage10Head": "1044345ba6fc22ff943883005e87d9cdfac4f930",
+    "stage10Source": {
+      "path": ".audit/v027-stage10-source.json",
+      "bytes": 15205,
+      "sha256": "57f0eef28dd18fe6c5fefead518da1a745cb96b751c2cfc56c85d75466afa835"
+    },
+    "originalUnknown": "B001 retained; never replayed",
+    "materials": [
+      {
+        "path": ".audit/v027.todo.md",
+        "bytes": 481,
+        "sha256": "6514a3f6eed0403586b6624fb62d519edd2fb01554e2d62fb6706621d9a27622"
+      },
+      {
+        "path": ".audit/v027-stage7-superseded-desk-archive.patch",
+        "bytes": 18774,
+        "sha256": "59ebd85c4f4df6fcf8359dfecbc8205a5c84c1d845044e40852d83ee9eb5a910"
+      },
+      {
+        "path": ".audit/v027-stage7-superseded-native-archive.patch",
+        "bytes": 40373,
+        "sha256": "d692097086409d01aa798caad2d37847d9be485ea398b87a2d7c0756320f754b"
+      }
+    ]
+  },
+  "scope": {
+    "newWindowsAfterFailure": 0,
+    "push": false,
+    "release": false,
+    "versionBump": false,
+    "userInstall": false,
+    "fastMode": "not enabled; no current-thread control receipt"
+  },
+  "minimumNextActions": [
+    "No new observation/window before explicit coordinator scope. Retain old owner and leases.",
+    "Obtain supported read-only lifecycle receipts for the exact existing parent/held Job/child and unknown browser. Prior native observer result is unknown; do not replay it without a new explicit bounded authorization and usable receipt channel. No WMI command-line retry, escalation, default-UDF access or unknown-process kill.",
+    "After proven lifecycle closure, independently verify the explicit directory setter path end-to-end on a new task fixture under a new NoNative Go. Native091 remains separately gated."
+  ],
+  "delivery": {
+    "firstCachedWhitespaceCheck": "failed status2 on four raw logs; commit not executed",
+    "rawEvidence": "preserved byte-for-byte in ZIP; source whitespace policy unchanged"
+  },
+  "rawSnapshotArchive": {
+    "path": ".audit/v027-stage11-raw-evidence.zip",
+    "bytes": 84232,
+    "sha256": "f33e70388e5457075638300548e7de72514271650d7af8947f714932f40a291c",
+    "entries": 49,
+    "roundtrip": "each entry byte-length and SHA256 verified; no extraction"
+  }
+}

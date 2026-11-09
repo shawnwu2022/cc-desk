@@ -71,6 +71,8 @@ function source(v: unknown): SourceRef {
   if (s.target.kind === 'run' && s.basis !== 'launch-environment') return invalid()
   return s
 }
+/** 删除等独立原生协议复用准确的来源 DTO 校验，不扩大 scope 授权。 */
+export function validateProjectionSource(value: unknown): SourceRef { return source(value) }
 function kind(v: unknown): ResourceKind { if (!kinds.includes(v as ResourceKind)) return invalid(); return v as ResourceKind }
 function readRequest(v: ReadRequest): Required<ReadRequest> {
   const r = object(v, ['source', 'resourceKind', 'requestEpoch'], ['query', 'sessionId', 'limit', 'offset'])

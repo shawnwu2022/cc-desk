@@ -4,6 +4,26 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
+## [0.27.0-rc.1]
+
+Added
+
+- Choose Stable, Test or Preview updates. Stable remains the default; returning to Stable never silently downgrades. Updates show their current stage, support bounded cancellation, and reject stale or untrusted candidates.
+- Browse historical release information and manual recovery guidance. Ignore one exact candidate without hiding later versions, and review local update history or retry a failed check.
+- Copy local redacted diagnostics, including bounded version probes for the selected CLI profile. Nothing is uploaded automatically.
+- Permanently delete eligible archived Codex roots on Windows with a preview, two separate confirmations and explicit irreversible-risk warnings. The native root and its execution-time subtree are the scope; the preview does not claim a complete frozen descendant list. Active or unproven sources are refused. Unknown outcomes are checked before any retry.
+
+Fixed
+
+- Restore native Ctrl+V and paste handling in structured Windows Codex sessions without forwarding clipboard text or replaying uncertain input.
+- Validate compressed Codex history when the native API reports a missing logical .jsonl path, while preserving source and session identity. Metadata rename requests explicit login and makes no model call.
+- Keep invalidated delete previews queryable before dispatch. Refresh the original source after a delete is acknowledged, including through read-only reconciliation after switching targets, and preserve unrelated history rows.
+
+Important
+
+- This is a prerelease. Stable Latest remains unchanged. Claude and OpenCode permanent deletion remain disabled because their source or writer protection is not yet sufficient.
+- Isolated product-backend deletion of one synthetic original was verified with Codex 0.167. The permanent-delete document IPC and visible WebView path remain unverified after a blocked test-instance lifecycle. Full descendants and partial failures, Unix, installed application behavior, D20/native All, real AI naming and signed upgrade/return roundtrips remain unverified. These limits are not certified by updater signatures; Windows Authenticode is also separate.
+
 ## [0.26.0]
 
 Fixed

@@ -9,8 +9,8 @@ import { platform } from '@/utils/platform'
 
 /**
  * NativeCliTerminal 组件级粘贴回归：Ctrl+V 的原生 paste 事件必须穿过
- * bindClipboard 守卫链（active/inputEnabled/target 包含）并携带
- * buildPastePayload 的字节到达 binding.reserveUserPaste。
+ * bindClipboard 守卫链（active/inputEnabled/target 包含），并按当前运行的
+ * 平台/CLI 路由到原生快捷键或 buildPastePayload 字节。
  * 守卫链任何一环静默丢弃都会表现为用户侧「Ctrl+V 失效」。
  */
 const io = vi.hoisted(() => ({
@@ -21,7 +21,13 @@ const io = vi.hoisted(() => ({
   readText: vi.fn(),
   readImage: vi.fn(),
   failReservation: false,
-  codexSupport: true,
+  platform: 'windows' as 'windows' | 'linux' | 'macos',
+}))
+vi.mock('@/utils/platform', async original => ({
+  ...await original<object>(),
+  get platform() { return io.platform },
+  get isWindows() { return io.platform === 'windows' },
+  get isMac() { return io.platform === 'macos' },
 }))
 vi.mock('@/terminal/deskNativeTerminal', () => ({
   createDeskNativeTerminalBinding: vi.fn((options: any) => {
@@ -79,9 +85,6 @@ vi.mock('@xterm/xterm', async original => {
 vi.mock('@xterm/addon-fit', () => ({ FitAddon: class { activate() {} dispose() {} fit() {} } }))
 vi.mock('@tauri-apps/api/core', async original => ({ ...await original<object>(), Channel: class { onmessage: any } }))
 vi.mock('@/api/observer', () => ({ onNativeObservation: async () => () => {} }))
-vi.mock('@/api/cliPasteSupport', () => ({
-  codexNativeTextPasteForAttempt: () => Promise.resolve(io.codexSupport),
-}))
 vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({
   writeText: vi.fn().mockResolvedValue(undefined),
   readText: (...args: unknown[]) => io.readText(...args),
@@ -101,7 +104,7 @@ beforeEach(() => {
   io.binding = null; io.bindings = []; io.terminals = []; io.starts = []; io.failReservation = false
   io.readText.mockResolvedValue('')
   io.readImage.mockRejectedValue(new Error('NO_IMAGE'))
-  io.codexSupport = true
+  io.platform = 'windows'
   Object.defineProperty(window, '__CC_DESK_DOCUMENT__', { configurable: true, value: {
     instanceId: 'test-backend',
     async invoke(command: string, input: any) {
@@ -139,13 +142,41 @@ function pasteEvent(text: string): Event {
 }
 
 describe('NativeTerminalPaste_TextEventRoutesToBinding', () => {
+  it.each(['keydown', 'paste'] as const)('CodexPaste_NativeLargeClipboardShortcut_014 %s', async source => {
+    const text = 'large clipboard fixture\n'.repeat(6000)
+    expect(new TextEncoder().encode(text).length).toBeGreaterThan(128 * 1024)
+    io.readText.mockResolvedValue(text)
+    const getData = vi.fn(() => text)
+    const tabs = useNativeTabsStore()
+    const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+    wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } })
+    await vi.advanceTimersByTimeAsync(0)
+    const event = source === 'keydown'
+      ? new KeyboardEvent('keydown', { key: 'v', ctrlKey: true, bubbles: true, cancelable: true })
+      : new Event('paste', { bubbles: true, cancelable: true })
+    Object.defineProperty(event, 'clipboardData', {
+      value: { getData, types: ['text/plain'], items: [] },
+    })
+    wrapper.find('textarea').element.dispatchEvent(event)
+    expect(io.binding.reserveUserPaste).toHaveBeenCalledOnce()
+    await vi.advanceTimersByTimeAsync(0)
+    const produced = await io.binding.reserveUserPaste.mock.results[0].value.produced
+    expect(produced.length).toBe(1)
+    expect(Array.from(produced)).toEqual([0x16])
+    expect(event.defaultPrevented).toBe(true)
+    expect(io.readText).not.toHaveBeenCalled()
+    expect(io.readImage).not.toHaveBeenCalled()
+    expect(getData).not.toHaveBeenCalled()
+    expect(io.binding.sendUserText).not.toHaveBeenCalled()
+  })
+
   it.each([
     ['plain', false, 'hello π🙂', 'hello π🙂'],
     ['multiline', true, 'a\r\nb\rc\n', '\x1b[200~a\nb\nc\n\x1b[201~'],
     ['controls', true, 'a\t\0\x03b', '\x1b[200~a\t\0\x03b\x1b[201~'],
     ['unbracketed', false, 'a\r\nb', 'a\nb'],
-  ] as const)('C5_NoNativeEvidenceUsesCurrentTextMode_003 %s', async (_name, bracketed, text, expected) => {
-    io.codexSupport = false
+  ] as const)('HostPaste_CurrentTextMode_003 %s', async (_name, bracketed, text, expected) => {
+    io.platform = 'linux'
     io.readText.mockResolvedValue(text)
     const tabs = useNativeTabsStore()
     const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
@@ -163,21 +194,21 @@ describe('NativeTerminalPaste_TextEventRoutesToBinding', () => {
     expect(io.readImage).not.toHaveBeenCalled()
   })
 
-  it.each([[false, true], [true, false]])('CodexCompatibility_AttemptFreezesPasteCapability_076 (%s → %s)', async (before, after) => {
-    io.codexSupport = before
+  it.each([['windows', 'linux'], ['linux', 'windows']] as const)('CodexPaste_AttemptFreezesRoute_015 (%s → %s)', async (before, after) => {
+    io.platform = before
     io.readText.mockResolvedValue('safe Desk paste')
     const tabs = useNativeTabsStore()
     const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
     wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } })
     await vi.advanceTimersByTimeAsync(0)
-    io.codexSupport = after
+    io.platform = after
     const paste = async () => {
       const active = io.binding
       wrapper!.find('textarea').element.dispatchEvent(new KeyboardEvent('keydown', { key: 'v', ctrlKey: true, bubbles: true, cancelable: true }))
       await vi.advanceTimersByTimeAsync(0)
       return new TextDecoder().decode(await active.reserveUserPaste.mock.results.at(-1).value.produced)
     }
-    expect(await paste()).toBe(before ? '\x16' : 'safe Desk paste')
+    expect(await paste()).toBe(before === 'windows' ? '\x16' : 'safe Desk paste')
     tabs.applyLaunchStatus(tab.tabId, {
       instanceId: 'test-backend', requestId: tab.requestId,
       run: { runId: tab.runId, generation: tab.generation },
@@ -185,11 +216,12 @@ describe('NativeTerminalPaste_TextEventRoutesToBinding', () => {
     })
     tabs.restart(tab.tabId, { profileId: 'cx', profileRevision: '7' })
     await vi.advanceTimersByTimeAsync(0)
-    expect(await paste()).toBe(after ? '\x16' : 'safe Desk paste')
+    expect(await paste()).toBe(after === 'windows' ? '\x16' : 'safe Desk paste')
     expect(io.starts).toHaveLength(2)
   })
 
   it('Running_ActivePasteReachesBinding_001 — running 激活 tab 的文本 paste 到达 binding 且字节正确', async () => {
+    io.platform = 'linux'
     const tabs = useNativeTabsStore()
     const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
     wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } })
@@ -206,9 +238,9 @@ describe('NativeTerminalPaste_TextEventRoutesToBinding', () => {
     expect(new TextDecoder().decode(await produce())).toBe('hello')
   })
 
-  // codex ≥0.163.0 探测通过后，\x16 由 codex 自行读剪贴板处理文本和图片；
+  // Windows Codex 的原生路由只发送快捷键；不将路由策略当作能力证明。
   // 预留仍走同步 reserveUserPaste 保持输入排序契约，仅 producer 返回 1 字节。
-  it('Running_KeyDownCtrlVCodexSendsNativeChar_002 — codex Ctrl+V 探测通过后经预留转发 \x16', async () => {
+  it('Running_KeyDownCtrlVCodexSendsNativeChar_002 — Windows codex Ctrl+V 经预留转发 \x16', async () => {
     const tabs = useNativeTabsStore()
     const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
     wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } })
@@ -229,23 +261,36 @@ describe('NativeTerminalPaste_TextEventRoutesToBinding', () => {
     expect(io.readImage).not.toHaveBeenCalled()
   })
 
-  // 探测不支持（codex 0.162.x 无 Windows 文本回退）时回退剪贴板读取路径。
-  it('Running_KeyDownCtrlVCodexUnsupportedFallsBackToClipboard_002c — 探测不过时 codex Ctrl+V 走剪贴板路径', async () => {
-    io.codexSupport = false
-    useCliProfilesStore().profiles[0].cli = 'codex'
+  it.each([
+    ['linux', 'codex', 'new', 'keydown'],
+    ['linux', 'codex', 'new', 'paste'],
+    ['macos', 'codex', 'new', 'keydown'],
+    ['macos', 'codex', 'new', 'paste'],
+    ['windows', 'codex', 'raw', 'keydown'],
+    ['windows', 'codex', 'raw', 'paste'],
+    ['windows', 'claude', 'new', 'keydown'],
+    ['windows', 'claude', 'new', 'paste'],
+    ['windows', 'opencode', 'new', 'keydown'],
+    ['windows', 'opencode', 'new', 'paste'],
+  ] as const)('HostPaste_RouteBoundary_016 %s %s %s %s', async (selectedPlatform, cli, action, source) => {
+    io.platform = selectedPlatform
+    useCliProfilesStore().profiles[0].cli = cli
     const tabs = useNativeTabsStore()
-    const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+    const tab = tabs.create({ cli, projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: action === 'raw' ? { kind: 'raw', argv: [] } : { kind: 'new' } })
     wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } })
     await vi.advanceTimersByTimeAsync(0)
     io.readText.mockResolvedValue('from-clipboard')
 
     const textarea = wrapper.find('textarea').element
-    textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'v', ctrlKey: true, bubbles: true, cancelable: true }))
+    textarea.dispatchEvent(source === 'keydown'
+      ? new KeyboardEvent('keydown', { key: 'v', ctrlKey: true, bubbles: true, cancelable: true })
+      : pasteEvent('from-clipboard'))
     await vi.advanceTimersByTimeAsync(0)
 
     expect(io.binding.reserveUserPaste).toHaveBeenCalledOnce()
-    const produce = io.binding.reserveUserPaste.mock.calls[0][0] as () => Promise<Uint8Array>
-    expect(new TextDecoder().decode(await produce())).toBe('from-clipboard')
+    const produced = await io.binding.reserveUserPaste.mock.results[0].value.produced
+    expect(new TextDecoder().decode(produced)).toBe('from-clipboard')
+    expect(io.readText).toHaveBeenCalledTimes(source === 'keydown' ? 1 : 0)
   })
 
   // claude 没有 codex 那样的原生 Ctrl+V 剪贴板读取，仍走剪贴板插件读取路由。
@@ -288,7 +333,7 @@ describe('NativeTerminalPaste_TextEventRoutesToBinding', () => {
     expect(io.binding.sendUserText).toHaveBeenCalledWith('\r')
   })
 
-  // 探测通过时 codex 的 \x16 路径由 codex 自行读剪贴板，同时处理文本和图片，
+  // Windows codex 的 \x16 路径由 CLI 自行读剪贴板，同时处理文本和图片，
   // 无需 CC Desk 分流；图片字节也不必转发。
   it('Running_KeyDownCtrlVCodexImageHandledNatively_004 — codex Ctrl+V 转发 \x16 后由 CLI 原生处理图片', async () => {
     const tabs = useNativeTabsStore()
@@ -309,9 +354,9 @@ describe('NativeTerminalPaste_TextEventRoutesToBinding', () => {
     expect(io.readImage).not.toHaveBeenCalled()
   })
 
-  // 探测不支持时 codex 与 claude 相同：无文本走图片键位分流。
-  it('Running_KeyDownCtrlVCodexUnsupportedImageFallback_004c — 探测不过时 codex 图片走键位分流', async () => {
-    io.codexSupport = false
+  // 其他平台的 codex 保留无文本时的图片键位分流。
+  it.each(['linux', 'macos'] as const)('HostPaste_CodexImageRoute_017 %s', async selectedPlatform => {
+    io.platform = selectedPlatform
     useCliProfilesStore().profiles[0].cli = 'codex'
     const tabs = useNativeTabsStore()
     const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
@@ -398,6 +443,54 @@ describe('NativeTerminalPaste_TextEventRoutesToBinding', () => {
     expect(reservation.cancel).toHaveBeenCalledOnce()
     expect(io.binding.reserveUserPaste).not.toHaveBeenCalled()
     expect(tabs.tab(tab.tabId)?.errorCode).toBeNull()
+  })
+
+  it.each(['keydown', 'paste'] as const)('CodexPaste_StaleNativeIntentCancels_018 %s', async source => {
+    const tabs = useNativeTabsStore()
+    const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+    wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } })
+    await vi.advanceTimersByTimeAsync(0)
+    const oldBinding = io.binding
+    wrapper.find('textarea').element.dispatchEvent(source === 'keydown'
+      ? new KeyboardEvent('keydown', { key: 'v', ctrlKey: true, bubbles: true, cancelable: true })
+      : pasteEvent('old clipboard'))
+    expect(oldBinding.reserveUserPaste).toHaveBeenCalledOnce()
+    tabs.applyLaunchStatus(tab.tabId, {
+      instanceId: 'test-backend', requestId: tab.requestId, run: { runId: tab.runId, generation: tab.generation },
+      phase: 'exited', revision: '2', failure: null,
+    })
+    tabs.restart(tab.tabId, { profileId: 'cx', profileRevision: '7' })
+    await vi.advanceTimersByTimeAsync(0)
+    const reservation = oldBinding.reserveUserPaste.mock.results[0].value
+    await expect(reservation.settled).resolves.toBeUndefined()
+    expect(await reservation.produced).toEqual(new Uint8Array())
+    expect(reservation.cancel).toHaveBeenCalledOnce()
+    expect(io.binding).not.toBe(oldBinding)
+    expect(io.binding.reserveUserPaste).not.toHaveBeenCalled()
+    expect(io.readText).not.toHaveBeenCalled()
+    expect(io.readImage).not.toHaveBeenCalled()
+    expect(tabs.tab(tab.tabId)?.errorCode).toBeNull()
+  })
+
+  it.each(['keydown', 'paste'] as const)('CodexPaste_WriteFailureNeverFallsBack_019 %s', async source => {
+    const tabs = useNativeTabsStore()
+    const tab = tabs.create({ cli: 'codex', projectId: 'project', projectPath: '/repo', profileId: 'cx', profileRevision: '7', action: { kind: 'new' } })
+    wrapper = mount(NativeCliTerminal, { props: { tabId: tab.tabId, active: true } })
+    await vi.advanceTimersByTimeAsync(0)
+    io.failReservation = true
+    io.readText.mockResolvedValue('must not replay this clipboard')
+    wrapper.find('textarea').element.dispatchEvent(source === 'keydown'
+      ? new KeyboardEvent('keydown', { key: 'v', ctrlKey: true, bubbles: true, cancelable: true })
+      : pasteEvent('must not replay this clipboard'))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(io.binding.reserveUserPaste).toHaveBeenCalledOnce()
+    const reservation = io.binding.reserveUserPaste.mock.results[0].value
+    expect(await reservation.produced).toEqual(Uint8Array.of(0x16))
+    expect(reservation.cancel).not.toHaveBeenCalled()
+    expect(io.readText).not.toHaveBeenCalled()
+    expect(io.readImage).not.toHaveBeenCalled()
+    expect(io.binding.sendUserText).not.toHaveBeenCalled()
+    expect(tabs.tab(tab.tabId)?.errorCode).toBe('NATIVE_INPUT_PAUSED')
   })
 
   it('Paste_UnreadableCancels_007 — 剪贴板不可读时取消预留且后续键盘仍可提交', async () => {

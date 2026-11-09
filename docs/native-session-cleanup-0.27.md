@@ -1,0 +1,48 @@
+# 原生归档与清理能力核查
+
+2026-11-06 在 WSK-MSI 读取已安装程序的版本与帮助，并对照官方文档。命令只使用任务专属配置环境，不读取或删除用户会话。此记录证明命令语义的发现，不证明 Desk 已完成删除功能或真实删除验收。版本只标识本次观察，不作为功能准入白名单。
+
+## 已观察的接口
+
+| CLI 与观察版本 | 原生接口 | 对象与恢复范围 |
+| --- | --- | --- |
+| Codex CLI 0.166.0 | `archive <SESSION>`、`unarchive <SESSION>` | 官方文档说明归档及恢复会尝试处理所派生子会话与后代，不能预览为单行副作用。 |
+| Codex CLI 0.166.0 | `delete <SESSION>` | 永久删除历史。`--force` 只接受 UUID。名称解析不能代替精确身份；非交互强制标志本身不是 Desk 删除授权。 |
+| OpenCode 2.2.5 | `session delete <sessionID>` | 明确删除目标及子会话。帮助同时提供 `--standalone` 和 `--server`，必须证明与原投影相同的数据库或服务身份，不能默认连接另一个后台服务。 |
+| Claude Code 2.1.318 | `purge [path]` | 清除项目级本地数据，范围包括历史、任务、日志、文件修改记录等，不是单会话删除。不能映射成归档清理按钮。 |
+| Claude Code 2.1.318 | `rm <id>` | 面向后台会话，可能涉及工作树；官方文档明确对话历史仍保留。不能映射成历史永久删除。 |
+
+来源为 [Codex CLI reference](https://learn.chatgpt.com/docs/cli/reference)、[OpenCode commands](https://opencode.ai/v2/docs/cli/commands/) 和 [Claude Code CLI reference](https://code.claude.com/docs/en/cli-reference)。现有 Desk 归档是列表投影元数据；Codex CLI 原生归档是另一层状态。两者不能共用“已删除”的结果。
+
+## 当前交付状态
+
+main 已有 Desk 归档、恢复与 Codex 原生 unarchive。此次更新器改动没有增加或调用 purge、rm、delete、目录删除，也没有把已有原生恢复能力标为新的清理交付。
+
+永久清理尚未实现。现有历史投影隐藏 OpenCode 子会话，Codex 子会话关系也不是当前 DTO 的完整契约。没有完整级联预览，不能安全地将已发现的原生命令直接连接到 GUI 确认。当前独立分支已包含准确 OpenCode v2 DB 探测、channel 来源校验和 `session_v2` 优先读取；不能沿用早期修复分支状态推断本分支完全缺少 v2 适配，也不为此整支合入独立工作。
+
+## 后续实现的固定边界
+
+1. 从已认证文档和后端保留的精确来源建立清理预约。绑定 profile revision、项目、根身份、原生 session key 与完整子会话集合。前端传不透明预约 ID，不传路径或命令。
+2. 使用原生只读能力核对级联范围。列表不完整、来源冲突、活动、启动、恢复中或状态未知时拒绝清理预约或执行；未知本身不禁止已授权的无副作用只读观察，仍须准确标明覆盖范围。只按已配置的原程序及冻结环境探测能力，不用 CLI 版本白名单。
+3. 预览逐项显示对象、CLI、项目、子会话数量、Desk 列表移除与原生永久删除的区别、可恢复性。永久删除必须单独明确确认。
+4. 执行前重读来源、关系与运行状态。状态变化则预约失效，重新预览。不能 fallback 到历史删除接口或猜路径搬删目录。
+5. 一个预约只提交一次。已知部分失败逐项报告；超时或未知退出保留准确对象与所有权，先只读协调，不自动重放。不得将“命令已启动”报告成“全部已删除”。
+6. 开发验证只能创建和清理任务专属的合成源。要求覆盖活动子会话、跨来源同 ID、级联变化、重复点击、部分失败、超时与未知结果。
+
+这些条件仍是未完成开发项。恢复旧版、真实 CLI 删除、安装版 WebView、现场身份关联和 AI 命名的验收分别记录。
+
+## 原生级联的并发边界复核
+
+本轮读取了与本机观察版本对应的官方 tag 源码，而不只看命令名称：
+
+- [Codex 0.166.0 thread/delete](https://github.com/openai/codex/blob/rust-v0.166.0/codex-rs/app-server/src/request_processors/thread_delete.rs) 在请求执行时重新计算 spawn 子树，再逐项准备并交给原生 store 删除。原请求没有预览集合摘要。
+- [OpenCode 2.2.5 Session.remove](https://github.com/anomalyco/opencode/blob/v2.2.5/packages/core/src/session.ts) 会中断目标、等待 idle、取消任务、关闭 transport，再读取并递归删除子会话。
+- [OpenCode 2.2.5 HTTP handler](https://github.com/anomalyco/opencode/blob/v2.2.5/packages/server/src/handlers/session.ts) 仅按 sessionID 调用 remove，没有把预览 revision、子会话集合或状态条件传入该调用。
+
+因此调用一次原生命令本身不能证明只作用于预览时的准确集合。Desk 自己的互斥锁及维护 gate 只约束 Desk 进程，不约束其他 CLI 实例。重复查询能发现已经发生的变化，但不能替代原生 mutation 的条件比较；尤其不能把 OpenCode 的“先中断”误当“活动时拒绝”。此边界正在独立安全审视，尚未据此开放永久清理，不能把未知的原生保证写成已验证能力。
+
+## 后续已核实结论
+
+独立审查已完成，当前不开放原生归档或永久删除。归档抽屉新增只读身份与拒绝说明，不声称完整子树预览。固定源码 commit、原生锁的准确作用、动态级联/活动中断反例以及解阻条件见 [原生清理能力阻塞](native-cleanup-blocker-0.27.md)。上方尚待复核的状态以该证据结论为准，完整清理链路仍未交付。
+
+新增 [只读预览窄范围分解](native-cleanup-readonly-preview-0.27.md) 独立检查公开关系查询、单页完整性、服务活动覆盖和同来源绑定。公开只读能力存在；完整 native 级联/授权域仍不能由当前根历史列表证明，预览与执行的缺口分别保留。

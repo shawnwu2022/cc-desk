@@ -1,0 +1,130 @@
+{
+  "from": {
+    "tag": "rust-v0.166.0",
+    "commit": "6ff1e1ca3b30fc8b914720681fcf5fe62e95f856"
+  },
+  "actual": {
+    "tag": "rust-v0.167.0",
+    "commit": "086ccc833bc9cf01024ad2dd6af7dbd421b6bf9a",
+    "versionStdout": "codex-cli 0.167.0",
+    "executableSha256": "edfdd48f8b458af0906e507b4cb05217b326c3d6e515e9f024e05e3b8d650f70",
+    "executableBytes": 369062704
+  },
+  "scope": "bounded isolation and native deletion branches; not full upstream tree review",
+  "files": [
+    {
+      "path": "codex-rs/config/src/loader/mod.rs",
+      "blobSha": "6e1dd082fac8938f358cf21af66d1d3b107292a4",
+      "compared": true,
+      "identicalTo166": false
+    },
+    {
+      "path": "codex-rs/core/src/config/mod.rs",
+      "blobSha": "8d93436455c461e1cd79753e369e116bc79f326a",
+      "compared": true,
+      "identicalTo166": false
+    },
+    {
+      "path": "codex-rs/cli/src/main.rs",
+      "blobSha": "1c3fe17c1cfb536c5402453f6efabd87548ea1e9",
+      "compared": true,
+      "identicalTo166": false
+    },
+    {
+      "path": "codex-rs/app-server/src/lib.rs",
+      "blobSha": "b3aa3b978b07b23f6cb33ee560fc0929efd632fc",
+      "compared": true,
+      "identicalTo166": true
+    },
+    {
+      "path": "codex-rs/app-server/src/startup_config.rs",
+      "blobSha": "71dc648265e811e919854c3dd78f125ef7db5150",
+      "compared": true,
+      "identicalTo166": true
+    },
+    {
+      "path": "codex-rs/app-server/src/message_processor.rs",
+      "blobSha": "c234acbc8b2a9e6cafaf1d88c433ee648ebcd49a",
+      "compared": true,
+      "identicalTo166": false
+    },
+    {
+      "path": "codex-rs/core-plugins/src/manager.rs",
+      "blobSha": "3fcc3fdf4917de1c032d01e6d32650a68c360cc7",
+      "compared": true,
+      "identicalTo166": false
+    },
+    {
+      "path": "codex-rs/ext/skills/src/host_roots.rs",
+      "blobSha": "2559b4bc7fe0f800604ebd9a946dd14afd84bb62",
+      "compared": true,
+      "identicalTo166": true
+    },
+    {
+      "path": "codex-rs/app-server/src/skills_watcher.rs",
+      "blobSha": "da3d1f7076b53a7e6eeb289a6f8242c1ac437219",
+      "compared": true,
+      "identicalTo166": true
+    },
+    {
+      "path": "codex-rs/protocol/src/protocol.rs",
+      "blobSha": "a0af620c340a0a98037795ca845bf0e855a56ad2",
+      "compared": true,
+      "identicalTo166": false
+    },
+    {
+      "path": "codex-rs/rollout/src/writer_lock.rs",
+      "blobSha": "31068707a2731303ec48a0cfcf154923d8e75eeb",
+      "compared": true,
+      "identicalTo166": true
+    },
+    {
+      "path": "codex-rs/app-server/src/request_processors/thread_delete.rs",
+      "blobSha": "7fd33e0997e1aae7479f33cc78bf7b6a38d9d4bf",
+      "compared": true,
+      "identicalTo166": true
+    },
+    {
+      "path": "codex-rs/thread-store/src/local/delete_thread.rs",
+      "blobSha": "ab13996c74ea6f3a70e27e248eb86cf3f7bf5d24",
+      "compared": true,
+      "identicalTo166": true
+    },
+    {
+      "path": "codex-rs/config/src/config_toml.rs",
+      "blobSha": "cd1c40056e191533b5ba5d1ea22c1940d6738177",
+      "compared": true,
+      "identicalTo166": false
+    },
+    {
+      "path": "codex-rs/config/defaults.toml",
+      "blobSha": "b4b0a8323cb87b187997fdc848e901b395810ace",
+      "compared": true,
+      "identicalTo166": true
+    },
+    {
+      "path": "codex-rs/features/src/lib.rs",
+      "blobSha": "8a9a0975edee02d4fa4e2aeee0d69b2d849e7a97",
+      "compared": true,
+      "identicalTo166": false
+    },
+    {
+      "path": "codex-rs/utils/home-dir/src/lib.rs",
+      "blobSha": "caa43569c78bae9f5cc875092f378f4d935b8063",
+      "compared": true,
+      "identicalTo166": true
+    }
+  ],
+  "diffReview": {
+    "loader": "Typed ConfigRequirements/TryFrom conversions; system locations, project root and source layering unchanged",
+    "coreConfig": "Typed TOML conversion and AppsEarlyResourceDiscovery flag; sqlite/log/root choice unchanged",
+    "cli": "Dispatcher/TUI refactor; strict startup-config still same implementation/default LoaderOverrides",
+    "messageProcessor": "Disconnect cancellation/guardian dispatch; existing metadata dispatch/startup unchanged",
+    "pluginManager": "Cache-key Apps entries normalization; startup plugins_enabled gate unchanged",
+    "protocol": "Audio/network approval fields and tests; SessionMeta unchanged",
+    "features": "New disabled features and unrelated world-state flag; chosen plugin/hooks control keys unchanged"
+  },
+  "githubCompareFilesTruncatedAt": 300,
+  "individualChangedSourcesCompared": true,
+  "stageBApproved": false
+}

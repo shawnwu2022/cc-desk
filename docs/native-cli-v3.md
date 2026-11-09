@@ -172,6 +172,14 @@ Key properties:
 - partial/unknown writes are never replayed automatically;
 - ambiguous `onData` bytes are never guessed to be terminal protocol replies.
 
+Windows structured Codex attempts freeze the native clipboard route. Ctrl-V and
+DOM paste each reserve one ordered user-paste intent containing only `0x16`.
+Desk does not read clipboard contents or probe a CLI version for this route.
+Other CLIs, non-Windows platforms and raw actions retain the host text path.
+Missing optional identity evidence cannot disable native paste, and a failed or
+unknown shortcut write never falls back to sending text. This routing choice
+does not certify old or custom CLI implementations. See [paste contracts](paste-framing.md).
+
 ## Output path
 
 Native output uses a bounded stream with explicit offsets and acknowledgements.
@@ -717,3 +725,11 @@ this does not remove the old auxiliary admission for unmigrated native layouts o
 silently select a different installation after an upgrade. Fixtures cover argument
 ownership and held-file protection; real native TUI hook delivery, installed package
 layout and field automatic title synchronization remain unaccepted.
+
+## 0.27：窄范围原生永久删除
+
+用户显式选择后，Windows 的 Codex 已原生归档根可走 `cli_preview_session_delete` → 独立二次确认 → `cli_confirm_session_delete`，结果只读核查走 `cli_inspect_session_delete`。预览不启动 CLI，取消不 mutation；不回退 Legacy 删除、直接 SQL、猜目录 purge 或软归档。新 DTO/caller/profile/held SourceRef 契约与 [永久删除证据](permanent-delete-0.27.md) 一致。
+
+授权语义是同精确 profile 选择的原生 store 中的根及其原生子树，不是事前冻结成员列表；完整数量与逐后代结果没有独立证明。确认前可见来源/配置/根记录变化须重预览；确认明确动态成员及原生关联维护风险，不把 writer 锁解释成未来图租约。
+
+受控短命 helper 只 initialize、thread/read(includeTurns=false)、thread/delete。实际 startup codexHome、rollout/header/cwd 与 held 来源必须核验；Windows 两个非 reparse 容器句柄与独占 admission 保留到直接进程 reap 且整个 own Job 为空。未知操作按物理 Root＋归一 UUID 跨 profile/caller 去重，root 缺失不伪造 ACK，未知只读协调不重发。OpenCode/Claude 和未实现等价容器保护的 Unix 当前不执行该 mutation。

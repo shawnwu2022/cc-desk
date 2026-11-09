@@ -81,26 +81,6 @@ pub(crate) async fn cli_discover_programs(
     .map_err(|_| error("DISCOVERY_UNAVAILABLE"))?
 }
 
-// 运行时能力查询：每次启动独立确认 codex Ctrl+V 文本回退，不缓存程序路径。
-#[tauri::command]
-pub(crate) async fn cli_codex_native_paste_support(
-    window: WebviewWindow,
-    request: Value,
-) -> Result<super::paste_support::CodexNativePasteSupport, SafeError> {
-    let caller = window.label().to_string();
-    let request: super::paste_support::PasteSupportRequest =
-        serde_json::from_value(request).map_err(|_| SafeError::invalid("request"))?;
-    tauri::async_runtime::spawn_blocking(move || {
-        super::paste_support::native_paste_support(
-            &WorkspaceRepository::production()?,
-            &caller,
-            &request,
-        )
-    })
-    .await
-    .map_err(|_| error("PASTE_SUPPORT_TASK_FAILED"))?
-}
-
 // Raw document-authenticated launch boundary. No wire owner fields.
 #[tauri::command]
 pub(crate) async fn cli_start(
@@ -163,6 +143,31 @@ pub(crate) async fn cli_rename_session(
     runtime: State<'_, Arc<NativeRuntime>>,
 ) -> Result<super::native_rename::RenameReceipt, SafeError> {
     runtime.rename_session(&webview, &request).await
+}
+
+#[tauri::command]
+pub(crate) async fn cli_preview_session_delete(
+    webview: Webview,
+    request: Request<'_>,
+    runtime: State<'_, Arc<NativeRuntime>>,
+) -> Result<super::native_delete::Preview, SafeError> {
+    runtime.preview_session_delete(&webview, &request).await
+}
+#[tauri::command]
+pub(crate) async fn cli_confirm_session_delete(
+    webview: Webview,
+    request: Request<'_>,
+    runtime: State<'_, Arc<NativeRuntime>>,
+) -> Result<super::native_delete::Receipt, SafeError> {
+    runtime.confirm_session_delete(&webview, &request).await
+}
+#[tauri::command]
+pub(crate) async fn cli_inspect_session_delete(
+    webview: Webview,
+    request: Request<'_>,
+    runtime: State<'_, Arc<NativeRuntime>>,
+) -> Result<super::native_delete::Receipt, SafeError> {
+    runtime.inspect_session_delete(&webview, &request).await
 }
 
 #[tauri::command]

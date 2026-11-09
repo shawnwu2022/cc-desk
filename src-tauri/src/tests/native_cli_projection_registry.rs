@@ -191,6 +191,129 @@ fn NativeRename_AuthorityRequiresCurrentExactOwnerAndPositiveProject_006() {
 
 #[test]
 #[allow(non_snake_case)]
+fn NativeRename_CodexCompressedLogicalPathRetainsAuthority_046() {
+    let root = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let live = Arc::new(AtomicBool::new(true));
+    let registry = ScopeRegistry::new(4);
+    let mut g = grant(root.path(), "unused", live.clone());
+    g.cli = CliKind::Codex;
+    g.projects = vec![AdmittedProject {
+        id: "project".into(),
+        root: Root::open(project.path()).unwrap(),
+        paths: vec![project.path().to_owned()],
+    }];
+    if let ScopeTarget::Profile { project_ids, .. } = &mut g.target {
+        *project_ids = vec!["project".into()];
+    }
+    fs::create_dir(root.path().join("sessions")).unwrap();
+    let path = root.path().join("sessions/rollout.jsonl");
+    let compressed = path.with_extension("jsonl.zst");
+    let id = "00000000-0000-4000-8000-000000000046";
+    let metadata = serde_json::json!({"type":"session_meta","payload":{"id":id,"cwd":project.path(),"source":"cli"}});
+    let bytes = format!("{metadata}\n");
+    let encoded = zstd::stream::encode_all(bytes.as_bytes(), 1).unwrap();
+    fs::write(&compressed, &encoded).unwrap();
+    let source = registry.register(g).unwrap();
+    let key = serde_json::to_string(&serde_json::json!([
+        "local",
+        "codex",
+        source.source_root_key,
+        id
+    ]))
+    .unwrap();
+    let authority = registry.authorize_rename(&owner(), &source, &key).unwrap();
+    let thread = serde_json::json!({"id":id,"cwd":project.path(),"path":path});
+
+    authority.check_thread(&thread).unwrap();
+    // 重命名的兼容回退不能扩大永久删除准入。
+    assert_eq!(
+        authority.check_delete_thread(&thread).unwrap_err().code,
+        "SESSION_NOT_FOUND"
+    );
+    let mut wrong = thread.clone();
+    wrong["path"] = serde_json::json!(project.path().join("sessions/rollout.jsonl"));
+    assert!(authority.check_thread(&wrong).is_err());
+    wrong = thread.clone();
+    wrong["path"] = serde_json::json!(root.path().join("sessions/rollout.log"));
+    fs::write(root.path().join("sessions/rollout.log.zst"), &encoded).unwrap();
+    assert_eq!(
+        authority.check_thread(&wrong).unwrap_err().code,
+        "SESSION_NOT_FOUND"
+    );
+
+    // 明文存在时保持优先，即使内容无效也不能改读压缩副本。
+    fs::write(&path, b"{}\n").unwrap();
+    assert_eq!(
+        authority.check_thread(&thread).unwrap_err().code,
+        "SESSION_ORIGIN_AMBIGUOUS"
+    );
+    fs::remove_file(&path).unwrap();
+    fs::create_dir(&path).unwrap();
+    assert_eq!(
+        authority.check_thread(&thread).unwrap_err().code,
+        "SOURCE_NOT_REGULAR"
+    );
+    fs::remove_dir(&path).unwrap();
+
+    let mut wrong_meta = metadata.clone();
+    wrong_meta["payload"]["id"] = serde_json::json!("00000000-0000-4000-8000-000000000047");
+    fs::write(
+        &compressed,
+        zstd::stream::encode_all(format!("{wrong_meta}\n").as_bytes(), 1).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        authority.check_thread(&thread).unwrap_err().code,
+        "SESSION_ORIGIN_AMBIGUOUS"
+    );
+    wrong_meta = metadata;
+    wrong_meta["payload"]["cwd"] = serde_json::json!(root.path());
+    fs::write(
+        &compressed,
+        zstd::stream::encode_all(format!("{wrong_meta}\n").as_bytes(), 1).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        authority.check_thread(&thread).unwrap_err().code,
+        "SESSION_ORIGIN_AMBIGUOUS"
+    );
+    fs::write(&compressed, b"not zstd").unwrap();
+    assert_eq!(
+        authority.check_thread(&thread).unwrap_err().code,
+        "SOURCE_INVALID"
+    );
+    let oversized = format!(
+        "{}\n{bytes}",
+        "x".repeat(super::super::scoped_fs::Limits::default().file_bytes + 1)
+    );
+    fs::write(
+        &compressed,
+        zstd::stream::encode_all(oversized.as_bytes(), 1).unwrap(),
+    )
+    .unwrap();
+    assert!(authority.check_thread(&thread).is_err());
+    fs::remove_file(&compressed).unwrap();
+    fs::create_dir(&compressed).unwrap();
+    assert_eq!(
+        authority.check_thread(&thread).unwrap_err().code,
+        "SOURCE_NOT_REGULAR"
+    );
+    fs::remove_dir(&compressed).unwrap();
+    assert_eq!(
+        authority.check_thread(&thread).unwrap_err().code,
+        "SESSION_NOT_FOUND"
+    );
+    fs::write(&compressed, &encoded).unwrap();
+    live.store(false, Ordering::SeqCst);
+    assert_eq!(
+        authority.check_thread(&thread).unwrap_err().code,
+        "SCOPE_REVOKED"
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
 fn NativeRename_UnregisteredProjectAndRunScopesNeverAuthorize_007() {
     let temp = tempfile::tempdir().unwrap();
     let registry = ScopeRegistry::new(8);

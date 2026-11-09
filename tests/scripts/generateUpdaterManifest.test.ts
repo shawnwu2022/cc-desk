@@ -156,6 +156,7 @@ describe('generate updater manifest', () => {
     try {
       mkdirSync(dirname(fixtureScript), { recursive: true })
       copyFileSync(scriptPath, fixtureScript)
+      copyFileSync(resolve(process.cwd(), 'scripts/release-version.mjs'), join(root, 'scripts/release-version.mjs'))
       copyFileSync(resolve(process.cwd(), 'scripts/updater-signature.js'), join(root, 'scripts/updater-signature.js'))
       copyFileSync(resolve(process.cwd(), 'scripts/release-notes.js'), join(root, 'scripts/release-notes.js'))
       mkdirSync(join(root, 'docs'))

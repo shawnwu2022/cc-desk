@@ -21,7 +21,7 @@ const official = (): UpdateInfo => ({ version: '0.99.0', currentVersion: '0.23.4
   channel: 'stable', installEligible: true, admissionId: '00000000-0000-4000-8000-000000000001', officialRelease: { id: 1, tag: 'v0.99.0', sourceSha: 'a'.repeat(40) } })
 const wrappers: VueWrapper[] = []
 beforeEach(() => { setActivePinia(createPinia()); io.check.mockReset().mockResolvedValue(official()); io.install.mockReset() })
-afterEach(() => { wrappers.splice(0).forEach(wrapper => wrapper.unmount()); vi.useRealTimers(); document.body.innerHTML = '' })
+afterEach(() => { wrappers.splice(0).forEach(wrapper => wrapper.unmount()); vi.useRealTimers(); vi.restoreAllMocks(); document.body.innerHTML = '' })
 function background() {
   const wrapper = mount(defineComponent({ setup() { useBackgroundUpdateCheck(); return () => null } }))
   wrappers.push(wrapper); return wrapper
@@ -33,10 +33,16 @@ function render(component: any) {
 
 // 首屏不发请求，定期只读检查；离开组件后不留下定时器。
 it('Update_BackgroundDelayAndInterval_001', async () => {
+  // jsdom 的 Storage.setItem 用 JS timeout 派发宿主 storage 事件；此例只计应用定时器。
+  // 保留真实 store 和原零剩余断言，在浏览器存储边界用同步值语义替代该宿主实现。
+  const values = new Map<string, string>()
+  vi.spyOn(Storage.prototype, 'getItem').mockImplementation(key => values.get(key) ?? null)
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation((key, value) => { values.set(key, value) })
   vi.useFakeTimers(); const wrapper = background()
   await vi.advanceTimersByTimeAsync(29_999); expect(io.check).not.toHaveBeenCalled()
   await vi.advanceTimersByTimeAsync(1); expect(io.check).toHaveBeenCalledTimes(1)
   expect(useUpdateStore().availableVersion).toBe('0.99.0')
+  expect(values.has('cc-desk-update-preferences-v1')).toBe(true)
   await vi.advanceTimersByTimeAsync(6 * 60 * 60 * 1000 - 1); expect(io.check).toHaveBeenCalledTimes(1)
   await vi.advanceTimersByTimeAsync(1); expect(io.check).toHaveBeenCalledTimes(2)
   expect(io.install).not.toHaveBeenCalled()

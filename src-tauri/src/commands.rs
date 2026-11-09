@@ -607,3 +607,26 @@ pub(crate) async fn native_unarchive_session(
 ) -> std::result::Result<(), crate::cli::types::SafeError> {
     runtime.unarchive(&webview, &request).await
 }
+
+#[tauri::command]
+pub(crate) async fn native_probe_cli_version(
+    webview: tauri::Webview,
+    request: tauri::ipc::Request<'_>,
+    runtime: tauri::State<'_, std::sync::Arc<crate::cli::native_runtime::NativeRuntime>>,
+) -> Result<
+    crate::cli::launch_service::diagnostic_versions::ProbeResult,
+    crate::cli::types::SafeError,
+> {
+    runtime.probe_cli_version(&webview, &request).await
+}
+#[tauri::command]
+pub(crate) fn native_cancel_cli_version_probe(
+    webview: tauri::Webview,
+    request: tauri::ipc::Request<'_>,
+    runtime: tauri::State<'_, std::sync::Arc<crate::cli::native_runtime::NativeRuntime>>,
+) -> Result<
+    crate::cli::launch_service::diagnostic_versions::CancelResult,
+    crate::cli::types::SafeError,
+> {
+    runtime.cancel_cli_version(&webview, &request)
+}

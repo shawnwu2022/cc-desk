@@ -106,6 +106,8 @@ pub struct AppConfig {
     pub claude_env_vars: Option<std::collections::HashMap<String, String>>,
     #[serde(rename = "updaterProxy")]
     pub updater_proxy: Option<String>,
+    #[serde(rename = "updaterChannel")]
+    pub updater_channel: Option<String>,
     pub language: Option<String>,
 }
 

@@ -27,6 +27,7 @@ import { useSidebarStore } from '@/stores/sidebar'
 import { useProjectResourcesStore } from '@/stores/projectResources'
 import { useNewSessionDraftStore } from '@/stores/newSessionDraft'
 import { useCliSupportStore } from '@/stores/cliSupport'
+import { useUpdateStore } from '@/stores/update'
 import { fixtureSessions, fixtureProfiles, fixtureResources, longProjectName, projectPaths } from './fixtures'
 import { blockedHostCalls } from './tauriStub'
 import { installHistoryFixture } from './historyFixture'
@@ -128,9 +129,16 @@ if (scenario === 'resume-session' || scenario === 'resume-history') {
 }
 
 if (scenario === 'projects') shell.navigate('projects')
-else if (scenario === 'terminal-settings' || scenario === 'launch-configurations' || scenario === 'historical-versions') {
-  sidebar.activeSettingsSection = scenario === 'terminal-settings' ? 'terminal' : scenario === 'historical-versions' ? 'update' : 'launch-configurations'
+else if (scenario === 'terminal-settings' || scenario === 'launch-configurations' || scenario === 'historical-versions' || scenario === 'update-preferences') {
+  sidebar.activeSettingsSection = scenario === 'terminal-settings' ? 'terminal' : scenario === 'historical-versions' || scenario === 'update-preferences' ? 'update' : 'launch-configurations'
   shell.navigate('settings')
+}
+if (scenario === 'update-preferences') {
+  const updates = useUpdateStore()
+  updates.setUpdateInfo({ version: '0.99.0', currentVersion: '0.18.1', hasUpdate: true, releaseNotes: 'Synthetic update preference review.', downloadUrl: '', platformAsset: null,
+    selectedChannel: 'stable', channel: 'stable', installEligible: true, admissionId: '00000000-0000-4000-8000-000000000001',
+    officialRelease: { id: 1, tag: 'v0.99.0', sourceSha: 'a'.repeat(40) } })
+  updates.recordFailure({ code: 'UPDATER_REQUEST_FAILED', stage: 'check' })
 }
 if (scenario === 'resources') shell.drawerVisible = true
 if (scenario === 'new-session') { draft.open(project, 'codex'); draft.title = 'Review terminal continuity' }

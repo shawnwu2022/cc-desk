@@ -205,7 +205,7 @@ pub(crate) fn exchange(
             .ok_or_else(|| super::profiles::error("RENAME_FAILED"))
     }
     send(
-        json!({"id":1,"method":"initialize","params":{"clientInfo":{"name":"cc_desk","version":env!("CARGO_PKG_VERSION")}}}),
+        json!({"id":1,"method":"initialize","params":{"clientInfo":{"name":"cc_desk","version":env!("CARGO_PKG_VERSION")},"capabilities":{"explicitGatewayOauth":true}}}),
     )?;
     result(receive(1)?, 1)?;
     send(json!({"method":"initialized"}))?;

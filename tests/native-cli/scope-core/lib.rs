@@ -5,6 +5,9 @@
 mod cache;
 #[path = "../../../src-tauri/src/cli/native_projection/catalog.rs"]
 mod catalog;
+#[cfg(all(test, windows))]
+#[path = "../../../src-tauri/src/tests/claude_delete_guards.rs"]
+mod claude_delete_guards;
 #[cfg(windows)]
 #[path = "../../../src-tauri/src/cli/codex_cmd.rs"]
 mod codex_cmd;

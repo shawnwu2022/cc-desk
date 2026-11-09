@@ -1,5 +1,7 @@
 //! Shared update HTTP transport; never imports CLI environment configuration.
-use crate::updater_policy::{failure, validated_proxy, UpdateFailure, REPOSITORY};
+use crate::updater_policy::{
+    failure, validated_proxy, UpdateFailure, MAX_PACKAGE_BYTES, REPOSITORY,
+};
 use serde::Serialize;
 use std::time::{Duration, Instant};
 
@@ -85,6 +87,67 @@ pub(crate) async fn bytes(
             return Err(failure("UPDATER_MANIFEST_INVALID", "provenance"));
         }
         data.extend_from_slice(&chunk);
+    }
+    Ok(data)
+}
+
+pub(crate) async fn package_bytes(
+    client: &reqwest::Client,
+    url: &str,
+    expected_size: u64,
+    mut progress: impl FnMut(u64),
+) -> Result<Vec<u8>, UpdateFailure> {
+    let mismatch = || failure("UPDATER_PACKAGE_MISMATCH", "download");
+    if expected_size == 0 || expected_size > MAX_PACKAGE_BYTES {
+        return Err(mismatch());
+    }
+    let network_failure = |error: reqwest::Error| {
+        failure(
+            if error.is_timeout() {
+                "UPDATER_TIMEOUT"
+            } else {
+                "UPDATER_REQUEST_FAILED"
+            },
+            "download",
+        )
+    };
+    let mut response = client
+        .get(url)
+        .timeout(Duration::from_secs(180))
+        .send()
+        .await
+        .map_err(network_failure)?;
+    if !response.status().is_success() {
+        let limited = response.status().as_u16() == 429
+            || response
+                .headers()
+                .get("x-ratelimit-remaining")
+                .is_some_and(|h| h == "0");
+        return Err(failure(
+            if limited {
+                "UPDATER_RATE_LIMITED"
+            } else {
+                "UPDATER_HTTP_REJECTED"
+            },
+            "download",
+        ));
+    }
+    if response
+        .content_length()
+        .is_some_and(|size| size != expected_size)
+    {
+        return Err(mismatch());
+    }
+    let mut data = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(network_failure)? {
+        if (data.len() as u64).saturating_add(chunk.len() as u64) > expected_size {
+            return Err(mismatch());
+        }
+        data.extend_from_slice(&chunk);
+        progress(data.len() as u64);
+    }
+    if data.len() as u64 != expected_size {
+        return Err(mismatch());
     }
     Ok(data)
 }

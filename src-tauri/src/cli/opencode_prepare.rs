@@ -197,7 +197,7 @@ impl Drop for ServerChild {
 }
 
 #[cfg(windows)]
-mod server_job {
+pub(super) mod server_job {
     use super::{error, SafeError};
     use std::os::windows::io::AsRawHandle;
     use std::process::Child;
@@ -213,7 +213,7 @@ mod server_job {
     };
     use windows::Win32::System::Threading::{OpenThread, ResumeThread, THREAD_SUSPEND_RESUME};
 
-    pub(super) struct Job(HANDLE);
+    pub(crate) struct Job(HANDLE);
     impl Drop for Job {
         fn drop(&mut self) {
             unsafe {
@@ -222,7 +222,51 @@ mod server_job {
         }
     }
     impl Job {
-        pub(super) fn new() -> Result<Self, SafeError> {
+        #[cfg(test)]
+        pub(crate) fn duplicate_handle(
+            &self,
+        ) -> Result<std::os::windows::io::OwnedHandle, SafeError> {
+            use std::os::windows::io::FromRawHandle;
+            use windows::Win32::Foundation::{DuplicateHandle, DUPLICATE_SAME_ACCESS};
+            use windows::Win32::System::Threading::GetCurrentProcess;
+            let mut handle = HANDLE::default();
+            unsafe {
+                DuplicateHandle(
+                    GetCurrentProcess(),
+                    self.0,
+                    GetCurrentProcess(),
+                    &mut handle,
+                    0,
+                    false,
+                    DUPLICATE_SAME_ACCESS,
+                )
+            }
+            .map_err(|_| error("DELETE_OWNER_PENDING"))?;
+            Ok(unsafe { std::os::windows::io::OwnedHandle::from_raw_handle(handle.0) })
+        }
+        pub(crate) fn terminate(&self) -> Result<(), SafeError> {
+            unsafe { windows::Win32::System::JobObjects::TerminateJobObject(self.0, 1) }
+                .map_err(|_| error("DELETE_OWNER_PENDING"))
+        }
+        pub(crate) fn is_empty(&self) -> Result<bool, SafeError> {
+            use windows::Win32::System::JobObjects::{
+                JobObjectBasicAccountingInformation, QueryInformationJobObject,
+                JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
+            };
+            let mut information = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
+            unsafe {
+                QueryInformationJobObject(
+                    Some(self.0),
+                    JobObjectBasicAccountingInformation,
+                    (&mut information as *mut JOBOBJECT_BASIC_ACCOUNTING_INFORMATION).cast(),
+                    std::mem::size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>() as u32,
+                    None,
+                )
+            }
+            .map_err(|_| error("DELETE_OWNER_PENDING"))?;
+            Ok(information.ActiveProcesses == 0)
+        }
+        pub(crate) fn new() -> Result<Self, SafeError> {
             let job = Self(
                 unsafe { CreateJobObjectW(None, PCWSTR::null()) }
                     .map_err(|_| error("OPENCODE_SESSION_PREPARE_FAILED"))?,
@@ -240,7 +284,7 @@ mod server_job {
             .map_err(|_| error("OPENCODE_SESSION_PREPARE_FAILED"))?;
             Ok(job)
         }
-        pub(super) fn assign_and_resume(&self, child: &Child) -> Result<(), SafeError> {
+        pub(crate) fn assign_and_resume(&self, child: &Child) -> Result<(), SafeError> {
             let process = HANDLE(child.as_raw_handle());
             unsafe { AssignProcessToJobObject(self.0, process) }
                 .map_err(|_| error("OPENCODE_SESSION_PREPARE_FAILED"))?;

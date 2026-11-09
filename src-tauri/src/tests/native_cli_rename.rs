@@ -74,6 +74,10 @@ fn NativeRename_OfficialProtocolConfirmsWithoutTurn_001() {
         sent[3]["params"],
         json!({"threadId":"fixture","name":"New title"})
     );
+    assert_eq!(
+        sent[0]["params"]["capabilities"]["explicitGatewayOauth"],
+        true
+    );
 }
 
 #[test]

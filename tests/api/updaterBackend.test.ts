@@ -4,6 +4,13 @@ import * as api from '@/api/tauri'
 
 afterEach(clearMocks)
 describe('desktop updater host API', () => {
+  it('UpdateChannel_OnlyEnumAndOpaqueCancellation_001', async () => {
+    const calls: [string, unknown][] = []
+    mockIPC((command, args) => { calls.push([command, args]); return { status: 'requested' } })
+    await api.saveUpdaterChannel('test')
+    expect(await api.cancelDesktopUpdate('opaque')).toEqual({ status: 'requested' })
+    expect(calls).toEqual([['save_updater_channel', { channel: 'test' }], ['cancel_desktop_update', { admissionId: 'opaque' }]])
+  })
   // 检测使用独立只读命令，既不保存配置也不调用更新安装准入。
   it('ProxyTest_ReadOnlyDraftCommand_001', async () => {
     const calls: [string, unknown][] = []

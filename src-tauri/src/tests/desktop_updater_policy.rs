@@ -16,7 +16,14 @@ fn release() -> Value {
     ]})
 }
 fn admission(value: &Value) -> Result<OfficialRelease, UpdateFailure> {
-    validate_official_release(value, "1.2.3", "windows-x86_64", URL, &json!({}))
+    validate_official_release(
+        value,
+        "1.2.3",
+        "windows-x86_64",
+        URL,
+        &json!({}),
+        UpdateChannel::Stable,
+    )
 }
 #[test]
 fn official_release_passes_existing_contract() {
@@ -48,9 +55,15 @@ fn draft_prerelease_and_candidate_metadata_never_admit() {
         json!({"publishable":false}),
         json!({"updaterPublication":false}),
     ] {
-        assert!(
-            validate_official_release(&release(), "1.2.3", "windows-x86_64", URL, &raw).is_err()
-        );
+        assert!(validate_official_release(
+            &release(),
+            "1.2.3",
+            "windows-x86_64",
+            URL,
+            &raw,
+            UpdateChannel::Stable
+        )
+        .is_err());
     }
 }
 #[test]
@@ -174,6 +187,12 @@ fn signed_bytes_and_official_digests_are_both_required_before_install() {
     assert_eq!(
         verify_package(b"evil", &signature, &key, &asset)
             .unwrap_err()
+            .stage,
+        "verify"
+    );
+    assert_eq!(
+        verify_package(b"evil", &signature, &key, &asset)
+            .unwrap_err()
             .code,
         "UPDATER_SIGNATURE_INVALID"
     );
@@ -217,4 +236,299 @@ fn ReleaseNotes_BoundedLocalesRetainImportantText_001() {
     .unwrap();
     assert_eq!(english.len(), 1);
     assert_eq!(english["en"], "Keep backups");
+}
+
+fn versioned_release(version: &str) -> Value {
+    let mut value = release();
+    let category = release_channel(version).unwrap();
+    value["tag_name"] = json!(format!("v{version}"));
+    value["prerelease"] = json!(category != ReleaseChannel::Stable);
+    value["html_url"] = json!(format!(
+        "https://github.com/{REPOSITORY}/releases/tag/v{version}"
+    ));
+    for (index, suffix) in [(0, ""), (1, ".sig")] {
+        let name = format!("CC.Desk_{version}_x64-setup.exe{suffix}");
+        value["assets"][index]["name"] = json!(name);
+        value["assets"][index]["browser_download_url"] = json!(format!(
+            "https://github.com/{REPOSITORY}/releases/download/v{version}/{name}"
+        ));
+    }
+    value
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn UpdateChannel_AdmissionMatrix_001() {
+    for (version, admitted) in [
+        ("1.2.3", [true, true, true]),
+        ("1.2.3-beta.2", [false, true, true]),
+        ("1.2.3-rc.3", [false, true, true]),
+        ("1.2.3-preview.4", [false, false, true]),
+    ] {
+        let release = versioned_release(version);
+        let url = release["assets"][0]["browser_download_url"]
+            .as_str()
+            .unwrap();
+        for (selected, expected) in [
+            UpdateChannel::Stable,
+            UpdateChannel::Test,
+            UpdateChannel::Preview,
+        ]
+        .into_iter()
+        .zip(admitted)
+        {
+            let result = validate_official_release(
+                &release,
+                version,
+                "windows-x86_64",
+                url,
+                &json!({}),
+                selected,
+            );
+            assert_eq!(result.is_ok(), expected, "{version} / {selected:?}");
+        }
+    }
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn UpdateChannel_UnknownVersionsAndInvalidSelection_002() {
+    assert_eq!(
+        UpdateChannel::from_config(None).unwrap(),
+        UpdateChannel::Stable
+    );
+    for value in ["candidate", "test-only", "nightly", "Stable", ""] {
+        assert!(UpdateChannel::from_config(Some(value)).is_err());
+        assert!(serde_json::from_value::<UpdateChannel>(json!(value)).is_err());
+    }
+    for version in [
+        "1.2.3-alpha.1",
+        "1.2.3-rc.x",
+        "1.2.3-RC.1",
+        "1.2.3-rc.1.more",
+        "1.2.3+candidate",
+        "01.2.3",
+        "1.2.3-preview.evil",
+    ] {
+        assert!(release_channel(version).is_none(), "{version}");
+    }
+    for (version, label) in [
+        ("1.2.3-beta", "beta"),
+        ("1.2.3-rc", "rc"),
+        ("1.2.3-preview", "preview"),
+    ] {
+        assert_eq!(release_channel(version).unwrap().as_str(), label);
+    }
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn UpdateChannel_ExclusionIsIndependentOfUserSelection_003() {
+    let release = versioned_release("1.2.3-preview.1");
+    let url = release["assets"][0]["browser_download_url"]
+        .as_str()
+        .unwrap();
+    for raw in [
+        json!({"channel":"candidate"}),
+        json!({"channel":"test-only"}),
+        json!({"publishable":false}),
+        json!({"updaterPublication":false}),
+    ] {
+        assert!(validate_official_release(
+            &release,
+            "1.2.3-preview.1",
+            "windows-x86_64",
+            url,
+            &raw,
+            UpdateChannel::Preview
+        )
+        .is_err());
+    }
+    for (field, invalid) in [
+        ("draft", json!(true)),
+        ("prerelease", json!(false)),
+        ("published_at", json!("")),
+        ("target_commitish", json!("main")),
+        ("body", json!("Source: fake")),
+    ] {
+        let mut altered = release.clone();
+        altered[field] = invalid;
+        assert!(
+            validate_official_release(
+                &altered,
+                "1.2.3-preview.1",
+                "windows-x86_64",
+                url,
+                &json!({}),
+                UpdateChannel::Preview
+            )
+            .is_err(),
+            "{field}"
+        );
+    }
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn UpdateChannel_SelectHighestSemverNeverDowngrade_004() {
+    let releases = [
+        versioned_release("1.4.0-preview.1"),
+        versioned_release("1.2.3"),
+        versioned_release("1.3.0-rc.2"),
+        versioned_release("1.3.0-beta.9"),
+    ];
+    for (selected, expected) in [
+        (UpdateChannel::Stable, "v1.2.3"),
+        (UpdateChannel::Test, "v1.3.0-rc.2"),
+        (UpdateChannel::Preview, "v1.4.0-preview.1"),
+    ] {
+        assert_eq!(
+            select_release(&releases, "1.2.2", selected)
+                .unwrap()
+                .unwrap()["tag_name"],
+            expected
+        );
+    }
+    assert!(
+        select_release(&releases, "1.3.0-rc.2", UpdateChannel::Stable)
+            .unwrap()
+            .is_none()
+    );
+    let mut releases = releases.to_vec();
+    let mut duplicate = versioned_release("1.4.0-preview.1");
+    duplicate["id"] = json!(456);
+    releases.push(duplicate);
+    assert!(select_release(&releases, "1.2.2", UpdateChannel::Preview).is_err());
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn UpdateChannel_PreviewProofStillBindsSourceAssetsAndSignatures_005() {
+    let release = versioned_release("1.2.3-preview.1");
+    let url = release["assets"][0]["browser_download_url"]
+        .as_str()
+        .unwrap();
+    for (field, value) in [
+        ("digest", Value::Null),
+        ("browser_download_url", json!("https://example.com/package")),
+        ("state", json!("new")),
+        ("id", json!(0)),
+        ("size", json!(MAX_PACKAGE_BYTES + 1)),
+    ] {
+        let mut altered = release.clone();
+        altered["assets"][0][field] = value;
+        assert!(
+            validate_official_release(
+                &altered,
+                "1.2.3-preview.1",
+                "windows-x86_64",
+                url,
+                &json!({}),
+                UpdateChannel::Preview
+            )
+            .is_err(),
+            "{field}"
+        );
+    }
+    let proof = validate_official_release(
+        &release,
+        "1.2.3-preview.1",
+        "windows-x86_64",
+        url,
+        &json!({}),
+        UpdateChannel::Preview,
+    )
+    .unwrap();
+    assert!(validate_tag_commit(&json!({"ref":"refs/tags/v1.2.3-preview.1", "object":{"type":"commit","sha":"e".repeat(40)}}), &proof).is_err());
+    assert!(validate_source_config(
+        &json!({"version":"1.2.3-preview.1", "plugins":{"updater":{"pubkey":"evil"}}}),
+        &proof,
+        KEY
+    )
+    .is_err());
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn UpdateCancellation_CommitIsOneShotAndCancellationIsFinal_006() {
+    let cancelled = InstallCancellation::default();
+    assert_eq!(cancelled.request(), CancelStatus::Requested);
+    assert_eq!(cancelled.request(), CancelStatus::Requested);
+    assert_eq!(cancelled.check().unwrap_err().code, "UPDATER_CANCELLED");
+    assert!(cancelled.commit().is_err());
+    let committed = InstallCancellation::default();
+    committed.commit().unwrap();
+    assert_eq!(committed.request(), CancelStatus::TooLate);
+    assert!(committed.commit().is_err());
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn UpdateCancellation_RacingCancelAndInstallHaveOneWinner_007() {
+    for _ in 0..128 {
+        let control = std::sync::Arc::new(InstallCancellation::default());
+        let cancel = control.clone();
+        let waiter = std::thread::spawn(move || cancel.request());
+        let committed = control.commit().is_ok();
+        let cancelled = waiter.join().unwrap();
+        assert_eq!(committed, cancelled == CancelStatus::TooLate);
+        if committed {
+            assert!(control.check().is_ok());
+        } else {
+            assert!(control.check().is_err());
+        }
+    }
+}
+
+#[tokio::test]
+#[allow(non_snake_case)]
+async fn UpdateCancellation_AlreadyRequestedAndLiveWaitBothWake_008() {
+    let control = std::sync::Arc::new(InstallCancellation::default());
+    let cancel = control.clone();
+    let request = tokio::spawn(async move {
+        tokio::task::yield_now().await;
+        cancel.request()
+    });
+    control.cancelled().await;
+    assert_eq!(request.await.unwrap(), CancelStatus::Requested);
+    control.cancelled().await;
+    assert!(control.commit().is_err());
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn UpdateChannel_StableMainVersionTransition_009() {
+    let stable = versioned_release("0.26.0");
+    for channel in [
+        UpdateChannel::Stable,
+        UpdateChannel::Test,
+        UpdateChannel::Preview,
+    ] {
+        let releases = [stable.clone()];
+        assert_eq!(
+            select_release(&releases, "0.26.0-rc.3", channel)
+                .unwrap()
+                .unwrap()["tag_name"],
+            "v0.26.0"
+        );
+        for current in ["0.26.0", "0.27.0-rc.1"] {
+            assert!(select_release(&releases, current, channel)
+                .unwrap()
+                .is_none());
+        }
+    }
+    let mut rc = versioned_release("0.27.0-rc.1");
+    rc["id"] = json!(124);
+    let releases = [stable, rc];
+    assert!(select_release(&releases, "0.26.0", UpdateChannel::Stable)
+        .unwrap()
+        .is_none());
+    for channel in [UpdateChannel::Test, UpdateChannel::Preview] {
+        assert_eq!(
+            select_release(&releases, "0.26.0", channel)
+                .unwrap()
+                .unwrap()["tag_name"],
+            "v0.27.0-rc.1"
+        );
+    }
 }

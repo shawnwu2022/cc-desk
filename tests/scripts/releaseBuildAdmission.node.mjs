@@ -112,3 +112,16 @@ for (const [name, fixture, expected] of [
     } finally { rmSync(directory, { recursive: true, force: true }) }
   })
 }
+
+for (const version of ['0.27.0-beta.1', '0.27.0-preview.1']) {
+  test('ReleaseBuildAdmission_PrereleaseExactSource_' + version, async () => {
+    const { assertBuildAdmission } = await admission()
+    const value = { ...admitted(), versions: [version, version, version] }
+    assert.doesNotThrow(() => assertBuildAdmission(value))
+    for (const mutate of [c => { c.main.protected = false }, c => { c.checkoutSha = '2'.repeat(40) },
+      c => { c.versions[1] = '0.27.0' }]) {
+      const bad = structuredClone(value); mutate(bad)
+      assert.throws(() => assertBuildAdmission(bad), /build admission blocked/)
+    }
+  })
+}

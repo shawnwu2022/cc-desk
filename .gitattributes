@@ -19,3 +19,8 @@ tests/fixtures/version-history-minisign/* -text
 
 # 已批准图标交付件按原始字节校验，禁止跨平台换行转换。
 src-tauri/icons/source/** -text
+
+# 冻结审计索引的 SHA256 绑定原始字节，检出时不得转换换行。
+.audit/v027-stage10-source.json -text
+.audit/v027-stage11-source.json -text
+.audit/v027-stage13-original-execution.log.gz -text

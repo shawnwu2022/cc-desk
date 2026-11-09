@@ -15,9 +15,11 @@ const messages = {
   UPDATER_SESSIONS_BUSY: 'updateSessionsBusy',
   UPDATER_INSTALL_OUTCOME_UNKNOWN: 'updateInstallUnknown',
   UPDATER_CALLER_DENIED: 'updateCheckSafeFailed',
+  UPDATER_CANCELLED: 'updateCancelled',
+  UPDATER_CATALOG_LIMIT: 'updateCatalogLimit',
   UPDATER_FAILED: 'updateCheckSafeFailed',
 } as const
-const stages = new Set(['check', 'configuration', 'proxy', 'provenance', 'download', 'install', 'admission'])
+const stages = new Set(['check', 'configuration', 'proxy', 'provenance', 'download', 'verify', 'install', 'restart', 'admission'])
 export function updateFailure(cause: unknown): { code: keyof typeof messages; stage: string; key: string } {
   if (cause && typeof cause === 'object') {
     const value = cause as Record<string, unknown>

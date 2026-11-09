@@ -35,8 +35,21 @@ where
     if config.label != "main" || manager.get_webview_window("main").is_some() {
         return Err(error("DOCUMENT_WINDOW_UNAVAILABLE"));
     }
+    if config
+        .data_directory
+        .as_ref()
+        .is_some_and(|path| !path.is_absolute())
+    {
+        return Err(error("DOCUMENT_WINDOW_UNAVAILABLE"));
+    }
     let builder = WebviewWindowBuilder::from_config(manager, config)
         .map_err(|_| error("DOCUMENT_WINDOW_UNAVAILABLE"))?;
+    // 锁定版本的配置转换遗漏此字段；显式传给原 builder，避免回落到默认目录。
+    let builder = if let Some(path) = &config.data_directory {
+        builder.data_directory(path.clone())
+    } else {
+        builder
+    };
     let authority = DocumentAuthority::new(registry, expected_url)?;
     let navigation = authority.clone();
     let loading = authority.clone();

@@ -79,6 +79,9 @@ pub(super) fn read(
     // 因此在归属过滤之前独立汇总每个 thread 的最早创建时间，发布时按 thread 取值。
     let mut codex_creation = std::collections::HashMap::<String, String>::new();
     for path in files {
+        if c.cli == CliKind::Codex && b.tracks_mutations() {
+            b.observe_mutation_file(&path, c.root.stat(std::path::Path::new(&path))?);
+        }
         let mut observation_bytes = 0;
         // Ok(None) 表示这一行不是用户主动创建的会话，直接跳过而不计入任何失败。
         let parsed: ReadResult<Option<Transcript>> = (|| {
@@ -183,6 +186,15 @@ pub(super) fn read(
         };
         if c.cli == CliKind::Codex {
             if let Some(&index) = codex_representatives.get(&transcript.id) {
+                // 显示折叠不能证明原生变更目标只有一种归档状态。
+                if transcript.source_path.starts_with("archived_sessions/")
+                    != transcripts[index]
+                        .0
+                        .source_path
+                        .starts_with("archived_sessions/")
+                {
+                    b.retain_mutation_ambiguity(&transcript.id);
+                }
                 // 最新文件代表 thread 当前状态，与 codex resume 语义一致；
                 // updated 相同（含都缺失）时保留先到的代表。
                 let replaces = match (&transcript.updated, &transcripts[index].0.updated) {

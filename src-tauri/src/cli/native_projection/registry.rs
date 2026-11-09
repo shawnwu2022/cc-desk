@@ -38,13 +38,66 @@ struct Scope {
     history_generation: std::sync::atomic::AtomicU64,
     retired: std::sync::atomic::AtomicBool,
 }
-pub(crate) struct RenameAuthority {
+pub(crate) struct SessionAuthority {
     scope: Arc<Scope>,
     pub(crate) native_id: String,
     pub(crate) cwd: String,
+    pub(crate) archived: bool,
+    pub(crate) observation: String,
+    config_observation: Vec<u8>,
+    delete_containers: Vec<Root>,
     claude_file: Option<super::scoped_fs::PinnedTranscript>,
 }
-impl RenameAuthority {
+pub(crate) type RenameAuthority = SessionAuthority;
+impl SessionAuthority {
+    pub(crate) fn pin_delete_containers(mut self) -> Result<Self, SafeError> {
+        self.delete_containers = self
+            .scope
+            .grant
+            .root
+            .pin_delete_containers()
+            .map_err(safe)?;
+        self.current()?;
+        Ok(self)
+    }
+    pub(crate) fn check_delete_startup(&self, value: &serde_json::Value) -> Result<(), SafeError> {
+        self.current()?;
+        let path = value["codexHome"]
+            .as_str()
+            .ok_or_else(|| safe("DELETE_SOURCE_UNAVAILABLE"))?;
+        let actual = super::scoped_fs::Root::open(std::path::Path::new(path)).map_err(safe)?;
+        if actual.key() != self.scope.grant.root.key() {
+            return Err(safe("DELETE_SOURCE_UNAVAILABLE"));
+        }
+        self.current()
+    }
+    pub(crate) fn check_delete_thread(&self, thread: &serde_json::Value) -> Result<(), SafeError> {
+        self.check_thread_path(thread, false)?;
+        let mut budget = super::scoped_fs::Budget::new(super::scoped_fs::Limits::default());
+        let config = self
+            .scope
+            .grant
+            .root
+            .read(std::path::Path::new("config.toml"), &mut budget)
+            .map_err(safe)?
+            .unwrap_or_default();
+        if config != self.config_observation {
+            return Err(safe("DELETE_PREVIEW_CHANGED"));
+        }
+        let path = thread["path"]
+            .as_str()
+            .ok_or_else(|| safe("DELETE_SOURCE_UNAVAILABLE"))?;
+        let relative = self
+            .scope
+            .grant
+            .root
+            .descendant(std::path::Path::new(path))
+            .map_err(safe)?;
+        if !relative.starts_with("archived_sessions/") {
+            return Err(safe("DELETE_ROOT_NOT_ARCHIVED"));
+        }
+        Ok(())
+    }
     pub(crate) fn prepare_claude(&self) -> Result<super::scoped_fs::PrivateTranscript, SafeError> {
         self.verify_claude(None)?;
         self.scope
@@ -92,6 +145,9 @@ impl RenameAuthority {
         self.current()
     }
     pub(crate) fn current(&self) -> Result<(), SafeError> {
+        for container in &self.delete_containers {
+            container.current().map_err(safe)?;
+        }
         if self
             .scope
             .retired
@@ -110,6 +166,13 @@ impl RenameAuthority {
         Ok(())
     }
     pub(crate) fn check_thread(&self, thread: &serde_json::Value) -> Result<(), SafeError> {
+        self.check_thread_path(thread, true)
+    }
+    fn check_thread_path(
+        &self,
+        thread: &serde_json::Value,
+        compressed_fallback: bool,
+    ) -> Result<(), SafeError> {
         self.current()?;
         if thread["id"].as_str() != Some(self.native_id.as_str())
             || thread["cwd"].as_str() != Some(self.cwd.as_str())
@@ -126,13 +189,27 @@ impl RenameAuthority {
             .descendant(std::path::Path::new(path))
             .map_err(safe)?;
         let mut budget = super::scoped_fs::Budget::new(super::scoped_fs::Limits::default());
-        let (bytes, _) = self
+        let header = self
             .scope
             .grant
             .root
             .history_header(std::path::Path::new(&relative), &mut budget)
-            .map_err(safe)?
-            .ok_or_else(|| safe("SESSION_NOT_FOUND"))?;
+            .map_err(safe)?;
+        // Codex 0.167 对压缩历史返回逻辑路径；仅明确缺失时尝试精确同名压缩文件，
+        // 仍复用原 held Root 与读取预算，其他读取错误不得触发回退。
+        let header = if header.is_none() && compressed_fallback && relative.ends_with(".jsonl") {
+            self.scope
+                .grant
+                .root
+                .history_header(
+                    std::path::Path::new(&format!("{relative}.zst")),
+                    &mut budget,
+                )
+                .map_err(safe)?
+        } else {
+            header
+        };
+        let (bytes, _) = header.ok_or_else(|| safe("SESSION_NOT_FOUND"))?;
         let metadata = bytes
             .split(|byte| *byte == b'\n')
             .filter_map(|line| serde_json::from_slice::<serde_json::Value>(line).ok())
@@ -243,11 +320,45 @@ impl Grant {
     }
 }
 impl ScopeRegistry {
+    pub(crate) fn check_source(&self, owner: &Owner, source: &SourceRef) -> Result<(), SafeError> {
+        let scope = self
+            .state
+            .lock()
+            .map_err(|_| safe("SCOPE_UNAVAILABLE"))?
+            .scopes
+            .get(&source.scope_id)
+            .cloned()
+            .ok_or_else(|| safe("SCOPE_UNKNOWN"))?;
+        if &scope.grant.owner != owner {
+            return Err(safe("FORBIDDEN"));
+        }
+        if &scope.source != source {
+            return Err(safe("SCOPE_STALE"));
+        }
+        scope.grant.current().map_err(safe)
+    }
     pub(crate) fn authorize_rename(
         &self,
         owner: &Owner,
         source: &SourceRef,
         key: &str,
+    ) -> Result<RenameAuthority, SafeError> {
+        self.authorize_session_inner(owner, source, key, false)
+    }
+    pub(crate) fn authorize_session(
+        &self,
+        owner: &Owner,
+        source: &SourceRef,
+        key: &str,
+    ) -> Result<SessionAuthority, SafeError> {
+        self.authorize_session_inner(owner, source, key, true)
+    }
+    fn authorize_session_inner(
+        &self,
+        owner: &Owner,
+        source: &SourceRef,
+        key: &str,
+        track_mutations: bool,
     ) -> Result<RenameAuthority, SafeError> {
         let scope = self
             .state
@@ -304,6 +415,9 @@ impl ScopeRegistry {
             check: g.check.as_ref(),
         };
         let mut budget = super::scoped_fs::Budget::new(super::scoped_fs::Limits::default());
+        if track_mutations {
+            budget.track_mutations();
+        }
         let items = super::catalog::read(
             &catalog,
             &super::catalog::Options {
@@ -315,12 +429,27 @@ impl ScopeRegistry {
         )
         .map_err(safe)?;
         let mut matched = None;
+        use sha2::Digest;
+        let mut digest = sha2::Sha256::new();
+        digest.update(serde_json::to_vec(&items).map_err(|_| safe("SOURCE_INVALID"))?);
+        digest.update(budget.mutation_fingerprint());
+        let config_observation = if track_mutations && g.cli == CliKind::Codex {
+            g.root
+                .read(std::path::Path::new("config.toml"), &mut budget)
+                .map_err(safe)?
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        digest.update(&config_observation);
+        let observation = format!("{:x}", digest.finalize());
         for item in items {
             if let ResourceItem::Session {
                 session_key,
                 native_session_id,
                 project_id: Some(project),
                 cwd: Some(cwd),
+                archived,
                 ..
             } = item
             {
@@ -328,12 +457,12 @@ impl ScopeRegistry {
                     if matched.is_some() {
                         return Err(safe("SESSION_ORIGIN_AMBIGUOUS"));
                     }
-                    matched = Some((native_session_id, cwd));
+                    matched = Some((native_session_id, cwd, archived));
                 }
             }
         }
         g.current().map_err(safe)?;
-        let (native_id, cwd) = matched.ok_or_else(|| safe("SESSION_NOT_FOUND"))?;
+        let (native_id, cwd, archived) = matched.ok_or_else(|| safe("SESSION_NOT_FOUND"))?;
         if if source.cli == CliKind::Opencode {
             budget.history_metadata_incomplete()
         } else {
@@ -360,7 +489,11 @@ impl ScopeRegistry {
         } else {
             None
         };
-        Ok(RenameAuthority {
+        Ok(SessionAuthority {
+            delete_containers: Vec::new(),
+            observation,
+            config_observation,
+            archived,
             scope,
             native_id,
             cwd,

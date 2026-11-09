@@ -1,4 +1,6 @@
-use crate::updater_http::{bytes, http_client, probe_proxy, validate_probe_manifest};
+use crate::updater_http::{
+    bytes, http_client, package_bytes, probe_proxy, validate_probe_manifest,
+};
 use crate::updater_policy::validated_proxy;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -187,6 +189,47 @@ async fn http_limits_and_rejections_return_only_safe_codes() {
         .unwrap_err();
         assert_eq!(error.code, code);
         assert_eq!(error.stage, "provenance");
+        server.join().unwrap();
+    }
+}
+
+#[tokio::test]
+#[allow(non_snake_case)]
+async fn UpdatePackage_ExactBytesAndProgress_006() {
+    let (address, server) =
+        proxy_server("HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\ntest");
+    let proxy = validated_proxy(Some(&address)).unwrap().unwrap();
+    let mut progress = Vec::new();
+    let data = package_bytes(
+        &http_client(Some(&proxy)).unwrap(),
+        "http://update.invalid/package",
+        4,
+        |bytes| progress.push(bytes),
+    )
+    .await
+    .unwrap();
+    assert_eq!(data, b"test");
+    assert_eq!(progress.last(), Some(&4));
+    assert!(progress.iter().all(|bytes| *bytes <= 4));
+    server.join().unwrap();
+}
+
+#[tokio::test]
+#[allow(non_snake_case)]
+async fn UpdatePackage_RejectsOversizedShortAndBrokenBodies_007() {
+    for (response, expected_code) in [
+        ("HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nevil!", "UPDATER_PACKAGE_MISMATCH"),
+        ("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nno", "UPDATER_PACKAGE_MISMATCH"),
+        ("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n5\r\nevil!\r\n0\r\n\r\n", "UPDATER_PACKAGE_MISMATCH"),
+        ("HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nno", "UPDATER_REQUEST_FAILED"),
+    ] {
+        let (address, server) = proxy_server(response);
+        let proxy = validated_proxy(Some(&address)).unwrap().unwrap();
+        let mut published = 0;
+        let error = package_bytes(&http_client(Some(&proxy)).unwrap(), "http://update.invalid/package", 4, |bytes| published = bytes).await.unwrap_err();
+        assert_eq!(error.code, expected_code);
+        assert_eq!(error.stage, "download");
+        assert!(published <= 4);
         server.join().unwrap();
     }
 }

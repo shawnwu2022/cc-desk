@@ -129,15 +129,11 @@ Native Ctrl+V 在读取剪贴板前同步向当前 binding 预留输入 intent�
 
 ### codex Ctrl+V 原生粘贴转发
 
-codex 的 Ctrl+V 能力分版本：**≥0.163.0** 在 Windows 上对纯 Ctrl+V 构造 `PasteImage { text_fallback }`（`chatwidget/interaction.rs`，先尝试图片、无图时回退由 codex TUI 自行读系统剪贴板文本：`clipboard_paste/text.rs` 用 arboard，`app/clipboard.rs:23-52` 处理回退）；**0.162.x** 的 `chatwidget/clipboard.rs` 只处理图片、无文本回退，纯文本按键会被吞掉。
+Windows 的结构化 Codex 会话把 Ctrl+V 和 DOM paste 都交给 Codex。路由在启动 attempt 内冻结；两个入口在读取或分类剪贴板之前同步 `reserveUserPaste`，只产生一个 `\x16` 字节，正文和图片由 Codex 自行读取。这样大文本不经过宿主正文编码、IPC 上传和 ConPTY 字符输入。输入鉴权、有序队列、mode epoch、过期 attempt 拒绝及 partial/unknown 不重放保持原有边界。
 
-因此 CC Desk 不能无条件转发：`cli_codex_native_paste_support`（`cli/paste_support.rs`）仅在接受探测的 Windows 上运行，按 profile 授权解析 `configured_program` 后运行 `codex --version`，输出必须携带 `codex-cli` 标识 token（裸 semver 如启动器 npx 打印的自身版本不算），版本 ≥0.163.0 才支持原生转发；探测有 5s 期限并回收挂起子进程，每个启动 attempt 独立探测，失败仅令该运行回退 Desk 路径；不按路径或 profile revision 永久缓存，也不合并不同 attempt 尚未完成的查询。这是运行时能力查询，不属于 launch preflight（preflight 仍不 spawn CLI）。
+这是一项输入路由策略，不是运行时能力探测。宿主不运行 `--version`，不依赖 observer 或身份增强，也不因缺少被动能力广告而回退正文转发。快捷键已发送后不得自动补发正文。旧 0.162 和不支持此快捷键的自定义程序不在原生文本粘贴兼容范围内；官方源码依据、回归要求与真实平台验收边界见 [粘贴契约](paste-framing.md#windows-codex-原生粘贴路由)。
 
-Ctrl+V keydown 仍先**同步** `reserveUserPaste` 保持输入排序契约；producer 内等待探测结果：支持时返回 1 字节 `\x16`（Ctrl+V 控制字符），由 codex 原生读剪贴板处理文本和图片；不支持时回退 Desk 剪贴板读取路径（文本构造 bracketed frame、图片走键位分流）。
-
-为什么转发：CC Desk 原路径（读剪贴板 IPC → 构造 76011 字节 bracketed frame → 分块 IPC 上传 → 一次 `write_all` 进 ConPTY）端到端约 150ms，但 codex 侧的 paste burst 启发式（`paste_burst.rs`，Windows 上无 bracketed paste 事件只能靠 `PASTE_BURST_CHAR_INTERVAL=8ms` 的字符间隔判定）在大 payload 时 burst 断裂，导致 codex **逐字插入**而非折叠——29198 字符的逐字插入是 O(n²) 的 textarea 编辑，耗时 3.7–10+ 秒且部分展开。转发 `\x16` 绕过整个问题链：codex 收到的是一次完整粘贴事件，自行读剪贴板、自行折叠。
-
-约束与限制：仅适用于 codex（Claude Code 无等效的 Ctrl+V 剪贴板读取键位，仍走剪贴板插件读取路径）。转发分支由 codex 自行处理内容（无 LF 规范化、无 atomic write_all 保证）。能力 Promise 固定到准确 run/generation，运行中不重新查询已替换的程序；新建或重启终端会重新探测，同路径升降级不需要重启 CC Desk。Claude Code 在 Windows 上仍有同样的 bracketed paste 限制（上游未修），大段粘贴建议用 `@路径` 或 `Ctrl+G`。
+其他 CLI、非 Windows 和 raw 会话保留已有剪贴板读取及 bracketed-paste 路径。Codex 原生路线不由宿主规范化正文，也不证明 CLI 已读入完整草稿；实际 Codex 和 Windows WebView2 验收须独立记录。
 
 ### 图片粘贴分流
 
