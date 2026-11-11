@@ -45,6 +45,7 @@ pub(crate) struct SessionAuthority {
     pub(crate) archived: bool,
     pub(crate) observation: String,
     config_observation: Vec<u8>,
+    rollout_observation: Option<String>,
     delete_containers: Vec<Root>,
     claude_file: Option<super::scoped_fs::PinnedTranscript>,
 }
@@ -96,7 +97,29 @@ impl SessionAuthority {
         if !relative.starts_with("archived_sessions/") {
             return Err(safe("DELETE_ROOT_NOT_ARCHIVED"));
         }
-        Ok(())
+        if let Some(expected) = &self.rollout_observation {
+            let observed = self
+                .scope
+                .grant
+                .root
+                .codex_delete_observation(&self.native_id, &self.cwd, self.archived, &mut budget)
+                .map_err(safe)?;
+            if &observed != expected {
+                return Err(safe("DELETE_PREVIEW_CHANGED"));
+            }
+        }
+        // 全内容扫描可能较慢，返回前重新核对配置与来源授权。
+        let final_config = self
+            .scope
+            .grant
+            .root
+            .read(std::path::Path::new("config.toml"), &mut budget)
+            .map_err(safe)?
+            .unwrap_or_default();
+        if final_config != self.config_observation {
+            return Err(safe("DELETE_PREVIEW_CHANGED"));
+        }
+        self.current()
     }
     pub(crate) fn prepare_claude(&self) -> Result<super::scoped_fs::PrivateTranscript, SafeError> {
         self.verify_claude(None)?;
@@ -442,8 +465,10 @@ impl ScopeRegistry {
             Vec::new()
         };
         digest.update(&config_observation);
-        let observation = format!("{:x}", digest.finalize());
+        let mut observation = format!("{:x}", digest.finalize());
         for item in items {
+            let record_observation =
+                serde_json::to_vec(&item).map_err(|_| safe("SOURCE_INVALID"))?;
             if let ResourceItem::Session {
                 session_key,
                 native_session_id,
@@ -457,12 +482,13 @@ impl ScopeRegistry {
                     if matched.is_some() {
                         return Err(safe("SESSION_ORIGIN_AMBIGUOUS"));
                     }
-                    matched = Some((native_session_id, cwd, archived));
+                    matched = Some((native_session_id, cwd, archived, record_observation));
                 }
             }
         }
         g.current().map_err(safe)?;
-        let (native_id, cwd, archived) = matched.ok_or_else(|| safe("SESSION_NOT_FOUND"))?;
+        let (native_id, cwd, archived, record_observation) =
+            matched.ok_or_else(|| safe("SESSION_NOT_FOUND"))?;
         if if source.cli == CliKind::Opencode {
             budget.history_metadata_incomplete()
         } else {
@@ -482,6 +508,23 @@ impl ScopeRegistry {
         if !valid_id {
             return Err(safe("SESSION_ORIGIN_AMBIGUOUS"));
         }
+        let rollout_observation = if track_mutations && source.cli == CliKind::Codex {
+            let fingerprint = g
+                .root
+                .codex_delete_observation(&native_id, &cwd, archived, &mut budget)
+                .map_err(safe)?;
+            let mut digest = sha2::Sha256::new();
+            digest.update(
+                serde_json::to_vec(&(&native_id, &cwd, archived, &fingerprint))
+                    .map_err(|_| safe("SOURCE_INVALID"))?,
+            );
+            digest.update(&record_observation);
+            digest.update(&config_observation);
+            observation = format!("{:x}", digest.finalize());
+            Some(fingerprint)
+        } else {
+            None
+        };
         let claude_file = if source.cli == CliKind::Claude {
             let file = g.root.find_transcript(&native_id).map_err(safe)?;
             file.verify(&native_id, &cwd, None).map_err(safe)?;
@@ -493,6 +536,7 @@ impl ScopeRegistry {
             delete_containers: Vec::new(),
             observation,
             config_observation,
+            rollout_observation,
             archived,
             scope,
             native_id,

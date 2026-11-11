@@ -9,6 +9,8 @@ use std::time::{Duration, Instant};
 #[path = "compressed.rs"]
 mod compressed;
 use compressed::{is_zstd_history, Mode};
+#[path = "delete_observation.rs"]
+mod delete_observation;
 #[path = "rename_fs.rs"]
 mod rename_fs;
 pub(crate) use rename_fs::{PinnedTranscript, PrivateTranscript};

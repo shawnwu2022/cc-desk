@@ -7,7 +7,7 @@ import InlineNotice from '@/components/ui/InlineNotice.vue'
 import { useNativeHistoryStore } from '@/stores/nativeHistory'
 import { sessionDeleteTargetKey, useNativeSessionDeletesStore } from '@/stores/nativeSessionDeletes'
 import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
-import { normalizePath } from '@/utils/path'
+import { nativeDeleteBinding } from '@/utils/nativeSessionDelete'
 import { createNativeUuid } from '@/utils/nativeId'
 import type { UnifiedSession } from '@/types/unifiedSession'
 import type { SessionDeletePreviewRequest } from '@/types/nativeSessionDelete'
@@ -16,18 +16,8 @@ const props = defineProps<{ target: UnifiedSession | null; active: boolean }>()
 const { t } = useI18n(), history = useNativeHistoryStore(), operations = useNativeSessionDeletesStore()
 const open = ref(false), selectedKey = ref(''), permanent = ref(false), subtree = ref(false)
 const binding = computed(() => {
-  const row = props.target, origin = row?.nativeOrigin
-  if (!props.active || !row || row.runtime !== 'native-cli' || row.cli !== 'codex' || !origin || origin.cli !== 'codex'
-    || row.opened !== false || row.resumePending || row.preparationState || !['stopped', 'failed'].includes(row.processState)
-    || !row.nativeHistorySessionKey || !row.nativeSessionId || !row.nativeRootKey || normalizePath(origin.projectPath) !== normalizePath(row.projectPath)) return null
-  const entry = history.get(origin)
-  if (!entry?.loaded || entry.loading || entry.error || !entry.source || entry.source.basis !== 'configured-profile'
-    || entry.source.target.kind !== 'profile' || !entry.source.target.projectIds.includes(origin.projectId)
-    || entry.source.sourceRootKey !== row.nativeRootKey || entry.source.cli !== row.cli || entry.source.profileId !== origin.profileId || entry.source.profileRevision !== origin.profileRevision) return null
-  const matches = entry.sessions.filter(item => item.sessionKey === row.nativeHistorySessionKey && item.nativeSessionId === row.nativeSessionId)
-  if (matches.length !== 1 || matches[0]!.archived !== true || matches[0]!.truncated || matches[0]!.readFailure
-    || matches[0]!.projectId && matches[0]!.projectId !== origin.projectId) return null
-  return { source: entry.source, sessionKey: row.nativeHistorySessionKey, nativeSessionId: row.nativeSessionId, origin }
+  const row = props.target
+  return props.active && row ? nativeDeleteBinding(row, row.nativeOrigin ? history.get(row.nativeOrigin) : undefined) : null
 })
 const signature = computed(() => binding.value ? JSON.stringify([props.target?.id, binding.value.source, binding.value.sessionKey, binding.value.nativeSessionId]) : '')
 const operation = computed(() => operations.records.get(selectedKey.value))

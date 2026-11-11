@@ -195,3 +195,8 @@ AppShell 是所有构建的唯一外壳，一级入口为工作区、项目、�
 ## Structured restart continuity
 
 An already-started Native new or resume-id tab restarts only after checking its frozen run source, a fresh positive history identity and the exact current owner. The root/profile/project are revalidated around stopping; a known conversation restarts with resume-id and its proven source key. Unknown identity, changed source or stale ownership fails explicitly instead of silently starting a new conversation. A positively unstarted attempt remains a launch retry; raw actions remain explicit reruns.
+
+
+## 0.27 批量永久删除
+
+归档抽屉 → 永久删除能力 → 批量删除，支持多选、筛选和全选当前可删除项。整个所选根清单统一预览及独立二次确认，随后按序执行，每项保留准确结果。首个失败/未知、资格变化或关闭会停止尚未发出的请求；已发出项不能撤回。大批量仍受原 120 秒票据限制，过期项需重新选择、预览和确认，不自动续期或重试。当前执行仍限 Windows/Codex 原生已归档记录，其他 CLI 仅展示具体限制。完整边界和证据见 [永久删除说明](permanent-delete-0.27.md#2026-11-11批量删除交互)。

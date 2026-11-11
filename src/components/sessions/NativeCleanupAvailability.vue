@@ -3,7 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppSelect from '@/components/ui/AppSelect.vue'
 import InlineNotice from '@/components/ui/InlineNotice.vue'
-import NativeSessionDeletePanel from './NativeSessionDeletePanel.vue'
+import NativeSessionBatchDeletePanel from './NativeSessionBatchDeletePanel.vue'
 import type { UnifiedSession } from '@/types/unifiedSession'
 
 const props = defineProps<{ sessions: UnifiedSession[]; active: boolean }>()
@@ -24,6 +24,7 @@ const scopeDescription = computed(() => target.value?.cli === 'claude' ? 'cleanu
 <template>
   <details class="cleanup-availability" data-cleanup-availability>
     <summary>{{ t('cleanupAvailabilityTitle') }}</summary>
+    <NativeSessionBatchDeletePanel :sessions="archived" :active="active" />
     <p>{{ t('cleanupDeskDistinction') }}</p>
     <AppSelect v-model="selectedId" :options="options" :label="t('cleanupTargetLabel')" :disabled="!active || !archived.length" />
     <div v-if="target && active" data-cleanup-target class="cleanup-target">
@@ -41,7 +42,6 @@ const scopeDescription = computed(() => target.value?.cli === 'claude' ? 'cleanu
       <InlineNotice kind="warning" :message="t(reason)" />
       <p>{{ t('cleanupDeletionConfirmation') }}</p>
     </div>
-    <NativeSessionDeletePanel :target="target || null" :active="active" />
   </details>
 </template>
 

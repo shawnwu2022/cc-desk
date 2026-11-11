@@ -459,6 +459,7 @@ fn NativeDelete_PreWriteRevalidationFailureIsNotDispatch_010() {
         &json!({"method":"thread/delete","id":3}),
         &|| Err(error("SCOPE_STALE")),
         &mut started,
+        Instant::now() + Duration::from_secs(30),
     )
     .unwrap_err();
     assert_eq!(failure.code, "SCOPE_STALE");
@@ -478,7 +479,8 @@ fn NativeDelete_PreWriteRevalidationFailureIsNotDispatch_010() {
             &mut FailingWriter,
             &json!({"method":"thread/delete","id":3}),
             &|| Ok(()),
-            &mut started
+            &mut started,
+            Instant::now() + Duration::from_secs(30),
         )
         .unwrap_err()
         .code,
@@ -707,6 +709,135 @@ fs.writeFileSync(marker+'.trace','started\n');readline.createInterface({{input:p
         "acknowledged"
     );
     assert!(repo.admission().check_metadata_idle().is_ok());
+
+    // 两个根在同一目录、同一配置预览后逐项真执行合成助手；第二张票不能被首删污染。
+    let batch_marker = temp.path().join("batch-delete-calls");
+    let mut pending = Vec::new();
+    for native in [
+        "00000000-0000-4000-8000-000000000005",
+        "00000000-0000-4000-8000-000000000006",
+    ] {
+        let path = root
+            .join("archived_sessions")
+            .join(format!("rollout-{native}.jsonl"));
+        std::fs::write(&path, transcript.replace(id, native)).unwrap();
+        let request = PreviewRequest {
+            operation_id: uuid::Uuid::new_v4().to_string(),
+            session_key: json!(["local", "codex", request.source.source_root_key, native])
+                .to_string(),
+            source: request.source.clone(),
+        };
+        pending.push((native, path, request));
+    }
+    let tickets: Vec<_> = pending
+        .iter()
+        .map(|(_, _, request)| service.preview_delete(&caller, request.clone()).unwrap())
+        .collect();
+    for ((native, path, request), preview) in pending.iter().zip(tickets) {
+        assert_eq!(preview.state, "ready");
+        let variant = script
+            .replace(id, native)
+            .replace(
+                &json!(rollout.to_str().unwrap())
+                    .to_string()
+                    .replace(id, native),
+                &json!(path.to_str().unwrap()).to_string(),
+            )
+            .replace(
+                &json!(marker.to_str().unwrap()).to_string(),
+                &json!(batch_marker.to_str().unwrap()).to_string(),
+            );
+        std::fs::write(project.join("app-server"), variant).unwrap();
+        let receipt = service
+            .confirm_delete(
+                &caller,
+                ConfirmRequest {
+                    operation_id: request.operation_id.clone(),
+                    preview_id: preview.preview_id.unwrap(),
+                    acknowledge_permanent_delete: true,
+                    acknowledge_native_subtree: true,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            receipt.state, "acknowledged",
+            "same-source batch root: {native}"
+        );
+        assert!(!path.exists());
+    }
+    assert_eq!(
+        std::fs::read_to_string(batch_marker)
+            .unwrap()
+            .lines()
+            .count(),
+        2
+    );
+    // 原生子树删除包含另一已选根时，只能记首项 ACK，第二项缺失不得合成 ACK。
+    let parent_id = "00000000-0000-4000-8000-000000000007";
+    let child_id = "00000000-0000-4000-8000-000000000008";
+    let parent_path = root.join("archived_sessions/overlap-parent.jsonl");
+    let child_path = root.join("archived_sessions/overlap-child.jsonl");
+    std::fs::write(&parent_path, transcript.replace(id, parent_id)).unwrap();
+    std::fs::write(&child_path, transcript.replace(id, child_id)).unwrap();
+    let overlap: Vec<_> = [parent_id, child_id]
+        .into_iter()
+        .map(|native| {
+            let request = PreviewRequest {
+                operation_id: uuid::Uuid::new_v4().to_string(),
+                session_key: json!(["local", "codex", request.source.source_root_key, native])
+                    .to_string(),
+                source: request.source.clone(),
+            };
+            let preview = service.preview_delete(&caller, request.clone()).unwrap();
+            assert_eq!(preview.state, "ready");
+            ConfirmRequest {
+                operation_id: request.operation_id,
+                preview_id: preview.preview_id.unwrap(),
+                acknowledge_permanent_delete: true,
+                acknowledge_native_subtree: true,
+            }
+        })
+        .collect();
+    let overlap_marker = temp.path().join("overlap-delete-calls");
+    let variant = script
+        .replace(id, parent_id)
+        .replace(
+            &json!(rollout.to_str().unwrap())
+                .to_string()
+                .replace(id, parent_id),
+            &json!(parent_path.to_str().unwrap()).to_string(),
+        )
+        .replace(
+            &json!(marker.to_str().unwrap()).to_string(),
+            &json!(overlap_marker.to_str().unwrap()).to_string(),
+        )
+        .replace(
+            "fs.unlinkSync(file);",
+            &format!(
+                "fs.unlinkSync(file);fs.unlinkSync({});",
+                json!(child_path.to_str().unwrap())
+            ),
+        );
+    std::fs::write(project.join("app-server"), variant).unwrap();
+    assert_eq!(
+        service
+            .confirm_delete(&caller, overlap[0].clone())
+            .unwrap()
+            .state,
+        "acknowledged"
+    );
+    assert!(!parent_path.exists() && !child_path.exists());
+    let missing = service.confirm_delete(&caller, overlap[1].clone()).unwrap();
+    assert_eq!(missing.state, "blocked");
+    assert_eq!(
+        std::fs::read_to_string(overlap_marker)
+            .unwrap()
+            .lines()
+            .count(),
+        1
+    );
+    std::fs::write(project.join("app-server"), &script).unwrap();
+
     let active_rollout = root.join("sessions").join(rollout.file_name().unwrap());
     std::fs::write(&active_rollout, &transcript).unwrap();
     assert_eq!(
@@ -838,4 +969,79 @@ fn NativeDelete_ContainerLeaseRejectsReparseAndPinsUntilReap_005() {
         .unwrap();
     assert!(status.success());
     assert!(authority.pin_delete_containers().is_err());
+}
+
+#[test]
+fn NativeDelete_ExpiredBatchTicketNeverRenewsOrClaims_083() {
+    let operations = Operations::default();
+    let caller = caller();
+    let request = request();
+    let preview = operations
+        .register(
+            &caller,
+            &request,
+            "70000000-0000-4000-8000-000000000004",
+            "same".into(),
+        )
+        .unwrap();
+    operations.0.lock().unwrap()[0].created =
+        std::time::Instant::now() - std::time::Duration::from_secs(121);
+    let confirm = ConfirmRequest {
+        operation_id: request.operation_id.clone(),
+        preview_id: preview.preview_id.unwrap(),
+        acknowledge_permanent_delete: true,
+        acknowledge_native_subtree: true,
+    };
+    assert_eq!(
+        operations
+            .begin(&caller, &confirm, "same")
+            .unwrap()
+            .unwrap()
+            .state,
+        "blocked"
+    );
+    assert_eq!(
+        operations
+            .begin(&caller, &confirm, "same")
+            .unwrap()
+            .unwrap()
+            .state,
+        "blocked"
+    );
+    assert!(operations
+        .get(&caller, &request.operation_id)
+        .unwrap()
+        .confirmed
+        .is_none());
+}
+
+#[test]
+fn NativeDelete_SlowPreWriteValidationCannotDispatchAfterDeadline_084() {
+    let deadline = Instant::now() + Duration::from_millis(500);
+    let checked = std::sync::atomic::AtomicBool::new(false);
+    let mut wire = Vec::new();
+    let mut started = false;
+    let failure = exchange(
+        "70000000-0000-4000-8000-000000000004",
+        &mut |packet| send_packet(&mut wire, &packet, &|| Ok(()), &mut started, deadline),
+        &mut |id| Ok(json!({"id":id,"result":if id==2 { json!({"thread":{}}) } else {json!({})}})),
+        &|_| {
+            checked.store(true, std::sync::atomic::Ordering::Relaxed);
+            std::thread::sleep(Duration::from_millis(550));
+            Ok(())
+        },
+        &|_| Ok(()),
+    )
+    .unwrap_err();
+    assert!(!started);
+    assert!(checked.load(std::sync::atomic::Ordering::Relaxed));
+    let packets: Vec<serde_json::Value> = String::from_utf8(wire)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert!(!packets
+        .iter()
+        .any(|packet| packet["method"] == "thread/delete"));
+    assert_eq!(pre_dispatch_failure(failure).code, "DELETE_PREPARE_FAILED");
 }

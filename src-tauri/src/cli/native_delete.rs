@@ -380,8 +380,13 @@ fn send_packet(
     value: &serde_json::Value,
     current: &dyn Fn() -> Result<(), SafeError>,
     delete_write_started: &mut bool,
+    deadline: Instant,
 ) -> Result<(), SafeError> {
     current()?;
+    // 复核可能耗尽助手剩余时限，超时后不得再发送任何协议帧。
+    if Instant::now() >= deadline {
+        return Err(error("DELETE_PREPARE_FAILED"));
+    }
     // 验证失败尚未写入；一旦尝试序列化删除，即使写入报错也不能断言未发送。
     if value["method"] == "thread/delete" {
         *delete_write_started = true;
@@ -432,7 +437,7 @@ pub(crate) fn process(
     let deadline = Instant::now() + Duration::from_secs(30);
     exchange(
         &authority.native_id,
-        &mut |value| send_packet(&mut input, &value, current, delete_write_started),
+        &mut |value| send_packet(&mut input, &value, current, delete_write_started, deadline),
         &mut |id| {
             for _ in 0..256 {
                 let value = loop {
