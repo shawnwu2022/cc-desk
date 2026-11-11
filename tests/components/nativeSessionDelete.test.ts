@@ -245,6 +245,55 @@ describe('archived session row deletion entry', () => {
     expect(document.querySelector('[data-cleanup-availability], [data-batch-start], [data-native-cleanup-delete], .delete-operations')).toBeNull()
     expect(io.invoke).not.toHaveBeenCalled()
   })
+  // 有界元数据和标题截断只影响展示，不能阻止已知原生归档进入后端只读预览。
+  it.each([true, false])('ArchiveDelete_BoundedPreview_006 (%s)', async metadataIncomplete => {
+    const entry = useNativeHistoryStore().get(context)!
+    Object.assign(entry.sessions[0]!, { truncated: true, metadataIncomplete })
+    entry.metadataIncomplete = metadataIncomplete
+    drawer(); await flushPromises()
+    expect((element('[data-session-delete]') as HTMLButtonElement).disabled).toBe(false)
+    element('[data-session-delete]').click(); await flushPromises()
+    expect(element('[data-delete-dialog]').textContent).toContain(nativeId)
+    expect(io.invoke.mock.calls).toEqual([['cli_preview_session_delete', expect.objectContaining({ source, sessionKey: 'key' })]])
+    element('[data-delete-next-confirm]').click(); await flushPromises()
+    expect((element('[data-delete-final]') as HTMLButtonElement).disabled).toBe(true)
+    element('[data-delete-cancel]').click(); await flushPromises()
+    expect(io.invoke.mock.calls.map(([command]) => command)).toEqual(['cli_preview_session_delete'])
+  })
+  // 截断记录仍须通过原生归档、来源和活动检查，并明确显示实际阻止原因。
+  it.each([
+    ['desk-only', 'not archived by Codex'],
+    ['opened', 'still open'],
+    ['running', 'still open'],
+    ['resume-pending', 'still open'],
+    ['loading', 'being refreshed'],
+    ['read-failure', 'could not be read reliably'],
+    ['source-error', 'could not be verified'],
+    ['root-change', 'could not be verified'],
+    ['revision-change', 'could not be verified'],
+    ['wrong-project', 'could not be verified'],
+    ['duplicate', 'could not be verified'],
+  ])('ArchiveDelete_ExplainBlocked_007 (%s)', async (state, reason) => {
+    const entry = useNativeHistoryStore().get(context)!, row = target()
+    Object.assign(entry.sessions[0]!, { truncated: true, metadataIncomplete: true })
+    if (state === 'desk-only') entry.sessions[0]!.archived = false
+    if (state === 'opened') row.opened = true
+    if (state === 'running') row.processState = 'running'
+    if (state === 'resume-pending') row.resumePending = true
+    if (state === 'loading') entry.loading = true
+    if (state === 'read-failure') entry.sessions[0]!.readFailure = 'SOURCE_READ_FAILED'
+    if (state === 'source-error') entry.error = 'SOURCE_UNAVAILABLE'
+    if (state === 'root-change') entry.source = { ...source, sourceRootKey: 'different-root' }
+    if (state === 'revision-change') entry.source = { ...source, profileRevision: '2' }
+    if (state === 'wrong-project') entry.sessions[0]!.projectId = 'different-project'
+    if (state === 'duplicate') entry.sessions.push({ ...entry.sessions[0]! })
+    drawer([row]); await flushPromises()
+    const button = element('[data-session-delete]') as HTMLButtonElement
+    expect(button.disabled).toBe(true)
+    expect(button.getAttribute('aria-label')).toContain(reason)
+    button.click(); await flushPromises()
+    expect(io.invoke).not.toHaveBeenCalled()
+  })
   it('ArchiveDelete_ExactRowPreviewCancelAndRestoreStaySeparate_002', async () => {
     const secondId = '40000000-0000-4000-8000-000000000003'
     const second = { ...target(), id: 'second', nativeSessionId: secondId, nativeHistorySessionKey: 'key-2', title: 'Second synthetic session' }

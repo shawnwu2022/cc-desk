@@ -709,7 +709,7 @@ for (const locale of ['en', 'zh']) for (const dpr of [1, 1.5]) {
         const context = { cli: 'codex', profileId: 'synthetic-profile', profileRevision: '1', projectId: 'synthetic-project', projectPath: 'C:/synthetic/batch-project' }
         const source = { scopeId: 'synthetic-scope', instanceId: 'synthetic-instance', cli: 'codex', sourceRootKey: 'synthetic-root', identityEpoch: '1', profileId: context.profileId, profileRevision: '1', basis: 'configured-profile', target: { kind: 'profile', profileId: context.profileId, expectedProfileRevision: '1', projectIds: [context.projectId] } }
         const uuid = (n: number) => '60000000-0000-4000-8000-' + String(n).padStart(12, '0')
-        const entries = [1, 2, 3].map(n => ({ type: 'session', sessionKey: 'key-' + n, nativeSessionId: uuid(n), projectId: context.projectId, title: 'Synthetic archived session ' + n, truncated: false, archived: true, cwd: context.projectPath, updatedAt: null }))
+        const entries = [1, 2, 3].map(n => ({ type: 'session', sessionKey: 'key-' + n, nativeSessionId: uuid(n), projectId: context.projectId, title: 'Synthetic archived session ' + n, truncated: true, metadataIncomplete: true, archived: n !== 3, cwd: context.projectPath, updatedAt: null }))
         history.entries.set(nativeHistoryContextKey(context), { key: nativeHistoryContextKey(context), context, source, sourceRootKey: 'synthetic-root', loaded: true, loading: false, error: null, requestEpoch: '1', sessions: entries })
         catalog.sessions = entries.map((entry, i) => ({ id: 'batch-' + i, projectKey: context.projectId, projectPath: context.projectPath, cli: 'codex', runtime: 'native-cli', title: entry.title, processState: 'stopped', attentionState: 'none', lastActivityAt: i, archived: true, opened: false, resumable: true, adapterSessionId: 'adapter-' + i, nativeSessionId: entry.nativeSessionId, nativeRootKey: source.sourceRootKey, nativeHistorySessionKey: entry.sessionKey, nativeOrigin: context }))
         const host = window as any
@@ -725,7 +725,11 @@ for (const locale of ['en', 'zh']) for (const dpr of [1, 1.5]) {
       })
       await expect(page.locator('[data-session-delete]')).toHaveCount(3)
       await expect(page.locator('[data-cleanup-availability], [data-batch-start]')).toHaveCount(0)
+      const deskOnly = page.locator('[data-session-row="batch-2"] [data-session-delete]')
+      await expect(deskOnly).toBeDisabled()
+      await expect(deskOnly).toHaveAttribute('aria-label', locale === 'zh' ? /尚未由 Codex 原生归档/ : /not archived by Codex/)
       const rowDelete = page.locator('[data-session-row="batch-1"] [data-session-delete]')
+      await expect(rowDelete).toBeEnabled()
       await expect(rowDelete).toBeInViewport({ ratio: 1 })
       await captureFixtureEvidence(page, testInfo, 'archive-row-delete-' + locale + '-unapproved')
       await rowDelete.focus()

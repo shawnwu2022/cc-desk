@@ -6,7 +6,7 @@ import SessionList from './SessionList.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import NativeSessionDeletePanel from './NativeSessionDeletePanel.vue'
 import { useNativeHistoryStore } from '@/stores/nativeHistory'
-import { nativeDeleteBinding } from '@/utils/nativeSessionDelete'
+import { nativeDeleteEligibility } from '@/utils/nativeSessionDelete'
 import { normalizePath } from '@/utils/path'
 import { compareSessionOpenOrder } from '@/utils/sessionOpenOrder'
 import type { SessionMenuAction, SessionPrimaryAction, UnifiedProjectIdentity, UnifiedSession } from '@/types/unifiedSession'
@@ -31,21 +31,19 @@ const archived = computed(() => props.sessions.filter(session => session.archive
   && (!props.project || normalizePath(session.projectPath) === normalizePath(props.project.projectPath)))
   .sort(compareSessionOpenOrder))
 const deleteTarget = computed(() => archived.value.find(session => session.id === deleteTargetId.value) ?? null)
-const deleteBindings = computed(() => new Map(archived.value.map(session => [session.id,
-  nativeDeleteBinding(session, session.nativeOrigin ? history.get(session.nativeOrigin) : undefined)])))
+const deleteEligibility = computed(() => new Map(archived.value.map(session => [session.id,
+  nativeDeleteEligibility(session, session.nativeOrigin ? history.get(session.nativeOrigin) : undefined)])))
 function deleteLabel(session: UnifiedSession) {
   const label = t('deletePermanently') + ' · ' + session.title
-  if (deleteBindings.value.get(session.id)) return label
-  const reason = session.cli === 'claude' ? 'cleanupClaudeUnsupported'
-    : session.cli === 'opencode' ? 'cleanupOpencodeUnsafe' : 'deleteEligibility'
-  return label + ' · ' + t(reason)
+  const reason = deleteEligibility.value.get(session.id)?.reason
+  return reason ? label + ' · ' + t(reason) : label
 }
 async function reviewDelete(id: string) {
-  if (!props.open || !deleteBindings.value.get(id)) return
+  if (!props.open || !deleteEligibility.value.get(id)?.binding) return
   deleteTargetId.value = id
   await nextTick()
   // 行在渲染间隙被恢复、移除或切换来源时，不沿用旧点击的资格。
-  if (props.open && deleteTargetId.value === id && deleteBindings.value.get(id)) await deletePanel.value?.review()
+  if (props.open && deleteTargetId.value === id && deleteEligibility.value.get(id)?.binding) await deletePanel.value?.review()
 }
 function primaryAction(id: string, action: SessionPrimaryAction) {
   if (action === 'restore-archive' && archived.value.some(session => session.id === id)) emit('restore-request', id)
@@ -70,7 +68,7 @@ function menuAction(id: string, action: SessionMenuAction) {
       <SessionList v-if="archived.length" :sessions="archived" :surface-active="open" :menu-teleport="false" @primary-action="primaryAction" @menu-action="menuAction"
         @rename-commit="(id, title) => emit('rename-commit', id, title)" @rename-cancel="emit('rename-cancel', $event)">
         <template #trailingAction="{ session }">
-          <IconButton data-session-delete :label="deleteLabel(session)" :disabled="!open || !deleteBindings.get(session.id)" @click.stop="reviewDelete(session.id)">
+          <IconButton data-session-delete :label="deleteLabel(session)" :disabled="!open || !deleteEligibility.get(session.id)?.binding" @click.stop="reviewDelete(session.id)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M3 6h18M9 6V4h6v2M5 6l1 14h12l1-14M10 10v6M14 10v6" />
             </svg>
