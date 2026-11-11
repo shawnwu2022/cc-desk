@@ -733,3 +733,17 @@ layout and field automatic title synchronization remain unaccepted.
 授权语义是同精确 profile 选择的原生 store 中的根及其原生子树，不是事前冻结成员列表；完整数量与逐后代结果没有独立证明。确认前可见来源/配置/根记录变化须重预览；确认明确动态成员及原生关联维护风险，不把 writer 锁解释成未来图租约。
 
 受控短命 helper 只 initialize、thread/read(includeTurns=false)、thread/delete。实际 startup codexHome、rollout/header/cwd 与 held 来源必须核验；Windows 两个非 reparse 容器句柄与独占 admission 保留到直接进程 reap 且整个 own Job 为空。未知操作按物理 Root＋归一 UUID 跨 profile/caller 去重，root 缺失不伪造 ACK，未知只读协调不重发。OpenCode/Claude 和未实现等价容器保护的 Unix 当前不执行该 mutation。
+
+
+## Codex 原生归档连接
+
+Codex 行的“原生归档”使用 authenticated `cli_archive_session`，经配置 profile 的官方 app-server `thread/archive`，不再写 Desk `archivedSessions` 冒充原生归档。来源固定为 backend-held 配置 scope、profile revision、注册项目、原生 UUID 与 session key；打开过的行还必须证明 frozen run 与新历史投影同根。Claude/OpenCode 的既有 Desk 隐藏语义不在本次范围内。
+
+- 执行前复用准确 owner 的确认框，即使是已结束的历史行也必须确认。文案明确官方接口处理原生子会话树，可能停止活动后代且影响其他项目。Desk 自己任何活动、准备或未知 owner 都阻止准入；外部 writer 冲突交给官方 CLI 的锁处理，不猜测进程、不关闭无关会话。
+- Windows 专用 helper 冻结环境，核对 initialize 返回的实际 `codexHome` 和 held root，前置 read 核对 ID/cwd/header/path，随后只发一次 archive，再通过同源 `archived_sessions` 物理位置核实根。压缩 rollout 沿用安全 resolver。非 Windows 暂返回 `NATIVE_ARCHIVE_UNSUPPORTED`，不能以 Windows Job 证明其他平台后代收口。
+- 固定 `sessions` 和 `archived_sessions` 的非 reparse 目录身份；目标归档目录缺失时只在已授权操作下用 held capability 创建空目录，随后固定。助手从 suspended 启动加入本次 Job，整个进程组真正退出前保持目录、来源与 admission lease；超时、EOF、撤销及未知写不释放仍存活的后代。
+- 官方 ACK 只代表根路径调用完成，后代可能仅记录 warning。回执限定 `rootArchived: true, descendants: "unverified"`，不宣称整棵子树都已归档。成功和不确定结果都强制重读已加载的同根各项目，外根不受影响。界面刷新失败不能再发一次归档。
+- 后端按物理根/原生 ID 保留 pending/unknown 写屏障，换 operation ID 或文档不能绕过。普通历史刷新只在能取得空闲准入时尝试核对，忙时照常读取且保留屏障；pending 不清除。官方 unarchive 的后端入口对该物理目标旧未知写强制执行独立只读核对，取得空闲准入并证明原生根已归档后才清屏障和继续恢复，因此丢 ACK → 刷新 → 恢复 → 再归档不会被旧屏障永久锁住。尚未证实的写始终不自动重放。
+- 旧 Desk-only 记录保持原样，不自动迁移真实会话。用户先恢复旧显示标记，再显式“原生归档”；永久删除仍只接受原生已归档根，原有预览与二次确认门不变。
+
+协议依据为官方 Codex 0.167.0，对应 `openai/codex` commit `086ccc833bc9cf01024ad2dd6af7dbd421b6bf9a` 的 `thread_processor.rs`、`thread-store/src/local/archive_thread.rs`、`read_thread.rs`。`thread/read` 可读取归档但 DTO 没有 archived 字段；不能把 read 成功或 archive ACK 当作物理归档证明。测试使用独立临时 Node 合成 app-server 验证 Windows Job、EOF、只读恢复闭环与容器防护；不是已登录真实 CLI 或已安装 WebView2 的验收，本次未归档或删除真实用户会话。

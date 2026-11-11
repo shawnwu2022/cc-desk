@@ -12,7 +12,9 @@ const sessions = useUnifiedSessionsStore()
 const keys = computed(() => sessions.sessionConfirmation?.kind === 'close-running'
   ? { title: 'confirmCloseTitle', description: 'confirmCloseDescription', action: 'confirmCloseAction' }
   : sessions.sessionConfirmation?.kind === 'stop-and-archive'
-    ? { title: 'confirmArchiveTitle', description: 'confirmArchiveDescription', action: 'confirmArchiveAction' }
+    ? sessions.sessionConfirmation.nativeArchive
+      ? { title: 'confirmNativeArchiveTitle', description: 'confirmNativeArchiveDescription', action: 'sessionActionNativeArchive' }
+      : { title: 'confirmArchiveTitle', description: 'confirmArchiveDescription', action: 'confirmArchiveAction' }
     : { title: 'confirmRestartTitle', description: 'confirmRestartDescription', action: 'confirmRestartAction' })
 watch(() => [props.active, sessions.sessionConfirmation], () => { if (!props.active) sessions.closeSessionConfirmation() }, { flush: 'sync', immediate: true })
 </script>

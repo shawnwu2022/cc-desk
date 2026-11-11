@@ -367,3 +367,16 @@ it('Projection_TitleObservationFieldsAreFinite_008', async () => {
     await expect(client.read(request())).rejects.toThrow('INVALID_PROJECTION')
   }
 })
+it('Projection_CodexArchiveBindsReceiptAndSanitizesErrors_040', async () => {
+  const value = { operationId: 'archive-1', sessionKey: 'session-key', source: { ...source, cli: 'codex' as const } }
+  const invoke = vi.fn(async () => ({ ...value, state: 'archived', rootArchived: true, descendants: 'unverified' }))
+  const client = createProjectionClient({ instanceId: 'instance', invoke })
+  await expect(client.archive(value)).resolves.toMatchObject({ state: 'archived' })
+  expect(invoke).toHaveBeenCalledWith('cli_archive_session', value)
+  invoke.mockResolvedValueOnce({ ...value, sessionKey: 'other', state: 'archived', rootArchived: true, descendants: 'unverified' })
+  await expect(client.archive(value)).rejects.toThrow('ARCHIVE_OUTCOME_UNKNOWN')
+  invoke.mockRejectedValueOnce(new Error('private path or secret'))
+  await expect(client.archive(value)).rejects.toThrow('ARCHIVE_OUTCOME_UNKNOWN')
+  await expect(client.archive({ ...value, source })).rejects.toThrow('INVALID_PROJECTION')
+  await expect(client.archive({ ...value, extra: true } as never)).rejects.toThrow('INVALID_PROJECTION')
+})

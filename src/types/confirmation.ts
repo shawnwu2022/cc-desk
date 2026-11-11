@@ -1,7 +1,7 @@
 /** Display requests contain human labels only. Execution ownership stays with the store. */
 export type SessionConfirmationRequest =
   | { kind: 'close-running'; sessionId: string; title: string }
-  | { kind: 'stop-and-archive'; sessionId: string; title: string }
+  | { kind: 'stop-and-archive'; sessionId: string; title: string; nativeArchive?: true }
   | { kind: 'restart-unknown'; sessionId: string; title: string }
 
 export type ProjectConfirmationRequest =

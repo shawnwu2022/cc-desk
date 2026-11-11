@@ -507,6 +507,9 @@ export async function nativeGetScope(target: import('@/types/nativeProjection').
 export function cliGetObserverStatus(owner: { requestId: string; runId: string; generation: number }) {
   return readObserverInstallation(nativeDocumentBridge(), owner)
 }
+export function nativeArchiveSession(request: import('@/types/nativeProjection').NativeArchiveRequest) {
+  return createNativeProjectionClient().archive(request);
+}
 export function nativeRenameSession(request: import('@/types/nativeProjection').NativeRenameRequest) {
   return createNativeProjectionClient().rename(request)
 }

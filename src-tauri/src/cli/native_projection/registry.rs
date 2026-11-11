@@ -51,6 +51,16 @@ pub(crate) struct SessionAuthority {
 }
 pub(crate) type RenameAuthority = SessionAuthority;
 impl SessionAuthority {
+    pub(crate) fn pin_archive_containers(mut self) -> Result<Self, SafeError> {
+        self.delete_containers = self
+            .scope
+            .grant
+            .root
+            .pin_archive_containers()
+            .map_err(safe)?;
+        self.current()?;
+        Ok(self)
+    }
     pub(crate) fn pin_delete_containers(mut self) -> Result<Self, SafeError> {
         self.delete_containers = self
             .scope
@@ -187,6 +197,25 @@ impl SessionAuthority {
             return Err(safe("SCOPE_REVOKED"));
         }
         Ok(())
+    }
+    pub(crate) fn check_archived_thread(
+        &self,
+        thread: &serde_json::Value,
+    ) -> Result<(), SafeError> {
+        self.check_thread(thread)?;
+        let path = thread["path"]
+            .as_str()
+            .ok_or_else(|| safe("ARCHIVE_VERIFICATION_FAILED"))?;
+        let relative = self
+            .scope
+            .grant
+            .root
+            .descendant(std::path::Path::new(path))
+            .map_err(safe)?;
+        if !relative.starts_with("archived_sessions/") {
+            return Err(safe("ARCHIVE_VERIFICATION_FAILED"));
+        }
+        self.current()
     }
     pub(crate) fn check_thread(&self, thread: &serde_json::Value) -> Result<(), SafeError> {
         self.check_thread_path(thread, true)

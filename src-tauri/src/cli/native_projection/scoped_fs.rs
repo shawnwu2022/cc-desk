@@ -196,6 +196,24 @@ pub(crate) struct Entry {
 pub(crate) const OPENCODE_DEFAULT_DB: &str = "opencode.db";
 
 impl Root {
+    pub(crate) fn pin_archive_containers(&self) -> ReadResult<Vec<Root>> {
+        #[cfg(not(windows))]
+        {
+            Err("NATIVE_ARCHIVE_UNSUPPORTED")
+        }
+        #[cfg(windows)]
+        {
+            self.current()?;
+            // 只在显式归档中用已授权目录句柄准备空容器；不移动或改写 CLI 数据。
+            match self.dir.create_dir("archived_sessions") {
+                Ok(()) => (),
+                Err(failure) if failure.kind() == std::io::ErrorKind::AlreadyExists => (),
+                Err(_) => return Err("ARCHIVE_CONTAINER_UNSAFE"),
+            }
+            self.pin_delete_containers()
+                .map_err(|_| "ARCHIVE_CONTAINER_UNSAFE")
+        }
+    }
     pub(crate) fn pin_delete_containers(&self) -> ReadResult<Vec<Root>> {
         #[cfg(not(windows))]
         {
@@ -219,7 +237,7 @@ impl Root {
                 check()?;
                 let container = Root::open(&path)?;
                 check()?;
-                container.current()?;
+                container.source_current()?;
                 held.push(container);
             }
             self.current()?;

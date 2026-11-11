@@ -274,6 +274,24 @@ impl NativeRuntime {
         self.service.registry().check_caller(&caller)?;
         Ok(result)
     }
+    pub(crate) async fn archive_session<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        request: &Request<'_>,
+    ) -> Result<super::native_archive::ArchiveReceipt, SafeError> {
+        let caller = self.binding()?.admit_native(webview, request.headers())?;
+        let query: super::native_archive::ArchiveRequest =
+            decode_projection(request.body(), 32768)?;
+        query.validate()?;
+        let service = self.projections.clone();
+        let admitted = caller.clone();
+        let result =
+            tauri::async_runtime::spawn_blocking(move || service.archive(&admitted, query))
+                .await
+                .map_err(|_| error("ARCHIVE_OUTCOME_UNKNOWN"))??;
+        self.service.registry().check_caller(&caller)?;
+        Ok(result)
+    }
     pub(crate) async fn rename_session<T: Runtime>(
         &self,
         webview: &Webview<T>,
@@ -338,7 +356,10 @@ impl NativeRuntime {
         query.validate()?;
         let service = self.service.clone();
         let admitted = caller.clone();
+        let projections = self.projections.clone();
         tauri::async_runtime::spawn_blocking(move || {
+            // 恢复前必须收敛同一物理根的旧归档未知写，不能凭前端普通历史读取放行。
+            projections.reconcile_before_unarchive(&admitted, &query)?;
             service.run_command(&admitted, &query.to_launch_request())
         })
         .await

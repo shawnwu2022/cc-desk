@@ -137,6 +137,15 @@ pub(crate) async fn cli_session_index_maintenance(
 }
 
 #[tauri::command]
+pub(crate) async fn cli_archive_session(
+    webview: Webview,
+    request: Request<'_>,
+    runtime: State<'_, Arc<NativeRuntime>>,
+) -> Result<super::native_archive::ArchiveReceipt, SafeError> {
+    runtime.archive_session(&webview, &request).await
+}
+
+#[tauri::command]
 pub(crate) async fn cli_rename_session(
     webview: Webview,
     request: Request<'_>,

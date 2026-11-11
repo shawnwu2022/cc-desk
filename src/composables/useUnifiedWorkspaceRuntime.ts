@@ -1,6 +1,6 @@
 import { computed, shallowRef, nextTick, onMounted, onUnmounted, ref, watch, type Ref } from 'vue'
 import { writeText } from '@tauri-apps/plugin-clipboard-manager'
-import { openInFileManager, nativeUnarchiveSession, nativeRenameSession, nativePrepareOpencodeSession, nativeGetScope, legacyClaudeRootKey, getSessions } from '@/api/tauri'
+import { openInFileManager, nativeUnarchiveSession, nativeArchiveSession, nativeRenameSession, nativePrepareOpencodeSession, nativeGetScope, legacyClaudeRootKey, getSessions } from '@/api/tauri'
 import { useSessionIndexMaintenanceStore } from '@/stores/sessionIndexMaintenance'
 import { useLegacyHistoryRefresh } from '@/composables/useLegacyHistoryRefresh'
 import { createNativeId } from '@/utils/nativeId'
@@ -514,6 +514,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
         } }),
       createNativeCliAdapter({ tabs: native, history, metadata: projects, legacyClaudeRootKey: validateLegacyClaudeRoot, historyEnabled: cli => cliSupport.isEnabled(cli), archive: { getArchivedSessions: legacy.getArchivedSessions, archiveSession: projects.archiveSession, restoreSession: projects.restoreSession },
         nativeRename: { rename: nativeRenameSession },
+        nativeArchive: { archive: nativeArchiveSession },
         runSource: tab => nativeGetScope({kind:'run',runId:tab.runId,generation:tab.generation}),
         cliUnarchive: { unarchive: (context, nativeSessionId) => {
           if (app.isProjectAdmissionBlocked(context.projectPath)) throw new Error('PROJECT_REMOVAL_IN_PROGRESS')
@@ -825,7 +826,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
         if (!open) return false
         await catalog.closeSession(session.id); return true
       case 'archive':
-        if (live) { if (shell.section === 'workspace') catalog.beginSessionConfirmation('stop-and-archive', session.id); return true }
+        if (live || session.cli === 'codex') { if (shell.section === 'workspace') catalog.beginSessionConfirmation('stop-and-archive', session.id); return true }
         await catalog.archiveSession(session.id); return true
       case 'resume':
         await resumeDirect(session, claimResumeFeedback)

@@ -586,10 +586,10 @@ describe('Unified session menu model', () => {
     await nextTick()
     expect(document.querySelector('[data-item-id="archive"]')).toBeNull()
     const archiveRow = row({ ...base, opened: false, processState: 'stopped' })
-    expect(archiveRow.get('[data-session-archive] button').attributes('aria-label')).toBe('Archive')
+    expect(archiveRow.get('[data-session-archive] button').attributes('aria-label')).toBe(en.sessionActionNativeArchive)
     i18n.global.locale.value = 'zh'
     await nextTick()
-    expect(archiveRow.get('[data-session-archive] button').attributes('aria-label')).toBe('归档')
+    expect(archiveRow.get('[data-session-archive] button').attributes('aria-label')).toBe(zh.sessionActionNativeArchive)
     expect(document.querySelector('[role="menu"]')!.textContent).not.toMatch(/sessionAction|Profile|Native|Legacy/)
     document.querySelector<HTMLElement>('[data-item-id="open-project-directory"]')!.click()
     await nextTick()
@@ -707,7 +707,7 @@ it('Row_ArchiveQuickAction_043', async () => {
 // 归档占独立固定槽，关闭槽不会在历史行出现后变成归档。
 it('Row_ArchiveOverlaysTime_044', async () => {
   const wrapper = row({ ...base, opened: false, processState: 'stopped' })
-  expect(wrapper.get('[data-session-archive] button').attributes('aria-label')).toBe('Archive')
+  expect(wrapper.get('[data-session-archive] button').attributes('aria-label')).toBe(en.sessionActionNativeArchive)
   expect(wrapper.find('.session-tail [data-session-archive]').exists()).toBe(false)
   expect(wrapper.get('.session-overflow-trigger button').attributes('aria-label')).toBe('Session actions')
   const rules = styleRules()
