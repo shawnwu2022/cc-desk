@@ -4,6 +4,20 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
+## [0.27.0-rc.4]
+
+修复
+
+- Windows Codex 的“原生归档”接通官方元数据接口，不再只是从 CC Desk 隐藏会话。核实根会话已原生归档，并刷新同来源下已加载的项目。
+- 归档结果不确定时仅做只读核对，不重试写入；保留精确来源、配置、会话与活动检查。
+
+重要说明
+
+- 这是预发布版本，稳定 Latest 保持不变。原生归档目前仅限 Windows Codex；Claude 和 OpenCode 保留既有的 Desk 隐藏行为，Unix 原生归档暂不可用。
+- 旧 Desk-only 归档不会自动迁移。请先恢复其 Desk 显示标记，再显式选择“原生归档”。永久删除仍只接受符合条件的原生已归档根，并保留独立预览和确认流程。
+- 官方归档可能影响原生子会话树、停止活动后代并涉及其他项目。成功回执仅核实根会话，后代是否全部完成仍未验证。
+- 隔离的合成元数据服务测试不代表真实 Codex CLI 归档/删除、已安装 Windows WebView2、完整后代或外部写入场景已验收。D20/native All、签名安装及返回旧版仍未验证。updater 签名不能证明这些行为，也不代表 Windows Authenticode。
+
 ## [0.27.0-rc.3]
 
 优化
