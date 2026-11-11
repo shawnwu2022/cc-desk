@@ -397,7 +397,7 @@ and sends `restore-request` for list-only restoration. Clicking a row does not
 implicitly restore or launch it. Ordinary groups continue to exclude archived
 records; archive-only project shells retain the per-project archive menu, and the
 panel-level archive entry remains available even with no matching search results.
-There is no native-history permanent-delete affordance in this drawer.
+Each archived row has its own guarded permanent-delete icon; unsupported sources remain disabled. A header history icon appears only when a retained deletion operation exists, and opens read-only results independently of current row eligibility.
 
 The drawer passes `menuTeleport=false` through the list/row to
 `SessionOverflowMenu.vue`. The fixed-position shared menu then stays inside the
@@ -870,3 +870,7 @@ Context invalidation still revokes dispatch ownership. A confirmed native rename
 whose later adapter/catalog display synchronization fails ends the original editor
 and reports `RENAME_DISPLAY_SYNC_FAILED`; it does not reopen that save for another
 write. Refresh remains a separate read-only recovery action.
+
+### Archived session deletion entry
+
+The archive drawer supplies a trailing delete icon to each shared session row. The trailing slot uses the otherwise empty archive column, preserving the normal row geometry, restore control and overflow menu. Unsupported identities keep a disabled icon with a localized reason. The drawer owns one persistent single-target deletion dialog, so removal of an acknowledged row does not unmount its receipt. No permanent-deletion availability or batch-selection module appears below the list; previous operation results stay inside the deletion dialog. All original source, preview, second-confirmation and no-replay guards remain in the existing deletion store and panel.

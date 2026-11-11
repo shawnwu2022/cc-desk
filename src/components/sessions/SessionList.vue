@@ -27,7 +27,9 @@ const emit = defineEmits<{
       @primary-action="(id, action) => emit('primary-action', id, action)"
       @menu-action="(id, action) => emit('menu-action', id, action)"
       @rename-commit="(id, title) => emit('rename-commit', id, title)"
-      @rename-cancel="emit('rename-cancel', $event)" />
+      @rename-cancel="emit('rename-cancel', $event)">
+      <template v-if="$slots.trailingAction" #trailingAction><slot name="trailingAction" :session="session" /></template>
+    </SessionItem>
   </div>
 </template>
 

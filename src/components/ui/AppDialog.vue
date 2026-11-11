@@ -107,6 +107,7 @@ onBeforeUnmount(releaseFocus)
         aria-modal="true" :aria-labelledby="titleId" :aria-describedby="description ? descriptionId : undefined" tabindex="-1" @keydown="onKeydown">
         <header class="ui-dialog-header">
           <h2 :id="titleId">{{ title }}</h2>
+          <div v-if="$slots.headerActions" class="ui-dialog-header-actions"><slot name="headerActions" /></div>
           <AppButton v-if="showClose" variant="ghost" size="compact" class="ui-icon-button" :aria-label="t('close')" @click="close"><span aria-hidden="true">×</span></AppButton>
         </header>
         <div class="ui-dialog-body">
@@ -118,3 +119,7 @@ onBeforeUnmount(releaseFocus)
     </div>
   </Teleport>
 </template>
+
+<style scoped>
+.ui-dialog-header-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+</style>
