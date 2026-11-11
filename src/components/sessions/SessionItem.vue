@@ -244,7 +244,7 @@ function preventReferenceNativeDrag(event: DragEvent) {
         </IconButton>
       </div>
     </div>
-    <div class="session-archive-slot">
+    <div v-if="!$slots.trailingAction" class="session-archive-slot">
       <div v-if="archive && !primary && !isRenaming" class="session-archive-action" data-session-archive>
         <IconButton class="session-row-control" :label="t(archive.labelKey)" :disabled="archive.disabled" @click.stop="runArchive">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -258,6 +258,9 @@ function preventReferenceNativeDrag(event: DragEvent) {
         aria-haspopup="menu" :aria-expanded="menuOpen" @click="openOverflow">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8" /><circle cx="12" cy="12" r="1.8" /><circle cx="19" cy="12" r="1.8" /></svg>
       </IconButton>
+    </div>
+    <div v-if="$slots.trailingAction" class="session-trailing-action" @click.stop @dblclick.stop>
+      <slot name="trailingAction" />
     </div>
     <SessionOverflowMenu v-model:open="menuOpen" :actions="actions" :anchor="menuAnchor" :teleport="menuTeleport" @menu-action="onMenuAction" />
   </div>
@@ -331,6 +334,8 @@ function preventReferenceNativeDrag(event: DragEvent) {
   pointer-events: none;
 }
 .session-archive-slot { width: 20px; height: 28px; }
+.session-trailing-action { width: 20px; height: 28px; }
+.session-trailing-action :deep(.ui-button) { width: 20px; min-width: 20px; height: 28px; padding: 0; }
 [data-session-history-issue] { color: var(--status-warning); flex-shrink: 0; font-weight: 600; }
 .session-archive-action { display: flex; justify-content: flex-end; align-items: center; opacity: 0; pointer-events: none; }
 .session-item:hover .session-archive-action, .session-item:focus-within .session-archive-action { opacity: 1; pointer-events: auto; }

@@ -1,9 +1,12 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppDrawer from '@/components/ui/AppDrawer.vue'
 import SessionList from './SessionList.vue'
-import NativeCleanupAvailability from './NativeCleanupAvailability.vue'
+import IconButton from '@/components/ui/IconButton.vue'
+import NativeSessionDeletePanel from './NativeSessionDeletePanel.vue'
+import { useNativeHistoryStore } from '@/stores/nativeHistory'
+import { nativeDeleteEligibility } from '@/utils/nativeSessionDelete'
 import { normalizePath } from '@/utils/path'
 import { compareSessionOpenOrder } from '@/utils/sessionOpenOrder'
 import type { SessionMenuAction, SessionPrimaryAction, UnifiedProjectIdentity, UnifiedSession } from '@/types/unifiedSession'
@@ -21,9 +24,27 @@ const emit = defineEmits<{
   'rename-cancel': [id: string]
 }>()
 const { t } = useI18n()
+const history = useNativeHistoryStore()
+const deletePanel = ref<InstanceType<typeof NativeSessionDeletePanel> | null>(null)
+const deleteTargetId = ref('')
 const archived = computed(() => props.sessions.filter(session => session.archived
   && (!props.project || normalizePath(session.projectPath) === normalizePath(props.project.projectPath)))
   .sort(compareSessionOpenOrder))
+const deleteTarget = computed(() => archived.value.find(session => session.id === deleteTargetId.value) ?? null)
+const deleteEligibility = computed(() => new Map(archived.value.map(session => [session.id,
+  nativeDeleteEligibility(session, session.nativeOrigin ? history.get(session.nativeOrigin) : undefined)])))
+function deleteLabel(session: UnifiedSession) {
+  const label = t('deletePermanently') + ' · ' + session.title
+  const reason = deleteEligibility.value.get(session.id)?.reason
+  return reason ? label + ' · ' + t(reason) : label
+}
+async function reviewDelete(id: string) {
+  if (!props.open || !deleteEligibility.value.get(id)?.binding) return
+  deleteTargetId.value = id
+  await nextTick()
+  // 行在渲染间隙被恢复、移除或切换来源时，不沿用旧点击的资格。
+  if (props.open && deleteTargetId.value === id && deleteEligibility.value.get(id)?.binding) await deletePanel.value?.review()
+}
 function primaryAction(id: string, action: SessionPrimaryAction) {
   if (action === 'restore-archive' && archived.value.some(session => session.id === id)) emit('restore-request', id)
 }
@@ -36,13 +57,28 @@ function menuAction(id: string, action: SessionMenuAction) {
 
 <template>
   <AppDrawer :open="open" :title="t('archivedSessions')" @update:open="emit('update:open', $event)">
+    <template v-if="deletePanel?.hasResults" #headerActions>
+      <IconButton data-archive-delete-results :label="t('deleteViewOperation')" @click="deletePanel?.showResults()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 11a9 9 0 1 1 3 7M3 4v7h7M12 7v5l3 2" />
+        </svg>
+      </IconButton>
+    </template>
     <div class="archived-sessions-content" role="tree" :aria-label="t('archivedSessions')">
-      <SessionList v-if="archived.length" :sessions="archived" :menu-teleport="false" @primary-action="primaryAction" @menu-action="menuAction"
-        @rename-commit="(id, title) => emit('rename-commit', id, title)" @rename-cancel="emit('rename-cancel', $event)" />
+      <SessionList v-if="archived.length" :sessions="archived" :surface-active="open" :menu-teleport="false" @primary-action="primaryAction" @menu-action="menuAction"
+        @rename-commit="(id, title) => emit('rename-commit', id, title)" @rename-cancel="emit('rename-cancel', $event)">
+        <template #trailingAction="{ session }">
+          <IconButton data-session-delete :label="deleteLabel(session)" :disabled="!open || !deleteEligibility.get(session.id)?.binding" @click.stop="reviewDelete(session.id)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 6h18M9 6V4h6v2M5 6l1 14h12l1-14M10 10v6M14 10v6" />
+            </svg>
+          </IconButton>
+        </template>
+      </SessionList>
       <p v-else class="archived-empty">{{ t('noArchivedSessions') }}</p>
-      <NativeCleanupAvailability :sessions="archived" :active="open" />
     </div>
   </AppDrawer>
+  <NativeSessionDeletePanel ref="deletePanel" :target="deleteTarget" :active="open" dialog-only />
 </template>
 
 <style scoped>

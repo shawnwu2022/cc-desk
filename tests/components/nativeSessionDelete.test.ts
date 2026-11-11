@@ -3,6 +3,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
 import NativeSessionDeletePanel from '@/components/sessions/NativeSessionDeletePanel.vue'
+import ArchivedSessionsDrawer from '@/components/sessions/ArchivedSessionsDrawer.vue'
 import { useNativeHistoryStore, nativeHistoryContextKey } from '@/stores/nativeHistory'
 import { useNativeSessionDeletesStore } from '@/stores/nativeSessionDeletes'
 import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
@@ -224,4 +225,147 @@ describe('native permanent deletion review and second confirmation', () => {
     expect(store.records.get(key)?.receipt?.state).toBe('blocked')
     expect(io.invoke.mock.calls.filter(([command]) => command === 'cli_preview_session_delete')).toHaveLength(1)
   })
+})
+
+
+describe('archived session row deletion entry', () => {
+  function drawer(sessions: UnifiedSession[] = [target()]) {
+    view = mount(ArchivedSessionsDrawer, { props: { sessions, open: true }, attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en, zh } })] } })
+    return view
+  }
+  it('ArchiveDelete_RowIconsReplaceBottomModule_001', async () => {
+    drawer([target(), { ...target(), id: 'claude', cli: 'claude' }, { ...target(), id: 'opencode', cli: 'opencode' }])
+    await flushPromises()
+    expect(document.querySelectorAll('[data-session-delete]')).toHaveLength(3)
+    expect((element('[data-session-row="desk"] [data-session-delete]') as HTMLButtonElement).disabled).toBe(false)
+    expect((element('[data-session-row="claude"] [data-session-delete]') as HTMLButtonElement).disabled).toBe(true)
+    expect(element('[data-session-row="claude"] [data-session-delete]').getAttribute('aria-label')).toContain('active external writer')
+    expect((element('[data-session-row="opencode"] [data-session-delete]') as HTMLButtonElement).disabled).toBe(true)
+    expect(element('[data-session-row="opencode"] [data-session-delete]').getAttribute('aria-label')).toContain('may interrupt active sessions')
+    expect(document.querySelector('[data-cleanup-availability], [data-batch-start], [data-native-cleanup-delete], .delete-operations')).toBeNull()
+    expect(io.invoke).not.toHaveBeenCalled()
+  })
+  // 有界元数据和标题截断只影响展示，不能阻止已知原生归档进入后端只读预览。
+  it.each([true, false])('ArchiveDelete_BoundedPreview_006 (%s)', async metadataIncomplete => {
+    const entry = useNativeHistoryStore().get(context)!
+    Object.assign(entry.sessions[0]!, { truncated: true, metadataIncomplete })
+    entry.metadataIncomplete = metadataIncomplete
+    drawer(); await flushPromises()
+    expect((element('[data-session-delete]') as HTMLButtonElement).disabled).toBe(false)
+    element('[data-session-delete]').click(); await flushPromises()
+    expect(element('[data-delete-dialog]').textContent).toContain(nativeId)
+    expect(io.invoke.mock.calls).toEqual([['cli_preview_session_delete', expect.objectContaining({ source, sessionKey: 'key' })]])
+    element('[data-delete-next-confirm]').click(); await flushPromises()
+    expect((element('[data-delete-final]') as HTMLButtonElement).disabled).toBe(true)
+    element('[data-delete-cancel]').click(); await flushPromises()
+    expect(io.invoke.mock.calls.map(([command]) => command)).toEqual(['cli_preview_session_delete'])
+  })
+  // 截断记录仍须通过原生归档、来源和活动检查，并明确显示实际阻止原因。
+  it.each([
+    ['desk-only', 'not archived by Codex'],
+    ['opened', 'still open'],
+    ['running', 'still open'],
+    ['resume-pending', 'still open'],
+    ['loading', 'being refreshed'],
+    ['read-failure', 'could not be read reliably'],
+    ['source-error', 'could not be verified'],
+    ['root-change', 'could not be verified'],
+    ['revision-change', 'could not be verified'],
+    ['wrong-project', 'could not be verified'],
+    ['duplicate', 'could not be verified'],
+  ])('ArchiveDelete_ExplainBlocked_007 (%s)', async (state, reason) => {
+    const entry = useNativeHistoryStore().get(context)!, row = target()
+    Object.assign(entry.sessions[0]!, { truncated: true, metadataIncomplete: true })
+    if (state === 'desk-only') entry.sessions[0]!.archived = false
+    if (state === 'opened') row.opened = true
+    if (state === 'running') row.processState = 'running'
+    if (state === 'resume-pending') row.resumePending = true
+    if (state === 'loading') entry.loading = true
+    if (state === 'read-failure') entry.sessions[0]!.readFailure = 'SOURCE_READ_FAILED'
+    if (state === 'source-error') entry.error = 'SOURCE_UNAVAILABLE'
+    if (state === 'root-change') entry.source = { ...source, sourceRootKey: 'different-root' }
+    if (state === 'revision-change') entry.source = { ...source, profileRevision: '2' }
+    if (state === 'wrong-project') entry.sessions[0]!.projectId = 'different-project'
+    if (state === 'duplicate') entry.sessions.push({ ...entry.sessions[0]! })
+    drawer([row]); await flushPromises()
+    const button = element('[data-session-delete]') as HTMLButtonElement
+    expect(button.disabled).toBe(true)
+    expect(button.getAttribute('aria-label')).toContain(reason)
+    button.click(); await flushPromises()
+    expect(io.invoke).not.toHaveBeenCalled()
+  })
+  it('ArchiveDelete_ExactRowPreviewCancelAndRestoreStaySeparate_002', async () => {
+    const secondId = '40000000-0000-4000-8000-000000000003'
+    const second = { ...target(), id: 'second', nativeSessionId: secondId, nativeHistorySessionKey: 'key-2', title: 'Second synthetic session' }
+    useNativeHistoryStore().get(context)!.sessions.push({ ...useNativeHistoryStore().get(context)!.sessions[0]!, nativeSessionId: secondId, sessionKey: 'key-2' })
+    const previous = io.invoke.getMockImplementation()!
+    io.invoke.mockImplementation(async (command, request) => command === 'cli_preview_session_delete'
+      ? { ...await previous(command, request), nativeSessionId: secondId } : previous(command, request))
+    const w = drawer([target(), second]); await flushPromises()
+    element('[data-session-row="second"] [data-session-delete]').click(); await flushPromises()
+    expect(io.invoke.mock.calls[0]).toEqual(['cli_preview_session_delete', expect.objectContaining({ sessionKey: 'key-2', source })])
+    expect(element('[data-delete-dialog]').textContent).toContain('Second synthetic session')
+    expect(w.emitted('restore-request')).toBeUndefined()
+    element('[data-delete-cancel]').click(); await flushPromises()
+    expect(document.querySelector('[data-delete-dialog]')).toBeNull()
+    expect(document.querySelectorAll('[data-session-row]')).toHaveLength(2)
+    expect(io.invoke.mock.calls.map(([command]) => command)).toEqual(['cli_preview_session_delete'])
+    element('[data-session-row="desk"] .session-launch-action button').click(); await flushPromises()
+    expect(w.emitted('restore-request')).toEqual([['desk']])
+  })
+  it('ArchiveDelete_DoubleConfirmationAndRemovedRowKeepResult_003', async () => {
+    const w = drawer(); await flushPromises()
+    element('[data-session-delete]').click(); element('[data-session-delete]').click(); await flushPromises()
+    expect(io.invoke.mock.calls.filter(([command]) => command === 'cli_preview_session_delete')).toHaveLength(1)
+    element('[data-delete-next-confirm]').click(); await flushPromises()
+    expect((element('[data-delete-final]') as HTMLButtonElement).disabled).toBe(true)
+    await acknowledge('[data-delete-ack-permanent]')
+    expect((element('[data-delete-final]') as HTMLButtonElement).disabled).toBe(true)
+    await acknowledge('[data-delete-ack-subtree]')
+    element('[data-delete-final]').click(); element('[data-delete-final]').click(); await flushPromises()
+    expect(io.invoke.mock.calls.filter(([command]) => command === 'cli_confirm_session_delete')).toHaveLength(1)
+    await w.setProps({ sessions: [] }); await flushPromises()
+    expect(element('[data-delete-result]').textContent).toContain('acknowledged')
+    expect(element('[data-delete-result]').textContent).toContain('not independently verified')
+    element('[data-delete-cancel]').click(); await flushPromises()
+    expect(document.querySelector('.delete-operations')).toBeNull()
+  })
+  it('ArchiveDelete_SourceChangeAndClosingDiscardUnsentReview_004', async () => {
+    const w = drawer(); await flushPromises()
+    element('[data-session-delete]').click(); await flushPromises()
+    await w.setProps({ sessions: [{ ...target(), resumePending: true }] }); await flushPromises()
+    expect(document.querySelector('[data-delete-dialog]')).toBeNull()
+    expect((element('[data-session-delete]') as HTMLButtonElement).disabled).toBe(true)
+    await w.setProps({ sessions: [target()] }); await flushPromises()
+    element('[data-session-delete]').click(); await flushPromises()
+    await w.setProps({ open: false }); await flushPromises()
+    expect(document.querySelector('[data-delete-dialog]')).toBeNull()
+    expect(useNativeSessionDeletesStore().records.size).toBe(0)
+    expect(io.invoke.mock.calls.filter(([command]) => command === 'cli_confirm_session_delete')).toHaveLength(0)
+  })
+  it.each(['removed', 'source-error'])('ArchiveDelete_UnknownResultRemainsReachable_005 (%s)', async state => {
+    const previous = io.invoke.getMockImplementation()!
+    io.invoke.mockImplementation(async (command, request) => ['cli_confirm_session_delete', 'cli_inspect_session_delete'].includes(command)
+      ? { operationId: request.operationId, cli: 'codex', state: 'unknown', rootPresent: null, descendants: 'unverified', reason: 'DELETE_OUTCOME_UNKNOWN' }
+      : previous(command, request))
+    const w = drawer(); await flushPromises()
+    expect(document.querySelector('[data-archive-delete-results]')).toBeNull()
+    element('[data-session-delete]').click(); await flushPromises()
+    element('[data-delete-next-confirm]').click(); await flushPromises()
+    await acknowledge('[data-delete-ack-permanent]'); await acknowledge('[data-delete-ack-subtree]')
+    element('[data-delete-final]').click(); await flushPromises()
+    if (state === 'removed') await w.setProps({ sessions: [] })
+    else useNativeHistoryStore().get(context)!.error = 'SOURCE_UNAVAILABLE'
+    await flushPromises()
+    element('[data-delete-cancel]').click(); await flushPromises()
+    await w.setProps({ open: false }); await w.setProps({ open: true }); await flushPromises()
+    if (state === 'source-error') expect((element('[data-session-delete]') as HTMLButtonElement).disabled).toBe(true)
+    expect(element('[data-archive-delete-results]')).not.toBeNull()
+    element('[data-archive-delete-results]').click(); await flushPromises()
+    expect(element('[data-delete-result]').textContent).toContain('unknown')
+    expect(document.querySelector('[data-delete-final], [data-delete-next-confirm], [data-delete-review-again]')).toBeNull()
+    element('[data-delete-inspect]').click(); await flushPromises()
+    expect(io.invoke.mock.calls.map(([command]) => command)).toEqual(['cli_preview_session_delete', 'cli_confirm_session_delete', 'cli_inspect_session_delete'])
+  })
+
 })

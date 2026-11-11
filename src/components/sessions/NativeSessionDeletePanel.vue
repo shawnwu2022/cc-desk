@@ -12,8 +12,11 @@ import { createNativeUuid } from '@/utils/nativeId'
 import type { UnifiedSession } from '@/types/unifiedSession'
 import type { SessionDeletePreviewRequest } from '@/types/nativeSessionDelete'
 
-const props = defineProps<{ target: UnifiedSession | null; active: boolean }>()
+const props = defineProps<{ target: UnifiedSession | null; active: boolean; dialogOnly?: boolean }>()
 const { t } = useI18n(), history = useNativeHistoryStore(), operations = useNativeSessionDeletesStore()
+const resultsOnly = ref(false)
+const retainedOperations = computed(() => [...operations.records].filter(([, item]) => item.receipt || ['executing', 'checking'].includes(item.phase)))
+const hasResults = computed(() => retainedOperations.value.length > 0)
 const open = ref(false), selectedKey = ref(''), permanent = ref(false), subtree = ref(false)
 const binding = computed(() => {
   const row = props.target
@@ -44,6 +47,7 @@ onBeforeUnmount(() => operations.cancel(selectedKey.value))
 async function review() {
   const current = binding.value
   if (!current) return
+  resultsOnly.value = false
   const request: SessionDeletePreviewRequest = { operationId: createNativeUuid(), source: current.source, sessionKey: current.sessionKey }
   selectedKey.value = sessionDeleteTargetKey(request)
   const requestKey = selectedKey.value
@@ -78,22 +82,30 @@ async function inspect() {
     if (operations.records.get(key) === record && previous !== 'acknowledged') await refreshAcknowledged(key)
   } catch { /* 重读失败保留缓存及错误，不改写删除回执。 */ }
 }
-function reopen(key: string) { selectedKey.value = key; open.value = true; permanent.value = false; subtree.value = false }
+function reopen(key: string, readonly = false) { if (readonly) operations.cancel(selectedKey.value); resultsOnly.value = readonly; selectedKey.value = key; open.value = true; permanent.value = false; subtree.value = false }
+function showResults() {
+  const latest = retainedOperations.value[retainedOperations.value.length - 1]
+  if (props.active && latest) reopen(latest[0], true)
+}
 async function reviewAgain() {
   if (!sameTarget.value || !operations.canReviewAgain(selectedKey.value)) return
   operations.restartReview(selectedKey.value)
   await review()
 }
+defineExpose({ review, showResults, hasResults })
 </script>
 
 <template>
   <div class="native-delete-panel">
-    <AppButton data-native-cleanup-delete variant="danger" :disabled="!binding" @click="review">{{ t('deleteReview') }}</AppButton>
-    <p v-if="target?.cli === 'codex' && !binding" class="delete-hint">{{ t('deleteEligibility') }}</p>
-    <div v-if="operations.records.size" class="delete-operations">
+    <AppButton v-if="!dialogOnly" data-native-cleanup-delete variant="danger" :disabled="!binding" @click="review">{{ t('deleteReview') }}</AppButton>
+    <p v-if="!dialogOnly && target?.cli === 'codex' && !binding" class="delete-hint">{{ t('deleteEligibility') }}</p>
+    <div v-if="!dialogOnly && operations.records.size" class="delete-operations">
       <AppButton v-for="[key, item] of operations.records" :key="key" data-delete-existing @click="reopen(key)">{{ t('deleteViewOperation') }} · {{ item.request.source.profileId }}</AppButton>
     </div>
-    <AppDialog :open="open" :title="t(operation?.phase === 'confirmation' ? 'deleteSecondConfirmation' : 'deleteReview')" data-delete-dialog @close="close">
+    <AppDialog :open="open" :title="t(resultsOnly ? 'deleteViewOperation' : operation?.phase === 'confirmation' ? 'deleteSecondConfirmation' : 'deleteReview')" data-delete-dialog @close="close">
+      <div v-if="dialogOnly && retainedOperations.length > 1" class="delete-operations">
+        <AppButton v-for="[key, item] of retainedOperations" :key="key" data-delete-existing @click="reopen(key, true)">{{ t('deleteViewOperation') }} · {{ item.display?.title || item.request.source.profileId }}</AppButton>
+      </div>
       <template v-if="operation">
         <dl class="delete-identity">
           <dt>{{ t('cleanupTargetLabel') }}</dt><dd>{{ operation.display?.title || t('cleanupUnknown') }}</dd>
@@ -118,13 +130,13 @@ async function reviewAgain() {
           <p v-if="operation.receipt?.rootPresent === true">{{ t('deleteRootPresent') }}</p>
           <code v-if="operation.error || operation.receipt?.reason || operation.preview?.reason">{{ operation.error || operation.receipt?.reason || operation.preview?.reason }}</code>
           <AppButton v-if="operation.receipt" data-delete-inspect @click="inspect">{{ t('deleteInspect') }}</AppButton>
-          <AppButton v-if="sameTarget && operations.canReviewAgain(selectedKey)" data-delete-review-again @click="reviewAgain">{{ t('deleteReviewAgain') }}</AppButton>
+          <AppButton v-if="!resultsOnly && sameTarget && operations.canReviewAgain(selectedKey)" data-delete-review-again @click="reviewAgain">{{ t('deleteReviewAgain') }}</AppButton>
         </div>
       </template>
       <template #footer>
         <AppButton data-delete-cancel @click="close">{{ t(busy && operation?.phase !== 'previewing' ? 'close' : 'cancel') }}</AppButton>
-        <AppButton v-if="operation?.phase === 'review'" data-delete-next-confirm @click="operations.beginConfirmation(selectedKey)">{{ t('deleteContinueConfirmation') }}</AppButton>
-        <AppButton v-if="operation?.phase === 'confirmation'" data-delete-final variant="danger" :disabled="!permanent || !subtree || !ownsOperation" @click="execute">{{ t('deletePermanently') }}</AppButton>
+        <AppButton v-if="!resultsOnly && operation?.phase === 'review'" data-delete-next-confirm @click="operations.beginConfirmation(selectedKey)">{{ t('deleteContinueConfirmation') }}</AppButton>
+        <AppButton v-if="!resultsOnly && operation?.phase === 'confirmation'" data-delete-final variant="danger" :disabled="!permanent || !subtree || !ownsOperation" @click="execute">{{ t('deletePermanently') }}</AppButton>
       </template>
     </AppDialog>
   </div>

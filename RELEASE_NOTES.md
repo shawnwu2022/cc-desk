@@ -4,6 +4,22 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
+## [0.27.0-rc.3]
+
+Improved
+
+- Open permanent-delete review from a separate icon at the end of each archived session row. Remove the permanent-delete module below the list and keep existing deletion receipts available from the drawer's result icon.
+
+Fixed
+
+- Allow known natively archived Codex sessions with bounded history metadata or shortened titles to reach read-only deletion preview. Show specific reasons when activity, missing sources, read failures or Desk-only archiving block review.
+
+Important
+
+- This is a prerelease. Stable Latest remains unchanged. Permanent deletion is still limited to eligible archived Codex roots on Windows; Claude, OpenCode and Unix remain unavailable.
+- Permanent deletion cannot be undone. Review still requires two separate confirmations and both risk acknowledgements. The selected native root and its execution-time subtree are the scope; the preview is not a complete frozen descendant list. Existing source, activity, expiry and one-shot execution checks remain in force.
+- These interface changes were checked with synthetic history and a browser bridge. Real Codex CLI deletion, installed Windows WebView2, full descendant and external-writer cases, D20/native All and signed upgrade/return roundtrips remain unverified. Updater signatures do not certify those behaviors or Windows Authenticode.
+
 ## [0.27.0-rc.2]
 
 Added

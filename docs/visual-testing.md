@@ -675,3 +675,36 @@ test configuration, and performs no image repainting or regeneration. A fresh
 complete 241-case current-head no-update CI with `maxDiffPixels: 0` is required
 before merging. These Linux fixture pixels do not certify installed WebView2,
 native taskbar/Dock presentation, native scaling or real CLI behavior.
+
+
+## PR83 archived-row deletion baseline acceptance
+
+Two reviewers inspected the actual, expected and diff PNGs from
+[PR83 visual run 42978925269, attempt 1](https://github.com/shawnwu2022/cc-desk/actions/runs/42978925269).
+Only archived-sessions.png changes: the three requested row-tail delete icons
+replace the list-bottom permanent-deletion module and its divider. Existing
+archive text, restore icons, drawer bounds and the rest of the interface remain
+unchanged, without clipping or hidden failures.
+
+The adopted file is the exact 50,596-byte CI actual PNG, SHA-256
+64eb9f3791f820a28d8eb5a2d455ea0a07805ebea808f8732dc1e9e652296b39.
+Its previous tracked baseline hash is
+b44fc17fa12de582abbcdf2dc67cd77d69990e1870f1eefaffc91a5eace2dda7.
+The original comparison reported 490 Playwright differing pixels; the raw RGBA
+comparison has 1,299 changed pixels within [987,73,1345,223). Both reviewers
+verified the exact artifact ZIP hash independently.
+
+Capture head: 7bd325697ab7e091b177fe150aa99d627818681d; tested PR merge:
+3db1ef57b793fed0c14eafcfb38adfb3bcecbe2f. Artifact 13836861505 has
+41,489,365 bytes and SHA-256
+3ac98792d47776e2d2318f2fd1d2124d7a2f0ac2a76507cc4288a71714080d68.
+Environment: Ubuntu 24.04, Node 22.23.4, Playwright 1.63.0, Chrome for Testing
+153.0.8010.12; Noto core 20201225-2, CJK 1:20230817+repack1-3 and emoji
+2.047-0ubuntu0.24.04.1. The manifest retains prior provenance and the exact hashes
+of all twelve unchanged tracked baselines. Candidate recaptures are not adopted.
+
+The original run remains RED: one screenshot failure and 254 passing cases.
+This reviewed baseline adoption changes no product code, fixture, inventory,
+mask or tolerance. A fresh complete 255-case no-update CI run with
+maxDiffPixels: 0 remains required before merge. These synthetic Linux pixels
+do not certify installed Windows WebView2 or real CLI deletion.

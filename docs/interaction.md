@@ -197,6 +197,10 @@ AppShell 是所有构建的唯一外壳，一级入口为工作区、项目、�
 An already-started Native new or resume-id tab restarts only after checking its frozen run source, a fresh positive history identity and the exact current owner. The root/profile/project are revalidated around stopping; a known conversation restarts with resume-id and its proven source key. Unknown identity, changed source or stale ownership fails explicitly instead of silently starting a new conversation. A positively unstarted attempt remains a launch retry; raw actions remain explicit reruns.
 
 
-## 0.27 批量永久删除
+## 0.27 归档会话永久删除
 
-归档抽屉 → 永久删除能力 → 批量删除，支持多选、筛选和全选当前可删除项。整个所选根清单统一预览及独立二次确认，随后按序执行，每项保留准确结果。首个失败/未知、资格变化或关闭会停止尚未发出的请求；已发出项不能撤回。大批量仍受原 120 秒票据限制，过期项需重新选择、预览和确认，不自动续期或重试。当前执行仍限 Windows/Codex 原生已归档记录，其他 CLI 仅展示具体限制。完整边界和证据见 [永久删除说明](permanent-delete-0.27.md#2026-11-11批量删除交互)。
+归档抽屉仅在每条会话末尾提供独立删除图标，不再显示列表下方的永久删除能力或批量选择模块。点击支持的会话后打开准确目标的只读预览，再经独立二次确认和两个风险勾选执行单条原生删除。取消或关闭抽屉、目标恢复/移除、来源或资格变化均撤销未发送的确认；已发出请求保留原回执，未知结果仅可只读核查，不能重放。原生删除仍可能包含执行时发现的后代，不等于只删除一个文件。当前范围仍限 Windows/Codex 原生已归档记录；不支持来源显示禁用图标和具体原因。历史结果在删除弹窗内查看，不恢复下方模块。完整边界和历史批量实现证据见 [永久删除说明](permanent-delete-0.27.md)。
+
+仅当已有删除执行/结果记录时，抽屉标题旁显示“查看删除结果”的历史图标，独立于当前行和删除资格打开只读回执与核查。它不提供新的删除或重试入口，也不恢复列表下方模块。
+
+删除图标的禁用提示区分仅 Desk 归档、会话尚未关闭、来源刷新中、读取失败及准确来源不可核验。正常有界历史元数据或标题截断不阻止进入后端只读预览；原生归档、活动保护与双确认规则不变。
