@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [0.27.0-rc.3] - 2026-11-11
+
+### Improved
+
+- Move permanent-delete review to a dedicated icon on each archived session row and remove the list-bottom module. Preserve exact-target cancellation, separate risk confirmation and read-only receipt access after a row disappears or loses eligibility.
+
+### Fixed
+
+- Stop treating display truncation and bounded metadata as failed source evidence for known natively archived Codex records. Keep exact source/profile/project/session binding, read failures, active/preparing owners and Desk-only archives blocking review, with specific localized reasons.
+
+This is a prerelease with make_latest=false; stable Latest remains unchanged. The two independent confirmations, both risk acknowledgements, 120-second preview lifetime, execution-time native subtree scope and backend one-shot/source/activity protections are unchanged. Claude/OpenCode and Unix permanent deletion remain unavailable. Synthetic history and browser-bridge checks do not certify real Codex CLI deletion, installed WebView2, full descendants/external writers, D20/native All or signed installation/return. Exact-main CI, authenticated coverage and same-run three-platform updater signatures remain mandatory publication gates; updater signing is not Windows Authenticode.
+
 ## [0.27.0-rc.2] - 2026-11-11
 
 ### Added
