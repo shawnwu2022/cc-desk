@@ -39,7 +39,7 @@ impl Drop for PrivateTranscript {
         let _ = self.parent.remove_dir(&self.name);
     }
 }
-fn identity(file: &cap_std::fs::File) -> ReadResult<String> {
+pub(super) fn identity(file: &cap_std::fs::File) -> ReadResult<String> {
     let file = file.try_clone().map_err(read_error)?.into_std();
     #[cfg(unix)]
     {

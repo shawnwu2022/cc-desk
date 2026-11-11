@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [0.27.0-rc.2] - 2026-11-11
+
+### Added
+
+- Batch selection, filtering and one shared two-step confirmation for eligible archived Windows Codex roots. Execute each original root sequentially through the existing one-shot deletion protocol, without per-item reconfirmation.
+
+### Fixed
+
+- Bind each deletion preview to the selected root's exact history records, original file identities and content, and configuration instead of the entire catalog, allowing consecutive deletion of different roots from the same source. Recheck the target before native dispatch within the existing deadline.
+- Stop unsent batch items on cancellation, observed loss of eligibility, expired tickets or the first blocked, partial or unknown result. Retain independent operation receipts and merge acknowledged refreshes by their original source.
+
+This is a prerelease with make_latest=false; stable Latest remains unchanged. Batches are non-atomic and never roll back completed roots. Existing 120-second preview expiry, native execution-time subtree semantics, unknown-result reconciliation and source/activity protections remain in force. Claude/OpenCode and Unix deletion stay unavailable. Synthetic-file, subprocess and browser-bridge checks do not certify real Codex CLI batch deletion, installed WebView2, full descendants/external writers, D20/native All or signed installation/return. Exact-main CI, authenticated coverage and same-run three-platform updater signatures remain mandatory publication gates; updater signing is not Windows Authenticode.
+
 ## [0.27.0-rc.1] - 2026-11-10
 
 ### Added

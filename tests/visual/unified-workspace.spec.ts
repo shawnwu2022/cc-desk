@@ -346,8 +346,9 @@ for (const locale of ['en', 'zh']) {
     const value = await select.getByRole('option', { name: /^claude / }).first().getAttribute('value')
     await select.selectOption(value!)
     await expect(availability.locator('[data-cleanup-target]')).toBeVisible()
-    await availability.locator('[data-native-cleanup-delete]').scrollIntoViewIfNeeded()
-    await expect(availability.locator('[data-native-cleanup-delete]')).toBeDisabled()
+    await availability.locator('[data-batch-start]').click()
+    await availability.locator('[data-batch-review]').scrollIntoViewIfNeeded()
+    await expect(availability.locator('[data-batch-review]')).toBeDisabled()
     await expect(availability.locator('[data-native-cleanup-archive]')).toHaveCount(0)
     await expect(availability.locator('[data-cleanup-provider-scope]')).toContainText(locale === 'zh' ? '子会话记录目录' : 'subagent-transcript directory')
     await expect(availability).toContainText(locale === 'zh' ? '独立二次确认' : 'separate second confirmation')
@@ -697,5 +698,64 @@ for (const locale of ['en', 'zh']) for (const gui of ['light', 'dark']) {
     await expect(filter).toHaveAttribute('aria-pressed', 'false')
     await expect(rows).toHaveCount(17)
     expect(errors).toEqual([])
+  })
+}
+
+
+// 只接合成 document bridge，验证真实浏览器中的批量选择与双确认，不启动任何 CLI。
+for (const locale of ['en', 'zh']) for (const dpr of [1, 1.5]) {
+  test.describe('batch deletion browser evidence ' + locale + ' DPR ' + dpr, () => {
+    test.use({ viewport: { width: 1024, height: 640 }, deviceScaleFactor: dpr })
+    test('BatchDelete_Browser_SelectReviewCancelConfirm_001', async ({ page }, testInfo) => {
+      await openFixture(page, { scenario: 'archived', locale, gui: locale === 'zh' ? 'dark' : 'light' })
+      await page.evaluate(async () => {
+        const historyPath = '/src/stores/nativeHistory.ts', catalogPath = '/src/stores/unifiedSessions.ts'
+        const { useNativeHistoryStore, nativeHistoryContextKey } = await import(historyPath)
+        const { useUnifiedSessionsStore } = await import(catalogPath)
+        const history = useNativeHistoryStore(), catalog = useUnifiedSessionsStore()
+        const context = { cli: 'codex', profileId: 'synthetic-profile', profileRevision: '1', projectId: 'synthetic-project', projectPath: 'C:/synthetic/batch-project' }
+        const source = { scopeId: 'synthetic-scope', instanceId: 'synthetic-instance', cli: 'codex', sourceRootKey: 'synthetic-root', identityEpoch: '1', profileId: context.profileId, profileRevision: '1', basis: 'configured-profile', target: { kind: 'profile', profileId: context.profileId, expectedProfileRevision: '1', projectIds: [context.projectId] } }
+        const uuid = (n: number) => '60000000-0000-4000-8000-' + String(n).padStart(12, '0')
+        const entries = [1, 2, 3].map(n => ({ type: 'session', sessionKey: 'key-' + n, nativeSessionId: uuid(n), projectId: context.projectId, title: 'Synthetic archived session ' + n, truncated: false, archived: true, cwd: context.projectPath, updatedAt: null }))
+        history.entries.set(nativeHistoryContextKey(context), { key: nativeHistoryContextKey(context), context, source, sourceRootKey: 'synthetic-root', loaded: true, loading: false, error: null, requestEpoch: '1', sessions: entries })
+        catalog.sessions = entries.map((entry, i) => ({ id: 'batch-' + i, projectKey: context.projectId, projectPath: context.projectPath, cli: 'codex', runtime: 'native-cli', title: entry.title, processState: 'stopped', attentionState: 'none', lastActivityAt: i, archived: true, opened: false, resumable: true, adapterSessionId: 'adapter-' + i, nativeSessionId: entry.nativeSessionId, nativeRootKey: source.sourceRootKey, nativeHistorySessionKey: entry.sessionKey, nativeOrigin: context }))
+        const host = window as any
+        host.__batchCalls = []
+        host.__CC_DESK_DOCUMENT__ = { instanceId: source.instanceId, invoke: async (command: string, request: any) => {
+          host.__batchCalls.push(command)
+          if (command === 'cli_preview_session_delete') return { operationId: request.operationId, previewId: uuid(100 + Number(request.sessionKey.split('-')[1])), nativeSessionId: uuid(Number(request.sessionKey.split('-')[1])), cli: 'codex', state: 'ready', rootArchived: true, scope: 'native-subtree', knownDescendantCount: null, reason: null }
+          if (command === 'cli_confirm_session_delete') return { operationId: request.operationId, cli: 'codex', state: 'acknowledged', rootPresent: false, descendants: 'unverified', reason: null }
+          if (command === 'native_get_scope') return source
+          if (command === 'native_list_resources') return { source: request.source, resourceKind: 'history', requestEpoch: request.requestEpoch, observedAt: '1', state: 'ready', reason: null, items: [], hasMore: false }
+          throw new Error('UNEXPECTED_SYNTHETIC_COMMAND')
+        } }
+      })
+      await page.locator('[data-cleanup-availability] summary').click()
+      await page.locator('[data-batch-start]').click()
+      await page.locator('[data-batch-select-all]').click()
+      await expect(page.locator('[data-batch-choice]:checked')).toHaveCount(3)
+      await captureFixtureEvidence(page, testInfo, 'batch-selection-' + locale + '-unapproved')
+      await page.locator('[data-batch-review]').click()
+      await expect(page.locator('[data-batch-next]')).toBeVisible()
+      await page.keyboard.press('Escape')
+      await expect(page.locator('[data-batch-dialog]')).toHaveCount(0)
+      await expect(page.locator('[data-cleanup-availability]')).toBeVisible()
+      expect(await page.evaluate(() => (window as any).__batchCalls.filter((c: string) => c === 'cli_confirm_session_delete').length)).toBe(0)
+      await page.locator('[data-batch-review]').click()
+      await expect(page.locator('[data-batch-next]')).toBeVisible()
+      await captureFixtureEvidence(page, testInfo, 'batch-review-' + locale + '-unapproved')
+      await page.locator('[data-batch-next]').click()
+      await expect(page.locator('[data-batch-final]')).toBeDisabled()
+      await expect(page.locator('[data-batch-final]')).not.toBeFocused()
+      await page.locator('[data-batch-ack-permanent]').check()
+      await expect(page.locator('[data-batch-final]')).toBeDisabled()
+      await page.locator('[data-batch-ack-subtree]').check()
+      await captureFixtureEvidence(page, testInfo, 'batch-confirmation-' + locale + '-unapproved')
+      await page.locator('[data-batch-final]').click()
+      await expect(page.locator('[data-batch-result]')).toContainText(locale === 'zh' ? '3 项已确认' : '3 acknowledged')
+      expect(await page.evaluate(() => (window as any).__batchCalls.filter((c: string) => c === 'cli_confirm_session_delete').length)).toBe(3)
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+      await captureFixtureEvidence(page, testInfo, 'batch-result-' + locale + '-unapproved')
+    })
   })
 }

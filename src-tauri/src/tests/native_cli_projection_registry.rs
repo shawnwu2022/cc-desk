@@ -1518,3 +1518,152 @@ fn old_first_page_retirement_cannot_remove_newer_generation() {
         ProjectionState::Ready
     );
 }
+
+#[test]
+#[allow(non_snake_case)]
+fn NativeDelete_BatchObservationSurvivesOtherRootRemoval_081() {
+    let root = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let registry = ScopeRegistry::new(4);
+    let mut g = grant(root.path(), "unused", Arc::new(AtomicBool::new(true)));
+    g.cli = CliKind::Codex;
+    fs::create_dir(root.path().join("sessions")).unwrap();
+    fs::create_dir(root.path().join("archived_sessions")).unwrap();
+    g.projects = vec![AdmittedProject {
+        id: "p".into(),
+        root: Root::open(project.path()).unwrap(),
+        paths: vec![project.path().to_owned()],
+    }];
+    if let ScopeTarget::Profile { project_ids, .. } = &mut g.target {
+        *project_ids = vec!["p".into()];
+    }
+    let a = "70000000-0000-4000-8000-000000000001";
+    let b = "70000000-0000-4000-8000-000000000002";
+    let content = |id: &str| {
+        format!(
+            "{}\n{}\n",
+            serde_json::json!({"type":"session_meta","payload":{"id":id,"cwd":project.path().to_str().unwrap(),"timestamp":"2026-11-11T00:00:00Z"}}),
+            serde_json::json!({"type":"event_msg","payload":{"type":"token_count","info":{"value":"aa"}}})
+        )
+    };
+    let a_path = root.path().join("archived_sessions/a.jsonl");
+    let b_path = root.path().join("archived_sessions/b.jsonl");
+    fs::write(&a_path, content(a)).unwrap();
+    fs::write(&b_path, content(b)).unwrap();
+    let source = registry.register(g).unwrap();
+    let key = serde_json::json!(["local", "codex", source.source_root_key, b]).to_string();
+    let before = registry.authorize_session(&owner(), &source, &key).unwrap();
+    fs::remove_file(&a_path).unwrap();
+    let after = registry.authorize_session(&owner(), &source, &key).unwrap();
+    assert_eq!(
+        before.observation, after.observation,
+        "deleting root A must not invalidate unchanged selected root B"
+    );
+    // 后端实际复核同长度、同 mtime 的目标内容变化，而非仅比较折叠行。
+    let thread = serde_json::json!({"id":b,"cwd":project.path().to_str().unwrap(),"path":b_path.to_str().unwrap()});
+    assert!(after.check_delete_thread(&thread).is_ok());
+    let modified = fs::metadata(&b_path).unwrap().modified().unwrap();
+    let original = content(b);
+    let changed = original.replace("\"value\":\"aa\"", "\"value\":\"bb\"");
+    assert_ne!(original, changed);
+    assert_eq!(original.len(), changed.len());
+    fs::write(&b_path, changed).unwrap();
+    fs::File::options()
+        .write(true)
+        .open(&b_path)
+        .unwrap()
+        .set_modified(modified)
+        .unwrap();
+    assert_ne!(
+        after.observation,
+        registry
+            .authorize_session(&owner(), &source, &key)
+            .unwrap()
+            .observation
+    );
+    assert_eq!(
+        after.check_delete_thread(&thread).unwrap_err().code,
+        "DELETE_PREVIEW_CHANGED"
+    );
+    drop(before);
+    drop(after);
+    drop(registry);
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn NativeDelete_AllRolloutsAndConfigRemainBound_082() {
+    for change in ["replace", "extra", "foreign", "auto", "active", "config"] {
+        let root = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let registry = ScopeRegistry::new(4);
+        let mut g = grant(root.path(), "unused", Arc::new(AtomicBool::new(true)));
+        g.cli = CliKind::Codex;
+        fs::create_dir(root.path().join("sessions")).unwrap();
+        fs::create_dir(root.path().join("archived_sessions")).unwrap();
+        g.projects = vec![AdmittedProject {
+            id: "p".into(),
+            root: Root::open(project.path()).unwrap(),
+            paths: vec![project.path().to_owned()],
+        }];
+        if let ScopeTarget::Profile { project_ids, .. } = &mut g.target {
+            *project_ids = vec!["p".into()];
+        }
+        let id = "70000000-0000-4000-8000-000000000003";
+        let payload = serde_json::json!({"type":"session_meta","payload":{"id":id,"cwd":project.path().to_str().unwrap(),"timestamp":"2026-11-11T00:00:00Z"}});
+        let content = format!("{payload}\n");
+        let path = root.path().join("archived_sessions/one.jsonl");
+        fs::write(&path, &content).unwrap();
+        let source = registry.register(g).unwrap();
+        let key = serde_json::json!(["local", "codex", source.source_root_key, id]).to_string();
+        let before = registry.authorize_session(&owner(), &source, &key).unwrap();
+        let thread = serde_json::json!({"id":id,"cwd":project.path().to_str().unwrap(),"path":path.to_str().unwrap()});
+        assert!(before.check_delete_thread(&thread).is_ok());
+        match change {
+            "replace" => {
+                let modified = fs::metadata(&path).unwrap().modified().unwrap();
+                fs::rename(&path, root.path().join("old-rollout")).unwrap();
+                fs::write(&path, &content).unwrap();
+                fs::File::options()
+                    .write(true)
+                    .open(&path)
+                    .unwrap()
+                    .set_modified(modified)
+                    .unwrap();
+            }
+            "extra" => {
+                fs::write(root.path().join("archived_sessions/two.jsonl"), &content).unwrap()
+            }
+            "foreign" | "auto" => {
+                let mut other = payload.clone();
+                if change == "foreign" {
+                    other["payload"]["cwd"] = serde_json::json!(root.path().to_str().unwrap());
+                } else {
+                    other["payload"]["source"] = serde_json::json!({"subagent":{"thread_spawn":{"parent_thread_id":id,"depth":1}}});
+                }
+                fs::write(
+                    root.path().join("archived_sessions/hidden.jsonl"),
+                    format!("{other}\n"),
+                )
+                .unwrap();
+            }
+            "active" => fs::write(root.path().join("sessions/other.jsonl"), &content).unwrap(),
+            "config" => fs::write(root.path().join("config.toml"), "model = 'changed'\n").unwrap(),
+            _ => unreachable!(),
+        }
+        let after = registry.authorize_session(&owner(), &source, &key);
+        assert!(
+            after
+                .as_ref()
+                .map_or(true, |value| value.observation != before.observation),
+            "unchanged authority after {change}"
+        );
+        assert!(
+            before.check_delete_thread(&thread).is_err(),
+            "write-boundary mutation accepted: {change}"
+        );
+        drop(after);
+        drop(before);
+        drop(registry);
+    }
+}

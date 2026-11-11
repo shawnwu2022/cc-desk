@@ -29,12 +29,9 @@ describe('native cleanup conservative capability check', () => {
     expect(view.get('[data-cleanup-target]').text()).toContain('fixture-root')
     expect(view.text()).toContain('complete child-session range is unverified')
     expect(view.text()).toContain('native subtree at execution')
-    expect(view.get('[data-native-cleanup-delete]').attributes('disabled')).toBeDefined()
+    expect(view.find('[data-native-cleanup-delete]').exists()).toBe(false)
     expect(view.find('[data-native-cleanup-archive]').exists()).toBe(false)
     expect(view.text()).toContain('Desk metadata')
-    const eventsBefore = Object.keys(view.emitted())
-    await view.get('[data-native-cleanup-delete]').trigger('click')
-    expect(Object.keys(view.emitted())).toEqual(eventsBefore)
   })
   it('CleanupAvailability_OpencodeInterruptAndClaudeUnsupportedAreDistinct_002', async () => {
     const view = render([session('opencode'), session('claude')])
@@ -56,7 +53,7 @@ describe('native cleanup conservative capability check', () => {
     await view.get('select').setValue('claude-desk')
     expect(view.text()).toContain('transcript and subagent-transcript directory')
     expect(view.text()).toContain('associated worktrees')
-    expect(view.get('[data-native-cleanup-delete]').attributes('disabled')).toBeDefined()
+    expect(view.find('[data-native-cleanup-delete]').exists()).toBe(false)
   })
   it('CleanupAvailability_ProtectsActiveAndRestoringAndClearsRemovedTarget_003', async () => {
     const view = render([session('codex', { processState: 'running', resumePending: true })])

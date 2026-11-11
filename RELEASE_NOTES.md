@@ -4,6 +4,23 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
+## [0.27.0-rc.2]
+
+Added
+
+- Select multiple eligible archived Codex sessions on Windows, filter by name, CLI or project, and review one batch before two separate confirmations. Selected roots run in sequence without another confirmation for each item.
+
+Fixed
+
+- Keep previews for other roots valid after one root in the same history source is deleted. Recheck the selected root's source, original files and configuration before dispatch.
+- Stop unsent items on cancellation, expired previews, changed sources, blocked results or uncertain outcomes. Preserve per-item receipts and refresh each acknowledged original source once.
+
+Important
+
+- This is a prerelease. Stable Latest remains unchanged. Claude, OpenCode and Unix permanent deletion remain unavailable.
+- Permanent deletion cannot be undone. A batch is not atomic and does not roll back completed items. A selected root includes its native subtree at execution time; the preview is not a complete frozen descendant list. Previews expire after 120 seconds, so large or delayed batches may need a smaller new selection and fresh confirmations.
+- Batch behavior was checked with synthetic files, subprocesses and a browser bridge. Real Codex CLI batch deletion, installed Windows WebView2, full descendant and external-writer cases, D20/native All and signed upgrade/return roundtrips remain unverified. Updater signatures do not certify those behaviors or Windows Authenticode.
+
 ## [0.27.0-rc.1]
 
 Added
