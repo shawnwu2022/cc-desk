@@ -10,6 +10,7 @@ use std::sync::{Arc, LazyLock};
 #[derive(Clone, Copy)]
 pub(crate) enum RuntimeKind {
     Native,
+    NativeCli(crate::cli::types::CliKind),
     Legacy,
 }
 
@@ -17,6 +18,19 @@ enum ChildState {
     Starting(RuntimeKind),
     Running(RuntimeKind),
     Unknown,
+}
+impl ChildState {
+    fn blocks_codex_archive(&self) -> bool {
+        use crate::cli::types::CliKind;
+        !matches!(
+            self,
+            Self::Starting(
+                RuntimeKind::Legacy | RuntimeKind::NativeCli(CliKind::Claude | CliKind::Opencode)
+            ) | Self::Running(
+                RuntimeKind::Legacy | RuntimeKind::NativeCli(CliKind::Claude | CliKind::Opencode)
+            )
+        )
+    }
 }
 #[derive(Default)]
 struct AdmissionState {
@@ -54,11 +68,43 @@ impl AdmissionGate {
         }
         Ok(())
     }
+    pub(crate) fn check_codex_archive_idle(&self) -> Result<(), SafeError> {
+        let state = self.0.lock();
+        if state.frozen.is_some()
+            || state
+                .children
+                .values()
+                .any(ChildState::blocks_codex_archive)
+            || !state.mutations.is_empty()
+        {
+            return Err(error("SOURCE_BUSY"));
+        }
+        Ok(())
+    }
+    pub(crate) fn begin_codex_archive(
+        &self,
+    ) -> Result<(FrozenAdmissions, PreparingStart), SafeError> {
+        self.begin_metadata_scoped(true)
+    }
     /// 元数据助手独占启动票据，同时冻结其他运行时启动与权威写入。
     /// 调用方必须持有冻结状态，直到精确子进程及其受控后代全部收口。
     pub(crate) fn begin_metadata(&self) -> Result<(FrozenAdmissions, PreparingStart), SafeError> {
+        self.begin_metadata_scoped(false)
+    }
+    fn begin_metadata_scoped(
+        &self,
+        codex_archive: bool,
+    ) -> Result<(FrozenAdmissions, PreparingStart), SafeError> {
         let mut state = self.0.lock();
-        if state.frozen.is_some() || !state.children.is_empty() || !state.mutations.is_empty() {
+        let children_busy = if codex_archive {
+            state
+                .children
+                .values()
+                .any(ChildState::blocks_codex_archive)
+        } else {
+            !state.children.is_empty()
+        };
+        if state.frozen.is_some() || children_busy || !state.mutations.is_empty() {
             return Err(error("SOURCE_BUSY"));
         }
         let id = uuid::Uuid::new_v4();
@@ -214,6 +260,20 @@ impl Drop for StartTicket {
 /// remain unknown unless the audited platform adapter proves no child was created.
 pub(crate) struct PreparingStart(Option<StartTicket>);
 impl PreparingStart {
+    // 只在结构化启动通过 profile/CLI 核对后标记；raw、Shell 和未知 owner 仍全局阻止归档。
+    pub(crate) fn identify_cli(&mut self, cli: crate::cli::types::CliKind) {
+        if let Some(ticket) = &self.0 {
+            let mut state = ticket.gate.0.lock();
+            if matches!(
+                state.children.get(&ticket.id),
+                Some(ChildState::Starting(RuntimeKind::Native))
+            ) {
+                state
+                    .children
+                    .insert(ticket.id, ChildState::Starting(RuntimeKind::NativeCli(cli)));
+            }
+        }
+    }
     pub(crate) fn begin_creation(&mut self) -> StartTicket {
         self.0.take().expect("start ticket already transferred")
     }

@@ -233,15 +233,15 @@ fn NativeArchive_UnknownFenceSurvivesNewOperationAndDocument_007() {
 #[test]
 #[cfg(windows)]
 fn NativeArchive_SyntheticBackendPinsSourceAndWaitsForJob_008() {
-    synthetic_archive(false, true);
+    synthetic_archive(false, true, false, false);
 }
 #[test]
 #[cfg(windows)]
 fn NativeArchive_LostAckReadRestoreArchiveRecovers_009() {
-    synthetic_archive(true, true);
+    synthetic_archive(true, true, false, false);
 }
 #[cfg(windows)]
-fn synthetic_archive(lost_ack: bool, move_before_ack: bool) {
+fn synthetic_archive(lost_ack: bool, move_before_ack: bool, unrelated_owner: bool, linger: bool) {
     use crate::cli::{
         environment::EnvMap,
         launch_service::LaunchService,
@@ -278,7 +278,8 @@ fn synthetic_archive(lost_ack: bool, move_before_ack: bool) {
     std::fs::write(&descendant, format!("require('node:fs').writeFileSync({}, 'started');setTimeout(()=>require('node:fs').writeFileSync({}, 'done'),500);", json!(started.to_str().unwrap()), json!(late.to_str().unwrap()))).unwrap();
     let script = format!(
         r#"const fs=require('node:fs'),rl=require('node:readline'),cp=require('node:child_process');let path={file};const archived={archived};
-rl.createInterface({{input:process.stdin}}).on('line',line=>{{const m=JSON.parse(line);if(!m.id)return;let result;if(m.method==='initialize')result={{codexHome:{home}}};else if(m.method==='thread/read')result={{thread:{{id:{id},cwd:{cwd},path}}}};else if(m.method==='thread/archive'){{fs.appendFileSync({marker},'archive\n');if({move_before_ack}){{fs.renameSync(path,archived);path=archived;}}if({lost_ack}&&fs.readFileSync({marker},'utf8').trim().split('\n').length===1)process.exit(0);cp.spawn(process.execPath,[{descendant}],{{stdio:['ignore','inherit',fs.openSync({child_error},'w')],windowsHide:true,detached:true}}).unref();const until=Date.now()+5000;while(!fs.existsSync({started})&&Date.now()<until)Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10);if(!fs.existsSync({started}))process.exit(8);result={{}};}}else process.exit(9);process.stdout.write(JSON.stringify({{id:m.id,result}})+'\n');}}).on('close',()=>process.exit(0));"#,
+rl.createInterface({{input:process.stdin}}).on('line',line=>{{const m=JSON.parse(line);if(!m.id)return;let result;if(m.method==='initialize')result={{codexHome:{home}}};else if(m.method==='thread/read')result={{thread:{{id:{id},cwd:{cwd},path}}}};else if(m.method==='thread/archive'){{fs.appendFileSync({marker},'archive\n');if({move_before_ack}){{fs.renameSync(path,archived);path=archived;}}if({lost_ack}&&fs.readFileSync({marker},'utf8').trim().split('\n').length===1)process.exit(0);cp.spawn(process.execPath,[{descendant}],{{stdio:['ignore','inherit',fs.openSync({child_error},'w')],windowsHide:true,detached:true}}).unref();const until=Date.now()+5000;while(!fs.existsSync({started})&&Date.now()<until)Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10);if(!fs.existsSync({started}))process.exit(8);result={{}};}}else process.exit(9);process.stdout.write(JSON.stringify({{id:m.id,result}})+'\n');}}).on('close',()=>{{if({linger})setInterval(()=>{{}},1000);else process.exit(0);}});"#,
+        linger = linger,
         lost_ack = lost_ack,
         move_before_ack = move_before_ack,
         file = json!(file.to_str().unwrap()),
@@ -336,6 +337,13 @@ rl.createInterface({{input:process.stdin}}).on('line',line=>{{const m=JSON.parse
     forged.source.profile_id = "other".into();
     assert!(service.archive(&caller, forged).is_err());
     assert!(!marker.exists());
+    let unrelated_ticket = unrelated_owner.then(|| {
+        repo.admission()
+            .begin_start(crate::version_history::maintenance::RuntimeKind::Legacy)
+            .unwrap()
+            .preparing()
+    });
+    let started_at = Instant::now();
     let worker_service = service.clone();
     let worker_caller = caller.clone();
     let worker_request = request.clone();
@@ -449,6 +457,13 @@ rl.createInterface({{input:process.stdin}}).on('line',line=>{{const m=JSON.parse
         );
         worker.join().unwrap().unwrap()
     };
+    if linger {
+        assert!(
+            started_at.elapsed() < Duration::from_secs(8),
+            "verified archive must not wait for the full RPC timeout"
+        );
+    }
+    drop(unrelated_ticket);
     assert!(receipt.root_archived);
     assert_eq!(receipt.descendants, "unverified");
     assert!(
@@ -515,5 +530,84 @@ fn NativeArchive_ContainersRejectJunctionAndPreventReplacement_010() {
 #[test]
 #[cfg(windows)]
 fn NativeArchive_UnknownUnarchivedDoesNotBlockOrdinaryHistory_011() {
-    synthetic_archive(true, false);
+    synthetic_archive(true, false, false, false);
+}
+
+#[test]
+#[cfg(windows)]
+fn NativeArchive_UnrelatedLegacyOwnerDoesNotBlock_012() {
+    synthetic_archive(false, true, true, false);
+}
+#[test]
+#[cfg(windows)]
+fn NativeArchive_CompletedHelperHasBoundedShutdown_013() {
+    synthetic_archive(false, true, false, true);
+}
+
+#[test]
+fn NativeArchive_AdmissionKeepsCodexUnknownAndDeleteGuards_014() {
+    use crate::cli::types::CliKind;
+    use crate::version_history::maintenance::{AdmissionGate, RuntimeKind};
+    for cli in [
+        CliKind::Claude,
+        CliKind::Opencode,
+        CliKind::Codex,
+        CliKind::Shell,
+    ] {
+        let gate = AdmissionGate::new();
+        let mut preparing = gate.begin_start(RuntimeKind::Native).unwrap().preparing();
+        assert!(gate.check_codex_archive_idle().is_err());
+        preparing.identify_cli(cli);
+        let unrelated = matches!(cli, CliKind::Claude | CliKind::Opencode);
+        assert_eq!(gate.check_codex_archive_idle().is_ok(), unrelated);
+        let owned = preparing.begin_creation().child_created();
+        assert_eq!(gate.check_codex_archive_idle().is_ok(), unrelated);
+        assert!(
+            gate.begin_metadata().is_err(),
+            "permanent delete still requires all owners to end"
+        );
+        if unrelated {
+            let (frozen, helper) = gate.begin_codex_archive().unwrap();
+            assert!(gate.begin_start(RuntimeKind::Native).is_err());
+            assert!(gate.begin_mutation().is_err());
+            drop(helper);
+            frozen.release_review().unwrap();
+            assert!(
+                gate.check_metadata_idle().is_err(),
+                "unrelated owner must remain retained"
+            );
+        }
+        drop(owned);
+        assert!(
+            gate.begin_codex_archive().is_err(),
+            "unreaped ownership stays unknown"
+        );
+    }
+    let gate = AdmissionGate::new();
+    let mutation = gate.begin_mutation().unwrap();
+    assert!(gate.begin_codex_archive().is_err());
+    drop(mutation);
+    assert!(
+        gate.begin_codex_archive().is_err(),
+        "unknown writes stay blocked"
+    );
+}
+
+#[test]
+fn NativeArchive_UnrelatedPreparationAndExitKeepFreeze_015() {
+    use crate::cli::types::CliKind;
+    use crate::version_history::maintenance::{AdmissionGate, RuntimeKind};
+    for cli in [CliKind::Claude, CliKind::Opencode] {
+        let gate = AdmissionGate::new();
+        let mut preparing = gate.begin_start(RuntimeKind::Native).unwrap().preparing();
+        preparing.identify_cli(cli);
+        let (frozen, helper) = gate.begin_codex_archive().unwrap();
+        let owned = preparing.begin_creation().child_created();
+        owned.reaped();
+        assert!(gate.begin_mutation().is_err());
+        assert!(gate.check_codex_archive_idle().is_err());
+        drop(helper);
+        frozen.release_review().unwrap();
+        assert!(gate.check_metadata_idle().is_ok());
+    }
 }
