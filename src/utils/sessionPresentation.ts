@@ -173,13 +173,14 @@ export const SESSION_MENU_ACTION_DEFINITIONS: readonly MenuActionRule[] = [
 ]
 export function sessionActionLabelKey(action: SessionMenuAction | SessionPrimaryAction, session: UnifiedSession): string {
   if (action === 'save-rename') return 'sessionActionSaveRename'
+  if (action === 'archive' && session.cli === 'codex') return 'sessionActionNativeArchive'
   if (action === 'archive' && session.processState === 'running') return 'sessionActionStopAndArchive'
   return SESSION_MENU_ACTION_DEFINITIONS.find((definition) => definition.id === action)!.labelKey
 }
 /** Archive is a trailing quick action, with the existing ended-session admission policy. */
 export function selectSessionArchiveAction(session: UnifiedSession, visibility: SessionMenuActionVisibility = {}): SessionMenuActionDefinition | null {
   if (visibility.archive === false || session.preparationState || !isState('stopped', 'failed')(session)) return null
-  return { id: 'archive', labelKey: 'sessionActionArchive', danger: true, disabled: session.renameState === 'saving' }
+  return { id: 'archive', labelKey: session.cli === 'codex' ? 'sessionActionNativeArchive' : 'sessionActionArchive', danger: true, disabled: session.renameState === 'saving' }
 }
 export function selectSessionMenuActions(session: UnifiedSession, visibility: SessionMenuActionVisibility = {}): SessionMenuActionDefinition[] {
   return SESSION_MENU_ACTION_DEFINITIONS

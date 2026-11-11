@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [0.27.0-rc.4] - 2026-11-11
+
+### Fixed
+
+- Connect Windows Codex native archiving to the official metadata API, verify the physical archived root, and refresh loaded projects from the same source instead of writing a Desk-only display marker.
+- Keep pending or unknown writes behind exact-source read-only reconciliation, including restore/rearchive, while preserving source containers, profile/session binding, owned-process cleanup and activity admission.
+
+This is a prerelease with make_latest=false; stable Latest remains unchanged. Existing Desk-only archives are not migrated automatically: restore the display marker before explicitly choosing native archive. Claude/OpenCode keep their Desk-only behavior and Unix native archiving remains unavailable. The official operation may stop active descendants and affect other projects; acknowledged completion proves the root only, never the whole native child tree. Real Codex CLI archive/delete, installed Windows WebView2, full descendants/external writers, D20/native All and signed installation/return remain unverified. Permanent-delete preview, two confirmations and one-shot/source/activity protections are unchanged. Exact-main CI, authenticated coverage and same-run three-platform updater signatures remain mandatory; updater signing is not Windows Authenticode.
+
 ## [0.27.0-rc.3] - 2026-11-11
 
 ### Improved

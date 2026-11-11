@@ -4,6 +4,20 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
+## [0.27.0-rc.4]
+
+Fixed
+
+- Connect Windows Codex Native archive to the official metadata API instead of only hiding the session in CC Desk. Verify the archived root and refresh already loaded projects from the same source.
+- Keep uncertain archive results behind read-only reconciliation rather than retrying the write. Preserve exact source, profile, session and activity checks.
+
+Important
+
+- This is a prerelease. Stable Latest remains unchanged. Native archiving is currently Windows Codex only; Claude and OpenCode keep their existing Desk-only hide behavior, and native archiving on Unix is unavailable.
+- Existing Desk-only archives are not migrated automatically. Restore their Desk display marker first, then explicitly choose Native archive. Permanent deletion still requires a natively archived eligible root and its separate preview and confirmations.
+- The official archive operation may affect the native child-session tree, stop active descendants and affect other projects. A successful receipt verifies only the root; descendant completion remains unverified.
+- Isolated synthetic metadata-server checks do not certify real Codex CLI archive/delete, installed Windows WebView2, complete descendants or external-writer cases. D20/native All and signed installation/return roundtrips remain unverified. Updater signatures do not certify those behaviors or Windows Authenticode.
+
 ## [0.27.0-rc.3]
 
 Improved

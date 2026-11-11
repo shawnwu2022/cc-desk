@@ -14,7 +14,7 @@ import type {
 import { makeSessionCatalogKey, nativeHistoryRecordKey } from '@/utils/sessionPresentation'
 import { normalizePath } from '@/utils/path'
 import { clearSessionDisplayName, saveSessionOpenedAt, withSessionDisplayName, type SessionMetadataPort } from '@/session/sessionMetadata'
-import type { NativeRenameRequest, NativeRenameReceipt } from '@/types/nativeProjection'
+import type { NativeRenameRequest, NativeRenameReceipt, NativeArchiveRequest } from '@/types/nativeProjection'
 import { createNativeId } from '@/utils/nativeId'
 import { compareSessionOpenOrder } from '@/utils/sessionOpenOrder'
 import { legacyHistoryId } from './legacyClaudeAdapter'
@@ -69,6 +69,7 @@ export interface NativeCliAdapterDeps {
   archive: NativeArchivePort
   cliUnarchive?: NativeCliUnarchivePort
   metadata?: SessionMetadataPort
+  nativeArchive?: { archive(request: NativeArchiveRequest): Promise<unknown> }
   nativeRename?: { rename(request: NativeRenameRequest): Promise<NativeRenameReceipt> }
   runSource?: (tab: NativeCliTab) => Promise<import('@/types/nativeProjection').SourceRef>
   /** legacy 固定根（`~/.claude`）的目录身份 key；仅在该根被证明时才接管 legacy 的裸 ID 归档。
@@ -738,6 +739,67 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
     } catch { throw new Error('RENAME_DISPLAY_SYNC_FAILED') }
     return 'native-title-saved'
   }
+  const uncertainArchives = new Set<string>()
+  const archiving = new Set<string>()
+  async function reloadArchiveRoot(context: NativeHistoryContext, root: string): Promise<NativeHistoryEntry> {
+    if (!deps.history.load) throw new Error('SOURCE_UNAVAILABLE')
+    const contexts = new Map([[nativeHistoryContextKey(context), context]])
+    for (const entry of deps.history.all()) if (entry.context.cli === 'codex' && entry.sourceRootKey === root) contexts.set(nativeHistoryContextKey(entry.context), entry.context)
+    // 原生归档可影响其他项目的子会话；全部同根上下文都必须重读，失败保留仅供显示。
+    const results = await Promise.allSettled([...contexts.values()].map(value => deps.history.load!({ ...value, force: true, retainOnFailure: true })))
+    if (results[0].status !== 'fulfilled') throw new Error('ARCHIVE_DISPLAY_SYNC_FAILED')
+    return results[0].value
+  }
+  async function archiveCodex(target: ReturnType<typeof findHistory>[number], requireCurrent: () => void, tab?: NativeCliTab): Promise<void> {
+    if (!deps.nativeArchive || !deps.history.load) throw new Error('CLI_ARCHIVE_UNAVAILABLE')
+    const { context } = target.entry
+    const root = target.entry.sourceRootKey
+    if (!root) throw new Error('SOURCE_UNAVAILABLE')
+    if (tab) {
+      if (!deps.runSource) throw new Error('SESSION_IDENTITY_UNKNOWN')
+      const frozen = await deps.runSource(tab)
+      requireCurrent()
+      if (frozen.cli !== 'codex' || frozen.profileId !== tab.profileId || frozen.profileRevision !== tab.profileRevision
+        || frozen.target.kind !== 'run' || frozen.target.runId !== tab.runId || frozen.target.generation !== tab.generation
+        || frozen.sourceRootKey !== root) throw new Error('SOURCE_CHANGED')
+    }
+    const fresh = await deps.history.load({ ...context, force: true, retainOnFailure: true })
+    requireCurrent()
+    if (!fresh.loaded || fresh.loading || fresh.error) throw new Error(fresh.error || 'SOURCE_UNAVAILABLE')
+    const source = fresh.source
+    if (nativeHistoryContextKey(fresh.context) !== nativeHistoryContextKey(context) || fresh.sourceRootKey !== root
+      || !source || source.basis !== 'configured-profile' || source.cli !== 'codex' || source.sourceRootKey !== root
+      || source.profileId !== context.profileId || source.profileRevision !== context.profileRevision
+      || source.target.kind !== 'profile' || source.target.profileId !== context.profileId
+      || source.target.expectedProfileRevision !== context.profileRevision || !source.target.projectIds.includes(context.projectId)) throw new Error('SOURCE_CHANGED')
+    const matches = fresh.sessions.filter(item => item.sessionKey === target.item.sessionKey && item.nativeSessionId === target.item.nativeSessionId)
+    if (matches.length !== 1 || matches[0].readFailure) throw new Error('SESSION_ORIGIN_AMBIGUOUS')
+    if (!matches[0].archived) {
+      requireCurrent()
+      const key = JSON.stringify([root, target.item.nativeSessionId])
+      if (uncertainArchives.has(key)) throw new Error('ARCHIVE_OUTCOME_UNKNOWN')
+      if (archiving.has(key)) throw new Error('SOURCE_BUSY')
+      archiving.add(key)
+      try {
+        await deps.nativeArchive.archive({ operationId: createNativeId('archive'), source, sessionKey: matches[0].sessionKey })
+        uncertainArchives.add(key)
+      } catch (failure) {
+        const code = failure instanceof Error ? failure.message : 'ARCHIVE_OUTCOME_UNKNOWN'
+        if (['ARCHIVE_OUTCOME_UNKNOWN', 'ARCHIVE_VERIFICATION_FAILED', 'BACKEND_INSTANCE_CHANGED'].includes(code)) {
+          uncertainArchives.add(key)
+          await reloadArchiveRoot(context, root).catch(() => {})
+        }
+        throw failure
+      } finally { archiving.delete(key) }
+    }
+    // 成功必须由同源历史回读证明；不写 Desk 标记伪装原生归档，也不自动重试未知写入。
+    const refreshed = await reloadArchiveRoot(context, root)
+    requireCurrent()
+    if (!refreshed.loaded || refreshed.loading || refreshed.error || refreshed.sourceRootKey !== root
+      || nativeHistoryContextKey(refreshed.context) !== nativeHistoryContextKey(context)
+      || !refreshed.sessions.some(item => item.sessionKey === target.item.sessionKey && item.nativeSessionId === target.item.nativeSessionId && item.archived && !item.readFailure)) throw new Error('ARCHIVE_DISPLAY_SYNC_FAILED')
+    uncertainArchives.delete(JSON.stringify([root, target.item.nativeSessionId]))
+  }
   async function archiveSession(id: string, canContinue = () => true): Promise<void> {
     const owns = captureOwnership(id)
     const requireCurrent = () => { if (!canContinue() || !owns()) throw new Error('STALE_SESSION_ATTEMPT') }
@@ -753,7 +815,8 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
       const { entry, item } = candidates[0]
       if (tab.status === 'running' || tab.status === 'starting') await deps.runtime.stopTab(tab)
       if (!matchesNativeAttempt(deps.tabs.tabs.get(tab.tabId), attempt) || !owns() || !canContinue()) throw new Error('STALE_SESSION_ATTEMPT')
-      await deps.archive.archiveSession(tab.projectPath, historyId(entry, item.sessionKey, item.nativeSessionId), requireCurrent)
+      if (tab.cli === 'codex') await archiveCodex({ entry, item }, requireCurrent, tab)
+      else await deps.archive.archiveSession(tab.projectPath, historyId(entry, item.sessionKey, item.nativeSessionId), requireCurrent)
       if (!matchesNativeAttempt(deps.tabs.tabs.get(tab.tabId), attempt) || !owns() || !canContinue()) throw new Error('STALE_SESSION_ATTEMPT')
       const noticeOwner = beginClosedNotice(tab)
       try { noticeOwner.publish(projectNotice(deps.tabs.tabs.get(tab.tabId)!, deps.tabs)) } finally { noticeOwner.release() }
@@ -763,7 +826,11 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
       return
     }
     const history = parseHistoryId(id)
-    await deps.archive.archiveSession(history.projectPath, id, requireCurrent)
+    const matches = findHistory(id)
+    if (matches.length !== 1) throw new Error('SESSION_ORIGIN_AMBIGUOUS')
+    if (matches[0].entry.context.cli === 'codex') {
+      await archiveCodex(matches[0], requireCurrent)
+    } else await deps.archive.archiveSession(history.projectPath, id, requireCurrent)
   }
   async function restoreArchivedSession(id: string): Promise<void> {
     const history = parseHistoryId(id)
@@ -829,7 +896,18 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
       if (match.item.archived === true) {
         const unarchive = deps.cliUnarchive
         if (!unarchive) throw new Error('CLI_UNARCHIVE_UNAVAILABLE')
+        if (match.entry.context.cli === 'codex') {
+          if (!deps.history.load) throw new Error('SOURCE_UNAVAILABLE')
+          // 后端只读历史会在 helper 已收口且根确已归档时清除丢 ACK 屏障。
+          const fresh = await deps.history.load({ ...match.entry.context, force: true, retainOnFailure: true })
+          if (!fresh.loaded || fresh.loading || fresh.error || fresh.sourceRootKey !== sourceRoot
+            || nativeHistoryContextKey(fresh.context) !== nativeHistoryContextKey(match.entry.context)
+            || !fresh.sessions.some(item => item.sessionKey === match.item.sessionKey && item.nativeSessionId === match.item.nativeSessionId && item.archived && !item.readFailure)) throw new Error(fresh.error || 'SOURCE_CHANGED')
+          requireCurrent(id)
+        }
         await unarchive.unarchive(match.entry.context, match.item.nativeSessionId)
+        // unarchive 后端已强制核对旧未知写；只有成功恢复才清当前 adapter 的屏障。
+        uncertainArchives.delete(JSON.stringify([sourceRoot, match.item.nativeSessionId]))
         // 归档状态由下一次历史读取按容器位置重投影；all() 仍是旧缓存，必须
         // 强制重读原上下文。先重读再清注册表：后续清 key 失败时投影已是未归档，
         // 重试不会对已恢复的会话重复请求 CLI unarchive。

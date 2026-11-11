@@ -266,6 +266,7 @@ fn run_ordinary(initial_dir: Option<String>, #[cfg(windows)] startup: DesktopSta
             cli::commands::cli_get_launch_status,
             cli::commands::cli_get_observer_status,
             cli::commands::cli_rename_session,
+            cli::commands::cli_archive_session,
             cli::commands::cli_preview_session_delete,
             cli::commands::cli_confirm_session_delete,
             cli::commands::cli_inspect_session_delete,

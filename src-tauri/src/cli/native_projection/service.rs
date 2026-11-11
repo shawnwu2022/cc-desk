@@ -17,6 +17,7 @@ use std::sync::Arc;
 pub(crate) struct ProjectionService {
     launch: Arc<LaunchService>,
     registry: ScopeRegistry,
+    archive_operations: crate::cli::native_archive::Operations,
     rename_operations: crate::cli::native_rename::Operations,
     delete_operations: crate::cli::native_delete::Operations,
 }
@@ -255,6 +256,139 @@ impl ProjectionService {
         self.launch.registry().check_caller(caller)?;
         Ok(receipt)
     }
+    pub(crate) fn reconcile_before_unarchive(
+        &self,
+        caller: &CallerIdentity,
+        request: &crate::cli::types::UnarchiveRequest,
+    ) -> Result<(), SafeError> {
+        self.launch.registry().check_caller(caller)?;
+        request.validate()?;
+        if !self.archive_operations.has_unknown(None)? {
+            return Ok(());
+        }
+        let document = self.launch.repository().read()?;
+        let profile = document
+            .profiles
+            .get(&request.profile_id)
+            .ok_or_else(|| error("PROFILE_NOT_FOUND"))?;
+        if profile.cli != CliKind::Codex || profile.revision != request.expected_profile_revision {
+            return Err(error("REVISION_CONFLICT"));
+        }
+        let (_, selected) = profile_locations(&self.launch, profile)?;
+        let root = selected.open_root(CliKind::Codex).map_err(error)?;
+        let physical = serde_json::to_string(&(root.key(), &request.native_session_id))
+            .map_err(|_| error("SOURCE_INVALID"))?;
+        if !self.archive_operations.has_unknown(Some(&physical))? {
+            return Ok(());
+        }
+        let path = Path::new(&request.project_path);
+        let project = document
+            .registered_projects
+            .values()
+            .find(|project| {
+                project.selected_path == path || project.canonical_path.as_deref() == Some(path)
+            })
+            .ok_or_else(|| error("PROJECT_NOT_FOUND"))?;
+        let target = ScopeTarget::Profile {
+            profile_id: request.profile_id.clone(),
+            expected_profile_revision: request.expected_profile_revision,
+            project_ids: vec![project.project_id.clone()],
+        };
+        let (frozen, admission) = self.launch.repository().admission().begin_metadata()?;
+        let result = (|| {
+            let source =
+                self.scope_inner(caller, &target, &mut ProjectionStage::ScopeCapability)?;
+            let key = serde_json::json!([
+                "local",
+                "codex",
+                source.source_root_key,
+                request.native_session_id
+            ])
+            .to_string();
+            let authority = self
+                .registry
+                .authorize_rename(&owner(caller), &source, &key)?;
+            if authority.root_key() != root.key() || !authority.archived {
+                return Err(error("ARCHIVE_OUTCOME_UNKNOWN"));
+            }
+            self.archive_operations.reconcile_archived(&physical)
+        })();
+        drop(admission);
+        let released = frozen.release_review();
+        result?;
+        released
+    }
+    pub(crate) fn archive(
+        &self,
+        caller: &CallerIdentity,
+        request: crate::cli::native_archive::ArchiveRequest,
+    ) -> Result<crate::cli::native_archive::ArchiveReceipt, SafeError> {
+        self.launch.registry().check_caller(caller)?;
+        request.validate()?;
+        if !cfg!(windows) {
+            return Err(error("NATIVE_ARCHIVE_UNSUPPORTED"));
+        }
+        self.launch
+            .repository()
+            .admission()
+            .check_metadata_idle()
+            .map_err(|_| error("ARCHIVE_BUSY"))?;
+        let authority = self.registry.authorize_rename(
+            &owner(caller),
+            &request.source,
+            &request.session_key,
+        )?;
+        let physical = serde_json::to_string(&(authority.root_key(), &authority.native_id))
+            .map_err(|_| error("SOURCE_INVALID"))?;
+        self.archive_operations
+            .release_revoked(|owner| self.launch.registry().check_caller(owner).is_ok())?;
+        self.archive_operations
+            .validate_request(caller, &request, &physical)?;
+        if authority.archived {
+            // 空闲与新来源共同证明根已归档，不能把尚在处理中的移动当完成。
+            self.launch
+                .repository()
+                .admission()
+                .check_metadata_idle()
+                .map_err(|_| error("ARCHIVE_BUSY"))?;
+            self.archive_operations.reconcile_archived(&physical)?;
+            if let Some(result) = self.archive_operations.begin(caller, &request, &physical)? {
+                result?;
+            } else {
+                self.archive_operations.finish(caller, &request, Ok(()));
+            }
+            return Ok(request.receipt());
+        }
+        if let Some(result) = self.archive_operations.begin(caller, &request, &physical)? {
+            result?;
+            return Ok(request.receipt());
+        }
+        let result = (|| {
+            let authority = authority.pin_archive_containers()?;
+            let launch = crate::cli::types::LaunchRequest {
+                request_id: format!("archive-{}", request.operation_id),
+                tab_id: "metadata".into(),
+                run_id: "metadata".into(),
+                generation: 1,
+                profile_id: request.source.profile_id.clone(),
+                expected_profile_revision: request.source.profile_revision,
+                cli: request.source.cli,
+                launch_cwd: authority.cwd.clone(),
+                action: LaunchAction::Raw {
+                    argv: vec!["app-server".into()],
+                },
+                extra_args: vec![],
+                cols: 80,
+                rows: 24,
+            };
+            self.launch.archive_metadata(caller, &launch, authority)
+        })();
+        self.archive_operations
+            .finish(caller, &request, result.clone());
+        result?;
+        self.launch.registry().check_caller(caller)?;
+        Ok(request.receipt())
+    }
     pub(crate) fn rename(
         &self,
         caller: &CallerIdentity,
@@ -303,6 +437,7 @@ impl ProjectionService {
         Self {
             launch,
             registry: ScopeRegistry::new(64),
+            archive_operations: Default::default(),
             rename_operations: Default::default(),
             delete_operations: Default::default(),
         }
@@ -546,6 +681,45 @@ impl ProjectionService {
         request: &ReadRequest,
     ) -> Result<ProjectionResult, SafeError> {
         self.launch.registry().check_caller(caller)?;
+        // 只读历史刷新也能收敛丢 ACK 的归档；恢复前不需要重放任何原生写命令。
+        if request.source.cli == CliKind::Codex
+            && request.source.basis == SourceBasis::ConfiguredProfile
+            && request.resource_kind == super::wire::ResourceKind::History
+        {
+            self.registry
+                .check_source(&owner(caller), &request.source)?;
+            let keys = self
+                .archive_operations
+                .unknown_session_keys(&request.source.source_root_key)?;
+            if !keys.is_empty() {
+                // 普通历史读取不能因某次未知写阻塞；忙时保留屏障，恢复由独立后端门强制核对。
+                let Ok((frozen, admission)) = self.launch.repository().admission().begin_metadata()
+                else {
+                    return self.registry.read(&owner(caller), request);
+                };
+                let result = (|| {
+                    for key in keys {
+                        if let Ok(authority) =
+                            self.registry
+                                .authorize_rename(&owner(caller), &request.source, &key)
+                        {
+                            if authority.archived {
+                                let physical = serde_json::to_string(&(
+                                    authority.root_key(),
+                                    &authority.native_id,
+                                ))
+                                .map_err(|_| error("SOURCE_INVALID"))?;
+                                self.archive_operations.reconcile_archived(&physical)?;
+                            }
+                        }
+                    }
+                    self.launch.registry().check_caller(caller)
+                })();
+                drop(admission);
+                let released = frozen.release_review();
+                let _ = (result, released);
+            }
+        }
         self.registry.read(&owner(caller), request)
     }
     pub(crate) fn check_caller(&self, caller: &CallerIdentity) -> Result<(), SafeError> {

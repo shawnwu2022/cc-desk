@@ -7,6 +7,8 @@ export interface SourceRef {
   scopeId: string; instanceId: string; cli: NativeCliKind; sourceRootKey: string; identityEpoch: string
   profileId: string; profileRevision: string; target: ScopeTarget; basis: 'configured-profile' | 'launch-environment'
 }
+export interface NativeArchiveRequest { operationId: string; source: SourceRef; sessionKey: string }
+export interface NativeArchiveReceipt extends NativeArchiveRequest { state: 'archived'; rootArchived: true; descendants: 'unverified' }
 export interface NativeRenameRequest { operationId: string; source: SourceRef; sessionKey: string; title: string }
 export interface NativeRenameReceipt extends NativeRenameRequest { state: 'renamed' }
 export interface ReadRequest {

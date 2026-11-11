@@ -12,10 +12,10 @@ import { useSessionStore } from '@/stores/session'
 import { useProjectManagementStore } from '@/stores/projectManagement'
 import { useCliProfilesStore } from '@/stores/cliProfiles'
 import en from '@/i18n/locales/en'
-const io = vi.hoisted(() => ({ stop: vi.fn(), recover: vi.fn(), archive: vi.fn(), profiles: vi.fn(), patch: vi.fn(), state: vi.fn(), record: vi.fn(), write: vi.fn(), remove: vi.fn(), projects: vi.fn(), registered: vi.fn(), pin: vi.fn(), sessions: vi.fn(), availability: vi.fn(), discovery: vi.fn(), scope: vi.fn() }))
+const io = vi.hoisted(() => ({ stop: vi.fn(), recover: vi.fn(), archive: vi.fn(), nativeArchive: vi.fn(), runSource: vi.fn(), read: vi.fn(), profiles: vi.fn(), patch: vi.fn(), state: vi.fn(), record: vi.fn(), write: vi.fn(), remove: vi.fn(), projects: vi.fn(), registered: vi.fn(), pin: vi.fn(), sessions: vi.fn(), availability: vi.fn(), discovery: vi.fn(), scope: vi.fn() }))
 vi.mock('@/api/tauri', async original => ({ ...await original<object>(), getProjectsState: io.state, upsertSessionUiRecord: io.record, getProjects: io.projects, getSessions: io.sessions,
-  getAppConfig: async () => ({ language: 'en', theme: 'light', terminalTheme: 'cc-box-light' }), updateAppConfig: async () => {}, onHookEvent: async () => () => {}, archiveSession: io.archive, pinProject: io.pin,
-  createNativeProjectionClient: () => ({ scope: io.scope, read: async () => ({ state: 'ready', items: [{ type: 'session', sessionKey: 'source', nativeSessionId: 'saved', title: 'Saved', cwd: '/repo' }], hasMore: false }) }) }))
+  getAppConfig: async () => ({ language: 'en', theme: 'light', terminalTheme: 'cc-box-light' }), updateAppConfig: async () => {}, onHookEvent: async () => () => {}, archiveSession: io.archive, nativeArchiveSession: io.nativeArchive, nativeGetScope: io.runSource, pinProject: io.pin,
+  createNativeProjectionClient: () => ({ scope: io.scope, read: io.read }) }))
 vi.mock('@/api/cli', () => ({ cliListProfiles: io.profiles, cliPatchProfile: io.patch }))
 vi.mock('@/api/cliAvailability', () => ({ cliGetAvailability: io.availability }))
 vi.mock('@/api/programDiscovery', () => ({ cliDiscoverPrograms: io.discovery }))
@@ -24,13 +24,18 @@ vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({ writeText: io.write }))
 vi.mock('@xterm/xterm', () => ({ Terminal: class {} }))
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ onResized: async () => () => {}, isMaximized: async () => false,
   isFocused: async () => true, onFocusChanged: async () => () => {}, requestUserAttention: async () => {} }) }))
+let nativeArchived = false
 const wrappers: VueWrapper[] = []
 beforeEach(() => {
   vi.stubGlobal('crypto', { getRandomValues: window.crypto.getRandomValues, randomUUID })
   setActivePinia(createPinia()); vi.clearAllMocks(); localStorage.clear()
   localStorage.setItem('cc-desk-cli-support-v1', JSON.stringify({ claude: true, codex: true }))
   io.projects.mockResolvedValue([])
-  io.scope.mockResolvedValue({ cli: 'codex' })
+  nativeArchived = false
+  io.nativeArchive.mockImplementation(async () => { nativeArchived = true })
+  io.scope.mockImplementation(async target => ({ scopeId: 'scope', instanceId: 'instance', cli: 'codex', sourceRootKey: 'root', identityEpoch: '1', profileId: 'cx', profileRevision: '7', target, basis: target.kind === 'run' ? 'launch-environment' : 'configured-profile' }))
+  io.runSource.mockImplementation(target => io.scope(target))
+  io.read.mockImplementation(async () => ({ state: 'ready', items: [{ type: 'session', sessionKey: 'source', nativeSessionId: 'saved', title: 'Saved', cwd: '/repo', archived: nativeArchived }], hasMore: false }))
   io.sessions.mockResolvedValue([])
   io.registered.mockResolvedValue({ revision: '1', projects: [{ projectId: 'project', hostId: 'host', sourcePathKey: 'source', selectedPath: '/repo', canonicalPath: '/repo', alias: { mode: 'inherit' }, pinned: { mode: 'inherit' }, hidden: { mode: 'inherit' } }] })
   io.state.mockResolvedValue({ pinnedProjects: [], archivedSessions: {} })
@@ -322,7 +327,7 @@ it('Feedback_ConfirmsStopArchive_002', async () => {
   useShellStore().requestWorkspaceAction({ kind: 'confirmation', request: { kind: 'stop-and-archive', sessionId: 'native-tab:' + tab.tabId, projectKey: '/repo', projectPath: '/repo' } }); await flushPromises()
   expect(document.querySelector('[data-session-confirm]')).not.toBeNull(); expect(io.archive).not.toHaveBeenCalled()
   ;(document.querySelector('[data-session-confirm]') as HTMLButtonElement).click(); await flushPromises()
-  expect(io.archive).toHaveBeenCalledTimes(1); expect(useNativeTabsStore().tab(tab.tabId)).toBeUndefined()
+  expect(io.nativeArchive).toHaveBeenCalledTimes(1); expect(io.archive).not.toHaveBeenCalled(); expect(useNativeTabsStore().tab(tab.tabId)).toBeUndefined()
 })
 // 未知状态重启确认只授权检查与停止，检查仍未知时不得生成新尝试。
 it('Feedback_UnknownRestartFailsClosed_003', async () => {
@@ -430,12 +435,16 @@ it('Feedback_NavigationCancelsRemainingWork_013', async () => {
 // 冲突读取最新状态后等待显式重试，成功前无 toast，失败正文不能泄露。
 it('Feedback_ConflictNeedsExplicitRetry_014', async () => {
   render(); await flushPromises(); const row = useUnifiedSessionsStore().sessions.find(row => row.runtime === 'native-cli')!
-  io.archive.mockRejectedValueOnce({ code: 'REVISION_CONFLICT', message: '/private/SECRET' })
+  io.nativeArchive.mockRejectedValueOnce(Object.assign(new Error('REVISION_CONFLICT'), { code: 'REVISION_CONFLICT', privateValue: '/private/SECRET' }))
   useShellStore().requestWorkspaceAction({ kind: 'menu-action', sessionId: row.id, action: 'archive' }); await flushPromises()
-  expect(io.archive).toHaveBeenCalledTimes(1); expect(document.querySelector('[data-action-feedback]')?.textContent).toContain(en.errorRevisionConflict)
+  expect(io.nativeArchive).not.toHaveBeenCalled()
+  expect(document.body.textContent).toContain(en.confirmNativeArchiveDescription)
+  ;(document.querySelector('[data-session-confirm]') as HTMLButtonElement).click(); await flushPromises()
+  expect(io.nativeArchive).toHaveBeenCalledTimes(1)
+  expect(useUnifiedSessionsStore().confirmationError?.detailCode).toBe('REVISION_CONFLICT')
   expect(document.body.textContent).not.toContain('/private/SECRET')
-  ;(document.querySelector('[data-action-feedback] button') as HTMLButtonElement).click(); await flushPromises()
-  expect(io.archive).toHaveBeenCalledTimes(2); expect(document.body.textContent).toContain(en.feedbackArchived)
+  ;(document.querySelector('[data-session-confirm]') as HTMLButtonElement).click(); await flushPromises()
+  expect(io.nativeArchive).toHaveBeenCalledTimes(2); expect(document.body.textContent).toContain(en.feedbackNativeArchived)
 })
 // 配置删除复用实际 App 确认组件与真实 store CAS；设置编辑入口由后续任务接入。
 it('Feedback_ConfigConfirmationUsesRealStore_015', async () => {
@@ -489,27 +498,23 @@ it('Feedback_ConfigDeleteBlocksPreparation_017', async () => {
 
 // 停止已完成但归档排队时，取消或替换会话来源仍须阻止尚未发出的索引写入。
 it.each(['cancel', 'source', 'attempt'] as const)('Feedback_ArchiveQueueGuard_018_%s', async change => {
-  const { useProjectsStateStore } = await import('@/stores/projectsState')
   render(); await flushPromises(); const tab = await running()
-  const catalog = useUnifiedSessionsStore(); const state = useProjectsStateStore()
+  const catalog = useUnifiedSessionsStore()
   let release!: (value: unknown) => void
-  io.pin.mockReturnValue(new Promise(resolve => { release = resolve }))
-  const pinning = state.pinProject('/other'); await flushPromises()
+  io.runSource.mockReturnValueOnce(new Promise(resolve => { release = resolve }))
   useShellStore().requestWorkspaceAction({ kind: 'confirmation', request: { kind: 'stop-and-archive', sessionId: 'native-tab:' + tab.tabId, projectKey: '/repo', projectPath: '/repo' } }); await flushPromises()
   ;(document.querySelector('[data-session-confirm]') as HTMLButtonElement).click(); await flushPromises()
-  expect(io.stop).toHaveBeenCalledOnce(); expect(io.archive).not.toHaveBeenCalled()
+  expect(io.stop).toHaveBeenCalledOnce(); expect(io.nativeArchive).not.toHaveBeenCalled()
   if (change === 'cancel') {
     const cancel = [...document.querySelectorAll('button')].find(button => button.textContent?.trim() === en.cancel)!
     cancel.click(); await flushPromises()
   } else if (change === 'source') useNativeTabsStore().tab(tab.tabId)!.sourceSessionKey = 'replacement'
   else useNativeTabsStore().tab(tab.tabId)!.generation++
-  const reads = io.state.mock.calls.length
-  release({ pinnedProjects: ['/other'], archivedSessions: {} }); await pinning; await flushPromises()
-  expect(io.archive, 'invalidated queued archive must not write metadata').not.toHaveBeenCalled()
-  expect(state.archivedSessions.size).toBe(0); expect(state.pinnedProjects).toEqual(['/other'])
+  release(await io.scope({ kind: 'run', runId: tab.runId, generation: tab.generation })); await flushPromises()
+  expect(io.nativeArchive, 'invalidated archive must not issue native mutation').not.toHaveBeenCalled()
+  expect(io.archive).not.toHaveBeenCalled()
   expect(useNativeTabsStore().tab(tab.tabId)).toBeDefined()
   expect(catalog.confirmationError).toBeNull()
-  expect(io.state).toHaveBeenCalledTimes(reads); expect(state.lastErrorCode).toBeNull(); expect(state.error).toBe(false)
 })
 
 

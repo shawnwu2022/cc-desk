@@ -14,19 +14,23 @@ import type { ProjectsState } from '@/types/app'
 import { useAppStore } from '@/stores/app'
 import { useShellStore } from '@/stores/shell'
 
-const io = vi.hoisted(() => ({ projects: vi.fn(), sessions: vi.fn(), profiles: vi.fn(), registered: vi.fn(), register: vi.fn(), patchProfile: vi.fn(), getState: vi.fn(), upsertRecord: vi.fn(), setPreference: vi.fn(), scope: vi.fn(), read: vi.fn(), writeText: vi.fn(), archive: vi.fn(), restore: vi.fn(), open: vi.fn(), remove: vi.fn(), runChecks: vi.fn(), ptySpawn: vi.fn(), ptyInput: vi.fn(), ptyKill: vi.fn(), nativeStop: vi.fn(), getConfig: vi.fn() }))
-vi.mock('@/api/tauri', async original => ({ ...await original<object>(), runChecks: io.runChecks, ptySpawn: io.ptySpawn, ptyInput: io.ptyInput, ptyKill: io.ptyKill, getProjectsState: io.getState, upsertSessionUiRecord: io.upsertRecord, setProjectLaunchPreference: io.setPreference, updateAppConfig: vi.fn().mockResolvedValue(undefined), getAppConfig: io.getConfig, archiveSession: io.archive, restoreSession: io.restore, getProjects: io.projects, getSessions: io.sessions, openInFileManager: io.open, createNativeProjectionClient: () => ({ scope: io.scope, read: io.read }), onHookEvent: async () => () => {} }))
+const io = vi.hoisted(() => ({ projects: vi.fn(), sessions: vi.fn(), profiles: vi.fn(), registered: vi.fn(), register: vi.fn(), patchProfile: vi.fn(), getState: vi.fn(), upsertRecord: vi.fn(), setPreference: vi.fn(), scope: vi.fn(), read: vi.fn(), writeText: vi.fn(), archive: vi.fn(), nativeArchive: vi.fn(), nativeUnarchive: vi.fn(), restore: vi.fn(), open: vi.fn(), remove: vi.fn(), runChecks: vi.fn(), ptySpawn: vi.fn(), ptyInput: vi.fn(), ptyKill: vi.fn(), nativeStop: vi.fn(), getConfig: vi.fn() }))
+vi.mock('@/api/tauri', async original => ({ ...await original<object>(), runChecks: io.runChecks, ptySpawn: io.ptySpawn, ptyInput: io.ptyInput, ptyKill: io.ptyKill, getProjectsState: io.getState, upsertSessionUiRecord: io.upsertRecord, setProjectLaunchPreference: io.setPreference, updateAppConfig: vi.fn().mockResolvedValue(undefined), getAppConfig: io.getConfig, archiveSession: io.archive, nativeArchiveSession: io.nativeArchive, nativeUnarchiveSession: io.nativeUnarchive, nativeGetScope: io.scope, restoreSession: io.restore, getProjects: io.projects, getSessions: io.sessions, openInFileManager: io.open, createNativeProjectionClient: () => ({ scope: io.scope, read: io.read }), onHookEvent: async () => () => {} }))
 vi.mock('@/api/cli', () => ({ cliListProfiles: io.profiles, cliPatchProfile: io.patchProfile }))
 vi.mock('@/api/workspace', () => ({ listRegisteredProjects: io.registered, registerProject: io.register, removeProject: io.remove }))
 vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({ writeText: io.writeText }))
 vi.mock('@xterm/xterm', () => ({ Terminal: class {} }))
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ onResized: async () => () => {}, isMaximized: async () => false, isFocused: async () => true, onFocusChanged: async () => () => {}, requestUserAttention: async () => {} }) }))
+let nativeArchived = false
 let persisted: ProjectsState
 const wrappers: VueWrapper[] = []
 beforeEach(() => {
   vi.stubGlobal('crypto', { getRandomValues: window.crypto.getRandomValues, randomUUID: () => 'legacy-tab-id' })
   localStorage.clear(); localStorage.setItem('cc-desk-cli-support-v1', JSON.stringify({ claude: true, codex: true })); setActivePinia(createPinia()); vi.clearAllMocks(); useProjectsStateStore().loaded = true
   io.getConfig.mockResolvedValue({ theme: 'light', terminalTheme: 'cc-box-light', language: 'en' })
+  nativeArchived = false
+  io.nativeArchive.mockImplementation(async () => { nativeArchived = true })
+  io.nativeUnarchive.mockImplementation(async () => { nativeArchived = false })
   persisted = { pinnedProjects: [], archivedSessions: {}, launchPreferences: {} }
   io.getState.mockImplementation(async () => structuredClone(persisted))
   io.upsertRecord.mockImplementation(async (key, record) => { persisted.sessionRecords ??= {}; persisted.sessionRecords[key] = structuredClone(record); return structuredClone(persisted) })
@@ -37,7 +41,7 @@ beforeEach(() => {
   io.profiles.mockResolvedValue({ revision: '7', profiles: [{ id: 'cx', revision: '7', cli: 'codex', name: 'CX', launcher: { kind: 'native' }, programPath: { mode: 'inherit' }, defaultArgs: { mode: 'inherit' }, skipPermissions: { mode: 'inherit' }, observer: { mode: 'inherit' }, env: {} }] })
   io.registered.mockResolvedValue({ revision: '1', projects: [{ projectId: 'project', hostId: 'host', sourcePathKey: 'source', selectedPath: '/repo', canonicalPath: '/repo', alias: { mode: 'inherit' }, pinned: { mode: 'inherit' }, hidden: { mode: 'inherit' } }] })
   io.register.mockImplementation(async path => ({ revision: '2', projectId: 'registered-new', projects: [{ projectId: 'registered-new', hostId: 'host', sourcePathKey: 'source-new', selectedPath: path, canonicalPath: path, alias: { mode: 'inherit' }, pinned: { mode: 'inherit' }, hidden: { mode: 'inherit' } }] }))
-  io.scope.mockImplementation(async target => ({ scopeId: 'scope', instanceId: 'instance', cli: 'codex', sourceRootKey: 'root', identityEpoch: '1', profileId: 'cx', profileRevision: '7', target, basis: target.kind === 'run' ? 'launch-environment' : 'configured-profile' })); io.read.mockResolvedValue({ state: 'ready', items: [{ type: 'session', projectId: 'project', sessionKey: 'root-key', nativeSessionId: 'history-id', title: 'History', cwd: '/repo' }] })
+  io.scope.mockImplementation(async target => ({ scopeId: 'scope', instanceId: 'instance', cli: 'codex', sourceRootKey: 'root', identityEpoch: '1', profileId: 'cx', profileRevision: '7', target, basis: target.kind === 'run' ? 'launch-environment' : 'configured-profile' })); io.read.mockImplementation(async () => ({ state: 'ready', items: [{ type: 'session', projectId: 'project', sessionKey: 'root-key', nativeSessionId: 'history-id', title: 'History', cwd: '/repo', archived: nativeArchived }] }))
 })
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.unstubAllGlobals(); vi.restoreAllMocks() })
 
@@ -140,7 +144,7 @@ describe('Final workspace review regressions', () => {
     } else expect(catalog.sessionConfirmation).toBeNull()
     expect(io.nativeStop).toHaveBeenCalledTimes(1)
     expect(tabs.tab(tab.tabId)).toBeUndefined()
-    expect(io.archive).toHaveBeenCalledTimes(action === 'archive' ? 1 : 0)
+    expect(io.nativeArchive).toHaveBeenCalledTimes(action === 'archive' ? 1 : 0); expect(io.archive).not.toHaveBeenCalled()
   })
   // 抽屉明确不 teleport，菜单点击也不能冒泡为 activate。
   it('Pointer_ArchiveRestore_002', async () => {
@@ -153,16 +157,12 @@ describe('Final workspace review regressions', () => {
     const list = drawer.findComponent({ name: 'SessionList' })
     const row = list.get('[data-session-row]')
     let finish!: () => void
-    io.restore.mockImplementationOnce(async (path, id) => {
-      await new Promise<void>(resolve => { finish = resolve })
-      persisted.archivedSessions[path] = (persisted.archivedSessions[path] ?? []).filter(value => value !== id)
-      return structuredClone(persisted)
-    })
+    io.nativeUnarchive.mockImplementationOnce(async () => { await new Promise<void>(resolve => { finish = resolve }); nativeArchived = false })
     const item = row.get('[data-session-launch] button')
     await item.trigger('click'); await flushPromises()
     expect(item.attributes('disabled')).toBeDefined()
     await item.trigger('click'); await flushPromises()
-    expect(io.restore).toHaveBeenCalledTimes(1)
+    expect(io.nativeUnarchive).toHaveBeenCalledTimes(1)
     finish(); await flushPromises()
     expect(catalog.resumeDialog).toBeNull()
     expect(drawer.emitted('restore-request')).toEqual([[history.id]])

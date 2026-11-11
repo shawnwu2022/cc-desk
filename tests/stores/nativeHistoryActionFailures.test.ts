@@ -53,10 +53,8 @@ describe.each(['restart', 'rename', 'rename-sync', 'unarchive'] as const)('%s hi
       await expect(adapter.renameSession(closed.id, 'Renamed')).rejects.toThrow('RENAME_DISPLAY_SYNC_FAILED')
       expect(rename).toHaveBeenCalledTimes(1)
     } else {
-      const pending = adapter.restoreArchivedSession(closed.id)
-      if (failure === 'exception') await expect(pending).rejects.toThrow()
-      else await pending
-      expect(unarchive).toHaveBeenCalledTimes(1)
+      await expect(adapter.restoreArchivedSession(closed.id)).rejects.toThrow()
+      expect(unarchive).not.toHaveBeenCalled()
     }
     const after = await adapter.listSessions('/repo')
     expect(after.map(row => [row.id, row.nativeRootKey, row.archived]), '读失败不能让关闭行消失或撤销运行行的来源根')
@@ -69,6 +67,6 @@ describe.each(['restart', 'rename', 'rename-sync', 'unarchive'] as const)('%s hi
     expect((await adapter.listSessions('/repo')).find(row => row.nativeSessionId === 'n1')).toMatchObject({ title: 'Fresh', archived: false })
     expect(history.get(context)?.error).toBeNull()
     expect(rename).toHaveBeenCalledTimes(operation === 'rename-sync' ? 1 : 0)
-    expect(unarchive).toHaveBeenCalledTimes(operation === 'unarchive' ? 1 : 0)
+    expect(unarchive).not.toHaveBeenCalled()
   })
 })

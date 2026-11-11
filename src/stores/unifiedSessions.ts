@@ -130,7 +130,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
   }
   function beginSessionConfirmation(kind: SessionConfirmationRequest['kind'], id: string) {
     const row = requireSession(id)
-    const request: SessionConfirmationRequest = { kind, sessionId: id, title: row.title }
+    const request: SessionConfirmationRequest = { kind, sessionId: id, title: row.title, ...(kind === 'stop-and-archive' && row.cli === 'codex' ? { nativeArchive: true as const } : {}) }
     const intent = selectionIntentEpoch
     sessionConfirmation.value = request
     // Pinia wraps the request; keep the published identity for comparison.
@@ -155,7 +155,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
         await restartSession(sessionId, canContinue)
       }
       if (current()) {
-        if (kind === 'stop-and-archive') publishActionSuccess(feedback, 'feedbackArchived')
+        if (kind === 'stop-and-archive') publishActionSuccess(feedback, owner.request.kind === 'stop-and-archive' && owner.request.nativeArchive ? 'feedbackNativeArchived' : 'feedbackArchived')
         closeSessionConfirmation()
       }
     } catch (failure) {

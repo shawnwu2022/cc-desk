@@ -1,6 +1,6 @@
-import type { HistoryReadFailure, NativeRenameRequest, NativeRenameReceipt, ProjectionResult, ReadRequest, ResourceItem, ResourceKind, ScopeTarget, SourceRef, UnarchiveRequest } from '@/types/nativeProjection'
+import type { HistoryReadFailure, NativeArchiveRequest, NativeArchiveReceipt, NativeRenameRequest, NativeRenameReceipt, ProjectionResult, ReadRequest, ResourceItem, ResourceKind, ScopeTarget, SourceRef, UnarchiveRequest } from '@/types/nativeProjection'
 export interface ProjectionBridge { readonly instanceId: string; invoke(command: string, payload: unknown): Promise<unknown> }
-export interface ProjectionClient { scope(target: ScopeTarget): Promise<SourceRef>; read(request: ReadRequest): Promise<ProjectionResult>; unarchive(request: UnarchiveRequest): Promise<void>; rename(request: NativeRenameRequest): Promise<NativeRenameReceipt> }
+export interface ProjectionClient { archive(request: NativeArchiveRequest): Promise<NativeArchiveReceipt>; scope(target: ScopeTarget): Promise<SourceRef>; read(request: ReadRequest): Promise<ProjectionResult>; unarchive(request: UnarchiveRequest): Promise<void>; rename(request: NativeRenameRequest): Promise<NativeRenameReceipt> }
 const kinds: ResourceKind[] = ['history', 'messages', 'search', 'config', 'mcp', 'skills', 'agents', 'plugins', 'instructions']
 const diagnosticStages = ['frontend-bridge', 'frontend-serialization',
   'scope-invoke', 'scope-document-admission', 'scope-request-decode', 'scope-request-validation', 'scope-profile-validation',
@@ -248,6 +248,23 @@ export function createProjectionClient(bridge: ProjectionBridge, current: () => 
     return response
   }
   return {
+    async archive(value) {
+      object(value, ['operationId', 'source', 'sessionKey'])
+      const admitted = source(value.source)
+      const query = { operationId: id(value.operationId), source: admitted, sessionKey: text(value.sessionKey, 8192, false) }
+      if (admitted.instanceId !== instance || admitted.cli !== 'codex' || admitted.basis !== 'configured-profile' || admitted.target.kind !== 'profile') return invalid()
+      try {
+        const reply = object(await invoke('cli_archive_session', query), ['operationId', 'source', 'sessionKey', 'state', 'rootArchived', 'descendants'])
+        if (reply.operationId !== query.operationId || reply.sessionKey !== query.sessionKey || reply.state !== 'archived' || reply.rootArchived !== true || reply.descendants !== 'unverified'
+          || JSON.stringify(source(reply.source)) !== JSON.stringify(admitted)) return invalid()
+        return { ...query, state: 'archived', rootArchived: true, descendants: 'unverified' }
+      } catch (failure) {
+        assertCurrent()
+        const code = failure && typeof failure === 'object' && 'code' in failure ? (failure as { code: unknown }).code : failure instanceof Error ? failure.message : null
+        const safe = typeof code === 'string' && (reasons.has(code) || ['ARCHIVE_FAILED', 'ARCHIVE_OUTCOME_UNKNOWN', 'ARCHIVE_VERIFICATION_FAILED', 'ARCHIVE_OPERATION_CONFLICT', 'NATIVE_ARCHIVE_UNSUPPORTED', 'ARCHIVE_BUSY', 'ARCHIVE_CONTAINER_UNSAFE', 'ARCHIVE_ARGUMENTS_UNSUPPORTED', 'ARCHIVE_PREPARE_FAILED', 'ARCHIVE_UNAVAILABLE', 'SESSION_ORIGIN_AMBIGUOUS', 'SESSION_NOT_FOUND'].includes(code)) ? code : 'ARCHIVE_OUTCOME_UNKNOWN'
+        throw Object.assign(new Error(safe), { code: safe, retryable: false })
+      }
+    },
     async rename(value) {
       const admitted = source(value.source)
       const operationId = id(value.operationId), sessionKey = text(value.sessionKey, 8192, false), title = text(value.title, 800, false).trim()

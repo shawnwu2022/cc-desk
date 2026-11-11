@@ -107,7 +107,15 @@ it.each(['loading', 'error', 'unloaded'] as const)('History_RestorePreflightsEve
   expect(archived.get('/repo')).toEqual(keys)
 })
 
-function setup(tabs: NativeCliTab[], entries: NativeHistoryEntry[], legacyRoot?: () => Promise<string | undefined>) {
+function archiveHistory(root: string, id: string) {
+  const entry = history('codex', root, id)
+  entry.context.profileId = `profile-${root.replaceAll('/', '')}`
+  entry.sourceRootKey = root
+  entry.source = { scopeId: `scope-${root}`, instanceId: 'instance', cli: 'codex', sourceRootKey: root, identityEpoch: '1', profileId: entry.context.profileId, profileRevision: '7', basis: 'configured-profile', target: { kind: 'profile', profileId: entry.context.profileId, expectedProfileRevision: '7', projectIds: ['project-1'] } }
+  return entry
+}
+
+function setup(tabs: NativeCliTab[], entries: NativeHistoryEntry[], legacyRoot?: () => Promise<string | undefined>, nativeArchives = false) {
   const map = new Map(tabs.map(value => [value.tabId, value]))
   const setActive = vi.fn()
   const close = vi.fn((id: string) => map.delete(id))
@@ -120,10 +128,15 @@ function setup(tabs: NativeCliTab[], entries: NativeHistoryEntry[], legacyRoot?:
   }
   const archived = new Map<string, string[]>()
   const archive = { getArchivedSessions: (path: string) => archived.get(path) ?? [], archiveSession: vi.fn(async (path: string, id: string) => { archived.set(path, [...(archived.get(path) ?? []), id]) }), restoreSession: vi.fn(async (path: string, id: string, beforeMutation?: () => void, prepareMutation?: () => Promise<void>) => { if (prepareMutation) await prepareMutation(); beforeMutation?.(); archived.set(path, (archived.get(path) ?? []).filter(value => value !== id)) }) }
-  const cliUnarchive = { unarchive: vi.fn().mockResolvedValue(undefined) }
-  const historyLoad = vi.fn(async () => entries[0])
+  const cliUnarchive = { unarchive: vi.fn(async (context, id) => {
+    if (nativeArchives) for (const entry of entries) if (entry.context.profileId === context.profileId) for (const item of entry.sessions) if (item.nativeSessionId === id) item.archived = false
+  }) }
+  const nativeArchive = { archive: vi.fn(async request => {
+    for (const entry of entries) if (entry.sourceRootKey === request.source.sourceRootKey) for (const item of entry.sessions) if (item.sessionKey === request.sessionKey) item.archived = true
+  }) }
+  const historyLoad = vi.fn(async (context?: NativeHistoryEntry['context']) => nativeArchives ? entries.find(entry => entry.context.profileId === context?.profileId)! : entries[0])
   const metadata = { sessionRecords: new Map(), recordSessionOpened: vi.fn(async () => undefined), upsertSessionRecord: vi.fn(async (_key: string, _record: any, _beforeMutation?: () => void) => undefined) }
-  const adapter = createNativeCliAdapter({ tabs: { tabs: map, activeTabId: null, setActive, close, rename }, history: { all: () => entries, load: historyLoad }, runtime, archive, cliUnarchive, metadata, legacyClaudeRootKey:legacyRoot })
+  const adapter = createNativeCliAdapter({ tabs: { tabs: map, activeTabId: null, setActive, close, rename }, history: { all: () => entries, load: historyLoad }, runtime, archive, cliUnarchive, ...(nativeArchives ? { nativeArchive } : {}), metadata, legacyClaudeRootKey:legacyRoot })
   return { adapter, map, runtime, archive, cliUnarchive, setActive, archived, historyLoad, metadata }
 }
 
@@ -566,8 +579,8 @@ describe('native CLI adapter', () => {
     const one = setup([unknown], [])
     await expect(one.adapter.restartSession('native-tab:tab-1')).rejects.toThrow('LAUNCH_STATE_UNKNOWN')
 
-    const running = tab({ tabId: 'tab-2' })
-    const entry = history('codex', '/root', 'session-1')
+    const running = tab({ tabId: 'tab-2', cli: 'claude', profileId: 'claude-main' })
+    const entry = history('claude', '/root', 'session-1')
     const two = setup([running], [entry])
     await two.adapter.archiveSession('native-tab:tab-2')
     expect(two.runtime.stopTab).toHaveBeenCalledTimes(1)
@@ -585,7 +598,7 @@ describe('native CLI adapter', () => {
   it('NativeArchive_RefreshRestore_006', async () => {
     localStorage.setItem('cc-desk-cli-support-v1', JSON.stringify({ claude: true, codex: true }))
     setActivePinia(createPinia())
-    const { adapter } = setup([], [history('codex', '/root', 'session-1')])
+    const { adapter } = setup([], [archiveHistory('/root', 'session-1')], undefined, true)
     const store = useUnifiedSessionsStore()
     store.configureAdapters([adapter])
     await store.refresh()
@@ -599,13 +612,13 @@ describe('native CLI adapter', () => {
   })
 
   it('NativeArchive_IsolatesCatalogIdentity_007', async () => {
-    const { adapter, archived } = setup([], [history('claude', '/claude', 'same'), history('codex', '/root-a', 'same'), history('codex', '/root-b', 'same')])
+    const { adapter, archived } = setup([], [history('claude', '/claude', 'same'), archiveHistory('/root-a', 'same'), archiveHistory('/root-b', 'same')], undefined, true)
     const before = await adapter.listSessions('/repo')
     const target = before.find(value => value.title === 'codex-/root-a')!
     await adapter.archiveSession(target.id)
     const after = await adapter.listSessions('/repo')
     expect(after.filter(value => value.archived).map(value => value.id)).toEqual([target.id])
-    expect(archived.get('/repo')).not.toContain('same')
+    expect(archived.get('/repo')).toBeUndefined()
     await adapter.restoreArchivedSession(target.id)
     expect((await adapter.listSessions('/repo')).every(value => !value.archived)).toBe(true)
   })
@@ -766,7 +779,7 @@ it('CodexArchive_ConcurrentArchiveUnarchivesBeforeRegistryClear_037', async () =
   await adapter.restoreArchivedSession(rows[0].id)
   expect(vi.mocked(cliUnarchive.unarchive).mock.invocationCallOrder[0])
     .toBeLessThan(vi.mocked(archive.restoreSession).mock.invocationCallOrder[0])
-  expect(historyLoad).toHaveBeenCalledTimes(1)
+  expect(historyLoad).toHaveBeenCalledTimes(2)
   expect(archive.restoreSession).toHaveBeenCalledTimes(1)
   expect(archived.get('/repo')).toEqual([])
 })
