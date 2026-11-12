@@ -1,5 +1,7 @@
 //! 阶段11测试宿主；正式应用启动、用户目录及默认工作区不进入此路径。
 use super::*;
+#[path = "native_cli_delete_recycle_webview.rs"]
+mod recycle;
 use crate::cli::{
     document::DOCUMENT_HEADER,
     native_runtime::{take_main_config, NativeRuntime},
@@ -9,6 +11,7 @@ use crate::version_history::windows::{
     webview::{actual_udf, reject_manager_overrides},
 };
 use parking_lot::Mutex;
+use recycle::RecycleFixture;
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tauri::ipc::{InvokeBody, Request};
@@ -658,6 +661,10 @@ struct TaskBackendFixture {
     peer_created: AtomicBool,
     peer_script: Mutex<Option<String>>,
     peer_reply: Mutex<Option<mpsc::Sender<bool>>>,
+    recycle: RecycleFixture,
+    recycle_checks: Mutex<Vec<String>>,
+    recycle_removes: AtomicUsize,
+    recycle_restores: AtomicUsize,
     confirmations: AtomicUsize,
     inspections: AtomicUsize,
     checkpoints: Mutex<Vec<String>>,
@@ -686,6 +693,19 @@ impl TaskBackendFixture {
         *self.failure.lock() = Some(code);
         self.finished.store(true, Ordering::Release);
         app.exit(1);
+    }
+    fn verify_final(&self) -> Result<(), String> {
+        final_fixture_check(
+            self.native,
+            [
+                self.confirmations.load(Ordering::Acquire),
+                self.inspections.load(Ordering::Acquire),
+                self.recycle_removes.load(Ordering::Acquire),
+                self.recycle_restores.load(Ordering::Acquire),
+            ],
+            |deleted| self.verify_files(deleted),
+            |removed| self.recycle.verify(removed),
+        )
     }
     fn verify_files(&self, deleted: bool) -> Result<(), String> {
         let b = self.backend.lock();
@@ -760,7 +780,7 @@ async fn s11_fixture(
     let context = state.context();
     let b = state.backend.lock();
     Ok(
-        serde_json::json!({"context":context,"targetId":b.id,"controlId":b.active_id,"expiryId":state.expiry_id,"native":state.native}),
+        serde_json::json!({"context":context,"targetId":b.id,"controlId":b.active_id,"expiryId":state.expiry_id,"native":state.native,"recycleContext":state.recycle.context,"recycleId":state.recycle.id}),
     )
 }
 #[tauri::command]
@@ -840,7 +860,13 @@ async fn s11_finish(
     let q: Finished = query(&request)?;
     let complete =
         state.checkpoints.lock().len() == if state.native { CHECKPOINTS.len() } else { 7 };
-    let success = q.success && complete && q.failure_code.is_none();
+    let success = q.success
+        && complete
+        && q.failure_code.is_none()
+        && state.recycle_checks.lock().len() == 3
+        && state.recycle_removes.load(Ordering::Acquire) == 1
+        && state.recycle_restores.load(Ordering::Acquire) == 1
+        && state.verify_final().is_ok();
     state.success.store(success, Ordering::Release);
     state.finished.store(true, Ordering::Release);
     if !success {
@@ -928,8 +954,27 @@ async fn s11_capture(
     use webview2_com::CallDevToolsProtocolMethodCompletedHandler;
     state.admit(&webview, &request)?;
     let q: Named = query(&request)?;
-    let names = ["review", "confirmation", "result"];
-    if names.get(state.captures.lock().len()).copied() != Some(q.name.as_str()) {
+    let (names, count) = {
+        let captures = state.captures.lock();
+        if q.name.starts_with("recycle-") {
+            (
+                ["recycle-review", "recycle-stored", "recycle-restored"],
+                captures
+                    .iter()
+                    .filter(|name| name.starts_with("recycle-"))
+                    .count(),
+            )
+        } else {
+            (
+                ["review", "confirmation", "result"],
+                captures
+                    .iter()
+                    .filter(|name| !name.starts_with("recycle-"))
+                    .count(),
+            )
+        }
+    };
+    if names.get(count).copied() != Some(q.name.as_str()) {
         return Err("CAPTURE_ORDER_INVALID".into());
     }
     let window = app.get_webview_window("main").ok_or("MAIN_MISSING")?;
@@ -1176,6 +1221,7 @@ fn worker(native: bool) {
     .into_iter()
     .map(|path| (path.clone(), fs::read(path).unwrap()))
     .collect();
+    let recycle = RecycleFixture::new(&backend);
     let runtime = Arc::new(NativeRuntime::new(backend.launch.clone()));
     let server = AssetServer::start(assets.clone()).unwrap();
     let state = Arc::new(TaskBackendFixture {
@@ -1193,6 +1239,10 @@ fn worker(native: bool) {
         peer_created: AtomicBool::new(false),
         peer_script: Mutex::new(None),
         peer_reply: Mutex::new(None),
+        recycle,
+        recycle_checks: Mutex::new(vec![]),
+        recycle_removes: AtomicUsize::new(0),
+        recycle_restores: AtomicUsize::new(0),
         confirmations: AtomicUsize::new(0),
         inspections: AtomicUsize::new(0),
         checkpoints: Mutex::new(vec![]),
@@ -1228,6 +1278,8 @@ fn worker(native: bool) {
         crate::cli::commands::cli_preview_session_delete,
         crate::cli::commands::cli_confirm_session_delete,
         crate::cli::commands::cli_inspect_session_delete,
+        crate::cli::commands::cli_recycle_session,
+        recycle::s11_recycle_checkpoint,
         s11_fixture,
         s11_checkpoint,
         s11_proof,
@@ -1243,6 +1295,21 @@ fn worker(native: bool) {
         .manage(state.clone())
         .invoke_handler(move |invoke| {
             let command = invoke.message.command();
+            if command == "cli_recycle_session" {
+                if let InvokeBody::Raw(bytes) = invoke.message.payload() {
+                    if let Ok(value) = serde_json::from_slice::<serde_json::Value>(bytes) {
+                        match value["action"].as_str() {
+                            Some("remove") => {
+                                dispatch.recycle_removes.fetch_add(1, Ordering::AcqRel);
+                            }
+                            Some("restore") => {
+                                dispatch.recycle_restores.fetch_add(1, Ordering::AcqRel);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
             if command == "cli_confirm_session_delete" {
                 dispatch.confirmations.fetch_add(1, Ordering::AcqRel);
                 if native && system_configuration_absent().is_err() {
@@ -1317,10 +1384,14 @@ fn worker(native: bool) {
     if native {
         system_configuration_absent().unwrap();
     }
+    if state.verify_final().is_err() {
+        state.success.store(false, Ordering::Release);
+        *state.failure.lock() = Some("FINAL_FIXTURE_CHANGED");
+    }
     let report = serde_json::json!({"native":native,"success":state.success.load(Ordering::Acquire),"failure":*state.failure.lock(),"exitCode":exit,
         "checkpoints":*state.checkpoints.lock(),"confirmIpcCount":state.confirmations.load(Ordering::Acquire),"inspectIpcCount":state.inspections.load(Ordering::Acquire),
         "actualUdfCount":state.actual_directories.lock().len(),"engineVersion":tauri::webview_version().unwrap(),"captures":*state.captures.lock(),
-        "assetBuildHead":assets.manifest["buildHead"],"assetFiles":assets.manifest["files"],"productionModules":assets.manifest["modules"],"driverSources":assets.manifest["drivers"],"metadataOwnerSettled":true});
+        "assetBuildHead":assets.manifest["buildHead"],"assetFiles":assets.manifest["files"],"productionModules":assets.manifest["modules"],"driverSources":assets.manifest["drivers"],"metadataOwnerSettled":true,"recycleCheckpoints":*state.recycle_checks.lock(),"recycleRemoves":state.recycle_removes.load(Ordering::Acquire),"recycleRestores":state.recycle_restores.load(Ordering::Acquire)});
     fs::write(
         fixture.root.join("reports/webview-result.json"),
         serde_json::to_vec_pretty(&report).unwrap(),
@@ -1560,6 +1631,11 @@ fn NativeDeleteWebView_FrontendFailureIsBounded_013() {
 }
 fn frontend_failure_code(code: Option<&str>) -> &'static str {
     const CODES: &[&str] = &[
+        "RECYCLE_FIXTURE_MISSING",
+        "RECYCLE_PANEL_TIMEOUT",
+        "RECYCLE_REMOVE_TIMEOUT",
+        "RECYCLE_RESTORE_TIMEOUT",
+        "RECYCLE_ACK_ENABLED",
         "ELEMENT_MISSING",
         "UNEXPECTED_REJECTION",
         "REAL_HISTORY_MISSING",
@@ -1583,4 +1659,66 @@ fn frontend_failure_code(code: Option<&str>) -> &'static str {
         .copied()
         .find(|candidate| Some(*candidate) == code)
         .unwrap_or("FRONTEND_ACCEPTANCE_FAILED")
+}
+
+fn final_fixture_check(
+    native: bool,
+    counts: [usize; 4],
+    codex: impl FnOnce(bool) -> Result<(), String>,
+    claude: impl FnOnce(bool) -> Result<(), String>,
+) -> Result<(), String> {
+    if counts != if native { [10, 1, 1, 1] } else { [6, 0, 1, 1] } {
+        return Err("FINAL_DISPATCH_CHANGED".into());
+    }
+    codex(native)?;
+    claude(false)
+}
+#[test]
+fn NativeDeleteWebView_FinalCheckRejectsLateFixtureOrDispatchChange_015() {
+    assert!(final_fixture_check(
+        false,
+        [6, 0, 1, 1],
+        |deleted| {
+            assert!(!deleted);
+            Ok(())
+        },
+        |removed| {
+            assert!(!removed);
+            Ok(())
+        }
+    )
+    .is_ok());
+    assert_eq!(
+        final_fixture_check(
+            false,
+            [7, 0, 1, 1],
+            |_| panic!("must reject count first"),
+            |_| Ok(())
+        )
+        .unwrap_err(),
+        "FINAL_DISPATCH_CHANGED"
+    );
+    assert_eq!(
+        final_fixture_check(
+            false,
+            [6, 0, 1, 1],
+            |_| Err("CODEX_LATE_CHANGE".into()),
+            |_| panic!("must reject Codex change")
+        )
+        .unwrap_err(),
+        "CODEX_LATE_CHANGE"
+    );
+    assert_eq!(
+        final_fixture_check(
+            true,
+            [10, 1, 1, 1],
+            |deleted| {
+                assert!(deleted);
+                Ok(())
+            },
+            |_| Err("CLAUDE_LATE_CHANGE".into())
+        )
+        .unwrap_err(),
+        "CLAUDE_LATE_CHANGE"
+    );
 }

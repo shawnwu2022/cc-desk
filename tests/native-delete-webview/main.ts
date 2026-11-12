@@ -1,6 +1,8 @@
 import { createApp, computed, h, nextTick, ref } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
+import ArchivedSessionsDrawer from '@/components/sessions/ArchivedSessionsDrawer.vue'
+import { normalizePath } from '@/utils/path'
 import NativeSessionDeletePanel from '@/components/sessions/NativeSessionDeletePanel.vue'
 import { useNativeHistoryStore, type NativeHistoryContext } from '@/stores/nativeHistory'
 import { useNativeTabsStore } from '@/stores/nativeTabs'
@@ -25,6 +27,7 @@ async function click(selector: string) { element(selector).click(); await nextTi
 async function ack(selector: string) { const input = element(selector) as HTMLInputElement; input.checked = true; input.dispatchEvent(new Event('change', { bubbles: true })); await nextTick(); await frame() }
 async function expectCode(task: Promise<unknown>, codes: string[]) { const code = await task.then(() => null, (e: any) => e?.code); if (!codes.includes(code)) throw Error('UNEXPECTED_REJECTION') }
 const failureCodes = new Set([
+  'RECYCLE_FIXTURE_MISSING', 'RECYCLE_PANEL_TIMEOUT', 'RECYCLE_REMOVE_TIMEOUT', 'RECYCLE_RESTORE_TIMEOUT', 'RECYCLE_ACK_ENABLED',
   'ELEMENT_MISSING', 'UNEXPECTED_REJECTION', 'REAL_HISTORY_MISSING', 'PREVIEW_TIMEOUT',
   'RISK_COPY_MISSING', 'SECOND_CONFIRMATION_MERGED', 'MISSING_ACK_ENABLED',
   'SUBTREE_ACK_OPTIONAL', 'NATIVE_DELETE_DISABLED', 'NATIVE_RESULT_TIMEOUT',
@@ -43,7 +46,7 @@ host.__STAGE11__ = { async start() {
   // 只有原生宿主核实实际UDF和父Job后才调用start；模块加载不能提前写偏好或mount。
   const pinia = createPinia(); setActivePinia(pinia)
   const history = useNativeHistoryStore(), catalog = useUnifiedSessionsStore(), support = useCliSupportStore()
-  support.setCliEnabled('codex', true); support.setCliEnabled('claude', false); support.setCliEnabled('opencode', false)
+  support.setCliEnabled('codex', true); support.setCliEnabled('claude', true); support.setCliEnabled('opencode', false)
   const projects = useProjectsStateStore(); projects.loaded = true
   const unused = () => { throw new Error('UNRELATED_SESSION_ACTION') }
   catalog.configureAdapters([createNativeCliAdapter({
@@ -51,12 +54,13 @@ host.__STAGE11__ = { async start() {
     archive: { getArchivedSessions: useSessionStore().getArchivedSessions, archiveSession: projects.archiveSession, restoreSession: projects.restoreSession },
     runtime: { createTab: unused, restartTab: unused, stopTab: async () => unused(), renameTab: async () => unused() },
   })])
-  const selectedId = ref(''), stage = ref('Waiting for the native document')
+  const selectedId = ref(''), stage = ref('Waiting for the native document'), drawerOpen = ref(false)
   const target = computed(() => catalog.sessions.find(row => row.nativeSessionId === selectedId.value) ?? null)
   createApp({ render: () => h('main', { style: 'max-width:1000px;margin:30px auto;padding:24px' }, [
     h('h1', 'Task-isolated permanent deletion acceptance'), h('p', stage.value),
     h('p', 'Synthetic fixtures only. This host does not start the installed CC Desk application.'),
     h(NativeSessionDeletePanel, { target: target.value, active: true }),
+    h(ArchivedSessionsDrawer, { open: drawerOpen.value, sessions: catalog.sessions, 'onUpdate:open': (value: boolean) => { drawerOpen.value = value } }),
     h('h2', 'Observed synthetic history'), h('ul', { 'data-fixture-history': '' }, catalog.sessions.map(row => h('li', { key: row.id }, `${row.title} · ${row.nativeSessionId}`))),
   ]) }).use(pinia).use(createI18n({ legacy: false, locale: 'en', messages: { en, zh } })).mount('#app')
   const call = (command: string, payload: unknown = {}) => bridge.invoke(command, payload)
@@ -102,7 +106,32 @@ host.__STAGE11__ = { async start() {
     await reload()
     if ((element('[data-native-cleanup-delete]') as HTMLButtonElement).disabled) throw Error('NATIVE_DELETE_DISABLED')
     await click('[data-native-cleanup-delete]'); await until(() => !!document.querySelector('[data-delete-next-confirm]'), 'PREVIEW_TIMEOUT')
-    if (!fixture.native) { await click('[data-delete-cancel]'); stage.value = 'NoNative document and component checks passed'; await call('s11_finish', { success: true }); return }
+    await click('[data-delete-cancel]')
+    await history.load({ ...fixture.recycleContext, force: true })
+    await catalog.refresh(fixture.recycleContext.projectPath, { cli: 'claude' })
+    const recycleRow = catalog.sessions.find(row => row.nativeSessionId === fixture.recycleId && row.cli === 'claude')
+    if (!recycleRow) throw Error('RECYCLE_FIXTURE_MISSING')
+    // 注入合成 Desk 归档标签作为起始状态，不声称验证标签持久化或完整应用启动。
+    projects.archivedSessions.set(normalizePath(fixture.recycleContext.projectPath), [recycleRow.id])
+    await catalog.refresh(fixture.recycleContext.projectPath, { cli: 'claude' })
+    drawerOpen.value = true; await nextTick(); await frame()
+    await click('[data-recycle-open]')
+    await until(() => !!document.querySelector('[data-recycle-select]') && !(element('[data-recycle-select]') as HTMLSelectElement).disabled, 'RECYCLE_PANEL_TIMEOUT')
+    const selector = element('[data-recycle-select]') as HTMLSelectElement
+    selector.value = recycleRow.id; selector.dispatchEvent(new Event('change', { bubbles: true })); await nextTick(); await frame()
+    await until(() => !!document.querySelector('[data-recycle-remove]'), 'RECYCLE_PANEL_TIMEOUT')
+    if (!(element('[data-recycle-remove]') as HTMLButtonElement).disabled) throw Error('RECYCLE_ACK_ENABLED')
+    await call('s11_recycle_checkpoint', { name: 'review' }); await call('s11_capture', { name: 'recycle-review' })
+    await ack('[data-recycle-ack]')
+    const remove = element('[data-recycle-remove]'); remove.click(); remove.click()
+    await until(() => !catalog.sessions.some(row => row.nativeSessionId === fixture.recycleId) && !!document.querySelector('[data-recycle-restore]') && !(element('[data-recycle-restore]') as HTMLButtonElement).disabled, 'RECYCLE_REMOVE_TIMEOUT')
+    await call('s11_recycle_checkpoint', { name: 'stored' }); await call('s11_capture', { name: 'recycle-stored' })
+    const restore = element('[data-recycle-restore]'); restore.click(); restore.click()
+    await until(() => catalog.sessions.some(row => row.nativeSessionId === fixture.recycleId && row.archived) && !document.querySelector('[data-recycle-restore]'), 'RECYCLE_RESTORE_TIMEOUT')
+    await call('s11_recycle_checkpoint', { name: 'restored' }); await call('s11_capture', { name: 'recycle-restored' })
+    drawerOpen.value = false; await nextTick(); await frame()
+    if (!fixture.native) { stage.value = 'NoNative document, deletion review and Claude recovery checks passed'; await call('s11_finish', { success: true }); return }
+    await click('[data-native-cleanup-delete]'); await until(() => !!document.querySelector('[data-delete-next-confirm]'), 'PREVIEW_TIMEOUT')
     await click('[data-delete-next-confirm]'); await ack('[data-delete-ack-permanent]'); await ack('[data-delete-ack-subtree]')
     await call('s11_capture', { name: 'confirmation' })
     const button = element('[data-delete-final]'); button.click(); button.click()
