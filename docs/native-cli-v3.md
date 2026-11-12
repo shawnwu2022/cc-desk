@@ -783,4 +783,4 @@ Codex 行的“原生归档”使用 authenticated `cli_archive_session`，经�
 
 ## 0.27：Claude 主记录可恢复移除
 
-独立的 `cli_recycle_session` 和“Claude 恢复区”仅支持已核实 Windows NTFS 配置来源。它只将主 transcript 原件移入同卷持久恢复区，保留子任务、附件和原生索引，提供无覆盖恢复；不是原生归档、软隐藏或永久删除。未知结果不重发，原有永久删除能力门不变。范围、句柄/日志契约与验证边界见 [可恢复移除](recoverable-claude-removal-0.70.md)。
+独立“Claude 恢复区”和 OpenCode 原生归档面板已撤除；产品界面不再新增移除或独立原生归档。已核实 Windows NTFS 来源的旧 Claude 恢复记录仍可在归档抽屉内找回，OpenCode 已原生归档行保留单条恢复确认。现有认证后端保留，不迁移、不覆盖或删除旧数据；未知结果不重发，原有永久删除能力门不变。当前界面与兼容边界见 [撤除说明](archive-feature-retirement.md)，历史句柄/日志契约见 [可恢复移除](recoverable-claude-removal-0.70.md)。

@@ -208,3 +208,7 @@ An already-started Native new or resume-id tab restarts only after checking its 
 ## 原生归档的单次操作
 
 历史和已停止的 Codex 会话点击归档后直接执行，不再弹出第二次确认。等待期间固定原始会话与导航上下文；后台仍核对准确来源并保护活动/未知 Codex owner。Claude/OpenCode 的已确认 owner 不再阻止 Codex 归档。归档后的真实状态必须回读确认，未知结果不重放。运行中会话菜单不提供归档，永久删除继续保留独立预览、风险勾选和二次确认。
+
+## 旧恢复数据兼容
+
+Claude/OpenCode 的独立恢复/归档面板与新增移除、原生归档入口已撤除。普通抽屉仅在旧 Claude 恢复记录存在或读取有明确问题时显示找回内容，OpenCode 已原生归档行仅提供单条恢复确认。原会话树、Desk 归档/恢复和 Codex 能力不变，不自动迁移或删除数据。详见 [撤除说明](archive-feature-retirement.md)。

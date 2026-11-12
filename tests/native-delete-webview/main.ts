@@ -2,7 +2,6 @@ import { createApp, computed, h, nextTick, ref } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import ArchivedSessionsDrawer from '@/components/sessions/ArchivedSessionsDrawer.vue'
-import OpencodeArchivePanel from '@/components/sessions/OpencodeArchivePanel.vue'
 import SessionList from '@/components/sessions/SessionList.vue'
 import NativeSessionDeletePanel from '@/components/sessions/NativeSessionDeletePanel.vue'
 import { useNativeHistoryStore, type NativeHistoryContext } from '@/stores/nativeHistory'
@@ -59,7 +58,7 @@ host.__STAGE11__ = { async start() {
     archive: { getArchivedSessions: useSessionStore().getArchivedSessions, archiveSession: projects.archiveSession, restoreSession: projects.restoreSession },
     runtime: { createTab: unused, restartTab: unused, stopTab: async () => unused(), renameTab: async () => unused() },
   })])
-  const selectedId = ref(''), stage = ref('Waiting for the native document'), drawerOpen = ref(false), opencodeActive = ref(false)
+  const selectedId = ref(''), stage = ref('Waiting for the native document'), drawerOpen = ref(false)
   const target = computed(() => catalog.sessions.find(row => row.nativeSessionId === selectedId.value) ?? null)
   createApp({ render: () => h('main', { style: 'max-width:1000px;margin:30px auto;padding:24px' }, [
     h('h1', 'Task-isolated permanent deletion acceptance'), h('p', stage.value),
@@ -67,7 +66,6 @@ host.__STAGE11__ = { async start() {
     h(NativeSessionDeletePanel, { target: target.value, active: true }),
     h('section', { 'data-desk-live': '' }, [h(SessionList, { sessions: catalog.sessions.filter(row => row.cli === 'claude' && !row.archived), onMenuAction: (id: string, action: string) => { if (action !== 'archive') unused(); void catalog.archiveSession(id).catch(() => {}) } })]),
     h(ArchivedSessionsDrawer, { open: drawerOpen.value, sessions: catalog.sessions, 'onUpdate:open': (value: boolean) => { drawerOpen.value = value }, onRestoreRequest: (id: string) => { void catalog.restoreArchivedSession(id).catch(() => {}) } }),
-    opencodeActive.value ? h(OpencodeArchivePanel, { sessions: catalog.sessions.filter(row => row.cli === 'opencode'), active: true }) : null,
     h('h2', 'Observed synthetic history'), h('ul', { 'data-fixture-history': '' }, catalog.sessions.map(row => h('li', { key: row.id }, `${row.title} · ${row.nativeSessionId}`))),
   ]) }).use(pinia).use(createI18n({ legacy: false, locale: 'en', messages: { en, zh } })).mount('#app')
   const call = (command: string, payload: unknown = {}) => bridge.invoke(command, payload)
@@ -150,15 +148,14 @@ host.__STAGE11__ = { async start() {
     await archiveFromRow()
     drawerOpen.value = true; await nextTick(); await frame()
     await call('s11_desk_checkpoint', { name: 'rearchived' }); await call('s11_capture', { name: 'desk-rearchived' })
-    await click('[data-recycle-open]')
-    await until(() => !!document.querySelector('[data-recycle-select]') && !(element('[data-recycle-select]') as HTMLSelectElement).disabled, 'RECYCLE_PANEL_TIMEOUT')
-    const selector = element('[data-recycle-select]') as HTMLSelectElement
-    selector.value = recycleRow.id; selector.dispatchEvent(new Event('change', { bubbles: true })); await nextTick(); await frame()
-    await until(() => !!document.querySelector('[data-recycle-remove]'), 'RECYCLE_PANEL_TIMEOUT')
-    if (!(element('[data-recycle-remove]') as HTMLButtonElement).disabled) throw Error('RECYCLE_ACK_ENABLED')
+    if (document.querySelector('[data-recycle-open], [data-recycle-remove], [data-opencode-archive-open]')) throw Error('RECYCLE_PANEL_TIMEOUT')
     await call('s11_recycle_checkpoint', { name: 'review' }); await call('s11_capture', { name: 'recycle-review' })
-    await ack('[data-recycle-ack]')
-    const remove = element('[data-recycle-remove]'); remove.click(); remove.click()
+    // 仅用隔离合成来源准备旧版本数据；产品 UI 不再提供移除入口。
+    drawerOpen.value = false; await nextTick(); await frame()
+    await call('cli_recycle_session', { source: history.get(fixture.recycleContext)!.source!, action: 'remove', operationId: crypto.randomUUID(), sessionKey: recycleRow.nativeHistorySessionKey, acknowledgeRecoverable: true })
+    await history.load({ ...fixture.recycleContext, force: true, retainOnFailure: true })
+    await reloadDesk()
+    drawerOpen.value = true; await nextTick(); await frame()
     await until(() => !catalog.sessions.some(row => row.nativeSessionId === fixture.recycleId) && !!document.querySelector('[data-recycle-restore]') && !(element('[data-recycle-restore]') as HTMLButtonElement).disabled, 'RECYCLE_REMOVE_TIMEOUT')
     await call('s11_recycle_checkpoint', { name: 'stored' }); await call('s11_capture', { name: 'recycle-stored' })
     const restore = element('[data-recycle-restore]'); restore.click(); restore.click()
@@ -169,30 +166,28 @@ host.__STAGE11__ = { async start() {
     await catalog.refresh(fixture.opencodeContext.projectPath, { cli: 'opencode' })
     const opencodeRow = () => catalog.sessions.find(row => row.cli === 'opencode' && row.nativeSessionId === fixture.opencodeId)
     if (!opencodeRow() || opencodeRow()!.nativeArchived) throw Error('OPENCODE_FIXTURE_MISSING')
-    // Establish the real Desk tag required by the production native-archive panel.
+    // Preserve a real Desk tag to verify native restoration does not clear it.
     const opencodeId = opencodeRow()!.id
     await projects.archiveSession(fixture.opencodeContext.projectPath, opencodeId)
     await catalog.refresh(fixture.opencodeContext.projectPath, { cli: 'opencode' })
-    opencodeActive.value = true; await nextTick(); await frame()
-    await click('[data-opencode-archive-open]')
-    async function selectOpencode() {
-      const selector = element('[data-opencode-archive-select]') as HTMLSelectElement
-      selector.value = opencodeRow()!.id; selector.dispatchEvent(new Event('change', { bubbles: true })); await nextTick(); await frame()
-      await until(() => !!document.querySelector('[data-opencode-archive-submit]'), 'OPENCODE_UI_TIMEOUT')
-      if (!(element('[data-opencode-archive-submit]') as HTMLButtonElement).disabled) throw Error('OPENCODE_ACK_ENABLED')
-    }
-    await selectOpencode()
     await call('s11_opencode_checkpoint', { name: 'review' }); await call('s11_capture', { name: 'opencode-review' })
-    for (const [name, archived] of [['archived', true], ['restored', false]] as const) {
-      if (!archived) await selectOpencode()
-      await ack('[data-opencode-archive-ack]')
-      const submit = element('[data-opencode-archive-submit]'); submit.click(); submit.click()
-      await until(() => { if (document.querySelector('[data-opencode-archive-error]')) throw Error('OPENCODE_UI_ERROR'); return opencodeRow()?.nativeArchived === archived && !(element('[data-opencode-archive-refresh]') as HTMLButtonElement).disabled && !document.querySelector('[data-opencode-archive-pending]') }, 'OPENCODE_UI_TIMEOUT', 40_000)
-      await call('s11_opencode_checkpoint', { name }); await call('s11_capture', { name: `opencode-${name}` })
-    }
+    // 先通过认证后端准备旧归档，再验证普通抽屉只保留单条恢复。
+    await call('cli_set_opencode_archive', { source: history.get(fixture.opencodeContext)!.source!, operationId: crypto.randomUUID(), sessionKey: opencodeRow()!.nativeHistorySessionKey, archived: true, acknowledgeRecoverable: true })
+    await history.load({ ...fixture.opencodeContext, force: true, retainOnFailure: true })
+    await catalog.refresh(fixture.opencodeContext.projectPath, { cli: 'opencode' })
+    await call('s11_opencode_checkpoint', { name: 'archived' }); await call('s11_capture', { name: 'opencode-archived' })
+    drawerOpen.value = true; await nextTick(); await frame()
+    if (document.querySelector('[data-opencode-archive-open]')) throw Error('OPENCODE_UI_ERROR')
+    await click('[data-session-opencode-archive]')
+    await until(() => !!document.querySelector('[data-opencode-archive-submit]'), 'OPENCODE_UI_TIMEOUT')
+    if (!(element('[data-opencode-archive-submit]') as HTMLButtonElement).disabled) throw Error('OPENCODE_ACK_ENABLED')
+    await ack('[data-opencode-archive-ack]')
+    const submit = element('[data-opencode-archive-submit]'); submit.click(); submit.click()
+    await until(() => { if (document.querySelector('[data-opencode-archive-error]')) throw Error('OPENCODE_UI_ERROR'); return opencodeRow()?.nativeArchived === false && !(element('[data-opencode-archive-refresh]') as HTMLButtonElement).disabled && !document.querySelector('[data-opencode-archive-pending]') }, 'OPENCODE_UI_TIMEOUT', 40_000)
+    await call('s11_opencode_checkpoint', { name: 'restored' }); await call('s11_capture', { name: 'opencode-restored' })
     await projects.restoreSession(fixture.opencodeContext.projectPath, opencodeId)
-    opencodeActive.value = false; await nextTick(); await frame()
-    if (!fixture.native) { stage.value = 'NoNative document, deletion review, Claude recovery and OpenCode archive checks passed'; await call('s11_finish', { success: true }); return }
+    drawerOpen.value = false; await nextTick(); await frame()
+    if (!fixture.native) { stage.value = 'NoNative document, deletion review, legacy Claude recovery and OpenCode restore checks passed'; await call('s11_finish', { success: true }); return }
     await click('[data-native-cleanup-delete]'); await until(() => !!document.querySelector('[data-delete-next-confirm]'), 'PREVIEW_TIMEOUT')
     await click('[data-delete-next-confirm]'); await ack('[data-delete-ack-permanent]'); await ack('[data-delete-ack-subtree]')
     await call('s11_capture', { name: 'confirmation' })

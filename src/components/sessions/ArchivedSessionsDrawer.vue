@@ -80,7 +80,7 @@ function menuAction(id: string, action: SessionMenuAction) {
       <SessionList v-if="archived.length" :sessions="archived" :surface-active="open" :menu-teleport="false" @primary-action="primaryAction" @menu-action="menuAction"
         @rename-commit="(id, title) => emit('rename-commit', id, title)" @rename-cancel="emit('rename-cancel', $event)">
         <template #trailingAction="{ session }">
-          <IconButton v-if="requiresOpencodeNativeRestore(session)" data-session-opencode-archive :label="`${t('opencodeArchiveOpen')} · ${session.title}`" :disabled="!open" @click.stop="opencodePanel?.showFor(session.id)">
+          <IconButton v-if="requiresOpencodeNativeRestore(session)" data-session-opencode-archive :label="`${t('opencodeArchiveRestore')} · ${session.title}`" :disabled="!open" @click.stop="opencodePanel?.showFor(session.id)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M3 4h18v4H3zM5 8v12h14V8M9 12h6" />
             </svg>
