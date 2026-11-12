@@ -329,8 +329,27 @@ impl Root {
         &self.scope_key
     }
     pub(crate) fn descendant(&self, path: &Path) -> ReadResult<String> {
+        let selected = self.selected.as_path();
+        #[cfg(windows)]
+        let canonical;
+        #[cfg(windows)]
+        let selected = if path.starts_with(selected) {
+            selected
+        } else {
+            // Codex 返回规范化的扩展路径；只解析已授权根，不解析不可信文件路径。
+            // 规范根及原选择入口都须仍指向 held capability，读取继续使用原目录句柄。
+            self.source_current()?;
+            canonical = selected.canonicalize().map_err(|_| "SOURCE_CHANGED")?;
+            let resolved = Dir::open_ambient_dir(&canonical, cap_std::ambient_authority())
+                .map_err(|_| "SOURCE_CHANGED")?;
+            if directory_key(&resolved)? != self.identity {
+                return Err("SOURCE_CHANGED");
+            }
+            self.source_current()?;
+            &canonical
+        };
         let path = path
-            .strip_prefix(&self.selected)
+            .strip_prefix(selected)
             .map_err(|_| "SOURCE_PATH_REJECTED")?;
         let components = path
             .components()

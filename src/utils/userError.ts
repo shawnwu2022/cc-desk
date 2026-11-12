@@ -31,6 +31,7 @@ const KNOWN_ERRORS: Readonly<Record<string, ErrorTemplate>> = Object.freeze({
   RENAME_VERIFICATION_FAILED: { messageKey:'errorNativeRenameUnknown',actionKey:'refresh',severity:'warning',retryable:false,detailCode:'RENAME_VERIFICATION_FAILED' },
   RENAME_OPERATION_CONFLICT: { messageKey:'errorNativeRenameUnknown',actionKey:'refresh',severity:'warning',retryable:false,detailCode:'RENAME_OPERATION_CONFLICT' },
   RENAME_DISPLAY_SYNC_FAILED: { messageKey:'errorNativeRenameDisplaySync',actionKey:'refresh',severity:'warning',retryable:false,detailCode:'RENAME_DISPLAY_SYNC_FAILED' },
+  SOURCE_PATH_REJECTED: { messageKey: 'errorGenericUnavailable', actionKey: 'viewDetails', severity: 'warning', retryable: false, detailCode: 'SOURCE_PATH_REJECTED' },
   FORBIDDEN: { messageKey: 'errorGenericUnavailable', actionKey: 'viewDetails', severity: 'warning', retryable: false, detailCode: 'FORBIDDEN' },
   DOCUMENT_BRIDGE_UNAVAILABLE: { messageKey: 'errorGenericUnavailable', actionKey: 'viewDetails', severity: 'warning', retryable: false, detailCode: 'DOCUMENT_BRIDGE_UNAVAILABLE' },
   INVALID_REQUEST: { messageKey: 'errorGenericUnavailable', actionKey: 'viewDetails', severity: 'warning', retryable: false, detailCode: 'INVALID_REQUEST' },

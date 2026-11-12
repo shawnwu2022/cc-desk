@@ -578,6 +578,36 @@ read-only review found no remaining blocker. The user's actual error code and
 machine remain unconfirmed; these fixtures do not certify live CLI/WebView2 or
 the user's histories. Anonymous omissions still block rather than guess identity.
 
+2026-11-12 Windows path regression: official Codex 0.167.1 `thread/read`
+returned a verbatim `\\?\C:\...` rollout path for an ordinary configured
+`C:\...` root. The original lexical `strip_prefix` rejected this same source as
+`SOURCE_PATH_REJECTED` before any `thread/name/set`. The selected root may now be
+canonicalized only after revalidating its held directory identity; the canonical
+root is independently opened and compared with the same held identity, then the
+original source path is rechecked. The untrusted returned rollout path is never
+canonicalized: traversal, foreign roots and non-normal suffixes still fail, and
+all transcript reads continue through the original held root and bounded reader.
+An absent logical `.jsonl` can still select only its exact `.jsonl.zst` fallback.
+
+The earlier 2026-10-19 fix covered unrelated history omissions, and the
+2026-11-08 fix covered compressed logical paths. Neither changed this prefix
+comparison. Existing Windows fixtures used the same tempfile spelling for both
+root and response, hiding the ordinary-root/canonical-response combination.
+The new Windows regression combines those spellings and exercises two consecutive
+renames through the official protocol exchange, along with foreign-root,
+traversal and revoked-source rejection. On the reported SXY session, diagnostics
+only read the identity header, title metadata and official `thread/read`; they
+never renamed, resumed or interrupted the user's live session. These findings
+are not installed-WebView or live-session rename acceptance. The UI now retains
+`SOURCE_PATH_REJECTED` as a fixed allowlisted detail code instead of replacing it
+with `GENERIC_UNAVAILABLE`; raw paths and exception fields remain suppressed.
+Windows verification: the new source regression failed with `SOURCE_PATH_REJECTED`
+before the fix, then the affected Rust rename/projection/archive/delete groups
+passed 260 tests. The diagnostic regression also completed RED/GREEN; the six
+affected frontend files passed 239 tests. Typecheck, production frontend build,
+rustfmt and strict all-target Clippy passed. Full Rust/Vitest inventories and installed GUI acceptance were not
+rerun for this scoped change.
+
 Rename operation receipts share a 4096-entry budget. Before each new admission,
 completed receipts belonging to permanently revoked full caller identities are
 reclaimed through the authenticated run registry. Active-document receipts,
