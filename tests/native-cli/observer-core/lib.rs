@@ -10,6 +10,7 @@ mod observer_registry;
 mod profiles;
 #[path = "../../../src-tauri/src/cli/types.rs"]
 mod types;
+mod version_history;
 mod cli {
     pub(crate) use crate::{environment, profiles, types};
 }

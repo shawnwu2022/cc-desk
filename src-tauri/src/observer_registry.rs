@@ -65,7 +65,7 @@ struct ObserverSlot {
     authorize: Arc<dyn Fn() -> bool + Send + Sync>,
     identity_diagnostics: CodexIdentityDiagnostics,
     codex_admission_identity:
-        Option<Arc<crate::version_history::codex_archive_admission::CodexOwnerIdentity>>,
+        Option<Arc<crate::version_history::codex_owner_identity::CodexOwnerIdentity>>,
 }
 
 /// Receipt diagnostics only, never a second frontend adoption state machine.
@@ -151,7 +151,7 @@ impl ObserverLease {
     }
     pub(crate) fn bind_codex_admission(
         &self,
-        identity: Arc<crate::version_history::codex_archive_admission::CodexOwnerIdentity>,
+        identity: Arc<crate::version_history::codex_owner_identity::CodexOwnerIdentity>,
     ) -> Result<(), SafeError> {
         self.registry.check_binding(&self.binding)?;
         let mut slots = self.registry.slots.lock();

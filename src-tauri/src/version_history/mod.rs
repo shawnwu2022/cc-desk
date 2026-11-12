@@ -23,6 +23,7 @@ pub(crate) mod acceptance;
 
 pub(crate) mod catalog;
 pub(crate) mod codex_archive_admission;
+pub(crate) mod codex_owner_identity;
 pub(crate) mod commands;
 pub(crate) mod compatibility;
 pub(crate) mod download;

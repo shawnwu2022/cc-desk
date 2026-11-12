@@ -844,7 +844,7 @@ fn Opencode_ObserverLeaseCleansPrivatePluginAndRevokes_043() {
 #[test]
 fn NativeArchiveOwners_AuthenticatedHookAccumulatesWithoutStopOrReplayRemoval_026() {
     use crate::observer_registry::ObserverDelivery;
-    use crate::version_history::codex_archive_admission::CodexOwnerIdentity;
+    use crate::version_history::codex_owner_identity::CodexOwnerIdentity;
     use std::sync::Arc;
     let registry = Arc::new(ObserverRegistry::new());
     let lease = registry
