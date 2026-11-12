@@ -64,6 +64,9 @@ const OUTPUT_LIMIT: u64 = 1024 * 1024;
 #[path = "native_cli_delete_webview.rs"]
 mod webview;
 
+#[path = "native_cli_archive_live.rs"]
+mod archive;
+
 struct NativeWriterLock {
     file: File,
     directory: Root,
