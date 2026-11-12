@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [0.27.0-rc.5] - 2026-11-12
+
+### Fixed
+
+- Scope Windows Codex archive admission so unrelated structured Claude, OpenCode and Legacy runtimes no longer block it, while Codex, raw/unknown owners, mutations and maintenance still fail closed.
+- Avoid the redundant pre-archive history scan and bound the metadata helper EOF grace after the RPC completes, without releasing owned processes prematurely.
+
+### Improved
+
+- Archive closed and stopped sessions directly with navigation/selection ownership guards; retain stop-and-archive confirmation for live sessions and the separate permanent-delete review and confirmations.
+
+This is a prerelease with make_latest=false; stable Latest remains unchanged. Native archiving remains Windows Codex only. Existing Desk-only markers are not migrated automatically. The official archive may affect native descendants, stop active children and involve other projects; a successful receipt verifies only the root. Exact-source read-only reconciliation and unknown-write fences remain in place. Real Codex archive/delete, installed Windows WebView2, full descendants/external writers, D20/native All and signed installation/return remain unverified. Exact-main CI, authenticated coverage and same-run three-platform updater signatures remain mandatory; updater signing is not Windows Authenticode.
+
 ## [0.27.0-rc.4] - 2026-11-11
 
 ### Fixed

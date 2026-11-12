@@ -4,6 +4,23 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
+## [0.27.0-rc.5]
+
+Fixed
+
+- Allow Windows Codex native archiving while unrelated structured Claude, OpenCode or Legacy sessions are open. Keep Codex, raw, unknown and maintenance activity blocking unsafe writes.
+- Return archive feedback without a redundant full history scan and shorten cleanup after the official metadata operation completes.
+
+Improved
+
+- Archive closed or stopped sessions with one click. Running sessions still require stop-and-archive confirmation, and permanent deletion keeps its separate preview and confirmations.
+
+Important
+
+- This is a prerelease. Stable Latest remains unchanged. Native archiving is Windows Codex only; Claude and OpenCode retain Desk-only hiding. Existing Desk-only archives require restoring the display marker before explicit native archive.
+- Native archive may affect child sessions, stop active descendants and involve other projects. Success verifies the root only; descendant completion remains unverified. Uncertain writes are reconciled read-only and are not automatically replayed.
+- Synthetic checks do not certify real Codex archive/delete, installed Windows WebView2, complete descendants or external writers. D20/native All and signed installation/return remain unverified. Updater signatures are not Windows Authenticode.
+
 ## [0.27.0-rc.4]
 
 Fixed
