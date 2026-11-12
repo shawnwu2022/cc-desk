@@ -3,7 +3,7 @@ import type { ProjectionBridge } from './nativeProjection'
 import { validateProjectionSource } from './nativeProjection'
 
 const safeCodes = new Set(['NATIVE_DELETE_UNSUPPORTED', 'DELETE_UNSUPPORTED', 'DELETE_FAILED', 'DELETE_OUTCOME_UNKNOWN', 'DELETE_PREVIEW_CHANGED', 'DELETE_PREVIEW_EXPIRED', 'DELETE_PREVIEW_REQUIRED', 'DELETE_CONFIRMATION_REQUIRED', 'DELETE_OPERATION_CONFLICT', 'DELETE_NOT_ARCHIVED', 'DELETE_SOURCE_UNVERIFIED', 'DELETE_CONFIGURATION_UNSUPPORTED', 'DELETE_SOURCE_BUSY', 'DELETE_IN_PROGRESS', 'SESSION_NOT_FOUND', 'SESSION_IDENTITY_UNKNOWN', 'SESSION_ORIGIN_AMBIGUOUS', 'PROGRAM_UNAVAILABLE', 'RUNNER_UNAVAILABLE', 'SOURCE_BUSY', 'SOURCE_CHANGED', 'SOURCE_UNAVAILABLE', 'SOURCE_TOO_LARGE', 'SOURCE_BUDGET_EXCEEDED', 'SOURCE_AMBIGUOUS', 'SCOPE_STALE', 'SCOPE_REVOKED', 'SCOPE_UNKNOWN', 'REVISION_CONFLICT', 'PROJECT_IDENTITY_CHANGED', 'FORBIDDEN', 'INVALID_REQUEST', 'BACKEND_INSTANCE_CHANGED', 'DELETE_INVALID_RESPONSE'])
-for (const code of ['DELETE_SOURCE_UNAVAILABLE', 'DELETE_ROOT_NOT_ARCHIVED', 'DELETE_ARGUMENTS_UNSUPPORTED', 'DELETE_OWNER_PENDING', 'DELETE_NOT_ACKNOWLEDGED', 'DELETE_ROOT_PRESENT', 'DELETE_OPERATION_UNKNOWN', 'DELETE_UNAVAILABLE', 'DELETE_CONFIG_UNPROVEN', 'DELETE_CONTAINER_UNSAFE', 'DOCUMENT_BRIDGE_UNAVAILABLE', 'DELETE_INITIALIZE_FAILED', 'DELETE_READ_FAILED', 'DELETE_PREPARE_FAILED']) safeCodes.add(code)
+for (const code of ['DELETE_SOURCE_UNAVAILABLE', 'DELETE_ROOT_NOT_ARCHIVED', 'DELETE_ARGUMENTS_UNSUPPORTED', 'DELETE_OWNER_PENDING', 'DELETE_NOT_ACKNOWLEDGED', 'DELETE_ROOT_PRESENT', 'DELETE_OPERATION_UNKNOWN', 'DELETE_UNAVAILABLE', 'DELETE_CONFIG_UNPROVEN', 'DELETE_CONTAINER_UNSAFE', 'DOCUMENT_BRIDGE_UNAVAILABLE', 'DELETE_INITIALIZE_FAILED', 'DELETE_READ_FAILED', 'DELETE_PREPARE_FAILED', 'DELETE_MAINTENANCE_UNAVAILABLE', 'DELETE_SERVICE_UNVERIFIED']) safeCodes.add(code)
 function error(code: string): Error & { code: string; retryable: false } { return Object.assign(new Error(code), { code, retryable: false as const }) }
 export function sessionDeleteErrorCode(value: unknown): string {
   const code = value && typeof value === 'object' && 'code' in value ? (value as { code: unknown }).code : value instanceof Error ? value.message : null
@@ -17,12 +17,19 @@ function object(value: unknown, fields: string[]): Record<string, unknown> {
   return record
 }
 function uuid(value: unknown): string { if (typeof value !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) return invalid(); return value }
+// 只读诊断保留提供方原生 ID；OpenCode locator 区分大小写，不套用 UUID 归一化。
+function nativeId(value: unknown, cli: string): string {
+  if (cli !== 'opencode') return uuid(value)
+  if (typeof value !== 'string' || !/^ses_[A-Za-z0-9_]{1,252}$/.test(value)) return invalid()
+  return value
+}
 function reason(value: unknown): string | null { if (value === null) return null; if (typeof value !== 'string' || !safeCodes.has(value)) return invalid(); return value }
 function nullableBoolean(value: unknown): boolean | null { if (value !== null && typeof value !== 'boolean') return invalid(); return value }
 function decodePreview(value: unknown, operationId: string, cli: string): SessionDeletePreview {
   const r = object(value, ['operationId', 'previewId', 'nativeSessionId', 'cli', 'state', 'rootArchived', 'scope', 'knownDescendantCount', 'reason'])
   if (r.operationId !== operationId || r.cli !== cli || !['ready', 'blocked', 'unsupported'].includes(r.state as string) || r.scope !== 'native-subtree' || r.knownDescendantCount !== null) return invalid()
-  const result = { operationId, previewId: r.previewId === null ? null : uuid(r.previewId), nativeSessionId: r.nativeSessionId === null ? null : uuid(r.nativeSessionId), cli, state: r.state, rootArchived: nullableBoolean(r.rootArchived), scope: 'native-subtree', knownDescendantCount: null, reason: reason(r.reason) } as SessionDeletePreview
+  const result = { operationId, previewId: r.previewId === null ? null : uuid(r.previewId), nativeSessionId: r.nativeSessionId === null ? null : nativeId(r.nativeSessionId, cli), cli, state: r.state, rootArchived: nullableBoolean(r.rootArchived), scope: 'native-subtree', knownDescendantCount: null, reason: reason(r.reason) } as SessionDeletePreview
+  if (result.state !== 'ready' && result.previewId !== null) return invalid()
   if (result.state === 'ready' && (cli !== 'codex' || !result.previewId || !result.nativeSessionId || result.rootArchived !== true || result.reason !== null)) return invalid()
   return result
 }

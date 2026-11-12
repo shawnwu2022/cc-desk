@@ -594,3 +594,195 @@ fn Opencode_RenameRejectsInventedScopeBeforeSpawn_01() {
         "SCOPE_UNKNOWN"
     );
 }
+
+fn provider_delete_fixture(
+    cli: CliKind,
+) -> (
+    Fixture,
+    crate::cli::native_delete::PreviewRequest,
+    std::path::PathBuf,
+    String,
+) {
+    use serde_json::json;
+    let f = Fixture::new();
+    let project_path = f._temp.path().join("project");
+    fs::create_dir(&project_path).unwrap();
+    let project = crate::cli::workspace::register_project(&f.repo, &project_path).unwrap();
+    let root = f._temp.path().join("provider-root");
+    fs::create_dir(&root).unwrap();
+    let mut profile = Profile::new("provider-delete", cli);
+    // 预览只读；故意不给可执行 CLI，以防此路径偷偷启动服务或助手。
+    profile.program_path = Override::Set(root.join("must-not-run.exe").to_string_lossy().into());
+    let (id, file) = if cli == CliKind::Claude {
+        let id = "00000000-0000-4000-8000-000000000070";
+        fs::create_dir_all(root.join("projects/fixture")).unwrap();
+        let file = root.join(format!("projects/fixture/{id}.jsonl"));
+        fs::write(&file, format!("{}\n", json!({"type":"user","sessionId":id,"cwd":project_path,"message":{"role":"user","content":"synthetic fixture"}}))).unwrap();
+        profile.env.insert(
+            "CLAUDE_CONFIG_DIR".into(),
+            Override::Set(EnvValue::Literal {
+                value: root.to_string_lossy().into(),
+                non_secret: true,
+            }),
+        );
+        (id, file)
+    } else {
+        let id = "ses_ExactCase070";
+        let file = root.join("fixture.db");
+        let db = rusqlite::Connection::open(&file).unwrap();
+        db.execute_batch(include_str!("fixtures/opencode-schema-1.19.0.sql"))
+            .unwrap();
+        db.execute("INSERT INTO project (id,worktree,time_created,time_updated,sandboxes) VALUES ('p',?1,1,1,'[]')", [project_path.to_str().unwrap()]).unwrap();
+        db.execute("INSERT INTO session (id,project_id,slug,directory,title,version,cost,tokens_input,tokens_output,tokens_reasoning,tokens_cache_read,tokens_cache_write,time_created,time_updated,time_archived) VALUES (?1,'p','fixture',?2,'Fixture','1.19.0',0,0,0,0,0,0,1,1,2)", [id, project_path.to_str().unwrap()]).unwrap();
+        drop(db);
+        for (key, value) in [
+            ("XDG_DATA_HOME", root.clone()),
+            ("OPENCODE_DB", file.clone()),
+        ] {
+            profile.env.insert(
+                key.into(),
+                Override::Set(EnvValue::Literal {
+                    value: value.to_string_lossy().into(),
+                    non_secret: true,
+                }),
+            );
+        }
+        (id, file)
+    };
+    let document = f
+        .repo
+        .apply(f.repo.read().unwrap().revision, Patch::Create { profile })
+        .unwrap();
+    let source = f
+        .service
+        .scope(
+            &f.caller,
+            &ScopeTarget::Profile {
+                profile_id: "provider-delete".into(),
+                expected_profile_revision: document.profiles["provider-delete"].revision,
+                project_ids: vec![project.project_id],
+            },
+        )
+        .unwrap();
+    let request = crate::cli::native_delete::PreviewRequest {
+        operation_id: uuid::Uuid::new_v4().to_string(),
+        session_key: json!([
+            "local",
+            if cli == CliKind::Claude {
+                "claude"
+            } else {
+                "opencode"
+            },
+            source.source_root_key,
+            id
+        ])
+        .to_string(),
+        source,
+    };
+    (f, request, file, id.into())
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn ProviderDelete_PreviewObservesExactIdentityWithoutTicketOrMutation_026() {
+    use crate::cli::native_delete::{ConfirmRequest, InspectRequest};
+    for cli in [CliKind::Claude, CliKind::Opencode] {
+        let (f, request, file, id) = provider_delete_fixture(cli);
+        let before = fs::read(&file).unwrap();
+        let preview = f
+            .service
+            .preview_delete(&f.caller, request.clone())
+            .unwrap();
+        assert_eq!(preview.state, "unsupported");
+        assert_eq!(preview.native_session_id.as_deref(), Some(id.as_str()));
+        assert!(preview.root_archived.is_none());
+        assert_eq!(
+            preview.reason,
+            Some(if cli == CliKind::Claude {
+                "DELETE_MAINTENANCE_UNAVAILABLE"
+            } else {
+                "DELETE_SERVICE_UNVERIFIED"
+            })
+        );
+        assert!(preview.preview_id.is_none());
+        assert!(preview.known_descendant_count.is_none());
+        assert_eq!(
+            f.service
+                .confirm_delete(
+                    &f.caller,
+                    ConfirmRequest {
+                        operation_id: request.operation_id.clone(),
+                        preview_id: uuid::Uuid::new_v4().to_string(),
+                        acknowledge_permanent_delete: true,
+                        acknowledge_native_subtree: true
+                    }
+                )
+                .err()
+                .unwrap()
+                .code,
+            "DELETE_OPERATION_UNKNOWN"
+        );
+        assert_eq!(
+            f.service
+                .inspect_delete(
+                    &f.caller,
+                    InspectRequest {
+                        operation_id: request.operation_id.clone()
+                    }
+                )
+                .err()
+                .unwrap()
+                .code,
+            "DELETE_OPERATION_UNKNOWN"
+        );
+        assert_eq!(fs::read(&file).unwrap(), before);
+    }
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn ProviderDelete_InvalidTargetOrActiveOwnerNeverPublishesIdentity_027() {
+    for cli in [CliKind::Claude, CliKind::Opencode] {
+        let (f, request, file, _) = provider_delete_fixture(cli);
+        let before = fs::read(&file).unwrap();
+        let mut wrong = request.clone();
+        wrong.session_key = "unobserved-target".into();
+        let preview = f.service.preview_delete(&f.caller, wrong).unwrap();
+        assert_eq!(preview.state, "blocked");
+        assert_eq!(preview.reason, Some("DELETE_SOURCE_UNAVAILABLE"));
+        assert!(preview.native_session_id.is_none());
+        assert!(preview.preview_id.is_none());
+        let ticket = f
+            .repo
+            .admission()
+            .begin_start(crate::version_history::maintenance::RuntimeKind::Native)
+            .unwrap();
+        let preview = f
+            .service
+            .preview_delete(&f.caller, request.clone())
+            .unwrap();
+        assert_eq!(preview.reason, Some("SOURCE_BUSY"));
+        assert!(preview.native_session_id.is_none());
+        ticket.no_child_created();
+        let mut wrong = request.clone();
+        wrong.source.source_root_key = "different-physical-source".into();
+        assert_eq!(
+            f.service
+                .preview_delete(&f.caller, wrong)
+                .err()
+                .unwrap()
+                .code,
+            "SCOPE_STALE"
+        );
+        f.launch.registry().revoke_window(&f.caller).unwrap();
+        assert_eq!(
+            f.service
+                .preview_delete(&f.caller, request)
+                .err()
+                .unwrap()
+                .code,
+            "FORBIDDEN"
+        );
+        assert_eq!(fs::read(&file).unwrap(), before);
+    }
+}

@@ -31,10 +31,9 @@ impl ProjectionService {
         request.validate()?;
         self.registry
             .check_source(&owner(caller), &request.source)?;
-        if request.source.cli != CliKind::Codex {
-            return Ok(request.preview("unsupported", Some("NATIVE_DELETE_UNSUPPORTED")));
-        }
-        if !cfg!(windows) {
+        if request.source.cli == CliKind::Shell
+            || (request.source.cli == CliKind::Codex && !cfg!(windows))
+        {
             return Ok(request.preview("unsupported", Some("NATIVE_DELETE_UNSUPPORTED")));
         }
         if self
@@ -54,6 +53,18 @@ impl ProjectionService {
             Ok(authority) => authority,
             Err(_) => return Ok(request.preview("blocked", Some("DELETE_SOURCE_UNAVAILABLE"))),
         };
+        if matches!(request.source.cli, CliKind::Claude | CliKind::Opencode) {
+            authority.current()?;
+            // 身份观察不等于维护准入；不签发票据，也不把 Desk 归档当原生归档证明。
+            let reason = if request.source.cli == CliKind::Claude {
+                "DELETE_MAINTENANCE_UNAVAILABLE"
+            } else {
+                "DELETE_SERVICE_UNVERIFIED"
+            };
+            let mut preview = request.preview("unsupported", Some(reason));
+            preview.native_session_id = Some(authority.native_id);
+            return Ok(preview);
+        }
         if !authority.archived {
             return Ok(request.preview("blocked", Some("DELETE_ROOT_NOT_ARCHIVED")));
         }
