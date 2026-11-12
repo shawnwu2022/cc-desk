@@ -125,6 +125,7 @@ const KNOWN_ERRORS: Readonly<Record<string, ErrorTemplate>> = Object.freeze({
   CLI_ARCHIVE_UNAVAILABLE: { messageKey: 'errorNativeArchiveUnsupported', actionKey: 'viewDetails', severity: 'warning', retryable: false, detailCode: 'CLI_ARCHIVE_UNAVAILABLE' },
   ARCHIVE_ARGUMENTS_UNSUPPORTED: { messageKey: 'errorNativeArchiveUnsupported', actionKey: 'viewDetails', severity: 'warning', retryable: false, detailCode: 'ARCHIVE_ARGUMENTS_UNSUPPORTED' },
   ARCHIVE_CONTAINER_UNSAFE: { messageKey: 'errorNativeArchiveContainer', actionKey: 'viewDetails', severity: 'warning', retryable: false, detailCode: 'ARCHIVE_CONTAINER_UNSAFE' },
+  ARCHIVE_RELATION_UNAVAILABLE: { messageKey: 'errorNativeArchiveRelationUnavailable', actionKey: 'viewDetails', severity: 'warning', retryable: false, detailCode: 'ARCHIVE_RELATION_UNAVAILABLE' },
   ARCHIVE_BUSY: { messageKey: 'errorNativeArchiveBusy', actionKey: 'viewDetails', severity: 'warning', retryable: false, detailCode: 'ARCHIVE_BUSY' },
   SOURCE_BUSY: {
     messageKey: 'errorResourceUnavailable',

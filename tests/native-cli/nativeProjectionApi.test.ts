@@ -380,3 +380,11 @@ it('Projection_CodexArchiveBindsReceiptAndSanitizesErrors_040', async () => {
   await expect(client.archive({ ...value, source })).rejects.toThrow('INVALID_PROJECTION')
   await expect(client.archive({ ...value, extra: true } as never)).rejects.toThrow('INVALID_PROJECTION')
 })
+
+it('Projection_ArchivePreservesRelationRefusalWithoutRetry_041', async () => {
+  const invoke = vi.fn(async () => { throw { code: 'ARCHIVE_RELATION_UNAVAILABLE', message: 'private owner data' } })
+  const client = createProjectionClient({ instanceId: 'instance', invoke })
+  await expect(client.archive({ operationId: 'archive-1', sessionKey: 'session-key', source: { ...source, cli: 'codex' as const } }))
+    .rejects.toMatchObject({ code: 'ARCHIVE_RELATION_UNAVAILABLE', retryable: false })
+  expect(invoke).toHaveBeenCalledTimes(1)
+})

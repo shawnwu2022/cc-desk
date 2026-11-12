@@ -40,3 +40,9 @@ describe('mapSafeUserError', () => {
     expect(JSON.stringify(result)).not.toContain('Users')
   })
 })
+
+test('Archive_RelationUnavailableIsKnownPresendRefusal_004', () => {
+  expect(mapSafeUserError('ARCHIVE_RELATION_UNAVAILABLE', 'session')).toMatchObject({
+    messageKey: 'errorNativeArchiveRelationUnavailable', detailCode: 'ARCHIVE_RELATION_UNAVAILABLE', retryable: false,
+  })
+})

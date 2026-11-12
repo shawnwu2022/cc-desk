@@ -2,6 +2,9 @@
 use super::*;
 use crate::cli::native_archive::ArchiveRequest;
 
+#[path = "native_cli_archive_writer.rs"]
+mod writer;
+
 fn initialize_fixture(fixture: &Arc<Fixture>, id: &str) {
     let mut command = Command::new(CODEX_EXE);
     command.args(["app-server", "--strict-config"]);

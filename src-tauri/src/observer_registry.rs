@@ -64,6 +64,8 @@ struct ObserverSlot {
     delivery: ObserverDelivery,
     authorize: Arc<dyn Fn() -> bool + Send + Sync>,
     identity_diagnostics: CodexIdentityDiagnostics,
+    codex_admission_identity:
+        Option<Arc<crate::version_history::codex_archive_admission::CodexOwnerIdentity>>,
 }
 
 /// Receipt diagnostics only, never a second frontend adoption state machine.
@@ -146,6 +148,24 @@ pub(crate) struct ObserverLease {
 impl ObserverLease {
     pub(crate) fn keep_resource(&mut self, resource: tempfile::TempDir) {
         self.resource = Some(resource);
+    }
+    pub(crate) fn bind_codex_admission(
+        &self,
+        identity: Arc<crate::version_history::codex_archive_admission::CodexOwnerIdentity>,
+    ) -> Result<(), SafeError> {
+        self.registry.check_binding(&self.binding)?;
+        let mut slots = self.registry.slots.lock();
+        let slot = slots
+            .get_mut(&self.binding.run)
+            .ok_or_else(|| error("OBSERVER_FORBIDDEN"))?;
+        if slot.source != ObserverSource::CodexHook
+            || !same_capability(&slot.capability, &self.binding.capability)
+            || slot.codex_admission_identity.is_some()
+        {
+            return Err(error("OBSERVER_FORBIDDEN"));
+        }
+        slot.codex_admission_identity = Some(identity);
+        Ok(())
     }
     pub(crate) fn binding(&self) -> &ObserverBinding {
         &self.binding
@@ -300,6 +320,7 @@ impl ObserverRegistry {
                 delivery,
                 authorize,
                 identity_diagnostics: Default::default(),
+                codex_admission_identity: None,
             },
         );
         drop(slots);
@@ -427,6 +448,16 @@ impl ObserverRegistry {
             slot.seen.insert(event_id.to_string());
         }
 
+        if binding.source == ObserverSource::CodexHook {
+            if let Some(identity) = &slot.codex_admission_identity {
+                if let Some(id) = event["session_id"]
+                    .as_str()
+                    .and_then(|id| uuid::Uuid::parse_str(id).ok())
+                {
+                    identity.observe(id);
+                }
+            }
+        }
         let diagnostic = (binding.source == ObserverSource::CodexHook)
             .then(|| {
                 slot.identity_diagnostics

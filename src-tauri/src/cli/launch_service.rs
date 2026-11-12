@@ -298,7 +298,7 @@ impl LaunchService {
         authority: super::native_projection::registry::SessionAuthority,
     ) -> Result<(), SafeError> {
         // 此准备段只冻结和验证输入，尚未创建原生进程，失败不能误报已发送归档。
-        let (spec, frozen, mut admission) = (|| -> Result<_, SafeError> {
+        let (spec, frozen, mut admission, archive_owners) = (|| -> Result<_, SafeError> {
             self.registry().check_caller(caller)?;
             let profile = self.repository.get_profile(&request.profile_id)?;
             let legacy =
@@ -333,8 +333,14 @@ impl LaunchService {
                 return Err(error("SCOPE_STALE"));
             }
             let spec = resolve_process(&build_invocation(request, &snapshot)?)?;
-            let (frozen, admission) = self.repository.admission().begin_codex_archive()?;
-            Ok((spec, frozen, admission))
+            let target =
+                uuid::Uuid::parse_str(&authority.native_id).map_err(|_| error("SOURCE_INVALID"))?;
+            let (frozen, admission, owners) = self
+                .repository
+                .admission()
+                .begin_codex_archive_for(target)
+                .map_err(|_| error("ARCHIVE_BUSY"))?;
+            Ok((spec, frozen, admission, owners))
         })()?;
         let frozen = Arc::new(Mutex::new(Some(frozen)));
         let worker_frozen = frozen.clone();
@@ -388,9 +394,15 @@ impl LaunchService {
                                 return Err(error("RUN_SUPERVISOR_STOPPING"));
                             }
                             registry.check_caller(&caller)?;
-                            authority.current()
+                            authority.current()?;
+                            archive_owners.current()
                         };
-                        super::native_archive::process(&mut child, &authority, &current)
+                        super::native_archive::process(
+                            &mut child,
+                            &authority,
+                            &archive_owners,
+                            &current,
+                        )
                     }))
                     .unwrap_or_else(|_| Err(error("ARCHIVE_OUTCOME_UNKNOWN")))
                 } else {
@@ -412,7 +424,11 @@ impl LaunchService {
                     if root_reaped && group_reaped {
                         ticket.reaped();
                         owner.settled = true;
-                        return result;
+                        return result.and(
+                            archive_owners
+                                .current()
+                                .map_err(|_| error("ARCHIVE_OUTCOME_UNKNOWN")),
+                        );
                     }
                     // RPC 收口会关闭 stdin，先允许官方助手按 EOF 正常退出。
                     // 失败或总时限到期才终止本次 Job；整个进程组清空前继续保留所有权。
@@ -1040,6 +1056,19 @@ impl LaunchService {
             |snapshot| {
                 // Observer failure never fails preparation or creates another child.
                 // Only the reservation winner can mint this per-run capability.
+                let codex_identity = (snapshot.request().cli == CliKind::Codex
+                    && !matches!(snapshot.request().action, LaunchAction::Raw { .. }))
+                .then(|| {
+                    let initial = match &snapshot.request().action {
+                        LaunchAction::ResumeId { native_session_id } => {
+                            uuid::Uuid::parse_str(native_session_id).ok()
+                        }
+                        _ => None,
+                    };
+                    crate::version_history::codex_archive_admission::CodexOwnerIdentity::new(
+                        initial,
+                    )
+                });
                 let mut observer_failure = None;
                 let prepared = self
                     .observer
@@ -1122,6 +1151,9 @@ impl LaunchService {
                                     return Err(error("OBSERVER_UNAVAILABLE"));
                                 }
                             }
+                            if let Some(identity) = &codex_identity {
+                                prepared.lease.bind_codex_admission(identity.clone())?;
+                            }
                             Ok(next)
                         });
                         match overlaid {
@@ -1165,7 +1197,9 @@ impl LaunchService {
                 let frozen = Arc::new(snapshot);
                 let invocation = build_invocation(frozen.request(), &frozen)?;
                 let spec = resolve_process(&invocation)?;
-                if !matches!(frozen.request().action, LaunchAction::Raw { .. }) {
+                if let Some(identity) = codex_identity {
+                    admission.identify_codex(identity);
+                } else if !matches!(frozen.request().action, LaunchAction::Raw { .. }) {
                     admission.identify_cli(frozen.request().cli);
                 }
                 let pty = OwnedPty::spawn_admitted(

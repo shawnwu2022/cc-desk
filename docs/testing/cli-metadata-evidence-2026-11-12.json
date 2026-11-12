@@ -1,0 +1,119 @@
+{
+  "nativeTests": {
+    "failed": 0,
+    "passed": 3
+  },
+  "results": [
+    {
+      "owner": {
+        "exitCode": 0,
+        "forced": false,
+        "jobEmpty": true,
+        "rootReaped": true,
+        "success": true
+      },
+      "result": {
+        "binarySha256": "2e055732c9d03d22700d9046251a8370b673607bfcc9e4d16a1b0e8fb1345cbd",
+        "checks": [
+          "read",
+          "rename",
+          "reopen",
+          "unique-list"
+        ],
+        "cli": "claude",
+        "driverSha256": "b3d86cd5de7d03f6e023eb8485489e2a1f679aced2ec799a7a403f714b29877d",
+        "guiAccepted": false,
+        "installerRoundtripAccepted": false,
+        "jobEmpty": true,
+        "modelCalled": false,
+        "nativeLifecycleAccepted": false,
+        "nodeSha256": "9a4eb5f1c29c6a2e93852ead46b999e284a6a5ca8bab4d4e241d587d025a52de",
+        "processGroupAcceptance": "outer-owner-confirmed",
+        "rootReaped": true,
+        "sdkSha256": "6b963b3eb871949a14392bb35ff970a55e91e2edbe218c61cd9eed60e46cbe45",
+        "sourceCommitBuild": "local",
+        "status": "METADATA_PASS",
+        "version": "2.1.319"
+      },
+      "fixtureName": "v027-codex-delete-live-niDStC"
+    },
+    {
+      "owner": {
+        "exitCode": 0,
+        "forced": false,
+        "jobEmpty": true,
+        "rootReaped": true,
+        "success": true
+      },
+      "result": {
+        "binarySha256": "edfdd48f8b458af0906e507b4cb05217b326c3d6e515e9f024e05e3b8d650f70",
+        "checks": [
+          "read",
+          "rename",
+          "reopen",
+          "unique-list"
+        ],
+        "cli": "codex",
+        "driverSha256": "b3d86cd5de7d03f6e023eb8485489e2a1f679aced2ec799a7a403f714b29877d",
+        "guiAccepted": false,
+        "installerRoundtripAccepted": false,
+        "jobEmpty": true,
+        "modelCalled": false,
+        "nativeLifecycleAccepted": false,
+        "nodeSha256": "9a4eb5f1c29c6a2e93852ead46b999e284a6a5ca8bab4d4e241d587d025a52de",
+        "processGroupAcceptance": "outer-owner-confirmed",
+        "rootReaped": true,
+        "sdkSha256": null,
+        "sourceCommitBuild": "local",
+        "status": "METADATA_PASS",
+        "version": "0.167.0"
+      },
+      "fixtureName": "v027-codex-delete-live-hSTAq9"
+    },
+    {
+      "owner": {
+        "exitCode": 0,
+        "forced": false,
+        "jobEmpty": true,
+        "rootReaped": true,
+        "success": true
+      },
+      "result": {
+        "binarySha256": "98cb0aa854c7c015cf6febafa7afb872c359bfe5a823a526f3b4fd347a9e9677",
+        "checks": [
+          "read",
+          "rename",
+          "reopen",
+          "unique-list",
+          "create"
+        ],
+        "cli": "opencode",
+        "driverSha256": "b3d86cd5de7d03f6e023eb8485489e2a1f679aced2ec799a7a403f714b29877d",
+        "guiAccepted": false,
+        "installerRoundtripAccepted": false,
+        "jobEmpty": true,
+        "modelCalled": false,
+        "nativeLifecycleAccepted": false,
+        "nodeSha256": "9a4eb5f1c29c6a2e93852ead46b999e284a6a5ca8bab4d4e241d587d025a52de",
+        "processGroupAcceptance": "outer-owner-confirmed",
+        "rootReaped": true,
+        "sdkSha256": null,
+        "sourceCommitBuild": "local",
+        "status": "METADATA_PASS",
+        "version": "2.2.6"
+      },
+      "fixtureName": "v027-codex-delete-live-smemI6"
+    }
+  ],
+  "driverSha256": "b3d86cd5de7d03f6e023eb8485489e2a1f679aced2ec799a7a403f714b29877d",
+  "scope": "offline-synthetic-metadata-only",
+  "baseCommit": "65a13414396e481b57a25cd130e3185bc81dff8b",
+  "fullReleaseAcceptance": false,
+  "relatedNodeTests": {
+    "failed": 0,
+    "passed": 41
+  },
+  "rustToolchain": "1.98.1",
+  "recordedAtUtc": "2026-11-12T09:10:01.3910114Z",
+  "host": "WSK-MSI"
+}

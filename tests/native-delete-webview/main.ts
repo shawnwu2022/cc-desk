@@ -24,6 +24,17 @@ const hasText = (selector: string, text: string) => document.querySelector(selec
 async function click(selector: string) { element(selector).click(); await nextTick(); await frame() }
 async function ack(selector: string) { const input = element(selector) as HTMLInputElement; input.checked = true; input.dispatchEvent(new Event('change', { bubbles: true })); await nextTick(); await frame() }
 async function expectCode(task: Promise<unknown>, codes: string[]) { const code = await task.then(() => null, (e: any) => e?.code); if (!codes.includes(code)) throw Error('UNEXPECTED_REJECTION') }
+const failureCodes = new Set([
+  'ELEMENT_MISSING', 'UNEXPECTED_REJECTION', 'REAL_HISTORY_MISSING', 'PREVIEW_TIMEOUT',
+  'RISK_COPY_MISSING', 'SECOND_CONFIRMATION_MERGED', 'MISSING_ACK_ENABLED',
+  'SUBTREE_ACK_OPTIONAL', 'NATIVE_DELETE_DISABLED', 'NATIVE_RESULT_TIMEOUT',
+  'DELETED_ROW_RETAINED', 'CONTROL_ROW_LOST', 'RECEIPT_MISSING', 'DUPLICATE_RECEIPT_CHANGED',
+  'INSPECT_TIMEOUT', 'EXPIRY_FIXTURE_MISSING', 'EXPIRED_TICKET_NOT_BLOCKED',
+])
+function failureCode(failure: unknown): string {
+  const code = failure instanceof Error ? failure.message : ''
+  return failureCodes.has(code) ? code : 'FRONTEND_ACCEPTANCE_FAILED'
+}
 let started = false
 host.__STAGE11__ = { async start() {
   if (started) return; started = true
@@ -82,12 +93,16 @@ host.__STAGE11__ = { async start() {
     await expectCode(call('cli_preview_session_delete', { operationId: crypto.randomUUID(), source: { ...source, sourceRootKey: 'forged-root' }, sessionKey }), ['SCOPE_STALE', 'FORBIDDEN'])
     await call('s11_peer', { confirmation, proof })
     await checkpoint('wrong-document-source-peer')
+    const previousContext = context
     context = await call('s11_change_source')
     await expectCode(call('cli_confirm_session_delete', confirmation), ['SCOPE_REVOKED', 'SCOPE_STALE', 'DELETE_PREVIEW_CHANGED'])
     await checkpoint('changed-source-ticket')
+    // 与正式 profile watcher 一致：旧 revision 不再拥有历史行。
+    history.invalidate(previousContext)
     await reload()
-    if (!fixture.native) { stage.value = 'NoNative document and component checks passed'; await call('s11_finish', { success: true }); return }
+    if ((element('[data-native-cleanup-delete]') as HTMLButtonElement).disabled) throw Error('NATIVE_DELETE_DISABLED')
     await click('[data-native-cleanup-delete]'); await until(() => !!document.querySelector('[data-delete-next-confirm]'), 'PREVIEW_TIMEOUT')
+    if (!fixture.native) { await click('[data-delete-cancel]'); stage.value = 'NoNative document and component checks passed'; await call('s11_finish', { success: true }); return }
     await click('[data-delete-next-confirm]'); await ack('[data-delete-ack-permanent]'); await ack('[data-delete-ack-subtree]')
     await call('s11_capture', { name: 'confirmation' })
     const button = element('[data-delete-final]'); button.click(); button.click()
@@ -117,5 +132,5 @@ host.__STAGE11__ = { async start() {
     await checkpoint('expired-ticket')
     stage.value = 'Real document IPC, double confirmation and isolated CLI deletion passed'
     await call('s11_finish', { success: true })
-  } catch { stage.value = 'Acceptance failed; no request is replayed'; await call('s11_finish', { success: false }) }
+  } catch (failure) { stage.value = 'Acceptance failed; no request is replayed'; await call('s11_finish', { success: false, failureCode: failureCode(failure) }) }
 } }

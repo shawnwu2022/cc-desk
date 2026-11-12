@@ -261,7 +261,7 @@ export function createProjectionClient(bridge: ProjectionBridge, current: () => 
       } catch (failure) {
         assertCurrent()
         const code = failure && typeof failure === 'object' && 'code' in failure ? (failure as { code: unknown }).code : failure instanceof Error ? failure.message : null
-        const safe = typeof code === 'string' && (reasons.has(code) || ['ARCHIVE_FAILED', 'ARCHIVE_OUTCOME_UNKNOWN', 'ARCHIVE_VERIFICATION_FAILED', 'ARCHIVE_OPERATION_CONFLICT', 'NATIVE_ARCHIVE_UNSUPPORTED', 'ARCHIVE_BUSY', 'ARCHIVE_CONTAINER_UNSAFE', 'ARCHIVE_ARGUMENTS_UNSUPPORTED', 'ARCHIVE_PREPARE_FAILED', 'ARCHIVE_UNAVAILABLE', 'SESSION_ORIGIN_AMBIGUOUS', 'SESSION_NOT_FOUND'].includes(code)) ? code : 'ARCHIVE_OUTCOME_UNKNOWN'
+        const safe = typeof code === 'string' && (reasons.has(code) || ['ARCHIVE_FAILED', 'ARCHIVE_OUTCOME_UNKNOWN', 'ARCHIVE_VERIFICATION_FAILED', 'ARCHIVE_OPERATION_CONFLICT', 'NATIVE_ARCHIVE_UNSUPPORTED', 'ARCHIVE_BUSY', 'ARCHIVE_RELATION_UNAVAILABLE', 'ARCHIVE_CONTAINER_UNSAFE', 'ARCHIVE_ARGUMENTS_UNSUPPORTED', 'ARCHIVE_PREPARE_FAILED', 'ARCHIVE_UNAVAILABLE', 'SESSION_ORIGIN_AMBIGUOUS', 'SESSION_NOT_FOUND'].includes(code)) ? code : 'ARCHIVE_OUTCOME_UNKNOWN'
         throw Object.assign(new Error(safe), { code: safe, retryable: false })
       }
     },

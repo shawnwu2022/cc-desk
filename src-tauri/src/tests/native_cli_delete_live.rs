@@ -64,6 +64,9 @@ const OUTPUT_LIMIT: u64 = 1024 * 1024;
 #[path = "native_cli_delete_webview.rs"]
 mod webview;
 
+#[path = "native_cli_metadata_live.rs"]
+mod metadata;
+
 #[path = "native_cli_archive_live.rs"]
 mod archive;
 
@@ -471,6 +474,22 @@ fn NativeDeleteLive_FixtureDisablesPluginsAndInheritedAuthentication_002() {
     }
 }
 
+#[test]
+fn NativeDeleteLive_FixtureRetainsSystemDriveForKnownFolder_009() {
+    let fixture = Fixture::new().unwrap();
+    let expected = std::env::var_os("SystemDrive").unwrap();
+    assert_eq!(
+        fixture.environment.get(&OsString::from("SystemDrive")),
+        Some(&expected)
+    );
+    assert!(
+        !fixture
+            .environment
+            .contains_key(&OsString::from("ProgramData")),
+        "do not redirect system configuration"
+    );
+}
+
 // 只打开系统配置名称的元数据；存在、无权访问或未知均拒绝，不读取值或配置正文。
 fn system_configuration_absent() -> io::Result<()> {
     let allocation = unsafe { SHGetKnownFolderPath(&FOLDERID_ProgramData, KF_FLAG_DEFAULT, None) }
@@ -566,7 +585,27 @@ impl Fixture {
         let system = std::env::var_os("SystemRoot")
             .filter(|v| Path::new(v).is_absolute())
             .ok_or_else(|| io::Error::other("SYSTEM_ROOT_UNAVAILABLE"))?;
+        // Rust env_clear 不会像 Node 一样补 SystemDrive；KnownFolder 需真实系统盘才能解析。
+        // 只保留调用进程已有且与 SystemRoot 匹配的盘符，不重定向 ProgramData。
+        let drive = std::env::var_os("SystemDrive")
+            .ok_or_else(|| io::Error::other("SYSTEM_DRIVE_UNAVAILABLE"))?;
+        let drive_text = drive
+            .to_str()
+            .ok_or_else(|| io::Error::other("SYSTEM_DRIVE_INVALID"))?;
+        let system_text = system
+            .to_str()
+            .ok_or_else(|| io::Error::other("SYSTEM_ROOT_UNAVAILABLE"))?;
+        if drive_text.len() != 2
+            || !drive_text.as_bytes()[0].is_ascii_alphabetic()
+            || drive_text.as_bytes()[1] != b':'
+            || !system_text
+                .get(..2)
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(drive_text))
+        {
+            return Err(io::Error::other("SYSTEM_DRIVE_INVALID"));
+        }
         let mut environment = BTreeMap::new();
+        environment.insert("SystemDrive".into(), drive);
         for key in ["SystemRoot", "WINDIR"] {
             environment.insert(key.into(), system.clone());
         }

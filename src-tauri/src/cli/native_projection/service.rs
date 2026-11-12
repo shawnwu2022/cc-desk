@@ -342,7 +342,7 @@ impl ProjectionService {
         self.launch
             .repository()
             .admission()
-            .check_codex_archive_idle()
+            .check_codex_archive_for(request.target_id()?)
             .map_err(|_| error("ARCHIVE_BUSY"))?;
         let authority = self.registry.authorize_rename(
             &owner(caller),
@@ -356,19 +356,36 @@ impl ProjectionService {
         self.archive_operations
             .validate_request(caller, &request, &physical)?;
         if authority.archived {
-            // 空闲与新来源共同证明根已归档，不能把尚在处理中的移动当完成。
-            self.launch
+            // Unknown 收口不执行原生关系核验，保留全 Codex 冻结，不能走 scoped 旁路。
+            let (frozen, admission) = self
+                .launch
                 .repository()
                 .admission()
-                .check_codex_archive_idle()
+                .begin_codex_archive()
                 .map_err(|_| error("ARCHIVE_BUSY"))?;
-            self.archive_operations.reconcile_archived(&physical)?;
-            if let Some(result) = self.archive_operations.begin(caller, &request, &physical)? {
-                result?;
-            } else {
-                self.archive_operations.finish(caller, &request, Ok(()));
-            }
-            return Ok(request.receipt());
+            let result = (|| {
+                self.registry
+                    .authorize_rename(&owner(caller), &request.source, &request.session_key)
+                    .and_then(|fresh| {
+                        if fresh.archived {
+                            Ok(())
+                        } else {
+                            Err(error("ARCHIVE_OUTCOME_UNKNOWN"))
+                        }
+                    })?;
+                self.archive_operations.reconcile_archived(&physical)?;
+                if let Some(result) = self.archive_operations.begin(caller, &request, &physical)? {
+                    result?;
+                } else {
+                    self.archive_operations.finish(caller, &request, Ok(()));
+                }
+                Ok(request.receipt())
+            })();
+            drop(admission);
+            let released = frozen.release_review();
+            let receipt = result?;
+            released?;
+            return Ok(receipt);
         }
         if let Some(result) = self.archive_operations.begin(caller, &request, &physical)? {
             result?;
