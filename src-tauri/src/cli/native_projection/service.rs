@@ -22,6 +22,64 @@ pub(crate) struct ProjectionService {
     delete_operations: crate::cli::native_delete::Operations,
 }
 impl ProjectionService {
+    pub(crate) fn recycle(
+        &self,
+        caller: &CallerIdentity,
+        request: crate::cli::native_recycle::Request,
+    ) -> Result<crate::cli::native_recycle::Response, SafeError> {
+        self.launch.registry().check_caller(caller)?;
+        request.validate()?;
+        self.registry
+            .check_source(&owner(caller), &request.source)?;
+        #[cfg(not(windows))]
+        {
+            Err(error("RECYCLE_UNSUPPORTED"))
+        }
+        #[cfg(windows)]
+        {
+            let scope = self
+                .registry
+                .recycle_scope(&owner(caller), &request.source)?;
+            if request.action == "list" {
+                return crate::cli::native_recycle::list(&scope);
+            }
+            let (frozen, admission) = self.launch.repository().admission().begin_metadata()?;
+            let result = (|| {
+                scope.current()?;
+                let id = request
+                    .operation_id
+                    .as_deref()
+                    .ok_or_else(|| error("RECYCLE_INVALID_REQUEST"))?;
+                if request.action == "restore" {
+                    return crate::cli::native_recycle::restore(&scope, id);
+                }
+                if crate::cli::native_recycle::list(&scope)?
+                    .records
+                    .iter()
+                    .any(|r| r.operation_id == id)
+                {
+                    return Err(error("RECYCLE_OPERATION_CONFLICT"));
+                }
+                let mut authority = self.registry.authorize_session(
+                    &owner(caller),
+                    &request.source,
+                    request
+                        .session_key
+                        .as_deref()
+                        .ok_or_else(|| error("RECYCLE_INVALID_REQUEST"))?,
+                )?;
+                let target = authority.prepare_recycle_target(&scope)?;
+                crate::cli::native_recycle::remove(&scope, id, target)
+            })();
+            // 同步文件操作没有启动子进程；确认本次工作已结束后显式解除冻结。
+            drop(admission);
+            frozen
+                .release_review()
+                .map_err(|_| error("RECYCLE_OUTCOME_UNKNOWN"))?;
+            result
+        }
+    }
+
     pub(crate) fn preview_delete(
         &self,
         caller: &CallerIdentity,

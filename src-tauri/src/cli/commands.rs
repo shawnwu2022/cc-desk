@@ -250,3 +250,12 @@ pub(crate) async fn cli_stop(
 ) -> Result<(), SafeError> {
     runtime.stop(&webview, &request)
 }
+
+#[tauri::command]
+pub(crate) async fn cli_recycle_session(
+    webview: Webview,
+    request: Request<'_>,
+    runtime: State<'_, Arc<NativeRuntime>>,
+) -> Result<super::native_recycle::Response, SafeError> {
+    runtime.recycle_session(&webview, &request).await
+}

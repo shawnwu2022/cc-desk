@@ -1,3 +1,4 @@
+import { createSessionRecycleClient } from './nativeSessionRecycle';
 import { createProjectionClient } from './nativeProjection'
 import { createSessionDeleteClient } from './nativeSessionDelete'
 import { readObserverInstallation } from './observer'
@@ -532,4 +533,9 @@ export async function nativeUnarchiveSession(request: import('@/types/nativeProj
 export function createNativeHistoryClient(): import('./versionHistory').HistoryClient {
   const bridge = nativeDocumentBridge()
   return createHistoryClient(bridge, () => nativeDocumentBridge() === bridge)
+}
+
+export function createNativeSessionRecycleClient() {
+  const bridge = nativeDocumentBridge()
+  return createSessionRecycleClient(bridge, () => nativeDocumentBridge() === bridge)
 }

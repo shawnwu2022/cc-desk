@@ -51,6 +51,34 @@ pub(crate) struct SessionAuthority {
 }
 pub(crate) type RenameAuthority = SessionAuthority;
 impl SessionAuthority {
+    #[cfg(windows)]
+    pub(crate) fn prepare_recycle_target(
+        &mut self,
+        scope: &crate::cli::native_recycle::Scope,
+    ) -> Result<crate::cli::native_recycle::Target, SafeError> {
+        self.verify_claude(None)?;
+        if self.root_key() != scope.root.key() {
+            return Err(safe("SCOPE_STALE"));
+        }
+        let relative = self
+            .claude_file
+            .as_ref()
+            .ok_or_else(|| safe("RECYCLE_UNSUPPORTED"))?
+            .relative_path()
+            .to_owned();
+        let target = crate::cli::native_recycle::prepare_target(
+            scope,
+            &relative,
+            &self.native_id,
+            &self.cwd,
+        )?;
+        self.verify_claude(None)?;
+        // 释放只读观察句柄后，由操作重新取得独占原件并比较先前的文件身份。
+        drop(self.claude_file.take());
+        self.current()?;
+        Ok(target)
+    }
+
     pub(crate) fn pin_archive_containers(mut self) -> Result<Self, SafeError> {
         self.delete_containers = self
             .scope
@@ -372,6 +400,47 @@ impl Grant {
     }
 }
 impl ScopeRegistry {
+    #[cfg(windows)]
+    pub(crate) fn recycle_scope(
+        &self,
+        owner: &Owner,
+        source: &SourceRef,
+    ) -> Result<crate::cli::native_recycle::Scope, SafeError> {
+        self.check_source(owner, source)?;
+        if source.cli != CliKind::Claude || matches!(source.target, ScopeTarget::Run { .. }) {
+            return Err(safe("RECYCLE_UNSUPPORTED"));
+        }
+        let scope = self
+            .state
+            .lock()
+            .map_err(|_| safe("SCOPE_UNAVAILABLE"))?
+            .scopes
+            .get(&source.scope_id)
+            .cloned()
+            .ok_or_else(|| safe("SCOPE_UNKNOWN"))?;
+        if scope.grant.projects.is_empty() {
+            return Err(safe("FORBIDDEN"));
+        }
+        let root = scope.grant.root.clone_source().map_err(safe)?;
+        let project_paths = scope
+            .grant
+            .projects
+            .iter()
+            .flat_map(|p| p.paths.iter().cloned())
+            .collect();
+        let check = Arc::new(move || {
+            if scope.retired.load(std::sync::atomic::Ordering::Acquire) {
+                return Err(safe("SCOPE_REVOKED"));
+            }
+            scope.grant.current().map_err(safe)
+        });
+        Ok(crate::cli::native_recycle::Scope {
+            root,
+            project_paths,
+            check,
+        })
+    }
+
     pub(crate) fn check_source(&self, owner: &Owner, source: &SourceRef) -> Result<(), SafeError> {
         let scope = self
             .state

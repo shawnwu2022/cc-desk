@@ -42,3 +42,5 @@ pub(crate) mod types;
 pub(crate) mod workspace;
 
 pub(crate) mod diagnostic_version_parser;
+
+pub(crate) mod native_recycle;

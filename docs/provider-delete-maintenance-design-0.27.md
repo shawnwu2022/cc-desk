@@ -64,3 +64,7 @@
 回归入口：`ProviderDelete_` 三条 Rust 测试使用任务临时 Claude JSONL/OpenCode SQLite，逐字节比较来源不变，覆盖已核验身份、虚假目标、活动 owner、错误物理来源、失效文档、伪造确认/核查和账本拒绝发票据。`providerSessionDeleteApi.test.ts` 覆盖两种 ID、非法 locator/原始错误载荷及不可执行诊断。既有 Codex 删除、单项/批量 UI 和未知结果账本测试继续独立执行；它们不能替代两家真实删除、外部 writer 或崩溃恢复的验收。
 
 2026-11-12 WSK-MSI 本地验证：新增前端诊断先 RED 后 GREEN；5 个删除相关前端文件共 68 项通过，TypeScript/Vue 类型检查通过。新增 `ProviderDelete_` 3 项先全部 RED 后全部 GREEN；既有 `NativeDelete_` 16 项、`native_cli_projection_service` 19 项通过（后者含 2 项新增重复）。`cargo fmt --all -- --check` 和 `cargo clippy --locked --all-targets -- -D warnings` 通过，独立只读审查无阻断发现。Cargo 提示既有全局 cache 的 Windows `nul` 元数据清理失败，但命令最终成功；未改缓存清理策略。未运行全量 Rust/前端、真实提供方删除或安装包 WebView 验收，不把本切片测试冒充上述证据。
+
+## 0.70：独立可恢复产品切片
+
+后续实现了 [Claude 主记录可恢复移除](recoverable-claude-removal-0.70.md)：不要求未知外部子任务已完全静止，因为它们保留原地且不会 purge；主 transcript 原件以精确身份移入持久恢复区，冲突恢复不覆盖。该独立功能不能替代本文件的永久原生删除合同，OpenCode 的整库/跨实例维护边界也未因此解决。

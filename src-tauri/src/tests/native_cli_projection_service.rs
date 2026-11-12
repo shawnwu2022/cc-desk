@@ -786,3 +786,101 @@ fn ProviderDelete_InvalidTargetOrActiveOwnerNeverPublishesIdentity_027() {
         assert_eq!(fs::read(&file).unwrap(), before);
     }
 }
+
+#[test]
+#[cfg(windows)]
+#[allow(non_snake_case)]
+fn NativeRecycle_AuthenticatedRoundtripAndNoReplay_007() {
+    use crate::cli::native_recycle::Request;
+    let (f, request, file, id) = provider_delete_fixture(CliKind::Claude);
+    let before = fs::read(&file).unwrap();
+    let query = |action: &str| Request {
+        source: request.source.clone(),
+        action: action.into(),
+        operation_id: if action == "list" {
+            None
+        } else {
+            Some(request.operation_id.clone())
+        },
+        session_key: if action == "remove" {
+            Some(request.session_key.clone())
+        } else {
+            None
+        },
+        acknowledge_recoverable: action != "list",
+    };
+    assert!(f
+        .service
+        .recycle(&f.caller, query("list"))
+        .unwrap()
+        .records
+        .is_empty());
+    let result = f.service.recycle(&f.caller, query("remove")).unwrap();
+    assert_eq!(result.records[0].native_session_id, id);
+    assert_eq!(result.records[0].state, "stored");
+    assert!(!file.exists());
+    assert_eq!(
+        f.service
+            .recycle(&f.caller, query("remove"))
+            .err()
+            .unwrap()
+            .code,
+        "RECYCLE_OPERATION_CONFLICT"
+    );
+    assert_eq!(
+        f.service.recycle(&f.caller, query("list")).unwrap().records[0].state,
+        "stored"
+    );
+    assert_eq!(
+        f.service
+            .recycle(&f.caller, query("restore"))
+            .unwrap()
+            .records[0]
+            .state,
+        "source"
+    );
+    assert_eq!(fs::read(&file).unwrap(), before);
+}
+#[test]
+#[cfg(windows)]
+#[allow(non_snake_case)]
+fn NativeRecycle_AdmissionForgeryAndRevokedDocumentDoNotMove_008() {
+    use crate::cli::native_recycle::Request;
+    let (f, request, file, _) = provider_delete_fixture(CliKind::Claude);
+    let before = fs::read(&file).unwrap();
+    let query = || Request {
+        source: request.source.clone(),
+        action: "remove".into(),
+        operation_id: Some(request.operation_id.clone()),
+        session_key: Some(request.session_key.clone()),
+        acknowledge_recoverable: true,
+    };
+    let ticket = f
+        .repo
+        .admission()
+        .begin_start(crate::version_history::maintenance::RuntimeKind::Native)
+        .unwrap();
+    assert_eq!(
+        f.service.recycle(&f.caller, query()).err().unwrap().code,
+        "SOURCE_BUSY"
+    );
+    ticket.no_child_created();
+    let mut wrong = query();
+    wrong.source.source_root_key = "forged".into();
+    assert_eq!(
+        f.service.recycle(&f.caller, wrong).err().unwrap().code,
+        "SCOPE_STALE"
+    );
+    let mut wrong = query();
+    wrong.acknowledge_recoverable = false;
+    assert_eq!(
+        f.service.recycle(&f.caller, wrong).err().unwrap().code,
+        "RECYCLE_INVALID_REQUEST"
+    );
+    f.launch.registry().revoke_window(&f.caller).unwrap();
+    assert_eq!(
+        f.service.recycle(&f.caller, query()).err().unwrap().code,
+        "FORBIDDEN"
+    );
+    assert_eq!(fs::read(&file).unwrap(), before);
+}

@@ -5,6 +5,7 @@ import AppDrawer from '@/components/ui/AppDrawer.vue'
 import SessionList from './SessionList.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import NativeSessionDeletePanel from './NativeSessionDeletePanel.vue'
+import NativeSessionRecyclePanel from './NativeSessionRecyclePanel.vue'
 import { useNativeHistoryStore } from '@/stores/nativeHistory'
 import { nativeDeleteEligibility } from '@/utils/nativeSessionDelete'
 import { normalizePath } from '@/utils/path'
@@ -64,6 +65,7 @@ function menuAction(id: string, action: SessionMenuAction) {
         </svg>
       </IconButton>
     </template>
+    <NativeSessionRecyclePanel :sessions="archived" :active="open" :project-path="project?.projectPath" />
     <div class="archived-sessions-content" role="tree" :aria-label="t('archivedSessions')">
       <SessionList v-if="archived.length" :sessions="archived" :surface-active="open" :menu-teleport="false" @primary-action="primaryAction" @menu-action="menuAction"
         @rename-commit="(id, title) => emit('rename-commit', id, title)" @rename-cancel="emit('rename-cancel', $event)">
