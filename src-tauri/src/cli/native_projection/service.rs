@@ -294,7 +294,7 @@ impl ProjectionService {
             expected_profile_revision: request.expected_profile_revision,
             project_ids: vec![project.project_id.clone()],
         };
-        let (frozen, admission) = self.launch.repository().admission().begin_metadata()?;
+        let (frozen, admission) = self.launch.repository().admission().begin_codex_archive()?;
         let result = (|| {
             let source =
                 self.scope_inner(caller, &target, &mut ProjectionStage::ScopeCapability)?;
@@ -331,7 +331,7 @@ impl ProjectionService {
         self.launch
             .repository()
             .admission()
-            .check_metadata_idle()
+            .check_codex_archive_idle()
             .map_err(|_| error("ARCHIVE_BUSY"))?;
         let authority = self.registry.authorize_rename(
             &owner(caller),
@@ -349,7 +349,7 @@ impl ProjectionService {
             self.launch
                 .repository()
                 .admission()
-                .check_metadata_idle()
+                .check_codex_archive_idle()
                 .map_err(|_| error("ARCHIVE_BUSY"))?;
             self.archive_operations.reconcile_archived(&physical)?;
             if let Some(result) = self.archive_operations.begin(caller, &request, &physical)? {
@@ -693,7 +693,8 @@ impl ProjectionService {
                 .unknown_session_keys(&request.source.source_root_key)?;
             if !keys.is_empty() {
                 // 普通历史读取不能因某次未知写阻塞；忙时保留屏障，恢复由独立后端门强制核对。
-                let Ok((frozen, admission)) = self.launch.repository().admission().begin_metadata()
+                let Ok((frozen, admission)) =
+                    self.launch.repository().admission().begin_codex_archive()
                 else {
                     return self.registry.read(&owner(caller), request);
                 };

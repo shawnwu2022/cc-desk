@@ -333,7 +333,7 @@ impl LaunchService {
                 return Err(error("SCOPE_STALE"));
             }
             let spec = resolve_process(&build_invocation(request, &snapshot)?)?;
-            let (frozen, admission) = self.repository.admission().begin_metadata()?;
+            let (frozen, admission) = self.repository.admission().begin_codex_archive()?;
             Ok((spec, frozen, admission))
         })()?;
         let frozen = Arc::new(Mutex::new(Some(frozen)));
@@ -396,6 +396,8 @@ impl LaunchService {
                 } else {
                     Err(error("ARCHIVE_UNAVAILABLE"))
                 };
+                // RPC 已完成后只留短暂 EOF 宽限，不为不主动退出的助手再等满 RPC 时限。
+                let shutdown_deadline = deadline.min(Instant::now() + Duration::from_secs(2));
                 let mut root_reaped = false;
                 loop {
                     if !root_reaped {
@@ -414,7 +416,10 @@ impl LaunchService {
                     }
                     // RPC 收口会关闭 stdin，先允许官方助手按 EOF 正常退出。
                     // 失败或总时限到期才终止本次 Job；整个进程组清空前继续保留所有权。
-                    if result.is_err() || Instant::now() >= deadline || *shutting_down.read() {
+                    if result.is_err()
+                        || Instant::now() >= shutdown_deadline
+                        || *shutting_down.read()
+                    {
                         #[cfg(windows)]
                         let _ = job.terminate();
                         let _ = child.kill();
@@ -1160,6 +1165,9 @@ impl LaunchService {
                 let frozen = Arc::new(snapshot);
                 let invocation = build_invocation(frozen.request(), &frozen)?;
                 let spec = resolve_process(&invocation)?;
+                if !matches!(frozen.request().action, LaunchAction::Raw { .. }) {
+                    admission.identify_cli(frozen.request().cli);
+                }
                 let pty = OwnedPty::spawn_admitted(
                     &spec,
                     PtySize {

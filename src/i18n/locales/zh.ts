@@ -100,7 +100,7 @@ export default {
   errorNativeArchiveUnknown: '归档结果尚未确认，不能重复执行。请刷新历史核对原生状态。',
   errorNativeArchiveUnsupported: '当前平台或配置无法安全执行原生归档。请使用 Codex 原生命令，Desk 不会改用本地标记。',
   errorNativeArchiveContainer: '原生归档目录不安全或无法固定，操作未执行。',
-  errorNativeArchiveBusy: 'Desk 仍有活动、准备中或状态未确认的会话。请结束这些会话后再归档。',
+  errorNativeArchiveBusy: 'Codex 会话仍在运行或准备中，或后台操作尚未确认结束。请结束相关任务或稍后再归档。',
   confirmArchiveTitle: "停止并归档此会话？",
   confirmArchiveDescription: "将停止当前进程，并把记录移到归档。不会删除 CLI 历史文件。",
   confirmArchiveAction: "停止并归档",

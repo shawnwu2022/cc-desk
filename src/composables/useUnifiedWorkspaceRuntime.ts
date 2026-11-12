@@ -826,8 +826,14 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
         if (!open) return false
         await catalog.closeSession(session.id); return true
       case 'archive':
-        if (live || session.cli === 'codex') { if (shell.section === 'workspace') catalog.beginSessionConfirmation('stop-and-archive', session.id); return true }
-        await catalog.archiveSession(session.id); return true
+        if (live) { if (shell.section === 'workspace') catalog.beginSessionConfirmation('stop-and-archive', session.id); return true }
+        {
+          const owns = catalog.captureSessionOwnership(session.id), selected = catalog.captureSelectionOwnership()
+          const sequence = shell.requestSequence, navigation = shell.navigationSequence
+          await catalog.archiveSession(session.id, () => !disposed && shell.requestSequence === sequence
+            && shell.navigationSequence === navigation && owns() && selected())
+          return true
+        }
       case 'resume':
         await resumeDirect(session, claimResumeFeedback)
         return true
@@ -877,7 +883,8 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
         shell.clearWorkspaceRequest(sequence)
         const key = request.kind === 'rename' ? (dispatched === 'rename-written' ? 'feedbackRenameSent' : 'feedbackRenamed')
           : 'action' in request && request.action === 'copy-session-id' ? 'feedbackCopied'
-          : 'action' in request && request.action === 'archive' && !catalog.sessionConfirmation ? 'feedbackArchived' : null
+          : 'action' in request && request.action === 'archive' && !catalog.sessionConfirmation
+            ? (catalog.sessions.find(row => row.id === request.sessionId)?.cli === 'codex' ? 'feedbackNativeArchived' : 'feedbackArchived') : null
         if (key) catalog.publishActionSuccess(current, key)
       }
     } catch (failure) {

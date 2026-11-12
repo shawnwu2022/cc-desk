@@ -32,7 +32,7 @@ it('CodexArchive_FailureNeverCreatesDeskOnlyArchive_002', async () => {
 })
 it('CodexArchive_ReadFailurePreventsNativeWrite_003', async () => {
   const f = fixture(), [row] = await f.adapter.listSessions()
-  f.load.mockImplementationOnce(async () => { f.entry.error = 'SOURCE_UNAVAILABLE'; return f.entry })
+  f.entry.error = 'SOURCE_UNAVAILABLE'
   await expect(f.adapter.archiveSession(row.id)).rejects.toThrow('SOURCE_UNAVAILABLE')
   expect(f.nativeArchive.archive).not.toHaveBeenCalled()
   expect(f.archive.archiveSession).not.toHaveBeenCalled()
@@ -50,9 +50,9 @@ it('CodexArchive_UnknownOutcomeCannotReplay_005', async () => {
   await expect(f.adapter.archiveSession(row.id)).rejects.toThrow('ARCHIVE_OUTCOME_UNKNOWN')
   expect(f.nativeArchive.archive).toHaveBeenCalledOnce()
 })
-it('CodexArchive_SourceChangeDuringRefreshNeverWrites_006', async () => {
+it('CodexArchive_SourceMismatchNeverWrites_006', async () => {
   const f = fixture(), [row] = await f.adapter.listSessions()
-  f.load.mockImplementationOnce(async () => { f.entry.sourceRootKey = 'different'; return f.entry })
+  f.entry.sourceRootKey = 'different'
   await expect(f.adapter.archiveSession(row.id)).rejects.toThrow('SOURCE_CHANGED')
   expect(f.nativeArchive.archive).not.toHaveBeenCalled()
 })
@@ -69,7 +69,7 @@ it('CodexArchive_RefreshesSameRootAcrossProjectsOnly_008', async () => {
   for (const [projectId, root] of [['other-project', 'root'], ['foreign-project', 'foreign']]) f.entries.push({ ...f.entry, context: { ...f.entry.context, projectId, projectPath: '/' + projectId }, sourceRootKey: root, sessions: [] })
   const [row] = await f.adapter.listSessions()
   await f.adapter.archiveSession(row.id)
-  expect(f.load.mock.calls.map(([context]) => context.projectId)).toEqual(['project', 'project', 'other-project'])
+  expect(f.load.mock.calls.map(([context]) => context.projectId)).toEqual(['project', 'other-project'])
 })
 it('CodexArchive_LostAckThenRestoreClearsLocalBarrier_009', async () => {
   const f = fixture(), [row] = await f.adapter.listSessions()
@@ -87,4 +87,14 @@ it('CodexArchive_RestoreRequiresFreshRootBeforeUnarchive_010', async () => {
   f.load.mockImplementationOnce(async () => { f.entry.sourceRootKey = 'different'; return f.entry })
   await expect(f.adapter.restoreArchivedSession(row.id)).rejects.toThrow('SOURCE_CHANGED')
   expect(f.cliUnarchive.unarchive).not.toHaveBeenCalled()
+})
+
+// 后端会重新授权并读取目标，已验证历史不必先全量扫描一次才获得忙碌反馈。
+it('CodexArchive_BusyResponseDoesNotWaitForRedundantHistoryScan_011', async () => {
+  const f = fixture(), [row] = await f.adapter.listSessions()
+  f.load.mockRejectedValueOnce(new Error('REDUNDANT_HISTORY_SCAN'))
+  f.nativeArchive.archive.mockRejectedValueOnce(new Error('ARCHIVE_BUSY'))
+  await expect(f.adapter.archiveSession(row.id)).rejects.toThrow('ARCHIVE_BUSY')
+  expect(f.load).not.toHaveBeenCalled()
+  expect(f.archive.archiveSession).not.toHaveBeenCalled()
 })

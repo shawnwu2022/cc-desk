@@ -410,7 +410,7 @@ npm run tauri:build        # 生产构建
 
 ### 统一确认与安全反馈（Task 16）
 
-- normal App 的停止并归档和未知状态重启通过类型化 `SessionConfirmDialog`；0.18.3 的普通关闭按用户授权直接执行。打开对话框只冻结目标，不执行进程操作。确认或直接关闭均固定 Native request/run/generation、CLI/配置修订/项目/来源/启动动作，或 Legacy Tab/PTY/generation/项目/Session 身份，并在异步边界重新检查。导航、项目/会话切换和新意图撤销旧确认，不能把旧错误或完成提示附到新选择。
+- normal App 的历史/已停止会话归档直接执行，不二次弹窗；既有显式停止并归档和未知状态重启通过类型化 `SessionConfirmDialog`；0.18.3 的普通关闭按用户授权直接执行。打开对话框只冻结目标，不执行进程操作。确认或直接关闭均固定 Native request/run/generation、CLI/配置修订/项目/来源/启动动作，或 Legacy Tab/PTY/generation/项目/Session 身份，并在异步边界重新检查。导航、项目/会话切换和新意图撤销旧确认，不能把旧错误或完成提示附到新选择。
 - 未知状态重启只授权既有 exact recover/stop 契约：仍未知或未确认停止时保留原尝试；只有状态已知且旧进程确认结束才分配新 generation。Native 不借道 Legacy PTY。Legacy 运行态关闭先 await 停止；异步重命名也重新检查原 PTY 所有权。
 - `ProjectConfirmDialog` 复用项目移除和启动配置删除展示。项目移除保留 Task14 admission/visibility 屏障、原注册身份和不删除文件边界；取消后不能继续后续写。配置删除由 `cliProfiles.requestDelete` / `confirmDelete` 提供真实 CAS 契约，冻结配置与工作区 revision，并阻止删除期间新 Native admission。Task19 已接入真实编辑器，并仅在准确启动回执证明身份冻结后允许删除运行会话的保存配置；未准入/准备中的会话仍阻止删除。不能用 `patch({ op: 'delete' })` 绕过确认。
 - `userError` 仅以 own-property 白名单映射固定键/代码，原始异常与原型继承键不进入渲染状态。普通重试错误内联显示，单个 CLI 故障用工具级横幅；只有全部来源不可读、无缓存和打开会话时显示工作区错误页，终端宿主不卸载。复制、重命名、归档、项目固定/移除和配置删除只在已确认完成且上下文仍匹配时发短 Toast。

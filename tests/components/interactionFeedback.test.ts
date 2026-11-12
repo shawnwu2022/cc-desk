@@ -437,14 +437,23 @@ it('Feedback_ConflictNeedsExplicitRetry_014', async () => {
   render(); await flushPromises(); const row = useUnifiedSessionsStore().sessions.find(row => row.runtime === 'native-cli')!
   io.nativeArchive.mockRejectedValueOnce(Object.assign(new Error('REVISION_CONFLICT'), { code: 'REVISION_CONFLICT', privateValue: '/private/SECRET' }))
   useShellStore().requestWorkspaceAction({ kind: 'menu-action', sessionId: row.id, action: 'archive' }); await flushPromises()
-  expect(io.nativeArchive).not.toHaveBeenCalled()
-  expect(document.body.textContent).toContain(en.confirmNativeArchiveDescription)
-  ;(document.querySelector('[data-session-confirm]') as HTMLButtonElement).click(); await flushPromises()
+  expect(document.querySelector('[data-session-confirm]')).toBeNull()
   expect(io.nativeArchive).toHaveBeenCalledTimes(1)
-  expect(useUnifiedSessionsStore().confirmationError?.detailCode).toBe('REVISION_CONFLICT')
+  expect(useUnifiedSessionsStore().actionFeedback?.detailCode).toBe('REVISION_CONFLICT')
   expect(document.body.textContent).not.toContain('/private/SECRET')
-  ;(document.querySelector('[data-session-confirm]') as HTMLButtonElement).click(); await flushPromises()
+  useShellStore().requestWorkspaceAction({ kind: 'menu-action', sessionId: row.id, action: 'archive' }); await flushPromises()
   expect(io.nativeArchive).toHaveBeenCalledTimes(2); expect(document.body.textContent).toContain(en.feedbackNativeArchived)
+})
+// 历史归档一次点击即执行，不再要求第二次确认，仍使用后端原生接口。
+it('Feedback_HistoryArchiveRunsWithoutConfirmation_019', async () => {
+  render(); await flushPromises()
+  const catalog = useUnifiedSessionsStore(), row = catalog.sessions.find(row => row.runtime === 'native-cli')!
+  useShellStore().requestWorkspaceAction({ kind: 'menu-action', sessionId: row.id, action: 'archive' }); await flushPromises()
+  expect(document.querySelector('[data-session-confirm]')).toBeNull()
+  expect(io.nativeArchive).toHaveBeenCalledOnce()
+  expect(io.stop).not.toHaveBeenCalled()
+  expect(catalog.sessions.find(value => value.id === row.id)?.archived).toBe(true)
+  expect(document.body.textContent).toContain(en.feedbackNativeArchived)
 })
 // 配置删除复用实际 App 确认组件与真实 store CAS；设置编辑入口由后续任务接入。
 it('Feedback_ConfigConfirmationUsesRealStore_015', async () => {
@@ -684,4 +693,20 @@ it.each(['direct', 'navigation-return', 'editor-cancel'] as const)('LaunchPrepar
   useShellStore().requestWorkspaceAction({ kind: 'create-session', input }); await flushPromises()
   expect(useNativeTabsStore().tabs.size).toBe(2)
   expect(io.discovery).toHaveBeenCalledTimes(entry === 'direct' ? 1 : 2)
+})
+
+// 一次点击的已停止终端归档仍可在来源读取等待期间被导航撤销。
+it('Feedback_DirectEndedArchiveKeepsNavigationGuard_020', async () => {
+  render(); await flushPromises(); const tab = await running()
+  useNativeTabsStore().tab(tab.tabId)!.status = 'stopped'
+  await useUnifiedSessionsStore().refresh(); await flushPromises()
+  let release!: (value: unknown) => void
+  io.runSource.mockReturnValueOnce(new Promise(resolve => { release = resolve }))
+  useShellStore().requestWorkspaceAction({ kind: 'menu-action', sessionId: 'native-tab:' + tab.tabId, action: 'archive' }); await flushPromises()
+  expect(document.querySelector('[data-session-confirm]')).toBeNull()
+  expect(io.stop).not.toHaveBeenCalled()
+  useShellStore().navigate('settings'); await flushPromises()
+  release(await io.scope({ kind: 'run', runId: tab.runId, generation: tab.generation })); await flushPromises()
+  expect(io.nativeArchive).not.toHaveBeenCalled()
+  expect(useNativeTabsStore().tab(tab.tabId)).toBeDefined()
 })

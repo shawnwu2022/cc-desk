@@ -763,16 +763,17 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
         || frozen.target.kind !== 'run' || frozen.target.runId !== tab.runId || frozen.target.generation !== tab.generation
         || frozen.sourceRootKey !== root) throw new Error('SOURCE_CHANGED')
     }
-    const fresh = await deps.history.load({ ...context, force: true, retainOnFailure: true })
+    // 后端在写入前重新验证 held scope 和准确历史；避免先全量扫描才返回忙碌错误。
+    const entry = target.entry
     requireCurrent()
-    if (!fresh.loaded || fresh.loading || fresh.error) throw new Error(fresh.error || 'SOURCE_UNAVAILABLE')
-    const source = fresh.source
-    if (nativeHistoryContextKey(fresh.context) !== nativeHistoryContextKey(context) || fresh.sourceRootKey !== root
+    if (!entry.loaded || entry.loading || entry.error) throw new Error(entry.error || 'SOURCE_UNAVAILABLE')
+    const source = entry.source
+    if (nativeHistoryContextKey(entry.context) !== nativeHistoryContextKey(context) || entry.sourceRootKey !== root
       || !source || source.basis !== 'configured-profile' || source.cli !== 'codex' || source.sourceRootKey !== root
       || source.profileId !== context.profileId || source.profileRevision !== context.profileRevision
       || source.target.kind !== 'profile' || source.target.profileId !== context.profileId
       || source.target.expectedProfileRevision !== context.profileRevision || !source.target.projectIds.includes(context.projectId)) throw new Error('SOURCE_CHANGED')
-    const matches = fresh.sessions.filter(item => item.sessionKey === target.item.sessionKey && item.nativeSessionId === target.item.nativeSessionId)
+    const matches = entry.sessions.filter(item => item.sessionKey === target.item.sessionKey && item.nativeSessionId === target.item.nativeSessionId)
     if (matches.length !== 1 || matches[0].readFailure) throw new Error('SESSION_ORIGIN_AMBIGUOUS')
     if (!matches[0].archived) {
       requireCurrent()

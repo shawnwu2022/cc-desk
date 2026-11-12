@@ -739,9 +739,10 @@ layout and field automatic title synchronization remain unaccepted.
 
 Codex 行的“原生归档”使用 authenticated `cli_archive_session`，经配置 profile 的官方 app-server `thread/archive`，不再写 Desk `archivedSessions` 冒充原生归档。来源固定为 backend-held 配置 scope、profile revision、注册项目、原生 UUID 与 session key；打开过的行还必须证明 frozen run 与新历史投影同根。Claude/OpenCode 的既有 Desk 隐藏语义不在本次范围内。
 
-- 执行前复用准确 owner 的确认框，即使是已结束的历史行也必须确认。文案明确官方接口处理原生子会话树，可能停止活动后代且影响其他项目。Desk 自己任何活动、准备或未知 owner 都阻止准入；外部 writer 冲突交给官方 CLI 的锁处理，不猜测进程、不关闭无关会话。
+- 历史/已停止行点击即执行原生归档，不再二次确认；异步边界仍固定目标与导航所有权。运行中行的菜单不提供归档，既有显式停止并归档请求仍须确认。后台只允许绕过已明确识别的 Legacy Claude 和结构化 Native Claude/OpenCode owner；Codex、未识别准备、raw/Shell、未知 owner、未收口写入和维护冻结继续阻止准入。永久删除仍要求所有运行时空闲。外部 writer 冲突交给官方 CLI 的锁处理，不猜测进程、不关闭无关会话。
 - Windows 专用 helper 冻结环境，核对 initialize 返回的实际 `codexHome` 和 held root，前置 read 核对 ID/cwd/header/path，随后只发一次 archive，再通过同源 `archived_sessions` 物理位置核实根。压缩 rollout 沿用安全 resolver。非 Windows 暂返回 `NATIVE_ARCHIVE_UNSUPPORTED`，不能以 Windows Job 证明其他平台后代收口。
 - 固定 `sessions` 和 `archived_sessions` 的非 reparse 目录身份；目标归档目录缺失时只在已授权操作下用 held capability 创建空目录，随后固定。助手从 suspended 启动加入本次 Job，整个进程组真正退出前保持目录、来源与 admission lease；超时、EOF、撤销及未知写不释放仍存活的后代。
+- 归档写入前由后端重新验证 held scope、profile、项目、准确原生 ID 与当前历史，前端不再先重复扫描整份历史才获得忙碌反馈。RPC 验证完成后给助手最多 2 秒 EOF 退出宽限，再终止仅属于本次操作的 Job；整个 Job 确认清空前不释放 admission。
 - 官方 ACK 只代表根路径调用完成，后代可能仅记录 warning。回执限定 `rootArchived: true, descendants: "unverified"`，不宣称整棵子树都已归档。成功和不确定结果都强制重读已加载的同根各项目，外根不受影响。界面刷新失败不能再发一次归档。
 - 后端按物理根/原生 ID 保留 pending/unknown 写屏障，换 operation ID 或文档不能绕过。普通历史刷新只在能取得空闲准入时尝试核对，忙时照常读取且保留屏障；pending 不清除。官方 unarchive 的后端入口对该物理目标旧未知写强制执行独立只读核对，取得空闲准入并证明原生根已归档后才清屏障和继续恢复，因此丢 ACK → 刷新 → 恢复 → 再归档不会被旧屏障永久锁住。尚未证实的写始终不自动重放。
 - 旧 Desk-only 记录保持原样，不自动迁移真实会话。用户先恢复旧显示标记，再显式“原生归档”；永久删除仍只接受原生已归档根，原有预览与二次确认门不变。

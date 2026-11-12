@@ -100,7 +100,7 @@ export default {
   errorNativeArchiveUnknown: 'The archive result is not confirmed. Do not repeat it. Refresh history to check the native state.',
   errorNativeArchiveUnsupported: 'This platform or configuration cannot safely run native archive. Use Codex directly; Desk will not substitute a local archive flag.',
   errorNativeArchiveContainer: 'The native archive containers are unsafe or cannot be pinned. Nothing was archived.',
-  errorNativeArchiveBusy: 'Desk still has active, preparing or uncertain sessions. End them before archiving.',
+  errorNativeArchiveBusy: 'A Codex session is active or preparing, or a background operation has not settled. End the relevant task or try again later.',
   confirmArchiveTitle: "Stop and archive this session?",
   confirmArchiveDescription: "The current process will be stopped and its record moved to the archive. CLI history files will not be deleted.",
   confirmArchiveAction: "Stop and archive",

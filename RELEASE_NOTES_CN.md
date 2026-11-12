@@ -4,6 +4,23 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
+## [0.27.0-rc.5]
+
+修复
+
+- 无关的结构化 Claude、OpenCode 或 Legacy 会话打开时，不再阻止 Windows Codex 原生归档；Codex、raw、未知活动及维护操作仍会阻止不安全写入。
+- 归档前不再重复全量扫描历史，更快返回操作反馈；官方元数据操作完成后，缩短辅助进程清理等待。
+
+优化
+
+- 已关闭或已停止的会话可一键归档。运行中会话仍需确认停止并归档，永久删除保留独立预览和确认流程。
+
+重要说明
+
+- 这是预发布版本，稳定 Latest 保持不变。原生归档仅限 Windows Codex；Claude 和 OpenCode 保留 Desk 隐藏行为。旧 Desk-only 归档需先恢复显示标记，再显式选择原生归档。
+- 原生归档可能影响子会话、停止活动后代并涉及其他项目。成功仅核实根会话，后代是否全部完成仍未验证。结果不确定时仅做只读核对，不自动重试写入。
+- 合成检查不代表真实 Codex 归档/删除、已安装 Windows WebView2、完整后代或外部写入已验收。D20/native All、签名安装及返回旧版仍未验证。updater 签名不代表 Windows Authenticode。
+
 ## [0.27.0-rc.4]
 
 修复
