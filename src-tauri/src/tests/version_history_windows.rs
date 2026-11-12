@@ -957,7 +957,13 @@ fn HistoryWindows_InFlightLaunch_022() {
             }
         }
     }
-    ImageFence::acquire(parent, name("race.exe"), &identity, &digest).unwrap();
+    // 子进程退出不是独占打开已就绪的证明；只在收尾等待原始打开的精确 busy。
+    let fence = acquire_prepared_fixture_fence(
+        std::time::Instant::now() + std::time::Duration::from_secs(30),
+        || ImageFence::acquire(parent.clone(), name("race.exe"), &identity, &digest),
+    )
+    .unwrap();
+    fence.verify().unwrap();
 }
 
 // 检查不同恢复目录的 control lease 不能授权另一个 lifetime 文件。
