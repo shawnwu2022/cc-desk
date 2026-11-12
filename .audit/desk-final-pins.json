@@ -1,0 +1,54 @@
+[
+  {
+    "path": "src-tauri/src/store.rs",
+    "sha256": "d6b9a5af55b0f161e9008a9de1ed9bcb9f47b1c880558ce506edc100386145ba"
+  },
+  {
+    "path": "src-tauri/src/version_history/windows/files.rs",
+    "sha256": "a808b916f8301bcdd0965e52c62dbdfb5ece9f4583fedb34ba2d5c26ccbbfaca"
+  },
+  {
+    "path": "src-tauri/src/version_history/windows/projects_fixture_test.rs",
+    "sha256": "44e86f72b5407a1a4e28a182b7cc8dc6d2c34914e272b23c663f3e964bc7f669"
+  },
+  {
+    "path": "src-tauri/src/tests/native_cli_delete_webview.rs",
+    "sha256": "c4a28cc2e949a5b852abd702d53d2ae79fa572da0685b8f4c3ad5635aede8046"
+  },
+  {
+    "path": "src-tauri/src/tests/native_cli_delete_recycle_webview.rs",
+    "sha256": "83f4a31c0900945d7640f9212197c9a797b0aef90ef1619fde5904002509b09f"
+  },
+  {
+    "path": "tests/native-delete-webview/main.ts",
+    "sha256": "16ba45386af8da34b6f867434ea389434e34c6ecf72368233b64de8b2aea937e"
+  },
+  {
+    "path": "scripts/build-native-delete-webview.mjs",
+    "sha256": "fdd32f4fc61233e9ca3a4dc6184a9d072136da9f4b74965024c5c7a083fad113"
+  },
+  {
+    "path": ".audit/v027-stage11-webview-dist/manifest.json",
+    "sha256": "1ab16c3b0598d42c0ad7621726b78d62f467a976020f0dc42260e8d169d53a8f"
+  },
+  {
+    "path": ".audit/desk-webview-bin/cc-desk-isolated-tests.exe",
+    "sha256": "2843657ccbfe5e97a29ce73d348093d0a42465aa545f3f9b3db409b0ef2a86d1"
+  },
+  {
+    "path": ".audit/tmp/v027-codex-delete-live-Zx05oB/temporary/v027-codex-delete-live-VQlp0M/reports/webview-result.json",
+    "sha256": "99c32a1ca815a0595debaef3031df9cffd9f27be9643187d27b1212d7f2770c3"
+  },
+  {
+    "path": ".audit/tmp/v027-codex-delete-live-Zx05oB/temporary/v027-codex-delete-live-VQlp0M/reports/desk-archived.png",
+    "sha256": "9786e5fd6e9c2f82b1e0f2a75e0e035157b28cf9ed73c9cea67d44389008db60"
+  },
+  {
+    "path": ".audit/tmp/v027-codex-delete-live-Zx05oB/temporary/v027-codex-delete-live-VQlp0M/reports/desk-restored.png",
+    "sha256": "282d8ff430ce19aa875a9bfe2b1d7ace3fc96445e786dfa5be587cfe8729ee37"
+  },
+  {
+    "path": ".audit/tmp/v027-codex-delete-live-Zx05oB/temporary/v027-codex-delete-live-VQlp0M/reports/desk-rearchived.png",
+    "sha256": "9786e5fd6e9c2f82b1e0f2a75e0e035157b28cf9ed73c9cea67d44389008db60"
+  }
+]

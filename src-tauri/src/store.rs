@@ -241,6 +241,10 @@ fn default_true() -> bool {
 
 /// 获取 GUI 配置目录
 fn get_gui_config_dir() -> Result<PathBuf> {
+    #[cfg(all(test, windows))]
+    if crate::version_history::windows::files::projects_fixture::active() {
+        anyhow::bail!("ambient GUI root disabled in isolated worker");
+    }
     dirs::home_dir()
         .map(|h| h.join(".cc-box"))
         .context("Home directory not found")
@@ -1889,6 +1893,15 @@ where
 
 /// 读取指定路径的 projects 状态（注入路径，便于单元测试）
 pub(crate) fn get_projects_state_at(path: &Path) -> Result<ProjectsState> {
+    #[cfg(all(test, windows))]
+    if let Some(result) =
+        crate::version_history::windows::files::projects_fixture::read_projects(path)
+    {
+        return match result? {
+            Some(bytes) => Ok(serde_json::from_slice(&bytes)?),
+            None => Ok(ProjectsState::default()),
+        };
+    }
     if !path.exists() {
         return Ok(ProjectsState::default());
     }
@@ -3480,6 +3493,12 @@ pub(crate) fn write_json_atomic(path: &Path, value: &serde_json::Value) -> Resul
 
 /// 原子写字节：完整写入并 flush `.tmp` 后原子替换目标；替换失败时保留原目标。
 pub(crate) fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    #[cfg(all(test, windows))]
+    if let Some(result) =
+        crate::version_history::windows::files::projects_fixture::write_projects(path, bytes)
+    {
+        return result;
+    }
     let tmp = path.with_extension("json.tmp");
     let mut file = fs::OpenOptions::new()
         .write(true)
@@ -3533,6 +3552,10 @@ pub(crate) fn lock_file_path() -> Result<PathBuf> {
 
 /// 便捷：返回 (数据文件路径, lock 文件路径)
 pub(crate) fn data_and_lock_paths() -> Result<(PathBuf, PathBuf)> {
+    #[cfg(all(test, windows))]
+    if let Some(result) = crate::version_history::windows::files::projects_fixture::paths() {
+        return Ok(result?);
+    }
     Ok((get_projects_state_path()?, lock_file_path()?))
 }
 
@@ -3712,13 +3735,8 @@ where
         .begin_mutation()
         .map_err(|e| anyhow::anyhow!(e.code))?
         .preparing();
-    ensure_parent(lock_path)?;
-    let lock_file = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(lock_path)?;
+    let lock_file = open_projects_lock(lock_path)?;
+
     acquire_lock(&lock_file, /*exclusive*/ true, Duration::from_secs(5))?;
 
     let result: Result<ProjectsState> = (|| {
@@ -3905,13 +3923,8 @@ pub(crate) fn read_projects_state_locked(
     data_path: &Path,
     lock_path: &Path,
 ) -> Result<ProjectsState> {
-    ensure_parent(lock_path)?;
-    let lock_file = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(lock_path)?;
+    let lock_file = open_projects_lock(lock_path)?;
+
     acquire_lock(&lock_file, /*exclusive*/ false, Duration::from_secs(5))?;
     let state = get_projects_state_at(data_path).map(|mut state| {
         canonicalize_state(&mut state);
@@ -3919,4 +3932,19 @@ pub(crate) fn read_projects_state_locked(
     }); // 不存在 -> default；返回前 canonicalize legacy 等价键
     let _ = lock_file.unlock();
     state
+}
+
+fn open_projects_lock(path: &Path) -> Result<File> {
+    #[cfg(all(test, windows))]
+    if let Some(result) = crate::version_history::windows::files::projects_fixture::open_lock(path)
+    {
+        return Ok(result?);
+    }
+    ensure_parent(path)?;
+    Ok(fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)?)
 }

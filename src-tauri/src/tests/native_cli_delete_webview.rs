@@ -661,6 +661,11 @@ struct TaskBackendFixture {
     peer_created: AtomicBool,
     peer_script: Mutex<Option<String>>,
     peer_reply: Mutex<Option<mpsc::Sender<bool>>>,
+    desk_checks: Mutex<Vec<String>>,
+    desk_key: Mutex<Option<String>>,
+    desk_archives: AtomicUsize,
+    desk_restores: AtomicUsize,
+    desk_upserts: AtomicUsize,
     recycle: RecycleFixture,
     recycle_checks: Mutex<Vec<String>>,
     recycle_removes: AtomicUsize,
@@ -705,7 +710,8 @@ impl TaskBackendFixture {
             ],
             |deleted| self.verify_files(deleted),
             |removed| self.recycle.verify(removed),
-        )
+        )?;
+        self.verify_desk_final()
     }
     fn verify_files(&self, deleted: bool) -> Result<(), String> {
         let b = self.backend.lock();
@@ -722,7 +728,11 @@ impl TaskBackendFixture {
                 return Err("CONTROL_CHANGED".into());
             }
         }
-        if b.repository.admission().check_metadata_idle().is_err() {
+        if b.repository.admission().check_metadata_idle().is_err()
+            || crate::version_history::maintenance::process_admissions()
+                .check_metadata_idle()
+                .is_err()
+        {
             return Err("OWNER_NOT_SETTLED".into());
         }
         if !deleted
@@ -956,7 +966,15 @@ async fn s11_capture(
     let q: Named = query(&request)?;
     let (names, count) = {
         let captures = state.captures.lock();
-        if q.name.starts_with("recycle-") {
+        if q.name.starts_with("desk-") {
+            (
+                ["desk-archived", "desk-restored", "desk-rearchived"],
+                captures
+                    .iter()
+                    .filter(|name| name.starts_with("desk-"))
+                    .count(),
+            )
+        } else if q.name.starts_with("recycle-") {
             (
                 ["recycle-review", "recycle-stored", "recycle-restored"],
                 captures
@@ -969,7 +987,7 @@ async fn s11_capture(
                 ["review", "confirmation", "result"],
                 captures
                     .iter()
-                    .filter(|name| !name.starts_with("recycle-"))
+                    .filter(|name| !name.starts_with("recycle-") && !name.starts_with("desk-"))
                     .count(),
             )
         }
@@ -1155,6 +1173,12 @@ fn browser_ready(window: WebviewWindow, state: Arc<TaskBackendFixture>, main: bo
 }
 
 fn worker(native: bool) {
+    assert!(crate::version_history::windows::files::projects_fixture::active());
+    assert!(
+        crate::version_history::windows::files::projects_fixture::paths()
+            .unwrap()
+            .is_err()
+    );
     webview_configuration_absent().unwrap();
     let fixture = Arc::new(Fixture::new().unwrap());
     for name in ["webview-main", "webview-peer"] {
@@ -1172,6 +1196,14 @@ fn worker(native: bool) {
         );
         std::thread::sleep(Duration::from_millis(20));
     }
+    let desk_root = fixture.root.join("desk-state");
+    fs::create_dir(&desk_root).unwrap();
+    let desk_capability = Directory::open_absolute(&desk_root).unwrap();
+    crate::version_history::windows::files::projects_fixture::install(desk_capability.clone())
+        .unwrap();
+    assert!(
+        crate::version_history::windows::files::projects_fixture::install(desk_capability).is_err()
+    );
     let assets = Arc::new(
         AssetBundle::load(
             &Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1239,6 +1271,11 @@ fn worker(native: bool) {
         peer_created: AtomicBool::new(false),
         peer_script: Mutex::new(None),
         peer_reply: Mutex::new(None),
+        desk_checks: Mutex::new(vec![]),
+        desk_key: Mutex::new(None),
+        desk_archives: AtomicUsize::new(0),
+        desk_restores: AtomicUsize::new(0),
+        desk_upserts: AtomicUsize::new(0),
         recycle,
         recycle_checks: Mutex::new(vec![]),
         recycle_removes: AtomicUsize::new(0),
@@ -1279,6 +1316,11 @@ fn worker(native: bool) {
         crate::cli::commands::cli_confirm_session_delete,
         crate::cli::commands::cli_inspect_session_delete,
         crate::cli::commands::cli_recycle_session,
+        crate::commands::get_projects_state,
+        crate::commands::archive_session,
+        crate::commands::restore_session,
+        crate::commands::upsert_session_ui_record,
+        recycle::s11_desk_checkpoint,
         recycle::s11_recycle_checkpoint,
         s11_fixture,
         s11_checkpoint,
@@ -1295,6 +1337,32 @@ fn worker(native: bool) {
         .manage(state.clone())
         .invoke_handler(move |invoke| {
             let command = invoke.message.command();
+            if matches!(
+                command,
+                "get_projects_state"
+                    | "archive_session"
+                    | "restore_session"
+                    | "upsert_session_ui_record"
+            ) {
+                if invoke.message.webview_ref().label() != "main"
+                    || !dispatch.started.load(Ordering::Acquire)
+                {
+                    invoke.resolver.reject("FIXTURE_DOCUMENT_REQUIRED");
+                    return true;
+                }
+                match command {
+                    "archive_session" => {
+                        dispatch.desk_archives.fetch_add(1, Ordering::AcqRel);
+                    }
+                    "restore_session" => {
+                        dispatch.desk_restores.fetch_add(1, Ordering::AcqRel);
+                    }
+                    "upsert_session_ui_record" => {
+                        dispatch.desk_upserts.fetch_add(1, Ordering::AcqRel);
+                    }
+                    _ => {}
+                }
+            }
             if command == "cli_recycle_session" {
                 if let InvokeBody::Raw(bytes) = invoke.message.payload() {
                     if let Ok(value) = serde_json::from_slice::<serde_json::Value>(bytes) {
@@ -1376,6 +1444,9 @@ fn worker(native: bool) {
         .admission()
         .check_metadata_idle()
         .is_err()
+        || crate::version_history::maintenance::process_admissions()
+            .check_metadata_idle()
+            .is_err()
     {
         println!("STAGE11_METADATA_OWNER_PENDING");
         std::thread::sleep(Duration::from_secs(1));
@@ -1391,7 +1462,7 @@ fn worker(native: bool) {
     let report = serde_json::json!({"native":native,"success":state.success.load(Ordering::Acquire),"failure":*state.failure.lock(),"exitCode":exit,
         "checkpoints":*state.checkpoints.lock(),"confirmIpcCount":state.confirmations.load(Ordering::Acquire),"inspectIpcCount":state.inspections.load(Ordering::Acquire),
         "actualUdfCount":state.actual_directories.lock().len(),"engineVersion":tauri::webview_version().unwrap(),"captures":*state.captures.lock(),
-        "assetBuildHead":assets.manifest["buildHead"],"assetFiles":assets.manifest["files"],"productionModules":assets.manifest["modules"],"driverSources":assets.manifest["drivers"],"metadataOwnerSettled":true,"recycleCheckpoints":*state.recycle_checks.lock(),"recycleRemoves":state.recycle_removes.load(Ordering::Acquire),"recycleRestores":state.recycle_restores.load(Ordering::Acquire)});
+        "assetBuildHead":assets.manifest["buildHead"],"assetFiles":assets.manifest["files"],"productionModules":assets.manifest["modules"],"driverSources":assets.manifest["drivers"],"metadataOwnerSettled":true,"deskCheckpoints":*state.desk_checks.lock(),"deskArchives":state.desk_archives.load(Ordering::Acquire),"deskRestores":state.desk_restores.load(Ordering::Acquire),"deskUpserts":state.desk_upserts.load(Ordering::Acquire),"recycleCheckpoints":*state.recycle_checks.lock(),"recycleRemoves":state.recycle_removes.load(Ordering::Acquire),"recycleRestores":state.recycle_restores.load(Ordering::Acquire)});
     fs::write(
         fixture.root.join("reports/webview-result.json"),
         serde_json::to_vec_pretty(&report).unwrap(),
@@ -1631,6 +1702,9 @@ fn NativeDeleteWebView_FrontendFailureIsBounded_013() {
 }
 fn frontend_failure_code(code: Option<&str>) -> &'static str {
     const CODES: &[&str] = &[
+        "DESK_ARCHIVE_TIMEOUT",
+        "DESK_RESTORE_TIMEOUT",
+        "DESK_PERSISTENCE_INVALID",
         "RECYCLE_FIXTURE_MISSING",
         "RECYCLE_PANEL_TIMEOUT",
         "RECYCLE_REMOVE_TIMEOUT",

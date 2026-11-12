@@ -1046,3 +1046,7 @@ fn rename_handle(
         destination,
     })
 }
+
+#[cfg(test)]
+#[path = "projects_fixture_test.rs"]
+pub(crate) mod projects_fixture;

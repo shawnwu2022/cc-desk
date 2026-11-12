@@ -2,7 +2,7 @@ import { createApp, computed, h, nextTick, ref } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import ArchivedSessionsDrawer from '@/components/sessions/ArchivedSessionsDrawer.vue'
-import { normalizePath } from '@/utils/path'
+import SessionList from '@/components/sessions/SessionList.vue'
 import NativeSessionDeletePanel from '@/components/sessions/NativeSessionDeletePanel.vue'
 import { useNativeHistoryStore, type NativeHistoryContext } from '@/stores/nativeHistory'
 import { useNativeTabsStore } from '@/stores/nativeTabs'
@@ -27,6 +27,7 @@ async function click(selector: string) { element(selector).click(); await nextTi
 async function ack(selector: string) { const input = element(selector) as HTMLInputElement; input.checked = true; input.dispatchEvent(new Event('change', { bubbles: true })); await nextTick(); await frame() }
 async function expectCode(task: Promise<unknown>, codes: string[]) { const code = await task.then(() => null, (e: any) => e?.code); if (!codes.includes(code)) throw Error('UNEXPECTED_REJECTION') }
 const failureCodes = new Set([
+  'DESK_ARCHIVE_TIMEOUT', 'DESK_RESTORE_TIMEOUT', 'DESK_PERSISTENCE_INVALID',
   'RECYCLE_FIXTURE_MISSING', 'RECYCLE_PANEL_TIMEOUT', 'RECYCLE_REMOVE_TIMEOUT', 'RECYCLE_RESTORE_TIMEOUT', 'RECYCLE_ACK_ENABLED',
   'ELEMENT_MISSING', 'UNEXPECTED_REJECTION', 'REAL_HISTORY_MISSING', 'PREVIEW_TIMEOUT',
   'RISK_COPY_MISSING', 'SECOND_CONFIRMATION_MERGED', 'MISSING_ACK_ENABLED',
@@ -60,7 +61,8 @@ host.__STAGE11__ = { async start() {
     h('h1', 'Task-isolated permanent deletion acceptance'), h('p', stage.value),
     h('p', 'Synthetic fixtures only. This host does not start the installed CC Desk application.'),
     h(NativeSessionDeletePanel, { target: target.value, active: true }),
-    h(ArchivedSessionsDrawer, { open: drawerOpen.value, sessions: catalog.sessions, 'onUpdate:open': (value: boolean) => { drawerOpen.value = value } }),
+    h('section', { 'data-desk-live': '' }, [h(SessionList, { sessions: catalog.sessions.filter(row => row.cli === 'claude' && !row.archived), onMenuAction: (id: string, action: string) => { if (action !== 'archive') unused(); void catalog.archiveSession(id).catch(() => {}) } })]),
+    h(ArchivedSessionsDrawer, { open: drawerOpen.value, sessions: catalog.sessions, 'onUpdate:open': (value: boolean) => { drawerOpen.value = value }, onRestoreRequest: (id: string) => { void catalog.restoreArchivedSession(id).catch(() => {}) } }),
     h('h2', 'Observed synthetic history'), h('ul', { 'data-fixture-history': '' }, catalog.sessions.map(row => h('li', { key: row.id }, `${row.title} · ${row.nativeSessionId}`))),
   ]) }).use(pinia).use(createI18n({ legacy: false, locale: 'en', messages: { en, zh } })).mount('#app')
   const call = (command: string, payload: unknown = {}) => bridge.invoke(command, payload)
@@ -111,10 +113,38 @@ host.__STAGE11__ = { async start() {
     await catalog.refresh(fixture.recycleContext.projectPath, { cli: 'claude' })
     const recycleRow = catalog.sessions.find(row => row.nativeSessionId === fixture.recycleId && row.cli === 'claude')
     if (!recycleRow) throw Error('RECYCLE_FIXTURE_MISSING')
-    // 注入合成 Desk 归档标签作为起始状态，不声称验证标签持久化或完整应用启动。
-    projects.archivedSessions.set(normalizePath(fixture.recycleContext.projectPath), [recycleRow.id])
-    await catalog.refresh(fixture.recycleContext.projectPath, { cli: 'claude' })
+    await projects.reload()
+    async function reloadDesk() {
+      await projects.reload(); await catalog.refresh(fixture.recycleContext.projectPath, { cli: 'claude' }); await nextTick(); await frame()
+      if (projects.lastErrorCode) throw Error('DESK_PERSISTENCE_INVALID')
+    }
+    function rowAt(selector: string): HTMLElement {
+      const row = [...document.querySelectorAll<HTMLElement>(selector)].find(row => row.dataset.sessionRow === recycleRow!.id)
+      if (!row) throw Error('RECYCLE_FIXTURE_MISSING')
+      return row
+    }
+    async function archiveFromRow() {
+      const archive = rowAt('[data-desk-live] [data-session-row]').querySelector<HTMLButtonElement>('[data-session-archive] button')
+      if (!archive || archive.disabled) throw Error('ELEMENT_MISSING')
+      archive.click(); await nextTick(); await frame()
+      await until(() => catalog.sessions.some(row => row.id === recycleRow!.id && row.archived), 'DESK_ARCHIVE_TIMEOUT')
+      await reloadDesk()
+      if (!catalog.sessions.some(row => row.id === recycleRow!.id && row.archived)) throw Error('DESK_PERSISTENCE_INVALID')
+    }
+    await archiveFromRow()
     drawerOpen.value = true; await nextTick(); await frame()
+    await call('s11_desk_checkpoint', { name: 'archived' }); await call('s11_capture', { name: 'desk-archived' })
+    const restoreArchive = rowAt('.archived-sessions-content [data-session-row]').querySelector<HTMLElement>('.session-primary-action button')
+    if (!restoreArchive) throw Error('ELEMENT_MISSING')
+    restoreArchive.click(); restoreArchive.click()
+    await until(() => catalog.sessions.some(row => row.id === recycleRow!.id && !row.archived) && [...projects.sessionRecords.values()].some(record => record.nativeSessionId === fixture.recycleId && (record.lastOpenedAt ?? 0) > 0), 'DESK_RESTORE_TIMEOUT')
+    await reloadDesk()
+    if (catalog.sessions.some(row => row.id === recycleRow!.id && row.archived)) throw Error('DESK_PERSISTENCE_INVALID')
+    await call('s11_desk_checkpoint', { name: 'restored' }); await call('s11_capture', { name: 'desk-restored' })
+    drawerOpen.value = false; await nextTick(); await frame()
+    await archiveFromRow()
+    drawerOpen.value = true; await nextTick(); await frame()
+    await call('s11_desk_checkpoint', { name: 'rearchived' }); await call('s11_capture', { name: 'desk-rearchived' })
     await click('[data-recycle-open]')
     await until(() => !!document.querySelector('[data-recycle-select]') && !(element('[data-recycle-select]') as HTMLSelectElement).disabled, 'RECYCLE_PANEL_TIMEOUT')
     const selector = element('[data-recycle-select]') as HTMLSelectElement

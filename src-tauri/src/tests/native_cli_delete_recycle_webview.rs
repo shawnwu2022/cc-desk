@@ -3,6 +3,7 @@ use super::*;
 pub(super) struct RecycleFixture {
     pub(super) id: String,
     pub(super) context: serde_json::Value,
+    source_root_key: String,
     transcript: PathBuf,
     original: Vec<u8>,
     controls: Vec<(PathBuf, Vec<u8>)>,
@@ -57,9 +58,18 @@ impl RecycleFixture {
             )
             .unwrap();
         let context = serde_json::json!({"cli":"claude","profileId":"native-recycle-fixture","profileRevision":backend.repository.get_profile("native-recycle-fixture").unwrap().revision,"projectId":backend.project_id,"projectPath":backend.fixture.project});
+        let source_root_key = BackendFixture::scope(
+            &backend.service,
+            &backend.repository,
+            &backend.caller,
+            "native-recycle-fixture",
+            &backend.project_id,
+        )
+        .source_root_key;
         Self {
             id,
             context,
+            source_root_key,
             transcript,
             original,
             controls,
@@ -144,4 +154,129 @@ fn NativeDeleteWebView_RecycleFixtureUsesOnlyContainedSyntheticFiles_014() {
                 .into()
         )
     );
+}
+
+impl TaskBackendFixture {
+    fn verify_desk_state(&self, archived: bool, opened: bool) -> Result<(), String> {
+        let (data, lock) =
+            crate::store::data_and_lock_paths().map_err(|_| "DESK_PATH_UNAVAILABLE")?;
+        let state = crate::store::read_projects_state_locked(&data, &lock)
+            .map_err(|_| "DESK_READ_FAILED")?;
+        crate::version_history::maintenance::process_admissions()
+            .check_metadata_idle()
+            .map_err(|_| "DESK_OWNER_PENDING")?;
+        let project = self.recycle.context["projectPath"]
+            .as_str()
+            .ok_or("DESK_CONTEXT_INVALID")?;
+        let normalized = crate::store::normalize_path_str(project);
+        let context = serde_json::json!([
+            "native-history-v1",
+            "claude",
+            self.recycle.context["profileId"],
+            self.recycle.context["profileRevision"],
+            self.recycle.context["projectId"],
+            normalized
+        ])
+        .to_string();
+        let adapter = serde_json::json!([
+            "local",
+            "claude",
+            self.recycle.source_root_key,
+            self.recycle.id
+        ])
+        .to_string();
+        let expected_key = format!(
+            "native-history:{}",
+            serde_json::json!(["native-history-v2", context, adapter, self.recycle.id])
+        );
+        if !state.pinned_projects.is_empty()
+            || !state.display_names.is_empty()
+            || !state.launch_preferences.is_empty()
+        {
+            return Err("DESK_UNEXPECTED_METADATA".into());
+        }
+        if archived {
+            if state.archived_sessions.len() != 1
+                || state.archived_sessions.get(&normalized) != Some(&vec![expected_key.clone()])
+            {
+                return Err("DESK_ARCHIVE_INVALID".into());
+            }
+            let mut known = self.desk_key.lock();
+            if known.as_ref().is_some_and(|key| key != &expected_key) {
+                return Err("DESK_KEY_CHANGED".into());
+            }
+            *known = Some(expected_key.clone());
+        } else if state
+            .archived_sessions
+            .values()
+            .any(|keys| !keys.is_empty())
+        {
+            return Err("DESK_RESTORE_INVALID".into());
+        }
+        if opened {
+            let record = state
+                .session_records
+                .get(&expected_key)
+                .ok_or("DESK_RECORD_MISSING")?;
+            if state.session_records.len() != 1
+                || record.runtime != "native-cli"
+                || record.cli != "claude"
+                || record.project_path != normalized
+                || record.adapter_session_id != adapter
+                || record.native_session_id.as_deref() != Some(self.recycle.id.as_str())
+                || !record.title.is_empty()
+                || !record.last_opened_at.is_some_and(|value| value > 0)
+            {
+                return Err("DESK_OPENED_AT_MISSING".into());
+            }
+        } else if !state.session_records.is_empty() {
+            return Err("DESK_UNEXPECTED_METADATA".into());
+        }
+        Ok(())
+    }
+    pub(super) fn verify_desk_final(&self) -> Result<(), String> {
+        if self.desk_checks.lock().len() != 3
+            || [
+                self.desk_archives.load(Ordering::Acquire),
+                self.desk_restores.load(Ordering::Acquire),
+                self.desk_upserts.load(Ordering::Acquire),
+            ] != [2, 1, 1]
+        {
+            return Err("DESK_FINAL_DISPATCH_CHANGED".into());
+        }
+        self.verify_desk_state(true, true)
+    }
+}
+#[tauri::command]
+pub(super) async fn s11_desk_checkpoint(
+    webview: Webview,
+    request: Request<'_>,
+    state: State<'_, Arc<TaskBackendFixture>>,
+) -> Result<(), String> {
+    state.admit(&webview, &request)?;
+    let q: Named = query(&request)?;
+    let mut checks = state.desk_checks.lock();
+    let expected = [
+        ("archived", [1, 0, 0]),
+        ("restored", [1, 1, 1]),
+        ("rearchived", [2, 1, 1]),
+    ];
+    if expected.get(checks.len()).copied()
+        != Some((
+            q.name.as_str(),
+            [
+                state.desk_archives.load(Ordering::Acquire),
+                state.desk_restores.load(Ordering::Acquire),
+                state.desk_upserts.load(Ordering::Acquire),
+            ],
+        ))
+    {
+        return Err("DESK_CHECKPOINT_INVALID".into());
+    }
+    state.verify_desk_state(q.name != "restored", q.name != "archived")?;
+    state.recycle.verify(false)?;
+    state.verify_files(false)?;
+    println!("STAGE11_DESK_CHECKPOINT {}", q.name);
+    checks.push(q.name);
+    Ok(())
 }
