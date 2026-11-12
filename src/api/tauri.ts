@@ -1,3 +1,4 @@
+import { createOpencodeArchiveClient } from './opencodeArchive'
 import { createSessionRecycleClient } from './nativeSessionRecycle';
 import { createProjectionClient } from './nativeProjection'
 import { createSessionDeleteClient } from './nativeSessionDelete'
@@ -538,4 +539,9 @@ export function createNativeHistoryClient(): import('./versionHistory').HistoryC
 export function createNativeSessionRecycleClient() {
   const bridge = nativeDocumentBridge()
   return createSessionRecycleClient(bridge, () => nativeDocumentBridge() === bridge)
+}
+
+export function createNativeOpencodeArchiveClient() {
+  const bridge = nativeDocumentBridge()
+  return createOpencodeArchiveClient(bridge, () => nativeDocumentBridge() === bridge)
 }

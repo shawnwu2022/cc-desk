@@ -89,6 +89,8 @@ export interface UnifiedSession {
   /** CLI 会话创建时间（毫秒）；创建序排序的稳定键，缺失时 UI 回落首见近似。 */
   createdAt?: number
   archived: boolean
+  /** CLI 历史投影的原生归档状态，仅供展示；不代替执行时来源核对。 */
+  nativeArchived?: boolean
   /** UI projection only; runtime actions must still check the owning store. */
   opened?: boolean
   /** Local creation projection; failed proves admission was never attempted. */

@@ -19,9 +19,48 @@ pub(crate) struct ProjectionService {
     registry: ScopeRegistry,
     archive_operations: crate::cli::native_archive::Operations,
     rename_operations: crate::cli::native_rename::Operations,
+    opencode_archive_operations: crate::cli::opencode_archive::Operations,
     delete_operations: crate::cli::native_delete::Operations,
 }
 impl ProjectionService {
+    pub(crate) fn set_opencode_archive(
+        &self,
+        caller: &CallerIdentity,
+        request: crate::cli::opencode_archive::Request,
+    ) -> Result<crate::cli::opencode_archive::Receipt, SafeError> {
+        self.launch.registry().check_caller(caller)?;
+        request.validate()?;
+        self.opencode_archive_operations
+            .release_revoked(|owner| self.launch.registry().check_caller(owner).is_ok())?;
+        if let Some(result) = self.opencode_archive_operations.begin(caller, &request)? {
+            result?;
+            return Ok(request.receipt());
+        }
+        let result = (|| {
+            #[cfg(not(windows))]
+            {
+                Err(error("OPENCODE_ARCHIVE_UNSUPPORTED"))
+            }
+            #[cfg(windows)]
+            {
+                let (authority, pinned) = self.registry.authorize_opencode_archive(
+                    &owner(caller),
+                    &request.source,
+                    &request.session_key,
+                )?;
+                self.launch
+                    .set_opencode_archive(caller, &request, authority, pinned)?;
+                self.launch
+                    .registry()
+                    .check_caller(caller)
+                    .map_err(|_| error("ARCHIVE_OUTCOME_UNKNOWN"))
+            }
+        })();
+        self.opencode_archive_operations
+            .finish(caller, &request, result.clone());
+        result?;
+        Ok(request.receipt())
+    }
     pub(crate) fn recycle(
         &self,
         caller: &CallerIdentity,
@@ -525,6 +564,7 @@ impl ProjectionService {
             registry: ScopeRegistry::new(64),
             archive_operations: Default::default(),
             rename_operations: Default::default(),
+            opencode_archive_operations: Default::default(),
             delete_operations: Default::default(),
         }
     }

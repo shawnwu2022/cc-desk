@@ -1,0 +1,13 @@
+{
+  "name": "cc-desk-opencode-archive-build",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@effect/sql-sqlite-node": "4.1.0",
+    "@opencode/core": "2.2.6",
+    "effect": "4.1.0"
+  },
+  "devDependencies": {
+    "@opencode/sdk": "2.2.6"
+  }
+}

@@ -113,6 +113,130 @@ pub(crate) struct LaunchService {
     opencode_probe_argv: Mutex<std::collections::HashMap<(String, String), ApiFlavor>>,
 }
 impl LaunchService {
+    #[cfg(windows)]
+    pub(crate) fn set_opencode_archive(
+        self: &Arc<Self>,
+        caller: &CallerIdentity,
+        request: &super::opencode_archive::Request,
+        authority: super::native_projection::registry::SessionAuthority,
+        pinned: super::opencode_archive::PinnedSource,
+    ) -> Result<(), SafeError> {
+        let expires = Instant::now() + Duration::from_secs(35);
+        let service = self.clone();
+        let caller = caller.clone();
+        let request = request.clone();
+        // OS 收口未知不无限阻塞 IPC；真正 owner 在后台继续持有来源/冻结和子进程。
+        super::opencode_archive::owned(Duration::from_secs(35), move || {
+            service.set_opencode_archive_owned(&caller, &request, authority, pinned, expires)
+        })
+    }
+    #[cfg(windows)]
+    fn set_opencode_archive_owned(
+        &self,
+        caller: &CallerIdentity,
+        request: &super::opencode_archive::Request,
+        authority: super::native_projection::registry::SessionAuthority,
+        pinned: super::opencode_archive::PinnedSource,
+        expires: Instant,
+    ) -> Result<(), SafeError> {
+        {
+            self.registry().check_caller(caller)?;
+            let profile = self.repository.get_profile(&request.source.profile_id)?;
+            if profile.revision != request.source.profile_revision {
+                return Err(error("SCOPE_STALE"));
+            }
+            let legacy =
+                profile.read_legacy(&self.repository.metadata_directory().join("config.json"))?;
+            let environment = super::environment::build_environment(
+                &self.inherited_environment()?,
+                &EnvMap::new(),
+                &profile,
+                legacy.as_ref(),
+                None,
+            )?;
+            if Instant::now() >= expires {
+                return Err(error("ARCHIVE_SOURCE_UNAVAILABLE"));
+            }
+            let (frozen, mut admission) = self.repository.admission().begin_metadata()?;
+            // 后台线程是本次工作 owner；IPC 取消或超时不释放该同步工作。
+            let result = (|| {
+                let mut prepared = super::opencode_archive::Prepared::new(&environment, pinned)?;
+                let shutdown = self.shutting_down.read();
+                if *shutdown {
+                    return Err(error("RUN_SUPERVISOR_STOPPING"));
+                }
+                authority.current()?;
+                let job = super::opencode_prepare::server_job::Job::new()
+                    .map_err(|_| error("SDK_HELPER_UNAVAILABLE"))?;
+                let mut owner = self.command_owners.register()?;
+                let ticket = admission.begin_creation();
+                let mut child = match self
+                    .registry()
+                    .with_current_caller(caller, || prepared.command.spawn())
+                {
+                    Ok(Ok(child)) => child,
+                    failed => {
+                        ticket.no_child_created();
+                        owner.settled = true;
+                        return Err(match failed {
+                            Err(failure) => failure,
+                            _ => error("NODE_RUNTIME_UNAVAILABLE"),
+                        });
+                    }
+                };
+                let ticket = ticket.child_created();
+                let assigned = job.assign_and_resume(&child).is_ok();
+                drop(shutdown);
+                let deadline = Instant::now() + Duration::from_secs(35);
+                let result = if assigned {
+                    catch_unwind(AssertUnwindSafe(|| {
+                        prepared.process(
+                            &mut child,
+                            &authority.native_id,
+                            &authority.cwd,
+                            request.archived,
+                            &|| {
+                                super::opencode_archive::before_deadline(expires, || {
+                                    if *self.shutting_down.read() {
+                                        return Err(error("RUN_SUPERVISOR_STOPPING"));
+                                    }
+                                    self.registry().check_caller(caller)?;
+                                    authority.current()
+                                })
+                            },
+                        )
+                    }))
+                    .unwrap_or_else(|_| Err(error("ARCHIVE_OUTCOME_UNKNOWN")))
+                } else {
+                    Err(error("SDK_HELPER_UNAVAILABLE"))
+                };
+                let mut reaped = false;
+                loop {
+                    if !reaped {
+                        if let Ok(Some(_)) = child.try_wait() {
+                            reaped = true;
+                        }
+                    }
+                    if reaped && job.is_empty().unwrap_or(false) {
+                        ticket.reaped();
+                        owner.settled = true;
+                        return result;
+                    }
+                    if result.is_err() || Instant::now() >= deadline || *self.shutting_down.read() {
+                        let _ = job.terminate();
+                        let _ = child.kill();
+                    }
+                    std::thread::sleep(Duration::from_millis(25));
+                }
+            })();
+            drop(admission);
+            // 未能确认直接子进程及 Job 全部退出时绝不走到这里。
+            frozen
+                .release_review()
+                .map_err(|_| error("ARCHIVE_OUTCOME_UNKNOWN"))?;
+            result
+        }
+    }
     pub(crate) fn delete_metadata(
         &self,
         caller: &CallerIdentity,

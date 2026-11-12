@@ -17,8 +17,9 @@ use windows::Wdk::{
     Foundation::OBJECT_ATTRIBUTES,
     Storage::FileSystem::{
         FileRenameInformation, NtCreateFile, NtSetInformationFile, FILE_CREATE,
-        FILE_DIRECTORY_FILE, FILE_NON_DIRECTORY_FILE, FILE_OPEN, FILE_RENAME_INFORMATION,
-        FILE_SYNCHRONOUS_IO_NONALERT, FILE_WRITE_THROUGH, NTCREATEFILE_CREATE_DISPOSITION,
+        FILE_DIRECTORY_FILE, FILE_NON_DIRECTORY_FILE, FILE_OPEN, FILE_OPEN_IF,
+        FILE_RENAME_INFORMATION, FILE_SYNCHRONOUS_IO_NONALERT, FILE_WRITE_THROUGH,
+        NTCREATEFILE_CREATE_DISPOSITION,
     },
 };
 use windows::Win32::{
@@ -649,6 +650,27 @@ impl Directory {
             })?;
         PinnedFile::from_file(self.clone(), name, file)
     }
+    /// SQLite 可写但不能替换：保留主文件/侧车准确身份，不阻断 SQLite 自身事务锁。
+    /// 只允许调用者为预先固定的侧车名补建空文件，绝不截断已有对象。
+    pub(crate) fn pin_sqlite_file(
+        self: &Arc<Self>,
+        name: ComponentName,
+        create_sidecar: bool,
+    ) -> io::Result<PinnedFile> {
+        let file = self.open_relative(
+            &name,
+            FILE_READ_DATA | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            if create_sidecar {
+                FILE_OPEN_IF
+            } else {
+                FILE_OPEN
+            },
+            false,
+            None,
+        )?;
+        PinnedFile::from_file(self.clone(), name, file)
+    }
     pub(super) fn open_relative(
         &self,
         name: &ComponentName,
@@ -875,6 +897,10 @@ impl PinnedFile {
         };
         result.verify()?;
         Ok(result)
+    }
+    pub(crate) fn size(&self) -> io::Result<u64> {
+        self.verify()?;
+        Ok(metadata(handle(&self.file))?.size)
     }
     pub(crate) fn identity(&self) -> &FileIdentity {
         &self.identity

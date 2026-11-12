@@ -412,6 +412,7 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
     // archived=true 也来自 CLI 自身的归档容器（codex 会把会话移进
     // archived_sessions/，与 sessions/ 零重叠），不只来自 Desk 的归档注册表。
     return { archived: item.archived === true || keys.includes(historyId(entry, item.sessionKey, item.nativeSessionId)) || legacy || bare,
+      nativeArchived: item.archived === true,
       safeErrorCode: (legacy && oldKeyMatches(old).length !== 1) || bareAmbiguous ? 'SESSION_ORIGIN_AMBIGUOUS'
         : bare && legacyRoot === undefined ? 'SOURCE_UNAVAILABLE' : null }
   }
@@ -895,6 +896,8 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
       // 让 CLI 取消归档。codex 明确拒绝 resume 已归档会话（要求先 unarchive），
       // 所以这里不能走 resume；Desk 也不搬动 CLI 的归档文件。
       if (match.item.archived === true) {
+        // OpenCode 必须经独立状态设置面板确认，不能借 Codex 的 unarchive verb。
+        if (match.entry.context.cli === 'opencode') throw new Error('OPENCODE_NATIVE_ARCHIVE_RESTORE_REQUIRED')
         const unarchive = deps.cliUnarchive
         if (!unarchive) throw new Error('CLI_UNARCHIVE_UNAVAILABLE')
         if (match.entry.context.cli === 'codex') {

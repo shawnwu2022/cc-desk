@@ -193,7 +193,7 @@ test('RustDag_Static_002: entry contracts, strict lint and actual loader remain 
   assert.match(staticJob, /cargo build --locked/);
   assert.match(staticJob, /WaitForExit\(30000\)/);
   assert.match(staticJob, /dtolnay\/rust-toolchain@1\.98\.1/);
-  assert.match(staticJob, /node-version: 22/);
+  assert.match(staticJob, /node-version: '24\.18\.0'/);
 });
 
 test('RustDag_Aggregate_003: existing required check gates producer, static and every shard before coverage', () => {
@@ -232,7 +232,7 @@ test('RustDag_Cache_005: same compatible defaults share dependency cache and cle
   for (const id of ['rust-compile', 'rust-static']) {
     const text = job(id);
     assert.match(text, /shared-key: rust-compile/);
-    assert.match(text, /node-version: 22\n          cache: npm/);
+    assert.match(text, /node-version: '24\.18\.0'\n          cache: npm/);
     assert.match(text, /cache-workspace-crates: false/);
     assert.match(text, /ci-build-metrics-\$\{\{ github\.job \}\}-\$\{\{ github\.sha \}\}-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}/);
     assert.match(text, /'src-tauri\/target\/ci-build-metrics'/);

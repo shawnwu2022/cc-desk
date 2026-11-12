@@ -123,9 +123,13 @@ export function selectSessionObservationNotice(session: UnifiedSession): { label
   return labelKey ? { labelKey, unread: false, ...details } : null
 }
 
+export function requiresOpencodeNativeRestore(session: UnifiedSession): boolean {
+  return session.runtime === 'native-cli' && session.cli === 'opencode' && session.nativeArchived === true
+}
+
 export function selectSessionPrimaryAction(session: UnifiedSession): SessionPrimaryAction | null {
   if (session.renameState === 'editing' || session.renameState === 'saving') return 'save-rename'
-  if (session.archived) return 'restore-archive'
+  if (session.archived) return requiresOpencodeNativeRestore(session) ? null : 'restore-archive'
   if (session.opened) return 'close'
 
   switch (session.processState) {
@@ -166,7 +170,7 @@ export const SESSION_MENU_ACTION_DEFINITIONS: readonly MenuActionRule[] = [
   { id: 'discard-creation', labelKey: 'sessionActionDiscardCreation', danger: true, visible: (session) => !session.archived && !session.opened && session.preparationState === 'failed' && session.processState === 'failed' },
   { id: 'archive', labelKey: 'sessionActionArchive', danger: true, visible: session => !!selectSessionArchiveAction(session)
     && (session.opened === true || selectSessionPrimaryAction(session) === 'retry') },
-  { id: 'restore-archive', labelKey: 'sessionActionRestoreArchive', visible: (session) => session.archived },
+  { id: 'restore-archive', labelKey: 'sessionActionRestoreArchive', visible: (session) => session.archived && !requiresOpencodeNativeRestore(session) },
   { id: 'copy-session-id', labelKey: 'sessionActionCopyId', visible: () => true },
   { id: 'open-project-directory', labelKey: 'sessionActionOpenProject', visible: () => true },
   { id: 'view-diagnostics', labelKey: 'sessionActionDiagnostics', visible: () => true },

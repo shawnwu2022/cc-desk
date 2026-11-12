@@ -259,3 +259,12 @@ pub(crate) async fn cli_recycle_session(
 ) -> Result<super::native_recycle::Response, SafeError> {
     runtime.recycle_session(&webview, &request).await
 }
+
+#[tauri::command]
+pub(crate) async fn cli_set_opencode_archive(
+    runtime: State<'_, Arc<NativeRuntime>>,
+    webview: Webview,
+    request: Request<'_>,
+) -> Result<super::opencode_archive::Receipt, SafeError> {
+    runtime.set_opencode_archive(&webview, &request).await
+}

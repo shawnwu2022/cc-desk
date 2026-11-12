@@ -63,7 +63,9 @@
     },
     "resources": {
       "resources/native-session-sdk/LICENSE.md": "licenses/claude-agent-sdk/LICENSE.md",
-      "resources/native-session-sdk/NOTICE.txt": "licenses/claude-agent-sdk/NOTICE.txt"
+      "resources/native-session-sdk/NOTICE.txt": "licenses/claude-agent-sdk/NOTICE.txt",
+      "resources/opencode-native-archive/LICENSES.txt": "licenses/opencode-native-archive/LICENSES.txt",
+      "resources/opencode-native-archive/NOTICE.txt": "licenses/opencode-native-archive/NOTICE.txt"
     }
   },
   "plugins": {

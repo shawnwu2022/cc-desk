@@ -1779,3 +1779,76 @@ fn NativeRename_WindowsCanonicalPath_047() {
         "SCOPE_REVOKED"
     );
 }
+
+#[cfg(windows)]
+#[test]
+#[allow(non_snake_case)]
+fn OpenCodeArchive_PinsBeforeReadingIdentity_010() {
+    let root = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let filename = root.path().join("custom.db");
+    let moved = root.path().join("replaced.db");
+    let db = rusqlite::Connection::open(&filename).unwrap();
+    db.execute_batch(include_str!("fixtures/opencode-schema-1.19.0.sql"))
+        .unwrap();
+    db.execute_batch("PRAGMA journal_mode=WAL").unwrap();
+    db.execute("INSERT INTO project (id,worktree,time_created,time_updated,sandboxes) VALUES ('p',?1,1,1,'[]')",[project.path().to_str().unwrap()]).unwrap();
+    db.execute("INSERT INTO session (id,project_id,slug,directory,title,version,cost,tokens_input,tokens_output,tokens_reasoning,tokens_cache_read,tokens_cache_write,time_created,time_updated) VALUES ('ses_fixture','p','fixture',?1,'Old','1.19.0',0,0,0,0,0,0,1,1)",[project.path().to_str().unwrap()]).unwrap();
+    drop(db);
+    let mut g = grant(root.path(), "unused", Arc::new(AtomicBool::new(true)));
+    g.cli = CliKind::Opencode;
+    g.root = Root::open_sqlite(root.path(), "custom.db").unwrap();
+    g.projects = vec![AdmittedProject {
+        id: "p".into(),
+        root: Root::open(project.path()).unwrap(),
+        paths: vec![project.path().to_owned()],
+    }];
+    if let ScopeTarget::Profile { project_ids, .. } = &mut g.target {
+        *project_ids = vec!["p".into()];
+    }
+    let enabled = Arc::new(AtomicBool::new(false));
+    let count = Arc::new(AtomicUsize::new(0));
+    let blocked = Arc::new(AtomicBool::new(false));
+    let (on, counter, result, a, b) = (
+        enabled.clone(),
+        count.clone(),
+        blocked.clone(),
+        filename.clone(),
+        moved.clone(),
+    );
+    g.check = Arc::new(move || {
+        if on.load(Ordering::SeqCst) && counter.fetch_add(1, Ordering::SeqCst) == 1 {
+            result.store(fs::rename(&a, &b).is_err(), Ordering::SeqCst);
+        }
+        Ok(())
+    });
+    let registry = ScopeRegistry::new(8);
+    let source = registry.register(g).unwrap();
+    let key = serde_json::to_string(&serde_json::json!([
+        "local",
+        "opencode",
+        source.source_root_key,
+        "ses_fixture"
+    ]))
+    .unwrap();
+    let mut foreign = owner();
+    foreign.epoch = n(2);
+    assert_eq!(
+        registry
+            .authorize_opencode_archive(&foreign, &source, &key)
+            .err()
+            .unwrap()
+            .code,
+        "FORBIDDEN"
+    );
+    assert!(!root.path().join("custom.db-journal").exists());
+    enabled.store(true, Ordering::SeqCst);
+    let (authority, pins) = registry
+        .authorize_opencode_archive(&owner(), &source, &key)
+        .unwrap();
+    assert!(blocked.load(Ordering::SeqCst));
+    assert_eq!(authority.native_id, "ses_fixture");
+    assert!(fs::rename(&filename, &moved).is_err());
+    drop(pins);
+    fs::rename(&filename, &moved).unwrap();
+}

@@ -53,7 +53,7 @@ jobs:
         run: npm run test:ci
 
       - name: Run Node policy tests
-        run: node --test tests/scripts/releaseRecovery.node.cjs tests/scripts/nativeReleasePolicy.node.mjs tests/scripts/releaseCoverage.node.mjs tests/scripts/releaseDraftRecovery.node.mjs tests/scripts/windowsNativeValidation.node.mjs tests/scripts/historySignatureFixtures.node.mjs tests/scripts/historyRoundtripBuild.node.mjs tests/scripts/historyRoundtripDriver.node.mjs tests/scripts/historyPayloadPolicy.node.mjs tests/scripts/pasteAcceptance.node.cjs tests/scripts/pasteReleaseGate.node.cjs tests/scripts/pasteTrace.node.cjs tests/scripts/nativeLaunchDiagnostics.node.mjs tests/scripts/releaseBuildAdmission.node.mjs tests/scripts/windowsRustShards.node.mjs tests/scripts/windowsRustShardRunner.node.mjs tests/scripts/windowsRustCalibration.node.mjs tests/scripts/ownedJobDrain.node.mjs tests/scripts/ciRustWorkflow.node.mjs tests/scripts/ciBuildMetrics.node.mjs tests/scripts/sessionRenameSafety.node.mjs tests/scripts/opencodeObserver.node.mjs tests/scripts/terminalDropPaths.node.mjs tests/scripts/metadataLifecycle.node.mjs
+        run: node --test tests/scripts/releaseRecovery.node.cjs tests/scripts/nativeReleasePolicy.node.mjs tests/scripts/releaseCoverage.node.mjs tests/scripts/releaseDraftRecovery.node.mjs tests/scripts/windowsNativeValidation.node.mjs tests/scripts/historySignatureFixtures.node.mjs tests/scripts/historyRoundtripBuild.node.mjs tests/scripts/historyRoundtripDriver.node.mjs tests/scripts/historyPayloadPolicy.node.mjs tests/scripts/pasteAcceptance.node.cjs tests/scripts/pasteReleaseGate.node.cjs tests/scripts/pasteTrace.node.cjs tests/scripts/nativeLaunchDiagnostics.node.mjs tests/scripts/releaseBuildAdmission.node.mjs tests/scripts/windowsRustShards.node.mjs tests/scripts/windowsRustShardRunner.node.mjs tests/scripts/windowsRustCalibration.node.mjs tests/scripts/ownedJobDrain.node.mjs tests/scripts/ciRustWorkflow.node.mjs tests/scripts/nativeHelperPreparation.node.mjs tests/scripts/ciBuildMetrics.node.mjs tests/scripts/sessionRenameSafety.node.mjs tests/scripts/opencodeObserver.node.mjs tests/scripts/terminalDropPaths.node.mjs tests/scripts/metadataLifecycle.node.mjs
 
       - name: Install production startup browser
         run: npx playwright install --with-deps chromium
@@ -82,7 +82,7 @@ jobs:
       - name: Set up Node.js for pinned runtime preparation
         uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version: '24.18.0'
           cache: npm
 
       - name: Set up Rust
@@ -114,6 +114,8 @@ jobs:
           npm ci --ignore-scripts
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run prepare:session-sdk
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run prepare:opencode-archive
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Prepare verified Windows runtime before direct cargo commands
@@ -203,7 +205,7 @@ jobs:
       - name: Set up Node.js for pinned runtime preparation
         uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version: '24.18.0'
           cache: npm
 
       - name: Set up Rust
@@ -236,6 +238,8 @@ jobs:
           npm ci --ignore-scripts
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run prepare:session-sdk
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run prepare:opencode-archive
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Prepare verified Windows runtime before direct cargo commands
@@ -342,7 +346,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version: '24.18.0'
       - name: Observe ordinary host containment without a compiler or test
         id: host
         working-directory: src-tauri
@@ -428,7 +432,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version: '24.18.0'
           cache: npm
       - name: Set up pinned Rust
         uses: dtolnay/rust-toolchain@1.98.1
@@ -444,6 +448,8 @@ jobs:
           npm ci
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run prepare:session-sdk
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run prepare:opencode-archive
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node scripts/prepare-conpty.mjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -472,7 +478,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version: '24.18.0'
           cache: npm
       - name: Set up pinned Rust
         uses: dtolnay/rust-toolchain@1.98.1
@@ -488,6 +494,8 @@ jobs:
           npm ci
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run prepare:session-sdk
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run prepare:opencode-archive
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node scripts/prepare-conpty.mjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

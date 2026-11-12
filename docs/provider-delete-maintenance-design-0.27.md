@@ -68,3 +68,6 @@
 ## 0.70：独立可恢复产品切片
 
 后续实现了 [Claude 主记录可恢复移除](recoverable-claude-removal-0.70.md)：不要求未知外部子任务已完全静止，因为它们保留原地且不会 purge；主 transcript 原件以精确身份移入持久恢复区，冲突恢复不覆盖。该独立功能不能替代本文件的永久原生删除合同，OpenCode 的整库/跨实例维护边界也未因此解决。
+
+
+OpenCode 后续已将[原生可逆归档](opencode-recoverable-archive-0.70.md)接入 Windows 产品的独立认证命令与面板，不启用永久删除；适用范围、schema 兼容和仍需集成验收的边界见链接文档。

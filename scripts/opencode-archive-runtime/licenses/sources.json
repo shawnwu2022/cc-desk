@@ -1,0 +1,30 @@
+{
+  "aws-LICENSE": {
+    "url": "https://github.com/aws/aws-sdk-js-v3/blob/main/LICENSE",
+    "gitBlob": "0322cba2eac898acb5c8577a20657e7a74af55a4"
+  },
+  "sigstore-LICENSE": {
+    "url": "https://github.com/sigstore/sigstore-js/blob/main/LICENSE",
+    "gitBlob": "e9e7c1679a09dfcb0793682d99f5129e206a8abd"
+  },
+  "drizzle-LICENSE": {
+    "url": "https://github.com/drizzle-team/drizzle-orm/blob/main/LICENSE",
+    "gitBlob": "261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64"
+  },
+  "isc-LICENSE": {
+    "url": "https://github.com/spdx/license-list-data/blob/main/text/ISC.txt",
+    "gitBlob": "e80998f07690783bacce4ae55ff59c471d50cd75"
+  },
+  "ccby-LICENSE": {
+    "url": "https://github.com/spdx/license-list-data/blob/main/text/CC-BY-3.0.txt",
+    "gitBlob": "1a16e05564d2aaa880bbe9e506a0a0226d8742cc"
+  },
+  "cczero-LICENSE": {
+    "url": "https://github.com/spdx/license-list-data/blob/main/text/CC0-1.0.txt",
+    "gitBlob": "0e259d42c996742e9e3cba14c677129b2c1b6311"
+  },
+  "opencode-2.2.6-LICENSE": {
+    "url": "https://github.com/anomalyco/opencode/blob/v2.2.6/LICENSE",
+    "gitBlob": "6439474beed8e0271df9862eff97ffd70ec2464c"
+  }
+}

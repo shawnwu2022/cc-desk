@@ -466,6 +466,43 @@ impl ScopeRegistry {
     ) -> Result<RenameAuthority, SafeError> {
         self.authorize_session_inner(owner, source, key, false)
     }
+    #[cfg(windows)]
+    pub(crate) fn authorize_opencode_archive(
+        &self,
+        owner: &Owner,
+        source: &SourceRef,
+        key: &str,
+    ) -> Result<(SessionAuthority, crate::cli::opencode_archive::PinnedSource), SafeError> {
+        let scope = self
+            .state
+            .lock()
+            .map_err(|_| safe("SCOPE_UNAVAILABLE"))?
+            .scopes
+            .get(&source.scope_id)
+            .cloned()
+            .ok_or_else(|| safe("SCOPE_UNKNOWN"))?;
+        if &scope.grant.owner != owner {
+            return Err(safe("FORBIDDEN"));
+        }
+        if &scope.source != source {
+            return Err(safe("SCOPE_STALE"));
+        }
+        if scope.grant.cli != CliKind::Opencode
+            || matches!(scope.grant.target, ScopeTarget::Run { .. })
+        {
+            return Err(safe("OPENCODE_ARCHIVE_UNSUPPORTED"));
+        }
+        scope.grant.current().map_err(safe)?;
+        // 在 catalog 读取身份前持有主库及侧车，消除读快照与 native 写入之间的同名换库窗口。
+        let pinned = crate::cli::opencode_archive::PinnedSource::open(
+            scope.grant.root.selected_path(),
+            scope.grant.root.sqlite_filename(),
+        )?;
+        let authority = self.authorize_session(owner, source, key)?;
+        pinned.verify()?;
+        authority.current()?;
+        Ok((authority, pinned))
+    }
     pub(crate) fn authorize_session(
         &self,
         owner: &Owner,

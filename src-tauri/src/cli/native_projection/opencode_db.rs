@@ -430,9 +430,15 @@ fn append_project(
         })
         .map(|(id, _)| id.clone())
         .collect();
+    // 原生 archive 是元数据位，和 Desk 归档索引独立；旧可读 schema 缺该列时仍可读。
+    let archive = if table_columns(tx, table)?.contains("time_archived") {
+        "time_archived IS NOT NULL AND time_archived != 0"
+    } else {
+        "0"
+    };
     // 表名来自 session_table 的白名单二选一，不是外部输入。
     let sql = format!(
-        "SELECT id, title, directory, time_created, time_updated FROM {table} \
+        "SELECT id, title, directory, time_created, time_updated, {archive} FROM {table} \
                WHERE parent_id IS NULL AND project_id = ?1 \
                ORDER BY time_updated DESC, id ASC LIMIT ?2"
     );
@@ -465,7 +471,7 @@ fn append_project(
         .map(|index| format!("?{index}"))
         .collect::<Vec<_>>()
         .join(",");
-    let sql = format!("SELECT id, title, directory, time_created, time_updated FROM {table} \
+    let sql = format!("SELECT id, title, directory, time_created, time_updated, {archive} FROM {table} \
                       WHERE parent_id IS NULL AND project_id = ?1 AND {directory} IN ({placeholders}) \
                       ORDER BY time_updated DESC, id ASC LIMIT ?{}", spellings.len() + 2);
     let limit = PER_PROJECT_LIMIT + 1;
@@ -496,13 +502,14 @@ fn append_rows(
                 row.get::<_, String>(2)?,
                 row.get::<_, i64>(3)?,
                 row.get::<_, i64>(4)?,
+                row.get::<_, bool>(5)?,
             ))
         })
         .map_err(sqlite_code)?;
     let mut count = 0i64;
     for row in rows {
         budget.checkpoint()?;
-        let (id, title, directory, created_ms, updated_ms) = row.map_err(sqlite_code)?;
+        let (id, title, directory, created_ms, updated_ms, archived) = row.map_err(sqlite_code)?;
         count += 1;
         if count > PER_PROJECT_LIMIT {
             budget.retain_history_metadata_incomplete();
@@ -517,7 +524,7 @@ fn append_rows(
             continue;
         }
         push_session(
-            root, project, out, id, title, directory, created_ms, updated_ms, budget,
+            root, project, out, id, title, directory, created_ms, updated_ms, archived, budget,
         );
     }
     Ok(())
@@ -544,6 +551,7 @@ fn push_session(
     directory: String,
     created_ms: i64,
     updated_ms: i64,
+    archived: bool,
     budget: &mut Budget,
 ) {
     let invalid_title = title.contains('\0');
@@ -568,8 +576,7 @@ fn push_session(
         metadata_incomplete: truncated.then_some(true),
         read_failure: None,
         truncated,
-        // opencode 无 CLI 侧归档容器；Desk 归档是独立元数据。
-        archived: false,
+        archived,
         cwd: Some(directory),
         updated_at: rfc3339(updated_ms),
         created_at: rfc3339(created_ms),

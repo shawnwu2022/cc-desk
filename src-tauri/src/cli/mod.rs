@@ -44,3 +44,5 @@ pub(crate) mod workspace;
 pub(crate) mod diagnostic_version_parser;
 
 pub(crate) mod native_recycle;
+
+pub(crate) mod opencode_archive;

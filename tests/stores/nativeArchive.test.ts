@@ -1,3 +1,4 @@
+import { selectSessionPrimaryAction, selectSessionMenuActions } from '@/utils/sessionPresentation'
 import { expect, it, vi } from 'vitest'
 import { createNativeCliAdapter } from '@/session/adapters/nativeCliAdapter'
 import type { NativeHistoryEntry } from '@/stores/nativeHistory'
@@ -97,4 +98,25 @@ it('CodexArchive_BusyResponseDoesNotWaitForRedundantHistoryScan_011', async () =
   await expect(f.adapter.archiveSession(row.id)).rejects.toThrow('ARCHIVE_BUSY')
   expect(f.load).not.toHaveBeenCalled()
   expect(f.archive.archiveSession).not.toHaveBeenCalled()
+})
+
+it('OpenCodeArchive_NativeHistoryRequiresSeparateRestore_012', async () => {
+  const f = fixture()
+  f.entry.context.cli = 'opencode'
+  f.entry.source = { ...f.entry.source!, cli: 'opencode' }
+  f.entry.sessions[0].archived = true
+  const [row] = await f.adapter.listSessions()
+  f.archive.getArchivedSessions = () => [row.id]
+  expect(selectSessionPrimaryAction(row)).toBeNull()
+  expect(selectSessionMenuActions(row).some(action => action.id === 'restore-archive')).toBe(false)
+  await expect(f.adapter.restoreArchivedSession(row.id)).rejects.toThrow('OPENCODE_NATIVE_ARCHIVE_RESTORE_REQUIRED')
+  expect(f.cliUnarchive.unarchive).not.toHaveBeenCalled()
+  expect(f.archive.restoreSession).not.toHaveBeenCalled()
+  f.entry.sessions[0].archived = false
+  const [restored] = await f.adapter.listSessions()
+  expect(restored.archived).toBe(true)
+  expect(selectSessionPrimaryAction(restored)).toBe('restore-archive')
+  await f.adapter.restoreArchivedSession(restored.id)
+  expect(f.cliUnarchive.unarchive).not.toHaveBeenCalled()
+  expect(f.archive.restoreSession).toHaveBeenCalledOnce()
 })

@@ -31,8 +31,15 @@ mod types;
 #[path = "../../../src-tauri/src/cli/native_projection/wire.rs"]
 mod wire;
 
+#[allow(unused_imports)]
+#[path = "../../../src-tauri/src/cli/native_recycle.rs"]
+mod native_recycle;
 #[path = "../../../src-tauri/src/cli/native_rename.rs"]
 mod native_rename;
+#[cfg(windows)]
+mod opencode_archive {
+    include!(concat!(env!("OUT_DIR"), "/opencode_archive.rs"));
+}
 #[path = "../../../src-tauri/src/cli/projection.rs"]
 mod projection;
 #[path = "../../../src-tauri/src/session_index_maintenance.rs"]
@@ -62,8 +69,11 @@ mod native_projection {
     pub(crate) use crate::{cache, catalog, opencode_db, registry, scoped_fs, wire};
 }
 mod cli {
+    #[cfg(windows)]
+    pub(crate) use crate::opencode_archive;
     #[allow(unused_imports)]
     pub(crate) use crate::{
-        environment, native_projection, native_rename, profiles, projection, snapshot, types,
+        environment, native_projection, native_recycle, native_rename, profiles, projection,
+        snapshot, types,
     };
 }
