@@ -317,7 +317,7 @@ rl.createInterface({{input:process.stdin}}).on('line',line=>{{const m=JSON.parse
     environment.insert("SystemRoot".into(), std::env::var_os("SystemRoot").unwrap());
     let launch = Arc::new(LaunchService::new(repo.clone(), Some(environment), None));
     let caller = launch.registry().activate_window("main").unwrap();
-    let service = Arc::new(ProjectionService::new(launch));
+    let service = Arc::new(ProjectionService::new(launch.clone()));
     let source = service
         .scope(
             &caller,
@@ -429,7 +429,26 @@ rl.createInterface({{input:process.stdin}}).on('line',line=>{{const m=JSON.parse
         service
             .reconcile_before_unarchive(&caller, &unarchive)
             .unwrap();
-        std::fs::rename(&archived, &file).unwrap();
+        #[allow(dead_code, clippy::duplicate_mod)]
+        #[path = "../conpty_runtime.rs"]
+        mod bundled_runtime;
+        bundled_runtime::initialize().unwrap();
+        std::fs::write(
+            project.join("unarchive"),
+            format!(
+                "require('node:fs').renameSync({}, {});",
+                json!(archived.to_str().unwrap()),
+                json!(file.to_str().unwrap())
+            ),
+        )
+        .unwrap();
+        launch
+            .run_command(&caller, &unarchive.to_launch_request())
+            .unwrap();
+        assert!(
+            repo.admission().check_codex_archive_idle().is_ok(),
+            "successful unarchive must permit immediate rearchive"
+        );
         service
             .archive(
                 &caller,
