@@ -79,7 +79,13 @@ impl AdmittedChild {
         if self.status.is_some() {
             self.settle_terminal(false);
         }
-        Ok(self.status.clone())
+        // Windows 退出码可能早于精确进程句柄的终止信号。不能让一次性命令的
+        // owner 提前返回并丢弃仍未回收的票据，否则它会永久留下 Unknown 门禁。
+        Ok(if self.ticket.is_none() {
+            self.status.clone()
+        } else {
+            None
+        })
     }
 
     pub(crate) fn wait(&mut self) -> io::Result<ExitStatus> {

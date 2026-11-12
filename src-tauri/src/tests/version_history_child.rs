@@ -44,10 +44,22 @@ fn HistoryRuntime_CachedExitWithoutSignalledHandleCannotSettle_02() {
         gate.begin_start(RuntimeKind::Native).unwrap(),
     );
     child.status = Some(ExitStatus::with_exit_code(0));
-    assert!(child.try_wait().unwrap().is_some());
+    let premature_exit = child.try_wait().unwrap();
+    assert!(gate.check_codex_archive_idle().is_err());
     assert!(gate.freeze(&uuid::Uuid::new_v4().to_string()).is_err());
     child.kill().unwrap();
-    child.wait().unwrap(); // Even cached status must await this exact handle.
+    // 保留同一进程句柄直到真正退出；由下一次非阻塞轮询而非 wait() 回收票据。
+    assert_eq!(
+        unsafe { wait_for_single_object(child.raw_handle(), 10_000) },
+        0
+    );
+    let confirmed_exit = child.try_wait().unwrap();
+    assert!(
+        premature_exit.is_none(),
+        "cached exit must not let the command owner abandon an unreaped admission"
+    );
+    assert!(confirmed_exit.is_some());
+    assert!(gate.check_codex_archive_idle().is_ok());
     gate.freeze(&uuid::Uuid::new_v4().to_string())
         .unwrap()
         .release_review()

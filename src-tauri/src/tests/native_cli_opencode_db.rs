@@ -1055,3 +1055,31 @@ fn Opencode_DbKeepsV1TableWhenNoV2Migration_28() {
         .collect();
     assert_eq!(ids, vec!["ses_v1"]);
 }
+
+#[test]
+#[allow(non_snake_case)]
+fn OpenCodeArchive_HistoryReadsNativeFlag_007() {
+    let f = Fixture::new();
+    let db = f.conn();
+    f.register_project(&db, "p1");
+    seed(
+        &db,
+        "ses_target",
+        "p1",
+        f.project.to_str().unwrap(),
+        "archived",
+        1,
+        None,
+    );
+    db.execute(
+        "UPDATE session SET time_archived=5 WHERE id='ses_target'",
+        [],
+    )
+    .unwrap();
+    let root = Root::open_sqlite(&f.root, "opencode.db").unwrap();
+    let out = read_history(&root, &[f.project_ref()]).unwrap();
+    assert!(matches!(
+        &out[0],
+        ResourceItem::Session { archived: true, .. }
+    ));
+}

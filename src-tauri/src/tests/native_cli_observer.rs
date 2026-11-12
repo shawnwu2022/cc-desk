@@ -840,3 +840,57 @@ fn Opencode_ObserverLeaseCleansPrivatePluginAndRevokes_043() {
     assert!(!plugin.exists());
     assert!(registry.check_binding(&binding).is_err());
 }
+
+#[test]
+fn NativeArchiveOwners_AuthenticatedHookAccumulatesWithoutStopOrReplayRemoval_026() {
+    use crate::observer_registry::ObserverDelivery;
+    use crate::version_history::codex_owner_identity::CodexOwnerIdentity;
+    use std::sync::Arc;
+    let registry = Arc::new(ObserverRegistry::new());
+    let lease = registry
+        .lease_source(
+            run("archive-owner", 1),
+            ObserverDelivery::native("main"),
+            Arc::new(|| true),
+            ObserverSource::CodexHook,
+        )
+        .unwrap();
+    let identity = CodexOwnerIdentity::new(None);
+    lease.bind_codex_admission(identity.clone()).unwrap();
+    let first = uuid::Uuid::new_v4();
+    let second = uuid::Uuid::new_v4();
+    let event = |name: &str, id: uuid::Uuid| {
+        serde_json::to_vec(&serde_json::json!({"hook_event_name":name,"session_id":id.to_string()}))
+            .unwrap()
+    };
+    let mut forged = lease.binding().clone();
+    forged.capability = "ffffffffffffffffffffffffffffffff".into();
+    assert!(registry
+        .accept_event(&forged, "forged", &event("SessionStart", first))
+        .is_err());
+    assert!(identity.sessions().is_err());
+    registry
+        .accept_event(lease.binding(), "start-1", &event("SessionStart", first))
+        .unwrap();
+    registry
+        .accept_event(lease.binding(), "stop-2", &event("Stop", second))
+        .unwrap();
+    assert_eq!(
+        identity.sessions().unwrap(),
+        std::collections::BTreeSet::from([first, second])
+    );
+    registry
+        .accept_event(
+            lease.binding(),
+            "start-1",
+            &event("SessionStart", uuid::Uuid::new_v4()),
+        )
+        .unwrap();
+    assert_eq!(identity.sessions().unwrap().len(), 2);
+    let old = lease.binding().clone();
+    drop(lease);
+    assert!(registry
+        .accept_event(&old, "late", &event("SessionStart", uuid::Uuid::new_v4()))
+        .is_err());
+    assert_eq!(identity.sessions().unwrap().len(), 2);
+}

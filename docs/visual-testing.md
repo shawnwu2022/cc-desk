@@ -708,3 +708,23 @@ This reviewed baseline adoption changes no product code, fixture, inventory,
 mask or tolerance. A fresh complete 255-case no-update CI run with
 maxDiffPixels: 0 remains required before merge. These synthetic Linux pixels
 do not certify installed Windows WebView2 or real CLI deletion.
+
+## PR86 archive panel baseline acceptance
+
+Two reviewers inspected expected, actual and diff from run 43237371331, attempt 1.
+Only archived-sessions.png changes: new Claude and OpenCode panel entries move
+the three existing rows down 32px, without clipping or obscured text.
+The exact actual PNG is 54,955 bytes, SHA-256
+32a416da2df3f67777a44dbca17eb742b7b6ddc13da17cf327a85ab7b57a7c4b.
+Previous SHA-256: 64eb9f3791f820a28d8eb5a2d455ea0a07805ebea808f8732dc1e9e652296b39.
+Source head: 22ec6abff4c21eed5c771871102258b7834e96cc; tested merge:
+11b796dfe139fdc088ad9f764ec808dd630fafe2. Artifact 13952658625 is
+41,685,287 bytes, ZIP SHA-256
+7f3c1f9e5b4fb4c2312308437f2fd49ad79623182d80dc96785e94bfbef9f55a.
+Environment: Ubuntu 24.04, Node 22.23.4, Playwright 1.63.0, Chrome 153.0.8010.12.
+The manifest preserves previous provenance and all twelve unchanged PNG hashes.
+No candidate recapture, fixture, assertion, mask or tolerance change is adopted.
+The original run remains RED: 254 of 255 cases passed, with 3,122 differing
+pixels in this snapshot. Fresh complete 255-case no-update CI with
+maxDiffPixels: 0 remains required. These synthetic Linux pixels do not certify
+installed Windows WebView2 or real CLI behavior.

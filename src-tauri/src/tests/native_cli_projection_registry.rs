@@ -1667,3 +1667,188 @@ fn NativeDelete_AllRolloutsAndConfigRemainBound_082() {
         drop(registry);
     }
 }
+
+// 普通配置根必须接受官方 thread/read 的规范路径，仍经原来源能力校验。
+#[test]
+#[cfg(windows)]
+#[allow(non_snake_case)]
+fn NativeRename_WindowsCanonicalPath_047() {
+    let temp = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let canonical_root = fs::canonicalize(temp.path()).unwrap();
+    let selected = std::path::PathBuf::from(
+        canonical_root
+            .to_str()
+            .unwrap()
+            .strip_prefix(r"\\?\")
+            .unwrap(),
+    );
+    let live = Arc::new(AtomicBool::new(true));
+    let registry = ScopeRegistry::new(4);
+    let mut g = grant(&selected, "unused", live.clone());
+    g.cli = CliKind::Codex;
+    g.projects = vec![AdmittedProject {
+        id: "project".into(),
+        root: Root::open(project.path()).unwrap(),
+        paths: vec![project.path().to_owned()],
+    }];
+    if let ScopeTarget::Profile { project_ids, .. } = &mut g.target {
+        *project_ids = vec!["project".into()];
+    }
+    fs::create_dir(selected.join("sessions")).unwrap();
+    let path = selected.join("sessions/rollout.jsonl");
+    let id = "00000000-0000-4000-8000-000000000047";
+    fs::write(
+        &path,
+        format!(
+            "{}\n",
+            serde_json::json!({
+                "type":"session_meta", "payload":{"id":id,"cwd":project.path(),"source":"cli"}
+            })
+        ),
+    )
+    .unwrap();
+    let source = registry.register(g).unwrap();
+    let key = serde_json::to_string(&serde_json::json!([
+        "local",
+        "codex",
+        source.source_root_key,
+        id
+    ]))
+    .unwrap();
+    let authority = registry.authorize_rename(&owner(), &source, &key).unwrap();
+    let mut thread =
+        serde_json::json!({"id":id,"cwd":project.path(),"path":fs::canonicalize(&path).unwrap()});
+    authority.check_thread(&thread).unwrap();
+    // 连续两次名称写入都必须完成官方前后回读，不凭已有名称跳过来源校验。
+    for title in ["First title", "Second title"] {
+        let mut after = thread.clone();
+        after["name"] = serde_json::json!(title);
+        let mut replies = std::collections::VecDeque::from([
+            serde_json::json!({"id":1,"result":{}}),
+            serde_json::json!({"id":2,"result":{"thread":thread}}),
+            serde_json::json!({"id":3,"result":{}}),
+            serde_json::json!({"id":4,"result":{"thread":after}}),
+        ]);
+        let mut writes = 0;
+        crate::cli::native_rename::exchange(
+            id,
+            title,
+            &mut |message| {
+                if message["method"] == "thread/name/set" {
+                    writes += 1;
+                }
+                Ok(())
+            },
+            &mut |_| Ok(replies.pop_front().unwrap()),
+            &|thread| authority.check_thread(thread),
+        )
+        .unwrap();
+        assert_eq!(writes, 1);
+        thread = after;
+    }
+    // 逻辑路径不存在时，规范根匹配仍允许既有的精确压缩副本校验。
+    let bytes = fs::read(&path).unwrap();
+    fs::write(
+        path.with_extension("jsonl.zst"),
+        zstd::stream::encode_all(bytes.as_slice(), 1).unwrap(),
+    )
+    .unwrap();
+    fs::remove_file(&path).unwrap();
+    authority.check_thread(&thread).unwrap();
+    let mut foreign = thread.clone();
+    foreign["path"] = serde_json::json!(fs::canonicalize(project.path())
+        .unwrap()
+        .join("sessions/rollout.jsonl"));
+    assert_eq!(
+        authority.check_thread(&foreign).unwrap_err().code,
+        "SOURCE_PATH_REJECTED"
+    );
+    let mut traversal = thread.clone();
+    traversal["path"] = serde_json::json!(format!(
+        r"{}\sessions\..\sessions\rollout.jsonl",
+        canonical_root.display()
+    ));
+    assert_eq!(
+        authority.check_thread(&traversal).unwrap_err().code,
+        "SOURCE_PATH_REJECTED"
+    );
+    live.store(false, Ordering::SeqCst);
+    assert_eq!(
+        authority.check_thread(&thread).unwrap_err().code,
+        "SCOPE_REVOKED"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+#[allow(non_snake_case)]
+fn OpenCodeArchive_PinsBeforeReadingIdentity_010() {
+    let root = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let filename = root.path().join("custom.db");
+    let moved = root.path().join("replaced.db");
+    let db = rusqlite::Connection::open(&filename).unwrap();
+    db.execute_batch(include_str!("fixtures/opencode-schema-1.19.0.sql"))
+        .unwrap();
+    db.execute_batch("PRAGMA journal_mode=WAL").unwrap();
+    db.execute("INSERT INTO project (id,worktree,time_created,time_updated,sandboxes) VALUES ('p',?1,1,1,'[]')",[project.path().to_str().unwrap()]).unwrap();
+    db.execute("INSERT INTO session (id,project_id,slug,directory,title,version,cost,tokens_input,tokens_output,tokens_reasoning,tokens_cache_read,tokens_cache_write,time_created,time_updated) VALUES ('ses_fixture','p','fixture',?1,'Old','1.19.0',0,0,0,0,0,0,1,1)",[project.path().to_str().unwrap()]).unwrap();
+    drop(db);
+    let mut g = grant(root.path(), "unused", Arc::new(AtomicBool::new(true)));
+    g.cli = CliKind::Opencode;
+    g.root = Root::open_sqlite(root.path(), "custom.db").unwrap();
+    g.projects = vec![AdmittedProject {
+        id: "p".into(),
+        root: Root::open(project.path()).unwrap(),
+        paths: vec![project.path().to_owned()],
+    }];
+    if let ScopeTarget::Profile { project_ids, .. } = &mut g.target {
+        *project_ids = vec!["p".into()];
+    }
+    let enabled = Arc::new(AtomicBool::new(false));
+    let count = Arc::new(AtomicUsize::new(0));
+    let blocked = Arc::new(AtomicBool::new(false));
+    let (on, counter, result, a, b) = (
+        enabled.clone(),
+        count.clone(),
+        blocked.clone(),
+        filename.clone(),
+        moved.clone(),
+    );
+    g.check = Arc::new(move || {
+        if on.load(Ordering::SeqCst) && counter.fetch_add(1, Ordering::SeqCst) == 1 {
+            result.store(fs::rename(&a, &b).is_err(), Ordering::SeqCst);
+        }
+        Ok(())
+    });
+    let registry = ScopeRegistry::new(8);
+    let source = registry.register(g).unwrap();
+    let key = serde_json::to_string(&serde_json::json!([
+        "local",
+        "opencode",
+        source.source_root_key,
+        "ses_fixture"
+    ]))
+    .unwrap();
+    let mut foreign = owner();
+    foreign.epoch = n(2);
+    assert_eq!(
+        registry
+            .authorize_opencode_archive(&foreign, &source, &key)
+            .err()
+            .unwrap()
+            .code,
+        "FORBIDDEN"
+    );
+    assert!(!root.path().join("custom.db-journal").exists());
+    enabled.store(true, Ordering::SeqCst);
+    let (authority, pins) = registry
+        .authorize_opencode_archive(&owner(), &source, &key)
+        .unwrap();
+    assert!(blocked.load(Ordering::SeqCst));
+    assert_eq!(authority.native_id, "ses_fixture");
+    assert!(fs::rename(&filename, &moved).is_err());
+    drop(pins);
+    fs::rename(&filename, &moved).unwrap();
+}

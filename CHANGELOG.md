@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+## [0.27.0-rc.6] - 2026-11-12
+
+### Added
+
+- Add a separate Windows Claude recovery area for identity-pinned main transcripts, with persistent recovery receipts and no-overwrite restore. Children, attachments and native indexes are not purged.
+- Add reversible Windows OpenCode native archive/unarchive through the pinned official metadata helper, with exact source/schema admission, owned-process cleanup, operation receipts and a separate authenticated UI.
+- Add read-only provider deletion diagnostics without enabling Claude or OpenCode permanent deletion.
+
+### Fixed
+
+- Scope Codex archive admission to the selected native session relationship while retaining unknown-owner and mutation fences; keep metadata ownership until the child and Job are settled.
+- Accept canonical Windows history paths for rename without weakening source identity checks.
+- Include the actual Claude recovery and OpenCode source capability in the independent scope-core test harness, and prepare both helpers before affected Cargo/CI builds.
+
+### Validation and limits
+
+- Add isolated real Windows WebView coverage for Desk archive persistence, Claude recovery and OpenCode archive/restore. The OpenCode path uses production UI, authenticated IPC and the official helper against a newly created synthetic database; it does not launch the OpenCode CLI or a model. Desk storage uses test-host capabilities. These checks do not certify a full installed application or live user data.
+- Claude/OpenCode permanent deletion is still unavailable. Reversible recovery/archive does not complete that TODO. Unix mutation, complete native descendants/external writers, real model lifecycle, D20/native All and signed installation/return remain unverified.
+- This locally prepared prerelease is not a published release. Stable Latest must remain unchanged (make_latest=false). Exact protected-main CI, authenticated same-run/attempt coverage and three same-release-run platform updater signatures remain mandatory. Updater signing is not Windows Authenticode. See [RC preparation and acceptance boundary](docs/prerelease-0.27-rc6.md).
+
 ## [0.27.0-rc.5] - 2026-11-12
 
 ### Fixed

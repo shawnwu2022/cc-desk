@@ -75,7 +75,7 @@ Supported launch actions are:
 
 Raw argv is not shell-split. An uncertain launch result keeps the original request/run identity and is recovered by querying that same request. It is never replaced by an automatic second spawn.
 
-The unarchive action is a one-shot CLI command, not a session. It freezes the same profile/environment snapshot and builds argv through the same action mapping, but registers no run, opens no document, returns no tab and publishes no output: the CLI owns its own archive state and CC Desk only asks it to change that state (`codex unarchive <id>`). The child still runs in a PTY through the same admission gate, output is discarded, and only the exit status counts; the authenticated document is rechecked at the spawn commit point, and a backend owner observes shutdown and retains the exact PTY after a wait error or deadline. The caller receives one bounded safe failure while that owner retries termination and nonblocking reap with an interval; ownership and maintenance admission remain held until actual exit is proved. Unknown outcomes are not replayed. Restoring a Codex-archived session must go through this action because the CLI refuses to resume an archived session ("session <id> is archived. Run `codex unarchive <id>` …"); Claude has no such subcommand and rejects the action instead of silently degrading into a resume.
+The unarchive action is a one-shot CLI command, not a session. It freezes the same profile/environment snapshot and builds argv through the same action mapping, but registers no run, opens no document, returns no tab and publishes no output: the CLI owns its own archive state and CC Desk only asks it to change that state (`codex unarchive <id>`). The child still runs in a PTY through the same admission gate, output is discarded, and only the exit status counts; the authenticated document is rechecked at the spawn commit point, and a backend owner observes shutdown and retains the exact PTY after a wait error or deadline. The caller receives one bounded safe failure while that owner retries termination and nonblocking reap with an interval; ownership and maintenance admission remain held until actual exit is proved. On Windows, a cached exit code alone cannot complete this owner: nonblocking wait returns completion only after the exact process handle is signalled and its admission ticket is reaped. This keeps restore from returning success while leaving an unknown owner that blocks immediate rearchive. Unknown outcomes are not replayed. Restoring a Codex-archived session must go through this action because the CLI refuses to resume an archived session ("session <id> is archived. Run `codex unarchive <id>` …"); Claude has no such subcommand and rejects the action instead of silently degrading into a resume.
 
 Fully converged launch receipts are evicted within the registry record budget. A reaped run's receipt stays pinned while its supervisor still owns output drain; releasing process handles does not make the receipt evictable. Final convergence marks the exact request/run receipt ready for eviction under the active-supervisor lock before removing that owner. Generation floors for the current authenticated document have a separate limit of twice that budget; reaching it rejects new tab identities with `REGISTRY_CAPACITY`, while known tabs can still advance their generations. Floors cannot be forgotten while that document remains authorized. Activating a new backend-authenticated document revokes the old epoch and clears only its floors, retaining all still-owned runs.
 
@@ -578,6 +578,36 @@ read-only review found no remaining blocker. The user's actual error code and
 machine remain unconfirmed; these fixtures do not certify live CLI/WebView2 or
 the user's histories. Anonymous omissions still block rather than guess identity.
 
+2026-11-12 Windows path regression: official Codex 0.167.1 `thread/read`
+returned a verbatim `\\?\C:\...` rollout path for an ordinary configured
+`C:\...` root. The original lexical `strip_prefix` rejected this same source as
+`SOURCE_PATH_REJECTED` before any `thread/name/set`. The selected root may now be
+canonicalized only after revalidating its held directory identity; the canonical
+root is independently opened and compared with the same held identity, then the
+original source path is rechecked. The untrusted returned rollout path is never
+canonicalized: traversal, foreign roots and non-normal suffixes still fail, and
+all transcript reads continue through the original held root and bounded reader.
+An absent logical `.jsonl` can still select only its exact `.jsonl.zst` fallback.
+
+The earlier 2026-10-19 fix covered unrelated history omissions, and the
+2026-11-08 fix covered compressed logical paths. Neither changed this prefix
+comparison. Existing Windows fixtures used the same tempfile spelling for both
+root and response, hiding the ordinary-root/canonical-response combination.
+The new Windows regression combines those spellings and exercises two consecutive
+renames through the official protocol exchange, along with foreign-root,
+traversal and revoked-source rejection. On the reported SXY session, diagnostics
+only read the identity header, title metadata and official `thread/read`; they
+never renamed, resumed or interrupted the user's live session. These findings
+are not installed-WebView or live-session rename acceptance. The UI now retains
+`SOURCE_PATH_REJECTED` as a fixed allowlisted detail code instead of replacing it
+with `GENERIC_UNAVAILABLE`; raw paths and exception fields remain suppressed.
+Windows verification: the new source regression failed with `SOURCE_PATH_REJECTED`
+before the fix, then the affected Rust rename/projection/archive/delete groups
+passed 260 tests. The diagnostic regression also completed RED/GREEN; the six
+affected frontend files passed 239 tests. Typecheck, production frontend build,
+rustfmt and strict all-target Clippy passed. Full Rust/Vitest inventories and installed GUI acceptance were not
+rerun for this scoped change.
+
 Rename operation receipts share a 4096-entry budget. Before each new admission,
 completed receipts belonging to permanently revoked full caller identities are
 reclaimed through the authenticated run registry. Active-document receipts,
@@ -739,7 +769,7 @@ layout and field automatic title synchronization remain unaccepted.
 
 Codex 行的“原生归档”使用 authenticated `cli_archive_session`，经配置 profile 的官方 app-server `thread/archive`，不再写 Desk `archivedSessions` 冒充原生归档。来源固定为 backend-held 配置 scope、profile revision、注册项目、原生 UUID 与 session key；打开过的行还必须证明 frozen run 与新历史投影同根。Claude/OpenCode 的既有 Desk 隐藏语义不在本次范围内。
 
-- 历史/已停止行点击即执行原生归档，不再二次确认；异步边界仍固定目标与导航所有权。运行中行的菜单不提供归档，既有显式停止并归档请求仍须确认。后台只允许绕过已明确识别的 Legacy Claude 和结构化 Native Claude/OpenCode owner；Codex、未识别准备、raw/Shell、未知 owner、未收口写入和维护冻结继续阻止准入。永久删除仍要求所有运行时空闲。外部 writer 冲突交给官方 CLI 的锁处理，不猜测进程、不关闭无关会话。
+- 历史/已停止行点击即执行原生归档，不再二次确认；异步边界仍固定目标与导航所有权。运行中行的菜单不提供归档，既有显式停止并归档请求仍须确认。后台允许已明确识别的 Legacy Claude、结构化 Native Claude/OpenCode，以及经认证 hook 观察身份且由独立 helper 核对为无关的 Codex owner；已知目标及祖先/后代、未识别准备、raw/Shell、未知 owner、关系能力不足、未收口写入和维护冻结继续阻止准入。请求 resume UUID 本身不是已观察身份，Stop 不释放 owner。永久删除仍要求所有运行时空闲。外部 writer 冲突交给官方 CLI 的锁处理，不猜测进程、不关闭无关会话。
 - Windows 专用 helper 冻结环境，核对 initialize 返回的实际 `codexHome` 和 held root，前置 read 核对 ID/cwd/header/path，随后只发一次 archive，再通过同源 `archived_sessions` 物理位置核实根。压缩 rollout 沿用安全 resolver。非 Windows 暂返回 `NATIVE_ARCHIVE_UNSUPPORTED`，不能以 Windows Job 证明其他平台后代收口。
 - 固定 `sessions` 和 `archived_sessions` 的非 reparse 目录身份；目标归档目录缺失时只在已授权操作下用 held capability 创建空目录，随后固定。助手从 suspended 启动加入本次 Job，整个进程组真正退出前保持目录、来源与 admission lease；超时、EOF、撤销及未知写不释放仍存活的后代。
 - 归档写入前由后端重新验证 held scope、profile、项目、准确原生 ID 与当前历史，前端不再先重复扫描整份历史才获得忙碌反馈。RPC 验证完成后给助手最多 2 秒 EOF 退出宽限，再终止仅属于本次操作的 Job；整个 Job 确认清空前不释放 admission。
@@ -748,3 +778,9 @@ Codex 行的“原生归档”使用 authenticated `cli_archive_session`，经�
 - 旧 Desk-only 记录保持原样，不自动迁移真实会话。用户先恢复旧显示标记，再显式“原生归档”；永久删除仍只接受原生已归档根，原有预览与二次确认门不变。
 
 协议依据为官方 Codex 0.167.0，对应 `openai/codex` commit `086ccc833bc9cf01024ad2dd6af7dbd421b6bf9a` 的 `thread_processor.rs`、`thread-store/src/local/archive_thread.rs`、`read_thread.rs`。`thread/read` 可读取归档但 DTO 没有 archived 字段；不能把 read 成功或 archive ACK 当作物理归档证明。测试使用独立临时 Node 合成 app-server 验证 Windows Job、EOF、只读恢复闭环与容器防护；不是已登录真实 CLI 或已安装 WebView2 的验收，本次未归档或删除真实用户会话。
+
+并发准入、单次写入/Unknown、真实 CLI 隔离矩阵及兼容性边界见 [Codex 归档并发边界](codex-archive-concurrency.md)。只使用独立 app-server，不发送停止或主动接管外部会话；Unknown 收口与已归档快路径仍保留全 Codex 冻结。
+
+## 0.27：Claude 主记录可恢复移除
+
+独立的 `cli_recycle_session` 和“Claude 恢复区”仅支持已核实 Windows NTFS 配置来源。它只将主 transcript 原件移入同卷持久恢复区，保留子任务、附件和原生索引，提供无覆盖恢复；不是原生归档、软隐藏或永久删除。未知结果不重发，原有永久删除能力门不变。范围、句柄/日志契约与验证边界见 [可恢复移除](recoverable-claude-removal-0.70.md)。

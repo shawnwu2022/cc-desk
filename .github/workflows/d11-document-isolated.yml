@@ -32,7 +32,7 @@ jobs:
           "workflowCommit=$env:GITHUB_SHA testedSource=$actual testedTree=$tree"
       - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version: '24.18.0'
       - uses: dtolnay/rust-toolchain@1.98.1
         with:
           components: rustfmt
@@ -48,6 +48,8 @@ jobs:
           npm ci --ignore-scripts
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run prepare:session-sdk
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run prepare:opencode-archive
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Prepare verified Windows runtime

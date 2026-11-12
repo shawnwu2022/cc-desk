@@ -195,6 +195,11 @@ impl Root {
     }
 }
 impl PinnedTranscript {
+    #[cfg(windows)]
+    pub(crate) fn relative_path(&self) -> &str {
+        &self.path
+    }
+
     pub(crate) fn current(&self, root: &Root) -> ReadResult<()> {
         root.current()?;
         let now = root.dir.symlink_metadata(&self.path).map_err(read_error)?;

@@ -874,3 +874,7 @@ write. Refresh remains a separate read-only recovery action.
 ### Archived session deletion entry
 
 The archive drawer supplies a trailing delete icon to each shared session row. The trailing slot uses the otherwise empty archive column, preserving the normal row geometry, restore control and overflow menu. Unsupported identities keep a disabled icon with a localized reason. The drawer owns one persistent single-target deletion dialog, so removal of an acknowledged row does not unmount its receipt. No permanent-deletion availability or batch-selection module appears below the list; previous operation results stay inside the deletion dialog. All original source, preview, second-confirmation and no-replay guards remain in the existing deletion store and panel.
+
+### OpenCode native archive panel
+
+The archive drawer also offers an independent shared-control OpenCode native archive panel. Closed, Desk-archived OpenCode records require exact authenticated history identity and explicit scope acknowledgment. Archive and restore set the native archived flag; permanent deletion, Claude recovery and Desk metadata remain separate. Unknown intents survive panel reopening and only fresh positive same-target history evidence resolves them. See [OpenCode archive UI](opencode-native-archive-0.70.md).

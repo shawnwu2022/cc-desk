@@ -1,6 +1,9 @@
 import { createApp, computed, h, nextTick, ref } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
+import ArchivedSessionsDrawer from '@/components/sessions/ArchivedSessionsDrawer.vue'
+import OpencodeArchivePanel from '@/components/sessions/OpencodeArchivePanel.vue'
+import SessionList from '@/components/sessions/SessionList.vue'
 import NativeSessionDeletePanel from '@/components/sessions/NativeSessionDeletePanel.vue'
 import { useNativeHistoryStore, type NativeHistoryContext } from '@/stores/nativeHistory'
 import { useNativeTabsStore } from '@/stores/nativeTabs'
@@ -24,6 +27,22 @@ const hasText = (selector: string, text: string) => document.querySelector(selec
 async function click(selector: string) { element(selector).click(); await nextTick(); await frame() }
 async function ack(selector: string) { const input = element(selector) as HTMLInputElement; input.checked = true; input.dispatchEvent(new Event('change', { bubbles: true })); await nextTick(); await frame() }
 async function expectCode(task: Promise<unknown>, codes: string[]) { const code = await task.then(() => null, (e: any) => e?.code); if (!codes.includes(code)) throw Error('UNEXPECTED_REJECTION') }
+const failureCodes = new Set([
+  'SOURCE_UNSUPPORTED', 'SOURCE_BUSY', 'SOURCE_CHANGED', 'SOURCE_UNAVAILABLE', 'SCOPE_UNKNOWN', 'SCOPE_STALE', 'SESSION_ORIGIN_AMBIGUOUS', 'PROFILE_CLI_MISMATCH', 'ENV_VALUE_UNAVAILABLE',
+  'OPENCODE_UI_TIMEOUT', 'OPENCODE_ACK_ENABLED', 'OPENCODE_FIXTURE_MISSING', 'OPENCODE_UI_ERROR',
+  'DESK_ARCHIVE_TIMEOUT', 'DESK_RESTORE_TIMEOUT', 'DESK_PERSISTENCE_INVALID',
+  'RECYCLE_FIXTURE_MISSING', 'RECYCLE_PANEL_TIMEOUT', 'RECYCLE_REMOVE_TIMEOUT', 'RECYCLE_RESTORE_TIMEOUT', 'RECYCLE_ACK_ENABLED',
+  'ELEMENT_MISSING', 'UNEXPECTED_REJECTION', 'REAL_HISTORY_MISSING', 'PREVIEW_TIMEOUT',
+  'RISK_COPY_MISSING', 'SECOND_CONFIRMATION_MERGED', 'MISSING_ACK_ENABLED',
+  'SUBTREE_ACK_OPTIONAL', 'NATIVE_DELETE_DISABLED', 'NATIVE_RESULT_TIMEOUT',
+  'DELETED_ROW_RETAINED', 'CONTROL_ROW_LOST', 'RECEIPT_MISSING', 'DUPLICATE_RECEIPT_CHANGED',
+  'INSPECT_TIMEOUT', 'EXPIRY_FIXTURE_MISSING', 'EXPIRED_TICKET_NOT_BLOCKED',
+])
+function failureCode(failure: unknown): string {
+  const candidate = failure && typeof failure === 'object' && 'code' in failure ? failure.code : undefined
+  const code = typeof candidate === 'string' ? candidate : failure instanceof Error ? failure.message : ''
+  return failureCodes.has(code) ? code : 'FRONTEND_ACCEPTANCE_FAILED'
+}
 let started = false
 host.__STAGE11__ = { async start() {
   if (started) return; started = true
@@ -32,7 +51,7 @@ host.__STAGE11__ = { async start() {
   // 只有原生宿主核实实际UDF和父Job后才调用start；模块加载不能提前写偏好或mount。
   const pinia = createPinia(); setActivePinia(pinia)
   const history = useNativeHistoryStore(), catalog = useUnifiedSessionsStore(), support = useCliSupportStore()
-  support.setCliEnabled('codex', true); support.setCliEnabled('claude', false); support.setCliEnabled('opencode', false)
+  support.setCliEnabled('codex', true); support.setCliEnabled('claude', true); support.setCliEnabled('opencode', true)
   const projects = useProjectsStateStore(); projects.loaded = true
   const unused = () => { throw new Error('UNRELATED_SESSION_ACTION') }
   catalog.configureAdapters([createNativeCliAdapter({
@@ -40,12 +59,15 @@ host.__STAGE11__ = { async start() {
     archive: { getArchivedSessions: useSessionStore().getArchivedSessions, archiveSession: projects.archiveSession, restoreSession: projects.restoreSession },
     runtime: { createTab: unused, restartTab: unused, stopTab: async () => unused(), renameTab: async () => unused() },
   })])
-  const selectedId = ref(''), stage = ref('Waiting for the native document')
+  const selectedId = ref(''), stage = ref('Waiting for the native document'), drawerOpen = ref(false), opencodeActive = ref(false)
   const target = computed(() => catalog.sessions.find(row => row.nativeSessionId === selectedId.value) ?? null)
   createApp({ render: () => h('main', { style: 'max-width:1000px;margin:30px auto;padding:24px' }, [
     h('h1', 'Task-isolated permanent deletion acceptance'), h('p', stage.value),
     h('p', 'Synthetic fixtures only. This host does not start the installed CC Desk application.'),
     h(NativeSessionDeletePanel, { target: target.value, active: true }),
+    h('section', { 'data-desk-live': '' }, [h(SessionList, { sessions: catalog.sessions.filter(row => row.cli === 'claude' && !row.archived), onMenuAction: (id: string, action: string) => { if (action !== 'archive') unused(); void catalog.archiveSession(id).catch(() => {}) } })]),
+    h(ArchivedSessionsDrawer, { open: drawerOpen.value, sessions: catalog.sessions, 'onUpdate:open': (value: boolean) => { drawerOpen.value = value }, onRestoreRequest: (id: string) => { void catalog.restoreArchivedSession(id).catch(() => {}) } }),
+    opencodeActive.value ? h(OpencodeArchivePanel, { sessions: catalog.sessions.filter(row => row.cli === 'opencode'), active: true }) : null,
     h('h2', 'Observed synthetic history'), h('ul', { 'data-fixture-history': '' }, catalog.sessions.map(row => h('li', { key: row.id }, `${row.title} · ${row.nativeSessionId}`))),
   ]) }).use(pinia).use(createI18n({ legacy: false, locale: 'en', messages: { en, zh } })).mount('#app')
   const call = (command: string, payload: unknown = {}) => bridge.invoke(command, payload)
@@ -82,11 +104,95 @@ host.__STAGE11__ = { async start() {
     await expectCode(call('cli_preview_session_delete', { operationId: crypto.randomUUID(), source: { ...source, sourceRootKey: 'forged-root' }, sessionKey }), ['SCOPE_STALE', 'FORBIDDEN'])
     await call('s11_peer', { confirmation, proof })
     await checkpoint('wrong-document-source-peer')
+    const previousContext = context
     context = await call('s11_change_source')
     await expectCode(call('cli_confirm_session_delete', confirmation), ['SCOPE_REVOKED', 'SCOPE_STALE', 'DELETE_PREVIEW_CHANGED'])
     await checkpoint('changed-source-ticket')
+    // 与正式 profile watcher 一致：旧 revision 不再拥有历史行。
+    history.invalidate(previousContext)
     await reload()
-    if (!fixture.native) { stage.value = 'NoNative document and component checks passed'; await call('s11_finish', { success: true }); return }
+    if ((element('[data-native-cleanup-delete]') as HTMLButtonElement).disabled) throw Error('NATIVE_DELETE_DISABLED')
+    await click('[data-native-cleanup-delete]'); await until(() => !!document.querySelector('[data-delete-next-confirm]'), 'PREVIEW_TIMEOUT')
+    await click('[data-delete-cancel]')
+    await history.load({ ...fixture.recycleContext, force: true })
+    await catalog.refresh(fixture.recycleContext.projectPath, { cli: 'claude' })
+    const recycleRow = catalog.sessions.find(row => row.nativeSessionId === fixture.recycleId && row.cli === 'claude')
+    if (!recycleRow) throw Error('RECYCLE_FIXTURE_MISSING')
+    await projects.reload()
+    async function reloadDesk() {
+      await projects.reload(); await catalog.refresh(fixture.recycleContext.projectPath, { cli: 'claude' }); await nextTick(); await frame()
+      if (projects.lastErrorCode) throw Error('DESK_PERSISTENCE_INVALID')
+    }
+    function rowAt(selector: string): HTMLElement {
+      const row = [...document.querySelectorAll<HTMLElement>(selector)].find(row => row.dataset.sessionRow === recycleRow!.id)
+      if (!row) throw Error('RECYCLE_FIXTURE_MISSING')
+      return row
+    }
+    async function archiveFromRow() {
+      const archive = rowAt('[data-desk-live] [data-session-row]').querySelector<HTMLButtonElement>('[data-session-archive] button')
+      if (!archive || archive.disabled) throw Error('ELEMENT_MISSING')
+      archive.click(); await nextTick(); await frame()
+      await until(() => catalog.sessions.some(row => row.id === recycleRow!.id && row.archived), 'DESK_ARCHIVE_TIMEOUT')
+      await reloadDesk()
+      if (!catalog.sessions.some(row => row.id === recycleRow!.id && row.archived)) throw Error('DESK_PERSISTENCE_INVALID')
+    }
+    await archiveFromRow()
+    drawerOpen.value = true; await nextTick(); await frame()
+    await call('s11_desk_checkpoint', { name: 'archived' }); await call('s11_capture', { name: 'desk-archived' })
+    const restoreArchive = rowAt('.archived-sessions-content [data-session-row]').querySelector<HTMLElement>('.session-primary-action button')
+    if (!restoreArchive) throw Error('ELEMENT_MISSING')
+    restoreArchive.click(); restoreArchive.click()
+    await until(() => catalog.sessions.some(row => row.id === recycleRow!.id && !row.archived) && [...projects.sessionRecords.values()].some(record => record.nativeSessionId === fixture.recycleId && (record.lastOpenedAt ?? 0) > 0), 'DESK_RESTORE_TIMEOUT')
+    await reloadDesk()
+    if (catalog.sessions.some(row => row.id === recycleRow!.id && row.archived)) throw Error('DESK_PERSISTENCE_INVALID')
+    await call('s11_desk_checkpoint', { name: 'restored' }); await call('s11_capture', { name: 'desk-restored' })
+    drawerOpen.value = false; await nextTick(); await frame()
+    await archiveFromRow()
+    drawerOpen.value = true; await nextTick(); await frame()
+    await call('s11_desk_checkpoint', { name: 'rearchived' }); await call('s11_capture', { name: 'desk-rearchived' })
+    await click('[data-recycle-open]')
+    await until(() => !!document.querySelector('[data-recycle-select]') && !(element('[data-recycle-select]') as HTMLSelectElement).disabled, 'RECYCLE_PANEL_TIMEOUT')
+    const selector = element('[data-recycle-select]') as HTMLSelectElement
+    selector.value = recycleRow.id; selector.dispatchEvent(new Event('change', { bubbles: true })); await nextTick(); await frame()
+    await until(() => !!document.querySelector('[data-recycle-remove]'), 'RECYCLE_PANEL_TIMEOUT')
+    if (!(element('[data-recycle-remove]') as HTMLButtonElement).disabled) throw Error('RECYCLE_ACK_ENABLED')
+    await call('s11_recycle_checkpoint', { name: 'review' }); await call('s11_capture', { name: 'recycle-review' })
+    await ack('[data-recycle-ack]')
+    const remove = element('[data-recycle-remove]'); remove.click(); remove.click()
+    await until(() => !catalog.sessions.some(row => row.nativeSessionId === fixture.recycleId) && !!document.querySelector('[data-recycle-restore]') && !(element('[data-recycle-restore]') as HTMLButtonElement).disabled, 'RECYCLE_REMOVE_TIMEOUT')
+    await call('s11_recycle_checkpoint', { name: 'stored' }); await call('s11_capture', { name: 'recycle-stored' })
+    const restore = element('[data-recycle-restore]'); restore.click(); restore.click()
+    await until(() => catalog.sessions.some(row => row.nativeSessionId === fixture.recycleId && row.archived) && !document.querySelector('[data-recycle-restore]'), 'RECYCLE_RESTORE_TIMEOUT')
+    await call('s11_recycle_checkpoint', { name: 'restored' }); await call('s11_capture', { name: 'recycle-restored' })
+    drawerOpen.value = false; await nextTick(); await frame()
+    await history.load({ ...fixture.opencodeContext, force: true })
+    await catalog.refresh(fixture.opencodeContext.projectPath, { cli: 'opencode' })
+    const opencodeRow = () => catalog.sessions.find(row => row.cli === 'opencode' && row.nativeSessionId === fixture.opencodeId)
+    if (!opencodeRow() || opencodeRow()!.nativeArchived) throw Error('OPENCODE_FIXTURE_MISSING')
+    // Establish the real Desk tag required by the production native-archive panel.
+    const opencodeId = opencodeRow()!.id
+    await projects.archiveSession(fixture.opencodeContext.projectPath, opencodeId)
+    await catalog.refresh(fixture.opencodeContext.projectPath, { cli: 'opencode' })
+    opencodeActive.value = true; await nextTick(); await frame()
+    await click('[data-opencode-archive-open]')
+    async function selectOpencode() {
+      const selector = element('[data-opencode-archive-select]') as HTMLSelectElement
+      selector.value = opencodeRow()!.id; selector.dispatchEvent(new Event('change', { bubbles: true })); await nextTick(); await frame()
+      await until(() => !!document.querySelector('[data-opencode-archive-submit]'), 'OPENCODE_UI_TIMEOUT')
+      if (!(element('[data-opencode-archive-submit]') as HTMLButtonElement).disabled) throw Error('OPENCODE_ACK_ENABLED')
+    }
+    await selectOpencode()
+    await call('s11_opencode_checkpoint', { name: 'review' }); await call('s11_capture', { name: 'opencode-review' })
+    for (const [name, archived] of [['archived', true], ['restored', false]] as const) {
+      if (!archived) await selectOpencode()
+      await ack('[data-opencode-archive-ack]')
+      const submit = element('[data-opencode-archive-submit]'); submit.click(); submit.click()
+      await until(() => { if (document.querySelector('[data-opencode-archive-error]')) throw Error('OPENCODE_UI_ERROR'); return opencodeRow()?.nativeArchived === archived && !(element('[data-opencode-archive-refresh]') as HTMLButtonElement).disabled && !document.querySelector('[data-opencode-archive-pending]') }, 'OPENCODE_UI_TIMEOUT', 40_000)
+      await call('s11_opencode_checkpoint', { name }); await call('s11_capture', { name: `opencode-${name}` })
+    }
+    await projects.restoreSession(fixture.opencodeContext.projectPath, opencodeId)
+    opencodeActive.value = false; await nextTick(); await frame()
+    if (!fixture.native) { stage.value = 'NoNative document, deletion review, Claude recovery and OpenCode archive checks passed'; await call('s11_finish', { success: true }); return }
     await click('[data-native-cleanup-delete]'); await until(() => !!document.querySelector('[data-delete-next-confirm]'), 'PREVIEW_TIMEOUT')
     await click('[data-delete-next-confirm]'); await ack('[data-delete-ack-permanent]'); await ack('[data-delete-ack-subtree]')
     await call('s11_capture', { name: 'confirmation' })
@@ -117,5 +223,5 @@ host.__STAGE11__ = { async start() {
     await checkpoint('expired-ticket')
     stage.value = 'Real document IPC, double confirmation and isolated CLI deletion passed'
     await call('s11_finish', { success: true })
-  } catch { stage.value = 'Acceptance failed; no request is replayed'; await call('s11_finish', { success: false }) }
+  } catch (failure) { stage.value = 'Acceptance failed; no request is replayed'; await call('s11_finish', { success: false, failureCode: failureCode(failure) }) }
 } }

@@ -1,0 +1,26 @@
+[
+  {
+    "sha256": "F1C790E3137E7D82C226AF6DBBE1DEBB70BD1277E3988B8B900658DE5BA61EC7",
+    "path": "src-tauri/src/tests/native_cli_delete_webview.rs"
+  },
+  {
+    "sha256": "3D74F7A558534490B162CCF545C2A059FDC0062B9852AB0D2A5D46B5C5B3F1A1",
+    "path": "src-tauri/src/tests/native_cli_delete_recycle_webview.rs"
+  },
+  {
+    "sha256": "E098FCBAF9408C64D2A76CF29E4BDD4A3BBFB54A8961C9D3C09AF5813653718B",
+    "path": "tests/native-delete-webview/main.ts"
+  },
+  {
+    "sha256": "FDD32F4FC61233E9CA3A4DC6184A9D072136DA9F4B74965024C5C7A083FAD113",
+    "path": "scripts/build-native-delete-webview.mjs"
+  },
+  {
+    "sha256": "DD2EE33CEA680A2635F523F3EF262C837A949C391221A9B08350CDC590558795",
+    "path": ".audit/v027-stage11-webview-dist/manifest.json"
+  },
+  {
+    "sha256": "3FBE9F19CF1BBB41250779BEBB5A1EEFC0507B40BE0D1FEC17882B73B25BBAF5",
+    "path": ".audit/recycle-webview-bin/cc-desk-isolated-tests.exe"
+  }
+]

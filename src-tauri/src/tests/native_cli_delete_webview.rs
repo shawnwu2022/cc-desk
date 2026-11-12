@@ -1,5 +1,9 @@
 //! 阶段11测试宿主；正式应用启动、用户目录及默认工作区不进入此路径。
 use super::*;
+#[path = "native_cli_delete_opencode_webview.rs"]
+mod opencode;
+#[path = "native_cli_delete_recycle_webview.rs"]
+mod recycle;
 use crate::cli::{
     document::DOCUMENT_HEADER,
     native_runtime::{take_main_config, NativeRuntime},
@@ -9,6 +13,7 @@ use crate::version_history::windows::{
     webview::{actual_udf, reject_manager_overrides},
 };
 use parking_lot::Mutex;
+use recycle::RecycleFixture;
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tauri::ipc::{InvokeBody, Request};
@@ -479,17 +484,103 @@ fn parent_child_leases(parent: &Fixture, path: &Path) -> io::Result<Vec<Root>> {
 }
 
 fn mark_creation(root: &Path, label: &str) -> io::Result<()> {
+    mark_creation_with(root, label, |_| Ok(()))
+}
+fn mark_creation_with(
+    root: &Path,
+    label: &str,
+    before_complete: impl FnOnce(&Path) -> io::Result<()>,
+) -> io::Result<()> {
     if !matches!(label, "main" | "peer") {
         return Err(io::Error::other("CREATION_LABEL_INVALID"));
     }
-    // 文件先于任何 Wry 创建持久可见，stdout 只作诊断，不能靠日志到达顺序释放租约。
-    fs::write(
-        root.join(format!("reports/creation-{label}-pending")),
-        b"pending\n",
-    )?;
+    let path = root.join(format!("reports/creation-{label}-pending"));
+    publish_marker(&path, b"pending\n", before_complete)?;
     println!("STAGE11_CREATION_PENDING {label}");
     io::stdout().flush()
 }
+
+#[test]
+fn NativeDeleteWebView_CreationMarkerNeverPublishesPartialBytes_011() {
+    let fixture = Fixture::new().unwrap();
+    let verified = std::collections::BTreeSet::new();
+    mark_creation_with(&fixture.root, "main", |staged| {
+        assert_eq!(fs::read(staged)?, b"pend");
+        assert!(pending_creations(&fixture.root, &verified)?.is_empty());
+        Ok(())
+    })
+    .unwrap();
+    assert!(pending_creations(&fixture.root, &verified)
+        .unwrap()
+        .contains("main"));
+}
+
+#[test]
+fn NativeDeleteWebView_CreationFailureCannotPublishPending_012() {
+    let fixture = Fixture::new().unwrap();
+    assert!(
+        mark_creation_with(&fixture.root, "peer", |_| Err(io::Error::other(
+            "injected-creation-write"
+        )))
+        .is_err()
+    );
+    assert!(
+        pending_creations(&fixture.root, &std::collections::BTreeSet::new())
+            .unwrap()
+            .is_empty()
+    );
+}
+
+fn publish_marker(
+    path: &Path,
+    payload: &[u8],
+    before_complete: impl FnOnce(&Path) -> io::Result<()>,
+) -> io::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::other("MARKER_PARENT_MISSING"))?;
+    let mut staged = tempfile::NamedTempFile::new_in(parent)?;
+    let split = payload.len() / 2;
+    staged.write_all(&payload[..split])?;
+    before_complete(staged.path())?;
+    staged.write_all(&payload[split..])?;
+    staged.as_file().sync_all()?;
+    // 同目录完成写入后才原子发布；不覆盖已有回执，也不让 reader 看见半写内容。
+    staged
+        .persist_noclobber(path)
+        .map_err(|failure| failure.error)?;
+    Ok(())
+}
+
+#[test]
+fn NativeDeleteWebView_ParentMarkerNeverPublishesPartialBytes_009() {
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("browser-main-held");
+    publish_marker(&target, b"observed\n", |staging| {
+        assert_eq!(fs::read(staging)?, b"obse");
+        assert!(
+            !target.exists(),
+            "a partial marker must not be visible to the WebView worker"
+        );
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(fs::read(&target).unwrap(), b"observed\n");
+}
+
+#[test]
+fn NativeDeleteWebView_ParentMarkerFailurePublishesNothing_010() {
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("browser-main-held");
+    assert!(
+        publish_marker(&target, b"observed\n", |_| Err(io::Error::other(
+            "injected-before-complete"
+        )))
+        .is_err()
+    );
+    assert!(!target.exists());
+}
+
 fn pending_creations(
     root: &Path,
     verified: &std::collections::BTreeSet<String>,
@@ -572,6 +663,18 @@ struct TaskBackendFixture {
     peer_created: AtomicBool,
     peer_script: Mutex<Option<String>>,
     peer_reply: Mutex<Option<mpsc::Sender<bool>>>,
+    desk_checks: Mutex<Vec<String>>,
+    desk_key: Mutex<Option<String>>,
+    opencode: opencode::OpencodeFixture,
+    opencode_checks: Mutex<Vec<String>>,
+    opencode_calls: AtomicUsize,
+    desk_archives: AtomicUsize,
+    desk_restores: AtomicUsize,
+    desk_upserts: AtomicUsize,
+    recycle: RecycleFixture,
+    recycle_checks: Mutex<Vec<String>>,
+    recycle_removes: AtomicUsize,
+    recycle_restores: AtomicUsize,
     confirmations: AtomicUsize,
     inspections: AtomicUsize,
     checkpoints: Mutex<Vec<String>>,
@@ -601,6 +704,26 @@ impl TaskBackendFixture {
         self.finished.store(true, Ordering::Release);
         app.exit(1);
     }
+    fn verify_final(&self) -> Result<(), String> {
+        final_fixture_check(
+            self.native,
+            [
+                self.confirmations.load(Ordering::Acquire),
+                self.inspections.load(Ordering::Acquire),
+                self.recycle_removes.load(Ordering::Acquire),
+                self.recycle_restores.load(Ordering::Acquire),
+            ],
+            |deleted| self.verify_files(deleted),
+            |removed| self.recycle.verify(removed),
+        )?;
+        self.verify_desk_final()?;
+        if self.opencode_checks.lock().len() != 3
+            || self.opencode_calls.load(Ordering::Acquire) != 2
+        {
+            return Err("OPENCODE_FINAL_INVALID".into());
+        }
+        self.opencode.verify(false, 2)
+    }
     fn verify_files(&self, deleted: bool) -> Result<(), String> {
         let b = self.backend.lock();
         if deleted {
@@ -616,7 +739,11 @@ impl TaskBackendFixture {
                 return Err("CONTROL_CHANGED".into());
             }
         }
-        if b.repository.admission().check_metadata_idle().is_err() {
+        if b.repository.admission().check_metadata_idle().is_err()
+            || crate::version_history::maintenance::process_admissions()
+                .check_metadata_idle()
+                .is_err()
+        {
             return Err("OWNER_NOT_SETTLED".into());
         }
         if !deleted
@@ -653,6 +780,8 @@ struct Named {
 #[serde(deny_unknown_fields)]
 struct Finished {
     success: bool,
+    #[serde(default, rename = "failureCode")]
+    failure_code: Option<String>,
 }
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -672,7 +801,7 @@ async fn s11_fixture(
     let context = state.context();
     let b = state.backend.lock();
     Ok(
-        serde_json::json!({"context":context,"targetId":b.id,"controlId":b.active_id,"expiryId":state.expiry_id,"native":state.native}),
+        serde_json::json!({"context":context,"targetId":b.id,"controlId":b.active_id,"expiryId":state.expiry_id,"native":state.native,"recycleContext":state.recycle.context,"recycleId":state.recycle.id,"opencodeContext":state.opencode.context,"opencodeId":state.opencode.id}),
     )
 }
 #[tauri::command]
@@ -752,11 +881,17 @@ async fn s11_finish(
     let q: Finished = query(&request)?;
     let complete =
         state.checkpoints.lock().len() == if state.native { CHECKPOINTS.len() } else { 7 };
-    let success = q.success && complete;
+    let success = q.success
+        && complete
+        && q.failure_code.is_none()
+        && state.recycle_checks.lock().len() == 3
+        && state.recycle_removes.load(Ordering::Acquire) == 1
+        && state.recycle_restores.load(Ordering::Acquire) == 1
+        && state.verify_final().is_ok();
     state.success.store(success, Ordering::Release);
     state.finished.store(true, Ordering::Release);
     if !success {
-        *state.failure.lock() = Some("FRONTEND_ACCEPTANCE_FAILED");
+        *state.failure.lock() = Some(frontend_failure_code(q.failure_code.as_deref()));
     }
     app.exit(if success { 0 } else { 1 });
     Ok(())
@@ -840,8 +975,47 @@ async fn s11_capture(
     use webview2_com::CallDevToolsProtocolMethodCompletedHandler;
     state.admit(&webview, &request)?;
     let q: Named = query(&request)?;
-    let names = ["review", "confirmation", "result"];
-    if names.get(state.captures.lock().len()).copied() != Some(q.name.as_str()) {
+    let (names, count) = {
+        let captures = state.captures.lock();
+        if q.name.starts_with("opencode-") {
+            (
+                ["opencode-review", "opencode-archived", "opencode-restored"],
+                captures
+                    .iter()
+                    .filter(|name| name.starts_with("opencode-"))
+                    .count(),
+            )
+        } else if q.name.starts_with("desk-") {
+            (
+                ["desk-archived", "desk-restored", "desk-rearchived"],
+                captures
+                    .iter()
+                    .filter(|name| name.starts_with("desk-"))
+                    .count(),
+            )
+        } else if q.name.starts_with("recycle-") {
+            (
+                ["recycle-review", "recycle-stored", "recycle-restored"],
+                captures
+                    .iter()
+                    .filter(|name| name.starts_with("recycle-"))
+                    .count(),
+            )
+        } else {
+            (
+                ["review", "confirmation", "result"],
+                captures
+                    .iter()
+                    .filter(|name| {
+                        !name.starts_with("recycle-")
+                            && !name.starts_with("desk-")
+                            && !name.starts_with("opencode-")
+                    })
+                    .count(),
+            )
+        }
+    };
+    if names.get(count).copied() != Some(q.name.as_str()) {
         return Err("CAPTURE_ORDER_INVALID".into());
     }
     let window = app.get_webview_window("main").ok_or("MAIN_MISSING")?;
@@ -906,6 +1080,49 @@ async fn s11_capture(
     Ok(())
 }
 
+// 浏览器持有确认必须先于可失败的 UDF 核验，避免把已知进程丢成永久未知。
+fn admit_browser_before_udf(
+    retain_browser: impl FnOnce() -> Result<(), &'static str>,
+    verify_udf: impl FnOnce() -> Result<(), &'static str>,
+) -> Result<(), &'static str> {
+    retain_browser()?;
+    verify_udf()
+}
+
+#[test]
+fn NativeDeleteWebView_UdfFailureRetainsKnownBrowser_007() {
+    let retained = std::cell::Cell::new(false);
+    let result = admit_browser_before_udf(
+        || {
+            retained.set(true);
+            Ok(())
+        },
+        || Err("ACTUAL_UDF_MISMATCH"),
+    );
+    assert_eq!(result, Err("ACTUAL_UDF_MISMATCH"));
+    assert!(
+        retained.get(),
+        "UDF failure must not discard the known browser lifetime"
+    );
+}
+
+#[test]
+fn NativeDeleteWebView_UnheldBrowserNeverInspectsUdf_008() {
+    let inspected = std::cell::Cell::new(false);
+    let result = admit_browser_before_udf(
+        || Err("BROWSER_JOB_MEMBERSHIP_REJECTED"),
+        || {
+            inspected.set(true);
+            Ok(())
+        },
+    );
+    assert_eq!(result, Err("BROWSER_JOB_MEMBERSHIP_REJECTED"));
+    assert!(
+        !inspected.get(),
+        "unowned browser must not enter the UDF/page gate"
+    );
+}
+
 // COM 对象只在 UI 线程使用；父进程验证 browser 确实在自己的 Job 后才允许页面发起测试。
 fn browser_ready(window: WebviewWindow, state: Arc<TaskBackendFixture>, main: bool) {
     let expected = if main {
@@ -916,39 +1133,75 @@ fn browser_ready(window: WebviewWindow, state: Arc<TaskBackendFixture>, main: bo
     let app = window.app_handle().clone();
     let retained = window.clone();
     let failed = state.clone();
-    if window.with_webview(move|platform| {
-        let result=(||->io::Result<()> {
-            let actual=actual_udf(&platform.environment())?;
-            if actual.identity()!=expected.identity(){return Err(io::Error::other("ACTUAL_UDF_MISMATCH"));}
-            expected.recheck()?;state.actual_directories.lock().push(actual);
-            let core=unsafe{platform.controller().CoreWebView2()}.map_err(io::Error::other)?;
-            let mut pid=0;unsafe{core.BrowserProcessId(&mut pid)}.map_err(io::Error::other)?;
-            if pid==0{return Err(io::Error::other("BROWSER_PID_MISSING"));}
-            let label=if main{"main"}else{"peer"};
-            println!("STAGE11_BROWSER_READY {label} {pid}");let _=io::stdout().flush();
-            let root=state.root();let state=state.clone();let app=app.clone();let window=retained.clone();
-            std::thread::spawn(move|| {
-                let deadline=Instant::now()+Duration::from_secs(25);
+    if window.with_webview(move |platform| {
+        let label = if main { "main" } else { "peer" };
+        let root = state.root();
+        let result = admit_browser_before_udf(
+            || {
+                let core = unsafe { platform.controller().CoreWebView2() }
+                    .map_err(|_| "BROWSER_CONTROLLER_UNKNOWN")?;
+                let mut pid = 0;
+                unsafe { core.BrowserProcessId(&mut pid) }.map_err(|_| "BROWSER_PID_UNKNOWN")?;
+                if pid == 0 { return Err("BROWSER_PID_MISSING"); }
+                println!("STAGE11_BROWSER_READY {label} {pid}");
+                io::stdout().flush().map_err(|_| "BROWSER_SIGNAL_FAILED")?;
+                // 先等父层打开准确句柄并核对 own Job，再进行可能失败的 UDF 操作。
+                // 失败不再丢失已知 browser；未识别的创建仍保留原 pending 屏障。
+                let deadline = Instant::now() + Duration::from_secs(25);
                 loop {
-                    if root.join(format!("reports/browser-{label}-rejected")).exists(){state.fail(&app,"BROWSER_JOB_MEMBERSHIP_REJECTED");return;}
-                    if root.join(format!("reports/browser-{label}-held")).exists()&&state.runtime.binding().is_ok(){
-                        let script=if main {
-                            if state.started.swap(true,Ordering::AcqRel){return;}
-                            "(()=>{const end=performance.now()+15000;const t=setInterval(()=>{if(window.__STAGE11__){clearInterval(t);window.__STAGE11__.start().catch(()=>window.__CC_DESK_DOCUMENT__?.invoke('s11_finish',{success:false}));}else if(performance.now()>end){clearInterval(t);window.__CC_DESK_DOCUMENT__?.invoke('s11_finish',{success:false});}},20);})()".to_owned()
-                        } else {match state.peer_script.lock().take(){Some(script)=>script,None=>{state.fail(&app,"PEER_SCRIPT_MISSING");return;}}};
-                        println!("STAGE11_PAGE_START {label}");
-                        if window.eval(script).is_err(){state.fail(&app,"PAGE_START_FAILED");}return;
+                    match fs::read(root.join(format!("reports/browser-{label}-rejected"))) {
+                        Ok(_) => return Err("BROWSER_JOB_MEMBERSHIP_REJECTED"),
+                        Err(e) if e.kind() == io::ErrorKind::NotFound => {},
+                        Err(_) => return Err("BROWSER_PARENT_MARKER_UNKNOWN"),
                     }
-                    if Instant::now()>=deadline {state.fail(&app,"BROWSER_OR_DOCUMENT_READY_TIMEOUT");return;}
+                    match fs::read(root.join(format!("reports/browser-{label}-held"))) {
+                        Ok(bytes) if bytes == b"observed\n" => return Ok(()),
+                        Ok(_) => return Err("BROWSER_PARENT_MARKER_INVALID"),
+                        Err(e) if e.kind() == io::ErrorKind::NotFound => {},
+                        Err(_) => return Err("BROWSER_PARENT_MARKER_UNKNOWN"),
+                    }
+                    if Instant::now() >= deadline { return Err("BROWSER_PARENT_HOLD_TIMEOUT"); }
                     std::thread::sleep(Duration::from_millis(20));
                 }
-            });
-            Ok(())
-        })();if result.is_err(){state.fail(&app,"ACTUAL_UDF_OR_BROWSER_UNKNOWN");}
-    }).is_err(){failed.fail(window.app_handle(),"WEBVIEW_UI_THREAD_UNAVAILABLE");}
+            },
+            || {
+                let actual = actual_udf(&platform.environment()).map_err(|_| "ACTUAL_UDF_UNKNOWN")?;
+                if actual.identity() != expected.identity() { return Err("ACTUAL_UDF_MISMATCH"); }
+                expected.recheck().map_err(|_| "EXPECTED_UDF_CHANGED")?;
+                state.actual_directories.lock().push(actual);
+                Ok(())
+            },
+        );
+        if let Err(code) = result { state.fail(&app, code); return; }
+        let state = state.clone(); let app = app.clone(); let window = retained.clone();
+        std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(25);
+            loop {
+                if state.runtime.binding().is_ok() {
+                    let script = if main {
+                        if state.started.swap(true, Ordering::AcqRel) { return; }
+                        "(()=>{const end=performance.now()+15000;const t=setInterval(()=>{if(window.__STAGE11__){clearInterval(t);window.__STAGE11__.start().catch(()=>window.__CC_DESK_DOCUMENT__?.invoke('s11_finish',{success:false}));}else if(performance.now()>end){clearInterval(t);window.__CC_DESK_DOCUMENT__?.invoke('s11_finish',{success:false});}},20);})()".to_owned()
+                    } else {
+                        match state.peer_script.lock().take() { Some(script) => script, None => { state.fail(&app, "PEER_SCRIPT_MISSING"); return; } }
+                    };
+                    println!("STAGE11_PAGE_START {label}");
+                    if window.eval(script).is_err() { state.fail(&app, "PAGE_START_FAILED"); }
+                    return;
+                }
+                if Instant::now() >= deadline { state.fail(&app, "DOCUMENT_READY_TIMEOUT"); return; }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        });
+    }).is_err() { failed.fail(window.app_handle(), "WEBVIEW_UI_THREAD_UNAVAILABLE"); }
 }
 
 fn worker(native: bool) {
+    assert!(crate::version_history::windows::files::projects_fixture::active());
+    assert!(
+        crate::version_history::windows::files::projects_fixture::paths()
+            .unwrap()
+            .is_err()
+    );
     webview_configuration_absent().unwrap();
     let fixture = Arc::new(Fixture::new().unwrap());
     for name in ["webview-main", "webview-peer"] {
@@ -966,6 +1219,14 @@ fn worker(native: bool) {
         );
         std::thread::sleep(Duration::from_millis(20));
     }
+    let desk_root = fixture.root.join("desk-state");
+    fs::create_dir(&desk_root).unwrap();
+    let desk_capability = Directory::open_absolute(&desk_root).unwrap();
+    crate::version_history::windows::files::projects_fixture::install(desk_capability.clone())
+        .unwrap();
+    assert!(
+        crate::version_history::windows::files::projects_fixture::install(desk_capability).is_err()
+    );
     let assets = Arc::new(
         AssetBundle::load(
             &Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1015,6 +1276,8 @@ fn worker(native: bool) {
     .into_iter()
     .map(|path| (path.clone(), fs::read(path).unwrap()))
     .collect();
+    let recycle = RecycleFixture::new(&backend);
+    let opencode = opencode::OpencodeFixture::new(&backend);
     let runtime = Arc::new(NativeRuntime::new(backend.launch.clone()));
     let server = AssetServer::start(assets.clone()).unwrap();
     let state = Arc::new(TaskBackendFixture {
@@ -1032,6 +1295,18 @@ fn worker(native: bool) {
         peer_created: AtomicBool::new(false),
         peer_script: Mutex::new(None),
         peer_reply: Mutex::new(None),
+        desk_checks: Mutex::new(vec![]),
+        desk_key: Mutex::new(None),
+        opencode,
+        opencode_checks: Mutex::new(vec![]),
+        opencode_calls: AtomicUsize::new(0),
+        desk_archives: AtomicUsize::new(0),
+        desk_restores: AtomicUsize::new(0),
+        desk_upserts: AtomicUsize::new(0),
+        recycle,
+        recycle_checks: Mutex::new(vec![]),
+        recycle_removes: AtomicUsize::new(0),
+        recycle_restores: AtomicUsize::new(0),
         confirmations: AtomicUsize::new(0),
         inspections: AtomicUsize::new(0),
         checkpoints: Mutex::new(vec![]),
@@ -1067,6 +1342,15 @@ fn worker(native: bool) {
         crate::cli::commands::cli_preview_session_delete,
         crate::cli::commands::cli_confirm_session_delete,
         crate::cli::commands::cli_inspect_session_delete,
+        crate::cli::commands::cli_recycle_session,
+        crate::commands::get_projects_state,
+        crate::commands::archive_session,
+        crate::commands::restore_session,
+        crate::commands::upsert_session_ui_record,
+        opencode::s11_opencode_checkpoint,
+        crate::cli::commands::cli_set_opencode_archive,
+        recycle::s11_desk_checkpoint,
+        recycle::s11_recycle_checkpoint,
         s11_fixture,
         s11_checkpoint,
         s11_proof,
@@ -1082,6 +1366,50 @@ fn worker(native: bool) {
         .manage(state.clone())
         .invoke_handler(move |invoke| {
             let command = invoke.message.command();
+            if matches!(
+                command,
+                "get_projects_state"
+                    | "archive_session"
+                    | "restore_session"
+                    | "upsert_session_ui_record"
+            ) {
+                if invoke.message.webview_ref().label() != "main"
+                    || !dispatch.started.load(Ordering::Acquire)
+                {
+                    invoke.resolver.reject("FIXTURE_DOCUMENT_REQUIRED");
+                    return true;
+                }
+                match command {
+                    "archive_session" => {
+                        dispatch.desk_archives.fetch_add(1, Ordering::AcqRel);
+                    }
+                    "restore_session" => {
+                        dispatch.desk_restores.fetch_add(1, Ordering::AcqRel);
+                    }
+                    "upsert_session_ui_record" => {
+                        dispatch.desk_upserts.fetch_add(1, Ordering::AcqRel);
+                    }
+                    _ => {}
+                }
+            }
+            if command == "cli_set_opencode_archive" {
+                dispatch.opencode_calls.fetch_add(1, Ordering::AcqRel);
+            }
+            if command == "cli_recycle_session" {
+                if let InvokeBody::Raw(bytes) = invoke.message.payload() {
+                    if let Ok(value) = serde_json::from_slice::<serde_json::Value>(bytes) {
+                        match value["action"].as_str() {
+                            Some("remove") => {
+                                dispatch.recycle_removes.fetch_add(1, Ordering::AcqRel);
+                            }
+                            Some("restore") => {
+                                dispatch.recycle_restores.fetch_add(1, Ordering::AcqRel);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
             if command == "cli_confirm_session_delete" {
                 dispatch.confirmations.fetch_add(1, Ordering::AcqRel);
                 if native && system_configuration_absent().is_err() {
@@ -1148,6 +1476,9 @@ fn worker(native: bool) {
         .admission()
         .check_metadata_idle()
         .is_err()
+        || crate::version_history::maintenance::process_admissions()
+            .check_metadata_idle()
+            .is_err()
     {
         println!("STAGE11_METADATA_OWNER_PENDING");
         std::thread::sleep(Duration::from_secs(1));
@@ -1156,10 +1487,14 @@ fn worker(native: bool) {
     if native {
         system_configuration_absent().unwrap();
     }
+    if state.verify_final().is_err() {
+        state.success.store(false, Ordering::Release);
+        state.failure.lock().get_or_insert("FINAL_FIXTURE_CHANGED");
+    }
     let report = serde_json::json!({"native":native,"success":state.success.load(Ordering::Acquire),"failure":*state.failure.lock(),"exitCode":exit,
         "checkpoints":*state.checkpoints.lock(),"confirmIpcCount":state.confirmations.load(Ordering::Acquire),"inspectIpcCount":state.inspections.load(Ordering::Acquire),
         "actualUdfCount":state.actual_directories.lock().len(),"engineVersion":tauri::webview_version().unwrap(),"captures":*state.captures.lock(),
-        "assetBuildHead":assets.manifest["buildHead"],"assetFiles":assets.manifest["files"],"productionModules":assets.manifest["modules"],"driverSources":assets.manifest["drivers"],"metadataOwnerSettled":true});
+        "assetBuildHead":assets.manifest["buildHead"],"assetFiles":assets.manifest["files"],"productionModules":assets.manifest["modules"],"driverSources":assets.manifest["drivers"],"metadataOwnerSettled":true,"opencodeProofs":state.opencode.proofs,"opencodeCheckpoints":*state.opencode_checks.lock(),"opencodeCalls":state.opencode_calls.load(Ordering::Acquire),"deskCheckpoints":*state.desk_checks.lock(),"deskArchives":state.desk_archives.load(Ordering::Acquire),"deskRestores":state.desk_restores.load(Ordering::Acquire),"deskUpserts":state.desk_upserts.load(Ordering::Acquire),"recycleCheckpoints":*state.recycle_checks.lock(),"recycleRemoves":state.recycle_removes.load(Ordering::Acquire),"recycleRestores":state.recycle_restores.load(Ordering::Acquire)});
     fs::write(
         fixture.root.join("reports/webview-result.json"),
         serde_json::to_vec_pretty(&report).unwrap(),
@@ -1288,12 +1623,13 @@ fn driver(native: bool) {
                     let root = child_root
                         .as_ref()
                         .ok_or_else(|| io::Error::other("BROWSER_BEFORE_CHILD"))?;
-                    fs::write(
-                        root.join(format!(
+                    publish_marker(
+                        &root.join(format!(
                             "reports/browser-{label}-{}",
                             if verified { "held" } else { "rejected" }
                         )),
                         b"observed\n",
+                        |_| Ok(()),
                     )?;
                     if !verified {
                         unresolved_browser = true;
@@ -1382,4 +1718,126 @@ fn NativeDeleteWebView_Worker_099() {
     let mode = std::env::var("CC_DESK_STAGE11_WORKER").unwrap();
     assert!(matches!(mode.as_str(), "native" | "no-native"));
     worker(mode == "native");
+}
+
+#[test]
+fn NativeDeleteWebView_FrontendFailureIsBounded_013() {
+    assert_eq!(
+        frontend_failure_code(Some("PREVIEW_TIMEOUT")),
+        "PREVIEW_TIMEOUT"
+    );
+    assert_eq!(
+        frontend_failure_code(Some("secret or arbitrary exception")),
+        "FRONTEND_ACCEPTANCE_FAILED"
+    );
+    assert_eq!(frontend_failure_code(None), "FRONTEND_ACCEPTANCE_FAILED");
+}
+fn frontend_failure_code(code: Option<&str>) -> &'static str {
+    const CODES: &[&str] = &[
+        "SOURCE_UNSUPPORTED",
+        "SOURCE_BUSY",
+        "SOURCE_CHANGED",
+        "SOURCE_UNAVAILABLE",
+        "SCOPE_UNKNOWN",
+        "SCOPE_STALE",
+        "SESSION_ORIGIN_AMBIGUOUS",
+        "PROFILE_CLI_MISMATCH",
+        "ENV_VALUE_UNAVAILABLE",
+        "OPENCODE_UI_TIMEOUT",
+        "OPENCODE_ACK_ENABLED",
+        "OPENCODE_FIXTURE_MISSING",
+        "OPENCODE_UI_ERROR",
+        "DESK_ARCHIVE_TIMEOUT",
+        "DESK_RESTORE_TIMEOUT",
+        "DESK_PERSISTENCE_INVALID",
+        "RECYCLE_FIXTURE_MISSING",
+        "RECYCLE_PANEL_TIMEOUT",
+        "RECYCLE_REMOVE_TIMEOUT",
+        "RECYCLE_RESTORE_TIMEOUT",
+        "RECYCLE_ACK_ENABLED",
+        "ELEMENT_MISSING",
+        "UNEXPECTED_REJECTION",
+        "REAL_HISTORY_MISSING",
+        "PREVIEW_TIMEOUT",
+        "RISK_COPY_MISSING",
+        "SECOND_CONFIRMATION_MERGED",
+        "MISSING_ACK_ENABLED",
+        "SUBTREE_ACK_OPTIONAL",
+        "NATIVE_DELETE_DISABLED",
+        "NATIVE_RESULT_TIMEOUT",
+        "DELETED_ROW_RETAINED",
+        "CONTROL_ROW_LOST",
+        "RECEIPT_MISSING",
+        "DUPLICATE_RECEIPT_CHANGED",
+        "INSPECT_TIMEOUT",
+        "EXPIRY_FIXTURE_MISSING",
+        "EXPIRED_TICKET_NOT_BLOCKED",
+    ];
+    CODES
+        .iter()
+        .copied()
+        .find(|candidate| Some(*candidate) == code)
+        .unwrap_or("FRONTEND_ACCEPTANCE_FAILED")
+}
+
+fn final_fixture_check(
+    native: bool,
+    counts: [usize; 4],
+    codex: impl FnOnce(bool) -> Result<(), String>,
+    claude: impl FnOnce(bool) -> Result<(), String>,
+) -> Result<(), String> {
+    if counts != if native { [10, 1, 1, 1] } else { [6, 0, 1, 1] } {
+        return Err("FINAL_DISPATCH_CHANGED".into());
+    }
+    codex(native)?;
+    claude(false)
+}
+#[test]
+fn NativeDeleteWebView_FinalCheckRejectsLateFixtureOrDispatchChange_015() {
+    assert!(final_fixture_check(
+        false,
+        [6, 0, 1, 1],
+        |deleted| {
+            assert!(!deleted);
+            Ok(())
+        },
+        |removed| {
+            assert!(!removed);
+            Ok(())
+        }
+    )
+    .is_ok());
+    assert_eq!(
+        final_fixture_check(
+            false,
+            [7, 0, 1, 1],
+            |_| panic!("must reject count first"),
+            |_| Ok(())
+        )
+        .unwrap_err(),
+        "FINAL_DISPATCH_CHANGED"
+    );
+    assert_eq!(
+        final_fixture_check(
+            false,
+            [6, 0, 1, 1],
+            |_| Err("CODEX_LATE_CHANGE".into()),
+            |_| panic!("must reject Codex change")
+        )
+        .unwrap_err(),
+        "CODEX_LATE_CHANGE"
+    );
+    assert_eq!(
+        final_fixture_check(
+            true,
+            [10, 1, 1, 1],
+            |deleted| {
+                assert!(deleted);
+                Ok(())
+            },
+            |_| Err("CLAUDE_LATE_CHANGE".into())
+        )
+        .unwrap_err(),
+        "CLAUDE_LATE_CHANGE"
+    );
 }

@@ -34,6 +34,8 @@ export function defaultBaselineCommands(platform = process.platform) {
   const commands = [
     { name: 'typecheck', argv: ['npm', 'run', 'typecheck'] },
     { name: 'frontend-tests', argv: ['npm', 'run', 'test:ci'] },
+    { name: 'prepare-session-sdk', argv: [process.execPath, 'scripts/prepare-session-sdk.mjs'] },
+    { name: 'prepare-opencode-archive', argv: [process.execPath, 'scripts/prepare-opencode-archive-sdk.mjs'] },
   ]
 
   if (platform === 'win32') {

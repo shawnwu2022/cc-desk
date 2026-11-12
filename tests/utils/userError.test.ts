@@ -2,6 +2,14 @@ import { describe, expect, test } from 'vitest'
 import { mapSafeUserError, safeUserErrorCode } from '@/utils/userError'
 
 describe('mapSafeUserError', () => {
+  // 来源路径拒绝保留白名单诊断码，不让真实路径或异常正文进入详情。
+  test('SourcePath_KeepsSafeDiagnostic_004', () => {
+    const code = safeUserErrorCode({ code: 'SOURCE_PATH_REJECTED', field: 'C:/private/history', message: 'secret' })
+    const result = mapSafeUserError(code, 'session')
+    expect(result).toMatchObject({ detailCode: 'SOURCE_PATH_REJECTED', actionKey: 'viewDetails', retryable: false })
+    expect(JSON.stringify(result)).not.toMatch(/private|secret/)
+  })
+
   test.each(['NODE_RUNTIME_UNAVAILABLE','SDK_HELPER_UNAVAILABLE'])('Rename_RuntimeRequirementIsExplicit_003 %s',code=>{
     expect(mapSafeUserError(code,'session')).toMatchObject({messageKey:code==='NODE_RUNTIME_UNAVAILABLE'?'errorRenameNodeRuntime':'errorRenameSdkHelper',retryable:false,detailCode:code})
   })
@@ -30,5 +38,11 @@ describe('mapSafeUserError', () => {
     expect(result.messageKey).toBe('errorGenericUnavailable')
     expect(JSON.stringify(result)).not.toContain('super-secret')
     expect(JSON.stringify(result)).not.toContain('Users')
+  })
+})
+
+test('Archive_RelationUnavailableIsKnownPresendRefusal_004', () => {
+  expect(mapSafeUserError('ARCHIVE_RELATION_UNAVAILABLE', 'session')).toMatchObject({
+    messageKey: 'errorNativeArchiveRelationUnavailable', detailCode: 'ARCHIVE_RELATION_UNAVAILABLE', retryable: false,
   })
 })

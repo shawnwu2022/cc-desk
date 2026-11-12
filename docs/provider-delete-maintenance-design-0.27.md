@@ -1,6 +1,6 @@
 # Claude / OpenCode 永久删除的后续维护设计
 
-本文件是下一阶段可执行设计，**没有接入产品**。两家原生删除继续关闭；不重复已被阶段9反例推翻的分享锁/最后一次idle查询方案，不用隐藏或软归档替代永久删除。已证事实和固定源码见 [阶段9审计](../.audit/v027-stage9-provider-delete.md)。当前开发只允许任务新建合成源，不操作真实用户会话/服务、权限或凭据。
+本文件的维护执行合同仍为下一阶段设计，**没有开放删除执行**。0.27 已接入下述只读来源诊断切片；两家原生删除继续关闭；不重复已被阶段9反例推翻的分享锁/最后一次idle查询方案，不用隐藏或软归档替代永久删除。已证事实和固定源码见 [阶段9审计](../.audit/v027-stage9-provider-delete.md)。当前开发只允许任务新建合成源，不操作真实用户会话/服务、权限或凭据。
 
 ## Claude：分离原件来源与维护准入
 
@@ -48,4 +48,26 @@
 
 ## 两家共同交付门槛
 
-来源、活动/维护、双确认、逐根结果和恢复失败各自有证据才开放相应能力。新增危险能力先合成RED、最小实现、独立安全审查和固定工具链受影响验证；真实数据操作另有授权。当前仅保存本设计，不执行权限改动、启动真实服务、调用模型或删除真实用户数据。
+来源、活动/维护、双确认、逐根结果和恢复失败各自有证据才开放相应能力。新增危险能力先合成RED、最小实现、独立安全审查和固定工具链受影响验证；真实数据操作另有授权。维护执行仍仅保留设计；只读诊断不执行权限改动、启动真实服务、调用模型或删除真实用户数据。
+
+
+## 0.27：只读目标诊断切片
+
+`cli_preview_session_delete` 现在对 Claude/OpenCode 也重新核对 authenticated caller、精确 profile/revision、held root、注册项目和当前 sessionKey。它使用既有只读投影授权，Claude 额外核对原始 transcript 的 UUID/cwd，OpenCode 使用实际选定 SQLite 的受限只读快照；不启动 CLI/服务，不调用 SDK、不执行 SQL 写入，也不修改 ACL。
+
+- 成功观察到目标后，Claude 返回 `unsupported / DELETE_MAINTENANCE_UNAVAILABLE`，OpenCode 返回 `unsupported / DELETE_SERVICE_UNVERIFIED`，同时提供已核验的原生 ID。两个原因分别指出维护排他能力、受控服务来源/准入仍未接通，并不表示提供方没有原生删除 API。
+- 响应没有 previewId，不进入执行账本；rootArchived 和 knownDescendantCount 保持 null。Desk 的显示归档或当前只读投影的默认字段不作为两家的原生归档证明，也不编造子树范围。
+- Desk 存在活动/准备/未知 owner 时返回 SOURCE_BUSY；目标无法唯一归属时返回 DELETE_SOURCE_UNAVAILABLE 且不发布原生 ID。来源或文档失效继续使用既有安全错误。
+- 前端诊断协议按提供方校验 ID：Claude/Codex 仍是 UUID，OpenCode 是有界 `ses_` locator，保留大小写。任何 unsupported/blocked 响应携带执行票据都会拒绝；两家伪造 ready 响应也拒绝。后端账本另有 Codex-only 发票据保护，不能通过直接调用账本绕过尚未实现的适配。
+- 用户界面现有两家删除禁用入口保持不变。此切片是安全适配基础，不是永久删除功能交付，也没有将 TODO 3 标为完成。
+
+回归入口：`ProviderDelete_` 三条 Rust 测试使用任务临时 Claude JSONL/OpenCode SQLite，逐字节比较来源不变，覆盖已核验身份、虚假目标、活动 owner、错误物理来源、失效文档、伪造确认/核查和账本拒绝发票据。`providerSessionDeleteApi.test.ts` 覆盖两种 ID、非法 locator/原始错误载荷及不可执行诊断。既有 Codex 删除、单项/批量 UI 和未知结果账本测试继续独立执行；它们不能替代两家真实删除、外部 writer 或崩溃恢复的验收。
+
+2026-11-12 WSK-MSI 本地验证：新增前端诊断先 RED 后 GREEN；5 个删除相关前端文件共 68 项通过，TypeScript/Vue 类型检查通过。新增 `ProviderDelete_` 3 项先全部 RED 后全部 GREEN；既有 `NativeDelete_` 16 项、`native_cli_projection_service` 19 项通过（后者含 2 项新增重复）。`cargo fmt --all -- --check` 和 `cargo clippy --locked --all-targets -- -D warnings` 通过，独立只读审查无阻断发现。Cargo 提示既有全局 cache 的 Windows `nul` 元数据清理失败，但命令最终成功；未改缓存清理策略。未运行全量 Rust/前端、真实提供方删除或安装包 WebView 验收，不把本切片测试冒充上述证据。
+
+## 0.27：独立可恢复产品切片
+
+后续实现了 [Claude 主记录可恢复移除](recoverable-claude-removal-0.70.md)：不要求未知外部子任务已完全静止，因为它们保留原地且不会 purge；主 transcript 原件以精确身份移入持久恢复区，冲突恢复不覆盖。该独立功能不能替代本文件的永久原生删除合同，OpenCode 的整库/跨实例维护边界也未因此解决。
+
+
+OpenCode 后续已将[原生可逆归档](opencode-recoverable-archive-0.70.md)接入 Windows 产品的独立认证命令与面板，不启用永久删除；适用范围、schema 兼容和仍需集成验收的边界见链接文档。

@@ -1,0 +1,58 @@
+[
+  {
+    "path": "scripts/prepare-opencode-webview.mjs",
+    "sha256": "5c261cb3f8dc3cbd8f5ab3df4fc8b3860847a1df613227814cddf18c10c44bff"
+  },
+  {
+    "path": "scripts/build-native-delete-webview.mjs",
+    "sha256": "90a66ac2ebf1dce80bfea1dc18ae36be437e9e781c8f344ba24e331080864f87"
+  },
+  {
+    "path": "src-tauri/src/tests/native_cli_delete_opencode_webview.rs",
+    "sha256": "8458bf39352c6917200868d05cd06c7f761673ab6ea98f7b82017e6740150e81"
+  },
+  {
+    "path": "src-tauri/src/tests/native_cli_delete_webview.rs",
+    "sha256": "bfae0b8d1413bbbba35d4afd82ab6e31383e05999d03c2b93f4e1fe65b1b1f83"
+  },
+  {
+    "path": "src-tauri/src/tests/native_cli_delete_recycle_webview.rs",
+    "sha256": "5d51d4d20e8e1f74db152e6a59c2d777c06387f36eda1cecb513dfe35c91e1be"
+  },
+  {
+    "path": "tests/native-delete-webview/main.ts",
+    "sha256": "aee665f2cf5d388a33ee7669179744ddb329418b8d10fd5c96cf951b33821e0a"
+  },
+  {
+    "path": ".audit/opencode-webview-seed.json",
+    "sha256": "d210538fa9085415dd32bcd002432f2b878b32f278e71ddb5841ea9eefaba560"
+  },
+  {
+    "path": ".audit/v027-stage11-webview-dist/manifest.json",
+    "sha256": "3b95808cfe929a2a386f2f1d1548c11ca6d7c5d76635f5ec46feb55a13f20fa0"
+  },
+  {
+    "path": ".audit/opencode-webview-bin/cc-desk-isolated-tests.exe",
+    "sha256": "c482435662ff793671b6865a56e448137a9e32b2c0c51a879bcd3eebe1c62a74"
+  },
+  {
+    "path": "src-tauri/resources/opencode-native-archive/bridge.mjs",
+    "sha256": "584ce5c760b053286d256f9e171a4024d09ad4584776454691dd1656612899c2"
+  },
+  {
+    "path": ".audit/tmp/v027-codex-delete-live-I1WDyt/temporary/v027-codex-delete-live-eHSeLH/reports/webview-result.json",
+    "sha256": "ef57382c20ab7c3aba015d5e9997b6d8ec5584d3c4f961bbb2e7fe53f40f57c7"
+  },
+  {
+    "path": ".audit/tmp/v027-codex-delete-live-I1WDyt/temporary/v027-codex-delete-live-eHSeLH/reports/opencode-review.png",
+    "sha256": "66048db833d2d1b8bb2323ae16b471dbaab5fec28fe353ecaff6a10f18aab0a0"
+  },
+  {
+    "path": ".audit/tmp/v027-codex-delete-live-I1WDyt/temporary/v027-codex-delete-live-eHSeLH/reports/opencode-archived.png",
+    "sha256": "efc5c8b60610031e82d271231b6340e8d1192a1eaa914cc54a9925864891f4a8"
+  },
+  {
+    "path": ".audit/tmp/v027-codex-delete-live-I1WDyt/temporary/v027-codex-delete-live-eHSeLH/reports/opencode-restored.png",
+    "sha256": "55563bf7280c9f9a03ac820d747be546bb067f3f649e4ec471b7762f859edabd"
+  }
+]

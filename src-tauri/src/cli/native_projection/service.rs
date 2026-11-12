@@ -19,9 +19,106 @@ pub(crate) struct ProjectionService {
     registry: ScopeRegistry,
     archive_operations: crate::cli::native_archive::Operations,
     rename_operations: crate::cli::native_rename::Operations,
+    opencode_archive_operations: crate::cli::opencode_archive::Operations,
     delete_operations: crate::cli::native_delete::Operations,
 }
 impl ProjectionService {
+    pub(crate) fn set_opencode_archive(
+        &self,
+        caller: &CallerIdentity,
+        request: crate::cli::opencode_archive::Request,
+    ) -> Result<crate::cli::opencode_archive::Receipt, SafeError> {
+        self.launch.registry().check_caller(caller)?;
+        request.validate()?;
+        self.opencode_archive_operations
+            .release_revoked(|owner| self.launch.registry().check_caller(owner).is_ok())?;
+        if let Some(result) = self.opencode_archive_operations.begin(caller, &request)? {
+            result?;
+            return Ok(request.receipt());
+        }
+        let result = (|| {
+            #[cfg(not(windows))]
+            {
+                Err(error("OPENCODE_ARCHIVE_UNSUPPORTED"))
+            }
+            #[cfg(windows)]
+            {
+                let (authority, pinned) = self.registry.authorize_opencode_archive(
+                    &owner(caller),
+                    &request.source,
+                    &request.session_key,
+                )?;
+                self.launch
+                    .set_opencode_archive(caller, &request, authority, pinned)?;
+                self.launch
+                    .registry()
+                    .check_caller(caller)
+                    .map_err(|_| error("ARCHIVE_OUTCOME_UNKNOWN"))
+            }
+        })();
+        self.opencode_archive_operations
+            .finish(caller, &request, result.clone());
+        result?;
+        Ok(request.receipt())
+    }
+    pub(crate) fn recycle(
+        &self,
+        caller: &CallerIdentity,
+        request: crate::cli::native_recycle::Request,
+    ) -> Result<crate::cli::native_recycle::Response, SafeError> {
+        self.launch.registry().check_caller(caller)?;
+        request.validate()?;
+        self.registry
+            .check_source(&owner(caller), &request.source)?;
+        #[cfg(not(windows))]
+        {
+            Err(error("RECYCLE_UNSUPPORTED"))
+        }
+        #[cfg(windows)]
+        {
+            let scope = self
+                .registry
+                .recycle_scope(&owner(caller), &request.source)?;
+            if request.action == "list" {
+                return crate::cli::native_recycle::list(&scope);
+            }
+            let (frozen, admission) = self.launch.repository().admission().begin_metadata()?;
+            let result = (|| {
+                scope.current()?;
+                let id = request
+                    .operation_id
+                    .as_deref()
+                    .ok_or_else(|| error("RECYCLE_INVALID_REQUEST"))?;
+                if request.action == "restore" {
+                    return crate::cli::native_recycle::restore(&scope, id);
+                }
+                if crate::cli::native_recycle::list(&scope)?
+                    .records
+                    .iter()
+                    .any(|r| r.operation_id == id)
+                {
+                    return Err(error("RECYCLE_OPERATION_CONFLICT"));
+                }
+                let mut authority = self.registry.authorize_session(
+                    &owner(caller),
+                    &request.source,
+                    request
+                        .session_key
+                        .as_deref()
+                        .ok_or_else(|| error("RECYCLE_INVALID_REQUEST"))?,
+                )?;
+                let target = authority.prepare_recycle_target(&scope)?;
+                crate::cli::native_recycle::remove(&scope, id, target)
+            })();
+            // 同步文件操作没有启动子进程；确认本次工作已结束后显式解除冻结。
+            drop(admission);
+            frozen
+                .release_review()
+                .map_err(|_| error("RECYCLE_OUTCOME_UNKNOWN"))?;
+            result
+        }
+    }
+
     pub(crate) fn preview_delete(
         &self,
         caller: &CallerIdentity,
@@ -31,10 +128,9 @@ impl ProjectionService {
         request.validate()?;
         self.registry
             .check_source(&owner(caller), &request.source)?;
-        if request.source.cli != CliKind::Codex {
-            return Ok(request.preview("unsupported", Some("NATIVE_DELETE_UNSUPPORTED")));
-        }
-        if !cfg!(windows) {
+        if request.source.cli == CliKind::Shell
+            || (request.source.cli == CliKind::Codex && !cfg!(windows))
+        {
             return Ok(request.preview("unsupported", Some("NATIVE_DELETE_UNSUPPORTED")));
         }
         if self
@@ -54,6 +150,18 @@ impl ProjectionService {
             Ok(authority) => authority,
             Err(_) => return Ok(request.preview("blocked", Some("DELETE_SOURCE_UNAVAILABLE"))),
         };
+        if matches!(request.source.cli, CliKind::Claude | CliKind::Opencode) {
+            authority.current()?;
+            // 身份观察不等于维护准入；不签发票据，也不把 Desk 归档当原生归档证明。
+            let reason = if request.source.cli == CliKind::Claude {
+                "DELETE_MAINTENANCE_UNAVAILABLE"
+            } else {
+                "DELETE_SERVICE_UNVERIFIED"
+            };
+            let mut preview = request.preview("unsupported", Some(reason));
+            preview.native_session_id = Some(authority.native_id);
+            return Ok(preview);
+        }
         if !authority.archived {
             return Ok(request.preview("blocked", Some("DELETE_ROOT_NOT_ARCHIVED")));
         }
@@ -331,7 +439,7 @@ impl ProjectionService {
         self.launch
             .repository()
             .admission()
-            .check_codex_archive_idle()
+            .check_codex_archive_for(request.target_id()?)
             .map_err(|_| error("ARCHIVE_BUSY"))?;
         let authority = self.registry.authorize_rename(
             &owner(caller),
@@ -345,19 +453,36 @@ impl ProjectionService {
         self.archive_operations
             .validate_request(caller, &request, &physical)?;
         if authority.archived {
-            // 空闲与新来源共同证明根已归档，不能把尚在处理中的移动当完成。
-            self.launch
+            // Unknown 收口不执行原生关系核验，保留全 Codex 冻结，不能走 scoped 旁路。
+            let (frozen, admission) = self
+                .launch
                 .repository()
                 .admission()
-                .check_codex_archive_idle()
+                .begin_codex_archive()
                 .map_err(|_| error("ARCHIVE_BUSY"))?;
-            self.archive_operations.reconcile_archived(&physical)?;
-            if let Some(result) = self.archive_operations.begin(caller, &request, &physical)? {
-                result?;
-            } else {
-                self.archive_operations.finish(caller, &request, Ok(()));
-            }
-            return Ok(request.receipt());
+            let result = (|| {
+                self.registry
+                    .authorize_rename(&owner(caller), &request.source, &request.session_key)
+                    .and_then(|fresh| {
+                        if fresh.archived {
+                            Ok(())
+                        } else {
+                            Err(error("ARCHIVE_OUTCOME_UNKNOWN"))
+                        }
+                    })?;
+                self.archive_operations.reconcile_archived(&physical)?;
+                if let Some(result) = self.archive_operations.begin(caller, &request, &physical)? {
+                    result?;
+                } else {
+                    self.archive_operations.finish(caller, &request, Ok(()));
+                }
+                Ok(request.receipt())
+            })();
+            drop(admission);
+            let released = frozen.release_review();
+            let receipt = result?;
+            released?;
+            return Ok(receipt);
         }
         if let Some(result) = self.archive_operations.begin(caller, &request, &physical)? {
             result?;
@@ -439,6 +564,7 @@ impl ProjectionService {
             registry: ScopeRegistry::new(64),
             archive_operations: Default::default(),
             rename_operations: Default::default(),
+            opencode_archive_operations: Default::default(),
             delete_operations: Default::default(),
         }
     }

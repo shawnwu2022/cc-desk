@@ -274,6 +274,54 @@ impl NativeRuntime {
         self.service.registry().check_caller(&caller)?;
         Ok(result)
     }
+    pub(crate) async fn set_opencode_archive<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        request: &Request<'_>,
+    ) -> Result<super::opencode_archive::Receipt, SafeError> {
+        let caller = self.binding()?.admit_native(webview, request.headers())?;
+        let query: super::opencode_archive::Request = decode_projection(request.body(), 32768)?;
+        query.validate()?;
+        let service = self.projections.clone();
+        let admitted = caller.clone();
+        let result = tauri::async_runtime::spawn_blocking(move || {
+            service.set_opencode_archive(&admitted, query)
+        })
+        .await
+        .map_err(|_| error("ARCHIVE_OUTCOME_UNKNOWN"))??;
+        self.service
+            .registry()
+            .check_caller(&caller)
+            .map_err(|_| error("ARCHIVE_OUTCOME_UNKNOWN"))?;
+        Ok(result)
+    }
+    pub(crate) async fn recycle_session<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        request: &Request<'_>,
+    ) -> Result<super::native_recycle::Response, SafeError> {
+        let caller = self.binding()?.admit_native(webview, request.headers())?;
+        let query: super::native_recycle::Request = decode_projection(request.body(), 32768)?;
+        query.validate()?;
+        let mutating = query.action != "list";
+        let service = self.projections.clone();
+        let admitted = caller.clone();
+        let result =
+            tauri::async_runtime::spawn_blocking(move || service.recycle(&admitted, query))
+                .await
+                .map_err(|_| error("RECYCLE_OUTCOME_UNKNOWN"))??;
+        self.service
+            .registry()
+            .check_caller(&caller)
+            .map_err(|failure| {
+                if mutating {
+                    error("RECYCLE_OUTCOME_UNKNOWN")
+                } else {
+                    failure
+                }
+            })?;
+        Ok(result)
+    }
     pub(crate) async fn archive_session<T: Runtime>(
         &self,
         webview: &Webview<T>,

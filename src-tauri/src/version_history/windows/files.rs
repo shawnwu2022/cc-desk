@@ -17,8 +17,9 @@ use windows::Wdk::{
     Foundation::OBJECT_ATTRIBUTES,
     Storage::FileSystem::{
         FileRenameInformation, NtCreateFile, NtSetInformationFile, FILE_CREATE,
-        FILE_DIRECTORY_FILE, FILE_NON_DIRECTORY_FILE, FILE_OPEN, FILE_RENAME_INFORMATION,
-        FILE_SYNCHRONOUS_IO_NONALERT, FILE_WRITE_THROUGH, NTCREATEFILE_CREATE_DISPOSITION,
+        FILE_DIRECTORY_FILE, FILE_NON_DIRECTORY_FILE, FILE_OPEN, FILE_OPEN_IF,
+        FILE_RENAME_INFORMATION, FILE_SYNCHRONOUS_IO_NONALERT, FILE_WRITE_THROUGH,
+        NTCREATEFILE_CREATE_DISPOSITION,
     },
 };
 use windows::Win32::{
@@ -369,6 +370,26 @@ impl Directory {
             .collect())
     }
     pub(crate) fn read_child_entries(&self, maximum: usize) -> io::Result<Vec<ChildEntry>> {
+        self.read_child_entries_inner(maximum, false)
+            .map(|(entries, _)| entries)
+    }
+    /// 恢复区容错枚举只提供名字，不授予子项能力；调用方仍须以 no-follow 逐项打开。
+    /// 完整快照库存继续使用严格入口，不能因本方法容错而接受 reparse 或漏项。
+    pub(crate) fn read_recovery_child_names(
+        &self,
+        maximum: usize,
+    ) -> io::Result<(Vec<ComponentName>, usize)> {
+        let (entries, rejected) = self.read_child_entries_inner(maximum, true)?;
+        Ok((
+            entries.into_iter().map(|entry| entry.name).collect(),
+            rejected,
+        ))
+    }
+    fn read_child_entries_inner(
+        &self,
+        maximum: usize,
+        tolerate_unsafe_names: bool,
+    ) -> io::Result<(Vec<ChildEntry>, usize)> {
         // Nt directory enumeration has per-file-object cursor state. Serialize
         // users of this retained handle so concurrent readers cannot skip pages.
         let _enumeration = self.enumeration.lock();
@@ -377,6 +398,8 @@ impl Directory {
         }
         self.recheck()?;
         let mut names = vec![];
+        let mut observed = 0usize;
+        let mut rejected = 0usize;
         let mut buffer = vec![0usize; 65536 / size_of::<usize>()];
         let mut class = FileIdBothDirectoryRestartInfo;
         loop {
@@ -417,15 +440,28 @@ impl Directory {
                 let units =
                     unsafe { std::slice::from_raw_parts(entry.FileName.as_ptr(), length / 2) };
                 if units != [b'.' as u16] && units != [b'.' as u16, b'.' as u16] {
-                    if entry.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 {
+                    if !tolerate_unsafe_names
+                        && entry.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0
+                    {
                         return Err(blocked("reparse entry in complete inventory"));
                     }
-                    names.push(ChildEntry {
-                        name: ComponentName::new(&OsString::from_wide(units))?,
-                        directory: entry.FileAttributes & FILE_ATTRIBUTE_DIRECTORY.0 != 0,
-                    });
-                    if names.len() > maximum {
+                    let name = match ComponentName::new(&OsString::from_wide(units)) {
+                        Ok(name) => Some(name),
+                        Err(_) if tolerate_unsafe_names => {
+                            rejected += 1;
+                            None
+                        }
+                        Err(failure) => return Err(failure),
+                    };
+                    observed += 1;
+                    if observed > maximum {
                         return Err(inventory_limit());
+                    }
+                    if let Some(name) = name {
+                        names.push(ChildEntry {
+                            name,
+                            directory: entry.FileAttributes & FILE_ATTRIBUTE_DIRECTORY.0 != 0,
+                        });
                     }
                 }
                 if entry.NextEntryOffset == 0 {
@@ -439,7 +475,7 @@ impl Directory {
             }
         }
         self.recheck()?;
-        Ok(names)
+        Ok((names, rejected))
     }
     fn from_child(
         parent: Arc<Self>,
@@ -612,6 +648,27 @@ impl Directory {
                     error
                 }
             })?;
+        PinnedFile::from_file(self.clone(), name, file)
+    }
+    /// SQLite 可写但不能替换：保留主文件/侧车准确身份，不阻断 SQLite 自身事务锁。
+    /// 只允许调用者为预先固定的侧车名补建空文件，绝不截断已有对象。
+    pub(crate) fn pin_sqlite_file(
+        self: &Arc<Self>,
+        name: ComponentName,
+        create_sidecar: bool,
+    ) -> io::Result<PinnedFile> {
+        let file = self.open_relative(
+            &name,
+            FILE_READ_DATA | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            if create_sidecar {
+                FILE_OPEN_IF
+            } else {
+                FILE_OPEN
+            },
+            false,
+            None,
+        )?;
         PinnedFile::from_file(self.clone(), name, file)
     }
     pub(super) fn open_relative(
@@ -841,6 +898,10 @@ impl PinnedFile {
         result.verify()?;
         Ok(result)
     }
+    pub(crate) fn size(&self) -> io::Result<u64> {
+        self.verify()?;
+        Ok(metadata(handle(&self.file))?.size)
+    }
     pub(crate) fn identity(&self) -> &FileIdentity {
         &self.identity
     }
@@ -868,6 +929,16 @@ impl PinnedFile {
             return Err(blocked("held file name now identifies a different object"));
         }
         Ok(())
+    }
+    /// 有界读取仍使用原持有句柄，不通过可替换路径重新打开。
+    pub(crate) fn read_prefix(&self, maximum: usize) -> io::Result<Vec<u8>> {
+        self.verify()?;
+        let mut file = &self.file;
+        file.seek(SeekFrom::Start(0))?;
+        let mut bytes = Vec::new();
+        file.take(maximum as u64).read_to_end(&mut bytes)?;
+        self.verify()?;
+        Ok(bytes)
     }
     pub(crate) fn digest(&self) -> io::Result<String> {
         self.verify()?;
@@ -898,7 +969,7 @@ impl PinnedFile {
         self.verify()?;
         Ok(OsString::from_wide(&final_path(handle(&self.file))?))
     }
-    pub(super) fn rename_to(
+    pub(crate) fn rename_to(
         &mut self,
         parent: Arc<Directory>,
         name: ComponentName,
@@ -1001,3 +1072,7 @@ fn rename_handle(
         destination,
     })
 }
+
+#[cfg(test)]
+#[path = "projects_fixture_test.rs"]
+pub(crate) mod projects_fixture;

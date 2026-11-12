@@ -317,7 +317,7 @@ rl.createInterface({{input:process.stdin}}).on('line',line=>{{const m=JSON.parse
     environment.insert("SystemRoot".into(), std::env::var_os("SystemRoot").unwrap());
     let launch = Arc::new(LaunchService::new(repo.clone(), Some(environment), None));
     let caller = launch.registry().activate_window("main").unwrap();
-    let service = Arc::new(ProjectionService::new(launch));
+    let service = Arc::new(ProjectionService::new(launch.clone()));
     let source = service
         .scope(
             &caller,
@@ -400,6 +400,43 @@ rl.createInterface({{input:process.stdin}}).on('line',line=>{{const m=JSON.parse
             .unwrap();
         assert_eq!(std::fs::read_to_string(&marker).unwrap(), "archive\n");
         drop(active);
+        // 已认证的其他 Codex 也不能借已归档快路径清除 Unknown。
+        let identity =
+            crate::version_history::codex_archive_admission::CodexOwnerIdentity::new(None);
+        identity.observe(uuid::Uuid::new_v4());
+        let observed = repo
+            .admission()
+            .begin_start(crate::version_history::maintenance::RuntimeKind::Codex(
+                identity,
+            ))
+            .unwrap()
+            .child_created();
+        assert!(service
+            .reconcile_before_unarchive(&caller, &unarchive)
+            .is_err());
+        if move_before_ack {
+            assert_eq!(
+                service
+                    .archive(
+                        &caller,
+                        ArchiveRequest {
+                            operation_id: "observed-owner-must-not-reconcile".into(),
+                            ..request.clone()
+                        }
+                    )
+                    .err()
+                    .unwrap()
+                    .code,
+                "ARCHIVE_BUSY"
+            );
+        }
+        assert!(
+            service
+                .reconcile_before_unarchive(&caller, &unarchive)
+                .is_err(),
+            "rejected archive must retain Unknown"
+        );
+        observed.reaped();
         if !move_before_ack {
             assert_eq!(
                 service
@@ -429,7 +466,26 @@ rl.createInterface({{input:process.stdin}}).on('line',line=>{{const m=JSON.parse
         service
             .reconcile_before_unarchive(&caller, &unarchive)
             .unwrap();
-        std::fs::rename(&archived, &file).unwrap();
+        #[allow(dead_code, clippy::duplicate_mod)]
+        #[path = "../conpty_runtime.rs"]
+        mod bundled_runtime;
+        bundled_runtime::initialize().unwrap();
+        std::fs::write(
+            project.join("unarchive"),
+            format!(
+                "require('node:fs').renameSync({}, {});",
+                json!(archived.to_str().unwrap()),
+                json!(file.to_str().unwrap())
+            ),
+        )
+        .unwrap();
+        launch
+            .run_command(&caller, &unarchive.to_launch_request())
+            .unwrap();
+        assert!(
+            repo.admission().check_codex_archive_idle().is_ok(),
+            "successful unarchive must permit immediate rearchive"
+        );
         service
             .archive(
                 &caller,
@@ -609,5 +665,241 @@ fn NativeArchive_UnrelatedPreparationAndExitKeepFreeze_015() {
         drop(helper);
         frozen.release_review().unwrap();
         assert!(gate.check_metadata_idle().is_ok());
+    }
+}
+
+#[test]
+fn NativeArchive_RelationPreflightAllowsOnlyDisjointOwners_024() {
+    use std::{
+        cell::RefCell,
+        collections::{BTreeSet, HashMap},
+    };
+    let target = uuid::Uuid::new_v4();
+    let owner = uuid::Uuid::new_v4();
+    let ancestor = uuid::Uuid::new_v4();
+    for mode in [
+        "unrelated",
+        "descendant",
+        "ancestor",
+        "sibling",
+        "missing",
+        "wrong-id",
+        "native-error",
+    ] {
+        let t = |id: uuid::Uuid, parent: Option<uuid::Uuid>| json!({"id":id.to_string(),"parentThreadId":parent.map(|id|id.to_string())});
+        let mut records = HashMap::from([
+            (target, t(target, None)),
+            (owner, t(owner, None)),
+            (ancestor, t(ancestor, None)),
+        ]);
+        match mode {
+            "descendant" => {
+                records.insert(owner, t(owner, Some(target)));
+            }
+            "ancestor" => {
+                records.insert(target, t(target, Some(owner)));
+            }
+            "sibling" => {
+                records.insert(target, t(target, Some(ancestor)));
+                records.insert(owner, t(owner, Some(ancestor)));
+            }
+            "missing" => {
+                records.insert(owner, json!({"id":owner.to_string()}));
+            }
+            "wrong-id" => {
+                records.insert(owner, t(target, None));
+            }
+            _ => {}
+        }
+        let sent = RefCell::new(Vec::<serde_json::Value>::new());
+        let result = exchange_scoped(
+            &target.to_string(),
+            &BTreeSet::from([owner]),
+            &mut |frame| {
+                sent.borrow_mut().push(frame);
+                Ok(())
+            },
+            &mut |id| {
+                if id == 1 {
+                    return Ok(json!({"id":id,"result":{}}));
+                }
+                if id == 3 {
+                    return Ok(if mode == "native-error" {
+                        json!({"id":id,"error":{"code":-32600,"message":"writer conflict"}})
+                    } else {
+                        json!({"id":id,"result":{}})
+                    });
+                }
+                let requested = sent.borrow().last().unwrap()["params"]["threadId"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned();
+                let record = records
+                    .get(&uuid::Uuid::parse_str(&requested).unwrap())
+                    .unwrap();
+                Ok(json!({"id":id,"result":{"thread":record}}))
+            },
+            &|_| Ok(()),
+            &|_, _| Ok(()),
+        );
+        let frames = sent.into_inner();
+        let writes = frames
+            .iter()
+            .filter(|frame| frame["method"] == "thread/archive")
+            .count();
+        assert!(frames.iter().all(|frame| matches!(
+            frame["method"].as_str(),
+            Some("initialize" | "initialized" | "thread/read" | "thread/archive")
+        )));
+        match mode {
+            "unrelated" | "sibling" => {
+                result.unwrap();
+                assert_eq!(writes, 1);
+            }
+            "native-error" => {
+                assert_eq!(result.unwrap_err().code, "ARCHIVE_OUTCOME_UNKNOWN");
+                assert_eq!(writes, 1);
+            }
+            "descendant" | "ancestor" => {
+                assert_eq!(result.unwrap_err().code, "ARCHIVE_BUSY");
+                assert_eq!(writes, 0);
+            }
+            _ => {
+                assert_eq!(result.unwrap_err().code, "ARCHIVE_RELATION_UNAVAILABLE");
+                assert_eq!(writes, 0);
+            }
+        }
+    }
+}
+
+#[test]
+fn NativeArchive_SendCommitDistinguishesRefusalFromUnknown_025() {
+    for mode in ["before", "attempted", "after"] {
+        let mut sent = Vec::new();
+        let mut replies = replies();
+        let result = exchange_scoped(
+            "fixture",
+            &Default::default(),
+            &mut |frame| {
+                if mode == "before" && frame["method"] == "thread/archive" {
+                    return Err(SendFailure::NotSent(crate::cli::profiles::error(
+                        "ARCHIVE_BUSY",
+                    )));
+                }
+                let mutation = frame["method"] == "thread/archive";
+                let after = frame["id"] == 4;
+                sent.push(frame);
+                if mode == "attempted" && mutation {
+                    return Err(SendFailure::Attempted(crate::cli::profiles::error(
+                        "ARCHIVE_BUSY",
+                    )));
+                }
+                if mode == "after" && after {
+                    return Err(SendFailure::NotSent(crate::cli::profiles::error(
+                        "ARCHIVE_BUSY",
+                    )));
+                }
+                Ok(())
+            },
+            &mut |_| Ok(replies.pop_front().unwrap()),
+            &|_| Ok(()),
+            &|_, _| Ok(()),
+        );
+        assert_eq!(
+            result.unwrap_err().code,
+            if mode == "before" {
+                "ARCHIVE_BUSY"
+            } else {
+                "ARCHIVE_OUTCOME_UNKNOWN"
+            }
+        );
+        assert_eq!(
+            sent.iter()
+                .filter(|frame| frame["method"] == "thread/archive")
+                .count(),
+            usize::from(mode != "before")
+        );
+    }
+}
+#[test]
+fn NativeArchive_BlockedInputDoesNotHoldAdmissionAndTimesOutUnknown_028() {
+    use crate::version_history::{
+        codex_archive_admission::CodexOwnerIdentity,
+        maintenance::{AdmissionGate, RuntimeKind},
+    };
+    use std::{
+        sync::mpsc,
+        time::{Duration, Instant},
+    };
+    struct Blocked {
+        entered: mpsc::SyncSender<()>,
+        release: mpsc::Receiver<()>,
+    }
+    impl std::io::Write for Blocked {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            let _ = self.entered.try_send(());
+            let _ = self.release.recv();
+            Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "test closed",
+            ))
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    for change in [false, true] {
+        let gate = AdmissionGate::new();
+        let identity = CodexOwnerIdentity::new(None);
+        identity.observe(uuid::Uuid::new_v4());
+        let owned = gate
+            .begin_start(RuntimeKind::Codex(identity.clone()))
+            .unwrap()
+            .child_created();
+        let (frozen, helper, owners) = gate.begin_codex_archive_for(uuid::Uuid::new_v4()).unwrap();
+        let (entered, entered_rx) = mpsc::sync_channel(1);
+        let (release, released) = mpsc::sync_channel(1);
+        let input = input_writer(Blocked {
+            entered,
+            release: released,
+        })
+        .unwrap();
+        let (completed, completion) = mpsc::sync_channel(1);
+        let worker = std::thread::spawn(move || {
+            owners.with_current(|| ()).unwrap();
+            let result = send_bytes(
+                &input,
+                b"archive\n".to_vec(),
+                Instant::now() + Duration::from_millis(300),
+                &|| owners.current(),
+            )
+            .map_err(SendFailure::Attempted)
+            .map_err(SendFailure::archive);
+            let _ = completed.send(result);
+        });
+        entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let (probed, probe_result) = mpsc::sync_channel(1);
+        let probe_gate = gate.clone();
+        let probe = std::thread::spawn(move || {
+            let refused = probe_gate.begin_start(RuntimeKind::Native).is_err();
+            if change {
+                identity.observe(uuid::Uuid::new_v4());
+            }
+            let _ = probed.send(refused);
+        });
+        // 在释放 blocked Write 之前观察门禁、hook 和超时，先清理后断言避免失败挂起。
+        let responsive = probe_result.recv_timeout(Duration::from_secs(1));
+        let bounded = completion.recv_timeout(Duration::from_secs(1));
+        release.send(()).unwrap();
+        probe.join().unwrap();
+        worker.join().unwrap();
+        assert!(responsive.unwrap());
+        assert_eq!(
+            bounded.unwrap().unwrap_err().code,
+            "ARCHIVE_OUTCOME_UNKNOWN"
+        );
+        drop(helper);
+        frozen.release_review().unwrap();
+        owned.reaped();
     }
 }

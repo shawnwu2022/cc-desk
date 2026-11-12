@@ -3,6 +3,9 @@ on:
   push:
     branches: [codex/fix-devtools-text-paste]
     paths:
+      - 'scripts/opencode-archive-*.mjs'
+      - 'scripts/prepare-opencode-archive-sdk.mjs'
+      - 'scripts/opencode-archive-runtime/**'
       - .github/workflows/paste-runtime-trace.yml
       - .github/scripts/transpile_production_source.cjs
       - src/utils/pasteText.ts
@@ -30,7 +33,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version: '24.18.0'
           cache: npm
       - uses: dtolnay/rust-toolchain@1.98.1
         with:
@@ -46,6 +49,8 @@ jobs:
         working-directory: .
         run: |
           npm run prepare:session-sdk
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run prepare:opencode-archive
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - run: node scripts/prepare-conpty.mjs

@@ -1045,3 +1045,26 @@ fn NativeDelete_SlowPreWriteValidationCannotDispatchAfterDeadline_084() {
         .any(|packet| packet["method"] == "thread/delete"));
     assert_eq!(pre_dispatch_failure(failure).code, "DELETE_PREPARE_FAILED");
 }
+
+#[test]
+fn ProviderDelete_LedgerNeverIssuesUnsupportedProviderTickets_014() {
+    for cli in [CliKind::Claude, CliKind::Opencode] {
+        let mut request = request();
+        request.source.cli = cli;
+        let operations = Operations::default();
+        assert_eq!(
+            operations
+                .register(
+                    &caller(),
+                    &request,
+                    "00000000-0000-4000-8000-000000000070",
+                    "fixture".into()
+                )
+                .err()
+                .unwrap()
+                .code,
+            "NATIVE_DELETE_UNSUPPORTED"
+        );
+        assert!(operations.get(&caller(), &request.operation_id).is_err());
+    }
+}

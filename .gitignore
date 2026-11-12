@@ -63,3 +63,6 @@ playwright-report/
 
 # Generated pinned Claude session metadata helper
 src-tauri/resources/native-session-sdk/
+
+# Generated pinned OpenCode archive helper (build cache stays in .cache/)
+src-tauri/resources/opencode-native-archive/

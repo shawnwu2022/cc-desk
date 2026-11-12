@@ -27,6 +27,28 @@ fn production_items(root: &Path, source: &str, names: &[&str]) -> String {
         .join("\n")
 }
 
+// 能力方法始终取自唯一的完整生产 impl，不裁剪或替换其校验。
+fn production_impl(root: &Path, source: &str, name: &str) -> String {
+    let path = root.join(source);
+    println!("cargo:rerun-if-changed={}", path.display());
+    let parsed = syn::parse_file(&fs::read_to_string(&path).expect("read production source"))
+        .expect("parse production source");
+    let selected: Vec<_> = parsed
+        .items
+        .iter()
+        .filter(|item| match item {
+            syn::Item::Impl(value) => {
+                value.trait_.is_none()
+                    && matches!(value.self_ty.as_ref(), syn::Type::Path(path)
+                if path.qself.is_none() && path.path.is_ident(name))
+            }
+            _ => false,
+        })
+        .collect();
+    assert_eq!(selected.len(), 1, "production impl {source}::{name}");
+    selected[0].to_token_stream().to_string()
+}
+
 fn main() {
     let manifest = std::path::PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let root = manifest
@@ -81,6 +103,17 @@ fn main() {
     let security = root.join("version_history/windows/security.rs");
     fs::write(out.join("windows.rs"), format!(
         "use std::{{io, os::windows::io::{{AsRawHandle, FromRawHandle, OwnedHandle}}}}; use windows::Win32::Foundation::HANDLE;\n{windows}\n#[path = {files:?}] pub(crate) mod files;\n#[path = {security:?}] pub(crate) mod security;"
+    )).unwrap();
+    // scope-core 编译完整来源固定能力；helper 执行及其 owner 由主 crate 验证。
+    let source = "cli/opencode_archive_windows.rs";
+    let pinned = production_items(
+        &root,
+        source,
+        &["SOURCE_LIMIT", "unavailable", "local_path", "PinnedSource"],
+    );
+    let pinned_impl = production_impl(&root, source, "PinnedSource");
+    fs::write(out.join("opencode_archive.rs"), format!(
+        "use crate::cli::{{profiles::error, types::SafeError}}; use crate::version_history::windows::files::{{ComponentName, Directory, FileAccess, PinnedFile}}; use std::{{ffi::OsStr, path::{{Path, PathBuf}}, sync::Arc}};\n{pinned}\n{pinned_impl}"
     )).unwrap();
     // include_bytes! 使用调用 crate 的 manifest；复制已生成的同一官方 bundle。
     let helper = root.join("../resources/native-session-sdk/bridge.cjs");

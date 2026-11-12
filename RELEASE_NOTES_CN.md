@@ -4,6 +4,25 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
+## [0.27.0-rc.6]
+
+新增
+
+- Windows 提供独立的 Claude 恢复区：将已核实的主会话记录移到持久恢复位置，并支持不覆盖现有文件的恢复。
+- Windows 提供独立的 OpenCode 原生归档与恢复面板。恢复原生状态不会启动终端，也不会自动清除 Desk 归档标记。
+
+修复
+
+- 无关的结构化会话经核实后不再阻止 Codex 归档；相关会话、未知活动和冲突维护仍会阻止操作。
+- 重命名正确接纳 Windows 规范历史路径；元数据辅助进程清理完成前继续保留操作所有权。
+
+重要说明
+
+- 这是预发布版本，稳定 Latest 保持不变。Claude 和 OpenCode 永久删除尚未实现，入口继续关闭；恢复区和原生归档不等于永久删除。既有 Codex 删除仍是 Windows 上带独立复核与确认的操作。
+- Claude 仅移动主 transcript，子任务、附件和原生索引保留原地。OpenCode 归档保留记录，需要 Node.js 24.18 或更新版本及受支持的本地数据库结构。未知来源拒绝操作，结果不确定时只读核对，不自动重试写入。
+- 新功能仅适用于符合条件、已关闭且已在 Desk 归档的记录和核实的本地来源。Claude 恢复区与 OpenCode 归档要求受支持的 Windows/NTFS 来源及 CC Desk 运行时空闲，不沿用 Codex 并发例外。旧 Desk 标记不会自动迁移，请备份重要数据。
+- 隔离 Windows WebView 检查覆盖生产控件和认证 IPC，OpenCode 路径通过官方元数据 helper 操作合成数据；不代表完整安装版、真实模型会话、完整后代或外部写入已验收。D20/native All、签名安装及返回旧版仍未验证。updater 签名不代表 Windows Authenticode。
+
 ## [0.27.0-rc.5]
 
 修复

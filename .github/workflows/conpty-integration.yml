@@ -2,6 +2,9 @@ name: Windows test package and bundled ConPTY integration
 on:
   pull_request:
     paths:
+      - 'scripts/opencode-archive-*.mjs'
+      - 'scripts/prepare-opencode-archive-sdk.mjs'
+      - 'scripts/opencode-archive-runtime/**'
       # Unified UX changes need the final installed Windows package gate too.
       - src/**
       - src-tauri/src/commands.rs
@@ -67,7 +70,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version: '24.18.0'
           cache: npm
       - uses: dtolnay/rust-toolchain@1.98.1
         with:
@@ -97,7 +100,11 @@ jobs:
           NODE
 
       - name: Prepare pinned session metadata helper
-        run: npm run prepare:session-sdk
+        run: |
+          npm run prepare:session-sdk
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run prepare:opencode-archive
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Prepare verified bundled Windows runtime
         run: node scripts/prepare-conpty.mjs
@@ -144,7 +151,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version: '24.18.0'
           cache: npm
       - uses: dtolnay/rust-toolchain@1.98.1
         with:
@@ -163,6 +170,8 @@ jobs:
         working-directory: .
         run: |
           npm run prepare:session-sdk
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run prepare:opencode-archive
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Prepare verified bundled Windows runtime

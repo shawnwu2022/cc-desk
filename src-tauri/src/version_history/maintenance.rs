@@ -1,5 +1,6 @@
 //! Backend-held admission contracts. No command, IPC constructor, automatic kill,
 //! or production Windows proof constructor is supplied by this foundation.
+use super::codex_archive_admission::{CodexArchiveOwners, CodexOwnerIdentity};
 use super::journal::{JournalBinding, RootKind};
 use crate::cli::profiles::error;
 use crate::cli::types::SafeError;
@@ -7,10 +8,11 @@ use parking_lot::Mutex;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, LazyLock};
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) enum RuntimeKind {
     Native,
     NativeCli(crate::cli::types::CliKind),
+    Codex(Arc<CodexOwnerIdentity>),
     Legacy,
 }
 
@@ -20,7 +22,16 @@ enum ChildState {
     Unknown,
 }
 impl ChildState {
-    fn blocks_codex_archive(&self) -> bool {
+    fn blocks_codex_archive(&self, target: Option<uuid::Uuid>) -> bool {
+        if let Self::Starting(RuntimeKind::Codex(identity))
+        | Self::Running(RuntimeKind::Codex(identity)) = self
+        {
+            return target.is_none_or(|target| {
+                identity
+                    .sessions()
+                    .map_or(true, |ids| ids.contains(&target))
+            });
+        }
         use crate::cli::types::CliKind;
         !matches!(
             self,
@@ -37,6 +48,7 @@ struct AdmissionState {
     children: HashMap<uuid::Uuid, ChildState>,
     mutations: HashMap<uuid::Uuid, MutationState>,
     frozen: Option<String>,
+    archive_epoch: u64,
 }
 enum MutationState {
     Active,
@@ -60,6 +72,11 @@ impl std::fmt::Debug for AdmissionGate {
     }
 }
 
+fn changed(state: &mut AdmissionState, id: uuid::Uuid) {
+    if state.frozen.as_deref() != Some(id.to_string().as_str()) {
+        state.archive_epoch = state.archive_epoch.saturating_add(1);
+    }
+}
 impl AdmissionGate {
     pub(crate) fn check_metadata_idle(&self) -> Result<(), SafeError> {
         let state = self.0.lock();
@@ -68,13 +85,34 @@ impl AdmissionGate {
         }
         Ok(())
     }
+    pub(crate) fn with_archive_epoch<T>(
+        &self,
+        epoch: u64,
+        transaction: &str,
+        action: impl FnOnce() -> Result<T, SafeError>,
+    ) -> Result<T, SafeError> {
+        let state = self.0.lock();
+        if epoch == u64::MAX
+            || state.archive_epoch != epoch
+            || state.frozen.as_deref() != Some(transaction)
+        {
+            return Err(error("ARCHIVE_BUSY"));
+        }
+        action()
+    }
     pub(crate) fn check_codex_archive_idle(&self) -> Result<(), SafeError> {
+        self.check_codex_archive(None)
+    }
+    pub(crate) fn check_codex_archive_for(&self, target: uuid::Uuid) -> Result<(), SafeError> {
+        self.check_codex_archive(Some(target))
+    }
+    fn check_codex_archive(&self, target: Option<uuid::Uuid>) -> Result<(), SafeError> {
         let state = self.0.lock();
         if state.frozen.is_some()
             || state
                 .children
                 .values()
-                .any(ChildState::blocks_codex_archive)
+                .any(|child| child.blocks_codex_archive(target))
             || !state.mutations.is_empty()
         {
             return Err(error("SOURCE_BUSY"));
@@ -84,31 +122,58 @@ impl AdmissionGate {
     pub(crate) fn begin_codex_archive(
         &self,
     ) -> Result<(FrozenAdmissions, PreparingStart), SafeError> {
-        self.begin_metadata_scoped(true)
+        self.begin_metadata_scoped(true, None)
+            .map(|(a, b, _)| (a, b))
     }
-    /// 元数据助手独占启动票据，同时冻结其他运行时启动与权威写入。
-    /// 调用方必须持有冻结状态，直到精确子进程及其受控后代全部收口。
+    pub(crate) fn begin_codex_archive_for(
+        &self,
+        target: uuid::Uuid,
+    ) -> Result<(FrozenAdmissions, PreparingStart, CodexArchiveOwners), SafeError> {
+        self.begin_metadata_scoped(true, Some(target))
+    }
     pub(crate) fn begin_metadata(&self) -> Result<(FrozenAdmissions, PreparingStart), SafeError> {
-        self.begin_metadata_scoped(false)
+        self.begin_metadata_scoped(false, None)
+            .map(|(a, b, _)| (a, b))
     }
     fn begin_metadata_scoped(
         &self,
         codex_archive: bool,
-    ) -> Result<(FrozenAdmissions, PreparingStart), SafeError> {
+        target: Option<uuid::Uuid>,
+    ) -> Result<(FrozenAdmissions, PreparingStart, CodexArchiveOwners), SafeError> {
         let mut state = self.0.lock();
-        let children_busy = if codex_archive {
+        let busy = if codex_archive {
             state
                 .children
                 .values()
-                .any(ChildState::blocks_codex_archive)
+                .any(|child| child.blocks_codex_archive(target))
         } else {
             !state.children.is_empty()
         };
-        if state.frozen.is_some() || children_busy || !state.mutations.is_empty() {
+        if state.frozen.is_some() || busy || !state.mutations.is_empty() {
+            return Err(error("SOURCE_BUSY"));
+        }
+        let mut identities = Vec::new();
+        let mut sessions = std::collections::BTreeSet::new();
+        for child in state.children.values() {
+            if let ChildState::Starting(RuntimeKind::Codex(identity))
+            | ChildState::Running(RuntimeKind::Codex(identity)) = child
+            {
+                sessions.extend(identity.sessions()?);
+                identities.push(identity.clone());
+            }
+        }
+        if sessions.len() > 128 {
             return Err(error("SOURCE_BUSY"));
         }
         let id = uuid::Uuid::new_v4();
         let transaction_id = id.to_string();
+        let owners = CodexArchiveOwners {
+            transaction_id: transaction_id.clone(),
+            gate: self.clone(),
+            epoch: state.archive_epoch,
+            identities,
+            sessions,
+        };
         state.frozen = Some(transaction_id.clone());
         state
             .children
@@ -125,6 +190,7 @@ impl AdmissionGate {
                 completed: false,
             }
             .preparing(),
+            owners,
         ))
     }
     pub(crate) fn new() -> Self {
@@ -137,6 +203,7 @@ impl AdmissionGate {
             return Err(error("HISTORY_MAINTENANCE_ACTIVE"));
         }
         let id = uuid::Uuid::new_v4();
+        changed(&mut state, id);
         state.children.insert(id, ChildState::Starting(runtime));
         Ok(StartTicket {
             gate: self.clone(),
@@ -225,14 +292,17 @@ impl StartTicket {
         PreparingStart(Some(self))
     }
     pub(crate) fn no_child_created(mut self) {
-        self.gate.0.lock().children.remove(&self.id);
+        let mut state = self.gate.0.lock();
+        changed(&mut state, self.id);
+        state.children.remove(&self.id);
         self.completed = true;
     }
 
     pub(crate) fn child_created(mut self) -> OwnedChildTicket {
         let mut state = self.gate.0.lock();
         if let Some(ChildState::Starting(runtime)) = state.children.get(&self.id) {
-            let runtime = *runtime;
+            let runtime = runtime.clone();
+            changed(&mut state, self.id);
             state.children.insert(self.id, ChildState::Running(runtime));
         }
         self.completed = true;
@@ -246,11 +316,9 @@ impl StartTicket {
 impl Drop for StartTicket {
     fn drop(&mut self) {
         if !self.completed {
-            self.gate
-                .0
-                .lock()
-                .children
-                .insert(self.id, ChildState::Unknown);
+            let mut state = self.gate.0.lock();
+            changed(&mut state, self.id);
+            state.children.insert(self.id, ChildState::Unknown);
         }
     }
 }
@@ -268,9 +336,25 @@ impl PreparingStart {
                 state.children.get(&ticket.id),
                 Some(ChildState::Starting(RuntimeKind::Native))
             ) {
+                changed(&mut state, ticket.id);
                 state
                     .children
                     .insert(ticket.id, ChildState::Starting(RuntimeKind::NativeCli(cli)));
+            }
+        }
+    }
+    pub(crate) fn identify_codex(&mut self, identity: Arc<CodexOwnerIdentity>) {
+        if let Some(ticket) = &self.0 {
+            let mut state = ticket.gate.0.lock();
+            if matches!(
+                state.children.get(&ticket.id),
+                Some(ChildState::Starting(RuntimeKind::Native))
+            ) {
+                changed(&mut state, ticket.id);
+                state.children.insert(
+                    ticket.id,
+                    ChildState::Starting(RuntimeKind::Codex(identity)),
+                );
             }
         }
     }
@@ -313,7 +397,9 @@ pub(crate) struct OwnedChildTicket {
 }
 impl OwnedChildTicket {
     pub(crate) fn reaped(mut self) {
-        self.gate.0.lock().children.remove(&self.id);
+        let mut state = self.gate.0.lock();
+        changed(&mut state, self.id);
+        state.children.remove(&self.id);
         self.completed = true;
     }
     pub(crate) fn wait_failed(self) {
@@ -323,11 +409,9 @@ impl OwnedChildTicket {
 impl Drop for OwnedChildTicket {
     fn drop(&mut self) {
         if !self.completed {
-            self.gate
-                .0
-                .lock()
-                .children
-                .insert(self.id, ChildState::Unknown);
+            let mut state = self.gate.0.lock();
+            changed(&mut state, self.id);
+            state.children.insert(self.id, ChildState::Unknown);
         }
     }
 }

@@ -225,6 +225,10 @@ impl Operations {
         native_id: &str,
         observation: String,
     ) -> Result<Preview, SafeError> {
+        // 其他提供方只有只读来源诊断；后续适配不能仅凭有效 ID 绕过执行能力门。
+        if request.source.cli != CliKind::Codex {
+            return Err(error("NATIVE_DELETE_UNSUPPORTED"));
+        }
         let native_id = uuid::Uuid::parse_str(native_id)
             .map_err(|_| error("DELETE_SOURCE_UNAVAILABLE"))?
             .to_string();
