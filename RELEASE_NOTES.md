@@ -4,6 +4,25 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
+## [0.27.0-rc.6]
+
+Added
+
+- A separate Claude recovery area on Windows: move the verified main transcript to a persistent recovery location and restore it without overwriting another file.
+- Reversible OpenCode native archive and restore on Windows through a separate panel. Restoring native state does not start a terminal or automatically remove the Desk archive marker.
+
+Fixed
+
+- Allow Codex archiving with verified unrelated structured sessions open, while blocking related sessions, unknown activity and conflicting maintenance.
+- Accept canonical Windows history paths during rename and keep metadata-operation ownership until helper cleanup finishes.
+
+Important
+
+- This is a prerelease. Stable Latest remains unchanged. Claude and OpenCode permanent deletion is not implemented and remains disabled; these recovery and archive features are not permanent deletion. Existing Codex deletion remains a separate Windows-only operation with its own review and confirmations.
+- Claude recovery moves only the main transcript, leaving children, attachments and native indexes in place. OpenCode archive preserves records and requires Node.js 24.18 or newer and a supported local database schema. Unknown sources or outcomes are refused or reconciled read-only, never automatically retried.
+- These operations require eligible closed, Desk-archived records and verified local sources. Claude recovery and OpenCode archive require a supported Windows/NTFS source and idle CC Desk runtimes; the Codex concurrency exception does not apply to them. Existing Desk markers are not migrated automatically. Back up important data.
+- Isolated Windows WebView checks cover the production controls and authenticated IPC; the OpenCode path runs the official metadata helper against synthetic data. They do not certify an installed application, real model sessions, complete descendants or external writers. D20/native All and signed installation/return remain unverified. Updater signatures are not Windows Authenticode.
+
 ## [0.27.0-rc.5]
 
 Fixed

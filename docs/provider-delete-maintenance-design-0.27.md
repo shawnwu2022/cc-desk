@@ -1,6 +1,6 @@
 # Claude / OpenCode 永久删除的后续维护设计
 
-本文件的维护执行合同仍为下一阶段设计，**没有开放删除执行**。0.70 已接入下述只读来源诊断切片；两家原生删除继续关闭；不重复已被阶段9反例推翻的分享锁/最后一次idle查询方案，不用隐藏或软归档替代永久删除。已证事实和固定源码见 [阶段9审计](../.audit/v027-stage9-provider-delete.md)。当前开发只允许任务新建合成源，不操作真实用户会话/服务、权限或凭据。
+本文件的维护执行合同仍为下一阶段设计，**没有开放删除执行**。0.27 已接入下述只读来源诊断切片；两家原生删除继续关闭；不重复已被阶段9反例推翻的分享锁/最后一次idle查询方案，不用隐藏或软归档替代永久删除。已证事实和固定源码见 [阶段9审计](../.audit/v027-stage9-provider-delete.md)。当前开发只允许任务新建合成源，不操作真实用户会话/服务、权限或凭据。
 
 ## Claude：分离原件来源与维护准入
 
@@ -51,7 +51,7 @@
 来源、活动/维护、双确认、逐根结果和恢复失败各自有证据才开放相应能力。新增危险能力先合成RED、最小实现、独立安全审查和固定工具链受影响验证；真实数据操作另有授权。维护执行仍仅保留设计；只读诊断不执行权限改动、启动真实服务、调用模型或删除真实用户数据。
 
 
-## 0.70：只读目标诊断切片
+## 0.27：只读目标诊断切片
 
 `cli_preview_session_delete` 现在对 Claude/OpenCode 也重新核对 authenticated caller、精确 profile/revision、held root、注册项目和当前 sessionKey。它使用既有只读投影授权，Claude 额外核对原始 transcript 的 UUID/cwd，OpenCode 使用实际选定 SQLite 的受限只读快照；不启动 CLI/服务，不调用 SDK、不执行 SQL 写入，也不修改 ACL。
 
@@ -65,7 +65,7 @@
 
 2026-11-12 WSK-MSI 本地验证：新增前端诊断先 RED 后 GREEN；5 个删除相关前端文件共 68 项通过，TypeScript/Vue 类型检查通过。新增 `ProviderDelete_` 3 项先全部 RED 后全部 GREEN；既有 `NativeDelete_` 16 项、`native_cli_projection_service` 19 项通过（后者含 2 项新增重复）。`cargo fmt --all -- --check` 和 `cargo clippy --locked --all-targets -- -D warnings` 通过，独立只读审查无阻断发现。Cargo 提示既有全局 cache 的 Windows `nul` 元数据清理失败，但命令最终成功；未改缓存清理策略。未运行全量 Rust/前端、真实提供方删除或安装包 WebView 验收，不把本切片测试冒充上述证据。
 
-## 0.70：独立可恢复产品切片
+## 0.27：独立可恢复产品切片
 
 后续实现了 [Claude 主记录可恢复移除](recoverable-claude-removal-0.70.md)：不要求未知外部子任务已完全静止，因为它们保留原地且不会 purge；主 transcript 原件以精确身份移入持久恢复区，冲突恢复不覆盖。该独立功能不能替代本文件的永久原生删除合同，OpenCode 的整库/跨实例维护边界也未因此解决。
 

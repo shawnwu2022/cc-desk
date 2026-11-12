@@ -781,6 +781,6 @@ Codex 行的“原生归档”使用 authenticated `cli_archive_session`，经�
 
 并发准入、单次写入/Unknown、真实 CLI 隔离矩阵及兼容性边界见 [Codex 归档并发边界](codex-archive-concurrency.md)。只使用独立 app-server，不发送停止或主动接管外部会话；Unknown 收口与已归档快路径仍保留全 Codex 冻结。
 
-## 0.70：Claude 主记录可恢复移除
+## 0.27：Claude 主记录可恢复移除
 
 独立的 `cli_recycle_session` 和“Claude 恢复区”仅支持已核实 Windows NTFS 配置来源。它只将主 transcript 原件移入同卷持久恢复区，保留子任务、附件和原生索引，提供无覆盖恢复；不是原生归档、软隐藏或永久删除。未知结果不重发，原有永久删除能力门不变。范围、句柄/日志契约与验证边界见 [可恢复移除](recoverable-claude-removal-0.70.md)。

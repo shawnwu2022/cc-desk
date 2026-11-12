@@ -1,6 +1,6 @@
 # Three-CLI offline metadata acceptance
 
-This Windows-only experiment supplements TODO 4 for the user-designated 0.70 work. It does not change the application version.
+This Windows-only experiment supplements TODO 4 for the 0.27 work (the earlier 0.70 task label was corrected). It does not change the application version.
 
 ## Scope
 
