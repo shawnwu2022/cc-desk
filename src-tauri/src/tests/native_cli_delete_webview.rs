@@ -1,5 +1,7 @@
 //! 阶段11测试宿主；正式应用启动、用户目录及默认工作区不进入此路径。
 use super::*;
+#[path = "native_cli_delete_opencode_webview.rs"]
+mod opencode;
 #[path = "native_cli_delete_recycle_webview.rs"]
 mod recycle;
 use crate::cli::{
@@ -663,6 +665,9 @@ struct TaskBackendFixture {
     peer_reply: Mutex<Option<mpsc::Sender<bool>>>,
     desk_checks: Mutex<Vec<String>>,
     desk_key: Mutex<Option<String>>,
+    opencode: opencode::OpencodeFixture,
+    opencode_checks: Mutex<Vec<String>>,
+    opencode_calls: AtomicUsize,
     desk_archives: AtomicUsize,
     desk_restores: AtomicUsize,
     desk_upserts: AtomicUsize,
@@ -711,7 +716,13 @@ impl TaskBackendFixture {
             |deleted| self.verify_files(deleted),
             |removed| self.recycle.verify(removed),
         )?;
-        self.verify_desk_final()
+        self.verify_desk_final()?;
+        if self.opencode_checks.lock().len() != 3
+            || self.opencode_calls.load(Ordering::Acquire) != 2
+        {
+            return Err("OPENCODE_FINAL_INVALID".into());
+        }
+        self.opencode.verify(false, 2)
     }
     fn verify_files(&self, deleted: bool) -> Result<(), String> {
         let b = self.backend.lock();
@@ -790,7 +801,7 @@ async fn s11_fixture(
     let context = state.context();
     let b = state.backend.lock();
     Ok(
-        serde_json::json!({"context":context,"targetId":b.id,"controlId":b.active_id,"expiryId":state.expiry_id,"native":state.native,"recycleContext":state.recycle.context,"recycleId":state.recycle.id}),
+        serde_json::json!({"context":context,"targetId":b.id,"controlId":b.active_id,"expiryId":state.expiry_id,"native":state.native,"recycleContext":state.recycle.context,"recycleId":state.recycle.id,"opencodeContext":state.opencode.context,"opencodeId":state.opencode.id}),
     )
 }
 #[tauri::command]
@@ -966,7 +977,15 @@ async fn s11_capture(
     let q: Named = query(&request)?;
     let (names, count) = {
         let captures = state.captures.lock();
-        if q.name.starts_with("desk-") {
+        if q.name.starts_with("opencode-") {
+            (
+                ["opencode-review", "opencode-archived", "opencode-restored"],
+                captures
+                    .iter()
+                    .filter(|name| name.starts_with("opencode-"))
+                    .count(),
+            )
+        } else if q.name.starts_with("desk-") {
             (
                 ["desk-archived", "desk-restored", "desk-rearchived"],
                 captures
@@ -987,7 +1006,11 @@ async fn s11_capture(
                 ["review", "confirmation", "result"],
                 captures
                     .iter()
-                    .filter(|name| !name.starts_with("recycle-") && !name.starts_with("desk-"))
+                    .filter(|name| {
+                        !name.starts_with("recycle-")
+                            && !name.starts_with("desk-")
+                            && !name.starts_with("opencode-")
+                    })
                     .count(),
             )
         }
@@ -1254,6 +1277,7 @@ fn worker(native: bool) {
     .map(|path| (path.clone(), fs::read(path).unwrap()))
     .collect();
     let recycle = RecycleFixture::new(&backend);
+    let opencode = opencode::OpencodeFixture::new(&backend);
     let runtime = Arc::new(NativeRuntime::new(backend.launch.clone()));
     let server = AssetServer::start(assets.clone()).unwrap();
     let state = Arc::new(TaskBackendFixture {
@@ -1273,6 +1297,9 @@ fn worker(native: bool) {
         peer_reply: Mutex::new(None),
         desk_checks: Mutex::new(vec![]),
         desk_key: Mutex::new(None),
+        opencode,
+        opencode_checks: Mutex::new(vec![]),
+        opencode_calls: AtomicUsize::new(0),
         desk_archives: AtomicUsize::new(0),
         desk_restores: AtomicUsize::new(0),
         desk_upserts: AtomicUsize::new(0),
@@ -1320,6 +1347,8 @@ fn worker(native: bool) {
         crate::commands::archive_session,
         crate::commands::restore_session,
         crate::commands::upsert_session_ui_record,
+        opencode::s11_opencode_checkpoint,
+        crate::cli::commands::cli_set_opencode_archive,
         recycle::s11_desk_checkpoint,
         recycle::s11_recycle_checkpoint,
         s11_fixture,
@@ -1362,6 +1391,9 @@ fn worker(native: bool) {
                     }
                     _ => {}
                 }
+            }
+            if command == "cli_set_opencode_archive" {
+                dispatch.opencode_calls.fetch_add(1, Ordering::AcqRel);
             }
             if command == "cli_recycle_session" {
                 if let InvokeBody::Raw(bytes) = invoke.message.payload() {
@@ -1457,12 +1489,12 @@ fn worker(native: bool) {
     }
     if state.verify_final().is_err() {
         state.success.store(false, Ordering::Release);
-        *state.failure.lock() = Some("FINAL_FIXTURE_CHANGED");
+        state.failure.lock().get_or_insert("FINAL_FIXTURE_CHANGED");
     }
     let report = serde_json::json!({"native":native,"success":state.success.load(Ordering::Acquire),"failure":*state.failure.lock(),"exitCode":exit,
         "checkpoints":*state.checkpoints.lock(),"confirmIpcCount":state.confirmations.load(Ordering::Acquire),"inspectIpcCount":state.inspections.load(Ordering::Acquire),
         "actualUdfCount":state.actual_directories.lock().len(),"engineVersion":tauri::webview_version().unwrap(),"captures":*state.captures.lock(),
-        "assetBuildHead":assets.manifest["buildHead"],"assetFiles":assets.manifest["files"],"productionModules":assets.manifest["modules"],"driverSources":assets.manifest["drivers"],"metadataOwnerSettled":true,"deskCheckpoints":*state.desk_checks.lock(),"deskArchives":state.desk_archives.load(Ordering::Acquire),"deskRestores":state.desk_restores.load(Ordering::Acquire),"deskUpserts":state.desk_upserts.load(Ordering::Acquire),"recycleCheckpoints":*state.recycle_checks.lock(),"recycleRemoves":state.recycle_removes.load(Ordering::Acquire),"recycleRestores":state.recycle_restores.load(Ordering::Acquire)});
+        "assetBuildHead":assets.manifest["buildHead"],"assetFiles":assets.manifest["files"],"productionModules":assets.manifest["modules"],"driverSources":assets.manifest["drivers"],"metadataOwnerSettled":true,"opencodeProofs":state.opencode.proofs,"opencodeCheckpoints":*state.opencode_checks.lock(),"opencodeCalls":state.opencode_calls.load(Ordering::Acquire),"deskCheckpoints":*state.desk_checks.lock(),"deskArchives":state.desk_archives.load(Ordering::Acquire),"deskRestores":state.desk_restores.load(Ordering::Acquire),"deskUpserts":state.desk_upserts.load(Ordering::Acquire),"recycleCheckpoints":*state.recycle_checks.lock(),"recycleRemoves":state.recycle_removes.load(Ordering::Acquire),"recycleRestores":state.recycle_restores.load(Ordering::Acquire)});
     fs::write(
         fixture.root.join("reports/webview-result.json"),
         serde_json::to_vec_pretty(&report).unwrap(),
@@ -1702,6 +1734,19 @@ fn NativeDeleteWebView_FrontendFailureIsBounded_013() {
 }
 fn frontend_failure_code(code: Option<&str>) -> &'static str {
     const CODES: &[&str] = &[
+        "SOURCE_UNSUPPORTED",
+        "SOURCE_BUSY",
+        "SOURCE_CHANGED",
+        "SOURCE_UNAVAILABLE",
+        "SCOPE_UNKNOWN",
+        "SCOPE_STALE",
+        "SESSION_ORIGIN_AMBIGUOUS",
+        "PROFILE_CLI_MISMATCH",
+        "ENV_VALUE_UNAVAILABLE",
+        "OPENCODE_UI_TIMEOUT",
+        "OPENCODE_ACK_ENABLED",
+        "OPENCODE_FIXTURE_MISSING",
+        "OPENCODE_UI_ERROR",
         "DESK_ARCHIVE_TIMEOUT",
         "DESK_RESTORE_TIMEOUT",
         "DESK_PERSISTENCE_INVALID",

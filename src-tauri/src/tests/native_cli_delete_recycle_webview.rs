@@ -240,7 +240,7 @@ impl TaskBackendFixture {
                 self.desk_archives.load(Ordering::Acquire),
                 self.desk_restores.load(Ordering::Acquire),
                 self.desk_upserts.load(Ordering::Acquire),
-            ] != [2, 1, 1]
+            ] != [3, 2, 1]
         {
             return Err("DESK_FINAL_DISPATCH_CHANGED".into());
         }
