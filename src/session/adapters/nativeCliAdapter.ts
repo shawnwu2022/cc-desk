@@ -735,6 +735,14 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
           id:legacyHistoryId(historyIdentity.projectPath,item.nativeSessionId), runtime:'legacy-claude', adapterSessionId:item.nativeSessionId }
         await clearSessionDisplayName(deps.metadata, legacyIdentity, current)
       }
+      // Claude 历史标题按 UTF-8 限制为 512 字节，长标题必须按相同边界核对。
+      const titleEncoder = new TextEncoder()
+      let expectedTitle = '', titleBytes = 0
+      for (const character of value) {
+        titleBytes += titleEncoder.encode(character).length
+        if (titleBytes > 512) break
+        expectedTitle += character
+      }
       const contexts = new Map(related.map(item=>[nativeHistoryContextKey(item.context),item.context]))
       contexts.set(nativeHistoryContextKey(refreshContext),refreshContext)
       for (const context of contexts.values()) {
@@ -742,6 +750,12 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
         if ((tabIdentity && !refreshed) || (refreshed && (refreshed.error || !refreshed.loaded || refreshed.loading
           || nativeHistoryContextKey(refreshed.context) !== nativeHistoryContextKey(context)
           || refreshed.sourceRootKey !== request.source.sourceRootKey))) throw new Error('RENAME_DISPLAY_SYNC_FAILED')
+        // 刷新完成不等于标题同步；有界读取仍可能保留旧标题，不能误报保存成功。
+        if (entry.context.cli === 'claude' && refreshed) {
+          const observed = refreshed.sessions.filter(session => session.sessionKey === request.sessionKey && session.nativeSessionId === item.nativeSessionId)
+          if (observed.length !== 1 || observed[0].readFailure
+            || projectHistory(refreshed, observed[0]).title !== expectedTitle) throw new Error('RENAME_DISPLAY_SYNC_FAILED')
+        }
       }
     } catch { throw new Error('RENAME_DISPLAY_SYNC_FAILED') }
     return 'native-title-saved'

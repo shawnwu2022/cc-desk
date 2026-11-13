@@ -543,6 +543,12 @@ project/key checks. Raw/picker and unproven new identities cannot infer a target
 `cli_rename_session` still rejects Run scopes. Codex official app-server
 `thread/name/set` and Claude public Agent SDK 0.3.301 `renameSession` must read back
 successfully before Desk clears matching aliases; uncertain writes are not replayed.
+After a Claude rename receipt, each refreshed same-record projection must contain
+the exact target and display the requested title (at the history DTO’s 512-byte
+UTF-8 boundary). A retained old title, missing row, or target read failure reports
+`RENAME_DISPLAY_SYNC_FAILED` instead of a success toast; it never repeats the write.
+The current save request retains this warning if refresh removes its history row,
+without reviving feedback after navigation, selection, or a newer request.
 
 History omissions block rename only when they can conceal the requested identity.
 The per-read backend budget keeps a monotonic anonymous-omission flag and omitted
