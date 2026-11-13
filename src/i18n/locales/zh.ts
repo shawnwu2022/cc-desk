@@ -334,7 +334,7 @@ export default {
   expandSessions: '展开会话栏',
   workspaceWelcome: '你的工作区',
   workspaceWelcomeHint: '在每个项目下统一管理 Claude Code、Codex CLI 和 opencode 会话。',
-  workspaceActionPending: '此操作正在等待工作区连接。',
+  workspaceActionPending: '正在处理操作，请稍候。',
   cliUnavailable: '{cli} 当前不可用。其他会话与导航仍可访问。',
   workspaceConfigFailed: '无法加载应用偏好设置。你仍可切换页面或重试。',
   contextResourcesHint: '资源属于当前项目与会话。',

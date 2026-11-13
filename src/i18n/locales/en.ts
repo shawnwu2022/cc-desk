@@ -334,7 +334,7 @@ export default {
   expandSessions: 'Expand sessions panel',
   workspaceWelcome: 'Your workspace',
   workspaceWelcomeHint: 'Manage Claude Code, Codex CLI, and opencode sessions together under each project.',
-  workspaceActionPending: 'This action is waiting for the workspace connection.',
+  workspaceActionPending: 'Processing this action. Please wait.',
   cliUnavailable: '{cli} is unavailable. Other sessions and navigation remain accessible.',
   workspaceConfigFailed: 'Could not load application preferences. You can still navigate and retry.',
   contextResourcesHint: 'Resources belong to the current project and session.',

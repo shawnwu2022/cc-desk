@@ -710,3 +710,19 @@ it('Feedback_DirectEndedArchiveKeepsNavigationGuard_020', async () => {
   expect(io.nativeArchive).not.toHaveBeenCalled()
   expect(useNativeTabsStore().tab(tab.tabId)).toBeDefined()
 })
+
+// 已经发出归档 RPC 时显示处理中，不能误报正在等待工作区连接。
+it('WorkspaceRequest_ArchiveShowsProcessing_004', async () => {
+  const wrapper = render(); await flushPromises()
+  const catalog = useUnifiedSessionsStore()
+  const row = catalog.sessions.find(row => row.runtime === 'native-cli')!
+  let finish!: () => void
+  io.nativeArchive.mockImplementationOnce(() => new Promise<void>(resolve => { finish = () => { nativeArchived = true; resolve() } }))
+  useShellStore().requestWorkspaceAction({ kind: 'menu-action', sessionId: row.id, action: 'archive' }); await flushPromises()
+  expect(io.nativeArchive).toHaveBeenCalledOnce()
+  expect(wrapper.text()).toContain('Processing this action. Please wait.')
+  expect(wrapper.text()).not.toContain('This action is waiting for the workspace connection.')
+  finish(); await flushPromises()
+  expect(useShellStore().pendingRequest).toBeNull()
+  expect(catalog.sessions.find(item => item.id === row.id)?.archived).toBe(true)
+})
