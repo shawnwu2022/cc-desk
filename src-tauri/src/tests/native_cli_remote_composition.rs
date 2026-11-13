@@ -958,25 +958,58 @@ async fn NativeRemote_RegisteredSourceConsumesFreshMaterialsAndRebinds_008() {
         };
         let controller=Arc::new(RemoteHostController::default());
         if controller.current(&document_binding,&other_fixture.caller,&other_admission).map_err(|_| "empty controller")? != HostControlReply::Locked {return Err("empty controller not locked");}
+        let (entered_tx,entered_rx)=std::sync::mpsc::channel();let (release_tx,release_rx)=std::sync::mpsc::channel();
+        let (_,worker_material)=make_description();
         let (description,_unused)=make_description();
-        controller.install_native_configuration(&document_binding,other_fixture.caller.clone(),&other_admission,description,std::time::Instant::now()+Duration::from_secs(60)).map_err(|_| "controller config")?;
+        controller.test_install_preparation(&document_binding,other_fixture.caller.clone(),&other_admission,description,std::time::Instant::now()+Duration::from_secs(60),Box::new(move ||{let _=entered_tx.send(());let _=release_rx.recv_timeout(Duration::from_secs(5));worker_material})).map_err(|_| "controller config")?;
         if controller.test_request(&document_binding,&other_fixture.caller,&original,|_,_|panic!("wrong run must not show")).is_ok(){return Err("controller accepted foreign run");}
         if controller.cancel(&document_binding,&other_fixture.caller,&original).err().map(|e|e.code)!=Some("FORBIDDEN".into()) {return Err("foreign configuration cancel not forbidden");}
 
         let requested=controller.test_request(&document_binding,&other_fixture.caller,&other_admission,|description,_|Ok(Arc::new(crate::remote_host_approval::NativeHostApproval::test_record_description(description,&other_admission)))).map_err(|_| "original configuration consumed by foreign request")?;
         if requested != HostControlReply::ApprovalRecorded {return Err("native approval not recorded");}
         // 原工作线程先保管，fixture factory 等待受控释放；取消不能使其脱离保管。
-        let (entered_tx,entered_rx)=std::sync::mpsc::channel();let (release_tx,release_rx)=std::sync::mpsc::channel();
-        let (_,worker_material)=make_description();
         let worker_admission=other_fixture.supervisor.admit_remote_run(other_fixture.service.access(&other_fixture.caller,&other_status.run).map_err(|_| "worker access")?,&other_status.run).map_err(|_| "worker admission")?;
-        controller.test_prepare_owned(&document_binding,&other_fixture.caller,worker_admission,Arc::new(NativeRuntime::with_owned_components_for_test(other_fixture.service.clone(),other_fixture.transports.clone(),other_fixture.supervisor.clone())),other_host.clone(),move ||{let _=entered_tx.send(());let _=release_rx.recv_timeout(Duration::from_secs(5));worker_material}).map_err(|_| "fixture operation start")?;
+        controller.test_prepare_owned(&document_binding,&other_fixture.caller,worker_admission,Arc::new(NativeRuntime::with_owned_components_for_test(other_fixture.service.clone(),other_fixture.transports.clone(),other_fixture.supervisor.clone())),other_host.clone()).map_err(|_| "fixture operation start")?;
         let entered=entered_rx.recv_timeout(Duration::from_secs(5)).is_ok();
-        let pending=controller.test_join_finished().is_none();
+        let pending=controller.test_finish_preparation().is_none();
         let consumed=controller.current(&document_binding,&other_fixture.caller,&other_admission).map_err(|_| "preparing state")?==HostControlReply::Consumed;
         controller.cancel(&document_binding,&other_fixture.caller,&other_admission).map_err(|_| "cancel preparing")?;
         let _=release_tx.send(());
-        let join_end=Instant::now()+Duration::from_secs(10);let joined=loop{if let Some(result)=controller.test_join_finished(){break Some(result);}if Instant::now()>=join_end{break None;}std::thread::sleep(Duration::from_millis(5));};
+        let join_end=Instant::now()+Duration::from_secs(10);let joined=loop{if let Some(result)=controller.test_finish_preparation(){break Some(result);}if Instant::now()>=join_end{break None;}std::thread::sleep(Duration::from_millis(5));};
         if !entered || !pending || !consumed || joined!=Some(false) || other_host.test_network_attempts()!=0 {return Err("cancelled factory publication/custody");}
+        // 工厂在批准前绑定。准备成功后，查询不登记；显式推进才验证并消费原结果。
+        for mode in 0..3 {
+            let prepared_controller=RemoteHostController::default();let prepared_host=Arc::new(RemoteHostService::default());
+            let (mut description,material)=make_description();
+            if mode==1 {description.relay_binding.0=[0x7f;16];}
+            let samples=Arc::new(std::sync::atomic::AtomicUsize::new(0));let sample_count=samples.clone();let clock=description.clock.clone();
+            description.clock=Arc::new(move ||{sample_count.fetch_add(1,std::sync::atomic::Ordering::AcqRel);clock.now_ms()});
+            let (factory_tx,factory_rx)=std::sync::mpsc::sync_channel(1);
+            let prepared_owner=Arc::new(parking_lot::Mutex::new(std::sync::Weak::<crate::remote_host_approval::NativeHostApproval>::new()));
+            let expiring_owner=prepared_owner.clone();
+            prepared_controller.test_install_preparation(&document_binding,other_fixture.caller.clone(),&other_admission,description,Instant::now()+Duration::from_secs(60),Box::new(move||{
+                if mode==2 {if let Some(owner)=expiring_owner.lock().upgrade(){owner.test_expire();owner.poll_expiry();}}
+                let _=factory_tx.send(std::thread::current().id());material
+            })).map_err(|_|"prepared config")?;
+            prepared_controller.test_request(&document_binding,&other_fixture.caller,&other_admission,|description,_|{
+                let owner=Arc::new(crate::remote_host_approval::NativeHostApproval::test_record_description(description,&other_admission));
+                *prepared_owner.lock()=Arc::downgrade(&owner);Ok(owner)
+            }).map_err(|_|"prepared approval")?;
+            let prepare_admission=other_fixture.supervisor.admit_remote_run(other_fixture.service.access(&other_fixture.caller,&other_status.run).map_err(|_|"prepared access")?,&other_status.run).map_err(|_|"prepared admission")?;
+            prepared_controller.test_prepare_owned(&document_binding,&other_fixture.caller,prepare_admission,Arc::new(NativeRuntime::with_owned_components_for_test(other_fixture.service.clone(),other_fixture.transports.clone(),other_fixture.supervisor.clone())),prepared_host.clone()).map_err(|_|"prepared start")?;
+            let factory_thread=factory_rx.recv_timeout(Duration::from_secs(5)).map_err(|_|"prepared factory not called")?;
+            if factory_thread==std::thread::current().id() {return Err("factory used observer thread");}
+            let current=prepared_controller.current(&document_binding,&other_fixture.caller,&other_admission).map_err(|_|"prepared current")?;
+            if mode!=2 && current!=HostControlReply::Consumed {return Err("query registered prepared result");}
+            if samples.load(std::sync::atomic::Ordering::Acquire)!=1 {return Err("query sampled external clock");}
+            let duplicate=other_fixture.supervisor.admit_remote_run(other_fixture.service.access(&other_fixture.caller,&other_status.run).map_err(|_|"duplicate access")?,&other_status.run).map_err(|_|"duplicate admission")?;
+            if prepared_controller.test_prepare_owned(&document_binding,&other_fixture.caller,duplicate,Arc::new(NativeRuntime::with_owned_components_for_test(other_fixture.service.clone(),other_fixture.transports.clone(),other_fixture.supervisor.clone())),prepared_host.clone()).is_ok(){return Err("duplicate preparation accepted");}
+            let finish_end=Instant::now()+Duration::from_secs(5);
+            let completed=loop{if let Some(result)=prepared_controller.test_finish_preparation(){break result;}if Instant::now()>=finish_end{return Err("prepared result join timeout");}std::thread::yield_now();};
+            if completed!=(mode==0) || prepared_host.test_network_attempts()!=0 {return Err("prepared identity or expiry boundary");}
+            if mode==0 && (samples.load(std::sync::atomic::Ordering::Acquire)!=2 || prepared_controller.current(&document_binding,&other_fixture.caller,&other_admission).map_err(|_|"registered current")?!=HostControlReply::Registered){return Err("explicit prepared registration missing");}
+            prepared_controller.begin_shutdown();
+        }
         // show 尚未返回时，同 owner cancel 必须使迟到结果不可发布。
         let delayed=RemoteHostController::default();let (description,_unused)=make_description();
         delayed.install_native_configuration(&document_binding,other_fixture.caller.clone(),&other_admission,description,std::time::Instant::now()+Duration::from_secs(60)).map_err(|_| "delayed config")?;
@@ -1009,6 +1042,51 @@ async fn NativeRemote_RegisteredSourceConsumesFreshMaterialsAndRebinds_008() {
         if !thread_cancelled || published.ok()!=Some(HostControlReply::Cancelled) {return Err("cross-thread show published after cancel");}
         concurrent.begin_shutdown();
         controller.begin_shutdown();delayed.begin_shutdown();
+        // 真实 take_activation 的 clock 尚未返回时，没有准备线程也不能绕过 service 退出。
+        let clock_controller=Arc::new(RemoteHostController::default());
+        let clock_host=Arc::new(RemoteHostService::default());
+        let (clock_entered,clock_observed)=std::sync::mpsc::sync_channel(1);
+        let (clock_release,clock_held)=std::sync::mpsc::sync_channel(1);
+        let (mut clock_description,clock_material)=make_description();
+        let source_clock=clock_description.clock.clone();
+        let clock_held=parking_lot::Mutex::new(clock_held);
+        let weak_clock_host=Arc::downgrade(&clock_host);
+        let reentry_rejected=Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let reentry_result=reentry_rejected.clone();
+        clock_description.clock=Arc::new(move || {
+            if let Some(host)=weak_clock_host.upgrade() {
+                reentry_result.store(host.reserve_activation().is_err(),std::sync::atomic::Ordering::Release);
+            }
+            let _=clock_entered.send(());
+            clock_held.lock().recv_timeout(Duration::from_secs(5)).map_err(|_|cc_desk_remote_security::GrantError::Clock)?;
+            source_clock.now_ms()
+        });
+        let factory_calls=Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let calls=factory_calls.clone();
+        clock_controller.test_install_preparation(&document_binding,other_fixture.caller.clone(),&other_admission,clock_description,Instant::now()+Duration::from_secs(60),Box::new(move ||{calls.fetch_add(1,std::sync::atomic::Ordering::AcqRel);clock_material})).map_err(|_|"clock configuration")?;
+        clock_controller.test_request(&document_binding,&other_fixture.caller,&other_admission,|description,_|Ok(Arc::new(crate::remote_host_approval::NativeHostApproval::test_record_description(description,&other_admission)))).map_err(|_|"clock approval")?;
+        let foreign=fixture.supervisor.admit_remote_run(fixture.service.access(&fixture.caller,&status.run).map_err(|_|"foreign prepare access")?,&status.run).map_err(|_|"foreign prepare admission")?;
+        let worker_runtime=Arc::new(NativeRuntime::with_owned_components_for_test(other_fixture.service.clone(),other_fixture.transports.clone(),other_fixture.supervisor.clone()));
+        if clock_controller.test_prepare_owned(&document_binding,&other_fixture.caller,foreign,worker_runtime.clone(),clock_host.clone()).err().map(|e|e.code)!=Some("FORBIDDEN".into()) || clock_host.test_activation_observation().is_some() {return Err("foreign prepare touched operation");}
+        let clock_admission=other_fixture.supervisor.admit_remote_run(other_fixture.service.access(&other_fixture.caller,&other_status.run).map_err(|_|"clock access")?,&other_status.run).map_err(|_|"clock admission")?;
+        let worker_controller=clock_controller.clone();let worker_binding=document_binding.clone();let worker_caller=other_fixture.caller.clone();let worker_host=clock_host.clone();
+        struct ActivationCaller(Option<std::thread::JoinHandle<Result<(),crate::cli::types::SafeError>>>);
+        impl Drop for ActivationCaller {fn drop(&mut self){if let Some(worker)=self.0.take(){let _=worker.join();}}}
+        let mut caller_worker=ActivationCaller(Some(std::thread::spawn(move ||worker_controller.test_prepare_owned(&worker_binding,&worker_caller,clock_admission,worker_runtime,worker_host))));
+        clock_observed.recv_timeout(Duration::from_secs(5)).map_err(|_|"clock did not enter")?;
+        if !reentry_rejected.load(std::sync::atomic::Ordering::Acquire) || !clock_host.test_activation_observation().is_some_and(|o|o.outstanding) {return Err("clock reservation missing or reentered");}
+        if clock_host.request_exit(19,false)!=crate::remote_host::ExitDecision::Wait(19) {return Err("clock exit intent");}
+        // 本子场景没有网络或 pin，只隔离检验 activation gate，不声称运行树已退休。
+        let exit_directory=tempfile::tempdir().map_err(|_|"empty exit directory")?;
+        let exit_launch=Arc::new(crate::cli::launch_service::LaunchService::new(crate::cli::storage::WorkspaceRepository::open(exit_directory.path().join("workspace.json")).map_err(|_|"empty exit workspace")?,Some(Default::default()),None));
+        let (exit_tx,mut exit_rx)=tokio::sync::oneshot::channel();
+        clock_host.start_exit(19,Arc::new(NativeRuntime::new(exit_launch)),Arc::new(crate::remote_client_ipc::RemoteClientService::default()),move|code|{let _=exit_tx.send(code);});
+        tokio::time::timeout(Duration::from_secs(5),async{while !clock_host.test_activation_exit_observed(){tokio::task::yield_now().await;}}).await.map_err(|_|"activation waiter not observed")?;
+        if !matches!(exit_rx.try_recv(),Err(tokio::sync::oneshot::error::TryRecvError::Empty)) {return Err("exit overtook clock");}
+        let _=clock_release.send(());
+        caller_worker.0.take().unwrap().join().map_err(|_|"clock caller panic")?.map_err(|_|"clock caller failed")?;
+        if tokio::time::timeout(Duration::from_secs(5),exit_rx).await.map_err(|_|"clock exit pending")?.map_err(|_|"clock exit lost")?!=19 || factory_calls.load(std::sync::atomic::Ordering::Acquire)!=0 || clock_host.test_network_attempts()!=0 || !clock_host.test_activation_observation().is_some_and(|o|o.retired()) {return Err("cancelled clock operation retirement");}
+        clock_controller.begin_shutdown();
         // 原 admission 仍在手，但原 document 已撤销，不能注册自身批准。
         let other_scope = other_admission.scope().map_err(|_| "independent scope")?;
         let (stale_owner, stale_material) = crate::remote_host_approval::NativeHostApproval::test_from_inputs(network_inputs(&relay, other_scope, source.clone()), &other_admission, true);

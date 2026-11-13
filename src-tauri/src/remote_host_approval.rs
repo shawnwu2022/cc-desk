@@ -598,20 +598,33 @@ impl ActivationTicket {
     #[cfg(test)]
     pub(crate) fn prepare_fixture(
         self,
-        runtime: &NativeRuntime,
-        admission: &NativeRunAdmission,
-        service: &Arc<RemoteHostService>,
+        runtime: Arc<NativeRuntime>,
+        admission: NativeRunAdmission,
+        service: std::sync::Weak<RemoteHostService>,
+        signal: Arc<crate::remote_host::activation::ActivationSignal>,
         prepare: impl FnOnce() -> HostAttemptMaterials,
-    ) -> Result<(), ApprovalRegistrationError> {
-        if *self.lease.revoked.borrow()
+    ) -> crate::remote_host::activation::PreparationResult {
+        use crate::remote_host::activation::PreparationResult;
+        if signal.cancelled()
+            || *self.lease.revoked.borrow()
             || Instant::now() >= self.permit.end
-            || !self.permit.description.origin.matches(admission)
+            || !self.permit.description.origin.matches(&admission)
             || admission.network_origin().is_err()
         {
-            return Err(ApprovalRegistrationError::Revoked);
+            return PreparationResult::Complete(false);
         }
         let material = prepare();
-        self.register_material(runtime, admission, service, material)
+        // worker 只归还材料与登记能力。升级 service 必须等原线程实际 join 之后。
+        PreparationResult::Prepared(Box::new(move || {
+            if signal.cancelled() {
+                return false;
+            }
+            let Some(service) = service.upgrade() else {
+                return false;
+            };
+            self.register_material(&runtime, &admission, &service, material)
+                .is_ok()
+        }))
     }
     fn register_material(
         self,

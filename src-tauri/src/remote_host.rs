@@ -2,6 +2,9 @@
 
 use crate::cli::native_runtime::{HostNativeObservation, HostNativeShutdown, NativeRuntime};
 use crate::remote_client_ipc::RemoteClientService;
+#[path = "remote_host_activation.rs"]
+pub(crate) mod activation;
+use activation::{ActivationOperation, ActivationReservation};
 use crate::run_supervisor::NativeRunPin;
 use cc_desk_remote_host::native_host::{NativeHost, WriterRetirement};
 use parking_lot::Mutex;
@@ -145,6 +148,11 @@ pub(crate) struct ServiceState {
     #[cfg(test)]
     pub(crate) source_wait_pending: bool,
     retired: bool,
+    activation: Option<Arc<ActivationOperation>>,
+    #[cfg(test)]
+    activation_waiting: bool,
+    #[cfg(test)]
+    native_observed_terminal: bool,
     exit: ExitIntent,
     waiter: Option<tauri::async_runtime::JoinHandle<()>>,
     waiter_starting: bool,
@@ -174,6 +182,11 @@ impl Default for RemoteHostService {
                 #[cfg(test)]
                 source_wait_pending: false,
                 retired: false,
+                activation: None,
+                #[cfg(test)]
+                activation_waiting: false,
+                #[cfg(test)]
+                native_observed_terminal: false,
                 exit: ExitIntent::Idle,
                 waiter: None,
                 waiter_starting: false,
@@ -187,6 +200,53 @@ impl Default for RemoteHostService {
     }
 }
 impl RemoteHostService {
+    #[allow(dead_code, reason = "native activation supplier is not installed")]
+    pub(crate) fn reserve_activation(
+        &self,
+    ) -> Result<ActivationReservation, crate::cli::types::SafeError> {
+        let mut state = self.state.lock();
+        if state.closing || state.retired || state.activation.is_some() {
+            return Err(crate::cli::profiles::error("REMOTE_HOST_LOCKED"));
+        }
+        let reservation = ActivationReservation::new();
+        state.activation = Some(reservation.operation());
+        Ok(reservation)
+    }
+    fn activation_retired(state: &ServiceState) -> bool {
+        state
+            .activation
+            .as_ref()
+            .is_none_or(|operation| operation.snapshot().retired())
+    }
+    #[cfg(test)]
+    pub(crate) fn test_activation_observation(&self) -> Option<activation::ActivationObservation> {
+        self.state
+            .lock()
+            .activation
+            .as_ref()
+            .map(|operation| operation.snapshot())
+    }
+    #[cfg(test)]
+    pub(crate) fn test_activation_exit_observed(&self) -> bool {
+        self.state.lock().activation_waiting
+    }
+    async fn wait_activation(&self) -> bool {
+        loop {
+            #[cfg(test)]
+            {
+                self.state.lock().activation_waiting = true;
+            }
+            let operation = self.state.lock().activation.clone();
+            let Some(operation) = operation else {
+                return true;
+            };
+            let observation = operation.retire();
+            if !observation.outstanding {
+                return !observation.unknown;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
     fn checkout_host(&self, admitting: bool) -> Option<HostCheckout<'_>> {
         let mut state = self.state.lock();
         if matches!(state.host, HostSlot::CheckedOut(_)) || (admitting && (state.closing || state.peer_pumps.len() >= 64)) {
@@ -498,6 +558,8 @@ impl RemoteHostService {
         }
         let mut state = self.state.lock();
         state.closing = true;
+        // 原子失效不调用回调；同锁封闭后，晚发布 handle 仍由原槽接收。
+        if let Some(operation) = &state.activation { operation.cancel(); }
         let material = state.source_slot.close();
         let decision = match state.exit {
             ExitIntent::Idle => {
@@ -513,7 +575,7 @@ impl RemoteHostService {
     }
     fn complete_exit(&self, code: i32) -> bool {
         let mut state = self.state.lock();
-        if !state.retired || state.source_slot.material_returned() != Some(Ok(())) || !matches!(state.exit,ExitIntent::Waiting(original) if original==code) {
+        if !state.retired || !Self::activation_retired(&state) || state.source_slot.material_returned() != Some(Ok(())) || !matches!(state.exit,ExitIntent::Waiting(original) if original==code) {
             return false;
         }
         state.exit = ExitIntent::Ready(code);
@@ -561,7 +623,7 @@ impl RemoteHostService {
                 original.drain_closed_source_materials();
             }
             let network_owner = original.clone();
-            let (client_result, network_known, owned_known, pump_known, attempts_known, materials_known) = tokio::join!(
+            let (client_result, network_known, owned_known, pump_known, attempts_known, materials_known, activation_known) = tokio::join!(
                 client.shutdown(),
                 async move {
                     if let Some(networks) = networks {
@@ -573,7 +635,8 @@ impl RemoteHostService {
                 original.observe_owned(),
                 original.join_peer_pump(),
                 original.network.join_all(),
-                original.wait_source_materials()
+                original.wait_source_materials(),
+                original.wait_activation()
             );
             if client_result.is_err()
                 || !network_known
@@ -581,6 +644,7 @@ impl RemoteHostService {
                 || !pump_known
                 || !attempts_known
                 || !materials_known
+                || !activation_known
             {
                 original.mark_unknown();
                 return;
@@ -588,7 +652,7 @@ impl RemoteHostService {
             original.drain_closed_source_materials();
             {
                 let mut state = original.state.lock();
-                if state.source_slot.material_returned() != Some(Ok(())) { state.exit = ExitIntent::Unknown; return; }
+                if state.source_slot.material_returned() != Some(Ok(())) || !Self::activation_retired(&state) { state.exit = ExitIntent::Unknown; return; }
                 state.retired = true;
             }
             if original.complete_exit(code) {
@@ -646,6 +710,8 @@ impl RemoteHostService {
                 tokio::time::sleep(Duration::from_millis(25)).await;
                 continue;
             }
+            #[cfg(test)]
+            { self.state.lock().native_observed_terminal = true; }
             return !unknown;
         }
     }
@@ -660,8 +726,254 @@ impl RemoteHostService {
 }
 
 #[cfg(test)]
+#[allow(non_snake_case)]
 mod tests {
     use super::*;
+    fn empty_native() -> Arc<NativeRuntime> {
+        use crate::cli::{launch_service::LaunchService, storage::WorkspaceRepository};
+        let dir = tempfile::tempdir().unwrap();
+        Arc::new(NativeRuntime::new(Arc::new(LaunchService::new(
+            WorkspaceRepository::open(dir.path().join("workspace.json")).unwrap(),
+            Some(Default::default()),
+            None,
+        ))))
+    }
+    async fn activation_observed(service: &RemoteHostService) {
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while !service.state.lock().activation_waiting {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+    #[tokio::test]
+    async fn HostActivation_DirectServiceExit_013() {
+        let service = Arc::new(RemoteHostService::default());
+        let reservation = service.reserve_activation().unwrap();
+        let operation = reservation.operation();
+        assert!(service.reserve_activation().is_err());
+        assert_eq!(service.request_exit(9, true), ExitDecision::Prevent);
+        assert!(!service.state.lock().closing);
+        assert_eq!(service.request_exit(17, false), ExitDecision::Wait(17));
+        let (tx, mut rx) = tokio::sync::oneshot::channel();
+        service.start_exit(
+            17,
+            empty_native(),
+            Arc::new(RemoteClientService::default()),
+            move |code| {
+                let _ = tx.send(code);
+            },
+        );
+        activation_observed(&service).await;
+        assert!(operation.snapshot().outstanding);
+        assert!(matches!(
+            rx.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ));
+        assert!(!service.state.lock().retired);
+        assert!(!service.complete_exit(17));
+        drop(reservation);
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(3), rx)
+                .await
+                .unwrap()
+                .unwrap(),
+            17
+        );
+        let waiter = service.state.lock().waiter.take().unwrap();
+        waiter.await.unwrap();
+        assert!(service.reserve_activation().is_err());
+        assert_eq!(service.request_exit(18, false), ExitDecision::Prevent);
+    }
+    #[test]
+    fn HostActivation_FinalExitFence_014() {
+        let service = RemoteHostService::default();
+        let reservation = service.reserve_activation().unwrap();
+        service.request_exit(1, false);
+        service.state.lock().retired = true;
+        assert!(!service.complete_exit(1));
+        drop(reservation);
+        assert!(service.complete_exit(1));
+    }
+    #[tokio::test]
+    async fn HostActivation_UnknownStillJoins_015() {
+        let service = Arc::new(RemoteHostService::default());
+        let reservation = service.reserve_activation().unwrap();
+        let operation = reservation.operation();
+        reservation
+            .spawn(|_| panic!("TEST_ONLY_ACTIVATION_PANIC"))
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while operation.advance_join().outstanding {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(operation.snapshot().unknown);
+        let (entered_tx, entered) = std::sync::mpsc::sync_channel(1);
+        let (release, held) = std::sync::mpsc::sync_channel(1);
+        let original = std::thread::spawn(move || {
+            entered_tx.send(()).unwrap();
+            let _ = held.recv_timeout(Duration::from_secs(3));
+        });
+        entered.recv_timeout(Duration::from_secs(3)).unwrap();
+        service.state.lock().native =
+            Some(HostNativeShutdown::from_owned_worker_for_test(original));
+        service.request_exit(23, false);
+        let (tx, mut rx) = tokio::sync::oneshot::channel();
+        let waiter = service.spawn_waiter(
+            23,
+            Arc::new(RemoteClientService::default()),
+            None,
+            None,
+            move |_| {
+                let _ = tx.send(());
+            },
+        );
+        service.state.lock().waiter = Some(waiter);
+        activation_observed(&service).await;
+        assert!(matches!(
+            rx.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ));
+        release.send(()).unwrap();
+        let waiter = service.state.lock().waiter.take().unwrap();
+        tokio::time::timeout(Duration::from_secs(3), waiter)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!service.state.lock().retired);
+        assert!(matches!(service.state.lock().exit, ExitIntent::Unknown));
+        assert!(!service.complete_exit(23));
+    }
+    #[test]
+    fn HostActivation_LastServiceRelease_016() {
+        let service = Arc::new(RemoteHostService::default());
+        let weak = Arc::downgrade(&service);
+        let reservation = service.reserve_activation().unwrap();
+        let operation = reservation.operation();
+        let (entered_tx, entered) = std::sync::mpsc::sync_channel(1);
+        let (release, held) = std::sync::mpsc::sync_channel(1);
+        let (returned_tx, returned) = std::sync::mpsc::sync_channel(1);
+        reservation
+            .spawn_prepared(move |_| {
+                let worker_id = std::thread::current().id();
+                activation::PreparationResult::Prepared(Box::new(move || {
+                    assert_ne!(std::thread::current().id(), worker_id);
+                    let original = weak.upgrade().unwrap();
+                    entered_tx.send(()).unwrap();
+                    let _ = held.recv_timeout(Duration::from_secs(3));
+                    drop(original);
+                    let _ = returned_tx.send(());
+                    true
+                }))
+            })
+            .unwrap();
+        let observer = activation::FixtureThread::spawn(move || {
+            let until = std::time::Instant::now() + Duration::from_secs(3);
+            while operation.worker_fact() != activation::WorkerFact::Joined {
+                assert!(std::time::Instant::now() < until);
+                operation.advance_join();
+                std::thread::yield_now();
+            }
+            assert!(operation.snapshot().outstanding);
+            operation.finish_preparation()
+        });
+        entered.recv_timeout(Duration::from_secs(3)).unwrap();
+        drop(service);
+        release.send(()).unwrap();
+        assert!(
+            returned.recv_timeout(Duration::from_secs(3)).is_ok(),
+            "last service release must not self-join its worker"
+        );
+        assert!(observer.join().unwrap().retired());
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn HostActivation_ReleaseDoesNotBlockOtherOwners_017() {
+        struct Material {
+            entered: std::sync::mpsc::SyncSender<()>,
+            release: std::sync::mpsc::Receiver<()>,
+        }
+        impl Drop for Material {
+            fn drop(&mut self) {
+                let _ = self.entered.send(());
+                let _ = self.release.recv_timeout(Duration::from_secs(10));
+            }
+        }
+        let service = Arc::new(RemoteHostService::default());
+        let reservation = service.reserve_activation().unwrap();
+        let operation = reservation.operation();
+        let (entered_tx, entered) = std::sync::mpsc::sync_channel(1);
+        let (release, held) = std::sync::mpsc::sync_channel(1);
+        let material = Material {
+            entered: entered_tx,
+            release: held,
+        };
+        reservation
+            .spawn_prepared(move |_| {
+                activation::PreparationResult::Prepared(Box::new(move || {
+                    drop(material);
+                    panic!("closing must discard, never register");
+                }))
+            })
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while operation.worker_fact() != activation::WorkerFact::Joined {
+                operation.advance_join();
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let original = std::thread::spawn(|| {});
+        service.state.lock().native =
+            Some(HostNativeShutdown::from_owned_worker_for_test(original));
+        let (_native_entered, native_release) = service.test_hold_retirement();
+        service.request_exit(37, false);
+        let (exit_tx, mut exit_rx) = tokio::sync::oneshot::channel();
+        let waiter = service.spawn_waiter(
+            37,
+            Arc::new(RemoteClientService::default()),
+            None,
+            None,
+            move |code| {
+                let _ = exit_tx.send(code);
+            },
+        );
+        service.state.lock().waiter = Some(waiter);
+        entered.recv_timeout(Duration::from_secs(3)).unwrap();
+        native_release.send(()).unwrap();
+        let native_joined_while_material_held =
+            tokio::time::timeout(Duration::from_secs(3), async {
+                while !service.state.lock().native_observed_terminal {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .is_ok();
+        assert!(operation.snapshot().outstanding);
+        assert!(matches!(
+            exit_rx.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ));
+        // 先释放并回收全部原 owner，再断言 RED，失败也不遗留线程。
+        release.send(()).unwrap();
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(3), exit_rx)
+                .await
+                .unwrap()
+                .unwrap(),
+            37
+        );
+        let waiter = service.state.lock().waiter.take().unwrap();
+        waiter.await.unwrap();
+        assert!(
+            native_joined_while_material_held,
+            "blocked material release starved the original native owner join"
+        );
+    }
     #[tokio::test]
     async fn host_checkout_closing_before_return_stops_original_host() {
         let scope = cc_desk_remote_record::grant::SessionScope { session: "11".repeat(16), run: "TEST_ONLY_CHECKOUT_RETURN".into(), generation: "1".into() };

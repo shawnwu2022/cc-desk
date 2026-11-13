@@ -65,7 +65,12 @@ struct NativeConfiguration {
     identity: OwnerIdentity,
     description: HostApprovalDescription,
     cap: Instant,
+    #[cfg(test)]
+    prepare: Option<FixturePreparation>,
 }
+#[cfg(test)]
+type FixturePreparation =
+    Box<dyn FnOnce() -> crate::remote_host_network::HostAttemptMaterials + Send>;
 struct PendingRequest {
     identity: OwnerIdentity,
     cancelled: std::sync::atomic::AtomicBool,
@@ -73,6 +78,8 @@ struct PendingRequest {
 struct ApprovalSlot {
     identity: OwnerIdentity,
     owner: Arc<NativeHostApproval>,
+    #[cfg(test)]
+    prepare: Mutex<Option<FixturePreparation>>,
 }
 #[derive(Default)]
 struct ControllerState {
@@ -85,9 +92,7 @@ struct ControllerState {
 pub(crate) struct RemoteHostController {
     state: Mutex<ControllerState>,
     #[cfg(test)]
-    operations: Mutex<Vec<std::thread::JoinHandle<bool>>>,
-    #[cfg(test)]
-    operation_unknown: std::sync::atomic::AtomicBool,
+    operation: Mutex<Option<Weak<crate::remote_host::activation::ActivationOperation>>>,
 }
 impl RemoteHostController {
     fn authenticate(
@@ -99,6 +104,18 @@ impl RemoteHostController {
         admission.network_origin().map_err(|_| error("FORBIDDEN"))?;
         Ok(())
     }
+    #[cfg(test)]
+    pub(crate) fn test_install_preparation(
+        &self,
+        binding: &Arc<DocumentBinding<NativeRun>>,
+        caller: CallerIdentity,
+        admission: &NativeRunAdmission,
+        description: HostApprovalDescription,
+        cap: Instant,
+        prepare: FixturePreparation,
+    ) -> Result<(), SafeError> {
+        self.install_configuration(binding, caller, admission, description, cap, Some(prepare))
+    }
     /// 仅后端原生供应者可调用；没有 IPC 配置入口或默认批准。
     #[allow(dead_code)]
     pub(crate) fn install_native_configuration(
@@ -108,6 +125,25 @@ impl RemoteHostController {
         admission: &NativeRunAdmission,
         description: HostApprovalDescription,
         cap: Instant,
+    ) -> Result<(), SafeError> {
+        self.install_configuration(
+            binding,
+            caller,
+            admission,
+            description,
+            cap,
+            #[cfg(test)]
+            None,
+        )
+    }
+    fn install_configuration(
+        &self,
+        binding: &Arc<DocumentBinding<NativeRun>>,
+        caller: CallerIdentity,
+        admission: &NativeRunAdmission,
+        description: HostApprovalDescription,
+        cap: Instant,
+        #[cfg(test)] prepare: Option<FixturePreparation>,
     ) -> Result<(), SafeError> {
         Self::authenticate(binding, &caller, admission)?;
         let identity = OwnerIdentity {
@@ -127,6 +163,8 @@ impl RemoteHostController {
             identity,
             description,
             cap,
+            #[cfg(test)]
+            prepare,
         });
         Ok(())
     }
@@ -226,6 +264,8 @@ impl RemoteHostController {
             Ok::<_, SafeError>(Arc::new(ApprovalSlot {
                 identity: configuration.identity,
                 owner,
+                #[cfg(test)]
+                prepare: Mutex::new(configuration.prepare),
             }))
         })();
         let mut state = self.state.lock();
@@ -302,7 +342,6 @@ impl RemoteHostController {
         admission: NativeRunAdmission,
         runtime: Arc<crate::cli::native_runtime::NativeRuntime>,
         service: Arc<crate::remote_host::RemoteHostService>,
-        prepare: impl FnOnce() -> crate::remote_host_network::HostAttemptMaterials + Send + 'static,
     ) -> Result<(), SafeError> {
         Self::authenticate(binding, caller, &admission)?;
         let slot = self
@@ -312,44 +351,40 @@ impl RemoteHostController {
             .clone()
             .ok_or_else(|| error("REMOTE_HOST_LOCKED"))?;
         slot.identity.check(binding, caller, &admission)?;
-        let ticket = slot
-            .owner
-            .take_activation(&admission)
-            .map_err(|_| error("REMOTE_HOST_LOCKED"))?;
-        let handle = std::thread::spawn(move || {
-            ticket
-                .prepare_fixture(&runtime, &admission, &service, prepare)
-                .is_ok()
-        });
-        self.operations.lock().push(handle);
-        Ok(())
+        if slot.owner.control_reply() != HostControlReply::ApprovalRecorded
+            || slot.prepare.lock().is_none()
+        {
+            return Err(error("REMOTE_HOST_LOCKED"));
+        }
+        let reservation = service.reserve_activation()?;
+        let prepare = slot
+            .prepare
+            .lock()
+            .take()
+            .ok_or_else(|| error("REMOTE_HOST_LOCKED"))?;
+        *self.operation.lock() = Some(Arc::downgrade(&reservation.operation()));
+        // 原 clock 可能阻塞或重入。此时尚无线程，service 也必须保管预留。
+        let ticket = match slot.owner.take_activation(&admission) {
+            Ok(ticket) => ticket,
+            Err(_) => {
+                drop(prepare);
+                drop(admission);
+                drop(runtime);
+                return Err(error("REMOTE_HOST_LOCKED"));
+            }
+        };
+        let weak_service = Arc::downgrade(&service);
+        reservation
+            .spawn_prepared(move |signal| {
+                ticket.prepare_fixture(runtime, admission, weak_service, signal, prepare)
+            })
+            .map_err(|_| error("REMOTE_HOST_PREPARE_FAILED"))
     }
     #[cfg(test)]
-    pub(crate) fn test_join_finished(&self) -> Option<bool> {
-        let handles = {
-            let mut operations = self.operations.lock();
-            if operations.iter().any(|h| !h.is_finished()) {
-                return None;
-            }
-            std::mem::take(&mut *operations)
-        };
-        let mut outcomes = true;
-        for handle in handles {
-            match handle.join() {
-                Ok(success) => outcomes &= success,
-                Err(_) => {
-                    self.operation_unknown
-                        .store(true, std::sync::atomic::Ordering::Release);
-                    outcomes = false;
-                }
-            }
-        }
-        Some(
-            outcomes
-                && !self
-                    .operation_unknown
-                    .load(std::sync::atomic::Ordering::Acquire),
-        )
+    pub(crate) fn test_finish_preparation(&self) -> Option<bool> {
+        // 显式推进的测试入口，不是 current 查询；不持 controller 锁调用登记。
+        let operation = self.operation.lock().as_ref()?.upgrade()?;
+        operation.result()
     }
     pub(crate) fn begin_shutdown(&self) {
         let (configuration, slot) = {

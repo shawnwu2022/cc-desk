@@ -110,9 +110,10 @@ solve that gate or complete PTY/Job retirement.
 `RemoteHostService::begin_native_network` 先通过原 `NativeRuntime` 获取本次真实
 `NativeRunAdmission`，随后必须选择同一 service 的可信 native 注册槽。生产入口不再
 接收可直接进入网络的原始 bundle；旧的原始输入入口仅保留在 `cfg(test)`。
-普通应用启动仍没有 Host 批准 supplier、activation 批准生产者或注册调用者，槽默认
-为空并保持 Locked。本片没有增加 IPC command、配置文件审批、开键、enrollment 或
-把客户端 `NativeGrantPresence` 解释成 Host 启用批准。
+当前已有逐次 native 批准 owner，以及仅提供 current/request/cancel 的 controller。
+普通应用启动仍没有真实 profile/材料供应者或 activation 注册调用者，槽默认
+为空并保持 Locked。没有生产 start IPC、配置文件审批、开键或 enrollment，也不把
+客户端 `NativeGrantPresence` 解释成 Host 启用批准。现状见 [批准组件](native-host-approval.md)。
 
 注册固定原 Source Arc、弱 resource identity、scope、完整 HostSnapshot（包含原样
 activation/epoch/origin）、peer/browser/issuer/principal、policy、route 与预算。注册
@@ -138,9 +139,10 @@ HostWritten、撤销后本地 Node 输入继续及原 handle 回收。Host-first
 前提不关闭历史 parallel 启动失败；真实批准来源、实际调用该入口的产品 activation
 流程、手机/公网 WebPKI 和完整原生生命周期仍是独立门禁。
 
-槽固定的是批准描述与 Source Arc/弱 origin。原 LocalIdentity/Relay 类型没有公开身份
-getter，本片不自行比较每批 fresh 材料的初始 SPKI 或 Relay key id；fresh 身份必须由
-同一可信 native supplier 提供，并继续通过原 TLS/pin/AppBind/Relay/grant 校验。
+槽固定的是批准描述与 Source Arc/弱 origin。LocalIdentity 现已提供 endpoint identity
+和 role 元数据，Relay identity 已提供 key id 与 role 元数据。单次批准的注册边界将
+实际材料与冻结描述比较，随后继续通过原 TLS/pin/AppBind/Relay/grant 校验。底层
+replenish 接口仍依赖同一可信 native supplier；当前批准 owner 不开放补充或自动重连。
 `UnavailableProfile` / `UnavailablePresence` 本身也只在 `cfg(test)` 中编译；生产实际
 缺少 profile/presence supplier 对象。普通 `lib` 启动没有调用 register/begin，不能将
 这一强制选择方法描述为真实来源已配置。
@@ -151,11 +153,13 @@ constructor 或现有密钥打开路径。`RemoteClientService::native_signers` 
 批准，也不能把具体 COSE 请求的 `NativeGrantPresence` 解释为 Host 启用批准。
 客户端 `install_profile` 连接的是 Client 角色，不能用其成功结果代替 Host 来源。
 
-下一条真实调用链仍缺少可信本机批准 owner：谁确认完整 Host 描述、原 run/resource
-范围、activation 与期限，谁持有撤销及 signer 生命周期。这些不是 relay 地址、
-origin/RP 或公钥 JSON 的解析结果。该来源明确前不增加默认批准、占位启用 handler
-或另一套批准系统；默认空槽保持 Locked。真实来源实现与实际密钥登记/配置是两项
-不同门禁，不能仅因缺少真实配置就宣称生产来源代码已经存在。
+现有本机批准 owner 已冻结完整 Host 描述、原 run/resource 范围、activation 与期限，
+并保管 sticky 撤销。生命周期首片增加 service 的唯一 activation operation 和原退出
+waiter 保管，但仍无生产启动调用者。真实调用链仍缺真实 profile/材料供应者与 signer
+生命周期接线。这些不是 relay 地址、origin/RP 或公钥 JSON 的
+解析结果，不得增加默认批准、占位启用 handler 或另一套批准系统；默认空槽保持
+Locked。真实来源实现与实际密钥登记/配置仍是两项不同门禁，不能把批准组件的
+存在称为真实供应者已经实现。后续方案见 [启动保管链计划](native-host-activation-lifecycle-plan.md)。
 
 材料从 fresh 槽移出前登记单一 preflight reservation，原 network.begin 正常返回
 （已交原任务或失败析构已返回）才清除；预检期间拒绝重填与第二个预检。材料移出
