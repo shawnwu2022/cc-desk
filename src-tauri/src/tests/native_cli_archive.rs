@@ -903,3 +903,175 @@ fn NativeArchive_BlockedInputDoesNotHoldAdmissionAndTimesOutUnknown_028() {
         owned.reaped();
     }
 }
+
+// 显式隔离基准：真实授权/磁盘/Job，只有官方 RPC 对端用本次临时 Node 进程替代。
+#[test]
+#[cfg(windows)]
+#[ignore = "explicit isolated archive stage benchmark"]
+fn NativeArchivePerf_IsolatedStageMatrix_029() {
+    use crate::cli::{
+        environment::EnvMap,
+        launch_service::LaunchService,
+        native_projection::{
+            service::ProjectionService,
+            wire::{ProjectionState, ReadRequest, ResourceKind, ScopeTarget},
+        },
+        profiles::{EnvValue, Override, Profile},
+        storage::{Patch, WorkspaceRepository},
+        types::{CliKind, WireU64},
+    };
+    use std::{
+        sync::Arc,
+        time::{Instant, SystemTime, UNIX_EPOCH},
+    };
+    assert_eq!(
+        std::env::var("CC_DESK_ARCHIVE_PERF").as_deref(),
+        Ok("isolated-stages")
+    );
+    let node = std::process::Command::new("node")
+        .args(["-p", "process.execPath"])
+        .output()
+        .unwrap();
+    assert!(node.status.success());
+    let node = String::from_utf8(node.stdout).unwrap().trim().to_owned();
+    for (count, project_count) in [(1usize, 1usize), (128, 1), (1024, 1), (1024, 8)] {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("codex-home");
+        let directory = root.join("sessions/2026/11/13");
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::create_dir(root.join("archived_sessions")).unwrap();
+        let repo = WorkspaceRepository::open(temp.path().join("desk/workspace.json")).unwrap();
+        let mut project_ids = Vec::new();
+        let mut projects = Vec::new();
+        for index in 0..project_count {
+            let path = temp.path().join(format!("project-{index}"));
+            std::fs::create_dir(&path).unwrap();
+            project_ids.push(
+                crate::cli::workspace::register_project(&repo, &path)
+                    .unwrap()
+                    .project_id,
+            );
+            projects.push(path);
+        }
+        let id = "00000000-0000-4000-8000-000000000000";
+        let target_name = format!("rollout-2026-11-13T00-00-00-{id}.jsonl");
+        let file = directory.join(&target_name);
+        let archived = root.join("archived_sessions").join(&target_name);
+        for index in 0..count {
+            let native_id = format!("00000000-0000-4000-8000-{index:012}");
+            let text = format!(
+                "{}\n{}\n{}\n",
+                json!({"type":"session_meta","timestamp":"2026-11-13T00:00:00Z","payload":{"id":native_id,"cwd":projects[index % project_count],"source":"cli"}}),
+                json!({"type":"event_msg","timestamp":"2026-11-13T00:00:01Z","payload":{"type":"user_message","message":"Synthetic archive performance fixture"}}),
+                json!({"type":"event_msg","timestamp":"2026-11-13T00:00:02Z","payload":{"type":"agent_message","message":"Synthetic fixture result"}})
+            );
+            std::fs::write(
+                directory.join(format!("rollout-2026-11-13T00-00-00-{native_id}.jsonl")),
+                text,
+            )
+            .unwrap();
+        }
+        let trace = temp.path().join("rpc-trace.jsonl");
+        let script = format!(
+            r#"const fs=require('node:fs'),rl=require('node:readline');const trace={trace};function mark(phase){{fs.appendFileSync(trace,JSON.stringify({{phase,at:Date.now()}})+'\n');}}mark('helper-start');let path={file};rl.createInterface({{input:process.stdin}}).on('line',line=>{{const m=JSON.parse(line);if(!m.id)return;mark(m.method);let result;if(m.method==='initialize')result={{codexHome:{home}}};else if(m.method==='thread/read')result={{thread:{{id:{id},cwd:{cwd},path}}}};else if(m.method==='thread/archive'){{fs.renameSync(path,{archived});path={archived};result={{}};}}else process.exit(9);process.stdout.write(JSON.stringify({{id:m.id,result}})+'\n');}}).on('close',()=>process.exit(0));"#,
+            trace = json!(trace),
+            file = json!(file),
+            home = json!(root),
+            id = json!(id),
+            cwd = json!(projects[0]),
+            archived = json!(archived)
+        );
+        std::fs::write(projects[0].join("app-server"), script).unwrap();
+        let mut profile = Profile::new("archive-perf", CliKind::Codex);
+        profile.program_path = Override::Set(node.clone());
+        profile.default_args = Override::Set(vec![]);
+        profile.env.insert(
+            "CODEX_HOME".into(),
+            Override::Set(EnvValue::Literal {
+                value: root.to_str().unwrap().into(),
+                non_secret: true,
+            }),
+        );
+        let document = repo
+            .apply(repo.read().unwrap().revision, Patch::Create { profile })
+            .unwrap();
+        let mut environment = EnvMap::new();
+        environment.insert("SystemRoot".into(), std::env::var_os("SystemRoot").unwrap());
+        let launch = Arc::new(LaunchService::new(repo.clone(), Some(environment), None));
+        let caller = launch.registry().activate_window("main").unwrap();
+        let service = ProjectionService::new(launch.clone());
+        let start = Instant::now();
+        let source = service
+            .scope(
+                &caller,
+                &ScopeTarget::Profile {
+                    profile_id: "archive-perf".into(),
+                    expected_profile_revision: document.profiles["archive-perf"].revision,
+                    project_ids,
+                },
+            )
+            .unwrap();
+        let scope_ms = start.elapsed().as_secs_f64() * 1000.0;
+        let observe = |epoch: u64| {
+            let started = Instant::now();
+            let mut offset = 0usize;
+            loop {
+                let response = service
+                    .read(
+                        &caller,
+                        &ReadRequest {
+                            source: source.clone(),
+                            resource_kind: ResourceKind::History,
+                            request_epoch: WireU64::parse(&epoch.to_string()).unwrap(),
+                            query: None,
+                            session_id: None,
+                            limit: 200,
+                            offset: offset.try_into().unwrap(),
+                        },
+                    )
+                    .unwrap();
+                assert_eq!(response.state, ProjectionState::Ready);
+                offset += response.items.len();
+                if !response.has_more {
+                    break;
+                }
+            }
+            assert_eq!(offset, count);
+            started.elapsed().as_secs_f64() * 1000.0
+        };
+        let initial_read_ms = observe(1);
+        let started = Instant::now();
+        let wall = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let receipt = service
+            .archive(
+                &caller,
+                ArchiveRequest {
+                    operation_id: format!("perf-{count}-{project_count}"),
+                    source: source.clone(),
+                    session_key: json!(["local", "codex", source.source_root_key, id]).to_string(),
+                },
+            )
+            .unwrap();
+        let archive_ms = started.elapsed().as_secs_f64() * 1000.0;
+        assert!(receipt.root_archived && archived.exists() && !file.exists());
+        assert!(repo.admission().check_metadata_idle().is_ok());
+        let events: Vec<serde_json::Value> = std::fs::read_to_string(&trace)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let helper = events.first().unwrap()["at"].as_u64().unwrap();
+        let last = events.last().unwrap()["at"].as_u64().unwrap();
+        let readback_ms = observe(2);
+        println!(
+            "ARCHIVE_PERF {}",
+            json!({"sessions":count,"projects":project_count,"scope_ms":scope_ms,"initial_read_ms":initial_read_ms,"pre_rpc_ms":helper.saturating_sub(wall),"rpc_window_ms":last.saturating_sub(helper),"archive_ms":archive_ms,"post_rpc_ms":archive_ms-(last.saturating_sub(wall) as f64),"readback_ms":readback_ms,"total_action_ms":archive_ms+readback_ms})
+        );
+        drop(service);
+        drop(launch);
+        drop(repo);
+    }
+}

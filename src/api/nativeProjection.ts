@@ -73,6 +73,17 @@ function source(v: unknown): SourceRef {
 }
 /** 删除等独立原生协议复用准确的来源 DTO 校验，不扩大 scope 授权。 */
 export function validateProjectionSource(value: unknown): SourceRef { return source(value) }
+/** 原生归档完成证据只绑定本次准确请求，供 IPC 与历史投影共用。 */
+export function validateNativeArchiveReceipt(value: unknown, request: NativeArchiveRequest): NativeArchiveReceipt {
+  object(request, ['operationId', 'source', 'sessionKey'])
+  const admitted = source(request.source)
+  const query = { operationId: id(request.operationId), source: admitted, sessionKey: text(request.sessionKey, 8192, false) }
+  if (admitted.cli !== 'codex' || admitted.basis !== 'configured-profile' || admitted.target.kind !== 'profile') return invalid()
+  const reply = object(value, ['operationId', 'source', 'sessionKey', 'state', 'rootArchived', 'descendants'])
+  if (reply.operationId !== query.operationId || reply.sessionKey !== query.sessionKey || reply.state !== 'archived' || reply.rootArchived !== true || reply.descendants !== 'unverified'
+    || JSON.stringify(source(reply.source)) !== JSON.stringify(admitted)) return invalid()
+  return { ...query, state: 'archived', rootArchived: true, descendants: 'unverified' }
+}
 function kind(v: unknown): ResourceKind { if (!kinds.includes(v as ResourceKind)) return invalid(); return v as ResourceKind }
 function readRequest(v: ReadRequest): Required<ReadRequest> {
   const r = object(v, ['source', 'resourceKind', 'requestEpoch'], ['query', 'sessionId', 'limit', 'offset'])
@@ -254,10 +265,7 @@ export function createProjectionClient(bridge: ProjectionBridge, current: () => 
       const query = { operationId: id(value.operationId), source: admitted, sessionKey: text(value.sessionKey, 8192, false) }
       if (admitted.instanceId !== instance || admitted.cli !== 'codex' || admitted.basis !== 'configured-profile' || admitted.target.kind !== 'profile') return invalid()
       try {
-        const reply = object(await invoke('cli_archive_session', query), ['operationId', 'source', 'sessionKey', 'state', 'rootArchived', 'descendants'])
-        if (reply.operationId !== query.operationId || reply.sessionKey !== query.sessionKey || reply.state !== 'archived' || reply.rootArchived !== true || reply.descendants !== 'unverified'
-          || JSON.stringify(source(reply.source)) !== JSON.stringify(admitted)) return invalid()
-        return { ...query, state: 'archived', rootArchived: true, descendants: 'unverified' }
+        return validateNativeArchiveReceipt(await invoke('cli_archive_session', query), query)
       } catch (failure) {
         assertCurrent()
         const code = failure && typeof failure === 'object' && 'code' in failure ? (failure as { code: unknown }).code : failure instanceof Error ? failure.message : null

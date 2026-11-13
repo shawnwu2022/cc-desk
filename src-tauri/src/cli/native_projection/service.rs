@@ -811,6 +811,8 @@ impl ProjectionService {
         if request.source.cli == CliKind::Codex
             && request.source.basis == SourceBasis::ConfiguredProfile
             && request.resource_kind == super::wire::ResourceKind::History
+            // 续页属于已核验快照；Unknown 只在新观察首屏协调，不能每页重扫整根。
+            && request.offset == 0
         {
             self.registry
                 .check_source(&owner(caller), &request.source)?;
@@ -825,19 +827,19 @@ impl ProjectionService {
                     return self.registry.read(&owner(caller), request);
                 };
                 let result = (|| {
-                    for key in keys {
-                        if let Ok(authority) =
-                            self.registry
-                                .authorize_rename(&owner(caller), &request.source, &key)
-                        {
-                            if authority.archived {
-                                let physical = serde_json::to_string(&(
-                                    authority.root_key(),
-                                    &authority.native_id,
-                                ))
-                                .map_err(|_| error("SOURCE_INVALID"))?;
-                                self.archive_operations.reconcile_archived(&physical)?;
-                            }
+                    let authorities = self.registry.authorize_archive_observation(
+                        &owner(caller),
+                        &request.source,
+                        &keys,
+                    )?;
+                    for authority in authorities.into_iter().flatten() {
+                        if authority.archived {
+                            let physical = serde_json::to_string(&(
+                                authority.root_key(),
+                                &authority.native_id,
+                            ))
+                            .map_err(|_| error("SOURCE_INVALID"))?;
+                            self.archive_operations.reconcile_archived(&physical)?;
                         }
                     }
                     self.launch.registry().check_caller(caller)
@@ -931,3 +933,7 @@ fn verified_spellings(selected: &Path, root: &Root) -> Result<Vec<PathBuf>, Safe
     }
     Ok(paths)
 }
+
+#[cfg(test)]
+#[path = "../../tests/native_cli_archive_observation.rs"]
+mod archive_observation_tests;

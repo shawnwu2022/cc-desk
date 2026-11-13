@@ -2,8 +2,8 @@ import { defineStore } from 'pinia'
 import { reactive } from 'vue'
 import { createNativeProjectionClient } from '@/api/tauri'
 import type { NativeCliKind } from '@/types/cli'
-import type { HistoryReadFailure, ResourceItem, SourceRef } from '@/types/nativeProjection'
-import { projectionFailure, type ProjectionStage } from '@/api/nativeProjection'
+import type { HistoryReadFailure, NativeArchiveRequest, NativeArchiveReceipt, ResourceItem, SourceRef } from '@/types/nativeProjection'
+import { projectionFailure, validateNativeArchiveReceipt, validateProjectionSource, type ProjectionStage } from '@/api/nativeProjection'
 import { normalizePath } from '@/utils/path'
 
 export interface NativeHistoryContext {
@@ -354,6 +354,23 @@ export function createNativeHistoryReader() {
     return owned ? owned.promise : entry
   }
 
+  function applyArchiveReceipt(expected: NativeHistoryEntry, request: NativeArchiveRequest, receipt: NativeArchiveReceipt, nativeSessionId: string): boolean {
+    const verified = validateNativeArchiveReceipt(receipt, request)
+    const key = nativeHistoryContextKey(expected.context), current = entries.get(key)
+    // 已被读取/换源接管的 entry 不能接收迟到回执，调用方仍可走原只读核查。
+    if (current !== expected || !current.loaded || current.loading || current.error || !current.source
+      || current.sourceRootKey !== verified.source.sourceRootKey
+      || JSON.stringify(validateProjectionSource(current.source)) !== JSON.stringify(verified.source)) return false
+    const matches = current.sessions.filter(row => row.sessionKey === verified.sessionKey && row.nativeSessionId === nativeSessionId)
+    if (matches.length !== 1 || matches[0].readFailure) return false
+    // 只更新原生已证明的根，不推断子会话；旧读取所有者不能覆盖这个新证据。
+    owners.set(key, {})
+    inFlight.delete(key)
+    current.sessions = current.sessions.map(row => row === matches[0] ? { ...row, archived: true } : row)
+    current.absenceEvidence = undefined
+    return true
+  }
+
   function invalidate(input?: Omit<NativeHistoryContext, 'force'>): void {
     if (!input) {
       for (const key of entries.keys()) owners.set(key, {})
@@ -367,7 +384,7 @@ export function createNativeHistoryReader() {
     inFlight.delete(key)
   }
 
-  return { entries, get, all, load, loadGrouped, invalidate }
+  return { entries, get, all, load, loadGrouped, applyArchiveReceipt, invalidate }
 }
 
 export const useNativeHistoryStore = defineStore('native-history', createNativeHistoryReader)

@@ -773,8 +773,8 @@ Codex 行的“原生归档”使用 authenticated `cli_archive_session`，经�
 - Windows 专用 helper 冻结环境，核对 initialize 返回的实际 `codexHome` 和 held root，前置 read 核对 ID/cwd/header/path，随后只发一次 archive，再通过同源 `archived_sessions` 物理位置核实根。压缩 rollout 沿用安全 resolver。非 Windows 暂返回 `NATIVE_ARCHIVE_UNSUPPORTED`，不能以 Windows Job 证明其他平台后代收口。
 - 固定 `sessions` 和 `archived_sessions` 的非 reparse 目录身份；目标归档目录缺失时只在已授权操作下用 held capability 创建空目录，随后固定。助手从 suspended 启动加入本次 Job，整个进程组真正退出前保持目录、来源与 admission lease；超时、EOF、撤销及未知写不释放仍存活的后代。
 - 归档写入前由后端重新验证 held scope、profile、项目、准确原生 ID 与当前历史，前端不再先重复扫描整份历史才获得忙碌反馈。RPC 验证完成后给助手最多 2 秒 EOF 退出宽限，再终止仅属于本次操作的 Job；整个 Job 确认清空前不释放 admission。
-- 官方 ACK 只代表根路径调用完成，后代可能仅记录 warning。回执限定 `rootArchived: true, descendants: "unverified"`，不宣称整棵子树都已归档。成功和不确定结果都强制重读已加载的同根各项目，外根不受影响。界面刷新失败不能再发一次归档。
-- 后端按物理根/原生 ID 保留 pending/unknown 写屏障，换 operation ID 或文档不能绕过。普通历史刷新只在能取得空闲准入时尝试核对，忙时照常读取且保留屏障；pending 不清除。官方 unarchive 的后端入口对该物理目标旧未知写强制执行独立只读核对，取得空闲准入并证明原生根已归档后才清屏障和继续恢复，因此丢 ACK → 刷新 → 恢复 → 再归档不会被旧屏障永久锁住。尚未证实的写始终不自动重放。
+- 官方 ACK 只代表根路径调用完成，后代可能仅记录 warning。回执限定 `rootArchived: true, descendants: "unverified"`，不宣称整棵子树都已归档。经过完整 operation/source/session 校验的回执可先发布准确根的归档状态并结束前台等待；全部已加载同根项目继续后台重读，不推断后代或外根。当前 entry 被新读取接管、失效或来源变化时回执不能覆盖，退回只读核查。后台失败保留已证明目标和来源警告；不确定结果仍等待只读核查，界面刷新失败不能再发一次归档。
+- 后端按物理根/原生 ID 保留 pending/unknown 写屏障，换 operation ID 或文档不能绕过。普通历史刷新只在 offset-zero 新观察且能取得空闲准入时尝试核对，忙时照常读取且保留屏障；续页仅复用原观察，不再协调 Unknown。同根所有 Unknown 共享一次新鲜全源授权扫描，每个目标仍独立检查身份、项目归属、歧义与归档状态，发布前重核 scope。缺失、外项目、未归档和 pending 不清除。官方 unarchive 的后端入口对该物理目标旧未知写强制执行独立只读核对，取得空闲准入并证明原生根已归档后才清屏障和继续恢复，因此丢 ACK → 刷新 → 恢复 → 再归档不会被旧屏障永久锁住。尚未证实的写始终不自动重放。
 - 旧 Desk-only 记录保持原样，不自动迁移真实会话。用户先恢复旧显示标记，再显式“原生归档”；永久删除仍只接受原生已归档根，原有预览与二次确认门不变。
 
 协议依据为官方 Codex 0.167.0，对应 `openai/codex` commit `086ccc833bc9cf01024ad2dd6af7dbd421b6bf9a` 的 `thread_processor.rs`、`thread-store/src/local/archive_thread.rs`、`read_thread.rs`。`thread/read` 可读取归档但 DTO 没有 archived 字段；不能把 read 成功或 archive ACK 当作物理归档证明。测试使用独立临时 Node 合成 app-server 验证 Windows Job、EOF、只读恢复闭环与容器防护；不是已登录真实 CLI 或已安装 WebView2 的验收，本次未归档或删除真实用户会话。
@@ -783,4 +783,4 @@ Codex 行的“原生归档”使用 authenticated `cli_archive_session`，经�
 
 ## 0.27：Claude 主记录可恢复移除
 
-独立的 `cli_recycle_session` 和“Claude 恢复区”仅支持已核实 Windows NTFS 配置来源。它只将主 transcript 原件移入同卷持久恢复区，保留子任务、附件和原生索引，提供无覆盖恢复；不是原生归档、软隐藏或永久删除。未知结果不重发，原有永久删除能力门不变。范围、句柄/日志契约与验证边界见 [可恢复移除](recoverable-claude-removal-0.70.md)。
+独立“Claude 恢复区”和 OpenCode 原生归档面板已撤除；产品界面不再新增移除或独立原生归档。已核实 Windows NTFS 来源的旧 Claude 恢复记录仍可在归档抽屉内找回，OpenCode 已原生归档行保留单条恢复确认。现有认证后端保留，不迁移、不覆盖或删除旧数据；未知结果不重发，原有永久删除能力门不变。当前界面与兼容边界见 [撤除说明](archive-feature-retirement.md)，历史句柄/日志契约见 [可恢复移除](recoverable-claude-removal-0.70.md)。

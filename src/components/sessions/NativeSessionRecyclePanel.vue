@@ -1,117 +1,148 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppButton from '@/components/ui/AppButton.vue'
-import AppDialog from '@/components/ui/AppDialog.vue'
-import AppSelect from '@/components/ui/AppSelect.vue'
-import InlineNotice from '@/components/ui/InlineNotice.vue'
 import { createNativeSessionRecycleClient } from '@/api/tauri'
 import { recycleErrorCode, type RecycleRecord } from '@/api/nativeSessionRecycle'
 import { useNativeHistoryStore } from '@/stores/nativeHistory'
 import { useNativeSessionRecoveryStore } from '@/stores/nativeSessionRecovery'
 import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
-import { nativeRecycleBinding } from '@/utils/nativeSessionRecycle'
-import { createNativeUuid } from '@/utils/nativeId'
 import { normalizePath } from '@/utils/path'
 import type { UnifiedSession } from '@/types/unifiedSession'
 import type { SourceRef } from '@/types/nativeProjection'
 const props = defineProps<{ sessions: UnifiedSession[]; active: boolean; projectPath?: string }>()
 const { t } = useI18n(), history = useNativeHistoryStore(), recovery = useNativeSessionRecoveryStore()
-const unavailable = ref(0)
-const open = ref(false), busy = ref(false), error = ref(''), selected = ref(''), acknowledged = ref(false)
+const unavailableBySource = ref(new Map<string, { root: string; count: number }>())
+const unavailable = computed(() => {
+  const roots = new Map<string, number>()
+  for (const item of unavailableBySource.value.values()) roots.set(item.root, Math.max(roots.get(item.root) ?? 0, item.count))
+  return [...roots.values()].reduce((sum, count) => sum + count, 0)
+})
+const busy = ref(false), error = ref('')
 const records = ref<{ source: SourceRef; record: RecycleRecord }[]>([])
-const eligible = computed(() => props.sessions.map(row => nativeRecycleBinding(row, row.nativeOrigin ? history.get(row.nativeOrigin) : undefined)).filter(row => row !== null).filter(row => !recovery.has(row.source, row.nativeSessionId)))
-const choices = computed(() => [{ value: '', label: t('recycleChoose') }, ...eligible.value.map(row => ({ value: row.rowId, label: `${row.title} · ${row.nativeSessionId}` }))])
-const target = computed(() => eligible.value.find(row => row.rowId === selected.value))
-const signature = computed(() => JSON.stringify(target.value ?? null))
-const sources = computed(() => {
+let epoch = 0
+const sourceIdentity = (source: SourceRef) => JSON.stringify([source.instanceId, source.sourceRootKey, source.profileId, source.profileRevision, source.target])
+const knownSources = computed(() => {
   const byScope = new Map<string, SourceRef>()
-  for (const entry of history.all()) if (entry.loaded && !entry.loading && !entry.error && entry.source?.cli === 'claude' && entry.source.basis === 'configured-profile' && entry.source.target.kind === 'profile'
-    && (!props.projectPath || normalizePath(props.projectPath) === normalizePath(entry.context.projectPath))) byScope.set(entry.source.scopeId, entry.source)
+  for (const entry of history.all()) {
+    const source = entry.source
+    if (source?.cli === 'claude' && source.basis === 'configured-profile' && source.target.kind === 'profile'
+      && source.profileId === entry.context.profileId && source.profileRevision === entry.context.profileRevision && source.target.projectIds.includes(entry.context.projectId)
+      && (!props.projectPath || normalizePath(props.projectPath) === normalizePath(entry.context.projectPath))) byScope.set(source.scopeId, source)
+  }
   return [...byScope.values()]
 })
-watch(signature, () => { acknowledged.value = false })
-watch(() => props.active, active => { if (!active) { open.value = false; selected.value = ''; acknowledged.value = false } })
-const pending = computed(() => [...recovery.pending.values()].filter(item => sources.value.some(source => source.sourceRootKey === item.root && source.instanceId === item.instance) && (!props.projectPath || normalizePath(props.projectPath) === normalizePath(item.projectPath))))
+const sources = computed(() => knownSources.value.filter(source => history.all().some(entry => entry.source?.scopeId === source.scopeId && entry.loaded && !entry.loading && !entry.error)))
+const currentSource = (source: SourceRef) => sources.value.some(value => JSON.stringify(value) === JSON.stringify(source))
+const readySignature = computed(() => JSON.stringify(sources.value))
+const signature = computed(() => JSON.stringify([props.active, props.projectPath, knownSources.value.map(sourceIdentity)]))
+const retained = computed(() => records.value.filter(item => item.record.state !== 'source'))
+const pending = computed(() => [...recovery.pending.values()].filter(item => knownSources.value.some(source => source.sourceRootKey === item.root && source.instanceId === item.instance)
+  && (!props.projectPath || normalizePath(props.projectPath) === normalizePath(item.projectPath))))
+const sourceUnavailable = computed(() => retained.value.some(item => !currentSource(item.source)))
+const visible = computed(() => props.active && (retained.value.length || pending.value.length || unavailable.value || error.value))
 async function load() {
-  const next: typeof records.value = []
-  const damaged = new Map<string, number>()
-  for (const source of sources.value) {
-    const result = await createNativeSessionRecycleClient().send({ source, action: 'list', operationId: null, sessionKey: null, acknowledgeRecoverable: false })
-    recovery.observe(source, result.records)
-    damaged.set(source.sourceRootKey, Math.max(damaged.get(source.sourceRootKey) ?? 0, result.unavailableCount))
-    next.push(...result.records.filter(record => !props.projectPath || normalizePath(record.projectPath) === normalizePath(props.projectPath)).map(record => ({ source, record })))
+  if (!props.active || busy.value || !sources.value.length) return
+  const readiness = readySignature.value
+  const request = ++epoch, owner = signature.value, selectedSources = [...sources.value]
+  const current = () => request === epoch && owner === signature.value && props.active
+  busy.value = true; error.value = ''
+  const next: typeof records.value = [...records.value], damaged = new Map(unavailableBySource.value)
+  try {
+    for (const source of selectedSources) {
+      const result = await createNativeSessionRecycleClient().send({ source, action: 'list', operationId: null, sessionKey: null, acknowledgeRecoverable: false })
+      if (!current()) return
+      if (!currentSource(source)) continue
+      for (let index = next.length - 1; index >= 0; index--) {
+        if (sourceIdentity(next[index]!.source) === sourceIdentity(source)) next.splice(index, 1)
+      }
+      recovery.observe(source, result.records)
+      damaged.set(sourceIdentity(source), { root: source.sourceRootKey, count: result.unavailableCount })
+      next.push(...result.records.filter(record => !props.projectPath || normalizePath(record.projectPath) === normalizePath(props.projectPath)).map(record => ({ source, record })))
+    }
+    if (!current()) return
+    unavailableBySource.value = damaged
+    records.value = [...new Map(next.map(item => [`${item.source.sourceRootKey}/${item.record.operationId}`, item])).values()]
+  } catch (failure) {
+    if (current()) {
+      const code = recycleErrorCode(failure)
+      if (code !== 'RECYCLE_UNSUPPORTED') error.value = code
+    }
+  } finally {
+    if (current()) {
+      busy.value = false
+      if (readiness !== readySignature.value) void load()
+    }
   }
-  unavailable.value = [...damaged.values()].reduce((sum, count) => sum + count, 0)
-  records.value = [...new Map(next.map(item => [`${item.source.sourceRootKey}/${item.record.operationId}`, item])).values()]
 }
-async function show() {
+async function recheck() {
   if (!props.active || busy.value) return
-  open.value = true; selected.value = ''; acknowledged.value = false; error.value = ''; busy.value = true
-  try { await load() } catch (failure) { error.value = recycleErrorCode(failure) } finally { busy.value = false }
+  const owner = signature.value
+  busy.value = true; error.value = ''
+  try {
+    for (const entry of history.all().filter(entry => entry.source && knownSources.value.some(source => sourceIdentity(source) === sourceIdentity(entry.source!)) && (!entry.loaded || entry.error) && !entry.loading)) {
+      await history.load({ ...entry.context, force: true, retainOnFailure: true })
+    }
+  } catch (failure) { if (owner === signature.value) error.value = recycleErrorCode(failure) }
+  finally { if (owner === signature.value) busy.value = false }
+  if (owner === signature.value && !error.value) await load()
 }
+watch(readySignature, () => { if (props.active && !busy.value) void load() }, { flush: 'sync' })
+let previousView = ''
+watch(signature, () => {
+  const view = JSON.stringify([props.active, props.projectPath]), identities = new Set(knownSources.value.map(sourceIdentity))
+  const sameView = view === previousView
+  previousView = view
+  ++epoch
+  records.value = sameView ? records.value.filter(item => identities.has(sourceIdentity(item.source))) : []
+  unavailableBySource.value = sameView ? new Map([...unavailableBySource.value].filter(([identity]) => identities.has(identity))) : new Map()
+  error.value = ''; busy.value = false
+  if (props.active) void load()
+}, { immediate: true, flush: 'sync' })
+onBeforeUnmount(() => { ++epoch })
 async function refresh(source: SourceRef) {
-  const entries = history.all().filter(entry => entry.sourceRootKey === source.sourceRootKey)
-  for (const entry of entries) {
+  for (const entry of history.all().filter(entry => entry.sourceRootKey === source.sourceRootKey)) {
     try { await history.load({ ...entry.context, force: true, retainOnFailure: true }) }
     finally { await useUnifiedSessionsStore().refresh(entry.context.projectPath, { cli: 'claude' }) }
   }
 }
-async function remove() {
-  const binding = target.value
-  if (!props.active || !open.value || busy.value || !acknowledged.value || !binding) return
-  busy.value = true; error.value = ''
-  const source = binding.source
-  selected.value = ''; acknowledged.value = false
-  const operationId = createNativeUuid()
-  try {
-    recovery.begin(source, binding.nativeSessionId, operationId, binding.origin.projectPath)
-    const response = await createNativeSessionRecycleClient().send({ source, action: 'remove', operationId, sessionKey: binding.sessionKey, acknowledgeRecoverable: true })
-    if (response.records[0]?.nativeSessionId !== binding.nativeSessionId) throw { code: 'RECYCLE_OUTCOME_UNKNOWN' }
-    recovery.observe(source, response.records)
-    await refresh(source); await load()
-  } catch (failure) {
-    error.value = recycleErrorCode(failure)
-    recovery.failed(source, binding.nativeSessionId, error.value)
-    // 不重发移动；后端日志允许用户明确刷新或重新打开恢复区。
-  } finally { busy.value = false }
-}
 async function restore(item: (typeof records.value)[number]) {
-  if (!props.active || !open.value || busy.value || item.record.state !== 'stored' || item.record.originalOccupied) return
-  const source = sources.value.find(value => value.scopeId === item.source.scopeId) ?? history.all().find(entry => entry.sourceRootKey === item.source.sourceRootKey && normalizePath(entry.context.projectPath) === normalizePath(item.record.projectPath) && !entry.loading && !entry.error)?.source
-  if (!source) { error.value = 'SCOPE_STALE'; return }
+  if (!props.active || busy.value || item.record.state !== 'stored' || item.record.originalOccupied || recovery.hasRestore(item.source, item.record.operationId)) return
+  const source = sources.value.find(value => JSON.stringify(value) === JSON.stringify(item.source))
+  if (!source || !records.value.includes(item)) return
+  const owner = signature.value, request = ++epoch
+  const current = () => props.active && owner === signature.value && request === epoch
   busy.value = true; error.value = ''
   try {
-    await createNativeSessionRecycleClient().send({ source, action: 'restore', operationId: item.record.operationId, sessionKey: null, acknowledgeRecoverable: true })
-    await refresh(source); await load()
-  } catch (failure) { error.value = recycleErrorCode(failure) } finally { busy.value = false }
+    recovery.beginRestore(source, item.record.operationId)
+    try {
+      const result = await createNativeSessionRecycleClient().send({ source, action: 'restore', operationId: item.record.operationId, sessionKey: null, acknowledgeRecoverable: true })
+      recovery.settleRestore(source, item.record.operationId)
+      recovery.observe(source, result.records)
+    } finally { recovery.settleRestore(source, item.record.operationId) }
+    await refresh(source)
+    if (current()) { busy.value = false; await load() }
+  } catch (failure) { if (current()) error.value = recycleErrorCode(failure) }
+  finally { if (current()) busy.value = false }
 }
 </script>
 <template>
-  <AppButton data-recycle-open :disabled="!active || busy" @click="show">{{ t('recycleOpen') }}</AppButton>
-  <AppDialog :open="open" :title="t('recycleOpen')" data-recycle-dialog @close="open = false">
-    <p>{{ t('recycleScope') }}</p>
-    <InlineNotice kind="warning" :message="t('recycleLimitations')" />
+  <div v-if="visible" data-recycle-legacy>
+    <p>{{ t('recycleLegacyScope') }}</p>
+    <p v-if="sourceUnavailable" data-recycle-source-unavailable role="status">{{ t('recycleSourceUnavailable') }}</p>
     <p v-if="error" data-recycle-error role="alert">{{ error }}</p>
     <p v-if="unavailable" role="alert">{{ t('recycleDamaged', { count: unavailable }) }}</p>
     <p v-for="item in pending" :key="item.operationId" data-recycle-pending>{{ item.nativeSessionId }} · {{ t('recyclePending') }}</p>
     <p v-if="busy" aria-live="polite">{{ t('deleteBusy') }}</p>
-    <AppSelect v-model="selected" data-recycle-select :label="t('recycleChoose')" :options="choices" :disabled="busy" />
-    <template v-if="target">
-      <p>{{ target.nativeSessionId }}</p>
-      <label><input v-model="acknowledged" data-recycle-ack type="checkbox" :disabled="busy">{{ t('recycleAcknowledge') }}</label>
-      <AppButton data-recycle-remove :disabled="busy || !acknowledged || !active" @click="remove">{{ t('recycleRemove') }}</AppButton>
-    </template>
-    <ul data-recycle-records><li v-for="item in records" :key="`${item.source.sourceRootKey}/${item.record.operationId}`">
+    <ul data-recycle-records><li v-for="item in retained" :key="`${item.source.sourceRootKey}/${item.record.operationId}`">
       <p>{{ item.record.nativeSessionId }} · {{ t(`recycleState_${item.record.state}`) }}</p>
       <p v-if="item.record.state === 'stored' && item.record.originalOccupied">{{ t('recycleConflict') }}</p>
-      <AppButton v-if="item.record.state === 'stored'" data-recycle-restore :disabled="busy || item.record.originalOccupied || !active" @click="restore(item)">{{ t('recycleRestore') }}</AppButton>
+      <AppButton v-if="item.record.state === 'stored'" data-recycle-restore :disabled="busy || !currentSource(item.source) || item.record.originalOccupied || recovery.hasRestore(item.source, item.record.operationId)" @click="restore(item)">{{ t('recycleRestore') }}</AppButton>
     </li></ul>
-    <template #footer><AppButton data-recycle-refresh :disabled="busy" @click="show">{{ t('recycleRefresh') }}</AppButton><AppButton @click="open = false">{{ t('close') }}</AppButton></template>
-  </AppDialog>
+    <AppButton data-recycle-refresh :disabled="busy" @click="recheck">{{ t('recycleRefresh') }}</AppButton>
+  </div>
 </template>
 <style scoped>
 p { line-height: 1.6; overflow-wrap: anywhere; }
-label { display: flex; align-items: flex-start; gap: 8px; margin: 12px 0; }
 ul { padding-left: 20px; } li { margin-top: 12px; }
 </style>

@@ -7,6 +7,16 @@ const key = (source: SourceRef, nativeId: string) => JSON.stringify([source.inst
 /** 未决意图跨组件关闭/重开保留；不同后端 instance 不能继承其执行身份。 */
 export const useNativeSessionRecoveryStore = defineStore('native-session-recovery', () => {
   const pending = reactive(new Map<string, Pending>())
+  const restores = reactive(new Map<string, { operationId: string; sending: boolean }>())
+  const restoreKey = (source: SourceRef, operationId: string) => JSON.stringify([source.instanceId, source.sourceRootKey, operationId])
+  function hasRestore(source: SourceRef, operationId: string) { return restores.has(restoreKey(source, operationId)) }
+  function beginRestore(source: SourceRef, operationId: string) {
+    if (hasRestore(source, operationId)) throw Object.assign(new Error('RECYCLE_OUTCOME_UNKNOWN'), { code: 'RECYCLE_OUTCOME_UNKNOWN' })
+    restores.set(restoreKey(source, operationId), { operationId, sending: true })
+  }
+  function settleRestore(source: SourceRef, operationId: string) {
+    const item = restores.get(restoreKey(source, operationId)); if (item) item.sending = false
+  }
   function has(source: SourceRef, nativeId: string) { return pending.has(key(source, nativeId)) }
   function begin(source: SourceRef, nativeId: string, operationId: string, projectPath: string) {
     if (has(source, nativeId)) throw Object.assign(new Error('RECYCLE_OUTCOME_UNKNOWN'), { code: 'RECYCLE_OUTCOME_UNKNOWN' })
@@ -14,6 +24,8 @@ export const useNativeSessionRecoveryStore = defineStore('native-session-recover
   }
   function observe(source: SourceRef, records: RecycleRecord[]) {
     for (const record of records) {
+      const restore = restoreKey(source, record.operationId)
+      if (restores.get(restore)?.sending === false && ['stored', 'source'].includes(record.state)) restores.delete(restore)
       const id = key(source, record.nativeSessionId), item = pending.get(id)
       if (item?.operationId === record.operationId && ['stored', 'source'].includes(record.state)) pending.delete(id)
     }
@@ -22,5 +34,5 @@ export const useNativeSessionRecoveryStore = defineStore('native-session-recover
     // 这些固定前置错误证明该调用未移动原件；传输/失权/未知结果继续等待只读核实。
     if (['SOURCE_BUSY', 'RECYCLE_INVALID_REQUEST', 'RECYCLE_UNSUPPORTED', 'RECYCLE_UNAVAILABLE', 'RECYCLE_CAPACITY', 'RECYCLE_OPERATION_CONFLICT', 'SOURCE_CHANGED', 'SCOPE_STALE', 'SCOPE_UNKNOWN', 'FORBIDDEN'].includes(code)) pending.delete(key(source, nativeId))
   }
-  return { pending, has, begin, observe, failed }
+  return { pending, has, begin, observe, failed, hasRestore, beginRestore, settleRestore }
 })

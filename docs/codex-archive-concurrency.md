@@ -59,3 +59,13 @@ Windows KnownFolder 不受 USERPROFILE 覆盖，因此启动前后必须确认�
 该版本共享 app-server 的归档会先对其加载的 root/descendants 准备 Shutdown，故 Desk 明确不采用共享实例路径。`ThreadArchiveParams` 只有 threadId，loaded-list 不是稳定快照，initialize 没有持久 writer 范围租约。
 
 将来若需跨版本、跨 owner 的原子 idle 保证，应由原生存储协调者增加显式能力及 `archiveIfIdle`、持续 writer lease、目标树 epoch、无副作用 Busy 和可核对 receipt。这是更强保证的上游方案，不是当前独立原生语义方案的伪造能力或版本白名单，也不是本次生产交付的阻塞前提。
+
+## 归档后目录回读修复（2026-11-13）
+
+归档成功/Unknown 后的同根回读原先逐项目调用独立历史扫描，并发数不受控。后端 registry 仅允许两个扫描；真实 history store 加隔离 IPC 的八项目回归在修复前得到两个正常读取、六个 SOURCE_BUSY，复现来源警告。现在同配置/修订项目使用已有 loadGrouped，八项目一次观察完成；三个同根配置仍分别授权，以两组一批收口。不同根不读取，目标必须保持精确根/上下文且读回 archived 才成功。
+
+进行中横幅原先对已发出的归档 RPC 也声称“等待工作区连接”，现改为中性处理中。该横幅不证明连接失败。上述回归证明重复扫描和自触发来源忙碌已消除；不等于复现用户现场的约 30 秒总耗时，未操作真实用户会话，也未替换安装版或证明端到端耗时。
+
+本次验证：针对性 79 项通过；完整 Vitest 219 文件、3344 项通过、2 项 Windows 原条件跳过（D28_D20_RunRootSymlinkEscapeIsRejected_04、D20_Runner_ExecutionRejectsSymlinkEscape_11），91.77 秒；typecheck 与前端 build 通过。npm 旧配置与 bundle 大小警告仍存在。没有修改 Rust，不将上述结果视为安装版或真实 CLI 耗时验收。
+
+独立审查补充无关项目在合并观察中撤销的边界：整组拒绝时，只对准确目标作一次新的只读回读，不重放归档；目标原有来源/所有权检查仍必需。新增回归先复现 ARCHIVE_DISPLAY_SYNC_FAILED，再验证成功目标不被无关撤销误报，撤销项目不复活。

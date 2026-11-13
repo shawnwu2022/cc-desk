@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+## [0.27.0-rc.7] - 2026-11-13
+
+### Fixed
+
+- Complete Codex archive feedback after an exact, physically verified root receipt while all loaded same-source projects refresh in the background; retain source-read warnings, stale-response guards and unknown-write fences.
+- Fold repeated archive history reloads within the reader budget and reconcile unknown operations with one fresh shared source scan per offset-zero observation instead of rescanning per target.
+
+### Improved
+
+- Remove standalone Claude recovery and OpenCode native-archive panels. Preserve only safe inline restore of existing Claude recovery records and per-row restore of already natively archived OpenCode records.
+
+### Validation and limits
+
+- Preserve ordinary Desk archive/restore, Codex native archive/delete admission, source identity, operation ownership and permanent-delete confirmations. No data migration, automatic restore, cleanup or deletion is performed.
+- Targeted synthetic frontend/native regressions cover completion, background failures, stale receipts, shared scans and retained recovery access. Hosted exact-main CI and authenticated coverage plus three same-release-run updater signatures remain mandatory before publication.
+- This prerelease uses make_latest=false. Live CLI/model sessions, installed WebView acceptance for these changes, complete descendants/external writers, D20/native All and signed installation/return remain separately unverified. Updater signatures are not Windows Authenticode. See [feature retirement](docs/archive-feature-retirement.md) and [archive performance evidence](docs/ci-performance.md).
+
 ## [0.27.0-rc.6] - 2026-11-12
 
 ### Added

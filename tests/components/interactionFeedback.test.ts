@@ -710,3 +710,34 @@ it('Feedback_DirectEndedArchiveKeepsNavigationGuard_020', async () => {
   expect(io.nativeArchive).not.toHaveBeenCalled()
   expect(useNativeTabsStore().tab(tab.tabId)).toBeDefined()
 })
+
+// 已经发出归档 RPC 时显示处理中，不能误报正在等待工作区连接。
+it('WorkspaceRequest_ArchiveShowsProcessing_004', async () => {
+  const wrapper = render(); await flushPromises()
+  const catalog = useUnifiedSessionsStore()
+  const row = catalog.sessions.find(row => row.runtime === 'native-cli')!
+  let finish!: () => void
+  io.nativeArchive.mockImplementationOnce(() => new Promise<void>(resolve => { finish = () => { nativeArchived = true; resolve() } }))
+  useShellStore().requestWorkspaceAction({ kind: 'menu-action', sessionId: row.id, action: 'archive' }); await flushPromises()
+  expect(io.nativeArchive).toHaveBeenCalledOnce()
+  expect(wrapper.text()).toContain('Processing this action. Please wait.')
+  expect(wrapper.text()).not.toContain('This action is waiting for the workspace connection.')
+  finish(); await flushPromises()
+  expect(useShellStore().pendingRequest).toBeNull()
+  expect(catalog.sessions.find(item => item.id === row.id)?.archived).toBe(true)
+})
+
+// 归档已由原生回执确认，后台目录刷新失败独立可见，不能误报归档失败或丢掉状态。
+it('WorkspaceRequest_ArchiveBackgroundFailureRemainsVisible_005', async () => {
+  const wrapper = render(); await flushPromises()
+  const catalog = useUnifiedSessionsStore()
+  const row = catalog.sessions.find(row => row.runtime === 'native-cli')!
+  io.nativeArchive.mockImplementationOnce(async request => { nativeArchived = true; return { ...request, state: 'archived', rootArchived: true, descendants: 'unverified' } })
+  io.read.mockRejectedValueOnce(new Error('SOURCE_UNAVAILABLE'))
+  useShellStore().requestWorkspaceAction({ kind: 'menu-action', sessionId: row.id, action: 'archive' }); await flushPromises()
+  expect(useShellStore().pendingRequest).toBeNull()
+  expect(catalog.sessions.find(item => item.id === row.id)?.archived).toBe(true)
+  expect(catalog.actionFeedback).toBeNull()
+  expect(wrapper.text()).toContain(en.workspaceRuntimePartial)
+  expect(io.nativeArchive).toHaveBeenCalledOnce()
+})

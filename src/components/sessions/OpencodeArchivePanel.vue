@@ -3,7 +3,6 @@ import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppButton from '@/components/ui/AppButton.vue'
 import AppDialog from '@/components/ui/AppDialog.vue'
-import AppSelect from '@/components/ui/AppSelect.vue'
 import InlineNotice from '@/components/ui/InlineNotice.vue'
 import { createNativeOpencodeArchiveClient } from '@/api/tauri'
 import { opencodeArchiveErrorCode } from '@/api/opencodeArchive'
@@ -21,8 +20,7 @@ const open = ref(false), busy = ref(false), error = ref(''), selected = ref(''),
 const inProject = (path: string) => !props.projectPath || normalizePath(path) === normalizePath(props.projectPath)
 const eligible = computed(() => props.sessions.filter(row => inProject(row.projectPath))
   .map(row => opencodeArchiveBinding(row, row.nativeOrigin ? history.get(row.nativeOrigin) : undefined))
-  .filter(row => row !== null).filter(row => !operations.has(row)))
-const choices = computed(() => [{ value: '', label: t('opencodeArchiveChoose') }, ...eligible.value.map(row => ({ value: row.rowId, label: `${row.title} · ${row.nativeSessionId}` }))])
+  .filter(row => row !== null).filter(row => row.nativeArchived && !operations.has(row)))
 const target = computed(() => eligible.value.find(row => row.rowId === selected.value))
 const signature = computed(() => JSON.stringify(target.value ?? null))
 const pending = computed(() => [...operations.pending.values()].filter(item => inProject(item.binding.origin.projectPath)))
@@ -47,8 +45,8 @@ async function refreshContexts(contexts: NativeHistoryContext[]) {
   }
 }
 async function refresh() {
-  if (!props.active || !open.value || busy.value) return
-  busy.value = true; error.value = ''; selected.value = ''; acknowledged.value = false
+  if (!props.active || busy.value || (!open.value && !pending.value.length)) return
+  busy.value = true; error.value = ''; acknowledged.value = false
   try {
     await refreshContexts([...history.all().filter(entry => entry.context.cli === 'opencode' && inProject(entry.context.projectPath)).map(entry => entry.context),
       ...pending.value.map(item => item.binding.origin)])
@@ -58,7 +56,7 @@ async function submit() {
   const binding = target.value
   if (!props.active || !open.value || busy.value || !acknowledged.value || !binding) return
   busy.value = true; error.value = ''; verified.value = false; selected.value = ''; acknowledged.value = false
-  const operationId = createNativeUuid(), archived = !binding.nativeArchived
+  const operationId = createNativeUuid(), archived = false
   try {
     operations.begin(binding, operationId, archived)
     try {
@@ -73,19 +71,22 @@ async function submit() {
 }
 </script>
 <template>
-  <AppButton data-opencode-archive-open :disabled="!active || busy" @click="show">{{ t('opencodeArchiveOpen') }}</AppButton>
-  <AppDialog :open="open" :title="t('opencodeArchiveOpen')" data-opencode-archive-dialog @close="open = false">
-    <p>{{ t('opencodeArchiveScope') }}</p>
+  <div v-if="active && pending.length && !open" data-opencode-pending-status>
+    <p v-for="item in pending" :key="item.operationId">{{ item.binding.nativeSessionId }} · {{ t('opencodeArchivePending') }}</p>
+    <p v-if="error" data-opencode-archive-error role="alert">{{ error }}</p>
+    <AppButton data-opencode-pending-refresh :disabled="busy" @click="refresh">{{ t('opencodeArchiveRefresh') }}</AppButton>
+  </div>
+  <AppDialog :open="open" :title="t('opencodeArchiveRestore')" data-opencode-archive-dialog @close="open = false">
+    <p>{{ t('opencodeRestoreScope') }}</p>
     <InlineNotice kind="warning" :message="t('opencodeArchiveLimitations')" />
     <p v-if="error" data-opencode-archive-error role="alert">{{ error }}</p>
     <p v-if="verified" aria-live="polite">{{ t('opencodeArchiveVerified') }}</p>
     <p v-for="item in pending" :key="item.operationId" data-opencode-archive-pending>{{ item.binding.nativeSessionId }} · {{ t(item.archived ? 'opencodeArchiveSet' : 'opencodeArchiveRestore') }} · {{ t('opencodeArchivePending') }}</p>
     <p v-if="busy" aria-live="polite">{{ t('deleteBusy') }}</p>
-    <AppSelect v-model="selected" data-opencode-archive-select :label="t('opencodeArchiveChoose')" :options="choices" :disabled="busy" />
     <template v-if="target">
-      <p>{{ target.nativeSessionId }} · {{ t(target.nativeArchived ? 'opencodeArchiveArchived' : 'opencodeArchiveUnarchived') }}</p>
-      <label><input v-model="acknowledged" data-opencode-archive-ack type="checkbox" :disabled="busy">{{ t('opencodeArchiveAcknowledge') }}</label>
-      <AppButton data-opencode-archive-submit :disabled="busy || !acknowledged || !active" @click="submit">{{ t(target.nativeArchived ? 'opencodeArchiveRestore' : 'opencodeArchiveSet') }}</AppButton>
+      <p>{{ target.title }} · {{ target.nativeSessionId }}</p>
+      <label><input v-model="acknowledged" data-opencode-archive-ack type="checkbox" :disabled="busy">{{ t('opencodeRestoreAcknowledge') }}</label>
+      <AppButton data-opencode-archive-submit :disabled="busy || !acknowledged || !active" @click="submit">{{ t('opencodeArchiveRestore') }}</AppButton>
     </template>
     <template #footer>
       <AppButton data-opencode-archive-refresh :disabled="busy || !active" @click="refresh">{{ t('opencodeArchiveRefresh') }}</AppButton>

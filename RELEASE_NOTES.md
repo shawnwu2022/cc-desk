@@ -4,6 +4,24 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
+## [0.27.0-rc.7]
+
+Fixed
+
+- Show archive completion once the exact native root has been verified, while the session list continues refreshing in the background. Keep genuine history-read warnings visible and uncertain writes behind read-only verification.
+- Combine repeated history refreshes and unknown-archive checks to avoid redundant scans, especially with many sessions or projects.
+
+Improved
+
+- Remove the separate Claude recovery and OpenCode native-archive panels from the archive drawer. Existing Claude recovery records remain available inline for safe restore, and already natively archived OpenCode rows retain their individual restore action.
+
+Important
+
+- This is a prerelease. Stable Latest remains unchanged. No automatic data migration, restore or deletion is performed. Back up important data.
+- Normal Desk archive/restore and Codex native archive/permanent-delete safeguards remain unchanged. Claude and OpenCode permanent deletion is still unavailable; new Claude recovery removals and OpenCode native archives are no longer offered by the UI.
+- Codex archive success verifies the selected root, not all descendants or external writers. Existing recovery and native restore still require a supported, verified Windows source; unknown outcomes are reconciled read-only and are not automatically retried.
+- Isolated tests do not certify live model sessions, the installed application, native All, D20 or signed installation/return. Updater signatures are not Windows Authenticode.
+
 ## [0.27.0-rc.6]
 
 Added

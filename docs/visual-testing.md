@@ -728,3 +728,27 @@ The original run remains RED: 254 of 255 cases passed, with 3,122 differing
 pixels in this snapshot. Fresh complete 255-case no-update CI with
 maxDiffPixels: 0 remains required. These synthetic Linux pixels do not certify
 installed Windows WebView2 or real CLI behavior.
+
+## PR87 archive panel retirement baseline acceptance
+
+Two reviewers opened expected, actual and diff from run 43344088250, attempt 1.
+Only archived-sessions.png changes: the Claude recovery and OpenCode native-archive
+buttons disappear and the same three rows move up 32px. The drawer boundary, title,
+Close button and every pixel outside [987,61,1333,200) remain unchanged.
+
+The exact actual PNG is 50,596 bytes, SHA-256
+64eb9f3791f820a28d8eb5a2d455ea0a07805ebea808f8732dc1e9e652296b39,
+matching the reviewed pre-panel image without reusing an old capture. Its replaced
+baseline SHA-256 is 32a416da2df3f67777a44dbca17eb742b7b6ddc13da17cf327a85ab7b57a7c4b.
+Both reviewers independently checked the downloaded 41,462,141-byte artifact
+14000991708, ZIP SHA-256 5b0c371ec15365491af97a5c93149e2091692868bf374f526c8f6bd983131088.
+Source head: 00003b2b31e2ee489fb4a47197edb49a43fec2f3; tested merge:
+9ec6d756d0efa98110fdf7d371b54db968e17142. Environment: Ubuntu 24.04, Node 22.23.4,
+Playwright 1.63.0, Chrome 153.0.8010.12 and the existing Noto fonts. All twelve
+unrelated baseline hashes match the artifact copies; prior provenance is retained.
+
+The original verification stays RED: 254 passed and one screenshot failure,
+3,122 Playwright differing pixels (8,514 raw RGBA pixels). No candidate recapture,
+fixture, assertion, mask or tolerance change is adopted. Fresh complete 255-case
+no-update CI with maxDiffPixels: 0 remains required before merge. These synthetic
+Linux pixels do not certify installed Windows WebView2 or real CLI behavior.

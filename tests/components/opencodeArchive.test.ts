@@ -23,7 +23,7 @@ beforeEach(() => {
   setActivePinia(createPinia()); vi.resetAllMocks()
   Object.defineProperty(window, '__CC_DESK_DOCUMENT__', { configurable: true, value: { instanceId: 'instance', invoke: io.invoke } })
   const history = useNativeHistoryStore()
-  history.entries.set(nativeHistoryContextKey(context), { key: nativeHistoryContextKey(context), context, source, sourceRootKey: 'root', loaded: true, loading: false, error: null, requestEpoch: '1', sessions: [{ type: 'session', sessionKey: 'key', nativeSessionId: 'ses_synthetic', projectId: 'project', title: 'Synthetic session', truncated: false, archived: false, cwd: context.projectPath, updatedAt: null }] })
+  history.entries.set(nativeHistoryContextKey(context), { key: nativeHistoryContextKey(context), context, source, sourceRootKey: 'root', loaded: true, loading: false, error: null, requestEpoch: '1', sessions: [{ type: 'session', sessionKey: 'key', nativeSessionId: 'ses_synthetic', projectId: 'project', title: 'Synthetic session', truncated: false, archived: true, cwd: context.projectPath, updatedAt: null }] })
   vi.spyOn(history, 'load').mockImplementation(async () => { entry().source = { ...source, scopeId: 'fresh' }; return entry() })
   vi.spyOn(useUnifiedSessionsStore(), 'refresh').mockResolvedValue(undefined)
   io.invoke.mockImplementation(async (command, request) => {
@@ -36,68 +36,65 @@ afterEach(() => { view?.unmount(); view = undefined; delete (window as any).__CC
 const element = (selector: string) => document.querySelector<HTMLElement>(selector)!
 async function show(sessions = [target()], locale = 'en') {
   view = mount(OpencodeArchivePanel, { props: { sessions, active: true }, attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale, messages: { en, zh } })] } })
-  await view.get('[data-opencode-archive-open]').trigger('click'); await flushPromises(); return view
+  ;(view.vm as unknown as { showFor(id: string): void }).showFor('desk'); await flushPromises(); return view
 }
-async function choose() { const select = element('[data-opencode-archive-select]') as HTMLSelectElement; select.value = 'desk'; select.dispatchEvent(new Event('change', { bubbles: true })); await flushPromises() }
+async function choose() { (view!.vm as unknown as { showFor(id: string): void }).showFor('desk'); await flushPromises() }
 async function acknowledge() { const box = element('[data-opencode-archive-ack]') as HTMLInputElement; box.checked = true; box.dispatchEvent(new Event('change', { bubbles: true })); await flushPromises() }
 async function submit() { await choose(); await acknowledge(); element('[data-opencode-archive-submit]').click(); await flushPromises() }
-describe('independent OpenCode native archive panel', () => {
-  it('OpenCodeArchiveUi_ExplicitScopeCancelAndClosedCandidates_001', async () => {
-    const w = await show(); await choose()
-    expect(element('[data-opencode-archive-dialog]').textContent).toContain('not permanent deletion')
-    expect(element('[data-opencode-archive-dialog]').textContent).toContain('Child sessions and attachments remain')
-    expect((element('[data-opencode-archive-submit]') as HTMLButtonElement).disabled).toBe(true)
-    await acknowledge(); await w.setProps({ active: false }); await flushPromises()
+describe('OpenCode archived-row restore compatibility', () => {
+  it('OpenCodeArchiveUi_NoGlobalEntryOrNewArchiveAction_001', async () => {
+    entry().sessions[0]!.archived = false
+    await show()
+    expect(element('[data-opencode-archive-open]')).toBeNull()
+    expect(element('[data-opencode-archive-select]')).toBeNull()
+    expect(element('[data-opencode-archive-submit]')).toBeNull()
     expect(io.invoke).not.toHaveBeenCalled()
   })
-  it('OpenCodeArchiveUi_ArchiveThenExplicitRestoreRefreshesNativeHistory_002', async () => {
-    await show(); await choose(); await acknowledge()
+  it('OpenCodeArchiveUi_RestoreOnlyRequiresExplicitAcknowledgment_002', async () => {
+    await show()
+    expect((element('[data-opencode-archive-submit]') as HTMLButtonElement).disabled).toBe(true)
+    await acknowledge()
     const button = element('[data-opencode-archive-submit]'); button.click(); button.click(); await flushPromises()
     expect(io.invoke).toHaveBeenCalledTimes(1)
-    expect(io.invoke.mock.calls[0]).toEqual(['cli_set_opencode_archive', expect.objectContaining({ source, sessionKey: 'key', archived: true, acknowledgeRecoverable: true })])
+    expect(io.invoke.mock.calls[0]).toEqual(['cli_set_opencode_archive', expect.objectContaining({ source, sessionKey: 'key', archived: false, acknowledgeRecoverable: true })])
+    expect(element('[data-opencode-archive-submit]')).toBeNull()
     expect(useNativeHistoryStore().load).toHaveBeenCalledWith(expect.objectContaining({ ...context, force: true, retainOnFailure: true }))
     expect(useUnifiedSessionsStore().refresh).toHaveBeenCalledWith(context.projectPath, { cli: 'opencode' })
-    await choose(); expect(element('[data-opencode-archive-submit]').textContent).toContain('Restore from native archive')
-    await acknowledge(); element('[data-opencode-archive-submit]').click(); await flushPromises()
-    expect(io.invoke).toHaveBeenCalledTimes(2); expect(io.invoke.mock.calls[1]![1].archived).toBe(false)
-    expect(io.invoke.mock.calls.every(([command]) => command === 'cli_set_opencode_archive')).toBe(true)
-    expect(target().archived).toBe(true)
   })
   it('OpenCodeArchiveUi_UnknownPersistsAcrossReopenMissingIsNotSuccess_003', async () => {
-    io.invoke.mockRejectedValue({ code: 'ARCHIVE_OUTCOME_UNKNOWN', privatePath: 'secret' })
-    await show(); await submit(); expect(element('[data-opencode-archive-error]').textContent).toBe('ARCHIVE_OUTCOME_UNKNOWN')
+    io.invoke.mockRejectedValue({ code: 'ARCHIVE_OUTCOME_UNKNOWN', privatePath: 'secret' }); await show(); await submit()
+    expect(element('[data-opencode-archive-error]').textContent).toBe('ARCHIVE_OUTCOME_UNKNOWN')
     view!.unmount(); view = undefined; await show()
     expect(element('[data-opencode-archive-pending]').textContent).toContain('ses_synthetic')
-    expect((element('[data-opencode-archive-select]') as HTMLSelectElement).options).toHaveLength(1)
+    expect(element('[data-opencode-archive-submit]')).toBeNull()
     const session = entry().sessions[0]!; entry().sessions = []
     element('[data-opencode-archive-refresh]').click(); await flushPromises()
     expect(element('[data-opencode-archive-pending]')).not.toBeNull()
-    entry().sessions = [{ ...session, archived: true }]
+    entry().sessions = [{ ...session, archived: false }]
     element('[data-opencode-archive-refresh]').click(); await flushPromises()
     expect(element('[data-opencode-archive-pending]')).toBeNull()
     expect(io.invoke).toHaveBeenCalledTimes(1)
   })
   it('OpenCodeArchiveUi_IdentityAndStateChangeRevokeAcknowledgment_004', async () => {
-    await show(); await choose(); await acknowledge()
+    await show(); await acknowledge()
     entry().source = { ...source, scopeId: 'replacement' }; await flushPromises()
     expect((element('[data-opencode-archive-submit]') as HTMLButtonElement).disabled).toBe(true)
-    await acknowledge(); entry().sessions[0]!.archived = true; await flushPromises()
-    expect((element('[data-opencode-archive-submit]') as HTMLButtonElement).disabled).toBe(true)
-    entry().source = { ...source, profileRevision: '2' }; await flushPromises()
+    await acknowledge(); entry().sessions[0]!.archived = false; await flushPromises()
     expect(element('[data-opencode-archive-submit]')).toBeNull()
     expect(io.invoke).not.toHaveBeenCalled()
   })
-  it('OpenCodeArchiveUi_ExcludesUnverifiedAndActiveRows_005', async () => {
-    const w = await show()
-    for (const change of [{ opened: true }, { archived: false }, { cli: 'claude' }, { runtime: 'legacy-claude' }, { nativeRootKey: 'different' }, { resumePending: true }, { preparationState: 'pending' }, { processState: 'unknown' }, { nativeHistorySessionKey: undefined }]) {
-      await w.setProps({ sessions: [{ ...target(), ...change } as UnifiedSession] }); await flushPromises()
-      expect((element('[data-opencode-archive-select]') as HTMLSelectElement).options).toHaveLength(1)
-    }
+  it('OpenCodeArchiveUi_CloseOrSameTickScopeChangeCannotReuseConsent_005', async () => {
+    const w = await show(); await acknowledge()
+    const button = element('[data-opencode-archive-submit]')
+    entry().source = { ...source, scopeId: 'replaced-before-render' }
+    button.click(); await flushPromises()
+    expect(io.invoke).not.toHaveBeenCalled()
+    await acknowledge(); await w.setProps({ active: false }); await flushPromises()
     expect(io.invoke).not.toHaveBeenCalled()
   })
   it('OpenCodeArchiveUi_ReadFailureOrChangedRootCannotResolveUnknown_006', async () => {
     io.invoke.mockRejectedValue({ code: 'ARCHIVE_OUTCOME_UNKNOWN' }); await show(); await submit()
-    entry().sessions[0]!.archived = true
+    entry().sessions[0]!.archived = false
     vi.mocked(useNativeHistoryStore().load).mockImplementation(async () => { entry().source = { ...source, sourceRootKey: 'different' }; return entry() })
     element('[data-opencode-archive-refresh]').click(); await flushPromises()
     expect(element('[data-opencode-archive-pending]')).not.toBeNull()
@@ -109,47 +106,13 @@ describe('independent OpenCode native archive panel', () => {
   it('OpenCodeArchiveUi_CloseInflightDoesNotReplayOrLosePending_007', async () => {
     let reject!: (error: unknown) => void
     io.invoke.mockImplementation(() => new Promise((_, failure) => { reject = failure }))
-    const w = await show(); await choose(); await acknowledge(); element('[data-opencode-archive-submit]').click(); await flushPromises()
+    const w = await show(); await acknowledge(); element('[data-opencode-archive-submit]').click(); await flushPromises()
     await w.setProps({ active: false }); reject({ code: 'BACKEND_INSTANCE_CHANGED' }); await flushPromises()
     view!.unmount(); view = undefined; await show([], 'zh')
     expect(element('[data-opencode-archive-pending]').textContent).toContain('ses_synthetic')
     expect(io.invoke).toHaveBeenCalledTimes(1)
   })
-  it('OpenCodeArchiveUi_SameTickScopeChangeCannotReuseConsent_008', async () => {
-    await show(); await choose(); await acknowledge()
-    const button = element('[data-opencode-archive-submit]')
-    entry().source = { ...source, scopeId: 'replaced-before-render' }
-    button.click(); await flushPromises()
-    expect(io.invoke).not.toHaveBeenCalled()
-  })
-  it('OpenCodeArchiveUi_DrawerKeepsPermanentDeleteSeparate_009', async () => {
-    view = mount(ArchivedSessionsDrawer, { props: { sessions: [target()], open: true }, attachTo: document.body,
-      global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en, zh } })] } })
-    await flushPromises()
-    expect((element('[data-session-delete]') as HTMLButtonElement).disabled).toBe(true)
-    element('[data-opencode-archive-open]').click(); await flushPromises(); await choose()
-    expect(element('[data-opencode-archive-submit]').textContent).toContain('Archive in OpenCode')
-    expect(io.invoke).not.toHaveBeenCalled()
-  })
-  it('OpenCodeArchiveUi_PreflightFailureAllowsOnlyExplicitNewAttempt_010', async () => {
-    const succeed = io.invoke.getMockImplementation()!
-    io.invoke.mockRejectedValue({ code: 'SOURCE_BUSY' }); await show(); await submit()
-    expect(element('[data-opencode-archive-pending]')).toBeNull()
-    expect(io.invoke).toHaveBeenCalledTimes(1)
-    await choose(); expect((element('[data-opencode-archive-submit]') as HTMLButtonElement).disabled).toBe(true)
-    io.invoke.mockImplementation(succeed); await acknowledge(); element('[data-opencode-archive-submit]').click(); await flushPromises()
-    expect(io.invoke).toHaveBeenCalledTimes(2)
-    expect(io.invoke.mock.calls[1]![1].operationId).not.toBe(io.invoke.mock.calls[0]![1].operationId)
-    expect(io.invoke.mock.calls[1]![1].archived).toBe(true)
-  })
-  it('OpenCodeArchiveUi_PostReceiptReadBusyKeepsPending_011', async () => {
-    vi.mocked(useNativeHistoryStore().load).mockRejectedValue({ code: 'SOURCE_BUSY' })
-    await show(); await submit()
-    expect(element('[data-opencode-archive-pending]')).not.toBeNull()
-    expect(io.invoke).toHaveBeenCalledTimes(1)
-  })
-  it('OpenCodeArchiveUi_NativeArchivedRowOpensSeparateRestoreBeforeDeskRestore_012', async () => {
-    entry().sessions[0]!.archived = true
+  it('OpenCodeArchiveUi_NativeArchivedRowRetainsRestoreButDeskRowCannotArchive_008', async () => {
     let deskIds: string[] = []
     const adapter = createNativeCliAdapter({ tabs: { tabs: new Map(), activeTabId: null, setActive: vi.fn(), close: vi.fn(), rename: vi.fn() },
       history: { all: () => [entry()], load: useNativeHistoryStore().load }, runtime: {} as any,
@@ -158,16 +121,42 @@ describe('independent OpenCode native archive panel', () => {
     view = mount(ArchivedSessionsDrawer, { props: { sessions: [row], open: true }, attachTo: document.body,
       global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en, zh } })] } })
     await flushPromises()
-    expect(element('.session-primary-action')).toBeNull()
+    expect(element('[data-opencode-archive-open]')).toBeNull()
     element('[data-session-opencode-archive]').click(); await flushPromises()
     expect(element('[data-opencode-archive-submit]').textContent).toContain('Restore from native archive')
-    expect((element('[data-opencode-archive-select]') as HTMLSelectElement).value).toBe(row.id)
+    expect(element('[data-opencode-archive-select]')).toBeNull()
     await acknowledge(); element('[data-opencode-archive-submit]').click(); await flushPromises()
     expect(io.invoke).toHaveBeenCalledTimes(1)
     expect(io.invoke.mock.calls[0]![1].archived).toBe(false)
     expect(view.emitted('restore-request')).toBeUndefined()
     await view.setProps({ sessions: await adapter.listSessions() }); await flushPromises()
+    expect(element('[data-session-opencode-archive]')).toBeNull()
     element('.session-primary-action button').click(); await flushPromises()
     expect(view.emitted('restore-request')).toEqual([[row.id]])
   })
+  it('OpenCodeArchiveUi_ExcludesUnverifiedAndActiveRows_009', async () => {
+    const w = await show()
+    for (const change of [{ opened: true }, { archived: false }, { cli: 'claude' }, { runtime: 'legacy-claude' }, { nativeRootKey: 'different' }, { resumePending: true }, { preparationState: 'pending' }, { processState: 'unknown' }, { nativeHistorySessionKey: undefined }]) {
+      await w.setProps({ sessions: [{ ...target(), ...change } as UnifiedSession] }); await flushPromises()
+      expect(element('[data-opencode-archive-submit]')).toBeNull()
+    }
+    expect(io.invoke).not.toHaveBeenCalled()
+  })
+  it('OpenCodeArchiveUi_MissingRowKeepsReadOnlyPendingCheckReachable_010', async () => {
+    io.invoke.mockRejectedValue({ code: 'ARCHIVE_OUTCOME_UNKNOWN' }); await show(); await submit()
+    const session = entry().sessions[0]!
+    entry().sessions = []; view!.unmount(); view = undefined
+    view = mount(ArchivedSessionsDrawer, { props: { sessions: [], open: true }, attachTo: document.body,
+      global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en, zh } })] } })
+    await flushPromises()
+    expect(element('[data-opencode-pending-refresh]')).not.toBeNull()
+    element('[data-opencode-pending-refresh]').click(); await flushPromises()
+    expect(element('[data-opencode-pending-refresh]')).not.toBeNull()
+    expect(element('[data-opencode-archive-submit]')).toBeNull()
+    entry().sessions = [{ ...session, archived: false }]
+    element('[data-opencode-pending-refresh]').click(); await flushPromises()
+    expect(element('[data-opencode-pending-refresh]')).toBeNull()
+    expect(io.invoke).toHaveBeenCalledTimes(1)
+  })
+
 })
