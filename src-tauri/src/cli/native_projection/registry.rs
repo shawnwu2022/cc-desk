@@ -511,6 +511,27 @@ impl ScopeRegistry {
     ) -> Result<SessionAuthority, SafeError> {
         self.authorize_session_inner(owner, source, key, true)
     }
+    // 同一空闲冻结内的 Unknown 目标共享一次新鲜观察，不复用历史缓存作为变更授权。
+    pub(crate) fn authorize_archive_observation(
+        &self,
+        owner: &Owner,
+        source: &SourceRef,
+        keys: &[String],
+    ) -> Result<Vec<Result<SessionAuthority, SafeError>>, SafeError> {
+        if source.cli != CliKind::Codex
+            || source.basis != SourceBasis::ConfiguredProfile
+            || keys.is_empty()
+            || keys.len() > 4096
+        {
+            return Err(safe("INVALID_REQUEST"));
+        }
+        self.authorize_sessions_inner(
+            owner,
+            source,
+            &keys.iter().map(String::as_str).collect::<Vec<_>>(),
+            false,
+        )
+    }
     fn authorize_session_inner(
         &self,
         owner: &Owner,
@@ -518,6 +539,17 @@ impl ScopeRegistry {
         key: &str,
         track_mutations: bool,
     ) -> Result<RenameAuthority, SafeError> {
+        self.authorize_sessions_inner(owner, source, &[key], track_mutations)?
+            .pop()
+            .ok_or_else(|| safe("SESSION_NOT_FOUND"))?
+    }
+    fn authorize_sessions_inner(
+        &self,
+        owner: &Owner,
+        source: &SourceRef,
+        keys: &[&str],
+        track_mutations: bool,
+    ) -> Result<Vec<Result<SessionAuthority, SafeError>>, SafeError> {
         let scope = self
             .state
             .lock()
@@ -586,7 +618,6 @@ impl ScopeRegistry {
             &mut budget,
         )
         .map_err(safe)?;
-        let mut matched = None;
         use sha2::Digest;
         let mut digest = sha2::Sha256::new();
         digest.update(serde_json::to_vec(&items).map_err(|_| safe("SOURCE_INVALID"))?);
@@ -600,84 +631,105 @@ impl ScopeRegistry {
             Vec::new()
         };
         digest.update(&config_observation);
-        let mut observation = format!("{:x}", digest.finalize());
-        for item in items {
-            let record_observation =
-                serde_json::to_vec(&item).map_err(|_| safe("SOURCE_INVALID"))?;
+        let observation = format!("{:x}", digest.finalize());
+        let mut candidates = std::collections::BTreeMap::<&str, Option<&ResourceItem>>::new();
+        for item in &items {
             if let ResourceItem::Session {
                 session_key,
-                native_session_id,
                 project_id: Some(project),
-                cwd: Some(cwd),
-                archived,
+                cwd: Some(_),
                 ..
             } = item
             {
-                if session_key == key && g.projects.iter().any(|p| p.id == project) {
-                    if matched.is_some() {
-                        return Err(safe("SESSION_ORIGIN_AMBIGUOUS"));
-                    }
-                    matched = Some((native_session_id, cwd, archived, record_observation));
+                if g.projects.iter().any(|p| &p.id == project) {
+                    candidates
+                        .entry(session_key)
+                        .and_modify(|value| *value = None)
+                        .or_insert(Some(item));
                 }
             }
         }
-        g.current().map_err(safe)?;
-        let (native_id, cwd, archived, record_observation) =
-            matched.ok_or_else(|| safe("SESSION_NOT_FOUND"))?;
-        if if source.cli == CliKind::Opencode {
-            budget.history_metadata_incomplete()
-        } else {
-            budget.rename_target_may_be_omitted(&native_id)
-        } {
-            return Err(safe("SESSION_ORIGIN_AMBIGUOUS"));
-        }
-        let valid_id = if source.cli == CliKind::Opencode {
-            native_id.starts_with("ses_")
-                && native_id.len() <= 256
-                && native_id
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
-        } else {
-            uuid::Uuid::parse_str(&native_id).is_ok()
-        };
-        if !valid_id {
-            return Err(safe("SESSION_ORIGIN_AMBIGUOUS"));
-        }
-        let rollout_observation = if track_mutations && source.cli == CliKind::Codex {
-            let fingerprint = g
-                .root
-                .codex_delete_observation(&native_id, &cwd, archived, &mut budget)
-                .map_err(safe)?;
-            let mut digest = sha2::Sha256::new();
-            digest.update(
-                serde_json::to_vec(&(&native_id, &cwd, archived, &fingerprint))
-                    .map_err(|_| safe("SOURCE_INVALID"))?,
-            );
-            digest.update(&record_observation);
-            digest.update(&config_observation);
-            observation = format!("{:x}", digest.finalize());
-            Some(fingerprint)
-        } else {
-            None
-        };
-        let claude_file = if source.cli == CliKind::Claude {
-            let file = g.root.find_transcript(&native_id).map_err(safe)?;
-            file.verify(&native_id, &cwd, None).map_err(safe)?;
-            Some(file)
-        } else {
-            None
-        };
-        Ok(SessionAuthority {
-            delete_containers: Vec::new(),
-            observation,
-            config_observation,
-            rollout_observation,
-            archived,
-            scope,
-            native_id,
-            cwd,
-            claude_file,
-        })
+        let results = keys
+            .iter()
+            .map(|key| -> Result<SessionAuthority, SafeError> {
+                budget.checkpoint().map_err(safe)?;
+                let mut observation = observation.clone();
+                let item = candidates
+                    .get(*key)
+                    .ok_or_else(|| safe("SESSION_NOT_FOUND"))?
+                    .ok_or_else(|| safe("SESSION_ORIGIN_AMBIGUOUS"))?;
+                let ResourceItem::Session {
+                    native_session_id,
+                    cwd: Some(cwd),
+                    archived,
+                    ..
+                } = item
+                else {
+                    return Err(safe("SESSION_ORIGIN_AMBIGUOUS"));
+                };
+                let (native_id, cwd, archived) =
+                    (native_session_id.clone(), cwd.clone(), *archived);
+                let record_observation =
+                    serde_json::to_vec(item).map_err(|_| safe("SOURCE_INVALID"))?;
+                if if source.cli == CliKind::Opencode {
+                    budget.history_metadata_incomplete()
+                } else {
+                    budget.rename_target_may_be_omitted(&native_id)
+                } {
+                    return Err(safe("SESSION_ORIGIN_AMBIGUOUS"));
+                }
+                let valid_id = if source.cli == CliKind::Opencode {
+                    native_id.starts_with("ses_")
+                        && native_id.len() <= 256
+                        && native_id
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+                } else {
+                    uuid::Uuid::parse_str(&native_id).is_ok()
+                };
+                if !valid_id {
+                    return Err(safe("SESSION_ORIGIN_AMBIGUOUS"));
+                }
+                let rollout_observation = if track_mutations && source.cli == CliKind::Codex {
+                    let fingerprint = g
+                        .root
+                        .codex_delete_observation(&native_id, &cwd, archived, &mut budget)
+                        .map_err(safe)?;
+                    let mut digest = sha2::Sha256::new();
+                    digest.update(
+                        serde_json::to_vec(&(&native_id, &cwd, archived, &fingerprint))
+                            .map_err(|_| safe("SOURCE_INVALID"))?,
+                    );
+                    digest.update(&record_observation);
+                    digest.update(&config_observation);
+                    observation = format!("{:x}", digest.finalize());
+                    Some(fingerprint)
+                } else {
+                    None
+                };
+                let claude_file = if source.cli == CliKind::Claude {
+                    let file = g.root.find_transcript(&native_id).map_err(safe)?;
+                    file.verify(&native_id, &cwd, None).map_err(safe)?;
+                    Some(file)
+                } else {
+                    None
+                };
+                Ok(SessionAuthority {
+                    delete_containers: Vec::new(),
+                    observation,
+                    config_observation: config_observation.clone(),
+                    rollout_observation,
+                    archived,
+                    scope: scope.clone(),
+                    native_id,
+                    cwd,
+                    claude_file,
+                })
+            })
+            .collect();
+        // 所有逐目标结果发布前仍作完整授权复核，任何撤销丢弃整次观察。
+        self.check_source(owner, source)?;
+        Ok(results)
     }
     pub(crate) fn new(capacity: usize) -> Self {
         Self {

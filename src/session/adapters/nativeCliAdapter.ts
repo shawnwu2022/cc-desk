@@ -14,7 +14,8 @@ import type {
 import { makeSessionCatalogKey, nativeHistoryRecordKey } from '@/utils/sessionPresentation'
 import { normalizePath } from '@/utils/path'
 import { clearSessionDisplayName, saveSessionOpenedAt, withSessionDisplayName, type SessionMetadataPort } from '@/session/sessionMetadata'
-import type { NativeRenameRequest, NativeRenameReceipt, NativeArchiveRequest } from '@/types/nativeProjection'
+import { validateNativeArchiveReceipt } from '@/api/nativeProjection'
+import type { NativeRenameRequest, NativeRenameReceipt, NativeArchiveRequest, NativeArchiveReceipt } from '@/types/nativeProjection'
 import { createNativeId } from '@/utils/nativeId'
 import { compareSessionOpenOrder } from '@/utils/sessionOpenOrder'
 import { legacyHistoryId } from './legacyClaudeAdapter'
@@ -35,6 +36,7 @@ export interface NativeTabsPort {
 export interface NativeHistoryPort {
   all(): NativeHistoryEntry[]
   load?(input: NativeHistoryContext): Promise<NativeHistoryEntry>
+  applyArchiveReceipt?(expected: NativeHistoryEntry, request: NativeArchiveRequest, receipt: NativeArchiveReceipt, nativeSessionId: string): boolean
   loadGrouped?(group: {
     cli: NativeHistoryContext['cli']; profileId: string; profileRevision: string
     projects: { projectId: string; projectPath: string }[]
@@ -767,9 +769,11 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
         try {
           const result = await grouped(group, { force: true, retainOnFailure: true })
           if (key === groupKey(context)) refreshed = result.get(context.projectId)
-        } catch {
-          // 无关项目撤销可使整组拒绝；仅重读准确目标，不重发已执行的归档。
-          if (key === groupKey(context)) refreshed = await deps.history.load!({ ...context, force: true, retainOnFailure: true })
+        } catch (failure) {
+          // 仅无关项目撤销时补读目标；真实来源失败保持可见，不自动重试整根。
+          if (key === groupKey(context) && failure instanceof Error && failure.message === 'SCOPE_REVOKED') {
+            refreshed = await deps.history.load!({ ...context, force: true, retainOnFailure: true })
+          } else throw failure
         }
       })
     } else {
@@ -815,8 +819,20 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
       if (archiving.has(key)) throw new Error('SOURCE_BUSY')
       archiving.add(key)
       try {
-        await deps.nativeArchive.archive({ operationId: createNativeId('archive'), source, sessionKey: matches[0].sessionKey })
+        const request = { operationId: createNativeId('archive'), source, sessionKey: matches[0].sessionKey }
+        const result = await deps.nativeArchive.archive(request)
         uncertainArchives.add(key)
+        if (result !== undefined) {
+          let receipt: NativeArchiveReceipt
+          try { receipt = validateNativeArchiveReceipt(result, request) } catch { throw new Error('ARCHIVE_OUTCOME_UNKNOWN') }
+          requireCurrent()
+          if (deps.history.applyArchiveReceipt?.(entry, request, receipt, target.item.nativeSessionId)) {
+            uncertainArchives.delete(key)
+            // 后端已按物理路径证明准确根归档；同根目录同步独立进行，失败由 history 诊断展示。
+            void reloadArchiveRoot(context, root).catch(() => {})
+            return
+          }
+        }
       } catch (failure) {
         const code = failure instanceof Error ? failure.message : 'ARCHIVE_OUTCOME_UNKNOWN'
         if (['ARCHIVE_OUTCOME_UNKNOWN', 'ARCHIVE_VERIFICATION_FAILED', 'BACKEND_INSTANCE_CHANGED'].includes(code)) {

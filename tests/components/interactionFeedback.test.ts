@@ -726,3 +726,18 @@ it('WorkspaceRequest_ArchiveShowsProcessing_004', async () => {
   expect(useShellStore().pendingRequest).toBeNull()
   expect(catalog.sessions.find(item => item.id === row.id)?.archived).toBe(true)
 })
+
+// 归档已由原生回执确认，后台目录刷新失败独立可见，不能误报归档失败或丢掉状态。
+it('WorkspaceRequest_ArchiveBackgroundFailureRemainsVisible_005', async () => {
+  const wrapper = render(); await flushPromises()
+  const catalog = useUnifiedSessionsStore()
+  const row = catalog.sessions.find(row => row.runtime === 'native-cli')!
+  io.nativeArchive.mockImplementationOnce(async request => { nativeArchived = true; return { ...request, state: 'archived', rootArchived: true, descendants: 'unverified' } })
+  io.read.mockRejectedValueOnce(new Error('SOURCE_UNAVAILABLE'))
+  useShellStore().requestWorkspaceAction({ kind: 'menu-action', sessionId: row.id, action: 'archive' }); await flushPromises()
+  expect(useShellStore().pendingRequest).toBeNull()
+  expect(catalog.sessions.find(item => item.id === row.id)?.archived).toBe(true)
+  expect(catalog.actionFeedback).toBeNull()
+  expect(wrapper.text()).toContain(en.workspaceRuntimePartial)
+  expect(io.nativeArchive).toHaveBeenCalledOnce()
+})

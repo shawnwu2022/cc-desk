@@ -225,7 +225,7 @@ impl TaskBackendFixture {
                 || record.adapter_session_id != adapter
                 || record.native_session_id.as_deref() != Some(self.recycle.id.as_str())
                 || !record.title.is_empty()
-                || !record.last_opened_at.is_some_and(|value| value > 0)
+                || record.last_opened_at.is_none_or(|value| value == 0)
             {
                 return Err("DESK_OPENED_AT_MISSING".into());
             }

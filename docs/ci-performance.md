@@ -1451,3 +1451,32 @@ cross-comparison nor that API test explains Chromium's internal text raster logi
 or substitutes for the original screenshot gate. The one-off diagnostic step and
 script are removed after retaining their source-bound evidence, not kept as an
 extra old-dependency installation on future failures.
+
+## 2026-11-13：归档完成与目录刷新解耦
+
+本轮只消除归档重复等待和 Unknown 扫描放大，不重写 CLI 锁或扩大原生写入范围。
+
+- 前端仅接受完整 operation/source/session 匹配、`rootArchived: true`、`descendants: unverified` 的原生回执。后端已物理核验的准确根可立即进入归档，全部已加载同根项目仍后台刷新；后台失败保留已证明目标并显示真实来源警告。
+- 迟到回执不能覆盖被新读取接管、换源、失败或重复身份的 entry。错误回执继续标记 Unknown，不重放原生写入；无回执兼容端口仍须等待只读核查。
+- Unknown 只在新的 offset-zero 历史观察协调。同根候选共享一次新鲜全源授权扫描，按 session key 建索引后逐目标核验，出口重新核对 scope。后续页不重复协调。缺失、外项目、未归档与 pending 保留屏障。
+- 单次成功归档仍保留写前新鲜授权扫描；本轮不把缓存、文件名或旧历史行当成新写入授权。
+
+### 隔离测量
+
+WSK-MSI，Windows，debug test build；真实磁盘、backend scope 与 Windows Job，官方 RPC 对端为临时 Node 合成进程，无真实用户会话、登录凭据或模型调用。单轮值仅用于分解等待，不是安装版或真实 CLI 延迟承诺。
+
+| 会话数 / 项目数 | 后端归档并物理核验 | 完成后目录刷新 | 两阶段串行总耗时 |
+| --- | ---: | ---: | ---: |
+| 1 / 1 | 278 ms | 16 ms | 294 ms |
+| 128 / 1 | 445 ms | 266 ms | 711 ms |
+| 1024 / 1 | 1700 ms | 1404 ms | 3104 ms |
+| 1024 / 8 | 1675 ms | 1510 ms | 3185 ms |
+
+新的前台完成条件对应第一阶段；第二阶段继续执行。真实 adapter/store 测试将背景读取保持未完成，确认操作已完成且只更新准确目标；另验证后台失败在应用中可见。不能把表格总耗时下降误写成磁盘扫描本身提速。
+
+Unknown RED：8 条已归档 Unknown 逐条扫描产生 49 次 workspace 读取。GREEN：12 条候选（8 条可收敛，加缺失、外项目、未归档、pending 各一条）共享扫描产生 14 次读取，只有前 8 条屏障清除，续页不协调。
+
+可复现入口（先从根运行 `node scripts/prepare-conpty.mjs`，再进入 `src-tauri`）：设置仅当前进程的 `CC_DESK_ARCHIVE_PERF=isolated-stages`，执行 `cargo test --locked --lib cli::native_archive::tests::NativeArchivePerf_IsolatedStageMatrix_029 -- --ignored --exact --nocapture`。此 benchmark 默认 ignored，不能把只显示 0 tests 的过滤器运行算作验证。
+
+本轮完整前端 219 文件、3359 项通过、2 项原有跳过，typecheck/build 通过；Rust 投影 219 项、归档 29 项（另 3 ignored，含 benchmark 与两个真实 CLI 实验）、改名 10 项、删除 15 项通过。独立 benchmark 已显式执行 1 项通过。原有 npm 配置警告、Cargo `nul` 缓存清理警告和 Vite 大 chunk 提示保留。真实已登录 CLI、安装版 WebView、完整 Rust library 与 hosted CI 不由这些结果替代。
+严格 all-target Clippy 与 rustfmt 最终通过。Clippy 先报告既有 WebView 测试的 nonminimal_bool；仅将 u64 时间戳条件等价改为 None/零值判断，未改验收断言语义。
