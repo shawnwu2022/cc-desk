@@ -3,11 +3,14 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { beforeEach, expect, it, vi } from 'vitest'
 import RemoteHostPanel from '@/components/workspace/RemoteHostPanel.vue'
 import * as api from '@/api/tauri'
+import { writeText } from '@tauri-apps/plugin-clipboard-manager'
 const state = vi.hoisted(() => ({ pushToast: vi.fn(), tab: { requestId: 'r1', runId: 'run1', generation: 1, status: 'running' } }))
 vi.mock('@/stores/nativeTabs', async importOriginal => ({ ...await importOriginal<typeof import('@/stores/nativeTabs')>(), useNativeTabsStore: () => ({ tab: () => state.tab }) }))
 vi.mock('@/stores/notifications', () => ({ useNotificationsStore: () => ({ pushToast: state.pushToast }) }))
 vi.mock('@/api/tauri', () => ({ remoteHostPairingScope: vi.fn(), remoteHostConfigure: vi.fn(), remoteHostCurrent: vi.fn(), remoteHostRequest: vi.fn(), remoteHostStart: vi.fn(), remoteHostCancel: vi.fn(), remoteHostDiscardCandidate: vi.fn() }))
+vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({ writeText: vi.fn() }))
 beforeEach(() => {
+ vi.mocked(writeText).mockResolvedValue(undefined)
  vi.clearAllMocks(); state.tab = reactive({ requestId: 'r1', runId: 'run1', generation: 1, status: 'running' })
  vi.mocked(api.remoteHostDiscardCandidate).mockResolvedValue(undefined)
  vi.mocked(api.remoteHostConfigure).mockResolvedValue({ state: 'Configured', receipt: '1' })
@@ -114,4 +117,130 @@ it('RemoteHostScope_ReadFailureClearsPreviousScope_005', async () => {
  const w=mount(RemoteHostPanel,{props:{tabId:'t1'}});await click(w,'单次远程连接');await click(w,'读取公开会话范围')
  vi.mocked(api.remoteHostPairingScope).mockRejectedValueOnce({code:'REMOTE_HOST_UNAVAILABLE'})
  await click(w,'读取公开会话范围');expect(w.find('[aria-label="公开会话范围"]').exists()).toBe(false);w.unmount()
+})
+
+const publicBrowserCandidate = {
+ version:1,profile:{origin:'https://desk.invalid',rpId:'desk.invalid',credentialId:'Bw'},
+ localSpki:Buffer.alloc(91,1).toString('base64url'),hostSpki:Buffer.alloc(91,2).toString('base64url'),
+ trust:{hostKeyEpoch:'1',clientKeyEpoch:'2',origin:'wss://relay.invalid/route'},
+ grant:{issuerSpki:Buffer.alloc(91,3).toString('base64url'),principal:'04'.repeat(32),scope:{session:'05'.repeat(16),run:'PUBLIC_TEST_ONLY',generation:'7'},role:'Controller',budgetMs:10000,peerInstall:{budgetMs:1000},profile:{origin:'https://desk.invalid',rpId:'desk.invalid',credentialId:'Bw',credentialSpki:Buffer.alloc(91,4).toString('base64url'),backupEligible:false,allowBackedUp:false}},
+ relay:{mode:'rendezvous-v1',endpoint:'wss://relay.invalid/route',tunnel:Buffer.alloc(16,9).toString('base64url'),keyId:Buffer.alloc(16,8).toString('base64url')},
+ artifacts:{wasm:'https://desk.invalid/client.wasm',glue:'https://desk.invalid/client.js'},
+}
+function expectNoAuthorityCalls(){expect(api.remoteHostConfigure).not.toHaveBeenCalled();expect(api.remoteHostRequest).not.toHaveBeenCalled();expect(api.remoteHostStart).not.toHaveBeenCalled()}
+it('BrowserCandidate_OfflinePreviewDoesNotApproveOrReadScope_001',async()=>{
+ const w=mount(RemoteHostPanel,{props:{tabId:'t1'}});await click(w,'单次远程连接')
+ await w.get('[aria-label="Browser公开候选JSON"]').setValue(JSON.stringify(publicBrowserCandidate));await click(w,'预检Browser候选')
+ expect(JSON.parse((w.get('[aria-label="待独立批准的Browser候选JSON"]').element as HTMLTextAreaElement).value)).toEqual(publicBrowserCandidate)
+ expect(w.text()).toContain('尚未批准');expect(api.remoteHostPairingScope).not.toHaveBeenCalled();expectNoAuthorityCalls();w.unmount()
+})
+it('BrowserCandidate_ExplicitScopeUpdatePreservesOtherPublicFields_002',async()=>{
+ const w=mount(RemoteHostPanel,{props:{tabId:'t1'}});await click(w,'单次远程连接')
+ const text=JSON.stringify(publicBrowserCandidate);await w.get('[aria-label="Browser公开候选JSON"]').setValue(text);await click(w,'读取公开会话范围')
+ expect(w.find('[aria-label="待独立批准的Browser候选JSON"]').exists()).toBe(false)
+ await click(w,'用当前会话范围生成候选')
+ const expected=structuredClone(publicBrowserCandidate);expected.grant.scope={session:'ab'.repeat(16),run:'run1',generation:'1'}
+ expect(JSON.parse((w.get('[aria-label="待独立批准的Browser候选JSON"]').element as HTMLTextAreaElement).value)).toEqual(expected)
+ expect((w.get('[aria-label="Browser公开候选JSON"]').element as HTMLTextAreaElement).value).toBe(text)
+ expect((w.get('[aria-label="公开配对JSON"]').element as HTMLTextAreaElement).value).toBe('')
+ expectNoAuthorityCalls();w.unmount()
+})
+it.each(['duplicate','unknown','tooLarge'])('BrowserCandidate_InvalidInputClearsPreview_%s_003',async kind=>{
+ const w=mount(RemoteHostPanel,{props:{tabId:'t1'}});await click(w,'单次远程连接')
+ await w.get('[aria-label="Browser公开候选JSON"]').setValue(JSON.stringify(publicBrowserCandidate));await click(w,'预检Browser候选')
+ const invalid=kind==='duplicate'?JSON.stringify(publicBrowserCandidate).replace('"version":1','"version":1,"version":1'):kind==='unknown'?JSON.stringify({...publicBrowserCandidate,PRIVATE_SENTINEL:'PRIVATE_PAYLOAD'}):' '.repeat(16385)
+ await w.get('[aria-label="Browser公开候选JSON"]').setValue(invalid);expect(w.find('[aria-label="待独立批准的Browser候选JSON"]').exists()).toBe(false);await click(w,'预检Browser候选')
+ expect(w.text()).toContain('公开候选格式无效');expect(w.find('[aria-label="待独立批准的Browser候选JSON"]').exists()).toBe(false);expect(w.text()).not.toContain('PRIVATE_PAYLOAD');expectNoAuthorityCalls();w.unmount()
+})
+it('BrowserCandidate_RefreshScopeClearsPreviewAndLateCloseCannotRestore_004',async()=>{
+ const w=mount(RemoteHostPanel,{props:{tabId:'t1'}});await click(w,'单次远程连接');await w.get('[aria-label="Browser公开候选JSON"]').setValue(JSON.stringify(publicBrowserCandidate));await click(w,'读取公开会话范围');await click(w,'用当前会话范围生成候选')
+ let finish!:(value:{session:string,run:string,generation:string})=>void;vi.mocked(api.remoteHostPairingScope).mockReturnValueOnce(new Promise(r=>{finish=r}));await click(w,'读取公开会话范围')
+ expect(w.find('[aria-label="待独立批准的Browser候选JSON"]').exists()).toBe(false);await click(w,'关闭');await click(w,'单次远程连接');finish({session:'cd'.repeat(16),run:'run1',generation:'1'});await flushPromises()
+ expect((w.get('[aria-label="Browser公开候选JSON"]').element as HTMLTextAreaElement).value).toBe('');expect(w.find('[aria-label="待独立批准的Browser候选JSON"]').exists()).toBe(false);expectNoAuthorityCalls();w.unmount()
+})
+
+it('BrowserCandidate_ClipboardOnlyExplicitAndLateResultCannotMarkNewDraft_005',async()=>{
+ const w=mount(RemoteHostPanel,{props:{tabId:'t1'}});await click(w,'单次远程连接');await w.get('[aria-label="Browser公开候选JSON"]').setValue(JSON.stringify(publicBrowserCandidate));await click(w,'预检Browser候选')
+ const preview=(w.get('[aria-label="待独立批准的Browser候选JSON"]').element as HTMLTextAreaElement).value;expect(writeText).not.toHaveBeenCalled()
+ let finish!:()=>void;vi.mocked(writeText).mockReturnValueOnce(new Promise(r=>{finish=r}));await click(w,'复制未授权候选');expect(writeText).toHaveBeenCalledExactlyOnceWith(preview)
+ await w.get('[aria-label="Browser公开候选JSON"]').setValue('{}');finish();await flushPromises();expect(w.text()).not.toContain('已复制');expect(w.find('[aria-label="待独立批准的Browser候选JSON"]').exists()).toBe(false);expectNoAuthorityCalls();w.unmount()
+})
+it('BrowserCandidate_ClipboardFailureIsFixedAndRetainsManualOutput_006',async()=>{
+ vi.mocked(writeText).mockRejectedValueOnce(new Error('PRIVATE_CLIPBOARD_FAILURE'));const w=mount(RemoteHostPanel,{props:{tabId:'t1'}});await click(w,'单次远程连接');await w.get('[aria-label="Browser公开候选JSON"]').setValue(JSON.stringify(publicBrowserCandidate));await click(w,'预检Browser候选');await click(w,'复制未授权候选')
+ expect(w.text()).toContain('复制未确认');expect(w.text()).not.toContain('PRIVATE_CLIPBOARD_FAILURE');expect(w.find('[aria-label="待独立批准的Browser候选JSON"]').exists()).toBe(true);expect(writeText).toHaveBeenCalledTimes(1);expectNoAuthorityCalls();w.unmount()
+})
+
+it.each(['requestId', 'runId', 'generation', 'status'])('BrowserCandidate_AttemptChangeDropsDraftAndOutput_%s_007', async change => {
+  const w = mount(RemoteHostPanel, { props: { tabId: 't1' } })
+  await click(w, '单次远程连接')
+  await w.get('[aria-label="Browser公开候选JSON"]').setValue(JSON.stringify(publicBrowserCandidate))
+  await click(w, '读取公开会话范围')
+  await click(w, '用当前会话范围生成候选')
+  expect(w.find('[aria-label="待独立批准的Browser候选JSON"]').exists()).toBe(true)
+  Object.assign(state.tab, { [change]: change === 'generation' ? 2 : change === 'status' ? 'stopped' : 'replacement' })
+  await flushPromises()
+  expect(w.find('[data-browser-candidate-editor]').exists()).toBe(false)
+  if (change !== 'status') {
+    await click(w, '单次远程连接')
+    expect((w.get('[aria-label="Browser公开候选JSON"]').element as HTMLTextAreaElement).value).toBe('')
+    expect(w.find('[aria-label="待独立批准的Browser候选JSON"]').exists()).toBe(false)
+  }
+  expectNoAuthorityCalls()
+  expect(writeText).not.toHaveBeenCalled()
+  w.unmount()
+})
+
+it.each([
+  { session: 'invalid', run: 'run1', generation: '1' },
+  { session: 'ab'.repeat(16), run: '', generation: '1' },
+  { session: 'ab'.repeat(16), run: 'run1', generation: '0' },
+])('BrowserCandidate_InvalidScopeCannotProduceCandidate_008_%#', async scope => {
+  vi.mocked(api.remoteHostPairingScope).mockResolvedValueOnce(scope)
+  const w = mount(RemoteHostPanel, { props: { tabId: 't1' } })
+  await click(w, '单次远程连接')
+  await w.get('[aria-label="Browser公开候选JSON"]').setValue(JSON.stringify(publicBrowserCandidate))
+  await click(w, '预检Browser候选')
+  await click(w, '读取公开会话范围')
+  await click(w, '用当前会话范围生成候选')
+  expect(w.text()).toContain('公开候选格式无效')
+  expect(w.find('[aria-label="待独立批准的Browser候选JSON"]').exists()).toBe(false)
+  expectNoAuthorityCalls()
+  expect(writeText).not.toHaveBeenCalled()
+  w.unmount()
+})
+
+it('BrowserCandidate_FailedScopeReadClearsOutputWithoutRetry_009', async () => {
+  const w = mount(RemoteHostPanel, { props: { tabId: 't1' } })
+  await click(w, '单次远程连接')
+  await w.get('[aria-label="Browser公开候选JSON"]').setValue(JSON.stringify(publicBrowserCandidate))
+  await click(w, '读取公开会话范围')
+  await click(w, '用当前会话范围生成候选')
+  vi.mocked(api.remoteHostPairingScope).mockRejectedValueOnce(new Error('PRIVATE_SCOPE_FAILURE'))
+  await click(w, '读取公开会话范围')
+  expect(w.find('[aria-label="待独立批准的Browser候选JSON"]').exists()).toBe(false)
+  expect(w.text()).not.toContain('PRIVATE_SCOPE_FAILURE')
+  expect(w.findAll('button').find(b => b.text() === '用当前会话范围生成候选')!.attributes('disabled')).toBeDefined()
+  expect(api.remoteHostPairingScope).toHaveBeenCalledTimes(2)
+  expectNoAuthorityCalls()
+  w.unmount()
+})
+
+it('BrowserCandidate_LateClipboardResultCannotAffectReopenedPanel_010', async () => {
+  const w = mount(RemoteHostPanel, { props: { tabId: 't1' } })
+  await click(w, '单次远程连接')
+  await w.get('[aria-label="Browser公开候选JSON"]').setValue(JSON.stringify(publicBrowserCandidate))
+  await click(w, '预检Browser候选')
+  let finish!: () => void
+  vi.mocked(writeText).mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
+  await click(w, '复制未授权候选')
+  await click(w, '关闭')
+  await click(w, '单次远程连接')
+  finish()
+  await flushPromises()
+  expect(w.text()).not.toContain('已复制')
+  expect(w.find('[aria-label="待独立批准的Browser候选JSON"]').exists()).toBe(false)
+  expect(writeText).toHaveBeenCalledTimes(1)
+  expectNoAuthorityCalls()
+  expect(state.pushToast).not.toHaveBeenCalled()
+  w.unmount()
 })

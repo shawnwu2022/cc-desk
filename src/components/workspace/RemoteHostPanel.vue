@@ -2,6 +2,7 @@
 import { computed, onUnmounted, ref, watch } from 'vue'
 import AppButton from '@/components/ui/AppButton.vue'
 import InlineNotice from '@/components/ui/InlineNotice.vue'
+import BrowserPairingCandidateEditor from './BrowserPairingCandidateEditor.vue'
 import { captureNativeAttempt, matchesNativeAttempt, useNativeTabsStore, type NativeAttemptIdentity } from '@/stores/nativeTabs'
 import { remoteHostConfigure, remoteHostCurrent, remoteHostRequest, remoteHostStart, remoteHostCancel, remoteHostDiscardCandidate, remoteHostPairingScope } from '@/api/tauri'
 import { useNotificationsStore } from '@/stores/notifications'
@@ -83,6 +84,7 @@ onUnmounted(invalidate)
       <label>公开配对 JSON（不要填写私钥、密码或令牌）
         <textarea v-model="candidate" aria-label="公开配对JSON" :disabled="configured || busy" maxlength="16384" spellcheck="false" autocomplete="off" />
       </label>
+      <BrowserPairingCandidateEditor :scope-json="pairingScope" :disabled="busy" />
       <div class="remote-host-actions">
         <AppButton :disabled="configured || busy" @click="act('configure')">校验并冻结</AppButton>
         <AppButton :disabled="!configured || busy || state !== 'Locked'" @click="act('request')">请求本机批准</AppButton>

@@ -13,7 +13,7 @@
 | 环节 | 当前代码已有 | 尚需完成或单独验收 |
 | --- | --- | --- |
 | Host 本机入口 | 严格公开候选冻结、实际 run 归属、本机一次批准、显式 start、owned driver/network，见 remote_host_configuration.rs / remote_host_ipc.rs | 真实 named-key 引用与公开元数据的可信供应；实际安装应用面板和原生批准对话框验收 |
-| Browser 目标 | browserEntry.ts 严格验证 grant.scope；本片提供原生公开 scope | 用户明确选择并绑定 scope；不把展示结果当批准或 enrollment |
+| Browser 目标 | browserEntry.ts 严格验证 grant.scope；原生只读 scope；Host 面板可离线预检公开候选并显式生成更新 scope 的副本，见 [候选准备](browser-pairing-profile.md#host-面板离线准备公开候选) | 独立可信供应方核对并批准新目标；不把展示或生成结果当批准或 enrollment |
 | Browser 身份与批准 | browserApproval.ts / browserGrant.ts / browserTlsSigner.ts 使用分离的 non-exportable CryptoKey、WebAuthn assertion 与 TLS 签名；browserEntry.ts 接收已批准 inputs 和 presenter | 真实独立 endpoint / issuer key handles、credential、relay signer 和公开 pins 的可信 enrollment、管理、撤销/恢复；真实设备验证 |
 | Browser 配置供应 | browserProfileSource.ts 从同源受控 /browser-profile.js 读取受信模块，每页只读一次并保留原 source；[公开配置核对 helper](browser-pairing-profile.md) 严格解析候选，与独立可信 provider 完整快照匹配后组合原 handles | 可信模块与 presenter 的实际供应/部署。换 run/generation 后需新的显式页面/连接流程，旧 source 不会自动更新 |
 | Relay | 同级 cc-desk-relay 的 rendezvous opt-in 与显式 policy / TLS chain / TLS key / TLS CA WSS 启动器已实现 | operator 可信配置、真实 TLS/Origin 信任、授权部署与真实网络验收 |

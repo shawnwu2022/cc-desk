@@ -79,3 +79,14 @@ node --experimental-strip-types --test remote/ui-terminal/src/browserData.integr
 ```
 
 该验收使用 Node 的 browser-shaped 平台、公开 TEST_ONLY non-exportable handles、合成 WebAuthn、loopback 直连和内存 writer。它不经过 Relay，也不启动真实 PTY/CLI，不代表真实浏览器网络、站点供应、真实 enrollment、真实设备或 GUI 审批全链验收。生产可信供应和真实设备门禁仍保持未完成。
+
+## Host 面板离线准备公开候选
+
+`RemoteHostPanel` 的“准备 Browser 公开候选（可选）”复用上述严格公开解析器，只在内存中生成另一份未授权 JSON，不调用可信 provider、Host configure/request/start、WebAuthn、签名、网络或持久化接口。
+
+1. 将独立来源的公开 Browser 候选粘贴到独立文本框，点击“预检Browser候选”。这只核对格式，不证明身份、SPKI 与原 handles 的绑定，也不代表可连接。
+2. 如需切换目标，先显式“读取公开会话范围”，再点“用当前会话范围生成候选”。仅输出副本的 `grant.scope.session/run/generation` 被替换；输入文本、其他公开字段和 Host 配对候选不变。输出会重新通过完整解析与 16 KiB 字节限制。
+3. 只有点击“复制未授权候选”才写本机剪贴板；也可手动选择只读输出。复制失败使用固定提示，不自动重试。已经发起的剪贴板操作不能撤回，迟到结果不能更新已编辑或重新打开的面板。
+4. 原 attempt 改变、run 停止、关闭或卸载会清空草稿/输出。重新读取 scope 时旧输出立即失效；迟到的 scope 不能恢复关闭后的数据。
+
+输出必须交给独立可信供应流程重新核对和批准。本工具不创建 enrollment authority、可撤销批准记录、credential、key handles 或 `/browser-profile.js`，不会替换旧 Browser source 或延长其 deadline。UI 自动化仅用合成公开数据与模拟 native/clipboard 接口，不代表安装应用或真实设备验收。
