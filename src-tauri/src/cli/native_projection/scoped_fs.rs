@@ -17,7 +17,12 @@ pub(crate) use rename_fs::{PinnedTranscript, PrivateTranscript};
 
 pub(crate) type ReadResult<T> = Result<T, &'static str>;
 type HistoryObserver<'a> = dyn FnMut(&[u8]) -> ReadResult<bool> + 'a;
-pub(crate) type TitleTail = (Vec<u8>, Vec<u8>, bool);
+pub(crate) struct TitleTail {
+    pub(crate) header: Vec<u8>,
+    pub(crate) tail: Vec<u8>,
+    pub(crate) cut_first: bool,
+    pub(crate) header_complete: bool,
+}
 /// Codex 头窗口观察结果：头字节、尾字节、是否只观察到文件前缀。
 pub(crate) type CodexHead = (Vec<u8>, Vec<u8>, bool);
 /// Codex 身份与首条用户消息的头窗口上限。实测本机 2131 个 rollout 在 192KiB
@@ -653,8 +658,9 @@ impl Root {
         path: &Path,
         header_bytes: usize,
         budget: &mut Budget,
+        observe: &mut HistoryObserver<'_>,
     ) -> ReadResult<Option<TitleTail>> {
-        self.title_window(path, header_bytes, CLAUDE_TITLE_TAIL, budget)
+        self.title_window(path, header_bytes, CLAUDE_TITLE_TAIL, budget, Some(observe))
     }
     /// Optional append-only metadata uses the existing file cap as a tail cap.
     /// A partial window never proves that an older name is absent.
@@ -663,7 +669,7 @@ impl Root {
         path: &Path,
         budget: &mut Budget,
     ) -> ReadResult<Option<TitleTail>> {
-        self.title_window(path, 0, budget.file_bytes, budget)
+        self.title_window(path, 0, budget.file_bytes, budget, None)
     }
     fn title_window(
         &self,
@@ -671,6 +677,7 @@ impl Root {
         header_bytes: usize,
         window: usize,
         budget: &mut Budget,
+        mut observe: Option<&mut HistoryObserver<'_>>,
     ) -> ReadResult<Option<TitleTail>> {
         if !budget.optional_title_available(header_bytes, window) {
             return Ok(None);
@@ -710,10 +717,43 @@ impl Root {
         if before.len() < header_bytes as u64 {
             return Err("SOURCE_CHANGED");
         }
+        // 同一句柄扩展展示头部并读取尾窗；已花费的身份头、重复读取和尾窗都计费。
+        // 先预留尾窗，不能用截断后的解析长度代替实际读取字节。
+        let head_cap = if observe.is_some() {
+            budget
+                .file_bytes
+                .saturating_sub(header_bytes)
+                .min(budget.bytes_left)
+                .saturating_sub(window)
+        } else {
+            header_bytes
+        };
         let mut header = Vec::new();
-        let read = (&file).take(header_bytes as u64).read_to_end(&mut header);
-        budget.bytes_left = budget.bytes_left.saturating_sub(header.len());
-        read.map_err(read_error)?;
+        let mut requested = 0;
+        while header.len() < head_cap {
+            budget.checkpoint()?;
+            let next =
+                (head_cap - header.len()).min(if observe.is_some() { 4096 } else { head_cap });
+            let previous = header.len();
+            let read = (&file).take(next as u64).read_to_end(&mut header);
+            budget.bytes_left = budget.bytes_left.saturating_sub(header.len() - previous);
+            read.map_err(read_error)?;
+            requested += next;
+            let complete = match observe.as_mut() {
+                Some(probe) => probe(&header).map_err(|code| {
+                    if code == "SOURCE_AMBIGUOUS" {
+                        code
+                    } else {
+                        "SOURCE_CHANGED"
+                    }
+                })?,
+                None => true,
+            };
+            // 更早出现的标题不能缩短对第一轮已观察范围的重新验证。
+            if header.len() - previous < next || complete && header.len() >= header_bytes {
+                break;
+            }
+        }
         budget.checkpoint()?;
         // The chosen window was checked against both file and aggregate caps.
         // Claude titles use 64KiB; the optional Codex index retains the file cap.
@@ -728,14 +768,19 @@ impl Root {
         let after = file.metadata().map_err(read_error)?;
         if before.len() != after.len()
             || before.modified().ok() != after.modified().ok()
-            || header.len() != header_bytes
+            || header.len() as u64 != before.len().min(requested as u64)
             || tail.len() as u64 != tail_bytes
         {
             return Err("SOURCE_CHANGED");
         }
         budget.checkpoint()?;
         self.current()?;
-        Ok(Some((header, tail, before.len() > tail_bytes)))
+        Ok(Some(TitleTail {
+            header_complete: header.len() as u64 == before.len(),
+            header,
+            tail,
+            cut_first: before.len() > tail_bytes,
+        }))
     }
     fn read_bounded(
         &self,

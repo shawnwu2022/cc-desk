@@ -62,6 +62,13 @@ impl Catalog<'_> {
     ) -> ReadResult<Option<(Vec<u8>, bool)>> {
         let result = if self.cli == CliKind::Codex {
             self.root.history_header(Path::new(path), budget)?
+        } else if !self.projects.is_empty() {
+            // 必需身份头部先完成，较长的展示元数据留到同句柄头尾观察阶段。
+            self.root.history_until(
+                Path::new(path),
+                budget,
+                &mut history::claude_initial_metadata_probe(),
+            )?
         } else {
             // Leading metadata and long first prompts can put Claude's cwd
             // beyond a fixed window. Observe complete records adaptively.
@@ -80,9 +87,12 @@ impl Catalog<'_> {
         header_bytes: usize,
         budget: &mut Budget,
     ) -> ReadResult<Option<TitleTail>> {
-        let result = self
-            .root
-            .history_title_tail(Path::new(path), header_bytes, budget)?;
+        let result = self.root.history_title_tail(
+            Path::new(path),
+            header_bytes,
+            budget,
+            &mut history::claude_metadata_probe(),
+        )?;
         self.check()?;
         Ok(result)
     }

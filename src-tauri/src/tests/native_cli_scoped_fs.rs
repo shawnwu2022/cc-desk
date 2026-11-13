@@ -511,3 +511,83 @@ fn ZstdRead_TruncatedRecordIsIncomplete_008() {
         assert!(budget.history_metadata_incomplete(), "{path}");
     }
 }
+
+// 初次身份观察、扩展头的完整读取（含半行）和尾窗重叠都计入原预算。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_LongPrefixActualByteBudget_046() {
+    use super::super::catalog::{Catalog, Options, ProjectRef};
+    use super::super::wire::{ResourceItem, ResourceKind};
+    use crate::cli::types::CliKind;
+    use serde_json::json;
+    let temp = tempfile::tempdir().unwrap();
+    fs::create_dir_all(temp.path().join("projects/p")).unwrap();
+    let mut input = format!(
+        "{}\n",
+        json!({"type":"user","sessionId":"fixture","cwd":temp.path().to_str().unwrap(),"message":{"content":"<command-name>/synthetic</command-name>"}})
+    );
+    while input.len() < 1_208_000 {
+        input.push_str(&format!(
+            "{}\n",
+            json!({"type":"api-request-blob","sessionId":"fixture","value":"x".repeat(4000)})
+        ));
+    }
+    input.push_str(&format!(
+        "{}\n",
+        json!({"type":"ai-title","sessionId":"fixture","aiTitle":"Old AI title"})
+    ));
+    input.push_str(&format!("{}\n", json!({"type":"assistant","sessionId":"fixture","message":{"content":"x".repeat(96 * 1024)}})));
+    input.push_str(&format!(
+        "{}\n",
+        json!({"type":"custom-title","sessionId":"fixture","customTitle":"Renamed fixture"})
+    ));
+    fs::write(temp.path().join("projects/p/fixture.jsonl"), input).unwrap();
+    let root = Root::open(temp.path()).unwrap();
+    let paths = vec![temp.path().to_owned()];
+    let projects = [ProjectRef {
+        id: "p",
+        root: &root,
+        paths: &paths,
+    }];
+    let catalog = Catalog {
+        cli: CliKind::Claude,
+        root: &root,
+        projects: &projects,
+        user_config: None,
+        check: &|| Ok(()),
+    };
+    for (file_bytes, total_bytes, enriched) in [
+        (2 * 1024 * 1024, 2 * 1024 * 1024, true),
+        (3 * 64 * 1024 - 1, 2 * 1024 * 1024, false),
+        (2 * 1024 * 1024, 3 * 64 * 1024 - 1, false),
+    ] {
+        let mut budget = Budget::new(Limits {
+            file_bytes,
+            total_bytes,
+            entries: 4096,
+        });
+        let items = super::super::catalog::read(
+            &catalog,
+            &Options {
+                kind: ResourceKind::History,
+                query: None,
+                session_id: None,
+            },
+            &mut budget,
+        )
+        .unwrap();
+        assert_eq!(items.len(), 1);
+        let ResourceItem::Session { title, .. } = &items[0] else {
+            panic!("session metadata")
+        };
+        assert_eq!(title == "Renamed fixture", enriched);
+        let charged = total_bytes - budget.bytes_left;
+        assert!(charged <= file_bytes && charged <= total_bytes);
+        if enriched {
+            assert!(charged > 1_208_000 + 2 * 64 * 1024);
+        } else {
+            assert_eq!(charged, 64 * 1024);
+        }
+        assert!(budget.history_read_failures().is_empty());
+    }
+}

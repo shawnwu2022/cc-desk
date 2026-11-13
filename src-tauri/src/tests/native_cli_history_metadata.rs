@@ -3223,3 +3223,185 @@ fn HistoryCodex_CreationTimeRejectsUndecodableValue_065() {
         "发布的 createdAt 必须能通过前端的严格文本解码"
     );
 }
+
+// 长请求元数据把 AI 标题推过 1MiB 后，最新原生改名仍必须从尾窗读出。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_LongPrefixRenameReadsTail_066() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("projects/p")).unwrap();
+    let mut input = format!(
+        "{}\n{}\n",
+        json!({"type":"attachment","sessionId":"fixture","value":"x".repeat(39_000)}),
+        json!({"type":"user","sessionId":"fixture","cwd":temp.path().to_str().unwrap(),"message":{"content":"<command-name>/synthetic</command-name>"}}),
+    );
+    while input.len() < 1_208_000 {
+        input.push_str(&format!(
+            "{}\n",
+            json!({"type":"api-request-blob","sessionId":"fixture","value":"x".repeat(4000)})
+        ));
+    }
+    input.push_str(&format!(
+        "{}\n",
+        json!({"type":"ai-title","sessionId":"fixture","aiTitle":"Old AI title","timestamp":"2026-10-04T09:00:00Z"})
+    ));
+    while input.len() < 3_200_000 {
+        input.push_str(&format!(
+            "{}\n",
+            json!({"type":"assistant","sessionId":"fixture","message":{"content":"x".repeat(4000)}})
+        ));
+    }
+    input.push_str(&format!(
+        "{}\n",
+        json!({"type":"custom-title","sessionId":"fixture","customTitle":"Renamed fixture"})
+    ));
+    std::fs::write(temp.path().join("projects/p/fixture.jsonl"), input).unwrap();
+    let root = Root::open(temp.path()).unwrap();
+    let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
+    let items = read_claude_history_fixture(&root, &[temp.path().to_owned()], &mut budget).unwrap();
+    assert_eq!(items.len(), 1);
+    let ResourceItem::Session {
+        title,
+        title_source,
+        created_at,
+        updated_at,
+        ..
+    } = &items[0]
+    else {
+        panic!("session metadata")
+    };
+    assert_eq!(title, "Renamed fixture");
+    assert!(matches!(title_source, Some(TitleSource::Custom)));
+    assert_eq!(created_at.as_deref(), Some("2026-10-04T09:00:00Z"));
+    assert_eq!(updated_at.as_deref(), Some("2026-10-04T09:00:00Z"));
+    assert!(budget.history_read_failures().is_empty());
+}
+
+// 第一遍身份头之后的冲突，仍必须由第二遍完整头部解析拒绝。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_ExpandedHeaderIdentityConflict_067() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("projects/p")).unwrap();
+    let mut input = format!(
+        "{}\n",
+        json!({"type":"user","sessionId":"fixture","cwd":temp.path().to_str().unwrap(),"message":{"content":"<command-name>/synthetic</command-name>"}})
+    );
+    while input.len() < 80 * 1024 {
+        input.push_str(&format!(
+            "{}\n",
+            json!({"type":"api-request-blob","sessionId":"fixture","value":"x".repeat(4000)})
+        ));
+    }
+    input.push_str(&format!(
+        "{}\n",
+        json!({"type":"assistant","sessionId":"other","message":{"content":"conflict"}})
+    ));
+    input.push_str(&format!(
+        "{}\n",
+        json!({"type":"ai-title","sessionId":"fixture","aiTitle":"Old AI title"})
+    ));
+    input.push_str(&format!("{}\n", json!({"type":"assistant","sessionId":"fixture","message":{"content":"x".repeat(96 * 1024)}})));
+    input.push_str(&format!(
+        "{}\n",
+        json!({"type":"custom-title","sessionId":"fixture","customTitle":"Renamed fixture"})
+    ));
+    std::fs::write(temp.path().join("projects/p/fixture.jsonl"), input).unwrap();
+    let root = Root::open(temp.path()).unwrap();
+    let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
+    assert_eq!(
+        read_claude_history_fixture(&root, &[temp.path().to_owned()], &mut budget).err(),
+        Some("SOURCE_AMBIGUOUS")
+    );
+}
+
+// 第二轮即使更早见到标题，也必须重新验证第一轮已观察的整个范围。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_EarlierTitleCannotShortenRevalidation_068() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("projects/p")).unwrap();
+    let make_input = |changed: bool| {
+        let mut input = format!(
+            "{}\n",
+            json!({"type":"user","sessionId":"fixture","cwd":temp.path().to_str().unwrap(),"message":{"content":if changed {"early prompt"} else {"<command-name>/synthetic</command-name>"}}})
+        );
+        while input.len() < 40 * 1024 {
+            input.push_str(&format!(
+                "{}\n",
+                json!({"type":"api-request-blob","sessionId":"fixture","value":"x".repeat(4000)})
+            ));
+        }
+        input.push_str(&format!("{}\n", json!({"type":"assistant","sessionId":if changed {"other"} else {"fixture"},"message":{"content":"synthetic reply"}})));
+        while input.len() < 192 * 1024 {
+            input.push_str(&format!(
+                "{}\n",
+                json!({"type":"api-request-blob","sessionId":"fixture","value":"x".repeat(4000)})
+            ));
+        }
+        input.push_str(&format!(
+            "{}\n",
+            json!({"type":"custom-title","sessionId":"fixture","customTitle":"Renamed fixture"})
+        ));
+        input
+    };
+    let input = make_input(false);
+    let path = temp.path().join("projects/p/fixture.jsonl");
+    std::fs::write(&path, &input).unwrap();
+    let root = Root::open(temp.path()).unwrap();
+    let observed_bytes = 64 * 1024;
+    let end = input[..observed_bytes].rfind('\n').unwrap();
+    let mut transcript =
+        parse_metadata("projects/p/fixture.jsonl", CliKind::Claude, &input[..=end]).unwrap();
+    transcript.observation_bytes = observed_bytes;
+    std::fs::write(&path, make_input(true)).unwrap();
+    let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
+    let project_paths = [temp.path().to_owned()];
+    let projects = granted(&root, &project_paths);
+    let catalog = Catalog {
+        cli: CliKind::Claude,
+        root: &root,
+        projects: &projects,
+        user_config: None,
+        check: &|| Ok(()),
+    };
+    assert_eq!(
+        enrich_claude_title(&catalog, &transcript, &mut budget).err(),
+        Some("SOURCE_AMBIGUOUS")
+    );
+}
+
+// 扩展头读到 EOF 时，最后一条无换行的记录仍是完整证据。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_ExpandedHeadKeepsCompleteEofRecord_069() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("projects/p")).unwrap();
+    let mut input = format!(
+        "{}\n",
+        json!({"type":"user","sessionId":"fixture","cwd":temp.path().to_str().unwrap(),"message":{"content":""}})
+    );
+    while input.len() < 80 * 1024 {
+        input.push_str(&format!(
+            "{}\n",
+            json!({"type":"api-request-blob","sessionId":"fixture","value":"x".repeat(4000)})
+        ));
+    }
+    input.push_str(&json!({"type":"user","sessionId":"fixture","message":{"content":"Final prompt"},"timestamp":"2026-10-04T09:00:00Z"}).to_string());
+    std::fs::write(temp.path().join("projects/p/fixture.jsonl"), &input).unwrap();
+    let root = Root::open(temp.path()).unwrap();
+    let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
+    let items = read_claude_history_fixture(&root, &[temp.path().to_owned()], &mut budget).unwrap();
+    assert_eq!(items.len(), 1);
+    let row = serde_json::to_value(&items[0]).unwrap();
+    assert_eq!(row["title"], "Final prompt");
+    assert_eq!(row["createdAt"], "2026-10-04T09:00:00Z");
+    assert!(budget.history_read_failures().is_empty());
+    input.pop();
+    std::fs::write(temp.path().join("projects/p/fixture.jsonl"), input).unwrap();
+    let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
+    assert_eq!(
+        read_claude_history_fixture(&root, &[temp.path().to_owned()], &mut budget).err(),
+        Some("SOURCE_CHANGED")
+    );
+}

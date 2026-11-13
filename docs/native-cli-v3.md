@@ -543,6 +543,16 @@ project/key checks. Raw/picker and unproven new identities cannot infer a target
 `cli_rename_session` still rejects Run scopes. Codex official app-server
 `thread/name/set` and Claude public Agent SDK 0.3.301 `renameSession` must read back
 successfully before Desk clears matching aliases; uncertain writes are not replayed.
+Claude project history keeps ordinary short-header observations unchanged, but
+once a first cwd is proven it can defer title discovery beyond 64 KiB until all
+required headers have completed. Optional enrichment then reads an adaptive head
+and the 64 KiB tail on one file handle. It reparses that full observed head and
+checks native ID, first cwd, file size/modification and held-root validity.
+Initial header bytes, repeated head bytes (including partial-record overread),
+and tail bytes all share the existing 2 MiB/file and 512 MiB/read limits. Expanded
+head titles/timestamps remain usable when the tail contains no title. This avoids
+reading a >1 MiB title-discovery prefix twice and silently skipping a newer name.
+
 After a Claude rename receipt, each refreshed same-record projection must contain
 the exact target and display the requested title (at the history DTO’s 512-byte
 UTF-8 boundary). A retained old title, missing row, or target read failure reports
