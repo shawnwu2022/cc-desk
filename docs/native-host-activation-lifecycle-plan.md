@@ -162,3 +162,9 @@ Endpoint 与 Relay 使用不同的固定 SPKI。批准期限来自原 ticket，�
 - `final3-fmt.*` 是六个改动 Rust 文件的只读格式检查；`final3-clippy.*` 是 remote-host `--lib -- -D warnings` 严格检查，两者通过。严格 `--lib --tests` 仍受已提交的 `native_cli_remote_composition.rs` 三处 lint 阻断：978/1008 的 `possible_missing_else` 来自首片，1759 的 `chunks_exact_to_as_chunks` 是更早基线。本片 helper lint 已修，不修改或屏蔽上述范围外代码；不能称全目标 Clippy 通过。
 
 2A 未运行全量 Rust、feature-off 新 harness、NativeRemote 全套重跑、真实 existing-key loader、真实原生批准、手机或公网端到端。controller/approval/activation/service/IPC 未改，保留首片原隔离证据。本片不创建或打开持久/真实用户 key，不增加生产 Host profile、两用途供应者、通知/释放 custody 或 start 调用者。生产仍为 None/Locked，后续 2B 必须单独验收上述组合边界。
+
+## 2A 后续独立测试 lint 收口
+
+以 `d1a32989e623f1d812b1ebca6ee0b4a753506f19` 为基线，独立修复上述三处 composition 测试 lint：两段等待循环仅换行，保留原先相互独立的 `if`；`chunks_exact(2)` 改为 `as_chunks::<2>().0.iter()`，仍仅遍历完整两字节块并忽略余字节，兼容声明的 Rust 1.89 MSRV。没有 lint allow、整文件重排或生产逻辑变更，中文注释原文保持不变。
+
+证据为 `.audit/remote-composition-lint-20261113/`。`clippy.*` 记录同源码 remote-host 严格 `--lib --tests -- -D warnings` exit 0，关闭三处 lint；前述 2A 历史失败记录继续保留。原隔离脚本的 `isolated/results.json` 记录 NativeRemote 001–010 各 fresh process、005 额外一次、network 23 项及 checkout 3 项全部 exit 0、无 timeout、测试摘要计数正确。本次实际 Cargo test artifact SHA256 为 `5F13099C1A30DCB9E787180B1D7C52AF183D07EE6923E6958B5EBF82F3E90E82`，没有沿用 2A 旧产物。仅收口测试 lint，不提前实现 2B 或扩大生产验收范围。

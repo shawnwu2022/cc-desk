@@ -975,7 +975,16 @@ async fn NativeRemote_RegisteredSourceConsumesFreshMaterialsAndRebinds_008() {
         let consumed=controller.current(&document_binding,&other_fixture.caller,&other_admission).map_err(|_| "preparing state")?==HostControlReply::Consumed;
         controller.cancel(&document_binding,&other_fixture.caller,&other_admission).map_err(|_| "cancel preparing")?;
         let _=release_tx.send(());
-        let join_end=Instant::now()+Duration::from_secs(10);let joined=loop{if let Some(result)=controller.test_finish_preparation(){break Some(result);}if Instant::now()>=join_end{break None;}std::thread::sleep(Duration::from_millis(5));};
+        let join_end = Instant::now() + Duration::from_secs(10);
+        let joined = loop {
+            if let Some(result) = controller.test_finish_preparation() {
+                break Some(result);
+            }
+            if Instant::now() >= join_end {
+                break None;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        };
         if !entered || !pending || !consumed || joined!=Some(false) || other_host.test_network_attempts()!=0 {return Err("cancelled factory publication/custody");}
         // 工厂在批准前绑定。准备成功后，查询不登记；显式推进才验证并消费原结果。
         for mode in 0..3 {
@@ -1005,7 +1014,15 @@ async fn NativeRemote_RegisteredSourceConsumesFreshMaterialsAndRebinds_008() {
             let duplicate=other_fixture.supervisor.admit_remote_run(other_fixture.service.access(&other_fixture.caller,&other_status.run).map_err(|_|"duplicate access")?,&other_status.run).map_err(|_|"duplicate admission")?;
             if prepared_controller.test_prepare_owned(&document_binding,&other_fixture.caller,duplicate,Arc::new(NativeRuntime::with_owned_components_for_test(other_fixture.service.clone(),other_fixture.transports.clone(),other_fixture.supervisor.clone())),prepared_host.clone()).is_ok(){return Err("duplicate preparation accepted");}
             let finish_end=Instant::now()+Duration::from_secs(5);
-            let completed=loop{if let Some(result)=prepared_controller.test_finish_preparation(){break result;}if Instant::now()>=finish_end{return Err("prepared result join timeout");}std::thread::yield_now();};
+            let completed = loop {
+                if let Some(result) = prepared_controller.test_finish_preparation() {
+                    break result;
+                }
+                if Instant::now() >= finish_end {
+                    return Err("prepared result join timeout");
+                }
+                std::thread::yield_now();
+            };
             if completed!=(mode==0) || prepared_host.test_network_attempts()!=0 {return Err("prepared identity or expiry boundary");}
             if mode==0 && (samples.load(std::sync::atomic::Ordering::Acquire)!=2 || prepared_controller.current(&document_binding,&other_fixture.caller,&other_admission).map_err(|_|"registered current")?!=HostControlReply::Registered){return Err("explicit prepared registration missing");}
             prepared_controller.begin_shutdown();
@@ -1756,7 +1773,7 @@ async fn NativeRemote_ActualAdmissionInstallsOriginalOwnNode_001() {
         let window=client.exchange(br#"{"message":"Window","profile":1,"request":"2"}"#,BUDGET).await.map_err(|_|"input window")?;
         let wire::Message::WindowGranted{window,not_after_host_ms,..}=wire::decode(&window).map_err(|_|"window codec")? else{return Err("window reply");};
         let mut token=[0;32];
-        for(i,pair)in window.as_bytes().chunks_exact(2).enumerate(){token[i]=u8::from_str_radix(std::str::from_utf8(pair).map_err(|_|"window hex")?,16).map_err(|_|"window value")?;}
+        for(i,pair)in window.as_bytes().as_chunks::<2>().0.iter().enumerate(){token[i]=u8::from_str_radix(std::str::from_utf8(pair).map_err(|_|"window hex")?,16).map_err(|_|"window value")?;}
         let frame=input::encode(&input::Input{operation:[0x21;16],sequence:1,window:token,not_after_host_ms:not_after_host_ms.parse().map_err(|_|"window deadline")?,bytes:b"nat".to_vec()}).map_err(|_|"input codec")?;
         let receipt=client.exchange(&frame,BUDGET).await.map_err(|_|"original remote input")?;
         let wire::Message::InputReceipt{operation,sequence,outcome:wire::Outcome::HostWritten,proof:Some(proof),..}=wire::decode(&receipt).map_err(|_|"receipt codec")? else{return Err("exact written receipt");};
