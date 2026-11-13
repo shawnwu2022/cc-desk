@@ -670,6 +670,18 @@ impl RemoteHostController {
     pub(crate) fn test_approval_owner(&self) -> Arc<NativeHostApproval> {
         self.state.lock().slot.as_ref().unwrap().owner.clone()
     }
+    #[cfg(all(test, windows))]
+    pub(crate) fn test_native_approval_observation(&self) -> (bool, Option<bool>) {
+        let state = self.state.lock();
+        // None 仅表示没有可观测的保留 owner，不是原生回调已完成的证明。
+        (
+            state.requesting.is_some(),
+            state
+                .slot
+                .as_ref()
+                .map(|slot| slot.owner.callback_outstanding()),
+        )
+    }
     pub(crate) fn begin_shutdown(&self) {
         let (configuration, slot) = {
             let mut state = self.state.lock();

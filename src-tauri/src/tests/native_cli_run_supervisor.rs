@@ -24,6 +24,10 @@ mod managed_job;
 #[path = "native_cli_remote_composition.rs"]
 mod remote_composition;
 
+#[cfg(all(windows, feature = "remote-host"))]
+#[path = "native_cli_host_ui_live.rs"]
+mod host_ui;
+
 #[cfg(windows)]
 #[allow(dead_code, clippy::duplicate_mod)]
 #[path = "../conpty_runtime.rs"]
