@@ -52,4 +52,11 @@ node --input-type=module -e "const m=await import('./.audit/browser-profile-exam
 
 本层不签名、不调用 presenter，不联网、不存储、不导入/导出/生成密钥，不改变连接、WebAuthn 批准、Host cap 或 relay 协议。自动化覆盖完整合法/非法配置、全字段匹配、非导出句柄规则、冻结隔离、取消/唯一读取与锁定示例 bundle。测试只使用现有公开 TEST_ONLY P-256 向量和隔离合成数据。
 
-真实 enrollment、credential/handle 管理与撤销恢复、可信 provider、部署和实际设备全链验收仍未完成；单元测试和 ESM smoke 不替代真实浏览器、WebAuthn、Host 或网络验收。
+真实 Edge 隔离回归位于 `tests/remote-browser/browser-pairing-profile.spec.ts`。它在内存中 bundle 真实 helper，以 Playwright route 提供带 COOP/COEP 的 `https://desk.invalid` 页面，仅导入现有公开 TEST_ONLY scalar1/2 为非导出 WebCrypto handles。四条行为测试检查原句柄及冻结快照、完整配置不匹配保持锁定、首读取消保留原 pending、后续调用取消与缺失批准；未批准输入不能因缓存或换 signal 成功。所有其他页面请求被拒绝，未连接 Relay、Host 或账户。
+
+```powershell
+# 已安装 Edge；沿用上文项目内 TEMP/TMP/TMPDIR，默认结果仍在项目 test-results 中。
+node_modules/.bin/playwright.cmd test --config playwright.remote-browser.config.ts tests/remote-browser/browser-pairing-profile.spec.ts --reporter=line
+```
+
+这补充真实 Edge 引擎、WebCrypto handles 与事件循环的行为证据；HTTPS 由测试路由截获，不证明真实 TLS、站点部署或同源模块供应。真实 enrollment、credential/handle 管理与撤销恢复、可信 provider、WebAuthn、Host、网络和实际设备全链验收仍未完成。
