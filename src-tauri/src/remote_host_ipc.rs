@@ -61,3 +61,32 @@ pub(crate) fn remote_host_start(
         service.inner().clone(),
     )
 }
+
+#[cfg(windows)]
+pub(crate) fn remote_host_configure(
+    webview: Webview,
+    request: Request<'_>,
+    runtime: State<'_, Arc<NativeRuntime>>,
+    controller: State<'_, Arc<RemoteHostController>>,
+) -> Result<crate::remote_host_configuration::ConfigurationReply, SafeError> {
+    let (binding, caller, admission, text) =
+        runtime.admit_host_configuration(&webview, request.headers(), request.body())?;
+    let frozen = crate::remote_host_configuration::freeze(&text, &admission)?;
+    let receipt = controller.install_candidate(&binding, caller, &admission, frozen)?;
+    Ok(
+        crate::remote_host_configuration::ConfigurationReply::Configured {
+            receipt: receipt.to_string(),
+        },
+    )
+}
+#[cfg(windows)]
+pub(crate) fn remote_host_discard_candidate(
+    webview: Webview,
+    request: Request<'_>,
+    runtime: State<'_, Arc<NativeRuntime>>,
+    controller: State<'_, Arc<RemoteHostController>>,
+) -> Result<(), SafeError> {
+    let (binding, caller, admission, receipt) =
+        runtime.admit_host_candidate_discard(&webview, request.headers(), request.body())?;
+    controller.discard_candidate(&binding, &caller, &admission, receipt)
+}

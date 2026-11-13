@@ -91,6 +91,110 @@ async fn owned_start_original_node(phone_first: bool, failure: u8) {
         Instant::now() + Duration::from_secs(60),
         opened.clone(),
     );
+
+    if failure == 8 {
+        let b = supplied.binding();
+        let encode = |v: &[u8]| v.iter().map(|b| format!("{b:02x}")).collect::<String>();
+        let candidate=serde_json::json!({"version":1,"address":relay.address.to_string(),"origin":relay.origin,"relayMode":"rendezvousV1","tunnel":"03".repeat(16),"relayId":encode(&b.relay_id),"profileId":encode(&b.native_profile.id),"profileRevision":b.native_profile.revision.to_string(),"endpoint":{"keyName":"TEST_ONLY_NEVER_OPEN_ENDPOINT","spki":encode(&b.endpoint_spki)},"relay":{"keyName":"TEST_ONLY_NEVER_OPEN_RELAY","spki":encode(&b.relay_spki)},"phoneSpki":encode(&b.endpoint_spki),"issuerSpki":encode(&b.endpoint_spki),"principal":"04".repeat(32),"activation":"33".repeat(32),"hostKeyEpoch":"5","clientKeyEpoch":"7","policyEpoch":"13","issuerEpoch":"17","incarnation":"11","browser":{"origin":"https://desk.invalid","rpId":"desk.invalid","credentialId":"07".repeat(32),"spki":encode(&b.endpoint_spki)}}).to_string();
+        for hostile in [
+            candidate.replacen("\"version\":1", "\"version\":1,\"approved\":true", 1),
+            candidate.replacen("\"profileRevision\":\"1\"", "\"profileRevision\":\"01\"", 1),
+        ] {
+            // 第二种替换仅在 fixture 的修订恰为1时使用。
+            if hostile != candidate {
+                assert!(crate::remote_host_configuration::freeze(&hostile, &admission).is_err());
+            }
+        }
+        let frozen = crate::remote_host_configuration::freeze(&candidate, &admission).unwrap();
+        let text = crate::remote_host_approval::NativeHostApproval::render_frozen(&frozen);
+        for marker in [
+            "TEST_ONLY_NEVER_OPEN_ENDPOINT",
+            "TEST_ONLY_NEVER_OPEN_RELAY",
+            "Microsoft Software KSP",
+            "Endpoint SPKI SHA256",
+            "Relay SPKI SHA256",
+            "RendezvousV1",
+            "not renewed after Yes",
+        ] {
+            assert!(
+                text.contains(marker),
+                "missing native approval marker {marker}"
+            );
+        }
+        assert!(frozen.matches(&admission));
+        assert!(frozen.cap() <= Instant::now() + Duration::from_secs(60));
+        let mut foreign = fixture.caller.clone();
+        foreign.window_label.push_str("-FOREIGN");
+        assert!(controller
+            .install_frozen_configuration(&binding, foreign, &admission, frozen)
+            .is_err());
+        let make = || crate::remote_host_configuration::freeze(&candidate, &admission).unwrap();
+        let a = controller
+            .install_candidate(&binding, fixture.caller.clone(), &admission, make())
+            .unwrap();
+        let mut foreign = fixture.caller.clone();
+        foreign.window_label.push_str("-FOREIGN");
+        assert!(controller
+            .discard_candidate(&binding, &foreign, &admission, a)
+            .is_err());
+        controller
+            .discard_candidate(&binding, &fixture.caller, &admission, a)
+            .unwrap();
+        controller
+            .discard_candidate(&binding, &fixture.caller, &admission, a)
+            .unwrap();
+        let b = controller
+            .install_candidate(&binding, fixture.caller.clone(), &admission, make())
+            .unwrap();
+        assert_ne!(a, b);
+        controller
+            .cancel(&binding, &fixture.caller, &admission)
+            .unwrap();
+        assert!(controller
+            .install_candidate(&binding, fixture.caller.clone(), &admission, make())
+            .is_err());
+        controller
+            .discard_candidate(&binding, &fixture.caller, &admission, a)
+            .unwrap();
+        assert!(controller
+            .install_candidate(&binding, fixture.caller.clone(), &admission, make())
+            .is_err());
+        controller
+            .test_request_frozen(&binding, &fixture.caller, &admission, true)
+            .unwrap();
+        assert!(controller
+            .discard_candidate(&binding, &fixture.caller, &admission, b)
+            .is_err());
+        controller
+            .cancel(&binding, &fixture.caller, &admission)
+            .unwrap();
+        assert!(host.test_activation_observation().is_none());
+        assert_eq!(host.test_network_attempts(), 0);
+        assert!(opened
+            .iter()
+            .all(|v| v.load(std::sync::atomic::Ordering::Acquire) == 0));
+        assert!(controller
+            .start_owned(
+                &binding,
+                &fixture.caller,
+                admit(),
+                runtime.clone(),
+                host.clone()
+            )
+            .is_err());
+        assert!(host.test_join_network().await);
+        controller.begin_shutdown();
+        assert!(
+            tokio::time::timeout(Duration::from_secs(5), host.test_retire_activation())
+                .await
+                .unwrap()
+        );
+        drop(admission);
+        let physical = cleanup.close();
+        let relay_closed = relay.close().await;
+        assert!(physical && relay_closed);
+        return;
+    }
     let frozen = crate::remote_host_approval::FrozenHostApproval::supplied(
         fields,
         &admission,
@@ -254,4 +358,9 @@ async fn HostStart_BeginClockPanicKeepsUnknown_006() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn HostStart_AsyncNoPeerFailureCannotRetry_007() {
     owned_start_original_node(false, 5).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn HostCandidate_FrozenRunBindingAndCancelledNoStart_005() {
+    owned_start_original_node(false, 8).await;
 }

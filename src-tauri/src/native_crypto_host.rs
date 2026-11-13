@@ -28,6 +28,7 @@ pub(super) type OpenerMailbox = Arc<Mutex<Option<Opener>>>;
 /// 元数据与两个不可替换 opener 一起移动；没有 Issuer opener 或可变 profile 引用。
 pub(crate) struct FrozenHostSupplier {
     binding: FrozenHostBinding,
+    pub(super) key_references: Option<[String;2]>,
     openers: [OpenerMailbox; 2],
 }
 #[derive(Clone)]
@@ -77,12 +78,14 @@ impl FrozenHostSupplier {
     ) -> Self {
         Self {
             binding,
+            key_references: None,
             openers: [
                 Arc::new(Mutex::new(Some(endpoint))),
                 Arc::new(Mutex::new(Some(relay))),
             ],
         }
     }
+    pub(crate) fn key_references(&self) -> Option<&[String;2]> { self.key_references.as_ref() }
     pub(crate) fn binding(&self) -> &FrozenHostBinding {
         &self.binding
     }

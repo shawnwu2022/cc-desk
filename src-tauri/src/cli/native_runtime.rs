@@ -604,6 +604,61 @@ impl NativeRuntime {
             .stop(&caller, &receipt)
     }
 
+    #[cfg(all(feature = "remote-host", windows))]
+    pub(crate) fn admit_host_configuration<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        headers: &HeaderMap,
+        body: &InvokeBody,
+    ) -> Result<crate::remote_host_configuration::ConfigurationAdmission, SafeError> {
+        let binding = self.binding()?;
+        let caller = binding.admit_native(webview, headers)?;
+        let input: crate::remote_host_configuration::ConfigurationRequest =
+            decode_projection(body, 24576)?;
+        if input.generation == 0 || input.run_id.len() > 256 || input.candidate_json.len() > 16384 {
+            return Err(error("INVALID_REQUEST"));
+        }
+        let run = RunKey {
+            run_id: input.run_id,
+            generation: input.generation,
+        };
+        self.service.registry().check_run(&caller, &run)?;
+        let access = self.service.access(&caller, &run)?;
+        let admission = self
+            .supervisor
+            .as_ref()
+            .ok_or_else(|| error("NATIVE_RUNTIME_NOT_READY"))?
+            .admit_remote_run(access, &run)?;
+        Ok((binding, caller, admission, input.candidate_json))
+    }
+    #[cfg(all(feature = "remote-host", windows))]
+    pub(crate) fn admit_host_candidate_discard<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        headers: &HeaderMap,
+        body: &InvokeBody,
+    ) -> Result<crate::remote_host_configuration::DiscardAdmission, SafeError> {
+        let binding = self.binding()?;
+        let caller = binding.admit_native(webview, headers)?;
+        let input: crate::remote_host_configuration::DiscardRequest =
+            decode_projection(body, 1024)?;
+        if input.generation == 0 || input.run_id.len() > 256 {
+            return Err(error("INVALID_REQUEST"));
+        }
+        let receipt = crate::remote_host_configuration::receipt(&input.receipt)?;
+        let run = RunKey {
+            run_id: input.run_id,
+            generation: input.generation,
+        };
+        self.service.registry().check_run(&caller, &run)?;
+        let access = self.service.access(&caller, &run)?;
+        let admission = self
+            .supervisor
+            .as_ref()
+            .ok_or_else(|| error("NATIVE_RUNTIME_NOT_READY"))?
+            .admit_remote_run(access, &run)?;
+        Ok((binding, caller, admission, receipt))
+    }
     /// A native provider must first obtain the existing exact run capability.
     #[cfg(feature = "remote-host")]
     #[allow(

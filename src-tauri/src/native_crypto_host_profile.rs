@@ -9,6 +9,7 @@ use super::{
 pub(crate) struct NativeHostProfile {
     binding: FrozenHostBinding,
     keys: [ExistingKeyLoader; 2],
+    key_references:[String;2],
 }
 impl NativeHostProfile {
     pub(crate) fn new(
@@ -28,15 +29,17 @@ impl NativeHostProfile {
             )?,
             ExistingKeyLoader::new(relay_name, SigningPurpose::Relay, binding.relay_spki)?,
         ];
-        Ok(Self { binding, keys })
+        Ok(Self { binding, keys, key_references:[endpoint_name.into(),relay_name.into()] })
     }
     pub(crate) fn freeze(self) -> FrozenHostSupplier {
         let [endpoint, relay] = self.keys;
-        FrozenHostSupplier::from_openers(
+        let mut supplier=FrozenHostSupplier::from_openers(
             self.binding,
             Opener::Existing(endpoint),
             Opener::Existing(relay),
-        )
+        );
+        supplier.key_references=Some(self.key_references);
+        supplier
     }
     #[cfg(test)]
     pub(crate) fn test_anonymous(

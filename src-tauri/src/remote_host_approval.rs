@@ -381,7 +381,6 @@ impl NativeHostApproval {
         }
         frozen.constrain_from_clock()?;
         let cap = frozen.cap();
-        let description = &frozen.fields;
         if DIALOG_ACTIVE
             .compare_exchange(
                 false,
@@ -393,6 +392,16 @@ impl NativeHostApproval {
         {
             return Err(HostNetworkError::Locked);
         }
+        let text = Self::render_frozen(&frozen);
+        let machine = ApprovalMachine::show(app, window, frozen, text, cap);
+        Ok(Self {
+            lease: machine.lease.clone(),
+            machine,
+        })
+    }
+    pub(crate) fn render_frozen(frozen: &FrozenHostApproval) -> String {
+        let cap = frozen.cap();
+        let description = &frozen.fields;
         let full = format!(
             "Local endpoint: {:02x?} ({:?})\nRelay identity: {:?}\n{}{}",
             description.endpoint_id,
@@ -420,13 +429,10 @@ impl NativeHostApproval {
             .as_bytes(),
         );
         let fingerprint: [u8; 32] = digest.finalize().into();
-        let text = format!("One connection only; no automatic reconnect.\nRun: {}\nRole: {:?}\nOrigin: {}\nPhone: {:02x?}\nExpires within five minutes or earlier profile/policy limit.\nFrozen description SHA256: {:02x?}\n\n{}", public_text(&description.policy.scope.run), description.policy.role, description.binding.origin.as_str(), description.phone_pin.endpoint_id(), fingerprint, full);
+        let text = format!("One connection only; no automatic reconnect.\nRun: {}\nRole: {:?}\nOrigin: {}\nPhone: {:02x?}\nExpires at the remaining upper bound below; approval does not renew it.\nFrozen description SHA256: {:02x?}\n\n{}", public_text(&description.policy.scope.run), description.policy.role, description.binding.origin.as_str(), description.phone_pin.endpoint_id(), fingerprint, full);
 
-        let machine = ApprovalMachine::show(app, window, frozen, text, cap);
-        Ok(Self {
-            lease: machine.lease.clone(),
-            machine,
-        })
+        let text=format!("可查看并控制当前会话。Requires explicit one-shot start; no automatic reconnect.\nRemaining approval upper bound: {} seconds (not renewed after Yes).\n{}",cap.saturating_duration_since(Instant::now()).as_secs(),text);
+        text
     }
     pub(crate) fn cancel(&self) {
         self.lease.cancel();

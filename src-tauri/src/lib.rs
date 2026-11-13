@@ -30,6 +30,8 @@ mod remote_host_approval;
 mod remote_host_controller;
 #[cfg(feature = "remote-host")]
 mod remote_host_ipc;
+#[cfg(all(feature = "remote-host", windows))]
+mod remote_host_configuration;
 pub use codex_observer_reporter::run_entry as run_codex_observer_entry;
 mod observer_host;
 mod observer_http;
@@ -295,6 +297,8 @@ fn run_ordinary(initial_dir: Option<String>, #[cfg(windows)] startup: DesktopSta
             commands::remote_host_request,
             commands::remote_host_cancel,
             commands::remote_host_start,
+            commands::remote_host_configure,
+            commands::remote_host_discard_candidate,
             #[cfg(feature = "remote-client-ipc")]
             remote_client_ipc::remote_client_snapshot,
             #[cfg(feature = "remote-client-ipc")]

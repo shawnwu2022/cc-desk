@@ -26,3 +26,6 @@ Windows remote-host 依次经过原 document/run admission、controller 原配�
 ## 本片冻结验收
 
 冻结11个源码/测试文件，remote-host 精确产物 SHA256 为 `CF40A2EA7E685B54EE6AE7145D0D0F7E49C26FE713FCF65B9D2B1EF4E448038A`。新 start 7 条、原 NativeRemote 19 条、受影响 driver/approval/activation/network/DTO/会合 68 条均逐原始进程通过。另一个 feature-off 精确产物的四个禁用入口测试通过。Windows remote-host 严格 Clippy（lib+tests、-D warnings）、四个修改模块格式检查、前端 bridge/权限测试16条及 typecheck 通过。client-only check 通过，保留原有3条测试 helper dead-code警告，不称该模式严格Clippy通过。未运行全量Rust或非Windows原生编译。
+
+## Current candidate-entry evolution
+The subsequent [candidate configuration slice](native-host-config-entry.md) adds an untrusted public DTO entry and active Native session panel. Earlier statements above that no JS candidate entry exists describe this historical start-only slice. Candidate input never supplies authority: native validation/freeze, original document/run ownership and a one-shot native confirmation remain mandatory. Actual credentials and actual native-window acceptance remain outside the isolated validation.

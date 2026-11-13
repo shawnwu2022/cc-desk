@@ -62,6 +62,7 @@ impl OwnerIdentity {
     }
 }
 struct NativeConfiguration {
+    receipt: u64,
     identity: OwnerIdentity,
     frozen: FrozenHostApproval,
     #[cfg(test)]
@@ -82,6 +83,7 @@ struct ApprovalSlot {
 }
 #[derive(Default)]
 struct ControllerState {
+    next_receipt: u64,
     closing: bool,
     requesting: Option<Arc<PendingRequest>>,
     configuration: Option<NativeConfiguration>,
@@ -158,6 +160,7 @@ impl RemoteHostController {
             #[cfg(test)]
             prepare,
         )
+        .map(|_| ())
     }
     #[allow(dead_code)]
     pub(crate) fn install_frozen_configuration(
@@ -175,6 +178,7 @@ impl RemoteHostController {
             #[cfg(test)]
             None,
         )
+        .map(|_| ())
     }
     fn install_frozen(
         &self,
@@ -183,7 +187,7 @@ impl RemoteHostController {
         admission: &NativeRunAdmission,
         frozen: FrozenHostApproval,
         #[cfg(test)] prepare: Option<FixturePreparation>,
-    ) -> Result<(), SafeError> {
+    ) -> Result<u64, SafeError> {
         Self::authenticate(binding, &caller, admission)?;
         if !frozen.matches(admission) {
             return Err(error("FORBIDDEN"));
@@ -201,12 +205,67 @@ impl RemoteHostController {
         {
             return Err(error("REMOTE_HOST_LOCKED"));
         }
+        let receipt = state
+            .next_receipt
+            .checked_add(1)
+            .ok_or_else(|| error("REMOTE_HOST_LOCKED"))?;
+        state.next_receipt = receipt;
         state.configuration = Some(NativeConfiguration {
+            receipt,
             identity,
             frozen,
             #[cfg(test)]
             prepare,
         });
+        Ok(receipt)
+    }
+    #[cfg(windows)]
+    pub(crate) fn install_candidate(
+        &self,
+        binding: &Arc<DocumentBinding<NativeRun>>,
+        caller: CallerIdentity,
+        admission: &NativeRunAdmission,
+        frozen: FrozenHostApproval,
+    ) -> Result<u64, SafeError> {
+        self.install_frozen(
+            binding,
+            caller,
+            admission,
+            frozen,
+            #[cfg(test)]
+            None,
+        )
+    }
+    #[cfg(windows)]
+    pub(crate) fn discard_candidate(
+        &self,
+        binding: &Arc<DocumentBinding<NativeRun>>,
+        caller: &CallerIdentity,
+        admission: &NativeRunAdmission,
+        receipt: u64,
+    ) -> Result<(), SafeError> {
+        Self::authenticate(binding, caller, admission)?;
+        let removed = {
+            let mut state = self.state.lock();
+            if let Some(pending) = &state.requesting {
+                pending.identity.check(binding, caller, admission)?;
+                return Err(error("REMOTE_HOST_LOCKED"));
+            }
+            if let Some(slot) = &state.slot {
+                slot.identity.check(binding, caller, admission)?;
+                return Err(error("REMOTE_HOST_LOCKED"));
+            }
+            if let Some(configuration) = &state.configuration {
+                configuration.identity.check(binding, caller, admission)?;
+                if configuration.receipt != receipt {
+                    return Ok(());
+                }
+                state.configuration.take()
+            } else {
+                None
+            }
+        };
+        drop(removed);
         Ok(())
     }
     pub(crate) fn current(

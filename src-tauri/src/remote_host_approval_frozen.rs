@@ -93,7 +93,8 @@ impl FrozenHostApproval {
         if let Some(supplier) = &self.supplier {
             use sha2::{Digest, Sha256};
             let binding = supplier.binding();
-            return format!("Native signing profile: {:02x?}; revision: {}\nEndpoint SPKI SHA256: {:02x?}\nRelay SPKI SHA256: {:02x?}\n",
+            let references=supplier.key_references().map(|names|format!("Microsoft Software KSP / current user / silent open-only\nEndpoint key reference: {}\nRelay key reference: {}\n",public_text(&names[0]),public_text(&names[1]))).unwrap_or_default();
+            return format!("{references}Native signing profile: {:02x?}; revision: {}\nEndpoint SPKI SHA256: {:02x?}\nRelay SPKI SHA256: {:02x?}\n",
                 binding.native_profile.id, binding.native_profile.revision,
                 Sha256::digest(binding.endpoint_spki), Sha256::digest(binding.relay_spki));
         }

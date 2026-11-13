@@ -143,3 +143,25 @@ it("RemoteHost_StartUsesOriginalBridgeAndPreservesFailure_005", async () => {
   delete (window as any)[bridgeKey];
   await expect(api.remoteHostStart(run)).rejects.toMatchObject({ code: "DOCUMENT_BRIDGE_UNAVAILABLE" });
 });
+
+it('RemoteHost_CandidateUsesExactBridge_006', async () => {
+  const request = { runId: 'original', generation: 1, candidateJson: '{}' };
+  const invoke = vi.fn(async () => ({ state: 'Configured', receipt: '1' }));
+  bridge(invoke);
+  await expect(api.remoteHostConfigure(request)).resolves.toEqual({ state: 'Configured', receipt: '1' });
+  expect(invoke.mock.calls).toEqual([['remote_host_configure', request]]);
+  const failure = { code: 'FORBIDDEN' };
+  bridge(vi.fn(async () => { throw failure; }));
+  await expect(api.remoteHostConfigure(request)).rejects.toBe(failure);
+  delete (window as any)[bridgeKey];
+  await expect(api.remoteHostConfigure(request)).rejects.toMatchObject({ code: 'DOCUMENT_BRIDGE_UNAVAILABLE' });
+});
+
+it('RemoteHost_CandidateDiscardUsesExactBridge_007', async () => {
+ const request={runId:'original',generation:1,receipt:'42'};
+ const invoke=vi.fn(async()=>undefined);bridge(invoke);
+ await api.remoteHostDiscardCandidate(request);expect(invoke.mock.calls).toEqual([['remote_host_discard_candidate',request]]);
+ const failure={code:'FORBIDDEN'};bridge(vi.fn(async()=>{throw failure}));
+ await expect(api.remoteHostDiscardCandidate(request)).rejects.toBe(failure);
+ delete (window as any)[bridgeKey];await expect(api.remoteHostDiscardCandidate(request)).rejects.toMatchObject({code:'DOCUMENT_BRIDGE_UNAVAILABLE'});
+});

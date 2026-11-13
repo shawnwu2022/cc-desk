@@ -1,4 +1,5 @@
 export default {
+  remoteHostCleanupUnconfirmed: "远程清理结果未确认，请刷新原会话状态；不会自动重试。",
   remoteTerminalTitle: "远程终端",
   remoteTerminalLocked: "已锁定：尚未安装原生连接。",
   remoteTerminalSynced: "快照已验证并确认。",

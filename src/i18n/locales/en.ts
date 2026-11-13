@@ -1,4 +1,5 @@
 export default {
+  remoteHostCleanupUnconfirmed: "Remote cleanup is unconfirmed. Refresh the original session status; no automatic retry will occur.",
   remoteTerminalTitle: "Remote terminal",
   remoteTerminalLocked: "Locked — no native connection is installed.",
   remoteTerminalSynced: "Snapshot verified and acknowledged.",
