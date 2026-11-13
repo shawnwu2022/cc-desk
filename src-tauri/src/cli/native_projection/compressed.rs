@@ -24,7 +24,9 @@ impl Root {
         relative(path, false)?;
         budget.entry()?;
         self.current()?;
-        let metadata = match self.dir.symlink_metadata(path) {
+        let (parent, path) = self.history_location(path, budget);
+        let dir = parent.as_deref().unwrap_or(&self.dir);
+        let metadata = match dir.symlink_metadata(path) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(read_error(error)),
@@ -42,7 +44,7 @@ impl Root {
             use cap_std::fs::OpenOptionsExt;
             options.custom_flags(libc::O_NONBLOCK);
         }
-        let file = self.dir.open_with(path, &options).map_err(read_error)?;
+        let file = dir.open_with(path, &options).map_err(read_error)?;
         let before = file.metadata().map_err(read_error)?;
         if !before.is_file() {
             return Err("SOURCE_NOT_REGULAR");

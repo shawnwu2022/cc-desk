@@ -11,6 +11,8 @@ mod compressed;
 use compressed::{is_zstd_history, Mode};
 #[path = "delete_observation.rs"]
 mod delete_observation;
+#[path = "history_dirs.rs"]
+mod history_dirs;
 #[path = "rename_fs.rs"]
 mod rename_fs;
 pub(crate) use rename_fs::{PinnedTranscript, PrivateTranscript};
@@ -63,6 +65,8 @@ pub(crate) struct Budget {
     history_omitted_sessions: std::collections::BTreeSet<uuid::Uuid>,
     history_anonymous_omission: bool,
     mutation_observations: Option<Sha256>,
+    #[cfg(windows)]
+    history_parents: std::collections::HashMap<(String, PathBuf), std::sync::Arc<Dir>>,
 }
 impl Budget {
     pub(crate) fn new(limits: Limits) -> Self {
@@ -77,6 +81,8 @@ impl Budget {
             history_omitted_sessions: Default::default(),
             history_anonymous_omission: false,
             mutation_observations: None,
+            #[cfg(windows)]
+            history_parents: Default::default(),
         }
     }
     pub(crate) fn checkpoint(&self) -> ReadResult<()> {
@@ -439,6 +445,7 @@ impl Root {
         budget: &mut Budget,
         observe: &mut HistoryObserver<'_>,
     ) -> ReadResult<Option<CodexHead>> {
+        self.retain_history_parent(path, budget)?;
         if is_zstd_history(path) {
             return self
                 .read_zstd(
@@ -473,7 +480,9 @@ impl Root {
         budget.entry()?;
         budget.checkpoint()?;
         self.current()?;
-        let metadata = match self.dir.symlink_metadata(path) {
+        let (parent, path) = self.history_location(path, budget);
+        let dir = parent.as_deref().unwrap_or(&self.dir);
+        let metadata = match dir.symlink_metadata(path) {
             Ok(m) => m,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(read_error(e)),
@@ -497,7 +506,7 @@ impl Root {
             // A file swapped for a FIFO must not indefinitely block the reader.
             options.custom_flags(libc::O_NONBLOCK);
         }
-        let file = self.dir.open_with(path, &options).map_err(read_error)?;
+        let file = dir.open_with(path, &options).map_err(read_error)?;
         let before = file.metadata().map_err(read_error)?;
         if !before.is_file() {
             return Err("SOURCE_NOT_REGULAR");
@@ -587,7 +596,19 @@ impl Root {
         path: &Path,
     ) -> ReadResult<Option<(u64, Option<std::time::SystemTime>)>> {
         relative(path, false)?;
-        match self.dir.symlink_metadata(path) {
+        Self::stat_in(&self.dir, path)
+    }
+    pub(crate) fn history_stat(
+        &self,
+        path: &Path,
+        budget: &mut Budget,
+    ) -> ReadResult<Option<(u64, Option<std::time::SystemTime>)>> {
+        self.retain_history_parent(path, budget)?;
+        let (parent, path) = self.history_location(path, budget);
+        Self::stat_in(parent.as_deref().unwrap_or(&self.dir), path)
+    }
+    fn stat_in(dir: &Dir, path: &Path) -> ReadResult<Option<(u64, Option<std::time::SystemTime>)>> {
+        match dir.symlink_metadata(path) {
             Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => Ok(Some((
                 metadata.len(),
                 metadata.modified().ok().map(|t| t.into_std()),
@@ -793,7 +814,9 @@ impl Root {
         relative(path, false)?;
         budget.entry()?;
         self.current()?;
-        let metadata = match self.dir.symlink_metadata(path) {
+        let (parent, path) = self.history_location(path, budget);
+        let dir = parent.as_deref().unwrap_or(&self.dir);
+        let metadata = match dir.symlink_metadata(path) {
             Ok(m) => m,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(read_error(e)),
@@ -813,7 +836,7 @@ impl Root {
             // A file swapped for a FIFO must not indefinitely block the reader.
             options.custom_flags(libc::O_NONBLOCK);
         }
-        let file = self.dir.open_with(path, &options).map_err(read_error)?;
+        let file = dir.open_with(path, &options).map_err(read_error)?;
         let before = file.metadata().map_err(read_error)?;
         if !before.is_file() {
             return Err("SOURCE_NOT_REGULAR");

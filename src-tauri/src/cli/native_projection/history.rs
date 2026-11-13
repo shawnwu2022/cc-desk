@@ -388,7 +388,7 @@ fn codex_history(
     cache_route: Option<&crate::session_index_maintenance::IndexRoute>,
 ) -> ReadResult<Option<Transcript>> {
     let relative = Path::new(path);
-    let Some((len, modified)) = c.root.stat(relative)? else {
+    let Some((len, modified)) = c.root.history_stat(relative, b)? else {
         return Ok(None);
     };
     let Some(stamps) = cache::Stamps::from_system(len, modified) else {
