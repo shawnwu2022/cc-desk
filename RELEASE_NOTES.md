@@ -4,6 +4,22 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
+## [0.27.0-rc.8]
+
+Fixed
+
+- Show the saved Claude conversation name after long metadata prefixes, and report a list-sync failure instead of silently keeping an old title.
+
+Improved
+
+- Reduce repeated Windows directory traversal during Codex history scans and archive preparation while keeping fresh file reads and source checks.
+
+Important
+
+- This is a prerelease. Stable Latest remains unchanged. No automatic migration, restore or deletion is performed.
+- Archive, restore and permanent-delete safeguards remain unchanged. Claude and OpenCode permanent deletion is still unavailable.
+- Performance measurements used isolated synthetic histories and do not guarantee a fixed duration for real sessions. Live model sessions, installed application acceptance, native All, D20 and signed installation/return remain separately unverified. Updater signatures are not Windows Authenticode.
+
 ## [0.27.0-rc.7]
 
 Fixed

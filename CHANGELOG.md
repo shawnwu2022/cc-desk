@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+## [0.27.0-rc.8] - 2026-11-13
+
+### Fixed
+
+- Surface Claude rename display synchronization failures and require the exact renamed record and bounded requested title after readback.
+- Read Claude titles beyond long metadata prefixes using one bounded adaptive head/tail observation, with shared byte budgets, unchanged identity checks and incomplete-read disclosure.
+
+### Improved
+
+- Reuse identity-pinned Windows parent directories within one Codex history observation, reducing repeated traversal while retaining fresh file metadata/content, complete scans, source revocation and reparse-point rejection.
+
+### Validation and limits
+
+- Preserve archive, rename, restore and permanent-delete admission, unknown-write fences and owned-process cleanup. No user data migration, restore or deletion is performed.
+- This prerelease uses make_latest=false. Exact protected-main CI, authenticated coverage and three same-release-run updater signatures remain mandatory. Performance comparisons use isolated synthetic histories; real sessions have no fixed latency guarantee.
+- Live CLI/model sessions, installed WebView acceptance, original native All, D20 and signed installation/return are separate unverified boundaries. Updater signatures are not Windows Authenticode.
+
 ## [0.27.0-rc.7] - 2026-11-13
 
 ### Fixed
