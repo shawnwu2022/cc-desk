@@ -1480,3 +1480,32 @@ Unknown RED：8 条已归档 Unknown 逐条扫描产生 49 次 workspace 读取�
 
 本轮完整前端 219 文件、3359 项通过、2 项原有跳过，typecheck/build 通过；Rust 投影 219 项、归档 29 项（另 3 ignored，含 benchmark 与两个真实 CLI 实验）、改名 10 项、删除 15 项通过。独立 benchmark 已显式执行 1 项通过。原有 npm 配置警告、Cargo `nul` 缓存清理警告和 Vite 大 chunk 提示保留。真实已登录 CLI、安装版 WebView、完整 Rust library 与 hosted CI 不由这些结果替代。
 严格 all-target Clippy 与 rustfmt 最终通过。Clippy 先报告既有 WebView 测试的 nonminimal_bool；仅将 u64 时间戳条件等价改为 None/零值判断，未改验收断言语义。
+
+## 2026-11-13：缩短 Codex 归档前的目录遍历
+
+继续测量 rc.7 的前台链路后，剩余主要成本仍在写前新鲜历史扫描，而不是归档 RPC。Windows 的 cap-std 文件 stat 和读取会逐分量解析日期目录；同一目录下的每个 rollout 原先都会重复打开这些祖先。
+
+本轮只在一次 Codex 观察的 Budget 内复用父目录能力。逐相对分量打开时使用 `FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS`，在同一已打开句柄上拒绝非目录和 reparse point，禁止 delete-sharing，并持有全部祖先直到观察结束。缓存按根文件身份和相对父路径区分，最多 256 个目录，满后继续原有逐路径读取。文件 stat、身份/正文读取、压缩预算、全源歧义、scope/profile/project 撤销检查均保留；不缓存文件字节或变更授权，不缩短 Job 回收等待，不改变 Unknown、一次写入或原生 CLI 锁语义。非 Windows 不启用父目录缓存。
+
+### 同源交替对照
+
+WSK-MSI，基线 `68955d23`（origin/main rc.7），新建独立项目内 worktree 和 target。为适应磁盘余量，两侧均设置 `CARGO_PROFILE_TEST_DEBUG=0`、`CARGO_PROFILE_DEV_DEBUG=0`、`CARGO_INCREMENTAL=0`，仍为 unoptimized test profile。先分别编译基线和本补丁，再交替执行同一 `NativeArchivePerf_IsolatedStageMatrix_029` 三轮；以下是每列三轮中位数。没有清理 OS 缓存。真实磁盘、backend scope 和 Windows Job，RPC 对端仍为隔离 Node 合成进程。
+
+| 会话数 / 项目数 | 原前台归档 | 新前台归档 | 原后台回读 | 新后台回读 |
+| --- | ---: | ---: | ---: | ---: |
+| 1 / 1 | 231 ms | 208 ms | 14 ms | 14 ms |
+| 128 / 1 | 401 ms | 317 ms | 158 ms | 110 ms |
+| 1024 / 1 | 1390 ms | 1037 ms | 1199 ms | 808 ms |
+| 1024 / 8 | 1409 ms | 1026 ms | 1247 ms | 830 ms |
+
+1024 会话 / 8 项目前台中位数减少 **27.2%**，后台回读减少 **33.5%**。其 helper 首次事件前耗时由 1356 ms 降为 976 ms；RPC 窗口两侧均为 20 ms，完成后回收均约 30 ms。前置阶段包含扫描和 helper 启动，不能将其全称为纯扫描时间；单会话的小幅变化也不能单独归因于目录缓存。
+
+这些是短合成转录的隔离测量，不证明已安装应用、真实 Codex CLI 或真实用户会话已达到 1 秒，也不能直接与上一节不同构建配置的单轮结果相减。全量新鲜扫描和 CLI 启动仍有成本，本补丁没有承诺恒定耗时或即时完成。
+
+可复现入口仍为 `CC_DESK_ARCHIVE_PERF=isolated-stages` 加 `cargo test --locked --lib cli::native_archive::tests::NativeArchivePerf_IsolatedStageMatrix_029 -- --ignored --exact --nocapture`。本次基线测试程序 SHA-256 为 `8bccb74646f9e4a0a436928b4cd4fa173cd11989119f9d96415cb003b27943ee`，补丁程序为 `4984eefd2ebc4c3c5822ca42181d37dc23913759453ff0d33229af279c92eb36`；三轮阶段明细保留在该工作树 `.audit/archive-comparison.json`，编译与逐轮日志同目录。
+
+### 回归边界
+
+新增五条 Windows 回归覆盖：全部祖先在观察期间不可替换、结束后释放；同预算跨根隔离和同名文件替换后的新 stat/内容；缺失中间目录后新建及压缩文件替换；超过目录缓存容量仍完整读取；同根 junction 拒绝。`CodexParents_HoldAndRelease_046` 在旧实现先失败，修改后通过。其余原有身份、缓存、完整性、预算、撤销、Unknown 和压缩回归保持原断言。
+
+最终验证：投影 224 项、归档 29 项（另 3 项保持显式 ignored）、改名 10 项、删除 15 项分别通过；基准显式执行六次均通过。`cargo fmt --check` 和严格 `cargo clippy --locked --all-targets -- -D warnings` 通过，独立只读审查无阻断发现。Cargo 全局缓存 `nul` 清理警告仍存在，不改缓存或主机权限来消除警告。未运行完整 Rust library、真实 CLI live 矩阵、安装版 WebView 或 hosted CI；本轮没有前端变更，不用旧前端结果代替本轮验收。未读取、归档或删除真实用户会话，未替换安装版、升级版本或发布。

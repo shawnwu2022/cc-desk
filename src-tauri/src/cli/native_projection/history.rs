@@ -18,8 +18,12 @@ impl TitlePriority {
         }
     }
 }
-/// 有界标题尾读的结果：优先标题候选，以及尾段观察到的最新记录时间。
-type BoundedTitleResult = (Option<(String, TitlePriority)>, Option<String>);
+/// 有界头尾观察的结果：优先标题、最新记录时间，以及头段首个记录时间。
+type BoundedTitleResult = (
+    Option<(String, TitlePriority)>,
+    Option<String>,
+    Option<String>,
+);
 struct Transcript {
     id: String,
     cwd: Option<String>,
@@ -222,7 +226,10 @@ pub(super) fn read(
             }
             let enriched = enrich_claude_title(c, transcript, b);
             match enriched {
-                Ok((candidate, tail_updated)) => {
+                Ok((candidate, tail_updated, head_created)) => {
+                    if transcript.created.is_none() {
+                        transcript.created = head_created;
+                    }
                     // 尾读观察到的更新时间总是可采用的证据，与标题候选无关。
                     if let Some(newer) = tail_updated {
                         if transcript.updated.as_ref().is_none_or(|old| newer > *old) {
@@ -328,7 +335,9 @@ fn codex_session_names(
                 .root
                 .history_jsonl_tail(Path::new("session_index.jsonl"), b)
             {
-                Ok(Some((_, tail, cut))) if c.check().is_ok() => (tail, cut),
+                Ok(Some(TitleTail {
+                    tail, cut_first, ..
+                })) if c.check().is_ok() => (tail, cut_first),
                 _ => return HashMap::new(),
             }
         }
@@ -379,7 +388,7 @@ fn codex_history(
     cache_route: Option<&crate::session_index_maintenance::IndexRoute>,
 ) -> ReadResult<Option<Transcript>> {
     let relative = Path::new(path);
-    let Some((len, modified)) = c.root.stat(relative)? else {
+    let Some((len, modified)) = c.root.history_stat(relative, b)? else {
         return Ok(None);
     };
     let Some(stamps) = cache::Stamps::from_system(len, modified) else {
@@ -865,19 +874,30 @@ fn enrich_claude_title(
     transcript: &Transcript,
     budget: &mut Budget,
 ) -> ReadResult<BoundedTitleResult> {
-    let Some((header, tail, cut_first)) = catalog.history_title_tail(
+    let Some(TitleTail {
+        header,
+        tail,
+        cut_first,
+        header_complete,
+    }) = catalog.history_title_tail(
         &transcript.source_path,
         transcript.observation_bytes,
         budget,
     )?
     else {
-        return Ok((None, None));
+        return Ok((None, None, None));
     };
-    let end = header
-        .iter()
-        .rposition(|byte| *byte == b'\n')
-        .ok_or("SOURCE_CHANGED")?;
-    let observed = text(&header[..=end])
+    // 同句柄已经读到 EOF 时，末条无换行记录也是完整证据，不能截掉。
+    let end = if header_complete {
+        header.len()
+    } else {
+        header
+            .iter()
+            .rposition(|byte| *byte == b'\n')
+            .ok_or("SOURCE_CHANGED")?
+            + 1
+    };
+    let observed = text(&header[..end])
         .and_then(|input| parse_metadata(&transcript.source_path, CliKind::Claude, input))
         .map_err(|code| {
             if code == "SOURCE_AMBIGUOUS" {
@@ -898,8 +918,11 @@ fn enrich_claude_title(
     } else {
         0
     };
-    let mut candidate = None;
-    let mut tail_updated: Option<String> = None;
+    // 扩展头中可能已找到标题；尾窗没有标题时也不能丢弃这份新观察。
+    let mut candidate = observed
+        .title_priority
+        .map(|priority| (observed.title, priority));
+    let mut tail_updated = observed.updated;
     for line in text(&tail[start..])?
         .lines()
         .filter(|line| !line.trim().is_empty())
@@ -932,7 +955,7 @@ fn enrich_claude_title(
             }
         }
     }
-    Ok((candidate, tail_updated))
+    Ok((candidate, tail_updated, observed.created))
 }
 
 // Official SDK 0.2.165 (bundled CLI 2.1.296) demonstrates permission-mode
@@ -960,6 +983,13 @@ fn claude_project_cwd(value: &Value) -> Option<&str> {
 }
 
 pub(super) fn claude_metadata_probe() -> impl FnMut(&[u8]) -> ReadResult<bool> {
+    claude_probe(false)
+}
+// 常见短头保持原行为；超过 64KiB 且身份已知后，把找标题留给可选头尾阶段。
+pub(super) fn claude_initial_metadata_probe() -> impl FnMut(&[u8]) -> ReadResult<bool> {
+    claude_probe(true)
+}
+fn claude_probe(short_head: bool) -> impl FnMut(&[u8]) -> ReadResult<bool> {
     let mut searched = 0;
     let mut line_start = 0;
     let mut cwd_observed = false;
@@ -995,7 +1025,7 @@ pub(super) fn claude_metadata_probe() -> impl FnMut(&[u8]) -> ReadResult<bool> {
             }
         }
         searched = bytes.len();
-        Ok(cwd_observed && titled)
+        Ok(cwd_observed && (titled || short_head && bytes.len() >= 64 * 1024))
     }
 }
 fn parse_complete(

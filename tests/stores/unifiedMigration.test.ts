@@ -76,7 +76,8 @@ function workspaceFixture() {
     if (command === 'native_get_scope') return source(argument)
     if (command === 'cli_rename_session') {
       if (fixture.renameFailure) throw new Error(fixture.renameFailure)
-      for (const [key, rows] of fixture.histories) if (key.startsWith(argument.source.profileId + ':')) {
+      // 相同 sessionKey 表示同一原生文件，跨配置观察也必须看到已保存的标题。
+      for (const rows of fixture.histories.values()) {
         const item = rows.find(row => row.sessionKey === argument.sessionKey)
         if (item) item.title = argument.title
       }

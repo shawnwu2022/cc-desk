@@ -11,7 +11,7 @@ function fixture(cli:'claude'|'codex'|'opencode'='codex') {
   const entry:NativeHistoryEntry={key:'entry',context:{cli,profileId:'profile',profileRevision:'1',projectId:'project',projectPath:'/repo'},sessions:[{type:'session',sessionKey:key,nativeSessionId:'session',title:'Old title',titleSource:'custom',truncated:false,archived:false,cwd:'/repo',updatedAt:null}],loading:false,loaded:true,error:null,requestEpoch:'1',sourceRootKey:'root',source:{...source,cli}}
   const records=new Map(),write=vi.fn(async(id,record,before)=>{before?.();records.set(id,record)})
   const entries=[entry]
-  const rename=vi.fn(async request=>({...request,state:'renamed' as const})),load=vi.fn(async(context:NativeHistoryContext)=>entries.find(item=>item.context.profileId===context.profileId)??entry)
+  const rename=vi.fn(async request=>{for(const other of entries) for(const session of other.sessions) if(session.sessionKey===request.sessionKey) session.title=request.title;return {...request,state:'renamed' as const}}),load=vi.fn(async(context:NativeHistoryContext)=>entries.find(item=>item.context.profileId===context.profileId)??entry)
   const tabs=new Map<string,NativeCliTab>(),runSource=vi.fn(async(tab:NativeCliTab)=>({...source,cli,target:{kind:'run' as const,runId:tab.runId,generation:tab.generation},basis:'launch-environment' as const}))
   const runtime={createTab:vi.fn(),restartTab:vi.fn(),stopTab:vi.fn(),renameTab:vi.fn()}
   const legacyRoot=vi.fn(async():Promise<string|undefined>=>undefined)
@@ -227,7 +227,7 @@ describe('Native session rename admission',()=>{
     const h=resumed('claude'),other={...h.tab,tabId:'other',requestId:'other-request',runId:'other-run',action:{kind:'new' as const},sourceSessionKey:undefined,observedSessionId:'session'}
     h.tabs.set('other',other)
     h.records.set('native-tab:other',{runtime:'native-cli',cli:'claude',projectPath:'/repo',adapterSessionId:'other',nativeSessionId:null,title:'Other session alias',lastActivityAt:1})
-    h.rename.mockImplementation(async request=>{other.observedSessionId='other-session';return {...request,state:'renamed' as const}})
+    h.rename.mockImplementation(async request=>{other.observedSessionId='other-session';h.entry.sessions[0].title=request.title;return {...request,state:'renamed' as const}})
     await h.adapter.renameSession(h.id,'Target native')
     expect(h.records.get('native-tab:other').title).toBe('Other session alias')
   })
@@ -238,4 +238,28 @@ describe('Native session rename admission',()=>{
     await h.adapter.renameSession(row.id,'Native title')
     expect(h.records.get(id).title).toBe(proven?'':'Legacy override')
   })
+  // 原生回执已成功，但列表仍显示旧值时必须暴露同步问题，不能再次执行改名。
+  it.each(['old-title', 'retained-title', 'missing', 'read-failure'] as const)('Rename_ClaudeStaleDisplayFails_024 %s', async reason => {
+    const h = fixture('claude'), row = (await h.adapter.listSessions())[0]
+    h.rename.mockImplementation(async request => ({ ...request, state: 'renamed' as const }))
+    h.load.mockImplementation(async () => {
+      if (reason === 'retained-title') { h.entry.sessions[0].title = 'New title'; h.entry.sessions[0].lastKnownTitle = 'Old title' }
+      if (reason === 'missing') h.entry.sessions = []
+      if (reason === 'read-failure') { h.entry.sessions[0].title = 'New title'; h.entry.sessions[0].readFailure = 'SOURCE_READ_FAILED' }
+      return h.entry
+    })
+    await expect(h.adapter.renameSession(row.id, 'New title')).rejects.toThrow('RENAME_DISPLAY_SYNC_FAILED')
+    expect(h.rename).toHaveBeenCalledTimes(1)
+  })
+  it.each([['Chinese', '长'.repeat(200), 170], ['emoji', '😀'.repeat(150), 128]] as const)('Rename_ClaudeBoundedTitleConfirms_025 %s', async (_kind, title, length) => {
+    const h = fixture('claude'), row = (await h.adapter.listSessions())[0]
+    h.load.mockImplementation(async () => {
+      h.entry.sessions[0].title = [...title].slice(0, length).join('')
+      h.entry.sessions[0].truncated = true
+      return h.entry
+    })
+    await expect(h.adapter.renameSession(row.id, title)).resolves.toBe('native-title-saved')
+    expect(h.rename).toHaveBeenCalledTimes(1)
+  })
+
 })

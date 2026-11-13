@@ -4,6 +4,22 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
+## [0.27.0-rc.8]
+
+修复
+
+- Claude 会话包含较长元数据前缀时，正确显示已保存的新名称；列表同步失败会明确提示，不再静默保留旧标题。
+
+优化
+
+- 减少 Windows 上 Codex 历史扫描和归档准备期间的重复目录遍历，保留新鲜文件读取与来源校验。
+
+重要说明
+
+- 这是预发布版本，稳定 Latest 保持不变。不自动迁移、恢复或删除数据。
+- 归档、恢复和永久删除的安全校验保持不变。Claude 和 OpenCode 永久删除仍未开放。
+- 性能测量使用隔离的合成历史，不保证真实会话的固定耗时。真实模型会话、完整安装版、native All、D20 和签名安装及返回旧版验收仍需单独验证。updater 签名不代表 Windows Authenticode。
+
 ## [0.27.0-rc.7]
 
 修复

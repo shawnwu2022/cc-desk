@@ -13,9 +13,10 @@ import { useSessionStore } from '@/stores/session'
 import type { ProjectsState } from '@/types/app'
 import { useAppStore } from '@/stores/app'
 import { useShellStore } from '@/stores/shell'
+import { useNotificationsStore } from '@/stores/notifications'
 
-const io = vi.hoisted(() => ({ projects: vi.fn(), sessions: vi.fn(), profiles: vi.fn(), registered: vi.fn(), register: vi.fn(), patchProfile: vi.fn(), getState: vi.fn(), upsertRecord: vi.fn(), setPreference: vi.fn(), scope: vi.fn(), read: vi.fn(), writeText: vi.fn(), archive: vi.fn(), nativeArchive: vi.fn(), nativeUnarchive: vi.fn(), restore: vi.fn(), open: vi.fn(), remove: vi.fn(), runChecks: vi.fn(), ptySpawn: vi.fn(), ptyInput: vi.fn(), ptyKill: vi.fn(), nativeStop: vi.fn(), getConfig: vi.fn() }))
-vi.mock('@/api/tauri', async original => ({ ...await original<object>(), runChecks: io.runChecks, ptySpawn: io.ptySpawn, ptyInput: io.ptyInput, ptyKill: io.ptyKill, getProjectsState: io.getState, upsertSessionUiRecord: io.upsertRecord, setProjectLaunchPreference: io.setPreference, updateAppConfig: vi.fn().mockResolvedValue(undefined), getAppConfig: io.getConfig, archiveSession: io.archive, nativeArchiveSession: io.nativeArchive, nativeUnarchiveSession: io.nativeUnarchive, nativeGetScope: io.scope, restoreSession: io.restore, getProjects: io.projects, getSessions: io.sessions, openInFileManager: io.open, createNativeProjectionClient: () => ({ scope: io.scope, read: io.read }), onHookEvent: async () => () => {} }))
+const io = vi.hoisted(() => ({ projects: vi.fn(), sessions: vi.fn(), profiles: vi.fn(), registered: vi.fn(), register: vi.fn(), patchProfile: vi.fn(), getState: vi.fn(), upsertRecord: vi.fn(), setPreference: vi.fn(), scope: vi.fn(), read: vi.fn(), writeText: vi.fn(), archive: vi.fn(), nativeArchive: vi.fn(), nativeUnarchive: vi.fn(), restore: vi.fn(), open: vi.fn(), remove: vi.fn(), runChecks: vi.fn(), ptySpawn: vi.fn(), ptyInput: vi.fn(), ptyKill: vi.fn(), nativeStop: vi.fn(), nativeRename: vi.fn(), getConfig: vi.fn() }))
+vi.mock('@/api/tauri', async original => ({ ...await original<object>(), runChecks: io.runChecks, ptySpawn: io.ptySpawn, ptyInput: io.ptyInput, ptyKill: io.ptyKill, getProjectsState: io.getState, upsertSessionUiRecord: io.upsertRecord, setProjectLaunchPreference: io.setPreference, updateAppConfig: vi.fn().mockResolvedValue(undefined), getAppConfig: io.getConfig, archiveSession: io.archive, nativeArchiveSession: io.nativeArchive, nativeRenameSession: io.nativeRename, nativeUnarchiveSession: io.nativeUnarchive, nativeGetScope: io.scope, restoreSession: io.restore, getProjects: io.projects, getSessions: io.sessions, openInFileManager: io.open, createNativeProjectionClient: () => ({ scope: io.scope, read: io.read }), onHookEvent: async () => () => {} }))
 vi.mock('@/api/cli', () => ({ cliListProfiles: io.profiles, cliPatchProfile: io.patchProfile }))
 vi.mock('@/api/workspace', () => ({ listRegisteredProjects: io.registered, registerProject: io.register, removeProject: io.remove }))
 vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({ writeText: io.writeText }))
@@ -313,4 +314,56 @@ describe('Final workspace review regressions', () => {
     expect(useUnifiedSessionsStore().activeSessionId).toBe(selected)
   })
 
+})
+
+// 从实际列表保存入口检查写入、目录标题和成功反馈，而非直接调用 adapter。
+it.each([['closed', 'fresh'], ['opened', 'fresh'], ['closed', 'stale'], ['opened', 'stale'], ['closed', 'missing'], ['opened', 'missing'], ['closed', 'missing-navigated'], ['closed', 'missing-selected'], ['closed', 'missing-new-request']] as const)('Rename_ClaudeListSavePublishesTitle_030 %s %s', async (state, projection) => {
+  let title = 'Original Claude title'
+  let written = false
+  io.profiles.mockResolvedValue({ revision: '7', profiles: [{ id: 'cc', revision: '7', cli: 'claude', name: 'Claude', launcher: { kind: 'native' }, programPath: { mode: 'inherit' }, defaultArgs: { mode: 'inherit' }, skipPermissions: { mode: 'inherit' }, observer: { mode: 'inherit' }, env: {} }] })
+  io.scope.mockImplementation(async target => ({ scopeId: 'scope', instanceId: 'instance', cli: 'claude', sourceRootKey: 'root', identityEpoch: '1', profileId: 'cc', profileRevision: '7', target, basis: target.kind === 'run' ? 'launch-environment' : 'configured-profile' }))
+  io.read.mockImplementation(async () => ({ state: 'ready', items: projection.startsWith('missing') && written ? [] : [{ type: 'session', projectId: 'project', sessionKey: 'root-key', nativeSessionId: 'history-id', title, titleSource: 'custom', cwd: '/repo', archived: false }] }))
+  io.nativeRename.mockImplementation(async request => {
+    written = true
+    if (projection === 'fresh') title = request.title
+    if (projection === 'missing-navigated') useShellStore().navigate('settings')
+    if (projection === 'missing-selected') useUnifiedSessionsStore().selectProjectContext('/legacy')
+    if (projection === 'missing-new-request') useShellStore().requestWorkspaceAction({ kind: 'add-project' })
+    return { ...request, state: 'renamed' }
+  })
+  const w = renderApp(); await flushPromises()
+  const catalog = useUnifiedSessionsStore()
+  let target = catalog.sessions.find(row => row.cli === 'claude')!
+  if (state === 'opened') {
+    const tabs = useNativeTabsStore()
+    const tab = tabs.create({ cli: 'claude', projectId: 'project', projectPath: '/repo', profileId: 'cc', profileRevision: '7', action: { kind: 'resume-id', nativeSessionId: 'history-id' }, sourceSessionKey: 'root-key' })
+    tabs.tab(tab.tabId)!.status = 'running'; tabs.tab(tab.tabId)!.launchRevision = '1'
+    await flushPromises(); await catalog.activateSession('native-tab:' + tab.tabId); await flushPromises()
+    target = catalog.sessions.find(row => row.id === 'native-tab:' + tab.tabId)!
+  }
+  const project = w.findAll('.project-node').find(row => row.text().includes('repo'))!
+  await project.get('.project-main').trigger('click'); await flushPromises()
+  const row = w.findAll('[data-session-row]').find(row => row.attributes('data-session-row') === target.id)!
+  await row.get('.session-overflow-trigger button').trigger('click'); await flushPromises()
+  document.querySelector<HTMLElement>('[data-item-id="rename"]')!.click(); await flushPromises()
+  await row.get('input').setValue('Renamed Claude title')
+  await row.get('.session-primary-action button').trigger('click'); await flushPromises()
+  expect(io.nativeRename).toHaveBeenCalledTimes(1)
+  if (projection === 'missing-navigated' || projection === 'missing-selected' || projection === 'missing-new-request') {
+    expect(catalog.actionFeedback).toBeNull()
+    expect(useNotificationsStore().toasts.some(toast => toast.messageKey === 'feedbackRenamed')).toBe(false)
+    return
+  }
+  if (projection !== 'fresh') {
+    expect(catalog.actionFeedback?.detailCode).toBe('RENAME_DISPLAY_SYNC_FAILED')
+    expect(w.get('[data-action-feedback]').text()).toContain(en.errorNativeRenameDisplaySync)
+    expect(w.find('.rename-input input').exists()).toBe(false)
+    if (projection === 'stale') expect(row.get('.session-name').text()).toBe('Original Claude title')
+    expect(useNotificationsStore().toasts.some(toast => toast.messageKey === 'feedbackRenamed')).toBe(false)
+    return
+  }
+  expect(catalog.actionFeedback).toBeNull()
+  expect(catalog.sessions.find(item => item.id === target.id)?.title).toBe('Renamed Claude title')
+  expect(row.get('.session-name').text()).toBe('Renamed Claude title')
+  expect(useNotificationsStore().toasts.some(toast => toast.messageKey === 'feedbackRenamed')).toBe(true)
 })

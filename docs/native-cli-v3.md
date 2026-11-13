@@ -543,6 +543,22 @@ project/key checks. Raw/picker and unproven new identities cannot infer a target
 `cli_rename_session` still rejects Run scopes. Codex official app-server
 `thread/name/set` and Claude public Agent SDK 0.3.301 `renameSession` must read back
 successfully before Desk clears matching aliases; uncertain writes are not replayed.
+Claude project history keeps ordinary short-header observations unchanged, but
+once a first cwd is proven it can defer title discovery beyond 64 KiB until all
+required headers have completed. Optional enrichment then reads an adaptive head
+and the 64 KiB tail on one file handle. It reparses that full observed head and
+checks native ID, first cwd, file size/modification and held-root validity.
+Initial header bytes, repeated head bytes (including partial-record overread),
+and tail bytes all share the existing 2 MiB/file and 512 MiB/read limits. Expanded
+head titles/timestamps remain usable when the tail contains no title. This avoids
+reading a >1 MiB title-discovery prefix twice and silently skipping a newer name.
+
+After a Claude rename receipt, each refreshed same-record projection must contain
+the exact target and display the requested title (at the history DTO’s 512-byte
+UTF-8 boundary). A retained old title, missing row, or target read failure reports
+`RENAME_DISPLAY_SYNC_FAILED` instead of a success toast; it never repeats the write.
+The current save request retains this warning if refresh removes its history row,
+without reviving feedback after navigation, selection, or a newer request.
 
 History omissions block rename only when they can conceal the requested identity.
 The per-read backend budget keeps a monotonic anonymous-omission flag and omitted
@@ -772,7 +788,7 @@ Codex 行的“原生归档”使用 authenticated `cli_archive_session`，经�
 - 历史/已停止行点击即执行原生归档，不再二次确认；异步边界仍固定目标与导航所有权。运行中行的菜单不提供归档，既有显式停止并归档请求仍须确认。后台允许已明确识别的 Legacy Claude、结构化 Native Claude/OpenCode，以及经认证 hook 观察身份且由独立 helper 核对为无关的 Codex owner；已知目标及祖先/后代、未识别准备、raw/Shell、未知 owner、关系能力不足、未收口写入和维护冻结继续阻止准入。请求 resume UUID 本身不是已观察身份，Stop 不释放 owner。永久删除仍要求所有运行时空闲。外部 writer 冲突交给官方 CLI 的锁处理，不猜测进程、不关闭无关会话。
 - Windows 专用 helper 冻结环境，核对 initialize 返回的实际 `codexHome` 和 held root，前置 read 核对 ID/cwd/header/path，随后只发一次 archive，再通过同源 `archived_sessions` 物理位置核实根。压缩 rollout 沿用安全 resolver。非 Windows 暂返回 `NATIVE_ARCHIVE_UNSUPPORTED`，不能以 Windows Job 证明其他平台后代收口。
 - 固定 `sessions` 和 `archived_sessions` 的非 reparse 目录身份；目标归档目录缺失时只在已授权操作下用 held capability 创建空目录，随后固定。助手从 suspended 启动加入本次 Job，整个进程组真正退出前保持目录、来源与 admission lease；超时、EOF、撤销及未知写不释放仍存活的后代。
-- 归档写入前由后端重新验证 held scope、profile、项目、准确原生 ID 与当前历史，前端不再先重复扫描整份历史才获得忙碌反馈。RPC 验证完成后给助手最多 2 秒 EOF 退出宽限，再终止仅属于本次操作的 Job；整个 Job 确认清空前不释放 admission。
+- 归档写入前由后端重新验证 held scope、profile、项目、准确原生 ID 与当前历史，前端不再先重复扫描整份历史才获得忙碌反馈。Windows 的单次 Codex 历史观察复用已固定的父目录能力，避免每个文件反复穿过相同日期目录；每个文件仍新鲜读取身份与元数据，完整扫描、歧义与撤销检查不变，不把旧历史缓存当作写入授权。父目录逐相对分量以不跟随 reparse point、禁止 delete-sharing 的句柄打开并核对同一句柄类型，所有祖先只保留到本次 Budget 结束；最多缓存 256 个目录，超出时走原有完整路径读取，不省略会话。RPC 验证完成后给助手最多 2 秒 EOF 退出宽限，再终止仅属于本次操作的 Job；整个 Job 确认清空前不释放 admission。
 - 官方 ACK 只代表根路径调用完成，后代可能仅记录 warning。回执限定 `rootArchived: true, descendants: "unverified"`，不宣称整棵子树都已归档。经过完整 operation/source/session 校验的回执可先发布准确根的归档状态并结束前台等待；全部已加载同根项目继续后台重读，不推断后代或外根。当前 entry 被新读取接管、失效或来源变化时回执不能覆盖，退回只读核查。后台失败保留已证明目标和来源警告；不确定结果仍等待只读核查，界面刷新失败不能再发一次归档。
 - 后端按物理根/原生 ID 保留 pending/unknown 写屏障，换 operation ID 或文档不能绕过。普通历史刷新只在 offset-zero 新观察且能取得空闲准入时尝试核对，忙时照常读取且保留屏障；续页仅复用原观察，不再协调 Unknown。同根所有 Unknown 共享一次新鲜全源授权扫描，每个目标仍独立检查身份、项目归属、歧义与归档状态，发布前重核 scope。缺失、外项目、未归档和 pending 不清除。官方 unarchive 的后端入口对该物理目标旧未知写强制执行独立只读核对，取得空闲准入并证明原生根已归档后才清屏障和继续恢复，因此丢 ACK → 刷新 → 恢复 → 再归档不会被旧屏障永久锁住。尚未证实的写始终不自动重放。
 - 旧 Desk-only 记录保持原样，不自动迁移真实会话。用户先恢复旧显示标记，再显式“原生归档”；永久删除仍只接受原生已归档根，原有预览与二次确认门不变。

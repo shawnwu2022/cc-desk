@@ -892,6 +892,10 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
       // banner; retry still requires a new explicit request and sequence.
       shell.clearWorkspaceRequest(sequence)
       const code = safeUserErrorCode(failure)
+      // 原生写入已确认；刷新丢失目标行不能吞掉当前保存请求的同步警告。
+      // 请求、导航和选中项的所有权仍由 current 校验，不向后来操作发送旧反馈。
+      if (request.kind === 'rename' && code === 'RENAME_DISPLAY_SYNC_FAILED'
+        && !catalog.sessions.some(row => row.id === request.sessionId)) ownsFeedbackSession = () => true
       if (code === 'REVISION_CONFLICT') {
         const recovery = await Promise.allSettled([projects.reload(), profiles.load(), workspace.load()])
         if (recovery.some(result => result.status === 'rejected')) {
