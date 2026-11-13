@@ -61,6 +61,7 @@ fn pin(client: bool) -> PeerPin {
 }
 fn profile() -> NativeProfile {
     NativeProfile {
+        relay_mode: transport::wss::RelayMode::Legacy,
         address: "127.0.0.1:0".parse().unwrap(),
         relay: transport::wss::RelayAdmissionIdentity::new(
             [1; 16],

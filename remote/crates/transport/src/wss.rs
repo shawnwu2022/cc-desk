@@ -16,6 +16,14 @@ pub async fn connect(
     tokio_tungstenite::WebSocketStream<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>,
     ConnectError,
 > {
+    connect_protocol(origin, address, budget, None).await
+}
+async fn connect_protocol(
+    origin: &str,
+    address: std::net::SocketAddr,
+    budget: std::time::Duration,
+    protocol: Option<&'static str>,
+) -> Result<AdmittedSocket, ConnectError> {
     if budget.is_zero() || budget > crate::MAX_IO_BUDGET {
         return Err(ConnectError::Limit);
     }
@@ -51,7 +59,7 @@ pub async fn connect(
         let socket = tokio::net::TcpStream::connect(address)
             .await
             .map_err(|_| ConnectError::Transport)?;
-        upgrade(url.as_str(), name, socket, config()).await
+        upgrade(url.as_str(), name, socket, config(), protocol).await
     })
     .await
     .map_err(|_| ConnectError::Deadline)?
@@ -79,6 +87,7 @@ async fn upgrade(
     name: rustls::pki_types::ServerName<'static>,
     socket: tokio::net::TcpStream,
     c: std::sync::Arc<rustls::ClientConfig>,
+    protocol: Option<&'static str>,
 ) -> Result<
     tokio_tungstenite::WebSocketStream<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>,
     ConnectError,
@@ -87,10 +96,28 @@ async fn upgrade(
         .connect(name, socket)
         .await
         .map_err(|_| ConnectError::Transport)?;
-    let (ws, _) =
-        tokio_tungstenite::client_async_with_config(origin, tls, Some(crate::websocket_config()))
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let mut request = origin
+        .into_client_request()
+        .map_err(|_| ConnectError::Origin)?;
+    if let Some(protocol) = protocol {
+        request.headers_mut().insert(
+            "sec-websocket-protocol",
+            protocol.parse().map_err(|_| ConnectError::Origin)?,
+        );
+    }
+    let (ws, response) =
+        tokio_tungstenite::client_async_with_config(request, tls, Some(crate::websocket_config()))
             .await
             .map_err(|_| ConnectError::Transport)?;
+    if let Some(protocol) = protocol {
+        let mut values = response.headers().get_all("sec-websocket-protocol").iter();
+        if values.next().map(|v| v.as_bytes()) != Some(protocol.as_bytes())
+            || values.next().is_some()
+        {
+            return Err(ConnectError::Admission);
+        }
+    }
     Ok(ws)
 }
 
@@ -173,6 +200,7 @@ mod tests {
                 rustls::pki_types::ServerName::try_from(host.to_owned()).unwrap(),
                 socket,
                 c,
+                None,
             )
             .await?;
             assert_eq!(
@@ -222,9 +250,11 @@ mod tests {
 
 #[path = "wss_admission.rs"]
 mod admission;
-#[cfg(any(test, feature = "test-only-loopback"))]
-pub use admission::test_only_connect_admitted_loopback;
 pub use admission::{
-    AdmittedSocket, RelayAdmissionIdentity, RelayRole, RelaySigner, SignError, SigningRequest,
-    connect_admitted,
+    AdmittedSocket, RENDEZVOUS_SUBPROTOCOL, RelayAdmissionIdentity, RelayMode, RelayRole,
+    RelaySigner, SignError, SigningRequest, connect_admitted, connect_admitted_with_mode,
+};
+#[cfg(any(test, feature = "test-only-loopback"))]
+pub use admission::{
+    test_only_connect_admitted_loopback, test_only_connect_admitted_loopback_with_mode,
 };

@@ -70,3 +70,7 @@ HostOpen11 的 named OpenKey 与部分失败由永久拦截的模拟 API 验证�
 HostDriver8 与 NativeRemote019 覆盖自主一次登记、原线程/尾门保管、失败/退出，以及原批准→Existing公开匿名CNG→真实隔离Relay/TLS→撤销/join。019还断言异源/重复请求无原批准副作用、到期通知前已撤销且controller锁可用、查询零clock增量。核心阻塞测试使用合成回调，不把它称为真实 GrantClock 阻塞验收；Unknown负向子进程退出不是退休。
 
 最终证据按两版明确归属：冻结1完成广矩阵/default/client-only，原产物已保存副本；冻结2仅移动HostDriver002已有Pending采样块，其余源码不变，再跑严格Clippy、构建、Driver8与019。哈希、精确计数与差异证明见计划“Controller 保管的准备与登记驱动片”，不称完整矩阵由一个最终产物运行。生产配置/应用触发/start IPC/UI、实际用户key和真实本机对话框仍未接入或验收，默认无配置仍Locked。
+
+## 显式 relay 会合模式
+
+批准描述现包含并展示 `relay_mode`，注册来源冻结该值，补充签名材料不能改变它。Legacy 仍按 Accepted 放行；RendezvousV1 必须完成精确子协议回显和同 tunnel Join/Ready，才进入 Endpoint arm/mux。全部等待消耗原 setup end 与批准 cap，Ready 不代替端到端 pin、BrowserProfile 或 grant。协议与验收边界见 [RENDEZVOUS-V1](../remote/RENDEZVOUS-V1.md)。

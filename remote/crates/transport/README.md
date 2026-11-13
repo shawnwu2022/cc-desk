@@ -81,3 +81,5 @@ public fixture CA, and accepts no caller roots/config. Only tests and finite loc
 cross-repository qualification use it. Production `connect`/`connect_admitted` always
 use Mozilla roots, including when this test feature is compiled. Never enable it in
 a shipping app. No public origin, mobile bridge or release acceptance is inferred.
+
+显式任意顺序会合接线见 [RENDEZVOUS-V1](../../RENDEZVOUS-V1.md)；旧 `connect_admitted` 继续使用 v1，新模式必须由批准来源显式选择。

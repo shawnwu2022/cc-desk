@@ -246,3 +246,6 @@ async fn admitted_endpoint_rejects_unsafe_or_noncanonical_origin_before_tcp() {
             .is_err()
     );
 }
+
+#[path = "wss_rendezvous_tests.rs"]
+mod rendezvous;

@@ -16,6 +16,7 @@ mod tests;
 pub struct NativeProfile {
     pub address: SocketAddr,
     pub relay: RelayAdmissionIdentity,
+    pub relay_mode: transport::wss::RelayMode,
     pub tunnel: [u8; 16],
     pub local: LocalIdentity,
     pub host_pin: PeerPin,
@@ -68,11 +69,13 @@ pub async fn connect_native(
         .checked_add(profile.setup_budget)
         .ok_or(BootstrapError::Bounds)?;
     let socket = {
-        let connect = transport::wss::connect_admitted(
+        let connect = transport::wss::connect_admitted_with_mode(
             profile.binding.origin.as_str(),
             profile.address,
             remaining(end)?,
             &profile.relay,
+            profile.relay_mode,
+            profile.tunnel,
         );
         tokio::pin!(connect);
         tokio::select! {biased;_=stop.changed()=>return Err(BootstrapError::Cancelled),result=&mut connect=>result.map_err(|_|BootstrapError::Relay)?}

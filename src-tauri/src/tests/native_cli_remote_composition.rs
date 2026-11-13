@@ -330,14 +330,31 @@ async fn network_client(
     ),
     &'static str,
 > {
+    network_client_mode(relay, scope, cc_desk_remote_transport::wss::RelayMode::Legacy).await
+}
+async fn network_client_mode(
+    relay: &NetworkRelayFixture,
+    scope: cc_desk_remote_record::grant::SessionScope,
+    mode: cc_desk_remote_transport::wss::RelayMode,
+) -> Result<
+    (
+        cc_desk_remote_client::NativeClient,
+        cc_desk_remote_transport::OwnedTunnel,
+        cc_desk_remote_security::CancelHandle,
+    ),
+    &'static str,
+> {
     use cc_desk_remote_security::*;
     let budget = Duration::from_secs(8);
     let end = tokio::time::Instant::now() + budget;
-    let socket = cc_desk_remote_transport::wss::test_only_connect_admitted_loopback(
+    let remaining = || end.checked_duration_since(tokio::time::Instant::now()).filter(|left| !left.is_zero()).ok_or("phone setup deadline");
+    let socket = cc_desk_remote_transport::wss::test_only_connect_admitted_loopback_with_mode(
         &relay.origin,
         relay.address,
         budget,
         &network_relay_identity(&relay.origin, false),
+        mode,
+        [3; 16],
     )
     .await
     .map_err(|_| "phone relay")?;
@@ -352,7 +369,7 @@ async fn network_client(
             Unbound::new(stream),
             network_local(true),
             network_pin(false),
-            budget,
+            remaining()?,
             token,
         )
         .await
@@ -377,7 +394,7 @@ async fn network_client(
         let mut signer = NetworkBrowserSigner;
         let mut state = ClientGrantState::new(Arc::new(|| Ok(1000)));
         let mut channel = channel
-            .grant_client(&trust, &mut signer, &mut state, budget)
+            .grant_client(&trust, &mut signer, &mut state, remaining()?)
             .await
             .map_err(|error| {
                 eprintln!("TEST_ONLY_PHONE_GRANT_ERROR {error:?}");
@@ -451,6 +468,7 @@ fn network_inputs(
         address: relay.address,
         relay: network_relay_identity(&relay.origin, true),
         tunnel: [3; 16],
+        relay_mode: cc_desk_remote_transport::wss::RelayMode::Legacy,
         local: network_local(false),
         phone_pin: network_pin(true),
         binding: HostSnapshot {
@@ -1979,3 +1997,6 @@ async fn NativeRemote_LiveSourceClockReentryRejectsSecondAttempt_010() {
 #[cfg(windows)]
 #[path = "native_cli_remote_approval_keys.rs"]
 mod approval_keys;
+
+#[path = "native_cli_remote_rendezvous.rs"]
+mod rendezvous;

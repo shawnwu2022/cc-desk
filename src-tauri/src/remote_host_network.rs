@@ -83,6 +83,7 @@ pub(crate) struct ApprovedHostInputs {
     pub(crate) address: SocketAddr,
     pub(crate) relay: RelayAdmissionIdentity,
     pub(crate) tunnel: [u8; 16],
+    pub(crate) relay_mode: transport::wss::RelayMode,
     pub(crate) local: LocalIdentity,
     pub(crate) phone_pin: PeerPin,
     pub(crate) binding: HostSnapshot,
@@ -112,6 +113,7 @@ pub(crate) struct HostAttemptMaterials {
 struct HostSourceDescription {
     address: SocketAddr,
     tunnel: [u8; 16],
+    relay_mode: transport::wss::RelayMode,
     phone_pin: PeerPin,
     binding: HostSnapshot,
     browser: BrowserProfile,
@@ -124,7 +126,7 @@ struct HostSourceDescription {
 }
 impl HostSourceDescription {
     fn inputs(&self, material: HostAttemptMaterials) -> ApprovedHostInputs {
-        ApprovedHostInputs { #[cfg(windows)] stages: material.stages, address: self.address, relay: material.relay, tunnel: self.tunnel, local: material.local, phone_pin: self.phone_pin.clone(), binding: self.binding.clone(), browser: self.browser.clone(), issuer: self.issuer.clone(), principal: self.principal, policy: NativeGrantPolicy { scope: self.policy.scope.clone(), role: self.policy.role, duration: self.policy.duration }, source: self.source.clone(), setup_budget: self.setup_budget, io_budget: self.io_budget,
+        ApprovedHostInputs { #[cfg(windows)] stages: material.stages, address: self.address, relay: material.relay, tunnel: self.tunnel, relay_mode: self.relay_mode, local: material.local, phone_pin: self.phone_pin.clone(), binding: self.binding.clone(), browser: self.browser.clone(), issuer: self.issuer.clone(), principal: self.principal, policy: NativeGrantPolicy { scope: self.policy.scope.clone(), role: self.policy.role, duration: self.policy.duration }, source: self.source.clone(), setup_budget: self.setup_budget, io_budget: self.io_budget,
             #[cfg(test)] outer_accepted: material.outer_accepted,
             #[cfg(test)] termination: material.termination,
         }
@@ -675,21 +677,25 @@ async fn run_attempt(
         }
         let socket = match connector {
             Connector::WebPki => {
-                transport::wss::connect_admitted(
+                transport::wss::connect_admitted_with_mode(
                     inputs.binding.origin.as_str(),
                     inputs.address,
                     budget,
                     &inputs.relay,
+                    inputs.relay_mode,
+                    inputs.tunnel,
                 )
                 .await
             }
             #[cfg(test)]
             Connector::PublicLoopbackFixture => {
-                transport::wss::test_only_connect_admitted_loopback(
+                transport::wss::test_only_connect_admitted_loopback_with_mode(
                     inputs.binding.origin.as_str(),
                     inputs.address,
                     budget,
                     &inputs.relay,
+                    inputs.relay_mode,
+                    inputs.tunnel,
                 )
                 .await
             }
@@ -878,11 +884,11 @@ impl RemoteHostService {
             || approval.as_ref().is_some_and(NativeApprovalStop::is_invalid) {
             return Err(Box::new((HostNetworkError::Locked, inputs)));
         }
-        let ApprovedHostInputs { #[cfg(windows)] stages, address, relay, tunnel, local, phone_pin, binding, browser, issuer, principal, policy, source, setup_budget, io_budget,
+        let ApprovedHostInputs { #[cfg(windows)] stages, address, relay, tunnel, relay_mode, local, phone_pin, binding, browser, issuer, principal, policy, source, setup_budget, io_budget,
             #[cfg(test)] outer_accepted,
             #[cfg(test)] termination,
         } = inputs;
-        let registration = Arc::new(RegisteredHostSource { description: HostSourceDescription { address, tunnel, phone_pin, binding, browser, issuer, principal, policy, source, setup_budget, io_budget }, origin, live: AtomicBool::new(true), approval });
+        let registration = Arc::new(RegisteredHostSource { description: HostSourceDescription { address, tunnel, relay_mode, phone_pin, binding, browser, issuer, principal, policy, source, setup_budget, io_budget }, origin, live: AtomicBool::new(true), approval });
         state.source_slot.fresh = Some(HostAttemptMaterials { #[cfg(windows)] stages, local, relay, #[cfg(test)] outer_accepted, #[cfg(test)] termination });
         state.source_slot.registration = Some(registration.clone());
         Ok(HostSourceToken(Arc::downgrade(&registration)))

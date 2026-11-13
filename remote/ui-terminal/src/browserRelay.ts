@@ -1,12 +1,15 @@
 import type {BrowserTlsTransport} from './browserTlsWorker.ts';
 export type BrowserRelaySigningRequest=Readonly<{origin:string;keyId:Uint8Array;role:2;transcript:Uint8Array}>;
 export type BrowserRelayIdentity=Readonly<{keyId:Uint8Array;sign:(request:BrowserRelaySigningRequest,signal:AbortSignal)=>Promise<Uint8Array>}>;
-export type BrowserRelaySocket=Pick<WebSocket,'readyState'|'binaryType'|'bufferedAmount'|'send'|'close'|'addEventListener'|'removeEventListener'>;
-export function createBrowserRelay(options:Readonly<{origin:string;tunnel:Uint8Array;identity:BrowserRelayIdentity;setupDeadline:number;ioBudgetMs:number;socket:BrowserRelaySocket;signal?:AbortSignal}>):Readonly<{ready:Promise<BrowserTlsTransport>;close():void;waitClosed():Promise<void>}>{
+export const RENDEZVOUS_SUBPROTOCOL='cc-desk-relay-rendezvous-v1';
+export type BrowserRelayMode='legacy'|'rendezvous-v1';
+export type BrowserRelaySocket=Pick<WebSocket,'readyState'|'binaryType'|'bufferedAmount'|'send'|'close'|'addEventListener'|'removeEventListener'>&Readonly<{protocol?:string}>;
+export function createBrowserRelay(options:Readonly<{origin:string;tunnel:Uint8Array;identity:BrowserRelayIdentity;setupDeadline:number;ioBudgetMs:number;mode?:BrowserRelayMode;socket:BrowserRelaySocket;signal?:AbortSignal}>):Readonly<{ready:Promise<BrowserTlsTransport>;close():void;waitClosed():Promise<void>}>{
  const now=()=>performance.timeOrigin+performance.now(),{origin,socket,setupDeadline,ioBudgetMs,signal}=options;
  const url=new URL(origin),tunnel=Uint8Array.from(options.tunnel),keyId=Uint8Array.from(options.identity.keyId),sign=options.identity.sign;
  if(origin.length>512||!/^[\x00-\x7f]+$/.test(origin)||origin.includes('%')||origin.includes('\\')||url.href!==origin||url.protocol!=='wss:'||url.username||url.password||url.search||url.hash||!url.hostname||url.port==='0'||tunnel.length!==16||!tunnel.some(Boolean)||keyId.length!==16||typeof sign!=='function'||!Number.isFinite(setupDeadline)||setupDeadline<=now()||setupDeadline>now()+10000||!Number.isInteger(ioBudgetMs)||ioBudgetMs<1||ioBudgetMs>30000)throw Error('browser relay configuration');
- const controller=new AbortController();let phase:'challenge'|'signing'|'accepted'|'data'|'closed'='challenge',failed=false,physicalClosed=socket.readyState===3;
+ const mode=options.mode??'legacy';if(mode!=='legacy'&&mode!=='rendezvous-v1')throw Error('browser relay mode');
+ const controller=new AbortController();let phase:'challenge'|'signing'|'accepted'|'joining'|'data'|'closed'='challenge',failed=false,physicalClosed=socket.readyState===3;
  let signer:Promise<void>|undefined,write:Promise<void>|undefined,read:{maximum:number;resolve:(v:Uint8Array|null)=>void;reject:(e:Error)=>void}|undefined;
  let queue:Uint8Array[]=[],queuedBytes=0,offset=0,readDeadline=setupDeadline,timer:ReturnType<typeof setTimeout>|undefined;
  let resolveReady!:(v:BrowserTlsTransport)=>void,rejectReady!:(e:Error)=>void,resolveClosed!:()=>void;
@@ -36,11 +39,16 @@ export function createBrowserRelay(options:Readonly<{origin:string;tunnel:Uint8A
   if(phase==='closed')return;if(now()>=readDeadline)throw Error('browser relay deadline');
   const data=(event as MessageEvent).data;if(!(data instanceof ArrayBuffer)||data.byteLength>65536)throw Error('browser relay binary bounds');const bytes=new Uint8Array(data);
   if(phase==='challenge'){
+   if(mode==='rendezvous-v1'&&socket.protocol!==RENDEZVOUS_SUBPROTOCOL)throw Error('browser relay negotiation');
    if(bytes.length!==66||bytes[0]!==1||bytes[1]!==0)throw Error('browser relay challenge');phase='signing';
    const prefix=new TextEncoder().encode('CC_DESK_RELAY_ADMISSION\0\x01'),name=new TextEncoder().encode(origin),transcript=new Uint8Array(prefix.length+2+name.length+64+16+1);transcript.set(prefix);new DataView(transcript.buffer).setUint16(prefix.length,name.length);transcript.set(name,prefix.length+2);let p=prefix.length+2+name.length;transcript.set(bytes.subarray(2),p);p+=64;transcript.set(keyId,p);transcript[p+16]=2;
    const operation=Promise.resolve().then(()=>{if(phase!=='signing'||controller.signal.aborted||now()>=setupDeadline)throw Error('browser relay signer cancelled');return sign(Object.freeze({origin,keyId:keyId.slice(),role:2,transcript}),controller.signal);}).then(signature=>{if(phase!=='signing'||now()>=setupDeadline)return;if(!(signature instanceof Uint8Array)||signature.length!==64||socket.readyState!==1||socket.bufferedAmount+83>131072)throw Error('browser relay proof');const proof=new Uint8Array([1,1,...keyId,2,...signature]);phase='accepted';socket.send(proof);}).catch(()=>stop(Error('browser relay signer'))).finally(()=>{signer=undefined;retire();});signer=operation;return;
   }
-  if(phase==='accepted'){if(bytes.length!==2||bytes[0]!==1||bytes[1]!==2)throw Error('browser relay acceptance');phase='data';readDeadline=now()+ioBudgetMs;arm();resolveReady(transport);return;}
+  if(phase==='accepted'){if(bytes.length!==2||bytes[0]!==1||bytes[1]!==2)throw Error('browser relay acceptance');
+   if(mode==='rendezvous-v1'){if(socket.protocol!==RENDEZVOUS_SUBPROTOCOL||socket.readyState!==1||socket.bufferedAmount+18>131072)throw Error('browser relay join');phase='joining';socket.send(new Uint8Array([2,0,...tunnel]));return;}
+   phase='data';readDeadline=now()+ioBudgetMs;arm();resolveReady(transport);return;
+  }
+  if(phase==='joining'){if(bytes.length!==18||bytes[0]!==2||bytes[1]!==1||!tunnel.every((v,i)=>bytes[i+2]===v))throw Error('browser relay readiness');phase='data';readDeadline=now()+ioBudgetMs;arm();resolveReady(transport);return;}
   if(phase!=='data'||bytes.length<4||bytes[0]!==1||bytes[1]!==1)throw Error('browser relay outer header');const view=new DataView(bytes.buffer),count=view.getUint16(2);if(count>32)throw Error('browser relay outer count');let cursor=4;const frames:Uint8Array[]=[];
   for(let i=0;i<count;i++){if(cursor+20>bytes.length)throw Error('browser relay outer length');if(!tunnel.every((v,j)=>bytes[cursor+j]===v)||frames.length!==0)throw Error('browser relay route');const end=cursor+20+view.getUint32(cursor+16);if(end>bytes.length)throw Error('browser relay payload length');frames.push(bytes.subarray(cursor+20,end));cursor=end;}
   if(cursor!==bytes.length||queue.length+frames.length>4||queuedBytes+frames.reduce((n,b)=>n+b.length,0)>65536)throw Error('browser relay incoming backpressure');for(const frame of frames)if(frame.length){queue.push(frame.slice());queuedBytes+=frame.length;}readDeadline=now()+ioBudgetMs;arm();deliver();

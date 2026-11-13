@@ -787,3 +787,5 @@ bytes. This does not qualify browser WebPKI, real WebAuthn, phone suspend, or a
 real CLI. Separate application composition uses an explicitly self-owned test
 Node process and original native writer/pin/rebind/retirement. Its permanent
 process admission requires each exact composition test to run in a fresh process.
+
+显式 relay 会合模式、批准输入冻结和 Ready 前禁止内层 TLS 的边界见 [RENDEZVOUS-V1](RENDEZVOUS-V1.md)。Ready 不代替本文件的 BrowserProfile 或最终 grant。

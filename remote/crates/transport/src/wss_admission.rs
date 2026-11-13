@@ -2,6 +2,12 @@
 use super::ConnectError;
 use std::{future::Future, net::SocketAddr, pin::Pin, sync::Arc, time::Duration};
 use tokio::time::Instant;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RelayMode {
+    Legacy,
+    RendezvousV1,
+}
+pub const RENDEZVOUS_SUBPROTOCOL: &str = "cc-desk-relay-rendezvous-v1";
 pub type AdmittedSocket =
     tokio_tungstenite::WebSocketStream<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>;
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -48,7 +54,9 @@ pub struct RelayAdmissionIdentity {
 }
 impl RelayAdmissionIdentity {
     /// 只读公开准入元组，签名器和挑战保持不透明。
-    pub fn binding(&self) -> ([u8;16], RelayRole) { (self.key_id, self.role) }
+    pub fn binding(&self) -> ([u8; 16], RelayRole) {
+        (self.key_id, self.role)
+    }
     pub fn new(key_id: [u8; 16], role: RelayRole, signer: Arc<dyn RelaySigner>) -> Self {
         Self {
             key_id,
@@ -88,13 +96,34 @@ pub async fn connect_admitted(
     budget: Duration,
     identity: &RelayAdmissionIdentity,
 ) -> Result<AdmittedSocket, ConnectError> {
+    connect_admitted_with_mode(
+        origin,
+        address,
+        budget,
+        identity,
+        RelayMode::Legacy,
+        [0; 16],
+    )
+    .await
+}
+/// 显式模式与原批准路由；会合不授予 endpoint/grant 权限，也不自动降级。
+pub async fn connect_admitted_with_mode(
+    origin: &str,
+    address: SocketAddr,
+    budget: Duration,
+    identity: &RelayAdmissionIdentity,
+    mode: RelayMode,
+    tunnel: [u8; 16],
+) -> Result<AdmittedSocket, ConnectError> {
     endpoint(origin, address, budget)?;
+    validate_route(mode, tunnel)?;
     let deadline = Instant::now()
         .checked_add(budget)
         .ok_or(ConnectError::Limit)?;
     crate::deadline::bounded(deadline, async {
-        let ws = super::connect(origin, address, budget).await?;
-        admit(ws, origin, identity, deadline).await
+        let ws = super::connect_protocol(origin, address, budget, subprotocol(mode)).await?;
+        let ws = admit(ws, origin, identity, deadline).await?;
+        ready(ws, mode, tunnel, deadline).await
     })
     .await
     .map_err(|_| ConnectError::Deadline)?
@@ -161,7 +190,28 @@ pub async fn test_only_connect_admitted_loopback(
     budget: Duration,
     identity: &RelayAdmissionIdentity,
 ) -> Result<AdmittedSocket, ConnectError> {
+    test_only_connect_admitted_loopback_with_mode(
+        origin,
+        address,
+        budget,
+        identity,
+        RelayMode::Legacy,
+        [0; 16],
+    )
+    .await
+}
+#[cfg(any(test, feature = "test-only-loopback"))]
+#[doc(hidden)]
+pub async fn test_only_connect_admitted_loopback_with_mode(
+    origin: &str,
+    address: SocketAddr,
+    budget: Duration,
+    identity: &RelayAdmissionIdentity,
+    mode: RelayMode,
+    tunnel: [u8; 16],
+) -> Result<AdmittedSocket, ConnectError> {
     let url = endpoint(origin, address, budget)?;
+    validate_route(mode, tunnel)?;
     if !address.ip().is_loopback() || url.host_str() != Some("foobar.com") {
         return Err(ConnectError::Origin);
     }
@@ -185,9 +235,11 @@ pub async fn test_only_connect_admitted_loopback(
             rustls::pki_types::ServerName::try_from("foobar.com").expect("fixed test name"),
             socket,
             super::with_roots(roots),
+            subprotocol(mode),
         )
         .await?;
-        admit(ws, origin, identity, deadline).await
+        let ws = admit(ws, origin, identity, deadline).await?;
+        ready(ws, mode, tunnel, deadline).await
     })
     .await
     .map_err(|_| ConnectError::Deadline)?
@@ -195,3 +247,45 @@ pub async fn test_only_connect_admitted_loopback(
 #[cfg(test)]
 #[path = "wss_admission_tests.rs"]
 mod tests;
+
+fn subprotocol(mode: RelayMode) -> Option<&'static str> {
+    match mode {
+        RelayMode::Legacy => None,
+        RelayMode::RendezvousV1 => Some(RENDEZVOUS_SUBPROTOCOL),
+    }
+}
+fn validate_route(mode: RelayMode, tunnel: [u8; 16]) -> Result<(), ConnectError> {
+    if mode == RelayMode::RendezvousV1 && tunnel == [0; 16] {
+        Err(ConnectError::Origin)
+    } else {
+        Ok(())
+    }
+}
+async fn ready(
+    mut ws: AdmittedSocket,
+    mode: RelayMode,
+    tunnel: [u8; 16],
+    deadline: Instant,
+) -> Result<AdmittedSocket, ConnectError> {
+    if mode == RelayMode::Legacy {
+        return Ok(ws);
+    }
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+    let mut join = vec![2, 0];
+    join.extend_from_slice(&tunnel);
+    crate::deadline::bounded(deadline, ws.send(Message::Binary(join.into())))
+        .await
+        .map_err(|_| ConnectError::Deadline)?
+        .map_err(|_| ConnectError::Admission)?;
+    let response = crate::deadline::bounded(deadline, ws.next())
+        .await
+        .map_err(|_| ConnectError::Deadline)?
+        .ok_or(ConnectError::Admission)?
+        .map_err(|_| ConnectError::Admission)?;
+    if !matches!(response,Message::Binary(ref bytes) if bytes.len()==18 && bytes[..2]==[2,1] && bytes[2..]==tunnel)
+    {
+        return Err(ConnectError::Admission);
+    }
+    Ok(ws)
+}

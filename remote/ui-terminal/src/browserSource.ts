@@ -1,6 +1,6 @@
 import {approvedBrowserInputs,type ApprovedBrowserInputs} from './browserEntry.ts';
 import type {TerminalConnectionSource} from './connectionSource.ts';
-import {createBrowserRelay} from './browserRelay.ts';
+import {createBrowserRelay,RENDEZVOUS_SUBPROTOCOL} from './browserRelay.ts';
 import {serveBrowserTransport} from './browserTransport.ts';
 import {createBrowserTlsSignerBroker} from './browserTlsSigner.ts';
 import {createBrowserGrantBroker} from './browserGrant.ts';
@@ -27,7 +27,7 @@ export function browserConnectionSource(inputs:ApprovedBrowserInputs|undefined):
   signal.addEventListener('abort',abort,{once:true});source.addEventListener('visibilitychange',lifecycle);source.addEventListener('freeze',abort);globalThis.addEventListener('pagehide',abort);
   const expire=()=>{if(performance.timeOrigin+performance.now()<deadline){setupTimer=setTimeout(expire,Math.max(0,deadline-performance.timeOrigin-performance.now()));return;}void close();};setupTimer=setTimeout(expire,Math.max(0,deadline-performance.timeOrigin-performance.now()));
   try{
-   relay=createBrowserRelay({origin:approved.relay.endpoint,tunnel:approved.relay.tunnel,identity:approved.relay.identity,setupDeadline:deadline,ioBudgetMs:30000,socket:new WebSocket(approved.relay.endpoint),signal:controller.signal});
+   relay=createBrowserRelay({origin:approved.relay.endpoint,tunnel:approved.relay.tunnel,identity:approved.relay.identity,setupDeadline:deadline,ioBudgetMs:30000,mode:approved.relay.mode,socket:approved.relay.mode==='rendezvous-v1'?new WebSocket(approved.relay.endpoint,RENDEZVOUS_SUBPROTOCOL):new WebSocket(approved.relay.endpoint),signal:controller.signal});
    const wire=await relay.ready;if(controller.signal.aborted)throw Error('browser entry cancelled');
    tls=createBrowserTlsSignerBroker(approved.profile,{timeoutMs:10000,setupDeadline:deadline,signal:controller.signal});
    grant=createBrowserGrantBroker(approved.profile,{configuration:approved.grant,present:approved.present,signal:controller.signal});

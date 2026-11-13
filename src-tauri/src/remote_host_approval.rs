@@ -217,6 +217,7 @@ pub(crate) struct HostApprovalDescription {
     pub relay_binding: ([u8; 16], cc_desk_remote_transport::wss::RelayRole),
     pub address: std::net::SocketAddr,
     pub tunnel: [u8; 16],
+    pub relay_mode: cc_desk_remote_transport::wss::RelayMode,
     pub phone_pin: PeerPin,
     pub binding: HostSnapshot,
     pub browser: BrowserProfile,
@@ -360,8 +361,8 @@ fn public_text(value: &str) -> String {
 impl HostApprovalDescription {
     fn render(&self) -> String {
         let browser = self.browser.display_metadata();
-        format!("Allow one remote connection for this running session, for at most five minutes (earlier policy limits apply). No automatic reconnect.\nRoute: {}\nTunnel: {:02x?}\nOrigin: {}\nSession: {}\nRun: {}\nGeneration: {}\nRole: {:?}; grant duration: {:?}\nPhone endpoint: {:02x?}\nBrowser origin: {}; RP: {}\nCredential fingerprint: {:02x?}\nBrowser key fingerprint: {:02x?}\nBackup eligible: {}; allow backed-up: {}\nIssuer identity: {:02x?}\nPrincipal: {:02x?}\nActivation: {:02x?}\nEpochs host/client/policy/issuer: {}/{}/{}/{}; incarnation: {}\nSetup/IO budgets: {:?}/{:?}",
-            self.address, self.tunnel, self.binding.origin.as_str(), public_text(&self.policy.scope.session), public_text(&self.policy.scope.run), public_text(&self.policy.scope.generation), self.policy.role, self.policy.duration, self.phone_pin.endpoint_id(), browser.origin, browser.rp_id, browser.credential_fingerprint, browser.key_fingerprint, browser.backup_eligible, browser.allow_backed_up, self.issuer.endpoint_id(cc_desk_remote_security::Role::Host), self.principal, self.binding.activation, self.binding.host_key_epoch, self.binding.client_key_epoch, self.binding.policy_epoch, self.binding.issuer_epoch, self.binding.incarnation, self.setup_budget, self.io_budget)
+        format!("Allow one remote connection for this running session, for at most five minutes (earlier policy limits apply). No automatic reconnect.\nRoute: {}\nRelay mode: {:?}\nTunnel: {:02x?}\nOrigin: {}\nSession: {}\nRun: {}\nGeneration: {}\nRole: {:?}; grant duration: {:?}\nPhone endpoint: {:02x?}\nBrowser origin: {}; RP: {}\nCredential fingerprint: {:02x?}\nBrowser key fingerprint: {:02x?}\nBackup eligible: {}; allow backed-up: {}\nIssuer identity: {:02x?}\nPrincipal: {:02x?}\nActivation: {:02x?}\nEpochs host/client/policy/issuer: {}/{}/{}/{}; incarnation: {}\nSetup/IO budgets: {:?}/{:?}",
+            self.address, self.relay_mode, self.tunnel, self.binding.origin.as_str(), public_text(&self.policy.scope.session), public_text(&self.policy.scope.run), public_text(&self.policy.scope.generation), self.policy.role, self.policy.duration, self.phone_pin.endpoint_id(), browser.origin, browser.rp_id, browser.credential_fingerprint, browser.key_fingerprint, browser.backup_eligible, browser.allow_backed_up, self.issuer.endpoint_id(cc_desk_remote_security::Role::Host), self.principal, self.binding.activation, self.binding.host_key_epoch, self.binding.client_key_epoch, self.binding.policy_epoch, self.binding.issuer_epoch, self.binding.incarnation, self.setup_budget, self.io_budget)
     }
 }
 impl NativeHostApproval {
@@ -554,6 +555,7 @@ impl NativeHostApproval {
             address,
             relay,
             tunnel,
+            relay_mode,
             local,
             phone_pin,
             binding,
@@ -573,6 +575,7 @@ impl NativeHostApproval {
             relay_binding: relay.binding(),
             address,
             tunnel,
+            relay_mode,
             phone_pin,
             binding,
             browser,
@@ -890,6 +893,7 @@ impl ActivationTicket {
             address: d.address,
             relay,
             tunnel: d.tunnel,
+            relay_mode: d.relay_mode,
             local,
             phone_pin: d.phone_pin,
             binding: d.binding,
