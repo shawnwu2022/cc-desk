@@ -773,6 +773,14 @@ impl Drop for RequestUnwindRevocation {
         }
     }
 }
+enum KeyFactory {
+    Legacy(Box<dyn FnOnce() -> Result<NativeOwnedSoftwareKey, CryptoError> + Send>),
+    #[cfg(feature = "remote-host")]
+    Host {
+        opener: super::host::OpenerMailbox,
+        cap: Instant,
+    },
+}
 struct WorkerEnd {
     key: Option<KeyEnd>,
     normal: bool,
@@ -874,6 +882,54 @@ impl KeyCustodian {
         hooks: WorkerHooks,
         revocation: Option<Arc<NativeRevocation>>,
     ) -> Result<(Self, KeyRequestHandle, KeyStart), SignFailure> {
+        Self::prepare_factory(
+            KeyFactory::Legacy(Box::new(factory)),
+            purpose,
+            spki,
+            hooks,
+            revocation,
+        )
+    }
+    #[cfg(feature = "remote-host")]
+    pub(super) fn prepare_host(
+        opener: super::host::OpenerMailbox,
+        purpose: SigningPurpose,
+        spki: Vec<u8>,
+        token: Arc<NativeRevocation>,
+        cap: Instant,
+    ) -> Result<(Self, KeyRequestHandle, KeyStart), SignFailure> {
+        Self::prepare_factory(
+            KeyFactory::Host { opener, cap },
+            purpose,
+            spki,
+            WorkerHooks::default(),
+            Some(token),
+        )
+    }
+    #[cfg(all(test, feature = "remote-host"))]
+    pub(super) fn prepare_host_for_test(
+        opener: super::host::OpenerMailbox,
+        purpose: SigningPurpose,
+        spki: Vec<u8>,
+        token: Arc<NativeRevocation>,
+        cap: Instant,
+        hooks: WorkerHooks,
+    ) -> Result<(Self, KeyRequestHandle, KeyStart), SignFailure> {
+        Self::prepare_factory(
+            KeyFactory::Host { opener, cap },
+            purpose,
+            spki,
+            hooks,
+            Some(token),
+        )
+    }
+    fn prepare_factory(
+        factory: KeyFactory,
+        purpose: SigningPurpose,
+        spki: Vec<u8>,
+        hooks: WorkerHooks,
+        revocation: Option<Arc<NativeRevocation>>,
+    ) -> Result<(Self, KeyRequestHandle, KeyStart), SignFailure> {
         if spki.len() != 91 {
             if let Some(token) = &revocation {
                 token.revoke();
@@ -920,6 +976,15 @@ impl KeyCustodian {
                         normal: true,
                     };
                 }
+                let factory = match factory {
+                    KeyFactory::Legacy(factory) => factory,
+                    #[cfg(feature = "remote-host")]
+                    KeyFactory::Host { opener, cap } => {
+                        return run_host_key(
+                            opener, cap, &original, receive, purpose, &spki, hooks,
+                        );
+                    }
+                };
                 let mut key = match factory() {
                     Ok(key) => key,
                     Err(_) => {
@@ -1043,6 +1108,101 @@ impl Drop for KeyCustodian {
         }
     }
 }
+
+// Host 原 slot 位于 catch 外；loader 借用它，Err/panic 均不先析构 partial。
+#[cfg(feature = "remote-host")]
+fn run_host_key(
+    opener: super::host::OpenerMailbox,
+    cap: Instant,
+    shared: &Shared,
+    receive: Receiver<Command>,
+    purpose: SigningPurpose,
+    spki: &[u8],
+    mut hooks: WorkerHooks,
+) -> WorkerEnd {
+    #[cfg(not(test))]
+    let _ = &mut hooks;
+    let token = shared.revocation.as_ref().expect("Host token");
+    let mut key = NativeOwnedSoftwareKey {
+        provider: Default::default(),
+        key: Default::default(),
+        approved_purpose: purpose,
+        approved_spki: spki.try_into().expect("validated bound"),
+        silent_metadata: true,
+        worker: std::thread::current().id(),
+        unknown: false,
+        _not_send_or_sync: Default::default(),
+        #[cfg(test)]
+        free_effect: None,
+        #[cfg(test)]
+        mock_api: None,
+    };
+    #[cfg(test)]
+    let mut fixture = false;
+    let opened = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if token.is_revoked() || Instant::now() >= cap {
+            return Err(CryptoError::Closed);
+        }
+        let original = opener.lock().take().ok_or(CryptoError::Closed)?;
+        match original {
+            super::host::Opener::Existing(loader) => loader.fill(&mut key, token, cap),
+            #[cfg(test)]
+            super::host::Opener::Fixture(factory) => {
+                fixture = true;
+                key = factory()?;
+                Ok(())
+            }
+        }
+    }));
+    let mut normal = opened.is_ok();
+    #[cfg(test)]
+    if fixture && !matches!(&opened, Ok(Ok(()))) {
+        normal = false;
+    }
+    let had_native = key.provider.0 != 0 || key.key.0 != 0;
+    if !matches!(&opened, Ok(Ok(()))) {
+        shared.revoke();
+        let mut control = shared.control.lock();
+        control.closing = true;
+        control.unknown |= !normal;
+    }
+    #[cfg(test)]
+    let after_free = hooks.after_free.take();
+    if matches!(&opened, Ok(Ok(()))) {
+        normal = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_requests(&mut key, shared, receive, purpose, spki, hooks);
+        }))
+        .is_ok();
+        if !normal {
+            shared.control.lock().unknown = true;
+        }
+    }
+    // 资格先失效；已知业务拒绝与物理清理成功分别记录。
+    shared.revoke();
+    let retired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| key.try_retire()));
+    if !matches!(retired, Ok(Ok(()))) {
+        shared.control.lock().unknown = true;
+        let _original = key;
+        let _failure = (opened, retired);
+        loop {
+            std::thread::park();
+        }
+    }
+    shared.control.lock().key_freed = had_native;
+    #[cfg(test)]
+    if let Some(after) = after_free {
+        after();
+    }
+    WorkerEnd {
+        key: Some(if had_native {
+            KeyEnd::Freed
+        } else {
+            KeyEnd::NotCreated
+        }),
+        normal,
+    }
+}
+
 fn run_requests(
     key: &mut NativeOwnedSoftwareKey,
     shared: &Shared,

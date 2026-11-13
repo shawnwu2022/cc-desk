@@ -59,6 +59,10 @@ fn import_known_public_fixture(
         worker: std::thread::current().id(),
         unknown: false,
         _not_send_or_sync: PhantomData,
+        #[cfg(feature = "remote-host")]
+        silent_metadata: false,
+        #[cfg(feature = "remote-host")]
+        mock_api: None,
         free_effect: None,
     };
     let imported = (|| {
@@ -267,6 +271,10 @@ fn CngP256_FreeFailureRetainsOriginalFactsAndNeverRetries_004() {
         worker: std::thread::current().id(),
         unknown: false,
         _not_send_or_sync: PhantomData,
+        #[cfg(feature = "remote-host")]
+        silent_metadata: false,
+        #[cfg(feature = "remote-host")]
+        mock_api: None,
         free_effect: Some(Box::new(move |_| {
             effect_calls.set(effect_calls.get() + 1);
             Err(CryptoError::Unknown)
@@ -308,4 +316,21 @@ pub(crate) fn test_host_supplier(
         let mut scalar = [0; 32]; scalar[31] = 1;
         import_known_public_fixture(&relay, &scalar, SigningPurpose::Relay)
     }))
+}
+
+#[cfg(feature = "remote-host")]
+#[path = "native_crypto_existing_key_tests.rs"]
+mod existing_key_tests;
+
+#[cfg(feature = "remote-host")]
+pub(crate) fn test_existing_host_supplier(
+    origin: cc_desk_remote_record::appbind::CanonicalOrigin,
+    cap: std::time::Instant,
+    opened: std::sync::Arc<[std::sync::atomic::AtomicUsize;2]>,
+) -> host::FrozenHostSupplier {
+    let binding = test_host_supplier(origin,cap,opened.clone()).binding().clone();
+    let endpoint: [u8;32] = hex("c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721").try_into().unwrap();
+    let mut relay = [0;32];relay[31]=1;
+    host_profile::NativeHostProfile::new(binding,"TEST_ONLY_ENDPOINT","TEST_ONLY_RELAY").unwrap()
+        .test_anonymous([endpoint,relay],opened).freeze()
 }

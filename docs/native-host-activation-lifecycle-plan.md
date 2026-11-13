@@ -1,6 +1,6 @@
 # Native Host 单次启动保管链设计
 
-状态：生命周期首片、2A 底层前置条件和 2B 独立双密钥保管片均已完成实现、定向验证与独立复核。生命周期首片核查基线为 `cbe7cae13b0b7f4c3291bf07decb26f996a9b230`，后续分片基线与证据分别记录在末节；本文不代表完整批准供应链已验收。
+状态：生命周期首片、2A 底层前置条件、2B 双密钥保管、批准绑定、单次阶段签名及已有密钥供应适配均已完成实现、定向验证与独立复核。生命周期首片核查基线为 `cbe7cae13b0b7f4c3291bf07decb26f996a9b230`，后续分片基线与证据分别记录在末节；本文不代表完整批准供应链已验收。
 
 本片要证明：即使 Host 尚未注册网络或 pin，应用退出仍保管本次启动预留、原准备线程和所有已交付材料。生产默认配置继续为空。生命周期首片通过之前不增加生产 start IPC、UI 按钮或真实密钥打开调用。
 
@@ -291,3 +291,34 @@ Endpoint 与 Relay 使用不同的固定 SPKI。批准期限来自原 ticket，�
 - default2-* 从同源码重建独立默认 feature-off 产物，仅 default/rusqlite/sqlite；原 native crypto11全部通过、无timeout，包含默认 owner 的 queued/started/旧票据取消对照。其 SHA256 为 78F646243DDFC942D0B175999955374A4FD59FFFA00007FF5E436B39B8138410，不混用 remote-host artifact。
 
 本片未运行全量 Rust、真实 GUI、持久 existing-key loader、真实手机或公网端到端。生产无配置仍 Locked，不新增 start IPC/UI、部署或自动续期。mux 启动后的原两秒空闲限制、Phone-first Offline/任意顺序会合、真实配置/启动与公网验收仍未完成。
+## 已有密钥供应适配与原线程 partial 保管片
+
+基线 aea09248f4804b8ed886f2675931fb4f043d4d08。本片完成私有不可变 NativeHostProfile、两用途 open-only 适配和原 KeyCustodian 线程的 partial 保管合同；没有安装生产配置来源或启动调用者。证据目录为 .audit/host-existing-key-20261113/。
+
+### 实际类型与释放边界
+
+- NativeHostProfile 将原 FrozenHostBinding 与 Endpoint、Relay 两个已有 key 引用一次冻结。引用、名字和公开 profile 都不是权限；冻结不执行任何 native I/O，不枚举或猜测用户 key，不含 Issuer 私钥 opener。实际供应仍受原批准 token、原 Instant cap、严格 document/run 与一次性 claim 约束。
+- ExistingKeyLoader 固定 Microsoft Software KSP、当前用户 scope、legacy key spec=0、NCRYPT_SILENT_FLAG 的 OpenKey。Host owned key 的私有来源标记让加载及签名前复验的全部 metadata 读取都使用 SILENT；旧 Client/default 构造仍使用原 flags=0。只导出公开 ECC blob 核对批准 SPKI，不创建持久 key、不导入或导出真实私钥、不写属性、不切换 provider 或交互回退。
+- 原 KeyCustodian 线程在首个 native 调用之前拥有空 partial slot，sealed loader 只借用填充。provider/key 只有 API 成功才被原 slot 接收，每步前后核对同 token/cap；不猜失败输出的非零值是有效句柄。loader/metadata panic 的 catch 外仍保留该 slot，先纯撤销，再在同一原线程显式按 key→provider 释放。
+- 已知业务拒绝不等于 Unknown。未取得资源可记 NoKeyCreated；取得过 provider/key、成功释放并原线程真 join 才证明已退休。panic 保留 sticky Unknown，即使后续已成功释放和 join；Free 阻塞继续 Pending。Free 失败或 panic 保留原 slot、原 JoinHandle 和 Unknown/outstanding，不自动重试、不 detach，也不以普通 RAII Drop 吞掉资源义务。
+- 原两槽 custody、通知/释放保管及 operation 共同推进保持不变。一个 key 的 Free 阻塞或失败不把另一个原 key 的实际 join 隐藏；free 返回和原线程尾部结束是两件事，只有原 handle 真 join 才完成对应线程事实。没有新增 open-ready 协议。
+
+### 行为证据与真实调用范围
+
+- red.* 是旧普通 Result factory 合同的实际行为 RED：仅模拟 provider 已取得后 panic，首次 Free 入口 token=false，exit101。新 sealed-slot 路径的 001 在同一边界先撤销，实际 token=true；不把这个未来适配所需合同的缺口称为已部署 named-key 漏洞。
+- HostOpen_001–011 覆盖 provider-only、OpenKey/metadata/SPKI/usage 拒绝、取得 provider/key 后 panic、key→provider 顺序、原线程身份、provider 调用中取消/原期限到期后零 OpenKey、阻塞 Free 时兄弟原 join、Free 返回但线程尾门仍 Pending、第二用途失败无 user exit 收口，以及无 native I/O 的 profile 冻结。fake provider/open/property/export/free 全部由同一测试 API 永久拦截；fake key 的签名前准入拒绝，不能落入真实 CNG。
+- 009 的三个有界子进程覆盖 key Free 失败、key 已释放但 provider Free 失败、Free panic。它们证明 Unknown 下原资源和 handle 仍被保管且不重试，子进程结束不证明这些资源在进程内已退休。
+- 010 使用公开 TEST_ONLY 向量建立匿名、非持久 CNG key，真实签名并验证 Endpoint DER 与 Relay fixed 签名，随后真实释放/join。018 继续走 NativeHostProfile.freeze→Existing→原 worker 空 slot，再经原批准、activation、显式登记、真实隔离 Relay/TLS 握手与撤销/join；旧 012 及其断言保留。018 的 cfg(test) 适配只将 named OpenKey 替换为公开匿名 key 导入，不打开任何用户已有 key；它不能替代实际 named-key OpenKey、真实配置来源或 GUI 批准验收。
+- green1 的测试 helper 参数错误是编译失败；green2 的两个失败来自 mock 对 PCWSTR 指针而非文本比较，修正测试比较后通过。composition1 在编译成功后因缺 CC_DESK_TEST_RELAY_ROOT 拒绝初始化，composition2 使用明确既有 relay 路径通过。上述记录保留，不冒充行为 RED 或生产缺陷。
+
+### 最终同源码验收
+
+冻结1的十一项 Rust/脚本由 frozen1-source-hashes.json 固定，独立只读复核无阻断；两份文档和源码的完整十三文件清单为 final13-manifest.json，验收汇总为 acceptance-summary.json。以下结果均对应冻结源码，不用早期绿色产物替代。
+
+- final1-isolated/results.json 实跑 NativeRemote001–018 各 fresh process、005额外五次、network25、checkout3，共25个原进程/51次测试执行，全部 exit0、摘要计数正确、无 timeout。最终 remote-host artifact SHA256 为 F93F62854517EC7EC992A7956C39A3EC0F2CD6677E22C1B2DD2C8FBB7A4232D1，来源 final1-isolated/selected-artifact.json。
+- final1-groups-results.json：native crypto60、Client25、HostActivation21、HostApproval11、service14、strict query1 均通过。crypto60 包含新 HostOpen11 与原49；原 host_tests26 包含 HostKeys15 和 HostStages11。分组存在交叉，不将它们相加为去重总数。
+- 同源码默认 feature-off 独立 artifact 的 native crypto11、RemoteHost_Unsupported3 均通过。其 SHA256 为 5DBBA41F36D35BC2BB73C28A80D7FD0228900BB75267B9C7E745A087C1D3D7DA，来源 default1-artifact.json，不混用 remote-host 产物。
+- final1-clippy.*：remote-host 严格 --lib --tests -- -D warnings exit0。client-only.*：不含 remote-host 的 --lib --tests --features remote-client-ipc 编译检查 exit0；仍有三处既有测试 helper dead_code 警告，不将此 check 称为 client-only 严格 Clippy。没有为本片修改这些无关 helper。
+- final1-fmt.* 对六个本片适合整文件检查的 Rust 模块验证通过，旧 compact 基线未作无关整文件重排；完整十三文件直接 UTF-8 字节检查与 git diff --check 通过。未运行全量 Rust 或全仓格式化。
+
+生产配置来源、native profile 安装、start IPC/UI 和真实本机批准流程仍未接入，默认无配置仍 Locked。本片未读取、生成或配置真实用户凭据，也未部署或改变系统设置。实际用户 key 名称、公开 profile/信任材料及相应访问授权必须另行明确，不能从测试向量推断。真正 named-key 打开、手机和公网端到端仍待独立验收；原 mux 两秒空闲、Phone-first Offline 与任意顺序会合缺口没有改变。

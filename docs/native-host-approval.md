@@ -16,7 +16,7 @@ Pending now retains only weak NativeRunNetworkOrigin, not network_checks or Nati
 
 The remote-host feature now manages one application controller and exposes current/request/cancel only. Each command authenticates the original document and run through the existing raw-body admission path. JavaScript supplies only runId/generation; unknown fields, duplicate fields and wrong types are rejected by the shared DTO. Feature-disabled commands return REMOTE_HOST_UNAVAILABLE without decoding or accessing controller state. Frontend wrappers require the native document bridge and never fall back to raw invoke.
 
-Production has no installed profile configuration or material factory, so authenticated calls remain Locked. There is no start IPC, new UI button, production key adapter, unattended mode or readiness claim. Backend configuration is not IPC-installable. Once an approval slot is created, it remains occupied for the controller session; cancellation does not automatically replenish configuration or open another dialog.
+Production has no installed profile configuration or material factory, so authenticated calls remain Locked. There is no start IPC, new UI button, unattended mode or readiness claim. The private open-only key adapter described below has no production configuration source or caller. Backend configuration is not IPC-installable. Once an approval slot is created, it remains occupied for the controller session; cancellation does not automatically replenish configuration or open another dialog.
 
 Wrong document/run requests cannot consume another owner's configuration. A pending request retains its original identity and cancellation flag while the dialog is scheduled outside the controller lock. Cancellation before publication invalidates the returned owner. Closing begins controller cancellation at the existing Host exit entry; the existing document handoff refusal still runs first. It does not replace original exit/Unknown/join rules.
 
@@ -28,7 +28,7 @@ Registered is only a historical native-source registration fact, not connection 
 
 ## 生命周期首片边界
 
-[单次启动保管链设计与测试计划](native-host-activation-lifecycle-plan.md) 记录首片及后续独立分片的审查、RED/GREEN 证据边界。生产代码新增 service 唯一 activation 槽，预留先于 ticket 内外部 clock，原准备线程真 join 后才允许显式完成登记。查询没有推进副作用；未消费结果仍 Pending。退出由 operation 保管独立材料释放线程，原唯一 waiter 持续观察，不同步析构阻塞材料。后续 2B 增加可选双 key custody、冻结两用途 supplier 契约和 operation 共推进，只有公开匿名 fixture 驱动。后续批准绑定片已将原 ApprovalLease 的同一 native 撤销 token 接入冻结供应、operation、两 key 与原网络停止门禁，并用匿名 fixture 验证严格准入和显式登记。生产供应安装、start IPC 与真实配置仍未实现；当前生产无配置仍 Locked，不能称为真实密钥供应者已实现，也不扩大 native dialog 的批准或退休证明。
+[单次启动保管链设计与测试计划](native-host-activation-lifecycle-plan.md) 记录首片及后续独立分片的审查、RED/GREEN 证据边界。生产代码新增 service 唯一 activation 槽，预留先于 ticket 内外部 clock，原准备线程真 join 后才允许显式完成登记。查询没有推进副作用；未消费结果仍 Pending。退出由 operation 保管独立材料释放线程，原唯一 waiter 持续观察，不同步析构阻塞材料。后续 2B 增加可选双 key custody、冻结两用途 supplier 契约和 operation 共推进，只有公开匿名 fixture 驱动。后续批准绑定片已将原 ApprovalLease 的同一 native 撤销 token 接入冻结供应、operation、两 key 与原网络停止门禁，并用匿名 fixture 验证严格准入和显式登记。生产供应安装、start IPC 与真实配置仍未实现；当前生产无配置仍 Locked，不能将隔离供应适配验收称为真实用户密钥供应链已验收，也不扩大 native dialog 的批准或退休证明。
 
 ## 原批准与冻结供应绑定
 
@@ -50,4 +50,13 @@ FrozenHostApproval 将公开描述和两个私有一次性 opener 的 FrozenHost
 
 Host Relay 手写 Future 直接保管原 SignTicket，Drop 先纯撤销；poll 栈的纯 token guard 在 panic 时先失效，再允许后续票据/waker 析构。阶段锁不包 fence、adapter、等待、外部 hook 或句柄析构；原两 key/custody/Unknown/原 join 保管链未替换，Client 的默认无 token 语义不变。原 owner 的四个已确认失败点只为匹配原请求先纯撤销 Host token，再允许通知/析构；不改变 RequestFact、Unknown 或原 join。
 
-延迟 fixture 只证明原预算内的准备后等待，以及 Relay Accepted 后、Endpoint arm/mux 创建前由原任务保管的门控延迟。原 mux 启动后 2 秒无 Binary 的 IO idle 限制仍存在，不能称其可以空闲等待 Phone 超过该期限。原任务正常受保管退出和 work panic 已覆盖，不宣称任意强制丢弃整个 runtime Future 或进程异常能完成退休。生产安装、真实 loader、start IPC/UI 与历史 Phone-first Offline 仍未解决。详细证据见计划最新章节。
+延迟 fixture 只证明原预算内的准备后等待，以及 Relay Accepted 后、Endpoint arm/mux 创建前由原任务保管的门控延迟。原 mux 启动后 2 秒无 Binary 的 IO idle 限制仍存在，不能称其可以空闲等待 Phone 超过该期限。原任务正常受保管退出和 work panic 已覆盖，不宣称任意强制丢弃整个 runtime Future 或进程异常能完成退休。该阶段签名片结束时，生产安装、真实 loader、start IPC/UI 与历史 Phone-first Offline 仍未解决。后续已有密钥适配的实现和剩余验收边界见下节。
+## 已有密钥供应适配的当前边界
+
+私有 NativeHostProfile 现将原公开 binding 与 Endpoint/Relay 两个已有 key 引用冻结为不可变供应对象；冻结不执行 native I/O，引用不是权限，Issuer 仍无私钥 opener。ExistingKeyLoader 固定 Microsoft Software KSP、当前用户、legacy spec=0、silent/open-only；加载及签名前 metadata 复验均沿原 owned key 的私有来源标记使用 SILENT，旧 Client/default 行为不变。没有枚举、持久创建、真实私钥导入/导出、属性修改或 provider/交互回退。
+
+原 KeyCustodian 线程在首次 native 调用前保管空 partial slot，loader 只借用填充。失败或 panic 先纯撤销，再同线程显式按 key→provider 释放；Free 阻塞保持 Pending，失败保留原 slot/handle 与 Unknown/outstanding，不重试或 detach。已知拒绝、free 完成和原线程真 join 分别记录，普通 RAII Drop 不代替这些事实。
+
+HostOpen11 的 named OpenKey 与部分失败由永久拦截的模拟 API 验证；010 和 NativeRemote018 使用公开匿名 CNG key 完成真实签名，018 另经原批准、activation、登记和隔离 Relay/TLS 握手及撤销/join。匿名导入不能证明实际已有用户 key 已成功打开，Unknown 子进程退出也不能证明进程内退休。最终同源码矩阵、产物哈希与历史失败分类见计划“已有密钥供应适配与原线程 partial 保管片”。
+
+生产配置来源、native profile 安装、start IPC/UI 仍未接入，默认无配置仍 Locked；没有实际用户 key、真实 native dialog、手机或公网验收。两秒 mux 空闲和 Phone-first 行为保持，不能据本片宣称完整生产可用。

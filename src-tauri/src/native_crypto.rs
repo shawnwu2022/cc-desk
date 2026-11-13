@@ -21,9 +21,8 @@ pub(crate) enum SigningPurpose {
     Issuer,
 }
 
-/// Sole native ownership, bound to its original worker. There is intentionally
-/// no production constructor from raw handles, names or booleans in this slice.
-/// A later trusted native bootstrap must open the fixed Software KSP internally.
+/// 原 worker 独占 native 资源；Host 封闭 loader 只填充已保管的空 slot。
+/// 不提供 IPC 裸句柄构造或默认批准，真实配置选择和应用入口仍未安装。
 #[must_use = "Retain original native ownership through explicit retirement; Unknown is not closed"]
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct NativeOwnedSoftwareKey {
@@ -31,11 +30,15 @@ pub(crate) struct NativeOwnedSoftwareKey {
     key: NCRYPT_KEY_HANDLE,
     approved_purpose: SigningPurpose,
     approved_spki: [u8; 91],
+    #[cfg(feature = "remote-host")]
+    silent_metadata: bool,
     worker: ThreadId,
     unknown: bool,
     _not_send_or_sync: PhantomData<Rc<()>>,
     #[cfg(test)]
     free_effect: Option<FreeEffect>,
+    #[cfg(all(test, feature = "remote-host"))]
+    mock_api: Option<std::sync::Arc<dyn existing::MockKeyApi>>,
 }
 impl std::fmt::Debug for NativeOwnedSoftwareKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -73,7 +76,25 @@ impl NativeOwnedSoftwareKey {
         }
         Ok(())
     }
+    fn read_property(&self, name: windows_core::PCWSTR) -> Result<Vec<u8>, CryptoError> {
+        let flags = OBJECT_SECURITY_INFORMATION(0);
+        #[cfg(feature = "remote-host")]
+        let flags = if self.silent_metadata {
+            OBJECT_SECURITY_INFORMATION(NCRYPT_SILENT_FLAG.0)
+        } else {
+            flags
+        };
+        #[cfg(all(test, feature = "remote-host"))]
+        if let Some(api) = &self.mock_api {
+            return api.property(self.key.0, name, flags.0);
+        }
+        property(self.key, name, flags)
+    }
     fn free_object(&mut self, handle: NCRYPT_HANDLE) -> Result<(), CryptoError> {
+        #[cfg(all(test, feature = "remote-host"))]
+        if let Some(api) = &self.mock_api {
+            return api.free(handle.0);
+        }
         #[cfg(test)]
         if let Some(effect) = self.free_effect.as_mut() {
             return effect(handle);
@@ -126,6 +147,11 @@ impl<'key> CngP256Signer<'key> {
         expected_spki: &[u8],
     ) -> Result<Self, CryptoError> {
         owned.check_worker()?;
+        // 假句柄只走完整测试 API；误发签名也不能落入真实 CNG。
+        #[cfg(all(test, feature = "remote-host"))]
+        if owned.mock_api.is_some() {
+            return Err(CryptoError::Key);
+        }
         if owned.key.0 == 0 || owned.provider.0 == 0 {
             return Err(CryptoError::Closed);
         }
@@ -138,8 +164,8 @@ impl<'key> CngP256Signer<'key> {
         if expected_spki.len() != 91 || !expected_spki.starts_with(SPKI_HEAD) {
             return Err(CryptoError::Key);
         }
-        if property(owned.key, NCRYPT_LENGTH_PROPERTY)? != 256u32.to_le_bytes()
-            || property(owned.key, NCRYPT_ALGORITHM_GROUP_PROPERTY)?
+        if owned.read_property(NCRYPT_LENGTH_PROPERTY)? != 256u32.to_le_bytes()
+            || owned.read_property(NCRYPT_ALGORITHM_GROUP_PROPERTY)?
                 != "ECDSA\0"
                     .encode_utf16()
                     .flat_map(u16::to_le_bytes)
@@ -147,7 +173,7 @@ impl<'key> CngP256Signer<'key> {
         {
             return Err(CryptoError::Key);
         }
-        let usage = property(owned.key, NCRYPT_KEY_USAGE_PROPERTY)?;
+        let usage = owned.read_property(NCRYPT_KEY_USAGE_PROPERTY)?;
         let usage = u32::from_le_bytes(usage.as_slice().try_into().map_err(|_| CryptoError::Key)?);
         if usage & NCRYPT_ALLOW_SIGNING_FLAG == 0 {
             return Err(CryptoError::Key);
@@ -221,7 +247,11 @@ impl<'key> CngP256Signer<'key> {
         fixed_to_der(&self.sign_fixed(purpose, message)?)
     }
 }
-fn property(key: NCRYPT_KEY_HANDLE, name: windows_core::PCWSTR) -> Result<Vec<u8>, CryptoError> {
+fn property(
+    key: NCRYPT_KEY_HANDLE,
+    name: windows_core::PCWSTR,
+    flags: OBJECT_SECURITY_INFORMATION,
+) -> Result<Vec<u8>, CryptoError> {
     let mut output = [0u8; 64];
     let mut size = 0;
     unsafe {
@@ -230,7 +260,7 @@ fn property(key: NCRYPT_KEY_HANDLE, name: windows_core::PCWSTR) -> Result<Vec<u8
             name,
             Some(&mut output),
             &mut size,
-            OBJECT_SECURITY_INFORMATION(0),
+            flags,
         )
     }
     .map_err(|_| CryptoError::Native)?;
@@ -305,7 +335,7 @@ fn fixed_to_der(fixed: &[u8]) -> Result<Vec<u8>, CryptoError> {
 #[path = "native_crypto_tests.rs"]
 mod tests;
 #[cfg(all(test, feature = "remote-host"))]
-pub(crate) use tests::test_host_supplier;
+pub(crate) use tests::{test_existing_host_supplier, test_host_supplier};
 
 #[path = "native_crypto_owner.rs"]
 pub(crate) mod owner;
@@ -317,3 +347,10 @@ pub(crate) mod signers;
 #[cfg(feature = "remote-host")]
 #[path = "native_crypto_host.rs"]
 pub(crate) mod host;
+
+#[cfg(feature = "remote-host")]
+#[path = "native_crypto_existing_key.rs"]
+pub(crate) mod existing;
+#[cfg(feature = "remote-host")]
+#[path = "native_crypto_host_profile.rs"]
+pub(crate) mod host_profile;

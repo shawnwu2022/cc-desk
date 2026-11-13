@@ -515,6 +515,10 @@ fn CngHost_FreeFailureRetainsUnknownOriginal_007() {
                     worker: std::thread::current().id(),
                     unknown: false,
                     _not_send_or_sync: PhantomData,
+                    #[cfg(feature = "remote-host")]
+                    silent_metadata: false,
+                    #[cfg(feature = "remote-host")]
+                    mock_api: None,
                     free_effect: Some(Box::new(|_| Err(CryptoError::Unknown))),
                 };
                 created.send(()).unwrap();

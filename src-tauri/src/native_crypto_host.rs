@@ -1,9 +1,11 @@
-//! Host 两用途保管共用原批准 token；真实 loader 和生产启动调用者尚未接入。
+//! Host 两用途保管共用原批准 token；existing-key 适配已有，生产配置和启动调用者未接入。
 #![allow(
     dead_code,
     reason = "Host approval/supplier installation is a separate slice"
 )]
-use super::{owner::*, CryptoError, NativeOwnedSoftwareKey, SigningPurpose};
+use super::{owner::*, SigningPurpose};
+#[cfg(test)]
+use super::{CryptoError, NativeOwnedSoftwareKey};
 #[path = "native_crypto_host_stages.rs"]
 mod stages;
 use cc_desk_remote_record::appbind::CanonicalOrigin;
@@ -17,8 +19,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-type Opener = Box<dyn FnOnce() -> Result<NativeOwnedSoftwareKey, CryptoError> + Send>;
-type OpenerMailbox = Arc<Mutex<Option<Opener>>>;
+pub(super) enum Opener {
+    Existing(super::existing::ExistingKeyLoader),
+    #[cfg(test)]
+    Fixture(Box<dyn FnOnce() -> Result<NativeOwnedSoftwareKey, CryptoError> + Send>),
+}
+pub(super) type OpenerMailbox = Arc<Mutex<Option<Opener>>>;
 /// 元数据与两个不可替换 opener 一起移动；没有 Issuer opener 或可变 profile 引用。
 pub(crate) struct FrozenHostSupplier {
     binding: FrozenHostBinding,
@@ -55,9 +61,20 @@ impl FrozenHostBinding {
     }
 }
 impl FrozenHostSupplier {
-    // 真实后端冻结构造尚未接入；测试只能供应公开匿名 key。
+    // 仅兼容原公开匿名 fixture；生产冻结构造由 NativeHostProfile 提供。
     #[cfg(test)]
-    pub(crate) fn test_new(binding: FrozenHostBinding, endpoint: Opener, relay: Opener) -> Self {
+    pub(crate) fn test_new(
+        binding: FrozenHostBinding,
+        endpoint: Box<dyn FnOnce() -> Result<NativeOwnedSoftwareKey, CryptoError> + Send>,
+        relay: Box<dyn FnOnce() -> Result<NativeOwnedSoftwareKey, CryptoError> + Send>,
+    ) -> Self {
+        Self::from_openers(binding, Opener::Fixture(endpoint), Opener::Fixture(relay))
+    }
+    pub(super) fn from_openers(
+        binding: FrozenHostBinding,
+        endpoint: Opener,
+        relay: Opener,
+    ) -> Self {
         Self {
             binding,
             openers: [
@@ -551,19 +568,12 @@ impl HostKeyPublisher {
             if self.core.token.is_revoked() || Instant::now() >= cap {
                 return Err(SignFailure::Closed);
             }
-            let token = self.core.token.clone();
-            let (owner, signal, start) = KeyCustodian::prepare_revocable(
-                move || {
-                    if token.is_revoked() || Instant::now() >= cap {
-                        token.revoke();
-                        return Err(CryptoError::Key);
-                    }
-                    let opener = mailbox.lock().take().ok_or(CryptoError::Key)?;
-                    opener()
-                },
+            let (owner, signal, start) = KeyCustodian::prepare_host(
+                mailbox,
                 purpose,
                 spki.to_vec(),
                 self.core.token.clone(),
+                cap,
             )?;
             self.publish(index, owner, signal, start);
         }

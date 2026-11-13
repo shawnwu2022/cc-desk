@@ -66,28 +66,29 @@ async fn finish(controller: &RemoteHostController) -> bool {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn NativeRemote_ApprovedNativeKeysRegisterAndHandshake_012() {
-    approved_native_keys_trial(false, false, None).await;
+    approved_native_keys_trial(false, false, None, false).await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn NativeRemote_PreparedKeysWaitBeyondSignatureWindow_014() {
-    approved_native_keys_trial(true, false, None).await;
+    approved_native_keys_trial(true, false, None, false).await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn NativeRemote_LateClientHelloUsesOriginalEndpointStage_015() {
-    approved_native_keys_trial(false, true, None).await;
+    approved_native_keys_trial(false, true, None, false).await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn NativeRemote_StageGateHonorsOriginalSetupEnd_016() {
-    approved_native_keys_trial(false, false, Some(false)).await;
+    approved_native_keys_trial(false, false, Some(false), false).await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn NativeRemote_StageGateCancelKeepsOriginalOwners_017() {
-    approved_native_keys_trial(false, false, Some(true)).await;
+    approved_native_keys_trial(false, false, Some(true), false).await;
 }
 async fn approved_native_keys_trial(
     delay_network: bool,
     delay_hello: bool,
     gate_failure: Option<bool>,
+    existing_adapter: bool,
 ) {
     let transports = Arc::new(TerminalTransports::new());
     let supervisor = Arc::new(NativeRunSupervisor::new(transports.clone()));
@@ -140,6 +141,17 @@ async fn approved_native_keys_trial(
             .unwrap()
     };
     let original = admit();
+    let trial_supplier = |opened| {
+        if existing_adapter {
+            crate::native_crypto::test_existing_host_supplier(
+                cc_desk_remote_record::appbind::CanonicalOrigin::trusted(&relay.origin).unwrap(),
+                Instant::now() + Duration::from_secs(60),
+                opened,
+            )
+        } else {
+            supplier(&relay, opened)
+        }
+    };
     // 全部公开描述检查必须在任一 opener 运行前完成。
     for mismatch in 0..5 {
         let opened = counts();
@@ -160,7 +172,7 @@ async fn approved_native_keys_trial(
             fields,
             &original,
             Instant::now() + Duration::from_secs(60),
-            supplier(&relay, opened.clone())
+            trial_supplier(opened.clone())
         )
         .is_err());
         assert_eq!(opened.each_ref().map(|n| n.load(Ordering::Acquire)), [0, 0]);
@@ -173,7 +185,13 @@ async fn approved_native_keys_trial(
             .unwrap(),
         HostControlReply::Locked
     );
-    let frozen = frozen(&relay, &original, opened.clone(), Arc::new(|| Ok(1000)));
+    let frozen = FrozenHostApproval::supplied(
+        description(&relay, &original, Arc::new(|| Ok(1000))),
+        &original,
+        Instant::now() + Duration::from_secs(60),
+        trial_supplier(opened.clone()),
+    )
+    .unwrap();
     controller
         .install_frozen_configuration(&binding, fixture.caller.clone(), &original, frozen)
         .unwrap();
@@ -227,7 +245,7 @@ async fn approved_native_keys_trial(
             crate::remote_host::activation::ActivationOperation::test_reservation();
         let a_operation = a_reservation.operation();
         let a_token = crate::native_crypto::owner::NativeRevocation::new();
-        let supplied = supplier(&relay, counts());
+        let supplied = trial_supplier(counts());
         let a_spki = supplied.binding().endpoint_spki;
         let a_set = a_reservation
             .prepare_keys(a_token.clone(), Instant::now() + Duration::from_secs(30))
@@ -585,4 +603,9 @@ async fn NativeRemote_OriginalApprovalClaimFailureCustody_013() {
     drop(admission);
     assert!(cleanup.close());
     assert!(relay.close().await);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn NativeRemote_ApprovedExistingAdapterAnonymousHandshake_018() {
+    approved_native_keys_trial(false, false, None, true).await;
 }
