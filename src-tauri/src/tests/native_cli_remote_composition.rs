@@ -899,6 +899,194 @@ async fn NativeRemote_RegisteredSourceConsumesFreshMaterialsAndRebinds_008() {
         let admit = || fixture.supervisor.admit_remote_run(fixture.service.access(&fixture.caller, &status.run).map_err(|_| "slot boundary access")?, &status.run).map_err(|_| "slot boundary admission");
         let original = admit()?;
         let scope = original.scope().map_err(|_| "slot boundary scope")?;
+        // Fixture-only callback crosses the concrete bridge with original admission.
+        let approval_host = Arc::new(RemoteHostService::default());
+        let approval_reference_count = original.test_resource_strong_count();
+        let (approval, material) = crate::remote_host_approval::NativeHostApproval::test_from_inputs(
+            network_inputs(&relay, scope.clone(), source.clone()), &original, true);
+        if original.test_resource_strong_count() != approval_reference_count { return Err("approval retained original run"); }
+        approval.register_once(&runtime, &original, &approval_host, material).map_err(|_| "typed approval registration")?;
+        let (_, second_material) = crate::remote_host_approval::NativeHostApproval::test_from_inputs(
+            network_inputs(&relay, scope.clone(), source.clone()), &original, true);
+        if approval.register_once(&runtime, &original, &approval_host, second_material).is_ok() { return Err("approval reused"); }
+        approval.cancel();
+        if !matches!(approval_host.test_begin_registered_network(runtime.clone(), admit()?), Err(HostNetworkError::Closed)) { return Err("cancelled approval opened network"); }
+        let (denied, denied_material) = crate::remote_host_approval::NativeHostApproval::test_from_inputs(
+            network_inputs(&relay, scope.clone(), source.clone()), &original, false);
+        if denied.register_once(&runtime, &original, &Arc::new(RemoteHostService::default()), denied_material).is_ok() { return Err("denied approval registered"); }
+        let (mismatch, mut wrong_material) = crate::remote_host_approval::NativeHostApproval::test_from_inputs(
+            network_inputs(&relay, scope.clone(), source.clone()), &original, true);
+        wrong_material.local = network_local(true);
+        if mismatch.register_once(&runtime, &original, &Arc::new(RemoteHostService::default()), wrong_material).is_ok() { return Err("unapproved local identity registered"); }
+        let (expired, expired_material) = crate::remote_host_approval::NativeHostApproval::test_from_inputs(
+            network_inputs(&relay, scope.clone(), source.clone()), &original, true);
+        expired.test_expire();
+        if expired.register_once(&runtime, &original, &Arc::new(RemoteHostService::default()), expired_material).is_ok() { return Err("expired approval registered"); }
+        let (bad_clock, clock_material) = crate::remote_host_approval::NativeHostApproval::test_from_inputs(
+            network_inputs(&relay, scope.clone(), source.clone()), &original, true);
+        bad_clock.test_fail_clock();
+        if bad_clock.register_once(&runtime, &original, &Arc::new(RemoteHostService::default()), clock_material).is_ok() { return Err("failed approval clock registered"); }
+        // 独立真实 run/admission 不能消费原 run 的批准。
+        let other_transports = Arc::new(TerminalTransports::new());
+        let other_supervisor = Arc::new(NativeRunSupervisor::new(other_transports.clone()));
+        let mut other_fixture = Fixture::with_runtime_environment("input", other_supervisor, other_transports, true);
+        let document_url:tauri::Url="http://tauri.localhost/".parse().unwrap();
+        let document=crate::cli::document::DocumentAuthority::new(other_fixture.service.registry().clone(),document_url.clone()).map_err(|_| "controller document")?;
+        let mut document_resources=tauri::ResourceTable::default();
+        let document_binding=Arc::new(document.attach(&mut document_resources).map_err(|_| "controller binding")?);
+        document.started(&document_url);document.finished(&document_url);
+        other_fixture.caller=document.test_caller();
+        let other_status = other_fixture.start();
+        let other_host = Arc::new(RemoteHostService::default());
+        let other_runtime = NativeRuntime::with_owned_components_for_test(other_fixture.service.clone(), other_fixture.transports.clone(), other_fixture.supervisor.clone());
+        let mut other_cleanup = Cleanup { supervisor:other_fixture.supervisor.clone(),host:other_host.clone(),run:other_status.run.clone(),pin:Some(other_fixture.supervisor.pin_shutdown(&other_status.run)),stop:None,proofs:Vec::new() };
+        let other_ready = Instant::now() + Duration::from_secs(10);
+        while other_fixture.child_reports() == 0 || other_fixture.events.lock().is_empty() {
+            if Instant::now() >= other_ready { return Err("independent approval run not ready"); }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let other_admission = other_fixture.supervisor.admit_remote_run(other_fixture.service.access(&other_fixture.caller, &other_status.run).map_err(|_| "independent access")?, &other_status.run).map_err(|_| "independent admission")?;
+        if other_status.run != status.run { return Err("independent fixture must preserve textual run key"); }
+        let (bound_owner, bound_material) = crate::remote_host_approval::NativeHostApproval::test_from_inputs(network_inputs(&relay, scope.clone(), source.clone()), &original, true);
+        if bound_owner.register_once(&other_runtime, &other_admission, &other_host, bound_material).is_ok() || other_host.test_network_attempts() != 0 { return Err("approval crossed real run"); }
+        // 空配置完整鉴权后 Locked；错误 run 不得消耗原配置。
+        use crate::remote_host_controller::{RemoteHostController,HostControlReply};
+        let other_scope_for_controller=other_admission.scope().map_err(|_| "controller scope")?;
+        let make_description=|| {
+            let (owner,material)=crate::remote_host_approval::NativeHostApproval::test_from_inputs(network_inputs(&relay,other_scope_for_controller.clone(),source.clone()),&other_admission,true);
+            (owner.test_take_description(),material)
+        };
+        let controller=Arc::new(RemoteHostController::default());
+        if controller.current(&document_binding,&other_fixture.caller,&other_admission).map_err(|_| "empty controller")? != HostControlReply::Locked {return Err("empty controller not locked");}
+        let (description,_unused)=make_description();
+        controller.install_native_configuration(&document_binding,other_fixture.caller.clone(),&other_admission,description,std::time::Instant::now()+Duration::from_secs(60)).map_err(|_| "controller config")?;
+        if controller.test_request(&document_binding,&other_fixture.caller,&original,|_,_|panic!("wrong run must not show")).is_ok(){return Err("controller accepted foreign run");}
+        if controller.cancel(&document_binding,&other_fixture.caller,&original).err().map(|e|e.code)!=Some("FORBIDDEN".into()) {return Err("foreign configuration cancel not forbidden");}
+
+        let requested=controller.test_request(&document_binding,&other_fixture.caller,&other_admission,|description,_|Ok(Arc::new(crate::remote_host_approval::NativeHostApproval::test_record_description(description,&other_admission)))).map_err(|_| "original configuration consumed by foreign request")?;
+        if requested != HostControlReply::ApprovalRecorded {return Err("native approval not recorded");}
+        // 原工作线程先保管，fixture factory 等待受控释放；取消不能使其脱离保管。
+        let (entered_tx,entered_rx)=std::sync::mpsc::channel();let (release_tx,release_rx)=std::sync::mpsc::channel();
+        let (_,worker_material)=make_description();
+        let worker_admission=other_fixture.supervisor.admit_remote_run(other_fixture.service.access(&other_fixture.caller,&other_status.run).map_err(|_| "worker access")?,&other_status.run).map_err(|_| "worker admission")?;
+        controller.test_prepare_owned(&document_binding,&other_fixture.caller,worker_admission,Arc::new(NativeRuntime::with_owned_components_for_test(other_fixture.service.clone(),other_fixture.transports.clone(),other_fixture.supervisor.clone())),other_host.clone(),move ||{let _=entered_tx.send(());let _=release_rx.recv_timeout(Duration::from_secs(5));worker_material}).map_err(|_| "fixture operation start")?;
+        let entered=entered_rx.recv_timeout(Duration::from_secs(5)).is_ok();
+        let pending=controller.test_join_finished().is_none();
+        let consumed=controller.current(&document_binding,&other_fixture.caller,&other_admission).map_err(|_| "preparing state")?==HostControlReply::Consumed;
+        controller.cancel(&document_binding,&other_fixture.caller,&other_admission).map_err(|_| "cancel preparing")?;
+        let _=release_tx.send(());
+        let join_end=Instant::now()+Duration::from_secs(10);let joined=loop{if let Some(result)=controller.test_join_finished(){break Some(result);}if Instant::now()>=join_end{break None;}std::thread::sleep(Duration::from_millis(5));};
+        if !entered || !pending || !consumed || joined!=Some(false) || other_host.test_network_attempts()!=0 {return Err("cancelled factory publication/custody");}
+        // show 尚未返回时，同 owner cancel 必须使迟到结果不可发布。
+        let delayed=RemoteHostController::default();let (description,_unused)=make_description();
+        delayed.install_native_configuration(&document_binding,other_fixture.caller.clone(),&other_admission,description,std::time::Instant::now()+Duration::from_secs(60)).map_err(|_| "delayed config")?;
+        let result=delayed.test_request(&document_binding,&other_fixture.caller,&other_admission,|description,_|{
+            if delayed.test_request(&document_binding,&other_fixture.caller,&original,|_,_|panic!("foreign pending show")).err().map(|e|e.code)!=Some("FORBIDDEN".into()) {
+                return Err(crate::cli::profiles::error("TEST_FOREIGN_PENDING"));
+            }
+            delayed.cancel(&document_binding,&other_fixture.caller,&other_admission)?;Ok(Arc::new(crate::remote_host_approval::NativeHostApproval::test_record_description(description,&other_admission)))}).map_err(|_| "delayed request")?;
+        if result!=HostControlReply::Cancelled {return Err("cancelled show published");}
+        // show 在原调用线程等待；另一条真实线程按同 document/run 取消。
+        let concurrent=Arc::new(RemoteHostController::default());
+        let (description,_unused)=make_description();
+        concurrent.install_native_configuration(&document_binding,other_fixture.caller.clone(),&other_admission,description,std::time::Instant::now()+Duration::from_secs(60)).map_err(|_| "thread config")?;
+        let cancel_admission=other_fixture.supervisor.admit_remote_run(other_fixture.service.access(&other_fixture.caller,&other_status.run).map_err(|_| "cancel access")?,&other_status.run).map_err(|_| "cancel admission")?;
+        let (entered_tx,entered_rx)=std::sync::mpsc::channel();
+        let (release_tx,release_rx)=std::sync::mpsc::channel();
+        let cancelling=concurrent.clone();let cancelling_binding=document_binding.clone();let cancelling_caller=other_fixture.caller.clone();
+        let cancel_thread=std::thread::spawn(move || {
+            let result=if entered_rx.recv_timeout(Duration::from_secs(5)).is_ok() {
+                cancelling.cancel(&cancelling_binding,&cancelling_caller,&cancel_admission).ok()==Some(HostControlReply::Cancelled)
+            }else{false};
+            let _=release_tx.send(());result
+        });
+        let published=concurrent.test_request(&document_binding,&other_fixture.caller,&other_admission,|description,_|{
+            let _=entered_tx.send(());
+            release_rx.recv_timeout(Duration::from_secs(5)).map_err(|_|crate::cli::profiles::error("TEST_TIMEOUT"))?;
+            Ok(Arc::new(crate::remote_host_approval::NativeHostApproval::test_record_description(description,&other_admission)))
+        });
+        let thread_cancelled=cancel_thread.join().map_err(|_| "show cancellation panic")?;
+        if !thread_cancelled || published.ok()!=Some(HostControlReply::Cancelled) {return Err("cross-thread show published after cancel");}
+        concurrent.begin_shutdown();
+        controller.begin_shutdown();delayed.begin_shutdown();
+        // 原 admission 仍在手，但原 document 已撤销，不能注册自身批准。
+        let other_scope = other_admission.scope().map_err(|_| "independent scope")?;
+        let (stale_owner, stale_material) = crate::remote_host_approval::NativeHostApproval::test_from_inputs(network_inputs(&relay, other_scope, source.clone()), &other_admission, true);
+        other_fixture.service.registry().revoke_window(&other_fixture.caller).map_err(|_| "revoke independent document")?;
+        if stale_owner.register_once(&other_runtime, &other_admission, &other_host, stale_material).is_ok() || other_host.test_network_attempts() != 0 { return Err("revoked document reused retained admission"); }
+        drop(other_admission);
+        if !other_cleanup.close() || !other_host.test_join_network().await { return Err("independent run did not retire"); }
+        // 重复固定交错：外部 clock 返回前撤销，或注册完成但 token 尚未发布时撤销。
+        for after_register in [false, true] {
+            for _ in 0..16 {
+                use cc_desk_remote_transport::wss::{RelayAdmissionIdentity, RelayRole};
+                let signer = Arc::new(NetworkRelaySigner {origin:relay.origin.clone(),id:[1;16],role:RelayRole::Host});
+                let signer_lifetime = Arc::downgrade(&signer);
+                let mut inputs = network_inputs(&relay, scope.clone(), source.clone());
+                inputs.relay = RelayAdmissionIdentity::new([1;16],RelayRole::Host,signer);
+                let (race, material) = crate::remote_host_approval::NativeHostApproval::test_from_inputs(inputs, &original, true);
+                let race = Arc::new(race);
+                let weak = Arc::downgrade(&race);
+                if after_register {
+                    race.test_before_publish(Box::new(move || weak.upgrade().unwrap().cancel()));
+                } else {
+                    race.test_clock(Arc::new(move || { weak.upgrade().unwrap().cancel(); Ok(1000) }));
+                }
+                let race_host = Arc::new(RemoteHostService::default());
+                if race.register_once(&runtime, &original, &race_host, material).is_ok() { return Err("interleaved cancel registered"); }
+                if signer_lifetime.strong_count() != 0 || race_host.test_network_attempts() != 0 { return Err("cancel retained material or opened network"); }
+                race.cancel();
+                let (_, retry_material) = crate::remote_host_approval::NativeHostApproval::test_from_inputs(network_inputs(&relay, scope.clone(), source.clone()), &original, true);
+                if race.register_once(&runtime, &original, &race_host, retry_material).is_ok() { return Err("cancelled approval revived"); }
+                if !race_host.test_join_network().await { return Err("cancel owner did not retire"); }
+            }
+        }
+        eprintln!("TEST_ONLY_APPROVAL_V2 same_run_key_independent_resource_rejected=true stale_document_admission_rejected=true cancel_before_and_after_register=32 material_released=true network_attempts=0 single_use_sticky=true");
+        // 真正跨线程取消：登记线程在边界等待，另一条保管的线程取消后才释放边界。
+        for after_register in [false, true] {
+            for _ in 0..8 {
+                use cc_desk_remote_transport::wss::{RelayAdmissionIdentity, RelayRole};
+                let signer = Arc::new(NetworkRelaySigner { origin: relay.origin.clone(), id: [1;16], role: RelayRole::Host });
+                let signer_lifetime = Arc::downgrade(&signer);
+                let mut inputs = network_inputs(&relay, scope.clone(), source.clone());
+                inputs.relay = RelayAdmissionIdentity::new([1;16], RelayRole::Host, signer);
+                let (race, material) = crate::remote_host_approval::NativeHostApproval::test_from_inputs(inputs, &original, true);
+                let race = Arc::new(race);
+                let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+                let (release_tx, release_rx) = std::sync::mpsc::channel();
+                let cancel_owner = race.clone();
+                let cancel_thread = std::thread::spawn(move || {
+                    let arrived = entered_rx.recv_timeout(Duration::from_secs(5)).is_ok();
+                    if arrived { cancel_owner.cancel(); }
+                    let _ = release_tx.send(());
+                    arrived
+                });
+                if after_register {
+                    race.test_before_publish(Box::new(move || {
+                        let _ = entered_tx.send(());
+                        assert!(release_rx.recv_timeout(Duration::from_secs(5)).is_ok(), "cancel thread release");
+                    }));
+                } else {
+                    let release_rx = parking_lot::Mutex::new(release_rx);
+                    race.test_clock(Arc::new(move || {
+                        let _ = entered_tx.send(());
+                        release_rx.lock().recv_timeout(Duration::from_secs(5)).map_err(|_| cc_desk_remote_security::GrantError::Clock)?;
+                        Ok(1000)
+                    }));
+                }
+                let race_host = Arc::new(RemoteHostService::default());
+                let rejected = race.register_once(&runtime, &original, &race_host, material).is_err();
+                // 边界等待最多五秒；取消线程始终归还原 JoinHandle，不以标志冒充 join。
+                let cancelled = cancel_thread.join().map_err(|_| "cancel thread panic")?;
+                if !rejected || !cancelled || signer_lifetime.strong_count()!=0 || race_host.test_network_attempts()!=0 {
+                    return Err("cross-thread cancellation retained material or registered");
+                }
+                let (_, retry_material) = crate::remote_host_approval::NativeHostApproval::test_from_inputs(network_inputs(&relay, scope.clone(), source.clone()), &original, true);
+                if race.register_once(&runtime, &original, &race_host, retry_material).is_ok() { return Err("cross-thread cancellation revived"); }
+                if !race_host.test_join_network().await { return Err("cross-thread original owner did not retire"); }
+            }
+        }
+        eprintln!("TEST_ONLY_APPROVAL_THREADS boundary_cases=16 original_threads_joined=true material_released=true attempts=0");
         let pending = Arc::new(RemoteHostService::default());
         let mut wrong_scope = network_inputs(&relay, scope.clone(), source.clone());
         wrong_scope.policy.scope.generation.push('0');

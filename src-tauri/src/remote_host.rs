@@ -17,6 +17,7 @@ pub(crate) fn request_app_exit(
     native: Arc<NativeRuntime>,
 ) -> bool {
     let service = app.state::<Arc<RemoteHostService>>().inner().clone();
+    app.state::<Arc<crate::remote_host_controller::RemoteHostController>>().begin_shutdown();
     match service.request_exit(code, false) {
         ExitDecision::Proceed => false,
         ExitDecision::Prevent => true,

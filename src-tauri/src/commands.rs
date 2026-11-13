@@ -614,3 +614,51 @@ pub(crate) async fn native_unarchive_session(
 ) -> std::result::Result<(), crate::cli::types::SafeError> {
     runtime.unarchive(&webview, &request).await
 }
+
+
+
+#[cfg(feature = "remote-host")]
+#[tauri::command]
+pub(crate) fn remote_host_current(webview:tauri::Webview,request:tauri::ipc::Request<'_>,runtime:tauri::State<'_,std::sync::Arc<crate::cli::native_runtime::NativeRuntime>>,controller:tauri::State<'_,std::sync::Arc<crate::remote_host_controller::RemoteHostController>>)->Result<crate::remote_host_controller::HostControlReply,crate::cli::types::SafeError>{
+    crate::remote_host_ipc::remote_host_current(webview,request,runtime,controller)
+}
+#[cfg(not(feature = "remote-host"))]
+#[tauri::command]
+pub(crate) fn remote_host_current()->Result<(),crate::cli::types::SafeError>{Err(crate::cli::profiles::error("REMOTE_HOST_UNAVAILABLE"))}
+
+#[cfg(feature = "remote-host")]
+#[tauri::command]
+pub(crate) fn remote_host_request(webview:tauri::Webview,request:tauri::ipc::Request<'_>,runtime:tauri::State<'_,std::sync::Arc<crate::cli::native_runtime::NativeRuntime>>,controller:tauri::State<'_,std::sync::Arc<crate::remote_host_controller::RemoteHostController>>)->Result<crate::remote_host_controller::HostControlReply,crate::cli::types::SafeError>{
+    crate::remote_host_ipc::remote_host_request(webview,request,runtime,controller)
+}
+#[cfg(not(feature = "remote-host"))]
+#[tauri::command]
+pub(crate) fn remote_host_request()->Result<(),crate::cli::types::SafeError>{Err(crate::cli::profiles::error("REMOTE_HOST_UNAVAILABLE"))}
+
+#[cfg(feature = "remote-host")]
+#[tauri::command]
+pub(crate) fn remote_host_cancel(webview:tauri::Webview,request:tauri::ipc::Request<'_>,runtime:tauri::State<'_,std::sync::Arc<crate::cli::native_runtime::NativeRuntime>>,controller:tauri::State<'_,std::sync::Arc<crate::remote_host_controller::RemoteHostController>>)->Result<crate::remote_host_controller::HostControlReply,crate::cli::types::SafeError>{
+    crate::remote_host_ipc::remote_host_cancel(webview,request,runtime,controller)
+}
+#[cfg(not(feature = "remote-host"))]
+#[tauri::command]
+pub(crate) fn remote_host_cancel()->Result<(),crate::cli::types::SafeError>{Err(crate::cli::profiles::error("REMOTE_HOST_UNAVAILABLE"))}
+
+#[cfg(all(test, not(feature = "remote-host")))]
+#[test]
+#[allow(non_snake_case)]
+fn RemoteHost_UnsupportedCurrent_001() {
+    assert_eq!(remote_host_current().unwrap_err().code, "REMOTE_HOST_UNAVAILABLE");
+}
+#[cfg(all(test, not(feature = "remote-host")))]
+#[test]
+#[allow(non_snake_case)]
+fn RemoteHost_UnsupportedRequest_002() {
+    assert_eq!(remote_host_request().unwrap_err().code, "REMOTE_HOST_UNAVAILABLE");
+}
+#[cfg(all(test, not(feature = "remote-host")))]
+#[test]
+#[allow(non_snake_case)]
+fn RemoteHost_UnsupportedCancel_003() {
+    assert_eq!(remote_host_cancel().unwrap_err().code, "REMOTE_HOST_UNAVAILABLE");
+}

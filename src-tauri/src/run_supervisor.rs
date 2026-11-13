@@ -2167,6 +2167,8 @@ impl NativeRunNetworkOrigin {
 }
 #[cfg(feature = "remote-host")]
 impl NativeRunAdmission {
+    #[cfg(test)]
+    pub(crate) fn test_resource_strong_count(&self) -> usize { Arc::strong_count(&self.original) }
     pub(crate) fn network_origin(&self) -> Result<NativeRunNetworkOrigin, SafeError> {
         self.validate()?;
         self.pin.network_origin()

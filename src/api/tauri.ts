@@ -523,3 +523,17 @@ export function createNativeHistoryClient(): import('./versionHistory').HistoryC
   const bridge = nativeDocumentBridge()
   return createHistoryClient(bridge, () => nativeDocumentBridge() === bridge)
 }
+
+// Registered 仅表示来源曾登记，不表示连接可用、批准有效或可再次消费；不能映射 Ready。
+export type RemoteHostControlState = { state: 'Locked' | 'Pending' | 'ApprovalRecorded' | 'Consumed' | 'Cancelled' | 'Expired' | 'Registered' };
+export type RemoteHostRun = { runId: string; generation: number };
+// 仅走当前文档证明；不回退到 raw invoke，不将失败包装成 Locked。
+export async function remoteHostCurrent(run: RemoteHostRun): Promise<RemoteHostControlState> {
+  return await nativeDocumentBridge().invoke('remote_host_current', run) as RemoteHostControlState;
+}
+export async function remoteHostRequest(run: RemoteHostRun): Promise<RemoteHostControlState> {
+  return await nativeDocumentBridge().invoke('remote_host_request', run) as RemoteHostControlState;
+}
+export async function remoteHostCancel(run: RemoteHostRun): Promise<RemoteHostControlState> {
+  return await nativeDocumentBridge().invoke('remote_host_cancel', run) as RemoteHostControlState;
+}

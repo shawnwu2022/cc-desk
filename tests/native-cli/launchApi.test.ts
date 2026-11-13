@@ -101,3 +101,32 @@ it('D23_Api_ResizeMissingDocumentNeverFallsBack_008', async () => {
   await expect(api.cliResize({ runId: 'run-resize', generation: 3 }, 80, 24))
     .rejects.toMatchObject({ code: 'DOCUMENT_BRIDGE_UNAVAILABLE' });
 });
+
+it('RemoteHost_ControlUsesOnlyDocumentBridge_001', async () => {
+  const invoke = vi.fn(async () => ({ state: 'Locked' }));
+  bridge(invoke);
+  const run = { runId: 'original', generation: 1 };
+  await api.remoteHostCurrent(run); await api.remoteHostRequest(run); await api.remoteHostCancel(run);
+  expect(invoke.mock.calls).toEqual([['remote_host_current', run], ['remote_host_request', run], ['remote_host_cancel', run]]);
+});
+it('RemoteHost_UnsupportedAndAuthorizationErrorsRemainErrors_002', async () => {
+  const failure = { code: 'REMOTE_HOST_UNAVAILABLE' };
+  bridge(vi.fn(async () => { throw failure; }));
+  await expect(api.remoteHostRequest({ runId: 'original', generation: 1 })).rejects.toBe(failure);
+  delete (window as any)[bridgeKey];
+  await expect(api.remoteHostCurrent({ runId: 'original', generation: 1 })).rejects.toMatchObject({ code: 'DOCUMENT_BRIDGE_UNAVAILABLE' });
+});
+
+it('RemoteHost_AllControlsRejectMissingBridgeWithoutRawFallback_003', async () => {
+  const run = { runId: 'original', generation: 1 };
+  for (const action of [api.remoteHostCurrent, api.remoteHostRequest, api.remoteHostCancel]) {
+    await expect(action(run)).rejects.toMatchObject({ code: 'DOCUMENT_BRIDGE_UNAVAILABLE' });
+  }
+});
+it('RemoteHost_ConsumedAndForbiddenRemainVisible_004', async () => {
+  bridge(vi.fn(async () => ({ state: 'Consumed' })));
+  await expect(api.remoteHostCurrent({ runId: 'original', generation: 1 })).resolves.toEqual({ state: 'Consumed' });
+  const failure = { code: 'FORBIDDEN' };
+  bridge(vi.fn(async () => { throw failure; }));
+  await expect(api.remoteHostCancel({ runId: 'original', generation: 1 })).rejects.toBe(failure);
+});
