@@ -4,7 +4,7 @@ use crate::{
         document::DocumentBinding, launch_service::NativeRun, profiles::error,
         snapshot::CallerIdentity, types::SafeError,
     },
-    remote_host_approval::{HostApprovalDescription, NativeHostApproval},
+    remote_host_approval::{FrozenHostApproval, HostApprovalDescription, NativeHostApproval},
     run_supervisor::{NativeRunAdmission, NativeRunNetworkOrigin},
 };
 use parking_lot::Mutex;
@@ -63,8 +63,7 @@ impl OwnerIdentity {
 }
 struct NativeConfiguration {
     identity: OwnerIdentity,
-    description: HostApprovalDescription,
-    cap: Instant,
+    frozen: FrozenHostApproval,
     #[cfg(test)]
     prepare: Option<FixturePreparation>,
 }
@@ -146,6 +145,46 @@ impl RemoteHostController {
         #[cfg(test)] prepare: Option<FixturePreparation>,
     ) -> Result<(), SafeError> {
         Self::authenticate(binding, &caller, admission)?;
+        let frozen = FrozenHostApproval::description(description, admission, cap)
+            .map_err(|_| error("REMOTE_HOST_CONFIGURATION"))?;
+        self.install_frozen(
+            binding,
+            caller,
+            admission,
+            frozen,
+            #[cfg(test)]
+            prepare,
+        )
+    }
+    #[allow(dead_code)]
+    pub(crate) fn install_frozen_configuration(
+        &self,
+        binding: &Arc<DocumentBinding<NativeRun>>,
+        caller: CallerIdentity,
+        admission: &NativeRunAdmission,
+        frozen: FrozenHostApproval,
+    ) -> Result<(), SafeError> {
+        self.install_frozen(
+            binding,
+            caller,
+            admission,
+            frozen,
+            #[cfg(test)]
+            None,
+        )
+    }
+    fn install_frozen(
+        &self,
+        binding: &Arc<DocumentBinding<NativeRun>>,
+        caller: CallerIdentity,
+        admission: &NativeRunAdmission,
+        frozen: FrozenHostApproval,
+        #[cfg(test)] prepare: Option<FixturePreparation>,
+    ) -> Result<(), SafeError> {
+        Self::authenticate(binding, &caller, admission)?;
+        if !frozen.matches(admission) {
+            return Err(error("FORBIDDEN"));
+        }
         let identity = OwnerIdentity {
             caller,
             binding: Arc::downgrade(binding),
@@ -161,8 +200,7 @@ impl RemoteHostController {
         }
         state.configuration = Some(NativeConfiguration {
             identity,
-            description,
-            cap,
+            frozen,
             #[cfg(test)]
             prepare,
         });
@@ -212,8 +250,8 @@ impl RemoteHostController {
         app: &tauri::AppHandle<R>,
         window: &tauri::Window<R>,
     ) -> Result<HostControlReply, SafeError> {
-        self.request_inner(binding, caller, admission, |description, cap| {
-            NativeHostApproval::show(app, window, description, admission, cap)
+        self.request_inner(binding, caller, admission, |frozen| {
+            NativeHostApproval::show(app, window, frozen, admission)
                 .map(Arc::new)
                 .map_err(|_| error("REMOTE_HOST_APPROVAL_UNAVAILABLE"))
         })
@@ -223,10 +261,7 @@ impl RemoteHostController {
         binding: &Arc<DocumentBinding<NativeRun>>,
         caller: &CallerIdentity,
         admission: &NativeRunAdmission,
-        show: impl FnOnce(
-            HostApprovalDescription,
-            Instant,
-        ) -> Result<Arc<NativeHostApproval>, SafeError>,
+        show: impl FnOnce(FrozenHostApproval) -> Result<Arc<NativeHostApproval>, SafeError>,
     ) -> Result<HostControlReply, SafeError> {
         Self::authenticate(binding, caller, admission)?;
         let (configuration, pending) = {
@@ -260,7 +295,7 @@ impl RemoteHostController {
         };
         let result = (|| {
             configuration.identity.check(binding, caller, admission)?;
-            let owner = show(configuration.description, configuration.cap)?;
+            let owner = show(configuration.frozen)?;
             Ok::<_, SafeError>(Arc::new(ApprovalSlot {
                 identity: configuration.identity,
                 owner,
@@ -295,7 +330,24 @@ impl RemoteHostController {
             Instant,
         ) -> Result<Arc<NativeHostApproval>, SafeError>,
     ) -> Result<HostControlReply, SafeError> {
-        self.request_inner(binding, caller, admission, show)
+        self.request_inner(binding, caller, admission, |frozen| {
+            let (description, cap) = frozen.into_fixture_parts();
+            show(description, cap)
+        })
+    }
+    #[cfg(test)]
+    pub(crate) fn test_request_frozen(
+        &self,
+        binding: &Arc<DocumentBinding<NativeRun>>,
+        caller: &CallerIdentity,
+        admission: &NativeRunAdmission,
+        yes: bool,
+    ) -> Result<HostControlReply, SafeError> {
+        self.request_inner(binding, caller, admission, |frozen| {
+            NativeHostApproval::test_record_frozen(frozen, yes)
+                .map(Arc::new)
+                .map_err(|_| error("REMOTE_HOST_APPROVAL_UNAVAILABLE"))
+        })
     }
     pub(crate) fn cancel(
         &self,
@@ -352,19 +404,29 @@ impl RemoteHostController {
             .ok_or_else(|| error("REMOTE_HOST_LOCKED"))?;
         slot.identity.check(binding, caller, &admission)?;
         if slot.owner.control_reply() != HostControlReply::ApprovalRecorded
-            || slot.prepare.lock().is_none()
+            || (slot.prepare.lock().is_none() && !slot.owner.has_supplier())
         {
             return Err(error("REMOTE_HOST_LOCKED"));
         }
-        let reservation = service.reserve_activation()?;
-        let prepare = slot
-            .prepare
-            .lock()
-            .take()
-            .ok_or_else(|| error("REMOTE_HOST_LOCKED"))?;
+        let mut reservation = service.reserve_activation()?;
         *self.operation.lock() = Some(Arc::downgrade(&reservation.operation()));
-        // 原 clock 可能阻塞或重入。此时尚无线程，service 也必须保管预留。
-        let ticket = match slot.owner.take_activation(&admission) {
+        let claim = slot
+            .owner
+            .claim_activation(&admission)
+            .map_err(|_| error("REMOTE_HOST_LOCKED"))?;
+        #[cfg(windows)]
+        let publisher = if claim.has_supplier() {
+            Some(
+                reservation
+                    .prepare_keys(claim.native_token(), claim.end())
+                    .map_err(|_| error("REMOTE_HOST_PREPARE_FAILED"))?,
+            )
+        } else {
+            None
+        };
+        let prepare = slot.prepare.lock().take();
+        // 原 clock 可能阻塞或重入。尚无准备线程，通知线程已由同一 service 预留保管。
+        let ticket = match claim.validate(&admission) {
             Ok(ticket) => ticket,
             Err(_) => {
                 drop(prepare);
@@ -376,6 +438,19 @@ impl RemoteHostController {
         let weak_service = Arc::downgrade(&service);
         reservation
             .spawn_prepared(move |signal| {
+                #[cfg(windows)]
+                if let Some(publisher) = publisher {
+                    return ticket.prepare_frozen(
+                        runtime,
+                        admission,
+                        weak_service,
+                        signal,
+                        publisher,
+                    );
+                }
+                let Some(prepare) = prepare else {
+                    return crate::remote_host::activation::PreparationResult::Complete(false);
+                };
                 ticket.prepare_fixture(runtime, admission, weak_service, signal, prepare)
             })
             .map_err(|_| error("REMOTE_HOST_PREPARE_FAILED"))
@@ -385,6 +460,10 @@ impl RemoteHostController {
         // 显式推进的测试入口，不是 current 查询；不持 controller 锁调用登记。
         let operation = self.operation.lock().as_ref()?.upgrade()?;
         operation.result()
+    }
+    #[cfg(all(test, windows))]
+    pub(crate) fn test_approval_owner(&self) -> Arc<NativeHostApproval> {
+        self.state.lock().slot.as_ref().unwrap().owner.clone()
     }
     pub(crate) fn begin_shutdown(&self) {
         let (configuration, slot) = {

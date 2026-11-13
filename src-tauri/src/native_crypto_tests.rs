@@ -282,3 +282,30 @@ fn CngP256_FreeFailureRetainsOriginalFactsAndNeverRetries_004() {
     drop(owned);
     assert_eq!(calls.get(), 1);
 }
+
+// 仅重用仓库公开 TEST_ONLY 标量；匿名 CNG import 不读写用户持久密钥。
+#[cfg(feature = "remote-host")]
+pub(crate) fn test_host_supplier(
+    origin: cc_desk_remote_record::appbind::CanonicalOrigin,
+    cap: std::time::Instant,
+    opened: std::sync::Arc<[std::sync::atomic::AtomicUsize; 2]>,
+) -> host::FrozenHostSupplier {
+    use std::sync::atomic::Ordering;
+    let endpoint = hex(vector()["public_key_sec1"].as_str().unwrap());
+    let relay = hex("046b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c2964fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5");
+    let binding = host::FrozenHostBinding {
+        native_profile: host::HostKeyProfileIdentity { id: [7; 16], revision: 9 },
+        endpoint_spki: [SPKI_HEAD, &endpoint[1..]].concat().try_into().unwrap(),
+        relay_spki: [SPKI_HEAD, &relay[1..]].concat().try_into().unwrap(),
+        origin, relay_id: [1; 16], profile_cap: cap,
+    };
+    let first = opened.clone();
+    host::FrozenHostSupplier::test_new(binding, Box::new(move || {
+        first[0].fetch_add(1, Ordering::AcqRel);
+        import_public_rfc6979_fixture(&endpoint)
+    }), Box::new(move || {
+        opened[1].fetch_add(1, Ordering::AcqRel);
+        let mut scalar = [0; 32]; scalar[31] = 1;
+        import_known_public_fixture(&relay, &scalar, SigningPurpose::Relay)
+    }))
+}

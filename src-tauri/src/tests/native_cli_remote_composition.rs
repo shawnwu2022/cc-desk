@@ -197,7 +197,8 @@ struct NetworkRelayFixture {
     address: std::net::SocketAddr,
 }
 impl NetworkRelayFixture {
-    async fn start() -> Self {
+    async fn start() -> Self { Self::start_with_host_point(None).await }
+    async fn start_with_host_point(host_point: Option<Vec<u8>>) -> Self {
         let reserve = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = reserve.local_addr().unwrap();
         drop(reserve);
@@ -208,8 +209,7 @@ impl NetworkRelayFixture {
             .unwrap()
             .as_millis() as u64;
         let point = |host| {
-            network_relay_material(host)
-                .1
+            host_point.as_ref().filter(|_| host).cloned().unwrap_or_else(|| network_relay_material(host).1)
                 .iter()
                 .map(|b| format!("{b:02x}"))
                 .collect::<String>()
@@ -476,6 +476,66 @@ fn network_inputs(
         outer_accepted: None,
         termination: None,
     }
+}
+
+#[cfg(windows)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(non_snake_case)]
+async fn NativeRemote_ApprovalPureRevokeClosesIdle_011() {
+    use crate::remote_host_network::*;
+    let transports = Arc::new(TerminalTransports::new());
+    let supervisor = Arc::new(NativeRunSupervisor::new(transports.clone()));
+    let fixture = Fixture::with_runtime_environment("input", supervisor, transports, true);
+    let host = Arc::new(RemoteHostService::default());
+    let runtime = Arc::new(NativeRuntime::with_owned_components_for_test(fixture.service.clone(), fixture.transports.clone(), fixture.supervisor.clone()));
+    let status = fixture.start();
+    let mut cleanup = Cleanup { supervisor: fixture.supervisor.clone(), host: host.clone(), run: status.run.clone(), pin: Some(fixture.supervisor.pin_shutdown(&status.run)), stop: None, proofs: Vec::new() };
+    let ready = Instant::now() + Duration::from_secs(10);
+    while fixture.child_reports() == 0 || fixture.events.lock().is_empty() {
+        assert!(Instant::now() < ready);
+        tokio::task::yield_now().await;
+    }
+    let mut relay = NetworkRelayFixture::start().await;
+    let (_source_watch, revoked) = tokio::sync::watch::channel(false);
+    let source = Arc::new(ApprovedHostSource { clock: Arc::new(|| Ok(1000)), revoked, expires_host_ms: 11000 });
+    let admission = fixture.supervisor.admit_remote_run(fixture.service.access(&fixture.caller, &status.run).unwrap(), &status.run).unwrap();
+    let scope = admission.scope().unwrap();
+    let (accepted, outer_ready) = tokio::sync::oneshot::channel();
+    let (terminated, ending) = tokio::sync::oneshot::channel();
+    let mut inputs = network_inputs(&relay, scope.clone(), source);
+    inputs.outer_accepted = Some(accepted);
+    inputs.termination = Some(terminated);
+    let (approval, material) = crate::remote_host_approval::NativeHostApproval::test_from_inputs(inputs, &admission, true);
+    assert!(approval.register_once(&runtime, &admission, &host, material).is_ok());
+    let attempt = host.test_begin_registered_network(runtime.clone(), admission).unwrap();
+    let mut peer = None;
+    let outcome: Result<bool, &'static str> = async {
+        outer_ready.await.map_err(|_| "pure revoke outer acceptance")?;
+        let (phone, admitted) = tokio::join!(network_client(&relay, scope), attempt.wait_admitted());
+        peer = Some(phone?);
+        admitted.map_err(|_| "pure revoke handoff")?;
+        if tokio::time::timeout(Duration::from_millis(100), attempt.wait_closed()).await.is_ok() {
+            return Err("channel already ended before pure revoke");
+        }
+        // 原 peer/run 仍保管且原 grant 尚未到期；之后不发消息、不 poll UI 或授权。
+        // 已完成原握手，之后不发消息、不 poll UI、不通知 watch 或显式退出。
+        approval.test_revoke_only();
+        if approval.test_watch_revoked() { return Err("pure revoke notified watch"); }
+        let joined = tokio::time::timeout(Duration::from_secs(1), attempt.wait_closed()).await;
+        Ok(matches!(joined, Ok(Ok(()))))
+    }.await;
+    let joined_without_exit = outcome == Ok(true);
+    // RED 也先收回全部原 owner，再报告失败。
+    attempt.request_close();
+    if let Some(peer) = peer.take() { let _ = retire_network_peer(peer, &attempt).await; }
+    let _ = attempt.wait_closed().await;
+    let end = ending.await.unwrap();
+    let known = host.test_join_network().await;
+    let physical = cleanup.close();
+    let relay_closed = relay.close().await;
+    eprintln!("TEST_ONLY_APPROVAL_PURE_REVOKE outcome={outcome:?} cause={:?} joined_without_exit={joined_without_exit} watch_notified={} original_network_joined={known}", end.cause, approval.test_watch_revoked());
+    assert!(physical && relay_closed && known);
+    assert!(joined_without_exit, "idle approved network ignored its original token: {outcome:?}");
 }
 async fn retire_network_peer(
     peer: NetworkTestPeer,
@@ -909,7 +969,14 @@ async fn NativeRemote_RegisteredSourceConsumesFreshMaterialsAndRebinds_008() {
         let (_, second_material) = crate::remote_host_approval::NativeHostApproval::test_from_inputs(
             network_inputs(&relay, scope.clone(), source.clone()), &original, true);
         if approval.register_once(&runtime, &original, &approval_host, second_material).is_ok() { return Err("approval reused"); }
+        approval.test_revoke_only();
+        let (publication, published) = tokio::sync::watch::channel(None);
+        let (_stop, stopped) = tokio::sync::watch::channel(false);
+        let committed = approval_host.commit_network_handoff(&publication, &stopped, tokio::time::Instant::now() + Duration::from_secs(30));
+        let refused_before_full_cancel = committed.is_err() && published.borrow().is_none() && !approval_host.network_admission_open();
+        eprintln!("TEST_ONLY_APPROVAL_FINAL_GATE commit={committed:?} publication={:?} refused_before_full_cancel={refused_before_full_cancel}", *published.borrow());
         approval.cancel();
+        if !refused_before_full_cancel { return Err("pure revoked source passed final publication gate"); }
         if !matches!(approval_host.test_begin_registered_network(runtime.clone(), admit()?), Err(HostNetworkError::Closed)) { return Err("cancelled approval opened network"); }
         let (denied, denied_material) = crate::remote_host_approval::NativeHostApproval::test_from_inputs(
             network_inputs(&relay, scope.clone(), source.clone()), &original, false);
@@ -949,6 +1016,15 @@ async fn NativeRemote_RegisteredSourceConsumesFreshMaterialsAndRebinds_008() {
         if other_status.run != status.run { return Err("independent fixture must preserve textual run key"); }
         let (bound_owner, bound_material) = crate::remote_host_approval::NativeHostApproval::test_from_inputs(network_inputs(&relay, scope.clone(), source.clone()), &original, true);
         if bound_owner.register_once(&other_runtime, &other_admission, &other_host, bound_material).is_ok() || other_host.test_network_attempts() != 0 { return Err("approval crossed real run"); }
+        let original_token = bound_owner.test_native_token();
+        if original_token.is_revoked() { return Err("foreign request revoked original approval"); }
+        let claim_host = Arc::new(RemoteHostService::default());
+        let claim_reservation = claim_host.reserve_activation().map_err(|_| "original claim reservation")?;
+        let original_claim = bound_owner.claim_activation(&original).map_err(|_| "foreign request consumed original approval")?;
+        let original_ticket = original_claim.validate(&original).map_err(|_| "original claim no longer valid")?;
+        if original_token.is_revoked() { return Err("original validated claim lost authority"); }
+        drop(original_ticket);
+        drop(claim_reservation);
         // 空配置完整鉴权后 Locked；错误 run 不得消耗原配置。
         use crate::remote_host_controller::{RemoteHostController,HostControlReply};
         let other_scope_for_controller=other_admission.scope().map_err(|_| "controller scope")?;
@@ -1898,3 +1974,7 @@ async fn NativeRemote_LiveSourceClockReentryRejectsSecondAttempt_010() {
     let physical=cleanup.close();let network=host.test_join_network().await;let relay_closed=relay.close().await;
     assert!(physical && network && relay_closed,"original native/network/relay owners must retire");assert_eq!(outcome,Ok(()));
 }
+
+#[cfg(windows)]
+#[path = "native_cli_remote_approval_keys.rs"]
+mod approval_keys;

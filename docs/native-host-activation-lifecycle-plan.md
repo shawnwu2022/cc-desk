@@ -210,3 +210,40 @@ Endpoint 与 Relay 使用不同的固定 SPKI。批准期限来自原 ticket，�
 - `default-build.*` 实际重建同源码默认 feature-off harness，feature 仅 default/rusqlite/sqlite。`default-result.json` 的原 native crypto 11 项全通过；其独立 artifact SHA256 为 `50ED00058F9DD135E873A1D80999407A978B35BCC024C3415DB13A6A759837AB`。它不是 remote-host artifact，不混用结果。两份文档及七个 Rust 文件均通过直接 UTF-8 字节解码与替换字符检查。
 
 本片没有运行全量 Rust、真实 GUI/native dialog、持久 existing-key loader、手机或公网端到端，也不声称完整批准供应闭环或真实用户凭据验收。下一片必须将 ApprovalLease cancel 的 token 撤销放在任何 watch 通知之前，并定义 take_activation 失败及原 ApprovalClock expiry/error 的主动撤销；不能依赖 UI poll。仍需审查冻结公开描述与原 lease 一次性绑定，完成 strict document/run 的实际启动推进。既有 Phone-first Offline 与任意顺序会合缺口不由匿名 fixture 结果替代。
+
+## 批准与冻结供应绑定片
+
+基线为 0b16a2f8fcb292289817b45e1be897a6117cc1c0。本片实现及同源码矩阵已完成，冻结核心与末次发布门禁经独立只读审查。没有生产供应安装、真实 key loader、start IPC/UI 或部署；默认无配置仍 Locked。前述 2B 的未完成项是该历史提交的边界，本节记录本次实际推进。
+
+### 实际类型与一次性顺序
+
+- ApprovalLease 创建时唯一生成 NativeRevocation，cancel 先置位再发原 watch/source 通知。原 operation signal、SigningFence、两个原 key 及 RegisteredHostSource 使用同一 token。先撤销后绑定不能恢复资格，token 不是新凭据。
+- NativeConfiguration 保存一个 move-only FrozenHostApproval，公开描述、弱原 run 身份、原 cap 和 FrozenHostSupplier 一起消费。HostKeyProfileIdentity 明确属于原生签名配置域，不能代入 CLI Profile 或 WebAuthn BrowserProfile 的身份/修订。两个不同 SPKI、Endpoint Host id/role、Relay Host id/origin、原 policy.scope 与 admission.scope 在任何 opener 执行前核对。供应对象没有 Issuer opener，也没有可变 profile 仓库引用。
+- 严格 document/run/config owner 门禁先于原 service reservation；随后本地 claim 唯一取走原 MachinePermit、bundle 和 approved_end，不调用外部 clock。取得 claim 后才安装原 token custody/通知线程，之后锁外验证 clock 并准备。重复 Consumed 和外国请求在 claim 前返回，不新建通知 owner、不消耗或撤销合法批准。
+- 未消费批准每次使用检查原期限；claim/ticket 原样携带原 Instant end；活 key 的 Core cap 只能缩短。没有新计时线程。已取得 claim/ticket 的失败、owner 丢失、clock Err/expiry/panic 先纯撤销；准备/材料释放线程不执行会升级 Weak service 的完整 lease.cancel。ApprovalClock 保留 panic 传播，原 SourceClock 继续记录 Unknown。
+- prepare worker 只持原一次性 ticket、publisher/Core/signal、必要原运行引用和 Weak service；登记在准备原线程真 join 后由显式推进完成。查询无登记/外部 clock 副作用。成功业务 Registered 和资源 outstanding 独立，原退出保管链不因业务成功而跳过 key/通知/释放原 handle。
+- 私有 NativeApprovalStop 只持原 token/end，无 lease、service、run 或回调。它原样进入 SourceClock、已登记源后续准入/补充、原 setup/established select 及最终 service commit 门禁。SourceClock 的普通错误、回退、host-ms 到期、重入和 panic 都纯撤销，保留原错误/Unknown 分类；网络等待只用原任务内的有界 timer。is_closed 的新纯活性检查只供资格门禁，不冒充槽材料或原资源已释放。
+
+### RED 与最终证据
+
+证据目录为 .audit/host-approval-key-binding-20261113/，历史结果全部保留。
+
+- clock-red.*：实际行为 RED，源 clock 首次 Err 后同 lease 仍可在新 wrapper 返回 Ok；exit 101。修复为 lease failure guard 的只可置位撤销，且先于 watch/waker。
+- network-red.* 的 011 首次运行实际上通过，原因是原 Channel 路径关闭，不将它冒称失败或缺陷复现。随后加入撤销前 100ms 原通道保持 Pending 的观察，并用同源码实际 cause=Approval 验证显式 stop 分支；不靠延长原 grant 或删除生产检查制造 RED。
+- value-red.*：SourceClock 对 999 回退与 11000 到期均已拒绝授权，但 token 仍 false，exit 101。最终同源码两路径 token=true、watch=false、Unknown=false。它是新批准绑定中的失败传播缺口，不声称旧网络仍可授权。
+- commit-red.*：008 在仅纯撤销、尚未 full cancel 时，原末次 commit 返回 Ok 并发布 Some(Ok)，exit 101/0.96s。修复仅令原 source 槽资格门禁读取原 registration 纯活性；最终 commit=Err(Closed)、publication=None。008 同时保留外国请求拒绝，并新增原 token 仍 live、正确原 admission 可继续 claim/validate 的断言。
+- combination1-build.* 的 Endpoint Role 枚举名错误、clippy1.* 的旧 SourceClock 测试 literal 缺字段都是编译问题，不是行为 RED。没有放宽断言或添加 lint allow 来掩盖失败。
+
+最终 Rust/脚本冻结清单是 frozen2-source-hashes.json，完整十五文件清单是 final15-manifest.json。最终 remote-host test artifact SHA256 为 67FAE4BED147EAF281CE630EE1D33A17942635D7F41F73A5F1FCF795F000CE91，来源为 final2-isolated/selected-artifact.json，不沿用早期产物结果。
+
+- final2-isolated/results.json：NativeRemote 001–013 各 fresh process，005 额外五次，network 25、checkout 3，共 20 个原进程、46 次测试执行；全部 exit 0，无 timeout，摘要计数正确。原 006 panic→Unknown、原网络/PTY/Job/退出和 008 clock 预留边界保持通过。
+- 011 验证纯 token 撤销、watch 不通知时空闲已建立通道沿原 stop+join 退出；012 验证五类冻结描述错配零 open、严格 controller/原 operation 准备、显式 Registered 同时 keys outstanding、两公开匿名 CNG opener 各一次及立即 Relay/TLS 握手；013 覆盖九类批准/claim 失败，均在任何清理前检查撤销/零 open，并实测原一秒 cap 下两个匿名 key 已打开后无需 UI/exit/watch 自主失效与最终退休。Issuer opener 在类型中不存在，不是打开真实 Issuer key 的测试。
+- final2-groups-results.json：HostKeys 15、native crypto 38、Client 25、HostActivation 21、HostApproval 11、service 14、strict query 1 全部通过。HostKeys 包含在 crypto 内，Approval 中两个新源/stop 测试也包含在 network 25 内，其他旧分组亦有交叉，不合并成去重总数。
+- clippy3.*：冻结2源码 remote-host 严格 --lib --tests -- -D warnings exit 0。final2-fmt.* 是八个本片适合整文件检查的 Rust 模块只读格式验证；旧 compact network/composition/crypto 基线未做无关整文件重排。全部十五文件另做直接 UTF-8 字节及 diff-check。
+- default2-*：同源码默认 feature-off Cargo 调用选择独立原 artifact，native crypto 11 项通过，无 timeout；其 SHA256 为 67D068AF1C7A9BF494E82F133DBBFD296D273C416861263C18E31ED7A2C7D232。没有混用 remote-host 产物。底层改动在 feature-off 中仅增加受 cfg 限定的测试 helper，原行为保持。
+
+### 仍未完成的生产验收
+
+没有运行全量 Rust、真实 GUI/native dialog、已有用户 key loader、手机或公网端到端。原批准到双用途供应保管链已由公开匿名 fixture 验证，生产安装/配置和真正启动调用者仍未接入。当前 prepare 将两种 facade 的同次 attempt 限为最多五秒；Relay 建立、会合及晚 ClientHello 可能超过此窗口，不能据立即握手通过声称等待 Phone 后仍可用。
+
+下一独立片应在原 network/stage 独占的一次性 permit 中，于实际签名时领取不超过五秒的 attempt，Relay 和 Endpoint 分开领取，仍受同一原 key/fence/token/cap。LocalIdentity::new 会提前探测 choose_scheme，不能在那里消耗 permit；不得延长期限、重开 key、失败后续领或自动续期。原 Phone-first Offline 与任意顺序会合缺口继续保留，不用 sleep/buffer 掩盖。

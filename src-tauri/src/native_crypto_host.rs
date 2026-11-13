@@ -1,4 +1,4 @@
-//! 独立 Host 两用途保管前置片；无批准接线、真实 loader 或启动调用者。
+//! Host 两用途保管共用原批准 token；真实 loader 和生产启动调用者尚未接入。
 #![allow(
     dead_code,
     reason = "Host approval/supplier installation is a separate slice"
@@ -23,13 +23,33 @@ pub(crate) struct FrozenHostSupplier {
 }
 #[derive(Clone)]
 pub(crate) struct FrozenHostBinding {
-    pub(crate) profile: [u8; 16],
-    pub(crate) revision: u64,
+    pub(crate) native_profile: HostKeyProfileIdentity,
     pub(crate) endpoint_spki: [u8; 91],
     pub(crate) relay_spki: [u8; 91],
     pub(crate) origin: CanonicalOrigin,
     pub(crate) relay_id: [u8; 16],
     pub(crate) profile_cap: Instant,
+}
+/// 原生密钥供应配置域，既不是 CLI Profile，也不是 BrowserProfile。
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) struct HostKeyProfileIdentity {
+    pub(crate) id: [u8; 16],
+    pub(crate) revision: u64,
+}
+impl FrozenHostBinding {
+    pub(crate) fn validate(&self) -> Result<(), SignFailure> {
+        if self.native_profile.id == [0; 16]
+            || self.native_profile.revision == 0
+            || self.endpoint_spki == self.relay_spki
+            || self.relay_id == [0; 16]
+            || self.origin.as_str().len() > 512
+            || cc_desk_remote_security::P256Spki::new(&self.endpoint_spki).is_err()
+            || cc_desk_remote_security::P256Spki::new(&self.relay_spki).is_err()
+        {
+            return Err(SignFailure::Bounds);
+        }
+        Ok(())
+    }
 }
 impl FrozenHostSupplier {
     // 真实后端冻结构造尚未接入；测试只能供应公开匿名 key。
@@ -504,16 +524,7 @@ impl HostKeyPublisher {
             s.cap = s.cap.min(binding.profile_cap);
             s.supplier = Some(supplier);
         }
-        if binding.profile == [0; 16]
-            || binding.revision == 0
-            || binding.endpoint_spki == binding.relay_spki
-            || binding.relay_id == [0; 16]
-            || binding.origin.as_str().len() > 512
-            || cc_desk_remote_security::P256Spki::new(&binding.endpoint_spki).is_err()
-            || cc_desk_remote_security::P256Spki::new(&binding.relay_spki).is_err()
-        {
-            return Err(SignFailure::Bounds);
-        }
+        binding.validate()?;
         for (index, purpose, spki) in [
             (0, SigningPurpose::Endpoint, binding.endpoint_spki),
             (1, SigningPurpose::Relay, binding.relay_spki),

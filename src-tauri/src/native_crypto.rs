@@ -304,6 +304,8 @@ fn fixed_to_der(fixed: &[u8]) -> Result<Vec<u8>, CryptoError> {
 #[cfg(test)]
 #[path = "native_crypto_tests.rs"]
 mod tests;
+#[cfg(all(test, feature = "remote-host"))]
+pub(crate) use tests::test_host_supplier;
 
 #[path = "native_crypto_owner.rs"]
 pub(crate) mod owner;

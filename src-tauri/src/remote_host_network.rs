@@ -25,6 +25,9 @@ use std::{
     time::Duration,
 };
 use tokio::{sync::watch, time::Instant};
+#[path = "remote_host_approval_stop.rs"]
+mod approval_stop;
+pub(crate) use approval_stop::NativeApprovalStop;
 
 thread_local! { static SOURCE_SAMPLE_DEPTH: Cell<usize> = const { Cell::new(0) }; }
 thread_local! { static ACTIVE_SOURCE_CLOCKS: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) }; }
@@ -115,6 +118,13 @@ struct RegisteredHostSource {
     description: HostSourceDescription,
     origin: NativeRunNetworkOrigin,
     live: AtomicBool,
+    approval: Option<NativeApprovalStop>,
+}
+impl RegisteredHostSource {
+    fn is_live(&self) -> bool {
+        self.live.load(Ordering::Acquire)
+            && self.approval.as_ref().is_none_or(|stop| !stop.is_invalid())
+    }
 }
 /// 只能由本服务接受原 native 批准能力后取得；不是可序列化授权或 Ready。
 #[derive(Clone)]
@@ -129,7 +139,9 @@ pub(crate) struct HostSourceSlot {
     material_unknown: bool,
 }
 impl HostSourceSlot {
-    pub(crate) fn is_closed(&self) -> bool { self.closed }
+    pub(crate) fn is_closed(&self) -> bool {
+        self.closed || self.registration.as_ref().is_some_and(|source| !source.is_live())
+    }
     pub(crate) fn material_returned(&self) -> Option<Result<(), HostNetworkError>> {
         if self.material_unknown { Some(Err(HostNetworkError::Unknown)) }
         else if self.preflight || self.releasing || self.fresh.is_some() { None }
@@ -172,7 +184,7 @@ impl Drop for SourceMaterialHold<'_> {
 }
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum TestAttemptCause { Setup, AttemptStop, SourceWatch, Lease, Channel }
+pub(crate) enum TestAttemptCause { Setup, AttemptStop, SourceWatch, Approval, Lease, Channel }
 #[cfg(test)]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct TestAttemptEnd {
@@ -196,6 +208,7 @@ pub(crate) enum HostNetworkError {
 }
 struct ContinuityChecks(Box<dyn Fn() -> bool + Send + Sync>);
 struct SourceClock {
+    approval: Option<NativeApprovalStop>,
     source: Arc<ApprovedHostSource>,
     checks: Mutex<Weak<ContinuityChecks>>,
     sampled: Mutex<Option<u64>>,
@@ -207,12 +220,17 @@ impl GrantClock for SourceClock {
         let _sampling = SourceSampleGuard::enter();
         // 同线程同一 clock 在任何锁之前拒绝；不同 clock 和其他线程仍可正常采样。
         let Some(_entry) = SourceClockEntry::enter(self as *const Self as usize) else {
+            self.revoke_approval();
             self.failed.store(true, Ordering::Release);
             return Err(GrantError::Clock);
         };
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.sample())) {
-            Ok(result) => result,
+            Ok(result) => {
+                if result.is_err() { self.revoke_approval(); }
+                result
+            },
             Err(_) => {
+                self.revoke_approval();
                 self.failed.store(true, Ordering::Release);
                 self.unknown.store(true, Ordering::Release);
                 Err(GrantError::Clock)
@@ -221,6 +239,9 @@ impl GrantClock for SourceClock {
     }
 }
 impl SourceClock {
+    fn revoke_approval(&self) {
+        if let Some(approval) = &self.approval { approval.revoke(); }
+    }
     fn sample(&self) -> Result<u64, GrantError> {
         if self.failed.load(Ordering::Acquire) || self.unknown.load(Ordering::Acquire) {
             return Err(GrantError::Revoked);
@@ -416,9 +437,10 @@ impl HostNetworkCustody {
             .map_err(|_| HostNetworkError::Authority)?;
         let registration = start.registration;
         if registration.as_ref().is_some_and(|registered| !registered.origin.matches(&admission) || !Arc::ptr_eq(&registered.description.source, &inputs.source)) { return Err(HostNetworkError::Authority); }
+        let approval_stop = registration.as_ref().and_then(|source| source.approval.clone());
         let live_registration = registration.clone();
         let fresh = Arc::new(ContinuityChecks(Box::new(move || {
-            live_registration.as_ref().is_none_or(|registered| registered.live.load(Ordering::Acquire)) && checks()
+            live_registration.as_ref().is_none_or(|registered| registered.is_live()) && checks()
         })));
         let (clock, continuity) = {
             let mut state = self.open_state()?;
@@ -442,6 +464,7 @@ impl HostNetworkCustody {
                 (existing.clock.clone(), held)
             } else {
                 let clock = Arc::new(SourceClock {
+                    approval: approval_stop.clone(),
                     source: inputs.source.clone(),
                     checks: Mutex::new(Arc::downgrade(&fresh)),
                     sampled: Mutex::new(None),
@@ -493,7 +516,7 @@ impl HostNetworkCustody {
             } else {
                 run_attempt(
                     service, runtime, admission, inputs, connector, stopped, end, clock,
-                    continuity, &published,
+                    continuity, approval_stop, &published,
                 )
                 .await
             };
@@ -502,7 +525,7 @@ impl HostNetworkCustody {
                     owner.mark_unknown();
                 }
             }
-            if registration.as_ref().is_some_and(|registered| !registered.live.load(Ordering::Acquire)) {
+            if registration.as_ref().is_some_and(|registered| !registered.is_live()) {
                 if let Some(owner) = custody.upgrade() { owner.begin_shutdown(); }
             }
             if let Some(owner) = release_service.upgrade() { owner.drain_closed_source_materials(); }
@@ -597,6 +620,7 @@ async fn run_attempt(
     end: Instant,
     clock: Arc<SourceClock>,
     _continuity: Arc<ContinuityChecks>,
+    approval_stop: Option<NativeApprovalStop>,
     published: &watch::Sender<Option<Result<(), HostNetworkError>>>,
 ) -> Result<(), HostNetworkError> {
     #[cfg(test)]
@@ -731,6 +755,7 @@ async fn run_attempt(
         tokio::select! {biased;
             _ = stopped.changed() => Err(HostNetworkError::Closed),
             _ = source_stop.changed() => Err(HostNetworkError::Authority),
+            _ = NativeApprovalStop::wait(approval_stop.as_ref()) => Err(HostNetworkError::Authority),
             _ = tokio::time::sleep_until(end) => Err(HostNetworkError::Deadline),
             result = &mut work => result,
         }
@@ -743,6 +768,7 @@ async fn run_attempt(
         tokio::select! {biased;
             _ = stopped.changed() => { #[cfg(test)] { cause = TestAttemptCause::AttemptStop; selected_at = Instant::now(); } Ok(()) },
             _ = source_stop.changed() => { #[cfg(test)] { cause = TestAttemptCause::SourceWatch; selected_at = Instant::now(); } Ok(()) },
+            _ = NativeApprovalStop::wait(approval_stop.as_ref()) => { #[cfg(test)] { cause = TestAttemptCause::Approval; selected_at = Instant::now(); } Ok(()) },
             _ = tokio::time::sleep_until(expiry) => { #[cfg(test)] { cause = TestAttemptCause::Lease; selected_at = Instant::now(); } Ok(()) },
             result = channel.wait_closed_checked() => { #[cfg(test)] { cause = TestAttemptCause::Channel; selected_at = Instant::now(); } result.map(|_|()).map_err(|_|HostNetworkError::Unknown) },
         }
@@ -796,6 +822,15 @@ impl RemoteHostService {
         admission: &NativeRunAdmission,
         inputs: ApprovedHostInputs,
     ) -> Result<HostSourceToken, Box<(HostNetworkError, ApprovedHostInputs)>> {
+        self.register_approved_native_source(runtime, admission, inputs, None)
+    }
+    pub(crate) fn register_approved_native_source(
+        &self,
+        runtime: &NativeRuntime,
+        admission: &NativeRunAdmission,
+        inputs: ApprovedHostInputs,
+        approval: Option<NativeApprovalStop>,
+    ) -> Result<HostSourceToken, Box<(HostNetworkError, ApprovedHostInputs)>> {
         if self.network.unknown_latched.load(Ordering::Acquire) { return Err(Box::new((HostNetworkError::Unknown, inputs))); }
         let checked = (|| {
             if !admission.is_owned_by(runtime) || admission.scope().map_err(|_| HostNetworkError::Authority)? != inputs.policy.scope { return Err(HostNetworkError::Authority); }
@@ -803,14 +838,15 @@ impl RemoteHostService {
         })();
         let origin = match checked { Ok(origin) => origin, Err(error) => return Err(Box::new((error, inputs))) };
         let mut state = self.state.lock();
-        if state.closing || state.source_slot.closed || state.source_slot.registration.is_some() {
+        if state.closing || state.source_slot.closed || state.source_slot.registration.is_some()
+            || approval.as_ref().is_some_and(NativeApprovalStop::is_invalid) {
             return Err(Box::new((HostNetworkError::Locked, inputs)));
         }
         let ApprovedHostInputs { address, relay, tunnel, local, phone_pin, binding, browser, issuer, principal, policy, source, setup_budget, io_budget,
             #[cfg(test)] outer_accepted,
             #[cfg(test)] termination,
         } = inputs;
-        let registration = Arc::new(RegisteredHostSource { description: HostSourceDescription { address, tunnel, phone_pin, binding, browser, issuer, principal, policy, source, setup_budget, io_budget }, origin, live: AtomicBool::new(true) });
+        let registration = Arc::new(RegisteredHostSource { description: HostSourceDescription { address, tunnel, phone_pin, binding, browser, issuer, principal, policy, source, setup_budget, io_budget }, origin, live: AtomicBool::new(true), approval });
         state.source_slot.fresh = Some(HostAttemptMaterials { local, relay, #[cfg(test)] outer_accepted, #[cfg(test)] termination });
         state.source_slot.registration = Some(registration.clone());
         Ok(HostSourceToken(Arc::downgrade(&registration)))
@@ -828,7 +864,7 @@ impl RemoteHostService {
             return Err(Box::new((HostNetworkError::Authority, material)));
         }
         let mut state = self.state.lock();
-        if state.closing || state.source_slot.closed || state.source_slot.preflight || state.source_slot.material_unknown || !registration.live.load(Ordering::Acquire) || !state.source_slot.registration.as_ref().is_some_and(|current| Arc::ptr_eq(current, &registration)) || state.source_slot.fresh.is_some() {
+        if state.closing || state.source_slot.closed || state.source_slot.preflight || state.source_slot.material_unknown || !registration.is_live() || !state.source_slot.registration.as_ref().is_some_and(|current| Arc::ptr_eq(current, &registration)) || state.source_slot.fresh.is_some() {
             return Err(Box::new((HostNetworkError::Locked, material)));
         }
         state.source_slot.fresh = Some(material);
@@ -873,7 +909,7 @@ impl RemoteHostService {
         if !admission.is_owned_by(&runtime) || !registration.origin.matches(&admission) || admission.scope().map_err(|_| HostNetworkError::Authority)? != registration.description.policy.scope { return Err(HostNetworkError::Authority); }
         let material = {
             let mut state = self.state.lock();
-            if state.closing || state.source_slot.closed || state.source_slot.preflight || state.source_slot.material_unknown || !registration.live.load(Ordering::Acquire) || !state.source_slot.registration.as_ref().is_some_and(|current| Arc::ptr_eq(current, &registration)) { return Err(HostNetworkError::Closed); }
+            if state.closing || state.source_slot.closed || state.source_slot.preflight || state.source_slot.material_unknown || !registration.is_live() || !state.source_slot.registration.as_ref().is_some_and(|current| Arc::ptr_eq(current, &registration)) { return Err(HostNetworkError::Closed); }
             if state.source_slot.fresh.is_none() { return Err(HostNetworkError::Locked); }
             state.source_slot.preflight = true;
             state.source_slot.fresh.take().expect("original single material reserved under the same lock")
@@ -929,6 +965,14 @@ impl RemoteHostService {
     #[cfg(test)]
     pub(crate) fn test_network_attempts(&self) -> usize { self.network.state.lock().attempts.len() }
     #[cfg(test)]
+    pub(crate) fn test_observe_fresh_material(&self, accepted: tokio::sync::oneshot::Sender<()>, termination: tokio::sync::oneshot::Sender<TestAttemptEnd>) {
+        let mut state = self.state.lock();
+        let material = state.source_slot.fresh.as_mut().expect("original unconsumed material");
+        assert!(material.outer_accepted.is_none() && material.termination.is_none());
+        material.outer_accepted = Some(accepted);
+        material.termination = Some(termination);
+    }
+    #[cfg(test)]
     pub(crate) fn test_source_material_pending(&self) -> bool { self.state.lock().source_slot.fresh.is_some() }
     #[cfg(test)]
     pub(crate) fn test_network_stop_receiver(&self) -> Option<watch::Receiver<bool>> { self.network.state.lock().attempts.last().map(|attempt| attempt.stop.subscribe()) }
@@ -937,6 +981,34 @@ impl RemoteHostService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
+    #[test]
+    #[allow(non_snake_case)]
+    fn HostApproval_SourceValueFailureRevokesKeys_010() {
+        let mut results = Vec::new();
+        for next in [999u64, 11000] {
+            let token = crate::native_crypto::owner::NativeRevocation::new();
+            let stop = NativeApprovalStop::new(token.clone(), std::time::Instant::now() + Duration::from_secs(30));
+            let live = stop.clone();
+            let checks = Arc::new(ContinuityChecks(Box::new(move || !live.is_invalid())));
+            let value = Arc::new(std::sync::atomic::AtomicU64::new(1000));
+            let provider = value.clone();
+            let (watch, revoked) = watch::channel(false);
+            let clock = SourceClock {
+                approval: Some(stop),
+                source: Arc::new(ApprovedHostSource { clock: Arc::new(move || Ok(provider.load(Ordering::Acquire))), revoked, expires_host_ms: 11000 }),
+                checks: Mutex::new(Arc::downgrade(&checks)), sampled: Mutex::new(None),
+                failed: AtomicBool::new(false), unknown: Arc::new(AtomicBool::new(false)),
+            };
+            assert_eq!(clock.now_ms(), Ok(1000));
+            value.store(next, Ordering::Release);
+            assert_eq!(clock.now_ms(), Err(if next == 999 { GrantError::Clock } else { GrantError::Expired }));
+            results.push((next, token.is_revoked(), *watch.borrow(), clock.unknown.load(Ordering::Acquire)));
+        }
+        eprintln!("TEST_ONLY_SOURCE_VALUE_FAILURE {results:?}");
+        assert!(results.iter().all(|(_, revoked, watch, unknown)| *revoked && !watch && !unknown), "source value failure did not revoke original key token");
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn source_material_drop_must_return_before_real_exit_publication() {
         use crate::cli::{launch_service::LaunchService, storage::WorkspaceRepository};
@@ -1016,7 +1088,7 @@ mod tests {
         let checked_owner = Arc::downgrade(&owner);
         let checks = Arc::new(ContinuityChecks(Box::new(move || checked_owner.upgrade().is_some_and(|owner| owner.network_admission_open()))));
         let (_lease, revoked) = watch::channel(false);
-        let clock = SourceClock { source: Arc::new(ApprovedHostSource { clock: Arc::new(move || {
+        let clock = SourceClock { approval: None, source: Arc::new(ApprovedHostSource { clock: Arc::new(move || {
             assert_eq!(source_owner.request_exit(99, false), crate::remote_host::ExitDecision::Wait(99));
             let exit = exit.lock().take().unwrap();
             source_owner.start_exit(99, native.clone(), client.clone(), move |code| { let _ = exit.send(code); });
@@ -1074,6 +1146,7 @@ mod tests {
         let checks = Arc::new(ContinuityChecks(Box::new(move || checked.load(Ordering::Acquire))));
         let (_lease, revoked) = watch::channel(false);
         let clock = SourceClock {
+            approval: None,
             source: Arc::new(ApprovedHostSource { clock: Arc::new(move || { revoked_in_callback.store(false, Ordering::Release); Ok(1000) }), revoked, expires_host_ms: 11000 }),
             checks: Mutex::new(Arc::downgrade(&checks)),
             sampled: Mutex::new(None),
@@ -1159,6 +1232,7 @@ mod tests {
             true
         })));
         let clock = Arc::new(SourceClock {
+            approval: None,
             source: Arc::new(ApprovedHostSource {
                 clock: Arc::new(move || {
                     assert!(continuity_panics || !provider_fault.load(Ordering::Acquire), "TEST_ONLY_PROVIDER_PANIC");
@@ -1336,6 +1410,7 @@ mod tests {
         let time = now.clone();
         let checks = Arc::new(ContinuityChecks(Box::new(|| true)));
         let clock = SourceClock {
+            approval: None,
             source: Arc::new(ApprovedHostSource {
                 clock: Arc::new(move || Ok(time.load(Ordering::Acquire))),
                 revoked,
@@ -1420,6 +1495,7 @@ mod tests {
         let (stop, revoked) = watch::channel(false);
         let checks = Arc::new(ContinuityChecks(Box::new(|| true)));
         let clock = Arc::new(SourceClock {
+            approval: None,
             source: Arc::new(ApprovedHostSource {
                 clock: source,
                 revoked,
@@ -1458,7 +1534,7 @@ mod reentry_regression {
     fn clock(provider:Arc<dyn GrantClock>)->(Arc<SourceClock>,watch::Sender<bool>,Arc<ContinuityChecks>){
         let (sender,revoked)=watch::channel(false);
         let checks=Arc::new(ContinuityChecks(Box::new(||true)));
-        let clock=Arc::new(SourceClock{source:Arc::new(ApprovedHostSource{clock:provider,revoked,expires_host_ms:11000}),checks:Mutex::new(Arc::downgrade(&checks)),sampled:Mutex::new(None),failed:AtomicBool::new(false),unknown:Arc::new(AtomicBool::new(false))});
+        let clock=Arc::new(SourceClock{approval:None,source:Arc::new(ApprovedHostSource{clock:provider,revoked,expires_host_ms:11000}),checks:Mutex::new(Arc::downgrade(&checks)),sampled:Mutex::new(None),failed:AtomicBool::new(false),unknown:Arc::new(AtomicBool::new(false))});
         (clock,sender,checks)
     }
     // 父测试始终使用独立子进程及有界 watchdog，递归同步自锁不会阻塞测试进程。

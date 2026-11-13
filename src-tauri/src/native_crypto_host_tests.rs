@@ -290,8 +290,10 @@ fn frozen_binding(cap: Instant, origin: &str) -> FrozenHostBinding {
     let endpoint = hex(vector()["public_key_sec1"].as_str().unwrap());
     let relay=hex("046b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c2964fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5");
     FrozenHostBinding {
-        profile: [7; 16],
-        revision: 9,
+        native_profile: HostKeyProfileIdentity {
+            id: [7; 16],
+            revision: 9,
+        },
         endpoint_spki: [SPKI_HEAD, &endpoint[1..]].concat().try_into().unwrap(),
         relay_spki: [SPKI_HEAD, &relay[1..]].concat().try_into().unwrap(),
         origin: cc_desk_remote_record::appbind::CanonicalOrigin::trusted(origin).unwrap(),
@@ -346,7 +348,7 @@ fn HostKeys_MetadataAndPrecancelOpenNothing_005() {
         match mode {
             1 => binding.endpoint_spki[0] = 0,
             2 => binding.relay_spki = binding.endpoint_spki,
-            3 => binding.profile = [0; 16],
+            3 => binding.native_profile.id = [0; 16],
             4 => binding.profile_cap = Instant::now(),
             5 => {
                 binding.origin = cc_desk_remote_record::appbind::CanonicalOrigin::trusted(&format!(
@@ -385,9 +387,12 @@ async fn HostKeys_FrozenRolesSignWhileBusinessDoneKeepsResources_006() {
     let expected = source.clone();
     let calls = counters();
     let frozen = supplier(source.clone(), calls.clone());
-    source.revision += 1;
+    source.native_profile.revision += 1;
     source.endpoint_spki[0] = 0;
-    assert_eq!(frozen.binding().revision, expected.revision);
+    assert_eq!(
+        frozen.binding().native_profile.revision,
+        expected.native_profile.revision
+    );
     assert_eq!(frozen.binding().endpoint_spki, expected.endpoint_spki);
     let mut reservation = ActivationOperation::test_reservation();
     let operation = reservation.operation();

@@ -14,10 +14,18 @@ static DIALOG_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicB
 const PENDING: Duration = Duration::from_secs(30);
 const APPROVAL: Duration = Duration::from_secs(300);
 
+#[cfg(test)]
+#[path = "remote_host_approval_binding_tests.rs"]
+mod binding_tests;
+#[path = "remote_host_approval_frozen.rs"]
+mod frozen;
+pub(crate) use frozen::FrozenHostApproval;
+
 /// 状态机只持不可变后端描述，不接收密钥、运行所有权或 IPC 数据。
 /// 泛型仅限私有状态机；对外桥接使用具体描述。
 struct ApprovalMachine<T> {
     state: Mutex<State<T>>,
+    lease: Arc<ApprovalLease>,
 }
 struct State<T> {
     description: Option<T>,
@@ -36,6 +44,7 @@ struct MachinePermit<T> {
 impl<T: Send + 'static> ApprovalMachine<T> {
     fn pending(description: T, now: Instant, cap: Instant) -> Arc<Self> {
         Arc::new(Self {
+            lease: ApprovalLease::new(),
             state: Mutex::new(State {
                 description: Some(description),
                 pending_end: now + PENDING,
@@ -77,6 +86,7 @@ impl<T: Send + 'static> ApprovalMachine<T> {
         }
         state.callback_outstanding = false;
         if state.closed || !yes || now >= state.pending_end || now >= state.cap {
+            self.lease.revoke_only();
             state.closed = true;
             let discarded = state.description.take();
             drop(state);
@@ -86,6 +96,7 @@ impl<T: Send + 'static> ApprovalMachine<T> {
         state.approved_end = Some((now + APPROVAL).min(state.cap));
     }
     pub(crate) fn cancel(&self) {
+        self.lease.revoke_only();
         let mut state = self.state.lock();
         state.closed = true;
         let discarded = state.description.take();
@@ -102,6 +113,7 @@ impl<T: Send + 'static> ApprovalMachine<T> {
             .approved_end
             .unwrap_or(state.pending_end.min(state.cap));
         if state.closed || now >= end {
+            self.lease.revoke_only();
             state.closed = true;
             let discarded = state.description.take();
             drop(state);
@@ -124,10 +136,16 @@ impl<T> MachinePermit<T> {
     /// 调用方必须重新验证原运行，并保管全部产出材料。
     pub(crate) fn consume<U>(self, prepare: impl FnOnce(T, Instant) -> U) -> Option<U> {
         let owner = self.owner.upgrade()?;
-        if owner.state.lock().closed || Instant::now() >= self.end {
+        if owner.lease.is_revoked() || owner.state.lock().closed || Instant::now() >= self.end {
+            owner.lease.revoke_only();
             return None;
         }
         Some(prepare(self.description, self.end))
+    }
+}
+impl<T> Drop for ApprovalMachine<T> {
+    fn drop(&mut self) {
+        self.lease.revoke_only();
     }
 }
 #[cfg(test)]
@@ -210,18 +228,51 @@ pub(crate) struct HostApprovalDescription {
     pub setup_budget: Duration,
     pub io_budget: Duration,
 }
-struct BoundDescription {
-    fields: HostApprovalDescription,
-    origin: NativeRunNetworkOrigin,
-}
+type BoundDescription = FrozenHostApproval;
 struct ApprovalLease {
+    #[cfg(windows)]
+    native: Arc<crate::native_crypto::owner::NativeRevocation>,
+    #[cfg(not(windows))]
+    invalid: std::sync::atomic::AtomicBool,
     #[cfg(test)]
     before_publish: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     revoked: watch::Sender<bool>,
     registration: Mutex<Option<(std::sync::Weak<RemoteHostService>, HostSourceToken)>>,
 }
 impl ApprovalLease {
+    fn new() -> Arc<Self> {
+        let (revoked, _) = watch::channel(false);
+        Arc::new(Self {
+            #[cfg(windows)]
+            native: crate::native_crypto::owner::NativeRevocation::new(),
+            #[cfg(not(windows))]
+            invalid: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(test)]
+            before_publish: Mutex::new(None),
+            revoked,
+            registration: Mutex::new(None),
+        })
+    }
+    fn is_revoked(&self) -> bool {
+        #[cfg(windows)]
+        {
+            self.native.is_revoked()
+        }
+        #[cfg(not(windows))]
+        {
+            self.invalid.load(std::sync::atomic::Ordering::Acquire)
+        }
+    }
+    /// 资格事实先失效；这里没有 wake、service 升级、材料析构或外部 clock。
+    fn revoke_only(&self) {
+        #[cfg(windows)]
+        self.native.revoke();
+        #[cfg(not(windows))]
+        self.invalid
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
     fn cancel(&self) {
+        self.revoke_only();
         self.revoked.send_if_modified(|value| {
             if *value {
                 false
@@ -238,6 +289,26 @@ impl ApprovalLease {
         }
     }
 }
+/// 原票据/采样失败只能纯撤销，不在 prepare 或 release worker 上升级 service。
+struct LeaseFailure {
+    lease: Arc<ApprovalLease>,
+    armed: bool,
+}
+impl LeaseFailure {
+    fn new(lease: Arc<ApprovalLease>) -> Self {
+        Self { lease, armed: true }
+    }
+    fn complete(&mut self) {
+        self.armed = false;
+    }
+}
+impl Drop for LeaseFailure {
+    fn drop(&mut self) {
+        if self.armed {
+            self.lease.revoke_only();
+        }
+    }
+}
 struct ApprovalClock {
     original: Arc<dyn GrantClock>,
     lease: Arc<ApprovalLease>,
@@ -245,19 +316,21 @@ struct ApprovalClock {
 }
 impl GrantClock for ApprovalClock {
     fn now_ms(&self) -> Result<u64, GrantError> {
-        if *self.lease.revoked.borrow() {
+        if self.lease.is_revoked() {
             return Err(GrantError::Revoked);
         }
+        let mut failure = LeaseFailure::new(self.lease.clone());
         if Instant::now() >= self.end {
             return Err(GrantError::Expired);
         }
         let now = self.original.now_ms()?;
-        if *self.lease.revoked.borrow() {
+        if self.lease.is_revoked() {
             return Err(GrantError::Revoked);
         }
         if Instant::now() >= self.end {
             return Err(GrantError::Expired);
         }
+        failure.complete();
         Ok(now)
     }
 }
@@ -295,32 +368,15 @@ impl NativeHostApproval {
     pub(crate) fn show<R: tauri::Runtime>(
         app: &tauri::AppHandle<R>,
         window: &tauri::Window<R>,
-        description: HostApprovalDescription,
+        mut frozen: FrozenHostApproval,
         admission: &NativeRunAdmission,
-        profile_cap: Instant,
     ) -> Result<Self, HostNetworkError> {
-        let origin = admission
-            .network_origin()
-            .map_err(|_| HostNetworkError::Authority)?;
-        if admission.scope().ok().as_ref() != Some(&description.policy.scope) {
+        if !frozen.matches(admission) {
             return Err(HostNetworkError::Authority);
         }
-        let now = description
-            .clock
-            .now_ms()
-            .map_err(|_| HostNetworkError::Authority)?;
-        let remaining = description
-            .expires_host_ms
-            .checked_sub(now)
-            .filter(|ms| *ms > 0)
-            .ok_or(HostNetworkError::Deadline)?;
-        let cap = Instant::now()
-            .checked_add(Duration::from_millis(remaining))
-            .ok_or(HostNetworkError::Bounds)?
-            .min(profile_cap);
-        if cap <= Instant::now() {
-            return Err(HostNetworkError::Deadline);
-        }
+        frozen.constrain_from_clock()?;
+        let cap = frozen.cap();
+        let description = &frozen.fields;
         if DIALOG_ACTIVE
             .compare_exchange(
                 false,
@@ -333,7 +389,7 @@ impl NativeHostApproval {
             return Err(HostNetworkError::Locked);
         }
         let full = format!(
-            "Local endpoint: {:02x?} ({:?})\nRelay identity: {:?}\n{}",
+            "Local endpoint: {:02x?} ({:?})\nRelay identity: {:?}\n{}{}",
             description.endpoint_id,
             description.endpoint_role,
             (
@@ -344,6 +400,7 @@ impl NativeHostApproval {
                     "Phone"
                 }
             ),
+            frozen.signing_text(),
             description.render()
         );
         use sha2::{Digest, Sha256};
@@ -353,31 +410,17 @@ impl NativeHostApproval {
         digest.update(
             format!(
                 "{:?}|{}|{:?}",
-                description.policy.scope, description.expires_host_ms, profile_cap
+                description.policy.scope, description.expires_host_ms, cap
             )
             .as_bytes(),
         );
         let fingerprint: [u8; 32] = digest.finalize().into();
         let text = format!("One connection only; no automatic reconnect.\nRun: {}\nRole: {:?}\nOrigin: {}\nPhone: {:02x?}\nExpires within five minutes or earlier profile/policy limit.\nFrozen description SHA256: {:02x?}\n\n{}", public_text(&description.policy.scope.run), description.policy.role, description.binding.origin.as_str(), description.phone_pin.endpoint_id(), fingerprint, full);
 
-        let (revoked, _) = watch::channel(false);
+        let machine = ApprovalMachine::show(app, window, frozen, text, cap);
         Ok(Self {
-            machine: ApprovalMachine::show(
-                app,
-                window,
-                BoundDescription {
-                    fields: description,
-                    origin,
-                },
-                text,
-                cap,
-            ),
-            lease: Arc::new(ApprovalLease {
-                #[cfg(test)]
-                before_publish: Mutex::new(None),
-                revoked,
-                registration: Mutex::new(None),
-            }),
+            lease: machine.lease.clone(),
+            machine,
         })
     }
     pub(crate) fn cancel(&self) {
@@ -386,6 +429,22 @@ impl NativeHostApproval {
     }
     pub(crate) fn callback_outstanding(&self) -> bool {
         self.machine.callback_outstanding()
+    }
+    #[cfg(test)]
+    pub(crate) fn has_supplier(&self) -> bool {
+        #[cfg(windows)]
+        {
+            self.machine
+                .state
+                .lock()
+                .description
+                .as_ref()
+                .is_some_and(|d| d.supplier.is_some())
+        }
+        #[cfg(not(windows))]
+        {
+            false
+        }
     }
     /// 调用方轮询可清理到期描述；这不表示原生框线程已回收。
     pub(crate) fn poll_expiry(&self) {
@@ -431,24 +490,49 @@ impl NativeHostApproval {
         self.machine.state.lock().approved_end = Some(Instant::now());
     }
     #[cfg(test)]
+    pub(crate) fn test_revoke_only(&self) {
+        self.lease.revoke_only();
+    }
+    #[cfg(all(test, windows))]
+    pub(crate) fn test_native_token(&self) -> Arc<crate::native_crypto::owner::NativeRevocation> {
+        self.lease.native.clone()
+    }
+    #[cfg(test)]
+    pub(crate) fn test_watch_revoked(&self) -> bool {
+        *self.lease.revoked.borrow()
+    }
+    #[cfg(test)]
     pub(crate) fn test_record_description(
         fields: HostApprovalDescription,
         admission: &NativeRunAdmission,
     ) -> Self {
         let origin = admission.network_origin().unwrap();
         let now = Instant::now();
-        let machine =
-            ApprovalMachine::pending(BoundDescription { fields, origin }, now, now + APPROVAL);
+        let machine = ApprovalMachine::pending(
+            BoundDescription::fixture(fields, origin, now + APPROVAL),
+            now,
+            now + APPROVAL,
+        );
         machine.complete(true, now);
-        let (revoked, _) = watch::channel(false);
         Self {
+            lease: machine.lease.clone(),
             machine,
-            lease: Arc::new(ApprovalLease {
-                before_publish: Mutex::new(None),
-                revoked,
-                registration: Mutex::new(None),
-            }),
         }
+    }
+    #[cfg(test)]
+    pub(crate) fn test_record_frozen(
+        mut frozen: FrozenHostApproval,
+        yes: bool,
+    ) -> Result<Self, HostNetworkError> {
+        frozen.constrain_from_clock()?;
+        let cap = frozen.cap();
+        let now = Instant::now();
+        let machine = ApprovalMachine::pending(frozen, now, cap);
+        machine.complete(yes, now);
+        Ok(Self {
+            lease: machine.lease.clone(),
+            machine,
+        })
     }
     #[cfg(test)]
     pub(crate) fn test_take_description(&self) -> HostApprovalDescription {
@@ -496,19 +580,16 @@ impl NativeHostApproval {
         };
         let origin = admission.network_origin().unwrap();
         let now = Instant::now();
-        let machine =
-            ApprovalMachine::pending(BoundDescription { fields, origin }, now, now + APPROVAL);
+        let machine = ApprovalMachine::pending(
+            BoundDescription::fixture(fields, origin, now + APPROVAL),
+            now,
+            now + APPROVAL,
+        );
         machine.complete(yes, now);
-        let (revoked, _) = watch::channel(false);
         (
             Self {
+                lease: machine.lease.clone(),
                 machine,
-                lease: Arc::new(ApprovalLease {
-                    #[cfg(test)]
-                    before_publish: Mutex::new(None),
-                    revoked,
-                    registration: Mutex::new(None),
-                }),
             },
             HostAttemptMaterials {
                 local,
@@ -533,7 +614,7 @@ impl NativeHostApproval {
                 Reply::Cancelled
             };
         }
-        if *self.lease.revoked.borrow() {
+        if self.lease.is_revoked() {
             return Reply::Cancelled;
         }
         if self.lease.registration.lock().is_some() {
@@ -552,26 +633,28 @@ impl NativeHostApproval {
         &self,
         admission: &NativeRunAdmission,
     ) -> Result<ActivationTicket, HostNetworkError> {
+        self.claim_activation(admission)?.validate(admission)
+    }
+    /// 只认原 run；不取 clock。未取得 claim 的外国/重复请求无撤销副作用。
+    pub(crate) fn claim_activation(
+        &self,
+        admission: &NativeRunAdmission,
+    ) -> Result<ActivationClaim, HostNetworkError> {
+        admission
+            .network_origin()
+            .map_err(|_| HostNetworkError::Authority)?;
+        {
+            let state = self.machine.state.lock();
+            let bound = state.description.as_ref().ok_or(HostNetworkError::Locked)?;
+            if !bound.origin.matches(admission) {
+                return Err(HostNetworkError::Authority);
+            }
+        }
         let permit = self.machine.take().ok_or(HostNetworkError::Locked)?;
-        let bound = &permit.description;
-        if *self.lease.revoked.borrow()
-            || Instant::now() >= permit.end
-            || !bound.origin.matches(admission)
-            || admission.network_origin().is_err()
-        {
-            return Err(HostNetworkError::Authority);
-        }
-        let sample =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| bound.fields.clock.now_ms()));
-        if !matches!(sample, Ok(Ok(now)) if now < bound.fields.expires_host_ms)
-            || *self.lease.revoked.borrow()
-            || Instant::now() >= permit.end
-        {
-            return Err(HostNetworkError::Deadline);
-        }
-        Ok(ActivationTicket {
-            permit,
+        Ok(ActivationClaim {
+            permit: Some(permit),
             lease: self.lease.clone(),
+            failure: Some(LeaseFailure::new(self.lease.clone())),
         })
     }
     #[cfg(test)]
@@ -589,12 +672,110 @@ impl NativeHostApproval {
         ticket.register_material(runtime, admission, service, material)
     }
 }
+pub(crate) struct ActivationClaim {
+    failure: Option<LeaseFailure>,
+    permit: Option<MachinePermit<BoundDescription>>,
+    lease: Arc<ApprovalLease>,
+}
+impl ActivationClaim {
+    #[cfg(windows)]
+    pub(crate) fn has_supplier(&self) -> bool {
+        self.permit
+            .as_ref()
+            .expect("original claim")
+            .description
+            .supplier
+            .is_some()
+    }
+    pub(crate) fn end(&self) -> Instant {
+        self.permit.as_ref().expect("original claim").end
+    }
+    #[cfg(windows)]
+    pub(crate) fn native_token(&self) -> Arc<crate::native_crypto::owner::NativeRevocation> {
+        self.lease.native.clone()
+    }
+    pub(crate) fn validate(
+        mut self,
+        admission: &NativeRunAdmission,
+    ) -> Result<ActivationTicket, HostNetworkError> {
+        let permit = self.permit.as_ref().expect("original claim");
+        let bound = &permit.description;
+        if self.lease.is_revoked()
+            || Instant::now() >= permit.end
+            || !bound.origin.matches(admission)
+            || admission.network_origin().is_err()
+        {
+            return Err(HostNetworkError::Authority);
+        }
+        let sample =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| bound.fields.clock.now_ms()));
+        if !matches!(sample, Ok(Ok(now)) if now < bound.fields.expires_host_ms)
+            || self.lease.is_revoked()
+            || Instant::now() >= permit.end
+        {
+            return Err(HostNetworkError::Deadline);
+        }
+        Ok(ActivationTicket {
+            permit: self.permit.take().expect("original claim"),
+            lease: self.lease.clone(),
+            failure: self.failure.take().expect("original failure guard"),
+        })
+    }
+}
 /// 私有构造且不可复制；消费批准之后才允许准备材料。
 pub(crate) struct ActivationTicket {
+    failure: LeaseFailure,
     permit: MachinePermit<BoundDescription>,
     lease: Arc<ApprovalLease>,
 }
 impl ActivationTicket {
+    #[cfg(windows)]
+    pub(crate) fn prepare_frozen(
+        mut self,
+        runtime: Arc<NativeRuntime>,
+        admission: NativeRunAdmission,
+        service: std::sync::Weak<RemoteHostService>,
+        signal: Arc<crate::remote_host::activation::ActivationSignal>,
+        publisher: crate::native_crypto::host::HostKeyPublisher,
+    ) -> crate::remote_host::activation::PreparationResult {
+        use crate::remote_host::activation::PreparationResult;
+        if signal.cancelled()
+            || self.lease.is_revoked()
+            || Instant::now() >= self.permit.end
+            || !self.permit.description.origin.matches(&admission)
+            || admission.network_origin().is_err()
+        {
+            return PreparationResult::Complete(false);
+        }
+        let Some(supplier) = self.permit.description.supplier.take() else {
+            return PreparationResult::Complete(false);
+        };
+        let public = match P256Spki::new(&supplier.binding().endpoint_spki) {
+            Ok(public) => public,
+            Err(_) => return PreparationResult::Complete(false),
+        };
+        let set = match publisher.prepare(supplier) {
+            Ok(set) => set,
+            Err(_) => return PreparationResult::Complete(false),
+        };
+        let local = match cc_desk_remote_security::LocalIdentity::new(
+            cc_desk_remote_security::Role::Host,
+            public,
+            set.endpoint,
+        ) {
+            Ok(local) => local,
+            Err(_) => return PreparationResult::Complete(false),
+        };
+        let material = HostAttemptMaterials {
+            local,
+            relay: set.relay,
+            #[cfg(test)]
+            outer_accepted: None,
+            #[cfg(test)]
+            termination: None,
+        };
+        self.completion(runtime, admission, service, signal, material)
+    }
     #[cfg(test)]
     pub(crate) fn prepare_fixture(
         self,
@@ -606,7 +787,7 @@ impl ActivationTicket {
     ) -> crate::remote_host::activation::PreparationResult {
         use crate::remote_host::activation::PreparationResult;
         if signal.cancelled()
-            || *self.lease.revoked.borrow()
+            || self.lease.is_revoked()
             || Instant::now() >= self.permit.end
             || !self.permit.description.origin.matches(&admission)
             || admission.network_origin().is_err()
@@ -614,6 +795,17 @@ impl ActivationTicket {
             return PreparationResult::Complete(false);
         }
         let material = prepare();
+        self.completion(runtime, admission, service, signal, material)
+    }
+    fn completion(
+        self,
+        runtime: Arc<NativeRuntime>,
+        admission: NativeRunAdmission,
+        service: std::sync::Weak<RemoteHostService>,
+        signal: Arc<crate::remote_host::activation::ActivationSignal>,
+        material: HostAttemptMaterials,
+    ) -> crate::remote_host::activation::PreparationResult {
+        use crate::remote_host::activation::PreparationResult;
         // worker 只归还材料与登记能力。升级 service 必须等原线程实际 join 之后。
         PreparationResult::Prepared(Box::new(move || {
             if signal.cancelled() {
@@ -633,10 +825,15 @@ impl ActivationTicket {
         service: &Arc<RemoteHostService>,
         material: HostAttemptMaterials,
     ) -> Result<(), ApprovalRegistrationError> {
-        let Self { permit, lease } = self;
+        let Self {
+            permit,
+            lease,
+            failure,
+        } = self;
         let end = permit.end;
         let bound = permit.description;
-        if *lease.revoked.borrow()
+        let validation_failure = failure;
+        if lease.is_revoked()
             || Instant::now() >= end
             || !bound.origin.matches(admission)
             || admission.network_origin().is_err()
@@ -644,6 +841,7 @@ impl ActivationTicket {
             return Err(ApprovalRegistrationError::Rejected(material));
         }
         let d = bound.fields;
+        let mut failure = validation_failure;
         if material.local.endpoint_id() != d.endpoint_id
             || material.local.role() != d.endpoint_role
             || material.relay.binding() != d.relay_binding
@@ -653,7 +851,7 @@ impl ActivationTicket {
         // 外部时钟不占用 owner 锁；返回后再次检查撤销和本机期限。
         let sample = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| d.clock.now_ms()));
         if !matches!(sample, Ok(Ok(now)) if now < d.expires_host_ms)
-            || *lease.revoked.borrow()
+            || lease.is_revoked()
             || Instant::now() >= end
         {
             return Err(ApprovalRegistrationError::Rejected(material));
@@ -694,8 +892,15 @@ impl ActivationTicket {
             #[cfg(test)]
             termination,
         };
+        #[cfg(windows)]
+        let stop = Some(crate::remote_host_network::NativeApprovalStop::new(
+            lease.native.clone(),
+            end,
+        ));
+        #[cfg(not(windows))]
+        let stop = None;
         let token = service
-            .register_native_source(runtime, admission, inputs)
+            .register_approved_native_source(runtime, admission, inputs, stop)
             .map_err(ApprovalRegistrationError::Registration)?;
         #[cfg(test)]
         {
@@ -705,10 +910,11 @@ impl ActivationTicket {
             }
         }
         *lease.registration.lock() = Some((Arc::downgrade(service), token.clone()));
-        if *lease.revoked.borrow() || Instant::now() >= end {
+        if lease.is_revoked() || Instant::now() >= end {
             lease.cancel();
             return Err(ApprovalRegistrationError::Revoked);
         }
+        failure.complete();
         Ok(())
     }
 }
@@ -723,13 +929,7 @@ impl Drop for NativeHostApproval {
 #[test]
 #[allow(non_snake_case)]
 fn HostApproval_ClockRevocationIsSticky_005() {
-    let (revoked, _) = watch::channel(false);
-    let lease = Arc::new(ApprovalLease {
-        #[cfg(test)]
-        before_publish: Mutex::new(None),
-        revoked,
-        registration: Mutex::new(None),
-    });
+    let lease = ApprovalLease::new();
     let clock = ApprovalClock {
         original: Arc::new(|| Ok(123)),
         lease: lease.clone(),
@@ -746,9 +946,10 @@ fn HostApproval_ClockRevocationIsSticky_005() {
 #[allow(non_snake_case)]
 fn HostApproval_RevokedLeaseNeverReportsAvailable_006() {
     let now = Instant::now();
-    let (revoked, _) = watch::channel(false);
+    let lease = ApprovalLease::new();
     let owner = NativeHostApproval {
         machine: Arc::new(ApprovalMachine {
+            lease: lease.clone(),
             state: Mutex::new(State {
                 description: None,
                 pending_end: now + PENDING,
@@ -758,11 +959,7 @@ fn HostApproval_RevokedLeaseNeverReportsAvailable_006() {
                 callback_outstanding: false,
             }),
         }),
-        lease: Arc::new(ApprovalLease {
-            revoked,
-            registration: Mutex::new(None),
-            before_publish: Mutex::new(None),
-        }),
+        lease,
     };
     assert_eq!(
         owner.control_reply(),
