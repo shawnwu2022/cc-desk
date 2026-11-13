@@ -10,23 +10,31 @@ export function browserConnectionSource(inputs:ApprovedBrowserInputs|undefined):
  const approved=inputs===undefined?undefined:approvedBrowserInputs(inputs);let occupied=false;
  return Object.freeze({async open(signal:AbortSignal,deadline=performance.timeOrigin+performance.now()+10000){
   if(!approved)return undefined;
-  if(occupied||signal.aborted||typeof Window==='undefined'||!(globalThis instanceof Window)||globalThis.top!==globalThis.self||!globalThis.isSecureContext||!globalThis.crossOriginIsolated||location.origin!==approved.profile.origin||typeof Document==='undefined'||!(document instanceof Document)||document.visibilityState!=='visible'||typeof Worker!=='function')throw Error('browser entry unavailable');
+  if(occupied||signal.aborted||approved.enrollment?.signal.aborted||typeof Window==='undefined'||!(globalThis instanceof Window)||globalThis.top!==globalThis.self||!globalThis.isSecureContext||!globalThis.crossOriginIsolated||location.origin!==approved.profile.origin||typeof Document==='undefined'||!(document instanceof Document)||document.visibilityState!=='visible'||typeof Worker!=='function')throw Error('browser entry unavailable');
   if(!Number.isFinite(deadline)||deadline<=performance.timeOrigin+performance.now()||deadline>performance.timeOrigin+performance.now()+10000)throw Error('browser entry deadline');
   occupied=true;const controller=new AbortController(),source=document;
   let relay:ReturnType<typeof createBrowserRelay>|undefined,transport:ReturnType<typeof serveBrowserTransport>|undefined,tls:ReturnType<typeof createBrowserTlsSignerBroker>|undefined,grant:ReturnType<typeof createBrowserGrantBroker>|undefined,worker:Worker|undefined,port:ReturnType<typeof browserClientPort>|undefined,closing:Promise<void>|undefined,setupTimer:ReturnType<typeof setTimeout>|undefined;
   let resolveRetired!:()=>void,rejectRetired!:(e:Error)=>void;const retired=new Promise<void>((a,b)=>{resolveRetired=a;rejectRetired=b;});void retired.catch(()=>{});
+  let resolveOwned!:()=>void,rejectOwned!:(error:unknown)=>void;
+  const owned=new Promise<void>((a,b)=>{resolveOwned=a;rejectOwned=b;});void owned.catch(()=>{});
   const lifecycle=()=>{if(document!==source||source.visibilityState!=='visible')void close();};
   const abort=()=>{void close();};
   function close(){if(closing)return closing;if(setupTimer!==undefined)clearTimeout(setupTimer);controller.abort();tls?.close();grant?.close();relay?.close();transport?.close();try{worker?.postMessage({kind:'close'});}catch{rejectRetired(Error('browser Worker retirement uncertain'));}
    closing=Promise.resolve().then(async()=>{
-    const facts=await Promise.allSettled([tls?.waitClosed(),grant?.waitClosed(),relay?.waitClosed(),transport?.waitClosed(),worker?retired:undefined]);
-    worker?.terminate();source.removeEventListener('visibilitychange',lifecycle);source.removeEventListener('freeze',abort);globalThis.removeEventListener('pagehide',abort);signal.removeEventListener('abort',abort);occupied=false;
+    const facts=await Promise.allSettled([port?.close(),tls?.waitClosed(),grant?.waitClosed(),relay?.waitClosed(),transport?.waitClosed(),worker?retired:undefined]);
+    worker?.terminate();source.removeEventListener('visibilitychange',lifecycle);source.removeEventListener('freeze',abort);globalThis.removeEventListener('pagehide',abort);signal.removeEventListener('abort',abort);approved!.enrollment?.signal.removeEventListener('abort',abort);occupied=false;
     if(facts.some(f=>f.status==='rejected')){occupied=true;throw Error('browser entry retirement uncertain');}
-   });void closing.catch(()=>{});return closing;
+   });void closing.then(resolveOwned,rejectOwned);return closing;
   }
   signal.addEventListener('abort',abort,{once:true});source.addEventListener('visibilitychange',lifecycle);source.addEventListener('freeze',abort);globalThis.addEventListener('pagehide',abort);
   const expire=()=>{if(performance.timeOrigin+performance.now()<deadline){setupTimer=setTimeout(expire,Math.max(0,deadline-performance.timeOrigin-performance.now()));return;}void close();};setupTimer=setTimeout(expire,Math.max(0,deadline-performance.timeOrigin-performance.now()));
   try{
+   if(approved.enrollment){
+    // Register the original complete retirement before any socket, key use or Worker.
+    approved.enrollment.retain(owned);
+    approved.enrollment.signal.addEventListener('abort',abort,{once:true});
+    if(approved.enrollment.signal.aborted)throw Error('browser enrollment revoked');
+   }
    relay=createBrowserRelay({origin:approved.relay.endpoint,tunnel:approved.relay.tunnel,identity:approved.relay.identity,setupDeadline:deadline,ioBudgetMs:30000,mode:approved.relay.mode,socket:approved.relay.mode==='rendezvous-v1'?new WebSocket(approved.relay.endpoint,RENDEZVOUS_SUBPROTOCOL):new WebSocket(approved.relay.endpoint),signal:controller.signal});
    const wire=await relay.ready;if(controller.signal.aborted)throw Error('browser entry cancelled');
    tls=createBrowserTlsSignerBroker(approved.profile,{timeoutMs:10000,setupDeadline:deadline,signal:controller.signal});

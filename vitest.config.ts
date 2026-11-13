@@ -2,6 +2,7 @@ import { defineConfig } from 'vitest/config'
 import viteConfig from './vite.config'
 
 const nodeTests = [
+  'tests/remote-browser/browserEnrollment.test.ts',
   'tests/remote-browser/browserPairingProfile.test.ts',
   'tests/designTokens.test.ts',
   'tests/productBoundary.test.ts',

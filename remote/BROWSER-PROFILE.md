@@ -793,6 +793,11 @@ process admission requires each exact composition test to run in a fresh process
 
 ## Supplier through the complete Browser entry and original Relay
 
+The optional page-local approval owner and original-operation retirement contract
+are documented in [Browser enrollment lifecycle](../docs/browser-enrollment-lifecycle.md).
+This revocable in-memory authority does not implement real enrollment or enable
+the default Locked entry.
+
 The browser-entry.spec.ts fixture supplies the fixed same-origin profile module
 through createApprovedBrowserProfileReader, instead of directly assembling
 approved inputs. Its independent TEST_ONLY snapshot comes from the actual Host
@@ -834,3 +839,10 @@ WebAuthn and an in-memory writer. This does not qualify real enrollment,
 browser-native WebPKI/DNS, a deployed launcher, a real CLI, phone behavior or the
 installed application's native approval dialog. Fixture clicks do not bypass or
 replace that real approval gate.
+
+The same fixture now supplies the independent TEST_ONLY record through the real
+`createBrowserEnrollmentAuthority` owner. Additional cases revoke an active source,
+hold the original presenter pending across revocation, and revoke during source
+retirement registration before any side effect. The operator helper and final
+product source are separately bundled, exercising the original signal/retirement
+contract across that boundary. No real credentials, storage, or deployment are used.

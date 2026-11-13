@@ -68,3 +68,71 @@ for(const mutation of ['session','run','generation','hostSpki'] as const satisfi
   }finally{await f.dispose()}
  })
 }
+
+test('BrowserEntry_EnrollmentRevokesActiveSourceAndCachedReopen_004',async({page,context},info)=>{
+ const f=await entryFixture(context)
+ try{
+  await page.goto('https://desk.invalid/browser-remote.html')
+  await page.locator('[data-remote-refresh]').click()
+  await page.getByRole('button',{name:'Approve TEST_ONLY'}).click()
+  await expect(page.getByRole('status')).toContainText('Snapshot verified')
+  const before=await page.evaluate(()=>Reflect.get(globalThis,'__ccDeskTestOnlyPairing'))
+  await page.evaluate(async()=>{const owner=Reflect.get(globalThis,'__ccDeskTestOnlyEnrollment');owner.revoke();await owner.waitClosed()})
+  await page.locator('[data-remote-refresh]').click()
+  await expect(page.getByRole('status')).toContainText('Remote connection unavailable')
+  await expect(page.locator('[data-remote-input]')).toHaveCount(0)
+  expect(await page.evaluate(()=>Reflect.get(globalThis,'__ccDeskTestOnlyPairing'))).toEqual(before)
+  expect(f.observations()).toEqual({browserConnections:1,artifactRequests:2})
+  const effect=await f.host.wait(value=>value.kind==='effects')
+  expect(effect.writeCount).toBe(0)
+  await f.relay.wait(value=>value.originalRelayRetired===true)
+  await writeEvidence(info,'enrollment-active-revocation',{artifacts:f.artifacts,before,transport:f.observations(),effect})
+ }finally{await f.dispose()}
+})
+
+test('BrowserEntry_EnrollmentRevocationRetainsPendingPresenter_005',async({page,context},info)=>{
+ await context.addInitScript(()=>Reflect.set(globalThis,'__ccDeskTestOnlyHoldPresentation',true))
+ const f=await entryFixture(context)
+ try{
+  await page.goto('https://desk.invalid/browser-remote.html')
+  await page.locator('[data-remote-refresh]').click()
+  await expect(page.getByRole('button',{name:'Approve TEST_ONLY'})).toBeVisible()
+  const before=await page.evaluate(()=>Reflect.get(globalThis,'__ccDeskTestOnlyPairing'))
+  const pending=await page.evaluate(async()=>{
+   const owner=Reflect.get(globalThis,'__ccDeskTestOnlyEnrollment');let settled=false
+   owner.revoke();void owner.waitClosed().then(()=>{settled=true},()=>{settled=true})
+   await new Promise(resolve=>setTimeout(resolve,20));return !settled
+  })
+  expect(pending).toBe(true)
+  await page.evaluate(async()=>{Reflect.get(globalThis,'__ccDeskTestOnlyReleasePresentation')();await Reflect.get(globalThis,'__ccDeskTestOnlyEnrollment').waitClosed()})
+  await expect(page.getByRole('status')).toContainText('Remote connection unavailable')
+  await expect(page.getByRole('button',{name:'Approve TEST_ONLY'})).toHaveCount(0)
+  await page.locator('[data-remote-refresh]').click()
+  await expect(page.locator('[data-remote-refresh]')).toBeEnabled()
+  const after=await page.evaluate(()=>Reflect.get(globalThis,'__ccDeskTestOnlyPairing'))
+  expect(after).toEqual(before);expect(after.assertions).toBe(0)
+  expect(f.observations().browserConnections).toBe(1)
+  expect(f.host.output()).not.toContain('"kind":"installed"')
+  await writeEvidence(info,'enrollment-pending-revocation',{artifacts:f.artifacts,before,after,pending,transport:f.observations()})
+ }finally{await f.dispose()}
+})
+
+test('BrowserEntry_EnrollmentRevokesDuringRetentionBeforeSideEffects_006',async({page,context},info)=>{
+ await context.addInitScript(()=>Reflect.set(globalThis,'__ccDeskTestOnlyRevokeOnRetain',true))
+ const f=await entryFixture(context);let workers=0,sockets=0
+ page.on('worker',()=>workers++);page.on('websocket',()=>sockets++)
+ try{
+  await page.goto('https://desk.invalid/browser-remote.html')
+  await page.locator('[data-remote-refresh]').click()
+  await expect(page.getByRole('status')).toContainText('Remote connection unavailable')
+  await page.evaluate(async()=>{await Reflect.get(globalThis,'__ccDeskTestOnlyEnrollment').waitClosed()})
+  await page.locator('[data-remote-refresh]').click()
+  await expect(page.locator('[data-remote-refresh]')).toBeEnabled()
+  const supplied=await page.evaluate(()=>Reflect.get(globalThis,'__ccDeskTestOnlyPairing'))
+  expect(supplied).toMatchObject({sourceReads:1,providerReads:1,signatures:0,presentations:0,assertions:0})
+  expect(f.observations()).toEqual({browserConnections:0,artifactRequests:0})
+  expect(workers).toBe(0);expect(sockets).toBe(0)
+  await expect(page.locator('[data-remote-input]')).toHaveCount(0)
+  await writeEvidence(info,'enrollment-admission-revocation',{artifacts:f.artifacts,supplied,transport:f.observations(),workers,sockets})
+ }finally{await f.dispose()}
+})

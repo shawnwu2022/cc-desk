@@ -1,5 +1,6 @@
 import {approvedBrowserInputs,type ApprovedBrowserInputs} from './browserEntry.ts';
 import {counter,hex,parseJson} from './wire.ts';
+import {checkedBrowserEnrollmentLease,type BrowserEnrollmentLease} from './browserEnrollmentLease.ts';
 
 export type PublicBrowserPairingConfiguration=Readonly<{
  version:1;
@@ -20,6 +21,7 @@ export type BrowserProfileHandles=Readonly<{
 }>;
 /** 只允许受控模块提供独立事先批准的配置；候选从不作为选择器传入。 */
 export type BrowserProfileProvider=Readonly<{
+ enrollment?:BrowserEnrollmentLease;
  readApproved(signal:AbortSignal):Promise<Readonly<{configuration:Uint8Array;handles:BrowserProfileHandles}>|undefined>;
 }>;
 
@@ -80,7 +82,7 @@ function same(a:unknown,b:unknown):boolean{
  const left=a as Record<string,unknown>,right=b as Record<string,unknown>,keys=Object.keys(left);
  return keys.length===Object.keys(right).length&&keys.every(key=>Object.prototype.hasOwnProperty.call(right,key)&&same(left[key],right[key]));
 }
-function assemble(expected:PublicBrowserPairingConfiguration,handles:BrowserProfileHandles):ApprovedBrowserInputs{
+function assemble(expected:PublicBrowserPairingConfiguration,handles:BrowserProfileHandles,enrollment?:BrowserEnrollmentLease):ApprovedBrowserInputs{
  const p=expected.profile,g=expected.grant,r=expected.relay;
  return approvedBrowserInputs({
   profile:{origin:p.origin,rpId:p.rpId,credentialId:decode(p.credentialId,1,1024),tlsKey:handles.tlsKey,grantKey:handles.grantKey},
@@ -90,7 +92,7 @@ function assemble(expected:PublicBrowserPairingConfiguration,handles:BrowserProf
    scope:{session:g.scope.session,run:g.scope.run,generation:g.scope.generation},role:g.role,budgetMs:g.budgetMs,peerInstall:{budgetMs:g.peerInstall.budgetMs},
    profile:{origin:g.profile.origin,rpId:g.profile.rpId,credentialId:decode(g.profile.credentialId,1,1024),credentialSpki:decode(g.profile.credentialSpki,91,91),backupEligible:g.profile.backupEligible,allowBackedUp:g.profile.allowBackedUp}},
   relay:{endpoint:r.endpoint,tunnel:decode(r.tunnel,16,16),identity:{keyId:decode(r.keyId,16,16),sign:handles.relaySign},...(Object.prototype.hasOwnProperty.call(r,'mode')?{mode:r.mode}:{})},
-  artifacts:{wasm:expected.artifacts.wasm,glue:expected.artifacts.glue},present:handles.present,
+  artifacts:{wasm:expected.artifacts.wasm,glue:expected.artifacts.glue},present:handles.present,...(enrollment?{enrollment}:{}),
  });
 }
 
@@ -98,26 +100,27 @@ function assemble(expected:PublicBrowserPairingConfiguration,handles:BrowserProf
 export function createApprovedBrowserProfileReader(candidateBytes:Uint8Array,provider?:BrowserProfileProvider):(signal:AbortSignal)=>Promise<ApprovedBrowserInputs|undefined>{
  const candidate=parseBrowserPairingConfiguration(candidateBytes);
  let read:BrowserProfileProvider['readApproved']|undefined;
- if(provider!==undefined){try{exact(provider,['readApproved']);if(typeof provider.readApproved!=='function')throw Error('provider');read=provider.readApproved.bind(provider);}catch{throw Error('browser pairing profile unavailable');}}
+ let enrollment:BrowserEnrollmentLease|undefined;
+ if(provider!==undefined){try{const owns=Object.prototype.hasOwnProperty.call(provider,'enrollment');if('enrollment'in provider&&!owns)throw Error('provider');exact(provider,owns?['readApproved','enrollment']:['readApproved']);if(owns)enrollment=checkedBrowserEnrollmentLease(provider.enrollment);if(typeof provider.readApproved!=='function')throw Error('provider');read=provider.readApproved.bind(provider);}catch{throw Error('browser pairing profile unavailable');}}
  let original:Promise<ApprovedBrowserInputs|undefined>|undefined,firstSignal:AbortSignal|undefined;
  return async(signal:AbortSignal)=>{
   if(!original){
    firstSignal=signal;
    original=Promise.resolve().then(async()=>{
-    if(signal.aborted)throw Error('cancelled');
+    if(signal.aborted||enrollment?.signal.aborted)throw Error('cancelled');
     const supplied=await read?.(signal);
-    if(signal.aborted)throw Error('cancelled');
+    if(signal.aborted||enrollment?.signal.aborted)throw Error('cancelled');
     if(supplied===undefined)return undefined;
     exact(supplied,['configuration','handles']);exact(supplied.handles,['tlsKey','grantKey','relaySign','present']);
     const h=supplied.handles,handles=Object.freeze({tlsKey:h.tlsKey,grantKey:h.grantKey,relaySign:h.relaySign,present:h.present});
     const expected=parseBrowserPairingConfiguration(supplied.configuration);
     if(!same(candidate,expected))throw Error('mismatch');
-    return assemble(expected,handles);
+    return assemble(expected,handles,enrollment);
    }).catch(()=>{throw Error('browser pairing profile unavailable');});
    void original.catch(()=>{});
   }
   const approved=await original;
-  if(signal.aborted||firstSignal!.aborted)throw Error('browser pairing profile unavailable');
+  if(signal.aborted||firstSignal!.aborted||enrollment?.signal.aborted)throw Error('browser pairing profile unavailable');
   return approved;
  };
 }
