@@ -537,3 +537,7 @@ export async function remoteHostRequest(run: RemoteHostRun): Promise<RemoteHostC
 export async function remoteHostCancel(run: RemoteHostRun): Promise<RemoteHostControlState> {
   return await nativeDocumentBridge().invoke('remote_host_cancel', run) as RemoteHostControlState;
 }
+
+export async function remoteHostStart(run: RemoteHostRun): Promise<RemoteHostControlState> {
+  return await nativeDocumentBridge().invoke('remote_host_start', run) as RemoteHostControlState;
+}

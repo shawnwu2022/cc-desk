@@ -74,3 +74,8 @@ HostDriver8 与 NativeRemote019 覆盖自主一次登记、原线程/尾门保�
 ## 显式 relay 会合模式
 
 批准描述现包含并展示 `relay_mode`，注册来源冻结该值，补充签名材料不能改变它。Legacy 仍按 Accepted 放行；RendezvousV1 必须完成精确子协议回显和同 tunnel Join/Ready，才进入 Endpoint arm/mux。全部等待消耗原 setup end 与批准 cap，Ready 不代替端到端 pin、BrowserProfile 或 grant。协议与验收边界见 [RENDEZVOUS-V1](../remote/RENDEZVOUS-V1.md)。
+
+
+## 单次 start 应用入口后续分片
+
+现已增加严格 document/run 的 start IPC 与自主登记后单次网络触发，生产配置仍为空。调用链、状态语义、测试与未验收边界见 [Native Host 单次 start 入口](native-host-start-entry.md)；上文各历史分片的未接线声明保留其当时证据口径。

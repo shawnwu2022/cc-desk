@@ -42,3 +42,22 @@ pub(crate) fn remote_host_cancel(
         runtime.admit_host_control(&webview, request.headers(), request.body())?;
     controller.cancel(&binding, &caller, &admission)
 }
+
+#[cfg(windows)]
+pub(crate) fn remote_host_start(
+    webview: Webview,
+    request: Request<'_>,
+    runtime: State<'_, Arc<NativeRuntime>>,
+    controller: State<'_, Arc<RemoteHostController>>,
+    service: State<'_, Arc<crate::remote_host::RemoteHostService>>,
+) -> Result<HostControlReply, SafeError> {
+    let (binding, caller, admission) =
+        runtime.admit_host_control(&webview, request.headers(), request.body())?;
+    controller.start_owned(
+        &binding,
+        &caller,
+        admission,
+        runtime.inner().clone(),
+        service.inner().clone(),
+    )
+}

@@ -967,6 +967,12 @@ impl RemoteHostService {
         self.drain_closed_source_materials();
         result
     }
+    /// 仅原生已鉴权的单次启动驱动可调用，不接收前端配置或批准布尔值。
+    pub(crate) fn begin_owned_native_network(
+        self: &Arc<Self>, runtime: Arc<NativeRuntime>, admission: NativeRunAdmission,
+    ) -> Result<Arc<HostNetworkAttempt>, HostNetworkError> {
+        self.begin_registered_admitted_network(runtime, admission, Connector::WebPki)
+    }
     /// 实际网络接线；批准来源注册独立，签名能力仍保管自己的请求和密钥任务。
     pub(crate) fn begin_native_network(
         self: &Arc<Self>,
@@ -1008,6 +1014,8 @@ impl RemoteHostService {
     pub(crate) fn test_begin_registered_network(self: &Arc<Self>, runtime: Arc<NativeRuntime>, admission: NativeRunAdmission) -> Result<Arc<HostNetworkAttempt>, HostNetworkError> {
         self.begin_registered_admitted_network(runtime, admission, Connector::PublicLoopbackFixture)
     }
+    #[cfg(test)]
+    pub(crate) fn test_original_attempt(&self) -> Option<Arc<HostNetworkAttempt>> { self.network.state.lock().attempts.last().cloned() }
     #[cfg(test)]
     pub(crate) fn test_network_attempts(&self) -> usize { self.network.state.lock().attempts.len() }
     #[cfg(test)]

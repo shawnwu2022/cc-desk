@@ -294,6 +294,7 @@ fn run_ordinary(initial_dir: Option<String>, #[cfg(windows)] startup: DesktopSta
             commands::remote_host_current,
             commands::remote_host_request,
             commands::remote_host_cancel,
+            commands::remote_host_start,
             #[cfg(feature = "remote-client-ipc")]
             remote_client_ipc::remote_client_snapshot,
             #[cfg(feature = "remote-client-ipc")]

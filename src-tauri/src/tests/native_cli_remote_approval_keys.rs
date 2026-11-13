@@ -5,7 +5,7 @@ use crate::remote_host_controller::{HostControlReply, RemoteHostController};
 use crate::remote_host_network::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-fn description(
+pub(super) fn description(
     relay: &NetworkRelayFixture,
     admission: &crate::run_supervisor::NativeRunAdmission,
     clock: Arc<dyn cc_desk_remote_security::GrantClock>,

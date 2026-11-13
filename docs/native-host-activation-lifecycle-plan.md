@@ -354,3 +354,8 @@ Endpoint 与 Relay 使用不同的固定 SPKI。批准期限来自原 ticket，�
 - 最终十文件清单 final10-manifest.json，双版本汇总 acceptance-summary.json。源码/文档直接 UTF-8 字节检查与 git diff --check 通过。未重排旧 compact service 基线，未运行全量 Rust、全仓格式化、真实用户 key/native dialog、手机或公网验收。
 
 生产配置来源、native profile 安装、批准成功后的应用触发、start IPC/UI 仍未接入。prepare_owned 是内部可编译的已保管驱动，本片仅由公开匿名 fixture 调用；它不等于生产来源或端到端已启用。原 mux 两秒空闲与 Phone-first 行为不变，没有真实凭据操作、系统安全变更、部署或推送。
+
+
+## 单次 start 应用入口后续分片
+
+现已增加严格 document/run 的 start IPC 与自主登记后单次网络触发，生产配置仍为空。调用链、状态语义、测试与未验收边界见 [Native Host 单次 start 入口](native-host-start-entry.md)；上文各历史分片的未接线声明保留其当时证据口径。

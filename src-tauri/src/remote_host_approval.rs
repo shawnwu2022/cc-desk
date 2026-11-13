@@ -237,6 +237,8 @@ struct ApprovalLease {
     invalid: std::sync::atomic::AtomicBool,
     #[cfg(test)]
     before_publish: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    #[cfg(test)]
+    before_network: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     revoked: watch::Sender<bool>,
     registration: Mutex<Option<(std::sync::Weak<RemoteHostService>, HostSourceToken)>>,
 }
@@ -250,6 +252,8 @@ impl ApprovalLease {
             invalid: std::sync::atomic::AtomicBool::new(false),
             #[cfg(test)]
             before_publish: Mutex::new(None),
+            #[cfg(test)]
+            before_network: Mutex::new(None),
             revoked,
             registration: Mutex::new(None),
         })
@@ -470,6 +474,10 @@ impl NativeHostApproval {
             .unwrap()
             .fields
             .clock = clock;
+    }
+    #[cfg(test)]
+    pub(crate) fn test_before_network(&self, hook: Box<dyn FnOnce() + Send>) {
+        *self.lease.before_network.lock() = Some(hook);
     }
     #[cfg(test)]
     pub(crate) fn test_before_publish(&self, hook: Box<dyn FnOnce() + Send>) {
@@ -739,15 +747,41 @@ pub(crate) struct ActivationTicket {
     permit: MachinePermit<BoundDescription>,
     lease: Arc<ApprovalLease>,
 }
+#[derive(Clone, Copy)]
+pub(crate) enum ActivationStart {
+    RegisterOnly,
+    NativeNetwork,
+    #[cfg(test)]
+    LoopbackNetwork,
+}
 impl ActivationTicket {
     #[cfg(windows)]
     pub(crate) fn prepare_frozen(
+        self,
+        runtime: Arc<NativeRuntime>,
+        admission: NativeRunAdmission,
+        service: std::sync::Weak<RemoteHostService>,
+        signal: Arc<crate::remote_host::activation::ActivationSignal>,
+        publisher: crate::native_crypto::host::HostKeyPublisher,
+    ) -> crate::remote_host::activation::PreparationResult {
+        self.prepare_frozen_start(
+            runtime,
+            admission,
+            service,
+            signal,
+            publisher,
+            ActivationStart::RegisterOnly,
+        )
+    }
+    #[cfg(windows)]
+    pub(crate) fn prepare_frozen_start(
         mut self,
         runtime: Arc<NativeRuntime>,
         admission: NativeRunAdmission,
         service: std::sync::Weak<RemoteHostService>,
         signal: Arc<crate::remote_host::activation::ActivationSignal>,
         publisher: crate::native_crypto::host::HostKeyPublisher,
+        start: ActivationStart,
     ) -> crate::remote_host::activation::PreparationResult {
         use crate::remote_host::activation::PreparationResult;
         if signal.cancelled()
@@ -786,7 +820,7 @@ impl ActivationTicket {
             #[cfg(test)]
             termination: None,
         };
-        self.completion(runtime, admission, service, signal, material)
+        self.completion(runtime, admission, service, signal, material, start)
     }
     #[cfg(test)]
     pub(crate) fn prepare_fixture(
@@ -807,7 +841,14 @@ impl ActivationTicket {
             return PreparationResult::Complete(false);
         }
         let material = prepare();
-        self.completion(runtime, admission, service, signal, material)
+        self.completion(
+            runtime,
+            admission,
+            service,
+            signal,
+            material,
+            ActivationStart::RegisterOnly,
+        )
     }
     fn completion(
         self,
@@ -816,6 +857,7 @@ impl ActivationTicket {
         service: std::sync::Weak<RemoteHostService>,
         signal: Arc<crate::remote_host::activation::ActivationSignal>,
         material: HostAttemptMaterials,
+        start: ActivationStart,
     ) -> crate::remote_host::activation::PreparationResult {
         use crate::remote_host::activation::PreparationResult;
         // worker 只归还材料与登记能力。升级 service 必须等原线程实际 join 之后。
@@ -826,8 +868,35 @@ impl ActivationTicket {
             let Some(service) = service.upgrade() else {
                 return false;
             };
-            self.register_material(&runtime, &admission, &service, material)
-                .is_ok()
+            let mut failure = LeaseFailure::new(self.lease.clone());
+            if self
+                .register_material(&runtime, &admission, &service, material)
+                .is_err()
+            {
+                return false;
+            }
+            #[cfg(test)]
+            if !matches!(start, ActivationStart::RegisterOnly) {
+                let hook = failure.lease.before_network.lock().take();
+                if let Some(hook) = hook {
+                    hook();
+                }
+            }
+            // 登记事实与网络受理分开；网络失败只撤销同一批准，不回退历史登记。
+            let accepted = match start {
+                ActivationStart::RegisterOnly => true,
+                ActivationStart::NativeNetwork => service
+                    .begin_owned_native_network(runtime, admission)
+                    .is_ok(),
+                #[cfg(test)]
+                ActivationStart::LoopbackNetwork => service
+                    .test_begin_registered_network(runtime, admission)
+                    .is_ok(),
+            };
+            if accepted {
+                failure.complete();
+            }
+            true
         }))
     }
     fn register_material(

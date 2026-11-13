@@ -130,3 +130,16 @@ it('RemoteHost_ConsumedAndForbiddenRemainVisible_004', async () => {
   bridge(vi.fn(async () => { throw failure; }));
   await expect(api.remoteHostCancel({ runId: 'original', generation: 1 })).rejects.toBe(failure);
 });
+
+it("RemoteHost_StartUsesOriginalBridgeAndPreservesFailure_005", async () => {
+  const run = { runId: "original", generation: 1 };
+  const invoke = vi.fn(async () => ({ state: "Consumed" }));
+  bridge(invoke);
+  await expect(api.remoteHostStart(run)).resolves.toEqual({ state: "Consumed" });
+  expect(invoke.mock.calls).toEqual([["remote_host_start", run]]);
+  const failure = { code: "FORBIDDEN" };
+  bridge(vi.fn(async () => { throw failure; }));
+  await expect(api.remoteHostStart(run)).rejects.toBe(failure);
+  delete (window as any)[bridgeKey];
+  await expect(api.remoteHostStart(run)).rejects.toMatchObject({ code: "DOCUMENT_BRIDGE_UNAVAILABLE" });
+});

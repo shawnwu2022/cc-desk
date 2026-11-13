@@ -662,3 +662,20 @@ fn RemoteHost_UnsupportedRequest_002() {
 fn RemoteHost_UnsupportedCancel_003() {
     assert_eq!(remote_host_cancel().unwrap_err().code, "REMOTE_HOST_UNAVAILABLE");
 }
+
+#[cfg(all(feature = "remote-host", windows))]
+#[tauri::command]
+pub(crate) fn remote_host_start(webview: tauri::Webview, request: tauri::ipc::Request<'_>, runtime: tauri::State<'_, std::sync::Arc<crate::cli::native_runtime::NativeRuntime>>, controller: tauri::State<'_, std::sync::Arc<crate::remote_host_controller::RemoteHostController>>, service: tauri::State<'_, std::sync::Arc<crate::remote_host::RemoteHostService>>) -> Result<crate::remote_host_controller::HostControlReply, crate::cli::types::SafeError> {
+    crate::remote_host_ipc::remote_host_start(webview, request, runtime, controller, service)
+}
+#[cfg(not(all(feature = "remote-host", windows)))]
+#[tauri::command]
+pub(crate) fn remote_host_start() -> Result<(), crate::cli::types::SafeError> {
+    Err(crate::cli::profiles::error("REMOTE_HOST_UNAVAILABLE"))
+}
+#[cfg(all(test, not(all(feature = "remote-host", windows))))]
+#[test]
+#[allow(non_snake_case)]
+fn RemoteHostDisabled_StartRejectsBeforeDecode_004() {
+    assert_eq!(remote_host_start().unwrap_err().code, "REMOTE_HOST_UNAVAILABLE");
+}

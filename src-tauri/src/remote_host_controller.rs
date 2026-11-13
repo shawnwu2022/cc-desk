@@ -411,6 +411,63 @@ impl RemoteHostController {
         runtime: Arc<crate::cli::native_runtime::NativeRuntime>,
         service: Arc<crate::remote_host::RemoteHostService>,
     ) -> Result<(), SafeError> {
+        self.prepare_owned_mode(
+            binding,
+            caller,
+            admission,
+            runtime,
+            service,
+            crate::remote_host_approval::ActivationStart::RegisterOnly,
+        )
+    }
+    #[cfg(windows)]
+    pub(crate) fn start_owned(
+        &self,
+        binding: &Arc<DocumentBinding<NativeRun>>,
+        caller: &CallerIdentity,
+        admission: NativeRunAdmission,
+        runtime: Arc<crate::cli::native_runtime::NativeRuntime>,
+        service: Arc<crate::remote_host::RemoteHostService>,
+    ) -> Result<HostControlReply, SafeError> {
+        self.prepare_owned_mode(
+            binding,
+            caller,
+            admission,
+            runtime,
+            service,
+            crate::remote_host_approval::ActivationStart::NativeNetwork,
+        )?;
+        Ok(HostControlReply::Consumed)
+    }
+    #[cfg(all(test, windows))]
+    pub(crate) fn test_start_owned(
+        &self,
+        binding: &Arc<DocumentBinding<NativeRun>>,
+        caller: &CallerIdentity,
+        admission: NativeRunAdmission,
+        runtime: Arc<crate::cli::native_runtime::NativeRuntime>,
+        service: Arc<crate::remote_host::RemoteHostService>,
+    ) -> Result<HostControlReply, SafeError> {
+        self.prepare_owned_mode(
+            binding,
+            caller,
+            admission,
+            runtime,
+            service,
+            crate::remote_host_approval::ActivationStart::LoopbackNetwork,
+        )?;
+        Ok(HostControlReply::Consumed)
+    }
+    #[cfg(windows)]
+    fn prepare_owned_mode(
+        &self,
+        binding: &Arc<DocumentBinding<NativeRun>>,
+        caller: &CallerIdentity,
+        admission: NativeRunAdmission,
+        runtime: Arc<crate::cli::native_runtime::NativeRuntime>,
+        service: Arc<crate::remote_host::RemoteHostService>,
+        mode: crate::remote_host_approval::ActivationStart,
+    ) -> Result<(), SafeError> {
         Self::authenticate(binding, caller, &admission)?;
         let slot = self
             .state
@@ -462,7 +519,14 @@ impl RemoteHostController {
                         return crate::remote_host::activation::PreparationResult::Complete(false)
                     }
                 };
-                ticket.prepare_frozen(runtime, admission, weak_service, signal, publisher)
+                ticket.prepare_frozen_start(
+                    runtime,
+                    admission,
+                    weak_service,
+                    signal,
+                    publisher,
+                    mode,
+                )
             })
             .map_err(|_| error("REMOTE_HOST_PREPARE_FAILED"))?;
         gate.open();
