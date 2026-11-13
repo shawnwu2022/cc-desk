@@ -311,3 +311,7 @@ pub(crate) mod owner;
 #[cfg(any(test, feature = "remote-client-ipc"))]
 #[path = "native_crypto_signers.rs"]
 pub(crate) mod signers;
+
+#[cfg(feature = "remote-host")]
+#[path = "native_crypto_host.rs"]
+pub(crate) mod host;

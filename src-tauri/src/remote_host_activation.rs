@@ -22,10 +22,36 @@ impl ActivationObservation {
 
 pub(crate) struct ActivationSignal {
     cancelled: AtomicBool,
+    #[cfg(windows)]
+    revocation: Mutex<Option<Arc<crate::native_crypto::owner::NativeRevocation>>>,
 }
 impl ActivationSignal {
     pub(crate) fn cancelled(&self) -> bool {
         self.cancelled.load(Ordering::Acquire)
+    }
+    fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Release);
+        #[cfg(windows)]
+        if let Some(token) = self.revocation.lock().as_ref() {
+            token.revoke();
+        }
+    }
+    #[cfg(windows)]
+    fn bind_revocation(&self, token: Arc<crate::native_crypto::owner::NativeRevocation>) {
+        let mut bound = self.revocation.lock();
+        assert!(bound.is_none(), "one original key token");
+        if self.cancelled() {
+            token.revoke();
+        }
+        *bound = Some(token);
+    }
+}
+struct SignalUnwind(Arc<ActivationSignal>);
+impl Drop for SignalUnwind {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            self.0.cancel();
+        }
     }
 }
 enum Phase {
@@ -65,21 +91,85 @@ struct State {
 pub(crate) struct ActivationOperation {
     state: Mutex<State>,
     signal: Arc<ActivationSignal>,
+    #[cfg(windows)]
+    keys: Mutex<Option<crate::native_crypto::host::HostKeyCustody>>,
 }
 
 /// 失败事实不代替原句柄生命周期。只有原 join 或明确未创建才是终态。
 impl ActivationOperation {
+    #[cfg(test)]
+    pub(crate) fn test_reservation() -> ActivationReservation {
+        ActivationReservation::new()
+    }
     pub(crate) fn cancel(&self) {
-        self.signal.cancelled.store(true, Ordering::Release);
+        self.signal.cancel();
+    }
+    /// Reserved 槽先覆盖无线程 custody，才把锁外创建能力交给唯一 reservation。
+    #[cfg(windows)]
+    fn begin_keys(
+        &self,
+        token: Arc<crate::native_crypto::owner::NativeRevocation>,
+        cap: std::time::Instant,
+    ) -> Result<
+        crate::native_crypto::host::NotificationBuilder,
+        crate::native_crypto::owner::SignFailure,
+    > {
+        let state = self.state.lock();
+        let mut keys = self.keys.lock();
+        if !matches!(state.phase, Phase::Reserved) || keys.is_some() {
+            return Err(crate::native_crypto::owner::SignFailure::Closed);
+        }
+        self.signal.bind_revocation(token.clone());
+        let custody = crate::native_crypto::host::HostKeyCustody::new(token, cap);
+        if self.signal.cancelled() {
+            custody.revoke();
+        }
+        *keys = Some(custody);
+        keys.as_ref()
+            .expect("canonical reservation")
+            .notification_builder()
+    }
+    #[cfg(all(test, windows))]
+    pub(crate) fn test_key_observer(&self) -> Arc<crate::native_crypto::host::HostKeyCore> {
+        self.keys.lock().as_ref().unwrap().observer()
+    }
+    #[cfg(all(test, windows))]
+    pub(crate) fn test_prepare_keys(
+        &self,
+        token: Arc<crate::native_crypto::owner::NativeRevocation>,
+        cap: std::time::Instant,
+        hooks: crate::native_crypto::host::NotifyHooks,
+    ) -> Result<
+        crate::native_crypto::host::HostKeyPublisher,
+        crate::native_crypto::owner::SignFailure,
+    > {
+        self.begin_keys(token, cap)?.start(hooks)?;
+        self.keys.lock().as_ref().unwrap().publisher()
     }
     pub(crate) fn snapshot(&self) -> ActivationObservation {
         let state = self.state.lock();
-        ActivationObservation {
+        let observation = ActivationObservation {
             outstanding: !matches!(state.phase, Phase::NotSpawned | Phase::Joined),
             unknown: state.unknown,
+        };
+        #[cfg(windows)]
+        {
+            let mut observation = observation;
+            if let Some(keys) = self.keys.lock().as_ref() {
+                let facts = keys.snapshot();
+                observation.outstanding |= facts.outstanding;
+                observation.unknown |= facts.unknown;
+            }
+            observation
         }
+        #[cfg(not(windows))]
+        observation
     }
     pub(crate) fn advance_join(&self) -> ActivationObservation {
+        #[cfg(windows)]
+        if let Some(keys) = self.keys.lock().as_ref() {
+            keys.advance();
+        }
         let original = {
             let mut state = self.state.lock();
             if matches!(&state.phase, Phase::Running(worker) if worker.is_finished()) {
@@ -94,6 +184,9 @@ impl ActivationOperation {
         if let Some(original) = original {
             // 已结束原线程的同步 join 没有 await 取消窗口；Joining 期间其他观察仍 Pending。
             let result = original.join();
+            if matches!(&result, Ok(PreparationResult::Complete(false)) | Err(_)) {
+                self.signal.cancel();
+            }
             let mut state = self.state.lock();
             match result {
                 Ok(PreparationResult::Prepared(completion)) => {
@@ -178,6 +271,9 @@ impl ActivationOperation {
                     completion()
                 }
             }));
+            if !matches!(&result, Ok(true)) {
+                self.signal.cancel();
+            }
             let mut state = self.state.lock();
             state.phase = Phase::Joined;
             match result {
@@ -259,12 +355,10 @@ impl ActivationOperation {
     }
     #[cfg(test)]
     pub(crate) fn result(&self) -> Option<bool> {
-        let observation = self.finish_preparation();
-        if observation.outstanding {
-            None
-        } else {
-            Some(!observation.unknown && self.state.lock().result.unwrap_or(false))
-        }
+        self.finish_preparation();
+        let state = self.state.lock();
+        // 登记结果与仍活着的 key/通知/释放责任是两种事实。
+        state.result.map(|result| !state.unknown && result)
     }
     #[cfg(test)]
     pub(crate) fn worker_fact(&self) -> WorkerFact {
@@ -284,7 +378,15 @@ impl ActivationOperation {
 impl Drop for ActivationOperation {
     fn drop(&mut self) {
         self.cancel();
-        // 正常路径由 service 显式观察。异常丢失应用 owner 也不能 detach 原线程。
+        // 无 exit waiter 时仍共同推进，不能先等 prepare/notify 而遗弃兄弟 key。
+        #[cfg(windows)]
+        if self.keys.get_mut().is_some() {
+            while self.retire().outstanding {
+                std::thread::park_timeout(std::time::Duration::from_millis(1));
+            }
+            return;
+        }
+        // 未装配 key 的首片保管路径保持原有最后 owner 语义。
         match std::mem::replace(&mut self.state.get_mut().phase, Phase::Joining) {
             Phase::Running(original) => {
                 let _ = original.join();
@@ -370,6 +472,46 @@ impl Drop for Publication {
     }
 }
 impl ActivationReservation {
+    #[cfg(test)]
+    pub(crate) fn test_fail_spawn(self) -> std::io::Result<()> {
+        self.start(
+            |_| PreparationResult::Complete(false),
+            SpawnHooks {
+                fail: true,
+                ..Default::default()
+            },
+        )
+    }
+    #[cfg(all(test, windows))]
+    pub(crate) fn test_prepare_keys(
+        &mut self,
+        token: Arc<crate::native_crypto::owner::NativeRevocation>,
+        cap: std::time::Instant,
+        hooks: crate::native_crypto::host::NotifyHooks,
+    ) -> Result<
+        crate::native_crypto::host::HostKeyPublisher,
+        crate::native_crypto::owner::SignFailure,
+    > {
+        self.operation.test_prepare_keys(token, cap, hooks)
+    }
+    #[cfg(windows)]
+    #[allow(
+        dead_code,
+        reason = "Host approval/supplier installation is a separate slice"
+    )]
+    pub(crate) fn prepare_keys(
+        &mut self,
+        token: Arc<crate::native_crypto::owner::NativeRevocation>,
+        cap: std::time::Instant,
+    ) -> Result<
+        crate::native_crypto::host::HostKeyPublisher,
+        crate::native_crypto::owner::SignFailure,
+    > {
+        self.operation
+            .begin_keys(token, cap)?
+            .start(crate::native_crypto::host::NotifyHooks::default())?;
+        self.operation.keys.lock().as_ref().unwrap().publisher()
+    }
     pub(super) fn new() -> Self {
         Self {
             operation: Arc::new(ActivationOperation {
@@ -381,7 +523,11 @@ impl ActivationReservation {
                 }),
                 signal: Arc::new(ActivationSignal {
                     cancelled: AtomicBool::new(false),
+                    #[cfg(windows)]
+                    revocation: Mutex::new(None),
                 }),
+                #[cfg(windows)]
+                keys: Mutex::new(None),
             }),
             settled: false,
         }
@@ -419,9 +565,18 @@ impl ActivationReservation {
             .name("remote-host-prepare".into())
             .spawn(move || {
                 if start.recv().is_err() || signal.cancelled() {
+                    signal.cancel();
                     return PreparationResult::Complete(false);
                 }
-                let result = work(signal);
+                let result = {
+                    // worker 只持 signal/token；失败即撤销，不反持 operation/custody。
+                    let _failure = SignalUnwind(signal.clone());
+                    work(signal.clone())
+                };
+                if matches!(&result, PreparationResult::Complete(false)) {
+                    signal.cancel();
+                }
+                let _tail_failure = SignalUnwind(signal);
                 #[cfg(test)]
                 if let Some(after) = _hooks.after_work {
                     after();
@@ -447,6 +602,7 @@ impl Drop for ActivationReservation {
         if self.settled {
             return;
         }
+        self.operation.cancel();
         let mut state = self.operation.state.lock();
         state.unknown |= std::thread::panicking();
         if matches!(state.phase, Phase::Reserved | Phase::Publishing) {

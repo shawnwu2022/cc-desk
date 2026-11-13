@@ -10,6 +10,10 @@ mod signers_tests;
 #[path = "native_crypto_revocation_tests.rs"]
 mod revocation_tests;
 
+#[cfg(feature = "remote-host")]
+#[path = "native_crypto_host_tests.rs"]
+mod host_tests;
+
 fn hex(value: &str) -> Vec<u8> {
     (0..value.len())
         .step_by(2)

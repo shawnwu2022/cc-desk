@@ -599,7 +599,7 @@ async fn native_tls_trial(endpoint: Arc<dyn SigningKey>, spki: &[u8]) -> bool {
     accepted
 }
 
-async fn relay_trial(
+pub(super) async fn relay_trial(
     listener: tokio::net::TcpListener,
     origin: String,
     identity: &RelayAdmissionIdentity,

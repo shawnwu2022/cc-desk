@@ -30,7 +30,7 @@ impl CngTlsKey {
         Self::bounded(handle, end, None)
     }
     #[cfg(feature = "remote-client-ipc")]
-    fn for_attempt(
+    pub(super) fn for_attempt(
         handle: KeyRequestHandle,
         attempt: NativeSigningAttempt,
     ) -> Result<Self, SignFailure> {
@@ -73,7 +73,7 @@ impl CngRelaySigner {
     ) -> Result<Self, SignFailure> {
         Self::bound(handle, origin, key_id, role, None)
     }
-    fn bound(
+    pub(super) fn bound(
         handle: KeyRequestHandle,
         origin: CanonicalOrigin,
         key_id: [u8; 16],

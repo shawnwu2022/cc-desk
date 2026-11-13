@@ -28,4 +28,4 @@ Registered is only a historical native-source registration fact, not connection 
 
 ## 生命周期首片边界
 
-[单次启动保管链设计与测试计划](native-host-activation-lifecycle-plan.md) 记录已获准实施的首片及其独立审查、RED/GREEN 证据边界。生产代码新增 service 唯一 activation 槽，预留先于 ticket 内外部 clock，原准备线程真 join 后才允许显式完成登记。查询没有推进副作用；未消费结果仍 Pending。退出由 operation 保管独立材料释放线程，原唯一 waiter 持续观察，不同步析构阻塞材料。材料工厂与启动调用仍仅由隔离 fixture 驱动，当前生产无配置仍 Locked。两用途签名工厂、start IPC 与真实配置是未完成的后续分片，不能称为真实密钥供应者已实现，也不扩大 native dialog 的批准或退休证明。
+[单次启动保管链设计与测试计划](native-host-activation-lifecycle-plan.md) 记录首片及后续独立分片的审查、RED/GREEN 证据边界。生产代码新增 service 唯一 activation 槽，预留先于 ticket 内外部 clock，原准备线程真 join 后才允许显式完成登记。查询没有推进副作用；未消费结果仍 Pending。退出由 operation 保管独立材料释放线程，原唯一 waiter 持续观察，不同步析构阻塞材料。后续 2B 增加可选双 key custody、冻结两用途 supplier 契约和 operation 共推进，只有公开匿名 fixture 驱动。原 ApprovalLease 到 native 撤销 token 的正式绑定、生产供应安装、start IPC 与真实配置仍未实现；当前生产无配置仍 Locked，不能称为真实密钥供应者已实现，也不扩大 native dialog 的批准或退休证明。

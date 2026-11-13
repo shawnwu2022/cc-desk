@@ -1,10 +1,10 @@
 # Native Host 单次启动保管链设计
 
-状态：首片已完成实现、定向验证与独立复核。核查基线为 `cbe7cae13b0b7f4c3291bf07decb26f996a9b230`。测试证据和未完成验收见末节；本文不代表完整供应链已验收。
+状态：生命周期首片、2A 底层前置条件和 2B 独立双密钥保管片均已完成实现、定向验证与独立复核。生命周期首片核查基线为 `cbe7cae13b0b7f4c3291bf07decb26f996a9b230`，后续分片基线与证据分别记录在末节；本文不代表完整批准供应链已验收。
 
 本片要证明：即使 Host 尚未注册网络或 pin，应用退出仍保管本次启动预留、原准备线程和所有已交付材料。生产默认配置继续为空。生命周期首片通过之前不增加生产 start IPC、UI 按钮或真实密钥打开调用。
 
-现有行为见 [Native Host approval component](native-host-approval.md) 和 [Experimental native Host lifecycle](remote-host-lifecycle.md)。首片生产代码只保管生命周期；材料工厂、批准安装与启动调用仍仅由隔离 fixture 驱动。后续两用途工厂与 start IPC 未实现。
+现有行为见 [Native Host approval component](native-host-approval.md) 和 [Experimental native Host lifecycle](remote-host-lifecycle.md)。生命周期首片生产代码只保管生命周期；后续 2B 已增加独立两用途 custody、冻结 supplier 契约与 operation 保管接线，具体边界见末节。材料工厂、批准安装与启动调用仍仅由隔离 fixture 驱动，生产供应与 start IPC 未接入。
 
 ## 分片范围
 
@@ -99,7 +99,7 @@ Endpoint 与 Relay 使用不同的固定 SPKI。批准期限来自原 ticket，�
 - 两 key 的调用方可以先对两者执行 `prepare_shutdown`，再在受保管通知路径中消费 notice。第一个 wake 阻塞时，第二个 key 已失效且仍可由原 owner 真正 join。notice 的最后 Drop 也可能运行 RawWaker 代码，因此后续集成不能把未消费 notice 随意丢在唯一 async waiter 或应用锁内。2A 没有实现该应用级通知 worker。
 - `KeyCustodian::observe_complete` 在同一次原 owner 独占观察中取得 retirement 和 `holds_original_join`，`NativeKeySlot::observe_complete` 路径持同一 owner 锁。Unknown 与原线程是否仍在运行独立；CNG Free 后原线程尾部尚未返回仍 Pending，不能用业务结果或空的瞬时快照伪造退休。
 
-2B 仍须把原批准 lease 的 cancel/expiry、operation cancel、service close 和准备失败绑定到同一 token，覆盖先取消后晚绑定；被冻结的工厂不得在 Yes 后重新读取 profile binding。两原 key owner、signal handle、待通知 mailbox 和最终 slot 释放必须由 canonical 保管链覆盖，晚到 owner 必须接收、晚到 start gate 不得放行。两个 key 槽的 Unknown 不能短路另一个槽的真实 join。原准备线程尚未 join 时，即使两槽暂为空也不能宣布退休。
+以下是 2A 收口时的后续要求；2B 独立保管片的实际进展见末节。完整接线仍须把原批准 lease 的 cancel/expiry、operation cancel、service close 和准备失败绑定到同一 token，覆盖先取消后晚绑定；被冻结的工厂不得在 Yes 后重新读取 profile binding。两原 key owner、signal handle、待通知 mailbox 和最终 slot 释放必须由 canonical 保管链覆盖，晚到 owner 必须接收、晚到 start gate 不得放行。两个 key 槽的 Unknown 不能短路另一个槽的真实 join。原准备线程尚未 join 时，即使两槽暂为空也不能宣布退休。
 
 业务登记和资源 outstanding 将在 2B 分开：材料交付后原 key worker 仍活着，Registered 不是 Ready，也不意味着整个退出已退休。首片 operation 的 prepare/release Joined 不能代替 key、通知与最终释放线程的原 join。冻结工厂、key worker、通知/释放 worker 都不得持自己的 service/operation/custody 强引用。上述应用级整合仍待独立实现和验证。
 
@@ -168,3 +168,45 @@ Endpoint 与 Relay 使用不同的固定 SPKI。批准期限来自原 ticket，�
 以 `d1a32989e623f1d812b1ebca6ee0b4a753506f19` 为基线，独立修复上述三处 composition 测试 lint：两段等待循环仅换行，保留原先相互独立的 `if`；`chunks_exact(2)` 改为 `as_chunks::<2>().0.iter()`，仍仅遍历完整两字节块并忽略余字节，兼容声明的 Rust 1.89 MSRV。没有 lint allow、整文件重排或生产逻辑变更，中文注释原文保持不变。
 
 证据为 `.audit/remote-composition-lint-20261113/`。`clippy.*` 记录同源码 remote-host 严格 `--lib --tests -- -D warnings` exit 0，关闭三处 lint；前述 2A 历史失败记录继续保留。原隔离脚本的 `isolated/results.json` 记录 NativeRemote 001–010 各 fresh process、005 额外一次、network 23 项及 checkout 3 项全部 exit 0、无 timeout、测试摘要计数正确。本次实际 Cargo test artifact SHA256 为 `5F13099C1A30DCB9E787180B1D7C52AF183D07EE6923E6958B5EBF82F3E90E82`，没有沿用 2A 旧产物。仅收口测试 lint，不提前实现 2B 或扩大生产验收范围。
+
+## 2B 独立双密钥保管片
+
+基线为 `23f1077fdd01046ed51b8bb6ccc04027f7b31b9e`。本片只实现 core custody、冻结两用途 supplier 契约及原 operation 的实际保管接线，不安装生产 supplier、不修改 controller/approval，也没有 start IPC。测试显式传入同一 native token，不等于原 ApprovalLease 已完成绑定。
+
+### 固定所有权与推进
+
+- 唯一 `ActivationReservation` 在原 service 已保管的 Reserved operation 中先安装无线程 custody，才向锁外调用栈发出 notification builder。终态 operation 不能新增线程或 key 责任。通知原 handle 先入 canonical 槽，再允许唯一 publisher 发出；真实 spawn 后的 publication unwind 不能记成 NoWorker。
+- operation 持有 custody 和原通知 handle；Core 只保管两个私有 Box slot、原 signal keeper、notice 队列及冻结 opener mailbox。prepare worker 只持 publisher/Core 或 signal/token，不持 operation/service/custody。通知 worker 只持 Core，没有自己的 JoinHandle owner，因而没有反向强引用或自 join 环。
+- Core 锁内借用固定 slot，观察并复制 retirement 与 original-join 事实；观察者不取得 slot/keeper 的 Arc。关闭先对两个 key 无外部回调地失效并收集 notice。唯一通知原线程在锁外 wake，并在两原 key 真 join 且 publisher 封闭后取走实际 slot、keeper 和未消费 opener，锁外 Drop 正常完成后才写 disposal_complete。
+- 通知可能阻塞第一个 wake，唯一 exit waiter 和最后 operation Drop 仍能独立推进另一个 finished key 的原 join。最后 owner 不先 blocking join prepare/notify，而共同推进所有 finished 原句柄；publisher_closed 从不替代 prepare Joined。通知线程自身也能 join key，无需外部 observer 先写入 prepare 完成。
+- 通知 handle 的 checkout 保持 Pending。完整 custody snapshot 按 notify→Core 同一锁序采样，不把旧 unknown=false 和后来空 handle 拼接成已退休。通知 panic 后，即使原通知已 join、mailbox/slots 已取空，未正常完成的通知或析构责任仍 Unknown+Pending；不重试、不 detach，也不把退出负向测试进程当成退休。
+- operation signal 一次绑定 opaque 只可置位 token。取消先于晚绑定时，新 token 立即失效。未 settled reservation 放弃、prepare spawnErr、Complete(false)、prepare panic、登记 false/panic 都走相同纯撤销；worker 只持 signal 的 unwind guard，观察者幂等兜底。成功 fixture completion 后，cfg(test) result helper 可观察 true，而原 key/通知资源继续 outstanding；实际 finish_preparation 仍返回资源观察，不表示生产 controller Registered/start 已打通。
+
+### 冻结供应与失败封闭
+
+`FrozenHostSupplier` 将 profile 身份、revision、Endpoint/Relay 两个不同公开 SPKI、relay origin/id、原本机 Instant cap 与两个私有一次性 opener 绑定为同一移动对象。没有 Issuer opener，没有可变 profile 引用或重新采样入口。生产可信构造尚未安装，测试构造仅使用公开 TEST_ONLY 标量及匿名 CNG key。
+
+工厂在任何 opener 运行前验证非空身份、revision、两个 P256 SPKI 的现有格式合同、SPKI 不同和 relay adapter 的公开 bounds。每个 key 原 handle 先存入固定 slot 再放 KeyStart；取消后晚到 owner 仍接收，但 gate 不放行。原 worker 开键前再次检查同一 token 和原 cap，不延长时限。prepare 返回仅证明原线程和限定 facade 已保管，不证明 key 已打开或 Ready；可用性另用真实匿名 CNG Endpoint/Relay 签名验证。
+
+第二个准备创建失败仍保管第一个 owner。工厂/native/free 失败由 2A 原 worker 先撤销 token，Core 通知循环无需用户退出便关闭兄弟 key。到期只读取原本机 Instant，不在 Core/通知线程调用外部 GrantClock。业务 Registered 与资源 outstanding 必须分离，本片以 fixture completion/result helper 验证该语义；current/snapshot 不执行登记或调用外部 clock，生产 controller 接线仍未完成。
+
+### 行为证据与验收范围
+
+证据目录为 `.audit/host-key-custody-20261113/`，所有历史失败保留：
+
+- `red-three-gate.*`：原 operation 最后 Drop 先等 prepare，导致兄弟原 key 无人 join，exit 101。测试实际关住 prepare 尾部与首个 wake，只放第二 key 的 after_free 尾部，主线程仅查询复制事实；先打开全部 gate 并 join fixture 再断言。
+- `late-red.*`：旧首次 attach 允许终态 operation 新增 custody，exit 101。修复为 reservation 先保管无线程 custody 再创建通知。
+- `snapshot-red.*`：旧分锁采样把先前成功与后来已 join 的通知拼接，exit 101。修复为一致 notify→Core 采样与独立 joining 事实。
+- `abandon-red.*` 两项和 `outcome-red.*` 参数化测试实际复现放弃、spawnErr、prepare false/panic、登记 false/panic 未撤销 token，均 exit 101；检查发生在任何 retire/drain 之前，不能由清理阶段的 cancel 掩盖。`green4.*` 中 010–012 已验证修复，成功结果对照保留活 key。
+- `green2-build.*` 仅是新增 SPKI 校验缺少借用的编译失败，不是生产行为 RED。`check2-existing.*` 的 006 是 loopback 测试误用证书域名 localhost；`green4.*` 006 的实际签名已通过，但取消后 choose_scheme 返回 None 被测试错误 unwrap。修正测试使用原 fixture 的 foobar.com，并同时断言旧 signer 拒绝签名、新 choose_scheme 为 None，不减弱撤销要求。
+
+最终七个 Rust 文件冻结清单为 `frozen-source-hashes.json`，九个源码/文档文件清单为 `final9-manifest.json`。固定 core 和最终 15 项测试经独立只读复核，没有新增源码阻断。
+
+- `green5.*` 的 14/15 通过保留为历史结果；015 首版把签名拒绝错误等同资源 Unknown，实际拒绝、token 撤销与原 key 正常 free/join 均已完成。最终测试分别断言拒绝及已知资源退休，未改变生产逻辑，也未削弱既有回归断言。
+- 最终 remote-host artifact SHA256 为 `411EBAB9472319E2B364CA1A03CA76E54376B76AC723DBB7ED5D1B6B38285897`，来自 `final-isolated/selected-artifact.json`。同一产物 `final-groups-results.json` 实跑 HostKeys 15、native crypto 38、Client 25、HostActivation 21、HostApproval 6、service 14、strict query 1，全部 exit 0、无 ignored/timeout；HostKeys 包含在 crypto 内，activation/service/checkout 也有交叉，不合并成去重总数。
+- 新 013 区分明确未创建通知线程与已 spawn 后 publication unwind；014 用三个有界独立子进程分支分别验证通知回调 panic、已取出但未正常完成的析构、合成 free Unknown 都不伪造退休。free 分支的兄弟 join 也可能由通知原线程自主完成，不单独证明 fallback 亲自 join；实际最后 operation Drop 共推进由 001 的三 gate 及通知失败后的观察组合验证。015 用实际匿名 key 验证原 native purpose 不符时拒绝、撤销及无需退出的资源收口。
+- `final-isolated/results.json` 包含 NativeRemote 001–010 各 fresh process、005 额外五次、network 23 和 checkout 3，共 17 个原进程、41 次测试执行；全部 exit 0、计数正确、无 timeout。008 保留原 clock 预留组合、错误 document/run、迟到取消/过期与只读 current 合同。
+- `clippy1.*` 记录最终 Rust 源码 remote-host 严格 `--lib --tests -- -D warnings` exit 0；`final-fmt.*` 记录七文件只读格式检查通过。没有扩大 lint allow 或重排旧 service/composition。
+- `default-build.*` 实际重建同源码默认 feature-off harness，feature 仅 default/rusqlite/sqlite。`default-result.json` 的原 native crypto 11 项全通过；其独立 artifact SHA256 为 `50ED00058F9DD135E873A1D80999407A978B35BCC024C3415DB13A6A759837AB`。它不是 remote-host artifact，不混用结果。两份文档及七个 Rust 文件均通过直接 UTF-8 字节解码与替换字符检查。
+
+本片没有运行全量 Rust、真实 GUI/native dialog、持久 existing-key loader、手机或公网端到端，也不声称完整批准供应闭环或真实用户凭据验收。下一片必须将 ApprovalLease cancel 的 token 撤销放在任何 watch 通知之前，并定义 take_activation 失败及原 ApprovalClock expiry/error 的主动撤销；不能依赖 UI poll。仍需审查冻结公开描述与原 lease 一次性绑定，完成 strict document/run 的实际启动推进。既有 Phone-first Offline 与任意顺序会合缺口不由匿名 fixture 结果替代。
