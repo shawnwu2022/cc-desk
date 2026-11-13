@@ -104,3 +104,63 @@ write or resize. The authenticated remote actor is still not installed as this
 owner, and no parallel remote writer is exposed. A production provider must route
 or reject the desktop authority at its actual handoff; this patch alone does not
 solve that gate or complete PTY/Job retirement.
+
+## 可信 Native Host 来源槽
+
+`RemoteHostService::begin_native_network` 先通过原 `NativeRuntime` 获取本次真实
+`NativeRunAdmission`，随后必须选择同一 service 的可信 native 注册槽。生产入口不再
+接收可直接进入网络的原始 bundle；旧的原始输入入口仅保留在 `cfg(test)`。
+普通应用启动仍没有 Host 批准 supplier、activation 批准生产者或注册调用者，槽默认
+为空并保持 Locked。本片没有增加 IPC command、配置文件审批、开键、enrollment 或
+把客户端 `NativeGrantPresence` 解释成 Host 启用批准。
+
+注册固定原 Source Arc、弱 resource identity、scope、完整 HostSnapshot（包含原样
+activation/epoch/origin）、peer/browser/issuer/principal、policy、route 与预算。注册
+只能发生一次，元数据不能替换。每次尝试消费一份 move-only LocalIdentity/Relay
+能力；可信 native owner 只能凭 opaque weak token 补给下一份材料，不能覆盖批准
+元数据。缺注册或缺新材料不能开网。activation 保留原协议的 opaque 值域，没有新增
+“全零等于缺失”的协议约定。注册本身不产生 Ready、grant 或原生输入权限。
+
+每次选择仍复查本次原 document/run/resource 权限，沿原 SourceClock、TLS/AppBind、
+browser grant、peer install、exact ACK/window 和同一 writer 执行。注册活性加入原
+连续检查，并在外部 clock 返回后重验；原 ClockOrigin/Source Arc 与 sticky Unknown
+均不能重置。撤销不可恢复，最终成功发布与槽关闭在同一短 service 锁下决定。
+
+正常撤销和退出在锁内移出未用材料，锁外先通知原网络 owner 再释放本地材料。
+时钟/continuity 调用栈内撤销只同步失效，不 Drop 材料或唤醒 Waker；私有采样 guard
+退出只恢复 depth。原 begin 返回或 owned task 终态到达安全边界后，才完成幂等 stop
+和材料释放。当前通道仍依原 LivePolicy/channel 终态真实 join；跨 Source 的回调撤销
+只保证资格立即失效，未观察到的资源终态仍为 Pending/Unknown，不承诺同步退休。
+材料 Drop、撤销返回与网络 join 都不证明外部 signer/key worker 或整个 Job 已退休。
+
+公开 TEST_ONLY loopback fixture 验证同槽 fresh 材料的原资源重绑、原 ACK/window/
+HostWritten、撤销后本地 Node 输入继续及原 handle 回收。Host-first fixture 的资格
+前提不关闭历史 parallel 启动失败；真实批准来源、实际调用该入口的产品 activation
+流程、手机/公网 WebPKI 和完整原生生命周期仍是独立门禁。
+
+槽固定的是批准描述与 Source Arc/弱 origin。原 LocalIdentity/Relay 类型没有公开身份
+getter，本片不自行比较每批 fresh 材料的初始 SPKI 或 Relay key id；fresh 身份必须由
+同一可信 native supplier 提供，并继续通过原 TLS/pin/AppBind/Relay/grant 校验。
+`UnavailableProfile` / `UnavailablePresence` 本身也只在 `cfg(test)` 中编译；生产实际
+缺少 profile/presence supplier 对象。普通 `lib` 启动没有调用 register/begin，不能将
+这一强制选择方法描述为真实来源已配置。
+
+`NativeKeyProfile` 只规定 metadata/open 契约；`NativeOwnedSoftwareKey` 尚无生产
+constructor 或现有密钥打开路径。`RemoteClientService::native_signers` 可以绑定
+`RelayRole::Host`，但签名批准期限仍由可信调用者提供；它既不产生 Host activation
+批准，也不能把具体 COSE 请求的 `NativeGrantPresence` 解释为 Host 启用批准。
+客户端 `install_profile` 连接的是 Client 角色，不能用其成功结果代替 Host 来源。
+
+下一条真实调用链仍缺少可信本机批准 owner：谁确认完整 Host 描述、原 run/resource
+范围、activation 与期限，谁持有撤销及 signer 生命周期。这些不是 relay 地址、
+origin/RP 或公钥 JSON 的解析结果。该来源明确前不增加默认批准、占位启用 handler
+或另一套批准系统；默认空槽保持 Locked。真实来源实现与实际密钥登记/配置是两项
+不同门禁，不能仅因缺少真实配置就宣称生产来源代码已经存在。
+
+材料从 fresh 槽移出前登记单一 preflight reservation，原 network.begin 正常返回
+（已交原任务或失败析构已返回）才清除；预检期间拒绝重填与第二个预检。材料移出
+关闭槽直至实际 Drop 正常返回期间保留 release 事实，unwind 记录不可恢复的 Unknown。
+fresh=None 不能证明材料已经退出。退出的原唯一 waiter 先保管 handle，再在自身任务
+内通知并停止原 owners；采样回调不再同步进入完整停止准备。准备失败不发布退出，
+首个 code、重复调用与晚到 pin/pump 的原保管不变。原 waiter 同时等待材料事实，
+最终与 retired 决定在同一短锁内重验；Pending/Unknown 不因观察超时变成退休。

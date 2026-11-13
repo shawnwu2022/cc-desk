@@ -753,6 +753,9 @@ pub(crate) struct HostNativeShutdown {
 }
 #[cfg(feature = "remote-host")]
 impl HostNativeShutdown {
+    pub(crate) fn covers_pin(&self, pin: &crate::run_supervisor::NativeRunPin) -> bool {
+        self.stop.as_ref().is_some_and(|stop| stop.covers_pin(pin))
+    }
     #[cfg(all(test, windows))]
     pub(crate) fn test_original_managed_facts(
         &mut self,

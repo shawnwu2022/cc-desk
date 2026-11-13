@@ -86,6 +86,18 @@ impl NativeHost {
         channel: Arc<RunningChannel>,
         authorize: Box<dyn FnOnce() -> bool + Send>,
     ) -> Result<InstallAttempt, Box<(NativeHostError, NativeRunProducer)>> {
+        let mut slot = Some(producer);
+        self.adopt_native_producer_slot(&mut slot, channel, authorize)
+            .map_err(|error| Box::new((error, slot.expect("rejected original producer"))))
+    }
+    /// 准备期间只借用原槽；通过所有可失败检查后才交给此 Host 保管。
+    pub fn adopt_native_producer_slot(
+        &mut self,
+        slot: &mut Option<NativeRunProducer>,
+        channel: Arc<RunningChannel>,
+        authorize: Box<dyn FnOnce() -> bool + Send>,
+    ) -> Result<InstallAttempt, NativeHostError> {
+        let producer = slot.as_ref().ok_or(NativeHostError::Authority)?;
         let prepared = (|| {
             if self.closing || self.attempts.len() >= MAX_ATTEMPTS || self.owner.active.len() >= 12
             {
@@ -147,11 +159,9 @@ impl NativeHost {
                 .map_err(|_| NativeHostError::Rejected)?;
             Ok((target, device, lease, a, pending))
         })();
-        let (target, device, lease, authority, pending) = match prepared {
-            Ok(value) => value,
-            Err(error) => return Err(Box::new((error, producer))),
-        };
+        let (target, device, lease, authority, pending) = prepared?;
         producer.retain_authority(authority.clone());
+        let producer = slot.take().expect("prepared original producer");
         let id = InstallAttempt(self.attempts.len() as u64 + 1);
         let pending =
             AuthorizedPendingRebind::from_native(pending, authority.clone(), target.clone());

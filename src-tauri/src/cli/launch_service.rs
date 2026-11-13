@@ -1341,8 +1341,20 @@ impl RunAccess {
 }
 
 #[cfg(feature = "remote-host")]
+impl NativeRun {
+    pub(crate) fn remote_input(&self) -> Option<cc_desk_remote_host::native_host::NativeLocalInput> {
+        self.process.native_input.get().cloned()
+    }
+}
+#[cfg(feature = "remote-host")]
+pub(crate) enum NativeProducerSlot {
+    Available(Box<cc_desk_remote_host::native_host::NativeRunProducer>),
+    CheckedOut,
+    Consumed,
+}
+#[cfg(feature = "remote-host")]
 pub(crate) struct NativeCanonicalRun {
-    pub(crate) producer: Option<cc_desk_remote_host::native_host::NativeRunProducer>,
+    pub(crate) producer: NativeProducerSlot,
     input: cc_desk_remote_host::native_host::NativeLocalInput,
     _directory: tempfile::TempDir,
     pub(crate) scope: cc_desk_remote_host::native_host::NativeSessionScope,
@@ -1359,15 +1371,14 @@ impl NativeCanonicalRun {
         }
         Ok(self.scope.clone())
     }
-    pub(crate) fn stop(&self) {
-        self.input.stop();
-    }
     pub(crate) fn observe_writer(
         &mut self,
         budget: Duration,
     ) -> cc_desk_remote_host::native_host::NativeWriterRetirement {
-        if let Some(producer) = self.producer.as_mut() {
-            let _ = producer.join(budget);
+        match &mut self.producer {
+            NativeProducerSlot::Available(producer) => { let _ = producer.join(budget); }
+            NativeProducerSlot::CheckedOut => return cc_desk_remote_host::native_host::NativeWriterRetirement::Pending,
+            NativeProducerSlot::Consumed => {}
         }
         self.input.retirement()
     }
@@ -1491,7 +1502,7 @@ pub(crate) fn prepare_native_canonical(
     Ok((
         NativeCanonicalRun {
             scope: producer.native_scope(),
-            producer: Some(producer),
+            producer: NativeProducerSlot::Available(Box::new(producer)),
             input,
             _directory: directory,
         },

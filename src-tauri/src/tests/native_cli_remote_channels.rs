@@ -1,7 +1,7 @@
 //! Public TEST_ONLY identities and real TLS/AppBind/grant exchange over duplex.
 use cc_desk_remote_record::{
     appbind::CanonicalOrigin,
-    grant::{DataRole, SessionScope},
+    grant::{CanonicalGrant, DataRole, SessionScope},
 };
 use cc_desk_remote_security::*;
 use std::{sync::Arc, time::Duration};
@@ -12,7 +12,7 @@ use std::{sync::Arc, time::Duration};
     dead_code,
     reason = "Existing fixed public TEST_ONLY signing vectors; never a product provider"
 )]
-mod identities;
+pub(super) mod identities;
 #[path = "../../../remote/crates/client/src/tests/support.rs"]
 #[rustfmt::skip]
 // Import fixed vectors without formatting another workspace's source.
@@ -21,6 +21,12 @@ mod identities;
     reason = "Existing public TEST_ONLY issuer/scalar; unused fixed scope is intentionally not adopted"
 )]
 mod support;
+pub(super) fn admin() -> P256Spki {
+    support::admin()
+}
+pub(super) fn signed(payload: &CanonicalGrant, kid: [u8; 32]) -> Vec<u8> {
+    support::signed(payload, kid)
+}
 const BUDGET: Duration = Duration::from_secs(1);
 struct PublicSigner;
 impl NativeGrantSigner for PublicSigner {

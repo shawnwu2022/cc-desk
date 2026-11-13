@@ -22,6 +22,8 @@ mod native_crypto;
 mod remote_client_ipc;
 #[cfg(feature = "remote-host")]
 mod remote_host;
+#[cfg(feature = "remote-host")]
+mod remote_host_network;
 pub use codex_observer_reporter::run_entry as run_codex_observer_entry;
 mod observer_host;
 mod observer_http;

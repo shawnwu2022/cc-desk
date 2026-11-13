@@ -76,6 +76,28 @@ pub fn start_admitted(
 ) -> Result<(tokio::io::DuplexStream, OwnedTunnel), TransportError> {
     start_owned(ws, tunnel, budget)
 }
+#[cfg(feature = "test-only-loopback")]
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TestOnlyMuxCause { Cancelled, IoBudget, WebSocketClose, WebSocketEof, WebSocketReset, SocketIo, SocketWrite, RouteWorker, Delivery, Wire }
+#[cfg(feature = "test-only-loopback")]
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug)]
+pub struct TestOnlyMuxEnd {
+    pub cause: TestOnlyMuxCause,
+    pub selected_at: tokio::time::Instant,
+    pub result: &'static str,
+}
+#[cfg(feature = "test-only-loopback")]
+#[doc(hidden)]
+pub type TestOnlyObservedTunnel = (tokio::io::DuplexStream, OwnedTunnel, tokio::sync::oneshot::Receiver<TestOnlyMuxEnd>);
+#[cfg(feature = "test-only-loopback")]
+#[doc(hidden)]
+pub fn test_only_start_admitted_observed(ws: wss::AdmittedSocket, tunnel: [u8; 16], budget: std::time::Duration) -> Result<TestOnlyObservedTunnel, TransportError> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let (stream, owner) = start_owned_inner(ws, tunnel, budget, Some(sender))?;
+    Ok((stream, owner, receiver))
+}
 /// In-memory outer WebSocket fixture; never a relay admission or production path.
 #[cfg(feature = "test-only-loopback")]
 #[doc(hidden)]
@@ -115,16 +137,29 @@ fn start_owned<S>(
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
+    start_owned_inner(ws, tunnel, budget, #[cfg(feature = "test-only-loopback")] None)
+}
+fn start_owned_inner<S>(
+    ws: tokio_tungstenite::WebSocketStream<S>,
+    tunnel: [u8; 16],
+    budget: std::time::Duration,
+    #[cfg(feature = "test-only-loopback")] observer: Option<tokio::sync::oneshot::Sender<TestOnlyMuxEnd>>,
+) -> Result<(tokio::io::DuplexStream, OwnedTunnel), TransportError>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
     if tunnel == [0; 16] || budget.is_zero() || budget > MAX_IO_BUDGET {
         return Err(TransportError::Limit);
     }
     let (stream, route) = bounded_tunnel();
     let (stop, rx) = tokio::sync::watch::channel(false);
-    let task = tokio::spawn(drive(
+    let task = tokio::spawn(drive_inner(
         ws,
         std::collections::HashMap::from([(tunnel, route)]),
         rx,
         budget,
+        #[cfg(feature = "test-only-loopback")]
+        observer,
     ));
     Ok((
         stream,
@@ -147,10 +182,22 @@ pub enum TransportError {
     Cancelled,
 }
 pub async fn drive<S>(
+    ws: tokio_tungstenite::WebSocketStream<S>,
+    routes: std::collections::HashMap<[u8; 16], RouteEndpoint>,
+    cancel: tokio::sync::watch::Receiver<bool>,
+    budget: std::time::Duration,
+) -> Result<(), TransportError>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    drive_inner(ws, routes, cancel, budget, #[cfg(feature = "test-only-loopback")] None).await
+}
+async fn drive_inner<S>(
     mut ws: tokio_tungstenite::WebSocketStream<S>,
     routes: std::collections::HashMap<[u8; 16], RouteEndpoint>,
     mut cancel: tokio::sync::watch::Receiver<bool>,
     budget: std::time::Duration,
+    #[cfg(feature = "test-only-loopback")] observer: Option<tokio::sync::oneshot::Sender<TestOnlyMuxEnd>>,
 ) -> Result<(), TransportError>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
@@ -219,9 +266,19 @@ where
     let mut read_deadline = Instant::now()
         .checked_add(budget)
         .ok_or(TransportError::Limit)?;
+    #[cfg(feature = "test-only-loopback")]
+    let observed_end;
+    macro_rules! finish {
+        ($result:expr, $cause:ident) => {{
+            let terminal_result = $result;
+            #[cfg(feature = "test-only-loopback")]
+            { observed_end = TestOnlyMuxEnd { cause: TestOnlyMuxCause::$cause, selected_at: Instant::now(), result: match &terminal_result { Ok(()) => "Ok", Err(TransportError::Limit) => "Limit", Err(TransportError::Wire) => "Wire", Err(TransportError::UnknownTunnel) => "UnknownTunnel", Err(TransportError::Backpressure) => "Backpressure", Err(TransportError::Io) => "Io", Err(TransportError::Deadline) => "Deadline", Err(TransportError::Closed) => "Closed", Err(TransportError::Cancelled) => "Cancelled" } }; }
+            break terminal_result;
+        }};
+    }
     let result = loop {
         if Instant::now() >= read_deadline {
-            break Err(TransportError::Deadline);
+            finish!(Err(TransportError::Deadline), IoBudget);
         }
         // Service at most one ready outbound envelope before the next inbound
         // event. A permanently-ready inbound stream cannot starve outbound.
@@ -232,22 +289,22 @@ where
                 r=timeout_at(read_deadline,ws.send(Message::Binary(bytes.into())))=>r.map_err(|_|TransportError::Deadline).and_then(|r|r.map_err(|_|TransportError::Io)),
             };
             if let Err(e) = sent {
-                break Err(e);
+                finish!(Err(e), SocketWrite);
             }
         }
         tokio::select! {
             biased;
-            _=cancel.changed()=>break Err(TransportError::Cancelled),
+            _=cancel.changed()=>finish!(Err(TransportError::Cancelled), Cancelled),
             ended=workers.join_next(), if !workers.is_empty()=>{
-                break ended.unwrap().unwrap_or(Err(TransportError::Io));
+                finish!(ended.unwrap().unwrap_or(Err(TransportError::Io)), RouteWorker);
             }
             next=timeout_at(read_deadline,ws.next())=>{
-                if Instant::now()>=read_deadline {break Err(TransportError::Deadline);}
+                if Instant::now()>=read_deadline {finish!(Err(TransportError::Deadline), IoBudget);}
                 match next {
-                    Err(_)=>break Err(TransportError::Deadline),
+                    Err(_)=>finish!(Err(TransportError::Deadline), IoBudget),
                     Ok(Some(Ok(Message::Binary(bytes))))=>{
-                        if let Err(e)=deliver(&bytes,&incoming){break Err(e);}
-                        read_deadline=match Instant::now().checked_add(budget){Some(d)=>d,None=>break Err(TransportError::Limit)};
+                        if let Err(e)=deliver(&bytes,&incoming){finish!(Err(e), Delivery);}
+                        read_deadline=match Instant::now().checked_add(budget){Some(d)=>d,None=>finish!(Err(TransportError::Limit), IoBudget)};
                     }
                     Ok(Some(Ok(Message::Ping(_))))=>{
                         let sent=tokio::select! {
@@ -255,15 +312,16 @@ where
                             _=cancel.changed()=>Err(TransportError::Cancelled),
                             r=timeout_at(read_deadline,ws.flush())=>r.map_err(|_|TransportError::Deadline).and_then(|r|r.map_err(|_|TransportError::Io)),
                         };
-                        if let Err(e)=sent {break Err(e);}
+                        if let Err(e)=sent {finish!(Err(e), SocketWrite);}
                     }
                     Ok(Some(Ok(Message::Pong(_))))=>{}
-                    Ok(Some(Ok(Message::Close(_))))|Ok(None)=>break Err(TransportError::Closed),
+                    Ok(Some(Ok(Message::Close(_))))=>finish!(Err(TransportError::Closed), WebSocketClose),
+                    Ok(None)=>finish!(Err(TransportError::Closed), WebSocketEof),
                     Ok(Some(Err(tokio_tungstenite::tungstenite::Error::ConnectionClosed
                         |tokio_tungstenite::tungstenite::Error::AlreadyClosed
-                        |tokio_tungstenite::tungstenite::Error::Protocol(tokio_tungstenite::tungstenite::error::ProtocolError::ResetWithoutClosingHandshake))))=>break Err(TransportError::Closed),
-                    Ok(Some(Err(tokio_tungstenite::tungstenite::Error::Io(_))))=>break Err(TransportError::Io),
-                    _=>break Err(TransportError::Wire),
+                        |tokio_tungstenite::tungstenite::Error::Protocol(tokio_tungstenite::tungstenite::error::ProtocolError::ResetWithoutClosingHandshake))))=>finish!(Err(TransportError::Closed), WebSocketReset),
+                    Ok(Some(Err(tokio_tungstenite::tungstenite::Error::Io(_))))=>finish!(Err(TransportError::Io), SocketIo),
+                    _=>finish!(Err(TransportError::Wire), Wire),
                 }
             }
             outgoing=out_rx.recv(), if !out_rx.is_closed()=>{
@@ -273,7 +331,7 @@ where
                         _=cancel.changed()=>Err(TransportError::Cancelled),
                         r=timeout_at(read_deadline,ws.send(Message::Binary(bytes.into())))=>r.map_err(|_|TransportError::Deadline).and_then(|r|r.map_err(|_|TransportError::Io)),
                     };
-                    if let Err(e)=sent {break Err(e);}
+                    if let Err(e)=sent {finish!(Err(e), SocketWrite);}
                 }
             }
         }
@@ -283,6 +341,8 @@ where
     };
     workers.abort_all();
     while workers.join_next().await.is_some() {}
+    #[cfg(feature = "test-only-loopback")]
+    if let Some(observer) = observer { let _ = observer.send(observed_end); }
     result
 }
 type Routes = std::collections::HashMap<[u8; 16], tokio::sync::mpsc::Sender<Vec<u8>>>;
