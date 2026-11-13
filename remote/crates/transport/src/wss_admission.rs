@@ -47,6 +47,8 @@ pub struct RelayAdmissionIdentity {
     signer: Arc<dyn RelaySigner>,
 }
 impl RelayAdmissionIdentity {
+    /// 只读公开准入元组，签名器和挑战保持不透明。
+    pub fn binding(&self) -> ([u8;16], RelayRole) { (self.key_id, self.role) }
     pub fn new(key_id: [u8; 16], role: RelayRole, signer: Arc<dyn RelaySigner>) -> Self {
         Self {
             key_id,
