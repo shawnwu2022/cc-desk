@@ -66,6 +66,29 @@ async fn finish(controller: &RemoteHostController) -> bool {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn NativeRemote_ApprovedNativeKeysRegisterAndHandshake_012() {
+    approved_native_keys_trial(false, false, None).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn NativeRemote_PreparedKeysWaitBeyondSignatureWindow_014() {
+    approved_native_keys_trial(true, false, None).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn NativeRemote_LateClientHelloUsesOriginalEndpointStage_015() {
+    approved_native_keys_trial(false, true, None).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn NativeRemote_StageGateHonorsOriginalSetupEnd_016() {
+    approved_native_keys_trial(false, false, Some(false)).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn NativeRemote_StageGateCancelKeepsOriginalOwners_017() {
+    approved_native_keys_trial(false, false, Some(true)).await;
+}
+async fn approved_native_keys_trial(
+    delay_network: bool,
+    delay_hello: bool,
+    gate_failure: Option<bool>,
+) {
     let transports = Arc::new(TerminalTransports::new());
     let supervisor = Arc::new(NativeRunSupervisor::new(transports.clone()));
     let mut fixture = Fixture::with_runtime_environment("input", supervisor, transports, true);
@@ -198,15 +221,111 @@ async fn NativeRemote_ApprovedNativeKeysRegisterAndHandshake_012() {
         "business registration is not key retirement"
     );
     assert!(!token.is_revoked());
+    // 相同公开 key、另一批准的材料不得消耗 B 的 fresh 槽或撤销 B；退回 A 仍由 A 原 owner 保管。
+    if !delay_network && !delay_hello && gate_failure.is_none() {
+        let mut a_reservation =
+            crate::remote_host::activation::ActivationOperation::test_reservation();
+        let a_operation = a_reservation.operation();
+        let a_token = crate::native_crypto::owner::NativeRevocation::new();
+        let supplied = supplier(&relay, counts());
+        let a_spki = supplied.binding().endpoint_spki;
+        let a_set = a_reservation
+            .prepare_keys(a_token.clone(), Instant::now() + Duration::from_secs(30))
+            .unwrap()
+            .prepare(supplied)
+            .unwrap();
+        a_reservation.spawn(|_| true).unwrap();
+        let material = HostAttemptMaterials {
+            stages: Some(a_set.stages),
+            local: cc_desk_remote_security::LocalIdentity::new(
+                cc_desk_remote_security::Role::Host,
+                cc_desk_remote_security::P256Spki::new(&a_spki).unwrap(),
+                a_set.endpoint,
+            )
+            .unwrap(),
+            relay: a_set.relay,
+            outer_accepted: None,
+            termination: None,
+        };
+        let refused = host
+            .replenish_native_source(
+                &runtime,
+                &original,
+                &host.test_registered_source_token(),
+                material,
+            )
+            .err()
+            .unwrap();
+        assert_eq!(refused.0, HostNetworkError::Authority);
+        assert!(
+            !token.is_revoked() && !a_token.is_revoked() && host.test_source_material_pending()
+        );
+        drop(refused);
+        assert!(a_token.is_revoked() && !token.is_revoked() && host.test_source_material_pending());
+        let end = Instant::now() + Duration::from_secs(5);
+        while a_operation.retire().outstanding {
+            assert!(Instant::now() < end);
+            tokio::task::yield_now().await;
+        }
+        assert!(!a_operation.snapshot().unknown);
+    }
     let (accepted, ready) = tokio::sync::oneshot::channel();
     let (terminated, ending) = tokio::sync::oneshot::channel();
     host.test_observe_fresh_material(accepted, terminated);
+    let mut proceed = if delay_hello || gate_failure.is_some() {
+        let (release, wait) = tokio::sync::oneshot::channel();
+        host.test_gate_fresh_after_accepted(wait);
+        Some(release)
+    } else {
+        None
+    };
+    if delay_network {
+        // 测量真实旧窗口过期，不用 sleep 安排线程先后；原批准 cap 不变。
+        let release = tokio::time::Instant::now() + Duration::from_millis(5200);
+        tokio::time::sleep_until(release).await;
+        assert!(tokio::time::Instant::now() >= release);
+        assert!(!token.is_revoked());
+    }
     let attempt = host
         .test_begin_registered_network(runtime.clone(), admit())
         .unwrap();
     let mut peer = None;
     let result: Result<(), &'static str> = async {
         ready.await.map_err(|_| "native relay acceptance")?;
+        if let Some(cancel_gate) = gate_failure {
+            if cancel_gate {
+                drop(proceed.take());
+            }
+            let failure = attempt.wait_admitted().await;
+            let expected = if cancel_gate {
+                HostNetworkError::Closed
+            } else {
+                HostNetworkError::Deadline
+            };
+            if failure != Err(expected) {
+                return Err("original setup gate did not refuse");
+            }
+            attempt
+                .wait_closed()
+                .await
+                .map_err(|_| "gate original join")?;
+            if !token.is_revoked() {
+                return Err("failed stage retained authority");
+            }
+            return Ok(());
+        }
+        if delay_hello {
+            // 原任务在 Accepted 后、mux 创建前受门保管；避免独立 2 秒 IO idle timeout 掩盖签名窗口。
+            // 保留原 8 秒 setup end，晚于旧五秒窗才启动 Phone。
+            let release = tokio::time::Instant::now() + Duration::from_millis(5200);
+            tokio::time::sleep_until(release).await;
+            assert!(tokio::time::Instant::now() >= release);
+            proceed
+                .take()
+                .unwrap()
+                .send(())
+                .map_err(|_| "original setup gate closed")?;
+        }
         let (phone, admitted) = tokio::join!(
             network_client(&relay, original.scope().unwrap()),
             attempt.wait_admitted()
@@ -241,7 +360,7 @@ async fn NativeRemote_ApprovedNativeKeysRegisterAndHandshake_012() {
     drop(original);
     let physical = cleanup.close();
     let relay_known = relay.close().await;
-    eprintln!("TEST_ONLY_FROZEN_APPROVAL result={result:?} cause={:?} opens={:?} token_revoked={} network_joined={network_known}", ending.cause, opened.each_ref().map(|n| n.load(Ordering::Acquire)), token.is_revoked());
+    eprintln!("TEST_ONLY_FROZEN_APPROVAL result={result:?} cause={:?} mux={:?} opens={:?} token_revoked={} network_joined={network_known}", ending.cause, ending.mux, opened.each_ref().map(|n| n.load(Ordering::Acquire)), token.is_revoked());
     assert!(physical && relay_known && network_known);
     assert!(result.is_ok(), "{result:?}");
 }

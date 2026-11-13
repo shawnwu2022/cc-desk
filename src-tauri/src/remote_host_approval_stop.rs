@@ -33,6 +33,14 @@ impl NativeApprovalStop {
             .await;
         }
     }
+    #[cfg(windows)]
+    pub(crate) fn matches_native(
+        &self,
+        token: &Arc<crate::native_crypto::owner::NativeRevocation>,
+        cap: Instant,
+    ) -> bool {
+        Arc::ptr_eq(&self.token, token) && self.end == cap
+    }
     pub(crate) fn revoke(&self) {
         #[cfg(windows)]
         self.token.revoke();

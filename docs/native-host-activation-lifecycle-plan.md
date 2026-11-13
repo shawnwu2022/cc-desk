@@ -244,6 +244,50 @@ Endpoint 与 Relay 使用不同的固定 SPKI。批准期限来自原 ticket，�
 
 ### 仍未完成的生产验收
 
-没有运行全量 Rust、真实 GUI/native dialog、已有用户 key loader、手机或公网端到端。原批准到双用途供应保管链已由公开匿名 fixture 验证，生产安装/配置和真正启动调用者仍未接入。当前 prepare 将两种 facade 的同次 attempt 限为最多五秒；Relay 建立、会合及晚 ClientHello 可能超过此窗口，不能据立即握手通过声称等待 Phone 后仍可用。
+没有运行全量 Rust、真实 GUI/native dialog、已有用户 key loader、手机或公网端到端。原批准到双用途供应保管链已由公开匿名 fixture 验证，生产安装/配置和真正启动调用者仍未接入。该片提交时，prepare 将两种 facade 的同次 attempt 限为最多五秒；Relay 建立、会合及晚 ClientHello 可能超过此窗口，当时不能据立即握手通过声称等待 Phone 后仍可用。后续实际修复与保留边界见下一节“原网络任务的单次阶段签名片”。
 
-下一独立片应在原 network/stage 独占的一次性 permit 中，于实际签名时领取不超过五秒的 attempt，Relay 和 Endpoint 分开领取，仍受同一原 key/fence/token/cap。LocalIdentity::new 会提前探测 choose_scheme，不能在那里消耗 permit；不得延长期限、重开 key、失败后续领或自动续期。原 Phone-first Offline 与任意顺序会合缺口继续保留，不用 sleep/buffer 掩盖。
+该片结束时规划的下一独立片，是在原 network/stage 独占的一次性 permit 中，于实际签名时领取不超过五秒的 attempt，Relay 和 Endpoint 分开领取，仍受同一原 key/fence/token/cap；其实现和验收记录现见下节。LocalIdentity::new 会提前探测 choose_scheme，不能在那里消耗 permit；不得延长期限、重开 key、失败后续领或自动续期。原 Phone-first Offline 与任意顺序会合缺口继续保留，不用 sleep/buffer 掩盖。
+
+## 原网络任务的单次阶段签名片
+
+基线 3e88ddf7a9e742f6a12e5982fe5b4713cce02c62。本片仅移动原两 key 的签名资格签发时点，没有增加批准、真实凭据或生产启动入口。完整最终验证记录在本节收口部分。
+
+### 实际所有权与失败边界
+
+- FrozenHostSupplier 的同一准备流程产生 HostSigningStages、Endpoint/Relay 惰性 facade；原 HostKeys 测试也走此流程，没有完整 eager 工厂旁路。个别 custody/factory 专项仅用明确 cfg(test) 的 Endpoint-only driver 隔离故障，它不证明生产 Relay 顺序。
+- 阶段控制对象不可 Clone，随原 fresh material、原 NetworkStart 唯一移动到已保管网络任务；共享 facade 只有短锁下的占用/交付事实，没有 arm 权。NetworkSigningScope 的构造限制在原网络模块，并携原 registration 的 token 身份、原批准 cap、原 setup end。同一公开 key 不是同一批准身份；注册、补充和 bind 拒绝异源 staged 材料，B 资格与合法 fresh 槽不受 A 拒绝/Drop 影响。
+- Relay sign 调用原子消费一次，首次 poll 才 mint；Endpoint 在原 connect_admitted 成功返回后 arm，实际 sign 才消费/mint，choose_scheme 不消费。attempt.end 不晚于 now+5 秒、原 cap、原 setup end。Relay 交付及 Accepted 先于 Endpoint advance，同 fence 不覆盖尚未交付的前阶段；旧 Relay attempt 在等待后到期，不阻止原 setup/cap 内的新 Endpoint 阶段。
+- Bounds/Busy/超时/取消/panic 不回填许可、不重开 key。未 poll 与已排队 Relay Future 的 Drop 先 pure revoke；其手写 poll 持纯 token unwind guard，原票据保存在 Future 字段中，避免 opaque async 内先析构票据再撤销。共享阶段锁从不包外部回调或资源释放。正常原网络退出先 revoke，再按原 stop+join 退出；Client 的默认 None 路径与原 key 退休事实不变；下述 owner 窄修只补失败撤销和外部回调的顺序。
+- 原网络任务没有新增 abort 入口，原 JoinHandle 持续保管，work panic 通过 guarded 返回后显式 cancel。该事实不等于证明任意强制 Drop 整个 runtime Future 的局部析构顺序，更不代表进程异常退休。
+
+### RED、测试含义与验收边界
+
+证据目录 .audit/host-signing-stages-20261113/。
+
+- delay-red-014.* 是真实行为 RED：准备/登记后等待超过旧五秒窗，再开始原网络，旧 Relay 签名拒绝；exit 101。green3-014.* 在同样延迟和原预算下握手通过，两个匿名 opener 各一次，原 network 已知 join。
+- delay-red-015.* 与 green1-015.* 的早期测试是混合失败：Host 已启动 mux，2 秒无 Binary 的原 IO idle timeout 先关闭它，不能将其冒称纯 Endpoint 签名 RED。原日志保留，没有提高 IO/setup 时限或弱化生产检查。
+- 修正 015 使用仅测试的原任务门，位置在真实 Relay Accepted 后、Endpoint arm 和 mux 创建前；等 5.2 秒才放行并发送真实 ClientHello，原 8 秒 setup、2 秒 IO 不变。green4-015.* 已通过。这同时检验旧 Relay attempt 到期后仍可 arm，以及临近实际 Endpoint sign 才 mint；不证明已启动 mux 可空闲等待 Phone 超过 2 秒，也不解决历史 Phone-first Offline。
+- green4 的 HostStages 001–005 覆盖重复 choose_scheme 零 mint、并发八个已得 Signer 仅一次成功/mint、未 poll Drop、真实 Queued 票据及 RawWaker clone panic、撤销先于阻塞 wake且兄弟原 key 真 join、公开 bounds/原 setup 到期与 token/cap 替换拒绝。新 006 补 Busy 与原五秒排队超时不续领。
+- NativeRemote012 增加 A 材料进入 B 的 Authority 拒绝、B token/fresh 保持、A 退回仍 live而 Drop 后仅 A 撤销，并继续原 B 真实握手。016/017 分别让 Accepted 门等到原 8 秒 setup 结束、让门取消，确认失败时原 key/network 收口，不因阶段存在延长时间或漏原 owner。
+- green2-build.* 的四个旧测试 gate 类型调用点、clippy1.* 的测试 helper cfg 与类型布局/复杂度问题都是编译/检查问题，不计为行为 RED，不靠 lint allow 掩盖。
+
+### 到期失败通知的独立复核与补丁
+
+冻结1的完整隔离矩阵与八个分组均通过，但独立审查发现这些测试未覆盖三个已知失败点中的阻塞回调顺序，因此冻结1不能替代修复后验收。
+
+- expiry-red.* 的007在实际五秒到期后 poll Queued 票据，原 cancel_observer 先同步 wake，撤销仍 false，exit101/5.03秒。
+- expiry2-red-008.* 让原 worker 先发现到期，observer 尚未再次 poll；reply通知前撤销仍 false，exit101/5.04秒。
+- expiry2-red-009.* 用原 hook_delivery 在交付时过期，原 clear_notification 先析构旧 waker，撤销仍 false，exit101/5.02秒。三例都先放开门、等待原资源收口，再断言失败，不把悬挂或进程退出当退休。
+- 修复仅在原 id 匹配且取消/拒绝/交付失败事实已明确时，先置既有可选 NativeRevocation，再执行外部 wake/析构。原 worker native return 已有正确顺序，保持不动。另在 SignTicket::poll 入口、任何 waker 回调前对当时已知失效的匹配 Host 请求纯撤销；它不替代前三处，也不声称能抢占运行中的外部回调或完全消除跨 deadline 竞态。原 RequestFact/closing、Client None、正常成功和 stale id 都保留。
+- 最终新增010覆盖入口已过期时的旧 waker析构，011覆盖原已交付票据的 stale cancel 不撤销新合法请求。HostStages总计11项，均使用公开匿名key和原票据，没有新增生产凭据操作。
+
+### 最终同源码收口
+
+冻结2源码及核心独立只读审查完成，实际最终矩阵全部通过。源码/脚本清单 frozen2-source-hashes.json 共11项，完整十三文件清单 final13-manifest.json；验收汇总 acceptance-summary.json。本节记录提交前的实际最终产物验证，不将早期结果替代最终验收。
+
+- 最终 remote-host artifact SHA256 为 285EC05A342BC9582C1285ACE7B601429EDB07F87B8FECE5D01DCEAF8C8F2463，来自 final2-isolated/selected-artifact.json。同源码严格 Clippy3（--lib --tests -- -D warnings）exit0；final2-fmt 对八个适合整文件检查的 Rust 模块通过，旧 compact network/composition 不做无关重排；最终文件直接 UTF-8 字节检查和 diff-check 通过。
+- final2-isolated/results.json 实跑 NativeRemote001–017 各 fresh process、005额外五次、network25、checkout3，共24个原进程/50次测试执行，全部exit0、摘要计数匹配、无timeout。014与015延迟后真实握手、016原setup到期、017门取消及原网络/PTY/Job/Unknown/首次退出码边界全部通过。
+- final2-groups-results.json 的窄过滤 HostKeys15、HostStages11，以及 crypto49、Client25、HostActivation21、HostApproval11、service14、strict query1 全通过。实际 inventory 中 host_tests 总26包含前两组，crypto49包含host_tests；其他分组也存在交叉，不将这些计数相加成去重总数。007–010日志均记录已知失败的外部通知/析构前 token=true；011证实 stale cancel 不影响新的原请求。三个历史 RED 的 false 事实保留。
+- default2-* 从同源码重建独立默认 feature-off 产物，仅 default/rusqlite/sqlite；原 native crypto11全部通过、无timeout，包含默认 owner 的 queued/started/旧票据取消对照。其 SHA256 为 78F646243DDFC942D0B175999955374A4FD59FFFA00007FF5E436B39B8138410，不混用 remote-host artifact。
+
+本片未运行全量 Rust、真实 GUI、持久 existing-key loader、真实手机或公网端到端。生产无配置仍 Locked，不新增 start IPC/UI、部署或自动续期。mux 启动后的原两秒空闲限制、Phone-first Offline/任意顺序会合、真实配置/启动与公网验收仍未完成。

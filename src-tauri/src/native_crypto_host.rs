@@ -3,10 +3,13 @@
     dead_code,
     reason = "Host approval/supplier installation is a separate slice"
 )]
-use super::{owner::*, signers::*, CryptoError, NativeOwnedSoftwareKey, SigningPurpose};
+use super::{owner::*, CryptoError, NativeOwnedSoftwareKey, SigningPurpose};
+#[path = "native_crypto_host_stages.rs"]
+mod stages;
 use cc_desk_remote_record::appbind::CanonicalOrigin;
-use cc_desk_remote_transport::wss::{RelayAdmissionIdentity, RelayRole};
+use cc_desk_remote_transport::wss::RelayAdmissionIdentity;
 use parking_lot::{Condvar, Mutex};
+pub(crate) use stages::HostSigningStages;
 use std::{
     collections::VecDeque,
     sync::{mpsc, Arc},
@@ -68,7 +71,7 @@ impl FrozenHostSupplier {
     }
 }
 pub(crate) struct HostSignerSet {
-    pub(crate) attempt: NativeSigningAttempt,
+    pub(crate) stages: HostSigningStages,
     pub(crate) endpoint: Arc<dyn rustls::sign::SigningKey>,
     pub(crate) relay: RelayAdmissionIdentity,
 }
@@ -574,23 +577,7 @@ impl HostKeyPublisher {
                 s.cap,
             )
         };
-        let attempt = SigningFence::new_revocable(cap, self.core.token.clone())
-            .advance(&handles, (Instant::now() + Duration::from_secs(5)).min(cap))?;
-        let result = HostSignerSet {
-            endpoint: Arc::new(CngTlsKey::for_attempt(handles[0].clone(), attempt.clone())?),
-            relay: RelayAdmissionIdentity::new(
-                binding.relay_id,
-                RelayRole::Host,
-                Arc::new(CngRelaySigner::bound(
-                    handles[1].clone(),
-                    binding.origin,
-                    binding.relay_id,
-                    RelayRole::Host,
-                    Some(attempt.clone()),
-                )?),
-            ),
-            attempt,
-        };
+        let result = HostSigningStages::prepare(handles, cap, self.core.token.clone(), &binding)?;
         self.success = true;
         Ok(result)
     }

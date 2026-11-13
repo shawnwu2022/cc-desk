@@ -545,6 +545,8 @@ impl NativeHostApproval {
         yes: bool,
     ) -> (Self, HostAttemptMaterials) {
         let ApprovedHostInputs {
+            #[cfg(windows)]
+            stages,
             address,
             relay,
             tunnel,
@@ -592,6 +594,8 @@ impl NativeHostApproval {
                 machine,
             },
             HostAttemptMaterials {
+                #[cfg(windows)]
+                stages,
                 local,
                 relay,
                 outer_accepted,
@@ -767,6 +771,7 @@ impl ActivationTicket {
             Err(_) => return PreparationResult::Complete(false),
         };
         let material = HostAttemptMaterials {
+            stages: Some(set.stages),
             local,
             relay: set.relay,
             #[cfg(test)]
@@ -866,6 +871,8 @@ impl ActivationTicket {
             expires_host_ms: d.expires_host_ms,
         });
         let HostAttemptMaterials {
+            #[cfg(windows)]
+            stages,
             local,
             relay,
             #[cfg(test)]
@@ -874,6 +881,8 @@ impl ActivationTicket {
             termination,
         } = material;
         let inputs = ApprovedHostInputs {
+            #[cfg(windows)]
+            stages,
             address: d.address,
             relay,
             tunnel: d.tunnel,

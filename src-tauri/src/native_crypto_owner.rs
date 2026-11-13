@@ -279,6 +279,11 @@ impl Shared {
     fn cancel_observer(&self, id: u64) -> RequestFact {
         let (fact, waker, discarded, close) = {
             let mut c = self.control.lock();
+            if c.active.as_ref().is_none_or(|a| a.id != id) {
+                return RequestFact::Delivered;
+            }
+            // 原请求的取消已确定；先失效 Host token，不能让通知/析构先阻塞。
+            self.revoke();
             match c.active.as_mut().filter(|a| a.id == id) {
                 None => return RequestFact::Delivered,
                 Some(a)
@@ -543,7 +548,8 @@ impl SignTicket {
                     .as_ref()
                     .zip(gate.as_ref())
                     .is_none_or(|(a, g)| a.valid_locked(**g));
-            match c
+            let matching = c.active.as_ref().is_some_and(|a| a.id == self.id);
+            let outcome = match c
                 .active
                 .as_ref()
                 .filter(|a| a.id == self.id)
@@ -567,7 +573,11 @@ impl SignTicket {
                     (Err(SignFailure::CancelledNoEffect), false, None)
                 }
                 _ => (Err(SignFailure::Unknown), true, None),
+            };
+            if matching && outcome.0.is_err() {
+                self.shared.revoke();
             }
+            outcome
         };
         drop(gate);
         drop(delivered);
@@ -672,6 +682,23 @@ impl Future for SignTicket {
         let this = self.get_mut();
         if this.done {
             return Poll::Ready(Err(SignFailure::Closed));
+        }
+        // 已知失效的原 Host 请求先纯撤销；这不是对后续跨 deadline 竞态的替代。
+        if this.shared.revocation.is_some() {
+            let invalid = Instant::now() >= this.end
+                || this.attempt.as_ref().is_some_and(|a| !a.is_current());
+            let c = this.shared.control.lock();
+            if c.active.as_ref().is_some_and(|a| {
+                a.id == this.id
+                    && (invalid
+                        || c.closing
+                        || matches!(
+                            a.fact,
+                            RequestFact::CancelledNoEffect | RequestFact::Unknown
+                        ))
+            }) {
+                this.shared.revoke();
+            }
         }
         // RawWaker clone/drop callbacks are arbitrary code too.
         let mut incoming = Some(cx.waker().clone());
@@ -1056,6 +1083,9 @@ fn run_requests(
                     .zip(gate.as_ref())
                     .is_some_and(|(a, g)| !a.valid_locked(**g))
             {
+                if c.active.as_ref().is_some_and(|a| a.id == request.id) {
+                    shared.revoke();
+                }
                 if request.attempt.is_none() {
                     shared.revoke();
                     c.closing = true;

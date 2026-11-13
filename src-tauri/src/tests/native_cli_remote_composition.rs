@@ -422,12 +422,12 @@ async fn open_registered_network_peer(
     let scope = admission.scope().map_err(|_| "registered scope")?;
     let (accepted, ready) = tokio::sync::oneshot::channel();
     let token = if let Some(token) = current {
-        let material = HostAttemptMaterials { local: network_local(false), relay: network_relay_identity(&relay.origin, true), outer_accepted: Some(accepted), termination };
+        let material = HostAttemptMaterials { stages: None, local: network_local(false), relay: network_relay_identity(&relay.origin, true), outer_accepted: Some(Box::new((accepted, None))), termination };
         host.replenish_native_source(runtime, &admission, token, material).map_err(|_| "registered fresh material")?;
         token.clone()
     } else {
         let mut inputs = network_inputs(relay, scope.clone(), source);
-        inputs.outer_accepted = Some(accepted);
+        inputs.outer_accepted = Some(Box::new((accepted, None)));
         inputs.termination = termination;
         host.register_native_source(runtime, &admission, inputs).map_err(|_| "registered source install")?
     };
@@ -447,6 +447,7 @@ fn network_inputs(
 ) -> crate::remote_host_network::ApprovedHostInputs {
     use cc_desk_remote_security::*;
     crate::remote_host_network::ApprovedHostInputs {
+        stages: None,
         address: relay.address,
         relay: network_relay_identity(&relay.origin, true),
         tunnel: [3; 16],
@@ -503,7 +504,7 @@ async fn NativeRemote_ApprovalPureRevokeClosesIdle_011() {
     let (accepted, outer_ready) = tokio::sync::oneshot::channel();
     let (terminated, ending) = tokio::sync::oneshot::channel();
     let mut inputs = network_inputs(&relay, scope.clone(), source);
-    inputs.outer_accepted = Some(accepted);
+    inputs.outer_accepted = Some(Box::new((accepted, None)));
     inputs.termination = Some(terminated);
     let (approval, material) = crate::remote_host_approval::NativeHostApproval::test_from_inputs(inputs, &admission, true);
     assert!(approval.register_once(&runtime, &admission, &host, material).is_ok());
@@ -587,7 +588,7 @@ async fn open_network_peer_observed(
     let scope = admission.scope().map_err(|_| "scope")?;
     let (outer_accepted, accepted) = tokio::sync::oneshot::channel();
     let mut inputs = network_inputs(relay, scope.clone(), source);
-    inputs.outer_accepted = Some(outer_accepted);
+    inputs.outer_accepted = Some(Box::new((outer_accepted, None)));
     inputs.termination = termination;
     let attempt = host
         .test_begin_admitted_network(
@@ -1266,7 +1267,7 @@ async fn NativeRemote_RegisteredSourceConsumesFreshMaterialsAndRebinds_008() {
         let mut changed = network_inputs(&relay, scope.clone(), Arc::new(ApprovedHostSource { clock: Arc::new(|| Ok(1000)), revoked: source.revoked.clone(), expires_host_ms: 11000 }));
         changed.binding.activation = [0x44; 32];
         if !matches!(pending.register_native_source(&runtime, &original, changed), Err(rejected) if rejected.0 == HostNetworkError::Locked) { return Err("activation/source replacement accepted"); }
-        let material = || HostAttemptMaterials { local: network_local(false), relay: network_relay_identity(&relay.origin, true), outer_accepted: None, termination: None };
+        let material = || HostAttemptMaterials { stages: None, local: network_local(false), relay: network_relay_identity(&relay.origin, true), outer_accepted: None, termination: None };
         if !matches!(pending.replenish_native_source(&runtime, &original, &token, material()), Err(rejected) if rejected.0 == HostNetworkError::Locked) { return Err("occupied material overwritten"); }
         let other = Arc::new(RemoteHostService::default());
         let foreign = other.register_native_source(&runtime, &original, network_inputs(&relay, scope.clone(), source.clone())).map_err(|_| "foreign install")?;
@@ -1430,7 +1431,7 @@ async fn NativeRemote_RegisteredProviderRevokeNaturallyJoinsWithoutInlineWake_00
         let ack = projection::encode_ack(&projection::Ack { profile: 1, stamp: snapshot.stamp }, 1).map_err(|_| "registered revoke ACK codec")?;
         peer.as_ref().unwrap().0.exchange(&ack, Duration::from_secs(1)).await.map_err(|_| "registered revoke ACK")?;
         let fresh = fixture.supervisor.admit_remote_run(fixture.service.access(&fixture.caller, &status.run).map_err(|_| "registered pending access")?, &status.run).map_err(|_| "registered pending admission")?;
-        host.replenish_native_source(&runtime, &fresh, &token, HostAttemptMaterials { local: network_local(false), relay: network_relay_identity(&relay.origin, true), outer_accepted: None, termination: None }).map_err(|_| "registered pending capability")?;
+        host.replenish_native_source(&runtime, &fresh, &token, HostAttemptMaterials { stages: None, local: network_local(false), relay: network_relay_identity(&relay.origin, true), outer_accepted: None, termination: None }).map_err(|_| "registered pending capability")?;
         drop(fresh);
         let mut stop = host.test_network_stop_receiver().ok_or("registered original stop missing")?;
         let probe = Arc::new(Probe { inside: inside.clone(), inline: AtomicUsize::new(0) });
@@ -1957,7 +1958,7 @@ async fn NativeRemote_LiveSourceClockReentryRejectsSecondAttempt_010() {
         let fresh=fixture.supervisor.admit_remote_run(fixture.service.access(&fixture.caller,&status.run).map_err(|_|"reentry access")?,&status.run).map_err(|_|"reentry admission")?;
         use cc_desk_remote_transport::wss::{RelayAdmissionIdentity,RelayRole};
         let signer=Arc::new(NetworkRelaySigner{origin:relay.origin.clone(),id:[1;16],role:RelayRole::Host});let material_lifetime=Arc::downgrade(&signer);
-        host.replenish_native_source(&runtime,&fresh,&token,HostAttemptMaterials{local:network_local(false),relay:RelayAdmissionIdentity::new([1;16],RelayRole::Host,signer),outer_accepted:None,termination:None}).map_err(|_|"reentry refill")?;
+        host.replenish_native_source(&runtime,&fresh,&token,HostAttemptMaterials{stages:None,local:network_local(false),relay:RelayAdmissionIdentity::new([1;16],RelayRole::Host,signer),outer_accepted:None,termination:None}).map_err(|_|"reentry refill")?;
         *queued.lock()=Some(fresh);
         let window=peer.as_ref().unwrap().0.exchange(br#"{"message":"Window","profile":1,"request":"2"}"#,Duration::from_secs(1)).await;
         if window.is_ok() || !matches!(*result.lock(),Some(Err(_))) {return Err("live recursion did not reject");}

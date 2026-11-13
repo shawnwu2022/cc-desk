@@ -420,7 +420,23 @@ async fn HostKeys_FrozenRolesSignWhileBusinessDoneKeepsResources_006() {
         operation.snapshot().outstanding,
         "business completion must not retire live keys"
     );
-    let set = receive.recv_timeout(Duration::from_secs(3)).unwrap();
+    let mut set = receive.recv_timeout(Duration::from_secs(3)).unwrap();
+    set.stages
+        .test_begin_relay(Instant::now() + Duration::from_secs(8))
+        .unwrap();
+    let result = super::signers_tests::relay_trial(
+        listener,
+        origin,
+        &set.relay,
+        expected.relay_spki[26..].to_vec(),
+    )
+    .await;
+    assert_eq!(result, (true, false, true));
+    set.stages.arm_endpoint().unwrap();
+    let held_signer = set
+        .endpoint
+        .choose_scheme(&[rustls::SignatureScheme::ECDSA_NISTP256_SHA256])
+        .unwrap();
     let signature = set
         .endpoint
         .choose_scheme(&[rustls::SignatureScheme::ECDSA_NISTP256_SHA256])
@@ -433,14 +449,7 @@ async fn HostKeys_FrozenRolesSignWhileBusinessDoneKeepsResources_006() {
     )
     .verify(b"PUBLIC_FROZEN_HOST", &signature)
     .unwrap();
-    let result = super::signers_tests::relay_trial(
-        listener,
-        origin,
-        &set.relay,
-        expected.relay_spki[26..].to_vec(),
-    )
-    .await;
-    assert_eq!(result, (true, false, true));
+    let attempt = set.stages.test_attempt(SigningPurpose::Endpoint).unwrap();
     let other = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let other_origin = format!(
         "wss://foobar.com:{}/relay",
@@ -459,12 +468,8 @@ async fn HostKeys_FrozenRolesSignWhileBusinessDoneKeepsResources_006() {
     assert_eq!(calls[0].load(Ordering::Acquire), 1);
     assert_eq!(calls[1].load(Ordering::Acquire), 1);
     // 类型只有 Endpoint/Relay 两个 opener；Issuer 私钥入口不存在。
-    let held_signer = set
-        .endpoint
-        .choose_scheme(&[rustls::SignatureScheme::ECDSA_NISTP256_SHA256])
-        .unwrap();
     operation.cancel();
-    assert!(!set.attempt.is_current());
+    assert!(!attempt.is_current());
     assert!(set
         .endpoint
         .choose_scheme(&[rustls::SignatureScheme::ECDSA_NISTP256_SHA256])
@@ -550,8 +555,11 @@ fn HostKeys_FactoryFailureAndExpiryCloseWithoutExit_008() {
         } else {
             supplier(binding, counters())
         };
-        let set = publisher.prepare(frozen).unwrap();
+        let mut set = publisher.prepare(frozen).unwrap();
         reservation.spawn(|_| true).unwrap();
+        set.stages
+            .test_endpoint_only(Instant::now() + Duration::from_secs(5))
+            .unwrap();
         set.endpoint
             .choose_scheme(&[rustls::SignatureScheme::ECDSA_NISTP256_SHA256])
             .unwrap()
@@ -685,11 +693,14 @@ fn HostKeys_ReservationSpawnFailureRevokesPublishedKeys_011() {
     let operation = reservation.operation();
     let token = NativeRevocation::new();
     let publisher = reservation.prepare_keys(token.clone(), cap).unwrap();
-    let set = publisher
+    let mut set = publisher
         .prepare(supplier(
             frozen_binding(cap, "wss://relay.invalid/"),
             counters(),
         ))
+        .unwrap();
+    set.stages
+        .test_endpoint_only(Instant::now() + Duration::from_secs(5))
         .unwrap();
     set.endpoint
         .choose_scheme(&[rustls::SignatureScheme::ECDSA_NISTP256_SHA256])
@@ -715,11 +726,14 @@ fn HostKeys_FailureOutcomesRevokeBeforeRetirement_012() {
         let operation = reservation.operation();
         let token = NativeRevocation::new();
         let publisher = reservation.prepare_keys(token.clone(), cap).unwrap();
-        let set = publisher
+        let mut set = publisher
             .prepare(supplier(
                 frozen_binding(cap, "wss://relay.invalid/"),
                 counters(),
             ))
+            .unwrap();
+        set.stages
+            .test_endpoint_only(Instant::now() + Duration::from_secs(5))
             .unwrap();
         set.endpoint
             .choose_scheme(&[rustls::SignatureScheme::ECDSA_NISTP256_SHA256])
@@ -759,8 +773,14 @@ fn HostKeys_FailureOutcomesRevokeBeforeRetirement_012() {
             std::thread::yield_now();
         };
         let revoked_before_retire = token.is_revoked();
-        let healthy_success =
-            mode < 4 || (business && set.attempt.is_current() && operation.snapshot().outstanding);
+        let healthy_success = mode < 4
+            || (business
+                && set
+                    .stages
+                    .test_attempt(SigningPurpose::Endpoint)
+                    .unwrap()
+                    .is_current()
+                && operation.snapshot().outstanding);
         observations.push((
             mode,
             before_observer,
@@ -1028,8 +1048,11 @@ fn HostKeys_WrongNativePurposeFailsClosedWithoutExit_015() {
     let token = NativeRevocation::new();
     let publisher = reservation.prepare_keys(token.clone(), cap).unwrap();
     let observer = operation.test_key_observer();
-    let set = publisher.prepare(frozen).unwrap();
+    let mut set = publisher.prepare(frozen).unwrap();
     reservation.spawn(|_| true).unwrap();
+    set.stages
+        .test_endpoint_only(Instant::now() + Duration::from_secs(5))
+        .unwrap();
     let signer = set
         .endpoint
         .choose_scheme(&[rustls::SignatureScheme::ECDSA_NISTP256_SHA256])
@@ -1047,3 +1070,6 @@ fn HostKeys_WrongNativePurposeFailsClosedWithoutExit_015() {
     // 签名已拒绝且资格失效，但正常 Free + 原 join 是已知资源退休。
     assert!(!drain(&operation).unknown);
 }
+
+#[path = "native_crypto_host_stage_tests.rs"]
+mod stage_tests;

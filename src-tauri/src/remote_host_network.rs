@@ -65,7 +65,21 @@ pub(crate) struct ApprovedHostSource {
     pub(crate) revoked: watch::Receiver<bool>,
     pub(crate) expires_host_ms: u64,
 }
+/// 仅原网络任务在原注册来源和原 setup end 下构造，不持 service/run。
+#[cfg(windows)]
+pub(crate) struct NetworkSigningScope { approval: NativeApprovalStop, end: std::time::Instant }
+#[cfg(windows)]
+impl NetworkSigningScope {
+    pub(crate) fn matches(&self, token: &Arc<crate::native_crypto::owner::NativeRevocation>, cap: std::time::Instant) -> bool { self.approval.matches_native(token, cap) && !self.approval.is_invalid() }
+    pub(crate) fn end(&self) -> std::time::Instant { self.end }
+    #[cfg(test)]
+    pub(crate) fn test_new(token: Arc<crate::native_crypto::owner::NativeRevocation>, cap: std::time::Instant, end: std::time::Instant) -> Self { Self { approval: NativeApprovalStop::new(token, cap), end } }
+}
+#[cfg(test)]
+type TestAcceptedGate = (tokio::sync::oneshot::Sender<()>, Option<tokio::sync::oneshot::Receiver<()>>);
 pub(crate) struct ApprovedHostInputs {
+    #[cfg(windows)]
+    pub(crate) stages: Option<crate::native_crypto::host::HostSigningStages>,
     pub(crate) address: SocketAddr,
     pub(crate) relay: RelayAdmissionIdentity,
     pub(crate) tunnel: [u8; 16],
@@ -80,16 +94,18 @@ pub(crate) struct ApprovedHostInputs {
     pub(crate) setup_budget: Duration,
     pub(crate) io_budget: Duration,
     #[cfg(test)]
-    pub(crate) outer_accepted: Option<tokio::sync::oneshot::Sender<()>>,
+    pub(crate) outer_accepted: Option<Box<TestAcceptedGate>>,
     #[cfg(test)]
     pub(crate) termination: Option<tokio::sync::oneshot::Sender<TestAttemptEnd>>,
 }
 /// 每次只转移新的签名能力；此类型没有可覆盖批准元数据的字段。
 pub(crate) struct HostAttemptMaterials {
+    #[cfg(windows)]
+    pub(crate) stages: Option<crate::native_crypto::host::HostSigningStages>,
     pub(crate) local: LocalIdentity,
     pub(crate) relay: RelayAdmissionIdentity,
     #[cfg(test)]
-    pub(crate) outer_accepted: Option<tokio::sync::oneshot::Sender<()>>,
+    pub(crate) outer_accepted: Option<Box<TestAcceptedGate>>,
     #[cfg(test)]
     pub(crate) termination: Option<tokio::sync::oneshot::Sender<TestAttemptEnd>>,
 }
@@ -108,7 +124,7 @@ struct HostSourceDescription {
 }
 impl HostSourceDescription {
     fn inputs(&self, material: HostAttemptMaterials) -> ApprovedHostInputs {
-        ApprovedHostInputs { address: self.address, relay: material.relay, tunnel: self.tunnel, local: material.local, phone_pin: self.phone_pin.clone(), binding: self.binding.clone(), browser: self.browser.clone(), issuer: self.issuer.clone(), principal: self.principal, policy: NativeGrantPolicy { scope: self.policy.scope.clone(), role: self.policy.role, duration: self.policy.duration }, source: self.source.clone(), setup_budget: self.setup_budget, io_budget: self.io_budget,
+        ApprovedHostInputs { #[cfg(windows)] stages: material.stages, address: self.address, relay: material.relay, tunnel: self.tunnel, local: material.local, phone_pin: self.phone_pin.clone(), binding: self.binding.clone(), browser: self.browser.clone(), issuer: self.issuer.clone(), principal: self.principal, policy: NativeGrantPolicy { scope: self.policy.scope.clone(), role: self.policy.role, duration: self.policy.duration }, source: self.source.clone(), setup_budget: self.setup_budget, io_budget: self.io_budget,
             #[cfg(test)] outer_accepted: material.outer_accepted,
             #[cfg(test)] termination: material.termination,
         }
@@ -629,6 +645,8 @@ async fn run_attempt(
     let termination = inputs.termination;
     #[cfg(test)]
     let mut mux_termination = None;
+    #[cfg(windows)]
+    let mut signing_stages = inputs.stages;
     let (cancel, token) = security::cancellation();
     let mut mux = None;
     let mut running: Option<Arc<RunningChannel>> = None;
@@ -650,6 +668,11 @@ async fn run_attempt(
                 .ok_or(HostNetworkError::Bounds)?,
         );
         let budget = remaining(end)?;
+        #[cfg(windows)]
+        if let Some(stages) = &mut signing_stages {
+            let approval = approval_stop.as_ref().ok_or(HostNetworkError::Authority)?.clone();
+            stages.begin_relay(NetworkSigningScope { approval, end: end.into_std() }).map_err(|_| HostNetworkError::Authority)?;
+        }
         let socket = match connector {
             Connector::WebPki => {
                 transport::wss::connect_admitted(
@@ -675,7 +698,14 @@ async fn run_attempt(
         #[cfg(test)]
         eprintln!("TEST_ONLY_HOST_OUTER_ACCEPTED");
         #[cfg(test)]
-        if let Some(accepted) = outer_accepted.take() { let _ = accepted.send(()); }
+        if let Some(accepted) = outer_accepted.take() {
+            let (accepted, proceed) = *accepted;
+            let _ = accepted.send(());
+            // 仅测试中的原任务调度门；仍受原 setup select/end 保管，不改变 mux 的 IO 预算。
+            if let Some(proceed) = proceed { proceed.await.map_err(|_| HostNetworkError::Closed)?; }
+        }
+        #[cfg(windows)]
+        if let Some(stages) = &mut signing_stages { stages.arm_endpoint().map_err(|_| HostNetworkError::Authority)?; }
         #[cfg(not(test))]
         let (stream, owner) = transport::start_admitted(socket, inputs.tunnel, inputs.io_budget)
             .map_err(|_| HostNetworkError::Relay)?;
@@ -775,6 +805,8 @@ async fn run_attempt(
     } else {
         result
     };
+    #[cfg(windows)]
+    if let Some(stages) = &signing_stages { stages.cancel(); }
     // 先通知全部 owner 再等待；取消外部观察者不能移走原始句柄。
     if let Some(gate) = &mut gate {
         gate.revoke();
@@ -831,6 +863,10 @@ impl RemoteHostService {
         inputs: ApprovedHostInputs,
         approval: Option<NativeApprovalStop>,
     ) -> Result<HostSourceToken, Box<(HostNetworkError, ApprovedHostInputs)>> {
+        #[cfg(windows)]
+        if inputs.stages.as_ref().is_some_and(|stages| approval.as_ref().is_none_or(|approval| !stages.matches_approval(approval))) {
+            return Err(Box::new((HostNetworkError::Authority, inputs)));
+        }
         if self.network.unknown_latched.load(Ordering::Acquire) { return Err(Box::new((HostNetworkError::Unknown, inputs))); }
         let checked = (|| {
             if !admission.is_owned_by(runtime) || admission.scope().map_err(|_| HostNetworkError::Authority)? != inputs.policy.scope { return Err(HostNetworkError::Authority); }
@@ -842,12 +878,12 @@ impl RemoteHostService {
             || approval.as_ref().is_some_and(NativeApprovalStop::is_invalid) {
             return Err(Box::new((HostNetworkError::Locked, inputs)));
         }
-        let ApprovedHostInputs { address, relay, tunnel, local, phone_pin, binding, browser, issuer, principal, policy, source, setup_budget, io_budget,
+        let ApprovedHostInputs { #[cfg(windows)] stages, address, relay, tunnel, local, phone_pin, binding, browser, issuer, principal, policy, source, setup_budget, io_budget,
             #[cfg(test)] outer_accepted,
             #[cfg(test)] termination,
         } = inputs;
         let registration = Arc::new(RegisteredHostSource { description: HostSourceDescription { address, tunnel, phone_pin, binding, browser, issuer, principal, policy, source, setup_budget, io_budget }, origin, live: AtomicBool::new(true), approval });
-        state.source_slot.fresh = Some(HostAttemptMaterials { local, relay, #[cfg(test)] outer_accepted, #[cfg(test)] termination });
+        state.source_slot.fresh = Some(HostAttemptMaterials { #[cfg(windows)] stages, local, relay, #[cfg(test)] outer_accepted, #[cfg(test)] termination });
         state.source_slot.registration = Some(registration.clone());
         Ok(HostSourceToken(Arc::downgrade(&registration)))
     }
@@ -861,6 +897,10 @@ impl RemoteHostService {
         if self.network.unknown_latched.load(Ordering::Acquire) { return Err(Box::new((HostNetworkError::Unknown, material))); }
         let Some(registration) = token.0.upgrade() else { return Err(Box::new((HostNetworkError::Authority, material))); };
         if !admission.is_owned_by(runtime) || !registration.origin.matches(admission) || admission.scope().ok().as_ref() != Some(&registration.description.policy.scope) {
+            return Err(Box::new((HostNetworkError::Authority, material)));
+        }
+        #[cfg(windows)]
+        if material.stages.as_ref().is_some_and(|stages| registration.approval.as_ref().is_none_or(|approval| !stages.matches_approval(approval))) {
             return Err(Box::new((HostNetworkError::Authority, material)));
         }
         let mut state = self.state.lock();
@@ -965,11 +1005,21 @@ impl RemoteHostService {
     #[cfg(test)]
     pub(crate) fn test_network_attempts(&self) -> usize { self.network.state.lock().attempts.len() }
     #[cfg(test)]
+    pub(crate) fn test_registered_source_token(&self) -> HostSourceToken {
+        HostSourceToken(Arc::downgrade(self.state.lock().source_slot.registration.as_ref().unwrap()))
+    }
+    #[cfg(test)]
+    pub(crate) fn test_gate_fresh_after_accepted(&self, proceed: tokio::sync::oneshot::Receiver<()>) {
+        let mut state = self.state.lock();
+        let (_, gate) = state.source_slot.fresh.as_mut().unwrap().outer_accepted.as_mut().unwrap().as_mut();
+        assert!(gate.is_none()); *gate = Some(proceed);
+    }
+    #[cfg(test)]
     pub(crate) fn test_observe_fresh_material(&self, accepted: tokio::sync::oneshot::Sender<()>, termination: tokio::sync::oneshot::Sender<TestAttemptEnd>) {
         let mut state = self.state.lock();
         let material = state.source_slot.fresh.as_mut().expect("original unconsumed material");
         assert!(material.outer_accepted.is_none() && material.termination.is_none());
-        material.outer_accepted = Some(accepted);
+        material.outer_accepted = Some(Box::new((accepted, None)));
         material.termination = Some(termination);
     }
     #[cfg(test)]
@@ -1038,7 +1088,7 @@ mod tests {
         let (entered_tx, entered) = std::sync::mpsc::sync_channel(1);
         let (release, released) = std::sync::mpsc::sync_channel(1);
         let local = RemoteHostService::test_public_source_material_identity();
-        owner.state.lock().source_slot.fresh = Some(HostAttemptMaterials { local, relay: RelayAdmissionIdentity::new([1; 16], transport::wss::RelayRole::Host, Arc::new(HeldRelayDrop { entered: entered_tx, released: Mutex::new(released), panics })), outer_accepted: None, termination: None });
+        owner.state.lock().source_slot.fresh = Some(HostAttemptMaterials { #[cfg(windows)] stages: None, local, relay: RelayAdmissionIdentity::new([1; 16], transport::wss::RelayRole::Host, Arc::new(HeldRelayDrop { entered: entered_tx, released: Mutex::new(released), panics })), outer_accepted: None, termination: None });
         let closer = owner.clone();
         let closing = std::thread::spawn(move || closer.request_exit(101, false));
         entered.recv_timeout(Duration::from_secs(2)).unwrap();

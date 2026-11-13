@@ -32,7 +32,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Test inventory failed' }
 $inventory | Set-Content (Join-Path $out 'inventory.txt')
 $names=@($inventory | Where-Object { $_ -match '::NativeRemote_.*: test$' } | ForEach-Object { $_ -replace ': test$','' })
 $ids=@($names | ForEach-Object { ($_ -split '_')[-1] } | Sort-Object)
-if (($ids -join ',') -ne '001,002,003,004,005,006,007,008,009,010,011,012,013') { throw 'Expected exact NativeRemote 001..013 inventory' }
+if (($ids -join ',') -ne '001,002,003,004,005,006,007,008,009,010,011,012,013,014,015,016,017') { throw 'Expected exact NativeRemote 001..017 inventory' }
 $checkout=@($inventory | Where-Object { $_ -match '^remote_host::tests::host_checkout_.*: test$' })
 $expectedCheckout=@(
 'remote_host::tests::host_checkout_busy_is_pending_and_closing_survives_return: test',
