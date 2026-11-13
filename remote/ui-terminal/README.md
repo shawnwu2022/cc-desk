@@ -115,3 +115,15 @@ verified native shell bridge remains required. This package supplies no remote
 webpage fallback, JS self-signing, enrollment, credentials, mobile shell or
 persistent client recovery. Real-device IME/fonts/layout, phone-to-Host acceptance,
 production entry and signed phone prerelease remain separate delivery gates.
+
+## Controlled Browser profile supply
+
+The controlled HTTPS Browser path uses `browserProfileSource.ts` to read one
+same-origin `/browser-profile.js` module per page. `browserPairingProfile.ts`
+strictly parses public candidate JSON and matches it against an independent,
+previously approved provider snapshot before combining that provider's original
+non-exportable handles and callbacks. Parsed JSON does not authorize or enroll.
+See [Browser pairing profile](../../docs/browser-pairing-profile.md) for the exact
+schema, provider trust contract, cancellation semantics and a buildable locked
+example. This helper does not supply a real provider, deploy the module or replace
+real-device, WebAuthn, TLS/AppBind/grant and Host acceptance gates.
