@@ -86,6 +86,9 @@ struct ControllerState {
     requesting: Option<Arc<PendingRequest>>,
     configuration: Option<NativeConfiguration>,
     slot: Option<Arc<ApprovalSlot>>,
+    driver: Option<crate::remote_host::driver::DriverOwner>,
+    #[cfg(test)]
+    driver_hooks: Option<crate::remote_host::driver::DriverHooks>,
 }
 #[derive(Default)]
 pub(crate) struct RemoteHostController {
@@ -386,6 +389,85 @@ impl RemoteHostController {
         slot.owner.cancel();
         Ok(HostControlReply::Cancelled)
     }
+    #[cfg(all(test, windows))]
+    pub(crate) fn test_state_lock_available(&self) -> bool {
+        self.state.try_lock().is_some()
+    }
+    #[cfg(test)]
+    pub(crate) fn test_driver_hooks(&self, hooks: crate::remote_host::driver::DriverHooks) {
+        self.state.lock().driver_hooks = Some(hooks);
+    }
+    /// 原生内部驱动，尚无生产配置或 IPC/UI 调用者。调用栈只转移资格，不运行外部 clock。
+    #[cfg(windows)]
+    #[allow(
+        dead_code,
+        reason = "native configuration and application trigger are not installed"
+    )]
+    pub(crate) fn prepare_owned(
+        &self,
+        binding: &Arc<DocumentBinding<NativeRun>>,
+        caller: &CallerIdentity,
+        admission: NativeRunAdmission,
+        runtime: Arc<crate::cli::native_runtime::NativeRuntime>,
+        service: Arc<crate::remote_host::RemoteHostService>,
+    ) -> Result<(), SafeError> {
+        Self::authenticate(binding, caller, &admission)?;
+        let slot = self
+            .state
+            .lock()
+            .slot
+            .clone()
+            .ok_or_else(|| error("REMOTE_HOST_LOCKED"))?;
+        slot.identity.check(binding, caller, &admission)?;
+        // 到期状态采样可能通知/reenter；必须在 controller 锁外。
+        if slot.owner.control_reply() != HostControlReply::ApprovalRecorded
+            || !slot.owner.has_supplier()
+        {
+            return Err(error("REMOTE_HOST_LOCKED"));
+        }
+        let (mut reservation, start) = {
+            let mut state = self.state.lock();
+            if state.closing
+                || state.driver.is_some()
+                || !state
+                    .slot
+                    .as_ref()
+                    .is_some_and(|original| Arc::ptr_eq(original, &slot))
+            {
+                return Err(error("REMOTE_HOST_LOCKED"));
+            }
+            // controller→service 只发布空 owner；原 handle/clock/资源尚未创建。
+            let (reservation, owner, start) = service.reserve_driven_activation()?;
+            state.driver = Some(owner);
+            #[cfg(test)]
+            let start = start.test_hooks(state.driver_hooks.take().unwrap_or_default());
+            (reservation, start)
+        };
+        let claim = slot
+            .owner
+            .claim_activation(&admission)
+            .map_err(|_| error("REMOTE_HOST_LOCKED"))?;
+        let gate = start
+            .spawn()
+            .map_err(|_| error("REMOTE_HOST_PREPARE_FAILED"))?;
+        let publisher = reservation
+            .prepare_keys(claim.native_token(), claim.end())
+            .map_err(|_| error("REMOTE_HOST_PREPARE_FAILED"))?;
+        let weak_service = Arc::downgrade(&service);
+        reservation
+            .spawn_prepared(move |signal| {
+                let ticket = match claim.validate(&admission) {
+                    Ok(ticket) => ticket,
+                    Err(_) => {
+                        return crate::remote_host::activation::PreparationResult::Complete(false)
+                    }
+                };
+                ticket.prepare_frozen(runtime, admission, weak_service, signal, publisher)
+            })
+            .map_err(|_| error("REMOTE_HOST_PREPARE_FAILED"))?;
+        gate.open();
+        Ok(())
+    }
     #[cfg(test)]
     pub(crate) fn test_prepare_owned(
         &self,
@@ -469,11 +551,22 @@ impl RemoteHostController {
         let (configuration, slot) = {
             let mut state = self.state.lock();
             state.closing = true;
+            if let Some(driver) = state.driver.as_ref() {
+                driver.cancel();
+            }
             (state.configuration.take(), state.slot.clone())
         };
         drop(configuration);
         if let Some(slot) = slot {
             slot.owner.cancel();
         }
+    }
+}
+
+impl Drop for RemoteHostController {
+    fn drop(&mut self) {
+        // 先在锁外完成原驱动/资源保管，再让 ApprovalSlot 的 full cancel 触发外部 wake。
+        let driver = self.state.get_mut().driver.take();
+        drop(driver);
     }
 }

@@ -104,6 +104,15 @@ impl ActivationOperation {
     pub(crate) fn cancel(&self) {
         self.signal.cancel();
     }
+    pub(crate) fn cancelled(&self) -> bool {
+        self.signal.cancelled()
+    }
+    /// 只读业务事实；不 join、不登记、不采外部 clock。
+    pub(crate) fn preparation_result(&self) -> Option<bool> {
+        let state = self.state.lock();
+        state.result.map(|result| !state.unknown && result)
+    }
+
     /// Reserved 槽先覆盖无线程 custody，才把锁外创建能力交给唯一 reservation。
     #[cfg(windows)]
     fn begin_keys(

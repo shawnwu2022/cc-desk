@@ -20,7 +20,7 @@ Production has no installed profile configuration or material factory, so authen
 
 Wrong document/run requests cannot consume another owner's configuration. A pending request retains its original identity and cancellation flag while the dialog is scheduled outside the controller lock. Cancellation before publication invalidates the returned owner. Closing begins controller cancellation at the existing Host exit entry; the existing document handoff refusal still runs first. It does not replace original exit/Unknown/join rules.
 
-ActivationTicket is private, move-only and consumed before the fixture factory runs. Consumed reports this intermediate state without claiming a network start. A revoked lease reports Cancelled even if the state-machine object has not independently closed. Frozen supplier preparation now uses the original production-capable custody and operation code, but its only start caller remains under cfg(test). The anonymous fixture verifies actual original-thread joins and post-join registration; it does not qualify a production existing-key loader or GUI activation.
+ActivationTicket is private, move-only and consumed before the fixture factory runs. Consumed reports this intermediate state without claiming a network start. A revoked lease reports Cancelled even if the state-machine object has not independently closed. Frozen supplier preparation uses the original production-capable custody and operation code. The internal prepare_owned driver is now compiled outside cfg(test), but has no production configuration or application trigger; only anonymous fixtures invoke it. It owns autonomous preparation and post-join registration without query/IPC observer progress. This does not qualify actual user existing-key access or GUI activation.
 
 Verification separates 32 synchronous reentrant interleavings from 16 actual two-thread cancellation cases at clock return / token publication. The fixture checks material release, zero new network attempts, original owner retirement and no reuse. A distinct actual-thread test cancels a pending show before publication. Real native dialog interaction, Windows Hello, production profile/key acquisition and late production worker retirement remain separate acceptance gates.
 
@@ -60,3 +60,13 @@ Host Relay 手写 Future 直接保管原 SignTicket，Drop 先纯撤销；poll �
 HostOpen11 的 named OpenKey 与部分失败由永久拦截的模拟 API 验证；010 和 NativeRemote018 使用公开匿名 CNG key 完成真实签名，018 另经原批准、activation、登记和隔离 Relay/TLS 握手及撤销/join。匿名导入不能证明实际已有用户 key 已成功打开，Unknown 子进程退出也不能证明进程内退休。最终同源码矩阵、产物哈希与历史失败分类见计划“已有密钥供应适配与原线程 partial 保管片”。
 
 生产配置来源、native profile 安装、start IPC/UI 仍未接入，默认无配置仍 Locked；没有实际用户 key、真实 native dialog、手机或公网验收。两秒 mux 空闲和 Phone-first 行为保持，不能据本片宣称完整生产可用。
+
+## Controller 保管的自主准备与登记
+
+内部 prepare_owned 仍要求原严格 document/run/config owner 准入和原一次性 claim。唯一 DriverOwner 留在 controller，service 同 closing 锁登记 operation、独立持久观察事实及 Weak join Core；driver 不持自己的保管外壳，operation 不等待 driver。原 handle 先保管再放 gate，外部 claim clock 在原准备线程、准备真 join 后的登记在原 driver 线程。业务 Registered 不等于 key/driver 已退休。current 只读，不执行 clock、登记或 join；没有让可取消 IPC Future 承担保管。
+
+退出或最后 Owner Drop 先纯撤销并共同推进原资源，仅 join 已结束的原线程。Controller 在原 ApprovalSlot full cancel/同步通知析构前先处理 DriverOwner，且不在 controller 锁内释放它。driver 内 panic payload 在原线程撤销后释放；若最终 join 仍返回未知 payload，则隔离保管并持续 Unknown/outstanding，不由唯一 async waiter 析构、不重试或 detach。既有 service source/closing 裁决没有复制。
+
+HostDriver8 与 NativeRemote019 覆盖自主一次登记、原线程/尾门保管、失败/退出，以及原批准→Existing公开匿名CNG→真实隔离Relay/TLS→撤销/join。019还断言异源/重复请求无原批准副作用、到期通知前已撤销且controller锁可用、查询零clock增量。核心阻塞测试使用合成回调，不把它称为真实 GrantClock 阻塞验收；Unknown负向子进程退出不是退休。
+
+最终证据按两版明确归属：冻结1完成广矩阵/default/client-only，原产物已保存副本；冻结2仅移动HostDriver002已有Pending采样块，其余源码不变，再跑严格Clippy、构建、Driver8与019。哈希、精确计数与差异证明见计划“Controller 保管的准备与登记驱动片”，不称完整矩阵由一个最终产物运行。生产配置/应用触发/start IPC/UI、实际用户key和真实本机对话框仍未接入或验收，默认无配置仍Locked。

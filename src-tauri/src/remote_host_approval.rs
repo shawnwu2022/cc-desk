@@ -430,7 +430,7 @@ impl NativeHostApproval {
     pub(crate) fn callback_outstanding(&self) -> bool {
         self.machine.callback_outstanding()
     }
-    #[cfg(test)]
+    #[cfg(any(test, windows))]
     pub(crate) fn has_supplier(&self) -> bool {
         #[cfg(windows)]
         {
@@ -496,6 +496,10 @@ impl NativeHostApproval {
     #[cfg(all(test, windows))]
     pub(crate) fn test_native_token(&self) -> Arc<crate::native_crypto::owner::NativeRevocation> {
         self.lease.native.clone()
+    }
+    #[cfg(all(test, windows))]
+    pub(crate) fn test_watch_receiver(&self) -> watch::Receiver<bool> {
+        self.lease.revoked.subscribe()
     }
     #[cfg(test)]
     pub(crate) fn test_watch_revoked(&self) -> bool {

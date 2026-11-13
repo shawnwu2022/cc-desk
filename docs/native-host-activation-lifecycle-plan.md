@@ -1,6 +1,6 @@
 # Native Host 单次启动保管链设计
 
-状态：生命周期首片、2A 底层前置条件、2B 双密钥保管、批准绑定、单次阶段签名及已有密钥供应适配均已完成实现、定向验证与独立复核。生命周期首片核查基线为 `cbe7cae13b0b7f4c3291bf07decb26f996a9b230`，后续分片基线与证据分别记录在末节；本文不代表完整批准供应链已验收。
+状态：生命周期首片、2A 底层前置条件、2B 双密钥保管、批准绑定、单次阶段签名、已有密钥供应适配及 controller 保管的准备/登记驱动均已完成实现、定向验证与独立复核。生命周期首片核查基线为 `cbe7cae13b0b7f4c3291bf07decb26f996a9b230`，后续分片基线与证据分别记录在末节；本文不代表完整批准供应链已验收。
 
 本片要证明：即使 Host 尚未注册网络或 pin，应用退出仍保管本次启动预留、原准备线程和所有已交付材料。生产默认配置继续为空。生命周期首片通过之前不增加生产 start IPC、UI 按钮或真实密钥打开调用。
 
@@ -322,3 +322,35 @@ Endpoint 与 Relay 使用不同的固定 SPKI。批准期限来自原 ticket，�
 - final1-fmt.* 对六个本片适合整文件检查的 Rust 模块验证通过，旧 compact 基线未作无关整文件重排；完整十三文件直接 UTF-8 字节检查与 git diff --check 通过。未运行全量 Rust 或全仓格式化。
 
 生产配置来源、native profile 安装、start IPC/UI 和真实本机批准流程仍未接入，默认无配置仍 Locked。本片未读取、生成或配置真实用户凭据，也未部署或改变系统设置。实际用户 key 名称、公开 profile/信任材料及相应访问授权必须另行明确，不能从测试向量推断。真正 named-key 打开、手机和公网端到端仍待独立验收；原 mux 两秒空闲、Phone-first Offline 与任意顺序会合缺口没有改变。
+
+## Controller 保管的准备与登记驱动片
+
+基线 95c19d5009f960bd8542facce0c457bcaf91fbd0。本片补齐内部 prepare_owned 的自主准备和登记驱动，不安装生产配置、不增加 start IPC/UI 或真实凭据调用。默认无配置仍 Locked。证据目录为 .audit/host-activation-driver-20261113/；最终采用明确区分的两版冻结验证，不能将它们描述成一个产物的全矩阵。
+
+### 保管与退出接点
+
+- 唯一 DriverOwner 外壳放在原 controller 槽；它持有原 JoinHandle 的 DriverJoinCore 和 activation。service 在同一个 closing 锁下预留 operation、独立持久 DriverObservation 与 Weak Core；service/operation 不强持 DriverOwner，driver 也不持 controller、Owner 或 Core。Weak 失效不表示退休，原句柄 publication、Joining、Joined、Unknown 分别记录。原 source 槽及 lease.registration 没有拆分或复制。
+- 未来接入的 GrantClock、供应闭包及其持有对象不得直接或间接强持 controller/DriverOwner，也不得在准备或登记线程通过 Weak 升级形成最后 DriverOwner 的释放路径；接入前须复核该捕获图。
+- 严格 document/run/config owner 门禁后安装空 Owner，唯一 claim 不调用外部 clock。原 driver handle 先被保管再放 gate；同一 token/cap 的 key custody 与原准备线程依旧先保管后启动。claim.validate 的外部 clock 在原准备线程执行；准备原线程真 join 后，登记 completion 在原 driver 执行。错误、取消、publication unwind 都先纯撤销，保留原资源与句柄。
+- driver 以纯 preparation_result 判断业务工作已结算，不等待活 key 退休才报告 Registered。成功登记仍可有 keys outstanding。current/snapshot 不调用 clock、不登记、不推进 join；IPC Future 或观察者不是资源保管者。control_reply 可能同步处理到期通知，因此在 controller 锁外采样，锁内只核对原 slot 身份、closing 与 Owner 槽事实。
+- 原唯一退出 waiter 同时观察 operation 与 driver，只有 is_finished 的原 driver 才 checkout/join，Joining 仍 outstanding。最后 DriverOwner Drop 先纯撤销，再共同推进 key、prepare、release 与 driver，不能先阻塞 join driver。Controller 显式先在锁外完成 DriverOwner 保管，再允许旧 ApprovalSlot 的 full cancel/同步 wake 析构，避免通知阻塞抢在资源共推进之前。
+- 原 driver 捕获的 work/tail panic 先撤销，并在原 driver 线程释放 payload；释放阻塞时原 handle 仍 Pending，其他 owner 仍可推进。最终 join 若仍返回异常 payload，Core 以不可自动析构槽保管它，保持 Unknown+outstanding、不重试、不另建清理线程。原已知业务拒绝与原 prepare/completion 的 panic 分类保持，不将所有拒绝都改成资源 Unknown。
+
+### 行为证据和测试范围
+
+- red-build.* 编译成功；red.* 的旧019实际 exit101：原 test_prepare_owned 停在 Consumed，没有观察者显式推进时不会登记，清理已完成后才断言失败。这证明旧测试驱动链缺少自主登记，不称为已启用生产入口的故障。green1 的019已通过；随后独立审查发现锁内 control_reply 与观察者析构 panic payload 两处边界，已在最终冻结前修复。
+- HostDriver001–008 分别覆盖无观察者自主一次登记、阻塞准备/登记时 direct service exit 仍 Pending 且原 native 分支推进、最后 service 与 Owner 释放无自 join、spawnErr/publication unwind/关 gate、业务返回但原尾门未 join、拒绝与 panic 分类、阻塞 payload 下兄弟 key 原 join、异常 payload 隔离。002/003 使用受控合成回调，不冒称实际 GrantClock 阻塞或完整 Controller/approval watch 最后析构的动态验收；后者的显式 Drop 顺序另由源码审查覆盖。
+- 007 使用公开匿名 CNG key，payload 释放前已撤销、兄弟原 key 实际 join，driver 仍 Pending；key join 也可由原通知线程推进，不单称最后 Owner 亲自完成全部 join。008 有界子进程仅证明 Unknown 时原责任仍保管，进程退出不是正常退休。
+- NativeRemote019 走新内部 prepare_owned、原批准与 Existing 匿名适配，等待原 driver 的完成信号期间不查询 current，之后只读 Registered。真实 claim/register clock 共两次、位于不同原准备/登记线程；反复 current 不增加 clock 调用。新入口 duplicate 与异源 caller 拒绝不撤销原合法批准。到期 watch 探针实测撤销先于 wake、controller 锁可用、零 reservation/零 open。随后真实隔离 Relay/TLS 握手通过，opens=[1,1]、token 撤销及原 network/key/driver 收口。旧012/018及断言保留。
+- green2 的 Driver7/8 失败来自002在独立 native 分支到终态前就断言它已完成，记录保留；最终使用秒级有界等待，未改生产期限。冻结1随后通过完整矩阵，但该测试仍先采样 exit Pending 再等 native；冻结2仅移动原四行采样到 native 等待之后、release gate 之前，精确证明兄弟已推进时 driver 仍阻止退出。
+
+### 双版本最终验收
+
+- 冻结1八项清单 frozen1-source-hashes.json；final1-isolated/results.json 为 NativeRemote001–019 各 fresh process、005额外五次、network25、checkout3，共26个原进程/52次测试执行，全部 exit0、摘要正确、无 timeout。final1-groups-results.json 的 Driver8、crypto60、Client25、Activation21、Approval11、service14、query1 全通过。crypto60 包含 HostOpen11 与原49，host_tests26 包含 HostKeys15 与 HostStages11，分组有交叉，不相加为去重总数。
+- 冻结1 remote-host 产物 SHA256 为 7CBA330E123558E15272A1906DD2B3583149B9AFBA826894964A194806217923，82685440 bytes，原执行路径见 final1-isolated/selected-artifact.json。它在冻结2重建前已复制到 final1-remote-host-artifact.exe 并复核字节/哈希，记录 final1-preserved-artifact.json。原 target exe 路径后来被冻结2覆盖，不能继续用该路径的当前字节代表冻结1。
+- 冻结1默认 feature-off 独立 artifact 的 crypto11、RemoteHost_Unsupported3 全通过，SHA256 5DBBA41F36D35BC2BB73C28A80D7FD0228900BB75267B9C7E745A087C1D3D7DA；client-only.* 的 --lib --tests --features remote-client-ipc check exit0，三个未改测试辅助项 dead_code 警告仍在（test_only_install_original_client、admin、signed），不称为 client-only 严格 Clippy。final1-clippy/fmt 均 exit0。
+- 冻结2清单 frozen2-source-hashes.json，freeze2-only-test.diff 与 freeze2-delta-proof.json 证明唯一差异是002原四行采样块位置；其余七项与全部生产代码逐字节不变，独立复核无待改项。final2-clippy 为 remote-host --lib --tests -- -D warnings exit0；final2-fmt 六模块只读检查通过，final2-build 成功。
+- 冻结2产物 SHA256 42E77A4E5908E6CA0C6E5AB0E084182646B93F19E0633E0B9781FB9B668C9206，82688512 bytes，见 final2-artifact-hash.json。final2-results.json 实跑完整 Driver8（0.41秒）和 exact019独立进程（1.13秒），均 exit0、无 timeout。该产物没有重跑冻结1的完整隔离矩阵/default/client-only；本片据唯一测试断言顺序差异作受限增量验收，不将两个产物的结果混称同产物全绿。
+- 最终十文件清单 final10-manifest.json，双版本汇总 acceptance-summary.json。源码/文档直接 UTF-8 字节检查与 git diff --check 通过。未重排旧 compact service 基线，未运行全量 Rust、全仓格式化、真实用户 key/native dialog、手机或公网验收。
+
+生产配置来源、native profile 安装、批准成功后的应用触发、start IPC/UI 仍未接入。prepare_owned 是内部可编译的已保管驱动，本片仅由公开匿名 fixture 调用；它不等于生产来源或端到端已启用。原 mux 两秒空闲与 Phone-first 行为不变，没有真实凭据操作、系统安全变更、部署或推送。

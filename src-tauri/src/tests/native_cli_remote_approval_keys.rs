@@ -66,29 +66,30 @@ async fn finish(controller: &RemoteHostController) -> bool {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn NativeRemote_ApprovedNativeKeysRegisterAndHandshake_012() {
-    approved_native_keys_trial(false, false, None, false).await;
+    approved_native_keys_trial(false, false, None, false, false).await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn NativeRemote_PreparedKeysWaitBeyondSignatureWindow_014() {
-    approved_native_keys_trial(true, false, None, false).await;
+    approved_native_keys_trial(true, false, None, false, false).await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn NativeRemote_LateClientHelloUsesOriginalEndpointStage_015() {
-    approved_native_keys_trial(false, true, None, false).await;
+    approved_native_keys_trial(false, true, None, false, false).await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn NativeRemote_StageGateHonorsOriginalSetupEnd_016() {
-    approved_native_keys_trial(false, false, Some(false), false).await;
+    approved_native_keys_trial(false, false, Some(false), false, false).await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn NativeRemote_StageGateCancelKeepsOriginalOwners_017() {
-    approved_native_keys_trial(false, false, Some(true), false).await;
+    approved_native_keys_trial(false, false, Some(true), false, false).await;
 }
 async fn approved_native_keys_trial(
     delay_network: bool,
     delay_hello: bool,
     gate_failure: Option<bool>,
     existing_adapter: bool,
+    autonomous: bool,
 ) {
     let transports = Arc::new(TerminalTransports::new());
     let supervisor = Arc::new(NativeRunSupervisor::new(transports.clone()));
@@ -177,6 +178,87 @@ async fn approved_native_keys_trial(
         .is_err());
         assert_eq!(opened.each_ref().map(|n| n.load(Ordering::Acquire)), [0, 0]);
     }
+    if autonomous {
+        use std::{
+            future::Future,
+            task::{Context, Wake, Waker},
+        };
+        struct ExpiryWake {
+            controller: std::sync::Weak<RemoteHostController>,
+            token: Arc<crate::native_crypto::owner::NativeRevocation>,
+            observed: Arc<AtomicUsize>,
+        }
+        impl Wake for ExpiryWake {
+            fn wake(self: Arc<Self>) {
+                let unlocked = self
+                    .controller
+                    .upgrade()
+                    .is_some_and(|c| c.test_state_lock_available());
+                self.observed.store(
+                    if unlocked && self.token.is_revoked() {
+                        1
+                    } else {
+                        2
+                    },
+                    Ordering::Release,
+                );
+            }
+        }
+        let expiring = Arc::new(RemoteHostController::default());
+        let rejected_service = Arc::new(RemoteHostService::default());
+        let unopened = counts();
+        expiring
+            .install_frozen_configuration(
+                &binding,
+                fixture.caller.clone(),
+                &original,
+                FrozenHostApproval::supplied(
+                    description(&relay, &original, Arc::new(|| Ok(1000))),
+                    &original,
+                    Instant::now() + Duration::from_secs(60),
+                    trial_supplier(unopened.clone()),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        expiring
+            .test_request_frozen(&binding, &fixture.caller, &original, true)
+            .unwrap();
+        let expired = expiring.test_approval_owner();
+        let expired_token = expired.test_native_token();
+        let observed = Arc::new(AtomicUsize::new(0));
+        let waker = Waker::from(Arc::new(ExpiryWake {
+            controller: Arc::downgrade(&expiring),
+            token: expired_token.clone(),
+            observed: observed.clone(),
+        }));
+        let mut receiver = expired.test_watch_receiver();
+        let mut changed = Box::pin(receiver.changed());
+        assert!(changed
+            .as_mut()
+            .poll(&mut Context::from_waker(&waker))
+            .is_pending());
+        expired.test_expire();
+        let refused = expiring.prepare_owned(
+            &binding,
+            &fixture.caller,
+            admit(),
+            runtime.clone(),
+            rejected_service.clone(),
+        );
+        assert!(refused.is_err());
+        assert_eq!(
+            observed.load(Ordering::Acquire),
+            1,
+            "expiry wake must see token revoked and controller lock available"
+        );
+        assert!(rejected_service.test_activation_observation().is_none());
+        assert_eq!(
+            unopened.each_ref().map(|n| n.load(Ordering::Acquire)),
+            [0, 0]
+        );
+        eprintln!("TEST_ONLY_DRIVER_EXPIRY lock_available=true revoked_before_wake=true reservation=false opens=[0,0]");
+    }
     let opened = counts();
     let controller = RemoteHostController::default();
     assert_eq!(
@@ -185,8 +267,18 @@ async fn approved_native_keys_trial(
             .unwrap(),
         HostControlReply::Locked
     );
+    let clock_threads = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let clock_log = clock_threads.clone();
+    let query_thread = std::thread::current().id();
     let frozen = FrozenHostApproval::supplied(
-        description(&relay, &original, Arc::new(|| Ok(1000))),
+        description(
+            &relay,
+            &original,
+            Arc::new(move || {
+                clock_log.lock().push(std::thread::current().id());
+                Ok(1000)
+            }),
+        ),
         &original,
         Instant::now() + Duration::from_secs(60),
         trial_supplier(opened.clone()),
@@ -205,35 +297,132 @@ async fn approved_native_keys_trial(
     let token = owner.test_native_token();
     assert!(!token.is_revoked());
     assert_eq!(opened.each_ref().map(|n| n.load(Ordering::Acquire)), [0, 0]);
-    controller
-        .test_prepare_owned(
+    if autonomous {
+        let mut foreign = fixture.caller.clone();
+        foreign.window_label.push_str("-TEST_ONLY_FOREIGN");
+        assert!(controller
+            .prepare_owned(&binding, &foreign, admit(), runtime.clone(), host.clone())
+            .is_err());
+        assert!(!token.is_revoked() && host.test_activation_observation().is_none());
+        assert_eq!(
+            controller
+                .current(&binding, &fixture.caller, &original)
+                .unwrap(),
+            HostControlReply::ApprovalRecorded
+        );
+    }
+    clock_threads.lock().clear();
+    let (completed, completion) = tokio::sync::oneshot::channel();
+    if autonomous {
+        controller.test_driver_hooks(crate::remote_host::driver::DriverHooks {
+            after_work: Some(Box::new(move || {
+                let _ = completed.send(());
+            })),
+            ..Default::default()
+        });
+    } else {
+        drop(completed);
+    }
+    if autonomous {
+        controller
+            .prepare_owned(
+                &binding,
+                &fixture.caller,
+                admit(),
+                runtime.clone(),
+                host.clone(),
+            )
+            .unwrap();
+    } else {
+        controller
+            .test_prepare_owned(
+                &binding,
+                &fixture.caller,
+                admit(),
+                runtime.clone(),
+                host.clone(),
+            )
+            .unwrap();
+    }
+    let duplicate = if autonomous {
+        controller.prepare_owned(
             &binding,
             &fixture.caller,
             admit(),
             runtime.clone(),
             host.clone(),
         )
-        .unwrap();
-    assert!(controller
-        .test_prepare_owned(
+    } else {
+        controller.test_prepare_owned(
             &binding,
             &fixture.caller,
             admit(),
             runtime.clone(),
-            host.clone()
+            host.clone(),
         )
-        .is_err());
+    };
+    assert!(duplicate.is_err());
     assert!(
         !token.is_revoked(),
         "duplicate must not cancel original claim"
     );
-    assert!(finish(&controller).await);
+    let registered = if autonomous {
+        // 等原 driver 完成信号期间完全不读 current，不用观察者帮助推进。
+        tokio::time::timeout(Duration::from_secs(5), completion)
+            .await
+            .is_ok_and(|r| r.is_ok())
+    } else {
+        finish(&controller).await
+    };
+    if !registered {
+        let prior = controller
+            .current(&binding, &fixture.caller, &original)
+            .unwrap();
+        controller.begin_shutdown();
+        // 先按原保管链收口，再断言；读取状态不替代启动推进。
+        if autonomous {
+            let _ =
+                tokio::time::timeout(Duration::from_secs(5), host.test_retire_activation()).await;
+        } else {
+            let _ = finish(&controller).await;
+        }
+        drop(original);
+        let physical = cleanup.close();
+        let relay_known = relay.close().await;
+        eprintln!("TEST_ONLY_AUTONOMOUS_REGISTER registered={registered} prior={prior:?} physical={physical} relay={relay_known}");
+        assert!(physical && relay_known);
+        assert!(registered, "prepare did not autonomously register");
+        return;
+    }
+
     assert_eq!(
         controller
             .current(&binding, &fixture.caller, &original)
             .unwrap(),
         HostControlReply::Registered
     );
+    if autonomous {
+        let calls = clock_threads.lock().clone();
+        assert_eq!(calls.len(), 2, "claim and registration sample exactly once");
+        assert!(calls.iter().all(|thread| *thread != query_thread));
+        assert_ne!(
+            calls[0], calls[1],
+            "prepare must join before separate registration driver"
+        );
+        for _ in 0..8 {
+            assert_eq!(
+                controller
+                    .current(&binding, &fixture.caller, &original)
+                    .unwrap(),
+                HostControlReply::Registered
+            );
+        }
+        assert_eq!(
+            clock_threads.lock().len(),
+            2,
+            "current must not sample clock or register"
+        );
+    }
     assert!(
         host.test_activation_observation().unwrap().outstanding,
         "business registration is not key retirement"
@@ -375,6 +564,13 @@ async fn approved_native_keys_trial(
     let ending = ending.await.unwrap();
     let network_known = host.test_join_network().await;
     controller.begin_shutdown();
+    if autonomous {
+        assert!(
+            tokio::time::timeout(Duration::from_secs(5), host.test_retire_activation())
+                .await
+                .unwrap()
+        );
+    }
     drop(original);
     let physical = cleanup.close();
     let relay_known = relay.close().await;
@@ -607,5 +803,10 @@ async fn NativeRemote_OriginalApprovalClaimFailureCustody_013() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn NativeRemote_ApprovedExistingAdapterAnonymousHandshake_018() {
-    approved_native_keys_trial(false, false, None, true).await;
+    approved_native_keys_trial(false, false, None, true, false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn NativeRemote_OwnedDriverRegistersWithoutObserver_019() {
+    approved_native_keys_trial(false, false, None, true, true).await;
 }

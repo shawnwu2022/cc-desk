@@ -4,6 +4,8 @@ use crate::cli::native_runtime::{HostNativeObservation, HostNativeShutdown, Nati
 use crate::remote_client_ipc::RemoteClientService;
 #[path = "remote_host_activation.rs"]
 pub(crate) mod activation;
+#[path = "remote_host_driver.rs"]
+pub(crate) mod driver;
 use activation::{ActivationOperation, ActivationReservation};
 use crate::run_supervisor::NativeRunPin;
 use cc_desk_remote_host::native_host::{NativeHost, WriterRetirement};
@@ -149,6 +151,7 @@ pub(crate) struct ServiceState {
     pub(crate) source_wait_pending: bool,
     retired: bool,
     activation: Option<Arc<ActivationOperation>>,
+    driver: Option<driver::DriverLink>,
     #[cfg(test)]
     activation_waiting: bool,
     #[cfg(test)]
@@ -183,6 +186,7 @@ impl Default for RemoteHostService {
                 source_wait_pending: false,
                 retired: false,
                 activation: None,
+                driver: None,
                 #[cfg(test)]
                 activation_waiting: false,
                 #[cfg(test)]
@@ -212,11 +216,19 @@ impl RemoteHostService {
         state.activation = Some(reservation.operation());
         Ok(reservation)
     }
+    #[cfg(windows)]
+    pub(crate) fn reserve_driven_activation(&self) -> Result<(ActivationReservation, driver::DriverOwner, driver::DriverStart), crate::cli::types::SafeError> {
+        let mut state = self.state.lock();
+        if state.closing || state.retired || state.activation.is_some() { return Err(crate::cli::profiles::error("REMOTE_HOST_LOCKED")); }
+        let reservation = ActivationReservation::new();
+        let (owner, start) = driver::DriverOwner::new(reservation.operation());
+        state.driver = Some(owner.link());
+        state.activation = Some(reservation.operation());
+        Ok((reservation, owner, start))
+    }
     fn activation_retired(state: &ServiceState) -> bool {
-        state
-            .activation
-            .as_ref()
-            .is_none_or(|operation| operation.snapshot().retired())
+        state.driver.as_ref().is_none_or(|driver| driver.snapshot().retired())
+            && state.activation.as_ref().is_none_or(|operation| operation.snapshot().retired())
     }
     #[cfg(test)]
     pub(crate) fn test_activation_observation(&self) -> Option<activation::ActivationObservation> {
@@ -230,19 +242,22 @@ impl RemoteHostService {
     pub(crate) fn test_activation_exit_observed(&self) -> bool {
         self.state.lock().activation_waiting
     }
+    #[cfg(test)]
+    pub(crate) async fn test_retire_activation(&self) -> bool { self.wait_activation().await }
     async fn wait_activation(&self) -> bool {
         loop {
             #[cfg(test)]
             {
                 self.state.lock().activation_waiting = true;
             }
-            let operation = self.state.lock().activation.clone();
+            let (operation, driver) = { let state = self.state.lock(); (state.activation.clone(), state.driver.clone()) };
+            let driver = driver.map(|driver| driver.advance());
             let Some(operation) = operation else {
                 return true;
             };
             let observation = operation.retire();
-            if !observation.outstanding {
-                return !observation.unknown;
+            if !observation.outstanding && driver.is_none_or(|d| !d.outstanding) {
+                return !observation.unknown && driver.is_none_or(|d| !d.unknown);
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
