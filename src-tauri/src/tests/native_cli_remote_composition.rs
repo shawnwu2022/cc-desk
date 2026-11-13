@@ -2003,3 +2003,6 @@ mod rendezvous;
 
 #[path = "native_cli_remote_start.rs"]
 mod owned_start;
+#[cfg(windows)]
+#[path = "native_cli_remote_pairing_scope.rs"]
+mod pairing_scope;

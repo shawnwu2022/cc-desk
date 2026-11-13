@@ -16,3 +16,6 @@ Successful configuration returns a native monotonic candidate receipt. This is c
 Closing before configuration returns waits only for that existing response, then discards its specific receipt once. It does not issue a broad cancellation or retry an unknown result. Once requesting has begun, close uses the original approval cancellation path. Unknown cleanup failures are shown without echoing input.
 
 Validation scope: synthetic public inputs and isolated run fixtures only. No actual named key was opened or created, no credential was persisted, no deployment occurred, and an actual native approval window has not been clicked in this slice.
+## Public scope projection
+
+The independent explicit read described in [native-host-pairing-scope.md](native-host-pairing-scope.md) supplies only the original native session/run/generation for Browser configuration. It does not install this candidate, enroll a peer, approve a connection or renew the candidate cap.

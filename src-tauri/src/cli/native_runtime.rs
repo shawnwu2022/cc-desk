@@ -1053,7 +1053,7 @@ struct NativeRunQuery {
 fn RemoteHost_RunQueryRejectsAuthorityFields_001() {
     let valid = serde_json::json!({"runId":"original","generation":1});
     assert!(serde_json::from_value::<NativeRunQuery>(valid.clone()).is_ok());
-    for field in ["approved", "cap", "profile", "caller", "activation"] {
+    for field in ["approved", "cap", "profile", "caller", "activation", "scope", "session", "run"] {
         let mut forged = valid.clone();
         forged[field] = serde_json::json!(true);
         assert!(serde_json::from_value::<NativeRunQuery>(forged).is_err(), "{field}");

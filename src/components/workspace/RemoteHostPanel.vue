@@ -3,7 +3,7 @@ import { computed, onUnmounted, ref, watch } from 'vue'
 import AppButton from '@/components/ui/AppButton.vue'
 import InlineNotice from '@/components/ui/InlineNotice.vue'
 import { captureNativeAttempt, matchesNativeAttempt, useNativeTabsStore, type NativeAttemptIdentity } from '@/stores/nativeTabs'
-import { remoteHostConfigure, remoteHostCurrent, remoteHostRequest, remoteHostStart, remoteHostCancel, remoteHostDiscardCandidate } from '@/api/tauri'
+import { remoteHostConfigure, remoteHostCurrent, remoteHostRequest, remoteHostStart, remoteHostCancel, remoteHostDiscardCandidate, remoteHostPairingScope } from '@/api/tauri'
 import { useNotificationsStore } from '@/stores/notifications'
 const notifications = useNotificationsStore()
 function cleanupFailed() { notifications.pushToast({ kind: 'warning', messageKey: 'remoteHostCleanupUnconfirmed' }) }
@@ -11,6 +11,7 @@ const props = defineProps<{ tabId: string }>()
 const tabs = useNativeTabsStore()
 const open = ref(false), candidate = ref(''), busy = ref(false), configured = ref(false)
 const state = ref('Locked'), message = ref('')
+const pairingScope = ref('')
 let epoch = 0, captured: NativeAttemptIdentity | null = null
 let receipt: string | null = null, requested = false
 const available = computed(() => { const t = tabs.tab(props.tabId); return t?.status === 'running' && t.generation > 0 })
@@ -18,7 +19,7 @@ const statusText = computed(() => ({ Locked: '尚无批准', Pending: '等待本
 function stillCurrent(token: number, attempt: NativeAttemptIdentity) { return token === epoch && open.value && matchesNativeAttempt(tabs.tab(props.tabId), attempt) }
 function invalidate() {
   const previous = captured, previousReceipt = receipt, wasRequested = requested
-  epoch++; captured = null; receipt = null; requested = false; candidate.value = ''; configured.value = false; busy.value = false; state.value = 'Locked'; message.value = ''; open.value = false
+  epoch++; captured = null; receipt = null; requested = false; candidate.value = ''; pairingScope.value = ''; configured.value = false; busy.value = false; state.value = 'Locked'; message.value = ''; open.value = false
   if (previous) {
     const run = { runId: previous.runId, generation: previous.generation }
     if (wasRequested) void remoteHostCancel(run).catch(cleanupFailed)
@@ -29,6 +30,19 @@ function show() {
   const t = tabs.tab(props.tabId)
   if (!t || !available.value) return
   captured = captureNativeAttempt(t); open.value = true; message.value = ''
+}
+async function readScope() {
+  const attempt = captured, token = epoch
+  if (!attempt || busy.value || !stillCurrent(token, attempt)) return
+  busy.value = true; message.value = ''; pairingScope.value = ''
+  try {
+    const scope = await remoteHostPairingScope({ runId: attempt.runId, generation: attempt.generation })
+    if (stillCurrent(token, attempt)) pairingScope.value = JSON.stringify({ session: scope.session, run: scope.run, generation: scope.generation })
+  } catch {
+    if (stillCurrent(token, attempt)) message.value = '未能读取公开会话范围，不会自动重试。'
+  } finally {
+    if (stillCurrent(token, attempt)) busy.value = false
+  }
 }
 async function act(kind: 'configure' | 'request' | 'start' | 'cancel' | 'refresh') {
   const attempt = captured, token = epoch
@@ -63,6 +77,9 @@ onUnmounted(invalidate)
     <div v-else class="remote-host-content">
       <strong>可查看并控制当前会话</strong>
       <p>仅本次应用会话；候选冻结后最多60秒，批准不会续期。不会自动启动或重连。</p>
+      <AppButton :disabled="busy" @click="readScope">读取公开会话范围</AppButton>
+      <p>公开会话范围不是授权，仅用于独立配对配置；不会自动发送到浏览器。更换会话后须重新配置浏览器连接。</p>
+      <output v-if="pairingScope" aria-label="公开会话范围">{{ pairingScope }}</output>
       <label>公开配对 JSON（不要填写私钥、密码或令牌）
         <textarea v-model="candidate" aria-label="公开配对JSON" :disabled="configured || busy" maxlength="16384" spellcheck="false" autocomplete="off" />
       </label>
@@ -84,6 +101,7 @@ onUnmounted(invalidate)
 .remote-host-panel { position: absolute; right: 8px; top: 8px; z-index: 5; max-width: min(480px, 95%); color: var(--text-primary); }
 .remote-host-content { padding: 12px; border: 1px solid var(--border-color); border-radius: var(--radius-md); background: var(--bg-primary); max-height: 80vh; overflow: auto; }
 p, label { font-size: 12px; }
+output { display: block; overflow-wrap: anywhere; user-select: text; font-size: 12px; }
 textarea { display: block; width: 100%; min-height: 100px; color: var(--text-primary); background: var(--bg-secondary); border: 1px solid var(--border-color); }
 .remote-host-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
 </style>

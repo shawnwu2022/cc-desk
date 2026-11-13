@@ -164,4 +164,10 @@ it('RemoteHost_CandidateDiscardUsesExactBridge_007', async () => {
  const failure={code:'FORBIDDEN'};bridge(vi.fn(async()=>{throw failure}));
  await expect(api.remoteHostDiscardCandidate(request)).rejects.toBe(failure);
  delete (window as any)[bridgeKey];await expect(api.remoteHostDiscardCandidate(request)).rejects.toMatchObject({code:'DOCUMENT_BRIDGE_UNAVAILABLE'});
+});it('RemoteHostScope_OriginalBridgeAndFailure_008', async () => {
+ const run={runId:'original',generation:1}, scope={session:'ab'.repeat(16),run:'original',generation:'1'};
+ const invoke=vi.fn(async()=>scope);bridge(invoke);
+ await expect(api.remoteHostPairingScope(run)).resolves.toEqual(scope);expect(invoke.mock.calls).toEqual([['remote_host_pairing_scope',run]]);
+ const failure={code:'FORBIDDEN'};bridge(vi.fn(async()=>{throw failure}));await expect(api.remoteHostPairingScope(run)).rejects.toBe(failure);
+ delete (window as any)[bridgeKey];await expect(api.remoteHostPairingScope(run)).rejects.toMatchObject({code:'DOCUMENT_BRIDGE_UNAVAILABLE'});
 });
