@@ -9,7 +9,7 @@
 ## 分片范围
 
 1. 首片实现一个应用持有的 activation operation、必要的冻结绑定，以及原唯一退出 waiter 的观察。公开测试材料负责驱动该链路。没有生产材料供应者时继续 Locked。
-2. 首片通过后，单独实现 Host 的 Endpoint、Relay 两用途签名工厂。复用底层 `KeyCustodian` 和签名 facade，不复用 `RemoteClientService` 的状态或生命周期。
+2. 两用途工厂拆成 2A 底层前置条件和 2B Host 集成。2A 提供共享只可置位撤销事实、无回调停止与延后通知、同一 owner 锁下的完整退休观察。2B 再实现 Host 的 Endpoint、Relay 两用途签名工厂及保管链；复用底层 `KeyCustodian` 和签名 facade，不复用 `RemoteClientService` 的状态或生命周期。
 3. 两用途工厂及其退出保管通过后，才接 strict document/run 的 start IPC 和原 registered network begin。
 4. 实际配置、已有用户密钥打开、生产原生批准、手机与公网端到端分别验收，不由前三片的 fixture 结果替代。
 
@@ -90,6 +90,19 @@ Endpoint 与 Relay 使用不同的固定 SPKI。批准期限来自原 ticket，�
 
 本阶段不为 named-key 验证创建任何持久测试 key。测试只使用仓库公开 TEST_ONLY 向量、CNG 匿名临时 key 和 API 仿真。仿真可以核对 provider、参数和失败保管，不能证明真实 existing-key loader 已实测。实际读取用户 key 需要另行授权，缺少该验收时明确保留缺口。
 
+## 2A：两用途工厂的底层前置条件
+
+2A 的代码边界只涉及 `native_crypto_owner.rs`、`native_crypto_signers.rs` 的完整观察，以及相应测试。它不修改 controller、approval、activation 或 service，不新增 Host 工厂、真实 loader、start IPC 或 KeyInitialization/open-ready 协议。`prepare` 成功只证明原线程和能力已创建，不证明 key 已成功打开，更不能称为 Ready。
+
+- `NativeRevocation` 是不可复位的共享事实；Host 可选的 `SigningFence::new_revocable` 与 `KeyCustodian::prepare_revocable` 接受同一 opaque token。原 attempt 的 admission、claim、native-return、delivery、publication 和 fence advance 都重新检查它。工厂失败、签名失败、释放失败及 panic 必须在外部 wake 前失效；原 request 的 unwind guard 先于 reply sender 析构，只持 token，不持自己的 owner。
+- `Shared::prepare_cancel` 在锁内封闭资格并更新原事实，锁外只执行 bounded `try_send`，返回持有原 waker 的 `KeyShutdownNotice`。`notify` 才实际执行回调。原 Client 的 `cancel`/`shutdown` 继续同步执行两步，默认 fence 不绑定 Host token；没有改变 Client 的三用途状态或保管链。
+- 两 key 的调用方可以先对两者执行 `prepare_shutdown`，再在受保管通知路径中消费 notice。第一个 wake 阻塞时，第二个 key 已失效且仍可由原 owner 真正 join。notice 的最后 Drop 也可能运行 RawWaker 代码，因此后续集成不能把未消费 notice 随意丢在唯一 async waiter 或应用锁内。2A 没有实现该应用级通知 worker。
+- `KeyCustodian::observe_complete` 在同一次原 owner 独占观察中取得 retirement 和 `holds_original_join`，`NativeKeySlot::observe_complete` 路径持同一 owner 锁。Unknown 与原线程是否仍在运行独立；CNG Free 后原线程尾部尚未返回仍 Pending，不能用业务结果或空的瞬时快照伪造退休。
+
+2B 仍须把原批准 lease 的 cancel/expiry、operation cancel、service close 和准备失败绑定到同一 token，覆盖先取消后晚绑定；被冻结的工厂不得在 Yes 后重新读取 profile binding。两原 key owner、signal handle、待通知 mailbox 和最终 slot 释放必须由 canonical 保管链覆盖，晚到 owner 必须接收、晚到 start gate 不得放行。两个 key 槽的 Unknown 不能短路另一个槽的真实 join。原准备线程尚未 join 时，即使两槽暂为空也不能宣布退休。
+
+业务登记和资源 outstanding 将在 2B 分开：材料交付后原 key worker 仍活着，Registered 不是 Ready，也不意味着整个退出已退休。首片 operation 的 prepare/release Joined 不能代替 key、通知与最终释放线程的原 join。冻结工厂、key worker、通知/释放 worker 都不得持自己的 service/operation/custody 强引用。上述应用级整合仍待独立实现和验证。
+
 ## 首片测试计划
 
 新增测试放在现有 Rust 测试体系。所有并发控制使用有界 channel 或 barrier，不用 sleep 制造顺序。保留真实两个线程的取消交错，不能仅用同步回调冒充并发。
@@ -136,3 +149,16 @@ Endpoint 与 Relay 使用不同的固定 SPKI。批准期限来自原 ticket，�
 - 确认所有原 handle 在工厂执行前入槽，join checkout 不会暴露假空槽。
 - 确认 Unknown 不短路其他原 owner 的等待，Drop 不触发同线程自 join。
 - 确认冻结配置不被当作真实供应者，首片无生产 start 与实际 key 操作。
+
+## 2A 实测记录与剩余边界
+
+2A 基线为首片提交 `cbd8e4b43ceb5bc1fb9bac36c99f8d05765265fe`。证据保存在 `.audit/native-crypto-host-prerequisites-20261113/`；最终 Rust 清单为 `frozen2-source-hashes.json`，最终八文件清单为 `final8-manifest.json`。最后一次源码修改只将新测试 helper 的 `join().ok().expect` 改为直接 `join().expect`，之后重新构建和验证，没有把前一产物结果套到新源码。
+
+- `red-build.*` 成功编译原接口上的行为测试；`red-deferred-stop.*` 以 exit 101、1.01 秒复现顺序同步 shutdown 在第一个 wake 阻塞时无法停止并 join 第二个 key。该 RED 说明原调用组合不适合 Host 的唯一 async waiter，不声称原 Client 同步接口有生产故障。退出断言前已释放测试 gate 并 join 两个原线程。
+- `check1-host.*` 首版 6 项中 5 通过、1 失败：原 request unwind 先销毁 reply sender，外部 wake 当时还看不到撤销事实。新增只持 token 的 request unwind guard 修复此顺序；它不替代原 JoinHandle 或 Unknown 事实。
+- `final2-build.*` 是调用目录错误导致离线 aliyun 索引找不到 `coset` 的环境失败，不是行为 RED。恢复在工作树根目录使用 `--manifest-path src-tauri/Cargo.toml` 后，直接复用既有 crates.io 缓存、同一 target 和 `CARGO_INCREMENTAL=0`；没有改配置或下载依赖。
+- `final3-artifact-hash.json` 的精确 test executable SHA256 为 `5D5897AAE5F2409FFF2623BC083FB1A3ABDEC277E14E566148D2A7D76F5D93D7`。`final3-host-prerequisites.*` 新增 7 项、`final3-native-crypto.*` 23 项、`final3-client.*` 25 项、`final3-activation.*` 21 项、`final3-approval.*` 6 项均 exit 0、0 failed、0 ignored。新增 7 项包含在 native crypto 23 项内，不重复计数；完整名称见 `final3-inventory.txt`。
+- 新增 001 验证两 key 先无回调停止，首个通知阻塞仍能 join 兄弟 key；002 覆盖原五处签名检查及 fence advance；003 实测已 Free 但线程尾部受 gate 持有时的 Pending/Unknown 与原 join 独立；004 覆盖 gate 前取消、factory Err/panic 及非法元数据；005 用匿名 RFC6979 CNG 签名验证 Client 独立；006 验证 panic 在 sender/waker 析构前撤销；007 在有界独立子进程用固定假句柄和永久 free 拦截验证 Unknown 仍持原 worker，不触碰真实 CNG 对象。007 的进程退出不是 key Free 或原 join 成功凭据。
+- `final3-fmt.*` 是六个改动 Rust 文件的只读格式检查；`final3-clippy.*` 是 remote-host `--lib -- -D warnings` 严格检查，两者通过。严格 `--lib --tests` 仍受已提交的 `native_cli_remote_composition.rs` 三处 lint 阻断：978/1008 的 `possible_missing_else` 来自首片，1759 的 `chunks_exact_to_as_chunks` 是更早基线。本片 helper lint 已修，不修改或屏蔽上述范围外代码；不能称全目标 Clippy 通过。
+
+2A 未运行全量 Rust、feature-off 新 harness、NativeRemote 全套重跑、真实 existing-key loader、真实原生批准、手机或公网端到端。controller/approval/activation/service/IPC 未改，保留首片原隔离证据。本片不创建或打开持久/真实用户 key，不增加生产 Host profile、两用途供应者、通知/释放 custody 或 start 调用者。生产仍为 None/Locked，后续 2B 必须单独验收上述组合边界。

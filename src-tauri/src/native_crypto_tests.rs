@@ -6,6 +6,10 @@ mod owner_tests;
 #[path = "native_crypto_signers_tests.rs"]
 mod signers_tests;
 
+#[cfg(feature = "remote-client-ipc")]
+#[path = "native_crypto_revocation_tests.rs"]
+mod revocation_tests;
+
 fn hex(value: &str) -> Vec<u8> {
     (0..value.len())
         .step_by(2)

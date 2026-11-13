@@ -765,6 +765,7 @@ fn CngAdapters_SyncTlsOriginalHorizonReturnsUnknownWithoutDroppingOwner_005() {
                 let _ = entered.send(());
                 let _ = gate.recv();
             })),
+            ..Default::default()
         },
     )
     .unwrap();

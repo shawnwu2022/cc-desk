@@ -298,6 +298,24 @@ receipt. Unknown keeps the original owner and prevents exit; the first exit code
 is preserved. These source/fixture facts do not enable a real key profile, prove
 native-call preemption, or establish mobile/device or production enrollment.
 
+Host signing prerequisites add an opaque, shared, one-way `NativeRevocation`
+fact to an optional native worker and `SigningFence`. Admission, physical claim,
+native return, delivery, publication and generation advance recheck this fact.
+Factory/native/free failure and unwind seal it before notifying observers; the
+request unwind guard precedes destruction of the original reply sender. The
+existing Client constructors keep their independent, non-revocable default.
+
+`prepare_shutdown` seals the original key and returns a retained
+`KeyShutdownNotice` without calling an external waker. Its explicit `notify`
+step may block or panic and must run in owned notification custody. Legacy
+`shutdown` still executes both steps synchronously. `observe_complete` reports
+retirement and original JoinHandle custody in one exclusive owner observation,
+holding the same owner lock on the slot path: Unknown
+does not mean the worker has joined, and native free does not prove thread exit.
+These are tested prerequisites, not a Host key bundle or an open-ready receipt.
+Host lease/token binding, two-slot custody, notification/release ownership and
+production start remain separate integration work. No real key loader is enabled.
+
 ## Output path
 
 Native output uses a bounded stream with explicit offsets and acknowledgements.

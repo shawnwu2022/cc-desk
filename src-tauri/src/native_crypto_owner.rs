@@ -5,7 +5,7 @@ use std::{
     future::Future,
     pin::Pin,
     sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc::{self, Receiver, SyncSender},
         Arc,
     },
@@ -38,6 +38,32 @@ pub(crate) enum KeyRetirement {
     Unknown,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct KeyObservation {
+    pub(crate) retirement: KeyRetirement,
+    pub(crate) holds_original_join: bool,
+}
+/// 原生共享撤销事实只能置位，不能被替换为可恢复的 Ready 状态。
+#[derive(Default)]
+pub(crate) struct NativeRevocation(AtomicBool);
+impl NativeRevocation {
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "Host lease binding is a separate integration slice"
+        )
+    )]
+    pub(crate) fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+    pub(crate) fn revoke(&self) {
+        self.0.store(true, Ordering::Release);
+    }
+    pub(crate) fn is_revoked(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SignFailure {
     Busy,
     Closed,
@@ -66,6 +92,7 @@ struct Shared {
     send: SyncSender<Command>,
     signs: AtomicUsize,
     facades: AtomicUsize,
+    revocation: Option<Arc<NativeRevocation>>,
 }
 struct Request {
     attempt: Option<NativeSigningAttempt>,
@@ -79,6 +106,7 @@ struct Request {
 pub(crate) struct SigningFence {
     generation: Mutex<u64>,
     approved_until: Instant,
+    revocation: Option<Arc<NativeRevocation>>,
 }
 #[derive(Clone)]
 pub(crate) struct NativeSigningAttempt {
@@ -119,6 +147,7 @@ impl NativeSigningAttempt {
         current == self.generation
             && Instant::now() < self.end
             && Instant::now() < self.fence.approved_until
+            && !self.fence.is_revoked()
     }
     pub(crate) fn end(&self) -> Instant {
         self.end
@@ -171,7 +200,28 @@ impl SigningFence {
         Arc::new(Self {
             generation: Mutex::new(0),
             approved_until,
+            revocation: None,
         })
+    }
+    #[cfg(feature = "remote-client-ipc")]
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "Host signing factory is not connected")
+    )]
+    pub(crate) fn new_revocable(
+        approved_until: Instant,
+        revocation: Arc<NativeRevocation>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            generation: Mutex::new(0),
+            approved_until,
+            revocation: Some(revocation),
+        })
+    }
+    fn is_revoked(&self) -> bool {
+        self.revocation
+            .as_ref()
+            .is_some_and(|token| token.is_revoked())
     }
     #[cfg(feature = "remote-client-ipc")]
     pub(crate) fn advance(
@@ -180,7 +230,8 @@ impl SigningFence {
         end: Instant,
     ) -> Result<NativeSigningAttempt, SignFailure> {
         let mut generation = self.generation.lock();
-        if end > self.approved_until
+        if self.is_revoked()
+            || end > self.approved_until
             || end
                 .checked_duration_since(Instant::now())
                 .is_none_or(|d| d > Duration::from_secs(5))
@@ -197,6 +248,9 @@ impl SigningFence {
             }
         }
         let next = generation.checked_add(1).ok_or(SignFailure::Bounds)?;
+        if self.is_revoked() {
+            return Err(SignFailure::Closed);
+        }
         *generation = next;
         Ok(NativeSigningAttempt {
             #[cfg(test)]
@@ -212,6 +266,16 @@ enum Command {
     Shutdown,
 }
 impl Shared {
+    fn revoke(&self) {
+        if let Some(token) = &self.revocation {
+            token.revoke();
+        }
+    }
+    fn is_revoked(&self) -> bool {
+        self.revocation
+            .as_ref()
+            .is_some_and(|token| token.is_revoked())
+    }
     fn cancel_observer(&self, id: u64) -> RequestFact {
         let (fact, waker, discarded, close) = {
             let mut c = self.control.lock();
@@ -241,11 +305,18 @@ impl Shared {
         }
     }
     fn cancel(&self, id: Option<u64>) -> RequestFact {
+        self.prepare_cancel(id).notify()
+    }
+    fn prepare_cancel(&self, id: Option<u64>) -> KeyShutdownNotice {
         let (fact, waker) = {
             let mut c = self.control.lock();
             if id.is_some_and(|id| c.active.as_ref().is_none_or(|a| a.id != id)) {
-                return RequestFact::Delivered;
+                return KeyShutdownNotice {
+                    fact: RequestFact::Delivered,
+                    waker: None,
+                };
             }
+            self.revoke();
             c.closing = true;
             let mut fact = RequestFact::Delivered;
             let mut waker = None;
@@ -264,10 +335,7 @@ impl Shared {
         // Queue is bounded. A full slot already wakes the worker; that original
         // request will see closing. No lock is held over waits/native calls.
         let _ = self.send.try_send(Command::Shutdown);
-        if let Some(waker) = waker {
-            waker.wake();
-        }
-        fact
+        KeyShutdownNotice { fact, waker }
     }
     fn fact(&self, id: u64) -> RequestFact {
         self.control
@@ -276,6 +344,21 @@ impl Shared {
             .as_ref()
             .filter(|a| a.id == id)
             .map_or(RequestFact::Delivered, |a| a.fact)
+    }
+}
+
+/// 必须保管到受托管通知路径；移动本类型不调用 RawWaker 的 clone/drop/wake。
+#[must_use = "Retain this original notice until an owned notification path consumes it"]
+pub(crate) struct KeyShutdownNotice {
+    fact: RequestFact,
+    waker: Option<Waker>,
+}
+impl KeyShutdownNotice {
+    pub(crate) fn notify(mut self) -> RequestFact {
+        if let Some(waker) = self.waker.take() {
+            waker.wake();
+        }
+        self.fact
     }
 }
 
@@ -307,6 +390,10 @@ impl KeyRequestHandle {
     #[cfg(feature = "remote-client-ipc")]
     pub(crate) fn shutdown(&self) {
         self.shared.cancel(None);
+    }
+    #[cfg(feature = "remote-client-ipc")]
+    pub(crate) fn prepare_shutdown(&self) -> KeyShutdownNotice {
+        self.shared.prepare_cancel(None)
     }
     #[cfg(test)]
     pub(crate) fn control_available(&self) -> bool {
@@ -375,7 +462,13 @@ impl KeyRequestHandle {
         }
         let (reply, receive) = oneshot::channel();
         let mut c = self.shared.control.lock();
-        if c.closing {
+        if c.closing
+            || self.shared.is_revoked()
+            || attempt
+                .as_ref()
+                .zip(gate.as_ref())
+                .is_some_and(|(a, g)| !a.valid_locked(**g))
+        {
             return Err(SignFailure::Closed);
         }
         if c.active.is_some() {
@@ -401,6 +494,7 @@ impl KeyRequestHandle {
             }))
             .is_err()
         {
+            self.shared.revoke();
             c.closing = true;
             c.active.as_mut().unwrap().fact = RequestFact::Unknown;
             return Err(SignFailure::Closed);
@@ -442,12 +536,13 @@ impl SignTicket {
         }
         let attempt = self.attempt.clone();
         let gate = attempt.as_ref().map(|a| a.fence.generation.lock());
-        let valid = attempt
-            .as_ref()
-            .zip(gate.as_ref())
-            .is_none_or(|(a, g)| a.valid_locked(**g));
         let (value, close, delivered) = {
             let mut c = self.shared.control.lock();
+            let valid = !self.shared.is_revoked()
+                && attempt
+                    .as_ref()
+                    .zip(gate.as_ref())
+                    .is_none_or(|(a, g)| a.valid_locked(**g));
             match c
                 .active
                 .as_ref()
@@ -531,6 +626,10 @@ impl SignTicket {
                 std::thread::sleep(remaining);
             }
         }));
+    }
+    #[cfg(test)]
+    pub(crate) fn hook_delivery(&mut self, hook: Box<dyn FnOnce() + Send>) {
+        self.delivery_hook = Some(hook);
     }
     pub(crate) fn cancel(&self) -> RequestFact {
         if self.attempt.is_some() {
@@ -626,6 +725,26 @@ pub(crate) struct WorkerHooks {
     pub(crate) before_claim: Option<Box<dyn FnOnce() + Send>>,
     #[cfg(test)]
     pub(crate) after_native: Option<Box<dyn FnOnce() + Send>>,
+    #[cfg(test)]
+    pub(crate) after_free: Option<Box<dyn FnOnce() + Send>>,
+}
+struct WorkerRevocation(Option<Arc<NativeRevocation>>);
+impl Drop for WorkerRevocation {
+    fn drop(&mut self) {
+        if let Some(token) = &self.0 {
+            token.revoke();
+        }
+    }
+}
+struct RequestUnwindRevocation(Option<Arc<NativeRevocation>>);
+impl Drop for RequestUnwindRevocation {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            if let Some(token) = &self.0 {
+                token.revoke();
+            }
+        }
+    }
 }
 struct WorkerEnd {
     key: Option<KeyEnd>,
@@ -694,7 +813,44 @@ impl KeyCustodian {
         spki: Vec<u8>,
         hooks: WorkerHooks,
     ) -> Result<(Self, KeyRequestHandle, KeyStart), SignFailure> {
+        Self::prepare_inner(factory, purpose, spki, hooks, None)
+    }
+    #[cfg(feature = "remote-client-ipc")]
+    pub(crate) fn prepare_revocable(
+        factory: impl FnOnce() -> Result<NativeOwnedSoftwareKey, CryptoError> + Send + 'static,
+        purpose: SigningPurpose,
+        spki: Vec<u8>,
+        revocation: Arc<NativeRevocation>,
+    ) -> Result<(Self, KeyRequestHandle, KeyStart), SignFailure> {
+        Self::prepare_inner(
+            factory,
+            purpose,
+            spki,
+            WorkerHooks::default(),
+            Some(revocation),
+        )
+    }
+    #[cfg(test)]
+    pub(crate) fn prepare_revocable_for_test(
+        factory: impl FnOnce() -> Result<NativeOwnedSoftwareKey, CryptoError> + Send + 'static,
+        purpose: SigningPurpose,
+        spki: Vec<u8>,
+        revocation: Arc<NativeRevocation>,
+        hooks: WorkerHooks,
+    ) -> Result<(Self, KeyRequestHandle, KeyStart), SignFailure> {
+        Self::prepare_inner(factory, purpose, spki, hooks, Some(revocation))
+    }
+    fn prepare_inner(
+        factory: impl FnOnce() -> Result<NativeOwnedSoftwareKey, CryptoError> + Send + 'static,
+        purpose: SigningPurpose,
+        spki: Vec<u8>,
+        hooks: WorkerHooks,
+        revocation: Option<Arc<NativeRevocation>>,
+    ) -> Result<(Self, KeyRequestHandle, KeyStart), SignFailure> {
         if spki.len() != 91 {
+            if let Some(token) = &revocation {
+                token.revoke();
+            }
             return Err(SignFailure::Bounds);
         }
         let (send, receive) = mpsc::sync_channel(1);
@@ -713,17 +869,20 @@ impl KeyCustodian {
             send,
             signs: AtomicUsize::new(0),
             facades: AtomicUsize::new(1),
+            revocation,
         });
         let original = shared.clone();
         let worker = std::thread::Builder::new()
             .name("native-cng-key".into())
             .spawn(move || {
+                // 仅持撤销事实；factory panic 不会先释放自己的 JoinHandle owner。
+                let _revoke_on_exit = WorkerRevocation(original.revocation.clone());
                 let admitted = loop {
-                    if original.control.lock().closing {
+                    if original.control.lock().closing || original.is_revoked() {
                         break false;
                     }
                     match start.recv_timeout(Duration::from_millis(10)) {
-                        Ok(()) => break !original.control.lock().closing,
+                        Ok(()) => break !original.control.lock().closing && !original.is_revoked(),
                         Err(mpsc::RecvTimeoutError::Timeout) => continue,
                         Err(_) => break false,
                     }
@@ -737,6 +896,7 @@ impl KeyCustodian {
                 let mut key = match factory() {
                     Ok(key) => key,
                     Err(_) => {
+                        original.revoke();
                         let mut c = original.control.lock();
                         c.closing = true;
                         c.unknown = true;
@@ -745,6 +905,12 @@ impl KeyCustodian {
                             normal: false,
                         };
                     }
+                };
+                #[cfg(test)]
+                let (hooks, after_free) = {
+                    let mut hooks = hooks;
+                    let after = hooks.after_free.take();
+                    (hooks, after)
                 };
                 let normal = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     run_requests(&mut key, &original, receive, purpose, &spki, hooks)
@@ -763,12 +929,19 @@ impl KeyCustodian {
                     }
                 }
                 original.control.lock().key_freed = true;
+                #[cfg(test)]
+                if let Some(after) = after_free {
+                    after();
+                }
                 WorkerEnd {
                     key: Some(KeyEnd::Freed),
                     normal,
                 }
             })
-            .map_err(|_| SignFailure::Closed)?;
+            .map_err(|_| {
+                shared.revoke();
+                SignFailure::Closed
+            })?;
         let custodian = Self {
             shared: shared.clone(),
             worker: Some(worker),
@@ -803,6 +976,12 @@ impl KeyCustodian {
             KeyRetirement::Unknown
         } else {
             self.retirement
+        }
+    }
+    pub(crate) fn observe_complete(&mut self) -> KeyObservation {
+        KeyObservation {
+            retirement: self.observe(),
+            holds_original_join: self.holds_original_join(),
         }
     }
     pub(crate) fn native_sign_count(&self) -> usize {
@@ -846,12 +1025,14 @@ fn run_requests(
     mut hooks: WorkerHooks,
 ) {
     loop {
-        if shared.control.lock().closing {
+        if shared.control.lock().closing || shared.is_revoked() {
             break;
         }
         let Ok(Command::Sign(request)) = receive.recv() else {
             break;
         };
+        // guard 后声明、先析构；panic 时必须早于原 reply sender 的外部 wake。
+        let _revoke_before_reply_drop = RequestUnwindRevocation(shared.revocation.clone());
         #[cfg(test)]
         if let Some(hook) = hooks.before_claim.take() {
             hook();
@@ -865,6 +1046,9 @@ fn run_requests(
         let claimed = {
             let gate = request.attempt.as_ref().map(|a| a.fence.generation.lock());
             let mut c = shared.control.lock();
+            if shared.is_revoked() {
+                c.closing = true;
+            }
             if Instant::now() >= request.end
                 || request
                     .attempt
@@ -873,6 +1057,7 @@ fn run_requests(
                     .is_some_and(|(a, g)| !a.valid_locked(**g))
             {
                 if request.attempt.is_none() {
+                    shared.revoke();
                     c.closing = true;
                 }
                 if let Some(a) = c
@@ -935,7 +1120,8 @@ fn run_requests(
         }
         let gate = request.attempt.as_ref().map(|a| a.fence.generation.lock());
         let mut c = shared.control.lock();
-        if Instant::now() >= request.end
+        if shared.is_revoked()
+            || Instant::now() >= request.end
             || result.is_err()
             || request
                 .attempt
@@ -943,9 +1129,11 @@ fn run_requests(
                 .zip(gate.as_ref())
                 .is_some_and(|(a, g)| !a.valid_locked(**g))
         {
+            shared.revoke();
             c.closing = true;
         }
         if c.closing {
+            shared.revoke();
             if let Some(a) = c.active.as_mut().filter(|a| a.id == request.id) {
                 if a.fact != RequestFact::CancelledNoEffect {
                     a.fact = RequestFact::Unknown;
@@ -972,6 +1160,7 @@ fn run_requests(
             let mut c = shared.control.lock();
             if let Some(a) = c.active.as_mut().filter(|a| a.id == request.id) {
                 a.fact = RequestFact::Unknown;
+                shared.revoke();
                 c.closing = true;
             }
         }

@@ -346,6 +346,14 @@ impl NativeKeySlot {
     pub(crate) fn observe(&self) -> KeyRetirement {
         self.owner.lock().observe()
     }
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "Host key custody is a separate integration slice")
+    )]
+    pub(crate) fn observe_complete(&self) -> KeyObservation {
+        // 两种事实必须来自同一次原 owner checkout，不能分开加锁后拼接。
+        self.owner.lock().observe_complete()
+    }
 }
 impl fmt::Debug for CngTlsKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

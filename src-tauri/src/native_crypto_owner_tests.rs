@@ -90,6 +90,7 @@ fn CngOwner_QueuedCancelSignsZeroAndJoinsOriginal_001() {
         WorkerHooks {
             before_claim: Some(gate.blocker()),
             after_native: None,
+            ..Default::default()
         },
     )
     .unwrap();
@@ -156,6 +157,7 @@ fn CngOwner_StartedCancelWithholdsLateResultAndRetiresOriginal_002() {
         WorkerHooks {
             before_claim: None,
             after_native: Some(gate.blocker()),
+            ..Default::default()
         },
     )
     .unwrap();
@@ -204,6 +206,7 @@ fn CngOwner_AsyncPollIsPendingAndDeliveredTicketCannotCancelNext_003() {
         WorkerHooks {
             before_claim: Some(gate.blocker()),
             after_native: None,
+            ..Default::default()
         },
     )
     .unwrap();
