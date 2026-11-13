@@ -90,3 +90,9 @@ node --experimental-strip-types --test remote/ui-terminal/src/browserData.integr
 4. 原 attempt 改变、run 停止、关闭或卸载会清空草稿/输出。重新读取 scope 时旧输出立即失效；迟到的 scope 不能恢复关闭后的数据。
 
 输出必须交给独立可信供应流程重新核对和批准。本工具不创建 enrollment authority、可撤销批准记录、credential、key handles 或 `/browser-profile.js`，不会替换旧 Browser source 或延长其 deadline。UI 自动化仅用合成公开数据与模拟 native/clipboard 接口，不代表安装应用或真实设备验收。
+
+## 经完整 Browser 入口与实际中转的组合验收
+
+browser-entry.spec.ts 已把 supplier 接入真实 Edge 的最终产品页面、受控同源 source、原 WebSocket/broker/Worker 与 Rust WASM，并经过原 Relay WSS 到 Rust Host。匹配 case 核对原 non-exportable handles/回调、一次 provider 读取、Snapshot/ACK、精确一次内存 writer 写入、刷新不重读和原 Relay 退休。四种语法合法的 session/run/generation/Host SPKI 不匹配在 Browser 签名、WebAuthn/presenter、Relay 连接、Worker/runtime 加载前拒绝，二次刷新不能恢复失败 source。
+
+可复现的 oracle 源码、锁文件、构建与运行命令见 [完整入口验收](../remote/BROWSER-PROFILE.md#supplier-through-the-complete-browser-entry-and-original-relay)。该 fixture 使用原生 Host 的实际 scope 和公开 TEST_ONLY 身份独立构造可信测试快照，不把候选当批准记录。HTTPS/WS 仍由 Playwright route 桥接，WebAuthn 为合成响应、writer 为内存对象；真实可信供应、enrollment、部署、手机及安装应用 GUI 批准门禁仍未完成。

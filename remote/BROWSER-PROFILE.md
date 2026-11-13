@@ -774,9 +774,10 @@ authorities. Browser lifecycle Create/Attach/Resize/Resume/Close commands remain
 outside this entry; disconnect only retires its connection.
 
 The original relay library supplies the verified `Relay::serve` WSS path used
-by this slice. Its current binary does not yet expose a configured production
-TLS/WSS launcher or production policy source. Those are code integration gaps,
-separate from supplying a relay address/certificate or qualifying a device.
+by this slice. The sibling cc-desk-relay checkout now has an explicit production
+policy/TLS launcher. Trusted operator policy and certificates, authorized
+deployment and device qualification remain separate gates; this fixture still
+uses the original Relay library with public TEST_ONLY identities.
 
 Stage2 verification includes an actual Edge TEST_ONLY routed HTTPS/assets/WS
 fixture with the final product page/Worker/runtime, original loopback TLS WSS
@@ -789,3 +790,47 @@ Node process and original native writer/pin/rebind/retirement. Its permanent
 process admission requires each exact composition test to run in a fresh process.
 
 显式 relay 会合模式、批准输入冻结和 Ready 前禁止内层 TLS 的边界见 [RENDEZVOUS-V1](RENDEZVOUS-V1.md)。Ready 不代替本文件的 BrowserProfile 或最终 grant。
+
+## Supplier through the complete Browser entry and original Relay
+
+The browser-entry.spec.ts fixture supplies the fixed same-origin profile module
+through createApprovedBrowserProfileReader, instead of directly assembling
+approved inputs. Its independent TEST_ONLY snapshot comes from the actual Host
+scope and fixed public vectors. Only a separate candidate copy is mutated. The
+provider receives the original signal, not candidate selectors, and returns the
+original nonexportable handles and callbacks.
+
+The matching case runs the final Vite page, controlled source, production
+WebSocket/brokers/Worker and Rust WASM against the original Relay and Host. It
+checks snapshot/exact ACK, one literal input writer effect, original source reuse
+on refresh, and Relay retirement. Four valid mismatches (session, run, generation,
+Host SPKI) check zero browser signatures, assertions/presentations, Relay
+connections, Workers and runtime loads. Second refresh cannot reread or resurrect
+the failed source. Test attachments record SHA256 of each actual Relay/Host/WASM/glue input.
+
+The oracle source and lockfile are tracked under tests/remote-browser/relay-host-oracle,
+without historic machine paths. Select an existing Relay checkout explicitly;
+build output and temporary files stay inside the current project:
+
+```powershell
+$env:CC_DESK_TEST_ONLY_RELAY_ROOT = 'E:/source/github/cc-desk-relay'
+node tests/remote-browser/build-entry-relay.mjs
+$relay = Get-Content .audit/browser-entry-relay-build/artifacts.json -Raw | ConvertFrom-Json
+$env:CC_DESK_TEST_ONLY_ORIGINAL_RELAY_ORACLE = $relay.executable
+New-Item -ItemType Directory -Force .audit/browser-entry-run/runtime | Out-Null
+$env:TEMP = (Resolve-Path .audit/browser-entry-run/runtime).Path
+$env:TMP = $env:TEMP
+$env:TMPDIR = $env:TEMP
+$env:CC_DESK_TEST_ONLY_BROWSER_RESULTS = (Join-Path $PWD '.audit/browser-entry-run/results')
+# Set CC_DESK_TEST_ONLY_DATA_HOST / DATA_WASM / DATA_GLUE to exact artifacts
+# from the preceding Host/WASM procedure. Missing inputs fail, never skip.
+node node_modules/@playwright/test/cli.js test --config playwright.remote-browser.config.ts tests/remote-browser/browser-entry.spec.ts --reporter=line
+```
+
+The oracle receives only repository public test TLS material. The WSS bridge
+verifies the public test CA/name; HTTPS assets and browser WebSocket routing
+remain Playwright-controlled. Real Edge, Relay, Host and WASM run with synthetic
+WebAuthn and an in-memory writer. This does not qualify real enrollment,
+browser-native WebPKI/DNS, a deployed launcher, a real CLI, phone behavior or the
+installed application's native approval dialog. Fixture clicks do not bypass or
+replace that real approval gate.
