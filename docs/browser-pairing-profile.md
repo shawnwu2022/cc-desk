@@ -60,3 +60,22 @@ node_modules/.bin/playwright.cmd test --config playwright.remote-browser.config.
 ```
 
 这补充真实 Edge 引擎、WebCrypto handles 与事件循环的行为证据；HTTPS 由测试路由截获，不证明真实 TLS、站点部署或同源模块供应。真实 enrollment、credential/handle 管理与撤销恢复、可信 provider、WebAuthn、Host、网络和实际设备全链验收仍未完成。
+
+## 合成 supplier → Host/WASM 数据回路
+
+`remote/ui-terminal/src/browserData.integration.ts` 现在增加 5 条 supplier 验收。可信 TEST_ONLY 快照由隔离 Host 输出的原生 scope 与固定公开向量独立构造，候选只是另一份待核对输入。只有 `createApprovedBrowserProfileReader` 成功返回，才将其原 handles、pins、trust、grant 与 presenter 交给既有 TLS/grant broker 和 WASM Worker；候选不选择 key，也不会回填供应端记录。
+
+- 匹配路径通过真实编译的 Rust Host、WASM TLS/AppBind/grant、原生 peer 安装和原数据 dispatcher，完成 Snapshot/ACK/Window、InputReceipt、Query、Settle、Cursor，并核对内存 writer 的字节与恰好一次写入。
+- session、run、generation、Host SPKI 任一不匹配，都在 broker/Worker 建立前拒绝；核对零 WebCrypto 签名、零 presenter/WebAuthn 调用、零连接，并确认换 signal 不能让已拒绝的读取成功。
+- 在项目内隔离副本中删除全字段匹配检查，4 条负例均以缺少预期拒绝失败；生产 helper 未被修改。
+
+复用 [Browser data 验收构建与显式 artifact 输入](../remote/BROWSER-PROFILE.md) 的 Host/WASM 命令，设置 `CC_DESK_TEST_ONLY_DATA_HOST`、`CC_DESK_TEST_ONLY_DATA_WASM`、`CC_DESK_TEST_ONLY_DATA_GLUE` 后，从仓库根运行：
+
+```powershell
+# TEMP/TMP/TMPDIR 与构建产物必须指向项目内的隔离审计目录。
+node --experimental-strip-types --test --test-name-pattern=PairingSupplier remote/ui-terminal/src/browserData.integration.ts
+# 完整 data 回归，包含现有取消、重连、不重放与 fencing 场景。
+node --experimental-strip-types --test remote/ui-terminal/src/browserData.integration.ts
+```
+
+该验收使用 Node 的 browser-shaped 平台、公开 TEST_ONLY non-exportable handles、合成 WebAuthn、loopback 直连和内存 writer。它不经过 Relay，也不启动真实 PTY/CLI，不代表真实浏览器网络、站点供应、真实 enrollment、真实设备或 GUI 审批全链验收。生产可信供应和真实设备门禁仍保持未完成。
