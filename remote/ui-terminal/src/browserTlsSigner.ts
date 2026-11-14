@@ -67,6 +67,22 @@ export function createBrowserTlsSignerBroker(profile:BrowserProfile,options:Read
  return broker(p.tlsKey,p.origin,timeoutMs,options.signal,options.setupDeadline);
 }
 
+/** 仅机械适配调用方独立获准的已有 TLS identity；不认可注册 candidate，不授予登记或信任。 */
+export function createBrowserRegistrationTlsSignerBroker(tlsKey:CryptoKey,origin:string,options:Readonly<{
+ /** 原始 setup 绝对截止和撤销信号，不能在重试时刷新。 */
+ setupDeadline:number;signal:AbortSignal;
+}>):BrowserTlsSignerBroker{
+ const algorithm=tlsKey?.algorithm as EcKeyAlgorithm|undefined;
+ if(typeof CryptoKey==='undefined'||!(tlsKey instanceof CryptoKey)||tlsKey.type!=='private'||tlsKey.extractable!==false||algorithm?.name!=='ECDSA'||algorithm.namedCurve!=='P-256'||tlsKey.usages.length!==1||tlsKey.usages[0]!=='sign')throw Error('TLS registration key policy');
+ if(typeof origin!=='string'||!validOrigin(origin))throw Error('TLS registration origin');
+ if(typeof Window==='undefined'||!(globalThis instanceof Window)||globalThis.top!==globalThis.self||!atOrigin(origin)||!globalThis.crypto?.subtle)throw Error('TLS signer window unavailable');
+ isolated();
+ const {setupDeadline,signal}=options,remaining=setupDeadline-now();
+ if(!Number.isFinite(setupDeadline)||remaining<=0||remaining>MAX_WAIT_MS)throw Error('TLS setup deadline');
+ if(typeof AbortSignal==='undefined'||!(signal instanceof AbortSignal)||signal.aborted)throw Error('TLS registration signal closed or unavailable');
+ return broker(tlsKey,origin,Math.ceil(remaining),signal,setupDeadline);
+}
+
 function broker(key:CryptoKey|undefined,origin:string,timeoutMs:number,signal?:AbortSignal,setupDeadline?:number):BrowserTlsSignerBroker{
  const channel=new MessageChannel(),port=channel.port1,shared=new SharedArrayBuffer(SIZE);
  const control=new Int32Array(shared,0,WORDS),output=new Uint8Array(shared,WORDS*4,MAX_DER);

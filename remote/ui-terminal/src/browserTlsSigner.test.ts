@@ -4,6 +4,7 @@ import {Worker} from 'node:worker_threads';
 import {once,on} from 'node:events';
 import {createPublicKey,verify} from 'node:crypto';
 import {createBrowserTlsSignerBroker,createBrowserTlsWorkerSigner} from './browserTlsSigner.ts';
+import * as signerApi from './browserTlsSigner.ts';
 
 const origin='https://desk.invalid';
 const message=()=>new Uint8Array([...new Uint8Array(64).fill(32),...new TextEncoder().encode('TLS 1.3, client CertificateVerify'),0,...new Uint8Array(32).fill(7)]);
@@ -11,9 +12,9 @@ const message=()=>new Uint8Array([...new Uint8Array(64).fill(32),...new TextEnco
 const b64=(hex:string)=>Buffer.from(hex,'hex').toString('base64url');
 const jwk={kty:'EC',crv:'P-256',x:b64('6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296'),y:b64('4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5'),d:b64('00'.repeat(31)+'01')};
 const publicKey=createPublicKey({key:{kty:jwk.kty,crv:jwk.crv,x:jwk.x,y:jwk.y},format:'jwk'});
+const tlsKey=()=>crypto.subtle.importKey('jwk',jwk,{name:'ECDSA',namedCurve:'P-256'},false,['sign']);
 async function profile(){
- const importKey=()=>crypto.subtle.importKey('jwk',jwk,{name:'ECDSA',namedCurve:'P-256'},false,['sign']);
- return {origin,rpId:'desk.invalid',credentialId:new Uint8Array([7]),tlsKey:await importKey(),grantKey:await importKey()};
+ return {origin,rpId:'desk.invalid',credentialId:new Uint8Array([7]),tlsKey:await tlsKey(),grantKey:await tlsKey()};
 }
 function platform(){
  const saved=new Map<string,PropertyDescriptor|undefined>();
@@ -31,6 +32,71 @@ async function fixture(timeoutMs=2000,isolated=true,signal?:AbortSignal){
 }
 async function reply(worker:Worker,command:unknown){const response=once(worker,'message');worker.postMessage(command);return (await response)[0];}
 const pause=()=>new Promise<void>(resolve=>setImmediate(resolve));
+
+test('BrowserRegistrationTls_ExistingKeyWithoutCredential_012',async()=>{
+ const restore=platform();
+ try{
+  assert.equal(typeof signerApi.createBrowserRegistrationTlsSignerBroker,'function');
+  const key=await tlsKey(),signal=new AbortController().signal;
+  const setupDeadline=performance.timeOrigin+performance.now()+2000;
+  const broker=signerApi.createBrowserRegistrationTlsSignerBroker(key,origin,{setupDeadline,signal});
+  try{
+   assert.equal(broker.worker.origin,origin);assert.equal(broker.worker.setupDeadline,setupDeadline);
+   assert.ok(broker.worker.timeoutMs>0&&broker.worker.timeoutMs<=2000);
+   assert.equal('credentialId' in broker,false);assert.equal('tlsKey' in broker.worker,false);
+  }finally{broker.close();await broker.waitClosed();broker.worker.port.close();}
+ }finally{restore();}
+});
+
+test('BrowserRegistrationTls_AdmissionRejectsMissingOrWrongInputs_013',async()=>{
+ const restore=platform();
+ try{
+  assert.equal(typeof signerApi.createBrowserRegistrationTlsSignerBroker,'function');
+  const key=await tlsKey(),signal=new AbortController().signal;
+  const options=()=>({setupDeadline:performance.timeOrigin+performance.now()+2000,signal});
+  const extractable=await crypto.subtle.importKey('jwk',jwk,{name:'ECDSA',namedCurve:'P-256'},true,['sign']);
+  const publicOnly=await crypto.subtle.importKey('jwk',{kty:jwk.kty,crv:jwk.crv,x:jwk.x,y:jwk.y},{name:'ECDSA',namedCurve:'P-256'},false,['verify']);
+  const ecdh=await crypto.subtle.importKey('jwk',jwk,{name:'ECDH',namedCurve:'P-256'},false,['deriveBits']);
+  for(const invalid of [undefined,{},extractable,publicOnly,ecdh])assert.throws(()=>signerApi.createBrowserRegistrationTlsSignerBroker(invalid as CryptoKey,origin,options()),/key/i);
+  for(const invalid of ['http://desk.invalid','https://foreign.invalid',origin+'/',origin+'/path',origin+'?x=1',origin+'#x','https://user@desk.invalid'])assert.throws(()=>signerApi.createBrowserRegistrationTlsSignerBroker(key,invalid,options()),/origin|window/i);
+  for(const setupDeadline of [undefined,0,NaN,Infinity,performance.timeOrigin+performance.now()-1,performance.timeOrigin+performance.now()+11000])assert.throws(()=>signerApi.createBrowserRegistrationTlsSignerBroker(key,origin,{...options(),setupDeadline:setupDeadline as number}),/deadline/i);
+  for(const badSignal of [undefined,{},AbortSignal.abort()])assert.throws(()=>signerApi.createBrowserRegistrationTlsSignerBroker(key,origin,{...options(),signal:badSignal as AbortSignal}),/signal|closed/i);
+  for(const [name,value]of Object.entries({isSecureContext:false,crossOriginIsolated:false,top:{}})){
+   const saved=Object.getOwnPropertyDescriptor(globalThis,name)!;
+   try{Object.defineProperty(globalThis,name,{configurable:true,value});assert.throws(()=>signerApi.createBrowserRegistrationTlsSignerBroker(key,origin,options()),/window|isolation/i);}
+   finally{Object.defineProperty(globalThis,name,saved);}
+  }
+ }finally{restore();}
+});
+
+test('BrowserRegistrationTls_AbortClosesIdleBroker_014',async()=>{
+ const restore=platform();
+ try{
+  assert.equal(typeof signerApi.createBrowserRegistrationTlsSignerBroker,'function');
+  const key=await tlsKey(),controller=new AbortController();
+  const broker=signerApi.createBrowserRegistrationTlsSignerBroker(key,origin,{setupDeadline:performance.timeOrigin+performance.now()+2000,signal:controller.signal});
+  try{controller.abort();await broker.waitClosed();assert.equal(Atomics.load(new Int32Array(broker.worker.shared),0),1);}
+  finally{broker.close();broker.worker.port.close();}
+ }finally{restore();}
+});
+
+for(const mode of ['enrolled','registration'] as const)test(`BrowserTls_SessionOutlivesSetup_${mode}_015`,async()=>{
+ const restore=platform(),key=await tlsKey(),p=mode==='enrolled'?await profile():undefined;
+ const setupDeadline=performance.timeOrigin+performance.now()+600,signal=new AbortController().signal;
+ const broker=p?createBrowserTlsSignerBroker(p,{timeoutMs:600,setupDeadline,signal}):signerApi.createBrowserRegistrationTlsSignerBroker(key,origin,{setupDeadline,signal});
+ const worker=new Worker(new URL('./browserTlsSigner.worker.fixture.ts',import.meta.url),{workerData:{bridge:broker.worker},transferList:[broker.worker.port as never]});
+ const subtle=crypto.subtle,original=subtle.sign;let calls=0;
+ subtle.sign=(...args:Parameters<SubtleCrypto['sign']>)=>{calls++;return original.apply(subtle,args);};
+ try{
+  assert.equal((await once(worker,'message'))[0].ready,true);
+  assert.ok((await reply(worker,{message:message()})).signature);
+  let retired=false;void broker.waitClosed().then(()=>{retired=true;});
+  await new Promise(resolve=>setTimeout(resolve,Math.max(0,setupDeadline-performance.timeOrigin-performance.now()+20)));
+  assert.equal(Atomics.load(new Int32Array(broker.worker.shared),0),0);assert.equal(retired,false);
+  assert.match((await reply(worker,{message:message()})).error,/setup timeout/i);
+  await broker.waitClosed();assert.equal(retired,true);assert.equal(calls,1);
+ }finally{broker.close();await broker.waitClosed();await worker.terminate();subtle.sign=original;restore();}
+});
 
 test('BrowserTls_WorkerRealSubtleCryptoDerAndReuse_001',async()=>{
  const restore=platform();const f=await fixture();
