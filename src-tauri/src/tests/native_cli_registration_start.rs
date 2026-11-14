@@ -10,7 +10,25 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 #[ignore = "TEST_ONLY requires actual Edge Worker / WASM client"]
 async fn NativeRegistration_StartOracle_904() {
     let mode = std::env::var("CC_DESK_TEST_ONLY_NATIVE_REGISTRATION_MODE").unwrap();
-    assert!(["start-yes", "start-deny", "start-cancel"].contains(&mode.as_str()));
+    assert!([
+        "start-yes",
+        "start-deny",
+        "start-cancel",
+        "start-remember",
+        "start-remember-deny",
+        "start-remember-cancel"
+    ]
+    .contains(&mode.as_str()));
+    let remember = mode.starts_with("start-remember");
+    let native_store_dir = tempfile::Builder::new()
+        .prefix("native-remember-")
+        .tempdir_in(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap()
+                .join(".audit"),
+        )
+        .unwrap();
     let transports = Arc::new(TerminalTransports::new());
     let supervisor = Arc::new(NativeRunSupervisor::new(transports.clone()));
     let mut fixture = Fixture::with_runtime_environment("input", supervisor, transports, true);
@@ -58,7 +76,7 @@ async fn NativeRegistration_StartOracle_904() {
     let host_spki = key_bytes(4);
     let mut relay_spki = key_bytes(1)[..26].to_vec();
     relay_spki.extend(network_relay_material(true).1);
-    let candidate = serde_json::json!({"version":1,"address":relay.address.to_string(),"origin":relay.origin,"relayMode":"legacyV1","tunnel":"03".repeat(16),"relayId":"01".repeat(16),"profileId":"07".repeat(16),"profileRevision":"9","endpoint":{"keyName":"TEST_ONLY_ENDPOINT","spki":hex(&host_spki)},"relay":{"keyName":"TEST_ONLY_RELAY","spki":hex(&relay_spki)},"principal":"09".repeat(32),"activation":"02".repeat(32),"hostKeyEpoch":"1","clientKeyEpoch":"1","policyEpoch":"1","issuerEpoch":"1","incarnation":"1","browser":{"origin":"https://desk.invalid","rpId":"desk.invalid","userHandle":"07".repeat(32),"tlsSpki":hex(&key_bytes(1)),"grantSpki":hex(&key_bytes(2)),"relaySpki":hex(&key_bytes(3)),"relayId":"02".repeat(16),"databaseName":"TEST_ONLY.registration-chain","expectedRevision":null,"wasmUrl":"https://desk.invalid/fixture_bg.wasm","glueUrl":"https://desk.invalid/fixture_bg.js"}});
+    let candidate = serde_json::json!({"remember":remember,"version":1,"address":relay.address.to_string(),"origin":relay.origin,"relayMode":"legacyV1","tunnel":"03".repeat(16),"relayId":"01".repeat(16),"profileId":"07".repeat(16),"profileRevision":"9","endpoint":{"keyName":"TEST_ONLY_ENDPOINT","spki":hex(&host_spki)},"relay":{"keyName":"TEST_ONLY_RELAY","spki":hex(&relay_spki)},"principal":"09".repeat(32),"activation":"02".repeat(32),"hostKeyEpoch":"1","clientKeyEpoch":"1","policyEpoch":"1","issuerEpoch":"1","incarnation":"1","browser":{"origin":"https://desk.invalid","rpId":"desk.invalid","userHandle":"07".repeat(32),"tlsSpki":hex(&key_bytes(1)),"grantSpki":hex(&key_bytes(2)),"relaySpki":hex(&key_bytes(3)),"relayId":"02".repeat(16),"databaseName":"TEST_ONLY.registration-chain","expectedRevision":null,"wasmUrl":"https://desk.invalid/fixture_bg.wasm","glueUrl":"https://desk.invalid/fixture_bg.js"}});
     let mut frozen = FrozenRegistrationStart::parse(&candidate.to_string()).unwrap();
     let mut endpoint_scalar = [0; 32];
     endpoint_scalar[31] = 4;
@@ -87,9 +105,33 @@ async fn NativeRegistration_StartOracle_904() {
             controller.clone(),
             Some(mode != "start-deny"),
             true,
+            if remember {
+                Some(crate::remote_host_controller::startup::TestPersistence {
+                    store: crate::remote_native_pairing_store::tests::synthetic_file_store(
+                        native_store_dir.path(),
+                    )
+                    .unwrap(),
+                    yes: if mode == "start-remember-cancel" {
+                        None
+                    } else {
+                        Some(mode == "start-remember")
+                    },
+                })
+            } else {
+                None
+            },
         )
         .await
         .unwrap();
+    if mode == "start-remember-cancel" {
+        let end = Instant::now() + Duration::from_secs(30);
+        while !matches!(handle.reply(), RegistrationReply::PendingNativePersistence) {
+            assert!(Instant::now() < end);
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+        document.started(&url);
+        document.finished(&url);
+    }
     if mode == "start-cancel" {
         let end = Instant::now() + Duration::from_secs(5);
         loop {
@@ -154,6 +196,7 @@ async fn NativeRegistration_StartOracle_904() {
                 controller.clone(),
                 Some(false),
                 true,
+                None,
             )
             .await
             .unwrap();
@@ -177,7 +220,29 @@ async fn NativeRegistration_StartOracle_904() {
     );
     let outcome = handle.reply();
     let installed = matches!(outcome, RegistrationReply::InstalledLocked { .. });
-    assert_eq!(installed, mode == "start-yes", "{outcome:?}");
+    assert_eq!(
+        installed,
+        mode == "start-yes" || mode == "start-remember",
+        "{outcome:?}"
+    );
+    let native_remembered = mode == "start-remember";
+    if remember {
+        let stored = crate::remote_native_pairing_store::tests::reopen_synthetic_file_store(
+            native_store_dir.path(),
+        )
+        .unwrap();
+        if native_remembered {
+            assert_eq!(stored.load().unwrap().devices.len(), 1);
+        } else {
+            assert_eq!(
+                stored.load(),
+                Err(crate::remote_native_pairing_store::StoreError::Missing)
+            );
+        }
+    }
+    if mode == "start-remember-deny" {
+        assert_eq!(outcome, RegistrationReply::NativeStoreDeclined);
+    }
     assert_eq!(controller.test_has_configuration(), installed);
     let counts = opened.each_ref().map(|n| n.load(Ordering::Acquire));
     assert_eq!(counts, if mode == "start-deny" { [0, 0] } else { [1, 1] });
@@ -186,7 +251,7 @@ async fn NativeRegistration_StartOracle_904() {
         host.test_activation_observation().is_none(),
         "registration must not consume the Host slot"
     );
-    if mode != "start-cancel" {
+    if mode != "start-cancel" && mode != "start-remember-cancel" {
         let inspect = fixture
             .supervisor
             .admit_remote_run(
@@ -208,9 +273,230 @@ async fn NativeRegistration_StartOracle_904() {
     drop(handle);
     drop(controller);
     assert!(cleanup.close());
-    emit(&serde_json::to_vec(&serde_json::json!({"kind":"finished","mode":mode,"nativeCandidateInstalled":installed,"locked":true,"hostNetworkAttempts":0,"hostKeyOpens":counts.iter().sum::<usize>(),"registrationKeyOpens":counts,"registrationTlsConnections":if installed {Some(1)}else if mode=="start-deny" {Some(0)}else{None},"actualRelay":true,"relayMode":"explicit-legacy","nativeTransportRetired":true,"nativeKeysRetired":true,"nativeStartupOwner":true,"nativeElapsedMs":start.elapsed().as_millis(),"acknowledged":installed,"receipt":outcome,"genuineGuiApproval":false,"persistentTrust":false})).unwrap());
+    emit(&serde_json::to_vec(&serde_json::json!({"kind":"finished","mode":mode,"nativeCandidateInstalled":installed,"locked":true,"hostNetworkAttempts":0,"hostKeyOpens":counts.iter().sum::<usize>(),"registrationKeyOpens":counts,"registrationTlsConnections":if installed {Some(1)}else if mode=="start-deny" {Some(0)}else{None},"actualRelay":true,"relayMode":"explicit-legacy","nativeTransportRetired":true,"nativeKeysRetired":true,"nativeStartupOwner":true,"nativeRemembered":native_remembered,"nativePairingReloadLocked":native_remembered,"nativeElapsedMs":start.elapsed().as_millis(),"acknowledged":installed,"receipt":outcome,"genuineGuiApproval":false,"persistentTrust":false})).unwrap());
     let mut permission = String::new();
     std::io::stdin().read_line(&mut permission).unwrap();
     assert_eq!(permission.trim(), "TEST_ONLY_BROWSER_RETIRED");
     assert!(relay.close().await);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn NativePairingProduct_FreshRunLockedAndForgetFences_023() {
+    use crate::{
+        remote_host_approval::NativeForgetApproval,
+        remote_native_pairing_store::{
+            tests::{record, reopen_synthetic_file_store, synthetic_file_store},
+            Mutation,
+        },
+        remote_pairing_product as product,
+    };
+    let root = tempfile::Builder::new()
+        .prefix("pairing-product-")
+        .tempdir_in(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap()
+                .join(".audit"),
+        )
+        .unwrap();
+    // 公开测试点与synthetic sealer，绝不访问真实 DPAPI 或已有 key。
+    let store = synthetic_file_store(root.path()).unwrap();
+    struct InitialAuthorization;
+    impl crate::remote_native_pairing_store::MutationAuthorization for InitialAuthorization {
+        fn check(
+            &mut self,
+            _: &crate::remote_native_pairing_store::StoreTarget,
+            m: &Mutation,
+        ) -> Result<(), crate::remote_native_pairing_store::StoreError> {
+            assert!(matches!(m, Mutation::Initialize { .. }));
+            Ok(())
+        }
+    }
+    let snapshot = store
+        .apply(
+            Mutation::Initialize {
+                store_id: uuid::Uuid::new_v4().to_string(),
+                record: record(),
+            },
+            &mut InitialAuthorization,
+        )
+        .unwrap();
+    drop(store);
+    let mut old: Option<FrozenHostApproval> = None;
+    let mut old_scope = None;
+    for iteration in 0..2 {
+        let transports = Arc::new(TerminalTransports::new());
+        let supervisor = Arc::new(NativeRunSupervisor::new(transports.clone()));
+        let mut fixture = Fixture::with_runtime_environment("input", supervisor, transports, true);
+        let url: tauri::Url = "http://tauri.localhost/".parse().unwrap();
+        let document = crate::cli::document::DocumentAuthority::new(
+            fixture.service.registry().clone(),
+            url.clone(),
+        )
+        .unwrap();
+        let mut resources = tauri::ResourceTable::default();
+        let binding = Arc::new(document.attach(&mut resources).unwrap());
+        document.started(&url);
+        document.finished(&url);
+        fixture.caller = document.test_caller();
+        let host = Arc::new(RemoteHostService::default());
+        let status = fixture.start();
+        let mut cleanup = Cleanup {
+            supervisor: fixture.supervisor.clone(),
+            host: host.clone(),
+            run: status.run.clone(),
+            pin: Some(fixture.supervisor.pin_shutdown(&status.run)),
+            stop: None,
+            proofs: Vec::new(),
+        };
+        let admission = fixture
+            .supervisor
+            .admit_remote_run(
+                fixture
+                    .service
+                    .access(&fixture.caller, &status.run)
+                    .unwrap(),
+                &status.run,
+            )
+            .unwrap();
+        if let Some(previous) = old.take() {
+            assert!(!previous.matches(&admission));
+            assert_ne!(old_scope.take().unwrap(), admission.scope().unwrap());
+        }
+        let store = reopen_synthetic_file_store(root.path()).unwrap();
+        let loaded = store.load().unwrap();
+        assert_eq!(loaded, snapshot);
+        let selection=serde_json::json!({"storeId":loaded.expected.store_id,"revision":loaded.expected.revision.to_string(),"deviceId":record().device_id}).to_string();
+        let selected = product::selected(&loaded, &selection).unwrap();
+        let frozen = product::freeze(&selected, &admission).unwrap();
+        assert!(frozen.matches(&admission));
+        let controller = RemoteHostController::default();
+        controller
+            .install_candidate(&binding, fixture.caller.clone(), &admission, frozen)
+            .unwrap();
+        assert_eq!(
+            controller
+                .current(&binding, &fixture.caller, &admission)
+                .unwrap(),
+            HostControlReply::Locked
+        );
+        assert_eq!(host.test_network_attempts(), 0);
+        old = Some(product::freeze(&selected, &admission).unwrap());
+        old_scope = Some(admission.scope().unwrap());
+        if iteration == 1 {
+            let mutation = Mutation::Forget {
+                expected: loaded.expected.clone(),
+                device_id: record().device_id,
+            };
+            let denied = NativeForgetApproval::test_pending(
+                &binding,
+                &fixture.caller,
+                &admission,
+                store.target(),
+                mutation.clone(),
+            );
+            denied.test_complete(false);
+            assert!(denied
+                .commit(&admission, |_, _| panic!("No must not write"))
+                .unwrap()
+                .is_none());
+            assert!(!denied.pending());
+            let cancelled_id = uuid::Uuid::new_v4().to_string();
+            let cancelled = product::forget_operation(
+                cancelled_id.clone(),
+                1,
+                &binding,
+                &fixture.caller,
+                &admission,
+            )
+            .unwrap();
+            cancelled.cancel();
+            let late = product::forget_operation(
+                cancelled_id.clone(),
+                1,
+                &binding,
+                &fixture.caller,
+                &admission,
+            )
+            .unwrap();
+            assert!(late
+                .show(|| panic!("early cancel must fence late dialog"))
+                .is_err());
+            let operation = product::forget_operation(
+                uuid::Uuid::new_v4().to_string(),
+                2,
+                &binding,
+                &fixture.caller,
+                &admission,
+            )
+            .unwrap();
+            operation
+                .show(|| {
+                    let a = NativeForgetApproval::test_pending(
+                        &binding,
+                        &fixture.caller,
+                        &admission,
+                        store.target(),
+                        mutation.clone(),
+                    );
+                    a.test_complete(true);
+                    Ok(a)
+                })
+                .unwrap();
+            operation.cancel();
+            assert!(matches!(
+                operation.commit(&admission, &store).unwrap(),
+                Some(product::ForgetReply::Declined)
+            ));
+            assert_eq!(store.load().unwrap(), loaded);
+            for sequence in 3..=70 {
+                let op = product::forget_operation(
+                    uuid::Uuid::new_v4().to_string(),
+                    sequence,
+                    &binding,
+                    &fixture.caller,
+                    &admission,
+                )
+                .unwrap();
+                op.cancel();
+            }
+            assert!(product::forget_operation(
+                cancelled_id,
+                1,
+                &binding,
+                &fixture.caller,
+                &admission
+            )
+            .is_err());
+            let approved = NativeForgetApproval::test_pending(
+                &binding,
+                &fixture.caller,
+                &admission,
+                store.target(),
+                mutation,
+            );
+            approved.test_complete(true);
+            assert!(approved
+                .commit(&admission, |m, a| store.apply(m.clone(), a))
+                .unwrap()
+                .is_some());
+            assert!(approved
+                .commit(&admission, |_, _| panic!("one shot"))
+                .unwrap()
+                .is_none());
+            assert!(product::selected(&store.load().unwrap(), &selection).is_err());
+            // Forget 不撤销已经独立冻结的候选，更不接触运行连接。
+            assert!(controller.test_has_configuration());
+            assert_eq!(
+                controller
+                    .current(&binding, &fixture.caller, &admission)
+                    .unwrap(),
+                HostControlReply::Locked
+            );
+        }
+        drop(store);
+        drop(controller);
+        drop(admission);
+        assert!(cleanup.close());
+    }
 }

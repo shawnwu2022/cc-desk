@@ -171,3 +171,106 @@ pub(crate) fn remote_host_discard_candidate(
         runtime.admit_host_candidate_discard(&webview, request.headers(), request.body())?;
     controller.discard_candidate(&binding, &caller, &admission, receipt)
 }
+
+#[cfg(windows)]
+pub(crate) fn remote_pairing_list(
+    webview: Webview,
+    request: Request<'_>,
+    runtime: State<'_, Arc<NativeRuntime>>,
+) -> Result<crate::remote_pairing_product::PairingList, SafeError> {
+    let (binding, caller, admission) =
+        runtime.admit_host_control(&webview, request.headers(), request.body())?;
+    binding.check_admitted(&caller)?;
+    admission.scope()?;
+    let result = crate::remote_pairing_product::list()?;
+    binding.check_admitted(&caller)?;
+    admission.scope()?;
+    Ok(result)
+}
+#[cfg(windows)]
+pub(crate) fn remote_pairing_select(
+    webview: Webview,
+    request: Request<'_>,
+    runtime: State<'_, Arc<NativeRuntime>>,
+    controller: State<'_, Arc<RemoteHostController>>,
+) -> Result<crate::remote_host_configuration::ConfigurationReply, SafeError> {
+    use crate::remote_pairing_product as product;
+    let (binding, caller, admission, text) =
+        runtime.admit_host_configuration(&webview, request.headers(), request.body())?;
+    let store = product::open().map_err(product::store_error)?;
+    store
+        .with_locked_snapshot(|snapshot| {
+            use crate::remote_native_pairing_store::StoreError;
+            let record = product::selected(&snapshot, &text).map_err(|_| StoreError::Conflict)?;
+            let frozen =
+                product::freeze(&record, &admission).map_err(|_| StoreError::Unauthorized)?;
+            let receipt = controller
+                .install_candidate(&binding, caller, &admission, frozen)
+                .map_err(|_| StoreError::Unauthorized)?;
+            Ok(
+                crate::remote_host_configuration::ConfigurationReply::Configured {
+                    receipt: receipt.to_string(),
+                },
+            )
+        })
+        .map_err(product::store_error)
+}
+#[cfg(windows)]
+pub(crate) async fn remote_pairing_forget(
+    webview: Webview,
+    request: Request<'_>,
+    runtime: State<'_, Arc<NativeRuntime>>,
+) -> Result<crate::remote_pairing_product::ForgetReply, SafeError> {
+    use crate::{remote_native_pairing_store::Mutation, remote_pairing_product as product};
+    use tauri::Manager;
+    let (binding, caller, admission, text) =
+        runtime.admit_host_configuration(&webview, request.headers(), request.body())?;
+    let (request_id, sequence, selection) = product::forget_request(&text)?;
+    let operation = product::forget_operation(request_id, sequence, &binding, &caller, &admission)?;
+    let store = product::open().map_err(product::store_error)?;
+    let snapshot = store.load().map_err(product::store_error)?;
+    let record = product::selected(&snapshot, &selection)?;
+    let mutation = Mutation::Forget {
+        expected: snapshot.expected,
+        device_id: record.device_id.clone(),
+    };
+    operation.show(|| {
+        crate::remote_host_approval::NativeForgetApproval::show(
+            webview.app_handle(),
+            &webview.window(),
+            &binding,
+            &caller,
+            &admission,
+            store.target(),
+            mutation,
+            &record,
+        )
+    })?;
+    loop {
+        if binding.check_admitted(&caller).is_err() || admission.scope().is_err() {
+            operation.cancel();
+            return Err(crate::cli::profiles::error("FORBIDDEN"));
+        }
+        if let Some(reply) = operation.commit(&admission, &store)? {
+            return Ok(reply);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
+#[cfg(windows)]
+pub(crate) fn remote_pairing_forget_cancel(
+    webview: Webview,
+    request: Request<'_>,
+    runtime: State<'_, Arc<NativeRuntime>>,
+) -> Result<(), SafeError> {
+    use crate::remote_pairing_product as product;
+    let (binding, caller, admission, text) =
+        runtime.admit_host_configuration(&webview, request.headers(), request.body())?;
+    let (id, sequence) = product::cancel_request(&text)?;
+    match product::forget_operation(id, sequence, &binding, &caller, &admission) {
+        Ok(operation) => operation.cancel(),
+        Err(e) if e.code == "REMOTE_NATIVE_STORE_CANCELLED" => (),
+        Err(e) => return Err(e),
+    }
+    Ok(())
+}

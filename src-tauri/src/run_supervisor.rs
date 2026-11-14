@@ -2158,6 +2158,16 @@ impl Drop for NativeProducerCheckout {
 }
 #[cfg(feature = "remote-host")]
 impl NativeRunNetworkOrigin {
+    pub(crate) fn is_live(&self) -> bool {
+        self.resource.upgrade().is_some_and(|resource| {
+            NativeRunAuthority {
+                state: self.state.clone(),
+                resource: self.resource.clone(),
+            }
+            .check(&resource)
+            .is_ok()
+        })
+    }
     pub(crate) fn matches(&self, admission: &NativeRunAdmission) -> bool {
         self.run == admission.pin.run
             && Weak::ptr_eq(&self.supervisor, &admission.pin.origin)

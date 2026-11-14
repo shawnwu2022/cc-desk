@@ -84,8 +84,14 @@ fn key(two: bool) -> Vec<u8> {
         "3059301306072a8648ce3d020106082a8648ce3d03010703420004{point}"
     ))
 }
-fn record() -> PublicDeviceRecord {
+pub(crate) fn record() -> PublicDeviceRecord {
     PublicDeviceRecord {
+        epochs: PublicEpochs {
+            host_key: 2,
+            client_key: 3,
+            policy: 4,
+            issuer: 5,
+        },
         device_id: "00000000-0000-4000-8000-000000000001".into(),
         native: NativePublicIdentity {
             profile_id: [1; 16],
@@ -244,7 +250,7 @@ fn NativePairing_StrictEnvelopeAndBounds_003() {
     let text = String::from_utf8(TestSealer.unseal(&bytes).unwrap()).unwrap();
     for malformed in [
         text.replacen("\"domain\":", "\"unknown\":1,\"domain\":", 1),
-        text.replacen("\"schema\":1", "\"schema\":1,\"schema\":1", 1),
+        text.replacen("\"schema\":2", "\"schema\":2,\"schema\":2", 1),
         text.replacen(DOMAIN, "wrong-domain", 1),
         text.replacen("\"revision\":1", "\"revision\":2", 1),
         text.replacen("\"active\"", "\"approved\"", 1),
@@ -508,4 +514,74 @@ fn NativePairing_InitializeRechecksAtSyscall_011() {
         "revocation must precede the actual syscall"
     );
     assert_eq!(store.load(), Err(StoreError::Missing));
+}
+
+#[test]
+fn NativePairing_ProductProjectionStrictSelection_020() {
+    let dir = directory();
+    let store = synthetic_file_store(dir.path()).unwrap();
+    let saved = apply(&store, initial()).unwrap();
+    drop(store);
+    let reopened = reopen_synthetic_file_store(dir.path()).unwrap();
+    let loaded = reopened.load().unwrap();
+    let request=serde_json::json!({"storeId":saved.expected.store_id,"revision":"1","deviceId":record().device_id}).to_string();
+    let selected = crate::remote_pairing_product::selected(&loaded, &request).unwrap();
+    assert_eq!(selected, record());
+    let projection =
+        serde_json::to_value(crate::remote_pairing_product::project(Some(loaded.clone()))).unwrap();
+    assert_eq!(projection["state"], "Locked");
+    assert_eq!(projection["devices"].as_array().unwrap().len(), 1);
+    for invalid in [
+        request.replace("\"revision\":\"1\"", "\"revision\":\"01\""),
+        request.replacen('{', "{\"scope\":{},", 1),
+        request.replacen('{', "{\"revision\":\"1\",", 1),
+    ] {
+        assert!(crate::remote_pairing_product::selected(&loaded, &invalid).is_err());
+    }
+    let forgotten = apply(
+        &reopened,
+        Mutation::Forget {
+            expected: loaded.expected,
+            device_id: record().device_id,
+        },
+    )
+    .unwrap();
+    assert!(crate::remote_pairing_product::selected(&forgotten, &request).is_err());
+    assert_eq!(
+        serde_json::to_value(crate::remote_pairing_product::project(Some(forgotten))).unwrap()
+            ["devices"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+}
+#[test]
+fn NativePairing_LegacySchemaNeverMigrates_021() {
+    let dir = directory();
+    let store = synthetic_file_store(dir.path()).unwrap();
+    apply(&store, initial()).unwrap();
+    let path = data_path(dir.path());
+    drop(store);
+    let original = std::fs::read(&path).unwrap();
+    let legacy = String::from_utf8(original)
+        .unwrap()
+        .replace("\"schema\":2", "\"schema\":1");
+    std::fs::write(&path, &legacy).unwrap();
+    let reopened = reopen_synthetic_file_store(dir.path()).unwrap();
+    assert_eq!(reopened.load(), Err(StoreError::Invalid));
+    assert_eq!(std::fs::read(&path).unwrap(), legacy.as_bytes());
+}
+#[test]
+fn NativePairing_MissingLeaseNeverRecreated_022() {
+    let dir = directory();
+    let store = synthetic_file_store(dir.path()).unwrap();
+    apply(&store, initial()).unwrap();
+    drop(store);
+    let lease = dir.path().join("remote-pairings-v1/control.lock");
+    let backup = dir.path().join("remote-pairings-v1/control.moved");
+    std::fs::rename(&lease, &backup).unwrap();
+    assert!(reopen_synthetic_file_store(dir.path()).is_err());
+    assert!(!lease.exists());
+    assert!(backup.exists());
 }

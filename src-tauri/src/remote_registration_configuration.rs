@@ -38,6 +38,8 @@ struct BrowserRequest {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Candidate {
+    #[serde(default)]
+    remember: bool,
     version: u8,
     address: String,
     origin: String,
@@ -76,6 +78,9 @@ fn invalid() -> SafeError {
     error("REMOTE_HOST_CONFIGURATION")
 }
 impl FrozenRegistrationStart {
+    pub(crate) fn remember(&self) -> bool {
+        self.candidate.remember
+    }
     pub(crate) fn parse(text: &str) -> Result<Self, SafeError> {
         let anchor = Instant::now();
         if text.len() > 16384 {

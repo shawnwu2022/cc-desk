@@ -69,11 +69,20 @@ pub(crate) struct PublicRoute {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct PublicDeviceRecord {
+    pub(crate) epochs: PublicEpochs,
     pub(crate) device_id: String,
     pub(crate) native: NativePublicIdentity,
     pub(crate) browser: BrowserPublicIdentity,
     pub(crate) route: PublicRoute,
     pub(crate) principal: [u8; 32],
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct PublicEpochs {
+    pub(crate) host_key: u64,
+    pub(crate) client_key: u64,
+    pub(crate) policy: u64,
+    pub(crate) issuer: u64,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -194,13 +203,19 @@ impl<B: Backend, S: Sealer> PairingStore<B, S> {
         self.target.clone()
     }
     pub(crate) fn load(&self) -> Result<LockedSnapshot> {
+        self.with_locked_snapshot(Ok)
+    }
+    pub(crate) fn with_locked_snapshot<T>(
+        &self,
+        work: impl FnOnce(LockedSnapshot) -> Result<T>,
+    ) -> Result<T> {
         let poison = self.poisoned.lock();
         if *poison {
             return Err(StoreError::Poisoned);
         }
         let mut tx = self.backend.begin()?;
         let bytes = tx.read()?.ok_or(StoreError::Missing)?;
-        Ok(snapshot(self.decode(&bytes)?))
+        work(snapshot(self.decode(&bytes)?))
     }
     pub(crate) fn apply<A: MutationAuthorization + ?Sized>(
         &self,
@@ -223,7 +238,7 @@ impl<B: Backend, S: Sealer> PairingStore<B, S> {
                 uuid_text(store_id)?;
                 record.validate()?;
                 Document {
-                    schema: 1,
+                    schema: 2,
                     domain: DOMAIN.into(),
                     store_id: store_id.clone(),
                     revision: 1,
@@ -362,7 +377,7 @@ fn key_name(value: &str) -> Result<()> {
     Ok(())
 }
 fn validate_document(doc: &Document) -> Result<()> {
-    if doc.schema != 1
+    if doc.schema != 2
         || doc.domain != DOMAIN
         || doc.revision == 0
         || doc.devices.is_empty()
@@ -395,7 +410,14 @@ impl PublicDeviceRecord {
         let r = &self.route;
         key_name(&n.endpoint_key_name)?;
         key_name(&n.relay_key_name)?;
-        if n.profile_id == [0; 16]
+        if [
+            self.epochs.host_key,
+            self.epochs.client_key,
+            self.epochs.policy,
+            self.epochs.issuer,
+        ]
+        .contains(&0)
+            || n.profile_id == [0; 16]
             || n.profile_revision == 0
             || n.endpoint_key_name == n.relay_key_name
             || n.endpoint_spki == n.relay_spki

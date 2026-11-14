@@ -24,9 +24,23 @@ pub(crate) enum RegistrationReply {
     Connecting,
     Verifying,
     PendingBrowserApproval,
-    InstalledLocked { receipt: String },
-    DeliveryUnconfirmed { receipt: String },
-    RetirementUnknown { receipt: Option<String> },
+    PendingNativePersistence,
+    NativeStoreDeclined,
+    NativeStoreFailed,
+    NativeStoreUnknown,
+    NativeStoredRegistrationIncomplete,
+    InstalledLocked {
+        receipt: String,
+        remembered: bool,
+    },
+    DeliveryUnconfirmed {
+        receipt: String,
+        remembered: bool,
+    },
+    RetirementUnknown {
+        receipt: Option<String>,
+        remembered: bool,
+    },
     Cancelled,
     Failed,
     Unknown,
@@ -34,7 +48,11 @@ pub(crate) enum RegistrationReply {
 fn settle_failure(reply: &mut RegistrationReply, stopped: bool, known: bool) {
     if matches!(
         reply,
-        RegistrationReply::DeliveryUnconfirmed { .. }
+        RegistrationReply::NativeStoreDeclined
+            | RegistrationReply::NativeStoreFailed
+            | RegistrationReply::NativeStoreUnknown
+            | RegistrationReply::NativeStoredRegistrationIncomplete
+            | RegistrationReply::DeliveryUnconfirmed { .. }
             | RegistrationReply::InstalledLocked { .. }
             | RegistrationReply::RetirementUnknown { .. }
     ) {
@@ -73,6 +91,7 @@ struct Attempt {
     commit: AttemptCommitGate,
     channel_cancel: cc_desk_remote_security::CancelHandle,
     reply: Mutex<RegistrationReply>,
+    remembered: AtomicBool,
     task: tokio::sync::Mutex<Option<tauri::async_runtime::JoinHandle<bool>>>,
     joined: AtomicU8,
     #[cfg(test)]
@@ -81,7 +100,7 @@ struct Attempt {
 enum BrowserPrompt {
     Native(Box<(tauri::AppHandle, tauri::Window)>),
     #[cfg(test)]
-    Test(bool),
+    Test(bool, Option<TestPersistence>),
 }
 impl Attempt {
     fn stopped(&self) -> bool {
@@ -96,12 +115,15 @@ impl Attempt {
     fn unknown(&self) {
         let mut reply = self.reply.lock();
         let receipt = match &*reply {
-            RegistrationReply::InstalledLocked { receipt }
-            | RegistrationReply::DeliveryUnconfirmed { receipt } => Some(receipt.clone()),
-            RegistrationReply::RetirementUnknown { receipt } => receipt.clone(),
+            RegistrationReply::InstalledLocked { receipt, .. }
+            | RegistrationReply::DeliveryUnconfirmed { receipt, .. } => Some(receipt.clone()),
+            RegistrationReply::RetirementUnknown { receipt, .. } => receipt.clone(),
             _ => None,
         };
-        *reply = RegistrationReply::RetirementUnknown { receipt };
+        *reply = RegistrationReply::RetirementUnknown {
+            receipt,
+            remembered: self.remembered.load(Ordering::Acquire),
+        };
     }
     async fn join(&self) -> bool {
         let mut slot = self.task.lock().await;
@@ -182,6 +204,7 @@ impl RegistrationCustody {
             commit: AttemptCommitGate::default(),
             channel_cancel,
             reply: Mutex::new(RegistrationReply::PendingKeyApproval),
+            remembered: AtomicBool::new(false),
             task: tokio::sync::Mutex::new(None),
             joined: AtomicU8::new(0),
             #[cfg(test)]
@@ -220,6 +243,7 @@ impl RegistrationCustody {
         controller: Arc<RemoteHostController>,
         first_yes: Option<bool>,
         browser_yes: bool,
+        persistence: Option<TestPersistence>,
     ) -> Result<TestRegistrationHandle, SafeError> {
         RemoteHostController::authenticate(&binding, &caller, &admission)?;
         self.reap_finished().await;
@@ -252,6 +276,7 @@ impl RegistrationCustody {
             commit: AttemptCommitGate::default(),
             channel_cancel,
             reply: Mutex::new(RegistrationReply::PendingKeyApproval),
+            remembered: AtomicBool::new(false),
             task: tokio::sync::Mutex::new(None),
             joined: AtomicU8::new(0),
             loopback: true,
@@ -265,7 +290,7 @@ impl RegistrationCustody {
                 admission,
                 reservation,
                 controller,
-                BrowserPrompt::Test(browser_yes),
+                BrowserPrompt::Test(browser_yes, persistence),
                 token,
             )
             .await
@@ -375,7 +400,7 @@ async fn run(
     admission: NativeRunAdmission,
     reservation: ActivationReservation,
     controller: Arc<RemoteHostController>,
-    prompt: BrowserPrompt,
+    mut prompt: BrowserPrompt,
     token: cc_desk_remote_security::CancelToken,
 ) -> bool {
     let mut tunnel = None;
@@ -396,9 +421,10 @@ async fn run(
         };
         let frozen = permit.frozen;
         let end = frozen.end;
+        let signing_token = permit.signing.token();
         let check = || -> Result<(), SafeError> {
             attempt.identity.check(&binding, &caller, &admission)?;
-            if attempt.stopped() || Instant::now() >= end || permit.signing.token().is_revoked() {
+            if attempt.stopped() || Instant::now() >= end || signing_token.is_revoked() {
                 Err(error("REMOTE_HOST_LOCKED"))
             } else {
                 Ok(())
@@ -509,10 +535,68 @@ async fn run(
             NativeRegistrationSession::new(owner, channel, &binding, &caller, &admission)?;
         *attempt.reply.lock() = RegistrationReply::Verifying;
         session.verify(&binding, &caller, &admission).await?;
-        let request = frozen.installation(
+        let mut request = frozen.installation(
             &session.verified_binding(&binding, &caller, &admission)?,
             &admission,
         )?;
+        if frozen.remember() {
+            let store = match &mut prompt {
+                BrowserPrompt::Native(native) => {
+                    let (app, window) = native.as_ref();
+                    let (store, target) = crate::remote_pairing_product::remember_target()
+                        .map_err(|e| {
+                            *attempt.reply.lock() = RegistrationReply::NativeStoreFailed;
+                            crate::remote_pairing_product::store_error(e)
+                        })?;
+                    session.request_native_persistence(
+                        &binding, &caller, &admission, request.0, target, app, window,
+                    )?;
+                    PersistenceStore::Native(store)
+                }
+                #[cfg(test)]
+                BrowserPrompt::Test(_, persistence) => {
+                    let p = persistence
+                        .take()
+                        .ok_or_else(|| error("REMOTE_NATIVE_STORE_FAILED"))?;
+                    let target = crate::remote_pairing_product::persistence_target(&p.store)
+                        .map_err(crate::remote_pairing_product::store_error)?;
+                    let a = session.test_request_native_persistence(
+                        &binding, &caller, &admission, request.0, target,
+                    )?;
+                    if let Some(yes) = p.yes {
+                        a.test_complete(yes);
+                    }
+                    PersistenceStore::Test(p.store)
+                }
+            };
+            *attempt.reply.lock() = RegistrationReply::PendingNativePersistence;
+            loop {
+                check()?;
+                match attempt.commit.commit(|| {
+                    session.persist_native(&binding, &caller, &admission, |m, a| store.apply(m, a))
+                }) {
+                    Ok(Some((host, _))) => {
+                        attempt.remembered.store(true, Ordering::Release);
+                        request.0 = host;
+                        break;
+                    }
+                    Ok(None) if session.native_persistence_pending() => {}
+                    Ok(None) => {
+                        *attempt.reply.lock() = RegistrationReply::NativeStoreDeclined;
+                        return Err(error("REMOTE_NATIVE_STORE_DECLINED"));
+                    }
+                    Err(e) => {
+                        *attempt.reply.lock() = if e.code == "REMOTE_NATIVE_STORE_COMMIT_UNKNOWN" {
+                            RegistrationReply::NativeStoreUnknown
+                        } else {
+                            RegistrationReply::NativeStoreFailed
+                        };
+                        return Err(e);
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }
         match prompt {
             BrowserPrompt::Native(native) => {
                 let (app, window) = *native;
@@ -521,7 +605,7 @@ async fn run(
                 )?;
             }
             #[cfg(test)]
-            BrowserPrompt::Test(yes) => {
+            BrowserPrompt::Test(yes, _) => {
                 let approval = session.test_request_browser_installation(
                     &binding, &caller, &admission, request.0, request.1,
                 )?;
@@ -547,12 +631,16 @@ async fn run(
         let receipt=match installed.outcome(){cc_desk_remote_security::registration_channel::RegistrationOutcome::BrowserInstallationApproved{receipt,..}=>receipt.clone(),_=>return Err(error("REMOTE_HOST_LOCKED"))};
         *attempt.reply.lock() = RegistrationReply::DeliveryUnconfirmed {
             receipt: receipt.clone(),
+            remembered: attempt.remembered.load(Ordering::Acquire),
         };
         installed
             .deliver()
             .await
             .map_err(|_| error("REMOTE_HOST_LOCKED"))?;
-        *attempt.reply.lock() = RegistrationReply::InstalledLocked { receipt };
+        *attempt.reply.lock() = RegistrationReply::InstalledLocked {
+            receipt,
+            remembered: attempt.remembered.load(Ordering::Acquire),
+        };
         Ok(())
     };
     let result = {
@@ -595,9 +683,46 @@ async fn run(
     if result.is_err() {
         let mut state = attempt.reply.lock();
         settle_failure(&mut state, attempt.stopped(), known);
+        if attempt.remembered.load(Ordering::Acquire)
+            && matches!(
+                *state,
+                RegistrationReply::Failed
+                    | RegistrationReply::Cancelled
+                    | RegistrationReply::Unknown
+            )
+        {
+            *state = RegistrationReply::NativeStoredRegistrationIncomplete;
+        }
     }
     if !known {
         attempt.unknown();
     }
     known
+}
+
+#[cfg(test)]
+pub(crate) struct TestPersistence {
+    pub(crate) store: crate::remote_native_pairing_store::tests::TestStore,
+    pub(crate) yes: Option<bool>,
+}
+enum PersistenceStore {
+    Native(crate::remote_native_pairing_store::WindowsPairingStore),
+    #[cfg(test)]
+    Test(crate::remote_native_pairing_store::tests::TestStore),
+}
+impl PersistenceStore {
+    fn apply(
+        &self,
+        mutation: &crate::remote_native_pairing_store::Mutation,
+        authorization: &mut dyn crate::remote_native_pairing_store::MutationAuthorization,
+    ) -> Result<
+        crate::remote_native_pairing_store::LockedSnapshot,
+        crate::remote_native_pairing_store::StoreError,
+    > {
+        match self {
+            Self::Native(store) => store.apply(mutation.clone(), authorization),
+            #[cfg(test)]
+            Self::Test(store) => store.apply(mutation.clone(), authorization),
+        }
+    }
 }

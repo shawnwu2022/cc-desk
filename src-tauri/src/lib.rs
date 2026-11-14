@@ -34,6 +34,8 @@ mod remote_host_ipc;
 mod remote_host_network;
 #[cfg(all(feature = "remote-host", windows))]
 mod remote_native_pairing_store;
+#[cfg(all(feature = "remote-host", windows))]
+mod remote_pairing_product;
 pub use codex_observer_reporter::run_entry as run_codex_observer_entry;
 mod observer_host;
 mod observer_http;
@@ -297,6 +299,10 @@ fn run_ordinary(initial_dir: Option<String>, #[cfg(windows)] startup: DesktopSta
         .invoke_handler(tauri::generate_handler![
             #[cfg(feature = "remote-client-ipc")]
             remote_client_ipc::remote_client_current,
+            commands::remote_pairing_list,
+            commands::remote_pairing_select,
+            commands::remote_pairing_forget,
+            commands::remote_pairing_forget_cancel,
             commands::remote_registration_request,
             commands::remote_registration_current,
             commands::remote_registration_cancel,

@@ -55,7 +55,14 @@ impl WindowsPairingBackend {
             }
             .map_err(io_error)?,
         );
-        let leases = Arc::new(LeaseFiles::open(root.clone(), &user).map_err(io_error)?);
+        let leases = Arc::new(
+            if create {
+                LeaseFiles::open(root.clone(), &user)
+            } else {
+                LeaseFiles::open_existing(root.clone(), &user)
+            }
+            .map_err(io_error)?,
+        );
         Ok(Self {
             root,
             leases,

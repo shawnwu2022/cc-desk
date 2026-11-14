@@ -136,6 +136,12 @@ impl<T: Send + 'static> ApprovalMachine<T> {
             owner: Arc::downgrade(self),
         })
     }
+    fn waiting(&self) -> bool {
+        let s = self.state.lock();
+        !s.closed
+            && s.description.is_some()
+            && Instant::now() < s.approved_end.unwrap_or(s.pending_end.min(s.cap))
+    }
     pub(crate) fn callback_outstanding(&self) -> bool {
         self.state.lock().callback_outstanding
     }
@@ -167,7 +173,10 @@ mod tests {
         let owner = ApprovalMachine::pending(42, now, now + APPROVAL);
         assert!(owner.take_at(now).is_none());
         owner.complete(true, now);
+        // take(None) 与 pending 之间到达的 Yes 必须仍可消费。
+        assert!(owner.waiting());
         let permit = owner.take_at(now).unwrap();
+        assert!(!owner.waiting());
         assert!(owner.take_at(now).is_none());
         assert_eq!(permit.consume(|description, _| description), Some(42));
     }
@@ -1098,3 +1107,9 @@ mod native_persistence;
 pub(crate) use native_persistence::{
     NativePersistenceApproval, NativePersistenceTarget, PersistedRegistration,
 };
+
+#[cfg(windows)]
+#[path = "remote_native_forget_approval.rs"]
+mod native_forget;
+#[cfg(windows)]
+pub(crate) use native_forget::NativeForgetApproval;

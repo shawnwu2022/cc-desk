@@ -101,6 +101,12 @@ impl NativeRegistrationOwner {
 }
 
 impl<S> NativeRegistrationSession<S> {
+    pub(crate) fn native_persistence_pending(&self) -> bool {
+        self.owner.as_ref().is_some_and(|o| match &o.stage {
+            Stage::AwaitingNativePersistence(a) => a.pending(),
+            _ => false,
+        })
+    }
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn request_native_persistence<R: tauri::Runtime>(
         &mut self,

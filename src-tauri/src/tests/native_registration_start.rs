@@ -137,19 +137,22 @@ fn NativeRegistrationStart_CommitAndCancelLinearize_006() {
 fn NativeRegistrationStart_DeliveryFailureUnknownRetainsReceipt_007() {
     let mut reply = RegistrationReply::RetirementUnknown {
         receipt: Some("42".into()),
+        remembered: true,
     };
     settle_failure(&mut reply, false, false);
     assert_eq!(
         reply,
         RegistrationReply::RetirementUnknown {
-            receipt: Some("42".into())
+            receipt: Some("42".into()),
+            remembered: true
         }
     );
     settle_failure(&mut reply, true, false);
     assert_eq!(
         reply,
         RegistrationReply::RetirementUnknown {
-            receipt: Some("42".into())
+            receipt: Some("42".into()),
+            remembered: true
         }
     );
 }

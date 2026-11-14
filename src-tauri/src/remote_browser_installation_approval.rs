@@ -168,10 +168,7 @@ impl NativeBrowserInstallationApproval {
         }))
     }
     pub(crate) fn pending(&self) -> bool {
-        let state = self.machine.state.lock();
-        !state.closed
-            && state.callback_outstanding
-            && Instant::now() < state.pending_end.min(state.cap)
+        self.machine.waiting()
     }
     pub(crate) fn take(
         &self,

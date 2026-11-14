@@ -60,6 +60,12 @@ fn material(
         return Err(invalid());
     }
     let record = PublicDeviceRecord {
+        epochs: crate::remote_native_pairing_store::PublicEpochs {
+            host_key: f.binding.host_key_epoch,
+            client_key: f.binding.client_key_epoch,
+            policy: f.binding.policy_epoch,
+            issuer: f.binding.issuer_epoch,
+        },
         device_id: target.device_id.clone(),
         native: NativePublicIdentity {
             profile_id: native.native_profile.id,
@@ -283,6 +289,10 @@ impl NativePersistenceApproval {
             .ok_or(StoreError::Unauthorized)
             .map(Some)?
             .transpose()
+    }
+
+    pub(crate) fn pending(&self) -> bool {
+        self.machine.waiting()
     }
 
     pub(crate) fn cancel(&self) {

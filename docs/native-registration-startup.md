@@ -1,6 +1,6 @@
 # 原生首次登记启动
 
-`remote-host` 的 Windows 构建在原 `RemoteHostPanel` 增加首次登记入口。它复用 authenticated document bridge，公开命令只有 request/current/cancel。request 的外层仍为严格的 `runId`、`generation`、`candidateJson`；没有前端批准字段、原始 key 句柄或 credential 导入接口。默认构建返回固定 unavailable。
+`remote-host` 的 Windows 构建在原 `RemoteHostPanel` 增加首次登记入口。它复用 authenticated document bridge，登记命令为 request/current/cancel，公开配对记录另有 list/select/forget/forget_cancel。request 的外层仍为严格的 `runId`、`generation`、`candidateJson`；没有前端批准字段、原始 key 句柄或 credential 导入接口。默认构建返回固定 unavailable。
 
 ## 两次确认与独立信任来源
 
@@ -14,6 +14,7 @@ Host `NativeHostProfile` 和浏览器 `BrowserProfile` 是不同类型。启动�
 
 `candidateJson` 最大16KiB，拒绝未知字段、重复字段、不规范整数与十六进制。字段如下：
 
+- 可选 `remember: boolean`，默认 false。它只请求在验证后显示独立原生持久化确认，不是批准字段。
 - `version: 1`；`address` 为明确 IP/socket address；`origin` 为精确规范 WSS 地址；`relayMode` 为 `legacyV1` 或 `rendezvousV1`，不会回退。
 - `tunnel`、`relayId`、`profileId` 为16字节小写十六进制；`profileRevision` 为正十进制字符串。
 - `endpoint` 和 `relay` 各含 `keyName` 与91字节小写十六进制 `spki`。两个已有 key 引用和公钥必须不同；不生成或发现密钥。
@@ -36,4 +37,8 @@ Host `NativeHostProfile` 和浏览器 `BrowserProfile` 是不同类型。启动�
 
 `NativeRegistration_StartOracle_904` 使用同一生产 startup owner，覆盖实际 Relay/BrowserWasm 登记路径。仅原生 dialog 结果、匿名 TEST_ONLY key supplier 和固定测试 WSS 信任入口被替换。`start-yes` 验证安装和原资源退休，`start-deny` 要求零开 key，`start-cancel` 撤销原 document，等待原 key/task 退休，并验证新 document 能回收旧任务后重新登记。它不是实际 GUI 或真实用户凭据验收。
 
-本机“记住公开配对记录”有独立批准与存储模块，但此面板本轮尚未接 Remember 控件。记录的重启投影保持 Locked，不恢复 run scope、网络、key 使用或 Host 控制。尚未进行真实持久用户凭据配置、真实原生 Yes 点击、部署或完整重启远控验收。
+本机“记住公开配对记录”已接入原 RegistrationCustody：原验证证据完成后进入 PendingNativePersistence，独立原生 Yes 才向精确目标提交 schema-2 公开记录，然后用同一原证据进入 BrowserInstallation。No/过期返回 NativeStoreDeclined 并结束登记，不写记录、不安装浏览器；错误/不确定分别为 NativeStoreFailed/NativeStoreUnknown。InstalledLocked/DeliveryUnconfirmed/RetirementUnknown 的 remembered 标志记录真实已完成的写入；后续安装失败/取消为 NativeStoredRegistrationIncomplete，不抹掉已经保存的事实。
+
+启动后的列表只读并保持 Locked，不创建/修复目录或 lease，不打开 key 或网络。显式选择按当前 store CAS 冻结新 run 候选，保留原公钥、backup flags 和 epochs；scope 只取新 admission，activation/incarnation/clock 为新值。Forget 使用独立原生确认和 requestId 精确取消，可在请求入场前建立取消 fence；不撤销已独立运行的连接。详见 native-public-pairing-store.md。
+
+NativeRegistration_StartOracle_904 新增 start-remember/start-remember-deny/start-remember-cancel，仍使用实际 startup owner、匿名 key supplier 和 synthetic native store。成功分支重新打开原文件验证 Locked；No/取消要求无已提交文件。该 oracle 不是实际用户 DPAPI 或原生 GUI 验收。尚未进行真实持久用户凭据配置、真实原生 Yes 点击、部署或完整重启远控验收。
