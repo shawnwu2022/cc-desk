@@ -23,7 +23,7 @@ test('ProductProvider_ActualBundleInstalledRecordNewRunAndGracefulRetirement_001
   const active=await installAndReload(page,context),errors:string[]=[];active.on('pageerror',error=>errors.push(error.message))
   expect(await active.evaluate(async()=>Object.keys(await import(location.origin+'/browser-profile.js')))).toEqual(['readApprovedBrowserInputs'])
   expect(await observe(active)).toEqual({assertions:0,imports:0,signatures:0,databaseOpens:0});expect(f.observations()).toEqual({browserConnections:0,artifactRequests:0})
-  const before=await stored(active);expect(before.configuration.grant.scope).toEqual(f.storedScope);expect(f.scope).not.toEqual(f.storedScope)
+  const before=await stored(active);expect(before.configuration.relay.mode).toBe(process.env.CC_DESK_TEST_ONLY_ENTRY_RELAY_MODE??'legacy');expect(before.configuration.grant.scope).toEqual(f.storedScope);expect(f.scope).not.toEqual(f.storedScope)
   await active.locator('[data-remote-refresh]').click();const dialog=active.getByRole('dialog',{name:'Approve remote session'});await expect(dialog).toBeVisible()
   const shown=JSON.parse(await dialog.locator('pre').innerText());expect(shown.scope).toEqual(f.scope)
   const pending=await observe(active);expect(pending).toMatchObject({assertions:0,imports:0})
@@ -36,10 +36,10 @@ test('ProductProvider_ActualBundleInstalledRecordNewRunAndGracefulRetirement_001
   // 不调用任何 fixture session.close；产品 Disconnect 必须让原持久 owner 正常退役。
   await expect.poll(async()=>{const record=await stored(active);return record?.owner}).toBeUndefined()
   const after=await stored(active);expect(after).toEqual(before)
-  const effect=await f.host.wait(value=>value.kind==='effects');expect(effect).toMatchObject({writeCount:1,bytes:Buffer.from('TEST_ONLY_PRODUCT_PROVIDER').toString('hex')});await f.relay.wait(value=>value.originalRelayRetired===true)
+  const effect=await f.host.wait(value=>value.kind==='effects');expect(effect).toMatchObject({writeCount:1,bytes:Buffer.from('TEST_ONLY_PRODUCT_PROVIDER').toString('hex')});await f.waitBridgeRetired();expect(f.transport()).toMatchObject({errors:[],hostAccepted:true,hostReady:process.env.CC_DESK_TEST_ONLY_ENTRY_RELAY_MODE==='rendezvous-v1'})
   await active.locator('[data-remote-refresh]').click();await expect(active.getByRole('status')).toContainText('Remote connection unavailable');expect(f.observations()).toEqual({browserConnections:1,artifactRequests:2})
   expect((await observe(active)).assertions).toBe(1);expect(errors).toEqual([])
-  await evidence(info,{boundary:'real built product provider, original Relay/Host/WASM and Edge IDB; synthetic installed identity and authenticator, not production enrollment/deployment',artifacts:f.artifacts,before,after,shown,descriptor,pending,approved,effect,transport:f.observations()})
+  await f.retireRelay();await evidence(info,{boundary:'real built product provider, original Relay/Host/WASM and Edge IDB; synthetic installed identity and authenticator, not production enrollment/deployment',artifacts:f.artifacts,before,after,shown,descriptor,pending,approved,effect,transport:f.observations(),relayTransport:f.transport()})
  }finally{await f.dispose()}
 })
 
@@ -50,7 +50,7 @@ for(const mode of ['wrong-pin','wrong-principal','wrong-epoch','wrong-role'] as 
   await active.locator('[data-remote-refresh]').click();await expect(active.getByRole('status')).toContainText('Remote connection unavailable');await expect(active.getByRole('dialog')).toHaveCount(0)
   expect(await observe(active)).toMatchObject({assertions:0,imports:0});expect(f.host.output()).not.toContain('"kind":"installed"');expect(f.host.output()).not.toContain('"kind":"dispatched"')
   await expect.poll(async()=>{const record=await stored(active);return record?.owner}).toBeUndefined();expect(await stored(active)).toEqual(before)
-  await evidence(info,{mode,artifacts:f.artifacts,observed:await observe(active),stored:before,host:f.host.output(),transport:f.observations()})
+  await f.retireRelay();await evidence(info,{mode,artifacts:f.artifacts,observed:await observe(active),stored:before,host:f.host.output(),transport:f.observations(),relayTransport:f.transport()})
  }finally{await f.dispose()}
 })
 
@@ -67,7 +67,7 @@ for(const action of ['cancel','deadline','forget'] as const)test(`ProductProvide
   if(action==='forget'){
    const next=await context.newPage();await next.goto('https://desk.invalid/browser-remote.html');await next.locator('[data-remote-refresh]').click();await expect(next.getByRole('status')).toContainText('Locked');expect(await observe(next)).toMatchObject({assertions:0,imports:0,signatures:0});expect(f.observations().browserConnections).toBe(1)
   }
-  await evidence(info,{action,artifacts:f.artifacts,observed:await observe(active),record:await stored(active),host:f.host.output(),transport:f.observations()})
+  await f.retireRelay();await evidence(info,{action,artifacts:f.artifacts,observed:await observe(active),record:await stored(active),host:f.host.output(),transport:f.observations(),relayTransport:f.transport()})
  }finally{await f.dispose()}
 })
 
@@ -78,6 +78,6 @@ test('ProductProvider_MissingInstallationAndUrlSelectorsStayLocked_004',async({p
   expect(await observe(page)).toEqual({assertions:0,imports:0,signatures:0,databaseOpens:0})
   await page.locator('[data-remote-refresh]').click();await expect(page.getByRole('status')).toContainText('Locked');await expect(page.locator('textarea')).toHaveCount(0)
   expect(await observe(page)).toMatchObject({assertions:0,imports:0,signatures:0});expect(f.observations()).toEqual({browserConnections:0,artifactRequests:0})
-  await evidence(info,{artifacts:f.artifacts,observed:await observe(page),transport:f.observations()})
+  await f.retireRelay();await evidence(info,{artifacts:f.artifacts,observed:await observe(page),transport:f.observations(),relayTransport:f.transport()})
  }finally{await f.dispose()}
 })

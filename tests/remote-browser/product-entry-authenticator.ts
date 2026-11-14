@@ -1,5 +1,7 @@
 /** 独立 TEST_ONLY authenticator 与只读计数；正式 provider、store 和 presenter 不被替换。 */
 export function productAuthenticatorScript(credential:JsonWebKey){return `
+ // 只在 fixture 的安全文档注入，避免新页面 about:blank 没有 SubtleCrypto 时抛错。
+ if(location.origin==='https://desk.invalid'){
  const observed={assertions:0,imports:0,signatures:0,databaseOpens:0};Object.defineProperty(globalThis,'__ccDeskTestOnlyProduct',{value:observed});
  const sign=crypto.subtle.sign.bind(crypto.subtle),load=crypto.subtle.importKey.bind(crypto.subtle),open=indexedDB.open.bind(indexedDB);
  Object.defineProperty(crypto.subtle,'sign',{configurable:true,value:(...args)=>{observed.signatures++;return sign(...args)}});
@@ -16,4 +18,5 @@ export function productAuthenticatorScript(credential:JsonWebKey){return `
   const value=Object.create(PublicKeyCredential.prototype);Object.defineProperties(value,{type:{value:'public-key'},rawId:{value:new Uint8Array(32).fill(7).buffer},response:{value:response}});return value;
  }});
  const original=MessagePort.prototype.start,seen=new WeakSet();Object.defineProperty(MessagePort.prototype,'start',{value:function(){if(!seen.has(this)){seen.add(this);this.addEventListener('message',event=>{if(event.data?.kind==='descriptor')Reflect.set(globalThis,'__ccDeskTestOnlyRunDescriptor',event.data.value)})}return original.call(this)}});
+ }
 `}

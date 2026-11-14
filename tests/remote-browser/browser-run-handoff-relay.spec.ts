@@ -38,9 +38,9 @@ test('RunHandoff_ActualRelayWasmNewScopeNeedsFreshPresenceAndData_001',async({pa
   await active.locator('[data-remote-input]').fill('TEST_ONLY_AUTHENTICATED_NEW_RUN');await active.locator('[data-remote-send]').click();await expect(active.locator('[data-remote-input]')).toHaveValue('')
   await active.locator('[data-remote-disconnect]').click();await expect(active.getByRole('status')).toContainText('Locked');await closeSession(active)
   const afterStored=await storedConfiguration(active);expect(afterStored).toEqual(beforeStored)
-  const effect=await f.host.wait(value=>value.kind==='effects');expect(effect.writeCount).toBe(1);expect(effect.bytes).toBe(Buffer.from('TEST_ONLY_AUTHENTICATED_NEW_RUN').toString('hex'));await f.relay.wait(value=>value.originalRelayRetired===true)
+  const effect=await f.host.wait(value=>value.kind==='effects');expect(effect.writeCount).toBe(1);expect(effect.bytes).toBe(Buffer.from('TEST_ONLY_AUTHENTICATED_NEW_RUN').toString('hex'));await f.waitBridgeRetired();expect(f.transport()).toMatchObject({errors:[],hostAccepted:true,hostReady:process.env.CC_DESK_TEST_ONLY_ENTRY_RELAY_MODE==='rendezvous-v1'})
   await active.locator('[data-remote-refresh]').click();await expect(active.getByRole('status')).toContainText('Remote connection unavailable');expect(f.observations()).toEqual({browserConnections:1,artifactRequests:2});expect(await active.evaluate(()=>Reflect.get(globalThis,'__ccDeskTestOnlyPairing'))).toEqual(supplied)
-  await evidence(info,{boundary:'real Edge/IDB, original Relay, actual WASM and original memory Host; synthetic WebAuthn and Host approval, not native restart or deployment',artifacts:f.artifacts,shown,descriptor,before,supplied,beforeStored,afterStored,effect,transport:f.observations()})
+  await f.retireRelay();await evidence(info,{boundary:'real Edge/IDB, original Relay, actual WASM and original memory Host; synthetic WebAuthn and Host approval, not native restart or deployment',artifacts:f.artifacts,shown,descriptor,before,supplied,beforeStored,afterStored,effect,transport:f.observations(),relayTransport:f.transport()})
  }finally{if(active)await closeSession(active).catch(()=>{});await f.dispose()}
 })
 
@@ -52,7 +52,7 @@ for(const mode of ['exact-old','wrong-pin','wrong-principal','wrong-epoch','wron
   const supplied=await active.evaluate(()=>Reflect.get(globalThis,'__ccDeskTestOnlyPairing'));expect(supplied).toMatchObject({sourceReads:1,storeReads:1,presentations:0,assertions:0,grantSignatures:0,keyImports:0})
   expect(f.host.output()).not.toContain('"kind":"installed"');expect(f.host.output()).not.toContain('"kind":"dispatched"');expect(await storedConfiguration(active)).toEqual(beforeStored)
   await closeSession(active);await active.locator('[data-remote-refresh]').click();await expect(active.locator('[data-remote-refresh]')).toBeEnabled();expect(await active.evaluate(()=>Reflect.get(globalThis,'__ccDeskTestOnlyPairing'))).toEqual(supplied);expect(f.observations().browserConnections).toBe(1)
-  await evidence(info,{mode,artifacts:f.artifacts,supplied,scope:f.scope,stored:beforeStored,host:f.host.output(),transport:f.observations()})
+  await f.retireRelay();await evidence(info,{mode,artifacts:f.artifacts,supplied,scope:f.scope,stored:beforeStored,host:f.host.output(),transport:f.observations(),relayTransport:f.transport()})
  }finally{if(active)await closeSession(active).catch(()=>{});await f.dispose()}
 })
 
@@ -66,6 +66,6 @@ for(const action of ['cancel','deadline','forget'] as const)test(`RunHandoff_Act
   await expect(active.getByRole('status')).toContainText('Remote connection unavailable');await expect(dialog).toHaveCount(0)
   const after=await active.evaluate(()=>Reflect.get(globalThis,'__ccDeskTestOnlyPairing'));expect(after).toEqual(before);expect(f.host.output()).not.toContain('"kind":"installed"');expect(f.host.output()).not.toContain('"kind":"dispatched"')
   await closeSession(active);await active.locator('[data-remote-refresh]').click();await expect(active.locator('[data-remote-refresh]')).toBeEnabled();expect(await active.evaluate(()=>Reflect.get(globalThis,'__ccDeskTestOnlyPairing'))).toEqual(after);expect(f.observations().browserConnections).toBe(1)
-  await evidence(info,{action,artifacts:f.artifacts,before,after,host:f.host.output(),transport:f.observations()})
+  await f.retireRelay();await evidence(info,{action,artifacts:f.artifacts,before,after,host:f.host.output(),transport:f.observations(),relayTransport:f.transport()})
  }finally{if(active)await closeSession(active).catch(()=>{});await f.dispose()}
 })
