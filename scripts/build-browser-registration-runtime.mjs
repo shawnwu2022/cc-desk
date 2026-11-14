@@ -37,7 +37,7 @@ export function selectRegistrationArtifacts(rows,root,target){
   return {security:select('cc_desk_remote_security'),rustls:select('rustls')};
 }
 
-// 路径和现存祖先都必须在项目内，不能经 junction 将产物或临时文件写出项目。
+// 路径及已有祖先必须位于项目内，禁止通过 junction 将产物或临时文件写到项目外。
 export function projectPath(root,input){
   const resolved=path.resolve(root,input);
   if(!inside(root,resolved))throw Error('registration build path must stay inside the project');
@@ -101,7 +101,7 @@ export function buildBrowserRegistrationRuntime(){
     cargoArtifacts:{file:relative(root,path.join(runDir,'cargo-artifacts.stdout')),sha256:hash(path.join(runDir,'cargo-artifacts.stdout'))},
     sources,files,exports:exports.map(value=>value.name),imports};
   fs.writeFileSync(path.join(stage,'manifest.json'),JSON.stringify(manifest,null,2)+'\n');
-  // 所有检查通过后才复制三项部署产物；fixture.js 的自动启动入口不属于独立 Worker 合约。
+  // 验证通过后才复制三项部署产物；fixture.js 自动启动入口不属于独立 Worker 的合约。
   fs.mkdirSync(out,{recursive:true});
   for(const name of [...files.map(file=>file.name),'manifest.json'])fs.copyFileSync(path.join(stage,name),projectPath(root,path.join(out,name)));
   console.log(JSON.stringify({out:relative(root,out),files}));
