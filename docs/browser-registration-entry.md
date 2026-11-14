@@ -4,7 +4,8 @@
 does not read a provider, open a socket or call WebAuthn. Only its explicit Start
 registration button calls the one-use registration source. Missing, rejected or
 invalid sources leave the page Locked; there is no retry on that document.
-The ordinary `/browser-profile.js` connection source is unchanged.
+The separate [product profile reader](browser-product-provider.md) consumes only
+a previously approved installed enrollment.
 
 ## Independent source contract
 
@@ -58,7 +59,8 @@ Late original promises are retained; uncertainty cannot authorize IDB installati
 
 Reload uses `createBrowserEnrollmentStore().openExisting` and the existing profile
 reader. No second private-key import, automatic terminal connection or native
-restart trust is introduced. No production provider or automatically approved
+restart trust is introduced. The production connection provider is now built as `/browser-profile.js`; no
+default independent `/browser-registration.js` source or automatically approved
 configuration is shipped.
 
 ## Evidence limits

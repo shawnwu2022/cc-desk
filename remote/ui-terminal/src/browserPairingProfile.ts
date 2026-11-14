@@ -99,10 +99,19 @@ function assemble(expected:PublicBrowserPairingConfiguration,handles:BrowserProf
 
 /** 返回受控模块唯一导出所需的 reader；不读取网络、签名、呈现或创建 deadline。 */
 export function createApprovedBrowserProfileReader(candidateBytes:Uint8Array,provider?:BrowserProfileProvider):(signal:AbortSignal)=>Promise<ApprovedBrowserInputs<BrowserExactGrantConfiguration>|undefined>{
- const candidate=parseBrowserPairingConfiguration(candidateBytes);
+ return createProfileReader(provider,parseBrowserPairingConfiguration(candidateBytes));
+}
+
+/** 仅供受控安装记录启动：批准来自原 provider，不构造候选自比较。 */
+export function createInstalledBrowserEnrollmentProfileReader(provider:BrowserProfileProvider&Readonly<{enrollment:BrowserEnrollmentLease}>){
+ return createProfileReader(provider,undefined,true);
+}
+
+function createProfileReader(provider:BrowserProfileProvider|undefined,candidate?:PublicBrowserPairingConfiguration,installed=false):(signal:AbortSignal)=>Promise<ApprovedBrowserInputs<BrowserExactGrantConfiguration>|undefined>{
  let read:BrowserProfileProvider['readApproved']|undefined;
  let enrollment:BrowserEnrollmentLease|undefined;
  if(provider!==undefined){try{const owns=Object.prototype.hasOwnProperty.call(provider,'enrollment');if('enrollment'in provider&&!owns)throw Error('provider');exact(provider,owns?['readApproved','enrollment']:['readApproved']);if(owns)enrollment=checkedBrowserEnrollmentLease(provider.enrollment);if(typeof provider.readApproved!=='function')throw Error('provider');read=provider.readApproved.bind(provider);}catch{throw Error('browser pairing profile unavailable');}}
+ if(installed&&!enrollment)throw Error('browser pairing profile unavailable');
  let original:Promise<ApprovedBrowserInputs<BrowserExactGrantConfiguration>|undefined>|undefined,firstSignal:AbortSignal|undefined;
  return async(signal:AbortSignal)=>{
   if(!original){
@@ -115,7 +124,7 @@ export function createApprovedBrowserProfileReader(candidateBytes:Uint8Array,pro
     exact(supplied,['configuration','handles']);exact(supplied.handles,['tlsKey','grantKey','relaySign','present']);
     const h=supplied.handles,handles=Object.freeze({tlsKey:h.tlsKey,grantKey:h.grantKey,relaySign:h.relaySign,present:h.present});
     const expected=parseBrowserPairingConfiguration(supplied.configuration);
-    if(!same(candidate,expected))throw Error('mismatch');
+    if(candidate&&!same(candidate,expected))throw Error('mismatch');
     return assemble(expected,handles,enrollment);
    }).catch(()=>{throw Error('browser pairing profile unavailable');});
    void original.catch(()=>{});

@@ -4,7 +4,7 @@
 
 Add an explicit IndexedDB adapter for independently approved enrollment material: public configuration plus existing non-exportable TLS, grant and relay P-256 signing keys. It stores browser-native CryptoKey objects, never private-key JSON, presenter callbacks or an `approved: true` import. The trusted operator supplies the material only through `installApproved(expectedRevision, load, signal)`; the loader receives only the original signal, never a candidate or selector. This API is not an identity-authentication ceremony. The owner must already have independently authorized persistence and bound the public identities to the supplied handles.
 
-Origin-isolated browser storage and controlled same-origin code are the trust boundary. This does not protect against malicious same-origin scripts, privileged browser/OS access, disk rollback, eviction, backups or copied browser profiles. Storage loss is Locked, not permission to recreate credentials. The normal product supplies no default store or enrollment action.
+Origin-isolated browser storage and controlled same-origin code are the trust boundary. This does not protect against malicious same-origin scripts, privileged browser/OS access, disk rollback, eviction, backups or copied browser profiles. Storage loss is Locked, not permission to recreate credentials. The normal product now supplies a lazy fixed-database reader, but no default enrollment action or independent registration provider. See [product startup](browser-product-provider.md).
 
 ## Record and ownership
 

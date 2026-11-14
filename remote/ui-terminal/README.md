@@ -110,11 +110,12 @@ node --experimental-strip-types --test src/native.control.integration.ts
 
 Browser/PWA reuse covers the pure codecs, reducer, renderer and controller logic.
 Browser WebSocket APIs do not expose the existing Rust TLS1.3 mutual RFC7250 raw
-public key handshake, pinned-key verification and AppBind channel ownership. A
-verified native shell bridge remains required. This package supplies no remote
-webpage fallback, JS self-signing, enrollment, credentials, mobile shell or
-persistent client recovery. Real-device IME/fonts/layout, phone-to-Host acceptance,
-production entry and signed phone prerelease remain separate delivery gates.
+public key handshake, pinned-key verification and AppBind channel ownership. The
+controlled Browser path therefore uses the original Rust WASM TLS runtime with
+existing browser-native non-exportable signing handles. There is no plaintext
+webpage fallback, new self-signed identity or automatic enrollment/recovery.
+Real-device IME/fonts/layout, phone-to-Host acceptance, authorized production
+deployment and signed phone prerelease remain separate delivery gates.
 
 ## Controlled Browser profile supply
 
@@ -125,5 +126,9 @@ previously approved provider snapshot before combining that provider's original
 non-exportable handles and callbacks. Parsed JSON does not authorize or enroll.
 See [Browser pairing profile](../../docs/browser-pairing-profile.md) for the exact
 schema, provider trust contract, cancellation semantics and a buildable locked
-example. This helper does not supply a real provider, deploy the module or replace
-real-device, WebAuthn, TLS/AppBind/grant and Host acceptance gates.
+example. The production build now also emits the fixed `/browser-profile.js`
+[installed-record provider](../../docs/browser-product-provider.md). It directly
+consumes the original approved enrollment, preserves its handles and lease, and
+selects the existing authenticated-host-run policy only in memory. It does not
+invent an independent registration source, configure real credentials, deploy
+the module or replace real-device, WebAuthn, TLS/AppBind/grant and Host gates.

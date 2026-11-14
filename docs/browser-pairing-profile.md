@@ -34,7 +34,7 @@ provider 须合作响应原 signal。helper 不通过 race 假装外部工作已
 
 ## 外部受控模块构建
 
-仓库的 [browser-profile.ts](../remote/ui-terminal/examples/browser-profile.ts) 是永远锁定的构建示例：使用标明 PUBLIC_TEST_ONLY 的合成公开值，provider 总是返回 undefined。其唯一导出为 `readApprovedBrowserInputs`，可直接使用项目已安装 esbuild 构建，**不需要也不更改 Vite 生产入口**：
+仓库的 [browser-profile.ts](../remote/ui-terminal/examples/browser-profile.ts) 是永远锁定的构建示例：使用标明 PUBLIC_TEST_ONLY 的合成公开值，provider 总是返回 undefined。其唯一导出为 `readApprovedBrowserInputs`，可直接使用项目已安装 esbuild 构建，**此示例单独构建，不替换 Vite 的正式产品入口**：
 
 ```powershell
 # 从仓库根执行，输出仅保留在项目内审计目录，不部署。
@@ -46,7 +46,7 @@ node_modules/.bin/esbuild.cmd remote/ui-terminal/examples/browser-profile.ts --b
 node --input-type=module -e "const m=await import('./.audit/browser-profile-example/browser-profile.mjs'); console.log(Object.keys(m),await m.readApprovedBrowserInputs(new AbortController().signal))"
 ```
 
-预期只有一个导出，读取结果为 undefined。示例里的 `.invalid` URLs、合成 SPKI 和 scope 不能用于真实登记；该构建产物不是已部署的 `/browser-profile.js`。实际站点需从真实受控源码导入本 helper，并把示例的锁定 provider 替换为它自己已有的独立可信供应实现，然后在另行授权的部署流程中将审核后的单一 ESM 模块供应在固定同源路径。候选来源和 artifact URLs 也必须由站点按真实受控配置提供，不能直接照搬示例。
+预期只有一个导出，读取结果为 undefined。示例里的 `.invalid` URLs、合成 SPKI 和 scope 不能用于真实登记；该构建产物不是已部署的 `/browser-profile.js`。正式构建现在另行提供 [产品启动模块](browser-product-provider.md)，直接读取原先独立批准的固定库安装记录。自定义站点仍可从真实受控源码导入本候选 helper 并提供自己的独立可信 supplier；两条路径都须经过另行授权的部署流程，示例不建立批准。候选来源和 artifact URLs 也必须由站点按真实受控配置提供，不能直接照搬示例。
 
 ## 验证边界
 

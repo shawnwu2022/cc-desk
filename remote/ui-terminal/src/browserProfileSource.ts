@@ -26,11 +26,16 @@ export function controlledBrowserProfileSource():TerminalConnectionSource{
      if(Object.keys(module).length!==1||typeof module.readApprovedBrowserInputs!=='function')throw Error('browser profile source unavailable');
      if(controller.signal.aborted||now()>=setupDeadline||!trusted()||document!==page||location.origin!==origin)throw Error('browser profile source cancelled');
      const inputs:ApprovedBrowserInputs|undefined=await module.readApprovedBrowserInputs(controller.signal);
-     if(controller.signal.aborted||now()>=setupDeadline||!trusted()||document!==page||location.origin!==origin)throw Error('browser profile source cancelled');
-     return inputs===undefined?undefined:browserConnectionSource(inputs);
+     try{
+      if(controller.signal.aborted||now()>=setupDeadline||!trusted()||document!==page||location.origin!==origin)throw Error('browser profile source cancelled');
+      return inputs===undefined?undefined:browserConnectionSource(inputs);
+     }catch{await inputs?.enrollment?.retire?.();throw Error('browser profile source cancelled');}
     }).finally(()=>{clearTimeout(timer);signal.removeEventListener('abort',abort);page.removeEventListener('visibilitychange',visible);page.removeEventListener('freeze',abort);globalThis.removeEventListener('pagehide',abort);});void original.catch(()=>{});
    }
-   const source=await original;if(signal.aborted||now()>=setupDeadline)throw Error('browser profile source cancelled');return await source?.open(signal,setupDeadline);
+   const source=await original;
+   // 原 source 负责 admission 前取消/过期时退休已取得的 store session。
+   if(source)return await source.open(signal,setupDeadline);
+   if(signal.aborted||now()>=setupDeadline)throw Error('browser profile source cancelled');return undefined;
   }finally{opening=false;}
  }});
 }

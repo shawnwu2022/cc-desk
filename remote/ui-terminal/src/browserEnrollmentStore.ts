@@ -87,7 +87,8 @@ export function createBrowserEnrollmentStore(options:Readonly<{origin:string;dat
   const ready=new Promise<Session|undefined>((r,j)=>{resolveReady=r;rejectReady=j;}),closed=new Promise<void>((r,j)=>{resolveClosed=r;rejectClosed=j;});void closed.catch(()=>{});
   const released=navigator.locks.request(name,{mode:'exclusive',ifAvailable:true},async lock=>{
    if(!lock){resolveReady(undefined);return;}
-   const authority=createBrowserEnrollmentAuthority(),channel=new BroadcastChannel(name);
+   // 只退休当前激活：原 closed 包含清理 owner marker 与释放原 Web Lock。
+   const authority=createBrowserEnrollmentAuthority(()=>{authority.revoke();return closed;}),channel=new BroadcastChannel(name);
    let claimed:RecordValue|undefined;
    const close=()=>authority.revoke(),visibility=()=>{if(!eligible())close();};
    channel.onmessage=event=>{const value=event.data;if(value&&typeof value==='object'&&typeof value.revision==='string'&&(!claimed||value.revision===claimed.revision))close();};
@@ -114,7 +115,8 @@ export function createBrowserEnrollmentStore(options:Readonly<{origin:string;dat
    }
   });
   void released.then(()=>resolveClosed(),()=>{rejectReady(unavailable());rejectClosed(uncertain());});
-  return ready;
+  // ready 失败也不能越过原 marker 清理与 Web Lock 释放。
+  return ready.catch(async()=>{await closed;throw unavailable();});
  }
  async function revoke():Promise<Metadata>{
   const selected=await atomic('readwrite',idleSignal(),current=>{

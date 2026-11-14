@@ -21,8 +21,8 @@ function snapshot(value:BrowserApprovedEnrollmentMaterial):BrowserApprovedEnroll
 /** Only controlled owner code receives approve/revoke. No candidate or serialized record import.
  * load must independently supply previously approved, correctly bound existing handles/metadata.
  * This mechanism does not authenticate an operator or implement an enrollment ceremony. */
-export function createBrowserEnrollmentAuthority(){
- const lifetime=createBrowserEnrollmentLease();
+export function createBrowserEnrollmentAuthority(retire?:()=>Promise<void>){
+ const lifetime=createBrowserEnrollmentLease(retire);
  let state:'unapproved'|'preparing'|'approved'|'unavailable'|'revoked'='unapproved',readStarted=false;
  let record:BrowserApprovedEnrollmentMaterial|undefined,pending:Promise<void>|undefined,originalRead:Promise<void>|undefined;
  const unavailable=()=>Error('browser enrollment unavailable');

@@ -5,9 +5,10 @@
 `createStoredBrowserRunProfileReader(candidateBytes, store, present)` is a separate
 controlled-module reader for a remembered device connecting to a new native run.
 It is not selected by a URL, public JSON field, discovery response or receipt.
-A trusted `/browser-profile.js` deployment must explicitly choose this reader;
-no production provider is installed, and the normal entry remains Locked without
-one. Creating or reading the helper does not connect, present, sign or use WebAuthn.
+A custom trusted `/browser-profile.js` deployment can explicitly choose this reader;
+the product also provides the separate installed-record startup described in
+[product startup](browser-product-provider.md). Missing approved enrollment still
+remains Locked. Creating or reading the helper does not connect, present, sign or use WebAuthn.
 The existing explicit Connect/Refresh action still opens the original source.
 
 The helper first executes `createStoredBrowserProfileReader` unchanged. The

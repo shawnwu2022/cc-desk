@@ -50,13 +50,16 @@ export default defineConfig(({ command, mode }) => ({
     // Produce sourcemaps for debug builds
     sourcemap: !!process.env.TAURI_DEBUG,
     rollupOptions: {
+      preserveEntrySignatures: 'strict',
       input: {
         main: resolve(__dirname, 'index.html'),
         versionManager: resolve(__dirname, 'version-manager.html'),
         browserRemote: resolve(__dirname, 'browser-remote.html'),
         browserRegistration: resolve(__dirname, 'browser-registration.html'),
+        browserProfile: resolve(__dirname, 'remote/ui-terminal/src/browser-profile.ts'),
       },
       output: {
+        entryFileNames: chunk => chunk.name === 'browserProfile' ? 'browser-profile.js' : 'assets/[name]-[hash].js',
         manualChunks: manualChunkName
       }
     }

@@ -12,18 +12,21 @@ This is a page-local ownership mechanism for independently approved material. It
 - The existing pairing helper still performs a full comparison with the independent approved record before producing inputs. It never treats public JSON as an approved record.
 - `revoke()` first closes admission and removes the record, then aborts the original owner signal. Cached pairing inputs and cached connection sources reject later use. Revocation does not undo already accepted Host effects.
 
-The implementation has no persistence, import of serialized approval flags, URL/local-storage enrollment, default provider, or automatic recovery. No production entry imports the authority by default. The controlled operator module may bundle it with the pairing helper; the product's browser source remains a separate bundle.
+The authority itself has no persistence, import of serialized approval flags, URL/local-storage enrollment or automatic recovery. The [product provider](browser-product-provider.md) now imports the existing store/authority for lazy startup from an independently approved installed record. It does not supply an initial registration approval. The controlled generic operator module and candidate example remain supported.
 
 ## Cross-bundle lifecycle contract
 
-`BrowserProfileProvider` and `ApprovedBrowserInputs` support an optional trusted `enrollment` object with exactly two own data fields:
+`BrowserProfileProvider` and `ApprovedBrowserInputs` support an optional trusted `enrollment` object with exactly two own data fields, or three when the original store owner supplies the optional close-only `retire` callback:
 
 ```ts
 Readonly<{
   signal: AbortSignal;
   retain: (originalRetirement: Promise<void>) => void;
+  retire?: () => Promise<void>;
 }>
 ```
+
+`retire()` closes only the current activation and joins original store owner cleanup and lock release, without deleting the persistent enrollment. The source retains transport completion separately so store retirement cannot wait on itself.
 
 This object is a lifecycle contract, **not evidence of authorization**. It requires an actual native signal and function and is never serialized into the public pairing schema. The checker retains the same signal/function identities, taking a frozen snapshot if necessary. Structural validation deliberately supports separately bundled operator and product modules instead of depending on a module-local WeakMap brand.
 

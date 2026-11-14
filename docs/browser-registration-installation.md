@@ -5,7 +5,10 @@
 This preview uses explicit local-owner device pairing, not account authentication.
 Existing independently approved TLS pins and original browser TLS/grant/relay handles
 remain prerequisites. Neither a public pairing candidate nor registration success
-establishes that initial authority. Production defaults remain unavailable/Locked.
+establishes that initial authority. Missing independent registration inputs remain unavailable/Locked. The
+[product startup reader](browser-product-provider.md) consumes only an original
+installed record. Its fixed database constant is for trusted plan authors to
+explicitly select before approval, never to rewrite an already approved target.
 
 1. Read new credential metadata directly from the original live, typed native
    registration evidence. Do not parse the display JSON to recover authority or
