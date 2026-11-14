@@ -393,3 +393,106 @@ async fn RegistrationChannel_NativeDecisionChecksOriginalLifetime_014() {
     };
     tokio::join!(client, host);
 }
+
+#[tokio::test(start_paused = true)]
+async fn RegistrationChannel_OriginalAbsoluteEndSurvivesDeferredPolling_015() {
+    let (c, h) = tokio::io::duplex(65536);
+    let (_cancel, token) = cancellation();
+    let original = tokio::time::Instant::now();
+    let end = original + Duration::from_secs(30);
+    let host = registration_accept_until(
+        Unbound::new(h),
+        local(false),
+        pin(true),
+        original + Duration::from_secs(10),
+        end,
+        token.clone(),
+    );
+    tokio::time::advance(Duration::from_secs(5)).await;
+    let (client, host) = tokio::join!(
+        registration_connect(
+            Unbound::new(c),
+            local(true),
+            pin(false),
+            Duration::from_secs(2),
+            Duration::from_secs(30),
+            token
+        ),
+        host,
+    );
+    let mut client = client.unwrap().into_channel().unwrap();
+    let mut host = host.unwrap().into_channel().unwrap();
+    assert_eq!(host.deadline(), end);
+    asserted_pair(&mut client, &mut host).await;
+    let client = async {
+        assert!(client.client_asserted(b"asserted").await.is_err());
+    };
+    let server = async {
+        let mut wire = host.take(Stage::HostConfirm).unwrap();
+        wire.read(4).await.unwrap();
+        host.keep(wire, Stage::HostFinish).unwrap();
+        assert!(host.check_host_decision().is_ok());
+        tokio::time::advance(Duration::from_secs(25)).await;
+        assert_eq!(tokio::time::Instant::now(), end);
+        assert_eq!(host.check_host_decision(), Err(RegistrationError::Deadline));
+        host.close();
+    };
+    tokio::join!(client, server);
+}
+
+#[tokio::test(start_paused = true)]
+async fn RegistrationChannel_AbsoluteSetupDoesNotRestartAfterAdmission_016() {
+    use tokio::io::AsyncReadExt;
+    let (io, mut peer) = tokio::io::duplex(1024);
+    let (_cancel, token) = cancellation();
+    let original = tokio::time::Instant::now();
+    let pending = registration_accept_until(
+        Unbound::new(io),
+        local(false),
+        pin(true),
+        original + Duration::from_secs(10),
+        original + Duration::from_secs(40),
+        token,
+    );
+    tokio::time::advance(Duration::from_secs(9)).await;
+    assert!(matches!(pending.await, Err(SecurityError::Deadline)));
+    assert_eq!(
+        tokio::time::Instant::now(),
+        original + Duration::from_secs(10)
+    );
+    assert_eq!(peer.read(&mut [0]).await.unwrap(), 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn RegistrationChannel_AbsoluteLimitsFailBeforeIo_017() {
+    use tokio::io::AsyncReadExt;
+    let now = tokio::time::Instant::now();
+    for (setup, total, expected) in [
+        (now, now + Duration::from_secs(30), SecurityError::Deadline),
+        (now + Duration::from_secs(1), now, SecurityError::Deadline),
+        (
+            now + Duration::from_secs(11),
+            now + Duration::from_secs(30),
+            SecurityError::Limit,
+        ),
+        (
+            now + Duration::from_secs(1),
+            now + Duration::from_secs(121),
+            SecurityError::Limit,
+        ),
+    ] {
+        let (io, mut peer) = tokio::io::duplex(1024);
+        let (_cancel, token) = cancellation();
+        let result = registration_accept_until(
+            Unbound::new(io),
+            local(false),
+            pin(true),
+            setup,
+            total,
+            token,
+        )
+        .await;
+        assert!(matches!(result, Err(error) if error == expected));
+        assert_eq!(peer.read(&mut [0]).await.unwrap(), 0);
+    }
+}

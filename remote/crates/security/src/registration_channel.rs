@@ -425,6 +425,45 @@ pub async fn registration_accept<S: AsyncRead + AsyncWrite + Unpin + Send + 'sta
     .map_err(|_| SecurityError::Deadline)??;
     admitted(pending, end)
 }
+
+/// Preserve the original native ceremony deadlines across Relay admission and TLS.
+/// Inputs remain independently approved identities, never a public pairing candidate.
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn registration_accept_until<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
+    io: Unbound<S>,
+    local: LocalIdentity,
+    pin: PeerPin,
+    original_setup_end: tokio::time::Instant,
+    original_total_end: tokio::time::Instant,
+    cancel: CancelToken,
+) -> Result<RegistrationPending<S>, SecurityError> {
+    if cancel.is_cancelled() {
+        return Err(SecurityError::Cancelled);
+    }
+    let now = tokio::time::Instant::now();
+    if now >= original_setup_end || now >= original_total_end {
+        return Err(SecurityError::Deadline);
+    }
+    if original_setup_end - now > crate::MAX_HANDSHAKE_BUDGET
+        || original_total_end - now > Duration::from_secs(120)
+    {
+        return Err(SecurityError::Limit);
+    }
+    let setup_end = original_setup_end.min(original_total_end);
+    let pending = tokio::time::timeout_at(
+        setup_end,
+        crate::tls::accept_protocol(io, local, pin, setup_end - now, cancel, REGISTRATION_ALPN),
+    )
+    .await
+    .map_err(|_| SecurityError::Deadline)??;
+    if pending._cancel.is_cancelled() {
+        return Err(SecurityError::Cancelled);
+    }
+    if tokio::time::Instant::now() >= setup_end {
+        return Err(SecurityError::Deadline);
+    }
+    admitted(pending, original_total_end)
+}
 #[cfg(test)]
 #[path = "../tests/support/registration_channel.rs"]
 mod tests;

@@ -8,6 +8,8 @@ The native channel carries exactly create request, creation response, assertion 
 
 The native implementation reuses the original TLS machinery internally with sealed separate public types. Reusing ManagementOnly or filling a fake enrolled credential to enter the existing BrowserWasm path is rejected. A later [isolated BrowserWasm registration owner](browser-registration-worker.md) reuses this same codec with its own signer, Worker, timer, producer bridge and joint retirement. No public network endpoint or automatic credential action is enabled.
 
+For a native owner whose ceremony already began before Relay admission, use `registration_accept_until` with the original setup and total end instants. It caps TLS by the earlier original end, checks cancellation and expiry again after TLS, and stores the exact original total end in the channel and native approval owner. Reconstructing that end as `now + remaining` can move it right by the invocation delay; closing the outer socket alone cannot fence a synchronous approval or installation. The original duration-based entry remains available for a ceremony that starts at that entry. The new native entry does not alter browser timing, endpoint identity authority or the 10-second setup and 120-second total caps.
+
 ## Implementation plan
 
 - [x] Add a failing mutual-RPK test, then separate TLS ALPN admission and sealed registration pending types. Test normal/registration ALPN incompatibility, wrong pins and original setup limits.
