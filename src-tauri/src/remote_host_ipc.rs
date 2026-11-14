@@ -7,6 +7,50 @@ use std::sync::Arc;
 use tauri::{ipc::Request, State, Webview};
 
 #[cfg(windows)]
+pub(crate) async fn remote_registration_request(
+    webview: Webview,
+    request: Request<'_>,
+    runtime: State<'_, Arc<NativeRuntime>>,
+    controller: State<'_, Arc<RemoteHostController>>,
+    service: State<'_, Arc<crate::remote_host::RemoteHostService>>,
+) -> Result<crate::remote_host_controller::startup::RegistrationReply, SafeError> {
+    use tauri::Manager;
+    let (binding, caller, admission, text) =
+        runtime.admit_host_configuration(&webview, request.headers(), request.body())?;
+    let frozen =
+        crate::remote_host_controller::startup::configuration::FrozenRegistrationStart::parse(
+            &text,
+        )?;
+    service
+        .registration
+        .request(
+            binding,
+            caller,
+            admission,
+            frozen,
+            controller.inner().clone(),
+            webview.app_handle().clone(),
+            webview.window(),
+        )
+        .await
+}
+#[cfg(windows)]
+pub(crate) async fn remote_registration_current(
+    webview: Webview,
+    request: Request<'_>,
+    runtime: State<'_, Arc<NativeRuntime>>,
+    service: State<'_, Arc<crate::remote_host::RemoteHostService>>,
+    cancel: bool,
+) -> Result<crate::remote_host_controller::startup::RegistrationReply, SafeError> {
+    let (binding, caller, admission) =
+        runtime.admit_host_control(&webview, request.headers(), request.body())?;
+    service
+        .registration
+        .current(&binding, &caller, &admission, cancel)
+        .await
+}
+
+#[cfg(windows)]
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct HostPairingScope {

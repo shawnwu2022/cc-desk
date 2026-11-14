@@ -23,15 +23,17 @@ mod remote_client_ipc;
 #[cfg(feature = "remote-host")]
 mod remote_host;
 #[cfg(feature = "remote-host")]
-mod remote_host_network;
-#[cfg(feature = "remote-host")]
 mod remote_host_approval;
+#[cfg(all(feature = "remote-host", windows))]
+mod remote_host_configuration;
 #[cfg(feature = "remote-host")]
 mod remote_host_controller;
 #[cfg(feature = "remote-host")]
 mod remote_host_ipc;
+#[cfg(feature = "remote-host")]
+mod remote_host_network;
 #[cfg(all(feature = "remote-host", windows))]
-mod remote_host_configuration;
+mod remote_native_pairing_store;
 pub use codex_observer_reporter::run_entry as run_codex_observer_entry;
 mod observer_host;
 mod observer_http;
@@ -158,7 +160,9 @@ fn run_ordinary(initial_dir: Option<String>, #[cfg(windows)] startup: DesktopSta
         remote_host::RemoteHostService::default(),
     ));
     #[cfg(feature = "remote-host")]
-    let builder = builder.manage(std::sync::Arc::new(remote_host_controller::RemoteHostController::default()));
+    let builder = builder.manage(std::sync::Arc::new(
+        remote_host_controller::RemoteHostController::default(),
+    ));
     #[cfg(feature = "remote-client-ipc")]
     let builder = builder.manage(std::sync::Arc::new(
         remote_client_ipc::RemoteClientService::default(),
@@ -293,6 +297,9 @@ fn run_ordinary(initial_dir: Option<String>, #[cfg(windows)] startup: DesktopSta
         .invoke_handler(tauri::generate_handler![
             #[cfg(feature = "remote-client-ipc")]
             remote_client_ipc::remote_client_current,
+            commands::remote_registration_request,
+            commands::remote_registration_current,
+            commands::remote_registration_cancel,
             commands::remote_host_current,
             commands::remote_host_pairing_scope,
             commands::remote_host_request,

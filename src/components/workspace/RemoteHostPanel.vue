@@ -6,6 +6,7 @@ import BrowserPairingCandidateEditor from './BrowserPairingCandidateEditor.vue'
 import { captureNativeAttempt, matchesNativeAttempt, useNativeTabsStore, type NativeAttemptIdentity } from '@/stores/nativeTabs'
 import { remoteHostConfigure, remoteHostCurrent, remoteHostRequest, remoteHostStart, remoteHostCancel, remoteHostDiscardCandidate, remoteHostPairingScope } from '@/api/tauri'
 import { useNotificationsStore } from '@/stores/notifications'
+import { remoteRegistrationRequest, remoteRegistrationCurrent, remoteRegistrationCancel } from '@/api/tauri'
 const notifications = useNotificationsStore()
 function cleanupFailed() { notifications.pushToast({ kind: 'warning', messageKey: 'remoteHostCleanupUnconfirmed' }) }
 const props = defineProps<{ tabId: string }>()
@@ -13,6 +14,8 @@ const tabs = useNativeTabsStore()
 const open = ref(false), candidate = ref(''), busy = ref(false), configured = ref(false)
 const state = ref('Locked'), message = ref('')
 const pairingScope = ref('')
+const registrationJson = ref(''), registrationState = ref('Locked')
+let registrationRequested = false
 let epoch = 0, captured: NativeAttemptIdentity | null = null
 let receipt: string | null = null, requested = false
 const available = computed(() => { const t = tabs.tab(props.tabId); return t?.status === 'running' && t.generation > 0 })
@@ -20,12 +23,39 @@ const statusText = computed(() => ({ Locked: '尚无批准', Pending: '等待本
 function stillCurrent(token: number, attempt: NativeAttemptIdentity) { return token === epoch && open.value && matchesNativeAttempt(tabs.tab(props.tabId), attempt) }
 function invalidate() {
   const previous = captured, previousReceipt = receipt, wasRequested = requested
+  const wasRegistering = registrationRequested
+  registrationRequested = false; registrationJson.value = ''; registrationState.value = 'Locked'
   epoch++; captured = null; receipt = null; requested = false; candidate.value = ''; pairingScope.value = ''; configured.value = false; busy.value = false; state.value = 'Locked'; message.value = ''; open.value = false
   if (previous) {
     const run = { runId: previous.runId, generation: previous.generation }
+    if (wasRegistering) void remoteRegistrationCancel(run).catch(cleanupFailed)
     if (wasRequested) void remoteHostCancel(run).catch(cleanupFailed)
     else if (previousReceipt) void remoteHostDiscardCandidate({ ...run, receipt: previousReceipt }).catch(cleanupFailed)
   }
+}
+async function register(kind: 'request' | 'refresh' | 'cancel') {
+  const attempt = captured, token = epoch
+  if (!attempt || busy.value || !stillCurrent(token, attempt)) return
+  if (kind === 'request' && (!registrationJson.value || new TextEncoder().encode(registrationJson.value).length > 16384)) { message.value = '登记请求必须为不含 credential 的公开 JSON，且不超过16KiB。'; return }
+  const run = { runId: attempt.runId, generation: attempt.generation }
+  busy.value = true; message.value = ''
+  try {
+    if (kind === 'request') registrationRequested = true
+    const result = kind === 'request'
+      ? await remoteRegistrationRequest({ ...run, candidateJson: registrationJson.value })
+      : await (kind === 'cancel' ? remoteRegistrationCancel : remoteRegistrationCurrent)(run)
+    if (!stillCurrent(token, attempt)) { if (kind === 'request') await remoteRegistrationCancel(run); return }
+    registrationState.value = result.state
+    if (result.state === 'RetirementUnknown') {
+      message.value = '原登记资源的退休结果不确定。已安装记录（如有）仍为锁定；请勿重试或启动。'
+    } else if ('receipt' in result) {
+      receipt = result.receipt; configured.value = true; state.value = 'Locked'; registrationJson.value = ''
+      message.value = result.state === 'InstalledLocked' ? '登记已完成，本次会话候选仍为锁定。Host控制需要下方另一次本机批准和启动。' : '本机会话候选已安装并保持锁定，但浏览器交付未确认。不要重放登记。'
+    }
+  } catch (error) {
+    if (!stillCurrent(token, attempt)) cleanupFailed()
+    else message.value = typeof error === 'object' && error !== null && 'code' in error && error.code === 'REMOTE_HOST_UNAVAILABLE' ? '当前构建未启用远程登记。' : '登记操作未确认成功。请刷新状态，不会自动重试。'
+  } finally { if (stillCurrent(token, attempt)) busy.value = false }
 }
 function show() {
   const t = tabs.tab(props.tabId)
@@ -85,6 +115,20 @@ onUnmounted(invalidate)
         <textarea v-model="candidate" aria-label="公开配对JSON" :disabled="configured || busy" maxlength="16384" spellcheck="false" autocomplete="off" />
       </label>
       <BrowserPairingCandidateEditor :scope-json="pairingScope" :disabled="busy" />
+      <details>
+        <summary>首次浏览器登记</summary>
+        <p>粘贴仅含公开材料的登记请求，不含 credential、私钥、密码或令牌。先独立核对两端公钥；浏览器必须另有可信 Host pin，不能从此候选自动生成。</p>
+        <label>首次登记 JSON
+          <textarea v-model="registrationJson" aria-label="首次登记JSON" :disabled="busy || registrationRequested" maxlength="16384" spellcheck="false" autocomplete="off" />
+        </label>
+        <p>首次本机 Yes 只允许使用现有密钥建立一次登记连接，原始总期限120秒。验证后另有浏览器存储确认；均不授予 Host 控制。</p>
+        <div class="remote-host-actions">
+          <AppButton :disabled="busy || registrationRequested || configured" @click="register('request')">请求登记密钥使用</AppButton>
+          <AppButton :disabled="busy || !registrationRequested" @click="register('refresh')">刷新登记状态</AppButton>
+          <AppButton :disabled="busy || !registrationRequested" @click="register('cancel')">取消登记</AppButton>
+        </div>
+        <output aria-label="登记状态">{{ registrationState }}</output>
+      </details>
       <div class="remote-host-actions">
         <AppButton :disabled="configured || busy" @click="act('configure')">校验并冻结</AppButton>
         <AppButton :disabled="!configured || busy || state !== 'Locked'" @click="act('request')">请求本机批准</AppButton>

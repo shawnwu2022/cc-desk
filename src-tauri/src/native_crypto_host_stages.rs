@@ -138,6 +138,24 @@ impl HostSigningStages {
         facts.phase = Phase::RelayArmed;
         Ok(())
     }
+    #[cfg(feature = "remote-host")]
+    pub(crate) fn begin_registration(
+        &mut self,
+        scope: crate::remote_host_approval::RegistrationSigningScope,
+        setup_end: Instant,
+    ) -> Result<(), SignFailure> {
+        if !scope.matches(&self.shared.token, self.shared.cap) || setup_end > scope.end() {
+            self.cancel();
+            return Err(SignFailure::Closed);
+        }
+        let mut facts = self.shared.facts.lock();
+        if facts.phase != Phase::Dormant || !self.shared.live(Some(setup_end)) {
+            return Err(SignFailure::Closed);
+        }
+        facts.setup_end = Some(setup_end);
+        facts.phase = Phase::RelayArmed;
+        Ok(())
+    }
     pub(crate) fn arm_endpoint(&mut self) -> Result<(), SignFailure> {
         let mut facts = self.shared.facts.lock();
         // 原 connect_admitted 已返回 Accepted；已交付签名的五秒窗不再是网络寿命。

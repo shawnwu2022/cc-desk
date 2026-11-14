@@ -7,9 +7,11 @@ import {createRequire} from 'node:module';
 import {join} from 'node:path';
 const Ws=createRequire(join(process.cwd(),'package.json'))('ws');
 import {readFile,writeFile} from 'node:fs/promises';
-let module:string,fixture:string,relayModule:string,installationModule:string
+let module:string,fixture:string,relayModule:string,installationModule:string,productionEntryModule:string,productionWorkerModule:string
 test.use({serviceWorkers:'block'})
 test.beforeAll(async()=>{
+ productionEntryModule=(await build({stdin:{resolveDir:process.cwd(),contents:`export {controlledBrowserRegistrationSource} from './remote/ui-terminal/src/browserRegistrationSource.ts'; export {createBrowserEnrollmentStore} from './remote/ui-terminal/src/browserEnrollmentStore.ts';`},bundle:true,platform:'browser',format:'esm',target:'es2022',write:false})).outputFiles[0].text;
+ productionWorkerModule=(await build({entryPoints:['remote/ui-terminal/src/browserRegistrationEntry.worker.ts'],bundle:true,platform:'browser',format:'esm',target:'es2022',write:false})).outputFiles[0].text;
  module=(await build({entryPoints:['remote/ui-terminal/src/browserRegistrationBridge.ts'],bundle:true,platform:'browser',format:'esm',target:'es2022',write:false})).outputFiles[0].text
  relayModule=(await build({entryPoints:['remote/ui-terminal/src/browserRelay.ts'],bundle:true,platform:'browser',format:'esm',target:'es2022',write:false})).outputFiles[0].text;
  installationModule=(await build({stdin:{resolveDir:process.cwd(),contents:`export {createBrowserRegistrationInstallation} from './remote/ui-terminal/src/browserRegistrationInstallation.ts'; export {createBrowserEnrollmentStore} from './remote/ui-terminal/src/browserEnrollmentStore.ts';`},bundle:true,platform:'browser',format:'esm',target:'es2022',write:false})).outputFiles[0].text;
@@ -27,6 +29,47 @@ test.beforeAll(async()=>{
  Object.defineProperty(navigator.credentials,'get',{configurable:true,value:async options=>{f.gets++;if(!f.credential||options.publicKey.allowCredentials.length!==1||!new Uint8Array(options.publicKey.allowCredentials[0].id).every((v,i)=>v===f.credential[i]))throw Error('TEST_ONLY credential binding mismatch');const client=new TextEncoder().encode(JSON.stringify({type:'webauthn.get',challenge:encode(new Uint8Array(options.publicKey.challenge)),origin:location.origin,crossOrigin:false}));const auth=new Uint8Array([...(await hash(new TextEncoder().encode('desk.invalid'))),5,0,0,0,0]);const raw=new Uint8Array(await crypto.subtle.sign({name:'ECDSA',hash:'SHA-256'},keys[f.mode==='wrong-key'?2:3],new Uint8Array([...auth,...(await hash(client))])));const response=Object.create(AuthenticatorAssertionResponse.prototype);Object.defineProperties(response,{clientDataJSON:{value:client.buffer},authenticatorData:{value:auth.buffer},signature:{value:der(raw).buffer},userHandle:{value:null}});const value=Object.create(PublicKeyCredential.prototype);Object.defineProperties(value,{type:{value:'public-key'},rawId:{value:f.credential.slice().buffer},response:{value:response},getClientExtensionResults:{value:()=>({})}});return value}});
  return f;}`
 })
+
+// 生产入口与真实专用 Worker；合成凭证、原生 cfg(test) 审批与 WSS 外层转发仍限于 fixture。
+for(const scenario of ['install','wrong-pin','start-yes','start-deny','start-cancel'])test(`RegistrationEntry_ActualRelayNative_${scenario}_003`,async({page,context},info)=>{
+ test.setTimeout(45000);
+ const startup=scenario.startsWith('start-'),success=scenario==='install'||scenario==='start-yes';
+ const o=oracle(startup?scenario:scenario==='install'?'install':'cancel');let r:Awaited<ReturnType<typeof route>>|undefined;
+ try{
+  const ready=await o.next();expect(ready.plan).toBeDefined();r=await route(context,ready.origin);
+  const extra:Record<string,string>={'/production-entry.mjs':productionEntryModule,'/browserRegistrationEntry.worker.ts':productionWorkerModule,'/browser-registration.js':'export async function readApprovedBrowserRegistrationInputs(signal){globalThis.f.sourceReads++;if(signal.aborted)throw Error("TEST_ONLY cancelled");return globalThis.f.approvedInputs}'};
+  for(const [path,body] of Object.entries(extra))await context.route('https://desk.invalid'+path,route=>route.fulfill({headers:{'Cross-Origin-Opener-Policy':'same-origin','Cross-Origin-Embedder-Policy':'require-corp'},contentType:'text/javascript',body}));
+  await page.goto('https://desk.invalid/');
+  await page.evaluate(async({plan,scenario})=>{
+   const fixture=await import(location.origin+'/fixture.mjs'),api=await import(location.origin+'/production-entry.mjs'),f=await fixture.setup(true);f.controller=new AbortController();f.events=[];f.sourceReads=0;f.retired=false;
+   if(scenario==='wrong-pin')plan.configuration.hostSpki=plan.configuration.grant.issuerSpki;
+   f.approvedInputs={keys:f.keys,approvedPlan:plan,artifacts:{wasm:location.origin+'/fixture_bg.wasm',glue:location.origin+'/fixture_bg.js'}};
+   const now=performance.timeOrigin+performance.now();f.source=api.controlledBrowserRegistrationSource();f.owner=await f.source.register({signal:f.controller.signal,setupDeadline:now+10000,registrationDeadline:now+40000});
+   void f.owner.evidence.then((value:unknown)=>f.events.push({kind:'evidence',value}),()=>f.events.push({kind:'evidenceFailed'}));
+   void f.owner.outcome.then((value:unknown)=>f.events.push({kind:'outcome',value}),()=>f.events.push({kind:'outcomeFailed'}));
+   void f.owner.completed.then(()=>f.events.push({kind:'completed'}),()=>f.events.push({kind:'completionFailed'}));
+   f.installState='pending';void f.owner.install().then((value:unknown)=>{f.installState='installed';f.result=value},()=>{f.installState='rejected'}).then(()=>f.owner.waitClosed()).then(()=>{f.retired=true},()=>{f.retirementFailed=true});
+   f.store=api.createBrowserEnrollmentStore({origin:location.origin,databaseName:plan.databaseName});
+  },{plan:structuredClone(ready.plan),scenario});
+  await expect.poll(()=>page.evaluate(()=>Reflect.get(globalThis,'f').retired),{timeout:20000}).toBe(true);
+  const browser=await page.evaluate(async()=>{const f=Reflect.get(globalThis,'f');return{creates:f.creates,gets:f.gets,sourceReads:f.sourceReads,state:f.installState,result:f.result,status:await f.store.status(),events:f.events}});
+  if(success){
+   expect(browser).toMatchObject({creates:1,gets:1,sourceReads:1,state:'installed',result:{revision:'1',state:'active'},status:{revision:'1',state:'active'}});
+   expect(browser.events).toContainEqual(expect.objectContaining({kind:'evidence',value:expect.objectContaining({protocol:772,fullHandshake:true,rawPublicKey:true,alpnMatches:true})}));
+   expect(browser.events).toContainEqual({kind:'completed'});
+  }else expect(browser).toMatchObject({creates:0,gets:0,sourceReads:1,state:'rejected',status:undefined,events:expect.not.arrayContaining([expect.objectContaining({kind:'evidence'})])});
+  const native=await o.next();expect(native).toMatchObject({nativeCandidateInstalled:success,acknowledged:success,locked:true,hostNetworkAttempts:0,hostKeyOpens:startup&&scenario!=='start-deny'?2:0,nativeTransportRetired:true});
+  if(startup)expect(native).toMatchObject({nativeStartupOwner:true,nativeKeysRetired:true,registrationKeyOpens:scenario==='start-deny'?[0,0]:[1,1]});
+  o.releaseRelay();expect((await o.exit)[0],o.output()).toBe(0);
+  if(success){
+   await page.reload();expect(await page.evaluate(async databaseName=>{const api=await import(location.origin+'/production-entry.mjs');crypto.subtle.importKey=()=>{throw Error('TEST_ONLY unexpected key import')};const store=api.createBrowserEnrollmentStore({origin:location.origin,databaseName}),signal=new AbortController().signal,session=await store.openExisting(async()=>{},signal),material=await session.provider.readApproved(signal);const nonExportable=[material.handles.tlsKey,material.handles.grantKey].every(k=>k instanceof CryptoKey&&!k.extractable);session.close();await session.waitClosed();return{status:await store.status(),nonExportable}},ready.plan.databaseName)).toEqual({status:{revision:'1',state:'active'},nonExportable:true});
+  }
+  const files=[o.file,r.wasm,r.glue,process.env.CC_DESK_TEST_RELAY_EXE!,'remote/ui-terminal/src/browserRegistrationEntry.ts','remote/ui-terminal/src/browserRegistrationEntry.worker.ts','remote/ui-terminal/src/browserRegistrationArtifacts.ts','remote/ui-terminal/src/browserRegistrationSource.ts'];
+  const artifact={testOnly:true,scenario,boundary:'production entry/Worker and real TLS/Relay/native fixture; synthetic credentials and approval; not production deployment',browser,native,metrics:r.metrics(),artifacts:await Promise.all(files.map(async file=>({file,sha256:createHash('sha256').update(await readFile(file)).digest('hex')})))};
+  const path=info.outputPath('production-registration-entry.json');await writeFile(path,JSON.stringify(artifact,null,2));await info.attach('production-registration-entry',{path,contentType:'application/json'});
+ }catch(error){const path=info.outputPath('production-entry-failure.json');await writeFile(path,JSON.stringify({native:o.output(),browser:await page.evaluate(()=>{const f=Reflect.get(globalThis,'f');return f?{events:f.events,state:f.installState,retired:f.retired,retirementFailed:f.retirementFailed}:undefined}).catch(()=>null)},null,2));throw error;}
+ finally{await page.evaluate(()=>{const f=Reflect.get(globalThis,'f');f?.owner?.close();f?.controller?.abort()}).catch(()=>{});r?.dispose();await o.dispose();}
+});
 
 const entry=`import {startBrowserRegistrationWorker} from './remote/ui-terminal/src/browserRegistrationWorker.ts';
 let releaseClose;const controller=new AbortController();
@@ -49,7 +92,7 @@ let workerModule:string;
 test.beforeAll(async()=>{workerModule=(await build({stdin:{contents:entry,resolveDir:process.cwd()},bundle:true,platform:'browser',format:'esm',target:'es2022',write:false})).outputFiles[0].text;});
 function oracle(mode:string){
  const file=process.env.CC_DESK_TEST_ONLY_NATIVE_REGISTRATION_ORACLE;if(!file)throw Error('explicit native registration oracle executable required');
- const child=spawn(file,['NativeRegistration_RelayOracle_903','--ignored','--nocapture'],{stdio:['pipe','pipe','pipe'],windowsHide:true,env:{...process.env,CC_DESK_TEST_ONLY_NATIVE_REGISTRATION_MODE:mode}}),exit=once(child,'exit');
+ const child=spawn(file,[mode.startsWith('start-')?'NativeRegistration_StartOracle_904':'NativeRegistration_RelayOracle_903','--ignored','--nocapture'],{stdio:['pipe','pipe','pipe'],windowsHide:true,env:{...process.env,CC_DESK_TEST_ONLY_NATIVE_REGISTRATION_MODE:mode}}),exit=once(child,'exit');
  const values:any[]=[],waiters:{resolve:(v:any)=>void;reject:(e:Error)=>void}[]=[];let buffer='',output='',ended=false;
  child.stderr.on('data',b=>{output+=b});child.stdout.on('data',b=>{buffer+=b;output+=b;for(;;){const n=buffer.indexOf('\n');if(n<0)break;const line=buffer.slice(0,n);buffer=buffer.slice(n+1);const at=line.indexOf('CC_DESK_REGISTRATION_ORACLE:');if(at<0)continue;const value=JSON.parse(line.slice(at+'CC_DESK_REGISTRATION_ORACLE:'.length));const waiter=waiters.shift();if(waiter)waiter.resolve(value);else values.push(value);}});
  void exit.then(()=>{ended=true;for(const waiter of waiters)waiter.reject(Error(output));});
@@ -159,11 +202,11 @@ for(const scenario of scenarios)test(`RegistrationRelay_ActualEdgeNative_${scena
 });
 
 // 新 credential 经原 TLS 通道取得独立持久安装批准，原三方退休后才可提交同一组 handles。
-const installationScenarios=['install','install-deny','install-document','install-expired','install-held-retirement','install-plan-mismatch','install-run-local'] as const;
+const installationScenarios=['install','install-deny','install-document','install-expired','install-held-retirement','install-plan-mismatch','install-run-local','remember','remember-deny','remember-document','remember-expired','remember-target'] as const;
 for(const scenario of installationScenarios)test(`RegistrationRelay_Persistent_${scenario}_002`,async({page,context},info)=>{
  test.setTimeout(45000);
- const rejectedByNative=['install-deny','install-document','install-expired'].includes(scenario);
- const mode=rejectedByNative?scenario:scenario==='install-run-local'?'yes':'install';
+ const rejectedByNative=['install-deny','install-document','install-expired','remember-deny','remember-document','remember-expired','remember-target'].includes(scenario);
+ const mode=scenario.startsWith('remember')?scenario:rejectedByNative?scenario:scenario==='install-run-local'?'yes':'install';
  const o=oracle(mode);let r:Awaited<ReturnType<typeof route>>|undefined,reloaded:any,revoked:any;
  try{
   const ready=await o.next();expect(ready.kind).toBe('ready');expect(ready.plan).toBeDefined();
@@ -184,9 +227,10 @@ for(const scenario of installationScenarios)test(`RegistrationRelay_Persistent_$
   }
   await retired(page);
   const result=await o.next();expect(result).toMatchObject({nativeCandidateInstalled:!rejectedByNative,locked:true,hostNetworkAttempts:0,hostKeyOpens:0,registrationTlsConnections:1,acknowledged:true,persistentTrust:false,genuineGuiApproval:false,actualRelay:true,relayMode:'explicit-legacy',nativeTransportRetired:true});
+  if(scenario.startsWith('remember'))expect(result).toMatchObject({nativeRecordWritten:scenario==='remember',nativeReloadLocked:scenario==='remember'});
   if(!rejectedByNative)expect(outcome).toEqual(result.receipt);
   o.releaseRelay();expect((await o.exit)[0],o.output()).toBe(0);
-  const success=scenario==='install'||scenario==='install-held-retirement';
+  const success=scenario==='install'||scenario==='install-held-retirement'||scenario==='remember';
   await expect.poll(()=>page.evaluate(()=>Reflect.get(globalThis,'f').installState)).toBe(success?'installed':'rejected');
   const browser=await page.evaluate(async()=>{const f=Reflect.get(globalThis,'f');await f.installation.waitClosed();return{creates:f.creates,gets:f.gets,credential:Array.from(f.credential),state:f.installState,result:f.installResult,status:await f.store.status(),writes:f.activeWrites,commits:f.activeCommits,aborted:f.controller.signal.aborted,mainRetired:f.mainRetired,relayRetired:f.relayRetired,sessionRetired:f.sessionRetired,events:f.events};});
   expect(browser).toMatchObject({creates:1,gets:1,state:success?'installed':'rejected',writes:success?1:0,commits:success?1:0,aborted:false,mainRetired:true,relayRetired:true,sessionRetired:true});

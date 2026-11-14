@@ -481,6 +481,10 @@ impl Drop for Publication {
     }
 }
 impl ActivationReservation {
+    #[cfg(windows)]
+    pub(crate) fn registration() -> Self {
+        Self::new()
+    }
     #[cfg(test)]
     pub(crate) fn test_fail_spawn(self) -> std::io::Result<()> {
         self.start(

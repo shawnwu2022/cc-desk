@@ -21,6 +21,8 @@ enum Stage {
     Evidence(UnapprovedBrowserRegistration),
     Awaiting(Arc<NativeRegistrationApproval>),
     AwaitingBrowserInstallation(Arc<NativeBrowserInstallationApproval>),
+    #[cfg(windows)]
+    AwaitingNativePersistence(Arc<crate::remote_host_approval::NativePersistenceApproval>),
     Closed,
 }
 pub(crate) struct NativeRegistrationOwner {
@@ -298,6 +300,10 @@ impl NativeRegistrationOwner {
             a.cancel();
         }
         if let Stage::AwaitingBrowserInstallation(a) = &self.stage {
+            a.cancel();
+        }
+        #[cfg(windows)]
+        if let Stage::AwaitingNativePersistence(a) = &self.stage {
             a.cancel();
         }
         self.stage = Stage::Closed;

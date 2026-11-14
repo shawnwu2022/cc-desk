@@ -5,6 +5,9 @@ use cc_desk_remote_security::{
     Role,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
+#[cfg(windows)]
+#[path = "remote_native_persistence_session.rs"]
+mod native_persistence;
 
 pub(crate) struct NativeRegistrationSession<S> {
     owner: Option<NativeRegistrationOwner>,
@@ -128,6 +131,12 @@ impl<S> NativeRegistrationSession<S> {
                 scope,
             },
             channel: self.channel.take(),
+        })
+    }
+    pub(crate) fn browser_approval_pending(&self) -> bool {
+        self.owner.as_ref().is_some_and(|owner| match &owner.stage {
+            Stage::AwaitingBrowserInstallation(a) => a.pending(),
+            _ => false,
         })
     }
     pub(crate) fn cancel(&mut self) {

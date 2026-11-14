@@ -2,6 +2,44 @@
 use super::*;
 use std::task::{RawWaker, RawWakerVTable};
 
+#[tokio::test]
+async fn HostStages_RegistrationHeldEndpointHonorsSetupEnd_010() {
+    let mut f = Fixture::new();
+    let scope =
+        crate::remote_host_approval::RegistrationSigningScope::test_new(f.token.clone(), f.cap);
+    let end = Instant::now() + Duration::from_secs(1);
+    f.set().stages.begin_registration(scope, end).unwrap();
+    let relay = f
+        .set()
+        .stages
+        .test_relay_future(b"PUBLIC_REGISTRATION_RELAY".to_vec())
+        .unwrap();
+    assert!(relay.await.is_ok());
+    f.set().stages.arm_endpoint().unwrap();
+    let (claim, in_claim, release_claim) = gate();
+    f.set()
+        .stages
+        .test_on_mint(Box::new(move |attempt| attempt.hook_claim(claim)));
+    let signer = f
+        .set()
+        .endpoint
+        .choose_scheme(&[rustls::SignatureScheme::ECDSA_NISTP256_SHA256])
+        .unwrap();
+    let signing = std::thread::spawn(move || signer.sign(b"PUBLIC_REGISTRATION_ENDPOINT"));
+    in_claim.recv_timeout(Duration::from_secs(3)).unwrap();
+    let actual = f
+        .set()
+        .stages
+        .test_attempt(SigningPurpose::Endpoint)
+        .unwrap()
+        .end();
+    assert!(actual <= end);
+    tokio::time::sleep_until(end.into()).await;
+    release_claim.open();
+    assert!(signing.join().unwrap().is_err());
+    f.finish();
+}
+
 struct Fixture {
     set: Option<HostSignerSet>,
     operation: Arc<ActivationOperation>,

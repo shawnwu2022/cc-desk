@@ -17,7 +17,12 @@ async fn NativeRegistration_RelayOracle_903() {
         "install",
         "install-deny",
         "install-document",
-        "install-expired"
+        "install-expired",
+        "remember",
+        "remember-deny",
+        "remember-document",
+        "remember-expired",
+        "remember-target"
     ]
     .contains(&mode.as_str()));
     let transports = Arc::new(TerminalTransports::new());
@@ -145,6 +150,8 @@ async fn NativeRegistration_RelayOracle_903() {
     let mut installed = false;
     let mut acknowledged = false;
     let mut receipt = None;
+    let mut native_record_written = false;
+    let mut native_reload_locked = false;
     if ["cancel", "native-cancel", "native-deadline"].contains(&mode.as_str()) {
         if let Ok(pending) = pending {
             let channel = pending.into_channel().unwrap();
@@ -188,7 +195,7 @@ async fn NativeRegistration_RelayOracle_903() {
         )
         .unwrap();
         let cap = Instant::now()
-            + if mode == "install-expired" {
+            + if mode == "install-expired" || mode == "remember-expired" {
                 Duration::from_millis(200)
             } else {
                 Duration::from_secs(60)
@@ -199,67 +206,163 @@ async fn NativeRegistration_RelayOracle_903() {
             opened.clone(),
         );
         let frozen = FrozenHostApproval::supplied(fields, &admission, cap, supplier).unwrap();
-        let browser_install = mode.starts_with("install");
-        if browser_install {
+        let frozen = if mode.starts_with("remember") {
+            use crate::remote_native_pairing_store::{
+                tests::{reopen_synthetic_file_store, synthetic_file_store},
+                StoreError,
+            };
+            let task_temp = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap()
+                .join(".audit")
+                .join("runtime-temp");
+            let root = tempfile::Builder::new()
+                .prefix("native-record-")
+                .tempdir_in(&task_temp)
+                .unwrap();
+            let store = synthetic_file_store(root.path()).unwrap();
             let approval = session
-                .test_request_browser_installation(
+                .test_request_native_persistence(
                     &binding,
                     &fixture.caller,
                     &admission,
                     frozen,
-                    crate::remote_host_approval::BrowserInstallationTarget {
-                        database_name: "TEST_ONLY.registration-chain".into(),
-                        expected_revision: None,
-                        host_spki,
-                        relay_id: [2; 16],
-                        wasm_url: "https://desk.invalid/fixture_bg.wasm".into(),
-                        glue_url: "https://desk.invalid/fixture_bg.js".into(),
-                        peer_budget_ms: 5000,
+                    crate::remote_host_approval::NativePersistenceTarget {
+                        store: store.target(),
+                        store_id: uuid::Uuid::new_v4().to_string(),
+                        expected: None,
+                        device_id: uuid::Uuid::new_v4().to_string(),
                     },
                 )
                 .unwrap();
             assert!(session
-                .install(&binding, &fixture.caller, &admission, &controller)
-                .is_err());
-            assert!(session
                 .install_browser(&binding, &fixture.caller, &admission, &controller)
                 .is_err());
-            approval.test_complete(mode != "install-deny");
-        } else {
-            let approval = session
-                .test_request_approval(&binding, &fixture.caller, &admission, frozen)
+            assert_eq!(store.load(), Err(StoreError::Missing));
+            approval.test_complete(mode != "remember-deny");
+            if mode == "remember-document" {
+                document.started(&url);
+                document.finished(&url);
+            }
+            if mode == "remember-expired" {
+                tokio::time::sleep(Duration::from_millis(220)).await;
+            }
+            let wrong_root = tempfile::Builder::new()
+                .prefix("native-record-wrong-")
+                .tempdir_in(&task_temp)
                 .unwrap();
-            approval.test_complete(mode != "deny");
-        }
-        if mode == "document" || mode == "install-document" {
-            document.started(&url);
-            document.finished(&url);
-        }
-        if mode == "install-expired" {
-            tokio::time::sleep(Duration::from_millis(220)).await;
-        }
-        let installation = if browser_install {
-            session.install_browser(&binding, &fixture.caller, &admission, &controller)
+            let wrong_store = synthetic_file_store(wrong_root.path()).unwrap();
+            let decision = session.persist_native(
+                &binding,
+                &fixture.caller,
+                &admission,
+                |mutation, authorization| {
+                    if mode == "remember-target" {
+                        wrong_store.apply(mutation.clone(), authorization)
+                    } else {
+                        store.apply(mutation.clone(), authorization)
+                    }
+                },
+            );
+            assert_eq!(wrong_store.load(), Err(StoreError::Missing));
+            if mode == "remember" {
+                let (host, snapshot) = decision.unwrap().unwrap();
+                assert_eq!(snapshot.expected.revision, 1);
+                assert_eq!(snapshot.devices.len(), 1);
+                assert!(snapshot.devices[0].record.is_some());
+                assert!(session
+                    .persist_native(&binding, &fixture.caller, &admission, |_, _| panic!(
+                        "consumed native persistence permit"
+                    ))
+                    .is_err());
+                drop(store);
+                let reopened = reopen_synthetic_file_store(root.path()).unwrap();
+                assert_eq!(reopened.load().unwrap(), snapshot);
+                assert_eq!(
+                    controller
+                        .current(&binding, &fixture.caller, &admission)
+                        .unwrap(),
+                    HostControlReply::Locked
+                );
+                native_record_written = true;
+                native_reload_locked = true;
+                Some(host)
+            } else {
+                assert!(decision.is_err() || matches!(decision, Ok(None)));
+                assert_eq!(store.load(), Err(StoreError::Missing));
+                None
+            }
         } else {
-            session.install(&binding, &fixture.caller, &admission, &controller)
+            Some(frozen)
         };
-        match installation {
-            Ok(mut delivery) => {
+        if let Some(frozen) = frozen {
+            let browser_install = mode.starts_with("install") || mode == "remember";
+            if browser_install {
+                let approval = session
+                    .test_request_browser_installation(
+                        &binding,
+                        &fixture.caller,
+                        &admission,
+                        frozen,
+                        crate::remote_host_approval::BrowserInstallationTarget {
+                            database_name: "TEST_ONLY.registration-chain".into(),
+                            expected_revision: None,
+                            host_spki,
+                            relay_id: [2; 16],
+                            wasm_url: "https://desk.invalid/fixture_bg.wasm".into(),
+                            glue_url: "https://desk.invalid/fixture_bg.js".into(),
+                            peer_budget_ms: 5000,
+                        },
+                    )
+                    .unwrap();
+                assert!(session
+                    .install(&binding, &fixture.caller, &admission, &controller)
+                    .is_err());
                 assert!(session
                     .install_browser(&binding, &fixture.caller, &admission, &controller)
                     .is_err());
-                installed = true;
-                receipt = Some(delivery.outcome().clone());
-                acknowledged = delivery.deliver().await.is_ok();
-                assert!(delivery.deliver().await.is_err());
+                approval.test_complete(mode != "install-deny");
+            } else {
+                let approval = session
+                    .test_request_approval(&binding, &fixture.caller, &admission, frozen)
+                    .unwrap();
+                approval.test_complete(mode != "deny");
             }
-            Err(_) => {
-                acknowledged = session.reject().await.is_ok();
+            if mode == "document" || mode == "install-document" {
+                document.started(&url);
+                document.finished(&url);
             }
+            if mode == "install-expired" {
+                tokio::time::sleep(Duration::from_millis(220)).await;
+            }
+            let installation = if browser_install {
+                session.install_browser(&binding, &fixture.caller, &admission, &controller)
+            } else {
+                session.install(&binding, &fixture.caller, &admission, &controller)
+            };
+            match installation {
+                Ok(mut delivery) => {
+                    assert!(session
+                        .install_browser(&binding, &fixture.caller, &admission, &controller)
+                        .is_err());
+                    installed = true;
+                    receipt = Some(delivery.outcome().clone());
+                    acknowledged = delivery.deliver().await.is_ok();
+                    assert!(delivery.deliver().await.is_err());
+                }
+                Err(_) => {
+                    acknowledged = session.reject().await.is_ok();
+                }
+            }
+        } else {
+            acknowledged = session.reject().await.is_ok();
         }
-        assert_eq!(installed, mode == "yes" || mode == "install");
+        assert_eq!(
+            installed,
+            mode == "yes" || mode == "install" || mode == "remember"
+        );
         assert_eq!(controller.test_has_configuration(), installed);
-        if mode != "document" && mode != "install-document" {
+        if mode != "document" && mode != "install-document" && mode != "remember-document" {
             assert_eq!(
                 controller
                     .current(&binding, &fixture.caller, &admission)
@@ -272,7 +375,7 @@ async fn NativeRegistration_RelayOracle_903() {
     assert_eq!(opened[0].load(std::sync::atomic::Ordering::Acquire), 0);
     assert_eq!(opened[1].load(std::sync::atomic::Ordering::Acquire), 0);
     assert_eq!(controller.test_has_configuration(), installed);
-    if mode != "document" && mode != "install-document" {
+    if mode != "document" && mode != "install-document" && mode != "remember-document" {
         assert_eq!(
             controller
                 .current(&binding, &fixture.caller, &admission)
@@ -293,7 +396,7 @@ async fn NativeRegistration_RelayOracle_903() {
     drop(controller);
     drop(admission);
     assert!(cleanup.close());
-    emit(&serde_json::to_vec(&serde_json::json!({"kind":"finished","mode":mode,"nativeCandidateInstalled":installed,"locked":true,"hostNetworkAttempts":0,"hostKeyOpens":0,"registrationTlsConnections":1,"actualRelay":true,"relayMode":"explicit-legacy","nativeTransportRetired":true,"nativeElapsedMs":elapsed_ms,"acknowledged":acknowledged,"receipt":receipt,"genuineGuiApproval":false,"persistentTrust":false})).unwrap());
+    emit(&serde_json::to_vec(&serde_json::json!({"kind":"finished","mode":mode,"nativeCandidateInstalled":installed,"locked":true,"hostNetworkAttempts":0,"hostKeyOpens":0,"registrationTlsConnections":1,"actualRelay":true,"relayMode":"explicit-legacy","nativeTransportRetired":true,"nativeElapsedMs":elapsed_ms,"acknowledged":acknowledged,"receipt":receipt,"genuineGuiApproval":false,"persistentTrust":false,"nativeRecordWritten":native_record_written,"nativeReloadLocked":native_reload_locked})).unwrap());
     // 浏览器确认严格协议退役之前，保留测试基础设施。
     let mut cleanup_permission = String::new();
     std::io::stdin().read_line(&mut cleanup_permission).unwrap();
@@ -302,7 +405,7 @@ async fn NativeRegistration_RelayOracle_903() {
 }
 
 // 复用公开 fixture 密钥与已校验 CA/名称，限定浏览器来源和注册寿命。
-async fn registration_relay_fixture() -> NetworkRelayFixture {
+pub(super) async fn registration_relay_fixture() -> NetworkRelayFixture {
     let reserve = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = reserve.local_addr().unwrap();
     drop(reserve);

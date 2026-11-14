@@ -6,8 +6,8 @@ use crate::remote_client_ipc::RemoteClientService;
 pub(crate) mod activation;
 #[path = "remote_host_driver.rs"]
 pub(crate) mod driver;
-use activation::{ActivationOperation, ActivationReservation};
 use crate::run_supervisor::NativeRunPin;
+use activation::{ActivationOperation, ActivationReservation};
 use cc_desk_remote_host::native_host::{NativeHost, WriterRetirement};
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -22,7 +22,8 @@ pub(crate) fn request_app_exit(
     native: Arc<NativeRuntime>,
 ) -> bool {
     let service = app.state::<Arc<RemoteHostService>>().inner().clone();
-    app.state::<Arc<crate::remote_host_controller::RemoteHostController>>().begin_shutdown();
+    app.state::<Arc<crate::remote_host_controller::RemoteHostController>>()
+        .begin_shutdown();
     match service.request_exit(code, false) {
         ExitDecision::Proceed => false,
         ExitDecision::Prevent => true,
@@ -85,7 +86,9 @@ struct HostCheckout<'a> {
 impl HostCheckout<'_> {
     fn finish(mut self) {
         #[cfg(test)]
-        if let Some(before_return) = self.before_return.take() { before_return(); }
+        if let Some(before_return) = self.before_return.take() {
+            before_return();
+        }
         loop {
             let mut state = self.service.state.lock();
             if state.closing && self.host.is_some() && !self.stopped {
@@ -94,7 +97,10 @@ impl HostCheckout<'_> {
                 continue;
             }
             assert!(matches!(state.host, HostSlot::CheckedOut(token) if token == self.token));
-            state.host = self.host.take().map_or(HostSlot::Empty, HostSlot::Available);
+            state.host = self
+                .host
+                .take()
+                .map_or(HostSlot::Empty, HostSlot::Available);
             state.host_stopped = self.stopped;
             self.finished = true;
             break;
@@ -102,16 +108,24 @@ impl HostCheckout<'_> {
     }
     fn stop(&mut self) {
         if !self.stopped {
-            if let Some(host) = &mut self.host { host.begin_shutdown(); self.stopped = true; }
+            if let Some(host) = &mut self.host {
+                host.begin_shutdown();
+                self.stopped = true;
+            }
         }
     }
 }
 impl Drop for HostCheckout<'_> {
     fn drop(&mut self) {
-        if self.finished { return; }
+        if self.finished {
+            return;
+        }
         let mut state = self.service.state.lock();
         assert!(matches!(state.host, HostSlot::CheckedOut(token) if token == self.token));
-        state.host = self.host.take().map_or(HostSlot::Empty, HostSlot::Available);
+        state.host = self
+            .host
+            .take()
+            .map_or(HostSlot::Empty, HostSlot::Available);
         state.host_stopped = self.stopped;
         if !self.finished {
             state.closing = true;
@@ -163,16 +177,23 @@ pub(crate) struct ServiceState {
     #[cfg(test)]
     after_handoff: Option<Box<dyn FnOnce() + Send>>,
     #[cfg(test)]
-    retirement_gate: Option<(std::sync::mpsc::Sender<()>,tokio::sync::oneshot::Receiver<()>)>,
+    retirement_gate: Option<(
+        std::sync::mpsc::Sender<()>,
+        tokio::sync::oneshot::Receiver<()>,
+    )>,
 }
 pub(crate) struct RemoteHostService {
     pub(crate) state: Mutex<ServiceState>,
     pub(crate) network: Arc<crate::remote_host_network::HostNetworkCustody>,
+    #[cfg(windows)]
+    pub(crate) registration: Arc<crate::remote_host_controller::startup::RegistrationCustody>,
 }
 impl Default for RemoteHostService {
     fn default() -> Self {
         Self {
             network: Arc::new(Default::default()),
+            #[cfg(windows)]
+            registration: Arc::new(Default::default()),
             state: Mutex::new(ServiceState {
                 host: HostSlot::Empty,
                 host_stopped: false,
@@ -217,9 +238,20 @@ impl RemoteHostService {
         Ok(reservation)
     }
     #[cfg(windows)]
-    pub(crate) fn reserve_driven_activation(&self) -> Result<(ActivationReservation, driver::DriverOwner, driver::DriverStart), crate::cli::types::SafeError> {
+    pub(crate) fn reserve_driven_activation(
+        &self,
+    ) -> Result<
+        (
+            ActivationReservation,
+            driver::DriverOwner,
+            driver::DriverStart,
+        ),
+        crate::cli::types::SafeError,
+    > {
         let mut state = self.state.lock();
-        if state.closing || state.retired || state.activation.is_some() { return Err(crate::cli::profiles::error("REMOTE_HOST_LOCKED")); }
+        if state.closing || state.retired || state.activation.is_some() {
+            return Err(crate::cli::profiles::error("REMOTE_HOST_LOCKED"));
+        }
         let reservation = ActivationReservation::new();
         let (owner, start) = driver::DriverOwner::new(reservation.operation());
         state.driver = Some(owner.link());
@@ -227,8 +259,14 @@ impl RemoteHostService {
         Ok((reservation, owner, start))
     }
     fn activation_retired(state: &ServiceState) -> bool {
-        state.driver.as_ref().is_none_or(|driver| driver.snapshot().retired())
-            && state.activation.as_ref().is_none_or(|operation| operation.snapshot().retired())
+        state
+            .driver
+            .as_ref()
+            .is_none_or(|driver| driver.snapshot().retired())
+            && state
+                .activation
+                .as_ref()
+                .is_none_or(|operation| operation.snapshot().retired())
     }
     #[cfg(test)]
     pub(crate) fn test_activation_observation(&self) -> Option<activation::ActivationObservation> {
@@ -243,14 +281,19 @@ impl RemoteHostService {
         self.state.lock().activation_waiting
     }
     #[cfg(test)]
-    pub(crate) async fn test_retire_activation(&self) -> bool { self.wait_activation().await }
+    pub(crate) async fn test_retire_activation(&self) -> bool {
+        self.wait_activation().await
+    }
     async fn wait_activation(&self) -> bool {
         loop {
             #[cfg(test)]
             {
                 self.state.lock().activation_waiting = true;
             }
-            let (operation, driver) = { let state = self.state.lock(); (state.activation.clone(), state.driver.clone()) };
+            let (operation, driver) = {
+                let state = self.state.lock();
+                (state.activation.clone(), state.driver.clone())
+            };
             let driver = driver.map(|driver| driver.advance());
             let Some(operation) = operation else {
                 return true;
@@ -264,7 +307,9 @@ impl RemoteHostService {
     }
     fn checkout_host(&self, admitting: bool) -> Option<HostCheckout<'_>> {
         let mut state = self.state.lock();
-        if matches!(state.host, HostSlot::CheckedOut(_)) || (admitting && (state.closing || state.peer_pumps.len() >= 64)) {
+        if matches!(state.host, HostSlot::CheckedOut(_))
+            || (admitting && (state.closing || state.peer_pumps.len() >= 64))
+        {
             return None;
         }
         let token = state.next_host_checkout.checked_add(1)?;
@@ -274,10 +319,21 @@ impl RemoteHostService {
             HostSlot::Empty => None,
             HostSlot::CheckedOut(_) => unreachable!("reservation checked under same lock"),
         };
-        let mut checkout = HostCheckout { service: self, token, host, origin: state.origin.clone(), stopped: state.host_stopped, finished: false, #[cfg(test)] before_return: None };
+        let mut checkout = HostCheckout {
+            service: self,
+            token,
+            host,
+            origin: state.origin.clone(),
+            stopped: state.host_stopped,
+            finished: false,
+            #[cfg(test)]
+            before_return: None,
+        };
         let closing = state.closing;
         drop(state);
-        if closing { checkout.stop(); }
+        if closing {
+            checkout.stop();
+        }
         Some(checkout)
     }
     fn with_host<T>(&self, operation: impl FnOnce(Option<&mut NativeHost>) -> T) -> Option<T> {
@@ -291,10 +347,18 @@ impl RemoteHostService {
         self.state.try_lock().is_some()
     }
     #[cfg(test)]
-    pub(crate) fn test_hold_retirement(&self)->(std::sync::mpsc::Receiver<()>,tokio::sync::oneshot::Sender<()>) {
-        let (entered_tx,entered)=std::sync::mpsc::channel();let (release,release_rx)=tokio::sync::oneshot::channel();
-        let mut state=self.state.lock();assert!(state.retirement_gate.is_none());state.retirement_gate=Some((entered_tx,release_rx));
-        (entered,release)
+    pub(crate) fn test_hold_retirement(
+        &self,
+    ) -> (
+        std::sync::mpsc::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let (entered_tx, entered) = std::sync::mpsc::channel();
+        let (release, release_rx) = tokio::sync::oneshot::channel();
+        let mut state = self.state.lock();
+        assert!(state.retirement_gate.is_none());
+        state.retirement_gate = Some((entered_tx, release_rx));
+        (entered, release)
     }
     #[cfg(test)]
     pub(crate) fn test_after_handoff(&self, hook: Box<dyn FnOnce() + Send>) {
@@ -306,7 +370,9 @@ impl RemoteHostService {
     }
     pub(crate) fn commit_network_handoff(
         &self,
-        published: &tokio::sync::watch::Sender<Option<Result<(), crate::remote_host_network::HostNetworkError>>>,
+        published: &tokio::sync::watch::Sender<
+            Option<Result<(), crate::remote_host_network::HostNetworkError>>,
+        >,
         stopped: &tokio::sync::watch::Receiver<bool>,
         end: tokio::time::Instant,
     ) -> Result<(), crate::remote_host_network::HostNetworkError> {
@@ -316,7 +382,12 @@ impl RemoteHostService {
         published.send_if_modified(|value| {
             let state = self.state.lock();
             let stop = stopped.borrow();
-            outcome = if state.closing || state.source_slot.is_closed() || *stop || !matches!(stopped.has_changed(), Ok(false)) || value.is_some() {
+            outcome = if state.closing
+                || state.source_slot.is_closed()
+                || *stop
+                || !matches!(stopped.has_changed(), Ok(false))
+                || value.is_some()
+            {
                 Err(HostNetworkError::Closed)
             } else if tokio::time::Instant::now() >= end {
                 Err(HostNetworkError::Deadline)
@@ -324,7 +395,9 @@ impl RemoteHostService {
                 Ok(())
             };
             let committed = outcome.is_ok();
-            if committed { *value = Some(Ok(())); }
+            if committed {
+                *value = Some(Ok(()));
+            }
             // Tokio 释放 publication 值锁后才唤醒；拒绝保留原 cleanup 的最终错误发布。
             drop(stop);
             drop(state);
@@ -357,7 +430,9 @@ impl RemoteHostService {
         }
     }
     #[cfg(test)]
-    pub(crate) fn test_exit_worker_held(&self) -> bool { self.state.lock().waiter.is_some() }
+    pub(crate) fn test_exit_worker_held(&self) -> bool {
+        self.state.lock().waiter.is_some()
+    }
     // Native provider entry. It accepts only an opaque original document/run
     // admission and a real verified channel, never a shutdown pin or JS authority.
     #[allow(
@@ -406,51 +481,63 @@ impl RemoteHostService {
             )));
         }
         let Some(mut checkout) = self.checkout_host(true) else {
-            return Err(Box::new((crate::cli::profiles::error("REMOTE_HOST_CLOSED"), admission)));
+            return Err(Box::new((
+                crate::cli::profiles::error("REMOTE_HOST_CLOSED"),
+                admission,
+            )));
         };
         let result = (|| {
-        if checkout.host.is_none() {
-            let host = match admission.create_host(channel.clone()) {
-                Ok(host) => host,
-                Err(error) => return Err(Box::new((error, admission))),
-            };
-            // Keep this SAME permanent-admission Host even if the following
-            // handoff rejects. Never drop/recreate it on a wrong-resource retry.
-            checkout.host = Some(Box::new(host));
-        }
-        if let Some(origin) = &checkout.origin {
-            admission.rebind_origin(
-                origin,
-                checkout.host.as_deref_mut().expect("retained original Host"),
-                channel.clone(),
-            )?;
-        } else {
-            let origin = match admission.network_origin() {
-                Ok(origin) => origin,
-                Err(error) => return Err(Box::new((error, admission))),
-            };
-            let pin = admission.adopt(
-                checkout.host.as_deref_mut().expect("retained original Host"),
-                channel.clone(),
-            )?;
-            #[cfg(test)]
-            {
-                let hook = self.state.lock().after_handoff.take();
-                if let Some(hook) = hook { hook(); }
+            if checkout.host.is_none() {
+                let host = match admission.create_host(channel.clone()) {
+                    Ok(host) => host,
+                    Err(error) => return Err(Box::new((error, admission))),
+                };
+                // Keep this SAME permanent-admission Host even if the following
+                // handoff rejects. Never drop/recreate it on a wrong-resource retry.
+                checkout.host = Some(Box::new(host));
             }
-            let mut state = self.state.lock();
-            state.origin = Some(origin);
-            state.pins.push(pin);
-        }
-        let original = self.clone();
-        let worker = tauri::async_runtime::spawn(async move { original.pump_peer(channel).await });
-        // Publish the original handle while the service lock is still held.
-        // The worker cannot observe its Host before this custody is registered.
-        self.state.lock().peer_pumps.push(Arc::new(PeerPump {
-            join: tokio::sync::Mutex::new(Some(worker)),
-            joined: AtomicU8::new(0),
-        }));
-        Ok(())
+            if let Some(origin) = &checkout.origin {
+                admission.rebind_origin(
+                    origin,
+                    checkout
+                        .host
+                        .as_deref_mut()
+                        .expect("retained original Host"),
+                    channel.clone(),
+                )?;
+            } else {
+                let origin = match admission.network_origin() {
+                    Ok(origin) => origin,
+                    Err(error) => return Err(Box::new((error, admission))),
+                };
+                let pin = admission.adopt(
+                    checkout
+                        .host
+                        .as_deref_mut()
+                        .expect("retained original Host"),
+                    channel.clone(),
+                )?;
+                #[cfg(test)]
+                {
+                    let hook = self.state.lock().after_handoff.take();
+                    if let Some(hook) = hook {
+                        hook();
+                    }
+                }
+                let mut state = self.state.lock();
+                state.origin = Some(origin);
+                state.pins.push(pin);
+            }
+            let original = self.clone();
+            let worker =
+                tauri::async_runtime::spawn(async move { original.pump_peer(channel).await });
+            // Publish the original handle while the service lock is still held.
+            // The worker cannot observe its Host before this custody is registered.
+            self.state.lock().peer_pumps.push(Arc::new(PeerPump {
+                join: tokio::sync::Mutex::new(Some(worker)),
+                joined: AtomicU8::new(0),
+            }));
+            Ok(())
         })();
         checkout.finish();
         result
@@ -464,13 +551,16 @@ impl RemoteHostService {
                 break None;
             }
             let closing = self.state.lock().closing;
-            let connection = if closing { None } else {
+            let connection = if closing {
+                None
+            } else {
                 self.with_host(|host| {
                     host.and_then(|host| {
                         host.drive_peer_installs();
                         host.peer_connection(&channel).ok()
                     })
-                }).flatten()
+                })
+                .flatten()
             };
             if closing {
                 break None;
@@ -526,9 +616,15 @@ impl RemoteHostService {
         let pumps = loop {
             let ready = {
                 let state = self.state.lock();
-                if matches!(state.host, HostSlot::CheckedOut(_)) { None } else { Some(state.peer_pumps.clone()) }
+                if matches!(state.host, HostSlot::CheckedOut(_)) {
+                    None
+                } else {
+                    Some(state.peer_pumps.clone())
+                }
             };
-            if let Some(pumps) = ready { break pumps; }
+            if let Some(pumps) = ready {
+                break pumps;
+            }
             tokio::time::sleep(Duration::from_millis(10)).await;
         };
         let mut known = true;
@@ -557,7 +653,11 @@ impl RemoteHostService {
         let (joined, attempts) = tokio::join!(self.join_peer_pump(), self.network.join_all());
         let joined = joined && attempts;
         let network = loop {
-            if let Some(network) = self.with_host(|host| host.and_then(|host| host.network_retirement())) { break network; }
+            if let Some(network) =
+                self.with_host(|host| host.and_then(|host| host.network_retirement()))
+            {
+                break network;
+            }
             tokio::time::sleep(Duration::from_millis(10)).await;
         };
         if let Some(network) = network {
@@ -574,7 +674,9 @@ impl RemoteHostService {
         let mut state = self.state.lock();
         state.closing = true;
         // 原子失效不调用回调；同锁封闭后，晚发布 handle 仍由原槽接收。
-        if let Some(operation) = &state.activation { operation.cancel(); }
+        if let Some(operation) = &state.activation {
+            operation.cancel();
+        }
         let material = state.source_slot.close();
         let decision = match state.exit {
             ExitIntent::Idle => {
@@ -585,12 +687,18 @@ impl RemoteHostService {
             _ => ExitDecision::Prevent,
         };
         drop(state);
+        #[cfg(windows)]
+        self.registration.begin_shutdown();
         self.release_source_material(material);
         decision
     }
     fn complete_exit(&self, code: i32) -> bool {
         let mut state = self.state.lock();
-        if !state.retired || !Self::activation_retired(&state) || state.source_slot.material_returned() != Some(Ok(())) || !matches!(state.exit,ExitIntent::Waiting(original) if original==code) {
+        if !state.retired
+            || !Self::activation_retired(&state)
+            || state.source_slot.material_returned() != Some(Ok(()))
+            || !matches!(state.exit,ExitIntent::Waiting(original) if original==code)
+        {
             return false;
         }
         state.exit = ExitIntent::Ready(code);
@@ -631,14 +739,27 @@ impl RemoteHostService {
             if let Some(native) = prepare {
                 let pins = std::mem::take(&mut original.state.lock().pins);
                 original.network.begin_shutdown();
+                #[cfg(windows)]
+                original.registration.begin_shutdown();
                 client.begin_shutdown();
                 let native = native.begin_host_shutdown(pins);
                 original.state.lock().native = Some(native);
-                networks = original.with_host(|host| host.and_then(|host| host.network_retirement())).flatten();
+                networks = original
+                    .with_host(|host| host.and_then(|host| host.network_retirement()))
+                    .flatten();
                 original.drain_closed_source_materials();
             }
             let network_owner = original.clone();
-            let (client_result, network_known, owned_known, pump_known, attempts_known, materials_known, activation_known) = tokio::join!(
+            let (
+                client_result,
+                network_known,
+                owned_known,
+                pump_known,
+                attempts_known,
+                materials_known,
+                activation_known,
+                registration_known,
+            ) = tokio::join!(
                 client.shutdown(),
                 async move {
                     if let Some(networks) = networks {
@@ -651,7 +772,17 @@ impl RemoteHostService {
                 original.join_peer_pump(),
                 original.network.join_all(),
                 original.wait_source_materials(),
-                original.wait_activation()
+                original.wait_activation(),
+                async {
+                    #[cfg(windows)]
+                    {
+                        original.registration.join_all().await
+                    }
+                    #[cfg(not(windows))]
+                    {
+                        true
+                    }
+                }
             );
             if client_result.is_err()
                 || !network_known
@@ -660,6 +791,7 @@ impl RemoteHostService {
                 || !attempts_known
                 || !materials_known
                 || !activation_known
+                || !registration_known
             {
                 original.mark_unknown();
                 return;
@@ -667,7 +799,12 @@ impl RemoteHostService {
             original.drain_closed_source_materials();
             {
                 let mut state = original.state.lock();
-                if state.source_slot.material_returned() != Some(Ok(())) || !Self::activation_retired(&state) { state.exit = ExitIntent::Unknown; return; }
+                if state.source_slot.material_returned() != Some(Ok(()))
+                    || !Self::activation_retired(&state)
+                {
+                    state.exit = ExitIntent::Unknown;
+                    return;
+                }
                 state.retired = true;
             }
             if original.complete_exit(code) {
@@ -681,7 +818,9 @@ impl RemoteHostService {
                 Some(result) => return result.is_ok(),
                 None => {
                     #[cfg(test)]
-                    { self.state.lock().source_wait_pending = true; }
+                    {
+                        self.state.lock().source_wait_pending = true;
+                    }
                     tokio::time::sleep(Duration::from_millis(25)).await;
                 }
             }
@@ -691,22 +830,49 @@ impl RemoteHostService {
         #[cfg(test)]
         {
             // 原唯一观察者保管 gate；不在 service 锁内等待，失败不伪造退休。
-            let gate={self.state.lock().retirement_gate.take()};
-            if let Some((entered,release))=gate {
-                let _=entered.send(());
-                if !matches!(tokio::time::timeout(Duration::from_secs(5),release).await,Ok(Ok(()))){return false;}
+            let gate = { self.state.lock().retirement_gate.take() };
+            if let Some((entered, release)) = gate {
+                let _ = entered.send(());
+                if !matches!(
+                    tokio::time::timeout(Duration::from_secs(5), release).await,
+                    Ok(Ok(()))
+                ) {
+                    return false;
+                }
             }
         }
         loop {
-            let writer = self.with_host(|host| host.map_or(WriterRetirement::Joined, NativeHost::observe_shutdown))
+            let writer = self
+                .with_host(|host| {
+                    host.map_or(WriterRetirement::Joined, NativeHost::observe_shutdown)
+                })
                 .unwrap_or(WriterRetirement::Pending);
             // 原 shutdown owner 临时移出，observe 可能唤醒 input/Job 等原 owner。
-            let mut native = NativeShutdownCheckout { service: self, owner: self.state.lock().native.take(), finished: false };
-            let observation = native.owner.as_mut().map(|native| native.observe()).unwrap_or(HostNativeObservation::Unknown);
+            let mut native = NativeShutdownCheckout {
+                service: self,
+                owner: self.state.lock().native.take(),
+                finished: false,
+            };
+            let observation = native
+                .owner
+                .as_mut()
+                .map(|native| native.observe())
+                .unwrap_or(HostNativeObservation::Unknown);
             let mut uncovered = false;
-            if writer == WriterRetirement::Joined && matches!(observation, HostNativeObservation::OwnedSessionReleased | HostNativeObservation::NoRemoteNativeResources) {
+            if writer == WriterRetirement::Joined
+                && matches!(
+                    observation,
+                    HostNativeObservation::OwnedSessionReleased
+                        | HostNativeObservation::NoRemoteNativeResources
+                )
+            {
                 let late_pins = std::mem::take(&mut self.state.lock().pins);
-                let covered = late_pins.iter().all(|pin| native.owner.as_ref().is_some_and(|owner| owner.covers_pin(pin)));
+                let covered = late_pins.iter().all(|pin| {
+                    native
+                        .owner
+                        .as_ref()
+                        .is_some_and(|owner| owner.covers_pin(pin))
+                });
                 if covered {
                     // 同一原 stop inventory 已实际退休；释放额外引用也不持 service 锁。
                     drop(late_pins);
@@ -718,22 +884,33 @@ impl RemoteHostService {
             native.finished = true;
             drop(native);
             let (pending, unknown) = (
-                    writer == WriterRetirement::Pending || observation == HostNativeObservation::Pending,
-                    uncovered || writer == WriterRetirement::Unknown || observation == HostNativeObservation::Unknown,
+                writer == WriterRetirement::Pending
+                    || observation == HostNativeObservation::Pending,
+                uncovered
+                    || writer == WriterRetirement::Unknown
+                    || observation == HostNativeObservation::Unknown,
             );
             if pending {
                 tokio::time::sleep(Duration::from_millis(25)).await;
                 continue;
             }
             #[cfg(test)]
-            { self.state.lock().native_observed_terminal = true; }
+            {
+                self.state.lock().native_observed_terminal = true;
+            }
             return !unknown;
         }
     }
     async fn wait_host_network(&self) -> bool {
         loop {
-            if let Some(network) = self.with_host(|host| host.and_then(|host| host.network_retirement())) {
-                return if let Some(network) = network { network.wait_checked().await.is_ok() } else { true };
+            if let Some(network) =
+                self.with_host(|host| host.and_then(|host| host.network_retirement()))
+            {
+                return if let Some(network) = network {
+                    network.wait_checked().await.is_ok()
+                } else {
+                    true
+                };
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
@@ -991,7 +1168,11 @@ mod tests {
     }
     #[tokio::test]
     async fn host_checkout_closing_before_return_stops_original_host() {
-        let scope = cc_desk_remote_record::grant::SessionScope { session: "11".repeat(16), run: "TEST_ONLY_CHECKOUT_RETURN".into(), generation: "1".into() };
+        let scope = cc_desk_remote_record::grant::SessionScope {
+            session: "11".repeat(16),
+            run: "TEST_ONLY_CHECKOUT_RETURN".into(),
+            generation: "1".into(),
+        };
         let (client, channel, gate, cancel) = crate::tests::remote_channels::channels(scope).await;
         let channel = Arc::new(channel);
         let service = Arc::new(RemoteHostService::default());
@@ -1002,7 +1183,9 @@ mod tests {
         checkout.before_return = Some(Box::new(move || closing.test_begin_host_shutdown()));
         checkout.finish();
         let slot = { std::mem::replace(&mut service.state.lock().host, HostSlot::Empty) };
-        let HostSlot::Available(mut original) = slot else { panic!("original Host must return"); };
+        let HostSlot::Available(mut original) = slot else {
+            panic!("original Host must return");
+        };
         let stopped = original.network_retirement().is_some();
         original.begin_shutdown();
         cancel.cancel();
@@ -1010,7 +1193,10 @@ mod tests {
         channel.authority().request_close();
         let _ = tokio::join!(client.wait_closed(), channel.wait_closed());
         drop(gate);
-        assert!(stopped, "closing raced return and original Host was not stopped");
+        assert!(
+            stopped,
+            "closing raced return and original Host was not stopped"
+        );
     }
     #[test]
     fn host_checkout_busy_is_pending_and_closing_survives_return() {

@@ -35,7 +35,7 @@ function snapshot(value:unknown,depth=0):any{
 function same(a:unknown,b:unknown):boolean{
  if(a===b)return true;if(!a||!b||typeof a!=='object'||typeof b!=='object')return false;
  const left=a as Record<string,unknown>,right=b as Record<string,unknown>,names=Object.keys(left);
- return names.length===Object.keys(right).length&&names.every(name=>Object.hasOwn(right,name)&&same(left[name],right[name]));
+ return names.length===Object.keys(right).length&&names.every(name=>Object.prototype.hasOwnProperty.call(right,name)&&same(left[name],right[name]));
 }
 function decode(value:unknown,min:number,max:number):Uint8Array<ArrayBuffer>{
  if(typeof value!=='string'||value.length>Math.ceil(max*4/3)||!/^[A-Za-z0-9_-]+$/.test(value))throw unavailable();

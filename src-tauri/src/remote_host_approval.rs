@@ -1084,3 +1084,17 @@ fn HostApproval_RevokedLeaseNeverReportsAvailable_006() {
         crate::remote_host_controller::HostControlReply::Expired
     );
 }
+
+#[cfg(windows)]
+#[path = "remote_registration_key_approval.rs"]
+mod registration_key;
+#[cfg(windows)]
+pub(crate) use registration_key::{NativeRegistrationKeyApproval, RegistrationSigningScope};
+#[cfg(windows)]
+#[path = "remote_native_persistence_approval.rs"]
+mod native_persistence;
+#[cfg(windows)]
+#[allow(unused_imports)]
+pub(crate) use native_persistence::{
+    NativePersistenceApproval, NativePersistenceTarget, PersistedRegistration,
+};

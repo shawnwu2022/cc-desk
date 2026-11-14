@@ -527,6 +527,19 @@ export function createNativeHistoryClient(): import('./versionHistory').HistoryC
 // Registered 仅表示来源曾登记，不表示连接可用、批准有效或可再次消费；不能映射 Ready。
 export type RemoteHostControlState = { state: 'Locked' | 'Pending' | 'ApprovalRecorded' | 'Consumed' | 'Cancelled' | 'Expired' | 'Registered' };
 export type RemoteHostRun = { runId: string; generation: number };
+export type RemoteRegistrationState =
+  | { state: 'Locked' | 'PendingKeyApproval' | 'Connecting' | 'Verifying' | 'PendingBrowserApproval' | 'Cancelled' | 'Failed' | 'Unknown' }
+  | { state: 'InstalledLocked' | 'DeliveryUnconfirmed'; receipt: string }
+  | { state: 'RetirementUnknown'; receipt: string | null };
+export async function remoteRegistrationRequest(request: RemoteHostRun & { candidateJson: string }): Promise<RemoteRegistrationState> {
+  return await nativeDocumentBridge().invoke('remote_registration_request', request) as RemoteRegistrationState;
+}
+export async function remoteRegistrationCurrent(run: RemoteHostRun): Promise<RemoteRegistrationState> {
+  return await nativeDocumentBridge().invoke('remote_registration_current', run) as RemoteRegistrationState;
+}
+export async function remoteRegistrationCancel(run: RemoteHostRun): Promise<RemoteRegistrationState> {
+  return await nativeDocumentBridge().invoke('remote_registration_cancel', run) as RemoteRegistrationState;
+}
 // 仅是原生目标的公开描述，不是批准、密钥或连接权限。
 export type RemoteHostPairingScope = { session: string; run: string; generation: string };
 export async function remoteHostPairingScope(run: RemoteHostRun): Promise<RemoteHostPairingScope> {

@@ -34,10 +34,12 @@ fn emit(bytes: &[u8]) {
 
 #[path = "native_cli_registration_channel.rs"]
 mod channel;
-#[path = "native_cli_registration_wasm.rs"]
-mod registration_wasm;
 #[path = "native_cli_registration_relay.rs"]
 mod registration_relay;
+#[path = "native_cli_registration_start.rs"]
+mod registration_start;
+#[path = "native_cli_registration_wasm.rs"]
+mod registration_wasm;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "TEST_ONLY protocol oracle requires an actual browser producer on stdin"]

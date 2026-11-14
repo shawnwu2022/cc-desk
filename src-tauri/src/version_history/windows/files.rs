@@ -898,6 +898,46 @@ impl PinnedFile {
         self.verify()?;
         Ok(OsString::from_wide(&final_path(handle(&self.file))?))
     }
+    /// Pairing-only publication: retain every ordinary identity/no-reparse check,
+    /// then revalidate native authority after the test hook and immediately before
+    /// the actual rename syscall. No history caller receives a weaker primitive.
+    #[cfg(feature = "remote-host")]
+    pub(super) fn publish_pairing_new(
+        &mut self,
+        parent: Arc<Directory>,
+        name: ComponentName,
+        authorize: &mut dyn FnMut() -> crate::remote_native_pairing_store::Result<()>,
+    ) -> crate::remote_native_pairing_store::Result<RenameReceipt> {
+        use crate::remote_native_pairing_store::StoreError;
+        self.verify().map_err(|_| StoreError::Io)?;
+        let mut attempted = false;
+        let mut denied = None;
+        let outcome = rename_handle_admitted(
+            handle(&self.file),
+            &self.identity,
+            &parent,
+            &name,
+            &mut || {
+                if let Err(error) = authorize() {
+                    denied = Some(error);
+                    return Err(io::Error::other("pairing publication not authorized"));
+                }
+                attempted = true;
+                Ok(())
+            },
+        );
+        let receipt = outcome.map_err(|_| {
+            denied.unwrap_or(if attempted {
+                StoreError::Unknown
+            } else {
+                StoreError::Io
+            })
+        })?;
+        self.parent = parent;
+        self.name = name;
+        self.verify().map_err(|_| StoreError::Unknown)?;
+        Ok(receipt)
+    }
     pub(super) fn rename_to(
         &mut self,
         parent: Arc<Directory>,
@@ -951,6 +991,15 @@ fn rename_handle(
     parent: &Directory,
     name: &ComponentName,
 ) -> io::Result<RenameReceipt> {
+    rename_handle_admitted(file, identity, parent, name, &mut || Ok(()))
+}
+fn rename_handle_admitted(
+    file: HANDLE,
+    identity: &FileIdentity,
+    parent: &Directory,
+    name: &ComponentName,
+    before_syscall: &mut dyn FnMut() -> io::Result<()>,
+) -> io::Result<RenameReceipt> {
     parent.recheck()?;
     if identity.volume != parent.identity.volume || metadata(file)?.identity != *identity {
         return Err(blocked("rename requires the same verified NTFS volume"));
@@ -974,6 +1023,7 @@ fn rename_handle(
         if let Some(action) = RENAME_PROBE.with_borrow_mut(|pending| pending.take()) {
             action();
         }
+        before_syscall()?;
         let result = NtSetInformationFile(
             file,
             &mut status,

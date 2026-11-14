@@ -63,14 +63,14 @@ struct Candidate {
 fn invalid() -> SafeError {
     error("REMOTE_HOST_CONFIGURATION")
 }
-fn decimal(s: &str) -> Result<u64, SafeError> {
+pub(crate) fn decimal(s: &str) -> Result<u64, SafeError> {
     if s.is_empty() || s.len() > 20 || s.starts_with('0') || !s.bytes().all(|c| c.is_ascii_digit())
     {
         return Err(invalid());
     }
     s.parse::<u64>().map_err(|_| invalid())
 }
-fn hex(s: &str, max: usize) -> Result<Vec<u8>, SafeError> {
+pub(crate) fn hex(s: &str, max: usize) -> Result<Vec<u8>, SafeError> {
     if s.is_empty()
         || s.len() > max * 2
         || !s.len().is_multiple_of(2)
@@ -90,10 +90,10 @@ fn hex(s: &str, max: usize) -> Result<Vec<u8>, SafeError> {
         })
         .collect()
 }
-fn fixed<const N: usize>(s: &str) -> Result<[u8; N], SafeError> {
+pub(crate) fn fixed<const N: usize>(s: &str) -> Result<[u8; N], SafeError> {
     hex(s, N)?.try_into().map_err(|_| invalid())
 }
-fn nonzero<const N: usize>(s: &str) -> Result<[u8; N], SafeError> {
+pub(crate) fn nonzero<const N: usize>(s: &str) -> Result<[u8; N], SafeError> {
     let b = fixed(s)?;
     if b == [0; N] {
         Err(invalid())
@@ -101,7 +101,7 @@ fn nonzero<const N: usize>(s: &str) -> Result<[u8; N], SafeError> {
         Ok(b)
     }
 }
-fn key_name(s: &str) -> Result<(), SafeError> {
+pub(crate) fn key_name(s: &str) -> Result<(), SafeError> {
     if s.is_empty()
         || s.len() > 128
         || !s
@@ -115,7 +115,7 @@ fn key_name(s: &str) -> Result<(), SafeError> {
     }
     Ok(())
 }
-fn public(s: &str) -> Result<P256Spki, SafeError> {
+pub(crate) fn public(s: &str) -> Result<P256Spki, SafeError> {
     P256Spki::new(&fixed::<91>(s)?).map_err(|_| invalid())
 }
 pub(crate) fn freeze(

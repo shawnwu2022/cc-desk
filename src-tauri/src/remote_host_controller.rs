@@ -713,3 +713,7 @@ impl Drop for RemoteHostController {
         drop(driver);
     }
 }
+
+#[cfg(windows)]
+#[path = "remote_registration_start.rs"]
+pub(crate) mod startup;
