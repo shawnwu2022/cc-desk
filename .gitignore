@@ -64,3 +64,4 @@ playwright-report/
 # Generated pinned Claude session metadata helper
 src-tauri/resources/native-session-sdk/
 public/remote-runtime/
+public/remote-registration-runtime/
