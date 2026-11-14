@@ -26,6 +26,8 @@ The deterministic final-byte test first reproduced the loss, then passed with th
 
 The test's opposite peer is a raw TEST_ONLY host using the same bounded empty frames. It is not the original native registration owner. Its browser-shaped WebSocket runs in Node, not Edge. The dedicated BrowserWasm/Edge/native approval tests are separate evidence and must not be presented as this combined path.
 
+A subsequent [nine-case actual Edge registration-through-Relay matrix](browser-registration-relay.md) supplies that separate combined evidence in explicit legacy mode, using the original native registration owner and genuine browser WASM TLS. It retains the synthetic authenticator/approval and outer-WSS-forwarder limits stated in that document.
+
 ## Explicit limits
 
 The specified Relay checkout is legacy-only. An initial rendezvous negotiation correctly failed with `Server sent no subprotocol`; the test now explicitly selects legacy mode, without fallback, weaker negotiation or server changes. A separate [actual rendezvous registration acceptance](registration-rendezvous-acceptance.md) verifies the explicit rendezvous service candidate. Neither Node-only transport acceptance qualifies the Worker-through-actual-Relay combination.

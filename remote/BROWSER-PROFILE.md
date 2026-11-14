@@ -835,7 +835,13 @@ independent actual WSS acceptance crosses 35 seconds of idle time in explicitly
 selected legacy mode and closes at the original 40-second end. A separate
 [rendezvous registration acceptance](../docs/registration-rendezvous-acceptance.md)
 passes five actual-service cases with exact Ready and original-deadline gates.
-These Node-only checks do not qualify the Worker-plus-Relay combination. Production
+These Node-only checks remain separate from the
+[actual Edge registration-through-Relay matrix](../docs/browser-registration-relay.md).
+That nine-case explicit-legacy matrix now connects the genuine BrowserWasm Worker,
+production browser adapter, actual Relay and original native approval/install
+owner, including a 35-second authenticator wait, exact ACK/TLS completion and
+original-owner retirement. The outer WSS byte forwarder validates the fixed test
+CA/name in Node; it does not qualify the browser's certificate UI. Production
 identity authority, independent pins, genuine native GUI approval and durable
 installation remain separate engineering gates; default entry stays Locked.
 
