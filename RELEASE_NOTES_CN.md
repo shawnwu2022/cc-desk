@@ -4,6 +4,19 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
+## [0.27.0-rc.9]
+
+修复
+
+- Codex 会话仍在确认原生身份时，不再阻止归档其他无关的已关闭会话；目标会话及其子会话存在冲突时仍会停止操作。
+- 修复 PowerShell Archive 模块与运行时不兼容导致 Windows 构建准备失败的问题。
+
+重要说明
+
+- 这是预发布版本，稳定 Latest 保持不变。不自动迁移、归档、恢复或删除数据。
+- 结果不确定的操作仍须核对，永久删除仍须确认；普通归档不增加二次确认弹窗。
+- 已在隔离的 Codex 0.169.0 会话中检查目标与子会话写入冲突；其他 CLI 版本、真实用户会话、原始 native All、D20 及签名安装/返回仍为独立的未验证边界。Updater 签名不等同于 Windows Authenticode。
+
 ## [0.27.0-rc.8]
 
 修复
