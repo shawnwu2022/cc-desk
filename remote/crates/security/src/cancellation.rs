@@ -34,7 +34,8 @@ impl CancelToken {
     pub fn is_cancelled(&self) -> bool {
         self.state.load(Ordering::Acquire) || self.notify.has_changed().is_err()
     }
-    pub(crate) async fn cancelled(&mut self) {
+    /// Wait for the original owner to cancel; this grants no cancellation authority.
+    pub async fn cancelled(&mut self) {
         if !self.is_cancelled() {
             let _ = self.notify.changed().await;
         }

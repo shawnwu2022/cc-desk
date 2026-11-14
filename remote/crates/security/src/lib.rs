@@ -49,11 +49,11 @@ mod grant_tests;
 pub use browser_approval::BrowserProfile;
 #[cfg(all(feature = "experimental", not(target_arch = "wasm32")))]
 pub mod browser_registration;
-#[cfg(all(feature = "experimental", not(target_arch = "wasm32")))]
-pub mod registration_channel;
 #[cfg(all(test, feature = "experimental", not(target_arch = "wasm32")))]
 #[path = "../tests/support/browser_registration.rs"]
 mod browser_registration_tests;
+#[cfg(feature = "experimental")]
+pub mod registration_channel;
 #[cfg(all(test, feature = "experimental"))]
 #[path = "../tests/support/identities.rs"]
 #[allow(dead_code)]
@@ -103,3 +103,16 @@ pub use browser_wasm_owner::{BrowserApplicationFailure, browser_application_star
 pub use browser_wasm_owner::{
     browser_tls_cancel, browser_tls_event, browser_tls_poll, browser_tls_start,
 };
+
+#[cfg(all(
+    feature = "experimental",
+    target_arch = "wasm32",
+    target_os = "unknown"
+))]
+mod browser_wasm_registration;
+#[cfg(all(
+    feature = "experimental",
+    target_arch = "wasm32",
+    target_os = "unknown"
+))]
+pub use browser_wasm_registration::*;

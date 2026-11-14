@@ -7,7 +7,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 pub const REGISTRATION_ALPN: &[u8] = b"cc-desk-enroll/1";
 pub struct RegistrationPending<S> {
     pending: Pending<S>,
-    end: tokio::time::Instant,
+    end: crate::owner_clock::Instant,
 }
 impl<S> RegistrationPending<S> {
     pub fn evidence(&self) -> &TransportEvidence {
@@ -49,7 +49,7 @@ enum Stage {
 struct Wire<S> {
     io: tokio_rustls::TlsStream<S>,
     cancel: CancelToken,
-    end: tokio::time::Instant,
+    end: crate::owner_clock::Instant,
     transcript: ring::digest::Context,
 }
 pub struct RegistrationChannel<S> {
@@ -58,7 +58,7 @@ pub struct RegistrationChannel<S> {
     host: [u8; 32],
     client: [u8; 32],
     role: crate::Role,
-    end: tokio::time::Instant,
+    end: crate::owner_clock::Instant,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -131,21 +131,21 @@ impl<S: AsyncRead + AsyncWrite + Unpin> RegistrationPending<S> {
     }
 }
 async fn bounded<T>(
-    end: tokio::time::Instant,
+    end: crate::owner_clock::Instant,
     cancel: &mut CancelToken,
     work: impl std::future::Future<Output = Result<T, RegistrationError>>,
 ) -> Result<T, RegistrationError> {
     if cancel.is_cancelled() {
         return Err(RegistrationError::Cancelled);
     }
-    if tokio::time::Instant::now() >= end {
+    if crate::owner_clock::Instant::now() >= end {
         return Err(RegistrationError::Deadline);
     }
-    let result = tokio::select! {biased;_=cancel.cancelled()=>Err(RegistrationError::Cancelled),_=tokio::time::sleep_until(end)=>Err(RegistrationError::Deadline),result=work=>result};
+    let result = tokio::select! {biased;_=cancel.cancelled()=>Err(RegistrationError::Cancelled),_=crate::owner_clock::sleep_until(end)=>Err(RegistrationError::Deadline),result=work=>result};
     if cancel.is_cancelled() {
         return Err(RegistrationError::Cancelled);
     }
-    if tokio::time::Instant::now() >= end {
+    if crate::owner_clock::Instant::now() >= end {
         return Err(RegistrationError::Deadline);
     }
     result
@@ -154,7 +154,7 @@ impl<S> Wire<S> {
     fn check(&self) -> Result<(), RegistrationError> {
         if self.cancel.is_cancelled() {
             Err(RegistrationError::Cancelled)
-        } else if tokio::time::Instant::now() >= self.end {
+        } else if crate::owner_clock::Instant::now() >= self.end {
             Err(RegistrationError::Deadline)
         } else {
             Ok(())
@@ -262,7 +262,7 @@ impl<S> RegistrationChannel<S> {
     pub fn local_role(&self) -> crate::Role {
         self.role
     }
-    pub fn deadline(&self) -> tokio::time::Instant {
+    pub fn deadline(&self) -> crate::owner_clock::Instant {
         self.end
     }
     /// Drop the original TLS IO; external mux/transport owners still require their own joins.
@@ -359,7 +359,10 @@ impl<S: AsyncRead + AsyncWrite + Unpin> RegistrationChannel<S> {
         w.shutdown().await
     }
 }
-fn lifetime(setup: Duration, total: Duration) -> Result<tokio::time::Instant, SecurityError> {
+fn lifetime(
+    setup: Duration,
+    total: Duration,
+) -> Result<crate::owner_clock::Instant, SecurityError> {
     if setup.is_zero()
         || setup > crate::MAX_HANDSHAKE_BUDGET
         || total.is_zero()
@@ -367,16 +370,22 @@ fn lifetime(setup: Duration, total: Duration) -> Result<tokio::time::Instant, Se
     {
         return Err(SecurityError::Limit);
     }
-    Ok(tokio::time::Instant::now() + total)
+    #[cfg(not(target_arch = "wasm32"))]
+    return Ok(crate::owner_clock::Instant::now() + total);
+    #[cfg(target_arch = "wasm32")]
+    crate::owner_clock::Instant::from_owner_deadline(
+        crate::browser_wasm_registration::total_deadline(),
+    )
+    .ok_or(SecurityError::Deadline)
 }
 fn admitted<S>(
     pending: Pending<S>,
-    end: tokio::time::Instant,
+    end: crate::owner_clock::Instant,
 ) -> Result<RegistrationPending<S>, SecurityError> {
     if pending._cancel.is_cancelled() {
         return Err(SecurityError::Cancelled);
     }
-    if tokio::time::Instant::now() >= end {
+    if crate::owner_clock::Instant::now() >= end {
         return Err(SecurityError::Deadline);
     }
     Ok(RegistrationPending { pending, end })
@@ -391,7 +400,7 @@ pub async fn registration_connect<S: AsyncRead + AsyncWrite + Unpin + Send + 'st
     cancel: CancelToken,
 ) -> Result<RegistrationPending<S>, SecurityError> {
     let end = lifetime(setup, total)?;
-    let pending = tokio::time::timeout_at(
+    let pending = crate::owner_clock::timeout_at(
         end,
         crate::tls::connect_protocol(io, local, pin, setup.min(total), cancel, REGISTRATION_ALPN),
     )
@@ -408,7 +417,7 @@ pub async fn registration_accept<S: AsyncRead + AsyncWrite + Unpin + Send + 'sta
     cancel: CancelToken,
 ) -> Result<RegistrationPending<S>, SecurityError> {
     let end = lifetime(setup, total)?;
-    let pending = tokio::time::timeout_at(
+    let pending = crate::owner_clock::timeout_at(
         end,
         crate::tls::accept_protocol(io, local, pin, setup.min(total), cancel, REGISTRATION_ALPN),
     )

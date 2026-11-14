@@ -6,7 +6,7 @@ Build a separate mutual-RPK TLS registration channel using independently approve
 
 The native channel carries exactly create request, creation response, assertion request, assertion response, historical native decision and exact acknowledgement. Bounded frames and a transcript digest bind the exact exchange and authenticated endpoint identities. A decision reports only the result of the original native run-local candidate installation; it is not a bearer token or durable authorization. Lost decision/ack after installation means locally installed with peer outcome uncertain, never permission to reinstall.
 
-The selected minimal implementation reuses the original TLS machinery internally with sealed separate public types. Reusing ManagementOnly or filling a fake enrolled credential to enter the existing BrowserWasm path is rejected. BrowserWasm registration would require independent signer, worker, timer, producer bridge and joint-retirement work and is intentionally outside this slice. No public network endpoint or automatic credential action is enabled.
+The native implementation reuses the original TLS machinery internally with sealed separate public types. Reusing ManagementOnly or filling a fake enrolled credential to enter the existing BrowserWasm path is rejected. A later [isolated BrowserWasm registration owner](browser-registration-worker.md) reuses this same codec with its own signer, Worker, timer, producer bridge and joint retirement. No public network endpoint or automatic credential action is enabled.
 
 ## Implementation plan
 
