@@ -1,5 +1,10 @@
 # Native registration approval gate
 
+The separate [browser persistence approval](browser-registration-installation.md)
+does not change this run-local Yes. It uses its own purpose, original permit and
+authenticated result; historical receipts from this path still cannot install a
+browser store or restore native trust after restart.
+
 This slice closes one concrete gap: the existing authenticated native document/run owner holds the original two-stage registration attempt, presents its verified result through the existing native `ApprovalMachine`, and consumes one Yes permit to install the matching frozen Host configuration. Installation remains Locked until the separate Host session approval/start flow. Registration approval never starts a connection, opens a key or grants terminal access.
 
 The original `OwnerIdentity` checks caller, exact document binding and `NativeRunNetworkOrigin` at every stage and again at installation. A fresh backend-owned context label binds this attempt; that label is not a new trust root. Failed or repeated stages cannot reconstruct a verifier from JSON. Final confirmation owns the original `UnapprovedBrowserRegistration` and frozen configuration, compares the original TLS/issuer/browser fields, and displays the exact public evidence plus full Host description. The original registration deadline and frozen Host cap remain in force. Cancellation revokes verification and any outstanding approval.

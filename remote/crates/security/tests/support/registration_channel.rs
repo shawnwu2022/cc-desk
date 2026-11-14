@@ -17,6 +17,49 @@ fn pin(client: bool) -> PeerPin {
         P256Spki::new(&p).unwrap(),
     )
 }
+#[test]
+fn RegistrationChannel_BrowserInstallationIsSeparateBoundedDecision_018() {
+    let mut installation = BrowserInstallation {
+        database_name: "TEST_ONLY.enrollment".into(),
+        expected_revision: None,
+        configuration: "{}".into(),
+        relay_spki: "A".repeat(122),
+        requested_user_handle: "Bw".into(),
+    };
+    let scope = cc_desk_remote_record::grant::SessionScope {
+        session: "03".repeat(16),
+        run: "TEST_ONLY".into(),
+        generation: "1".into(),
+    };
+    let make = |installation| RegistrationOutcome::BrowserInstallationApproved {
+        receipt: "1".into(),
+        scope: scope.clone(),
+        installation,
+    };
+    assert!(make(installation.clone()).validate().is_ok());
+    let bytes = serde_json::to_vec(&make(installation.clone())).unwrap();
+    assert_eq!(
+        serde_json::from_slice::<RegistrationOutcome>(&bytes).unwrap(),
+        make(installation.clone())
+    );
+    installation.database_name = "../outside".into();
+    assert_eq!(
+        make(installation.clone()).validate(),
+        Err(RegistrationError::Bounds)
+    );
+    installation.database_name = "TEST_ONLY.enrollment".into();
+    installation.expected_revision = Some("01".into());
+    assert_eq!(
+        make(installation.clone()).validate(),
+        Err(RegistrationError::Bounds)
+    );
+    installation.expected_revision = None;
+    installation.configuration = "x".repeat(10001);
+    assert_eq!(
+        make(installation).validate(),
+        Err(RegistrationError::Bounds)
+    );
+}
 #[tokio::test]
 async fn RegistrationChannel_MutualPinnedTls_001() {
     let (c, h) = tokio::io::duplex(65536);

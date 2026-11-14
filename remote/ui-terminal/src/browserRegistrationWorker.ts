@@ -2,10 +2,10 @@ import {createBrowserTlsWasmImports} from './browserTlsWasm.ts';
 import type {BrowserRegistrationBridge} from './browserRegistrationBridge.ts';
 import type {BrowserTlsEvidence,BrowserTlsTransport} from './browserTlsWorker.ts';
 
-type Outcome=Readonly<{kind:'Rejected'}|{kind:'RunLocalCandidateInstalled';receipt:string;scope:Readonly<{session:string;run:string;generation:string}>}>;
+type Outcome=Readonly<{kind:'Rejected'}|{kind:'RunLocalCandidateInstalled';receipt:string;scope:Readonly<{session:string;run:string;generation:string}>}|{kind:'BrowserInstallationApproved';receipt:string;scope:Readonly<{session:string;run:string;generation:string}>;installation:Readonly<{databaseName:string;expectedRevision:string|null;configuration:string;relaySpki:string;requestedUserHandle:string}>}>;
 type Api={memory:WebAssembly.Memory;browser_registration_start(setup:number,total:number):number;browser_registration_poll():void;browser_registration_cancel():void;browser_registration_event(kind:number):void;__wbindgen_start():void};
 const CAP=16384;
-/** 单次、专用登记 owner；不导出 AppBind/grant/data 或可安装的浏览器 profile。 */
+/** 单次、专用登记 owner；不导出 AppBind/grant/data 或可跨上下文导入的安装许可。 */
 export async function startBrowserRegistrationWorker(options:Readonly<{wasm:BufferSource|WebAssembly.Module;glue:WebAssembly.ModuleImports;bridge:BrowserRegistrationBridge;localSpki:Uint8Array;peerSpki:Uint8Array;transport:BrowserTlsTransport;signal:AbortSignal}>){
  const bridge=options.bridge,transport=options.transport,signal=options.signal,scope=globalThis as typeof globalThis&{DedicatedWorkerGlobalScope?:new()=>object};
  if(typeof scope.DedicatedWorkerGlobalScope!=='function'||!(globalThis instanceof scope.DedicatedWorkerGlobalScope)||!globalThis.crossOriginIsolated||!globalThis.isSecureContext||location.origin!==bridge.origin||!(signal instanceof AbortSignal)||!(bridge.port instanceof MessagePort)||!(bridge.cancel instanceof SharedArrayBuffer)||bridge.cancel.byteLength!==8)throw Error('browser registration trusted Worker required');
@@ -66,7 +66,7 @@ export async function startBrowserRegistrationWorker(options:Readonly<{wasm:Buff
  },cc_desk_browser_registration_v1:{deadline:()=>total,
   request:(kind:number,p:number,n:number)=>{try{if(stopping||external()||now()>=total||kind!==requested+1||kind>2||requested!==answered||n<1||n>4096)return -2;const bytes=range(p,n).slice();requested=kind;bridge.port.postMessage({kind:'request',seq:kind,bytes},[bytes.buffer]);return 1;}catch{close();return -2;}},
   response:(kind:number,p:number,n:number)=>{try{if(stopping||external()||now()>=total||kind!==requested||kind!==answered+1||n!==CAP)return -2;if(!response)return -1;range(p,response.length).set(response);const length=response.length;response=undefined;answered=kind;return length;}catch{close();return -2;}},
-  outcome:(p:number,n:number)=>{try{if(stopping||external()||now()>=total||n<1||n>4096||answered!==2)throw Error('registration outcome fence');const value=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(range(p,n)));if(value.kind!=='Rejected'&&value.kind!=='RunLocalCandidateInstalled')throw Error('registration outcome');resolveOutcome(Object.freeze(value));}catch{close();}},
+  outcome:(p:number,n:number)=>{try{if(stopping||external()||now()>=total||n<1||n>CAP||answered!==2)throw Error('registration outcome fence');const value=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(range(p,n)));if(value.kind!=='Rejected'&&value.kind!=='RunLocalCandidateInstalled'&&value.kind!=='BrowserInstallationApproved')throw Error('registration outcome');resolveOutcome(Object.freeze(value));}catch{close();}},
  }};
  try{
   if(external()||now()>=setup)throw Error('registration startup expired');

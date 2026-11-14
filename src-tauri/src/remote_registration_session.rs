@@ -28,6 +28,25 @@ impl<S: AsyncRead + AsyncWrite + Unpin> InstalledRegistration<S> {
     }
 }
 impl<S> NativeRegistrationSession<S> {
+    pub(crate) fn verified_binding<'a>(
+        &'a self,
+        binding: &Arc<DocumentBinding<NativeRun>>,
+        caller: &CallerIdentity,
+        admission: &NativeRunAdmission,
+    ) -> Result<
+        cc_desk_remote_security::browser_registration::VerifiedBrowserRegistrationBinding<'a>,
+        SafeError,
+    > {
+        self.channel
+            .as_ref()
+            .ok_or_else(|| error("REMOTE_HOST_LOCKED"))?
+            .check_host_decision()
+            .map_err(|_| error("REMOTE_HOST_LOCKED"))?;
+        self.owner
+            .as_ref()
+            .ok_or_else(|| error("REMOTE_HOST_LOCKED"))?
+            .verified_binding(binding, caller, admission)
+    }
     pub(crate) fn new(
         mut owner: NativeRegistrationOwner,
         channel: RegistrationChannel<S>,
@@ -114,6 +133,60 @@ impl<S> NativeRegistrationSession<S> {
     pub(crate) fn cancel(&mut self) {
         self.owner.take();
         self.channel.take();
+    }
+    pub(crate) fn request_browser_installation<R: tauri::Runtime>(
+        &mut self,
+        binding: &Arc<DocumentBinding<NativeRun>>,
+        caller: &CallerIdentity,
+        admission: &NativeRunAdmission,
+        request: (FrozenHostApproval, BrowserInstallationTarget),
+        app: &tauri::AppHandle<R>,
+        window: &tauri::Window<R>,
+    ) -> Result<(), SafeError> {
+        self.check_host(&request.0)?;
+        self.owner
+            .as_mut()
+            .ok_or_else(|| error("REMOTE_HOST_LOCKED"))?
+            .request_browser_installation(binding, caller, admission, request, app, window)
+    }
+    pub(crate) fn install_browser(
+        &mut self,
+        binding: &Arc<DocumentBinding<NativeRun>>,
+        caller: &CallerIdentity,
+        admission: &NativeRunAdmission,
+        controller: &RemoteHostController,
+    ) -> Result<InstalledRegistration<S>, SafeError> {
+        let scope = admission.scope().map_err(|_| error("FORBIDDEN"))?;
+        self.check_live_decision()?;
+        let (receipt, installation) = self
+            .owner
+            .as_mut()
+            .ok_or_else(|| error("REMOTE_HOST_LOCKED"))?
+            .install_browser(binding, caller, admission, controller)?;
+        self.owner.take();
+        Ok(InstalledRegistration {
+            outcome: RegistrationOutcome::BrowserInstallationApproved {
+                receipt: receipt.to_string(),
+                scope,
+                installation,
+            },
+            channel: self.channel.take(),
+        })
+    }
+    #[cfg(test)]
+    pub(crate) fn test_request_browser_installation(
+        &mut self,
+        binding: &Arc<DocumentBinding<NativeRun>>,
+        caller: &CallerIdentity,
+        admission: &NativeRunAdmission,
+        host: FrozenHostApproval,
+        target: BrowserInstallationTarget,
+    ) -> Result<Arc<NativeBrowserInstallationApproval>, SafeError> {
+        self.check_host(&host)?;
+        self.owner
+            .as_mut()
+            .ok_or_else(|| error("REMOTE_HOST_LOCKED"))?
+            .test_request_browser_installation(binding, caller, admission, host, target)
     }
     #[cfg(test)]
     pub(crate) fn test_rebind(

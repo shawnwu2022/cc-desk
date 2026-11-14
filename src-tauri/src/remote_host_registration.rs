@@ -5,6 +5,7 @@
 )]
 use super::*;
 use crate::remote_host_approval::NativeRegistrationApproval;
+use crate::remote_host_approval::{BrowserInstallationTarget, NativeBrowserInstallationApproval};
 use cc_desk_remote_security::{
     browser_registration::{
         BrowserRegistrationAttempt, BrowserRegistrationContext, BrowserRegistrationPossession,
@@ -19,6 +20,7 @@ enum Stage {
     Possession(BrowserRegistrationPossession),
     Evidence(UnapprovedBrowserRegistration),
     Awaiting(Arc<NativeRegistrationApproval>),
+    AwaitingBrowserInstallation(Arc<NativeBrowserInstallationApproval>),
     Closed,
 }
 pub(crate) struct NativeRegistrationOwner {
@@ -30,6 +32,23 @@ pub(crate) struct NativeRegistrationOwner {
     stage: Stage,
 }
 impl NativeRegistrationOwner {
+    /// 原持有证据的只读数据，不批准连接或持久安装。
+    pub(crate) fn verified_binding<'a>(
+        &'a self,
+        binding: &Arc<DocumentBinding<NativeRun>>,
+        caller: &CallerIdentity,
+        admission: &NativeRunAdmission,
+    ) -> Result<
+        cc_desk_remote_security::browser_registration::VerifiedBrowserRegistrationBinding<'a>,
+        SafeError,
+    > {
+        self.check(binding, caller, admission)?;
+        let Stage::Evidence(e) = &self.stage else {
+            return Err(error("REMOTE_HOST_LOCKED"));
+        };
+        e.verified_binding()
+            .map_err(|_| error("REMOTE_HOST_LOCKED"))
+    }
     pub(crate) fn begin(
         binding: &Arc<DocumentBinding<NativeRun>>,
         caller: &CallerIdentity,
@@ -213,9 +232,72 @@ impl NativeRegistrationOwner {
             None,
         )
     }
+    pub(crate) fn request_browser_installation<R: tauri::Runtime>(
+        &mut self,
+        binding: &Arc<DocumentBinding<NativeRun>>,
+        caller: &CallerIdentity,
+        admission: &NativeRunAdmission,
+        request: (FrozenHostApproval, BrowserInstallationTarget),
+        app: &tauri::AppHandle<R>,
+        window: &tauri::Window<R>,
+    ) -> Result<(), SafeError> {
+        let (host, target) = request;
+        let evidence = self.evidence(binding, caller, admission, &host)?;
+        let approved = NativeBrowserInstallationApproval::show(
+            app,
+            window,
+            host,
+            evidence,
+            self.context_binding,
+            target,
+            self.end,
+        )
+        .map_err(|_| error("REMOTE_HOST_LOCKED"))?;
+        self.stage = Stage::AwaitingBrowserInstallation(approved);
+        Ok(())
+    }
+    pub(crate) fn install_browser(
+        &mut self,
+        binding: &Arc<DocumentBinding<NativeRun>>,
+        caller: &CallerIdentity,
+        admission: &NativeRunAdmission,
+        controller: &RemoteHostController,
+    ) -> Result<
+        (
+            u64,
+            cc_desk_remote_security::registration_channel::BrowserInstallation,
+        ),
+        SafeError,
+    > {
+        self.check(binding, caller, admission)?;
+        let Stage::AwaitingBrowserInstallation(approval) = &self.stage else {
+            return Err(error("REMOTE_HOST_LOCKED"));
+        };
+        let (host, installation) = approval
+            .take()
+            .map_err(|_| error("REMOTE_HOST_LOCKED"))?
+            .ok_or_else(|| error("REMOTE_HOST_LOCKED"))?;
+        self.identity.check(binding, caller, admission)?;
+        self.stage = Stage::Closed;
+        if Instant::now() >= self.end {
+            return Err(error("REMOTE_HOST_LOCKED"));
+        }
+        let receipt = controller.install_frozen(
+            binding,
+            caller.clone(),
+            admission,
+            host,
+            #[cfg(test)]
+            None,
+        )?;
+        Ok((receipt, installation))
+    }
     pub(crate) fn cancel(&mut self) {
         self.cancel.cancel();
         if let Stage::Awaiting(a) = &self.stage {
+            a.cancel();
+        }
+        if let Stage::AwaitingBrowserInstallation(a) = &self.stage {
             a.cancel();
         }
         self.stage = Stage::Closed;
@@ -242,6 +324,27 @@ impl NativeRegistrationOwner {
     #[cfg(test)]
     pub(crate) fn test_expire(&mut self) {
         self.end = Instant::now();
+    }
+    #[cfg(test)]
+    pub(crate) fn test_request_browser_installation(
+        &mut self,
+        binding: &Arc<DocumentBinding<NativeRun>>,
+        caller: &CallerIdentity,
+        admission: &NativeRunAdmission,
+        host: FrozenHostApproval,
+        target: BrowserInstallationTarget,
+    ) -> Result<Arc<NativeBrowserInstallationApproval>, SafeError> {
+        let evidence = self.evidence(binding, caller, admission, &host)?;
+        let approved = NativeBrowserInstallationApproval::test_pending(
+            host,
+            evidence,
+            self.context_binding,
+            target,
+            self.end,
+        )
+        .map_err(|_| error("REMOTE_HOST_LOCKED"))?;
+        self.stage = Stage::AwaitingBrowserInstallation(approved.clone());
+        Ok(approved)
     }
 }
 impl Drop for NativeRegistrationOwner {

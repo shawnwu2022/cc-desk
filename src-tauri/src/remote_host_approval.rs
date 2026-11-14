@@ -23,6 +23,11 @@ pub(crate) use frozen::FrozenHostApproval;
 #[path = "remote_registration_approval.rs"]
 mod registration;
 pub(crate) use registration::NativeRegistrationApproval;
+#[path = "remote_browser_installation_approval.rs"]
+mod browser_installation;
+pub(crate) use browser_installation::{
+    BrowserInstallationTarget, NativeBrowserInstallationApproval,
+};
 
 /// 状态机只持不可变后端描述，不接收密钥、运行所有权或 IPC 数据。
 /// 泛型仅限私有状态机；对外桥接使用具体描述。

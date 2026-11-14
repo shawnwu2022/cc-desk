@@ -23,6 +23,21 @@ pub enum RegistrationOutcome {
         receipt: String,
         scope: cc_desk_remote_record::grant::SessionScope,
     },
+    /// 仅原受认证通道中的明确浏览器安装决定；序列化副本不是可导入的许可。
+    BrowserInstallationApproved {
+        receipt: String,
+        scope: cc_desk_remote_record::grant::SessionScope,
+        installation: BrowserInstallation,
+    },
+}
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BrowserInstallation {
+    pub database_name: String,
+    pub expected_revision: Option<String>,
+    pub configuration: String,
+    pub relay_spki: String,
+    pub requested_user_handle: String,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RegistrationError {
@@ -69,7 +84,9 @@ struct Decision {
 }
 impl RegistrationOutcome {
     fn validate(&self) -> Result<(), RegistrationError> {
-        if let Self::RunLocalCandidateInstalled { receipt, scope } = self {
+        if let Self::RunLocalCandidateInstalled { receipt, scope }
+        | Self::BrowserInstallationApproved { receipt, scope, .. } = self
+        {
             if !receipt
                 .parse::<u64>()
                 .ok()
@@ -79,6 +96,37 @@ impl RegistrationOutcome {
             }
             cc_desk_remote_record::grant::encode_scope(scope)
                 .map_err(|_| RegistrationError::Bounds)?;
+        }
+        if let Self::BrowserInstallationApproved {
+            installation: i, ..
+        } = self
+        {
+            let revision = |s: &str| {
+                s.parse::<u64>()
+                    .ok()
+                    .is_some_and(|n| n > 0 && n.to_string() == s)
+            };
+            let encoded = |s: &str, max: usize| {
+                !s.is_empty()
+                    && s.len() <= max
+                    && s.bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b))
+            };
+            if i.database_name.is_empty()
+                || i.database_name.len() > 64
+                || !i
+                    .database_name
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+                || i.expected_revision.as_ref().is_some_and(|r| !revision(r))
+                || i.configuration.is_empty()
+                || i.configuration.len() > 10000
+                || !encoded(&i.relay_spki, 122)
+                || i.relay_spki.len() != 122
+                || !encoded(&i.requested_user_handle, 86)
+            {
+                return Err(RegistrationError::Bounds);
+            }
         }
         Ok(())
     }

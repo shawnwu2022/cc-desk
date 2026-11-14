@@ -38,6 +38,36 @@ pub struct UnapprovedBrowserRegistration {
     verified: BrowserRegistrationPossession,
 }
 
+/// 已验证、仍待批准的公共材料借用视图，不是授权或身份凭据。
+///
+/// 仅在获取时检查原撤销与截止；保存或修改视图不延长原证据的有效期。
+/// 最终批准必须保留并重新核对原 `UnapprovedBrowserRegistration`。
+/// `requested_user_handle` 只是原请求关联，不能证明人员或账户身份。
+/// 公共 JSON 不能恢复这个视图，也不能恢复原验证对象。
+///
+/// ```compile_fail
+/// use cc_desk_remote_security::browser_registration::VerifiedBrowserRegistrationBinding;
+/// let _: VerifiedBrowserRegistrationBinding<'_> = serde_json::from_slice(b"{}").unwrap();
+/// ```
+#[non_exhaustive]
+pub struct VerifiedBrowserRegistrationBinding<'a> {
+    pub origin: &'a str,
+    pub rp_id: &'a str,
+    pub credential_id: &'a [u8],
+    pub credential_key: &'a P256Spki,
+    pub credential_spki: &'a [u8],
+    pub backup_eligible: bool,
+    pub allow_backed_up: bool,
+    pub requested_user_handle: &'a [u8],
+    pub owner_binding: &'a [u8; 32],
+    pub tls_key: &'a P256Spki,
+    pub grant_key: &'a P256Spki,
+    pub relay_key: &'a P256Spki,
+    pub tls_spki: &'a [u8],
+    pub grant_spki: &'a [u8],
+    pub relay_spki: &'a [u8],
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct CreateResponse {
@@ -373,6 +403,29 @@ impl BrowserRegistrationPossession {
     }
 }
 impl UnapprovedBrowserRegistration {
+    /// 只读取原两阶段证明绑定的公共材料，不批准、持久化或签发任何授权。
+    pub fn verified_binding(&self) -> Result<VerifiedBrowserRegistrationBinding<'_>, GrantError> {
+        let p = &self.verified;
+        p.attempt.live()?;
+        let c = &p.attempt.context;
+        Ok(VerifiedBrowserRegistrationBinding {
+            origin: &c.origin,
+            rp_id: &c.rp_id,
+            credential_id: &p.credential,
+            credential_key: &p.key,
+            credential_spki: &p.key.0,
+            backup_eligible: p.backup_eligible,
+            allow_backed_up: c.allow_backed_up,
+            requested_user_handle: &c.user_handle,
+            owner_binding: &c.owner_binding,
+            tls_key: &c.tls_key,
+            grant_key: &c.grant_key,
+            relay_key: &c.relay_key,
+            tls_spki: &c.tls_key.0,
+            grant_spki: &c.grant_key.0,
+            relay_spki: &c.relay_key.0,
+        })
+    }
     /// 只核对原类型化证据，不将候选或展示 JSON 升格为批准。
     pub fn matches_host_candidate(
         &self,
@@ -381,25 +434,37 @@ impl UnapprovedBrowserRegistration {
         issuer: &P256Spki,
         browser: &crate::BrowserProfile,
     ) -> Result<bool, GrantError> {
-        let p = &self.verified;
-        p.attempt.live()?;
-        let c = &p.attempt.context;
+        let v = self.verified_binding()?;
         let b = browser.display_metadata();
-        Ok(c.owner_binding == owner_binding
-            && phone.endpoint_id() == c.tls_key.endpoint_id(crate::Role::Client)
-            && issuer.0 == c.grant_key.0
-            && b.origin == c.origin
-            && b.rp_id == c.rp_id
+        Ok(*v.owner_binding == owner_binding
+            && phone.endpoint_id() == v.tls_key.endpoint_id(crate::Role::Client)
+            && issuer.0 == v.grant_spki
+            && b.origin == v.origin
+            && b.rp_id == v.rp_id
             && b.credential_fingerprint.as_slice()
-                == digest::digest(&digest::SHA256, &p.credential).as_ref()
-            && b.key_fingerprint.as_slice() == digest::digest(&digest::SHA256, &p.key.0).as_ref()
-            && b.backup_eligible == p.backup_eligible
-            && b.allow_backed_up == c.allow_backed_up)
+                == digest::digest(&digest::SHA256, v.credential_id).as_ref()
+            && b.key_fingerprint.as_slice()
+                == digest::digest(&digest::SHA256, v.credential_spki).as_ref()
+            && b.backup_eligible == v.backup_eligible
+            && b.allow_backed_up == v.allow_backed_up)
     }
     pub fn description(&self) -> Result<Vec<u8>, GrantError> {
-        let p = &self.verified;
-        p.attempt.live()?;
-        let c = &p.attempt.context;
-        serde_json::to_vec(&serde_json::json!({"version":1,"approval":"required","ownerBinding":B64.encode(c.owner_binding),"origin":c.origin,"rpId":c.rp_id,"requestedUserHandle":B64.encode(&c.user_handle),"tlsSpki":B64.encode(&c.tls_key.0),"grantSpki":B64.encode(&c.grant_key.0),"relaySpki":B64.encode(&c.relay_key.0),"credentialId":B64.encode(&p.credential),"credentialSpki":B64.encode(&p.key.0),"backupEligible":p.backup_eligible,"allowBackedUp":c.allow_backed_up})).map_err(|_|GrantError::Encoding)
+        let v = self.verified_binding()?;
+        serde_json::to_vec(&serde_json::json!({
+            "version": 1,
+            "approval": "required",
+            "ownerBinding": B64.encode(v.owner_binding),
+            "origin": v.origin,
+            "rpId": v.rp_id,
+            "requestedUserHandle": B64.encode(v.requested_user_handle),
+            "tlsSpki": B64.encode(v.tls_spki),
+            "grantSpki": B64.encode(v.grant_spki),
+            "relaySpki": B64.encode(v.relay_spki),
+            "credentialId": B64.encode(v.credential_id),
+            "credentialSpki": B64.encode(v.credential_spki),
+            "backupEligible": v.backup_eligible,
+            "allowBackedUp": v.allow_backed_up,
+        }))
+        .map_err(|_| GrantError::Encoding)
     }
 }

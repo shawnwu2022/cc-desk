@@ -237,6 +237,98 @@ fn Registration_TwoStageEvidence_001() {
     assert_eq!(description["credentialId"], B64.encode([7; 32]));
 }
 
+// 类型化公共材料必须来自同一 create/assert 验证，不能把请求关联误作身份认证。
+#[test]
+fn Registration_VerifiedBinding_013() {
+    for (create_case, assertion_case, backup_eligible, allow_backed_up) in [
+        (0, 0, false, false),
+        (7, 10, true, false),
+        (27, 27, true, true),
+    ] {
+        let (_h, token) = cancellation();
+        let mut c = context();
+        c.owner_binding = [19; 32];
+        c.user_handle = vec![42; 16];
+        c.allow_backup_eligible = backup_eligible;
+        c.allow_backed_up = allow_backed_up;
+        let attempt = BrowserRegistrationAttempt::new(c, token, Duration::from_secs(30)).unwrap();
+        let created = create_proof(&attempt.request().unwrap(), create_case);
+        let possession = attempt.verify_create(&created).unwrap();
+        let asserted = assertion(&possession.request().unwrap(), assertion_case);
+        let evidence = possession.verify_assertion(&asserted).unwrap();
+
+        let binding = evidence.verified_binding().unwrap();
+        assert_eq!(binding.origin, "https://desk.invalid");
+        assert_eq!(binding.rp_id, "desk.invalid");
+        assert_eq!(binding.credential_id, &[7; 32]);
+        assert_eq!(binding.credential_key.0, key(4).0);
+        assert_eq!(binding.backup_eligible, backup_eligible);
+        assert_eq!(binding.allow_backed_up, allow_backed_up);
+        assert_eq!(binding.requested_user_handle, &[42; 16]);
+        assert_eq!(binding.owner_binding, &[19; 32]);
+        assert_eq!(binding.tls_key.0, key(1).0);
+        assert_eq!(binding.grant_key.0, key(2).0);
+        assert_eq!(binding.relay_key.0, key(3).0);
+        assert_eq!(binding.credential_spki, key(4).0);
+        assert_eq!(binding.tls_spki, key(1).0);
+        assert_eq!(binding.grant_spki, key(2).0);
+        assert_eq!(binding.relay_spki, key(3).0);
+
+        let description: Value = serde_json::from_slice(&evidence.description().unwrap()).unwrap();
+        assert_eq!(
+            description,
+            json!({
+                "version": 1, "approval": "required", "ownerBinding": B64.encode([19; 32]),
+                "origin": "https://desk.invalid", "rpId": "desk.invalid",
+                "requestedUserHandle": B64.encode([42; 16]), "tlsSpki": B64.encode(&key(1).0),
+                "grantSpki": B64.encode(&key(2).0), "relaySpki": B64.encode(&key(3).0),
+                "credentialId": B64.encode([7; 32]), "credentialSpki": B64.encode(&key(4).0),
+                "backupEligible": backup_eligible, "allowBackedUp": allow_backed_up,
+            })
+        );
+    }
+}
+
+// 先前读过公共材料也不能让撤销后的原证据继续导出绑定。
+#[test]
+fn Registration_VerifiedBindingCancelled_014() {
+    let (cancel, token) = cancellation();
+    let attempt =
+        BrowserRegistrationAttempt::new(context(), token, Duration::from_secs(30)).unwrap();
+    let created = create_proof(&attempt.request().unwrap(), 0);
+    let possession = attempt.verify_create(&created).unwrap();
+    let asserted = assertion(&possession.request().unwrap(), 0);
+    let evidence = possession.verify_assertion(&asserted).unwrap();
+    assert!(evidence.verified_binding().is_ok());
+    cancel.cancel();
+    assert!(matches!(
+        evidence.verified_binding(),
+        Err(crate::GrantError::Revoked)
+    ));
+}
+
+// create、assert 与读取绑定均不重置原截止，边界相等时已失效。
+#[tokio::test(start_paused = true)]
+async fn Registration_VerifiedBindingOriginalDeadline_015() {
+    let (_cancel, token) = cancellation();
+    let attempt =
+        BrowserRegistrationAttempt::new(context(), token, Duration::from_secs(30)).unwrap();
+    let created = create_proof(&attempt.request().unwrap(), 0);
+    tokio::time::advance(Duration::from_secs(9)).await;
+    let possession = attempt.verify_create(&created).unwrap();
+    let asserted = assertion(&possession.request().unwrap(), 0);
+    tokio::time::advance(Duration::from_secs(11)).await;
+    let evidence = possession.verify_assertion(&asserted).unwrap();
+    assert!(evidence.verified_binding().is_ok());
+    tokio::time::advance(Duration::from_secs(9)).await;
+    assert!(evidence.verified_binding().is_ok());
+    tokio::time::advance(Duration::from_secs(1)).await;
+    assert!(matches!(
+        evidence.verified_binding(),
+        Err(crate::GrantError::Expired)
+    ));
+}
+
 // 拒绝注册字段、算法、CBOR、绑定密钥和备份策略的具体变化。
 #[test]
 fn Registration_RejectCreateChanges_002() {

@@ -13,7 +13,11 @@ async fn NativeRegistration_RelayOracle_903() {
         "document",
         "cancel",
         "native-cancel",
-        "native-deadline"
+        "native-deadline",
+        "install",
+        "install-deny",
+        "install-document",
+        "install-expired"
     ]
     .contains(&mode.as_str()));
     let transports = Arc::new(TerminalTransports::new());
@@ -109,9 +113,23 @@ async fn NativeRegistration_RelayOracle_903() {
         None
     };
     let (_, host_spki) = network_identities::identity(false, false);
+    let mut fields =
+        super::super::approval_keys::description(&relay, &admission, Arc::new(|| Ok(1000)));
+    fields.phone_pin = PeerPin::new(Role::Client, key(1));
+    fields.issuer = key(2);
+    // TEST_ONLY 独立配置在收到任何新 credential 之前冻结，不能从登记 outcome 反推。
+    let plan = {
+        use base64::{engine::general_purpose::URL_SAFE_NO_PAD as B64, Engine};
+        serde_json::json!({"databaseName":"TEST_ONLY.registration-chain","expectedRevision":null,"relaySpki":B64.encode(key_bytes(3)),"requestedUserHandle":B64.encode([7;32]),"configuration":{
+            "version":1,"profile":{"origin":"https://desk.invalid","rpId":"desk.invalid"},"localSpki":B64.encode(key_bytes(1)),"hostSpki":B64.encode(&host_spki),
+            "trust":{"hostKeyEpoch":fields.binding.host_key_epoch.to_string(),"clientKeyEpoch":fields.binding.client_key_epoch.to_string(),"origin":fields.binding.origin.as_str()},
+            "grant":{"issuerSpki":B64.encode(key_bytes(2)),"principal":fields.principal.iter().map(|v|format!("{v:02x}")).collect::<String>(),"scope":fields.policy.scope,"role":fields.policy.role,"budgetMs":fields.policy.duration.as_millis() as u64,"peerInstall":{"budgetMs":5000},"profile":{"origin":"https://desk.invalid","rpId":"desk.invalid","allowBackedUp":false}},
+            "relay":{"mode":"legacy","endpoint":fields.binding.origin.as_str(),"tunnel":B64.encode(fields.tunnel),"keyId":B64.encode([2;16])},"artifacts":{"wasm":"https://desk.invalid/fixture_bg.wasm","glue":"https://desk.invalid/fixture_bg.js"}
+        }})
+    };
     emit(
         &serde_json::to_vec(
-            &serde_json::json!({"kind":"ready","origin":relay.origin,"hostSpki":host_spki}),
+            &serde_json::json!({"kind":"ready","origin":relay.origin,"hostSpki":host_spki,"plan":plan}),
         )
         .unwrap(),
     );
@@ -157,36 +175,79 @@ async fn NativeRegistration_RelayOracle_903() {
         assert!(session
             .install(&binding, &fixture.caller, &admission, &controller)
             .is_err());
-        let mut fields =
-            super::super::approval_keys::description(&relay, &admission, Arc::new(|| Ok(1000)));
-        fields.phone_pin = PeerPin::new(Role::Client, key(1));
-        fields.issuer = key(2);
+        let verified = session
+            .verified_binding(&binding, &fixture.caller, &admission)
+            .unwrap();
         fields.browser = BrowserProfile::enrolled(
-            "https://desk.invalid",
-            "desk.invalid",
-            vec![7; 32],
-            key(4),
-            false,
-            false,
+            verified.origin,
+            verified.rp_id,
+            verified.credential_id.to_vec(),
+            verified.credential_key.clone(),
+            verified.backup_eligible,
+            verified.allow_backed_up,
         )
         .unwrap();
-        let cap = Instant::now() + Duration::from_secs(60);
+        let cap = Instant::now()
+            + if mode == "install-expired" {
+                Duration::from_millis(200)
+            } else {
+                Duration::from_secs(60)
+            };
         let supplier = crate::native_crypto::test_existing_host_supplier(
             cc_desk_remote_record::appbind::CanonicalOrigin::trusted(&relay.origin).unwrap(),
             cap,
             opened.clone(),
         );
         let frozen = FrozenHostApproval::supplied(fields, &admission, cap, supplier).unwrap();
-        let approval = session
-            .test_request_approval(&binding, &fixture.caller, &admission, frozen)
-            .unwrap();
-        approval.test_complete(mode != "deny");
-        if mode == "document" {
+        let browser_install = mode.starts_with("install");
+        if browser_install {
+            let approval = session
+                .test_request_browser_installation(
+                    &binding,
+                    &fixture.caller,
+                    &admission,
+                    frozen,
+                    crate::remote_host_approval::BrowserInstallationTarget {
+                        database_name: "TEST_ONLY.registration-chain".into(),
+                        expected_revision: None,
+                        host_spki,
+                        relay_id: [2; 16],
+                        wasm_url: "https://desk.invalid/fixture_bg.wasm".into(),
+                        glue_url: "https://desk.invalid/fixture_bg.js".into(),
+                        peer_budget_ms: 5000,
+                    },
+                )
+                .unwrap();
+            assert!(session
+                .install(&binding, &fixture.caller, &admission, &controller)
+                .is_err());
+            assert!(session
+                .install_browser(&binding, &fixture.caller, &admission, &controller)
+                .is_err());
+            approval.test_complete(mode != "install-deny");
+        } else {
+            let approval = session
+                .test_request_approval(&binding, &fixture.caller, &admission, frozen)
+                .unwrap();
+            approval.test_complete(mode != "deny");
+        }
+        if mode == "document" || mode == "install-document" {
             document.started(&url);
             document.finished(&url);
         }
-        match session.install(&binding, &fixture.caller, &admission, &controller) {
+        if mode == "install-expired" {
+            tokio::time::sleep(Duration::from_millis(220)).await;
+        }
+        let installation = if browser_install {
+            session.install_browser(&binding, &fixture.caller, &admission, &controller)
+        } else {
+            session.install(&binding, &fixture.caller, &admission, &controller)
+        };
+        match installation {
             Ok(mut delivery) => {
+                assert!(session
+                    .install_browser(&binding, &fixture.caller, &admission, &controller)
+                    .is_err());
                 installed = true;
                 receipt = Some(delivery.outcome().clone());
                 acknowledged = delivery.deliver().await.is_ok();
@@ -196,9 +257,9 @@ async fn NativeRegistration_RelayOracle_903() {
                 acknowledged = session.reject().await.is_ok();
             }
         }
-        assert_eq!(installed, mode == "yes");
+        assert_eq!(installed, mode == "yes" || mode == "install");
         assert_eq!(controller.test_has_configuration(), installed);
-        if mode != "document" {
+        if mode != "document" && mode != "install-document" {
             assert_eq!(
                 controller
                     .current(&binding, &fixture.caller, &admission)
@@ -211,7 +272,7 @@ async fn NativeRegistration_RelayOracle_903() {
     assert_eq!(opened[0].load(std::sync::atomic::Ordering::Acquire), 0);
     assert_eq!(opened[1].load(std::sync::atomic::Ordering::Acquire), 0);
     assert_eq!(controller.test_has_configuration(), installed);
-    if mode != "document" {
+    if mode != "document" && mode != "install-document" {
         assert_eq!(
             controller
                 .current(&binding, &fixture.caller, &admission)
