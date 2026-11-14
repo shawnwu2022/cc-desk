@@ -798,6 +798,10 @@ are documented in [Browser enrollment lifecycle](../docs/browser-enrollment-life
 This revocable in-memory authority does not implement real enrollment or enable
 the default Locked entry.
 
+Controlled modules can supply the production [grant presenter](../docs/browser-grant-presentation.md)
+for explicit review of the original verified grant before the existing WebAuthn
+step. This dialog does not replace the native Host approval or establish enrollment.
+
 The browser-entry.spec.ts fixture supplies the fixed same-origin profile module
 through createApprovedBrowserProfileReader, instead of directly assembling
 approved inputs. Its independent TEST_ONLY snapshot comes from the actual Host

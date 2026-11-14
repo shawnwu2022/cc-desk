@@ -3,3 +3,10 @@ body { overflow:auto;background:var(--bg-primary);color:var(--text-primary); }
 #browser-remote { width:min(100%,800px);box-sizing:border-box;margin:0 auto;padding:24px 16px; }
 #browser-remote .remote-panel { border:0;padding-top:0; }
 #browser-remote textarea { box-sizing:border-box;width:100%;font-size:16px; }
+.browser-grant-dialog { box-sizing:border-box;width:min(720px,calc(100vw - 24px));max-height:calc(100dvh - 24px);padding:20px;border:1px solid var(--border-color,#777);border-radius:12px;background:var(--bg-primary,#fff);color:var(--text-primary,#111);overflow:auto;overflow-wrap:anywhere; }
+.browser-grant-dialog::backdrop { background:rgb(0 0 0 / 55%); }
+.browser-grant-dialog h2 { margin:0 0 12px;font-size:20px; }
+.browser-grant-dialog p { font-size:14px;line-height:1.5; }
+.browser-grant-dialog pre { white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;padding:12px;background:var(--bg-secondary,#f3f3f3);border-radius:6px; }
+.browser-grant-actions { position:sticky;bottom:0;display:flex;flex-wrap:wrap;gap:12px;justify-content:flex-end;padding:12px 0;background:var(--bg-primary,#fff); }
+.browser-grant-actions button { min-height:44px;padding:8px 16px;font:inherit;cursor:pointer; }

@@ -136,3 +136,43 @@ test('BrowserEntry_EnrollmentRevokesDuringRetentionBeforeSideEffects_006',async(
   await writeEvidence(info,'enrollment-admission-revocation',{artifacts:f.artifacts,supplied,transport:f.observations(),workers,sockets})
  }finally{await f.dispose()}
 })
+
+test('BrowserEntry_ProductionPresenterApprovesOriginalGrant_007',async({page,context},info)=>{
+ const f=await entryFixture(context,undefined,true)
+ try{
+  await page.goto('https://desk.invalid/browser-remote.html');await page.locator('[data-remote-refresh]').click()
+  const dialog=page.getByRole('dialog',{name:'Approve remote session'});await expect(dialog).toBeVisible()
+  const shown=JSON.parse(await dialog.locator('pre').innerText()),ready=await f.host.wait(value=>value.kind==='ready')
+  expect(shown.scope).toEqual(ready.scope);expect(shown.role).toBe('Controller');expect(shown.principalId).toBe('04'.repeat(32))
+  const before=await page.evaluate(()=>Reflect.get(globalThis,'__ccDeskTestOnlyPairing'))
+  expect(before.assertions).toBe(0)
+  await page.getByRole('button',{name:'Approve this connection',exact:true}).evaluate((button:HTMLButtonElement)=>button.click())
+  expect(await page.evaluate(()=>Reflect.get(globalThis,'__ccDeskTestOnlyPairing'))).toEqual(before)
+  await page.getByRole('button',{name:'Approve this connection',exact:true}).click()
+  await expect(page.getByRole('status')).toContainText('Snapshot verified');await expect(dialog).toHaveCount(0)
+  await page.locator('[data-remote-input]').fill('TEST_ONLY_PRODUCTION_PRESENTER');await page.locator('[data-remote-send]').click();await expect(page.locator('[data-remote-input]')).toHaveValue('')
+  await page.locator('[data-remote-disconnect]').click();await expect(page.getByRole('status')).toContainText('Locked')
+  const effect=await f.host.wait(value=>value.kind==='effects');expect(effect.writeCount).toBe(1);expect(effect.bytes).toBe(Buffer.from('TEST_ONLY_PRODUCTION_PRESENTER').toString('hex'))
+  await f.relay.wait(value=>value.originalRelayRetired===true)
+  await writeEvidence(info,'production-presenter-approved',{artifacts:f.artifacts,shown,before,after:await page.evaluate(()=>Reflect.get(globalThis,'__ccDeskTestOnlyPairing')),effect})
+ }finally{await f.dispose()}
+})
+
+for(const action of ['cancel','revoke','deadline'] as const){
+ test(`BrowserEntry_ProductionPresenterRefusalBlocksGrant_${action}_008`,async({page,context},info)=>{
+  const f=await entryFixture(context,undefined,true)
+  try{
+   await page.goto('https://desk.invalid/browser-remote.html');await page.locator('[data-remote-refresh]').click()
+   await expect(page.getByRole('dialog',{name:'Approve remote session'})).toBeVisible()
+   const before=await page.evaluate(()=>Reflect.get(globalThis,'__ccDeskTestOnlyPairing'))
+   expect(before.assertions).toBe(0)
+   if(action==='cancel')await page.getByRole('button',{name:'Cancel',exact:true}).click()
+   else if(action==='revoke')await page.evaluate(async()=>{const owner=Reflect.get(globalThis,'__ccDeskTestOnlyEnrollment');owner.revoke();await owner.waitClosed()})
+   await expect(page.getByRole('status')).toContainText('Remote connection unavailable');await expect(page.getByRole('dialog')).toHaveCount(0)
+   const after=await page.evaluate(()=>Reflect.get(globalThis,'__ccDeskTestOnlyPairing'));expect(after).toEqual(before)
+   expect(f.host.output()).not.toContain('"kind":"installed"');expect(f.host.output()).not.toContain('"kind":"dispatched"')
+   await expect(page.locator('[data-remote-input]')).toHaveCount(0)
+   await writeEvidence(info,'production-presenter-refused',{artifacts:f.artifacts,action,before,after,host:f.host.output()})
+  }finally{await f.dispose()}
+ })
+}
