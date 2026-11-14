@@ -84,4 +84,4 @@ rc.8 的 scoped admission 仍把任意未收到认证 hook 的结构化 Codex ru
 
 修复回归：归档组 34 项通过，3 项按原规则显式忽略；strict `cargo clippy --offline --locked --all-targets -- -D warnings` 和 `cargo fmt --check` 通过。前端归档/adapter/workspace 三文件 113 项通过；`Pointer_ArchiveRestore_002` 补充恢复后关闭抽屉、直接点精确历史行归档，核对第二次 native archive、未打开、未创建/切换 tab、没有普通归档二次确认。Rust `_009` 原有合成 ConPTY 恢复后直接归档链也通过。这些覆盖不等于安装版 UI 或真实 CLI 恢复循环；SXY 历史原因仍未证实，不与本次问题直接合并归因。现场缺少错误发生时逐次诊断快照，本次确认可复现的阻断机制，不宣称是全部历史错误的唯一原因。
 
-全库边界：本轮启动的 1932 项 Rust library 库存仍在执行长耗时 Windows 恢复夹具，尚未得到最终汇总；已观察到 `D11_Channel_Native_011`、`D11_Webview_Live_001`、`D11_Launch_Native_001`、`D12_Webview_FormalCommands_001` 和 `HistoryClassesAlias_HeldDrift_003` 失败。没有放宽断言、忽略规则或 OS 安全设置，也未把这些失败归为已证实的旧失败。本修复按上述独立完成的归档验收交付，不宣称全库通过；完整日志保留供后续收口。
+全库已收口：1932 项中 1836 通过、48 失败、48 原有显式忽略，2675.36 秒。失败为 23 项注册表访问拒绝、18 项 Job-contained 前提拒绝、5 项 WebView 超时和 2 项受限 worker 参数错误。D12 超时已在精确未修改 b2540b7b 单例复现，其余未据此泛化为旧失败。完整失败清单、错误边界、原始日志校验和与下一验证见 [本次验证记录](codex-archive-validation-2026-11-14.md)。归档独立验收通过不代表全库通过，没有放宽断言或安全设置。
