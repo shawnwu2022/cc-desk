@@ -25,12 +25,31 @@ test.beforeAll(async()=>{
 })
 async function route(context:BrowserContext){await context.route('https://desk.invalid/**',r=>{const p=new URL(r.request().url()).pathname;return r.fulfill({headers:{'Cross-Origin-Opener-Policy':'same-origin','Cross-Origin-Embedder-Policy':'require-corp'},contentType:p.endsWith('.mjs')?'text/javascript':'text/html',body:p==='/registration.mjs'?module:p==='/fixture.mjs'?fixture:'<!doctype html><title>TEST_ONLY registration</title>'})})}
 async function prepare(page:Page){await page.goto('https://desk.invalid/');await page.evaluate(async()=>{const api=await import(location.origin+'/fixture.mjs');await api.setup();const f=Reflect.get(globalThis,'f');f.api=api;f.controller=new AbortController();f.producer=api.createBrowserRegistrationProducer(location.origin,f.controller.signal,performance.timeOrigin+performance.now()+60000)})}
-function oracle(nativeMode?:string){
+function oracle(nativeMode?:string,channel=false){
  const file=process.env[nativeMode?'CC_DESK_TEST_ONLY_NATIVE_REGISTRATION_ORACLE':'CC_DESK_TEST_ONLY_REGISTRATION_ORACLE'];if(!file)throw Error('explicit TEST_ONLY registration oracle executable required')
- const filter=nativeMode?'NativeRegistration_BrowserOracle_900':'browser_registration_tests::Registration_BrowserOracle_900'
+ const filter=channel?'NativeRegistration_ChannelOracle_901':nativeMode?'NativeRegistration_BrowserOracle_900':'browser_registration_tests::Registration_BrowserOracle_900'
  const child=spawn(file,[filter,'--ignored','--nocapture'],{stdio:['pipe','pipe','pipe'],windowsHide:true,env:{...process.env,...(nativeMode?{CC_DESK_TEST_ONLY_NATIVE_REGISTRATION_MODE:nativeMode}:{})}});const exit=once(child,'exit');const values:any[]=[],waiters:{resolve:(v:any)=>void;reject:(e:Error)=>void}[]=[];let buffer='',output='';let ended=false
  child.stderr.on('data',b=>{output+=b});child.stdout.on('data',b=>{output+=b;buffer+=b;for(;;){const i=buffer.indexOf('\n');if(i<0)break;const line=buffer.slice(0,i).trim();buffer=buffer.slice(i+1);const start=line.indexOf('CC_DESK_REGISTRATION_ORACLE:');if(start<0)continue;const value=JSON.parse(line.slice(start+'CC_DESK_REGISTRATION_ORACLE:'.length));const waiter=waiters.shift();if(waiter)waiter.resolve(value);else values.push(value)}});void exit.then(()=>{ended=true;for(const w of waiters)w.reject(Error(output))})
  return{file,child,exit,next:()=>values.length?Promise.resolve(values.shift()):ended?Promise.reject(Error(output)):new Promise<any>((resolve,reject)=>waiters.push({resolve,reject})),send:(bytes:unknown[])=>{if(!bytes.every((n):n is number=>typeof n==='number'&&Number.isInteger(n)&&n>=0&&n<=255))throw Error('TEST_ONLY response bytes');return child.stdin.write(Buffer.from(bytes).toString('utf8')+'\n')},async dispose(){if(!ended){child.kill();await exit}}}
+}
+
+for(const mode of ['yes','deny','document','foreign','host-mismatch','client-mismatch','install-failed','lost-ack','lost-decision','cancel-before-install','rebind']){
+ test(`Registration_NativeTls_${mode}_030`,async({page,context},info)=>{
+  const o=oracle(mode,true);try{
+   await route(context);await prepare(page);
+   if(mode!=='client-mismatch'){
+    const request=await o.next();o.send(await page.evaluate(async request=>{const f=Reflect.get(globalThis,'f');return Array.from(await f.producer.create(new TextEncoder().encode(JSON.stringify(request)),f.keys))},request));
+    const confirm=await o.next();o.send(await page.evaluate(async request=>Array.from(await Reflect.get(globalThis,'f').producer.confirm(new TextEncoder().encode(JSON.stringify(request)))),confirm));
+   }
+   const evidence=await o.next();
+   const installed=['yes','lost-ack','lost-decision'].includes(mode);
+   expect(evidence).toMatchObject({mode,nativeCandidateInstalled:installed,locked:true,hostNetworkAttempts:0,hostKeyOpens:0,registrationTlsConnections:1,acknowledged:!['client-mismatch','lost-ack','lost-decision','cancel-before-install','rebind'].includes(mode),genuineGuiApproval:false,persistentTrust:false});
+   if(installed){expect(evidence.receipt).toMatchObject({kind:'RunLocalCandidateInstalled',receipt:'1'});if(mode!=='lost-decision')expect(evidence.peerOutcome).toEqual(evidence.receipt);else expect(evidence.peerOutcome).toBeNull()}
+   else expect(evidence.receipt).toBeNull();
+   expect((await o.exit)[0]).toBe(0);
+   const output=info.outputPath('native-registration-channel.json');await writeFile(output,JSON.stringify({evidence,oracle:{file:o.file,sha256:createHash('sha256').update(await readFile(o.file)).digest('hex')}},null,2));await info.attach('native-registration-channel',{path:output,contentType:'application/json'});
+  }finally{await o.dispose()}
+ })
 }
 
 // 实际 Edge 生产者经原 Rust 两阶段验证，只得到待批准证据。

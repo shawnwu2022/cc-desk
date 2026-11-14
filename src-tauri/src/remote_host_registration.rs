@@ -24,6 +24,7 @@ enum Stage {
 pub(crate) struct NativeRegistrationOwner {
     identity: OwnerIdentity,
     context_binding: [u8; 32],
+    client_endpoint: [u8; 32],
     end: Instant,
     cancel: CancelHandle,
     stage: Stage,
@@ -46,6 +47,9 @@ impl NativeRegistrationOwner {
         context_binding[..16].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
         context_binding[16..].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
         context.owner_binding = context_binding;
+        let client_endpoint = context
+            .tls_key
+            .endpoint_id(cc_desk_remote_security::Role::Client);
         let budget = Duration::from_secs(120);
         let end = Instant::now() + budget;
         let (cancel, token) = cancellation();
@@ -54,6 +58,7 @@ impl NativeRegistrationOwner {
         Ok(Self {
             identity,
             context_binding,
+            client_endpoint,
             end,
             cancel,
             stage: Stage::Create(attempt),
@@ -184,7 +189,7 @@ impl NativeRegistrationOwner {
         caller: &CallerIdentity,
         admission: &NativeRunAdmission,
         controller: &RemoteHostController,
-    ) -> Result<(), SafeError> {
+    ) -> Result<u64, SafeError> {
         self.check(binding, caller, admission)?;
         let Stage::Awaiting(approval) = &self.stage else {
             return Err(error("REMOTE_HOST_LOCKED"));
@@ -199,7 +204,14 @@ impl NativeRegistrationOwner {
         if Instant::now() >= self.end {
             return Err(error("REMOTE_HOST_LOCKED"));
         }
-        controller.install_frozen_configuration(binding, caller.clone(), admission, host)
+        controller.install_frozen(
+            binding,
+            caller.clone(),
+            admission,
+            host,
+            #[cfg(test)]
+            None,
+        )
     }
     pub(crate) fn cancel(&mut self) {
         self.cancel.cancel();
@@ -237,3 +249,7 @@ impl Drop for NativeRegistrationOwner {
         self.cancel();
     }
 }
+
+#[path = "remote_registration_session.rs"]
+mod session;
+pub(crate) use session::NativeRegistrationSession;

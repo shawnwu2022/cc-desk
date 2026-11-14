@@ -11,6 +11,9 @@ use cc_desk_remote_security::{
 use std::io::{BufRead, Write};
 
 fn key(n: usize) -> P256Spki {
+    P256Spki::new(&key_bytes(n)).unwrap()
+}
+fn key_bytes(n: usize) -> Vec<u8> {
     const POINTS: [&str; 4] = [
         "046b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c2964fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5",
         "047cf27b188d034f7e8a52380304b51ac3c08969e277f21b35a60b48fc4766997807775510db8ed040293d9ac69f7430dbba7dade63ce982299e04b79d227873d1",
@@ -19,7 +22,7 @@ fn key(n: usize) -> P256Spki {
     ];
     let mut bytes = network_hex("3059301306072a8648ce3d020106082a8648ce3d030107034200");
     bytes.extend(network_hex(POINTS[n - 1]));
-    P256Spki::new(&bytes).unwrap()
+    bytes
 }
 fn emit(bytes: &[u8]) {
     println!(
@@ -28,6 +31,9 @@ fn emit(bytes: &[u8]) {
     );
     std::io::stdout().flush().unwrap();
 }
+
+#[path = "native_cli_registration_channel.rs"]
+mod channel;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "TEST_ONLY protocol oracle requires an actual browser producer on stdin"]

@@ -11,7 +11,7 @@ use parking_lot::Mutex;
 #[path = "remote_host_registration.rs"]
 mod registration;
 #[allow(unused_imports)]
-pub(crate) use registration::NativeRegistrationOwner;
+pub(crate) use registration::{NativeRegistrationOwner, NativeRegistrationSession};
 use serde::Serialize;
 use std::{
     sync::{Arc, Weak},

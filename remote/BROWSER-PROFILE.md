@@ -809,14 +809,25 @@ initial enrollment or permit automatic recovery after uncertain retirement.
 
 The optional native [two-stage registration evidence verifier](../docs/browser-registration-evidence.md)
 now checks explicit existing-key possession and synthetic WebAuthn creation plus
-credential possession. It returns only unapproved evidence and has no production
-registration channel, account authority, GUI approval or store installation wiring.
+credential possession. It returns only unapproved evidence, not account authority,
+GUI approval or store installation wiring.
 The separate backend-only [native registration approval gate](../docs/native-registration-approval.md)
 now binds that original evidence to its authenticated native document/run and the
 original one-shot native approval machine. It may install only the matching frozen
 Host configuration; a separate Host session approval/start remains required and
 the controller stays Locked. This is not a public registration command, account
 identity root, authenticated bootstrap channel or durable browser installation.
+
+The experimental backend-only [native registration channel](../docs/native-registration-channel.md)
+adds separate mutual-RPK TLS with `cc-desk-enroll/1`, original bounded lifetime,
+ordered evidence messages and transcript-bound historical decision/ACK. It joins
+the original verifier and approval owner, checks both actual endpoint identities,
+and preserves the real native installation receipt if delivery fails. A receipt
+is not durable trust or a grant. Its Edge acceptance uses a TEST_ONLY native TLS
+client over loopback, not BrowserWasm, real passkeys, relay bootstrap or a public
+registration endpoint. Browser signer/worker admission, relay keepalive within
+the original 120-second cap, identity authority and durable installation remain
+separate engineering gates.
 
 The browser-entry.spec.ts fixture supplies the fixed same-origin profile module
 through createApprovedBrowserProfileReader, instead of directly assembling

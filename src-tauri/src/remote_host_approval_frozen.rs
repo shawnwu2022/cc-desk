@@ -61,6 +61,9 @@ impl FrozenHostApproval {
     pub(crate) fn cap(&self) -> Instant {
         self.cap
     }
+    pub(crate) fn endpoint_id(&self) -> [u8; 32] {
+        self.fields.endpoint_id
+    }
     pub(crate) fn matches(&self, admission: &NativeRunAdmission) -> bool {
         self.origin.matches(admission)
             && admission.scope().ok().as_ref() == Some(&self.fields.policy.scope)

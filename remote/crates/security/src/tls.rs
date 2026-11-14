@@ -133,6 +133,7 @@ fn provider() -> Arc<rustls::crypto::CryptoProvider> {
 fn evidence(
     state: &rustls::CommonState,
     pin: &PeerPin,
+    alpn: &[u8],
 ) -> Result<TransportEvidence, SecurityError> {
     let e = TransportEvidence {
         protocol: state.protocol_version().ok_or(SecurityError::Negotiated)?,
@@ -148,7 +149,7 @@ fn evidence(
         raw_public_key: state
             .peer_certificates()
             .is_some_and(|p| p.len() == 1 && p[0].as_ref() == pin.public.0),
-        alpn_matches: state.alpn_protocol() == Some(ALPN),
+        alpn_matches: state.alpn_protocol() == Some(alpn),
         peer_endpoint_id: pin.public.endpoint_id(pin.role),
     };
     if e.protocol != rustls::ProtocolVersion::TLSv1_3
@@ -208,7 +209,17 @@ pub async fn connect<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     local: LocalIdentity,
     pin: PeerPin,
     budget: Duration,
+    cancel: crate::CancelToken,
+) -> Result<Pending<S>, SecurityError> {
+    connect_protocol(io, local, pin, budget, cancel, ALPN).await
+}
+pub(crate) async fn connect_protocol<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
+    io: Unbound<S>,
+    local: LocalIdentity,
+    pin: PeerPin,
+    budget: Duration,
     mut cancel: crate::CancelToken,
+    alpn: &'static [u8],
 ) -> Result<Pending<S>, SecurityError> {
     let deadline = end(budget)?;
     if local.role != Role::Client || pin.role != Role::Host {
@@ -228,7 +239,7 @@ pub async fn connect<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
         .with_client_cert_resolver(Arc::new(
             rustls::client::AlwaysResolvesClientRawPublicKeys::new(local.certified()),
         ));
-    config.alpn_protocols = vec![ALPN.to_vec()];
+    config.alpn_protocols = vec![alpn.to_vec()];
     config.enable_early_data = false;
     config.enable_sni = false;
     config.key_log = Arc::new(rustls::NoKeyLog {});
@@ -240,7 +251,7 @@ pub async fn connect<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
         &mut cancel,
     )
     .await?;
-    let e = finish(deadline, &cancel, || evidence(tls.get_ref().1, &pin))?;
+    let e = finish(deadline, &cancel, || evidence(tls.get_ref().1, &pin, alpn))?;
     Ok(Pending {
         _io: tokio_rustls::TlsStream::Client(tls),
         _context: context,
@@ -254,7 +265,17 @@ pub async fn accept<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     local: LocalIdentity,
     pin: PeerPin,
     budget: Duration,
+    cancel: crate::CancelToken,
+) -> Result<Pending<S>, SecurityError> {
+    accept_protocol(io, local, pin, budget, cancel, ALPN).await
+}
+pub(crate) async fn accept_protocol<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
+    io: Unbound<S>,
+    local: LocalIdentity,
+    pin: PeerPin,
+    budget: Duration,
     mut cancel: crate::CancelToken,
+    alpn: &'static [u8],
 ) -> Result<Pending<S>, SecurityError> {
     let deadline = end(budget)?;
     if local.role != Role::Host || pin.role != Role::Client {
@@ -273,7 +294,7 @@ pub async fn accept<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
         .with_cert_resolver(Arc::new(
             rustls::server::AlwaysResolvesServerRawPublicKeys::new(local.certified()),
         ));
-    config.alpn_protocols = vec![ALPN.to_vec()];
+    config.alpn_protocols = vec![alpn.to_vec()];
     config.send_tls13_tickets = 0;
     config.max_early_data_size = 0;
     config.key_log = Arc::new(rustls::NoKeyLog {});
@@ -287,7 +308,7 @@ pub async fn accept<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
         &mut cancel,
     )
     .await?;
-    let e = finish(deadline, &cancel, || evidence(tls.get_ref().1, &pin))?;
+    let e = finish(deadline, &cancel, || evidence(tls.get_ref().1, &pin, alpn))?;
     Ok(Pending {
         _io: tokio_rustls::TlsStream::Server(tls),
         _context: context,
