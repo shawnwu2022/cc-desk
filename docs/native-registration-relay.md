@@ -10,6 +10,14 @@ This optional transport policy keeps an admitted registration tunnel alive while
 - Inbound traffic may renew the bounded IO-idle deadline, never the original total end. Outbound heartbeat cannot renew the owner's own read-idle deadline. Cancellation and total expiry stop the original driver and join its route workers and original socket owner.
 - Browser timing uses both monotonic and wall elapsed time, retaining the larger value and a nondecreasing high-water mark. A backward or invalid sample permanently expires this owner. These anchors start at factory creation: the caller must retain and validate the earlier ceremony clock before invoking it. Factory construction cannot reconstruct a suspension that preceded it.
 
+## Final bytes and original retirement
+
+A registration route now waits for the original driver to finish `ws.send` for each queued outbound envelope before reading the next chunk or observing producer EOF. Both driver send paths acknowledge that internal receipt only after flushing the original WSS sink and checking the unchanged deadline. Without it, a route could finish at EOF while final TLS bytes were still queued, allowing the driver's task-completion branch to drop those bytes.
+
+This receipt is not a peer acknowledgement or proof that TLS close-notify was consumed. Exact registration ACK and browser TLS completion remain separate required checks. Cancellation, deadline, incoming write failure and backpressure still fail closed; no failure is converted into a successful drain. The same driver aborts and joins an outstanding receipt wait, with no new background task or timeout. Normal enrolled routes retain their previous behavior.
+
+The deterministic final-byte test first reproduced the loss, then passed with the fix. An additional paused-clock case proves that the original total end joins a blocked flush receipt and its original producer write. The resulting complete transport suite passes 55 tests, including eight registration cases, and strict Clippy passes.
+
 ## Isolated verification, 2026-11-14
 
 - Transport all-target tests: 53 passed. Six new virtual-time/native cases cover more than 30 seconds idle with no TLS-byte injection, exact original total expiry, outbound-only idle failure, cancellation before IO, cancellation while a write is blocked, invalid bounds and unchanged legacy-owner behavior.
@@ -20,6 +28,6 @@ The test's opposite peer is a raw TEST_ONLY host using the same bounded empty fr
 
 ## Explicit limits
 
-The specified Relay checkout is legacy-only. An initial rendezvous negotiation correctly failed with `Server sent no subprotocol`; the test now explicitly selects legacy mode, without fallback, weaker negotiation or server changes. Rendezvous registration and the Worker-through-actual-Relay combination are not accepted by this evidence.
+The specified Relay checkout is legacy-only. An initial rendezvous negotiation correctly failed with `Server sent no subprotocol`; the test now explicitly selects legacy mode, without fallback, weaker negotiation or server changes. A separate [actual rendezvous registration acceptance](registration-rendezvous-acceptance.md) verifies the explicit rendezvous service candidate. Neither Node-only transport acceptance qualifies the Worker-through-actual-Relay combination.
 
 Strict checking of the integration fixture itself remains blocked by its existing missing `ws` declarations and associated callback types; no type stubs or packages were installed to hide that gap. Its actual runtime test passed. No real account credentials, persistent enrollment, public endpoint, deployment or push is performed. Default Host entry remains Locked.

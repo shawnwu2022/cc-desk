@@ -31,6 +31,64 @@ async fn tick(ms: u64) {
         tokio::task::yield_now().await;
     }
 }
+
+#[tokio::test]
+async fn RegistrationRelay_FinalBytesReachSocketBeforeRouteRetires_007() {
+    use futures_util::StreamExt;
+    let (socket, mut peer) = sockets().await;
+    let (mut app, owner) = start_owned_registration(
+        socket,
+        [9; 16],
+        Duration::from_secs(3),
+        Instant::now() + Duration::from_secs(10),
+        std::future::pending(),
+    )
+    .unwrap();
+    // 原生产者在路由任务首次轮询前完成，确定性复现尾帧排队与 EOF 的竞争。
+    let final_bytes = vec![7; 32768];
+    app.write_all(&final_bytes).await.unwrap();
+    app.shutdown().await.unwrap();
+    drop(app);
+    let mut received = Vec::new();
+    while received.len() < final_bytes.len() {
+        let next = tokio::time::timeout(Duration::from_secs(3), peer.next())
+            .await
+            .unwrap();
+        let Some(Ok(tokio_tungstenite::tungstenite::Message::Binary(bytes))) = next else {
+            panic!("original route retired before its final queued bytes reached the socket");
+        };
+        for frame in cc_desk_remote_protocol::decode_outer(&bytes).unwrap() {
+            received.extend_from_slice(frame.payload);
+        }
+    }
+    assert_eq!(received, final_bytes);
+    owner.wait_closed().await.unwrap();
+    assert_eq!(owner.joined.load(std::sync::atomic::Ordering::Acquire), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn RegistrationRelay_OriginalEndJoinsPendingFlushReceipt_008() {
+    let (socket, _peer) = sockets().await;
+    let end = Instant::now() + Duration::from_secs(1);
+    let (mut app, owner) = start_owned_registration(
+        socket,
+        [9; 16],
+        Duration::from_secs(30),
+        end,
+        std::future::pending(),
+    )
+    .unwrap();
+    let writer = tokio::spawn(async move { app.write_all(&vec![5; 512 * 1024]).await });
+    for _ in 0..32 {
+        tokio::task::yield_now().await;
+    }
+    assert!(!writer.is_finished());
+    tokio::time::sleep_until(end).await;
+    owner.wait_closed().await.unwrap();
+    assert_eq!(Instant::now(), end);
+    assert_eq!(owner.joined.load(std::sync::atomic::Ordering::Acquire), 1);
+    assert!(writer.await.unwrap().is_err());
+}
 #[tokio::test(start_paused = true)]
 async fn RegistrationRelay_KeepaliveIsNotPayloadAndTotalNeverRenews_001() {
     let (a, b) = sockets().await;

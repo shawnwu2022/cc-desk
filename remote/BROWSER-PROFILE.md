@@ -832,8 +832,10 @@ synthetic authenticator responses and the original cfg(test) native approval cal
 The registration-only [Relay lifetime owner](../docs/native-registration-relay.md)
 adds bounded opaque keepalive without renewing the original total deadline. Its
 independent actual WSS acceptance crosses 35 seconds of idle time in explicitly
-selected legacy mode and closes at the original 40-second end. This does not yet
-qualify the Worker-plus-Relay combination or rendezvous registration. Production
+selected legacy mode and closes at the original 40-second end. A separate
+[rendezvous registration acceptance](../docs/registration-rendezvous-acceptance.md)
+passes five actual-service cases with exact Ready and original-deadline gates.
+These Node-only checks do not qualify the Worker-plus-Relay combination. Production
 identity authority, independent pins, genuine native GUI approval and durable
 installation remain separate engineering gates; default entry stays Locked.
 

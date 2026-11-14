@@ -289,12 +289,14 @@ where S:tokio::io::AsyncRead+tokio::io::AsyncWrite+Unpin+Send+'static {
         return Err(TransportError::Cancelled);
     }
     let mut workers = JoinSet::new();
-    let (out_tx, mut out_rx) = mpsc::channel::<Vec<u8>>(16);
+    type Outgoing = (Vec<u8>, Option<tokio::sync::oneshot::Sender<()>>);
+    let (out_tx, mut out_rx) = mpsc::channel::<Outgoing>(16);
     let mut incoming = std::collections::HashMap::new();
     for (id, stream) in routes {
         let (tx, mut rx) = mpsc::channel::<Vec<u8>>(4);
         incoming.insert(id, tx);
         let out = out_tx.clone();
+        let registration_flush = registration.is_some();
         workers.spawn(async move {
             let (mut read, mut write) = tokio::io::split(stream.0);
             let read_loop = async {
@@ -309,7 +311,17 @@ where S:tokio::io::AsyncRead+tokio::io::AsyncWrite+Unpin+Send+'static {
                         payload: &buf[..n],
                     }])
                     .map_err(|_| TransportError::Wire)?;
-                    out.send(msg).await.map_err(|_| TransportError::Closed)?;
+                    let (flushed, receipt) = if registration_flush {
+                        let (tx, rx) = tokio::sync::oneshot::channel();
+                        (Some(tx), Some(rx))
+                    } else {
+                        (None, None)
+                    };
+                    out.send((msg, flushed)).await.map_err(|_| TransportError::Closed)?;
+                    // 登记路由必须等原发送完成，不能让 EOF 抢先丢弃队列中的最终 TLS 字节。
+                    if let Some(receipt) = receipt {
+                        receipt.await.map_err(|_| TransportError::Closed)?;
+                    }
                 }
             };
             let write_loop = async {
@@ -362,7 +374,7 @@ where S:tokio::io::AsyncRead+tokio::io::AsyncWrite+Unpin+Send+'static {
         }
         // Service at most one ready outbound envelope before the next inbound
         // event. A permanently-ready inbound stream cannot starve outbound.
-        if let Ok(bytes) = out_rx.try_recv() {
+        if let Ok((bytes, flushed)) = out_rx.try_recv() {
             let sent = tokio::select! {
                 biased;
                 _=cancel.changed()=>Err(TransportError::Cancelled),
@@ -373,6 +385,7 @@ where S:tokio::io::AsyncRead+tokio::io::AsyncWrite+Unpin+Send+'static {
                 finish!(Err(e), SocketWrite);
             }
             if registration.is_some()&&Instant::now()>=read_deadline{finish!(Err(TransportError::Deadline),IoBudget);}
+            if let Some(flushed) = flushed { let _ = flushed.send(()); }
         }
         tokio::select! {
             biased;
@@ -411,7 +424,7 @@ where S:tokio::io::AsyncRead+tokio::io::AsyncWrite+Unpin+Send+'static {
                 }
             }
             outgoing=out_rx.recv(), if !out_rx.is_closed()=>{
-                if let Some(bytes)=outgoing {
+                if let Some((bytes,flushed))=outgoing {
                     let sent=tokio::select! {
                         biased;
                         _=cancel.changed()=>Err(TransportError::Cancelled),
@@ -420,6 +433,7 @@ where S:tokio::io::AsyncRead+tokio::io::AsyncWrite+Unpin+Send+'static {
                     };
                     if let Err(e)=sent {finish!(Err(e), SocketWrite);}
                     if registration.is_some()&&Instant::now()>=read_deadline{finish!(Err(TransportError::Deadline),IoBudget);}
+                    if let Some(flushed) = flushed { let _ = flushed.send(()); }
                 }
             }
         }

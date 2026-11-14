@@ -426,8 +426,8 @@ pub async fn registration_accept<S: AsyncRead + AsyncWrite + Unpin + Send + 'sta
     admitted(pending, end)
 }
 
-/// Preserve the original native ceremony deadlines across Relay admission and TLS.
-/// Inputs remain independently approved identities, never a public pairing candidate.
+/// 跨中转准入与 TLS 阶段保留原生登记原始截止时间。
+/// 输入仍须是独立批准的身份，不能使用公开配对候选。
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn registration_accept_until<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     io: Unbound<S>,
