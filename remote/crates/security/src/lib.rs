@@ -47,6 +47,11 @@ mod data_tests;
 mod grant_tests;
 #[cfg(feature = "experimental")]
 pub use browser_approval::BrowserProfile;
+#[cfg(all(feature = "experimental", not(target_arch = "wasm32")))]
+pub mod browser_registration;
+#[cfg(all(test, feature = "experimental", not(target_arch = "wasm32")))]
+#[path = "../tests/support/browser_registration.rs"]
+mod browser_registration_tests;
 #[cfg(all(test, feature = "experimental"))]
 #[path = "../tests/support/identities.rs"]
 #[allow(dead_code)]

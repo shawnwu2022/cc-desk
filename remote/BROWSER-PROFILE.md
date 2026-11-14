@@ -807,6 +807,11 @@ can supply existing non-exportable handles across pages. Its persisted revision,
 revocation tombstone and original-owner completion marker do not authenticate the
 initial enrollment or permit automatic recovery after uncertain retirement.
 
+The optional native [two-stage registration evidence verifier](../docs/browser-registration-evidence.md)
+now checks explicit existing-key possession and synthetic WebAuthn creation plus
+credential possession. It returns only unapproved evidence and has no production
+registration channel, account authority, GUI approval or store installation wiring.
+
 The browser-entry.spec.ts fixture supplies the fixed same-origin profile module
 through createApprovedBrowserProfileReader, instead of directly assembling
 approved inputs. Its independent TEST_ONLY snapshot comes from the actual Host
