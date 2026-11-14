@@ -49,3 +49,5 @@ Tests use fixed public TEST_ONLY private scalars imported as non-exportable in-m
 ## Remaining production admission work
 
 A real deployment still needs an explicitly authorized operator approval flow, independent durable trust storage and identity-to-handle binding, real credential enrollment and its recovery/revocation policy, and the native GUI approval bridge. This slice implements none of those external actions. It provides a bounded, revocable in-memory owner that such a controlled flow can use without changing the supplier, Host grants, or Relay protocol.
+
+The subsequent [origin-local store adapter](browser-enrollment-store.md) adds explicit persistence of independently approved existing handles and fail-closed revision/retirement records. It preserves this page-local authority and does not fill the initial authentication, real credential registration, hardware trust or recovery gates described above.

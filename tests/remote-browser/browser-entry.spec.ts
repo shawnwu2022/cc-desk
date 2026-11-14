@@ -176,3 +176,39 @@ for(const action of ['cancel','revoke','deadline'] as const){
   }finally{await f.dispose()}
  })
 }
+
+test('BrowserEntry_PersistedSupplierAcrossPagesThenDurableRevocation_009',async({page,context},info)=>{
+ const f=await entryFixture(context,undefined,true,true)
+ try{
+  await page.goto('https://desk.invalid/browser-remote.html')
+  const installed=await page.evaluate(async()=>{const installer=await import(location.origin+'/test-only-enrollment-install.mjs');return installer.install()})
+  expect(installed).toEqual({revision:'1',state:'active'});await page.close()
+  const active=await context.newPage();await active.goto('https://desk.invalid/browser-remote.html');await active.locator('[data-remote-refresh]').click()
+  await active.getByRole('button',{name:'Approve this connection',exact:true}).click();await expect(active.getByRole('status')).toContainText('Snapshot verified')
+  const supplied=await active.evaluate(()=>Reflect.get(globalThis,'__ccDeskTestOnlyPairing'))
+  expect(supplied).toMatchObject({sourceReads:1,storeReads:1,nonExportable:true,presentations:1,assertions:1,keyImports:1})
+  await active.locator('[data-remote-input]').fill('TEST_ONLY_PERSISTED_SUPPLIER');await active.locator('[data-remote-send]').click();await expect(active.locator('[data-remote-input]')).toHaveValue('')
+  const admin=await context.newPage();await admin.goto('https://desk.invalid/browser-remote.html')
+  const revoked=await admin.evaluate(async()=>{const api=await import(location.origin+'/test-only-pairing-helper.mjs');return api.createBrowserEnrollmentStore({origin:location.origin,databaseName:'CC_DESK_TEST_ONLY_ENTRY'}).revoke()})
+  expect(revoked).toEqual({revision:'1',state:'revoked'})
+  await active.locator('[data-remote-refresh]').click();await expect(active.getByRole('status')).toContainText('Remote connection unavailable')
+  const effect=await f.host.wait(value=>value.kind==='effects');expect(effect.writeCount).toBe(1);expect(effect.bytes).toBe(Buffer.from('TEST_ONLY_PERSISTED_SUPPLIER').toString('hex'))
+  await f.relay.wait(value=>value.originalRelayRetired===true)
+  const fresh=await context.newPage();await fresh.goto('https://desk.invalid/browser-remote.html');await fresh.locator('[data-remote-refresh]').click();await expect(fresh.locator('[data-remote-refresh]')).toBeEnabled();await expect(fresh.getByRole('status')).toContainText('Locked')
+  const locked=await fresh.evaluate(()=>Reflect.get(globalThis,'__ccDeskTestOnlyPairing'))
+  expect(locked).toMatchObject({sourceReads:1,storeReads:1,signatures:0,presentations:0,assertions:0,keyImports:0});expect(f.observations()).toEqual({browserConnections:1,artifactRequests:2})
+  await writeEvidence(info,'persisted-supplier-revocation',{artifacts:f.artifacts,installed,supplied,revoked,locked,effect,transport:f.observations()})
+ }finally{await f.dispose()}
+})
+
+test('BrowserEntry_PersistedRecordCannotApproveChangedCandidate_010',async({page,context},info)=>{
+ const f=await entryFixture(context,'run',true,true)
+ try{
+  await page.goto('https://desk.invalid/browser-remote.html');await page.evaluate(async()=>{const installer=await import(location.origin+'/test-only-enrollment-install.mjs');await installer.install()})
+  for(let attempt=0;attempt<2;attempt++){await page.locator('[data-remote-refresh]').click();await expect(page.locator('[data-remote-refresh]')).toBeEnabled();await expect(page.getByRole('status')).toContainText('Remote connection unavailable')}
+  const supplied=await page.evaluate(()=>Reflect.get(globalThis,'__ccDeskTestOnlyPairing'))
+  expect(supplied).toMatchObject({sourceReads:1,storeReads:1,signatures:0,presentations:0,assertions:0,keyImports:0});expect(f.observations()).toEqual({browserConnections:0,artifactRequests:0})
+  const status=await page.evaluate(async()=>Reflect.get(globalThis,'__ccDeskTestOnlyStore').store.status());expect(status).toEqual({revision:'1',state:'active'})
+  await writeEvidence(info,'persisted-supplier-mismatch',{artifacts:f.artifacts,supplied,status,transport:f.observations()})
+ }finally{await f.dispose()}
+})

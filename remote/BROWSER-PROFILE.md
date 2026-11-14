@@ -802,6 +802,11 @@ Controlled modules can supply the production [grant presenter](../docs/browser-g
 for explicit review of the original verified grant before the existing WebAuthn
 step. This dialog does not replace the native Host approval or establish enrollment.
 
+An explicitly installed [origin-local enrollment store](../docs/browser-enrollment-store.md)
+can supply existing non-exportable handles across pages. Its persisted revision,
+revocation tombstone and original-owner completion marker do not authenticate the
+initial enrollment or permit automatic recovery after uncertain retirement.
+
 The browser-entry.spec.ts fixture supplies the fixed same-origin profile module
 through createApprovedBrowserProfileReader, instead of directly assembling
 approved inputs. Its independent TEST_ONLY snapshot comes from the actual Host
