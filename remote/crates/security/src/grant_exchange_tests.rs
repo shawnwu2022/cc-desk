@@ -718,3 +718,375 @@ async fn grant_management_current_policy_rejection_does_not_consume_pending_sign
     ));
     assert!(gate.accept(&signed(&pending, gate.issuer_kid())).is_ok());
 }
+
+fn resume_trust() -> BrowserResumeGrantTrust {
+    BrowserResumeGrantTrust {
+        issuer: admin(),
+        principal: [4; 32],
+        role: DataRole::Controller,
+    }
+}
+
+#[derive(Default)]
+struct ResumeSigner {
+    calls: usize,
+    seen: Vec<cc_desk_remote_record::grant::CanonicalGrant>,
+    replay: Option<Vec<u8>>,
+    deny: bool,
+    slow: bool,
+}
+impl NativeGrantSigner for ResumeSigner {
+    fn browser_profile(&self) -> Option<BrowserProfile> {
+        Some(crate::browser_approval_tests::profile())
+    }
+    fn confirm_and_sign<'a>(
+        &'a mut self,
+        grant: &'a VerifiedCanonicalGrant,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>, GrantError>> + Send + 'a>>
+    {
+        self.calls += 1;
+        self.seen.push(grant.payload().clone());
+        Box::pin(async move {
+            if self.deny {
+                return Err(GrantError::Policy);
+            }
+            if self.slow {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+            }
+            if let Some(old) = &self.replay {
+                return Ok(old.clone());
+            }
+            let challenge = grant.browser_challenge(&crate::browser_approval_tests::profile())?;
+            Ok(crate::browser_approval_tests::proof_challenge(
+                grant.payload(),
+                grant.issuer_kid(),
+                challenge,
+                0,
+            ))
+        })
+    }
+}
+
+#[tokio::test]
+async fn browser_resume_authenticated_new_scope_requires_fresh_approval_001() {
+    let mut signer = ResumeSigner::default();
+    let trust = resume_trust();
+    for run in ["new-run-one", "new-run-two"] {
+        let (c, h, _cancel) = bound_pair(true, true).await;
+        let (c, h) = (c.unwrap(), h.unwrap());
+        let mut gate =
+            GrantGate::for_binding(h.context(), admin(), [4; 32], Arc::new(|| Ok(1000))).unwrap();
+        gate.require_browser(crate::browser_approval_tests::profile())
+            .unwrap();
+        let mut next = policy();
+        next.scope.run = run.into();
+        next.scope.generation = "42".into();
+        let target = next.scope.clone();
+        let (c, h) = tokio::join!(
+            c.grant_browser_resume(
+                &trust,
+                &mut signer,
+                Arc::new(|| Ok(200)),
+                Duration::from_secs(1)
+            ),
+            h.grant_host(&mut gate, next, Duration::from_secs(1))
+        );
+        let (mut c, mut h) = (c.unwrap(), h.unwrap());
+        assert_eq!(c.access.as_ref().unwrap().scope(), &target);
+        assert_eq!(signer.seen.last().unwrap().scope, target);
+        assert_eq!(signer.seen.last().unwrap().context, *c.context.raw());
+        let (c, h) = (c.start().unwrap(), h.start().unwrap());
+        let (sent, received) = tokio::join!(
+            c.send_control(&target, 4, b"FRESH_RUN", Duration::from_secs(1)),
+            h.receive(&target, 4, Duration::from_secs(1))
+        );
+        sent.unwrap();
+        assert_eq!(received.unwrap().payload(), b"FRESH_RUN");
+        c.close().await;
+        h.wait_closed().await;
+    }
+    assert_eq!(signer.calls, 2);
+    assert_ne!(signer.seen[0].challenge, signer.seen[1].challenge);
+    assert_ne!(signer.seen[0].grant_id, signer.seen[1].grant_id);
+}
+
+#[tokio::test]
+async fn browser_resume_exact_scope_and_native_signer_stay_closed_002() {
+    for resume in [false, true] {
+        let (c, h, _cancel) = bound_pair(true, true).await;
+        let (c, h) = (c.unwrap(), h.unwrap());
+        let mut gate =
+            GrantGate::for_binding(h.context(), admin(), [4; 32], Arc::new(|| Ok(1000))).unwrap();
+        let mut next = policy();
+        next.scope.run = "new-run".into();
+        let mut signer = PublicSigner { calls: 0 };
+        let mut state = ClientGrantState::new(Arc::new(|| Ok(200)));
+        let exact = trust();
+        let resume_trust = resume_trust();
+        let client = async {
+            if resume {
+                c.grant_browser_resume(
+                    &resume_trust,
+                    &mut signer,
+                    Arc::new(|| Ok(200)),
+                    Duration::from_secs(1),
+                )
+                .await
+            } else {
+                c.grant_client(&exact, &mut signer, &mut state, Duration::from_secs(1))
+                    .await
+            }
+        };
+        let (c, h) = tokio::join!(
+            client,
+            h.grant_host(&mut gate, next, Duration::from_secs(1))
+        );
+        assert!(c.is_err());
+        assert!(h.is_err());
+        assert_eq!(signer.calls, 0);
+        assert!(state.remote_grant().is_none());
+    }
+}
+
+#[tokio::test]
+async fn browser_resume_identity_context_nonce_binding_rejected_before_presence_003() {
+    use cc_desk_remote_record::grant_management::{self as wire, Message};
+    for case in 0..10 {
+        let (c, h, _cancel) = bound_pair(true, true).await;
+        let (c, mut h) = (c.unwrap(), h.unwrap());
+        let mut gate =
+            GrantGate::for_binding(h.context(), admin(), [4; 32], Arc::new(|| Ok(1000))).unwrap();
+        let mut signer = ResumeSigner::default();
+        let trust = resume_trust();
+        let host = async {
+            let Message::Request { mut nonce, reuse } =
+                wire::decode(&management_read(&mut h).await).unwrap()
+            else {
+                panic!("request")
+            };
+            assert!(!reuse);
+            let mut grant = gate
+                .challenge(scope(), DataRole::Controller, Duration::from_secs(4))
+                .unwrap();
+            let mut binding: String = h.binding.iter().map(|b| format!("{b:02x}")).collect();
+            match case {
+                0 => nonce = "99".repeat(32),
+                1 => binding = "99".repeat(32),
+                2 => grant.principal_id = "99".repeat(32),
+                3 => grant.role = DataRole::Observer,
+                4 => grant.context.activation = "99".repeat(32),
+                5 => grant.context.incarnation = "99".into(),
+                6 => grant.context.policy_epoch = "99".into(),
+                7 => grant.context.issuer_epoch = "99".into(),
+                8 => grant.context.host_endpoint_id = "99".repeat(32),
+                _ => grant.context.client_endpoint_id = "99".repeat(32),
+            }
+            management_write(
+                &mut h,
+                &wire::encode(&Message::Challenge {
+                    nonce,
+                    binding,
+                    grant,
+                })
+                .unwrap(),
+            )
+            .await;
+        };
+        let (client, ()) = tokio::join!(
+            c.grant_browser_resume(
+                &trust,
+                &mut signer,
+                Arc::new(|| Ok(200)),
+                Duration::from_secs(1)
+            ),
+            host
+        );
+        assert!(client.is_err(), "case {case}");
+        assert_eq!(signer.calls, 0, "case {case}");
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn browser_resume_deny_timeout_and_replay_fail_closed_004() {
+    for case in 0..3 {
+        let (c, h, _cancel) = bound_pair(true, true).await;
+        let (c, h) = (c.unwrap(), h.unwrap());
+        let mut gate =
+            GrantGate::for_binding(h.context(), admin(), [4; 32], Arc::new(|| Ok(1000))).unwrap();
+        gate.require_browser(crate::browser_approval_tests::profile())
+            .unwrap();
+        let mut signer = ResumeSigner {
+            deny: case == 0,
+            slow: case == 1,
+            ..ResumeSigner::default()
+        };
+        if case == 2 {
+            let old = crate::grant_tests::browser_test_gate()
+                .challenge(scope(), DataRole::Controller, Duration::from_secs(4))
+                .unwrap();
+            signer.replay = Some(crate::browser_approval_tests::proof_challenge(
+                &old,
+                gate.issuer_kid(),
+                [8; 32],
+                0,
+            ));
+        }
+        let trust = resume_trust();
+        let (client, host) = tokio::join!(
+            c.grant_browser_resume(
+                &trust,
+                &mut signer,
+                Arc::new(|| Ok(200)),
+                Duration::from_secs(1)
+            ),
+            h.grant_host(&mut gate, policy(), Duration::from_secs(1))
+        );
+        assert!(client.is_err(), "case {case}");
+        assert!(host.is_err(), "case {case}");
+        assert_eq!(signer.calls, 1);
+    }
+}
+
+struct LateResumeSigner {
+    completion: Option<tokio::sync::oneshot::Sender<Vec<u8>>>,
+    proof: Option<Vec<u8>>,
+}
+impl NativeGrantSigner for LateResumeSigner {
+    fn browser_profile(&self) -> Option<BrowserProfile> {
+        Some(crate::browser_approval_tests::profile())
+    }
+    fn confirm_and_sign<'a>(
+        &'a mut self,
+        grant: &'a VerifiedCanonicalGrant,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>, GrantError>> + Send + 'a>>
+    {
+        let challenge = grant
+            .browser_challenge(&crate::browser_approval_tests::profile())
+            .unwrap();
+        self.proof = Some(crate::browser_approval_tests::proof_challenge(
+            grant.payload(),
+            grant.issuer_kid(),
+            challenge,
+            0,
+        ));
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.completion = Some(tx);
+        Box::pin(async move { rx.await.map_err(|_| GrantError::Closed) })
+    }
+}
+#[tokio::test(start_paused = true)]
+async fn browser_resume_late_approval_cannot_reopen_timed_out_exchange_006() {
+    let (c, h, _cancel) = bound_pair(true, true).await;
+    let (c, h) = (c.unwrap(), h.unwrap());
+    let mut gate =
+        GrantGate::for_binding(h.context(), admin(), [4; 32], Arc::new(|| Ok(1000))).unwrap();
+    gate.require_browser(crate::browser_approval_tests::profile())
+        .unwrap();
+    let mut signer = LateResumeSigner {
+        completion: None,
+        proof: None,
+    };
+    let trust = resume_trust();
+    let (client, host) = tokio::join!(
+        c.grant_browser_resume(
+            &trust,
+            &mut signer,
+            Arc::new(|| Ok(200)),
+            Duration::from_secs(1)
+        ),
+        h.grant_host(&mut gate, policy(), Duration::from_secs(1))
+    );
+    assert!(client.is_err());
+    assert!(host.is_err());
+    assert!(
+        signer
+            .completion
+            .take()
+            .unwrap()
+            .send(signer.proof.take().unwrap())
+            .is_err()
+    );
+}
+#[tokio::test]
+async fn browser_resume_success_cannot_reenter_management_or_downgrade_exact_007() {
+    for exact in [false, true] {
+        let (c, h, _cancel) = bound_pair(true, true).await;
+        let (c, h) = (c.unwrap(), h.unwrap());
+        let mut gate =
+            GrantGate::for_binding(h.context(), admin(), [4; 32], Arc::new(|| Ok(1000))).unwrap();
+        gate.require_browser(crate::browser_approval_tests::profile())
+            .unwrap();
+        let mut signer = ResumeSigner::default();
+        let trust = resume_trust();
+        let (c, h) = tokio::join!(
+            c.grant_browser_resume(
+                &trust,
+                &mut signer,
+                Arc::new(|| Ok(200)),
+                Duration::from_secs(1)
+            ),
+            h.grant_host(&mut gate, policy(), Duration::from_secs(1))
+        );
+        let c = c.unwrap();
+        let _h = h.unwrap();
+        let result = if exact {
+            let mut state = ClientGrantState::new(Arc::new(|| Ok(200)));
+            c.grant_client(
+                &self::trust(),
+                &mut signer,
+                &mut state,
+                Duration::from_secs(1),
+            )
+            .await
+        } else {
+            c.grant_browser_resume(
+                &trust,
+                &mut signer,
+                Arc::new(|| Ok(200)),
+                Duration::from_secs(1),
+            )
+            .await
+        };
+        assert!(matches!(result, Err(GrantError::Policy)));
+        assert_eq!(signer.calls, 1);
+    }
+}
+#[tokio::test]
+async fn browser_resume_existing_browser_exact_scope_and_tls_issuer_fail_before_presence_008() {
+    for exact in [false, true] {
+        let (c, h, _cancel) = bound_pair(true, true).await;
+        let (c, h) = (c.unwrap(), h.unwrap());
+        let mut gate =
+            GrantGate::for_binding(h.context(), admin(), [4; 32], Arc::new(|| Ok(1000))).unwrap();
+        gate.require_browser(crate::browser_approval_tests::profile())
+            .unwrap();
+        let mut next = policy();
+        next.scope.run = "new-run".into();
+        let mut signer = ResumeSigner::default();
+        let mut state = ClientGrantState::new(Arc::new(|| Ok(200)));
+        let trust = self::trust();
+        let mut resume = resume_trust();
+        resume.issuer = P256Spki::new(&identities::identity(false, false).1).unwrap();
+        let client = async {
+            if exact {
+                c.grant_client(&trust, &mut signer, &mut state, Duration::from_secs(1))
+                    .await
+            } else {
+                c.grant_browser_resume(
+                    &resume,
+                    &mut signer,
+                    Arc::new(|| Ok(200)),
+                    Duration::from_secs(1),
+                )
+                .await
+            }
+        };
+        let (client, host) = tokio::join!(
+            client,
+            h.grant_host(&mut gate, next, Duration::from_secs(1))
+        );
+        assert!(client.is_err());
+        assert!(host.is_err());
+        assert_eq!(signer.calls, 0);
+    }
+}

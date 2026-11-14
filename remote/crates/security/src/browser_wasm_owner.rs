@@ -243,11 +243,25 @@ fn start(
                     crate::bind::browser_grant_client(pending, trust).await
                 }
                 .map_err(bind_error)?;
-                let mut state = browser_grant::state();
-                let mut channel = channel
-                    .grant_client(&config.trust, &mut config.signer, &mut state, config.budget)
-                    .await
-                    .map_err(|_| -8)?;
+                let mut channel = match &config.trust {
+                    crate::browser_grant_config::Trust::Exact(trust) => {
+                        let mut state = crate::ClientGrantState::new(browser_grant::clock());
+                        channel
+                            .grant_client(trust, &mut config.signer, &mut state, config.budget)
+                            .await
+                    }
+                    crate::browser_grant_config::Trust::AuthenticatedHostRun(trust) => {
+                        channel
+                            .grant_browser_resume(
+                                trust,
+                                &mut config.signer,
+                                browser_grant::clock(),
+                                config.budget,
+                            )
+                            .await
+                    }
+                }
+                .map_err(|_| -8)?;
                 let receipt = channel.browser_receipt().map_err(|_| -8)?;
                 if token.is_cancelled() {
                     return Err(-3);

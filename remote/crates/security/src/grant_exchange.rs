@@ -27,6 +27,12 @@ pub struct ClientGrantTrust {
     pub scope: SessionScope,
     pub role: DataRole,
 }
+/// 已注册 Browser 显式恢复：scope 只来自本次认证 Host，仍须完整展示并批准。
+pub struct BrowserResumeGrantTrust {
+    pub issuer: P256Spki,
+    pub principal: [u8; 32],
+    pub role: DataRole,
+}
 pub struct VerifiedCanonicalGrant {
     payload: CanonicalGrant,
     kid: [u8; 32],
@@ -206,6 +212,28 @@ fn matches(payload: &CanonicalGrant, context: &Context, trust: &ClientGrantTrust
         && payload.scope == trust.scope
         && payload.role == trust.role
 }
+enum ClientScopePolicy<'a> {
+    Exact(&'a ClientGrantTrust),
+    AuthenticatedHostRun(&'a BrowserResumeGrantTrust),
+}
+impl ClientScopePolicy<'_> {
+    fn issuer(&self) -> &P256Spki {
+        match self {
+            Self::Exact(trust) => &trust.issuer,
+            Self::AuthenticatedHostRun(trust) => &trust.issuer,
+        }
+    }
+    fn matches(&self, payload: &CanonicalGrant, context: &Context) -> bool {
+        match self {
+            Self::Exact(trust) => matches(payload, context, trust),
+            Self::AuthenticatedHostRun(trust) => {
+                payload.context == *context
+                    && payload.principal_id == hex(&trust.principal)
+                    && payload.role == trust.role
+            }
+        }
+    }
+}
 async fn send<S: AsyncRead + AsyncWrite + Unpin>(
     io: &mut tokio_rustls::TlsStream<S>,
     bytes: &[u8],
@@ -331,9 +359,36 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> ManagedChannel<S> {
         self.install(&access).map_err(|_| GrantError::Policy)?;
         Ok(self)
     }
+    pub async fn grant_browser_resume(
+        self,
+        trust: &BrowserResumeGrantTrust,
+        signer: &mut dyn NativeGrantSigner,
+        clock: Arc<dyn GrantClock>,
+        budget: Duration,
+    ) -> Result<Self, GrantError> {
+        // 不接受旧 state，恢复始终需要新的 challenge 和 Browser presence。
+        let mut state = ClientGrantState::new(clock);
+        self.grant_client_with_policy(
+            ClientScopePolicy::AuthenticatedHostRun(trust),
+            signer,
+            &mut state,
+            budget,
+        )
+        .await
+    }
     pub async fn grant_client(
-        mut self,
+        self,
         trust: &ClientGrantTrust,
+        signer: &mut dyn NativeGrantSigner,
+        state: &mut ClientGrantState,
+        budget: Duration,
+    ) -> Result<Self, GrantError> {
+        self.grant_client_with_policy(ClientScopePolicy::Exact(trust), signer, state, budget)
+            .await
+    }
+    async fn grant_client_with_policy(
+        mut self,
+        trust: ClientScopePolicy<'_>,
         signer: &mut dyn NativeGrantSigner,
         state: &mut ClientGrantState,
         budget: Duration,
@@ -342,8 +397,8 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> ManagedChannel<S> {
         let context = self.context.raw().clone();
         let binding = self.binding;
         let remote = within(deadline, &mut token, async {
-            if hex(&trust.issuer.endpoint_id(Role::Host)) == context.host_endpoint_id
-                || hex(&trust.issuer.endpoint_id(Role::Client)) == context.client_endpoint_id
+            if hex(&trust.issuer().endpoint_id(Role::Host)) == context.host_endpoint_id
+                || hex(&trust.issuer().endpoint_id(Role::Client)) == context.client_endpoint_id
             {
                 return Err(GrantError::Policy);
             }
@@ -351,12 +406,15 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> ManagedChannel<S> {
             let anchor = state.clock.now_ms()?;
             let nonce = crate::grant::fresh()?;
             let browser = signer.browser_profile();
+            if matches!(trust, ClientScopePolicy::AuthenticatedHostRun(_)) && browser.is_none() {
+                return Err(GrantError::Policy);
+            }
             let reuse = state.candidate.is_some() && browser.is_none();
             if let Some(old) = &state.candidate
                 && reuse
             {
                 old.remaining()?;
-                if !matches(&old.0.payload, &context, trust) || old.0.issuer.0 != trust.issuer.0 {
+                if !trust.matches(&old.0.payload, &context) || old.0.issuer.0 != trust.issuer().0 {
                     return Err(GrantError::Context);
                 }
             }
@@ -379,13 +437,13 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> ManagedChannel<S> {
                 };
                 if echo != nonce
                     || echo_binding != hex(&binding)
-                    || !matches(&grant, &context, trust)
+                    || !trust.matches(&grant, &context)
                 {
                     return Err(GrantError::Context);
                 }
                 let request = VerifiedCanonicalGrant {
                     payload: grant,
-                    kid: kid(&trust.issuer),
+                    kid: kid(trust.issuer()),
                     attempt: (crate::grant::hex_id(&nonce), binding),
                 };
                 let signed = signer.confirm_and_sign(&request).await?;
@@ -393,12 +451,17 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> ManagedChannel<S> {
                     profile.verify(
                         &signed,
                         &request.payload,
-                        &trust.issuer,
+                        trust.issuer(),
                         request.kid,
                         request.attempt,
                     )?;
                 } else {
-                    crate::grant::signature(&signed, &request.payload, &trust.issuer, request.kid)?;
+                    crate::grant::signature(
+                        &signed,
+                        &request.payload,
+                        trust.issuer(),
+                        request.kid,
+                    )?;
                 }
                 let created = request
                     .payload
@@ -409,7 +472,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> ManagedChannel<S> {
                 let (closed, _) = watch::channel(false);
                 let remote = RemoteGrant(Arc::new(RemoteAccess {
                     payload: request.payload,
-                    issuer: trust.issuer.clone(),
+                    issuer: trust.issuer().clone(),
                     signed,
                     clock: Arc::new(ClientDeadlineClock {
                         source: state.clock.clone(),

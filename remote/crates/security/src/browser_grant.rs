@@ -1,10 +1,8 @@
 use crate::{
-    BrowserProfile, ClientGrantState, ClientGrantTrust, GrantError, NativeGrantSigner, P256Spki,
-    VerifiedCanonicalGrant,
+    BrowserProfile, GrantClock, GrantError, NativeGrantSigner, P256Spki, VerifiedCanonicalGrant,
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD as B64};
 use coset::TaggedCborSerializable;
-use serde::Deserialize;
 use std::{
     future::Future,
     pin::Pin,
@@ -26,102 +24,23 @@ pub(super) fn notify() {
         w.wake();
     }
 }
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct Enrollment {
-    origin: String,
-    rp_id: String,
-    credential_id: String,
-    credential_spki: String,
-    backup_eligible: bool,
-    allow_backed_up: bool,
-}
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct Wire {
-    issuer_spki: String,
-    principal: String,
-    scope: cc_desk_remote_record::grant::SessionScope,
-    role: cc_desk_remote_record::grant::DataRole,
-    budget_ms: u64,
-    profile: Enrollment,
-    #[serde(default, deserialize_with = "peer_present")]
-    peer_install: Option<PeerInstall>,
-}
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct PeerInstall {
-    budget_ms: u64,
-}
-fn peer_present<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<PeerInstall>, D::Error> {
-    PeerInstall::deserialize(d).map(Some)
-}
-fn decode(value: &str, max: usize) -> Result<Vec<u8>, GrantError> {
-    if value.len() > max.div_ceil(3) * 4 {
-        return Err(GrantError::Bounds);
-    }
-    let b = B64.decode(value).map_err(|_| GrantError::Encoding)?;
-    if b.len() > max || B64.encode(&b) != value {
-        return Err(GrantError::Encoding);
-    }
-    Ok(b)
-}
 pub(super) struct Configuration {
-    pub trust: ClientGrantTrust,
+    pub trust: crate::browser_grant_config::Trust,
     pub signer: Signer,
     pub budget: Duration,
     pub peer_budget: Option<Duration>,
 }
 impl Configuration {
     pub fn parse(bytes: &[u8]) -> Result<Self, GrantError> {
-        if bytes.is_empty() || bytes.len() > 8192 {
-            return Err(GrantError::Bounds);
-        }
-        let w: Wire = serde_json::from_slice(bytes).map_err(|_| GrantError::Encoding)?;
-        let peer_budget = match w.peer_install {
-            Some(p) if p.budget_ms > 0 && p.budget_ms <= 10000 => {
-                Some(Duration::from_millis(p.budget_ms))
-            }
-            Some(_) => return Err(GrantError::Policy),
-            None => None,
-        };
-        if w.budget_ms == 0
-            || w.budget_ms > 30000
-            || w.principal.len() != 64
-            || !w
-                .principal
-                .bytes()
-                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-            || w.principal.bytes().all(|b| b == b'0')
-        {
-            return Err(GrantError::Policy);
-        }
-        cc_desk_remote_record::grant::encode_scope(&w.scope).map_err(|_| GrantError::Policy)?;
-        let principal: Vec<_> = (0..64)
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&w.principal[i..i + 2], 16).map_err(|_| GrantError::Policy))
-            .collect::<Result<_, _>>()?;
-        let issuer = P256Spki::new(&decode(&w.issuer_spki, 91)?).map_err(|_| GrantError::Policy)?;
-        let key = P256Spki::new(&decode(&w.profile.credential_spki, 91)?)
-            .map_err(|_| GrantError::Policy)?;
-        let profile = BrowserProfile::enrolled(
-            &w.profile.origin,
-            &w.profile.rp_id,
-            decode(&w.profile.credential_id, 1024)?,
-            key,
-            w.profile.backup_eligible,
-            w.profile.allow_backed_up,
-        )?;
+        let parsed = crate::browser_grant_config::Configuration::parse(bytes)?;
         Ok(Self {
-            trust: ClientGrantTrust {
-                issuer: issuer.clone(),
-                principal: principal.try_into().map_err(|_| GrantError::Policy)?,
-                scope: w.scope,
-                role: w.role,
+            trust: parsed.trust,
+            signer: Signer {
+                profile: parsed.profile,
+                issuer: parsed.issuer,
             },
-            signer: Signer { profile, issuer },
-            budget: Duration::from_millis(w.budget_ms),
-            peer_budget,
+            budget: parsed.budget,
+            peer_budget: parsed.peer_budget,
         })
     }
 }
@@ -202,12 +121,12 @@ impl NativeGrantSigner for Signer {
         })
     }
 }
-pub(super) fn state() -> ClientGrantState {
-    ClientGrantState::new(Arc::new(|| {
+pub(super) fn clock() -> Arc<dyn GrantClock> {
+    Arc::new(|| {
         let now = unsafe { super::now() };
         if !now.is_finite() || !(0.0..=9007199254740991.0).contains(&now) {
             return Err(GrantError::Clock);
         }
         Ok(now.floor() as u64)
-    }))
+    })
 }

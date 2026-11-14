@@ -26,8 +26,8 @@ pub use grant::{GrantClock, GrantError, GrantGate, VerifiedGrant};
 mod data;
 #[cfg(feature = "experimental")]
 pub use data::{
-    ClientGrantState, ClientGrantTrust, DataError, DataRecord, ManagedChannel, NativeGrantPolicy,
-    NativeGrantSigner, RemoteGrant, VerifiedCanonicalGrant,
+    BrowserResumeGrantTrust, ClientGrantState, ClientGrantTrust, DataError, DataRecord,
+    ManagedChannel, NativeGrantPolicy, NativeGrantSigner, RemoteGrant, VerifiedCanonicalGrant,
 };
 #[cfg(feature = "experimental")]
 mod data_owner;
@@ -116,3 +116,9 @@ mod browser_wasm_registration;
     target_os = "unknown"
 ))]
 pub use browser_wasm_registration::*;
+
+#[cfg(all(
+    feature = "experimental",
+    any(test, all(target_arch = "wasm32", target_os = "unknown"))
+))]
+mod browser_grant_config;

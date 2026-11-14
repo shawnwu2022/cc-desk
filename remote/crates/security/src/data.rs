@@ -399,8 +399,8 @@ mod local_driver_tests {
 #[path = "grant_exchange.rs"]
 mod grant_exchange;
 pub use grant_exchange::{
-    ClientGrantState, ClientGrantTrust, NativeGrantPolicy, NativeGrantSigner, RemoteGrant,
-    VerifiedCanonicalGrant,
+    BrowserResumeGrantTrust, ClientGrantState, ClientGrantTrust, NativeGrantPolicy,
+    NativeGrantSigner, RemoteGrant, VerifiedCanonicalGrant,
 };
 #[derive(Clone)]
 pub(crate) enum ChannelGrant {
