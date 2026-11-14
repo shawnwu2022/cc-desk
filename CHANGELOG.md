@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [0.27.0-rc.9] - 2026-11-14
+
+### Fixed
+
+- Scope pending structured Codex archive admission to the native target instead of globally blocking unrelated closed sessions. Separate requested resume hints from authenticated identities and revalidate complete per-owner snapshots.
+- Use the explicit .NET Framework ZIP extraction API during pinned ConPTY preparation, avoiding incompatible auto-loaded PowerShell Archive modules without changing hashes, size bounds or x64 checks.
+
+### Validation and limits
+
+- Preserve target/descendant conflicts, Unknown reconciliation, unknown/raw owners, maintenance, writer ownership and permanent-delete confirmations. Cover restore followed by archive without reopening; ordinary archive adds no confirmation dialog.
+- Isolated current Codex 0.169.0 loaded-writer checks do not certify arbitrary CLI versions or live user histories. No real session was archived, restored or deleted by this release preparation.
+- This prerelease uses make_latest=false. Exact protected-main CI, authenticated coverage and three same-release-run updater signatures remain mandatory. Existing unavailable-host disclosures are retained; original native All, D20 and signed installation/return remain separately unverified. Updater signatures are not Windows Authenticode.
+
 ## [0.27.0-rc.8] - 2026-11-13
 
 ### Fixed

@@ -4,6 +4,19 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
+## [0.27.0-rc.9]
+
+Fixed
+
+- Allow an unrelated Codex session that is still identifying itself to remain open while you archive a closed conversation. Target and child-session conflicts still stop the operation.
+- Fix Windows build preparation when the PowerShell Archive module is incompatible with its runtime.
+
+Important
+
+- This is a prerelease. Stable Latest remains unchanged. No automatic migration, archive, restore or deletion is performed.
+- Unknown operation results still require reconciliation, and permanent deletion still requires confirmation. Ordinary archive does not add an extra confirmation dialog.
+- Target and child-session writer conflicts were checked in isolated Codex 0.169.0 sessions. Other CLI versions, live user sessions, native All, D20 and signed installation/return remain separately unverified. Updater signatures are not Windows Authenticode.
+
 ## [0.27.0-rc.8]
 
 Fixed
