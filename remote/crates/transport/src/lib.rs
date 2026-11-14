@@ -30,6 +30,7 @@ pub struct OwnedTunnel {
     stop: tokio::sync::watch::Sender<bool>,
     join: tokio::sync::Mutex<Option<tokio::task::JoinHandle<Result<(), TransportError>>>>,
     joined: std::sync::Arc<std::sync::atomic::AtomicU8>,
+    registration_tail: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 #[cfg(feature = "test-only-loopback")]
 #[doc(hidden)]
@@ -41,6 +42,10 @@ impl TestOnlyTunnelRetirement {
     }
 }
 impl OwnedTunnel {
+    /// 原登记 producer EOF，且 EOF 前每个原 WS send receipt 均已完成；不表示对端落库。
+    pub fn registration_tail_drained(&self) -> bool {
+        self.registration_tail.as_ref().is_some_and(|tail| tail.load(std::sync::atomic::Ordering::Acquire))
+    }
     #[cfg(feature = "test-only-loopback")]
     #[doc(hidden)]
     pub fn test_only_retirement(&self) -> TestOnlyTunnelRetirement {
@@ -86,6 +91,19 @@ pub fn start_admitted_registration(
     original_end: tokio::time::Instant,
     original_cancel: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> Result<(tokio::io::DuplexStream, OwnedTunnel), TransportError> {
+    start_owned_registration(ws, tunnel, budget, original_end, original_cancel)
+}
+/// TEST_ONLY：保留真实登记 driver，允许测试持有原外层字节流的发送。
+#[cfg(feature = "test-only-loopback")]
+#[doc(hidden)]
+pub fn test_only_start_registration_stream<S>(
+    ws: tokio_tungstenite::WebSocketStream<S>,
+    tunnel: [u8; 16],
+    budget: std::time::Duration,
+    original_end: tokio::time::Instant,
+    original_cancel: impl std::future::Future<Output = ()> + Send + 'static,
+) -> Result<(tokio::io::DuplexStream, OwnedTunnel), TransportError>
+where S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static {
     start_owned_registration(ws, tunnel, budget, original_end, original_cancel)
 }
 fn start_owned_registration<S>(
@@ -201,6 +219,7 @@ where S:tokio::io::AsyncRead+tokio::io::AsyncWrite+Unpin+Send+'static {
     }
     let (stream, route) = bounded_tunnel();
     let (stop, rx) = tokio::sync::watch::channel(false);
+    let registration_tail = registration.map(|_| std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)));
     let task = tokio::spawn(drive_policy(
         ws,
         std::collections::HashMap::from([(tunnel, route)]),
@@ -208,6 +227,7 @@ where S:tokio::io::AsyncRead+tokio::io::AsyncWrite+Unpin+Send+'static {
         budget,
         registration,
         original_cancel,
+        registration_tail.clone(),
         #[cfg(feature = "test-only-loopback")]
         observer,
     ));
@@ -217,6 +237,7 @@ where S:tokio::io::AsyncRead+tokio::io::AsyncWrite+Unpin+Send+'static {
             stop,
             join: tokio::sync::Mutex::new(Some(task)),
             joined: std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0)),
+            registration_tail,
         },
     ))
 }
@@ -252,15 +273,17 @@ async fn drive_inner<S>(
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
-    drive_policy(ws,routes,cancel,budget,None,None,
+    drive_policy(ws,routes,cancel,budget,None,None,None,
         #[cfg(feature="test-only-loopback")]
         observer,
     ).await
 }
+#[allow(clippy::too_many_arguments)]
 async fn drive_policy<S>(
     mut ws:tokio_tungstenite::WebSocketStream<S>,routes:std::collections::HashMap<[u8;16],RouteEndpoint>,
     mut cancel:tokio::sync::watch::Receiver<bool>,budget:std::time::Duration,
     registration:Option<RegistrationPolicy>,mut original_cancel:Option<OriginalCancellation>,
+    registration_tail:Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     #[cfg(feature="test-only-loopback")] observer:Option<tokio::sync::oneshot::Sender<TestOnlyMuxEnd>>,
 ) -> Result<(),TransportError>
 where S:tokio::io::AsyncRead+tokio::io::AsyncWrite+Unpin+Send+'static {
@@ -297,6 +320,7 @@ where S:tokio::io::AsyncRead+tokio::io::AsyncWrite+Unpin+Send+'static {
         incoming.insert(id, tx);
         let out = out_tx.clone();
         let registration_flush = registration.is_some();
+        let registration_tail = registration_tail.clone();
         workers.spawn(async move {
             let (mut read, mut write) = tokio::io::split(stream.0);
             let read_loop = async {
@@ -304,6 +328,7 @@ where S:tokio::io::AsyncRead+tokio::io::AsyncWrite+Unpin+Send+'static {
                 loop {
                     let n = read.read(&mut buf).await.map_err(|_| TransportError::Io)?;
                     if n == 0 {
+                        if let Some(tail) = &registration_tail { tail.store(true, std::sync::atomic::Ordering::Release); }
                         return Err::<(), _>(TransportError::Closed);
                     }
                     let msg = encode_outer(&[Subframe {

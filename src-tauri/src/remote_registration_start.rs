@@ -392,6 +392,23 @@ async fn checked<F: std::future::Future<Output = Result<(), SafeError>>>(
     })
     .await
 }
+async fn complete_registration_delivery(
+    delivery: impl std::future::Future<Output = Result<(), SafeError>>,
+    tunnel: &cc_desk_remote_transport::OwnedTunnel,
+    recheck: impl FnOnce() -> Result<(), SafeError>,
+) -> Result<(), SafeError> {
+    delivery.await?;
+    // 内层 ACK/duplex shutdown 尚未证明最终 WS send 完成；原检查与取消循环仍持有此等待。
+    tunnel
+        .wait_closed()
+        .await
+        .map_err(|_| error("REMOTE_HOST_UNKNOWN"))?;
+    if !tunnel.registration_tail_drained() {
+        return Err(error("REMOTE_HOST_LOCKED"));
+    }
+    // 已退休不等于仍获授权，尤其不能让 biased work 抢先发布取消/过期后的成功。
+    recheck()
+}
 #[allow(clippy::too_many_arguments)]
 async fn run(
     attempt: Arc<Attempt>,
@@ -633,10 +650,17 @@ async fn run(
             receipt: receipt.clone(),
             remembered: attempt.remembered.load(Ordering::Acquire),
         };
-        installed
-            .deliver()
-            .await
-            .map_err(|_| error("REMOTE_HOST_LOCKED"))?;
+        complete_registration_delivery(
+            async {
+                installed
+                    .deliver()
+                    .await
+                    .map_err(|_| error("REMOTE_HOST_LOCKED"))
+            },
+            tunnel.as_ref().ok_or_else(|| error("REMOTE_HOST_LOCKED"))?,
+            check,
+        )
+        .await?;
         *attempt.reply.lock() = RegistrationReply::InstalledLocked {
             receipt,
             remembered: attempt.remembered.load(Ordering::Acquire),

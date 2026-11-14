@@ -83,3 +83,19 @@ use Mozilla roots, including when this test feature is compiled. Never enable it
 a shipping app. No public origin, mobile bridge or release acceptance is inferred.
 
 显式任意顺序会合接线见 [RENDEZVOUS-V1](../../RENDEZVOUS-V1.md)；旧 `connect_admitted` 继续使用 v1，新模式必须由批准来源显式选择。
+
+## Registration tail completion
+
+Registration shutdown distinguishes task retirement from successful tail sending.
+`OwnedTunnel.wait_closed()` still only attests that the original driver was joined.
+The registration-only `registration_tail_drained()` fact becomes true only when
+its original producer reaches EOF after every queued envelope has received the
+original WebSocket send receipt. It stays false when a held send fails, is
+cancelled, or reaches the original deadline. This is not an acknowledgement of
+browser storage and adds no wire message or retry.
+
+The native registration startup owner waits for this fact inside its original
+checked work, then rechecks the original owner and deadline before reporting
+`InstalledLocked`. Failure retains the existing unconfirmed delivery receipt;
+cleanup still cancels and joins the original resources. Global driver cancellation
+priority and ordinary tunnel retirement semantics are unchanged.

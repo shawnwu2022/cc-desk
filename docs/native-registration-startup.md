@@ -31,7 +31,7 @@ Host `NativeHostProfile` 和浏览器 `BrowserProfile` 是不同类型。启动�
 
 旧 document 撤销后，新的已鉴权 request 可以回收已结束的原任务句柄，再重新检查鉴权与发布锁。未知退休不能回收为可用容量。取消 join 观察者不会移走原 JoinHandle。
 
-`InstalledLocked` 是已安装且已确认交付的历史状态，不是 Host 授权。`DeliveryUnconfirmed` 保留真实安装 receipt，不能重放已消费的决定。`RetirementUnknown` 立即报告不确定退休并保留可能已有的 receipt，同时继续保管尚未退休的原 owner，不以超时或错误当作成功退出。
+`InstalledLocked` 是已安装且原登记尾发送已排空的历史状态，不是 Host 授权，也不承诺 Browser 已落库。原 TLS ACK/close_notify 完成后，仍须在原 checked work 内等待原 transport driver 退休，核对 producer 在全部原 WS send receipt 完成后到达 EOF，再核对原 document/run、stopped、signing token 与绝对截止时间；之后才发布该状态。取消或发送失败不得用正常 join 冒充交付成功。`DeliveryUnconfirmed` 保留真实安装 receipt，不能重放已消费的决定。`RetirementUnknown` 立即报告不确定退休并保留可能已有的 receipt，同时继续保管尚未退休的原 owner，不以超时或错误当作成功退出。
 
 ## 验证范围
 

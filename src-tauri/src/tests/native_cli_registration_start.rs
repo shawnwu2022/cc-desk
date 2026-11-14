@@ -20,6 +20,12 @@ async fn NativeRegistration_StartOracle_904() {
     ]
     .contains(&mode.as_str()));
     let remember = mode.starts_with("start-remember");
+    let (_, browser_relay_mode) = super::registration_relay::registration_relay_mode();
+    let native_relay_mode = if browser_relay_mode == "rendezvous-v1" {
+        "rendezvousV1"
+    } else {
+        "legacyV1"
+    };
     let native_store_dir = tempfile::Builder::new()
         .prefix("native-remember-")
         .tempdir_in(
@@ -76,7 +82,7 @@ async fn NativeRegistration_StartOracle_904() {
     let host_spki = key_bytes(4);
     let mut relay_spki = key_bytes(1)[..26].to_vec();
     relay_spki.extend(network_relay_material(true).1);
-    let candidate = serde_json::json!({"remember":remember,"version":1,"address":relay.address.to_string(),"origin":relay.origin,"relayMode":"legacyV1","tunnel":"03".repeat(16),"relayId":"01".repeat(16),"profileId":"07".repeat(16),"profileRevision":"9","endpoint":{"keyName":"TEST_ONLY_ENDPOINT","spki":hex(&host_spki)},"relay":{"keyName":"TEST_ONLY_RELAY","spki":hex(&relay_spki)},"principal":"09".repeat(32),"activation":"02".repeat(32),"hostKeyEpoch":"1","clientKeyEpoch":"1","policyEpoch":"1","issuerEpoch":"1","incarnation":"1","browser":{"origin":"https://desk.invalid","rpId":"desk.invalid","userHandle":"07".repeat(32),"tlsSpki":hex(&key_bytes(1)),"grantSpki":hex(&key_bytes(2)),"relaySpki":hex(&key_bytes(3)),"relayId":"02".repeat(16),"databaseName":"TEST_ONLY.registration-chain","expectedRevision":null,"wasmUrl":"https://desk.invalid/fixture_bg.wasm","glueUrl":"https://desk.invalid/fixture_bg.js"}});
+    let candidate = serde_json::json!({"remember":remember,"version":1,"address":relay.address.to_string(),"origin":relay.origin,"relayMode":native_relay_mode,"tunnel":"03".repeat(16),"relayId":"01".repeat(16),"profileId":"07".repeat(16),"profileRevision":"9","endpoint":{"keyName":"TEST_ONLY_ENDPOINT","spki":hex(&host_spki)},"relay":{"keyName":"TEST_ONLY_RELAY","spki":hex(&relay_spki)},"principal":"09".repeat(32),"activation":"02".repeat(32),"hostKeyEpoch":"1","clientKeyEpoch":"1","policyEpoch":"1","issuerEpoch":"1","incarnation":"1","browser":{"origin":"https://desk.invalid","rpId":"desk.invalid","userHandle":"07".repeat(32),"tlsSpki":hex(&key_bytes(1)),"grantSpki":hex(&key_bytes(2)),"relaySpki":hex(&key_bytes(3)),"relayId":"02".repeat(16),"databaseName":"TEST_ONLY.registration-chain","expectedRevision":null,"wasmUrl":"https://desk.invalid/fixture_bg.wasm","glueUrl":"https://desk.invalid/fixture_bg.js"}});
     let mut frozen = FrozenRegistrationStart::parse(&candidate.to_string()).unwrap();
     let mut endpoint_scalar = [0; 32];
     endpoint_scalar[31] = 4;
@@ -91,7 +97,7 @@ async fn NativeRegistration_StartOracle_904() {
         "version":1,"profile":{"origin":"https://desk.invalid","rpId":"desk.invalid"},"localSpki":B64.encode(key_bytes(1)),"hostSpki":B64.encode(&host_spki),
         "trust":{"hostKeyEpoch":"1","clientKeyEpoch":"1","origin":relay.origin},
         "grant":{"issuerSpki":B64.encode(key_bytes(2)),"principal":"09".repeat(32),"scope":scope,"role":cc_desk_remote_record::grant::DataRole::Controller,"budgetMs":30000,"peerInstall":{"budgetMs":10000},"profile":{"origin":"https://desk.invalid","rpId":"desk.invalid","allowBackedUp":false}},
-        "relay":{"mode":"legacy","endpoint":relay.origin,"tunnel":B64.encode([3;16]),"keyId":B64.encode([2;16])},"artifacts":{"wasm":"https://desk.invalid/fixture_bg.wasm","glue":"https://desk.invalid/fixture_bg.js"}
+        "relay":{"mode":browser_relay_mode,"endpoint":relay.origin,"tunnel":B64.encode([3;16]),"keyId":B64.encode([2;16])},"artifacts":{"wasm":"https://desk.invalid/fixture_bg.wasm","glue":"https://desk.invalid/fixture_bg.js"}
     }});
     emit(&serde_json::to_vec(&serde_json::json!({"kind":"ready","origin":relay.origin,"hostSpki":host_spki,"plan":plan})).unwrap());
     let start = Instant::now();
@@ -232,7 +238,12 @@ async fn NativeRegistration_StartOracle_904() {
         )
         .unwrap();
         if native_remembered {
-            assert_eq!(stored.load().unwrap().devices.len(), 1);
+            let loaded = stored.load().unwrap();
+            assert_eq!(loaded.devices.len(), 1);
+            assert_eq!(
+                loaded.devices[0].record.as_ref().unwrap().route.relay_mode,
+                native_relay_mode
+            );
         } else {
             assert_eq!(
                 stored.load(),
@@ -273,7 +284,7 @@ async fn NativeRegistration_StartOracle_904() {
     drop(handle);
     drop(controller);
     assert!(cleanup.close());
-    emit(&serde_json::to_vec(&serde_json::json!({"kind":"finished","mode":mode,"nativeCandidateInstalled":installed,"locked":true,"hostNetworkAttempts":0,"hostKeyOpens":counts.iter().sum::<usize>(),"registrationKeyOpens":counts,"registrationTlsConnections":if installed {Some(1)}else if mode=="start-deny" {Some(0)}else{None},"actualRelay":true,"relayMode":"explicit-legacy","nativeTransportRetired":true,"nativeKeysRetired":true,"nativeStartupOwner":true,"nativeRemembered":native_remembered,"nativePairingReloadLocked":native_remembered,"nativeElapsedMs":start.elapsed().as_millis(),"acknowledged":installed,"receipt":outcome,"genuineGuiApproval":false,"persistentTrust":false})).unwrap());
+    emit(&serde_json::to_vec(&serde_json::json!({"kind":"finished","mode":mode,"nativeCandidateInstalled":installed,"locked":true,"hostNetworkAttempts":0,"hostKeyOpens":counts.iter().sum::<usize>(),"registrationKeyOpens":counts,"registrationTlsConnections":if installed {Some(1)}else if mode=="start-deny" {Some(0)}else{None},"actualRelay":true,"relayMode":if browser_relay_mode == "legacy" { "explicit-legacy" } else { browser_relay_mode },"nativeTransportRetired":true,"nativeKeysRetired":true,"nativeStartupOwner":true,"nativeRemembered":native_remembered,"nativePairingReloadLocked":native_remembered,"nativeElapsedMs":start.elapsed().as_millis(),"acknowledged":installed,"receipt":outcome,"genuineGuiApproval":false,"persistentTrust":false})).unwrap());
     let mut permission = String::new();
     std::io::stdin().read_line(&mut permission).unwrap();
     assert_eq!(permission.trim(), "TEST_ONLY_BROWSER_RETIRED");

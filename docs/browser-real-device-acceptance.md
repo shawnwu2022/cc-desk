@@ -42,7 +42,7 @@
 - 原生真实窗口的三类独立确认：拒绝、取消、期限、换 document/run 及迟到回调。测试 callback 成功不证明真正用户批准。
 - 原生重启后只读配对记录，选择新的 run 后仍 Locked；重新 Host Yes、Browser presenter 与 WebAuthn 才能连接。
 - 显式 Disconnect 等待完成后重新打开页面，不重新导入 private keys、不修改历史配置、不重放输入。另测 tab 硬关闭、挂起/恢复、掉网和进程退出，并记录 Unknown/uncertain，不把超时当作完成。
-- 实际公网 Relay rendezvous 的独立认证与保活 deadline；当前 explicit-legacy loopback 组合证据不能替代该项。
+- 实际公网 Relay rendezvous 的独立认证与保活 deadline；当前 legacy 与 rendezvous-v1 的本地合成组合证据仍不能替代该项，范围见 [注册会合验收](registration-rendezvous-acceptance.md)。
 - 若验收终端控制，必须使用明确授权的测试会话，核对一个原始输入对应一次 Host 写入，并保留 Partial/Unknown 的原事实；不能用重试凑成成功。
 
 ## 合成证据可以说明什么

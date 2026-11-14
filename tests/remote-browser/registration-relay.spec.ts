@@ -7,6 +7,8 @@ import {createRequire} from 'node:module';
 import {join} from 'node:path';
 const Ws=createRequire(join(process.cwd(),'package.json'))('ws');
 import {readFile,writeFile} from 'node:fs/promises';
+const entryRelayMode=process.env.CC_DESK_TEST_ONLY_REGISTRATION_RELAY_MODE??'legacy';
+if(!['legacy','rendezvous-v1'].includes(entryRelayMode))throw Error('explicit TEST_ONLY registration relay mode required');
 let module:string,fixture:string,relayModule:string,installationModule:string,productionEntryModule:string,productionWorkerModule:string
 test.use({serviceWorkers:'block'})
 test.beforeAll(async()=>{
@@ -31,12 +33,12 @@ test.beforeAll(async()=>{
 })
 
 // 生产入口与真实专用 Worker；合成凭证、原生 cfg(test) 审批与 WSS 外层转发仍限于 fixture。
-for(const scenario of ['install','wrong-pin','start-yes','start-deny','start-cancel','start-remember','start-remember-deny','start-remember-cancel'])test(`RegistrationEntry_ActualRelayNative_${scenario}_003`,async({page,context},info)=>{
+for(const scenario of ['install','wrong-pin','start-yes','start-deny','start-cancel','start-remember','start-remember-deny','start-remember-cancel'])test(`RegistrationEntry_ActualRelayNative_${entryRelayMode}_${scenario}_003`,async({page,context},info)=>{
  test.setTimeout(45000);
  const startup=scenario.startsWith('start-'),remember=scenario.startsWith('start-remember'),success=scenario==='install'||scenario==='start-yes'||scenario==='start-remember';
- const o=oracle(startup?scenario:scenario==='install'?'install':'cancel');let r:Awaited<ReturnType<typeof route>>|undefined;
+ const o=oracle(startup?scenario:scenario==='install'?'install':'cancel',entryRelayMode);let r:Awaited<ReturnType<typeof route>>|undefined;
  try{
-  const ready=await o.next();expect(ready.plan).toBeDefined();r=await route(context,ready.origin);
+  const ready=await o.next();expect(ready.plan).toBeDefined();expect(ready.plan.configuration.relay.mode).toBe(entryRelayMode);r=await route(context,ready.origin);
   const extra:Record<string,string>={'/production-entry.mjs':productionEntryModule,'/browserRegistrationEntry.worker.ts':productionWorkerModule,'/browser-registration.js':'export async function readApprovedBrowserRegistrationInputs(signal){globalThis.f.sourceReads++;if(signal.aborted)throw Error("TEST_ONLY cancelled");return globalThis.f.approvedInputs}'};
   for(const [path,body] of Object.entries(extra))await context.route('https://desk.invalid'+path,route=>route.fulfill({headers:{'Cross-Origin-Opener-Policy':'same-origin','Cross-Origin-Embedder-Policy':'require-corp'},contentType:'text/javascript',body}));
   await page.goto('https://desk.invalid/');
@@ -63,17 +65,19 @@ for(const scenario of ['install','wrong-pin','start-yes','start-deny','start-can
    expect(browser.events).toContainEqual(expect.objectContaining({kind:'evidence',value:expect.objectContaining({protocol:772,fullHandshake:true,rawPublicKey:true,alpnMatches:true})}));
    expect(browser.events).not.toContainEqual({kind:'completed'});
   }else expect(browser).toMatchObject({creates:0,gets:0,sourceReads:1,state:'rejected',status:undefined,events:expect.not.arrayContaining([expect.objectContaining({kind:'evidence'})])});
-  const native=await o.next();expect(native).toMatchObject({nativeCandidateInstalled:success,acknowledged:success,locked:true,hostNetworkAttempts:0,hostKeyOpens:startup&&scenario!=='start-deny'?2:0,nativeTransportRetired:true});
+  const native=await o.next();expect(native).toMatchObject({relayMode:entryRelayMode==='legacy'?'explicit-legacy':entryRelayMode,nativeCandidateInstalled:success,acknowledged:success,locked:true,hostNetworkAttempts:0,hostKeyOpens:startup&&scenario!=='start-deny'?2:0,nativeTransportRetired:true});
   if(startup)expect(native).toMatchObject({nativeStartupOwner:true,nativeKeysRetired:true,registrationKeyOpens:scenario==='start-deny'?[0,0]:[1,1]});
   if(remember)expect(native).toMatchObject({nativeRemembered:success,nativePairingReloadLocked:success});
   o.releaseRelay();expect((await o.exit)[0],o.output()).toBe(0);
   if(success){
-   await page.reload();expect(await page.evaluate(async databaseName=>{const api=await import(location.origin+'/production-entry.mjs');crypto.subtle.importKey=()=>{throw Error('TEST_ONLY unexpected key import')};const store=api.createBrowserEnrollmentStore({origin:location.origin,databaseName}),signal=new AbortController().signal,session=await store.openExisting(async()=>{},signal),material=await session.provider.readApproved(signal);const nonExportable=[material.handles.tlsKey,material.handles.grantKey].every(k=>k instanceof CryptoKey&&!k.extractable);session.close();await session.waitClosed();return{status:await store.status(),nonExportable}},ready.plan.databaseName)).toEqual({status:{revision:'1',state:'active'},nonExportable:true});
+   await page.reload();expect(await page.evaluate(async databaseName=>{const api=await import(location.origin+'/production-entry.mjs');crypto.subtle.importKey=()=>{throw Error('TEST_ONLY unexpected key import')};const store=api.createBrowserEnrollmentStore({origin:location.origin,databaseName}),signal=new AbortController().signal,session=await store.openExisting(async()=>{},signal),material=await session.provider.readApproved(signal);const nonExportable=[material.handles.tlsKey,material.handles.grantKey].every(k=>k instanceof CryptoKey&&!k.extractable);session.close();await session.waitClosed();return{status:await store.status(),nonExportable,relayMode:JSON.parse(new TextDecoder().decode(material.configuration)).relay.mode}},ready.plan.databaseName)).toEqual({status:{revision:'1',state:'active'},nonExportable:true,relayMode:entryRelayMode});
   }
-  const files=[o.file,r.wasm,r.glue,process.env.CC_DESK_TEST_RELAY_EXE!,'remote/ui-terminal/src/browserRegistrationEntry.ts','remote/ui-terminal/src/browserRegistrationEntry.worker.ts','remote/ui-terminal/src/browserRegistrationArtifacts.ts','remote/ui-terminal/src/browserRegistrationSource.ts'];
-  const artifact={testOnly:true,scenario,boundary:'production entry/Worker and real TLS/Relay/native fixture; synthetic credentials and approval; not production deployment',browser,native,metrics:r.metrics(),artifacts:await Promise.all(files.map(async file=>({file,sha256:createHash('sha256').update(await readFile(file)).digest('hex')})))};
+  const files=[o.file,r.wasm,r.glue,process.env.CC_DESK_TEST_RELAY_EXE!,'remote/ui-terminal/src/browserRegistrationEntry.ts','remote/ui-terminal/src/browserRegistrationEntry.worker.ts','remote/ui-terminal/src/browserRegistrationArtifacts.ts','remote/ui-terminal/src/browserRegistrationSource.ts','remote/ui-terminal/src/browserRelay.ts','src-tauri/src/tests/native_cli_registration_relay.rs','src-tauri/src/tests/native_cli_registration_start.rs','tests/remote-browser/registration-relay.spec.ts'];
+  const metrics=r.metrics();expect(metrics.forwarderErrors).toEqual([]);expect(metrics.connections).toBe(1);expect(metrics.requestedProtocols).toEqual([entryRelayMode==='rendezvous-v1'?['cc-desk-relay-rendezvous-v1']:[]]);
+  if(success||scenario==='wrong-pin'||remember){expect(metrics.outerVerified).toBe(true);expect(metrics.outerProtocol).toBe('TLSv1.3');expect(metrics.outerSubprotocol).toBe(entryRelayMode==='rendezvous-v1'?'cc-desk-relay-rendezvous-v1':'');}
+  const artifact={testOnly:true,scenario,relayMode:entryRelayMode,browserVersion:context.browser()?.version(),outerHandshakeBoundary:'Playwright echoes requested protocol; Node ws independently validates actual CA/hostname and negotiated protocol, not Edge WebPKI/subprotocol qualification',boundary:'production entry/Worker and real TLS/Relay/native fixture; synthetic credentials and approval; not production deployment',browser,native,metrics:r.metrics(),artifacts:await Promise.all(files.map(async file=>({file,sha256:createHash('sha256').update(await readFile(file)).digest('hex')})))};
   const path=info.outputPath('production-registration-entry.json');await writeFile(path,JSON.stringify(artifact,null,2));await info.attach('production-registration-entry',{path,contentType:'application/json'});
- }catch(error){const path=info.outputPath('production-entry-failure.json');await writeFile(path,JSON.stringify({native:o.output(),browser:await page.evaluate(()=>{const f=Reflect.get(globalThis,'f');return f?{events:f.events,state:f.installState,retired:f.retired,retirementFailed:f.retirementFailed}:undefined}).catch(()=>null)},null,2));throw error;}
+ }catch(error){const path=info.outputPath('production-entry-failure.json');await writeFile(path,JSON.stringify({native:o.output(),metrics:r?.metrics(),browser:await page.evaluate(()=>{const f=Reflect.get(globalThis,'f');return f?{events:f.events,state:f.installState,retired:f.retired,retirementFailed:f.retirementFailed}:undefined}).catch(()=>null)},null,2));throw error;}
  finally{await page.evaluate(()=>{const f=Reflect.get(globalThis,'f');f?.owner?.close();f?.controller?.abort()}).catch(()=>{});r?.dispose();await o.dispose();}
 });
 
@@ -96,9 +100,9 @@ self.onmessage=async({data:d})=>{
 };`;
 let workerModule:string;
 test.beforeAll(async()=>{workerModule=(await build({stdin:{contents:entry,resolveDir:process.cwd()},bundle:true,platform:'browser',format:'esm',target:'es2022',write:false})).outputFiles[0].text;});
-function oracle(mode:string){
+function oracle(mode:string,relayMode='legacy'){
  const file=process.env.CC_DESK_TEST_ONLY_NATIVE_REGISTRATION_ORACLE;if(!file)throw Error('explicit native registration oracle executable required');
- const child=spawn(file,[mode.startsWith('start-')?'NativeRegistration_StartOracle_904':'NativeRegistration_RelayOracle_903','--ignored','--nocapture'],{stdio:['pipe','pipe','pipe'],windowsHide:true,env:{...process.env,CC_DESK_TEST_ONLY_NATIVE_REGISTRATION_MODE:mode}}),exit=once(child,'exit');
+ const child=spawn(file,[mode.startsWith('start-')?'NativeRegistration_StartOracle_904':'NativeRegistration_RelayOracle_903','--ignored','--nocapture'],{stdio:['pipe','pipe','pipe'],windowsHide:true,env:{...process.env,CC_DESK_TEST_ONLY_NATIVE_REGISTRATION_MODE:mode,CC_DESK_TEST_ONLY_REGISTRATION_RELAY_MODE:relayMode}}),exit=once(child,'exit');
  const values:any[]=[],waiters:{resolve:(v:any)=>void;reject:(e:Error)=>void}[]=[];let buffer='',output='',ended=false;
  child.stderr.on('data',b=>{output+=b});child.stdout.on('data',b=>{buffer+=b;output+=b;for(;;){const n=buffer.indexOf('\n');if(n<0)break;const line=buffer.slice(0,n);buffer=buffer.slice(n+1);const at=line.indexOf('CC_DESK_REGISTRATION_ORACLE:');if(at<0)continue;const value=JSON.parse(line.slice(at+'CC_DESK_REGISTRATION_ORACLE:'.length));const waiter=waiters.shift();if(waiter)waiter.resolve(value);else values.push(value);}});
  void exit.then(()=>{ended=true;for(const waiter of waiters)waiter.reject(Error(output));});
@@ -107,20 +111,23 @@ function oracle(mode:string){
 async function route(context:BrowserContext,origin:string){
  const wasm=process.env.CC_DESK_TEST_ONLY_REGISTRATION_WASM,glue=process.env.CC_DESK_TEST_ONLY_REGISTRATION_GLUE,repo=process.env.CC_DESK_TEST_RELAY_ROOT;if(!wasm||!glue||!repo)throw Error('explicit registration WASM/glue and relay root required');
  const sockets=new Set<any>();
- const frames:{direction:string;length:number;sha256:string}[]=[];let outerVerified=false,outerProtocol='';
+ const frames:{direction:string;length:number;sha256:string}[]=[];let outerVerified=false,outerProtocol='',outerSubprotocol='',connections=0;const requestedProtocols:string[][]=[],forwarderErrors:string[]=[];
  await context.route('https://desk.invalid/**',async r=>{const p=new URL(r.request().url()).pathname;return r.fulfill({headers:{'Cross-Origin-Opener-Policy':'same-origin','Cross-Origin-Embedder-Policy':'require-corp'},contentType:p.endsWith('.wasm')?'application/wasm':p.endsWith('.mjs')||p.endsWith('.js')?'text/javascript':'text/html',body:p==='/registration.mjs'?module:p==='/installation.mjs'?installationModule:p==='/relay.mjs'?relayModule:p==='/fixture.mjs'?fixture:p==='/worker.mjs'?workerModule:p==='/fixture_bg.wasm'?await readFile(wasm):p==='/fixture_bg.js'?await readFile(glue):'<!doctype html><title>TEST_ONLY actual Relay registration Worker</title>'});});
  // TEST_ONLY 外层 WSS 仅转发完整二进制消息，不解析准入/TLS，也不签名。
+ // Playwright 回显请求的首个协议；实际协商由 Node ws 单独核验，不能冒充 Edge 握手资格。
  // Node 校验 fixture CA 与 foobar.com 名称，不代表 Edge 证书界面通过验收。
  await context.routeWebSocket(origin,async r=>{
-  const socket=new Ws(origin,[],{origin:'https://desk.invalid',ca:await readFile(join(repo,'tests/fixtures/root.pem')),rejectUnauthorized:true,servername:'foobar.com',lookup:(_host:unknown,_options:unknown,callback:Function)=>callback(null,[{address:'127.0.0.1',family:4}])});sockets.add(socket);
+  const protocols=r.protocols();requestedProtocols.push([...protocols]);connections++;let negotiated=false;
+  const socket=new Ws(origin,protocols,{origin:'https://desk.invalid',ca:await readFile(join(repo,'tests/fixtures/root.pem')),rejectUnauthorized:true,servername:'foobar.com',lookup:(_host:unknown,_options:unknown,callback:Function)=>callback(null,[{address:'127.0.0.1',family:4}])});sockets.add(socket);
+  const failClosed=(reason:string)=>{forwarderErrors.push(reason);negotiated=false;try{r.close();}catch{}socket.terminate();};
   const record=(direction:string,bytes:Buffer)=>frames.push({direction,length:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex')});
-  socket.on('open',()=>{outerVerified=socket._socket.authorized===true;outerProtocol=socket._socket.getProtocol();expect(socket.protocol).toBe('');});
-  r.onMessage(value=>{if(typeof value==='string')throw Error('binary-only forwarder');const bytes=Buffer.from(value);record('browser-to-relay',bytes);socket.send(bytes);});
-  r.onClose(()=>socket.close());
-  socket.on('message',(value:Buffer,isBinary:boolean)=>{if(!isBinary)throw Error('binary-only relay');const bytes=Buffer.from(value);record('relay-to-browser',bytes);r.send(bytes);});
-  socket.on('error',()=>r.close());socket.on('close',()=>{sockets.delete(socket);r.close();});
+  socket.on('open',()=>{outerVerified=socket._socket.authorized===true;outerProtocol=socket._socket.getProtocol();outerSubprotocol=socket.protocol;negotiated=outerVerified&&socket.protocol===(protocols[0]??'')&&protocols.length<=1;if(!negotiated)failClosed('actual WSS negotiation mismatch');});
+  r.onMessage(value=>{if(!negotiated){failClosed('browser data before verified WSS negotiation');return;}if(typeof value==='string'){failClosed('text browser frame');return;}try{const bytes=Buffer.from(value);record('browser-to-relay',bytes);socket.send(bytes,(error?:Error)=>{if(error)failClosed('WSS send failed');});}catch{failClosed('browser forwarding failed');}});
+  r.onClose(()=>{try{socket.close();}catch{failClosed('WSS close failed');}});
+  socket.on('message',(value:Buffer,isBinary:boolean)=>{if(!negotiated){failClosed('relay data before verified WSS negotiation');return;}if(!isBinary){failClosed('text relay frame');return;}try{const bytes=Buffer.from(value);record('relay-to-browser',bytes);r.send(bytes);}catch{failClosed('relay forwarding failed');}});
+  socket.on('error',()=>failClosed('WSS socket error'));socket.on('close',()=>{sockets.delete(socket);try{r.close();}catch{forwarderErrors.push('browser close failed');}});
  });
- return{wasm,glue,metrics:()=>({outerVerified,outerProtocol,frames}),dispose(){for(const socket of sockets)socket.terminate();}};
+ return{wasm,glue,metrics:()=>({outerVerified,outerProtocol,outerSubprotocol,requestedProtocols,connections,forwarderErrors,frames}),dispose(){for(const socket of sockets)socket.terminate();}};
 }
 async function start(page:Page,peerSpki:number[],origin:string,options:{hold?:boolean;totalMs?:number;holdClose?:boolean;randomCredential?:boolean;approvedPlan?:any}={}){
  await page.goto('https://desk.invalid/');
@@ -200,7 +207,7 @@ for(const scenario of scenarios)test(`RegistrationRelay_ActualEdgeNative_${scena
   const browser=await page.evaluate(()=>{const f=Reflect.get(globalThis,'f');return{elapsedMs:f.relayClosedAt-f.started,creates:f.creates,gets:f.gets,relayReady:f.relayReady,events:f.events};});
   if(scenario==='browser-deadline')expect(browser.elapsedMs).toBeLessThan(3500);
   if(scenario==='native-cancel'||scenario==='native-deadline'){expect(browser.gets).toBe(0);expect(browser.events.some((e:{kind:string})=>e.kind==='outcome'||e.kind==='completed')).toBe(false);}
-  const metrics=r.metrics();expect(metrics.outerVerified).toBe(true);expect(metrics.outerProtocol).toBe('TLSv1.3');
+  const metrics=r.metrics();expect(metrics.forwarderErrors).toEqual([]);expect(metrics.outerVerified).toBe(true);expect(metrics.outerProtocol).toBe('TLSv1.3');
   if(scenario==='wait35'){expect(browser.elapsedMs).toBeGreaterThanOrEqual(35000);for(const direction of ['browser-to-relay','relay-to-browser'])expect(metrics.frames.filter(f=>f.direction===direction&&f.length===24).length).toBeGreaterThanOrEqual(3);}
   const files=[o.file,r.wasm,r.glue,process.env.CC_DESK_TEST_RELAY_EXE!,'tests/remote-browser/registration-relay.spec.ts','src-tauri/src/tests/native_cli_registration_relay.rs','remote/ui-terminal/src/browserRelay.ts'];
   const artifact={testOnly:true,scenario,result,browser,metrics,artifacts:await Promise.all(files.map(async file=>({file,sha256:createHash('sha256').update(await readFile(file)).digest('hex')})))};const path=info.outputPath('registration-relay.json');await writeFile(path,JSON.stringify(artifact,null,2));await info.attach('registration-relay',{path,contentType:'application/json'});
@@ -272,7 +279,7 @@ for(const scenario of installationScenarios)test(`RegistrationRelay_Persistent_$
    revoked=await after.evaluate(async databaseName=>{const api=await import(location.origin+'/installation.mjs'),store=api.createBrowserEnrollmentStore({origin:location.origin,databaseName});return{status:await store.status(),locked:(await store.openExisting(async()=>{},new AbortController().signal))===undefined};},ready.plan.databaseName);
    expect(revoked).toEqual({status:{revision:'1',state:'revoked'},locked:true});await after.close();
   }else expect(browser.status).toBeUndefined();
-  const metrics=r.metrics();expect(metrics.outerVerified).toBe(true);expect(metrics.outerProtocol).toBe('TLSv1.3');
+  const metrics=r.metrics();expect(metrics.forwarderErrors).toEqual([]);expect(metrics.outerVerified).toBe(true);expect(metrics.outerProtocol).toBe('TLSv1.3');
   const files=[o.file,r.wasm,r.glue,process.env.CC_DESK_TEST_RELAY_EXE!,'tests/remote-browser/registration-relay.spec.ts','src-tauri/src/tests/native_cli_registration_relay.rs','remote/ui-terminal/src/browserRegistrationInstallation.ts','remote/ui-terminal/src/browserEnrollmentStore.ts','remote/ui-terminal/src/browserRegistrationWorker.ts'];
   const artifact={testOnly:true,scenario,boundary:'registration-to-persistent-installation-reload-revoke; not terminal-controller or genuine approval',plan:ready.plan,result,browser,reloaded,revoked,metrics,artifacts:await Promise.all(files.map(async file=>({file,sha256:createHash('sha256').update(await readFile(file)).digest('hex')})))};
   const path=info.outputPath('registration-installation-relay.json');await writeFile(path,JSON.stringify(artifact,null,2));await info.attach('registration-installation-relay',{path,contentType:'application/json'});

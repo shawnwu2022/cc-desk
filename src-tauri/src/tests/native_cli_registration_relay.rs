@@ -7,6 +7,7 @@ use cc_desk_remote_security::{cancellation, Unbound};
 #[ignore = "TEST_ONLY requires actual Edge Worker / WASM client"]
 async fn NativeRegistration_RelayOracle_903() {
     let mode = std::env::var("CC_DESK_TEST_ONLY_NATIVE_REGISTRATION_MODE").unwrap();
+    let (relay_mode, browser_relay_mode) = registration_relay_mode();
     assert!([
         "yes",
         "deny",
@@ -88,12 +89,36 @@ async fn NativeRegistration_RelayOracle_903() {
     let original_setup_end = original_started + Duration::from_secs(10);
     let original_end =
         original_started + Duration::from_secs(if mode == "native-deadline" { 4 } else { 60 });
+    let (_, host_spki) = network_identities::identity(false, false);
+    let mut fields =
+        super::super::approval_keys::description(&relay, &admission, Arc::new(|| Ok(1000)));
+    fields.phone_pin = PeerPin::new(Role::Client, key(1));
+    fields.issuer = key(2);
+    fields.relay_mode = relay_mode;
+    // TEST_ONLY 独立配置在收到任何新 credential 之前冻结，不能从登记 outcome 反推。
+    let plan = {
+        use base64::{engine::general_purpose::URL_SAFE_NO_PAD as B64, Engine};
+        serde_json::json!({"databaseName":"TEST_ONLY.registration-chain","expectedRevision":null,"relaySpki":B64.encode(key_bytes(3)),"requestedUserHandle":B64.encode([7;32]),"configuration":{
+            "version":1,"profile":{"origin":"https://desk.invalid","rpId":"desk.invalid"},"localSpki":B64.encode(key_bytes(1)),"hostSpki":B64.encode(&host_spki),
+            "trust":{"hostKeyEpoch":fields.binding.host_key_epoch.to_string(),"clientKeyEpoch":fields.binding.client_key_epoch.to_string(),"origin":fields.binding.origin.as_str()},
+            "grant":{"issuerSpki":B64.encode(key_bytes(2)),"principal":fields.principal.iter().map(|v|format!("{v:02x}")).collect::<String>(),"scope":fields.policy.scope,"role":fields.policy.role,"budgetMs":fields.policy.duration.as_millis() as u64,"peerInstall":{"budgetMs":5000},"profile":{"origin":"https://desk.invalid","rpId":"desk.invalid","allowBackedUp":false}},
+            "relay":{"mode":browser_relay_mode,"endpoint":fields.binding.origin.as_str(),"tunnel":B64.encode(fields.tunnel),"keyId":B64.encode([2;16])},"artifacts":{"wasm":"https://desk.invalid/fixture_bg.wasm","glue":"https://desk.invalid/fixture_bg.js"}
+        }})
+    };
+    let ready_message = serde_json::to_vec(
+        &serde_json::json!({"kind":"ready","origin":relay.origin,"hostSpki":host_spki,"plan":plan}),
+    )
+    .unwrap();
+    // 会合等待双方 Join；旧协议必须保持 Host 先准入，避免 Browser 首帧遇到 Offline。
+    if relay_mode == cc_desk_remote_transport::wss::RelayMode::RendezvousV1 {
+        emit(&ready_message);
+    }
     let ws = cc_desk_remote_transport::wss::test_only_connect_admitted_loopback_with_mode(
         &relay.origin,
         relay.address,
         Duration::from_secs(5),
         &network_relay_identity(&relay.origin, true),
-        cc_desk_remote_transport::wss::RelayMode::Legacy,
+        relay_mode,
         [3; 16],
     )
     .await
@@ -117,27 +142,9 @@ async fn NativeRegistration_RelayOracle_903() {
     } else {
         None
     };
-    let (_, host_spki) = network_identities::identity(false, false);
-    let mut fields =
-        super::super::approval_keys::description(&relay, &admission, Arc::new(|| Ok(1000)));
-    fields.phone_pin = PeerPin::new(Role::Client, key(1));
-    fields.issuer = key(2);
-    // TEST_ONLY 独立配置在收到任何新 credential 之前冻结，不能从登记 outcome 反推。
-    let plan = {
-        use base64::{engine::general_purpose::URL_SAFE_NO_PAD as B64, Engine};
-        serde_json::json!({"databaseName":"TEST_ONLY.registration-chain","expectedRevision":null,"relaySpki":B64.encode(key_bytes(3)),"requestedUserHandle":B64.encode([7;32]),"configuration":{
-            "version":1,"profile":{"origin":"https://desk.invalid","rpId":"desk.invalid"},"localSpki":B64.encode(key_bytes(1)),"hostSpki":B64.encode(&host_spki),
-            "trust":{"hostKeyEpoch":fields.binding.host_key_epoch.to_string(),"clientKeyEpoch":fields.binding.client_key_epoch.to_string(),"origin":fields.binding.origin.as_str()},
-            "grant":{"issuerSpki":B64.encode(key_bytes(2)),"principal":fields.principal.iter().map(|v|format!("{v:02x}")).collect::<String>(),"scope":fields.policy.scope,"role":fields.policy.role,"budgetMs":fields.policy.duration.as_millis() as u64,"peerInstall":{"budgetMs":5000},"profile":{"origin":"https://desk.invalid","rpId":"desk.invalid","allowBackedUp":false}},
-            "relay":{"mode":"legacy","endpoint":fields.binding.origin.as_str(),"tunnel":B64.encode(fields.tunnel),"keyId":B64.encode([2;16])},"artifacts":{"wasm":"https://desk.invalid/fixture_bg.wasm","glue":"https://desk.invalid/fixture_bg.js"}
-        }})
-    };
-    emit(
-        &serde_json::to_vec(
-            &serde_json::json!({"kind":"ready","origin":relay.origin,"hostSpki":host_spki,"plan":plan}),
-        )
-        .unwrap(),
-    );
+    if relay_mode == cc_desk_remote_transport::wss::RelayMode::Legacy {
+        emit(&ready_message);
+    }
     let pending = registration_accept_until(
         Unbound::new(io),
         network_local(false),
@@ -396,7 +403,7 @@ async fn NativeRegistration_RelayOracle_903() {
     drop(controller);
     drop(admission);
     assert!(cleanup.close());
-    emit(&serde_json::to_vec(&serde_json::json!({"kind":"finished","mode":mode,"nativeCandidateInstalled":installed,"locked":true,"hostNetworkAttempts":0,"hostKeyOpens":0,"registrationTlsConnections":1,"actualRelay":true,"relayMode":"explicit-legacy","nativeTransportRetired":true,"nativeElapsedMs":elapsed_ms,"acknowledged":acknowledged,"receipt":receipt,"genuineGuiApproval":false,"persistentTrust":false,"nativeRecordWritten":native_record_written,"nativeReloadLocked":native_reload_locked})).unwrap());
+    emit(&serde_json::to_vec(&serde_json::json!({"kind":"finished","mode":mode,"nativeCandidateInstalled":installed,"locked":true,"hostNetworkAttempts":0,"hostKeyOpens":0,"registrationTlsConnections":1,"actualRelay":true,"relayMode":if browser_relay_mode == "legacy" { "explicit-legacy" } else { browser_relay_mode },"nativeTransportRetired":true,"nativeElapsedMs":elapsed_ms,"acknowledged":acknowledged,"receipt":receipt,"genuineGuiApproval":false,"persistentTrust":false,"nativeRecordWritten":native_record_written,"nativeReloadLocked":native_reload_locked})).unwrap());
     // 浏览器确认严格协议退役之前，保留测试基础设施。
     let mut cleanup_permission = String::new();
     std::io::stdin().read_line(&mut cleanup_permission).unwrap();
@@ -495,4 +502,15 @@ pub(super) async fn registration_relay_fixture() -> NetworkRelayFixture {
         panic!("TEST_ONLY_RELAY_START {ready:?} {detail}");
     }
     owned
+}
+
+// TEST_ONLY：两端独立读取显式选择，未知模式不得默默退回旧协议。
+pub(super) fn registration_relay_mode() -> (cc_desk_remote_transport::wss::RelayMode, &'static str)
+{
+    use cc_desk_remote_transport::wss::RelayMode;
+    match std::env::var("CC_DESK_TEST_ONLY_REGISTRATION_RELAY_MODE").as_deref() {
+        Ok("legacy") | Err(std::env::VarError::NotPresent) => (RelayMode::Legacy, "legacy"),
+        Ok("rendezvous-v1") => (RelayMode::RendezvousV1, "rendezvous-v1"),
+        _ => panic!("unsupported TEST_ONLY registration relay mode"),
+    }
 }
