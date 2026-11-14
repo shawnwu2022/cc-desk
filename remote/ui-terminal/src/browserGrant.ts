@@ -4,7 +4,18 @@ const exact=(v:unknown,keys:string[]):v is Record<string,unknown>=>!!v&&typeof v
 const bytes=(v:unknown,min:number,max:number):v is Uint8Array=>v instanceof Uint8Array&&v.length>=min&&v.length<=max;
 function encode(v:Uint8Array){return btoa(Array.from(v,b=>String.fromCharCode(b)).join('')).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');}
 function decode(v:unknown,max:number){if(typeof v!=='string'||v.length>Math.ceil(max/3)*4||!/^[A-Za-z0-9_-]*$/.test(v))throw Error('grant bytes');const result=Uint8Array.from(atob(v.replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0));if(result.length>max||encode(result)!==v)throw Error('grant bytes');return result;}
-export type BrowserGrantConfiguration=Readonly<{issuerSpki:Uint8Array;principal:string;scope:Readonly<{session:string;run:string;generation:string}>;role:'Observer'|'Controller';budgetMs:number;peerInstall?:Readonly<{budgetMs:number}>;profile:Readonly<{origin:string;rpId:string;credentialId:Uint8Array;credentialSpki:Uint8Array;backupEligible:boolean;allowBackedUp:boolean}>}>;
+type BrowserGrantIdentity=Readonly<{issuerSpki:Uint8Array;principal:string;role:'Observer'|'Controller';budgetMs:number;peerInstall?:Readonly<{budgetMs:number}>;profile:Readonly<{origin:string;rpId:string;credentialId:Uint8Array;credentialSpki:Uint8Array;backupEligible:boolean;allowBackedUp:boolean}>}>;
+export type BrowserExactGrantConfiguration=BrowserGrantIdentity&Readonly<{scope:Readonly<{session:string;run:string;generation:string}>;scopePolicy?:never}>;
+export type BrowserResumeGrantConfiguration=BrowserGrantIdentity&Readonly<{scopePolicy:'authenticated-host-run';scope?:never}>;
+export type BrowserGrantConfiguration=BrowserExactGrantConfiguration|BrowserResumeGrantConfiguration;
+/** 缺失 scope 绝不是恢复模式；两个入口的策略必须是互斥的自有数据字段。 */
+export function browserGrantScopeField(value:unknown):'scope'|'scopePolicy'{
+ if(!value||typeof value!=='object')throw Error('browser grant scope policy');
+ const scope=Object.getOwnPropertyDescriptor(value,'scope'),policy=Object.getOwnPropertyDescriptor(value,'scopePolicy');
+ if(('scope'in value&&!scope)||('scopePolicy'in value&&!policy)||Boolean(scope)===Boolean(policy))throw Error('browser grant scope policy');
+ const field=scope??policy!;if(!field.enumerable||!('value'in field)||(policy&&policy.value!=='authenticated-host-run'))throw Error('browser grant scope policy');
+ return scope?'scope':'scopePolicy';
+}
 export type BrowserGrantBridge=Readonly<{port:MessagePort;generation:string;origin:string;configuration:Uint8Array;cancel:SharedArrayBuffer|undefined}>;
 export type BrowserGrantBroker=Readonly<{worker:BrowserGrantBridge;close():void;waitClosed():Promise<void>}>;
 function frozen(value:unknown):unknown{if(value&&typeof value==='object'){for(const child of Object.values(value))frozen(child);Object.freeze(value);}return value;}
@@ -13,6 +24,7 @@ export function createBrowserGrantBroker(profile:BrowserProfile,options:Readonly
  let retained:BrowserProfile|undefined=browserProfileBoundary(profile),present:typeof options.present|undefined=options.present;const config=options.configuration;
  if(typeof Window==='undefined'||!(globalThis instanceof Window)||globalThis.top!==globalThis.self||!globalThis.isSecureContext||location.origin!==retained.origin||typeof present!=='function'||options.signal?.aborted)throw Error('grant trusted presentation unavailable');
  if(!config||!bytes(config.issuerSpki,91,91)||!bytes(config.profile?.credentialSpki,91,91)||!bytes(config.profile.credentialId,1,1024)||config.profile.origin!==retained.origin||config.profile.rpId!==retained.rpId||encode(config.profile.credentialId)!==encode(retained.credentialId)||!Number.isInteger(config.budgetMs)||config.budgetMs<1||config.budgetMs>30000)throw Error('grant configuration');
+ browserGrantScopeField(config);
  const peer=config.peerInstall!==undefined,documentSource=peer?globalThis.document:undefined;
  if(peer&&(!exact(config.peerInstall,['budgetMs'])||!Number.isInteger(config.peerInstall.budgetMs)||config.peerInstall.budgetMs<1||config.peerInstall.budgetMs>10000||typeof Document==='undefined'||!(documentSource instanceof Document)||documentSource.visibilityState!=='visible'||typeof globalThis.addEventListener!=='function'||typeof globalThis.removeEventListener!=='function'||!globalThis.crossOriginIsolated||typeof SharedArrayBuffer==='undefined'))throw Error('peer lifecycle source unavailable');
  const cancel=peer?new SharedArrayBuffer(4):undefined,listen=peer?globalThis.addEventListener.bind(globalThis):undefined,unlisten=peer?globalThis.removeEventListener.bind(globalThis):undefined;

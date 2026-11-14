@@ -1,4 +1,5 @@
 import {approvedBrowserInputs,type ApprovedBrowserInputs} from './browserEntry.ts';
+import type {BrowserExactGrantConfiguration} from './browserGrant.ts';
 import {counter,hex,parseJson} from './wire.ts';
 import {checkedBrowserEnrollmentLease,type BrowserEnrollmentLease} from './browserEnrollmentLease.ts';
 
@@ -82,7 +83,7 @@ function same(a:unknown,b:unknown):boolean{
  const left=a as Record<string,unknown>,right=b as Record<string,unknown>,keys=Object.keys(left);
  return keys.length===Object.keys(right).length&&keys.every(key=>Object.prototype.hasOwnProperty.call(right,key)&&same(left[key],right[key]));
 }
-function assemble(expected:PublicBrowserPairingConfiguration,handles:BrowserProfileHandles,enrollment?:BrowserEnrollmentLease):ApprovedBrowserInputs{
+function assemble(expected:PublicBrowserPairingConfiguration,handles:BrowserProfileHandles,enrollment?:BrowserEnrollmentLease):ApprovedBrowserInputs<BrowserExactGrantConfiguration>{
  const p=expected.profile,g=expected.grant,r=expected.relay;
  return approvedBrowserInputs({
   profile:{origin:p.origin,rpId:p.rpId,credentialId:decode(p.credentialId,1,1024),tlsKey:handles.tlsKey,grantKey:handles.grantKey},
@@ -97,12 +98,12 @@ function assemble(expected:PublicBrowserPairingConfiguration,handles:BrowserProf
 }
 
 /** 返回受控模块唯一导出所需的 reader；不读取网络、签名、呈现或创建 deadline。 */
-export function createApprovedBrowserProfileReader(candidateBytes:Uint8Array,provider?:BrowserProfileProvider):(signal:AbortSignal)=>Promise<ApprovedBrowserInputs|undefined>{
+export function createApprovedBrowserProfileReader(candidateBytes:Uint8Array,provider?:BrowserProfileProvider):(signal:AbortSignal)=>Promise<ApprovedBrowserInputs<BrowserExactGrantConfiguration>|undefined>{
  const candidate=parseBrowserPairingConfiguration(candidateBytes);
  let read:BrowserProfileProvider['readApproved']|undefined;
  let enrollment:BrowserEnrollmentLease|undefined;
  if(provider!==undefined){try{const owns=Object.prototype.hasOwnProperty.call(provider,'enrollment');if('enrollment'in provider&&!owns)throw Error('provider');exact(provider,owns?['readApproved','enrollment']:['readApproved']);if(owns)enrollment=checkedBrowserEnrollmentLease(provider.enrollment);if(typeof provider.readApproved!=='function')throw Error('provider');read=provider.readApproved.bind(provider);}catch{throw Error('browser pairing profile unavailable');}}
- let original:Promise<ApprovedBrowserInputs|undefined>|undefined,firstSignal:AbortSignal|undefined;
+ let original:Promise<ApprovedBrowserInputs<BrowserExactGrantConfiguration>|undefined>|undefined,firstSignal:AbortSignal|undefined;
  return async(signal:AbortSignal)=>{
   if(!original){
    firstSignal=signal;

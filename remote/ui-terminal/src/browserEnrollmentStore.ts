@@ -2,6 +2,7 @@ import {browserProfileBoundary} from './browserApproval.ts';
 import {createBrowserEnrollmentAuthority} from './browserEnrollment.ts';
 import {createApprovedBrowserProfileReader,parseBrowserPairingConfiguration,type BrowserProfileHandles} from './browserPairingProfile.ts';
 import type {ApprovedBrowserInputs} from './browserEntry.ts';
+import type {BrowserExactGrantConfiguration} from './browserGrant.ts';
 import {counter,hex} from './wire.ts';
 
 export type StoredBrowserEnrollmentMaterial=Readonly<{configuration:Uint8Array;keys:Readonly<{tlsKey:CryptoKey;grantKey:CryptoKey;relayKey:CryptoKey}>}>;
@@ -131,7 +132,7 @@ export function createBrowserEnrollmentStore(options:Readonly<{origin:string;dat
 /** One original persisted supplier read per controlled module, never a reload/recovery loop. */
 export function createStoredBrowserProfileReader(candidateBytes:Uint8Array,store:ReturnType<typeof createBrowserEnrollmentStore>,present:BrowserProfileHandles['present']){
  const candidate=new TextEncoder().encode(JSON.stringify(parseBrowserPairingConfiguration(candidateBytes)));
- let original:Promise<ApprovedBrowserInputs|undefined>|undefined,firstSignal:AbortSignal|undefined,session:Session|undefined;
+ let original:Promise<ApprovedBrowserInputs<BrowserExactGrantConfiguration>|undefined>|undefined,firstSignal:AbortSignal|undefined,session:Session|undefined;
  return async(signal:AbortSignal)=>{
   if(!original){firstSignal=signal;original=Promise.resolve().then(async()=>{
    session=await store.openExisting(present,signal);if(!session)return undefined;
