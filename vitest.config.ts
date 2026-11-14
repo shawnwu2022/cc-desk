@@ -4,6 +4,7 @@ import viteConfig from './vite.config'
 const nodeTests = [
   'tests/remote-browser/browserEnrollment.test.ts',
   'tests/remote-browser/browserPairingProfile.test.ts',
+  'tests/remote-browser/browserRegistrationProfile.test.ts',
   'tests/designTokens.test.ts',
   'tests/productBoundary.test.ts',
   'tests/config/csp.test.ts',
@@ -49,6 +50,7 @@ const processTests = [
   'tests/native-cli/realCliCommand.test.ts',
   'tests/native-cli/realCliRunner.test.ts',
   'tests/scripts/generateUpdaterManifest.test.ts',
+  'tests/scripts/buildBrowserRegistrationSource.test.ts',
   'tests/scripts/releaseManifestUrls.test.ts',
 ]
 const stressTests = ['tests/stores/unifiedStress.test.ts']

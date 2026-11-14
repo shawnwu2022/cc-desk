@@ -31,6 +31,7 @@
     "build": "npm run prepare:session-sdk && vite build",
     "build:browser": "node scripts/build-browser-runtime.mjs && vite build",
     "build:browser:registration-runtime": "node scripts/build-browser-registration-runtime.mjs",
+    "build:browser:registration-source": "node scripts/build-browser-registration-source.mjs",
     "build:browser:product": "node scripts/build-browser-runtime.mjs && node scripts/build-browser-registration-runtime.mjs && vite build",
     "preview": "vite preview",
     "tauri": "tauri",

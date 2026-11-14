@@ -24,6 +24,12 @@ registration WASM and standalone glue, not the later terminal runtime.
 No credential ID is invented in the source. No native candidate, Ready event,
 receipt or returned outcome can supply this independent approval.
 
+The [controlled source supply adapter](browser-registration-source.md) now offers
+strict public registration configuration parsing, independent provider comparison,
+original-handle preservation and an explicit standalone source build. The product
+helper requires the already-approved fixed product database. It does not supply a
+real trusted provider or turn a public candidate into approval.
+
 The entry API is `createBrowserRegistrationEntry(inputs, lifetime)` with
 `lifetime = {signal, setupDeadline, registrationDeadline}`. Deadlines are absolute
 performance epoch values, fixed before loading (setup <= 10 seconds, total <=

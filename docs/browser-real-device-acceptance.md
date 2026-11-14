@@ -30,6 +30,7 @@
 - 登记：`public/remote-registration-runtime/fixture_bg.wasm`、`fixture_bg.js`、`manifest.json`。
 - 产品 provider：Vite 构建的 `dist/browser-profile.js`，唯一导出 `readApprovedBrowserInputs`。配套页面及任何合法 shared chunks 必须来自同次构建。
 - 首次登记的 `/browser-registration.js` 仍是独立可信供应入口；产品不会自动生成批准记录或替该来源挑选真实身份。
+- [供应适配器与独立构建](browser-registration-source.md)已提供严格公开配置解析、完整独立批准比较、原 handles 保留及唯一导出 bundle。实际可信 provider 仍须单独实现与授权，默认产品构建不会替用户生成此来源；reader 只验 key policy，公私钥匹配仍由原 entry/installer 证明。
 
 验收记录精确 source commit、工具链、每个 runtime/glue 的 SHA256 和部署字节。核验 manifest 的生产源文件、原始库与要求的导出，拒绝 TEST_ONLY 导出。不要把一轮旧 WASM、另一轮前端与最新 Rust 的结果合并成单一最终验收。
 

@@ -2,15 +2,10 @@ import {browserProfileBoundary} from './browserApproval.ts';
 import {createBrowserEnrollmentStore,type StoredBrowserEnrollmentMaterial} from './browserEnrollmentStore.ts';
 import {parseBrowserPairingConfiguration,type PublicBrowserPairingConfiguration} from './browserPairingProfile.ts';
 import {counter} from './wire.ts';
+import {snapshotBrowserRegistrationPlan,type BrowserRegistrationInstallationPlan} from './browserRegistrationPlan.ts';
+export type {BrowserRegistrationInstallationPlan} from './browserRegistrationPlan.ts';
 
 type Configuration=PublicBrowserPairingConfiguration;
-export type BrowserRegistrationInstallationPlan=Readonly<{
- databaseName:string;expectedRevision:string|null;relaySpki:string;requestedUserHandle:string;
- configuration:Omit<Configuration,'profile'|'grant'>&Readonly<{
-  profile:Omit<Configuration['profile'],'credentialId'>;
-  grant:Omit<Configuration['grant'],'profile'>&Readonly<{profile:Omit<Configuration['grant']['profile'],'credentialId'|'credentialSpki'|'backupEligible'>}>;
- }>;
-}>;
 export type BrowserRegistrationInstallationSession=Readonly<{
  outcome:Promise<unknown>;completed:Promise<void>;close():void;waitClosed():Promise<void>;
 }>;
@@ -48,19 +43,6 @@ function template(value:Configuration){
  const {credentialId:_grantId,credentialSpki:_spki,backupEligible:_backup,...grantProfile}=value.grant.profile;
  return {...value,profile,grant:{...value.grant,profile:grantProfile}};
 }
-function plan(value:unknown):BrowserRegistrationInstallationPlan{
- const approved=snapshot(value);exact(approved,['databaseName','expectedRevision','configuration','relaySpki','requestedUserHandle']);
- if(typeof approved.databaseName!=='string'||!/^[A-Za-z0-9._-]{1,64}$/.test(approved.databaseName))throw unavailable();
- if(approved.expectedRevision!==null)counter(approved.expectedRevision);
- decode(approved.relaySpki,91,91);decode(approved.requestedUserHandle,1,64);
- const c=approved.configuration;exact(c,['version','profile','localSpki','hostSpki','trust','grant','relay','artifacts']);
- exact(c.profile,['origin','rpId']);exact(c.grant,['issuerSpki','principal','scope','role','budgetMs','peerInstall','profile']);
- exact(c.grant.profile,['origin','rpId','allowBackedUp']);
- // 只为复用公开语法校验补占位字段；这不是安装值，也不产生凭证授权。
- const parsed=parseBrowserPairingConfiguration(encoder.encode(JSON.stringify({...c,profile:{...c.profile,credentialId:'AQ'},grant:{...c.grant,profile:{...c.grant.profile,credentialId:'AQ',credentialSpki:c.localSpki,backupEligible:false}}})));
- if(!same(template(parsed),c)||new Set([c.localSpki,c.grant.issuerSpki,approved.relaySpki]).size!==3)throw unavailable();
- return approved as unknown as BrowserRegistrationInstallationPlan;
-}
 function configuration(value:unknown,approved:BrowserRegistrationInstallationPlan):Uint8Array{
  exact(value,['kind','receipt','scope','installation']);if(value.kind!=='BrowserInstallationApproved')throw unavailable();counter(value.receipt);
  exact(value.installation,['databaseName','expectedRevision','configuration','relaySpki','requestedUserHandle']);const i=value.installation;
@@ -80,7 +62,7 @@ export function createBrowserRegistrationInstallation(options:Readonly<{
  approvedPlan:BrowserRegistrationInstallationPlan;signal:AbortSignal;deadline:number;
 }>){
  exact(options,['session','keys','approvedPlan','signal','deadline']);
- const {session,signal,deadline}=options,approved=plan(options.approvedPlan),origin=approved.configuration.profile.origin;
+ const {session,signal,deadline}=options,approved=snapshotBrowserRegistrationPlan(options.approvedPlan),origin=approved.configuration.profile.origin;
  if(typeof Window==='undefined'||!(globalThis instanceof Window)||typeof Document==='undefined'||!(document instanceof Document)||!(signal instanceof AbortSignal)||signal.aborted||!session||typeof session!=='object'||used.has(session))throw unavailable();
  const outcome=field(session,'outcome'),completed=field(session,'completed'),wait=field(session,'waitClosed'),stop=field(session,'close');
  if(!(outcome instanceof Promise)||!(completed instanceof Promise)||typeof wait!=='function'||typeof stop!=='function')throw unavailable();
