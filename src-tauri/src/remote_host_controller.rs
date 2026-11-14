@@ -8,6 +8,10 @@ use crate::{
     run_supervisor::{NativeRunAdmission, NativeRunNetworkOrigin},
 };
 use parking_lot::Mutex;
+#[path = "remote_host_registration.rs"]
+mod registration;
+#[allow(unused_imports)]
+pub(crate) use registration::NativeRegistrationOwner;
 use serde::Serialize;
 use std::{
     sync::{Arc, Weak},
@@ -99,6 +103,10 @@ pub(crate) struct RemoteHostController {
     operation: Mutex<Option<Weak<crate::remote_host::activation::ActivationOperation>>>,
 }
 impl RemoteHostController {
+    #[cfg(test)]
+    pub(crate) fn test_has_configuration(&self) -> bool {
+        self.state.lock().configuration.is_some()
+    }
     fn authenticate(
         binding: &Arc<DocumentBinding<NativeRun>>,
         caller: &CallerIdentity,

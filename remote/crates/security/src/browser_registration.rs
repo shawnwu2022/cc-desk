@@ -373,6 +373,29 @@ impl BrowserRegistrationPossession {
     }
 }
 impl UnapprovedBrowserRegistration {
+    /// 只核对原类型化证据，不将候选或展示 JSON 升格为批准。
+    pub fn matches_host_candidate(
+        &self,
+        owner_binding: [u8; 32],
+        phone: &crate::PeerPin,
+        issuer: &P256Spki,
+        browser: &crate::BrowserProfile,
+    ) -> Result<bool, GrantError> {
+        let p = &self.verified;
+        p.attempt.live()?;
+        let c = &p.attempt.context;
+        let b = browser.display_metadata();
+        Ok(c.owner_binding == owner_binding
+            && phone.endpoint_id() == c.tls_key.endpoint_id(crate::Role::Client)
+            && issuer.0 == c.grant_key.0
+            && b.origin == c.origin
+            && b.rp_id == c.rp_id
+            && b.credential_fingerprint.as_slice()
+                == digest::digest(&digest::SHA256, &p.credential).as_ref()
+            && b.key_fingerprint.as_slice() == digest::digest(&digest::SHA256, &p.key.0).as_ref()
+            && b.backup_eligible == p.backup_eligible
+            && b.allow_backed_up == c.allow_backed_up)
+    }
     pub fn description(&self) -> Result<Vec<u8>, GrantError> {
         let p = &self.verified;
         p.attempt.live()?;

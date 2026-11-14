@@ -392,3 +392,107 @@ fn Registration_BrowserOracle_900() {
         .unwrap();
     emit(&v.description().unwrap());
 }
+
+// 原验证对象只匹配同一 owner、TLS/issuer 身份和完整 Browser 策略。
+#[test]
+fn Registration_MatchesCandidate_011() {
+    let (_h, t) = cancellation();
+    let a = BrowserRegistrationAttempt::new(context(), t, Duration::from_secs(30)).unwrap();
+    let bytes = create_proof(&a.request().unwrap(), 0);
+    let p = a.verify_create(&bytes).unwrap();
+    let bytes = assertion(&p.request().unwrap(), 0);
+    let e = p.verify_assertion(&bytes).unwrap();
+    let browser = crate::BrowserProfile::enrolled(
+        "https://desk.invalid",
+        "desk.invalid",
+        vec![7; 32],
+        key(4),
+        false,
+        false,
+    )
+    .unwrap();
+    let phone = crate::PeerPin::new(crate::Role::Client, key(1));
+    assert!(
+        e.matches_host_candidate([8; 32], &phone, &key(2), &browser)
+            .unwrap()
+    );
+    assert!(
+        !e.matches_host_candidate([9; 32], &phone, &key(2), &browser)
+            .unwrap()
+    );
+    assert!(
+        !e.matches_host_candidate(
+            [8; 32],
+            &crate::PeerPin::new(crate::Role::Client, key(2)),
+            &key(2),
+            &browser
+        )
+        .unwrap()
+    );
+    assert!(
+        !e.matches_host_candidate([8; 32], &phone, &key(3), &browser)
+            .unwrap()
+    );
+    let changed = crate::BrowserProfile::enrolled(
+        "https://desk.invalid",
+        "desk.invalid",
+        vec![9; 32],
+        key(4),
+        false,
+        false,
+    )
+    .unwrap();
+    assert!(
+        !e.matches_host_candidate([8; 32], &phone, &key(2), &changed)
+            .unwrap()
+    );
+    for (origin, rp, k, be, bs) in [
+        ("https://sub.desk.invalid", "desk.invalid", 4, false, false),
+        ("https://desk.invalid", "invalid", 4, false, false),
+        ("https://desk.invalid", "desk.invalid", 3, false, false),
+        ("https://desk.invalid", "desk.invalid", 4, true, false),
+        ("https://desk.invalid", "desk.invalid", 4, true, true),
+    ] {
+        let changed =
+            crate::BrowserProfile::enrolled(origin, rp, vec![7; 32], key(k), be, bs).unwrap();
+        assert!(
+            !e.matches_host_candidate([8; 32], &phone, &key(2), &changed)
+                .unwrap()
+        );
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn Registration_MatchRetainsOriginalLifetime_012() {
+    for cancelled in [true, false] {
+        let (h, t) = cancellation();
+        let a = BrowserRegistrationAttempt::new(context(), t, Duration::from_secs(30)).unwrap();
+        let created = create_proof(&a.request().unwrap(), 0);
+        let p = a.verify_create(&created).unwrap();
+        let asserted = assertion(&p.request().unwrap(), 0);
+        let e = p.verify_assertion(&asserted).unwrap();
+        if cancelled {
+            h.cancel();
+        } else {
+            tokio::time::advance(Duration::from_secs(30)).await;
+        }
+        let browser = crate::BrowserProfile::enrolled(
+            "https://desk.invalid",
+            "desk.invalid",
+            vec![7; 32],
+            key(4),
+            false,
+            false,
+        )
+        .unwrap();
+        assert!(
+            e.matches_host_candidate(
+                [8; 32],
+                &crate::PeerPin::new(crate::Role::Client, key(1)),
+                &key(2),
+                &browser
+            )
+            .is_err()
+        );
+    }
+}

@@ -2006,3 +2006,6 @@ mod owned_start;
 #[cfg(windows)]
 #[path = "native_cli_remote_pairing_scope.rs"]
 mod pairing_scope;
+#[cfg(windows)]
+#[path = "native_cli_registration_approval.rs"]
+mod registration_approval;

@@ -25,14 +25,31 @@ test.beforeAll(async()=>{
 })
 async function route(context:BrowserContext){await context.route('https://desk.invalid/**',r=>{const p=new URL(r.request().url()).pathname;return r.fulfill({headers:{'Cross-Origin-Opener-Policy':'same-origin','Cross-Origin-Embedder-Policy':'require-corp'},contentType:p.endsWith('.mjs')?'text/javascript':'text/html',body:p==='/registration.mjs'?module:p==='/fixture.mjs'?fixture:'<!doctype html><title>TEST_ONLY registration</title>'})})}
 async function prepare(page:Page){await page.goto('https://desk.invalid/');await page.evaluate(async()=>{const api=await import(location.origin+'/fixture.mjs');await api.setup();const f=Reflect.get(globalThis,'f');f.api=api;f.controller=new AbortController();f.producer=api.createBrowserRegistrationProducer(location.origin,f.controller.signal,performance.timeOrigin+performance.now()+60000)})}
-function oracle(){
- const file=process.env.CC_DESK_TEST_ONLY_REGISTRATION_ORACLE;if(!file)throw Error('explicit TEST_ONLY registration oracle executable required')
- const child=spawn(file,['--exact','browser_registration_tests::Registration_BrowserOracle_900','--ignored','--nocapture'],{stdio:['pipe','pipe','pipe'],windowsHide:true});const exit=once(child,'exit');const values:any[]=[],waiters:{resolve:(v:any)=>void;reject:(e:Error)=>void}[]=[];let buffer='',output='';let ended=false
+function oracle(nativeMode?:string){
+ const file=process.env[nativeMode?'CC_DESK_TEST_ONLY_NATIVE_REGISTRATION_ORACLE':'CC_DESK_TEST_ONLY_REGISTRATION_ORACLE'];if(!file)throw Error('explicit TEST_ONLY registration oracle executable required')
+ const filter=nativeMode?'NativeRegistration_BrowserOracle_900':'browser_registration_tests::Registration_BrowserOracle_900'
+ const child=spawn(file,[filter,'--ignored','--nocapture'],{stdio:['pipe','pipe','pipe'],windowsHide:true,env:{...process.env,...(nativeMode?{CC_DESK_TEST_ONLY_NATIVE_REGISTRATION_MODE:nativeMode}:{})}});const exit=once(child,'exit');const values:any[]=[],waiters:{resolve:(v:any)=>void;reject:(e:Error)=>void}[]=[];let buffer='',output='';let ended=false
  child.stderr.on('data',b=>{output+=b});child.stdout.on('data',b=>{output+=b;buffer+=b;for(;;){const i=buffer.indexOf('\n');if(i<0)break;const line=buffer.slice(0,i).trim();buffer=buffer.slice(i+1);const start=line.indexOf('CC_DESK_REGISTRATION_ORACLE:');if(start<0)continue;const value=JSON.parse(line.slice(start+'CC_DESK_REGISTRATION_ORACLE:'.length));const waiter=waiters.shift();if(waiter)waiter.resolve(value);else values.push(value)}});void exit.then(()=>{ended=true;for(const w of waiters)w.reject(Error(output))})
  return{file,child,exit,next:()=>values.length?Promise.resolve(values.shift()):ended?Promise.reject(Error(output)):new Promise<any>((resolve,reject)=>waiters.push({resolve,reject})),send:(bytes:unknown[])=>{if(!bytes.every((n):n is number=>typeof n==='number'&&Number.isInteger(n)&&n>=0&&n<=255))throw Error('TEST_ONLY response bytes');return child.stdin.write(Buffer.from(bytes).toString('utf8')+'\n')},async dispose(){if(!ended){child.kill();await exit}}}
 }
 
 // 实际 Edge 生产者经原 Rust 两阶段验证，只得到待批准证据。
+for(const mode of ['yes','deny','cancel','expired','expired-host','expired-clock','install-failed','run','foreign','document','mismatch','repeat-create']){
+ test(`Registration_NativeOwner_${mode}_020`,async({page,context},info)=>{
+  const o=oracle(mode);try{
+   await route(context);await prepare(page);
+   const request=await o.next();
+   o.send(await page.evaluate(async request=>{const f=Reflect.get(globalThis,'f');return Array.from(await f.producer.create(new TextEncoder().encode(JSON.stringify(request)),f.keys))},request));
+   if(mode!=='repeat-create'){
+    const confirm=await o.next();
+    o.send(await page.evaluate(async request=>Array.from(await Reflect.get(globalThis,'f').producer.confirm(new TextEncoder().encode(JSON.stringify(request)))),confirm));
+   }else await page.evaluate(()=>Reflect.get(globalThis,'f').producer.close());
+   const evidence=await o.next();expect(evidence).toEqual({mode,nativeCandidateInstalled:mode==='yes',locked:true,networkAttempts:0,keyOpens:0,genuineGuiApproval:false,persistentTrust:false});
+   expect((await o.exit)[0]).toBe(0);
+   const output=info.outputPath('native-registration-approval.json');await writeFile(output,JSON.stringify({evidence,oracle:{file:o.file,sha256:createHash('sha256').update(await readFile(o.file)).digest('hex')}},null,2));await info.attach('native-registration-approval',{path:output,contentType:'application/json'});
+  }finally{await o.dispose()}
+ })
+}
 test('Registration_TwoStageNative_001',async({page,context},info)=>{
  const o=oracle();try{await route(context);await prepare(page);const request=await o.next();const created=await page.evaluate(async request=>{const f=Reflect.get(globalThis,'f');return Array.from(await f.producer.create(new TextEncoder().encode(JSON.stringify(request)),f.keys))},request);o.send(created);const confirm=await o.next();expect(confirm.credentialId).toBe(Buffer.alloc(32,7).toString('base64url'));const assertion=await page.evaluate(async request=>Array.from(await Reflect.get(globalThis,'f').producer.confirm(new TextEncoder().encode(JSON.stringify(request)))),confirm);o.send(assertion);const evidence=await o.next();expect(evidence.approval).toBe('required');expect((await o.exit)[0]).toBe(0);expect(await page.evaluate(async()=>{const f=Reflect.get(globalThis,'f');await f.producer.waitClosed();return{creates:f.creates,gets:f.gets,options:f.options}})).toEqual({creates:1,gets:1,options:[{attestation:'none',uv:'required',algorithm:-7}]});const output=info.outputPath('registration-native-evidence.json');await writeFile(output,JSON.stringify({evidence,oracle:{file:o.file,sha256:createHash('sha256').update(await readFile(o.file)).digest('hex')}},null,2));await info.attach('registration-native-evidence',{path:output,contentType:'application/json'})}finally{await o.dispose()}
 })

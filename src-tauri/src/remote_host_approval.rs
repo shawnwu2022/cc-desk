@@ -20,6 +20,9 @@ mod binding_tests;
 #[path = "remote_host_approval_frozen.rs"]
 mod frozen;
 pub(crate) use frozen::FrozenHostApproval;
+#[path = "remote_registration_approval.rs"]
+mod registration;
+pub(crate) use registration::NativeRegistrationApproval;
 
 /// 状态机只持不可变后端描述，不接收密钥、运行所有权或 IPC 数据。
 /// 泛型仅限私有状态机；对外桥接使用具体描述。
@@ -62,13 +65,14 @@ impl<T: Send + 'static> ApprovalMachine<T> {
         window: &tauri::Window<R>,
         description: T,
         message: String,
+        title: &str,
         cap: Instant,
     ) -> Arc<Self> {
         let owner = Self::pending(description, Instant::now(), cap);
         let weak = Arc::downgrade(&owner);
         app.dialog()
             .message(message)
-            .title("Approve this remote Host session")
+            .title(title)
             .parent(window)
             .buttons(MessageDialogButtons::YesNo)
             .show_with_result(move |result| {
@@ -393,7 +397,14 @@ impl NativeHostApproval {
             return Err(HostNetworkError::Locked);
         }
         let text = Self::render_frozen(&frozen);
-        let machine = ApprovalMachine::show(app, window, frozen, text, cap);
+        let machine = ApprovalMachine::show(
+            app,
+            window,
+            frozen,
+            text,
+            "Approve this remote Host session",
+            cap,
+        );
         Ok(Self {
             lease: machine.lease.clone(),
             machine,

@@ -811,6 +811,12 @@ The optional native [two-stage registration evidence verifier](../docs/browser-r
 now checks explicit existing-key possession and synthetic WebAuthn creation plus
 credential possession. It returns only unapproved evidence and has no production
 registration channel, account authority, GUI approval or store installation wiring.
+The separate backend-only [native registration approval gate](../docs/native-registration-approval.md)
+now binds that original evidence to its authenticated native document/run and the
+original one-shot native approval machine. It may install only the matching frozen
+Host configuration; a separate Host session approval/start remains required and
+the controller stays Locked. This is not a public registration command, account
+identity root, authenticated bootstrap channel or durable browser installation.
 
 The browser-entry.spec.ts fixture supplies the fixed same-origin profile module
 through createApprovedBrowserProfileReader, instead of directly assembling
