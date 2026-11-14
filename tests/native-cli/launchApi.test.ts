@@ -178,7 +178,10 @@ it.each([
  ['remote_pairing_forget_cancel', 'remotePairingForgetCancel', undefined],
  ['remote_pairing_forget', 'remotePairingForget', { state: 'Declined' }],
 ] as const)('RemotePairing_ExactBridgeAndFailure_001_%s', async (command, name, reply) => {
- const request = name === 'remotePairingList' ? { runId: 'original', generation: 1 } : { runId: 'original', generation: 1, candidateJson: '{"storeId":"s1","revision":"3","deviceId":"d1"}' }
+ const target = { storeId: 's1', revision: '3', deviceId: 'd1' }
+ const identity = { requestId: 'a082b136-8104-4801-a284-1db4710611d1', requestSequence: '65' }
+ const candidate = name === 'remotePairingForgetCancel' ? identity : name === 'remotePairingForget' ? { ...target, ...identity } : target
+ const request = name === 'remotePairingList' ? { runId: 'original', generation: 1 } : { runId: 'original', generation: 1, candidateJson: JSON.stringify(candidate) }
  const invoke = vi.fn(async () => reply); bridge(invoke)
  await expect((api[name] as (request: unknown) => Promise<unknown>)(request)).resolves.toEqual(reply)
  expect(invoke.mock.calls).toEqual([[command, request]])

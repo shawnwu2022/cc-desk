@@ -1,5 +1,15 @@
+<script lang="ts">
+// 同一文档的所有面板共享递增序号；关开/卸载不能重用旧取消序号。
+type ForgetIdentity = { readonly requestId: string; readonly requestSequence: string }
+let forgetSequence = 0n
+function nextForgetIdentity(): ForgetIdentity {
+  if (forgetSequence >= 18446744073709551615n) throw new Error('FORGET_SEQUENCE_EXHAUSTED')
+  const requestId = crypto.randomUUID()
+  return { requestId, requestSequence: (++forgetSequence).toString() }
+}
+</script>
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from 'vue'
+import { computed, onUnmounted, ref, shallowRef, watch } from 'vue'
 import AppButton from '@/components/ui/AppButton.vue'
 import InlineNotice from '@/components/ui/InlineNotice.vue'
 import { parseJson } from '../../../remote/ui-terminal/src/wire'
@@ -16,7 +26,7 @@ const open = ref(false), candidate = ref(''), busy = ref(false), configured = re
 const state = ref('Locked'), message = ref('')
 const pairingScope = ref('')
 const registrationJson = ref(''), registrationState = ref('Locked')
-const pendingForget = ref<string | null>(null)
+const pendingForget = shallowRef<ForgetIdentity | null>(null)
 const remember = ref(false), devices = ref<RemotePairingList | null>(null)
 let registrationRequested = false
 let epoch = 0, captured: NativeAttemptIdentity | null = null
@@ -26,13 +36,13 @@ const statusText = computed(() => ({ Locked: '尚无批准', Pending: '等待本
 function stillCurrent(token: number, attempt: NativeAttemptIdentity) { return token === epoch && open.value && matchesNativeAttempt(tabs.tab(props.tabId), attempt) }
 function invalidate() {
   const previous = captured, previousReceipt = receipt, wasRequested = requested
-  const wasRegistering = registrationRequested, forgetId = pendingForget.value
+  const wasRegistering = registrationRequested, forgetIdentity = pendingForget.value
   pendingForget.value = null
   registrationRequested = false; remember.value = false; devices.value = null; registrationJson.value = ''; registrationState.value = 'Locked'
   epoch++; captured = null; receipt = null; requested = false; candidate.value = ''; pairingScope.value = ''; configured.value = false; busy.value = false; state.value = 'Locked'; message.value = ''; open.value = false
   if (previous) {
     const run = { runId: previous.runId, generation: previous.generation }
-    if (forgetId) void remotePairingForgetCancel({ ...run, candidateJson: JSON.stringify({ requestId: forgetId }) }).catch(cleanupFailed)
+    if (forgetIdentity) void remotePairingForgetCancel({ ...run, candidateJson: JSON.stringify(forgetIdentity) }).catch(cleanupFailed)
     if (wasRegistering) void remoteRegistrationCancel(run).catch(cleanupFailed)
     if (wasRequested) void remoteHostCancel(run).catch(cleanupFailed)
     else if (previousReceipt) void remoteHostDiscardCandidate({ ...run, receipt: previousReceipt }).catch(cleanupFailed)
@@ -71,32 +81,32 @@ async function readDevices() {
   finally { if (stillCurrent(token, attempt)) busy.value = false }
 }
 function cancelForget() {
-  const attempt = captured, requestId = pendingForget.value
-  if (!attempt || !requestId) return
+  const attempt = captured, identity = pendingForget.value
+  if (!attempt || !identity) return
   pendingForget.value = null
   message.value = '已请求取消忘记确认，等待原生操作结束。不会自动重试。'
-  void remotePairingForgetCancel({ runId: attempt.runId, generation: attempt.generation, candidateJson: JSON.stringify({ requestId }) }).catch(cleanupFailed)
+  void remotePairingForgetCancel({ runId: attempt.runId, generation: attempt.generation, candidateJson: JSON.stringify(identity) }).catch(cleanupFailed)
 }
 async function useDevice(kind: 'select' | 'forget', deviceId: string) {
   const attempt = captured, token = epoch, snapshot = devices.value
   if (!attempt || busy.value || !stillCurrent(token, attempt) || !snapshot?.storeId || !snapshot.revision || !snapshot.devices.some(device => device.deviceId === deviceId)) return
   if (kind === 'select' && (configured.value || registrationRequested)) return
   const run = { runId: attempt.runId, generation: attempt.generation }
-  let requestId: string | null = null
+  let identity: ForgetIdentity | null = null
   busy.value = true; message.value = ''
   try {
-    requestId = kind === 'forget' ? crypto.randomUUID() : null
-    const request = { ...run, candidateJson: JSON.stringify({ storeId: snapshot.storeId, revision: snapshot.revision, deviceId, ...(requestId ? { requestId } : {}) }) }
+    identity = kind === 'forget' ? nextForgetIdentity() : null
+    const request = { ...run, candidateJson: JSON.stringify({ storeId: snapshot.storeId, revision: snapshot.revision, deviceId, ...(identity ?? {}) }) }
     if (kind === 'select') {
       const result = await remotePairingSelect(request)
       if (!stillCurrent(token, attempt)) { await remoteHostDiscardCandidate({ ...run, receipt: result.receipt }); return }
       receipt = result.receipt; configured.value = true; requested = false; state.value = 'Locked'; candidate.value = ''
       message.value = '已选为当前会话的新候选，仍为 Locked；不恢复旧授权，不打开密钥或连接。请另行请求本机批准。'
     } else {
-      pendingForget.value = requestId
+      pendingForget.value = identity
       const result = await remotePairingForget(request)
       if (!stillCurrent(token, attempt)) return
-      if (pendingForget.value !== requestId) { devices.value = null; message.value = '忘记确认已结束。请刷新已记住设备核对结果，不会自动重试。'; return }
+      if (pendingForget.value !== identity) { devices.value = null; message.value = '忘记确认已结束。请刷新已记住设备核对结果，不会自动重试。'; return }
       pendingForget.value = null
       if (result.state === 'Declined') { message.value = '未确认忘记设备。不会自动重试。'; return }
       if (result.state !== 'Forgotten') throw new Error('INVALID_FORGET_RESPONSE')
@@ -108,7 +118,7 @@ async function useDevice(kind: 'select' | 'forget', deviceId: string) {
       } catch { if (stillCurrent(token, attempt)) message.value = '已忘记设备，但列表刷新失败。请手动刷新；不会重放忘记操作。' }
     }
   } catch {
-    if (stillCurrent(token, attempt) && pendingForget.value === requestId && requestId) cancelForget()
+    if (stillCurrent(token, attempt) && pendingForget.value === identity && identity) cancelForget()
     if (stillCurrent(token, attempt)) { devices.value = null; message.value = '设备操作未确认成功。请刷新已记住设备后核对，不会自动重试。' }
     else if (kind === 'select') cleanupFailed()
   } finally { if (stillCurrent(token, attempt)) busy.value = false }

@@ -84,7 +84,7 @@ it('PairingForget_IndependentConfirmationRefreshesWithoutCancellingHost_001', as
  const w = await panel(); await click(w, '刷新已记住设备'); await click(w, '用于当前会话'); await click(w, '请求本机批准')
  vi.mocked(api.remotePairingList).mockResolvedValueOnce({ state: 'Locked', storeId: 'store1', revision: '4', devices: [] })
  expect(w.text()).toContain('不终止独立已批准的连接'); await click(w, '忘记设备（本机确认）')
- expect(api.remotePairingForget).toHaveBeenCalledTimes(1); const forgotten = vi.mocked(api.remotePairingForget).mock.calls[0][0]; expect(forgotten).toMatchObject(run); expect(JSON.parse(forgotten.candidateJson)).toEqual({ ...JSON.parse(selection.candidateJson), requestId: expect.any(String) }); expect(api.remotePairingList).toHaveBeenCalledTimes(2)
+ expect(api.remotePairingForget).toHaveBeenCalledTimes(1); const forgotten = vi.mocked(api.remotePairingForget).mock.calls[0][0]; expect(forgotten).toMatchObject(run); expect(JSON.parse(forgotten.candidateJson)).toEqual({ ...JSON.parse(selection.candidateJson), requestId: expect.any(String), requestSequence: expect.stringMatching(/^[1-9][0-9]*$/) }); expect(api.remotePairingList).toHaveBeenCalledTimes(2)
  expect(w.get('[aria-label="已记住设备"]').text()).not.toContain('https://browser.invalid'); expect(api.remoteHostCancel).not.toHaveBeenCalled(); expect(api.remoteHostDiscardCandidate).not.toHaveBeenCalled(); w.unmount()
 })
 it.each(['Declined', 'error'])('PairingForget_NoFailureNeverRetries_002_%s', async result => {
@@ -110,13 +110,14 @@ it.each(['close', 'requestId', 'runId', 'generation', 'status', 'unmount', 'canc
  let finish!: (value: { state: 'Forgotten' | 'Declined' }) => void
  vi.mocked(api.remotePairingForget).mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
  const w = await panel(); await click(w, '刷新已记住设备'); await click(w, '忘记设备（本机确认）')
- const requestId = JSON.parse(vi.mocked(api.remotePairingForget).mock.calls[0][0].candidateJson).requestId
+ const { requestId, requestSequence } = JSON.parse(vi.mocked(api.remotePairingForget).mock.calls[0][0].candidateJson)
+ expect(requestSequence).toMatch(/^[1-9][0-9]*$/)
  expect(requestId).toMatch(/^[0-9a-f-]{36}$/)
  if (change === 'close') { await click(w, '关闭'); await click(w, '单次远程连接') }
  else if (change === 'cancel') await click(w, '取消忘记确认')
  else if (change === 'unmount') w.unmount()
  else { Object.assign(state.tab, { [change]: change === 'generation' ? 2 : change === 'status' ? 'stopped' : 'replacement' }); await flushPromises() }
- expect(api.remotePairingForgetCancel).toHaveBeenCalledExactlyOnceWith({ ...run, candidateJson: JSON.stringify({ requestId }) })
+ expect(api.remotePairingForgetCancel).toHaveBeenCalledExactlyOnceWith({ ...run, candidateJson: JSON.stringify({ requestId, requestSequence }) })
  finish({ state: 'Declined' }); await flushPromises(); expect(api.remotePairingList).toHaveBeenCalledTimes(1)
  expect(w.text()).not.toContain('已忘记设备'); noAuthority(); if (change !== 'unmount') w.unmount()
 })
@@ -130,4 +131,35 @@ it('PairingRemember_OnlyTopLevelBooleanChangesPreservesRawNumbers_006', async ()
  const input = '{"version":1e0,"nested":{"remember":true},"reme\\u006dber":true,"note":"escaped \\\"remember\\\""}'
  await w.get('[aria-label="首次登记JSON"]').setValue(input); await click(w, '请求登记密钥使用')
  expect(api.remoteRegistrationRequest).toHaveBeenCalledExactlyOnceWith({ ...run, candidateJson: input.replace('"reme\\u006dber":true', '"reme\\u006dber":false') }); w.unmount()
+})
+
+it('PairingForget_SequenceRemainsMonotonicBeyond64Operations_006', async () => {
+ vi.mocked(api.remotePairingForget).mockResolvedValue({ state: 'Declined' })
+ const w = await panel(); await click(w, '刷新已记住设备')
+ for (let index = 0; index < 70; index++) await click(w, '忘记设备（本机确认）')
+ const requests = vi.mocked(api.remotePairingForget).mock.calls.map(([request]) => JSON.parse(request.candidateJson))
+ expect(requests).toHaveLength(70)
+ expect(new Set(requests.map(request => request.requestId)).size).toBe(70)
+ for (let index = 0; index < requests.length; index++) {
+   expect(requests[index].requestSequence).toMatch(/^[1-9][0-9]*$/)
+   if (index) expect(BigInt(requests[index].requestSequence)).toBe(BigInt(requests[index - 1].requestSequence) + 1n)
+ }
+ expect(api.remotePairingForgetCancel).not.toHaveBeenCalled(); noAuthority(); w.unmount()
+})
+it('PairingForget_SequenceSurvivesRemountAndOldCancelKeepsOriginalSequence_007', async () => {
+ let finishOld!: (value: { state: 'Declined' }) => void
+ let finishNew!: (value: { state: 'Declined' }) => void
+ vi.mocked(api.remotePairingForget).mockReturnValueOnce(new Promise(resolve => { finishOld = resolve })).mockReturnValueOnce(new Promise(resolve => { finishNew = resolve }))
+ const oldPanel = await panel(); await click(oldPanel, '刷新已记住设备'); await click(oldPanel, '忘记设备（本机确认）')
+ const old = JSON.parse(vi.mocked(api.remotePairingForget).mock.calls[0][0].candidateJson)
+ oldPanel.unmount(); await flushPromises()
+ const newPanel = await panel(); await click(newPanel, '刷新已记住设备'); await click(newPanel, '忘记设备（本机确认）')
+ const next = JSON.parse(vi.mocked(api.remotePairingForget).mock.calls[1][0].candidateJson)
+ expect(BigInt(next.requestSequence)).toBe(BigInt(old.requestSequence) + 1n)
+ expect(next.requestId).not.toBe(old.requestId)
+ expect(api.remotePairingForgetCancel).toHaveBeenNthCalledWith(1, { ...run, candidateJson: JSON.stringify({ requestId: old.requestId, requestSequence: old.requestSequence }) })
+ finishOld({ state: 'Declined' }); await flushPromises()
+ await click(newPanel, '取消忘记确认')
+ expect(api.remotePairingForgetCancel).toHaveBeenNthCalledWith(2, { ...run, candidateJson: JSON.stringify({ requestId: next.requestId, requestSequence: next.requestSequence }) })
+ finishNew({ state: 'Declined' }); await flushPromises(); noAuthority(); newPanel.unmount()
 })
