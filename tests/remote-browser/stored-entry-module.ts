@@ -1,8 +1,7 @@
 import type {PublicBrowserPairingConfiguration} from '../../remote/ui-terminal/src/browserPairingProfile'
 
 /** Explicit synthetic installer is separate from the candidate-reading production profile. */
-export function storedEntryModule(trusted:PublicBrowserPairingConfiguration,candidate:unknown,keys:{tls:JsonWebKey;grant:JsonWebKey;relay:JsonWebKey;credential:JsonWebKey},runHandoff?:'exact'|'resume'){
- const databaseName='CC_DESK_TEST_ONLY_ENTRY'
+export function storedEntryModule(trusted:PublicBrowserPairingConfiguration,candidate:unknown,keys:{tls:JsonWebKey;grant:JsonWebKey;relay:JsonWebKey;credential:JsonWebKey},runHandoff?:'exact'|'resume',databaseName='CC_DESK_TEST_ONLY_ENTRY'){
  const install=`import {createBrowserEnrollmentStore} from '/test-only-pairing-helper.mjs';
  export async function install(){const store=createBrowserEnrollmentStore({origin:location.origin,databaseName:${JSON.stringify(databaseName)}});return store.installApproved(undefined,async signal=>{const [tlsKey,grantKey,relayKey]=await Promise.all(${JSON.stringify([keys.tls,keys.grant,keys.relay])}.map(jwk=>crypto.subtle.importKey('jwk',jwk,{name:'ECDSA',namedCurve:'P-256'},false,['sign'])));if(signal.aborted)throw Error('TEST_ONLY cancelled');return{configuration:new TextEncoder().encode(${JSON.stringify(JSON.stringify(trusted))}),keys:{tlsKey,grantKey,relayKey}}},new AbortController().signal);}`
  const profile=`import {createBrowserEnrollmentStore,createStoredBrowserProfileReader,createStoredBrowserRunProfileReader,createBrowserGrantPresenter} from '/test-only-pairing-helper.mjs';
