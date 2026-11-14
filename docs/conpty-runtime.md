@@ -17,6 +17,10 @@ archive, picks the paired x64 files, and verifies each staged file. Cached files
 are reverified, not trusted by existence. Binaries are generated/ignored, not
 committed. There is no runtime download or user-provided URL.
 
+Fresh staging uses the Windows PowerShell .NET Framework two-argument ZIP API,
+not the auto-loaded Archive module. This avoids module/runtime overload drift
+without changing package/file hashes, size bounds, x64 checks or runtime loading.
+
 `tauri.windows.conf.json` maps the DLL, host and license next to the application
 in Windows bundles. `build.rs` also stages them next to ordinary/debug/test
 executables for `tauri dev` and `--no-bundle`. Plain Windows `cargo` users first
@@ -41,7 +45,10 @@ as the runtime files are intentionally held open while it runs.
 ## Automated verification
 
 `node --test tests/scripts/conptyBundle.node.cjs` checks resource mapping and
-binary verification failures. Windows `cargo test --locked --bin cc-desk
+binary verification failures. On Windows x64 it also runs the real generator
+in a disposable checkout with a local HTTP fixture and real ZIP: fresh staging
+(including literal/Unicode paths), corrupt ZIP refusal, package hash refusal
+before extraction and staged-file hash refusal before publication. Windows `cargo test --locked --bin cc-desk
 ConptyRuntime_` checks the actual SHA-256 API, file locks and malformed components.
 
 The Rust native CLI test harness acts as a terminal during ConPTY startup: it

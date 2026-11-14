@@ -301,6 +301,9 @@ fn NativeArchiveLive_LoadedWriterScopedMatrix_002() {
         "known-unrelated",
         "external-target",
         "external-descendant",
+        "awaiting-target",
+        "awaiting-descendant",
+        "awaiting-unrelated",
     ] {
         system_configuration_absent().unwrap();
         host_skills_absent().unwrap();
@@ -331,14 +334,16 @@ fn NativeArchiveLive_LoadedWriterScopedMatrix_002() {
             &unrelated_id
         };
         let writer = LiveWriter::start(fixture.clone(), held_id.clone()).unwrap();
-        let owner = held.starts_with("known-").then(|| {
+        let owner = (held.starts_with("known-") || held.starts_with("awaiting-")).then(|| {
             backend
                 .repository
                 .admission()
                 .begin_start(RuntimeKind::Codex({
                     let id = uuid::Uuid::parse_str(held_id).unwrap();
-                    let identity = CodexOwnerIdentity::new(Some(id));
-                    identity.observe(id);
+                    let identity = CodexOwnerIdentity::new(None);
+                    if held.starts_with("known-") {
+                        identity.observe(id);
+                    }
                     identity
                 }))
                 .unwrap()
@@ -370,7 +375,7 @@ fn NativeArchiveLive_LoadedWriterScopedMatrix_002() {
         let archived_child = home
             .join("archived_sessions")
             .join(child.file_name().unwrap());
-        if held == "known-unrelated" {
+        if held.ends_with("unrelated") {
             assert!(result.is_ok(), "{held}: {code:?}");
             assert!(!backend.active_rollout.exists() && !child.exists());
             assert_eq!(fs::read(archived_root).unwrap(), root_bytes);
@@ -397,7 +402,7 @@ fn NativeArchiveLive_LoadedWriterScopedMatrix_002() {
         }
         assert!(backend.repository.admission().check_metadata_idle().is_ok());
         let report = json!({"version":CODEX_VERSION,"case":held,"safeCode":code,"archiveSucceeded":result.is_ok(),
-            "loadedNativeWriter":true,"modelTurnSent":false,"syntheticDeskAdmission":held.starts_with("known-"),
+            "loadedNativeWriter":true,"modelTurnSent":false,"syntheticDeskAdmission":held.starts_with("known-") || held.starts_with("awaiting-"),"authenticatedDeskIdentity":held.starts_with("known-"),
             "writerLeaseHeldAfterArchive":true,"rootAndChildChecked":true,"rootReaped":true,"jobEmpty":true,
             "hostSkillsAbsentBeforeAndAfter":true,"allSessionDataSynthetic":true});
         fs::write(

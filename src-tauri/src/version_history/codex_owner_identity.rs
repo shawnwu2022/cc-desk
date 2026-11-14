@@ -3,7 +3,9 @@ use parking_lot::Mutex;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+#[derive(Clone, PartialEq, Eq)]
 pub(super) struct IdentityState {
+    pub(super) requested_id: Option<uuid::Uuid>,
     pub(super) ids: Option<BTreeSet<uuid::Uuid>>,
     pub(super) observed: bool,
 }
@@ -11,7 +13,8 @@ pub(crate) struct CodexOwnerIdentity(pub(super) Mutex<IdentityState>);
 impl CodexOwnerIdentity {
     pub(crate) fn new(initial: Option<uuid::Uuid>) -> Arc<Self> {
         Arc::new(Self(Mutex::new(IdentityState {
-            ids: Some(initial.into_iter().collect()),
+            requested_id: initial,
+            ids: Some(BTreeSet::new()),
             observed: false,
         })))
     }
@@ -27,16 +30,20 @@ impl CodexOwnerIdentity {
             }
         }
     }
-    pub(crate) fn sessions(&self) -> Result<BTreeSet<uuid::Uuid>, SafeError> {
+    /// 等待 hook 不证明占用任何目标；溢出或不一致状态仍不能降级为等待身份。
+    pub(super) fn archive_snapshot(&self) -> Result<IdentityState, SafeError> {
         let state = self.0.lock();
+        match (&state.ids, state.observed) {
+            (Some(ids), false) if ids.is_empty() => Ok(state.clone()),
+            (Some(ids), true) if !ids.is_empty() => Ok(state.clone()),
+            _ => Err(error("ARCHIVE_BUSY")),
+        }
+    }
+    pub(crate) fn sessions(&self) -> Result<BTreeSet<uuid::Uuid>, SafeError> {
+        let state = self.archive_snapshot()?;
         if !state.observed {
             return Err(error("ARCHIVE_BUSY"));
         }
-        state
-            .ids
-            .as_ref()
-            .filter(|ids| !ids.is_empty())
-            .cloned()
-            .ok_or_else(|| error("ARCHIVE_BUSY"))
+        state.ids.ok_or_else(|| error("ARCHIVE_BUSY"))
     }
 }

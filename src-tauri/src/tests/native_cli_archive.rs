@@ -400,43 +400,47 @@ rl.createInterface({{input:process.stdin}}).on('line',line=>{{const m=JSON.parse
             .unwrap();
         assert_eq!(std::fs::read_to_string(&marker).unwrap(), "archive\n");
         drop(active);
-        // 已认证的其他 Codex 也不能借已归档快路径清除 Unknown。
-        let identity =
-            crate::version_history::codex_archive_admission::CodexOwnerIdentity::new(None);
-        identity.observe(uuid::Uuid::new_v4());
-        let observed = repo
-            .admission()
-            .begin_start(crate::version_history::maintenance::RuntimeKind::Codex(
-                identity,
-            ))
-            .unwrap()
-            .child_created();
-        assert!(service
-            .reconcile_before_unarchive(&caller, &unarchive)
-            .is_err());
-        if move_before_ack {
-            assert_eq!(
-                service
-                    .archive(
-                        &caller,
-                        ArchiveRequest {
-                            operation_id: "observed-owner-must-not-reconcile".into(),
-                            ..request.clone()
-                        }
-                    )
-                    .err()
-                    .unwrap()
-                    .code,
-                "ARCHIVE_BUSY"
-            );
-        }
-        assert!(
-            service
+        // 等待身份与已认证 owner 都不能借已归档快路径清除 Unknown。
+        for authenticate in [false, true] {
+            let identity =
+                crate::version_history::codex_archive_admission::CodexOwnerIdentity::new(None);
+            if authenticate {
+                identity.observe(uuid::Uuid::new_v4());
+            }
+            let observed = repo
+                .admission()
+                .begin_start(crate::version_history::maintenance::RuntimeKind::Codex(
+                    identity,
+                ))
+                .unwrap()
+                .child_created();
+            assert!(service
                 .reconcile_before_unarchive(&caller, &unarchive)
-                .is_err(),
-            "rejected archive must retain Unknown"
-        );
-        observed.reaped();
+                .is_err());
+            if move_before_ack {
+                assert_eq!(
+                    service
+                        .archive(
+                            &caller,
+                            ArchiveRequest {
+                                operation_id: "observed-owner-must-not-reconcile".into(),
+                                ..request.clone()
+                            }
+                        )
+                        .err()
+                        .unwrap()
+                        .code,
+                    "ARCHIVE_BUSY"
+                );
+            }
+            assert!(
+                service
+                    .reconcile_before_unarchive(&caller, &unarchive)
+                    .is_err(),
+                "rejected archive must retain Unknown"
+            );
+            observed.reaped();
+        }
         if !move_before_ack {
             assert_eq!(
                 service
@@ -1073,5 +1077,61 @@ fn NativeArchivePerf_IsolatedStageMatrix_029() {
         drop(service);
         drop(launch);
         drop(repo);
+    }
+}
+
+#[test]
+fn NativeArchive_PendingIdentityChangePreservesDispatchBoundary_034() {
+    use crate::version_history::{
+        codex_archive_admission::CodexOwnerIdentity,
+        maintenance::{AdmissionGate, RuntimeKind},
+    };
+    for after_dispatch in [false, true] {
+        let gate = AdmissionGate::new();
+        let identity = CodexOwnerIdentity::new(None);
+        let owned = gate
+            .begin_start(RuntimeKind::Codex(identity.clone()))
+            .unwrap()
+            .child_created();
+        let (frozen, helper, owners) = gate.begin_codex_archive_for(uuid::Uuid::new_v4()).unwrap();
+        let mut sent = Vec::new();
+        let mut responses = replies();
+        let result = exchange_scoped(
+            "fixture",
+            owners.sessions(),
+            &mut |frame| {
+                let archive = frame["method"] == "thread/archive";
+                if archive && !after_dispatch {
+                    identity.observe(uuid::Uuid::new_v4());
+                }
+                owners.with_current(|| ()).map_err(SendFailure::NotSent)?;
+                sent.push(frame);
+                if archive && after_dispatch {
+                    identity.observe(uuid::Uuid::new_v4());
+                    owners.current().map_err(SendFailure::Attempted)?;
+                }
+                Ok(())
+            },
+            &mut |_| Ok(responses.pop_front().unwrap()),
+            &|_| Ok(()),
+            &|_, _| Ok(()),
+        );
+        assert_eq!(
+            result.unwrap_err().code,
+            if after_dispatch {
+                "ARCHIVE_OUTCOME_UNKNOWN"
+            } else {
+                "ARCHIVE_BUSY"
+            }
+        );
+        assert_eq!(
+            sent.iter()
+                .filter(|frame| frame["method"] == "thread/archive")
+                .count(),
+            usize::from(after_dispatch)
+        );
+        drop(helper);
+        frozen.release_review().unwrap();
+        owned.reaped();
     }
 }

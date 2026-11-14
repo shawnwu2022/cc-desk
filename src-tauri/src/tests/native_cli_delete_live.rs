@@ -56,9 +56,9 @@ use windows::{
 };
 
 const CODEX_EXE: &str = r"D:\nodejs\node_global\node_modules\@openai\codex\node_modules\@openai\codex-win32-x64\vendor\x86_64-pc-windows-msvc\bin\codex.exe";
-const CODEX_SHA256: &str = "edfdd48f8b458af0906e507b4cb05217b326c3d6e515e9f024e05e3b8d650f70";
-const CODEX_BYTES: u64 = 369_062_704;
-const CODEX_VERSION: &str = "0.167.0";
+const CODEX_SHA256: &str = "ce1945eb440b5481ed1233ebaf32b7056ee7e4e452fa62ffe1cbfb26103cdee0";
+const CODEX_BYTES: u64 = 382_529_840;
+const CODEX_VERSION: &str = "0.169.0";
 const OUTPUT_LIMIT: u64 = 1024 * 1024;
 
 #[path = "native_cli_delete_webview.rs"]

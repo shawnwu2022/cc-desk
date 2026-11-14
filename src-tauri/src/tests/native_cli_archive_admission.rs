@@ -13,7 +13,7 @@ fn NativeArchiveOwners_RequestedResumeIdIsNotObservedIdentity_027() {
     assert!(identity.sessions().is_err());
     let actual = uuid::Uuid::new_v4();
     identity.observe(actual);
-    assert_eq!(identity.sessions().unwrap(), BTreeSet::from([id, actual]));
+    assert_eq!(identity.sessions().unwrap(), BTreeSet::from([actual]));
 }
 
 #[test]
@@ -44,12 +44,11 @@ fn NativeArchiveOwners_UnrelatedCodexUsesScopedAdmission_016() {
 }
 
 #[test]
-fn NativeArchiveOwners_EmptyRawAndUnknownKeepBarrier_017() {
+fn NativeArchiveOwners_RawAndUnknownProcessKeepBarrier_017() {
     let target = uuid::Uuid::new_v4();
     for kind in [
         RuntimeKind::Native,
         RuntimeKind::NativeCli(crate::cli::types::CliKind::Shell),
-        RuntimeKind::Codex(CodexOwnerIdentity::new(None)),
     ] {
         let gate = AdmissionGate::new();
         let owned = gate.begin_start(kind).unwrap().child_created();
@@ -101,4 +100,107 @@ fn NativeArchiveOwners_OverflowRemainsUnknown_020() {
     assert!(identity.sessions().is_err());
     identity.observe(uuid::Uuid::new_v4());
     assert!(identity.sessions().is_err());
+    let gate = AdmissionGate::new();
+    let owned = gate
+        .begin_start(RuntimeKind::Codex(identity))
+        .unwrap()
+        .child_created();
+    assert!(gate.check_codex_archive_for(uuid::Uuid::new_v4()).is_err());
+    assert!(gate.begin_codex_archive_for(uuid::Uuid::new_v4()).is_err());
+    owned.reaped();
+}
+
+#[test]
+fn NativeArchiveOwners_PendingResumeOnlyVetoesExactTarget_030() {
+    let gate = AdmissionGate::new();
+    let hint = uuid::Uuid::new_v4();
+    let target = uuid::Uuid::new_v4();
+    let identity = CodexOwnerIdentity::new(Some(hint));
+    let owned = gate
+        .begin_start(RuntimeKind::Codex(identity))
+        .unwrap()
+        .child_created();
+    assert!(gate.check_codex_archive_for(hint).is_err());
+    assert!(gate.check_codex_archive_for(target).is_ok());
+    let (frozen, helper, owners) = gate.begin_codex_archive_for(target).unwrap();
+    assert!(
+        owners.sessions().is_empty(),
+        "resume intent must not become a relation-query identity"
+    );
+    assert!(owners.current().is_ok());
+    drop(helper);
+    frozen.release_review().unwrap();
+    assert!(gate.check_codex_archive_idle().is_err());
+    assert!(gate.begin_codex_archive().is_err());
+    assert!(gate.begin_metadata().is_err());
+    owned.reaped();
+}
+
+#[test]
+fn NativeArchiveOwners_PendingNewUsesNativeWriterBoundary_031() {
+    let gate = AdmissionGate::new();
+    let target = uuid::Uuid::new_v4();
+    let owned = gate
+        .begin_start(RuntimeKind::Codex(CodexOwnerIdentity::new(None)))
+        .unwrap()
+        .child_created();
+    assert!(gate.check_codex_archive_for(target).is_ok());
+    let (frozen, helper, owners) = gate.begin_codex_archive_for(target).unwrap();
+    assert!(owners.sessions().is_empty());
+    assert!(owners.current().is_ok());
+    drop(helper);
+    frozen.release_review().unwrap();
+    owned.wait_failed();
+    assert!(
+        gate.check_codex_archive_for(target).is_err(),
+        "unknown process lifetime still blocks"
+    );
+}
+
+#[test]
+fn NativeArchiveOwners_PendingObservationRevokesEvenWhenUnionUnchanged_032() {
+    let gate = AdmissionGate::new();
+    let active = uuid::Uuid::new_v4();
+    let known = gate
+        .begin_start(RuntimeKind::Codex(observed(active)))
+        .unwrap()
+        .child_created();
+    let pending_identity = CodexOwnerIdentity::new(Some(active));
+    let pending = gate
+        .begin_start(RuntimeKind::Codex(pending_identity.clone()))
+        .unwrap()
+        .child_created();
+    let (frozen, helper, owners) = gate.begin_codex_archive_for(uuid::Uuid::new_v4()).unwrap();
+    assert_eq!(owners.sessions(), &BTreeSet::from([active]));
+    assert!(owners.current().is_ok());
+    pending_identity.observe(active);
+    assert!(
+        owners.current().is_err(),
+        "per-owner authentication changes cannot hide in an unchanged UUID union"
+    );
+    drop(helper);
+    frozen.release_review().unwrap();
+    pending.reaped();
+    known.reaped();
+}
+
+#[test]
+fn NativeArchiveOwners_ResumeHintNeverBecomesObservedRelation_033() {
+    let gate = AdmissionGate::new();
+    let hint = uuid::Uuid::new_v4();
+    let actual = uuid::Uuid::new_v4();
+    let identity = CodexOwnerIdentity::new(Some(hint));
+    identity.observe(actual);
+    assert_eq!(identity.sessions().unwrap(), BTreeSet::from([actual]));
+    let owned = gate
+        .begin_start(RuntimeKind::Codex(identity))
+        .unwrap()
+        .child_created();
+    assert!(gate.check_codex_archive_for(hint).is_err());
+    assert!(gate.check_codex_archive_for(actual).is_err());
+    let (frozen, helper, owners) = gate.begin_codex_archive_for(uuid::Uuid::new_v4()).unwrap();
+    assert_eq!(owners.sessions(), &BTreeSet::from([actual]));
+    drop(helper);
+    frozen.release_review().unwrap();
+    owned.reaped();
 }

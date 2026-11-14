@@ -1,4 +1,5 @@
 //! 运行身份用于保守拒绝关联会话，不证明有效数据根或完整写入范围。
+use super::codex_owner_identity::IdentityState;
 use super::maintenance::AdmissionGate;
 use crate::cli::{profiles::error, types::SafeError};
 pub(crate) use crate::version_history::codex_owner_identity::CodexOwnerIdentity;
@@ -9,7 +10,7 @@ pub(crate) struct CodexArchiveOwners {
     pub(super) gate: AdmissionGate,
     pub(super) epoch: u64,
     pub(super) transaction_id: String,
-    pub(super) identities: Vec<Arc<CodexOwnerIdentity>>,
+    pub(super) identities: Vec<(Arc<CodexOwnerIdentity>, IdentityState)>,
     pub(super) sessions: BTreeSet<uuid::Uuid>,
 }
 impl CodexArchiveOwners {
@@ -26,22 +27,13 @@ impl CodexArchiveOwners {
                 let held: Vec<_> = self
                     .identities
                     .iter()
-                    .map(|identity| identity.0.lock())
+                    .map(|(identity, _)| identity.0.lock())
                     .collect();
-                let mut current = BTreeSet::new();
-                for state in &held {
-                    if !state.observed {
+                // 合并 UUID 集合可能不变，逐 owner 比较才能发现等待身份变为已认证。
+                for ((_, expected), state) in self.identities.iter().zip(&held) {
+                    if **state != *expected {
                         return Err(error("ARCHIVE_BUSY"));
                     }
-                    let ids = state
-                        .ids
-                        .as_ref()
-                        .filter(|ids| !ids.is_empty())
-                        .ok_or_else(|| error("ARCHIVE_BUSY"))?;
-                    current.extend(ids.iter().copied());
-                }
-                if current != self.sessions {
-                    return Err(error("ARCHIVE_BUSY"));
                 }
                 Ok(action())
             })

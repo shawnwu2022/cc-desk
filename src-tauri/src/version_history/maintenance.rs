@@ -27,9 +27,11 @@ impl ChildState {
         | Self::Running(RuntimeKind::Codex(identity)) = self
         {
             return target.is_none_or(|target| {
-                identity
-                    .sessions()
-                    .map_or(true, |ids| ids.contains(&target))
+                identity.archive_snapshot().map_or(true, |state| {
+                    // 请求 ID 只能保守否决自身，不能冒充认证身份去推导关联关系。
+                    state.requested_id == Some(target)
+                        || state.ids.as_ref().is_none_or(|ids| ids.contains(&target))
+                })
             });
         }
         use crate::cli::types::CliKind;
@@ -158,8 +160,12 @@ impl AdmissionGate {
             if let ChildState::Starting(RuntimeKind::Codex(identity))
             | ChildState::Running(RuntimeKind::Codex(identity)) = child
             {
-                sessions.extend(identity.sessions()?);
-                identities.push(identity.clone());
+                let snapshot = identity.archive_snapshot()?;
+                if let Some(ids) = &snapshot.ids {
+                    sessions.extend(ids.iter().copied());
+                }
+                // 即使尚无身份也保留完整 owner 快照；认证变化必须撤销本次发送准入。
+                identities.push((identity.clone(), snapshot));
             }
         }
         if sessions.len() > 128 {
