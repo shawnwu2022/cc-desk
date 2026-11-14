@@ -51,8 +51,7 @@ only output outside `.audit`. No dependency download, install, deployment,
 credential creation or security-setting change is part of the build.
 
 The existing `npm run build:browser` and `public/remote-runtime` terminal product
-are unchanged. 
-pm run build:browser:product` explicitly builds both runtimes
+are unchanged. `npm run build:browser:product` explicitly builds both runtimes
 then runs Vite for a complete static bundle. Set `CARGO_TARGET_DIR` to a path
 inside this checkout (prefer `.audit/browser-product/target`) and keep TEMP/TMP/
 TMPDIR inside `.audit` when using that combined command, because the unchanged
