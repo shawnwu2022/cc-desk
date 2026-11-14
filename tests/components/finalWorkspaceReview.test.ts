@@ -151,6 +151,11 @@ describe('Final workspace review regressions', () => {
   it('Pointer_ArchiveRestore_002', async () => {
     const w = renderApp(); await openNativeRow(w)
     const catalog = useUnifiedSessionsStore()
+    const tabs = useNativeTabsStore()
+    const tabIds = [...tabs.tabs.keys()]
+    const activeTabId = tabs.activeTabId
+    const activeSessionId = catalog.activeSessionId
+    const createTab = vi.spyOn(tabs, 'create')
     const history = catalog.sessions.find(value => value.id.startsWith('native-history:'))!
     await catalog.archiveSession(history.id); await flushPromises()
     await w.get('[data-view-archived]').trigger('click'); await flushPromises()
@@ -168,7 +173,19 @@ describe('Final workspace review regressions', () => {
     expect(catalog.resumeDialog).toBeNull()
     expect(drawer.emitted('restore-request')).toEqual([[history.id]])
     expect(list.emitted('activate')).toBeUndefined()
-    expect(catalog.sessions.find(value => value.id === history.id)?.archived).toBe(false)
+    expect(catalog.sessions.find(value => value.id === history.id)).toMatchObject({ archived: false, opened: false })
+    document.querySelector<HTMLButtonElement>('.ui-drawer button[aria-label="Close"]')!.click(); await flushPromises()
+    expect(drawer.props('open')).toBe(false)
+    const restoredRow = w.findAll('[data-session-row]').find(row => row.attributes('data-session-row') === history.id)!
+    await restoredRow.get('[data-session-archive] button').trigger('click'); await flushPromises()
+    expect(io.nativeArchive).toHaveBeenCalledTimes(2)
+    expect(catalog.sessionConfirmation).toBeNull()
+    expect(catalog.resumeDialog).toBeNull()
+    expect(catalog.sessions.find(value => value.id === history.id)).toMatchObject({ archived: true, opened: false })
+    expect(createTab).not.toHaveBeenCalled()
+    expect([...tabs.tabs.keys()]).toEqual(tabIds)
+    expect(tabs.activeTabId).toBe(activeTabId)
+    expect(catalog.activeSessionId).toBe(activeSessionId)
   })
   // 已取消的编辑不能通过迟到 Save 被解释为新的尝试。
   it('Rename_CancelRejectsLateSave_003', async () => {
