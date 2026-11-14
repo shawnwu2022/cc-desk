@@ -528,9 +528,9 @@ export function createNativeHistoryClient(): import('./versionHistory').HistoryC
 export type RemoteHostControlState = { state: 'Locked' | 'Pending' | 'ApprovalRecorded' | 'Consumed' | 'Cancelled' | 'Expired' | 'Registered' };
 export type RemoteHostRun = { runId: string; generation: number };
 export type RemoteRegistrationState =
-  | { state: 'Locked' | 'PendingKeyApproval' | 'Connecting' | 'Verifying' | 'PendingBrowserApproval' | 'Cancelled' | 'Failed' | 'Unknown' }
-  | { state: 'InstalledLocked' | 'DeliveryUnconfirmed'; receipt: string }
-  | { state: 'RetirementUnknown'; receipt: string | null };
+  | { state: 'Locked' | 'PendingKeyApproval' | 'Connecting' | 'Verifying' | 'PendingBrowserApproval' | 'PendingNativePersistence' | 'NativeStoreDeclined' | 'NativeStoreFailed' | 'NativeStoreUnknown' | 'NativeStoredRegistrationIncomplete' | 'Cancelled' | 'Failed' | 'Unknown' }
+  | { state: 'InstalledLocked' | 'DeliveryUnconfirmed'; receipt: string; remembered: boolean }
+  | { state: 'RetirementUnknown'; receipt: string | null; remembered: boolean };
 export async function remoteRegistrationRequest(request: RemoteHostRun & { candidateJson: string }): Promise<RemoteRegistrationState> {
   return await nativeDocumentBridge().invoke('remote_registration_request', request) as RemoteRegistrationState;
 }
@@ -565,4 +565,22 @@ export async function remoteHostConfigure(request: RemoteHostRun & { candidateJs
 }
 export async function remoteHostDiscardCandidate(request: RemoteHostRun & { receipt: string }): Promise<void> {
   await nativeDocumentBridge().invoke('remote_host_discard_candidate', request);
+}
+
+// 已记住的公开设备不是批准；选择只冻结当前 owned run 的新候选。
+export type RemotePairingDevice = { deviceId: string; browserOrigin: string; relayOrigin: string; profileId: string };
+export type RemotePairingList = { state: 'Locked'; storeId: string | null; revision: string | null; devices: RemotePairingDevice[] };
+export type RemotePairingSelection = RemoteHostRun & { candidateJson: string };
+export async function remotePairingList(run: RemoteHostRun): Promise<RemotePairingList> {
+  return await nativeDocumentBridge().invoke('remote_pairing_list', run) as RemotePairingList;
+}
+export async function remotePairingSelect(request: RemotePairingSelection): Promise<{ state: 'Configured'; receipt: string }> {
+  return await nativeDocumentBridge().invoke('remote_pairing_select', request) as { state: 'Configured'; receipt: string };
+}
+export async function remotePairingForget(request: RemotePairingSelection): Promise<{ state: 'Forgotten' | 'Declined' }> {
+  return await nativeDocumentBridge().invoke('remote_pairing_forget', request) as { state: 'Forgotten' | 'Declined' };
+}
+
+export async function remotePairingForgetCancel(request: RemotePairingSelection): Promise<void> {
+  await nativeDocumentBridge().invoke('remote_pairing_forget_cancel', request);
 }

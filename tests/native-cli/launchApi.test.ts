@@ -171,3 +171,19 @@ it('RemoteHost_CandidateDiscardUsesExactBridge_007', async () => {
  const failure={code:'FORBIDDEN'};bridge(vi.fn(async()=>{throw failure}));await expect(api.remoteHostPairingScope(run)).rejects.toBe(failure);
  delete (window as any)[bridgeKey];await expect(api.remoteHostPairingScope(run)).rejects.toMatchObject({code:'DOCUMENT_BRIDGE_UNAVAILABLE'});
 });
+
+it.each([
+ ['remote_pairing_list', 'remotePairingList', { state: 'Locked', storeId: null, revision: null, devices: [] }],
+ ['remote_pairing_select', 'remotePairingSelect', { state: 'Configured', receipt: 'r1' }],
+ ['remote_pairing_forget_cancel', 'remotePairingForgetCancel', undefined],
+ ['remote_pairing_forget', 'remotePairingForget', { state: 'Declined' }],
+] as const)('RemotePairing_ExactBridgeAndFailure_001_%s', async (command, name, reply) => {
+ const request = name === 'remotePairingList' ? { runId: 'original', generation: 1 } : { runId: 'original', generation: 1, candidateJson: '{"storeId":"s1","revision":"3","deviceId":"d1"}' }
+ const invoke = vi.fn(async () => reply); bridge(invoke)
+ await expect((api[name] as (request: unknown) => Promise<unknown>)(request)).resolves.toEqual(reply)
+ expect(invoke.mock.calls).toEqual([[command, request]])
+ const failure = { code: 'REMOTE_NATIVE_STORE_UNKNOWN' }; bridge(vi.fn(async () => { throw failure }))
+ await expect((api[name] as (request: unknown) => Promise<unknown>)(request)).rejects.toBe(failure)
+ delete (window as any)[bridgeKey]
+ await expect((api[name] as (request: unknown) => Promise<unknown>)(request)).rejects.toMatchObject({ code: 'DOCUMENT_BRIDGE_UNAVAILABLE' })
+})
