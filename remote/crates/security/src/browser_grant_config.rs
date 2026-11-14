@@ -20,17 +20,12 @@ struct Wire {
     #[serde(default, deserialize_with = "present")]
     scope: Option<cc_desk_remote_record::grant::SessionScope>,
     #[serde(default, deserialize_with = "present")]
-    scope_policy: Option<ScopePolicy>,
+    scope_policy: Option<String>,
     role: cc_desk_remote_record::grant::DataRole,
     budget_ms: u64,
     profile: Enrollment,
     #[serde(default, deserialize_with = "peer_present")]
     peer_install: Option<PeerInstall>,
-}
-#[derive(Deserialize)]
-enum ScopePolicy {
-    #[serde(rename = "authenticated-host-run")]
-    AuthenticatedHostRun,
 }
 fn present<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(
     d: D,
@@ -95,7 +90,7 @@ impl Configuration {
                 cc_desk_remote_record::grant::encode_scope(scope)
                     .map_err(|_| GrantError::Policy)?;
             }
-            (None, Some(ScopePolicy::AuthenticatedHostRun)) => {}
+            (None, Some(policy)) if policy == "authenticated-host-run" => {}
             _ => return Err(GrantError::Policy),
         }
         let principal: Vec<_> = (0..64)
@@ -189,5 +184,30 @@ mod tests {
             }
             assert!(parse(&invalid).is_err(), "case {case}");
         }
+    }
+    #[test]
+    fn browser_resume_wire_policy_accepts_only_the_exact_string_009() {
+        let mut resume = exact();
+        resume.as_object_mut().unwrap().remove("scope");
+        resume["scopePolicy"] = "authenticated-host-run".into();
+        assert!(matches!(
+            parse(&resume).unwrap().trust,
+            Trust::AuthenticatedHostRun(_)
+        ));
+        for value in [
+            serde_json::json!({"authenticated-host-run": null}),
+            serde_json::Value::Null,
+            serde_json::json!(["authenticated-host-run"]),
+            serde_json::json!(1),
+            serde_json::json!(true),
+            serde_json::json!(false),
+        ] {
+            resume["scopePolicy"] = value.clone();
+            assert!(
+                parse(&resume).is_err(),
+                "accepted non-string policy: {value}"
+            );
+        }
+        assert!(matches!(parse(&exact()).unwrap().trust, Trust::Exact(_)));
     }
 }
