@@ -55,9 +55,9 @@ export async function prepare() {
     if (digest(archive) !== manifest.packageSha256) throw new Error('Microsoft ConPTY package SHA-256 mismatch');
     const zip = path.join(temp, 'runtime.zip'); const extracted = path.join(temp, 'extracted');
     await fs.writeFile(zip, archive);
-    // Paths are passed as environment data, not interpolated PowerShell code.
+    // 路径通过环境传入；使用 .NET Framework 两参数重载，避免 Archive 模块版本不兼容。
     const run = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-      '$ErrorActionPreference="Stop"; Expand-Archive -LiteralPath $env:CC_CONPTY_ZIP -DestinationPath $env:CC_CONPTY_EXTRACT'],
+      '$ErrorActionPreference="Stop"; Add-Type -AssemblyName System.IO.Compression.FileSystem; [System.IO.Compression.ZipFile]::ExtractToDirectory($env:CC_CONPTY_ZIP, $env:CC_CONPTY_EXTRACT)'],
       { env: { ...process.env, CC_CONPTY_ZIP: zip, CC_CONPTY_EXTRACT: extracted }, encoding: 'utf8', timeout: 90_000 });
     if (run.error || run.status !== 0) throw new Error(`ConPTY extraction failed: ${run.error || run.stderr}`);
     const candidates = await walk(extracted); const staged = path.join(temp, 'staged'); await fs.mkdir(staged);

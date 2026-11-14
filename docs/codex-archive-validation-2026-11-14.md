@@ -114,3 +114,20 @@ cc_desk-<hash>.exe --exact tests::native_cli_projection_live::D12_Webview_Formal
 ## 剩余验证
 
 归档修复可按已完成的独立验收审查；完整库不得标为通过。其余 WebView 与两个 restart-lifetime 的进一步定位需要逐例有界诊断或同环境基线比较；注册表和 Job-free 专项应在已有授权且满足前提的 Windows 测试宿主上补测，不通过提升权限、修改安全设置或放宽断言来消除失败。本次到此收口，不扩大为平台测试环境修复。
+
+## PR CI preparation compatibility follow-up
+
+PR #89 at head 36cbdd56 reached ordinary CI run [43590268694](https://github.com/shawnwu2022/cc-desk/actions/runs/43590268694), attempt 1. Frontend checks passed. Rust producer/static and both roundtrip jobs failed before compiling the archive change: Windows PowerShell `Expand-Archive` could not find the three-argument `ExtractToDirectory` overload. Historical-recovery run 43590268704 and ConPTY-integration run 43590268617 independently failed at the same preparation step. These failures are not archive test failures or successful Rust validation.
+
+The preparation script is unchanged between b2540b7b and 36cbdd56. Baseline run [43374558457](https://github.com/shawnwu2022/cc-desk/actions/runs/43374558457), job 131717893821, logged successful fresh pinned ConPTY preparation on Windows image 20261101.353.1. The failing jobs used image 20261112.366.7. This establishes compatibility drift in the preparation environment; it does not identify which image component introduced it.
+
+The narrow repair uses the explicit .NET Framework two-argument ZIP API with the same Windows PowerShell process and environment-data path arguments. Package and file hashes, download limits, x64 checks, staging checks and failure cleanup are unchanged. No machine module, permission, registry, SSH, credential or release-gate setting changed.
+
+Local regression executes the unmodified generator logic from a disposable checkout against a local HTTP fixture and genuine ZIP, without mocking the extraction subprocess. Before the repair, the real installed PowerShell reproduced `MethodCountCouldNotFindBest,Expand-Archive` (9 passed, 2 failed). After the repair, 31 ConPTY/CI/release-policy tests passed, including fresh staging, corrupt ZIP, mismatching package/file hashes, Unicode/literal staging paths, and cleanup on success/failure. The earlier full Rust library results above remain separate; they were not reclassified or rerun for this build-script-only change.
+
+- RED log SHA-256: `e9e044ee6b8b9d2ff64c4af385997b12800fe760916409cd20e5bd5f40adcc06`.
+- GREEN log SHA-256: `09ab39f1d83f60dbd9dde16b546b90cfe8f7382bc3b26472f08a426125439081`.
+- Logs: `conpty-extraction-red.log` and `conpty-extraction-green.log` in the same local evidence directory described above.
+- Independent read-only review found no blocking issue. New hosted CI must still validate the repaired exact source; baseline success and local fixture results do not replace it.
+
+A separate empty temporary checkout successfully downloaded and staged the official pinned ConPTY 1.24.2607.10001 package, then passed `--verify` against the unchanged manifest. The first network attempt failed with `fetch failed`; a later read-only package fetch returned HTTP 200 and the fresh retry completed. This is fresh preparation evidence, not a cached-runtime shortcut.
