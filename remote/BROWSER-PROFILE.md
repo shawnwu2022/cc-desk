@@ -823,11 +823,19 @@ adds separate mutual-RPK TLS with `cc-desk-enroll/1`, original bounded lifetime,
 ordered evidence messages and transcript-bound historical decision/ACK. It joins
 the original verifier and approval owner, checks both actual endpoint identities,
 and preserves the real native installation receipt if delivery fails. A receipt
-is not durable trust or a grant. Its Edge acceptance uses a TEST_ONLY native TLS
-client over loopback, not BrowserWasm, real passkeys, relay bootstrap or a public
-registration endpoint. Browser signer/worker admission, relay keepalive within
-the original 120-second cap, identity authority and durable installation remain
-separate engineering gates.
+is not durable trust or a grant. A separate [BrowserWasm registration owner](../docs/browser-registration-worker.md)
+now carries actual browser WASM TLS through a dedicated Worker and original-handle
+bridge to that native gate. Fifteen actual Edge cases verify the loopback path,
+including original-owner retirement and uncertainty after WASM traps. They use
+synthetic authenticator responses and the original cfg(test) native approval callback.
+
+The registration-only [Relay lifetime owner](../docs/native-registration-relay.md)
+adds bounded opaque keepalive without renewing the original total deadline. Its
+independent actual WSS acceptance crosses 35 seconds of idle time in explicitly
+selected legacy mode and closes at the original 40-second end. This does not yet
+qualify the Worker-plus-Relay combination or rendezvous registration. Production
+identity authority, independent pins, genuine native GUI approval and durable
+installation remain separate engineering gates; default entry stays Locked.
 
 The browser-entry.spec.ts fixture supplies the fixed same-origin profile module
 through createApprovedBrowserProfileReader, instead of directly assembling

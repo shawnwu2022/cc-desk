@@ -4,6 +4,8 @@ mod deadline;
 mod browser_relay_fixture_tests;
 #[cfg(test)]
 mod owned_tests;
+#[cfg(test)]
+mod registration_tests;
 pub mod records;
 pub mod wss;
 pub fn websocket_config() -> tokio_tungstenite::tungstenite::protocol::WebSocketConfig {
@@ -75,6 +77,41 @@ pub fn start_admitted(
     budget: std::time::Duration,
 ) -> Result<(tokio::io::DuplexStream, OwnedTunnel), TransportError> {
     start_owned(ws, tunnel, budget)
+}
+/// Registration-only outer keepalive. The original total deadline is never renewed.
+pub fn start_admitted_registration(
+    ws: wss::AdmittedSocket,
+    tunnel: [u8; 16],
+    budget: std::time::Duration,
+    original_end: tokio::time::Instant,
+    original_cancel: impl std::future::Future<Output = ()> + Send + 'static,
+) -> Result<(tokio::io::DuplexStream, OwnedTunnel), TransportError> {
+    start_owned_registration(ws, tunnel, budget, original_end, original_cancel)
+}
+fn start_owned_registration<S>(
+    ws: tokio_tungstenite::WebSocketStream<S>,
+    tunnel: [u8; 16],
+    budget: std::time::Duration,
+    original_end: tokio::time::Instant,
+    original_cancel: impl std::future::Future<Output = ()> + Send + 'static,
+) -> Result<(tokio::io::DuplexStream, OwnedTunnel), TransportError>
+where S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static {
+    let remaining = original_end.checked_duration_since(tokio::time::Instant::now())
+        .filter(|remaining| !remaining.is_zero() && *remaining <= std::time::Duration::from_secs(120))
+        .ok_or(TransportError::Limit)?;
+    if budget < std::time::Duration::from_millis(30) || remaining.is_zero() {
+        return Err(TransportError::Limit);
+    }
+    start_owned_policy(ws,tunnel,budget,Some(RegistrationPolicy{end:original_end,interval:budget/3,tunnel}),Some(Box::pin(original_cancel)),
+        #[cfg(feature="test-only-loopback")]
+        None,
+    )
+}
+#[derive(Clone,Copy)]
+struct RegistrationPolicy { end:tokio::time::Instant,interval:std::time::Duration,tunnel:[u8;16] }
+type OriginalCancellation = std::pin::Pin<Box<dyn std::future::Future<Output=()> + Send>>;
+async fn original_cancelled(cancel:&mut Option<OriginalCancellation>) {
+    match cancel { Some(future)=>future.await, None=>std::future::pending().await }
 }
 #[cfg(feature = "test-only-loopback")]
 #[doc(hidden)]
@@ -148,16 +185,29 @@ fn start_owned_inner<S>(
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
+    start_owned_policy(ws,tunnel,budget,None,None,
+        #[cfg(feature="test-only-loopback")]
+        observer,
+    )
+}
+fn start_owned_policy<S>(
+    ws:tokio_tungstenite::WebSocketStream<S>, tunnel:[u8;16],budget:std::time::Duration,
+    registration:Option<RegistrationPolicy>,original_cancel:Option<OriginalCancellation>,
+    #[cfg(feature="test-only-loopback")] observer:Option<tokio::sync::oneshot::Sender<TestOnlyMuxEnd>>,
+) -> Result<(tokio::io::DuplexStream,OwnedTunnel),TransportError>
+where S:tokio::io::AsyncRead+tokio::io::AsyncWrite+Unpin+Send+'static {
     if tunnel == [0; 16] || budget.is_zero() || budget > MAX_IO_BUDGET {
         return Err(TransportError::Limit);
     }
     let (stream, route) = bounded_tunnel();
     let (stop, rx) = tokio::sync::watch::channel(false);
-    let task = tokio::spawn(drive_inner(
+    let task = tokio::spawn(drive_policy(
         ws,
         std::collections::HashMap::from([(tunnel, route)]),
         rx,
         budget,
+        registration,
+        original_cancel,
         #[cfg(feature = "test-only-loopback")]
         observer,
     ));
@@ -193,15 +243,27 @@ where
     drive_inner(ws, routes, cancel, budget, #[cfg(feature = "test-only-loopback")] None).await
 }
 async fn drive_inner<S>(
-    mut ws: tokio_tungstenite::WebSocketStream<S>,
+    ws: tokio_tungstenite::WebSocketStream<S>,
     routes: std::collections::HashMap<[u8; 16], RouteEndpoint>,
-    mut cancel: tokio::sync::watch::Receiver<bool>,
+    cancel: tokio::sync::watch::Receiver<bool>,
     budget: std::time::Duration,
     #[cfg(feature = "test-only-loopback")] observer: Option<tokio::sync::oneshot::Sender<TestOnlyMuxEnd>>,
 ) -> Result<(), TransportError>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
+    drive_policy(ws,routes,cancel,budget,None,None,
+        #[cfg(feature="test-only-loopback")]
+        observer,
+    ).await
+}
+async fn drive_policy<S>(
+    mut ws:tokio_tungstenite::WebSocketStream<S>,routes:std::collections::HashMap<[u8;16],RouteEndpoint>,
+    mut cancel:tokio::sync::watch::Receiver<bool>,budget:std::time::Duration,
+    registration:Option<RegistrationPolicy>,mut original_cancel:Option<OriginalCancellation>,
+    #[cfg(feature="test-only-loopback")] observer:Option<tokio::sync::oneshot::Sender<TestOnlyMuxEnd>>,
+) -> Result<(),TransportError>
+where S:tokio::io::AsyncRead+tokio::io::AsyncWrite+Unpin+Send+'static {
     use cc_desk_remote_protocol::{Subframe, encode_outer};
     use futures_util::{SinkExt, StreamExt};
     use tokio::{
@@ -266,6 +328,9 @@ where
     let mut read_deadline = Instant::now()
         .checked_add(budget)
         .ok_or(TransportError::Limit)?;
+    let cap=|end:Instant|registration.map_or(end,|r|end.min(r.end));
+    read_deadline=cap(read_deadline);
+    let mut heartbeat=registration.map_or(read_deadline,|r|cap(Instant::now()+r.interval));
     #[cfg(feature = "test-only-loopback")]
     let observed_end;
     macro_rules! finish {
@@ -277,8 +342,23 @@ where
         }};
     }
     let result = loop {
+        if registration.is_some() {
+            if *cancel.borrow() || cancel.has_changed().is_err(){finish!(Err(TransportError::Cancelled),Cancelled);}
+            tokio::select!{biased;_=original_cancelled(&mut original_cancel)=>finish!(Err(TransportError::Cancelled),Cancelled),_=std::future::ready(())=>{}}
+        }
         if Instant::now() >= read_deadline {
             finish!(Err(TransportError::Deadline), IoBudget);
+        }
+        if let Some(policy)=registration.filter(|_|Instant::now()>=heartbeat) {
+            let bytes=encode_outer(&[Subframe{tunnel:policy.tunnel,payload:&[]}]).map_err(|_|TransportError::Wire)?;
+            let sent=tokio::select!{biased;
+                _=cancel.changed()=>Err(TransportError::Cancelled),
+                _=original_cancelled(&mut original_cancel)=>Err(TransportError::Cancelled),
+                r=timeout_at(read_deadline,ws.send(Message::Binary(bytes.into())))=>r.map_err(|_|TransportError::Deadline).and_then(|r|r.map_err(|_|TransportError::Io)),
+            };
+            if let Err(e)=sent{finish!(Err(e),SocketWrite);}
+            if Instant::now()>=read_deadline{finish!(Err(TransportError::Deadline),IoBudget);}
+            heartbeat=cap(Instant::now()+policy.interval);
         }
         // Service at most one ready outbound envelope before the next inbound
         // event. A permanently-ready inbound stream cannot starve outbound.
@@ -286,15 +366,19 @@ where
             let sent = tokio::select! {
                 biased;
                 _=cancel.changed()=>Err(TransportError::Cancelled),
+                _=original_cancelled(&mut original_cancel)=>Err(TransportError::Cancelled),
                 r=timeout_at(read_deadline,ws.send(Message::Binary(bytes.into())))=>r.map_err(|_|TransportError::Deadline).and_then(|r|r.map_err(|_|TransportError::Io)),
             };
             if let Err(e) = sent {
                 finish!(Err(e), SocketWrite);
             }
+            if registration.is_some()&&Instant::now()>=read_deadline{finish!(Err(TransportError::Deadline),IoBudget);}
         }
         tokio::select! {
             biased;
             _=cancel.changed()=>finish!(Err(TransportError::Cancelled), Cancelled),
+            _=original_cancelled(&mut original_cancel)=>finish!(Err(TransportError::Cancelled), Cancelled),
+            _=tokio::time::sleep_until(heartbeat),if registration.is_some()=>{},
             ended=workers.join_next(), if !workers.is_empty()=>{
                 finish!(ended.unwrap().unwrap_or(Err(TransportError::Io)), RouteWorker);
             }
@@ -304,15 +388,17 @@ where
                     Err(_)=>finish!(Err(TransportError::Deadline), IoBudget),
                     Ok(Some(Ok(Message::Binary(bytes))))=>{
                         if let Err(e)=deliver(&bytes,&incoming){finish!(Err(e), Delivery);}
-                        read_deadline=match Instant::now().checked_add(budget){Some(d)=>d,None=>finish!(Err(TransportError::Limit), IoBudget)};
+                        read_deadline=match Instant::now().checked_add(budget){Some(d)=>cap(d),None=>finish!(Err(TransportError::Limit), IoBudget)};
                     }
                     Ok(Some(Ok(Message::Ping(_))))=>{
                         let sent=tokio::select! {
                             biased;
                             _=cancel.changed()=>Err(TransportError::Cancelled),
+                            _=original_cancelled(&mut original_cancel)=>Err(TransportError::Cancelled),
                             r=timeout_at(read_deadline,ws.flush())=>r.map_err(|_|TransportError::Deadline).and_then(|r|r.map_err(|_|TransportError::Io)),
                         };
                         if let Err(e)=sent {finish!(Err(e), SocketWrite);}
+                        if registration.is_some()&&Instant::now()>=read_deadline{finish!(Err(TransportError::Deadline),IoBudget);}
                     }
                     Ok(Some(Ok(Message::Pong(_))))=>{}
                     Ok(Some(Ok(Message::Close(_))))=>finish!(Err(TransportError::Closed), WebSocketClose),
@@ -329,9 +415,11 @@ where
                     let sent=tokio::select! {
                         biased;
                         _=cancel.changed()=>Err(TransportError::Cancelled),
+                        _=original_cancelled(&mut original_cancel)=>Err(TransportError::Cancelled),
                         r=timeout_at(read_deadline,ws.send(Message::Binary(bytes.into())))=>r.map_err(|_|TransportError::Deadline).and_then(|r|r.map_err(|_|TransportError::Io)),
                     };
                     if let Err(e)=sent {finish!(Err(e), SocketWrite);}
+                    if registration.is_some()&&Instant::now()>=read_deadline{finish!(Err(TransportError::Deadline),IoBudget);}
                 }
             }
         }

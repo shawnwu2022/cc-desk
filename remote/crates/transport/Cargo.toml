@@ -21,5 +21,6 @@ url = "=2.5.8"
 rustls-pemfile = { version = "=1.0.4", optional = true }
 
 [dev-dependencies]
+tokio = { version = "=1.52.1", features = ["test-util"] }
 ring = "=0.17.14"
 rustls-pemfile = "=1.0.4"
