@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [0.27.0-rc.11] - 2026-11-16
+
+### Fixed
+
+- Match the SQLite canonical cwd and rollout cwd against aliases already verified for the same registered Windows project. Avoid falsely rejecting native Codex archive with SESSION_ORIGIN_AMBIGUOUS while preserving source, header, held-root and native-lock checks.
+- Apply the same identity check to archive readback for plain and compressed rollout files. Reject aliases belonging to another registered project, neighboring path prefixes, unadmitted canonical spellings and revoked scopes.
+
+### Validation and limits
+
+- Reproduced the original rejection before the fix. Scope-core passes 310 tests, the focused native archive group passes 35 tests, and related frontend tests pass 118 tests. Strict Rust 1.98.1 all-target Clippy passes. Isolated installed Codex 0.169.0 plain/zstd archive experiments verify unchanged content and unrelated histories. No real user history was modified.
+- This prerelease uses make_latest=false. Exact protected-main CI, authenticated coverage and three same-release-run updater signatures remain mandatory. Live user sessions, installed WebView2 acceptance, original native All, D20 and signed installation/return remain separately unverified. Updater signatures are not Windows Authenticode.
+
 ## [0.27.0-rc.10] - 2026-11-15
 
 ### Fixed

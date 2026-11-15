@@ -4,6 +4,18 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
+## [0.27.0-rc.11]
+
+修复
+
+- 修复 Windows 将同一项目保存为两种已验证路径拼法时，Codex 归档被误判为来源不明确的问题，同时覆盖压缩会话历史。
+- 保留真实跨项目、来源变化及结果不确定时的检查，不新增归档确认弹窗。
+
+重要说明
+
+- 这是预发布版本，稳定 Latest 保持不变。不自动迁移、归档、恢复或删除数据。
+- 验证使用隔离的 Codex 0.169.0 历史。真实用户会话、安装版 WebView2、原始 native All、D20 和签名安装/返回仍需独立验证。Updater 签名不等同于 Windows Authenticode。
+
 ## [0.27.0-rc.10]
 
 修复
