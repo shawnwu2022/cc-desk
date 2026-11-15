@@ -4,6 +4,18 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
+## [0.27.0-rc.10]
+
+修复
+
+- Claude 扩展标题读取遇到某个会话的 JSON 或文本损坏时，其他正常会话仍可显示和刷新；保留受影响会话最后确认的列表记录，并明确报告读取失败。
+- 继续拒绝会话身份冲突、读取期间文件变化和来源访问权限失效。
+
+重要说明
+
+- 这是预发布版本，稳定 Latest 保持不变。不自动迁移、归档、恢复或删除数据。
+- 验证使用隔离的会话记录样本。真实模型会话、安装版 WebView2、原始 native All、D20 及签名安装/返回仍需独立验证。Updater 签名不等同于 Windows Authenticode。
+
 ## [0.27.0-rc.9]
 
 修复

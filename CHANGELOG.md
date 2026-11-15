@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [0.27.0-rc.10] - 2026-11-15
+
+### Fixed
+
+- Isolate malformed JSON, invalid text and incomplete EOF records found during expanded Claude title reads to the affected session. Retain its proven history row while healthy sibling histories refresh.
+- Revalidate the original identity-bearing header and preserve file/root stability and authority checks. Reject valid conflicting session records observed before a later content error instead of concealing the conflict as a per-session read failure.
+
+### Validation and limits
+
+- Reproduced the original content-isolation failures on main and mixed identity/content failures on the prior local repair before the final correction. The Rust 1.98.1 scope-core suite passes all 309 tests, including same/cross-chunk JSON, UTF-8, NUL and EOF cases. No real user history was modified.
+- This prerelease uses make_latest=false. Exact protected-main CI, authenticated coverage and three same-release-run updater signatures remain mandatory. Live model sessions, installed WebView2 acceptance, original native All, D20 and signed installation/return remain separately unverified. Updater signatures are not Windows Authenticode.
+
 ## [0.27.0-rc.9] - 2026-11-14
 
 ### Fixed
