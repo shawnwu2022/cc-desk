@@ -768,3 +768,40 @@ fn CodexParents_RejectsJunction_050() {
         Some("SOURCE_NOT_REGULAR")
     );
 }
+
+// 内容错误只能在同次文件稳定性复核之后隔离，不能遮蔽同时发生的写入。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_ContentFailureStillChecksFileChange_051() {
+    use std::io::Write;
+    for (changed, expected) in [(false, "SOURCE_INVALID"), (true, "SOURCE_CHANGED")] {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("fixture.jsonl");
+        fs::write(&path, vec![b' '; 128 * 1024]).unwrap();
+        let root = Root::open(temp.path()).unwrap();
+        let mut observe = |bytes: &[u8]| {
+            if bytes.len() <= 64 * 1024 {
+                return Ok(false);
+            }
+            if changed {
+                fs::OpenOptions::new()
+                    .append(true)
+                    .open(&path)
+                    .unwrap()
+                    .write_all(b"\n")
+                    .unwrap();
+            }
+            Err("SOURCE_INVALID")
+        };
+        assert_eq!(
+            root.history_title_tail(
+                Path::new("fixture.jsonl"),
+                64 * 1024,
+                &mut budget(),
+                &mut observe
+            )
+            .err(),
+            Some(expected)
+        );
+    }
+}

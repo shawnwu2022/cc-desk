@@ -3400,8 +3400,261 @@ fn HistoryClaude_ExpandedHeadKeepsCompleteEofRecord_069() {
     input.pop();
     std::fs::write(temp.path().join("projects/p/fixture.jsonl"), input).unwrap();
     let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
+    let items = read_claude_history_fixture(&root, &[temp.path().to_owned()], &mut budget).unwrap();
+    assert_eq!(items.len(), 1);
     assert_eq!(
-        read_claude_history_fixture(&root, &[temp.path().to_owned()], &mut budget).err(),
-        Some("SOURCE_CHANGED")
+        serde_json::to_value(&items[0]).unwrap()["readFailure"],
+        "SOURCE_INVALID"
     );
+    assert_eq!(budget.history_read_failures(), vec!["SOURCE_INVALID"]);
+}
+
+fn assert_expanded_header_failure_is_isolated(corrupt: &[u8], code: &'static str) {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("projects/p")).unwrap();
+    let bad_id = "11111111-1111-4111-8111-111111111111";
+    let good_id = "22222222-2222-4222-8222-222222222222";
+    let mut input = format!(
+        "{}\n",
+        json!({"type":"user","sessionId":bad_id,"cwd":temp.path().to_str().unwrap(),"message":{"content":""}})
+    ).into_bytes();
+    while input.len() < 80 * 1024 {
+        input.extend_from_slice(
+            format!(
+                "{}\n",
+                json!({"type":"api-request-blob","sessionId":bad_id,"value":"x".repeat(4000)})
+            )
+            .as_bytes(),
+        );
+    }
+    input.extend_from_slice(corrupt);
+    let bad_path = temp.path().join(format!("projects/p/{bad_id}.jsonl"));
+    std::fs::write(&bad_path, &input).unwrap();
+    let healthy = format!(
+        "{}\n",
+        json!({"type":"user","sessionId":good_id,"cwd":temp.path().to_str().unwrap(),"message":{"content":"Healthy session"}})
+    );
+    let good_path = temp.path().join(format!("projects/p/{good_id}.jsonl"));
+    std::fs::write(&good_path, &healthy).unwrap();
+    let root = Root::open(temp.path()).unwrap();
+    let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
+    let items = read_claude_history_fixture(&root, &[temp.path().to_owned()], &mut budget).unwrap();
+    let rows = serde_json::to_value(&items).unwrap();
+    let rows = rows.as_array().unwrap();
+    assert_eq!(
+        rows.len(),
+        2,
+        "已证实归属的行保留，内容损坏不应中止整个来源"
+    );
+    let good = rows
+        .iter()
+        .find(|row| row["nativeSessionId"] == good_id)
+        .unwrap();
+    assert_eq!(good["title"], "Healthy session");
+    assert!(good["readFailure"].is_null());
+    let bad = rows
+        .iter()
+        .find(|row| row["nativeSessionId"] == bad_id)
+        .unwrap();
+    assert_eq!(bad["readFailure"], code);
+    assert_eq!(bad["metadataIncomplete"], true);
+    assert!(budget.history_metadata_incomplete());
+    assert_eq!(budget.history_read_failures(), vec![code]);
+    assert!(budget.rename_target_may_be_omitted(bad_id));
+    assert!(!budget.rename_target_may_be_omitted(good_id));
+    assert_eq!(std::fs::read(&bad_path).unwrap(), input);
+    assert_eq!(std::fs::read(&good_path).unwrap(), healthy.as_bytes());
+}
+
+// 新扩展区域的损坏 JSON 只标记对应会话，正常同源会话仍可刷新。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_ExpandedHeadInvalidJsonIsIsolated_070() {
+    assert_expanded_header_failure_is_isolated(b"{broken}\n", "SOURCE_INVALID");
+}
+
+// 新记录的非法 UTF-8 和转义 NUL 都必须保留单会话错误码。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_ExpandedHeadInvalidTextIsIsolated_071() {
+    for corrupt in [
+        b"\xff\n".as_slice(),
+        b"{\"type\":\"future\",\"value\":\"bad\\u0000text\"}\n",
+    ] {
+        assert_expanded_header_failure_is_isolated(corrupt, "SOURCE_INVALID_TEXT");
+    }
+}
+
+// 无换行 EOF 由完整头解析验证，不能在第二条错误路径升级为来源变化。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_ExpandedHeadInvalidEofIsIsolated_072() {
+    for (corrupt, code) in [
+        (b"{broken}".as_slice(), "SOURCE_INVALID"),
+        (b"\xff", "SOURCE_INVALID_TEXT"),
+        (
+            b"{\"type\":\"future\",\"value\":\"bad\\u0000text\"}",
+            "SOURCE_INVALID_TEXT",
+        ),
+    ] {
+        assert_expanded_header_failure_is_isolated(corrupt, code);
+    }
+}
+
+// 即使新增区域损坏，第二轮旧头中的身份替换也必须先按来源级拒绝。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_ChangedHeaderBeforeCorruptExpansionFailsClosed_073() {
+    for (replacement, code) in [
+        (
+            json!({"type":"user","sessionId":"fixture","cwd":"/synthetic/changed","message":{"content":""}}),
+            "SOURCE_CHANGED",
+        ),
+        (
+            json!({"type":"user","sessionId":"other","cwd":"/synthetic/project","message":{"content":""}}),
+            "SOURCE_AMBIGUOUS",
+        ),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(temp.path().join("projects/p")).unwrap();
+        let mut padding = String::new();
+        while padding.len() < 80 * 1024 {
+            padding.push_str(&format!(
+                "{}\n",
+                json!({"type":"api-request-blob","sessionId":"fixture","value":"x".repeat(4000)})
+            ));
+        }
+        let original = format!(
+            "{}\n{padding}",
+            json!({"type":"user","sessionId":"fixture","cwd":temp.path().to_str().unwrap(),"message":{"content":""}})
+        );
+        let relative = "projects/p/fixture.jsonl";
+        let path = temp.path().join(relative);
+        std::fs::write(&path, original).unwrap();
+        let root = Root::open(temp.path()).unwrap();
+        let paths = [temp.path().to_owned()];
+        let projects = granted(&root, &paths);
+        let catalog = Catalog {
+            cli: CliKind::Claude,
+            root: &root,
+            projects: &projects,
+            user_config: None,
+            check: &|| Ok(()),
+        };
+        let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
+        let (bytes, incomplete) = catalog
+            .history_prefix(relative, &mut budget)
+            .unwrap()
+            .unwrap();
+        assert!(incomplete);
+        let end = bytes.iter().rposition(|byte| *byte == b'\n').unwrap();
+        let mut transcript =
+            parse_metadata(relative, CliKind::Claude, text(&bytes[..=end]).unwrap()).unwrap();
+        transcript.observation_bytes = bytes.len();
+        std::fs::write(&path, format!("{replacement}\n{padding}{{broken}}\n")).unwrap();
+        assert_eq!(
+            enrich_claude_title(&catalog, &transcript, &mut budget).err(),
+            Some(code)
+        );
+        assert!(budget.history_read_failures().is_empty());
+    }
+}
+
+// 可隔离的内容错误也必须经过 Catalog 的读后授权复核。
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_ContentFailureStillChecksAuthority_074() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(temp.path().join("fixture.jsonl"), vec![b' '; 128 * 1024]).unwrap();
+    let root = Root::open(temp.path()).unwrap();
+    let revoked = std::cell::Cell::new(false);
+    let check = || {
+        if revoked.get() {
+            Err("SCOPE_REVOKED")
+        } else {
+            Ok(())
+        }
+    };
+    let catalog = Catalog {
+        cli: CliKind::Claude,
+        root: &root,
+        projects: &[],
+        user_config: None,
+        check: &check,
+    };
+    let mut observe = |bytes: &[u8]| {
+        if bytes.len() <= 64 * 1024 {
+            return Ok(false);
+        }
+        revoked.set(true);
+        Err("SOURCE_INVALID")
+    };
+    let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
+    assert_eq!(
+        catalog
+            .history_title_tail("fixture.jsonl", 64 * 1024, &mut budget, &mut observe)
+            .err(),
+        Some("SCOPE_REVOKED")
+    );
+}
+
+// 有效的新记录已证明身份冲突时，后继内容错误不能把它降级为单会话失败。
+fn assert_expanded_identity_precedes_corruption(corrupt: &[u8]) {
+    for gap in [0, 8192] {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(temp.path().join("projects/p")).unwrap();
+        let mut input = format!(
+            "{}\n",
+            json!({"type":"user","sessionId":"fixture","cwd":temp.path().to_str().unwrap(),"message":{"content":""}})
+        ).into_bytes();
+        while input.len() < 80 * 1024 {
+            input.extend_from_slice(
+                format!(
+                    "{}\n",
+                    json!({"type":"api-request-blob","value":"x".repeat(4000)})
+                )
+                .as_bytes(),
+            );
+        }
+        input.extend_from_slice(
+            format!(
+                "{}\n",
+                json!({"type":"assistant","sessionId":"other","message":{"content":"conflict"}})
+            )
+            .as_bytes(),
+        );
+        input.extend(std::iter::repeat_n(b'\n', gap));
+        input.extend_from_slice(corrupt);
+        let path = temp.path().join("projects/p/fixture.jsonl");
+        std::fs::write(&path, &input).unwrap();
+        let root = Root::open(temp.path()).unwrap();
+        let mut budget = Budget::new(super::super::super::scoped_fs::Limits::default());
+        assert_eq!(
+            read_claude_history_fixture(&root, &[temp.path().to_owned()], &mut budget).err(),
+            Some("SOURCE_AMBIGUOUS"),
+            "已观察的身份冲突不能被后继损坏内容掩盖，gap={gap}"
+        );
+        assert!(budget.history_read_failures().is_empty());
+        assert_eq!(std::fs::read(path).unwrap(), input);
+    }
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_ExpandedIdentityBeforeInvalidJsonFailsClosed_075() {
+    for corrupt in [b"{broken}\n".as_slice(), b"{broken}"] {
+        assert_expanded_identity_precedes_corruption(corrupt);
+    }
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn HistoryClaude_ExpandedIdentityBeforeInvalidTextFailsClosed_076() {
+    for corrupt in [
+        b"\xff\n".as_slice(),
+        b"\xff",
+        b"{\"value\":\"bad\\u0000text\"}\n",
+    ] {
+        assert_expanded_identity_precedes_corruption(corrupt);
+    }
 }

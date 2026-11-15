@@ -874,6 +874,38 @@ fn enrich_claude_title(
     transcript: &Transcript,
     budget: &mut Budget,
 ) -> ReadResult<BoundedTitleResult> {
+    let mut probe = claude_probe(false, Some(&transcript.id));
+    let mut revalidated = false;
+    let mut observe = |bytes: &[u8]| {
+        if !revalidated && bytes.len() >= transcript.observation_bytes {
+            // 先重新验证第一轮完整记录；新扩展区域的内容错误不能掩盖旧身份变化。
+            let end = bytes[..transcript.observation_bytes]
+                .iter()
+                .rposition(|byte| *byte == b'\n')
+                .ok_or("SOURCE_CHANGED")?
+                + 1;
+            let previous = text(&bytes[..end])
+                .and_then(|input| parse_metadata(&transcript.source_path, CliKind::Claude, input))
+                .map_err(|code| {
+                    if code == "SOURCE_AMBIGUOUS" {
+                        code
+                    } else {
+                        "SOURCE_CHANGED"
+                    }
+                })?;
+            if previous.id != transcript.id || previous.cwd != transcript.cwd {
+                return Err("SOURCE_CHANGED");
+            }
+            revalidated = true;
+        }
+        probe(bytes).map_err(|code| {
+            if !revalidated && code != "SOURCE_AMBIGUOUS" {
+                "SOURCE_CHANGED"
+            } else {
+                code
+            }
+        })
+    };
     let Some(TitleTail {
         header,
         tail,
@@ -883,6 +915,7 @@ fn enrich_claude_title(
         &transcript.source_path,
         transcript.observation_bytes,
         budget,
+        &mut observe,
     )?
     else {
         return Ok((None, None, None));
@@ -897,15 +930,9 @@ fn enrich_claude_title(
             .ok_or("SOURCE_CHANGED")?
             + 1
     };
+    // 已验证身份头之后的新增记录（含无换行 EOF）保留原内容错误，按单会话披露。
     let observed = text(&header[..end])
-        .and_then(|input| parse_metadata(&transcript.source_path, CliKind::Claude, input))
-        .map_err(|code| {
-            if code == "SOURCE_AMBIGUOUS" {
-                code
-            } else {
-                "SOURCE_CHANGED"
-            }
-        })?;
+        .and_then(|input| parse_metadata(&transcript.source_path, CliKind::Claude, input))?;
     if observed.id != transcript.id || observed.cwd != transcript.cwd {
         return Err("SOURCE_CHANGED");
     }
@@ -983,13 +1010,16 @@ fn claude_project_cwd(value: &Value) -> Option<&str> {
 }
 
 pub(super) fn claude_metadata_probe() -> impl FnMut(&[u8]) -> ReadResult<bool> {
-    claude_probe(false)
+    claude_probe(false, None)
 }
 // 常见短头保持原行为；超过 64KiB 且身份已知后，把找标题留给可选头尾阶段。
 pub(super) fn claude_initial_metadata_probe() -> impl FnMut(&[u8]) -> ReadResult<bool> {
-    claude_probe(true)
+    claude_probe(true, None)
 }
-fn claude_probe(short_head: bool) -> impl FnMut(&[u8]) -> ReadResult<bool> {
+fn claude_probe(
+    short_head: bool,
+    session_id: Option<&str>,
+) -> impl FnMut(&[u8]) -> ReadResult<bool> + '_ {
     let mut searched = 0;
     let mut line_start = 0;
     let mut cwd_observed = false;
@@ -1010,6 +1040,10 @@ fn claude_probe(short_head: bool) -> impl FnMut(&[u8]) -> ReadResult<bool> {
             validate_value(&value)?;
             if !value.is_object() {
                 return Err("SOURCE_INVALID");
+            }
+            // 扩展区先观察到的有效身份冲突，不能被后继内容错误降级。
+            if let Some(session_id) = session_id {
+                claude_observed_session_id(&value, session_id)?;
             }
             let record = value["type"].as_str();
             cwd_observed |= claude_project_cwd(&value).is_some();

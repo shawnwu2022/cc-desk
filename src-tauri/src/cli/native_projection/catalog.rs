@@ -86,15 +86,13 @@ impl Catalog<'_> {
         path: &str,
         header_bytes: usize,
         budget: &mut Budget,
+        observe: &mut dyn FnMut(&[u8]) -> ReadResult<bool>,
     ) -> ReadResult<Option<TitleTail>> {
-        let result = self.root.history_title_tail(
-            Path::new(path),
-            header_bytes,
-            budget,
-            &mut history::claude_metadata_probe(),
-        )?;
+        let result = self
+            .root
+            .history_title_tail(Path::new(path), header_bytes, budget, observe);
         self.check()?;
-        Ok(result)
+        result
     }
 }
 pub(crate) fn read(
