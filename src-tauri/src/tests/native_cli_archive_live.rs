@@ -177,3 +177,94 @@ fn NativeArchiveLive_InstalledCodexLockMatrix_001() {
         println!("NATIVE_ARCHIVE_LIVE_LOCK {report}");
     }
 }
+
+#[test]
+#[ignore = "explicit isolated installed Codex canonical cwd experiment only"]
+fn NativeArchiveLive_CanonicalCwdMatrix_004() {
+    assert_eq!(
+        std::env::var("CC_DESK_NATIVE_ARCHIVE_LIVE_GO").as_deref(),
+        Ok("archive-canonical-cwd-matrix")
+    );
+    for compressed in [false, true] {
+        system_configuration_absent().unwrap();
+        let fixture = Arc::new(Fixture::new().unwrap());
+        let executable_lease = verified_executable().unwrap();
+        let configuration_lease = OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ.0)
+            .open(fixture.root.join("codex-home/config.toml"))
+            .unwrap();
+        let backend = BackendFixture::new(fixture.clone(), BackendProgram::InstalledPinned);
+        initialize_fixture(&fixture, &backend.active_id);
+        let original = fs::read(&backend.active_rollout).unwrap();
+        let canonical = fs::canonicalize(&fixture.project).unwrap();
+        assert_ne!(canonical, fixture.project);
+        // 仅改本次合成库，重现现场 SQLite 规范 cwd 与 rollout 原始 cwd 的差异。
+        let database = rusqlite::Connection::open_with_flags(
+            fixture.root.join("sqlite/state_5.sqlite"),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
+        )
+        .unwrap();
+        assert_eq!(
+            database
+                .execute(
+                    "UPDATE threads SET cwd = ?1 WHERE id = ?2",
+                    rusqlite::params![canonical.to_str().unwrap(), backend.active_id],
+                )
+                .unwrap(),
+            1
+        );
+        drop(database);
+        let actual_rollout = if compressed {
+            let file = backend.active_rollout.with_extension("jsonl.zst");
+            fs::write(
+                &file,
+                zstd::stream::encode_all(original.as_slice(), 1).unwrap(),
+            )
+            .unwrap();
+            fs::remove_file(&backend.active_rollout).unwrap();
+            file
+        } else {
+            backend.active_rollout.clone()
+        };
+        let result = backend.service.archive(
+            &backend.caller,
+            ArchiveRequest {
+                operation_id: uuid::Uuid::new_v4().to_string(),
+                session_key: serde_json::json!([
+                    "local",
+                    "codex",
+                    backend.source.source_root_key,
+                    backend.active_id
+                ])
+                .to_string(),
+                source: backend.source.clone(),
+            },
+        );
+        backend.launch.wait_for_commands();
+        let receipt = result.unwrap();
+        assert!(receipt.root_archived);
+        assert!(!actual_rollout.exists());
+        let archived = fixture
+            .root
+            .join("codex-home/archived_sessions")
+            .join(actual_rollout.file_name().unwrap());
+        let archived_bytes = fs::read(&archived).unwrap();
+        let restored = if compressed {
+            zstd::stream::decode_all(archived_bytes.as_slice()).unwrap()
+        } else {
+            archived_bytes
+        };
+        assert_eq!(restored, original);
+        assert_eq!(fs::read(&backend.rollout).unwrap(), backend.original);
+        assert!(backend.repository.admission().check_metadata_idle().is_ok());
+        system_configuration_absent().unwrap();
+        println!("NATIVE_ARCHIVE_CANONICAL_CWD version={CODEX_VERSION} compressed={compressed} root_verified=true unrelated_unchanged=true");
+        let temporary_root = fixture.root.clone();
+        drop(backend);
+        drop(configuration_lease);
+        drop(executable_lease);
+        drop(fixture);
+        fs::remove_dir_all(temporary_root).unwrap();
+    }
+}

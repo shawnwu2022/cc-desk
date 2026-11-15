@@ -1852,3 +1852,114 @@ fn OpenCodeArchive_PinsBeforeReadingIdentity_010() {
     drop(pins);
     fs::rename(&filename, &moved).unwrap();
 }
+
+#[test]
+#[cfg(windows)]
+#[allow(non_snake_case)]
+fn NativeArchive_CanonicalCwdUsesVerifiedProjectSpellings_049() {
+    for compressed in [false, true] {
+        for admit_canonical in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let project = tempfile::tempdir().unwrap();
+            let foreign = tempfile::tempdir().unwrap();
+            let selected = project.path().to_owned();
+            let canonical = fs::canonicalize(&selected).unwrap();
+            assert_ne!(selected, canonical);
+            let registry = ScopeRegistry::new(4);
+            let live = Arc::new(AtomicBool::new(true));
+            let mut g = grant(root.path(), "unused", live.clone());
+            g.cli = CliKind::Codex;
+            let mut paths = vec![selected.clone()];
+            if admit_canonical {
+                paths.push(canonical.clone());
+            }
+            g.projects = vec![
+                AdmittedProject {
+                    id: "project".into(),
+                    root: Root::open(&selected).unwrap(),
+                    paths,
+                },
+                AdmittedProject {
+                    id: "foreign".into(),
+                    root: Root::open(foreign.path()).unwrap(),
+                    paths: vec![
+                        foreign.path().to_owned(),
+                        fs::canonicalize(foreign.path()).unwrap(),
+                    ],
+                },
+            ];
+            if let ScopeTarget::Profile { project_ids, .. } = &mut g.target {
+                *project_ids = vec!["project".into(), "foreign".into()];
+            }
+            fs::create_dir(root.path().join("sessions")).unwrap();
+            fs::create_dir(root.path().join("archived_sessions")).unwrap();
+            let id = "00000000-0000-4000-8000-000000000049";
+            let logical = root.path().join("sessions/rollout.jsonl");
+            let file = if compressed {
+                logical.with_extension("jsonl.zst")
+            } else {
+                logical.clone()
+            };
+            let metadata = serde_json::json!({"type":"session_meta","payload":{"id":id,"cwd":selected,"source":"cli"}});
+            let bytes = format!("{metadata}\n");
+            fs::write(
+                &file,
+                if compressed {
+                    zstd::stream::encode_all(bytes.as_bytes(), 1).unwrap()
+                } else {
+                    bytes.as_bytes().to_vec()
+                },
+            )
+            .unwrap();
+            let source = registry.register(g).unwrap();
+            let key = serde_json::json!(["local", "codex", source.source_root_key, id]).to_string();
+            let authority = registry.authorize_rename(&owner(), &source, &key).unwrap();
+            let selected_thread = serde_json::json!({"id":id,"cwd":selected,"path":logical});
+            authority.check_thread(&selected_thread).unwrap();
+            // 原生 SQLite 可使用规范 cwd，rollout 仍保留已选项目的原始拼法。
+            let thread = serde_json::json!({"id":id,"cwd":canonical,"path":logical});
+            if !admit_canonical {
+                assert_eq!(
+                    authority.check_thread(&thread).unwrap_err().code,
+                    "SESSION_ORIGIN_AMBIGUOUS"
+                );
+                drop(authority);
+                drop(registry);
+                continue;
+            }
+            authority.check_thread(&thread).unwrap();
+            for wrong_cwd in [
+                fs::canonicalize(foreign.path()).unwrap(),
+                std::path::PathBuf::from(format!("{}-neighbor", canonical.display())),
+            ] {
+                let mut wrong = thread.clone();
+                wrong["cwd"] = serde_json::json!(wrong_cwd);
+                assert_eq!(
+                    authority.check_thread(&wrong).unwrap_err().code,
+                    "SESSION_ORIGIN_AMBIGUOUS"
+                );
+            }
+            live.store(false, Ordering::SeqCst);
+            assert_eq!(
+                authority.check_thread(&thread).unwrap_err().code,
+                "SCOPE_REVOKED"
+            );
+            live.store(true, Ordering::SeqCst);
+            let archived = root
+                .path()
+                .join("archived_sessions")
+                .join(file.file_name().unwrap());
+            fs::rename(&file, &archived).unwrap();
+            let mut after = thread;
+            after["path"] = serde_json::json!(root.path().join("archived_sessions/rollout.jsonl"));
+            authority.check_archived_thread(&after).unwrap();
+            live.store(false, Ordering::SeqCst);
+            assert_eq!(
+                authority.check_archived_thread(&after).unwrap_err().code,
+                "SCOPE_REVOKED"
+            );
+            drop(authority);
+            drop(registry);
+        }
+    }
+}

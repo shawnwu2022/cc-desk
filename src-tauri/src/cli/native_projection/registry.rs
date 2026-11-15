@@ -254,9 +254,31 @@ impl SessionAuthority {
         compressed_fallback: bool,
     ) -> Result<(), SafeError> {
         self.current()?;
-        if thread["id"].as_str() != Some(self.native_id.as_str())
-            || thread["cwd"].as_str() != Some(self.cwd.as_str())
-        {
+        // Codex 的 SQLite cwd 可是 Windows 规范路径，而 rollout 保留原注册拼法。
+        // 只采用 scope 已按目录身份核验的同一项目别名，不解析原生返回的任意路径。
+        let cwd_matches = thread["cwd"].as_str().is_some_and(|cwd| {
+            if cwd == self.cwd {
+                return true;
+            }
+            #[cfg(windows)]
+            {
+                self.scope.grant.projects.iter().any(|project| {
+                    project
+                        .paths
+                        .iter()
+                        .any(|path| path == std::path::Path::new(&self.cwd))
+                        && project
+                            .paths
+                            .iter()
+                            .any(|path| path == std::path::Path::new(cwd))
+                })
+            }
+            #[cfg(not(windows))]
+            {
+                false
+            }
+        });
+        if thread["id"].as_str() != Some(self.native_id.as_str()) || !cwd_matches {
             return Err(safe("SESSION_ORIGIN_AMBIGUOUS"));
         }
         let path = thread["path"]
