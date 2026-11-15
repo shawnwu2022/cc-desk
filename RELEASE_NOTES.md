@@ -4,6 +4,18 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
+## [0.27.0-rc.10]
+
+Fixed
+
+- Keep healthy Claude conversations visible when another transcript contains malformed JSON or invalid text during extended title lookup. Retain the affected conversation's last proven list entry and report its read failure.
+- Preserve rejection of conflicting session identities, changed files and revoked source access.
+
+Important
+
+- This is a prerelease. Stable Latest remains unchanged. No automatic migration, archive, restore or deletion is performed.
+- Validation used isolated transcript fixtures. Live model sessions, installed WebView2 acceptance, native All, D20 and signed installation/return remain separately unverified. Updater signatures are not Windows Authenticode.
+
 ## [0.27.0-rc.9]
 
 Fixed
