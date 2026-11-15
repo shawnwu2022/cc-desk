@@ -552,6 +552,13 @@ Initial header bytes, repeated head bytes (including partial-record overread),
 and tail bytes all share the existing 2 MiB/file and 512 MiB/read limits. Expanded
 head titles/timestamps remain usable when the tail contains no title. This avoids
 reading a >1 MiB title-discovery prefix twice and silently skipping a newer name.
+The original complete header records are revalidated before expanded content is
+accepted. Invalid JSON/text in newly observed records, including an EOF record
+without a newline, stays a per-session read failure: retain the proven row with
+its fixed readFailure code and continue refreshing healthy siblings. Even a
+content failure must pass same-read file/root stability and authority checks
+before isolation. A changed original identity/header, ambiguous session IDs,
+links, root replacement and source-wide budget failures still reject the source.
 
 After a Claude rename receipt, each refreshed same-record projection must contain
 the exact target and display the requested title (at the history DTO’s 512-byte

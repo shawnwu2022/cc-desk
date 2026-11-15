@@ -751,6 +751,7 @@ impl Root {
         };
         let mut header = Vec::new();
         let mut requested = 0;
+        let mut observation_error = None;
         while header.len() < head_cap {
             budget.checkpoint()?;
             let next =
@@ -761,13 +762,15 @@ impl Root {
             read.map_err(read_error)?;
             requested += next;
             let complete = match observe.as_mut() {
-                Some(probe) => probe(&header).map_err(|code| {
-                    if code == "SOURCE_AMBIGUOUS" {
-                        code
-                    } else {
-                        "SOURCE_CHANGED"
+                Some(probe) => match probe(&header) {
+                    Ok(complete) => complete,
+                    Err(code @ ("SOURCE_INVALID" | "SOURCE_INVALID_TEXT")) => {
+                        // 内容失败只能在文件与来源复核后隔离，不能遮蔽并发变化。
+                        observation_error = Some(code);
+                        break;
                     }
-                })?,
+                    Err(code) => return Err(code),
+                },
                 None => true,
             };
             // 更早出现的标题不能缩短对第一轮已观察范围的重新验证。
@@ -796,6 +799,9 @@ impl Root {
         }
         budget.checkpoint()?;
         self.current()?;
+        if let Some(code) = observation_error {
+            return Err(code);
+        }
         Ok(Some(TitleTail {
             header_complete: header.len() as u64 == before.len(),
             header,
