@@ -1,6 +1,10 @@
 {
   "schemaVersion": 1,
   "releases": {
+    "0.27.0-rc.11": {
+      "en": "Fixed\n\n- Fix Codex archive being rejected as an ambiguous source when Windows stores two verified spellings of the same project path. This also covers compressed conversation histories.\n- Keep genuine cross-project, changed-source and uncertain-operation checks without adding another archive confirmation.\n\nImportant\n\n- This is a prerelease. Stable Latest remains unchanged. No automatic migration, archive, restore or deletion is performed.\n- Verification used isolated Codex 0.169.0 histories. Live user sessions, installed WebView2 acceptance, native All, D20 and signed installation/return remain separately unverified. Updater signatures are not Windows Authenticode.",
+      "zh": "修复\n\n- 修复 Windows 将同一项目保存为两种已验证路径拼法时，Codex 归档被误判为来源不明确的问题，同时覆盖压缩会话历史。\n- 保留真实跨项目、来源变化及结果不确定时的检查，不新增归档确认弹窗。\n\n重要说明\n\n- 这是预发布版本，稳定 Latest 保持不变。不自动迁移、归档、恢复或删除数据。\n- 验证使用隔离的 Codex 0.169.0 历史。真实用户会话、安装版 WebView2、原始 native All、D20 和签名安装/返回仍需独立验证。Updater 签名不等同于 Windows Authenticode。"
+    },
     "0.27.0-rc.10": {
       "en": "Fixed\n\n- Keep healthy Claude conversations visible when another transcript contains malformed JSON or invalid text during extended title lookup. Retain the affected conversation's last proven list entry and report its read failure.\n- Preserve rejection of conflicting session identities, changed files and revoked source access.\n\nImportant\n\n- This is a prerelease. Stable Latest remains unchanged. No automatic migration, archive, restore or deletion is performed.\n- Validation used isolated transcript fixtures. Live model sessions, installed WebView2 acceptance, native All, D20 and signed installation/return remain separately unverified. Updater signatures are not Windows Authenticode.",
       "zh": "修复\n\n- Claude 扩展标题读取遇到某个会话的 JSON 或文本损坏时，其他正常会话仍可显示和刷新；保留受影响会话最后确认的列表记录，并明确报告读取失败。\n- 继续拒绝会话身份冲突、读取期间文件变化和来源访问权限失效。\n\n重要说明\n\n- 这是预发布版本，稳定 Latest 保持不变。不自动迁移、归档、恢复或删除数据。\n- 验证使用隔离的会话记录样本。真实模型会话、安装版 WebView2、原始 native All、D20 及签名安装/返回仍需独立验证。Updater 签名不等同于 Windows Authenticode。"

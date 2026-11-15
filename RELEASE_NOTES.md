@@ -4,6 +4,18 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
+## [0.27.0-rc.11]
+
+Fixed
+
+- Fix Codex archive being rejected as an ambiguous source when Windows stores two verified spellings of the same project path. This also covers compressed conversation histories.
+- Keep genuine cross-project, changed-source and uncertain-operation checks without adding another archive confirmation.
+
+Important
+
+- This is a prerelease. Stable Latest remains unchanged. No automatic migration, archive, restore or deletion is performed.
+- Verification used isolated Codex 0.169.0 histories. Live user sessions, installed WebView2 acceptance, native All, D20 and signed installation/return remain separately unverified. Updater signatures are not Windows Authenticode.
+
 ## [0.27.0-rc.10]
 
 Fixed
