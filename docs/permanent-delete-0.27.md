@@ -1,5 +1,19 @@
 # 0.27 永久删除：当前实现与明确缺口
 
+## 当前交互契约：0.27.0-rc.12（2026-11-16）
+
+用户后续明确要求移除归档/删除二次确认。**首次点击可用的永久删除图标就是删除授权，不是只读预览入口。** 后台仍执行准确目标预检并取得一次性票据；成功后直接执行原生删除，不等待风险勾选或额外确认。操作详情保留不可恢复、执行时动态子树和原生维护风险说明，但它不是保证可停留审阅的发送前确认窗口。不要通过点击删除来测试资格或查看目标。
+
+删除范围仍是准确 profile 的原生根及执行时原生子树，后代成员未冻结，可能发生原生关联维护；不能保证只删一个文件、全部后代已清除或错误表示无改动。取消/导航/来源变化只能撤销尚未发送的操作，已发送请求由原账本收口，不回滚、不重放。后端身份、资格、活动保护、一次性票据和发送前复核不变；`cli_confirm_session_delete` 的协议字段仍保留，由明确删除点击驱动，不表示界面仍有双确认。
+
+结果中的“重新尝试永久删除 / Retry permanent deletion”是新的删除意图，预检成功即执行。未知结果必须先只读核查；只有既有账本允许新操作时才提供重试，绝不自动重放。历史结果入口与“核查结果”保持只读。产品归档抽屉只提供逐行删除图标，不恢复下方批量模块；保留批量组件的显式执行按钮同样直接执行并保留逐项停止/回执边界。
+
+当前验收须覆盖：中英首次点击直接执行且无二次确认/勾选；预检期间取消、换目标或来源失效不发 mutation；重复点击不重复执行；准确 ACK 后刷新原来源；unknown/partial 按原账本核查；重试按钮明确说明永久删除并产生新操作；历史结果只读。组件与合成浏览器回归不等于真实用户会话、安装版 WebView2 或完整原生动态子树验收。
+
+## 历史实现与验收记录（不代表当前确认流程）
+
+以下按阶段保留旧设计和原始证据。有关“二次确认”“双勾选”“只读预览入口”的旧描述已被上面的 RC12 契约取代；原阶段的通过结果不能充当新交互验收。
+
 2026-11-06 用户明确要求永久删除来清理累计 session，并要求二次确认和风险提示。此要求替代此前优先隐藏/软归档的方向；隐藏、归档、备份都不作为永久删除交付。开发仅使用本任务合成数据，不删除真实用户数据，不连接用户正在使用的服务或申请凭据。
 
 产品实现提交 `6de019a2ee22528d1c391e76c449c968c9846140`；最终命令、408项前端/7项Rust及独审与失败证据见 [阶段审计](../.audit/v027-stage8-permanent-delete.md)。
@@ -32,13 +46,13 @@
 - [`acquire_writer_locks`](https://github.com/openai/codex/blob/086ccc833bc9cf01024ad2dd6af7dbd421b6bf9a/codex-rs/thread-store/src/local/mod.rs) 逐项 acquire，任一失败退出；[`writer_lock`](https://github.com/openai/codex/blob/086ccc833bc9cf01024ad2dd6af7dbd421b6bf9a/codex-rs/rollout/src/writer_lock.rs#L44) 使用实际文件锁。短命 helper 不发送 resume/turn，可避免它自己加载活动线程；阶段10已做持合成原生锁的真实CLI未取得成功回执/原件保留观察，未启动真实模型writer，不等同完整busy演练。
 - 协议源码确实提供实验性的 `parentThreadId`、`ancestorThreadId`、`attachedToThreadId`；生成 JSON schema 缺字段不证明接口不存在。可按实际能力校验做持久关系观察，但不能把两分区、多页查询当原子快照。预览后、请求重新求子树前发生的外部变化，仍可能扩大范围；writer 锁保证执行一致性，不是事前确认集合的 CAS。
 
-当前不再把缺少 expected IDs 单独当作永久阻塞。窄契约按准确根及原生子树确认；普通 resume/unarchive 先获取同一 thread writer 锁，spawn 先持久化关系边再创建 child 存储，可为活动/引用保护提供实际依据。但这不是未来 spawn 图的租约：外部 unarchive 若在最后复核后先完成并释放锁，删除可能处理其后的原生子树；不能承诺只处理预览时固定成员或根始终保持 archived。界面对此明确二次确认，已观察到变化则拒旧票据。没有自行占用 native writer 锁再与 CLI 抢同锁。
+当前不再把缺少 expected IDs 单独当作永久阻塞。窄契约按准确根及原生子树确认；普通 resume/unarchive 先获取同一 thread writer 锁，spawn 先持久化关系边再创建 child 存储，可为活动/引用保护提供实际依据。但这不是未来 spawn 图的租约：外部 unarchive 若在最后复核后先完成并释放锁，删除可能处理其后的原生子树；不能承诺只处理预览时固定成员或根始终保持 archived。当前交互以明确删除点击授权此范围并在操作详情保留风险说明，不再二次确认；已观察到变化仍拒旧票据。没有自行占用 native writer 锁再与 CLI 抢同锁。
 
 同一精确 configured-profile 自己选择的原生 store 是本次授权语义，包含 CLI 自行配置的 graph DB；不要求 `sqlite_home` 物理等于 `CODEX_HOME`，也不写命令行覆盖它。[管理 requirements](https://github.com/openai/codex/blob/086ccc833bc9cf01024ad2dd6af7dbd421b6bf9a/codex-rs/core/src/config/requirements.rs#L13) 可覆盖普通配置，故不能声称 `-c` 或最新 config/read 已证明启动数据库身份。受控 helper 的 [initialize.codexHome](https://github.com/openai/codex/blob/086ccc833bc9cf01024ad2dd6af7dbd421b6bf9a/codex-rs/app-server-protocol/src/protocol/v1.rs#L76) 来自实际启动 Config；当前将其物理 Root key 与 held authority 核对，再核对 thread/read 的实际 rollout 路径、首行身份和 cwd。缺失、不匹配或不能实核时不发 delete；没有版本白名单。
 
 Windows 还持有非 reparse 的 sessions/archived_sessions 容器句柄至整棵 own Job 进程树实际退出，拒绝目录替换；直接 launcher reap 不等于 native 后代结束。新 helper suspended 创建后加入 Job 再恢复，实际释放必须 root 已 reap 且 Job.ActiveProcesses=0，未知继续保留 owner/freeze。当前还要求 Desk 全局无其他活动/准备/未知 CLI，执行期间冻结新 admission，不自行停止其他会话。Unix 缺等价已实现保护则 unsupported，无 legacy fallback。
 
-原生 [host cleanup](https://github.com/openai/codex/blob/086ccc833bc9cf01024ad2dd6af7dbd421b6bf9a/codex-rs/core/src/thread_manager.rs#L565) 正常按候选 ID 清消息板；但 [board 数据库损坏恢复](https://github.com/openai/codex/blob/086ccc833bc9cf01024ad2dd6af7dbd421b6bf9a/codex-rs/message-board/src/local/lifecycle.rs#L42) 会备份并重建共享库，可能影响其他会话 board 可用性。启动还可运行 migration/compression；“没有 resume/turn”不表示没有后台维护写。二次确认明确关联维护风险，正常 ACK 后先 EOF 收尾，原时限后只终止本次 Job，未 settled 不释放保护。错误不等于无改动；没有保证对同用户恶意任意文件改名的强原子隔离。
+原生 [host cleanup](https://github.com/openai/codex/blob/086ccc833bc9cf01024ad2dd6af7dbd421b6bf9a/codex-rs/core/src/thread_manager.rs#L565) 正常按候选 ID 清消息板；但 [board 数据库损坏恢复](https://github.com/openai/codex/blob/086ccc833bc9cf01024ad2dd6af7dbd421b6bf9a/codex-rs/message-board/src/local/lifecycle.rs#L42) 会备份并重建共享库，可能影响其他会话 board 可用性。启动还可运行 migration/compression；“没有 resume/turn”不表示没有后台维护写。当前操作详情继续说明关联维护风险，但不再提供二次确认等待；正常 ACK 后先 EOF 收尾，原时限后只终止本次 Job，未 settled 不释放保护。错误不等于无改动；没有保证对同用户恶意任意文件改名的强原子隔离。
 
 早期阶段3安装版本探测为0.166.0；阶段10现有二进制实际探测为 **0.167.0**，SHA256 `edfdd48f8b458af0906e507b4cb05217b326c3d6e515e9f024e05e3b8d650f70`，本任务未安装或升级它。实际匹配上述086ccc来源，另核对关键配置/认证/初始化差异，未用旧0.166分析冒充当前行为。
 
@@ -86,7 +100,7 @@ fixture `v027-stage8-sdk-delete-AMYBUm` 和日志保留原状；脚本额外校�
 - `cli_preview_session_delete` 只读绑定 caller/document、profile/revision、held root、sessionKey/UUID 与当前观察；120 秒票据不等于冻结图。scope 明确 native-subtree，knownDescendantCount=null，不编造列表。
 - `cli_confirm_session_delete` 必须原 previewId、operationId 和两个 true ack；确认前 fresh 复核，变化消费旧票据。同 operationId/参数只返回原结果，不扩大范围；未知物理 Root+UUID 还跨 profile/caller/UUID 大小写保护，不可换配置盲重试。
 - 尚未 dispatch 时，来源、容器、观察或票据失效消费原预览并保存 `blocked / DELETE_PREVIEW_CHANGED` 回执，只读 inspect 可返回该结果。已经 claim 的操作不会被迟到失效改写为 blocked；必须保留已有回执或 unknown，不能重新发出删除。
-- `cli_inspect_session_delete` 只读查原操作，不调用删除。区分 acknowledged、partial、unknown、blocked、unsupported；native ACK 单独保存，owner settled 前仍不报完成。没有 ACK、根缺失仍 unknown；owner 已 settled 且根仍在可报告 partial，但只有只读检查后、用户主动新预览及再次双确认才可重试，不自动重放。
+- `cli_inspect_session_delete` 只读查原操作，不调用删除。区分 acknowledged、partial、unknown、blocked、unsupported；native ACK 单独保存，owner settled 前仍不报完成。没有 ACK、根缺失仍 unknown；owner 已 settled 且根仍在可报告 partial，但只有只读检查后、用户明确点击“重新尝试永久删除”发起新预检才可重试，不自动重放。
 - inspect 首次协调为 acknowledged 后，界面刷新操作最初保存的准确历史来源和项目；切换复核目标不改变刷新对象。历史读取失败保留最后完整缓存并显示错误，仍刷新对应目录，不把刷新失败改写为删除失败。
 - Desk 标签/覆盖元数据可能保留；没有宣称清掉全局日志、外部附件、项目文件或远端副本。原生不返回失败时逐项清单，后代与关联数据仍标 unverified。
 
