@@ -197,3 +197,6 @@ fn DelegatedNative_ForeignResourceConsentCannotCapture_006() {
     assert!(cleanup_first.close());
     assert!(cleanup_second.close());
 }
+
+#[path = "native_cli_delegated_network.rs"]
+mod network;

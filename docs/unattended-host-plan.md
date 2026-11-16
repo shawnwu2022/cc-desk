@@ -323,3 +323,78 @@ the final Clippy expression simplification; owner-verified reran that final sour
 Independent read-only review accepted the local retirement boundary and the
 stronger last-Arc budget. No full Host/App suite, phone acceptance or production
 authority activation is claimed by these focused results.
+
+## Stage 3b-2a progress: sealed first-channel adoption
+
+Implemented a separate network-attempt capability, stable session clock domain,
+sealed prepared-channel brand and mutual exclusion in the original service
+reservation/HostCheckout. Original producer adoption is consuming and occurs only
+once. Normal disconnect closes Starting as well as active admission but leaves
+the live slot occupied. No complete RetirementProof, second-generation rebind,
+material supplier, production consent, UI or retry scheduler is implemented here.
+
+Review found and closed a preparation race: disconnect before adoption previously
+saw no active entry and did nothing. The fixed clock domain now closes atomically
+before any active-entry lookup. Another review narrowed native create/adopt to the
+sealed prepared type rather than accepting an arbitrary RunningChannel.
+
+Actual tests exposed two distinct integration issues. Concurrent clock reads
+could return Owner Busy, and full resource checks could encounter the canonical
+checkout mutex. The network-only state segment now serializes its short checks;
+its private Attempt cannot be used as a local effect Ticket, and the single-live
+invariant prevents a valid blocking local effect from coexisting. Resource checks
+remain outside that lock. Independent lifecycle review established the original
+input's irreversible seal and exact captured identities as the mutex-free clock
+lifetime fence. Full native handoff/actor slot and scope checks were retained.
+Tests cover concurrent sampling, close while sampling waits, local-ticket exclusion,
+held resource/canonical mutexes and actual input seal/shutdown/natural reap.
+
+The next factory rejection was separately diagnosed: every precondition was true
+and authority.check succeeded, but the original factory returned Rejected. Its
+registry intentionally rejects a second Host for the entire process, including
+when its old Weak has expired. The fixture had attempted two fresh Hosts in a loop.
+Normal disconnect and revoke are now separately named cases, each executing the
+same test executable with --exact in a bounded child process. This follows the
+project's existing native subprocess pattern. The parent requires success and one
+actual passed case; timeout fails rather than claiming retirement. No factory,
+identity/incarnation, timeout assertion or production registry was relaxed/reset.
+
+Final same-source verification on WSK-MSI (2026-11-16): 91 distinct focused cases
+passed. Child isolation wrappers and their worker runs are not double-counted.
+All commands use `cargo test --offline --locked --manifest-path src-tauri/Cargo.toml
+--lib --features remote-host <filter> -- --test-threads=1` from the repository root:
+- DelegatedChannel_: 7 passed, 2,307 filtered; actual Node/PTY + TLS/AppBind channel
+  cases, including original remote input, disconnect/revoke without replay,
+  preserved local input, wrong binding/scope, late bind and Starting cancellation.
+- DelegatedNative_: 6 passed, 2,308 filtered (existing Stage 3a actual effects).
+- remote_unattended: 48 passed, 2,266 filtered (existing 43 + new network-clock 5).
+- remote_host::tests: 14 passed, 2,300 filtered (original custody/activation/exit).
+- HostCandidate_: 5 passed; HostPairingScope_: 2 passed.
+- NativeRemote_ActualAdmissionInstallsOriginalOwnNode_001: 1 passed; original
+  one-shot real producer adoption and same-Host rebind were not replaced by mocks.
+- publication_callback_close_cannot_commit_success: 1 passed.
+- HostStart_PhonePolledFirstOriginalNode_001, HostStart_HostInitiatedFirstOriginalNode_002,
+  HostStart_CancelAfterRegistration_003, HostStart_CloseAfterRegistration_004,
+  HostStart_NetworkClockRejectsOnce_005, HostStart_BeginClockPanicKeepsUnknown_006,
+  HostStart_AsyncNoPeerFailureCannotRetry_007: each passed in a fresh test process.
+
+`cargo clippy --offline --locked --manifest-path src-tauri/Cargo.toml --lib
+--features remote-host -- -D warnings` passed on the same source. Focused Rust 2021
+format and git whitespace checks passed. Existing project Cargo home/target were
+reused; no dependency or lockfile change was needed.
+
+Final logs: .audit/unattended-stage3b2a-final-*.log,
+unattended-stage3b2a-relay-final-*.log and unattended-stage3b2a-clippy-first.log.
+Earlier compile, clock/resource, factory and fixture-setup failures are separately
+preserved. The first HostCandidate run passed four parser tests but its real-start
+case lacked Relay fixture environment variables; the corrected five-case run is
+recorded separately, not a rewritten log. Relay regressions used only the existing
+local executable, verified against the earlier compatibility record with SHA256
+39E54732DE9EF9D5B7FAAE179148EF2852B27F490956D880C144C106323F8CB3, and repository
+public test certificates. CC_DESK_TEST_RELAY_ROOT/EXE were set only for those
+commands. No real credential or cloud service was touched.
+
+The earlier Stage 3b-1 full Host PTY-suite failure remains an unresolved publication
+gate. These 91 passing tests are not a full App/Host suite or real-phone acceptance.
+Stage 3b-2b must still retain and join original preparation/material/socket/PeerPump
+and Host facts before any complete receipt or second attempt can be issued.

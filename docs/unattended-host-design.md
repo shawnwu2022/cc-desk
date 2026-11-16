@@ -324,3 +324,49 @@ supplier retirement, and cannot construct a complete Stage 1 RetirementProof.
 There is no new consent constructor, supplier, service-mode integration, retry
 scheduler or direct phone-to-NativeLocalInput route. Prepared-channel branding and
 adoption/rebind within the same service reservation remain subsequent work.
+
+## Stage 3b-2a: sealed single-channel handoff (inactive)
+
+A DelegatedSession reserves the existing ServiceState activation slot and uses
+its original HostCheckout. One-shot activation, source registration, adoption
+and publication reject that delegated mode under the same service lock. The
+session holds only a Weak service reference. Its prepared channel is not an
+arbitrary RunningChannel wrapper: the only constructor is a test-only real
+TLS/AppBind/grant exchange using the session's owner-bound clock. Both session
+and attempt brands must match before the original producer can be handed off.
+The native create/adopt methods accept only that sealed prepared type.
+
+The original NativeProducerCheckout is consumed once. Even a failed later handoff
+retains the same permanent NativeHost; no replacement producer or factory reset
+is introduced. The registered PeerPump Arc is the original task, not another
+executor. Actor installation rechecks the original resource/scope and the channel
+fence. Control does not silently promote View. Revoke closes policy first;
+ordinary disconnect closes the attempt clock even while preparation is still
+Starting. Neither disconnect nor dropping an attempt releases the Stage 1 live
+slot. This slice deliberately has no complete receipt or second-generation rebind.
+
+The session keeps one stable Arc GrantClock domain. Initial binding is one-shot;
+there is no reset method. Clock sampling serializes only the short Stage 1 state
+check, retaining revision, epoch, deadline and final close checks. A network
+attempt owns a private Attempt, never a local effect Ticket. The single-live rule
+prevents a valid local effect from coexisting; stale local tickets are rejected
+before any IO. The resource callback executes before the Owner lock, and selected
+clock custody is cloned and unlocked before sampling. These invariants must be
+reviewed again before adding retirement receipts or clock rotation.
+
+After full capture, clock lifetime checks use the exact captured weak identities,
+supervisor shutdown/stop/reap atomics and the original input's atomic Complete
+status. They do not contend with the producer's canonical checkout mutex. In the
+current production lifecycle, resource is initialized once, never replaced or
+refilled; every production removal first retires the writer, whose retirement
+seals the original input. Canonical scope is initialized once. Actual native
+handoff and actor authorization retain their full resource-slot and scope checks.
+Any future resource-refill feature needs an irreversible invalidation gate rather
+than silently relying on this lifetime argument.
+
+Only fixed public test identities currently construct prepared channels. Complete
+production enrollment, key-fingerprint/issuer/pin validation and material supply
+are not implemented. There is no real phone approval, UI, restart authorization,
+retry scheduler or cloud change. Starting/prepared cancellation remains closed
+without any complete retirement claim; the later slice must retain and join all
+original preparation, transport and material tasks before issuing a receipt.

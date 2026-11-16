@@ -8,6 +8,8 @@ pub(crate) mod activation;
 pub(crate) mod driver;
 use crate::run_supervisor::NativeRunPin;
 use activation::{ActivationOperation, ActivationReservation};
+#[path = "remote_host/delegated.rs"]
+pub(crate) mod delegated;
 use cc_desk_remote_host::native_host::{NativeHost, WriterRetirement};
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -154,6 +156,8 @@ impl Drop for NativeShutdownCheckout<'_> {
 pub(crate) struct ServiceState {
     // Locked/off: no JS registration or production provider factory is exposed.
     host: HostSlot,
+    pub(crate) delegation: Option<Arc<()>>,
+    pub(crate) one_shot_claimed: bool,
     host_stopped: bool,
     next_host_checkout: u64,
     origin: Option<crate::run_supervisor::NativeRunNetworkOrigin>,
@@ -196,6 +200,8 @@ impl Default for RemoteHostService {
             registration: Arc::new(Default::default()),
             state: Mutex::new(ServiceState {
                 host: HostSlot::Empty,
+                delegation: None,
+                one_shot_claimed: false,
                 host_stopped: false,
                 next_host_checkout: 0,
                 origin: None,
@@ -230,9 +236,14 @@ impl RemoteHostService {
         &self,
     ) -> Result<ActivationReservation, crate::cli::types::SafeError> {
         let mut state = self.state.lock();
-        if state.closing || state.retired || state.activation.is_some() {
+        if state.closing
+            || state.retired
+            || state.activation.is_some()
+            || state.delegation.is_some()
+        {
             return Err(crate::cli::profiles::error("REMOTE_HOST_LOCKED"));
         }
+        state.one_shot_claimed = true;
         let reservation = ActivationReservation::new();
         state.activation = Some(reservation.operation());
         Ok(reservation)
@@ -249,9 +260,14 @@ impl RemoteHostService {
         crate::cli::types::SafeError,
     > {
         let mut state = self.state.lock();
-        if state.closing || state.retired || state.activation.is_some() {
+        if state.closing
+            || state.retired
+            || state.activation.is_some()
+            || state.delegation.is_some()
+        {
             return Err(crate::cli::profiles::error("REMOTE_HOST_LOCKED"));
         }
+        state.one_shot_claimed = true;
         let reservation = ActivationReservation::new();
         let (owner, start) = driver::DriverOwner::new(reservation.operation());
         state.driver = Some(owner.link());
@@ -306,7 +322,26 @@ impl RemoteHostService {
         }
     }
     fn checkout_host(&self, admitting: bool) -> Option<HostCheckout<'_>> {
+        self.checkout_host_for(admitting, None)
+    }
+    fn checkout_host_for(
+        &self,
+        admitting: bool,
+        delegation: Option<&Arc<()>>,
+    ) -> Option<HostCheckout<'_>> {
         let mut state = self.state.lock();
+        if admitting {
+            match delegation {
+                Some(token)
+                    if state
+                        .delegation
+                        .as_ref()
+                        .is_some_and(|current| Arc::ptr_eq(current, token)) => {}
+                Some(_) => return None,
+                None if state.delegation.is_some() => return None,
+                None => state.one_shot_claimed = true,
+            }
+        }
         if matches!(state.host, HostSlot::CheckedOut(_))
             || (admitting && (state.closing || state.peer_pumps.len() >= 64))
         {
@@ -366,7 +401,7 @@ impl RemoteHostService {
     }
     pub(crate) fn network_admission_open(&self) -> bool {
         let state = self.state.lock();
-        !state.closing && !state.source_slot.is_closed()
+        !state.closing && state.delegation.is_none() && !state.source_slot.is_closed()
     }
     pub(crate) fn commit_network_handoff(
         &self,
@@ -383,6 +418,7 @@ impl RemoteHostService {
             let state = self.state.lock();
             let stop = stopped.borrow();
             outcome = if state.closing
+                || state.delegation.is_some()
                 || state.source_slot.is_closed()
                 || *stop
                 || !matches!(stopped.has_changed(), Ok(false))

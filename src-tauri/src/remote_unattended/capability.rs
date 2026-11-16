@@ -337,3 +337,6 @@ mod tests {
         assert_eq!(policy.observe_close(), CloseObservation::EffectsClosed);
     }
 }
+
+#[path = "network.rs"]
+pub(crate) mod network;

@@ -1068,6 +1068,7 @@ impl RemoteHostService {
         };
         let mut state = self.state.lock();
         if state.closing
+            || state.delegation.is_some()
             || state.source_slot.closed
             || state.source_slot.registration.is_some()
             || approval
@@ -1076,6 +1077,7 @@ impl RemoteHostService {
         {
             return Err(Box::new((HostNetworkError::Locked, inputs)));
         }
+        state.one_shot_claimed = true;
         let ApprovedHostInputs {
             #[cfg(windows)]
             stages,
