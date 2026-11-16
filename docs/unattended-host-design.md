@@ -623,3 +623,25 @@ Native start/start_peer_pending/start_mode 仅编译在 Native 平台；Browser
 pagehide/freeze/hidden 仍关闭原 owner，并等待原任务退休；没有解除前台
 生命周期限制。实际验证是 Node Worker 执行新编译 WASM、真实 TLS 与 Host，
 平台事件和 WebAuthn 使用公开合成 fixture，不是 Chromium 或手机验收。
+
+
+### Browser 手动 lease owner（原 TerminalClient）
+
+TerminalClient 的 leaseState/renewLease 复用原 request counter、Busy、epoch、
+一秒有界调用和断线关闭，不新增 Rust/RPC counter。首次成功 State 固定本代
+lease/fence/next sequence；同一连接不能再次 State 重置。Renew 只能使用保存
+的精确身份及下一个序号，成功回复必须匹配 request/lease/fence/sequence，
+且 deadline 不回退；随后才推进本地序号。不存在公网 retryLastRenewal 接口。
+协议层同序号幂等仍要求新 request + 原 deadline，但未知/取消已关闭的本代
+不能藉此恢复。u64 边界由原严格 codec 拒绝，不允许 wrap。
+
+这些回复只是原 Host 历史事实，不是浏览器产生的授权或实时有效性证明。
+原 NativeClient/Host 仍复查认证能力、角色、Installed、原 grant/租约截止。
+浏览器不借 wall clock 重算 Host deadline。lease 操作不会更新 input window、
+projection ACK 或 receipt。NeedsSettlement 中可以纯续租，成功后仍恢复该
+原阶段；pending/receipt 在失败、断线和晚到旧 epoch 时均不被抹掉。
+
+已用真实 Node-WASM TLS→Host 验证两次手动续租、其中一次处于未 settlement
+的真实输入之后，原精确 query/settle 和仅一次写入保持；旧模式、700ms 合成
+grant 到期与 freeze 均拒绝后续操作。此项约秒级，既非 Browser 61 秒验收，
+也不是无流量空闲、自动续租或 outer 心跳。生产授权/供应/UI 仍未接通。

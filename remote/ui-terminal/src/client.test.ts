@@ -197,3 +197,24 @@ test('contradictory Known receipt cannot replace a retained exact final proof',a
     client.connect(native);await client.settle();assert.equal(client.phase,'Idle');
   }
 });
+
+function manualLease(native:NativeConnection,sent:string[],lease='11'.repeat(16)){
+ const original=native.query;native.query=async bytes=>{const v=JSON.parse(new TextDecoder().decode(bytes));if(!['LeaseState','LeaseRenew'].includes(v.message))return original(bytes);sent.push(JSON.stringify(v));return utf8.encode(JSON.stringify(v.message==='LeaseState'?{message:'LeaseStateReply',profile:1,request:v.request,lease,fence:'3',notAfterHostMs:'1000',nextRenewalSequence:'1'}:{message:'LeaseRenewed',profile:1,request:v.request,lease:v.lease,fence:v.fence,renewalSequence:v.renewalSequence,notAfterHostMs:String(1000+Number(v.renewalSequence)*100)}));};
+}
+test('BrowserLeaseOwner_StrictReplyCodec_001',()=>{
+ const good={message:'LeaseStateReply',profile:1,request:'1',lease:'11'.repeat(16),fence:'3',notAfterHostMs:'1000',nextRenewalSequence:'1'};assert.deepEqual(decodeReply(utf8.encode(JSON.stringify(good))),good);
+ for(const change of [{request:'01'},{lease:'00'.repeat(16)},{nextRenewalSequence:'0'},{target:'other'},{notAfterHostMs:'18446744073709551616'}])assert.throws(()=>decodeReply(utf8.encode(JSON.stringify({...good,...change}))));
+});
+test('BrowserLeaseOwner_SharesCounterAndPreservesSettlement_002',async()=>{
+ const {client,native,sent}=setup();manualLease(native,sent);client.connect(native);await (client as any).leaseState();await client.snapshot();await client.window();await client.submit('07'.repeat(16),'1',utf8.encode('x'));assert.equal(client.phase,'NeedsSettlement');await (client as any).renewLease();assert.equal(client.phase,'NeedsSettlement');await assert.rejects(client.window());await client.settle();assert.equal(client.phase,'Idle');assert.deepEqual(sent.map(v=>JSON.parse(v)).filter(v=>v.request).map(v=>v.request),['1','2','3','4']);await assert.rejects((client as any).leaseState());
+});
+test('BrowserLeaseOwner_BusyAndLateEpochCannotMutateNewConnection_003',async()=>{
+ const {client,native,sent}=setup();let release!:(v:Uint8Array)=>void;native.query=()=>new Promise(r=>{release=r});client.connect(native);const old=(client as any).leaseState();await assert.rejects((client as any).leaseState());client.disconnect();const next=setup();manualLease(next.native,next.sent,'22'.repeat(16));client.connect(next.native);await (client as any).leaseState();release(utf8.encode(JSON.stringify({message:'LeaseStateReply',profile:1,request:'1',lease:'11'.repeat(16),fence:'3',notAfterHostMs:'1000',nextRenewalSequence:'1'})));await assert.rejects(old);await (client as any).renewLease();assert.equal(JSON.parse(next.sent.at(-1)!).lease,'22'.repeat(16));assert.equal(client.phase,'Idle');
+});
+test('BrowserLeaseOwner_BadRenewalClosesWithoutReset_004',async()=>{
+ for(const change of [{request:'9'},{lease:'22'.repeat(16)},{fence:'4'},{renewalSequence:'2'},{notAfterHostMs:'999'}]){const {client,native,sent}=setup();manualLease(native,sent);client.connect(native);await (client as any).leaseState();native.query=async bytes=>{const v=JSON.parse(new TextDecoder().decode(bytes));return utf8.encode(JSON.stringify({message:'LeaseRenewed',profile:1,request:v.request,lease:v.lease,fence:v.fence,renewalSequence:v.renewalSequence,notAfterHostMs:'1100',...change}));};await assert.rejects((client as any).renewLease());assert.equal(client.phase,'NotConnected');await assert.rejects((client as any).leaseState());}
+});
+
+test('BrowserLeaseOwner_TimeoutRetainsExactInputSettlement_005',async()=>{
+ const {native,sent,f}=setup();const client=new TerminalClient(f.body.stamp.target,f.body.stamp.binding,5);manualLease(native,sent);client.connect(native);await client.leaseState();await client.snapshot();await client.window();await client.submit('07'.repeat(16),'1',utf8.encode('x'));native.query=()=>new Promise(()=>{});await assert.rejects(client.renewLease());assert.equal(client.phase,'NotConnected');client.connect(native);assert.equal(client.phase,'NeedsSettlement');await assert.rejects(client.window());await client.settle();assert.equal(client.phase,'Idle');
+});

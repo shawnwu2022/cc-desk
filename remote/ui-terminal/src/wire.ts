@@ -92,7 +92,10 @@ export function input(operation:string,sequence:string,window:string,notAfterHos
 export type Outcome='HostWritten'|'Rejected'|'Partial'|'Unknown';
 export type Receipt={operation:string;sequence:string;outcome:Outcome;proof:string|null};
 export type InputCursorReply={message:'InputCursorState';profile:1;request:string;nextSequence:string|null;pending:Receipt|null};
+export type LeaseStateReply={message:'LeaseStateReply';profile:1;request:string;lease:string;fence:string;notAfterHostMs:string;nextRenewalSequence:string};
+export type LeaseRenewed={message:'LeaseRenewed';profile:1;request:string;lease:string;fence:string;renewalSequence:string;notAfterHostMs:string};
 export type Reply=
+  | LeaseStateReply | LeaseRenewed
   | InputCursorReply
   | {message:'WindowGranted';profile:1;request:string;window:string;notAfterHostMs:string}
   | {message:'ProjectionAcknowledged';profile:1;stamp:Stamp}
@@ -118,6 +121,10 @@ export function decodeReply(payload:Uint8Array):Reply {
   const value:any=parseJson(payload,16270);
   integerLexeme(value,'profile');if(!value||value.profile!==1)throw Error('reply profile');
   switch(value.message){
+    case 'LeaseStateReply':
+      shape(value,['message','profile','request','lease','fence','notAfterHostMs','nextRenewalSequence']);counter(value.request);hex(value.lease,16,true);counter(value.fence);counter(value.notAfterHostMs);counter(value.nextRenewalSequence);break;
+    case 'LeaseRenewed':
+      shape(value,['message','profile','request','lease','fence','renewalSequence','notAfterHostMs']);counter(value.request);hex(value.lease,16,true);counter(value.fence);counter(value.renewalSequence);counter(value.notAfterHostMs);break;
     case 'InputCursorState':
       shape(value,['message','profile','request','nextSequence','pending']);counter(value.request);
       if(value.pending===null)counter(value.nextSequence);
@@ -136,6 +143,12 @@ export function decodeReply(payload:Uint8Array):Reply {
     default:throw Error('unsupported reply');
   }
   return value as Reply;
+}
+export function leaseState(request:string):Uint8Array {
+  counter(request);return json({message:'LeaseState',profile:1,request});
+}
+export function leaseRenew(request:string,lease:string,fence:string,renewalSequence:string):Uint8Array {
+  counter(request);hex(lease,16,true);counter(fence);counter(renewalSequence);return json({message:'LeaseRenew',profile:1,request,lease,fence,renewalSequence});
 }
 export function receiptQuery(request:string,operation:string,sequence:string):Uint8Array {
   counter(request);hex(operation,16,true);counter(sequence);return json({message:'ReceiptQuery',profile:1,request,operation,sequence});

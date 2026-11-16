@@ -687,3 +687,25 @@ clippy-final 日志（App 使用 final2）均保留。无真实凭据、云服�
 下一片才在 TerminalClient 原唯一 request/epoch/Busy owner 内实现手动
 LeaseState/LeaseRenew，不能另起 Rust counter，也不能清 input pending/
 NeedsSettlement。自动续租及 outer heartbeat 仍未实现。
+
+
+### Browser 手动 owner 第二片：统一计数与实际续租
+
+- 前片 757abe8d 后，仅 wire.ts 与 client.ts 增加生产逻辑；手动方法走原
+  NativeConnection.query → exchange → NativeClient，没有新 transport API。
+- 初始四项 RED 保留在 browser-lease-owner-red.log；codec、共享 request、
+  Busy/旧 epoch、错误身份/截止及 timeout 保留 pending 的定向行为已绿。
+- 最终 Node owner/native/transport/Worker 33/33；真实 Node-WASM Browser data
+  集成 45/45（含子例），独立父例为 37。两组去重合计 70 个父例，名单为
+  browser-lease-owner-final-testnames.txt，不与前片 98 项重复相加。
+- 真实手动 case 已证 state→renew→snapshot/window→一次写入→未结算时 renew
+  →原 receipt query/settle；另旧 mode、到期和 freeze 拒绝且零写入。
+  定向两父 case/五计数首跑约 3.04 秒，最终 data 集合约 19.40 秒。
+- 受影响 TS 文件 typecheck、Host 严格 Clippy、Rustfmt/diffcheck 通过。
+  Rust 生产 WASM 未变，复用前片同源码、已实际构建的测试 artifact；仅 Host
+  TEST_ONLY 增加 manual-expired 700ms 策略以检验原截止，不扩大原期限。
+- 日志 browser-lease-owner-node-final、wasm-final、typecheck、host-clippy；
+  未运行全 App/Host suite，仍有原 PTY 发布门槛，不推送/发布 RC。
+
+后续只读设计原 owner 自动受托管续租与 outer 心跳，不能把手动方法通过
+直接等同自动、空闲或 30 天可持续验收，也不能另起计数/无主 timer。

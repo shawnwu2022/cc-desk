@@ -228,3 +228,22 @@ test('BrowserControlLease_ExplicitPairingPreservedAndLifecycleCloses_003',async(
   try{const supply=await pairingSupply(h,undefined,true);f=await supply.connect();await f.app.descriptor;if(event==='visibilitychange')p.hidden();else p.lifecycle(event);await f.retired;const effects=await h.wait('effects');assert.equal(effects.writeCount,0);}finally{await f?.dispose();await h.dispose();p();}
  });
 });
+
+test('BrowserLeaseOwner_RealWasmManualRenewalAndSettlement_001',async()=>{
+ const p=platform(),h=await host('manual');let f:Awaited<ReturnType<typeof client>>|undefined;
+ try{
+  f=await client(h,{configuration:{peerInstall:{budgetMs:1000,controlLease:'manual-v1'}}});const descriptor=await f.app.descriptor,connection=nativeConnection(f.app),terminal=new TerminalClient(descriptor.target,descriptor.binding);terminal.connect(connection);
+  const lease=await terminal.leaseState(),first=await terminal.renewLease();assert.equal(first.lease,lease.lease);assert.equal(first.fence,descriptor.fence);assert.equal(first.renewalSequence,lease.nextRenewalSequence);assert.ok(BigInt(first.notAfterHostMs)>=BigInt(lease.notAfterHostMs));
+  await terminal.snapshot();await terminal.window();const receipt=await terminal.submit('32'.repeat(16),'1',new TextEncoder().encode('TEST_ONLY_MANUAL_LEASE'));assert.equal(receipt.message,'InputReceipt');assert.equal(receipt.outcome,'HostWritten');
+  const second=await terminal.renewLease();assert.equal(second.renewalSequence,String(BigInt(first.renewalSequence)+1n));assert.equal(terminal.phase,'NeedsSettlement');assert.equal((await terminal.query()).proof,receipt.proof);await terminal.settle();assert.equal(terminal.phase,'Idle');terminal.disconnect();await connection.waitClosed();const effects=await h.wait('effects');assert.equal(effects.writeCount,1);assert.equal(effects.bytes,Buffer.from('TEST_ONLY_MANUAL_LEASE').toString('hex'));
+ }finally{await f?.dispose();await h.dispose();p();}
+});
+test('BrowserLeaseOwner_RealLegacyExpiryAndCancellationFailClosed_002',async(t)=>{
+ for(const variant of ['legacy','expiry','cancel'])await t.test(variant,async()=>{
+  const p=platform(),h=await host(variant==='legacy'?'normal':variant==='expiry'?'manual-expired':'manual');let f:Awaited<ReturnType<typeof client>>|undefined;
+  try{f=await client(h,{configuration:{peerInstall:{budgetMs:1000,...(variant==='legacy'?{}:{controlLease:'manual-v1'})}}});const descriptor=await f.app.descriptor,connection=nativeConnection(f.app),terminal=new TerminalClient(descriptor.target,descriptor.binding);terminal.connect(connection);
+   if(variant==='legacy')await assert.rejects(terminal.leaseState());else{await terminal.leaseState();if(variant==='cancel')p.lifecycle('freeze');await f.retired;await assert.rejects(terminal.renewLease());}
+   assert.equal(terminal.phase,'NotConnected');await connection.waitClosed();const effects=await h.wait('effects');assert.equal(effects.writeCount,0);
+  }finally{await f?.dispose();await h.dispose();p();}
+ });
+});

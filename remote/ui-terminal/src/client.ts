@@ -1,6 +1,6 @@
 import {ProjectionReceiver, type Stamp, type Target} from './reducer.ts';
 import {render} from './renderer.ts';
-import {command,input,inputCursor,projectionAck,decodeProjection,decodeReply,receiptQuery,receiptAck,type Receipt,type Reply,type InputCursorReply} from './wire.ts';
+import {command,input,inputCursor,projectionAck,decodeProjection,decodeReply,receiptQuery,receiptAck,leaseState,leaseRenew,type LeaseStateReply,type LeaseRenewed,type Receipt,type Reply,type InputCursorReply} from './wire.ts';
 /** An injected native adapter must own the verified mutual-RPK/AppBind channel
  * and validate original received DataRecord direction/channel/scope/fence. These
  * methods return bounded JSON payloads, never authentication booleans. This
@@ -31,6 +31,7 @@ export class TerminalClient {
   #phase:Phase='NotConnected';
   #window:{token:string;notAfterHostMs:string}|undefined;
   #pending:Pending|undefined;
+  #lease:{lease:string;fence:string;nextSequence:bigint;deadline:bigint}|undefined;
   #budget:number;
   #unlisten:(()=>void)|undefined;
   constructor(target:Target,binding:string,budgetMs=1000){if(!Number.isInteger(budgetMs)||budgetMs<1||budgetMs>1000)throw Error('invalid deadline');this.#budget=budgetMs;this.#receiver=new ProjectionReceiver(target,binding);this.#binding=binding;}
@@ -47,7 +48,7 @@ export class TerminalClient {
   }
   disconnect():void {
     this.#unlisten?.();this.#unlisten=undefined;
-    const native=this.#native;this.#epoch++;this.#native=undefined;this.#window=undefined;this.#receiver.disconnect();this.#phase='NotConnected';native?.close();
+    const native=this.#native;this.#epoch++;this.#native=undefined;this.#window=undefined;this.#lease=undefined;this.#receiver.disconnect();this.#phase='NotConnected';native?.close();
   }
   #enter(allowed:Phase[],reconcile=false):{native:NativeConnection;epoch:number}{
     if(!this.#native||!allowed.includes(this.#phase)||(!reconcile&&this.#pending))throw Error('client unavailable');
@@ -62,6 +63,27 @@ export class TerminalClient {
   #next():string{if(this.#request===18446744073709551615n)throw Error('request counter exhausted');return String(++this.#request);}
   #fail(epoch:number):void{if(epoch===this.#epoch)this.disconnect();}
   #identity(reply:{operation:string;sequence:string},pending:Pending):void{if(reply.operation!==pending.operation||reply.sequence!==pending.sequence)throw Error('receipt identity');}
+  // 浏览器状态只关联原通道回复，真实权限由原 NativeClient/Host 复查。
+  // 同一 epoch 只捕获一次 lease，不能用再次读取重置不确定的续租序号。
+  async leaseState():Promise<Readonly<LeaseStateReply>> {
+    if(this.#lease)throw Error('lease already captured');
+    const phase=this.#phase,{native,epoch}=this.#enter(['Idle','Synced','Ready','NeedsSettlement'],true);
+    try{
+      const request=this.#next(),reply=decodeReply(await this.#wait(native.query(leaseState(request)),epoch));this.#check(epoch);
+      if(reply.message!=='LeaseStateReply'||reply.request!==request)throw Error('lease state mismatch');
+      this.#lease={lease:reply.lease,fence:reply.fence,nextSequence:BigInt(reply.nextRenewalSequence),deadline:BigInt(reply.notAfterHostMs)};
+      this.#phase=phase;return Object.freeze(reply);
+    }catch(error){this.#fail(epoch);throw error;}
+  }
+  async renewLease():Promise<Readonly<LeaseRenewed>> {
+    const lease=this.#lease;if(!lease)throw Error('lease not captured');
+    const phase=this.#phase,{native,epoch}=this.#enter(['Idle','Synced','Ready','NeedsSettlement'],true);
+    try{
+      const request=this.#next(),sequence=String(lease.nextSequence),reply=decodeReply(await this.#wait(native.query(leaseRenew(request,lease.lease,lease.fence,sequence)),epoch));this.#check(epoch);
+      if(reply.message!=='LeaseRenewed'||reply.request!==request||reply.lease!==lease.lease||reply.fence!==lease.fence||reply.renewalSequence!==sequence||BigInt(reply.notAfterHostMs)<lease.deadline)throw Error('lease renewal mismatch');
+      lease.nextSequence++;lease.deadline=BigInt(reply.notAfterHostMs);this.#phase=phase;return Object.freeze(reply);
+    }catch(error){this.#fail(epoch);throw error;}
+  }
   async snapshot():Promise<void> {
     const {native,epoch}=this.#enter(['Idle','Synced','Ready']);this.#window=undefined;let begun=false,installed=false,total=0;
     try{

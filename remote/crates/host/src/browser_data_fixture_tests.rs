@@ -84,6 +84,7 @@ async fn BrowserData_OriginalHostFixture_001() {
             "selftest",
             "normal",
             "manual",
+            "manual-expired",
             "reconnect",
             "unknown",
             "expired",
@@ -157,7 +158,7 @@ async fn BrowserData_OriginalHostFixture_001() {
             )
             .unwrap(),
         };
-        let channel = if mode == "manual" {
+        let channel = if mode.starts_with("manual") {
             cc_desk_remote_security::bind_host_control_lease_channel(pending, snapshot).await
         } else {
             bind_host_peer_channel(pending, snapshot).await
@@ -188,7 +189,7 @@ async fn BrowserData_OriginalHostFixture_001() {
                 NativeGrantPolicy {
                     scope: scope.clone(),
                     role: DataRole::Controller,
-                    duration: if mode == "expired" {
+                    duration: if mode == "expired" || mode == "manual-expired" {
                         Duration::from_millis(700)
                     } else {
                         Duration::from_secs(6)
