@@ -341,6 +341,8 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     sessions.value.find(session => session.id === activeSessionId.value) ?? null,
   )
 
+  // 仅保留当前项目的输入序列；单行变化不能使其它项目的排序和组件缓存失效。
+  let groupProjectionCache = new Map<string, { input: UnifiedSession[]; group: UnifiedProjectGroup }>()
   const projectGroups = computed<UnifiedProjectGroup[]>(() => {
     const groups = new Map<string, UnifiedProjectGroup>()
     const pinned = new Set(projects.pinnedProjects.map(normalizePath))
@@ -392,10 +394,20 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
       group.lastActivityAt = Math.max(group.lastActivityAt, session.lastActivityAt)
     }
 
-    for (const group of groups.values()) {
-      group.sessions.sort(compareSessionOpenOrder)
+    const nextCache = new Map<string, { input: UnifiedSession[]; group: UnifiedProjectGroup }>()
+    for (const [key, group] of groups) {
+      const input = group.sessions
+      const cached = groupProjectionCache.get(key)
+      const sameRows = cached && input.length === cached.input.length
+        && input.every((row, index) => row === cached.input[index])
+      group.sessions = sameRows ? cached.group.sessions : [...input].sort(compareSessionOpenOrder)
+      const unchanged = cached && (Object.keys(group) as (keyof UnifiedProjectGroup)[])
+        .every(field => group[field] === cached.group[field])
+      const output = unchanged ? cached.group : group
+      groups.set(key, output)
+      nextCache.set(key, { input, group: output })
     }
-
+    groupProjectionCache = nextCache
     return [...groups.values()].sort(compareProjectGroups)
   })
 
