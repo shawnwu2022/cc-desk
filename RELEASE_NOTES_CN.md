@@ -4,6 +4,19 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
+## [0.27.0-rc.12]
+
+优化
+
+- 已显示的 Codex 会话归档不再重复扫描无关历史，继续核对目标和来源。
+- 列表更新时复用未变化项目组及其已排序会话，减少重复计算和刷新。
+- 符合条件的已归档会话点击删除后直接执行，不再弹出额外确认框。
+
+重要说明
+
+- 这是预发布版本，稳定 Latest 保持不变。永久删除不可恢复；保留删除资格检查和结果不确定时的核对。
+- 性能数据来自隔离合成历史，不保证达到 Codex 桌面版延迟。真实用户会话、安装版 WebView2、原始 native All、D20 和签名安装/返回仍需独立验证。Updater 签名不等同于 Windows Authenticode。
+
 ## [0.27.0-rc.11]
 
 修复

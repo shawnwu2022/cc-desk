@@ -34,30 +34,40 @@ beforeEach(() => {
   })
 })
 afterEach(() => { view?.unmount(); view = undefined; delete (window as any).__CC_DESK_DOCUMENT__; document.body.innerHTML = '' })
-function render() { view = mount(NativeSessionDeletePanel, { props: { target: target(), active: true }, attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en, zh } })] } }); return view }
+function render(locale = 'en') { view = mount(NativeSessionDeletePanel, { props: { target: target(), active: true }, attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale, messages: { en, zh } })] } }); return view }
 const element = (selector: string) => document.querySelector<HTMLElement>(selector)!
 async function review() { const w = render(); await w.get('[data-native-cleanup-delete]').trigger('click'); await flushPromises(); return w }
-async function acknowledge(selector: string) { const checkbox = element(selector) as HTMLInputElement; checkbox.checked = true; checkbox.dispatchEvent(new Event('change', { bubbles: true })); await flushPromises() }
 
-describe('native permanent deletion review and second confirmation', () => {
-  it('PermanentDeleteUi_CancelBeforeFinalConfirmationDoesNotMutate_001', async () => {
-    await review()
-    expect(element('[data-delete-dialog]').textContent).toContain(nativeId)
-    expect(element('[data-delete-dialog]').textContent).toContain('not a frozen list')
-    element('[data-delete-next-confirm]').click(); await flushPromises()
-    expect((element('[data-delete-final]') as HTMLButtonElement).disabled).toBe(true)
-    await acknowledge('[data-delete-ack-permanent]')
-    expect((element('[data-delete-final]') as HTMLButtonElement).disabled).toBe(true)
-    element('[data-delete-cancel]').click(); await flushPromises()
-    expect(io.invoke.mock.calls.map(([command]) => command)).toEqual(['cli_preview_session_delete'])
-  })
-  it('PermanentDeleteUi_SecondConfirmationIssuesOneNativeMutation_002', async () => {
-    await review(); element('[data-delete-next-confirm]').click(); await flushPromises()
-    await acknowledge('[data-delete-ack-permanent]'); await acknowledge('[data-delete-ack-subtree]')
-    const button = element('[data-delete-final]'); button.click(); button.click(); await flushPromises()
+describe('native permanent deletion direct action', () => {
+  it.each([['en', 'Retry permanent deletion'], ['zh', '重新尝试永久删除']])('PermanentDeleteUi_RetryLabelsActualMutation_020 %s', async (locale, label) => {
+    const previous = io.invoke.getMockImplementation()!
+    io.invoke.mockImplementation((command, request) => command === 'cli_confirm_session_delete'
+      ? Promise.resolve({ operationId: request.operationId, cli: 'codex', state: 'blocked', rootPresent: true, descendants: 'unverified', reason: 'DELETE_PREVIEW_CHANGED' })
+      : previous(command, request))
+    const w = render(locale)
+    await w.get('[data-native-cleanup-delete]').trigger('click'); await flushPromises()
+    const retry = element('[data-delete-review-again]')
+    expect(retry.textContent).toBe(label)
     expect(io.invoke.mock.calls.filter(([command]) => command === 'cli_confirm_session_delete')).toHaveLength(1)
-    expect(element('[data-delete-result]').textContent).toContain('acknowledged')
-    expect(element('[data-delete-result]').textContent).toContain('not independently verified')
+    retry.click(); await flushPromises()
+    expect(io.invoke.mock.calls.filter(([command]) => command === 'cli_confirm_session_delete')).toHaveLength(2)
+    expect(document.querySelector('[data-delete-next-confirm]')).toBeNull()
+  })
+  it('PermanentDeleteUi_ClosePendingPreviewDoesNotMutate_001', async () => {
+    const previous = io.invoke.getMockImplementation()!; let finish!: (v: unknown) => void; let pending: any
+    io.invoke.mockImplementation((command, request) => command === 'cli_preview_session_delete' ? new Promise(done => { finish = done; pending = request }) : previous(command, request))
+    await review(); element('[data-delete-cancel]').click(); await flushPromises()
+    finish(await previous('cli_preview_session_delete', pending)); await flushPromises()
+    expect(document.querySelector('[data-delete-dialog]')).toBeNull()
+    expect(io.invoke.mock.calls.filter(([c]) => c === 'cli_confirm_session_delete')).toHaveLength(0)
+  })
+  it('PermanentDeleteUi_SingleConfirmationIssuesOneNativeMutation_002', async () => {
+    await review(); expect(document.querySelector('[data-delete-next-confirm]')).toBeNull()
+
+     await flushPromises()
+    expect(io.invoke.mock.calls.filter(([command]) => command === 'cli_confirm_session_delete')).toHaveLength(1)
+    expect([...useNativeSessionDeletesStore().records.values()].some(record => record.receipt?.state === 'acknowledged')).toBe(true)
+    expect([...useNativeSessionDeletesStore().records.values()].some(record => record.receipt?.descendants === 'unverified')).toBe(true)
     expect(io.invoke.mock.calls.filter(([command]) => command === 'native_list_resources')).toHaveLength(1)
   })
   it.each([false, true])('PermanentDeleteUi_ReReadsHistoryWithoutDiscardingOtherRows_010 (read failure=%s)', async readFailure => {
@@ -81,28 +91,31 @@ describe('native permanent deletion review and second confirmation', () => {
       if (command === 'native_list_resources') return { source: request.source, resourceKind: 'history', requestEpoch: request.requestEpoch, observedAt: '1', state: 'ready', reason: null, items: [control], hasMore: false }
       return previous(command, request)
     })
-    await review(); element('[data-delete-next-confirm]').click(); await flushPromises()
-    await acknowledge('[data-delete-ack-permanent]'); await acknowledge('[data-delete-ack-subtree]')
-    element('[data-delete-final]').click(); await flushPromises()
+    await review(); expect(document.querySelector('[data-delete-next-confirm]')).toBeNull()
+
+     await flushPromises()
     expect(io.invoke.mock.calls.filter(([command]) => command === 'native_get_scope')).toHaveLength(1)
     expect(catalog.sessions.map(row => row.nativeSessionId)).toContain(controlId)
     if (!readFailure) expect(catalog.sessions.map(row => row.nativeSessionId)).not.toContain(nativeId)
     else expect(history.get(context)?.error).toBeTruthy()
-    expect(element('[data-delete-result]').textContent).toContain('acknowledged')
+    expect([...useNativeSessionDeletesStore().records.values()].some(record => record.receipt?.state === 'acknowledged')).toBe(true)
   })
   it('PermanentDeleteUi_SourceOrActivityChangeInvalidatesReview_003', async () => {
+    const previous = io.invoke.getMockImplementation()!; let finish!: (v: unknown) => void; let pending: any
+    io.invoke.mockImplementation((command, request) => command === 'cli_preview_session_delete' ? new Promise(done => { finish = done; pending = request }) : previous(command, request))
     const w = await review()
-    element('[data-delete-next-confirm]').click(); await flushPromises()
-    await acknowledge('[data-delete-ack-permanent]'); await acknowledge('[data-delete-ack-subtree]')
+    expect(document.querySelector('[data-delete-next-confirm]')).toBeNull()
+
     await w.setProps({ target: { ...target(), processState: 'running' } }); await flushPromises()
+    finish(await previous('cli_preview_session_delete', pending)); await flushPromises()
     expect(document.querySelector('[data-delete-final]')).toBeNull()
     expect(io.invoke.mock.calls.filter(([command]) => command === 'cli_confirm_session_delete')).toHaveLength(0)
   })
   it('PermanentDeleteUi_UnknownOnlyOffersReadOnlyInspection_004', async () => {
     io.invoke.mockImplementation(async (command, request) => command === 'cli_preview_session_delete' ? { operationId: request.operationId, previewId, nativeSessionId: nativeId, cli: 'codex', state: 'ready', rootArchived: true, scope: 'native-subtree', knownDescendantCount: null, reason: null } : { operationId: request.operationId, cli: 'codex', state: 'unknown', rootPresent: false, descendants: 'unverified', reason: 'DELETE_OUTCOME_UNKNOWN' })
-    await review(); element('[data-delete-next-confirm]').click(); await flushPromises()
-    await acknowledge('[data-delete-ack-permanent]'); await acknowledge('[data-delete-ack-subtree]')
-    element('[data-delete-final]').click(); await flushPromises()
+    await review(); expect(document.querySelector('[data-delete-next-confirm]')).toBeNull()
+
+     await flushPromises()
     expect(document.querySelector('[data-delete-final]')).toBeNull()
     expect(element('[data-delete-result]').textContent).toContain('unknown')
     element('[data-delete-inspect]').click(); await flushPromises()
@@ -124,9 +137,9 @@ describe('native permanent deletion review and second confirmation', () => {
       if (command === 'native_list_resources') return { source: request.source, resourceKind: 'history', requestEpoch: request.requestEpoch, observedAt: '1', state: 'ready', reason: null, items: [control], hasMore: false }
       return previous(command, request)
     })
-    const w = await review(); element('[data-delete-next-confirm]').click(); await flushPromises()
-    await acknowledge('[data-delete-ack-permanent]'); await acknowledge('[data-delete-ack-subtree]')
-    element('[data-delete-final]').click(); await flushPromises()
+    const w = await review(); expect(document.querySelector('[data-delete-next-confirm]')).toBeNull()
+
+     await flushPromises()
     const operationId = io.invoke.mock.calls.find(([command]) => command === 'cli_confirm_session_delete')![1].operationId
     element('[data-delete-inspect]').click(); await flushPromises()
     await w.setProps({ target: { ...target(), id: 'different-target', projectPath: '/synthetic/other', nativeOrigin: { ...context, projectId: 'other', projectPath: '/synthetic/other', profileId: 'other-profile' } } })
@@ -136,7 +149,7 @@ describe('native permanent deletion review and second confirmation', () => {
     expect(history.get(context)!.sessions.map(row => row.nativeSessionId)).toContain(controlId)
     if (readFailure) expect(history.get(context)?.error).toBeTruthy()
     else expect(history.get(context)!.sessions.map(row => row.nativeSessionId)).not.toContain(nativeId)
-    expect(element('[data-delete-result]').textContent).toContain('acknowledged')
+    expect([...useNativeSessionDeletesStore().records.values()].some(record => record.receipt?.state === 'acknowledged')).toBe(true)
     io.invoke.mockImplementation(async (command, request) => command === 'cli_inspect_session_delete'
       ? { operationId, cli: 'codex', state: 'acknowledged', rootPresent: false, descendants: 'unverified', reason: null }
       : previous(command, request))
@@ -151,14 +164,14 @@ describe('native permanent deletion review and second confirmation', () => {
     await w.get('[data-native-cleanup-delete]').trigger('click')
     expect(io.invoke).not.toHaveBeenCalled()
   })
-  it('PermanentDeleteUi_BlockedPreviewRequiresFreshTwoStepReview_012', async () => {
+  it('PermanentDeleteUi_BlockedResultRequiresFreshExplicitAction_012', async () => {
     const previous = io.invoke.getMockImplementation()!
     io.invoke.mockImplementation(async (command, request) => ['cli_confirm_session_delete', 'cli_inspect_session_delete'].includes(command)
       ? { operationId: request.operationId, cli: 'codex', state: 'blocked', rootPresent: null, descendants: 'unverified', reason: 'DELETE_PREVIEW_CHANGED' }
       : previous(command, request))
-    await review(); element('[data-delete-next-confirm]').click(); await flushPromises()
-    await acknowledge('[data-delete-ack-permanent]'); await acknowledge('[data-delete-ack-subtree]')
-    element('[data-delete-final]').click(); await flushPromises()
+    await review(); expect(document.querySelector('[data-delete-next-confirm]')).toBeNull()
+
+     await flushPromises()
     expect(element('[data-delete-result]').textContent).toContain('blocked')
     element('[data-delete-inspect]').click(); await flushPromises()
     element('[data-delete-review-again]').click(); await flushPromises()
@@ -166,9 +179,9 @@ describe('native permanent deletion review and second confirmation', () => {
     expect(previews).toHaveLength(2)
     expect(previews[0]![1].operationId).not.toBe(previews[1]![1].operationId)
     expect(document.querySelector('[data-delete-final]')).toBeNull()
-    element('[data-delete-next-confirm]').click(); await flushPromises()
-    expect((element('[data-delete-final]') as HTMLButtonElement).disabled).toBe(true)
-    expect(io.invoke.mock.calls.filter(([command]) => command === 'cli_confirm_session_delete')).toHaveLength(1)
+    expect(document.querySelector('[data-delete-next-confirm]')).toBeNull()
+    expect(document.querySelector('[data-delete-final], [data-batch-final]')).toBeNull()
+    expect(io.invoke.mock.calls.filter(([command]) => command === 'cli_confirm_session_delete')).toHaveLength(2)
   })
   it('PermanentDeleteUi_MissingBridgeFailsBeforeMutation_006', async () => {
     delete (window as any).__CC_DESK_DOCUMENT__
@@ -192,8 +205,8 @@ describe('native permanent deletion review and second confirmation', () => {
     await w.get('[data-native-cleanup-delete]').trigger('click'); await flushPromises()
     resolveFirst({ operationId: firstOperation, previewId, nativeSessionId: nativeId, cli: 'codex', state: 'ready', rootArchived: true, scope: 'native-subtree', knownDescendantCount: null, reason: null }); await flushPromises()
     expect(element('[data-delete-dialog]').textContent).toContain(secondId)
-    expect(document.querySelector('[data-delete-next-confirm]')).not.toBeNull()
-    expect(io.invoke.mock.calls.filter(([command]) => command === 'cli_confirm_session_delete')).toHaveLength(0)
+    expect(document.querySelector('[data-delete-next-confirm]')).toBeNull()
+    expect(io.invoke.mock.calls.filter(([command]) => command === 'cli_confirm_session_delete')).toHaveLength(1)
   })
   it('PermanentDeleteUi_OtherTargetsReviewCannotBorrowCurrentOwner_008', async () => {
     const secondId = '40000000-0000-4000-8000-000000000003'
@@ -203,9 +216,9 @@ describe('native permanent deletion review and second confirmation', () => {
     entry.sessions.push({ ...entry.sessions[0]!, sessionKey: 'key-b', nativeSessionId: secondId })
     const w = render(); await w.setProps({ target: { ...target(), id: 'desk-b', nativeSessionId: secondId, nativeHistorySessionKey: 'key-b' } })
     await w.get('[data-delete-existing]').trigger('click'); await flushPromises()
-    element('[data-delete-next-confirm]').click(); await flushPromises()
-    await acknowledge('[data-delete-ack-permanent]'); await acknowledge('[data-delete-ack-subtree]')
-    expect((element('[data-delete-final]') as HTMLButtonElement).disabled).toBe(true)
+    expect(document.querySelector('[data-delete-next-confirm]')).toBeNull()
+
+    expect(document.querySelector('[data-delete-final], [data-batch-final]')).toBeNull()
     expect(io.invoke.mock.calls.filter(([command]) => command === 'cli_confirm_session_delete')).toHaveLength(0)
   })
   it('PermanentDeleteUi_ReReviewCannotDiscardAnotherTargetsResult_009', async () => {
@@ -253,12 +266,11 @@ describe('archived session row deletion entry', () => {
     drawer(); await flushPromises()
     expect((element('[data-session-delete]') as HTMLButtonElement).disabled).toBe(false)
     element('[data-session-delete]').click(); await flushPromises()
-    expect(element('[data-delete-dialog]').textContent).toContain(nativeId)
-    expect(io.invoke.mock.calls).toEqual([['cli_preview_session_delete', expect.objectContaining({ source, sessionKey: 'key' })]])
-    element('[data-delete-next-confirm]').click(); await flushPromises()
-    expect((element('[data-delete-final]') as HTMLButtonElement).disabled).toBe(true)
-    element('[data-delete-cancel]').click(); await flushPromises()
-    expect(io.invoke.mock.calls.map(([command]) => command)).toEqual(['cli_preview_session_delete'])
+    expect(document.querySelector('[data-delete-dialog]')).toBeNull()
+    expect(io.invoke.mock.calls[0]).toEqual(['cli_preview_session_delete', expect.objectContaining({ source, sessionKey: 'key' })])
+    expect(document.querySelector('[data-delete-next-confirm]')).toBeNull()
+    expect(document.querySelector('[data-delete-final], [data-batch-final]')).toBeNull()
+    expect(io.invoke.mock.calls.filter(([c]) => c === 'cli_confirm_session_delete')).toHaveLength(1)
   })
   // 截断记录仍须通过原生归档、来源和活动检查，并明确显示实际阻止原因。
   it.each([
@@ -294,7 +306,7 @@ describe('archived session row deletion entry', () => {
     button.click(); await flushPromises()
     expect(io.invoke).not.toHaveBeenCalled()
   })
-  it('ArchiveDelete_ExactRowPreviewCancelAndRestoreStaySeparate_002', async () => {
+  it('ArchiveDelete_ExactRowDeleteAndRestoreStaySeparate_002', async () => {
     const secondId = '40000000-0000-4000-8000-000000000003'
     const second = { ...target(), id: 'second', nativeSessionId: secondId, nativeHistorySessionKey: 'key-2', title: 'Second synthetic session' }
     useNativeHistoryStore().get(context)!.sessions.push({ ...useNativeHistoryStore().get(context)!.sessions[0]!, nativeSessionId: secondId, sessionKey: 'key-2' })
@@ -304,33 +316,33 @@ describe('archived session row deletion entry', () => {
     const w = drawer([target(), second]); await flushPromises()
     element('[data-session-row="second"] [data-session-delete]').click(); await flushPromises()
     expect(io.invoke.mock.calls[0]).toEqual(['cli_preview_session_delete', expect.objectContaining({ sessionKey: 'key-2', source })])
-    expect(element('[data-delete-dialog]').textContent).toContain('Second synthetic session')
+    expect([...useNativeSessionDeletesStore().records.values()][0]?.display?.title).toBe('Second synthetic session')
     expect(w.emitted('restore-request')).toBeUndefined()
-    element('[data-delete-cancel]').click(); await flushPromises()
     expect(document.querySelector('[data-delete-dialog]')).toBeNull()
     expect(document.querySelectorAll('[data-session-row]')).toHaveLength(2)
-    expect(io.invoke.mock.calls.map(([command]) => command)).toEqual(['cli_preview_session_delete'])
+    expect(io.invoke.mock.calls.filter(([command]) => command === 'cli_confirm_session_delete')).toHaveLength(1)
     element('[data-session-row="desk"] .session-launch-action button').click(); await flushPromises()
     expect(w.emitted('restore-request')).toEqual([['desk']])
   })
-  it('ArchiveDelete_DoubleConfirmationAndRemovedRowKeepResult_003', async () => {
+  it('ArchiveDelete_DirectClickAndRemovedRowKeepResult_003', async () => {
     const w = drawer(); await flushPromises()
     element('[data-session-delete]').click(); element('[data-session-delete]').click(); await flushPromises()
     expect(io.invoke.mock.calls.filter(([command]) => command === 'cli_preview_session_delete')).toHaveLength(1)
-    element('[data-delete-next-confirm]').click(); await flushPromises()
-    expect((element('[data-delete-final]') as HTMLButtonElement).disabled).toBe(true)
-    await acknowledge('[data-delete-ack-permanent]')
-    expect((element('[data-delete-final]') as HTMLButtonElement).disabled).toBe(true)
-    await acknowledge('[data-delete-ack-subtree]')
-    element('[data-delete-final]').click(); element('[data-delete-final]').click(); await flushPromises()
+    expect(document.querySelector('[data-delete-next-confirm]')).toBeNull()
+    expect(document.querySelector('[data-delete-final], [data-batch-final]')).toBeNull()
+
+    expect(document.querySelector('[data-delete-final], [data-batch-final]')).toBeNull()
+
+      await flushPromises()
     expect(io.invoke.mock.calls.filter(([command]) => command === 'cli_confirm_session_delete')).toHaveLength(1)
     await w.setProps({ sessions: [] }); await flushPromises()
-    expect(element('[data-delete-result]').textContent).toContain('acknowledged')
-    expect(element('[data-delete-result]').textContent).toContain('not independently verified')
-    element('[data-delete-cancel]').click(); await flushPromises()
+    expect([...useNativeSessionDeletesStore().records.values()].some(record => record.receipt?.state === 'acknowledged')).toBe(true)
+    expect([...useNativeSessionDeletesStore().records.values()].some(record => record.receipt?.descendants === 'unverified')).toBe(true)
+    expect(document.querySelector('[data-delete-dialog]')).toBeNull()
     expect(document.querySelector('.delete-operations')).toBeNull()
   })
   it('ArchiveDelete_SourceChangeAndClosingDiscardUnsentReview_004', async () => {
+    io.invoke.mockImplementation(() => new Promise(() => {}))
     const w = drawer(); await flushPromises()
     element('[data-session-delete]').click(); await flushPromises()
     await w.setProps({ sessions: [{ ...target(), resumePending: true }] }); await flushPromises()
@@ -351,9 +363,9 @@ describe('archived session row deletion entry', () => {
     const w = drawer(); await flushPromises()
     expect(document.querySelector('[data-archive-delete-results]')).toBeNull()
     element('[data-session-delete]').click(); await flushPromises()
-    element('[data-delete-next-confirm]').click(); await flushPromises()
-    await acknowledge('[data-delete-ack-permanent]'); await acknowledge('[data-delete-ack-subtree]')
-    element('[data-delete-final]').click(); await flushPromises()
+    expect(document.querySelector('[data-delete-next-confirm]')).toBeNull()
+
+     await flushPromises()
     if (state === 'removed') await w.setProps({ sessions: [] })
     else useNativeHistoryStore().get(context)!.error = 'SOURCE_UNAVAILABLE'
     await flushPromises()

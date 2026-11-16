@@ -56,6 +56,88 @@ fn request(source: SourceRef) -> ReadRequest {
 
 #[test]
 #[allow(non_snake_case)]
+fn NativeArchive_DisplayedLocatorAvoidsRescanButRechecksTarget_074() {
+    let root = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let live = Arc::new(AtomicBool::new(true));
+    let checks = Arc::new(AtomicUsize::new(0));
+    let mut g = grant(root.path(), "unused", live.clone());
+    g.cli = CliKind::Codex;
+    g.projects = vec![AdmittedProject {
+        id: "project".into(),
+        root: Root::open(project.path()).unwrap(),
+        paths: vec![project.path().to_owned()],
+    }];
+    if let ScopeTarget::Profile { project_ids, .. } = &mut g.target {
+        *project_ids = vec!["project".into()];
+    }
+    let count = checks.clone();
+    let valid = live.clone();
+    g.check = Arc::new(move || {
+        count.fetch_add(1, Ordering::SeqCst);
+        if valid.load(Ordering::SeqCst) {
+            Ok(())
+        } else {
+            Err("SCOPE_REVOKED")
+        }
+    });
+    fs::create_dir_all(root.path().join("sessions")).unwrap();
+    let id = "00000000-0000-4000-8000-000000000000";
+    for index in 0..128 {
+        let id = format!("00000000-0000-4000-8000-{index:012}");
+        fs::write(root.path().join(format!("sessions/{id}.jsonl")), format!("{}\n{}\n",
+            serde_json::json!({"type":"session_meta","payload":{"id":id,"cwd":project.path(),"source":"cli"}}),
+            serde_json::json!({"type":"event_msg","payload":{"type":"user_message","message":"fixture"}}))).unwrap();
+    }
+    let registry = ScopeRegistry::new(4);
+    let source = registry.register(g).unwrap();
+    let key = serde_json::json!(["local", "codex", source.source_root_key, id]).to_string();
+    registry.read(&owner(), &request(source.clone())).unwrap();
+    checks.store(0, Ordering::SeqCst);
+    let started = std::time::Instant::now();
+    registry.authorize_rename(&owner(), &source, &key).unwrap();
+    let scan_ms = started.elapsed().as_secs_f64() * 1000.0;
+    let scan_checks = checks.swap(0, Ordering::SeqCst);
+    let started = std::time::Instant::now();
+    let authority = registry.locate_archive(&owner(), &source, &key).unwrap();
+    let locate_ms = started.elapsed().as_secs_f64() * 1000.0;
+    let locate_checks = checks.load(Ordering::SeqCst);
+    println!("ARCHIVE_LOCATOR_PERF scan_ms={scan_ms:.3} locate_ms={locate_ms:.3} scan_checks={scan_checks} locate_checks={locate_checks}");
+    assert!(
+        scan_checks > locate_checks,
+        "full observation performs extra checks"
+    );
+    assert!(
+        locate_checks <= 4,
+        "locator must not scan unrelated history"
+    );
+    let path = root.path().join(format!("sessions/{id}.jsonl"));
+    let thread = serde_json::json!({"id":id,"cwd":project.path(),"path":path});
+    authority.check_thread(&thread).unwrap();
+    fs::write(
+        &path,
+        format!(
+            "{}\n",
+            serde_json::json!({"type":"session_meta","payload":{"id":id,"cwd":root.path()}})
+        ),
+    )
+    .unwrap();
+    assert_eq!(
+        authority.check_thread(&thread).unwrap_err().code,
+        "SESSION_ORIGIN_AMBIGUOUS"
+    );
+    let mut foreign = owner();
+    foreign.epoch = n(7);
+    assert!(registry.locate_archive(&foreign, &source, &key).is_err());
+    let mut stale = source.clone();
+    stale.profile_revision = n(9);
+    assert!(registry.locate_archive(&owner(), &stale, &key).is_err());
+    live.store(false, Ordering::SeqCst);
+    assert!(registry.locate_archive(&owner(), &source, &key).is_err());
+}
+
+#[test]
+#[allow(non_snake_case)]
 fn Opencode_RenameAuthorityRequiresExactScopedDatabaseSession_040() {
     let root = tempfile::tempdir().unwrap();
     let project = tempfile::tempdir().unwrap();

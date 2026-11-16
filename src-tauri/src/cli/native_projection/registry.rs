@@ -37,6 +37,7 @@ struct Scope {
     source: SourceRef,
     history_generation: std::sync::atomic::AtomicU64,
     retired: std::sync::atomic::AtomicBool,
+    archive_hints: std::sync::Mutex<std::collections::BTreeMap<String, (String, String)>>,
 }
 pub(crate) struct SessionAuthority {
     scope: Arc<Scope>,
@@ -488,6 +489,58 @@ impl ScopeRegistry {
     ) -> Result<RenameAuthority, SafeError> {
         self.authorize_session_inner(owner, source, key, false)
     }
+    // A displayed row supplies only a launch locator, never write authority.
+    // archive_metadata must still verify the native thread and its held-root
+    // session_meta immediately before dispatching thread/archive.
+    pub(crate) fn locate_archive(
+        &self,
+        owner: &Owner,
+        source: &SourceRef,
+        key: &str,
+    ) -> Result<SessionAuthority, SafeError> {
+        self.check_source(owner, source)?;
+        let scope = self
+            .state
+            .lock()
+            .map_err(|_| safe("SCOPE_UNAVAILABLE"))?
+            .scopes
+            .get(&source.scope_id)
+            .cloned()
+            .ok_or_else(|| safe("SCOPE_UNKNOWN"))?;
+        if source.cli == CliKind::Codex && !matches!(source.target, ScopeTarget::Run { .. }) {
+            let hint = scope
+                .archive_hints
+                .lock()
+                .map_err(|_| safe("SCOPE_UNAVAILABLE"))?
+                .get(key)
+                .cloned();
+            if let Some((native_id, cwd)) = hint {
+                let authority = SessionAuthority {
+                    scope,
+                    native_id,
+                    cwd,
+                    archived: false,
+                    observation: String::new(),
+                    config_observation: Vec::new(),
+                    rollout_observation: None,
+                    delete_containers: Vec::new(),
+                    claude_file: None,
+                };
+                authority.current()?;
+                return Ok(authority);
+            }
+        }
+        self.authorize_rename(owner, source, key)
+    }
+    pub(crate) fn retire_archive_hint(&self, source: &SourceRef, key: &str) {
+        if let Ok(state) = self.state.lock() {
+            if let Some(scope) = state.scopes.get(&source.scope_id) {
+                if let Ok(mut hints) = scope.archive_hints.lock() {
+                    hints.remove(key);
+                }
+            }
+        }
+    }
     #[cfg(windows)]
     pub(crate) fn authorize_opencode_archive(
         &self,
@@ -836,6 +889,7 @@ impl ScopeRegistry {
                     source,
                     history_generation: Default::default(),
                     retired: Default::default(),
+                    archive_hints: Default::default(),
                 });
                 state.next_epoch = epoch;
                 state
@@ -1041,6 +1095,55 @@ impl ScopeRegistry {
         {
             // A late older scan cannot publish or replace the newer load's receipt.
             return unavailable(&scope.source, request, "SOURCE_CHANGED");
+        }
+        if response.state == ProjectionState::Ready
+            && request.resource_kind == ResourceKind::History
+            && scope.source.cli == CliKind::Codex
+            && scope.source.basis == SourceBasis::ConfiguredProfile
+        {
+            let mut hints = scope
+                .archive_hints
+                .lock()
+                .map_err(|_| safe("SCOPE_UNAVAILABLE"))?;
+            if response_generation.is_some_and(|generation| {
+                generation != scope.history_generation.load(Ordering::SeqCst)
+            }) {
+                return unavailable(&scope.source, request, "SOURCE_CHANGED");
+            }
+            if request.offset == 0 {
+                hints.clear();
+            }
+            let mut hint_bytes: usize = hints
+                .iter()
+                .map(|(key, (id, cwd))| key.len() + id.len() + cwd.len() + 128)
+                .sum();
+            for item in &response.items {
+                if let ResourceItem::Session {
+                    session_key,
+                    native_session_id,
+                    cwd: Some(cwd),
+                    project_id: Some(project),
+                    archived: false,
+                    ..
+                } = item
+                {
+                    let bytes = session_key.len() + native_session_id.len() + cwd.len() + 128;
+                    if hints.len() < 512
+                        && hint_bytes + bytes <= 128 * 1024
+                        && uuid::Uuid::parse_str(native_session_id).is_ok()
+                        && scope.grant.projects.iter().any(|p| {
+                            &p.id == project
+                                && p.paths.iter().any(|path| path == std::path::Path::new(cwd))
+                        })
+                    {
+                        hints.insert(
+                            session_key.clone(),
+                            (native_session_id.clone(), cwd.clone()),
+                        );
+                        hint_bytes += bytes;
+                    }
+                }
+            }
         }
         if response.state == ProjectionState::Ready && response.has_more {
             if let Some(snapshot) = fresh_snapshot {

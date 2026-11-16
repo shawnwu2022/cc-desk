@@ -72,6 +72,11 @@ async function review() {
   const created = batches.create(bindings.value)
   batchId.value = created.id; open.value = true; permanent.value = false; subtree.value = false
   await batches.prepare(created, owns)
+  if (created.phase === 'review') {
+    batches.beginConfirmation(created, owns)
+    await batches.execute(created, true, true, owns)
+    if (batchId.value === created.id && created.items.every(item => batches.record(item)?.receipt?.state === 'acknowledged')) open.value = false
+  }
 }
 function reopen(id: string) { batchId.value = id; open.value = true; permanent.value = false; subtree.value = false }
 function inspect(item: NativeDeleteBatchItem) { if (batch.value) void batches.inspect(batch.value, item) }
@@ -102,7 +107,7 @@ function inspect(item: NativeDeleteBatchItem) { if (batch.value) void batches.in
     <div class="batch-ledger">
       <AppButton v-for="[id, entry] in batches.batches" :key="id" data-batch-existing :disabled="locked && entry.phase === 'result'" @click="reopen(id)">{{ t('deleteBatchView', { count: entry.items.length }) }} · {{ entry.items[0]?.binding.title }}</AppButton>
     </div>
-    <AppDialog :open="open" :title="t(batch?.phase === 'confirmation' ? 'deleteSecondConfirmation' : 'deleteBatchTitle')" data-batch-dialog @close="close">
+    <AppDialog :open="open" :title="t('deleteBatchTitle')" data-batch-dialog @close="close">
       <template v-if="batch">
         <p>{{ t('deleteBatchSelected', { count: batch.items.length }) }}</p>
         <p>{{ t('deleteBatchScope') }}</p>
@@ -131,15 +136,9 @@ function inspect(item: NativeDeleteBatchItem) { if (batch.value) void batches.in
             </template>
           </li>
         </ol>
-        <template v-if="batch.phase === 'confirmation'">
-          <label class="batch-choice"><input v-model="permanent" data-batch-ack-permanent type="checkbox" />{{ t('deleteAcknowledgePermanent') }}</label>
-          <label class="batch-choice"><input v-model="subtree" data-batch-ack-subtree type="checkbox" />{{ t('deleteBatchAcknowledgeScope', { count: batch.items.length }) }}</label>
-        </template>
       </template>
       <template #footer>
         <AppButton data-batch-close @click="close">{{ t(batch?.phase === 'executing' ? 'deleteBatchStop' : 'close') }}</AppButton>
-        <AppButton v-if="batch?.phase === 'review'" data-batch-next @click="batches.beginConfirmation(batch, owns)">{{ t('deleteContinueConfirmation') }}</AppButton>
-        <AppButton v-if="batch?.phase === 'confirmation'" data-batch-final variant="danger" :disabled="!permanent || !subtree || batch.items.some(item => !owns(item))" @click="batches.execute(batch, permanent, subtree, owns)">{{ t('deleteBatchFinal', { count: batch.items.length }) }}</AppButton>
       </template>
     </AppDialog>
   </section>
