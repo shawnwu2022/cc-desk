@@ -30,6 +30,7 @@ pub struct BoundDataAuthority {
     stop: watch::Sender<bool>,
     binding: [u8; 32],
     role: Role,
+    control_lease: Option<crate::bind::NegotiatedControlLease>,
 }
 impl std::fmt::Debug for BoundDataAuthority {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -52,7 +53,18 @@ impl BoundDataAuthority {
             stop,
             binding,
             role,
+            control_lease: None,
         }
+    }
+    pub(crate) fn with_control_lease(
+        mut self,
+        fact: Option<crate::bind::NegotiatedControlLease>,
+    ) -> Self {
+        self.control_lease = fact;
+        self
+    }
+    pub fn control_lease_renew_enabled(&self) -> bool {
+        self.control_lease.is_some()
     }
     pub fn check(&self) -> Result<(), DataError> {
         if self.cancel.is_cancelled() {

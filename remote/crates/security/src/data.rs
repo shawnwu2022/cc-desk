@@ -73,6 +73,7 @@ pub struct ManagedChannel<S> {
     grant_management: bool,
     management_used: bool,
     peer_install: bool,
+    control_lease: Option<crate::bind::NegotiatedControlLease>,
     transferred: bool,
 
     active: Arc<AtomicBool>,
@@ -95,6 +96,7 @@ impl<S> ManagedChannel<S> {
             grant_management: false,
             management_used: false,
             peer_install: false,
+            control_lease: None,
             transferred: false,
 
             active: Arc::new(AtomicBool::new(true)),
@@ -107,6 +109,13 @@ impl<S> ManagedChannel<S> {
     pub(crate) fn with_peer_install(mut self) -> Self {
         self.peer_install = true;
         self
+    }
+    pub(crate) fn with_control_lease(mut self, fact: crate::bind::NegotiatedControlLease) -> Self {
+        self.control_lease = Some(fact);
+        self
+    }
+    pub fn control_lease_renew_enabled(&self) -> bool {
+        self.control_lease.is_some()
     }
     pub fn grant_management_enabled(&self) -> bool {
         self.grant_management
@@ -179,7 +188,10 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> ManagedChannel<S> {
             self.role,
             self.binding,
             self.active.clone(),
-            Some(crate::owner_clock::Instant(end.0)),
+            crate::data_owner::PeerStart {
+                end: Some(crate::owner_clock::Instant(end.0)),
+                control_lease: self.control_lease,
+            },
         )?;
         self.transferred = true;
         Ok(result)
@@ -206,7 +218,8 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> ManagedChannel<S> {
             stop,
             self.binding,
             self.role,
-        );
+        )
+        .with_control_lease(self.control_lease);
         crate::browser_wasm_owner::browser_peer::run(
             self.io.as_mut().ok_or(DataError::Closed)?,
             authority,
@@ -290,7 +303,10 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> ManagedChannel<S> {
             self.role,
             self.binding,
             self.active.clone(),
-            peer_end,
+            crate::data_owner::PeerStart {
+                end: peer_end,
+                control_lease: self.control_lease,
+            },
         )?;
         self.transferred = true;
         Ok(owner)
@@ -333,7 +349,7 @@ mod local_driver_tests {
             client.role,
             client.binding,
             client.active.clone(),
-            None,
+            None.into(),
         )
         .unwrap();
         client.transferred = true;
@@ -379,7 +395,7 @@ mod local_driver_tests {
             client.role,
             client.binding,
             client.active.clone(),
-            None,
+            None.into(),
         )
         .unwrap();
         client.transferred = true;

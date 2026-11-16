@@ -314,7 +314,7 @@ async fn bind_host_with<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     hooks: Hooks,
 ) -> Result<BoundManagement, BindError> {
     native_factory()?;
-    let e = establish_host(pending, snapshot, hooks, vec![0], 0).await?;
+    let e = establish_host(pending, snapshot, hooks, vec![0], BindMode::Base).await?;
     owner(e.io, e.token, e.deadline, e.context, e.selection)
 }
 pub(crate) struct Established<S> {
@@ -330,14 +330,14 @@ pub(crate) async fn browser_establish_client<S: AsyncRead + AsyncWrite + Unpin +
     pending: Pending<S>,
     trust: ClientTrust,
 ) -> Result<Established<S>, BindError> {
-    establish_client(pending, trust, Hooks::default(), vec![0], 0).await
+    establish_client(pending, trust, Hooks::default(), vec![0], BindMode::Base).await
 }
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 pub(crate) async fn browser_grant_client<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     pending: Pending<S>,
     trust: ClientTrust,
 ) -> Result<crate::ManagedChannel<S>, BindError> {
-    let e = establish_client(pending, trust, Hooks::default(), vec![1], 1).await?;
+    let e = establish_client(pending, trust, Hooks::default(), vec![1], BindMode::Grant).await?;
     eligible(e.deadline, &e.token)?;
     Ok(crate::ManagedChannel::new(
         e.io,
@@ -353,7 +353,7 @@ pub(crate) async fn browser_peer_client<S: AsyncRead + AsyncWrite + Unpin + Send
     pending: Pending<S>,
     trust: ClientTrust,
 ) -> Result<crate::ManagedChannel<S>, BindError> {
-    let e = establish_client(pending, trust, Hooks::default(), vec![1], 2).await?;
+    let e = establish_client(pending, trust, Hooks::default(), vec![1], BindMode::Peer).await?;
     eligible(e.deadline, &e.token)?;
     Ok(crate::ManagedChannel::new(
         e.io,
@@ -381,7 +381,7 @@ async fn establish_host<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     snapshot: HostSnapshot,
     hooks: Hooks,
     minors: Vec<u16>,
-    grant_management: u8,
+    grant_management: BindMode,
 ) -> Result<Established<S>, BindError> {
     let (host_id, client_id) = projected(&pending)?;
     if pending._context.0 != Role::Host {
@@ -460,7 +460,7 @@ async fn bind_client_with<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     hooks: Hooks,
 ) -> Result<BoundManagement, BindError> {
     native_factory()?;
-    let e = establish_client(pending, trust, hooks, vec![0], 0).await?;
+    let e = establish_client(pending, trust, hooks, vec![0], BindMode::Base).await?;
     owner(e.io, e.token, e.deadline, e.context, e.selection)
 }
 async fn establish_client<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
@@ -468,7 +468,7 @@ async fn establish_client<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     trust: ClientTrust,
     hooks: Hooks,
     minors: Vec<u16>,
-    grant_management: u8,
+    grant_management: BindMode,
 ) -> Result<Established<S>, BindError> {
     let (host_id, client_id) = projected(&pending)?;
     if pending._context.0 != Role::Client {
@@ -560,7 +560,14 @@ pub async fn bind_host_channel<S: AsyncRead + AsyncWrite + Unpin + Send + 'stati
     snapshot: HostSnapshot,
 ) -> Result<crate::ManagedChannel<S>, BindError> {
     native_factory()?;
-    let e = establish_host(pending, snapshot, Hooks::default(), vec![0, 1], 0).await?;
+    let e = establish_host(
+        pending,
+        snapshot,
+        Hooks::default(),
+        vec![0, 1],
+        BindMode::Base,
+    )
+    .await?;
     eligible(e.deadline, &e.token)?;
     if e.selection.minor != 1 {
         return Err(BindError::Unsupported);
@@ -578,7 +585,7 @@ pub async fn bind_client_channel<S: AsyncRead + AsyncWrite + Unpin + Send + 'sta
     trust: ClientTrust,
 ) -> Result<crate::ManagedChannel<S>, BindError> {
     native_factory()?;
-    let e = establish_client(pending, trust, Hooks::default(), vec![0, 1], 0).await?;
+    let e = establish_client(pending, trust, Hooks::default(), vec![0, 1], BindMode::Base).await?;
     eligible(e.deadline, &e.token)?;
     if e.selection.minor != 1 {
         return Err(BindError::Unsupported);
@@ -676,41 +683,53 @@ mod browser_fixture;
 #[path = "bind_tests.rs"]
 mod tests;
 
-fn management_capabilities(enabled: u8) -> Vec<String> {
-    if enabled == 2 {
-        vec![
-            "canonical-json".into(),
-            "grant-management-v1".into(),
-            "peer-install-v1".into(),
-        ]
-    } else if enabled == 1 {
-        vec![
-            "canonical-json".into(),
-            cc_desk_remote_record::grant_management::CAPABILITY.into(),
-        ]
-    } else {
-        vec!["canonical-json".into()]
-    }
+#[derive(Clone, Copy)]
+enum BindMode {
+    Base,
+    Grant,
+    Peer,
+    ControlLease,
+}
+fn management_capabilities(enabled: BindMode) -> Vec<String> {
+    let values: &[&str] = match enabled {
+        BindMode::Base => &["canonical-json"],
+        BindMode::Grant => &["canonical-json", "grant-management-v1"],
+        BindMode::Peer => &["canonical-json", "grant-management-v1", "peer-install-v1"],
+        BindMode::ControlLease => &[
+            "canonical-json",
+            appbind::CONTROL_LEASE_CAPABILITY,
+            "grant-management-v1",
+            "peer-install-v1",
+        ],
+    };
+    values.iter().map(|v| (*v).into()).collect()
 }
 fn management_negotiate(
     h: &HostOffer,
     c: &ClientOffer,
-    enabled: u8,
+    mode: BindMode,
 ) -> Result<HostSelection, CodecError> {
-    if enabled == 2 {
-        appbind::negotiate_peer(h, c)
-    } else if enabled == 1 {
-        appbind::negotiate_grant(h, c)
-    } else {
-        appbind::negotiate(h, c)
+    match mode {
+        BindMode::Base => appbind::negotiate(h, c),
+        BindMode::Grant => appbind::negotiate_grant(h, c),
+        BindMode::Peer => appbind::negotiate_peer(h, c),
+        BindMode::ControlLease => appbind::negotiate_control_lease(h, c),
     }
 }
+
 pub async fn bind_host_grant_channel<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     pending: Pending<S>,
     snapshot: HostSnapshot,
 ) -> Result<crate::ManagedChannel<S>, BindError> {
     native_factory()?;
-    let e = establish_host(pending, snapshot, Hooks::default(), vec![1], 1).await?;
+    let e = establish_host(
+        pending,
+        snapshot,
+        Hooks::default(),
+        vec![1],
+        BindMode::Grant,
+    )
+    .await?;
     eligible(e.deadline, &e.token)?;
     Ok(crate::ManagedChannel::new(
         e.io,
@@ -726,7 +745,7 @@ pub async fn bind_client_grant_channel<S: AsyncRead + AsyncWrite + Unpin + Send 
     trust: ClientTrust,
 ) -> Result<crate::ManagedChannel<S>, BindError> {
     native_factory()?;
-    let e = establish_client(pending, trust, Hooks::default(), vec![1], 1).await?;
+    let e = establish_client(pending, trust, Hooks::default(), vec![1], BindMode::Grant).await?;
     eligible(e.deadline, &e.token)?;
     Ok(crate::ManagedChannel::new(
         e.io,
@@ -744,7 +763,7 @@ pub async fn bind_host_peer_channel<S: AsyncRead + AsyncWrite + Unpin + Send + '
     snapshot: HostSnapshot,
 ) -> Result<crate::ManagedChannel<S>, BindError> {
     native_factory()?;
-    let e = establish_host(pending, snapshot, Hooks::default(), vec![1], 2).await?;
+    let e = establish_host(pending, snapshot, Hooks::default(), vec![1], BindMode::Peer).await?;
     eligible(e.deadline, &e.token)?;
     Ok(crate::ManagedChannel::new(
         e.io,
@@ -761,7 +780,7 @@ pub async fn bind_client_peer_channel<S: AsyncRead + AsyncWrite + Unpin + Send +
     trust: ClientTrust,
 ) -> Result<crate::ManagedChannel<S>, BindError> {
     native_factory()?;
-    let e = establish_client(pending, trust, Hooks::default(), vec![1], 2).await?;
+    let e = establish_client(pending, trust, Hooks::default(), vec![1], BindMode::Peer).await?;
     eligible(e.deadline, &e.token)?;
     Ok(crate::ManagedChannel::new(
         e.io,
@@ -846,13 +865,25 @@ mod peer_negotiation_refusal_tests {
                 };
                 let (c, h) = if client_side {
                     tokio::join!(
-                        establish_client(c.unwrap(), trust, hooks, vec![1], 2),
-                        establish_host(h.unwrap(), snapshot, Hooks::default(), vec![1], 2)
+                        establish_client(c.unwrap(), trust, hooks, vec![1], BindMode::Peer),
+                        establish_host(
+                            h.unwrap(),
+                            snapshot,
+                            Hooks::default(),
+                            vec![1],
+                            BindMode::Peer
+                        )
                     )
                 } else {
                     tokio::join!(
-                        establish_client(c.unwrap(), trust, Hooks::default(), vec![1], 2),
-                        establish_host(h.unwrap(), snapshot, hooks, vec![1], 2)
+                        establish_client(
+                            c.unwrap(),
+                            trust,
+                            Hooks::default(),
+                            vec![1],
+                            BindMode::Peer
+                        ),
+                        establish_host(h.unwrap(), snapshot, hooks, vec![1], BindMode::Peer)
                     )
                 };
                 assert!(
@@ -862,4 +893,61 @@ mod peer_negotiation_refusal_tests {
             }
         }
     }
+}
+
+// 只有本模块完成双向原 transcript 校验后才能构造；不是授权或 DTO 开关。
+#[derive(Clone, Copy)]
+pub(crate) struct NegotiatedControlLease(());
+
+pub async fn bind_host_control_lease_channel<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
+    pending: Pending<S>,
+    snapshot: HostSnapshot,
+) -> Result<crate::ManagedChannel<S>, BindError> {
+    native_factory()?;
+    let e = establish_host(
+        pending,
+        snapshot,
+        Hooks::default(),
+        vec![1],
+        BindMode::ControlLease,
+    )
+    .await?;
+    eligible(e.deadline, &e.token)?;
+    Ok(crate::ManagedChannel::new(
+        e.io,
+        e.token,
+        BoundContext(e.context),
+        e.binding,
+        Role::Host,
+    )
+    .with_grant_management()
+    .with_peer_install()
+    .with_control_lease(NegotiatedControlLease(())))
+}
+pub async fn bind_client_control_lease_channel<
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+>(
+    pending: Pending<S>,
+    trust: ClientTrust,
+) -> Result<crate::ManagedChannel<S>, BindError> {
+    native_factory()?;
+    let e = establish_client(
+        pending,
+        trust,
+        Hooks::default(),
+        vec![1],
+        BindMode::ControlLease,
+    )
+    .await?;
+    eligible(e.deadline, &e.token)?;
+    Ok(crate::ManagedChannel::new(
+        e.io,
+        e.token,
+        BoundContext(e.context),
+        e.binding,
+        Role::Client,
+    )
+    .with_grant_management()
+    .with_peer_install()
+    .with_control_lease(NegotiatedControlLease(())))
 }

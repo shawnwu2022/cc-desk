@@ -603,3 +603,23 @@ unattended-budget-security-clippy-first.log。最初漏 experimental 的 0 项�
   使用 unattended-budget-final-*。仅预算安全基础可收口，不是完整长期能力。
   后续先审查显式双端能力协商、受限 lease 续租和独立 outer 心跳，再实现。
   生产授权/UI、真实手机、长空闲、30 天 endurance 及原 PTY 发布门槛仍未验收。
+
+## 受限续租第一片：认证能力事实（2026-11-16）
+
+仅新增精确 control-lease-renew-v1 AppBind 模式；内部数值模式改为封闭
+BindMode，旧 Base/Grant/Peer 保持原能力列表。原完整 offers 进入 transcript、
+exporter 与双向 MAC，裁剪副本仅供 negotiate_peer 复用严格校验。
+NegotiatedControlLease 字段私有，仅本 bind 模块验证成功后生成并沿原
+ManagedChannel/driver/BoundDataAuthority 传递，不是授权或公开 DTO 开关。
+即使协商成功仍需要 Controller、原活跃 channel 和 Installed fence 才能续租。
+
+RED 为新 negotiate_control_lease 缺失的编译错误，见
+unattended-lease-capability-red.log；record appbind 全部 7/7，security
+bind 全部 18/18（包含新增真实 mutual-RPK/AppBind 三项），strict 非 test
+Clippy 通过。日志 capability-codec-green、capability-native-third、
+capability-bind-final、capability-clippy-first 均带 unattended-lease- 前缀。
+首次测试编译漏改 browser fixture 的旧数值模式及客户端错误直接 install
+NativeGrant 的 Role 拒绝均保留；后者改为真实 grant_client/grant_host 交换。
+
+本片只暴露显式 native 协商工厂，不自动启用原 one-shot，不含手动 lease wire、
+调度器、outer 心跳或浏览器/WASM/手机支持；后续每项仍独立验证，生产授权关闭。

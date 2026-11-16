@@ -661,3 +661,6 @@ async fn early_control_record_and_post_bind_data_never_dispatch() {
     drop(peer);
     assert_eq!(drops.load(std::sync::atomic::Ordering::SeqCst), 2);
 }
+
+#[path = "control_lease_bind_tests.rs"]
+mod control_lease;

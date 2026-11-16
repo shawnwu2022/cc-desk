@@ -425,6 +425,19 @@ impl Drop for OwnedDriver {
         }
     }
 }
+// 原 peer 截止和认证事实同时移交；空事实保持旧入口语义。
+pub(crate) struct PeerStart {
+    pub end: Option<Instant>,
+    pub control_lease: Option<crate::bind::NegotiatedControlLease>,
+}
+impl From<Option<Instant>> for PeerStart {
+    fn from(end: Option<Instant>) -> Self {
+        Self {
+            end,
+            control_lease: None,
+        }
+    }
+}
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 pub(super) fn start<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     io: tokio_rustls::TlsStream<S>,
@@ -433,9 +446,9 @@ pub(super) fn start<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     role: Role,
     binding: [u8; 32],
     active: Arc<AtomicBool>,
-    peer_end: Option<Instant>,
+    peer_start: PeerStart,
 ) -> Result<RunningChannel, DataError> {
-    let (mut channel, driver) = prepare(io, cancel, access, role, binding, active, peer_end)?;
+    let (mut channel, driver) = prepare(io, cancel, access, role, binding, active, peer_start)?;
     let task = channel.task.get_mut();
     task.local = None;
     task.join = Some(tokio::spawn(driver));
@@ -449,7 +462,7 @@ pub(super) fn start<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     _: Role,
     _: [u8; 32],
     _: Arc<AtomicBool>,
-    _: Option<tokio::time::Instant>,
+    _: PeerStart,
 ) -> Result<RunningChannel, DataError> {
     Err(DataError::Context)
 }
@@ -460,7 +473,7 @@ pub(crate) fn prepare<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     role: Role,
     binding: [u8; 32],
     active: Arc<AtomicBool>,
-    peer_end: Option<Instant>,
+    peer_start: PeerStart,
 ) -> Result<(RunningChannel, OwnedDriver), DataError> {
     if access.is_remote() && role != Role::Client {
         return Err(DataError::Role);
@@ -469,7 +482,7 @@ pub(crate) fn prepare<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     if cancel.is_cancelled() {
         return Err(DataError::Cancelled);
     }
-    let fixed_end = peer_end.map(|caller| {
+    let fixed_end = peer_start.end.map(|caller| {
         caller
             .min(Instant::now() + Duration::from_secs(10))
             .min(Instant::now() + Duration::from_millis(remaining))
@@ -499,7 +512,8 @@ pub(crate) fn prepare<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
         stop.clone(),
         binding,
         role,
-    );
+    )
+    .with_control_lease(peer_start.control_lease);
     let public_authority = authority.clone();
     let a = active.clone();
     let (completion, local) = watch::channel(None);

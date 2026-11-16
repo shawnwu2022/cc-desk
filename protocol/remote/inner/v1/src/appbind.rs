@@ -435,3 +435,24 @@ pub fn negotiate_peer(h: &HostOffer, c: &ClientOffer) -> Result<HostSelection, C
     c.required_capabilities.pop();
     negotiate_grant(&h, &c)
 }
+
+/// 精确双端能力属于原认证 transcript；旧 peer 工厂不接受隐式降级。
+pub const CONTROL_LEASE_CAPABILITY: &str = "control-lease-renew-v1";
+pub fn negotiate_control_lease(
+    h: &HostOffer,
+    c: &ClientOffer,
+) -> Result<HostSelection, CodecError> {
+    let required = [
+        "canonical-json",
+        CONTROL_LEASE_CAPABILITY,
+        crate::grant_management::CAPABILITY,
+        crate::peer_install::CAPABILITY,
+    ];
+    if h.required_capabilities != required || c.required_capabilities != required {
+        return Err(CodecError::Unsupported);
+    }
+    let (mut host, mut client) = (h.clone(), c.clone());
+    host.required_capabilities.remove(1);
+    client.required_capabilities.remove(1);
+    negotiate_peer(&host, &client)
+}

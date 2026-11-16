@@ -417,9 +417,10 @@ async fn BrowserAppBind_LoopbackFixture_001() {
             }
         };
         if mode == "postdata" {
-            let mut e = establish_host(pending, snapshot, Hooks::default(), vec![0], 0)
-                .await
-                .unwrap();
+            let mut e =
+                establish_host(pending, snapshot, Hooks::default(), vec![0], BindMode::Base)
+                    .await
+                    .unwrap();
             emit(serde_json::json!({"kind":"bound","round":round}));
             e.io.write_all(&[1]).await.unwrap();
             e.io.flush().await.unwrap();

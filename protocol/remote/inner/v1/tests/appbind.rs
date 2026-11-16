@@ -132,3 +132,45 @@ fn appbind_validates_public_dto_entries_and_profile_capabilities() {
         assert!(matches!(result, Ok(Err(_))));
     }
 }
+
+#[test]
+#[allow(non_snake_case)]
+fn ControlLease_ExactCapabilityAndTranscript_001() {
+    let v = oracle();
+    let Message::HostOffer(mut h) =
+        decode(v["canonicalParts"][0].as_str().unwrap().as_bytes()).unwrap()
+    else {
+        panic!()
+    };
+    let Message::ClientOffer(mut c) =
+        decode(v["canonicalParts"][1].as_str().unwrap().as_bytes()).unwrap()
+    else {
+        panic!()
+    };
+    h.minors = vec![1];
+    c.minors = vec![1];
+    let required = [
+        "canonical-json",
+        "control-lease-renew-v1",
+        "grant-management-v1",
+        "peer-install-v1",
+    ];
+    h.required_capabilities = required.iter().map(|s| s.to_string()).collect();
+    c.required_capabilities = h.required_capabilities.clone();
+    let selected = negotiate_control_lease(&h, &c).unwrap();
+    assert_eq!(selected.minor, 1);
+    let original = transcript(&h, &c, &selected).unwrap();
+    assert!(negotiate_peer(&h, &c).is_err());
+    for side in [true, false] {
+        let (mut host, mut client) = (h.clone(), c.clone());
+        if side {
+            host.required_capabilities.remove(1);
+        } else {
+            client.required_capabilities.remove(1);
+        }
+        assert!(negotiate_control_lease(&host, &client).is_err());
+        assert_ne!(transcript(&host, &client, &selected).unwrap(), original);
+    }
+    c.minors = vec![0];
+    assert!(negotiate_control_lease(&h, &c).is_err());
+}
