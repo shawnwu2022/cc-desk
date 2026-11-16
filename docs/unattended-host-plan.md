@@ -544,3 +544,23 @@ suite, real-phone acceptance, 30-day endurance test or production activation.
 两代 socket/MUX、同 Host/producer、原输入 settlement 及撤销/到期/错设备/
 耗尽失败路径；日志 .audit/unattended-history-app-renewal-first.log。
 本轮共 Host 38 + App 9 = 47 个不重复父用例；未重算 contained 子进程内部用例。
+
+## 容量第二片验证记录（2026-11-16）
+
+- RED：130 个真实 PeerPump 任务依次 join 后，原未回收列表在第 64 项
+  （零基 generation63）仍耗尽 admission；日志
+  .audit/unattended-history-app-red-first.log。
+- GREEN：新 4 项 AppHistory 全通过，含 130 次原任务 join/原 reservation，
+  64 个终局但未消费 handle 仍占容量、取消 observer/slot 锁竞争仍托管、
+  panic Unknown 保留与关闭不重开。原 network 历史用例扩为 130 次真实
+  coordinator join，并持有旧观察 Arc 验证旧结果不指向新条目。
+- 最终同源码 Service 18/18、network 21/21、Delegated 44/44。实际父用例名
+  去重 83 项，写入 .audit/unattended-history-app-final-testnames.txt；
+  记录在 service-final/network-final/delegated-final 日志，不重复累计
+  contained 子进程或最初 AppHistory 单独结果。
+- App 非 test Clippy -- -D warnings 通过，记录
+  .audit/unattended-history-app-clippy-final.log；rustfmt 与 diff check 通过。
+  本片只改原 PeerPump 历史 prune，network 仅扩测试，materials 无重复 GC。
+- 本轮含原真实 localhost Relay 双代、原生产 actor 输入与 receipt settlement、
+  取消/迟到 bind/材料与退出边界回归，但不是完整 App/Host suite、真实手机或
+  30 天 endurance。旧 PTY 全库发布门槛仍未解决，无 push/merge/RC 发布。

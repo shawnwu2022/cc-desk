@@ -1838,7 +1838,8 @@ mod tests {
     #[tokio::test]
     async fn known_joined_failures_release_attempt_capacity() {
         let custody = Arc::new(HostNetworkCustody::default());
-        for _ in 0..64 {
+        let mut old = Vec::new();
+        for _ in 0..130 {
             let (stop, _stopped) = watch::channel(false);
             let (_published, admitted) = watch::channel(Some(Err(HostNetworkError::Relay)));
             let task = tauri::async_runtime::spawn(async { Err(HostNetworkError::Relay) });
@@ -1851,6 +1852,13 @@ mod tests {
             });
             custody.state.lock().attempts.push(attempt.clone());
             assert!(attempt.join().await);
+            old.push(attempt);
+            assert!(custody.open_state().unwrap().attempts.is_empty());
+        }
+        for attempt in old {
+            attempt.request_close();
+            assert!(attempt.wait_closed().await.is_ok());
+            assert_eq!(attempt.wait_admitted().await, Err(HostNetworkError::Relay));
         }
         let available = custody.open_state().unwrap().attempts.len() < 64;
         assert!(

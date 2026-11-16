@@ -501,3 +501,26 @@ observer 重新登记原 handle 的 waker。两个真实 channel 定向测试分
 本片只改 Host 历史，未解决 App PeerPump/network/material 容器的长期容量，
 未改变 60 秒 attempt、8 秒启动或 grant/材料期限，也不提供生产授权、UI、
 自动重试、真实手机验收或 30 天连续运行证明。
+
+## 容量第二片：App 原任务历史
+
+Service admission 的原 reservation/state 锁内只移除 PeerPump 的已成功 join
+缓存：joined=1 且能 try_lock 确认原 handle slot=None。join 仍持自己的 slot 锁
+跨原任务 await，清空 slot 与发布 joined 都在同一锁内，不反向取得 Service 锁。
+GC 不 await，不因 is_finished、取消观察或 Drop 清任务；try_lock 竞争保留原条目。
+Unknown 和未消费 handle 的终局任务仍占容量，Service 关闭位不被重置。
+
+已 join 的旧 PeerPump Arc 只可再次观察相同完成事实，没有输入、安装、材料或
+重放能力，因此不采用 Arc 引用数背压。Host 的 token/Connection/Cell 可操作
+custody 背压规则不变。network 本来已有 terminal=1 + slot=None 的真实 join
+回收，本片不改变它的语义。旧网络观察句柄只能关闭其自己的旧 stop 或读取旧结果，
+不能指向后来登记的任务。
+
+材料不新增平行 GC：每 Session 仅一个 socket 槽，每代原 MaterialCustody
+只有一个状态机。原 coordinator 的 teardown 收齐 channel/MUX 和材料释放，
+Released/NotSpawned 才正常结束；Unknown 保留并关闭，不经历史清理恢复。
+完整 receipt 后才替换旧代槽的原规则不变。
+
+130 个 PeerPump 任务和 130 个 network coordinator 测试用于有界容器机制验证，
+不是 130 次公网/真实手机会话，更不等于 30 天运行。真实 localhost Relay 双代
+回归另行执行。生产授权/UI/供钥、60 秒窗口、8 秒启动和绝对最长 30 天均未扩展。

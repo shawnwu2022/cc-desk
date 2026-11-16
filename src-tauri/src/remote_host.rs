@@ -58,6 +58,11 @@ struct PeerPump {
     joined: AtomicU8,
 }
 impl PeerPump {
+    fn known_joined(&self) -> bool {
+        // 只读真实 join 缓存；Service 锁内只 try_lock，竞争时保留，不跨 await。
+        self.joined.load(Ordering::Acquire) == 1
+            && self.join.try_lock().is_ok_and(|slot| slot.is_none())
+    }
     async fn join(&self) -> bool {
         let mut slot = self.join.lock().await;
         if let Some(worker) = slot.as_mut() {
@@ -341,6 +346,8 @@ impl RemoteHostService {
                 None if state.delegation.is_some() => return None,
                 None => state.one_shot_claimed = true,
             }
+            // 旧 Arc 只观察原终局，无安装或输入能力，不以引用数冒充任务事实。
+            state.peer_pumps.retain(|pump| !pump.known_joined());
         }
         if matches!(state.host, HostSlot::CheckedOut(_))
             || (admitting && (state.closing || state.peer_pumps.len() >= 64))
@@ -1414,5 +1421,102 @@ mod tests {
         wait.await.unwrap();
         assert_eq!(service.request_exit(31, false), ExitDecision::Prevent);
         assert!(!service.state.lock().retired);
+    }
+
+    #[tokio::test]
+    #[allow(non_snake_case)]
+    async fn AppHistory_JoinedPeerPumpsSurvive130Reservations_001() {
+        let service = RemoteHostService::default();
+        let mut old = Vec::new();
+        for generation in 0..130 {
+            let pump = Arc::new(PeerPump {
+                join: tokio::sync::Mutex::new(Some(tauri::async_runtime::spawn(async { Ok(()) }))),
+                joined: AtomicU8::new(0),
+            });
+            service.state.lock().peer_pumps.push(pump.clone());
+            assert!(pump.join().await);
+            old.push(pump);
+            let checkout = service.checkout_host(true);
+            assert!(
+                checkout.is_some(),
+                "joined history exhausted generation {generation}"
+            );
+            checkout.unwrap().finish();
+            assert!(service.state.lock().peer_pumps.len() < 64);
+        }
+        // 已回收旧 Arc 只能观察同一缓存事实，不代表新任务或授权。
+        for pump in old {
+            assert!(pump.join().await);
+        }
+    }
+
+    #[tokio::test]
+    async fn AppHistory_UnconsumedFinishedHandlesKeepCapacity_002() {
+        let service = RemoteHostService::default();
+        let mut original = Vec::new();
+        for _ in 0..64 {
+            let pump = Arc::new(PeerPump {
+                join: tokio::sync::Mutex::new(Some(tauri::async_runtime::spawn(async { Ok(()) }))),
+                joined: AtomicU8::new(0),
+            });
+            service.state.lock().peer_pumps.push(pump.clone());
+            original.push(pump);
+        }
+        tokio::task::yield_now().await;
+        assert!(service.checkout_host(true).is_none());
+        assert_eq!(service.state.lock().peer_pumps.len(), 64);
+        assert!(original[0].join().await);
+        service.checkout_host(true).unwrap().finish();
+        assert_eq!(service.state.lock().peer_pumps.len(), 63);
+        for pump in original {
+            assert!(pump.join().await);
+        }
+    }
+    #[tokio::test]
+    async fn AppHistory_CancelledObserverAndSlotContentionKeepOriginal_003() {
+        let service = RemoteHostService::default();
+        let (release, wait) = tokio::sync::oneshot::channel();
+        let pump = Arc::new(PeerPump {
+            join: tokio::sync::Mutex::new(Some(tauri::async_runtime::spawn(async move {
+                wait.await.map_err(|_| ())?;
+                Ok(())
+            }))),
+            joined: AtomicU8::new(0),
+        });
+        service.state.lock().peer_pumps.push(pump.clone());
+        assert!(tokio::time::timeout(Duration::from_millis(10), pump.join())
+            .await
+            .is_err());
+        service.checkout_host(true).unwrap().finish();
+        assert_eq!(service.state.lock().peer_pumps.len(), 1);
+        release.send(()).unwrap();
+        assert!(pump.join().await);
+        let slot = pump.join.lock().await;
+        service.checkout_host(true).unwrap().finish();
+        assert_eq!(service.state.lock().peer_pumps.len(), 1);
+        drop(slot);
+        service.checkout_host(true).unwrap().finish();
+        assert!(service.state.lock().peer_pumps.is_empty());
+        assert!(pump.join().await);
+    }
+    #[tokio::test]
+    async fn AppHistory_UnknownRetainedAndShutdownNeverReopens_004() {
+        let service = RemoteHostService::default();
+        let pump = Arc::new(PeerPump {
+            join: tokio::sync::Mutex::new(Some(tauri::async_runtime::spawn(async {
+                panic!("TEST_ONLY original pump panic");
+                #[allow(unreachable_code)]
+                Ok(())
+            }))),
+            joined: AtomicU8::new(0),
+        });
+        service.state.lock().peer_pumps.push(pump.clone());
+        assert!(!pump.join().await);
+        service.checkout_host(true).unwrap().finish();
+        assert_eq!(service.state.lock().peer_pumps.len(), 1);
+        service.state.lock().closing = true;
+        assert!(service.checkout_host(true).is_none());
+        assert_eq!(service.state.lock().peer_pumps.len(), 1);
+        assert!(!pump.join().await);
     }
 }
