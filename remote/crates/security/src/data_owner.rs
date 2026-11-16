@@ -810,3 +810,7 @@ mod peer_engine_admission_tests {
         c.wait_closed().await;
     }
 }
+
+#[path="live_keepalive.rs"]
+mod live_keepalive;
+pub use live_keepalive::LiveKeepaliveFact;

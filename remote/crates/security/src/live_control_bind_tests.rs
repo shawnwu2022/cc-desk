@@ -85,6 +85,36 @@ async fn LiveControl_AuthenticatedFactReachesOriginalChannel_002() {
         // 协商事实不是 Installed 或控制授权，原 bootstrap 尚未完成。
         assert!(c.installed_fence().is_err());
         assert!(h.installed_fence().is_err());
+        if enabled {
+            assert!(h.live_keepalive_fact(Role::Host).unwrap().is_none());
+        } else {
+            assert!(h.live_keepalive_fact(Role::Host).is_err());
+        }
+        if enabled {
+            let request = h.host_install_request().await.unwrap();
+            let (proof, done) =
+                tokio::join!(c.client_installed(), h.complete_host_install(request, 7));
+            done.unwrap();
+            let proof = proof.unwrap();
+            assert_eq!(proof.consume_for(&c).unwrap(), 7);
+            let fact = h.live_keepalive_fact(Role::Host).unwrap().unwrap();
+            assert!(fact.remaining_ms_for(&h, Role::Host).unwrap() > 0);
+            assert!(fact.validate_for(&c, Role::Host).is_err());
+            assert!(fact.validate_for(&h, Role::Client).is_err());
+            let other: Arc<dyn crate::GrantClock> = Arc::new(|| Ok(1000));
+            assert!(!fact.uses_clock(&other));
+            assert!(
+                h.live_keepalive_fact(Role::Host)
+                    .unwrap()
+                    .unwrap()
+                    .test_stale_fence()
+                    .validate_for(&h, Role::Host)
+                    .is_err()
+            );
+            h.authority().request_close();
+            assert!(fact.validate_for(&h, Role::Host).is_err());
+            assert!(h.live_keepalive_fact(Role::Host).is_err());
+        }
         c.authority().request_close();
         h.authority().request_close();
         let (c, h) = tokio::join!(c.wait_closed_checked(), h.wait_closed_checked());

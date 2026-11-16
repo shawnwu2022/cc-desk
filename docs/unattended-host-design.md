@@ -723,3 +723,15 @@ Browser 最多一个原应用 write 等正在 drain 的 heartbeat，第二并发
 额外实际 WSS→Rust oracle 是旧路径兼容回归，不是新心跳 Relay/WASM
 组合或手机后台验收。C 仍需真实当前 Installed/authority 事实与固定时钟
 交接，绝不能仅拿 getter、peer_deadline、配置或 JS bool 激活。
+
+
+## C1：原 Host Installed 事实激活原 MUX
+
+本片仅为封闭 delegated Live 路径接线。默认、manual-v1、原 one-shot 不升级；Live 材料选择仍只有测试构造，生产 supplier/consent/UI 未开放，Browser C2 未接线。
+
+- LiveKeepaliveFact 仅从原 RunningChannel 缓存 Installed 产生，保存精确原 authority、peer 与 fence；要求 Live + Controller + expected local role，Terminal 不回到 Installed。缓存只读，不消费 PeerPump 原证明或事件。getter 不授权输入。
+- 原 NetworkWire 托管唯一 Dormant activation、channel 与 MUX。handoff 后在原 8 秒 setup/cancel 任务内等待 Installed，每 100ms 检查缓存；无额外后台任务。Host 激活要求 Host role，原 NetworkBudget clock 与 fact 同域。
+- sampleBefore 先于 GrantClock 采样；固定 end 取 sampleBefore + 当前 grant 剩余与原固定 NetworkBudget deadline 的 min。激活前后重核 authority、预算、域和原 stop；activation 只能 take 一次。任何失败走原 cancel/close_and_join/material release，不新建回收 owner。
+- 真实本地 Relay fixture 的两端使用原 socket/TLS/认证 Live channel 后分别激活原 MUX。无 Snapshot/ACK/LeaseRenew/输入等待 4 秒，超过本轮 fixture 的 2 秒 IO 预算后仍有效；固定总授权 6 秒到期后原 socket/MUX join，不能 prepare_next，本机原终端仍精确消费 native。此证据不是 Browser/WASM/手机或 61 秒低流量验收。
+
+首轮 5/6：空闲用例错误调用终局 report()，该 helper 等 ProcessLifecycle::Exited，而原 input probe 必须收到至少 6 字节才退出，造成 D15 lifecycle did not converge。修复只改为空闲观察原进程未退出，后续精确 native 字节报告排除任何额外输入；未扩大超时或降低协议断言。首轮日志保留。

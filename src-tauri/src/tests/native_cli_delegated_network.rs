@@ -1462,3 +1462,157 @@ async fn ControlLease_Real61SecondsManualRenewalThenOriginalRetirement_015() {
     }
     renewal_case(17).await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn LiveHost_IdleBeyondIoAndFixedTotalJoin_001() {
+    if isolated("LiveHost_IdleBeyondIoAndFixedTotalJoin_001") {
+        return;
+    }
+    live_host_case(0).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn LiveHost_RevokeBeforeActivation_002() {
+    if isolated("LiveHost_RevokeBeforeActivation_002") {
+        return;
+    }
+    live_host_case(1).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn LiveHost_RevokeAfterActivation_003() {
+    if isolated("LiveHost_RevokeAfterActivation_003") {
+        return;
+    }
+    live_host_case(2).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn LiveHost_ShutdownBeforeActivation_004() {
+    if isolated("LiveHost_ShutdownBeforeActivation_004") {
+        return;
+    }
+    live_host_case(3).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn LiveHost_ShutdownAfterActivation_005() {
+    if isolated("LiveHost_ShutdownAfterActivation_005") {
+        return;
+    }
+    live_host_case(4).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn LiveHost_LateInstalledAfterDisconnect_006() {
+    if isolated("LiveHost_LateInstalledAfterDisconnect_006") {
+        return;
+    }
+    live_host_case(5).await;
+}
+
+async fn live_host_case(mode: u8) {
+    let (f, mut cleanup) = setup();
+    let mut relay = NetworkRelayFixture::start().await;
+    let source = admit(&f);
+    let scope = source.scope().unwrap();
+    let (consent, mut current, policy) = NativeDelegationConsent::test_network(&source, device());
+    policy.test_network_origin(&mut current, relay.origin.clone());
+    policy.test_budget_progress();
+    policy.test_budget_total(if mode == 0 { 6000 } else { 15000 });
+    let owner = DelegatedRunOwner::capture(source, consent).unwrap();
+    let session = Arc::new(cleanup.host.reserve_delegation(owner).unwrap());
+    let (accepted, ready) = tokio::sync::oneshot::channel();
+    let mut builder =
+        renewal_material_duration(&relay, accepted, Duration::from_secs(20)).test_live_keepalive();
+    let hook_called = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    if (1..=4).contains(&mode) {
+        let called = hook_called.clone();
+        let session = session.clone();
+        let host = cleanup.host.clone();
+        builder = builder.test_activation_hook(mode == 2 || mode == 4, move || {
+            called.store(true, std::sync::atomic::Ordering::Release);
+            if mode <= 2 {
+                session.revoke();
+            } else {
+                host.request_exit(83, false);
+            }
+        });
+    }
+    let (entered, seen) = tokio::sync::oneshot::channel();
+    let (release, resume) = std::sync::mpsc::sync_channel(0);
+    if mode == 5 {
+        session.test_hold_bind(move || {
+            entered.send(()).unwrap();
+            resume.recv().unwrap();
+        });
+    }
+    let socket = session
+        .test_begin_socket(&current, &f.supervisor, builder)
+        .unwrap();
+    ready.await.unwrap();
+    let peer = if mode == 5 {
+        let peer = network_client_live(&relay, scope);
+        tokio::pin!(peer);
+        tokio::select! {result=seen=>result.unwrap(),_=&mut peer=>panic!("late original bind must remain owned")};
+        session.disconnect();
+        assert!(socket.wait_admitted().await.is_err());
+        release.send(()).unwrap();
+        peer.await
+    } else {
+        let (peer, admitted) =
+            tokio::join!(network_client_live(&relay, scope), socket.wait_admitted());
+        if mode == 0 {
+            assert!(admitted.is_ok(), "{admitted:?}");
+        } else {
+            assert!(hook_called.load(std::sync::atomic::Ordering::Acquire));
+            assert!(admitted.is_err());
+        }
+        peer
+    };
+    if mode == 0 {
+        let channel = socket.test_original_channel().unwrap();
+        let began = Instant::now();
+        // 真实等待期间没有 Snapshot、ACK、LeaseRenew 或输入；只有 outer 心跳。
+        tokio::time::sleep(Duration::from_secs(4)).await;
+        assert!(began.elapsed() >= Duration::from_secs(4));
+        assert!(!channel.is_closed());
+        assert!(channel.authority().check().is_ok());
+        assert_ne!(f.supervisor.snapshot(&f.request_run()).unwrap().process(), ProcessLifecycle::Exited);
+        tokio::time::timeout(Duration::from_secs(4), socket.wait_closed())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(channel.authority().check().is_err());
+        assert!(session.prepare_next(&current, &f.supervisor).is_err());
+    } else {
+        tokio::time::timeout(Duration::from_secs(4), socket.wait_closed())
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    if let Ok((client, mux, cancel)) = peer {
+        let _ = client.close().await;
+        cancel.cancel();
+        mux.request_close();
+        assert!(mux.wait_closed().await.is_ok());
+    } else {
+        assert_ne!(mode, 0);
+    }
+    if let Some(channel) = socket.test_original_channel() {
+        assert!(
+            channel
+                .live_keepalive_fact(cc_desk_remote_security::Role::Host)
+                .is_err()
+        );
+    }
+    f.service
+        .access(&f.caller, &f.request_run())
+        .unwrap()
+        .write_frame(b"native")
+        .unwrap();
+    assert_eq!(report(&f)["input"], json!([110, 97, 116, 105, 118, 101]));
+    drop(session);
+    assert!(cleanup.close());
+    assert!(relay.close().await);
+}

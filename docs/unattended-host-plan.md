@@ -768,3 +768,12 @@ NeedsSettlement。自动续租及 outer heartbeat 仍未实现。
   clippy-final2、typecheck-final2。未接 C/生产授权/UI/真实凭据/云服。
   实际 Relay 空闲长测、Worker→Window challenge、手机后台与原全 Host
   PTY 发布门槛仍未完成，不能称长期无人值守已交付。
+
+
+## C1 阶段验证记录
+
+- 真实 Relay LiveHost 6/6（14.93s）：无业务流量超过 IO/总截止 join、activation 前后 revoke、前后 shutdown、晚 Installed 被断开拒绝。
+- 同源码 Delegated 44/44、remote_unattended 56/56；原 HostStart 7 项逐项 fresh --exact 全通过，未合批绕过终身 Host 工厂约束。
+- security Native 全库 136 passed / 1 ignored；App remote-host 与 security experimental 严格 Clippy 均通过。
+- 日志实际父测试名去重 239 项，名单 .audit/live-activation-final-testnames.txt。首轮 fact API 缺失 RED、Relay 5/6 及 D15 错误观察点记录均保留；修复后日志 live-activation-relay-second 与各 *-final。
+- 本片未修改 Browser C2、自动 lease owner、生产 supplier/UI、真实凭据或云服。尚未证明真实 Relay + WASM 无业务流量或 A 低流量 61 秒，亦未解除原全 Host PTY 发布门槛，不能称长期无人值守已完成。

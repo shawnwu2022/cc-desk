@@ -1,6 +1,14 @@
 //! 两种封闭授权入口共用的原传输机制；本模块不产生批准或回收证明。
 use super::*;
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DelegatedWireMode {
+    Manual,
+    Live,
+}
 pub(super) struct WireInputs {
+    mode: DelegatedWireMode,
+    #[cfg(test)]
+    activation_hook: Option<(bool, Box<dyn FnOnce() + Send>)>,
     #[cfg(windows)]
     stages: Option<crate::native_crypto::host::HostSigningStages>,
     address: SocketAddr,
@@ -20,8 +28,25 @@ pub(super) struct WireInputs {
 }
 impl WireInputs {
     #[cfg(test)]
+    pub(super) fn test_activation_hook(
+        mut self,
+        after: bool,
+        hook: Box<dyn FnOnce() + Send>,
+    ) -> Self {
+        self.activation_hook = Some((after, hook));
+        self
+    }
+    #[cfg(test)]
+    pub(super) fn test_live(mut self) -> Self {
+        self.mode = DelegatedWireMode::Live;
+        self
+    }
+    #[cfg(test)]
     pub(super) fn from_test(inputs: super::delegated::TestMaterial) -> Self {
         Self {
+            mode: DelegatedWireMode::Manual,
+            #[cfg(test)]
+            activation_hook: None,
             #[cfg(windows)]
             stages: None,
             address: inputs.address,
@@ -41,6 +66,9 @@ impl WireInputs {
     }
     pub(super) fn from_approved(inputs: ApprovedHostInputs) -> Self {
         Self {
+            mode: DelegatedWireMode::Manual,
+            #[cfg(test)]
+            activation_hook: None,
             #[cfg(windows)]
             stages: inputs.stages,
             address: inputs.address,
@@ -74,6 +102,10 @@ impl WireAuthority<'_> {
 }
 pub(super) struct NetworkWire {
     started: bool,
+    live_requested: bool,
+    activation: Option<transport::DataKeepaliveActivation>,
+    #[cfg(test)]
+    activation_hook: Option<(bool, Box<dyn FnOnce() + Send>)>,
     cancel: security::CancelHandle,
     token: Option<security::CancelToken>,
     mux: Option<transport::OwnedTunnel>,
@@ -89,6 +121,10 @@ impl NetworkWire {
         let (cancel, token) = security::cancellation();
         Self {
             started: false,
+            live_requested: false,
+            activation: None,
+            #[cfg(test)]
+            activation_hook: None,
             cancel,
             token: Some(token),
             mux: None,
@@ -147,6 +183,15 @@ impl NetworkWire {
             return Err(HostNetworkError::Closed);
         }
         self.started = true;
+        let live = inputs.mode == DelegatedWireMode::Live;
+        if live && matches!(authorization, WireAuthority::Original(_)) {
+            return Err(HostNetworkError::Authority);
+        }
+        self.live_requested = live;
+        #[cfg(test)]
+        {
+            self.activation_hook = inputs.activation_hook;
+        }
         #[cfg(test)]
         let mut outer_accepted = inputs.outer_accepted;
         #[cfg(windows)]
@@ -207,18 +252,39 @@ impl NetworkWire {
                 .arm_endpoint()
                 .map_err(|_| HostNetworkError::Authority)?;
         }
-        #[cfg(not(test))]
-        let (stream, owner) = transport::start_admitted(socket, inputs.tunnel, inputs.io_budget)
-            .map_err(|_| HostNetworkError::Relay)?;
-        #[cfg(test)]
-        let (stream, owner) = {
-            let (stream, owner, ending) = transport::test_only_start_admitted_observed(
+        let (stream, owner) = if live {
+            let WireAuthority::Delegated(budget) = &authorization else {
+                return Err(HostNetworkError::Authority);
+            };
+            let mut cancelled = self.token.as_ref().ok_or(HostNetworkError::Closed)?.clone();
+            let (stream, owner, activation) = transport::start_admitted_data_keepalive_dormant(
                 socket,
                 inputs.tunnel,
                 inputs.io_budget,
+                end,
+                Instant::from_std(budget.deadline()),
+                async move { cancelled.cancelled().await },
             )
             .map_err(|_| HostNetworkError::Relay)?;
-            self.mux_termination = Some(ending);
+            self.activation = Some(activation);
+            (stream, owner)
+        } else {
+            #[cfg(not(test))]
+            let (stream, owner) =
+                transport::start_admitted(socket, inputs.tunnel, inputs.io_budget)
+                    .map_err(|_| HostNetworkError::Relay)?;
+            #[cfg(test)]
+            let (stream, owner) = {
+                let (stream, owner, ending) = transport::test_only_start_admitted_observed(
+                    socket,
+                    inputs.tunnel,
+                    inputs.io_budget,
+                )
+                .map_err(|_| HostNetworkError::Relay)?;
+                self.mux_termination = Some(ending);
+                (stream, owner)
+            };
+
             (stream, owner)
         };
         self.mux = Some(owner);
@@ -244,7 +310,11 @@ impl NetworkWire {
                 security::bind_host_peer_channel(pending, inputs.binding).await
             }
             WireAuthority::Delegated(_) => {
-                security::bind_host_control_lease_channel(pending, inputs.binding).await
+                if live {
+                    security::bind_host_live_control_channel(pending, inputs.binding).await
+                } else {
+                    security::bind_host_control_lease_channel(pending, inputs.binding).await
+                }
             }
         }
         .map_err(|error| {
@@ -285,6 +355,87 @@ impl NetworkWire {
         );
         self.running = Some(channel.clone());
         Ok(channel)
+    }
+    // 仅原 wire/channel 在原 setup task 内观察缓存；不读取 PeerPump 的事件或证明。
+    pub(super) async fn activate_live_after_install(
+        &mut self,
+        budget: &crate::remote_unattended::capability::network::NetworkBudget,
+        setup_end: Instant,
+        stop: &watch::Sender<bool>,
+    ) -> Result<(), HostNetworkError> {
+        if !self.live_requested {
+            return Ok(());
+        }
+        let result = async {
+            let channel = self.running.as_ref().ok_or(HostNetworkError::Closed)?;
+            loop {
+                remaining(setup_end)?;
+                if *stop.borrow() {
+                    return Err(HostNetworkError::Closed);
+                }
+                budget.check().map_err(|_| HostNetworkError::Authority)?;
+                if let Some(fact) = channel
+                    .live_keepalive_fact(security::Role::Host)
+                    .map_err(|_| HostNetworkError::Authority)?
+                {
+                    let clock = budget.clock();
+                    if !fact.uses_clock(&clock) {
+                        return Err(HostNetworkError::Authority);
+                    }
+                    #[cfg(test)]
+                    if self
+                        .activation_hook
+                        .as_ref()
+                        .is_some_and(|(after, _)| !*after)
+                    {
+                        (self.activation_hook.take().unwrap().1)();
+                    }
+                    if *stop.borrow() {
+                        return Err(HostNetworkError::Closed);
+                    }
+                    let sample_before = Instant::now();
+                    let left = fact
+                        .remaining_ms_for(channel, security::Role::Host)
+                        .map_err(|_| HostNetworkError::Authority)?;
+                    let fixed_end = sample_before
+                        .checked_add(Duration::from_millis(left))
+                        .ok_or(HostNetworkError::Deadline)?
+                        .min(Instant::from_std(budget.deadline()));
+                    budget.check().map_err(|_| HostNetworkError::Authority)?;
+                    fact.validate_for(channel, security::Role::Host)
+                        .map_err(|_| HostNetworkError::Authority)?;
+                    remaining(setup_end)?;
+                    self.activation
+                        .take()
+                        .ok_or(HostNetworkError::Closed)?
+                        .activate(fixed_end)
+                        .map_err(|_| HostNetworkError::Authority)?;
+                    #[cfg(test)]
+                    if let Some((_, hook)) = self.activation_hook.take() {
+                        hook();
+                    }
+                    if *stop.borrow() {
+                        return Err(HostNetworkError::Closed);
+                    }
+                    budget.check().map_err(|_| HostNetworkError::Authority)?;
+                    fact.validate_for(channel, security::Role::Host)
+                        .map_err(|_| HostNetworkError::Authority)?;
+                    if !fact.uses_clock(&budget.clock()) {
+                        return Err(HostNetworkError::Authority);
+                    }
+                    return Ok(());
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        }
+        .await;
+        if result.is_err() {
+            self.cancel.cancel();
+            if let Some(mux) = &self.mux {
+                mux.request_close();
+            }
+        }
+        result
     }
     pub(super) async fn close_and_join(&mut self) -> bool {
         #[cfg(windows)]

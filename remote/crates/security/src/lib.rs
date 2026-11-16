@@ -32,7 +32,7 @@ pub use data::{
 #[cfg(feature = "experimental")]
 mod data_owner;
 #[cfg(feature = "experimental")]
-pub use data_owner::{DATA_QUEUE_SLOTS, RunningChannel};
+pub use data_owner::{DATA_QUEUE_SLOTS, LiveKeepaliveFact, RunningChannel};
 #[cfg(feature = "experimental")]
 mod data_authority;
 #[cfg(feature = "experimental")]

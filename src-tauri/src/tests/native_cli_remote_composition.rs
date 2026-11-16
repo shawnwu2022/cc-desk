@@ -400,11 +400,33 @@ async fn network_client_lease(
     )
     .await
 }
+async fn network_client_live(
+    relay: &NetworkRelayFixture,
+    scope: cc_desk_remote_record::grant::SessionScope,
+) -> NetworkClientResult {
+    network_client_profile_inner(
+        relay,
+        scope,
+        cc_desk_remote_transport::wss::RelayMode::Legacy,
+        true,
+        true,
+    )
+    .await
+}
 async fn network_client_profile(
     relay: &NetworkRelayFixture,
     scope: cc_desk_remote_record::grant::SessionScope,
     mode: cc_desk_remote_transport::wss::RelayMode,
     control_lease: bool,
+) -> NetworkClientResult {
+    network_client_profile_inner(relay, scope, mode, control_lease, false).await
+}
+async fn network_client_profile_inner(
+    relay: &NetworkRelayFixture,
+    scope: cc_desk_remote_record::grant::SessionScope,
+    mode: cc_desk_remote_transport::wss::RelayMode,
+    control_lease: bool,
+    live_keepalive: bool,
 ) -> NetworkClientResult {
     use cc_desk_remote_security::*;
     let budget = Duration::from_secs(8);
@@ -425,10 +447,26 @@ async fn network_client_profile(
     .await
     .map_err(|_| "phone relay")?;
     eprintln!("TEST_ONLY_PHONE_OUTER_ACCEPTED");
-    let (stream, mux) =
-        cc_desk_remote_transport::start_admitted(socket, [3; 16], Duration::from_secs(2))
-            .map_err(|_| "phone mux")?;
     let (cancel, token) = cancellation();
+    let (stream, mux, activation) = if live_keepalive {
+        let mut stopped = token.clone();
+        let (stream, mux, activation) =
+            cc_desk_remote_transport::start_admitted_data_keepalive_dormant(
+                socket,
+                [3; 16],
+                Duration::from_secs(2),
+                end,
+                tokio::time::Instant::now() + Duration::from_secs(900),
+                async move { stopped.cancelled().await },
+            )
+            .map_err(|_| "phone live mux")?;
+        (stream, mux, Some(activation))
+    } else {
+        let (stream, mux) =
+            cc_desk_remote_transport::start_admitted(socket, [3; 16], Duration::from_secs(2))
+                .map_err(|_| "phone mux")?;
+        (stream, mux, None)
+    };
     let result: Result<_, &'static str> = async {
         eprintln!("TEST_ONLY_PHONE_TLS_START");
         let pending = connect(
@@ -449,7 +487,9 @@ async fn network_client_profile(
             origin: cc_desk_remote_record::appbind::CanonicalOrigin::trusted(&relay.origin)
                 .unwrap(),
         };
-        let channel = if control_lease {
+        let channel = if live_keepalive {
+            bind_client_live_control_channel(pending, binding_trust).await
+        } else if control_lease {
             bind_client_control_lease_channel(pending, binding_trust).await
         } else {
             bind_client_peer_channel(pending, binding_trust).await
@@ -475,6 +515,21 @@ async fn network_client_profile(
             .client_installed()
             .await
             .map_err(|_| "phone install")?;
+        if let Some(activation) = activation {
+            let fact = channel
+                .live_keepalive_fact(Role::Client)
+                .map_err(|_| "phone live fact")?
+                .ok_or("phone pending")?;
+            let sample = tokio::time::Instant::now();
+            let left = fact
+                .remaining_ms_for(&channel, Role::Client)
+                .map_err(|_| "phone live deadline")?;
+            activation
+                .activate(sample + Duration::from_millis(left))
+                .map_err(|_| "phone activate")?;
+            fact.validate_for(&channel, Role::Client)
+                .map_err(|_| "phone live closed")?;
+        }
         cc_desk_remote_client::NativeClient::from_installed(channel, installed)
             .map_err(|_| "phone client")
     }

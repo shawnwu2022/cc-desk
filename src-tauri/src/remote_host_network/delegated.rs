@@ -37,6 +37,20 @@ struct TestHooks {
 }
 #[cfg(test)]
 impl TestMaterialBuilder {
+    pub(crate) fn test_activation_hook(
+        mut self,
+        after: bool,
+        hook: impl FnOnce() + Send + 'static,
+    ) -> Self {
+        let previous = self.0;
+        self.0 = Box::new(move |scope| previous(scope).test_activation_hook(after, Box::new(hook)));
+        self
+    }
+    pub(crate) fn test_live_keepalive(mut self) -> Self {
+        let previous = self.0;
+        self.0 = Box::new(move |scope| previous(scope).test_live());
+        self
+    }
     pub(crate) fn test_after_keepalive(mut self, hook: impl FnOnce() + Send + 'static) -> Self {
         self.2.after_keepalive = Some(Box::new(hook));
         self
@@ -228,6 +242,8 @@ impl SocketCustody {
                     .handoff(channel)
                     .map_err(|_| HostNetworkError::Handoff)?;
                 clock.now_ms().map_err(|_| HostNetworkError::Authority)?;
+                wire.activate_live_after_install(&budget, end, &original.network.stop)
+                    .await?;
                 Ok(())
             };
             let result = {
