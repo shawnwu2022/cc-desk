@@ -138,3 +138,99 @@ browserFlowCredit.model.test.ts 仅包含 test-local 模型，不导出也不接
 不能因此把 ACK 上限从已发送高水位放宽为预留量；需确定真实提交点，或仅有界
 保留超前 ACK 等待原发送事实，期间不释放额度。模型没有覆盖此真实 IO 时序。
 两项失败中的验收测试不属于此独立文档/模型阶段提交；5.2 秒链路仍 RED。
+
+## 优先候选修订：显式协商的有界 Snapshot 拉取
+
+路线已选择进入安全设计/RED，尚未选择生产启用。
+相较通用 wire-credit，该路线不在 TLS 字节流中途等待新的传输信用，因而不引入
+同流半 record 后排队 ACK 的新等待环；不需要把原 transport 改成 TLS 控制调度器。
+代价是额外 RTT，原固定 1 秒预算仍保留，公网大快照不作可用性承诺。
+
+候选状态：Idle -> Captured -> ServingBatch -> AwaitNext -> Delivered -> AwaitProjectionAck。
+任何阶段均可 Closing -> Joined/Unknown；截止、撤销、设备/信任失效必须独立触发。
+
+- 新协商能力与新请求格式精确匹配。旧端路径明确分离，不以静默降级绕过保护。
+- 每连接最多一个冻结的原 CapturedProjection，继续占用原 MAX_VIEWS=2、每view
+  4 MiB 的预算。不得每次 Next 重新capture、换stamp或增加保留快照。
+- 每个请求只能触发一个严格限制编码总字节的小批响应；Client 完整认证、验证并
+  消费该批后才请求 Next。恶意超批/乱序响应直接终止，不缓存待将来拼装。
+- transfer 标识不是新权限：必须与同一 channel/target/binding/fence、原stamp、
+  精确下一offset和请求序列同时匹配。重复/跨代/越界 Next 不能重放发送。
+- 整次传输端到端截止取自首次请求，不因 Next、heartbeat 或续租重置；
+  每批只使用原剩余预算。Host 不能因等待下一个请求而无限保留 frame。
+- 最后一批仍不授输入；完整安装后保留原 ProjectionAck/Window 流程。
+- 固定 64 KiB byte ring 或等价有界拼接仍是必要候选：任意小 outer 碎片不能
+  每片新增无界对象。不得把这个表示修补单独称为背压修复。
+
+### 拉取路线仍需证明的上界
+
+已查锁定源码：inner grant DATA_PREFIX=114，outer Native pump 每次读至多16384；
+rustls 0.23.46 默认明文 fragment 长16384、接收 MAX_WIRE_SIZE=18432+5、
+默认 sendable buffer 64 KiB；原 ServerConfig 禁用 TLS1.3 tickets。
+这些是单层事实，不足以直接证明一个拉取响应的总 wire bytes 或总驻留。
+
+响应cap必须包含实际编码后的 inner header、Data envelope、全部 TLS records、
+可能的 KeyUpdate/其他自动记录及初始化残余。禁止把 payload 上限直接等同密文上限。
+不能假设一次 write 就是一条 TLS record，也不能使用典型片长；必须记录真实原
+TLS配置/编码器可达最坏界，并以最大payload/任意碎片/自动控制记录回归验证。
+若边界无法证明，拉取候选仍停在设计阶段。
+
+下游内存账仍需包含批响应解码、WASM/JS复制、最终4MiB Snapshot以及原view。
+Client 请求下一批不能把仍被多份引用的上一批当作已释放；允许的累计Snapshot
+必须单独计入固定总账。一个无限请求历史数组同样不可接受。
+
+### 拉取路线 RED/验证清单
+
+1. 模型：一个原view、一次固定截止、精确Next、重复/方向/跨代/超限拒绝；
+   未完整消费批不能发Next；关闭/到期在等待Next时也释放原view且不伪造join。
+2. 编码：最大Unicode/style网格保持完整覆盖；响应按编码后字节cap分批，
+   不缩小网格；总Snapshot仍有原上限；拒绝超批及未授权追加帧。
+3. 原链：任意小碎片、突发多片、慢消费者、撤销/断连/早到ACK、旧端协商与拒绝降级。
+4. 同源码5.2秒原RED转绿后才做61秒组合验收，RTT与吞吐仍是独立门禁。
+
+上述只是有限比较后的较小候选，不是内存/兼容/无死锁证明已经完成。
+
+### 原生命周期补充
+
+现有 deliver_bound 消耗 self；SendingGuard 在未完成时 Drop 会 REVOKED 并关闭。
+不能在每批调用这个完整发送函数后提前 DELIVERED，也不能临时 drop guard 再重建。
+候选必须由原 Host owner 跨批保留唯一 Transfer、原 guard 与 CapturedProjection。
+MAX_VIEWS=2 是全 Host 共享预算，绝非每连接各有2份。撤销立即禁止 Next；
+仍在途的原发送必须继续观察/join，不把“发出close”视为已经释放全部资源。
+到期/撤销/断连的回收必须由原owner独立驱动，不能依赖下一个 Next 到达。
+NativeClient 整个 snapshot 持有原 pending，Next不开放并行 exchange/LeaseRenew。
+
+## 测试专用真实 TLS 探针阶段（仍非生产修复）
+
+`tls_batch_probe.rs` 仅经 `tls.rs` 的 cfg(test) 加载，复用原 connect/accept、
+测试 RPK 身份、真实 rustls 0.23.46。未新增生产接口或传输协议。
+同源码两例 2/2 通过：`.audit/tls-batch-probe-final.log`。
+正常 32776 明文字节产生 [16406,16406,30] 共32842 wire；
+主动 KeyUpdate + 每次底层最多7字节写产生 [27,16406,16406,30] 共32869 wire。
+短写例 write_all 成功时只有888 wire，flush 后才32869；写成功不是消费证明。
+KeyUpdate+7字节短写例首次应用读取1字节时底层已收18464 wire；普通例为18437。
+rustls Reader此时仍持有16383明文字节。
+读完整批后 Reader 返回 WouldBlock，只证明当前明文队列无可读内容，不证明
+分配容量、WASM/MessagePort/JS副本已经释放。
+
+更重要：KeyUpdate收到后空flush没有输出（0字节），但下一1字节请求产生
+[27,23]，相较无KeyUpdate的[23]多27字节。空flush、wants_write为false及
+当前明文队列空都不能合起来推导“后续没有TLS控制残余”。握手输出计数未重置；
+本次两例首批前未读残余为0，仅是这两例观测，不是全链激活屏障证明。
+
+源码可推导的条件公式：锁定ring TLS1.3 AES128GCM/ChaCha（均16字节tag），
+默认16384明文fragment；每个非空应用record增加5字节头+1字节类型+16字节tag。
+若一次完整明文提交P且未受内部缓冲余量分割，则wire=P+22*ceil(P/16384)。
+32776对应32842；独立KeyUpdate明文5字节，对应27 wire。
+依据：rustls msgs/fragmenter.rs、crypto/ring/tls13.rs、common_state.rs。
+这不是通用批上界：原data_owner.rs使用poll_write(bytes[offset..])，待发余量
+和每次接受边界可增加record数；必须证明激活/前批flush/额外控制的实际状态。
+queued_key_update_message是一个Option，但被perhaps_write_key_update取走后
+可再次排入；每次应用数据会重置32次KeyUpdate接收计数，不能把Option解释成
+整个传输生命周期最多一个控制record。告警/关闭记录须独立有界并终止owner。
+本探针没有强制另一cipher、序号自动换钥阈值或恶意KeyUpdate洪泛，不能代替这些门禁。
+
+当前仍不接生产：需真实批编码/owner截止边界、旧控制残余账、原Worker消费接点
+和固定总内存预算。保留原5.2秒smoke失败、61秒未开始的事实。
+Pull模型现9/9（含每连接唯一Transfer槽位），仍只是探索约束；Set删除不等于
+真实Arc回收，手动tick/join不证明主动回收，Unknown发送结果不得冒充成功join。

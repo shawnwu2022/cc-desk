@@ -354,3 +354,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "tls_batch_probe.rs"]
+mod batch_probe;
