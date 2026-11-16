@@ -1,0 +1,9 @@
+.remote-terminal-grid { font-family: monospace; line-height: 1.2; isolation: isolate; }
+.remote-terminal-grid .cell { min-width: 0; }
+.remote-terminal-grid .cursor { z-index: 1; outline: 1px solid currentColor; }
+.remote-terminal-grid .cursor-Underline { outline: none; border-bottom: 2px solid currentColor; }
+.remote-terminal-grid .cursor-Beam { outline: none; border-left: 2px solid currentColor; }
+.remote-terminal-grid .cursor-Block { background: currentColor; opacity: .35; }
+.remote-terminal-grid .cursor-blinking { animation: remote-cursor 1s step-end infinite; }
+@keyframes remote-cursor { 50% { visibility: hidden; } }
+@media (prefers-reduced-motion: reduce) { .remote-terminal-grid .cursor-blinking { animation: none; } }

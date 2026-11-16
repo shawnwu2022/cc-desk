@@ -405,16 +405,16 @@ export async function cliResize(
   run: import('@/types/terminal').RunKey,
   cols: number,
   rows: number,
-): Promise<void> {
+): Promise<import('@/types/terminal').NativeResizeReceipt | void> {
   if (!Number.isInteger(cols) || cols <= 0 || cols > 65535
     || !Number.isInteger(rows) || rows <= 0 || rows > 65535) {
     throw new Error('INVALID_TERMINAL_SIZE')
   }
-  await nativeDocumentBridge().invoke('cli_resize', {
+  return await nativeDocumentBridge().invoke('cli_resize', {
     ...run,
     cols,
     rows,
-  })
+  }) as import('@/types/terminal').NativeResizeReceipt | void
 }
 
 
@@ -466,6 +466,7 @@ export async function cliWriteInput(
 export async function cliWriteProtocol(
   run: import('@/types/terminal').RunKey,
   bytes: Uint8Array,
+  source?: import('@/types/terminal').ProtocolSource,
 ): Promise<import('@/types/terminal').ProtocolWriteReceipt> {
   if (bytes.byteLength === 0 || bytes.byteLength > NATIVE_INPUT_UPLOAD_CHUNK_BYTES) {
     throw new Error('INVALID_PROTOCOL_INPUT_SIZE')
@@ -473,6 +474,7 @@ export async function cliWriteProtocol(
   return nativeDocumentBridge().invoke('cli_input_protocol', {
     ...run,
     bytes: Array.from(bytes),
+    ...(source ? { protocolSource: source } : {}),
   }) as Promise<import('@/types/terminal').ProtocolWriteReceipt>
 }
 
@@ -544,4 +546,65 @@ export function createNativeSessionRecycleClient() {
 export function createNativeOpencodeArchiveClient() {
   const bridge = nativeDocumentBridge()
   return createOpencodeArchiveClient(bridge, () => nativeDocumentBridge() === bridge)
+}
+
+// Registered 仅表示来源曾登记，不表示连接可用、批准有效或可再次消费；不能映射 Ready。
+export type RemoteHostControlState = { state: 'Locked' | 'Pending' | 'ApprovalRecorded' | 'Consumed' | 'Cancelled' | 'Expired' | 'Registered' };
+export type RemoteHostRun = { runId: string; generation: number };
+export type RemoteRegistrationState =
+  | { state: 'Locked' | 'PendingKeyApproval' | 'Connecting' | 'Verifying' | 'PendingBrowserApproval' | 'PendingNativePersistence' | 'NativeStoreDeclined' | 'NativeStoreFailed' | 'NativeStoreUnknown' | 'NativeStoredRegistrationIncomplete' | 'Cancelled' | 'Failed' | 'Unknown' }
+  | { state: 'InstalledLocked' | 'DeliveryUnconfirmed'; receipt: string; remembered: boolean }
+  | { state: 'RetirementUnknown'; receipt: string | null; remembered: boolean };
+export async function remoteRegistrationRequest(request: RemoteHostRun & { candidateJson: string }): Promise<RemoteRegistrationState> {
+  return await nativeDocumentBridge().invoke('remote_registration_request', request) as RemoteRegistrationState;
+}
+export async function remoteRegistrationCurrent(run: RemoteHostRun): Promise<RemoteRegistrationState> {
+  return await nativeDocumentBridge().invoke('remote_registration_current', run) as RemoteRegistrationState;
+}
+export async function remoteRegistrationCancel(run: RemoteHostRun): Promise<RemoteRegistrationState> {
+  return await nativeDocumentBridge().invoke('remote_registration_cancel', run) as RemoteRegistrationState;
+}
+// 仅是原生目标的公开描述，不是批准、密钥或连接权限。
+export type RemoteHostPairingScope = { session: string; run: string; generation: string };
+export async function remoteHostPairingScope(run: RemoteHostRun): Promise<RemoteHostPairingScope> {
+  return await nativeDocumentBridge().invoke('remote_host_pairing_scope', run) as RemoteHostPairingScope;
+}
+// 仅走当前文档证明；不回退到 raw invoke，不将失败包装成 Locked。
+export async function remoteHostCurrent(run: RemoteHostRun): Promise<RemoteHostControlState> {
+  return await nativeDocumentBridge().invoke('remote_host_current', run) as RemoteHostControlState;
+}
+export async function remoteHostRequest(run: RemoteHostRun): Promise<RemoteHostControlState> {
+  return await nativeDocumentBridge().invoke('remote_host_request', run) as RemoteHostControlState;
+}
+export async function remoteHostCancel(run: RemoteHostRun): Promise<RemoteHostControlState> {
+  return await nativeDocumentBridge().invoke('remote_host_cancel', run) as RemoteHostControlState;
+}
+
+export async function remoteHostStart(run: RemoteHostRun): Promise<RemoteHostControlState> {
+  return await nativeDocumentBridge().invoke('remote_host_start', run) as RemoteHostControlState;
+}
+
+export async function remoteHostConfigure(request: RemoteHostRun & { candidateJson: string }): Promise<{ state: 'Configured'; receipt: string }> {
+  return await nativeDocumentBridge().invoke('remote_host_configure', request) as { state: 'Configured'; receipt: string };
+}
+export async function remoteHostDiscardCandidate(request: RemoteHostRun & { receipt: string }): Promise<void> {
+  await nativeDocumentBridge().invoke('remote_host_discard_candidate', request);
+}
+
+// 已记住的公开设备不是批准；选择只冻结当前 owned run 的新候选。
+export type RemotePairingDevice = { deviceId: string; browserOrigin: string; relayOrigin: string; profileId: string };
+export type RemotePairingList = { state: 'Locked'; storeId: string | null; revision: string | null; devices: RemotePairingDevice[] };
+export type RemotePairingSelection = RemoteHostRun & { candidateJson: string };
+export async function remotePairingList(run: RemoteHostRun): Promise<RemotePairingList> {
+  return await nativeDocumentBridge().invoke('remote_pairing_list', run) as RemotePairingList;
+}
+export async function remotePairingSelect(request: RemotePairingSelection): Promise<{ state: 'Configured'; receipt: string }> {
+  return await nativeDocumentBridge().invoke('remote_pairing_select', request) as { state: 'Configured'; receipt: string };
+}
+export async function remotePairingForget(request: RemotePairingSelection): Promise<{ state: 'Forgotten' | 'Declined' }> {
+  return await nativeDocumentBridge().invoke('remote_pairing_forget', request) as { state: 'Forgotten' | 'Declined' };
+}
+
+export async function remotePairingForgetCancel(request: RemotePairingSelection): Promise<void> {
+  await nativeDocumentBridge().invoke('remote_pairing_forget_cancel', request);
 }

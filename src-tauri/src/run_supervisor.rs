@@ -20,9 +20,246 @@ use std::time::{Duration, Instant};
 
 type RunIdentity = (String, u32);
 
+/// Original Read outcome only. ReadZero is ambiguous: filedescriptor maps both
+/// a successful zero-byte read and Windows ERROR_BROKEN_PIPE to Ok(0).
+/// This observation never attests EOF or internal console/thread exit.
+#[cfg(feature = "remote-host")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub(crate) enum OriginalOutputReadObservation {
+    Unobserved = 0,
+    ReadZero = 1,
+    #[cfg(windows)]
+    RawBrokenPipe109 = 2,
+    ReadError = 3,
+    Panicked = 4,
+}
+#[cfg(feature = "remote-host")]
+impl OriginalOutputReadObservation {
+    #[cfg(any(windows, test))]
+    fn observe(end: &std::sync::atomic::AtomicU8) -> Self {
+        match end.load(Ordering::Acquire) {
+            0 => Self::Unobserved,
+            1 => Self::ReadZero,
+            #[cfg(windows)]
+            2 => Self::RawBrokenPipe109,
+            3 => Self::ReadError,
+            _ => Self::Panicked,
+        }
+    }
+}
+
+#[cfg(feature = "remote-host")]
+struct CanonicalReader {
+    original: Box<dyn std::io::Read + Send>,
+    output: Option<cc_desk_remote_host::native_host::NativeOutputIngress>,
+    offset: u64,
+    observation: Arc<std::sync::atomic::AtomicU8>,
+    discard: Arc<AtomicBool>,
+}
+#[cfg(feature = "remote-host")]
+impl std::io::Read for CanonicalReader {
+    fn read(&mut self, b: &mut [u8]) -> std::io::Result<usize> {
+        struct OriginalReadPanic<'a>(&'a std::sync::atomic::AtomicU8);
+        impl Drop for OriginalReadPanic<'_> {
+            fn drop(&mut self) {
+                if std::thread::panicking() {
+                    self.0.fetch_max(
+                        OriginalOutputReadObservation::Panicked as u8,
+                        Ordering::Release,
+                    );
+                }
+            }
+        }
+        let panic = OriginalReadPanic(&self.observation);
+        let result = self.original.read(b);
+        drop(panic); // Only the actual original Read is covered by this guard.
+        let observed = match &result {
+            Ok(0) if !b.is_empty() => Some(OriginalOutputReadObservation::ReadZero),
+            #[cfg(windows)]
+            Err(error) if !b.is_empty() && error.raw_os_error() == Some(109) => {
+                Some(OriginalOutputReadObservation::RawBrokenPipe109)
+            }
+            Err(_) => Some(OriginalOutputReadObservation::ReadError),
+            _ => None,
+        };
+        if let Some(observed) = observed {
+            // Errors/panics are sticky; later zero or raw 109 cannot reopen them.
+            self.observation
+                .fetch_max(observed as u8, Ordering::Release);
+        }
+        let count = result?;
+        if count > 0 {
+            if let Some(output) = self
+                .output
+                .as_mut()
+                .filter(|_| !self.discard.load(Ordering::Acquire))
+            {
+                output.feed(self.offset, &b[..count]);
+            }
+            self.offset = self
+                .offset
+                .checked_add(count as u64)
+                .ok_or_else(|| std::io::Error::other("NATIVE_OFFSET_OVERFLOW"))?;
+        }
+        Ok(count)
+    }
+}
+
 // 诊断快照保留上限：超过后按完成顺序淘汰最老记录，避免 completed 无界增长。
 const SUPERVISOR_COMPLETED_MAX: usize = 256;
 const SUPERVISOR_RETRY_DELAY: Duration = Duration::from_millis(100);
+
+#[cfg(all(windows, any(test, feature = "remote-host")))]
+pub(crate) fn drain_unpublished_output(reader: &mut dyn std::io::Read) -> Result<u64, ()> {
+    // Shutdown-only discard, never an authorized TerminalStream or replay body.
+    let mut scratch = [0u8; 8192];
+    let mut count = 0u64;
+    loop {
+        match reader.read(&mut scratch) {
+            Ok(0) => return Ok(count),
+            Ok(bytes) => count = count.checked_add(bytes as u64).ok_or(())?,
+            Err(failure) if crate::pty::is_pty_stream_end(&failure) => return Ok(count),
+            Err(_) => return Err(()),
+        }
+    }
+}
+
+#[cfg(all(windows, feature = "remote-host"))]
+fn drain_output_until_close(
+    reader: &mut dyn std::io::Read,
+    close_returned: impl Fn() -> bool,
+) -> Result<(), ()> {
+    let mut scratch = [0u8; 8192];
+    while !close_returned() {
+        match reader.read(&mut scratch) {
+            Ok(0) if !close_returned() => std::thread::sleep(Duration::from_millis(1)),
+            Ok(_) => {}
+            Err(_) => return Err(()), // Never retry/call a failed original read again.
+        }
+    }
+    Ok(())
+}
+#[cfg(all(windows, feature = "remote-host"))]
+fn finish_pinned_reader_after_pump(
+    reader: &mut CanonicalReader,
+    close_returned: impl Fn() -> bool,
+) -> Result<(), ()> {
+    reader.discard.store(true, Ordering::Release);
+    reader.output.take();
+    if matches!(
+        OriginalOutputReadObservation::observe(&reader.observation),
+        OriginalOutputReadObservation::RawBrokenPipe109
+            | OriginalOutputReadObservation::ReadError
+            | OriginalOutputReadObservation::Panicked
+    ) {
+        return Err(()); // A pump raw-read failure is not a delivery-route failure; never call Read again.
+    }
+    drain_output_until_close(reader, close_returned)
+}
+
+#[cfg(all(windows, test))]
+mod unpublished_drain_tests {
+    use super::drain_unpublished_output;
+    use std::io::{self, Cursor, Read};
+    #[test]
+    #[allow(non_snake_case)]
+    fn UnpublishedDrain_EofUsesBoundedScratch_001() {
+        struct Bounded(Cursor<Vec<u8>>);
+        impl Read for Bounded {
+            fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+                assert!(
+                    bytes.len() <= 8192,
+                    "unpublished output must not allocate an unbounded frame"
+                );
+                self.0.read(bytes)
+            }
+        }
+        let mut reader = Bounded(Cursor::new(vec![b'x'; 1024 * 1024]));
+        assert_eq!(drain_unpublished_output(&mut reader), Ok(1024 * 1024));
+        assert_eq!(reader.0.position(), 1024 * 1024);
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn UnpublishedDrain_ReadFailureIsNotEof_002() {
+        struct Failure;
+        impl Read for Failure {
+            fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+                Err(io::Error::other("TEST_ONLY_READ_FAILURE"))
+            }
+        }
+        assert_eq!(drain_unpublished_output(&mut Failure), Err(()));
+    }
+}
+#[cfg(all(windows, test, feature = "remote-host"))]
+#[allow(non_snake_case)]
+mod owned_close_drain_tests {
+    use super::*;
+    use std::io::{self, Read};
+    #[test]
+    fn OwnedCloseDrain_AmbiguousZeroKeepsOriginalReaderUntilCloseReturns_001() {
+        struct ZeroThenHold {
+            reads: usize,
+            entered: std::sync::mpsc::Sender<()>,
+            release: std::sync::mpsc::Receiver<()>,
+        }
+        impl Read for ZeroThenHold {
+            fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+                self.reads += 1;
+                if self.reads == 2 {
+                    self.entered.send(()).unwrap();
+                    self.release.recv_timeout(Duration::from_secs(3)).unwrap();
+                }
+                Ok(0)
+            }
+        }
+        let (tx, entered) = std::sync::mpsc::channel();
+        let (release, rx) = std::sync::mpsc::channel();
+        let closed = Arc::new(AtomicBool::new(false));
+        let observed = closed.clone();
+        let worker = std::thread::spawn(move || {
+            drain_output_until_close(
+                &mut ZeroThenHold {
+                    reads: 0,
+                    entered: tx,
+                    release: rx,
+                },
+                || observed.load(Ordering::Acquire),
+            )
+        });
+        let second_read = entered.recv_timeout(Duration::from_secs(2)).is_ok();
+        let prematurely_finished = worker.is_finished();
+        closed.store(true, Ordering::Release);
+        let _ = release.send(());
+        let result = worker.join().unwrap();
+        assert!(
+            second_read && !prematurely_finished,
+            "ReadZero discarded the only service owner before Close"
+        );
+        assert_eq!(result, Ok(()));
+    }
+    #[test]
+    fn OwnedCloseDrain_ReadErrorBeforeCloseIsStickyAndNeverRetried_002() {
+        struct Fail(usize);
+        impl Read for Fail {
+            fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+                self.0 += 1;
+                if self.0 == 1 {
+                    Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "TEST_ONLY_READ_FAILURE",
+                    ))
+                } else {
+                    panic!("failed original read retried");
+                }
+            }
+        }
+        let mut reader = Fail(0);
+        let result = drain_output_until_close(&mut reader, || false);
+        assert_eq!(result, Err(()));
+        assert_eq!(reader.0, 1);
+    }
+}
 
 #[derive(Default)]
 struct CompletedRuns {
@@ -48,6 +285,12 @@ struct SupervisorCore {
     active: Mutex<HashMap<RunIdentity, Arc<SupervisedRun>>>,
     completed: Mutex<CompletedRuns>,
     shutting_down: AtomicBool,
+    #[cfg(feature = "remote-host")]
+    unmanaged_history: AtomicBool,
+    #[cfg(any(test, feature = "remote-host"))]
+    owned_shutdown_started: AtomicBool,
+    #[cfg(test)]
+    stop_spawn_hook: Mutex<Option<Box<dyn FnOnce() -> bool + Send>>>,
     settled: Condvar,
     #[cfg(test)]
     fail_next_wait: AtomicBool,
@@ -66,6 +309,8 @@ struct SupervisorCore {
     #[cfg(test)]
     automatic_retry_paused: Mutex<bool>,
     #[cfg(test)]
+    automatic_retry_waiting: AtomicBool,
+    #[cfg(test)]
     automatic_retry_changed: Condvar,
     #[cfg(test)]
     registry_steps_paused: Mutex<bool>,
@@ -81,6 +326,18 @@ struct SupervisorCore {
     adoption_setup_waiting: AtomicBool,
     #[cfg(test)]
     adoption_setup_changed: Condvar,
+    #[cfg(test)]
+    reader_exit_paused: Mutex<bool>,
+    #[cfg(test)]
+    reader_exit_waiting: AtomicBool,
+    #[cfg(test)]
+    reader_exit_changed: Condvar,
+    #[cfg(test)]
+    wait_exit_paused: Mutex<bool>,
+    #[cfg(test)]
+    wait_exit_waiting: AtomicBool,
+    #[cfg(test)]
+    wait_exit_changed: Condvar,
 }
 
 pub(crate) struct NativeRunSupervisor {
@@ -88,6 +345,54 @@ pub(crate) struct NativeRunSupervisor {
 }
 
 impl NativeRunSupervisor {
+    #[cfg(all(test, windows, feature = "remote-host"))]
+    pub(crate) fn arm_failed_stop_after_waiter_release_for_test(
+        &self,
+        run: &RunKey,
+    ) -> Arc<AtomicBool> {
+        let state = self.core.active.lock().get(&identity(run)).unwrap().clone();
+        // The paused original waiter already owns the exact PTY. This models
+        // its normal release just before the owned-exit handoff, without IO on this caller.
+        let resource = state.resource.lock().take();
+        drop(resource);
+        let completed = Arc::new(AtomicBool::new(false));
+        let observed = completed.clone();
+        let core = self.core.clone();
+        *self.core.stop_spawn_hook.lock() = Some(Box::new(move || {
+            *core.retirement_publish_paused.lock() = false;
+            core.retirement_publish_changed.notify_all();
+            let deadline = Instant::now() + Duration::from_secs(3);
+            loop {
+                let _ = state.native_writer_status(Duration::ZERO);
+                if state.wait_workers.lock().observe() == WaitWorkersState::Joined {
+                    observed.store(true, Ordering::Release);
+                    break;
+                }
+                if Instant::now() >= deadline {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            true
+        }));
+        completed
+    }
+    #[cfg(all(test, windows, feature = "remote-host"))]
+    pub(crate) fn cleanup_injected_stop_failure_for_test(&self, run: &RunKey) {
+        let state = self.core.active.lock().get(&identity(run)).cloned();
+        if let Some(state) = state {
+            let keepalive = state
+                .managed_job
+                .as_ref()
+                .and_then(|job| job.original_pty());
+            // Explicit fixture teardown of a known non-started injected worker;
+            // this is never a production retry or retirement success claim.
+            std::thread::spawn(move || state.stop_owned_session(keepalive))
+                .join()
+                .unwrap()
+                .unwrap();
+        }
+    }
     pub(crate) fn new(transports: Arc<TerminalTransports>) -> Self {
         Self {
             core: Arc::new(SupervisorCore {
@@ -95,6 +400,12 @@ impl NativeRunSupervisor {
                 active: Mutex::new(HashMap::new()),
                 completed: Mutex::new(CompletedRuns::default()),
                 shutting_down: AtomicBool::new(false),
+                #[cfg(feature = "remote-host")]
+                unmanaged_history: AtomicBool::new(false),
+                #[cfg(any(test, feature = "remote-host"))]
+                owned_shutdown_started: AtomicBool::new(false),
+                #[cfg(test)]
+                stop_spawn_hook: Mutex::new(None),
                 settled: Condvar::new(),
                 #[cfg(test)]
                 fail_next_wait: AtomicBool::new(false),
@@ -113,6 +424,8 @@ impl NativeRunSupervisor {
                 #[cfg(test)]
                 automatic_retry_paused: Mutex::new(false),
                 #[cfg(test)]
+                automatic_retry_waiting: AtomicBool::new(false),
+                #[cfg(test)]
                 automatic_retry_changed: Condvar::new(),
                 #[cfg(test)]
                 registry_steps_paused: Mutex::new(false),
@@ -128,6 +441,18 @@ impl NativeRunSupervisor {
                 adoption_setup_waiting: AtomicBool::new(false),
                 #[cfg(test)]
                 adoption_setup_changed: Condvar::new(),
+                #[cfg(test)]
+                reader_exit_paused: Mutex::new(false),
+                #[cfg(test)]
+                reader_exit_waiting: AtomicBool::new(false),
+                #[cfg(test)]
+                reader_exit_changed: Condvar::new(),
+                #[cfg(test)]
+                wait_exit_paused: Mutex::new(false),
+                #[cfg(test)]
+                wait_exit_waiting: AtomicBool::new(false),
+                #[cfg(test)]
+                wait_exit_changed: Condvar::new(),
             }),
         }
     }
@@ -171,6 +496,21 @@ impl NativeRunSupervisor {
     pub(crate) fn automatic_retry_calls_for_test(&self) -> usize {
         self.core.automatic_retry_calls.load(Ordering::SeqCst)
     }
+    #[cfg(test)]
+    pub(crate) fn retry_handle_waiting_for_test(&self, run: &RunKey) -> bool {
+        self.core.automatic_retry_waiting.load(Ordering::SeqCst)
+            && self
+                .core
+                .active
+                .lock()
+                .get(&identity(run))
+                .is_some_and(|state| {
+                    state.wait_workers.lock().handles.iter().any(|worker| {
+                        worker.thread().name() == Some("native-run-wait-retry")
+                            && !worker.is_finished()
+                    })
+                })
+    }
 
     #[cfg(test)]
     pub(crate) fn pause_automatic_retry_for_test(&self) {
@@ -192,6 +532,33 @@ impl NativeRunSupervisor {
     pub(crate) fn release_registry_steps_for_test(&self) {
         *self.core.registry_steps_paused.lock() = false;
         self.core.registry_steps_changed.notify_all();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pause_reader_exit_for_test(&self) {
+        *self.core.reader_exit_paused.lock() = true;
+    }
+    #[cfg(test)]
+    pub(crate) fn pause_wait_exit_for_test(&self) {
+        *self.core.wait_exit_paused.lock() = true;
+    }
+    #[cfg(test)]
+    pub(crate) fn release_wait_exit_for_test(&self) {
+        *self.core.wait_exit_paused.lock() = false;
+        self.core.wait_exit_changed.notify_all();
+    }
+    #[cfg(test)]
+    pub(crate) fn wait_exit_waiting_for_test(&self) -> bool {
+        self.core.wait_exit_waiting.load(Ordering::SeqCst)
+    }
+    #[cfg(test)]
+    pub(crate) fn release_reader_exit_for_test(&self) {
+        *self.core.reader_exit_paused.lock() = false;
+        self.core.reader_exit_changed.notify_all();
+    }
+    #[cfg(test)]
+    pub(crate) fn reader_exit_waiting_for_test(&self) -> bool {
+        self.core.reader_exit_waiting.load(Ordering::SeqCst)
     }
 
     #[cfg(test)]
@@ -233,6 +600,19 @@ impl NativeRunSupervisor {
     #[cfg(test)]
     pub(crate) fn active_for_test(&self, run: &RunKey) -> bool {
         self.core.active.lock().contains_key(&identity(run))
+    }
+
+    #[cfg(all(test, feature = "remote-host"))]
+    pub(crate) fn original_output_observation_for_test(
+        &self,
+        run: &RunKey,
+    ) -> Option<(bool, OriginalOutputReadObservation)> {
+        let state = self.core.active.lock().get(&identity(run)).cloned()?;
+        let joined = state.output_reader.lock().observe();
+        Some((
+            joined,
+            OriginalOutputReadObservation::observe(&state.output_read_observation),
+        ))
     }
 
     #[cfg(test)]
@@ -320,6 +700,14 @@ impl RunSupervisor for NativeRunSupervisor {
         run: &RunKey,
         resource: Arc<NativeRun>,
     ) -> Result<(), SafeError> {
+        #[cfg(all(windows, feature = "remote-host"))]
+        if resource.process.managed_job.is_none()
+            || !resource.process.pty.io_drop_witness().is_pinned_conpty()
+        {
+            self.core.unmanaged_history.store(true, Ordering::Release);
+        }
+        #[cfg(all(not(windows), feature = "remote-host"))]
+        self.core.unmanaged_history.store(true, Ordering::Release);
         let state = SupervisedRun::new(
             Arc::downgrade(&self.core),
             registry,
@@ -331,6 +719,15 @@ impl RunSupervisor for NativeRunSupervisor {
             if active.contains_key(&identity(run)) {
                 return Err(error("RUN_SUPERVISOR_BUSY"));
             }
+            #[cfg(all(windows, feature = "remote-host"))]
+            if let Some(job) = &resource.process.managed_job {
+                job.register(run, &resource, || {
+                    active.insert(identity(run), state.clone());
+                })?;
+            } else {
+                active.insert(identity(run), state.clone());
+            }
+            #[cfg(not(all(windows, feature = "remote-host")))]
             active.insert(identity(run), state.clone());
         }
         let mut adoption = AdoptionGuard::new(state.clone());
@@ -356,7 +753,22 @@ impl RunSupervisor for NativeRunSupervisor {
                 .store(false, Ordering::SeqCst);
         }
 
-        let mut reader = resource.process.pty.take_reader()?;
+        let reader = resource.process.pty.take_reader()?;
+        #[cfg(feature = "remote-host")]
+        let mut native_output = match crate::cli::launch_service::prepare_native_canonical(
+            run,
+            resource.clone(),
+            NativeRunAuthority {
+                state: Arc::downgrade(&state),
+                resource: Arc::downgrade(&resource),
+            },
+        ) {
+            Ok((owned, output)) => {
+                *state.native_canonical.lock() = Some(owned);
+                Some(output)
+            }
+            Err(_) => None, // Ordinary local run remains available; no complete-state remote eligibility.
+        };
 
         let progress: Arc<dyn OutputProgress> = state.clone();
         let stream = self.core.transports.attach_observed(
@@ -366,26 +778,107 @@ impl RunSupervisor for NativeRunSupervisor {
             progress,
         )?;
         state.set_stream(stream.clone())?;
+        #[cfg(feature = "remote-host")]
+        resource
+            .process
+            .native_stream
+            .set(Arc::downgrade(&stream))
+            .map_err(|_| error("NATIVE_CANONICAL_ALREADY_OWNED"))?;
 
+        #[cfg(any(test, feature = "remote-host"))]
+        {
+            if !state.output_reader.lock().reserve() {
+                return Err(error("RUN_SUPERVISOR_FAILED"));
+            }
+        }
         let reader_state = state.clone();
-        if std::thread::Builder::new()
+        let reader_worker = std::thread::Builder::new()
             .name("native-output-reader".into())
-            .spawn(move || loop {
-                match stream.pump_once_with_end(&mut *reader, crate::pty::is_pty_stream_end) {
-                    Ok(0) => {
-                        reader_state.output_end(stream.stream_epoch(), stream.sent_offset());
+            .spawn(move || {
+                #[cfg(not(feature = "remote-host"))]
+                let mut reader = reader;
+                #[cfg(feature = "remote-host")]
+                let mut reader = CanonicalReader {
+                    original: reader,
+                    output: native_output.take(),
+                    offset: 0,
+                    observation: reader_state.output_read_observation.clone(),
+                    discard: reader_state.discard_output.clone(),
+                };
+                loop {
+                    #[cfg(feature = "remote-host")]
+                    if reader_state.discard_output.load(Ordering::Acquire) {
                         break;
                     }
-                    Ok(_) => {}
-                    Err(_) => {
-                        reader_state.reader_failed();
-                        break;
+                    match stream.pump_once_with_end(&mut reader, crate::pty::is_pty_stream_end) {
+                        Ok(0) => {
+                            #[cfg(all(windows, feature = "remote-host"))]
+                            let ambiguous_managed = reader_state.managed_job.is_some()
+                                && reader_state.io_drop.is_pinned_conpty();
+                            #[cfg(not(all(windows, feature = "remote-host")))]
+                            let ambiguous_managed = false;
+                            if ambiguous_managed {
+                                reader_state.reader_failed();
+                            } else {
+                                reader_state
+                                    .output_end(stream.stream_epoch(), stream.sent_offset());
+                            }
+                            break;
+                        }
+                        Ok(_) => {}
+                        Err(_) => {
+                            reader_state.reader_failed();
+                            break;
+                        }
                     }
                 }
-            })
-            .is_err()
-        {
-            return Err(error("RUN_SUPERVISOR_FAILED"));
+                #[cfg(all(windows, feature = "remote-host"))]
+                if reader_state.managed_job.is_some() && reader_state.io_drop.is_pinned_conpty() {
+                    // Keep this SAME original independent reader serving Close.
+                    // Terminal delivery failure never creates a second reader.
+                    if finish_pinned_reader_after_pump(&mut reader, || {
+                        reader_state.io_drop.pinned_close_returned()
+                    })
+                    .is_err()
+                    {
+                        reader_state
+                            .reader_service_failed
+                            .store(true, Ordering::Release);
+                    }
+                    if reader_state.io_drop.pinned_close_returned()
+                        && !reader_state.reader_service_failed.load(Ordering::Acquire)
+                    {
+                        reader_state
+                            .reader_served_close
+                            .store(true, Ordering::Release);
+                    }
+                }
+                #[cfg(test)]
+                if let Some(core) = reader_state.core.upgrade() {
+                    let mut paused = core.reader_exit_paused.lock();
+                    core.reader_exit_waiting.store(true, Ordering::SeqCst);
+                    while *paused {
+                        core.reader_exit_changed.wait(&mut paused);
+                    }
+                    core.reader_exit_waiting.store(false, Ordering::SeqCst);
+                }
+            });
+        match reader_worker {
+            Ok(worker) => {
+                #[cfg(any(test, feature = "remote-host"))]
+                {
+                    *state.output_reader.lock() = OutputReaderJoin::Running(worker);
+                }
+                #[cfg(not(any(test, feature = "remote-host")))]
+                drop(worker);
+            }
+            Err(_) => {
+                #[cfg(any(test, feature = "remote-host"))]
+                {
+                    *state.output_reader.lock() = OutputReaderJoin::Unknown;
+                }
+                return Err(error("RUN_SUPERVISOR_FAILED"));
+            }
         }
 
         // Close the shutdown-vs-adopt race. shutdown() may have taken its active
@@ -394,9 +887,23 @@ impl RunSupervisor for NativeRunSupervisor {
         if self.core.shutting_down.load(Ordering::SeqCst) {
             state.request_stop()?;
         }
+        #[cfg(all(windows, feature = "remote-host"))]
+        let closed_claim = state
+            .managed_job
+            .as_ref()
+            .is_some_and(|job| job.is_closed());
+        #[cfg(not(all(windows, feature = "remote-host")))]
+        let closed_claim = false;
+        if closed_claim {
+            state.request_stop()?;
+        }
 
         adoption.complete();
-        Ok(())
+        if closed_claim {
+            Err(error("MANAGED_START_CANCELLED"))
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -430,7 +937,81 @@ impl Drop for AdoptionGuard {
     }
 }
 
+/// Exactly one existing output reader; never a claim about waiter/master/tree.
+#[cfg(any(test, feature = "remote-host"))]
+pub(crate) enum OutputReaderJoin {
+    Unstarted,
+    Publishing,
+    Running(std::thread::JoinHandle<()>),
+    Joined,
+    Unknown,
+}
+#[cfg(any(test, feature = "remote-host"))]
+impl OutputReaderJoin {
+    pub(crate) fn reserve(&mut self) -> bool {
+        if !matches!(self, Self::Unstarted) {
+            return false;
+        }
+        *self = Self::Publishing;
+        true
+    }
+    pub(crate) fn observe(&mut self) -> bool {
+        if matches!(self,Self::Running(worker) if worker.is_finished()) {
+            let Self::Running(worker) = std::mem::replace(self, Self::Unknown) else {
+                unreachable!()
+            };
+            *self = if worker.join().is_ok() {
+                Self::Joined
+            } else {
+                Self::Unknown
+            };
+        }
+        matches!(self, Self::Joined)
+    }
+}
+
+/// Only this run's original waiter/retry threads, never global process evidence.
+#[cfg(any(test, feature = "remote-host"))]
+#[derive(Default)]
+struct WaitWorkers {
+    handles: Vec<std::thread::JoinHandle<()>>,
+    started: bool,
+    panicked: bool,
+}
+#[cfg(any(test, feature = "remote-host"))]
+#[derive(PartialEq, Eq)]
+enum WaitWorkersState {
+    Pending,
+    Joined,
+    Unknown,
+}
+#[cfg(any(test, feature = "remote-host"))]
+impl WaitWorkers {
+    const MAX: usize = 64;
+    fn observe(&mut self) -> WaitWorkersState {
+        let mut index = 0;
+        while index < self.handles.len() {
+            if self.handles[index].is_finished() {
+                self.panicked |= self.handles.swap_remove(index).join().is_err();
+            } else {
+                index += 1;
+            }
+        }
+        if !self.handles.is_empty() {
+            WaitWorkersState::Pending
+        } else if self.started && !self.panicked {
+            WaitWorkersState::Joined
+        } else {
+            WaitWorkersState::Unknown
+        }
+    }
+}
+
 struct SupervisedRun {
+    #[cfg(all(windows, feature = "remote-host"))]
+    managed_job: Option<Arc<crate::platform::owned_job_launch::ManagedJob>>,
+    #[cfg(feature = "remote-host")]
+    native_canonical: Mutex<Option<crate::cli::launch_service::NativeCanonicalRun>>,
     core: Weak<SupervisorCore>,
     registry: Arc<RunRegistry<NativeRun>>,
     run: RunKey,
@@ -439,6 +1020,18 @@ struct SupervisedRun {
     lifecycle: Mutex<LifecycleRecord>,
     stream: Mutex<Option<Arc<TerminalStream>>>,
     resource: Mutex<Option<Arc<NativeRun>>>,
+    #[cfg(feature = "remote-host")]
+    output_read_observation: Arc<std::sync::atomic::AtomicU8>,
+    #[cfg(feature = "remote-host")]
+    discard_output: Arc<AtomicBool>,
+    #[cfg(all(windows, feature = "remote-host"))]
+    owned_exit_release: AtomicBool,
+    #[cfg(all(windows, feature = "remote-host"))]
+    owned_exit_pty: Mutex<Option<Arc<crate::platform::owned_pty::OwnedPty>>>,
+    #[cfg(all(windows, feature = "remote-host"))]
+    reader_service_failed: AtomicBool,
+    #[cfg(all(windows, feature = "remote-host"))]
+    reader_served_close: AtomicBool,
     stop_control: Mutex<()>,
     stop_requested: AtomicBool,
     waiter_running: AtomicBool,
@@ -446,10 +1039,22 @@ struct SupervisedRun {
     registry_retired: AtomicBool,
     adoption_complete: AtomicBool,
     automatic_retry_used: AtomicBool,
+    #[cfg(any(test, feature = "remote-host"))]
+    output_reader: Mutex<OutputReaderJoin>,
+    #[cfg(any(test, feature = "remote-host"))]
+    wait_workers: Mutex<WaitWorkers>,
+    #[cfg(any(test, feature = "remote-host"))]
+    io_drop: crate::platform::owned_pty::IoDropWitness,
     changed: Condvar,
 }
 
 impl SupervisedRun {
+    #[cfg(all(windows, feature = "remote-host"))]
+    fn managed_job_quiescent(&self) -> bool {
+        self.managed_job
+            .as_ref()
+            .is_none_or(|job| job.active_processes() == Ok(0))
+    }
     fn new(
         core: Weak<SupervisorCore>,
         registry: Arc<RunRegistry<NativeRun>>,
@@ -460,7 +1065,13 @@ impl SupervisedRun {
         lifecycle.process_running()?;
         let owner = resource.process.snapshot.owner().clone();
         let request_id = resource.process.snapshot.request().request_id.clone();
+        #[cfg(any(test, feature = "remote-host"))]
+        let io_drop = resource.process.pty.io_drop_witness();
         Ok(Arc::new(Self {
+            #[cfg(all(windows, feature = "remote-host"))]
+            managed_job: resource.process.managed_job.clone(),
+            #[cfg(feature = "remote-host")]
+            native_canonical: Mutex::new(None),
             core,
             registry,
             run,
@@ -469,6 +1080,20 @@ impl SupervisedRun {
             lifecycle: Mutex::new(lifecycle),
             stream: Mutex::new(None),
             resource: Mutex::new(Some(resource)),
+            #[cfg(feature = "remote-host")]
+            output_read_observation: Arc::new(std::sync::atomic::AtomicU8::new(
+                OriginalOutputReadObservation::Unobserved as u8,
+            )),
+            #[cfg(feature = "remote-host")]
+            discard_output: Arc::new(AtomicBool::new(false)),
+            #[cfg(all(windows, feature = "remote-host"))]
+            owned_exit_release: AtomicBool::new(false),
+            #[cfg(all(windows, feature = "remote-host"))]
+            owned_exit_pty: Mutex::new(None),
+            #[cfg(all(windows, feature = "remote-host"))]
+            reader_service_failed: AtomicBool::new(false),
+            #[cfg(all(windows, feature = "remote-host"))]
+            reader_served_close: AtomicBool::new(false),
             stop_control: Mutex::new(()),
             stop_requested: AtomicBool::new(false),
             waiter_running: AtomicBool::new(false),
@@ -476,8 +1101,54 @@ impl SupervisedRun {
             registry_retired: AtomicBool::new(false),
             adoption_complete: AtomicBool::new(false),
             automatic_retry_used: AtomicBool::new(false),
+            #[cfg(any(test, feature = "remote-host"))]
+            output_reader: Mutex::new(OutputReaderJoin::Unstarted),
+            #[cfg(any(test, feature = "remote-host"))]
+            wait_workers: Mutex::new(WaitWorkers::default()),
+            #[cfg(any(test, feature = "remote-host"))]
+            io_drop,
             changed: Condvar::new(),
         }))
+    }
+
+    fn spawn_wait_worker(
+        &self,
+        name: &str,
+        work: impl FnOnce() + Send + 'static,
+    ) -> Result<bool, SafeError> {
+        #[cfg(any(test, feature = "remote-host"))]
+        {
+            let mut workers = self.wait_workers.lock();
+            workers.observe();
+            // Recheck under the same lock used for publication and observation.
+            // Once registry retirement plus actual joins is observed, a starter
+            // delayed after its earlier check cannot create another thread.
+            if self.registry_retired.load(Ordering::SeqCst) {
+                drop(workers);
+                drop(work);
+                return Ok(false);
+            }
+            if workers.handles.len() >= WaitWorkers::MAX {
+                drop(workers);
+                drop(work);
+                return Err(error("RUN_SUPERVISOR_CAPACITY"));
+            }
+            let handle = std::thread::Builder::new()
+                .name(name.into())
+                .spawn(work)
+                .map_err(|_| error("RUN_SUPERVISOR_FAILED"))?;
+            workers.handles.push(handle);
+            workers.started = true;
+            Ok(true)
+        }
+        #[cfg(not(any(test, feature = "remote-host")))]
+        {
+            std::thread::Builder::new()
+                .name(name.into())
+                .spawn(work)
+                .map_err(|_| error("RUN_SUPERVISOR_FAILED"))?;
+            Ok(true)
+        }
     }
 
     fn start_waiter(self: &Arc<Self>) -> Result<(), SafeError> {
@@ -505,21 +1176,46 @@ impl SupervisedRun {
             }
         };
         let state = self.clone();
-        if std::thread::Builder::new()
-            .name("native-run-waiter".into())
-            .spawn(move || state.wait_and_converge(resource))
-            .is_err()
-        {
+        let spawned = self.spawn_wait_worker("native-run-waiter", move || {
+            #[cfg(test)]
+            let finished = state.clone();
+            state.wait_and_converge(resource);
+            #[cfg(test)]
+            if let Some(core) = finished.core.upgrade() {
+                let mut paused = core.wait_exit_paused.lock();
+                core.wait_exit_waiting.store(true, Ordering::SeqCst);
+                while *paused {
+                    core.wait_exit_changed.wait(&mut paused);
+                }
+                core.wait_exit_waiting.store(false, Ordering::SeqCst);
+            }
+        });
+        if !matches!(spawned, Ok(true)) {
             self.waiter_running.store(false, Ordering::SeqCst);
             self.notify_retryable();
-            return Err(error("RUN_SUPERVISOR_FAILED"));
         }
+        spawned?;
         Ok(())
     }
 
-    fn wait_and_converge(self: Arc<Self>, resource: Option<Arc<NativeRun>>) {
+    fn wait_and_converge(self: Arc<Self>, mut resource: Option<Arc<NativeRun>>) {
+        #[cfg(all(windows, feature = "remote-host"))]
+        let managed_pty = if self.managed_job.is_some() && self.io_drop.is_pinned_conpty() {
+            resource
+                .as_ref()
+                .map(|resource| resource.process.pty.clone())
+                .or_else(|| {
+                    self.resource
+                        .lock()
+                        .as_ref()
+                        .map(|resource| resource.process.pty.clone())
+                })
+                .or_else(|| self.managed_job.as_ref().and_then(|job| job.original_pty()))
+        } else {
+            None
+        };
         if !self.reaped.load(Ordering::SeqCst) {
-            let Some(resource) = resource else {
+            let Some(resource) = resource.take() else {
                 self.waiter_running.store(false, Ordering::SeqCst);
                 self.notify_retryable();
                 return;
@@ -592,9 +1288,14 @@ impl SupervisedRun {
         }
         self.registry_retired.store(true, Ordering::SeqCst);
         self.changed.notify_all();
-        self.release_resource_if_transport_terminal();
+        self.release_resource_on_waiter();
+        drop(resource);
         self.finish_if_terminal();
         self.await_real_output_end();
+        #[cfg(all(windows, feature = "remote-host"))]
+        if let Some(pty) = managed_pty {
+            self.close_managed_on_waiter(pty);
+        }
         self.waiter_running.store(false, Ordering::SeqCst);
         self.notify_retryable();
     }
@@ -733,6 +1434,11 @@ impl SupervisedRun {
     }
 
     fn request_stop(self: &Arc<Self>) -> Result<(), SafeError> {
+        #[cfg(feature = "remote-host")]
+        {
+            let input = self.resource.lock().as_ref().and_then(|run| run.remote_input());
+            if let Some(input) = input { input.stop(); }
+        }
         // 每次显式控制允许一次延迟自动重试；连续底层错误仍保持未知并等待下一次控制。
         self.automatic_retry_used.store(false, Ordering::SeqCst);
         {
@@ -743,6 +1449,10 @@ impl SupervisedRun {
         {
             let _control = self.stop_control.lock();
             if !self.stop_requested.load(Ordering::SeqCst) {
+                #[cfg(all(windows, feature = "remote-host"))]
+                if let Some(job) = &self.managed_job {
+                    job.request_stop()?;
+                }
                 if !self.reaped.load(Ordering::SeqCst) {
                     let resource = self
                         .resource
@@ -750,6 +1460,11 @@ impl SupervisedRun {
                         .clone()
                         .ok_or_else(|| error("RUN_NOT_READY"))?;
                     // 只在系统接受 terminate 后发布 stop_requested，避免并发 stop 误报成功。
+                    #[cfg(all(windows, feature = "remote-host"))]
+                    if self.managed_job.is_none() {
+                        resource.process.pty.terminate_root()?;
+                    }
+                    #[cfg(not(all(windows, feature = "remote-host")))]
                     resource.process.pty.terminate_root()?;
                 }
                 // 真实 reap 已知时无需 terminate；两种成功控制路径都登记后续有界重试。
@@ -784,10 +1499,24 @@ impl SupervisedRun {
         }
         drop(lifecycle);
 
+        #[cfg(all(windows, feature = "remote-host"))]
+        if self.owned_exit_release.load(Ordering::Acquire) {
+            return;
+        }
+
         if timed_out {
             // ConPTY can keep its output pipe open after the root process exits.
             // Closing the owned PTY is the bounded convergence action. We do not
             // manufacture output-end/finalOffset, so this run remains incomplete.
+            #[cfg(all(windows, feature = "remote-host"))]
+            if !self.managed_job_quiescent() {
+                return;
+            }
+            #[cfg(feature = "remote-host")]
+            if !self.native_writer_retired(Duration::from_secs(1)) {
+                self.changed.notify_all();
+                return;
+            }
             self.resource.lock().take();
             self.changed.notify_all();
             self.finish_if_terminal();
@@ -795,6 +1524,29 @@ impl SupervisedRun {
     }
 
     fn release_resource_if_transport_terminal(&self) {
+        self.release_resource_if_transport_terminal_with_budget(Duration::from_secs(1));
+    }
+    fn release_resource_if_transport_terminal_with_budget(&self, native_budget: Duration) {
+        #[cfg(all(windows, feature = "remote-host"))]
+        if self.managed_job.is_some() && self.io_drop.is_pinned_conpty() {
+            return; // Never run potentially blocking Close in a reader/observer callback.
+        }
+        self.release_resource_inner(native_budget);
+    }
+    fn release_resource_on_waiter(&self) {
+        #[cfg(all(windows, feature = "remote-host"))]
+        if self.owned_exit_release.load(Ordering::Acquire) {
+            return;
+        }
+        self.release_resource_inner(Duration::from_secs(1));
+    }
+    fn release_resource_inner(&self, native_budget: Duration) {
+        #[cfg(all(windows, feature = "remote-host"))]
+        if !self.managed_job_quiescent() {
+            return;
+        }
+        #[cfg(not(feature = "remote-host"))]
+        let _ = native_budget;
         let release = {
             let lifecycle = self.lifecycle.lock();
             lifecycle.process() == crate::run_lifecycle::ProcessLifecycle::Exited
@@ -805,7 +1557,115 @@ impl SupervisedRun {
                     ))
         };
         if release {
-            self.resource.lock().take();
+            #[cfg(feature = "remote-host")]
+            if !self.native_writer_retired(native_budget) {
+                return;
+            }
+            let resource = self.resource.lock().take();
+            drop(resource); // No state/global mutex across the original destructor.
+        }
+    }
+
+    #[cfg(all(windows, feature = "remote-host"))]
+    fn prepare_owned_exit(&self) -> Option<Arc<crate::platform::owned_pty::OwnedPty>> {
+        if self.managed_job.is_none() || !self.io_drop.is_pinned_conpty() {
+            return None;
+        }
+        let resource = self
+            .resource
+            .lock()
+            .as_ref()
+            .map(|resource| resource.process.pty.clone())
+            .or_else(|| self.managed_job.as_ref().and_then(|job| job.original_pty()));
+        // Retain the exact original PTY in the existing state BEFORE telling a
+        // natural waiter to hand off. Failed thread creation may drop its closure
+        // on the caller; the original shutdown pin must still own this strong Arc.
+        *self.owned_exit_pty.lock() = resource.clone();
+        self.owned_exit_release.store(true, Ordering::Release);
+        self.discard_output.store(true, Ordering::Release);
+        let _ = self.lifecycle.lock().mark_incomplete();
+        if let Some(core) = self.core.upgrade() {
+            if let Some(stream) = self.stream.lock().clone() {
+                let _ = core.transports.detach(&stream);
+            }
+        }
+        self.changed.notify_all();
+        resource
+    }
+    #[cfg(all(windows, feature = "remote-host"))]
+    fn stop_owned_session(
+        self: &Arc<Self>,
+        keepalive: Option<Arc<crate::platform::owned_pty::OwnedPty>>,
+    ) -> Result<(), SafeError> {
+        let keepalive = keepalive.or_else(|| self.owned_exit_pty.lock().as_ref().cloned());
+        self.request_stop()?;
+        if !self.owned_exit_release.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        // The SAME retained blocking stop worker holds the last release owner.
+        // Waiter/root/native writer may settle before Close; the independent
+        // original reader must stay free to discard while Close is in progress.
+        loop {
+            let workers = self.wait_workers.lock().observe();
+            if workers == WaitWorkersState::Unknown {
+                return Err(error("NATIVE_WAIT_UNKNOWN"));
+            }
+            let writer = self.native_writer_status(Duration::ZERO);
+            if writer == cc_desk_remote_host::native_host::NativeWriterRetirement::Unknown {
+                return Err(error("NATIVE_WRITER_UNKNOWN"));
+            }
+            if self.reaped.load(Ordering::SeqCst)
+                && self.registry_retired.load(Ordering::SeqCst)
+                && self.adoption_complete.load(Ordering::SeqCst)
+                && self.managed_job_quiescent()
+                && workers == WaitWorkersState::Joined
+                && writer == cc_desk_remote_host::native_host::NativeWriterRetirement::Joined
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        let resource = self.resource.lock().take();
+        drop(resource);
+        let retained = self.owned_exit_pty.lock().take();
+        drop(retained); // This worker's keepalive still owns the exact PTY until try_unwrap succeeds.
+        if let Some(mut pty) = keepalive {
+            loop {
+                match Arc::try_unwrap(pty) {
+                    Ok(original) => {
+                        drop(original);
+                        break;
+                    } // Close happens on this original blocking owner.
+                    Err(original) => pty = original, // A late access still pins the real PTY: remain Pending.
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+        }
+        Ok(())
+    }
+    #[cfg(all(windows, feature = "remote-host"))]
+    fn close_managed_on_waiter(&self, mut pty: Arc<crate::platform::owned_pty::OwnedPty>) {
+        // The original wait worker also keeps natural managed completion off an
+        // eventual UI/late-access destructor. Explicit exit hands custody to its
+        // retained stop owner; neither path uses a strong-count observation.
+        loop {
+            if self.owned_exit_release.load(Ordering::Acquire) {
+                return;
+            }
+            if !self.managed_job_quiescent() || !self.native_writer_retired(Duration::ZERO) {
+                std::thread::sleep(Duration::from_millis(25));
+                continue;
+            }
+            let resource = self.resource.lock().take();
+            drop(resource);
+            match Arc::try_unwrap(pty) {
+                Ok(original) => {
+                    drop(original);
+                    return;
+                }
+                Err(original) => pty = original,
+            }
+            std::thread::sleep(Duration::from_millis(25));
         }
     }
 
@@ -817,6 +1677,18 @@ impl SupervisedRun {
     }
 
     fn finish_if_terminal(&self) {
+        #[cfg(all(windows, feature = "remote-host"))]
+        if !self.managed_job_quiescent() {
+            return;
+        }
+        #[cfg(all(windows, feature = "remote-host"))]
+        if self.managed_job.is_some()
+            && (!self.io_drop.all_returned()
+                || !self.output_reader.lock().observe()
+                || self.wait_workers.lock().observe() != WaitWorkersState::Joined)
+        {
+            return;
+        }
         if !self.adoption_complete.load(Ordering::SeqCst) {
             return;
         }
@@ -830,6 +1702,10 @@ impl SupervisedRun {
             }
             lifecycle.clone()
         };
+        #[cfg(feature = "remote-host")]
+        if !self.native_writer_retired(Duration::ZERO) {
+            return;
+        }
         let Some(core) = self.core.upgrade() else {
             return;
         };
@@ -867,6 +1743,26 @@ impl SupervisedRun {
         self.resource.lock().take();
     }
 
+    #[cfg(feature = "remote-host")]
+    fn native_writer_retired(&self, budget: Duration) -> bool {
+        matches!(
+            self.native_writer_status(budget),
+            cc_desk_remote_host::native_host::NativeWriterRetirement::Joined
+        )
+    }
+    #[cfg(feature = "remote-host")]
+    fn native_writer_status(
+        &self,
+        budget: Duration,
+    ) -> cc_desk_remote_host::native_host::NativeWriterRetirement {
+        let input = self.resource.lock().as_ref().and_then(|run| run.remote_input());
+        if let Some(input) = &input { input.stop(); }
+        let mut native = self.native_canonical.lock();
+        let Some(native) = native.as_mut() else {
+            return input.map_or(cc_desk_remote_host::native_host::NativeWriterRetirement::Joined, |input| input.retirement());
+        };
+        native.observe_writer(budget)
+    }
     fn notify_retryable(&self) {
         self.changed.notify_all();
         if let Some(core) = self.core.upgrade() {
@@ -887,9 +1783,8 @@ impl SupervisedRun {
             return;
         }
         let state = self.clone();
-        if std::thread::Builder::new()
-            .name("native-run-wait-retry".into())
-            .spawn(move || {
+        if self
+            .spawn_wait_worker("native-run-wait-retry", move || {
                 std::thread::sleep(SUPERVISOR_RETRY_DELAY);
                 if state
                     .core
@@ -901,9 +1796,11 @@ impl SupervisedRun {
                 #[cfg(test)]
                 if let Some(core) = state.core.upgrade() {
                     let mut paused = core.automatic_retry_paused.lock();
+                    core.automatic_retry_waiting.store(true, Ordering::SeqCst);
                     while *paused {
                         core.automatic_retry_changed.wait(&mut paused);
                     }
+                    core.automatic_retry_waiting.store(false, Ordering::SeqCst);
                     drop(paused);
                     core.automatic_retry_calls.fetch_add(1, Ordering::SeqCst);
                 }
@@ -1027,5 +1924,1280 @@ mod convergence_tests {
         assert_eq!(completed.records.len(), 1);
         assert_eq!(completed.order.len(), 1);
         assert_eq!(completed.order.front(), Some(&key));
+    }
+}
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod remote_shutdown_observation_tests {
+    use super::*;
+    #[cfg(feature = "remote-host")]
+    #[test]
+    fn OwnedExitAggregate_PendingThenUnknownThenReleasedInEitherOrder_005() {
+        let unknown = NativeShutdownObservation::Unknown {
+            direct_child_reaped: false,
+            output_reader_joined: false,
+            wait_workers_joined: false,
+            original_io_drop_returned: false,
+            io_threads_joined: false,
+            stop_job_joined: false,
+        };
+        let released = NativeShutdownObservation::OwnedSessionReleased;
+        assert_eq!(released.merge(unknown), unknown);
+        assert_eq!(unknown.merge(released), unknown);
+        for first in [unknown, released] {
+            assert_eq!(
+                first.merge(NativeShutdownObservation::Pending),
+                NativeShutdownObservation::Pending
+            );
+            assert_eq!(
+                NativeShutdownObservation::Pending.merge(first),
+                NativeShutdownObservation::Pending
+            );
+        }
+        assert_eq!(released.merge(released), released);
+    }
+    #[test]
+    fn RemoteShutdown_EvictedLegacyRecordIsUnknown_001() {
+        let supervisor = NativeRunSupervisor::new(Arc::new(TerminalTransports::new()));
+        for index in 0..=SUPERVISOR_COMPLETED_MAX {
+            let key = RunKey {
+                run_id: format!("TEST_ONLY_EVICTED_{index}"),
+                generation: 1,
+            };
+            let mut record = LifecycleRecord::new(key.clone());
+            record.process_running().unwrap();
+            record.output_started("1").unwrap();
+            record.process_exited().unwrap();
+            record.output_end("0").unwrap();
+            record.parsed_through("0").unwrap();
+            record_completed(
+                &mut supervisor.core.completed.lock(),
+                identity(&key),
+                record,
+            );
+        }
+        let absent = RunKey {
+            run_id: "TEST_ONLY_ABSENT".into(),
+            generation: 1,
+        };
+        let evicted = RunKey {
+            run_id: "TEST_ONLY_EVICTED_0".into(),
+            generation: 1,
+        };
+        let mut shutdown = supervisor
+            .begin_shutdown_owned(vec![
+                supervisor.pin_shutdown(&absent),
+                supervisor.pin_shutdown(&evicted),
+            ])
+            .unwrap();
+        assert_eq!(
+            shutdown.observe_run(&RunKey {
+                run_id: "TEST_ONLY_EVICTED_0".into(),
+                generation: 1
+            }),
+            NativeShutdownObservation::Unknown {
+                direct_child_reaped: false,
+                output_reader_joined: false,
+                wait_workers_joined: false,
+                original_io_drop_returned: false,
+                io_threads_joined: false,
+                stop_job_joined: false
+            }
+        );
+        assert_eq!(
+            shutdown.observe_run(&RunKey {
+                run_id: "TEST_ONLY_ABSENT".into(),
+                generation: 1
+            }),
+            NativeShutdownObservation::Unknown {
+                direct_child_reaped: false,
+                output_reader_joined: false,
+                wait_workers_joined: false,
+                original_io_drop_returned: false,
+                io_threads_joined: false,
+                stop_job_joined: false
+            }
+        );
+    }
+
+    #[test]
+    fn RemoteShutdown_DuplicateAndSecondInvocationAreRejected_003() {
+        let supervisor = NativeRunSupervisor::new(Arc::new(TerminalTransports::new()));
+        let run = RunKey {
+            run_id: "TEST_ONLY_DUPLICATE".into(),
+            generation: 1,
+        };
+        assert!(supervisor
+            .begin_shutdown_owned(vec![
+                supervisor.pin_shutdown(&run),
+                supervisor.pin_shutdown(&run)
+            ])
+            .is_err());
+        assert!(!supervisor.core.shutting_down.load(Ordering::SeqCst));
+        let _held = supervisor
+            .begin_shutdown_owned(vec![supervisor.pin_shutdown(&run)])
+            .unwrap();
+        assert!(supervisor.begin_shutdown_owned(Vec::new()).is_err());
+    }
+
+    #[test]
+    fn RemoteShutdown_ForeignSupervisorPinRejectedBeforeStop_004() {
+        let original = NativeRunSupervisor::new(Arc::new(TerminalTransports::new()));
+        let foreign = NativeRunSupervisor::new(Arc::new(TerminalTransports::new()));
+        let pin = original.pin_shutdown(&RunKey {
+            run_id: "TEST_ONLY_PROVENANCE".into(),
+            generation: 1,
+        });
+        assert!(foreign.begin_shutdown_owned(vec![pin]).is_err());
+        assert!(!foreign.core.shutting_down.load(Ordering::SeqCst));
+    }
+}
+
+/// Narrow observations only: OwnedPty currently proves a direct child, not its tree.
+#[cfg(any(test, feature = "remote-host"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NativeShutdownObservation {
+    Pending,
+    #[cfg(feature = "remote-host")]
+    OwnedSessionReleased,
+    Unknown {
+        direct_child_reaped: bool,
+        output_reader_joined: bool,
+        wait_workers_joined: bool,
+        original_io_drop_returned: bool,
+        io_threads_joined: bool,
+        stop_job_joined: bool,
+    },
+}
+#[cfg(feature = "remote-host")]
+impl NativeShutdownObservation {
+    fn merge(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Pending, _) | (_, Self::Pending) => Self::Pending,
+            (unknown @ Self::Unknown { .. }, _) | (_, unknown @ Self::Unknown { .. }) => unknown,
+            (Self::OwnedSessionReleased, Self::OwnedSessionReleased) => Self::OwnedSessionReleased,
+        }
+    }
+}
+/// Native-only pin. A missing/evicted run never becomes evidence of retirement.
+#[cfg(any(test, feature = "remote-host"))]
+pub(crate) struct NativeRunPin {
+    run: RunKey,
+    origin: Weak<SupervisorCore>,
+    state: Option<Arc<SupervisedRun>>,
+}
+#[cfg(feature = "remote-host")]
+impl NativeRunPin {
+    pub(crate) fn network_origin(&self) -> Result<NativeRunNetworkOrigin, SafeError> {
+        let state = self.state.as_ref().ok_or_else(|| error("RUN_NOT_READY"))?;
+        let resource = state.resource.lock().as_ref().map(Arc::downgrade).ok_or_else(|| error("RUN_NOT_READY"))?;
+        Ok(NativeRunNetworkOrigin { supervisor: self.origin.clone(), state: Arc::downgrade(state), resource, run: self.run.clone() })
+    }
+    pub(crate) fn native_scope(
+        &self,
+    ) -> Result<cc_desk_remote_host::native_host::NativeSessionScope, SafeError> {
+        let state = self.state.as_ref().ok_or_else(|| error("RUN_NOT_READY"))?;
+        if state.stop_requested.load(Ordering::SeqCst) || state.reaped.load(Ordering::SeqCst) {
+            return Err(error("RUN_NOT_READY"));
+        }
+        let native = state.native_canonical.lock();
+        let native = native
+            .as_ref()
+            .ok_or_else(|| error("NATIVE_CANONICAL_UNAVAILABLE"))?;
+        native.remote_scope()
+    }
+}
+/// Current document/run admission plus original lifetime custody. A shutdown pin
+/// alone cannot construct this capability or authorize a producer handoff.
+#[cfg(feature = "remote-host")]
+pub(crate) struct NativeRunAdmission {
+    pin: NativeRunPin,
+    access: crate::cli::launch_service::RunAccess,
+    original: Arc<NativeRun>,
+    authority: NativeRunAuthority,
+}
+/// 只保留弱身份；历史网络时钟不能继续占用原生 IO。
+#[cfg(feature = "remote-host")]
+#[derive(Clone)]
+pub(crate) struct NativeRunNetworkOrigin {
+    supervisor: Weak<SupervisorCore>,
+    state: Weak<SupervisedRun>,
+    resource: Weak<NativeRun>,
+    run: RunKey,
+}
+#[cfg(feature = "remote-host")]
+pub(crate) type NativeRunNetworkChecks = Box<dyn Fn() -> bool + Send + Sync>;
+/// 仅移出 producer；原 input、scope 和目录仍由同一 SupervisedRun 保管。
+#[cfg(feature = "remote-host")]
+struct NativeProducerCheckout {
+    state: Arc<SupervisedRun>,
+    producer: Option<cc_desk_remote_host::native_host::NativeRunProducer>,
+}
+#[cfg(feature = "remote-host")]
+impl NativeProducerCheckout {
+    fn take(state: &Arc<SupervisedRun>) -> Result<Self, SafeError> {
+        use crate::cli::launch_service::NativeProducerSlot;
+        let mut canonical = state.native_canonical.lock();
+        let native = canonical.as_mut().ok_or_else(|| error("NATIVE_CANONICAL_UNAVAILABLE"))?;
+        match std::mem::replace(&mut native.producer, NativeProducerSlot::CheckedOut) {
+            NativeProducerSlot::Available(producer) => Ok(Self { state: state.clone(), producer: Some(*producer) }),
+            original => { native.producer = original; Err(error("REMOTE_PRODUCER_OWNED")) }
+        }
+    }
+}
+#[cfg(feature = "remote-host")]
+impl Drop for NativeProducerCheckout {
+    fn drop(&mut self) {
+        use crate::cli::launch_service::NativeProducerSlot;
+        let mut canonical = self.state.native_canonical.lock();
+        let native = canonical.as_mut().expect("original canonical retained by checkout");
+        debug_assert!(matches!(native.producer, NativeProducerSlot::CheckedOut));
+        native.producer = self.producer.take().map_or(NativeProducerSlot::Consumed, |producer| NativeProducerSlot::Available(Box::new(producer)));
+    }
+}
+#[cfg(feature = "remote-host")]
+impl NativeRunNetworkOrigin {
+    pub(crate) fn is_live(&self) -> bool {
+        self.resource.upgrade().is_some_and(|resource| {
+            NativeRunAuthority {
+                state: self.state.clone(),
+                resource: self.resource.clone(),
+            }
+            .check(&resource)
+            .is_ok()
+        })
+    }
+    pub(crate) fn matches(&self, admission: &NativeRunAdmission) -> bool {
+        self.run == admission.pin.run
+            && Weak::ptr_eq(&self.supervisor, &admission.pin.origin)
+            && Weak::ptr_eq(&self.state, &admission.authority.state)
+            && Weak::ptr_eq(&self.resource, &admission.authority.resource)
+    }
+}
+#[cfg(feature = "remote-host")]
+impl NativeRunAdmission {
+    #[cfg(test)]
+    pub(crate) fn test_resource_strong_count(&self) -> usize { Arc::strong_count(&self.original) }
+    pub(crate) fn network_origin(&self) -> Result<NativeRunNetworkOrigin, SafeError> {
+        self.validate()?;
+        self.pin.network_origin()
+    }
+    #[cfg(test)]
+    pub(crate) fn test_canonical_probe(&self) -> Box<dyn Fn() -> bool + Send + Sync> {
+        let state = self.authority.state.clone();
+        Box::new(move || state.upgrade().is_some_and(|state| state.native_canonical.try_lock().is_some()))
+    }
+    pub(crate) fn network_checks(
+        &self,
+    ) -> Result<(NativeRunNetworkOrigin, NativeRunNetworkChecks), SafeError> {
+        self.validate()?;
+        let origin = NativeRunNetworkOrigin {
+            supervisor: self.pin.origin.clone(),
+            state: self.authority.state.clone(),
+            resource: self.authority.resource.clone(),
+            run: self.pin.run.clone(),
+        };
+        let access = self.access.clone();
+        let original = self.original.clone();
+        let authority = NativeRunAuthority {
+            state: self.authority.state.clone(),
+            resource: self.authority.resource.clone(),
+        };
+        Ok((
+            origin,
+            Box::new(move || {
+                access.check_remote_admission(&original).is_ok()
+                    && authority.check(&original).is_ok()
+            }),
+        ))
+    }
+    pub(crate) fn scope(
+        &self,
+    ) -> Result<cc_desk_remote_host::native_host::NativeSessionScope, SafeError> {
+        self.validate()?;
+        let scope = self.pin.native_scope()?;
+        if scope.run != self.pin.key().run_id
+            || scope.generation != self.pin.key().generation.to_string()
+        {
+            return Err(error("FORBIDDEN"));
+        }
+        Ok(scope)
+    }
+    fn validate(&self) -> Result<(), SafeError> {
+        self.access.check_remote_admission(&self.original)?;
+        self.authority.check(&self.original)
+    }
+    pub(crate) fn create_host(
+        &self,
+        channel: Arc<cc_desk_remote_host::native_host::NativeChannel>,
+    ) -> Result<cc_desk_remote_host::native_host::NativeHost, SafeError> {
+        self.validate()?;
+        let state = self
+            .pin
+            .state
+            .as_ref()
+            .ok_or_else(|| error("RUN_NOT_READY"))?;
+        let checkout = NativeProducerCheckout::take(state)?;
+        self.validate()?;
+        cc_desk_remote_host::native_host::NativeHost::for_native_resource(channel, checkout.producer.as_ref().expect("checked out original producer"))
+            .map_err(|_| error("REMOTE_HOST_AUTHORITY"))
+    }
+    pub(crate) fn adopt(
+        self,
+        host: &mut cc_desk_remote_host::native_host::NativeHost,
+        channel: Arc<cc_desk_remote_host::native_host::NativeChannel>,
+    ) -> Result<NativeRunPin, Box<(SafeError, Self)>> {
+        match self.adopt_inner(host, channel) {
+            Ok(()) => Ok(self.into_pin()),
+            Err(error) => Err(Box::new((error, self))),
+        }
+    }
+    fn adopt_inner(
+        &self,
+        host: &mut cc_desk_remote_host::native_host::NativeHost,
+        channel: Arc<cc_desk_remote_host::native_host::NativeChannel>,
+    ) -> Result<(), SafeError> {
+        self.scope()?;
+        let state = self
+            .pin
+            .state
+            .as_ref()
+            .ok_or_else(|| error("RUN_NOT_READY"))?;
+        let mut checkout = NativeProducerCheckout::take(state)?;
+        self.validate()?;
+        let access = self.access.clone();
+        let original = self.original.clone();
+        let authority = NativeRunAuthority {
+            state: self.authority.state.clone(),
+            resource: self.authority.resource.clone(),
+        };
+        host.adopt_native_producer_slot(
+            &mut checkout.producer,
+            channel,
+            Box::new(move || {
+                access.check_remote_admission(&original).is_ok()
+                    && authority.check(&original).is_ok()
+            }),
+        ).map(|_| ()).map_err(|_| error("REMOTE_HOST_AUTHORITY"))
+    }
+    pub(crate) fn is_owned_by(&self, runtime: &crate::cli::native_runtime::NativeRuntime) -> bool {
+        runtime.owns_remote_pin(&self.pin)
+    }
+    pub(crate) fn rebind_origin(
+        self,
+        origin: &NativeRunNetworkOrigin,
+        host: &mut cc_desk_remote_host::native_host::NativeHost,
+        channel: Arc<cc_desk_remote_host::native_host::NativeChannel>,
+    ) -> Result<(), Box<(SafeError, Self)>> {
+        let result = (|| {
+            self.scope()?;
+            if !origin.matches(&self) {
+                return Err(error("REMOTE_HOST_AUTHORITY"));
+            }
+            let access = self.access.clone();
+            let original = self.original.clone();
+            let authority = NativeRunAuthority {
+                state: self.authority.state.clone(),
+                resource: self.authority.resource.clone(),
+            };
+            host.begin_native_resource_rebind(
+                channel,
+                Box::new(move || {
+                    access.check_remote_admission(&original).is_ok()
+                        && authority.check(&original).is_ok()
+                }),
+            )
+            .map_err(|_| error("REMOTE_HOST_AUTHORITY"))
+        })();
+        result.map_err(|error| Box::new((error, self)))
+    }
+    fn into_pin(self) -> NativeRunPin {
+        self.pin
+    }
+}
+#[cfg(feature = "remote-host")]
+impl NativeRunSupervisor {
+    pub(crate) fn admit_remote_run(
+        &self,
+        access: crate::cli::launch_service::RunAccess,
+        run: &RunKey,
+    ) -> Result<NativeRunAdmission, SafeError> {
+        let pin = self.pin_shutdown(run);
+        let state = pin.state.as_ref().ok_or_else(|| error("RUN_NOT_READY"))?;
+        let original = state
+            .resource
+            .lock()
+            .clone()
+            .ok_or_else(|| error("RUN_NOT_READY"))?;
+        access.check_remote_admission(&original)?;
+        let authority = NativeRunAuthority {
+            state: Arc::downgrade(state),
+            resource: Arc::downgrade(&original),
+        };
+        authority.check(&original)?;
+        let admission = NativeRunAdmission {
+            pin,
+            access,
+            original,
+            authority,
+        };
+        admission.scope()?;
+        Ok(admission)
+    }
+}
+/// Minted only by actual supervisor adoption. UI document revocation does not
+/// destroy this process owner; explicit native stop/reap/resource retirement do.
+#[cfg(feature = "remote-host")]
+pub(crate) struct NativeRunAuthority {
+    state: Weak<SupervisedRun>,
+    resource: Weak<NativeRun>,
+}
+#[cfg(feature = "remote-host")]
+impl NativeRunAuthority {
+    pub(crate) fn check(&self, resource: &Arc<NativeRun>) -> Result<(), SafeError> {
+        let state = self.state.upgrade().ok_or_else(|| error("RUN_NOT_READY"))?;
+        let original = self
+            .resource
+            .upgrade()
+            .ok_or_else(|| error("RUN_NOT_READY"))?;
+        if !Arc::ptr_eq(&original, resource)
+            || state.stop_requested.load(Ordering::SeqCst)
+            || state.reaped.load(Ordering::SeqCst)
+            || !state
+                .resource
+                .lock()
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(current, resource))
+        {
+            return Err(error("RUN_NOT_READY"));
+        }
+        Ok(())
+    }
+}
+#[cfg(any(test, feature = "remote-host"))]
+struct NativeStopEntry {
+    pin: NativeRunPin,
+    #[cfg(feature = "remote-host")]
+    identity: Option<NativeStopIdentity>,
+    job: Option<std::thread::JoinHandle<Result<(), SafeError>>>,
+    joined: bool,
+    failed: bool,
+    #[cfg(all(windows, feature = "remote-host"))]
+    managed_history: Option<ManagedRetirementFacts>,
+}
+/// 退休后只保留弱身份；不延长原 Job、IO 或 SupervisedRun 的生命周期。
+#[cfg(feature = "remote-host")]
+struct NativeStopIdentity {
+    supervisor: Weak<SupervisorCore>,
+    state: Weak<SupervisedRun>,
+    run: RunKey,
+    #[cfg(windows)]
+    managed_job: Option<Weak<crate::platform::owned_job_launch::ManagedJob>>,
+}
+#[cfg(feature = "remote-host")]
+impl NativeStopIdentity {
+    fn from_pin(pin: &NativeRunPin) -> Option<Self> {
+        let state = pin.state.as_ref()?;
+        Some(Self {
+            supervisor: pin.origin.clone(), state: Arc::downgrade(state), run: pin.run.clone(),
+            #[cfg(windows)]
+            managed_job: state.managed_job.as_ref().map(Arc::downgrade),
+        })
+    }
+    fn matches(&self, pin: &NativeRunPin) -> bool {
+        let Some(state) = pin.state.as_ref() else { return false; };
+        #[cfg(windows)]
+        let same_job = match (&self.managed_job, &state.managed_job) {
+            (Some(original), Some(current)) => Weak::ptr_eq(original, &Arc::downgrade(current)),
+            (None, None) => true,
+            _ => false,
+        };
+        #[cfg(not(windows))]
+        let same_job = true;
+        self.run == pin.run && Weak::ptr_eq(&self.supervisor, &pin.origin)
+            && Weak::ptr_eq(&self.state, &Arc::downgrade(state)) && same_job
+    }
+}
+#[must_use = "Retain the real stop jobs until observed; dropping is not retirement"]
+#[cfg(any(test, feature = "remote-host"))]
+pub(crate) struct NativeShutdown {
+    entries: Vec<NativeStopEntry>,
+}
+/// Facts about this exact owned Job and Rust/native owners. Internal ConPTY
+/// server/thread exit is deliberately not inferred from master destruction.
+#[cfg(all(windows, feature = "remote-host"))]
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ManagedRetirementFacts {
+    /// Last exact query, historical after the original handle has been closed.
+    /// A missing entry/state/query never supplies zero.
+    pub(crate) job_active_processes: Option<u32>,
+    pub(crate) job_query_is_historical: bool,
+    pub(crate) original_job_handle_closed: bool,
+    pub(crate) pinned_conpty_close_returned: bool,
+    pub(crate) stream_capacity_retired: bool,
+    pub(crate) original_reader_served_close: bool,
+    #[allow(
+        dead_code,
+        reason = "Diagnostic only; deliberately does not unlock whole-resource retirement"
+    )]
+    pub(crate) original_output_read: OriginalOutputReadObservation,
+    pub(crate) direct_child_reaped: bool,
+    pub(crate) output_reader_joined: bool,
+    pub(crate) wait_workers_joined: bool,
+    pub(crate) physical_writer_joined: bool,
+    pub(crate) original_io_drop_returned: bool,
+    pub(crate) stop_job_joined: bool,
+}
+#[cfg(all(windows, feature = "remote-host"))]
+impl ManagedRetirementFacts {
+    fn owned_session_released(&self) -> bool {
+        self.job_query_is_historical
+            && self.original_job_handle_closed
+            && self.pinned_conpty_close_returned
+            && self.stream_capacity_retired
+            && self.original_reader_served_close
+            && self.original_resources_retired()
+    }
+    pub(crate) fn original_resources_retired(&self) -> bool {
+        self.job_active_processes == Some(0)
+            && self.direct_child_reaped
+            && self.output_reader_joined
+            && self.wait_workers_joined
+            && self.physical_writer_joined
+            && self.original_io_drop_returned
+            && self.stop_job_joined
+    }
+}
+#[cfg(all(windows, feature = "remote-host"))]
+impl NativeStopEntry {
+    fn managed_facts(&self) -> Option<ManagedRetirementFacts> {
+        if let Some(history) = self.managed_history {
+            return Some(history);
+        }
+        let state = self.pin.state.as_ref()?;
+        let job = state.managed_job.as_ref()?;
+        Some(ManagedRetirementFacts {
+            job_active_processes: job.active_processes().ok(),
+            job_query_is_historical: false,
+            original_job_handle_closed: false,
+            pinned_conpty_close_returned: state.io_drop.pinned_close_returned(),
+            stream_capacity_retired: state.stream.lock().is_none(),
+            original_reader_served_close: state.reader_served_close.load(Ordering::Acquire)
+                && !state.reader_service_failed.load(Ordering::Acquire),
+            original_output_read: OriginalOutputReadObservation::observe(
+                &state.output_read_observation,
+            ),
+            direct_child_reaped: state.reaped.load(Ordering::SeqCst),
+            output_reader_joined: state.output_reader.lock().observe(),
+            wait_workers_joined: state.wait_workers.lock().observe() == WaitWorkersState::Joined,
+            physical_writer_joined: state.native_writer_retired(Duration::ZERO),
+            original_io_drop_returned: state.io_drop.all_returned(),
+            stop_job_joined: self.joined && !self.failed,
+        })
+    }
+    fn release_completed_managed_ownership(&mut self) {
+        let Some(mut facts) = self.managed_facts() else {
+            return;
+        };
+        if facts.job_query_is_historical || !facts.original_resources_retired() {
+            return;
+        }
+        let state = self
+            .pin
+            .state
+            .as_ref()
+            .expect("fresh managed facts retain original state");
+        if !state.registry_retired.load(Ordering::SeqCst)
+            || !state.adoption_complete.load(Ordering::SeqCst)
+        {
+            return;
+        }
+        let Some(core) = state.core.upgrade() else {
+            return;
+        };
+        if !core.shutting_down.load(Ordering::SeqCst) {
+            return;
+        }
+        let active = core.active.lock();
+        if active.contains_key(&identity(&self.pin.run)) {
+            return;
+        }
+        // The Job slot itself rechecks closed admission, accepted stop and the
+        // final exact Job0 query while protecting its original native handle.
+        if state
+            .managed_job
+            .as_ref()
+            .expect("managed facts")
+            .close_after_owners_retired()
+            .is_err()
+        {
+            return;
+        }
+        drop(active);
+        facts.job_query_is_historical = true;
+        facts.original_job_handle_closed = true;
+        self.managed_history = Some(facts);
+        // Every original JoinHandle was joined above. Keep bounded run/generation
+        // history, not the state/Job owner. Whole-resource exit stays Unknown.
+        self.pin.state.take();
+    }
+}
+#[cfg(any(test, feature = "remote-host"))]
+impl NativeRunSupervisor {
+    #[cfg(all(windows, feature = "remote-host"))]
+    pub(crate) fn shutdown_inventory_pins(&self) -> Vec<NativeRunPin> {
+        self.core
+            .active
+            .lock()
+            .values()
+            .map(|state| NativeRunPin {
+                run: state.run.clone(),
+                origin: Arc::downgrade(&self.core),
+                state: Some(state.clone()),
+            })
+            .collect()
+    }
+    #[cfg(feature = "remote-host")]
+    pub(crate) fn has_unattested_native_inventory(&self) -> bool {
+        self.core.unmanaged_history.load(Ordering::Acquire) || !self.core.active.lock().is_empty()
+    }
+    pub(crate) fn pin_shutdown(&self, run: &RunKey) -> NativeRunPin {
+        NativeRunPin {
+            run: run.clone(),
+            origin: Arc::downgrade(&self.core),
+            state: self.core.active.lock().get(&identity(run)).cloned(),
+        }
+    }
+    /// Explicit application shutdown only. Never use for phone disconnection.
+    #[cfg(feature = "remote-host")]
+    pub(crate) fn owns_live_pin(&self, pin: &NativeRunPin) -> bool {
+        pin.state.is_some()
+            && pin
+                .origin
+                .upgrade()
+                .is_some_and(|origin| Arc::ptr_eq(&origin, &self.core))
+    }
+
+    /// Explicit application shutdown only. Never use for phone disconnection.
+    pub(crate) fn begin_shutdown_owned(
+        &self,
+        pins: Vec<NativeRunPin>,
+    ) -> Result<NativeShutdown, SafeError> {
+        if pins.len() > 16 {
+            return Err(error("REMOTE_RESOURCE_CAPACITY"));
+        }
+        for (index, pin) in pins.iter().enumerate() {
+            if !pin
+                .origin
+                .upgrade()
+                .is_some_and(|origin| Arc::ptr_eq(&origin, &self.core))
+            {
+                return Err(error("REMOTE_RESOURCE_ORIGIN"));
+            }
+            if pins[..index]
+                .iter()
+                .any(|other| identity(&other.run) == identity(&pin.run))
+            {
+                return Err(error("REMOTE_DUPLICATE_RESOURCE"));
+            }
+        }
+        if self
+            .core
+            .owned_shutdown_started
+            .swap(true, Ordering::SeqCst)
+        {
+            return Err(error("REMOTE_SHUTDOWN_ALREADY_STARTED"));
+        }
+        self.core.shutting_down.store(true, Ordering::SeqCst);
+        let mut entries = Vec::with_capacity(pins.len());
+        for pin in pins {
+            let job = pin.state.as_ref().map(|state| {
+                let original = state.clone();
+                #[cfg(all(windows, feature = "remote-host"))]
+                let keepalive = original.prepare_owned_exit();
+                let work = move || {
+                    #[cfg(all(windows, feature = "remote-host"))]
+                    {
+                        original.stop_owned_session(keepalive)
+                    }
+                    #[cfg(not(all(windows, feature = "remote-host")))]
+                    {
+                        original.request_stop()
+                    }
+                };
+                #[cfg(test)]
+                {
+                    let hook = self.core.stop_spawn_hook.lock().take();
+                    if hook.is_some_and(|hook| hook()) {
+                        drop(work); // Same closure-drop boundary as a real Builder::spawn failure.
+                        return Err(std::io::Error::other("TEST_ONLY_STOP_SPAWN_FAILURE"));
+                    }
+                }
+                std::thread::Builder::new()
+                    .name("remote-native-stop".into())
+                    .spawn(work)
+            });
+            let (job, failed) = match job {
+                Some(Ok(job)) => (Some(job), false),
+                Some(Err(_)) => (None, true),
+                None => (None, false),
+            };
+            entries.push(NativeStopEntry {
+                #[cfg(feature = "remote-host")]
+                identity: NativeStopIdentity::from_pin(&pin),
+                pin,
+                job,
+                joined: false,
+                failed,
+                #[cfg(all(windows, feature = "remote-host"))]
+                managed_history: None,
+            });
+        }
+        Ok(NativeShutdown { entries })
+    }
+}
+#[cfg(any(test, feature = "remote-host"))]
+impl NativeShutdown {
+    #[cfg(feature = "remote-host")]
+    pub(crate) fn covers_pin(&self, pin: &NativeRunPin) -> bool {
+        self.entries.iter().any(|entry| entry.identity.as_ref().is_some_and(|identity| identity.matches(pin)))
+    }
+    #[cfg(all(test, windows, feature = "remote-host"))]
+    pub(crate) fn retains_managed_state_for_test(&self, run: &RunKey) -> bool {
+        self.entries
+            .iter()
+            .any(|entry| identity(&entry.pin.run) == identity(run) && entry.pin.state.is_some())
+    }
+    #[cfg(all(windows, feature = "remote-host"))]
+    pub(crate) fn managed_retirement(&mut self, run: &RunKey) -> Option<ManagedRetirementFacts> {
+        let _ = self.observe_run(run);
+        let entry = self
+            .entries
+            .iter()
+            .find(|entry| identity(&entry.pin.run) == identity(run))?;
+        entry.managed_facts()
+    }
+    pub(crate) fn observe_run(&mut self, run: &RunKey) -> NativeShutdownObservation {
+        let unknown =
+            |reaped, joined, reader, workers, io_drop| NativeShutdownObservation::Unknown {
+                direct_child_reaped: reaped,
+                output_reader_joined: reader,
+                wait_workers_joined: workers,
+                original_io_drop_returned: io_drop,
+                io_threads_joined: false,
+                stop_job_joined: joined,
+            };
+        let Some(entry) = self
+            .entries
+            .iter_mut()
+            .find(|entry| identity(&entry.pin.run) == identity(run))
+        else {
+            return unknown(false, false, false, false, false);
+        };
+        let Some(state) = entry.pin.state.as_ref() else {
+            #[cfg(all(windows, feature = "remote-host"))]
+            if let Some(history) = entry.managed_history {
+                if history.owned_session_released() {
+                    return NativeShutdownObservation::OwnedSessionReleased;
+                }
+                return unknown(
+                    history.direct_child_reaped,
+                    history.stop_job_joined,
+                    history.output_reader_joined,
+                    history.wait_workers_joined,
+                    history.original_io_drop_returned,
+                );
+            }
+            return unknown(false, false, false, false, false);
+        };
+        #[cfg(feature = "remote-host")]
+        {
+            state.release_resource_if_transport_terminal_with_budget(Duration::ZERO);
+            state.finish_if_terminal();
+            if state.native_writer_status(Duration::ZERO)
+                == cc_desk_remote_host::native_host::NativeWriterRetirement::Pending
+            {
+                return NativeShutdownObservation::Pending;
+            }
+        }
+        // Observe the original reader even while stop/root publication is pending.
+        let reader_joined = state.output_reader.lock().observe();
+        // Never block the observer behind thread creation/publication.
+        let workers = state
+            .wait_workers
+            .try_lock()
+            .map(|mut workers| workers.observe())
+            .unwrap_or(WaitWorkersState::Pending);
+        let workers_joined =
+            workers == WaitWorkersState::Joined && state.registry_retired.load(Ordering::SeqCst);
+        #[cfg(feature = "remote-host")]
+        if state.native_writer_status(Duration::ZERO)
+            == cc_desk_remote_host::native_host::NativeWriterRetirement::Unknown
+        {
+            return unknown(
+                state.reaped.load(Ordering::SeqCst),
+                entry.joined,
+                reader_joined,
+                workers_joined,
+                state.io_drop.all_returned(),
+            );
+        }
+        if let Some(job) = entry.job.as_ref() {
+            if !job.is_finished() {
+                return NativeShutdownObservation::Pending;
+            }
+            let result = entry.job.take().expect("observed owned stop job").join();
+            entry.joined = true;
+            entry.failed = !matches!(result, Ok(Ok(())));
+        }
+        let reaped = state.reaped.load(Ordering::SeqCst);
+        if entry.failed {
+            return unknown(
+                reaped,
+                entry.joined,
+                reader_joined,
+                workers_joined,
+                state.io_drop.all_returned(),
+            );
+        }
+        if !entry.joined
+            || !reaped
+            || !state.adoption_complete.load(Ordering::SeqCst)
+            || !state.registry_retired.load(Ordering::SeqCst)
+            || workers == WaitWorkersState::Pending
+        {
+            return NativeShutdownObservation::Pending;
+        }
+        // These original thread joins do not attest remaining I/O, master or
+        // PTY descendants. Keep the whole-resource result Unknown.
+        let observed = unknown(
+            reaped,
+            entry.joined,
+            reader_joined,
+            workers_joined,
+            state.io_drop.all_returned(),
+        );
+        #[cfg(all(windows, feature = "remote-host"))]
+        entry.release_completed_managed_ownership();
+        #[cfg(all(windows, feature = "remote-host"))]
+        if entry
+            .managed_history
+            .is_some_and(|facts| facts.owned_session_released())
+        {
+            return NativeShutdownObservation::OwnedSessionReleased;
+        }
+        observed
+    }
+
+    #[cfg(feature = "remote-host")]
+    pub(crate) fn observe_all(&mut self) -> Option<NativeShutdownObservation> {
+        let keys: Vec<_> = self
+            .entries
+            .iter()
+            .map(|entry| entry.pin.run.clone())
+            .collect();
+        let mut result = None;
+        for key in keys {
+            let observed = self.observe_run(&key);
+            #[cfg(windows)]
+            let managed_pending = self.managed_retirement(&key).is_some_and(|facts| {
+                facts.job_active_processes.is_some_and(|active| active > 0)
+                    && !facts.original_resources_retired()
+            });
+            #[cfg(not(windows))]
+            let managed_pending = false;
+            let reader_pending = self
+                .entries
+                .iter()
+                .find(|entry| identity(&entry.pin.run) == identity(&key))
+                .and_then(|entry| entry.pin.state.as_ref())
+                .is_some_and(|state| {
+                    matches!(
+                        *state.output_reader.lock(),
+                        OutputReaderJoin::Publishing | OutputReaderJoin::Running(_)
+                    )
+                });
+            let workers_pending = self
+                .entries
+                .iter()
+                .find(|entry| identity(&entry.pin.run) == identity(&key))
+                .and_then(|entry| entry.pin.state.as_ref())
+                .is_some_and(|state| {
+                    state
+                        .wait_workers
+                        .try_lock()
+                        .map(|mut workers| workers.observe() == WaitWorkersState::Pending)
+                        .unwrap_or(true)
+                });
+            let io_pending = self
+                .entries
+                .iter()
+                .find(|entry| identity(&entry.pin.run) == identity(&key))
+                .and_then(|entry| entry.pin.state.as_ref())
+                .is_some_and(|state| {
+                    state.io_drop.observe() == crate::platform::owned_pty::IoDropState::Pending
+                });
+            let effective = if managed_pending
+                || reader_pending
+                || workers_pending
+                || io_pending
+                || observed == NativeShutdownObservation::Pending
+            {
+                NativeShutdownObservation::Pending
+            } else {
+                observed
+            };
+            result = Some(
+                result.map_or(effective, |prior: NativeShutdownObservation| {
+                    prior.merge(effective)
+                }),
+            );
+        }
+        result
+    }
+}
+
+#[cfg(feature = "remote-host")]
+impl NativeRunPin {
+    pub(crate) fn key(&self) -> &RunKey {
+        &self.run
+    }
+}
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod output_reader_join_tests {
+    use super::*;
+    #[test]
+    fn ReaderJoin_UnstartedPublishingAndUnknownNeverAttestJoin_006() {
+        let mut slot = OutputReaderJoin::Unstarted;
+        assert!(!slot.observe());
+        assert!(slot.reserve());
+        assert!(!slot.observe());
+        assert!(!slot.reserve());
+        slot = OutputReaderJoin::Unknown;
+        assert!(!slot.observe());
+        assert!(!slot.reserve());
+    }
+    #[test]
+    fn ReaderJoin_OriginalHandleCannotBeReplacedAndFinishedJoinIsCached_007() {
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let mut slot = OutputReaderJoin::Running(std::thread::spawn(move || {
+            let _ = rx.recv_timeout(Duration::from_secs(2));
+        }));
+        assert!(!slot.reserve());
+        assert!(!slot.observe());
+        tx.send(()).unwrap();
+        let end = Instant::now() + Duration::from_secs(2);
+        while !slot.observe() {
+            assert!(Instant::now() < end);
+            std::thread::yield_now();
+        }
+        assert!(slot.observe());
+        assert!(!slot.reserve());
+    }
+    #[test]
+    fn ReaderJoin_PanicConsumesOriginalHandleButRemainsUnknown_008() {
+        let mut slot =
+            OutputReaderJoin::Running(std::thread::spawn(|| panic!("TEST_ONLY_READER_PANIC")));
+        let end = Instant::now() + Duration::from_secs(2);
+        while matches!(slot, OutputReaderJoin::Running(_)) {
+            assert!(!slot.observe());
+            assert!(Instant::now() < end);
+            std::thread::yield_now();
+        }
+        assert!(matches!(slot, OutputReaderJoin::Unknown));
+        assert!(!slot.observe());
+        assert!(!slot.reserve());
+    }
+}
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod wait_worker_join_tests {
+    use super::*;
+    // Thread-custody fixture only: no NativeRun, PTY, credentials or provider.
+    fn owner() -> Arc<SupervisedRun> {
+        let run = RunKey {
+            run_id: "TEST_ONLY_THREADS".into(),
+            generation: 1,
+        };
+        Arc::new(SupervisedRun {
+            #[cfg(all(windows, feature = "remote-host"))]
+            managed_job: None,
+            #[cfg(feature = "remote-host")]
+            native_canonical: Mutex::new(None),
+            core: Weak::new(),
+            registry: Arc::new(RunRegistry::new(1)),
+            lifecycle: Mutex::new(LifecycleRecord::new(run.clone())),
+            run,
+            owner: CallerIdentity {
+                instance_id: "TEST_ONLY".into(),
+                window_label: "main".into(),
+                webview_epoch: WireU64::parse("1").unwrap(),
+            },
+            request_id: "TEST_ONLY".into(),
+            stream: Mutex::new(None),
+            resource: Mutex::new(None),
+            #[cfg(feature = "remote-host")]
+            output_read_observation: Arc::new(std::sync::atomic::AtomicU8::new(
+                OriginalOutputReadObservation::Unobserved as u8,
+            )),
+            #[cfg(feature = "remote-host")]
+            discard_output: Arc::new(AtomicBool::new(false)),
+            #[cfg(all(windows, feature = "remote-host"))]
+            owned_exit_release: AtomicBool::new(false),
+            #[cfg(all(windows, feature = "remote-host"))]
+            owned_exit_pty: Mutex::new(None),
+            #[cfg(all(windows, feature = "remote-host"))]
+            reader_service_failed: AtomicBool::new(false),
+            #[cfg(all(windows, feature = "remote-host"))]
+            reader_served_close: AtomicBool::new(false),
+            stop_control: Mutex::new(()),
+            stop_requested: AtomicBool::new(false),
+            waiter_running: AtomicBool::new(false),
+            reaped: AtomicBool::new(false),
+            registry_retired: AtomicBool::new(false),
+            adoption_complete: AtomicBool::new(false),
+            automatic_retry_used: AtomicBool::new(false),
+            output_reader: Mutex::new(OutputReaderJoin::Unstarted),
+            wait_workers: Mutex::new(WaitWorkers::default()),
+            io_drop: crate::platform::owned_pty::IoDropWitness::default(),
+            changed: Condvar::new(),
+        })
+    }
+    struct Gate(Arc<(Mutex<bool>, Condvar)>);
+    impl Gate {
+        fn new() -> Self {
+            Self(Arc::new((Mutex::new(false), Condvar::new())))
+        }
+        fn work(&self) -> impl FnOnce() + Send + 'static {
+            let gate = self.0.clone();
+            move || {
+                let mut released = gate.0.lock();
+                let end = Instant::now() + Duration::from_secs(10);
+                while !*released && Instant::now() < end {
+                    gate.1.wait_for(&mut released, Duration::from_millis(50));
+                }
+            }
+        }
+    }
+    impl Drop for Gate {
+        fn drop(&mut self) {
+            *self.0 .0.lock() = true;
+            self.0 .1.notify_all();
+        }
+    }
+    fn finish(owner: &SupervisedRun) -> WaitWorkersState {
+        let end = Instant::now() + Duration::from_secs(3);
+        loop {
+            let observed = owner.wait_workers.lock().observe();
+            if observed != WaitWorkersState::Pending {
+                return observed;
+            }
+            assert!(Instant::now() < end);
+            std::thread::yield_now();
+        }
+    }
+    #[test]
+    fn WaitWorkers_CapacityRejectsWithoutLosingOriginals_011() {
+        let state = owner();
+        let gate = Gate::new();
+        for _ in 0..WaitWorkers::MAX {
+            assert!(state
+                .spawn_wait_worker("TEST_ONLY_HELD", gate.work())
+                .unwrap());
+        }
+        let rejected =
+            state.spawn_wait_worker("TEST_ONLY_REJECTED", || panic!("must never execute"));
+        let retained = state.wait_workers.lock().handles.len();
+        drop(gate);
+        assert_eq!(rejected.unwrap_err().code, "RUN_SUPERVISOR_CAPACITY");
+        assert_eq!(retained, WaitWorkers::MAX);
+        assert!(finish(&state) == WaitWorkersState::Joined);
+        assert!(state
+            .spawn_wait_worker("TEST_ONLY_AFTER_PRUNE", || {})
+            .unwrap());
+        assert!(finish(&state) == WaitWorkersState::Joined);
+    }
+    #[test]
+    fn WaitWorkers_LateStarterCannotCreateAfterRetirement_012() {
+        let state = owner();
+        let locked = state.wait_workers.lock();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let late = state.clone();
+        let worker = std::thread::spawn(move || {
+            tx.send(()).unwrap();
+            late.spawn_wait_worker("TEST_ONLY_LATE", || panic!("late work"))
+        });
+        rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        state.registry_retired.store(true, Ordering::SeqCst);
+        drop(locked);
+        assert!(!worker.join().unwrap().unwrap());
+        assert!(state.wait_workers.lock().handles.is_empty());
+        assert!(state.wait_workers.lock().observe() == WaitWorkersState::Unknown);
+    }
+    #[test]
+    fn WaitWorkers_PanicStaysUnknownAfterOtherOriginalReturns_013() {
+        let state = owner();
+        let gate = Gate::new();
+        state
+            .spawn_wait_worker("TEST_ONLY_PANIC", || panic!("TEST_ONLY_WAIT_PANIC"))
+            .unwrap();
+        state
+            .spawn_wait_worker("TEST_ONLY_HELD", gate.work())
+            .unwrap();
+        let end = Instant::now() + Duration::from_secs(3);
+        loop {
+            let mut workers = state.wait_workers.lock();
+            assert!(workers.observe() == WaitWorkersState::Pending);
+            if workers.panicked {
+                break;
+            }
+            drop(workers);
+            assert!(Instant::now() < end);
+            std::thread::yield_now();
+        }
+        drop(gate);
+        assert!(finish(&state) == WaitWorkersState::Unknown);
+        assert!(state.wait_workers.lock().observe() == WaitWorkersState::Unknown);
+    }
+}
+
+#[cfg(all(test, feature = "remote-host"))]
+#[allow(non_snake_case)]
+mod raw_output_read_tests {
+    use super::*;
+    use std::io::{self, Read};
+    use std::sync::atomic::AtomicU8;
+    enum Step {
+        Zero,
+        Error(io::Error),
+        Panic,
+    }
+    struct Scripted(std::collections::VecDeque<Step>);
+    impl Read for Scripted {
+        fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+            match self.0.pop_front().unwrap_or(Step::Zero) {
+                Step::Zero => Ok(0),
+                Step::Error(e) => Err(e),
+                Step::Panic => panic!("TEST_ONLY_ORIGINAL_READ_PANIC"),
+            }
+        }
+    }
+    fn reader(steps: Vec<Step>) -> (CanonicalReader, Arc<AtomicU8>) {
+        let end = Arc::new(AtomicU8::new(0));
+        (
+            CanonicalReader {
+                original: Box::new(Scripted(steps.into())),
+                output: None,
+                offset: 0,
+                observation: end.clone(),
+                discard: Arc::new(AtomicBool::new(false)),
+            },
+            end,
+        )
+    }
+    #[cfg(windows)]
+    #[test]
+    fn OwnedCloseDrain_ActualPumpRawErrorCannotEnterDiscardAndRetry_003() {
+        use crate::cli::output_route::OutputRoutes;
+        let mut failures = Vec::new();
+        for kind in [io::ErrorKind::UnexpectedEof, io::ErrorKind::Other] {
+            let (mut original, _) = reader(vec![
+                Step::Error(io::Error::new(kind, "TEST_ONLY_PUMP_READ_FAILURE")),
+                Step::Panic,
+            ]);
+            let transports = TerminalTransports::new();
+            let routes = OutputRoutes::new(2);
+            let route = routes
+                .bind(1, Box::new(|| Ok(())), || {
+                    Ok(tauri::ipc::Channel::new(|_| Ok(())))
+                })
+                .unwrap();
+            let caller = CallerIdentity {
+                instance_id: "TEST_ONLY_PUMP".into(),
+                window_label: "main".into(),
+                webview_epoch: WireU64::parse("1").unwrap(),
+            };
+            let stream = transports
+                .attach(
+                    caller,
+                    RunKey {
+                        run_id: "TEST_ONLY_PUMP".into(),
+                        generation: 1,
+                    },
+                    Arc::new(route),
+                )
+                .unwrap();
+            let _ = stream.pump_once_with_end(&mut original, crate::pty::is_pty_stream_end);
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                finish_pinned_reader_after_pump(&mut original, || false)
+            }));
+            transports.detach(&stream).unwrap();
+            failures.push(matches!(result, Ok(Err(()))));
+        }
+        assert!(
+            failures
+                .into_iter()
+                .all(|failed_without_read| failed_without_read),
+            "raw pump failure was retried as shutdown discard"
+        );
+    }
+    #[test]
+    fn OutputReadObservation_ZeroIsAmbiguousAndEmptyBufferUnobserved_001() {
+        let (mut reader, end) = reader(vec![Step::Zero, Step::Zero]);
+        assert_eq!(reader.read(&mut []).unwrap(), 0);
+        assert_eq!(
+            OriginalOutputReadObservation::observe(&end),
+            OriginalOutputReadObservation::Unobserved
+        );
+        assert_eq!(reader.read(&mut [0]).unwrap(), 0);
+        assert_eq!(
+            OriginalOutputReadObservation::observe(&end),
+            OriginalOutputReadObservation::ReadZero
+        );
+    }
+    #[cfg(windows)]
+    #[test]
+    fn OutputReadObservation_ExactRawWindows109IsPreserved_002() {
+        let (mut reader, end) = reader(vec![Step::Error(io::Error::from_raw_os_error(109))]);
+        assert!(reader.read(&mut [0]).is_err());
+        assert_eq!(
+            OriginalOutputReadObservation::observe(&end),
+            OriginalOutputReadObservation::RawBrokenPipe109
+        );
+    }
+    #[test]
+    fn OutputReadObservation_ReadErrorsAndCancelStayFailedAfterLaterZero_003() {
+        for error in [
+            io::Error::from(io::ErrorKind::Interrupted),
+            io::Error::from(io::ErrorKind::UnexpectedEof),
+            io::Error::from(io::ErrorKind::BrokenPipe),
+            io::Error::from_raw_os_error(995),
+            io::Error::other("TEST_ONLY_READ_FAILURE"),
+        ] {
+            let (mut reader, end) = reader(vec![Step::Error(error), Step::Zero]);
+            assert!(reader.read(&mut [0]).is_err());
+            assert_eq!(reader.read(&mut [0]).unwrap(), 0);
+            assert_eq!(
+                OriginalOutputReadObservation::observe(&end),
+                OriginalOutputReadObservation::ReadError
+            );
+        }
+    }
+    #[test]
+    fn OutputReadObservation_PanicStaysFailedAfterLaterZero_004() {
+        let (mut reader, end) = reader(vec![Step::Panic, Step::Zero]);
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| reader.read(&mut [0])))
+                .is_err()
+        );
+        assert_eq!(reader.read(&mut [0]).unwrap(), 0);
+        assert_eq!(
+            OriginalOutputReadObservation::observe(&end),
+            OriginalOutputReadObservation::Panicked
+        );
     }
 }

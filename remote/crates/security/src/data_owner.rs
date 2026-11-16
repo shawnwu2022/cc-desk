@@ -1,0 +1,807 @@
+//! One private task polls both directions; public waits never own TLS futures.
+use crate::owner_clock::{Instant, sleep_until, timeout_at};
+use crate::{
+    CancelToken, GrantError, Role,
+    data::{DataError, DataRecord},
+};
+use cc_desk_remote_record::{
+    Header, Kind,
+    grant::{self, DataHeader, DataRole, SessionScope},
+};
+use std::{
+    pin::Pin,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    task::{Context, Poll},
+    time::Duration,
+};
+use tokio::{
+    io::{AsyncRead, AsyncWrite, ReadBuf},
+    sync::{Mutex, OwnedSemaphorePermit, Semaphore, mpsc, oneshot, watch},
+    task::JoinHandle,
+};
+pub const DATA_QUEUE_SLOTS: usize = 4;
+struct Inbox {
+    rx: mpsc::Receiver<DataRecord>,
+    head: Option<DataRecord>,
+}
+struct SendRequest {
+    fence: u64,
+    admitted_peer_fence: Option<u64>,
+    body: Vec<u8>,
+    end: Instant,
+    reply: oneshot::Sender<Result<(), DataError>>,
+    _credit: OwnedSemaphorePermit,
+}
+struct Writing {
+    bytes: Vec<u8>,
+    offset: usize,
+    request: SendRequest,
+}
+struct Reading {
+    header: [u8; 8],
+    offset: usize,
+    payload: Option<Vec<u8>>,
+    credit: Option<OwnedSemaphorePermit>,
+    end: Option<Instant>,
+}
+impl Reading {
+    fn new() -> Self {
+        Self {
+            header: [0; 8],
+            offset: 0,
+            payload: None,
+            credit: None,
+            end: None,
+        }
+    }
+}
+pub struct RunningChannel {
+    authority: crate::BoundDataAuthority,
+    cancel: CancelToken,
+    access: crate::data::ChannelGrant,
+    role: Role,
+    binding: [u8; 32],
+    out: mpsc::Sender<SendRequest>,
+    incoming: Mutex<Inbox>,
+    send_credits: Arc<Semaphore>,
+    stop: watch::Sender<bool>,
+    active: Arc<AtomicBool>,
+    task: Mutex<ChannelTask>,
+    exit: watch::Receiver<Option<DataError>>,
+    pub(crate) peer: Arc<crate::peer_install::Shared>,
+}
+// The original join and its outcome share one cancellation-safe custody slot.
+// Legacy observers cannot erase panic/abort evidence for a later checked wait.
+struct ChannelTask {
+    join: Option<JoinHandle<DataError>>,
+    outcome: Option<Result<DataError, DataError>>,
+    local: Option<watch::Receiver<Option<Result<DataError, DataError>>>>,
+}
+impl RunningChannel {
+    pub fn authority(&self) -> crate::BoundDataAuthority {
+        self.authority.clone()
+    }
+    pub fn binding_id(&self) -> [u8; 32] {
+        self.binding
+    }
+    pub fn is_closed(&self) -> bool {
+        !self.active.load(Ordering::Acquire)
+    }
+    pub fn peer_install_enabled(&self) -> bool {
+        self.peer.enabled()
+    }
+    pub fn installed_fence(&self) -> Result<u64, DataError> {
+        self.authority.check()?;
+        self.peer.fence()
+    }
+    fn check(
+        &self,
+        scope: &SessionScope,
+        fence: u64,
+        budget: Duration,
+    ) -> Result<Instant, DataError> {
+        if self.cancel.is_cancelled() {
+            return Err(DataError::Cancelled);
+        }
+        if *self.stop.borrow() {
+            return Err(DataError::Closed);
+        }
+        if self.is_closed() {
+            return Err(DataError::Closed);
+        }
+        if scope != self.access.scope() {
+            return Err(DataError::Scope);
+        }
+        if fence == 0 {
+            return Err(DataError::Fence);
+        }
+        self.peer.check_data(fence)?;
+        if budget.is_zero() || budget > Duration::from_secs(10) {
+            return Err(DataError::Bounds);
+        }
+        let ms = self.access.check().map_err(DataError::Grant)?;
+        Instant::now()
+            .checked_add(budget.min(Duration::from_millis(ms)))
+            .ok_or(DataError::Bounds)
+    }
+    pub async fn send_projection(
+        &self,
+        scope: &SessionScope,
+        fence: u64,
+        bytes: &[u8],
+        budget: Duration,
+    ) -> Result<(), DataError> {
+        if self.role != Role::Host {
+            return Err(DataError::Role);
+        }
+        self.send(scope, fence, bytes, budget).await
+    }
+    pub async fn send_control(
+        &self,
+        scope: &SessionScope,
+        fence: u64,
+        bytes: &[u8],
+        budget: Duration,
+    ) -> Result<(), DataError> {
+        if self.role != Role::Client {
+            return Err(DataError::Role);
+        }
+        self.send(scope, fence, bytes, budget).await
+    }
+    async fn send(
+        &self,
+        scope: &SessionScope,
+        fence: u64,
+        bytes: &[u8],
+        budget: Duration,
+    ) -> Result<(), DataError> {
+        let end = self.check(scope, fence, budget)?;
+        let kind = if self.role == Role::Host {
+            Kind::Projection
+        } else {
+            Kind::Control
+        };
+        if kind == Kind::Control && self.access.role() != DataRole::Controller {
+            return Err(DataError::Role);
+        }
+        if bytes.len() > kind.limit() - grant::DATA_PREFIX {
+            return Err(DataError::Bounds);
+        }
+        let credit = self
+            .send_credits
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| DataError::Full)?;
+        let (tx, rx) = oneshot::channel();
+        self.out
+            .try_send(SendRequest {
+                fence,
+                admitted_peer_fence: self.peer.admission_stamp(fence)?,
+                body: bytes.to_vec(),
+                end,
+                reply: tx,
+                _credit: credit,
+            })
+            .map_err(|e| match e {
+                mpsc::error::TrySendError::Full(_) => DataError::Full,
+                _ => DataError::Closed,
+            })?;
+        timeout_at(end, rx)
+            .await
+            .map_err(|_| DataError::Uncertain)?
+            .map_err(|_| DataError::Uncertain)?
+    }
+    pub async fn receive(
+        &self,
+        scope: &SessionScope,
+        fence: u64,
+        budget: Duration,
+    ) -> Result<DataRecord, DataError> {
+        let end = self.check(scope, fence, budget)?;
+        let mut exit = self.exit.clone();
+        let work = async {
+            let mut inbox = self.incoming.lock().await;
+            if inbox.head.is_none() {
+                inbox.head = Some(inbox.rx.recv().await.ok_or(DataError::Closed)?);
+            }
+            self.check(scope, fence, budget)?;
+            if Instant::now() >= end {
+                return Err(DataError::Deadline);
+            }
+            if self.cancel.is_cancelled() {
+                return Err(DataError::Cancelled);
+            }
+            if *self.stop.borrow() {
+                return Err(DataError::Closed);
+            }
+            if inbox.head.as_ref().unwrap().fence() != fence {
+                self.stop.send_replace(true);
+                return Err(DataError::Fence);
+            }
+            Ok(inbox.head.take().unwrap())
+        };
+        tokio::select! {biased;_=exit.changed()=>Err(exit.borrow().unwrap_or(DataError::Closed)),r=timeout_at(end,work)=>r.map_err(|_|DataError::Deadline)?}
+    }
+    pub async fn close(&self) -> DataError {
+        self.stop.send_replace(true);
+        self.wait_closed().await
+    }
+    pub async fn wait_closed(&self) -> DataError {
+        self.wait_closed_checked()
+            .await
+            .unwrap_or(DataError::Uncertain)
+    }
+    pub async fn wait_closed_checked(&self) -> Result<DataError, DataError> {
+        let mut task = self.task.lock().await;
+        if let Some(join) = task.join.as_mut() {
+            let result = join.await.map_err(|_| DataError::Uncertain);
+            task.join.take();
+            task.outcome = Some(result);
+            result
+        } else if let Some(local) = &mut task.local {
+            loop {
+                if let Some(result) = *local.borrow() {
+                    return result;
+                }
+                if local.changed().await.is_err() {
+                    return Err(DataError::Uncertain);
+                }
+            }
+        } else {
+            task.outcome.unwrap_or(Err(DataError::Uncertain))
+        }
+    }
+}
+impl Drop for RunningChannel {
+    fn drop(&mut self) {
+        self.stop.send_replace(true);
+    }
+}
+enum Event {
+    Progress,
+    Incoming(DataRecord),
+    Written,
+}
+struct Engine<S> {
+    authority: Arc<crate::BoundDataAuthority>,
+    io: tokio_rustls::TlsStream<S>,
+    access: crate::data::ChannelGrant,
+    role: Role,
+    binding: [u8; 32],
+    read: Reading,
+    writing: Option<Writing>,
+    sent: u64,
+    received: u64,
+    write_turn: bool,
+    peer: Arc<crate::peer_install::Shared>,
+}
+impl<S: AsyncRead + AsyncWrite + Unpin> Engine<S> {
+    fn poll(&mut self, cx: &mut Context<'_>) -> Poll<Result<Event, DataError>> {
+        self.authority.check()?;
+        if let Some(w) = &self.writing {
+            self.peer
+                .check_queued(w.request.fence, w.request.admitted_peer_fence)?;
+        }
+        let mut progress = false;
+        let mut written = false;
+        let mut timer_started = false;
+        if let Some(w) = &mut self.writing {
+            if w.offset < w.bytes.len() {
+                match Pin::new(&mut self.io).poll_write(cx, &w.bytes[w.offset..]) {
+                    Poll::Ready(Ok(0)) => return Poll::Ready(Err(DataError::Io)),
+                    Poll::Ready(Ok(n)) => {
+                        w.offset += n;
+                        progress = true
+                    }
+                    Poll::Ready(Err(_)) => return Poll::Ready(Err(DataError::Io)),
+                    Poll::Pending => {}
+                }
+            }
+            if w.offset == w.bytes.len() {
+                match Pin::new(&mut self.io).poll_flush(cx) {
+                    Poll::Ready(Ok(())) => written = true,
+                    Poll::Ready(Err(_)) => return Poll::Ready(Err(DataError::Io)),
+                    Poll::Pending => {}
+                }
+            }
+        }
+        if written && self.write_turn {
+            self.write_turn = false;
+            return Poll::Ready(Ok(Event::Written));
+        }
+        if self.read.credit.is_some() {
+            let buffer = match self.read.payload.as_mut() {
+                None => &mut self.read.header[self.read.offset..],
+                Some(p) => &mut p[self.read.offset..],
+            };
+            let mut b = ReadBuf::new(buffer);
+            match Pin::new(&mut self.io).poll_read(cx, &mut b) {
+                Poll::Ready(Ok(())) => {
+                    let n = b.filled().len();
+                    if n == 0 {
+                        return Poll::Ready(Err(DataError::Closed));
+                    }
+                    progress = true;
+                    self.read.offset += n;
+                    if self.read.end.is_none() {
+                        self.read.end = Some(Instant::now() + Duration::from_secs(10));
+                        timer_started = true;
+                    }
+                }
+                Poll::Ready(Err(_)) => return Poll::Ready(Err(DataError::Io)),
+                Poll::Pending => {}
+            }
+            if self.read.payload.is_none() && self.read.offset == 8 {
+                let h = Header::decode(self.read.header, 1).map_err(|_| DataError::Codec)?;
+                if h.kind != Kind::Data {
+                    return Poll::Ready(Err(DataError::Codec));
+                }
+                self.read.payload = Some(vec![0; h.payload_len]);
+                self.read.offset = 0;
+            }
+            if self
+                .read
+                .payload
+                .as_ref()
+                .is_some_and(|p| self.read.offset == p.len())
+            {
+                let mut bytes = self.read.payload.take().unwrap();
+                let (h, _) = grant::decode_data(&bytes).map_err(|_| DataError::Codec)?;
+                let kind = if self.role == Role::Host {
+                    Kind::Control
+                } else {
+                    Kind::Projection
+                };
+                let next = self.received.checked_add(1).ok_or(DataError::Replay)?;
+                if h.binding != self.binding
+                    || h.grant != self.access.id()
+                    || h.scope != self.access.scope_digest()
+                    || h.sequence != next
+                    || h.kind != kind
+                {
+                    return Poll::Ready(Err(DataError::Context));
+                }
+                if kind == Kind::Control && self.access.role() != DataRole::Controller {
+                    return Poll::Ready(Err(DataError::Role));
+                }
+                self.peer.check_data(h.fence)?;
+                self.received = next;
+                let n = bytes.len() - grant::DATA_PREFIX;
+                bytes.copy_within(grant::DATA_PREFIX.., 0);
+                bytes.truncate(n);
+                let credit = self.read.credit.take();
+                self.read = Reading::new();
+                self.write_turn = true;
+                return Poll::Ready(Ok(Event::Incoming(DataRecord {
+                    source: self.authority.clone(),
+                    scope: self.access.scope().clone(),
+                    fence: h.fence,
+                    sequence: h.sequence,
+                    payload: bytes,
+                    _credit: credit,
+                })));
+            }
+        }
+        if timer_started {
+            return Poll::Ready(Ok(Event::Progress));
+        }
+        if written {
+            self.write_turn = false;
+            return Poll::Ready(Ok(Event::Written));
+        }
+        if progress {
+            cx.waker().wake_by_ref();
+        }
+        Poll::Pending
+    }
+}
+pub(crate) struct OwnedDriver {
+    inner: Option<Pin<Box<dyn std::future::Future<Output = DataError> + Send>>>,
+    completed: watch::Sender<Option<Result<DataError, DataError>>>,
+    active: Arc<AtomicBool>,
+}
+impl std::future::Future for OwnedDriver {
+    type Output = DataError;
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<DataError> {
+        match self.inner.as_mut().unwrap().as_mut().poll(cx) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(reason) => {
+                // 必须先drop原inner/Engine/IO，再公布本地驱动终态。
+                self.inner.take();
+                self.completed.send_replace(Some(Ok(reason)));
+                Poll::Ready(reason)
+            }
+        }
+    }
+}
+impl Drop for OwnedDriver {
+    fn drop(&mut self) {
+        if self.inner.take().is_some() {
+            self.active.store(false, Ordering::Release);
+            self.completed.send_replace(Some(Err(DataError::Uncertain)));
+        }
+    }
+}
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+pub(super) fn start<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
+    io: tokio_rustls::TlsStream<S>,
+    cancel: CancelToken,
+    access: crate::data::ChannelGrant,
+    role: Role,
+    binding: [u8; 32],
+    active: Arc<AtomicBool>,
+    peer_end: Option<Instant>,
+) -> Result<RunningChannel, DataError> {
+    let (mut channel, driver) = prepare(io, cancel, access, role, binding, active, peer_end)?;
+    let task = channel.task.get_mut();
+    task.local = None;
+    task.join = Some(tokio::spawn(driver));
+    Ok(channel)
+}
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+pub(super) fn start<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
+    _: tokio_rustls::TlsStream<S>,
+    _: CancelToken,
+    _: crate::data::ChannelGrant,
+    _: Role,
+    _: [u8; 32],
+    _: Arc<AtomicBool>,
+    _: Option<tokio::time::Instant>,
+) -> Result<RunningChannel, DataError> {
+    Err(DataError::Context)
+}
+pub(crate) fn prepare<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
+    io: tokio_rustls::TlsStream<S>,
+    mut cancel: CancelToken,
+    access: crate::data::ChannelGrant,
+    role: Role,
+    binding: [u8; 32],
+    active: Arc<AtomicBool>,
+    peer_end: Option<Instant>,
+) -> Result<(RunningChannel, OwnedDriver), DataError> {
+    if access.is_remote() && role != Role::Client {
+        return Err(DataError::Role);
+    }
+    let remaining = access.check().map_err(DataError::Grant)?;
+    if cancel.is_cancelled() {
+        return Err(DataError::Cancelled);
+    }
+    let fixed_end = peer_end.map(|caller| {
+        caller
+            .min(Instant::now() + Duration::from_secs(10))
+            .min(Instant::now() + Duration::from_millis(remaining))
+    });
+    if fixed_end.is_some_and(|end| end <= Instant::now()) {
+        return Err(DataError::Deadline);
+    }
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+    let (peer, bootstrap) = crate::peer_install::Shared::new(fixed_end);
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    let (peer, bootstrap) = crate::peer_install::Shared::new_browser(crate::tls_clock::Deadline(
+        fixed_end.ok_or(DataError::Context)?.0,
+    ));
+    let public_peer = peer.clone();
+    let (out, mut requests) = mpsc::channel::<SendRequest>(DATA_QUEUE_SLOTS);
+    let (in_tx, in_rx) = mpsc::channel(DATA_QUEUE_SLOTS);
+    let credits = Arc::new(Semaphore::new(DATA_QUEUE_SLOTS));
+    let read_credits = Arc::new(Semaphore::new(DATA_QUEUE_SLOTS));
+    let (stop, mut stopped) = watch::channel(false);
+    let (exit_tx, exit) = watch::channel(None);
+    let public_access = access.clone();
+    let public_cancel = cancel.clone();
+    let authority = crate::BoundDataAuthority::new(
+        access.clone(),
+        active.clone(),
+        cancel.clone(),
+        stop.clone(),
+        binding,
+        role,
+    );
+    let public_authority = authority.clone();
+    let a = active.clone();
+    let (completion, local) = watch::channel(None);
+    let driver_active = active.clone();
+    let inner = Box::pin(async move {
+        let (mut revoked, mut superseded) = access.revoked();
+        let mut end = Instant::now() + Duration::from_millis(remaining);
+        let mut engine = Engine {
+            authority: Arc::new(authority),
+            io,
+            access,
+            role,
+            binding,
+            read: Reading::new(),
+            writing: None,
+            sent: 0,
+            received: 0,
+            write_turn: false,
+            peer: peer.clone(),
+        };
+        // The same task and TLS object complete bootstrap before ordinary framing.
+        // Subscribe first, then check the CURRENT cancellation/stop/grant state.
+        let boot_result = if let Some(d) = fixed_end {
+            let boot = async {
+                engine.authority.check()?;
+                crate::peer_install::bootstrap(
+                    &mut engine.io,
+                    &engine.authority,
+                    &engine.access,
+                    role,
+                    peer.clone(),
+                    bootstrap,
+                )
+                .await
+            };
+            tokio::select! { biased;
+                _ = cancel.cancelled() => Err(DataError::Cancelled),
+                _ = stopped.changed() => Err(DataError::Closed),
+                _ = revoked.changed() => Err(DataError::Grant(GrantError::Revoked)),
+                _ = superseded.changed() => Err(DataError::Grant(GrantError::Revoked)),
+                _ = sleep_until(d) => Err(DataError::Deadline),
+                r = boot => r,
+            }
+        } else {
+            Ok(())
+        };
+        if let Err(error) = boot_result {
+            peer.terminal();
+            a.store(false, Ordering::Release);
+            drop(engine);
+            exit_tx.send_replace(Some(error));
+            return error;
+        }
+        let mut pending = None;
+        let result = loop {
+            if let Err(e) = engine.authority.check() {
+                break e;
+            }
+            let left = match engine.access.check() {
+                Ok(ms) => ms,
+                Err(e) => break DataError::Grant(e),
+            };
+            end = end.min(Instant::now() + Duration::from_millis(left));
+            let until = engine
+                .writing
+                .as_ref()
+                .map_or(end, |w| end.min(w.request.end));
+            let until = engine.read.end.map_or(until, |e| until.min(e));
+            tokio::select! {biased;
+                            _=cancel.cancelled()=>break DataError::Cancelled,
+                            _=stopped.changed()=>break DataError::Closed,
+                            _=revoked.changed()=>break DataError::Grant(GrantError::Revoked),
+                            _=superseded.changed()=>break DataError::Grant(GrantError::Revoked),
+                            _=sleep_until(until)=>break DataError::Deadline,
+                            permit=in_tx.reserve(),if pending.is_some()=>{if cancel.is_cancelled(){break DataError::Cancelled}
+            if let Err(e)=engine.access.check(){break DataError::Grant(e)}
+            match permit{Ok(p)=>p.send(pending.take().unwrap()),Err(_)=>break DataError::Closed}},
+                            credit=read_credits.clone().acquire_owned(),if engine.read.credit.is_none()&&pending.is_none()=>{engine.read.credit=Some(credit.unwrap());},
+                            request=requests.recv(),if engine.writing.is_none()=>{
+                                let Some(request)=request else{break DataError::Closed};if Instant::now()>=request.end{let _=request.reply.send(Err(DataError::Deadline));continue}
+                                if let Err(e)=engine.peer.check_queued(request.fence,request.admitted_peer_fence){let _=request.reply.send(Err(e));break e}
+                                let Some(sequence)=engine.sent.checked_add(1)else{break DataError::Replay};
+                                let kind=if role==Role::Host{Kind::Projection}else{Kind::Control};
+                                let header=DataHeader{binding,grant:engine.access.id(),scope:engine.access.scope_digest(),fence:request.fence,sequence,kind};
+                                let bytes=match grant::encode_data(&header,&request.body).and_then(|p|cc_desk_remote_record::encode(Kind::Data,1,&p).map_err(|_|cc_desk_remote_record::appbind::CodecError::Field)){Ok(b)=>b,Err(_)=>break DataError::Codec};
+                                engine.sent=sequence;engine.writing=Some(Writing{bytes,offset:0,request});
+                            },
+                            event=std::future::poll_fn(|cx|engine.poll(cx))=>{if cancel.is_cancelled(){break DataError::Cancelled}
+            if *stopped.borrow(){break DataError::Closed}
+            if Instant::now()>=until{break DataError::Deadline}
+            if let Err(e)=engine.access.check(){break DataError::Grant(e)}
+            match event{
+                                Err(e)=>break e,
+                                Ok(Event::Progress)=>{},
+                                Ok(Event::Incoming(record))=>{if pending.is_some(){break DataError::Full}pending=Some(record);},
+                                Ok(Event::Written)=>{if let Err(e)=engine.access.check(){break DataError::Grant(e)}let w=engine.writing.take().unwrap();if Instant::now()>=w.request.end{break DataError::Deadline}let _=w.request.reply.send(Ok(()));},
+                            }}
+                        }
+        };
+        peer.terminal();
+        drop(engine);
+        drop(pending);
+        drop(requests);
+        drop(in_tx);
+        a.store(false, Ordering::Release);
+        exit_tx.send_replace(Some(result));
+        result
+    });
+    Ok((
+        RunningChannel {
+            authority: public_authority,
+            cancel: public_cancel,
+            access: public_access,
+            role,
+            binding,
+            out,
+            incoming: Mutex::new(Inbox {
+                rx: in_rx,
+                head: None,
+            }),
+            send_credits: credits,
+            stop,
+            active,
+            task: Mutex::new(ChannelTask {
+                join: None,
+                outcome: None,
+                local: Some(local),
+            }),
+            exit,
+            peer: public_peer,
+        },
+        OwnedDriver {
+            inner: Some(inner),
+            completed: completion,
+            active: driver_active,
+        },
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        GrantGate,
+        data_tests::pair,
+        grant_tests::{admin, scope, signed},
+    };
+    use std::sync::atomic::AtomicU64;
+    #[tokio::test]
+    async fn channel_join_failure_is_not_closed_even_after_a_legacy_observer() {
+        let (mut c, mut h, _cancel) = pair().await;
+        let mut gate =
+            GrantGate::for_binding(h.context(), admin(), [4; 32], Arc::new(|| Ok(1000))).unwrap();
+        let challenge = gate
+            .challenge(scope(), DataRole::Controller, Duration::from_secs(900))
+            .unwrap();
+        let grant = gate.accept(&signed(&challenge, gate.issuer_kid())).unwrap();
+        c.install(&grant).unwrap();
+        h.install(&grant).unwrap();
+        let c = c.start().unwrap();
+        let h = h.start().unwrap();
+        h.task.lock().await.join.as_ref().unwrap().abort();
+        let first = h.wait_closed().await;
+        let later = h.wait_closed().await;
+        let checked = h.wait_closed_checked().await;
+        c.close().await;
+        assert_eq!(first, DataError::Uncertain);
+        assert_eq!(
+            later,
+            DataError::Uncertain,
+            "another observer lost the original JoinError"
+        );
+        assert_eq!(checked, Err(DataError::Uncertain));
+    }
+    #[tokio::test]
+    async fn expired_receive_wait_preserves_the_original_queued_record() {
+        let (mut c, mut h, _cancel) = pair().await;
+        let mut gate =
+            GrantGate::for_binding(h.context(), admin(), [4; 32], Arc::new(|| Ok(1000))).unwrap();
+        let p = gate
+            .challenge(scope(), DataRole::Controller, Duration::from_secs(900))
+            .unwrap();
+        let grant = gate.accept(&signed(&p, gate.issuer_kid())).unwrap();
+        c.install(&grant).unwrap();
+        h.install(&grant).unwrap();
+        let c = c.start().unwrap();
+        let h = h.start().unwrap();
+        let target = scope();
+        c.send_control(&target, 4, b"not-lost", Duration::from_secs(1))
+            .await
+            .unwrap();
+        let queue = h.incoming.lock().await;
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while queue.head.is_none() && queue.rx.is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        tokio::time::pause();
+        let mut wait = Box::pin(h.receive(&target, 4, Duration::from_secs(1)));
+        assert!(futures_util::poll!(wait.as_mut()).is_pending());
+        tokio::time::advance(Duration::from_secs(2)).await;
+        drop(queue);
+        assert_eq!(wait.await.unwrap_err(), DataError::Deadline);
+        assert_eq!(
+            h.receive(&target, 4, Duration::from_secs(1))
+                .await
+                .unwrap()
+                .payload(),
+            b"not-lost"
+        );
+        h.close().await;
+        c.wait_closed().await;
+    }
+    #[tokio::test]
+    async fn buffered_payload_cannot_escape_after_cancel_or_stop_is_requested() {
+        for cancel_it in [false, true] {
+            let (mut c, mut h, cancel) = pair().await;
+            let clock = Arc::new(AtomicU64::new(1000));
+            let mut gate = GrantGate::for_binding(
+                h.context(),
+                admin(),
+                [4; 32],
+                Arc::new(move || Ok(clock.load(Ordering::Acquire))),
+            )
+            .unwrap();
+            let p = gate
+                .challenge(scope(), DataRole::Controller, Duration::from_secs(4))
+                .unwrap();
+            let grant = gate.accept(&signed(&p, gate.issuer_kid())).unwrap();
+            c.install(&grant).unwrap();
+            h.install(&grant).unwrap();
+            let c = c.start().unwrap();
+            let h = h.start().unwrap();
+            c.send_control(&scope(), 4, b"buffered", Duration::from_secs(1))
+                .await
+                .unwrap();
+            let queue = h.incoming.lock().await;
+            tokio::time::timeout(Duration::from_secs(1), async {
+                while queue.head.is_none() && queue.rx.is_empty() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            drop(queue);
+            if cancel_it {
+                cancel.cancel()
+            } else {
+                h.stop.send_replace(true);
+            }
+            assert!(
+                h.receive(&scope(), 4, Duration::from_secs(1))
+                    .await
+                    .is_err()
+            );
+            h.wait_closed().await;
+            c.wait_closed().await;
+        }
+    }
+}
+
+#[cfg(test)]
+mod peer_engine_admission_tests {
+    use super::*;
+    #[tokio::test]
+    async fn peer_install_pending_queue_injection_cannot_be_adopted_after_ready() {
+        let (mut c, mut h, _cancel, _gate) = crate::data::peer_install_tests::granted().await;
+        let d = Instant::now() + Duration::from_secs(2);
+        let c = c.start_peer_pending(d).unwrap();
+        let h = h.start_peer_pending(d).unwrap();
+        let (reply, result) = oneshot::channel();
+        let permit = h.send_credits.clone().try_acquire_owned().unwrap();
+        // Private owner-level injection deliberately lacks a Ready admission stamp.
+        // It must not become eligible merely because bootstrap later commits Ready.
+        assert!(
+            h.out
+                .try_send(SendRequest {
+                    fence: 7,
+                    admitted_peer_fence: None,
+                    body: b"MUST_NEVER_WRITE".to_vec(),
+                    end: d,
+                    reply,
+                    _credit: permit
+                })
+                .is_ok()
+        );
+        let request = h.host_install_request().await.unwrap();
+        let (proof, complete) =
+            tokio::join!(c.client_installed(), h.complete_host_install(request, 7));
+        // Terminal queue rejection may race historical bootstrap proof delivery.
+        drop(proof);
+        assert!(matches!(complete, Ok(()) | Err(DataError::Closed)));
+        assert_eq!(result.await.unwrap(), Err(DataError::Context));
+        assert_eq!(h.wait_closed().await, DataError::Context);
+        assert!(
+            c.receive(h.authority().scope(), 7, Duration::from_secs(1))
+                .await
+                .is_err(),
+            "pre-Ready queued bytes escaped"
+        );
+        c.wait_closed().await;
+    }
+}

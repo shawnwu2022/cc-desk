@@ -179,6 +179,173 @@ Other CLIs, non-Windows platforms and raw actions retain the host text path.
 Missing optional identity evidence cannot disable native paste, and a failed or
 unknown shortcut write never falls back to sending text. This routing choice
 does not certify old or custom CLI implementations. See [paste contracts](paste-framing.md).
+Legacy mouse `onBinary` events are human input. Their unchanged eight-bit bytes
+use the authenticated user-intent/staging path and the current input-allowed gate;
+they are never suppressed as native-generated parser replies or paste-wrapped.
+
+With the default-off `remote-host` build, supervisor adoption initializes the native
+canonical producer before the original output reader's first read. The same actor
+keeps canonical state and short journal transactions; one owned physical-IO worker
+retains the original PTY mutation region for each complete frame or resize. While
+IO is pending, canonical output and factual queries can progress, but snapshots,
+input eligibility, resize and control transitions cannot overtake that mutation.
+Stop retains the original result and worker join; it does not manufacture retirement.
+
+The authenticated protocol route can return `state: "native-owned"` with zero
+confirmed bytes and the exact run/generation. This means the browser reply had no
+physical effect. New clients retain the original parsed frame's `streamEpoch` and
+`throughOffset` as `protocolSource`, including across an asynchronous input wait;
+the backend rechecks that source against the original run stream. An oversized
+valid local resize is applied in full, without raising the remote terminal bounds.
+Pure canonical/projection loss also revokes the peer and enters irreversible
+local-only mode. The original canonical output cut suppresses delayed browser
+replies for the native prefix; later authenticated desktop replies use the same
+physical worker. Missing or mismatched source information fails closed in that
+mode. Local input may continue after a durable Written/Rejected original outcome;
+unacknowledged receipts, sequence floors and fences remain intact. Actual partial
+native IO, source discontinuity and journal failure retain their fail-closed rules.
+
+Resize returns `state: "resized"` and `canonicalOutput` (`complete`, `local-only`
+or `unavailable`); the local-only diagnostic does not disable ordinary local input.
+
+Native remote admission retains the exact current RunAccess, original resource Arc
+and supervisor authority; a shutdown pin alone grants no admission. Successful
+handoff consumes this temporary admission and registers the original lifetime pin;
+rejection returns admission and producer custody while retaining the same Host.
+The durable remote resize actor can retain a physical resize on its sole IO worker
+through cancellation/expiry. It compares the adapter-reported size before publishing;
+ConPTY's cached size is not independent OS evidence. The actual provider connection
+entry and wire lifecycle route remain Locked/unregistered until their native adapters
+are connected and qualified.
+
+The native service retains one original per-channel pump for install coordination
+and the existing snapshot/ACK/window/input dispatcher. A receive-only idle deadline
+is a bounded poll; native writes and dispatch are never automatically retried.
+Channel loss closes its authority and pump while local input/process ownership
+continues. Explicit app exit signals exact channels first and awaits the original
+pump join before retirement; existing unknown native IO/Job gates remain unchanged.
+The app composition fixture uses real RPK TLS/AppBind/grant exchange over bounded
+duplex with public TEST_ONLY vectors and a fresh owned Node: three remote bytes,
+original receipt/query/settlement, pre-ACK replay denial and three local bytes are
+observed as exactly six child-consumed bytes. This is not phone/WebView/enrolled-key
+or process-tree qualification.
+These capture facts are not remote admission. Identity provisioning, the production
+verified connection entry and complete Job/process-tree retirement remain separate
+release gates; this bridge does not enroll credentials or enable remote access.
+
+The Windows native backend also has an explicit managed **new-run** launch path;
+ordinary local launches retain their direct-root stop policy. A managed start
+creates an unrestricted owned Job, assigns its suspended original root before
+resume, and binds one nonclone claim to the successful attempt and exact frozen
+LaunchSnapshot. Claiming transfers sole-reader custody immediately; cancellation
+cannot start a competing unpublished drain. The unpublished slot is released
+only after the same NativeRun is registered with the real Supervisor. A closed
+claim still registers a cleanup owner and returns no successful launch response.
+No existing process tree is adopted, and a launch intent/status alone is not Job
+ownership or remote admission. Native profile/UI enablement remains a separate
+Locked gate.
+
+Managed stop controls that original Job even after its root has exited. Resource
+retirement separately checks Job ActiveProcesses zero, exact root reap, original
+reader and waiter joins, physical writer-worker join, and original IO destructor
+return. The fresh isolated Node fixture proves the same Job has two processes,
+then one after root exit, then zero after stop. Node's own child kill-on-close Job
+is avoided only in this fixture via its source-verified detached option, which
+does not use CREATE_BREAKAWAY_FROM_JOB. Neither master destruction nor these facts
+attest internal ConPTY/OpenConsole thread/process exit; the existing whole-native
+shutdown result remains Unknown for that unobservable boundary. UI closure or
+phone/channel loss does not terminate the managed task; explicit stop/app exit does.
+
+The Windows CNG slice supplies a synchronous P256 primitive, with opaque native
+key custody, exact exported public SPKI matching, signing usage/algorithm/width
+checks and a fixed backend purpose. It hashes bounded messages with SHA256;
+fixed 64-byte signatures feed the existing COSE boundary, and Windows'
+CryptEncodeObjectEx handles DER encoding. No private import path is compiled for
+production. Native key selection/loading and profile approval remain separate
+gates; this primitive is not a JS signing bridge.
+
+CNG calls must run on the original dedicated native worker. Thread-bound custody
+does not make synchronous KSP calls preemptible. Qualification uses only the existing
+public RFC6979 TEST_ONLY scalar and point: Microsoft Software KSP, nonopaque ECC
+private blob, NULL parameter list/name and only the silent flag. The documented
+unnamed import is ephemeral. Keys/providers must explicitly free successfully
+and the original worker must join before qualification passes; Unknown retains
+the original owner/JoinHandle and cannot become a successful Drop receipt. No
+existing user keys, naming/persistence, key generation or enrollment are tested.
+The three-role bundle fixture additionally uses the repository's published
+scalar-one/generator and COSE-02 public pair, with distinct SPKIs across roles.
+An admitted owner cannot be relabelled with another purpose or SPKI. This does
+not establish that future separately loaded role objects use different physical
+keys: actual provisioned-key selection and approval remain enrollment gates.
+
+Private native adapters implement the existing RelaySigner, NativeGrantSigner
+and rustls SigningKey/Signer contracts using the same retained key worker.
+Relay signing binds the backend-approved canonical origin, key ID and role;
+SigningRequest keeps its original private authenticated-challenge construction.
+Grant signing uses the verified request's shared canonical COSE builder and
+requires native presence approval of its exact issuer-bound signing fingerprint.
+Missing profile or presence is Unavailable/Policy; public fixture approval is
+test-only. There is no production profile loader or JS arbitrary-sign operation.
+
+Relay/grant futures remain cooperative and Drop seals their original request;
+after claim, cancellation keeps Unknown and withholds late results. rustls signing
+is explicitly synchronous/blocking with one absolute provider/handshake horizon.
+Its observer can time out while native work remains owned; this does not qualify
+the enclosing async TLS timeout as preemptible or unblock an opaque KSP call.
+The native factory requires an explicit immutable backend signing-approval
+expiry, separately from each caller's absolute attempt horizon and from the
+wire grant's Host-clock expiry. `fresh_native_signers` reuses the same healthy
+owned keys, profile, presence and relay tuple; one short gate serializes new
+generation publication, request admission, physical claim and final delivery.
+All three signer traits use the same capped attempt end. Active/Unknown/closing
+keys refuse renewal. Queued no-effect observer cancellation and discarded known
+Ready results do not close healthy keys; cancellation after Started keeps Unknown.
+Old objects/tickets cannot authorize a new generation or cancel its request.
+
+The native-only async `install_profile` now reuses the original
+`bootstrap::connect_native` and retained creation task. It obtains signer objects
+from this service's original authority, checks the frozen origin and replaces
+endpoint/relay/grant signers together; the input profile's original
+ClientGrantState, GrantClock and monotonic anchor remain intact. The completed
+NativeClient first enters the service's private OwnedClient custody. Document
+registration and a common signing-fence publication gate precede visibility to
+get/Data; a stale or expired result is joined through the original creation task.
+Observer cancellation retains its original task and resource. Unknown cleanup
+seals admission. The short signing horizon only gates first publication; an
+installed channel keeps its original grant/document/fence lifetime. Fresh signer
+sets do not restore state from signed COSE. No production profile loader, native
+presence source or JS connection command is supplied; missing sources still fail
+closed. Current/descriptor UI wiring is separate from this native integration.
+No reconnect, stale-client publication or cross-connection replay qualification
+follows from the bounded in-memory RPK handshakes or equal wire expiry fixture.
+
+RemoteClientService owns at most one key slot per purpose, rejects cross-purpose
+SPKI reuse before opening a key, and reuses its original creation reservation.
+The original key worker JoinHandle is registered before activation. Both explicit
+exit and client-only main-window close seal admission, signal outside application
+locks, and await original key retirement alongside the existing client/Host work.
+Cancelled preactivation reports NoKeyCreated plus original join, never a Free
+receipt. Unknown keeps the original owner and prevents exit; the first exit code
+is preserved. These source/fixture facts do not enable a real key profile, prove
+native-call preemption, or establish mobile/device or production enrollment.
+
+Host signing prerequisites add an opaque, shared, one-way `NativeRevocation`
+fact to an optional native worker and `SigningFence`. Admission, physical claim,
+native return, delivery, publication and generation advance recheck this fact.
+Factory/native/free failure and unwind seal it before notifying observers; the
+request unwind guard precedes destruction of the original reply sender. The
+existing Client constructors keep their independent, non-revocable default.
+
+`prepare_shutdown` seals the original key and returns a retained
+`KeyShutdownNotice` without calling an external waker. Its explicit `notify`
+step may block or panic and must run in owned notification custody. Legacy
+`shutdown` still executes both steps synchronously. `observe_complete` reports
+retirement and original JoinHandle custody in one exclusive owner observation,
+holding the same owner lock on the slot path: Unknown
+does not mean the worker has joined, and native free does not prove thread exit.
+These are tested prerequisites, not a Host key bundle or an open-ready receipt.
+Host lease/token binding, two-slot custody, notification/release ownership and
+production start remain separate integration work. No real key loader is enabled.
 
 ## Output path
 

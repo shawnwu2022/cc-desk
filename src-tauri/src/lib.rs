@@ -3,11 +3,39 @@ mod cli;
 mod codex_observer;
 mod codex_observer_reporter;
 mod commands;
+#[cfg(windows)]
+// Existing isolated fixtures source-reuse this module (and its unit tests).
+// Production main imports this single library runtime; it does not duplicate it.
+#[cfg_attr(test, allow(clippy::duplicate_mod))]
+pub mod conpty_runtime;
 mod desktop_updater;
 mod hook_config;
 mod hook_events;
 mod hook_server;
 mod logger;
+#[cfg(all(
+    windows,
+    any(test, feature = "remote-host", feature = "remote-client-ipc")
+))]
+mod native_crypto;
+#[cfg(feature = "remote-client-ipc")]
+mod remote_client_ipc;
+#[cfg(feature = "remote-host")]
+mod remote_host;
+#[cfg(feature = "remote-host")]
+mod remote_host_approval;
+#[cfg(all(feature = "remote-host", windows))]
+mod remote_host_configuration;
+#[cfg(feature = "remote-host")]
+mod remote_host_controller;
+#[cfg(feature = "remote-host")]
+mod remote_host_ipc;
+#[cfg(feature = "remote-host")]
+mod remote_host_network;
+#[cfg(all(feature = "remote-host", windows))]
+mod remote_native_pairing_store;
+#[cfg(all(feature = "remote-host", windows))]
+mod remote_pairing_product;
 pub use codex_observer_reporter::run_entry as run_codex_observer_entry;
 mod observer_host;
 mod observer_http;
@@ -129,6 +157,18 @@ fn run_ordinary(initial_dir: Option<String>, #[cfg(windows)] startup: DesktopSta
     let native_shutdown = native_runtime.clone();
     let native_exit_shutdown = native_runtime.clone();
     let builder = tauri::Builder::default();
+    #[cfg(feature = "remote-host")]
+    let builder = builder.manage(std::sync::Arc::new(
+        remote_host::RemoteHostService::default(),
+    ));
+    #[cfg(feature = "remote-host")]
+    let builder = builder.manage(std::sync::Arc::new(
+        remote_host_controller::RemoteHostController::default(),
+    ));
+    #[cfg(feature = "remote-client-ipc")]
+    let builder = builder.manage(std::sync::Arc::new(
+        remote_client_ipc::RemoteClientService::default(),
+    ));
     #[cfg(windows)]
     let builder = builder.manage(startup.admission);
     let app = builder
@@ -153,7 +193,25 @@ fn run_ordinary(initial_dir: Option<String>, #[cfg(windows)] startup: DesktopSta
                     api.prevent_close();
                     return;
                 }
+                #[cfg(feature = "remote-host")]
+                if window.label() == "main"
+                    && remote_host::request_app_exit(
+                        window.app_handle(),
+                        0,
+                        native_shutdown.clone(),
+                    )
+                {
+                    api.prevent_close();
+                }
+                #[cfg(all(feature = "remote-client-ipc", not(feature = "remote-host")))]
+                if window.label() == "main"
+                    && remote_client_ipc::request_app_exit(window.app_handle(), 0)
+                {
+                    api.prevent_close();
+                    return;
+                }
             }
+            #[cfg(not(feature = "remote-host"))]
             if window.label() == "main"
                 && matches!(event, tauri::WindowEvent::CloseRequested { .. })
             {
@@ -239,6 +297,28 @@ fn run_ordinary(initial_dir: Option<String>, #[cfg(windows)] startup: DesktopSta
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            #[cfg(feature = "remote-client-ipc")]
+            remote_client_ipc::remote_client_current,
+            commands::remote_pairing_list,
+            commands::remote_pairing_select,
+            commands::remote_pairing_forget,
+            commands::remote_pairing_forget_cancel,
+            commands::remote_registration_request,
+            commands::remote_registration_current,
+            commands::remote_registration_cancel,
+            commands::remote_host_current,
+            commands::remote_host_pairing_scope,
+            commands::remote_host_request,
+            commands::remote_host_cancel,
+            commands::remote_host_start,
+            commands::remote_host_configure,
+            commands::remote_host_discard_candidate,
+            #[cfg(feature = "remote-client-ipc")]
+            remote_client_ipc::remote_client_snapshot,
+            #[cfg(feature = "remote-client-ipc")]
+            remote_client_ipc::remote_client_exchange,
+            #[cfg(feature = "remote-client-ipc")]
+            remote_client_ipc::remote_client_close,
             desktop_updater::get_updater_settings,
             desktop_updater::save_updater_settings,
             desktop_updater::save_updater_channel,
@@ -334,7 +414,12 @@ fn run_ordinary(initial_dir: Option<String>, #[cfg(windows)] startup: DesktopSta
         .build(context)
         .expect("error while building tauri application");
     app.run(move |_app_handle, event| {
-        if let tauri::RunEvent::ExitRequested { ref api, .. } = event {
+        if let tauri::RunEvent::ExitRequested {
+            ref api,
+            code: _code,
+            ..
+        } = event
+        {
             if native_exit_shutdown
                 .binding()
                 .is_ok_and(|binding| binding.blocks_handoff_exit())
@@ -342,11 +427,28 @@ fn run_ordinary(initial_dir: Option<String>, #[cfg(windows)] startup: DesktopSta
                 api.prevent_exit();
                 return;
             }
+            #[cfg(feature = "remote-host")]
+            if remote_host::request_app_exit(
+                _app_handle,
+                _code.unwrap_or(0),
+                native_exit_shutdown.clone(),
+            ) {
+                api.prevent_exit();
+                return;
+            }
+            #[cfg(all(feature = "remote-client-ipc", not(feature = "remote-host")))]
+            {
+                if remote_client_ipc::request_app_exit(_app_handle, _code.unwrap_or(0)) {
+                    api.prevent_exit();
+                    return;
+                }
+            }
         }
         if matches!(
             event,
             tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
         ) {
+            #[cfg(not(feature = "remote-host"))]
             native_exit_shutdown.shutdown();
             // 补齐不经窗口 CloseRequested 的退出路径（如更新安装后的退出）。
             // kill_all 先 drain 再逐个杀，窗口关闭路径已清理过时此处为空操作。

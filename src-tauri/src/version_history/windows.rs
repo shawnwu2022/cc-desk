@@ -102,3 +102,6 @@ unsafe fn own(value: HANDLE) -> OwnedHandle {
     // SAFETY: callers only transfer successfully created, non-pseudo handles.
     unsafe { OwnedHandle::from_raw_handle(value.0) }
 }
+
+#[cfg(all(windows, feature = "remote-host"))]
+pub(crate) mod pairing_store;

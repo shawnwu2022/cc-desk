@@ -1,0 +1,2 @@
+import {defineConfig} from '@playwright/test'
+export default defineConfig({testDir:'./tests/remote-browser',workers:1,fullyParallel:false,timeout:30000,use:{baseURL:'http://127.0.0.1:1478',launchOptions:{executablePath:process.env.CC_DESK_TEST_ONLY_EDGE??'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'},headless:true},outputDir:process.env.CC_DESK_TEST_ONLY_BROWSER_RESULTS??'test-results/remote-browser'})

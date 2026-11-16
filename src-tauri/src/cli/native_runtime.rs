@@ -9,8 +9,8 @@ use super::storage::WorkspaceRepository;
 use super::types::SafeError;
 use crate::run_supervisor::NativeRunSupervisor;
 use crate::terminal_input::{
-    write_host_frame, InputAbortRequest, InputBeginRequest, InputChunkRequest, InputCommitRequest,
-    InputStager, InputWriteReceipt, ProtocolInputRequest, ProtocolWriteReceipt,
+    InputAbortRequest, InputBeginRequest, InputChunkRequest, InputCommitRequest, InputStager,
+    InputWriteReceipt, ProtocolInputRequest, ProtocolWriteReceipt,
 };
 use crate::terminal_transport::{OutputAck, OutputFrame, TerminalTransports};
 use parking_lot::Mutex;
@@ -51,6 +51,8 @@ pub(crate) fn decode_stop_query(body: &InvokeBody) -> Result<(String, RunKey), S
 }
 
 pub(crate) struct NativeRuntime {
+    #[cfg(all(windows, feature = "remote-host"))]
+    owned_job_starts: Arc<crate::platform::owned_job_launch::OwnedJobLaunchSlot>,
     service: Arc<LaunchService>,
     projections: Arc<super::native_projection::service::ProjectionService>,
     binding: Mutex<Option<Arc<DocumentBinding<NativeRun>>>>,
@@ -59,6 +61,19 @@ pub(crate) struct NativeRuntime {
     inputs: Arc<InputStager>,
     supervisor: Option<Arc<NativeRunSupervisor>>,
 }
+
+pub(crate) async fn resize_native_run(
+    access: RunAccess,
+    size: portable_pty::PtySize,
+) -> Result<(), SafeError> {
+    // The shared mutation owner may be held by a blocking native write. Never
+    // consume an async worker while waiting; retain this exact access in the
+    // original blocking task, including if its observer is dropped.
+    tauri::async_runtime::spawn_blocking(move || access.resize(size))
+        .await
+        .map_err(|_| error("RESIZE_TASK_FAILED"))?
+}
+
 impl NativeRuntime {
     #[allow(dead_code)] // Staged native WebView harnesses construct isolated runtimes.
     pub(crate) fn new(service: Arc<LaunchService>) -> Self {
@@ -71,6 +86,8 @@ impl NativeRuntime {
         supervisor: Option<Arc<NativeRunSupervisor>>,
     ) -> Self {
         Self {
+            #[cfg(all(windows, feature = "remote-host"))]
+            owned_job_starts: Arc::new(Default::default()),
             projections: Arc::new(super::native_projection::service::ProjectionService::new(
                 service.clone(),
             )),
@@ -81,6 +98,14 @@ impl NativeRuntime {
             inputs: Arc::new(InputStager::new()),
             supervisor,
         }
+    }
+    #[cfg(all(test, feature = "remote-host"))]
+    pub(crate) fn with_owned_components_for_test(
+        service: Arc<LaunchService>,
+        transports: Arc<TerminalTransports>,
+        supervisor: Arc<NativeRunSupervisor>,
+    ) -> Self {
+        Self::with_components(service, transports, Some(supervisor))
     }
 
     pub(crate) fn production(
@@ -107,6 +132,25 @@ impl NativeRuntime {
             transports,
             Some(supervisor),
         ))
+    }
+    /// Backend-only staging seam: not a JS/IPC registration or an authority
+    /// factory. No ordinary launch is switched into Job mode here.
+    #[cfg(all(windows, feature = "remote-host"))]
+    #[allow(dead_code)]
+    pub(crate) fn stage_owned_job_start(
+        &self,
+        pair: portable_pty::PtyPair,
+        command: portable_pty::CommandBuilder,
+        ticket: crate::version_history::maintenance::StartTicket,
+        job: std::os::windows::io::OwnedHandle,
+    ) -> crate::platform::owned_job_launch::JobLaunchObservation {
+        self.owned_job_starts.launch(pair, command, ticket, job)
+    }
+    #[cfg(all(windows, feature = "remote-host", test))]
+    pub(crate) fn owned_job_slot_for_test(
+        &self,
+    ) -> &crate::platform::owned_job_launch::OwnedJobLaunchSlot {
+        &self.owned_job_starts
     }
     pub(crate) fn initialize_main<T: Runtime, M: Manager<T>>(
         &self,
@@ -157,6 +201,50 @@ impl NativeRuntime {
         webview: Webview<T>,
         request: Request<'_>,
     ) -> Result<LaunchStatus, SafeError> {
+        self.start_mode(webview, request, false).await
+    }
+    /// Explicit native managed NEW-run entry. Provider admission remains Locked;
+    /// this is not a JS flag and never adopts an already-running process tree.
+    #[cfg(all(windows, feature = "remote-host"))]
+    #[allow(dead_code)] // The native provider/UI enablement is a separate locked gate.
+    pub(crate) async fn start_managed<T: Runtime>(
+        &self,
+        webview: Webview<T>,
+        request: Request<'_>,
+    ) -> Result<LaunchStatus, SafeError> {
+        self.start_mode(webview, request, true).await
+    }
+    #[cfg(all(windows, feature = "remote-host"))]
+    #[allow(dead_code)] // Backend managed launcher awaits explicit native provider/UI admission.
+    pub(crate) fn start_managed_run(
+        &self,
+        caller: &CallerIdentity,
+        launch: &super::types::LaunchRequest,
+        connect: impl FnOnce(
+            &LaunchStatus,
+        )
+            -> Result<super::output_route::OutputRoute<OutputFrame>, SafeError>,
+    ) -> Result<LaunchStatus, SafeError> {
+        if self.supervisor.is_none() {
+            return Err(error("NATIVE_RUNTIME_NOT_READY"));
+        }
+        let admission = self.service.admit_start()?;
+        self.service.start_managed_admitted(
+            admission,
+            caller,
+            launch,
+            connect,
+            &self.owned_job_starts,
+        )
+    }
+    async fn start_mode<T: Runtime>(
+        &self,
+        webview: Webview<T>,
+        request: Request<'_>,
+        managed: bool,
+    ) -> Result<LaunchStatus, SafeError> {
+        #[cfg(not(all(windows, feature = "remote-host")))]
+        let _ = managed;
         let binding = self.binding()?;
         let (caller, launch) = binding.start_native(&webview, &request)?;
         if let Some(status) = self.service.registry().existing(&caller, &launch)? {
@@ -166,10 +254,12 @@ impl NativeRuntime {
         let descriptor = parse_channel(request.headers());
         let proof = request.headers()[DOCUMENT_HEADER].clone();
         let service = self.service.clone();
+        #[cfg(all(windows, feature = "remote-host"))]
+        let managed_slot = self.owned_job_starts.clone();
         // Keep only validated routing metadata, not the raw body or arbitrary
         // request headers. A replay never evaluates the connect closure.
         tauri::async_runtime::spawn_blocking(move || {
-            service.start_admitted(admission, &caller, &launch, |_| {
+            let connect = |_: &LaunchStatus| {
                 let id = descriptor?;
                 let mut headers = HeaderMap::new();
                 headers.insert(DOCUMENT_HEADER, proof);
@@ -180,7 +270,18 @@ impl NativeRuntime {
                         .map_err(|_| SafeError::invalid("outputChannel"))?,
                 );
                 binding.channel_native::<_, OutputFrame>(&webview, &headers)
-            })
+            };
+            #[cfg(all(windows, feature = "remote-host"))]
+            if managed {
+                return service.start_managed_admitted(
+                    admission,
+                    &caller,
+                    &launch,
+                    connect,
+                    &managed_slot,
+                );
+            }
+            service.start_admitted(admission, &caller, &launch, connect)
         })
         .await
         .map_err(|_| error("LAUNCH_STATE_UNKNOWN"))?
@@ -491,13 +592,7 @@ impl NativeRuntime {
         if bytes.len() > 1024 {
             return Err(error("REQUEST_TOO_LARGE"));
         }
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Query {
-            run_id: String,
-            generation: u32,
-        }
-        let query: Query = serde_json::from_slice(bytes).map_err(|_| error("INVALID_REQUEST"))?;
+        let query: NativeRunQuery = serde_json::from_slice(bytes).map_err(|_| error("INVALID_REQUEST"))?;
         if query.generation == 0 {
             return Err(SafeError::invalid("generation"));
         }
@@ -586,7 +681,7 @@ impl NativeRuntime {
         let inputs = self.inputs.clone();
         tauri::async_runtime::spawn_blocking(move || {
             inputs.commit(&caller, &input, |bytes| {
-                let result = access.with_writer(|writer| Ok(write_host_frame(writer, bytes)))?;
+                let result = access.write_frame(bytes)?;
                 Ok(result)
             })
         })
@@ -605,18 +700,17 @@ impl NativeRuntime {
         let run = input_run_key(&input.run_id, input.generation)?;
         let access = self.service.access(&caller, &run)?;
         tauri::async_runtime::spawn_blocking(move || {
-            let result = access.with_writer(|writer| Ok(write_host_frame(writer, &input.bytes)))?;
-            Ok(ProtocolWriteReceipt::from_host(result))
+            access.protocol_frame(&input.bytes, input.protocol_source.as_ref())
         })
         .await
         .map_err(|_| error("INPUT_TASK_FAILED"))?
     }
 
-    pub(crate) fn resize<T: Runtime>(
+    pub(crate) async fn resize<T: Runtime>(
         &self,
         webview: &Webview<T>,
         request: &Request<'_>,
-    ) -> Result<(), SafeError> {
+    ) -> Result<crate::terminal_input::NativeResizeReceipt, SafeError> {
         let caller = self.binding()?.admit_native(webview, request.headers())?;
         let input: ResizeRequest = decode_projection(request.body(), 4096)?;
         if input.generation == 0 || input.cols == 0 || input.rows == 0 {
@@ -624,12 +718,18 @@ impl NativeRuntime {
         }
         let run = input_run_key(&input.run_id, input.generation)?;
         let access = self.service.access(&caller, &run)?;
-        access.resize(portable_pty::PtySize {
-            rows: input.rows,
-            cols: input.cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
+        let current = access.clone();
+        resize_native_run(
+            access,
+            portable_pty::PtySize {
+                rows: input.rows,
+                cols: input.cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            },
+        )
+        .await?;
+        Ok(current.resize_receipt())
     }
 
     pub(crate) fn stop<T: Runtime>(
@@ -644,8 +744,173 @@ impl NativeRuntime {
             .stop(&caller, &receipt)
     }
 
+    #[cfg(all(feature = "remote-host", windows))]
+    pub(crate) fn admit_host_configuration<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        headers: &HeaderMap,
+        body: &InvokeBody,
+    ) -> Result<crate::remote_host_configuration::ConfigurationAdmission, SafeError> {
+        let binding = self.binding()?;
+        let caller = binding.admit_native(webview, headers)?;
+        let input: crate::remote_host_configuration::ConfigurationRequest =
+            decode_projection(body, 24576)?;
+        if input.generation == 0 || input.run_id.len() > 256 || input.candidate_json.len() > 16384 {
+            return Err(error("INVALID_REQUEST"));
+        }
+        let run = RunKey {
+            run_id: input.run_id,
+            generation: input.generation,
+        };
+        self.service.registry().check_run(&caller, &run)?;
+        let access = self.service.access(&caller, &run)?;
+        let admission = self
+            .supervisor
+            .as_ref()
+            .ok_or_else(|| error("NATIVE_RUNTIME_NOT_READY"))?
+            .admit_remote_run(access, &run)?;
+        Ok((binding, caller, admission, input.candidate_json))
+    }
+    #[cfg(all(feature = "remote-host", windows))]
+    pub(crate) fn admit_host_candidate_discard<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        headers: &HeaderMap,
+        body: &InvokeBody,
+    ) -> Result<crate::remote_host_configuration::DiscardAdmission, SafeError> {
+        let binding = self.binding()?;
+        let caller = binding.admit_native(webview, headers)?;
+        let input: crate::remote_host_configuration::DiscardRequest =
+            decode_projection(body, 1024)?;
+        if input.generation == 0 || input.run_id.len() > 256 {
+            return Err(error("INVALID_REQUEST"));
+        }
+        let receipt = crate::remote_host_configuration::receipt(&input.receipt)?;
+        let run = RunKey {
+            run_id: input.run_id,
+            generation: input.generation,
+        };
+        self.service.registry().check_run(&caller, &run)?;
+        let access = self.service.access(&caller, &run)?;
+        let admission = self
+            .supervisor
+            .as_ref()
+            .ok_or_else(|| error("NATIVE_RUNTIME_NOT_READY"))?
+            .admit_remote_run(access, &run)?;
+        Ok((binding, caller, admission, receipt))
+    }
+    /// A native provider must first obtain the existing exact run capability.
+    #[cfg(feature = "remote-host")]
+    #[allow(
+        dead_code,
+        reason = "native Host provider remains Locked; no JS pin factory"
+    )]
+    pub(crate) fn pin_remote_run(
+        &self,
+        caller: &CallerIdentity,
+        run: &RunKey,
+    ) -> Result<crate::run_supervisor::NativeRunPin, SafeError> {
+        let _access = self.service.access(caller, run)?;
+        Ok(self
+            .supervisor
+            .as_ref()
+            .ok_or_else(|| error("NATIVE_RUNTIME_NOT_READY"))?
+            .pin_shutdown(run))
+    }
+    /// Native provider callers must present the actual current document request;
+    /// no IPC field, shutdown pin or metadata can mint this admission.
+    #[cfg(feature = "remote-host")]
+    pub(crate) fn admit_remote_run<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        headers: &HeaderMap,
+        body: &InvokeBody,
+    ) -> Result<crate::run_supervisor::NativeRunAdmission, SafeError> {
+        let (caller, run) = self.admit_run_key(webview, headers, body)?;
+        let access = self.service.access(&caller, &run)?;
+        self.supervisor
+            .as_ref()
+            .ok_or_else(|| error("NATIVE_RUNTIME_NOT_READY"))?
+            .admit_remote_run(access, &run)
+    }
+
+    #[cfg(feature = "remote-host")]
+    pub(crate) fn admit_host_control<T: Runtime>(&self, webview: &Webview<T>, headers: &HeaderMap, body: &InvokeBody)
+        -> Result<(Arc<DocumentBinding<NativeRun>>, CallerIdentity, crate::run_supervisor::NativeRunAdmission), SafeError> {
+        let (caller, run) = self.admit_run_key(webview, headers, body)?;
+        let binding = self.binding()?;
+        binding.check_admitted(&caller)?;
+        let access = self.service.access(&caller, &run)?;
+        let admission = self.supervisor.as_ref().ok_or_else(|| error("NATIVE_RUNTIME_NOT_READY"))?.admit_remote_run(access, &run)?;
+        Ok((binding, caller, admission))
+    }
+
+    #[cfg(feature = "remote-host")]
+    pub(crate) fn owns_remote_pin(&self, pin: &crate::run_supervisor::NativeRunPin) -> bool {
+        self.supervisor
+            .as_ref()
+            .is_some_and(|s| s.owns_live_pin(pin))
+    }
+
+    #[cfg(feature = "remote-host")]
+    pub(crate) fn begin_host_shutdown(
+        self: &Arc<Self>,
+        mut pins: Vec<crate::run_supervisor::NativeRunPin>,
+    ) -> HostNativeShutdown {
+        self.service.begin_shutdown();
+        #[cfg(windows)]
+        if let Some(supervisor) = &self.supervisor {
+            for pin in supervisor.shutdown_inventory_pins() {
+                if !pins.iter().any(|current| current.key() == pin.key()) {
+                    pins.push(pin);
+                }
+            }
+        }
+        #[cfg(windows)]
+        self.owned_job_starts.close_admission();
+        if let Some(binding) = self.binding.lock().as_ref().cloned() {
+            binding.revoke();
+        }
+        let (stop, unknown) = if pins.is_empty() {
+            (None, false)
+        } else {
+            match self
+                .supervisor
+                .as_ref()
+                .ok_or_else(|| error("NATIVE_RUNTIME_NOT_READY"))
+                .and_then(|s| s.begin_shutdown_owned(pins))
+            {
+                Ok(stop) => (Some(stop), false),
+                Err(_) => (None, true),
+            }
+        };
+        // Retain the original legacy shutdown call; it can block and is never
+        // aborted. Its five-second return is NOT run/IO/command retirement proof.
+        // Any remote native pin therefore still yields Unknown below.
+        let original = self.clone();
+        let desktop = std::thread::Builder::new()
+            .name("remote-desktop-stop".into())
+            .spawn(move || original.shutdown());
+        let (desktop, failed) = match desktop {
+            Ok(job) => (Some(job), false),
+            Err(_) => (None, true),
+        };
+        HostNativeShutdown {
+            commands: Some(self.service.clone()),
+            inventory: self.supervisor.clone(),
+            #[cfg(windows)]
+            owned_job_starts: self.owned_job_starts.clone(),
+            stop,
+            desktop,
+            joined: failed,
+            unknown: unknown || failed,
+        }
+    }
+
     pub(crate) fn shutdown(&self) {
         self.service.begin_shutdown();
+        #[cfg(all(windows, feature = "remote-host"))]
+        self.owned_job_starts.close_admission();
         // Revoke document/output authority before waiting for process reaping.
         // A closing main-thread WebView must not be required to service new
         // url/resource-table getters from an output sender while shutdown waits.
@@ -656,6 +921,128 @@ impl NativeRuntime {
             supervisor.shutdown();
         }
         self.service.wait_for_commands();
+        #[cfg(all(windows, feature = "remote-host"))]
+        // The existing owned blocking stop worker keeps this exact runtime.
+        // Unknown stays registered; a timeout is never converted into no-owner.
+        while self.owned_job_starts.cleanup_step()
+            == crate::platform::owned_job_launch::JobLaunchObservation::Pending
+        {
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+    }
+}
+
+#[cfg(feature = "remote-host")]
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum HostNativeObservation {
+    Pending,
+    OwnedSessionReleased,
+    NoRemoteNativeResources,
+    Unknown,
+}
+#[cfg(feature = "remote-host")]
+pub(crate) struct HostNativeShutdown {
+    commands: Option<Arc<LaunchService>>,
+    inventory: Option<Arc<NativeRunSupervisor>>,
+    #[cfg(windows)]
+    owned_job_starts: Arc<crate::platform::owned_job_launch::OwnedJobLaunchSlot>,
+    stop: Option<crate::run_supervisor::NativeShutdown>,
+    desktop: Option<std::thread::JoinHandle<()>>,
+    joined: bool,
+    unknown: bool,
+}
+#[cfg(feature = "remote-host")]
+impl HostNativeShutdown {
+    pub(crate) fn covers_pin(&self, pin: &crate::run_supervisor::NativeRunPin) -> bool {
+        self.stop.as_ref().is_some_and(|stop| stop.covers_pin(pin))
+    }
+    #[cfg(all(test, windows))]
+    pub(crate) fn test_original_managed_facts(
+        &mut self,
+        run: &RunKey,
+    ) -> Option<crate::run_supervisor::ManagedRetirementFacts> {
+        self.stop.as_mut()?.managed_retirement(run)
+    }
+    #[cfg(test)]
+    pub(crate) fn from_owned_worker_for_test(worker: std::thread::JoinHandle<()>) -> Self {
+        Self {
+            commands: None, // This fixture has no command service or child.
+            inventory: None,
+            #[cfg(windows)]
+            owned_job_starts: Arc::new(Default::default()),
+            stop: None,
+            desktop: Some(worker),
+            joined: false,
+            unknown: false,
+        }
+    }
+    #[cfg(test)]
+    pub(crate) fn from_command_worker_for_test(
+        service: Arc<LaunchService>,
+        worker: std::thread::JoinHandle<()>,
+        native: Option<crate::run_supervisor::NativeShutdown>,
+    ) -> Self {
+        service.begin_shutdown();
+        let mut stop = Self::from_owned_worker_for_test(worker);
+        stop.commands = Some(service);
+        stop.stop = native;
+        stop
+    }
+    pub(crate) fn observe(&mut self) -> HostNativeObservation {
+        let commands = self
+            .commands
+            .as_ref()
+            .map(|service| service.command_shutdown_observation());
+        #[cfg(windows)]
+        let job_start = self.owned_job_starts.observe();
+        if self.desktop.as_ref().is_some_and(|job| job.is_finished()) {
+            self.unknown |= self
+                .desktop
+                .take()
+                .expect("owned finished desktop stop")
+                .join()
+                .is_err();
+            self.joined = true;
+        }
+        // Poll all owned stop jobs even if another resource is already unknown.
+        let native = self.stop.as_mut().and_then(|stop| stop.observe_all());
+        #[cfg(windows)]
+        let job_pending =
+            job_start == crate::platform::owned_job_launch::JobLaunchObservation::Pending;
+        #[cfg(not(windows))]
+        let job_pending = false;
+        if !self.joined
+            || commands == Some(super::launch_service::CommandShutdownObservation::Pending)
+            || job_pending
+            || native == Some(crate::run_supervisor::NativeShutdownObservation::Pending)
+        {
+            return HostNativeObservation::Pending;
+        }
+        #[cfg(windows)]
+        let job_unknown =
+            job_start != crate::platform::owned_job_launch::JobLaunchObservation::Empty;
+        #[cfg(not(windows))]
+        let job_unknown = false;
+        if self.unknown
+            || commands == Some(super::launch_service::CommandShutdownObservation::Unknown)
+            || job_unknown
+            || matches!(
+                native,
+                Some(crate::run_supervisor::NativeShutdownObservation::Unknown { .. })
+            )
+            || self
+                .inventory
+                .as_ref()
+                .is_some_and(|supervisor| supervisor.has_unattested_native_inventory())
+        {
+            HostNativeObservation::Unknown
+        } else if native
+            == Some(crate::run_supervisor::NativeShutdownObservation::OwnedSessionReleased)
+        {
+            HostNativeObservation::OwnedSessionReleased
+        } else {
+            HostNativeObservation::NoRemoteNativeResources
+        }
     }
 }
 
@@ -789,4 +1176,28 @@ mod tests {
             "FORBIDDEN"
         );
     }
+}
+
+
+// 与原 admit_run_key 共用同一严格 DTO；测试不复制另一套较宽解析器。
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct NativeRunQuery {
+    run_id: String,
+    generation: u32,
+}
+
+#[cfg(test)]
+#[test]
+#[allow(non_snake_case)]
+fn RemoteHost_RunQueryRejectsAuthorityFields_001() {
+    let valid = serde_json::json!({"runId":"original","generation":1});
+    assert!(serde_json::from_value::<NativeRunQuery>(valid.clone()).is_ok());
+    for field in ["approved", "cap", "profile", "caller", "activation", "scope", "session", "run"] {
+        let mut forged = valid.clone();
+        forged[field] = serde_json::json!(true);
+        assert!(serde_json::from_value::<NativeRunQuery>(forged).is_err(), "{field}");
+    }
+    assert!(serde_json::from_str::<NativeRunQuery>(r#"{"runId":"a","runId":"b","generation":1}"#).is_err());
+    assert!(serde_json::from_str::<NativeRunQuery>(r#"{"runId":"a","generation":"1"}"#).is_err());
 }

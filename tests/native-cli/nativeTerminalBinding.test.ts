@@ -54,6 +54,51 @@ function frame(bytes: number[], offset = '0'): OutputFrame {
 }
 
 describe('D19 native terminal binding', () => {
+  it('routes genuine binary mouse bytes through current local input and honors visibility', async () => {
+    const xterm=fakeXterm();const userBytes:number[][]=[];let protocolCalls=0;let allowed=true;
+    const binding=createNativeTerminalBinding({
+      term:xterm.term,runId:'run-a',generation:2,currentTarget:()=>({runId:'run-a',generation:2,modeEpoch:'4'}),isUserInputAllowed:()=>allowed,
+      writeUser:async input=>{userBytes.push([...input.bytes]);return {...input,state:'host-written',confirmedBytes:String(input.bytes.length)}},
+      writeProtocol:async(run,_bytes,source)=>{protocolCalls++;return {...run,state:'native-owned',confirmedBytes:'0',...(source?{protocolSource:source}:{})}},
+      ackOutput:async()=>{},
+    });
+    xterm.binary.fire(String.fromCharCode(0,128,255));await binding.drainInput();
+    allowed=false;xterm.binary.fire('hidden');await binding.drainInput();
+    const beforeReply=protocolCalls;
+    binding.acceptOutput(frame([27,91,54,110]));xterm.data.fire('\x1b[1;1R');await binding.drainInput();xterm.writeCallbacks[0]();
+    binding.dispose();
+    expect(userBytes).toEqual([[0,128,255]]);expect(beforeReply).toBe(0);expect(protocolCalls).toBe(1);
+  })
+  it('retains each parser source cut across a delayed protocol dispatch', async () => {
+    const xterm = fakeXterm()
+    const gate = deferred<void>()
+    const sources: unknown[] = []
+    const binding = createNativeTerminalBinding({
+      term: xterm.term, runId: 'run-a', generation: 2,
+      currentTarget: () => ({ runId: 'run-a', generation: 2, modeEpoch: '4' }),
+      writeUser: async input => { await gate.promise; return { ...input, state: 'host-written', confirmedBytes: String(input.bytes.length) } },
+      writeProtocol: async (_run, bytes, source?: unknown) => { sources.push(source); return { state: 'host-written', confirmedBytes: String(bytes.length) } },
+      ackOutput: async () => {},
+    })
+    const user = binding.sendUserText('x')
+    await Promise.resolve()
+    binding.acceptOutput(frame([27, 91, 54, 110]))
+    xterm.data.fire('first reply')
+    binding.acceptOutput(frame([27, 91, 54, 110], '4'))
+    const callbacksBeforeFirstParsed = xterm.writeCallbacks.length
+    xterm.writeCallbacks[0]()
+    xterm.data.fire('second reply')
+    xterm.writeCallbacks[1]()
+    gate.resolve()
+    await user
+    await binding.drainInput()
+    binding.dispose()
+    expect(callbacksBeforeFirstParsed).toBe(1)
+    expect(sources).toEqual([
+      { streamEpoch: '9', throughOffset: '4' },
+      { streamEpoch: '9', throughOffset: '8' },
+    ])
+  })
   it('D19_Binding_OutputParserReplyUsesProtocolWriterAndAckWaitsForParsedCallback_013', async () => {
     const xterm = fakeXterm()
     const protocol: number[][] = []
@@ -370,13 +415,13 @@ it.each(['protocol', 'binary'] as const)('Native_PreserveRouteFailure_020 %s', a
   const binding = createNativeTerminalBinding({
     term: xterm.term, runId: 'run-a', generation: 2,
     currentTarget: () => ({ runId: 'run-a', generation: 2, modeEpoch: '4' }),
-    writeUser: async input => ({ ...input, state: 'host-written', confirmedBytes: String(input.bytes.length) }),
+    writeUser: async input => {if(route==='binary')throw new Error('user binary write failed');return { ...input, state: 'host-written', confirmedBytes: String(input.bytes.length) }},
     writeProtocol: async () => { await Promise.resolve(); throw new Error('protocol write failed') },
     ackOutput: async () => {}, onDegraded: reason => diagnostics.push(reason),
   })
   if (route === 'protocol') xterm.data.fire('\x1b[0n')
   else xterm.binary.fire(String.fromCharCode(0, 128, 255))
-  await expect(binding.drainInput()).rejects.toThrow('protocol write failed')
-  expect(diagnostics).toEqual([])
+  await expect(binding.drainInput()).rejects.toThrow(route==='protocol'?'protocol write failed':'NATIVE_INPUT_PAUSED')
+  expect(diagnostics).toEqual(route==='protocol'?[]:['NATIVE_INPUT_PAUSED'])
   binding.dispose()
 })
