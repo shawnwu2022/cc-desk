@@ -1085,7 +1085,7 @@ export default {
   deleteContinueConfirmation: 'Continue to second confirmation',
   deletePermanently: 'Permanently delete',
   deleteInspect: 'Inspect outcome without deleting again',
-  deleteReviewAgain: 'Start a new review; confirm again before deleting',
+  deleteReviewAgain: 'Retry permanent deletion',
   deleteViewOperation: 'View deletion operation',
   deleteBusy: 'The operation is in progress. Closing this dialog does not undo a request already sent.',
   deleteState_acknowledged: 'Codex acknowledged its deletion request.',

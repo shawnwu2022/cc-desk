@@ -34,11 +34,25 @@ beforeEach(() => {
   })
 })
 afterEach(() => { view?.unmount(); view = undefined; delete (window as any).__CC_DESK_DOCUMENT__; document.body.innerHTML = '' })
-function render() { view = mount(NativeSessionDeletePanel, { props: { target: target(), active: true }, attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en, zh } })] } }); return view }
+function render(locale = 'en') { view = mount(NativeSessionDeletePanel, { props: { target: target(), active: true }, attachTo: document.body, global: { plugins: [createI18n({ legacy: false, locale, messages: { en, zh } })] } }); return view }
 const element = (selector: string) => document.querySelector<HTMLElement>(selector)!
 async function review() { const w = render(); await w.get('[data-native-cleanup-delete]').trigger('click'); await flushPromises(); return w }
 
 describe('native permanent deletion direct action', () => {
+  it.each([['en', 'Retry permanent deletion'], ['zh', '重新尝试永久删除']])('PermanentDeleteUi_RetryLabelsActualMutation_020 %s', async (locale, label) => {
+    const previous = io.invoke.getMockImplementation()!
+    io.invoke.mockImplementation((command, request) => command === 'cli_confirm_session_delete'
+      ? Promise.resolve({ operationId: request.operationId, cli: 'codex', state: 'blocked', rootPresent: true, descendants: 'unverified', reason: 'DELETE_PREVIEW_CHANGED' })
+      : previous(command, request))
+    const w = render(locale)
+    await w.get('[data-native-cleanup-delete]').trigger('click'); await flushPromises()
+    const retry = element('[data-delete-review-again]')
+    expect(retry.textContent).toBe(label)
+    expect(io.invoke.mock.calls.filter(([command]) => command === 'cli_confirm_session_delete')).toHaveLength(1)
+    retry.click(); await flushPromises()
+    expect(io.invoke.mock.calls.filter(([command]) => command === 'cli_confirm_session_delete')).toHaveLength(2)
+    expect(document.querySelector('[data-delete-next-confirm]')).toBeNull()
+  })
   it('PermanentDeleteUi_ClosePendingPreviewDoesNotMutate_001', async () => {
     const previous = io.invoke.getMockImplementation()!; let finish!: (v: unknown) => void; let pending: any
     io.invoke.mockImplementation((command, request) => command === 'cli_preview_session_delete' ? new Promise(done => { finish = done; pending = request }) : previous(command, request))
