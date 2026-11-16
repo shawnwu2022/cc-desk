@@ -138,4 +138,50 @@ review found no blocking Stage 1 defect. No UI/network/restart acceptance is imp
 Verified test executable SHA256:
 19159973180BFD50FE4415EFEE6649C52DB4816E9FB73CD84591DCC795519FA9.
 
-Stages 2–5 are not implemented or verified. No user-facing switch is enabled.
+Stages 3–5 are not implemented or verified. No user-facing switch is enabled.
+
+Stage 2 storage baseline: a distinct strict record store and Windows adapter were
+added under remote_unattended_store and windows/unattended_store. Their
+records remain Locked descriptions, not executable consent or restored authority.
+The adapter uses its own directory/files/leases; the pairing storage path and
+pairing publication primitive are unchanged. Tests use a fake sealer with the
+real Windows file/lease adapter, never the user's true store or credentials.
+
+The temporary WSK-MSI transport disconnection was followed by a read-only file
+audit: core/DPAPI/registrations existed, but adapter/helper did not. Only missing
+files were then written. This is not evidence that an uncertain write was safely
+replayed.
+
+Review found two persistence hazards before activation: failed read must latch
+this Store closed, and an observed expiry/rollback must persist Revoked plus the
+wall floor before returning its reason. Whole-store rollback by a local principal
+with storage control is outside the adapter's guarantee. Post-publication Unknown
+poisons this instance; safe cross-restart recovery of uncertain transactions is
+still a separate required gate, not inferred from parsing a later valid blob.
+
+Stage 2 validation: the first actual App compile succeeded but 15 filesystem
+tests failed during fixture setup (one DPAPI-disabled test passed). The fixture
+used mixed Windows path separators rejected by the unchanged production path
+validator. Normalizing only the test-owned manifest path and joining components
+separately fixed setup. The final actual App library run passed all 30 focused
+tests: 13 Stage 1 and 17 Stage 2 (2,253 unrelated tests filtered, not run).
+This includes real NTFS adapter tests with fake sealing, not real DPAPI runtime
+acceptance. Storage CAS revision is now separate from authority revision; ordinary
+wall observations cannot change the grant epoch. Both known wall and authority
+high-water marks reject regression even under a larger storage revision.
+
+Strict non-test App remote-host library Clippy (-D warnings) passed, so the real
+DPAPI adapter compiles, but it was not invoked. Focused formatting and whitespace
+checks passed. Read-only security review found no blocker for this inactive
+storage stage; publication-vs-revoke atomicity and cross-process live cancellation
+remain real integration gates.
+
+Before Stage 3/5 activation, implement Stage 2b transaction evidence: a fixed,
+initialized, bounded append journal under the same private-directory control lease,
+strict Pending/Clean records linked to store/target/storage revision/authority
+revision and exact sealed blob digest. Flush Pending before blob publication,
+verify/flush blob before Clean. Missing/torn/unmatched/Pending history stays Locked;
+no automatic journal repair/reset. A recovered matching Clean can provide commit
+evidence, not evidence the old caller received an acknowledgement. Define that
+recovery distinction explicitly, retain same-process known-Unknown fencing, and
+do not claim tested power-loss durability or defense against full local rollback.

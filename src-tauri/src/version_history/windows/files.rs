@@ -1009,6 +1009,46 @@ impl PinnedFile {
         self.verify().map_err(|_| StoreError::Unknown)?;
         Ok(receipt)
     }
+    /// 无人值守专用发布：保留原身份及 no-reparse 检查，
+    /// 测试钩子后、实际 rename 系统调用前再次核验原生许可。
+    /// 不改变历史或配对调用者的原有原语。
+    #[cfg(feature = "remote-host")]
+    pub(super) fn publish_unattended_new(
+        &mut self,
+        parent: Arc<Directory>,
+        name: ComponentName,
+        authorize: &mut dyn FnMut() -> crate::remote_unattended_store::Result<()>,
+    ) -> crate::remote_unattended_store::Result<RenameReceipt> {
+        use crate::remote_unattended_store::StoreError;
+        self.verify().map_err(|_| StoreError::Io)?;
+        let mut attempted = false;
+        let mut denied = None;
+        let outcome = rename_handle_admitted(
+            handle(&self.file),
+            &self.identity,
+            &parent,
+            &name,
+            &mut || {
+                if let Err(error) = authorize() {
+                    denied = Some(error);
+                    return Err(io::Error::other("unattended publication not authorized"));
+                }
+                attempted = true;
+                Ok(())
+            },
+        );
+        let receipt = outcome.map_err(|_| {
+            denied.unwrap_or(if attempted {
+                StoreError::Unknown
+            } else {
+                StoreError::Io
+            })
+        })?;
+        self.parent = parent;
+        self.name = name;
+        self.verify().map_err(|_| StoreError::Unknown)?;
+        Ok(receipt)
+    }
     pub(crate) fn rename_to(
         &mut self,
         parent: Arc<Directory>,

@@ -38,6 +38,8 @@ mod remote_native_pairing_store;
 mod remote_pairing_product;
 #[cfg(feature = "remote-host")]
 mod remote_unattended;
+#[cfg(all(feature = "remote-host", windows))]
+mod remote_unattended_store;
 pub use codex_observer_reporter::run_entry as run_codex_observer_entry;
 mod observer_host;
 mod observer_http;

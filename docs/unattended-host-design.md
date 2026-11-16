@@ -108,6 +108,34 @@ separately reviewed per-connection budget/continuation design inside the approve
 delegation, with revocation checks throughout the real data path. Reconnecting
 every minute with another prompt is not acceptance of the convenience goal.
 
+Implementation proposal for the separate delegated path: at most 15 minutes per
+fresh connection capability, clamped to the delegation's absolute remaining life,
+with continuous trust/revocation checks. This does not change the old 60-second
+configuration path. A longer uninterrupted authorized session or silent phone
+recovery is not implemented or claimed by choosing this budget; the actual
+channel/credential behavior and user interruption cost still require validation.
+
+## Native delegated admission boundary
+
+The existing NativeRunAdmission continuously checks RunAccess's original document
+caller, including on input effects. Retaining that object is not a background
+authority. Do not add a skip-document boolean or re-create CallerIdentity.
+
+Add a separate closed native DelegatedRunOwner captured only by valid local
+consent plus current real run admission. It retains original supervisor/state/
+resource/scope identity and the delegation gate, not an old webview capability.
+Each non-Clone DelegatedRunAdmission checks both original resource lifecycle and
+consent revision/device/trust/expiry. Reuse NativeRunAuthority and the exclusive
+NativeProducerCheckout without treating either as remote permission on its own.
+
+Use an independent prepare_delegated_owned path with the same service reservation,
+driver publication gate and key/prepare/release custody sequence as one-shot.
+Never relax replenish_native_source's existing exact admission contract. Native
+and delegated paths must contend for the same service-owned resources. A private
+retirement witness may be emitted only after original network, preparation,
+driver and key/material release completion all converge; no timeout or vanished
+Weak reference is such a witness. This integration is not present in Stage 1.
+
 ## Revocation semantics and offline limits
 
 Local disable prevents new attempts and cancels existing authority before any

@@ -105,3 +105,6 @@ unsafe fn own(value: HANDLE) -> OwnedHandle {
 
 #[cfg(all(windows, feature = "remote-host"))]
 pub(crate) mod pairing_store;
+
+#[cfg(all(windows, feature = "remote-host"))]
+pub(crate) mod unattended_store;
