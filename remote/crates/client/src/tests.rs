@@ -414,3 +414,6 @@ async fn ControlLease_ClientGrantBoundsAndNegotiatedObserver_014() {
     client.close().await;
     h.close().await;
 }
+
+#[path = "snapshot_pull_probe.rs"]
+mod snapshot_pull_probe;

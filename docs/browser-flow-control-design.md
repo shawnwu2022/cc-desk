@@ -234,3 +234,38 @@ queued_key_update_message是一个Option，但被perhaps_write_key_update取走�
 和固定总内存预算。保留原5.2秒smoke失败、61秒未开始的事实。
 Pull模型现9/9（含每连接唯一Transfer槽位），仍只是探索约束；Set删除不等于
 真实Arc回收，手动tick/join不证明主动回收，Unknown发送结果不得冒充成功join。
+
+## 原 NativeClient 资源语义上的候选拉取实验（仅 cfg(test)）
+
+client/src/snapshot_pull_probe.rs 挂在原 tests 模块，使用原 NativeClient.pending、
+record 验证、真实 RunningChannel/TLS/grant，而不是另建模拟资源账。
+其 pull 是私有实验函数，尚未替换生产 NativeClient.snapshot；生产无新调用入口。
+当前握手无 snapshot-pull capability，不造 bool/fact 冒充协商；旧 command decoder
+确实拒绝 Begin。下一生产阶段必须把 capability 纳入原绑定 transcript/channel fact，
+从 ManagedChannel 传递到 owner/BoundDataAuthority，再允许显式新模式；不自动退旧模式。
+
+候选消息为 Begin(request) / Batch(request, transfer, index, part) / Next(原request,
+transfer, index, offset)。Next不消耗UI顶层request号；认证Data序号仍由原安全层递增。
+一个Batch是一个DataRecord；part自带完整原stamp/state，独立BatchDone不另发记录。
+实验批payload受原32768-DATA_PREFIX界约束，累计part受原4MiB界约束；这些不是密文
+或全链内存上界。transfer当前为固定测试值，Value解析容忍重复JSON键，不能原样推广
+生产codec；生产须由严格DTO/规范化编码及原owner唯一transfer绑定替换。
+
+迁移接点：原 NativeClient.snapshot 内保留整个pending与首次绝对end，在单批词法作用域
+内验证原record、schema/stamp/offset、累计字节账，复制part后离开作用域，再发送Next。
+这使独占DataRecord及其许可、解析临时先drop，累计parts仍驻留。它不证明rustls/WASM/JS
+分配容量释放。原真实安全层回归另验证保留4个record阻塞第5个、drop一个后恢复，
+并且该阻塞不妨碍反向发送；不新增虚构消费事件。
+
+本阶段候选实验4/4通过，另原真实credit回归单独记录。覆盖两批、错offset关闭、
+并发顶层请求Full、完成后Window request2真实往返、已poll future主动取消及checked
+Client/Host owner join。它没有真实Host dispatcher顶层counter，因此request2往返
+不是Host counter接线已完成的证据，也没有模拟真实Snapshot捕获/guard回收。
+固定截止测试在真实握手后暂停Tokio时间，advance30ms才送首批，总预算仍40ms；
+虚拟定时粒度落在40–42ms。有效“Next刷新截止”变异在71ms被断言拒绝，已还原，
+日志snapshot-pull-deadline-mutation-red2.log；首次未命中替换的变异无效，不计RED。
+日志snapshot-pull-real-green.log记录还原后的4/4；无墙钟窄容差验收。
+
+本片段只闭合候选交互与原资源持有/取消语义。仍未完成cap协商、Host原frame/guard
+单transfer loop、严格生产codec、全链wire/内存账和浏览器接入；原真实smoke仍RED，
+61秒未启动。禁止把该私有函数当成已实现的生产客户端或重用其固定transfer身份。
