@@ -735,3 +735,17 @@ Browser 最多一个原应用 write 等正在 drain 的 heartbeat，第二并发
 - 真实本地 Relay fixture 的两端使用原 socket/TLS/认证 Live channel 后分别激活原 MUX。无 Snapshot/ACK/LeaseRenew/输入等待 4 秒，超过本轮 fixture 的 2 秒 IO 预算后仍有效；固定总授权 6 秒到期后原 socket/MUX join，不能 prepare_next，本机原终端仍精确消费 native。此证据不是 Browser/WASM/手机或 61 秒低流量验收。
 
 首轮 5/6：空闲用例错误调用终局 report()，该 helper 等 ProcessLifecycle::Exited，而原 input probe 必须收到至少 6 字节才退出，造成 D15 lifecycle did not converge。修复只改为空闲观察原进程未退出，后续精确 native 字节报告排除任何额外输入；未扩大超时或降低协议断言。首轮日志保留。
+
+
+## C2：Browser 原认证事实到原 port 的一次保活激活
+
+显式 live-v1 才在 Window 创建原 Dormant Relay activation；manual/default 不创建该能力，不启动自动 lease owner。生产 Host supplier/consent/UI 仍关闭。
+
+- WASM 原 NativeClient loop 的私有 kind4 只收空 payload，重新取原 Client + Controller + Live + Installed/current fact，返回恰 8 字节 little-endian u64 剩余毫秒（1..900000）。身份、scope/grant/fence 关联由原 NativeClient/channel 实例、原唯一 RPC sequence 与封闭 adapter 保持，JS 不提供身份或 approved 标记。
+- 原 adapter singlepending/sequence 不拆分。live descriptor 发布前只允许私有 kind4；所有直接 snapshot/exchange/limitDeadline 入口均拒绝，不占 seq/pending。fact 已回但 ack 未回的空 pending 窗口也关闭；收到 ack 后末端检查取消/固定期限才开放，首普通操作保持 seq=2。
+- 原 transport MessagePort（一次 claim）内使用同一 seq 的 prepare→challenge→commit→ack。Window 先置 Pending，再采 sampleBefore，再发 challenge；异常永久 Closed，不回 Dormant。Worker 在 challenge 后调用原 fact RPC，remaining=floor(min(fact remaining, 原 peerExpiry - 当前时间))，不能重读重置 peerExpiry。
+- Window 预存 setupEnd=floor(原 setup deadline)、maxEnd=floor(创建时 monotonic epoch+900000)，不重新计时。固定 end=min(maxEnd,sampleBefore+remaining)。校验 safe integer、时钟回退、原 seq、一次槽与当前期限；消息延迟都从原 sampleBefore 扣除，handoff 最多 1 秒且不越 setupEnd。只是原 transport 保活机制，不授予或刷新 grant/presence/input 权限。
+- 原控制 Promise 先登记后调用 fact，取消不会 race 丢弃 RPC。Rust run(&client) 真实返回后的专用 invalidated import 先 terminal 原 pending，再 client.retire；普通 JS invalidate/close 仅封口。这样不形成 control→RPC pending→transportDone→control 环。实际 WASM export 调用抛错时先 latch rustDone/runtimeFailure，再 terminal/关原 IO/等待物理退休，最终 Unknown；普通 JS 网络错误不伪称 Rust 已结束。
+- 原唯一 writer、B2 500ms 空 outer subframe、固定截止和物理 close/join 不变。消息不进入 TLS 应用队列，不启动 A，不做回声响应或期限刷新。
+
+实际验收使用 Node 合成 Window/WebAuthn + Dedicated Worker，公开固定测试密钥；新 WASM→原 browserRelay→实际本地 Relay→原 App Native Host。无 Snapshot/ACK/LeaseRenew/输入等待 4 秒超过 fixture 2 秒 IO，原总授权 10 秒截止后真正回收，最后原本机终端精确 native 字节无额外输入。这不是 Chromium/手机/公网或 A 低流量 61 秒验收。

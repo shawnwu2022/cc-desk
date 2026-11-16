@@ -6,6 +6,7 @@ import {createBrowserNativeAdapter} from './browserNative.ts';
 const CAP=16384;
 export type BrowserTlsTransport=Readonly<{
  read(maximum:number):Promise<Uint8Array|null>;write(bytes:Uint8Array):Promise<void>;
+ activateKeepalive?(remaining:()=>Promise<number>):Promise<void>;
  close():void;waitClosed():Promise<void>;
 }>;
 export type BrowserTlsEvidence=Readonly<{protocol:number;cipher:number;group:number;fullHandshake:boolean;rawPublicKey:boolean;alpnMatches:boolean;peerEndpointId:Uint8Array}>;
@@ -25,6 +26,7 @@ export async function startBrowserTlsWorker(options:Readonly<{wasm:BufferSource|
  let lastPerf=performance.now(),lastWall=Date.now(),clockValue=performance.timeOrigin+lastPerf,clockFailed=false;
  const anchorPerf=lastPerf,anchorWall=lastWall,anchorEpoch=clockValue;
  const dataRequested=options.application===true;
+ const liveRequested=dataRequested&&(()=>{try{return JSON.parse(new TextDecoder().decode(options.grantBridge?.configuration)).peerInstall?.controlLease==='live-v1';}catch{return false;}})();
  const now=()=>{
   if(!dataRequested)return performance.timeOrigin+performance.now();
   const perf=performance.now(),wall=Date.now(),pd=perf-lastPerf,wd=wall-lastWall;
@@ -52,21 +54,26 @@ export async function startBrowserTlsWorker(options:Readonly<{wasm:BufferSource|
  function fail(error:Error){rejectEvidence(error);rejectManagement?.(error);rejectGrant?.(error);rejectPeer?.(error);}
  const closed=new Promise<void>((resolve,reject)=>{resolveClosed=resolve;rejectClosed=reject;});void evidence.catch(()=>{});void closed.catch(()=>{});
  let signer:ReturnType<typeof createBrowserTlsWasmImports>|undefined;
- const application=dataRequested?createBrowserNativeAdapter(()=>memory,()=>stopping||ioClosed||clockFailed||externallyStopped(),()=>event(7),close,()=>closed,now,()=>peerExpiry??NaN):undefined;
+ const application=dataRequested?createBrowserNativeAdapter(()=>memory,()=>stopping||ioClosed||clockFailed||externallyStopped(),()=>event(7),close,()=>closed,now,()=>peerExpiry??NaN,liveRequested?{prepare:async remaining=>{
+  if(!transport.activateKeepalive)throw Error('live transport required');
+  await transport.activateKeepalive(async()=>{const fact=await remaining();const current=now(),left=Math.floor(Math.min(fact,(peerExpiry??NaN)-current));if(stopping||externallyStopped()||!Number.isSafeInteger(left)||left<1||left>900000)throw Error('live current fact expired');return left;});
+  const finalNow=now();if(stopping||externallyStopped()||!Number.isFinite(finalNow)||finalNow>=(peerExpiry??NaN))throw Error('live publication expired');
+ },settled:()=>retire()}:undefined):undefined;
  const externallyStopped=()=>clockFailed||signal?.aborted===true||Atomics.load(new Int32Array(bridge.shared,0,1),0)!==0||(grantBridge?.cancel instanceof SharedArrayBuffer&&grantBridge.cancel.byteLength===4&&Atomics.load(new Int32Array(grantBridge.cancel),0)!==0);
  function sealSigning(){if(signer)signer.close();else{const control=new Int32Array(bridge.shared,0,5);Atomics.store(control,0,1);Atomics.store(control,1,3);Atomics.notify(control,1);try{bridge.port.postMessage('close');}catch{/* 原主线程仍可看到共享关闭标记。 */}}}
  function sealGrant(){if(grantAdapter)grantAdapter.close();else if(grantBridge){try{grantBridge.port.postMessage('close');grantBridge.port.close();}catch{/* 无有效grant能力。 */}}}
- function retire(){if(rustDone&&transportDone&&!reading&&!writing&&!retired){retired=true;application?.terminal();rx=undefined;disarm();sealGrant();signal?.removeEventListener('abort',close);bridge.port.removeEventListener('message',brokerClosed);bridge.port.removeEventListener('messageerror',close);if(runtimeFailure)rejectClosed(runtimeFailure);else resolveClosed();}}
- function schedule(){if(queued||rustDone||!api)return;queued=true;queueMicrotask(()=>{queued=false;if(rustDone||!api)return;try{if(externallyStopped())close();api.browser_tls_poll();}catch{rustDone=true;runtimeFailure=Error('browser TLS runtime failed');fail(runtimeFailure);closeIo();sealSigning();sealGrant();retire();}});}
- function event(kind:number){if(!rustDone&&api){(api.browser_client_event??api.browser_tls_event)(kind);schedule();}}
+ function retire(){if(rustDone&&transportDone&&!reading&&!writing&&!application?.publicationPending()&&!retired){retired=true;application?.terminal();rx=undefined;disarm();sealGrant();signal?.removeEventListener('abort',close);bridge.port.removeEventListener('message',brokerClosed);bridge.port.removeEventListener('messageerror',close);if(runtimeFailure)rejectClosed(runtimeFailure);else resolveClosed();}}
+ function failRuntime(){if(rustDone)return;rustDone=true;runtimeFailure=Error('browser TLS runtime failed');application?.terminal();fail(runtimeFailure);closeIo();sealSigning();sealGrant();retire();}
+ function schedule(){if(queued||rustDone||!api)return;queued=true;queueMicrotask(()=>{queued=false;if(rustDone||!api)return;if(externallyStopped())close();if(rustDone)return;try{api.browser_tls_poll();}catch{failRuntime();}});}
+ function event(kind:number){if(!rustDone&&api){try{(api.browser_client_event??api.browser_tls_event)(kind);}catch{failRuntime();return;}schedule();}}
  function closeIo(){
   if(ioClosed)return;ioClosed=true;rx=undefined;
   try{transport.close();}catch{ioError=true;runtimeFailure=Error('browser transport close failed');}
   let operation:Promise<void>;try{operation=transport.waitClosed();}catch{runtimeFailure=Error('browser transport retirement failed');transportDone=true;event(2);retire();return;}
   void operation.then(()=>{transportDone=true;event(2);retire();},()=>{runtimeFailure=Error('browser transport retirement failed');transportDone=true;event(2);fail(runtimeFailure);retire();});
  }
- function close(){if(stopping)return;stopping=true;application?.invalidate();sealSigning();sealGrant();if(api&&!rustDone)api.browser_tls_cancel();closeIo();schedule();}
- function shutdown(){if(trust&&!managementBound){close();return;}if(api&&!rustDone){api.browser_tls_event(5);schedule();}}
+ function close(){if(stopping)return;stopping=true;application?.invalidate();sealSigning();sealGrant();if(api&&!rustDone){try{api.browser_tls_cancel();}catch{failRuntime();}}closeIo();schedule();}
+ function shutdown(){if(trust&&!managementBound){close();return;}if(api&&!rustDone)event(5);}
  function brokerClosed(){close();}
  function stopLoading(){rustDone=true;fail(Error(externallyStopped()||stopping?'browser TLS cancelled':'browser TLS deadline'));sealSigning();sealGrant();closeIo();retire();}
  function cancelTimer(){timerEpoch++;if(timer!==undefined)clearTimeout(timer);timer=undefined;timerDeadline=undefined;}
@@ -114,7 +121,7 @@ export async function startBrowserTlsWorker(options:Readonly<{wasm:BufferSource|
   close_io:closeIo,
   report:(code:number,protocol:number,cipher:number,group:number,flags:number,pointer:number,length:number)=>{
    if(code===1){if(stopping||ioClosed||ioError||eof||externallyStopped()||now()>=deadline||length!==32){close();return;}resolveEvidence(Object.freeze({protocol,cipher,group,fullHandshake:(flags&1)!==0,rawPublicKey:(flags&2)!==0,alpnMatches:(flags&4)!==0,peerEndpointId:range(pointer,32).slice()}));return;}
-   application?.invalidate();if(code===-13)runtimeFailure=Error('browser application retirement uncertain');rustDone=true;const failure=Error(code===-10?'browser peer deadline':code===-11?'browser peer invalidated':code===-9?'browser peer rejected':code===-8?'browser grant rejected':code===-6?'browser AppBind Unsupported':code===-7?'browser AppBind rejected':code===-2?'browser TLS deadline':code===-3?'browser TLS cancelled':code===-4?'browser TLS role':'browser TLS rejected');fail(failure);sealSigning();grantAdapter?.close();closeIo();retire();
+   application?.terminal();if(code===-13)runtimeFailure=Error('browser application retirement uncertain');rustDone=true;const failure=Error(code===-10?'browser peer deadline':code===-11?'browser peer invalidated':code===-9?'browser peer rejected':code===-8?'browser grant rejected':code===-6?'browser AppBind Unsupported':code===-7?'browser AppBind rejected':code===-2?'browser TLS deadline':code===-3?'browser TLS cancelled':code===-4?'browser TLS role':'browser TLS rejected');fail(failure);sealSigning();grantAdapter?.close();closeIo();retire();
   },
  }};}
  signal?.addEventListener('abort',close,{once:true});

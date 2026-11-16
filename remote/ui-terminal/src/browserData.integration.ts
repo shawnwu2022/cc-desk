@@ -259,9 +259,9 @@ test('AutoLease_RealWasmFiveSecondTickAndOriginalRetirement_001',async()=>{
  }finally{terminal?.disconnect();await f?.dispose();await h.dispose();p();}
 });
 
-test('BrowserLiveControl_AuthenticatedWasmApplicationMode_001',async()=>{
+test('BrowserLiveControl_BareTlsWithoutOuterActivationRefusesPublication_001',async()=>{
  const p=platform(),h=await host('live');let f:Awaited<ReturnType<typeof client>>|undefined;
- try{f=await client(h,{configuration:{peerInstall:{budgetMs:1000,controlLease:'live-v1'}}});const descriptor=await f.app.descriptor;assert.equal(descriptor.role,'Controller');await f.app.close();await f.retired;const effects=await h.wait('effects');assert.equal(effects.writeCount,0);}finally{await f?.dispose();await h.dispose();p();}
+ try{f=await client(h,{configuration:{peerInstall:{budgetMs:1000,controlLease:'live-v1'}}});await assert.rejects(f.app.descriptor);await f.app.close();await f.retired;const effects=await h.wait('effects');assert.equal(effects.writeCount,0);}finally{await f?.dispose();await h.dispose();p();}
 });
 test('BrowserLiveControl_AuthenticatedModeMismatchCloses_002',async(t)=>{
  for(const serverManual of [false,true])await t.test(String(serverManual),async()=>{

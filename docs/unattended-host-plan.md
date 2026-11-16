@@ -777,3 +777,12 @@ NeedsSettlement。自动续租及 outer heartbeat 仍未实现。
 - security Native 全库 136 passed / 1 ignored；App remote-host 与 security experimental 严格 Clippy 均通过。
 - 日志实际父测试名去重 239 项，名单 .audit/live-activation-final-testnames.txt。首轮 fact API 缺失 RED、Relay 5/6 及 D15 错误观察点记录均保留；修复后日志 live-activation-relay-second 与各 *-final。
 - 本片未修改 Browser C2、自动 lease owner、生产 supplier/UI、真实凭据或云服。尚未证明真实 Relay + WASM 无业务流量或 A 低流量 61 秒，亦未解除原全 Host PTY 发布门槛，不能称长期无人值守已完成。
+
+
+## C2 阶段验证记录
+
+- 受影响 Node 48/48；新真实 WASM 应用 50/50（40 父 case）；真实 Relay/WASM 1/1（10.95s）；C1 六项 6/6。日志父测试名去重共 95，.audit/browser-live-c2-final-testnames.txt，不重复计算子 case。
+- 新 WASM 实际构建，WASM client 与 App remote-host 严格 Clippy、受影响 TS typecheck 通过。日志 browser-live-c2-node-final2、wasm-data-final3、relay-final2、LiveHost_-final、wasm-clippy-final、app-clippy-final、typecheck-final2。
+- 负测包含回退/迟到、默认无 activation、取消保留原 fact Promise、原 Rust app 终局解除 pending、ack 前空 pending 窗口不占 seq，以及 poll/event/cancel export 调用异常注入后等物理退休且保 Unknown。异常注入以替换 export 的 JS throw 模拟调用失败，不是实际 WASM 引擎 trap 证明。
+- 保留首次 Node 缺失机制 RED（失败后因未构造方法留下测试端口而停止进程）、真实链首轮错误 CWD、第二轮 Native-only fixture browser_origins=[] 拒绝 Browser 的记录；仅本地新 fixture 显式允许 https://desk.invalid，旧默认/部署不变。WASM Clippy 首轮遗漏既有 clang 路径，补原官方工具路径后通过。
+- 旧裸 TLS Live 用例现在明确验证缺少原 outer activation 时不发布 descriptor；不塞 no-op activation 冒充保活。真实 Live 正例由上述新 Relay 链提供。A 低流量 61 秒留独立后续片；生产 supplier/UI/真实手机/公网与原全 Host PTY 发布门槛仍未完成。

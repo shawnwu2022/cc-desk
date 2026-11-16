@@ -1,6 +1,6 @@
 import {approvedBrowserInputs,type ApprovedBrowserInputs} from './browserEntry.ts';
 import type {TerminalConnectionSource} from './connectionSource.ts';
-import {createBrowserRelay,RENDEZVOUS_SUBPROTOCOL} from './browserRelay.ts';
+import {createBrowserRelay,createBrowserDataKeepaliveRelay,RENDEZVOUS_SUBPROTOCOL} from './browserRelay.ts';
 import {serveBrowserTransport} from './browserTransport.ts';
 import {createBrowserTlsSignerBroker} from './browserTlsSigner.ts';
 import {createBrowserGrantBroker} from './browserGrant.ts';
@@ -56,11 +56,15 @@ export function browserConnectionSource(inputs:ApprovedBrowserInputs|undefined):
    // Relay 构造的再次校验可能失败；先独立持有原 socket 的物理退出。
    socket=approved.relay.mode==='rendezvous-v1'?new WebSocket(approved.relay.endpoint,RENDEZVOUS_SUBPROTOCOL):new WebSocket(approved.relay.endpoint);
    socket.addEventListener('close',resolveSocket,{once:true});if(socket.readyState===3)resolveSocket();
-   relay=createBrowserRelay({origin:approved.relay.endpoint,tunnel:approved.relay.tunnel,identity:approved.relay.identity,setupDeadline:deadline,ioBudgetMs:30000,mode:approved.relay.mode,socket,signal:controller.signal});
+   const live=approved.grant.peerInstall?.controlLease==='live-v1';
+   const setupEnd=Math.floor(deadline),maxEnd=Math.floor(performance.timeOrigin+performance.now()+900000);
+   const relayOptions={origin:approved.relay.endpoint,tunnel:approved.relay.tunnel,identity:approved.relay.identity,setupDeadline:live?setupEnd:deadline,ioBudgetMs:30000,mode:approved.relay.mode,socket,signal:controller.signal};
+   const dormant=live?createBrowserDataKeepaliveRelay({...relayOptions,maxDeadline:maxEnd}):undefined;
+   relay=dormant?.owner??createBrowserRelay(relayOptions);
    const wire=await relay.ready;if(controller.signal.aborted)throw Error('browser entry cancelled');
    tls=createBrowserTlsSignerBroker(approved.profile,{timeoutMs:10000,setupDeadline:deadline,signal:controller.signal});
    grant=createBrowserGrantBroker(approved.profile,{configuration:approved.grant,present:approved.present,signal:controller.signal});
-   const io=new MessageChannel(),application=new MessageChannel();transport=serveBrowserTransport(io.port1,wire);
+   const io=new MessageChannel(),application=new MessageChannel();transport=serveBrowserTransport(io.port1,wire,dormant?{activation:dormant.activation,setupEnd,maxEnd,clock:()=>Math.floor(performance.timeOrigin+performance.now())}:undefined);
    worker=new Worker(new URL('./browserEntry.worker.ts',import.meta.url),{type:'module',name:'cc-desk-remote'});
    worker.addEventListener('message',event=>{if(event.data?.kind==='retired'){if(event.data.uncertain)rejectRetired(Error('browser Worker retirement uncertain'));else resolveRetired();}else{rejectRetired(Error('browser Worker control'));void close();}});
    worker.addEventListener('error',()=>{rejectRetired(Error('browser Worker failed'));void close();});worker.addEventListener('messageerror',()=>{rejectRetired(Error('browser Worker message'));void close();});

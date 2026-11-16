@@ -121,6 +121,21 @@ async fn run(client: &NativeClient) -> Result<(), DataError> {
                     .exchange(&buffer[20..], Duration::from_millis(budget as u64))
                     .await
                     .map(|part| vec![part]),
+                4 => {
+                    if length != 20 {
+                        return Err(DataError::Codec);
+                    }
+                    let fact = client
+                        .channel
+                        .live_keepalive_fact(cc_desk_remote_security::Role::Client)?
+                        .ok_or(DataError::Context)?;
+                    let remaining = fact
+                        .remaining_ms_for(&client.channel, cc_desk_remote_security::Role::Client)?;
+                    if remaining > 900000 {
+                        return Err(DataError::Bounds);
+                    }
+                    Ok(vec![remaining.to_le_bytes().to_vec()])
+                }
                 _ => Err(DataError::Codec),
             }
         })

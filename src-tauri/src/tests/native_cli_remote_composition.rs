@@ -204,6 +204,9 @@ impl NetworkRelayFixture {
         Self::start_with_lifetime(host_point, 30_000).await
     }
     async fn start_with_lifetime(host_point: Option<Vec<u8>>, lifetime_ms: u64) -> Self {
+        Self::start_with_browser(host_point, lifetime_ms, false).await
+    }
+    async fn start_with_browser(host_point: Option<Vec<u8>>, lifetime_ms: u64, browser: bool) -> Self {
         assert!((30_000..=120_000).contains(&lifetime_ms));
         let reserve = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = reserve.local_addr().unwrap();
@@ -224,7 +227,7 @@ impl NetworkRelayFixture {
                 .map(|b| format!("{b:02x}"))
                 .collect::<String>()
         };
-        fs::write(root.path().join("policy.json"),serde_json::to_vec(&json!({"schema":1,"policy_id":"TEST_ONLY_NATIVE_NETWORK","revision":1,"issued_at_unix_ms":now,"not_before_unix_ms":now-1000,"expires_unix_ms":now+lifetime_ms,"listen":address.to_string(),"signed_wss_endpoint":origin,"browser_origins":[],"devices":[{"id":"01".repeat(16),"public_key_sec1":point(true),"role":"Host"},{"id":"02".repeat(16),"public_key_sec1":point(false),"role":"Phone"}],"routes":[{"tunnel":"03".repeat(16),"host":"01".repeat(16),"phone":"02".repeat(16)}]})).unwrap()).unwrap();
+        fs::write(root.path().join("policy.json"),serde_json::to_vec(&json!({"schema":1,"policy_id":"TEST_ONLY_NATIVE_NETWORK","revision":1,"issued_at_unix_ms":now,"not_before_unix_ms":now-1000,"expires_unix_ms":now+lifetime_ms,"listen":address.to_string(),"signed_wss_endpoint":origin,"browser_origins":if browser { vec!["https://desk.invalid"] } else { vec![] },"devices":[{"id":"01".repeat(16),"public_key_sec1":point(true),"role":"Host"},{"id":"02".repeat(16),"public_key_sec1":point(false),"role":"Phone"}],"routes":[{"tunnel":"03".repeat(16),"host":"01".repeat(16),"phone":"02".repeat(16)}]})).unwrap()).unwrap();
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let relay = std::env::var_os("CC_DESK_TEST_RELAY_ROOT")
             .map(std::path::PathBuf::from)

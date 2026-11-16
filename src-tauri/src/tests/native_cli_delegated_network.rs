@@ -1616,3 +1616,88 @@ async fn live_host_case(mode: u8) {
     assert!(cleanup.close());
     assert!(relay.close().await);
 }
+
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn BrowserLiveRelay_OriginalWasmIdleAndFixedCutoff_001() {
+    if isolated("BrowserLiveRelay_OriginalWasmIdleAndFixedCutoff_001") {
+        return;
+    }
+    let (f, mut cleanup) = setup();
+    let mut relay = NetworkRelayFixture::start_with_browser(None, 30000, true).await;
+    let source = admit(&f);
+    let scope = source.scope().unwrap();
+    let (consent, mut current, policy) = NativeDelegationConsent::test_network(&source, device());
+    policy.test_network_origin(&mut current, relay.origin.clone());
+    policy.test_budget_progress();
+    policy.test_budget_total(10000);
+    let session = Arc::new(
+        cleanup
+            .host
+            .reserve_delegation(DelegatedRunOwner::capture(source, consent).unwrap())
+            .unwrap(),
+    );
+    let (accepted, ready) = tokio::sync::oneshot::channel();
+    let builder =
+        renewal_material_duration(&relay, accepted, Duration::from_secs(20)).test_live_keepalive();
+    let socket = session
+        .test_begin_socket(&current, &f.supervisor, builder)
+        .unwrap();
+    ready.await.unwrap();
+    let (_, spki) = network_identities::identity(false, false);
+    let config = serde_json::json!({"origin": relay.origin, "scope": scope, "hostSpki": spki.iter().map(|b|format!("{b:02x}")).collect::<String>()}).to_string();
+    let child = tokio::task::spawn_blocking(move || {
+        let mut process = std::process::Command::new("node")
+            .current_dir(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .parent()
+                    .unwrap(),
+            )
+            .args([
+                "--experimental-strip-types",
+                "remote/ui-terminal/src/browserLiveRelay.fixture.ts",
+                &config,
+            ])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let end = Instant::now() + Duration::from_secs(20);
+        loop {
+            if process.try_wait().unwrap().is_some() {
+                return process.wait_with_output().unwrap();
+            }
+            if Instant::now() >= end {
+                let _ = process.kill();
+                return process.wait_with_output().unwrap();
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    });
+    let admitted = socket.wait_admitted().await;
+    let output = child.await.unwrap();
+    socket.request_close();
+    let joined = socket.wait_closed().await;
+    f.service
+        .access(&f.caller, &f.request_run())
+        .unwrap()
+        .write_frame(b"native")
+        .unwrap();
+    assert_eq!(report(&f)["input"], json!([110, 97, 116, 105, 118, 101]));
+    drop(session);
+    assert!(cleanup.close());
+    assert!(relay.close().await);
+    assert!(
+        admitted.is_ok(),
+        "admission={admitted:?} child={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(joined.is_ok());
+    assert!(
+        output.status.success(),
+        "{} {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("fixedDeadlineRetired"));
+}

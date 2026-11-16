@@ -1,3 +1,4 @@
+import {browserTransport} from './browserTransport.ts';
 import {serveBrowserClient} from './browserClient.ts';
 import {parentPort,workerData} from 'node:worker_threads';
 import {createConnection} from 'node:net';
@@ -77,7 +78,7 @@ function socketTransport(port:number):BrowserTlsTransport{
 let releaseSilent!:()=>void;
 const silent:BrowserTlsTransport={read:()=>new Promise(resolve=>{releaseSilent=()=>resolve(null);}),write:async()=>{},close(){releaseSilent?.();},waitClosed:()=>workerData.holdClose?new Promise<void>(resolve=>{gate.set(0,resolve);parentPort!.postMessage({kind:'closeHeld'});}):Promise.resolve()};
 try{
- owner=await startBrowserTlsWorker({wasm:workerData.wasm,glue:await import(workerData.glueUrl),bridge:workerData.bridge,localSpki:workerData.localSpki,peerSpki:workerData.peerSpki,transport:workerData.port?socketTransport(workerData.port):silent,localRole:workerData.localRole,peerRole:workerData.peerRole,signal:controller.signal,clientTrust:workerData.clientTrust,grantBridge:workerData.grantBridge,application:workerData.application?true:undefined});
+ owner=await startBrowserTlsWorker({wasm:workerData.wasm,glue:await import(workerData.glueUrl),bridge:workerData.bridge,localSpki:workerData.localSpki,peerSpki:workerData.peerSpki,transport:workerData.transportPort?browserTransport(workerData.transportPort):workerData.port?socketTransport(workerData.port):silent,localRole:workerData.localRole,peerRole:workerData.peerRole,signal:controller.signal,clientTrust:workerData.clientTrust,grantBridge:workerData.grantBridge,application:workerData.application?true:undefined});
  if(workerData.application){if(!owner.application)throw Error('original application missing');serveBrowserClient(workerData.application,owner.application.port,owner.application.descriptor,owner.close,owner.waitClosed,owner.application.limitDeadline);}
  parentPort!.postMessage({kind:'started',peerEnabled:owner.peerInstalled!==undefined});
  void owner.peerInstalled?.then(value=>{peerPublished=true;parentPort!.postMessage({kind:'peerInstalled',value});},error=>parentPort!.postMessage({kind:'peerError',error:(error as Error).message}));
