@@ -430,6 +430,7 @@ pub(crate) struct PeerStart {
     pub end: Option<Instant>,
     pub control_lease: Option<crate::bind::NegotiatedControlLease>,
     pub data_keepalive: Option<crate::bind::NegotiatedDataKeepalive>,
+    pub snapshot_pull: Option<crate::bind::NegotiatedSnapshotPull>,
 }
 impl From<Option<Instant>> for PeerStart {
     fn from(end: Option<Instant>) -> Self {
@@ -437,6 +438,7 @@ impl From<Option<Instant>> for PeerStart {
             end,
             control_lease: None,
             data_keepalive: None,
+            snapshot_pull: None,
         }
     }
 }
@@ -504,7 +506,8 @@ pub(crate) fn prepare<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
         role,
     )
     .with_control_lease(peer_start.control_lease)
-    .with_data_keepalive(peer_start.data_keepalive);
+    .with_data_keepalive(peer_start.data_keepalive)
+    .with_snapshot_pull(peer_start.snapshot_pull);
     let public_authority = authority.clone();
     let a = active.clone();
     let (completion, local) = watch::channel(None);
@@ -811,6 +814,6 @@ mod peer_engine_admission_tests {
     }
 }
 
-#[path="live_keepalive.rs"]
+#[path = "live_keepalive.rs"]
 mod live_keepalive;
 pub use live_keepalive::LiveKeepaliveFact;

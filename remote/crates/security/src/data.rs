@@ -75,6 +75,7 @@ pub struct ManagedChannel<S> {
     peer_install: bool,
     control_lease: Option<crate::bind::NegotiatedControlLease>,
     data_keepalive: Option<crate::bind::NegotiatedDataKeepalive>,
+    snapshot_pull: Option<crate::bind::NegotiatedSnapshotPull>,
     transferred: bool,
 
     active: Arc<AtomicBool>,
@@ -99,6 +100,7 @@ impl<S> ManagedChannel<S> {
             peer_install: false,
             control_lease: None,
             data_keepalive: None,
+            snapshot_pull: None,
             transferred: false,
 
             active: Arc::new(AtomicBool::new(true)),
@@ -122,6 +124,15 @@ impl<S> ManagedChannel<S> {
     ) -> Self {
         self.data_keepalive = Some(fact);
         self
+    }
+    pub(crate) fn with_snapshot_pull(mut self, fact: crate::bind::NegotiatedSnapshotPull) -> Self {
+        self.snapshot_pull = Some(fact);
+        self
+    }
+    // 只描述原 channel 的协商事实，不代替 grant/Installed/截止校验。
+    pub fn snapshot_pull_negotiated(&self) -> bool {
+        self.snapshot_pull
+            .is_some_and(|fact| fact.matches(self.binding, self.role))
     }
     pub fn data_keepalive_negotiated(&self) -> bool {
         self.data_keepalive.is_some()
@@ -214,6 +225,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> ManagedChannel<S> {
                 end: Some(crate::owner_clock::Instant(end.0)),
                 control_lease: self.control_lease,
                 data_keepalive: self.data_keepalive,
+                snapshot_pull: self.snapshot_pull,
             },
         )?;
         self.transferred = true;
@@ -243,7 +255,8 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> ManagedChannel<S> {
             self.role,
         )
         .with_control_lease(self.control_lease)
-        .with_data_keepalive(self.data_keepalive);
+        .with_data_keepalive(self.data_keepalive)
+        .with_snapshot_pull(self.snapshot_pull);
         crate::browser_wasm_owner::browser_peer::run(
             self.io.as_mut().ok_or(DataError::Closed)?,
             authority,
@@ -334,6 +347,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> ManagedChannel<S> {
                 end: peer_end,
                 control_lease: self.control_lease,
                 data_keepalive: self.data_keepalive,
+                snapshot_pull: self.snapshot_pull,
             },
         )?;
         self.transferred = true;

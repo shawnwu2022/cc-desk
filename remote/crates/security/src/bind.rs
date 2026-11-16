@@ -717,12 +717,21 @@ enum BindMode {
     Peer,
     ControlLease,
     LiveControl,
+    LiveSnapshotPull,
 }
 fn management_capabilities(enabled: BindMode) -> Vec<String> {
     let values: &[&str] = match enabled {
         BindMode::Base => &["canonical-json"],
         BindMode::Grant => &["canonical-json", "grant-management-v1"],
         BindMode::Peer => &["canonical-json", "grant-management-v1", "peer-install-v1"],
+        BindMode::LiveSnapshotPull => &[
+            "canonical-json",
+            appbind::CONTROL_LEASE_CAPABILITY,
+            appbind::DATA_KEEPALIVE_CAPABILITY,
+            "grant-management-v1",
+            "peer-install-v1",
+            appbind::SNAPSHOT_PULL_CAPABILITY,
+        ],
         BindMode::LiveControl => &[
             "canonical-json",
             appbind::CONTROL_LEASE_CAPABILITY,
@@ -750,6 +759,7 @@ fn management_negotiate(
         BindMode::Peer => appbind::negotiate_peer(h, c),
         BindMode::ControlLease => appbind::negotiate_control_lease(h, c),
         BindMode::LiveControl => appbind::negotiate_live_control(h, c),
+        BindMode::LiveSnapshotPull => appbind::negotiate_live_snapshot_pull(h, c),
     }
 }
 
@@ -1075,4 +1085,81 @@ pub(crate) async fn browser_live_control_client<
     .with_peer_install()
     .with_control_lease(NegotiatedControlLease(()))
     .with_data_keepalive(NegotiatedDataKeepalive(())))
+}
+
+// 仅原认证模块可构造；保留 exporter binding 与本端角色，不能搬到另一 channel。
+#[derive(Clone, Copy)]
+pub(crate) struct NegotiatedSnapshotPull {
+    binding: [u8; 32],
+    role: Role,
+}
+impl NegotiatedSnapshotPull {
+    pub(crate) fn matches(&self, binding: [u8; 32], role: Role) -> bool {
+        self.binding == binding && self.role == role
+    }
+}
+pub async fn bind_host_live_snapshot_pull_channel<
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+>(
+    pending: Pending<S>,
+    snapshot: HostSnapshot,
+) -> Result<crate::ManagedChannel<S>, BindError> {
+    native_factory()?;
+    let e = establish_host(
+        pending,
+        snapshot,
+        Hooks::default(),
+        vec![1],
+        BindMode::LiveSnapshotPull,
+    )
+    .await?;
+    eligible(e.deadline, &e.token)?;
+    Ok(crate::ManagedChannel::new(
+        e.io,
+        e.token,
+        BoundContext(e.context),
+        e.binding,
+        Role::Host,
+    )
+    .with_grant_management()
+    .with_peer_install()
+    .with_control_lease(NegotiatedControlLease(()))
+    .with_data_keepalive(NegotiatedDataKeepalive(()))
+    .with_snapshot_pull(NegotiatedSnapshotPull {
+        binding: e.binding,
+        role: Role::Host,
+    }))
+}
+
+pub async fn bind_client_live_snapshot_pull_channel<
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+>(
+    pending: Pending<S>,
+    trust: ClientTrust,
+) -> Result<crate::ManagedChannel<S>, BindError> {
+    native_factory()?;
+    let e = establish_client(
+        pending,
+        trust,
+        Hooks::default(),
+        vec![1],
+        BindMode::LiveSnapshotPull,
+    )
+    .await?;
+    eligible(e.deadline, &e.token)?;
+    Ok(crate::ManagedChannel::new(
+        e.io,
+        e.token,
+        BoundContext(e.context),
+        e.binding,
+        Role::Client,
+    )
+    .with_grant_management()
+    .with_peer_install()
+    .with_control_lease(NegotiatedControlLease(()))
+    .with_data_keepalive(NegotiatedDataKeepalive(()))
+    .with_snapshot_pull(NegotiatedSnapshotPull {
+        binding: e.binding,
+        role: Role::Client,
+    }))
 }

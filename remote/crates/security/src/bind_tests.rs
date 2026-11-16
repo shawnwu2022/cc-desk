@@ -667,3 +667,6 @@ mod control_lease;
 
 #[path = "live_control_bind_tests.rs"]
 mod live_control;
+
+#[path = "snapshot_pull_bind_tests.rs"]
+mod snapshot_pull;

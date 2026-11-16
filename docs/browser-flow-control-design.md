@@ -269,3 +269,18 @@ Client/Host owner join。它没有真实Host dispatcher顶层counter，因此req
 本片段只闭合候选交互与原资源持有/取消语义。仍未完成cap协商、Host原frame/guard
 单transfer loop、严格生产codec、全链wire/内存账和浏览器接入；原真实smoke仍RED，
 61秒未启动。禁止把该私有函数当成已实现的生产客户端或重用其固定transfer身份。
+
+## P1：显式 Snapshot pull 能力事实（未接拉取生产链路）
+
+新增 snapshot-pull-v1 显式 LiveSnapshotPull 绑定模式，依赖原 live-control
+能力组合。完整 offer 仍进入原认证 transcript；混合模式拒绝，不静默回退。
+原绑定工厂在成功协商后签发绑定 exporter binding 与本端角色的私有事实，
+沿 ManagedChannel、PeerStart、BoundDataAuthority 传递；旧工厂默认无此事实。
+修复首轮 client 工厂漏传事实的真实失败，不通过测试布尔值模拟协商。
+
+本阶段只提供协商事实，不授予 grant、输入或 Installed 权限，不延长截止。
+尚未接严格 Begin/Next/Batch codec、Host transfer loop、NativeClient pull、
+浏览器固定字节缓冲及全链内存上界；原 5.2 秒 smoke 仍 RED，61 秒未开始。
+原绑定回归 22/22 与 security 严格 Clippy 已通过；最终格式源码复核日志为
+snapshot-pull-bind-final.log / snapshot-pull-clippy-final.log。
+审查范围：篡改用例可能在协商即拒绝，不独立证明 MAC 覆盖；原完整 offers 的 hash 覆盖及跨 binding/role 拒绝为源码审查证据，尚无跨 binding 搬运动态用例。

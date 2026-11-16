@@ -475,3 +475,26 @@ pub fn negotiate_live_control(h: &HostOffer, c: &ClientOffer) -> Result<HostSele
     client.required_capabilities.remove(2);
     negotiate_control_lease(&host, &client)
 }
+
+// 精确新模式只裁剪校验副本，原始 offers 仍完整进入认证 transcript。
+pub const SNAPSHOT_PULL_CAPABILITY: &str = "snapshot-pull-v1";
+pub fn negotiate_live_snapshot_pull(
+    h: &HostOffer,
+    c: &ClientOffer,
+) -> Result<HostSelection, CodecError> {
+    let required = [
+        "canonical-json",
+        CONTROL_LEASE_CAPABILITY,
+        DATA_KEEPALIVE_CAPABILITY,
+        crate::grant_management::CAPABILITY,
+        crate::peer_install::CAPABILITY,
+        SNAPSHOT_PULL_CAPABILITY,
+    ];
+    if h.required_capabilities != required || c.required_capabilities != required {
+        return Err(CodecError::Unsupported);
+    }
+    let (mut host, mut client) = (h.clone(), c.clone());
+    host.required_capabilities.pop();
+    client.required_capabilities.pop();
+    negotiate_live_control(&host, &client)
+}

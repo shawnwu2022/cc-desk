@@ -32,6 +32,7 @@ pub struct BoundDataAuthority {
     role: Role,
     control_lease: Option<crate::bind::NegotiatedControlLease>,
     data_keepalive: Option<crate::bind::NegotiatedDataKeepalive>,
+    snapshot_pull: Option<crate::bind::NegotiatedSnapshotPull>,
 }
 impl std::fmt::Debug for BoundDataAuthority {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -56,6 +57,7 @@ impl BoundDataAuthority {
             role,
             control_lease: None,
             data_keepalive: None,
+            snapshot_pull: None,
         }
     }
     pub(crate) fn with_control_lease(
@@ -71,6 +73,18 @@ impl BoundDataAuthority {
     ) -> Self {
         self.data_keepalive = fact;
         self
+    }
+    pub(crate) fn with_snapshot_pull(
+        mut self,
+        fact: Option<crate::bind::NegotiatedSnapshotPull>,
+    ) -> Self {
+        self.snapshot_pull = fact;
+        self
+    }
+    // 只描述原 channel 的协商事实，不代替 grant/Installed/截止校验。
+    pub fn snapshot_pull_negotiated(&self) -> bool {
+        self.snapshot_pull
+            .is_some_and(|fact| fact.matches(self.binding, self.role))
     }
     pub fn data_keepalive_negotiated(&self) -> bool {
         self.data_keepalive.is_some()
