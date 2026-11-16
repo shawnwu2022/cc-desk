@@ -226,3 +226,49 @@ async fn ChannelRetirement_LostOriginalBindReplyIsUnknown_004() {
     assert!(f.host.unknown);
     f.finish().await;
 }
+
+#[tokio::test]
+async fn ChannelReadiness_InstalledExactHostAndSingleIssue_001() {
+    let mut f = Fixture::new(Box::new(|| true)).await;
+    f.installed().await;
+    let token = f.host.begin_channel_retirement(&f.channel).unwrap();
+    let end = Instant::now() + Duration::from_secs(3);
+    let ready = loop {
+        match f.host.retired_installed_channel(&token).unwrap() {
+            Some(ready) => break ready,
+            None => {
+                assert!(Instant::now() < end);
+                tokio::task::yield_now().await;
+            }
+        }
+    };
+    assert!(f.host.retired_installed_channel(&token).is_err());
+    let other_owner =
+        WriterHostOwner::from_registry(&OwnerRegistry::default(), support::host(), 11).unwrap();
+    let mut other = NativeHost::from_owner(other_owner);
+    assert!(
+        other
+            .begin_native_resource_rebind_retired(ready, f.channel.clone(), Box::new(|| true))
+            .is_err()
+    );
+    assert!(f.input.commit(b"local", || true).unwrap().complete);
+    f.finish().await;
+}
+#[tokio::test]
+async fn ChannelReadiness_RejectedFirstInstallNeverQualifies_002() {
+    let mut f = Fixture::new(Box::new(|| false)).await;
+    let token = f.host.begin_channel_retirement(&f.channel).unwrap();
+    let end = Instant::now() + Duration::from_secs(3);
+    loop {
+        match f.host.retired_installed_channel(&token) {
+            Ok(None) => {
+                assert!(Instant::now() < end);
+                tokio::task::yield_now().await;
+            }
+            Err(_) => break,
+            Ok(Some(_)) => panic!("rejected installation minted readiness"),
+        }
+    }
+    assert!(f.input.commit(b"local", || true).unwrap().complete);
+    f.finish().await;
+}

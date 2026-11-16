@@ -405,3 +405,70 @@ PeerPump, mint RetirementProof, clear Stage 1 live, replace the clock attempt or
 allow a second generation. Those remain Stage 3b-2b-ii. Production key provisioning
 and release semantics, phone consent, UI, restart restoration, retries and cloud
 deployment remain unavailable.
+## Stage 3b-2b-ii: complete original retirement and same-Host renewal (inactive)
+
+The Session now aggregates the exact original NativeHost channel-retirement
+fact, original PeerPump join, and original socket/MUX/channel/material task joins.
+The Host contributes an opaque Installed-readiness value bound to its original
+owner, attempt, channel and fence. It is not a complete receipt or authorization
+by itself. Only the Session aggregation module constructs CompleteRetirement;
+its fields are private, it is not cloneable or serializable, and no boolean or
+from-parts constructor exists. Missing installation, panic, lost/uncertain result
+or mismatched custody cannot produce a usable receipt. Cancelling observation
+retains all original handles. Unknown keeps custody for full shutdown and never
+releases live admission.
+
+One observer owns the receipt slot. A single locked decision distinguishes Empty,
+Ready, NextStarting and Unknown. Ready is historical retirement evidence, not a
+current permission: later revocation must still reject consumption. Consuming it
+changes the slot to NextStarting exactly once. Observing that state returns
+Pending without disconnecting the next attempt or mixing the old active channel
+with new socket custody. Successful handoff establishes the next observation
+epoch under the Session transition lock. A rejected rebind permanently closes
+policy/clock and records Unknown after the inner handoff guards have been
+released. Here Unknown conservatively means no usable renewal proof remains;
+it does not claim that a rejected handoff necessarily performed partial IO.
+
+Renewal preflights the original captured run and retains a sealed NativeRunLifetime
+containing the original supervisor/state/input. At commit it reads only their
+irreversible lifecycle atomics and original input Complete status. It performs
+no resource callback, Weak upgrade, IO, task join or Host rebind under the Owner
+lock. The lock order is Session transition, selected clock generation, then Owner.
+The original live retirement and next begin happen under the same Owner guard.
+All post-consumption failures, including sequence overflow after clearing live,
+close the Owner gate and irreversible termination bits before unlocking. Absolute
+cutoff, original monotonic deadline, binding, revision and lifecycle are rechecked
+at commit. Test-only barriers exercise revocation immediately before commit and
+after selecting the new generation; they do not exist in production builds.
+
+The GrantClock Arc/domain remains stable, but each generation has an irreversible
+closed bit. Disconnect before first binding leaves an irreversible initial-cancel
+fact. An old sample must pass a final exact-generation and closed check after
+releasing the Owner guard. No old closed latch is reset. Old channel authority is
+explicitly closed before rotation; a late old SocketStart close is identity-bound
+and cannot disconnect a newer generation. Host rebind runs outside transition
+and rechecks the opaque original Installed-readiness against the same Host.
+The original producer is adopted only once and is not checked out or recreated
+for the next connection.
+
+The executable success fixture uses two real localhost Relay socket/MUX generations
+and the original terminal: remote na, exact receipt settlement, complete retirement,
+same-Host rebind, new operation/continuous sequence 2 writing ti, then local ve.
+The child's exact native report and one retained producer pin are required.
+Original receipt settlement and anti-replay history remain intact. Reusing an
+operation with changed payload is a separate negative case, not a retry strategy.
+The rejected-handoff state test uses a duplex prepared channel only for fault
+injection after a real first-generation retirement; it is not socket/material
+join evidence for a successful second generation.
+
+This milestone does not provide production consent, enrollment/key supply, UI,
+restart restoration, retry scheduling, real-phone acceptance or cloud deployment.
+It supports renewal only after an actually Installed generation and complete
+original retirement. The existing 64-attempt/install/retirement/network custody
+limits are unchanged, as are WriterHostOwner limits. The current Stage 1 attempt
+maximum is still 60 seconds, not a new 15-minute grant. Thus 64 full current
+windows cover at most 64 minutes of authorized connectivity; a hypothetical
+15-minute window would cover at most 16 hours before the same cap. Neither is
+30 days of continuous operation. A later bounded-history reclamation design must
+preserve non-reused monotonic IDs, original fences, pending result custody and
+credits retained by old Wait handles. No safety cap was silently raised here.

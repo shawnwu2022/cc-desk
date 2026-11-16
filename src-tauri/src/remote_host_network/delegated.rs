@@ -1,6 +1,6 @@
-//! 委托单代 socket 的原任务托管；仍无完整 receipt 或二代入口。
+//! 每代 socket 与原材料任务托管；完整回收事实只由 Session 汇合模块签发。
 use super::*;
-use crate::remote_host::delegated::DelegatedSocketStart;
+use crate::remote_host::delegated::{DelegatedAttemptIdentity, DelegatedSocketStart};
 #[path = "materials.rs"]
 mod materials;
 use materials::MaterialCustody;
@@ -30,6 +30,10 @@ struct TestHooks {
     after_keepalive: Option<Box<dyn FnOnce() + Send>>,
     before_go: Option<Box<dyn FnOnce() + Send>>,
     fail_material_spawn: bool,
+    before_retirement: Option<(
+        tokio::sync::oneshot::Sender<()>,
+        tokio::sync::oneshot::Receiver<()>,
+    )>,
 }
 #[cfg(test)]
 impl TestMaterialBuilder {
@@ -39,6 +43,14 @@ impl TestMaterialBuilder {
     }
     pub(crate) fn test_before_go(mut self, hook: impl FnOnce() + Send + 'static) -> Self {
         self.2.before_go = Some(Box::new(hook));
+        self
+    }
+    pub(crate) fn test_hold_retirement(
+        mut self,
+        entered: tokio::sync::oneshot::Sender<()>,
+        release: tokio::sync::oneshot::Receiver<()>,
+    ) -> Self {
+        self.2.before_retirement = Some((entered, release));
         self
     }
     pub(crate) fn test_fail_spawn(mut self) -> Self {
@@ -62,6 +74,9 @@ enum Launch {
 }
 type AdmissionPublisher = watch::Sender<Option<Result<(), HostNetworkError>>>;
 pub(crate) struct SocketCustody {
+    identity: DelegatedAttemptIdentity,
+    terminal_clock: Arc<crate::remote_unattended::capability::network::NetworkClock>,
+    original_channel: Mutex<Option<Arc<RunningChannel>>>,
     service: Weak<RemoteHostService>,
     network: Arc<HostNetworkAttempt>,
     material: Arc<MaterialCustody>,
@@ -70,7 +85,10 @@ pub(crate) struct SocketCustody {
     published: Mutex<Option<AdmissionPublisher>>,
 }
 impl SocketCustody {
-    pub(crate) fn reserve(service: &Arc<RemoteHostService>) -> Arc<Self> {
+    pub(crate) fn reserve(
+        service: &Arc<RemoteHostService>,
+        start: &DelegatedSocketStart,
+    ) -> Arc<Self> {
         let (stop, _) = watch::channel(false);
         let (published, admitted) = watch::channel(None);
         let network = Arc::new(HostNetworkAttempt {
@@ -81,6 +99,9 @@ impl SocketCustody {
             terminal: Arc::new(AtomicU8::new(0)),
         });
         Arc::new(Self {
+            identity: start.identity(),
+            terminal_clock: start.terminal_clock(),
+            original_channel: Mutex::new(None),
             service: Arc::downgrade(service),
             network,
             material: Arc::new(MaterialCustody::reserve()),
@@ -89,13 +110,29 @@ impl SocketCustody {
             published: Mutex::new(Some(published)),
         })
     }
+    pub(crate) fn matches_identity(&self, identity: &DelegatedAttemptIdentity) -> bool {
+        self.identity.matches(identity)
+    }
+    pub(crate) fn matches_original(
+        &self,
+        identity: &DelegatedAttemptIdentity,
+        channel: &Arc<RunningChannel>,
+    ) -> bool {
+        self.identity.matches(identity)
+            && self
+                .original_channel
+                .lock()
+                .as_ref()
+                .is_some_and(|original| Arc::ptr_eq(original, channel))
+    }
     pub(crate) fn request_close(&self) {
         self.network.request_close();
         *self.launch.lock() = Launch::Closed;
     }
     pub(crate) async fn wait_closed(&self) -> Result<(), HostNetworkError> {
         let result = self.network.wait_closed().await;
-        if self.publication_unknown.load(Ordering::Acquire) {
+        if self.publication_unknown.load(Ordering::Acquire) || result.is_err() {
+            self.terminal_clock.close();
             Err(HostNetworkError::Unknown)
         } else {
             result
@@ -110,6 +147,9 @@ impl SocketCustody {
         build: TestMaterialBuilder,
     ) -> Result<(), HostNetworkError> {
         // 最后 Session 析构会关闭本 custody；必须先持 keepalive，再取得任何锁。
+        if !self.identity.matches(&start.identity()) {
+            return Err(HostNetworkError::Authority);
+        }
         let keepalive = start.keepalive().ok_or(HostNetworkError::Closed)?;
         #[cfg(test)]
         let mut build = build;
@@ -154,6 +194,8 @@ impl SocketCustody {
             .take()
             .ok_or(HostNetworkError::Unknown)?;
         let (ready, go) = tokio::sync::oneshot::channel();
+        #[cfg(test)]
+        let retirement_hook = hooks.before_retirement;
         let task = tauri::async_runtime::spawn(async move {
             let mut wire = wire::NetworkWire::new();
             let mut transferred = false;
@@ -178,6 +220,7 @@ impl SocketCustody {
                     .setup(material, connector, clock.clone(), end, None)
                     .await?;
                 clock.now_ms().map_err(|_| HostNetworkError::Authority)?;
+                *original.original_channel.lock() = Some(channel.clone());
                 start
                     .handoff(channel)
                     .map_err(|_| HostNetworkError::Handoff)?;
@@ -205,6 +248,11 @@ impl SocketCustody {
             };
             // 即使 setup 没有产出 channel，也必须回收原材料线程。
             start.close();
+            #[cfg(test)]
+            if let Some((entered, release)) = retirement_hook {
+                let _ = entered.send(());
+                let _ = release.await;
+            }
             let wire_known = wire.close_and_join().await;
             drop(wire);
             let material_known = if transferred {
@@ -217,6 +265,9 @@ impl SocketCustody {
             } else {
                 Err(HostNetworkError::Unknown)
             };
+            if result == Err(HostNetworkError::Unknown) {
+                original.terminal_clock.close();
+            }
             original.network.terminal.store(
                 if result == Err(HostNetworkError::Unknown) {
                     2
@@ -242,6 +293,7 @@ impl SocketCustody {
         }
         if ready.send(()).is_err() {
             self.publication_unknown.store(true, Ordering::Release);
+            self.terminal_clock.close();
             service.network.mark_unknown();
             Err(HostNetworkError::Unknown)
         } else {

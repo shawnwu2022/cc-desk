@@ -333,23 +333,37 @@ async fn DelegatedSocket_OriginalRelayMuxAndProducerJoin_001() {
     if isolated("DelegatedSocket_OriginalRelayMuxAndProducerJoin_001") {
         return;
     }
-    socket_case(false, false).await;
+    socket_case(false, false, 0).await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn DelegatedSocket_CancelObserverRetainsLateMaterial_002() {
     if isolated("DelegatedSocket_CancelObserverRetainsLateMaterial_002") {
         return;
     }
-    socket_case(true, false).await;
+    socket_case(true, false, 0).await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn DelegatedSocket_SessionDropRetainsOriginalMaterialAndNetwork_007() {
     if isolated("DelegatedSocket_SessionDropRetainsOriginalMaterialAndNetwork_007") {
         return;
     }
-    socket_case(true, true).await;
+    socket_case(true, true, 0).await;
 }
-async fn socket_case(late: bool, drop_owner: bool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn DelegatedReceipt_OriginalJoinsMintUniqueFacts_001() {
+    if isolated("DelegatedReceipt_OriginalJoinsMintUniqueFacts_001") {
+        return;
+    }
+    socket_case(false, false, 1).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn DelegatedReceipt_CancelObserverRetainsOriginalNetworkJoin_002() {
+    if isolated("DelegatedReceipt_CancelObserverRetainsOriginalNetworkJoin_002") {
+        return;
+    }
+    socket_case(false, false, 2).await;
+}
+async fn socket_case(late: bool, drop_owner: bool, receipt_mode: u8) {
     use crate::remote_host_network::delegated::{TestMaterial, TestMaterialBuilder};
     let (f, mut cleanup) = setup();
     let mut relay = NetworkRelayFixture::start().await;
@@ -359,12 +373,17 @@ async fn socket_case(late: bool, drop_owner: bool) {
     policy.test_network_origin(&mut current, relay.origin.clone());
     let owner = DelegatedRunOwner::capture(source, consent).unwrap();
     let session = Arc::new(cleanup.host.reserve_delegation(owner).unwrap());
+    let (pump_entered, pump_seen) = tokio::sync::oneshot::channel();
+    let (pump_release, pump_resume) = tokio::sync::oneshot::channel();
+    if receipt_mode == 3 {
+        session.test_hold_pump(pump_entered, pump_resume);
+    }
     let origin = relay.origin.clone();
     let address = relay.address;
     let (accepted, ready) = tokio::sync::oneshot::channel();
     let (release, held) = std::sync::mpsc::sync_channel(0);
     let (started, working) = tokio::sync::oneshot::channel();
-    let build = TestMaterialBuilder::new(move |scope| {
+    let mut build = TestMaterialBuilder::new(move |scope| {
         let _ = started.send(());
         if late {
             held.recv().unwrap();
@@ -395,6 +414,11 @@ async fn socket_case(late: bool, drop_owner: bool) {
             accepted: Some(Box::new((accepted, None))),
         }
     });
+    let (retirement_entered, retirement_seen) = tokio::sync::oneshot::channel();
+    let (retirement_release, retirement_resume) = tokio::sync::oneshot::channel();
+    if receipt_mode == 2 {
+        build = build.test_hold_retirement(retirement_entered, retirement_resume);
+    }
     let socket = session
         .test_begin_socket(&current, &f.supervisor, build)
         .unwrap();
@@ -486,6 +510,33 @@ async fn socket_case(late: bool, drop_owner: bool) {
             })
         ));
         session.disconnect();
+        if receipt_mode > 0 {
+            use crate::remote_host::delegated::retirement::RetirementObservation;
+            if receipt_mode == 2 {
+                retirement_seen.await.unwrap();
+                assert!(tokio::time::timeout(
+                    Duration::from_millis(25),
+                    session.observe_retirement()
+                )
+                .await
+                .is_err());
+                retirement_release.send(()).unwrap();
+            }
+            if receipt_mode == 3 {
+                pump_seen.await.unwrap();
+                assert!(tokio::time::timeout(
+                    Duration::from_millis(25),
+                    session.observe_retirement()
+                )
+                .await
+                .is_err());
+                pump_release.send(()).unwrap();
+            }
+            let (first, second) =
+                tokio::join!(session.observe_retirement(), session.observe_retirement());
+            assert_eq!(first, RetirementObservation::Ready);
+            assert_eq!(second, RetirementObservation::Ready);
+        }
         assert!(session.test_join_pump().await);
         assert!(socket.wait_closed().await.is_ok());
         assert!(client
@@ -576,6 +627,17 @@ async fn socket_failure_case(mode: u8) {
         assert_eq!(socket.wait_closed().await.is_ok(), expected_known);
         assert_eq!(host.test_join_network().await, expected_known);
     }
+    if mode >= 2 {
+        use crate::remote_host::delegated::retirement::RetirementObservation;
+        assert_eq!(
+            session.observe_retirement().await,
+            RetirementObservation::Unknown
+        );
+        assert_eq!(
+            session.observe_retirement().await,
+            RetirementObservation::Unknown
+        );
+    }
     assert_eq!(
         calls.load(std::sync::atomic::Ordering::SeqCst),
         usize::from(mode == 3)
@@ -642,4 +704,401 @@ async fn DelegatedSocket_LastSessionDropDuringStartDoesNotDeadlock_008() {
         .unwrap();
     assert_eq!(report(&f)["input"], json!([110, 97, 116, 105, 118, 101]));
     assert!(cleanup.close());
+}
+
+fn renewal_material(
+    relay: &NetworkRelayFixture,
+    accepted: tokio::sync::oneshot::Sender<()>,
+) -> crate::remote_host_network::delegated::TestMaterialBuilder {
+    use crate::remote_host_network::delegated::{TestMaterial, TestMaterialBuilder};
+    let address = relay.address;
+    let origin = relay.origin.clone();
+    TestMaterialBuilder::new(move |scope| TestMaterial {
+        address,
+        relay: network_relay_identity(&origin, true),
+        tunnel: [3; 16],
+        local: network_local(false),
+        phone_pin: network_pin(true),
+        binding: cc_desk_remote_security::HostSnapshot {
+            host_key_epoch: 5,
+            client_key_epoch: 7,
+            activation: [0x33; 32],
+            incarnation: 11,
+            policy_epoch: 13,
+            issuer_epoch: 17,
+            origin: cc_desk_remote_record::appbind::CanonicalOrigin::trusted(&origin).unwrap(),
+        },
+        browser: network_browser_profile(),
+        issuer: network_grants::admin(),
+        principal: [4; 32],
+        policy: cc_desk_remote_security::NativeGrantPolicy {
+            scope,
+            role: cc_desk_remote_record::grant::DataRole::Controller,
+            duration: Duration::from_secs(10),
+        },
+        accepted: Some(Box::new((accepted, None))),
+    })
+}
+
+async fn renewal_input(
+    client: &NativeClient,
+    bytes: &[u8],
+    sequence: u64,
+    expected: wire::Outcome,
+    settle: bool,
+) -> Vec<u8> {
+    let budget = Duration::from_secs(1);
+    let snapshot = client
+        .snapshot(
+            br#"{"message":"Snapshot","profile":1,"request":"1"}"#,
+            budget,
+        )
+        .await
+        .unwrap();
+    let ack = projection::encode_ack(
+        &projection::Ack {
+            profile: 1,
+            stamp: snapshot.stamp,
+        },
+        1,
+    )
+    .unwrap();
+    client.exchange(&ack, budget).await.unwrap();
+    let window = client
+        .exchange(br#"{"message":"Window","profile":1,"request":"2"}"#, budget)
+        .await
+        .unwrap();
+    let wire::Message::WindowGranted {
+        window,
+        not_after_host_ms,
+        ..
+    } = wire::decode(&window).unwrap()
+    else {
+        panic!("window")
+    };
+    let mut token = [0; 32];
+    for (index, pair) in window.as_bytes().chunks_exact(2).enumerate() {
+        token[index] = u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap();
+    }
+    let frame = input::encode(&input::Input {
+        operation: [0x60 + sequence as u8; 16],
+        sequence,
+        window: token,
+        not_after_host_ms: not_after_host_ms.parse().unwrap(),
+        bytes: bytes.to_vec(),
+    })
+    .unwrap();
+    let result = client.exchange(&frame, budget).await.unwrap();
+    let outcome = match wire::decode(&result) {
+        Ok(wire::Message::InputReceipt { outcome, .. }) => outcome,
+        Ok(wire::Message::InputNotAccepted { .. }) => panic!("TEST_ONLY input not accepted"),
+        _ => panic!("TEST_ONLY wrong response variant"),
+    };
+    eprintln!("TEST_ONLY_RENEW_INPUT sequence={sequence} outcome={outcome:?}");
+    assert_eq!(outcome, expected);
+    if settle {
+        let wire::Message::InputReceipt {
+            operation,
+            sequence,
+            outcome: wire::Outcome::HostWritten,
+            proof: Some(proof),
+            ..
+        } = wire::decode(&result).unwrap()
+        else {
+            panic!("exact written proof")
+        };
+        let ack = wire::encode(&wire::Message::ReceiptAck {
+            profile: 1,
+            request: "3".into(),
+            operation,
+            sequence,
+            outcome: wire::Outcome::HostWritten,
+            proof,
+        })
+        .unwrap();
+        let settled = client.exchange(&ack, budget).await.unwrap();
+        assert!(matches!(
+            wire::decode(&settled),
+            Ok(wire::Message::ReceiptSettled {
+                disposition: wire::Disposition::Advanced,
+                ..
+            })
+        ));
+    }
+    frame
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn DelegatedRenewal_TwoOriginalSocketGenerationsOneProducer_001() {
+    if isolated("DelegatedRenewal_TwoOriginalSocketGenerationsOneProducer_001") {
+        return;
+    }
+    renewal_case(0).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn DelegatedRenewal_RevokeAfterReceiptCannotConsume_002() {
+    if isolated("DelegatedRenewal_RevokeAfterReceiptCannotConsume_002") {
+        return;
+    }
+    renewal_case(1).await;
+}
+async fn renewal_case(mode: u8) {
+    use crate::remote_host::delegated::retirement::RetirementObservation;
+    let (f, mut cleanup) = setup();
+    let mut relay = NetworkRelayFixture::start().await;
+    let source = admit(&f);
+    let scope = source.scope().unwrap();
+    let (consent, mut current, policy) = NativeDelegationConsent::test_network(&source, device());
+    policy.test_network_origin(&mut current, relay.origin.clone());
+    let owner = DelegatedRunOwner::capture(source, consent).unwrap();
+    let session = Arc::new(cleanup.host.reserve_delegation(owner).unwrap());
+    let (accepted, ready) = tokio::sync::oneshot::channel();
+    let first = session
+        .test_begin_socket(&current, &f.supervisor, renewal_material(&relay, accepted))
+        .unwrap();
+    ready.await.unwrap();
+    let (peer, admitted) =
+        tokio::join!(network_client(&relay, scope.clone()), first.wait_admitted());
+    assert!(admitted.is_ok());
+    let (client, mux, cancel) = peer.unwrap();
+    let old_frame = renewal_input(&client, b"na", 1, wire::Outcome::HostWritten, mode != 4).await;
+    let old_client = client;
+    assert!(session.prepare_next(&current, &f.supervisor).is_err());
+    session.disconnect();
+    assert_eq!(
+        session.observe_retirement().await,
+        RetirementObservation::Ready
+    );
+    let _ = old_client.close().await;
+    cancel.cancel();
+    mux.request_close();
+    assert!(mux.wait_closed().await.is_ok());
+    if mode == 1 {
+        session.revoke();
+        assert!(session.prepare_next(&current, &f.supervisor).is_err());
+    } else if mode == 8 {
+        let (_custody, mut start) = session.prepare_next(&current, &f.supervisor).unwrap();
+        let mut wrong_scope = scope.clone();
+        wrong_scope.run.push_str("-wrong");
+        // 仅失败注入用 duplex；它不是第二代 socket/material join 的替代证据。
+        let (client, channel, _gate, _cancel) =
+            channels::channels_with_clock(wrong_scope, start.clock()).await;
+        let channel = Arc::new(channel);
+        assert!(start.handoff(channel.clone()).is_err());
+        assert_eq!(
+            session.observe_retirement().await,
+            RetirementObservation::Unknown
+        );
+        assert_eq!(
+            session.observe_retirement().await,
+            RetirementObservation::Unknown
+        );
+        assert!(session.prepare_next(&current, &f.supervisor).is_err());
+        client.authority().request_close();
+        channel.authority().request_close();
+        let _ = client.wait_closed_checked().await;
+        let _ = channel.wait_closed_checked().await;
+    } else if mode >= 5 {
+        if mode == 7 {
+            assert!(session
+                .prepare_next(&current.test_wrong_device(), &f.supervisor)
+                .is_err());
+        } else {
+            if mode == 5 {
+                policy.test_expire();
+            } else {
+                policy.test_exhaust_sequence();
+            }
+            assert!(session.prepare_next(&current, &f.supervisor).is_err());
+        }
+        assert!(policy.test_owner_gate_closed());
+        assert!(policy.begin(&current).is_err());
+    } else if (2..=3).contains(&mode) {
+        let (entered, seen) = std::sync::mpsc::sync_channel(0);
+        let (release, resume) = std::sync::mpsc::sync_channel(0);
+        session.test_hold_renew(mode == 3, move || {
+            entered.send(()).unwrap();
+            resume.recv().unwrap();
+        });
+        std::thread::scope(|threads| {
+            let worker = threads.spawn(|| session.prepare_next(&current, &f.supervisor));
+            seen.recv().unwrap();
+            policy.request_revoke();
+            release.send(()).unwrap();
+            assert!(worker.join().unwrap().is_err());
+        });
+        assert!(session.prepare_next(&current, &f.supervisor).is_err());
+        assert!(policy.begin(&current).is_err());
+    } else {
+        // 两个消费者竞争同一 private receipt，只有一个能取得新 Starting generation。
+        let (a, b) = std::thread::scope(|threads| {
+            let a = threads.spawn(|| session.prepare_next(&current, &f.supervisor));
+            let b = threads.spawn(|| session.prepare_next(&current, &f.supervisor));
+            (a.join().unwrap(), b.join().unwrap())
+        });
+        assert_ne!(a.is_ok(), b.is_ok());
+        let (second, start) = a.or(b).unwrap();
+        assert_eq!(
+            session.observe_retirement().await,
+            RetirementObservation::Pending
+        );
+        assert_eq!(
+            session.observe_retirement().await,
+            RetirementObservation::Pending
+        );
+        let (accepted, ready) = tokio::sync::oneshot::channel();
+        second
+            .start(start, renewal_material(&relay, accepted))
+            .unwrap();
+        // 旧 custody 的迟到关闭不得转成整个 Session 的新代关闭。
+        first.request_close();
+        ready.await.unwrap();
+        let (peer, admitted) = tokio::join!(network_client(&relay, scope), second.wait_admitted());
+        assert!(admitted.is_ok(), "{admitted:?}");
+        let (client, mux, cancel) = peer.unwrap();
+        assert!(old_client
+            .exchange(&old_frame, Duration::from_secs(1))
+            .await
+            .is_err());
+        if mode == 4 {
+            // 独立负例：冲突 Unknown 后不再在该 channel 提交任何新输入。
+            renewal_input(&client, b"ti", 1, wire::Outcome::Unknown, false).await;
+        } else {
+            renewal_input(&client, b"ti", 2, wire::Outcome::HostWritten, true).await;
+        }
+        assert_eq!(cleanup.host.test_pin_count(), 1);
+        session.disconnect();
+        assert!(session.test_join_pump().await);
+        assert!(second.wait_closed().await.is_ok());
+        let _ = client.close().await;
+        cancel.cancel();
+        mux.request_close();
+        assert!(mux.wait_closed().await.is_ok());
+    }
+    f.service
+        .access(&f.caller, &f.request_run())
+        .unwrap()
+        .write_frame(if mode != 0 { b"tive" } else { b"ve" })
+        .unwrap();
+    assert_eq!(report(&f)["input"], json!([110, 97, 116, 105, 118, 101]));
+    drop(session);
+    assert!(cleanup.close());
+    assert!(relay.close().await);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn DelegatedReceipt_CancelObserverRetainsOriginalPeerPumpJoin_003() {
+    if isolated("DelegatedReceipt_CancelObserverRetainsOriginalPeerPumpJoin_003") {
+        return;
+    }
+    socket_case(false, false, 3).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn DelegatedReceipt_LateOriginalBindCannotMintInstalledReceipt_004() {
+    if isolated("DelegatedReceipt_LateOriginalBindCannotMintInstalledReceipt_004") {
+        return;
+    }
+    use crate::remote_host::delegated::retirement::RetirementObservation;
+    let (f, mut cleanup) = setup();
+    let mut relay = NetworkRelayFixture::start().await;
+    let source = admit(&f);
+    let scope = source.scope().unwrap();
+    let (consent, mut current, policy) = NativeDelegationConsent::test_network(&source, device());
+    policy.test_network_origin(&mut current, relay.origin.clone());
+    let owner = DelegatedRunOwner::capture(source, consent).unwrap();
+    let session = Arc::new(cleanup.host.reserve_delegation(owner).unwrap());
+    let (entered, seen) = tokio::sync::oneshot::channel();
+    let (release, resume) = std::sync::mpsc::sync_channel(0);
+    session.test_hold_bind(move || {
+        entered.send(()).unwrap();
+        resume.recv().unwrap();
+    });
+    let (accepted, ready) = tokio::sync::oneshot::channel();
+    let socket = session
+        .test_begin_socket(&current, &f.supervisor, renewal_material(&relay, accepted))
+        .unwrap();
+    ready.await.unwrap();
+    let (peer, retired) = {
+        let peer = network_client(&relay, scope);
+        tokio::pin!(peer);
+        tokio::select! {result=seen=>result.unwrap(),_=&mut peer=>panic!("original actor must remain pending")};
+        assert!(
+            tokio::time::timeout(Duration::from_millis(25), session.observe_retirement())
+                .await
+                .is_err()
+        );
+        release.send(()).unwrap();
+        tokio::join!(&mut peer, session.observe_retirement())
+    };
+    assert!(peer.is_err());
+    assert_eq!(retired, RetirementObservation::Unknown);
+    assert_eq!(
+        session.observe_retirement().await,
+        RetirementObservation::Unknown
+    );
+    assert!(session.prepare_next(&current, &f.supervisor).is_err());
+    let _ = socket.wait_closed().await;
+    f.service
+        .access(&f.caller, &f.request_run())
+        .unwrap()
+        .write_frame(b"native")
+        .unwrap();
+    assert_eq!(report(&f)["input"], json!([110, 97, 116, 105, 118, 101]));
+    drop(session);
+    assert!(cleanup.close());
+    assert!(relay.close().await);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn DelegatedRenewal_RevokeAtLockedPreCommitClosesOwner_003() {
+    if isolated("DelegatedRenewal_RevokeAtLockedPreCommitClosesOwner_003") {
+        return;
+    }
+    renewal_case(2).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn DelegatedRenewal_RevokeAfterSelectionNeverRestoresOldGeneration_004() {
+    if isolated("DelegatedRenewal_RevokeAfterSelectionNeverRestoresOldGeneration_004") {
+        return;
+    }
+    renewal_case(3).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn DelegatedRenewal_OriginalOperationConflictNeverReplays_005() {
+    if isolated("DelegatedRenewal_OriginalOperationConflictNeverReplays_005") {
+        return;
+    }
+    renewal_case(4).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn DelegatedRenewal_AbsoluteExpiryRejectsReceipt_006() {
+    if isolated("DelegatedRenewal_AbsoluteExpiryRejectsReceipt_006") {
+        return;
+    }
+    renewal_case(5).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn DelegatedRenewal_SequenceExhaustionClosesGateBeforeUnlock_007() {
+    if isolated("DelegatedRenewal_SequenceExhaustionClosesGateBeforeUnlock_007") {
+        return;
+    }
+    renewal_case(6).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn DelegatedRenewal_WrongDeviceCannotConsumeAsNewAuthority_008() {
+    if isolated("DelegatedRenewal_WrongDeviceCannotConsumeAsNewAuthority_008") {
+        return;
+    }
+    renewal_case(7).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn DelegatedRenewal_RejectedRebindIsUnknownNotPerpetualStarting_009() {
+    if isolated("DelegatedRenewal_RejectedRebindIsUnknownNotPerpetualStarting_009") {
+        return;
+    }
+    renewal_case(8).await;
 }

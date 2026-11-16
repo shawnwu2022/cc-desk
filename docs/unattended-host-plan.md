@@ -452,3 +452,68 @@ Focused formatting and git whitespace checks passed.
 The prior full Host PTY-suite failure remains an unresolved publication gate.
 These results are not a full App/Host suite, real-phone acceptance, production
 unattended activation or complete per-attempt retirement proof.
+## Stage 3b-2b-ii completion: original receipt and bounded same-Host renewal
+
+Implemented the opaque Host Installed-readiness fact, Session-only complete
+retirement receipt, single-consumer NextStarting transition, same-Owner atomic
+retire/begin, fixed-clock generation fencing, and original Host rebind without a
+second producer checkout. Production native consent/material/UI/retry entrances
+remain unavailable. Only a previously Installed generation can renew; the current
+64-history limits and 60-second attempt maximum are unchanged. The separate
+30-day sustainable-history design remains open.
+
+Final same-source verification on WSK-MSI, 2026-11-16:
+
+- App filters: Delegated 44; remote_unattended 52; remote_host_network::tests 21;
+  remote_host::tests 14; HostCandidate_ 5; HostPairingScope_ 2;
+  NativeRemote_ActualAdmissionInstallsOriginalOwnNode_001 1; the seven HostStart_
+  cases listed above each passed in a fresh invocation.
+- Host ChannelReadiness_ 2 passed.
+- Strict non-test App and Host Clippy both passed with -D warnings.
+- Actual successful parent test names were extracted from the final logs and
+  unioned: App 136 unique, Host 2 unique, total 138. Delegated/unattended overlap
+  and isolated child execution are not counted twice. The exact name set is in
+  .audit/unattended-stage3b2bii-final2-testnames.txt.
+
+Commands, from the repository root with the existing Cargo home/target and
+project-local TEMP/TMP/TMPDIR:
+
+    cargo test --offline --locked --manifest-path src-tauri/Cargo.toml --lib --features remote-host FILTER -- --test-threads=1
+    cargo test --offline --locked --manifest-path remote/Cargo.toml -p cc-desk-remote-host --lib --features experimental-host-owner ChannelReadiness_ -- --test-threads=1
+    cargo clippy --offline --locked --manifest-path src-tauri/Cargo.toml --lib --features remote-host -- -D warnings
+    cargo clippy --offline --locked --manifest-path remote/Cargo.toml -p cc-desk-remote-host --lib --features experimental-host-owner -- -D warnings
+
+Final logs: .audit/unattended-stage3b2bii-final2-01.log through final2-14.log,
+unattended-stage3b2bii-host-final2.log, unattended-stage3b2bii-clippy-final2.log,
+and unattended-stage3b2bii-host-clippy-final2.log. Final hashes are preserved in
+unattended-stage3b2bii-final2-hashes.txt:
+
+- App test executable: 9A713FC7B9438AEA4AA0111F18182945B3CE2AAF6DA685BB36E64A22738A6CB8.
+- Host test executable: AB0BCF4671C92FCCDBD7C60BD9FCD2183B360E9E53CF523BC4F7A06B8C43B8B6.
+- Existing Relay executable: 39E54732DE9EF9D5B7FAAE179148EF2852B27F490956D880C144C106323F8CB3.
+
+New behavior coverage includes original network and PeerPump joins independently
+held across cancelled observation; a late original bind actor that cannot mint
+Installed evidence; duplicate observers and receipt consumers; observation during
+NextStarting; old-client closure; revocation before/after atomic selection;
+absolute expiry; wrong device; sequence overflow closing the Owner gate before
+unlock; and rejected rebind becoming sticky Unknown rather than perpetual Pending.
+The successful two-generation localhost test requires remote na, the real original
+receipt ACK/settlement, new operation/sequence 2 writing ti, local ve, exact child
+native output, and one retained producer pin. A separate conflict case proves
+changed payload with the old operation remains Unknown and does not write twice.
+
+Earlier failures remain in separate first/second/third/fourth logs. They exposed
+fixture mistakes rather than grounds to weaken production semantics: reusing an
+operation with changed payload produces the original conflict result; routing an
+old-window frame through a new channel did not promise a receipt; and a new
+operation before settling the original pending receipt was InputNotAccepted.
+The success fixture now follows the existing receipt settlement and continuous
+sequence contract. The original journal and producer were never reset. Rebind
+failure-state coverage uses a duplex prepared channel only for rejection injection;
+it is not substituted for the real successful second-generation socket/MUX joins.
+
+No dependency/lockfile, real credential, cloud, security-setting, production
+supplier or UI change was made. The earlier full Host PTY-suite failure remains
+an unresolved publication gate. These 138 focused cases are not a full App/Host
+suite, real-phone acceptance, 30-day endurance test or production activation.

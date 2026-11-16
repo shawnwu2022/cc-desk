@@ -1,4 +1,4 @@
-//! 单次封闭委托接线；生产材料构造与完整回收证明仍未开放。
+//! 封闭委托及原任务回收续代；生产 consent、供给与 UI 入口仍未开放。
 #![allow(dead_code, reason = "委托生产 consent 与材料供应尚未接入")]
 use super::*;
 use crate::cli::types::SafeError;
@@ -8,6 +8,8 @@ use crate::remote_unattended::capability::VerifiedBinding;
 use crate::run_supervisor::delegated::{DelegatedNetworkAdmission, DelegatedRunOwner};
 use cc_desk_remote_host::native_host::{ChannelRetirementToken, NativeChannel};
 use std::sync::Weak;
+#[path = "delegated/retirement.rs"]
+pub(crate) mod retirement;
 
 pub(crate) struct DelegatedSession {
     service: Weak<RemoteHostService>,
@@ -16,6 +18,17 @@ pub(crate) struct DelegatedSession {
     owner: DelegatedRunOwner,
     reservation: ActivationReservation,
     active: Mutex<Option<ActiveAttempt>>,
+    transition: Mutex<()>,
+    #[cfg(test)]
+    bind_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    #[cfg(test)]
+    pump_retirement: Mutex<
+        Option<(
+            tokio::sync::oneshot::Sender<()>,
+            tokio::sync::oneshot::Receiver<()>,
+        )>,
+    >,
+    retirement: retirement::RetirementCustody,
     socket: Mutex<Option<Arc<crate::remote_host_network::delegated::SocketCustody>>>,
 }
 struct ActiveAttempt {
@@ -30,6 +43,7 @@ pub(crate) struct DelegatedPreparedChannel {
     admission: Option<DelegatedNetworkAdmission>,
     channel: Arc<NativeChannel>,
     adopted: bool,
+    retired: Option<cc_desk_remote_host::native_host::RetiredInstalledChannel>,
 }
 impl DelegatedPreparedChannel {
     pub(crate) fn channel_for(&self, brand: &Arc<()>) -> Result<Arc<NativeChannel>, SafeError> {
@@ -75,12 +89,28 @@ impl RemoteHostService {
             owner,
             reservation,
             active: Mutex::new(None),
+            transition: Mutex::new(()),
+            #[cfg(test)]
+            bind_hook: Mutex::new(None),
+            #[cfg(test)]
+            pump_retirement: Mutex::new(None),
+            retirement: retirement::RetirementCustody::new(),
             socket: Mutex::new(None),
         })
     }
 }
 impl DelegatedSession {
-    pub(crate) fn adopt(&self, mut prepared: DelegatedPreparedChannel) -> Result<(), SafeError> {
+    pub(crate) fn adopt(&self, prepared: DelegatedPreparedChannel) -> Result<(), SafeError> {
+        let rebind = prepared.retired.is_some();
+        let result = self.adopt_inner(prepared);
+        if rebind && result.is_err() {
+            self.owner.request_revoke();
+            self.retirement.mark_unknown();
+            self.clock.close();
+        }
+        result
+    }
+    fn adopt_inner(&self, mut prepared: DelegatedPreparedChannel) -> Result<(), SafeError> {
         if !Arc::ptr_eq(&self.brand, &prepared.brand)
             || self.reservation.operation().cancelled()
             || self.clock.is_closed()
@@ -95,18 +125,28 @@ impl DelegatedSession {
             .active
             .try_lock()
             .ok_or_else(|| crate::cli::profiles::error("REMOTE_HOST_BUSY"))?;
-        if active.is_some() {
+        let rebind = prepared.retired.is_some();
+        if active.is_some() != rebind {
             return Err(crate::cli::profiles::error("REMOTE_HOST_BUSY"));
         }
         let admission = prepared
             .admission
             .take()
             .ok_or_else(|| crate::cli::profiles::error("REMOTE_HOST_LOCKED"))?;
+        #[cfg(test)]
+        let mut admission = admission;
+        #[cfg(test)]
+        if let Some(hook) = self.bind_hook.lock().take() {
+            admission.test_before_actor(hook);
+        }
         let mut checkout = service
             .checkout_host_for(true, Some(&self.brand))
             .ok_or_else(|| crate::cli::profiles::error("REMOTE_HOST_BUSY"))?;
         let result = (|| {
             // 即使下游拒绝也保留同一个永久 Host，不制造替代 producer。
+            if rebind && checkout.host.is_none() {
+                return Err(crate::cli::profiles::error("REMOTE_HOST_LOCKED"));
+            }
             if checkout.host.is_none() {
                 checkout.host = Some(Box::new(admission.create_host(&prepared).inspect_err(
                     |_e| {
@@ -115,32 +155,46 @@ impl DelegatedSession {
                     },
                 )?));
             }
-            if checkout.origin.is_some() {
+            if !rebind && checkout.origin.is_some() {
                 return Err(crate::cli::profiles::error("REMOTE_PRODUCER_OWNED"));
             }
-            admission
-                .adopt_into(
+            if let Some(retired) = prepared.retired.take() {
+                admission.rebind_into(
                     checkout.host.as_deref_mut().expect("original Host"),
                     &prepared,
-                )
-                .inspect_err(|_e| {
-                    #[cfg(test)]
-                    eprintln!("TEST_ONLY_DELEGATED_ADOPT handoff_failed {}", _e.code);
-                })?;
+                    retired,
+                )?;
+            } else {
+                admission.adopt_into(
+                    checkout.host.as_deref_mut().expect("original Host"),
+                    &prepared,
+                )?;
+            }
             let origin = admission.origin();
             let pin = admission.pin();
             let original = service.clone();
             let channel = prepared.channel.clone();
-            let worker =
-                tauri::async_runtime::spawn(async move { original.pump_peer(channel).await });
+            #[cfg(test)]
+            let retirement_hook = self.pump_retirement.lock().take();
+            let worker = tauri::async_runtime::spawn(async move {
+                let result = original.pump_peer(channel).await;
+                #[cfg(test)]
+                if let Some((entered, release)) = retirement_hook {
+                    let _ = entered.send(());
+                    let _ = release.await;
+                }
+                result
+            });
             let pump = Arc::new(PeerPump {
                 join: tokio::sync::Mutex::new(Some(worker)),
                 joined: AtomicU8::new(0),
             });
             {
                 let mut state = service.state.lock();
-                state.origin = Some(origin);
-                state.pins.push(pin);
+                if !rebind {
+                    state.origin = Some(origin);
+                    state.pins.push(pin);
+                }
                 state.peer_pumps.push(pump.clone());
             }
             // 这里只登记原任务 Arc，绝不再次启动 dispatcher。
@@ -154,32 +208,49 @@ impl DelegatedSession {
             Ok(())
         })();
         checkout.finish();
+        drop(active);
+        if rebind && result.is_ok() {
+            let _transition = self.transition.lock();
+            if !self.clock.is_closed()
+                && self
+                    .active
+                    .lock()
+                    .as_ref()
+                    .is_some_and(|a| Arc::ptr_eq(&a.admission.brand(), &prepared.attempt_brand))
+            {
+                self.retirement.handoff_generation();
+            }
+        }
         result
     }
     pub(crate) fn disconnect(&self) {
-        // Starting 尚未进入 active，也必须同步关闭这代安装及其固定时钟。
-        self.clock.close();
-        if let Some(socket) = self.socket.lock().as_ref() {
+        self.disconnect_generation(None);
+    }
+    fn disconnect_generation(&self, identity: Option<&DelegatedAttemptIdentity>) {
+        let transition = self.transition.lock();
+        let socket = self.socket.lock().clone();
+        if identity.is_some_and(|id| !socket.as_ref().is_some_and(|s| s.matches_identity(id))) {
+            return;
+        }
+        self.clock.retire_current();
+        let original = self
+            .active
+            .lock()
+            .as_ref()
+            .map(|a| (a.admission.original_network_attempt(), a.channel.clone()));
+        drop(transition);
+        // 关闭/Host 回调在转换锁外；迟到的旧 start 不能关闭新 generation。
+        if let Some(socket) = socket {
             socket.request_close();
         }
-        let mut active = self.active.lock();
-        if let Some(attempt) = active.as_mut() {
-            attempt.admission.close();
-            if attempt.local.is_none() {
-                if let Some(service) = self.service.upgrade() {
-                    attempt.local = service
-                        .with_host(|host| {
-                            host.and_then(|h| h.begin_channel_retirement(&attempt.channel).ok())
-                        })
-                        .flatten();
-                }
-            }
-            attempt.channel.authority().request_close();
+        if let Some((attempt, channel)) = original {
+            attempt.close();
+            channel.authority().request_close();
         }
-        // 本阶段没有完整 receipt：即使本地已关，也不清空 active 或 live。
     }
     pub(crate) fn revoke(&self) {
         self.owner.request_revoke();
+        self.clock.close();
         self.disconnect();
     }
 }
@@ -197,6 +268,19 @@ impl DelegatedPreparedChannel {
 }
 #[cfg(test)]
 impl DelegatedSession {
+    pub(crate) fn test_hold_renew(&self, after: bool, hook: impl FnOnce() + Send + 'static) {
+        self.clock.test_hold_renew(after, hook);
+    }
+    pub(crate) fn test_hold_bind(&self, hook: impl FnOnce() + Send + 'static) {
+        *self.bind_hook.lock() = Some(Box::new(hook));
+    }
+    pub(crate) fn test_hold_pump(
+        &self,
+        entered: tokio::sync::oneshot::Sender<()>,
+        release: tokio::sync::oneshot::Receiver<()>,
+    ) {
+        *self.pump_retirement.lock() = Some((entered, release));
+    }
     pub(crate) async fn test_prepare(
         &self,
         current: &VerifiedBinding,
@@ -232,6 +316,7 @@ impl DelegatedSession {
                 admission: Some(admission),
                 channel: Arc::new(channel),
                 adopted: false,
+                retired: None,
             },
             client,
             gate,
@@ -252,12 +337,33 @@ impl DelegatedSession {
 }
 
 // 只有本 Session 可产生，网络机制不能自行构造 admission 或替换当前时钟。
+#[derive(Clone)]
+pub(crate) struct DelegatedAttemptIdentity {
+    session: Arc<()>,
+    operation: Arc<activation::ActivationOperation>,
+    attempt: Arc<()>,
+}
+impl DelegatedAttemptIdentity {
+    pub(crate) fn matches(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.session, &other.session)
+            && Arc::ptr_eq(&self.operation, &other.operation)
+            && Arc::ptr_eq(&self.attempt, &other.attempt)
+    }
+}
 pub(crate) struct DelegatedSocketStart {
+    identity: DelegatedAttemptIdentity,
+    retired: Option<cc_desk_remote_host::native_host::RetiredInstalledChannel>,
     session: Weak<DelegatedSession>,
     admission: Option<DelegatedNetworkAdmission>,
     clock: Arc<NetworkClock>,
 }
 impl DelegatedSocketStart {
+    pub(crate) fn identity(&self) -> DelegatedAttemptIdentity {
+        self.identity.clone()
+    }
+    pub(crate) fn terminal_clock(&self) -> Arc<NetworkClock> {
+        self.clock.clone()
+    }
     pub(crate) fn keepalive(&self) -> Option<Arc<DelegatedSession>> {
         self.session.upgrade()
     }
@@ -306,7 +412,7 @@ impl DelegatedSocketStart {
     }
     pub(crate) fn close(&self) {
         if let Some(session) = self.session.upgrade() {
-            session.disconnect();
+            session.disconnect_generation(Some(&self.identity));
         }
         if let Some(admission) = self.admission.as_ref() {
             admission.close();
@@ -327,6 +433,7 @@ impl DelegatedSocketStart {
             admission: Some(admission),
             channel,
             adopted: false,
+            retired: self.retired.take(),
         })
     }
 }
@@ -380,12 +487,20 @@ impl DelegatedSession {
             .ok_or_else(|| crate::cli::profiles::error("REMOTE_HOST_LOCKED"))?;
         let admission = self.owner.admit_network(current, supervisor)?;
         admission.clock(&self.clock)?;
+        let identity = DelegatedAttemptIdentity {
+            session: self.brand.clone(),
+            operation: self.reservation.operation(),
+            attempt: admission.brand(),
+        };
         let start = DelegatedSocketStart {
+            identity,
+            retired: None,
             session: Arc::downgrade(self),
             admission: Some(admission),
             clock: self.clock.clone(),
         };
-        let custody = crate::remote_host_network::delegated::SocketCustody::reserve(&service);
+        let custody =
+            crate::remote_host_network::delegated::SocketCustody::reserve(&service, &start);
         // 原材料和网络线程启动前，Session 已持有完整 custody。
         *slot = Some(custody.clone());
         Ok((custody, start))

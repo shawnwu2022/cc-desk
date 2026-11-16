@@ -311,6 +311,13 @@ impl Owner {
     }
     fn finish_retirement(&self, proof: RetirementProof) -> Result<(), Denied> {
         let mut s = self.lock()?;
+        self.finish_retirement_locked(&mut s, proof)
+    }
+    fn finish_retirement_locked(
+        &self,
+        s: &mut State,
+        proof: RetirementProof,
+    ) -> Result<(), Denied> {
         if !Arc::ptr_eq(&self.identity, &proof.owner) {
             return Err(Denied::Stale);
         }

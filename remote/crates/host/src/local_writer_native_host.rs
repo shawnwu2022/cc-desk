@@ -663,4 +663,4 @@ mod peer_coordinator;
 
 #[path = "local_writer_channel_retirement.rs"]
 mod retirement;
-pub use retirement::{ChannelRetirement, ChannelRetirementToken};
+pub use retirement::{ChannelRetirement, ChannelRetirementToken, RetiredInstalledChannel};

@@ -7,7 +7,7 @@ pub(crate) struct NetworkAttempt {
     ticket: Attempt,
     current: VerifiedBinding,
     closed: AtomicBool,
-    resource: Box<dyn Fn() -> bool + Send + Sync>,
+    resource: Arc<dyn Fn() -> bool + Send + Sync>,
 }
 impl Delegation {
     pub(crate) fn begin_network(
@@ -24,7 +24,7 @@ impl Delegation {
             ticket,
             current: current.clone(),
             closed: AtomicBool::new(false),
-            resource: Box::new(resource),
+            resource: Arc::new(resource),
         });
         if attempt.now_ms().is_err() {
             attempt.close();
@@ -251,30 +251,63 @@ impl Delegation {
 
 // Session 持有唯一 Arc 域。本阶段只允许首次绑定，后续换代须完整 receipt。
 pub(crate) struct NetworkClock {
+    // 首次未绑定时退休也必须留痕；此位永不复位，续代不能调用 bind。
+    initial_retired: AtomicBool,
+    #[cfg(test)]
+    before_renew: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    #[cfg(test)]
+    after_renew: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    #[cfg(test)]
+    after_sample: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     selected: Mutex<Option<std::sync::Weak<NetworkAttempt>>>,
-    closed: AtomicBool,
+    terminated: AtomicBool,
 }
 impl NetworkClock {
     pub(crate) fn new() -> Self {
         Self {
             selected: Mutex::new(None),
-            closed: AtomicBool::new(false),
+            initial_retired: AtomicBool::new(false),
+            #[cfg(test)]
+            before_renew: Mutex::new(None),
+            #[cfg(test)]
+            after_renew: Mutex::new(None),
+            #[cfg(test)]
+            after_sample: Mutex::new(None),
+            terminated: AtomicBool::new(false),
         }
     }
     pub(crate) fn is_closed(&self) -> bool {
-        self.closed.load(Ordering::Acquire)
+        self.terminated.load(Ordering::Acquire)
     }
+    // 永久 Session 终止位只置 true，任何续代都不能复位。
     pub(crate) fn close(&self) {
-        self.closed.store(true, Ordering::Release);
-        if let Ok(slot) = self.selected.try_lock() {
-            if let Some(attempt) = slot.as_ref().and_then(std::sync::Weak::upgrade) {
-                attempt.close();
+        self.terminated.store(true, Ordering::Release);
+        self.retire_current();
+    }
+    // 普通断线仅封原 generation，保留 selected 身份及原 live，不代表可续代。
+    pub(crate) fn retire_current(&self) {
+        let attempt = match self.selected.lock() {
+            Ok(slot) => {
+                let attempt = slot.as_ref().and_then(std::sync::Weak::upgrade);
+                if let Some(attempt) = &attempt {
+                    attempt.closed.store(true, Ordering::Release);
+                } else {
+                    self.initial_retired.store(true, Ordering::Release);
+                }
+                attempt
             }
+            Err(_) => {
+                self.terminated.store(true, Ordering::Release);
+                None
+            }
+        };
+        if let Some(attempt) = attempt {
+            attempt.close();
         }
     }
     pub(crate) fn bind(&self, attempt: &Arc<NetworkAttempt>) -> Result<(), Denied> {
         let mut slot = self.selected.try_lock().map_err(|_| Denied::Busy)?;
-        if self.is_closed() || slot.is_some() {
+        if self.is_closed() || self.initial_retired.load(Ordering::Acquire) || slot.is_some() {
             return Err(Denied::Busy);
         }
         *slot = Some(Arc::downgrade(attempt));
@@ -294,16 +327,225 @@ impl GrantClock for NetworkClock {
             .selected
             .lock()
             .map_err(|_| {
-                self.closed.store(true, Ordering::Release);
+                self.terminated.store(true, Ordering::Release);
                 GrantError::Closed
             })?
             .as_ref()
             .and_then(std::sync::Weak::upgrade)
             .ok_or(GrantError::Closed)?;
-        let sample = attempt.now_ms()?;
-        if self.is_closed() {
+        let sample = attempt.now_ms().inspect_err(|error| {
+            if *error != GrantError::Closed || attempt.policy.closed.load(Ordering::Acquire) {
+                self.terminated.store(true, Ordering::Release);
+            }
+        })?;
+        // sample 的 Owner guard 已释放，再复核 selected；绝不反向持 Owner→selected。
+        #[cfg(test)]
+        if let Some(hook) = self.after_sample.lock().unwrap().take() {
+            hook();
+        }
+        let same = self
+            .selected
+            .lock()
+            .map_err(|_| {
+                self.terminated.store(true, Ordering::Release);
+                GrantError::Closed
+            })?
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
+            .is_some_and(|current| {
+                Arc::ptr_eq(&current, &attempt) && !attempt.closed.load(Ordering::Acquire)
+            });
+        if self.is_closed() || !same {
             return Err(GrantError::Closed);
         }
         Ok(sample)
+    }
+}
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod clock_tests {
+    use super::*;
+    #[test]
+    fn DelegatedClock_RetirementDoesNotResetOrTerminateDomain_001() {
+        let (policy, current) = Delegation::test_new([7; 32], false);
+        let attempt = policy.begin_network(&current, || true).unwrap();
+        let clock = NetworkClock::new();
+        clock.bind(&attempt).unwrap();
+        clock.retire_current();
+        assert!(!clock.is_closed());
+        assert!(clock.now_ms().is_err());
+        assert!(!clock.is_closed());
+        assert!(clock.bind(&attempt).is_err());
+        assert!(policy.owner.state.lock().unwrap().live.is_some());
+        clock.close();
+        assert!(clock.is_closed());
+        clock.retire_current();
+        assert!(clock.is_closed());
+    }
+    #[test]
+    fn DelegatedClock_LateSampleRejectsChangedSelection_002() {
+        let (policy, current) = Delegation::test_new([7; 32], false);
+        let armed = Arc::new(AtomicBool::new(false));
+        let armed_worker = armed.clone();
+        let (entered, seen) = std::sync::mpsc::sync_channel(0);
+        let (release, resume) = std::sync::mpsc::sync_channel(0);
+        let resume = Mutex::new(resume);
+        let attempt = policy
+            .begin_network(&current, move || {
+                if armed_worker.load(Ordering::Acquire) {
+                    entered.send(()).unwrap();
+                    resume.lock().unwrap().recv().unwrap();
+                }
+                true
+            })
+            .unwrap();
+        let clock = Arc::new(NetworkClock::new());
+        clock.bind(&attempt).unwrap();
+        armed.store(true, Ordering::Release);
+        let original = clock.clone();
+        let worker = std::thread::spawn(move || original.now_ms());
+        seen.recv().unwrap();
+        *clock.selected.lock().unwrap() = None;
+        release.send(()).unwrap();
+        assert!(worker.join().unwrap().is_err());
+        assert!(policy.owner.state.lock().unwrap().live.is_some());
+    }
+    #[test]
+    fn DelegatedClock_RetirementBeforeFirstBindNeverRevives_003() {
+        let (policy, current) = Delegation::test_new([7; 32], false);
+        let attempt = policy.begin_network(&current, || true).unwrap();
+        let clock = NetworkClock::new();
+        clock.retire_current();
+        assert!(!clock.is_closed());
+        assert!(clock.bind(&attempt).is_err());
+        assert!(clock.now_ms().is_err());
+    }
+    #[test]
+    fn DelegatedClock_RetireAfterSuccessfulSampleRejectsLateReturn_004() {
+        let (policy, current) = Delegation::test_new([7; 32], false);
+        let attempt = policy.begin_network(&current, || true).unwrap();
+        let clock = Arc::new(NetworkClock::new());
+        clock.bind(&attempt).unwrap();
+        let (entered, seen) = std::sync::mpsc::sync_channel(0);
+        let (release, resume) = std::sync::mpsc::sync_channel(0);
+        *clock.after_sample.lock().unwrap() = Some(Box::new(move || {
+            entered.send(()).unwrap();
+            resume.recv().unwrap();
+        }));
+        let sampling = clock.clone();
+        let worker = std::thread::spawn(move || sampling.now_ms());
+        seen.recv().unwrap();
+        clock.retire_current();
+        release.send(()).unwrap();
+        assert!(worker.join().unwrap().is_err());
+        assert!(!clock.is_closed());
+        assert!(policy.owner.state.lock().unwrap().live.is_some());
+    }
+}
+
+impl NetworkClock {
+    // 唯一调用方持 Session transition；这里只按 selected→Owner，绝不执行资源回调。
+    pub(crate) fn renew(
+        &self,
+        receipt: &crate::remote_host::delegated::retirement::CompleteRetirement,
+        current: &VerifiedBinding,
+        lifetime: &crate::run_supervisor::delegated::NativeRunLifetime,
+    ) -> Result<Arc<NetworkAttempt>, Denied> {
+        let old = receipt.original_attempt();
+        let policy = &old.policy;
+        let mut selected = self.selected.lock().map_err(|_| Denied::Unknown)?;
+        let mut state = policy.owner.state.lock().map_err(|_| Denied::Unknown)?;
+        #[cfg(test)]
+        if let Some(hook) = self.before_renew.lock().unwrap().take() {
+            hook();
+        }
+        let result = (|| {
+            if self.is_closed()
+                || policy.closed.load(Ordering::Acquire)
+                || !old.closed.load(Ordering::Acquire)
+                || !selected
+                    .as_ref()
+                    .and_then(std::sync::Weak::upgrade)
+                    .is_some_and(|a| Arc::ptr_eq(&a, old))
+                || !lifetime.matches_policy(policy)
+                || !lifetime.live()
+                || current.0.role != Role::Control
+                || old.ticket.epoch != state.epoch
+                || old.ticket.revision != state.revision
+            {
+                return Err(Denied::Locked);
+            }
+            let now = policy.sample()?;
+            Owner::check(&mut state, &current.0, now)?;
+            policy.owner.finish_retirement_locked(
+                &mut state,
+                RetirementProof {
+                    owner: old.ticket.owner.clone(),
+                    sequence: old.ticket.sequence,
+                },
+            )?;
+            let ticket = policy.owner.begin_locked(&mut state, &current.0, now)?;
+            let next = Arc::new(NetworkAttempt {
+                policy: policy.clone(),
+                ticket,
+                current: current.clone(),
+                closed: AtomicBool::new(false),
+                resource: old.resource.clone(),
+            });
+            if self.is_closed() || policy.closed.load(Ordering::Acquire) || !lifetime.live() {
+                next.closed.store(true, Ordering::Release);
+                return Err(Denied::Locked);
+            }
+            let final_now = policy.sample()?;
+            policy.owner.check_attempt_locked(
+                &mut state,
+                &next.ticket,
+                &current.0,
+                final_now,
+                false,
+            )?;
+            *selected = Some(Arc::downgrade(&next));
+            #[cfg(test)]
+            if let Some(hook) = self.after_renew.lock().unwrap().take() {
+                hook();
+            }
+            if self.is_closed() || policy.closed.load(Ordering::Acquire) || !lifetime.live() {
+                next.closed.store(true, Ordering::Release);
+                return Err(Denied::Locked);
+            }
+            Ok(next)
+        })();
+        // 消费之后任何失败，仍持 Owner 锁先关闭；不得留下 Enabled+空 live 窗口。
+        if result.is_err() {
+            Owner::close(&mut state, Gate::Unknown);
+            policy.closed.store(true, Ordering::Release);
+            self.terminated.store(true, Ordering::Release);
+        }
+        result
+    }
+}
+
+#[cfg(test)]
+impl NetworkClock {
+    pub(crate) fn test_hold_renew(&self, after: bool, hook: impl FnOnce() + Send + 'static) {
+        // 仅确定性测试刻意停在提交前后；生产临界区没有此回调或等待。
+        *(if after {
+            &self.after_renew
+        } else {
+            &self.before_renew
+        })
+        .lock()
+        .unwrap() = Some(Box::new(hook));
+    }
+}
+
+#[cfg(test)]
+impl Delegation {
+    pub(crate) fn test_exhaust_sequence(&self) {
+        self.owner.state.lock().unwrap().sequence = u64::MAX;
+    }
+    pub(crate) fn test_owner_gate_closed(&self) -> bool {
+        self.owner.state.lock().unwrap().gate != Gate::Enabled
     }
 }

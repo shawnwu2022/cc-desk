@@ -290,6 +290,11 @@ impl DelegatedRunOwner {
     }
 }
 impl DelegatedNetworkAdmission {
+    pub(crate) fn original_network_attempt(
+        &self,
+    ) -> Arc<crate::remote_unattended::capability::network::NetworkAttempt> {
+        self.attempt.clone()
+    }
     pub(crate) fn clock(
         &self,
         domain: &Arc<crate::remote_unattended::capability::network::NetworkClock>,
@@ -442,5 +447,99 @@ impl NativeDelegationConsent {
         let (consent, mut current, policy) = Self::test_new(admission, false);
         policy.test_network_identity(&mut current, device);
         (consent, current, policy)
+    }
+}
+
+// 仅从原 Captured 完整核验后取得；提交点借用已持有对象，不升级 Weak 或执行回调。
+pub(crate) struct NativeRunLifetime {
+    captured: Arc<Captured>,
+    supervisor: Arc<SupervisorCore>,
+    state: Arc<SupervisedRun>,
+}
+impl NativeRunLifetime {
+    pub(crate) fn matches_policy(&self, policy: &Arc<Delegation>) -> bool {
+        Arc::ptr_eq(policy, &self.captured.policy)
+    }
+    pub(crate) fn live(&self) -> bool {
+        !self.supervisor.shutting_down.load(Ordering::SeqCst)
+            && !self.state.stop_requested.load(Ordering::SeqCst)
+            && !self.state.reaped.load(Ordering::SeqCst)
+            && self.captured.clock_input.canonical_status()
+                == cc_desk_remote_host::native_host::NativeCanonicalStatus::Complete
+    }
+}
+impl DelegatedRunOwner {
+    pub(crate) fn network_lifetime(
+        &self,
+        supervisor: &NativeRunSupervisor,
+    ) -> Result<NativeRunLifetime, SafeError> {
+        if !supervisor.owns_live_pin(&self.0.pin) {
+            return Err(error("FORBIDDEN"));
+        }
+        self.0.validate()?;
+        let lifetime = NativeRunLifetime {
+            captured: self.0.clone(),
+            supervisor: self
+                .0
+                .pin
+                .origin
+                .upgrade()
+                .ok_or_else(|| error("RUN_NOT_READY"))?,
+            state: self
+                .0
+                .authority
+                .state
+                .upgrade()
+                .ok_or_else(|| error("RUN_NOT_READY"))?,
+        };
+        if !lifetime.live() {
+            return Err(error("RUN_NOT_READY"));
+        }
+        Ok(lifetime)
+    }
+    pub(crate) fn resume_network(
+        &self,
+        receipt: &crate::remote_host::delegated::retirement::CompleteRetirement,
+        current: &VerifiedBinding,
+        clock: &crate::remote_unattended::capability::network::NetworkClock,
+        lifetime: &NativeRunLifetime,
+    ) -> Result<DelegatedNetworkAdmission, SafeError> {
+        if !Arc::ptr_eq(&self.0, &lifetime.captured) {
+            return Err(error("FORBIDDEN"));
+        }
+        let attempt = clock
+            .renew(receipt, current, lifetime)
+            .map_err(|_| error("REMOTE_HOST_LOCKED"))?;
+        Ok(DelegatedNetworkAdmission {
+            brand: Arc::new(()),
+            captured: self.0.clone(),
+            attempt,
+            #[cfg(test)]
+            before_actor: std::sync::Mutex::new(None),
+        })
+    }
+}
+impl DelegatedNetworkAdmission {
+    pub(crate) fn rebind_into(
+        &self,
+        host: &mut cc_desk_remote_host::native_host::NativeHost,
+        prepared: &crate::remote_host::delegated::DelegatedPreparedChannel,
+        retired: cc_desk_remote_host::native_host::RetiredInstalledChannel,
+    ) -> Result<(), SafeError> {
+        let channel = prepared.channel_for(&self.brand)?;
+        self.validate_channel(&channel)?;
+        let captured = self.captured.clone();
+        let attempt = self.attempt.clone();
+        let authority = channel.authority();
+        host.begin_native_resource_rebind_retired(
+            retired,
+            channel,
+            Box::new(move || {
+                attempt.matches_channel(&authority)
+                    && captured.validate().is_ok()
+                    && attempt.matches_channel(&authority)
+            }),
+        )
+        .map_err(|_| error("REMOTE_HOST_AUTHORITY"))
     }
 }
