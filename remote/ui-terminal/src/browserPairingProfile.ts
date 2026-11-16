@@ -1,3 +1,4 @@
+import {validBrowserPeerInstall,type BrowserPeerInstall} from './browserPeerMode.ts';
 import {approvedBrowserInputs,type ApprovedBrowserInputs} from './browserEntry.ts';
 import type {BrowserExactGrantConfiguration} from './browserGrant.ts';
 import {counter,hex,parseJson} from './wire.ts';
@@ -10,7 +11,7 @@ export type PublicBrowserPairingConfiguration=Readonly<{
  trust:Readonly<{hostKeyEpoch:string;clientKeyEpoch:string;origin:string}>;
  grant:Readonly<{
   issuerSpki:string;principal:string;scope:Readonly<{session:string;run:string;generation:string}>;
-  role:'Controller'|'Observer';budgetMs:number;peerInstall:Readonly<{budgetMs:number}>;
+  role:'Controller'|'Observer';budgetMs:number;peerInstall:BrowserPeerInstall;
   profile:Readonly<{origin:string;rpId:string;credentialId:string;credentialSpki:string;backupEligible:boolean;allowBackedUp:boolean}>;
  }>;
  relay:Readonly<{mode?:'legacy'|'rendezvous-v1';endpoint:string;tunnel:string;keyId:string}>;
@@ -68,7 +69,7 @@ export function parseBrowserPairingConfiguration(bytes:Uint8Array):PublicBrowser
   decode(g.issuerSpki,91,91);hex(g.principal,32);exact(g.scope,['session','run','generation']);
   hex(g.scope.session,16);counter(g.scope.generation);
   if(typeof g.scope.run!=='string'||!g.scope.run||g.scope.run.length>128||!['Controller','Observer'].includes(g.role))throw Error('grant');
-  budget(g.budgetMs,30000);exact(g.peerInstall,['budgetMs']);budget(g.peerInstall.budgetMs,10000);
+  budget(g.budgetMs,30000);if(!validBrowserPeerInstall(g.peerInstall,g.role))throw Error('peer configuration');
   exact(g.profile,['origin','rpId','credentialId','credentialSpki','backupEligible','allowBackedUp']);
   if(g.profile.origin!==p.origin||g.profile.rpId!==p.rpId||g.profile.credentialId!==p.credentialId||typeof g.profile.backupEligible!=='boolean'||typeof g.profile.allowBackedUp!=='boolean')throw Error('credential');
   decode(g.profile.credentialSpki,91,91);
@@ -90,7 +91,7 @@ function assemble(expected:PublicBrowserPairingConfiguration,handles:BrowserProf
   localSpki:decode(expected.localSpki,91,91),hostSpki:decode(expected.hostSpki,91,91),
   trust:{hostKeyEpoch:expected.trust.hostKeyEpoch,clientKeyEpoch:expected.trust.clientKeyEpoch,origin:expected.trust.origin},
   grant:{issuerSpki:decode(g.issuerSpki,91,91),principal:g.principal,
-   scope:{session:g.scope.session,run:g.scope.run,generation:g.scope.generation},role:g.role,budgetMs:g.budgetMs,peerInstall:{budgetMs:g.peerInstall.budgetMs},
+   scope:{session:g.scope.session,run:g.scope.run,generation:g.scope.generation},role:g.role,budgetMs:g.budgetMs,peerInstall:{budgetMs:g.peerInstall.budgetMs,...(g.peerInstall.controlLease===undefined?{}:{controlLease:g.peerInstall.controlLease})},
    profile:{origin:g.profile.origin,rpId:g.profile.rpId,credentialId:decode(g.profile.credentialId,1,1024),credentialSpki:decode(g.profile.credentialSpki,91,91),backupEligible:g.profile.backupEligible,allowBackedUp:g.profile.allowBackedUp}},
   relay:{endpoint:r.endpoint,tunnel:decode(r.tunnel,16,16),identity:{keyId:decode(r.keyId,16,16),sign:handles.relaySign},...(Object.prototype.hasOwnProperty.call(r,'mode')?{mode:r.mode}:{})},
   artifacts:{wasm:expected.artifacts.wasm,glue:expected.artifacts.glue},present:handles.present,...(enrollment?{enrollment}:{}),

@@ -660,3 +660,30 @@ clippy-final 日志（App 使用 final2）均保留。无真实凭据、云服�
 
 后续只在下一审定阶段实现自动 owner 调度与独立 outer 心跳；固定 lease/fence、
 单 outstanding、同序号同截止、丢回复不重置状态、关闭后完整回收等边界不变。
+
+
+### Browser 手动模式第一片：配置与真实 WASM 认证
+
+- 已实现可选 manual-v1 的严格字符串模式、Controller + application 限制、
+  原 AppBind factory 接线和 PairingProfile 显式字段贯通；旧模式缺省不变。
+- 新源码 wasm32-unknown-unknown 构建、官方 wasm-bindgen 0.2.129 后处理
+  和 Native/WASM 严格 Clippy 均通过。当前生产 wrapper 与 TEST_ONLY
+  wrapper 分开保存在本机审计目录，未替换发布资源。
+- 实际去重父测试 98 项：Browser/配置 71，Native security 27。
+  Node 配置入口 20/20；Browser data 40/40、peer 33/33 的工具计数含子例，
+  不能再次累加。去重名单 browser-lease-mode-final-testnames.txt。
+- 匹配模式、双向不匹配、显式 Pairing→原 WASM owner、hidden/pagehide/freeze
+  和 peer-only 拒绝已实跑。原 bind 18、config 3、data 3、owner 3 全通过。
+- 保留 RED：旧配置拒绝新模式；serde enum 接受对象形式被严格字符串测试
+  抓住；首次 WASM 编译揭示 Native tokio Instant 与 Browser Instant 不匹配，
+  通过平台边界隔离修复而非伪造转换。
+- 保留首次 data 39/40：误用生产 wrapper 缺少旧 uncertain 注入测试要求的
+  TEST_ONLY_uncertain_start；改用原测试 wrapper 后同源码 data 40/40。
+  原断言未改，生产 wrapper 上新认证与生命周期用例也已经通过。
+- 日志前缀 browser-lease：wasm-data-fixture-final、wasm-peer-final、
+  node-config-final、security-final-*、native-clippy、wasm-clippy。
+  这不是全 App/Host suite 或真实手机验收，原 PTY 发布门槛仍保留。
+
+下一片才在 TerminalClient 原唯一 request/epoch/Busy owner 内实现手动
+LeaseState/LeaseRenew，不能另起 Rust counter，也不能清 input pending/
+NeedsSettlement。自动续租及 outer heartbeat 仍未实现。

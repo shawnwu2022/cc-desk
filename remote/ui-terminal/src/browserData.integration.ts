@@ -165,12 +165,12 @@ test('BrowserData_ClockFailureBeforeEvidenceCannotPublish_008',async()=>{
 });
 
 // 独立 TEST_ONLY 批准记录先由 Host 原 scope 和固定公共向量构造，候选绝不回填供应端。
-async function pairingSupply(server:Awaited<ReturnType<typeof host>>,mutate?:(candidate:any)=>void){
+async function pairingSupply(server:Awaited<ReturnType<typeof host>>,mutate?:(candidate:any)=>void,manual=false){
  const b64=(v:Uint8Array)=>Buffer.from(v).toString('base64url');
  const identity={origin:'https://desk.invalid',rpId:'desk.invalid',credentialId:b64(credentialId)};
  const trusted:PublicBrowserPairingConfiguration={version:1,profile:identity,localSpki:b64(tls.spki),hostSpki:b64(Buffer.from(server.hostSpki,'hex')),
   trust:{hostKeyEpoch:'9007199254740993',clientKeyEpoch:'18446744073709551615',origin:'wss://relay.invalid/'},
-  grant:{issuerSpki:b64(issuer.spki),principal:'04'.repeat(32),scope:{...server.scope},role:'Controller',budgetMs:1800,peerInstall:{budgetMs:1000},profile:{...identity,credentialSpki:b64(credential.spki),backupEligible:false,allowBackedUp:false}},
+  grant:{issuerSpki:b64(issuer.spki),principal:'04'.repeat(32),scope:{...server.scope},role:'Controller',budgetMs:1800,peerInstall:{budgetMs:1000,...(manual?{controlLease:'manual-v1' as const}:{})},profile:{...identity,credentialSpki:b64(credential.spki),backupEligible:false,allowBackedUp:false}},
   relay:{endpoint:'wss://relay.invalid/',tunnel:b64(new Uint8Array(16).fill(9)),keyId:b64(new Uint8Array(16).fill(7))},
   artifacts:{wasm:'https://desk.invalid/fixture_bg.wasm',glue:'https://desk.invalid/fixture_bg.js'}};
  const configuration=new TextEncoder().encode(JSON.stringify(trusted));
@@ -208,4 +208,23 @@ for(const mismatch of ['session','run','generation','hostSpki'])test('BrowserDat
   await assert.rejects(supply.read(new AbortController().signal),/browser pairing profile unavailable/);
   assert.deepEqual(supply.calls,{supplier:1,connect:0,present:0,relaySign:0});assert.equal(signatures,0);assert.equal(p.calls(),0);
  }finally{crypto.subtle.sign=originalSign;try{await f?.dispose();}finally{try{await h.dispose();}finally{p();}}}
+});
+
+// 真实 WASM/TLS/认证与原应用 owner；平台事件来自 Node 测试替身，不是手机验收。
+test('BrowserControlLease_AuthenticatedWasmApplicationMode_001',async()=>{
+ const p=platform(),h=await host('manual');let f:Awaited<ReturnType<typeof client>>|undefined;
+ try{f=await client(h,{configuration:{peerInstall:{budgetMs:1000,controlLease:'manual-v1'}}});const descriptor=await f.app.descriptor;assert.equal(descriptor.role,'Controller');await f.app.close();await f.retired;const effects=await h.wait('effects');assert.equal(effects.writeCount,0);}finally{await f?.dispose();await h.dispose();p();}
+});
+test('BrowserControlLease_AuthenticatedModeMismatchCloses_002',async(t)=>{
+ for(const serverManual of [false,true])await t.test(String(serverManual),async()=>{
+  const p=platform(),h=await host(serverManual?'manual':'normal');let f:Awaited<ReturnType<typeof client>>|undefined;
+  try{f=await client(h,{configuration:{peerInstall:{budgetMs:1000,...(serverManual?{}:{controlLease:'manual-v1'})}}});await assert.rejects(f.app.descriptor);assert.equal(f.presentations(),0);await f.retired;}finally{await f?.dispose();await h.dispose();p();}
+ });
+});
+
+test('BrowserControlLease_ExplicitPairingPreservedAndLifecycleCloses_003',async(t)=>{
+ for(const event of ['visibilitychange','pagehide','freeze'])await t.test(event,async()=>{
+  const p=platform(),h=await host('manual');let f:Awaited<ReturnType<typeof client>>|undefined;
+  try{const supply=await pairingSupply(h,undefined,true);f=await supply.connect();await f.app.descriptor;if(event==='visibilitychange')p.hidden();else p.lifecycle(event);await f.retired;const effects=await h.wait('effects');assert.equal(effects.writeCount,0);}finally{await f?.dispose();await h.dispose();p();}
+ });
 });

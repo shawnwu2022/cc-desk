@@ -180,6 +180,10 @@ fn start(
                     .map_err(|_| SecurityError::Identity)?,
             )
         };
+        // 手动续租只属于原应用数据 owner，不能由仅安装 peer 的入口启用。
+        if grant.as_ref().is_some_and(|g| g.control_lease.is_some()) && application.is_none() {
+            return Err(SecurityError::Identity);
+        }
         let public = key(0)?;
         let peer = key(1)?;
         let signing = Arc::new(BrowserWasmSigningKey::new(public.clone(), unsafe {
@@ -237,7 +241,9 @@ fn start(
             };
             if let Some(mut config) = grant {
                 let trust = trust.ok_or(-7)?;
-                let channel = if config.peer_budget.is_some() {
+                let channel = if config.control_lease.is_some() {
+                    crate::bind::browser_control_lease_client(pending, trust).await
+                } else if config.peer_budget.is_some() {
                     crate::bind::browser_peer_client(pending, trust).await
                 } else {
                     crate::bind::browser_grant_client(pending, trust).await

@@ -1,3 +1,4 @@
+import {validBrowserPeerInstall} from './browserPeerMode.ts';
 import {createBrowserTlsWasmImports} from './browserTlsWasm.ts';
 import type {BrowserTlsWorkerBridge} from './browserTlsSigner.ts';
 import {createBrowserGrantWorker,type BrowserGrantBridge} from './browserGrant.ts';
@@ -123,7 +124,7 @@ export async function startBrowserTlsWorker(options:Readonly<{wasm:BufferSource|
   if(trust){const epoch=(value:unknown)=>typeof value==='string'&&/^(0|[1-9][0-9]{0,19})$/.test(value)&&BigInt(value)<=18446744073709551615n;if(Object.keys(trust).length!==3||!epoch(trust.hostKeyEpoch)||!epoch(trust.clientKeyEpoch)||typeof trust.origin!=='string'||trust.origin.length>2048)throw Error('browser AppBind trust');trustBytes=new TextEncoder().encode(JSON.stringify(trust));}
   if(!Number.isInteger(localRole)||!Number.isInteger(peerRole)||localRole<0||localRole>1||peerRole<0||peerRole>1){rustDone=true;fail(Error('browser TLS role'));sealSigning();closeIo();retire();return Object.freeze({application,evidence,management,grantAccepted,peerInstalled,close,shutdown,waitClosed:()=>closed});}
   signer=createBrowserTlsWasmImports(bridge,localSpki,()=>memory);
-  if(grantBridge){if(!trust)throw Error('grant requires ClientTrust');grantAdapter=createBrowserGrantWorker(grantBridge,()=>memory,()=>managementDeadline,()=>stopping||ioClosed||externallyStopped(),()=>event(6),close);const config=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(grantAdapter.configuration));if(Object.prototype.hasOwnProperty.call(config,'peerInstall')){if(!config.peerInstall||!Number.isInteger(config.peerInstall.budgetMs)||config.peerInstall.budgetMs<1||config.peerInstall.budgetMs>10000||!grantBridge.cancel)throw Error('peer configuration');peerBudget=config.peerInstall.budgetMs;}}
+  if(grantBridge){if(!trust)throw Error('grant requires ClientTrust');grantAdapter=createBrowserGrantWorker(grantBridge,()=>memory,()=>managementDeadline,()=>stopping||ioClosed||externallyStopped(),()=>event(6),close);const config=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(grantAdapter.configuration));if(Object.prototype.hasOwnProperty.call(config,'peerInstall')){if(!validBrowserPeerInstall(config.peerInstall,config.role)||!grantBridge.cancel)throw Error('peer configuration');if(config.peerInstall.controlLease!==undefined&&!dataRequested)throw Error('manual lease requires application');peerBudget=config.peerInstall.budgetMs;}}
   // 原始加载Promise由本函数持续持有到settle；取消不使用race丢弃迟到实例。
   const compilation=wasm instanceof WebAssembly.Module?undefined:WebAssembly.compile(wasm);
   const module=wasm instanceof WebAssembly.Module?wasm:await compilation!;

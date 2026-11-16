@@ -602,3 +602,24 @@ receiver 或原输入结果。取消/超时若已 CloseOnDrop 封闭 channel，�
 固定初始 lease/fence，单 outstanding、单调 sequence；不能通过新 LeaseState
 重置不确定结果。同 sequence 的成功重试必须保持同 deadline。外层心跳仅保 IO，
 必须与控制 lease 和固定 grant/attempt/总截止分开，不构成任何授权刷新。
+
+
+### Browser 显式手动续租认证模式（仅模式接线）
+
+peerInstall.controlLease 的唯一可选值是字符串 manual-v1。缺失保持原 Peer
+协议；存在但 undefined/null、对象、未知值或额外字段均拒绝，Observer 不能
+选择此模式。它只是请求原 AppBind 精确能力协商，不是批准标记。Rust 配置、
+Browser grant、Entry、PairingProfile/RegistrationPlan 严格校验和显式复制均
+保留该字段；不会因已配对或 enrolled 自动开启，也不写入新的持久默认。
+exact scope 与 authenticated-host-run 仍互斥，不自动选择后者。
+
+WASM 只由原 application owner 选择 ControlLease 认证入口，peer-only 入口
+拒绝；原 transcript、grant、Installed、driver 和最终 NativeClient 权限检查
+继续生效。对方旧模式不匹配时握手关闭，没有静默降级或优雅协商的承诺。
+Native start/start_peer_pending/start_mode 仅编译在 Native 平台；Browser
+仍走原 browser_prepare_data，不能把 Tokio Instant 转作 Browser 时钟。
+
+本片未增加 TerminalClient 手动请求、统一 lease 状态、自动 timer 或心跳。
+pagehide/freeze/hidden 仍关闭原 owner，并等待原任务退休；没有解除前台
+生命周期限制。实际验证是 Node Worker 执行新编译 WASM、真实 TLS 与 Host，
+平台事件和 WebAuthn 使用公开合成 fixture，不是 Chromium 或手机验收。

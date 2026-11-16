@@ -29,6 +29,7 @@ pub(super) struct Configuration {
     pub signer: Signer,
     pub budget: Duration,
     pub peer_budget: Option<Duration>,
+    pub control_lease: Option<crate::browser_grant_config::ControlLeaseMode>,
 }
 impl Configuration {
     pub fn parse(bytes: &[u8]) -> Result<Self, GrantError> {
@@ -41,6 +42,7 @@ impl Configuration {
             },
             budget: parsed.budget,
             peer_budget: parsed.peer_budget,
+            control_lease: parsed.control_lease,
         })
     }
 }

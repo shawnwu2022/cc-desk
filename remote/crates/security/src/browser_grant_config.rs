@@ -36,6 +36,20 @@ fn present<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PeerInstall {
     budget_ms: u64,
+    #[serde(default, deserialize_with = "present")]
+    control_lease: Option<ControlLeaseMode>,
+}
+#[derive(Clone, Copy)]
+pub(super) enum ControlLeaseMode {
+    Manual,
+}
+impl<'de> Deserialize<'de> for ControlLeaseMode {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        match String::deserialize(d)?.as_str() {
+            "manual-v1" => Ok(Self::Manual),
+            _ => Err(serde::de::Error::custom("unsupported control lease mode")),
+        }
+    }
 }
 fn peer_present<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<PeerInstall>, D::Error> {
     PeerInstall::deserialize(d).map(Some)
@@ -60,6 +74,7 @@ pub(super) struct Configuration {
     pub issuer: P256Spki,
     pub budget: Duration,
     pub peer_budget: Option<Duration>,
+    pub control_lease: Option<ControlLeaseMode>,
 }
 impl Configuration {
     pub fn parse(bytes: &[u8]) -> Result<Self, GrantError> {
@@ -67,6 +82,10 @@ impl Configuration {
             return Err(GrantError::Bounds);
         }
         let w: Wire = serde_json::from_slice(bytes).map_err(|_| GrantError::Encoding)?;
+        let control_lease = w.peer_install.as_ref().and_then(|p| p.control_lease);
+        if control_lease.is_some() && w.role != cc_desk_remote_record::grant::DataRole::Controller {
+            return Err(GrantError::Policy);
+        }
         let peer_budget = match w.peer_install {
             Some(p) if p.budget_ms > 0 && p.budget_ms <= 10000 => {
                 Some(Duration::from_millis(p.budget_ms))
@@ -128,6 +147,7 @@ impl Configuration {
             issuer,
             budget: Duration::from_millis(w.budget_ms),
             peer_budget,
+            control_lease,
         })
     }
 }
@@ -209,5 +229,29 @@ mod tests {
             );
         }
         assert!(matches!(parse(&exact()).unwrap().trust, Trust::Exact(_)));
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn BrowserControlLease_ExplicitStrictControllerMode_010() {
+        let old = exact();
+        assert!(parse(&old).is_ok());
+        let mut enabled = old.clone();
+        enabled["peerInstall"]["controlLease"] = "manual-v1".into();
+        assert!(parse(&enabled).is_ok());
+        for value in [
+            serde_json::Value::Null,
+            serde_json::json!(true),
+            serde_json::json!("auto-v1"),
+            serde_json::json!({"manual-v1":null}),
+        ] {
+            let mut invalid = enabled.clone();
+            invalid["peerInstall"]["controlLease"] = value;
+            assert!(parse(&invalid).is_err());
+        }
+        enabled["role"] = "Observer".into();
+        assert!(parse(&enabled).is_err());
+        let mut extra = old;
+        extra["peerInstall"]["unattended"] = true.into();
+        assert!(parse(&extra).is_err());
     }
 }

@@ -10,3 +10,11 @@ test('BrowserEntry_ConfiguredSourceRefusesUntrustedWindow_003',async()=>{const s
 test('BrowserEntry_ExplicitRendezvousModeIsFrozenWithoutLegacyDowngrade_004',async()=>{const value=await input();const inputMode={...value,relay:{...value.relay,mode:'rendezvous-v1' as const}};const approved=approvedBrowserInputs(inputMode);(inputMode.relay as {mode:string}).mode='legacy';assert.equal(approved.relay.mode,'rendezvous-v1');assert.throws(()=>approvedBrowserInputs({...value,relay:{...value.relay,mode:'unknown' as any}}));assert.equal(approvedBrowserInputs(value).relay.mode,undefined);});
 
 test('BrowserEntry_InheritedOrAccessorModeCannotBecomeLegacy_005',async()=>{const value=await input();const inherited={...value,relay:Object.assign(Object.create({mode:'rendezvous-v1'}),value.relay)};assert.throws(()=>approvedBrowserInputs(inherited));const accessor={...value,relay:{...value.relay}};Object.defineProperty(accessor.relay,'mode',{enumerable:true,get:()=> 'rendezvous-v1'});assert.throws(()=>approvedBrowserInputs(accessor));});
+
+test('BrowserControlLease_EntryPreservesOnlyExplicitManualMode_005',async()=>{
+ const old=await input();assert.equal(approvedBrowserInputs(old).grant.peerInstall!.controlLease,undefined);
+ const manual={...old,grant:{...old.grant,peerInstall:{budgetMs:1000,controlLease:'manual-v1' as const}}};
+ assert.equal(approvedBrowserInputs(manual).grant.peerInstall!.controlLease,'manual-v1');
+ for(const value of [undefined,null,true,'auto-v1'])assert.throws(()=>approvedBrowserInputs({...manual,grant:{...manual.grant,peerInstall:{budgetMs:1000,controlLease:value}}} as any));
+ assert.throws(()=>approvedBrowserInputs({...manual,grant:{...manual.grant,role:'Observer'}}));
+});

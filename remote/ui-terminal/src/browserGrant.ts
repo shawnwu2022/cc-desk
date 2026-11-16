@@ -1,10 +1,11 @@
+import {validBrowserPeerInstall,type BrowserPeerInstall} from './browserPeerMode.ts';
 import {browserProfileBoundary,produceBrowserApproval,type BrowserProfile} from './browserApproval.ts';
 const now=()=>performance.timeOrigin+performance.now();
 const exact=(v:unknown,keys:string[]):v is Record<string,unknown>=>!!v&&typeof v==='object'&&Object.keys(v).length===keys.length&&keys.every(k=>Object.prototype.hasOwnProperty.call(v,k));
 const bytes=(v:unknown,min:number,max:number):v is Uint8Array=>v instanceof Uint8Array&&v.length>=min&&v.length<=max;
 function encode(v:Uint8Array){return btoa(Array.from(v,b=>String.fromCharCode(b)).join('')).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');}
 function decode(v:unknown,max:number){if(typeof v!=='string'||v.length>Math.ceil(max/3)*4||!/^[A-Za-z0-9_-]*$/.test(v))throw Error('grant bytes');const result=Uint8Array.from(atob(v.replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0));if(result.length>max||encode(result)!==v)throw Error('grant bytes');return result;}
-type BrowserGrantIdentity=Readonly<{issuerSpki:Uint8Array;principal:string;role:'Observer'|'Controller';budgetMs:number;peerInstall?:Readonly<{budgetMs:number}>;profile:Readonly<{origin:string;rpId:string;credentialId:Uint8Array;credentialSpki:Uint8Array;backupEligible:boolean;allowBackedUp:boolean}>}>;
+type BrowserGrantIdentity=Readonly<{issuerSpki:Uint8Array;principal:string;role:'Observer'|'Controller';budgetMs:number;peerInstall?:BrowserPeerInstall;profile:Readonly<{origin:string;rpId:string;credentialId:Uint8Array;credentialSpki:Uint8Array;backupEligible:boolean;allowBackedUp:boolean}>}>;
 export type BrowserExactGrantConfiguration=BrowserGrantIdentity&Readonly<{scope:Readonly<{session:string;run:string;generation:string}>;scopePolicy?:never}>;
 export type BrowserResumeGrantConfiguration=BrowserGrantIdentity&Readonly<{scopePolicy:'authenticated-host-run';scope?:never}>;
 export type BrowserGrantConfiguration=BrowserExactGrantConfiguration|BrowserResumeGrantConfiguration;
@@ -26,7 +27,7 @@ export function createBrowserGrantBroker(profile:BrowserProfile,options:Readonly
  if(!config||!bytes(config.issuerSpki,91,91)||!bytes(config.profile?.credentialSpki,91,91)||!bytes(config.profile.credentialId,1,1024)||config.profile.origin!==retained.origin||config.profile.rpId!==retained.rpId||encode(config.profile.credentialId)!==encode(retained.credentialId)||!Number.isInteger(config.budgetMs)||config.budgetMs<1||config.budgetMs>30000)throw Error('grant configuration');
  browserGrantScopeField(config);
  const peer=config.peerInstall!==undefined,documentSource=peer?globalThis.document:undefined;
- if(peer&&(!exact(config.peerInstall,['budgetMs'])||!Number.isInteger(config.peerInstall.budgetMs)||config.peerInstall.budgetMs<1||config.peerInstall.budgetMs>10000||typeof Document==='undefined'||!(documentSource instanceof Document)||documentSource.visibilityState!=='visible'||typeof globalThis.addEventListener!=='function'||typeof globalThis.removeEventListener!=='function'||!globalThis.crossOriginIsolated||typeof SharedArrayBuffer==='undefined'))throw Error('peer lifecycle source unavailable');
+ if(peer&&(!validBrowserPeerInstall(config.peerInstall,config.role)||typeof Document==='undefined'||!(documentSource instanceof Document)||documentSource.visibilityState!=='visible'||typeof globalThis.addEventListener!=='function'||typeof globalThis.removeEventListener!=='function'||!globalThis.crossOriginIsolated||typeof SharedArrayBuffer==='undefined'))throw Error('peer lifecycle source unavailable');
  const cancel=peer?new SharedArrayBuffer(4):undefined,listen=peer?globalThis.addEventListener.bind(globalThis):undefined,unlisten=peer?globalThis.removeEventListener.bind(globalThis):undefined;
  const origin=retained.origin,budgetMs=config.budgetMs,configuration=new TextEncoder().encode(JSON.stringify({...config,issuerSpki:encode(config.issuerSpki),profile:{...config.profile,credentialId:encode(config.profile.credentialId),credentialSpki:encode(config.profile.credentialSpki)}}));if(configuration.length>8192)throw Error('grant configuration bounds');
  const channel=new MessageChannel(),port=channel.port1,generation=encode(crypto.getRandomValues(new Uint8Array(24))),controller=new AbortController(),signal=options.signal;

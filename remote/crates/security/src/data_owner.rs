@@ -454,18 +454,6 @@ pub(super) fn start<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     task.join = Some(tokio::spawn(driver));
     Ok(channel)
 }
-#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
-pub(super) fn start<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
-    _: tokio_rustls::TlsStream<S>,
-    _: CancelToken,
-    _: crate::data::ChannelGrant,
-    _: Role,
-    _: [u8; 32],
-    _: Arc<AtomicBool>,
-    _: PeerStart,
-) -> Result<RunningChannel, DataError> {
-    Err(DataError::Context)
-}
 pub(crate) fn prepare<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     io: tokio_rustls::TlsStream<S>,
     mut cancel: CancelToken,

@@ -264,6 +264,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> ManagedChannel<S> {
             .shutdown()
             .await
     }
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
     pub fn start(&mut self) -> Result<crate::RunningChannel, DataError> {
         if self.peer_install {
             return Err(DataError::Context);
@@ -271,6 +272,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> ManagedChannel<S> {
         self.start_mode(None)
     }
     /// Creates the original owner, with Data still denied. D is fixed before spawn.
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
     pub fn start_peer_pending(
         &mut self,
         caller_end: tokio::time::Instant,
@@ -280,6 +282,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> ManagedChannel<S> {
         }
         self.start_mode(Some(caller_end))
     }
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
     fn start_mode(
         &mut self,
         peer_end: Option<tokio::time::Instant>,

@@ -83,6 +83,7 @@ async fn BrowserData_OriginalHostFixture_001() {
         [
             "selftest",
             "normal",
+            "manual",
             "reconnect",
             "unknown",
             "expired",
@@ -143,22 +144,24 @@ async fn BrowserData_OriginalHostFixture_001() {
         )
         .await
         .unwrap();
-        let channel = bind_host_peer_channel(
-            pending,
-            HostSnapshot {
-                host_key_epoch: 9007199254740993,
-                client_key_epoch: u64::MAX,
-                activation: [0x44; 32],
-                incarnation: 11,
-                policy_epoch: 13,
-                issuer_epoch: 17,
-                origin: CanonicalOrigin::trusted(
-                    &std::env::var("CC_DESK_TEST_ONLY_DATA_RELAY_ORIGIN")
-                        .unwrap_or_else(|_| "wss://relay.invalid/".into()),
-                ).unwrap(),
-            },
-        )
-        .await
+        let snapshot = HostSnapshot {
+            host_key_epoch: 9007199254740993,
+            client_key_epoch: u64::MAX,
+            activation: [0x44; 32],
+            incarnation: 11,
+            policy_epoch: 13,
+            issuer_epoch: 17,
+            origin: CanonicalOrigin::trusted(
+                &std::env::var("CC_DESK_TEST_ONLY_DATA_RELAY_ORIGIN")
+                    .unwrap_or_else(|_| "wss://relay.invalid/".into()),
+            )
+            .unwrap(),
+        };
+        let channel = if mode == "manual" {
+            cc_desk_remote_security::bind_host_control_lease_channel(pending, snapshot).await
+        } else {
+            bind_host_peer_channel(pending, snapshot).await
+        }
         .unwrap();
         let mut gate = GrantGate::for_binding(
             channel.context(),
