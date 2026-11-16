@@ -2401,3 +2401,6 @@ mod pairing_scope;
 #[cfg(windows)]
 #[path = "native_cli_registration_approval.rs"]
 mod registration_approval;
+
+#[path = "native_cli_delegated.rs"]
+mod delegated;

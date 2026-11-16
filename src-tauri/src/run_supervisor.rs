@@ -3266,3 +3266,7 @@ mod raw_output_read_tests {
         );
     }
 }
+
+#[cfg(feature = "remote-host")]
+#[path = "run_supervisor/delegated.rs"]
+pub(crate) mod delegated;

@@ -78,7 +78,7 @@ enum Phase {
     Unknown,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Denied {
+pub(crate) enum Denied {
     Locked,
     Bounds,
     Stale,
@@ -208,12 +208,20 @@ impl Owner {
     }
     fn begin(&self, binding: &Binding, now: Sample) -> Result<Attempt, Denied> {
         let mut s = self.lock()?;
-        Self::check(&mut s, binding, now)?;
+        self.begin_locked(&mut s, binding, now)
+    }
+    fn begin_locked(
+        &self,
+        s: &mut State,
+        binding: &Binding,
+        now: Sample,
+    ) -> Result<Attempt, Denied> {
+        Self::check(s, binding, now)?;
         if s.live.is_some() {
             return Err(Denied::Busy);
         }
         let Some(sequence) = s.sequence.checked_add(1) else {
-            Self::close(&mut s, Gate::Revoked);
+            Self::close(s, Gate::Revoked);
             return Err(Denied::Bounds);
         };
         let remaining = s.cutoff_ms - now.wall_ms;
@@ -251,10 +259,18 @@ impl Owner {
         publish: bool,
     ) -> Result<(), Denied> {
         let mut s = self.lock()?;
-        Self::check(&mut s, binding, now)?;
-        if !self.same_attempt(&s, ticket)
-            || ticket.epoch != s.epoch
-            || ticket.revision != s.revision
+        self.check_attempt_locked(&mut s, ticket, binding, now, publish)
+    }
+    fn check_attempt_locked(
+        &self,
+        s: &mut State,
+        ticket: &Attempt,
+        binding: &Binding,
+        now: Sample,
+        publish: bool,
+    ) -> Result<(), Denied> {
+        Self::check(s, binding, now)?;
+        if !self.same_attempt(s, ticket) || ticket.epoch != s.epoch || ticket.revision != s.revision
         {
             return Err(Denied::Stale);
         }
@@ -318,3 +334,7 @@ impl Owner {
 #[cfg(test)]
 #[path = "remote_unattended_tests.rs"]
 mod tests;
+
+#[cfg(feature = "remote-host")]
+#[path = "remote_unattended/capability.rs"]
+pub(crate) mod capability;

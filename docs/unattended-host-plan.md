@@ -225,3 +225,40 @@ with earlier attempts separately preserved. Existing offline cargo home and buil
 cache were reused; these are fresh executions, not old test artifact claims.
 No production activation, whole-App suite, real DPAPI execution or power-cut
 acceptance is implied. Stage 3a delegated native admission remains next.
+
+Stage 3a captured-native-run implementation is separate from one-shot admission.
+The new capability consumes genuine native admission, exact original resource
+identity and test-only sealed consent. It reuses Stage 1 state instead of adding
+a second permission state machine. The original producer input/resize path is
+used, with a lock spanning the synchronous effect interval and a nonblocking
+atomic close request. No production consent, JS command or network route exists.
+
+Actual isolated Node/PTY regression first passed 4 of 5 cases. Stop regression
+exposed a real window: supervisor shutdown was set synchronously but per-run stop
+was set by a later worker. The delegated check now rejects the original
+supervisor's shutting_down flag immediately; the test was not weakened to wait.
+Review additionally closed clock-error recovery, an escaping generic fence,
+and revocation/expiry during original-resource validation. Error/partial-result
+classification is tested separately and is not claimed as physical PTY
+partial-write fault injection.
+
+The expanded six actual Native tests cover captured effects after document
+retirement with old caller input rejected, exact six-byte child receipt and
+resize, stale capture, wrong supervisor and wrong resource, View/device mismatch,
+expiry, rollback and clock-error recovery, actor-boundary revoke/expiry races,
+and stop/reap rejection. Rejected control operations must leave the child's
+actual dimensions unchanged. Existing Stage 1/store tests are rerun separately.
+
+Final Stage 3a verification on WSK-MSI (2026-11-16), same final source:
+- `cargo test --offline --locked --manifest-path src-tauri/Cargo.toml --lib --features remote-host DelegatedNative_ -- --test-threads=1`: 6 passed, 0 failed, 2,296 filtered.
+- `cargo test --offline --locked --manifest-path src-tauri/Cargo.toml --lib --features remote-host remote_unattended -- --test-threads=1`: 43 passed, 0 failed, 2,259 filtered (previous 42 plus uncertainty classification).
+- `cargo clippy --offline --locked --manifest-path src-tauri/Cargo.toml --lib --features remote-host -- -D warnings`: passed.
+- Focused rustfmt and git diff whitespace checks passed.
+
+Logs: .audit/unattended-stage3a-fourth.log,
+.audit/unattended-stage3a-baseline-final.log and
+.audit/unattended-stage3a-clippy-final.log. The first failed stop-window
+regression remains in unattended-stage3a-first.log. Independent review requested
+the clock/fence/validation ordering fixes before this final verification.
+This is 49 focused tests, not the complete App suite or phone/network acceptance.
+No task-join, cross-restart consent or real user consent is inferred.

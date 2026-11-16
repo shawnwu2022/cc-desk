@@ -251,3 +251,45 @@ an entire old valid blob+journal by a local storage principal, or propagate
 revocation to a live owner in another process. No real DPAPI runtime operation,
 real credential, cloud endpoint, UI, startup registration or networking is
 activated by these tests. Native delegated admission remains a later gate.
+
+## Stage 3a captured native run (inactive)
+
+`run_supervisor/delegated.rs` separates delegated custody from the existing
+document-owned `NativeRunAdmission`. Capture consumes a genuine admission,
+checks its original document/resource before and after matching a sealed native
+consent, and retains the exact supervisor/state/resource/scope. It does not retain
+an old caller token as delegated authority. The existing one-shot path still
+rejects a retired document.
+
+The private capability adapter reuses Stage 1 Owner/Attempt: one live ticket,
+fixed absolute/monotonic deadlines, exact binding/revision, rollback and stale
+ticket rejection. There is no production consent or VerifiedBinding constructor,
+no IPC command, no conversion from LockedSnapshot and no automatic reenrollment.
+Synthetic bindings and clocks exist only in tests.
+
+The only new effects are typed calls to the original NativeLocalInput frame and
+resize operations. The policy lock covers synchronous enqueue, original actor/
+PTY effect and result receipt. The operation fence cannot escape this interval:
+the generic helper and fence type are private, consumed inside typed operations.
+The actor checks the fence, original live supervisor/resource/scope with
+nonblocking lock acquisition, then the fence again. View bindings cannot use
+either control operation. Supervisor shutdown is checked as soon as its shared
+shutting_down flag is set, not only after the asynchronous per-run stop worker.
+
+NativeLocalInput uses an unbounded receive for its original result. No timeout
+was added to discard or retry an uncertain frame. Revoke first sets an independent
+atomic close request without waiting for the policy lock; new attempts and the
+actor fence reject it. Nonblocking observation returns Retiring while an effect
+holds the lock. EffectsClosed describes only closure of this effect interval,
+never socket retirement, producer join or complete task reclamation. Partial
+frames and non-Policy actor errors retain their original result and latch Unknown.
+A known Policy rejection with no effect can close normally. Drop requests close
+without blocking; it never manufactures retirement proof.
+
+Already-started frames cannot be preempted. If the actor or PTY stalls, retirement
+can remain pending indefinitely and cannot be reported as complete. Clock failure
+and rollback fail closed; sampled expiry is enforced at the effect boundary.
+This stage has no expiry watcher, production trust-change subscription, fresh
+material supplier, channel adoption/rebind or reconnect loop. Those require a
+separate network/retirement integration stage. The captured single-run owner also
+does not reconstruct authority after application restart.
