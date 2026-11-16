@@ -39,25 +39,22 @@ function render(sessions = [row(1), row(2), row(3)]) {
 const element = (s: string) => document.querySelector<HTMLElement>(s)!
 const calls = (command: string) => io.invoke.mock.calls.filter(([name]) => name === command)
 async function click(s: string) { element(s).click(); await flushPromises() }
-async function check(s: string) {
-  const box = element(s) as HTMLInputElement
-  box.checked = true; box.dispatchEvent(new Event('change', { bubbles: true })); await flushPromises()
-}
 async function review() {
   render(); await click('[data-batch-start]'); await click('[data-batch-select-all]'); await click('[data-batch-review]')
 }
 async function confirm() {
-  await click('[data-batch-next]')
-  await check('[data-batch-ack-permanent]'); await check('[data-batch-ack-subtree]')
+  expect(document.querySelector('[data-batch-next]')).toBeNull()
+
 }
 describe('native archived session batch deletion', () => {
   it('BatchDelete_OneConfirmationDeletesSelectedRootsOnceInOrder_001', async () => {
     await review()
     expect(calls('cli_preview_session_delete')).toHaveLength(3)
-    expect(calls('cli_confirm_session_delete')).toHaveLength(0)
-    expect(element('[data-batch-dialog]').textContent).toContain('3')
+    expect(calls('cli_confirm_session_delete')).toHaveLength(3)
+    expect(document.querySelector('[data-batch-dialog]')).toBeNull()
+    await click('[data-batch-existing]')
     await confirm()
-    element('[data-batch-final]').click(); element('[data-batch-final]')?.click(); await flushPromises()
+      await flushPromises()
     expect(calls('cli_confirm_session_delete')).toHaveLength(3)
     expect(calls('cli_confirm_session_delete').map(([, r]) => r.previewId)).toEqual([uuid(101), uuid(102), uuid(103)])
     expect(element('[data-batch-result]').textContent).toContain('3 acknowledged')
@@ -77,8 +74,11 @@ describe('native archived session batch deletion', () => {
     expect(calls('cli_confirm_session_delete')).toHaveLength(0)
   })
   it('BatchDelete_SourceChangeInvalidatesWholeUnsentConfirmation_003', async () => {
+    const previous = io.invoke.getMockImplementation()!; let finish!: (v: unknown) => void; let pending: any
+    io.invoke.mockImplementation((command, request) => command === 'cli_preview_session_delete' ? new Promise(done => { finish = done; pending = request }) : previous(command, request))
     await review(); await confirm()
     useNativeHistoryStore().get(context)!.source!.scopeId = 'replaced'
+    finish(await previous('cli_preview_session_delete', pending))
     await flushPromises()
     expect(document.querySelector('[data-batch-final]')).toBeNull()
     expect(calls('cli_confirm_session_delete')).toHaveLength(0)
@@ -87,7 +87,7 @@ describe('native archived session batch deletion', () => {
     const previous = io.invoke.getMockImplementation()!
     io.invoke.mockImplementation((command, request) => command === 'cli_confirm_session_delete'
       ? Promise.reject(new Error('private transport payload')) : previous(command, request))
-    await review(); await confirm(); await click('[data-batch-final]')
+    await review(); await confirm();
     expect(calls('cli_confirm_session_delete')).toHaveLength(1)
     expect(element('[data-batch-result]').textContent).toContain('2 not sent')
     expect(element('[data-batch-result]').textContent).not.toContain('private transport')
@@ -101,7 +101,7 @@ describe('native archived session batch deletion', () => {
     const previous = io.invoke.getMockImplementation()!
     io.invoke.mockImplementation((command, request) => command === 'cli_confirm_session_delete'
       ? new Promise(done => { finish = done; pending = request }) : previous(command, request))
-    await review(); await confirm(); element('[data-batch-final]').click(); await flushPromises()
+    await review(); await confirm();  await flushPromises()
     await click('[data-batch-close]')
     finish(await previous('cli_confirm_session_delete', pending)); await flushPromises()
     expect(calls('cli_confirm_session_delete')).toHaveLength(1)
@@ -120,7 +120,7 @@ describe('native archived session batch deletion', () => {
     await view!.setProps({ sessions: [row(1), row(2), row(3)] })
     await click('[data-batch-review]')
     expect(calls('cli_preview_session_delete')).toHaveLength(2)
-    await click('[data-batch-close]'); await click('[data-batch-cancel-selection]'); await click('[data-batch-start]')
+    await click('[data-batch-cancel-selection]'); await click('[data-batch-start]')
     expect((element('[data-batch-review]') as HTMLButtonElement).disabled).toBe(true)
   })
   it('BatchDelete_NoPartialDispatchWhenAnyPreviewBlocked_008', async () => {
@@ -149,7 +149,7 @@ describe('native archived session batch deletion', () => {
     const previous = io.invoke.getMockImplementation()!
     io.invoke.mockImplementation((command, request) => command === 'cli_confirm_session_delete' && request.previewId === uuid(101)
       ? new Promise(done => { finish = done; pending = request }) : previous(command, request))
-    await review(); await confirm(); element('[data-batch-final]').click(); await flushPromises()
+    await review(); await confirm();  await flushPromises()
     expect(calls('cli_confirm_session_delete')).toHaveLength(1)
     finish(await previous('cli_confirm_session_delete', pending)); await flushPromises()
     expect(calls('cli_confirm_session_delete')).toHaveLength(3)
@@ -159,7 +159,7 @@ describe('native archived session batch deletion', () => {
     io.invoke.mockImplementation(async (command, request) => command === 'cli_confirm_session_delete'
       ? { operationId: request.operationId, cli: 'codex', state, rootPresent: true, descendants: 'unverified', reason: state === 'blocked' ? 'DELETE_PREVIEW_EXPIRED' : 'DELETE_ROOT_PRESENT' }
       : previous(command, request))
-    await review(); await confirm(); await click('[data-batch-final]')
+    await review(); await confirm();
     expect(calls('cli_confirm_session_delete')).toHaveLength(1)
     expect(element('[data-batch-result]').textContent).toContain('2 not sent')
     expect(element('[data-batch-dialog]').textContent).toContain(state === 'blocked' ? 'DELETE_PREVIEW_EXPIRED' : 'DELETE_ROOT_PRESENT')
@@ -172,21 +172,21 @@ describe('native archived session batch deletion', () => {
     const other = { ...row(2), projectKey: 'other-project', projectPath: otherContext.projectPath, nativeOrigin: otherContext, nativeRootKey: 'other-root' }
     const previous = io.invoke.getMockImplementation()!
     io.invoke.mockImplementation((command, request) => command === 'native_get_scope' && request.profileId === 'other-profile' ? Promise.resolve(otherSource) : previous(command, request))
-    render([row(1), other]); await click('[data-batch-start]'); await click('[data-batch-select-all]'); await click('[data-batch-review]'); await confirm(); await click('[data-batch-final]')
+    render([row(1), other]); await click('[data-batch-start]'); await click('[data-batch-select-all]'); await click('[data-batch-review]'); await confirm();
     expect(calls('cli_confirm_session_delete')).toHaveLength(2)
     expect(calls('native_get_scope').map(([, request]) => request.profileId)).toEqual(['profile', 'other-profile'])
     expect(refresh).toHaveBeenCalledTimes(2)
     expect(refresh).toHaveBeenCalledWith(otherContext.projectPath, { cli: 'codex' })
   })
-  it.each(['acknowledged', 'unknown'] as const)('BatchDelete_BothAcknowledgementsRequiredAndUnmountStopsQueue_013 (%s)', async state => {
+  it.each(['acknowledged', 'unknown'] as const)('BatchDelete_DirectDispatchAndUnmountStopsQueue_013 (%s)', async state => {
     let finish!: (v: unknown) => void, pending: any
     const previous = io.invoke.getMockImplementation()!
     io.invoke.mockImplementation((command, request) => command === 'cli_confirm_session_delete'
       ? new Promise(done => { finish = done; pending = request }) : previous(command, request))
-    await review(); await click('[data-batch-next]')
-    await check('[data-batch-ack-permanent]')
-    expect((element('[data-batch-final]') as HTMLButtonElement).disabled).toBe(true)
-    await check('[data-batch-ack-subtree]'); element('[data-batch-final]').click(); await flushPromises()
+    await review(); expect(document.querySelector('[data-batch-next]')).toBeNull()
+
+    expect(document.querySelector('[data-delete-final], [data-batch-final]')).toBeNull()
+     await flushPromises()
     view!.unmount(); view = undefined
     finish(state === 'unknown' ? { operationId: pending.operationId, cli: 'codex', state: 'unknown', rootPresent: null, descendants: 'unverified', reason: 'DELETE_OUTCOME_UNKNOWN' } : await previous('cli_confirm_session_delete', pending)); await flushPromises()
     expect(calls('cli_confirm_session_delete')).toHaveLength(1)
@@ -199,21 +199,21 @@ describe('native archived session batch deletion', () => {
     const previous = io.invoke.getMockImplementation()!
     io.invoke.mockImplementation((command, request) => ['cli_confirm_session_delete', 'cli_inspect_session_delete'].includes(command)
       ? Promise.resolve({ operationId: request.operationId, cli: 'codex', state: 'partial', rootPresent: true, descendants: 'unverified', reason: 'DELETE_ROOT_PRESENT' }) : previous(command, request))
-    await review(); await confirm(); await click('[data-batch-final]'); await click('[data-batch-inspect]')
+    await review(); await confirm();  await click('[data-batch-inspect]')
     await click('[data-batch-close]'); await click('[data-batch-review]')
     await click('[data-batch-close]')
     await view!.findAll('[data-batch-existing]')[0]!.trigger('click'); await flushPromises()
     expect(element('[data-batch-dialog]').textContent).toContain('Partial result')
     expect(element('[data-batch-dialog]').textContent).toContain('DELETE_ROOT_PRESENT')
     expect(element('[data-batch-dialog]').textContent).toContain('still present')
-    expect(calls('cli_confirm_session_delete')).toHaveLength(1)
+    expect(calls('cli_confirm_session_delete')).toHaveLength(2)
   })
   it('BatchDelete_TransientQueuedOwnerLossCannotRecoverOldConfirmation_015', async () => {
     let finish!: (v: unknown) => void, pending: any
     const previous = io.invoke.getMockImplementation()!
     io.invoke.mockImplementation((command, request) => command === 'cli_confirm_session_delete'
       ? new Promise(done => { finish = done; pending = request }) : previous(command, request))
-    await review(); await confirm(); element('[data-batch-final]').click(); await flushPromises()
+    await review(); await confirm();  await flushPromises()
     await view!.setProps({ sessions: [row(1), { ...row(2), opened: true, processState: 'running' }, row(3)] })
     await view!.setProps({ sessions: [row(1), row(2), row(3)] })
     finish(await previous('cli_confirm_session_delete', pending)); await flushPromises()
