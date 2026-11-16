@@ -4,6 +4,19 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
+## [0.27.0-rc.12]
+
+Improved
+
+- Speed up archiving displayed Codex sessions by avoiding repeated scans of unrelated histories while retaining fresh target and source checks.
+- Keep unchanged project groups and their sorted session lists stable during updates.
+- Execute eligible archived-session deletion from the delete action without an extra confirmation dialog.
+
+Important
+
+- This is a prerelease. Stable Latest remains unchanged. Permanent deletion is irreversible; eligibility checks and uncertain-result reconciliation remain in place.
+- Performance measurements use isolated synthetic histories, not Codex Desktop latency guarantees. Live user sessions, installed WebView2, native All, D20 and signed installation/return remain separately unverified. Updater signatures are not Windows Authenticode.
+
 ## [0.27.0-rc.11]
 
 Fixed

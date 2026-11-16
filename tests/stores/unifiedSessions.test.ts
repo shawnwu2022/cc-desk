@@ -343,6 +343,31 @@ describe('unified sessions store', () => {
     expect(store.projectGroups.find(group => group.projectKey === '/project-1')?.name).toBe('Renamed')
     expect(store.projectGroups.find(group => group.projectKey === '/project-2')).toBe(previous.find(group => group.projectKey === '/project-2'))
   })
+  it('ProjectGroupCache_MoveRemoveAndOpenOrder_002', async () => {
+    const a = session({ id: 'a', projectPath: '/first', lastOpenedAt: 10 })
+    const b = session({ id: 'b', projectPath: '/first', lastOpenedAt: 20 })
+    const c = session({ id: 'c', projectPath: '/other', lastOpenedAt: 30 })
+    const legacy = fakeAdapter('legacy-claude', [a, b, c])
+    const store = useUnifiedSessionsStore()
+    store.configureAdapters([legacy.adapter])
+    await store.refresh()
+    const other = store.projectGroups.find(group => group.projectKey === '/other')!
+    expect(store.projectGroups[0].sessions.map(row => row.id)).toEqual(['b', 'a'])
+    const openedA = { ...a, lastOpenedAt: 40 }
+    legacy.setSessions([openedA, b, c]); await store.refresh()
+    expect(store.projectGroups[0].sessions.map(row => row.id)).toEqual(['a', 'b'])
+    expect(store.projectGroups.find(group => group.projectKey === '/other')).toBe(other)
+    const movedA = { ...openedA, projectPath: '/other' }
+    legacy.setSessions([movedA, b, c]); await store.refresh()
+    expect(store.projectGroups[0].sessions.map(row => row.id)).toEqual(['b'])
+    expect(store.projectGroups[1].sessions.map(row => row.id)).toEqual(['a', 'c'])
+    const removed = store.projectGroups[0]
+    legacy.setSessions([movedA, c]); await store.refresh()
+    expect(store.projectGroups.map(group => group.projectKey)).toEqual(['/other'])
+    legacy.setSessions([movedA, b, c]); await store.refresh()
+    expect(store.projectGroups[0]).not.toBe(removed)
+    expect(store.projectGroups[0].sessions.map(row => row.id)).toEqual(['b'])
+  })
   it('StableProjectOrder_Catalog_001', async () => {
     const rows = [
       session({ id: 'zulu', projectPath: '/zulu', lastActivityAt: 100 }),

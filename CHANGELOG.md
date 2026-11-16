@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [0.27.0-rc.12] - 2026-11-16
+
+### Improved
+
+- Reuse bounded backend-held displayed Codex locators for archive preparation instead of scanning unrelated histories. Keep fresh native target reads, source identity and containment checks, and unknown-result reconciliation.
+- Preserve unchanged project-group objects and sorted row arrays. A 50-project, 5000-session regression limits one-row updates to one invalidated group rather than all 50; movement, removal and opening-order updates remain covered.
+- Remove repeated archived-session delete confirmations from single and batch UI; preserve eligibility, stale-preview and backend execution checks. Permanent deletion remains irreversible.
+
+### Validation and limits
+
+- Local integration passes 197 frontend/stress regressions, type checks, production build, two strict-CSP startup cases and 109 release-policy fixtures. Archive measurements use isolated synthetic RPC peers, not live-user or native-desktop latency guarantees.
+- This prerelease uses make_latest=false. Exact protected-main CI, authenticated coverage and three same-release-run updater signatures remain mandatory. Live user sessions, installed WebView2, original native All, D20 and signed installation/return remain separately unverified. Updater signatures are not Windows Authenticode.
+
 ## [0.27.0-rc.11] - 2026-11-16
 
 ### Fixed
