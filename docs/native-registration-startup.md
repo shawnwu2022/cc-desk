@@ -21,6 +21,8 @@ Host `NativeHostProfile` 和浏览器 `BrowserProfile` 是不同类型。启动�
 - `principal` 和 `activation` 为32字节小写十六进制；`hostKeyEpoch`、`clientKeyEpoch`、`policyEpoch`、`issuerEpoch`、`incarnation` 为正十进制字符串。
 - `browser` 含 `origin`、`rpId`、`userHandle`、`tlsSpki`、`grantSpki`、`relaySpki`、`relayId`、`databaseName`、`expectedRevision`、`wasmUrl`、`glueUrl`。origin 必须为规范 HTTPS origin，RP 必须匹配其主机或父域；artifact URL 必须同源。userHandle 最大64字节，SPKI均为91字节小写十六进制。`expectedRevision` 为 null 或明确的已撤销存储修订字符串。
 
+产品 Browser Prepare 页面同时展示同一组三个公开 SPKI 的 Base64URL 与小写 hex。填写上述 `browser.tlsSpki/grantSpki/relaySpki` 时使用明确标注的 Native SPKI hex；这三项是完整91字节 SPKI，不是 Relay policy ``public_key_sec1`` 所需的65字节 SEC1 点。Browser 安装 JSON 仍使用 Base64URL。转换只减少人工编码错误，不生成完整候选、不发现 Host key、不证明身份或提供批准。取消或过期后须刷新页面重新准备身份，旧身份的配置不能用于新一轮。
+
 不得包含 credentialId、credentialSpki、私钥、密码、令牌、scope、clock 或 approved。会话 scope 始终由原 run admission 提供。浏览器原验证器继续负责凭据、签名、不同用途公钥、RP 与 WebAuthn 细节验证。
 
 ## 生命周期与失败语义

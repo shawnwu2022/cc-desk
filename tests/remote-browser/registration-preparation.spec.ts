@@ -4,10 +4,11 @@ import {resolve,sep,extname} from 'node:path'
 test.use({serviceWorkers:'block'})
 test.beforeEach(async({page,context})=>{
  await context.addInitScript(()=>{
-  const state={generations:0,signatures:0,sockets:0,keys:[] as CryptoKey[],originalHandles:true};Reflect.set(globalThis,'TEST_ONLY',state)
+  const state={generations:0,signatures:0,sockets:0,storageOpens:0,keys:[] as CryptoKey[],originalHandles:true};Reflect.set(globalThis,'TEST_ONLY',state)
   const generate=crypto.subtle.generateKey.bind(crypto.subtle),sign=crypto.subtle.sign.bind(crypto.subtle)
   crypto.subtle.generateKey=(async(...args:any[])=>{state.generations++;const pair=await Reflect.apply(generate,crypto.subtle,args) as CryptoKeyPair;state.keys.push(pair.privateKey);return pair}) as typeof crypto.subtle.generateKey
   crypto.subtle.sign=(async(algorithm,key,data)=>{state.signatures++;state.originalHandles&&=state.keys.includes(key);return sign(algorithm,key,data)}) as typeof crypto.subtle.sign
+  const open=indexedDB.open.bind(indexedDB);indexedDB.open=(...args)=>{state.storageOpens++;return open(...args)}
   Reflect.set(globalThis,'WebSocket',class{constructor(){state.sockets++;throw Error('TEST_ONLY stop before external socket')}})
   for(const name of ['create','get'])Object.defineProperty(navigator.credentials,name,{value:()=>{throw Error('TEST_ONLY no authenticator')}})
  })
@@ -33,18 +34,18 @@ for(const mode of ['start','mismatch','cancel','mutation','hidden','expired','bi
  expect(await page.evaluate(()=>Reflect.get(globalThis,'TEST_ONLY').generations)).toBe(0)
  await page.getByRole('button',{name:'Generate ephemeral identity',exact:true}).click()
  await expect(page.getByRole('textbox')).toBeVisible()
- const keys=JSON.parse(await page.locator('dialog pre').innerText()),config=configuration(keys)
+ const keys=JSON.parse(await page.getByLabel('Complete registration identity and configuration').innerText()),config=configuration(keys)
  if(mode==='mismatch')config.plan.relaySpki=keys.tlsSpki
  if(mode==='bidi')config.plan.configuration.grant.scope.run='PUBLIC\u061c\u202e'
  await page.getByRole('textbox').fill(JSON.stringify(config))
  await page.getByRole('button',{name:'Review public configuration',exact:true}).click()
  if(mode!=='mismatch'){
-  expect(JSON.parse(await page.locator('dialog pre').innerText())).toEqual(config)
+  expect(JSON.parse(await page.getByLabel('Complete registration identity and configuration').innerText())).toEqual(config)
   await page.getByRole('button',{name:'Approve this exact registration',exact:true}).dispatchEvent('click')
   await expect(page.getByRole('button',{name:'Start registration',exact:true})).toBeDisabled()
-  if(mode==='bidi'){expect(await page.locator('dialog pre').innerText()).toContain('\\u061c');expect(await page.locator('dialog pre').innerText()).toContain('\\u202e')}
+  if(mode==='bidi'){expect(await page.getByLabel('Complete registration identity and configuration').innerText()).toContain('\\u061c');expect(await page.getByLabel('Complete registration identity and configuration').innerText()).toContain('\\u202e')}
   if(mode==='cancel'||mode==='bidi')await page.getByRole('dialog').getByRole('button',{name:'Cancel',exact:true}).click()
-  else if(mode==='mutation')await page.locator('dialog pre').evaluate(e=>e.textContent='changed')
+  else if(mode==='mutation')await page.getByLabel('Complete registration identity and configuration').evaluate(e=>e.textContent='changed')
   else{
    await page.getByRole('button',{name:'Approve this exact registration',exact:true}).click()
    await expect(page.getByRole('button',{name:'Start registration',exact:true})).toBeEnabled()
@@ -81,4 +82,59 @@ test('Preparation_AbsoluteExpiry_008',async({page})=>{
  await expect(page.getByRole('status')).toContainText('Locked')
  await expect(page.getByRole('dialog')).toHaveCount(0)
  await expect(page.getByRole('button',{name:'Prepare registration',exact:true})).toBeDisabled()
+})
+
+test('Preparation_PublicIdentityEncodings_009',async({page})=>{
+ await page.getByRole('button',{name:'Prepare registration',exact:true}).click()
+ await page.getByRole('button',{name:'Generate ephemeral identity',exact:true}).click()
+ await expect(page.getByRole('textbox')).toBeVisible()
+ const publicKeys=JSON.parse(await page.getByLabel('Complete registration identity and configuration').innerText())
+ const nativeOutput=page.getByLabel('Native registration public identities (SPKI hex)')
+ await expect(nativeOutput).toBeVisible()
+ const nativeKeys=JSON.parse(await nativeOutput.innerText())
+ expect(Object.keys(nativeKeys).sort()).toEqual(['grantSpki','relaySpki','tlsSpki'])
+ for(const name of ['tlsSpki','grantSpki','relaySpki']){
+  expect(nativeKeys[name]).toMatch(/^[0-9a-f]{182}$/)
+  expect(Buffer.from(nativeKeys[name],'hex')).toEqual(Buffer.from(publicKeys[name],'base64url'))
+ }
+ expect(new Set(Object.values(nativeKeys)).size).toBe(3)
+ expect(await page.evaluate(()=>{const s=Reflect.get(globalThis,'TEST_ONLY');return{generations:s.generations,signatures:s.signatures,sockets:s.sockets,storageOpens:s.storageOpens,nonexportable:s.keys.every((key:CryptoKey)=>!key.extractable)}})).toEqual({generations:3,signatures:0,sockets:0,storageOpens:0,nonexportable:true})
+ const candidate=configuration(publicKeys)
+ await page.getByRole('textbox').fill(JSON.stringify(candidate))
+ await page.getByRole('button',{name:'Review public configuration',exact:true}).click()
+ await expect(nativeOutput).toHaveCount(0)
+ expect(JSON.parse(await page.getByLabel('Complete registration identity and configuration').innerText())).toEqual(candidate)
+ await page.getByRole('dialog').getByRole('button',{name:'Cancel',exact:true}).click()
+ await expect(page.getByRole('status')).toContainText('Locked')
+})
+
+for(const mode of ['cancel','expiry'])test('Preparation_ReloadFreshIdentity_'+mode+'_010',async({page})=>{
+ async function prepare(){
+  await page.getByRole('button',{name:'Prepare registration',exact:true}).click()
+  await page.getByRole('button',{name:'Generate ephemeral identity',exact:true}).click()
+  await expect(page.getByRole('textbox')).toBeVisible()
+  return JSON.parse(await page.getByLabel('Complete registration identity and configuration').innerText())
+ }
+ const oldKeys=await prepare(),oldConfiguration=configuration(oldKeys)
+ if(mode==='cancel')await page.getByRole('dialog').getByRole('button',{name:'Cancel',exact:true}).click()
+ else await page.evaluate(()=>{const now=Date.now();Date.now=()=>now+300001})
+ await expect(page.getByRole('status')).toContainText('Locked')
+ await expect(page.getByRole('button',{name:'Prepare registration',exact:true})).toBeDisabled()
+ expect(await page.evaluate(()=>Reflect.get(globalThis,'TEST_ONLY').sockets)).toBe(0)
+ await page.reload()
+ expect(await page.evaluate(()=>Reflect.get(globalThis,'TEST_ONLY').generations)).toBe(0)
+ const freshKeys=await prepare()
+ for(const name of ['tlsSpki','grantSpki','relaySpki'])expect(freshKeys[name]).not.toBe(oldKeys[name])
+ await page.getByRole('textbox').fill(JSON.stringify(oldConfiguration))
+ await page.getByRole('button',{name:'Review public configuration',exact:true}).click()
+ await expect(page.getByRole('status')).toContainText('Locked')
+ await expect(page.getByRole('button',{name:'Start registration',exact:true})).toBeDisabled()
+ expect(await page.evaluate(()=>{const s=Reflect.get(globalThis,'TEST_ONLY');return{generations:s.generations,signatures:s.signatures,sockets:s.sockets,storageOpens:s.storageOpens}})).toEqual({generations:3,signatures:0,sockets:0,storageOpens:0})
+ await page.reload()
+ const finalKeys=await prepare()
+ await page.getByRole('textbox').fill(JSON.stringify(configuration(finalKeys)))
+ await page.getByRole('button',{name:'Review public configuration',exact:true}).click()
+ await page.getByRole('button',{name:'Approve this exact registration',exact:true}).click()
+ await expect(page.getByRole('button',{name:'Start registration',exact:true})).toBeEnabled()
+ expect(await page.evaluate(()=>Reflect.get(globalThis,'TEST_ONLY').sockets)).toBe(0)
 })

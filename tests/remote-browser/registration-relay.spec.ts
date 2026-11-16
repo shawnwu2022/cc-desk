@@ -306,14 +306,14 @@ test('RegistrationPreparation_ProductGeneratedIdentityToNative_001',async({page,
  await productRoutes();await page.goto('https://desk.invalid/browser-registration.html');
  await page.evaluate(async()=>{const f=await import(location.origin+'/fixture.mjs');await f.setup(true)});
  await page.getByRole('button',{name:'Prepare registration',exact:true}).click();await page.getByRole('button',{name:'Generate ephemeral identity',exact:true}).click();
- await expect(page.getByRole('textbox')).toBeVisible();const publicIdentity=JSON.parse(await page.locator('dialog pre').innerText());
+ await expect(page.getByRole('textbox')).toBeVisible();const publicIdentity=JSON.parse(await page.getByLabel('Complete registration identity and configuration').innerText());
  expect(await page.evaluate(()=>{const k=Reflect.get(globalThis,'productKeys');return{k:k.length,nonexportable:k.every((v:CryptoKey)=>!v.extractable)}})).toEqual({k:3,nonexportable:true});
  const o=oracle('start-yes','rendezvous-v1',publicIdentity);
  try{
   const ready=await o.next();expect(ready.plan.configuration.localSpki).toBe(publicIdentity.tlsSpki);expect(ready.plan.configuration.grant.issuerSpki).toBe(publicIdentity.grantSpki);expect(ready.plan.relaySpki).toBe(publicIdentity.relaySpki);expect(ready.plan.databaseName).toBe('CC_DESK_BROWSER_ENROLLMENT_V1');
   expect(new URL(ready.origin).hostname).toBe('foobar.com');
   const config={version:1,plan:ready.plan,artifacts:{wasm:'https://desk.invalid/remote-registration-runtime/fixture_bg.wasm',glue:'https://desk.invalid/remote-registration-runtime/fixture_bg.js'}};
-  await page.getByRole('textbox').fill(JSON.stringify(config));await page.getByRole('button',{name:'Review public configuration',exact:true}).click();expect(JSON.parse(await page.locator('dialog pre').innerText())).toEqual(config);
+  await page.getByRole('textbox').fill(JSON.stringify(config));await page.getByRole('button',{name:'Review public configuration',exact:true}).click();expect(JSON.parse(await page.getByLabel('Complete registration identity and configuration').innerText())).toEqual(config);
   await page.getByRole('button',{name:'Approve this exact registration',exact:true}).click();await expect(page.getByRole('button',{name:'Start registration',exact:true})).toBeEnabled();expect(r.metrics().connections).toBe(0);
   await page.getByRole('button',{name:'Start registration',exact:true}).click();
   await expect(page.getByRole('status')).toContainText('Browser profile stored (revision 1)',{timeout:25000});

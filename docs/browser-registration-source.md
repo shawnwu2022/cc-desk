@@ -125,7 +125,14 @@ standalone CLI and the same single reader export.
 Prepare reads/imports the captured source once. Page load creates no keys.
 A separate trusted click generates three distinct non-exportable P-256 private
 signing handles in page memory; only public SPKIs are exported for separately
-authorized Host/Relay setup. No private key is serialized. One absolute
+authorized Host/Relay setup. The preparation view shows the same exported public SPKI bytes in two separate
+blocks: Base64URL for Browser configuration, and lowercase hex for Native
+`browser.tlsSpki/grantSpki/relaySpki`. These are complete 91-byte SPKIs, not
+the 65-byte SEC1 points required by Relay policy `public_key_sec1`.
+This conversion does not generate a full candidate, select a Host pin or key name,
+verify identity, approve configuration, sign, connect or persist data. The hex
+block is removed before complete-configuration review; Browser JSON still uses
+Base64URL. No private key is serialized. One absolute
 five-minute preparation limit includes time away. Unapproved keys can survive
 temporary visibility loss, but hidden pages cannot approve. Cancellation,
 pagehide/freeze, document replacement or expiry ends this document's attempt.
@@ -153,3 +160,9 @@ The offline checker reads the fixed emitted browser-registration.manifest.json
 when no source manifest directory is specified. An explicit directory still
 selects only manifest.json there; missing files do not trigger fallback.
 Integrity PASS is not deployment readiness or operator authorization.
+
+The production preparation regression also checks per-role byte equality between
+the two encodings, cancellation/expiry followed by reload and a fresh identity,
+rejection of the previous identity's configuration, and explicit approval of a
+new matching configuration. These cases perform no authenticator or relay
+connection; the expiry cases advance the test clock, not wall time.
