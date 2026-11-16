@@ -194,3 +194,60 @@ an implementation test. Record exact test artifacts and unresolved platform gate
   not revocation of an independently approved running connection.
 - browser-run-handoff retains per-channel presentation/WebAuthn and does not
   overwrite the stored enrollment with the newly authenticated run scope.
+
+## Stage 2b transaction evidence (inactive)
+
+The independent unattended directory now owns a fixed `commit.journal` beside
+`delegation.dpapi`. Neither parsing nor recovery constructs native consent,
+a live owner, a key supplier or executable admission. Results remain
+`LockedSnapshot` descriptions. Existing one-shot admission is unchanged.
+
+The journal is an append-only sequence of 224-byte records, with at most 8,192
+records (4,096 commits including initialization). Each little-endian record has:
+magic `CCDUJ001` (0..8), kind Pending=1/Clean=2 (8), zero padding (9..16),
+sequence (16..24), transaction UUID (24..40), store ID (40..56), storage revision
+(56..64), authority revision (64..72), canonical target SHA-256 (72..104), exact
+sealed blob SHA-256 (104..136), previous full-record SHA-256 (136..168), zero
+padding (168..192), and SHA-256 of bytes 0..192 (192..224).
+
+Parsing requires exact alternating Pending/Clean pairs, matching pair stamps,
+consecutive sequences/storage revisions, stable store/target, authority revision
+unchanged or incremented once, and unique transaction IDs across the entire
+bounded history. These hashes detect inconsistency; they are not authentication
+against the principal controlling the trusted local directory. The complete pair
+capacity is reserved before Pending. Capacity exhaustion rejects further writes
+without reset or compaction.
+
+All steps run under the existing private NTFS control lease:
+1. Recheck process poison after acquiring the lease. Open and verify the pinned
+   journal identity; read and strictly verify the full chain and matching blob.
+2. Reflush the matching blob and journal before returning recovered evidence.
+   A successful read permits at most one commit; another read must fully verify
+   again. Reuse without rereading is rejected before writing.
+3. Check native permit/CAS and capacity before Pending. Append and sync Pending.
+4. Recheck authorization at the existing publication fences, publish the main
+   blob atomically, verify its identity/content and sync it.
+5. Append and sync matching Clean. The successful Clean sync is the normal
+   commit linearization point. There is no fallible production I/O afterward.
+
+Any failure/cancellation after entering the Pending write interval reports
+Unknown and poisons that real store identity in this process. The bounded
+process registry is keyed by NTFS directory/journal identity, not only path;
+creating a new Store/backend does not clear known failure. Registry exhaustion
+fails closed and never evicts known Unknown entries. Lease acquisition and read
+return recheck poison, including the deterministic waiting-reader race.
+
+A different process can accept a complete matching Clean only after rereading,
+verifying and successfully flushing both files. That is independent transaction
+evidence at the new flush boundary, not proof the earlier caller received an
+acknowledgement or that a failed flush had made data durable. The earlier call
+and any same-process known failure remain Unknown. Missing/empty existing,
+malformed, partial, trailing Pending or mismatched evidence cannot be repaired
+by reopening or reinitializing. Only a newly created backend may initialize its
+own empty journal; abandoning creation and reopening is not implicit consent.
+
+This stage does not prove physical power-loss durability, resist restoration of
+an entire old valid blob+journal by a local storage principal, or propagate
+revocation to a live owner in another process. No real DPAPI runtime operation,
+real credential, cloud endpoint, UI, startup registration or networking is
+activated by these tests. Native delegated admission remains a later gate.

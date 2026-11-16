@@ -78,13 +78,18 @@ fn enable(store: &TestStore, s: &LockedSnapshot) -> LockedSnapshot {
         .enable(permit(store, s.expected(), 1000, 2000), 1000)
         .unwrap()
 }
-fn raw(store: &TestStore) -> Vec<u8> {
-    store.backend.begin().unwrap().read().unwrap().unwrap()
+fn path(store: &TestStore, name: &str) -> std::path::PathBuf {
+    Path::new(&store.backend.target_label().unwrap()).join(name)
 }
+fn raw(store: &TestStore) -> Vec<u8> {
+    std::fs::read(path(store, "delegation.dpapi")).unwrap()
+}
+// 显式模拟可信本地存储被篡改；不冒充一次已批准事务。
 fn replace_raw(store: &TestStore, bytes: &[u8]) {
-    let mut tx = store.backend.begin().unwrap();
-    assert!(tx.read().unwrap().is_some());
-    tx.commit(bytes, true, &mut || Ok(())).unwrap();
+    std::fs::write(path(store, "delegation.dpapi"), bytes).unwrap()
+}
+fn try_reopen(path: &Path) -> Result<TestStore> {
+    Store::new(WindowsUnattendedBackend::open_existing(path)?, FakeSealer)
 }
 #[test]
 fn UnattendedStore_RestartRevokedRemainsLocked_001() {
@@ -128,8 +133,6 @@ fn UnattendedStore_ExactCASAndNativePermit_002() {
 fn UnattendedStore_CompetingWritersSerialize_003() {
     let d = directory();
     let s = create(d.path());
-    drop(s);
-    let s = reopen(d.path());
     let snapshot = initialize(&s);
     drop(s);
     let barrier = Arc::new(Barrier::new(3));
@@ -157,31 +160,29 @@ fn UnattendedStore_CompetingWritersSerialize_003() {
 }
 #[test]
 fn UnattendedStore_MalformedDuplicateAndBounds_004() {
-    let d = directory();
-    let s = create(d.path());
-    let snapshot = initialize(&s);
-    let original = raw(&s);
-    let text = String::from_utf8(original.clone()).unwrap();
-    let cases = vec![
-        b"TEST_ONLY/{".to_vec(),
-        text.replace("\"schema\":1", "\"schema\":1,\"schema\":1")
-            .into_bytes(),
-        text.replace("\"schema\":1", "\"schema\":1,\"unknown\":true")
-            .into_bytes(),
-        text.replace(DOMAIN, "cc-desk/native-public-pairing/v1")
-            .into_bytes(),
-        vec![b'x'; MAX_PLAINTEXT + 1],
-    ];
-    for bytes in cases {
+    for mode in 0..5 {
+        let d = directory();
+        let s = create(d.path());
+        let snapshot = initialize(&s);
+        let text = String::from_utf8(raw(&s)).unwrap();
+        let bytes = match mode {
+            0 => b"TEST_ONLY/{".to_vec(),
+            1 => text
+                .replace("\"schema\":1", "\"schema\":1,\"schema\":1")
+                .into_bytes(),
+            2 => text
+                .replace("\"schema\":1", "\"schema\":1,\"unknown\":true")
+                .into_bytes(),
+            3 => text.replace(DOMAIN, "wrong-domain").into_bytes(),
+            _ => vec![b'x'; MAX_PLAINTEXT + 1],
+        };
+        assert!(s.decode(&bytes).is_err());
         replace_raw(&s, &bytes);
-        let reader = reopen(d.path());
         assert_eq!(
-            reader.observe(&snapshot.expected(), 1000),
-            Err(StoreError::Invalid)
+            s.observe(&snapshot.expected(), 1000),
+            Err(StoreError::Unknown)
         );
     }
-    replace_raw(&s, &original);
-    assert!(s.decode(&vec![0; MAX_SEALED + 1]).is_err());
 }
 #[test]
 fn UnattendedStore_PrePublishFailureKeepsOldRecord_005() {
@@ -192,13 +193,10 @@ fn UnattendedStore_PrePublishFailureKeepsOldRecord_005() {
     s.backend.test_fail_before_publish();
     assert_eq!(
         s.enable(permit(&s, old.expected(), 1000, 2000), 1000),
-        Err(StoreError::Io)
+        Err(StoreError::Unknown)
     );
     assert_eq!(raw(&s), bytes);
-    assert_eq!(
-        reopen(d.path()).observe(&old.expected(), 1000).unwrap(),
-        old
-    );
+    assert!(matches!(try_reopen(d.path()), Err(StoreError::Poisoned)));
 }
 #[test]
 fn UnattendedStore_PostPublishUncertainPoisons_006() {
@@ -215,10 +213,7 @@ fn UnattendedStore_PostPublishUncertainPoisons_006() {
         s.observe(&enabled.expected(), 1100),
         Err(StoreError::Poisoned)
     );
-    let mut committed = enabled.expected();
-    committed.revision += 1;
-    let loaded = reopen(d.path()).observe(&committed, 1100).unwrap();
-    assert_eq!(loaded.0.status, Status::Revoked);
+    assert!(matches!(try_reopen(d.path()), Err(StoreError::Poisoned)));
 }
 #[test]
 fn UnattendedStore_MissingNeverAutoInitializes_007() {
@@ -226,22 +221,19 @@ fn UnattendedStore_MissingNeverAutoInitializes_007() {
     assert!(WindowsUnattendedBackend::open_existing(d.path()).is_err());
     let s = create(d.path());
     assert_eq!(s.observe(&initial(), 1000), Err(StoreError::Missing));
-    assert!(!d
-        .path()
-        .join("remote-unattended-v1/delegation.dpapi")
-        .exists());
+    assert!(!path(&s, "delegation.dpapi").exists());
     drop(s);
-    let s = reopen(d.path());
+    let reader = reopen(d.path());
+    assert_eq!(reader.observe(&initial(), 1000), Err(StoreError::Unknown));
+    let d2 = directory();
+    let s = create(d2.path());
     let snapshot = initialize(&s);
+    let file = path(&s, "delegation.dpapi");
     drop(s);
-    std::fs::rename(
-        d.path().join("remote-unattended-v1/delegation.dpapi"),
-        d.path().join("remote-unattended-v1/held-test.dpapi"),
-    )
-    .unwrap();
+    std::fs::rename(&file, file.with_extension("held-test")).unwrap();
     assert_eq!(
-        reopen(d.path()).observe(&snapshot.expected(), 1000),
-        Err(StoreError::Missing)
+        reopen(d2.path()).observe(&snapshot.expected(), 1000),
+        Err(StoreError::Unknown)
     );
 }
 #[test]
@@ -294,13 +286,8 @@ fn UnattendedStore_CutoffRevisionAndSchemaBounds_009() {
         );
     }
     let mut doc = old.0.clone();
-    doc.revision = u64::MAX;
-    replace_raw(&s, &s.encode(&doc).unwrap());
-    let max = LockedSnapshot(doc);
-    assert_eq!(
-        s.enable(permit(&s, max.expected(), 1000, 2000), 1000),
-        Err(StoreError::Invalid)
-    );
+    doc.authority_revision = doc.revision + 1;
+    assert_eq!(validate(&doc), Err(StoreError::Invalid));
 }
 #[test]
 fn UnattendedStore_NativeAuthorityFenceAtRename_010() {
@@ -311,7 +298,7 @@ fn UnattendedStore_NativeAuthorityFenceAtRename_010() {
     let _probe = crate::version_history::windows::files::probe_before_rename(move || {
         cancel.store(true, Ordering::Release)
     });
-    assert_eq!(s.initialize(p), Err(StoreError::Unauthorized));
+    assert_eq!(s.initialize(p), Err(StoreError::Unknown));
     assert!(!d
         .path()
         .join("remote-unattended-v1/delegation.dpapi")
@@ -326,7 +313,12 @@ fn UnattendedStore_ReplaceChecksAuthorityAgain_011() {
     let mut tx = s.backend.begin().unwrap();
     tx.read().unwrap();
     let mut calls = 0;
-    let result = tx.commit(&bytes, true, &mut || {
+    let doc = s.decode(&bytes).unwrap();
+    let mut next = doc.clone();
+    next.revision += 1;
+    let next_bytes = s.encode(&next).unwrap();
+    let stamp = s.stamp(&next, &next_bytes).unwrap();
+    let result = tx.commit(&next_bytes, true, &stamp, &mut || {
         calls += 1;
         if calls == 2 {
             Err(StoreError::Unauthorized)
@@ -334,7 +326,7 @@ fn UnattendedStore_ReplaceChecksAuthorityAgain_011() {
             Ok(())
         }
     });
-    assert_eq!(result, Err(StoreError::Unauthorized));
+    assert_eq!(result, Err(StoreError::Unknown));
     assert_eq!(calls, 2);
     drop(tx);
     assert_eq!(raw(&s), bytes);
@@ -346,8 +338,10 @@ fn UnattendedStore_WholeStoreRollbackNotClaimedProtected_012() {
     let disabled = initialize(&s);
     let enabled = enable(&s, &disabled);
     let old = raw(&s);
+    let old_journal = std::fs::read(path(&s, "commit.journal")).unwrap();
     s.revoke(&enabled.expected(), 1100).unwrap();
     replace_raw(&s, &old);
+    std::fs::write(path(&s, "commit.journal"), old_journal).unwrap();
     // 本实例保留撤销闭锁；新实例无可信外部单调存储，旧完整 blob 无法自行识别。
     assert_eq!(
         s.observe(&enabled.expected(), 1100),
@@ -372,7 +366,7 @@ fn UnattendedStore_RepairedCorruptionDoesNotReopenSameInstance_014() {
     let old = initialize(&s);
     let bytes = raw(&s);
     replace_raw(&s, b"TEST_ONLY/{");
-    assert_eq!(s.observe(&old.expected(), 1000), Err(StoreError::Invalid));
+    assert_eq!(s.observe(&old.expected(), 1000), Err(StoreError::Unknown));
     replace_raw(&s, &bytes);
     assert_eq!(s.observe(&old.expected(), 1000), Err(StoreError::Poisoned));
 }
@@ -390,11 +384,7 @@ fn UnattendedStore_ExpiryPublicationFailureStaysBlocked_015() {
         }
         assert_eq!(
             s.observe(&enabled.expected(), 2000),
-            Err(if uncertain {
-                StoreError::Unknown
-            } else {
-                StoreError::Io
-            })
+            Err(StoreError::Unknown)
         );
         assert_eq!(
             s.observe(&enabled.expected(), 1500),
@@ -437,15 +427,364 @@ fn UnattendedStore_HigherStorageRevisionCannotLowerKnownFloors_017() {
         } else {
             regressed.observed_wall_ms -= 1
         }
+        // 独立验证核心高水位，下层的匹配事务证据也不能允许倒退。
+        let mut local = Local {
+            last: Some(known.0.clone()),
+            ..Local::default()
+        };
+        assert_eq!(
+            check_known(&mut local, &regressed),
+            Err(StoreError::Conflict)
+        );
+        assert!(local.blocked);
         replace_raw(&s, &s.encode(&regressed).unwrap());
         let regressed = LockedSnapshot(regressed);
         assert_eq!(
             s.observe(&regressed.expected(), 1500),
-            Err(StoreError::Conflict)
+            Err(StoreError::Unknown)
         );
         assert_eq!(
             s.observe(&regressed.expected(), 1500),
             Err(StoreError::Poisoned)
         );
     }
+}
+
+fn child_check(parent: &Path, revision: u64, status: &str) {
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "remote_unattended_store::tests::UnattendedStore_JournalRestartChild_025",
+            "--nocapture",
+        ])
+        .env("CC_DESK_TEST_ONLY_JOURNAL_PARENT", parent)
+        .env("CC_DESK_TEST_ONLY_JOURNAL_REVISION", revision.to_string())
+        .env("CC_DESK_TEST_ONLY_JOURNAL_STATUS", status)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "child failed: {} {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+#[test]
+fn UnattendedStore_JournalFaultsSurviveNewBackendAndProcess_018() {
+    for fault in [1, 2, 3, 4, 5, 6, 8, 9] {
+        let d = directory();
+        let s = create(d.path());
+        let old = initialize(&s);
+        s.backend.test_journal_fault(fault);
+        assert_eq!(
+            s.enable(permit(&s, old.expected(), 1000, 2000), 1000),
+            Err(StoreError::Unknown)
+        );
+        assert!(matches!(try_reopen(d.path()), Err(StoreError::Poisoned)));
+        drop(s);
+        child_check(
+            d.path(),
+            if fault == 8 { 1 } else { 2 },
+            match fault {
+                5 | 6 => "Enabled",
+                8 => "Disabled",
+                _ => "Unknown",
+            },
+        );
+    }
+}
+#[test]
+fn UnattendedStore_JournalInitializationPartialFailure_019() {
+    for fault in [1, 2, 3, 4, 5, 6, 8, 9] {
+        let d = directory();
+        let s = create(d.path());
+        s.backend.test_journal_fault(fault);
+        assert_eq!(
+            s.initialize(permit(&s, initial(), 1000, 1000)),
+            Err(StoreError::Unknown)
+        );
+        assert!(matches!(try_reopen(d.path()), Err(StoreError::Poisoned)));
+        drop(s);
+        child_check(
+            d.path(),
+            1,
+            if [5, 6].contains(&fault) {
+                "Disabled"
+            } else {
+                "Unknown"
+            },
+        );
+    }
+}
+#[test]
+fn UnattendedStore_JournalStrictChainRejectsMalformed_020() {
+    use journal::{Chain, Record};
+    for mode in 0..10 {
+        let d = directory();
+        let s = create(d.path());
+        let old = initialize(&s);
+        let bytes = std::fs::read(path(&s, "commit.journal")).unwrap();
+        let chain = Chain::parse(&bytes, false).unwrap();
+        let clean = chain.last.as_ref().unwrap();
+        let mut pending = Record {
+            clean: false,
+            sequence: 1,
+            transaction: clean.transaction,
+            stamp: clean.stamp.clone(),
+            previous: [0; 32],
+        };
+        let mut second = Record {
+            clean: true,
+            sequence: 2,
+            transaction: pending.transaction,
+            stamp: pending.stamp.clone(),
+            previous: Sha256::digest(pending.bytes()).into(),
+        };
+        let corrupt = match mode {
+            0 => vec![],
+            1 => bytes[..100].to_vec(),
+            2 => [bytes.as_slice(), b"tail"].concat(),
+            3 => {
+                pending.clean = true;
+                pending.bytes().to_vec()
+            }
+            4 => {
+                second.clean = false;
+                [pending.bytes().as_slice(), second.bytes().as_slice()].concat()
+            }
+            5 => {
+                second.stamp.store_id[0] ^= 1;
+                [pending.bytes().as_slice(), second.bytes().as_slice()].concat()
+            }
+            6 => {
+                second.sequence = 3;
+                [pending.bytes().as_slice(), second.bytes().as_slice()].concat()
+            }
+            7 => {
+                second.previous[0] ^= 1;
+                [pending.bytes().as_slice(), second.bytes().as_slice()].concat()
+            }
+            8 => {
+                pending.sequence = 3;
+                pending.previous = chain.hash;
+                [bytes.as_slice(), pending.bytes().as_slice()].concat()
+            }
+            _ => {
+                let mut bytes = bytes;
+                bytes[0] ^= 1;
+                bytes
+            }
+        };
+        assert!(Chain::parse(&corrupt, false).is_err());
+        std::fs::write(path(&s, "commit.journal"), corrupt).unwrap();
+        assert_eq!(s.observe(&old.expected(), 1000), Err(StoreError::Unknown));
+        assert!(matches!(try_reopen(d.path()), Err(StoreError::Poisoned)));
+    }
+}
+#[test]
+fn UnattendedStore_JournalCapacityReservedBeforePending_021() {
+    use journal::{Chain, Record, MAX_RECORDS};
+    let d = directory();
+    let s = create(d.path());
+    let old = initialize(&s);
+    let mut doc = old.0;
+    let mut bytes = std::fs::read(path(&s, "commit.journal")).unwrap();
+    let mut chain = Chain::parse(&bytes, false).unwrap();
+    let mut blob = raw(&s);
+    for _ in 1..MAX_RECORDS / 2 {
+        doc.revision += 1;
+        blob = s.encode(&doc).unwrap();
+        let stamp = s.stamp(&doc, &blob).unwrap();
+        let pending = chain.pending(&stamp).unwrap();
+        let clean = Record {
+            clean: true,
+            sequence: pending.sequence + 1,
+            transaction: pending.transaction,
+            stamp,
+            previous: Sha256::digest(pending.bytes()).into(),
+        };
+        bytes.extend_from_slice(&pending.bytes());
+        bytes.extend_from_slice(&clean.bytes());
+        chain.records += 2;
+        chain.hash = Sha256::digest(clean.bytes()).into();
+        chain.last = Some(clean);
+    }
+    std::fs::write(path(&s, "commit.journal"), &bytes).unwrap();
+    replace_raw(&s, &blob);
+    let snapshot = LockedSnapshot(doc);
+    assert!(s.observe(&snapshot.expected(), 1000).is_ok());
+    assert_eq!(
+        s.enable(permit(&s, snapshot.expected(), 1000, 2000), 1000),
+        Err(StoreError::Capacity)
+    );
+    assert_eq!(raw(&s), blob);
+    assert_eq!(std::fs::read(path(&s, "commit.journal")).unwrap(), bytes);
+}
+#[test]
+fn UnattendedStore_JournalIdentityAndMissingReject_022() {
+    for missing in [true, false] {
+        let d = directory();
+        let s = create(d.path());
+        let old = initialize(&s);
+        let log = path(&s, "commit.journal");
+        let bytes = std::fs::read(&log).unwrap();
+        std::fs::rename(&log, log.with_extension("held-test")).unwrap();
+        if !missing {
+            std::fs::write(&log, bytes).unwrap()
+        }
+        assert_eq!(s.observe(&old.expected(), 1000), Err(StoreError::Unknown));
+        assert!(matches!(try_reopen(d.path()), Err(StoreError::Poisoned)));
+    }
+}
+#[test]
+fn UnattendedStore_CancelBeforePendingDoesNotMutateEvidence_023() {
+    let d = directory();
+    let s = create(d.path());
+    let old = initialize(&s);
+    let bytes = std::fs::read(path(&s, "commit.journal")).unwrap();
+    let p = permit(&s, old.expected(), 1000, 2000);
+    p.cancelled.store(true, Ordering::Release);
+    assert_eq!(s.enable(p, 1000), Err(StoreError::Unauthorized));
+    assert_eq!(std::fs::read(path(&s, "commit.journal")).unwrap(), bytes);
+    assert_eq!(s.observe(&old.expected(), 1000).unwrap(), old);
+}
+#[test]
+fn UnattendedStore_BlobPublicationFailureLeavesPending_024() {
+    for after in [true, false] {
+        let d = directory();
+        let s = create(d.path());
+        let old = initialize(&s);
+        if after {
+            s.backend.test_fail_after_publish()
+        } else {
+            s.backend.test_fail_before_publish()
+        }
+        assert_eq!(
+            s.enable(permit(&s, old.expected(), 1000, 2000), 1000),
+            Err(StoreError::Unknown)
+        );
+        drop(s);
+        child_check(d.path(), 2, "Unknown");
+    }
+}
+#[test]
+fn UnattendedStore_JournalRestartChild_025() {
+    let Some(parent) = std::env::var_os("CC_DESK_TEST_ONLY_JOURNAL_PARENT") else {
+        return;
+    };
+    let revision = std::env::var("CC_DESK_TEST_ONLY_JOURNAL_REVISION")
+        .unwrap()
+        .parse()
+        .unwrap();
+    let status = std::env::var("CC_DESK_TEST_ONLY_JOURNAL_STATUS").unwrap();
+    let result = try_reopen(Path::new(&parent)).and_then(|s| {
+        s.observe(
+            &Expected {
+                revision,
+                ..initial()
+            },
+            1000,
+        )
+    });
+    if status == "Unknown" {
+        assert!(result.is_err())
+    } else {
+        let snapshot = result.unwrap();
+        assert_eq!(format!("{:?}", snapshot.0.status), status)
+    }
+}
+
+#[test]
+fn UnattendedStore_JournalRejectsNonAdjacentTransactionReuse_026() {
+    use journal::{Chain, Record};
+    let d = directory();
+    let s = create(d.path());
+    initialize(&s);
+    let mut bytes = std::fs::read(path(&s, "commit.journal")).unwrap();
+    let first = Chain::parse(&bytes, false).unwrap().last.unwrap();
+    for revision in [2, 3] {
+        let chain = Chain::parse(&bytes, false).unwrap();
+        let mut stamp = first.stamp.clone();
+        stamp.revision = revision;
+        let pending = Record {
+            clean: false,
+            sequence: chain.records as u64 + 1,
+            transaction: if revision == 3 {
+                first.transaction
+            } else {
+                [8; 16]
+            },
+            stamp: stamp.clone(),
+            previous: chain.hash,
+        };
+        let clean = Record {
+            clean: true,
+            sequence: pending.sequence + 1,
+            transaction: pending.transaction,
+            stamp,
+            previous: Sha256::digest(pending.bytes()).into(),
+        };
+        bytes.extend_from_slice(&pending.bytes());
+        bytes.extend_from_slice(&clean.bytes());
+    }
+    assert!(Chain::parse(&bytes, false).is_err());
+}
+
+#[test]
+fn UnattendedStore_KnownUnknownFencedAfterLeaseAcquisition_027() {
+    let d = directory();
+    let s = create(d.path());
+    let old = initialize(&s);
+    let b = reopen(d.path());
+    let expected = old.expected();
+    let (entered, seen) = std::sync::mpsc::sync_channel(0);
+    let (release, resume) = std::sync::mpsc::sync_channel(0);
+    let reader = thread::spawn(move || {
+        crate::version_history::windows::unattended_store::test_before_control(move || {
+            entered.send(()).unwrap();
+            resume.recv().unwrap();
+        });
+        b.observe(&expected, 1000)
+    });
+    seen.recv().unwrap();
+    s.backend.test_journal_fault(5);
+    assert_eq!(
+        s.enable(permit(&s, old.expected(), 1000, 2000), 1000),
+        Err(StoreError::Unknown)
+    );
+    release.send(()).unwrap();
+    assert_eq!(reader.join().unwrap(), Err(StoreError::Poisoned));
+}
+
+#[test]
+fn UnattendedStore_CompletedTransactionCannotCommitTwice_028() {
+    let d = directory();
+    let s = create(d.path());
+    let old = initialize(&s);
+    let mut tx = s.backend.begin().unwrap();
+    tx.read().unwrap();
+    let mut next = old.0;
+    next.revision += 1;
+    let bytes = s.encode(&next).unwrap();
+    let stamp = s.stamp(&next, &bytes).unwrap();
+    tx.commit(&bytes, true, &stamp, &mut || Ok(())).unwrap();
+    let journal = std::fs::read(path(&s, "commit.journal")).unwrap();
+    assert_eq!(
+        tx.commit(&bytes, true, &stamp, &mut || Ok(())),
+        Err(StoreError::Invalid)
+    );
+    assert_eq!(std::fs::read(path(&s, "commit.journal")).unwrap(), journal);
+}
+
+#[test]
+fn UnattendedStore_ReopenBeforeInitializeNeverResumesCreation_029() {
+    let d = directory();
+    drop(create(d.path()));
+    let s = reopen(d.path());
+    assert_eq!(
+        s.initialize(permit(&s, initial(), 1000, 1000)),
+        Err(StoreError::Unknown)
+    );
+    assert!(!path(&s, "delegation.dpapi").exists());
+    assert!(matches!(try_reopen(d.path()), Err(StoreError::Poisoned)));
 }

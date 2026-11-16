@@ -10,6 +10,9 @@ use std::sync::{
 use std::time::Instant;
 #[path = "remote_unattended_store/dpapi.rs"]
 mod dpapi;
+#[path = "remote_unattended_store/journal.rs"]
+pub(crate) mod journal;
+use journal::CommitStamp;
 #[cfg(test)]
 #[path = "remote_unattended_store/tests.rs"]
 mod tests;
@@ -29,6 +32,7 @@ pub(crate) enum StoreError {
     Poisoned,
     Expired,
     Clock,
+    Capacity,
 }
 pub(crate) type Result<T> = std::result::Result<T, StoreError>;
 pub(crate) trait Sealer {
@@ -37,10 +41,12 @@ pub(crate) trait Sealer {
 }
 pub(crate) trait Transaction {
     fn read(&mut self) -> Result<Option<Vec<u8>>>;
+    fn stamp(&self) -> Option<&CommitStamp>;
     fn commit(
         &mut self,
         bytes: &[u8],
         replacing: bool,
+        stamp: &CommitStamp,
         authorize: &mut dyn FnMut() -> Result<()>,
     ) -> Result<()>;
 }
@@ -182,9 +188,14 @@ impl<B: Backend, S: Sealer> Store<B, S> {
         })
     }
     fn read(&self, tx: &mut B::Guard, local: &mut Local) -> Result<Document> {
-        let decoded = tx
-            .read()
-            .and_then(|bytes| self.decode(&bytes.ok_or(StoreError::Missing)?));
+        let decoded = tx.read().and_then(|bytes| {
+            let bytes = bytes.ok_or(StoreError::Missing)?;
+            let doc = self.decode(&bytes)?;
+            if tx.stamp() != Some(&self.stamp(&doc, &bytes)?) {
+                return Err(StoreError::Unknown);
+            }
+            Ok(doc)
+        });
         let doc = match decoded {
             Ok(doc) => doc,
             Err(error) => {
@@ -192,16 +203,7 @@ impl<B: Backend, S: Sealer> Store<B, S> {
                 return Err(error);
             }
         };
-        if local.last.as_ref().is_some_and(|old| {
-            old.store_id != doc.store_id
-                || old.revision > doc.revision
-                || old.authority_revision > doc.authority_revision
-                || old.observed_wall_ms > doc.observed_wall_ms
-                || (old.revision == doc.revision && old != &doc)
-        }) {
-            local.blocked = true;
-            return Err(StoreError::Conflict);
-        }
+        check_known(local, &doc)?;
         Ok(doc)
     }
     fn cas(doc: &Document, expected: &Expected) -> Result<()> {
@@ -307,7 +309,7 @@ impl<B: Backend, S: Sealer> Store<B, S> {
     ) -> Result<LockedSnapshot> {
         validate(&doc)?;
         let bytes = self.encode(&doc)?;
-        if let Err(error) = tx.commit(&bytes, replacing, authorize) {
+        if let Err(error) = tx.commit(&bytes, replacing, &self.stamp(&doc, &bytes)?, authorize) {
             if error == StoreError::Unknown {
                 local.unknown = true
             }
@@ -315,6 +317,18 @@ impl<B: Backend, S: Sealer> Store<B, S> {
         }
         local.last = Some(doc.clone());
         Ok(LockedSnapshot(doc))
+    }
+    fn stamp(&self, doc: &Document, bytes: &[u8]) -> Result<CommitStamp> {
+        Ok(CommitStamp {
+            store_id: doc.store_id,
+            revision: doc.revision,
+            authority_revision: doc.authority_revision,
+            target: Sha256::digest(
+                serde_json::to_vec(&doc.target).map_err(|_| StoreError::Invalid)?,
+            )
+            .into(),
+            blob: Sha256::digest(bytes).into(),
+        })
     }
     fn encode(&self, doc: &Document) -> Result<Vec<u8>> {
         let canonical = serde_json::to_vec(doc).map_err(|_| StoreError::Invalid)?;
@@ -384,4 +398,18 @@ fn validate(doc: &Document) -> Result<()> {
     } else {
         Ok(())
     }
+}
+
+fn check_known(local: &mut Local, doc: &Document) -> Result<()> {
+    if local.last.as_ref().is_some_and(|old| {
+        old.store_id != doc.store_id
+            || old.revision > doc.revision
+            || old.authority_revision > doc.authority_revision
+            || old.observed_wall_ms > doc.observed_wall_ms
+            || (old.revision == doc.revision && old != doc)
+    }) {
+        local.blocked = true;
+        return Err(StoreError::Conflict);
+    }
+    Ok(())
 }

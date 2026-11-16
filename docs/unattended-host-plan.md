@@ -185,3 +185,43 @@ no automatic journal repair/reset. A recovered matching Clean can provide commit
 evidence, not evidence the old caller received an acknowledgement. Define that
 recovery distinction explicitly, retain same-process known-Unknown fencing, and
 do not claim tested power-loss durability or defense against full local rollback.
+
+Stage 2b implementation: fixed bounded journal, strict full-chain verification,
+Pending/blob/Clean flush ordering and identity-bound same-process Unknown fencing
+are implemented. A matching Clean is recovered only after reflush, and remains a
+locked description, never authorization. The design above records the exact
+linearization and local rollback/power-loss limitations.
+
+Validation history is retained rather than overwritten. Initial compile caught
+an extra core publish argument. The first completed 40-test run had 37 passing:
+003 reopened an uninitialized journal before initialization (now correctly
+rejected by the production contract), and 015/017 expected pre-journal error
+categories. The competing-writer fixture now initializes before reopening;
+independent empty-journal rejection remains covered. Pending-era failures expect
+Unknown. The core high-water rejection is tested independently as well as the
+real adapter's earlier journal/blob mismatch rejection. A retry of the old
+executable selecting zero tests is not counted as evidence.
+
+The corrected 40-test run passed, then the expanded 42-test run passed (13 Stage 1
+plus 29 store/journal cases; 2,253 unrelated tests filtered). New cases cover
+same-read double commit and abandoning initialization, alongside partial/full
+Pending/Clean failures, post-publication failure, separate child-process recovery,
+same-process new backend fencing, malformed/reused transactions, capacity,
+identity replacement, CAS, cancellation and the poison/lease race. Fake sealing
+and project-owned temporary NTFS directories were used, never production data.
+
+Non-test Clippy caught a test-only import and closure error-type inference issue
+hidden by fault injection, followed by strict style findings in the chain parser.
+These were fixed without suppressing warnings or weakening validation.
+
+Final Stage 2b verification on WSK-MSI (2026-11-16), from the repository root:
+- `cargo clippy --offline --locked --manifest-path src-tauri/Cargo.toml --lib --features remote-host -- -D warnings`: passed on the final source (non-test, real DPAPI code compiled but not invoked).
+- `cargo test --offline --locked --manifest-path src-tauri/Cargo.toml --lib --features remote-host remote_unattended -- --test-threads=1`: passed again on that same source, 42 passed / 0 failed, 2,253 filtered.
+- Focused rustfmt check and git diff whitespace check passed.
+
+Logs are retained under the worktree's .audit directory: final
+`unattended-stage2b-clippy-third.log` and `unattended-stage2b-seventh.log`,
+with earlier attempts separately preserved. Existing offline cargo home and build
+cache were reused; these are fresh executions, not old test artifact claims.
+No production activation, whole-App suite, real DPAPI execution or power-cut
+acceptance is implied. Stage 3a delegated native admission remains next.
