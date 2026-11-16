@@ -592,7 +592,8 @@ impl NativeRuntime {
         if bytes.len() > 1024 {
             return Err(error("REQUEST_TOO_LARGE"));
         }
-        let query: NativeRunQuery = serde_json::from_slice(bytes).map_err(|_| error("INVALID_REQUEST"))?;
+        let query: NativeRunQuery =
+            serde_json::from_slice(bytes).map_err(|_| error("INVALID_REQUEST"))?;
         if query.generation == 0 {
             return Err(SafeError::invalid("generation"));
         }
@@ -835,13 +836,28 @@ impl NativeRuntime {
     }
 
     #[cfg(feature = "remote-host")]
-    pub(crate) fn admit_host_control<T: Runtime>(&self, webview: &Webview<T>, headers: &HeaderMap, body: &InvokeBody)
-        -> Result<(Arc<DocumentBinding<NativeRun>>, CallerIdentity, crate::run_supervisor::NativeRunAdmission), SafeError> {
+    pub(crate) fn admit_host_control<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        headers: &HeaderMap,
+        body: &InvokeBody,
+    ) -> Result<
+        (
+            Arc<DocumentBinding<NativeRun>>,
+            CallerIdentity,
+            crate::run_supervisor::NativeRunAdmission,
+        ),
+        SafeError,
+    > {
         let (caller, run) = self.admit_run_key(webview, headers, body)?;
         let binding = self.binding()?;
         binding.check_admitted(&caller)?;
         let access = self.service.access(&caller, &run)?;
-        let admission = self.supervisor.as_ref().ok_or_else(|| error("NATIVE_RUNTIME_NOT_READY"))?.admit_remote_run(access, &run)?;
+        let admission = self
+            .supervisor
+            .as_ref()
+            .ok_or_else(|| error("NATIVE_RUNTIME_NOT_READY"))?
+            .admit_remote_run(access, &run)?;
         Ok((binding, caller, admission))
     }
 
@@ -1178,7 +1194,6 @@ mod tests {
     }
 }
 
-
 // 与原 admit_run_key 共用同一严格 DTO；测试不复制另一套较宽解析器。
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1193,11 +1208,26 @@ struct NativeRunQuery {
 fn RemoteHost_RunQueryRejectsAuthorityFields_001() {
     let valid = serde_json::json!({"runId":"original","generation":1});
     assert!(serde_json::from_value::<NativeRunQuery>(valid.clone()).is_ok());
-    for field in ["approved", "cap", "profile", "caller", "activation", "scope", "session", "run"] {
+    for field in [
+        "approved",
+        "cap",
+        "profile",
+        "caller",
+        "activation",
+        "scope",
+        "session",
+        "run",
+    ] {
         let mut forged = valid.clone();
         forged[field] = serde_json::json!(true);
-        assert!(serde_json::from_value::<NativeRunQuery>(forged).is_err(), "{field}");
+        assert!(
+            serde_json::from_value::<NativeRunQuery>(forged).is_err(),
+            "{field}"
+        );
     }
-    assert!(serde_json::from_str::<NativeRunQuery>(r#"{"runId":"a","runId":"b","generation":1}"#).is_err());
+    assert!(
+        serde_json::from_str::<NativeRunQuery>(r#"{"runId":"a","runId":"b","generation":1}"#)
+            .is_err()
+    );
     assert!(serde_json::from_str::<NativeRunQuery>(r#"{"runId":"a","generation":"1"}"#).is_err());
 }

@@ -1960,7 +1960,9 @@ fn identity_failure_stage(failure: &SafeError) -> &'static str {
 }
 #[cfg(feature = "remote-host")]
 impl NativeRun {
-    pub(crate) fn remote_input(&self) -> Option<cc_desk_remote_host::native_host::NativeLocalInput> {
+    pub(crate) fn remote_input(
+        &self,
+    ) -> Option<cc_desk_remote_host::native_host::NativeLocalInput> {
         self.process.native_input.get().cloned()
     }
 }
@@ -1994,8 +1996,12 @@ impl NativeCanonicalRun {
         budget: Duration,
     ) -> cc_desk_remote_host::native_host::NativeWriterRetirement {
         match &mut self.producer {
-            NativeProducerSlot::Available(producer) => { let _ = producer.join(budget); }
-            NativeProducerSlot::CheckedOut => return cc_desk_remote_host::native_host::NativeWriterRetirement::Pending,
+            NativeProducerSlot::Available(producer) => {
+                let _ = producer.join(budget);
+            }
+            NativeProducerSlot::CheckedOut => {
+                return cc_desk_remote_host::native_host::NativeWriterRetirement::Pending
+            }
             NativeProducerSlot::Consumed => {}
         }
         self.input.retirement()

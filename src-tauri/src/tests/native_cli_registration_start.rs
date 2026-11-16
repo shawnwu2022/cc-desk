@@ -67,7 +67,11 @@ async fn NativeRegistration_StartOracle_904() {
     // 仅接收产品 Prepare 页面的公开身份，不接受任何私钥材料。
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase", deny_unknown_fields)]
-    struct ProductPublicIdentity { tls_spki: String, grant_spki: String, relay_spki: String }
+    struct ProductPublicIdentity {
+        tls_spki: String,
+        grant_spki: String,
+        relay_spki: String,
+    }
     let public = std::env::var("CC_DESK_TEST_ONLY_PRODUCT_PUBLIC_IDENTITY").ok();
     let browser_keys = if let Some(value) = &public {
         assert!(value.len() <= 1024);
@@ -79,11 +83,26 @@ async fn NativeRegistration_StartOracle_904() {
             assert_eq!(&bytes[..26], &key_bytes(1)[..26]);
             bytes
         })
-    } else { [key_bytes(1), key_bytes(2), key_bytes(3)] };
-    let database = if public.is_some() { "CC_DESK_BROWSER_ENROLLMENT_V1" } else { "TEST_ONLY.registration-chain" };
-    let terminal_wasm = if public.is_some() { "https://desk.invalid/remote-runtime/fixture_bg.wasm" } else { "https://desk.invalid/fixture_bg.wasm" };
-    let terminal_glue = if public.is_some() { "https://desk.invalid/remote-runtime/fixture_bg.js" } else { "https://desk.invalid/fixture_bg.js" };
-    let mut relay = super::registration_relay::registration_relay_fixture_with_phone(&browser_keys[2]).await;
+    } else {
+        [key_bytes(1), key_bytes(2), key_bytes(3)]
+    };
+    let database = if public.is_some() {
+        "CC_DESK_BROWSER_ENROLLMENT_V1"
+    } else {
+        "TEST_ONLY.registration-chain"
+    };
+    let terminal_wasm = if public.is_some() {
+        "https://desk.invalid/remote-runtime/fixture_bg.wasm"
+    } else {
+        "https://desk.invalid/fixture_bg.wasm"
+    };
+    let terminal_glue = if public.is_some() {
+        "https://desk.invalid/remote-runtime/fixture_bg.js"
+    } else {
+        "https://desk.invalid/fixture_bg.js"
+    };
+    let mut relay =
+        super::registration_relay::registration_relay_fixture_with_phone(&browser_keys[2]).await;
     let admission = fixture
         .supervisor
         .admit_remote_run(

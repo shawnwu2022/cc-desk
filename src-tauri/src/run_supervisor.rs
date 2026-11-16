@@ -1436,8 +1436,14 @@ impl SupervisedRun {
     fn request_stop(self: &Arc<Self>) -> Result<(), SafeError> {
         #[cfg(feature = "remote-host")]
         {
-            let input = self.resource.lock().as_ref().and_then(|run| run.remote_input());
-            if let Some(input) = input { input.stop(); }
+            let input = self
+                .resource
+                .lock()
+                .as_ref()
+                .and_then(|run| run.remote_input());
+            if let Some(input) = input {
+                input.stop();
+            }
         }
         // 每次显式控制允许一次延迟自动重试；连续底层错误仍保持未知并等待下一次控制。
         self.automatic_retry_used.store(false, Ordering::SeqCst);
@@ -1755,11 +1761,20 @@ impl SupervisedRun {
         &self,
         budget: Duration,
     ) -> cc_desk_remote_host::native_host::NativeWriterRetirement {
-        let input = self.resource.lock().as_ref().and_then(|run| run.remote_input());
-        if let Some(input) = &input { input.stop(); }
+        let input = self
+            .resource
+            .lock()
+            .as_ref()
+            .and_then(|run| run.remote_input());
+        if let Some(input) = &input {
+            input.stop();
+        }
         let mut native = self.native_canonical.lock();
         let Some(native) = native.as_mut() else {
-            return input.map_or(cc_desk_remote_host::native_host::NativeWriterRetirement::Joined, |input| input.retirement());
+            return input.map_or(
+                cc_desk_remote_host::native_host::NativeWriterRetirement::Joined,
+                |input| input.retirement(),
+            );
         };
         native.observe_writer(budget)
     }
@@ -2091,8 +2106,18 @@ pub(crate) struct NativeRunPin {
 impl NativeRunPin {
     pub(crate) fn network_origin(&self) -> Result<NativeRunNetworkOrigin, SafeError> {
         let state = self.state.as_ref().ok_or_else(|| error("RUN_NOT_READY"))?;
-        let resource = state.resource.lock().as_ref().map(Arc::downgrade).ok_or_else(|| error("RUN_NOT_READY"))?;
-        Ok(NativeRunNetworkOrigin { supervisor: self.origin.clone(), state: Arc::downgrade(state), resource, run: self.run.clone() })
+        let resource = state
+            .resource
+            .lock()
+            .as_ref()
+            .map(Arc::downgrade)
+            .ok_or_else(|| error("RUN_NOT_READY"))?;
+        Ok(NativeRunNetworkOrigin {
+            supervisor: self.origin.clone(),
+            state: Arc::downgrade(state),
+            resource,
+            run: self.run.clone(),
+        })
     }
     pub(crate) fn native_scope(
         &self,
@@ -2139,10 +2164,18 @@ impl NativeProducerCheckout {
     fn take(state: &Arc<SupervisedRun>) -> Result<Self, SafeError> {
         use crate::cli::launch_service::NativeProducerSlot;
         let mut canonical = state.native_canonical.lock();
-        let native = canonical.as_mut().ok_or_else(|| error("NATIVE_CANONICAL_UNAVAILABLE"))?;
+        let native = canonical
+            .as_mut()
+            .ok_or_else(|| error("NATIVE_CANONICAL_UNAVAILABLE"))?;
         match std::mem::replace(&mut native.producer, NativeProducerSlot::CheckedOut) {
-            NativeProducerSlot::Available(producer) => Ok(Self { state: state.clone(), producer: Some(*producer) }),
-            original => { native.producer = original; Err(error("REMOTE_PRODUCER_OWNED")) }
+            NativeProducerSlot::Available(producer) => Ok(Self {
+                state: state.clone(),
+                producer: Some(*producer),
+            }),
+            original => {
+                native.producer = original;
+                Err(error("REMOTE_PRODUCER_OWNED"))
+            }
         }
     }
 }
@@ -2151,9 +2184,16 @@ impl Drop for NativeProducerCheckout {
     fn drop(&mut self) {
         use crate::cli::launch_service::NativeProducerSlot;
         let mut canonical = self.state.native_canonical.lock();
-        let native = canonical.as_mut().expect("original canonical retained by checkout");
+        let native = canonical
+            .as_mut()
+            .expect("original canonical retained by checkout");
         debug_assert!(matches!(native.producer, NativeProducerSlot::CheckedOut));
-        native.producer = self.producer.take().map_or(NativeProducerSlot::Consumed, |producer| NativeProducerSlot::Available(Box::new(producer)));
+        native.producer = self
+            .producer
+            .take()
+            .map_or(NativeProducerSlot::Consumed, |producer| {
+                NativeProducerSlot::Available(Box::new(producer))
+            });
     }
 }
 #[cfg(feature = "remote-host")]
@@ -2178,7 +2218,9 @@ impl NativeRunNetworkOrigin {
 #[cfg(feature = "remote-host")]
 impl NativeRunAdmission {
     #[cfg(test)]
-    pub(crate) fn test_resource_strong_count(&self) -> usize { Arc::strong_count(&self.original) }
+    pub(crate) fn test_resource_strong_count(&self) -> usize {
+        Arc::strong_count(&self.original)
+    }
     pub(crate) fn network_origin(&self) -> Result<NativeRunNetworkOrigin, SafeError> {
         self.validate()?;
         self.pin.network_origin()
@@ -2186,7 +2228,11 @@ impl NativeRunAdmission {
     #[cfg(test)]
     pub(crate) fn test_canonical_probe(&self) -> Box<dyn Fn() -> bool + Send + Sync> {
         let state = self.authority.state.clone();
-        Box::new(move || state.upgrade().is_some_and(|state| state.native_canonical.try_lock().is_some()))
+        Box::new(move || {
+            state
+                .upgrade()
+                .is_some_and(|state| state.native_canonical.try_lock().is_some())
+        })
     }
     pub(crate) fn network_checks(
         &self,
@@ -2240,8 +2286,14 @@ impl NativeRunAdmission {
             .ok_or_else(|| error("RUN_NOT_READY"))?;
         let checkout = NativeProducerCheckout::take(state)?;
         self.validate()?;
-        cc_desk_remote_host::native_host::NativeHost::for_native_resource(channel, checkout.producer.as_ref().expect("checked out original producer"))
-            .map_err(|_| error("REMOTE_HOST_AUTHORITY"))
+        cc_desk_remote_host::native_host::NativeHost::for_native_resource(
+            channel,
+            checkout
+                .producer
+                .as_ref()
+                .expect("checked out original producer"),
+        )
+        .map_err(|_| error("REMOTE_HOST_AUTHORITY"))
     }
     pub(crate) fn adopt(
         self,
@@ -2279,7 +2331,9 @@ impl NativeRunAdmission {
                 access.check_remote_admission(&original).is_ok()
                     && authority.check(&original).is_ok()
             }),
-        ).map(|_| ()).map_err(|_| error("REMOTE_HOST_AUTHORITY"))
+        )
+        .map(|_| ())
+        .map_err(|_| error("REMOTE_HOST_AUTHORITY"))
     }
     pub(crate) fn is_owned_by(&self, runtime: &crate::cli::native_runtime::NativeRuntime) -> bool {
         runtime.owns_remote_pin(&self.pin)
@@ -2400,13 +2454,17 @@ impl NativeStopIdentity {
     fn from_pin(pin: &NativeRunPin) -> Option<Self> {
         let state = pin.state.as_ref()?;
         Some(Self {
-            supervisor: pin.origin.clone(), state: Arc::downgrade(state), run: pin.run.clone(),
+            supervisor: pin.origin.clone(),
+            state: Arc::downgrade(state),
+            run: pin.run.clone(),
             #[cfg(windows)]
             managed_job: state.managed_job.as_ref().map(Arc::downgrade),
         })
     }
     fn matches(&self, pin: &NativeRunPin) -> bool {
-        let Some(state) = pin.state.as_ref() else { return false; };
+        let Some(state) = pin.state.as_ref() else {
+            return false;
+        };
         #[cfg(windows)]
         let same_job = match (&self.managed_job, &state.managed_job) {
             (Some(original), Some(current)) => Weak::ptr_eq(original, &Arc::downgrade(current)),
@@ -2415,8 +2473,10 @@ impl NativeStopIdentity {
         };
         #[cfg(not(windows))]
         let same_job = true;
-        self.run == pin.run && Weak::ptr_eq(&self.supervisor, &pin.origin)
-            && Weak::ptr_eq(&self.state, &Arc::downgrade(state)) && same_job
+        self.run == pin.run
+            && Weak::ptr_eq(&self.supervisor, &pin.origin)
+            && Weak::ptr_eq(&self.state, &Arc::downgrade(state))
+            && same_job
     }
 }
 #[must_use = "Retain the real stop jobs until observed; dropping is not retirement"]
@@ -2661,7 +2721,12 @@ impl NativeRunSupervisor {
 impl NativeShutdown {
     #[cfg(feature = "remote-host")]
     pub(crate) fn covers_pin(&self, pin: &NativeRunPin) -> bool {
-        self.entries.iter().any(|entry| entry.identity.as_ref().is_some_and(|identity| identity.matches(pin)))
+        self.entries.iter().any(|entry| {
+            entry
+                .identity
+                .as_ref()
+                .is_some_and(|identity| identity.matches(pin))
+        })
     }
     #[cfg(all(test, windows, feature = "remote-host"))]
     pub(crate) fn retains_managed_state_for_test(&self, run: &RunKey) -> bool {

@@ -416,7 +416,9 @@ pub(super) async fn registration_relay_fixture() -> NetworkRelayFixture {
     registration_relay_fixture_with_phone(&key_bytes(3)).await
 }
 
-pub(super) async fn registration_relay_fixture_with_phone(phone_spki: &[u8]) -> NetworkRelayFixture {
+pub(super) async fn registration_relay_fixture_with_phone(
+    phone_spki: &[u8],
+) -> NetworkRelayFixture {
     assert_eq!(phone_spki.len(), 91);
     let reserve = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = reserve.local_addr().unwrap();

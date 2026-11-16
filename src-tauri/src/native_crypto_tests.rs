@@ -302,20 +302,30 @@ pub(crate) fn test_host_supplier(
     let endpoint = hex(vector()["public_key_sec1"].as_str().unwrap());
     let relay = hex("046b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c2964fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5");
     let binding = host::FrozenHostBinding {
-        native_profile: host::HostKeyProfileIdentity { id: [7; 16], revision: 9 },
+        native_profile: host::HostKeyProfileIdentity {
+            id: [7; 16],
+            revision: 9,
+        },
         endpoint_spki: [SPKI_HEAD, &endpoint[1..]].concat().try_into().unwrap(),
         relay_spki: [SPKI_HEAD, &relay[1..]].concat().try_into().unwrap(),
-        origin, relay_id: [1; 16], profile_cap: cap,
+        origin,
+        relay_id: [1; 16],
+        profile_cap: cap,
     };
     let first = opened.clone();
-    host::FrozenHostSupplier::test_new(binding, Box::new(move || {
-        first[0].fetch_add(1, Ordering::AcqRel);
-        import_public_rfc6979_fixture(&endpoint)
-    }), Box::new(move || {
-        opened[1].fetch_add(1, Ordering::AcqRel);
-        let mut scalar = [0; 32]; scalar[31] = 1;
-        import_known_public_fixture(&relay, &scalar, SigningPurpose::Relay)
-    }))
+    host::FrozenHostSupplier::test_new(
+        binding,
+        Box::new(move || {
+            first[0].fetch_add(1, Ordering::AcqRel);
+            import_public_rfc6979_fixture(&endpoint)
+        }),
+        Box::new(move || {
+            opened[1].fetch_add(1, Ordering::AcqRel);
+            let mut scalar = [0; 32];
+            scalar[31] = 1;
+            import_known_public_fixture(&relay, &scalar, SigningPurpose::Relay)
+        }),
+    )
 }
 
 #[cfg(feature = "remote-host")]
@@ -326,11 +336,19 @@ mod existing_key_tests;
 pub(crate) fn test_existing_host_supplier(
     origin: cc_desk_remote_record::appbind::CanonicalOrigin,
     cap: std::time::Instant,
-    opened: std::sync::Arc<[std::sync::atomic::AtomicUsize;2]>,
+    opened: std::sync::Arc<[std::sync::atomic::AtomicUsize; 2]>,
 ) -> host::FrozenHostSupplier {
-    let binding = test_host_supplier(origin,cap,opened.clone()).binding().clone();
-    let endpoint: [u8;32] = hex("c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721").try_into().unwrap();
-    let mut relay = [0;32];relay[31]=1;
-    host_profile::NativeHostProfile::new(binding,"TEST_ONLY_ENDPOINT","TEST_ONLY_RELAY").unwrap()
-        .test_anonymous([endpoint,relay],opened).freeze()
+    let binding = test_host_supplier(origin, cap, opened.clone())
+        .binding()
+        .clone();
+    let endpoint: [u8; 32] =
+        hex("c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721")
+            .try_into()
+            .unwrap();
+    let mut relay = [0; 32];
+    relay[31] = 1;
+    host_profile::NativeHostProfile::new(binding, "TEST_ONLY_ENDPOINT", "TEST_ONLY_RELAY")
+        .unwrap()
+        .test_anonymous([endpoint, relay], opened)
+        .freeze()
 }

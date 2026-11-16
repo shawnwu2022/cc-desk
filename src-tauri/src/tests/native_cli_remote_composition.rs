@@ -197,7 +197,9 @@ struct NetworkRelayFixture {
     address: std::net::SocketAddr,
 }
 impl NetworkRelayFixture {
-    async fn start() -> Self { Self::start_with_host_point(None).await }
+    async fn start() -> Self {
+        Self::start_with_host_point(None).await
+    }
     async fn start_with_host_point(host_point: Option<Vec<u8>>) -> Self {
         let reserve = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = reserve.local_addr().unwrap();
@@ -209,17 +211,38 @@ impl NetworkRelayFixture {
             .unwrap()
             .as_millis() as u64;
         let point = |host| {
-            host_point.as_ref().filter(|_| host).cloned().unwrap_or_else(|| network_relay_material(host).1)
+            host_point
+                .as_ref()
+                .filter(|_| host)
+                .cloned()
+                .unwrap_or_else(|| network_relay_material(host).1)
                 .iter()
                 .map(|b| format!("{b:02x}"))
                 .collect::<String>()
         };
         fs::write(root.path().join("policy.json"),serde_json::to_vec(&json!({"schema":1,"policy_id":"TEST_ONLY_NATIVE_NETWORK","revision":1,"issued_at_unix_ms":now,"not_before_unix_ms":now-1000,"expires_unix_ms":now+30_000,"listen":address.to_string(),"signed_wss_endpoint":origin,"browser_origins":[],"devices":[{"id":"01".repeat(16),"public_key_sec1":point(true),"role":"Host"},{"id":"02".repeat(16),"public_key_sec1":point(false),"role":"Phone"}],"routes":[{"tunnel":"03".repeat(16),"host":"01".repeat(16),"phone":"02".repeat(16)}]})).unwrap()).unwrap();
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let relay = std::env::var_os("CC_DESK_TEST_RELAY_ROOT").map(std::path::PathBuf::from).unwrap_or_else(|| manifest.join("../../cc-desk-relay"));
-        let executable = std::env::var_os("CC_DESK_TEST_RELAY_EXE").map(std::path::PathBuf::from).map(|path| if path.is_absolute() { path } else { relay.join(path) }).unwrap_or_else(|| manifest.join("../target-browser-profile/debug/cc-desk-relay.exe"));
-        assert!(relay.join("tests/fixtures/chain.pem").is_file(), "set CC_DESK_TEST_RELAY_ROOT to the fixture checkout");
-        assert!(executable.is_file(), "set CC_DESK_TEST_RELAY_EXE to the built fixture executable");
+        let relay = std::env::var_os("CC_DESK_TEST_RELAY_ROOT")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| manifest.join("../../cc-desk-relay"));
+        let executable = std::env::var_os("CC_DESK_TEST_RELAY_EXE")
+            .map(std::path::PathBuf::from)
+            .map(|path| {
+                if path.is_absolute() {
+                    path
+                } else {
+                    relay.join(path)
+                }
+            })
+            .unwrap_or_else(|| manifest.join("../target-browser-profile/debug/cc-desk-relay.exe"));
+        assert!(
+            relay.join("tests/fixtures/chain.pem").is_file(),
+            "set CC_DESK_TEST_RELAY_ROOT to the fixture checkout"
+        );
+        assert!(
+            executable.is_file(),
+            "set CC_DESK_TEST_RELAY_EXE to the built fixture executable"
+        );
         let mut child = std::process::Command::new(executable)
             .arg("--policy")
             .arg(root.path().join("policy.json"))
@@ -309,7 +332,9 @@ fn network_local(client: bool) -> cc_desk_remote_security::LocalIdentity {
 }
 impl RemoteHostService {
     // 材料析构测试只复用原公开测试身份；此方法不进入生产批准入口。
-    pub(crate) fn test_public_source_material_identity() -> cc_desk_remote_security::LocalIdentity { network_local(false) }
+    pub(crate) fn test_public_source_material_identity() -> cc_desk_remote_security::LocalIdentity {
+        network_local(false)
+    }
 }
 fn network_pin(client: bool) -> cc_desk_remote_security::PeerPin {
     use cc_desk_remote_security::*;
@@ -330,7 +355,12 @@ async fn network_client(
     ),
     &'static str,
 > {
-    network_client_mode(relay, scope, cc_desk_remote_transport::wss::RelayMode::Legacy).await
+    network_client_mode(
+        relay,
+        scope,
+        cc_desk_remote_transport::wss::RelayMode::Legacy,
+    )
+    .await
 }
 async fn network_client_mode(
     relay: &NetworkRelayFixture,
@@ -347,7 +377,11 @@ async fn network_client_mode(
     use cc_desk_remote_security::*;
     let budget = Duration::from_secs(8);
     let end = tokio::time::Instant::now() + budget;
-    let remaining = || end.checked_duration_since(tokio::time::Instant::now()).filter(|left| !left.is_zero()).ok_or("phone setup deadline");
+    let remaining = || {
+        end.checked_duration_since(tokio::time::Instant::now())
+            .filter(|left| !left.is_zero())
+            .ok_or("phone setup deadline")
+    };
     let socket = cc_desk_remote_transport::wss::test_only_connect_admitted_loopback_with_mode(
         &relay.origin,
         relay.address,
@@ -373,7 +407,10 @@ async fn network_client_mode(
             token,
         )
         .await
-        .map_err(|error| { eprintln!("TEST_ONLY_PHONE_TLS_ERROR {error:?}"); "phone TLS" })?;
+        .map_err(|error| {
+            eprintln!("TEST_ONLY_PHONE_TLS_ERROR {error:?}");
+            "phone TLS"
+        })?;
         let channel = bind_client_peer_channel(
             pending,
             ClientTrust {
@@ -430,31 +467,70 @@ async fn open_registered_network_peer(
     host: &Arc<RemoteHostService>,
     runtime: &Arc<NativeRuntime>,
     relay: &NetworkRelayFixture,
-    source: (Arc<crate::remote_host_network::ApprovedHostSource>, Option<tokio::sync::oneshot::Sender<crate::remote_host_network::TestAttemptEnd>>),
+    source: (
+        Arc<crate::remote_host_network::ApprovedHostSource>,
+        Option<tokio::sync::oneshot::Sender<crate::remote_host_network::TestAttemptEnd>>,
+    ),
     current: Option<&crate::remote_host_network::HostSourceToken>,
-) -> Result<(Arc<crate::remote_host_network::HostNetworkAttempt>, NetworkTestPeer, crate::remote_host_network::HostSourceToken), &'static str> {
+) -> Result<
+    (
+        Arc<crate::remote_host_network::HostNetworkAttempt>,
+        NetworkTestPeer,
+        crate::remote_host_network::HostSourceToken,
+    ),
+    &'static str,
+> {
     use crate::remote_host_network::HostAttemptMaterials;
     let (source, termination) = source;
-    let admission = fixture.supervisor.admit_remote_run(fixture.service.access(&fixture.caller, run).map_err(|_| "registered access")?, run).map_err(|_| "registered admission")?;
+    let admission = fixture
+        .supervisor
+        .admit_remote_run(
+            fixture
+                .service
+                .access(&fixture.caller, run)
+                .map_err(|_| "registered access")?,
+            run,
+        )
+        .map_err(|_| "registered admission")?;
     let scope = admission.scope().map_err(|_| "registered scope")?;
     let (accepted, ready) = tokio::sync::oneshot::channel();
     let token = if let Some(token) = current {
-        let material = HostAttemptMaterials { stages: None, local: network_local(false), relay: network_relay_identity(&relay.origin, true), outer_accepted: Some(Box::new((accepted, None))), termination };
-        host.replenish_native_source(runtime, &admission, token, material).map_err(|_| "registered fresh material")?;
+        let material = HostAttemptMaterials {
+            stages: None,
+            local: network_local(false),
+            relay: network_relay_identity(&relay.origin, true),
+            outer_accepted: Some(Box::new((accepted, None))),
+            termination,
+        };
+        host.replenish_native_source(runtime, &admission, token, material)
+            .map_err(|_| "registered fresh material")?;
         token.clone()
     } else {
         let mut inputs = network_inputs(relay, scope.clone(), source);
         inputs.outer_accepted = Some(Box::new((accepted, None)));
         inputs.termination = termination;
-        host.register_native_source(runtime, &admission, inputs).map_err(|_| "registered source install")?
+        host.register_native_source(runtime, &admission, inputs)
+            .map_err(|_| "registered source install")?
     };
-    let attempt = host.test_begin_registered_network(runtime.clone(), admission).map_err(|_| "registered source begin")?;
-    if ready.await.is_err() { let _ = attempt.wait_closed().await; return Err("registered outer acceptance"); }
+    let attempt = host
+        .test_begin_registered_network(runtime.clone(), admission)
+        .map_err(|_| "registered source begin")?;
+    if ready.await.is_err() {
+        let _ = attempt.wait_closed().await;
+        return Err("registered outer acceptance");
+    }
     let (phone, admitted) = tokio::join!(network_client(relay, scope), attempt.wait_admitted());
     match (phone, admitted) {
         (Ok(peer), Ok(())) => Ok((attempt, peer, token)),
-        (Ok(peer), Err(_)) => { let _ = retire_network_peer(peer, &attempt).await; Err("registered handoff") }
-        (Err(error), _) => { attempt.request_close(); let _ = attempt.wait_closed().await; Err(error) }
+        (Ok(peer), Err(_)) => {
+            let _ = retire_network_peer(peer, &attempt).await;
+            Err("registered handoff")
+        }
+        (Err(error), _) => {
+            attempt.request_close();
+            let _ = attempt.wait_closed().await;
+            Err(error)
+        }
     }
 }
 fn network_inputs(
@@ -506,9 +582,20 @@ async fn NativeRemote_ApprovalPureRevokeClosesIdle_011() {
     let supervisor = Arc::new(NativeRunSupervisor::new(transports.clone()));
     let fixture = Fixture::with_runtime_environment("input", supervisor, transports, true);
     let host = Arc::new(RemoteHostService::default());
-    let runtime = Arc::new(NativeRuntime::with_owned_components_for_test(fixture.service.clone(), fixture.transports.clone(), fixture.supervisor.clone()));
+    let runtime = Arc::new(NativeRuntime::with_owned_components_for_test(
+        fixture.service.clone(),
+        fixture.transports.clone(),
+        fixture.supervisor.clone(),
+    ));
     let status = fixture.start();
-    let mut cleanup = Cleanup { supervisor: fixture.supervisor.clone(), host: host.clone(), run: status.run.clone(), pin: Some(fixture.supervisor.pin_shutdown(&status.run)), stop: None, proofs: Vec::new() };
+    let mut cleanup = Cleanup {
+        supervisor: fixture.supervisor.clone(),
+        host: host.clone(),
+        run: status.run.clone(),
+        pin: Some(fixture.supervisor.pin_shutdown(&status.run)),
+        stop: None,
+        proofs: Vec::new(),
+    };
     let ready = Instant::now() + Duration::from_secs(10);
     while fixture.child_reports() == 0 || fixture.events.lock().is_empty() {
         assert!(Instant::now() < ready);
@@ -516,37 +603,66 @@ async fn NativeRemote_ApprovalPureRevokeClosesIdle_011() {
     }
     let mut relay = NetworkRelayFixture::start().await;
     let (_source_watch, revoked) = tokio::sync::watch::channel(false);
-    let source = Arc::new(ApprovedHostSource { clock: Arc::new(|| Ok(1000)), revoked, expires_host_ms: 11000 });
-    let admission = fixture.supervisor.admit_remote_run(fixture.service.access(&fixture.caller, &status.run).unwrap(), &status.run).unwrap();
+    let source = Arc::new(ApprovedHostSource {
+        clock: Arc::new(|| Ok(1000)),
+        revoked,
+        expires_host_ms: 11000,
+    });
+    let admission = fixture
+        .supervisor
+        .admit_remote_run(
+            fixture
+                .service
+                .access(&fixture.caller, &status.run)
+                .unwrap(),
+            &status.run,
+        )
+        .unwrap();
     let scope = admission.scope().unwrap();
     let (accepted, outer_ready) = tokio::sync::oneshot::channel();
     let (terminated, ending) = tokio::sync::oneshot::channel();
     let mut inputs = network_inputs(&relay, scope.clone(), source);
     inputs.outer_accepted = Some(Box::new((accepted, None)));
     inputs.termination = Some(terminated);
-    let (approval, material) = crate::remote_host_approval::NativeHostApproval::test_from_inputs(inputs, &admission, true);
-    assert!(approval.register_once(&runtime, &admission, &host, material).is_ok());
-    let attempt = host.test_begin_registered_network(runtime.clone(), admission).unwrap();
+    let (approval, material) =
+        crate::remote_host_approval::NativeHostApproval::test_from_inputs(inputs, &admission, true);
+    assert!(approval
+        .register_once(&runtime, &admission, &host, material)
+        .is_ok());
+    let attempt = host
+        .test_begin_registered_network(runtime.clone(), admission)
+        .unwrap();
     let mut peer = None;
     let outcome: Result<bool, &'static str> = async {
-        outer_ready.await.map_err(|_| "pure revoke outer acceptance")?;
-        let (phone, admitted) = tokio::join!(network_client(&relay, scope), attempt.wait_admitted());
+        outer_ready
+            .await
+            .map_err(|_| "pure revoke outer acceptance")?;
+        let (phone, admitted) =
+            tokio::join!(network_client(&relay, scope), attempt.wait_admitted());
         peer = Some(phone?);
         admitted.map_err(|_| "pure revoke handoff")?;
-        if tokio::time::timeout(Duration::from_millis(100), attempt.wait_closed()).await.is_ok() {
+        if tokio::time::timeout(Duration::from_millis(100), attempt.wait_closed())
+            .await
+            .is_ok()
+        {
             return Err("channel already ended before pure revoke");
         }
         // 原 peer/run 仍保管且原 grant 尚未到期；之后不发消息、不 poll UI 或授权。
         // 已完成原握手，之后不发消息、不 poll UI、不通知 watch 或显式退出。
         approval.test_revoke_only();
-        if approval.test_watch_revoked() { return Err("pure revoke notified watch"); }
+        if approval.test_watch_revoked() {
+            return Err("pure revoke notified watch");
+        }
         let joined = tokio::time::timeout(Duration::from_secs(1), attempt.wait_closed()).await;
         Ok(matches!(joined, Ok(Ok(()))))
-    }.await;
+    }
+    .await;
     let joined_without_exit = outcome == Ok(true);
     // RED 也先收回全部原 owner，再报告失败。
     attempt.request_close();
-    if let Some(peer) = peer.take() { let _ = retire_network_peer(peer, &attempt).await; }
+    if let Some(peer) = peer.take() {
+        let _ = retire_network_peer(peer, &attempt).await;
+    }
     let _ = attempt.wait_closed().await;
     let end = ending.await.unwrap();
     let known = host.test_join_network().await;
@@ -554,7 +670,10 @@ async fn NativeRemote_ApprovalPureRevokeClosesIdle_011() {
     let relay_closed = relay.close().await;
     eprintln!("TEST_ONLY_APPROVAL_PURE_REVOKE outcome={outcome:?} cause={:?} joined_without_exit={joined_without_exit} watch_notified={} original_network_joined={known}", end.cause, approval.test_watch_revoked());
     assert!(physical && relay_closed && known);
-    assert!(joined_without_exit, "idle approved network ignored its original token: {outcome:?}");
+    assert!(
+        joined_without_exit,
+        "idle approved network ignored its original token: {outcome:?}"
+    );
 }
 async fn retire_network_peer(
     peer: NetworkTestPeer,
@@ -592,7 +711,13 @@ async fn open_network_peer_observed(
     relay: &NetworkRelayFixture,
     source: Arc<crate::remote_host_network::ApprovedHostSource>,
     termination: Option<tokio::sync::oneshot::Sender<crate::remote_host_network::TestAttemptEnd>>,
-) -> Result<(Arc<crate::remote_host_network::HostNetworkAttempt>, NetworkTestPeer), &'static str> {
+) -> Result<
+    (
+        Arc<crate::remote_host_network::HostNetworkAttempt>,
+        NetworkTestPeer,
+    ),
+    &'static str,
+> {
     let admission = fixture
         .supervisor
         .admit_remote_run(
@@ -609,11 +734,7 @@ async fn open_network_peer_observed(
     inputs.outer_accepted = Some(Box::new((outer_accepted, None)));
     inputs.termination = termination;
     let attempt = host
-        .test_begin_admitted_network(
-            runtime.clone(),
-            admission,
-            inputs,
-        )
+        .test_begin_admitted_network(runtime.clone(), admission, inputs)
         .map_err(|_| "native network entry")?;
     // 只观察真实 Relay Accepted；原建立截止不重置，尚无 Data 或安装权限。
     if accepted.await.is_err() {
@@ -759,12 +880,35 @@ async fn NativeRemote_ProviderReentryHasNoServiceOrCanonicalLock_004() {
     let supervisor = Arc::new(NativeRunSupervisor::new(transports.clone()));
     let fixture = Fixture::with_runtime_environment("input", supervisor, transports, true);
     let host = Arc::new(RemoteHostService::default());
-    let runtime = NativeRuntime::with_owned_components_for_test(fixture.service.clone(), fixture.transports.clone(), fixture.supervisor.clone());
+    let runtime = NativeRuntime::with_owned_components_for_test(
+        fixture.service.clone(),
+        fixture.transports.clone(),
+        fixture.supervisor.clone(),
+    );
     let status = fixture.start();
-    let mut cleanup = Cleanup { supervisor: fixture.supervisor.clone(), host: host.clone(), run: status.run.clone(), pin: Some(fixture.supervisor.pin_shutdown(&status.run)), stop: None, proofs: Vec::new() };
+    let mut cleanup = Cleanup {
+        supervisor: fixture.supervisor.clone(),
+        host: host.clone(),
+        run: status.run.clone(),
+        pin: Some(fixture.supervisor.pin_shutdown(&status.run)),
+        stop: None,
+        proofs: Vec::new(),
+    };
     let ready = Instant::now() + Duration::from_secs(10);
-    while fixture.child_reports() == 0 || fixture.events.lock().is_empty() { assert!(Instant::now() < ready); tokio::time::sleep(Duration::from_millis(5)).await; }
-    let admission = fixture.supervisor.admit_remote_run(fixture.service.access(&fixture.caller, &status.run).unwrap(), &status.run).unwrap();
+    while fixture.child_reports() == 0 || fixture.events.lock().is_empty() {
+        assert!(Instant::now() < ready);
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let admission = fixture
+        .supervisor
+        .admit_remote_run(
+            fixture
+                .service
+                .access(&fixture.caller, &status.run)
+                .unwrap(),
+            &status.run,
+        )
+        .unwrap();
     let scope = admission.scope().unwrap();
     let canonical_probe = admission.test_canonical_probe();
     let caller_thread = Arc::new(Mutex::new(None));
@@ -784,10 +928,25 @@ async fn NativeRemote_ProviderReentryHasNoServiceOrCanonicalLock_004() {
             let service = weak_host.upgrade().ok_or(GrantError::Revoked)?;
             let service_free = service.test_state_is_unlocked();
             let canonical_free = canonical_probe();
-            if !service_free { observed_service.store(true, Ordering::Release); }
-            if !canonical_free { observed_canonical.store(true, Ordering::Release); }
-            if !service_free || !canonical_free { return Err(GrantError::Clock); }
-            if !service.network_admission_open() || original_supervisor.pin_shutdown(&run).native_scope().ok().as_ref() != Some(&expected_scope) { return Err(GrantError::Revoked); }
+            if !service_free {
+                observed_service.store(true, Ordering::Release);
+            }
+            if !canonical_free {
+                observed_canonical.store(true, Ordering::Release);
+            }
+            if !service_free || !canonical_free {
+                return Err(GrantError::Clock);
+            }
+            if !service.network_admission_open()
+                || original_supervisor
+                    .pin_shutdown(&run)
+                    .native_scope()
+                    .ok()
+                    .as_ref()
+                    != Some(&expected_scope)
+            {
+                return Err(GrantError::Revoked);
+            }
             observed_reentry.store(true, Ordering::Release);
         }
         Ok(1000)
@@ -796,17 +955,36 @@ async fn NativeRemote_ProviderReentryHasNoServiceOrCanonicalLock_004() {
     cleanup.proofs.extend([c.authority(), h.authority()]);
     let h = Arc::new(h);
     *caller_thread.lock() = Some(std::thread::current().id());
-    let adopted = match host.adopt_admitted(admission, h.clone(), &runtime) { Ok(()) => true, Err(rejected) => { drop(rejected); false } };
+    let adopted = match host.adopt_admitted(admission, h.clone(), &runtime) {
+        Ok(()) => true,
+        Err(rejected) => {
+            drop(rejected);
+            false
+        }
+    };
     *caller_thread.lock() = None;
-    let installed = if adopted { c.client_installed().await.is_ok() } else { false };
-    cancel.cancel(); c.authority().request_close(); h.authority().request_close();
+    let installed = if adopted {
+        c.client_installed().await.is_ok()
+    } else {
+        false
+    };
+    cancel.cancel();
+    c.authority().request_close();
+    h.authority().request_close();
     let _ = tokio::join!(c.wait_closed(), h.wait_closed());
     let retired = cleanup.close();
     let network = host.test_join_network().await;
     drop(gate);
     eprintln!("TEST_ONLY_PROVIDER_REENTRY service_locked={} canonical_locked={} reentry={} installed={installed}", service_locked.load(Ordering::Acquire), canonical_locked.load(Ordering::Acquire), reentered.load(Ordering::Acquire));
     assert!(retired && network);
-    assert!(adopted && installed && reentered.load(Ordering::Acquire) && !service_locked.load(Ordering::Acquire) && !canonical_locked.load(Ordering::Acquire), "provider ran under an ownership lock");
+    assert!(
+        adopted
+            && installed
+            && reentered.load(Ordering::Acquire)
+            && !service_locked.load(Ordering::Acquire)
+            && !canonical_locked.load(Ordering::Acquire),
+        "provider ran under an ownership lock"
+    );
 }
 
 #[cfg(windows)]
@@ -820,21 +998,42 @@ async fn NativeRemote_LiveNetworkClockPanicKeepsUnknownAfterActualJoin_006() {
     let supervisor = Arc::new(NativeRunSupervisor::new(transports.clone()));
     let fixture = Fixture::with_runtime_environment("input", supervisor, transports, true);
     let host = Arc::new(RemoteHostService::default());
-    let runtime = Arc::new(NativeRuntime::with_owned_components_for_test(fixture.service.clone(), fixture.transports.clone(), fixture.supervisor.clone()));
+    let runtime = Arc::new(NativeRuntime::with_owned_components_for_test(
+        fixture.service.clone(),
+        fixture.transports.clone(),
+        fixture.supervisor.clone(),
+    ));
     let status = fixture.start();
-    let mut cleanup = Cleanup { supervisor: fixture.supervisor.clone(), host: host.clone(), run: status.run.clone(), pin: Some(fixture.supervisor.pin_shutdown(&status.run)), stop: None, proofs: Vec::new() };
+    let mut cleanup = Cleanup {
+        supervisor: fixture.supervisor.clone(),
+        host: host.clone(),
+        run: status.run.clone(),
+        pin: Some(fixture.supervisor.pin_shutdown(&status.run)),
+        stop: None,
+        proofs: Vec::new(),
+    };
     let ready = Instant::now() + Duration::from_secs(10);
-    while fixture.child_reports() == 0 || fixture.events.lock().is_empty() { assert!(Instant::now() < ready); tokio::time::sleep(Duration::from_millis(5)).await; }
+    while fixture.child_reports() == 0 || fixture.events.lock().is_empty() {
+        assert!(Instant::now() < ready);
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
     let mut relay = NetworkRelayFixture::start().await;
     let (revoke, revoked) = tokio::sync::watch::channel(false);
     let panic_next = Arc::new(AtomicBool::new(false));
     let panic_seen = Arc::new(AtomicBool::new(false));
     let armed = panic_next.clone();
     let observed = panic_seen.clone();
-    let source = Arc::new(ApprovedHostSource { clock: Arc::new(move || {
-        if armed.swap(false, Ordering::AcqRel) { observed.store(true, Ordering::Release); panic!("TEST_ONLY_LIVE_NETWORK_CLOCK_PANIC"); }
-        Ok(1000)
-    }), revoked, expires_host_ms: 11000 });
+    let source = Arc::new(ApprovedHostSource {
+        clock: Arc::new(move || {
+            if armed.swap(false, Ordering::AcqRel) {
+                observed.store(true, Ordering::Release);
+                panic!("TEST_ONLY_LIVE_NETWORK_CLOCK_PANIC");
+            }
+            Ok(1000)
+        }),
+        revoked,
+        expires_host_ms: 11000,
+    });
     let mut peer = None;
     let outcome: Result<(), &'static str> = async {
         let (attempt, connected) = open_network_peer(&fixture, &status.run, &host, &runtime, &relay, source.clone()).await?;
@@ -868,11 +1067,18 @@ async fn NativeRemote_LiveNetworkClockPanicKeepsUnknownAfterActualJoin_006() {
         Ok(())
     }.await;
     revoke.send_replace(true);
-    if let Some((client, mux, cancel)) = peer { cancel.cancel(); mux.request_close(); let _ = tokio::join!(client.close(), mux.wait_closed()); }
+    if let Some((client, mux, cancel)) = peer {
+        cancel.cancel();
+        mux.request_close();
+        let _ = tokio::join!(client.close(), mux.wait_closed());
+    }
     let physical = cleanup.close();
     let known = host.test_join_network().await;
     let relay_closed = relay.close().await;
-    assert!(physical && relay_closed, "all original self-owned native/relay resources must close");
+    assert!(
+        physical && relay_closed,
+        "all original self-owned native/relay resources must close"
+    );
     assert!(!known, "Unknown must survive actual network joins");
     assert_eq!(outcome, Ok(()));
 }
@@ -888,21 +1094,42 @@ async fn NativeRemote_LiveClockFaultWithoutFreshAdmissionNaturallyJoins_007() {
     let supervisor = Arc::new(NativeRunSupervisor::new(transports.clone()));
     let fixture = Fixture::with_runtime_environment("input", supervisor, transports, true);
     let host = Arc::new(RemoteHostService::default());
-    let runtime = Arc::new(NativeRuntime::with_owned_components_for_test(fixture.service.clone(), fixture.transports.clone(), fixture.supervisor.clone()));
+    let runtime = Arc::new(NativeRuntime::with_owned_components_for_test(
+        fixture.service.clone(),
+        fixture.transports.clone(),
+        fixture.supervisor.clone(),
+    ));
     let status = fixture.start();
-    let mut cleanup = Cleanup { supervisor: fixture.supervisor.clone(), host: host.clone(), run: status.run.clone(), pin: Some(fixture.supervisor.pin_shutdown(&status.run)), stop: None, proofs: Vec::new() };
+    let mut cleanup = Cleanup {
+        supervisor: fixture.supervisor.clone(),
+        host: host.clone(),
+        run: status.run.clone(),
+        pin: Some(fixture.supervisor.pin_shutdown(&status.run)),
+        stop: None,
+        proofs: Vec::new(),
+    };
     let ready = Instant::now() + Duration::from_secs(10);
-    while fixture.child_reports() == 0 || fixture.events.lock().is_empty() { assert!(Instant::now() < ready); tokio::time::sleep(Duration::from_millis(5)).await; }
+    while fixture.child_reports() == 0 || fixture.events.lock().is_empty() {
+        assert!(Instant::now() < ready);
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
     let mut relay = NetworkRelayFixture::start().await;
     let (revoke, revoked) = tokio::sync::watch::channel(false);
     let panic_next = Arc::new(AtomicBool::new(false));
     let fault_at = Arc::new(OnceLock::new());
     let armed = panic_next.clone();
     let recorded_fault = fault_at.clone();
-    let source = Arc::new(ApprovedHostSource { clock: Arc::new(move || {
-        if armed.swap(false, Ordering::AcqRel) { let _ = recorded_fault.set(tokio::time::Instant::now()); panic!("TEST_ONLY_NATURAL_CLOCK_PANIC"); }
-        Ok(1000)
-    }), revoked, expires_host_ms: 11000 });
+    let source = Arc::new(ApprovedHostSource {
+        clock: Arc::new(move || {
+            if armed.swap(false, Ordering::AcqRel) {
+                let _ = recorded_fault.set(tokio::time::Instant::now());
+                panic!("TEST_ONLY_NATURAL_CLOCK_PANIC");
+            }
+            Ok(1000)
+        }),
+        revoked,
+        expires_host_ms: 11000,
+    });
     let (selected, ending) = tokio::sync::oneshot::channel();
     let mut peer = None;
     let outcome: Result<(), &'static str> = async {
@@ -944,12 +1171,22 @@ async fn NativeRemote_LiveClockFaultWithoutFreshAdmissionNaturallyJoins_007() {
         Ok(())
     }.await;
     revoke.send_replace(true);
-    if let Some((client, mux, cancel)) = peer { cancel.cancel(); mux.request_close(); let _ = tokio::join!(client.close(), mux.wait_closed()); }
+    if let Some((client, mux, cancel)) = peer {
+        cancel.cancel();
+        mux.request_close();
+        let _ = tokio::join!(client.close(), mux.wait_closed());
+    }
     let physical = cleanup.close();
     let known = host.test_join_network().await;
     let relay_closed = relay.close().await;
-    assert!(physical && relay_closed, "all original self-owned resources must close");
-    assert!(!known, "natural fault must retain Unknown after actual joins");
+    assert!(
+        physical && relay_closed,
+        "all original self-owned resources must close"
+    );
+    assert!(
+        !known,
+        "natural fault must retain Unknown after actual joins"
+    );
     assert_eq!(outcome, Ok(()));
 }
 
@@ -958,19 +1195,37 @@ async fn NativeRemote_LiveClockFaultWithoutFreshAdmissionNaturallyJoins_007() {
 #[allow(non_snake_case)]
 async fn NativeRemote_RegisteredSourceConsumesFreshMaterialsAndRebinds_008() {
     use crate::remote_host_network::*;
-    use cc_desk_remote_record::{projection, control_io as wire, input};
+    use cc_desk_remote_record::{control_io as wire, input, projection};
     let transports = Arc::new(TerminalTransports::new());
     let supervisor = Arc::new(NativeRunSupervisor::new(transports.clone()));
     let fixture = Fixture::with_runtime_environment("input", supervisor, transports, true);
     let host = Arc::new(RemoteHostService::default());
-    let runtime = Arc::new(NativeRuntime::with_owned_components_for_test(fixture.service.clone(), fixture.transports.clone(), fixture.supervisor.clone()));
+    let runtime = Arc::new(NativeRuntime::with_owned_components_for_test(
+        fixture.service.clone(),
+        fixture.transports.clone(),
+        fixture.supervisor.clone(),
+    ));
     let status = fixture.start();
-    let mut cleanup = Cleanup { supervisor: fixture.supervisor.clone(), host: host.clone(), run: status.run.clone(), pin: Some(fixture.supervisor.pin_shutdown(&status.run)), stop: None, proofs: Vec::new() };
+    let mut cleanup = Cleanup {
+        supervisor: fixture.supervisor.clone(),
+        host: host.clone(),
+        run: status.run.clone(),
+        pin: Some(fixture.supervisor.pin_shutdown(&status.run)),
+        stop: None,
+        proofs: Vec::new(),
+    };
     let ready = Instant::now() + Duration::from_secs(10);
-    while fixture.child_reports() == 0 || fixture.events.lock().is_empty() { assert!(Instant::now() < ready); tokio::time::sleep(Duration::from_millis(5)).await; }
+    while fixture.child_reports() == 0 || fixture.events.lock().is_empty() {
+        assert!(Instant::now() < ready);
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
     let mut relay = NetworkRelayFixture::start().await;
     let (_revoke, revoked) = tokio::sync::watch::channel(false);
-    let source = Arc::new(ApprovedHostSource { clock: Arc::new(|| Ok(1000)), revoked, expires_host_ms: 11000 });
+    let source = Arc::new(ApprovedHostSource {
+        clock: Arc::new(|| Ok(1000)),
+        revoked,
+        expires_host_ms: 11000,
+    });
     let mut peer = None;
     let outcome: Result<(), &'static str> = async {
         let absent = fixture.supervisor.admit_remote_run(fixture.service.access(&fixture.caller, &status.run).map_err(|_| "absent access")?, &status.run).map_err(|_| "absent admission")?;
@@ -1385,7 +1640,11 @@ async fn NativeRemote_RegisteredSourceConsumesFreshMaterialsAndRebinds_008() {
         eprintln!("TEST_ONLY_REGISTERED_SOURCE same_source=true original_pin=1 fresh_consumed=true original_ACK_Window_HostWritten=true exact_Node_bytes=6");
         Ok(())
     }.await;
-    if let Some((client, mux, cancel)) = peer { cancel.cancel(); mux.request_close(); let _ = tokio::join!(client.close(), mux.wait_closed()); }
+    if let Some((client, mux, cancel)) = peer {
+        cancel.cancel();
+        mux.request_close();
+        let _ = tokio::join!(client.close(), mux.wait_closed());
+    }
     let physical = cleanup.close();
     let _ = host.test_join_network().await;
     let relay_closed = relay.close().await;
@@ -1400,20 +1659,48 @@ async fn NativeRemote_RegisteredProviderRevokeNaturallyJoinsWithoutInlineWake_00
     use crate::remote_host_network::*;
     use cc_desk_remote_record::projection;
     use futures_util::task::{waker, ArcWake};
-    use std::{future::Future, sync::{atomic::{AtomicBool, AtomicUsize}, OnceLock}, task::{Context, Poll}};
-    struct Probe { inside: Arc<AtomicBool>, inline: AtomicUsize }
+    use std::{
+        future::Future,
+        sync::{
+            atomic::{AtomicBool, AtomicUsize},
+            OnceLock,
+        },
+        task::{Context, Poll},
+    };
+    struct Probe {
+        inside: Arc<AtomicBool>,
+        inline: AtomicUsize,
+    }
     impl ArcWake for Probe {
-        fn wake_by_ref(this: &Arc<Self>) { if this.inside.load(Ordering::Acquire) { this.inline.fetch_add(1, Ordering::AcqRel); } }
+        fn wake_by_ref(this: &Arc<Self>) {
+            if this.inside.load(Ordering::Acquire) {
+                this.inline.fetch_add(1, Ordering::AcqRel);
+            }
+        }
     }
     let transports = Arc::new(TerminalTransports::new());
     let supervisor = Arc::new(NativeRunSupervisor::new(transports.clone()));
     let fixture = Fixture::with_runtime_environment("input", supervisor, transports, true);
     let host = Arc::new(RemoteHostService::default());
-    let runtime = Arc::new(NativeRuntime::with_owned_components_for_test(fixture.service.clone(), fixture.transports.clone(), fixture.supervisor.clone()));
+    let runtime = Arc::new(NativeRuntime::with_owned_components_for_test(
+        fixture.service.clone(),
+        fixture.transports.clone(),
+        fixture.supervisor.clone(),
+    ));
     let status = fixture.start();
-    let mut cleanup = Cleanup { supervisor: fixture.supervisor.clone(), host: host.clone(), run: status.run.clone(), pin: Some(fixture.supervisor.pin_shutdown(&status.run)), stop: None, proofs: Vec::new() };
+    let mut cleanup = Cleanup {
+        supervisor: fixture.supervisor.clone(),
+        host: host.clone(),
+        run: status.run.clone(),
+        pin: Some(fixture.supervisor.pin_shutdown(&status.run)),
+        stop: None,
+        proofs: Vec::new(),
+    };
     let ready = Instant::now() + Duration::from_secs(10);
-    while fixture.child_reports() == 0 || fixture.events.lock().is_empty() { assert!(Instant::now() < ready); tokio::time::sleep(Duration::from_millis(5)).await; }
+    while fixture.child_reports() == 0 || fixture.events.lock().is_empty() {
+        assert!(Instant::now() < ready);
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
     let mut relay = NetworkRelayFixture::start().await;
     let (_lease, revoked) = tokio::sync::watch::channel(false);
     let callback_token = Arc::new(parking_lot::Mutex::new(None::<HostSourceToken>));
@@ -1427,19 +1714,23 @@ async fn NativeRemote_RegisteredProviderRevokeNaturallyJoinsWithoutInlineWake_00
     let recorded = fault_at.clone();
     let deferred = Arc::new(AtomicBool::new(false));
     let held_during_callback = deferred.clone();
-    let source = Arc::new(ApprovedHostSource { clock: Arc::new(move || {
-        let token = held_token.lock().take();
-        if let Some(token) = token {
-            let _ = recorded.set(tokio::time::Instant::now());
-            in_provider.store(true, Ordering::Release);
-            let owner = weak.upgrade().unwrap();
-            owner.revoke_native_source(&token).unwrap();
-            held_during_callback.store(owner.test_source_material_pending(), Ordering::Release);
-            in_provider.store(false, Ordering::Release);
-            observed.store(true, Ordering::Release);
-        }
-        Ok(1000)
-    }), revoked, expires_host_ms: 11000 });
+    let source = Arc::new(ApprovedHostSource {
+        clock: Arc::new(move || {
+            let token = held_token.lock().take();
+            if let Some(token) = token {
+                let _ = recorded.set(tokio::time::Instant::now());
+                in_provider.store(true, Ordering::Release);
+                let owner = weak.upgrade().unwrap();
+                owner.revoke_native_source(&token).unwrap();
+                held_during_callback.store(owner.test_source_material_pending(), Ordering::Release);
+                in_provider.store(false, Ordering::Release);
+                observed.store(true, Ordering::Release);
+            }
+            Ok(1000)
+        }),
+        revoked,
+        expires_host_ms: 11000,
+    });
     let (selected, ending) = tokio::sync::oneshot::channel();
     let mut peer = None;
     let outcome: Result<(), &'static str> = async {
@@ -1477,7 +1768,11 @@ async fn NativeRemote_RegisteredProviderRevokeNaturallyJoinsWithoutInlineWake_00
         Ok(())
     }.await;
     callback_token.lock().take();
-    if let Some((client, mux, cancel)) = peer { cancel.cancel(); mux.request_close(); let _ = tokio::join!(client.close(), mux.wait_closed()); }
+    if let Some((client, mux, cancel)) = peer {
+        cancel.cancel();
+        mux.request_close();
+        let _ = tokio::join!(client.close(), mux.wait_closed());
+    }
     let physical = cleanup.close();
     let _ = host.test_join_network().await;
     let relay_closed = relay.close().await;
@@ -1679,23 +1974,46 @@ async fn NativeRemote_ExitDuringHandoffRetainsAndReleasesCoveredLatePin_005() {
     use crate::remote_client_ipc::RemoteClientService;
     use crate::remote_host::ExitDecision;
     struct Stop(Arc<NativeRuntime>);
-    impl Drop for Stop { fn drop(&mut self) { self.0.shutdown(); } }
+    impl Drop for Stop {
+        fn drop(&mut self) {
+            self.0.shutdown();
+        }
+    }
     let transports = Arc::new(TerminalTransports::new());
     let supervisor = Arc::new(NativeRunSupervisor::new(transports.clone()));
     let fixture = Fixture::with_runtime_environment("hold", supervisor, transports, true);
-    let runtime = Arc::new(NativeRuntime::with_owned_components_for_test(fixture.service.clone(), fixture.transports.clone(), fixture.supervisor.clone()));
+    let runtime = Arc::new(NativeRuntime::with_owned_components_for_test(
+        fixture.service.clone(),
+        fixture.transports.clone(),
+        fixture.supervisor.clone(),
+    ));
     let _stop = Stop(runtime.clone());
     let events = fixture.events.clone();
-    let status = runtime.start_managed_run(&fixture.caller, &fixture.request, |_| {
-        fixture.routes.bind(1, Box::new(|| Ok(())), || Ok(Channel::new(move |body| {
-            if let InvokeResponseBody::Json(text) = body { events.lock().push(serde_json::from_str(&text).unwrap()); }
-            Ok(())
-        })))
-    }).unwrap();
+    let status = runtime
+        .start_managed_run(&fixture.caller, &fixture.request, |_| {
+            fixture.routes.bind(1, Box::new(|| Ok(())), || {
+                Ok(Channel::new(move |body| {
+                    if let InvokeResponseBody::Json(text) = body {
+                        events.lock().push(serde_json::from_str(&text).unwrap());
+                    }
+                    Ok(())
+                }))
+            })
+        })
+        .unwrap();
     let ready = Instant::now() + Duration::from_secs(10);
-    while fixture.child_reports() == 0 || fixture.events.lock().is_empty() { assert!(Instant::now() < ready); tokio::time::sleep(Duration::from_millis(5)).await; }
-    let access = fixture.service.access(&fixture.caller, &status.run).unwrap();
-    let admission = fixture.supervisor.admit_remote_run(access.clone(), &status.run).unwrap();
+    while fixture.child_reports() == 0 || fixture.events.lock().is_empty() {
+        assert!(Instant::now() < ready);
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let access = fixture
+        .service
+        .access(&fixture.caller, &status.run)
+        .unwrap();
+    let admission = fixture
+        .supervisor
+        .admit_remote_run(access.clone(), &status.run)
+        .unwrap();
     let (client, channel, gate, cancel) = channels::channels(admission.scope().unwrap()).await;
     let channel = Arc::new(channel);
     let service = Arc::new(RemoteHostService::default());
@@ -1703,39 +2021,74 @@ async fn NativeRemote_ExitDuringHandoffRetainsAndReleasesCoveredLatePin_005() {
     let original_runtime = runtime.clone();
     let client_service = Arc::new(RemoteClientService::default());
     let (exit, mut exited) = tokio::sync::oneshot::channel();
-    let (retirement_entered,release_retirement)=service.test_hold_retirement();
+    let (retirement_entered, release_retirement) = service.test_hold_retirement();
     struct ReleaseRetirement(Option<tokio::sync::oneshot::Sender<()>>);
-    impl Drop for ReleaseRetirement {fn drop(&mut self){if let Some(release)=self.0.take(){let _=release.send(());}}}
-    let mut release_retirement=ReleaseRetirement(Some(release_retirement));
-    let observed_gate=Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let record_gate=observed_gate.clone();
+    impl Drop for ReleaseRetirement {
+        fn drop(&mut self) {
+            if let Some(release) = self.0.take() {
+                let _ = release.send(());
+            }
+        }
+    }
+    let mut release_retirement = ReleaseRetirement(Some(release_retirement));
+    let observed_gate = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let record_gate = observed_gate.clone();
     service.test_after_handoff(Box::new(move || {
         assert_eq!(closing.request_exit(91, false), ExitDecision::Wait(91));
-        closing.start_exit(91, original_runtime, client_service, move |code| { let _ = exit.send(code); });
+        closing.start_exit(91, original_runtime, client_service, move |code| {
+            let _ = exit.send(code);
+        });
         // 原 stop inventory 已移出后才返回 hook，随后才登记真正 late pin。
-        record_gate.store(retirement_entered.recv_timeout(Duration::from_secs(5)).is_ok(),std::sync::atomic::Ordering::Release);
+        record_gate.store(
+            retirement_entered
+                .recv_timeout(Duration::from_secs(5))
+                .is_ok(),
+            std::sync::atomic::Ordering::Release,
+        );
     }));
-    let committed = service.adopt_admitted(admission, channel.clone(), &runtime).is_ok();
-    let retirement_held=observed_gate.load(std::sync::atomic::Ordering::Acquire);
-    let exit_unpublished=matches!(exited.try_recv(),Err(tokio::sync::oneshot::error::TryRecvError::Empty));
+    let committed = service
+        .adopt_admitted(admission, channel.clone(), &runtime)
+        .is_ok();
+    let retirement_held = observed_gate.load(std::sync::atomic::Ordering::Acquire);
+    let exit_unpublished = matches!(
+        exited.try_recv(),
+        Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+    );
     let observed_pin_count = service.test_pin_count();
     let late_pin_retained = observed_pin_count == 1;
     eprintln!("TEST_ONLY_HANDOFF_005_SAMPLE committed={committed} observed_pin_count={observed_pin_count} late_pin_retained={late_pin_retained}");
-    if let Some(release)=release_retirement.0.take(){let _=release.send(());}
+    if let Some(release) = release_retirement.0.take() {
+        let _ = release.send(());
+    }
     drop(access);
-    let code = tokio::time::timeout(Duration::from_secs(10), exited).await.unwrap().unwrap();
+    let code = tokio::time::timeout(Duration::from_secs(10), exited)
+        .await
+        .unwrap()
+        .unwrap();
     let joined = service.test_join_exit_worker().await;
-    cancel.cancel(); client.authority().request_close(); channel.authority().request_close();
+    cancel.cancel();
+    client.authority().request_close();
+    channel.authority().request_close();
     let _ = tokio::join!(client.wait_closed(), channel.wait_closed());
     drop(gate);
     let facts = service.test_original_managed_facts(&status.run).unwrap();
     let released = service.test_pin_count() == 0;
     runtime.shutdown();
     eprintln!("TEST_ONLY_HANDOFF_005_FINAL committed={committed} late_pin_retained={late_pin_retained} joined={joined} code={code} released={released} facts={facts:?}");
-    assert!(retirement_held && exit_unpublished,"original retirement gate must hold before observing late pin");
+    assert!(
+        retirement_held && exit_unpublished,
+        "original retirement gate must hold before observing late pin"
+    );
     assert!(committed && late_pin_retained && joined && code == 91);
-    assert!(facts.original_resources_retired() && facts.job_query_is_historical && facts.original_job_handle_closed);
-    assert!(released, "covered late pin must be released after original inventory retirement");
+    assert!(
+        facts.original_resources_retired()
+            && facts.job_query_is_historical
+            && facts.original_job_handle_closed
+    );
+    assert!(
+        released,
+        "covered late pin must be released after original inventory retirement"
+    );
 }
 struct Cleanup {
     supervisor: Arc<NativeRunSupervisor>,
@@ -1943,30 +2296,59 @@ async fn NativeRemote_ManagedOriginalJobAndRemoteOwnersRetireTogether_002() {
 async fn NativeRemote_LiveSourceClockReentryRejectsSecondAttempt_010() {
     use crate::remote_host_network::*;
     use cc_desk_remote_record::projection;
-    let transports=Arc::new(TerminalTransports::new());
-    let supervisor=Arc::new(NativeRunSupervisor::new(transports.clone()));
-    let fixture=Fixture::with_runtime_environment("input",supervisor,transports,true);
-    let host=Arc::new(RemoteHostService::default());
-    let runtime=Arc::new(NativeRuntime::with_owned_components_for_test(fixture.service.clone(),fixture.transports.clone(),fixture.supervisor.clone()));
-    let status=fixture.start();
-    let mut cleanup=Cleanup{supervisor:fixture.supervisor.clone(),host:host.clone(),run:status.run.clone(),pin:Some(fixture.supervisor.pin_shutdown(&status.run)),stop:None,proofs:Vec::new()};
-    let ready=Instant::now()+Duration::from_secs(10);
-    while fixture.child_reports()==0 || fixture.events.lock().is_empty(){assert!(Instant::now()<ready);tokio::time::sleep(Duration::from_millis(5)).await;}
-    let mut relay=NetworkRelayFixture::start().await;
-    let queued=Arc::new(parking_lot::Mutex::new(None::<crate::run_supervisor::NativeRunAdmission>));
-    let result=Arc::new(parking_lot::Mutex::new(None::<Result<(),HostNetworkError>>));
-    let pending=queued.clone();let returned=result.clone();let weak_host=Arc::downgrade(&host);let weak_runtime=Arc::downgrade(&runtime);
-    let (_lease,revoked)=tokio::sync::watch::channel(false);
-    let source=Arc::new(ApprovedHostSource{clock:Arc::new(move||{
-        let admission=pending.lock().take();
-        if let Some(admission)=admission {
-            let nested=weak_host.upgrade().unwrap().test_begin_registered_network(weak_runtime.upgrade().unwrap(),admission).map(|_|());
-            *returned.lock()=Some(nested);
-        }
-        // 故意吞掉嵌套失败，外层仍必须保持 sticky 失效。
-        Ok(1000)
-    }),revoked,expires_host_ms:11000});
-    let mut peer=None;
+    let transports = Arc::new(TerminalTransports::new());
+    let supervisor = Arc::new(NativeRunSupervisor::new(transports.clone()));
+    let fixture = Fixture::with_runtime_environment("input", supervisor, transports, true);
+    let host = Arc::new(RemoteHostService::default());
+    let runtime = Arc::new(NativeRuntime::with_owned_components_for_test(
+        fixture.service.clone(),
+        fixture.transports.clone(),
+        fixture.supervisor.clone(),
+    ));
+    let status = fixture.start();
+    let mut cleanup = Cleanup {
+        supervisor: fixture.supervisor.clone(),
+        host: host.clone(),
+        run: status.run.clone(),
+        pin: Some(fixture.supervisor.pin_shutdown(&status.run)),
+        stop: None,
+        proofs: Vec::new(),
+    };
+    let ready = Instant::now() + Duration::from_secs(10);
+    while fixture.child_reports() == 0 || fixture.events.lock().is_empty() {
+        assert!(Instant::now() < ready);
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let mut relay = NetworkRelayFixture::start().await;
+    let queued = Arc::new(parking_lot::Mutex::new(
+        None::<crate::run_supervisor::NativeRunAdmission>,
+    ));
+    let result = Arc::new(parking_lot::Mutex::new(
+        None::<Result<(), HostNetworkError>>,
+    ));
+    let pending = queued.clone();
+    let returned = result.clone();
+    let weak_host = Arc::downgrade(&host);
+    let weak_runtime = Arc::downgrade(&runtime);
+    let (_lease, revoked) = tokio::sync::watch::channel(false);
+    let source = Arc::new(ApprovedHostSource {
+        clock: Arc::new(move || {
+            let admission = pending.lock().take();
+            if let Some(admission) = admission {
+                let nested = weak_host
+                    .upgrade()
+                    .unwrap()
+                    .test_begin_registered_network(weak_runtime.upgrade().unwrap(), admission)
+                    .map(|_| ());
+                *returned.lock() = Some(nested);
+            }
+            // 故意吞掉嵌套失败，外层仍必须保持 sticky 失效。
+            Ok(1000)
+        }),
+        revoked,
+        expires_host_ms: 11000,
+    });
+    let mut peer = None;
     let outcome:Result<(),&'static str>=async {
         let (attempt,connected,token)=open_registered_network_peer(&fixture,&status.run,&host,&runtime,&relay,(source,None),None).await?;
         peer=Some(connected);
@@ -1989,9 +2371,19 @@ async fn NativeRemote_LiveSourceClockReentryRejectsSecondAttempt_010() {
         Ok(())
     }.await;
     queued.lock().take();
-    if let Some((client,mux,cancel))=peer {cancel.cancel();mux.request_close();let _=tokio::join!(client.close(),mux.wait_closed());}
-    let physical=cleanup.close();let network=host.test_join_network().await;let relay_closed=relay.close().await;
-    assert!(physical && network && relay_closed,"original native/network/relay owners must retire");assert_eq!(outcome,Ok(()));
+    if let Some((client, mux, cancel)) = peer {
+        cancel.cancel();
+        mux.request_close();
+        let _ = tokio::join!(client.close(), mux.wait_closed());
+    }
+    let physical = cleanup.close();
+    let network = host.test_join_network().await;
+    let relay_closed = relay.close().await;
+    assert!(
+        physical && network && relay_closed,
+        "original native/network/relay owners must retire"
+    );
+    assert_eq!(outcome, Ok(()));
 }
 
 #[cfg(windows)]
