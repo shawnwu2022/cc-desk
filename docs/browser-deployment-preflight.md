@@ -1,9 +1,13 @@
 # Offline browser artifact preflight
 
 Run `node scripts/check-browser-deployment.mjs --site <project-local-dist>`.
-If the separately reviewed registration source is installed, also supply
-`--source-manifest-dir <project-local-source-build>` containing its generated
-`manifest.json`. No source inputs, credentials, or manifest command paths are read.
+Without an explicit source manifest directory, the checker reads only the fixed
+`browser-registration.manifest.json` emitted in the site by the product build.
+For a separately reviewed standalone source build, explicitly supply
+`--source-manifest-dir <project-local-source-build>`; this selects only its
+`manifest.json` instead. Neither mode falls back to another manifest when the
+selected file is missing or invalid. No source inputs, credentials, or manifest
+command paths are read.
 
 The command only reads fixed public artifacts and writes JSON to stdout. Exit 0
 means `localArtifactIntegrity: PASS` for the listed inventory, not deploy-ready.
@@ -23,8 +27,10 @@ Hashes establish consistency with the supplied manifest, not independent trusted
 provenance. HTML/JS dependency closure and behavior are explicitly UNVERIFIED.
 Provider authorization, Host/browser/RP identity, real public configuration,
 HTTPS/WebPKI/COOP/COEP, native GUI/authenticator acceptance and deployment always
-remain UNVERIFIED. A normal build without browser-registration.js is a concrete
-MISSING blocker. Do not replace it with a test or self-approved provider.
+remain UNVERIFIED. The product build now emits browser-registration.js and its
+fixed manifest, but this is not operator approval or deployment readiness.
+A missing registration source is still a concrete MISSING blocker. Do not replace
+it with a test provider or infer authorization from matching manifest bytes.
 
 Process regressions: `node --test tests/scripts/browserDeploymentPreflight.node.mjs`.
 Fixtures and temporary files stay under `.audit/deployment-preflight-tests`.

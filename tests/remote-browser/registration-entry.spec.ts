@@ -50,14 +50,14 @@ async function prepare(page:Page,context:BrowserContext,provider='export async f
 }
 test('RegistrationEntry_OriginalPlanAndReload_001',async({page,context})=>{
  await prepare(page,context)
- expect(await page.evaluate(async()=>{const f=Reflect.get(globalThis,'f');const source=f.api.controlledBrowserRegistrationSource(),owner=await source.register(f.lifetime);const result=await owner.install();await owner.waitClosed();return{result,reads:f.reads,sockets:f.sockets,workers:f.workers,terminated:f.terminated,hostPin:Array.from(f.start.hostSpki),expectedPin:Array.from(Uint8Array.from(atob(f.inputs.approvedPlan.configuration.hostSpki.replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0))),replay:await source.register(f.lifetime).then(()=>false,()=>true)}})).toMatchObject({result:{revision:'1',state:'active'},reads:1,sockets:1,workers:1,terminated:1,replay:true})
+ expect(await page.evaluate(async()=>{const f=Reflect.get(globalThis,'f');const source=f.api.controlledBrowserRegistrationSource();await source.prepare(f.controller.signal);const owner=await source.register(f.lifetime);const result=await owner.install();await owner.waitClosed();return{result,reads:f.reads,sockets:f.sockets,workers:f.workers,terminated:f.terminated,hostPin:Array.from(f.start.hostSpki),expectedPin:Array.from(Uint8Array.from(atob(f.inputs.approvedPlan.configuration.hostSpki.replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0))),replay:await source.register(f.lifetime).then(()=>false,()=>true)}})).toMatchObject({result:{revision:'1',state:'active'},reads:1,sockets:1,workers:1,terminated:1,replay:true})
  expect(await page.evaluate(()=>{const f=Reflect.get(globalThis,'f');const expected=Uint8Array.from(atob(f.inputs.approvedPlan.configuration.hostSpki.replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0));return expected.length===f.start.hostSpki.length&&expected.every((value,index)=>value===f.start.hostSpki[index])})).toBe(true)
  await page.reload()
  expect(await page.evaluate(async()=>{const api=await import(location.origin+'/entry.mjs');crypto.subtle.importKey=()=>{throw Error('TEST_ONLY reload must not import keys')};const store=api.createBrowserEnrollmentStore({origin:location.origin,databaseName:'TEST_ONLY_ENTRY'}),signal=new AbortController().signal,session=await store.openExisting(async()=>{},signal),material=await session.provider.readApproved(signal);const ok=[material.handles.tlsKey,material.handles.grantKey].every(k=>k instanceof CryptoKey&&!k.extractable);session.close();await session.waitClosed();return ok})).toBe(true)
 })
 for(const change of ['cancel','wallBack'])test(`RegistrationEntry_SourceHoldsOriginalProvider_${change}_007`,async({page,context})=>{
  await prepare(page,context,'export async function readApprovedBrowserRegistrationInputs(){globalThis.f.reads++;await new Promise(resolve=>{globalThis.f.releaseProvider=resolve});return globalThis.f.inputs}')
- await page.evaluate(()=>{const f=Reflect.get(globalThis,'f');f.source=f.api.controlledBrowserRegistrationSource();f.state='pending';void f.source.register(f.lifetime).then(()=>{f.state='resolved'},()=>{f.state='rejected'})})
+ await page.evaluate(()=>{const f=Reflect.get(globalThis,'f');f.source=f.api.controlledBrowserRegistrationSource();f.state='pending';void f.source.prepare(f.controller.signal).then(()=>{f.state='resolved'},()=>{f.state='rejected'})})
  await expect.poll(()=>page.evaluate(()=>typeof Reflect.get(globalThis,'f').releaseProvider)).toBe('function')
  await page.evaluate(change=>{const f=Reflect.get(globalThis,'f');if(change==='cancel')f.controller.abort();else{const original=Date.now.bind(Date);Date.now=()=>original()-2000}},change)
  await page.waitForTimeout(150)
@@ -67,7 +67,7 @@ for(const change of ['cancel','wallBack'])test(`RegistrationEntry_SourceHoldsOri
 })
 for(const failure of ['missing','reject','undefined','shape'])test(`RegistrationEntry_SourceLockedAndNoReplay_${failure}_002`,async({page,context})=>{
  await prepare(page,context,failure==='missing'?'missing':failure==='reject'?"export async function readApprovedBrowserRegistrationInputs(){globalThis.f.reads++;throw Error('TEST_ONLY denied')}":failure==='undefined'?'export async function readApprovedBrowserRegistrationInputs(){globalThis.f.reads++;return undefined}':'export const wrong=true')
- expect(await page.evaluate(async()=>{const f=Reflect.get(globalThis,'f'),source=f.api.controlledBrowserRegistrationSource();await source.register(f.lifetime).catch(()=>{});const replay=await f.api.controlledBrowserRegistrationSource().register(f.lifetime).then(()=>false,()=>true);return{replay,sockets:f.sockets,workers:f.workers,reads:f.reads}})).toMatchObject({replay:true,sockets:0,workers:0})
+ expect(await page.evaluate(async()=>{const f=Reflect.get(globalThis,'f'),source=f.api.controlledBrowserRegistrationSource();await source.prepare(f.controller.signal).catch(()=>{});const replay=await f.api.controlledBrowserRegistrationSource().register(f.lifetime).then(()=>false,()=>true);return{replay,sockets:f.sockets,workers:f.workers,reads:f.reads}})).toMatchObject({replay:true,sockets:0,workers:0})
 })
 for(const failure of ['reject','wrongOutcome','skipCompleted'])test(`RegistrationEntry_RefusesInstall_${failure}_003`,async({page,context})=>{
  await prepare(page,context)
@@ -102,4 +102,19 @@ for(const stop of ['cancel','wallBack','wallForward','setup-expiry'])test(`Regis
  expect(await page.evaluate(()=>{const f=Reflect.get(globalThis,'f');return{done:f.done,sockets:f.sockets,terminated:f.terminated}})).toEqual({done:false,sockets:0,terminated:0})
  await page.evaluate(()=>Reflect.get(globalThis,'f').release());await expect.poll(()=>page.evaluate(()=>Reflect.get(globalThis,'f').done)).toBe(true)
  expect(await page.evaluate(async()=>{const f=Reflect.get(globalThis,'f');await f.owner.waitClosed();return{status:await f.store.status(),sockets:f.sockets}})).toEqual({status:undefined,sockets:0})
+})
+
+test('RegistrationEntry_ApprovalSnapshot_009',async({page,context})=>{
+ await prepare(page,context)
+ expect(await page.evaluate(async()=>{
+  const f=Reflect.get(globalThis,'f'),source=f.api.controlledBrowserRegistrationSource()
+  f.inputs={keys:{...f.inputs.keys},approvedPlan:JSON.parse(JSON.stringify(f.inputs.approvedPlan)),artifacts:{...f.inputs.artifacts}}
+  const expected=f.inputs.approvedPlan.configuration.hostSpki
+  await source.prepare(f.controller.signal)
+  f.inputs.approvedPlan.configuration.hostSpki=f.inputs.approvedPlan.configuration.localSpki
+  f.inputs.keys.tlsKey=f.inputs.keys.grantKey
+  f.inputs.artifacts.wasm='https://desk.invalid/changed.wasm'
+  const owner=await source.register(f.lifetime);const result=await owner.install();await owner.waitClosed()
+  return {revision:result.revision,exactPin:JSON.stringify(Array.from(f.start.hostSpki))===JSON.stringify(Array.from(Uint8Array.from(atob(expected.replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0))))}
+ })).toMatchObject({revision:'1',exactPin:true})
 })

@@ -1,3 +1,4 @@
+import {registrationSourcePlugin} from './build/registrationSource'
 import { execFileSync } from 'node:child_process'
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
@@ -13,7 +14,7 @@ try {
 } catch { /* Source archives have no Git identity; do not invent one. */ }
 // https://vitejs.dev/config/
 export default defineConfig(({ command, mode }) => ({
-  plugins: [visualFixturePlugin(__dirname, command === 'serve' && mode === 'visual' && process.env.CC_DESK_VISUAL_FIXTURE === '1'), vue()],
+  plugins: [registrationSourcePlugin(__dirname), visualFixturePlugin(__dirname, command === 'serve' && mode === 'visual' && process.env.CC_DESK_VISUAL_FIXTURE === '1'), vue()],
   resolve: {
     alias: {
       '@': resolve(__dirname, 'src')

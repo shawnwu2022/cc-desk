@@ -46,7 +46,7 @@ for(const scenario of ['install','wrong-pin','start-yes','start-deny','start-can
    const fixture=await import(location.origin+'/fixture.mjs'),api=await import(location.origin+'/production-entry.mjs'),f=await fixture.setup(true);f.controller=new AbortController();f.events=[];f.sourceReads=0;f.retired=false;
    if(scenario==='wrong-pin')plan.configuration.hostSpki=plan.configuration.grant.issuerSpki;
    f.approvedInputs={keys:f.keys,approvedPlan:plan,artifacts:{wasm:location.origin+'/fixture_bg.wasm',glue:location.origin+'/fixture_bg.js'}};
-   const now=performance.timeOrigin+performance.now();f.source=api.controlledBrowserRegistrationSource();f.owner=await f.source.register({signal:f.controller.signal,setupDeadline:now+10000,registrationDeadline:now+40000});
+   f.source=api.controlledBrowserRegistrationSource();await f.source.prepare(f.controller.signal);const now=performance.timeOrigin+performance.now();f.owner=await f.source.register({signal:f.controller.signal,setupDeadline:now+10000,registrationDeadline:now+40000});
    void f.owner.evidence.then((value:unknown)=>f.events.push({kind:'evidence',value}),()=>f.events.push({kind:'evidenceFailed'}));
    void f.owner.outcome.then((value:unknown)=>f.events.push({kind:'outcome',value}),()=>f.events.push({kind:'outcomeFailed'}));
    void f.owner.completed.then(()=>f.events.push({kind:'completed'}),()=>f.events.push({kind:'completionFailed'}));

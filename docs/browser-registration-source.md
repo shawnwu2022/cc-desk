@@ -2,8 +2,7 @@
 
 `browserRegistrationProfile.ts` provides a reusable adapter for the independently
 controlled `/browser-registration.js` source. It does not supply a real trusted
-provider, select a Host/user, create keys, or grant enrollment permission. A normal
-product build still has no configured registration source and remains Locked.
+provider, select a Host/user, create keys, or grant enrollment permission. The production build now supplies a separate local-operator preparation flow. The reusable provider adapter remains available for explicitly supplied custom sources.
 
 ## Public configuration and independent approval
 
@@ -114,3 +113,43 @@ preserves all three original handles and is read once. Existing Edge entry/insta
 remain separate checks for key proofs, persistence and lifecycle composition.
 None is real-device, authenticator, trusted-provider, native GUI or deployment
 approval. See [real-device acceptance](browser-real-device-acceptance.md).
+
+## Product local-operator preparation
+
+The product build emits the standalone fixed /browser-registration.js plus
+browser-registration.manifest.json using the CLI's captured-input bundler.
+An existing public/browser-registration.js is not overwritten: the product
+build fails explicitly on that conflict. Custom deployments can still use the
+standalone CLI and the same single reader export.
+
+Prepare reads/imports the captured source once. Page load creates no keys.
+A separate trusted click generates three distinct non-exportable P-256 private
+signing handles in page memory; only public SPKIs are exported for separately
+authorized Host/Relay setup. No private key is serialized. One absolute
+five-minute preparation limit includes time away. Unapproved keys can survive
+temporary visibility loss, but hidden pages cannot approve. Cancellation,
+pagehide/freeze, document replacement or expiry ends this document's attempt.
+Pending key generation/export is awaited before completion.
+
+Public JSON is syntax, not authorization. The strict parser and local checks
+reject mismatched public identities, product database or origin. A separate
+immutable review exposes the exact Host SPKI Base64URL pin (not a hash),
+requested user association, scope, role, budgets, relay, both artifact pairs
+and storage target. Directional controls are escaped. Only another trusted click
+approves this frozen local choice. This does not authenticate an account or prove
+Host identity. Real Host pin checking and credential operations require separately
+authorized use. TLS/key proofs and native/device/storage approvals remain unchanged.
+
+Prepare returns no private inputs. Approved inputs are captured immediately,
+consumed once by Start, and invalidated after at most 60 seconds or visibility
+loss. Start establishes the original 10-second setup and 120-second registration
+deadlines. Direct register without prepare fails. Reload is required to retry.
+
+Isolated production Edge tests stop at a TEST_ONLY socket constructor after the
+original entry's public/private preflight. They are not real authenticator,
+native installation, live relay, deployment or persistent-trust evidence.
+
+The offline checker reads the fixed emitted browser-registration.manifest.json
+when no source manifest directory is specified. An explicit directory still
+selects only manifest.json there; missing files do not trigger fallback.
+Integrity PASS is not deployment readiness or operator authorization.

@@ -39,8 +39,8 @@ async function main(){
  check('remote-registration-runtime',()=>runtime(site,'remote-registration-runtime','OriginalBrowserRegistrationRuntime',[],['cc_desk_browser_owner_v1','cc_desk_browser_tls_v1','cc_desk_browser_registration_v1','./fixture_bg.js']));
  const source=check('browser-registration.js',()=>read(site,'browser-registration.js',1048576));
  if(source){try{
-  if(!options['--source-manifest-dir'])fail('SOURCE_MANIFEST_REQUIRED');
-  const manifest=JSON.parse(read(directory(options['--source-manifest-dir']),'manifest.json',262144));
+  if(!options['--source-manifest-dir']&&!fs.existsSync(path.join(site,'browser-registration.manifest.json')))fail('SOURCE_MANIFEST_REQUIRED');
+  const manifest=JSON.parse(options['--source-manifest-dir']?read(directory(options['--source-manifest-dir']),'manifest.json',262144):read(site,'browser-registration.manifest.json',262144));
   if(manifest.version!==1||JSON.stringify(manifest.exports)!==JSON.stringify(['readApprovedBrowserRegistrationInputs']))fail('SOURCE_EXPORT');
   metadata(manifest.artifact,'browser-registration.js',source,'path');
   if(/TEST_ONLY/i.test(source.toString('utf8')))fail('TEST_ONLY');

@@ -23,6 +23,11 @@ function snapshot<T>(value:T,depth=0):T{
  const output:Record<string,unknown>={};
  for(const key of Reflect.ownKeys(value)){if(typeof key!=='string')throw unavailable();const d=Object.getOwnPropertyDescriptor(value,key);if(!d?.enumerable||!('value'in d))throw unavailable();output[key]=snapshot(d.value,depth+1);}return Object.freeze(output) as T;
 }
+// 批准时捕获原始句柄与公开配置，后续调用不得重读可变 provider 对象。
+export function snapshotBrowserRegistrationInputs(inputs:ApprovedBrowserRegistrationInputs):ApprovedBrowserRegistrationInputs{
+ exact(inputs,['keys','approvedPlan','artifacts']);exact(inputs.keys,['tlsKey','grantKey','relayKey']);
+ return Object.freeze({keys:Object.freeze({...inputs.keys}),approvedPlan:snapshot(inputs.approvedPlan),artifacts:snapshot(inputs.artifacts)});
+}
 const decode=(v:string)=>Uint8Array.from(atob(v.replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0));
 function deferred<T>(){let resolve!:(v:T)=>void,reject!:(e:Error)=>void;const promise=new Promise<T>((r,j)=>{resolve=r;reject=j;});void promise.catch(()=>{});return{promise,resolve,reject};}
 

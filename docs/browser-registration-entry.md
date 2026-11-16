@@ -1,16 +1,27 @@
 # Controlled browser registration entry
 
 `/browser-registration.html` is separate from `/browser-remote.html`. Loading it
-does not read a provider, open a socket or call WebAuthn. Only its explicit Start
-registration button calls the one-use registration source. Missing, rejected or
+does not read a provider, generate keys, open a socket or call WebAuthn. The
+explicit Prepare button reads the one-use source; its separate trusted identity
+and full-review actions prepare local approval. Only the later Start button
+consumes that approval and creates the registration entry. Missing, rejected or
 invalid sources leave the page Locked; there is no retry on that document.
 The separate [product profile reader](browser-product-provider.md) consumes only
 a previously approved installed enrollment.
 
 ## Independent source contract
 
-`controlledBrowserRegistrationSource().register(lifetime)` reads the same-origin
+`controlledBrowserRegistrationSource().prepare(signal)` reads the same-origin
 `/browser-registration.js` once per module/document, including failure and cancel.
+Prepare has one absolute five-minute lifetime and resolves without returning
+private inputs. Unapproved ephemeral keys may survive temporary visibility loss
+within that lifetime, but approval requires a visible document. Approved inputs
+are immediately captured and frozen, then expire within 60 seconds or permanently
+on visibility loss. Cancellation, pagehide/freeze and document changes invalidate
+the attempt. Pending original key generation/export is retained until settled.
+The same source object's separate register(lifetime) consumes the approved
+snapshot once; register without successful preparation rejects. No retry or
+automatic key regeneration occurs on this document.
 That controlled module must export exactly:
 
 `readApprovedBrowserRegistrationInputs(signal): Promise<ApprovedBrowserRegistrationInputs | undefined>`
@@ -27,13 +38,18 @@ receipt or returned outcome can supply this independent approval.
 The [controlled source supply adapter](browser-registration-source.md) now offers
 strict public registration configuration parsing, independent provider comparison,
 original-handle preservation and an explicit standalone source build. The product
-helper requires the already-approved fixed product database. It does not supply a
-real trusted provider or turn a public candidate into approval.
+build also ships a local-operator preparation source: trusted explicit key
+generation, public identity matching and a separate immutable full review.
+The product source requires the exact fixed product database and origin without
+rewriting them. Public JSON alone never establishes approval. Local operator
+choice does not authenticate an account or prove Host identity; independent Host
+pin checking and the original native/device/storage approvals remain necessary.
 
 The entry API is `createBrowserRegistrationEntry(inputs, lifetime)` with
 `lifetime = {signal, setupDeadline, registrationDeadline}`. Deadlines are absolute
-performance epoch values, fixed before loading (setup <= 10 seconds, total <=
-120 seconds). It returns `outcome`, `completed`, `evidence`, `install()`, `close()`
+performance epoch values, established at Start after preparation (setup <=
+10 seconds, total <= 120 seconds). Preparation does not extend either original
+deadline. Entry runtime loading and cryptographic preflight stay within setup. It returns `outcome`, `completed`, `evidence`, `install()`, `close()`
 and `waitClosed()`. Only `install()` attempts persistence, after the unchanged
 installer observes the original outcome, exact ACK/TLS completion and aggregate
 retirement. Callers must close unused entries. Handles cannot start a second
@@ -65,9 +81,9 @@ Late original promises are retained; uncertainty cannot authorize IDB installati
 
 Reload uses `createBrowserEnrollmentStore().openExisting` and the existing profile
 reader. No second private-key import, automatic terminal connection or native
-restart trust is introduced. The production connection provider is now built as `/browser-profile.js`; no
-default independent `/browser-registration.js` source or automatically approved
-configuration is shipped.
+restart trust is introduced. The production connection provider is built as `/browser-profile.js`;
+the separate `/browser-registration.js` supplies explicit local-operator preparation,
+not automatically approved configuration or account/Host authentication.
 
 ## Evidence limits
 
@@ -76,8 +92,11 @@ notifications and socket events to test composition fences. It is not full TLS,
 Relay/native approval or real-authenticator evidence. Artifact loader tests are
 Node boundary tests. `registration-entry-worker.spec.ts` exercises the actual
 dedicated Worker startup failure/replay/retirement paths. The production-page
-smoke reads the built HTML and its real CSP and verifies both pages stay Locked
-without a provider or authenticator call.
+smoke reads the built HTML and its real CSP and verifies no source read on load,
+no authenticator call, and cancellation back to Locked. The production preparation
+tests exercise the actual emitted source, trusted review and original entry's
+three-key proof, then stop at a TEST_ONLY socket constructor. This is not a full
+new-product registration, real pairing or native persistence acceptance.
 
 `RegistrationEntry_ActualRelayNative_*` in `registration-relay.spec.ts` separately
 uses the controlled source, production entry, production Worker, actual WASM,
