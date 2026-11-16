@@ -85,6 +85,7 @@ async fn BrowserData_OriginalHostFixture_001() {
             "normal",
             "manual",
             "manual-expired",
+            "manual-auto",
             "reconnect",
             "unknown",
             "expired",
@@ -191,6 +192,8 @@ async fn BrowserData_OriginalHostFixture_001() {
                     role: DataRole::Controller,
                     duration: if mode == "expired" || mode == "manual-expired" {
                         Duration::from_millis(700)
+                    } else if mode == "manual-auto" {
+                        Duration::from_secs(12)
                     } else {
                         Duration::from_secs(6)
                     },

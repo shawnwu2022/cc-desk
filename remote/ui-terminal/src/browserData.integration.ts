@@ -247,3 +247,14 @@ test('BrowserLeaseOwner_RealLegacyExpiryAndCancellationFailClosed_002',async(t)=
   }finally{await f?.dispose();await h.dispose();p();}
  });
 });
+
+// 真实五秒节拍；Snapshot 是显式测试活动，不是 outer 心跳或纯空闲验收。
+test('AutoLease_RealWasmFiveSecondTickAndOriginalRetirement_001',async()=>{
+ const p=platform(),h=await host('manual-auto');let f:Awaited<ReturnType<typeof client>>|undefined,terminal:TerminalClient|undefined;
+ try{
+  f=await client(h,{configuration:{peerInstall:{budgetMs:1000,controlLease:'manual-v1'}}});const descriptor=await f.app.descriptor,original=f.app,renewals:string[]=[];
+  const connection=nativeConnection({...original,exchange:(bytes,budget)=>{const value=JSON.parse(new TextDecoder().decode(bytes));if(value.message==='LeaseRenew')renewals.push(value.renewalSequence);return original.exchange(bytes,budget);}});terminal=new TerminalClient(descriptor.target,descriptor.binding);terminal.connect(connection);await terminal.leaseState();await terminal.startAutoRenewal();const began=performance.now();
+  while(performance.now()-began<5200){if(terminal.phase!=='Busy'){try{await terminal.snapshot();}catch(error){if(terminal.phase!=='Busy')throw error;}}await new Promise(r=>setTimeout(r,250));}
+  assert.deepEqual(renewals,['1','2']);assert.equal(terminal.autoRenewalState,'Waiting');await terminal.window();const receipt=await terminal.submit('34'.repeat(16),'1',new TextEncoder().encode('TEST_ONLY_AUTO_TICK'));assert.equal(receipt.message,'InputReceipt');assert.equal(receipt.outcome,'HostWritten');assert.equal(terminal.phase,'NeedsSettlement');await terminal.settle();await terminal.stopAutoRenewal();assert.equal(terminal.autoRenewalState,'Stopped');const effects=await h.wait('effects');assert.equal(effects.writeCount,1);assert.equal(effects.bytes,Buffer.from('TEST_ONLY_AUTO_TICK').toString('hex'));
+ }finally{terminal?.disconnect();await f?.dispose();await h.dispose();p();}
+});

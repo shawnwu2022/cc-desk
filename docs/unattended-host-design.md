@@ -645,3 +645,32 @@ projection ACK 或 receipt。NeedsSettlement 中可以纯续租，成功后仍�
 的真实输入之后，原精确 query/settle 和仅一次写入保持；旧模式、700ms 合成
 grant 到期与 freeze 均拒绝后续操作。此项约秒级，既非 Browser 61 秒验收，
 也不是无流量空闲、自动续租或 outer 心跳。生产授权/供应/UI 仍未接通。
+
+
+### 自动续租 A：仅原 TerminalClient 受托管调度
+
+默认 Disabled，必须显式 startAutoRenewal，且本代 leaseState 已捕获、原连接
+有 waitClosed、当前非 Busy；Starting custody 在首 renew 调用前登记，首成功
+才 Waiting。不存在 UI 默认开启、配对默认开启、独立请求 counter 或重试 API。
+手动 renew 与自动 owner 互斥。停止 API 同步封准入/清 timer/关闭原 connection，
+返回的 Promise 才等待完整退休。状态为 Starting→Waiting↔Due/Renewing，随后
+Stopping→Stopped 或 Unknown；旧 Unknown 不得被 connect 覆盖。
+
+performance.now 固定五秒节拍，每次准入和 timer 都核 Due，错过不补发。
+三秒迟到限是固定工程检测界限，不是撤销 SLA 或 Host 权限期限；首 renew
+仍受原一秒预算，返回晚于该界也关闭。时钟非有限/回退或严重暂停关闭。
+这些 tick 不刷新长期授权、grant/attempt cutoff 或其他设备/范围。
+
+Due 只一个标志，不积队列。原 Snapshot+ACK 完整结束后才交棒，在下一普通
+请求准入前优先续租；input/query/settle 各自完整回复处理不能拆开。续租成功
+恢复原阶段，NeedsSettlement 与 pending/receipt 不变。当前没有自动重连。
+
+每次成功 enter 都有 finally。退休同时保留原逻辑 completion、原调用 Promise
+及绑定原 this 的 waitClosed；timeout race 不等于原任务结束。内部失败只
+requestStop，不能 await 自己。外部 close 的同步重入发生前已固定退休 latch。
+原 Promise 永不 settle 仍 Stopping，waitClosed 拒绝为 Unknown，不伪称 Stopped。
+旧 timer 和旧逻辑 completion 不能影响新 epoch。
+
+本片真实 Node-WASM TLS→Host 只验五秒自动 tick、原精确输入/结算和退休。
+期间 Snapshot 是测试活动，不是 heartbeat；不包括 outer Relay 数据心跳、
+纯空闲、手机后台、生产供应/UI 或三十天 endurance。manual-v1 不代表心跳协商。

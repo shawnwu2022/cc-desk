@@ -709,3 +709,27 @@ NeedsSettlement。自动续租及 outer heartbeat 仍未实现。
 
 后续只读设计原 owner 自动受托管续租与 outer 心跳，不能把手动方法通过
 直接等同自动、空闲或 30 天可持续验收，也不能另起计数/无主 timer。
+
+
+### 自动续租 A 独立片（B/C 心跳尚未实现）
+
+- client.ts 新显式 startAutoRenewal/stopAutoRenewal 与状态观察，默认关闭；
+  沿原 counter/Busy/epoch，固定 5s 节拍、3s 严重迟到关闭，不新增配置持久化。
+- 13 个确定性自动测试覆盖首调用同步 stop、原 Promise 晚到、close 重入、
+  原 waitClosed 方法绑定/拒绝、Due 先于 timer、完整 Snapshot/ACK、暂停回退、
+  NeedsSettlement、首次失败与首 reply 暂停后抢 timer，均通过。
+- 最终 Node 集合 46/46；真实 Browser data 46/46（含子例），独立父例 38。
+  两组去重合计 84 父例，browser-auto-owner-final-testnames.txt；不与历史
+  70/98/223 集合重复累计。TS typecheck、Host Clippy、格式检查通过。
+- 真实自动 case 首跑约 5.854s，最终约 5.747s；新 TEST_ONLY manual-auto
+  明确选 12s 合成 grant，不改变生产预算。首 renew 后实际五秒第二次续租，
+  原一次输入、原 settlement、stop→原 waitClosed 后 Stopped 均验证。
+- 保留首 RED/API 缺失、局部 operation 重名语法失败、settle 语法校验移位
+  导致原 Unknown case 的状态回归。修复为占 counter/enter 之前纯语法校验，
+  保留原 NeedsSettlement 拒绝语义，没有修改旧断言。
+- 日志 browser-auto-owner-node-final、wasm-final、typecheck-final、clippy-final。
+  WASM Rust 生产源码未变，复用已构建且已记录 hash 的原测试 artifact；新建
+  Host harness 来覆盖新增合成策略。无真实凭据、云服、安全设置或发布改动。
+
+下一步 B/C 仍须独立设计/审核：显式双端认证心跳能力、原 MUX writer/timer
+和固定 cutoff/任务托管。当前不能称无流量空闲或生产无人值守已交付。
