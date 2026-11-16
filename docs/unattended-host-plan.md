@@ -749,3 +749,22 @@ NeedsSettlement。自动续租及 outer heartbeat 仍未实现。
 - 日志 browser-live-*-final*；真实平台是 Node Worker WASM/TLS，非手机、
   Chromium 或 Relay 纯空闲验收。B2/C 未实现、没有激活 heartbeat/A。
   既有全 Host PTY 发布门槛仍未解除。
+
+## B2 交付验证记录
+
+- Rust transport 全 36/36（新机制 8 项），Node 新/旧 Relay/registration
+  30/30（新机制 9 项），Node 实际 WSS→原 Rust oracle 1/1。按日志
+  父测试名去重共 67 项，名单 .audit/data-keepalive-final-testnames.txt；
+  不累计 oracle 子进程内部重复 pass。
+- 严格 transport Clippy（test-only-loopback）及 Browser Relay/Source/
+  Transport 生产类型检查通过。新增模块已格式化，旧大文件保持最小差异。
+- 保留 RED：满应用 queue 的空帧错误 Backpressure；Dormant 已阻塞
+  send/flush 激活短 end 仍超时；Browser timer 迟到时原写越短 end；
+  heartbeat 未 drain 时合法 TLS write 被拒。分别修正并定向复验，
+  未通过放宽原截止、扩大队列或重发帧掩盖。
+- 终局覆盖固定 end 持续入站、背压原 writer join、取消 observer 不丢
+  原句柄、物理 close、回退/坏期限、独占/重复/错实例及忙 tick 不补发。
+- 日志 data-keepalive-transport-final、browser-final、original-wss-final、
+  clippy-final2、typecheck-final2。未接 C/生产授权/UI/真实凭据/云服。
+  实际 Relay 空闲长测、Worker→Window challenge、手机后台与原全 Host
+  PTY 发布门槛仍未完成，不能称长期无人值守已交付。

@@ -1,5 +1,7 @@
 //! Bounded opaque transport. This module grants no endpoint or PTY authority.
 mod deadline;
+mod data_keepalive;
+pub use data_keepalive::DataKeepaliveActivation;
 #[cfg(test)]
 mod browser_relay_fixture_tests;
 #[cfg(test)]
@@ -27,6 +29,7 @@ pub fn bounded_tunnel() -> (tokio::io::DuplexStream, RouteEndpoint) {
 /// One original mux driver. Cancelling a wait leaves its JoinHandle in this slot.
 /// A successful wait attests task termination, not a normal protocol exit.
 pub struct OwnedTunnel {
+    data_keepalive: Option<std::sync::Arc<data_keepalive::Policy>>,
     stop: tokio::sync::watch::Sender<bool>,
     join: tokio::sync::Mutex<Option<tokio::task::JoinHandle<Result<(), TransportError>>>>,
     joined: std::sync::Arc<std::sync::atomic::AtomicU8>,
@@ -52,6 +55,7 @@ impl OwnedTunnel {
         TestOnlyTunnelRetirement(self.joined.clone())
     }
     pub fn request_close(&self) {
+        if let Some(policy)=&self.data_keepalive {policy.close();}
         self.stop.send_replace(true);
     }
     pub async fn wait_closed(&self) -> Result<(), TransportError> {
@@ -120,7 +124,7 @@ where S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static {
     if budget < std::time::Duration::from_millis(30) || remaining.is_zero() {
         return Err(TransportError::Limit);
     }
-    start_owned_policy(ws,tunnel,budget,Some(RegistrationPolicy{end:original_end,interval:budget/3,tunnel}),Some(Box::pin(original_cancel)),
+    start_owned_policy(ws,tunnel,budget,Some(RegistrationPolicy{end:original_end,interval:budget/3,tunnel}),Some(Box::pin(original_cancel)),None,
         #[cfg(feature="test-only-loopback")]
         None,
     )
@@ -203,7 +207,7 @@ fn start_owned_inner<S>(
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
-    start_owned_policy(ws,tunnel,budget,None,None,
+    start_owned_policy(ws,tunnel,budget,None,None,None,
         #[cfg(feature="test-only-loopback")]
         observer,
     )
@@ -211,6 +215,7 @@ where
 fn start_owned_policy<S>(
     ws:tokio_tungstenite::WebSocketStream<S>, tunnel:[u8;16],budget:std::time::Duration,
     registration:Option<RegistrationPolicy>,original_cancel:Option<OriginalCancellation>,
+    data_keepalive:Option<std::sync::Arc<data_keepalive::Policy>>,
     #[cfg(feature="test-only-loopback")] observer:Option<tokio::sync::oneshot::Sender<TestOnlyMuxEnd>>,
 ) -> Result<(tokio::io::DuplexStream,OwnedTunnel),TransportError>
 where S:tokio::io::AsyncRead+tokio::io::AsyncWrite+Unpin+Send+'static {
@@ -228,6 +233,7 @@ where S:tokio::io::AsyncRead+tokio::io::AsyncWrite+Unpin+Send+'static {
         registration,
         original_cancel,
         registration_tail.clone(),
+        data_keepalive.clone(),
         #[cfg(feature = "test-only-loopback")]
         observer,
     ));
@@ -238,6 +244,7 @@ where S:tokio::io::AsyncRead+tokio::io::AsyncWrite+Unpin+Send+'static {
             join: tokio::sync::Mutex::new(Some(task)),
             joined: std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0)),
             registration_tail,
+            data_keepalive,
         },
     ))
 }
@@ -273,7 +280,7 @@ async fn drive_inner<S>(
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
-    drive_policy(ws,routes,cancel,budget,None,None,None,
+    drive_policy(ws,routes,cancel,budget,None,None,None,None,
         #[cfg(feature="test-only-loopback")]
         observer,
     ).await
@@ -284,10 +291,12 @@ async fn drive_policy<S>(
     mut cancel:tokio::sync::watch::Receiver<bool>,budget:std::time::Duration,
     registration:Option<RegistrationPolicy>,mut original_cancel:Option<OriginalCancellation>,
     registration_tail:Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    data_keepalive:Option<std::sync::Arc<data_keepalive::Policy>>,
     #[cfg(feature="test-only-loopback")] observer:Option<tokio::sync::oneshot::Sender<TestOnlyMuxEnd>>,
 ) -> Result<(),TransportError>
 where S:tokio::io::AsyncRead+tokio::io::AsyncWrite+Unpin+Send+'static {
     use cc_desk_remote_protocol::{Subframe, encode_outer};
+    let _close_data=data_keepalive::CloseOnExit(data_keepalive.clone());
     use futures_util::{SinkExt, StreamExt};
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
@@ -365,7 +374,9 @@ where S:tokio::io::AsyncRead+tokio::io::AsyncWrite+Unpin+Send+'static {
     let mut read_deadline = Instant::now()
         .checked_add(budget)
         .ok_or(TransportError::Limit)?;
-    let cap=|end:Instant|registration.map_or(end,|r|end.min(r.end));
+    let cap=|end:Instant|{let end=registration.map_or(end,|r|end.min(r.end));data_keepalive.as_ref().map_or(end,|p|end.min(p.end()))};
+    let mut last_read=Instant::now();
+    let mut data_active=false;
     read_deadline=cap(read_deadline);
     let mut heartbeat=registration.map_or(read_deadline,|r|cap(Instant::now()+r.interval));
     #[cfg(feature = "test-only-loopback")]
@@ -379,20 +390,20 @@ where S:tokio::io::AsyncRead+tokio::io::AsyncWrite+Unpin+Send+'static {
         }};
     }
     let result = loop {
-        if registration.is_some() {
+        if let Some(p)=&data_keepalive {
+            if !data_active && p.active(){data_active=true;read_deadline=cap(last_read+budget);heartbeat=cap(Instant::now()+p.interval());}
+            read_deadline=cap(read_deadline);
+        }
+        if registration.is_some() || data_keepalive.is_some() {
             if *cancel.borrow() || cancel.has_changed().is_err(){finish!(Err(TransportError::Cancelled),Cancelled);}
             tokio::select!{biased;_=original_cancelled(&mut original_cancel)=>finish!(Err(TransportError::Cancelled),Cancelled),_=std::future::ready(())=>{}}
         }
         if Instant::now() >= read_deadline {
             finish!(Err(TransportError::Deadline), IoBudget);
         }
-        if let Some(policy)=registration.filter(|_|Instant::now()>=heartbeat) {
+        if let Some(policy)=registration.or_else(||data_keepalive.as_ref().filter(|p|p.active()).map(|p|RegistrationPolicy{end:p.end(),interval:p.interval(),tunnel:p.tunnel})).filter(|_|Instant::now()>=heartbeat) {
             let bytes=encode_outer(&[Subframe{tunnel:policy.tunnel,payload:&[]}]).map_err(|_|TransportError::Wire)?;
-            let sent=tokio::select!{biased;
-                _=cancel.changed()=>Err(TransportError::Cancelled),
-                _=original_cancelled(&mut original_cancel)=>Err(TransportError::Cancelled),
-                r=timeout_at(read_deadline,ws.send(Message::Binary(bytes.into())))=>r.map_err(|_|TransportError::Deadline).and_then(|r|r.map_err(|_|TransportError::Io)),
-            };
+            let sent=socket_operation(&mut cancel,&mut original_cancel,data_keepalive.as_ref(),read_deadline,ws.send(Message::Binary(bytes.into()))).await;
             if let Err(e)=sent{finish!(Err(e),SocketWrite);}
             if Instant::now()>=read_deadline{finish!(Err(TransportError::Deadline),IoBudget);}
             heartbeat=cap(Instant::now()+policy.interval);
@@ -400,23 +411,19 @@ where S:tokio::io::AsyncRead+tokio::io::AsyncWrite+Unpin+Send+'static {
         // Service at most one ready outbound envelope before the next inbound
         // event. A permanently-ready inbound stream cannot starve outbound.
         if let Ok((bytes, flushed)) = out_rx.try_recv() {
-            let sent = tokio::select! {
-                biased;
-                _=cancel.changed()=>Err(TransportError::Cancelled),
-                _=original_cancelled(&mut original_cancel)=>Err(TransportError::Cancelled),
-                r=timeout_at(read_deadline,ws.send(Message::Binary(bytes.into())))=>r.map_err(|_|TransportError::Deadline).and_then(|r|r.map_err(|_|TransportError::Io)),
-            };
+            let sent=socket_operation(&mut cancel,&mut original_cancel,data_keepalive.as_ref(),read_deadline,ws.send(Message::Binary(bytes.into()))).await;
             if let Err(e) = sent {
                 finish!(Err(e), SocketWrite);
             }
-            if registration.is_some()&&Instant::now()>=read_deadline{finish!(Err(TransportError::Deadline),IoBudget);}
+            if (registration.is_some()||data_keepalive.is_some())&&Instant::now()>=read_deadline{finish!(Err(TransportError::Deadline),IoBudget);}
             if let Some(flushed) = flushed { let _ = flushed.send(()); }
         }
         tokio::select! {
             biased;
             _=cancel.changed()=>finish!(Err(TransportError::Cancelled), Cancelled),
             _=original_cancelled(&mut original_cancel)=>finish!(Err(TransportError::Cancelled), Cancelled),
-            _=tokio::time::sleep_until(heartbeat),if registration.is_some()=>{},
+            _=tokio::time::sleep_until(heartbeat),if registration.is_some()||data_active=>{},
+            _=async {match &data_keepalive {Some(p)=>p.changed().await,None=>std::future::pending().await}}=>{},
             ended=workers.join_next(), if !workers.is_empty()=>{
                 finish!(ended.unwrap().unwrap_or(Err(TransportError::Io)), RouteWorker);
             }
@@ -426,17 +433,13 @@ where S:tokio::io::AsyncRead+tokio::io::AsyncWrite+Unpin+Send+'static {
                     Err(_)=>finish!(Err(TransportError::Deadline), IoBudget),
                     Ok(Some(Ok(Message::Binary(bytes))))=>{
                         if let Err(e)=deliver(&bytes,&incoming){finish!(Err(e), Delivery);}
-                        read_deadline=match Instant::now().checked_add(budget){Some(d)=>cap(d),None=>finish!(Err(TransportError::Limit), IoBudget)};
+                        last_read=Instant::now();
+                        read_deadline=match last_read.checked_add(budget){Some(d)=>cap(d),None=>finish!(Err(TransportError::Limit), IoBudget)};
                     }
                     Ok(Some(Ok(Message::Ping(_))))=>{
-                        let sent=tokio::select! {
-                            biased;
-                            _=cancel.changed()=>Err(TransportError::Cancelled),
-                            _=original_cancelled(&mut original_cancel)=>Err(TransportError::Cancelled),
-                            r=timeout_at(read_deadline,ws.flush())=>r.map_err(|_|TransportError::Deadline).and_then(|r|r.map_err(|_|TransportError::Io)),
-                        };
+                        let sent=socket_operation(&mut cancel,&mut original_cancel,data_keepalive.as_ref(),read_deadline,ws.flush()).await;
                         if let Err(e)=sent {finish!(Err(e), SocketWrite);}
-                        if registration.is_some()&&Instant::now()>=read_deadline{finish!(Err(TransportError::Deadline),IoBudget);}
+                        if (registration.is_some()||data_keepalive.is_some())&&Instant::now()>=read_deadline{finish!(Err(TransportError::Deadline),IoBudget);}
                     }
                     Ok(Some(Ok(Message::Pong(_))))=>{}
                     Ok(Some(Ok(Message::Close(_))))=>finish!(Err(TransportError::Closed), WebSocketClose),
@@ -450,14 +453,9 @@ where S:tokio::io::AsyncRead+tokio::io::AsyncWrite+Unpin+Send+'static {
             }
             outgoing=out_rx.recv(), if !out_rx.is_closed()=>{
                 if let Some((bytes,flushed))=outgoing {
-                    let sent=tokio::select! {
-                        biased;
-                        _=cancel.changed()=>Err(TransportError::Cancelled),
-                        _=original_cancelled(&mut original_cancel)=>Err(TransportError::Cancelled),
-                        r=timeout_at(read_deadline,ws.send(Message::Binary(bytes.into())))=>r.map_err(|_|TransportError::Deadline).and_then(|r|r.map_err(|_|TransportError::Io)),
-                    };
+                    let sent=socket_operation(&mut cancel,&mut original_cancel,data_keepalive.as_ref(),read_deadline,ws.send(Message::Binary(bytes.into()))).await;
                     if let Err(e)=sent {finish!(Err(e), SocketWrite);}
-                    if registration.is_some()&&Instant::now()>=read_deadline{finish!(Err(TransportError::Deadline),IoBudget);}
+                    if (registration.is_some()||data_keepalive.is_some())&&Instant::now()>=read_deadline{finish!(Err(TransportError::Deadline),IoBudget);}
                     if let Some(flushed) = flushed { let _ = flushed.send(()); }
                 }
             }
@@ -484,6 +482,7 @@ fn deliver(bytes: &[u8], incoming: &Routes) -> Result<(), TransportError> {
         if !ids.insert(frame.tunnel) {
             return Err(TransportError::Wire);
         }
+        if frame.payload.is_empty(){continue;}
         reservations.push(
             incoming[&frame.tunnel]
                 .clone()
@@ -491,7 +490,7 @@ fn deliver(bytes: &[u8], incoming: &Routes) -> Result<(), TransportError> {
                 .map_err(|_| TransportError::Backpressure)?,
         );
     }
-    for (permit, frame) in reservations.into_iter().zip(frames) {
+    for (permit, frame) in reservations.into_iter().zip(frames.into_iter().filter(|frame|!frame.payload.is_empty())) {
         permit.send(frame.payload.to_vec());
     }
     Ok(())
@@ -522,6 +521,15 @@ mod tests {
             .await,
             Err(TransportError::Closed)
         );
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn DataKeepalive_EmptyDoesNotReserveFullApplicationQueue_001() {
+      let (tx,mut rx)=tokio::sync::mpsc::channel(1);tx.try_send(vec![7]).unwrap();
+      let routes=Routes::from([([1;16],tx)]);
+      let bytes=encode_outer(&[Subframe{tunnel:[1;16],payload:&[]}]).unwrap();
+      assert_eq!(deliver(&bytes,&routes),Ok(()));
+      assert_eq!(rx.try_recv().unwrap(),vec![7]);assert!(rx.try_recv().is_err());
     }
     #[test]
     fn full_later_queue_cannot_partially_deliver_earlier_frame() {
@@ -570,3 +578,82 @@ mod tests {
         ));
     }
 }
+
+// 调用方必须在原认证事实确认后消费 activation；此 API 本身不授予权限。
+pub fn start_admitted_data_keepalive_dormant(
+    ws: wss::AdmittedSocket,
+    tunnel: [u8; 16],
+    budget: std::time::Duration,
+    setup_end: tokio::time::Instant,
+    max_end: tokio::time::Instant,
+    original_cancel: impl std::future::Future<Output = ()> + Send + 'static,
+) -> Result<
+    (
+        tokio::io::DuplexStream,
+        OwnedTunnel,
+        DataKeepaliveActivation,
+    ),
+    TransportError,
+> {
+    start_data_keepalive(ws, tunnel, budget, setup_end, max_end, original_cancel)
+}
+fn start_data_keepalive<
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+>(
+    ws: tokio_tungstenite::WebSocketStream<S>,
+    tunnel: [u8; 16],
+    budget: std::time::Duration,
+    setup_end: tokio::time::Instant,
+    max_end: tokio::time::Instant,
+    original_cancel: impl std::future::Future<Output = ()> + Send + 'static,
+) -> Result<
+    (
+        tokio::io::DuplexStream,
+        OwnedTunnel,
+        DataKeepaliveActivation,
+    ),
+    TransportError,
+> {
+    let (policy, activation) = data_keepalive::Policy::new(setup_end, max_end, tunnel, budget)?;
+    let (stream, owner) = start_owned_policy(
+        ws,
+        tunnel,
+        budget,
+        None,
+        Some(Box::pin(original_cancel)),
+        Some(policy),
+        #[cfg(feature = "test-only-loopback")]
+        None,
+    )?;
+    Ok((stream, owner, activation))
+}
+
+// 始终持有同一个 send/flush future；激活收紧时仅重设 deadline，绝不重发帧。
+async fn socket_operation<T, F>(
+    cancel: &mut tokio::sync::watch::Receiver<bool>,
+    original: &mut Option<OriginalCancellation>,
+    policy: Option<&std::sync::Arc<data_keepalive::Policy>>,
+    original_end: tokio::time::Instant,
+    operation: F,
+) -> Result<T, TransportError>
+where
+    F: std::future::Future<Output = Result<T, tokio_tungstenite::tungstenite::Error>>,
+{
+    tokio::pin!(operation);
+    loop {
+        let end = policy.map_or(original_end, |p| original_end.min(p.end()));
+        if tokio::time::Instant::now() >= end {
+            return Err(TransportError::Deadline);
+        }
+        tokio::select! {biased;
+         _=cancel.changed()=>return Err(TransportError::Cancelled),
+         _=original_cancelled(original)=>return Err(TransportError::Cancelled),
+         _=async {match policy{Some(p)=>p.changed().await,None=>std::future::pending().await}}=>{},
+         _=tokio::time::sleep_until(end)=>return Err(TransportError::Deadline),
+         result=&mut operation=>{if policy.is_some_and(|p|tokio::time::Instant::now()>=p.end()){return Err(TransportError::Deadline);}return result.map_err(|_|TransportError::Io);}
+        }
+    }
+}
+
+#[cfg(test)]
+mod data_keepalive_tests;

@@ -691,3 +691,35 @@ authority、Controller grant、Installed 或截止核验。Native grant install
 本片没有心跳 timer/transport activation，没有自动启动 A，没有 UI 或生产
 授权。B2 后续提供一次 Dormant 机制；C 仍需另审原 Installed 与当前授权
 事实交接，不能拿 peer_deadline 或布尔 getter 激活。
+
+## B2：一次性 Dormant transport 机制，尚未认证接线
+
+Rust start_admitted_data_keepalive_dormant 返回原 stream/OwnedTunnel 和
+不可 Clone 的 activation；Browser createBrowserDataKeepaliveRelay 返回原
+owner 及原实例独占一次 activation。它们不依赖 security，不是认证事实
+或控制授权。没有生产调用方，C 尚未启用，live-v1 也不自动启动 A。
+
+Dormant 保留原 setupEnd；只有 setupEnd 前可一次选固定 end<=maxEnd。
+最大机制 horizon 900 秒、显式 IO budget 至少 2 秒，固定 500ms 节拍。
+重复、迟到、已关闭和超界不得重启；原 read/write/等待均裁剪固定 end，
+持续入站也不能延长。原 registration 的 120 秒/预算三分之一策略不变。
+Rust close/driver exit 均封原槽，仍由原 OwnedTunnel 的真实 join 终局。
+Browser live 检查有限时钟/安全整数期限以及时钟回退，原物理 closed 和
+原 signer/write/等待 Promise 才构成退休；Drop/发送成功不是回收证明。
+
+原唯一 writer 发送同 tunnel 的非空 WS Binary（outer payload 零字节），
+不回声，不进入 TLS，不刷新任何 grant/lease/presence/receipt。空 payload
+先严格校验路由及重复帧，再跳过应用 queue 容量占用。忙 tick 不补发。
+Browser 最多一个原应用 write 等正在 drain 的 heartbeat，第二并发应用
+写拒绝；等待从调用时固定预算，不给新 heartbeat 插队，不无界排队。
+
+激活若收紧已有发送的期限，Rust 保留并 pin 同一原 send/flush future，
+监听变更后重算 deadline，不取消再重发。Browser 原 Promise 每个执行点
+动态 min 当前 end，不依赖 timer 及时触发。原在途写等待只收紧，不借
+激活延长其已捕获期限。已开始的同步 socket.send 不可抢占，仍需原关闭
+和退休证据。
+
+本片测试是原 MUX 内存 WS 与 Browser-shaped Node socket 的机制验证。
+额外实际 WSS→Rust oracle 是旧路径兼容回归，不是新心跳 Relay/WASM
+组合或手机后台验收。C 仍需真实当前 Installed/authority 事实与固定时钟
+交接，绝不能仅拿 getter、peer_deadline、配置或 JS bool 激活。
