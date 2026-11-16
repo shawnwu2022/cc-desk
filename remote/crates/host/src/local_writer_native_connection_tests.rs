@@ -172,11 +172,27 @@ async fn native_connection_existing_dispatcher_cancellation_retains_original_pen
     entered.recv_timeout(Duration::from_secs(2)).unwrap();
     drop(future);
     assert!(h2.authority().check().is_err());
-    assert_eq!(host.pending.observe(), custody::Observation::Pending);
-    host.begin_shutdown();
-    assert_eq!(host.observe_shutdown(), WriterRetirement::Pending);
-    // Native actor remains blocked; dropping API waiter cannot consume custody.
+    assert_eq!(
+        host.attempts[0].pending.observe(),
+        custody::Observation::Pending
+    );
+    let retirement = host.begin_channel_retirement(&h2).unwrap();
+    assert_eq!(
+        host.observe_channel_retirement(&retirement),
+        ChannelRetirement::Pending
+    );
+    // 原 actor 仍阻塞，局部终结观察不能丢掉旧输入的原 receiver。
     release.send(()).unwrap();
+    let retirement_end = tokio::time::Instant::now() + Duration::from_secs(2);
+    while host.observe_channel_retirement(&retirement) == ChannelRetirement::Pending {
+        assert!(tokio::time::Instant::now() < retirement_end);
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(
+        host.observe_channel_retirement(&retirement),
+        ChannelRetirement::Retired
+    );
+    host.begin_shutdown();
     let end = tokio::time::Instant::now() + Duration::from_secs(2);
     loop {
         match host.observe_shutdown() {

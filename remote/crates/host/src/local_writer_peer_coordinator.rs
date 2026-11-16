@@ -323,6 +323,51 @@ impl NativeHost {
             .ok_or(NativeHostError::Rejected)?;
         self.connection(id)
     }
+    // 只观察原 channel 的终结事实，不使用已撤销的披露授权，也不丢弃原句柄。
+    pub(super) fn retire_channel_tasks(
+        &mut self,
+        authority: &cc_desk_remote_security::BoundDataAuthority,
+    ) -> bool {
+        let mut pending = false;
+        for job in &mut self.peer_installs {
+            let original = job.channel.authority();
+            if !original.same_channel(authority) || original.grant_id() != authority.grant_id() {
+                continue;
+            }
+            let stage = std::mem::replace(&mut job.stage, Stage::Failed);
+            job.stage = match stage {
+                Stage::Request(mut task) => match finished(&mut task) {
+                    None => {
+                        pending = true;
+                        Stage::Request(task)
+                    }
+                    Some(result) => {
+                        self.unknown |= result.is_err();
+                        job.authorize = None;
+                        Stage::Failed
+                    }
+                },
+                Stage::Response { attempt, mut task } => match finished(&mut task) {
+                    None => {
+                        pending = true;
+                        Stage::Response { attempt, task }
+                    }
+                    Some(result) => {
+                        self.unknown |= result.is_err();
+                        job.authorize = None;
+                        Stage::Failed
+                    }
+                },
+                Stage::Native { .. } => {
+                    // 原 bind receiver 仍在 attempts，必须另行收齐其终局。
+                    job.authorize = None;
+                    Stage::Failed
+                }
+                other => other,
+            };
+        }
+        pending
+    }
     /// Retains/joins every response/request task, including cancelled installations.
     /// Shutdown must first signal authorities, then call this alongside network retirement.
     pub async fn retire_peer_installs(&mut self) {

@@ -293,3 +293,34 @@ This stage has no expiry watcher, production trust-change subscription, fresh
 material supplier, channel adoption/rebind or reconnect loop. Those require a
 separate network/retirement integration stage. The captured single-run owner also
 does not reconstruct authority after application restart.
+
+## Stage 3b-1: Host-local channel retirement facts (inactive)
+
+`NativeHost::begin_channel_retirement` issues an opaque token branded by the
+original Host identity and exact channel/grant/attempt set. It seals each matching
+attempt's dispatch admission before requesting channel close. It never seals the
+original native writer. Repeated observation uses the original bind receiver and
+original coordinator request/response task handles, collecting their actual join
+results. A discarded observation token cannot discard those handles or pending
+input results. The existing disclosure API may report Unknown after channel close;
+that does not erase the independently retained terminal facts.
+
+Each installation attempt now owns its own dispatch custody registry. Native
+connections reserve in that exact registry; retirement seals only the matching
+registries, while full Host shutdown seals and observes every attempt. There is
+no parallel global result registry. All attempt registries share one 64-cell
+budget. The credit belongs to the result Cell and is released only when its last
+Arc is dropped, including any original Wait still holding a ready result. This
+intentionally tightens the old registry-only limit. Pruning a Drained index does
+not release a retained Wait's credit or erase its result; Unknown and unresolved
+cells remain owned. Cleanup snapshots are dropped before a fresh credit is taken,
+and credit destruction never takes an Owner lock.
+
+Observation exposes only Pending, Retired or Unknown. Lost original replies and
+actual task panics latch Unknown and prevent rebind; the full shutdown owner
+still retains and joins remaining tasks. Retired proves only these Host-local
+facts. It does not prove socket, RunningChannel transport, App PeerPump or material
+supplier retirement, and cannot construct a complete Stage 1 RetirementProof.
+There is no new consent constructor, supplier, service-mode integration, retry
+scheduler or direct phone-to-NativeLocalInput route. Prepared-channel branding and
+adoption/rebind within the same service reservation remain subsequent work.

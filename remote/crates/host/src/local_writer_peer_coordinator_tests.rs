@@ -1559,3 +1559,6 @@ async fn native_remote_resize_reserves_on_original_canonical_actor() {
         );
     }
 }
+
+#[path = "local_writer_channel_retirement_tests.rs"]
+mod channel_retirement_tests;

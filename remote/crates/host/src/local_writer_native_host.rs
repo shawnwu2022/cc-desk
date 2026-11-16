@@ -55,15 +55,18 @@ struct Attempt {
     next_fence: u64,
     connection_taken: bool,
     state: InstallState,
+    pending: Arc<custody::Owner>,
 }
 pub struct NativeHost {
     owner: WriterHostOwner,
     anchor: Option<Arc<RunningChannel>>,
     attempts: Vec<Attempt>,
-    pending: Arc<custody::Owner>,
     closing: bool,
     unknown: bool,
     peer_installs: Vec<peer_coordinator::Coordinator>,
+    retirement_identity: Arc<()>,
+    pending_budget: Arc<custody::Budget>,
+    channel_retirements: Vec<retirement::Entry>,
 }
 impl NativeHost {
     /// Validate the original producer before consuming the process admission.
@@ -176,6 +179,7 @@ impl NativeHost {
             next_fence: 1,
             connection_taken: false,
             state: InstallState::Pending(pending),
+            pending: Arc::new(custody::Owner::with_budget(self.pending_budget.clone())),
         });
         self.register_native_attempt(target, device, lease, channel, id);
         Ok(id)
@@ -221,10 +225,12 @@ impl NativeHost {
             owner,
             anchor: None,
             attempts: Vec::new(),
-            pending: Arc::new(custody::Owner::new()),
             closing: false,
             unknown: false,
             peer_installs: Vec::new(),
+            retirement_identity: Arc::new(()),
+            pending_budget: Arc::new(custody::Budget::new()),
+            channel_retirements: Vec::new(),
         }
     }
     /// Native provider lifetime binding; not an input permission or wire API.
@@ -284,6 +290,7 @@ impl NativeHost {
             next_fence,
             connection_taken: false,
             state: InstallState::Pending(pending),
+            pending: Arc::new(custody::Owner::with_budget(self.pending_budget.clone())),
         });
         Ok(id)
     }
@@ -343,7 +350,7 @@ impl NativeHost {
             peer.clone(),
             attempt.authority.clone(),
             *fence,
-            self.pending.clone(),
+            attempt.pending.clone(),
         )
         .map_err(|_| NativeHostError::Rejected)?;
         attempt.connection_taken = true;
@@ -364,12 +371,12 @@ impl NativeHost {
         Ok(())
     }
     pub fn begin_shutdown(&mut self) {
-        self.pending.seal();
         self.closing = true;
         if let Some(anchor) = &self.anchor {
             anchor.authority().request_close();
         }
         for attempt in &self.attempts {
+            attempt.pending.seal();
             attempt.authority.request_close();
         }
         for job in &self.peer_installs {
@@ -400,12 +407,12 @@ impl NativeHost {
         }
         self.drive_peer_installs();
         let mut pending = self.peer_installs.iter().any(|job| job.pending());
-        match self.pending.observe() {
-            custody::Observation::Pending => pending = true,
-            custody::Observation::Unknown => self.unknown = true,
-            custody::Observation::Drained => (),
-        }
         for attempt in &mut self.attempts {
+            match attempt.pending.observe() {
+                custody::Observation::Pending => pending = true,
+                custody::Observation::Unknown => self.unknown = true,
+                custody::Observation::Drained => {}
+            }
             Self::poll(attempt);
             pending |= matches!(attempt.state, InstallState::Pending(_));
             self.unknown |= matches!(attempt.state, InstallState::Unknown);
@@ -653,3 +660,7 @@ mod tests {
 
 #[path = "local_writer_peer_coordinator.rs"]
 mod peer_coordinator;
+
+#[path = "local_writer_channel_retirement.rs"]
+mod retirement;
+pub use retirement::{ChannelRetirement, ChannelRetirementToken};

@@ -113,3 +113,66 @@ fn native_pending_seal_rejects_new_but_retains_reserved_008() {
     tx.send(5).unwrap();
     assert_eq!(owner.observe(), Observation::Drained);
 }
+
+#[tokio::test]
+#[allow(non_snake_case)]
+async fn ChannelCustody_SharedBudgetPreservesUntakenResult_009() {
+    let budget = Arc::new(Budget::new());
+    let a = Owner::with_budget(budget.clone());
+    let b = Owner::with_budget(budget);
+    let mut held = Vec::new();
+    for _ in 0..(LIMIT - 1) {
+        held.push(a.reserve::<u64>().unwrap());
+    }
+    let (send, receive) = mpsc::sync_channel(1);
+    let waiter = b.reserve::<u64>().unwrap().bind(poll(receive));
+    assert!(matches!(b.reserve::<u64>(), Err(Reject::Full)));
+    send.send(29).unwrap();
+    assert_eq!(b.observe(), Observation::Drained);
+    // 仅终局尚未从索引退休，不会偷偷释放其他 owner 的共享额度。
+    assert!(matches!(a.reserve::<u64>(), Err(Reject::Full)));
+    b.seal();
+    b.prune_drained().unwrap();
+    assert!(matches!(a.reserve::<u64>(), Err(Reject::Full)));
+    assert!(matches!(b.reserve::<u64>(), Err(Reject::Sealed)));
+    assert_eq!(
+        waiter
+            .until(tokio::time::Instant::now() + Duration::from_secs(1))
+            .await,
+        Ok(29)
+    );
+    let extra = a.reserve::<u64>().unwrap();
+    drop(extra);
+    drop(held);
+    a.prune_drained().unwrap();
+    assert!(a.reserve::<u64>().is_ok());
+}
+
+#[tokio::test]
+#[allow(non_snake_case)]
+async fn ChannelCustody_AllReadyUntakenResultsKeepSharedCredits_010() {
+    let budget = Arc::new(Budget::new());
+    let a = Owner::with_budget(budget.clone());
+    let b = Owner::with_budget(budget);
+    let mut waits = Vec::new();
+    for value in 0..LIMIT {
+        let (send, receive) = mpsc::sync_channel(1);
+        waits.push(a.reserve::<usize>().unwrap().bind(poll(receive)));
+        send.send(value).unwrap();
+    }
+    assert_eq!(a.observe(), Observation::Drained);
+    a.seal();
+    a.prune_drained().unwrap();
+    assert!(matches!(b.reserve::<usize>(), Err(Reject::Full)));
+    let last = waits.pop().unwrap();
+    assert_eq!(
+        last.until(tokio::time::Instant::now() + Duration::from_secs(1))
+            .await,
+        Ok(LIMIT - 1)
+    );
+    let slot = b.reserve::<usize>().unwrap();
+    assert!(matches!(b.reserve::<usize>(), Err(Reject::Full)));
+    drop(waits);
+    assert!(b.reserve::<usize>().is_ok());
+    drop(slot);
+}

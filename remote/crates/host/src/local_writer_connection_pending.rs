@@ -1,6 +1,7 @@
 //! Original native receiver custody, not a second protocol router or executor.
 //! Only private Host pending.wait(Duration::ZERO) closures may be registered.
 use super::*;
+use std::sync::atomic::AtomicUsize;
 use std::sync::{OnceLock, TryLockError};
 const LIMIT: usize = 64;
 const POLL: Duration = Duration::from_millis(2);
@@ -13,6 +14,20 @@ pub(in crate::local_writer::owner) enum Observation {
 trait Observe: Send + Sync {
     fn observe(&self) -> Observation;
 }
+pub(in crate::local_writer::owner) struct Budget(AtomicUsize);
+impl Budget {
+    pub(in crate::local_writer::owner) fn new() -> Self {
+        Self(AtomicUsize::new(0))
+    }
+    fn take(&self) -> Result<(), Reject> {
+        self.0
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+                (used < LIMIT).then_some(used + 1)
+            })
+            .map(|_| ())
+            .map_err(|_| Reject::Full)
+    }
+}
 type Poll<T> = Box<dyn FnMut(Duration) -> Result<Result<T, Reject>, WaitError> + Send>;
 enum State<T> {
     Waiting(Poll<T>),
@@ -24,6 +39,13 @@ struct Cell<T> {
     // can replace/rebind this receiver to another operation or owner.
     pending: OnceLock<Mutex<State<T>>>,
     abandoned: AtomicBool,
+    budget: Arc<Budget>,
+}
+impl<T> Drop for Cell<T> {
+    fn drop(&mut self) {
+        // 共享额度覆盖旧 Wait 持有的未消费结果；析构不获取 Owner 锁。
+        self.budget.0.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 impl<T: Send + 'static> Observe for Cell<T> {
     fn observe(&self) -> Observation {
@@ -56,12 +78,17 @@ impl<T: Send + 'static> Observe for Cell<T> {
 pub(in crate::local_writer::owner) struct Owner {
     entries: Mutex<Vec<Arc<dyn Observe>>>,
     sealed: AtomicBool,
+    budget: Arc<Budget>,
 }
 impl Owner {
     pub(in crate::local_writer::owner) fn new() -> Self {
+        Self::with_budget(Arc::new(Budget::new()))
+    }
+    pub(in crate::local_writer::owner) fn with_budget(budget: Arc<Budget>) -> Self {
         Self {
             entries: Mutex::new(Vec::new()),
             sealed: AtomicBool::new(false),
+            budget,
         }
     }
     pub(in crate::local_writer::owner) fn seal(&self) {
@@ -90,33 +117,39 @@ impl Owner {
             Observation::Drained
         }
     }
+    pub(in crate::local_writer::owner) fn prune_drained(&self) -> Result<(), Reject> {
+        // 只删除已明确终局的索引；原 Wait 继续持有同一 Cell 和未取结果。
+        let snapshot = self
+            .entries
+            .try_lock()
+            .map_err(|_| Reject::Pending)?
+            .clone();
+        let finished: Vec<_> = snapshot
+            .iter()
+            .filter(|entry| entry.observe() == Observation::Drained)
+            .cloned()
+            .collect();
+        let mut entries = self.entries.try_lock().map_err(|_| Reject::Pending)?;
+        entries.retain(|entry| !finished.iter().any(|old| Arc::ptr_eq(entry, old)));
+        Ok(())
+    }
     pub(in crate::local_writer::owner) fn reserve<T: Send + 'static>(
         &self,
     ) -> Result<Reservation<T>, Reject> {
         if self.sealed.load(Ordering::Acquire) {
             return Err(Reject::Sealed);
         }
-        // Reap outside the registry lock: no actor receiver is polled under it.
-        let entries = self
-            .entries
-            .try_lock()
-            .map_err(|_| Reject::Pending)?
-            .clone();
-        let mut finished = Vec::new();
-        for entry in &entries {
-            if entry.observe() == Observation::Drained {
-                finished.push(entry.clone());
-            }
-        }
+        self.prune_drained()?;
         let mut entries = self.entries.try_lock().map_err(|_| Reject::Pending)?;
         if self.sealed.load(Ordering::Acquire) {
             return Err(Reject::Sealed);
         }
-        entries.retain(|entry| !finished.iter().any(|old| Arc::ptr_eq(entry, old)));
         if entries.len() >= LIMIT {
             return Err(Reject::Full);
         }
+        self.budget.take()?;
         let cell = Arc::new(Cell {
+            budget: self.budget.clone(),
             pending: OnceLock::new(),
             abandoned: AtomicBool::new(false),
         });

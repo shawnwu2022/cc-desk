@@ -262,3 +262,64 @@ regression remains in unattended-stage3a-first.log. Independent review requested
 the clock/fence/validation ordering fixes before this final verification.
 This is 49 focused tests, not the complete App suite or phone/network acceptance.
 No task-join, cross-restart consent or real user consent is inferred.
+
+## Stage 3b-1 progress: local retirement custody
+
+The Host-local fact API is implemented separately from service adoption/rebind.
+Its exact Host/channel/attempt token closes only original channel admission and
+retains original bind replies, dispatch results and coordinator JoinHandles.
+Each attempt has a separately sealable custody registry; full shutdown traverses
+all of them. One Host-wide 64-cell budget also counts ready results held by old
+Wait references. This is stricter than the old registry-only limit, not a claim
+that the earlier implementation already bounded all retained results.
+
+Four real-channel fixture tests cover close-before-bind, bind-before-close,
+late reserve after authority check, observer cancellation, original join success
+and panic, and lost original bind reply. The existing genuine wire input test
+also retires while its original writer result is pending, without replay.
+These use original actors and actual cryptographic channels with an in-memory
+writer; they are not physical PTY or real-phone acceptance. Two shared-budget
+cases verify independent sealing, old result retrieval, 64 unconsumed ready
+results remaining Full, and exactly one freed result restoring one credit.
+
+Initial attempts exposed a missing locked registry cache, then fixture compilation
+and premature GrantGate-drop errors. Official registry downloads supplied only
+locked versions; the fixture retained its original gate instead of weakening the
+timeout or authority checks. The first new tests and the 23-case Host-focused run
+then passed. A strict Clippy needless_bool finding in pruning was simplified.
+No lockfile, actual credential, cloud deployment or security configuration changed.
+
+An earlier full Host library run had 206 passed, 1 failed and 1 ignored:
+AuthorizedPty_BoundIo_001 failed at initial PTY view sync with Err(Sync). A single
+exact-case comparison on clean baseline 08081ade passed after preparing the
+existing pinned ConPTY runtime; one exact current-case rerun also passed. This
+does not establish a baseline fault or erase the failed full-suite run. Full Host
+suite acceptance remains an unresolved publication gate; no timeout or assertion
+was relaxed and no repeated full-suite loop was used to obtain a green claim.
+
+Local Retired cannot issue complete retirement proof. Original network socket,
+App PeerPump and material tasks remain separate required evidence. Unknown keeps
+full shutdown custody. Prepared-channel branding, same-reservation delegated
+adoption/rebind and production consent remain unimplemented; unattended access
+is still unavailable.
+
+Final same-source focused verification on WSK-MSI (2026-11-16), repository root,
+existing project Cargo home and build cache, offline/locked:
+- `cargo test --offline --locked --manifest-path remote/Cargo.toml -p cc-desk-remote-host --lib --features experimental-host-owner local_writer::owner:: -- --test-threads=1`: 44 passed, 0 failed, 167 filtered.
+- `cargo clippy --offline --locked --manifest-path remote/Cargo.toml -p cc-desk-remote-host --lib --features experimental-host-owner -- -D warnings`: passed.
+- `cargo test --offline --locked --manifest-path src-tauri/Cargo.toml --lib --features remote-host DelegatedNative_ -- --test-threads=1`: 6 passed, 0 failed, 2,296 filtered.
+- `cargo test --offline --locked --manifest-path src-tauri/Cargo.toml --lib --features remote-host remote_unattended -- --test-threads=1`: 43 passed, 0 failed, 2,259 filtered.
+
+Fresh final logs: .audit/unattended-stage3b1-owner-verified.log,
+unattended-stage3b1-host-clippy-verified.log,
+unattended-stage3b1-app-native-final.log and
+unattended-stage3b1-app-baseline-final.log. Earlier attempts and the failed full
+Host suite remain separately preserved. The owner-strict 44-pass run preceded
+the final Clippy expression simplification; owner-verified reran that final source.
+
+- `cargo clippy --offline --locked --manifest-path src-tauri/Cargo.toml --lib --features remote-host -- -D warnings`: passed on the same final source; log .audit/unattended-stage3b1-app-clippy-final.log.
+- Focused rustfmt check with the remote workspace's Rust 2024 edition and git diff whitespace check passed. An initial check selected Rust 2021 incorrectly and was corrected without rewriting unrelated files.
+
+Independent read-only review accepted the local retirement boundary and the
+stronger last-Arc budget. No full Host/App suite, phone acceptance or production
+authority activation is claimed by these focused results.
