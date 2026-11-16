@@ -327,3 +327,319 @@ fn isolated(case: &str) -> bool {
     eprintln!("TEST_ONLY_DELEGATED_ISOLATED {case}: original child joined, 1 passed");
     true
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn DelegatedSocket_OriginalRelayMuxAndProducerJoin_001() {
+    if isolated("DelegatedSocket_OriginalRelayMuxAndProducerJoin_001") {
+        return;
+    }
+    socket_case(false, false).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn DelegatedSocket_CancelObserverRetainsLateMaterial_002() {
+    if isolated("DelegatedSocket_CancelObserverRetainsLateMaterial_002") {
+        return;
+    }
+    socket_case(true, false).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn DelegatedSocket_SessionDropRetainsOriginalMaterialAndNetwork_007() {
+    if isolated("DelegatedSocket_SessionDropRetainsOriginalMaterialAndNetwork_007") {
+        return;
+    }
+    socket_case(true, true).await;
+}
+async fn socket_case(late: bool, drop_owner: bool) {
+    use crate::remote_host_network::delegated::{TestMaterial, TestMaterialBuilder};
+    let (f, mut cleanup) = setup();
+    let mut relay = NetworkRelayFixture::start().await;
+    let source = admit(&f);
+    let scope = source.scope().unwrap();
+    let (consent, mut current, policy) = NativeDelegationConsent::test_network(&source, device());
+    policy.test_network_origin(&mut current, relay.origin.clone());
+    let owner = DelegatedRunOwner::capture(source, consent).unwrap();
+    let session = Arc::new(cleanup.host.reserve_delegation(owner).unwrap());
+    let origin = relay.origin.clone();
+    let address = relay.address;
+    let (accepted, ready) = tokio::sync::oneshot::channel();
+    let (release, held) = std::sync::mpsc::sync_channel(0);
+    let (started, working) = tokio::sync::oneshot::channel();
+    let build = TestMaterialBuilder::new(move |scope| {
+        let _ = started.send(());
+        if late {
+            held.recv().unwrap();
+        }
+        TestMaterial {
+            address,
+            relay: network_relay_identity(&origin, true),
+            tunnel: [3; 16],
+            local: network_local(false),
+            phone_pin: network_pin(true),
+            binding: cc_desk_remote_security::HostSnapshot {
+                host_key_epoch: 5,
+                client_key_epoch: 7,
+                activation: [0x33; 32],
+                incarnation: 11,
+                policy_epoch: 13,
+                issuer_epoch: 17,
+                origin: cc_desk_remote_record::appbind::CanonicalOrigin::trusted(&origin).unwrap(),
+            },
+            browser: network_browser_profile(),
+            issuer: network_grants::admin(),
+            principal: [4; 32],
+            policy: cc_desk_remote_security::NativeGrantPolicy {
+                scope,
+                role: cc_desk_remote_record::grant::DataRole::Controller,
+                duration: Duration::from_secs(10),
+            },
+            accepted: Some(Box::new((accepted, None))),
+        }
+    });
+    let socket = session
+        .test_begin_socket(&current, &f.supervisor, build)
+        .unwrap();
+    working.await.unwrap();
+    if drop_owner {
+        drop(session);
+        // Session 已消失，service 仍必须保管原网络任务和在途材料。
+        assert!(
+            tokio::time::timeout(Duration::from_millis(25), cleanup.host.test_join_network())
+                .await
+                .is_err()
+        );
+        release.send(()).unwrap();
+        assert!(socket.wait_closed().await.is_ok());
+        assert!(cleanup.host.test_join_network().await);
+        f.service
+            .access(&f.caller, &f.request_run())
+            .unwrap()
+            .write_frame(b"native")
+            .unwrap();
+        assert_eq!(report(&f)["input"], json!([110, 97, 116, 105, 118, 101]));
+        assert!(cleanup.close());
+        assert!(relay.close().await);
+        return;
+    }
+    if late {
+        session.disconnect();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(25), socket.wait_closed())
+                .await
+                .is_err()
+        );
+        release.send(()).unwrap();
+        assert!(socket.wait_closed().await.is_ok());
+        assert!(socket.wait_admitted().await.is_err());
+    } else {
+        ready.await.unwrap();
+        let (peer, admitted) = tokio::join!(network_client(&relay, scope), socket.wait_admitted());
+        assert!(admitted.is_ok(), "{admitted:?}");
+        let (client, mux, cancel) = peer.unwrap();
+        let snapshot = client
+            .snapshot(
+                br#"{"message":"Snapshot","profile":1,"request":"1"}"#,
+                Duration::from_secs(1),
+            )
+            .await
+            .unwrap();
+        assert_eq!(snapshot.stamp.target.run, f.request_run().run_id);
+        let budget = Duration::from_secs(1);
+        let ack = projection::encode_ack(
+            &projection::Ack {
+                profile: 1,
+                stamp: snapshot.stamp,
+            },
+            1,
+        )
+        .unwrap();
+        client.exchange(&ack, budget).await.unwrap();
+        let window = client
+            .exchange(br#"{"message":"Window","profile":1,"request":"2"}"#, budget)
+            .await
+            .unwrap();
+        let wire::Message::WindowGranted {
+            window,
+            not_after_host_ms,
+            ..
+        } = wire::decode(&window).unwrap()
+        else {
+            panic!("window");
+        };
+        let mut token = [0; 32];
+        for (index, pair) in window.as_bytes().chunks_exact(2).enumerate() {
+            token[index] = u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap();
+        }
+        let frame = input::encode(&input::Input {
+            operation: [0x51; 16],
+            sequence: 1,
+            window: token,
+            not_after_host_ms: not_after_host_ms.parse().unwrap(),
+            bytes: b"nat".to_vec(),
+        })
+        .unwrap();
+        let receipt = client.exchange(&frame, budget).await.unwrap();
+        assert!(matches!(
+            wire::decode(&receipt),
+            Ok(wire::Message::InputReceipt {
+                outcome: wire::Outcome::HostWritten,
+                ..
+            })
+        ));
+        session.disconnect();
+        assert!(session.test_join_pump().await);
+        assert!(socket.wait_closed().await.is_ok());
+        assert!(client
+            .snapshot(
+                br#"{"message":"Snapshot","profile":1,"request":"2"}"#,
+                Duration::from_secs(1)
+            )
+            .await
+            .is_err());
+        let _ = client.close().await;
+        cancel.cancel();
+        mux.request_close();
+        assert!(mux.wait_closed().await.is_ok());
+    }
+    assert!(session
+        .test_prepare(&current, &f.supervisor, false)
+        .await
+        .is_err());
+    f.service
+        .access(&f.caller, &f.request_run())
+        .unwrap()
+        .write_frame(if late { b"native" } else { b"ive" })
+        .unwrap();
+    assert_eq!(report(&f)["input"], json!([110, 97, 116, 105, 118, 101]));
+    drop(session);
+    assert!(cleanup.close());
+    assert!(relay.close().await);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn DelegatedSocket_ReservedShutdownCannotStartWorker_003() {
+    socket_failure_case(0).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn DelegatedSocket_PublishedBeforeGoShutdownCannotStartWorker_004() {
+    socket_failure_case(1).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn DelegatedSocket_MaterialSpawnFailureStaysUnknown_005() {
+    socket_failure_case(2).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn DelegatedSocket_MaterialPanicStaysUnknown_006() {
+    socket_failure_case(3).await;
+}
+async fn socket_failure_case(mode: u8) {
+    use crate::remote_host_network::delegated::TestMaterialBuilder;
+    let (f, mut cleanup) = setup();
+    let host = cleanup.host.clone();
+    let source = admit(&f);
+    let (consent, current, _) = NativeDelegationConsent::test_network(&source, device());
+    let owner = DelegatedRunOwner::capture(source, consent).unwrap();
+    let session = Arc::new(host.reserve_delegation(owner).unwrap());
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let called = calls.clone();
+    let mut build = TestMaterialBuilder::new(move |_| {
+        called.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        panic!("TEST_ONLY material panic");
+    });
+    if mode == 1 {
+        let original = host.clone();
+        build = build.test_before_go(move || {
+            original.request_exit(71, false);
+        });
+    }
+    if mode == 2 {
+        build = build.test_fail_spawn();
+    }
+    let socket = if mode == 0 {
+        session.test_begin_socket_with_hook(&current, &f.supervisor, build, |_| {
+            host.request_exit(70, false);
+        })
+    } else {
+        session.test_begin_socket(&current, &f.supervisor, build)
+    };
+    if mode == 0 {
+        assert!(socket.is_err());
+        assert!(host.test_join_network().await);
+    } else {
+        let launch_failed = socket.is_err();
+        if mode != 1 {
+            assert!(!launch_failed);
+        }
+        let socket = session.test_socket().unwrap();
+        assert!(socket.wait_admitted().await.is_err());
+        let expected_known = mode == 1 && !launch_failed;
+        assert_eq!(socket.wait_closed().await.is_ok(), expected_known);
+        assert_eq!(socket.wait_closed().await.is_ok(), expected_known);
+        assert_eq!(host.test_join_network().await, expected_known);
+    }
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        usize::from(mode == 3)
+    );
+    assert!(session
+        .test_prepare(&current, &f.supervisor, false)
+        .await
+        .is_err());
+    f.service
+        .access(&f.caller, &f.request_run())
+        .unwrap()
+        .write_frame(b"native")
+        .unwrap();
+    assert_eq!(report(&f)["input"], json!([110, 97, 116, 105, 118, 101]));
+    drop(session);
+    // cleanup 仅收齐本机任务；网络 Unknown 已单独断言，不能由该结果洗掉。
+    assert!(cleanup.close());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn DelegatedSocket_LastSessionDropDuringStartDoesNotDeadlock_008() {
+    use crate::remote_host_network::delegated::TestMaterialBuilder;
+    let (f, mut cleanup) = setup();
+    let host = cleanup.host.clone();
+    let source = admit(&f);
+    let (consent, current, _) = NativeDelegationConsent::test_network(&source, device());
+    let owner = DelegatedRunOwner::capture(source, consent).unwrap();
+    let session = Arc::new(host.reserve_delegation(owner).unwrap());
+    let (socket, start) = session
+        .test_reserve_socket_start(&current, &f.supervisor)
+        .unwrap();
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let called = calls.clone();
+    let (held, holding) = std::sync::mpsc::sync_channel(0);
+    let (release, resume) = std::sync::mpsc::sync_channel(0);
+    let build = TestMaterialBuilder::new(move |_| {
+        called.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        panic!("unexpected material construction");
+    })
+    .test_after_keepalive(move || {
+        held.send(()).unwrap();
+        resume.recv().unwrap();
+    });
+    let original = socket.clone();
+    let worker = std::thread::spawn(move || original.start(start, build));
+    holding.recv_timeout(Duration::from_secs(3)).unwrap();
+    drop(session);
+    release.send(()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !worker.is_finished() {
+        assert!(Instant::now() < deadline, "last-owner Drop deadlocked");
+        tokio::task::yield_now().await;
+    }
+    let started = worker.join().unwrap();
+    let expected_known = started.is_ok();
+    assert!(socket.wait_admitted().await.is_err());
+    assert_eq!(socket.wait_closed().await.is_ok(), expected_known);
+    assert_eq!(host.test_join_network().await, expected_known);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    f.service
+        .access(&f.caller, &f.request_run())
+        .unwrap()
+        .write_frame(b"native")
+        .unwrap();
+    assert_eq!(report(&f)["input"], json!([110, 97, 116, 105, 118, 101]));
+    assert!(cleanup.close());
+}

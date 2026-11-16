@@ -27,6 +27,10 @@ use std::{
 use tokio::{sync::watch, time::Instant};
 #[path = "remote_host_approval_stop.rs"]
 mod approval_stop;
+#[path = "remote_host_network/delegated.rs"]
+pub(crate) mod delegated;
+#[path = "remote_host_network_wire.rs"]
+mod wire;
 pub(crate) use approval_stop::NativeApprovalStop;
 
 thread_local! { static SOURCE_SAMPLE_DEPTH: Cell<usize> = const { Cell::new(0) }; }
@@ -785,18 +789,12 @@ async fn run_attempt(
     published: &watch::Sender<Option<Result<(), HostNetworkError>>>,
 ) -> Result<(), HostNetworkError> {
     #[cfg(test)]
-    let mut outer_accepted = inputs.outer_accepted;
+    let mut inputs = inputs;
     #[cfg(test)]
-    let termination = inputs.termination;
-    #[cfg(test)]
-    let mut mux_termination = None;
-    #[cfg(windows)]
-    let mut signing_stages = inputs.stages;
-    let (cancel, token) = security::cancellation();
-    let mut mux = None;
-    let mut running: Option<Arc<RunningChannel>> = None;
-    let mut gate = None;
-    let mut source_stop = inputs.source.revoked.clone();
+    let termination = inputs.termination.take();
+    let source = inputs.source.clone();
+    let mut wire = wire::NetworkWire::new();
+    let mut source_stop = source.revoked.clone();
     let mut source_end = None;
     let setup_allowed = !*stopped.borrow() && stopped.has_changed().is_ok();
     let mut original = Some(admission);
@@ -809,132 +807,18 @@ async fn run_attempt(
         let now = clock.now_ms().map_err(|_| HostNetworkError::Authority)?;
         source_end = Some(
             source_anchor
-                .checked_add(Duration::from_millis(inputs.source.expires_host_ms - now))
+                .checked_add(Duration::from_millis(source.expires_host_ms - now))
                 .ok_or(HostNetworkError::Bounds)?,
         );
-        let budget = remaining(end)?;
-        #[cfg(windows)]
-        if let Some(stages) = &mut signing_stages {
-            let approval = approval_stop
-                .as_ref()
-                .ok_or(HostNetworkError::Authority)?
-                .clone();
-            stages
-                .begin_relay(NetworkSigningScope {
-                    approval,
-                    end: end.into_std(),
-                })
-                .map_err(|_| HostNetworkError::Authority)?;
-        }
-        let socket = match connector {
-            Connector::WebPki => {
-                transport::wss::connect_admitted_with_mode(
-                    inputs.binding.origin.as_str(),
-                    inputs.address,
-                    budget,
-                    &inputs.relay,
-                    inputs.relay_mode,
-                    inputs.tunnel,
-                )
-                .await
-            }
-            #[cfg(test)]
-            Connector::PublicLoopbackFixture => {
-                transport::wss::test_only_connect_admitted_loopback_with_mode(
-                    inputs.binding.origin.as_str(),
-                    inputs.address,
-                    budget,
-                    &inputs.relay,
-                    inputs.relay_mode,
-                    inputs.tunnel,
-                )
-                .await
-            }
-        }
-        .map_err(|_| HostNetworkError::Relay)?;
-        #[cfg(test)]
-        eprintln!("TEST_ONLY_HOST_OUTER_ACCEPTED");
-        #[cfg(test)]
-        if let Some(accepted) = outer_accepted.take() {
-            let (accepted, proceed) = *accepted;
-            let _ = accepted.send(());
-            // 仅测试中的原任务调度门；仍受原 setup select/end 保管，不改变 mux 的 IO 预算。
-            if let Some(proceed) = proceed {
-                proceed.await.map_err(|_| HostNetworkError::Closed)?;
-            }
-        }
-        #[cfg(windows)]
-        if let Some(stages) = &mut signing_stages {
-            stages
-                .arm_endpoint()
-                .map_err(|_| HostNetworkError::Authority)?;
-        }
-        #[cfg(not(test))]
-        let (stream, owner) = transport::start_admitted(socket, inputs.tunnel, inputs.io_budget)
-            .map_err(|_| HostNetworkError::Relay)?;
-        #[cfg(test)]
-        let (stream, owner) = {
-            let (stream, owner, ending) = transport::test_only_start_admitted_observed(
-                socket,
-                inputs.tunnel,
-                inputs.io_budget,
+        let channel = wire
+            .setup(
+                wire::WireInputs::from_approved(inputs),
+                connector,
+                clock.clone(),
+                end,
+                approval_stop.as_ref(),
             )
-            .map_err(|_| HostNetworkError::Relay)?;
-            mux_termination = Some(ending);
-            (stream, owner)
-        };
-        mux = Some(owner);
-        #[cfg(test)]
-        eprintln!("TEST_ONLY_HOST_TLS_START");
-        let pending = security::accept(
-            security::Unbound::new(stream),
-            inputs.local,
-            inputs.phone_pin,
-            remaining(end)?,
-            token,
-        )
-        .await
-        .map_err(|error| {
-            #[cfg(test)]
-            eprintln!("TEST_ONLY_HOST_TLS_ERROR {error:?}");
-            #[cfg(not(test))]
-            let _ = error;
-            HostNetworkError::Security
-        })?;
-        let managed = security::bind_host_peer_channel(pending, inputs.binding)
-            .await
-            .map_err(|error| {
-                #[cfg(test)]
-                eprintln!("TEST_ONLY_HOST_BIND_ERROR {error:?}");
-                #[cfg(not(test))]
-                let _ = error;
-                HostNetworkError::Security
-            })?;
-        let mut authority = GrantGate::for_binding(
-            managed.context(),
-            inputs.issuer,
-            inputs.principal,
-            clock.clone(),
-        )
-        .map_err(|_| HostNetworkError::Grant)?;
-        authority
-            .require_browser(inputs.browser)
-            .map_err(|_| HostNetworkError::Grant)?;
-        gate = Some(authority);
-        let mut managed = managed
-            .grant_host(
-                gate.as_mut().expect("original GrantGate"),
-                inputs.policy,
-                remaining(end)?,
-            )
-            .await
-            .map_err(|_| HostNetworkError::Grant)?;
-        let channel = Arc::new(
-            managed
-                .start_peer_pending(end)
-                .map_err(|_| HostNetworkError::Handoff)?,
-        );
-        running = Some(channel.clone());
+            .await?;
         remaining(end)?;
         clock.now_ms().map_err(|_| HostNetworkError::Authority)?;
         let owned = original.take().expect("original synchronous admission");
@@ -962,7 +846,7 @@ async fn run_attempt(
     let (mut cause, mut selected_at) = (TestAttemptCause::Setup, Instant::now());
     let result = if result.is_ok() {
         let expiry = source_end.expect("original source lease deadline");
-        let channel = running.as_ref().expect("original handed-off channel");
+        let channel = wire.running.as_ref().expect("original handed-off channel");
         tokio::select! {biased;
             _ = stopped.changed() => { #[cfg(test)] { cause = TestAttemptCause::AttemptStop; selected_at = Instant::now(); } Ok(()) },
             _ = source_stop.changed() => { #[cfg(test)] { cause = TestAttemptCause::SourceWatch; selected_at = Instant::now(); } Ok(()) },
@@ -973,42 +857,12 @@ async fn run_attempt(
     } else {
         result
     };
-    #[cfg(windows)]
-    if let Some(stages) = &signing_stages {
-        stages.cancel();
-    }
-    // 先通知全部 owner 再等待；取消外部观察者不能移走原始句柄。
-    if let Some(gate) = &mut gate {
-        gate.revoke();
-    }
-    cancel.cancel();
-    if let Some(channel) = &running {
-        channel.authority().request_close();
-    }
-    if let Some(owner) = &mux {
-        owner.request_close();
-    }
-    let (channel_known, mux_known) = tokio::join!(
-        async {
-            if let Some(channel) = &running {
-                channel.wait_closed_checked().await.is_ok()
-            } else {
-                true
-            }
-        },
-        async {
-            if let Some(owner) = &mux {
-                owner.wait_closed().await.is_ok()
-            } else {
-                true
-            }
-        },
-    );
+    let wire_known = wire.close_and_join().await;
     drop(original);
-    drop(gate);
     #[cfg(test)]
     if let Some(termination) = termination {
-        let mux = mux_termination
+        let mux = wire
+            .mux_termination
             .as_mut()
             .and_then(|receiver| receiver.try_recv().ok());
         let _ = termination.send(TestAttemptEnd {
@@ -1018,7 +872,7 @@ async fn run_attempt(
             mux,
         });
     }
-    if clock.unknown.load(Ordering::Acquire) || !channel_known || !mux_known {
+    if clock.unknown.load(Ordering::Acquire) || !wire_known {
         Err(HostNetworkError::Unknown)
     } else {
         result

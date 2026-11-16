@@ -398,3 +398,57 @@ The earlier Stage 3b-1 full Host PTY-suite failure remains an unresolved publica
 gate. These 91 passing tests are not a full App/Host suite or real-phone acceptance.
 Stage 3b-2b must still retain and join original preparation/material/socket/PeerPump
 and Host facts before any complete receipt or second attempt can be issued.
+
+## Stage 3b-2b-i result: original single-generation socket custody
+
+- [x] Share original setup/teardown without weakening one-shot authorization.
+- [x] Add sealed delegated runner and material/release custody; production
+      material and consent constructors remain absent.
+- [x] Register coordinator before material work; retain it across Session Drop,
+      cancelled observation and failed go publication.
+- [x] Fence start against shutdown; release all startup guards before last-owner
+      Session Drop. Independent review found no remaining P0-P2 blocker.
+- [ ] Stage 3b-2b-ii: aggregate exact Host-local token, original PeerPump,
+      socket/MUX and material facts into the sole complete receipt constructor.
+- [ ] Consume receipt before clearing live, selecting the next clock attempt and
+      same-Host rebind. Never reconstruct or consume the original producer again.
+
+Final same-source validation on WSK-MSI (2026-11-16): 119 distinct focused tests
+passed, plus strict non-test App Clippy. Commands ran from the repository root:
+
+    cargo test --offline --locked --manifest-path src-tauri/Cargo.toml --lib --features remote-host <filter> -- --test-threads=1
+    cargo clippy --offline --locked --manifest-path src-tauri/Cargo.toml --lib --features remote-host -- -D warnings
+
+Filters/counts: DelegatedSocket_ 8; DelegatedChannel_ 7; DelegatedNative_ 6;
+remote_unattended 48; remote_host_network::tests 21; remote_host::tests 14;
+HostCandidate_ 5; HostPairingScope_ 2;
+NativeRemote_ActualAdmissionInstallsOriginalOwnNode_001 1; the seven HostStart_
+cases listed in Stage 3b-2a each passed in a separate invocation. The publication
+callback case is included in network 21, not counted twice. Isolated child tests
+and their wrappers are also counted only once.
+
+The new eight cover real localhost Relay socket/MUX adoption and remote nat
+input followed after disconnect by local ive (exact native child report);
+cancelled observation with late material; shutdown before start and between
+registration/go; material spawn failure and real worker panic; Session Drop with
+material in flight; and last external Session Drop while start retains keepalive.
+The last case explicitly orders guard release, final keepalive destruction and
+go, rather than depending on scheduling speed. These are single-generation tests,
+not complete receipt or reconnect acceptance.
+
+Logs: .audit/unattended-stage3b2bi-final-01.log through final-16.log and
+unattended-stage3b2bi-clippy-final.log. Earlier compilation/lint attempts and the
+six-case first failure remain separately recorded. That failure assumed start
+must succeed after shutdown had discarded go. The corrected test retrieves the
+same retained custody and checks its true terminal fact and sticky Unknown on
+publication failure; send failure never means that no task exists.
+
+The existing Relay executable was rechecked at SHA256
+39E54732DE9EF9D5B7FAAE179148EF2852B27F490956D880C144C106323F8CB3.
+Existing Cargo home/target and public fixture certificates were reused. No new
+dependency, lockfile, real credential, cloud or security-setting change occurred.
+Focused formatting and git whitespace checks passed.
+
+The prior full Host PTY-suite failure remains an unresolved publication gate.
+These results are not a full App/Host suite, real-phone acceptance, production
+unattended activation or complete per-attempt retirement proof.

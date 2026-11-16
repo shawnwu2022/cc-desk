@@ -370,3 +370,38 @@ are not implemented. There is no real phone approval, UI, restart authorization,
 retry scheduler or cloud change. Starting/prepared cancellation remains closed
 without any complete retirement claim; the later slice must retain and join all
 original preparation, transport and material tasks before issuing a receipt.
+
+## Stage 3b-2b-i: original socket and material custody (inactive)
+
+The one-shot and sealed delegated runners share NetworkWire for original
+socket/MUX/TLS/AppBind/grant setup and channel/MUX close-and-join. It allows only
+one setup and grants no authority. One-shot SourceClock, approval, deadline and
+publication checks remain in the original entry. The delegated runner is compiled
+outside cfg(test), but material and native consent constructors remain test-only.
+Tests use the existing localhost Relay and fixed public identities, not the
+previous duplex-only fixture and not a real enrolled phone.
+
+Session retains private SocketCustody before startup. Start obtains the original
+join registration guard and checks exact service/session/activation operation
+under service.state then network.state. A coordinator waits behind go; its actual
+JoinHandle is installed and published to service.network before locks are released
+and go opens. Material construction starts only inside that registered task.
+Closing Reserved prevents later start. Failed go publication latches Socket and
+service Unknown while preserving the original task for joining.
+
+Start retains Session before taking any launch/service/network lock. Locked
+checks only borrow that keepalive. All guards are released before its final Drop,
+which may close the attempt before go. This prevents recursive last-owner
+shutdown under those locks. Original material and release threads are each
+registered before their work gate opens. Generated, transferred, released and
+explicitly NotSpawned are distinct facts. Cancelled preparation joins its worker
+and destroys late material through a separately registered and joined release
+thread. Panic payloads are quarantined with Unknown. Cancelled observation cannot
+remove handles; Session Drop cannot detach registered tasks from service custody.
+
+SocketCustody wait_closed covers only its original network task and material
+work. It does not aggregate the exact NativeHost local token and original App
+PeerPump, mint RetirementProof, clear Stage 1 live, replace the clock attempt or
+allow a second generation. Those remain Stage 3b-2b-ii. Production key provisioning
+and release semantics, phone consent, UI, restart restoration, retries and cloud
+deployment remain unavailable.

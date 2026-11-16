@@ -229,6 +229,12 @@ mod tests {
 
 #[cfg(test)]
 impl Delegation {
+    pub(crate) fn test_network_origin(&self, current: &mut VerifiedBinding, origin: String) {
+        let mut state = self.owner.state.lock().unwrap();
+        assert!(state.live.is_none());
+        current.0.origin = origin;
+        state.binding = Some(current.0.clone());
+    }
     pub(crate) fn test_network_identity(&self, current: &mut VerifiedBinding, device: [u8; 32]) {
         let mut state = self.owner.state.lock().unwrap();
         assert!(state.live.is_none());
