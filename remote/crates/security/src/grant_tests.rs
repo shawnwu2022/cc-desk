@@ -89,7 +89,7 @@ pub(super) fn scope() -> SessionScope {
         generation: "7".into(),
     }
 }
-fn context() -> Context {
+pub(super) fn context() -> Context {
     Context {
         host_endpoint_id: "01".repeat(32),
         client_endpoint_id: "02".repeat(32),

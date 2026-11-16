@@ -145,6 +145,9 @@ pub struct GrantGate {
     browser: Option<crate::BrowserProfile>,
     browser_attempt: Option<([u8; 32], [u8; 32])>,
     accepted_approval: Option<Vec<u8>>,
+    expiry_ceiling: Option<u64>,
+    ever_challenged: bool,
+    ever_accepted: bool,
 }
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
@@ -239,7 +242,44 @@ impl GrantGate {
             browser: None,
             browser_attempt: None,
             accepted_approval: None,
+            expiry_ceiling: None,
+            ever_challenged: false,
+            ever_accepted: false,
         })
+    }
+    /// 仅收紧既有原生策略；必须在任何 challenge/accept 尝试前绑定同一时钟。
+    pub fn limit_expiry(
+        &mut self,
+        clock: &Arc<dyn GrantClock>,
+        expires_host_ms: u64,
+    ) -> Result<(), GrantError> {
+        if !Arc::ptr_eq(clock, &self.state.clock)
+            || self.ever_challenged
+            || self.ever_accepted
+            || self.expiry_ceiling.is_some_and(|old| expires_host_ms > old)
+        {
+            return Err(GrantError::Policy);
+        }
+        if expires_host_ms <= self.state.sample()? {
+            return Err(GrantError::Expired);
+        }
+        self.expiry_ceiling = Some(expires_host_ms);
+        Ok(())
+    }
+    fn check_ceiling(&self, payload: &CanonicalGrant, now: u64) -> Result<(), GrantError> {
+        if let Some(ceiling) = self.expiry_ceiling {
+            let end: u64 = payload
+                .expires_host_ms
+                .parse()
+                .map_err(|_| GrantError::Encoding)?;
+            if end > ceiling {
+                return Err(GrantError::Policy);
+            }
+            if now >= ceiling || now >= end {
+                return Err(GrantError::Expired);
+            }
+        }
+        Ok(())
     }
     /// Trusted enrollment owner only; immutable once any challenge has been issued.
     pub fn require_browser(&mut self, profile: crate::BrowserProfile) -> Result<(), GrantError> {
@@ -330,6 +370,9 @@ impl GrantGate {
                 .expires_host_ms
                 .parse()
                 .map_err(|_| GrantError::Encoding)?;
+            if self.expiry_ceiling.is_some() {
+                self.check_ceiling(payload, self.state.sample()?)?;
+            }
             // A valid approval for another native policy is not a failed signature.
             if payload.scope != *scope
                 || payload.role != role
@@ -367,6 +410,7 @@ impl GrantGate {
         role: DataRole,
         duration: Duration,
     ) -> Result<CanonicalGrant, GrantError> {
+        self.ever_challenged = true;
         let now = self.state.sample()?;
         if self.browser.is_some() && self.browser_attempt.is_none() {
             return Err(GrantError::Context);
@@ -383,6 +427,10 @@ impl GrantGate {
             return Err(GrantError::Bounds);
         }
         let end = now.checked_add(ms).ok_or(GrantError::Bounds)?;
+        let end = self.expiry_ceiling.map_or(end, |ceiling| end.min(ceiling));
+        if end <= now {
+            return Err(GrantError::Expired);
+        }
         let value = CanonicalGrant {
             version: 1,
             context: self.context.clone(),
@@ -395,22 +443,27 @@ impl GrantGate {
             expires_host_ms: end.to_string(),
         };
         grant::encode(&value).map_err(|_| GrantError::Policy)?;
-        if self.state.sample()? >= now.checked_add(30000).ok_or(GrantError::Bounds)? {
+        let final_now = self.state.sample()?;
+        self.check_ceiling(&value, final_now)?;
+        if final_now >= now.checked_add(30000).ok_or(GrantError::Bounds)? {
             return Err(GrantError::Expired);
         }
         self.pending = Some((value.clone(), 0));
         Ok(value)
     }
     pub fn accept(&mut self, bytes: &[u8]) -> Result<VerifiedGrant, GrantError> {
+        self.ever_accepted = true;
         let now = self.state.sample()?;
         if let Some(old) = &self.accepted
             && self.approval_signature(bytes, &old.0.payload).is_ok()
             && (self.browser.is_none() || self.accepted_approval.as_deref() == Some(bytes))
         {
+            self.check_ceiling(&old.0.payload, now)?;
             old.check()?;
             return Ok(old.clone());
         }
         let (pending, _) = self.pending.as_ref().ok_or(GrantError::Replay)?;
+        self.check_ceiling(pending, now)?;
         let created: u64 = pending.created_host_ms.parse().unwrap();
         let end: u64 = pending.expires_host_ms.parse().unwrap();
         if now >= created.checked_add(30000).ok_or(GrantError::Bounds)? || now >= end {
@@ -426,6 +479,7 @@ impl GrantGate {
             return Err(error);
         }
         let now = self.state.sample()?;
+        self.check_ceiling(&self.pending.as_ref().ok_or(GrantError::Replay)?.0, now)?;
         if now >= created + 30000 || now >= end {
             self.pending = None;
             return Err(GrantError::Expired);
@@ -450,3 +504,7 @@ impl Drop for GrantGate {
         self.state.revoked.send_replace(true);
     }
 }
+
+#[cfg(test)]
+#[path = "grant_ceiling_tests.rs"]
+mod ceiling_tests;

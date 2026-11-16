@@ -564,3 +564,14 @@ suite, real-phone acceptance, 30-day endurance test or production activation.
 - 本轮含原真实 localhost Relay 双代、原生产 actor 输入与 receipt settlement、
   取消/迟到 bind/材料与退出边界回归，但不是完整 App/Host suite、真实手机或
   30 天 endurance。旧 PTY 全库发布门槛仍未解决，无 push/merge/RC 发布。
+
+## 预算 security 首片验证（2026-11-16）
+
+新增 GrantCeiling 5/5；同源码 grant 过滤合计 38/38（含新5项及原签名、
+management/browser/期限回归），security 非 test Clippy -- -D warnings 通过。
+日志 .audit/unattended-budget-security-feature-second.log、
+unattended-budget-security-grant-first.log 与
+unattended-budget-security-clippy-first.log。最初漏 experimental 的 0 项结果
+及测试 fixture 可见性编译失败保留但不计入成功。独立只读审查无阻塞。
+此提交限定 ceiling 能力；App fixed window/AttemptElapsed/wire 接线和真实
+超过60秒输入仍在后续切片，不能声称已完成长期连接。

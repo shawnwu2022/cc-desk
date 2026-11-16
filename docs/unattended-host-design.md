@@ -524,3 +524,16 @@ Released/NotSpawned 才正常结束；Unknown 保留并关闭，不经历史清�
 130 个 PeerPump 任务和 130 个 network coordinator 测试用于有界容器机制验证，
 不是 130 次公网/真实手机会话，更不等于 30 天运行。真实 localhost Relay 双代
 回归另行执行。生产授权/UI/供钥、60 秒窗口、8 秒启动和绝对最长 30 天均未扩展。
+
+## 预算基础第一片：grant 绝对上限（2026-11-16）
+
+GrantGate 新增只收紧的 limit_expiry：要求传入同一个 GrantClock Arc，在任何
+challenge/accept 尝试之前设置。历史 ever_challenged/ever_accepted 不随
+pending 清空、失败、browser_attempt 或 revoke 重置。未设置 ceiling 的原
+one-shot 行为不变。challenge 保留原 1..900000ms 限制，再与固定 ceiling
+取最小且要求 end>now；management 的 issued/accepted/pending 候选及 accept
+快返、pending、验签后采样均核固定上限。
+
+此切片只是 security 的收紧能力，尚未接入 App delegated wire；不是更长
+窗口已可使用的声明。后续必须由 sealed 原 attempt 提供同域固定 deadline，
+禁止把 DTO、当前 wall+重新完整窗口或解析持久记录当权限。
