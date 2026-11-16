@@ -8,23 +8,36 @@ pub enum ChannelRetirement {
 }
 pub struct ChannelRetirementToken {
     owner: Arc<()>,
-    index: usize,
+    id: u64,
+    pin: Arc<()>,
 }
 // 仅原 Host 的已安装终局事实；不能单独批准新连接，也不暴露 fence。
 pub struct RetiredInstalledChannel {
     owner: Arc<()>,
-    index: usize,
+    id: u64,
+    pin: Arc<()>,
     attempt: InstallAttempt,
     fence: u64,
 }
 pub(super) struct Entry {
-    authority: BoundDataAuthority,
-    attempts: Vec<InstallAttempt>,
-    unknown: bool,
-    readiness_issued: bool,
-    readiness_consumed: bool,
+    pub(super) id: u64,
+    pub(super) pin: Arc<()>,
+    pub(super) retired: bool,
+    pub(super) authority: BoundDataAuthority,
+    pub(super) attempts: Vec<InstallAttempt>,
+    pub(super) unknown: bool,
+    pub(super) readiness_issued: bool,
+    pub(super) readiness_consumed: bool,
 }
 impl NativeHost {
+    fn retirement_index(&self, token: &ChannelRetirementToken) -> Option<usize> {
+        if !Arc::ptr_eq(&self.retirement_identity, &token.owner) {
+            return None;
+        }
+        self.channel_retirements
+            .iter()
+            .position(|entry| entry.id == token.id && Arc::ptr_eq(&entry.pin, &token.pin))
+    }
     pub fn begin_channel_retirement(
         &mut self,
         channel: &RunningChannel,
@@ -36,7 +49,8 @@ impl NativeHost {
         }) {
             return Ok(ChannelRetirementToken {
                 owner: self.retirement_identity.clone(),
-                index,
+                id: self.channel_retirements[index].id,
+                pin: self.channel_retirements[index].pin.clone(),
             });
         }
         if self.channel_retirements.len() >= MAX_ATTEMPTS {
@@ -59,6 +73,12 @@ impl NativeHost {
         if !known {
             return Err(NativeHostError::Authority);
         }
+        let id = self
+            .next_retirement_id
+            .checked_add(1)
+            .ok_or(NativeHostError::Capacity)?;
+        self.next_retirement_id = id;
+        let pin = Arc::new(());
         let mut attempts = Vec::new();
         for attempt in &self.attempts {
             if same(&attempt.authority) {
@@ -68,8 +88,10 @@ impl NativeHost {
             }
         }
         authority.request_close();
-        let index = self.channel_retirements.len();
         self.channel_retirements.push(Entry {
+            id,
+            pin: pin.clone(),
+            retired: false,
             authority,
             attempts,
             unknown: false,
@@ -78,7 +100,8 @@ impl NativeHost {
         });
         Ok(ChannelRetirementToken {
             owner: self.retirement_identity.clone(),
-            index,
+            id,
+            pin,
         })
     }
     pub fn observe_channel_retirement(
@@ -88,7 +111,10 @@ impl NativeHost {
         if !Arc::ptr_eq(&self.retirement_identity, &token.owner) {
             return ChannelRetirement::Unknown;
         }
-        let Some(entry) = self.channel_retirements.get(token.index) else {
+        let Some(index) = self.retirement_index(token) else {
+            return ChannelRetirement::Unknown;
+        };
+        let Some(entry) = self.channel_retirements.get(index) else {
             return ChannelRetirement::Unknown;
         };
         if entry.unknown {
@@ -120,12 +146,14 @@ impl NativeHost {
             }
         }
         if unknown {
-            self.channel_retirements[token.index].unknown = true;
+            self.channel_retirements[index].unknown = true;
             self.unknown = true;
             ChannelRetirement::Unknown
         } else if pending {
+            self.channel_retirements[index].retired = false;
             ChannelRetirement::Pending
         } else {
+            self.channel_retirements[index].retired = true;
             ChannelRetirement::Retired
         }
     }
@@ -145,7 +173,10 @@ impl NativeHost {
             ChannelRetirement::Unknown => return Err(NativeHostError::Unknown),
             ChannelRetirement::Retired => {}
         }
-        let entry = &self.channel_retirements[token.index];
+        let index = self
+            .retirement_index(token)
+            .ok_or(NativeHostError::Authority)?;
+        let entry = &self.channel_retirements[index];
         if entry.readiness_issued || entry.attempts.len() != 1 {
             return Err(NativeHostError::Rejected);
         }
@@ -165,11 +196,12 @@ impl NativeHost {
         };
         let ready = RetiredInstalledChannel {
             owner: self.retirement_identity.clone(),
-            index: token.index,
+            id: token.id,
+            pin: token.pin.clone(),
             attempt: latest.id,
             fence,
         };
-        self.channel_retirements[token.index].readiness_issued = true;
+        self.channel_retirements[index].readiness_issued = true;
         Ok(Some(ready))
     }
     /// 消费原本地事实仍重新核 exact Host/channel/attempt/fence；不重新消费 producer。
@@ -184,12 +216,16 @@ impl NativeHost {
         }
         let token = ChannelRetirementToken {
             owner: ready.owner.clone(),
-            index: ready.index,
+            id: ready.id,
+            pin: ready.pin.clone(),
         };
         if self.observe_channel_retirement(&token) != ChannelRetirement::Retired {
             return Err(NativeHostError::Unknown);
         }
-        let entry = &self.channel_retirements[ready.index];
+        let index = self
+            .retirement_index(&token)
+            .ok_or(NativeHostError::Authority)?;
+        let entry = &self.channel_retirements[index];
         if !entry.readiness_issued
             || entry.readiness_consumed
             || channel.authority().scope() != entry.authority.scope()
@@ -208,7 +244,7 @@ impl NativeHost {
             return Err(NativeHostError::Rejected);
         }
         // 任何后续失败都不返还该事实；调用者必须关闭失败的新代并继续保管原任务。
-        self.channel_retirements[ready.index].readiness_consumed = true;
+        self.channel_retirements[index].readiness_consumed = true;
         self.begin_native_resource_rebind(channel, authorize)
     }
 }

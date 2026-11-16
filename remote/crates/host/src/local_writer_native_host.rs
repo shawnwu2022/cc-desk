@@ -23,7 +23,20 @@ pub enum NativeHostError {
     Unknown,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstallAttempt(u64);
+pub struct InstallAttempt {
+    owner: u64,
+    sequence: u64,
+}
+static NEXT_HOST_BRAND: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+fn allocate_host_brand(counter: &std::sync::atomic::AtomicU64) -> Option<u64> {
+    counter
+        .fetch_update(
+            std::sync::atomic::Ordering::AcqRel,
+            std::sync::atomic::Ordering::Acquire,
+            |value| value.checked_add(1),
+        )
+        .ok()
+}
 /// Installation fact only; never a snapshot ACK, input grant or Data capability.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InstallObservation {
@@ -61,6 +74,9 @@ pub struct NativeHost {
     owner: WriterHostOwner,
     anchor: Option<Arc<RunningChannel>>,
     attempts: Vec<Attempt>,
+    install_identity: u64,
+    next_attempt_id: u64,
+    next_retirement_id: u64,
     closing: bool,
     unknown: bool,
     peer_installs: Vec<peer_coordinator::Coordinator>,
@@ -68,7 +84,23 @@ pub struct NativeHost {
     pending_budget: Arc<custody::Budget>,
     channel_retirements: Vec<retirement::Entry>,
 }
+#[path = "local_writer_native_history.rs"]
+mod history;
 impl NativeHost {
+    fn allocate_attempt_id(&mut self) -> Result<InstallAttempt, NativeHostError> {
+        let sequence = self
+            .next_attempt_id
+            .checked_add(1)
+            .ok_or(NativeHostError::Capacity)?;
+        if self.install_identity == 0 {
+            return Err(NativeHostError::Capacity);
+        }
+        self.next_attempt_id = sequence;
+        Ok(InstallAttempt {
+            owner: self.install_identity,
+            sequence,
+        })
+    }
     /// Validate the original producer before consuming the process admission.
     pub fn for_native_resource(
         channel: Arc<RunningChannel>,
@@ -153,6 +185,7 @@ impl NativeHost {
             ring::rand::SystemRandom::new()
                 .fill(&mut lease)
                 .map_err(|_| NativeHostError::Rejected)?;
+            let id = self.allocate_attempt_id()?;
             let admission = self
                 .owner
                 .authorized_admission(&target, device, &a, lease, 1)
@@ -160,12 +193,11 @@ impl NativeHost {
             let pending = producer
                 .bind(target.clone(), device, admission, authorize)
                 .map_err(|_| NativeHostError::Rejected)?;
-            Ok((target, device, lease, a, pending))
+            Ok((target, device, lease, a, pending, id))
         })();
-        let (target, device, lease, authority, pending) = prepared?;
+        let (target, device, lease, authority, pending, id) = prepared?;
         producer.retain_authority(authority.clone());
         let producer = slot.take().expect("prepared original producer");
-        let id = InstallAttempt(self.attempts.len() as u64 + 1);
         let pending =
             AuthorizedPendingRebind::from_native(pending, authority.clone(), target.clone());
         self.owner.active.push(SessionWriter {
@@ -221,12 +253,16 @@ impl NativeHost {
         Ok(host)
     }
     fn from_owner(owner: WriterHostOwner) -> Self {
+        let identity = allocate_host_brand(&NEXT_HOST_BRAND);
         Self {
             owner,
             anchor: None,
             attempts: Vec::new(),
-            closing: false,
-            unknown: false,
+            install_identity: identity.unwrap_or(0),
+            next_attempt_id: 0,
+            next_retirement_id: 0,
+            closing: identity.is_none(),
+            unknown: identity.is_none(),
             peer_installs: Vec::new(),
             retirement_identity: Arc::new(()),
             pending_budget: Arc::new(custody::Budget::new()),
@@ -270,6 +306,7 @@ impl NativeHost {
             return Err(NativeHostError::Capacity);
         }
         let next_fence = expected.checked_add(1).ok_or(NativeHostError::Rejected)?;
+        let id = self.allocate_attempt_id()?;
         let authority = channel.authority();
         let pending = self
             .owner
@@ -282,7 +319,6 @@ impl NativeHost {
                 authorize,
             )
             .map_err(|_| NativeHostError::Rejected)?;
-        let id = InstallAttempt(self.attempts.len() as u64 + 1);
         self.attempts.push(Attempt {
             id,
             channel,

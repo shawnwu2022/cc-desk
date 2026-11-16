@@ -940,7 +940,7 @@ async fn coordinator_scenarios(modes: std::ops::Range<u8>) {
             );
             eprintln!(
                 "P06 original_attempt={} actual_actor_fence={} native_effect_us={} cancellation_observed_us={} original_reply_published_us={} original_result_observed_us={}",
-                original.unwrap().0,
+                original.unwrap().sequence,
                 actual_fence,
                 native_effect.duration_since(trace_start).as_micros(),
                 cancel_observed.duration_since(trace_start).as_micros(),
@@ -1221,7 +1221,10 @@ async fn peer_install_cancelled_retire_keeps_original_controlled_response_task_i
         lease: [9; 16],
         channel: h.clone(),
         stage: Stage::Response {
-            attempt: InstallAttempt(1),
+            attempt: InstallAttempt {
+                owner: host.install_identity,
+                sequence: 1,
+            },
             task,
         },
     });

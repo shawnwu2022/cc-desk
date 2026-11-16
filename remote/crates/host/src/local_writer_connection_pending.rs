@@ -40,11 +40,13 @@ struct Cell<T> {
     pending: OnceLock<Mutex<State<T>>>,
     abandoned: AtomicBool,
     budget: Arc<Budget>,
+    live_cells: Arc<AtomicUsize>,
 }
 impl<T> Drop for Cell<T> {
     fn drop(&mut self) {
         // 共享额度覆盖旧 Wait 持有的未消费结果；析构不获取 Owner 锁。
         self.budget.0.fetch_sub(1, Ordering::AcqRel);
+        self.live_cells.fetch_sub(1, Ordering::AcqRel);
     }
 }
 impl<T: Send + 'static> Observe for Cell<T> {
@@ -79,6 +81,7 @@ pub(in crate::local_writer::owner) struct Owner {
     entries: Mutex<Vec<Arc<dyn Observe>>>,
     sealed: AtomicBool,
     budget: Arc<Budget>,
+    live_cells: Arc<AtomicUsize>,
 }
 impl Owner {
     pub(in crate::local_writer::owner) fn new() -> Self {
@@ -89,6 +92,7 @@ impl Owner {
             entries: Mutex::new(Vec::new()),
             sealed: AtomicBool::new(false),
             budget,
+            live_cells: Arc::new(AtomicUsize::new(0)),
         }
     }
     pub(in crate::local_writer::owner) fn seal(&self) {
@@ -133,6 +137,13 @@ impl Owner {
         entries.retain(|entry| !finished.iter().any(|old| Arc::ptr_eq(entry, old)));
         Ok(())
     }
+    pub(in crate::local_writer::owner) fn history_reclaimable(&self) -> bool {
+        // 已 prune 的结果仍可能由外部 Wait 持有；计数只在最后 Cell Arc 析构时归还。
+        self.sealed.load(Ordering::Acquire)
+            && self.observe() == Observation::Drained
+            && self.prune_drained().is_ok()
+            && self.live_cells.load(Ordering::Acquire) == 0
+    }
     pub(in crate::local_writer::owner) fn reserve<T: Send + 'static>(
         &self,
     ) -> Result<Reservation<T>, Reject> {
@@ -148,8 +159,10 @@ impl Owner {
             return Err(Reject::Full);
         }
         self.budget.take()?;
+        self.live_cells.fetch_add(1, Ordering::AcqRel);
         let cell = Arc::new(Cell {
             budget: self.budget.clone(),
+            live_cells: self.live_cells.clone(),
             pending: OnceLock::new(),
             abandoned: AtomicBool::new(false),
         });

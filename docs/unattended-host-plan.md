@@ -517,3 +517,30 @@ No dependency/lockfile, real credential, cloud, security-setting, production
 supplier or UI change was made. The earlier full Host PTY-suite failure remains
 an unresolved publication gate. These 138 focused cases are not a full App/Host
 suite, real-phone acceptance, 30-day endurance test or production activation.
+
+## 容量第一片验证记录（2026-11-16）
+
+- RED：相同原 Host/producer 的真实 duplex TLS channel 第 65 代触发 Capacity，
+  保留 .audit/unattended-history-host-red-first.log。
+- GREEN：原 Host/producer 完成 130 代真实安装、原 channel join 和 rebind，
+  每代原本地 input 仍可写；稳定序号连续，已删除首 ID 不能别名新条目。
+  保留 64 个原退休 token 的独立用例仍在第 65 代 Capacity，旧 token 仍观察
+  对应原 Retired，未提高上限。
+- 同源码 Host peer_coordinator 26/26、custody 12/12，共 38 个不重叠具名用例；
+  包含新 7 项容量/取消/并行观察/跨 Host/溢出/外部结果背压，以及原 late-bind、
+  response-cancel、撤销和输入托管回归。日志为
+  .audit/unattended-history-host-coordinator-first.log 与
+  .audit/unattended-history-host-custody-first.log。
+- Host 非 test Clippy -- -D warnings 通过，记录
+  .audit/unattended-history-host-clippy-first.log。首轮机械编译遗漏与参数化
+  fixture 替换错误保留在 green-first/second、boundaries-second 日志；
+  没有放宽生产检查来让测试通过。
+- 独立只读审查无 P0–P2 阻塞。App 兼容验证单独记下，不将既有旧结果累计为
+  本轮验证。原全 Host PTY-suite 失败发布门槛保持，不能据本片宣称全库绿或发布。
+- 下一片仅 App 已真实 joined 的历史容器回收；长期连接窗口预算另片验证，
+  不与本片一起扩展生产授权或 UI。
+
+补充同源码 App 兼容结果：DelegatedRenewal_ 9/9，含真实 localhost Relay
+两代 socket/MUX、同 Host/producer、原输入 settlement 及撤销/到期/错设备/
+耗尽失败路径；日志 .audit/unattended-history-app-renewal-first.log。
+本轮共 Host 38 + App 9 = 47 个不重复父用例；未重算 contained 子进程内部用例。

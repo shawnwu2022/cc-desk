@@ -472,3 +472,32 @@ windows cover at most 64 minutes of authorized connectivity; a hypothetical
 30 days of continuous operation. A later bounded-history reclamation design must
 preserve non-reused monotonic IDs, original fences, pending result custody and
 credits retained by old Wait handles. No safety cap was silently raised here.
+
+## 容量第一片：Host 已确认历史回收（2026-11-16）
+
+本片不提高 64 的同时托管上限。InstallAttempt 改为进程内不复用的 Host
+brand 与 Host 内 checked 单调序号，退休条目使用 checked 单调 ID 和原私有
+pin；删除 Vec 元素不会让旧 token 指向新条目。分配器耗尽拒绝，不回绕。
+
+仅在旧 Installed-readiness 已消费、同一精确 scope 的后继已经真正 Installed
+且其原响应协调任务成功终局后，才考虑删除更旧整代。最新精确 fence 必须保留，
+不能经回收回退到旧授权。旧 bind 接收器、request/response 原任务、pending
+结果均须终局；Unknown 不删除。旧 channel 另须原 wait_closed_checked 成功
+取得真实完成事实，authority.closed、Drop 和 is_finished 都不替代 join。
+Host 局部事实仍不能替代 App 的完整退休 receipt。
+
+GC 单次 poll 原 checked-wait 并取消 Pending future：原实现持 Tokio task
+互斥锁跨 join.await，取消只释放锁，不取走 JoinHandle。已有 observer 持锁
+时 GC 不会 poll 同一 JoinHandle 或覆盖其 waker；GC 先持锁而取消后，后续
+observer 重新登记原 handle 的 waker。两个真实 channel 定向测试分别覆盖
+这两个顺序，并要求原 join 成功。
+
+原 token/readiness pin、外部 Connection 的原 pending Owner、外部 Wait 的
+原 Cell 都形成保守背压，不是 join 证明。每 Owner 的 live-Cell 计数仅在
+最后 Cell Arc 析构时减少；全 Host 共享 credit 规则保持不变。因此即使 Ready
+结果已从 registry prune，只要 Wait 仍持有结果，就不能回收这代。调用方持续
+保留 token 会在 64 代后得到 Capacity，这是明确的可用性限制，不丢弃结果。
+
+本片只改 Host 历史，未解决 App PeerPump/network/material 容器的长期容量，
+未改变 60 秒 attempt、8 秒启动或 grant/材料期限，也不提供生产授权、UI、
+自动重试、真实手机验收或 30 天连续运行证明。

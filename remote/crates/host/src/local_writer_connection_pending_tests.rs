@@ -176,3 +176,35 @@ async fn ChannelCustody_AllReadyUntakenResultsKeepSharedCredits_010() {
     assert!(b.reserve::<usize>().is_ok());
     drop(slot);
 }
+
+#[tokio::test]
+#[allow(non_snake_case)]
+async fn HistoryCustody_ReadyExternalWaitKeepsCreditAndHistory_011() {
+    let owner = Owner::new();
+    let wait = owner.reserve::<u32>().unwrap().bind(|_| Ok(Ok(19)));
+    owner.seal();
+    assert_eq!(owner.observe(), Observation::Drained);
+    owner.prune_drained().unwrap();
+    assert!(!owner.history_reclaimable());
+    assert_eq!(owner.budget.0.load(Ordering::Acquire), 1);
+    assert_eq!(
+        wait.until(tokio::time::Instant::now() + Duration::from_secs(1))
+            .await,
+        Ok(19)
+    );
+    assert!(owner.history_reclaimable());
+    assert_eq!(owner.budget.0.load(Ordering::Acquire), 0);
+}
+#[test]
+#[allow(non_snake_case)]
+fn HistoryCustody_DroppedPendingWaitDoesNotReleaseHistory_012() {
+    let owner = Owner::new();
+    let wait = owner
+        .reserve::<u32>()
+        .unwrap()
+        .bind(|_| Err(WaitError::Uncertain));
+    owner.seal();
+    drop(wait);
+    assert!(!owner.history_reclaimable());
+    assert_eq!(owner.budget.0.load(Ordering::Acquire), 1);
+}

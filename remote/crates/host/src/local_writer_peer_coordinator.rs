@@ -47,6 +47,12 @@ pub(super) struct Coordinator {
     stage: Stage,
 }
 impl Coordinator {
+    pub(super) fn reclaimable(&self) -> bool {
+        matches!(self.stage, Stage::Done(_) | Stage::Failed) && self.authorize.is_none()
+    }
+    pub(super) fn completed_attempt(&self, id: InstallAttempt) -> bool {
+        matches!(self.stage,Stage::Done(done) if done==id)
+    }
     pub(super) fn channel(&self) -> Arc<RunningChannel> {
         self.channel.clone()
     }
@@ -166,6 +172,10 @@ impl NativeHost {
     ) -> Result<(), NativeHostError> {
         if self.closing {
             return Err(NativeHostError::Closed);
+        }
+        self.prune_retired_history();
+        if self.unknown {
+            return Err(NativeHostError::Unknown);
         }
         if self.peer_installs.len() >= MAX_ATTEMPTS {
             return Err(NativeHostError::Capacity);
