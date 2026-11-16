@@ -96,3 +96,5 @@ pub fn encode(kind: Kind, minor: u16, payload: &[u8]) -> Result<Vec<u8>, Error> 
 
 #[cfg(test)]
 mod peer_install_tests;
+
+pub mod snapshot_pull;

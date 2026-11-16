@@ -284,3 +284,16 @@ Client/Host owner join。它没有真实Host dispatcher顶层counter，因此req
 原绑定回归 22/22 与 security 严格 Clippy 已通过；最终格式源码复核日志为
 snapshot-pull-bind-final.log / snapshot-pull-clippy-final.log。
 审查范围：篡改用例可能在协商即拒绝，不独立证明 MAC 覆盖；原完整 offers 的 hash 覆盖及跨 binding/role 拒绝为源码审查证据，尚无跨 binding 搬运动态用例。
+
+## P2a：未接线的拉取 codec
+
+Begin/Next 使用严格 DTO，拒绝重复/未知字段与非规范十进制；request u64，
+batch/through u32。Batch 使用 SPB1 + BE request(8)/transfer(32)/batch(4)/
+through(4)/final(1)/part_len(4) 的57字节头。final只0/1，长度完全相等，
+单Data payload上限32654，原part上限32597。先检查上限再单次分配；
+解码借用原part，不重复JSON转义。公有解码入口同时校验原projection和
+through/final；原projection自身的字段兼容性保持，不能泛称所有内层字段严格。
+当前request/transfer/stamp/offset的期望状态必须由原owner额外核验。
+
+codec 5/5及严格Clippy通过；移除未知字段限制的有效变异失败后已还原。
+仅codec，无Host/Client调用，不等于密文上界或浏览器内存门禁通过。
