@@ -64,7 +64,26 @@ async fn NativeRegistration_StartOracle_904() {
         assert!(Instant::now() < ready);
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
-    let mut relay = super::registration_relay::registration_relay_fixture().await;
+    // 仅接收产品 Prepare 页面的公开身份，不接受任何私钥材料。
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct ProductPublicIdentity { tls_spki: String, grant_spki: String, relay_spki: String }
+    let public = std::env::var("CC_DESK_TEST_ONLY_PRODUCT_PUBLIC_IDENTITY").ok();
+    let browser_keys = if let Some(value) = &public {
+        assert!(value.len() <= 1024);
+        let value: ProductPublicIdentity = serde_json::from_str(value).unwrap();
+        [value.tls_spki, value.grant_spki, value.relay_spki].map(|encoded| {
+            let bytes = B64.decode(&encoded).unwrap();
+            assert_eq!(B64.encode(&bytes), encoded);
+            assert_eq!(bytes.len(), 91);
+            assert_eq!(&bytes[..26], &key_bytes(1)[..26]);
+            bytes
+        })
+    } else { [key_bytes(1), key_bytes(2), key_bytes(3)] };
+    let database = if public.is_some() { "CC_DESK_BROWSER_ENROLLMENT_V1" } else { "TEST_ONLY.registration-chain" };
+    let terminal_wasm = if public.is_some() { "https://desk.invalid/remote-runtime/fixture_bg.wasm" } else { "https://desk.invalid/fixture_bg.wasm" };
+    let terminal_glue = if public.is_some() { "https://desk.invalid/remote-runtime/fixture_bg.js" } else { "https://desk.invalid/fixture_bg.js" };
+    let mut relay = super::registration_relay::registration_relay_fixture_with_phone(&browser_keys[2]).await;
     let admission = fixture
         .supervisor
         .admit_remote_run(
@@ -82,7 +101,7 @@ async fn NativeRegistration_StartOracle_904() {
     let host_spki = key_bytes(4);
     let mut relay_spki = key_bytes(1)[..26].to_vec();
     relay_spki.extend(network_relay_material(true).1);
-    let candidate = serde_json::json!({"remember":remember,"version":1,"address":relay.address.to_string(),"origin":relay.origin,"relayMode":native_relay_mode,"tunnel":"03".repeat(16),"relayId":"01".repeat(16),"profileId":"07".repeat(16),"profileRevision":"9","endpoint":{"keyName":"TEST_ONLY_ENDPOINT","spki":hex(&host_spki)},"relay":{"keyName":"TEST_ONLY_RELAY","spki":hex(&relay_spki)},"principal":"09".repeat(32),"activation":"02".repeat(32),"hostKeyEpoch":"1","clientKeyEpoch":"1","policyEpoch":"1","issuerEpoch":"1","incarnation":"1","browser":{"origin":"https://desk.invalid","rpId":"desk.invalid","userHandle":"07".repeat(32),"tlsSpki":hex(&key_bytes(1)),"grantSpki":hex(&key_bytes(2)),"relaySpki":hex(&key_bytes(3)),"relayId":"02".repeat(16),"databaseName":"TEST_ONLY.registration-chain","expectedRevision":null,"wasmUrl":"https://desk.invalid/fixture_bg.wasm","glueUrl":"https://desk.invalid/fixture_bg.js"}});
+    let candidate = serde_json::json!({"remember":remember,"version":1,"address":relay.address.to_string(),"origin":relay.origin,"relayMode":native_relay_mode,"tunnel":"03".repeat(16),"relayId":"01".repeat(16),"profileId":"07".repeat(16),"profileRevision":"9","endpoint":{"keyName":"TEST_ONLY_ENDPOINT","spki":hex(&host_spki)},"relay":{"keyName":"TEST_ONLY_RELAY","spki":hex(&relay_spki)},"principal":"09".repeat(32),"activation":"02".repeat(32),"hostKeyEpoch":"1","clientKeyEpoch":"1","policyEpoch":"1","issuerEpoch":"1","incarnation":"1","browser":{"origin":"https://desk.invalid","rpId":"desk.invalid","userHandle":"07".repeat(32),"tlsSpki":hex(&browser_keys[0]),"grantSpki":hex(&browser_keys[1]),"relaySpki":hex(&browser_keys[2]),"relayId":"02".repeat(16),"databaseName":database,"expectedRevision":null,"wasmUrl":terminal_wasm,"glueUrl":terminal_glue}});
     let mut frozen = FrozenRegistrationStart::parse(&candidate.to_string()).unwrap();
     let mut endpoint_scalar = [0; 32];
     endpoint_scalar[31] = 4;
@@ -93,11 +112,11 @@ async fn NativeRegistration_StartOracle_904() {
         ],
         opened.clone(),
     );
-    let plan = serde_json::json!({"databaseName":"TEST_ONLY.registration-chain","expectedRevision":null,"relaySpki":B64.encode(key_bytes(3)),"requestedUserHandle":B64.encode([7;32]),"configuration":{
-        "version":1,"profile":{"origin":"https://desk.invalid","rpId":"desk.invalid"},"localSpki":B64.encode(key_bytes(1)),"hostSpki":B64.encode(&host_spki),
+    let plan = serde_json::json!({"databaseName":database,"expectedRevision":null,"relaySpki":B64.encode(&browser_keys[2]),"requestedUserHandle":B64.encode([7;32]),"configuration":{
+        "version":1,"profile":{"origin":"https://desk.invalid","rpId":"desk.invalid"},"localSpki":B64.encode(&browser_keys[0]),"hostSpki":B64.encode(&host_spki),
         "trust":{"hostKeyEpoch":"1","clientKeyEpoch":"1","origin":relay.origin},
-        "grant":{"issuerSpki":B64.encode(key_bytes(2)),"principal":"09".repeat(32),"scope":scope,"role":cc_desk_remote_record::grant::DataRole::Controller,"budgetMs":30000,"peerInstall":{"budgetMs":10000},"profile":{"origin":"https://desk.invalid","rpId":"desk.invalid","allowBackedUp":false}},
-        "relay":{"mode":browser_relay_mode,"endpoint":relay.origin,"tunnel":B64.encode([3;16]),"keyId":B64.encode([2;16])},"artifacts":{"wasm":"https://desk.invalid/fixture_bg.wasm","glue":"https://desk.invalid/fixture_bg.js"}
+        "grant":{"issuerSpki":B64.encode(&browser_keys[1]),"principal":"09".repeat(32),"scope":scope,"role":cc_desk_remote_record::grant::DataRole::Controller,"budgetMs":30000,"peerInstall":{"budgetMs":10000},"profile":{"origin":"https://desk.invalid","rpId":"desk.invalid","allowBackedUp":false}},
+        "relay":{"mode":browser_relay_mode,"endpoint":relay.origin,"tunnel":B64.encode([3;16]),"keyId":B64.encode([2;16])},"artifacts":{"wasm":terminal_wasm,"glue":terminal_glue}
     }});
     emit(&serde_json::to_vec(&serde_json::json!({"kind":"ready","origin":relay.origin,"hostSpki":host_spki,"plan":plan})).unwrap());
     let start = Instant::now();

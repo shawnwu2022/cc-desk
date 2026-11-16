@@ -4,7 +4,7 @@ import {createECDH,createHash,createPublicKey,verify} from 'node:crypto';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
 import {createRequire} from 'node:module';
-import {join} from 'node:path';
+import {join,resolve,sep,extname} from 'node:path';
 const Ws=createRequire(join(process.cwd(),'package.json'))('ws');
 import {readFile,writeFile} from 'node:fs/promises';
 const entryRelayMode=process.env.CC_DESK_TEST_ONLY_REGISTRATION_RELAY_MODE??'legacy';
@@ -100,15 +100,16 @@ self.onmessage=async({data:d})=>{
 };`;
 let workerModule:string;
 test.beforeAll(async()=>{workerModule=(await build({stdin:{contents:entry,resolveDir:process.cwd()},bundle:true,platform:'browser',format:'esm',target:'es2022',write:false})).outputFiles[0].text;});
-function oracle(mode:string,relayMode='legacy'){
+function oracle(mode:string,relayMode='legacy',publicIdentity?:unknown){
  const file=process.env.CC_DESK_TEST_ONLY_NATIVE_REGISTRATION_ORACLE;if(!file)throw Error('explicit native registration oracle executable required');
- const child=spawn(file,[mode.startsWith('start-')?'NativeRegistration_StartOracle_904':'NativeRegistration_RelayOracle_903','--ignored','--nocapture'],{stdio:['pipe','pipe','pipe'],windowsHide:true,env:{...process.env,CC_DESK_TEST_ONLY_NATIVE_REGISTRATION_MODE:mode,CC_DESK_TEST_ONLY_REGISTRATION_RELAY_MODE:relayMode}}),exit=once(child,'exit');
+ const inherited={...process.env};delete inherited.CC_DESK_TEST_ONLY_PRODUCT_PUBLIC_IDENTITY;
+ const child=spawn(file,[mode.startsWith('start-')?'NativeRegistration_StartOracle_904':'NativeRegistration_RelayOracle_903','--ignored','--nocapture'],{stdio:['pipe','pipe','pipe'],windowsHide:true,env:{...inherited,CC_DESK_TEST_ONLY_NATIVE_REGISTRATION_MODE:mode,CC_DESK_TEST_ONLY_REGISTRATION_RELAY_MODE:relayMode,...(publicIdentity?{CC_DESK_TEST_ONLY_PRODUCT_PUBLIC_IDENTITY:JSON.stringify(publicIdentity)}:{})}}),exit=once(child,'exit');
  const values:any[]=[],waiters:{resolve:(v:any)=>void;reject:(e:Error)=>void}[]=[];let buffer='',output='',ended=false;
  child.stderr.on('data',b=>{output+=b});child.stdout.on('data',b=>{buffer+=b;output+=b;for(;;){const n=buffer.indexOf('\n');if(n<0)break;const line=buffer.slice(0,n);buffer=buffer.slice(n+1);const at=line.indexOf('CC_DESK_REGISTRATION_ORACLE:');if(at<0)continue;const value=JSON.parse(line.slice(at+'CC_DESK_REGISTRATION_ORACLE:'.length));const waiter=waiters.shift();if(waiter)waiter.resolve(value);else values.push(value);}});
  void exit.then(()=>{ended=true;for(const waiter of waiters)waiter.reject(Error(output));});
  return{file,exit,releaseRelay:()=>child.stdin.end('TEST_ONLY_BROWSER_RETIRED\n'),output:()=>output,next:()=>values.length?Promise.resolve(values.shift()):ended?Promise.reject(Error(output)):new Promise<any>((resolve,reject)=>waiters.push({resolve,reject})),async dispose(){if(!ended){if(!child.stdin.writableEnded)child.stdin.end('TEST_ONLY_TEST_ABORTED\n');const timer=setTimeout(()=>child.kill(),2000);await exit;clearTimeout(timer);}}};
 }
-async function route(context:BrowserContext,origin:string){
+async function route(context:BrowserContext,origin:string|RegExp){
  const wasm=process.env.CC_DESK_TEST_ONLY_REGISTRATION_WASM,glue=process.env.CC_DESK_TEST_ONLY_REGISTRATION_GLUE,repo=process.env.CC_DESK_TEST_RELAY_ROOT;if(!wasm||!glue||!repo)throw Error('explicit registration WASM/glue and relay root required');
  const sockets=new Set<any>();
  const frames:{direction:string;length:number;sha256:string}[]=[];let outerVerified=false,outerProtocol='',outerSubprotocol='',connections=0;const requestedProtocols:string[][]=[],forwarderErrors:string[]=[];
@@ -118,7 +119,7 @@ async function route(context:BrowserContext,origin:string){
  // Node 校验 fixture CA 与 foobar.com 名称，不代表 Edge 证书界面通过验收。
  await context.routeWebSocket(origin,async r=>{
   const protocols=r.protocols();requestedProtocols.push([...protocols]);connections++;let negotiated=false;
-  const socket=new Ws(origin,protocols,{origin:'https://desk.invalid',ca:await readFile(join(repo,'tests/fixtures/root.pem')),rejectUnauthorized:true,servername:'foobar.com',lookup:(_host:unknown,_options:unknown,callback:Function)=>callback(null,[{address:'127.0.0.1',family:4}])});sockets.add(socket);
+  const socket=new Ws(r.url(),protocols,{origin:'https://desk.invalid',ca:await readFile(join(repo,'tests/fixtures/root.pem')),rejectUnauthorized:true,servername:'foobar.com',lookup:(_host:unknown,_options:unknown,callback:Function)=>callback(null,[{address:'127.0.0.1',family:4}])});sockets.add(socket);
   const failClosed=(reason:string)=>{forwarderErrors.push(reason);negotiated=false;try{r.close();}catch{}socket.terminate();};
   const record=(direction:string,bytes:Buffer)=>frames.push({direction,length:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex')});
   socket.on('open',()=>{outerVerified=socket._socket.authorized===true;outerProtocol=socket._socket.getProtocol();outerSubprotocol=socket.protocol;negotiated=outerVerified&&socket.protocol===(protocols[0]??'')&&protocols.length<=1;if(!negotiated)failClosed('actual WSS negotiation mismatch');});
@@ -285,4 +286,41 @@ for(const scenario of installationScenarios)test(`RegistrationRelay_Persistent_$
   const path=info.outputPath('registration-installation-relay.json');await writeFile(path,JSON.stringify(artifact,null,2));await info.attach('registration-installation-relay',{path,contentType:'application/json'});
  }catch(error){const path=info.outputPath('failure.json');await writeFile(path,JSON.stringify({native:o.output(),metrics:r?.metrics(),browser:await page.evaluate(()=>{const f=Reflect.get(globalThis,'f');return f?{events:f.events,installState:f.installState,installError:f.installError,mainError:f.mainError}:undefined;}).catch(()=>null)},null,2));await info.attach('failure',{path,contentType:'application/json'});throw error;
  }finally{await page.evaluate(()=>{const f=Reflect.get(globalThis,'f');f?.installation?.close();f?.controller?.abort();f?.release?.();f?.bridge?.close();f?.relay?.close();f?.worker?.terminate();}).catch(()=>{});r?.dispose();await o.dispose();}
+});
+
+// 完整产品 Prepare 与原生成密钥；authenticator/本机批准为合成夹具，外层 WSS 由 Node 校验后转发。
+test('RegistrationPreparation_ProductGeneratedIdentityToNative_001',async({page,context},info)=>{
+ test.setTimeout(60000);
+ const pageErrors:string[]=[],consoleErrors:string[]=[],requestFailures:string[]=[];page.on('pageerror',error=>pageErrors.push(error.message));page.on('console',message=>{if(message.type()==='error')consoleErrors.push(message.text())});page.on('requestfailed',request=>requestFailures.push(request.url()+': '+request.failure()?.errorText));
+ const root=resolve('dist');
+ async function productRoutes(){await context.route('https://desk.invalid/**',async r=>{
+  const pathname=new URL(r.request().url()).pathname,headers={'Cross-Origin-Opener-Policy':'same-origin','Cross-Origin-Embedder-Policy':'require-corp'};
+  const modules:Record<string,string>={'/fixture.mjs':fixture,'/registration.mjs':module,'/test-inspect.mjs':productionEntryModule};
+  if(modules[pathname])return r.fulfill({headers,contentType:'text/javascript',body:modules[pathname]});
+  const file=resolve(root,'.'+pathname);if(!file.startsWith(root+sep))throw Error('TEST_ONLY path');
+  return r.fulfill({headers,contentType:({'.html':'text/html','.js':'text/javascript','.css':'text/css','.wasm':'application/wasm'} as Record<string,string>)[extname(file)]??'application/octet-stream',body:await readFile(file)});
+ });}
+ await context.addInitScript(()=>{const keys:CryptoKey[]=[];const original=crypto.subtle.generateKey.bind(crypto.subtle);Reflect.set(globalThis,'productKeys',keys);const operations:any[]=[];Reflect.set(globalThis,'productCryptoOperations',operations);for(const name of ['importKey','sign','verify'] as const){const fn=crypto.subtle[name].bind(crypto.subtle);Reflect.set(crypto.subtle,name,async(...args:any[])=>{const time=performance.now();try{const result=await Reflect.apply(fn,crypto.subtle,args);operations.push({name,time,end:performance.now(),result:typeof result==='boolean'?result:'ok'});return result}catch(error){operations.push({name,time,end:performance.now(),error:String(error)});throw error}})}crypto.subtle.generateKey=(async(...args:any[])=>{const pair=await Reflect.apply(original,crypto.subtle,args) as CryptoKeyPair;keys.push(pair.privateKey);return pair}) as typeof crypto.subtle.generateKey;});
+ // 在首次文档加载前安装 WebSocket 路由；目标端口随后由原 native fixture 冻结。
+ const r=await route(context,/^wss:\/\/foobar\.com:\d+\/relay$/);
+ await productRoutes();await page.goto('https://desk.invalid/browser-registration.html');
+ await page.evaluate(async()=>{const f=await import(location.origin+'/fixture.mjs');await f.setup(true)});
+ await page.getByRole('button',{name:'Prepare registration',exact:true}).click();await page.getByRole('button',{name:'Generate ephemeral identity',exact:true}).click();
+ await expect(page.getByRole('textbox')).toBeVisible();const publicIdentity=JSON.parse(await page.locator('dialog pre').innerText());
+ expect(await page.evaluate(()=>{const k=Reflect.get(globalThis,'productKeys');return{k:k.length,nonexportable:k.every((v:CryptoKey)=>!v.extractable)}})).toEqual({k:3,nonexportable:true});
+ const o=oracle('start-yes','rendezvous-v1',publicIdentity);
+ try{
+  const ready=await o.next();expect(ready.plan.configuration.localSpki).toBe(publicIdentity.tlsSpki);expect(ready.plan.configuration.grant.issuerSpki).toBe(publicIdentity.grantSpki);expect(ready.plan.relaySpki).toBe(publicIdentity.relaySpki);expect(ready.plan.databaseName).toBe('CC_DESK_BROWSER_ENROLLMENT_V1');
+  expect(new URL(ready.origin).hostname).toBe('foobar.com');
+  const config={version:1,plan:ready.plan,artifacts:{wasm:'https://desk.invalid/remote-registration-runtime/fixture_bg.wasm',glue:'https://desk.invalid/remote-registration-runtime/fixture_bg.js'}};
+  await page.getByRole('textbox').fill(JSON.stringify(config));await page.getByRole('button',{name:'Review public configuration',exact:true}).click();expect(JSON.parse(await page.locator('dialog pre').innerText())).toEqual(config);
+  await page.getByRole('button',{name:'Approve this exact registration',exact:true}).click();await expect(page.getByRole('button',{name:'Start registration',exact:true})).toBeEnabled();expect(r.metrics().connections).toBe(0);
+  await page.getByRole('button',{name:'Start registration',exact:true}).click();
+  await expect(page.getByRole('status')).toContainText('Browser profile stored (revision 1)',{timeout:25000});
+  const native=await o.next();expect(native).toMatchObject({nativeCandidateInstalled:true,acknowledged:true,nativeStartupOwner:true,nativeTransportRetired:true,nativeKeysRetired:true,registrationKeyOpens:[1,1]});
+  const browser=await page.evaluate(async(publicIdentity)=>{const api=await import(location.origin+'/test-inspect.mjs'),store=api.createBrowserEnrollmentStore({origin:location.origin,databaseName:'CC_DESK_BROWSER_ENROLLMENT_V1'}),session=await store.openExisting(async()=>{},new AbortController().signal),material=await session.provider.readApproved(new AbortController().signal);const challenge=crypto.getRandomValues(new Uint8Array(32));const signatures=[];for(const [handle,spki] of [[material.handles.tlsKey,publicIdentity.tlsSpki],[material.handles.grantKey,publicIdentity.grantSpki]] as [CryptoKey,string][]){const bytes=Uint8Array.from(atob(spki.replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0)),key=await crypto.subtle.importKey('spki',bytes,{name:'ECDSA',namedCurve:'P-256'},false,['verify']),signature=await crypto.subtle.sign({name:'ECDSA',hash:'SHA-256'},handle,challenge);signatures.push(await crypto.subtle.verify({name:'ECDSA',hash:'SHA-256'},key,signature,challenge));}const value={signatures,status:await store.status(),nonexportable:[material.handles.tlsKey,material.handles.grantKey].every((k:CryptoKey)=>!k.extractable),creates:Reflect.get(globalThis,'f').creates,gets:Reflect.get(globalThis,'f').gets};session.close();await session.waitClosed();return value;},publicIdentity);
+  expect(browser).toMatchObject({status:{state:'active',revision:'1'},signatures:[true,true],nonexportable:true,creates:1,gets:1});expect(pageErrors).toEqual([]);
+  o.releaseRelay();expect((await o.exit)[0],o.output()).toBe(0);expect(r.metrics()).toMatchObject({forwarderErrors:[],connections:1,outerVerified:true,outerProtocol:'TLSv1.3',outerSubprotocol:'cc-desk-relay-rendezvous-v1',requestedProtocols:[['cc-desk-relay-rendezvous-v1']]});
+  await writeFile(info.outputPath('product-preparation-native.json'),JSON.stringify({testOnly:true,boundary:'Product dist Prepare/keys/approval/Start and original Worker/WASM/relay/native; synthetic authenticator and native approval, Node WSS forwarding, not real-device WebPKI',publicIdentity,browser,native,metrics:r.metrics()},null,2));
+ }catch(error){await writeFile(info.outputPath('product-preparation-failure.json'),JSON.stringify({native:o.output(),metrics:r?.metrics(),pageErrors,consoleErrors,requestFailures,browser:await page.evaluate(()=>{const f=Reflect.get(globalThis,'f');return{creates:f?.creates,gets:f?.gets,status:document.querySelector('[role=status]')?.textContent,operations:Reflect.get(globalThis,'productCryptoOperations'),visibility:document.visibilityState}}).catch(()=>null)},null,2));throw error;}finally{await page.close();r?.dispose();await o.dispose();}
 });

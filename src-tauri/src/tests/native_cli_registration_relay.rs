@@ -413,6 +413,11 @@ async fn NativeRegistration_RelayOracle_903() {
 
 // 复用公开 fixture 密钥与已校验 CA/名称，限定浏览器来源和注册寿命。
 pub(super) async fn registration_relay_fixture() -> NetworkRelayFixture {
+    registration_relay_fixture_with_phone(&key_bytes(3)).await
+}
+
+pub(super) async fn registration_relay_fixture_with_phone(phone_spki: &[u8]) -> NetworkRelayFixture {
+    assert_eq!(phone_spki.len(), 91);
     let reserve = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = reserve.local_addr().unwrap();
     drop(reserve);
@@ -426,7 +431,7 @@ pub(super) async fn registration_relay_fixture() -> NetworkRelayFixture {
         (if host {
             network_relay_material(true).1
         } else {
-            key_bytes(3)[26..].to_vec()
+            phone_spki[26..].to_vec()
         })
         .iter()
         .map(|b| format!("{b:02x}"))
