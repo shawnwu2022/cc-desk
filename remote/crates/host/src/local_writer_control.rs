@@ -360,7 +360,17 @@ impl ControlState {
     }
 }
 
+pub(in crate::local_writer) struct LeaseSnapshot {
+    pub lease: [u8; 16],
+    pub fence: u64,
+    pub deadline: u64,
+    pub next_sequence: u64,
+}
+
 pub(super) enum ControlAction {
+    LeaseState {
+        reply: mpsc::SyncSender<Result<LeaseSnapshot, Reject>>,
+    },
     Cursor {
         reply: mpsc::SyncSender<Result<InputCursor, receipts::ControlError>>,
     },
@@ -397,6 +407,9 @@ impl ControlRequest {
     }
     pub(in crate::local_writer) fn reject(self, error: Reject) {
         match self.action {
+            ControlAction::LeaseState { reply } => {
+                let _ = reply.try_send(Err(error));
+            }
             ControlAction::Cursor { reply } => {
                 let _ = reply.try_send(Err(receipts::ControlError::Rejected(error)));
             }
@@ -425,6 +438,24 @@ impl ControlRequest {
             return;
         }
         match self.action {
+            ControlAction::LeaseState { reply } => {
+                let result = gate
+                    .control
+                    .as_ref()
+                    .ok_or(Reject::Unsupported)
+                    .and_then(|c| {
+                        c.eligible(&self.scope)?;
+                        let state = LeaseSnapshot {
+                            lease: c.identity.lease,
+                            fence: c.identity.fence,
+                            deadline: c.lease_deadline,
+                            next_sequence: c.renew_sequence.checked_add(1).ok_or(Reject::Policy)?,
+                        };
+                        c.authorized(&self.scope)?;
+                        Ok(state)
+                    });
+                let _ = reply.try_send(result);
+            }
             ControlAction::Cursor { reply } => {
                 let result = gate
                     .control
@@ -493,15 +524,15 @@ impl ControlRequest {
         }
     }
 }
-pub(in crate::local_writer) struct PendingLease {
-    reply: mpsc::Receiver<Result<u64, Reject>>,
+pub(in crate::local_writer) struct PendingLease<T = u64> {
+    reply: mpsc::Receiver<Result<T, Reject>>,
     _credit: Arc<Credit>,
 }
-impl PendingLease {
+impl<T> PendingLease<T> {
     pub(in crate::local_writer) fn wait(
         &self,
         budget: Duration,
-    ) -> Result<Result<u64, Reject>, WaitError> {
+    ) -> Result<Result<T, Reject>, WaitError> {
         self.reply.recv_timeout(budget).map_err(|e| match e {
             mpsc::RecvTimeoutError::Timeout => WaitError::Uncertain,
             mpsc::RecvTimeoutError::Disconnected => WaitError::Closed,
@@ -509,6 +540,21 @@ impl PendingLease {
     }
 }
 impl PeerViewHandle {
+    pub(in crate::local_writer) fn lease_state(
+        &self,
+    ) -> Result<PendingLease<LeaseSnapshot>, Reject> {
+        let credit = self.input.credits.reserve()?;
+        let (tx, rx) = mpsc::sync_channel(1);
+        self.send_control(ControlRequest {
+            scope: self.control.scope.clone(),
+            action: ControlAction::LeaseState { reply: tx },
+            _credit: credit.clone(),
+        })?;
+        Ok(PendingLease {
+            reply: rx,
+            _credit: credit,
+        })
+    }
     pub(in crate::local_writer) fn input_window(
         &self,
         view: &SyncedView,

@@ -71,6 +71,19 @@ impl NativeGrantSigner for PublicSigner {
 pub(super) async fn channels(
     now: Arc<AtomicU64>,
 ) -> (RunningChannel, RunningChannel, GrantGate, CancelHandle) {
+    let (mut c, mut h, gate, cancel) = managed_channels(now, DataRole::Controller, false).await;
+    (c.start().unwrap(), h.start().unwrap(), gate, cancel)
+}
+async fn managed_channels(
+    now: Arc<AtomicU64>,
+    role: DataRole,
+    lease: bool,
+) -> (
+    ManagedChannel<tokio::io::DuplexStream>,
+    ManagedChannel<tokio::io::DuplexStream>,
+    GrantGate,
+    CancelHandle,
+) {
     let local = |client| {
         let (k, p) = identities::identity(client, false);
         LocalIdentity::new(
@@ -100,28 +113,31 @@ pub(super) async fn channels(
         accept(Unbound::new(h), local(false), pin(true), BUDGET, token)
     );
     let origin = CanonicalOrigin::trusted("wss://relay.invalid/").unwrap();
-    let (c, h) = tokio::join!(
-        bind_client_grant_channel(
-            c.unwrap(),
-            ClientTrust {
-                host_key_epoch: 5,
-                client_key_epoch: 7,
-                origin: origin.clone()
-            }
-        ),
-        bind_host_grant_channel(
-            h.unwrap(),
-            HostSnapshot {
-                host_key_epoch: 5,
-                client_key_epoch: 7,
-                activation: [0x33; 32],
-                incarnation: 11,
-                policy_epoch: 13,
-                issuer_epoch: 17,
-                origin
-            }
+    let trust = ClientTrust {
+        host_key_epoch: 5,
+        client_key_epoch: 7,
+        origin: origin.clone(),
+    };
+    let snapshot = HostSnapshot {
+        host_key_epoch: 5,
+        client_key_epoch: 7,
+        activation: [0x33; 32],
+        incarnation: 11,
+        policy_epoch: 13,
+        issuer_epoch: 17,
+        origin,
+    };
+    let (c, h) = if lease {
+        tokio::join!(
+            bind_client_control_lease_channel(c.unwrap(), trust),
+            bind_host_control_lease_channel(h.unwrap(), snapshot)
         )
-    );
+    } else {
+        tokio::join!(
+            bind_client_grant_channel(c.unwrap(), trust),
+            bind_host_grant_channel(h.unwrap(), snapshot)
+        )
+    };
     let (c, h) = (c.unwrap(), h.unwrap());
     let clock: Arc<dyn GrantClock> =
         Arc::new(move || Ok(now.load(std::sync::atomic::Ordering::Acquire)));
@@ -133,19 +149,18 @@ pub(super) async fn channels(
         issuer: support::admin(),
         principal: [4; 32],
         scope: support::scope(),
-        role: DataRole::Controller,
+        role,
     };
     let policy = NativeGrantPolicy {
         scope: support::scope(),
-        role: DataRole::Controller,
+        role,
         duration: Duration::from_secs(10),
     };
     let (c, h) = tokio::join!(
         c.grant_client(&trust, &mut signer, &mut state, BUDGET),
         h.grant_host(&mut gate, policy, BUDGET)
     );
-    let (mut c, mut h) = (c.unwrap(), h.unwrap());
-    (c.start().unwrap(), h.start().unwrap(), gate, cancel)
+    (c.unwrap(), h.unwrap(), gate, cancel)
 }
 
 #[tokio::test]
@@ -289,4 +304,113 @@ async fn request_close_invalidates_original_native_owner_synchronously() {
     assert!(client.channel.authority().check().is_err());
     client.close().await;
     h.wait_closed().await;
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn ControlLease_ClientReplyCorrelatesEveryIdentityField_012() {
+    let request = serde_json::json!({"message":"LeaseRenew","profile":1,"request":"7","lease":"08".repeat(16),"fence":"4","renewalSequence":"2"});
+    let expected = expected(&serde_json::to_vec(&request).unwrap()).unwrap();
+    let reply = serde_json::json!({"message":"LeaseRenewed","profile":1,"request":"7","lease":"08".repeat(16),"fence":"4","renewalSequence":"2","notAfterHostMs":"16000"});
+    assert!(expected.matches(&wire::decode(&serde_json::to_vec(&reply).unwrap()).unwrap()));
+    for field in ["request", "lease", "fence", "renewalSequence"] {
+        let mut bad = reply.clone();
+        bad[field] = if field == "lease" {
+            "09".repeat(16).into()
+        } else {
+            "9".into()
+        };
+        assert!(!expected.matches(&wire::decode(&serde_json::to_vec(&bad).unwrap()).unwrap()));
+    }
+}
+#[tokio::test]
+#[allow(non_snake_case)]
+async fn ControlLease_ClientOldCapabilityDoesNotSendRequest_013() {
+    let (c, h, _gate, _cancel) = channels(Arc::new(AtomicU64::new(1000))).await;
+    let client = NativeClient::new(c, 4).unwrap();
+    assert!(
+        client
+            .exchange(
+                br#"{"message":"LeaseState","profile":1,"request":"1"}"#,
+                BUDGET
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        h.receive(&support::scope(), 4, Duration::from_millis(20))
+            .await
+            .is_err()
+    );
+    client.close().await;
+    h.close().await;
+}
+
+#[tokio::test]
+#[allow(non_snake_case)]
+async fn ControlLease_ClientGrantBoundsAndNegotiatedObserver_014() {
+    for until in [1000, 10999, 11000, 11001] {
+        let (mut c, mut h, _gate, _cancel) =
+            managed_channels(Arc::new(AtomicU64::new(1000)), DataRole::Controller, true).await;
+        let end = tokio::time::Instant::now() + BUDGET;
+        let (c, h) = (
+            c.start_peer_pending(end).unwrap(),
+            h.start_peer_pending(end).unwrap(),
+        );
+        let request = h.host_install_request().await.unwrap();
+        let (proof, sent) = tokio::join!(c.client_installed(), h.complete_host_install(request, 4));
+        sent.unwrap();
+        let client = NativeClient::from_installed(c, proof.unwrap()).unwrap();
+        let server = async {
+            h.receive(&support::scope(), 4, BUDGET).await.unwrap();
+            let reply = wire::Message::LeaseStateReply {
+                profile: 1,
+                request: "7".into(),
+                lease: "08".repeat(16),
+                fence: "4".into(),
+                next_renewal_sequence: "1".into(),
+                not_after_host_ms: until.to_string(),
+            };
+            h.send_projection(&support::scope(), 4, &wire::encode(&reply).unwrap(), BUDGET)
+                .await
+                .unwrap();
+        };
+        let (result, ()) = tokio::join!(
+            client.exchange(
+                br#"{"message":"LeaseState","profile":1,"request":"7"}"#,
+                BUDGET
+            ),
+            server
+        );
+        assert_eq!(result.is_ok(), until > 1000 && until <= 11000);
+        client.close().await;
+        h.close().await;
+    }
+    let (mut c, mut h, _gate, _cancel) =
+        managed_channels(Arc::new(AtomicU64::new(1000)), DataRole::Observer, true).await;
+    let end = tokio::time::Instant::now() + BUDGET;
+    let (c, h) = (
+        c.start_peer_pending(end).unwrap(),
+        h.start_peer_pending(end).unwrap(),
+    );
+    let request = h.host_install_request().await.unwrap();
+    let (proof, sent) = tokio::join!(c.client_installed(), h.complete_host_install(request, 4));
+    sent.unwrap();
+    let client = NativeClient::from_installed(c, proof.unwrap()).unwrap();
+    assert!(
+        client
+            .exchange(
+                br#"{"message":"LeaseState","profile":1,"request":"7"}"#,
+                BUDGET
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        h.receive(&support::scope(), 4, Duration::from_millis(20))
+            .await
+            .is_err()
+    );
+    client.close().await;
+    h.close().await;
 }

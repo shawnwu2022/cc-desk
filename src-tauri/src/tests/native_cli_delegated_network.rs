@@ -462,7 +462,8 @@ async fn socket_case(late: bool, drop_owner: bool, receipt_mode: u8) {
         assert!(socket.wait_admitted().await.is_err());
     } else {
         ready.await.unwrap();
-        let (peer, admitted) = tokio::join!(network_client(&relay, scope), socket.wait_admitted());
+        let (peer, admitted) =
+            tokio::join!(network_client_lease(&relay, scope), socket.wait_admitted());
         assert!(admitted.is_ok(), "{admitted:?}");
         let (client, mux, cancel) = peer.unwrap();
         let snapshot = client
@@ -892,7 +893,7 @@ async fn DelegatedRenewal_RevokeAfterReceiptCannotConsume_002() {
 async fn renewal_case(mode: u8) {
     use crate::remote_host::delegated::retirement::RetirementObservation;
     let (f, mut cleanup) = setup();
-    let mut relay = if mode == 9 {
+    let mut relay = if matches!(mode, 9 | 17) {
         NetworkRelayFixture::start_with_lifetime(None, 120_000).await
     } else {
         NetworkRelayFixture::start().await
@@ -901,14 +902,17 @@ async fn renewal_case(mode: u8) {
     let scope = source.scope().unwrap();
     let (consent, mut current, policy) = NativeDelegationConsent::test_network(&source, device());
     policy.test_network_origin(&mut current, relay.origin.clone());
-    if matches!(mode, 9 | 10 | 12 | 13 | 14) {
+    if matches!(mode, 9 | 10 | 12 | 13 | 14 | 17) {
         policy.test_budget_progress();
     }
     if mode == 12 {
         policy.test_budget_total(1500);
     }
-    if mode == 9 {
+    if matches!(mode, 9 | 17) {
         policy.test_budget_total(1_200_000);
+    }
+    if mode == 16 {
+        policy.test_budget_total(120_000);
     }
     let owner = DelegatedRunOwner::capture(source, consent).unwrap();
     let session = Arc::new(cleanup.host.reserve_delegation(owner).unwrap());
@@ -920,7 +924,7 @@ async fn renewal_case(mode: u8) {
             renewal_material_delay(
                 &relay,
                 accepted,
-                Duration::from_secs(if matches!(mode, 9 | 12 | 13 | 14 | 15) {
+                Duration::from_secs(if matches!(mode, 9 | 12 | 13 | 14 | 15 | 16 | 17) {
                     900
                 } else if mode == 10 {
                     1
@@ -955,8 +959,10 @@ async fn renewal_case(mode: u8) {
     }
     let fixed_end = policy.test_budget_end();
     ready.await.unwrap();
-    let (peer, admitted) =
-        tokio::join!(network_client(&relay, scope.clone()), first.wait_admitted());
+    let (peer, admitted) = tokio::join!(
+        network_client_lease(&relay, scope.clone()),
+        first.wait_admitted()
+    );
     assert!(admitted.is_ok());
     let (client, mux, cancel) = peer.unwrap();
     if mode == 13 {
@@ -1024,9 +1030,85 @@ async fn renewal_case(mode: u8) {
         return;
     }
     let mut request = 1;
-    if mode == 9 {
+    if mode == 16 {
+        let bytes = client
+            .exchange(
+                br#"{"message":"LeaseState","profile":1,"request":"1"}"#,
+                Duration::from_secs(1),
+            )
+            .await
+            .unwrap();
+        let wire::Message::LeaseStateReply {
+            lease,
+            fence,
+            next_renewal_sequence,
+            not_after_host_ms,
+            ..
+        } = wire::decode(&bytes).unwrap()
+        else {
+            panic!("lease state")
+        };
+        assert_eq!(next_renewal_sequence, "1");
+        let old_end = not_after_host_ms.parse::<u64>().unwrap();
+        policy.test_budget_advance(12_000);
+        let bytes=client.exchange(&serde_json::to_vec(&json!({"message":"LeaseRenew","profile":1,"request":"2","lease":lease,"fence":fence,"renewalSequence":"1"})).unwrap(),Duration::from_secs(1)).await.unwrap();
+        let wire::Message::LeaseRenewed {
+            not_after_host_ms, ..
+        } = wire::decode(&bytes).unwrap()
+        else {
+            panic!("lease renewed")
+        };
+        assert!(not_after_host_ms.parse::<u64>().unwrap() > old_end);
+        policy.test_budget_advance(12_000);
+        request = 3;
+    }
+    let mut lease_state = if mode == 17 {
+        let bytes = client
+            .exchange(
+                br#"{"message":"LeaseState","profile":1,"request":"1"}"#,
+                Duration::from_secs(1),
+            )
+            .await
+            .unwrap();
+        let wire::Message::LeaseStateReply {
+            lease,
+            fence,
+            next_renewal_sequence,
+            ..
+        } = wire::decode(&bytes).unwrap()
+        else {
+            panic!("lease state")
+        };
+        assert_eq!(next_renewal_sequence, "1");
+        request += 1;
+        Some((lease, fence, 1u64))
+    } else {
+        None
+    };
+    if matches!(mode, 9 | 17) {
         let began = std::time::Instant::now();
+        let mut last_renew = began;
         while began.elapsed() < Duration::from_secs(61) {
+            if last_renew.elapsed() >= Duration::from_secs(5) {
+                if let Some((lease, fence, sequence)) = &mut lease_state {
+                    // 仅测试显式驱动手动 API；生产没有新增定时器或心跳。
+                    let command=serde_json::to_vec(&json!({"message":"LeaseRenew","profile":1,"request":request.to_string(),"lease":lease,"fence":fence,"renewalSequence":sequence.to_string()})).unwrap();
+                    let bytes = client
+                        .exchange(&command, Duration::from_secs(1))
+                        .await
+                        .unwrap();
+                    let wire::Message::LeaseRenewed {
+                        not_after_host_ms, ..
+                    } = wire::decode(&bytes).unwrap()
+                    else {
+                        panic!("lease renewed")
+                    };
+                    assert!(not_after_host_ms.parse::<u64>().unwrap() <= fixed_end);
+                    *sequence += 1;
+                    request += 1;
+                    last_renew = std::time::Instant::now();
+                }
+            }
             renewal_readonly(&client, request).await;
             request += 1;
             tokio::time::sleep(Duration::from_millis(500)).await;
@@ -1044,7 +1126,7 @@ async fn renewal_case(mode: u8) {
     .await;
     let old_client = client;
     assert!(session.prepare_next(&current, &f.supervisor).is_err());
-    if mode == 9 {
+    if matches!(mode, 9 | 17) {
         policy.test_budget_advance(900_000);
         tokio::time::timeout(Duration::from_secs(3), first.wait_closed())
             .await
@@ -1153,7 +1235,8 @@ async fn renewal_case(mode: u8) {
         // 旧 custody 的迟到关闭不得转成整个 Session 的新代关闭。
         first.request_close();
         ready.await.unwrap();
-        let (peer, admitted) = tokio::join!(network_client(&relay, scope), second.wait_admitted());
+        let (peer, admitted) =
+            tokio::join!(network_client_lease(&relay, scope), second.wait_admitted());
         assert!(admitted.is_ok(), "{admitted:?}");
         let (client, mux, cancel) = peer.unwrap();
         assert!(old_client
@@ -1178,7 +1261,7 @@ async fn renewal_case(mode: u8) {
     f.service
         .access(&f.caller, &f.request_run())
         .unwrap()
-        .write_frame(if matches!(mode, 0 | 9 | 10 | 13) {
+        .write_frame(if matches!(mode, 0 | 9 | 10 | 13 | 16 | 17) {
             b"ve"
         } else {
             b"tive"
@@ -1224,7 +1307,7 @@ async fn DelegatedReceipt_LateOriginalBindCannotMintInstalledReceipt_004() {
         .unwrap();
     ready.await.unwrap();
     let (peer, retired) = {
-        let peer = network_client(&relay, scope);
+        let peer = network_client_lease(&relay, scope);
         tokio::pin!(peer);
         tokio::select! {result=seen=>result.unwrap(),_=&mut peer=>panic!("original actor must remain pending")};
         assert!(
@@ -1362,4 +1445,20 @@ async fn NetworkBudget_ControlLease15SecondsStillLimitsWindow_011() {
         return;
     }
     renewal_case(15).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ControlLease_OriginalRelayManualRenewalAllowsLaterInputAndRetires_011() {
+    if isolated("ControlLease_OriginalRelayManualRenewalAllowsLaterInputAndRetires_011") {
+        return;
+    }
+    renewal_case(16).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ControlLease_Real61SecondsManualRenewalThenOriginalRetirement_015() {
+    if isolated("ControlLease_Real61SecondsManualRenewalThenOriginalRetirement_015") {
+        return;
+    }
+    renewal_case(17).await;
 }

@@ -557,7 +557,7 @@ AttemptElapsed：封旧代并保留 live/Retiring，必须完整原任务 receip
 15 分钟边界仅由受控测试时钟验证，不是实际等待 15 分钟或 Relay 自动续租。
 长测临时公开合成 Relay policy 显式为 120 秒，默认 30 秒不变。
 
-**真实超过 60 秒远端输入尚未通过，不能称为长期连接交付。** 原无流量通道
+**在预算基础阶段，无续租路径的真实超过 60 秒远端输入当时未通过，不能据该阶段称为长期连接交付。** 原无流量通道
 约 1,978 ms 以 Io 结束；Snapshot+ACK 每 500 ms 可维持 61 秒活动，但随后
 Window 失败。Host 原 ControlState 控制 lease 独立只有 15 秒，Snapshot 不续租；
 已有 renew_lease 仅 crate 内部接口，当前认证 wire 并无续租消息。新增受控
@@ -568,3 +568,37 @@ Window 失败。Host 原 ControlState 控制 lease 独立只有 15 秒，Snapsho
 后者仍受 exact lease/fence、原设备/会话、连续序号与固定 grant/attempt 截止。
 本阶段未接生产授权、供钥、UI、自动重试，也未验证真实手机或 30 天持续运行。
 原全库 PTY 发布门槛未消除，不进行 push/merge/RC 发布。
+
+## 认证手动控制租约（native，生产授权仍关闭）
+
+AppBind 新模式精确要求 canonical-json、control-lease-renew-v1、
+grant-management-v1、peer-install-v1，双方完整 offer 进入原 transcript/MAC。
+旧 peer/grant/base 工厂不变，能力不匹配拒绝且不自动降级。仅 sealed delegated
+wire 选择新 Host 工厂，native 客户端显式选择相同模式。私有认证事实沿原
+channel 传递；协议支持不等于 Controller、Installed、用户同意或恢复权限。
+浏览器/WASM 配置、TS UI、真实手机与生产 consent 本阶段均未接通。
+
+LeaseState 仅含 profile/request；回复含原 actor 派生的 lease/fence、
+notAfterHostMs 和 nextRenewalSequence。LeaseRenew 请求含新 request、原
+lease/fence 与 renewalSequence，回复逐项关联同一身份和 Host 确认的截止。
+不允许请求选择另一设备、run 或 target；原 DataRecord 的 channel/scope/fence、
+活跃 authority、Controller 与 Installed 事实在请求及回复点检查。
+
+原 actor 保留 15 秒 lease：未到期时才允许续租，截止为 min(now+15s, grant.end)。
+同 renewalSequence 幂等返回既有截止，不再延长；只允许 next sequence。
+重试须使用新的单调 request，但保持原 renewalSequence。NativeClient 额外要求
+回复 deadline 严格大于原 grant.created 且不超过 grant.expires，允许 Host 更短。
+回复仅是原动作历史事实，不是当前 lease 仍有效的授权证明，不可据此重置期限。
+续租不刷新 InputWindow、ACK、receipt、grant、presence 或 attempt，不写 PTY。
+
+LeaseState/续租原 receiver 使用同 attempt 的 retained custody，取消观察不丢
+receiver 或原输入结果。取消/超时若已 CloseOnDrop 封闭 channel，就不能在旧连接
+重试恢复；必须保留关闭与原完整回收事实。只有应用未交付而原通道仍有效的回复
+可按同 sequence 幂等查询/重试。旧能力、Observer、错误 lease/fence、跳号、
+重复 request、到期和排队后撤销均拒绝。普通 lease 结束或通道关闭不主动 seal
+原本机终端；已有输入的 Partial/Unknown 安全语义不变。
+
+当前只有手动 API，无生产自动续租、心跳或 reconnect scheduler。后续 owner 必须
+固定初始 lease/fence，单 outstanding、单调 sequence；不能通过新 LeaseState
+重置不确定结果。同 sequence 的成功重试必须保持同 deadline。外层心跳仅保 IO，
+必须与控制 lease 和固定 grant/attempt/总截止分开，不构成任何授权刷新。

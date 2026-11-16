@@ -205,6 +205,36 @@ impl AuthorizedPendingRebind {
     }
 }
 impl AuthorizedPeer {
+    fn lease_record(&self, record: &DataRecord) -> Result<(), Reject> {
+        self.record(record)?;
+        if !self.authority.control_lease_renew_enabled()
+            || self.authority.data_role() != DataRole::Controller
+        {
+            return Err(Reject::Policy);
+        }
+        Ok(())
+    }
+    pub(in crate::local_writer) fn lease_state_received(
+        &self,
+        record: &DataRecord,
+    ) -> Result<view_gate::control::PendingLease<view_gate::control::LeaseSnapshot>, Reject> {
+        self.lease_record(record)?;
+        self.inner.lease_state()
+    }
+    pub(in crate::local_writer) fn renew_lease_received(
+        &self,
+        record: &DataRecord,
+        lease: [u8; 16],
+        fence: u64,
+        sequence: u64,
+    ) -> Result<view_gate::control::PendingLease, Reject> {
+        self.lease_record(record)?;
+        if fence != self.fence {
+            return Err(Reject::Target);
+        }
+        self.inner.renew_lease(lease, fence, sequence)
+    }
+
     pub(in crate::local_writer) fn input_cursor(
         &self,
     ) -> Result<view_gate::control::PendingValue<InputCursor>, Reject> {

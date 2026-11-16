@@ -378,6 +378,34 @@ async fn network_client_mode(
     ),
     &'static str,
 > {
+    network_client_profile(relay, scope, mode, false).await
+}
+type NetworkClientResult = Result<
+    (
+        cc_desk_remote_client::NativeClient,
+        cc_desk_remote_transport::OwnedTunnel,
+        cc_desk_remote_security::CancelHandle,
+    ),
+    &'static str,
+>;
+async fn network_client_lease(
+    relay: &NetworkRelayFixture,
+    scope: cc_desk_remote_record::grant::SessionScope,
+) -> NetworkClientResult {
+    network_client_profile(
+        relay,
+        scope,
+        cc_desk_remote_transport::wss::RelayMode::Legacy,
+        true,
+    )
+    .await
+}
+async fn network_client_profile(
+    relay: &NetworkRelayFixture,
+    scope: cc_desk_remote_record::grant::SessionScope,
+    mode: cc_desk_remote_transport::wss::RelayMode,
+    control_lease: bool,
+) -> NetworkClientResult {
     use cc_desk_remote_security::*;
     let budget = Duration::from_secs(8);
     let end = tokio::time::Instant::now() + budget;
@@ -415,16 +443,17 @@ async fn network_client_mode(
             eprintln!("TEST_ONLY_PHONE_TLS_ERROR {error:?}");
             "phone TLS"
         })?;
-        let channel = bind_client_peer_channel(
-            pending,
-            ClientTrust {
-                host_key_epoch: 5,
-                client_key_epoch: 7,
-                origin: cc_desk_remote_record::appbind::CanonicalOrigin::trusted(&relay.origin)
-                    .unwrap(),
-            },
-        )
-        .await
+        let binding_trust = ClientTrust {
+            host_key_epoch: 5,
+            client_key_epoch: 7,
+            origin: cc_desk_remote_record::appbind::CanonicalOrigin::trusted(&relay.origin)
+                .unwrap(),
+        };
+        let channel = if control_lease {
+            bind_client_control_lease_channel(pending, binding_trust).await
+        } else {
+            bind_client_peer_channel(pending, binding_trust).await
+        }
         .map_err(|_| "phone binding")?;
         let trust = ClientGrantTrust {
             issuer: network_grants::admin(),

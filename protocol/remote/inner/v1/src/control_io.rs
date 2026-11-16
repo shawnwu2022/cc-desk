@@ -34,6 +34,33 @@ pub struct PendingInput {
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "message", deny_unknown_fields, rename_all_fields = "camelCase")]
 pub enum Message {
+    LeaseState {
+        profile: u16,
+        request: String,
+    },
+    LeaseStateReply {
+        profile: u16,
+        request: String,
+        lease: String,
+        fence: String,
+        not_after_host_ms: String,
+        next_renewal_sequence: String,
+    },
+    LeaseRenew {
+        profile: u16,
+        request: String,
+        lease: String,
+        fence: String,
+        renewal_sequence: String,
+    },
+    LeaseRenewed {
+        profile: u16,
+        request: String,
+        lease: String,
+        fence: String,
+        renewal_sequence: String,
+        not_after_host_ms: String,
+    },
     InputCursor {
         profile: u16,
         request: String,
@@ -141,6 +168,50 @@ fn identity(operation: &str, sequence: &str) -> bool {
 impl Message {
     fn valid(&self) -> bool {
         match self {
+            Self::LeaseState { profile, request } => *profile == 1 && counter(request),
+            Self::LeaseStateReply {
+                profile,
+                request,
+                lease,
+                fence,
+                not_after_host_ms,
+                next_renewal_sequence,
+            } => {
+                *profile == 1
+                    && counter(request)
+                    && hex(lease, 16)
+                    && counter(fence)
+                    && counter(not_after_host_ms)
+                    && counter(next_renewal_sequence)
+            }
+            Self::LeaseRenew {
+                profile,
+                request,
+                lease,
+                fence,
+                renewal_sequence,
+            } => {
+                *profile == 1
+                    && counter(request)
+                    && hex(lease, 16)
+                    && counter(fence)
+                    && counter(renewal_sequence)
+            }
+            Self::LeaseRenewed {
+                profile,
+                request,
+                lease,
+                fence,
+                renewal_sequence,
+                not_after_host_ms,
+            } => {
+                *profile == 1
+                    && counter(request)
+                    && hex(lease, 16)
+                    && counter(fence)
+                    && counter(renewal_sequence)
+                    && counter(not_after_host_ms)
+            }
             Self::InputCursor { profile, request } => *profile == 1 && counter(request),
             Self::InputCursorState {
                 profile,

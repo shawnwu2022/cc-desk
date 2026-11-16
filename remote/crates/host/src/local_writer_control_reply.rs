@@ -140,6 +140,57 @@ impl Connection<'_> {
                 return Ok(());
             }
             Err(_) => match wire::decode(r.payload()).map_err(|_| Reject::Bounds)? {
+                wire::Message::LeaseState { request, .. } => {
+                    self.lease_ready(r, host)?;
+                    self.counter(request.parse().map_err(|_| Reject::Bounds)?)?;
+                    self.busy = true;
+                    let reservation = reserve(&self.custody)?;
+                    let pending = self.peer.lease_state_received(r)?;
+                    let state =
+                        retained_wait(deadline, reservation, move |left| pending.wait(left))
+                            .await?;
+                    self.lease_authority(host)?;
+                    self.busy = false;
+                    Some(wire::Message::LeaseStateReply {
+                        profile: 1,
+                        request,
+                        lease: hex(&state.lease),
+                        fence: state.fence.to_string(),
+                        not_after_host_ms: state.deadline.to_string(),
+                        next_renewal_sequence: state.next_sequence.to_string(),
+                    })
+                }
+                wire::Message::LeaseRenew {
+                    request,
+                    lease,
+                    fence,
+                    renewal_sequence,
+                    ..
+                } => {
+                    self.lease_ready(r, host)?;
+                    self.counter(request.parse().map_err(|_| Reject::Bounds)?)?;
+                    self.busy = true;
+                    let reservation = reserve(&self.custody)?;
+                    let pending = self.peer.renew_lease_received(
+                        r,
+                        decode_hex(&lease)?,
+                        fence.parse().map_err(|_| Reject::Bounds)?,
+                        renewal_sequence.parse().map_err(|_| Reject::Bounds)?,
+                    )?;
+                    let until =
+                        retained_wait(deadline, reservation, move |left| pending.wait(left))
+                            .await?;
+                    self.lease_authority(host)?;
+                    self.busy = false;
+                    Some(wire::Message::LeaseRenewed {
+                        profile: 1,
+                        request,
+                        lease,
+                        fence,
+                        renewal_sequence,
+                        not_after_host_ms: until.to_string(),
+                    })
+                }
                 wire::Message::InputCursor { request, .. } => {
                     self.counter(request.parse().map_err(|_| Reject::Bounds)?)?;
                     let reservation = reserve(&self.custody)?;
@@ -272,6 +323,22 @@ impl Connection<'_> {
         }
         close.0 = None;
         Ok(())
+    }
+    // 协商事实只表示协议支持；原通道、Controller 和安装 fence 仍逐次检查。
+    fn lease_authority(&self, host: &RunningChannel) -> Result<(), Reject> {
+        self.proof.check().map_err(|_| Reject::Policy)?;
+        if !self.proof.control_lease_renew_enabled()
+            || self.proof.data_role() != cc_desk_remote_record::grant::DataRole::Controller
+            || !host.authority().same_channel(&self.proof)
+            || host.installed_fence().map_err(|_| Reject::Policy)? != self.fence
+        {
+            return Err(Reject::Policy);
+        }
+        self.proof.check().map_err(|_| Reject::Policy)
+    }
+    fn lease_ready(&self, r: &DataRecord, host: &RunningChannel) -> Result<(), Reject> {
+        self.record(r)?;
+        self.lease_authority(host)
     }
     async fn send_wire(
         &self,

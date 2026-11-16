@@ -612,3 +612,6 @@ async fn phone_wire_roundtrip_uses_exact_native_receipt_and_durable_settlement()
     h.close().await;
     c.close().await;
 }
+
+#[path = "local_writer_control_lease_tests.rs"]
+mod lease;

@@ -45,6 +45,8 @@ impl Drop for CancelOnDrop {
     }
 }
 enum Expected {
+    LeaseState(String),
+    LeaseRenew(String, String, String, String),
     Cursor(String),
     Window(String),
     Ack(Box<projection::Stamp>),
@@ -63,6 +65,19 @@ fn expected(bytes: &[u8]) -> Result<Expected, DataError> {
         )),
         Ok(_) => Err(DataError::Codec),
         Err(_) => match wire::decode(bytes).map_err(|_| DataError::Codec)? {
+            wire::Message::LeaseState { request, .. } => Ok(Expected::LeaseState(request)),
+            wire::Message::LeaseRenew {
+                request,
+                lease,
+                fence,
+                renewal_sequence,
+                ..
+            } => Ok(Expected::LeaseRenew(
+                request,
+                lease,
+                fence,
+                renewal_sequence,
+            )),
             wire::Message::InputCursor { request, .. } => Ok(Expected::Cursor(request)),
             wire::Message::ReceiptQuery {
                 request,
@@ -84,6 +99,17 @@ fn expected(bytes: &[u8]) -> Result<Expected, DataError> {
 impl Expected {
     fn matches(&self, reply: &wire::Message) -> bool {
         match (self, reply) {
+            (Self::LeaseState(a), wire::Message::LeaseStateReply { request, .. }) => a == request,
+            (
+                Self::LeaseRenew(a, b, c, d),
+                wire::Message::LeaseRenewed {
+                    request,
+                    lease,
+                    fence,
+                    renewal_sequence,
+                    ..
+                },
+            ) => a == request && b == lease && c == fence && d == renewal_sequence,
             (Self::Cursor(a), wire::Message::InputCursorState { request, .. }) => a == request,
             (Self::Window(a), wire::Message::WindowGranted { request, .. }) => a == request,
             (Self::Ack(a), wire::Message::ProjectionAcknowledged { stamp, .. }) => {
@@ -242,6 +268,24 @@ impl NativeClient {
     /// after admission closes this exact owner; it never proves non-execution.
     pub async fn exchange(&self, payload: &[u8], budget: Duration) -> Result<Vec<u8>, DataError> {
         let expected = expected(payload)?;
+        let lease = matches!(
+            &expected,
+            Expected::LeaseState(_) | Expected::LeaseRenew(..)
+        );
+        if lease {
+            let authority = self.channel.authority();
+            authority.check()?;
+            if !authority.control_lease_renew_enabled()
+                || authority.data_role() != ClientRole::Controller
+                || self.channel.installed_fence()? != self.fence
+            {
+                return Err(DataError::Role);
+            }
+            if matches!(&expected,Expected::LeaseRenew(_,_,fence,_) if fence!=&self.fence.to_string())
+            {
+                return Err(DataError::Fence);
+            }
+        }
         let end = deadline(budget)?;
         let _pending = self.pending.try_lock().map_err(|_| DataError::Full)?;
         let mut close = CancelOnDrop(Some(self.channel.authority()));
@@ -254,6 +298,28 @@ impl NativeClient {
             .await?;
         self.record(&record)?;
         let reply = wire::decode(record.payload()).map_err(|_| DataError::Codec)?;
+        if lease {
+            let authority = self.channel.authority();
+            let until = match &reply {
+                wire::Message::LeaseStateReply {
+                    not_after_host_ms, ..
+                }
+                | wire::Message::LeaseRenewed {
+                    not_after_host_ms, ..
+                } => not_after_host_ms
+                    .parse::<u64>()
+                    .map_err(|_| DataError::Codec)?,
+                _ => return Err(DataError::Context),
+            };
+            if until <= authority.created_host_ms() || until > authority.expires_host_ms() {
+                return Err(DataError::Context);
+            }
+        }
+        if lease
+            && matches!(&reply,wire::Message::LeaseStateReply{fence,..}|wire::Message::LeaseRenewed{fence,..} if fence!=&self.fence.to_string())
+        {
+            return Err(DataError::Fence);
+        }
         if !expected.matches(&reply) {
             return Err(DataError::Context);
         }

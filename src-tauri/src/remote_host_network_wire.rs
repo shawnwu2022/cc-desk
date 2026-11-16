@@ -239,15 +239,21 @@ impl NetworkWire {
             let _ = error;
             HostNetworkError::Security
         })?;
-        let managed = security::bind_host_peer_channel(pending, inputs.binding)
-            .await
-            .map_err(|error| {
-                #[cfg(test)]
-                eprintln!("TEST_ONLY_HOST_BIND_ERROR {error:?}");
-                #[cfg(not(test))]
-                let _ = error;
-                HostNetworkError::Security
-            })?;
+        let managed = match &authorization {
+            WireAuthority::Original(_) => {
+                security::bind_host_peer_channel(pending, inputs.binding).await
+            }
+            WireAuthority::Delegated(_) => {
+                security::bind_host_control_lease_channel(pending, inputs.binding).await
+            }
+        }
+        .map_err(|error| {
+            #[cfg(test)]
+            eprintln!("TEST_ONLY_HOST_BIND_ERROR {error:?}");
+            #[cfg(not(test))]
+            let _ = error;
+            HostNetworkError::Security
+        })?;
         let mut authority = GrantGate::for_binding(
             managed.context(),
             inputs.issuer,

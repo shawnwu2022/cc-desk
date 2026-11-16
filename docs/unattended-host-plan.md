@@ -623,3 +623,40 @@ NativeGrant 的 Role 拒绝均保留；后者改为真实 grant_client/grant_hos
 
 本片只暴露显式 native 协商工厂，不自动启用原 one-shot，不含手动 lease wire、
 调度器、outer 心跳或浏览器/WASM/手机支持；后续每项仍独立验证，生产授权关闭。
+
+## 手动 lease wire 与 native App 验证（2026-11-16）
+
+原认证能力提交 2c82e29d 后，新增严格 LeaseState/LeaseRenew wire，原 actor
+派生状态/幂等续租、AuthorizedPeer/Installed/Controller 检查和原 retained custody。
+NativeClient 明确请求类型并关联 request/lease/fence/renewalSequence，回复截止
+要求 grant.created < deadline <= grant.expires。只有 sealed delegated App wire
+选择新工厂，测试客户端显式同模式，旧 one-shot 原行为保留。
+
+最终同源码按父测试名称分库去重 223 项：App 144、record 13、Host 30、
+security 18、client 18。实际集合保存在 .audit/unattended-lease-final-testnames.txt。
+App 包含 ControlLease 2 项、原 Delegated 44、预算短测 10、unattended 56、
+service 18、network 21 及七项各 fresh --exact one-shot；重叠只计一次。
+Host 包含 wire 9、control 状态 5、custody 12、真实 pipe OwnerControl 4。
+原 control_io_tests 文件名过滤得到 0 项日志保留且不计，随后用实际 OwnerControl_
+名称执行 4/4。App/Host/Client 最终 strict 非 test Clippy 和格式/diff 检查通过。
+
+新独立 ControlLease_Real61SecondsManualRenewalThenOriginalRetirement_015
+已实际通过：fixture 显式每 5 秒调用手动续租，Snapshot+ACK 每 500 ms 保持
+原 fixture IO 活动；等待至少 61 秒后真实远端 na 输入、完整原 receipt 回收、
+第二代 ti 与本机 ve 组成精确 native 输出。两项 App lease 测试总计 63.93 秒。
+这是 native 客户端/真实 localhost Relay/原 Host 与真实输入路径的活动长测，
+不是无流量空闲、生产 scheduler、WASM 浏览器、真实手机或 30 天 endurance。
+
+原 NetworkBudget 无续租的 61 秒失败 case 和断言原样保留，最终批次显式 skip；
+不能据 223 项称全 suite 通过。新的手动续租正例独立证明先前 15 秒控制 lease
+缺口已有受限协议路径，不意味着自动保活已交付。此前 PTY 全库发布门槛仍保留。
+
+保留所有首次失败：wire 未实现时 decode RED；fixture signer 临时值编译失败；
+Observer/codec API 拼写与原 1 秒 dispatcher budget 的 Bounds 拒绝；App 原
+NativeClient expected() 不识别新消息的 Codec 拒绝。均未放宽原期限/角色或
+绕过真实客户端。最终日志前缀 unattended-lease-app-final2、record-final、
+host-final、host-ownercontrol-final、security-bind-final2、client-final；三个
+clippy-final 日志（App 使用 final2）均保留。无真实凭据、云服或安全设置改动。
+
+后续只在下一审定阶段实现自动 owner 调度与独立 outer 心跳；固定 lease/fence、
+单 outstanding、同序号同截止、丢回复不重置状态、关闭后完整回收等边界不变。

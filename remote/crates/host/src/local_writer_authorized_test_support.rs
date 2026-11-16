@@ -174,3 +174,97 @@ pub(super) async fn channels_as(
     h.install(&grant).unwrap();
     (c.start().unwrap(), h.start().unwrap(), gate, cancel, grant)
 }
+
+// 公开合成身份、真实认证及签名交换；不直接标记已协商事实。
+pub(super) async fn lease_channels(
+    now: Arc<AtomicU64>,
+    enabled: bool,
+    role: DataRole,
+) -> (RunningChannel, RunningChannel, GrantGate, CancelHandle) {
+    let (c, h) = tokio::io::duplex(65536);
+    let (cancel, token) = cancellation();
+    let (c, h) = tokio::join!(
+        connect(
+            Unbound::new(c),
+            local(true),
+            pin(false),
+            Duration::from_secs(2),
+            token.clone()
+        ),
+        accept(
+            Unbound::new(h),
+            local(false),
+            pin(true),
+            Duration::from_secs(2),
+            token
+        )
+    );
+    let origin = CanonicalOrigin::trusted("wss://relay.invalid/").unwrap();
+    let trust = ClientTrust {
+        host_key_epoch: 5,
+        client_key_epoch: 7,
+        origin: origin.clone(),
+    };
+    let snapshot = HostSnapshot {
+        host_key_epoch: 5,
+        client_key_epoch: 7,
+        activation: [0x33; 32],
+        incarnation: 11,
+        policy_epoch: 13,
+        issuer_epoch: 17,
+        origin,
+    };
+    let (c, h) = if enabled {
+        tokio::join!(
+            bind_client_control_lease_channel(c.unwrap(), trust),
+            bind_host_control_lease_channel(h.unwrap(), snapshot)
+        )
+    } else {
+        tokio::join!(
+            bind_client_peer_channel(c.unwrap(), trust),
+            bind_host_peer_channel(h.unwrap(), snapshot)
+        )
+    };
+    let (c, h) = (c.unwrap(), h.unwrap());
+    let clock: Arc<dyn GrantClock> = Arc::new(move || Ok(now.load(Ordering::Acquire)));
+    let mut gate = GrantGate::for_binding(h.context(), admin(), [4; 32], clock.clone()).unwrap();
+    let mut state = ClientGrantState::new(clock);
+    struct Signer;
+    impl NativeGrantSigner for Signer {
+        fn confirm_and_sign<'a>(
+            &'a mut self,
+            g: &'a VerifiedCanonicalGrant,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<Vec<u8>, GrantError>> + Send + 'a>,
+        > {
+            Box::pin(async move { Ok(signed(g.payload(), g.issuer_kid())) })
+        }
+    }
+    let trust = ClientGrantTrust {
+        issuer: admin(),
+        principal: [4; 32],
+        scope: scope(),
+        role,
+    };
+    let policy = NativeGrantPolicy {
+        scope: scope(),
+        role,
+        duration: Duration::from_secs(90),
+    };
+    let mut signer = Signer;
+    let (c, h) = tokio::join!(
+        c.grant_client(&trust, &mut signer, &mut state, Duration::from_secs(1)),
+        h.grant_host(&mut gate, policy, Duration::from_secs(1))
+    );
+    let (mut c, mut h) = (c.unwrap(), h.unwrap());
+    let end = tokio::time::Instant::now() + Duration::from_secs(1);
+    let (c, h) = (
+        c.start_peer_pending(end).unwrap(),
+        h.start_peer_pending(end).unwrap(),
+    );
+    let request = h.host_install_request().await.unwrap();
+    let (proof, sent) = tokio::join!(c.client_installed(), h.complete_host_install(request, 4));
+    sent.unwrap();
+    assert_eq!(proof.unwrap().consume_for(&c).unwrap(), 4);
+    (c, h, gate, cancel)
+}
