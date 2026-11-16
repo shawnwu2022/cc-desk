@@ -441,11 +441,9 @@ impl ProjectionService {
             .admission()
             .check_codex_archive_for(request.target_id()?)
             .map_err(|_| error("ARCHIVE_BUSY"))?;
-        let authority = self.registry.authorize_rename(
-            &owner(caller),
-            &request.source,
-            &request.session_key,
-        )?;
+        let authority =
+            self.registry
+                .locate_archive(&owner(caller), &request.source, &request.session_key)?;
         let physical = serde_json::to_string(&(authority.root_key(), &authority.native_id))
             .map_err(|_| error("SOURCE_INVALID"))?;
         self.archive_operations
@@ -508,6 +506,8 @@ impl ProjectionService {
             };
             self.launch.archive_metadata(caller, &launch, authority)
         })();
+        self.registry
+            .retire_archive_hint(&request.source, &request.session_key);
         self.archive_operations
             .finish(caller, &request, result.clone());
         result?;

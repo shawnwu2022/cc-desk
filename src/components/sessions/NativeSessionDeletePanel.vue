@@ -58,7 +58,12 @@ async function review() {
   if (selectedKey.value !== requestKey || operation.value?.request.operationId !== request.operationId) return
   if (signature.value !== originalSignature) { close(); return }
   // 后端实核目标与所选行不一致时，不允许用显示行替换真实授权目标。
-  if (operation.value?.preview?.state === 'ready' && operation.value.preview.nativeSessionId !== current.nativeSessionId) close()
+  if (operation.value?.preview?.state === 'ready' && operation.value.preview.nativeSessionId !== current.nativeSessionId) { close(); return }
+  if (operation.value?.phase === 'review') {
+    operations.beginConfirmation(selectedKey.value)
+    permanent.value = true; subtree.value = true
+    await execute()
+  }
 }
 async function execute() {
   const original = signature.value, current = binding.value
@@ -67,6 +72,7 @@ async function execute() {
   try {
     await operations.execute(requestKey, permanent.value, subtree.value, () => selectedKey.value === requestKey && ownsOperation.value && signature.value === original)
     await refreshAcknowledged(requestKey)
+    if (selectedKey.value === requestKey && operations.records.get(requestKey)?.receipt?.state === 'acknowledged') open.value = false
   } catch { /* 后端结果保留在操作账本；前置失权不发送删除。 */ }
 }
 async function refreshAcknowledged(key: string) {
@@ -102,7 +108,7 @@ defineExpose({ review, showResults, hasResults })
     <div v-if="!dialogOnly && operations.records.size" class="delete-operations">
       <AppButton v-for="[key, item] of operations.records" :key="key" data-delete-existing @click="reopen(key)">{{ t('deleteViewOperation') }} · {{ item.request.source.profileId }}</AppButton>
     </div>
-    <AppDialog :open="open" :title="t(resultsOnly ? 'deleteViewOperation' : operation?.phase === 'confirmation' ? 'deleteSecondConfirmation' : 'deleteReview')" data-delete-dialog @close="close">
+    <AppDialog :open="open" :title="t(resultsOnly ? 'deleteViewOperation' : 'deleteReview')" data-delete-dialog @close="close">
       <div v-if="dialogOnly && retainedOperations.length > 1" class="delete-operations">
         <AppButton v-for="[key, item] of retainedOperations" :key="key" data-delete-existing @click="reopen(key, true)">{{ t('deleteViewOperation') }} · {{ item.display?.title || item.request.source.profileId }}</AppButton>
       </div>
@@ -118,10 +124,6 @@ defineExpose({ review, showResults, hasResults })
         <p>{{ t('deleteNativeMaintenance') }}</p>
         <InlineNotice kind="warning" :message="t('deleteIrreversible')" />
         <p v-if="operation.phase === 'previewing' || operation.phase === 'executing' || operation.phase === 'checking'">{{ t('deleteBusy') }}</p>
-        <template v-if="operation.phase === 'confirmation'">
-          <label class="delete-ack"><input v-model="permanent" data-delete-ack-permanent type="checkbox" />{{ t('deleteAcknowledgePermanent') }}</label>
-          <label class="delete-ack"><input v-model="subtree" data-delete-ack-subtree type="checkbox" />{{ t('deleteAcknowledgeSubtree') }}</label>
-        </template>
         <div v-if="operation.phase === 'result'" data-delete-result aria-live="polite">
           <p v-if="operation.receipt">{{ t(`deleteState_${operation.receipt.state}`) }}</p>
           <p v-if="!operation.receipt">{{ t('deleteState_blocked') }}</p>
@@ -135,8 +137,6 @@ defineExpose({ review, showResults, hasResults })
       </template>
       <template #footer>
         <AppButton data-delete-cancel @click="close">{{ t(busy && operation?.phase !== 'previewing' ? 'close' : 'cancel') }}</AppButton>
-        <AppButton v-if="!resultsOnly && operation?.phase === 'review'" data-delete-next-confirm @click="operations.beginConfirmation(selectedKey)">{{ t('deleteContinueConfirmation') }}</AppButton>
-        <AppButton v-if="!resultsOnly && operation?.phase === 'confirmation'" data-delete-final variant="danger" :disabled="!permanent || !subtree || !ownsOperation" @click="execute">{{ t('deletePermanently') }}</AppButton>
       </template>
     </AppDialog>
   </div>

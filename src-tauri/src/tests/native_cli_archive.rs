@@ -1011,7 +1011,7 @@ fn NativeArchivePerf_IsolatedStageMatrix_029() {
                 &ScopeTarget::Profile {
                     profile_id: "archive-perf".into(),
                     expected_profile_revision: document.profiles["archive-perf"].revision,
-                    project_ids,
+                    project_ids: project_ids.clone(),
                 },
             )
             .unwrap();
@@ -1044,12 +1044,33 @@ fn NativeArchivePerf_IsolatedStageMatrix_029() {
             started.elapsed().as_secs_f64() * 1000.0
         };
         let initial_read_ms = observe(1);
+        // Same binary and disk/cache state: compare the full-scan fallback with
+        // a locator retained by the displayed history, without mutating a user session.
+        let cold = std::env::var("CC_DESK_ARCHIVE_PERF_COLD").as_deref() == Ok("1");
+        let cold_service = cold.then(|| {
+            let service = ProjectionService::new(launch.clone());
+            assert_eq!(
+                service
+                    .scope(
+                        &caller,
+                        &ScopeTarget::Profile {
+                            profile_id: "archive-perf".into(),
+                            expected_profile_revision: document.profiles["archive-perf"].revision,
+                            project_ids: project_ids.clone(),
+                        }
+                    )
+                    .unwrap(),
+                source
+            );
+            service
+        });
+        let archive_service = cold_service.as_ref().unwrap_or(&service);
         let started = Instant::now();
         let wall = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64;
-        let receipt = service
+        let receipt = archive_service
             .archive(
                 &caller,
                 ArchiveRequest {
@@ -1072,7 +1093,7 @@ fn NativeArchivePerf_IsolatedStageMatrix_029() {
         let readback_ms = observe(2);
         println!(
             "ARCHIVE_PERF {}",
-            json!({"sessions":count,"projects":project_count,"scope_ms":scope_ms,"initial_read_ms":initial_read_ms,"pre_rpc_ms":helper.saturating_sub(wall),"rpc_window_ms":last.saturating_sub(helper),"archive_ms":archive_ms,"post_rpc_ms":archive_ms-(last.saturating_sub(wall) as f64),"readback_ms":readback_ms,"total_action_ms":archive_ms+readback_ms})
+            json!({"cold_locator":cold,"sessions":count,"projects":project_count,"scope_ms":scope_ms,"initial_read_ms":initial_read_ms,"pre_rpc_ms":helper.saturating_sub(wall),"rpc_window_ms":last.saturating_sub(helper),"archive_ms":archive_ms,"post_rpc_ms":archive_ms-(last.saturating_sub(wall) as f64),"readback_ms":readback_ms,"total_action_ms":archive_ms+readback_ms})
         );
         drop(service);
         drop(launch);

@@ -1101,7 +1101,7 @@ export default {
   deleteContinueConfirmation: '继续进行二次确认',
   deletePermanently: '永久删除',
   deleteInspect: '只读核实结果，不再次删除',
-  deleteReviewAgain: '重新预览，删除前再次确认',
+  deleteReviewAgain: '重新尝试永久删除',
   deleteViewOperation: '查看删除操作',
   deleteBusy: '操作正在执行。关闭弹窗不会撤销已发出的请求。',
   deleteState_acknowledged: 'Codex 已确认原生删除请求完成。',

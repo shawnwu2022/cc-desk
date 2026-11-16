@@ -873,7 +873,7 @@ write. Refresh remains a separate read-only recovery action.
 
 ### Archived session deletion entry
 
-The archive drawer supplies a trailing delete icon to each shared session row. The trailing slot uses the otherwise empty archive column, preserving the normal row geometry, restore control and overflow menu. Unsupported identities keep a disabled icon with a localized reason. The drawer owns one persistent single-target deletion dialog, so removal of an acknowledged row does not unmount its receipt. No permanent-deletion availability or batch-selection module appears below the list; previous operation results stay inside the deletion dialog. All original source, preview, second-confirmation and no-replay guards remain in the existing deletion store and panel.
+The archive drawer supplies a trailing delete icon to each shared session row. The trailing slot uses the otherwise empty archive column, preserving the normal row geometry, restore control and overflow menu. Unsupported identities keep a disabled icon with a localized reason. The drawer owns one persistent single-target deletion dialog, so removal of an acknowledged row does not unmount its receipt. No permanent-deletion availability or batch-selection module appears below the list; previous operation results stay inside the deletion dialog. An explicit click on an eligible delete icon authorizes permanent deletion; backend preflight proceeds directly to execution without a second confirmation or checkbox step. Source/eligibility checks, one-shot tickets, pre-dispatch cancellation and no-replay guards remain. The result retry label explicitly says permanent deletion; inspect and historical-result views stay read-only.
 
 ### OpenCode native archive panel
 
