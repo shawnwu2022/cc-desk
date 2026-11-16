@@ -17,6 +17,7 @@ pub struct SnapshotEncoder<'a> {
     next: usize,
     bytes: usize,
     failed: bool,
+    payload_limit: Option<usize>,
 }
 impl<'a> SnapshotEncoder<'a> {
     pub fn new(
@@ -61,9 +62,26 @@ impl<'a> SnapshotEncoder<'a> {
             next: 0,
             bytes: 0,
             failed: false,
+            payload_limit: None,
         };
         // Validate the complete context before a caller can send even part zero.
         this.part(0, 1)?;
+        Ok(this)
+    }
+    pub fn with_payload_limit(
+        view: &'a SemanticSnapshot,
+        stamp: wire::Stamp,
+        minor: u16,
+        limit: usize,
+    ) -> Result<Self, EncodingError> {
+        if limit == 0 || limit > wire::MAX_PAYLOAD {
+            return Err(EncodingError::Budget);
+        }
+        let mut this = Self::new(view, stamp, minor)?;
+        if this.part(0, 1)?.len() > limit {
+            return Err(EncodingError::Budget);
+        }
+        this.payload_limit = Some(limit);
         Ok(this)
     }
     fn part(&self, start: usize, count: usize) -> Result<Vec<u8>, EncodingError> {
@@ -88,8 +106,17 @@ impl Iterator for SnapshotEncoder<'_> {
         if self.failed || self.next == self.view.cells().len() {
             return None;
         }
-        let count = wire::MAX_CELLS.min(self.view.cells().len() - self.next);
-        let result = self.part(self.next, count).and_then(|bytes| {
+        let mut count = wire::MAX_CELLS.min(self.view.cells().len() - self.next);
+        let encoded = loop {
+            let part = self.part(self.next, count);
+            match self.payload_limit {
+                None => break part,
+                Some(limit) if part.as_ref().is_ok_and(|bytes| bytes.len() <= limit) => break part,
+                Some(_) if count > 1 => count /= 2,
+                Some(_) => break Err(EncodingError::Budget),
+            }
+        };
+        let result = encoded.and_then(|bytes| {
             let total = self
                 .bytes
                 .checked_add(bytes.len())

@@ -297,3 +297,13 @@ through/final；原projection自身的字段兼容性保持，不能泛称所有
 
 codec 5/5及严格Clippy通过；移除未知字段限制的有效变异失败后已还原。
 仅codec，无Host/Client调用，不等于密文上界或浏览器内存门禁通过。
+## P2b：原借用 encoder 的显式 payload 上限
+
+新增 with_payload_limit，不改变原 new 默认行为。仍借用同一 SemanticSnapshot；
+每批最多128cells，若编码超预算则按cell数量减半，最多7次减半，单cell仍不适配
+则失败并终止迭代。每次保留一个候选Vec，原projection在序列化前验证有界stamp、
+run<=128、固定Cell字段和网格；不是任意字符串重试缓冲，也不是全链内存证明。
+累计原part仍受4MiB上限，未缩终端网格或重复捕获。Host未来必须传MAX_PART，
+2048只用来施加小批压力。原188批兼容回归与80x24两种限额完整覆盖共3/3通过；
+禁用limit的有效行为变异失败后已还原。尚未接Host/Client协议。
+补充：最终encoding 5/5及严格Clippy通过；新增offset10单cell不适配与4MiB累计失败的fused真实回归。临时serialize沿原128cells固定结构上界，不承诺临时峰值<=payload_limit；仅返回批受该limit限制。

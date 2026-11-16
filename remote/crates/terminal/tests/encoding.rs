@@ -71,3 +71,83 @@ fn snapshot_encoder_refuses_misstamped_core_epochs_and_invalid_binding_before_em
     s.binding.clear();
     assert!(SnapshotEncoder::new(&view, s, 0).is_err());
 }
+
+#[test]
+fn bounded_pull_parts_preserve_full_grid_and_refuse_tiny_budget() {
+    let mut core = TerminalCore::new_with_queries(24, 80).unwrap();
+    let view = core.semantic_snapshot().unwrap();
+    assert!(SnapshotEncoder::with_payload_limit(&view, stamp(), 1, 1).is_err());
+    for limit in [2048, cc_desk_remote_record::snapshot_pull::MAX_PART] {
+        let mut total = 0usize;
+        for part in SnapshotEncoder::with_payload_limit(&view, stamp(), 1, limit).unwrap() {
+            let bytes = part.unwrap();
+            assert!(bytes.len() <= limit);
+            let Content::SnapshotPart(p) = decode(&bytes, 1).unwrap().content else {
+                panic!()
+            };
+            assert_eq!(usize::from(p.start), total);
+            total += p.cells.len();
+        }
+        assert_eq!(total, 1920);
+    }
+}
+
+fn single_cell_budget(view: &cc_desk_remote_terminal::SemanticSnapshot) -> usize {
+    let wire = SnapshotEncoder::new(view, stamp(), 1)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap();
+    let mut m = decode(&wire, 1).unwrap();
+    let Content::SnapshotPart(p) = &mut m.content else {
+        panic!()
+    };
+    p.cells.truncate(1);
+    cc_desk_remote_record::projection::encode(&m, 1)
+        .unwrap()
+        .len()
+}
+#[test]
+fn later_single_cell_failure_is_fused() {
+    let mut core = TerminalCore::new_with_queries(24, 80).unwrap();
+    let view = core.semantic_snapshot().unwrap();
+    let limit = single_cell_budget(&view);
+    let mut encoder = SnapshotEncoder::with_payload_limit(&view, stamp(), 1, limit).unwrap();
+    let mut emitted = 0;
+    let error = loop {
+        match encoder.next().expect("must reach offset-size failure") {
+            Ok(_) => {
+                emitted += 1;
+                assert!(emitted <= 10);
+            }
+            Err(e) => break e,
+        }
+    };
+    assert_eq!(error, cc_desk_remote_terminal::EncodingError::Budget);
+    assert_eq!(emitted, 10);
+    assert!(encoder.next().is_none());
+    assert!(encoder.next().is_none());
+}
+#[test]
+fn cumulative_small_parts_budget_failure_is_fused() {
+    let mut core = TerminalCore::new_with_queries(100, 240).unwrap();
+    let view = core.semantic_snapshot().unwrap();
+    let limit = single_cell_budget(&view) + 10;
+    let mut encoder = SnapshotEncoder::with_payload_limit(&view, stamp(), 1, limit).unwrap();
+    let mut bytes = 0;
+    let mut cells = 0;
+    let error = loop {
+        match encoder.next().expect("must exhaust cumulative budget") {
+            Ok(part) => {
+                bytes += part.len();
+                cells += 1;
+                assert!(bytes <= 4 * 1024 * 1024);
+            }
+            Err(e) => break e,
+        }
+    };
+    assert_eq!(error, cc_desk_remote_terminal::EncodingError::Budget);
+    assert!(bytes + limit > 4 * 1024 * 1024);
+    assert!(cells > 10 && cells < 24000);
+    assert!(encoder.next().is_none());
+}
