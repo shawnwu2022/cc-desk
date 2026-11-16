@@ -733,3 +733,19 @@ NeedsSettlement。自动续租及 outer heartbeat 仍未实现。
 
 下一步 B/C 仍须独立设计/审核：显式双端认证心跳能力、原 MUX writer/timer
 和固定 cutoff/任务托管。当前不能称无流量空闲或生产无人值守已交付。
+
+## B1 交付记录
+
+- live-v1 严格配置新增 RED（原解析拒绝）后 GREEN，旧模式断言不改。
+- 最终同源码 Native bind 19/19、配置 4/4；Node 配置 15/15；
+  新构建 WASM 经 Node Worker 原 TLS/Host BrowserData+BrowserPeer 84/84
+  （含子测试），57 个父 case。实际去重共 95 个父测试，名单保存
+  .audit/browser-live-final-testnames.txt，不重复累计 child wrapper。
+- 双方向删/换/重排认证能力、manual/live 不匹配、Controller 与 Observer
+  grant 拒绝、application/peer-only 边界以及原生命周期回归已覆盖。
+- security Native、client WASM、Host 严格 Clippy 与受影响 TS typecheck
+  通过。首非 test 编译 DataRole 路径失败保留，改显式类型路径后最终重建
+  WASM/Host 并重新跑全上述集合，不把旧产物算本轮结果。
+- 日志 browser-live-*-final*；真实平台是 Node Worker WASM/TLS，非手机、
+  Chromium 或 Relay 纯空闲验收。B2/C 未实现、没有激活 heartbeat/A。
+  既有全 Host PTY 发布门槛仍未解除。

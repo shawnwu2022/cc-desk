@@ -716,12 +716,20 @@ enum BindMode {
     Grant,
     Peer,
     ControlLease,
+    LiveControl,
 }
 fn management_capabilities(enabled: BindMode) -> Vec<String> {
     let values: &[&str] = match enabled {
         BindMode::Base => &["canonical-json"],
         BindMode::Grant => &["canonical-json", "grant-management-v1"],
         BindMode::Peer => &["canonical-json", "grant-management-v1", "peer-install-v1"],
+        BindMode::LiveControl => &[
+            "canonical-json",
+            appbind::CONTROL_LEASE_CAPABILITY,
+            appbind::DATA_KEEPALIVE_CAPABILITY,
+            "grant-management-v1",
+            "peer-install-v1",
+        ],
         BindMode::ControlLease => &[
             "canonical-json",
             appbind::CONTROL_LEASE_CAPABILITY,
@@ -741,6 +749,7 @@ fn management_negotiate(
         BindMode::Grant => appbind::negotiate_grant(h, c),
         BindMode::Peer => appbind::negotiate_peer(h, c),
         BindMode::ControlLease => appbind::negotiate_control_lease(h, c),
+        BindMode::LiveControl => appbind::negotiate_live_control(h, c),
     }
 }
 
@@ -977,4 +986,93 @@ pub async fn bind_client_control_lease_channel<
     .with_grant_management()
     .with_peer_install()
     .with_control_lease(NegotiatedControlLease(())))
+}
+
+// 仅本模块完成双向原 transcript 验证后可构造，不是授权或启动命令。
+#[derive(Clone, Copy)]
+pub(crate) struct NegotiatedDataKeepalive(());
+
+pub async fn bind_host_live_control_channel<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
+    pending: Pending<S>,
+    snapshot: HostSnapshot,
+) -> Result<crate::ManagedChannel<S>, BindError> {
+    native_factory()?;
+    let e = establish_host(
+        pending,
+        snapshot,
+        Hooks::default(),
+        vec![1],
+        BindMode::LiveControl,
+    )
+    .await?;
+    eligible(e.deadline, &e.token)?;
+    Ok(crate::ManagedChannel::new(
+        e.io,
+        e.token,
+        BoundContext(e.context),
+        e.binding,
+        Role::Host,
+    )
+    .with_grant_management()
+    .with_peer_install()
+    .with_control_lease(NegotiatedControlLease(()))
+    .with_data_keepalive(NegotiatedDataKeepalive(())))
+}
+
+pub async fn bind_client_live_control_channel<
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+>(
+    pending: Pending<S>,
+    trust: ClientTrust,
+) -> Result<crate::ManagedChannel<S>, BindError> {
+    native_factory()?;
+    let e = establish_client(
+        pending,
+        trust,
+        Hooks::default(),
+        vec![1],
+        BindMode::LiveControl,
+    )
+    .await?;
+    eligible(e.deadline, &e.token)?;
+    Ok(crate::ManagedChannel::new(
+        e.io,
+        e.token,
+        BoundContext(e.context),
+        e.binding,
+        Role::Client,
+    )
+    .with_grant_management()
+    .with_peer_install()
+    .with_control_lease(NegotiatedControlLease(()))
+    .with_data_keepalive(NegotiatedDataKeepalive(())))
+}
+
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+pub(crate) async fn browser_live_control_client<
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+>(
+    pending: Pending<S>,
+    trust: ClientTrust,
+) -> Result<crate::ManagedChannel<S>, BindError> {
+    let e = establish_client(
+        pending,
+        trust,
+        Hooks::default(),
+        vec![1],
+        BindMode::LiveControl,
+    )
+    .await?;
+    eligible(e.deadline, &e.token)?;
+    Ok(crate::ManagedChannel::new(
+        e.io,
+        e.token,
+        BoundContext(e.context),
+        e.binding,
+        Role::Client,
+    )
+    .with_grant_management()
+    .with_peer_install()
+    .with_control_lease(NegotiatedControlLease(()))
+    .with_data_keepalive(NegotiatedDataKeepalive(())))
 }

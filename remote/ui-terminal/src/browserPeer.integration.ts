@@ -41,3 +41,8 @@ test('BrowserControlLease_PeerOnlyOwnerRefusesManualMode_016',async()=>{
  const p=platform(),h=await host();let f:Awaited<ReturnType<typeof client>>|undefined;
  try{f=await client(h,{configuration:{peerInstall:{budgetMs:1000,controlLease:'manual-v1'}}});await assert.rejects(f.next('peerInstalled'));assert.equal(f.presentations(),0);}finally{await f?.dispose();await h.dispose();p();}
 });
+
+test('BrowserLiveControl_PeerOnlyOwnerRefusesLiveMode_017',async()=>{
+ const p=platform(),h=await host();let f:Awaited<ReturnType<typeof client>>|undefined;
+ try{f=await client(h,{configuration:{peerInstall:{budgetMs:1000,controlLease:'live-v1'}}});await assert.rejects(f.next('peerInstalled'));assert.equal(f.presentations(),0);}finally{await f?.dispose();await h.dispose();p();}
+});

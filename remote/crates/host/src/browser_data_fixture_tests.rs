@@ -84,6 +84,7 @@ async fn BrowserData_OriginalHostFixture_001() {
             "selftest",
             "normal",
             "manual",
+            "live",
             "manual-expired",
             "manual-auto",
             "reconnect",
@@ -159,7 +160,9 @@ async fn BrowserData_OriginalHostFixture_001() {
             )
             .unwrap(),
         };
-        let channel = if mode.starts_with("manual") {
+        let channel = if mode == "live" {
+            cc_desk_remote_security::bind_host_live_control_channel(pending, snapshot).await
+        } else if mode.starts_with("manual") {
             cc_desk_remote_security::bind_host_control_lease_channel(pending, snapshot).await
         } else {
             bind_host_peer_channel(pending, snapshot).await

@@ -664,3 +664,6 @@ async fn early_control_record_and_post_bind_data_never_dispatch() {
 
 #[path = "control_lease_bind_tests.rs"]
 mod control_lease;
+
+#[path = "live_control_bind_tests.rs"]
+mod live_control;

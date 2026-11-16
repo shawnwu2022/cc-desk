@@ -8,3 +8,9 @@ test('BrowserControlLease_ExplicitStrictMode_001',()=>{
  assert.equal(validBrowserPeerInstall({budgetMs:1000,unattended:true},'Controller'),false);
  assert.equal(validBrowserPeerInstall(Object.assign(Object.create({controlLease:'manual-v1'}),{budgetMs:1000}),'Controller'),false);
 });
+
+test('BrowserLiveControl_ExplicitModeNotManual_002',()=>{
+ assert.equal(validBrowserPeerInstall({budgetMs:1000,controlLease:'live-v1'},'Controller'),true);
+ assert.equal(validBrowserPeerInstall({budgetMs:1000,controlLease:'live-v1'},'Observer'),false);
+ for(const value of ['live-v2',{'live-v1':null}])assert.equal(validBrowserPeerInstall({budgetMs:1000,controlLease:value},'Controller'),false);
+});

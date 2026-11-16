@@ -74,6 +74,7 @@ pub struct ManagedChannel<S> {
     management_used: bool,
     peer_install: bool,
     control_lease: Option<crate::bind::NegotiatedControlLease>,
+    data_keepalive: Option<crate::bind::NegotiatedDataKeepalive>,
     transferred: bool,
 
     active: Arc<AtomicBool>,
@@ -97,6 +98,7 @@ impl<S> ManagedChannel<S> {
             management_used: false,
             peer_install: false,
             control_lease: None,
+            data_keepalive: None,
             transferred: false,
 
             active: Arc::new(AtomicBool::new(true)),
@@ -113,6 +115,16 @@ impl<S> ManagedChannel<S> {
     pub(crate) fn with_control_lease(mut self, fact: crate::bind::NegotiatedControlLease) -> Self {
         self.control_lease = Some(fact);
         self
+    }
+    pub(crate) fn with_data_keepalive(
+        mut self,
+        fact: crate::bind::NegotiatedDataKeepalive,
+    ) -> Self {
+        self.data_keepalive = Some(fact);
+        self
+    }
+    pub fn data_keepalive_negotiated(&self) -> bool {
+        self.data_keepalive.is_some()
     }
     pub fn control_lease_renew_enabled(&self) -> bool {
         self.control_lease.is_some()
@@ -140,6 +152,11 @@ impl<S> ManagedChannel<S> {
             return Err(DataError::Context);
         }
         access.check().map_err(DataError::Grant)?;
+        if self.data_keepalive.is_some()
+            && access.payload().role != cc_desk_remote_record::grant::DataRole::Controller
+        {
+            return Err(DataError::Role);
+        }
         self.access = Some(ChannelGrant::Remote(access.clone()));
         Ok(())
     }
@@ -155,6 +172,11 @@ impl<S> ManagedChannel<S> {
         }
         access.check().map_err(DataError::Grant)?;
         if self.grant_management && self.role == Role::Client {
+            return Err(DataError::Role);
+        }
+        if self.data_keepalive.is_some()
+            && access.role() != cc_desk_remote_record::grant::DataRole::Controller
+        {
             return Err(DataError::Role);
         }
         self.access = Some(ChannelGrant::Native(access.clone()));
@@ -191,6 +213,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> ManagedChannel<S> {
             crate::data_owner::PeerStart {
                 end: Some(crate::owner_clock::Instant(end.0)),
                 control_lease: self.control_lease,
+                data_keepalive: self.data_keepalive,
             },
         )?;
         self.transferred = true;
@@ -219,7 +242,8 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> ManagedChannel<S> {
             self.binding,
             self.role,
         )
-        .with_control_lease(self.control_lease);
+        .with_control_lease(self.control_lease)
+        .with_data_keepalive(self.data_keepalive);
         crate::browser_wasm_owner::browser_peer::run(
             self.io.as_mut().ok_or(DataError::Closed)?,
             authority,
@@ -309,6 +333,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> ManagedChannel<S> {
             crate::data_owner::PeerStart {
                 end: peer_end,
                 control_lease: self.control_lease,
+                data_keepalive: self.data_keepalive,
             },
         )?;
         self.transferred = true;

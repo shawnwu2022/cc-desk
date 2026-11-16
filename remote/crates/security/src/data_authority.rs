@@ -31,6 +31,7 @@ pub struct BoundDataAuthority {
     binding: [u8; 32],
     role: Role,
     control_lease: Option<crate::bind::NegotiatedControlLease>,
+    data_keepalive: Option<crate::bind::NegotiatedDataKeepalive>,
 }
 impl std::fmt::Debug for BoundDataAuthority {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -54,6 +55,7 @@ impl BoundDataAuthority {
             binding,
             role,
             control_lease: None,
+            data_keepalive: None,
         }
     }
     pub(crate) fn with_control_lease(
@@ -62,6 +64,16 @@ impl BoundDataAuthority {
     ) -> Self {
         self.control_lease = fact;
         self
+    }
+    pub(crate) fn with_data_keepalive(
+        mut self,
+        fact: Option<crate::bind::NegotiatedDataKeepalive>,
+    ) -> Self {
+        self.data_keepalive = fact;
+        self
+    }
+    pub fn data_keepalive_negotiated(&self) -> bool {
+        self.data_keepalive.is_some()
     }
     pub fn control_lease_renew_enabled(&self) -> bool {
         self.control_lease.is_some()

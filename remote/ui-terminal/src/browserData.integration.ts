@@ -258,3 +258,14 @@ test('AutoLease_RealWasmFiveSecondTickAndOriginalRetirement_001',async()=>{
   assert.deepEqual(renewals,['1','2']);assert.equal(terminal.autoRenewalState,'Waiting');await terminal.window();const receipt=await terminal.submit('34'.repeat(16),'1',new TextEncoder().encode('TEST_ONLY_AUTO_TICK'));assert.equal(receipt.message,'InputReceipt');assert.equal(receipt.outcome,'HostWritten');assert.equal(terminal.phase,'NeedsSettlement');await terminal.settle();await terminal.stopAutoRenewal();assert.equal(terminal.autoRenewalState,'Stopped');const effects=await h.wait('effects');assert.equal(effects.writeCount,1);assert.equal(effects.bytes,Buffer.from('TEST_ONLY_AUTO_TICK').toString('hex'));
  }finally{terminal?.disconnect();await f?.dispose();await h.dispose();p();}
 });
+
+test('BrowserLiveControl_AuthenticatedWasmApplicationMode_001',async()=>{
+ const p=platform(),h=await host('live');let f:Awaited<ReturnType<typeof client>>|undefined;
+ try{f=await client(h,{configuration:{peerInstall:{budgetMs:1000,controlLease:'live-v1'}}});const descriptor=await f.app.descriptor;assert.equal(descriptor.role,'Controller');await f.app.close();await f.retired;const effects=await h.wait('effects');assert.equal(effects.writeCount,0);}finally{await f?.dispose();await h.dispose();p();}
+});
+test('BrowserLiveControl_AuthenticatedModeMismatchCloses_002',async(t)=>{
+ for(const serverManual of [false,true])await t.test(String(serverManual),async()=>{
+  const p=platform(),h=await host(serverManual?'live':'manual');let f:Awaited<ReturnType<typeof client>>|undefined;
+  try{f=await client(h,{configuration:{peerInstall:{budgetMs:1000,controlLease:serverManual?'manual-v1':'live-v1'}}});await assert.rejects(f.app.descriptor);assert.equal(f.presentations(),0);await f.retired;}finally{await f?.dispose();await h.dispose();p();}
+ });
+});

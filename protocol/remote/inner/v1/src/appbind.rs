@@ -456,3 +456,22 @@ pub fn negotiate_control_lease(
     client.required_capabilities.remove(1);
     negotiate_peer(&host, &client)
 }
+
+// 独立精确协商；裁剪副本只复用校验，认证仍使用原始 transcript。
+pub const DATA_KEEPALIVE_CAPABILITY: &str = "data-keepalive-v1";
+pub fn negotiate_live_control(h: &HostOffer, c: &ClientOffer) -> Result<HostSelection, CodecError> {
+    let required = [
+        "canonical-json",
+        CONTROL_LEASE_CAPABILITY,
+        DATA_KEEPALIVE_CAPABILITY,
+        crate::grant_management::CAPABILITY,
+        crate::peer_install::CAPABILITY,
+    ];
+    if h.required_capabilities != required || c.required_capabilities != required {
+        return Err(CodecError::Unsupported);
+    }
+    let (mut host, mut client) = (h.clone(), c.clone());
+    host.required_capabilities.remove(2);
+    client.required_capabilities.remove(2);
+    negotiate_control_lease(&host, &client)
+}

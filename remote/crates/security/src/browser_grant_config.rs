@@ -42,11 +42,13 @@ struct PeerInstall {
 #[derive(Clone, Copy)]
 pub(super) enum ControlLeaseMode {
     Manual,
+    Live,
 }
 impl<'de> Deserialize<'de> for ControlLeaseMode {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         match String::deserialize(d)?.as_str() {
             "manual-v1" => Ok(Self::Manual),
+            "live-v1" => Ok(Self::Live),
             _ => Err(serde::de::Error::custom("unsupported control lease mode")),
         }
     }
@@ -253,5 +255,17 @@ mod tests {
         let mut extra = old;
         extra["peerInstall"]["unattended"] = true.into();
         assert!(parse(&extra).is_err());
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn BrowserLiveControl_ExplicitControllerMode_011() {
+        let mut value = exact();
+        value["peerInstall"]["controlLease"] = "live-v1".into();
+        assert!(matches!(
+            parse(&value).unwrap().control_lease,
+            Some(ControlLeaseMode::Live)
+        ));
+        value["role"] = "Observer".into();
+        assert!(parse(&value).is_err());
     }
 }

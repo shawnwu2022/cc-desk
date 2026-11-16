@@ -674,3 +674,20 @@ requestStop，不能 await 自己。外部 close 的同步重入发生前已固�
 本片真实 Node-WASM TLS→Host 只验五秒自动 tick、原精确输入/结算和退休。
 期间 Snapshot 是测试活动，不是 heartbeat；不包括 outer Relay 数据心跳、
 纯空闲、手机后台、生产供应/UI 或三十天 endurance。manual-v1 不代表心跳协商。
+
+## B1：独立 LiveControl 认证事实（机制未激活）
+
+显式 live-v1 选择新的 BindMode::LiveControl，必须双方精确提供
+control-lease-renew-v1 与 data-keepalive-v1。协商裁剪副本仅复用旧校验；
+MAC/transcript/binding 始终使用原完整 offer。旧 manual-v1、缺省 Peer
+和 one-shot 不升级，mixed mode 不降级。
+
+NegotiatedDataKeepalive 仅 bind 模块完成认证后构造，沿原 ManagedChannel、
+PeerStart、BoundDataAuthority 传递。getter 只是协商事实，不能替代当前
+authority、Controller grant、Installed 或截止核验。Native grant install
+与 Browser 严格配置均拒 Observer；Browser 还必须 application 模式。
+配置不是授权、不由 pairing 推断，原生命周期封口不变。
+
+本片没有心跳 timer/transport activation，没有自动启动 A，没有 UI 或生产
+授权。B2 后续提供一次 Dormant 机制；C 仍需另审原 Installed 与当前授权
+事实交接，不能拿 peer_deadline 或布尔 getter 激活。

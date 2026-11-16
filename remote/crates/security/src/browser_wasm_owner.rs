@@ -241,7 +241,12 @@ fn start(
             };
             if let Some(mut config) = grant {
                 let trust = trust.ok_or(-7)?;
-                let channel = if config.control_lease.is_some() {
+                let channel = if matches!(
+                    config.control_lease,
+                    Some(crate::browser_grant_config::ControlLeaseMode::Live)
+                ) {
+                    crate::bind::browser_live_control_client(pending, trust).await
+                } else if config.control_lease.is_some() {
                     crate::bind::browser_control_lease_client(pending, trust).await
                 } else if config.peer_budget.is_some() {
                     crate::bind::browser_peer_client(pending, trust).await
