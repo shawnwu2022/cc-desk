@@ -151,6 +151,8 @@ impl SocketCustody {
             return Err(HostNetworkError::Authority);
         }
         let keepalive = start.keepalive().ok_or(HostNetworkError::Closed)?;
+        // 资源采样与 Owner 预算绑定先于 launch/service 锁，不在锁内回调。
+        let budget = start.budget().map_err(|_| HostNetworkError::Authority)?;
         #[cfg(test)]
         let mut build = build;
         #[cfg(test)]
@@ -199,8 +201,9 @@ impl SocketCustody {
         let task = tauri::async_runtime::spawn(async move {
             let mut wire = wire::NetworkWire::new();
             let mut transferred = false;
-            let end = Instant::now() + Duration::from_secs(8);
-            let clock = start.clock();
+            let lifetime_end = Instant::from_std(budget.deadline());
+            let end = (Instant::now() + Duration::from_secs(8)).min(lifetime_end);
+            let clock = budget.clock();
             let initially_closed = *stopped.borrow();
             let setup = async {
                 go.await.map_err(|_| HostNetworkError::Unknown)?;
@@ -217,7 +220,7 @@ impl SocketCustody {
                 transferred = true;
                 clock.now_ms().map_err(|_| HostNetworkError::Authority)?;
                 let channel = wire
-                    .setup(material, connector, clock.clone(), end, None)
+                    .setup_delegated(material, connector, &budget, end)
                     .await?;
                 clock.now_ms().map_err(|_| HostNetworkError::Authority)?;
                 *original.original_channel.lock() = Some(channel.clone());
@@ -242,6 +245,11 @@ impl SocketCustody {
                 tokio::select! {biased;
                     _=stopped.changed()=>Ok(()),
                     result=channel.wait_closed_checked()=>result.map(|_|()).map_err(|_|HostNetworkError::Unknown),
+                    _=tokio::time::sleep_until(lifetime_end)=>{ let _ = budget.check(); Ok(()) },
+                    _=async {
+                        let mut tick = tokio::time::interval(Duration::from_millis(100));
+                        loop { tick.tick().await; if budget.check().is_err() { break; } }
+                    }=>Ok(()),
                 }
             } else {
                 result
@@ -299,5 +307,12 @@ impl SocketCustody {
         } else {
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+impl SocketCustody {
+    pub(crate) fn test_original_channel(&self) -> Option<Arc<RunningChannel>> {
+        self.original_channel.lock().clone()
     }
 }

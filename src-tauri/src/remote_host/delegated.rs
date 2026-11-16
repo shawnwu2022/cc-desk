@@ -391,6 +391,17 @@ impl DelegatedSocketStart {
                 .as_ref()
                 .is_some_and(|original| Arc::ptr_eq(original, &operation))
     }
+    pub(crate) fn budget(
+        &self,
+    ) -> Result<crate::remote_unattended::capability::network::NetworkBudget, SafeError> {
+        let admission = self
+            .admission
+            .as_ref()
+            .ok_or_else(|| crate::cli::profiles::error("REMOTE_HOST_LOCKED"))?;
+        self.clock
+            .budget(admission.original_network_attempt())
+            .map_err(|_| crate::cli::profiles::error("REMOTE_HOST_LOCKED"))
+    }
     pub(crate) fn clock(&self) -> Arc<dyn cc_desk_remote_security::GrantClock> {
         self.clock.clone()
     }

@@ -537,3 +537,34 @@ one-shot 行为不变。challenge 保留原 1..900000ms 限制，再与固定 ce
 此切片只是 security 的收紧能力，尚未接入 App delegated wire；不是更长
 窗口已可使用的声明。后续必须由 sealed 原 attempt 提供同域固定 deadline，
 禁止把 DTO、当前 wall+重新完整窗口或解析持久记录当权限。
+
+## 预算基础 App 接线与尚未完成的长期输入（2026-11-16）
+
+本地 typed effect 仍为 60 秒；sealed network attempt 最多 900 秒，均受原
+30 天绝对总截止约束。创建时固定 wall 与 monotonic 双截止，不因握手、活动或
+材料迟到重算完整窗口。NetworkBudget 只能从原 attempt 生成，与固定 GrantClock
+同 Arc 绑定；delegated wire 必须安装 ceiling，不能退回无 ceiling 的旧入口。
+原 one-shot 路径不变，bootstrap 仍最多 8 秒，本轮真实 fixture 的 outer MUX 2 秒 IO 预算未放宽。
+
+只有总授权、设备/资源、revision 和时间仍有效时，单代结束才分类为
+AttemptElapsed：封旧代并保留 live/Retiring，必须完整原任务 receipt 才能续代。
+总截止、时钟回退、资源失效和 Unknown 永久关闭。原 network coordinator 内
+固定截止唤醒及 100 ms 检查共用原取消/回收；不是新无主 timer，也不承诺同步
+立即撤销或操作系统调度下的硬实时上界。
+
+真实 localhost Relay 验证自然短 grant 到期、完整 receipt 后第二代、总截止
+不可续、近 8 秒材料/握手仍受固定 ceiling、迟到材料真实 join 后拒绝准入。
+15 分钟边界仅由受控测试时钟验证，不是实际等待 15 分钟或 Relay 自动续租。
+长测临时公开合成 Relay policy 显式为 120 秒，默认 30 秒不变。
+
+**真实超过 60 秒远端输入尚未通过，不能称为长期连接交付。** 原无流量通道
+约 1,978 ms 以 Io 结束；Snapshot+ACK 每 500 ms 可维持 61 秒活动，但随后
+Window 失败。Host 原 ControlState 控制 lease 独立只有 15 秒，Snapshot 不续租；
+已有 renew_lease 仅 crate 内部接口，当前认证 wire 并无续租消息。新增受控
+15,001 ms 测试证明 grant 仍有效且快照成功时 Window 仍被拒绝，本机输入保留。
+不通过 fixture 私调 renew、不延长 lease、不重置输入 journal 来掩盖缺口。
+
+后续需分别设计双端有界 outer 心跳和已认证控制 lease 续租：前者只维持 IO，
+后者仍受 exact lease/fence、原设备/会话、连续序号与固定 grant/attempt 截止。
+本阶段未接生产授权、供钥、UI、自动重试，也未验证真实手机或 30 天持续运行。
+原全库 PTY 发布门槛未消除，不进行 push/merge/RC 发布。

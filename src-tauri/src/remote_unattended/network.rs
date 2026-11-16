@@ -2,6 +2,11 @@
 use super::*;
 use cc_desk_remote_security::{GrantClock, GrantError};
 
+enum NetworkSample {
+    Live(u64),
+    AttemptElapsed,
+}
+
 pub(crate) struct NetworkAttempt {
     policy: Arc<Delegation>,
     ticket: Attempt,
@@ -18,7 +23,7 @@ impl Delegation {
         if current.0.role != Role::Control || !resource() {
             return Err(Denied::Locked);
         }
-        let ticket = self.begin(current)?.0;
+        let ticket = self.begin_window(current, AttemptWindow::Network)?;
         let attempt = Arc::new(NetworkAttempt {
             policy: self.clone(),
             ticket,
@@ -76,7 +81,7 @@ impl NetworkAttempt {
             && self.now_ms().is_ok()
             && authority.check().is_ok()
     }
-    fn sample_checked(&self) -> Result<u64, GrantError> {
+    fn sample_checked(&self) -> Result<NetworkSample, GrantError> {
         if self.closed.load(Ordering::Acquire) || self.policy.closed.load(Ordering::Acquire) {
             return Err(GrantError::Closed);
         }
@@ -98,22 +103,42 @@ impl NetworkAttempt {
             return Err(GrantError::Closed);
         }
         let sample = self.policy.sample().map_err(|_| GrantError::Clock)?;
-        self.policy
-            .owner
-            .check_attempt_locked(&mut state, &self.ticket, &self.current.0, sample, false)
-            .map_err(|_| {
-                self.closed.store(true, Ordering::Release);
-                GrantError::Expired
-            })?;
+        // 只有固定总授权和精确票据仍有效时，单代结束才允许等待 receipt。
+        if Owner::check(&mut state, &self.current.0, sample).is_err()
+            || !self.policy.owner.same_attempt(&state, &self.ticket)
+            || self.ticket.epoch != state.epoch
+            || self.ticket.revision != state.revision
+        {
+            self.policy.request_revoke();
+            self.closed.store(true, Ordering::Release);
+            return Err(GrantError::Revoked);
+        }
+        let live = state.live.as_mut().ok_or(GrantError::Closed)?;
+        if sample.monotonic >= live.end || sample.wall_ms >= live.wall_end {
+            live.phase = Phase::Retiring;
+            self.closed.store(true, Ordering::Release);
+            // 关闭本代，不清 live，也不重置 domain。
+            return Ok(NetworkSample::AttemptElapsed);
+        }
+        if !matches!(live.phase, Phase::Starting | Phase::Connected) {
+            self.closed.store(true, Ordering::Release);
+            if live.phase == Phase::Unknown {
+                self.policy.request_revoke();
+            }
+            return Err(GrantError::Closed);
+        }
         if self.closed.load(Ordering::Acquire) || self.policy.closed.load(Ordering::Acquire) {
             return Err(GrantError::Closed);
         }
-        Ok(sample.wall_ms)
+        Ok(NetworkSample::Live(sample.wall_ms))
     }
 }
 impl GrantClock for NetworkAttempt {
     fn now_ms(&self) -> Result<u64, GrantError> {
-        self.sample_checked()
+        match self.sample_checked()? {
+            NetworkSample::Live(now) => Ok(now),
+            NetworkSample::AttemptElapsed => Err(GrantError::Closed),
+        }
     }
 }
 impl Drop for NetworkAttempt {
@@ -485,7 +510,12 @@ impl NetworkClock {
                     sequence: old.ticket.sequence,
                 },
             )?;
-            let ticket = policy.owner.begin_locked(&mut state, &current.0, now)?;
+            let ticket = policy.owner.begin_window_locked(
+                &mut state,
+                &current.0,
+                now,
+                AttemptWindow::Network,
+            )?;
             let next = Arc::new(NetworkAttempt {
                 policy: policy.clone(),
                 ticket,
@@ -549,3 +579,129 @@ impl Delegation {
         self.owner.state.lock().unwrap().gate != Gate::Enabled
     }
 }
+
+// 原生固定预算只能由同域、同选中 attempt 产生；没有公开 from_parts 或 DTO 入口。
+pub(crate) struct NetworkBudget {
+    domain: Arc<NetworkClock>,
+    attempt: Arc<NetworkAttempt>,
+    wall_end: u64,
+    end: Instant,
+}
+impl NetworkClock {
+    pub(crate) fn budget(
+        self: &Arc<Self>,
+        attempt: Arc<NetworkAttempt>,
+    ) -> Result<NetworkBudget, Denied> {
+        attempt.now_ms().map_err(|_| Denied::Locked)?;
+        let selected = self.selected.lock().map_err(|_| Denied::Unknown)?;
+        if self.is_closed()
+            || !selected
+                .as_ref()
+                .and_then(std::sync::Weak::upgrade)
+                .is_some_and(|a| Arc::ptr_eq(&a, &attempt))
+        {
+            return Err(Denied::Stale);
+        }
+        let mut state = attempt
+            .policy
+            .owner
+            .state
+            .lock()
+            .map_err(|_| Denied::Unknown)?;
+        let sample = attempt.policy.sample()?;
+        attempt.policy.owner.check_attempt_locked(
+            &mut state,
+            &attempt.ticket,
+            &attempt.current.0,
+            sample,
+            false,
+        )?;
+        if attempt.closed.load(Ordering::Acquire)
+            || attempt.policy.closed.load(Ordering::Acquire)
+            || self.is_closed()
+        {
+            return Err(Denied::Locked);
+        }
+        let live = state.live.as_ref().ok_or(Denied::Stale)?;
+        let (wall_end, end) = (live.wall_end, live.end);
+        drop(state);
+        drop(selected);
+        Ok(NetworkBudget {
+            domain: self.clone(),
+            attempt,
+            wall_end,
+            end,
+        })
+    }
+}
+impl NetworkBudget {
+    pub(crate) fn clock(&self) -> Arc<dyn GrantClock> {
+        self.domain.clone()
+    }
+    pub(crate) fn deadline(&self) -> Instant {
+        self.end
+    }
+    pub(crate) fn check(&self) -> Result<(), GrantError> {
+        self.domain.now_ms()?;
+        self.attempt.now_ms()?;
+        let selected = self
+            .domain
+            .selected
+            .lock()
+            .map_err(|_| GrantError::Closed)?;
+        if self.domain.is_closed()
+            || self.attempt.closed.load(Ordering::Acquire)
+            || !selected
+                .as_ref()
+                .and_then(std::sync::Weak::upgrade)
+                .is_some_and(|a| Arc::ptr_eq(&a, &self.attempt))
+        {
+            return Err(GrantError::Closed);
+        }
+        Ok(())
+    }
+    pub(crate) fn limit_gate(
+        &self,
+        gate: &mut cc_desk_remote_security::GrantGate,
+    ) -> Result<(), GrantError> {
+        self.check()?;
+        gate.limit_expiry(&self.clock(), self.wall_end)
+    }
+}
+
+#[cfg(test)]
+impl Delegation {
+    pub(crate) fn test_budget_end(&self) -> u64 {
+        self.owner
+            .state
+            .lock()
+            .unwrap()
+            .live
+            .as_ref()
+            .unwrap()
+            .wall_end
+    }
+    pub(crate) fn test_budget_progress(&self) {
+        assert!(self.owner.state.lock().unwrap().live.is_none());
+        self.progress_clock.store(true, Ordering::Release);
+    }
+    pub(crate) fn test_budget_total(&self, total_ms: u64) {
+        assert!(total_ms > 0 && total_ms <= MAX_DELEGATION_MS);
+        let sample = self.sample().unwrap();
+        let mut state = self.owner.state.lock().unwrap();
+        assert!(state.live.is_none());
+        state.cutoff_ms = sample.wall_ms + total_ms;
+        state.end = Some(sample.monotonic + Duration::from_millis(total_ms));
+    }
+    pub(crate) fn test_budget_advance(&self, elapsed_ms: u64) {
+        if let Clock::Test(clock) = &self.clock {
+            let mut clock = clock.lock().unwrap();
+            let sample = clock.as_mut().unwrap();
+            sample.wall_ms += elapsed_ms;
+            sample.monotonic += Duration::from_millis(elapsed_ms);
+        }
+    }
+}
+#[cfg(test)]
+#[path = "network_budget_tests.rs"]
+mod budget_tests;

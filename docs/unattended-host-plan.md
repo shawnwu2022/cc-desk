@@ -575,3 +575,31 @@ unattended-budget-security-clippy-first.log。最初漏 experimental 的 0 项�
 及测试 fixture 可见性编译失败保留但不计入成功。独立只读审查无阻塞。
 此提交限定 ceiling 能力；App fixed window/AttemptElapsed/wire 接线和真实
 超过60秒输入仍在后续切片，不能声称已完成长期连接。
+
+## 预算 App 基础收口（2026-11-16，长期输入仍未完成）
+
+- 最终同源码：NetworkBudget 短测 10/10（显式 --skip 已失败的
+  NetworkBudget_Real61SecondsInputThenElapsedReceiptRenewal_005），
+  remote_unattended 56/56、Delegated 44/44、Service 18/18、network 21/21。
+  原 one-shot HostStart 七项按历史各 fresh --exact 进程执行，7/7 通过。
+  实际父用例名称去重 142 项，保存在
+  .audit/unattended-budget-final-testnames.txt；不重复计算包含关系或子进程。
+- 命令沿用 cargo test --offline --locked --manifest-path src-tauri/Cargo.toml
+  --lib --features remote-host FILTER -- --test-threads=1；HostStart 加 --exact。
+  最终 strict 非 test cargo clippy 同 manifest/features -- -D warnings 通过，
+  日志 unattended-budget-app-clippy-final.log。git diff --check 通过。
+- 保留原始失败：network-first/real61-second 为长测快照 Closed；IO 诊断
+  unattended-budget-idle-diagnostic-first.log 在 1,978 ms 记录 Ok(Io)。
+  network-second 的 fixture 总截止分类、毫秒舍入、重复请求序号与尾输入问题
+  已精确修正；network-third 为 9/10，61 秒持续 Snapshot+ACK 后 Window
+  Deadline，子进程 62.98 秒。该长测失败断言原样保留，不标通过或忽略。
+- 新 ControlLease15SecondsStillLimitsWindow 以原测试时钟推进 15,001 ms，
+  证明仍有效 grant/快照不等于控制 lease；Window 拒绝且原任务回收、本机
+  native 输入正常。长期输入缺少认证 wire 续租，不能靠内部 fixture 直调。
+- HostStart 合批日志 unattended-budget-final-HostStart_.log 保留 6/7，
+  phone-first install 失败；原进程终身唯一工厂要求隔离，随后七个独立 exact
+  日志各 1/1。不据隔离成功宣称合批或全套测试通过。
+- 最终短测日志 unattended-budget-network-final-short.log；其他聚焦回归
+  使用 unattended-budget-final-*。仅预算安全基础可收口，不是完整长期能力。
+  后续先审查显式双端能力协商、受限 lease 续租和独立 outer 心跳，再实现。
+  生产授权/UI、真实手机、长空闲、30 天 endurance 及原 PTY 发布门槛仍未验收。

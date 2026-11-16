@@ -60,6 +60,18 @@ impl WireInputs {
         }
     }
 }
+enum WireAuthority<'a> {
+    Original(Arc<dyn GrantClock>),
+    Delegated(&'a crate::remote_unattended::capability::network::NetworkBudget),
+}
+impl WireAuthority<'_> {
+    fn clock(&self) -> Arc<dyn GrantClock> {
+        match self {
+            Self::Original(clock) => clock.clone(),
+            Self::Delegated(budget) => budget.clock(),
+        }
+    }
+}
 pub(super) struct NetworkWire {
     started: bool,
     cancel: security::CancelHandle,
@@ -96,6 +108,41 @@ impl NetworkWire {
         end: Instant,
         approval_stop: Option<&NativeApprovalStop>,
     ) -> Result<Arc<RunningChannel>, HostNetworkError> {
+        self.setup_inner(
+            inputs,
+            connector,
+            WireAuthority::Original(clock),
+            end,
+            approval_stop,
+        )
+        .await
+    }
+    pub(super) async fn setup_delegated(
+        &mut self,
+        inputs: WireInputs,
+        connector: Connector,
+        budget: &crate::remote_unattended::capability::network::NetworkBudget,
+        end: Instant,
+    ) -> Result<Arc<RunningChannel>, HostNetworkError> {
+        budget.check().map_err(|_| HostNetworkError::Authority)?;
+        self.setup_inner(
+            inputs,
+            connector,
+            WireAuthority::Delegated(budget),
+            end,
+            None,
+        )
+        .await
+    }
+    async fn setup_inner(
+        &mut self,
+        inputs: WireInputs,
+        connector: Connector,
+        authorization: WireAuthority<'_>,
+        end: Instant,
+        approval_stop: Option<&NativeApprovalStop>,
+    ) -> Result<Arc<RunningChannel>, HostNetworkError> {
+        let clock = authorization.clock();
         if self.started {
             return Err(HostNetworkError::Closed);
         }
@@ -211,6 +258,11 @@ impl NetworkWire {
         authority
             .require_browser(inputs.browser)
             .map_err(|_| HostNetworkError::Grant)?;
+        if let WireAuthority::Delegated(budget) = &authorization {
+            budget
+                .limit_gate(&mut authority)
+                .map_err(|_| HostNetworkError::Authority)?;
+        }
         self.gate = Some(authority);
         let mut managed = managed
             .grant_host(

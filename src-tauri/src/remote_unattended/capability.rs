@@ -14,6 +14,8 @@ pub(crate) struct Delegation {
     closed: Arc<AtomicBool>,
     uncertain: AtomicBool,
     clock: Clock,
+    #[cfg(test)]
+    progress_clock: AtomicBool,
 }
 pub(crate) struct Ticket(Attempt);
 #[derive(Clone)]
@@ -72,7 +74,16 @@ impl EffectFence {
 }
 impl Delegation {
     fn sample(&self) -> Result<Sample, Denied> {
-        self.clock.sample().inspect_err(|_| self.request_revoke())
+        let sample = self.clock.sample().inspect_err(|_| self.request_revoke())?;
+        #[cfg(test)]
+        if self.progress_clock.load(Ordering::Acquire) {
+            let elapsed = Instant::now().saturating_duration_since(sample.monotonic);
+            return Ok(Sample {
+                wall_ms: sample.wall_ms + elapsed.as_millis() as u64,
+                monotonic: sample.monotonic + elapsed,
+            });
+        }
+        Ok(sample)
     }
     pub(crate) fn commit(
         &self,
@@ -143,6 +154,13 @@ impl Delegation {
         }
     }
     pub(crate) fn begin(&self, current: &VerifiedBinding) -> Result<Ticket, Denied> {
+        self.begin_window(current, AttemptWindow::Local).map(Ticket)
+    }
+    fn begin_window(
+        &self,
+        current: &VerifiedBinding,
+        window: AttemptWindow,
+    ) -> Result<Attempt, Denied> {
         if self.closed.load(Ordering::Acquire) {
             return Err(Denied::Locked);
         }
@@ -159,7 +177,7 @@ impl Delegation {
         }
         let ticket = self
             .owner
-            .begin_locked(&mut s, &current.0, self.sample()?)
+            .begin_window_locked(&mut s, &current.0, self.sample()?, window)
             .inspect_err(|error| {
                 if *error != Denied::Busy {
                     self.request_revoke();
@@ -168,7 +186,7 @@ impl Delegation {
         if self.closed.load(Ordering::Acquire) {
             return Err(Denied::Locked);
         }
-        Ok(Ticket(ticket))
+        Ok(ticket)
     }
     fn with_effect<T>(
         &self,
@@ -265,6 +283,7 @@ impl Delegation {
                 closed: Arc::new(AtomicBool::new(false)),
                 uncertain: AtomicBool::new(false),
                 clock: Clock::Test(Arc::new(Mutex::new(Ok(now)))),
+                progress_clock: AtomicBool::new(false),
             }),
             VerifiedBinding(binding),
         )

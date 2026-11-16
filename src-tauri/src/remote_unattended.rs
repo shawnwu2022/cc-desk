@@ -8,6 +8,20 @@ use std::time::{Duration, Instant};
 
 const MAX_DELEGATION_MS: u64 = 30 * 24 * 60 * 60 * 1000;
 const ATTEMPT_MS: u64 = 60_000;
+const NETWORK_ATTEMPT_MS: u64 = 900_000;
+#[derive(Clone, Copy)]
+enum AttemptWindow {
+    Local,
+    Network,
+}
+impl AttemptWindow {
+    fn millis(self) -> u64 {
+        match self {
+            Self::Local => ATTEMPT_MS,
+            Self::Network => NETWORK_ATTEMPT_MS,
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Binding {
@@ -89,6 +103,7 @@ struct Live {
     sequence: u64,
     phase: Phase,
     end: Instant,
+    wall_end: u64,
 }
 struct State {
     gate: Gate,
@@ -216,6 +231,15 @@ impl Owner {
         binding: &Binding,
         now: Sample,
     ) -> Result<Attempt, Denied> {
+        self.begin_window_locked(s, binding, now, AttemptWindow::Local)
+    }
+    fn begin_window_locked(
+        &self,
+        s: &mut State,
+        binding: &Binding,
+        now: Sample,
+        window: AttemptWindow,
+    ) -> Result<Attempt, Denied> {
         Self::check(s, binding, now)?;
         if s.live.is_some() {
             return Err(Denied::Busy);
@@ -224,10 +248,23 @@ impl Owner {
             Self::close(s, Gate::Revoked);
             return Err(Denied::Bounds);
         };
-        let remaining = s.cutoff_ms - now.wall_ms;
+        let remaining = (s.cutoff_ms - now.wall_ms).min(
+            u64::try_from(
+                s.end
+                    .ok_or(Denied::Locked)?
+                    .saturating_duration_since(now.monotonic)
+                    .as_millis(),
+            )
+            .map_err(|_| Denied::Bounds)?,
+        );
+        let duration = window.millis().min(remaining);
+        if duration == 0 {
+            return Err(Denied::Locked);
+        }
+        let wall_end = now.wall_ms.checked_add(duration).ok_or(Denied::Bounds)?;
         let end = now
             .monotonic
-            .checked_add(Duration::from_millis(ATTEMPT_MS.min(remaining)))
+            .checked_add(Duration::from_millis(duration))
             .ok_or(Denied::Bounds)?
             .min(s.end.ok_or(Denied::Locked)?);
         s.sequence = sequence;
@@ -235,6 +272,7 @@ impl Owner {
             sequence,
             phase: Phase::Starting,
             end,
+            wall_end,
         });
         Ok(Attempt {
             owner: self.identity.clone(),
@@ -275,7 +313,7 @@ impl Owner {
             return Err(Denied::Stale);
         }
         let live = s.live.as_mut().ok_or(Denied::Stale)?;
-        if now.monotonic >= live.end {
+        if now.monotonic >= live.end || now.wall_ms >= live.wall_end {
             live.phase = Phase::Retiring;
         }
         match live.phase {
