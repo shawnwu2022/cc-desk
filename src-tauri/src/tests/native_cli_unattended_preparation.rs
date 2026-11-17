@@ -2035,3 +2035,593 @@ async fn UnattendedApp_RejectionCleanupBlocksReadyAndUnknownIsSticky_008() {
 fn UnattendedApp_RejectedUnknownStillDrivesOriginalQuarantine_009() {
     unattended_app_unknown_case(true);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn UnattendedReservation_ExitDuringEnabledStartRetainsOriginalJoin_001() {
+    use crate::remote_unattended_store::service::pending::{PendingStart, StartKeys};
+    let transports = Arc::new(TerminalTransports::new());
+    let supervisor = Arc::new(NativeRunSupervisor::new(transports.clone()));
+    let f = Fixture::with_runtime_environment("input", supervisor, transports, true);
+    let native = Arc::new(NativeRuntime::with_owned_components_for_test(
+        f.service.clone(),
+        f.transports.clone(),
+        f.supervisor.clone(),
+    ));
+    struct RuntimeStop(Arc<NativeRuntime>);
+    impl Drop for RuntimeStop {
+        fn drop(&mut self) {
+            self.0.shutdown();
+        }
+    }
+    let _runtime_stop = RuntimeStop(native.clone());
+    let events = f.events.clone();
+    native
+        .start_managed_run(&f.caller, &f.request, |_| {
+            f.routes.bind(1, Box::new(|| Ok(())), || {
+                Ok(Channel::new(move |body| {
+                    if let InvokeResponseBody::Json(text) = body {
+                        events.lock().push(serde_json::from_str(&text).unwrap());
+                    }
+                    Ok(())
+                }))
+            })
+        })
+        .unwrap();
+    let startup_end = Instant::now() + Duration::from_secs(10);
+    while f.child_reports() == 0 || f.events.lock().is_empty() {
+        assert!(Instant::now() < startup_end);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let admission = admit(&f);
+    let pair_dir = store_root();
+    let pairing = Arc::new(synthetic_file_store(pair_dir.path()).unwrap());
+    let (approval, mut consent) = final_consent(&pairing, &admission);
+    let keys = crate::native_crypto::single_run_test_keys(consent.take_supplier().unwrap());
+    let durable_dir = store_root();
+    let path = std::path::PathBuf::from(durable_dir.path().to_string_lossy().replace('/', "\\"));
+    let backend =
+        crate::version_history::windows::unattended_store::WindowsUnattendedBackend::create_new(
+            &path,
+        )
+        .unwrap();
+    let close = consent.control();
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let mut pending = PendingStart::new(
+        backend,
+        SingleRunSealer,
+        consent,
+        admission,
+        StartKeys {
+            custody: keys.custody,
+            ready: keys.ready,
+            signers: keys.signers,
+        },
+        pairing,
+    )
+    .unwrap();
+    pending.test_after_enable(move || {
+        let _ = entered_tx.send(());
+        let _ = release_rx.recv_timeout(Duration::from_secs(10));
+    });
+
+    let host = Arc::new(RemoteHostService::default());
+    host.unattended
+        .reserve_start(pending, native.clone())
+        .unwrap();
+    let entered = entered_rx.recv_timeout(Duration::from_secs(10)).is_ok();
+    let cancelled_observer =
+        tokio::time::timeout(Duration::from_millis(20), host.unattended.wait())
+            .await
+            .is_err();
+    let decision = host.request_exit(47, false);
+    let immediate = close.closed();
+    let pending_at_exit = host.unattended.observe().outstanding;
+    let _ = release_tx.send(());
+    // RED 也先关门并收齐原资源；不可把断言 panic 留成等待原 cap 的 worker。
+    close.close();
+
+    let (tx, mut rx) = tokio::sync::oneshot::channel();
+    host.start_exit(
+        47,
+        native,
+        Arc::new(crate::remote_client_ipc::RemoteClientService::default()),
+        move |code| {
+            let _ = tx.send(code);
+        },
+    );
+    let owner_known = tokio::time::timeout(Duration::from_secs(10), host.unattended.wait())
+        .await
+        .unwrap();
+    let joined = tokio::time::timeout(Duration::from_secs(10), host.test_join_exit_worker())
+        .await
+        .unwrap();
+    let observation = host.unattended.observe();
+    let callback = rx.try_recv().ok();
+    drop(approval);
+    let facts = host.test_original_managed_facts(&f.request_run()).unwrap();
+    let cleanup_known = facts.original_resources_retired();
+    eprintln!("TEST_ONLY_APP_EXIT immediate={immediate} owner_known={owner_known} joined={joined} observation={observation:?} callback={callback:?} facts={facts:?}");
+    assert!(entered && cancelled_observer && pending_at_exit);
+    assert!(matches!(
+        decision,
+        crate::remote_host::ExitDecision::Wait(47)
+    ));
+    assert!(
+        owner_known && joined && observation.watcher_joined && observation.retired && cleanup_known
+    );
+    // 原 NativeRuntime 可以保守 Unknown；本片不能把它升级成完整 App 退出成功。
+    if callback.is_some() {
+        assert_eq!(callback, Some(47));
+    }
+    assert!(
+        immediate,
+        "original App exit did not close the managed single-run gate"
+    );
+}
+
+#[test]
+fn UnattendedReservation_UnstartedCleanupKeepsCustodyUntilKeysJoin_002() {
+    use crate::remote_unattended_store::service::pending::{PendingStart, StartKeys};
+    use crate::remote_unattended_store::StoreError;
+    use crate::version_history::windows::unattended_store::WindowsUnattendedBackend;
+    for mode in 0..4 {
+        let (f, mut cleanup) = setup();
+        let admission = admit(&f);
+        let pair_dir = store_root();
+        let pairing = Arc::new(synthetic_file_store(pair_dir.path()).unwrap());
+        let (approval, mut consent) = final_consent(&pairing, &admission);
+        let control = consent.control();
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let keys = crate::native_crypto::single_run_test_keys_with_hook(
+            consent.take_supplier().unwrap(),
+            Box::new(move || {
+                let _ = entered_tx.send(());
+                let _ = release_rx.recv_timeout(Duration::from_secs(10));
+            }),
+        );
+        let durable_dir = store_root();
+        let path =
+            std::path::PathBuf::from(durable_dir.path().to_string_lossy().replace('/', "\\"));
+        let backend = WindowsUnattendedBackend::create_new(&path).unwrap();
+        let pending = PendingStart::new(
+            backend,
+            SingleRunSealer,
+            consent,
+            admission,
+            StartKeys {
+                custody: keys.custody,
+                ready: keys.ready,
+                signers: keys.signers,
+            },
+            pairing,
+        )
+        .unwrap();
+        let host = Arc::new(RemoteHostService::default());
+        if mode == 1 {
+            host.request_exit(52, false);
+        }
+        if mode == 3 {
+            host.unattended.test_fail_spawn();
+        }
+        let supervisor = if mode == 2 {
+            Arc::new(NativeRunSupervisor::new(f.transports.clone()))
+        } else {
+            f.supervisor.clone()
+        };
+        let native = Arc::new(NativeRuntime::with_owned_components_for_test(
+            f.service.clone(),
+            f.transports.clone(),
+            supervisor,
+        ));
+        let original = host.clone();
+        let worker = std::thread::spawn(move || {
+            if mode == 0 {
+                drop(pending);
+                Ok(())
+            } else {
+                original.unattended.reserve_start(pending, native)
+            }
+        });
+        let entered = entered_rx.recv_timeout(Duration::from_secs(10)).is_ok();
+        let backend = WindowsUnattendedBackend::open_existing(&path).unwrap();
+        let busy = matches!(backend.claim_owner_custody(), Err(StoreError::Busy));
+        let blocked = mode == 0 || !host.unattended.observe().known();
+        let _ = release_tx.send(());
+        let result = worker.join().unwrap();
+        let reclaimed = backend.claim_owner_custody();
+        let available = reclaimed.is_ok();
+        drop(reclaimed);
+        let directory = path.join("remote-unattended-v1");
+        let no_write = !directory.join("delegation.dpapi").exists()
+            && std::fs::read(directory.join("commit.journal"))
+                .unwrap()
+                .is_empty();
+        drop(approval);
+        let retired = cleanup.close();
+        eprintln!("TEST_ONLY_PENDING mode={mode} result={result:?} busy={busy} blocked={blocked} no_write={no_write}");
+        assert!(entered && busy && blocked && available && no_write && retired && control.closed());
+        assert_eq!(
+            result,
+            match mode {
+                0 => Ok(()),
+                3 => Err(StoreError::Io),
+                _ => Err(StoreError::Conflict),
+            }
+        );
+        assert_eq!(host.unattended.start_result(), None);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn UnattendedReservation_ForeignExitCannotReplaceBoundRuntime_003() {
+    use crate::remote_unattended_store::service::pending::{PendingStart, StartKeys};
+    let transports = Arc::new(TerminalTransports::new());
+    let supervisor = Arc::new(NativeRunSupervisor::new(transports.clone()));
+    let f = Fixture::with_runtime_environment("input", supervisor, transports, true);
+    let native = Arc::new(NativeRuntime::with_owned_components_for_test(
+        f.service.clone(),
+        f.transports.clone(),
+        f.supervisor.clone(),
+    ));
+    struct RuntimeStop(Arc<NativeRuntime>);
+    impl Drop for RuntimeStop {
+        fn drop(&mut self) {
+            self.0.shutdown();
+        }
+    }
+    let _runtime_stop = RuntimeStop(native.clone());
+    let events = f.events.clone();
+    native
+        .start_managed_run(&f.caller, &f.request, |_| {
+            f.routes.bind(1, Box::new(|| Ok(())), || {
+                Ok(Channel::new(move |body| {
+                    if let InvokeResponseBody::Json(text) = body {
+                        events.lock().push(serde_json::from_str(&text).unwrap());
+                    }
+                    Ok(())
+                }))
+            })
+        })
+        .unwrap();
+    let startup_end = Instant::now() + Duration::from_secs(10);
+    while f.child_reports() == 0 || f.events.lock().is_empty() {
+        assert!(Instant::now() < startup_end);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let admission = admit(&f);
+    let pair_dir = store_root();
+    let pairing = Arc::new(synthetic_file_store(pair_dir.path()).unwrap());
+    let (approval, mut consent) = final_consent(&pairing, &admission);
+    let keys = crate::native_crypto::single_run_test_keys(consent.take_supplier().unwrap());
+    let durable_dir = store_root();
+    let path = std::path::PathBuf::from(durable_dir.path().to_string_lossy().replace('/', "\\"));
+    let backend =
+        crate::version_history::windows::unattended_store::WindowsUnattendedBackend::create_new(
+            &path,
+        )
+        .unwrap();
+    let close = consent.control();
+    let pending = PendingStart::new(
+        backend,
+        SingleRunSealer,
+        consent,
+        admission,
+        StartKeys {
+            custody: keys.custody,
+            ready: keys.ready,
+            signers: keys.signers,
+        },
+        pairing,
+    )
+    .unwrap();
+    let host = Arc::new(RemoteHostService::default());
+    host.unattended
+        .reserve_start(pending, native.clone())
+        .unwrap();
+    let start_end = Instant::now() + Duration::from_secs(10);
+    while host.unattended.start_result().is_none() && Instant::now() < start_end {
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+    let started = host.unattended.start_result();
+    let decision = host.request_exit(47, false);
+    let immediate = close.closed();
+    let pending_at_exit = host.unattended.observe().outstanding;
+    let foreign = Arc::new(NativeRuntime::with_owned_components_for_test(
+        f.service.clone(),
+        f.transports.clone(),
+        f.supervisor.clone(),
+    ));
+    let foreign_callback = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let callback_flag = foreign_callback.clone();
+    host.start_exit(
+        47,
+        foreign,
+        Arc::new(crate::remote_client_ipc::RemoteClientService::default()),
+        move |_| {
+            callback_flag.store(true, std::sync::atomic::Ordering::Release);
+        },
+    );
+    let rejected_before_shutdown = !host.test_exit_worker_held() && admit(&f).scope().is_ok();
+    // RED 也先关门并收齐原资源；不可把断言 panic 留成等待原 cap 的 worker。
+    close.close();
+
+    let (tx, mut rx) = tokio::sync::oneshot::channel();
+    host.start_exit(
+        47,
+        native,
+        Arc::new(crate::remote_client_ipc::RemoteClientService::default()),
+        move |code| {
+            let _ = tx.send(code);
+        },
+    );
+    let owner_known = tokio::time::timeout(Duration::from_secs(10), host.unattended.wait())
+        .await
+        .unwrap();
+    let joined = tokio::time::timeout(Duration::from_secs(10), host.test_join_exit_worker())
+        .await
+        .unwrap();
+    let observation = host.unattended.observe();
+    let callback = rx.try_recv().ok();
+    drop(approval);
+    let facts = host.test_original_managed_facts(&f.request_run()).unwrap();
+    let cleanup_known = facts.original_resources_retired();
+    eprintln!("TEST_ONLY_APP_EXIT immediate={immediate} owner_known={owner_known} joined={joined} observation={observation:?} callback={callback:?} facts={facts:?}");
+    assert_eq!(started, Some(Ok(())));
+    assert!(
+        pending_at_exit
+            && rejected_before_shutdown
+            && !foreign_callback.load(std::sync::atomic::Ordering::Acquire)
+    );
+    assert!(matches!(
+        decision,
+        crate::remote_host::ExitDecision::Wait(47)
+    ));
+    assert!(
+        owner_known && joined && observation.watcher_joined && observation.retired && cleanup_known
+    );
+    // 原 NativeRuntime 可以保守 Unknown；本片不能把它升级成完整 App 退出成功。
+    if callback.is_some() {
+        assert_eq!(callback, Some(47));
+    }
+    assert!(
+        immediate,
+        "original App exit did not close the managed single-run gate"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn UnattendedReservation_ExitDuringEnableSealUsesOriginalFence_004() {
+    use crate::remote_unattended_store::service::pending::{PendingStart, StartKeys};
+    let transports = Arc::new(TerminalTransports::new());
+    let supervisor = Arc::new(NativeRunSupervisor::new(transports.clone()));
+    let f = Fixture::with_runtime_environment("input", supervisor, transports, true);
+    let native = Arc::new(NativeRuntime::with_owned_components_for_test(
+        f.service.clone(),
+        f.transports.clone(),
+        f.supervisor.clone(),
+    ));
+    struct RuntimeStop(Arc<NativeRuntime>);
+    impl Drop for RuntimeStop {
+        fn drop(&mut self) {
+            self.0.shutdown();
+        }
+    }
+    let _runtime_stop = RuntimeStop(native.clone());
+    let events = f.events.clone();
+    native
+        .start_managed_run(&f.caller, &f.request, |_| {
+            f.routes.bind(1, Box::new(|| Ok(())), || {
+                Ok(Channel::new(move |body| {
+                    if let InvokeResponseBody::Json(text) = body {
+                        events.lock().push(serde_json::from_str(&text).unwrap());
+                    }
+                    Ok(())
+                }))
+            })
+        })
+        .unwrap();
+    let startup_end = Instant::now() + Duration::from_secs(10);
+    while f.child_reports() == 0 || f.events.lock().is_empty() {
+        assert!(Instant::now() < startup_end);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let admission = admit(&f);
+    let pair_dir = store_root();
+    let pairing = Arc::new(synthetic_file_store(pair_dir.path()).unwrap());
+    let (approval, mut consent) = final_consent(&pairing, &admission);
+    let keys = crate::native_crypto::single_run_test_keys(consent.take_supplier().unwrap());
+    let durable_dir = store_root();
+    let path = std::path::PathBuf::from(durable_dir.path().to_string_lossy().replace('/', "\\"));
+    let backend =
+        crate::version_history::windows::unattended_store::WindowsUnattendedBackend::create_new(
+            &path,
+        )
+        .unwrap();
+    let close = consent.control();
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    struct SealBarrier {
+        entered: std::sync::mpsc::Sender<()>,
+        release: parking_lot::Mutex<std::sync::mpsc::Receiver<()>>,
+        calls: std::sync::atomic::AtomicUsize,
+    }
+    impl crate::remote_unattended_store::Sealer for SealBarrier {
+        fn seal(&self, bytes: &[u8]) -> crate::remote_unattended_store::Result<Vec<u8>> {
+            if self.calls.fetch_add(1, std::sync::atomic::Ordering::AcqRel) == 1 {
+                let _ = self.entered.send(());
+                let _ = self.release.lock().recv_timeout(Duration::from_secs(10));
+            }
+            crate::remote_unattended_store::Sealer::seal(&SingleRunSealer, bytes)
+        }
+        fn unseal(&self, bytes: &[u8]) -> crate::remote_unattended_store::Result<Vec<u8>> {
+            crate::remote_unattended_store::Sealer::unseal(&SingleRunSealer, bytes)
+        }
+    }
+    let pending = PendingStart::new(
+        backend,
+        SealBarrier {
+            entered: entered_tx,
+            release: parking_lot::Mutex::new(release_rx),
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        },
+        consent,
+        admission,
+        StartKeys {
+            custody: keys.custody,
+            ready: keys.ready,
+            signers: keys.signers,
+        },
+        pairing,
+    )
+    .unwrap();
+    let host = Arc::new(RemoteHostService::default());
+    host.unattended
+        .reserve_start(pending, native.clone())
+        .unwrap();
+    let entered = entered_rx.recv_timeout(Duration::from_secs(10)).is_ok();
+    let cancelled_observer =
+        tokio::time::timeout(Duration::from_millis(20), host.unattended.wait())
+            .await
+            .is_err();
+    let decision = host.request_exit(47, false);
+    let immediate = close.closed();
+    let pending_at_exit = host.unattended.observe().outstanding;
+    let _ = release_tx.send(());
+    // RED 也先关门并收齐原资源；不可把断言 panic 留成等待原 cap 的 worker。
+    close.close();
+
+    let (tx, mut rx) = tokio::sync::oneshot::channel();
+    host.start_exit(
+        47,
+        native,
+        Arc::new(crate::remote_client_ipc::RemoteClientService::default()),
+        move |code| {
+            let _ = tx.send(code);
+        },
+    );
+    let owner_known = tokio::time::timeout(Duration::from_secs(10), host.unattended.wait())
+        .await
+        .unwrap();
+    let joined = tokio::time::timeout(Duration::from_secs(10), host.test_join_exit_worker())
+        .await
+        .unwrap();
+    let observation = host.unattended.observe();
+    let callback = rx.try_recv().ok();
+    drop(approval);
+    let facts = host.test_original_managed_facts(&f.request_run()).unwrap();
+    let cleanup_known = facts.original_resources_retired();
+    eprintln!("TEST_ONLY_APP_EXIT immediate={immediate} owner_known={owner_known} joined={joined} observation={observation:?} callback={callback:?} facts={facts:?}");
+    let backend =
+        crate::version_history::windows::unattended_store::WindowsUnattendedBackend::open_existing(
+            &path,
+        )
+        .unwrap();
+    let unchanged =
+        crate::remote_unattended_store::service::test_file_disabled_at(backend, SingleRunSealer, 1);
+    assert_eq!(
+        host.unattended.start_result(),
+        Some(Err(
+            crate::remote_unattended_store::StoreError::Unauthorized
+        ))
+    );
+    assert!(entered && cancelled_observer && pending_at_exit && unchanged);
+    assert!(matches!(
+        decision,
+        crate::remote_host::ExitDecision::Wait(47)
+    ));
+    assert!(
+        owner_known && joined && observation.watcher_joined && observation.retired && cleanup_known
+    );
+    // 原 NativeRuntime 可以保守 Unknown；本片不能把它升级成完整 App 退出成功。
+    if callback.is_some() {
+        assert_eq!(callback, Some(47));
+    }
+    assert!(
+        immediate,
+        "original App exit did not close the managed single-run gate"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn UnattendedReservation_GlobalCheckoutFailureClosesAdmissionAndActiveOwner_005() {
+    use crate::remote_unattended_store::service::pending::{PendingStart, StartKeys};
+    use crate::version_history::windows::unattended_store::WindowsUnattendedBackend;
+    for mode in 0..4 {
+        let (f, mut cleanup) = setup();
+        let admission = admit(&f);
+        let pair_dir = store_root();
+        let pairing = Arc::new(synthetic_file_store(pair_dir.path()).unwrap());
+        let (approval, mut consent) = final_consent(&pairing, &admission);
+        let control = consent.control();
+        let keys = crate::native_crypto::single_run_test_keys(consent.take_supplier().unwrap());
+        let durable_dir = store_root();
+        let path =
+            std::path::PathBuf::from(durable_dir.path().to_string_lossy().replace('/', "\\"));
+        let backend = WindowsUnattendedBackend::create_new(&path).unwrap();
+        let pending = PendingStart::new(
+            backend,
+            SingleRunSealer,
+            consent,
+            admission,
+            StartKeys {
+                custody: keys.custody,
+                ready: keys.ready,
+                signers: keys.signers,
+            },
+            pairing,
+        )
+        .unwrap();
+        let native = Arc::new(NativeRuntime::with_owned_components_for_test(
+            f.service.clone(),
+            f.transports.clone(),
+            f.supervisor.clone(),
+        ));
+        let host = Arc::new(RemoteHostService::default());
+        if mode < 2 {
+            host.test_unfinished_checkout_unwind(mode == 1);
+        }
+        let result = host.unattended.reserve_start(pending, native);
+        if mode >= 2 {
+            let end = Instant::now() + Duration::from_secs(10);
+            while host.unattended.start_result().is_none() && Instant::now() < end {
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            }
+            host.test_unfinished_checkout_unwind(mode == 3);
+        }
+        let immediate = control.closed();
+        let closed_admission = !host.network_admission_open();
+        // 失败版本也先收原 owner；不会等硬截止来掩盖缺失的关闭通知。
+        control.close();
+        let known = tokio::time::timeout(Duration::from_secs(10), host.unattended.wait())
+            .await
+            .unwrap();
+        let directory = path.join("remote-unattended-v1");
+        let state_ok = if mode < 2 {
+            !directory.join("delegation.dpapi").exists()
+                && std::fs::read(directory.join("commit.journal"))
+                    .unwrap()
+                    .is_empty()
+        } else {
+            let backend = WindowsUnattendedBackend::open_existing(&path).unwrap();
+            crate::remote_unattended_store::service::test_file_revoked_at(
+                backend,
+                SingleRunSealer,
+                3,
+            )
+        };
+        drop(approval);
+        let retired = cleanup.close();
+        eprintln!("TEST_ONLY_GLOBAL_CLOSE mode={mode} result={result:?} immediate={immediate} state_ok={state_ok}");
+        assert!(immediate && closed_admission && known && state_ok && retired);
+        assert_eq!(
+            result,
+            if mode < 2 {
+                Err(crate::remote_unattended_store::StoreError::Conflict)
+            } else {
+                Ok(())
+            }
+        );
+    }
+}

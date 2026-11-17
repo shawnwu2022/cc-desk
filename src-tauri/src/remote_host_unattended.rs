@@ -6,16 +6,43 @@ use crate::remote_unattended_store::{
 use parking_lot::Mutex;
 use std::{sync::Arc, thread::JoinHandle};
 
+pub(crate) struct StartPermit {
+    close: CloseHandle,
+}
+impl StartPermit {
+    pub(crate) fn matches(
+        &self,
+        control: &Arc<crate::remote_host_approval::unattended::final_approval::FinalControl>,
+    ) -> bool {
+        self.close.matches_control(control)
+    }
+}
 trait Managed: Send {
+    fn start(&mut self, _permit: &StartPermit) -> Result<(), StoreError> {
+        Ok(())
+    }
     #[allow(
         dead_code,
         reason = "default-off: production enable supplier is not connected"
     )]
-    fn finish(&self) -> ControllerEnd;
+    fn finish(&mut self) -> ControllerEnd;
 }
 impl<S: Sealer + Send> Managed for SingleRunController<S> {
-    fn finish(&self) -> ControllerEnd {
+    fn finish(&mut self) -> ControllerEnd {
         self.finish_owned()
+    }
+}
+impl<S, B, P> Managed for crate::remote_unattended_store::service::pending::PendingStart<S, B, P>
+where
+    S: Sealer + Send,
+    B: crate::remote_native_pairing_store::Backend + Send + Sync,
+    P: crate::remote_native_pairing_store::Sealer + Send + Sync,
+{
+    fn start(&mut self, _permit: &StartPermit) -> Result<(), StoreError> {
+        self.start(_permit)
+    }
+    fn finish(&mut self) -> ControllerEnd {
+        self.finish()
     }
 }
 type HeldController = Arc<Mutex<Option<Box<dyn Managed>>>>;
@@ -39,6 +66,7 @@ enum JoinState {
 }
 struct Owner {
     close: CloseHandle,
+    started: Arc<Mutex<Option<Result<(), StoreError>>>>,
     held: HeldController,
     join: Mutex<JoinState>,
     panic: Mutex<Option<std::mem::ManuallyDrop<Box<dyn std::any::Any + Send>>>>,
@@ -153,6 +181,7 @@ impl Drop for Owner {
 struct State {
     closing: bool,
     owner: Option<Arc<Owner>>,
+    runtime: Option<Arc<crate::cli::native_runtime::NativeRuntime>>,
 }
 #[derive(Default)]
 pub(crate) struct UnattendedCustody {
@@ -167,36 +196,85 @@ pub(crate) struct UnattendedCustody {
     panic_worker: std::sync::atomic::AtomicBool,
 }
 impl UnattendedCustody {
-    #[allow(
-        dead_code,
-        reason = "default-off: production enable supplier is not connected"
-    )]
+    #[cfg(test)]
     pub(crate) fn install<S: Sealer + Send + 'static>(
         &self,
         controller: SingleRunController<S>,
     ) -> Result<(), StoreError> {
         let end = controller.fixed_end();
         let close = controller.close_handle();
-        let held: HeldController = Arc::new(Mutex::new(Some(Box::new(controller))));
+        self.install_managed(Box::new(controller), close, end, None, true)
+    }
+    #[allow(
+        dead_code,
+        reason = "default-off: production enable supplier is not connected"
+    )]
+    pub(crate) fn reserve_start<S, B, P>(
+        &self,
+        pending: crate::remote_unattended_store::service::pending::PendingStart<S, B, P>,
+        runtime: Arc<crate::cli::native_runtime::NativeRuntime>,
+    ) -> Result<(), StoreError>
+    where
+        S: Sealer + Send + 'static,
+        B: crate::remote_native_pairing_store::Backend + Send + Sync + 'static,
+        P: crate::remote_native_pairing_store::Sealer + Send + Sync + 'static,
+    {
+        let valid = pending.matches_runtime(&runtime);
+        let end = pending.end();
+        let close = CloseHandle::from_control(pending.control());
+        self.install_managed(Box::new(pending), close, end, Some(runtime), valid)
+    }
+    #[allow(
+        dead_code,
+        reason = "default-off: production enable supplier is not connected"
+    )]
+    pub(crate) fn start_result(&self) -> Option<Result<(), StoreError>> {
+        self.state
+            .lock()
+            .owner
+            .as_ref()
+            .and_then(|owner| *owner.started.lock())
+    }
+    pub(crate) fn matches_exit_runtime(
+        &self,
+        runtime: &Arc<crate::cli::native_runtime::NativeRuntime>,
+    ) -> bool {
+        self.state
+            .lock()
+            .runtime
+            .as_ref()
+            .is_none_or(|original| Arc::ptr_eq(original, runtime))
+    }
+    fn install_managed(
+        &self,
+        managed: Box<dyn Managed>,
+        close: CloseHandle,
+        end: std::time::Instant,
+        runtime: Option<Arc<crate::cli::native_runtime::NativeRuntime>>,
+        valid: bool,
+    ) -> Result<(), StoreError> {
+        let held: HeldController = Arc::new(Mutex::new(Some(managed)));
         let owner = Arc::new(Owner {
             close: close.clone(),
+            started: Arc::new(Mutex::new(None)),
             held: held.clone(),
             join: Mutex::new(JoinState::Starting),
             panic: Mutex::new(None),
         });
         let rejection = {
             let mut state = self.state.lock();
-            if state.closing || state.owner.is_some() {
+            if !valid || state.closing || state.owner.is_some() {
                 Some(RejectedCleanup::new(self))
             } else {
+                state.runtime = runtime;
                 state.owner = Some(owner.clone());
                 None
             }
         };
         if let Some(mut rejection) = rejection {
             owner.close.request_close();
-            let original = owner.held.lock().take();
-            let end = original.as_ref().expect("rejected original").finish();
+            let mut original = owner.held.lock().take();
+            let end = original.as_mut().expect("rejected original").finish();
             drop(original);
             rejection.complete(end);
             return Err(end.durable.err().unwrap_or(if end.retired {
@@ -215,14 +293,26 @@ impl UnattendedCustody {
         }
         #[cfg(test)]
         let panic_worker = self.panic_worker.load(std::sync::atomic::Ordering::Acquire);
+        let permit = StartPermit {
+            close: close.clone(),
+        };
+        let start_result = owner.started.clone();
         let task = move || {
-            close.wait_until_closed(end);
+            let started = held
+                .lock()
+                .as_mut()
+                .expect("reserved original")
+                .start(&permit);
+            *start_result.lock() = Some(started);
+            if started.is_ok() {
+                close.wait_until_closed(end);
+            }
             close.request_close();
             #[cfg(test)]
             if panic_worker {
                 std::panic::panic_any("TEST_ONLY watcher failure");
             }
-            held.lock().as_ref().expect("original controller").finish()
+            held.lock().as_mut().expect("original controller").finish()
         };
         #[cfg(test)]
         let fail_spawn = self.fail_spawn.load(std::sync::atomic::Ordering::Acquire);
@@ -242,8 +332,8 @@ impl UnattendedCustody {
             }
             Err(_) => {
                 owner.close.request_close();
-                let original = owner.held.lock().take();
-                let end = original.as_ref().map(|o| o.finish());
+                let mut original = owner.held.lock().take();
+                let end = original.as_mut().map(|o| o.finish());
                 drop(original);
                 *owner.join.lock() = JoinState::Failed {
                     end,

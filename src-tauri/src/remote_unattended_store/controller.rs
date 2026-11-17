@@ -7,6 +7,12 @@ pub(crate) struct CloseHandle {
     control: Arc<FinalControl>,
 }
 impl CloseHandle {
+    pub(crate) fn matches_control(&self, control: &Arc<FinalControl>) -> bool {
+        Arc::ptr_eq(&self.control, control)
+    }
+    pub(crate) fn from_control(control: Arc<FinalControl>) -> Self {
+        Self { control }
+    }
     pub(crate) fn request_close(&self) {
         self.control.close();
     }
@@ -204,28 +210,6 @@ impl<S: Sealer> SingleRunController<S> {
     // 只由接管整个 controller 的原托管线程调用；不增加 effect 或恢复出口。
     pub(crate) fn finish_owned(&self) -> ControllerEnd {
         self.request_close();
-        let mut service = self.service.lock();
-        let durable = service.stop();
-        loop {
-            match service.advance_retirement() {
-                Some((keys, effects))
-                    if !keys.outstanding && effects != CloseObservation::Retiring =>
-                {
-                    return ControllerEnd {
-                        durable,
-                        retired: keys.disposal_complete
-                            && !keys.unknown
-                            && effects == CloseObservation::EffectsClosed,
-                    };
-                }
-                None => {
-                    return ControllerEnd {
-                        durable,
-                        retired: false,
-                    }
-                }
-                _ => std::thread::sleep(std::time::Duration::from_millis(2)),
-            }
-        }
+        self.service.lock().finish_owned()
     }
 }

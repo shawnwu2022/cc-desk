@@ -143,6 +143,8 @@ impl Drop for HostCheckout<'_> {
         if self.finished {
             return;
         }
+        #[cfg(windows)]
+        self.service.unattended.request_close();
         let mut state = self.service.state.lock();
         assert!(matches!(state.host, HostSlot::CheckedOut(token) if token == self.token));
         state.host = self
@@ -153,7 +155,7 @@ impl Drop for HostCheckout<'_> {
         if !self.finished {
             state.closing = true;
             state.exit = ExitIntent::Unknown;
-            // 上游可能仍在展开栈；这里只同步记录 Unknown，不调用任何 Waker。
+            // 不执行用户或异步 Waker 回调；上面的 Condvar 通知只唤醒原托管线程。
             self.service.network.latch_unknown();
         }
     }
@@ -165,6 +167,10 @@ struct NativeShutdownCheckout<'a> {
 }
 impl Drop for NativeShutdownCheckout<'_> {
     fn drop(&mut self) {
+        #[cfg(windows)]
+        if !self.finished {
+            self.service.unattended.request_close();
+        }
         let mut state = self.service.state.lock();
         state.native = self.owner.take();
         if !self.finished {
@@ -403,6 +409,24 @@ impl RemoteHostService {
         let result = operation(checkout.host.as_deref_mut());
         checkout.finish();
         Some(result)
+    }
+    #[cfg(all(test, windows))]
+    pub(crate) fn test_unfinished_checkout_unwind(&self, native: bool) {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if native {
+                let owner = self.state.lock().native.take();
+                let _checkout = NativeShutdownCheckout {
+                    service: self,
+                    owner,
+                    finished: false,
+                };
+                panic!("TEST_ONLY_NATIVE_CHECKOUT_PANIC");
+            } else {
+                let _checkout = self.checkout_host(false).unwrap();
+                panic!("TEST_ONLY_HOST_CHECKOUT_PANIC");
+            }
+        }));
+        assert!(result.is_err());
     }
     #[cfg(test)]
     pub(crate) fn test_state_is_unlocked(&self) -> bool {
@@ -698,6 +722,8 @@ impl RemoteHostService {
     }
     #[cfg(test)]
     pub(crate) fn test_begin_host_shutdown(&self) {
+        #[cfg(windows)]
+        self.unattended.request_close();
         let material = {
             let mut state = self.state.lock();
             state.closing = true;
@@ -783,6 +809,11 @@ impl RemoteHostService {
         client: Arc<RemoteClientService>,
         exit: impl FnOnce(i32) + Send + 'static,
     ) {
+        #[cfg(windows)]
+        if !self.unattended.matches_exit_runtime(&native) {
+            // 错 Runtime 不能停止别人的资源；原 Waiting 和托管槽保留供正确调用收口。
+            return;
+        }
         let mut state = self.state.lock();
         if !matches!(state.exit,ExitIntent::Waiting(original) if original==code)
             || state.waiter.is_some()

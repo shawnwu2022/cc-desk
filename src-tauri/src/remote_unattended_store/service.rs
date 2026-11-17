@@ -118,14 +118,7 @@ impl<S: Sealer> SingleRunService<S> {
         admission: NativeRunAdmission,
         pairing: &PairingStore<B, P>,
     ) -> Result<()> {
-        if self.attempted {
-            return Err(StoreError::Conflict);
-        }
-        self.attempted = true;
-        self.consent = Some(consent);
-        self.keys = Some(keys);
-        self.ready = Some(ready);
-        self.signers = Some(signers);
+        self.attach_start_resources(consent, keys, ready, signers)?;
         let result = self.start_inner(admission, pairing);
         if let Err(error) = result {
             if error == StoreError::Unknown {
@@ -135,6 +128,24 @@ impl<S: Sealer> SingleRunService<S> {
             let compensation = self.persist_close();
             return Err(compensation.err().unwrap_or(error));
         }
+        Ok(())
+    }
+    // 仅转移原资源，不写盘；未启动的 App reservation 也能沿同一 owner 收口。
+    fn attach_start_resources(
+        &mut self,
+        consent: FinalConsent,
+        keys: HostKeyCustody,
+        ready: HostKeysReady,
+        signers: HostSignerSet,
+    ) -> Result<()> {
+        if self.attempted {
+            return Err(StoreError::Conflict);
+        }
+        self.attempted = true;
+        self.consent = Some(consent);
+        self.keys = Some(keys);
+        self.ready = Some(ready);
+        self.signers = Some(signers);
         Ok(())
     }
     fn start_inner<B: PairingBackend, P: PairingSealer>(
@@ -609,3 +620,34 @@ pub(crate) fn test_file_disabled_at<S: Sealer>(
 
 #[path = "controller.rs"]
 pub(crate) mod controller;
+
+#[path = "pending.rs"]
+pub(crate) mod pending;
+
+impl<S: Sealer> SingleRunService<S> {
+    fn finish_owned(&mut self) -> controller::ControllerEnd {
+        use controller::ControllerEnd;
+        let durable = self.stop();
+        loop {
+            match self.advance_retirement() {
+                Some((keys, effects))
+                    if !keys.outstanding && effects != CloseObservation::Retiring =>
+                {
+                    return ControllerEnd {
+                        durable,
+                        retired: keys.disposal_complete
+                            && !keys.unknown
+                            && effects == CloseObservation::EffectsClosed,
+                    };
+                }
+                None => {
+                    return ControllerEnd {
+                        durable,
+                        retired: false,
+                    }
+                }
+                _ => std::thread::sleep(std::time::Duration::from_millis(2)),
+            }
+        }
+    }
+}
