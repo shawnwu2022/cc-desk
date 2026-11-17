@@ -56,3 +56,13 @@ npm run build:win:remote-trial -- --debug --no-bundle
 - 最终专用 dist 的 operator 6 项与真实 EntryWorker 4 项：`.audit/remote-trial-operator-final2.log`、`.audit/remote-trial-entry-final2.log`。前者包含 manifest 门、4 个拒绝分支和 reader 正选，不是 6 个完整认证成功；后者使用仅响应 close 的隔离 MessagePort，对端不是实际 socket/TLS。
 - 版本保持 0.27.0 的 5 项：`.audit/remote-trial-version-final.log`。共 25 个独立定向检查，不把重复构建或此前整合阶段 383/45 测试重复计入本片。
 - 完整应用/安装包/真实桌面 WebView2/真实手机与公网均未验收，不能凭此宣称正式 0.28 可发布。
+
+## 专用档源码身份门
+
+专用入口在任何编译前要求当前目录为实际 Git 根、HEAD 有效、tracked/index 与未忽略的 untracked 源码全部干净。忽略的产物不枚举；符号链接、submodule、间接路径、冲突 index 与隐藏 index 标记拒绝。已核 HEAD 同时覆盖子进程环境的 CC_DESK_BUILD_SHA 和 GITHUB_SHA，不修改父环境或标准发布流程。
+
+完成后再次检查 HEAD、干净状态与 tracked 文件字节库存，失败不报告构建验收成功。前后检查只能检测可观察变化，不是对恶意瞬时修改再还原的并发防护。构建修改生成的 tracked 文件也会拒绝，不能自动恢复后伪称通过。开发中的本修复先以隔离临时 Git fixture 验证，提交后才运行真实 clean 构建及原 --check-conpty 诊断；后者不启动普通用户 UI。
+
+身份门首 RED 为缺少 dirty 检查的新增快照实现：tracked/untracked 两项 Missing expected exception（非原产品完整构建反例）；保留 .audit/remote-trial-identity-red.log。最终 fixture 与原策略回归见 .audit/remote-trial-identity-final.log；真实 clean 产物验收待本修复审查提交后执行，不沿用之前手工设置 SHA 的结果。
+
+子构建环境同时剔除所有 GIT_*，避免 Vite 自行 git rev-parse 时被 GIT_DIR/GIT_WORK_TREE/GIT_CONFIG_* 指向另一仓库；父进程环境不变。两个实际临时仓库的反例见 .audit/remote-trial-identity-git-env-red.log，修后同源码 10 项身份门 + 8 项原策略见 .audit/remote-trial-identity-final2.log。
