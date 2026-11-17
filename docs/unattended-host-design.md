@@ -1803,3 +1803,55 @@ Rust strict Clippy passed in 30.37s. Logs are indexed in
 eight-file stage list exclude the original three unchanged dirty files. Independent
 final review remains the commit gate. This is production Source wiring under
 explicit approved configuration, not provisioned real-device or public deployment.
+
+## A6j: isolated real-browser EntryWorker loading boundary
+
+This stage adds `tests/remote-browser/browserEntry.real.mjs`, an explicitly invoked
+platform test, not a change to production admission. It launches the installed
+Chrome through Playwright in a new temporary context. It does not attach to a
+user browser, import user credentials, alter trust stores, ignore certificate
+errors, or expose a public listener. The HTTP server binds only `127.0.0.1` and
+supplies COOP/COEP. Chrome treats that origin as secure and isolated, but the
+operator source still correctly requires HTTPS.
+
+Run from the repository root with `PLAYWRIGHT_CHROMIUM_EXECUTABLE` pointing to
+an existing official Chrome installation and `CC_DESK_TEST_BROWSER_ARTIFACTS`
+pointing to the previously verified test WASM/glue directory:
+
+```
+node tests/remote-browser/browserEntry.real.mjs
+```
+
+The test bundles the actual production EntryWorker and starts it with a real
+module Worker and its original start/close message listener. No Node Worker
+bridge or fake Window is used. Four checks cover: HTTP operator refusal with
+zero `/browser-profile.js` requests; foreign artifact refusal before fetch;
+WASM 404 without glue import; and actual same-origin WASM fetch plus official
+glue module evaluation followed by fail-closed application/transport retirement.
+The glue retains its original body and only appends a test-only evaluation
+message. Invalid connection inputs deliberately prevent authorization. Fetch,
+module evaluation and retirement are not proof of WASM instantiation, successful
+TLS authentication, a real device enrollment, or an end-to-end remote session.
+The transport peer is an isolated MessagePort fixture that only acknowledges close; these receipts do not prove retirement of a real socket or TLS connection.
+The test waits separately for the original application and Worker receipts;
+only then does it terminate the Worker and close its ports. A six-second
+watchdog fails the test, rather than treating forced termination as retirement.
+
+Observed on Chrome 157.0.8103.79: all four checks passed in
+`.audit/browser-entry-real-final4.log`. The HTTPS-gate mutation runs only in an
+in-memory test bundle (`CC_DESK_TEST_REMOVE_HTTPS_GATE=1`), never in the worktree;
+`.audit/browser-entry-real-https-red.log` fails because the forbidden HTTP
+operator configuration was fetched. Earlier strengthened-test failures are
+retained: one incorrectly assumed cross-port delivery ordering, and one
+incorrectly required an explicit `uncertain:false` on the already-served
+application protocol, which normally omits that field. Neither was a production
+authorization failure. A separate isolated CDP probe confirmed virtual CTAP2
+creation/removal, but this test does not exercise WebAuthn registration.
+
+A real HTTPS operator success path still needs a browser-trusted test origin
+and matching operator configuration/artifacts. This stage deliberately does not
+install a CA or bypass TLS verification. Existing unit tests, not this HTTP
+platform test, cover HTTPS provider absence and candidate/provider mismatch.
+Actual phone registration, native dialogs, HTTPS deployment and the full
+EntryWorker-to-Relay success path remain unverified. Default-off behavior and
+the original short-session limits are unchanged.
