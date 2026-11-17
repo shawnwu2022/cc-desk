@@ -43,6 +43,23 @@ pub(crate) trait Sealer {
 }
 pub(crate) trait Transaction {
     fn read(&mut self) -> Result<Option<Vec<u8>>>;
+    fn read_authenticated(&mut self, _sealer: &dyn Sealer) -> Result<Option<Vec<u8>>> {
+        self.read()
+    }
+    fn current_blob(&self) -> Result<Vec<u8>> {
+        Err(StoreError::Invalid)
+    }
+    fn checkpoint_basis(&self) -> Result<journal::CheckpointBasis> {
+        Err(StoreError::Invalid)
+    }
+    fn checkpoint(
+        &mut self,
+        _checkpoint: &journal::VerifiedCheckpoint,
+        _sealer: &dyn Sealer,
+        _authorize: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<()> {
+        Err(StoreError::Invalid)
+    }
     fn stamp(&self) -> Option<&CommitStamp>;
     fn remaining_commits(&self) -> Result<usize>;
     fn commit(
@@ -182,7 +199,7 @@ impl<B: Backend, S: Sealer> Store<B, S> {
             return Err(StoreError::Conflict);
         }
         let mut tx = self.backend.begin()?;
-        if tx.read()?.is_some() {
+        if tx.read_authenticated(&self.sealer)?.is_some() {
             return Err(StoreError::Conflict);
         }
         let doc = Document {
@@ -203,7 +220,7 @@ impl<B: Backend, S: Sealer> Store<B, S> {
         })
     }
     fn read(&self, tx: &mut B::Guard, local: &mut Local) -> Result<Document> {
-        let decoded = tx.read().and_then(|bytes| {
+        let decoded = tx.read_authenticated(&self.sealer).and_then(|bytes| {
             let bytes = bytes.ok_or(StoreError::Missing)?;
             let doc = self.decode(&bytes)?;
             if tx.stamp() != Some(&self.stamp(&doc, &bytes)?) {
@@ -381,26 +398,29 @@ impl<B: Backend, S: Sealer> Store<B, S> {
         Ok(sealed)
     }
     fn decode(&self, bytes: &[u8]) -> Result<Document> {
-        if bytes.is_empty() || bytes.len() > MAX_SEALED {
-            return Err(StoreError::Invalid);
-        }
-        let raw = self.sealer.unseal(bytes)?;
-        if raw.len() > MAX_PLAINTEXT {
-            return Err(StoreError::Invalid);
-        }
-        // 直接 struct 解析，拒绝重复、未知字段和不完整数据。
-        let envelope: Envelope = serde_json::from_slice(&raw).map_err(|_| StoreError::Invalid)?;
-        if envelope.domain != DOMAIN {
-            return Err(StoreError::Invalid);
-        }
-        validate(&envelope.document)?;
-        let canonical = serde_json::to_vec(&envelope.document).map_err(|_| StoreError::Invalid)?;
-        let digest: [u8; 32] = Sha256::digest(canonical).into();
-        if digest != envelope.digest {
-            return Err(StoreError::Invalid);
-        }
-        Ok(envelope.document)
+        decode_document(&self.sealer, bytes)
     }
+}
+fn decode_document(sealer: &dyn Sealer, bytes: &[u8]) -> Result<Document> {
+    if bytes.is_empty() || bytes.len() > MAX_SEALED {
+        return Err(StoreError::Invalid);
+    }
+    let raw = sealer.unseal(bytes)?;
+    if raw.len() > MAX_PLAINTEXT {
+        return Err(StoreError::Invalid);
+    }
+    // 直接 struct 解析，拒绝重复、未知字段和不完整数据。
+    let envelope: Envelope = serde_json::from_slice(&raw).map_err(|_| StoreError::Invalid)?;
+    if envelope.domain != DOMAIN {
+        return Err(StoreError::Invalid);
+    }
+    validate(&envelope.document)?;
+    let canonical = serde_json::to_vec(&envelope.document).map_err(|_| StoreError::Invalid)?;
+    let digest: [u8; 32] = Sha256::digest(canonical).into();
+    if digest != envelope.digest {
+        return Err(StoreError::Invalid);
+    }
+    Ok(envelope.document)
 }
 fn validate(doc: &Document) -> Result<()> {
     let duration = doc
@@ -453,3 +473,6 @@ fn check_known(local: &mut Local, doc: &Document) -> Result<()> {
 
 #[path = "remote_unattended_store/service.rs"]
 pub(crate) mod service;
+
+#[path = "remote_unattended_store/checkpoint.rs"]
+mod checkpoint;

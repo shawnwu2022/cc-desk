@@ -1,6 +1,6 @@
 //! 隔离 NTFS 近满历史，固定原上限；不重置日志或修改真实授权。
 use super::*;
-fn near_capacity(
+pub(super) fn near_capacity(
     enabled: bool,
     remaining: usize,
 ) -> (tempfile::TempDir, TestStore, LockedSnapshot) {

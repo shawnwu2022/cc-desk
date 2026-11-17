@@ -9,8 +9,13 @@ use super::{
 };
 #[cfg(test)]
 use crate::remote_unattended_store::journal::RECORD_BYTES;
-use crate::remote_unattended_store::journal::{Chain, CommitStamp, Record, MAX_JOURNAL};
-use crate::remote_unattended_store::{Backend, Result, StoreError, Transaction, MAX_SEALED};
+use crate::remote_unattended_store::journal::{
+    Chain, CheckpointBasis, CommitStamp, Record, VerifiedCheckpoint, HEADER, MAX_JOURNAL,
+    PROCESSING_MAGIC,
+};
+use crate::remote_unattended_store::{
+    Backend, Result, Sealer, StoreError, Transaction, MAX_SEALED,
+};
 use sha2::{Digest, Sha256};
 #[cfg(test)]
 use std::sync::atomic::AtomicU8;
@@ -272,7 +277,7 @@ impl UnattendedTransaction {
             .map_err(io_error)?;
         PinnedFile::from_file(self.root.directory().clone(), name, file).map_err(io_error)
     }
-    fn read_verified(&mut self) -> Result<Option<Vec<u8>>> {
+    fn read_verified(&mut self, sealer: Option<&dyn Sealer>) -> Result<Option<Vec<u8>>> {
         if self.poison.load(Ordering::Acquire) {
             return Err(StoreError::Poisoned);
         }
@@ -282,7 +287,10 @@ impl UnattendedTransaction {
         }
         self.observed = true;
         let bytes = read_bounded(&self.journal, MAX_JOURNAL)?;
-        let chain = Chain::parse(&bytes, self.fresh)?;
+        let chain = match sealer {
+            Some(sealer) => Chain::parse_authenticated(&bytes, self.fresh, sealer)?,
+            None => Chain::parse(&bytes, self.fresh)?,
+        };
         let file = match self.open_target() {
             Ok(file) => file,
             Err(StoreError::Missing) if chain.records == 0 && self.fresh => {
@@ -292,6 +300,9 @@ impl UnattendedTransaction {
             _ => return Err(StoreError::Unknown),
         };
         let blob = read(&file)?;
+        if let Some(sealer) = sealer {
+            chain.verify_checkpoint_blob(&blob, sealer)?;
+        }
         if chain
             .last
             .as_ref()
@@ -536,14 +547,190 @@ impl Transaction for UnattendedTransaction {
         if !chain.records.is_multiple_of(2) || chain.last.as_ref().is_some_and(|r| !r.clean) {
             return Err(StoreError::Unknown);
         }
-        journal_remaining(chain.records)
+        chain.remaining_commits()
     }
     fn read(&mut self) -> Result<Option<Vec<u8>>> {
-        let result = self.read_verified();
+        let result = self.read_verified(None);
         if result.is_err() {
             self.poison.store(true, Ordering::Release)
         }
         result
+    }
+    fn read_authenticated(&mut self, sealer: &dyn Sealer) -> Result<Option<Vec<u8>>> {
+        let result = self.read_verified(Some(sealer));
+        if result.is_err() {
+            self.poison.store(true, Ordering::Release);
+        }
+        result
+    }
+    fn current_blob(&self) -> Result<Vec<u8>> {
+        self.check()?;
+        if self.poison.load(Ordering::Acquire) {
+            return Err(StoreError::Poisoned);
+        }
+        if !self.observed {
+            return Err(StoreError::Invalid);
+        }
+        let blob = read(self.old.as_ref().ok_or(StoreError::Invalid)?).inspect_err(|_| {
+            self.poison.store(true, Ordering::Release);
+        })?;
+        if self
+            .stamp()
+            .is_none_or(|stamp| stamp.blob != <[u8; 32]>::from(Sha256::digest(&blob)))
+        {
+            self.poison.store(true, Ordering::Release);
+            return Err(StoreError::Unknown);
+        }
+        Ok(blob)
+    }
+    fn checkpoint_basis(&self) -> Result<CheckpointBasis> {
+        self.check()?;
+        if self.poison.load(Ordering::Acquire) {
+            return Err(StoreError::Poisoned);
+        }
+        if !self.observed {
+            return Err(StoreError::Invalid);
+        }
+        self.chain
+            .as_ref()
+            .ok_or(StoreError::Invalid)?
+            .checkpoint_basis()
+    }
+    fn checkpoint(
+        &mut self,
+        checkpoint: &VerifiedCheckpoint,
+        sealer: &dyn Sealer,
+        authorize: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<()> {
+        self.check()?;
+        if self.poison.load(Ordering::Acquire) {
+            return Err(StoreError::Poisoned);
+        }
+        if !self.observed || self.old.is_none() {
+            return Err(StoreError::Invalid);
+        }
+        checkpoint.matches(self.chain.as_ref().ok_or(StoreError::Invalid)?)?;
+        let old_identity = self.old.as_ref().unwrap().identity().clone();
+        authorize()?;
+        self.inflight = true;
+        let result: Result<()> = (|| {
+            let bytes = checkpoint.bytes();
+            let mut processing = bytes[..HEADER].to_vec();
+            processing[..8].copy_from_slice(PROCESSING_MAGIC);
+            self.journal.verify().map_err(|_| StoreError::Unknown)?;
+            self.journal
+                .file
+                .seek(SeekFrom::Start(0))
+                .map_err(|_| StoreError::Unknown)?;
+            #[cfg(test)]
+            if self.journal_fault.load(Ordering::SeqCst) == 21 {
+                self.journal
+                    .file
+                    .write_all(&processing[..1])
+                    .map_err(|_| StoreError::Unknown)?;
+                return Err(StoreError::Unknown);
+            }
+            self.journal
+                .file
+                .write_all(&processing)
+                .map_err(|_| StoreError::Unknown)?;
+            #[cfg(test)]
+            if self.journal_fault.load(Ordering::SeqCst) == 22 {
+                return Err(StoreError::Unknown);
+            }
+            self.journal
+                .file
+                .sync_all()
+                .map_err(|_| StoreError::Unknown)?;
+            self.journal
+                .file
+                .seek(SeekFrom::Start(HEADER as u64))
+                .map_err(|_| StoreError::Unknown)?;
+            #[cfg(test)]
+            if self.journal_fault.load(Ordering::SeqCst) == 23 {
+                self.journal
+                    .file
+                    .write_all(&bytes[HEADER..HEADER + 1])
+                    .map_err(|_| StoreError::Unknown)?;
+                return Err(StoreError::Unknown);
+            }
+            self.journal
+                .file
+                .write_all(&bytes[HEADER..])
+                .map_err(|_| StoreError::Unknown)?;
+            #[cfg(test)]
+            if self.journal_fault.load(Ordering::SeqCst) == 24 {
+                return Err(StoreError::Unknown);
+            }
+            self.journal
+                .file
+                .set_len(bytes.len() as u64)
+                .map_err(|_| StoreError::Unknown)?;
+            self.journal
+                .file
+                .sync_all()
+                .map_err(|_| StoreError::Unknown)?;
+            #[cfg(test)]
+            if self.journal_fault.load(Ordering::SeqCst) == 25 {
+                return Err(StoreError::Unknown);
+            }
+            self.check()?;
+            authorize()?;
+            self.journal.verify().map_err(|_| StoreError::Unknown)?;
+            self.journal
+                .file
+                .seek(SeekFrom::Start(0))
+                .map_err(|_| StoreError::Unknown)?;
+            #[cfg(test)]
+            if self.journal_fault.load(Ordering::SeqCst) == 26 {
+                self.journal
+                    .file
+                    .write_all(&bytes[..4])
+                    .map_err(|_| StoreError::Unknown)?;
+                return Err(StoreError::Unknown);
+            }
+            self.journal
+                .file
+                .write_all(&bytes[..HEADER])
+                .map_err(|_| StoreError::Unknown)?;
+            #[cfg(test)]
+            if self.journal_fault.load(Ordering::SeqCst) == 29 {
+                return Err(StoreError::Unknown);
+            }
+            self.journal
+                .file
+                .sync_all()
+                .map_err(|_| StoreError::Unknown)?;
+            #[cfg(test)]
+            if self.journal_fault.load(Ordering::SeqCst) == 27 {
+                return Err(StoreError::Unknown);
+            }
+            if read_bounded(&self.journal, MAX_JOURNAL)? != bytes {
+                return Err(StoreError::Unknown);
+            }
+            #[cfg(test)]
+            if self.journal_fault.load(Ordering::SeqCst) == 28 {
+                return Err(StoreError::Unknown);
+            }
+            self.old.take();
+            self.observed = false;
+            self.read_verified(Some(sealer))?
+                .ok_or(StoreError::Unknown)?;
+            if self
+                .old
+                .as_ref()
+                .is_none_or(|file| file.identity() != &old_identity)
+            {
+                return Err(StoreError::Unknown);
+            }
+            Ok(())
+        })();
+        if result.is_err() {
+            self.poison.store(true, Ordering::Release);
+            return Err(StoreError::Unknown);
+        }
+        self.inflight = false;
+        Ok(())
     }
     fn commit(
         &mut self,
@@ -582,7 +769,7 @@ impl Transaction for UnattendedTransaction {
             }
             let clean = Record {
                 clean: true,
-                sequence: pending.sequence + 1,
+                sequence: pending.sequence.checked_add(1).ok_or(StoreError::Unknown)?,
                 transaction: pending.transaction,
                 stamp: pending.stamp.clone(),
                 previous: Sha256::digest(pending.bytes()).into(),

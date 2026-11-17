@@ -71,6 +71,7 @@ pub(crate) struct Chain {
     pub(crate) last: Option<Record>,
     pub(crate) hash: [u8; 32],
     transactions: std::collections::BTreeSet<[u8; 16]>,
+    anchor: Option<VerifiedCheckpoint>,
 }
 impl Chain {
     pub(crate) fn parse(bytes: &[u8], allow_empty: bool) -> Result<Self> {
@@ -80,10 +81,19 @@ impl Chain {
         {
             return Err(StoreError::Unknown);
         }
-        let mut state = Self::default();
+        Self::parse_suffix(bytes, Self::default())
+    }
+    fn parse_suffix(bytes: &[u8], mut state: Self) -> Result<Self> {
+        if !bytes.len().is_multiple_of(RECORD_BYTES) {
+            return Err(StoreError::Unknown);
+        }
         for bytes in bytes.chunks_exact(RECORD_BYTES) {
             let r = Record::decode(bytes)?;
-            if r.sequence != state.records as u64 + 1
+            if Some(r.sequence)
+                != state
+                    .last
+                    .as_ref()
+                    .map_or(Some(1), |r| r.sequence.checked_add(1))
                 || r.previous != state.hash
                 || r.transaction == [0; 16]
                 || r.stamp.store_id == [0; 16]
@@ -126,16 +136,22 @@ impl Chain {
         Ok(state)
     }
     pub(crate) fn pending(&self, stamp: &CommitStamp) -> Result<Record> {
-        if self.records > MAX_RECORDS - 2 {
+        if self.remaining_commits()? < 1 {
             return Err(StoreError::Capacity);
         }
+        let sequence = self
+            .last
+            .as_ref()
+            .map_or(Some(1), |r| r.sequence.checked_add(1))
+            .ok_or(StoreError::Invalid)?;
+        sequence.checked_add(1).ok_or(StoreError::Invalid)?;
         let transaction = *uuid::Uuid::new_v4().as_bytes();
         if transaction == [0; 16] || self.transactions.contains(&transaction) {
             return Err(StoreError::Conflict);
         }
         let r = Record {
             clean: false,
-            sequence: self.records as u64 + 1,
+            sequence,
             transaction,
             stamp: stamp.clone(),
             previous: self.hash,
@@ -155,4 +171,16 @@ impl Chain {
         }
         Ok(r)
     }
+}
+
+#[path = "checkpoint_codec.rs"]
+mod checkpoint;
+pub(crate) use checkpoint::{CheckpointBasis, VerifiedCheckpoint, HEADER, PROCESSING_MAGIC};
+pub(super) fn seal_checkpoint(
+    doc: &super::Document,
+    blob: &[u8],
+    basis: CheckpointBasis,
+    sealer: &dyn super::Sealer,
+) -> Result<VerifiedCheckpoint> {
+    checkpoint::seal(doc, blob, basis, sealer)
 }

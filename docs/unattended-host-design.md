@@ -2091,3 +2091,71 @@ The exact source manifest and split ledger are
 `network-authenticated-final-source.json` and
 `network-authenticated-final-ledger.json`. Original three dirty files and ignored
 runtime artifacts are excluded from this stage commit.
+
+## A6n: bounded authenticated checkpoint (isolated implementation)
+
+This stage adds a physical journal checkpoint under the original owner custody,
+ControlLease and pinned journal FileIdentity. It does not change the sealed
+state document, authority/revision, observed wall floor, target, cutoff or status.
+The checkpoint operation accepts the original exact CAS and authorization fence;
+it does not turn a LockedSnapshot into permission or introduce restart recovery.
+There is no automatic production compaction or UI call in this stage. Applying
+in-place history reclamation to real user state still requires a recoverable
+backup or the applicable explicit approval for irreversible history removal.
+Only isolated test roots are rewritten here.
+
+The v2 journal prefix seals a domain-separated, strict-schema capsule containing
+the complete anchor document, its canonical digest, the original sealed blob
+digest, prior chain hash, absolute sequence, segment and transaction. Store lends
+its own Sealer to the same transaction. Backend capacity and suffix processing
+use only a privately verified capsule. The current document must match the
+anchor exactly at the same revision; a later document must satisfy the original
+continuous sequence/revision/authority transitions, exact store/target and a
+nondecreasing floor. The fixed cutoff/status cannot change without an authority
+revision. Checkpoint itself never advances these fields. Segment and absolute
+sequence arithmetic are checked. New capacity subtracts the actual prefix bytes
+and counts only complete 448-byte commit pairs; the original revocation reserve
+remains in Store publication logic.
+
+Publication writes an invalid Processing header and syncs, writes the bounded
+capsule and exact length and syncs, then writes the committed header and syncs.
+It finally rereads through the authenticated reader and verifies the original
+blob FileIdentity. An uncertain write/flush/read poisons the original backend;
+Store Unknown is sticky, including uncertainty before the first write. It cannot
+append a rescue record. Fresh readers accept a complete verified new format or
+fail closed; they never scan for an old suffix or silently fall back to v1.
+The old v1 parser rejects the v2 magic. Repeated checkpoints support both empty
+and nonempty suffixes without changing the original blob or resetting sequence.
+The anchor transaction is retained in the new segment's uniqueness set; earlier
+transaction UUIDs are not retained as an unbounded historical set. Absolute
+sequence and the sealed prior-chain binding replace that historical retention.
+
+The isolated tests use FakeSealer for format/state/IO verification, not evidence
+of DPAPI cryptographic strength. Fault hooks perform real partial journal writes
+or stop at actual publication boundaries, then independent child processes use
+original Store authenticated reads. Their successful classification is not a
+physical power-loss simulation. Processing/body/header partial writes, length
+and sync boundaries, final reread uncertainty, cancellation before writes and
+before final publication, truncated/corrupt capsules and appended old tails are
+covered. Complete bytes after a late injected uncertainty can be read by a fresh
+process while the originating instance remains Unknown. Both whole-filesystem
+rollback of an old valid capsule plus its old blob and unobserved wall-clock
+rollback remain outside the guarantee; DPAPI is not a monotonic external anchor.
+
+Evidence before the final regression pass: `unattended-checkpoint-behavior-red.log`
+contains the real near-capacity Capacity RED (the earlier first-red log is only a
+visibility compilation error). `unattended-checkpoint-first-green.log` verifies
+normal v1-to-v2 continuation; `unattended-checkpoint-cuts-second.log` records the
+real write-cut/reopen matrix; `unattended-checkpoint-codec-first.log` adds anchor
+structure and overflow checks. The final same-source pass in `checkpoint-final-UnattendedCheckpoint_.log`
+passes all six primary cases. Four affected regression groups pass Store 29,
+Capacity 10, Custody 5 and SingleRun 10, for 60 distinct primary tests total.
+Dedicated ignored child helpers are actually invoked by their parent tests and
+are not counted again. `checkpoint-final-ledger.json` lists the exact tests;
+`checkpoint-final-source.json` records the eight source hashes and
+`checkpoint-stage-files.txt` the nine-file commit scope. Strict Clippy passes in
+`unattended-checkpoint-strict-final.log` (29.50 seconds). The earlier final-first
+run preserves a test-only incorrect fixture path failure, subsequently corrected
+to the original backend target path without changing the Unknown assertions. No result
+here claims automatic reclamation, practical long-duration availability,
+reconnection, real-device validation, or public deployment.

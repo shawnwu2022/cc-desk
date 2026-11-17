@@ -799,3 +799,5 @@ mod capacity;
 
 #[path = "single_run_tests.rs"]
 mod single_run_tests;
+#[path = "checkpoint_tests.rs"]
+mod checkpoint;
