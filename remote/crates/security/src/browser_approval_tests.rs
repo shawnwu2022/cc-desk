@@ -47,6 +47,16 @@ pub(super) fn proof_challenge(
     if case == 5 {
         client["topOrigin"] = "https://desk.invalid".into();
     }
+    if case == 17 {
+        client["other_keys_can_be_added_here"] =
+            "do not compare clientDataJSON against a template".into();
+    }
+    if case == 18 {
+        client["futureExtension"] = serde_json::json!({"nested":[1,true,null]});
+    }
+    if case == 19 {
+        client["topOrigin"] = serde_json::Value::Null;
+    }
     let client = serde_json::to_vec(&client).unwrap();
     let mut auth = ring::digest::digest(&ring::digest::SHA256, b"desk.invalid")
         .as_ref()
@@ -219,7 +229,14 @@ fn browser_approval_json_ambiguity_bounds_expiry_005() {
         .unwrap();
     let kid = gate.issuer_kid();
     let bytes = proof(&profile, &grant, kid, 0);
-    for field in ["type", "challenge", "origin", "crossOrigin", "unknown"] {
+    for field in [
+        "type",
+        "challenge",
+        "origin",
+        "crossOrigin",
+        r"\u0074ype",
+        "unknown",
+    ] {
         let mut p: Approval = serde_json::from_slice(&bytes).unwrap();
         let mut client = String::from_utf8(B64.decode(&p.client_data_json).unwrap()).unwrap();
         client.pop();
@@ -239,7 +256,11 @@ fn browser_approval_json_ambiguity_bounds_expiry_005() {
                 kid,
                 ([8; 32], [9; 32])
             ),
-            Err(GrantError::Encoding),
+            if field == "unknown" {
+                Err(GrantError::Signature)
+            } else {
+                Err(GrantError::Encoding)
+            },
             "{field}"
         );
     }
@@ -264,4 +285,80 @@ fn browser_approval_json_ambiguity_bounds_expiry_005() {
     );
     now.store(5000, Ordering::Release);
     assert!(matches!(gate.accept(&bytes), Err(GrantError::Expired)));
+}
+
+#[test]
+fn browser_approval_signed_client_data_extensions_006() {
+    for case in [17, 18] {
+        let mut gate = crate::grant_tests::browser_test_gate();
+        let profile = profile();
+        gate.require_browser(profile.clone()).unwrap();
+        gate.browser_attempt([8; 32], [9; 32]).unwrap();
+        let grant = gate
+            .challenge(scope(), DataRole::Controller, Duration::from_secs(4))
+            .unwrap();
+        let kid = gate.issuer_kid();
+        let bytes = proof(&profile, &grant, kid, case);
+        assert_eq!(
+            profile.verify(&bytes, &grant, &admin(), kid, ([8; 32], [9; 32])),
+            Ok(()),
+            "signed extension case {case}"
+        );
+        let mut altered: Approval = serde_json::from_slice(&bytes).unwrap();
+        let mut client: serde_json::Value =
+            serde_json::from_slice(&B64.decode(&altered.client_data_json).unwrap()).unwrap();
+        client["unsignedExtra"] = true.into();
+        altered.client_data_json = B64.encode(serde_json::to_vec(&client).unwrap());
+        assert_eq!(
+            profile.verify(
+                &serde_json::to_vec(&altered).unwrap(),
+                &grant,
+                &admin(),
+                kid,
+                ([8; 32], [9; 32])
+            ),
+            Err(GrantError::Signature)
+        );
+        assert_eq!(
+            profile.verify(
+                &proof(&profile, &grant, kid, 19),
+                &grant,
+                &admin(),
+                kid,
+                ([8; 32], [9; 32])
+            ),
+            Err(GrantError::Encoding)
+        );
+        for field in ["type", "challenge", "origin", "crossOrigin"] {
+            let mut invalid: Approval = serde_json::from_slice(&bytes).unwrap();
+            let mut value: serde_json::Value =
+                serde_json::from_slice(&B64.decode(&invalid.client_data_json).unwrap()).unwrap();
+            value[field] = 7.into();
+            invalid.client_data_json = B64.encode(serde_json::to_vec(&value).unwrap());
+            assert_eq!(
+                profile.verify(
+                    &serde_json::to_vec(&invalid).unwrap(),
+                    &grant,
+                    &admin(),
+                    kid,
+                    ([8; 32], [9; 32])
+                ),
+                Err(GrantError::Encoding),
+                "known field {field}"
+            );
+        }
+        let mut oversized: Approval = serde_json::from_slice(&bytes).unwrap();
+        oversized.client_data_json = B64.encode(vec![b' '; 2049]);
+        assert_eq!(
+            profile.verify(
+                &serde_json::to_vec(&oversized).unwrap(),
+                &grant,
+                &admin(),
+                kid,
+                ([8; 32], [9; 32])
+            ),
+            Err(GrantError::Encoding)
+        );
+        assert!(gate.accept(&bytes).is_ok());
+    }
 }

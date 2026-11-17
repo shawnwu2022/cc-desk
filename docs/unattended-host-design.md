@@ -1917,3 +1917,88 @@ A browser-validated HTTPS transport, real registration/phone, and a successful
 production EntryWorker-to-Relay session remain separate gates. This stage
 neither upgrades old configurations nor changes production defaults, user
 credentials, public deployment, or the existing ten-second Host limits.
+
+## A6l — real browser production Source and authenticated short session
+
+The isolated `UnattendedProduct_RealBrowserProductionEntry_006` fixture joins
+previously separate gates: the real Chrome Window imports the operator, the
+original reader and enrollment provider feed production Source, and Source
+constructs the actual module EntryWorker. That worker fetches the unchanged
+production WASM/glue, not a Node bridge or test WASM. Each run verifies every
+manifest source/input/output hash and rejects TEST_ONLY exports. Public test
+vectors and a fresh CTAP2 virtual authenticator supply the matching RP,
+credential and nonextractable key handles; a positive credential sign counter
+is checked after the actual WebAuthn assertion.
+
+Playwright still fulfills the synthetic HTTPS origin without a browser TLS
+handshake. Its WebSocket proxy permits only the exact fixture Relay endpoint;
+Node verifies the published fixture CA, TLS 1.3 and subprotocol before forwarding
+binary messages. This is not browser certificate-trust, real-phone registration
+or public deployment evidence. No user profile, credential or trust store is
+modified. The original production defaults and approval limits remain unchanged.
+
+The complete success path requires the original Installed channel, a 1,920-cell
+snapshot, Window, one Host-written input byte and settled Idle. Before the
+isolated browser is disposed, the original Source connection, enrollment,
+Worker and proxy sockets must finish their own close receipts. The Host also
+checks its original managed retirement observations, without elevating the
+historical/Unobserved platform fields into a stronger claim.
+
+Early runs exposed fixture timing instability. The retained `second` and
+`mux-end` logs contain successes, while `final`, `recovery`, `timing` and other
+diagnostic logs contain failures; none are substituted for final-source evidence.
+A diagnostic matched the ClientHello ciphertext at the Node send and original
+Host mux receive, and identified the existing two-second initial IO window.
+That does not establish a unique cause for every earlier failure. Temporary
+native tracing and Worker clock instrumentation were removed before final tests.
+
+The fixture now prewarms only artifact checks, bundling, isolated Chrome, the
+public virtual authenticator and an empty page. READY asserts zero operator/app
+imports, Workers and sockets. Only after the original final approval and Host
+readiness does the same owned child receive one GO. Neither the two-second IO
+budget nor the ten-second authorization is extended or re-anchored. Both output
+pipes are drained from spawn; EOF requests browser cleanup, and a failed
+cleanup's last resort targets only that child process tree, never counts as
+normal retirement. The absolute Node watchdog likewise cannot produce success.
+
+A second, independent compatibility defect was reproduced after prewarming:
+Chrome's actual assertion included `other_keys_can_be_added_here`, with a
+37-byte authenticator payload, UP/UV flags and a valid-format DER signature.
+The original signed-client-data regression then returned `Encoding` for the
+same extra-key shape. [WebAuthn §5.8.1](https://www.w3.org/TR/webauthn-3/#dictdef-collectedclientdata)
+requires tolerance of unknown keys and order; Chromium deliberately sometimes
+adds this key. Only the inner `ClientData` serde structure now ignores unknown
+members. The outer approval DTO stays strict; known-field types and duplicate
+checks, origin/challenge/type/crossOrigin/topOrigin policy and size bounds stay
+unchanged. Verification still hashes and verifies the original client bytes,
+including every extension byte, rather than normalizing or stripping them.
+
+The behavior RED is `.audit/browser-client-data-extension-red.log`; the focused
+GREEN covers signed string/nested extensions, post-signature extension mutation,
+raw duplicate known keys including an escaped equivalent, invalid known types,
+2049-byte client data and explicit `topOrigin:null`. Unknown extension bytes
+modified after signing now reach and fail signature verification, not parsing.
+This change requires rebuilding both native Host and production WASM; the
+previous manifest is retained in
+`.audit/browser-source-real-before-extension-manifest.json` and is not valid
+evidence for the new parser. No other protocol DTO is made extensible.
+
+Final-source verification: the security library passes 143 tests, with its
+pre-existing `Registration_BrowserOracle_900` ignored. The original short-network
+and product groups pass four tests each: 151 distinct Rust tests total. The new
+real-browser case additionally passes three bounded consecutive runs (6.62s,
+7.58s, 6.52s); these repetitions and the product-group rerun are not extra
+distinct tests. Logs are indexed in
+`.audit/browser-source-real-final-ledger.json`; final source hashes are in
+`.audit/browser-source-real-final-source.json`. Strict security and native Clippy
+both pass (11.93s and 46.08s), and the MJS syntax check passes.
+
+The rebuilt production WASM is 5,808,691 bytes, SHA-256
+`c6573066b23a195404496e26eb9e95051945067edeefdbab1b184536139088bf`;
+the glue retains the A6k hash. Each real run rechecks the full current manifest.
+Generated artifacts remain ignored. The stage commits only this compatibility
+fix, its tests, the real-browser fixture/native harness and this documentation;
+the three pre-existing dirty files remain untouched. Real phone enrollment,
+browser-validated HTTPS/WSS certificates, public deployment, long-lived access
+and seamless reconnect remain unverified separate gates, not implied by this
+isolated ten-second session.

@@ -3053,7 +3053,7 @@ async fn unattended_short_network_case(mode: u8) {
     use crate::remote_native_pairing_store::tests::{record, synthetic_confirmed_record_candidate};
     use crate::remote_unattended_store::service::pending::PendingStart;
     let (f, native, _runtime_stop, document) = unattended_app_run_prepared(|f| {
-        if mode != 3 && mode != 4 {
+        if mode != 3 && mode != 4 && mode != 5 {
             return None;
         }
         let url: tauri::Url = "http://tauri.localhost/".parse().unwrap();
@@ -3122,8 +3122,13 @@ async fn unattended_short_network_case(mode: u8) {
         decode("c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721"),
         relay_scalar,
     ];
+    // 浏览器工具初始化不占用原批准与首读窗口；READY 不授予任何权限。
+    let mut real_browser = if mode == 5 {
+        let config = serde_json::json!({"case":"short-input","origin":relay.origin,"scope":scope,"hostSpki":host_spki,"expires":false,"revocationPath":null}).to_string();
+        Some(RealBrowserChild::prepare(&config))
+    } else { None };
     let mut product_keepalive = None;
-    let (approval, fixed_end, control) = if mode == 3 || mode == 4 {
+    let (approval, fixed_end, control) = if mode == 3 || mode == 4 || mode == 5 {
         let product = crate::remote_host::short_session::ShortSessionService::default();
         let binding = &document.as_ref().unwrap().2;
         let id = product
@@ -3207,6 +3212,7 @@ async fn unattended_short_network_case(mode: u8) {
         let pairing = pairing.clone();
         output = Some(
             tokio::task::spawn_blocking(move || {
+                if let Some(child) = real_browser.take() { return child.go_and_wait(); }
                 let mut child = std::process::Command::new("node")
                     .current_dir(
                         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -3215,7 +3221,7 @@ async fn unattended_short_network_case(mode: u8) {
                     )
                     .args([
                         "--experimental-strip-types",
-                        if mode == 4 { "remote/ui-terminal/src/browserSourcePullRelay.fixture.ts" } else { "remote/ui-terminal/src/browserSnapshotPullRelay.fixture.ts" },
+                        if mode == 5 { "remote/ui-terminal/src/browserSourceRealRelay.fixture.mjs" } else if mode == 4 { "remote/ui-terminal/src/browserSourcePullRelay.fixture.ts" } else { "remote/ui-terminal/src/browserSnapshotPullRelay.fixture.ts" },
                         &config,
                     ])
                     .stdout(std::process::Stdio::piped())
@@ -3579,4 +3585,79 @@ async fn UnattendedProduct_CancelAndForeignAdvanceNeverPersist_004() {
 async fn UnattendedProduct_ProductionBrowserSourcePull_005() {
     if short_network_isolated("UnattendedProduct_ProductionBrowserSourcePull_005") { return; }
     unattended_short_network_case(4).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn UnattendedProduct_RealBrowserProductionEntry_006() {
+    if short_network_isolated("UnattendedProduct_RealBrowserProductionEntry_006") { return; }
+    unattended_short_network_case(5).await;
+}
+
+// 唯一测试 Child 从 spawn 即持有所有管道；未 GO/失败先 EOF，原 Chrome 清理后 join。
+struct RealBrowserChild {
+    child: Option<std::process::Child>,
+    stdout: Option<std::thread::JoinHandle<Vec<u8>>>,
+    stderr: Option<std::thread::JoinHandle<Vec<u8>>>,
+}
+impl RealBrowserChild {
+    fn prepare(config: &str) -> Self {
+        use std::io::{BufRead, Read};
+        let mut child = std::process::Command::new("node")
+            .current_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap())
+            .args(["remote/ui-terminal/src/browserSourceRealRelay.fixture.mjs", config])
+            .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped())
+            .spawn().unwrap();
+        let (ready, observed) = std::sync::mpsc::channel();
+        let output = child.stdout.take().unwrap();
+        let error = child.stderr.take().unwrap();
+        let stdout = std::thread::spawn(move || {
+            let mut reader = std::io::BufReader::new(output); let mut all = Vec::new(); let mut line = Vec::new();
+            while reader.read_until(b'\n', &mut line).unwrap() != 0 {
+                if line == b"{\"kind\":\"test-only-browser-ready\"}\n" { let _ = ready.send(()); }
+                all.extend_from_slice(&line);line.clear();
+            } all
+        });
+        let stderr = std::thread::spawn(move || {let mut bytes=Vec::new();let mut error=error;error.read_to_end(&mut bytes).unwrap();bytes});
+        let mut owner=Self {child:Some(child),stdout:Some(stdout),stderr:Some(stderr)};
+        let end=Instant::now()+Duration::from_secs(8);
+        loop {
+            if observed.try_recv().is_ok() { eprintln!("TEST_ONLY_BROWSER_READY_BEFORE_APPROVAL"); return owner; }
+            assert!(owner.child.as_mut().unwrap().try_wait().unwrap().is_none(), "browser exited before READY");
+            assert!(Instant::now()<end,"browser READY deadline");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    fn go_and_wait(mut self) -> std::process::Output {
+        use std::io::Write;
+        eprintln!("TEST_ONLY_BROWSER_GO_AFTER_HOST_READY");
+        self.child.as_mut().unwrap().stdin.as_mut().unwrap().write_all(b"GO\n").unwrap();
+        let end=Instant::now()+Duration::from_secs(15);
+        loop {
+            if let Some(status)=self.child.as_mut().unwrap().try_wait().unwrap() {
+                self.child.take();
+                return std::process::Output {status,stdout:self.stdout.take().unwrap().join().unwrap(),stderr:self.stderr.take().unwrap().join().unwrap()};
+            }
+            assert!(Instant::now()<end,"browser original child deadline");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+}
+impl Drop for RealBrowserChild {
+    fn drop(&mut self) {
+        if let Some(mut child)=self.child.take() {
+            drop(child.stdin.take());
+            let end=Instant::now()+Duration::from_secs(5);
+            while child.try_wait().ok().flatten().is_none() && Instant::now()<end {std::thread::sleep(Duration::from_millis(10));}
+            if child.try_wait().ok().flatten().is_none() {
+                // 仅失败兜底终止本 fixture 创建的进程树，不计为正常退休。
+                use std::os::windows::process::CommandExt;
+                let _ = std::process::Command::new("taskkill.exe")
+                    .args(["/PID", &child.id().to_string(), "/T", "/F"])
+                    .creation_flags(0x0800_0000).status();
+            }
+            let _=child.wait();
+        }
+        if let Some(task)=self.stdout.take(){let _=task.join();}
+        if let Some(task)=self.stderr.take(){let _=task.join();}
+    }
 }

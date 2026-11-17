@@ -30,7 +30,7 @@ pub(crate) struct Approval {
     pub signature: String,
 }
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 struct ClientData {
     #[serde(rename = "type")]
     kind: String,
