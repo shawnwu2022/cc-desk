@@ -969,3 +969,53 @@ as child processes by custody case 003, not counted as an unrun end-to-end proof
 Strict remote-host lib/tests Clippy passes (27.55 seconds). Logs:
 unattended-custody-shared-red, unattended-custody-final,
 unattended-custody-store-regression and unattended-custody-strict-final.
+
+## A5: reserve durable revocation capacity
+
+The A4 capacity limitation is now guarded, without changing the journal format,
+8192-record upper bound, or existing wall-clock observation semantics. The
+transaction's remaining_commits fact is available only after its original
+read_verified has validated a complete clean Chain under control. Unread,
+Pending/torn, poisoned, or consumed transactions cannot supply usable capacity;
+this is not a caller count or a raw file-length division.
+
+Every Store publication that would leave Enabled requires at least two complete
+commit pairs: this write plus one reserved closure. This covers enable and
+observe through the shared publish boundary. With one remaining pair, observe
+on Enabled closes to Revoked in the same exact-CAS transaction, advances revision
+and authority_revision, and persists the maximum observed floor. The capacity
+closure is checked before the same-wall fast return. With two pairs, normal
+observe/enable still succeeds; the last pair remains available for explicit
+revocation. Clock rollback and expiry retain their original closure precedence
+and reason, and all publication failures take precedence over those reasons.
+
+CapacityRevoked means only that this capacity-triggered transaction successfully
+committed Revoked. Capacity means this call did not establish such a durable
+closure (for example an old completely full Enabled record, or a rejected enable
+that would spend the reserve). Unknown remains an uncertain write. These outcomes
+are not authorization capabilities, and an in-memory store gate being blocked,
+a durable Revoked record, and full connection retirement are distinct facts.
+An old full Enabled record remains unchanged on disk, is blocked even for a
+same-wall observe, and must not be presented as successfully revoked or restored.
+
+The isolated NTFS boundary fixture constructs codec-valid full history, rather
+than claiming 4096 real approval/commit operations. Its first RED produced three
+behavior failures: enable and observe spent the final pair leaving Enabled, and
+a full Enabled record returned a successful same-wall observation. Typed results
+were then added, with final cases for positive two-pair behavior, explicit revoke,
+clock/expiry, uncertain publication, and Pending/torn capacity rejection.
+
+There is still no automatic production observe call or live-session revocation
+notification. Per-call floor persistence is not reduced, no old records are
+reset/discarded and the limit is not raised. This is fail-closed damage prevention,
+not a 30-day availability claim: high-frequency durable observations could still
+exhaust the journal and force an early durable closure. The production owner and
+its observation/connection lifecycle require a separate reviewed contract.
+
+A5 final same-source verification passes 44 distinct native tests: capacity 10,
+original store 29 and custody 5, with the dedicated custody helper actually run
+as subprocesses. Strict remote-host lib/tests Clippy passes (28.19 seconds).
+Evidence logs are unattended-capacity-red, unattended-capacity-final,
+unattended-capacity-UnattendedStore_-regression,
+unattended-capacity-UnattendedCustody_-regression and
+unattended-capacity-strict-final. The independent review found no stage blocker.

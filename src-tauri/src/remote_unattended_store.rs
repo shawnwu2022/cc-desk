@@ -33,6 +33,7 @@ pub(crate) enum StoreError {
     Expired,
     Clock,
     Capacity,
+    CapacityRevoked,
 }
 pub(crate) type Result<T> = std::result::Result<T, StoreError>;
 pub(crate) trait Sealer {
@@ -42,6 +43,7 @@ pub(crate) trait Sealer {
 pub(crate) trait Transaction {
     fn read(&mut self) -> Result<Option<Vec<u8>>>;
     fn stamp(&self) -> Option<&CommitStamp>;
+    fn remaining_commits(&self) -> Result<usize>;
     fn commit(
         &mut self,
         bytes: &[u8],
@@ -225,15 +227,21 @@ impl<B: Backend, S: Sealer> Store<B, S> {
         let mut tx = self.backend.begin()?;
         let mut doc = self.read(&mut tx, &mut local)?;
         Self::cas(&doc, expected)?;
+        let remaining = tx.remaining_commits()?;
         let closure = if now < doc.observed_wall_ms {
             Some(StoreError::Clock)
         } else if doc.status == Status::Enabled && now >= doc.cutoff_ms {
             Some(StoreError::Expired)
+        } else if doc.status == Status::Enabled && remaining <= 1 {
+            Some(StoreError::Capacity)
         } else {
             None
         };
         if let Some(reason) = closure {
             local.blocked = true;
+            if reason == StoreError::Capacity && remaining == 0 {
+                return Err(StoreError::Capacity);
+            }
             doc.revision = doc.revision.checked_add(1).ok_or(StoreError::Invalid)?;
             doc.authority_revision = doc
                 .authority_revision
@@ -243,7 +251,11 @@ impl<B: Backend, S: Sealer> Store<B, S> {
             doc.observed_wall_ms = now.max(doc.observed_wall_ms);
             // 精确 CAS 已在同一锁内通过；先保存撤销，再报告时钟或截止原因。
             self.publish(&mut local, &mut tx, doc, true, &mut || Ok(()))?;
-            return Err(reason);
+            return Err(if reason == StoreError::Capacity {
+                StoreError::CapacityRevoked
+            } else {
+                reason
+            });
         }
         if now == doc.observed_wall_ms {
             local.last = Some(doc.clone());
@@ -308,6 +320,11 @@ impl<B: Backend, S: Sealer> Store<B, S> {
         authorize: &mut dyn FnMut() -> Result<()>,
     ) -> Result<LockedSnapshot> {
         validate(&doc)?;
+        // 任意 Enabled 写入都必须留下完整撤销 pair；不只约束 observe 调用点。
+        if doc.status == Status::Enabled && tx.remaining_commits()? < 2 {
+            local.blocked = true;
+            return Err(StoreError::Capacity);
+        }
         let bytes = self.encode(&doc)?;
         if let Err(error) = tx.commit(&bytes, replacing, &self.stamp(&doc, &bytes)?, authorize) {
             if error == StoreError::Unknown {

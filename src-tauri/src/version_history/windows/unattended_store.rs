@@ -514,9 +514,29 @@ impl UnattendedTransaction {
         verify().map_err(|_| StoreError::Unknown)
     }
 }
+fn journal_remaining(records: usize) -> Result<usize> {
+    crate::remote_unattended_store::journal::MAX_RECORDS
+        .checked_sub(records)
+        .map(|remaining| remaining / 2)
+        .ok_or(StoreError::Unknown)
+}
 impl Transaction for UnattendedTransaction {
     fn stamp(&self) -> Option<&CommitStamp> {
         self.chain.as_ref()?.last.as_ref().map(|r| &r.stamp)
+    }
+    fn remaining_commits(&self) -> Result<usize> {
+        self.check()?;
+        if self.poison.load(Ordering::Acquire) {
+            return Err(StoreError::Poisoned);
+        }
+        if !self.observed {
+            return Err(StoreError::Invalid);
+        }
+        let chain = self.chain.as_ref().ok_or(StoreError::Invalid)?;
+        if !chain.records.is_multiple_of(2) || chain.last.as_ref().is_some_and(|r| !r.clean) {
+            return Err(StoreError::Unknown);
+        }
+        journal_remaining(chain.records)
     }
     fn read(&mut self) -> Result<Option<Vec<u8>>> {
         let result = self.read_verified();

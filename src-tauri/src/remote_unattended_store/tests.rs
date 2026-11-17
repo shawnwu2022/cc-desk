@@ -791,3 +791,6 @@ fn UnattendedStore_ReopenBeforeInitializeNeverResumesCreation_029() {
 
 #[path = "custody_tests.rs"]
 mod custody;
+
+#[path = "capacity_tests.rs"]
+mod capacity;
