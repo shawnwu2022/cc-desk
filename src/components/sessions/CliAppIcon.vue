@@ -8,7 +8,8 @@ import opencode from '@/assets/icons/cli/opencode.svg'
 import opencodeDark from '@/assets/icons/cli/opencode-dark.svg'
 
 const props = defineProps<{ cli: UnifiedCliKind; decorative?: boolean }>()
-const apps: Record<UnifiedCliKind, { src: string; darkSrc?: string; name: string; fallback: string }> = {
+const apps: Record<UnifiedCliKind, { src?: string; darkSrc?: string; name: string; fallback: string }> = {
+  antigravity: { name: 'Antigravity CLI', fallback: 'AGY' },
   claude: { src: claude, name: 'Claude Code', fallback: 'CC' },
   codex: { src: codex, name: 'Codex CLI', fallback: 'CX' },
   opencode: { src: opencode, darkSrc: opencodeDark, name: 'opencode', fallback: 'OC' },
@@ -27,7 +28,7 @@ function onImageError(event: Event) {
 <template>
   <component :is="decorative ? 'span' : AppTooltip" :text="decorative ? undefined : app.name">
     <span class="cli-app-icon" :class="`cli-app-icon--${cli}`" :role="decorative ? undefined : 'img'" :aria-hidden="decorative || undefined" :aria-label="decorative ? undefined : app.name" :tabindex="decorative ? undefined : 0">
-      <template v-if="!imageFailed">
+      <template v-if="!imageFailed && app.src">
         <img :key="cli" ref="image" class="cli-app-icon__image" :class="{ 'cli-app-icon__image--light': app.darkSrc }" :src="app.src" alt="" aria-hidden="true" draggable="false" @error="onImageError" />
         <img v-if="app.darkSrc" :key="`${cli}-dark`" ref="darkImage" class="cli-app-icon__image cli-app-icon__image--dark" :src="app.darkSrc" alt="" aria-hidden="true" draggable="false" @error="onImageError" />
       </template>

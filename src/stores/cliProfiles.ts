@@ -108,7 +108,7 @@ function launcher(value: unknown): ProfileLauncher {
 function profile(value: unknown): CliProfile {
   const row = object(value)
   // opencode 由后端 CliKind 序列化引入；CliKind union 扩散属 Plan B，白名单通过后局部桥接。
-  if (row.cli !== 'claude' && row.cli !== 'codex' && row.cli !== 'opencode') return invalid()
+  if (row.cli !== 'claude' && row.cli !== 'codex' && row.cli !== 'opencode' && row.cli !== 'antigravity') return invalid()
 
   const envRow = object(row.env)
   const env: CliProfile['env'] = {}
@@ -214,6 +214,7 @@ export const useCliProfilesStore = defineStore('cli-profiles', () => {
     claude: null,
     codex: null,
     opencode: null,
+    antigravity: null,
   })
 
   let epoch = 0
@@ -224,12 +225,14 @@ export const useCliProfilesStore = defineStore('cli-profiles', () => {
     claude: profiles.value.filter(item => item.cli === 'claude'),
     codex: profiles.value.filter(item => item.cli === 'codex'),
     opencode: profiles.value.filter(item => item.cli === 'opencode'),
+    antigravity: profiles.value.filter(item => item.cli === 'antigravity'),
   }))
 
   const selected = computed<Record<NativeCliKind, CliProfile | null>>(() => ({
     claude: selectedProfile('claude'),
     codex: selectedProfile('codex'),
     opencode: selectedProfile('opencode'),
+    antigravity: selectedProfile('antigravity'),
   }))
 
   function selectedProfile(cli: NativeCliKind): CliProfile | null {
@@ -239,7 +242,7 @@ export const useCliProfilesStore = defineStore('cli-profiles', () => {
   }
 
   function reconcileSelection() {
-    for (const cli of ['claude', 'codex', 'opencode'] as const) {
+    for (const cli of ['claude', 'codex', 'opencode', 'antigravity'] as const) {
       const rows = profiles.value.filter(item => item.cli === cli)
       const current = selectedIds.value[cli]
       selectedIds.value[cli] = rows.some(item => item.id === current)

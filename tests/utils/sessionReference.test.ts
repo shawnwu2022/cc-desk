@@ -46,6 +46,7 @@ describe('Session reference drag payload', () => {
   it('SessionRef_PayloadAcceptsOpencode_009', () => {
     const valid = JSON.parse(buildSessionDragPayload(base))
     expect(parseSessionDragPayload(JSON.stringify({ ...valid, cli: 'opencode' }))).not.toBeNull()
+    expect(parseSessionDragPayload(JSON.stringify({ ...valid, cli: 'antigravity' }))).not.toBeNull()
   })
 })
 

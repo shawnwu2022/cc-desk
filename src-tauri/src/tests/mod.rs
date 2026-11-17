@@ -186,3 +186,6 @@ mod native_cli_version_parser;
 #[cfg(feature = "remote-client-ipc")]
 #[path = "native_cli_remote_channels.rs"]
 pub(crate) mod remote_channels;
+
+#[cfg(all(test, windows, feature = "antigravity-acceptance"))]
+mod native_cli_antigravity_acceptance;

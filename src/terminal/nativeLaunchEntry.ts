@@ -67,7 +67,7 @@ export function createNativeLaunchEntry(options: NativeLaunchEntryOptions): Nati
   const makeAttempt = options.createAttempt ?? createCliLaunchAttempt
 
   function build(input: NativeLaunchEntryInput): LaunchRequest {
-    if (input.cli !== 'claude' && input.cli !== 'codex' && input.cli !== 'opencode') {
+    if (input.cli !== 'claude' && input.cli !== 'codex' && input.cli !== 'opencode' && input.cli !== 'antigravity') {
       throw new Error('NATIVE_CLI_REQUIRED')
     }
 

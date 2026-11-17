@@ -240,6 +240,7 @@ export default {
   newSessionAutomaticConfig: "自动选择",
   newSessionPermissions: "权限设置",
   newSessionCodexPermissions: "使用 Codex CLI 自身的权限与审批设置",
+  newSessionAntigravityPermissions: "使用 Antigravity CLI 自身的权限设置；历史与观察器暂不支持",
   newSessionOpencodePermissions: "使用 opencode 自身的权限设置",
   newSessionSkipPermissions: "Desk 配置的跳过权限检查标志：开启",
   newSessionInheritedPermissions: "Desk 的跳过权限检查标志继承现有 Claude 启动设置",

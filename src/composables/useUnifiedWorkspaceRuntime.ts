@@ -32,6 +32,7 @@ const historyWarningSources: Record<UnifiedCliKind, WorkspaceWarningSource> = {
   claude: 'claude-history',
   codex: 'codex-history',
   opencode: 'opencode-history',
+  antigravity: 'catalog',
 }
 export const historyWarningSource = (cli: UnifiedCliKind): WorkspaceWarningSource => historyWarningSources[cli]
 
@@ -298,7 +299,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     && !profiles.profiles.length && !workspace.projects.length && !projects.pinnedProjects.length)
   let retryRequest: { request: WorkspaceRequest; owns: () => boolean; resumeTarget?: UnifiedSession } | null = null
   let retryResumeTarget: { sequence: number; target: UnifiedSession } | null = null
-  const cliProblems = computed(() => (['claude', 'codex', 'opencode'] as const).flatMap(cli => {
+  const cliProblems = computed(() => (['claude', 'codex', 'opencode', 'antigravity'] as const).flatMap(cli => {
     const latest = [...native.tabs.values()].reverse().filter(tab => tab.cli === cli).sort((a, b) => b.lastActivityAt - a.lastActivityAt)[0]
     const failed = latest?.status === 'failed' ? latest : null
     const code = latest?.status === 'running' ? null : failed?.errorCode === 'AUTH_REQUIRED' ? 'AUTH_REQUIRED'
@@ -492,7 +493,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
           if (results.some(result => !result.ok)) partial = true
         }
       }
-      const contexts = profiles.profiles.flatMap(profile => profile.cli === 'shell' || (query.cli && profile.cli !== query.cli) || !cliSupport.isEnabled(profile.cli as UnifiedCliKind) ? []
+      const contexts = profiles.profiles.flatMap(profile => profile.cli === 'shell' || profile.cli === 'antigravity' || (query.cli && profile.cli !== query.cli) || !cliSupport.isEnabled(profile.cli as UnifiedCliKind) ? []
         : workspace.projects.filter(project => query.scope === 'all' || sameProjectPath(project.selectedPath, query.projectPath)).map(project => ({
           cli: profile.cli as UnifiedCliKind, profileId: profile.id, profileRevision: profile.revision, projectId: project.projectId, projectPath: project.selectedPath,
         })))
@@ -589,7 +590,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
         for (const profile of profiles.profiles) {
           // 关闭的 CLI 不组装历史观察组；validKeys 随之不含其 context，
           // 下面的失效循环会把已加载的 entry 一并撤销。
-          if (profile.cli === 'shell' || !cliSupport.isEnabled(profile.cli as UnifiedCliKind)) continue
+          if (profile.cli === 'shell' || profile.cli === 'antigravity' || !cliSupport.isEnabled(profile.cli as UnifiedCliKind)) continue
           groups.set(`${profile.id}\u0000${profile.revision}`, { cli: profile.cli as UnifiedCliKind, profileId: profile.id, profileRevision: profile.revision,
             projects: workspace.projects.map(project => ({ projectId: project.projectId, projectPath: project.selectedPath })) })
         }
@@ -669,7 +670,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
             if (!(await legacy.loadHistoryFor(path, true)).ok) legacyWarnings!.add('legacy-history')
           } catch (failure) { legacyWarnings!.add('legacy-history', failure) }
         }
-        const sources = profiles.profiles.filter(profile => profile.cli === cli)
+        const sources = profiles.profiles.filter(profile => profile.cli === cli && profile.cli !== 'antigravity')
         for (let i = 0; i < sources.length && current(); i += 2) {
           await Promise.allSettled(sources.slice(i, i + 2).map(async profile => {
             if (!current() || profiles.profile(profile.id)?.revision !== profile.revision) return
@@ -692,7 +693,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   watch(() => cliSupport.support, (next, previous) => {
     if (disposed) return
     if (!ready.value || loading.value) { void refresh(); return }
-    for (const cli of ['claude', 'codex', 'opencode'] as const) if (next[cli] !== previous[cli]) void refreshSupport(cli)
+    for (const cli of ['claude', 'codex', 'opencode', 'antigravity'] as const) if (next[cli] !== previous[cli]) void refreshSupport(cli)
   })
 
   watch(() => profiles.profiles.map(profile => ({ id: profile.id, cli: profile.cli, revision: profile.revision })), (next, previous) => {
@@ -712,7 +713,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
       await draft.refreshAvailability()
       for (let index = 0; index < changed.length && !disposed; index += 2) {
         await Promise.allSettled(changed.slice(index, index + 2).map(async profile => {
-          if (profile.cli === 'shell' || !cliSupport.isEnabled(profile.cli) || profiles.profile(profile.id)?.revision !== profile.revision) return
+          if (profile.cli === 'shell' || profile.cli === 'antigravity' || !cliSupport.isEnabled(profile.cli) || profiles.profile(profile.id)?.revision !== profile.revision) return
           await history.loadGrouped({ cli: profile.cli, profileId: profile.id, profileRevision: profile.revision,
             projects: workspace.projects.map(project => ({ projectId: project.projectId, projectPath: project.selectedPath })) }, { retainOnFailure: true })
         }))
@@ -747,7 +748,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
       const { intent, ...project } = request.project
       if (intent === 'restore') {
         shell.requestWorkspaceAction({ kind: 'restore-session', project, mode: 'history' })
-      } else if (intent === 'claude' || intent === 'codex' || intent === 'opencode') {
+      } else if (intent === 'claude' || intent === 'codex' || intent === 'opencode' || intent === 'antigravity') {
         await catalog.createSession({ ...project, cli: intent, action: { kind: 'new' } })
       } else if (intent === 'options') draft.open(project)
       else draft.openChooser(project)
@@ -954,6 +955,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   let historyTimer: ReturnType<typeof setTimeout> | undefined
   let historyReading = false
   function historyCue(tab: NativeCliTab): { identity: string | null; reply: string | null; prompt: string | null; titleRevision: number } | null {
+    if (tab.cli === 'antigravity') return null
     if (tab.cli === 'opencode' && tab.action.kind === 'resume-id') {
       // 指纹必须包含 historyChangeRevision：v2 观察者的 db 变化 cue 只推进它，
       // 不含它则 cue 永远到不了 queueHistory（对齐通用分支的合成公式）。
@@ -1192,7 +1194,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
   })
   const stopIndexMaintenance = indexMaintenance.configure(async control => {
     if (!ready.value || loading.value || disposed) throw new Error('INDEX_REBUILD_NOT_READY')
-    const sources = profiles.profiles.filter(profile => profile.cli !== 'shell' && cliSupport.isEnabled(profile.cli as UnifiedCliKind))
+    const sources = profiles.profiles.filter(profile => profile.cli !== 'shell' && profile.cli !== 'antigravity' && cliSupport.isEnabled(profile.cli as UnifiedCliKind))
       .map(profile => ({ cli: profile.cli as UnifiedCliKind, profileId: profile.id, profileRevision: profile.revision,
         projects: workspace.projects.map(project => ({ projectId: project.projectId, projectPath: project.selectedPath })) }))
     const identity = JSON.stringify(sources)
@@ -1218,7 +1220,7 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
         if ([...entries.values()].some(entry => entry.error || entry.readFailures?.length)) throw new Error('INDEX_SCAN_INCOMPLETE')
         control.progress(++completed, paths.length + sources.length)
       }
-      const current = profiles.profiles.filter(profile => profile.cli !== 'shell' && cliSupport.isEnabled(profile.cli as UnifiedCliKind))
+      const current = profiles.profiles.filter(profile => profile.cli !== 'shell' && profile.cli !== 'antigravity' && cliSupport.isEnabled(profile.cli as UnifiedCliKind))
         .map(profile => ({ cli: profile.cli as UnifiedCliKind, profileId: profile.id, profileRevision: profile.revision,
           projects: workspace.projects.map(project => ({ projectId: project.projectId, projectPath: project.selectedPath })) }))
       if (disposed || JSON.stringify(current) !== identity) throw new Error('INDEX_SOURCE_CHANGED')

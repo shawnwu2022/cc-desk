@@ -434,6 +434,7 @@ pub(crate) fn freeze_launch(
     };
     Ok(LaunchSnapshot {
         observer_requested: !raw
+            && request.cli != CliKind::Antigravity
             && observer_enabled(profile)
             && !default_args.iter().any(|arg| arg == "--")
             && !request.extra_args.iter().any(|arg| arg == "--"),

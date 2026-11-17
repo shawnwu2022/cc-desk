@@ -107,15 +107,24 @@ pub(crate) enum CliKind {
     Claude,
     Codex,
     Opencode,
+    Antigravity,
     Shell,
 }
 
 impl CliKind {
+    pub(crate) fn program_name(self) -> &'static str {
+        match self {
+            Self::Antigravity => "agy",
+            _ => self.as_str(),
+        }
+    }
+
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Claude => "claude",
             Self::Codex => "codex",
             Self::Opencode => "opencode",
+            Self::Antigravity => "antigravity",
             Self::Shell => "shell",
         }
     }

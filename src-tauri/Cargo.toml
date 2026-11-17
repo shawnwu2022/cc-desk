@@ -62,6 +62,8 @@ zstd = { version = "=0.13.3", default-features = false }
 default = ["sqlite"]
 sqlite = ["rusqlite"]
 history-roundtrip-acceptance = []
+# 仅显式运行已安装官方 CLI 的无任务、无登录交互验收。
+antigravity-acceptance = []
 remote-client-ipc = ["dep:cc-desk-remote-client", "dep:cc-desk-remote-security", "dep:cc-desk-remote-record", "dep:cc-desk-remote-transport", "dep:rustls", "dep:coset"]
 remote-host = ["remote-client-ipc", "dep:cc-desk-remote-host"]
 

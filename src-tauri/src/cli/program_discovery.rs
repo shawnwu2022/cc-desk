@@ -83,7 +83,7 @@ pub(crate) fn discover_programs(
     }
     let environment = build_environment(inherited, &EnvMap::new(), profile, legacy.as_ref(), None)?;
     let mut candidates = vec![];
-    for path in discover_candidates(profile.cli.as_str(), &environment, &roots)? {
+    for path in discover_candidates(profile.cli.program_name(), &environment, &roots)? {
         let Some(launcher) = candidate_launcher(&path, &environment, &roots)? else {
             continue;
         };

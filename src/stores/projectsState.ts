@@ -29,7 +29,7 @@ function boundedText(value: unknown, maximum: number, empty = false): value is s
 function sessionRecord(value: unknown): value is SessionUiRecord {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const row = value as SessionUiRecord
-  return ['legacy-claude', 'native-cli'].includes(row.runtime) && ['claude', 'codex', 'opencode'].includes(row.cli)
+  return ['legacy-claude', 'native-cli'].includes(row.runtime) && ['claude', 'codex', 'opencode', 'antigravity'].includes(row.cli)
     && boundedText(row.projectPath, 32768) && boundedText(row.adapterSessionId, 256)
     && (row.nativeSessionId == null || boundedText(row.nativeSessionId, 256)) && boundedText(row.title, 200, true)
     && Number.isInteger(row.lastActivityAt) && row.lastActivityAt >= 0
@@ -43,8 +43,8 @@ function sameSessionRecord(left: SessionUiRecord | undefined, right: SessionUiRe
 function launchPreference(value: unknown): value is ProjectLaunchPreference {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const row = value as ProjectLaunchPreference
-  return ['claude', 'codex', 'opencode'].includes(row.lastCli)
-    && [row.claudeLaunchConfigId, row.codexLaunchConfigId, row.opencodeLaunchConfigId].every(id => id == null || boundedText(id, 256))
+  return ['claude', 'codex', 'opencode', 'antigravity'].includes(row.lastCli)
+    && [row.claudeLaunchConfigId, row.codexLaunchConfigId, row.opencodeLaunchConfigId, row.antigravityLaunchConfigId].every(id => id == null || boundedText(id, 256))
 }
 function syncStringMap(target: Map<string, string>, source: Record<string, string> | undefined): void {
   target.clear()
@@ -226,10 +226,12 @@ export const useProjectsStateStore = defineStore('projects-state', () => {
         claudeLaunchConfigId: current?.claudeLaunchConfigId ?? null,
         codexLaunchConfigId: current?.codexLaunchConfigId ?? null,
         opencodeLaunchConfigId: current?.opencodeLaunchConfigId ?? null,
+        antigravityLaunchConfigId: current?.antigravityLaunchConfigId ?? null,
       }
       if (cli === 'claude') next.claudeLaunchConfigId = launchConfigId
       else if (cli === 'codex') next.codexLaunchConfigId = launchConfigId
       else if (cli === 'opencode') next.opencodeLaunchConfigId = launchConfigId
+      else if (cli === 'antigravity') next.antigravityLaunchConfigId = launchConfigId
       return projectsApi.setProjectLaunchPreference(projectPath, next)
     }, true)
   }

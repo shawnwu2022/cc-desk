@@ -24,7 +24,7 @@ const codexPreference: ProjectLaunchPreference = {
   lastCli: 'codex',
   claudeLaunchConfigId: null,
   codexLaunchConfigId: 'codex-default',
-  opencodeLaunchConfigId: null,
+  opencodeLaunchConfigId: null, antigravityLaunchConfigId: null,
 }
 
 vi.mock('@/api/tauri', () => ({
@@ -242,8 +242,8 @@ describe('durable shared projects state', () => {
     const codex = store.setLaunchPreference('/repo', 'codex', 'codex-success')
     first.resolve({ ...emptyState(), launchPreferences: { '/repo': { lastCli: 'claude', claudeLaunchConfigId: 'claude-success', codexLaunchConfigId: null } } })
     await Promise.all([claude, codex])
-    expect(write.mock.calls[1][1]).toEqual({ lastCli: 'codex', claudeLaunchConfigId: 'claude-success', codexLaunchConfigId: 'codex-success', opencodeLaunchConfigId: null })
-    expect(store.launchPreferences.get('/repo')).toEqual({ lastCli: 'codex', claudeLaunchConfigId: 'claude-success', codexLaunchConfigId: 'codex-success', opencodeLaunchConfigId: null })
+    expect(write.mock.calls[1][1]).toEqual({ lastCli: 'codex', claudeLaunchConfigId: 'claude-success', codexLaunchConfigId: 'codex-success', opencodeLaunchConfigId: null, antigravityLaunchConfigId: null })
+    expect(store.launchPreferences.get('/repo')).toEqual({ lastCli: 'codex', claudeLaunchConfigId: 'claude-success', codexLaunchConfigId: 'codex-success', opencodeLaunchConfigId: null, antigravityLaunchConfigId: null })
   })
 
   it('Task12_OpencodePreferenceThirdKey', async () => {
@@ -252,7 +252,7 @@ describe('durable shared projects state', () => {
     write.mockImplementationOnce(async (_path, preference) => ({ ...emptyState(), launchPreferences: { '/repo': preference } }))
     const store = useProjectsStateStore(); await store.load()
     await store.setLaunchPreference('/repo', 'opencode', 'opencode-success')
-    expect(write).toHaveBeenLastCalledWith('/repo', { lastCli: 'opencode', claudeLaunchConfigId: null, codexLaunchConfigId: null, opencodeLaunchConfigId: 'opencode-success' })
+    expect(write).toHaveBeenLastCalledWith('/repo', { lastCli: 'opencode', claudeLaunchConfigId: null, codexLaunchConfigId: null, opencodeLaunchConfigId: 'opencode-success', antigravityLaunchConfigId: null })
   })
 
   // 反向保护：写入其它 CLI 时不得抹掉已存的 opencode 槽位。
@@ -263,7 +263,17 @@ describe('durable shared projects state', () => {
     const store = useProjectsStateStore(); await store.load()
     await store.setLaunchPreference('/repo', 'opencode', 'opencode-success')
     await store.setLaunchPreference('/repo', 'claude', 'claude-success')
-    expect(write).toHaveBeenLastCalledWith('/repo', { lastCli: 'claude', claudeLaunchConfigId: 'claude-success', codexLaunchConfigId: null, opencodeLaunchConfigId: 'opencode-success' })
+    expect(write).toHaveBeenLastCalledWith('/repo', { lastCli: 'claude', claudeLaunchConfigId: 'claude-success', codexLaunchConfigId: null, opencodeLaunchConfigId: 'opencode-success', antigravityLaunchConfigId: null })
   })
 
+})
+
+it('Antigravity_PreferenceKeepsIndependentSlot_001', async () => {
+  const api = await import('@/api/tauri')
+  const write = api.setProjectLaunchPreference as ReturnType<typeof vi.fn>
+  write.mockImplementation(async (_path, preference) => ({ ...emptyState(), launchPreferences: { '/repo': preference } }))
+  const store = useProjectsStateStore(); await store.load()
+  await store.setLaunchPreference('/repo', 'antigravity', 'agy-work')
+  await store.setLaunchPreference('/repo', 'claude', 'cc-work')
+  expect(store.launchPreferences.get('/repo')).toMatchObject({ lastCli: 'claude', antigravityLaunchConfigId: 'agy-work', claudeLaunchConfigId: 'cc-work' })
 })

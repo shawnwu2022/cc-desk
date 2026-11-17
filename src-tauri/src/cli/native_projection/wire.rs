@@ -102,7 +102,9 @@ impl ReadRequest {
         id(&self.source.scope_id, "scopeId")?;
         id(&self.source.instance_id, "instanceId")?;
         id(&self.source.profile_id, "profileId")?;
-        if self.source.cli == CliKind::Shell || self.source.identity_epoch.get() == 0 {
+        if matches!(self.source.cli, CliKind::Shell | CliKind::Antigravity)
+            || self.source.identity_epoch.get() == 0
+        {
             return Err(SafeError::invalid("source"));
         }
         if self.source.source_root_key.is_empty()
