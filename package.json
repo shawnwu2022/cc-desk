@@ -59,7 +59,8 @@
     "test:terminal-fit": "playwright test --config playwright.terminal-fit.config.ts",
     "test:production": "playwright test --config playwright.production.config.ts",
     "prepare:session-sdk": "node scripts/prepare-session-sdk.mjs",
-    "prepare:opencode-archive": "node scripts/prepare-opencode-archive-sdk.mjs"
+    "prepare:opencode-archive": "node scripts/prepare-opencode-archive-sdk.mjs",
+    "build:win:remote-trial": "node scripts/build-remote-trial.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "2.11.1",

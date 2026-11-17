@@ -1,0 +1,10 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "build": {
+    "beforeBuildCommand": "node scripts/prepare-remote-trial.mjs",
+    "frontendDist": "../.audit/remote-trial-dist"
+  },
+  "bundle": {
+    "createUpdaterArtifacts": false
+  }
+}
