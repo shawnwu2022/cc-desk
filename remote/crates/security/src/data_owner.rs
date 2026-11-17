@@ -278,6 +278,20 @@ struct Engine<S> {
     write_turn: bool,
     peer: Arc<crate::peer_install::Shared>,
 }
+// TLS 协议损坏不可当作可重连传输中断，未知来源保持不确定。
+fn tls_io_error(kind: std::io::ErrorKind) -> DataError {
+    use std::io::ErrorKind;
+    match kind {
+        ErrorKind::InvalidData => DataError::Codec,
+        ErrorKind::UnexpectedEof
+        | ErrorKind::ConnectionReset
+        | ErrorKind::ConnectionAborted
+        | ErrorKind::BrokenPipe
+        | ErrorKind::NotConnected => DataError::Io,
+        _ => DataError::Uncertain,
+    }
+}
+
 impl<S: AsyncRead + AsyncWrite + Unpin> Engine<S> {
     fn poll(&mut self, cx: &mut Context<'_>) -> Poll<Result<Event, DataError>> {
         self.authority.check()?;
@@ -291,19 +305,21 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Engine<S> {
         if let Some(w) = &mut self.writing {
             if w.offset < w.bytes.len() {
                 match Pin::new(&mut self.io).poll_write(cx, &w.bytes[w.offset..]) {
-                    Poll::Ready(Ok(0)) => return Poll::Ready(Err(DataError::Io)),
+                    Poll::Ready(Ok(0)) => {
+                        return Poll::Ready(Err(tls_io_error(std::io::ErrorKind::WriteZero)));
+                    }
                     Poll::Ready(Ok(n)) => {
                         w.offset += n;
                         progress = true
                     }
-                    Poll::Ready(Err(_)) => return Poll::Ready(Err(DataError::Io)),
+                    Poll::Ready(Err(error)) => return Poll::Ready(Err(tls_io_error(error.kind()))),
                     Poll::Pending => {}
                 }
             }
             if w.offset == w.bytes.len() {
                 match Pin::new(&mut self.io).poll_flush(cx) {
                     Poll::Ready(Ok(())) => written = true,
-                    Poll::Ready(Err(_)) => return Poll::Ready(Err(DataError::Io)),
+                    Poll::Ready(Err(error)) => return Poll::Ready(Err(tls_io_error(error.kind()))),
                     Poll::Pending => {}
                 }
             }
@@ -331,7 +347,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Engine<S> {
                         timer_started = true;
                     }
                 }
-                Poll::Ready(Err(_)) => return Poll::Ready(Err(DataError::Io)),
+                Poll::Ready(Err(error)) => return Poll::Ready(Err(tls_io_error(error.kind()))),
                 Poll::Pending => {}
             }
             if self.read.payload.is_none() && self.read.offset == 8 {
@@ -817,3 +833,35 @@ mod peer_engine_admission_tests {
 #[path = "live_keepalive.rs"]
 mod live_keepalive;
 pub use live_keepalive::LiveKeepaliveFact;
+
+#[cfg(test)]
+mod tls_io_error_tests {
+    use super::*;
+
+    #[test]
+    fn tls_io_error_classification_is_conservative() {
+        use std::io::ErrorKind;
+        for kind in [
+            ErrorKind::UnexpectedEof,
+            ErrorKind::ConnectionReset,
+            ErrorKind::ConnectionAborted,
+            ErrorKind::BrokenPipe,
+            ErrorKind::NotConnected,
+        ] {
+            assert_eq!(tls_io_error(kind), DataError::Io);
+        }
+        assert_eq!(tls_io_error(ErrorKind::InvalidData), DataError::Codec);
+        for kind in [
+            ErrorKind::Other,
+            ErrorKind::WriteZero,
+            ErrorKind::TimedOut,
+            ErrorKind::InvalidInput,
+            ErrorKind::PermissionDenied,
+            ErrorKind::Interrupted,
+            ErrorKind::WouldBlock,
+            ErrorKind::Unsupported,
+        ] {
+            assert_eq!(tls_io_error(kind), DataError::Uncertain);
+        }
+    }
+}

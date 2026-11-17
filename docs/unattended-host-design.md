@@ -2216,3 +2216,65 @@ reconnect-compat，后九组为 reconnect-verified；reconnect-final-ledger.json
 reconnect-strict-final.log（29.57 秒）。reconnect-final-source.json 记录 12 份源码
 指纹，reconnect-stage-files.txt 限定 13 文件。两份临时 NativeHost 诊断源已与保存
 原字节逐项核对相同；原三份待处理改动与生成产物均排除本片提交。
+
+
+## A6p：原终因分类与异常截断恢复（内部有限会话）
+
+本片先闭合 A6o 的恢复分类，不接浏览器自动重试，不改变旧批准、父绝对截止、
+原两秒初始化窗口、每代完整认证或 journal 写入语义。只有独立 ReconnectSession
+使用新分类；旧 Local/ShortNetwork/NetworkSession 不升级为重连批准。
+
+原 RunningChannel.wait_closed_checked 返回 Result<DataError, DataError>：外层成功
+只证明原 channel owner join 后返回了终因，不表示业务成功。原 socket 在 wire
+关闭/join 后读取缓存终因，原材料收口仍独立执行；只有 Some(Ok(Io)) 是候选。
+None、Closed、Codec、Grant、其他终因或外层错误先关闭父门，再发布 terminal 与
+通知原 App worker。候选仍必须原 CompleteRetirement、key/notifier join、当前父门、
+固定截止、配对 CAS、Store.observe 和新一代完整认证；分类不制造任何退休收据。
+Closed 可由本机 stop 或队列关闭产生，因此不能作为正常 peer 断开的证明。
+
+固定 tokio-rustls 0.26.4 common/mod.rs 将 process_new_packets 的协议错误包装为
+io::ErrorKind::InvalidData；rustls 0.23.46 conn.rs 将没有 close_notify 的截断报告为
+UnexpectedEof。原 security Engine 三处 TLS read/write/flush 将全部错误压成 Io，
+会把坏 TLS 认证记录也误认为恢复候选。现统一有限映射：InvalidData 为 Codec；
+UnexpectedEof、ConnectionReset、ConnectionAborted、BrokenPipe、NotConnected 为 Io；
+其余（包括 Other、WriteZero、未知 kind）为 Uncertain，写入返回零也走同一映射。
+不改原 owner 的 stop 优先级；并发错误可能被观察为 Closed，但该结果仍拒绝恢复。
+UnexpectedEof 可以来自恶意截断，绝不等于善意断网证明。WASM 适配器的 Other
+同样保守为 Uncertain，不保证任意浏览器传输失败均能恢复。
+
+新增真实异常截断用例在 Installed、快照、输入与 settle 后终止原隔离代理 socket，
+观察原 Io、完整原收据及同 Session 第二次认证/Installed，两次输入各执行一次。
+这是受控传输截断，不是所有平台 TCP RST 的穷尽验证。另有测试终因 Codec 注入，
+只证明 socket 分类与父关先于 wake，不冒充真实 TLS 验证。
+
+坏 TLS 用例在真实生产 Source/EntryWorker/WASM 已 Installed 且输入 settle 为 Idle
+后，仅翻转下一条 TLS application ciphertext 的一个字节。RED 日志
+reconnect-bad-tls-red.log 记录原 Host Io、错误开启下一代（opens=[2,2]）；
+GREEN reconnect-bad-tls-green.log 记录实际翻转 192-byte TLS record、原 Host Codec、
+父门关闭、opens=[1,1]，并收齐原 Source/Worker/enrollment/socket 与指定 App/PTY
+退休事实。它不是通过超时、主动关闭父门或伪造终因获得通过。公开测试向量、
+隔离虚拟认证器、合成 HTTPS origin 与 fixture-CA 转发的边界沿 A6l；不代表真实
+手机、浏览器可信 TLS、公网或长期无人值守验收。原失败日志均保留。
+
+当前生产 WASM 按 build-browser-runtime.mjs 从本片源码重建，脚本验证必需导出与
+无 TEST_ONLY 导出，真实浏览器 fixture 再核 manifest 的 source/file/input SHA。
+生成物保持 ignored，不与源码提交。单元映射表不替代上述实际坏 TLS 反例。
+浏览器固定输入/provider 的父 lease、每代资源 lease、有限退避与不确定输入锁
+尚未实现，本片不会把已撤销 enrollment 重新使用，也没有自动重放输入。
+
+
+回归中保留一个未宣称已修复的前置竞争：首轮 DelegatedRenewal_ 为 8/9，003
+在 phone install 之前因 Captured.validate 的 native_canonical.try_lock 返回 Busy
+而失败（reconnect-tls-final-DelegatedRenewal_.log）。该组每例在独立子进程执行，
+父进程确认前例退出后才继续，不共享前例 canonical 对象；尚未动态识别本例当时
+具体持锁者。未改原 try_lock、预算或原 dirty fixture；独立复核 1/1（0.98 秒）及
+限定一次整组复核 9/9（8.59 秒）。这些成功不抹掉首轮失败，也不证明竞争已消失。
+
+
+最终同源码验证：Host 六组 8+1+4+9+5+6=33，security experimental lib 144，
+去重共 177（reconnect-tls-final-ledger.json）；独立 ignored 注册 oracle 不计。
+首次 security 默认 feature 为 0 tests，明确不计覆盖，已补 experimental。
+Native strict 32.47 秒，security experimental strict 3.07 秒均退出 0。
+五份源码指纹为 reconnect-tls-final-source.json；生产 manifest 65 个源文件及所有
+input/file SHA 全部匹配，六个必需导出存在且无 TEST_ONLY。只提交六文件清单，
+原三份 dirty 文件 SHA 不变，生成物与审计日志不纳提交。

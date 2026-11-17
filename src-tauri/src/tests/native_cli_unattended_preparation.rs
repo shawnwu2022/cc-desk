@@ -3123,13 +3123,14 @@ async fn unattended_short_network_case(mode: u8) {
         relay_scalar,
     ];
     // 浏览器工具初始化不占用原批准与首读窗口；READY 不授予任何权限。
-    let mut real_browser = if (5..=15).contains(&mode) {
-        let config = serde_json::json!({"case":if mode == 15 {"authenticated-reconnect-material-failed"} else if mode == 14 {"authenticated-reconnect-cancel"} else if mode == 13 {"authenticated-reconnect"} else if mode == 6 {"key-retirement-probe"} else if mode == 7 {"key-retirement-data"} else if mode == 8 {"authenticated-session"} else if mode == 9 {"authenticated-revoked"} else if mode == 10 {"authenticated-expired"} else if mode == 11 {"authenticated-race"} else {"short-input"},"origin":relay.origin,"scope":scope,"hostSpki":host_spki,"expires":false,"revocationPath":null}).to_string();
+    let mut real_browser = if (5..=18).contains(&mode) {
+        let config = serde_json::json!({"case":if mode == 18 {"authenticated-reconnect-bad-tls"} else if mode == 17 {"authenticated-reconnect-terminal-rejected"} else if mode == 16 {"authenticated-reconnect-rst"} else if mode == 15 {"authenticated-reconnect-material-failed"} else if mode == 14 {"authenticated-reconnect-cancel"} else if mode == 13 {"authenticated-reconnect"} else if mode == 6 {"key-retirement-probe"} else if mode == 7 {"key-retirement-data"} else if mode == 8 {"authenticated-session"} else if mode == 9 {"authenticated-revoked"} else if mode == 10 {"authenticated-expired"} else if mode == 11 {"authenticated-race"} else {"short-input"},"origin":relay.origin,"scope":scope,"hostSpki":host_spki,"expires":false,"revocationPath":null}).to_string();
         Some(RealBrowserChild::prepare(&config))
     } else {
         None
     };
     let mut failed_next_socket = None;
+    let mut bad_tls_observer = None;
     let mut key_probe: Option<Box<dyn FnOnce() -> bool + Send>> = None;
     let mut signing_observer = None;
     let mut activation_witness = None;
@@ -3192,7 +3193,7 @@ async fn unattended_short_network_case(mode: u8) {
         let first = UnattendedApproval::test_pending(preparation);
         first.test_answer(true, false);
         let prepared = first.consume(&pairing, &admission).unwrap().unwrap();
-        let approval = Arc::new(if (13..=15).contains(&mode) {
+        let approval = Arc::new(if (13..=18).contains(&mode) {
             FinalApproval::test_pending_reconnect(prepared, &pairing, &admission).unwrap()
         } else if mode >= 8 {
             FinalApproval::test_pending_session(prepared, &pairing, &admission).unwrap()
@@ -3214,7 +3215,13 @@ async fn unattended_short_network_case(mode: u8) {
         )
         .unwrap();
         pending.test_anonymous_network(scalars, opened.clone(), accepted);
-        if (13..=15).contains(&mode) {
+        if (13..=18).contains(&mode) {
+            if mode == 18 {
+                bad_tls_observer = Some(pending.test_first_terminal_observer());
+            }
+            if mode == 17 {
+                pending.test_first_terminal_reason(cc_desk_remote_security::DataError::Codec);
+            }
             if mode == 14 {
                 pending.test_cancel_after_receipt();
             }
@@ -3343,16 +3350,21 @@ async fn unattended_short_network_case(mode: u8) {
         activation_witness.is_none_or(|v| v.load(std::sync::atomic::Ordering::Acquire));
     eprintln!("TEST_ONLY_FIRST_DATA_BEFORE_FACT {activation_observed}");
     eprintln!("TEST_ONLY_AUTOMATIC_SIGNING_RETIRED {automatic_signing_retired}");
-    let cancelled_without_new_keys = mode != 14
+    let cancelled_without_new_keys = (mode != 14 && mode != 17 && mode != 18)
         || (control.as_ref().is_some_and(|control| control.closed())
             && opened
                 .iter()
                 .all(|value| value.load(std::sync::atomic::Ordering::Acquire) == 1));
+    let bad_tls_classified = bad_tls_observer.is_none_or(|observer| {
+        let actual = *observer.lock();
+        eprintln!("TEST_ONLY_BAD_TLS_ORIGINAL_REASON {actual:?}");
+        actual == Some(Ok(cc_desk_remote_security::DataError::Codec))
+    });
     let input_exact = if succeeded {
         let remainder: &[u8] =
             if revoke || expires || mode == 6 || mode == 7 || mode == 9 || mode == 10 {
                 b"native"
-            } else if mode == 13 {
+            } else if mode == 13 || mode == 16 {
                 b"tive"
             } else {
                 b"ative"
@@ -3440,6 +3452,7 @@ async fn unattended_short_network_case(mode: u8) {
     }
     assert!(
         succeeded
+            && bad_tls_classified
             && cancelled_without_new_keys
             && automatic_signing_retired
             && disconnect_ready
@@ -3973,4 +3986,28 @@ async fn UnattendedReconnect_FailedNextMaterialRetainsCustody_005() {
         return;
     }
     unattended_short_network_case(15).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn UnattendedReconnect_AbnormalTransportOriginalReceipt_006() {
+    if short_network_isolated("UnattendedReconnect_AbnormalTransportOriginalReceipt_006") {
+        return;
+    }
+    unattended_short_network_case(16).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn UnattendedReconnect_ProtocolTerminationNeverStartsNext_007() {
+    if short_network_isolated("UnattendedReconnect_ProtocolTerminationNeverStartsNext_007") {
+        return;
+    }
+    unattended_short_network_case(17).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn UnattendedReconnect_BadTlsCiphertextIsNotTransportRetry_009() {
+    if short_network_isolated("UnattendedReconnect_BadTlsCiphertextIsNotTransportRetry_009") {
+        return;
+    }
+    unattended_short_network_case(18).await;
 }

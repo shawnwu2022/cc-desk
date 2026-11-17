@@ -5,6 +5,14 @@ use crate::remote_host::delegated::{DelegatedAttemptIdentity, DelegatedSocketSta
 mod materials;
 use materials::MaterialCustody;
 
+fn reconnect_candidate(reason: Option<Result<security::DataError, security::DataError>>) -> bool {
+    matches!(reason, Some(Ok(security::DataError::Io)))
+}
+
+#[cfg(test)]
+pub(crate) type TestTerminalObserver =
+    Arc<Mutex<Option<Result<security::DataError, security::DataError>>>>;
+
 #[cfg(test)]
 pub(crate) struct TestMaterial {
     pub(crate) address: SocketAddr,
@@ -153,6 +161,10 @@ pub(crate) struct SocketCustody {
     terminal_clock: Arc<crate::remote_unattended::capability::network::NetworkClock>,
     original_channel: Mutex<Option<Arc<RunningChannel>>>,
     installed_data: Mutex<Option<InstalledData>>,
+    #[cfg(test)]
+    terminal_override: Mutex<Option<security::DataError>>,
+    #[cfg(test)]
+    terminal_observer: Mutex<Option<TestTerminalObserver>>,
     service: Weak<RemoteHostService>,
     network: Arc<HostNetworkAttempt>,
     material: Arc<MaterialCustody>,
@@ -182,6 +194,10 @@ impl SocketCustody {
             terminal_clock: start.terminal_clock(),
             original_channel: Mutex::new(None),
             installed_data: Mutex::new(None),
+            #[cfg(test)]
+            terminal_override: Mutex::new(None),
+            #[cfg(test)]
+            terminal_observer: Mutex::new(None),
             service: Arc::downgrade(service),
             network,
             material: Arc::new(MaterialCustody::reserve()),
@@ -202,6 +218,14 @@ impl SocketCustody {
         self.terminal_wake
             .set(control)
             .map_err(|_| HostNetworkError::Authority)
+    }
+    #[cfg(test)]
+    pub(crate) fn test_observe_terminal(&self, observer: TestTerminalObserver) {
+        *self.terminal_observer.lock() = Some(observer);
+    }
+    #[cfg(test)]
+    pub(crate) fn test_terminal_reason(&self, reason: security::DataError) {
+        *self.terminal_override.lock() = Some(reason);
     }
     pub(crate) fn terminal_observed(&self) -> bool {
         self.network.terminal.load(Ordering::Acquire) != 0
@@ -430,6 +454,24 @@ impl SocketCustody {
                 let _ = release.await;
             }
             let wire_known = wire.close_and_join().await;
+            let channel = original.original_channel.lock().clone();
+            let checked_end = match channel {
+                Some(channel) => Some(channel.wait_closed_checked().await),
+                None => None,
+            };
+            #[cfg(test)]
+            let checked_end = original
+                .terminal_override
+                .lock()
+                .take()
+                .map(Ok)
+                .or(checked_end);
+            #[cfg(test)]
+            if let Some(observer) = original.terminal_observer.lock().as_ref() {
+                *observer.lock() = checked_end;
+            }
+            #[cfg(test)]
+            eprintln!("TEST_ONLY_SOCKET_CHECKED_END {checked_end:?} wire_known={wire_known}");
             drop(wire);
             let material_known = if transferred {
                 wire_known && original.material.released_by_network().is_ok()
@@ -443,6 +485,12 @@ impl SocketCustody {
             };
             if result == Err(HostNetworkError::Unknown) {
                 original.terminal_clock.close();
+            }
+            if let Some(parent) = original.terminal_wake.get() {
+                // 只收窄新重连模式；先关父门，再发布终态或唤醒原 worker。
+                if result.is_err() || !reconnect_candidate(checked_end) {
+                    parent.close();
+                }
             }
             original.network.terminal.store(
                 if result == Err(HostNetworkError::Unknown) {
@@ -485,5 +533,36 @@ impl SocketCustody {
 impl SocketCustody {
     pub(crate) fn test_original_channel(&self) -> Option<Arc<RunningChannel>> {
         self.original_channel.lock().clone()
+    }
+}
+
+#[cfg(test)]
+mod reconnect_terminal_tests {
+    use super::*;
+    #[test]
+    fn unattended_reconnect_only_observed_io_is_retry_candidate_008() {
+        use security::DataError;
+        assert!(reconnect_candidate(Some(Ok(DataError::Io))));
+        for reason in [
+            None,
+            Some(Err(DataError::Uncertain)),
+            Some(Ok(DataError::Closed)),
+            Some(Ok(DataError::Cancelled)),
+            Some(Ok(DataError::Deadline)),
+            Some(Ok(DataError::Codec)),
+            Some(Ok(DataError::Replay)),
+            Some(Ok(DataError::Context)),
+            Some(Ok(DataError::Scope)),
+            Some(Ok(DataError::Role)),
+            Some(Ok(DataError::Fence)),
+            Some(Ok(DataError::Bounds)),
+            Some(Ok(DataError::Full)),
+            Some(Ok(DataError::Uncertain)),
+            Some(Ok(DataError::Grant(security::GrantError::Revoked))),
+            Some(Ok(DataError::Grant(security::GrantError::Clock))),
+            Some(Ok(DataError::Grant(security::GrantError::Expired))),
+        ] {
+            assert!(!reconnect_candidate(reason), "{reason:?}");
+        }
     }
 }

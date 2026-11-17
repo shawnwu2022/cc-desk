@@ -39,6 +39,10 @@ pub(crate) struct PendingStart<S: Sealer, B: PairingBackend, P: PairingSealer> {
     #[cfg(test)]
     fail_next_material: Option<TestNextSocket>,
     #[cfg(test)]
+    first_terminal_reason: Option<cc_desk_remote_security::DataError>,
+    #[cfg(test)]
+    first_terminal_observer: Option<crate::remote_host_network::delegated::TestTerminalObserver>,
+    #[cfg(test)]
     activation_race: Option<(
         Arc<std::sync::atomic::AtomicBool>,
         Arc<std::sync::atomic::AtomicBool>,
@@ -90,6 +94,10 @@ impl<S: Sealer, B: PairingBackend, P: PairingSealer> PendingStart<S, B, P> {
             #[cfg(test)]
             fail_next_material: None,
             #[cfg(test)]
+            first_terminal_reason: None,
+            #[cfg(test)]
+            first_terminal_observer: None,
+            #[cfg(test)]
             activation_race: None,
         })
     }
@@ -126,6 +134,10 @@ impl<S: Sealer, B: PairingBackend, P: PairingSealer> PendingStart<S, B, P> {
             late_wake_observed: None,
             #[cfg(test)]
             fail_next_material: None,
+            #[cfg(test)]
+            first_terminal_reason: None,
+            #[cfg(test)]
+            first_terminal_observer: None,
             #[cfg(test)]
             activation_race: None,
         })
@@ -310,6 +322,14 @@ impl<S: Sealer, B: PairingBackend, P: PairingSealer> PendingStart<S, B, P> {
         B: Send + Sync + 'static,
         P: Send + Sync + 'static,
     {
+        #[cfg(test)]
+        if let Some(observer) = self.first_terminal_observer.take() {
+            prepared.socket.test_observe_terminal(observer);
+        }
+        #[cfg(test)]
+        if let Some(reason) = self.first_terminal_reason.take() {
+            prepared.socket.test_terminal_reason(reason);
+        }
         let gate = request_gate::ServiceRequestGate::new(
             &self.service,
             self.pairing.clone(),
@@ -612,6 +632,19 @@ impl<S: Sealer, B: PairingBackend, P: PairingSealer> PendingStart<S, B, P> {
         let observed = Arc::new(std::sync::atomic::AtomicBool::new(false));
         self.late_wake_observed = Some(observed.clone());
         observed
+    }
+    pub(crate) fn test_first_terminal_observer(
+        &mut self,
+    ) -> crate::remote_host_network::delegated::TestTerminalObserver {
+        let observer = Arc::new(parking_lot::Mutex::new(None));
+        self.first_terminal_observer = Some(observer.clone());
+        observer
+    }
+    pub(crate) fn test_first_terminal_reason(
+        &mut self,
+        reason: cc_desk_remote_security::DataError,
+    ) {
+        self.first_terminal_reason = Some(reason);
     }
     pub(crate) fn test_fail_next_material(&mut self) -> TestNextSocket {
         let observed = Arc::new(parking_lot::Mutex::new(None));
