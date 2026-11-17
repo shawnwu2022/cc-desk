@@ -55,6 +55,8 @@ zstd = { version = "=0.13.3", default-features = false }
 default = ["sqlite"]
 sqlite = ["rusqlite"]
 history-roundtrip-acceptance = []
+# 仅显式运行已安装官方 CLI 的无任务、无登录交互验收。
+antigravity-acceptance = []
 
 [target.'cfg(target_os = "windows")'.dependencies]
 tempfile = "3"

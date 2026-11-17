@@ -43,3 +43,24 @@
 - `cargo test --locked --lib`：1791 通过、18 失败、41 ignored，不能称为全库绿色。
 - 在同执行环境，以起点 `038f4acab7e2dce1f3ce37cdb4c7d046743870f9` 建立 detached 对照树，仅运行 `version_history::windows::manager_process::tests`：2 通过、18 失败、1 ignored。18 个失败名称与当前全库失败集合完全一致，均报告 `source host is job-contained`。这是已复现的基线/环境限制，不是仅凭名字推断；没有改变安全限制或忽略测试。
 - 以上不替代 Job-free Windows 门禁、普通 CI、签名构建及已认证真实 CLI 端到端验收，不据此发布。
+
+
+### 真实 CC Desk 核心 PTY 验收（后续检查）
+
+重新检查时既有程序已变为 `1.5.9`；没有执行覆盖安装，版本变化原因未直接观察。Google LLC 签名为 Valid，SHA-512 与上述官方 Windows x64 清单一致：
+
+`539a9415a686d9ec45f5c59fe7d32c485c6fa9abaea50208ae8ede4ed3622b9fb2bfd6680c87dc52344981172a96ddacb261ff4231276b5572fb5b62a9b0221e`
+
+可复现命令（须已安装官方签名 CLI，并先完成仓库 ConPTY/SDK 准备）：
+
+```powershell
+./scripts/native-cli/run-antigravity-smoke.ps1
+```
+
+验收仅由显式 `antigravity-acceptance` feature 编译，默认产品和默认测试不会自动运行真实 CLI。脚本先核验签名、记录版本及 SHA-256；`--version` 探测在真实宿主环境执行，不属于隔离 HOME/APPDATA 的测试阶段。测试走生产 `discover_programs`、配置 CAS、冻结 snapshot、LaunchCoordinator 与 OwnedPty，使用空临时项目和隔离的 HOME/APPDATA，不写入用户启动配置。
+
+实际结果：真实 PATH 发现并选择精确的 agy 文件；收到 TUI 欢迎输出；PTY resize 调用成功；Desk 持有的进程句柄停止成功，确认退出码 1，读线程关闭。
+
+保留失败证据：第一次尝试要求两次 Ctrl+C 优雅退出，未认证启动阶段 15 秒内未退出，故该测试失败并清理。后续通过的是 **Desk owned stop**，不是把键盘取消标为成功。resize 仅证明系统调用成功，不证明画面布局正确。环境隔离并非 OS 沙箱或网络隔离，不宣称 CLI 完全不访问网络或系统凭据服务。
+
+没有确认登录、首次偏好、工作区信任，也没有发送任务。未完成已认证真实会话恢复；没有 WebView 可视控制工具，因此不宣称完成应用窗口点击、画面布局或文档桥全链路验收。`target-agy/` 仅为未跟踪构建缓存，不纳入提交，不删除用户文件。

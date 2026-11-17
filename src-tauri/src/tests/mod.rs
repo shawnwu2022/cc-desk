@@ -181,3 +181,6 @@ mod desktop_updater_http;
 mod desktop_updater_policy;
 
 mod native_cli_version_parser;
+
+#[cfg(all(test, windows, feature = "antigravity-acceptance"))]
+mod native_cli_antigravity_acceptance;
