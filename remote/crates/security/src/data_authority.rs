@@ -28,6 +28,10 @@ pub struct BoundDataAuthority {
     active: Arc<AtomicBool>,
     cancel: CancelToken,
     stop: watch::Sender<bool>,
+    identity: Arc<ChannelIdentity>,
+}
+#[derive(Clone)]
+struct ChannelIdentity {
     binding: [u8; 32],
     role: Role,
     control_lease: Option<crate::bind::NegotiatedControlLease>,
@@ -53,44 +57,47 @@ impl BoundDataAuthority {
             active,
             cancel,
             stop,
-            binding,
-            role,
-            control_lease: None,
-            data_keepalive: None,
-            snapshot_pull: None,
+            identity: Arc::new(ChannelIdentity {
+                binding,
+                role,
+                control_lease: None,
+                data_keepalive: None,
+                snapshot_pull: None,
+            }),
         }
     }
     pub(crate) fn with_control_lease(
         mut self,
         fact: Option<crate::bind::NegotiatedControlLease>,
     ) -> Self {
-        self.control_lease = fact;
+        Arc::make_mut(&mut self.identity).control_lease = fact;
         self
     }
     pub(crate) fn with_data_keepalive(
         mut self,
         fact: Option<crate::bind::NegotiatedDataKeepalive>,
     ) -> Self {
-        self.data_keepalive = fact;
+        Arc::make_mut(&mut self.identity).data_keepalive = fact;
         self
     }
     pub(crate) fn with_snapshot_pull(
         mut self,
         fact: Option<crate::bind::NegotiatedSnapshotPull>,
     ) -> Self {
-        self.snapshot_pull = fact;
+        Arc::make_mut(&mut self.identity).snapshot_pull = fact;
         self
     }
     // 只描述原 channel 的协商事实，不代替 grant/Installed/截止校验。
     pub fn snapshot_pull_negotiated(&self) -> bool {
-        self.snapshot_pull
-            .is_some_and(|fact| fact.matches(self.binding, self.role))
+        self.identity
+            .snapshot_pull
+            .is_some_and(|fact| fact.matches(self.identity.binding, self.identity.role))
     }
     pub fn data_keepalive_negotiated(&self) -> bool {
-        self.data_keepalive.is_some()
+        self.identity.data_keepalive.is_some()
     }
     pub fn control_lease_renew_enabled(&self) -> bool {
-        self.control_lease.is_some()
+        self.identity.control_lease.is_some()
     }
     pub fn check(&self) -> Result<(), DataError> {
         if self.cancel.is_cancelled() {
@@ -108,11 +115,11 @@ impl BoundDataAuthority {
     }
     pub fn same_channel(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.active, &other.active)
-            && self.binding == other.binding
-            && self.role == other.role
+            && self.identity.binding == other.identity.binding
+            && self.identity.role == other.identity.role
     }
     pub fn local_role(&self) -> Role {
-        self.role
+        self.identity.role
     }
     pub fn data_role(&self) -> DataRole {
         self.grant.role()
@@ -127,7 +134,7 @@ impl BoundDataAuthority {
         self.grant.principal_id()
     }
     pub fn binding_id(&self) -> [u8; 32] {
-        self.binding
+        self.identity.binding
     }
     pub fn grant_id(&self) -> [u8; 32] {
         self.grant.id()

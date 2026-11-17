@@ -139,6 +139,15 @@ impl Connection<'_> {
                 close.0 = None;
                 return Ok(());
             }
+            Err(_)
+                if matches!(
+                    cc_desk_remote_record::snapshot_pull::decode(r.payload()),
+                    Ok(cc_desk_remote_record::snapshot_pull::Message::SnapshotBegin { .. })
+                ) =>
+            {
+                self.snapshot(r, host, left()).await?;
+                None
+            }
             Err(_) => match wire::decode(r.payload()).map_err(|_| Reject::Bounds)? {
                 wire::Message::LeaseState { request, .. } => {
                     self.lease_ready(r, host)?;

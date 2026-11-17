@@ -74,10 +74,11 @@ pub(super) async fn channels(
     let (mut c, mut h, gate, cancel) = managed_channels(now, DataRole::Controller, false).await;
     (c.start().unwrap(), h.start().unwrap(), gate, cancel)
 }
-async fn managed_channels(
+async fn managed_channels_mode(
     now: Arc<AtomicU64>,
     role: DataRole,
     lease: bool,
+    pull: bool,
 ) -> (
     ManagedChannel<tokio::io::DuplexStream>,
     ManagedChannel<tokio::io::DuplexStream>,
@@ -127,7 +128,12 @@ async fn managed_channels(
         issuer_epoch: 17,
         origin,
     };
-    let (c, h) = if lease {
+    let (c, h) = if pull {
+        tokio::join!(
+            bind_client_live_snapshot_pull_channel(c.unwrap(), trust),
+            bind_host_live_snapshot_pull_channel(h.unwrap(), snapshot)
+        )
+    } else if lease {
         tokio::join!(
             bind_client_control_lease_channel(c.unwrap(), trust),
             bind_host_control_lease_channel(h.unwrap(), snapshot)
@@ -417,3 +423,99 @@ async fn ControlLease_ClientGrantBoundsAndNegotiatedObserver_014() {
 
 #[path = "snapshot_pull_probe.rs"]
 mod snapshot_pull_probe;
+
+#[tokio::test]
+async fn snapshot_pull_requires_original_negotiated_capability() {
+    let (c, h, _gate, _cancel) = channels(Arc::new(AtomicU64::new(1000))).await;
+    let client = NativeClient::new(c, 4).unwrap();
+    assert!(matches!(
+        client.snapshot_pull(1, BUDGET).await,
+        Err(DataError::Context)
+    ));
+    assert!(client.retire().await.is_ok());
+    h.close().await;
+    assert!(h.wait_closed_checked().await.is_ok());
+}
+
+async fn managed_channels(
+    now: Arc<AtomicU64>,
+    role: DataRole,
+    lease: bool,
+) -> (
+    ManagedChannel<tokio::io::DuplexStream>,
+    ManagedChannel<tokio::io::DuplexStream>,
+    GrantGate,
+    CancelHandle,
+) {
+    managed_channels_mode(now, role, lease, false).await
+}
+#[tokio::test]
+async fn production_snapshot_pull_two_batches_on_negotiated_original_channel() {
+    use cc_desk_remote_record::snapshot_pull as pull;
+    let (mut c, mut h, _gate, _cancel) = managed_channels_mode(
+        Arc::new(AtomicU64::new(1000)),
+        DataRole::Controller,
+        false,
+        true,
+    )
+    .await;
+    let end = tokio::time::Instant::now() + BUDGET;
+    let c = c.start_peer_pending(end).unwrap();
+    let host = h.start_peer_pending(end).unwrap();
+    let request = host.host_install_request().await.unwrap();
+    let (proof, installed) =
+        tokio::join!(c.client_installed(), host.complete_host_install(request, 4));
+    installed.unwrap();
+    let client = NativeClient::from_installed(c, proof.unwrap()).unwrap();
+    let raw = projection(&client);
+    let mut value: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+    value["body"]["state"]["rows"] = 1.into();
+    value["body"]["state"]["columns"] = 2.into();
+    let cell = value["body"]["cells"][0].clone();
+    value["body"]["cells"] = serde_json::json!([cell]);
+    let server = async {
+        let begin = host.receive(&support::scope(), 4, BUDGET).await.unwrap();
+        assert!(matches!(
+            pull::decode(begin.payload()),
+            Ok(pull::Message::SnapshotBegin { .. })
+        ));
+        drop(begin);
+        for index in 0..2 {
+            value["body"]["start"] = index.into();
+            let part = serde_json::to_vec(&value).unwrap();
+            let bytes = pull::encode_batch(&pull::Batch {
+                request: 1,
+                transfer: [7; 32],
+                batch: index,
+                through: index + 1,
+                last: index == 1,
+                part: &part,
+            })
+            .unwrap();
+            host.send_projection(&support::scope(), 4, &bytes, BUDGET)
+                .await
+                .unwrap();
+            if index == 0 {
+                let next = host.receive(&support::scope(), 4, BUDGET).await.unwrap();
+                let pull::Message::SnapshotNext {
+                    request,
+                    batch,
+                    through,
+                    ..
+                } = pull::decode(next.payload()).unwrap()
+                else {
+                    panic!()
+                };
+                assert_eq!(
+                    (request, batch, through),
+                    ("1".into(), "1".into(), "1".into())
+                );
+            }
+        }
+    };
+    let (result, ()) = tokio::join!(client.snapshot_pull(1, BUDGET), server);
+    assert_eq!(result.unwrap().parts.len(), 2);
+    assert!(client.retire().await.is_ok());
+    host.close().await;
+    assert!(host.wait_closed_checked().await.is_ok());
+}

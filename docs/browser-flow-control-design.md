@@ -307,3 +307,43 @@ run<=128、固定Cell字段和网格；不是任意字符串重试缓冲，也�
 2048只用来施加小批压力。原188批兼容回归与80x24两种限额完整覆盖共3/3通过；
 禁用limit的有效行为变异失败后已还原。尚未接Host/Client协议。
 补充：最终encoding 5/5及严格Clippy通过；新增offset10单cell不适配与4MiB累计失败的fused真实回归。临时serialize沿原128cells固定结构上界，不承诺临时峰值<=payload_limit；仅返回批受该limit限制。
+
+## P2c：原 Rust Host / Client 拉取闭环（浏览器及生产入口仍关闭）
+
+显式 NativeClient.snapshot_pull 仅在原 P1 认证事实存在时发送 Begin，旧 API 与旧绑定
+不自动切换。Host 原 Connection.dispatch 持有同次捕获的 frame、SendingGuard 与 busy
+状态；其原顺序 receive→dispatch 调用链内只有此 future 等待 Next。批次绑定原 request、
+基于实际 binding + 完整原 stamp 派生的 transfer、批号及 through；Next 不占顶层 UI
+counter。Client 调用公有 validated codec，再核原 channel/scope/fence、stamp/state、
+offset 与 transfer，保存原 part，并 drop 实际 DataRecord 后才发 Next。
+
+两端累计预算均为原 part 的 4MiB，不将 57 字节外壳重复计入累计；Client Vec 只留原
+part。Host encoder 的小批限制来自协议 MAX_PART，不事后拆 JSON。等待 Next 保持首次
+绝对截止，并监听关闭/撤销；每次后续动作仍检查原 grant。成功后原 ACK / Window
+request 2 可继续。旧 delivery 不计算新 transfer，也不额外编码其 stamp。
+
+本阶段同源码回归：bind 22/22、Host snapshot_pull 5/5、Client 全库 24/24。
+Host 测试包含原 dispatcher 真实捕获、多批、counter 2；生产 NativeClient 与生产 Host
+同 TLS / P1 / grant / Installed 链路；坏 Next、authority close、真正 GrantGate.revoke、
+首次截止；实际已 poll future 取消后 frame credit 从 1 回到 0。暂停时间测试在首批后
+推进 60ms，再收下一批，仍在原 100ms 截止退出。checked channel join 与 frame credit
+回收不等于完整 native writer / 网络栈 retirement 或设备 UI 撤销验收。
+
+P1 增加事实后的 authority 内联尺寸确实引起四个旧 enum 的严格 Clippy 回归；
+隔离 9240bbaa、同工具链/features 的基线检查通过。中间 fact Arc / capabilities Arc
+方案未保留。最终仅把不可变 binding、role 与三项独立事实放入私有 ChannelIdentity Arc；
+grant、active、cancel、stop 未移动，same_channel 仍比较原 active 指针与身份值。
+构造阶段 with_* 使用 COW，clone 后不会扩大原实例能力。跨 binding/role 事实拒绝及
+COW 后能力隔离、同 channel 身份保留已有动态测试。新增一份固定身份 allocation，
+不声明全链内存峰值已证明；未新增 Drop、弱引用或 grant 持有语义。
+
+仍未完成：完整 wire / rustls / WASM / JS / 队列驻留内存账、浏览器拉取接入与真实突发/
+碎片压力、固定 1 秒公网 RTT 可用性，以及原 61 秒低流量组合验收。原 smoke 失败证据
+保留，不将本地 Rust 通过宣称浏览器问题解决；不接生产 UI，不推送或部署。
+最终补验：原 data authority 11/11，Security/Host/Client 三 crate 严格 Clippy 通过。
+有效变异在合法 Next 后错误重置截止，真实 Host 用例于 164.3264ms 拒绝（exit 101）；
+已还原原代码，Host 5/5 再通过。对应日志 snapshot-pull-identity-{bind-final,
+host-final,client-final,authority-final,strict-final}.log 与
+snapshot-pull-host-{deadline-mutation,restored-final}.log。早先 bind_tests 过滤器
+选中 0 项不计作回归；最终 bind::tests 实际执行 22 项。
+近 4MiB 的双端累计边界尚待专门实测，不以 encoder 的单独累计失败测试代替。

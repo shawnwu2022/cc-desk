@@ -82,6 +82,35 @@ async fn SnapshotPull_AuthenticatedFactReachesOriginalChannel_002() {
         );
         assert_eq!(c.authority().snapshot_pull_negotiated(), enabled);
         assert_eq!(h.authority().snapshot_pull_negotiated(), enabled);
+        let original = c.authority();
+        let stripped = original.clone().with_snapshot_pull(None);
+        assert!(!stripped.snapshot_pull_negotiated());
+        assert!(stripped.same_channel(&original));
+        assert_eq!(original.snapshot_pull_negotiated(), enabled);
+        let foreign = original
+            .clone()
+            .with_snapshot_pull(Some(NegotiatedSnapshotPull {
+                binding: [0xee; 32],
+                role: Role::Client,
+            }));
+        assert!(!foreign.snapshot_pull_negotiated());
+        assert!(foreign.same_channel(&original));
+        let wrong_role = original
+            .clone()
+            .with_snapshot_pull(Some(NegotiatedSnapshotPull {
+                binding: original.binding_id(),
+                role: Role::Host,
+            }));
+        assert!(!wrong_role.snapshot_pull_negotiated());
+        assert_eq!(original.snapshot_pull_negotiated(), enabled);
+        assert_eq!(
+            stripped.control_lease_renew_enabled(),
+            original.control_lease_renew_enabled()
+        );
+        assert_eq!(
+            stripped.data_keepalive_negotiated(),
+            original.data_keepalive_negotiated()
+        );
         // 协商事实不是 Installed 或控制授权，原 bootstrap 尚未完成。
         assert!(c.installed_fence().is_err());
         assert!(h.installed_fence().is_err());

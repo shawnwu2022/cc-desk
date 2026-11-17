@@ -337,7 +337,34 @@ impl NativeClient {
         payload: &[u8],
         budget: Duration,
     ) -> Result<SnapshotBatch, DataError> {
-        if !matches!(command::decode(payload), Ok(command::Command::Snapshot(_))) {
+        self.snapshot_inner(payload, budget, None).await
+    }
+    /// Explicit opt-in; never falls back to the legacy full-push snapshot.
+    pub async fn snapshot_pull(
+        &self,
+        request: u64,
+        budget: Duration,
+    ) -> Result<SnapshotBatch, DataError> {
+        if !self.channel.authority().snapshot_pull_negotiated() {
+            return Err(DataError::Context);
+        }
+        let begin = cc_desk_remote_record::snapshot_pull::Message::SnapshotBegin {
+            profile: 1,
+            request: request.to_string(),
+        };
+        let bytes =
+            cc_desk_remote_record::snapshot_pull::encode(&begin).map_err(|_| DataError::Codec)?;
+        self.snapshot_inner(&bytes, budget, Some(request)).await
+    }
+    async fn snapshot_inner(
+        &self,
+        payload: &[u8],
+        budget: Duration,
+        pull_request: Option<u64>,
+    ) -> Result<SnapshotBatch, DataError> {
+        if pull_request.is_none()
+            && !matches!(command::decode(payload), Ok(command::Command::Snapshot(_)))
+        {
             return Err(DataError::Codec);
         }
         let end = deadline(budget)?;
@@ -351,22 +378,40 @@ impl NativeClient {
         let mut parts = Vec::new();
         let mut next = 0usize;
         let mut total_bytes = 0usize;
+        let mut transfer = None;
+        let mut batch_index = 0u32;
         loop {
             let record = self
                 .channel
                 .receive(&self.scope, self.fence, remaining(end)?)
                 .await?;
             self.record(&record)?;
+            let (part_bytes, part) = if let Some(request) = pull_request {
+                let (batch, part) =
+                    cc_desk_remote_record::snapshot_pull::decode_validated_batch(record.payload())
+                        .map_err(|_| DataError::Codec)?;
+                if batch.request != request
+                    || batch.batch != batch_index
+                    || transfer.is_some_and(|t| t != batch.transfer)
+                {
+                    return Err(DataError::Context);
+                }
+                transfer = Some(batch.transfer);
+                (batch.part, part)
+            } else {
+                let message =
+                    projection::decode(record.payload(), 1).map_err(|_| DataError::Codec)?;
+                let projection::Content::SnapshotPart(part) = message.content else {
+                    return Err(DataError::Codec);
+                };
+                (record.payload(), part)
+            };
             total_bytes = total_bytes
-                .checked_add(record.payload().len())
+                .checked_add(part_bytes.len())
                 .ok_or(DataError::Bounds)?;
             if total_bytes > MAX_SNAPSHOT_BYTES {
                 return Err(DataError::Bounds);
             }
-            let message = projection::decode(record.payload(), 1).map_err(|_| DataError::Codec)?;
-            let projection::Content::SnapshotPart(part) = message.content else {
-                return Err(DataError::Codec);
-            };
             let t = &part.stamp.target;
             let binding = authority
                 .binding_id()
@@ -399,7 +444,7 @@ impl NativeClient {
             if next > cells {
                 return Err(DataError::Bounds);
             }
-            parts.push(record.payload().to_vec());
+            parts.push(part_bytes.to_vec());
             remaining(end)?;
             if next == cells {
                 self.channel.authority().check()?;
@@ -408,6 +453,27 @@ impl NativeClient {
                     stamp: current.unwrap().0,
                     parts,
                 });
+            }
+            drop(part);
+            drop(record);
+            if let Some(request) = pull_request {
+                batch_index = batch_index.checked_add(1).ok_or(DataError::Bounds)?;
+                let next = cc_desk_remote_record::snapshot_pull::Message::SnapshotNext {
+                    profile: 1,
+                    request: request.to_string(),
+                    transfer: transfer
+                        .ok_or(DataError::Context)?
+                        .iter()
+                        .map(|b| format!("{b:02x}"))
+                        .collect(),
+                    batch: batch_index.to_string(),
+                    through: next.to_string(),
+                };
+                let bytes = cc_desk_remote_record::snapshot_pull::encode(&next)
+                    .map_err(|_| DataError::Codec)?;
+                self.channel
+                    .send_control(&self.scope, self.fence, &bytes, remaining(end)?)
+                    .await?;
             }
         }
     }

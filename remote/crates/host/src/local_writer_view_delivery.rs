@@ -119,6 +119,25 @@ impl projection::CapturedProjection {
         fence: u64,
         budget: Duration,
     ) -> Result<(), Reject> {
+        self.deliver_bound_inner(channel, fence, budget, None).await
+    }
+    pub(in crate::local_writer) async fn deliver_pull_bound(
+        self,
+        channel: &cc_desk_remote_security::RunningChannel,
+        fence: u64,
+        budget: Duration,
+        request: u64,
+    ) -> Result<(), Reject> {
+        self.deliver_bound_inner(channel, fence, budget, Some(request))
+            .await
+    }
+    pub(in crate::local_writer) async fn deliver_bound_inner(
+        self,
+        channel: &cc_desk_remote_security::RunningChannel,
+        fence: u64,
+        budget: Duration,
+        pull_request: Option<u64>,
+    ) -> Result<(), Reject> {
         if budget.is_zero() || budget > cc_desk_remote_transport::MAX_IO_BUDGET {
             return Err(Reject::Bounds);
         }
@@ -149,17 +168,82 @@ impl projection::CapturedProjection {
         };
         let mut closed = record.scope.closed.subscribe();
         let mut writer_closed = record.scope.writer_closed.subscribe();
-        let encoder = cc_desk_remote_terminal::SnapshotEncoder::new(
+        let mut encoder = cc_desk_remote_terminal::SnapshotEncoder::new(
             self.view(),
             record.stamp.clone(),
             record.scope.minor,
         )
         .map_err(|_| Reject::Bounds)?;
+        if pull_request.is_some() {
+            if !authority.snapshot_pull_negotiated() {
+                return Err(Reject::Policy);
+            }
+            encoder = cc_desk_remote_terminal::SnapshotEncoder::with_payload_limit(
+                self.view(),
+                record.stamp.clone(),
+                record.scope.minor,
+                cc_desk_remote_record::snapshot_pull::MAX_PART,
+            )
+            .map_err(|_| Reject::Bounds)?;
+        }
+        let transfer = if pull_request.is_some() {
+            let mut digest = ring::digest::Context::new(&ring::digest::SHA256);
+            digest.update(b"cc-desk/snapshot-pull/host/v1");
+            digest.update(&authority.binding_id());
+            digest.update(&pull_request.unwrap_or(0).to_be_bytes());
+            digest.update(
+                &cc_desk_remote_record::projection::encode_ack(
+                    &cc_desk_remote_record::projection::Ack {
+                        profile: 1,
+                        stamp: record.stamp.clone(),
+                    },
+                    record.scope.minor,
+                )
+                .map_err(|_| Reject::Bounds)?,
+            );
+            let value: [u8; 32] = digest
+                .finish()
+                .as_ref()
+                .try_into()
+                .map_err(|_| Reject::Bounds)?;
+
+            value
+        } else {
+            [0; 32]
+        };
+        let mut batch_index = 0u32;
         for part in encoder {
             if !record.scope.is_active() || record.phase.load(Ordering::Acquire) != SENDING {
                 return Err(Reject::Sync);
             }
             let payload = part.map_err(|_| Reject::Bounds)?;
+            let mut through = 0;
+            let mut last = true;
+            let payload = if let Some(request) = pull_request {
+                let message = cc_desk_remote_record::projection::decode(&payload, 1)
+                    .map_err(|_| Reject::Bounds)?;
+                let cc_desk_remote_record::projection::Content::SnapshotPart(p) = message.content
+                else {
+                    return Err(Reject::Bounds);
+                };
+                through = u32::from(p.start)
+                    .checked_add(p.cells.len() as u32)
+                    .ok_or(Reject::Bounds)?;
+                last = through == u32::from(p.state.rows) * u32::from(p.state.columns);
+                cc_desk_remote_record::snapshot_pull::encode_batch(
+                    &cc_desk_remote_record::snapshot_pull::Batch {
+                        request,
+                        transfer,
+                        batch: batch_index,
+                        through,
+                        last,
+                        part: &payload,
+                    },
+                )
+                .map_err(|_| Reject::Bounds)?
+            } else {
+                payload
+            };
             end = record.emission_deadline(end)?;
             let remaining = end
                 .checked_duration_since(tokio::time::Instant::now())
@@ -169,6 +253,45 @@ impl projection::CapturedProjection {
                 _=closed.changed()=>return Err(Reject::Sync),
                 _=writer_closed.changed()=>return Err(Reject::Sync),
                 result=tokio::time::timeout_at(end,channel.send_projection(authority.scope(),fence,&payload,remaining))=>{result.map_err(|_|Reject::Continuity)?.map_err(|_|Reject::Continuity)?;}
+            }
+            if let Some(request) = pull_request.filter(|_| !last) {
+                batch_index = batch_index.checked_add(1).ok_or(Reject::Bounds)?;
+                end = record.emission_deadline(end)?;
+                let left = end
+                    .checked_duration_since(tokio::time::Instant::now())
+                    .filter(|b| !b.is_zero())
+                    .ok_or(Reject::Continuity)?;
+                let next = tokio::select! {
+                    _=closed.changed()=>return Err(Reject::Sync),
+                    _=writer_closed.changed()=>return Err(Reject::Sync),
+                    r=tokio::time::timeout_at(end,channel.receive(authority.scope(),fence,left)) => r.map_err(|_|Reject::Continuity)?.map_err(|_|Reject::Continuity)?,
+                };
+                if !next.source().same_channel(authority)
+                    || next.scope() != authority.scope()
+                    || next.fence() != fence
+                {
+                    return Err(Reject::Target);
+                }
+                let cc_desk_remote_record::snapshot_pull::Message::SnapshotNext {
+                    request: n,
+                    transfer: t,
+                    batch,
+                    through: o,
+                    ..
+                } = cc_desk_remote_record::snapshot_pull::decode(next.payload())
+                    .map_err(|_| Reject::Bounds)?
+                else {
+                    return Err(Reject::Bounds);
+                };
+                let expected: String = transfer.iter().map(|b| format!("{b:02x}")).collect();
+                if n != request.to_string()
+                    || t != expected
+                    || batch != batch_index.to_string()
+                    || o != through.to_string()
+                {
+                    return Err(Reject::Epoch);
+                }
+                authority.check().map_err(|_| Reject::Policy)?;
             }
             if tokio::time::Instant::now() >= end {
                 return Err(Reject::Continuity);

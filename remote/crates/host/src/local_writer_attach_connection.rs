@@ -179,10 +179,21 @@ impl Connection<'_> {
         if !host.authority().same_channel(&self.proof) {
             return Err(Reject::Target);
         }
-        let cc_desk_remote_record::command::Command::Snapshot(n) =
-            cc_desk_remote_record::command::decode(r.payload()).map_err(|_| Reject::Bounds)?
-        else {
-            return Err(Reject::Bounds);
+        let (n, pull) = match cc_desk_remote_record::command::decode(r.payload()) {
+            Ok(cc_desk_remote_record::command::Command::Snapshot(n)) => (n, false),
+            _ => {
+                if !self.proof.snapshot_pull_negotiated() {
+                    return Err(Reject::Policy);
+                }
+                let cc_desk_remote_record::snapshot_pull::Message::SnapshotBegin {
+                    request, ..
+                } = cc_desk_remote_record::snapshot_pull::decode(r.payload())
+                    .map_err(|_| Reject::Bounds)?
+                else {
+                    return Err(Reject::Bounds);
+                };
+                (request.parse().map_err(|_| Reject::Bounds)?, true)
+            }
         };
         self.counter(n)?;
         self.busy = true;
@@ -196,7 +207,11 @@ impl Connection<'_> {
         if left.is_zero() {
             return Err(Reject::Continuity);
         }
-        frame.deliver_bound(host, self.fence, left).await?;
+        if pull {
+            frame.deliver_pull_bound(host, self.fence, left, n).await?;
+        } else {
+            frame.deliver_bound(host, self.fence, left).await?;
+        }
         self.proof.check().map_err(|_| Reject::Policy)?;
         if tokio::time::Instant::now() >= deadline {
             return Err(Reject::Continuity);

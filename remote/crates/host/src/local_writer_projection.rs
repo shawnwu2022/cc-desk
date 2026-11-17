@@ -22,6 +22,10 @@ struct ViewCredits {
 pub(crate) struct HostViewBudget(Arc<ViewCredits>);
 impl HostViewBudget {
     #[cfg(test)]
+    pub(crate) fn test_used(&self) -> usize {
+        self.0.used.load(Ordering::Acquire)
+    }
+    #[cfg(test)]
     pub(crate) fn new() -> Self {
         Self(Arc::new(ViewCredits::default()))
     }

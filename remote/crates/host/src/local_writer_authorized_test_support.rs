@@ -176,11 +176,18 @@ pub(super) async fn channels_as(
 }
 
 // 公开合成身份、真实认证及签名交换；不直接标记已协商事实。
-pub(super) async fn lease_channels(
+async fn lease_channels_mode(
     now: Arc<AtomicU64>,
     enabled: bool,
+    pull: bool,
     role: DataRole,
-) -> (RunningChannel, RunningChannel, GrantGate, CancelHandle) {
+) -> (
+    RunningChannel,
+    RunningChannel,
+    GrantGate,
+    CancelHandle,
+    ClientInstalledPeer,
+) {
     let (c, h) = tokio::io::duplex(65536);
     let (cancel, token) = cancellation();
     let (c, h) = tokio::join!(
@@ -214,7 +221,12 @@ pub(super) async fn lease_channels(
         issuer_epoch: 17,
         origin,
     };
-    let (c, h) = if enabled {
+    let (c, h) = if pull {
+        tokio::join!(
+            bind_client_live_snapshot_pull_channel(c.unwrap(), trust),
+            bind_host_live_snapshot_pull_channel(h.unwrap(), snapshot)
+        )
+    } else if enabled {
         tokio::join!(
             bind_client_control_lease_channel(c.unwrap(), trust),
             bind_host_control_lease_channel(h.unwrap(), snapshot)
@@ -265,6 +277,40 @@ pub(super) async fn lease_channels(
     let request = h.host_install_request().await.unwrap();
     let (proof, sent) = tokio::join!(c.client_installed(), h.complete_host_install(request, 4));
     sent.unwrap();
-    assert_eq!(proof.unwrap().consume_for(&c).unwrap(), 4);
-    (c, h, gate, cancel)
+    let proof = proof.unwrap();
+    (c, h, gate, cancel, proof)
+}
+
+pub(super) async fn lease_channels(
+    now: Arc<AtomicU64>,
+    enabled: bool,
+    role: DataRole,
+) -> (RunningChannel, RunningChannel, GrantGate, CancelHandle) {
+    let (c, h, g, t, p) = lease_channels_mode(now, enabled, false, role).await;
+    assert_eq!(p.consume_for(&c).unwrap(), 4);
+    (c, h, g, t)
+}
+pub(super) async fn pull_channels(
+    now: Arc<AtomicU64>,
+) -> (RunningChannel, RunningChannel, GrantGate, CancelHandle) {
+    let (c, h, g, t, p) = lease_channels_mode(now, true, true, DataRole::Controller).await;
+    assert_eq!(p.consume_for(&c).unwrap(), 4);
+    (c, h, g, t)
+}
+
+pub(super) async fn native_pull_channels(
+    now: Arc<AtomicU64>,
+) -> (
+    cc_desk_remote_client::NativeClient,
+    RunningChannel,
+    GrantGate,
+    CancelHandle,
+) {
+    let (c, h, g, t, p) = lease_channels_mode(now, true, true, DataRole::Controller).await;
+    (
+        cc_desk_remote_client::NativeClient::from_installed(c, p).unwrap(),
+        h,
+        g,
+        t,
+    )
 }
