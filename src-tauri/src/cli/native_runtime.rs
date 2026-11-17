@@ -1247,3 +1247,25 @@ fn RemoteHost_RunQueryRejectsAuthorityFields_001() {
     );
     assert!(serde_json::from_str::<NativeRunQuery>(r#"{"runId":"a","generation":"1"}"#).is_err());
 }
+
+#[cfg(all(feature = "remote-host", windows))]
+impl NativeRuntime {
+    pub(crate) fn prepare_unattended_next(
+        &self,
+        session: &Arc<crate::remote_host::delegated::DelegatedSession>,
+        current: &crate::remote_unattended::capability::VerifiedBinding,
+    ) -> Result<
+        (
+            Arc<crate::remote_host_network::delegated::SocketCustody>,
+            crate::remote_host::delegated::DelegatedSocketStart,
+        ),
+        SafeError,
+    > {
+        session.prepare_next(
+            current,
+            self.supervisor
+                .as_ref()
+                .ok_or_else(|| error("NATIVE_RUNTIME_NOT_READY"))?,
+        )
+    }
+}

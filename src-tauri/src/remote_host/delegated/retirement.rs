@@ -239,6 +239,7 @@ impl DelegatedSession {
             attempt: admission.brand(),
         };
         let start = DelegatedSocketStart {
+            request_gate: None,
             identity,
             session: Arc::downgrade(self),
             admission: Some(admission),

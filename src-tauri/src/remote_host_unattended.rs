@@ -13,8 +13,25 @@ use preparing::PreparingRequest;
 pub(crate) struct StartPermit {
     app: Arc<()>,
     close: CloseHandle,
+    runtime: Option<Arc<crate::cli::native_runtime::NativeRuntime>>,
 }
 impl StartPermit {
+    pub(crate) fn prepare_next(
+        &self,
+        session: &Arc<crate::remote_host::delegated::DelegatedSession>,
+        current: &crate::remote_unattended::capability::VerifiedBinding,
+    ) -> Result<
+        (
+            Arc<crate::remote_host_network::delegated::SocketCustody>,
+            crate::remote_host::delegated::DelegatedSocketStart,
+        ),
+        crate::cli::types::SafeError,
+    > {
+        self.runtime
+            .as_ref()
+            .ok_or_else(|| crate::cli::profiles::error("REMOTE_HOST_LOCKED"))?
+            .prepare_unattended_next(session, current)
+    }
     pub(crate) fn matches_host(&self, host: &crate::remote_host::RemoteHostService) -> bool {
         Arc::ptr_eq(&self.app, &host.unattended.app)
     }
@@ -380,6 +397,7 @@ impl UnattendedCustody {
         let permit = StartPermit {
             app: self.app.clone(),
             close: close.clone(),
+            runtime: self.state.lock().runtime.clone(),
         };
         let start_result = owner.started.clone();
         let task = move || {

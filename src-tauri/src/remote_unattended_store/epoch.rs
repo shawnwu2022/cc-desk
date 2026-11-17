@@ -61,7 +61,7 @@ impl<S: Sealer> SingleRunService<S> {
         }
         Ok(())
     }
-    fn check_epoch_parent<B: PairingBackend, P: PairingSealer>(
+    pub(super) fn check_epoch_parent<B: PairingBackend, P: PairingSealer>(
         &self,
         pairing: &PairingStore<B, P>,
     ) -> Result<()> {
@@ -88,7 +88,7 @@ impl<S: Sealer> SingleRunService<S> {
             .check_runtime(pairing)
             .map_err(|_| StoreError::Unauthorized)
     }
-    fn open_epoch<B: PairingBackend, P: PairingSealer>(
+    pub(super) fn open_epoch<B: PairingBackend, P: PairingSealer>(
         &mut self,
         pairing: &PairingStore<B, P>,
         permit: &crate::remote_host::unattended::StartPermit,

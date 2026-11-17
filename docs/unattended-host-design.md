@@ -2159,3 +2159,60 @@ run preserves a test-only incorrect fixture path failure, subsequently corrected
 to the original backend target path without changing the Unknown assertions. No result
 here claims automatic reclamation, practical long-duration availability,
 reconnection, real-device validation, or public deployment.
+
+## A6o — 同一委托 Session 的有限正常关闭重连
+
+本片新增独立的内部 ReconnectSession 最终批准模式，父授权仍不超过 60 秒，
+绝对截止不重新锚定。Local、ShortNetwork 和 NetworkSession 均不隐式升级；
+现有产品 UI 仍只提供原短会话入口，没有开放重连或长期无人值守。
+
+原 App 唯一 worker 收到当前 socket 终态通知后，先消费原 Session 的完整
+退休观察，再等待原 key custody（含 notifier）的确证退出；之后重新核父取消、
+固定截止、精确配对 CAS、原 Store.observe 和 captured run，创建新短材料并经
+同 Session.prepare_next 重新认证。每代 request gate 只随不可克隆的 Start →
+Prepared → pump 移交，旧 pump 保留旧 gate，不将旧 attempt 改绑新代。
+Condvar 通知仅唤醒，不授权；迟到旧代通知检查当前 socket，不额外打开第三代。
+
+真实二代测试发现原 wire 每连接随机生成 Host activation/incarnation，而原
+NativeHost rebind 必须保持同一 Host 生命周期身份。现私有 HostLifetimeIdentity
+在原 Session 登记前以 fallible 系统随机源生成并绑定 Session brand，只稳定这
+两个 Host 生命周期字段。Start 仍核原 operation/admission/预算；TLS exporter、
+Grant、nonce、lease 和 attempt 每代独立，未放宽原 same_host 校验。
+生产随机源经现有 rustls ring provider 获取，不新增依赖。首次 strict 暴露直接
+引用仅 dev-dependency ring 的非 test 构建问题，已保留失败日志并修正。
+
+验收使用真实 Chrome 隔离虚拟认证器、生产 Source/EntryWorker/WASM、原 Relay、
+真实 Host 和原 PTY。合成 HTTPS origin 与 Node fixture-CA 外层转发不证明浏览器
+可信 TLS、真实手机或公网可用。正常两代各完成认证、Installed、1920 cells 快照、
+窗口与一帧输入；第二代使用新 operation 和连续输入序号。fixture 等原第二 Host
+Accepted 后才启动第二 Source，这不是生产浏览器自动重试或退避实现。
+
+五个定向场景分别覆盖原非重连模式正常关闭收据、同 owner 两代完整链、收据后
+父取消零新材料、私有 Host 身份/跨 Session brand 否定，以及收据消费后新材料
+失败。身份单测不是两套独立真实跨 Session 握手。两代用例额外观察实际 worker
+处理迟到 wake，确认仅两代 key open。材料失败沿原 Unknown 规则保留父关闭、
+无第二 Installed、原任务及 OS custody，第二实例 claim 仍 Busy；独立子进程退出
+只是测试清理，不是正常 App/PTY 退休。此失败状态仍是产品可用性限制。
+
+本片不改变 socket 错误分类，不吞 wait_closed 的 Err，不承诺任意传输 EOF、
+协议故障或时钟/授权失败可重连。没有调用真实 checkpoint、降低 observed floor
+写频、重置 journal 或扩大撤销储备；长期预算与实际浏览器自动重连入口仍待验证。
+首行为 RED 保存在 reconnect-two-red.log；native rebind 诊断明确定位生命周期
+身份失配，临时 host/transport 诊断随后还原。格式化前五项通过记录为
+reconnect-negative-final-first.log（5/5，27.60 秒），不冒充最终同字节源码证据。
+
+收口回归另外发现 A6m 已存在的 Manual 兼容缺口：Socket setup 无条件调用
+live_keepalive_fact，而该 API 对未协商 keepalive 返回 Role 错误，不是 None。
+reconnect-final-DelegatedReceipt_.log 保留原 1 通过 / 3 失败。修复只按原 wire
+请求模式分支：Manual 不签发 InstalledData；live 仍执行原角色、时钟、协商与
+事实验证并原样拒绝错误，不把缺协商当作降级成功。旧 Manual 因此不会获得
+新长数据权，原三份待处理 fixture 改动仍保持字节不变。
+
+最终兼容修复后同源码验证：Receipt 4、Renewal 9、Reconnect 5、原 Network 数据
+寿命 6，以及 Native 6、Network admission 5、Socket 8、HostReady 7、HostStages 12、
+App 9、Final 2、Reservation 5、SingleRun 10，共 88 个不同测试。前四组日志前缀
+reconnect-compat，后九组为 reconnect-verified；reconnect-final-ledger.json 按原
+最终 harness 结果及去重名称核对，不重复计算子进程输出。严格 Clippy 最终通过
+reconnect-strict-final.log（29.57 秒）。reconnect-final-source.json 记录 12 份源码
+指纹，reconnect-stage-files.txt 限定 13 文件。两份临时 NativeHost 诊断源已与保存
+原字节逐项核对相同；原三份待处理改动与生成产物均排除本片提交。

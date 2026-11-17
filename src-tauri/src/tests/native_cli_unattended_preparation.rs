@@ -3123,15 +3123,17 @@ async fn unattended_short_network_case(mode: u8) {
         relay_scalar,
     ];
     // 浏览器工具初始化不占用原批准与首读窗口；READY 不授予任何权限。
-    let mut real_browser = if (5..=11).contains(&mode) {
-        let config = serde_json::json!({"case":if mode == 6 {"key-retirement-probe"} else if mode == 7 {"key-retirement-data"} else if mode == 8 {"authenticated-session"} else if mode == 9 {"authenticated-revoked"} else if mode == 10 {"authenticated-expired"} else if mode == 11 {"authenticated-race"} else {"short-input"},"origin":relay.origin,"scope":scope,"hostSpki":host_spki,"expires":false,"revocationPath":null}).to_string();
+    let mut real_browser = if (5..=15).contains(&mode) {
+        let config = serde_json::json!({"case":if mode == 15 {"authenticated-reconnect-material-failed"} else if mode == 14 {"authenticated-reconnect-cancel"} else if mode == 13 {"authenticated-reconnect"} else if mode == 6 {"key-retirement-probe"} else if mode == 7 {"key-retirement-data"} else if mode == 8 {"authenticated-session"} else if mode == 9 {"authenticated-revoked"} else if mode == 10 {"authenticated-expired"} else if mode == 11 {"authenticated-race"} else {"short-input"},"origin":relay.origin,"scope":scope,"hostSpki":host_spki,"expires":false,"revocationPath":null}).to_string();
         Some(RealBrowserChild::prepare(&config))
     } else {
         None
     };
-    let mut key_probe = None;
+    let mut failed_next_socket = None;
+    let mut key_probe: Option<Box<dyn FnOnce() -> bool + Send>> = None;
     let mut signing_observer = None;
     let mut activation_witness = None;
+    let mut retirement_probe = None;
     let mut product_keepalive = None;
     let (approval, fixed_end, control) = if mode == 3 || mode == 4 || mode == 5 {
         let product = crate::remote_host::short_session::ShortSessionService::default();
@@ -3190,7 +3192,9 @@ async fn unattended_short_network_case(mode: u8) {
         let first = UnattendedApproval::test_pending(preparation);
         first.test_answer(true, false);
         let prepared = first.consume(&pairing, &admission).unwrap().unwrap();
-        let approval = Arc::new(if mode >= 8 {
+        let approval = Arc::new(if (13..=15).contains(&mode) {
+            FinalApproval::test_pending_reconnect(prepared, &pairing, &admission).unwrap()
+        } else if mode >= 8 {
             FinalApproval::test_pending_session(prepared, &pairing, &admission).unwrap()
         } else {
             FinalApproval::test_pending_network(prepared, &pairing, &admission).unwrap()
@@ -3210,6 +3214,42 @@ async fn unattended_short_network_case(mode: u8) {
         )
         .unwrap();
         pending.test_anonymous_network(scalars, opened.clone(), accepted);
+        if (13..=15).contains(&mode) {
+            if mode == 14 {
+                pending.test_cancel_after_receipt();
+            }
+            if mode == 15 {
+                failed_next_socket = Some(pending.test_fail_next_material());
+            }
+            let late_wake = (mode == 13).then(|| pending.test_late_reconnect_wake());
+            let counts = opened.clone();
+            let (accepted, next_ready) = tokio::sync::oneshot::channel();
+            pending.test_next_network_accepted(accepted);
+            key_probe = Some(Box::new(move || {
+                let accepted = tauri::async_runtime::block_on(async {
+                    tokio::time::timeout(Duration::from_secs(8), next_ready).await
+                });
+                eprintln!("TEST_ONLY_SECOND_HOST_ACCEPTED {accepted:?}");
+                let end = Instant::now() + Duration::from_secs(1);
+                while late_wake
+                    .as_ref()
+                    .is_some_and(|flag| !flag.load(std::sync::atomic::Ordering::Acquire))
+                    && Instant::now() < end
+                {
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                let late_observed = late_wake
+                    .as_ref()
+                    .is_none_or(|flag| flag.load(std::sync::atomic::Ordering::Acquire));
+                let only_second = mode != 13
+                    || counts
+                        .iter()
+                        .all(|count| count.load(std::sync::atomic::Ordering::Acquire) == 2);
+                eprintln!("TEST_ONLY_LATE_WAKE observed={late_observed} only_second={only_second}");
+                matches!(accepted, Ok(Ok(()))) && late_observed && only_second
+            }));
+        }
+
         if mode == 6 || mode == 7 {
             key_probe = Some(pending.test_live_tls_key_retirement());
         }
@@ -3218,6 +3258,9 @@ async fn unattended_short_network_case(mode: u8) {
         }
         if mode == 9 {
             key_probe = Some(pending.test_close_after_signing());
+        }
+        if mode == 12 {
+            retirement_probe = Some(pending.test_normal_disconnect_receipt());
         }
         if mode == 11 {
             activation_witness = Some(pending.test_activation_race());
@@ -3247,7 +3290,13 @@ async fn unattended_short_network_case(mode: u8) {
                     )
                     .args([
                         "--experimental-strip-types",
-                        if mode == 5 { "remote/ui-terminal/src/browserSourceRealRelay.fixture.mjs" } else if mode == 4 { "remote/ui-terminal/src/browserSourcePullRelay.fixture.ts" } else { "remote/ui-terminal/src/browserSnapshotPullRelay.fixture.ts" },
+                        if mode == 5 {
+                            "remote/ui-terminal/src/browserSourceRealRelay.fixture.mjs"
+                        } else if mode == 4 {
+                            "remote/ui-terminal/src/browserSourcePullRelay.fixture.ts"
+                        } else {
+                            "remote/ui-terminal/src/browserSnapshotPullRelay.fixture.ts"
+                        },
                         &config,
                     ])
                     .stdout(std::process::Stdio::piped())
@@ -3285,15 +3334,26 @@ async fn unattended_short_network_case(mode: u8) {
             o.status.success()
         }
     });
+    let disconnect_ready = match retirement_probe {
+        Some(probe) => probe.await,
+        None => true,
+    };
     let automatic_signing_retired = signing_observer.is_none_or(|observe| observe());
     let activation_observed =
         activation_witness.is_none_or(|v| v.load(std::sync::atomic::Ordering::Acquire));
     eprintln!("TEST_ONLY_FIRST_DATA_BEFORE_FACT {activation_observed}");
     eprintln!("TEST_ONLY_AUTOMATIC_SIGNING_RETIRED {automatic_signing_retired}");
+    let cancelled_without_new_keys = mode != 14
+        || (control.as_ref().is_some_and(|control| control.closed())
+            && opened
+                .iter()
+                .all(|value| value.load(std::sync::atomic::Ordering::Acquire) == 1));
     let input_exact = if succeeded {
         let remainder: &[u8] =
             if revoke || expires || mode == 6 || mode == 7 || mode == 9 || mode == 10 {
                 b"native"
+            } else if mode == 13 {
+                b"tive"
             } else {
                 b"ative"
             };
@@ -3319,6 +3379,46 @@ async fn unattended_short_network_case(mode: u8) {
     } else {
         true
     };
+    if mode == 15 {
+        let socket = failed_next_socket.as_ref().unwrap().lock().clone().unwrap();
+        let failed_network = socket.wait_closed().await;
+        let no_channel = socket.test_original_channel().is_none();
+        let known = tokio::time::timeout(Duration::from_secs(10), host.unattended.wait()).await;
+        let observation = host.unattended.observe();
+        let backend = crate::version_history::windows::unattended_store::WindowsUnattendedBackend::open_existing(&path).unwrap();
+        let held = matches!(
+            backend.claim_owner_custody(),
+            Err(crate::remote_unattended_store::StoreError::Busy)
+        );
+        let relay_closed = relay.close().await;
+        eprintln!("TEST_ONLY_FAILED_NEXT network={failed_network:?} no_channel={no_channel} known={known:?} observation={observation:?} custody={held} opens={:?}", opened.iter().map(|n| n.load(std::sync::atomic::Ordering::Acquire)).collect::<Vec<_>>());
+        if let Some(output) = &output {
+            eprintln!(
+                "stdout={} stderr={}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        assert!(
+            succeeded
+                && input_exact
+                && control.as_ref().unwrap().closed()
+                && no_channel
+                && failed_network.is_err()
+                && matches!(known, Ok(false))
+                && observation.watcher_joined
+                && observation.controller_drop_returned
+                && !observation.retired
+                && held
+                && relay_closed
+        );
+        assert!(opened
+            .iter()
+            .all(|n| n.load(std::sync::atomic::Ordering::Acquire) == 2));
+        println!("TEST_ONLY_RECONNECT_FAILED_MATERIAL_QUARANTINED");
+        // 故意保留 Unknown/OS custody；这里只结束隔离测试进程，不是 App/PTY 退休证明。
+        std::process::exit(0);
+    }
     host.request_exit(53, false);
     host.start_exit(
         53,
@@ -3340,7 +3440,9 @@ async fn unattended_short_network_case(mode: u8) {
     }
     assert!(
         succeeded
+            && cancelled_without_new_keys
             && automatic_signing_retired
+            && disconnect_ready
             && activation_observed
             && before_app_exit
             && input_exact
@@ -3426,7 +3528,12 @@ fn short_network_isolated(case: &str) -> bool {
     };
     let evidence = std::fs::read_to_string(&path).unwrap();
     eprintln!("{evidence}");
-    assert!(status.success() && evidence.contains("1 passed; 0 failed"));
+    let completed = if case == "UnattendedReconnect_FailedNextMaterialRetainsCustody_005" {
+        evidence.contains("TEST_ONLY_RECONNECT_FAILED_MATERIAL_QUARANTINED")
+    } else {
+        evidence.contains("1 passed; 0 failed")
+    };
+    assert!(status.success() && completed);
     true
 }
 
@@ -3572,12 +3679,19 @@ async fn UnattendedProduct_CancelAndForeignAdvanceNeverPersist_004() {
                 .close_for(&host, &binding, &f.caller, &native, &id)
                 .unwrap();
         } else if mode == 4 {
-            f.service.access(&f.caller, &f.request_run()).unwrap()
-                .write_frame(b"native").unwrap();
+            f.service
+                .access(&f.caller, &f.request_run())
+                .unwrap()
+                .write_frame(b"native")
+                .unwrap();
             assert_eq!(report(&f)["input"], json!([110, 97, 116, 105, 118, 101]));
             assert!(f.service.access(&f.caller, &f.request_run()).is_err());
-            product.status_for(&host, &binding, &f.caller, &native).unwrap();
-            product.close_for(&host, &binding, &f.caller, &native, &id).unwrap();
+            product
+                .status_for(&host, &binding, &f.caller, &native)
+                .unwrap();
+            product
+                .close_for(&host, &binding, &f.caller, &native, &id)
+                .unwrap();
         } else {
             product.test_answer(false, true);
             let url: tauri::Url = "http://tauri.localhost/".parse().unwrap();
@@ -3624,13 +3738,17 @@ async fn UnattendedProduct_CancelAndForeignAdvanceNeverPersist_004() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn UnattendedProduct_ProductionBrowserSourcePull_005() {
-    if short_network_isolated("UnattendedProduct_ProductionBrowserSourcePull_005") { return; }
+    if short_network_isolated("UnattendedProduct_ProductionBrowserSourcePull_005") {
+        return;
+    }
     unattended_short_network_case(4).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn UnattendedProduct_RealBrowserProductionEntry_006() {
-    if short_network_isolated("UnattendedProduct_RealBrowserProductionEntry_006") { return; }
+    if short_network_isolated("UnattendedProduct_RealBrowserProductionEntry_006") {
+        return;
+    }
     unattended_short_network_case(5).await;
 }
 
@@ -3745,25 +3863,28 @@ impl RealBrowserChild {
                     stderr: self.stderr.take().unwrap().join().unwrap(),
                 };
             }
-            assert!(Instant::now()<end,"browser original child deadline");
+            assert!(Instant::now() < end, "browser original child deadline");
             std::thread::sleep(Duration::from_millis(10));
         }
     }
 }
 impl Drop for RealBrowserChild {
     fn drop(&mut self) {
-        if let Some(mut child)=self.child.take() {
+        if let Some(mut child) = self.child.take() {
             drop(child.stdin.take());
-            let end=Instant::now()+Duration::from_secs(5);
-            while child.try_wait().ok().flatten().is_none() && Instant::now()<end {std::thread::sleep(Duration::from_millis(10));}
+            let end = Instant::now() + Duration::from_secs(5);
+            while child.try_wait().ok().flatten().is_none() && Instant::now() < end {
+                std::thread::sleep(Duration::from_millis(10));
+            }
             if child.try_wait().ok().flatten().is_none() {
                 // 仅失败兜底终止本 fixture 创建的进程树，不计为正常退休。
                 use std::os::windows::process::CommandExt;
                 let _ = std::process::Command::new("taskkill.exe")
                     .args(["/PID", &child.id().to_string(), "/T", "/F"])
-                    .creation_flags(0x0800_0000).status();
+                    .creation_flags(0x0800_0000)
+                    .status();
             }
-            let _=child.wait();
+            let _ = child.wait();
         }
         if let Some(task) = self.stdout.take() {
             let _ = task.join();
@@ -3820,4 +3941,36 @@ async fn UnattendedNetwork_FirstDataBeforeFact_006() {
         return;
     }
     unattended_short_network_case(11).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn UnattendedReconnect_NormalSourceCloseReceipt_001() {
+    if short_network_isolated("UnattendedReconnect_NormalSourceCloseReceipt_001") {
+        return;
+    }
+    unattended_short_network_case(12).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn UnattendedReconnect_OriginalOwnerTwoAuthenticatedSessions_002() {
+    if short_network_isolated("UnattendedReconnect_OriginalOwnerTwoAuthenticatedSessions_002") {
+        return;
+    }
+    unattended_short_network_case(13).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn UnattendedReconnect_CancelAfterReceiptOpensNoNextKeys_003() {
+    if short_network_isolated("UnattendedReconnect_CancelAfterReceiptOpensNoNextKeys_003") {
+        return;
+    }
+    unattended_short_network_case(14).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn UnattendedReconnect_FailedNextMaterialRetainsCustody_005() {
+    if short_network_isolated("UnattendedReconnect_FailedNextMaterialRetainsCustody_005") {
+        return;
+    }
+    unattended_short_network_case(15).await;
 }

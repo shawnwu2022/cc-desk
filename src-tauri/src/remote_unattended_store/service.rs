@@ -819,3 +819,50 @@ impl<S: Sealer> SingleRunService<S> {
         })
     }
 }
+
+impl<S: Sealer> SingleRunService<S> {
+    fn prepare_next_network<B: PairingBackend, P: PairingSealer>(
+        &mut self,
+        session: Arc<crate::remote_host::delegated::DelegatedSession>,
+        pairing: &PairingStore<B, P>,
+        permit: &crate::remote_host::unattended::StartPermit,
+    ) -> Result<PreparedNetwork> {
+        if !self.consent.as_ref().is_some_and(|c| c.permits_reconnect()) {
+            return Err(StoreError::Unauthorized);
+        }
+        let checked = self.check_epoch_parent(pairing);
+        checked?;
+        let next = permit.prepare_next(
+            &session,
+            self.binding.as_ref().ok_or(StoreError::Unauthorized)?,
+        );
+        let (socket, start) = next.map_err(|_| StoreError::Unauthorized)?;
+        self.data_socket = Some(socket.clone());
+        let refreshed = self.refresh(pairing);
+        refreshed?;
+        let authority = self
+            .consent
+            .as_ref()
+            .ok_or(StoreError::Unauthorized)?
+            .network_signing_authorization(
+                permit,
+                &start,
+                self.ready.as_ref().ok_or(StoreError::Unauthorized)?,
+                self.keys.as_ref().ok_or(StoreError::Unauthorized)?,
+                self.current_key_binding()?,
+            )
+            .map_err(|_| StoreError::Unauthorized)?;
+        let material = crate::remote_host_network::delegated::MaterialSupply::delegated(
+            &start,
+            authority,
+            self.signers.take().ok_or(StoreError::Unauthorized)?,
+        )
+        .map_err(|_| StoreError::Unauthorized)?;
+        Ok(PreparedNetwork {
+            session,
+            socket,
+            start,
+            material,
+        })
+    }
+}

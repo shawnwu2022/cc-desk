@@ -10,14 +10,47 @@ use std::sync::Weak;
 #[path = "delegated/retirement.rs"]
 pub(crate) mod retirement;
 
+// 同一个 Host 的生命周期身份；不是可恢复权限，也不是 TLS/Grant 会话身份。
+#[derive(Clone)]
+pub(crate) struct HostLifetimeIdentity {
+    session: Arc<()>,
+    activation: [u8; 32],
+    incarnation: u64,
+}
+impl HostLifetimeIdentity {
+    fn new(session: Arc<()>) -> Result<Self, SafeError> {
+        let provider = rustls::crypto::ring::default_provider();
+        let random = provider.secure_random;
+        let mut activation = [0; 32];
+        let mut incarnation = [0; 8];
+        random
+            .fill(&mut activation)
+            .map_err(|_| crate::cli::profiles::error("REMOTE_HOST_LOCKED"))?;
+        random
+            .fill(&mut incarnation)
+            .map_err(|_| crate::cli::profiles::error("REMOTE_HOST_LOCKED"))?;
+        Ok(Self {
+            session,
+            activation,
+            incarnation: u64::from_le_bytes(incarnation).max(1),
+        })
+    }
+    pub(crate) fn matches_attempt(&self, attempt: &DelegatedAttemptIdentity) -> bool {
+        Arc::ptr_eq(&self.session, &attempt.session)
+    }
+    pub(crate) fn activation(&self) -> [u8; 32] {
+        self.activation
+    }
+    pub(crate) fn incarnation(&self) -> u64 {
+        self.incarnation
+    }
+}
 pub(crate) struct DelegatedSession {
     service: Weak<RemoteHostService>,
     brand: Arc<()>,
+    host_identity: HostLifetimeIdentity,
     clock: Arc<NetworkClock>,
     owner: DelegatedRunOwner,
-    request_gate: std::sync::OnceLock<
-        Arc<crate::remote_unattended_store::service::request_gate::ServiceRequestGate>,
-    >,
     reservation: ActivationReservation,
     active: Mutex<Option<ActiveAttempt>>,
     transition: Mutex<()>,
@@ -40,6 +73,8 @@ struct ActiveAttempt {
     local: Option<ChannelRetirementToken>,
 }
 pub(crate) struct DelegatedPreparedChannel {
+    request_gate:
+        Option<Arc<crate::remote_unattended_store::service::request_gate::ServiceRequestGate>>,
     brand: Arc<()>,
     attempt_brand: Arc<()>,
     admission: Option<DelegatedNetworkAdmission>,
@@ -88,15 +123,19 @@ impl RemoteHostService {
             return Err((crate::cli::profiles::error("REMOTE_HOST_LOCKED"), owner));
         }
         let brand = Arc::new(());
+        let host_identity = match HostLifetimeIdentity::new(brand.clone()) {
+            Ok(identity) => identity,
+            Err(error) => return Err((error, owner)),
+        };
         let reservation = ActivationReservation::new();
         state.activation = Some(reservation.operation());
         state.delegation = Some(brand.clone());
         Ok(DelegatedSession {
             service: Arc::downgrade(self),
             brand,
+            host_identity,
             clock: Arc::new(NetworkClock::new()),
             owner,
-            request_gate: std::sync::OnceLock::new(),
             reservation,
             active: Mutex::new(None),
             transition: Mutex::new(()),
@@ -110,14 +149,6 @@ impl RemoteHostService {
     }
 }
 impl DelegatedSession {
-    pub(crate) fn install_request_gate(
-        &self,
-        gate: crate::remote_unattended_store::service::request_gate::ServiceRequestGate,
-    ) -> Result<(), SafeError> {
-        self.request_gate
-            .set(Arc::new(gate))
-            .map_err(|_| crate::cli::profiles::error("REMOTE_HOST_LOCKED"))
-    }
     pub(crate) fn captured_owner(&self) -> &DelegatedRunOwner {
         &self.owner
     }
@@ -197,7 +228,7 @@ impl DelegatedSession {
             let channel = prepared.channel.clone();
             #[cfg(test)]
             let retirement_hook = self.pump_retirement.lock().take();
-            let request_gate = self.request_gate.get().cloned().map(|gate| {
+            let request_gate = prepared.request_gate.take().map(|gate| {
                 (
                     gate,
                     DelegatedAttemptIdentity {
@@ -342,6 +373,7 @@ impl DelegatedSession {
         .await;
         Ok((
             DelegatedPreparedChannel {
+                request_gate: None,
                 brand: self.brand.clone(),
                 attempt_brand: admission.brand(),
                 admission: Some(admission),
@@ -383,6 +415,14 @@ impl DelegatedAttemptIdentity {
             attempt: Arc::new(()),
         }
     }
+    #[cfg(test)]
+    pub(crate) fn test_foreign_session(&self) -> Self {
+        Self {
+            session: Arc::new(()),
+            operation: self.operation.clone(),
+            attempt: self.attempt.clone(),
+        }
+    }
     pub(crate) fn matches(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.session, &other.session)
             && Arc::ptr_eq(&self.operation, &other.operation)
@@ -390,6 +430,8 @@ impl DelegatedAttemptIdentity {
     }
 }
 pub(crate) struct DelegatedSocketStart {
+    request_gate:
+        Option<Arc<crate::remote_unattended_store::service::request_gate::ServiceRequestGate>>,
     identity: DelegatedAttemptIdentity,
     retired: Option<cc_desk_remote_host::native_host::RetiredInstalledChannel>,
     session: Weak<DelegatedSession>,
@@ -397,10 +439,19 @@ pub(crate) struct DelegatedSocketStart {
     clock: Arc<NetworkClock>,
 }
 impl DelegatedSocketStart {
+    pub(crate) fn install_request_gate(
+        &mut self,
+        gate: crate::remote_unattended_store::service::request_gate::ServiceRequestGate,
+    ) -> Result<(), SafeError> {
+        if self.request_gate.is_some() || !gate.matches_attempt(&self.identity) {
+            return Err(crate::cli::profiles::error("REMOTE_HOST_LOCKED"));
+        }
+        self.request_gate = Some(Arc::new(gate));
+        Ok(())
+    }
     pub(crate) fn has_request_gate(&self) -> bool {
-        self.session
-            .upgrade()
-            .and_then(|session| session.request_gate.get().cloned())
+        self.request_gate
+            .as_ref()
             .is_some_and(|gate| gate.matches_attempt(&self.identity))
     }
     pub(crate) fn matches_final_control(
@@ -410,6 +461,21 @@ impl DelegatedSocketStart {
         self.admission
             .as_ref()
             .is_some_and(|admission| admission.matches_final_control(control))
+    }
+    pub(crate) fn host_lifetime_identity(&self) -> Result<HostLifetimeIdentity, SafeError> {
+        let denied = || crate::cli::profiles::error("REMOTE_HOST_LOCKED");
+        let session = self.session.upgrade().ok_or_else(denied)?;
+        let admission = self.admission.as_ref().ok_or_else(denied)?;
+        if !Arc::ptr_eq(&session.brand, &self.identity.session)
+            || !Arc::ptr_eq(&session.host_identity.session, &self.identity.session)
+            || !Arc::ptr_eq(&session.reservation.operation(), &self.identity.operation)
+            || !Arc::ptr_eq(&admission.brand(), &self.identity.attempt)
+            || !self.starting_open()
+        {
+            return Err(denied());
+        }
+        self.budget()?.check().map_err(|_| denied())?;
+        Ok(session.host_identity.clone())
     }
     pub(crate) fn identity(&self) -> DelegatedAttemptIdentity {
         self.identity.clone()
@@ -492,6 +558,7 @@ impl DelegatedSocketStart {
             .take()
             .ok_or_else(|| crate::cli::profiles::error("REMOTE_HOST_LOCKED"))?;
         session.adopt(DelegatedPreparedChannel {
+            request_gate: self.request_gate.take(),
             brand: session.brand.clone(),
             attempt_brand: admission.brand(),
             admission: Some(admission),
@@ -587,6 +654,7 @@ impl DelegatedSession {
             attempt: admission.brand(),
         };
         let start = DelegatedSocketStart {
+            request_gate: None,
             identity,
             retired: None,
             session: Arc::downgrade(self),
@@ -598,5 +666,31 @@ impl DelegatedSession {
         // 原材料和网络线程启动前，Session 已持有完整 custody。
         *slot = Some(custody.clone());
         Ok((custody, start))
+    }
+}
+
+#[cfg(test)]
+mod lifetime_identity_tests {
+    use super::*;
+    #[test]
+    #[allow(non_snake_case)]
+    fn UnattendedReconnect_HostIdentityIsSessionScoped_004() {
+        let brand = Arc::new(());
+        let original = HostLifetimeIdentity::new(brand.clone()).unwrap();
+        let same = original.clone();
+        let other = HostLifetimeIdentity::new(Arc::new(())).unwrap();
+        let operation = ActivationReservation::new().operation();
+        let attempt = DelegatedAttemptIdentity {
+            session: brand,
+            operation,
+            attempt: Arc::new(()),
+        };
+        assert_eq!(original.activation(), same.activation());
+        assert_eq!(original.incarnation(), same.incarnation());
+        assert_ne!(original.activation(), other.activation());
+        assert!(!Arc::ptr_eq(&original.session, &other.session));
+        assert!(original.matches_attempt(&attempt));
+        assert!(!original.matches_attempt(&attempt.test_foreign_session()));
+        assert!(!other.matches_attempt(&attempt));
     }
 }

@@ -5,6 +5,10 @@ use crate::cli::native_runtime::NativeRuntime;
 #[cfg(test)]
 type PermitHook = Box<dyn FnOnce(&crate::remote_host::unattended::StartPermit) + Send>;
 
+#[cfg(test)]
+type TestNextSocket =
+    Arc<parking_lot::Mutex<Option<Arc<crate::remote_host_network::delegated::SocketCustody>>>>;
+
 pub(crate) struct StartKeys {
     pub(crate) custody: HostKeyCustody,
     pub(crate) ready: HostKeysReady,
@@ -26,6 +30,14 @@ pub(crate) struct PendingStart<S: Sealer, B: PairingBackend, P: PairingSealer> {
     permit_hook: Option<PermitHook>,
     #[cfg(test)]
     network_accepted: Option<tokio::sync::oneshot::Sender<()>>,
+    #[cfg(test)]
+    next_network_accepted: Option<tokio::sync::oneshot::Sender<()>>,
+    #[cfg(test)]
+    cancel_after_receipt: bool,
+    #[cfg(test)]
+    late_wake_observed: Option<Arc<std::sync::atomic::AtomicBool>>,
+    #[cfg(test)]
+    fail_next_material: Option<TestNextSocket>,
     #[cfg(test)]
     activation_race: Option<(
         Arc<std::sync::atomic::AtomicBool>,
@@ -70,6 +82,14 @@ impl<S: Sealer, B: PairingBackend, P: PairingSealer> PendingStart<S, B, P> {
             #[cfg(test)]
             network_accepted: None,
             #[cfg(test)]
+            next_network_accepted: None,
+            #[cfg(test)]
+            cancel_after_receipt: false,
+            #[cfg(test)]
+            late_wake_observed: None,
+            #[cfg(test)]
+            fail_next_material: None,
+            #[cfg(test)]
             activation_race: None,
         })
     }
@@ -98,6 +118,14 @@ impl<S: Sealer, B: PairingBackend, P: PairingSealer> PendingStart<S, B, P> {
             permit_hook: None,
             #[cfg(test)]
             network_accepted: None,
+            #[cfg(test)]
+            next_network_accepted: None,
+            #[cfg(test)]
+            cancel_after_receipt: false,
+            #[cfg(test)]
+            late_wake_observed: None,
+            #[cfg(test)]
+            fail_next_material: None,
             #[cfg(test)]
             activation_race: None,
         })
@@ -128,8 +156,37 @@ impl<S: Sealer, B: PairingBackend, P: PairingSealer> PendingStart<S, B, P> {
     pub(crate) fn advance_epoch(
         &mut self,
         permit: &crate::remote_host::unattended::StartPermit,
-    ) -> Result<()> {
+    ) -> Result<()>
+    where
+        S: Send + 'static,
+        B: Send + Sync + 'static,
+        P: Send + Sync + 'static,
+    {
         if self.network.is_some() {
+            let reconnect = {
+                let service = self.service.lock();
+                service
+                    .consent
+                    .as_ref()
+                    .is_some_and(|c| c.permits_reconnect())
+                    && service
+                        .data_socket
+                        .as_ref()
+                        .is_some_and(|socket| socket.terminal_observed())
+            };
+            if reconnect {
+                return self.reconnect(permit);
+            }
+            if self
+                .epoch_end()
+                .is_none_or(|end| std::time::Instant::now() < end)
+            {
+                #[cfg(test)]
+                if let Some(observed) = &self.late_wake_observed {
+                    observed.store(true, std::sync::atomic::Ordering::Release);
+                }
+                return Ok(());
+            }
             let keys = {
                 let service = self.service.lock();
                 if !permit.matches(&self.control)
@@ -239,50 +296,196 @@ impl<S: Sealer, B: PairingBackend, P: PairingSealer> PendingStart<S, B, P> {
                 .service
                 .lock()
                 .prepare_network(&host, &self.pairing, permit)?;
-            let gate = request_gate::ServiceRequestGate::new(
-                &self.service,
-                self.pairing.clone(),
-                self.control.clone(),
-                prepared.start.identity(),
-            );
-            #[cfg(test)]
-            let gate = match &self.activation_race {
-                Some((observed, _)) => gate.test_observe_authorized(observed.clone()),
-                None => gate,
-            };
-            prepared
-                .session
-                .install_request_gate(gate)
-                .map_err(|_| StoreError::Unauthorized)?;
-            #[cfg(test)]
-            let material = match self.network_accepted.take() {
-                Some(accepted) => prepared.material.test_loopback_observed(accepted),
-                None => prepared.material,
-            };
-            #[cfg(not(test))]
-            let material = prepared.material;
-            #[cfg(test)]
-            let material = match self.activation_race.take() {
-                Some((observed, witnessed)) => material.test_activation_hook(true, move || {
-                    let end = std::time::Instant::now() + std::time::Duration::from_secs(1);
-                    while !observed.load(std::sync::atomic::Ordering::Acquire)
-                        && std::time::Instant::now() < end
-                    {
-                        std::thread::sleep(std::time::Duration::from_millis(1));
-                    }
-                    witnessed.store(
-                        observed.load(std::sync::atomic::Ordering::Acquire),
-                        std::sync::atomic::Ordering::Release,
-                    );
-                }),
-                None => material,
-            };
-            prepared
-                .socket
-                .start(prepared.start, material)
-                .map_err(|_| StoreError::Unauthorized)?;
+            self.launch_network(prepared, permit)?;
         }
         Ok(())
+    }
+    fn launch_network(
+        &mut self,
+        mut prepared: PreparedNetwork,
+        _permit: &crate::remote_host::unattended::StartPermit,
+    ) -> Result<()>
+    where
+        S: Send + 'static,
+        B: Send + Sync + 'static,
+        P: Send + Sync + 'static,
+    {
+        let gate = request_gate::ServiceRequestGate::new(
+            &self.service,
+            self.pairing.clone(),
+            self.control.clone(),
+            prepared.start.identity(),
+        );
+        #[cfg(test)]
+        let gate = match &self.activation_race {
+            Some((observed, _)) => gate.test_observe_authorized(observed.clone()),
+            None => gate,
+        };
+        prepared
+            .start
+            .install_request_gate(gate)
+            .map_err(|_| StoreError::Unauthorized)?;
+        #[cfg(test)]
+        let material = match self
+            .network_accepted
+            .take()
+            .or_else(|| self.next_network_accepted.take())
+        {
+            Some(accepted) => prepared.material.test_loopback_observed(accepted),
+            None => prepared.material,
+        };
+        #[cfg(test)]
+        let material = if self.service.lock().epoch_anonymous.is_some() {
+            material.test_loopback()
+        } else {
+            material
+        };
+        #[cfg(not(test))]
+        let material = prepared.material;
+        #[cfg(test)]
+        let material = match self.activation_race.take() {
+            Some((observed, witnessed)) => material.test_activation_hook(true, move || {
+                let end = std::time::Instant::now() + std::time::Duration::from_secs(1);
+                while !observed.load(std::sync::atomic::Ordering::Acquire)
+                    && std::time::Instant::now() < end
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+                witnessed.store(
+                    observed.load(std::sync::atomic::Ordering::Acquire),
+                    std::sync::atomic::Ordering::Release,
+                );
+            }),
+            None => material,
+        };
+        if self
+            .service
+            .lock()
+            .consent
+            .as_ref()
+            .is_some_and(|c| c.permits_reconnect())
+        {
+            prepared
+                .socket
+                .install_terminal_wake(&prepared.start, self.control.clone())
+                .map_err(|_| StoreError::Unauthorized)?;
+        }
+        prepared
+            .socket
+            .start(prepared.start, material)
+            .map_err(|_| StoreError::Unauthorized)?;
+        Ok(())
+    }
+    fn reconnect(&mut self, permit: &crate::remote_host::unattended::StartPermit) -> Result<()>
+    where
+        S: Send + 'static,
+        B: Send + Sync + 'static,
+        P: Send + Sync + 'static,
+    {
+        let (session, keys) = {
+            let service = self.service.lock();
+            if !permit.matches(&self.control)
+                || !self.control.active()
+                || !service
+                    .consent
+                    .as_ref()
+                    .is_some_and(|c| c.permits_reconnect())
+            {
+                return Err(StoreError::Unauthorized);
+            }
+            let Some(CapturedOwner::Network { session, .. }) = &service.captured else {
+                return Err(StoreError::Unauthorized);
+            };
+            (
+                session.clone(),
+                service.keys.as_ref().ok_or(StoreError::Unknown)?.clone(),
+            )
+        };
+        // 原 App worker 锁外汇合；任何 Unknown 均不签发下一代。
+        let retired = tauri::async_runtime::block_on(session.observe_retirement());
+        if !matches!(
+            retired,
+            crate::remote_host::delegated::retirement::RetirementObservation::Ready
+        ) {
+            self.control.close();
+            return Err(StoreError::Unknown);
+        }
+        keys.revoke();
+        loop {
+            let observed = keys.advance();
+            if observed.unknown {
+                self.control.close();
+            }
+            if !observed.outstanding {
+                if observed.unknown || !observed.disposal_complete {
+                    return Err(StoreError::Unknown);
+                }
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        #[cfg(test)]
+        if self.cancel_after_receipt {
+            self.control.close();
+            self.next_network_accepted.take();
+        }
+        let prepared = {
+            let mut service = self.service.lock();
+            if !self.control.active()
+                || !service
+                    .keys
+                    .as_ref()
+                    .is_some_and(|original| Arc::ptr_eq(original, &keys))
+            {
+                return Err(StoreError::Unauthorized);
+            }
+            service.ready.take();
+            service.signers.take();
+            service.check_epoch_parent(&self.pairing)?;
+            let expected = service
+                .snapshot
+                .as_ref()
+                .ok_or(StoreError::Invalid)?
+                .expected();
+            match service.store.observe(&expected, now_ms()?) {
+                Ok(snapshot) => service.snapshot = Some(snapshot),
+                Err(error) => {
+                    if matches!(
+                        error,
+                        StoreError::CapacityRevoked | StoreError::Clock | StoreError::Expired
+                    ) {
+                        service.durable_closed = true;
+                    }
+                    if error == StoreError::Unknown {
+                        service.uncertain = true;
+                    }
+                    self.control.close();
+                    return Err(error);
+                }
+            }
+            service.check_epoch_parent(&self.pairing)?;
+            let opened = service.open_epoch(&self.pairing, permit);
+            opened?;
+            service.signing_retired = false;
+            service.prepare_next_network(session, &self.pairing, permit)?
+        };
+        drop(keys);
+        #[cfg(test)]
+        let prepared = {
+            let mut prepared = prepared;
+            if let Some(observed) = &self.fail_next_material {
+                *observed.lock() = Some(prepared.socket.clone());
+                prepared.material = prepared.material.test_fail_spawn();
+            }
+            prepared
+        };
+        let result = self.launch_network(prepared, permit);
+        #[cfg(test)]
+        if result.is_ok() && self.late_wake_observed.is_some() {
+            // 原旧代通知只唤醒；当前槽已选新代，不能再次消费旧 receipt。
+            self.control.notify_work();
+        }
+        result
     }
     pub(crate) fn finish(&mut self) -> controller::ControllerEnd {
         self.control.close();
@@ -328,6 +531,41 @@ impl<S: Sealer, B: PairingBackend, P: PairingSealer> Drop for PendingStart<S, B,
 }
 #[cfg(test)]
 impl<S: Sealer, B: PairingBackend, P: PairingSealer> PendingStart<S, B, P> {
+    // 仅探测原网络退休收据；不消费下一代、不改变旧模式授权。
+    pub(crate) fn test_normal_disconnect_receipt(
+        &self,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>>
+    where
+        S: Send + 'static,
+    {
+        let service = Arc::downgrade(&self.service);
+        let control = self.control.clone();
+        Box::pin(async move {
+            let Some(service) = service.upgrade() else {
+                return false;
+            };
+            let session = {
+                let held = service.lock();
+                match &held.captured {
+                    Some(CapturedOwner::Network { session, .. }) => session.clone(),
+                    _ => return false,
+                }
+            };
+            let observed = tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                session.observe_retirement(),
+            )
+            .await;
+            eprintln!(
+                "TEST_ONLY_NORMAL_DISCONNECT_RECEIPT {observed:?} parent_active={}",
+                control.active()
+            );
+            matches!(
+                observed,
+                Ok(crate::remote_host::delegated::retirement::RetirementObservation::Ready)
+            ) && control.active()
+        })
+    }
     pub(crate) fn test_live_tls_key_retirement(&self) -> Box<dyn FnOnce() -> bool + Send>
     where
         S: Send + 'static,
@@ -369,6 +607,25 @@ impl<S: Sealer, B: PairingBackend, P: PairingSealer> PendingStart<S, B, P> {
                 std::thread::sleep(std::time::Duration::from_millis(2));
             }
         })
+    }
+    pub(crate) fn test_late_reconnect_wake(&mut self) -> Arc<std::sync::atomic::AtomicBool> {
+        let observed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.late_wake_observed = Some(observed.clone());
+        observed
+    }
+    pub(crate) fn test_fail_next_material(&mut self) -> TestNextSocket {
+        let observed = Arc::new(parking_lot::Mutex::new(None));
+        self.fail_next_material = Some(observed.clone());
+        observed
+    }
+    pub(crate) fn test_cancel_after_receipt(&mut self) {
+        self.cancel_after_receipt = true;
+    }
+    pub(crate) fn test_next_network_accepted(
+        &mut self,
+        accepted: tokio::sync::oneshot::Sender<()>,
+    ) {
+        self.next_network_accepted = Some(accepted);
     }
     pub(crate) fn test_anonymous_network(
         &mut self,

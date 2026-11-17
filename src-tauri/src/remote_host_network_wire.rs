@@ -95,11 +95,8 @@ impl WireInputs {
             P256Spki::new(&record.native.endpoint_spki).map_err(|_| HostNetworkError::Authority)?;
         let local = LocalIdentity::new(security::Role::Host, endpoint, signers.endpoint)
             .map_err(|_| HostNetworkError::Authority)?;
-        let mut activation = [0; 32];
-        activation[..16].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
-        activation[16..].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
-        let incarnation =
-            u64::from_le_bytes(uuid::Uuid::new_v4().as_bytes()[..8].try_into().unwrap()).max(1);
+        let activation = authority.host_identity().activation();
+        let incarnation = authority.host_identity().incarnation();
         let remaining = authority
             .data_end()
             .saturating_duration_since(std::time::Instant::now());
@@ -468,6 +465,9 @@ impl NetworkWire {
         Ok(channel)
     }
     // 仅原 wire/channel 在原 setup task 内观察缓存；不读取 PeerPump 的事件或证明。
+    pub(super) fn requires_live_activation(&self) -> bool {
+        self.live_requested
+    }
     pub(super) async fn activate_live_after_install(
         &mut self,
         budget: &crate::remote_unattended::capability::network::NetworkBudget,

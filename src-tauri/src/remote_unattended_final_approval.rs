@@ -20,6 +20,7 @@ pub(crate) struct FinalControl {
     closed: Arc<NativeRevocation>,
     publication: Mutex<Publication>,
     closed_notify: parking_lot::Condvar,
+    work: std::sync::atomic::AtomicBool,
 }
 impl FinalControl {
     pub(crate) fn close(&self) {
@@ -30,9 +31,15 @@ impl FinalControl {
     // 同一短门下检查条件并等待；不跨等待持有存储、run 或 key 锁。
     pub(crate) fn wait_until_closed(&self, end: Instant) {
         let mut publication = self.publication.lock();
-        while !self.closed() && Instant::now() < end {
+        while !self.closed() && Instant::now() < end && !self.work.swap(false, Ordering::AcqRel) {
             self.closed_notify.wait_until(&mut publication, end);
         }
+    }
+    // 只唤醒原托管 worker，不改变权限或截止；同短门避免丢通知。
+    pub(crate) fn notify_work(&self) {
+        let _publication = self.publication.lock();
+        self.work.store(true, Ordering::Release);
+        self.closed_notify.notify_all();
     }
     pub(crate) fn closed(&self) -> bool {
         self.closed.is_revoked()
@@ -47,6 +54,7 @@ enum FinalMode {
     Local,
     ShortNetwork,
     NetworkSession,
+    ReconnectSession,
 }
 struct FinalDescription {
     mode: FinalMode,
@@ -84,7 +92,7 @@ impl FinalDescription {
         // 固定短材料窗口，不把等待确认的时间重新加到 cap 上。
         let anchor = Instant::now();
         let seconds = match mode {
-            FinalMode::Local | FinalMode::NetworkSession => 60,
+            FinalMode::Local | FinalMode::NetworkSession | FinalMode::ReconnectSession => 60,
             FinalMode::ShortNetwork => 10,
         };
         let cap = preparation.end.min(anchor + Duration::from_secs(seconds));
@@ -153,6 +161,7 @@ impl FinalDescription {
             FinalMode::Local => "当前批准仅限本机委托，不开启网络。",
             FinalMode::ShortNetwork => "允许经下列 Relay 为此设备开启一次短网络会话（最多 10 秒，且不超过所示实际截止），可读取该 run 终端快照并输入；不自动重连、不延长授权。",
             FinalMode::NetworkSession => "允许此设备在所示绝对截止内连接当前 run，读取终端快照和输入；签名材料仅短期持有，认证后的会话可持续到该截止。本阶段不自动重连，不跨 App 重启恢复。",
+            FinalMode::ReconnectSession => "允许此设备在所示固定绝对截止内重连同一 run，读取终端快照和输入。每次重连重新认证，旧连接及材料确认退休后才启动新连接；不延长截止，不跨 App 重启恢复。",
         };
         format!(
             "允许为此设备持久保存当前单会话委托？这不是之前的准备步骤。
@@ -231,6 +240,7 @@ impl FinalApproval {
                 closed: NativeRevocation::new(),
                 publication: Mutex::new(Publication::Waiting),
                 closed_notify: parking_lot::Condvar::new(),
+                work: std::sync::atomic::AtomicBool::new(false),
             }),
         })
     }
@@ -292,6 +302,14 @@ impl FinalApproval {
         Self::test_pending_mode(approved, store, admission, FinalMode::NetworkSession)
     }
     #[cfg(test)]
+    pub(crate) fn test_pending_reconnect<B: Backend, S: Sealer>(
+        approved: ApprovedPreparation,
+        store: &PairingStore<B, S>,
+        admission: &NativeRunAdmission,
+    ) -> Result<Self, SafeError> {
+        Self::test_pending_mode(approved, store, admission, FinalMode::ReconnectSession)
+    }
+    #[cfg(test)]
     fn test_pending_mode<B: Backend, S: Sealer>(
         approved: ApprovedPreparation,
         store: &PairingStore<B, S>,
@@ -306,6 +324,7 @@ impl FinalApproval {
                 closed: NativeRevocation::new(),
                 publication: Mutex::new(Publication::Waiting),
                 closed_notify: parking_lot::Condvar::new(),
+                work: std::sync::atomic::AtomicBool::new(false),
             }),
         })
     }
@@ -318,8 +337,14 @@ impl FinalConsent {
     pub(crate) fn permits_network(&self) -> bool {
         self.description.mode != FinalMode::Local
     }
+    pub(crate) fn permits_reconnect(&self) -> bool {
+        self.description.mode == FinalMode::ReconnectSession
+    }
     pub(crate) fn permits_authenticated_data(&self) -> bool {
-        self.description.mode == FinalMode::NetworkSession
+        matches!(
+            self.description.mode,
+            FinalMode::NetworkSession | FinalMode::ReconnectSession
+        )
     }
     pub(crate) fn check_start<B: Backend, S: Sealer>(
         &self,
@@ -486,6 +511,7 @@ impl FinalConsent {
 // 本代原 key 事实与同父委托的原 socket attempt 共同构成短签名准入。
 // 没有 caller token、公开构造器或 Clone；不能从历史 Enabled 恢复。
 pub(crate) struct DelegatedSigningAuthorization {
+    host_identity: crate::remote_host::delegated::HostLifetimeIdentity,
     record: crate::remote_native_pairing_store::PublicDeviceRecord,
     scope: NativeSessionScope,
     key: crate::native_crypto::host::ReadySigningIdentity,
@@ -496,10 +522,14 @@ pub(crate) struct DelegatedSigningAuthorization {
     data_end: Instant,
 }
 impl DelegatedSigningAuthorization {
+    pub(crate) fn host_identity(&self) -> &crate::remote_host::delegated::HostLifetimeIdentity {
+        &self.host_identity
+    }
     #[cfg(test)]
     pub(crate) fn test_exact_binding(&self) -> bool {
         self.matches_attempt(&self.attempt)
             && !self.matches_attempt(&self.attempt.test_foreign_attempt())
+            && !self.matches_attempt(&self.attempt.test_foreign_session())
             && self.key.test_authorization_caps(self)
     }
     pub(crate) fn record(&self) -> &crate::remote_native_pairing_store::PublicDeviceRecord {
@@ -518,7 +548,7 @@ impl DelegatedSigningAuthorization {
         &self,
         attempt: &crate::remote_host::delegated::DelegatedAttemptIdentity,
     ) -> bool {
-        self.attempt.matches(attempt)
+        self.attempt.matches(attempt) && self.host_identity.matches_attempt(attempt)
     }
     pub(crate) fn data_end(&self) -> Instant {
         self.data_end
@@ -566,6 +596,7 @@ impl FinalConsent {
             return Err(error("REMOTE_UNATTENDED_STALE"));
         }
         Ok(DelegatedSigningAuthorization {
+            host_identity: start.host_lifetime_identity()?,
             record: self.candidate().record().clone(),
             scope: self.scope().clone(),
             key,

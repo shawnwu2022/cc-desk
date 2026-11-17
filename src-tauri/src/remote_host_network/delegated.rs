@@ -71,6 +71,10 @@ struct TestHooks {
 }
 #[cfg(test)]
 impl TestMaterialBuilder {
+    pub(crate) fn test_loopback(mut self) -> Self {
+        self.connector = Connector::PublicLoopbackFixture;
+        self
+    }
     pub(crate) fn test_loopback_observed(
         mut self,
         accepted: tokio::sync::oneshot::Sender<()>,
@@ -154,6 +158,9 @@ pub(crate) struct SocketCustody {
     material: Arc<MaterialCustody>,
     launch: Mutex<Launch>,
     publication_unknown: AtomicBool,
+    terminal_wake: std::sync::OnceLock<
+        Arc<crate::remote_host_approval::unattended::final_approval::FinalControl>,
+    >,
     published: Mutex<Option<AdmissionPublisher>>,
 }
 impl SocketCustody {
@@ -180,8 +187,24 @@ impl SocketCustody {
             material: Arc::new(MaterialCustody::reserve()),
             launch: Mutex::new(Launch::Reserved),
             publication_unknown: AtomicBool::new(false),
+            terminal_wake: std::sync::OnceLock::new(),
             published: Mutex::new(Some(published)),
         })
+    }
+    pub(crate) fn install_terminal_wake(
+        &self,
+        start: &DelegatedSocketStart,
+        control: Arc<crate::remote_host_approval::unattended::final_approval::FinalControl>,
+    ) -> Result<(), HostNetworkError> {
+        if !self.matches_identity(&start.identity()) || !start.matches_final_control(&control) {
+            return Err(HostNetworkError::Authority);
+        }
+        self.terminal_wake
+            .set(control)
+            .map_err(|_| HostNetworkError::Authority)
+    }
+    pub(crate) fn terminal_observed(&self) -> bool {
+        self.network.terminal.load(Ordering::Acquire) != 0
     }
     pub(crate) fn installed_data_state(&self) -> Option<Result<(), HostNetworkError>> {
         if *self.network.stop.borrow() {
@@ -340,27 +363,37 @@ impl SocketCustody {
                 start
                     .handoff(channel)
                     .map_err(|_| HostNetworkError::Handoff)?;
-                clock.now_ms().map_err(|_| HostNetworkError::Authority)?;
-                wire.activate_live_after_install(&budget, end, &original.network.stop)
-                    .await?;
+                #[cfg(test)]
+                assert!(
+                    start.host_lifetime_identity().is_err(),
+                    "consumed start cannot issue signing identity"
+                );
+                let after_handoff = clock.now_ms();
+                after_handoff.map_err(|_| HostNetworkError::Authority)?;
+                let activated = wire
+                    .activate_live_after_install(&budget, end, &original.network.stop)
+                    .await;
+                activated?;
                 budget.check().map_err(|_| HostNetworkError::Authority)?;
-                if let Some(fact) = installed_channel
-                    .live_keepalive_fact(security::Role::Host)
-                    .map_err(|_| HostNetworkError::Authority)?
-                {
-                    fact.validate_for(&installed_channel, security::Role::Host)
-                        .map_err(|_| HostNetworkError::Authority)?;
-                    if !fact.uses_clock(&installed_budget.clock())
-                        || *original.network.stop.borrow()
+                if wire.requires_live_activation() {
+                    if let Some(fact) = installed_channel
+                        .live_keepalive_fact(security::Role::Host)
+                        .map_err(|_| HostNetworkError::Authority)?
                     {
-                        return Err(HostNetworkError::Authority);
+                        fact.validate_for(&installed_channel, security::Role::Host)
+                            .map_err(|_| HostNetworkError::Authority)?;
+                        if !fact.uses_clock(&installed_budget.clock())
+                            || *original.network.stop.borrow()
+                        {
+                            return Err(HostNetworkError::Authority);
+                        }
+                        *original.installed_data.lock() = Some(InstalledData {
+                            identity: original.identity.clone(),
+                            channel: installed_channel,
+                            budget: installed_budget,
+                            end: lifetime_end.into_std(),
+                        });
                     }
-                    *original.installed_data.lock() = Some(InstalledData {
-                        identity: original.identity.clone(),
-                        channel: installed_channel,
-                        budget: installed_budget,
-                        end: lifetime_end.into_std(),
-                    });
                 }
                 Ok(())
             };
@@ -419,6 +452,9 @@ impl SocketCustody {
                 },
                 Ordering::Release,
             );
+            if let Some(wake) = original.terminal_wake.get() {
+                wake.notify_work();
+            }
             result
         });
         *joined = Some(task);
