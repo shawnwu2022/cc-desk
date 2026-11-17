@@ -1701,3 +1701,6 @@ async fn BrowserLiveRelay_OriginalWasmIdleAndFixedCutoff_001() {
     );
     assert!(String::from_utf8_lossy(&output.stdout).contains("fixedDeadlineRetired"));
 }
+
+#[path = "native_cli_delegated_network_snapshot_pull.rs"]
+mod snapshot_pull;

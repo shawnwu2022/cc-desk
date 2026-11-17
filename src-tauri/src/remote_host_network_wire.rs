@@ -4,6 +4,7 @@ use super::*;
 enum DelegatedWireMode {
     Manual,
     Live,
+    LiveSnapshotPull,
 }
 pub(super) struct WireInputs {
     mode: DelegatedWireMode,
@@ -39,6 +40,11 @@ impl WireInputs {
     #[cfg(test)]
     pub(super) fn test_live(mut self) -> Self {
         self.mode = DelegatedWireMode::Live;
+        self
+    }
+    #[cfg(test)]
+    pub(super) fn test_live_snapshot_pull(mut self) -> Self {
+        self.mode = DelegatedWireMode::LiveSnapshotPull;
         self
     }
     #[cfg(test)]
@@ -183,7 +189,10 @@ impl NetworkWire {
             return Err(HostNetworkError::Closed);
         }
         self.started = true;
-        let live = inputs.mode == DelegatedWireMode::Live;
+        let live = matches!(
+            inputs.mode,
+            DelegatedWireMode::Live | DelegatedWireMode::LiveSnapshotPull
+        );
         if live && matches!(authorization, WireAuthority::Original(_)) {
             return Err(HostNetworkError::Authority);
         }
@@ -310,7 +319,9 @@ impl NetworkWire {
                 security::bind_host_peer_channel(pending, inputs.binding).await
             }
             WireAuthority::Delegated(_) => {
-                if live {
+                if inputs.mode == DelegatedWireMode::LiveSnapshotPull {
+                    security::bind_host_live_snapshot_pull_channel(pending, inputs.binding).await
+                } else if live {
                     security::bind_host_live_control_channel(pending, inputs.binding).await
                 } else {
                     security::bind_host_control_lease_channel(pending, inputs.binding).await

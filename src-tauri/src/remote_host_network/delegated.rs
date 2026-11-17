@@ -46,6 +46,11 @@ impl TestMaterialBuilder {
         self.0 = Box::new(move |scope| previous(scope).test_activation_hook(after, Box::new(hook)));
         self
     }
+    pub(crate) fn test_live_snapshot_pull(mut self) -> Self {
+        let previous = self.0;
+        self.0 = Box::new(move |scope| previous(scope).test_live_snapshot_pull());
+        self
+    }
     pub(crate) fn test_live_keepalive(mut self) -> Self {
         let previous = self.0;
         self.0 = Box::new(move |scope| previous(scope).test_live());

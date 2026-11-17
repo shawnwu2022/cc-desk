@@ -475,3 +475,31 @@ pending、非法 u64、晚 reply、Worker 非法序号/截止/长度/预算/额�
 真实 WASM 网络 pull 成功、非 application / mixed mode 动态拒绝、全链内存与
 固定 1 秒 RTT/残余门禁仍待完成。原 live Host 网络入口尚未选择 pull，下一步需
 显式且默认关闭的原入口选择；不得伪造 activation 或绕过原 owner 来令测试成功。
+
+## P2i：真实 Relay / WASM / Host 短测（2026-11-17）
+
+私有 DelegatedWireMode 增加 LiveSnapshotPull；只有 cfg(test) 材料 builder 显式
+选择，from_approved/from_test 的 Manual 默认与旧 test_live 的 Live 均不变。
+两种 Live 共用原 dormant mux、Installed 后认证 keepalive fact 激活、同一
+NetworkWire/dispatcher/退休任务；新模式仅选择原 bind_host_live_snapshot_pull_channel。
+Original authority 仍拒绝 Live，未增加 public bool、任意 capability 或生产 UI。
+
+新独立 Node fixture 与 Rust 嵌套模块沿真实本机 WSS Relay、原 WASM、
+原 Native Host/会话/捕获链运行。首 RED 旧 Live Host + Pull Client 在 bind
+阶段拒绝，admission Security，原 network join / Host / Relay 均成功退休。
+选择明确的新工厂后，最终 4/4 通过：完整 80×24、1920 cells 连续覆盖，
+ProjectionReceiver 逐批 Partial 最后 Installed、精确 ACK、后续旧 request2；
+以及双向 mixed-mode 拒绝、无 application 的原入口提前拒绝。后者是 JS
+入口拒绝，不声称执行了 WASM start 后才拒绝。失败/正常都检查原退休，
+watchdog 触发或外层 kill 不能报成功。
+
+本次本机 fixture 15 批、raw160895 bytes，Snapshot 184ms，含 ACK/request2
+246ms；仅一次观察，不是稳定性能或公网 RTT 保证。Node 的 Window/WebAuthn
+为合成公开测试身份，不是实体浏览器、硬件认证器或真实手机。全链内存/
+post-handshake 残余一般上界仍未证明，默认入口仍关闭。
+
+同源码原生 remote-host strict Clippy 与 fixture strict TS 通过；实际 WASM
+已从 P2h 当前源码重建。首 native 构建误用 default features，未纳入此模块，
+保留但不计验收；改 remote-host 后才执行上述测试。日志 browser-pull-relay-*
+及 browser-pull-rpc-wasm-build.log。独立模式/真实链路只读审查无权限旁路。
+后续优先显式高层适配器与原自动续租 owner 的 5.2→61 秒空闲组合验收。
