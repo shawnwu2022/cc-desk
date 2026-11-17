@@ -1,4 +1,4 @@
-import { createApp, h, nextTick, reactive, ref } from 'vue'
+import { createApp, h, nextTick, reactive, ref, type Ref } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import NativeCliTerminal from '@/components/NativeCliTerminal.vue'
@@ -8,9 +8,27 @@ import { useAppShortcuts } from '@/composables/useAppShortcuts'
 import type { SessionMenuAction, UnifiedSession } from '@/types/unifiedSession'
 import en from '@/i18n/locales/en'
 import { useAppStore } from '@/stores/app'
+import type { TerminalSettingFields } from '@/config/terminalPreferences'
 import { useNativeTabsStore } from '@/stores/nativeTabs'
 import { inputEvents, launches, sizes, terminal } from './host'
 import '@/styles/global.css'
+
+interface TerminalFitFixture {
+  settings: TerminalSettingFields
+  active: Ref<boolean>
+  focus: { actions: string[]; inputEvents: string[]; session: UnifiedSession; section: Ref<string>; dialog: Ref<boolean>; readonly renameRequests: number }
+  show(value: boolean): Promise<void>
+  markLastLine(): Promise<void>
+  measure(): {
+    rows: number; cols: number
+    host: { bottom: number; right: number }
+    screen: { top: number; bottom: number; right: number; height: number }
+    last: { bottom: number; height: number; text: string | null }
+    sent: { cols: number; rows: number } | undefined
+    sizes: { cols: number; rows: number }[]
+    launches: number
+  }
+}
 
 if (!import.meta.env.DEV || import.meta.env.MODE !== 'terminal-fit') throw new Error('TERMINAL_FIT_FIXTURE_DISABLED')
 const pinia = createPinia()
@@ -38,7 +56,7 @@ createApp({ render: () => h('div', [
   h('div', { id: 'terminal-host', style: { position: 'relative', height: 'calc(100vh - 40px)', width: 'calc(100vw - 40px)', margin: '20px', overflow: 'hidden' } }, [h(NativeCliTerminal, { tabId: tab.tabId, active: active.value && section.value === 'workspace' })]),
 ]) }).use(pinia).use(createI18n({ legacy: false, locale: 'en', messages: { en } })).mount('#app')
 
-const fixture = {
+const fixture: TerminalFitFixture = {
   settings, active,
   focus: { actions, inputEvents, session, section, dialog, get renameRequests() { return renameRequests } },
   async show(value: boolean) { active.value = value; await nextTick() },
@@ -57,5 +75,5 @@ const fixture = {
     return { rows: terminal.rows, cols: terminal.cols, host: { bottom: host.bottom, right: host.right }, screen: { top: screen.top, bottom: screen.bottom, right: screen.right, height: screen.height }, last: { bottom: last.bottom, height: last.height, text: lastRow.textContent }, sent: sizes[sizes.length - 1], sizes: [...sizes], launches }
   },
 }
-declare global { interface Window { terminalFit: typeof fixture } }
+declare global { interface Window { terminalFit: TerminalFitFixture } }
 window.terminalFit = fixture

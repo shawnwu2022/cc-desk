@@ -1,0 +1,350 @@
+diff --git a/src/lib.rs b/src/lib.rs
+index 1c69123..fae97f9 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -44,6 +44,12 @@ pub use params::{Params, ParamsIter};
+ const MAX_INTERMEDIATES: usize = 2;
+ const MAX_OSC_PARAMS: usize = 16;
+ const MAX_OSC_RAW: usize = 1024;
++/// Maximum OSC payload bytes retained by the `std` parser.
++///
++/// This CC Desk vendor patch counts every byte after `ESC ]`, including
++/// parameter separators, and excludes BEL/ST terminators.
++#[cfg(feature = "std")]
++pub const OSC_RAW_LIMIT: usize = 4096;
+ 
+ /// Parser for raw _VTE_ protocol which delegates actions to a [`Perform`]
+ ///
+@@ -64,6 +70,12 @@ pub struct Parser<const OSC_RAW_BUF_SIZE: usize = MAX_OSC_RAW> {
+     osc_raw: Vec<u8>,
+     osc_params: [(usize, usize); MAX_OSC_PARAMS],
+     osc_num_params: usize,
++    #[cfg(feature = "std")]
++    osc_payload_len: usize,
++    #[cfg(feature = "std")]
++    osc_overflowed: bool,
++    #[cfg(feature = "std")]
++    string_sequence_entered: bool,
+     ignoring: bool,
+     partial_utf8: [u8; 4],
+     partial_utf8_len: usize,
+@@ -74,6 +86,54 @@ impl Parser {
+     pub fn new() -> Parser {
+         Default::default()
+     }
++
++    /// Take the sticky OSC overflow signal raised since the previous call.
++    ///
++    /// Overflowed OSC sequences are discarded through BEL or ST and are never
++    /// delivered to [`Perform::osc_dispatch`].
++    #[cfg(feature = "std")]
++    pub fn take_osc_overflowed(&mut self) -> bool {
++        core::mem::take(&mut self.osc_overflowed)
++    }
++
++    /// Current bytes retained for the in-progress OSC sequence.
++    #[cfg(feature = "std")]
++    pub fn osc_storage_len(&self) -> usize {
++        self.osc_raw.len()
++    }
++
++    /// Current allocated OSC storage capacity.
++    #[cfg(feature = "std")]
++    pub fn osc_storage_capacity(&self) -> usize {
++        self.osc_raw.capacity()
++    }
++
++    /// Whether an OSC, DCS, SOS, PM, or APC string is in progress.
++    ///
++    /// This allows callers with a deliberately restricted terminal profile to
++    /// reject string controls before forwarding the same batch to a handler.
++    #[cfg(feature = "std")]
++    pub fn has_pending_string_sequence(&self) -> bool {
++        matches!(
++            self.state,
++            State::DcsEntry
++                | State::DcsIgnore
++                | State::DcsIntermediate
++                | State::DcsParam
++                | State::DcsPassthrough
++                | State::OscString
++                | State::OscDiscard
++                | State::OscDiscardEscape
++                | State::SosPmApcString
++        )
++    }
++
++    /// Take the sticky signal that a string control was entered since the
++    /// previous observation, even if it was terminated in the same batch.
++    #[cfg(feature = "std")]
++    pub fn take_string_sequence_entered(&mut self) -> bool {
++        core::mem::take(&mut self.string_sequence_entered)
++    }
+ }
+ 
+ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
+@@ -164,6 +224,40 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
+         i
+     }
+ 
++    /// Partially advance until the first over-limit OSC payload byte.
++    ///
++    /// Unlike [`Self::advance_until_terminated`], this consumes input regardless
++    /// of [`Perform::terminated`] and stops only for an OSC overflow. The caller
++    /// must inspect [`Self::take_osc_overflowed`] before processing any
++    /// remaining bytes.
++    #[inline]
++    #[cfg(feature = "std")]
++    #[must_use = "Returned value should be used to process or reject the remaining bytes"]
++    pub fn advance_until_osc_overflow<P: Perform>(
++        &mut self,
++        performer: &mut P,
++        bytes: &[u8],
++    ) -> usize {
++        let mut i = 0;
++
++        if self.partial_utf8_len != 0 {
++            i += self.advance_partial_utf8(performer, bytes);
++        }
++
++        while i != bytes.len() && !self.osc_overflowed {
++            match self.state {
++                State::Ground => i += self.advance_ground(performer, &bytes[i..]),
++                _ => {
++                    let byte = bytes[i];
++                    self.change_state(performer, byte);
++                    i += 1;
++                },
++            }
++        }
++
++        i
++    }
++
+     #[inline(always)]
+     fn change_state<P: Perform>(&mut self, performer: &mut P, byte: u8) {
+         match self.state {
+@@ -178,6 +272,10 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
+             State::DcsPassthrough => self.advance_dcs_passthrough(performer, byte),
+             State::Escape => self.advance_esc(performer, byte),
+             State::EscapeIntermediate => self.advance_esc_intermediate(performer, byte),
++            #[cfg(feature = "std")]
++            State::OscDiscard => self.advance_osc_discard(byte),
++            #[cfg(feature = "std")]
++            State::OscDiscardEscape => self.advance_osc_discard_escape(byte),
+             State::OscString => self.advance_osc_string(performer, byte),
+             State::SosPmApcString => self.anywhere(performer, byte),
+             State::Ground => unreachable!(),
+@@ -350,13 +448,23 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
+             },
+             0x50 => {
+                 self.reset_params();
++                #[cfg(feature = "std")]
++                {
++                    self.string_sequence_entered = true;
++                }
+                 self.state = State::DcsEntry
+             },
+             0x51..=0x57 => {
+                 performer.esc_dispatch(self.intermediates(), self.ignoring, byte);
+                 self.state = State::Ground
+             },
+-            0x58 => self.state = State::SosPmApcString,
++            0x58 => {
++                #[cfg(feature = "std")]
++                {
++                    self.string_sequence_entered = true;
++                }
++                self.state = State::SosPmApcString
++            },
+             0x59..=0x5A => {
+                 performer.esc_dispatch(self.intermediates(), self.ignoring, byte);
+                 self.state = State::Ground
+@@ -372,9 +480,20 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
+             0x5D => {
+                 self.osc_raw.clear();
+                 self.osc_num_params = 0;
++                #[cfg(feature = "std")]
++                {
++                    self.osc_payload_len = 0;
++                    self.string_sequence_entered = true;
++                }
+                 self.state = State::OscString
+             },
+-            0x5E..=0x5F => self.state = State::SosPmApcString,
++            0x5E..=0x5F => {
++                #[cfg(feature = "std")]
++                {
++                    self.string_sequence_entered = true;
++                }
++                self.state = State::SosPmApcString
++            },
+             0x60..=0x7E => {
+                 performer.esc_dispatch(self.intermediates(), self.ignoring, byte);
+                 self.state = State::Ground
+@@ -406,7 +525,9 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
+     #[inline(always)]
+     fn advance_osc_string<P: Perform>(&mut self, performer: &mut P, byte: u8) {
+         match byte {
+-            0x00..=0x06 | 0x08..=0x17 | 0x19 | 0x1C..=0x1F => (),
++            0x00..=0x06 | 0x08..=0x17 | 0x19 | 0x1C..=0x1F => {
++                self.accept_osc_payload_byte();
++            },
+             0x07 => {
+                 self.osc_end(performer, byte);
+                 self.state = State::Ground
+@@ -422,6 +543,9 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
+                 self.state = State::Escape
+             },
+             0x3B => {
++                if !self.accept_osc_payload_byte() {
++                    return;
++                }
+                 #[cfg(not(feature = "std"))]
+                 {
+                     if self.osc_raw.is_full() {
+@@ -434,6 +558,56 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
+         }
+     }
+ 
++    #[cfg(feature = "std")]
++    #[inline(always)]
++    fn advance_osc_discard(&mut self, byte: u8) {
++        match byte {
++            0x07 => self.finish_osc_discard(),
++            0x1B => self.state = State::OscDiscardEscape,
++            _ => (),
++        }
++    }
++
++    #[cfg(feature = "std")]
++    #[inline(always)]
++    fn advance_osc_discard_escape(&mut self, byte: u8) {
++        match byte {
++            0x07 | 0x5C => self.finish_osc_discard(),
++            0x1B => (),
++            _ => self.state = State::OscDiscard,
++        }
++    }
++
++    #[cfg(feature = "std")]
++    #[inline]
++    fn finish_osc_discard(&mut self) {
++        self.osc_raw.clear();
++        self.osc_num_params = 0;
++        self.osc_payload_len = 0;
++        self.state = State::Ground;
++    }
++
++    #[cfg(feature = "std")]
++    #[inline(always)]
++    fn accept_osc_payload_byte(&mut self) -> bool {
++        if self.osc_payload_len == OSC_RAW_LIMIT {
++            self.osc_overflowed = true;
++            self.osc_raw.clear();
++            self.osc_num_params = 0;
++            self.state = State::OscDiscard;
++            false
++        } else {
++            self.osc_payload_len += 1;
++            true
++        }
++    }
++
++    #[cfg(not(feature = "std"))]
++    #[inline(always)]
++    fn accept_osc_payload_byte(&mut self) -> bool {
++        true
++    }
++
+     #[inline(always)]
+     fn anywhere<P: Perform>(&mut self, performer: &mut P, byte: u8) {
+         match byte {
+@@ -542,6 +716,9 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
+ 
+     #[inline(always)]
+     fn action_osc_put(&mut self, byte: u8) {
++        if !self.accept_osc_payload_byte() {
++            return;
++        }
+         #[cfg(not(feature = "std"))]
+         {
+             if self.osc_raw.is_full() {
+@@ -743,6 +920,10 @@ enum State {
+     Escape,
+     EscapeIntermediate,
+     OscString,
++    #[cfg(feature = "std")]
++    OscDiscard,
++    #[cfg(feature = "std")]
++    OscDiscardEscape,
+     SosPmApcString,
+     #[default]
+     Ground,
+@@ -931,6 +1112,27 @@ mod tests {
+         }
+     }
+ 
++    #[cfg(feature = "std")]
++    #[test]
++    fn string_sequence_entry_is_sticky_until_taken() {
++        for input in [
++            &b"\x1bPqpayload\x1b[H"[..],
++            &b"\x1b]2;title\x1b[H"[..],
++            &b"\x1bXsos\x1b[H"[..],
++            &b"\x1b^pm\x1b[H"[..],
++            &b"\x1b_apc\x1b[H"[..],
++        ] {
++            let mut dispatcher = Dispatcher::default();
++            let mut parser = Parser::new();
++
++            parser.advance(&mut dispatcher, input);
++
++            assert!(parser.take_string_sequence_entered());
++            assert!(!parser.take_string_sequence_entered());
++            assert!(!parser.has_pending_string_sequence());
++        }
++    }
++
+     #[test]
+     fn parse_osc_max_params() {
+         let params = ";".repeat(params::MAX_PARAMS + 1);
+@@ -1386,6 +1588,38 @@ mod tests {
+         }
+     }
+ 
++    #[cfg(not(feature = "std"))]
++    #[test]
++    fn fixed_osc_buffer_above_std_limit_dispatches_its_full_capacity() {
++        let mut dispatcher = Dispatcher::default();
++        let mut parser: Parser<8192> = Parser::new_with_size();
++
++        parser.advance(&mut dispatcher, b"\x1b]");
++        parser.advance(&mut dispatcher, &[b'a'; 4097]);
++        parser.advance(&mut dispatcher, b"\x07");
++
++        match &dispatcher.dispatched[0] {
++            Sequence::Osc(params, true) => assert_eq!(params[0].len(), 4097),
++            _ => panic!("expected bell-terminated osc sequence"),
++        }
++    }
++
++    #[cfg(not(feature = "std"))]
++    #[test]
++    fn fixed_osc_buffer_below_std_limit_keeps_upstream_truncated_dispatch() {
++        let mut dispatcher = Dispatcher::default();
++        let mut parser: Parser<1024> = Parser::new_with_size();
++
++        parser.advance(&mut dispatcher, b"\x1b]");
++        parser.advance(&mut dispatcher, &[b'a'; 4097]);
++        parser.advance(&mut dispatcher, b"\x07");
++
++        match &dispatcher.dispatched[0] {
++            Sequence::Osc(params, true) => assert_eq!(params[0].len(), 1024),
++            _ => panic!("expected bell-terminated osc sequence"),
++        }
++    }
++
+     #[test]
+     fn unicode() {
+         const INPUT: &[u8] = b"\xF0\x9F\x8E\x89_\xF0\x9F\xA6\x80\xF0\x9F\xA6\x80_\xF0\x9F\x8E\x89";

@@ -19,7 +19,10 @@ if (mode === 'input') {
     chunks.push(chunk)
     length += chunk.length
     if (length >= 6) {
-      writeFileSync(report, JSON.stringify({ ...value, input: [...Buffer.concat(chunks)] }))
+      // Observe this own worker's console, not the adapter's requested size.
+      if (typeof process.stdout._refreshSize !== 'function') throw new Error('OWNED_CONSOLE_SIZE_PROBE_UNAVAILABLE')
+      process.stdout._refreshSize()
+      writeFileSync(report, JSON.stringify({ ...value, input: [...Buffer.concat(chunks)], columns: process.stdout.columns, rows: process.stdout.rows }))
       process.stdout.write('OWNED_TAIL\n', () => process.exit(17))
     }
   })

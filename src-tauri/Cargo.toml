@@ -13,6 +13,13 @@ tauri-build = { version = "2", features = [] }
 serde_json = "1"
 
 [dependencies]
+cc-desk-remote-client = { path = "../remote/crates/client", optional = true }
+cc-desk-remote-host = { path = "../remote/crates/host", optional = true, features = ["experimental-host-owner"] }
+cc-desk-remote-security = { path = "../remote/crates/security", optional = true, features = ["experimental"] }
+cc-desk-remote-record = { path = "../protocol/remote/inner/v1", optional = true }
+cc-desk-remote-transport = { path = "../remote/crates/transport", optional = true }
+rustls = { version = "=0.23.46", optional = true, default-features = false, features = ["std", "ring"] }
+coset = { version = "=0.4.2", optional = true }
 base64 = "=0.22.1"
 minisign-verify = "=0.2.5"
 sha2 = "=0.10.9"
@@ -48,13 +55,27 @@ once_cell = "1"
 tempfile = "3"
 axum = "0.7"
 tower = "0.5"
-rusqlite = { version = "0.31", features = ["bundled"], optional = true }
+rusqlite = { version = "=0.40.2", default-features = false, features = ["bundled"], optional = true }
 zstd = { version = "=0.13.3", default-features = false }
 
 [features]
 default = ["sqlite"]
 sqlite = ["rusqlite"]
 history-roundtrip-acceptance = []
+remote-client-ipc = ["dep:cc-desk-remote-client", "dep:cc-desk-remote-security", "dep:cc-desk-remote-record", "dep:cc-desk-remote-transport", "dep:rustls", "dep:coset"]
+remote-host = ["remote-client-ipc", "dep:cc-desk-remote-host"]
+
+[dev-dependencies]
+# Public TEST_ONLY vector channels for the original-resource composition test.
+cc-desk-remote-security = { path = "../remote/crates/security", features = ["experimental"] }
+cc-desk-remote-record = { path = "../protocol/remote/inner/v1" }
+rustls = { version = "=0.23.46", default-features = false, features = ["std", "ring"] }
+ring = "=0.17.14"
+coset = "=0.4.2"
+cc-desk-remote-transport = { path = "../remote/crates/transport", features = ["test-only-loopback"] }
+tokio-rustls = { version = "=0.26.4", default-features = false, features = ["ring"] }
+tokio-tungstenite = { version = "=0.29.0", default-features = false, features = ["handshake"] }
+rustls-pemfile = "=1.0.4"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 tempfile = "3"
@@ -63,7 +84,7 @@ windows-core = "0.61"
 windows = { version = "0.61", features = [
   "Wdk_Foundation", "Wdk_Storage_FileSystem", "Wdk_System_Registry",
   "Win32_Foundation", "Win32_Globalization",
-  "Win32_Storage_FileSystem", "Win32_Security", "Win32_Security_Authorization",
+  "Win32_Storage_FileSystem", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Cryptography",
   "Win32_System_IO", "Win32_System_Threading", "Win32_System_JobObjects",
   "Win32_System_Registry", "Win32_System_Com", "Win32_System_RemoteDesktop",
   "Win32_System_Ioctl", "Win32_System_SystemServices", "Win32_UI_Shell",
@@ -73,3 +94,9 @@ windows = { version = "0.61", features = [
 [profile.release]
 strip = true
 lto = true
+
+[patch.crates-io]
+# Keep Host's existing bounded OSC parser when consumed from this Cargo root.
+vte = { path = "../remote/vendor/vte" }
+# Same upstream version/ordinary spawn; additive exact-Job ownership API.
+portable-pty = { path = "../remote/vendor/portable-pty" }

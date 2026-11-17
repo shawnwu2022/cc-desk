@@ -17,6 +17,17 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tauri::ipc::{Channel, InvokeResponseBody};
 
+#[cfg(all(windows, feature = "remote-host"))]
+#[path = "native_cli_managed_job.rs"]
+mod managed_job;
+#[cfg(feature = "remote-host")]
+#[path = "native_cli_remote_composition.rs"]
+mod remote_composition;
+
+#[cfg(all(windows, feature = "remote-host"))]
+#[path = "native_cli_host_ui_live.rs"]
+mod host_ui;
+
 #[cfg(windows)]
 #[allow(dead_code, clippy::duplicate_mod)]
 #[path = "../conpty_runtime.rs"]
@@ -45,6 +56,14 @@ impl Fixture {
         mode: &str,
         supervisor: Arc<NativeRunSupervisor>,
         transports: Arc<TerminalTransports>,
+    ) -> Self {
+        Self::with_runtime_environment(mode, supervisor, transports, false)
+    }
+    fn with_runtime_environment(
+        mode: &str,
+        supervisor: Arc<NativeRunSupervisor>,
+        transports: Arc<TerminalTransports>,
+        isolated: bool,
     ) -> Self {
         #[cfg(windows)]
         bundled_runtime::initialize().unwrap();
@@ -85,7 +104,38 @@ impl Fixture {
             cols: 80,
             rows: 24,
         };
-        let mut inherited: EnvMap = std::env::vars_os().collect();
+        let mut inherited: EnvMap = if isolated {
+            let mut env = EnvMap::new();
+            for key in ["SystemRoot", "WINDIR", "COMSPEC", "PATHEXT"] {
+                if let Some(value) = std::env::var_os(key) {
+                    env.insert(key.into(), value);
+                }
+            }
+            let home = root.path().join("own-home");
+            let temp = root.path().join("own-temp");
+            fs::create_dir_all(&home).unwrap();
+            fs::create_dir_all(&temp).unwrap();
+            for key in [
+                "USERPROFILE",
+                "HOME",
+                "APPDATA",
+                "LOCALAPPDATA",
+                "XDG_CONFIG_HOME",
+                "XDG_DATA_HOME",
+                "CODEX_HOME",
+                "CLAUDE_CONFIG_DIR",
+            ] {
+                env.insert(key.into(), home.as_os_str().to_owned());
+            }
+            for key in ["TEMP", "TMP"] {
+                env.insert(key.into(), temp.as_os_str().to_owned());
+            }
+            // No inherited NODE_OPTIONS/preloads, API credentials, user PATH,
+            // settings or account namespace enters this task-owned Node probe.
+            env
+        } else {
+            std::env::vars_os().collect()
+        };
         inherited.insert("CC_DESK_TEST_ROOT".into(), cwd.as_os_str().to_owned());
 
         let service = Arc::new(LaunchService::new(
@@ -237,6 +287,189 @@ fn ack(run: &RunKey, epoch: &str, through: &str) -> OutputAck {
         "throughOffset": through,
     }))
     .unwrap()
+}
+
+#[cfg(feature = "remote-host")]
+#[test]
+fn NativeBridge_OriginalProductCallpointOwnsSingleWriterAndOwnProbeInput_001() {
+    // Installed before launch. It controls only this fixture's supervisor and
+    // its original creation-owned resource, including assertion failure paths.
+    struct Cleanup {
+        supervisor: Arc<NativeRunSupervisor>,
+        run: RunKey,
+        pin: Option<crate::run_supervisor::NativeRunPin>,
+    }
+    impl Cleanup {
+        fn close(&mut self) -> bool {
+            let pin = self
+                .pin
+                .take()
+                .unwrap_or_else(|| self.supervisor.pin_shutdown(&self.run));
+            let Ok(mut shutdown) = self.supervisor.begin_shutdown_owned(vec![pin]) else {
+                return false;
+            };
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while Instant::now() < deadline {
+                if matches!(
+                    shutdown.observe_run(&self.run),
+                    crate::run_supervisor::NativeShutdownObservation::Unknown {
+                        direct_child_reaped: true,
+                        output_reader_joined: true,
+                        wait_workers_joined: true,
+                        original_io_drop_returned: true,
+                        stop_job_joined: true,
+                        ..
+                    }
+                ) {
+                    return true;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            false
+        }
+    }
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            if self.pin.is_some() {
+                let _ = self.close();
+            } else {
+                self.supervisor.shutdown();
+            }
+        }
+    }
+    let transports = Arc::new(TerminalTransports::new());
+    let supervisor = Arc::new(NativeRunSupervisor::new(transports.clone()));
+    let fixture = Fixture::with_runtime_environment("input", supervisor, transports, true);
+    let mut cleanup = Cleanup {
+        supervisor: fixture.supervisor.clone(),
+        run: fixture.request_run(),
+        pin: None,
+    };
+    let status = fixture.start();
+    cleanup.pin = Some(fixture.supervisor.pin_shutdown(&status.run));
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while fixture.child_reports() == 0 || fixture.events.lock().is_empty() {
+        assert!(Instant::now() < deadline, "own worker did not initialize");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let access = fixture
+        .service
+        .access(&fixture.caller, &status.run)
+        .unwrap();
+    let admitted = fixture
+        .supervisor
+        .admit_remote_run(access.clone(), &status.run)
+        .unwrap();
+    let original_scope = admitted.scope().unwrap();
+    assert_eq!(original_scope.run, status.run.run_id);
+    assert_eq!(original_scope.generation, status.run.generation.to_string());
+    assert!(fixture
+        .supervisor
+        .admit_remote_run(
+            access.clone(),
+            &RunKey {
+                generation: status.run.generation + 1,
+                ..status.run.clone()
+            }
+        )
+        .is_err());
+    assert_eq!(
+        access
+            .with_writer(|_| -> std::io::Result<()> {
+                panic!("raw writer must be inaccessible after native adoption")
+            })
+            .unwrap_err()
+            .code,
+        "NATIVE_WRITER_ADOPTED"
+    );
+    let first = fixture.events.lock()[0].clone();
+    let source:crate::terminal_input::ProtocolSource=serde_json::from_value(json!({"streamEpoch":first["streamEpoch"],"throughOffset":(first["offset"].as_str().unwrap().parse::<u64>().unwrap()+first["bytes"].as_array().unwrap().len() as u64).to_string()})).unwrap();
+    let owned = access
+        .protocol_frame(b"DESKTOP_REPLY_MUST_NOT_REACH_CHILD", Some(&source))
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(owned).unwrap(),
+        json!({"state":"native-owned","confirmedBytes":"0","runId":status.run.run_id,"generation":status.run.generation,"protocolSource":{"streamEpoch":source.stream_epoch,"throughOffset":source.through_offset}})
+    );
+    let wrong_source: crate::terminal_input::ProtocolSource =
+        serde_json::from_value(json!({"streamEpoch":"999999","throughOffset":"1"})).unwrap();
+    assert_eq!(
+        access
+            .protocol_frame(b"wrong", Some(&wrong_source))
+            .unwrap_err()
+            .code,
+        "NATIVE_PROTOCOL_SOURCE_REJECTED"
+    );
+    access
+        .resize(portable_pty::PtySize {
+            rows: 101,
+            cols: 500,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .unwrap();
+    let local_only_admission_closed = admitted.scope().is_err();
+    let late = access
+        .protocol_frame(b"DELAYED_NATIVE_PREFIX_MUST_NOT_WRITE", Some(&source))
+        .unwrap();
+    assert_eq!(
+        late.state,
+        crate::terminal_input::ProtocolWriteState::NativeOwned
+    );
+    let receipt = access.write_frame(b"native").unwrap();
+    assert_eq!(
+        receipt.state,
+        crate::terminal_input::InputWriteState::HostWritten
+    );
+    assert_eq!(receipt.confirmed_bytes, 6);
+    drop(access);
+    fixture.wait_lifecycle(|state| state.process() == ProcessLifecycle::Exited);
+    let reports: Vec<Value> = fs::read_dir(fixture.root.path().join("work"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|e| e.path().extension().is_some_and(|e| e == "json"))
+        .map(|e| serde_json::from_slice(&fs::read(e.path()).unwrap()).unwrap())
+        .collect();
+    assert!(
+        reports
+            .iter()
+            .any(|r| r["input"] == json!(b"native".to_vec())),
+        "original native input was not consumed exactly"
+    );
+    assert!(
+        reports
+            .iter()
+            .any(|r| r["columns"] == 500 && r["rows"] == 101),
+        "own worker did not observe the original Master's full 101x500 console"
+    );
+    let terminal = fixture.wait_lifecycle(|state| {
+        state.final_offset().is_some() || state.output() == OutputLifecycle::Incomplete
+    });
+    if let Some(offset) = terminal.final_offset() {
+        let epoch = fixture.events.lock()[0]["streamEpoch"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        fixture
+            .transports
+            .ack(
+                &fixture.caller,
+                &ack(&status.run, &epoch, &offset.to_string()),
+            )
+            .unwrap();
+    }
+    fixture
+        .service
+        .registry()
+        .revoke_window(&fixture.caller)
+        .unwrap();
+    let stale_document = admitted.scope().unwrap_err().code;
+    // This untransferred admission still owns the original resource Arc. Release
+    // it before asking shutdown to observe native IO destruction.
+    drop(admitted);
+    assert!(cleanup.close(),"own original reader/writer/root/IO-drop cleanup did not settle; no Job-tree claim is implied");
+    assert!(local_only_admission_closed,"local-only canonical loss must close native remote admission before any connection/key use");
+    assert_eq!(stale_document, "FORBIDDEN");
 }
 
 #[test]
@@ -1343,4 +1576,300 @@ fn D15_AdoptGate_ShutdownPinsState_021() {
     );
     assert!(!fixture.supervisor.active_for_test(&fixture.request_run()));
     drop(fixture.attach_probe_stream(&fixture.request_run()));
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn RemoteShutdown_OriginalPublicationAndOwnedIoMustFinish_002() {
+    let fixture = Fixture::new("hold");
+    fixture.supervisor.pause_retirement_publish_for_test();
+    let status = fixture.start();
+    let ready_end = Instant::now() + Duration::from_secs(15);
+    while fixture.child_reports() == 0 && Instant::now() < ready_end {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    if fixture.child_reports() == 0 {
+        fixture.supervisor.release_retirement_publish_for_test();
+        panic!("owned probe did not report ready");
+    }
+    let pin = fixture.supervisor.pin_shutdown(&status.run);
+    let mut shutdown = fixture.supervisor.begin_shutdown_owned(vec![pin]).unwrap();
+    let before = shutdown.observe_run(&status.run);
+    fixture.supervisor.release_retirement_publish_for_test();
+    assert_eq!(
+        before,
+        crate::run_supervisor::NativeShutdownObservation::Pending
+    );
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let observed = shutdown.observe_run(&status.run);
+        if matches!(
+            observed,
+            crate::run_supervisor::NativeShutdownObservation::Unknown {
+                direct_child_reaped: true,
+                io_threads_joined: false,
+                stop_job_joined: true,
+                ..
+            }
+        ) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "owned stop/root observation never completed (whole PTY remains unknown): {observed:?}"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        fixture.child_reports(),
+        1,
+        "shutdown must not relaunch the fixture"
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn RemoteShutdown_OutputCallbackDoesNotProveReaderJoined_005() {
+    use crate::run_supervisor::NativeShutdownObservation;
+    let fixture = Fixture::new("hold");
+    fixture.supervisor.pause_reader_exit_for_test();
+    struct Release<'a>(&'a NativeRunSupervisor);
+    impl Drop for Release<'_> {
+        fn drop(&mut self) {
+            self.0.release_reader_exit_for_test();
+        }
+    }
+    let release = Release(&fixture.supervisor);
+    let status = fixture.start();
+    let end = Instant::now() + Duration::from_secs(15);
+    while fixture.child_reports() == 0 {
+        assert!(Instant::now() < end);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let pin = fixture.supervisor.pin_shutdown(&status.run);
+    let mut stopped = fixture.supervisor.begin_shutdown_owned(vec![pin]).unwrap();
+    while !fixture.supervisor.reader_exit_waiting_for_test() {
+        assert!(Instant::now() < end);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    loop {
+        match stopped.observe_run(&status.run) {
+            #[cfg(feature = "remote-host")]
+            NativeShutdownObservation::OwnedSessionReleased => {
+                panic!("unattested ordinary PTY must stay Unknown")
+            }
+            NativeShutdownObservation::Pending => {
+                assert!(Instant::now() < end);
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            NativeShutdownObservation::Unknown {
+                output_reader_joined,
+                io_threads_joined,
+                ..
+            } => {
+                assert!(!output_reader_joined);
+                assert!(!io_threads_joined);
+                break;
+            }
+        }
+    }
+    #[cfg(feature = "remote-host")]
+    assert_eq!(
+        stopped.observe_all(),
+        Some(NativeShutdownObservation::Pending),
+        "application must keep observing original reader even after root/EOF callbacks"
+    );
+    drop(release);
+    let joined = loop {
+        if let NativeShutdownObservation::Unknown {
+            output_reader_joined: true,
+            io_threads_joined: false,
+            ..
+        } = stopped.observe_run(&status.run)
+        {
+            break true;
+        }
+        if Instant::now() >= end {
+            break false;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    assert!(
+        joined,
+        "original reader JoinHandle was never joined; EOF is insufficient"
+    );
+    assert_eq!(fixture.child_reports(), 1);
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn RemoteShutdown_ReapAndCallbackDoNotProveWaiterJoined_009() {
+    use crate::run_supervisor::NativeShutdownObservation;
+    let fixture = Fixture::new("hold");
+    fixture.supervisor.pause_wait_exit_for_test();
+    struct Release<'a>(&'a NativeRunSupervisor);
+    impl Drop for Release<'_> {
+        fn drop(&mut self) {
+            self.0.release_wait_exit_for_test();
+        }
+    }
+    let release = Release(&fixture.supervisor);
+    let status = fixture.start();
+    let end = Instant::now() + Duration::from_secs(15);
+    while fixture.child_reports() == 0 {
+        assert!(Instant::now() < end);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let pin = fixture.supervisor.pin_shutdown(&status.run);
+    let mut shutdown = fixture.supervisor.begin_shutdown_owned(vec![pin]).unwrap();
+    while !fixture.supervisor.wait_exit_waiting_for_test() {
+        assert!(
+            Instant::now() < end,
+            "real waiter never reached its return barrier"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    if let NativeShutdownObservation::Unknown {
+        wait_workers_joined,
+        ..
+    } = shutdown.observe_run(&status.run)
+    {
+        assert!(
+            !wait_workers_joined,
+            "callback was mistaken for original-thread return"
+        );
+    }
+    drop(release);
+    loop {
+        if matches!(
+            shutdown.observe_run(&status.run),
+            NativeShutdownObservation::Unknown {
+                direct_child_reaped: true,
+                wait_workers_joined: true,
+                io_threads_joined: false,
+                ..
+            }
+        ) {
+            break;
+        }
+        assert!(
+            Instant::now() < end,
+            "original native waiter handle was never actually joined"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(fixture.child_reports(), 1);
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn RemoteShutdown_OriginalRetryHandleAlsoMustJoin_010() {
+    use crate::run_supervisor::NativeShutdownObservation;
+    let fixture = Fixture::new("hold");
+    fixture.supervisor.fail_wait_after_stop_for_test();
+    fixture.supervisor.pause_automatic_retry_for_test();
+    struct Release<'a>(&'a NativeRunSupervisor);
+    impl Drop for Release<'_> {
+        fn drop(&mut self) {
+            self.0.release_automatic_retry_for_test();
+        }
+    }
+    let release = Release(&fixture.supervisor);
+    let status = fixture.start();
+    let end = Instant::now() + Duration::from_secs(15);
+    while fixture.child_reports() == 0 {
+        assert!(Instant::now() < end);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    fixture.supervisor.stop(&fixture.caller, &status).unwrap();
+    while !fixture
+        .supervisor
+        .retry_handle_waiting_for_test(&status.run)
+    {
+        assert!(
+            Instant::now() < end,
+            "original retry handle not retained at its real barrier"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let pin = fixture.supervisor.pin_shutdown(&status.run);
+    let mut shutdown = fixture.supervisor.begin_shutdown_owned(vec![pin]).unwrap();
+    assert_eq!(
+        shutdown.observe_run(&status.run),
+        NativeShutdownObservation::Pending
+    );
+    drop(release);
+    loop {
+        if matches!(
+            shutdown.observe_run(&status.run),
+            NativeShutdownObservation::Unknown {
+                wait_workers_joined: true,
+                io_threads_joined: false,
+                ..
+            }
+        ) {
+            break;
+        }
+        assert!(
+            Instant::now() < end,
+            "waiter/retry original handles did not join"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(fixture.child_reports(), 1);
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn RemoteShutdown_OriginalIoDropRequiresLastResourceRelease_014() {
+    use crate::run_supervisor::NativeShutdownObservation;
+    let fixture = Fixture::new("hold");
+    let status = fixture.start();
+    let end = Instant::now() + Duration::from_secs(20);
+    while fixture.child_reports() == 0 {
+        assert!(Instant::now() < end);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let access = fixture
+        .service
+        .access(&fixture.caller, &status.run)
+        .unwrap();
+    let pin = fixture.supervisor.pin_shutdown(&status.run);
+    let mut shutdown = fixture.supervisor.begin_shutdown_owned(vec![pin]).unwrap();
+    loop {
+        if let NativeShutdownObservation::Unknown {
+            wait_workers_joined: true,
+            original_io_drop_returned,
+            ..
+        } = shutdown.observe_run(&status.run)
+        {
+            assert!(
+                !original_io_drop_returned,
+                "retained original I/O was falsely released"
+            );
+            break;
+        }
+        assert!(Instant::now() < end);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    drop(access);
+    loop {
+        if matches!(
+            shutdown.observe_run(&status.run),
+            NativeShutdownObservation::Unknown {
+                original_io_drop_returned: true,
+                output_reader_joined: true,
+                io_threads_joined: false,
+                ..
+            }
+        ) {
+            break;
+        }
+        assert!(
+            Instant::now() < end,
+            "original I/O destructors never reported their return"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(fixture.child_reports(), 1);
 }

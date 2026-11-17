@@ -1,0 +1,124 @@
+//! Experimental transport authentication only. Default feature exposes no endpoint API.
+#[doc(hidden)]
+#[cfg(feature = "experimental")]
+pub mod owner_clock;
+#[cfg(feature = "experimental")]
+mod pin;
+#[cfg(feature = "experimental")]
+mod tls;
+#[cfg(feature = "experimental")]
+mod tls_clock;
+#[cfg(feature = "experimental")]
+pub use tls::*;
+#[cfg(feature = "experimental")]
+mod cancellation;
+#[cfg(feature = "experimental")]
+pub use cancellation::{CancelHandle, CancelToken, cancellation};
+#[cfg(feature = "experimental")]
+mod bind;
+#[cfg(feature = "experimental")]
+pub use bind::*;
+#[cfg(feature = "experimental")]
+mod grant;
+#[cfg(feature = "experimental")]
+pub use grant::{GrantClock, GrantError, GrantGate, VerifiedGrant};
+#[cfg(feature = "experimental")]
+mod data;
+#[cfg(feature = "experimental")]
+pub use data::{
+    BrowserResumeGrantTrust, ClientGrantState, ClientGrantTrust, DataError, DataRecord,
+    ManagedChannel, NativeGrantPolicy, NativeGrantSigner, RemoteGrant, VerifiedCanonicalGrant,
+};
+#[cfg(feature = "experimental")]
+mod data_owner;
+#[cfg(feature = "experimental")]
+pub use data_owner::{DATA_QUEUE_SLOTS, LiveKeepaliveFact, RunningChannel};
+#[cfg(feature = "experimental")]
+mod data_authority;
+#[cfg(feature = "experimental")]
+pub use data_authority::{BoundDataAuthority, GrantClockDomain};
+#[cfg(feature = "experimental")]
+mod browser_approval;
+#[cfg(all(test, feature = "experimental"))]
+mod browser_approval_tests;
+#[cfg(all(test, feature = "experimental"))]
+mod data_tests;
+#[cfg(all(test, feature = "experimental"))]
+mod grant_tests;
+#[cfg(feature = "experimental")]
+pub use browser_approval::BrowserProfile;
+#[cfg(all(feature = "experimental", not(target_arch = "wasm32")))]
+pub mod browser_registration;
+#[cfg(all(test, feature = "experimental", not(target_arch = "wasm32")))]
+#[path = "../tests/support/browser_registration.rs"]
+mod browser_registration_tests;
+#[cfg(feature = "experimental")]
+pub mod registration_channel;
+#[cfg(all(test, feature = "experimental"))]
+#[path = "../tests/support/identities.rs"]
+#[allow(dead_code)]
+mod test_identities;
+
+#[cfg(feature = "experimental")]
+mod peer_install;
+#[cfg(feature = "experimental")]
+pub use peer_install::{ClientInstalledPeer, HostInstallRequest};
+
+#[cfg(all(
+    feature = "experimental",
+    target_arch = "wasm32",
+    target_os = "unknown"
+))]
+mod browser_wasm_signer;
+#[cfg(all(
+    feature = "experimental",
+    target_arch = "wasm32",
+    target_os = "unknown"
+))]
+pub use browser_wasm_signer::BrowserWasmSigningKey;
+
+#[cfg(all(
+    feature = "experimental",
+    target_arch = "wasm32",
+    target_os = "unknown"
+))]
+mod browser_wasm_io;
+#[cfg(all(
+    feature = "experimental",
+    target_arch = "wasm32",
+    target_os = "unknown"
+))]
+mod browser_wasm_owner;
+#[cfg(all(
+    feature = "experimental",
+    target_arch = "wasm32",
+    target_os = "unknown"
+))]
+pub use browser_wasm_owner::{BrowserApplicationFailure, browser_application_start};
+#[cfg(all(
+    feature = "experimental",
+    target_arch = "wasm32",
+    target_os = "unknown"
+))]
+pub use browser_wasm_owner::{
+    browser_tls_cancel, browser_tls_event, browser_tls_poll, browser_tls_start,
+};
+
+#[cfg(all(
+    feature = "experimental",
+    target_arch = "wasm32",
+    target_os = "unknown"
+))]
+mod browser_wasm_registration;
+#[cfg(all(
+    feature = "experimental",
+    target_arch = "wasm32",
+    target_os = "unknown"
+))]
+pub use browser_wasm_registration::*;
+
+#[cfg(all(
+    feature = "experimental",
+    any(test, all(target_arch = "wasm32", target_os = "unknown"))
+))]
+mod browser_grant_config;

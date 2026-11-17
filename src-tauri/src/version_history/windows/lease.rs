@@ -7,7 +7,7 @@ use super::{
     win_error,
 };
 use std::{ffi::OsStr, io, sync::Arc};
-use windows::Wdk::Storage::FileSystem::FILE_OPEN_IF;
+use windows::Wdk::Storage::FileSystem::{FILE_OPEN, FILE_OPEN_IF};
 use windows::Win32::{
     Storage::FileSystem::{
         LockFileEx, UnlockFileEx, FILE_READ_ATTRIBUTES, FILE_READ_DATA, FILE_SHARE_READ,
@@ -26,9 +26,22 @@ pub(crate) struct LeaseFiles {
 }
 impl LeaseFiles {
     pub(crate) fn open(root: Arc<PrivateDirectory>, user: &CurrentUser) -> io::Result<Self> {
+        Self::open_mode(root, user, true)
+    }
+    pub(crate) fn open_existing(
+        root: Arc<PrivateDirectory>,
+        user: &CurrentUser,
+    ) -> io::Result<Self> {
+        Self::open_mode(root, user, false)
+    }
+    fn open_mode(
+        root: Arc<PrivateDirectory>,
+        user: &CurrentUser,
+        create: bool,
+    ) -> io::Result<Self> {
         root.verify(user)?;
-        let control = open_lock(&root, "control.lock", user)?;
-        let lifetime = open_lock(&root, "lifetime.lock", user)?;
+        let control = open_lock_mode(&root, "control.lock", user, create)?;
+        let lifetime = open_lock_mode(&root, "lifetime.lock", user, create)?;
         Ok(Self {
             root,
             control: control.identity().clone(),
@@ -42,7 +55,7 @@ impl LeaseFiles {
     }
     fn lock(&self, name: &str, identity: &FileIdentity, exclusive: bool) -> io::Result<ByteLock> {
         let user = CurrentUser::capture()?;
-        let file = open_lock(&self.root, name, &user)?;
+        let file = open_lock_mode(&self.root, name, &user, false)?;
         if file.identity() != identity {
             return Err(blocked("stable lease identity changed"));
         }
@@ -90,7 +103,12 @@ impl LeaseFiles {
         )?)))
     }
 }
-fn open_lock(root: &PrivateDirectory, name: &str, user: &CurrentUser) -> io::Result<PinnedFile> {
+fn open_lock_mode(
+    root: &PrivateDirectory,
+    name: &str,
+    user: &CurrentUser,
+    create: bool,
+) -> io::Result<PinnedFile> {
     root.verify(user)?;
     let name = ComponentName::new(OsStr::new(name))?;
     let security = user.descriptor(false)?;
@@ -98,7 +116,7 @@ fn open_lock(root: &PrivateDirectory, name: &str, user: &CurrentUser) -> io::Res
         &name,
         FILE_READ_DATA | FILE_WRITE_DATA | FILE_READ_ATTRIBUTES | READ_CONTROL | SYNCHRONIZE,
         FILE_SHARE_READ | FILE_SHARE_WRITE,
-        FILE_OPEN_IF,
+        if create { FILE_OPEN_IF } else { FILE_OPEN },
         false,
         Some(&security),
     )?;
