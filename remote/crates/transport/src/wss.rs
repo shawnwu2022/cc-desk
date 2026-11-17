@@ -258,3 +258,10 @@ pub use admission::{
 pub use admission::{
     test_only_connect_admitted_loopback, test_only_connect_admitted_loopback_with_mode,
 };
+
+#[path = "wss_rendezvous_wait.rs"]
+mod rendezvous_wait;
+pub use rendezvous_wait::{ExpiredRendezvousWait, RendezvousWait};
+pub use admission::connect_admitted_observed;
+#[cfg(any(test, feature = "test-only-loopback"))]
+pub use admission::test_only_connect_admitted_loopback_observed;

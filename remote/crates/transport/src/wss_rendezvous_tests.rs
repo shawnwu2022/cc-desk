@@ -4,6 +4,13 @@ use tokio_tungstenite::tungstenite::{
     handshake::server::{Request, Response},
 };
 async fn rendezvous_trial(mode: u8, budget: Duration) -> Result<AdmittedSocket, ConnectError> {
+    rendezvous_observed_trial(mode, budget, None).await
+}
+async fn rendezvous_observed_trial(
+    mode: u8,
+    budget: Duration,
+    wait: Option<&RendezvousWait>,
+) -> Result<AdmittedSocket, ConnectError> {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let endpoint = format!("wss://foobar.com:{}/relay", address.port());
@@ -95,15 +102,28 @@ async fn rendezvous_trial(mode: u8, budget: Duration) -> Result<AdmittedSocket, 
         };
         let _ = ws.send(message).await;
     });
-    let result = test_only_connect_admitted_loopback_with_mode(
-        &endpoint,
-        address,
-        budget,
-        &identity(),
-        RelayMode::RendezvousV1,
-        [9; 16],
-    )
-    .await;
+    let result = if let Some(wait) = wait {
+        test_only_connect_admitted_loopback_observed(
+            &endpoint,
+            address,
+            budget,
+            &identity(),
+            RelayMode::RendezvousV1,
+            [9; 16],
+            wait,
+        )
+        .await
+    } else {
+        test_only_connect_admitted_loopback_with_mode(
+            &endpoint,
+            address,
+            budget,
+            &identity(),
+            RelayMode::RendezvousV1,
+            [9; 16],
+        )
+        .await
+    };
     server.await.unwrap();
     result
 }
@@ -130,4 +150,22 @@ async fn Rendezvous_OriginalDeadlineIncludesPeerWait_003() {
         rendezvous_trial(6, Duration::from_millis(100)).await,
         Err(ConnectError::Deadline)
     ));
+}
+
+#[tokio::test]
+async fn rendezvous_observed_real_tls_never_reclassifies_eof_or_bad_ready() {
+    for mode in [0, 3, 5, 6] {
+        let budget = Duration::from_millis(100);
+        let end = Instant::now() + budget;
+        let wait = RendezvousWait::new(end);
+        let result = rendezvous_observed_trial(mode, budget, Some(&wait)).await;
+        match mode {
+            0 => assert!(result.is_ok()),
+            6 => assert!(matches!(result, Err(ConnectError::Deadline))),
+            _ => assert!(matches!(result, Err(ConnectError::Admission))),
+        }
+        drop(result);
+        tokio::time::sleep_until(end).await;
+        assert_eq!(wait.take_expired().is_some(), mode == 6);
+    }
 }

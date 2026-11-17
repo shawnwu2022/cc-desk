@@ -544,6 +544,27 @@ impl DelegatedRunOwner {
             before_actor: std::sync::Mutex::new(None),
         })
     }
+    pub(crate) fn resume_waiting_network(
+        &self,
+        receipt: &crate::remote_host::delegated::retirement::UninstalledRetirement,
+        current: &VerifiedBinding,
+        clock: &crate::remote_unattended::capability::network::NetworkClock,
+        lifetime: &NativeRunLifetime,
+    ) -> Result<DelegatedNetworkAdmission, SafeError> {
+        if !Arc::ptr_eq(&self.0, &lifetime.captured) {
+            return Err(error("FORBIDDEN"));
+        }
+        let attempt = clock
+            .renew_waiting(receipt, current, lifetime)
+            .map_err(|_| error("REMOTE_HOST_LOCKED"))?;
+        Ok(DelegatedNetworkAdmission {
+            brand: Arc::new(()),
+            captured: self.0.clone(),
+            attempt,
+            #[cfg(test)]
+            before_actor: std::sync::Mutex::new(None),
+        })
+    }
 }
 impl DelegatedNetworkAdmission {
     pub(crate) fn rebind_into(

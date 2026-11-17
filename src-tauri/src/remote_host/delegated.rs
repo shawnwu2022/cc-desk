@@ -2,8 +2,8 @@
 #![allow(dead_code, reason = "委托生产 consent 与材料供应尚未接入")]
 use super::*;
 use crate::cli::types::SafeError;
-use crate::remote_unattended::capability::network::NetworkClock;
 use crate::remote_unattended::capability::VerifiedBinding;
+use crate::remote_unattended::capability::network::NetworkClock;
 use crate::run_supervisor::delegated::{DelegatedNetworkAdmission, DelegatedRunOwner};
 use cc_desk_remote_host::native_host::{ChannelRetirementToken, NativeChannel};
 use std::sync::Weak;
@@ -271,16 +271,13 @@ impl DelegatedSession {
         })();
         checkout.finish();
         drop(active);
-        if rebind && result.is_ok() {
+        if result.is_ok() {
             let _transition = self.transition.lock();
-            if !self.clock.is_closed()
-                && self
-                    .active
-                    .lock()
-                    .as_ref()
-                    .is_some_and(|a| Arc::ptr_eq(&a.admission.brand(), &prepared.attempt_brand))
-            {
-                self.retirement.handoff_generation();
+            if !self.clock.is_closed() {
+                if let Some(active) = self.active.lock().as_ref() {
+                    self.retirement
+                        .handoff_generation(&active.admission.brand(), &prepared.attempt_brand);
+                }
             }
         }
         result

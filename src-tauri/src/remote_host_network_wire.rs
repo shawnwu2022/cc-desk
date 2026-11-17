@@ -245,6 +245,7 @@ impl NetworkWire {
             WireAuthority::Original(clock),
             end,
             approval_stop,
+            None,
         )
         .await
     }
@@ -254,6 +255,7 @@ impl NetworkWire {
         connector: Connector,
         budget: &crate::remote_unattended::capability::network::NetworkBudget,
         end: Instant,
+        wait: &transport::wss::RendezvousWait,
     ) -> Result<Arc<RunningChannel>, HostNetworkError> {
         budget.check().map_err(|_| HostNetworkError::Authority)?;
         self.setup_inner(
@@ -262,6 +264,7 @@ impl NetworkWire {
             WireAuthority::Delegated(budget),
             end,
             None,
+            Some(wait),
         )
         .await
     }
@@ -272,6 +275,7 @@ impl NetworkWire {
         authorization: WireAuthority<'_>,
         end: Instant,
         approval_stop: Option<&NativeApprovalStop>,
+        wait: Option<&transport::wss::RendezvousWait>,
     ) -> Result<Arc<RunningChannel>, HostNetworkError> {
         let clock = authorization.clock();
         if self.started {
@@ -315,32 +319,65 @@ impl NetworkWire {
                 .begin_relay(scope)
                 .map_err(|_| HostNetworkError::Authority)?;
         }
+        let wait = wait.filter(|_| inputs.relay_mode == transport::wss::RelayMode::RendezvousV1);
         let socket = match connector {
             Connector::WebPki => {
-                transport::wss::connect_admitted_with_mode(
-                    inputs.binding.origin.as_str(),
-                    inputs.address,
-                    budget,
-                    &inputs.relay,
-                    inputs.relay_mode,
-                    inputs.tunnel,
-                )
-                .await
+                if let Some(wait) = wait {
+                    transport::wss::connect_admitted_observed(
+                        inputs.binding.origin.as_str(),
+                        inputs.address,
+                        budget,
+                        &inputs.relay,
+                        inputs.relay_mode,
+                        inputs.tunnel,
+                        wait,
+                    )
+                    .await
+                } else {
+                    transport::wss::connect_admitted_with_mode(
+                        inputs.binding.origin.as_str(),
+                        inputs.address,
+                        budget,
+                        &inputs.relay,
+                        inputs.relay_mode,
+                        inputs.tunnel,
+                    )
+                    .await
+                }
             }
             #[cfg(test)]
             Connector::PublicLoopbackFixture => {
-                transport::wss::test_only_connect_admitted_loopback_with_mode(
-                    inputs.binding.origin.as_str(),
-                    inputs.address,
-                    budget,
-                    &inputs.relay,
-                    inputs.relay_mode,
-                    inputs.tunnel,
-                )
-                .await
+                if let Some(wait) = wait {
+                    transport::wss::test_only_connect_admitted_loopback_observed(
+                        inputs.binding.origin.as_str(),
+                        inputs.address,
+                        budget,
+                        &inputs.relay,
+                        inputs.relay_mode,
+                        inputs.tunnel,
+                        wait,
+                    )
+                    .await
+                } else {
+                    transport::wss::test_only_connect_admitted_loopback_with_mode(
+                        inputs.binding.origin.as_str(),
+                        inputs.address,
+                        budget,
+                        &inputs.relay,
+                        inputs.relay_mode,
+                        inputs.tunnel,
+                    )
+                    .await
+                }
             }
         }
-        .map_err(|_| HostNetworkError::Relay)?;
+        .map_err(|error| {
+            if wait.is_some() && error == transport::wss::ConnectError::Deadline {
+                HostNetworkError::Deadline
+            } else {
+                HostNetworkError::Relay
+            }
+        })?;
         #[cfg(test)]
         eprintln!("TEST_ONLY_HOST_OUTER_ACCEPTED");
         #[cfg(test)]

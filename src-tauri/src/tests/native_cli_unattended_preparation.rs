@@ -3072,7 +3072,7 @@ async fn unattended_short_network_case(mode: u8) {
     record.native.endpoint_spki = network_identities::identity(false, false).1;
     let mut relay = NetworkRelayFixture::start_with_browser(
         Some(record.native.relay_spki[26..].to_vec()),
-        30000,
+        if mode == 21 { 45000 } else { 30000 },
         true,
     )
     .await;
@@ -3080,7 +3080,7 @@ async fn unattended_short_network_case(mode: u8) {
     let scope = admission.scope().unwrap();
     record.route.address = relay.address.to_string();
     record.route.origin = relay.origin.clone();
-    record.route.relay_mode = if mode == 19 { "rendezvousV1" } else { "legacyV1" }.into();
+    record.route.relay_mode = if mode >= 19 { "rendezvousV1" } else { "legacyV1" }.into();
     record.route.tunnel = [3; 16];
     record.route.relay_id = [1; 16];
     record.epochs.host_key = 5;
@@ -3123,8 +3123,8 @@ async fn unattended_short_network_case(mode: u8) {
         relay_scalar,
     ];
     // 浏览器工具初始化不占用原批准与首读窗口；READY 不授予任何权限。
-    let mut real_browser = if (5..=19).contains(&mode) {
-        let config = serde_json::json!({"case":if mode == 19 {"authenticated-browser-retry"} else if mode == 18 {"authenticated-reconnect-bad-tls"} else if mode == 17 {"authenticated-reconnect-terminal-rejected"} else if mode == 16 {"authenticated-reconnect-rst"} else if mode == 15 {"authenticated-reconnect-material-failed"} else if mode == 14 {"authenticated-reconnect-cancel"} else if mode == 13 {"authenticated-reconnect"} else if mode == 6 {"key-retirement-probe"} else if mode == 7 {"key-retirement-data"} else if mode == 8 {"authenticated-session"} else if mode == 9 {"authenticated-revoked"} else if mode == 10 {"authenticated-expired"} else if mode == 11 {"authenticated-race"} else {"short-input"},"origin":relay.origin,"scope":scope,"hostSpki":host_spki,"expires":false,"revocationPath":null}).to_string();
+    let mut real_browser = if (5..=20).contains(&mode) || mode == 22 {
+        let config = serde_json::json!({"case":if mode == 22 {"authenticated-reconnect"} else if mode >= 19 {"authenticated-browser-retry"} else if mode == 18 {"authenticated-reconnect-bad-tls"} else if mode == 17 {"authenticated-reconnect-terminal-rejected"} else if mode == 16 {"authenticated-reconnect-rst"} else if mode == 15 {"authenticated-reconnect-material-failed"} else if mode == 14 {"authenticated-reconnect-cancel"} else if mode == 13 {"authenticated-reconnect"} else if mode == 6 {"key-retirement-probe"} else if mode == 7 {"key-retirement-data"} else if mode == 8 {"authenticated-session"} else if mode == 9 {"authenticated-revoked"} else if mode == 10 {"authenticated-expired"} else if mode == 11 {"authenticated-race"} else {"short-input"},"origin":relay.origin,"scope":scope,"hostSpki":host_spki,"waitAfterFirstMs":if mode == 22 {Some(9000)} else {None},"expires":false,"revocationPath":null}).to_string();
         Some(RealBrowserChild::prepare(&config))
     } else {
         None
@@ -3193,7 +3193,7 @@ async fn unattended_short_network_case(mode: u8) {
         let first = UnattendedApproval::test_pending(preparation);
         first.test_answer(true, false);
         let prepared = first.consume(&pairing, &admission).unwrap().unwrap();
-        let approval = Arc::new(if (13..=19).contains(&mode) {
+        let approval = Arc::new(if (13..=23).contains(&mode) {
             FinalApproval::test_pending_reconnect(prepared, &pairing, &admission).unwrap()
         } else if mode >= 8 {
             FinalApproval::test_pending_session(prepared, &pairing, &admission).unwrap()
@@ -3215,6 +3215,7 @@ async fn unattended_short_network_case(mode: u8) {
         )
         .unwrap();
         pending.test_anonymous_network(scalars, opened.clone(), accepted);
+        if mode == 23 { pending.test_cancel_after_receipt(); }
         if (13..=18).contains(&mode) {
             if mode == 18 {
                 bad_tls_observer = Some(pending.test_first_terminal_observer());
@@ -3278,10 +3279,11 @@ async fn unattended_short_network_case(mode: u8) {
         (Some(approval), Some(end), Some(control))
     };
     // rendezvous 的 Ready 需要双方 Join；批准并托管后并发启动原 Browser，不能先等待 Host Ready。
-    let autonomous_browser = if mode == 19 {
+    let autonomous_browser = if (19..=20).contains(&mode) || mode == 22 {
         let child = real_browser.take().unwrap();
         let close = control.as_ref().unwrap().clone();
         Some(tokio::task::spawn_blocking(move || {
+            if mode == 20 { std::thread::sleep(Duration::from_secs(9)); }
             child.go_and_wait(Some(Box::new(move || { close.close(); close.closed() })), true, true)
         }))
     } else {
@@ -3345,7 +3347,12 @@ async fn unattended_short_network_case(mode: u8) {
             .unwrap(),
         );
     }
-    let succeeded = output.as_ref().is_some_and(|o| {
+    let waiting_exhausted = if mode == 21 || mode == 23 {
+        let ended = tokio::time::timeout(Duration::from_secs(28), host.unattended.wait()).await;
+        eprintln!("TEST_ONLY_WAITING_LIMIT ended={ended:?} closed={} opens={:?}", control.as_ref().unwrap().closed(), opened.iter().map(|v|v.load(std::sync::atomic::Ordering::Acquire)).collect::<Vec<_>>());
+        matches!(ended, Ok(true)) && control.as_ref().unwrap().closed() && Instant::now() < fixed_end.unwrap()
+    } else { false };
+    let succeeded = waiting_exhausted || output.as_ref().is_some_and(|o| {
         if mode == 7 {
             !o.status.success()
                 && String::from_utf8_lossy(&o.stderr).contains("browser request rejected")
@@ -3372,15 +3379,15 @@ async fn unattended_short_network_case(mode: u8) {
         eprintln!("TEST_ONLY_BAD_TLS_ORIGINAL_REASON {actual:?}");
         actual == Some(Ok(cc_desk_remote_security::DataError::Codec))
     });
-    let browser_retry_opens = mode != 19
+    let browser_retry_opens = mode < 19
         || opened
             .iter()
-            .all(|value| value.load(std::sync::atomic::Ordering::Acquire) == 2);
+            .all(|value| value.load(std::sync::atomic::Ordering::Acquire) == if mode == 23 { 1 } else if mode == 21 { 4 } else if mode == 20 || mode == 22 { 3 } else { 2 });
     let input_exact = if succeeded {
         let remainder: &[u8] =
-            if revoke || expires || mode == 6 || mode == 7 || mode == 9 || mode == 10 {
+            if revoke || expires || mode == 6 || mode == 7 || mode == 9 || mode == 10 || mode == 21 || mode == 23 {
                 b"native"
-            } else if mode == 13 || mode == 16 || mode == 19 {
+            } else if mode == 13 || mode == 16 || mode >= 19 {
                 b"tive"
             } else {
                 b"ative"
@@ -3566,7 +3573,11 @@ fn short_network_isolated(case: &str) -> bool {
     };
     let evidence = std::fs::read_to_string(&path).unwrap();
     eprintln!("{evidence}");
-    let completed = if case == "UnattendedReconnect_FailedNextMaterialRetainsCustody_005" {
+    let completed = if case == "UnattendedWaiting_ThreeReplacementsThenClosesBeforeParentEnd_002" {
+        evidence.contains("1 passed; 0 failed") && evidence.contains("TEST_ONLY_WAITING_RETRY_LIMIT_REACHED")
+    } else if case == "UnattendedWaiting_CancelAfterWaitingReceiptNeverOpensNextKeys_004" {
+        evidence.contains("1 passed; 0 failed") && evidence.contains("TEST_ONLY_CANCEL_AFTER_RECEIPT waiting=true")
+    } else if case == "UnattendedReconnect_FailedNextMaterialRetainsCustody_005" {
         evidence.contains("TEST_ONLY_RECONNECT_FAILED_MATERIAL_QUARANTINED")
     } else {
         evidence.contains("1 passed; 0 failed")
@@ -4046,4 +4057,28 @@ async fn UnattendedBrowserRetry_OriginalTimerReauthenticatesSamePage_001() {
         return;
     }
     unattended_short_network_case(19).await;
+}
+
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn UnattendedWaiting_LateClientKeepsOriginalApproval_001() {
+    if short_network_isolated("UnattendedWaiting_LateClientKeepsOriginalApproval_001") { return; }
+    unattended_short_network_case(20).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn UnattendedWaiting_ThreeReplacementsThenClosesBeforeParentEnd_002() {
+    if short_network_isolated("UnattendedWaiting_ThreeReplacementsThenClosesBeforeParentEnd_002") { return; }
+    unattended_short_network_case(21).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn UnattendedWaiting_InstalledThenAbsentClientRebindsOriginalHost_003() {
+    if short_network_isolated("UnattendedWaiting_InstalledThenAbsentClientRebindsOriginalHost_003") { return; }
+    unattended_short_network_case(22).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn UnattendedWaiting_CancelAfterWaitingReceiptNeverOpensNextKeys_004() {
+    if short_network_isolated("UnattendedWaiting_CancelAfterWaitingReceiptNeverOpensNextKeys_004") { return; }
+    unattended_short_network_case(23).await;
 }

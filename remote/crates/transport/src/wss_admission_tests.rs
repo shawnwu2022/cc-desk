@@ -249,3 +249,21 @@ async fn admitted_endpoint_rejects_unsafe_or_noncanonical_origin_before_tcp() {
 
 #[path = "wss_rendezvous_tests.rs"]
 mod rendezvous;
+
+#[tokio::test(start_paused = true)]
+async fn observed_bad_ready_is_sticky_when_deadline_tail_overrides_result() {
+    use tokio_tungstenite::tungstenite::Message;
+    for response in [None, Some(Ok(Message::Binary(vec![2, 9].into())))] {
+        let end = Instant::now() + Duration::from_secs(8);
+        let wait = RendezvousWait::new(end);
+        wait.begin(end).unwrap(); wait.pending().unwrap();
+        let result = crate::deadline::bounded(end, async {
+            // 同一 poll 已读错误后，deadline 尾检仍可能覆盖返回值。
+            let result = observe_ready(response, [1; 16], Some(&wait));
+            tokio::time::advance(Duration::from_secs(8)).await;
+            result
+        }).await;
+        assert_eq!(result, Err(crate::deadline::Expired));
+        assert!(wait.take_expired().is_none());
+    }
+}

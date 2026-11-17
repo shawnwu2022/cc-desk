@@ -1,5 +1,5 @@
 //! Separate native relay-admission signer; never imports endpoint identity keys.
-use super::ConnectError;
+use super::{ConnectError, RendezvousWait};
 use std::{future::Future, net::SocketAddr, pin::Pin, sync::Arc, time::Duration};
 use tokio::time::Instant;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -115,18 +115,54 @@ pub async fn connect_admitted_with_mode(
     mode: RelayMode,
     tunnel: [u8; 16],
 ) -> Result<AdmittedSocket, ConnectError> {
+    connect_admitted_inner(origin, address, budget, identity, mode, tunnel, None).await
+}
+pub async fn connect_admitted_observed(
+    origin: &str,
+    address: SocketAddr,
+    budget: Duration,
+    identity: &RelayAdmissionIdentity,
+    mode: RelayMode,
+    tunnel: [u8; 16],
+    wait: &RendezvousWait,
+) -> Result<AdmittedSocket, ConnectError> {
+    connect_admitted_inner(origin, address, budget, identity, mode, tunnel, Some(wait)).await
+}
+async fn connect_admitted_inner(
+    origin: &str,
+    address: SocketAddr,
+    budget: Duration,
+    identity: &RelayAdmissionIdentity,
+    mode: RelayMode,
+    tunnel: [u8; 16],
+    wait: Option<&RendezvousWait>,
+) -> Result<AdmittedSocket, ConnectError> {
     endpoint(origin, address, budget)?;
     validate_route(mode, tunnel)?;
     let deadline = Instant::now()
         .checked_add(budget)
         .ok_or(ConnectError::Limit)?;
-    crate::deadline::bounded(deadline, async {
+    let deadline = match wait {
+        Some(wait) if mode == RelayMode::RendezvousV1 => wait.begin(deadline)?,
+        Some(_) => return Err(ConnectError::Admission),
+        None => deadline,
+    };
+    let result = crate::deadline::bounded(deadline, async {
         let ws = super::connect_protocol(origin, address, budget, subprotocol(mode)).await?;
         let ws = admit(ws, origin, identity, deadline).await?;
-        ready(ws, mode, tunnel, deadline).await
+        ready(ws, mode, tunnel, deadline, wait).await
     })
     .await
-    .map_err(|_| ConnectError::Deadline)?
+    .map_err(|_| ConnectError::Deadline)
+    .and_then(|result| result);
+    if result
+        .as_ref()
+        .is_err_and(|error| *error != ConnectError::Deadline)
+        && let Some(wait) = wait
+    {
+        wait.failed();
+    }
+    result
 }
 async fn admit(
     mut ws: AdmittedSocket,
@@ -210,6 +246,30 @@ pub async fn test_only_connect_admitted_loopback_with_mode(
     mode: RelayMode,
     tunnel: [u8; 16],
 ) -> Result<AdmittedSocket, ConnectError> {
+    connect_loopback_inner(origin, address, budget, identity, mode, tunnel, None).await
+}
+#[cfg(any(test, feature = "test-only-loopback"))]
+pub async fn test_only_connect_admitted_loopback_observed(
+    origin: &str,
+    address: SocketAddr,
+    budget: Duration,
+    identity: &RelayAdmissionIdentity,
+    mode: RelayMode,
+    tunnel: [u8; 16],
+    wait: &RendezvousWait,
+) -> Result<AdmittedSocket, ConnectError> {
+    connect_loopback_inner(origin, address, budget, identity, mode, tunnel, Some(wait)).await
+}
+#[cfg(any(test, feature = "test-only-loopback"))]
+async fn connect_loopback_inner(
+    origin: &str,
+    address: SocketAddr,
+    budget: Duration,
+    identity: &RelayAdmissionIdentity,
+    mode: RelayMode,
+    tunnel: [u8; 16],
+    wait: Option<&RendezvousWait>,
+) -> Result<AdmittedSocket, ConnectError> {
     let url = endpoint(origin, address, budget)?;
     validate_route(mode, tunnel)?;
     if !address.ip().is_loopback() || url.host_str() != Some("foobar.com") {
@@ -218,6 +278,11 @@ pub async fn test_only_connect_admitted_loopback_with_mode(
     let deadline = Instant::now()
         .checked_add(budget)
         .ok_or(ConnectError::Limit)?;
+    let deadline = match wait {
+        Some(wait) if mode == RelayMode::RendezvousV1 => wait.begin(deadline)?,
+        Some(_) => return Err(ConnectError::Admission),
+        None => deadline,
+    };
     let mut roots = rustls::RootCertStore::empty();
     for cert in rustls_pemfile::certs(&mut &include_bytes!("../tests/fixtures/root.pem")[..])
         .map_err(|_| ConnectError::Transport)?
@@ -226,7 +291,7 @@ pub async fn test_only_connect_admitted_loopback_with_mode(
             .add(rustls::pki_types::CertificateDer::from(cert))
             .map_err(|_| ConnectError::Transport)?;
     }
-    crate::deadline::bounded(deadline, async {
+    let result = crate::deadline::bounded(deadline, async {
         let socket = tokio::net::TcpStream::connect(address)
             .await
             .map_err(|_| ConnectError::Transport)?;
@@ -239,10 +304,19 @@ pub async fn test_only_connect_admitted_loopback_with_mode(
         )
         .await?;
         let ws = admit(ws, origin, identity, deadline).await?;
-        ready(ws, mode, tunnel, deadline).await
+        ready(ws, mode, tunnel, deadline, wait).await
     })
     .await
-    .map_err(|_| ConnectError::Deadline)?
+    .map_err(|_| ConnectError::Deadline)
+    .and_then(|result| result);
+    if result
+        .as_ref()
+        .is_err_and(|error| *error != ConnectError::Deadline)
+        && let Some(wait) = wait
+    {
+        wait.failed();
+    }
+    result
 }
 #[cfg(test)]
 #[path = "wss_admission_tests.rs"]
@@ -266,6 +340,7 @@ async fn ready(
     mode: RelayMode,
     tunnel: [u8; 16],
     deadline: Instant,
+    wait: Option<&RendezvousWait>,
 ) -> Result<AdmittedSocket, ConnectError> {
     if mode == RelayMode::Legacy {
         return Ok(ws);
@@ -278,14 +353,38 @@ async fn ready(
         .await
         .map_err(|_| ConnectError::Deadline)?
         .map_err(|_| ConnectError::Admission)?;
-    let response = crate::deadline::bounded(deadline, ws.next())
-        .await
-        .map_err(|_| ConnectError::Deadline)?
-        .ok_or(ConnectError::Admission)?
-        .map_err(|_| ConnectError::Admission)?;
-    if !matches!(response,Message::Binary(ref bytes) if bytes.len()==18 && bytes[..2]==[2,1] && bytes[2..]==tunnel)
-    {
-        return Err(ConnectError::Admission);
+    if let Some(wait) = wait {
+        wait.pending()?;
+    }
+    crate::deadline::bounded(deadline, async {
+        let response = ws.next().await;
+        observe_ready(response, tunnel, wait)
+    })
+    .await
+    .map_err(|_| ConnectError::Deadline)??;
+    if let Some(wait) = wait {
+        wait.ready()?;
     }
     Ok(ws)
+}
+
+fn observe_ready(
+    response: Option<
+        Result<tokio_tungstenite::tungstenite::Message, tokio_tungstenite::tungstenite::Error>,
+    >,
+    tunnel: [u8; 16],
+    wait: Option<&RendezvousWait>,
+) -> Result<(), ConnectError> {
+    use tokio_tungstenite::tungstenite::Message;
+    let valid = matches!(response,
+            Some(Ok(Message::Binary(ref bytes)))
+            if bytes.len() == 18 && bytes[..2] == [2, 1] && bytes[2..] == tunnel);
+    if !valid {
+        // 在 deadline 包装器末尾检查之前锁存已观察的错误，不能洗成等待超时。
+        if let Some(wait) = wait {
+            wait.failed();
+        }
+        return Err(ConnectError::Admission);
+    }
+    Ok(())
 }

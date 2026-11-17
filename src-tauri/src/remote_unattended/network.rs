@@ -213,9 +213,11 @@ mod tests {
         let (foreign, binding) = Delegation::test_new([8; 32], false);
         let local = foreign.begin(&binding).unwrap();
         let entered = AtomicBool::new(false);
-        assert!(policy
-            .with_effect(&local, &current, |_| entered.store(true, Ordering::Release))
-            .is_err());
+        assert!(
+            policy
+                .with_effect(&local, &current, |_| entered.store(true, Ordering::Release))
+                .is_err()
+        );
         assert!(!entered.load(Ordering::Acquire));
     }
     #[test]
@@ -247,9 +249,11 @@ mod tests {
         let (policy, view) = Delegation::test_new([7; 32], true);
         assert!(policy.begin_network(&view, || true).is_err());
         let (policy, current) = Delegation::test_new([7; 32], false);
-        assert!(policy
-            .begin_network(&current.test_wrong_device(), || true)
-            .is_err());
+        assert!(
+            policy
+                .begin_network(&current.test_wrong_device(), || true)
+                .is_err()
+        );
     }
 }
 
@@ -478,7 +482,22 @@ impl NetworkClock {
         current: &VerifiedBinding,
         lifetime: &crate::run_supervisor::delegated::NativeRunLifetime,
     ) -> Result<Arc<NetworkAttempt>, Denied> {
-        let old = receipt.original_attempt();
+        self.renew_retired(receipt.original_attempt(), current, lifetime)
+    }
+    pub(crate) fn renew_waiting(
+        &self,
+        receipt: &crate::remote_host::delegated::retirement::UninstalledRetirement,
+        current: &VerifiedBinding,
+        lifetime: &crate::run_supervisor::delegated::NativeRunLifetime,
+    ) -> Result<Arc<NetworkAttempt>, Denied> {
+        self.renew_retired(receipt.original_attempt(), current, lifetime)
+    }
+    fn renew_retired(
+        &self,
+        old: &Arc<NetworkAttempt>,
+        current: &VerifiedBinding,
+        lifetime: &crate::run_supervisor::delegated::NativeRunLifetime,
+    ) -> Result<Arc<NetworkAttempt>, Denied> {
         let policy = &old.policy;
         let mut selected = self.selected.lock().map_err(|_| Denied::Unknown)?;
         let mut state = policy.owner.state.lock().map_err(|_| Denied::Unknown)?;

@@ -422,7 +422,23 @@ impl<S: Sealer, B: PairingBackend, P: PairingSealer> PendingStart<S, B, P> {
             )
         };
         // 原 App worker 锁外汇合；任何 Unknown 均不签发下一代。
-        let retired = tauri::async_runtime::block_on(session.observe_retirement());
+        let waiting = self
+            .service
+            .lock()
+            .data_socket
+            .as_ref()
+            .is_some_and(|socket| socket.waiting_expired());
+        if waiting && !session.waiting_retry_available() {
+            #[cfg(test)]
+            eprintln!("TEST_ONLY_WAITING_RETRY_LIMIT_REACHED");
+            self.control.close();
+            return Err(StoreError::Unauthorized);
+        }
+        let retired = if waiting {
+            tauri::async_runtime::block_on(session.observe_waiting_retirement())
+        } else {
+            tauri::async_runtime::block_on(session.observe_retirement())
+        };
         if !matches!(
             retired,
             crate::remote_host::delegated::retirement::RetirementObservation::Ready
@@ -446,6 +462,7 @@ impl<S: Sealer, B: PairingBackend, P: PairingSealer> PendingStart<S, B, P> {
         }
         #[cfg(test)]
         if self.cancel_after_receipt {
+            eprintln!("TEST_ONLY_CANCEL_AFTER_RECEIPT waiting={waiting}");
             self.control.close();
             self.next_network_accepted.take();
         }

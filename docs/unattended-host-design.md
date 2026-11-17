@@ -2359,3 +2359,75 @@ The exact source manifest, nine-file stage list and log ledger are
 requires the Relay root and executable from the explicitly built clean rendezvous
 worktree above; the older default legacy fixture binary is intentionally unsuitable.
 No Relay files or generated runtime binaries are part of this CC stage.
+
+## A6r: bounded waiting before endpoint TLS (internal, default off)
+
+The existing explicit ReconnectSession can now replace an uninstalled attempt
+whose original local rendezvous deadline expires after Admission and JOIN have
+completed, but before a socket can be handed to endpoint TLS. This is not an
+Installed receipt. The connector retains a private observer identity and exact
+original deadline; observed EOF, malformed READY and other failures are sticky.
+A late valid READY is not delivered to TLS. The phase observation alone cannot
+establish resource retirement or authorize a replacement.
+
+The original SocketCustody must first finish its task and material cleanup, with
+no handoff, channel or Installed fact. A separate non-Clone uninstalled receipt
+then owns the original Start, checked against the current Session, operation,
+attempt and socket. The original App worker joins the old key owners, checks the
+unchanged parent, pairing/CAS and durable policy, and consumes that receipt once.
+It does not manufacture CompleteRetirement or rebuild the delegated owner. If an
+Installed receipt was already consumed before this waiting attempt, its original
+RetiredInstalledChannel is carried forward for the later rebind. Successful first
+adoption after waiting also completes NextStarting; foreign attempts cannot clear
+that state, and initial Empty remains a no-op.
+
+At most three waiting replacements are allowed, charged without refund. The
+original parent deadline (at most 60 seconds), native setup deadline, Relay's
+pending timeout and initial I/O window are unchanged. The local eight-second
+setup deadline is frozen before the outer connection and Relay registration;
+the Relay's own eight-second pending interval starts later. Only the exact local
+phase expiry is eligible. Earlier Relay policy expiry or EOF closes the parent,
+not a retry. This is bounded availability, not waiting indefinitely or restoring
+across an App restart. Old Local/ShortNetwork modes and default production UI do
+not gain waiting or reconnect permission. Ordinary Store.observe/floor writes and
+revocation capacity remain unchanged; no automatic checkpoint is enabled.
+
+Evidence retained in the audit directory includes the original late-client RED,
+the real PendingReady expiry probe, and the first composite failure that exposed
+NextStarting not being completed after a first adoption following a wait. The
+final four real cases cover: a client arriving after nine seconds followed by the
+original autonomous browser retry; three waiting replacements and closure before
+the parent deadline; an Installed generation followed by an absent client and a
+later rebind of the original Host; and cancellation after the waiting receipt with
+no next key open. The second rebind case uses a timer, not a second HostAccepted
+fixture signal. Its initial missing test callback was a fixture failure, retained
+separately from the corrected result.
+
+The original no-client fixture used a 30-second Relay test policy. It closed
+safely before four full eight-second waits, so four observed opens alone did not
+prove the replacement-limit branch. The strengthened assertion correctly failed.
+Only that case now uses the existing isolated fixture policy lifetime of 45
+seconds; production timeouts, the fixed parent deadline and the 40-second child
+process watchdog were not changed. The final log must contain the exact
+WAITING_RETRY_LIMIT_REACHED marker, four opens per key and the original cleanup
+facts. The earlier 30-second result remains evidence of earlier external policy
+expiry failing closed, not evidence of counter exhaustion.
+
+The browser cases use public fixture credentials, anonymous nonpersistent CNG,
+virtual WebAuthn, a synthetic HTTPS origin and the existing CA-verifying Node WSS
+proxy. They do not establish browser TLS trust, a real phone or public deployment.
+Retirement claims are limited to the named original Source/Worker/enrollment,
+network/material/key and App managed-run facts, not an assertion about every
+platform resource. No real journal, registration or key was modified.
+Final verification is deliberately split by source revision. After the two
+semantically equivalent Clippy collapsible-if rewrites in wss_admission, the four
+real waiting cases and all 70 transport cases (43 unit plus 27 integration) passed
+on the recorded final source. Transport and native strict Clippy finished in
+1.96 seconds and 31.69 seconds. The 41 original native regression cases passed
+before those two lint-only rewrites; they are not described as byte-identical
+final-source runs. Combined distinct coverage is 115, not counting nested process
+harness duplication, earlier repeats, or zero doc-tests. The final real chain log
+is waiting-final2-four.log; the source, stage list and layered evidence ledger are
+waiting-final-source.json, waiting-stage-files.txt and waiting-final-ledger.json
+in the audit directory. The original three dirty files and generated artifacts
+remain outside the proposed 15-file stage. No stage or commit is implied here.

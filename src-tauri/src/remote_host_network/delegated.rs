@@ -156,11 +156,17 @@ struct InstalledData {
     budget: crate::remote_unattended::capability::network::NetworkBudget,
     end: std::time::Instant,
 }
+struct WaitingStart {
+    start: DelegatedSocketStart,
+    wait: transport::wss::RendezvousWait,
+    expired: transport::wss::ExpiredRendezvousWait,
+}
 pub(crate) struct SocketCustody {
     identity: DelegatedAttemptIdentity,
     terminal_clock: Arc<crate::remote_unattended::capability::network::NetworkClock>,
     original_channel: Mutex<Option<Arc<RunningChannel>>>,
     installed_data: Mutex<Option<InstalledData>>,
+    waiting: Mutex<Option<WaitingStart>>,
     #[cfg(test)]
     terminal_override: Mutex<Option<security::DataError>>,
     #[cfg(test)]
@@ -194,6 +200,7 @@ impl SocketCustody {
             terminal_clock: start.terminal_clock(),
             original_channel: Mutex::new(None),
             installed_data: Mutex::new(None),
+            waiting: Mutex::new(None),
             #[cfg(test)]
             terminal_override: Mutex::new(None),
             #[cfg(test)]
@@ -284,6 +291,27 @@ impl SocketCustody {
             result
         }
     }
+    pub(crate) fn waiting_expired(&self) -> bool {
+        self.waiting.lock().is_some()
+    }
+    pub(crate) async fn take_waiting_start(
+        &self,
+    ) -> Result<Option<DelegatedSocketStart>, HostNetworkError> {
+        self.wait_closed().await?;
+        if self.network.terminal.load(Ordering::Acquire) != 1
+            || self.original_channel.lock().is_some()
+            || self.installed_data.lock().is_some()
+        {
+            return Err(HostNetworkError::Unknown);
+        }
+        let mut waiting = self.waiting.lock();
+        if waiting.as_ref().is_some_and(|w| {
+            !w.expired.matches(&w.wait) || !self.matches_identity(&w.start.identity())
+        }) {
+            return Err(HostNetworkError::Unknown);
+        }
+        Ok(waiting.take().map(|w| w.start))
+    }
     pub(crate) async fn wait_admitted(&self) -> Result<(), HostNetworkError> {
         self.network.wait_admitted().await
     }
@@ -361,6 +389,7 @@ impl SocketCustody {
             let mut transferred = false;
             let lifetime_end = Instant::from_std(lifetime_end);
             let end = (Instant::now() + Duration::from_secs(8)).min(lifetime_end);
+            let wait = transport::wss::RendezvousWait::new(end);
             let clock = budget.clock();
             let initially_closed = *stopped.borrow();
             let setup = async {
@@ -378,7 +407,7 @@ impl SocketCustody {
                 transferred = true;
                 clock.now_ms().map_err(|_| HostNetworkError::Authority)?;
                 let channel = wire
-                    .setup_delegated(material, connector, &budget, end)
+                    .setup_delegated(material, connector, &budget, end, &wait)
                     .await?;
                 clock.now_ms().map_err(|_| HostNetworkError::Authority)?;
                 *original.original_channel.lock() = Some(channel.clone());
@@ -486,9 +515,28 @@ impl SocketCustody {
             if result == Err(HostNetworkError::Unknown) {
                 original.terminal_clock.close();
             }
+            let waiting = if result == Err(HostNetworkError::Deadline)
+                && original.terminal_wake.get().is_some()
+                && original.original_channel.lock().is_none()
+                && original.installed_data.lock().is_none()
+            {
+                wait.take_expired().filter(|expired| expired.matches(&wait))
+            } else {
+                None
+            };
+            let waiting = if let Some(expired) = waiting {
+                *original.waiting.lock() = Some(WaitingStart {
+                    start,
+                    wait,
+                    expired,
+                });
+                true
+            } else {
+                false
+            };
             if let Some(parent) = original.terminal_wake.get() {
                 // 只收窄新重连模式；先关父门，再发布终态或唤醒原 worker。
-                if result.is_err() || !reconnect_candidate(checked_end) {
+                if !waiting && (result.is_err() || !reconnect_candidate(checked_end)) {
                     parent.close();
                 }
             }
