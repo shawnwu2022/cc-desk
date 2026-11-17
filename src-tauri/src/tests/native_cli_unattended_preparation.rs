@@ -1363,3 +1363,675 @@ fn UnattendedClose_NaturalRunExitStillAllowsOriginalCloseHandle_005() {
     );
     assert!(old_admission_rejected && stopped.is_ok() && revoked && no_effect && retired);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn UnattendedApp_OriginalExitClosesAndJoinsManagedOwner_001() {
+    use crate::remote_unattended_store::service::controller::SingleRunController;
+    let transports = Arc::new(TerminalTransports::new());
+    let supervisor = Arc::new(NativeRunSupervisor::new(transports.clone()));
+    let f = Fixture::with_runtime_environment("input", supervisor, transports, true);
+    let native = Arc::new(NativeRuntime::with_owned_components_for_test(
+        f.service.clone(),
+        f.transports.clone(),
+        f.supervisor.clone(),
+    ));
+    struct RuntimeStop(Arc<NativeRuntime>);
+    impl Drop for RuntimeStop {
+        fn drop(&mut self) {
+            self.0.shutdown();
+        }
+    }
+    let _runtime_stop = RuntimeStop(native.clone());
+    let events = f.events.clone();
+    native
+        .start_managed_run(&f.caller, &f.request, |_| {
+            f.routes.bind(1, Box::new(|| Ok(())), || {
+                Ok(Channel::new(move |body| {
+                    if let InvokeResponseBody::Json(text) = body {
+                        events.lock().push(serde_json::from_str(&text).unwrap());
+                    }
+                    Ok(())
+                }))
+            })
+        })
+        .unwrap();
+    let startup_end = Instant::now() + Duration::from_secs(10);
+    while f.child_reports() == 0 || f.events.lock().is_empty() {
+        assert!(Instant::now() < startup_end);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let admission = admit(&f);
+    let pair_dir = store_root();
+    let pairing = synthetic_file_store(pair_dir.path()).unwrap();
+    let (approval, mut consent) = final_consent(&pairing, &admission);
+    let keys = crate::native_crypto::single_run_test_keys(consent.take_supplier().unwrap());
+    let durable_dir = store_root();
+    let mut owner = service(durable_dir.path());
+    owner
+        .start(
+            consent,
+            keys.custody,
+            keys.ready,
+            keys.signers,
+            admission,
+            &pairing,
+        )
+        .unwrap();
+    let controller = SingleRunController::from_started(owner).unwrap();
+    let close = controller.close_handle();
+    let host = Arc::new(RemoteHostService::default());
+    host.unattended.install(controller).unwrap();
+    let decision = host.request_exit(47, false);
+    let immediate = close.test_closed();
+    // RED 也先关门并收齐原资源；不可把断言 panic 留成等待原 cap 的 worker。
+    close.request_close();
+
+    let (tx, mut rx) = tokio::sync::oneshot::channel();
+    host.start_exit(
+        47,
+        native,
+        Arc::new(crate::remote_client_ipc::RemoteClientService::default()),
+        move |code| {
+            let _ = tx.send(code);
+        },
+    );
+    let owner_known = tokio::time::timeout(Duration::from_secs(10), host.unattended.wait())
+        .await
+        .unwrap();
+    let joined = tokio::time::timeout(Duration::from_secs(10), host.test_join_exit_worker())
+        .await
+        .unwrap();
+    let observation = host.unattended.observe();
+    let callback = rx.try_recv().ok();
+    drop(approval);
+    let facts = host.test_original_managed_facts(&f.request_run()).unwrap();
+    let cleanup_known = facts.original_resources_retired();
+    eprintln!("TEST_ONLY_APP_EXIT immediate={immediate} owner_known={owner_known} joined={joined} observation={observation:?} callback={callback:?} facts={facts:?}");
+    assert!(matches!(
+        decision,
+        crate::remote_host::ExitDecision::Wait(47)
+    ));
+    assert!(
+        owner_known && joined && observation.watcher_joined && observation.retired && cleanup_known
+    );
+    // 原 NativeRuntime 可以保守 Unknown；本片不能把它升级成完整 App 退出成功。
+    if callback.is_some() {
+        assert_eq!(callback, Some(47));
+    }
+    assert!(
+        immediate,
+        "original App exit did not close the managed single-run gate"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn UnattendedApp_FixedDeadlineSurvivesObserverCancellationWithoutJournalTicks_002() {
+    use crate::remote_unattended_store::service::controller::SingleRunController;
+    let (f, mut cleanup) = setup();
+    let admission = admit(&f);
+    let pair_dir = store_root();
+    let pairing = synthetic_file_store(pair_dir.path()).unwrap();
+    let now = cutoff() - 60000;
+    let preparation = UnattendedPreparation::new(
+        &pairing,
+        synthetic_confirmed_candidate(&pairing),
+        &admission,
+        RequestedRole::Control,
+        now + 4000,
+    )
+    .unwrap();
+    let first = UnattendedApproval::test_pending(preparation);
+    first.test_answer(true, false);
+    let prepared = first.consume(&pairing, &admission).unwrap().unwrap();
+    let approval =
+        crate::remote_host_approval::unattended::final_approval::FinalApproval::test_pending(
+            prepared, &pairing, &admission,
+        )
+        .unwrap();
+    approval.test_answer(true);
+    let mut consent = approval.consume(&pairing, &admission).unwrap().unwrap();
+    let fixed_end = consent.end();
+    let keys = crate::native_crypto::single_run_test_keys(consent.take_supplier().unwrap());
+    let durable_dir = store_root();
+    let mut owner = service(durable_dir.path());
+    owner
+        .start(
+            consent,
+            keys.custody,
+            keys.ready,
+            keys.signers,
+            admission,
+            &pairing,
+        )
+        .unwrap();
+    let controller = SingleRunController::from_started(owner).unwrap();
+    let close = controller.close_handle();
+    let journal = durable_dir
+        .path()
+        .join("remote-unattended-v1/commit.journal");
+    let before = fs::read(&journal).unwrap();
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    let host = RemoteHostService::default();
+    host.unattended.install(controller).unwrap();
+    let cancelled = tokio::time::timeout(Duration::from_millis(100), host.unattended.wait())
+        .await
+        .is_err();
+    let idle_unchanged = fs::read(&journal).unwrap() == before;
+    let still_open = !close.test_closed();
+    let result = tokio::time::timeout_at(
+        tokio::time::Instant::from_std(fixed_end + Duration::from_secs(1)),
+        host.unattended.wait(),
+    )
+    .await;
+    let in_original_budget = matches!(result, Ok(true));
+    // 任何断言前均先停止并 join 原 watcher，不能 timeout 后丢 handle。
+    close.request_close();
+    let joined = tokio::time::timeout(Duration::from_secs(5), host.unattended.wait())
+        .await
+        .unwrap();
+    let observation = host.unattended.observe();
+    drop(approval);
+    drop(first);
+    let cleaned = cleanup.close();
+    assert!(cancelled && idle_unchanged && still_open && in_original_budget && joined && cleaned, "cancelled={cancelled} idle={idle_unchanged} open={still_open} deadline={in_original_budget} joined={joined} cleanup={cleaned}");
+    assert!(
+        observation.watcher_joined && observation.controller_drop_returned && observation.known()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn UnattendedApp_SpawnFailureCloseRaceAndPanicRetainOriginalCustody_003() {
+    use crate::remote_unattended_store::service::controller::SingleRunController;
+    for mode in 0..3 {
+        let (f, mut cleanup) = setup();
+        let admission = admit(&f);
+        let pair_dir = store_root();
+        let pairing = synthetic_file_store(pair_dir.path()).unwrap();
+        let (approval, mut consent) = final_consent(&pairing, &admission);
+        let keys = crate::native_crypto::single_run_test_keys(consent.take_supplier().unwrap());
+        let durable_dir = store_root();
+        let mut owner = service(durable_dir.path());
+        owner
+            .start(
+                consent,
+                keys.custody,
+                keys.ready,
+                keys.signers,
+                admission,
+                &pairing,
+            )
+            .unwrap();
+        let controller = SingleRunController::from_started(owner).unwrap();
+        let close = controller.close_handle();
+        let host = Arc::new(RemoteHostService::default());
+        if mode == 0 {
+            host.unattended.test_fail_spawn();
+        }
+        if mode == 2 {
+            host.unattended.test_panic_worker();
+        }
+        let (entered, arrived) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        host.unattended.test_before_spawn(move || {
+            let _ = entered.send(());
+            released.recv_timeout(Duration::from_secs(5)).unwrap();
+        });
+        let target = host.clone();
+        let install = std::thread::spawn(move || target.unattended.install(controller));
+        arrived.recv_timeout(Duration::from_secs(5)).unwrap();
+        let starting = host.unattended.observe();
+        host.unattended.request_close();
+        let closed_before_publish = close.test_closed();
+        release.send(()).unwrap();
+        let installed = install.join().unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(5), host.unattended.wait())
+            .await
+            .unwrap();
+        let observed = host.unattended.observe();
+        drop(approval);
+        let cleaned = cleanup.close();
+        assert!(starting.present && starting.outstanding && !starting.watcher_joined);
+        assert!(
+            closed_before_publish
+                && cleaned
+                && observed.controller_drop_returned
+                && !observed.outstanding,
+            "mode={mode} observed={observed:?}"
+        );
+        match mode {
+            0 => assert!(
+                installed.is_err()
+                    && !result
+                    && observed.failed
+                    && !observed.watcher_joined
+                    && observed.durable == Some(Ok(()))
+            ),
+            1 => assert!(installed.is_ok() && result && observed.known()),
+            2 => assert!(
+                installed.is_ok()
+                    && !result
+                    && observed.failed
+                    && observed.watcher_joined
+                    && observed.durable.is_none()
+            ),
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn UnattendedApp_DefaultEmptyDoesNotBlockOriginalExit_004() {
+    let root = tempfile::tempdir().unwrap();
+    let native = Arc::new(NativeRuntime::new(Arc::new(LaunchService::new(
+        WorkspaceRepository::open(root.path().join("workspace.json")).unwrap(),
+        Some(Default::default()),
+        None,
+    ))));
+    let host = Arc::new(RemoteHostService::default());
+    let empty = host.unattended.observe();
+    assert!(!empty.present && !empty.watcher_joined && empty.known());
+    assert_eq!(
+        host.request_exit(48, false),
+        crate::remote_host::ExitDecision::Wait(48)
+    );
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    host.start_exit(
+        48,
+        native,
+        Arc::new(crate::remote_client_ipc::RemoteClientService::default()),
+        move |code| {
+            let _ = tx.send(code);
+        },
+    );
+    let result = tokio::time::timeout(Duration::from_secs(5), rx)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(host.test_join_exit_worker().await);
+    assert_eq!(result, 48);
+    assert_eq!(
+        host.request_exit(48, false),
+        crate::remote_host::ExitDecision::Proceed
+    );
+}
+
+struct UnattendedAppRuntimeStop(Arc<NativeRuntime>);
+impl Drop for UnattendedAppRuntimeStop {
+    fn drop(&mut self) {
+        self.0.shutdown();
+    }
+}
+fn unattended_app_run() -> (Fixture, Arc<NativeRuntime>, UnattendedAppRuntimeStop) {
+    let transports = Arc::new(TerminalTransports::new());
+    let supervisor = Arc::new(NativeRunSupervisor::new(transports.clone()));
+    let f = Fixture::with_runtime_environment("input", supervisor, transports, true);
+    let native = Arc::new(NativeRuntime::with_owned_components_for_test(
+        f.service.clone(),
+        f.transports.clone(),
+        f.supervisor.clone(),
+    ));
+    let guard = UnattendedAppRuntimeStop(native.clone());
+    let events = f.events.clone();
+    native
+        .start_managed_run(&f.caller, &f.request, |_| {
+            f.routes.bind(1, Box::new(|| Ok(())), || {
+                Ok(Channel::new(move |body| {
+                    if let InvokeResponseBody::Json(text) = body {
+                        events.lock().push(serde_json::from_str(&text).unwrap());
+                    }
+                    Ok(())
+                }))
+            })
+        })
+        .unwrap();
+    let end = Instant::now() + Duration::from_secs(10);
+    while f.child_reports() == 0 || f.events.lock().is_empty() {
+        assert!(Instant::now() < end);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    (f, native, guard)
+}
+#[test]
+fn UnattendedApp_UnknownJoinsWatcherAndPhysicalOwnersButNeverPublishesExit_005() {
+    unattended_app_unknown_case(false);
+}
+fn unattended_app_unknown_case(rejected: bool) {
+    use crate::remote_unattended_store::service::controller::SingleRunController;
+    use crate::version_history::windows::unattended_store::WindowsUnattendedBackend;
+    const FLAG: &str = "CC_TEST_UNATTENDED_APP_QUARANTINE";
+    if let Some(path) = std::env::var_os(FLAG) {
+        let path = std::path::PathBuf::from(path);
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let (f, native, _runtime_stop) = unattended_app_run();
+            let admission = admit(&f);
+            let pair_dir = store_root();
+            let pairing = synthetic_file_store(pair_dir.path()).unwrap();
+            let (approval, mut consent) = final_consent(&pairing, &admission);
+            let keys = crate::native_crypto::single_run_test_keys(consent.take_supplier().unwrap());
+            let mut owner = service(&path);
+            owner.start(consent, keys.custody, keys.ready, keys.signers, admission, &pairing).unwrap();
+            // 原 policy partial-result 注入；不冒称真的制造了未知 PTY 写入。
+            owner.test_partial_result();
+            let controller = SingleRunController::from_started(owner).unwrap();
+            let host = Arc::new(RemoteHostService::default());
+            if rejected { host.unattended.request_close(); }
+            let installed = host.unattended.install(controller);
+            if rejected { assert_eq!(installed, Err(crate::remote_unattended_store::StoreError::Unknown)); } else { installed.unwrap(); }
+            assert_eq!(host.request_exit(49, false), crate::remote_host::ExitDecision::Wait(49));
+            let (tx, mut rx) = tokio::sync::oneshot::channel();
+            host.start_exit(49, native, Arc::new(crate::remote_client_ipc::RemoteClientService::default()), move |code| { let _ = tx.send(code); });
+            let known = tokio::time::timeout(Duration::from_secs(10), host.unattended.wait()).await.unwrap();
+            let joined = tokio::time::timeout(Duration::from_secs(10), host.test_join_exit_worker()).await.unwrap();
+            let observation = host.unattended.observe();
+            let facts = host.test_original_managed_facts(&f.request_run()).unwrap();
+            let quarantine = crate::remote_unattended_store::service::test_quarantine_state();
+            let forbidden = rx.try_recv().is_err() && host.request_exit(49, false) == crate::remote_host::ExitDecision::Prevent;
+            let backend = WindowsUnattendedBackend::open_existing(&path).unwrap();
+            let custody_held = matches!(backend.claim_owner_custody(), Err(crate::remote_unattended_store::StoreError::Busy));
+            drop(backend);
+            drop(approval);
+            println!("TEST_ONLY_APP_UNKNOWN known={known} joined={joined} observation={observation:?} facts={facts:?} quarantine={quarantine:?} forbidden={forbidden} custody={custody_held}");
+            assert!(!known && joined && !observation.outstanding && forbidden && custody_held);
+            if rejected { assert!(!observation.present && observation.failed && !observation.watcher_joined); }
+            else { assert!(observation.watcher_joined && observation.controller_drop_returned && !observation.retired); }
+            assert!(facts.original_resources_retired() && facts.original_job_handle_closed && facts.job_query_is_historical);
+            assert_eq!(quarantine, Some((false, CloseObservation::Unknown)));
+        });
+        println!("TEST_ONLY_APP_QUARANTINED_NO_EXIT_RECEIPT");
+        // 以上原资源实证完成后，隔离槽/OS 锁只由进程退出释放。
+        std::process::exit(0);
+    }
+    let dir = store_root();
+    let path = std::path::PathBuf::from(dir.path().to_string_lossy().replace('/', "\\"));
+    use std::os::windows::process::CommandExt;
+    let child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", if rejected { "tests::native_cli_run_supervisor::remote_composition::delegated::preparation::UnattendedApp_RejectedUnknownStillDrivesOriginalQuarantine_009" } else { "tests::native_cli_run_supervisor::remote_composition::delegated::preparation::UnattendedApp_UnknownJoinsWatcherAndPhysicalOwnersButNeverPublishesExit_005" }, "--nocapture", "--test-threads=1"])
+        .env(FLAG, &path).creation_flags(0x08000000)
+        .stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().unwrap();
+    struct Child(Option<std::process::Child>);
+    impl Drop for Child {
+        fn drop(&mut self) {
+            if let Some(child) = &mut self.0 {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+    }
+    let mut child = Child(Some(child));
+    let end = Instant::now() + Duration::from_secs(20);
+    while child.0.as_mut().unwrap().try_wait().unwrap().is_none() {
+        if Instant::now() >= end {
+            let mut owned = child.0.take().unwrap();
+            let _ = owned.kill();
+            let output = owned.wait_with_output().unwrap();
+            panic!(
+                "App quarantine child timeout; stdout={} stderr={}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let output = child.0.take().unwrap().wait_with_output().unwrap();
+    println!("{}", String::from_utf8_lossy(&output.stdout));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout)
+        .contains("TEST_ONLY_APP_QUARANTINED_NO_EXIT_RECEIPT"));
+    let backend = WindowsUnattendedBackend::open_existing(&path).unwrap();
+    let custody = backend.claim_owner_custody().unwrap();
+    drop(custody);
+    let reopened =
+        crate::remote_unattended_store::service::SingleRunService::new(backend, SingleRunSealer)
+            .unwrap();
+    assert!(!reopened.is_published());
+    drop(reopened);
+    assert!(
+        crate::remote_unattended_store::service::test_file_revoked_at(
+            WindowsUnattendedBackend::open_existing(&path).unwrap(),
+            SingleRunSealer,
+            3
+        )
+    );
+}
+
+#[test]
+fn UnattendedApp_WrapperCoreClosesBeforeLegacyControllerLock_006() {
+    use crate::remote_unattended_store::service::controller::SingleRunController;
+    let (f, mut cleanup) = setup();
+    let admission = admit(&f);
+    let pair_dir = store_root();
+    let pairing = synthetic_file_store(pair_dir.path()).unwrap();
+    let (approval, mut consent) = final_consent(&pairing, &admission);
+    let keys = crate::native_crypto::single_run_test_keys(consent.take_supplier().unwrap());
+    let durable_dir = store_root();
+    let mut owner = service(durable_dir.path());
+    owner
+        .start(
+            consent,
+            keys.custody,
+            keys.ready,
+            keys.signers,
+            admission,
+            &pairing,
+        )
+        .unwrap();
+    let controller = SingleRunController::from_started(owner).unwrap();
+    let close = controller.close_handle();
+    let host = Arc::new(RemoteHostService::default());
+    host.unattended.install(controller).unwrap();
+    let legacy = Arc::new(crate::remote_host_controller::RemoteHostController::default());
+    let (held_tx, held_rx) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel();
+    let held_legacy = legacy.clone();
+    let lock = std::thread::spawn(move || {
+        held_legacy.test_hold_state(|| {
+            held_tx.send(()).unwrap();
+            released.recv_timeout(Duration::from_secs(5)).unwrap();
+        })
+    });
+    held_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (returned_tx, returned_rx) = std::sync::mpsc::channel();
+    let closing_host = host.clone();
+    let closing = std::thread::spawn(move || {
+        entered_tx.send(()).unwrap();
+        crate::remote_host::begin_app_shutdown(&closing_host, &legacy);
+        returned_tx.send(()).unwrap();
+    });
+    entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    let end = Instant::now() + Duration::from_secs(1);
+    while !close.test_closed() && Instant::now() < end {
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let closed_while_legacy_held = close.test_closed();
+    let wrapper_still_waiting = returned_rx.try_recv().is_err();
+    release.send(()).unwrap();
+    lock.join().unwrap();
+    closing.join().unwrap();
+    close.request_close();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let joined = runtime.block_on(async {
+        tokio::time::timeout(Duration::from_secs(5), host.unattended.wait())
+            .await
+            .unwrap()
+    });
+    drop(approval);
+    let cleaned = cleanup.close();
+    assert!(closed_while_legacy_held && wrapper_still_waiting && joined && cleaned);
+}
+
+#[test]
+fn UnattendedApp_RejectedStartedControllerDurablyClosesWithoutReplacingSlot_007() {
+    use crate::remote_unattended_store::service::controller::SingleRunController;
+    use crate::version_history::windows::unattended_store::WindowsUnattendedBackend;
+    let (f, mut cleanup) = setup();
+    let admission = admit(&f);
+    let pair_dir = store_root();
+    let pairing = synthetic_file_store(pair_dir.path()).unwrap();
+    let (approval, mut consent) = final_consent(&pairing, &admission);
+    let keys = crate::native_crypto::single_run_test_keys(consent.take_supplier().unwrap());
+    let durable_dir = store_root();
+    let mut owner = service(durable_dir.path());
+    owner
+        .start(
+            consent,
+            keys.custody,
+            keys.ready,
+            keys.signers,
+            admission,
+            &pairing,
+        )
+        .unwrap();
+    let controller = SingleRunController::from_started(owner).unwrap();
+    let close = controller.close_handle();
+    let host = RemoteHostService::default();
+    host.unattended.request_close();
+    let result = host.unattended.install(controller);
+    let closed = close.test_closed();
+    let observation = host.unattended.observe();
+    let path = std::path::PathBuf::from(durable_dir.path().to_string_lossy().replace('/', "\\"));
+    let revoked = crate::remote_unattended_store::service::test_file_revoked_at(
+        WindowsUnattendedBackend::open_existing(&path).unwrap(),
+        SingleRunSealer,
+        3,
+    );
+    drop(approval);
+    let cleaned = cleanup.close();
+    assert_eq!(
+        result,
+        Err(crate::remote_unattended_store::StoreError::Conflict)
+    );
+    assert!(closed && !observation.present && observation.known() && cleaned);
+    assert!(
+        revoked,
+        "rejected already-started owner left avoidable durable Enabled"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn UnattendedApp_RejectionCleanupBlocksReadyAndUnknownIsSticky_008() {
+    use crate::remote_unattended_store::service::controller::SingleRunController;
+    use crate::remote_unattended_store::{Sealer, StoreError};
+    use crate::version_history::windows::unattended_store::WindowsUnattendedBackend;
+    struct RevokeSealer {
+        calls: std::sync::atomic::AtomicUsize,
+        entered: parking_lot::Mutex<Option<std::sync::mpsc::Sender<()>>>,
+        release: parking_lot::Mutex<std::sync::mpsc::Receiver<()>>,
+    }
+    impl Sealer for RevokeSealer {
+        fn seal(&self, bytes: &[u8]) -> Result<Vec<u8>, StoreError> {
+            if self.calls.fetch_add(1, std::sync::atomic::Ordering::AcqRel) == 2 {
+                self.entered.lock().take().unwrap().send(()).unwrap();
+                self.release
+                    .lock()
+                    .recv_timeout(Duration::from_secs(5))
+                    .unwrap();
+            }
+            SingleRunSealer.seal(bytes)
+        }
+        fn unseal(&self, bytes: &[u8]) -> Result<Vec<u8>, StoreError> {
+            SingleRunSealer.unseal(bytes)
+        }
+    }
+    for unknown in [false, true] {
+        let (f, native, _guard) = unattended_app_run();
+        let admission = admit(&f);
+        let pair_dir = store_root();
+        let pairing = synthetic_file_store(pair_dir.path()).unwrap();
+        let (approval, mut consent) = final_consent(&pairing, &admission);
+        let keys = crate::native_crypto::single_run_test_keys(consent.take_supplier().unwrap());
+        let durable_dir = store_root();
+        let path =
+            std::path::PathBuf::from(durable_dir.path().to_string_lossy().replace('/', "\\"));
+        let (entered, arrived) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let sealer = RevokeSealer {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            entered: parking_lot::Mutex::new(Some(entered)),
+            release: parking_lot::Mutex::new(released),
+        };
+        let mut owner = crate::remote_unattended_store::service::SingleRunService::new(
+            WindowsUnattendedBackend::create_new(&path).unwrap(),
+            sealer,
+        )
+        .unwrap();
+        owner
+            .start(
+                consent,
+                keys.custody,
+                keys.ready,
+                keys.signers,
+                admission,
+                &pairing,
+            )
+            .unwrap();
+        let controller = SingleRunController::from_started(owner).unwrap();
+        if unknown {
+            controller.test_fail_durable_revoke();
+        }
+        let close = controller.close_handle();
+        let host = Arc::new(RemoteHostService::default());
+        host.unattended.request_close();
+        let rejecting = host.clone();
+        let worker = std::thread::spawn(move || rejecting.unattended.install(controller));
+        arrived.recv_timeout(Duration::from_secs(5)).unwrap();
+        let held = host.unattended.observe();
+        let closed = close.test_closed();
+        assert_eq!(
+            host.request_exit(50, false),
+            crate::remote_host::ExitDecision::Wait(50)
+        );
+        let (tx, mut rx) = tokio::sync::oneshot::channel();
+        host.start_exit(
+            50,
+            native,
+            Arc::new(crate::remote_client_ipc::RemoteClientService::default()),
+            move |code| {
+                let _ = tx.send(code);
+            },
+        );
+        let prevented = tokio::time::timeout(Duration::from_millis(50), host.unattended.wait())
+            .await
+            .is_err()
+            && rx.try_recv().is_err();
+        release.send(()).unwrap();
+        let result = worker.join().unwrap();
+        let joined = tokio::time::timeout(Duration::from_secs(10), host.test_join_exit_worker())
+            .await
+            .unwrap();
+        let ended = host.unattended.observe();
+        let facts = host.test_original_managed_facts(&f.request_run()).unwrap();
+        let callback = rx.try_recv().ok();
+        drop(approval);
+        assert!(
+            held.outstanding
+                && !held.known()
+                && closed
+                && prevented
+                && joined
+                && !ended.outstanding
+        );
+        assert!(facts.original_resources_retired() && facts.original_job_handle_closed);
+        if unknown {
+            assert_eq!(result, Err(StoreError::Unknown));
+            assert!(ended.failed && !ended.known() && callback.is_none());
+            assert_eq!(
+                host.request_exit(50, false),
+                crate::remote_host::ExitDecision::Prevent
+            );
+        } else {
+            assert_eq!(result, Err(StoreError::Conflict));
+            assert!(ended.known());
+            assert_eq!(callback, Some(50));
+        }
+    }
+}
+
+#[test]
+fn UnattendedApp_RejectedUnknownStillDrivesOriginalQuarantine_009() {
+    unattended_app_unknown_case(true);
+}

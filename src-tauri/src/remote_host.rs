@@ -10,6 +10,9 @@ use crate::run_supervisor::NativeRunPin;
 use activation::{ActivationOperation, ActivationReservation};
 #[path = "remote_host/delegated.rs"]
 pub(crate) mod delegated;
+#[cfg(windows)]
+#[path = "remote_host_unattended.rs"]
+pub(crate) mod unattended;
 use cc_desk_remote_host::native_host::{NativeHost, WriterRetirement};
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -24,8 +27,11 @@ pub(crate) fn request_app_exit(
     native: Arc<NativeRuntime>,
 ) -> bool {
     let service = app.state::<Arc<RemoteHostService>>().inner().clone();
-    app.state::<Arc<crate::remote_host_controller::RemoteHostController>>()
-        .begin_shutdown();
+    begin_app_shutdown(
+        &service,
+        app.state::<Arc<crate::remote_host_controller::RemoteHostController>>()
+            .inner(),
+    );
     match service.request_exit(code, false) {
         ExitDecision::Proceed => false,
         ExitDecision::Prevent => true,
@@ -36,6 +42,16 @@ pub(crate) fn request_app_exit(
             true
         }
     }
+}
+
+// Tauri 已通过原 handoff 拒绝门；先关闭委托，再进入旧 controller 的状态锁。
+pub(crate) fn begin_app_shutdown(
+    service: &RemoteHostService,
+    controller: &crate::remote_host_controller::RemoteHostController,
+) {
+    #[cfg(windows)]
+    service.unattended.request_close();
+    controller.begin_shutdown();
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -192,6 +208,8 @@ pub(crate) struct ServiceState {
     )>,
 }
 pub(crate) struct RemoteHostService {
+    #[cfg(windows)]
+    pub(crate) unattended: unattended::UnattendedCustody,
     pub(crate) state: Mutex<ServiceState>,
     pub(crate) network: Arc<crate::remote_host_network::HostNetworkCustody>,
     #[cfg(windows)]
@@ -200,6 +218,8 @@ pub(crate) struct RemoteHostService {
 impl Default for RemoteHostService {
     fn default() -> Self {
         Self {
+            #[cfg(windows)]
+            unattended: Default::default(),
             network: Arc::new(Default::default()),
             #[cfg(windows)]
             registration: Arc::new(Default::default()),
@@ -714,6 +734,8 @@ impl RemoteHostService {
         if maintenance_blocked {
             return ExitDecision::Prevent;
         }
+        #[cfg(windows)]
+        self.unattended.request_close();
         let mut state = self.state.lock();
         state.closing = true;
         // 原子失效不调用回调；同锁封闭后，晚发布 handle 仍由原槽接收。
@@ -736,6 +758,10 @@ impl RemoteHostService {
         decision
     }
     fn complete_exit(&self, code: i32) -> bool {
+        #[cfg(windows)]
+        if !self.unattended.observe().known() {
+            return false;
+        }
         let mut state = self.state.lock();
         if !state.retired
             || !Self::activation_retired(&state)
@@ -802,6 +828,7 @@ impl RemoteHostService {
                 materials_known,
                 activation_known,
                 registration_known,
+                unattended_known,
             ) = tokio::join!(
                 client.shutdown(),
                 async move {
@@ -825,6 +852,16 @@ impl RemoteHostService {
                     {
                         true
                     }
+                },
+                async {
+                    #[cfg(windows)]
+                    {
+                        original.unattended.wait().await
+                    }
+                    #[cfg(not(windows))]
+                    {
+                        true
+                    }
                 }
             );
             if client_result.is_err()
@@ -835,6 +872,7 @@ impl RemoteHostService {
                 || !materials_known
                 || !activation_known
                 || !registration_known
+                || !unattended_known
             {
                 original.mark_unknown();
                 return;
@@ -885,6 +923,8 @@ impl RemoteHostService {
             }
         }
         loop {
+            #[cfg(windows)]
+            self.unattended.advance_quarantine();
             let writer = self
                 .with_host(|host| {
                     host.map_or(WriterRetirement::Joined, NativeHost::observe_shutdown)

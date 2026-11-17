@@ -18,11 +18,20 @@ enum Publication {
 pub(crate) struct FinalControl {
     closed: AtomicBool,
     publication: Mutex<Publication>,
+    closed_notify: parking_lot::Condvar,
 }
 impl FinalControl {
     pub(crate) fn close(&self) {
         self.closed.store(true, Ordering::Release);
         *self.publication.lock() = Publication::Closed;
+        self.closed_notify.notify_all();
+    }
+    // 同一短门下检查条件并等待；不跨等待持有存储、run 或 key 锁。
+    pub(crate) fn wait_until_closed(&self, end: Instant) {
+        let mut publication = self.publication.lock();
+        while !self.closed() && Instant::now() < end {
+            self.closed_notify.wait_until(&mut publication, end);
+        }
     }
     pub(crate) fn closed(&self) -> bool {
         self.closed.load(Ordering::Acquire)
@@ -161,6 +170,7 @@ impl FinalApproval {
             control: Arc::new(FinalControl {
                 closed: AtomicBool::new(false),
                 publication: Mutex::new(Publication::Waiting),
+                closed_notify: parking_lot::Condvar::new(),
             }),
         })
     }
@@ -210,6 +220,7 @@ impl FinalApproval {
             control: Arc::new(FinalControl {
                 closed: AtomicBool::new(false),
                 publication: Mutex::new(Publication::Waiting),
+                closed_notify: parking_lot::Condvar::new(),
             }),
         })
     }

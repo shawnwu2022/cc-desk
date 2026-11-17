@@ -1321,3 +1321,112 @@ this same source in 25.94 seconds (unattended-close-strict-final.log; combined
 serial command exited zero). This is not full-suite, release, real phone,
 real-user key, or public-network validation. The pre-existing three unrelated
 browser/network fixture modifications are excluded from this stage.
+### A6d: original App custody, absolute-end close and checked watcher handoff
+
+RemoteHostService now owns a default-empty unattended custody slot. Installation
+consumes only the sealed, already-started SingleRunController; it creates no
+approval, registration, grant, network connection or UI enable path. The slot
+reserves ownership before spawning its one original standard-thread watcher.
+The watcher uses the original FinalConsent monotonic end, including time already
+spent confirming/starting/adopting. It waits on the original FinalControl
+publication mutex/condition variable and closes on that end or an explicit close
+notification. The condition loop prevents lost wakeups. No periodic refresh or
+journal observe is performed, and the existing persistent wall-floor semantics
+are not weakened. This does not solve the 4096-commit long-duration budget or
+provide a long-lived key supplier.
+
+The two lib.rs desktop close/exit handlers retain their original handoff refusal
+before request_app_exit. That admission reads the original runtime binding and
+document-state locks. Once accepted into the shared wrapper core, the unattended
+gate closes before waiting for the old RemoteHostController state lock; direct
+request_exit also closes it before its own state lock. Refused handoff exit
+requests do not automatically revoke an otherwise running delegation. The
+original App waiter now also observes the unattended owner. complete_exit has a
+final independent known-result check. Tests exercise that shared wrapper core
+with the actual legacy-controller lock held, and request_exit/start_exit with the
+real NativeRuntime managed-run factory. They are not desktop window-event or
+Tauri IPC automation.
+
+The slot keeps the original JoinHandle through observer cancellation, timeout,
+startup publication races and App shutdown. Controller ownership is retained
+outside the spawn closure, so a failed spawn performs explicit lock-external
+finish/Drop instead of losing custody. A worker panic is sticky failure; its
+single panic payload is retained (count bounded, byte size unspecified), rather than invoking an arbitrary payload
+Drop. Joining remains outstanding until the actual join and lock-external
+controller Drop have returned. Observations distinguish absence, outstanding
+work, watcher join, controller Drop return, durable result, failure and effect/key
+retirement. No-worker absence is not mislabeled as an observed successful join. The retired
+field describes the adopted slot only: with present=false it is vacuously true,
+including when a rejected owner is quarantined. Only the composite known()
+result includes outstanding rejection work and sticky rejection failure; neither
+that single field nor absence grants an App exit/retirement receipt.
+A rejected already-started controller is now explicitly closed, finished and
+Dropped outside the slot lock, rather than silently leaving avoidable Enabled
+state. The in-flight rejection cleanup is registered while the slot decision is
+locked and remains outstanding through original finish and Drop. Failure/panic
+is sticky before the counter decreases, so an empty slot cannot turn an unknown
+cleanup into Known. Durable failures keep their real error; unknown effects do
+not become a clean Conflict. Rejected Unknown also advances the original fixed
+quarantine even when no controller was adopted into the App slot. The existing
+slot is never replaced by the rejected owner. Production enable admission still
+has to reserve App ownership before creating a started controller; no such
+production enable supplier is introduced in this stage.
+Spawn failure remains a conservative failed App-exit result even when its
+synchronous close has a durable receipt; it does not wait forever or emit Ready.
+
+Unknown effects do not become successful retirement. After the watcher actually
+joins, original SingleRunService Drop moves unresolved ownership into the
+existing fixed process quarantine. The original App owned-resource observer
+advances that quarantine. Only the previously reviewed sticky-close,
+unpoisoned/nonblocking effect gate and original physical-writer Joined condition
+can release Captured references. The policy remains Unknown, the OS lifetime
+custody and process slot remain held, and no App Ready callback is issued.
+The isolated subprocess test additionally verifies original managed Job/child,
+reader/writer/wait/stop and IO-drop facts before process exit releases the
+quarantine lock. It injects a partial *result into the original policy*, not a
+real partial PTY write. This is not proof of internal ConPTY server/kernel-thread
+termination or authority to retry an unknown input.
+
+Initial App-exit RED attempts separately record a missing test type, duplicate
+shutdown-owner cleanup, and use of managed facts on the ordinary PTY fixture.
+Those are not behavioral evidence. With the existing start_managed_run factory,
+unattended-app-exit-red4.log reaches the intended failure: all original managed
+resource facts and watcher cleanup are confirmed, but request_exit leaves the
+new gate open. The corresponding exit-green log passes after the actual close
+and waiter integration.
+
+The deadline/Unknown mutation run deliberately adds five seconds to the fixed
+wait and falsifies the retirement observation. It produces exactly three passing
+and two failing cases: deadline=false while join/cleanup still succeed; and
+Unknown with an incorrectly permitted App callback despite quarantine remaining
+Unknown and the OS lock remaining Busy. The finally block restores the original
+source bytes and verifies SHA256 in unattended-app-mutation-restore.log. These
+mutations are not retained. Default-empty exit, startup failure/close-publication
+race/panic, observer cancellation, unchanged idle journal bytes, original managed
+exit, and Unknown subprocess isolation are separately exercised.
+Final same-source evidence: unattended-app-final4.log passes all nine new cases
+in 19.37 seconds, including independent adopted/rejected Unknown child processes.
+The rejection case007 has an effective earlier RED
+(unattended-app-rejected-red.log): its local close and original cleanup succeed
+but the old rejection path leaves Enabled instead of the expected Revoked rev3.
+Case008 then holds the real revoke seal stage while observing outstanding
+rejection cleanup and no App Ready; clean completion and durable Unknown are
+both tested before asserting original managed-resource facts.
+
+Final regression is Close 5, SingleRun 10, Final approval 2, Preparation 11,
+HostApproval 11, original remote_host::tests 18, the exact original managed exit
+case 1, DelegatedNative 6 and Store 29: 93 cases plus the nine new cases, 102
+distinct names. unattended-app-final-ledger.json lists the exact ten logs/names;
+subprocess occurrences of the same test are counted once. The earlier helper-name
+filter that ran zero tests is excluded; its real test
+NativeRemote_ManagedOriginalJobAndRemoteOwnersRetireTogether_002 passes in the
+final regression. Logs use unattended-app-final-regression-* with those exact
+filters (colons replaced by hyphens). Strict remote-host lib/tests Clippy passes
+on the same source in 27.12 seconds (unattended-app-strict-final3.log; the serial
+command exited zero). Narrow dead_code reasons only identify the default-off
+production install chain whose supplier is deliberately not yet connected; no
+other lint or permission check is disabled. Final code fingerprints are recorded
+in unattended-app-final-source.json. This is targeted Windows validation, not a
+full suite, release qualification, real phone/public-network test or completed
+long-duration unattended feature. The original three unrelated dirty files are
+excluded from the stage commit.

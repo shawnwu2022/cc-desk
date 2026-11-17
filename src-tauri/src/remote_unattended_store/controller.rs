@@ -10,6 +10,13 @@ impl CloseHandle {
     pub(crate) fn request_close(&self) {
         self.control.close();
     }
+    #[cfg(test)]
+    pub(crate) fn test_closed(&self) -> bool {
+        self.control.closed()
+    }
+    pub(crate) fn wait_until_closed(&self, end: std::time::Instant) {
+        self.control.wait_until_closed(end);
+    }
 }
 pub(crate) struct SingleRunController<S: Sealer> {
     close: CloseHandle,
@@ -177,5 +184,48 @@ impl<S: Sealer> SingleRunController<S> {
 impl<S: Sealer> SingleRunController<S> {
     pub(crate) fn test_fail_durable_revoke(&self) {
         self.service.lock().store.backend.test_fail_after_publish();
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ControllerEnd {
+    pub(crate) durable: Result<()>,
+    pub(crate) retired: bool,
+}
+impl<S: Sealer> SingleRunController<S> {
+    pub(crate) fn fixed_end(&self) -> std::time::Instant {
+        self.service
+            .lock()
+            .consent
+            .as_ref()
+            .expect("started controller")
+            .end()
+    }
+    // 只由接管整个 controller 的原托管线程调用；不增加 effect 或恢复出口。
+    pub(crate) fn finish_owned(&self) -> ControllerEnd {
+        self.request_close();
+        let mut service = self.service.lock();
+        let durable = service.stop();
+        loop {
+            match service.advance_retirement() {
+                Some((keys, effects))
+                    if !keys.outstanding && effects != CloseObservation::Retiring =>
+                {
+                    return ControllerEnd {
+                        durable,
+                        retired: keys.disposal_complete
+                            && !keys.unknown
+                            && effects == CloseObservation::EffectsClosed,
+                    };
+                }
+                None => {
+                    return ControllerEnd {
+                        durable,
+                        retired: false,
+                    }
+                }
+                _ => std::thread::sleep(std::time::Duration::from_millis(2)),
+            }
+        }
     }
 }

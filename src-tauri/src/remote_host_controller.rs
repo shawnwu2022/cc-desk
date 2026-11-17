@@ -717,3 +717,11 @@ impl Drop for RemoteHostController {
 #[cfg(windows)]
 #[path = "remote_registration_start.rs"]
 pub(crate) mod startup;
+
+#[cfg(test)]
+impl RemoteHostController {
+    pub(crate) fn test_hold_state(&self, held: impl FnOnce()) {
+        let _state = self.state.lock();
+        held();
+    }
+}
