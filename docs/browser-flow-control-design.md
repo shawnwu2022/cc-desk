@@ -452,3 +452,26 @@ String-only Deserialize 双端拒绝未知值及无效组合；Rust 实际 WASM 
 独立只读审查通过。非 application / mixed mode 的实际 WASM 动态拒绝仍待后续，
 不得以 schema 和原生 bind 测试冒充 Browser 端到端验证；重复 JSON 原字节键
 并非当前 JSON Value 测试的覆盖项。默认入口和云服均不变。
+## P2h：Browser 显式私有 RPC（2026-11-17）
+
+新增 BrowserNativeClientPort.snapshotPull(nonzero u64 bigint, budget) 与私有
+snapshotPull 消息；不修改 NativeClientPort 的旧必选方法或 nativeConnection 默认
+snapshot 路径。新 RPC kind5 固定 28 bytes：原 20-byte header + LE u64 request。
+Rust 在原 loop 的 seq / absolute timeout / authority 检查内解析并调用原
+NativeClient.snapshot_pull，仍由原 P1 fact 拒绝未协商；错误回到原 retire。
+
+新 JS API 唯一调用原 run(5)，仅 kind4 有 publicationReady 豁免，因此 kind5
+保留 publicationReady、single pending、序号、原 deadline/expiry 和终止检查。
+Window / Worker 私有 MessagePort 也共享原队列、序号和 limitDeadline；8-byte
+非零请求、字段数、预算先验，旧端缺方法直接关闭，不降级至旧 Snapshot。
+
+首 RED 4 项失败（API 缺失），最终新测试 9 项 + 原 LiveHandoff 6 项全绿，
+strict TS 与真实 wasm32 client strict Clippy 均通过。覆盖 publication 未就绪、
+pending、非法 u64、晚 reply、Worker 非法序号/截止/长度/预算/额外字段、旧端
+拒绝、成功后旧 kind1/2 连续序号及关闭。Window→真实 MessageChannel→Worker
+→原 adapter 完整往返通过；内存/回复由测试提供，不是实际 WASM 协议执行证明。
+独立只读审查 adapter/Rust/Bridge 无阻塞。日志 browser-pull-rpc-*。
+
+真实 WASM 网络 pull 成功、非 application / mixed mode 动态拒绝、全链内存与
+固定 1 秒 RTT/残余门禁仍待完成。原 live Host 网络入口尚未选择 pull，下一步需
+显式且默认关闭的原入口选择；不得伪造 activation 或绕过原 owner 来令测试成功。

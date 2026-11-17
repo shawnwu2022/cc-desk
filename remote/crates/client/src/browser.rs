@@ -121,6 +121,19 @@ async fn run(client: &NativeClient) -> Result<(), DataError> {
                     .exchange(&buffer[20..], Duration::from_millis(budget as u64))
                     .await
                     .map(|part| vec![part]),
+                5 => {
+                    if length != 28 {
+                        return Err(DataError::Codec);
+                    }
+                    let request = u64::from_le_bytes(buffer[20..28].try_into().unwrap());
+                    if request == 0 {
+                        return Err(DataError::Codec);
+                    }
+                    client
+                        .snapshot_pull(request, Duration::from_millis(budget as u64))
+                        .await
+                        .map(|batch| batch.parts)
+                }
                 4 => {
                     if length != 20 {
                         return Err(DataError::Codec);

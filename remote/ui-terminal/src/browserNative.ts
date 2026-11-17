@@ -1,5 +1,10 @@
 import type {NativeClientPort} from './native.ts';
 import type {Target,Stamp} from './reducer.ts';
+export type BrowserNativeClientPort=NativeClientPort&{snapshotPull(request:bigint,budgetMs:number):ReturnType<NativeClientPort['snapshot']>};
+export function snapshotPullRequest(request:bigint):Uint8Array{
+ if(typeof request!=='bigint'||request<1n||request>18446744073709551615n)throw Error('snapshot pull request');
+ const payload=new Uint8Array(8);new DataView(payload.buffer).setBigUint64(0,request,true);return payload;
+}
 export type BrowserClientDescriptor=Readonly<{target:Target;binding:string;role:'Controller'|'Observer';fence:string}>;
 /** 仅受控Worker持有此adapter；外部只拿固定NativeClientPort，不拿memory/exports。 */
 export function createBrowserNativeAdapter(memory:()=>WebAssembly.Memory|undefined,stopped:()=>boolean,wake:()=>void,stop:()=>void,retired:()=>Promise<void>,clock:()=>number,expiry:()=>number,publication?:Readonly<{prepare:(remaining:()=>Promise<number>)=>Promise<void>;settled:()=>void}>){
@@ -17,8 +22,10 @@ export function createBrowserNativeAdapter(memory:()=>WebAssembly.Memory|undefin
   const seq=++sequence,copy=payload.slice();request=new Uint8Array(20+copy.length);const header=new DataView(request.buffer);header.setUint32(0,seq,true);header.setUint32(4,kind,true);header.setUint32(8,budget,true);header.setFloat64(12,end,true);request.set(copy,20);
   const operation=new Promise<Uint8Array[]>((resolve,reject)=>{pending={seq,kind,parts:[],bytes:0,end,resolve,reject};});wake();return operation;
  }
- const port:NativeClientPort={
+ const port:BrowserNativeClientPort={
   snapshot:async(payload,budget)=>{const parts=await run(1,payload,budget);if(parts.length===0)throw Error('snapshot empty');const first=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(parts[0])) as {body:{stamp:Stamp}};return{stamp:first.body.stamp,parts};},
+  // kind5 必须走同一个 run：publicationReady、single pending、seq、原截止和关闭都不能豁免。
+  snapshotPull:async(request,budget)=>{const parts=await run(5,snapshotPullRequest(request),budget);if(parts.length===0)throw Error('snapshot empty');const first=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(parts[0])) as {body:{stamp:Stamp}};return{stamp:first.body.stamp,parts};},
   exchange:async(payload,budget)=>{const parts=await run(2,payload,budget);if(parts.length!==1)throw Error('exchange parts');return parts[0];},
   onInvalidate(listener){if(invalid){listener();return()=>{};}listeners.add(listener);return()=>listeners.delete(listener);},
   close(){invalidate();stop();return retired();},
