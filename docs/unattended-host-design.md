@@ -1251,3 +1251,73 @@ The exact final test-name ledger is unattended-single-run-final-ledger.json.
 It uses only the eleven explicit final logs above, counts the nested nocapture
 case008 name once, excludes the standalone ignored helper and verifies each
 group against its final passed count. No historical approval log is included.
+
+### A6c: internal close-first controller and separately approved pairing deletion
+
+This stage adds an internal, uniquely owning SingleRunController. Its cloneable
+CloseHandle can only close the original FinalControl; it cannot read or write a
+run, change targets, reopen, or obtain network authority. Closing is a reduction
+of authority and does not require the old document/run to remain alive or another
+Enable approval. request_close closes that gate before acquiring the service,
+effect or store locks; finish_close then attempts the original exact-CAS durable
+revoke. A closed local gate is not itself proof of persisted revocation.
+
+Pairing deletion is a separate, accurately worded native approval, not a new
+meaning silently attached to the existing Forget entry. The request is produced
+from the started controller and current pairing store. Its sealed controller
+brand, original store instance/namespace, device, current record and exact CAS
+cannot be supplied as an arbitrary mutation. The prompt includes the actual
+record and original run, generation, role and cutoff. The new action validates
+its current document/caller and original short approval lease. Its publication
+lock invokes only the matched narrow close handle, never a caller-provided close
+callback. Service/store work remains outside that short lock.
+
+After closing, the controller must successfully persist the original delegation
+revoke before applying the approved pairing tombstone. DurableRevoke and Pairing
+errors remain distinct; Unknown is not reported as successful deletion, and a
+failed first transaction does not automatically continue the second. Cancellation
+or document change while waiting for the service lock may leave the original
+delegation closed and durably revoked, but prevents the pairing tombstone. A new
+pairing revision is never overwritten by an old approved CAS. Mismatched
+controller/store approval is rejected before closing that other target.
+
+Same-root re-enablement is deliberately unsupported: fresh confirmation on an
+existing Disabled, Revoked or residual Enabled record returns Conflict without
+changing blob or journal bytes. No directory replacement, journal reset, schema
+upgrade or restart recovery is introduced. This is not yet a full user-facing
+toggle. There is still no UI/IPC/network entry, proactive expiry watcher,
+long-duration key supplier, or unified cross-process/legacy Forget notification.
+The existing external Forget route is not claimed to close current connections.
+A6b's Unknown quarantine and limited physical-retirement evidence remain unchanged.
+
+The effective lock regression RED is unattended-close-lock-red.log: holding the
+actual service lock prevented the previous close implementation from closing the
+gate. The test explicitly handshakes the close thread, releases locks and joins
+owned resources before asserting. The corrected independent close handle passes.
+The composition-first failure was an invalid test Remember-over-Active setup,
+not a failed security gate; the helper now uses the original Forget then Remember
+transitions. A later extra-unwrap compile error is likewise not behavioral RED.
+
+Five final UnattendedClose cases cover the close-lock barrier; eight independently
+cleaned composition outcomes (success, changed CAS, durable Unknown, pairing
+Unknown, No, cancel, foreign controller brand and foreign store); cancellation or
+new-document invalidation after the gate is observed closed while the service
+lock is held; same-root refusal for all three existing states; and natural run
+exit followed by pure close. The last case uses the controller's test-only service
+access to the original write path for six bytes, waits for actual child exit,
+checks the old admission rejects, then uses the original close handle to persist
+revocation. It is not evidence for a new production controller data channel.
+The final five-case log is unattended-close-final.log (5/5, 21.66 seconds).
+
+Final same-source targeted regression adds SingleRun 10, Final approval 2,
+Preparation 11, HostApproval 11, NativePairing 16, Store 29, DelegatedGate 2 and
+DelegatedNative 6: 87 regression cases plus the five new cases, 92 distinct names.
+The exact nine-log list and names are in unattended-close-final-ledger.json;
+no historical or repeated execution is counted. The eight regression logs are
+unattended-close-regression-{UnattendedSingleRun_,UnattendedFinal_,
+UnattendedPreparation_,HostApproval_,NativePairing_,UnattendedStore_,
+DelegatedGate_,DelegatedNative_}. Strict remote-host lib/tests Clippy passes on
+this same source in 25.94 seconds (unattended-close-strict-final.log; combined
+serial command exited zero). This is not full-suite, release, real phone,
+real-user key, or public-network validation. The pre-existing three unrelated
+browser/network fixture modifications are excluded from this stage.

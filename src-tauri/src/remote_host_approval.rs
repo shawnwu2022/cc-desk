@@ -1116,3 +1116,6 @@ pub(crate) use native_persistence::{
 mod native_forget;
 #[cfg(windows)]
 pub(crate) use native_forget::NativeForgetApproval;
+
+#[path = "remote_unattended_close_approval.rs"]
+pub(crate) mod unattended_close;

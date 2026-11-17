@@ -715,3 +715,15 @@ pub(crate) fn synthetic_forget(store: &TestStore) {
     )
     .unwrap();
 }
+
+// TEST_ONLY：走原公开记录事务构造确认后发生的设备变化，不产生安装证据。
+pub(crate) fn synthetic_change_record(store: &TestStore) {
+    let snapshot = store.load().unwrap();
+    let mut changed = snapshot.devices[0].record.clone().unwrap();
+    changed.epochs.policy += 1;
+    let forgotten = apply(store, Mutation::Forget { expected: snapshot.expected, device_id: changed.device_id.clone() }).unwrap();
+    apply(store, Mutation::Remember { expected: forgotten.expected, record: changed }).unwrap();
+}
+pub(crate) fn synthetic_fail_after_publish(store: &TestStore) {
+    store.backend.test_fail_after_publish();
+}

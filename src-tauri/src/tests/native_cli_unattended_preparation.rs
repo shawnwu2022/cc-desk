@@ -934,3 +934,432 @@ fn UnattendedSingleRun_CancelDuringEnableSealHitsOriginalFence_010() {
     assert_eq!(calls.load(std::sync::atomic::Ordering::Acquire), 2);
     assert!(inactive && retired && unchanged);
 }
+
+#[test]
+fn UnattendedClose_ServiceLockCannotDelayClosingGate_001() {
+    use crate::remote_unattended_store::service::controller::SingleRunController;
+    let (f, mut cleanup) = setup();
+    let admission = admit(&f);
+    let pair_dir = store_root();
+    let store = synthetic_file_store(pair_dir.path()).unwrap();
+    let (approval, mut consent) = final_consent(&store, &admission);
+    let keys = crate::native_crypto::single_run_test_keys(consent.take_supplier().unwrap());
+    let durable_dir = store_root();
+    let mut owner = service(durable_dir.path());
+    owner
+        .start(
+            consent,
+            keys.custody,
+            keys.ready,
+            keys.signers,
+            admission,
+            &store,
+        )
+        .unwrap();
+    let controller = Arc::new(SingleRunController::from_started(owner).unwrap());
+    let held = controller.test_lock_service();
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let closing = controller.clone();
+    let worker = std::thread::spawn(move || {
+        entered_tx.send(()).unwrap();
+        closing.request_close();
+        done_tx.send(()).unwrap();
+    });
+    entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    let fast = done_rx.recv_timeout(Duration::from_millis(250)).is_ok();
+    let gate_closed_while_held = !held.is_published();
+    drop(held);
+    worker.join().unwrap();
+    let closed = controller.finish_close();
+    let mut owner = Arc::try_unwrap(controller)
+        .ok()
+        .unwrap()
+        .test_into_service();
+    let rejected = owner.write_frame(&store, &f.supervisor, b"BAD").is_err();
+    retire_service(&mut owner);
+    let revoked = owner.test_durable_revoked();
+    drop(owner);
+    drop(approval);
+    let retired = cleanup.close();
+    assert!(
+        fast && gate_closed_while_held && closed.is_ok() && rejected && revoked && retired,
+        "close blocked behind service mutex: fast={fast}, gate_closed={gate_closed_while_held}"
+    );
+}
+
+#[test]
+fn UnattendedClose_NewDocumentApprovalOrdersDurableRevokeBeforeTombstone_002() {
+    use crate::{
+        remote_host_approval::unattended_close::CloseAndForgetApproval,
+        remote_native_pairing_store::tests::{
+            synthetic_change_record, synthetic_fail_after_publish,
+        },
+        remote_native_pairing_store::{RecordState, StoreError as PairError},
+        remote_unattended_store::{
+            service::controller::{CloseForgetError, SingleRunController},
+            StoreError,
+        },
+    };
+    for mode in 0..8 {
+        let (mut f, mut cleanup) = setup();
+        let admission = admit(&f);
+        let pair_dir = store_root();
+        let store = synthetic_file_store(pair_dir.path()).unwrap();
+        let (approval, mut consent) = final_consent(&store, &admission);
+        let keys = crate::native_crypto::single_run_test_keys(consent.take_supplier().unwrap());
+        let durable_dir = store_root();
+        let mut owner = service(durable_dir.path());
+        owner
+            .start(
+                consent,
+                keys.custody,
+                keys.ready,
+                keys.signers,
+                admission,
+                &store,
+            )
+            .unwrap();
+        let mut controller = SingleRunController::from_started(owner).unwrap();
+        // 新 Host 文档确认关闭已移交的委托，不要求旧 document/run admission 仍有效。
+        let url: tauri::Url = "http://tauri.localhost/".parse().unwrap();
+        let document =
+            crate::cli::document::DocumentAuthority::new(f.service.registry().clone(), url.clone())
+                .unwrap();
+        let mut resources = tauri::ResourceTable::default();
+        let doc_binding = Arc::new(document.attach(&mut resources).unwrap());
+        document.started(&url);
+        document.finished(&url);
+        f.caller = document.test_caller();
+        let request = controller.prepare_forget(&store).unwrap();
+        let deleting = CloseAndForgetApproval::test_pending(&doc_binding, &f.caller, request);
+        deleting.test_answer(mode != 4);
+        if mode == 1 {
+            synthetic_change_record(&store);
+        }
+        if mode == 2 {
+            controller.test_fail_durable_revoke();
+        }
+        if mode == 3 {
+            synthetic_fail_after_publish(&store);
+        }
+        if mode == 5 {
+            deleting.cancel();
+        }
+        if mode == 6 {
+            controller = SingleRunController::from_started(controller.test_into_service()).unwrap();
+        }
+        let before = store.load().unwrap();
+        let foreign_dir = store_root();
+        let foreign_store = synthetic_file_store(foreign_dir.path()).unwrap();
+        let result =
+            controller.close_and_forget(&deleting, if mode == 7 { &foreign_store } else { &store });
+        let published_after = controller.test_lock_service().is_published();
+        let pair_after = store.load();
+        let stop_result = controller.finish_close();
+        let mut owner = controller.test_into_service();
+        retire_service(&mut owner);
+        drop(owner);
+        drop(deleting);
+        drop(approval);
+        let retired = cleanup.close();
+        assert!(retired, "mode {mode}");
+        match mode {
+            0 => {
+                assert!(result.is_ok_and(|s| s.is_some()));
+                let after = pair_after.unwrap();
+                assert_eq!(after.expected.revision, before.expected.revision + 1);
+                assert_eq!(after.devices[0].state, RecordState::Revoked);
+                assert!(!published_after && stop_result.is_ok());
+            }
+            1 => {
+                assert_eq!(result, Err(CloseForgetError::Pairing(PairError::Conflict)));
+                assert_eq!(pair_after.unwrap(), before);
+                assert_eq!(before.devices[0].state, RecordState::Active);
+                assert!(!published_after && stop_result.is_ok());
+            }
+            2 => {
+                assert_eq!(
+                    result,
+                    Err(CloseForgetError::DurableRevoke(StoreError::Unknown))
+                );
+                assert_eq!(pair_after.unwrap(), before);
+                assert!(!published_after && stop_result == Err(StoreError::Unknown));
+            }
+            3 => {
+                assert_eq!(result, Err(CloseForgetError::Pairing(PairError::Unknown)));
+                assert_eq!(pair_after, Err(PairError::Poisoned));
+                assert!(!published_after && stop_result.is_ok());
+            }
+            6 | 7 => {
+                assert_eq!(
+                    result,
+                    Err(CloseForgetError::Pairing(PairError::Unauthorized))
+                );
+                assert_eq!(pair_after.unwrap(), before);
+                assert!(published_after && stop_result.is_ok());
+            }
+            _ => {
+                assert_eq!(result, Ok(None));
+                assert_eq!(pair_after.unwrap(), before);
+                assert!(published_after && stop_result.is_ok());
+            }
+        }
+    }
+}
+
+#[test]
+fn UnattendedClose_CancelOrDocumentChangeWhileWaitingCannotDelete_003() {
+    use crate::{
+        remote_host_approval::unattended_close::CloseAndForgetApproval,
+        remote_native_pairing_store::StoreError as PairError,
+        remote_unattended_store::service::controller::{CloseForgetError, SingleRunController},
+    };
+    for change_document in [false, true] {
+        let (mut f, mut cleanup) = setup();
+        let admission = admit(&f);
+        let pair_dir = store_root();
+        let store = Arc::new(synthetic_file_store(pair_dir.path()).unwrap());
+        let (approval, mut consent) = final_consent(&store, &admission);
+        let keys = crate::native_crypto::single_run_test_keys(consent.take_supplier().unwrap());
+        let durable_dir = store_root();
+        let mut owner = service(durable_dir.path());
+        owner
+            .start(
+                consent,
+                keys.custody,
+                keys.ready,
+                keys.signers,
+                admission,
+                &*store,
+            )
+            .unwrap();
+        let controller = Arc::new(SingleRunController::from_started(owner).unwrap());
+        let url: tauri::Url = "http://tauri.localhost/".parse().unwrap();
+        let document =
+            crate::cli::document::DocumentAuthority::new(f.service.registry().clone(), url.clone())
+                .unwrap();
+        let mut resources = tauri::ResourceTable::default();
+        let binding = Arc::new(document.attach(&mut resources).unwrap());
+        document.started(&url);
+        document.finished(&url);
+        f.caller = document.test_caller();
+        let deleting = Arc::new(CloseAndForgetApproval::test_pending(
+            &binding,
+            &f.caller,
+            controller.prepare_forget(&*store).unwrap(),
+        ));
+        deleting.test_answer(true);
+        let before = store.load().unwrap();
+        let held = controller.test_lock_service();
+        let worker_controller = controller.clone();
+        let worker_store = store.clone();
+        let worker_approval = deleting.clone();
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            entered_tx.send(()).unwrap();
+            worker_controller.close_and_forget(&worker_approval, &*worker_store)
+        });
+        entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let end = Instant::now() + Duration::from_secs(2);
+        while held.is_published() && Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        let closed_before_release = !held.is_published();
+        if change_document {
+            document.started(&url);
+        } else {
+            deleting.cancel();
+        }
+        drop(held);
+        let result = worker.join().unwrap();
+        let after = store.load();
+        let mut owner = Arc::try_unwrap(controller)
+            .ok()
+            .unwrap()
+            .test_into_service();
+        let revoked = owner.test_durable_revoked();
+        retire_service(&mut owner);
+        drop(owner);
+        drop(deleting);
+        drop(approval);
+        let retired = cleanup.close();
+        assert!(closed_before_release && revoked && retired);
+        assert_eq!(
+            result,
+            Err(CloseForgetError::Pairing(PairError::Unauthorized))
+        );
+        assert_eq!(after.unwrap(), before);
+    }
+}
+
+#[test]
+fn UnattendedClose_ExistingStatesNeverReinitializeOrResetJournal_004() {
+    use crate::{
+        remote_host_approval::unattended::final_approval::FinalApproval,
+        remote_unattended_store::{service::SingleRunService, Sealer, StoreError},
+        version_history::windows::unattended_store::WindowsUnattendedBackend,
+    };
+    struct FirstSealer {
+        cancel: Option<Arc<FinalApproval>>,
+        calls: std::sync::atomic::AtomicUsize,
+    }
+    impl Sealer for FirstSealer {
+        fn seal(&self, bytes: &[u8]) -> crate::remote_unattended_store::Result<Vec<u8>> {
+            if self.calls.fetch_add(1, std::sync::atomic::Ordering::AcqRel) == 1 {
+                if let Some(cancel) = &self.cancel {
+                    cancel.cancel();
+                }
+            }
+            SingleRunSealer.seal(bytes)
+        }
+        fn unseal(&self, bytes: &[u8]) -> crate::remote_unattended_store::Result<Vec<u8>> {
+            SingleRunSealer.unseal(bytes)
+        }
+    }
+    for mode in 0..3 {
+        let (f, mut cleanup) = setup();
+        let admission = admit(&f);
+        let pair_dir = store_root();
+        let pairing = synthetic_file_store(pair_dir.path()).unwrap();
+        let (approval, mut consent) = final_consent(&pairing, &admission);
+        let keys = crate::native_crypto::single_run_test_keys(consent.take_supplier().unwrap());
+        let durable_dir = store_root();
+        let path =
+            std::path::PathBuf::from(durable_dir.path().to_string_lossy().replace('/', "\\"));
+        let backend = WindowsUnattendedBackend::create_new(&path).unwrap();
+        let mut first = SingleRunService::new(
+            backend,
+            FirstSealer {
+                cancel: if mode == 0 {
+                    Some(approval.clone())
+                } else {
+                    None
+                },
+                calls: std::sync::atomic::AtomicUsize::new(0),
+            },
+        )
+        .unwrap();
+        let initial = first.start(
+            consent,
+            keys.custody,
+            keys.ready,
+            keys.signers,
+            admission,
+            &pairing,
+        );
+        if mode == 1 {
+            first.stop().unwrap();
+        } else {
+            first.request_close();
+        }
+        retire_service(&mut first);
+        drop(first);
+        drop(approval);
+        let blob_path = path.join("remote-unattended-v1").join("delegation.dpapi");
+        let journal_path = path.join("remote-unattended-v1").join("commit.journal");
+        let before_blob = std::fs::read(&blob_path).unwrap();
+        let before_journal = std::fs::read(&journal_path).unwrap();
+        let decoded: Value =
+            serde_json::from_slice(&SingleRunSealer.unseal(&before_blob).unwrap()).unwrap();
+        assert_eq!(
+            decoded["document"]["status"],
+            ["Disabled", "Revoked", "Enabled"][mode]
+        );
+        assert_eq!(initial.is_ok(), mode != 0);
+        // 第二次仍是同一设备/原run的新明确确认，不绕到新root或新配对文档。
+        let admission = admit(&f);
+        let snapshot = pairing.load().unwrap();
+        let candidate = pairing
+            .select_installed(&snapshot.expected, &snapshot.devices[0].device_id)
+            .unwrap();
+        let prep = UnattendedPreparation::new(
+            &pairing,
+            candidate,
+            &admission,
+            RequestedRole::Control,
+            cutoff(),
+        )
+        .unwrap();
+        let preliminary = UnattendedApproval::test_pending(prep);
+        preliminary.test_answer(true, false);
+        let prepared = preliminary.consume(&pairing, &admission).unwrap().unwrap();
+        let approval = FinalApproval::test_pending(prepared, &pairing, &admission).unwrap();
+        approval.test_answer(true);
+        let mut consent = approval.consume(&pairing, &admission).unwrap().unwrap();
+        let keys = crate::native_crypto::single_run_test_keys(consent.take_supplier().unwrap());
+        let backend = WindowsUnattendedBackend::open_existing(&path).unwrap();
+        let mut reopened = SingleRunService::new(backend, SingleRunSealer).unwrap();
+        let result = reopened.start(
+            consent,
+            keys.custody,
+            keys.ready,
+            keys.signers,
+            admission,
+            &pairing,
+        );
+        let closed = !reopened.is_published();
+        retire_service(&mut reopened);
+        drop(reopened);
+        drop(approval);
+        drop(preliminary);
+        let after_blob = std::fs::read(&blob_path).unwrap();
+        let after_journal = std::fs::read(&journal_path).unwrap();
+        let retired = cleanup.close();
+        assert_eq!(result, Err(StoreError::Conflict), "state mode {mode}");
+        assert!(closed && retired);
+        assert_eq!(before_blob, after_blob);
+        assert_eq!(before_journal, after_journal);
+    }
+}
+
+#[test]
+fn UnattendedClose_NaturalRunExitStillAllowsOriginalCloseHandle_005() {
+    use crate::remote_unattended_store::service::controller::SingleRunController;
+    let (f, mut cleanup) = setup();
+    let admission = admit(&f);
+    let legacy = admit(&f);
+    let pair_dir = store_root();
+    let pairing = synthetic_file_store(pair_dir.path()).unwrap();
+    let (approval, mut consent) = final_consent(&pairing, &admission);
+    let keys = crate::native_crypto::single_run_test_keys(consent.take_supplier().unwrap());
+    let durable_dir = store_root();
+    let mut owner = service(durable_dir.path());
+    owner
+        .start(
+            consent,
+            keys.custody,
+            keys.ready,
+            keys.signers,
+            admission,
+            &pairing,
+        )
+        .unwrap();
+    let controller = SingleRunController::from_started(owner).unwrap();
+    let close = controller.close_handle();
+    let written = controller
+        .test_lock_service()
+        .write_frame(&pairing, &f.supervisor, b"native");
+    let actual = if written.as_ref().is_ok_and(|r| r.complete) {
+        Some(report(&f))
+    } else {
+        None
+    };
+    let old_admission_rejected = legacy.scope().is_err();
+    close.request_close();
+    let stopped = controller.finish_close();
+    let mut owner = controller.test_into_service();
+    let revoked = owner.test_durable_revoked();
+    let no_effect = owner.write_frame(&pairing, &f.supervisor, b"BAD").is_err();
+    retire_service(&mut owner);
+    drop(owner);
+    drop(legacy);
+    drop(approval);
+    let retired = cleanup.close();
+    assert!(written.is_ok_and(|r| r.complete && r.confirmed_bytes == 6));
+    assert_eq!(
+        actual.unwrap()["input"],
+        json!([110, 97, 116, 105, 118, 101])
+    );
+    assert!(old_admission_rejected && stopped.is_ok() && revoked && no_effect && retired);
+}

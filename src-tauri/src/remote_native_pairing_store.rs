@@ -148,6 +148,7 @@ pub(crate) struct InstalledDeviceCandidate {
     confirmed_revision: u64,
 }
 impl InstalledDeviceCandidate {
+    pub(crate) fn target(&self) -> &StoreTarget { &self.target }
     pub(crate) fn record(&self) -> &PublicDeviceRecord {
         &self.record
     }

@@ -606,3 +606,6 @@ pub(crate) fn test_file_disabled_at<S: Sealer>(
     let current = store.read(&mut tx, &mut local).unwrap();
     current.status == Status::Disabled && current.revision == revision
 }
+
+#[path = "controller.rs"]
+pub(crate) mod controller;
