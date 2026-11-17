@@ -218,3 +218,33 @@ test('BrowserLeaseOwner_BadRenewalClosesWithoutReset_004',async()=>{
 test('BrowserLeaseOwner_TimeoutRetainsExactInputSettlement_005',async()=>{
  const {native,sent,f}=setup();const client=new TerminalClient(f.body.stamp.target,f.body.stamp.binding,5);manualLease(native,sent);client.connect(native);await client.leaseState();await client.snapshot();await client.window();await client.submit('07'.repeat(16),'1',utf8.encode('x'));native.query=()=>new Promise(()=>{});await assert.rejects(client.renewLease());assert.equal(client.phase,'NotConnected');client.connect(native);assert.equal(client.phase,'NeedsSettlement');await assert.rejects(client.window());await client.settle();assert.equal(client.phase,'Idle');
 });
+
+
+test('Reconnect_SafeIdleInvalidationKeepsExactGenerationOnly_001',async()=>{
+ const {client,native}=setup();let invalidate=()=>{};
+ native.onInvalidate=listener=>{invalidate=listener;return()=>{}};
+ client.connect(native);assert.equal((client as any).canReconnectFrom(native),false);
+ await client.snapshot();invalidate();
+ assert.equal((client as any).canReconnectFrom(native),true);
+ assert.equal((client as any).canReconnectFrom(setup().native),false);
+ client.disconnect();assert.equal((client as any).canReconnectFrom(native),false);
+});
+
+test('Reconnect_UnsettledAndBusyNeverBecomeSafeAfterDisconnect_002',async()=>{
+ const {client,native}=setup();let invalidate=()=>{};native.onInvalidate=listener=>{invalidate=listener;return()=>{}};
+ client.connect(native);await client.snapshot();await client.window();await client.submit('07'.repeat(16),'1',utf8.encode('x'));
+ invalidate();assert.equal(client.phase,'NotConnected');assert.equal((client as any).canReconnectFrom(native),false);
+ const next=setup();client.connect(next.native);assert.equal(client.phase,'NeedsSettlement');client.disconnect();
+ let release!:()=>void;const busy=setup(()=>new Promise<void>(r=>{release=r}));let late=()=>{};busy.native.onInvalidate=listener=>{late=listener;return()=>{}};
+ busy.client.connect(busy.native);const work=busy.client.snapshot();late();release();await assert.rejects(work);
+ assert.equal((busy.client as any).canReconnectFrom(busy.native),false);
+});
+
+test('Reconnect_ManualCloseAndFailureCannotMintCandidateThroughSynchronousCallback_003',async()=>{
+ for(const fail of [false,true]){
+  const {client,native}=setup();let invalidate=()=>{};native.onInvalidate=listener=>{invalidate=listener;return()=>{}};native.close=()=>invalidate();
+  client.connect(native);
+  if(fail){native.snapshot=async()=>{throw Error('protocol')};await assert.rejects(client.snapshot());}else client.disconnect();
+  assert.equal((client as any).canReconnectFrom(native),false);
+ }
+});

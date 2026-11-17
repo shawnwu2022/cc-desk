@@ -1,9 +1,10 @@
 import type {TerminalConnectionSource} from './connectionSource.ts';
 import {browserConnectionSource} from './browserSource.ts';
 import type {ApprovedBrowserInputs} from './browserEntry.ts';
+import {browserReconnectSession,type BrowserRetryPolicy} from './browserReconnect.ts';
 /** One original operator module/read/source per page. No serialized key material. */
-export function controlledBrowserProfileSource():TerminalConnectionSource{
- let original:Promise<TerminalConnectionSource|undefined>|undefined,opening=false;
+function controlledProfile<T>(build:(inputs:ApprovedBrowserInputs)=>T){
+ let original:Promise<T|undefined>|undefined,opening=false;
  return Object.freeze({async open(signal:AbortSignal,setupDeadline=performance.timeOrigin+performance.now()+10000){
   if(opening||signal.aborted)throw Error('browser profile source unavailable');opening=true;
   try{
@@ -28,14 +29,29 @@ export function controlledBrowserProfileSource():TerminalConnectionSource{
      const inputs:ApprovedBrowserInputs|undefined=await module.readApprovedBrowserInputs(controller.signal);
      try{
       if(controller.signal.aborted||now()>=setupDeadline||!trusted()||document!==page||location.origin!==origin)throw Error('browser profile source cancelled');
-      return inputs===undefined?undefined:browserConnectionSource(inputs);
+      return inputs===undefined?undefined:build(inputs);
      }catch{await inputs?.enrollment?.retire?.();throw Error('browser profile source cancelled');}
     }).finally(()=>{clearTimeout(timer);signal.removeEventListener('abort',abort);page.removeEventListener('visibilitychange',visible);page.removeEventListener('freeze',abort);globalThis.removeEventListener('pagehide',abort);});void original.catch(()=>{});
    }
    const source=await original;
    // 原 source 负责 admission 前取消/过期时退休已取得的 store session。
-   if(source)return await source.open(signal,setupDeadline);
+   if(source)return source;
    if(signal.aborted||now()>=setupDeadline)throw Error('browser profile source cancelled');return undefined;
   }finally{opening=false;}
  }});
+}
+
+
+/** 旧入口仍只持一个原单会话 source，不自动升级批准或重试。 */
+export function controlledBrowserProfileSource():TerminalConnectionSource{
+ const reader=controlledProfile(browserConnectionSource);let opening=false;
+ return Object.freeze({async open(signal:AbortSignal,setupDeadline=performance.timeOrigin+performance.now()+10000){
+  if(opening)throw Error('browser profile source unavailable');opening=true;
+  try{const source=await reader.open(signal,setupDeadline);return source?await source.open(signal,setupDeadline):undefined;}finally{opening=false;}
+ }});
+}
+
+/** 受控读取完成后才冻结本地重试预算；原读取另有不可延长的 setup 截止。 */
+export function controlledBrowserReconnectSession(policy:BrowserRetryPolicy,signal:AbortSignal,setupDeadline=performance.timeOrigin+performance.now()+10000){
+ return controlledProfile(inputs=>browserReconnectSession(inputs,policy,signal)).open(signal,setupDeadline);
 }

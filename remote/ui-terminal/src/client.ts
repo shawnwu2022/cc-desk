@@ -41,22 +41,39 @@ export class TerminalClient {
   #unlisten:(()=>void)|undefined;
   #operation:LogicalOperation|undefined;
   #auto:AutoRenewal|undefined;
+  #reconnect: {native:NativeConnection;epoch:number}|undefined;
   constructor(target:Target,binding:string,budgetMs=1000){if(!Number.isInteger(budgetMs)||budgetMs<1||budgetMs>1000)throw Error('invalid deadline');this.#budget=budgetMs;this.#receiver=new ProjectionReceiver(target,binding);this.#binding=binding;}
   get autoRenewalState():AutoRenewalState{return this.#auto?.state??'Disabled';}
   get phase():Phase{return this.#phase;}
+  // 仅观察原闲置失效代；调用方仍必须收齐该代完整 retirement。
+  canReconnectFrom(native:NativeConnection):boolean {
+    return this.#reconnect?.native===native&&this.#reconnect.epoch===this.#epoch&&
+      !this.#native&&this.#phase==='NotConnected'&&!this.#pending&&!this.#operation&&
+      (!this.#auto||this.#auto.state==='Stopped');
+  }
   get frame(){return this.#receiver.frame;}
   render(document:Parameters<typeof render>[0],palette?:readonly string[]){const frame=this.frame;if(!frame)throw Error('no installed frame');return render(document,frame,palette);}
   connect(native:NativeConnection,binding=this.#binding):void {
+    this.#reconnect=undefined;
     if(this.#native)throw Error('already connected');
     if(this.#auto&&this.#auto.state!=='Stopped')throw Error('automatic owner not retired');
     if(!native||!['snapshot','acknowledge','window','input','query','settle','close'].every(k=>typeof (native as any)[k]==='function'))throw Error('native adapter required');
     if(binding!==this.#binding){this.#receiver.rebind(binding);this.#binding=binding;}
     this.#auto=undefined;this.#native=native;this.#epoch++;this.#request=0n;this.#phase=this.#pending?'NeedsSettlement':'Idle';
     const epoch=this.#epoch;
-    this.#unlisten=native.onInvalidate?.(()=>{if(this.#native===native&&this.#epoch===epoch)this.disconnect();});
+    this.#unlisten=native.onInvalidate?.(()=>{
+      if(this.#native!==native||this.#epoch!==epoch)return;
+      const safe=['Idle','Synced','Ready'].includes(this.#phase)&&!this.#pending&&!this.#operation&&
+        (!this.#auto||this.#auto.state==='Waiting'||this.#auto.state==='Stopped');
+      this.#reconnect=safe?{native,epoch:epoch+1}:undefined;
+      this.#disconnectOwner(true);
+    });
   }
   disconnect():void {
-    const auto=this.#auto;if(auto&&auto.epoch===this.#epoch){this.#requestStop(auto);return;}this.#disconnectNow();
+    this.#reconnect=undefined;this.#disconnectOwner(false);
+  }
+  #disconnectOwner(preserveCandidate:boolean):void {
+    const auto=this.#auto;if(auto&&auto.epoch===this.#epoch){this.#requestStop(auto,preserveCandidate);return;}this.#disconnectNow();
   }
   #disconnectNow():void {
     const unlisten=this.#unlisten;this.#unlisten=undefined;const native=this.#native;
@@ -111,7 +128,8 @@ export class TerminalClient {
   stopAutoRenewal():Promise<void> {
     const auto=this.#auto;if(!auto)return Promise.reject(Error('automatic owner not started'));this.#requestStop(auto);return auto.retirement!;
   }
-  #requestStop(auto:AutoRenewal):void {
+  #requestStop(auto:AutoRenewal,preserveCandidate=false):void {
+    if(!preserveCandidate)this.#reconnect=undefined;
     if(auto.retirement)return;
     // 停止栅栏与退休 Promise 必须早于外部 close，防止同步失效通知重入。
     const retired=completion();auto.retirement=retired.promise;void retired.promise.catch(()=>{});auto.state='Stopping';

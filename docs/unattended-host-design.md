@@ -2278,3 +2278,84 @@ Native strict 32.47 秒，security experimental strict 3.07 秒均退出 0。
 五份源码指纹为 reconnect-tls-final-source.json；生产 manifest 65 个源文件及所有
 input/file SHA 全部匹配，六个必需导出存在且无 TEST_ONLY。只提交六文件清单，
 原三份 dirty 文件 SHA 不变，生成物与审计日志不纳提交。
+
+
+## A6q — explicit bounded Browser retry (local candidate)
+
+The default Browser source and Host UI remain unchanged. The new controlled
+reconnect entry reads the original operator module and approved provider once,
+then retains that same enrollment as the parent of per-generation resource leases.
+Only explicitly approved `rendezvous-v1`, Live and SnapshotPull configuration is
+eligible. Legacy configuration is rejected before any socket/Worker is created;
+there is no implicit profile upgrade or fallback. Local retry policy is not Host
+consent: the existing explicit ReconnectSession and its fixed deadline remain
+mandatory on every independently authenticated Host generation.
+
+The local monotonic budget is at most 60 seconds, fixed when the controlled read
+creates the session. The initial controlled read retains its separate bounded
+setup deadline. At most three replacement attempts use 250/500/1000 ms delays;
+the attempt is charged before waiting and is never refunded. A failed new setup
+ends this parent rather than repeatedly invoking authentication. No Host lifetime
+is inferred or displayed from the local budget.
+
+One original TerminalClient is retained. Only its exact generation's external
+invalidation can nominate an idle/settled reconnect candidate. Manual close and
+internal failures clear this candidate before invalidation callbacks can run.
+Pending input, an active operation, uncertain renewal, or an unsettled receipt
+precludes retry. A candidate is not a retirement receipt: the original connection
+and per-generation enrollment must finish their original drains, followed by a
+fresh check of the parent, candidate, fixed target and role. TLS binding changes
+with the new authentication. Input is never replayed or cleared to permit retry.
+Cancellation closes the parent first, cancels timers, and retains late opens until
+the original resources are drained. A failed drain remains Unknown.
+
+The first autonomous legacy experiment failed: a new Phone was admitted while the
+old Host still occupied the static route; the new ClientHello caused the old TLS
+owner to report Codec. `browser-retry-causal-real.log` preserves registration
+order and length-only send observations. This is not solved by increasing backoff
+or accepting Codec. The test had used the older Relay checkout, not a missing new
+protocol implementation. The existing clean `feat/rendezvous-v1` worktree at
+`6382ffe1fbde46ff9bb5586fb25d7c92e5617f2d` already provides mutually requested,
+bounded JOIN/READY and closes the original pair on disconnect. It was built in an
+isolated target and reused without Relay source changes, merge or deployment.
+Its original 55 tests passed. Independent review confirmed single-key registration,
+unique guard ownership, registry locking and distinct per-connection queues prevent
+old Drop or queued data from migrating into the new pair. Existing in-flight writes
+on the old socket may persist for their bounded write interval; this is not zero
+in-flight delivery. Old Relay negotiation is rejected, never silently downgraded.
+
+The first rendezvous test exposed a fixture-only circular wait: its initial GO
+waited for Host Ready, which now requires the Browser Join. Only the new case now
+starts the original Browser child after final approval and App reservation, in
+parallel with the original first Ready observation. No budget is re-anchored.
+The second generation is driven solely by the production Browser timer, with no
+HostAccepted fixture notification. After both inputs are settled, the test explicitly
+closes the original Host parent and then drains the Browser. This avoids counting
+a legitimate third Host waiting attempt as a failure of the two-generation test.
+Without that final parent close, source closure can cause the Host to prepare a
+new generation whose bounded setup fails if no client arrives. This remains a
+product availability limit, not a promise that a tab can return at any later time.
+
+`browser-retry-parent-close-real.log` records one distinct passing real-chain case
+(the nested process harness does not double its count): one page, original operator
+reader, production Source/EntryWorker and production manifest/WASM, two real virtual
+WebAuthn assertions, two 1920-cell snapshots, two settled one-byte PTY inputs,
+exactly two opens of each original key and original Source/Worker/enrollment/socket
+and specified App/managed-run retirement facts. The final Host close is only test
+shutdown after the two generations; it does not coordinate either retry.
+The browser origin is synthetic HTTPS, with a CA-verifying Node WSS proxy and
+public fixture credentials. This does not establish browser certificate trust,
+a real phone, public-network operation, long-term unattended usability, or a
+production automatic-retry UI. The original three unrelated dirty files and all
+ignored generated artifacts remain excluded from the stage commit.
+
+Final verification on the recorded source: Node 51, Vitest 183, original short-network
+4, original reconnect 8, and the new real same-page case 1: 247 distinct CC cases.
+The reused Relay's 55 cases are separate, not included in that total. Project
+TypeScript completed with exit 0 and native strict Clippy finished in 31.24 seconds.
+The exact source manifest, nine-file stage list and log ledger are
+`browser-retry-final-source.json`, `browser-retry-stage-files.txt` and
+`browser-retry-final-ledger.json` under the local audit directory. The real case
+requires the Relay root and executable from the explicitly built clean rendezvous
+worktree above; the older default legacy fixture binary is intentionally unsuitable.
+No Relay files or generated runtime binaries are part of this CC stage.

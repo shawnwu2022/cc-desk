@@ -3080,7 +3080,7 @@ async fn unattended_short_network_case(mode: u8) {
     let scope = admission.scope().unwrap();
     record.route.address = relay.address.to_string();
     record.route.origin = relay.origin.clone();
-    record.route.relay_mode = "legacyV1".into();
+    record.route.relay_mode = if mode == 19 { "rendezvousV1" } else { "legacyV1" }.into();
     record.route.tunnel = [3; 16];
     record.route.relay_id = [1; 16];
     record.epochs.host_key = 5;
@@ -3123,8 +3123,8 @@ async fn unattended_short_network_case(mode: u8) {
         relay_scalar,
     ];
     // 浏览器工具初始化不占用原批准与首读窗口；READY 不授予任何权限。
-    let mut real_browser = if (5..=18).contains(&mode) {
-        let config = serde_json::json!({"case":if mode == 18 {"authenticated-reconnect-bad-tls"} else if mode == 17 {"authenticated-reconnect-terminal-rejected"} else if mode == 16 {"authenticated-reconnect-rst"} else if mode == 15 {"authenticated-reconnect-material-failed"} else if mode == 14 {"authenticated-reconnect-cancel"} else if mode == 13 {"authenticated-reconnect"} else if mode == 6 {"key-retirement-probe"} else if mode == 7 {"key-retirement-data"} else if mode == 8 {"authenticated-session"} else if mode == 9 {"authenticated-revoked"} else if mode == 10 {"authenticated-expired"} else if mode == 11 {"authenticated-race"} else {"short-input"},"origin":relay.origin,"scope":scope,"hostSpki":host_spki,"expires":false,"revocationPath":null}).to_string();
+    let mut real_browser = if (5..=19).contains(&mode) {
+        let config = serde_json::json!({"case":if mode == 19 {"authenticated-browser-retry"} else if mode == 18 {"authenticated-reconnect-bad-tls"} else if mode == 17 {"authenticated-reconnect-terminal-rejected"} else if mode == 16 {"authenticated-reconnect-rst"} else if mode == 15 {"authenticated-reconnect-material-failed"} else if mode == 14 {"authenticated-reconnect-cancel"} else if mode == 13 {"authenticated-reconnect"} else if mode == 6 {"key-retirement-probe"} else if mode == 7 {"key-retirement-data"} else if mode == 8 {"authenticated-session"} else if mode == 9 {"authenticated-revoked"} else if mode == 10 {"authenticated-expired"} else if mode == 11 {"authenticated-race"} else {"short-input"},"origin":relay.origin,"scope":scope,"hostSpki":host_spki,"expires":false,"revocationPath":null}).to_string();
         Some(RealBrowserChild::prepare(&config))
     } else {
         None
@@ -3193,7 +3193,7 @@ async fn unattended_short_network_case(mode: u8) {
         let first = UnattendedApproval::test_pending(preparation);
         first.test_answer(true, false);
         let prepared = first.consume(&pairing, &admission).unwrap().unwrap();
-        let approval = Arc::new(if (13..=18).contains(&mode) {
+        let approval = Arc::new(if (13..=19).contains(&mode) {
             FinalApproval::test_pending_reconnect(prepared, &pairing, &admission).unwrap()
         } else if mode >= 8 {
             FinalApproval::test_pending_session(prepared, &pairing, &admission).unwrap()
@@ -3277,9 +3277,21 @@ async fn unattended_short_network_case(mode: u8) {
             .unwrap();
         (Some(approval), Some(end), Some(control))
     };
+    // rendezvous 的 Ready 需要双方 Join；批准并托管后并发启动原 Browser，不能先等待 Host Ready。
+    let autonomous_browser = if mode == 19 {
+        let child = real_browser.take().unwrap();
+        let close = control.as_ref().unwrap().clone();
+        Some(tokio::task::spawn_blocking(move || {
+            child.go_and_wait(Some(Box::new(move || { close.close(); close.closed() })), true, true)
+        }))
+    } else {
+        None
+    };
     let accepted = tokio::time::timeout(Duration::from_secs(8), ready).await;
     let mut output = None;
-    if matches!(accepted, Ok(Ok(()))) {
+    if let Some(browser) = autonomous_browser {
+        output = Some(browser.await.unwrap());
+    } else if matches!(accepted, Ok(Ok(()))) {
         let marker = durable_dir.path().join("network-change");
         let marker = marker.to_string_lossy().to_string();
         let config = serde_json::json!({"case":"short-input","origin":relay.origin,"scope":scope,"hostSpki":host_spki,"expires":expires,"revocationPath":if revoke {Some(&marker)} else {None}}).to_string();
@@ -3287,7 +3299,7 @@ async fn unattended_short_network_case(mode: u8) {
         output = Some(
             tokio::task::spawn_blocking(move || {
                 if let Some(child) = real_browser.take() {
-                    return child.go_and_wait(key_probe, mode >= 8);
+                    return child.go_and_wait(key_probe, mode >= 8, false);
                 }
                 let mut child = std::process::Command::new("node")
                     .current_dir(
@@ -3360,11 +3372,15 @@ async fn unattended_short_network_case(mode: u8) {
         eprintln!("TEST_ONLY_BAD_TLS_ORIGINAL_REASON {actual:?}");
         actual == Some(Ok(cc_desk_remote_security::DataError::Codec))
     });
+    let browser_retry_opens = mode != 19
+        || opened
+            .iter()
+            .all(|value| value.load(std::sync::atomic::Ordering::Acquire) == 2);
     let input_exact = if succeeded {
         let remainder: &[u8] =
             if revoke || expires || mode == 6 || mode == 7 || mode == 9 || mode == 10 {
                 b"native"
-            } else if mode == 13 || mode == 16 {
+            } else if mode == 13 || mode == 16 || mode == 19 {
                 b"tive"
             } else {
                 b"ative"
@@ -3442,6 +3458,14 @@ async fn unattended_short_network_case(mode: u8) {
     let joined = tokio::time::timeout(Duration::from_secs(10), host.test_join_exit_worker()).await;
     let facts = host.test_original_managed_facts(&f.request_run());
     let relay_closed = relay.close().await;
+    if mode == 19 && relay_closed {
+        use std::io::Read;
+        let mut causal = String::new();
+        if let Some(stderr) = relay.child.stderr.take() {
+            stderr.take(8192).read_to_string(&mut causal).unwrap();
+        }
+        eprintln!("TEST_ONLY_RELAY_CAUSAL_CAPTURE {causal}");
+    }
     eprintln!("TEST_ONLY_SHORT_NETWORK accepted={accepted:?} started={started:?} known={known:?} joined={joined:?} facts={facts:?} opens={:?}",opened.iter().map(|n|n.load(std::sync::atomic::Ordering::Acquire)).collect::<Vec<_>>());
     if let Some(output) = &output {
         eprintln!(
@@ -3452,6 +3476,7 @@ async fn unattended_short_network_case(mode: u8) {
     }
     assert!(
         succeeded
+            && browser_retry_opens
             && bad_tls_classified
             && cancelled_without_new_keys
             && automatic_signing_retired
@@ -3840,9 +3865,10 @@ impl RealBrowserChild {
         mut self,
         mut probe: Option<Box<dyn FnOnce() -> bool + Send>>,
         extended: bool,
+        stop_parent: bool,
     ) -> std::process::Output {
         use std::io::Write;
-        eprintln!("TEST_ONLY_BROWSER_GO_AFTER_HOST_READY");
+        eprintln!("TEST_ONLY_BROWSER_GO_AFTER_APPROVAL");
         self.child
             .as_mut()
             .unwrap()
@@ -3861,7 +3887,9 @@ impl RealBrowserChild {
                     .stdin
                     .as_mut()
                     .unwrap()
-                    .write_all(if passed {
+                    .write_all(if passed && stop_parent {
+                        b"PARENT_CLOSED\n"
+                    } else if passed {
                         b"KEYS_RETIRED\n"
                     } else {
                         b"PROBE_FAILED\n"
@@ -4010,4 +4038,12 @@ async fn UnattendedReconnect_BadTlsCiphertextIsNotTransportRetry_009() {
         return;
     }
     unattended_short_network_case(18).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn UnattendedBrowserRetry_OriginalTimerReauthenticatesSamePage_001() {
+    if short_network_isolated("UnattendedBrowserRetry_OriginalTimerReauthenticatesSamePage_001") {
+        return;
+    }
+    unattended_short_network_case(19).await;
 }
