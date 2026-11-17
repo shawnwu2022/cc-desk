@@ -460,7 +460,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     try {
       const lists = await Promise.all(adapters.map(adapter => adapter.listSessions(projectKey, options.cli)))
       const hasClaudeRows = lists.some(rows => rows.some(row => row.cli === 'claude'))
-      const provenLegacyRoot = options.cli === 'codex' || !cliSupport.isEnabled('claude') || !hasClaudeRows ? undefined : validateLegacyClaudeRoot ? await validateLegacyClaudeRoot() : legacyClaudeRoot
+      const provenLegacyRoot = (options.cli !== undefined && options.cli !== 'claude') || !cliSupport.isEnabled('claude') || !hasClaudeRows ? undefined : validateLegacyClaudeRoot ? await validateLegacyClaudeRoot() : legacyClaudeRoot
       if (fullRefreshVersion > version || (key !== undefined && !ownsProject(key, options.cli))) return
 
       // Replace only the requested project. A full read also preserves scopes
@@ -636,7 +636,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     const id = retryId ?? createNativeId('preparing')
     const owner = {}
     const row: UnifiedSession = { id, projectKey: normalizePath(input.projectPath), projectPath: input.projectPath,
-      cli: input.cli, runtime: 'native-cli', title: input.title || (input.cli === 'claude' ? 'Claude Code' : input.cli === 'codex' ? 'Codex CLI' : 'opencode'),
+      cli: input.cli, runtime: 'native-cli', title: input.title || (input.cli === 'claude' ? 'Claude Code' : input.cli === 'codex' ? 'Codex CLI' : input.cli === 'antigravity' ? 'Antigravity CLI' : 'opencode'),
       processState: 'starting', attentionState: 'none', lastActivityAt: Date.now(), lastOpenedAt: Date.now(), archived: false, opened: false, preparationState: 'pending', resumable: false, adapterSessionId: id }
     const creation = { input: copyInput(input), row, owner, preparing: true, selectionIntentEpoch: intentEpoch }
     creations.set(id, creation)

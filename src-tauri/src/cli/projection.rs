@@ -30,7 +30,7 @@ impl SourcePartition {
         root: &Path,
         identity_epoch: WireU64,
     ) -> Result<Self, SafeError> {
-        if cli == CliKind::Shell {
+        if matches!(cli, CliKind::Shell | CliKind::Antigravity) {
             return Err(error("SOURCE_UNSUPPORTED"));
         }
         let resolved =

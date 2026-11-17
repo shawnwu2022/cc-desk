@@ -13,7 +13,7 @@ const app = useAppStore()
 const support = useCliSupportStore()
 const indexMaintenance = useSessionIndexMaintenanceStore()
 const indexStateLabels = { idle:'indexRebuildTitle',preparing:'indexRebuildState_preparing',scanning:'indexRebuildState_scanning',committing:'indexRebuildState_committing',completed:'indexRebuildState_completed',cancelled:'indexRebuildState_cancelled',failed:'indexRebuildState_failed' }
-const cliName = { claude: 'Claude Code', codex: 'Codex CLI', opencode: 'opencode' } as const
+const cliName = { claude: 'Claude Code', codex: 'Codex CLI', opencode: 'opencode', antigravity: 'Antigravity CLI' } as const
 </script>
 <template>
   <section class="settings-section" data-settings-general :aria-label="t('settingsGeneral')">
@@ -26,13 +26,13 @@ const cliName = { claude: 'Claude Code', codex: 'Codex CLI', opencode: 'opencode
     </div>
     <div class="setting-field">
       <AppSelect data-default-new-cli :model-value="app.defaultNewCli" :label="t('settingsDefaultCli')"
-        :options="[{ value: 'claude', label: 'Claude Code' }, { value: 'codex', label: 'Codex CLI' }, { value: 'opencode', label: 'opencode' }]" @update:model-value="app.setDefaultNewCli" />
+        :options="[{ value: 'claude', label: 'Claude Code' }, { value: 'codex', label: 'Codex CLI' }, { value: 'opencode', label: 'opencode' }, { value: 'antigravity', label: 'Antigravity CLI' }]" @update:model-value="app.setDefaultNewCli" />
       <p>{{ t('settingsDefaultCliHint') }}</p>
     </div>
     <div class="setting-field">
       <span class="ui-field-label">{{ t('settingsCliSupport') }}</span>
       <div class="cli-support-row" role="group" :aria-label="t('settingsCliSupport')">
-        <IconButton v-for="cli in (['claude', 'codex', 'opencode'] as const)" :key="cli" :data-cli-support="cli"
+        <IconButton v-for="cli in (['claude', 'codex', 'opencode', 'antigravity'] as const)" :key="cli" :data-cli-support="cli"
           :label="t(support.isEnabled(cli) ? 'settingsCliClickToDisable' : 'settingsCliClickToEnable', { cli: cliName[cli] })"
           :aria-pressed="support.isEnabled(cli)" class="cli-support-toggle"
           :class="{ 'cli-support-toggle--off': !support.isEnabled(cli) }"

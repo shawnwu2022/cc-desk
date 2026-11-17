@@ -244,7 +244,7 @@ impl LaunchService {
             result.state = "cancelled";
             return Ok(result);
         }
-        if profile.cli == CliKind::Shell
+        if matches!(profile.cli, CliKind::Shell | CliKind::Antigravity)
             || !matches!(
                 profile.launcher,
                 Launcher::Native

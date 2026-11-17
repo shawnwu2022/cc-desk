@@ -2632,3 +2632,20 @@ it('CodexIdentity_CapturedCmdHistoryRefresh_048', async () => {
   expect(catalog.sessions).toHaveLength(2)
   expect(catalog.sessions.filter(row => row.nativeSessionId === resumedEvent.nativeSessionId)).toHaveLength(1)
 })
+
+it.each(['new', 'resume-id'] as const)('Antigravity_RuntimeNativeOnlyNoHistory_001: %s', async kind => {
+  localStorage.setItem('cc-desk-cli-support-v1', JSON.stringify({ claude: false, codex: false, opencode: false, antigravity: true }))
+  io.profiles.mockResolvedValue({ revision: '7', profiles: [{ id: 'agy', revision: '7', cli: 'antigravity', name: 'Antigravity CLI', launcher: { kind: 'native' }, programPath: { mode: 'set', value: '/tools/agy' }, defaultArgs: { mode: 'inherit' }, skipPermissions: { mode: 'inherit' }, observer: { mode: 'set', value: false }, env: {} }] })
+  render(); await flushPromises()
+  const catalog = useUnifiedSessionsStore()
+  const input = { cli: 'antigravity' as const, projectKey: '/repo', projectPath: '/repo', launchConfigId: 'agy', launchConfigRevision: '7', registeredProjectId: 'project' }
+  const created = kind === 'new' ? await catalog.createSession(input) : await catalog.launchResume({ ...input, action: { kind: 'resume-id', nativeSessionId: 'user-supplied-id' } })
+  const tab = useNativeTabsStore().tab(created.adapterSessionId)!
+  expect(tab.cli).toBe('antigravity')
+  expect(tab.action).toEqual(kind === 'new' ? { kind: 'new' } : { kind: 'resume-id', nativeSessionId: 'user-supplied-id' })
+  expect(io.prepare).not.toHaveBeenCalled()
+  expect(io.scope).not.toHaveBeenCalled()
+  expect(io.read).not.toHaveBeenCalled()
+  expect(io.ptySpawn).not.toHaveBeenCalled()
+  expect(io.ptyInput).not.toHaveBeenCalled()
+})

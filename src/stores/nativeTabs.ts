@@ -246,7 +246,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
   }
 
   function create(input: NativeTabCreate): NativeCliTab {
-    if (input.cli !== 'claude' && input.cli !== 'codex' && input.cli !== 'opencode') {
+    if (input.cli !== 'claude' && input.cli !== 'codex' && input.cli !== 'opencode' && input.cli !== 'antigravity') {
       throw new Error('NATIVE_CLI_REQUIRED')
     }
     const tabId = input.preparedIdentity?.tabId ?? id('tab')
@@ -269,7 +269,7 @@ export const useNativeTabsStore = defineStore('native-cli-tabs', () => {
       status: 'stopped',
       errorCode: null,
       launchRevision: null,
-      title: input.title?.trim() || (input.cli === 'claude' ? 'Claude Code' : input.cli === 'codex' ? 'Codex CLI' : 'opencode'),
+      title: input.title?.trim() || (input.cli === 'claude' ? 'Claude Code' : input.cli === 'codex' ? 'Codex CLI' : input.cli === 'antigravity' ? 'Antigravity CLI' : 'opencode'),
       createdAt: Date.now(),
       lastActivityAt: Date.now(),
       attentionState: 'none',

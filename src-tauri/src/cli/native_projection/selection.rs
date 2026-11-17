@@ -14,7 +14,7 @@ where
     I: IntoIterator<Item = A>,
     A: AsRef<OsStr>,
 {
-    if cli == CliKind::Shell
+    if matches!(cli, CliKind::Shell | CliKind::Antigravity)
         || !matches!(
             launcher,
             Launcher::Native
@@ -113,7 +113,7 @@ pub(crate) fn locations(cli: CliKind, env: &EnvMap) -> ReadResult<Locations> {
         CliKind::Codex => ("CODEX_HOME", ".codex"),
         // opencode 数据根由 XDG 决定，覆盖键就是 XDG_DATA_HOME 本身。
         CliKind::Opencode => return opencode_locations(env),
-        CliKind::Shell => return Err("SCOPE_UNKNOWN"),
+        CliKind::Shell | CliKind::Antigravity => return Err("SCOPE_UNKNOWN"),
     };
     let explicit = lookup(env, OsStr::new(key));
     let result = if let Some(root) = explicit {

@@ -430,7 +430,7 @@ impl ScopeRegistry {
         if matches!(source.target, ScopeTarget::Run { .. }) {
             return Err(safe("SESSION_IDENTITY_UNKNOWN"));
         }
-        if source.cli == CliKind::Shell {
+        if matches!(source.cli, CliKind::Shell | CliKind::Antigravity) {
             return Err(safe("NATIVE_RENAME_UNSUPPORTED"));
         }
         let g = &scope.grant;

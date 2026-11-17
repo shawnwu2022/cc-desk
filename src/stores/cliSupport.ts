@@ -16,10 +16,11 @@ function readSupport(): CliSupport {
     if (value && typeof value === 'object' && !Array.isArray(value)) {
       return { claude: typeof value.claude === 'boolean' ? value.claude : true,
         codex: typeof value.codex === 'boolean' ? value.codex : false,
-        opencode: typeof value.opencode === 'boolean' ? value.opencode : false }
+        opencode: typeof value.opencode === 'boolean' ? value.opencode : false,
+        antigravity: typeof value.antigravity === 'boolean' ? value.antigravity : false }
     }
   } catch { /* Optional UI preference storage must never block startup. */ }
-  return { claude: true, codex: false, opencode: false }
+  return { claude: true, codex: false, opencode: false, antigravity: false }
 }
 
 export const useCliSupportStore = defineStore('cli-support', () => {
@@ -34,7 +35,7 @@ export const useCliSupportStore = defineStore('cli-support', () => {
   /** 关闭的默认 CLI 回落到仍启用的 CLI；全部关闭时保持原值（入口已全部隐藏）。 */
   function fallbackDefault(preferred: UnifiedCliKind): UnifiedCliKind {
     if (support.value[preferred]) return preferred
-    const rest = (['claude', 'codex', 'opencode'] as const).filter(cli => cli !== preferred)
+    const rest = (['claude', 'codex', 'opencode', 'antigravity'] as const).filter(cli => cli !== preferred)
     return rest.find(cli => support.value[cli]) ?? preferred
   }
   return { support, isEnabled, setCliEnabled, fallbackDefault }

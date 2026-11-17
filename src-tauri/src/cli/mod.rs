@@ -1,3 +1,4 @@
+mod antigravity;
 pub(crate) mod availability;
 pub(crate) mod claude;
 pub(crate) mod codex;

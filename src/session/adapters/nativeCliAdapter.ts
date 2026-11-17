@@ -449,7 +449,7 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
     const wanted = projectKey == null ? null : normalizePath(projectKey)
     const hasClaudeHistory = deps.history.all().some(entry => entry.context.cli === 'claude'
       && (wanted == null || normalizePath(entry.context.projectPath) === wanted))
-    const legacyRoot = cli === 'codex' || deps.historyEnabled?.('claude') === false || !hasClaudeHistory
+    const legacyRoot = (cli !== undefined && cli !== 'claude') || deps.historyEnabled?.('claude') === false || !hasClaudeHistory
       ? undefined : await deps.legacyClaudeRootKey?.()
     if (!legacyArchiveDisplayRoot && legacyRoot) legacyArchiveDisplayRoot = legacyRoot
     const tabs = [...deps.tabs.tabs.values()].filter(tab => (!cli || tab.cli === cli) && (wanted == null || normalizePath(tab.projectPath) === wanted))
@@ -641,7 +641,7 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
     // a second close. The catalog's completed-close snapshot follows this read,
     // including a response that arrives after the runtime identity disappeared.
     try {
-      if (deps.history.load) await deps.history.load({ cli: tab.cli, profileId: tab.profileId,
+      if (tab.cli !== 'antigravity' && deps.history.load) await deps.history.load({ cli: tab.cli, profileId: tab.profileId,
         profileRevision: tab.profileRevision, projectId: tab.projectId, projectPath: tab.projectPath, force: true,
         retainOnFailure: true }).catch(() => {})
       noticeOwner.publish(closedNotice)

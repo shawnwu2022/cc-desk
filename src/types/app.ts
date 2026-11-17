@@ -69,6 +69,7 @@ export interface ProjectLaunchPreference {
   claudeLaunchConfigId?: string | null
   codexLaunchConfigId?: string | null
   opencodeLaunchConfigId?: string | null
+  antigravityLaunchConfigId?: string | null
 }
 
 export interface ProjectsState {

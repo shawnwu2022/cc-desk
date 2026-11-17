@@ -16,6 +16,7 @@ const position = ref({ left: '8px', top: '8px' })
 const items = computed(() => [
   support.isEnabled('claude') ? { id: 'claude', label: props.availability.claude === 'unavailable' ? t('newSessionToolUnavailable', { cli: 'Claude Code' }) : 'Claude Code', disabled: props.availability.claude === 'unavailable' } : null,
   support.isEnabled('codex') ? { id: 'codex', label: props.availability.codex === 'unavailable' ? t('newSessionToolUnavailable', { cli: 'Codex CLI' }) : 'Codex CLI', disabled: props.availability.codex === 'unavailable' } : null,
+  support.isEnabled('antigravity') ? { id: 'antigravity', label: props.availability.antigravity === 'unavailable' ? t('newSessionToolUnavailable', { cli: 'Antigravity CLI' }) : 'Antigravity CLI', disabled: props.availability.antigravity === 'unavailable' } : null,
   support.isEnabled('opencode') ? { id: 'opencode', label: props.availability.opencode === 'unavailable' ? t('newSessionToolUnavailable', { cli: 'opencode' }) : 'opencode', disabled: props.availability.opencode === 'unavailable' } : null,
 ].filter(item => item !== null).sort((left, right) => Number(right.id === app.defaultNewCli) - Number(left.id === app.defaultNewCli)).concat([
   { id: 'restore', label: t('newSessionRestore'), disabled: false }, { id: 'options', label: t('newSessionMoreOptions'), disabled: false },
@@ -37,7 +38,7 @@ onBeforeUnmount(() => window.removeEventListener('resize', place))
   <Teleport to="body">
     <AppMenu ref="menu" :open="open && active" :label="t('newSessionTitle')" :items="items" class="new-session-menu" :style="position"
       @update:open="emit('update:open', $event)" @select="emit('select', $event as NonNullable<NewSessionRequest['intent']>)">
-      <template #item="{ item }"><CliAppIcon v-if="item.id === 'claude' || item.id === 'codex' || item.id === 'opencode'" :cli="item.id" decorative /><span>{{ item.label }}</span></template>
+      <template #item="{ item }"><CliAppIcon v-if="item.id === 'claude' || item.id === 'codex' || item.id === 'opencode' || item.id === 'antigravity'" :cli="item.id" decorative /><span>{{ item.label }}</span></template>
     </AppMenu>
   </Teleport>
 </template>

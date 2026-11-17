@@ -12,6 +12,7 @@ import CliAppIcon from './CliAppIcon.vue'
 import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
 import { useCliProfilesStore } from '@/stores/cliProfiles'
 import { useWorkspaceStore } from '@/stores/workspace'
+import { useCliSupportStore } from '@/stores/cliSupport'
 import { useShellStore } from '@/stores/shell'
 import { sameProjectPath } from '@/utils/path'
 import { projectBasename } from '@/utils/displayName'
@@ -23,6 +24,7 @@ const catalog = useUnifiedSessionsStore()
 const profiles = useCliProfilesStore()
 const workspace = useWorkspaceStore()
 const shell = useShellStore()
+const support = useCliSupportStore()
 const query = ref('')
 const cli = ref('')
 const scope = ref<'current-project' | 'all'>('current-project')
@@ -48,7 +50,7 @@ const configurations = computed(() => [{ value: '', label: t('resumeChooseConfig
 const registeredProjects = computed(() => [{ value: '', label: t('resumeChooseProject') }, ...workspace.projects.map(project => ({ value: project.projectId, label: projectBasename(project.selectedPath) }))])
 // resume-picker 只有 claude/codex 提供原生列表；opencode 入口必须隐藏而非降级，
 // 否则会准备出后端必拒（UNSUPPORTED_ACTION）的 picker。
-const directToolOptions = computed(() => [{ value: 'claude', label: 'Claude Code' }, { value: 'codex', label: 'Codex CLI' }, ...(mode.value === 'resume-picker' ? [] : [{ value: 'opencode', label: 'opencode' }])])
+const directToolOptions = computed(() => [{ value: 'claude', label: 'Claude Code' }, { value: 'codex', label: 'Codex CLI' }, ...(mode.value === 'resume-picker' ? [] : [{ value: 'opencode', label: 'opencode' }, ...(support.isEnabled('antigravity') ? [{ value: 'antigravity', label: 'Antigravity CLI' }] : [])])])
 const title = computed(() => t(mode.value === 'session' ? 'resumeConfirm' : mode.value === 'resume-id' ? 'newSessionById' : mode.value === 'resume-picker' ? 'newSessionNativePicker' : 'newSessionRestore'))
 function safeMessage(failure: unknown) {
   const code = failure instanceof Error ? failure.message : failure && typeof failure === 'object' && 'code' in failure && typeof failure.code === 'string' ? failure.code : ''

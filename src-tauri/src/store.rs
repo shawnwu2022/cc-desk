@@ -1707,6 +1707,7 @@ pub struct ProjectLaunchPreference {
     pub claude_launch_config_id: Option<String>,
     pub codex_launch_config_id: Option<String>,
     pub opencode_launch_config_id: Option<String>,
+    pub antigravity_launch_config_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -1790,7 +1791,10 @@ pub(crate) fn validate_session_ui_record(value: &SessionUiRecord) -> Result<()> 
     if !matches!(value.runtime.as_str(), "legacy-claude" | "native-cli") {
         bail!("invalid session runtime");
     }
-    if !matches!(value.cli.as_str(), "claude" | "codex" | "opencode") {
+    if !matches!(
+        value.cli.as_str(),
+        "claude" | "codex" | "opencode" | "antigravity"
+    ) {
         bail!("invalid session cli");
     }
     validate_project_path_identity(&value.project_path)?;
@@ -1809,13 +1813,17 @@ pub(crate) fn validate_session_ui_record(value: &SessionUiRecord) -> Result<()> 
 }
 
 pub(crate) fn validate_project_launch_preference(value: &ProjectLaunchPreference) -> Result<()> {
-    if !matches!(value.last_cli.as_str(), "claude" | "codex" | "opencode") {
+    if !matches!(
+        value.last_cli.as_str(),
+        "claude" | "codex" | "opencode" | "antigravity"
+    ) {
         bail!("invalid launch preference cli");
     }
     for id in [
         value.claude_launch_config_id.as_deref(),
         value.codex_launch_config_id.as_deref(),
         value.opencode_launch_config_id.as_deref(),
+        value.antigravity_launch_config_id.as_deref(),
     ]
     .into_iter()
     .flatten()
