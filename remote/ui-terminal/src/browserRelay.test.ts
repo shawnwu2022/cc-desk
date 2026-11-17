@@ -33,7 +33,7 @@ for(const [name,value]of Object.entries({Text:'x',WrongTunnel:outer(new Uint8Arr
  const f=await admitted();try{f.socket.receive(value);await assert.rejects(f.transport.read(8));assert.equal(f.socket.closeCalls,1);}finally{await f.dispose();}
 });
 test('BrowserRelay_BoundedQueueAndSingleRead_003',async()=>{
- const f=await admitted();try{const first=f.transport.read(1);await assert.rejects(f.transport.read(1));f.socket.receive(outer(new Uint8Array([1])));assert.deepEqual(await first,new Uint8Array([1]));for(let i=0;i<5;i++)f.socket.receive(outer(new Uint8Array([1])));await assert.rejects(f.transport.read(1));}finally{await f.dispose();}
+ const f=await admitted();try{const first=f.transport.read(1);await assert.rejects(f.transport.read(1));f.socket.receive(outer(new Uint8Array([1])));assert.deepEqual(await first,new Uint8Array([1]));for(let i=0;i<4;i++)f.socket.receive(outer(new Uint8Array(16384)));f.socket.receive(outer(new Uint8Array([1])));await assert.rejects(f.transport.read(1));}finally{await f.dispose();}
 });
 test('BrowserRelay_CloseRetainsOriginalSignerAndSocket_004',async()=>{
  let release!:(v:Uint8Array)=>void;const socket=new Socket(),controller=new AbortController();let signal:AbortSignal|undefined;
@@ -46,3 +46,74 @@ test('BrowserRelay_BackpressureRetainsSingleWrite_005',async()=>{
 });
 test('BrowserRelay_WriteCompletesOnlyAfterOriginalBufferDrains_006',async()=>{const f=await admitted();try{const send=f.socket.send.bind(f.socket);f.socket.send=value=>{send(value);f.socket.bufferedAmount=30;};let done=false;const write=f.transport.write(new Uint8Array([8])).then(()=>{done=true;});await tick();assert.equal(done,false);f.socket.bufferedAmount=0;await write;}finally{await f.dispose();}});
 test('BrowserRelay_CloseBeforeSignerDispatchDoesNotUseKey_007',async()=>{const socket=new Socket();let calls=0;const relay=createBrowserRelay({origin:'wss://relay.invalid/route',tunnel,identity:{keyId,sign:async()=>{calls++;return new Uint8Array(64);}},setupDeadline:clock()+1000,ioBudgetMs:1000,socket});void relay.ready.catch(()=>{});socket.receive(new Uint8Array([1,0,...new Uint8Array(64)]));relay.close();socket.retire();await relay.waitClosed();assert.equal(calls,0);});
+
+async function readExactly(transport:Awaited<ReturnType<typeof admitted>>['transport'],count:number){
+ const out=new Uint8Array(count);let offset=0;
+ while(offset<count){const part=await transport.read(Math.min(16384,count-offset));assert.ok(part&&part.length>0);out.set(part,offset);offset+=part.length;}
+ return out;
+}
+test('BrowserRelay_RingManyFragmentsPreserveStream_008',async()=>{
+ const f=await admitted();try{
+  for(let i=0;i<100;i++)f.socket.receive(outer(new Uint8Array([i])));
+  assert.deepEqual(await readExactly(f.transport,100),Uint8Array.from({length:100},(_,i)=>i));
+ }finally{await f.dispose();}
+});
+test('BrowserRelay_RingWrapAndExactCapacity_009',async()=>{
+ const f=await admitted();try{
+  const first=Uint8Array.from({length:60000},(_,i)=>i%251);
+  for(let at=0;at<first.length;at+=10000)f.socket.receive(outer(first.subarray(at,at+10000)));
+  assert.deepEqual(await readExactly(f.transport,50000),first.subarray(0,50000));
+  const second=Uint8Array.from({length:55536},(_,i)=>(i+19)%251);
+  for(let at=0;at<second.length;at+=10000)f.socket.receive(outer(second.subarray(at,at+10000)));
+  assert.equal(f.socket.closeCalls,0);
+  const expected=new Uint8Array(65536);expected.set(first.subarray(50000));expected.set(second,10000);
+  assert.deepEqual(await readExactly(f.transport,65536),expected);
+ }finally{await f.dispose();}
+});
+test('BrowserRelay_RingCapacityPlusOneFailsClosed_010',async()=>{
+ const f=await admitted();try{
+  for(let i=0;i<4;i++)f.socket.receive(outer(new Uint8Array(16384).fill(i)));
+  assert.equal(f.socket.closeCalls,0);
+  f.socket.receive(outer(new Uint8Array([9])));
+  await assert.rejects(f.transport.read(1));assert.equal(f.socket.closeCalls,1);
+ }finally{await f.dispose();}
+});
+test('BrowserRelay_RingInvalidWholeMessagePublishesNoPrefix_011',async()=>{
+ for(const invalid of ['route','truncated','trailing']){
+  const f=await admitted();try{
+   const pending=f.transport.read(1);
+   const valid=outer(new Uint8Array([7]));
+   const bad=invalid==='route'?outer(new Uint8Array([7]),new Uint8Array(16).fill(8)):
+    invalid==='truncated'?valid.subarray(0,valid.length-1):new Uint8Array([...valid,8]);
+   f.socket.receive(bad);await assert.rejects(pending);assert.equal(f.socket.closeCalls,1);
+  }finally{await f.dispose();}
+ }
+});
+test('BrowserRelay_RingCloseDiscardsBufferedAndPendingReads_012',async()=>{
+ for(const buffered of [false,true]){
+  const f=await admitted();try{
+   if(buffered)for(let i=0;i<9;i++)f.socket.receive(outer(new Uint8Array([i])));
+   const pending=buffered?undefined:f.transport.read(1);
+   f.relay.close();if(pending)assert.equal(await pending,null);
+   assert.equal(await f.transport.read(1),null);
+  }finally{await f.dispose();}
+ }
+});
+test('BrowserRelay_RingInputAndReadResultsNeverAlias_013',async()=>{
+ const f=await admitted();try{
+  const frame=outer(new Uint8Array([1,2,3,4]));
+  f.socket.dispatchEvent(new MessageEvent('message',{data:frame.buffer}));
+  frame.fill(99);
+  const first=await f.transport.read(2);assert.deepEqual(first,new Uint8Array([1,2]));
+  assert.equal(first!.buffer.byteLength,2);first!.fill(88);
+  assert.deepEqual(await f.transport.read(2),new Uint8Array([3,4]));
+ }finally{await f.dispose();}
+});
+test('BrowserRelay_RingInvalidSecondSubframePublishesNoValidPrefix_014',async()=>{
+ const f=await admitted();try{
+  const pending=f.transport.read(1);
+  f.socket.receive(new Uint8Array([1,1,0,2,...outer(new Uint8Array([7])).subarray(4),
+   ...outer(new Uint8Array([9]),new Uint8Array(16).fill(8)).subarray(4)]));
+  await assert.rejects(pending);assert.equal(f.socket.closeCalls,1);
+ }finally{await f.dispose();}
+});

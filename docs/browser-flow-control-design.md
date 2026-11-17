@@ -388,3 +388,25 @@ RGB 扩大内容尝试被原 canonical 门禁拒绝 Unsupported，未放宽且�
 
 证据：snapshot-pull-budget-{exact-second,header-mutation,client-final,host-final,
 strict}.log、snapshot-pull-host-max-grid-measured.log；失败准备日志单独保留。
+## P2e：Relay 固定 ring（独立表示修复）
+
+原 createRelay 的 4-frame / 65536-byte 片数组替换为单个 65536-byte ring，不增
+byte cap。仅原 admitted 后分配；完整 WebSocket message 的长度/路由/单子帧语义/
+总余量先校验，再一次同步提交 ring。读仍只有一个 outstanding read、最多16384，
+按 TLS 字节流顺序跨旧 frame 边界返回独立副本；close 清零 ring 并释放引用。
+未知/第二子帧、截断、超限均原子拒绝，不发布合法前缀。未增加 writer 或排队 promise，
+未改变原绝对截止、live activation、撤销、heartbeat 与 retirement 条件。
+
+测试是 EventTarget Socket fixture 驱动实际 createRelay，不是实际网络 WebSocket
+或浏览器峰值验收。首 RED 证明旧4frame规则拒绝多碎片/环回/缓冲关闭情形；GREEN
+覆盖100个单字节片、环回后恰好65536、+1关闭、错误路由/截断/trailing、输入与
+输出无别名、合法首子帧+非法第二子帧不发布前缀、缓冲/待读关闭。移除bytecap的
+有效变异导致+1测试缺少应有拒绝，已还原。共享注册、DataKeepalive、Rendezvous、
+Transport 生命周期回归与严格局部 TypeScript 检查另有日志。
+
+本层逻辑驻留需同时计固定ring64KiB、当前message ArrayBuffer<=64KiB、read副本
+<=16KiB及消息/对象开销，不能仅报ring容量；当前事件的buffer由WebSocket提供，
+在handler前可能已有浏览器内部事件队列，此处无控制权。未将 JS 默认 GC 的释放
+时刻当作已证固定峰值。尚不据此启用 Browser pull。后续必须实测每批 Data plaintext
+32768+inner header8 的 TLS ciphertext/记录开销、post-handshake与前批残余、跨
+MessagePort/WASM的副本及固定1秒预算，仍可能因bytecap/RTT正确fail-closed。

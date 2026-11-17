@@ -33,13 +33,14 @@ function createRelay(options:BrowserRelayOptions,registrationEnd?:number,dataPol
  let signer:Promise<void>|undefined,write:Promise<void>|undefined,read:{maximum:number;resolve:(v:Uint8Array|null)=>void;reject:(e:Error)=>void}|undefined;
  let lastRead=now();
  let applicationWait:Promise<void>|undefined,writeKind:'heartbeat'|'application'|undefined;
- let queue:Uint8Array[]=[],queuedBytes=0,offset=0,readDeadline=cap(setupDeadline),timer:ReturnType<typeof setTimeout>|undefined,heartbeat:number|undefined;
+ // 固定字节容量消除合法碎片数量限制；不是对端流控，也不覆盖浏览器内部事件队列。
+ let ring:Uint8Array|undefined,queuedBytes=0,offset=0,readDeadline=cap(setupDeadline),timer:ReturnType<typeof setTimeout>|undefined,heartbeat:number|undefined;
  const empty=new Uint8Array(24);empty.set([1,1,0,1]);empty.set(tunnel,4);
  let resolveReady!:(v:BrowserTlsTransport)=>void,rejectReady!:(e:Error)=>void,resolveClosed!:()=>void;
  const ready=new Promise<BrowserTlsTransport>((a,b)=>{resolveReady=a;rejectReady=b;}),closed=new Promise<void>(a=>{resolveClosed=a;});void ready.catch(()=>{});
  let retired=false;const drainWaiters=new Set<()=>void>();
  function retire(){if(phase!=='closed'||!physicalClosed||signer||write||applicationWait||retired)return;retired=true;socket.removeEventListener('message',message);socket.removeEventListener('close',ended);socket.removeEventListener('error',broken);signal?.removeEventListener('abort',close);resolveClosed();}
- function stop(error?:Error){if(error)failed=true;if(phase==='closed')return;phase='closed';controller.abort();if(timer!==undefined)clearTimeout(timer);queue=[];queuedBytes=0;offset=0;rejectReady(error??Error('browser relay closed'));if(read){const original=read;read=undefined;if(failed)original.reject(error??Error('browser relay failed'));else original.resolve(null);}for(const wake of drainWaiters)wake();try{socket.close();}catch{failed=true;}retire();}
+ function stop(error?:Error){if(error)failed=true;if(phase==='closed')return;phase='closed';controller.abort();if(timer!==undefined)clearTimeout(timer);ring?.fill(0);ring=undefined;queuedBytes=0;offset=0;rejectReady(error??Error('browser relay closed'));if(read){const original=read;read=undefined;if(failed)original.reject(error??Error('browser relay failed'));else original.resolve(null);}for(const wake of drainWaiters)wake();try{socket.close();}catch{failed=true;}retire();}
  function close(){stop();}
  function broken(){stop(Error('browser relay socket'));}
  function ended(){physicalClosed=true;stop();retire();}
@@ -48,8 +49,8 @@ function createRelay(options:BrowserRelayOptions,registrationEnd?:number,dataPol
   if(heartbeat!==undefined&&phase==='data'&&current>=heartbeat){heartbeat=current+(dataPolicy?500:ioBudgetMs/3);if(!write&&!applicationWait&&socket.readyState===1&&socket.bufferedAmount===0){if(dataPolicy){void ownedWrite(empty.slice(),true).catch(()=>{});}else{socket.send(empty.slice());if(now()>=readDeadline)throw Error('registration relay deadline');}}}
  }
  function arm(){if(timer!==undefined)clearTimeout(timer);if(phase==='closed')return;const target=Math.min(readDeadline,heartbeat??Infinity);timer=setTimeout(()=>{try{if(registrationEnd!==undefined||dataPolicy)pulse();else if(now()>=readDeadline){stop(Error('browser relay deadline'));return;}arm();}catch{stop(Error('browser relay deadline'));}},Math.max(0,target-now()));}
- function admitted(){if((registrationEnd!==undefined||dataPolicy!==undefined)&&(signal?.aborted||now()>=readDeadline))throw Error('registration relay deadline');phase='data';lastRead=now();readDeadline=cap(lastRead+ioBudgetMs);if(registrationEnd!==undefined)heartbeat=now()+ioBudgetMs/3;arm();resolveReady(transport);}
- function deliver(){if(!read||!queue.length)return;const original=read;read=undefined;const first=queue[0]!,count=Math.min(original.maximum,first.length-offset),result=first.slice(offset,offset+count);offset+=count;queuedBytes-=count;if(offset===first.length){queue.shift();offset=0;}original.resolve(result);}
+ function admitted(){if((registrationEnd!==undefined||dataPolicy!==undefined)&&(signal?.aborted||now()>=readDeadline))throw Error('registration relay deadline');phase='data';ring=new Uint8Array(65536);lastRead=now();readDeadline=cap(lastRead+ioBudgetMs);if(registrationEnd!==undefined)heartbeat=now()+ioBudgetMs/3;arm();resolveReady(transport);}
+ function deliver(){if(!read||!ring||queuedBytes===0)return;const original=read;read=undefined;const count=Math.min(original.maximum,queuedBytes),result=new Uint8Array(count),first=Math.min(count,ring.length-offset);result.set(ring.subarray(offset,offset+first));if(first<count)result.set(ring.subarray(0,count-first),first);offset=(offset+count)%ring.length;queuedBytes-=count;original.resolve(result);}
  function ownedWrite(frame:Uint8Array,heartbeatWrite=false,callerEnd=Infinity):Promise<void>{const end=Math.min(readDeadline,now()+ioBudgetMs,callerEnd);
    const wait=()=>new Promise<void>(resolve=>{let poll:ReturnType<typeof setTimeout>;const wake=()=>{clearTimeout(poll);drainWaiters.delete(wake);resolve();};drainWaiters.add(wake);poll=setTimeout(wake,Math.min(5,Math.max(0,cap(end)-now())));});
    const check=()=>{if(phase!=='data'||socket.readyState!==1||now()>=cap(end))throw Error('browser relay write deadline/closed');};
@@ -85,9 +86,9 @@ function createRelay(options:BrowserRelayOptions,registrationEnd?:number,dataPol
    admitted();return;
   }
   if(phase==='joining'){if(bytes.length!==18||bytes[0]!==2||bytes[1]!==1||!tunnel.every((v,i)=>bytes[i+2]===v))throw Error('browser relay readiness');admitted();return;}
-  if(phase!=='data'||bytes.length<4||bytes[0]!==1||bytes[1]!==1)throw Error('browser relay outer header');const view=new DataView(bytes.buffer),count=view.getUint16(2);if(count>32)throw Error('browser relay outer count');let cursor=4;const frames:Uint8Array[]=[];
-  for(let i=0;i<count;i++){if(cursor+20>bytes.length)throw Error('browser relay outer length');if(!tunnel.every((v,j)=>bytes[cursor+j]===v)||frames.length!==0)throw Error('browser relay route');const end=cursor+20+view.getUint32(cursor+16);if(end>bytes.length)throw Error('browser relay payload length');frames.push(bytes.subarray(cursor+20,end));cursor=end;}
-  if(cursor!==bytes.length||queue.length+frames.filter(frame=>frame.length!==0).length>4||queuedBytes+frames.reduce((n,b)=>n+b.length,0)>65536)throw Error('browser relay incoming backpressure');if(registrationEnd!==undefined||dataPolicy)pulse();for(const frame of frames)if(frame.length){queue.push(frame.slice());queuedBytes+=frame.length;}lastRead=now();readDeadline=cap(lastRead+ioBudgetMs);arm();deliver();
+  if(phase!=='data'||bytes.length<4||bytes[0]!==1||bytes[1]!==1)throw Error('browser relay outer header');const view=new DataView(bytes.buffer),count=view.getUint16(2);if(count>32)throw Error('browser relay outer count');let cursor=4;let payload:Uint8Array|undefined;
+  for(let i=0;i<count;i++){if(cursor+20>bytes.length)throw Error('browser relay outer length');if(!tunnel.every((v,j)=>bytes[cursor+j]===v)||payload!==undefined)throw Error('browser relay route');const end=cursor+20+view.getUint32(cursor+16);if(end>bytes.length)throw Error('browser relay payload length');payload=bytes.subarray(cursor+20,end);cursor=end;}
+  if(cursor!==bytes.length||!ring||queuedBytes+(payload?.length??0)>ring.length)throw Error('browser relay incoming backpressure');if(registrationEnd!==undefined||dataPolicy)pulse();if(payload?.length){const tail=(offset+queuedBytes)%ring.length,first=Math.min(payload.length,ring.length-tail);ring.set(payload.subarray(0,first),tail);if(first<payload.length)ring.set(payload.subarray(first),0);queuedBytes+=payload.length;}lastRead=now();readDeadline=cap(lastRead+ioBudgetMs);arm();deliver();
  }catch{stop(Error('browser relay message'));}}
  socket.binaryType='arraybuffer';socket.addEventListener('message',message);socket.addEventListener('close',ended);socket.addEventListener('error',broken);signal?.addEventListener('abort',close,{once:true});arm();if(signal?.aborted||physicalClosed)close();
  const activation=dataPolicy?Object.freeze({activate(end:number){
