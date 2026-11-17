@@ -749,3 +749,68 @@ Browser 最多一个原应用 write 等正在 drain 的 heartbeat，第二并发
 - 原唯一 writer、B2 500ms 空 outer subframe、固定截止和物理 close/join 不变。消息不进入 TLS 应用队列，不启动 A，不做回声响应或期限刷新。
 
 实际验收使用 Node 合成 Window/WebAuthn + Dedicated Worker，公开固定测试密钥；新 WASM→原 browserRelay→实际本地 Relay→原 App Native Host。无 Snapshot/ACK/LeaseRenew/输入等待 4 秒超过 fixture 2 秒 IO，原总授权 10 秒截止后真正回收，最后原本机终端精确 native 字节无额外输入。这不是 Chromium/手机/公网或 A 低流量 61 秒验收。
+
+
+## Production A1: historical installation confirmation
+
+The real registration startup now retains a pending context only from its own
+successful persist_native mutation and returned snapshot. Pairing entries gain
+optional version-1 enrollment evidence (Pending or Confirmed), canonical public
+record digest and the revision at which that evidence was written. Missing
+evidence in an old schema-2 document remains Unverified. Skipping an absent field
+during serialization preserves old canonical bytes/digests; reading does not
+rewrite or upgrade them. Older readers reject the new field via their existing
+strict schema rather than silently interpreting it. This is not bidirectional
+format compatibility.
+
+Only the original authenticated registration delivery, inner ACK/EOF/shutdown,
+outer tail drain and final authority checks can produce the private completion
+marker. Startup combines it with the exact retained store object, successful
+mutation's device/digest and expected revision. The completion value cannot be
+cloned or deserialized. A separate consuming PairingStore confirmation method
+uses the original backend transaction and authorization rechecks; no cloneable
+Mutation::Confirm or caller-approved flag is introduced.
+
+Confirmation requires the exact old ExpectedStore CAS, including when an unrelated
+device changed meanwhile. It records the resulting incremented revision, not the
+old expected revision. Later historical reads allow the evidence revision to be
+older than the document revision after unrelated changes, but selection and any
+future admission must use current state. Forget clears the evidence; remembering
+a revoked device starts Pending again. Wrong digest/version/revision or a revoked
+record retaining evidence is rejected.
+
+Confirmation and the final InstalledLocked reply now share the original
+AttemptCommitGate. A cancellation that wins the gate prevents both; cancellation
+after publication is ordered after that completion. A final authority failure
+cannot be overwritten by a late successful reply. A committed historical
+Confirmed record does not become current authority if cancellation occurs later.
+An Unknown publication poisons only that store instance. Reopening may reconcile
+a completely written Confirmed record as historical data, never as a permission
+or a replay instruction; this is not a cross-process durable poison guarantee.
+
+No production unattended switch, delegation consent, reconnect owner, restore
+resolver or network authority is enabled by this stage. The new evidence is an
+installation prerequisite, not 30-day consent. Process-lifetime exclusivity,
+global status/revoke without a live run, journal revocation reserve and safe
+observation cadence remain independent gates before enabling unattended access.
+
+A1 verification: 34 distinct native tests passed (NativeEnrollment 3,
+NativePairing 16, NativeRegistrationStart 14, original fresh-run product/Forget 1).
+Actual legacy Edge/Worker/WASM/Relay scenarios passed 4/4: successful remembered
+registration now reopens Confirmed at revision 2; native save No creates no
+record; save followed by Host installation approval No reopens Pending at
+revision 1; the original non-remembered success path also passes.
+The original browser-entry transport boundary remains the A0 boundary above,
+not real-phone or rendezvous-v1 qualification.
+
+Same-source logs: unattended-enrollment-negative-final2, pairing-final,
+start-final, product-final, legacy-final, nonremember-final and strict-final.
+The last is remote-host lib/tests Clippy with -D warnings. The first genuine
+feature RED (unattended-enrollment-red) reached successful original registration
+and failed because enrollment.version was absent. Moving final reply publication
+outside the cancellation gate caused the exact barrier failure in
+unattended-enrollment-gate-red; the source was restored and recompiled before
+final GREEN runs. The old-bytes fixture's first failure was a protected-file ACL
+rejection, corrected by creating its test file through the original backend,
+not by changing ACL policy. Independent implementation review found and closed
+the final-publication race and required the second publication-fence test.

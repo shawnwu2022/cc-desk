@@ -12,6 +12,9 @@ use std::{
 #[path = "remote_registration_configuration.rs"]
 pub(crate) mod configuration;
 use configuration::FrozenRegistrationStart;
+#[path = "remote_registration_completion.rs"]
+pub(crate) mod completion;
+struct DeliveryComplete(());
 #[cfg(test)]
 #[path = "tests/native_registration_start.rs"]
 mod tests;
@@ -392,11 +395,27 @@ async fn checked<F: std::future::Future<Output = Result<(), SafeError>>>(
     })
     .await
 }
+fn publish_registration(
+    gate: &AttemptCommitGate,
+    reply: &Mutex<RegistrationReply>,
+    completed: RegistrationReply,
+    confirm: impl FnOnce() -> Result<(), SafeError>,
+    recheck: impl FnOnce() -> Result<(), SafeError>,
+) -> Result<(), SafeError> {
+    gate.commit(|| {
+        confirm()?;
+        // 历史确认和当前成功发布均在线性取消门内，不能在取消后覆盖状态。
+        recheck()?;
+        *reply.lock() = completed;
+        Ok(())
+    })
+}
+
 async fn complete_registration_delivery(
     delivery: impl std::future::Future<Output = Result<(), SafeError>>,
     tunnel: &cc_desk_remote_transport::OwnedTunnel,
     recheck: impl FnOnce() -> Result<(), SafeError>,
-) -> Result<(), SafeError> {
+) -> Result<DeliveryComplete, SafeError> {
     delivery.await?;
     // 内层 ACK/duplex shutdown 尚未证明最终 WS send 完成；原检查与取消循环仍持有此等待。
     tunnel
@@ -407,7 +426,8 @@ async fn complete_registration_delivery(
         return Err(error("REMOTE_HOST_LOCKED"));
     }
     // 已退休不等于仍获授权，尤其不能让 biased work 抢先发布取消/过期后的成功。
-    recheck()
+    recheck()?;
+    Ok(DeliveryComplete(()))
 }
 #[allow(clippy::too_many_arguments)]
 async fn run(
@@ -556,6 +576,7 @@ async fn run(
             &session.verified_binding(&binding, &caller, &admission)?,
             &admission,
         )?;
+        let mut persisted_completion = None;
         if frozen.remember() {
             let store = match &mut prompt {
                 BrowserPrompt::Native(native) => {
@@ -586,15 +607,36 @@ async fn run(
                     PersistenceStore::Test(p.store)
                 }
             };
+            let mut pending_completion = None;
             *attempt.reply.lock() = RegistrationReply::PendingNativePersistence;
             loop {
                 check()?;
                 match attempt.commit.commit(|| {
-                    session.persist_native(&binding, &caller, &admission, |m, a| store.apply(m, a))
+                    session.persist_native(&binding, &caller, &admission, |m, a| {
+                        let saved = store.apply(m, a)?;
+                        pending_completion =
+                            Some(
+                                completion::PendingInstallation::persisted(
+                                    store.target(),
+                                    m,
+                                    &saved,
+                                )
+                                .map_err(|_| {
+                                    crate::remote_native_pairing_store::StoreError::Unknown
+                                })?,
+                            );
+                        Ok(saved)
+                    })
                 }) {
                     Ok(Some((host, _))) => {
                         attempt.remembered.store(true, Ordering::Release);
                         request.0 = host;
+                        persisted_completion = Some((
+                            store,
+                            pending_completion
+                                .take()
+                                .ok_or_else(|| error("REMOTE_NATIVE_STORE_COMMIT_UNKNOWN"))?,
+                        ));
                         break;
                     }
                     Ok(None) if session.native_persistence_pending() => {}
@@ -650,7 +692,7 @@ async fn run(
             receipt: receipt.clone(),
             remembered: attempt.remembered.load(Ordering::Acquire),
         };
-        complete_registration_delivery(
+        let delivered = complete_registration_delivery(
             async {
                 installed
                     .deliver()
@@ -661,11 +703,33 @@ async fn run(
             check,
         )
         .await?;
-        *attempt.reply.lock() = RegistrationReply::InstalledLocked {
-            receipt,
-            remembered: attempt.remembered.load(Ordering::Acquire),
-        };
-        Ok(())
+        publish_registration(
+            &attempt.commit,
+            &attempt.reply,
+            RegistrationReply::InstalledLocked {
+                receipt,
+                remembered: attempt.remembered.load(Ordering::Acquire),
+            },
+            || {
+                if let Some((store, pending)) = persisted_completion {
+                    let proof = pending.complete(delivered, &check)?;
+                    store.confirm(proof).map_err(|e| {
+                        *attempt.reply.lock() = if matches!(
+                            e,
+                            crate::remote_native_pairing_store::StoreError::Unknown
+                                | crate::remote_native_pairing_store::StoreError::Poisoned
+                        ) {
+                            RegistrationReply::NativeStoreUnknown
+                        } else {
+                            RegistrationReply::NativeStoreFailed
+                        };
+                        crate::remote_pairing_product::store_error(e)
+                    })?;
+                }
+                Ok(())
+            },
+            check,
+        )
     };
     let result = {
         let work = checked(work);
@@ -735,6 +799,26 @@ enum PersistenceStore {
     Test(crate::remote_native_pairing_store::tests::TestStore),
 }
 impl PersistenceStore {
+    fn target(&self) -> crate::remote_native_pairing_store::StoreTarget {
+        match self {
+            Self::Native(store) => store.target(),
+            #[cfg(test)]
+            Self::Test(store) => store.target(),
+        }
+    }
+    fn confirm(
+        &self,
+        proof: completion::CompletedInstallation<'_>,
+    ) -> Result<
+        crate::remote_native_pairing_store::LockedSnapshot,
+        crate::remote_native_pairing_store::StoreError,
+    > {
+        match self {
+            Self::Native(store) => store.confirm_installation(proof),
+            #[cfg(test)]
+            Self::Test(store) => store.confirm_installation(proof),
+        }
+    }
     fn apply(
         &self,
         mutation: &crate::remote_native_pairing_store::Mutation,

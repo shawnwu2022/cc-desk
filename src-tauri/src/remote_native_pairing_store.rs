@@ -97,6 +97,22 @@ pub(crate) struct DeviceEntry {
     pub(crate) state: RecordState,
     /// Tombstones retain identity only.
     pub(crate) record: Option<PublicDeviceRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    enrollment: Option<EnrollmentEvidence>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct EnrollmentEvidence {
+    version: u32,
+    state: EnrollmentState,
+    revision: u64,
+    record_digest: [u8; 32],
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum EnrollmentState {
+    Pending,
+    Confirmed,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -242,7 +258,7 @@ impl<B: Backend, S: Sealer> PairingStore<B, S> {
                     domain: DOMAIN.into(),
                     store_id: store_id.clone(),
                     revision: 1,
-                    devices: vec![entry(record.clone())],
+                    devices: vec![entry(record.clone(), 1)?],
                 }
             }
             Mutation::Remember { expected, record } => {
@@ -254,9 +270,17 @@ impl<B: Backend, S: Sealer> PairingStore<B, S> {
                     .iter_mut()
                     .find(|e| e.device_id == record.device_id)
                 {
-                    Some(e) if e.state == RecordState::Revoked => *e = entry(record.clone()),
+                    Some(e) if e.state == RecordState::Revoked => {
+                        *e = entry(
+                            record.clone(),
+                            doc.revision.checked_add(1).ok_or(StoreError::Invalid)?,
+                        )?
+                    }
                     Some(_) => return Err(StoreError::Conflict),
-                    None => doc.devices.push(entry(record.clone())),
+                    None => doc.devices.push(entry(
+                        record.clone(),
+                        doc.revision.checked_add(1).ok_or(StoreError::Invalid)?,
+                    )?),
                 }
                 doc.revision = doc.revision.checked_add(1).ok_or(StoreError::Invalid)?;
                 doc
@@ -277,6 +301,7 @@ impl<B: Backend, S: Sealer> PairingStore<B, S> {
                 }
                 e.state = RecordState::Revoked;
                 e.record = None;
+                e.enrollment = None;
                 doc.revision = doc.revision.checked_add(1).ok_or(StoreError::Invalid)?;
                 doc
             }
@@ -287,6 +312,50 @@ impl<B: Backend, S: Sealer> PairingStore<B, S> {
         if let Err(error) = tx.commit(&bytes, replacing, &mut || {
             authorization.check(&self.target, &mutation)
         }) {
+            if error == StoreError::Unknown {
+                *poison = true;
+            }
+            return Err(error);
+        }
+        Ok(snapshot(doc))
+    }
+    pub(crate) fn confirm_installation(
+        &self,
+        proof: crate::remote_host_controller::startup::completion::CompletedInstallation<'_>,
+    ) -> Result<LockedSnapshot> {
+        let mut poison = self.poisoned.lock();
+        if *poison {
+            return Err(StoreError::Poisoned);
+        }
+        proof.check(&self.target)?;
+        let mut tx = self.backend.begin()?;
+        let bytes = tx.read()?.ok_or(StoreError::Missing)?;
+        let mut doc = self.decode(&bytes)?;
+        cas(&doc, proof.expected())?;
+        let revision = doc.revision.checked_add(1).ok_or(StoreError::Invalid)?;
+        let entry = doc
+            .devices
+            .iter_mut()
+            .find(|e| e.device_id == proof.device())
+            .ok_or(StoreError::Conflict)?;
+        let pending = entry.enrollment.as_ref().ok_or(StoreError::Unauthorized)?;
+        if entry.state != RecordState::Active
+            || pending.state != EnrollmentState::Pending
+            || pending.revision != proof.expected().revision
+            || pending.record_digest != proof.digest()
+        {
+            return Err(StoreError::Conflict);
+        }
+        entry.enrollment = Some(EnrollmentEvidence {
+            version: 1,
+            state: EnrollmentState::Confirmed,
+            revision,
+            record_digest: proof.digest(),
+        });
+        doc.revision = revision;
+        validate_document(&doc)?;
+        let bytes = self.encode(&doc)?;
+        if let Err(error) = tx.commit(&bytes, true, &mut || proof.check(&self.target)) {
             if error == StoreError::Unknown {
                 *poison = true;
             }
@@ -342,12 +411,24 @@ fn snapshot(doc: Document) -> LockedSnapshot {
         devices: doc.devices,
     }
 }
-fn entry(record: PublicDeviceRecord) -> DeviceEntry {
-    DeviceEntry {
+fn entry(record: PublicDeviceRecord, revision: u64) -> Result<DeviceEntry> {
+    let digest = record_digest(&record)?;
+    Ok(DeviceEntry {
         device_id: record.device_id.clone(),
         state: RecordState::Active,
         record: Some(record),
-    }
+        enrollment: Some(EnrollmentEvidence {
+            version: 1,
+            state: EnrollmentState::Pending,
+            revision,
+            record_digest: digest,
+        }),
+    })
+}
+pub(crate) fn record_digest(record: &PublicDeviceRecord) -> Result<[u8; 32]> {
+    record.validate()?;
+    let bytes = serde_json::to_vec(record).map_err(|_| StoreError::Invalid)?;
+    Ok(Sha256::digest(bytes).into())
 }
 fn cas(doc: &Document, expected: &ExpectedStore) -> Result<()> {
     if doc.store_id != expected.store_id || doc.revision != expected.revision {
@@ -393,8 +474,19 @@ fn validate_document(doc: &Document) -> Result<()> {
             return Err(StoreError::Invalid);
         }
         match (&e.state, &e.record) {
-            (RecordState::Active, Some(r)) if r.device_id == e.device_id => r.validate()?,
-            (RecordState::Revoked, None) => (),
+            (RecordState::Active, Some(r)) if r.device_id == e.device_id => {
+                r.validate()?;
+                if let Some(proof) = &e.enrollment {
+                    if proof.version != 1
+                        || proof.revision == 0
+                        || proof.revision > doc.revision
+                        || proof.record_digest != record_digest(r)?
+                    {
+                        return Err(StoreError::Invalid);
+                    }
+                }
+            }
+            (RecordState::Revoked, None) if e.enrollment.is_none() => (),
             _ => return Err(StoreError::Invalid),
         }
     }

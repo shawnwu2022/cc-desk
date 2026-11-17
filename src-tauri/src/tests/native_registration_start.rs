@@ -377,3 +377,80 @@ async fn NativeRegistrationStart_HeldTailBrokenPipeKeepsReceiptUnconfirmed_013()
     settle_failure(&mut reply, false, true);
     assert_eq!(reply, original);
 }
+
+#[test]
+#[allow(non_snake_case)]
+fn NativeRegistrationStart_ConfirmationPublicationCancelBarrier_014() {
+    use std::sync::mpsc;
+    let gate = Arc::new(AttemptCommitGate::default());
+    let reply = Arc::new(Mutex::new(RegistrationReply::DeliveryUnconfirmed {
+        receipt: "TEST_ONLY".into(),
+        remembered: true,
+    }));
+    let held = reply.lock();
+    let (entered, seen) = mpsc::channel();
+    let worker_gate = gate.clone();
+    let worker_reply = reply.clone();
+    let worker = std::thread::spawn(move || {
+        publish_registration(
+            &worker_gate,
+            &worker_reply,
+            RegistrationReply::InstalledLocked {
+                receipt: "TEST_ONLY".into(),
+                remembered: true,
+            },
+            || {
+                entered.send(()).unwrap();
+                Ok(())
+            },
+            || Ok(()),
+        )
+    });
+    seen.recv_timeout(Duration::from_secs(5)).unwrap();
+    let (started, start_seen) = mpsc::channel();
+    let (cancelled, cancel_seen) = mpsc::channel();
+    let cancelling = gate.clone();
+    let cancel = std::thread::spawn(move || {
+        started.send(()).unwrap();
+        cancelling.cancel();
+        cancelled.send(()).unwrap();
+    });
+    start_seen.recv_timeout(Duration::from_secs(5)).unwrap();
+    let cancellation_waited_for_publication = cancel_seen
+        .recv_timeout(Duration::from_millis(200))
+        .is_err();
+    drop(held);
+    assert!(worker.join().unwrap().is_ok());
+    cancel.join().unwrap();
+    assert!(
+        cancellation_waited_for_publication,
+        "cancel overtook a pending success publication"
+    );
+    assert!(gate.stopped.load(Ordering::Acquire));
+
+    let before = reply.lock().clone();
+    assert!(publish_registration(
+        &gate,
+        &reply,
+        RegistrationReply::Locked,
+        || panic!("cancelled owner must not confirm"),
+        || Ok(())
+    )
+    .is_err());
+    assert_eq!(*reply.lock(), before);
+
+    let gate = AttemptCommitGate::default();
+    let reply = Mutex::new(RegistrationReply::Locked);
+    assert!(publish_registration(
+        &gate,
+        &reply,
+        RegistrationReply::InstalledLocked {
+            receipt: "TEST_ONLY".into(),
+            remembered: false,
+        },
+        || Ok(()),
+        || Err(error("REMOTE_HOST_LOCKED"))
+    )
+    .is_err());
+    assert_eq!(*reply.lock(), RegistrationReply::Locked);
+}

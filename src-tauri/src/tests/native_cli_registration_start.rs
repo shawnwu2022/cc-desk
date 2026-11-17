@@ -285,6 +285,15 @@ async fn NativeRegistration_StartOracle_904() {
         if native_remembered {
             let loaded = stored.load().unwrap();
             assert_eq!(loaded.devices.len(), 1);
+            let expected_revision = if installed { 2 } else { 1 };
+            let enrollment = serde_json::to_value(&loaded.devices[0]).unwrap();
+            assert_eq!(enrollment["enrollment"]["version"], 1);
+            assert_eq!(
+                enrollment["enrollment"]["state"],
+                if installed { "confirmed" } else { "pending" }
+            );
+            assert_eq!(enrollment["enrollment"]["revision"], expected_revision);
+            assert_eq!(loaded.expected.revision, expected_revision);
             assert_eq!(
                 loaded.devices[0].state,
                 crate::remote_native_pairing_store::RecordState::Active

@@ -585,3 +585,80 @@ fn NativePairing_MissingLeaseNeverRecreated_022() {
     assert!(!lease.exists());
     assert!(backup.exists());
 }
+
+pub(crate) fn fail_after_publish(store: &TestStore) {
+    store.backend.test_fail_after_publish();
+}
+
+#[test]
+fn NativePairing_OldSchema2BytesRemainUnverified_023() {
+    let dir = directory();
+    let store = synthetic_file_store(dir.path()).unwrap();
+    let record = record();
+    // 精确保留扩展前 schema2 的字段次序；不能让新 codec 代造旧 envelope。
+    let doc = format!(
+        "{{\"schema\":2,\"domain\":\"{}\",\"storeId\":\"00000000-0000-4000-8000-000000000002\",\"revision\":1,\"devices\":[{{\"deviceId\":\"{}\",\"state\":\"active\",\"record\":{}}}]}}",
+        DOMAIN, record.device_id, serde_json::to_string(&record).unwrap()
+    );
+    let digest: [u8; 32] = Sha256::digest(doc.as_bytes()).into();
+    let bytes = TestSealer
+        .seal(
+            format!(
+                "{{\"domain\":\"{}\",\"document\":{},\"digest\":{}}}",
+                DOMAIN,
+                doc,
+                serde_json::to_string(&digest).unwrap()
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+    let decoded = store.decode(&bytes).unwrap();
+    assert!(decoded.devices[0].enrollment.is_none());
+    assert_eq!(store.encode(&decoded).unwrap(), bytes);
+    // 先由原 backend 创建受保护文件，再注入旧字节；不用普通新文件绕过 ACL 边界。
+    apply(&store, initial()).unwrap();
+    std::fs::write(data_path(dir.path()), &bytes).unwrap();
+    drop(store);
+    let reopened = reopen_synthetic_file_store(dir.path()).unwrap();
+    let loaded = reopened.load().unwrap();
+    assert!(loaded.devices[0].enrollment.is_none());
+    assert_eq!(std::fs::read(data_path(dir.path())).unwrap(), bytes);
+}
+#[test]
+fn NativePairing_EnrollmentStrictBoundsAndTombstones_024() {
+    let dir = directory();
+    let store = synthetic_file_store(dir.path()).unwrap();
+    apply(&store, initial()).unwrap();
+    let sealed = std::fs::read(data_path(dir.path())).unwrap();
+    let valid = store.decode(&sealed).unwrap();
+    for mode in 0..5 {
+        let mut doc = valid.clone();
+        let entry = &mut doc.devices[0];
+        let evidence = entry.enrollment.as_mut().unwrap();
+        match mode {
+            0 => evidence.version = 2,
+            1 => evidence.revision = 0,
+            2 => evidence.revision = 2,
+            3 => evidence.record_digest = [0; 32],
+            _ => {
+                entry.state = RecordState::Revoked;
+                entry.record = None;
+            }
+        }
+        // 重新计算 envelope digest，确证拒绝来自证据语义而非摘要不符。
+        assert_eq!(
+            store.decode(&store.encode(&doc).unwrap()),
+            Err(StoreError::Invalid)
+        );
+    }
+    let text = String::from_utf8(TestSealer.unseal(&sealed).unwrap()).unwrap();
+    for malformed in [
+        text.replacen("\"enrollment\":", "\"enrollment\":null,\"enrollment\":", 1),
+        text.replacen("\"pending\"", "\"unknown\"", 1),
+    ] {
+        assert_eq!(
+            store.decode(&TestSealer.seal(malformed.as_bytes()).unwrap()),
+            Err(StoreError::Invalid)
+        );
+    }
+}
