@@ -16,7 +16,8 @@ async fn NativeRegistration_StartOracle_904() {
         "start-cancel",
         "start-remember",
         "start-remember-deny",
-        "start-remember-cancel"
+        "start-remember-cancel",
+        "start-remember-browser-deny"
     ]
     .contains(&mode.as_str()));
     let remember = mode.starts_with("start-remember");
@@ -148,7 +149,7 @@ async fn NativeRegistration_StartOracle_904() {
             frozen,
             controller.clone(),
             Some(mode != "start-deny"),
-            true,
+            mode != "start-remember-browser-deny",
             if remember {
                 Some(crate::remote_host_controller::startup::TestPersistence {
                     store: crate::remote_native_pairing_store::tests::synthetic_file_store(
@@ -158,7 +159,10 @@ async fn NativeRegistration_StartOracle_904() {
                     yes: if mode == "start-remember-cancel" {
                         None
                     } else {
-                        Some(mode == "start-remember")
+                        Some(matches!(
+                            mode.as_str(),
+                            "start-remember" | "start-remember-browser-deny"
+                        ))
                     },
                 })
             } else {
@@ -269,7 +273,10 @@ async fn NativeRegistration_StartOracle_904() {
         mode == "start-yes" || mode == "start-remember",
         "{outcome:?}"
     );
-    let native_remembered = mode == "start-remember";
+    let native_remembered = matches!(
+        mode.as_str(),
+        "start-remember" | "start-remember-browser-deny"
+    );
     if remember {
         let stored = crate::remote_native_pairing_store::tests::reopen_synthetic_file_store(
             native_store_dir.path(),
@@ -278,6 +285,10 @@ async fn NativeRegistration_StartOracle_904() {
         if native_remembered {
             let loaded = stored.load().unwrap();
             assert_eq!(loaded.devices.len(), 1);
+            assert_eq!(
+                loaded.devices[0].state,
+                crate::remote_native_pairing_store::RecordState::Active
+            );
             assert_eq!(
                 loaded.devices[0].record.as_ref().unwrap().route.relay_mode,
                 native_relay_mode
@@ -288,6 +299,12 @@ async fn NativeRegistration_StartOracle_904() {
                 Err(crate::remote_native_pairing_store::StoreError::Missing)
             );
         }
+    }
+    if mode == "start-remember-browser-deny" {
+        assert_eq!(
+            outcome,
+            RegistrationReply::NativeStoredRegistrationIncomplete
+        );
     }
     if mode == "start-remember-deny" {
         assert_eq!(outcome, RegistrationReply::NativeStoreDeclined);

@@ -786,3 +786,41 @@ NeedsSettlement。自动续租及 outer heartbeat 仍未实现。
 - 负测包含回退/迟到、默认无 activation、取消保留原 fact Promise、原 Rust app 终局解除 pending、ack 前空 pending 窗口不占 seq，以及 poll/event/cancel export 调用异常注入后等物理退休且保 Unknown。异常注入以替换 export 的 JS throw 模拟调用失败，不是实际 WASM 引擎 trap 证明。
 - 保留首次 Node 缺失机制 RED（失败后因未构造方法留下测试端口而停止进程）、真实链首轮错误 CWD、第二轮 Native-only fixture browser_origins=[] 拒绝 Browser 的记录；仅本地新 fixture 显式允许 https://desk.invalid，旧默认/部署不变。WASM Clippy 首轮遗漏既有 clang 路径，补原官方工具路径后通过。
 - 旧裸 TLS Live 用例现在明确验证缺少原 outer activation 时不发布 descriptor；不塞 no-op activation 冒充保活。真实 Live 正例由上述新 Relay 链提供。A 低流量 61 秒留独立后续片；生产 supplier/UI/真实手机/公网与原全 Host PTY 发布门槛仍未完成。
+
+## Production A0: persisted pairing is not completed installation
+
+This is a prerequisite regression, not production unattended admission. The
+existing startup path persists the public native pairing record before asking
+the Host's independent native approval for Browser installation. A successful
+native save followed by that approval's No leaves an Active record on reopening
+the isolated store, while the original startup owner reports
+NativeStoredRegistrationIncomplete. No candidate or Host network attempt is
+published, and the original key/task owners retire. This is not a phone-side
+denial or a lost delivery acknowledgement.
+
+The regression uses the original production Browser registration entry/Worker,
+current-source registration WASM, native startup owner and local WSS Relay.
+WebAuthn credentials and native approvals are synthetic; persistence uses the
+existing temporary Windows backend with TestSealer, not the user's DPAPI store.
+Explicit legacy transport qualification must not be reported as rendezvous-v1
+qualification. The first rendezvous run failed before registration because the
+selected fixture executable returned no negotiated subprotocol; evidence remains
+in unattended-registration-incomplete-first and unattended-registration-diagnostic.
+TLS verification was not weakened and no fallback was added.
+
+Consequently, SelectedPairingCandidate may describe an exact store/revision/device
+selection but cannot confer installation, consent or network authority.
+A future installation evidence record must be independently versioned and exact
+revision/digest bound, constructed only after authenticated delivery, original
+tail drain and final authority checks. Historical installation confirmation is
+still not unattended consent. Old or uncertain records remain unverified.
+Process-lifetime exclusive custody, durable target resolution, journal capacity
+reserved for revocation, and safe wall-clock observation remain separate
+production gates. No production enabling/UI or journal semantics change here.
+Final same-source evidence: unattended-registration-legacy-final.log is 3/3
+(original successful save, native save No, save followed by Host installation
+approval No). The native oracle compiled successfully, current-source registration
+WASM was rebuilt into the isolated audit directory, and
+unattended-registration-strict.log passed remote-host lib/tests Clippy with
+-D warnings. Independent read-only review passed. The initial failed rendezvous
+run is diagnostic evidence, not a RED proving a production defect.

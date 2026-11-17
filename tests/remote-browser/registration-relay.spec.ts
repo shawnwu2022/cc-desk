@@ -33,7 +33,7 @@ test.beforeAll(async()=>{
 })
 
 // 生产入口与真实专用 Worker；合成凭证、原生 cfg(test) 审批与 WSS 外层转发仍限于 fixture。
-for(const scenario of ['install','wrong-pin','start-yes','start-deny','start-cancel','start-remember','start-remember-deny','start-remember-cancel'])test(`RegistrationEntry_ActualRelayNative_${entryRelayMode}_${scenario}_003`,async({page,context},info)=>{
+for(const scenario of ['install','wrong-pin','start-yes','start-deny','start-cancel','start-remember','start-remember-deny','start-remember-cancel','start-remember-browser-deny'])test(`RegistrationEntry_ActualRelayNative_${entryRelayMode}_${scenario}_003`,async({page,context},info)=>{
  test.setTimeout(45000);
  const startup=scenario.startsWith('start-'),remember=scenario.startsWith('start-remember'),success=scenario==='install'||scenario==='start-yes'||scenario==='start-remember';
  const o=oracle(startup?scenario:scenario==='install'?'install':'cancel',entryRelayMode);let r:Awaited<ReturnType<typeof route>>|undefined;
@@ -60,14 +60,15 @@ for(const scenario of ['install','wrong-pin','start-yes','start-deny','start-can
    expect(browser.events).toContainEqual(expect.objectContaining({kind:'evidence',value:expect.objectContaining({protocol:772,fullHandshake:true,rawPublicKey:true,alpnMatches:true})}));
    expect(browser.events).toContainEqual({kind:'completed'});
   }else if(remember){
-   // 原登记验证已完成，但独立本机保存 No/取消不得发布任一端记录。
+   // 本机保存拒绝/取消或后续安装拒绝均不得发布 Browser 记录。
    expect(browser).toMatchObject({creates:1,gets:1,sourceReads:1,state:'rejected',status:undefined});
    expect(browser.events).toContainEqual(expect.objectContaining({kind:'evidence',value:expect.objectContaining({protocol:772,fullHandshake:true,rawPublicKey:true,alpnMatches:true})}));
    expect(browser.events).not.toContainEqual({kind:'completed'});
   }else expect(browser).toMatchObject({creates:0,gets:0,sourceReads:1,state:'rejected',status:undefined,events:expect.not.arrayContaining([expect.objectContaining({kind:'evidence'})])});
   const native=await o.next();expect(native).toMatchObject({relayMode:entryRelayMode==='legacy'?'explicit-legacy':entryRelayMode,nativeCandidateInstalled:success,acknowledged:success,locked:true,hostNetworkAttempts:0,hostKeyOpens:startup&&scenario!=='start-deny'?2:0,nativeTransportRetired:true});
   if(startup)expect(native).toMatchObject({nativeStartupOwner:true,nativeKeysRetired:true,registrationKeyOpens:scenario==='start-deny'?[0,0]:[1,1]});
-  if(remember)expect(native).toMatchObject({nativeRemembered:success,nativePairingReloadLocked:success});
+  if(remember){const persisted=success||scenario==='start-remember-browser-deny';expect(native).toMatchObject({nativeRemembered:persisted,nativePairingReloadLocked:persisted});}
+  if(scenario==='start-remember-browser-deny')expect(native.receipt).toEqual({state:'NativeStoredRegistrationIncomplete'});
   o.releaseRelay();expect((await o.exit)[0],o.output()).toBe(0);
   if(success){
    await page.reload();expect(await page.evaluate(async databaseName=>{const api=await import(location.origin+'/production-entry.mjs');crypto.subtle.importKey=()=>{throw Error('TEST_ONLY unexpected key import')};const store=api.createBrowserEnrollmentStore({origin:location.origin,databaseName}),signal=new AbortController().signal,session=await store.openExisting(async()=>{},signal),material=await session.provider.readApproved(signal);const nonExportable=[material.handles.tlsKey,material.handles.grantKey].every(k=>k instanceof CryptoKey&&!k.extractable);session.close();await session.waitClosed();return{status:await store.status(),nonExportable,relayMode:JSON.parse(new TextDecoder().decode(material.configuration)).relay.mode}},ready.plan.databaseName)).toEqual({status:{revision:'1',state:'active'},nonExportable:true,relayMode:entryRelayMode});
