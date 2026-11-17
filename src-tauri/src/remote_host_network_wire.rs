@@ -101,7 +101,7 @@ impl WireInputs {
         let incarnation =
             u64::from_le_bytes(uuid::Uuid::new_v4().as_bytes()[..8].try_into().unwrap()).max(1);
         let remaining = authority
-            .end()
+            .data_end()
             .saturating_duration_since(std::time::Instant::now());
         if remaining.is_zero() {
             return Err(HostNetworkError::Closed);

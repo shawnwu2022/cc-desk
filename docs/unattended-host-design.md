@@ -2002,3 +2002,92 @@ the three pre-existing dirty files remain untouched. Real phone enrollment,
 browser-validated HTTPS/WSS certificates, public deployment, long-lived access
 and seamless reconnect remain unverified separate gates, not implied by this
 isolated ten-second session.
+
+## A6m: bounded authenticated data after signing-key retirement
+
+This internal mode is not the existing product switch. `NetworkSession` requires
+its own final consent, freezes an actual parent deadline of at most 60 seconds,
+and explicitly does not authorize reconnect or restart recovery. `Local` and
+`ShortNetwork` keep their previous meanings. The production UI still offers the
+previous short session; no real device, user key, public service or certificate
+trust configuration is created or changed here.
+
+Signing authorization still requires the exact original ready key identity,
+parent cancellation roots, accepted attempt and original setup deadline. Its
+`end` remains limited by the current child key cap. A separate `data_end` is
+bounded by the original parent and network budget. It determines the initial
+Grant policy and socket upper bound, not an extension of an already issued Grant.
+The independent browser Grant may be shorter. Existing two-second initial IO
+and setup checks remain unchanged.
+
+Only the original socket task, after successful live Installed activation and
+revalidation of the channel's original live fact and clock, publishes private
+`InstalledData`. It retains the exact original attempt/channel and fixed budget.
+It is not a persistent boolean authorization: every use checks current stop,
+deadline, budget and channel authority. No-live success cannot issue it. Before
+publication, the original current ready-key check still applies. After publication,
+invalidity is a denial, never a transition back to ready. A retired key cannot
+use the pre-publication path. The socket task sets its original stop before any
+retirement await, and retains the published fact instead of resetting its state.
+
+The existing App worker alone handles normal child signing retirement. The service
+retains its original `Arc<HostKeyCustody>` while that worker advances the same
+custody outside the service mutex; the worker does not introduce a second owner.
+Publication checks the original Arc identity, parent and Installed data again.
+Normal retirement does not revoke the parent; Unknown closes the parent and keeps
+original custody and the process/OS ownership rules. The current data gate also
+rejects a key-custody Unknown observation. No signer is rearmed or reused for a
+new handshake. Reconnect remains unimplemented in this mode.
+
+Data operations retain the original pairing candidate/CAS, durable Store.observe,
+wall floor, captured-run and tail checks. There is no disk IO in GrantClock and no
+Busy bypass. SnapshotNext remains an internal batch receipt under its original
+fixed snapshot-operation budget, not a new top-level Store.observe. The signing
+retirement transition performs one ordinary refresh/observe; it does not create
+periodic journal ticks. The 4096-commit bound and reserved revocation pair remain.
+A crash-safe checkpoint is still required before claiming practical long-lived
+operation; no journal reset, floor weakening or larger capacity is introduced.
+
+### Evidence and scope
+
+The initial feasibility probe used an explicit test-only key-retirement call
+while Installed TLS remained open. It proved original CNG/notification joins and
+parent independence, not automatic production retirement or data usability.
+`network-key-retirement-probe-live.log` records that limited result.
+`network-data-after-signing-red.log` then rejected the actual next browser request
+in the old short mode, with original cleanup complete. This is retained as the
+old-mode no-expansion negative test, not changed into an authorization success.
+
+The first new-mode run used the original App worker, waited eleven seconds after
+Source.open without business keepalive, then completed a 1920-cell snapshot,
+window, one-byte PTY input and settlement. The original signing/notification join
+is separately observed without advancing it from the test. The isolated parent
+close and 14-second parent-deadline cases reject subsequent business and deliver
+zero remote PTY bytes. Test-process watchdogs for these longer cases are bounded
+separately from, and do not extend, production authorization or handshake budgets.
+
+`network-installed-race-red.log` preserves a genuine first-Data publication race:
+with Installed fact publication delayed by the original activation hook, the
+first browser request was rejected. The regression observes a real authorized
+DataRecord before that hook returns; it does not inject a fabricated DataRecord.
+The hook has a one-second test bound and does not alter production budgets.
+
+All browser cases still use the same production Source, real module EntryWorker,
+verified production WASM, virtual CTAP2 credential, original Relay and isolated
+anonymous CNG test keys. Synthetic HTTPS routing and Node verification of fixture
+WSS are not a browser certificate-trust test, a real phone test, public deployment,
+30-minute availability, 30-day unattended access or cross-restart recovery.
+
+Final validation: six targeted cases pass on the final formatted source in
+`network-authenticated-formatted-final.log`; this count includes the limited
+retirement probe and is not six separate production features. Native strict
+Clippy also passes in `network-authenticated-strict-final.log`. Fifteen affected
+regression groups passed 137 distinct tests before the final rustfmt-only cleanup;
+`network-authenticated-format-proof.json` records the before/after source hashes
+and formatting scope. The native test binary, six targeted cases and strict
+Clippy were rebuilt/rerun after formatting. This is 143 distinct tests overall,
+not a claim that every regression log used byte-identical final formatted source.
+The exact source manifest and split ledger are
+`network-authenticated-final-source.json` and
+`network-authenticated-final-ledger.json`. Original three dirty files and ignored
+runtime artifacts are excluded from this stage commit.

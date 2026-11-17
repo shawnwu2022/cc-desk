@@ -46,7 +46,7 @@ impl MaterialSupply {
             authority.test_exact_binding(),
             "actual authorization rejects foreign attempt/cap"
         );
-        let end = authority.end();
+        let end = authority.data_end();
         let wire = wire::WireInputs::from_delegated(authority, signers)?;
         Ok(Self {
             build: Box::new(move |_| wire),
@@ -138,10 +138,17 @@ enum Launch {
     Closed,
 }
 type AdmissionPublisher = watch::Sender<Option<Result<(), HostNetworkError>>>;
+struct InstalledData {
+    identity: DelegatedAttemptIdentity,
+    channel: Arc<RunningChannel>,
+    budget: crate::remote_unattended::capability::network::NetworkBudget,
+    end: std::time::Instant,
+}
 pub(crate) struct SocketCustody {
     identity: DelegatedAttemptIdentity,
     terminal_clock: Arc<crate::remote_unattended::capability::network::NetworkClock>,
     original_channel: Mutex<Option<Arc<RunningChannel>>>,
+    installed_data: Mutex<Option<InstalledData>>,
     service: Weak<RemoteHostService>,
     network: Arc<HostNetworkAttempt>,
     material: Arc<MaterialCustody>,
@@ -167,6 +174,7 @@ impl SocketCustody {
             identity: start.identity(),
             terminal_clock: start.terminal_clock(),
             original_channel: Mutex::new(None),
+            installed_data: Mutex::new(None),
             service: Arc::downgrade(service),
             network,
             material: Arc::new(MaterialCustody::reserve()),
@@ -174,6 +182,32 @@ impl SocketCustody {
             publication_unknown: AtomicBool::new(false),
             published: Mutex::new(Some(published)),
         })
+    }
+    pub(crate) fn installed_data_state(&self) -> Option<Result<(), HostNetworkError>> {
+        if *self.network.stop.borrow() {
+            return Some(Err(HostNetworkError::Closed));
+        }
+        let installed = self.installed_data.lock();
+        let fact = installed.as_ref()?;
+        Some((|| {
+            if !self.matches_original(&fact.identity, &fact.channel)
+                || *self.network.stop.borrow()
+                || std::time::Instant::now() >= fact.end
+            {
+                return Err(HostNetworkError::Closed);
+            }
+            fact.budget
+                .check()
+                .map_err(|_| HostNetworkError::Authority)?;
+            fact.channel
+                .authority()
+                .check()
+                .map_err(|_| HostNetworkError::Authority)
+        })())
+    }
+    pub(crate) fn check_installed_data(&self) -> Result<(), HostNetworkError> {
+        self.installed_data_state()
+            .unwrap_or(Err(HostNetworkError::Authority))
     }
     pub(crate) fn matches_identity(&self, identity: &DelegatedAttemptIdentity) -> bool {
         self.identity.matches(identity)
@@ -301,12 +335,33 @@ impl SocketCustody {
                     .await?;
                 clock.now_ms().map_err(|_| HostNetworkError::Authority)?;
                 *original.original_channel.lock() = Some(channel.clone());
+                let installed_budget = start.budget().map_err(|_| HostNetworkError::Authority)?;
+                let installed_channel = channel.clone();
                 start
                     .handoff(channel)
                     .map_err(|_| HostNetworkError::Handoff)?;
                 clock.now_ms().map_err(|_| HostNetworkError::Authority)?;
                 wire.activate_live_after_install(&budget, end, &original.network.stop)
                     .await?;
+                budget.check().map_err(|_| HostNetworkError::Authority)?;
+                if let Some(fact) = installed_channel
+                    .live_keepalive_fact(security::Role::Host)
+                    .map_err(|_| HostNetworkError::Authority)?
+                {
+                    fact.validate_for(&installed_channel, security::Role::Host)
+                        .map_err(|_| HostNetworkError::Authority)?;
+                    if !fact.uses_clock(&installed_budget.clock())
+                        || *original.network.stop.borrow()
+                    {
+                        return Err(HostNetworkError::Authority);
+                    }
+                    *original.installed_data.lock() = Some(InstalledData {
+                        identity: original.identity.clone(),
+                        channel: installed_channel,
+                        budget: installed_budget,
+                        end: lifetime_end.into_std(),
+                    });
+                }
                 Ok(())
             };
             let result = {
@@ -334,6 +389,7 @@ impl SocketCustody {
                 result
             };
             // 即使 setup 没有产出 channel，也必须回收原材料线程。
+            original.network.request_close();
             start.close();
             #[cfg(test)]
             if let Some((entered, release)) = retirement_hook {

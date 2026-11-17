@@ -3123,10 +3123,15 @@ async fn unattended_short_network_case(mode: u8) {
         relay_scalar,
     ];
     // 浏览器工具初始化不占用原批准与首读窗口；READY 不授予任何权限。
-    let mut real_browser = if mode == 5 {
-        let config = serde_json::json!({"case":"short-input","origin":relay.origin,"scope":scope,"hostSpki":host_spki,"expires":false,"revocationPath":null}).to_string();
+    let mut real_browser = if (5..=11).contains(&mode) {
+        let config = serde_json::json!({"case":if mode == 6 {"key-retirement-probe"} else if mode == 7 {"key-retirement-data"} else if mode == 8 {"authenticated-session"} else if mode == 9 {"authenticated-revoked"} else if mode == 10 {"authenticated-expired"} else if mode == 11 {"authenticated-race"} else {"short-input"},"origin":relay.origin,"scope":scope,"hostSpki":host_spki,"expires":false,"revocationPath":null}).to_string();
         Some(RealBrowserChild::prepare(&config))
-    } else { None };
+    } else {
+        None
+    };
+    let mut key_probe = None;
+    let mut signing_observer = None;
+    let mut activation_witness = None;
     let mut product_keepalive = None;
     let (approval, fixed_end, control) = if mode == 3 || mode == 4 || mode == 5 {
         let product = crate::remote_host::short_session::ShortSessionService::default();
@@ -3175,14 +3180,21 @@ async fn unattended_short_network_case(mode: u8) {
             candidate,
             &admission,
             RequestedRole::Control,
-            cutoff(),
+            if mode == 10 {
+                cutoff() - 46000
+            } else {
+                cutoff()
+            },
         )
         .unwrap();
         let first = UnattendedApproval::test_pending(preparation);
         first.test_answer(true, false);
         let prepared = first.consume(&pairing, &admission).unwrap().unwrap();
-        let approval =
-            Arc::new(FinalApproval::test_pending_network(prepared, &pairing, &admission).unwrap());
+        let approval = Arc::new(if mode >= 8 {
+            FinalApproval::test_pending_session(prepared, &pairing, &admission).unwrap()
+        } else {
+            FinalApproval::test_pending_network(prepared, &pairing, &admission).unwrap()
+        });
         approval.test_answer(true);
         let consent = approval.consume(&pairing, &admission).unwrap().unwrap();
         let end = consent.end();
@@ -3198,6 +3210,18 @@ async fn unattended_short_network_case(mode: u8) {
         )
         .unwrap();
         pending.test_anonymous_network(scalars, opened.clone(), accepted);
+        if mode == 6 || mode == 7 {
+            key_probe = Some(pending.test_live_tls_key_retirement());
+        }
+        if (8..=10).contains(&mode) {
+            signing_observer = Some(pending.test_observe_signing_retired());
+        }
+        if mode == 9 {
+            key_probe = Some(pending.test_close_after_signing());
+        }
+        if mode == 11 {
+            activation_witness = Some(pending.test_activation_race());
+        }
         host.unattended
             .reserve_start(pending, native.clone())
             .unwrap();
@@ -3212,7 +3236,9 @@ async fn unattended_short_network_case(mode: u8) {
         let pairing = pairing.clone();
         output = Some(
             tokio::task::spawn_blocking(move || {
-                if let Some(child) = real_browser.take() { return child.go_and_wait(); }
+                if let Some(child) = real_browser.take() {
+                    return child.go_and_wait(key_probe, mode >= 8);
+                }
                 let mut child = std::process::Command::new("node")
                     .current_dir(
                         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -3251,13 +3277,26 @@ async fn unattended_short_network_case(mode: u8) {
             .unwrap(),
         );
     }
-    let succeeded = output.as_ref().is_some_and(|o| o.status.success());
-    let input_exact = if succeeded {
-        let remainder: &[u8] = if revoke || expires {
-            b"native"
+    let succeeded = output.as_ref().is_some_and(|o| {
+        if mode == 7 {
+            !o.status.success()
+                && String::from_utf8_lossy(&o.stderr).contains("browser request rejected")
         } else {
-            b"ative"
-        };
+            o.status.success()
+        }
+    });
+    let automatic_signing_retired = signing_observer.is_none_or(|observe| observe());
+    let activation_observed =
+        activation_witness.is_none_or(|v| v.load(std::sync::atomic::Ordering::Acquire));
+    eprintln!("TEST_ONLY_FIRST_DATA_BEFORE_FACT {activation_observed}");
+    eprintln!("TEST_ONLY_AUTOMATIC_SIGNING_RETIRED {automatic_signing_retired}");
+    let input_exact = if succeeded {
+        let remainder: &[u8] =
+            if revoke || expires || mode == 6 || mode == 7 || mode == 9 || mode == 10 {
+                b"native"
+            } else {
+                b"ative"
+            };
         f.service
             .access(&f.caller, &f.request_run())
             .unwrap()
@@ -3301,6 +3340,8 @@ async fn unattended_short_network_case(mode: u8) {
     }
     assert!(
         succeeded
+            && automatic_signing_retired
+            && activation_observed
             && before_app_exit
             && input_exact
             && matches!(known, Ok(true))
@@ -3598,44 +3639,111 @@ struct RealBrowserChild {
     child: Option<std::process::Child>,
     stdout: Option<std::thread::JoinHandle<Vec<u8>>>,
     stderr: Option<std::thread::JoinHandle<Vec<u8>>>,
+    probe: std::sync::mpsc::Receiver<()>,
 }
 impl RealBrowserChild {
     fn prepare(config: &str) -> Self {
         use std::io::{BufRead, Read};
         let mut child = std::process::Command::new("node")
-            .current_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap())
-            .args(["remote/ui-terminal/src/browserSourceRealRelay.fixture.mjs", config])
-            .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped())
-            .spawn().unwrap();
+            .current_dir(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .parent()
+                    .unwrap(),
+            )
+            .args([
+                "remote/ui-terminal/src/browserSourceRealRelay.fixture.mjs",
+                config,
+            ])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
         let (ready, observed) = std::sync::mpsc::channel();
+        let (probe_signal, probe) = std::sync::mpsc::channel();
         let output = child.stdout.take().unwrap();
         let error = child.stderr.take().unwrap();
         let stdout = std::thread::spawn(move || {
-            let mut reader = std::io::BufReader::new(output); let mut all = Vec::new(); let mut line = Vec::new();
+            let mut reader = std::io::BufReader::new(output);
+            let mut all = Vec::new();
+            let mut line = Vec::new();
             while reader.read_until(b'\n', &mut line).unwrap() != 0 {
-                if line == b"{\"kind\":\"test-only-browser-ready\"}\n" { let _ = ready.send(()); }
-                all.extend_from_slice(&line);line.clear();
-            } all
+                if line == b"{\"kind\":\"test-only-browser-ready\"}\n" {
+                    let _ = ready.send(());
+                }
+                if line == b"{\"kind\":\"test-only-installed-probe\"}\n" {
+                    let _ = probe_signal.send(());
+                }
+                all.extend_from_slice(&line);
+                line.clear();
+            }
+            all
         });
-        let stderr = std::thread::spawn(move || {let mut bytes=Vec::new();let mut error=error;error.read_to_end(&mut bytes).unwrap();bytes});
-        let mut owner=Self {child:Some(child),stdout:Some(stdout),stderr:Some(stderr)};
-        let end=Instant::now()+Duration::from_secs(8);
+        let stderr = std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            let mut error = error;
+            error.read_to_end(&mut bytes).unwrap();
+            bytes
+        });
+        let mut owner = Self {
+            child: Some(child),
+            stdout: Some(stdout),
+            stderr: Some(stderr),
+            probe,
+        };
+        let end = Instant::now() + Duration::from_secs(8);
         loop {
-            if observed.try_recv().is_ok() { eprintln!("TEST_ONLY_BROWSER_READY_BEFORE_APPROVAL"); return owner; }
-            assert!(owner.child.as_mut().unwrap().try_wait().unwrap().is_none(), "browser exited before READY");
-            assert!(Instant::now()<end,"browser READY deadline");
+            if observed.try_recv().is_ok() {
+                eprintln!("TEST_ONLY_BROWSER_READY_BEFORE_APPROVAL");
+                return owner;
+            }
+            assert!(
+                owner.child.as_mut().unwrap().try_wait().unwrap().is_none(),
+                "browser exited before READY"
+            );
+            assert!(Instant::now() < end, "browser READY deadline");
             std::thread::sleep(Duration::from_millis(10));
         }
     }
-    fn go_and_wait(mut self) -> std::process::Output {
+    fn go_and_wait(
+        mut self,
+        mut probe: Option<Box<dyn FnOnce() -> bool + Send>>,
+        extended: bool,
+    ) -> std::process::Output {
         use std::io::Write;
         eprintln!("TEST_ONLY_BROWSER_GO_AFTER_HOST_READY");
-        self.child.as_mut().unwrap().stdin.as_mut().unwrap().write_all(b"GO\n").unwrap();
-        let end=Instant::now()+Duration::from_secs(15);
+        self.child
+            .as_mut()
+            .unwrap()
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(b"GO\n")
+            .unwrap();
+        let end = Instant::now() + Duration::from_secs(if extended { 25 } else { 15 });
         loop {
-            if let Some(status)=self.child.as_mut().unwrap().try_wait().unwrap() {
+            if self.probe.try_recv().is_ok() {
+                let passed = probe.take().is_some_and(|run| run());
+                self.child
+                    .as_mut()
+                    .unwrap()
+                    .stdin
+                    .as_mut()
+                    .unwrap()
+                    .write_all(if passed {
+                        b"KEYS_RETIRED\n"
+                    } else {
+                        b"PROBE_FAILED\n"
+                    })
+                    .unwrap();
+            }
+            if let Some(status) = self.child.as_mut().unwrap().try_wait().unwrap() {
                 self.child.take();
-                return std::process::Output {status,stdout:self.stdout.take().unwrap().join().unwrap(),stderr:self.stderr.take().unwrap().join().unwrap()};
+                return std::process::Output {
+                    status,
+                    stdout: self.stdout.take().unwrap().join().unwrap(),
+                    stderr: self.stderr.take().unwrap().join().unwrap(),
+                };
             }
             assert!(Instant::now()<end,"browser original child deadline");
             std::thread::sleep(Duration::from_millis(10));
@@ -3657,7 +3765,59 @@ impl Drop for RealBrowserChild {
             }
             let _=child.wait();
         }
-        if let Some(task)=self.stdout.take(){let _=task.join();}
-        if let Some(task)=self.stderr.take(){let _=task.join();}
+        if let Some(task) = self.stdout.take() {
+            let _ = task.join();
+        }
+        if let Some(task) = self.stderr.take() {
+            let _ = task.join();
+        }
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn UnattendedNetwork_KeyRetirementWithLiveTls_001() {
+    if short_network_isolated("UnattendedNetwork_KeyRetirementWithLiveTls_001") {
+        return;
+    }
+    unattended_short_network_case(6).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn UnattendedNetwork_OldShortRejectsRetiredSigning_002() {
+    if short_network_isolated("UnattendedNetwork_OldShortRejectsRetiredSigning_002") {
+        return;
+    }
+    unattended_short_network_case(7).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn UnattendedNetwork_AuthenticatedDataBeyondSigning_003() {
+    if short_network_isolated("UnattendedNetwork_AuthenticatedDataBeyondSigning_003") {
+        return;
+    }
+    unattended_short_network_case(8).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn UnattendedNetwork_ParentCloseAfterSigning_004() {
+    if short_network_isolated("UnattendedNetwork_ParentCloseAfterSigning_004") {
+        return;
+    }
+    unattended_short_network_case(9).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn UnattendedNetwork_ParentExpiryAfterSigning_005() {
+    if short_network_isolated("UnattendedNetwork_ParentExpiryAfterSigning_005") {
+        return;
+    }
+    unattended_short_network_case(10).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn UnattendedNetwork_FirstDataBeforeFact_006() {
+    if short_network_isolated("UnattendedNetwork_FirstDataBeforeFact_006") {
+        return;
+    }
+    unattended_short_network_case(11).await;
 }

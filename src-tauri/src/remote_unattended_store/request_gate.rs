@@ -6,6 +6,8 @@ use cc_desk_remote_host::native_host::{NativeChannel, NativeConnection};
 use cc_desk_remote_security::DataRecord;
 
 pub(crate) struct ServiceRequestGate {
+    #[cfg(test)]
+    observed: Option<Arc<std::sync::atomic::AtomicBool>>,
     control: Arc<FinalControl>,
     attempt: DelegatedAttemptIdentity,
     check: Box<dyn Fn() -> Result<()> + Send + Sync>,
@@ -33,6 +35,8 @@ impl ServiceRequestGate {
         let weak = Arc::downgrade(service);
         let closed = control.clone();
         Self {
+            #[cfg(test)]
+            observed: None,
             control,
             attempt,
             check: Box::new(move || {
@@ -48,6 +52,14 @@ impl ServiceRequestGate {
                 Ok(())
             }),
         }
+    }
+    #[cfg(test)]
+    pub(super) fn test_observe_authorized(
+        mut self,
+        observed: Arc<std::sync::atomic::AtomicBool>,
+    ) -> Self {
+        self.observed = Some(observed);
+        self
     }
     pub(crate) fn authorize(
         &self,
@@ -65,6 +77,10 @@ impl ServiceRequestGate {
             self.control.close();
             channel.authority().request_close();
             return Err(());
+        }
+        #[cfg(test)]
+        if let Some(observed) = &self.observed {
+            observed.store(true, std::sync::atomic::Ordering::Release);
         }
         Ok(AuthorizedRecord {
             record,

@@ -26,6 +26,11 @@ pub(crate) struct PendingStart<S: Sealer, B: PairingBackend, P: PairingSealer> {
     permit_hook: Option<PermitHook>,
     #[cfg(test)]
     network_accepted: Option<tokio::sync::oneshot::Sender<()>>,
+    #[cfg(test)]
+    activation_race: Option<(
+        Arc<std::sync::atomic::AtomicBool>,
+        Arc<std::sync::atomic::AtomicBool>,
+    )>,
 }
 impl<S: Sealer, B: PairingBackend, P: PairingSealer> PendingStart<S, B, P> {
     pub(crate) fn new(
@@ -64,6 +69,8 @@ impl<S: Sealer, B: PairingBackend, P: PairingSealer> PendingStart<S, B, P> {
             permit_hook: None,
             #[cfg(test)]
             network_accepted: None,
+            #[cfg(test)]
+            activation_race: None,
         })
     }
     pub(crate) fn new_epochs(
@@ -91,6 +98,8 @@ impl<S: Sealer, B: PairingBackend, P: PairingSealer> PendingStart<S, B, P> {
             permit_hook: None,
             #[cfg(test)]
             network_accepted: None,
+            #[cfg(test)]
+            activation_race: None,
         })
     }
     pub(crate) fn new_network(
@@ -109,15 +118,65 @@ impl<S: Sealer, B: PairingBackend, P: PairingSealer> PendingStart<S, B, P> {
         Ok(pending)
     }
     pub(crate) fn epoch_end(&self) -> Option<std::time::Instant> {
-        self.service.lock().epoch_end()
+        let service = self.service.lock();
+        if service.signing_retired {
+            None
+        } else {
+            service.epoch_end()
+        }
     }
     pub(crate) fn advance_epoch(
         &mut self,
         permit: &crate::remote_host::unattended::StartPermit,
     ) -> Result<()> {
         if self.network.is_some() {
-            self.control.close();
-            return Err(StoreError::Unauthorized);
+            let keys = {
+                let service = self.service.lock();
+                if !permit.matches(&self.control)
+                    || !service
+                        .consent
+                        .as_ref()
+                        .is_some_and(|c| c.permits_authenticated_data())
+                    || service
+                        .data_socket
+                        .as_ref()
+                        .is_none_or(|s| s.check_installed_data().is_err())
+                {
+                    self.control.close();
+                    return Err(StoreError::Unauthorized);
+                }
+                service.keys.as_ref().ok_or(StoreError::Unknown)?.clone()
+            };
+            keys.revoke();
+            loop {
+                let observation = keys.advance();
+                if observation.unknown {
+                    self.control.close();
+                }
+                if !observation.outstanding {
+                    if observation.unknown || !observation.disposal_complete {
+                        return Err(StoreError::Unknown);
+                    }
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            let mut service = self.service.lock();
+            if !self.control.active()
+                || !service
+                    .keys
+                    .as_ref()
+                    .is_some_and(|original| Arc::ptr_eq(original, &keys))
+                || service
+                    .data_socket
+                    .as_ref()
+                    .is_none_or(|s| s.check_installed_data().is_err())
+            {
+                self.control.close();
+                return Err(StoreError::Unauthorized);
+            }
+            service.signing_retired = true;
+            return service.refresh(&self.pairing);
         }
         self.service.lock().advance_epoch(&self.pairing, permit)
     }
@@ -186,6 +245,11 @@ impl<S: Sealer, B: PairingBackend, P: PairingSealer> PendingStart<S, B, P> {
                 self.control.clone(),
                 prepared.start.identity(),
             );
+            #[cfg(test)]
+            let gate = match &self.activation_race {
+                Some((observed, _)) => gate.test_observe_authorized(observed.clone()),
+                None => gate,
+            };
             prepared
                 .session
                 .install_request_gate(gate)
@@ -197,6 +261,22 @@ impl<S: Sealer, B: PairingBackend, P: PairingSealer> PendingStart<S, B, P> {
             };
             #[cfg(not(test))]
             let material = prepared.material;
+            #[cfg(test)]
+            let material = match self.activation_race.take() {
+                Some((observed, witnessed)) => material.test_activation_hook(true, move || {
+                    let end = std::time::Instant::now() + std::time::Duration::from_secs(1);
+                    while !observed.load(std::sync::atomic::Ordering::Acquire)
+                        && std::time::Instant::now() < end
+                    {
+                        std::thread::sleep(std::time::Duration::from_millis(1));
+                    }
+                    witnessed.store(
+                        observed.load(std::sync::atomic::Ordering::Acquire),
+                        std::sync::atomic::Ordering::Release,
+                    );
+                }),
+                None => material,
+            };
             prepared
                 .socket
                 .start(prepared.start, material)
@@ -248,6 +328,48 @@ impl<S: Sealer, B: PairingBackend, P: PairingSealer> Drop for PendingStart<S, B,
 }
 #[cfg(test)]
 impl<S: Sealer, B: PairingBackend, P: PairingSealer> PendingStart<S, B, P> {
+    pub(crate) fn test_live_tls_key_retirement(&self) -> Box<dyn FnOnce() -> bool + Send>
+    where
+        S: Send + 'static,
+    {
+        let service = Arc::downgrade(&self.service);
+        let control = self.control.clone();
+        Box::new(move || {
+            let Some(service) = service.upgrade() else {
+                return false;
+            };
+            let service = service.lock();
+            if !control.active() || !matches!(service.captured, Some(CapturedOwner::Network { .. }))
+            {
+                return false;
+            }
+            let Some(keys) = service.keys.as_ref() else {
+                return false;
+            };
+            keys.revoke();
+            let end = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            loop {
+                let fact = keys.advance();
+                if !fact.outstanding {
+                    let passed = fact.disposal_complete
+                        && !fact.unknown
+                        && keys.observer().test_notify_joins() > 0
+                        && control.active();
+                    eprintln!(
+                        "TEST_ONLY_LIVE_TLS_KEYS retired={} parent_active={} notify_joined={}",
+                        passed,
+                        control.active(),
+                        keys.observer().test_notify_joins()
+                    );
+                    return passed;
+                }
+                if std::time::Instant::now() >= end {
+                    return false;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+        })
+    }
     pub(crate) fn test_anonymous_network(
         &mut self,
         scalars: [[u8; 32]; 2],
@@ -268,5 +390,50 @@ impl<S: Sealer, B: PairingBackend, P: PairingSealer> PendingStart<S, B, P> {
     }
     pub(crate) fn test_after_enable(&mut self, action: impl FnOnce() + Send + 'static) {
         self.service.lock().test_after_enable(action);
+    }
+}
+
+#[cfg(test)]
+impl<S: Sealer, B: PairingBackend, P: PairingSealer> PendingStart<S, B, P> {
+    pub(crate) fn test_activation_race(&mut self) -> Arc<std::sync::atomic::AtomicBool> {
+        let observed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let witnessed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.activation_race = Some((observed, witnessed.clone()));
+        witnessed
+    }
+    pub(crate) fn test_close_after_signing(&self) -> Box<dyn FnOnce() -> bool + Send>
+    where
+        B: Send + Sync + 'static,
+        P: Send + Sync + 'static,
+        S: Send + 'static,
+    {
+        let observed = self.test_observe_signing_retired();
+        let control = self.control.clone();
+        Box::new(move || {
+            let retired = observed();
+            control.close();
+            retired && control.closed()
+        })
+    }
+    pub(crate) fn test_observe_signing_retired(&self) -> Box<dyn FnOnce() -> bool + Send>
+    where
+        B: Send + Sync + 'static,
+        P: Send + Sync + 'static,
+        S: Send + 'static,
+    {
+        let service = Arc::downgrade(&self.service);
+        Box::new(move || {
+            service.upgrade().is_some_and(|service| {
+                let service = service.lock();
+                service.signing_retired
+                    && service.keys.as_ref().is_some_and(|keys| {
+                        let o = keys.snapshot();
+                        !o.outstanding
+                            && o.disposal_complete
+                            && !o.unknown
+                            && keys.observer().test_notify_joins() > 0
+                    })
+            })
+        })
     }
 }

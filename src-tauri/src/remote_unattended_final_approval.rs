@@ -46,6 +46,7 @@ impl FinalControl {
 enum FinalMode {
     Local,
     ShortNetwork,
+    NetworkSession,
 }
 struct FinalDescription {
     mode: FinalMode,
@@ -75,8 +76,7 @@ impl FinalDescription {
         mode: FinalMode,
     ) -> Result<Self, SafeError> {
         approved.check(store, admission)?;
-        if mode == FinalMode::ShortNetwork
-            && !matches!(approved.preparation.role, RequestedRole::Control)
+        if mode != FinalMode::Local && !matches!(approved.preparation.role, RequestedRole::Control)
         {
             return Err(error("REMOTE_UNATTENDED_STALE"));
         }
@@ -84,7 +84,7 @@ impl FinalDescription {
         // 固定短材料窗口，不把等待确认的时间重新加到 cap 上。
         let anchor = Instant::now();
         let seconds = match mode {
-            FinalMode::Local => 60,
+            FinalMode::Local | FinalMode::NetworkSession => 60,
             FinalMode::ShortNetwork => 10,
         };
         let cap = preparation.end.min(anchor + Duration::from_secs(seconds));
@@ -152,6 +152,7 @@ impl FinalDescription {
         let mode = match self.mode {
             FinalMode::Local => "当前批准仅限本机委托，不开启网络。",
             FinalMode::ShortNetwork => "允许经下列 Relay 为此设备开启一次短网络会话（最多 10 秒，且不超过所示实际截止），可读取该 run 终端快照并输入；不自动重连、不延长授权。",
+            FinalMode::NetworkSession => "允许此设备在所示绝对截止内连接当前 run，读取终端快照和输入；签名材料仅短期持有，认证后的会话可持续到该截止。本阶段不自动重连，不跨 App 重启恢复。",
         };
         format!(
             "允许为此设备持久保存当前单会话委托？这不是之前的准备步骤。
@@ -283,6 +284,14 @@ impl FinalApproval {
         Self::test_pending_mode(approved, store, admission, FinalMode::ShortNetwork)
     }
     #[cfg(test)]
+    pub(crate) fn test_pending_session<B: Backend, S: Sealer>(
+        approved: ApprovedPreparation,
+        store: &PairingStore<B, S>,
+        admission: &NativeRunAdmission,
+    ) -> Result<Self, SafeError> {
+        Self::test_pending_mode(approved, store, admission, FinalMode::NetworkSession)
+    }
+    #[cfg(test)]
     fn test_pending_mode<B: Backend, S: Sealer>(
         approved: ApprovedPreparation,
         store: &PairingStore<B, S>,
@@ -307,7 +316,10 @@ impl FinalApproval {
 }
 impl FinalConsent {
     pub(crate) fn permits_network(&self) -> bool {
-        self.description.mode == FinalMode::ShortNetwork
+        self.description.mode != FinalMode::Local
+    }
+    pub(crate) fn permits_authenticated_data(&self) -> bool {
+        self.description.mode == FinalMode::NetworkSession
     }
     pub(crate) fn check_start<B: Backend, S: Sealer>(
         &self,
@@ -481,6 +493,7 @@ pub(crate) struct DelegatedSigningAuthorization {
     budget: crate::remote_unattended::capability::network::NetworkBudget,
     control: Arc<FinalControl>,
     end: Instant,
+    data_end: Instant,
 }
 impl DelegatedSigningAuthorization {
     #[cfg(test)]
@@ -506,6 +519,9 @@ impl DelegatedSigningAuthorization {
         attempt: &crate::remote_host::delegated::DelegatedAttemptIdentity,
     ) -> bool {
         self.attempt.matches(attempt)
+    }
+    pub(crate) fn data_end(&self) -> Instant {
+        self.data_end
     }
     pub(crate) fn end(&self) -> Instant {
         self.end
@@ -543,7 +559,8 @@ impl FinalConsent {
             return Err(error("REMOTE_UNATTENDED_STALE"));
         }
         let budget = start.budget()?;
-        let end = budget.deadline().min(key.cap()).min(self.end());
+        let budget_end = budget.deadline().min(self.end());
+        let end = budget_end.min(key.cap());
         self.check_window()?;
         if !self.control.active() || Instant::now() >= end {
             return Err(error("REMOTE_UNATTENDED_STALE"));
@@ -556,6 +573,11 @@ impl FinalConsent {
             budget,
             control: self.control.clone(),
             end,
+            data_end: if self.permits_authenticated_data() {
+                budget_end
+            } else {
+                end
+            },
         })
     }
 }

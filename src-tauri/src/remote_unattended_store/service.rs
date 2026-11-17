@@ -60,10 +60,12 @@ struct AnonymousKeyFixture {
 pub(crate) struct SingleRunService<S: Sealer> {
     store: Store<WindowsUnattendedBackend, S>,
     consent: Option<FinalConsent>,
-    keys: Option<HostKeyCustody>,
+    keys: Option<Arc<HostKeyCustody>>,
     signers: Option<HostSignerSet>,
     ready: Option<HostKeysReady>,
     epoch: Option<epoch::KeyEpoch>,
+    data_socket: Option<Arc<crate::remote_host_network::delegated::SocketCustody>>,
+    signing_retired: bool,
     #[cfg(test)]
     epoch_trace: Option<crate::native_crypto::EpochTestTrace>,
     #[cfg(test)]
@@ -99,6 +101,8 @@ impl<S: Sealer> SingleRunService<S> {
             signers: None,
             ready: None,
             epoch: None,
+            data_socket: None,
+            signing_retired: false,
             #[cfg(test)]
             epoch_trace: None,
             #[cfg(test)]
@@ -189,7 +193,7 @@ impl<S: Sealer> SingleRunService<S> {
         }
         self.attempted = true;
         self.consent = Some(consent);
-        self.keys = Some(keys);
+        self.keys = Some(Arc::new(keys));
         self.ready = Some(ready);
         self.signers = Some(signers);
         Ok(())
@@ -432,14 +436,41 @@ impl<S: Sealer> SingleRunService<S> {
             consent
                 .check_runtime(pairing)
                 .map_err(|_| StoreError::Unauthorized)?;
-            self.ready
-                .as_ref()
-                .ok_or(StoreError::Unauthorized)?
-                .check(
-                    self.keys.as_ref().ok_or(StoreError::Unauthorized)?,
-                    self.current_key_binding()?,
-                )
-                .map_err(|_| StoreError::Unauthorized)?;
+            let installed = if consent.permits_authenticated_data() {
+                match self
+                    .data_socket
+                    .as_ref()
+                    .and_then(|socket| socket.installed_data_state())
+                {
+                    Some(result) => {
+                        result.map_err(|_| StoreError::Unauthorized)?;
+                        if self
+                            .keys
+                            .as_ref()
+                            .is_none_or(|keys| keys.snapshot().unknown)
+                        {
+                            return Err(StoreError::Unknown);
+                        }
+                        true
+                    }
+                    None => false,
+                }
+            } else {
+                false
+            };
+            if !installed {
+                if self.signing_retired {
+                    return Err(StoreError::Unauthorized);
+                }
+                self.ready
+                    .as_ref()
+                    .ok_or(StoreError::Unauthorized)?
+                    .check(
+                        self.keys.as_ref().ok_or(StoreError::Unauthorized)?,
+                        self.current_key_binding()?,
+                    )
+                    .map_err(|_| StoreError::Unauthorized)?;
+            }
             self.captured
                 .as_ref()
                 .ok_or(StoreError::Unauthorized)?
@@ -586,7 +617,7 @@ impl Drop for ProcessSlot {
 struct Quarantine {
     _custody: OwnerCustody,
     _slot: ProcessSlot,
-    keys: Option<HostKeyCustody>,
+    keys: Option<Arc<HostKeyCustody>>,
     _captured: Option<CapturedOwner>,
     _policy: Option<Arc<Delegation>>,
     _snapshot: Option<LockedSnapshot>,
@@ -605,7 +636,7 @@ pub(crate) fn advance_quarantine() -> Option<CustodyObservation> {
     {
         q._captured.take();
     }
-    q.keys.as_ref().map(HostKeyCustody::advance)
+    q.keys.as_ref().map(|keys| keys.advance())
 }
 #[cfg(test)]
 impl<S: Sealer> SingleRunService<S> {
@@ -779,6 +810,7 @@ impl<S: Sealer> SingleRunService<S> {
             &start, authority, signers,
         )
         .map_err(|_| StoreError::Unauthorized)?;
+        self.data_socket = Some(socket.clone());
         Ok(PreparedNetwork {
             session,
             socket,

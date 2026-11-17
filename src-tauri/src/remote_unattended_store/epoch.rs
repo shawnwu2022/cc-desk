@@ -129,7 +129,7 @@ impl<S: Sealer> SingleRunService<S> {
             supplier
         };
         // 先由同一服务保留原 custody；任何 prepare 失败/恐慌仍沿原 owner 退休。
-        self.keys = Some(HostKeyCustody::new(token, binding.profile_cap));
+        self.keys = Some(Arc::new(HostKeyCustody::new(token, binding.profile_cap)));
         let epoch = self.epoch.as_mut().unwrap();
         epoch.binding = Some(binding);
         epoch.generation = generation;
