@@ -1855,3 +1855,65 @@ platform test, cover HTTPS provider absence and candidate/provider mismatch.
 Actual phone registration, native dialogs, HTTPS deployment and the full
 EntryWorker-to-Relay success path remain unverified. Default-off behavior and
 the original short-session limits are unchanged.
+
+## A6k: current production artifact and synthetic-origin operator verification
+
+The existing `scripts/build-browser-runtime.mjs` was run offline against the
+current checkout with the existing LLVM 21.1.8 and wasm-bindgen 0.2.129 tools.
+The previous ignored production manifest had 55 source entries, 22 of which no
+longer matched the checkout. Its full manifest and file hashes were preserved
+in `.audit/browser-production-rebuild-before.json`; no old evidence was erased.
+The new production manifest has 65 matching source entries, three matching
+compiler inputs, and two matching output files. Its six required browser
+exports are present and there are no `TEST_ONLY` exports. The production WASM
+is 5,808,647 bytes, SHA-256
+`89dc2d466156e5da71fed8ad6f7cfc1c9e501066136305fb13fd9ba86145f75a`.
+The glue SHA-256 is
+`2631ef5e2536935d9dc797ba410edb358e63edbf70c2204da5f7d35827e1859d`.
+These generated files remain ignored; this stage does not commit binaries.
+
+`tests/remote-browser/browserOperator.real.mjs` first checks the manifest's
+source, compiler-input and artifact hashes against disk, compiles the WASM with
+Node for its export inspection, then opens isolated real Chrome contexts. Set
+`PLAYWRIGHT_CHROMIUM_EXECUTABLE` to the installed official browser and run:
+
+```
+node tests/remote-browser/browserOperator.real.mjs
+```
+
+The default artifact directory is `public/remote-runtime`; the explicitly
+TEST_ONLY `CC_DESK_TEST_PRODUCTION_RUNTIME` override permits a stale-manifest
+negative run. The preserved old manifest fails the source-hash gate in
+`.audit/browser-production-stale-red.log`, before browser launch. Current
+production inputs pass in `.audit/browser-operator-real-final2.log`.
+
+Playwright fulfills requests for the synthetic `https://desk.invalid` origin,
+following the repository's existing browser test infrastructure. This exercises
+real Window, secure-context/isolation and production dynamic import behavior,
+without a certificate, a TLS handshake, trust-store modification or certificate
+exception. Each operator scenario has a fresh context and ESM cache. Missing
+operator, an explicitly undefined provider, extra module exports, and differing
+candidate/provider pull configurations remain locked or rejected with zero
+Workers and zero WebSockets. The mismatch uses valid nonextractable handles
+imported from public test vectors; an independent original-reader positive
+control confirms the matching configuration preserves `snapshot-pull-v1` and
+the original handles. That positive reader control does not open a Source or
+prove authorization. All WebSocket routes are intercepted and closed, so an
+unexpected connection cannot escape the fixture. No enrollment or user-key
+store is opened or modified.
+
+Separately, the original A6j real EntryWorker test was rerun with
+`CC_DESK_TEST_BROWSER_ARTIFACTS=public/remote-runtime`. All four checks pass in
+`.audit/browser-production-entry-final.log`, now fetching the freshly generated
+production WASM/glue instead of the older test artifact. The served glue has
+only the A6j test-only evaluation message appended; its on-disk original hash
+above is unchanged. This remains a real module-Worker fetch/import and
+fail-closed retirement test, not a browser WASM-instantiation or authentication
+success test. The operator suite contributes six checks (one artifact check,
+four operator cases, one reader positive control), and EntryWorker contributes
+four; they are distinct scopes, not ten successful network sessions.
+
+A browser-validated HTTPS transport, real registration/phone, and a successful
+production EntryWorker-to-Relay session remain separate gates. This stage
+neither upgrades old configurations nor changes production defaults, user
+credentials, public deployment, or the existing ten-second Host limits.
