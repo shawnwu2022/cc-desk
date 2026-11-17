@@ -23,11 +23,12 @@ impl AttemptWindow {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 struct Binding {
     installation: [u8; 32],
     device: [u8; 32],
     key_fingerprints: [[u8; 32]; 4],
+    full_record_digest: [u8; 32],
     enrollment_revision: u64,
     issuer: [u8; 32],
     principal: [u8; 32],
@@ -42,7 +43,7 @@ struct Binding {
     route: [u8; 16],
     role: Role,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 enum Role {
     View,
     Control,

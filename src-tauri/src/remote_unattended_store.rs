@@ -72,10 +72,17 @@ enum Status {
     Enabled,
     Revoked,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+enum ExecutionMode {
+    #[serde(rename = "single_run_no_restore")]
+    SingleRunNoRestore,
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Document {
     schema: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mode: Option<ExecutionMode>,
     domain: String,
     store_id: [u8; 16],
     revision: u64,
@@ -113,6 +120,9 @@ impl LockedSnapshot {
 }
 // 私有、不可序列化、不可克隆；只有测试构造，生产原生确认入口尚未实现。
 struct NativePermit {
+    final_control:
+        Option<Arc<crate::remote_host_approval::unattended::final_approval::FinalControl>>,
+    mode: Option<ExecutionMode>,
     instance: Arc<()>,
     expected: Expected,
     issued_ms: u64,
@@ -122,7 +132,8 @@ struct NativePermit {
 }
 impl NativePermit {
     fn check(&self, instance: &Arc<()>) -> Result<()> {
-        if !Arc::ptr_eq(instance, &self.instance)
+        if self.final_control.as_ref().is_some_and(|c| c.closed())
+            || !Arc::ptr_eq(instance, &self.instance)
             || self.cancelled.load(Ordering::Acquire)
             || Instant::now() >= self.deadline
         {
@@ -174,7 +185,8 @@ impl<B: Backend, S: Sealer> Store<B, S> {
             return Err(StoreError::Conflict);
         }
         let doc = Document {
-            schema: 1,
+            schema: if permit.mode.is_some() { 2 } else { 1 },
+            mode: permit.mode,
             domain: DOMAIN.into(),
             store_id: permit.expected.store_id,
             revision: 1,
@@ -274,6 +286,9 @@ impl<B: Backend, S: Sealer> Store<B, S> {
         let mut tx = self.backend.begin()?;
         let mut doc = self.read(&mut tx, &mut local)?;
         Self::cas(&doc, &permit.expected)?;
+        if doc.mode != permit.mode {
+            return Err(StoreError::Unauthorized);
+        }
         if now < doc.observed_wall_ms || permit.issued_ms != now {
             local.blocked = true;
             return Err(StoreError::Clock);
@@ -391,8 +406,10 @@ fn validate(doc: &Document) -> Result<()> {
         .cutoff_ms
         .checked_sub(doc.issued_ms)
         .ok_or(StoreError::Invalid)?;
-    if doc.schema != 1
-        || doc.domain != DOMAIN
+    if !matches!(
+        (doc.schema, doc.mode),
+        (1, None) | (2, Some(ExecutionMode::SingleRunNoRestore))
+    ) || doc.domain != DOMAIN
         || doc.store_id == [0; 16]
         || doc.revision == 0
         || doc.authority_revision == 0
@@ -419,7 +436,9 @@ fn validate(doc: &Document) -> Result<()> {
 
 fn check_known(local: &mut Local, doc: &Document) -> Result<()> {
     if local.last.as_ref().is_some_and(|old| {
-        old.store_id != doc.store_id
+        old.schema != doc.schema
+            || old.mode != doc.mode
+            || old.store_id != doc.store_id
             || old.revision > doc.revision
             || old.authority_revision > doc.authority_revision
             || old.observed_wall_ms > doc.observed_wall_ms
@@ -430,3 +449,6 @@ fn check_known(local: &mut Local, doc: &Document) -> Result<()> {
     }
     Ok(())
 }
+
+#[path = "remote_unattended_store/service.rs"]
+pub(crate) mod service;

@@ -330,7 +330,7 @@ pub(crate) fn test_host_supplier(
 
 #[cfg(feature = "remote-host")]
 #[path = "native_crypto_existing_key_tests.rs"]
-mod existing_key_tests;
+pub(super) mod existing_key_tests;
 
 #[cfg(feature = "remote-host")]
 pub(crate) fn test_existing_host_supplier(

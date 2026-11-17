@@ -154,6 +154,12 @@ impl DelegatedRunOwner {
     pub(crate) fn request_revoke(&self) {
         self.0.policy.request_revoke();
     }
+    // 仅供封闭服务释放自己的资源引用；不是整体退休或重新授权凭据。
+    pub(crate) fn closed_capture_releasable(&self) -> bool {
+        self.0.clock_input.retirement()
+            == cc_desk_remote_host::native_host::NativeWriterRetirement::Joined
+            && self.0.policy.closed_calls_quiescent()
+    }
     pub(crate) fn observe_close(&self) -> CloseObservation {
         self.0.policy.observe_close()
     }
@@ -550,4 +556,28 @@ pub(crate) fn test_hold_admission_resource(admission: &NativeRunAdmission, work:
     let state = admission.authority.state.upgrade().unwrap();
     let _resource = state.resource.lock();
     work();
+}
+
+impl DelegatedRunOwner {
+    pub(crate) fn capture_single_run(
+        admission: NativeRunAdmission,
+        consent: &crate::remote_host_approval::unattended::final_approval::FinalConsent,
+        policy: Arc<Delegation>,
+    ) -> Result<Self, SafeError> {
+        if !consent.matches_original(&admission)
+            || !policy.matches_single_run(consent)
+            || admission.scope()? != *consent.scope()
+        {
+            return Err(error("FORBIDDEN"));
+        }
+        let native = NativeDelegationConsent {
+            policy,
+            origin: admission.network_origin()?,
+            scope: admission.scope()?,
+        };
+        Self::capture(admission, native)
+    }
+    pub(crate) fn check_captured(&self) -> Result<(), SafeError> {
+        self.0.validate()
+    }
 }

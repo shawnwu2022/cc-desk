@@ -1074,3 +1074,180 @@ unattended-key-ready-CngOwner_-regression and unattended-key-ready-strict.
 This is targeted coverage, not the complete crypto or Rust suite. Project
 lessons L02/L04/L06 were read from 9add5e02 without merging that documentation
 branch, preserving ownership, same-source and historical-fact distinctions.
+## A6b internal single-run service (production entry remains disabled)
+
+This is a new v1 service definition, not a claim that the earlier model already
+defined an installation identity. The existing pairing UUID identifies a pairing
+document namespace only. A domain-separated digest of that namespace may be used
+with the original Store instance, OS custody and exact run brands; it is not an
+OS installation identity or copy/rollback protection.
+
+A separate final native confirmation is required. A3 explicitly approved only
+preparation, and must never be silently upgraded to durable Enable permission.
+The final prompt must identify the device, original run/generation, exact role,
+actual effective cap, durable Enabled write, no restart restoration, and the
+difference between local closure, durable revoke and Unknown. It reuses original
+bounded approval timing but has an independent, explicitly approved final stage.
+Its cancellation epoch and short publication gate are shared with the service.
+Blocking store/run/key checks stay outside that gate; only final lease/end/epoch
+checks and the one-way Starting -> Active/Closed publication occur inside.
+
+The implemented durable format is schema 2 with the exact mode
+single_run_no_restore, included in canonical integrity and the journal binding.
+Schema 1 remains historical Locked and cannot be upgraded, rebound or enabled
+by this service. Unknown or mismatched modes fail closed. Loading a schema 2
+Enabled record never reconstructs a policy or opens a gate; crash residue is
+Locked, not falsely described as durably revoked. A fresh enable refuses such
+residue; any later cleanup requires explicit exact-CAS closure.
+
+The runtime binding must compare the full canonical public record digest, not
+merely put it in the durable target. Explicit key slots are native endpoint,
+native relay, browser TLS and WebAuthn; issuer is the domain-separated grant
+SPKI fingerprint. The full-record digest also binds browser relay, credential,
+profile, epochs and routing data. Confirmation revision comes from the original
+candidate's historical confirmation revision, distinct from the current store
+CAS revision. Exact session/run/generation is versioned and length-encoded, not
+delimiter concatenated. These digests supplement, never replace, original
+instance/run/worker identities and current checks.
+
+The internal start sequence holds the gate closed through final confirmation,
+original custody/key/candidate checks, durable exact-CAS Enable, original capture
+and tail revalidation. Neither capture nor VerifiedBinding escapes before final
+publication. Original document/caller network_checks are required before capture,
+at the Enable tail and before final publication. After explicit delegation is
+published, the captured owner follows the original exact run/resource/scope,
+trust, local revocation and deadline lifetime, not the obsolete WebView. This
+preserves DelegatedNative_DocumentRetirementPreservesOnlyCapturedEffect_001 and
+the existing design's explicit transfer of ownership away from that document.
+Any failed step irreversibly closes the policy first. If Enable was known to
+commit, compensation uses only its exact returned CAS to persist Revoked; a
+conflict must not overwrite another revision, and Unknown cannot be reported as
+successful durable revocation. Crash after Enable is handled by the no-restore
+read boundary, not by pretending compensation always ran.
+
+Disable closes the live gate before disk work and retains the original
+retirement owner. The internal Forget path must close first, then perform the
+original pairing tombstone transaction; old external Forget paths cannot be
+left as an uncoordinated production bypass when UI/network entry is eventually
+connected. Expiry, trust change and any uncertain effect fail closed. A managed
+background check, if introduced, needs explicit stop/join ownership and no
+detached Drop path. Polling cannot substitute for the shared cancellation gate.
+
+This first service must not expand the current 60-second frozen key cap into
+30 days. It must disclose and enforce its actual cap and reject incompatible
+requests. The 4096-commit journal remains a separate availability gate: every
+existing durable observe keeps its floor semantics, reserved revocation capacity
+is retained, and neither history reset nor silently reduced persistence is
+allowed. Early capacity revocation is not proof of 30-day operation. There is
+no UI, IPC, network activation or cross-process restoration in this slice.
+
+Required real-composition RED cases include cancellation during Enable I/O,
+after Enable before capture, and after tail checks before publication; capture
+failure with exact compensation; compensation CAS conflict/Unknown; expiry and
+trust changes; document invalidation before publication versus replacement after publication preserving only captured effects; original key/task retirement; and an owned subprocess exiting
+after durable Enable followed by a reopened Locked store. The tests must use
+explicit final-stage approval, isolated stores and public/mock test keys, not
+production registrations or a test-only authorization shortcut.
+### A6b implementation and evidence boundaries
+
+FinalApproval is independent of A3 preparation. Its sanitized final description
+includes the complete selected public record and record fingerprint, original
+run/generation, role, route/origin/RP and actual bounded cutoff. It creates no
+network entry. The service owns original key custody/signers and consumes the
+original ready receipt against the exact frozen binding before Enable. Original
+capture follows the committed Enable; current durable revision/full document
+is rechecked before publication, followed by original run/device/key checks.
+The transaction is released before the short publication gate, so a concurrent
+external write can still occur in between. Case009 proves its injected timing,
+not linearization with every external revoke. Shared revocation entry and a
+cross-process protocol remain prerequisites to production activation.
+The short final publication gate still shares the original cancellation epoch.
+
+An exact-CAS compensation conflict leaves the newer record untouched and closes
+the local gate; it is not reported as durable revocation success. is_published
+only reports publication state, never continuing effect authority or UI status.
+Every effect uses fresh candidate/key/run/deadline/durable checks. No background
+watcher is installed, so proactive expiry notification is not claimed.
+
+Normal service destruction retains OS lifetime custody until original key and
+notification joins and captured/ticket destruction. One process-wide slot is
+reserved before start. An uncertain effect keeps the original policy Unknown,
+snapshot, keys and OS custody in one bounded process-lifetime quarantine; new
+services are refused. No detached task, repeated authorization or history reset
+is introduced. advance_quarantine advances original key retirement. It may
+release only the private captured resource reference after sticky closure, a
+non-poisoned original effect mutex observation and original writer Joined.
+This means delegated synchronous calls are quiescent, not that unknown input
+results became successful or EffectsClosed. WouldBlock, poison and an unjoined
+writer retain the reference. Policy Unknown and the custody/slot remain until
+process exit even after the original run resources can be closed.
+
+The first quarantine test failed with output_reader_joined=false and
+original_io_drop_returned=false while the original keys had already joined.
+Those failures remain in quarantine-first, quarantine-diagnostic and
+quarantine-observation logs. The corrected fixture starts original supervisor
+shutdown and alternates its observations with quarantine advancement. Before
+process exit it requires direct child reaping, output reader/wait/stop joins
+and original IO Drop return; its observed io_threads_joined=false remains an
+explicit whole-resource Unknown, not a claimed complete platform retirement.
+The original observe_run Unknown constructor always sets io_threads_joined to
+false; it does not identify a particular still-running thread. IoDropWitness
+attests Rust destructor return only, not kernel close or all ConPTY internals.
+The checked original joins therefore do not establish complete platform exit.
+Only then does owned child exit release OS custody; reopening retains a Locked
+Enabled history and cannot restore authority. The 20-second child deadline
+was not enlarged, and forced child termination is a failure, never success.
+
+Effective negative evidence includes the original custody-order RED and two
+reversible mutations: omitting compensation fails case006 mode0 with revoked
+false; omitting the final publication gate fails mode1 after cancellation with
+Ok and revoked false. Each mutation restores the source byte-for-byte with a
+SHA256 record. Final owner-final4 runs ten schema/composition cases, including
+actual Node/PTY effects after document replacement, failed capture/cancellation,
+concurrent durable revocation without overwrite, original key exit barriers and
+the isolated quarantine child. Case010 explicitly identifies the second seal
+as Enabled, cancels the original final approval, then returns normal ciphertext
+to the original Windows transaction authorization fence. It proves no published
+service, unchanged Disabled revision 1 and original key/run cleanup for that
+seal-completion-to-commit timing, not every disk-I/O cancellation window.
+This uses synthetic Confirmed pairing fixtures,
+TestSealer and original ExistingKeyLoader through MockKeyApi, not a real phone
+registration, real user CNG key or production WebAuthn approval.
+
+The requirements above remain the production-entry checklist, not a claim all
+are finished. In particular, the existing Forget dialog explicitly does not
+revoke independent connections and is not silently repurposed here. A new
+accurately confirmed close-first deletion path, shared trust/revocation service,
+managed expiry/check scheduling and app shutdown advancement must be integrated
+before UI/network activation. Service-specific post-publication Unknown and later disk-I/O
+cancellation windows are not yet new composition cases; original
+store fence/Unknown tests remain separate evidence. The 60-second cap and
+4096-commit availability limitation remain, with no claim of 30-day operation.
+No real device, network, cloud deployment, default UI or restart recovery is
+enabled by this internal stage.
+
+Project lessons were read from main 2d65d236 without merging it. Two L06
+corrections matter here: a preparation approval is not durable Enable consent,
+and explicitly captured delegation is not the old WebView capability. An
+unknown effect outcome is also distinct from a currently executing call; the
+narrow quiescence observation does not clear Unknown or release OS custody.
+
+Final same-source verification passes 111 distinct tests: SingleRun 10, Final
+approval 2, Preparation 11, DelegatedGate 2, Store 29, Capacity 10, Custody 5,
+original model 13, DelegatedNative 6, NativePairing 16 and HostReady 7. The
+Custody helper is ignored as a standalone test but is invoked by its owned
+process case. Repeated earlier runs are not added to this count. A mistaken
+remote_unattended_tests filter ran zero cases and is explicitly excluded;
+the correct Unattended_ filter subsequently ran all 13 original model tests.
+Strict remote-host lib/tests Clippy passes on this source (25.90 seconds).
+Final logs are unattended-single-run-owner-final4,
+unattended-single-run-final-{UnattendedFinal_,UnattendedPreparation_,
+DelegatedGate_,UnattendedStore_,UnattendedCapacity_,UnattendedCustody_,
+Unattended_,DelegatedNative_,NativePairing_,HostReady_} and
+unattended-single-run-strict-final2. This is targeted regression, not the full
+Rust suite or a release qualification. Original unrelated browser/network
+acceptance changes remain outside this stage commit.
+The exact final test-name ledger is unattended-single-run-final-ledger.json.
+It uses only the eleven explicit final logs above, counts the nested nocapture
+case008 name once, excludes the standalone ignored helper and verifies each
+group against its final passed count. No historical approval log is included.

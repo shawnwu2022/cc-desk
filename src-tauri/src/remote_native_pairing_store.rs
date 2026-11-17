@@ -151,6 +151,7 @@ impl InstalledDeviceCandidate {
     pub(crate) fn record(&self) -> &PublicDeviceRecord {
         &self.record
     }
+    pub(crate) fn confirmed_revision(&self) -> u64 { self.confirmed_revision }
     pub(crate) fn expected(&self) -> &ExpectedStore {
         &self.expected
     }

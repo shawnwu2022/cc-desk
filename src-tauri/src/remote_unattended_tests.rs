@@ -8,6 +8,7 @@ fn binding() -> Binding {
         installation: [1; 32],
         device: [2; 32],
         key_fingerprints: [[3; 32]; 4],
+        full_record_digest: [7; 32],
         enrollment_revision: 1,
         issuer: [4; 32],
         principal: [5; 32],

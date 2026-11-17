@@ -259,3 +259,6 @@ mod clock_tests {
         }
     }
 }
+
+#[path = "remote_unattended_final_approval.rs"]
+pub(crate) mod final_approval;

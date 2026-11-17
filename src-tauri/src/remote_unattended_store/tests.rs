@@ -60,6 +60,8 @@ fn initial() -> Expected {
 }
 fn permit(store: &TestStore, expected: Expected, issued_ms: u64, cutoff_ms: u64) -> NativePermit {
     NativePermit {
+        final_control: None,
+        mode: None,
         instance: store.instance.clone(),
         expected,
         issued_ms,
@@ -794,3 +796,6 @@ mod custody;
 
 #[path = "capacity_tests.rs"]
 mod capacity;
+
+#[path = "single_run_tests.rs"]
+mod single_run_tests;

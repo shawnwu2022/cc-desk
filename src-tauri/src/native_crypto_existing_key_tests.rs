@@ -720,3 +720,24 @@ fn HostOpen_DeadlineDuringProviderCallRetainsPartial_011() {
 
 #[path = "native_crypto_host_ready_tests.rs"]
 mod ready;
+
+pub(crate) fn single_run_keys(supplier: crate::native_crypto::host::FrozenHostSupplier, retire_hook: Option<Box<dyn FnOnce()+Send>>) -> crate::native_crypto::SingleRunTestKeys {
+    use crate::native_crypto::host::{HostKeyCustody, NotifyHooks};
+    let binding = supplier.binding().clone();
+    let names = supplier.key_references().unwrap().clone();
+    let token = NativeRevocation::new();
+    let mut first = Api::new(Mode::Good, token.clone());
+    { let a=Arc::get_mut(&mut first).unwrap(); a.name=names[0].clone(); a.public=binding.endpoint_spki; }
+    let mut second = Api::new(Mode::Good, token.clone());
+    { let a=Arc::get_mut(&mut second).unwrap(); a.name=names[1].clone(); a.public=binding.relay_spki; }
+    *first.free_hook.lock()=retire_hook;
+    let frozen = crate::native_crypto::host_profile::NativeHostProfile::new(binding.clone(), &names[0], &names[1]).unwrap().test_api(first, second).freeze();
+    let custody=HostKeyCustody::reserve_with(token,binding.profile_cap,NotifyHooks::default());
+    let signers=custody.publisher().unwrap().prepare(frozen).unwrap();
+    let end=Instant::now()+Duration::from_secs(3);
+    loop {
+        if let Ok(Some(ready))=custody.take_ready() { return crate::native_crypto::SingleRunTestKeys {custody,ready,signers}; }
+        assert!(Instant::now()<end,"mock original workers failed readiness");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}

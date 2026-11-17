@@ -354,3 +354,19 @@ pub(crate) mod existing;
 #[cfg(feature = "remote-host")]
 #[path = "native_crypto_host_profile.rs"]
 pub(crate) mod host_profile;
+
+#[cfg(all(test, feature = "remote-host"))]
+pub(crate) struct SingleRunTestKeys {
+    pub(crate) custody: host::HostKeyCustody,
+    pub(crate) ready: host::HostKeysReady,
+    pub(crate) signers: host::HostSignerSet,
+}
+#[cfg(all(test, feature = "remote-host"))]
+pub(crate) fn single_run_test_keys(supplier: host::FrozenHostSupplier) -> SingleRunTestKeys {
+    tests::existing_key_tests::single_run_keys(supplier, None)
+}
+
+#[cfg(all(test, feature="remote-host"))]
+pub(crate) fn single_run_test_keys_with_hook(supplier: host::FrozenHostSupplier, hook: Box<dyn FnOnce()+Send>) -> SingleRunTestKeys {
+    tests::existing_key_tests::single_run_keys(supplier, Some(hook))
+}

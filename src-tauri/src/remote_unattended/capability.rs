@@ -10,6 +10,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub(crate) struct VerifiedBinding(Binding);
 
 pub(crate) struct Delegation {
+    final_control:
+        Option<Arc<crate::remote_host_approval::unattended::final_approval::FinalControl>>,
+
     owner: Owner,
     closed: Arc<AtomicBool>,
     uncertain: AtomicBool,
@@ -50,6 +53,9 @@ pub(crate) enum CloseObservation {
 
 // fence 仅供已持有 Owner 锁的同步 effect 回调；不能独立发行下一次许可。
 struct EffectFence {
+    final_control:
+        Option<Arc<crate::remote_host_approval::unattended::final_approval::FinalControl>>,
+
     closed: Arc<AtomicBool>,
     clock: Clock,
     wall_floor: u64,
@@ -58,8 +64,13 @@ struct EffectFence {
     end: Instant,
 }
 impl EffectFence {
+    fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::Acquire)
+            || self.final_control.as_ref().is_some_and(|c| !c.active())
+    }
+
     fn check(&self) -> bool {
-        let valid = !self.closed.load(Ordering::Acquire)
+        let valid = !self.is_closed()
             && self.clock.sample().is_ok_and(|now| {
                 now.wall_ms >= self.wall_floor
                     && now.wall_ms < self.cutoff
@@ -73,6 +84,11 @@ impl EffectFence {
     }
 }
 impl Delegation {
+    fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::Acquire)
+            || self.final_control.as_ref().is_some_and(|c| !c.active())
+    }
+
     fn sample(&self) -> Result<Sample, Denied> {
         let sample = self.clock.sample().inspect_err(|_| self.request_revoke())?;
         #[cfg(test)]
@@ -137,11 +153,21 @@ impl Delegation {
     pub(crate) fn request_revoke(&self) {
         self.closed.store(true, Ordering::Release);
     }
+    // 只证明本委托同步调用已离开；Unknown 结果和物理退休事实都不改变。
+    pub(crate) fn closed_calls_quiescent(&self) -> bool {
+        if !self.closed.load(Ordering::Acquire) {
+            return false;
+        }
+        match self.owner.state.try_lock() {
+            Ok(_state) => self.closed.load(Ordering::Acquire),
+            Err(_) => false,
+        }
+    }
     pub(crate) fn observe_close(&self) -> CloseObservation {
         if self.uncertain.load(Ordering::Acquire) {
             return CloseObservation::Unknown;
         }
-        if !self.closed.load(Ordering::Acquire) {
+        if !self.is_closed() {
             return CloseObservation::Retiring;
         }
         match self.owner.state.try_lock() {
@@ -161,7 +187,7 @@ impl Delegation {
         current: &VerifiedBinding,
         window: AttemptWindow,
     ) -> Result<Attempt, Denied> {
-        if self.closed.load(Ordering::Acquire) {
+        if self.is_closed() {
             return Err(Denied::Locked);
         }
         let mut s = match self.owner.state.try_lock() {
@@ -172,7 +198,7 @@ impl Delegation {
                 return Err(Denied::Unknown);
             }
         };
-        if self.closed.load(Ordering::Acquire) {
+        if self.is_closed() {
             return Err(Denied::Locked);
         }
         let ticket = self
@@ -183,7 +209,7 @@ impl Delegation {
                     self.request_revoke();
                 }
             })?;
-        if self.closed.load(Ordering::Acquire) {
+        if self.is_closed() {
             return Err(Denied::Locked);
         }
         Ok(ticket)
@@ -194,7 +220,7 @@ impl Delegation {
         current: &VerifiedBinding,
         operation: impl FnOnce(EffectFence) -> T,
     ) -> Result<T, Denied> {
-        if self.closed.load(Ordering::Acquire) {
+        if self.is_closed() {
             return Err(Denied::Locked);
         }
         // 不等待另一个无界 actor 操作，也不从 actor 回调重入这把锁。
@@ -206,7 +232,7 @@ impl Delegation {
                 return Err(Denied::Unknown);
             }
         };
-        if self.closed.load(Ordering::Acquire) {
+        if self.is_closed() {
             return Err(Denied::Locked);
         }
         if current.0.role != Role::Control {
@@ -221,6 +247,7 @@ impl Delegation {
             return Err(error);
         }
         let fence = EffectFence {
+            final_control: self.final_control.clone(),
             closed: self.closed.clone(),
             clock: self.clock.clone(),
             wall_floor: s.wall_floor,
@@ -230,7 +257,7 @@ impl Delegation {
         };
         // 锁跨同步提交、原 PTY effect 和答复；close 请求不需要等待这把锁。
         let result = operation(fence);
-        if self.closed.load(Ordering::Acquire) {
+        if self.is_closed() {
             Owner::close(
                 &mut s,
                 if self.uncertain.load(Ordering::Acquire) {
@@ -248,6 +275,7 @@ impl Delegation {
             installation: [1; 32],
             device: [2; 32],
             key_fingerprints: [[3; 32]; 4],
+            full_record_digest: [7; 32],
             enrollment_revision: 1,
             issuer: [4; 32],
             principal: [5; 32],
@@ -279,6 +307,7 @@ impl Delegation {
             .unwrap();
         (
             Arc::new(Self {
+                final_control: None,
                 owner,
                 closed: Arc::new(AtomicBool::new(false)),
                 uncertain: AtomicBool::new(false),
@@ -331,6 +360,28 @@ mod tests {
     use super::*;
     #[test]
     #[allow(non_snake_case)]
+    fn DelegatedGate_ClosedCallsQuiescenceNeverClearsUnknown_002() {
+        let (policy, _) = Delegation::test_new([7; 32], false);
+        assert!(!policy.closed_calls_quiescent());
+        policy.record_frame_result(&Ok(NativeFrameResult {
+            complete: false,
+            confirmed_bytes: 1,
+        }));
+        let held = policy.owner.state.lock().unwrap();
+        assert!(!policy.closed_calls_quiescent());
+        drop(held);
+        assert!(policy.closed_calls_quiescent());
+        assert_eq!(policy.observe_close(), CloseObservation::Unknown);
+        let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _held = policy.owner.state.lock().unwrap();
+            panic!("TEST_ONLY poison original effect gate");
+        }));
+        assert!(poisoned.is_err());
+        assert!(!policy.closed_calls_quiescent());
+        assert_eq!(policy.observe_close(), CloseObservation::Unknown);
+    }
+    #[test]
+    #[allow(non_snake_case)]
     fn DelegatedGate_UncertainFrameNeverBecomesEffectsClosed_001() {
         for partial in [true, false] {
             let (policy, current) = Delegation::test_new([7; 32], false);
@@ -359,3 +410,16 @@ mod tests {
 
 #[path = "network.rs"]
 pub(crate) mod network;
+
+#[path = "single_run.rs"]
+mod single_run;
+
+#[cfg(test)]
+impl Delegation {
+    pub(crate) fn test_single_run_partial_result(&self) {
+        self.record_frame_result(&Ok(NativeFrameResult {
+            complete: false,
+            confirmed_bytes: 1,
+        }));
+    }
+}
