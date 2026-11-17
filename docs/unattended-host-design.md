@@ -917,3 +917,55 @@ store-read and original-run-lock barriers verify cancellation can return before
 those locks are released in these fixtures, not absolute scheduling guarantees.
 No full native-dialog/WebView acceptance, real phone, public route, persistent
 owner startup, or unattended network connection is claimed by this stage.
+
+## A4: exclusive OS lifetime custody (not a restored owner)
+
+WindowsUnattendedBackend can claim a non-cloneable OwnerCustody using the existing
+permanent lifetime.lock byte interval [0,1). Claim briefly holds the independent
+control.lock interval [0,1), validates the original root/journal identities, takes
+an exclusive nonblocking lifetime lock and releases control. Ordinary transactions
+still take control exactly as before: no reentrancy, bypass, ACL change, new lock
+file or journal-format change is introduced. Custody exports no lifetime witness.
+
+Custody retains pinned root/lease handles, the lifetime lock, journal identity and
+same-process poison observation. A check against a backend reopened on the same
+NTFS root/lease/journal identities is allowed; a foreign root is rejected. This is
+OS resource custody, not the A2 candidate's Store-instance authority. Check opens
+its own short transaction and must not be nested inside an existing control
+transaction. Known poison rejects an existing custody check and a new claim.
+
+Claim does not parse or attest the journal chain, initialize a missing document,
+prove Enabled, or create an authorization. A fresh empty store can be held without
+writing its blob/journal. Original Store transaction validation/CAS remains
+mandatory before any future recovery. Other ordinary transactions retain their
+existing behavior; no cross-process live-owner revocation notification is added.
+Dropping custody or exiting the holder process only releases OS custody and does
+not change Disabled/Enabled/Revoked history. No production network owner uses this
+capability yet.
+
+The real isolated NTFS tests hold custody during original observe/revoke
+transactions, reject a second object/child process, reject a foreign root, retain
+exclusion after dropping the original backend, and permit reacquisition after
+Drop or the dedicated child calls process::exit(7) without Rust destructors.
+The child is bounded; timeout kills only its owned Child handle, waits and joins
+its reader, then fails the test. This is not a guarantee about every possible OS
+crash or storage failure. A temporary shared-lock mutation caused all three
+competition cases to fail, including the actual child assertion. The mutation was
+restored and the final exclusive source rebuilt; the shared-red log is retained.
+
+The remaining journal gate is unchanged: 224-byte records, 8192 records and two
+records per commit allow at most 4096 commits. Current observe persists each
+changed wall value, even when Disabled/Revoked; equal wall values do not write.
+Revocation currently consumes the same capacity and can fail at a full journal.
+Production observe cadence is not wired. Reserving the final revocation pair and
+closing before exhaustion is a separate planned fail-closed guard, not evidence
+of 30-day usability and not permission to reduce clock checks, reset the journal,
+or discard history. An old full Enabled record cannot be claimed durably revoked
+merely because an in-memory owner is blocked.
+
+A4 final same-source verification: five custody tests and the original 29 store
+tests pass (34 distinct tests). The dedicated ignored helper is actually invoked
+as child processes by custody case 003, not counted as an unrun end-to-end proof.
+Strict remote-host lib/tests Clippy passes (27.55 seconds). Logs:
+unattended-custody-shared-red, unattended-custody-final,
+unattended-custody-store-regression and unattended-custody-strict-final.

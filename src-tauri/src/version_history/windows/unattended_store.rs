@@ -4,7 +4,7 @@
 use super::{
     files::{ComponentName, Directory, FileIdentity, PinnedFile, PrivateDirectory},
     handle,
-    lease::{ControlLease, LeaseFiles},
+    lease::{ControlLease, ExclusiveLease, LeaseFiles},
     security::CurrentUser,
 };
 #[cfg(test)]
@@ -49,7 +49,51 @@ pub(crate) struct WindowsUnattendedBackend {
     #[cfg(test)]
     fail_before_publish: Arc<std::sync::atomic::AtomicBool>,
 }
+// 只保管独立 lifetime.lock，不授予恢复、写入或网络权限；不可复制或外借 witness。
+pub(crate) struct OwnerCustody {
+    root: Arc<PrivateDirectory>,
+    leases: Arc<LeaseFiles>,
+    lifetime: ExclusiveLease,
+    journal_identity: FileIdentity,
+    poison: Arc<AtomicBool>,
+}
+impl OwnerCustody {
+    pub(crate) fn check(&self, backend: &WindowsUnattendedBackend) -> Result<()> {
+        if self.poison.load(Ordering::Acquire) {
+            return Err(StoreError::Poisoned);
+        }
+        if self.root.directory().identity() != backend.root.directory().identity()
+            || self.leases.identities() != backend.leases.identities()
+            || self.journal_identity != backend.journal_identity
+        {
+            return Err(StoreError::Unauthorized);
+        }
+        self.lifetime.verify_root(&self.root).map_err(io_error)?;
+        // 独立短事务只验证当前身份；不在调用者已持 control 时重入。
+        let tx = backend.begin()?;
+        if tx.journal.identity() != &self.journal_identity {
+            return Err(StoreError::Unknown);
+        }
+        Ok(())
+    }
+}
 impl WindowsUnattendedBackend {
+    pub(crate) fn claim_owner_custody(&self) -> Result<OwnerCustody> {
+        // control 与 lifetime 是不同永久文件的 [0,1) 区间；不长持事务锁。
+        let tx = self.begin()?;
+        let lifetime = self
+            .leases
+            .acquire_exclusive(&tx.control)
+            .map_err(io_error)?;
+        lifetime.verify_root(&self.root).map_err(io_error)?;
+        Ok(OwnerCustody {
+            root: self.root.clone(),
+            leases: self.leases.clone(),
+            lifetime,
+            journal_identity: tx.journal.identity().clone(),
+            poison: self.poison.clone(),
+        })
+    }
     /// 仅显式初始化创建；打开和加载绝不自动补建缺失目录。
     pub(crate) fn create_new(parent: &Path) -> Result<Self> {
         Self::open_impl(parent, true)

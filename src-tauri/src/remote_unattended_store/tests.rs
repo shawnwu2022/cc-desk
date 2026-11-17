@@ -788,3 +788,6 @@ fn UnattendedStore_ReopenBeforeInitializeNeverResumesCreation_029() {
     assert!(!path(&s, "delegation.dpapi").exists());
     assert!(matches!(try_reopen(d.path()), Err(StoreError::Poisoned)));
 }
+
+#[path = "custody_tests.rs"]
+mod custody;
