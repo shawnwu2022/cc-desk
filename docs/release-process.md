@@ -2,6 +2,8 @@
 
 Every authorized version release first merges reviewed changes into **protected main** and then publishes only from that exact merged main source. After merging, remove integrated and redundant local/remote branches and the temporary release branch; retain unfinished branches with continued value or long-term purpose in place. Do not create backups merely to justify deletion; permanently deleting unintegrated unique work requires explicit itemized confirmation. The user-authorized recovery path promotes one signed platform set from **protected main**. Feature revisions remain candidates until they are merged and the actual merged main SHA passes full CI under the required-checks policy, with a validated disclosure of unavailable native checks. Required CI success does not prove original unfiltered native All or real installation/return roundtrip acceptance. Package metadata changes and manual dispatch can start the release workflow; tags and feature branches cannot promote. The release workflow waits for that exact main SHA's ordinary CI to finish; failed CI and changed main remain blocking.
 
+Before opening a version-promotion PR, synchronize the package manifests/locks, Tauri config, changelog and the fixed version/date expectations in `tests/config/packageVersion.test.ts`. Run `npm test -- tests/config/packageVersion.test.ts` first and confirm all five cases execute; this focused check does not replace full CI or publication gates. See [lesson L09](lessons-learned.md#l09-版本晋级不只改-manifests).
+
 Before starting signed builds, the read-only admission step also samples the
 latest ordinary push CI for the exact protected-main SHA. A completed unsuccessful
 CI run rejects redundant candidate builds immediately; a missing or pending run
