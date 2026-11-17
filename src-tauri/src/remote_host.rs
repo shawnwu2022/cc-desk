@@ -11,6 +11,9 @@ use activation::{ActivationOperation, ActivationReservation};
 #[path = "remote_host/delegated.rs"]
 pub(crate) mod delegated;
 #[cfg(windows)]
+#[path = "remote_short_session.rs"]
+pub(crate) mod short_session;
+#[cfg(windows)]
 #[path = "remote_host_unattended.rs"]
 pub(crate) mod unattended;
 use cc_desk_remote_host::native_host::{NativeHost, WriterRetirement};
@@ -216,6 +219,8 @@ pub(crate) struct ServiceState {
 pub(crate) struct RemoteHostService {
     #[cfg(windows)]
     pub(crate) unattended: unattended::UnattendedCustody,
+    #[cfg(windows)]
+    pub(crate) short_session: short_session::ShortSessionService,
     pub(crate) state: Mutex<ServiceState>,
     pub(crate) network: Arc<crate::remote_host_network::HostNetworkCustody>,
     #[cfg(windows)]
@@ -226,6 +231,8 @@ impl Default for RemoteHostService {
         Self {
             #[cfg(windows)]
             unattended: Default::default(),
+            #[cfg(windows)]
+            short_session: Default::default(),
             network: Arc::new(Default::default()),
             #[cfg(windows)]
             registration: Arc::new(Default::default()),

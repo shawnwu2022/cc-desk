@@ -157,6 +157,9 @@ pub(crate) struct ApprovedPreparation {
     end: Instant,
 }
 impl UnattendedApproval {
+    pub(crate) fn waiting(&self) -> bool {
+        self.machine.waiting()
+    }
     pub(crate) fn cancel(&self) {
         let _gate = self.gate.lock();
         self.machine.cancel();

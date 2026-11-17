@@ -167,6 +167,13 @@ Generation: {}
     }
 }
 impl FinalApproval {
+    pub(crate) fn matches_control(&self, control: &Arc<FinalControl>) -> bool {
+        Arc::ptr_eq(&self.control, control)
+    }
+    pub(crate) fn waiting(&self) -> bool {
+        self.machine.waiting()
+    }
+
     pub(crate) fn show<B: Backend, S: Sealer, R: tauri::Runtime>(
         approved: ApprovedPreparation,
         store: &PairingStore<B, S>,

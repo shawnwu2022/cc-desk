@@ -10,6 +10,7 @@ use std::sync::{
 use std::time::Instant;
 #[path = "remote_unattended_store/dpapi.rs"]
 mod dpapi;
+pub(crate) use dpapi::CurrentUserDpapi;
 #[path = "remote_unattended_store/journal.rs"]
 pub(crate) mod journal;
 use journal::CommitStamp;

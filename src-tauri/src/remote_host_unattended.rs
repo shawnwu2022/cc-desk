@@ -6,6 +6,10 @@ use crate::remote_unattended_store::{
 use parking_lot::Mutex;
 use std::{sync::Arc, thread::JoinHandle};
 
+#[path = "remote_host_preparing.rs"]
+pub(crate) mod preparing;
+use preparing::PreparingRequest;
+
 pub(crate) struct StartPermit {
     app: Arc<()>,
     close: CloseHandle,
@@ -196,6 +200,7 @@ impl Drop for Owner {
 #[derive(Default)]
 struct State {
     closing: bool,
+    preparing: Option<Arc<PreparingRequest>>,
     owner: Option<Arc<Owner>>,
     runtime: Option<Arc<crate::cli::native_runtime::NativeRuntime>>,
 }
@@ -213,6 +218,23 @@ pub(crate) struct UnattendedCustody {
     panic_worker: std::sync::atomic::AtomicBool,
 }
 impl UnattendedCustody {
+    pub(crate) fn reserve_preparation(
+        &self,
+        runtime: Arc<crate::cli::native_runtime::NativeRuntime>,
+        admission: crate::run_supervisor::NativeRunAdmission,
+    ) -> Result<Arc<PreparingRequest>, StoreError> {
+        if !admission.is_owned_by(&runtime) {
+            return Err(StoreError::Unauthorized);
+        }
+        let mut state = self.state.lock();
+        if state.closing || state.owner.is_some() || state.preparing.is_some() {
+            return Err(StoreError::Conflict);
+        }
+        let request = PreparingRequest::new(admission);
+        state.runtime = Some(runtime);
+        state.preparing = Some(request.clone());
+        Ok(request)
+    }
     #[cfg(test)]
     pub(crate) fn install<S: Sealer + Send + 'static>(
         &self,
@@ -220,7 +242,7 @@ impl UnattendedCustody {
     ) -> Result<(), StoreError> {
         let end = controller.fixed_end();
         let close = controller.close_handle();
-        self.install_managed(Box::new(controller), close, end, None, true)
+        self.install_managed(Box::new(controller), close, end, None, true, None)
     }
     #[allow(
         dead_code,
@@ -239,7 +261,31 @@ impl UnattendedCustody {
         let valid = pending.matches_runtime(&runtime);
         let end = pending.end();
         let close = CloseHandle::from_control(pending.control());
-        self.install_managed(Box::new(pending), close, end, Some(runtime), valid)
+        self.install_managed(Box::new(pending), close, end, Some(runtime), valid, None)
+    }
+    pub(crate) fn reserve_prepared<S, B, P>(
+        &self,
+        request: &Arc<PreparingRequest>,
+        pending: crate::remote_unattended_store::service::pending::PendingStart<S, B, P>,
+        runtime: Arc<crate::cli::native_runtime::NativeRuntime>,
+    ) -> Result<(), StoreError>
+    where
+        S: Sealer + Send + 'static,
+        B: crate::remote_native_pairing_store::Backend + Send + Sync + 'static,
+        P: crate::remote_native_pairing_store::Sealer + Send + Sync + 'static,
+    {
+        let valid =
+            pending.matches_runtime(&runtime) && request.matches_control(&pending.control());
+        let end = pending.end();
+        let close = CloseHandle::from_control(pending.control());
+        self.install_managed(
+            Box::new(pending),
+            close,
+            end,
+            Some(runtime),
+            valid,
+            Some(request),
+        )
     }
     #[allow(
         dead_code,
@@ -269,6 +315,7 @@ impl UnattendedCustody {
         end: std::time::Instant,
         runtime: Option<Arc<crate::cli::native_runtime::NativeRuntime>>,
         valid: bool,
+        preparation: Option<&Arc<PreparingRequest>>,
     ) -> Result<(), StoreError> {
         let held: HeldController = Arc::new(Mutex::new(Some(managed)));
         let owner = Arc::new(Owner {
@@ -280,11 +327,31 @@ impl UnattendedCustody {
         });
         let rejection = {
             let mut state = self.state.lock();
-            if !valid || state.closing || state.owner.is_some() {
+            let prepared_matches = match (&state.preparing, preparation) {
+                (None, None) => true,
+                (Some(original), Some(request)) => {
+                    Arc::ptr_eq(original, request) && !request.closed()
+                }
+                _ => false,
+            };
+            let runtime_matches = state.runtime.as_ref().is_none_or(|original| {
+                runtime
+                    .as_ref()
+                    .is_some_and(|current| Arc::ptr_eq(original, current))
+            });
+            if !valid
+                || !prepared_matches
+                || !runtime_matches
+                || state.closing
+                || state.owner.is_some()
+            {
                 Some(RejectedCleanup::new(self))
             } else {
                 state.runtime = runtime;
                 state.owner = Some(owner.clone());
+                if let Some(request) = preparation {
+                    request.transferred();
+                }
                 None
             }
         };
@@ -380,15 +447,43 @@ impl UnattendedCustody {
             }
         }
     }
+    pub(crate) fn preparation_status(&self) -> Option<(String, bool)> {
+        self.state
+            .lock()
+            .preparing
+            .as_ref()
+            .map(|p| (p.id().to_owned(), p.closed()))
+    }
+    pub(crate) fn close_preparation(&self, id: &str) -> Result<(), StoreError> {
+        let state = self.state.lock();
+        if state
+            .preparing
+            .as_ref()
+            .is_none_or(|request| request.id() != id)
+        {
+            return Err(StoreError::Unauthorized);
+        }
+        drop(state);
+        self.request_close();
+        Ok(())
+    }
     pub(crate) fn request_close(&self) {
         let mut state = self.state.lock();
         state.closing = true;
         if let Some(owner) = &state.owner {
             owner.close.request_close();
         }
+        let preparing = state.preparing.clone();
+        drop(state);
+        if let Some(preparing) = preparing {
+            preparing.request_close();
+        }
     }
     pub(crate) fn observe(&self) -> Observation {
-        let owner = self.state.lock().owner.clone();
+        let (owner, preparing) = {
+            let state = self.state.lock();
+            (state.owner.clone(), state.preparing.clone())
+        };
         let mut result = owner.map_or(
             Observation {
                 present: false,
@@ -401,6 +496,7 @@ impl UnattendedCustody {
             },
             |o| o.advance(),
         );
+        result.outstanding |= preparing.as_ref().is_some_and(|p| p.outstanding());
         result.outstanding |= self
             .rejected_cleanup
             .load(std::sync::atomic::Ordering::Acquire)

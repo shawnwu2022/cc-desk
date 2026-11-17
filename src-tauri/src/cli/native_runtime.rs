@@ -22,6 +22,9 @@ use tauri::ipc::{InvokeBody, Request};
 use tauri::utils::config::{Config, FrontendDist, WindowConfig};
 use tauri::{Manager, Runtime, Url, Webview, WebviewUrl, WebviewWindow};
 
+#[cfg(all(feature = "remote-host", windows))]
+pub(crate) type HostDocumentAdmission<T> = (Arc<DocumentBinding<NativeRun>>, CallerIdentity, T);
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct StopQuery {
@@ -745,6 +748,19 @@ impl NativeRuntime {
             .stop(&caller, &receipt)
     }
 
+    #[cfg(all(feature = "remote-host", windows))]
+    pub(crate) fn admit_host_document<T: serde::de::DeserializeOwned, R: Runtime>(
+        &self,
+        webview: &Webview<R>,
+        headers: &HeaderMap,
+        body: &InvokeBody,
+    ) -> Result<HostDocumentAdmission<T>, SafeError> {
+        let binding = self.binding()?;
+        let caller = binding.admit_native(webview, headers)?;
+        let input = decode_projection(body, 1024)?;
+        binding.check_admitted(&caller)?;
+        Ok((binding, caller, input))
+    }
     #[cfg(all(feature = "remote-host", windows))]
     pub(crate) fn admit_host_configuration<T: Runtime>(
         &self,

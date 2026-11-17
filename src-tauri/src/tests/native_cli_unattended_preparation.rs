@@ -1672,9 +1672,16 @@ impl Drop for UnattendedAppRuntimeStop {
     }
 }
 fn unattended_app_run() -> (Fixture, Arc<NativeRuntime>, UnattendedAppRuntimeStop) {
+    let (f, native, guard, ()) = unattended_app_run_prepared(|_| ());
+    (f, native, guard)
+}
+fn unattended_app_run_prepared<T>(
+    prepare: impl FnOnce(&mut Fixture) -> T,
+) -> (Fixture, Arc<NativeRuntime>, UnattendedAppRuntimeStop, T) {
     let transports = Arc::new(TerminalTransports::new());
     let supervisor = Arc::new(NativeRunSupervisor::new(transports.clone()));
-    let f = Fixture::with_runtime_environment("input", supervisor, transports, true);
+    let mut f = Fixture::with_runtime_environment("input", supervisor, transports, true);
+    let prepared = prepare(&mut f);
     let native = Arc::new(NativeRuntime::with_owned_components_for_test(
         f.service.clone(),
         f.transports.clone(),
@@ -1699,7 +1706,7 @@ fn unattended_app_run() -> (Fixture, Arc<NativeRuntime>, UnattendedAppRuntimeSto
         assert!(Instant::now() < end);
         std::thread::sleep(Duration::from_millis(5));
     }
-    (f, native, guard)
+    (f, native, guard, prepared)
 }
 #[test]
 fn UnattendedApp_UnknownJoinsWatcherAndPhysicalOwnersButNeverPublishesExit_005() {
@@ -3032,13 +3039,34 @@ async fn UnattendedShortNetwork_IdleFixedDeadlineRetiresBeforeAppExit_004() {
     }
     unattended_short_network_case(2).await;
 }
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn UnattendedProduct_OriginalTwoApprovalsRelayWasmInput_002() {
+    if short_network_isolated("UnattendedProduct_OriginalTwoApprovalsRelayWasmInput_002") {
+        return;
+    }
+    unattended_short_network_case(3).await;
+}
 async fn unattended_short_network_case(mode: u8) {
     let revoke = mode == 1;
     let expires = mode == 2;
     use crate::remote_host_approval::unattended::final_approval::FinalApproval;
     use crate::remote_native_pairing_store::tests::{record, synthetic_confirmed_record_candidate};
     use crate::remote_unattended_store::service::pending::PendingStart;
-    let (f, native, _runtime_stop) = unattended_app_run();
+    let (f, native, _runtime_stop, document) = unattended_app_run_prepared(|f| {
+        if mode != 3 {
+            return None;
+        }
+        let url: tauri::Url = "http://tauri.localhost/".parse().unwrap();
+        let authority =
+            crate::cli::document::DocumentAuthority::new(f.service.registry().clone(), url.clone())
+                .unwrap();
+        let mut resources = tauri::ResourceTable::default();
+        let binding = Arc::new(authority.attach(&mut resources).unwrap());
+        authority.started(&url);
+        authority.finished(&url);
+        f.caller = authority.test_caller();
+        Some((authority, resources, binding))
+    });
     let mut record = record();
     record.native.relay_spki = record.native.endpoint_spki.clone();
     record.native.endpoint_spki = network_identities::identity(false, false).1;
@@ -3073,40 +3101,10 @@ async fn unattended_short_network_case(mode: u8) {
     let pair_dir = store_root();
     let pairing = Arc::new(synthetic_file_store(pair_dir.path()).unwrap());
     let candidate = synthetic_confirmed_record_candidate(&pairing, record);
-    let preparation = UnattendedPreparation::new(
-        &pairing,
-        candidate,
-        &admission,
-        RequestedRole::Control,
-        cutoff(),
-    )
-    .unwrap();
-    let first = UnattendedApproval::test_pending(preparation);
-    first.test_answer(true, false);
-    let prepared = first.consume(&pairing, &admission).unwrap().unwrap();
-    let approval =
-        Arc::new(FinalApproval::test_pending_network(prepared, &pairing, &admission).unwrap());
-    approval.test_answer(true);
-    let consent = approval.consume(&pairing, &admission).unwrap().unwrap();
-    let fixed_end = consent.end();
-    let control = consent.control();
+    let selection=serde_json::json!({"storeId":candidate.expected().store_id,"revision":candidate.expected().revision.to_string(),"deviceId":candidate.record().device_id}).to_string();
     let durable_dir = store_root();
     let path = std::path::PathBuf::from(durable_dir.path().to_string_lossy().replace('/', "\\"));
-    let backend =
-        crate::version_history::windows::unattended_store::WindowsUnattendedBackend::create_new(
-            &path,
-        )
-        .unwrap();
     let host = Arc::new(RemoteHostService::default());
-    let mut pending = PendingStart::new_network(
-        backend,
-        SingleRunSealer,
-        consent,
-        admission,
-        pairing.clone(),
-        &host,
-    )
-    .unwrap();
     let decode = |s: &str| -> [u8; 32] {
         (0..32)
             .map(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16).unwrap())
@@ -3120,17 +3118,86 @@ async fn unattended_short_network_case(mode: u8) {
         std::sync::atomic::AtomicUsize::new(0)
     }));
     let (accepted, ready) = tokio::sync::oneshot::channel();
-    pending.test_anonymous_network(
-        [
-            decode("c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721"),
-            relay_scalar,
-        ],
-        opened.clone(),
-        accepted,
-    );
-    host.unattended
-        .reserve_start(pending, native.clone())
+    let scalars = [
+        decode("c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721"),
+        relay_scalar,
+    ];
+    let mut product_keepalive = None;
+    let (approval, fixed_end, control) = if mode == 3 {
+        let product = crate::remote_host::short_session::ShortSessionService::default();
+        let binding = &document.as_ref().unwrap().2;
+        let id = product
+            .test_request(
+                &host,
+                crate::remote_host::short_session::StartContext {
+                    runtime: native.clone(),
+                    binding: binding.clone(),
+                    caller: f.caller.clone(),
+                    admission,
+                },
+                &selection,
+                pairing.clone(),
+            )
+            .unwrap();
+        for _ in 0..3 {
+            product.current(&host).unwrap();
+        }
+        assert_eq!(
+            opened
+                .iter()
+                .map(|v| v.load(std::sync::atomic::Ordering::Acquire))
+                .sum::<usize>(),
+            0
+        );
+        product.test_answer(false, true);
+        product
+            .test_advance::<SingleRunSealer>(&host, binding, &f.caller, &id, || {
+                panic!("preparation must not persist")
+            })
+            .unwrap();
+        product.test_answer(true, true);
+        product.test_network(crate::remote_host::short_session::TestNetwork {
+            scalars,
+            opened: opened.clone(),
+            accepted,
+        });
+        product.test_advance(&host,binding,&f.caller,&id,||Ok((crate::version_history::windows::unattended_store::WindowsUnattendedBackend::create_new(&path).unwrap(),SingleRunSealer))).unwrap();
+        product_keepalive = Some(product);
+        (None, None, None)
+    } else {
+        let preparation = UnattendedPreparation::new(
+            &pairing,
+            candidate,
+            &admission,
+            RequestedRole::Control,
+            cutoff(),
+        )
         .unwrap();
+        let first = UnattendedApproval::test_pending(preparation);
+        first.test_answer(true, false);
+        let prepared = first.consume(&pairing, &admission).unwrap().unwrap();
+        let approval =
+            Arc::new(FinalApproval::test_pending_network(prepared, &pairing, &admission).unwrap());
+        approval.test_answer(true);
+        let consent = approval.consume(&pairing, &admission).unwrap().unwrap();
+        let end = consent.end();
+        let control = consent.control();
+        let backend=crate::version_history::windows::unattended_store::WindowsUnattendedBackend::create_new(&path).unwrap();
+        let mut pending = PendingStart::new_network(
+            backend,
+            SingleRunSealer,
+            consent,
+            admission,
+            pairing.clone(),
+            &host,
+        )
+        .unwrap();
+        pending.test_anonymous_network(scalars, opened.clone(), accepted);
+        host.unattended
+            .reserve_start(pending, native.clone())
+            .unwrap();
+        (Some(approval), Some(end), Some(control))
+    };
     let accepted = tokio::time::timeout(Duration::from_secs(8), ready).await;
     let mut output = None;
     if matches!(accepted, Ok(Ok(()))) {
@@ -3200,8 +3267,8 @@ async fn unattended_short_network_case(mode: u8) {
         let observed = host.unattended.observe();
         eprintln!("TEST_ONLY_SHORT_EXPIRED_BEFORE_APP known={known:?} observation={observed:?}");
         matches!(known, Ok(true))
-            && control.closed()
-            && Instant::now() >= fixed_end
+            && control.as_ref().unwrap().closed()
+            && Instant::now() >= fixed_end.unwrap()
             && observed.watcher_joined
             && observed.retired
     } else {
@@ -3236,6 +3303,7 @@ async fn unattended_short_network_case(mode: u8) {
     );
     assert!(facts.unwrap().original_resources_retired());
     drop(approval);
+    drop(product_keepalive);
 }
 
 #[test]
@@ -3313,4 +3381,196 @@ fn short_network_isolated(case: &str) -> bool {
     eprintln!("{evidence}");
     assert!(status.success() && evidence.contains("1 passed; 0 failed"));
     true
+}
+
+#[test]
+fn UnattendedPreparing_CloseKeepsInflightAppOwned_001() {
+    use crate::{cli::native_runtime::NativeRuntime, remote_host::RemoteHostService};
+    let (f, mut cleanup) = setup();
+    let admission = admit(&f);
+    let native = Arc::new(NativeRuntime::with_owned_components_for_test(
+        f.service.clone(),
+        f.transports.clone(),
+        f.supervisor.clone(),
+    ));
+    let host = RemoteHostService::default();
+    let request = host
+        .unattended
+        .reserve_preparation(native, admission)
+        .unwrap();
+    let mut operation = request.begin().unwrap();
+    host.unattended.request_close();
+    let closed = request.closed();
+    let outstanding = host.unattended.observe().outstanding;
+    let refused = request.begin().is_err();
+    operation.complete();
+    drop(operation);
+    let settled = host.unattended.observe().known();
+    assert!(cleanup.close());
+    assert!(closed && outstanding && refused && settled);
+}
+
+#[test]
+fn UnattendedPreparing_CloseCompletionCannotPrecedeOriginalCancel_003() {
+    let (f, mut cleanup) = setup();
+    let admission = admit(&f);
+    let native = Arc::new(NativeRuntime::with_owned_components_for_test(
+        f.service.clone(),
+        f.transports.clone(),
+        f.supervisor.clone(),
+    ));
+    let host = Arc::new(RemoteHostService::default());
+    let request = host
+        .unattended
+        .reserve_preparation(native, admission)
+        .unwrap();
+    let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(1);
+    let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+    request.test_before_cancel(move || {
+        entered_tx.send(()).unwrap();
+        release_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    });
+    let original = host.clone();
+    let worker = std::thread::spawn(move || original.unattended.request_close());
+    let entered = entered_rx.recv_timeout(Duration::from_secs(5)).is_ok();
+    let before = host.unattended.observe();
+    let closed = request.closed();
+    let _ = release_tx.send(());
+    worker.join().unwrap();
+    let after = host.unattended.observe();
+    assert!(cleanup.close());
+    assert!(entered && closed && before.outstanding && !before.known() && after.known());
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn UnattendedProduct_CancelAndForeignAdvanceNeverPersist_004() {
+    use crate::remote_host::short_session::{ShortSessionService, StartContext};
+    for mode in 0..5 {
+        let (mut f, native, _guard, (document, mut resources, binding)) =
+            unattended_app_run_prepared(|f| {
+                let url: tauri::Url = "http://tauri.localhost/".parse().unwrap();
+                let document = crate::cli::document::DocumentAuthority::new(
+                    f.service.registry().clone(),
+                    url.clone(),
+                )
+                .unwrap();
+                let mut resources = tauri::ResourceTable::default();
+                let binding = Arc::new(document.attach(&mut resources).unwrap());
+                document.started(&url);
+                document.finished(&url);
+                f.caller = document.test_caller();
+                (document, resources, binding)
+            });
+        let admission = admit(&f);
+        let pair_dir = store_root();
+        let pairing = Arc::new(synthetic_file_store(pair_dir.path()).unwrap());
+        let candidate =
+            crate::remote_native_pairing_store::tests::synthetic_confirmed_record_candidate(
+                &pairing,
+                crate::remote_native_pairing_store::tests::record(),
+            );
+        let selection=serde_json::json!({"storeId":candidate.expected().store_id,"revision":candidate.expected().revision.to_string(),"deviceId":candidate.record().device_id}).to_string();
+        let host = Arc::new(RemoteHostService::default());
+        let product = ShortSessionService::default();
+        let id = product
+            .test_request(
+                &host,
+                StartContext {
+                    runtime: native.clone(),
+                    binding: binding.clone(),
+                    caller: f.caller.clone(),
+                    admission,
+                },
+                &selection,
+                pairing,
+            )
+            .unwrap();
+        let never = || -> Result<(_, SingleRunSealer), crate::cli::types::SafeError> {
+            panic!("unapproved flow reached persistence")
+        };
+        for _ in 0..3 {
+            let state = serde_json::to_value(
+                product
+                    .status_for(&host, &binding, &f.caller, &native)
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(state["phase"], "preparing");
+        }
+        if mode == 1 {
+            product.test_answer(false, true);
+            product
+                .test_advance(&host, &binding, &f.caller, &id, never)
+                .unwrap();
+        }
+        if mode <= 1 {
+            product
+                .close_for(&host, &binding, &f.caller, &native, &id)
+                .unwrap();
+            product.test_answer(mode == 1, true);
+            assert!(product
+                .test_advance(&host, &binding, &f.caller, &id, never)
+                .is_err());
+        } else if mode == 2 {
+            product.test_answer(false, true);
+            assert!(product
+                .test_advance(
+                    &host,
+                    &binding,
+                    &f.caller,
+                    "22222222-2222-4222-8222-222222222222",
+                    never
+                )
+                .is_err());
+            product
+                .close_for(&host, &binding, &f.caller, &native, &id)
+                .unwrap();
+        } else if mode == 4 {
+            f.service.access(&f.caller, &f.request_run()).unwrap()
+                .write_frame(b"native").unwrap();
+            assert_eq!(report(&f)["input"], json!([110, 97, 116, 105, 118, 101]));
+            assert!(f.service.access(&f.caller, &f.request_run()).is_err());
+            product.status_for(&host, &binding, &f.caller, &native).unwrap();
+            product.close_for(&host, &binding, &f.caller, &native, &id).unwrap();
+        } else {
+            product.test_answer(false, true);
+            let url: tauri::Url = "http://tauri.localhost/".parse().unwrap();
+            let next = crate::cli::document::DocumentAuthority::new(
+                f.service.registry().clone(),
+                url.clone(),
+            )
+            .unwrap();
+            let next_binding = Arc::new(next.attach(&mut resources).unwrap());
+            next.started(&url);
+            next.finished(&url);
+            f.caller = next.test_caller();
+            assert!(product
+                .test_advance(&host, &next_binding, &f.caller, &id, never)
+                .is_err());
+            product
+                .status_for(&host, &next_binding, &f.caller, &native)
+                .unwrap();
+            product
+                .close_for(&host, &next_binding, &f.caller, &native, &id)
+                .unwrap();
+        }
+        assert!(host.unattended.start_result().is_none());
+        host.request_exit(55, false);
+        host.start_exit(
+            55,
+            native.clone(),
+            Arc::new(crate::remote_client_ipc::RemoteClientService::default()),
+            |_| {},
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_secs(10), host.unattended.wait())
+                .await
+                .unwrap()
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_secs(10), host.test_join_exit_worker())
+                .await
+                .unwrap()
+        );
+        drop(document);
+    }
 }

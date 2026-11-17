@@ -14,6 +14,7 @@ import AppButton from '@/components/ui/AppButton.vue'
 import InlineNotice from '@/components/ui/InlineNotice.vue'
 import { parseJson } from '../../../remote/ui-terminal/src/wire'
 import BrowserPairingCandidateEditor from './BrowserPairingCandidateEditor.vue'
+import ShortRemoteSessionPanel from './ShortRemoteSessionPanel.vue'
 import { captureNativeAttempt, matchesNativeAttempt, useNativeTabsStore, type NativeAttemptIdentity } from '@/stores/nativeTabs'
 import { remoteHostConfigure, remoteHostCurrent, remoteHostRequest, remoteHostStart, remoteHostCancel, remoteHostDiscardCandidate, remoteHostPairingScope } from '@/api/tauri'
 import { useNotificationsStore } from '@/stores/notifications'
@@ -33,6 +34,7 @@ let registrationRequested = false
 let epoch = 0, captured: NativeAttemptIdentity | null = null
 let receipt: string | null = null, requested = false
 const available = computed(() => { const t = tabs.tab(props.tabId); return t?.status === 'running' && t.generation > 0 })
+const shortRun = computed(() => { const t=tabs.tab(props.tabId); return available.value && t?.runId ? {runId:t.runId,generation:t.generation} : null })
 const statusText = computed(() => ({ Locked: '尚无批准', Pending: '等待本机原生确认', ApprovalRecorded: '已记录批准，尚未启动', Consumed: '单次启动已受理，不代表已连接', Registered: '已登记，不代表已连接', Cancelled: '已取消', Expired: '已到期' }[state.value] ?? '状态未知'))
 function stillCurrent(token: number, attempt: NativeAttemptIdentity) { return token === epoch && open.value && matchesNativeAttempt(tabs.tab(props.tabId), attempt) }
 function invalidate() {
@@ -266,6 +268,7 @@ onUnmounted(invalidate)
       <InlineNotice v-if="message" kind="warning" :message="message" />
     </div>
 
+    <ShortRemoteSessionPanel :run="shortRun" :devices="devices" />
   </section>
 </template>
 <style scoped>

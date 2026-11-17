@@ -1680,3 +1680,71 @@ the final suite ran under the original PowerShell 7 environment.
 Independent final review remains the commit gate. The original three dirty
 files are unchanged and excluded; this stage's snapshot fixture and preparation
 tests do not depend on their uncommitted additions.
+
+## A6h: explicit short-session product entry
+
+The Host panel now offers a default-off, explicit ten-second network session for
+an already Confirmed registered device and the current exact live run. Selection
+does not enroll a device or create keys. The original preparation approval is
+still not network consent: the separate final native dialog freezes the actual
+ten-second deadline before display, including confirmation/setup time. The
+product does not promise unattended longevity, reconnect, cross-restart restore,
+or public deployment. Accepted means the original App start returned success,
+not that a phone has connected.
+
+Before the first dialog, the original App custody registers a Preparing slot
+under its closing/Runtime identity gate. The slot owns the original run admission;
+a single in-flight operation temporarily owns it and either returns it, transfers
+it to the original PendingStart/adopt path, or drops it before releasing the
+in-flight count. Flow/UI state cannot retain the run pin independently. Closing
+first makes the request sticky closed, cancels original approval handles outside
+the management lock, and reports completion only after cancellation and owned
+resource disposal return. Late approvals cannot create Enabled state or key work.
+The same tracked final-control identity is required at reserve_prepared.
+
+Request uses the original live-run/document admission. Advance also binds the
+original document, caller, operation and Runtime. Current and pure close instead
+use the current trusted document-only admission, allowing a new trusted document
+to close the old operation without requiring the old run to remain alive. Current
+does not consume either approval; it may observe original retirement. The private
+production factory uses the existing pairing store/DPAPI and a fixed user-home
+unattended root, opening existing state rather than resetting it. Existing
+persistent state and repeat starts remain fail-closed. The UI explicitly says
+that a failed request is not retried within this App lifetime.
+
+The test-only private environment substitutes isolated stores/sealers, the original
+explicit Yes/No completion APIs and anonymous public-vector CNG material. It calls
+the same request/advance implementation, not a parallel fake flow. No production
+caller can supply a store path, sealer, approved flag or synthetic registration.
+The Node/WASM/Relay oracle is not an actual phone, WebView2 native dialog test,
+or a rebuilt same-source WASM artifact; it reuses the previously recorded artifact.
+
+A real cancellation test initially timed out in original App exit after ten
+seconds because Flow retained NativeRunAdmission. The failure remains in
+`.audit/unattended-product-cancel-red.log`. Moving ownership into Preparing made
+the same four cancellation/foreign-operation/document cases pass in 4.01s with
+original App wait/join, and the two Preparing tests now explicitly assert original
+cleanup success. The earlier Preparing test that ignored cleanup's return is not
+used as retirement evidence. Final same-source tests and independent review remain
+the commit gate; no A6h completion or production-phone validation is claimed here.
+
+Final Rust validation covers 100 distinct tests across twelve group logs in
+`.audit/unattended-product-final-ledger.json`: Preparing 2, Product 2 (the negative
+case includes five scenarios), original ShortNetwork 4, App 9, Reservation 5,
+Close 5, SingleRun 10, Final 2, Preparation 11, Store 29, Document 19 and Proof 2.
+The fifth product scenario completes the original run through its local input
+path, confirms old run access is rejected, then uses current-document status and
+close and joins original App exit. The Product network case repeats both original
+approval stages and original Relay/WASM snapshot/input on the final Rust source.
+Child harness results are not counted twice. Strict Clippy passed in 1m17s in
+`unattended-product-strict-final.log`; the initial equivalent boolean-expression
+lint was corrected without changing the authorization predicate. The sixteen
+source fingerprints and seventeen-file stage list exclude all three prior dirty
+files. UI final tests/typecheck and independent final review are recorded at the
+stage closeout; no actual desktop native dialog or phone interaction was exercised.
+
+Final UI regression is 84/84 (seven new short-session cases plus 77 existing
+Host/pairing cases), with TypeScript build and vue-tsc both successful. The late
+request cleanup rejection after component unmount now emits the existing warning
+toast rather than writing only to an invisible component. Logs are
+`unattended-product-ui-final.log` and `unattended-product-typecheck-final.log`.

@@ -274,3 +274,100 @@ pub(crate) fn remote_pairing_forget_cancel(
     }
     Ok(())
 }
+
+#[cfg(windows)]
+pub(crate) fn remote_short_request(
+    webview: Webview,
+    request: Request<'_>,
+    runtime: State<'_, Arc<NativeRuntime>>,
+    service: State<'_, Arc<crate::remote_host::RemoteHostService>>,
+) -> Result<crate::remote_host::short_session::Reply, SafeError> {
+    use tauri::Manager;
+    let (binding, caller, admission, text) =
+        runtime.admit_host_configuration(&webview, request.headers(), request.body())?;
+    service.short_session.request(
+        service.inner(),
+        crate::remote_host::short_session::StartContext {
+            runtime: runtime.inner().clone(),
+            binding,
+            caller,
+            admission,
+        },
+        &text,
+        webview.app_handle(),
+        &webview.window(),
+    )
+}
+#[cfg(windows)]
+pub(crate) fn remote_short_advance(
+    webview: Webview,
+    request: Request<'_>,
+    runtime: State<'_, Arc<NativeRuntime>>,
+    service: State<'_, Arc<crate::remote_host::RemoteHostService>>,
+) -> Result<crate::remote_host::short_session::Reply, SafeError> {
+    use tauri::Manager;
+    let (binding, caller, input) = runtime
+        .admit_host_document::<crate::remote_host::short_session::OperationRequest, _>(
+            &webview,
+            request.headers(),
+            request.body(),
+        )?;
+    input.validate()?;
+    if !service.unattended.matches_exit_runtime(runtime.inner()) {
+        return Err(crate::cli::profiles::error("FORBIDDEN"));
+    }
+    service.short_session.advance(
+        service.inner(),
+        &binding,
+        &caller,
+        &input.operation_id,
+        webview.app_handle(),
+        &webview.window(),
+    )
+}
+#[cfg(windows)]
+pub(crate) fn remote_short_current(
+    webview: Webview,
+    request: Request<'_>,
+    runtime: State<'_, Arc<NativeRuntime>>,
+    service: State<'_, Arc<crate::remote_host::RemoteHostService>>,
+) -> Result<crate::remote_host::short_session::Reply, SafeError> {
+    let (binding, caller, _) = runtime
+        .admit_host_document::<crate::remote_host::short_session::ReadRequest, _>(
+            &webview,
+            request.headers(),
+            request.body(),
+        )?;
+    if !service.unattended.matches_exit_runtime(runtime.inner()) {
+        return Err(crate::cli::profiles::error("FORBIDDEN"));
+    }
+    service
+        .short_session
+        .status_for(&service, &binding, &caller, runtime.inner())
+}
+#[cfg(windows)]
+pub(crate) fn remote_short_close(
+    webview: Webview,
+    request: Request<'_>,
+    runtime: State<'_, Arc<NativeRuntime>>,
+    service: State<'_, Arc<crate::remote_host::RemoteHostService>>,
+) -> Result<(), SafeError> {
+    let (binding, caller, input) = runtime
+        .admit_host_document::<crate::remote_host::short_session::OperationRequest, _>(
+            &webview,
+            request.headers(),
+            request.body(),
+        )?;
+    input.validate()?;
+    if !service.unattended.matches_exit_runtime(runtime.inner()) {
+        return Err(crate::cli::profiles::error("FORBIDDEN"));
+    }
+    binding.check_admitted(&caller)?;
+    service.short_session.close_for(
+        &service,
+        &binding,
+        &caller,
+        runtime.inner(),
+        &input.operation_id,
+    )
+}
