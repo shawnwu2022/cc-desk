@@ -68,3 +68,21 @@ Codex 默认 `project_doc_max_bytes` 为 32 KiB，限制自动合并的项目指
 - Cursor、Cascade 与 Copilot 的实际界面加载仍未验证，保留上方官方入口与操作步骤。静态链接或另一工具通过不能替代各客户端证据。
 
 本轮 CI 契约更新后重新核对：根标准 11,298 bytes，三层合计 16,649 bytes；6 个原生导入与本次检查的 88 个本地链接有效。上述 Codex、Claude Code 和 Gemini 加载检查均用最新标准正文重跑，保存实际正文哈希与匹配结果；Claude 深层启动的祖先导入信任限制保持。检查未发送模型服务请求，不替代客户端界面加载、模型遵循或真实 CLI 认证。
+
+## 项目错题集入口（2026-11-17）
+
+根 AGENTS 明确要求每次开发、修复、审查、发布前先读 [错题集](lessons-learned.md)
+清单，再读相关条目与证据。错题集不是规范副本，也不自动整份导入模型上下文。
+Codex 从 AGENTS 得到读取要求；Claude 经同目录 `@./AGENTS.md` 获得同一要求。
+所有现有根/Rust/CLI 三层 AGENTS 与 CLAUDE 配对保留，薄壳不新增独立业务规则。
+
+本次重新核对官方机制：
+- [Codex](https://learn.chatgpt.com/docs/agent-configuration/agents-md) 按项目目录发现 AGENTS，仍有总量预算；本页链接和错题集须按指令主动读取，不能当作自动内联。
+- [Claude Code](https://code.claude.com/docs/en/memory#import-additional-files) 的 `@` 相对路径以包含它的文件为基准。当前官方文档还支持特定版本直接读取 AGENTS，但已有 CLAUDE/设置会影响选择；保留官方支持的原生导入薄壳，不修改用户全局设置或信任。
+
+本次验收是静态入口、引用与大小检查；上方 2026-10-11 的实际 loader 结果是历史证据，
+不是本次重新完成的运行认证。后续在 Codex/Claude 新会话核对根指南来源，并要求列出
+本次相关 Lxx 条目；Claude 可用 `/memory` 或 `/context all` 查看来源。深层目录外部导入
+若被信任机制阻止，应报告并从根会话核查，不规避批准。
+
+大小检查：本次工作树根指南 12,978 bytes，根/Rust/CLI 合计 19,719 bytes，低于 20 KiB 合计目标。根指南原提交本身已是 12,581 bytes，超过 12 KiB 目标；此项为既有预算债务，本次保留原有必要规则，不声称根预算通过。文件换行规范化会使磁盘与 Git blob 字节数略有差别。
