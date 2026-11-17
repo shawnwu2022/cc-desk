@@ -299,6 +299,29 @@ pub(crate) fn remote_short_request(
     )
 }
 #[cfg(windows)]
+pub(crate) fn remote_reconnect_request(
+    webview: Webview,
+    request: Request<'_>,
+    runtime: State<'_, Arc<NativeRuntime>>,
+    service: State<'_, Arc<crate::remote_host::RemoteHostService>>,
+) -> Result<crate::remote_host::short_session::Reply, SafeError> {
+    use tauri::Manager;
+    let (binding, caller, admission, text) =
+        runtime.admit_host_configuration(&webview, request.headers(), request.body())?;
+    service.short_session.request_reconnect(
+        service.inner(),
+        crate::remote_host::short_session::StartContext {
+            runtime: runtime.inner().clone(),
+            binding,
+            caller,
+            admission,
+        },
+        &text,
+        webview.app_handle(),
+        &webview.window(),
+    )
+}
+#[cfg(windows)]
 pub(crate) fn remote_short_advance(
     webview: Webview,
     request: Request<'_>,

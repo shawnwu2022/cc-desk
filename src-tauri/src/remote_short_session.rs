@@ -4,9 +4,9 @@ use crate::{
         document::DocumentBinding, launch_service::NativeRun, native_runtime::NativeRuntime,
         profiles::error, snapshot::CallerIdentity, types::SafeError,
     },
-    remote_host::{unattended::preparing::PreparingRequest, RemoteHostService},
+    remote_host::{RemoteHostService, unattended::preparing::PreparingRequest},
     remote_host_approval::unattended::{
-        final_approval::FinalApproval, RequestedRole, UnattendedApproval, UnattendedPreparation,
+        RequestedRole, UnattendedApproval, UnattendedPreparation, final_approval::FinalApproval,
     },
     remote_native_pairing_store::{
         Backend as PairingBackend, CurrentUserDpapi as PairingDpapi, ExpectedStore, PairingStore,
@@ -45,12 +45,29 @@ enum Phase {
     Closed,
     Unknown,
 }
+#[derive(Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum RequestMode {
+    ShortNetwork,
+    ReconnectTrial,
+}
+impl RequestMode {
+    fn limit(self) -> u8 {
+        match self {
+            Self::ShortNetwork => 10,
+            Self::ReconnectTrial => 60,
+        }
+    }
+}
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Reply {
     phase: Phase,
     operation_id: Option<String>,
-    limit_seconds: u8,
+    limit_seconds: Option<u8>,
+    mode: Option<RequestMode>,
+    deadline_unix_ms: Option<u64>,
+    waiting_replacements: Option<u8>,
 }
 struct Flow<B: PairingBackend, P: PairingSealer> {
     request: Arc<PreparingRequest>,
@@ -61,6 +78,8 @@ struct Flow<B: PairingBackend, P: PairingSealer> {
     preparation: Arc<UnattendedApproval>,
     final_approval: Option<Arc<FinalApproval>>,
     phase: Phase,
+    mode: RequestMode,
+    deadline_unix_ms: Option<u64>,
 }
 pub(crate) struct StartContext {
     pub(crate) runtime: Arc<NativeRuntime>,
@@ -96,6 +115,7 @@ impl<B: PairingBackend + Send + Sync + 'static, P: PairingSealer + Send + Sync +
         host: &Arc<RemoteHostService>,
         context: StartContext,
         text: &str,
+        mode: RequestMode,
         open: impl FnOnce() -> Result<Arc<PairingStore<B, P>>, SafeError>,
         show: impl FnOnce(
             UnattendedPreparation,
@@ -139,6 +159,11 @@ impl<B: PairingBackend + Send + Sync + 'static, P: PairingSealer + Send + Sync +
                 &selection.device_id,
             )
             .map_err(|_| failed())?;
+        if mode == RequestMode::ReconnectTrial
+            && candidate.record().route.relay_mode != "rendezvousV1"
+        {
+            return Err(failed());
+        }
         let wall: u64 = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|_| failed())?
@@ -170,6 +195,8 @@ impl<B: PairingBackend + Send + Sync + 'static, P: PairingSealer + Send + Sync +
             preparation: approval,
             final_approval: None,
             phase: Phase::Preparing,
+            mode,
+            deadline_unix_ms: None,
         });
         operation.complete();
         drop(operation);
@@ -183,6 +210,7 @@ impl<B: PairingBackend + Send + Sync + 'static, P: PairingSealer + Send + Sync +
         caller: &CallerIdentity,
         id: &str,
         show: impl FnOnce(
+            RequestMode,
             crate::remote_host_approval::unattended::ApprovedPreparation,
             &PairingStore<B, P>,
             &NativeRunAdmission,
@@ -214,7 +242,8 @@ impl<B: PairingBackend + Send + Sync + 'static, P: PairingSealer + Send + Sync +
         admission.scope()?;
         if flow.final_approval.is_none() {
             if let Some(approved) = flow.preparation.consume(&flow.store, admission)? {
-                let final_approval = show(approved, &flow.store, admission)?;
+                let final_approval = show(flow.mode, approved, &flow.store, admission)?;
+                flow.deadline_unix_ms = Some(final_approval.display_cutoff());
                 flow.request
                     .track_final(final_approval.clone())
                     .map_err(|_| failed())?;
@@ -309,7 +338,10 @@ impl<B: PairingBackend + Send + Sync + 'static, P: PairingSealer + Send + Sync +
                     Phase::Preparing
                 },
                 operation_id: Some(id),
-                limit_seconds: 10,
+                limit_seconds: None,
+                mode: None,
+                deadline_unix_ms: None,
+                waiting_replacements: None,
             });
         };
         let Some(flow) = slot.as_ref() else {
@@ -326,13 +358,19 @@ impl<B: PairingBackend + Send + Sync + 'static, P: PairingSealer + Send + Sync +
                 return Ok(Reply {
                     phase,
                     operation_id: Some(id),
-                    limit_seconds: 10,
+                    limit_seconds: None,
+                    mode: None,
+                    deadline_unix_ms: None,
+                    waiting_replacements: None,
                 });
             }
             return Ok(Reply {
                 phase: Phase::Empty,
                 operation_id: None,
-                limit_seconds: 10,
+                limit_seconds: None,
+                mode: None,
+                deadline_unix_ms: None,
+                waiting_replacements: None,
             });
         };
         let observation = host.unattended.observe();
@@ -359,7 +397,14 @@ impl<B: PairingBackend + Send + Sync + 'static, P: PairingSealer + Send + Sync +
         Ok(Reply {
             phase,
             operation_id: Some(flow.request.id().to_owned()),
-            limit_seconds: 10,
+            limit_seconds: Some(flow.mode.limit()),
+            mode: Some(flow.mode),
+            deadline_unix_ms: flow.deadline_unix_ms,
+            waiting_replacements: Some(if flow.mode == RequestMode::ReconnectTrial {
+                3
+            } else {
+                0
+            }),
         })
     }
     pub(crate) fn close(&self, host: &RemoteHostService, id: &str) -> Result<(), SafeError> {
@@ -391,10 +436,39 @@ impl ShortSessionService {
         app: &tauri::AppHandle<R>,
         window: &tauri::Window<R>,
     ) -> Result<Reply, SafeError> {
+        self.request_mode(host, context, text, app, window, RequestMode::ShortNetwork)
+    }
+    pub(crate) fn request_reconnect<R: tauri::Runtime>(
+        &self,
+        host: &Arc<RemoteHostService>,
+        context: StartContext,
+        text: &str,
+        app: &tauri::AppHandle<R>,
+        window: &tauri::Window<R>,
+    ) -> Result<Reply, SafeError> {
+        self.request_mode(
+            host,
+            context,
+            text,
+            app,
+            window,
+            RequestMode::ReconnectTrial,
+        )
+    }
+    fn request_mode<R: tauri::Runtime>(
+        &self,
+        host: &Arc<RemoteHostService>,
+        context: StartContext,
+        text: &str,
+        app: &tauri::AppHandle<R>,
+        window: &tauri::Window<R>,
+        mode: RequestMode,
+    ) -> Result<Reply, SafeError> {
         self.request_with(
             host,
             context,
             text,
+            mode,
             || {
                 crate::remote_pairing_product::open()
                     .map(Arc::new)
@@ -421,8 +495,16 @@ impl ShortSessionService {
             binding,
             caller,
             id,
-            |approved, store, admission| {
-                FinalApproval::show_network(approved, store, admission, app, window).map(Arc::new)
+            |mode, approved, store, admission| {
+                match mode {
+                    RequestMode::ShortNetwork => {
+                        FinalApproval::show_network(approved, store, admission, app, window)
+                    }
+                    RequestMode::ReconnectTrial => {
+                        FinalApproval::show_reconnect(approved, store, admission, app, window)
+                    }
+                }
+                .map(Arc::new)
             },
             || {
                 let parent = dirs::home_dir().ok_or_else(failed)?.join(".cc-box");
@@ -461,10 +543,45 @@ impl<B: PairingBackend + Send + Sync + 'static, P: PairingSealer + Send + Sync +
             host,
             context,
             text,
+            RequestMode::ShortNetwork,
             || Ok(store),
             |preparation, _, _| Ok(Arc::new(UnattendedApproval::test_pending(preparation))),
         )?;
         result.operation_id.ok_or_else(failed)
+    }
+    pub(crate) fn test_request_reconnect(
+        &self,
+        host: &Arc<RemoteHostService>,
+        context: StartContext,
+        text: &str,
+        store: Arc<PairingStore<B, P>>,
+    ) -> Result<String, SafeError> {
+        self.request_with(
+            host,
+            context,
+            text,
+            RequestMode::ReconnectTrial,
+            || Ok(store),
+            |preparation, _, _| Ok(Arc::new(UnattendedApproval::test_pending(preparation))),
+        )?
+        .operation_id
+        .ok_or_else(failed)
+    }
+    pub(crate) fn test_final_control(
+        &self,
+    ) -> Arc<crate::remote_host_approval::unattended::final_approval::FinalControl> {
+        self.flow
+            .lock()
+            .as_ref()
+            .unwrap()
+            .final_approval
+            .as_ref()
+            .unwrap()
+            .test_control()
+    }
+    pub(crate) fn test_busy_reply(&self, host: &RemoteHostService) -> Reply {
+        let _guard = self.flow.lock();
+        self.current(host).unwrap()
     }
     pub(crate) fn test_answer(&self, final_stage: bool, yes: bool) {
         let slot = self.flow.lock();
@@ -494,8 +611,16 @@ impl<B: PairingBackend + Send + Sync + 'static, P: PairingSealer + Send + Sync +
             binding,
             caller,
             id,
-            |approved, store, admission| {
-                FinalApproval::test_pending_network(approved, store, admission).map(Arc::new)
+            |mode, approved, store, admission| {
+                match mode {
+                    RequestMode::ShortNetwork => {
+                        FinalApproval::test_pending_network(approved, store, admission)
+                    }
+                    RequestMode::ReconnectTrial => {
+                        FinalApproval::test_pending_reconnect(approved, store, admission)
+                    }
+                }
+                .map(Arc::new)
             },
             persist,
         )

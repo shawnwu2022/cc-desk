@@ -63,6 +63,7 @@ struct FinalDescription {
     supplier: Option<FrozenHostSupplier>,
 }
 pub(crate) struct FinalApproval {
+    display_cutoff: u64,
     machine: Arc<ApprovalMachine<FinalDescription>>,
     control: Arc<FinalControl>,
 }
@@ -159,9 +160,15 @@ impl FinalDescription {
             .collect::<String>();
         let mode = match self.mode {
             FinalMode::Local => "当前批准仅限本机委托，不开启网络。",
-            FinalMode::ShortNetwork => "允许经下列 Relay 为此设备开启一次短网络会话（最多 10 秒，且不超过所示实际截止），可读取该 run 终端快照并输入；不自动重连、不延长授权。",
-            FinalMode::NetworkSession => "允许此设备在所示绝对截止内连接当前 run，读取终端快照和输入；签名材料仅短期持有，认证后的会话可持续到该截止。本阶段不自动重连，不跨 App 重启恢复。",
-            FinalMode::ReconnectSession => "允许此设备在所示固定绝对截止内重连同一 run，读取终端快照和输入。每次重连重新认证，旧连接及材料确认退休后才启动新连接；不延长截止，不跨 App 重启恢复。",
+            FinalMode::ShortNetwork => {
+                "允许经下列 Relay 为此设备开启一次短网络会话（最多 10 秒，且不超过所示实际截止），可读取该 run 终端快照并输入；不自动重连、不延长授权。"
+            }
+            FinalMode::NetworkSession => {
+                "允许此设备在所示绝对截止内连接当前 run，读取终端快照和输入；签名材料仅短期持有，认证后的会话可持续到该截止。本阶段不自动重连，不跨 App 重启恢复。"
+            }
+            FinalMode::ReconnectSession => {
+                "允许此设备在所示固定绝对截止内重连同一 run，读取终端快照和输入。此为最多60秒试用；Host无客户端等待最多替代3次，浏览器另有本地重试预算，两者不保证成功。每次重连重新认证，旧连接及材料确认退休后才启动新连接；不延长截止，不跨 App 重启恢复。"
+            }
         };
         format!(
             "允许为此设备持久保存当前单会话委托？这不是之前的准备步骤。
@@ -177,6 +184,29 @@ Generation: {}
     }
 }
 impl FinalApproval {
+    #[cfg(test)]
+    pub(crate) fn test_control(&self) -> Arc<FinalControl> {
+        self.control.clone()
+    }
+    pub(crate) fn display_cutoff(&self) -> u64 {
+        self.display_cutoff
+    }
+    pub(crate) fn show_reconnect<B: Backend, S: Sealer, R: tauri::Runtime>(
+        approved: ApprovedPreparation,
+        store: &PairingStore<B, S>,
+        admission: &NativeRunAdmission,
+        app: &tauri::AppHandle<R>,
+        window: &tauri::Window<R>,
+    ) -> Result<Self, SafeError> {
+        Self::show_mode(
+            approved,
+            store,
+            admission,
+            app,
+            window,
+            FinalMode::ReconnectSession,
+        )
+    }
     pub(crate) fn matches_control(&self, control: &Arc<FinalControl>) -> bool {
         Arc::ptr_eq(&self.control, control)
     }
@@ -228,6 +258,7 @@ impl FinalApproval {
         }
         let cap = description.preparation.end;
         Ok(Self {
+            display_cutoff: description.preparation.cutoff,
             machine: ApprovalMachine::show(
                 app,
                 window,
@@ -319,6 +350,7 @@ impl FinalApproval {
         let description = FinalDescription::new(approved, store, admission, mode)?;
         let cap = description.preparation.end;
         Ok(Self {
+            display_cutoff: description.preparation.cutoff,
             machine: ApprovalMachine::pending(description, Instant::now(), cap),
             control: Arc::new(FinalControl {
                 closed: NativeRevocation::new(),

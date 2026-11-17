@@ -312,6 +312,7 @@ fn run_ordinary(initial_dir: Option<String>, #[cfg(windows)] startup: DesktopSta
             commands::remote_registration_cancel,
             commands::remote_host_current,
             commands::remote_short_request,
+            commands::remote_reconnect_request,
             commands::remote_short_advance,
             commands::remote_short_current,
             commands::remote_short_close,

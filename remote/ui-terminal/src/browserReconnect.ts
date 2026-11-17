@@ -7,7 +7,7 @@ import type {Target} from './reducer.ts';
 
 export type BrowserRetryPolicy=Readonly<{mode:'safe-idle-retry-v1';budgetMs:number}>;
 export type BrowserRetryState='New'|'Connecting'|'Connected'|'Retiring'|'Waiting'|'Closed'|'Unknown';
-type Generation={id:number;child:ReturnType<typeof createBrowserEnrollmentLease>;found?:TerminalConnection;unlisten?:()=>void;recovering:boolean};
+type Generation={id:number;child:ReturnType<typeof createBrowserEnrollmentLease>;found?:TerminalConnection;unlisten?:()=>void;recovering:boolean;automatic?:boolean};
 const backoff=[250,500,1000] as const;
 const sameTarget=(a:Target,b:Target)=>a.host===b.host&&a.session===b.session&&a.run===b.run&&a.generation===b.generation&&a.incarnation===b.incarnation;
 
@@ -36,6 +36,7 @@ export function browserReconnectSession(inputs:ApprovedBrowserInputs,policy:Brow
   let failed=false;
   try{g.found?.connection.close();await g.found?.connection.waitClosed();}catch{failed=true;}
   g.child.revoke();try{await g.child.waitClosed();}catch{failed=true;}
+  if(g.automatic){try{await client!.waitAutoRenewalClosed(g.found!.connection);}catch{failed=true;}}
   if(failed){uncertain=true;throw Error('browser retry retirement uncertain');}
  }
  function close():Promise<void>{
@@ -86,6 +87,10 @@ export function browserReconnectSession(inputs:ApprovedBrowserInputs,policy:Brow
     void track(Promise.resolve().then(()=>recover(g))).catch(()=>{void close();});
    });
    await client!.snapshot();
+   await client!.leaseState();
+   const automatic=client!.startAutoRenewal();
+   g.automatic=client!.autoRenewalState!=='Disabled';
+   await automatic;
    if(!active()||current!==g||client!.phase!=='Synced')throw Error('browser retry setup stopped');
    state='Connected';return client!;
   }catch(error){await retire(g);throw error;}

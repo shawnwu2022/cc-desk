@@ -955,6 +955,22 @@ pub(crate) fn remote_short_request() -> Result<(), crate::cli::types::SafeError>
 
 #[cfg(all(feature = "remote-host", windows))]
 #[tauri::command]
+pub(crate) fn remote_reconnect_request(
+    webview: tauri::Webview,
+    request: tauri::ipc::Request<'_>,
+    runtime: tauri::State<'_, std::sync::Arc<crate::cli::native_runtime::NativeRuntime>>,
+    service: tauri::State<'_, std::sync::Arc<crate::remote_host::RemoteHostService>>,
+) -> Result<crate::remote_host::short_session::Reply, crate::cli::types::SafeError> {
+    crate::remote_host_ipc::remote_reconnect_request(webview, request, runtime, service)
+}
+#[cfg(not(all(feature = "remote-host", windows)))]
+#[tauri::command]
+pub(crate) fn remote_reconnect_request() -> Result<(), crate::cli::types::SafeError> {
+    Err(crate::cli::profiles::error("REMOTE_HOST_UNAVAILABLE"))
+}
+
+#[cfg(all(feature = "remote-host", windows))]
+#[tauri::command]
 pub(crate) fn remote_short_advance(
     webview: tauri::Webview,
     request: tauri::ipc::Request<'_>,

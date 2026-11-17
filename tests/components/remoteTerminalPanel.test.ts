@@ -169,3 +169,56 @@ it('RemoteTerminal_OverlappingSendUsesOneOriginalOperation_011', async () => {
   release(); await flushPromises()
   expect(messages.filter(x => x.message === 'InputChunk')).toHaveLength(1)
 })
+
+it('BrowserRetryEntry_DefaultOffAndBusyStartRemainsCancellable_020', async()=>{
+ let rejectStart!:(reason:Error)=>void
+ const start=vi.fn(()=>new Promise((_resolve,reject)=>{rejectStart=reject}))
+ const close=vi.fn(async()=>{rejectStart?.(Error('cancelled'))})
+ const waitClosed=vi.fn(async()=>{})
+ const opener=vi.fn(async()=>({start,close,waitClosed,observe:()=>({state:'Connecting',generation:1,replacements:0,localDeadline:Date.now()+60000,client:undefined,role:'Controller'})}))
+ view=mount(RemoteTerminalPanel,{props:{reconnectSession:opener as any},global:{plugins:[createI18n({legacy:false,locale:'en',messages:{en,zh}})]}})
+ expect(opener).not.toHaveBeenCalled()
+ await view.get('[data-remote-retry-optin]').setValue(true)
+ await view.get('[data-remote-refresh]').trigger('click');await flushPromises()
+ expect(start).toHaveBeenCalledOnce()
+ expect(view.get('[data-remote-disconnect]').attributes('disabled')).toBeUndefined()
+ await view.get('[data-remote-disconnect]').trigger('click');await flushPromises()
+ expect(close).toHaveBeenCalled();expect(waitClosed).toHaveBeenCalled()
+ expect(opener).toHaveBeenCalledOnce()
+})
+it('BrowserRetryEntry_LateOwnerCleanupFailureRemainsUncertain_021', async()=>{
+ let deliver!:(value:any)=>void
+ const start=vi.fn(), close=vi.fn(async()=>{throw Error('retirement unknown')}), waitClosed=vi.fn(async()=>{})
+ const opener=vi.fn(()=>new Promise<any>(resolve=>{deliver=resolve}))
+ view=mount(RemoteTerminalPanel,{props:{reconnectSession:opener},global:{plugins:[createI18n({legacy:false,locale:'en',messages:{en,zh}})]}})
+ await view.get('[data-remote-retry-optin]').setValue(true)
+ await view.get('[data-remote-refresh]').trigger('click');await flushPromises()
+ await view.get('[data-remote-disconnect]').trigger('click')
+ deliver({start,close,waitClosed,observe:()=>({state:'New'})});await flushPromises()
+ expect(start).not.toHaveBeenCalled();expect(close).toHaveBeenCalled()
+ expect(view.text()).toContain('uncertain')
+ expect(view.get('[data-remote-refresh]').attributes('disabled')).toBeDefined()
+})
+
+it('BrowserRetryEntry_WaitingNeverSendsFromOldSyncedScreen_022', async()=>{
+ vi.useFakeTimers()
+ let phase='Connected'
+ const client={phase:'Synced',snapshot:vi.fn(async()=>{}),render:()=>document.createElement('pre'),disconnect:vi.fn(),cursor:vi.fn(),window:vi.fn(),submit:vi.fn()}
+ const owner={start:vi.fn(async()=>client),close:vi.fn(async()=>{}),waitClosed:vi.fn(async()=>{}),observe:()=>({state:phase,generation:1,replacements:0,localDeadline:Date.now()+60000,client,role:'Controller'})}
+ view=mount(RemoteTerminalPanel,{props:{reconnectSession:(async()=>owner) as any},global:{plugins:[createI18n({legacy:false,locale:'en',messages:{en,zh}})]}})
+ try {
+  await view.get('[data-remote-retry-optin]').setValue(true)
+  await view.get('[data-remote-refresh]').trigger('click');await flushPromises()
+  await view.get('[data-remote-input]').setValue('do not replay')
+  const snapshots=client.snapshot.mock.calls.length
+  phase='Waiting'
+  // 即使观察定时器尚未刷新显示，操作入口也同步检查原 owner。
+  await view.get('[data-remote-send]').trigger('click');await flushPromises()
+  expect(client.cursor).not.toHaveBeenCalled();expect(client.submit).not.toHaveBeenCalled()
+  await view.get('[data-remote-refresh]').trigger('click');await flushPromises()
+  expect(client.snapshot).toHaveBeenCalledTimes(snapshots);expect(owner.close).not.toHaveBeenCalled()
+  await vi.advanceTimersByTimeAsync(100)
+  expect(view.get('[data-remote-send]').attributes('disabled')).toBeDefined()
+  expect(view.get('[data-remote-disconnect]').attributes('disabled')).toBeUndefined()
+ } finally {view.unmount();await flushPromises();vi.useRealTimers()}
+})

@@ -612,7 +612,10 @@ export async function remotePairingForgetCancel(request: RemotePairingSelection)
 
 // 短会话独立原生确认；current 不消费批准，close 不要求旧 run 存活。
 export type RemoteShortPhase = 'empty'|'preparing'|'confirming'|'starting'|'accepted'|'closing'|'closed'|'unknown';
-export type RemoteShortReply = { phase: RemoteShortPhase; operationId: string|null; limitSeconds: 10 };
+export type RemoteShortReply = { phase: RemoteShortPhase; operationId: string|null; limitSeconds: 10|60|null; mode?: 'shortNetwork'|'reconnectTrial'|null; deadlineUnixMs?: number|null; waitingReplacements?: 0|3|null };
+export async function remoteReconnectRequest(request: RemotePairingSelection): Promise<RemoteShortReply> {
+  return await nativeDocumentBridge().invoke('remote_reconnect_request', request) as RemoteShortReply;
+}
 export async function remoteShortRequest(request: RemotePairingSelection): Promise<RemoteShortReply> {
   return await nativeDocumentBridge().invoke('remote_short_request', request) as RemoteShortReply;
 }

@@ -125,6 +125,12 @@ export class TerminalClient {
     const auto:AutoRenewal={epoch:this.#epoch,native:native as AutoRenewal['native'],join:native.waitClosed.bind(native),state:'Starting',next:Infinity,last:now};this.#auto=auto;
     return this.#launchAuto(auto,true);
   }
+  // 仅等待匹配原代已开始的退休，不停止另一代，也不清除安全重连候选。
+  waitAutoRenewalClosed(native:NativeConnection):Promise<void> {
+    const auto=this.#auto;
+    if(!auto||auto.native!==native||!auto.retirement)return Promise.reject(Error('automatic retirement unavailable'));
+    return auto.retirement;
+  }
   stopAutoRenewal():Promise<void> {
     const auto=this.#auto;if(!auto)return Promise.reject(Error('automatic owner not started'));this.#requestStop(auto);return auto.retirement!;
   }

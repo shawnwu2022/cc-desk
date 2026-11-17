@@ -4,7 +4,7 @@ import ShortRemoteSessionPanel from '@/components/workspace/ShortRemoteSessionPa
 import * as api from '@/api/tauri'
 const toast=vi.hoisted(()=>vi.fn())
 vi.mock('@/stores/notifications',()=>({useNotificationsStore:()=>({pushToast:toast})}))
-vi.mock('@/api/tauri',()=>({remoteShortRequest:vi.fn(),remoteShortAdvance:vi.fn(),remoteShortCurrent:vi.fn(),remoteShortClose:vi.fn()}))
+vi.mock('@/api/tauri',()=>({remoteShortRequest:vi.fn(),remoteReconnectRequest:vi.fn(),remoteShortAdvance:vi.fn(),remoteShortCurrent:vi.fn(),remoteShortClose:vi.fn()}))
 const id='11111111-1111-4111-8111-111111111111'
 const devices:api.RemotePairingList={state:'Locked',storeId:'store',revision:'2',devices:[{deviceId:'phone',browserOrigin:'https://phone.invalid',relayOrigin:'wss://relay.invalid',profileId:'profile',installation:'confirmed'}]}
 const run={runId:'run',generation:1}
@@ -61,4 +61,17 @@ it('ShortSession_LateCleanupFailureRemainsVisibleAfterUnmount_007',async()=>{
  expect(api.remoteShortClose).toHaveBeenCalledExactlyOnceWith(id)
  expect(toast).toHaveBeenCalledExactlyOnceWith({kind:'warning',messageKey:'remoteHostCleanupUnconfirmed'})
  expect(api.remoteShortAdvance).not.toHaveBeenCalled()
+})
+
+it('ReconnectTrial_ExplicitSeparateRequestNeverUpgradesOldConsent_008',async()=>{
+ const reconnect=vi.mocked((api as any).remoteReconnectRequest)
+ reconnect.mockResolvedValue({phase:'preparing',operationId:id,mode:'reconnectTrial',limitSeconds:60,deadlineUnixMs:null,waitingReplacements:3})
+ const w=mount(ShortRemoteSessionPanel,{props:{run,devices}})
+ expect(reconnect).not.toHaveBeenCalled()
+ await w.get('select').setValue('phone')
+ await w.get('[data-reconnect-request]').trigger('click');await flushPromises()
+ expect(reconnect).toHaveBeenCalledExactlyOnceWith({...run,candidateJson:JSON.stringify({storeId:'store',revision:'2',deviceId:'phone'})})
+ expect(api.remoteShortRequest).not.toHaveBeenCalled()
+ expect(w.text()).toContain('60');expect(w.text()).toContain('3')
+ w.unmount();await flushPromises();expect(api.remoteShortClose).toHaveBeenCalledWith(id)
 })

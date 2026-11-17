@@ -28,7 +28,9 @@ function fixture(){
  const ports:any[]=[];let failedClose=false;
  const makePort=()=>{const item=structuredClone(snapshot);item.body.stamp.syncEpoch=String(BigInt(item.body.stamp.syncEpoch)+BigInt(ports.length));item.body.stamp.binding=(ports.length+17).toString(16).padStart(2,'0').repeat(32);const batch={stamp:item.body.stamp,parts:[new TextEncoder().encode(JSON.stringify(item))]};const listeners=new Set<()=>void>();const port={descriptor:Promise.resolve({target:batch.stamp.target,binding:batch.stamp.binding,role:'Controller'}),snapshotPull:vi.fn(async()=>batch),snapshot:vi.fn(async()=>batch),
  exchange:vi.fn(async(bytes:Uint8Array)=>{const v=JSON.parse(new TextDecoder().decode(bytes));const common={profile:1};let reply:any;
- if(v.message==='ProjectionAck')reply={...common,message:'ProjectionAcknowledged',stamp:v.stamp};
+ if(v.message==='LeaseState')reply={...common,message:'LeaseStateReply',request:v.request,lease:'09'.repeat(16),fence:'1',notAfterHostMs:'15000',nextRenewalSequence:'1'};
+ else if(v.message==='LeaseRenew')reply={...common,message:'LeaseRenewed',request:v.request,lease:v.lease,fence:v.fence,renewalSequence:v.renewalSequence,notAfterHostMs:'15000'};
+ else if(v.message==='ProjectionAck')reply={...common,message:'ProjectionAcknowledged',stamp:v.stamp};
  else if(v.message==='Window')reply={...common,message:'WindowGranted',request:v.request,window:'08'.repeat(32),notAfterHostMs:'6000'};
  else if(v.message==='InputChunk')reply={...common,message:'InputReceipt',operation:v.operation,sequence:v.sequence,outcome:'HostWritten',proof:'aa'.repeat(32)};
  else throw Error('unexpected request');return new TextEncoder().encode(JSON.stringify(reply));}),
@@ -93,7 +95,7 @@ test('BrowserRetry_ThreeReplacementBudgetNeverResets_007',async()=>{
 test('BrowserRetry_FixedLocalDeadlineAndParentRevokePreventNewGeneration_008',async()=>{
  for(const revoke of [false,true]){const f=fixture(),owner=browserReconnectSession(f.input,{...policy,budgetMs:100},new AbortController().signal);await owner.start();
  if(revoke)f.lifetime.revoke();else{f.makePort();f.ports[0].invalidate()}
- await owner.waitClosed();expect(owner.observe().state).toBe('Closed');expect(f.workers).toHaveLength(1)}
+ await owner.waitClosed();expect(owner.observe().state).toBe('Closed');expect(owner.observe().client?.autoRenewalState).toBe('Stopped');expect(f.workers).toHaveLength(1)}
 });
 
 
@@ -105,4 +107,26 @@ test('BrowserRetry_LegacyCannotAcquireAutomaticRetry_009',async()=>{
   if(owner)await owner.close();
   expect(rejected).toBe(true);expect(f.sockets).toHaveLength(0);expect(f.workers).toHaveLength(0);
  }
+});
+
+
+test('BrowserRetry_AutoRenewalCapturedBeforeConnectedAndJoinedBeforeReplacement_010',async()=>{
+ const f=fixture(),owner=browserReconnectSession(f.input,policy,new AbortController().signal),client=await owner.start();
+ try{expect(client.autoRenewalState).toBe('Waiting');
+ const requests=f.ports[0].exchange.mock.calls.map((v:any)=>JSON.parse(new TextDecoder().decode(v[0])).message);
+ expect(requests).toEqual(['ProjectionAck','LeaseState','LeaseRenew']);
+ await expect(client.waitAutoRenewalClosed({} as any)).rejects.toThrow();
+ f.makePort();f.ports[0].invalidate();await until(()=>owner.observe().generation===2&&owner.observe().state==='Connected');
+ expect(client.autoRenewalState).toBe('Waiting');expect(f.workers[0].terminated).toBe(1);
+ }finally{await owner.close()}
+ expect(client.autoRenewalState).toBe('Stopped');
+});
+
+test('BrowserRetry_CloseWaitsOriginalAutomaticRawReply_011',async()=>{
+ const f=fixture(),exchange=f.ports[0].exchange.getMockImplementation();let release!:()=>void,entered=false;
+ const hold=new Promise<void>(r=>{release=r});
+ f.ports[0].exchange.mockImplementation(async(bytes:Uint8Array)=>{const v=JSON.parse(new TextDecoder().decode(bytes));if(v.message==='LeaseRenew'){entered=true;await hold}return exchange!(bytes)});
+ const owner=browserReconnectSession(f.input,policy,new AbortController().signal),opening=owner.start(),rejected=expect(opening).rejects.toThrow();
+ await until(()=>entered);let closed=false;const closing=owner.close().then(()=>{closed=true});await new Promise(r=>setTimeout(r,20));expect(closed).toBe(false);
+ release();await rejected;await closing;expect(owner.observe().client?.autoRenewalState).toBe('Stopped');expect(owner.observe().state).toBe('Closed');expect(f.workers).toHaveLength(1);
 });

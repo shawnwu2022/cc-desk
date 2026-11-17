@@ -2431,3 +2431,93 @@ is waiting-final2-four.log; the source, stage list and layered evidence ledger a
 waiting-final-source.json, waiting-stage-files.txt and waiting-final-ledger.json
 in the audit directory. The original three dirty files and generated artifacts
 remain outside the proposed 15-file stage. No stage or commit is implied here.
+## A6s - Explicit bounded reconnect trial entry (0.28 development)
+
+The Host now has a separate reconnect-trial request beside the unchanged
+10-second short-network request. Neither Local nor ShortNetwork consent is
+upgraded. The private request mode is fixed before the first original native
+approval; advance cannot replace it. The new path requires an already confirmed
+rendezvous-v1 record and still uses current document/run admission, the original
+Preparing custody, two approvals, fixed root, final consent and App reservation.
+It does not enroll a device, provision keys, reset a durable record or make an
+existing record restartable. This is at most 60 seconds in the current App/run,
+not unattended operation across restarts or a long-duration authorization.
+
+Host status reports the selected mode and the actual absolute cutoff frozen by
+the final approval. Before that point the cutoff is absent. A busy observation
+without the Flow lock returns unknown details rather than inventing a 10- or
+60-second authorization. The UI distinguishes three Host uninstalled-wait
+replacements from three Browser safe-idle replacements: they are independent
+maximum budgets, not a promise that any connection will succeed. New requests
+remain subject to the original one-attempt/App and existing-state restrictions.
+
+The Browser entry has an unchecked reconnect-trial option. It obtains the
+original controlled profile reader's reconnect owner once, retains that owner
+before awaiting start, and uses its original TerminalClient across generations.
+It does not create a replacement client to erase unsettled input. Connecting and
+Waiting remain cancelable; cancellation first aborts the parent, then waits for
+late acquisition and original retirement. Unknown cleanup remains sticky.
+Both send and refresh read the owner's current state synchronously, so an old
+Synced screen cannot issue work while Waiting. The 100 ms UI observation timer
+only reads state; it does not send snapshots, inputs or lease renewals.
+
+The first real Panel idle test exposed another necessary connection: a displayed
+60-second local retry budget did not maintain the original Host control lease.
+After a successful snapshot, each reconnect generation now captures LeaseState
+and starts the existing TerminalClient automatic-renewal owner before Connected
+is published. The original five-second renewal schedule and failure policy are
+unchanged. A passive wait method requires the exact original native connection
+and an already-started automatic retirement; it cannot stop a different owner
+or mint a reconnect candidate. Replacement waits for the original connection,
+child enrollment drain and automatic owner (including its raw operation/task)
+before using the same client for the next generation. Parent close and cutoff
+stop maintenance through the original cancellation path. No Panel renewal timer
+or new renewal owner was introduced.
+
+Evidence includes the initial missing-entry component REDs and a real Panel
+16-second idle RED: the next operation did not finish, while the fixture finally
+ran before its unchanged watchdog. That failure is not claimed to identify a
+specific Host error enum. With the existing automatic owner connected, the same
+single-generation idle scenario completed its original one-byte PTY input and
+retirement. The separate real Panel two-generation scenario uses the production
+browser-main, Vue Panel, controlled operator/profile reader, actual module Entry
+Worker and production WASM. The user-facing opt-in and refresh/send/close actions
+are driven through the DOM. A forced transport break causes the original timer
+to reconnect without a second Host-Accepted test signal; the second input is
+separately submitted and settled, never replayed.
+
+These are isolated Chromium contexts with public virtual WebAuthn credentials,
+synthetic HTTPS routing and a Node WSS proxy validating the fixture CA. They are
+not a browser trusted-certificate handshake, a real phone, public deployment or
+real user credential test. Host approvals in the integration fixture are explicit
+original test-pending Yes answers, not an exercised desktop native dialog or
+end-to-end Tauri IPC click. The production IPC registration is compiled and the
+Host panel is component-tested. Production artifacts are unchanged from the
+previous source-verified manifest and are rechecked by the browser fixture.
+
+The expanded product negative fixture exercises both old and new modes through
+preparation/final cancellation, wrong operation identity, document replacement,
+and run exit; a further new-mode case rejects an explicitly legacy record. Its
+first attempt mistakenly retained the helper's rendezvous default and therefore
+did not constitute a valid legacy negative. That failed log is preserved; the
+fixed fixture explicitly selects legacy, without changing production validation.
+No real journal compaction is enabled. Existing per-operation floor/CAS checks,
+capacity fail-closed behavior, fixed parent cutoff and conservative Unknown
+retirement limitations remain. This stage does not establish long-term usable
+availability or complete every physical platform teardown condition.
+
+Final verification on the recorded A6s source: 24 distinct native tests across
+10 logs, 34 component/reconnect lifecycle tests and 50 original TerminalClient,
+automatic-renewal, enrollment/profile and pull-adapter tests, totaling 108.
+Nested child harness repeats and the 11 scenarios inside one negative test are
+not counted again. Native strict Clippy completed in 1m 05s after removal of one
+redundant test parenthesis; all 24 native tests were rebuilt and rerun on that same source.
+The earlier strict failure remains in entry-trial-strict-final.log. Typecheck
+completed with exit 0. Final evidence is entry-trial-final3-*.log (excluding the
+build log from test counts), entry-trial-ui-final.log, entry-trial-node-final.log,
+entry-trial-typecheck-final.log and entry-trial-strict-final2.log. The exact
+ledger and source/stage lists are entry-trial-final-ledger.json,
+entry-trial-final-source.json and entry-trial-stage-files.txt in the audit
+directory. The proposed stage is 16 source/test files plus this document. The
+three original dirty files and ignored generated artifacts remain excluded;
+no commit, deployment or real-device acceptance is implied by these results.

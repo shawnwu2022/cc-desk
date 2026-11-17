@@ -2,7 +2,7 @@
 import { computed, onUnmounted, ref } from 'vue'
 import AppButton from '@/components/ui/AppButton.vue'
 import { useNotificationsStore } from '@/stores/notifications'
-import { remoteShortRequest, remoteShortAdvance, remoteShortCurrent, remoteShortClose, type RemotePairingList, type RemoteHostRun, type RemoteShortReply } from '@/api/tauri'
+import { remoteShortRequest, remoteReconnectRequest, remoteShortAdvance, remoteShortCurrent, remoteShortClose, type RemotePairingList, type RemoteHostRun, type RemoteShortReply } from '@/api/tauri'
 const props = defineProps<{ run: RemoteHostRun|null; devices: RemotePairingList|null }>()
 const notifications = useNotificationsStore()
 function cleanupFailed() { notifications.pushToast({ kind:'warning', messageKey:'remoteHostCleanupUnconfirmed' }) }
@@ -32,12 +32,13 @@ async function progress() {
   finally { busy.value=false }
   schedule()
 }
-async function start() {
+async function start(reconnect = false) {
   if(!canStart.value || !props.run || !props.devices) return
   const run={...props.run}, list=props.devices, deviceId=selected.value
   attempted.value=true; cancelled=false; busy.value=true; message.value=''
   try {
-    const value=await remoteShortRequest({...run,candidateJson:JSON.stringify({storeId:list.storeId,revision:list.revision,deviceId})})
+    const request = reconnect ? remoteReconnectRequest : remoteShortRequest
+    const value=await request({...run,candidateJson:JSON.stringify({storeId:list.storeId,revision:list.revision,deviceId})})
     if(disposed || cancelled) { await discardLate(value); return }
     reply.value=value
   } catch { if(disposed) cleanupFailed(); message.value='短会话未确认开启。本次App不再重试；请刷新状态核对。不会生成设备、修复存储或自动重试。'; return }
@@ -63,8 +64,8 @@ onUnmounted(() => { disposed=true; stopTimer(); if(['preparing','confirming'].in
 </script>
 <template>
   <details class="short-session" aria-label="实验短会话">
-    <summary>实验短会话：最多10秒</summary>
-    <p>默认关闭。仅当前精确会话与已确认设备；最终确认前开始计时，确认和连接均占用这10秒。不会重连、延时或跨重启恢复，不是长期无人值守。</p>
+    <summary>远程试用入口（默认关闭）</summary>
+    <p>旧10秒入口：默认关闭。仅当前精确会话与已确认设备；最终确认前开始计时，确认和连接均占用这10秒。不会重连、延时或跨重启恢复，不是长期无人值守。</p>
     <p>先在上方完成真实浏览器登记并刷新设备；不会自动生成手机身份或配置密钥。</p>
     <label>已确认设备
       <select v-model="selected" aria-label="短会话设备" :disabled="busy || reply.phase !== 'empty'">
@@ -73,10 +74,14 @@ onUnmounted(() => { disposed=true; stopTimer(); if(['preparing','confirming'].in
       </select>
     </label>
     <div class="short-actions">
-      <AppButton :disabled="!canStart" @click="start">请求10秒短会话</AppButton>
+      <AppButton :disabled="!canStart" @click="start(false)">请求10秒短会话</AppButton>
+      <AppButton data-reconnect-request :disabled="!canStart" @click="start(true)">请求最多60秒可重连试用</AppButton>
       <AppButton :disabled="busy" @click="refresh">刷新短会话状态</AppButton>
       <AppButton variant="danger" @click="close">关闭短会话</AppButton>
     </div>
+    <p>可重连试用需另行本机明确批准，仅同一设备与当前会话，最多60秒；确认时间计入截止。Host无客户端等待最多替代3次，浏览器安全空闲重试另有最多3次预算，均不保证连接成功或长期无人值守。</p>
+    <p v-if="reply.mode === 'reconnectTrial'">当前为可重连试用。实际截止：{{ reply.deadlineUnixMs == null ? '尚未冻结，以最终确认显示为准' : new Date(reply.deadlineUnixMs).toLocaleString() }}。</p>
+    <p v-if="reply.limitSeconds == null">当前授权详情未知，不推定10秒或60秒许可。</p>
     <output aria-label="短会话状态">{{ label }}</output>
     <p v-if="message" role="status">{{ message }}</p>
     <p>关闭与状态读取不要求旧会话仍在运行。已有持久记录不会被重置；此版本不提供重复开启。</p>
