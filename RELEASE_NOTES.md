@@ -4,6 +4,20 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
+## [0.28.0-rc.1]
+
+Added
+
+- Opt-in Antigravity CLI profiles with explicit new-session, conversation-ID and continue actions. Antigravity remains disabled by default.
+- A separate local remote-trial build profile with explicit Host approval, cancellation, bounded waiting/reconnect and lease maintenance for trials of at most 60 seconds.
+
+Important
+
+- This is RC preparation, not a publication. The standard release installers do not include the remote-host feature and both browser runtimes; remote trials require the separate local build profile. This is not long-term unattended access or cross-App recovery.
+- Real phone enrollment, browser-trusted TLS, ordinary installed desktop behavior and authenticated Antigravity session restore remain unverified. Isolated browser tests use synthetic origins and public virtual credentials.
+- Antigravity can access the OS keyring on launch. A temporary HOME does not isolate credentials; historical smoke tests do not prove credential isolation or a credential leak. Use a separately authorized isolated identity for authentication testing.
+- Stable Latest remains unchanged. Publication still requires the protected-main CI, coverage and signed platform gates. Native All, real installation/return and live-user certification remain separate.
+
 ## [0.27.0]
 
 Added
