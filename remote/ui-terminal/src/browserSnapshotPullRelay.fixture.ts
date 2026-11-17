@@ -1,3 +1,4 @@
+import {TerminalClient} from './client.ts';import {browserPullConnection} from './browserPullConnection.ts';
 import {leaseState,projectionAck,decodeReply,decodeProjection} from './wire.ts';import {ProjectionReceiver} from './reducer.ts';
 import assert from 'node:assert/strict';import {readFileSync} from 'node:fs';import {pathToFileURL} from 'node:url';import {Worker,MessageChannel} from 'node:worker_threads';import {createECDH,createPrivateKey,createHash,sign} from 'node:crypto';import {createRequire} from 'node:module';
 // 仅描述此测试使用的 ws 边界；生产 Relay 仍接收 WebSocket 接口。
@@ -15,12 +16,14 @@ function platform(options:{mutation?:string;hold?:boolean;delay?:number}={}){con
 const restore=platform(),clock=()=>Math.floor(performance.timeOrigin+performance.now()),setupEnd=clock()+7000,maxEnd=clock()+900000;
 const phonePoint=Buffer.from('04bac5b11cad8f99f9c72b05cf4b9e26d244dc189f745228255a219a86d6a09eff20138bf82dc1b6d562be0fa54ab7804a3a64b6d72ccfed6b6fb6ed28bbfc117e','hex'),phoneJwk={kty:'EC',crv:'P-256',x:phonePoint.subarray(1,33).toString('base64url'),y:phonePoint.subarray(33).toString('base64url'),d:'V8kgd2ZBRuh2dgyVINBUqpPDr7BOMGcF22CQMIUHtNM'},phoneKey=createPrivateKey({format:'jwk',key:phoneJwk});
 const socket=new Ws(config.origin,{origin:'https://desk.invalid',ca:readFileSync(process.env.CC_DESK_TEST_RELAY_ROOT+'/tests/fixtures/root.pem'),rejectUnauthorized:true,servername:'foobar.com',lookup:(_h,_o,cb)=>cb(null,[{address:'127.0.0.1',family:4}])});
+let sentHeartbeats=0;const originalSend=socket.send.bind(socket);
+socket.send=data=>{if(data instanceof Uint8Array&&data.length===24&&data[0]===1&&data[1]===1&&data[2]===0&&data[3]===1&&data.subarray(4,20).every(b=>b===3)&&data.subarray(20).every(b=>b===0))sentHeartbeats++;originalSend(data);};
 socket.on('error',error=>console.error('TEST_ONLY_OUTER',error.message));
 const {owner:relay,activation}=createBrowserDataKeepaliveRelay({origin:config.origin,tunnel:new Uint8Array(16).fill(3),identity:{keyId:new Uint8Array(16).fill(2),sign:async r=>Uint8Array.from(sign('sha256',r.transcript,{key:phoneKey,dsaEncoding:'ieee-p1363'}))},socket:socket as unknown as WebSocket,setupDeadline:setupEnd,maxDeadline:maxEnd,ioBudgetMs:2000});
 let worker:Worker|undefined,served:ReturnType<typeof serveBrowserTransport>|undefined,tls:ReturnType<typeof createBrowserTlsSignerBroker>|undefined,grant:ReturnType<typeof createBrowserGrantBroker>|undefined,app:ReturnType<typeof browserClientPort>|undefined;
 let resolveRetired!:()=>void,rejectRetired!:(e:Error)=>void,done=false;const retired=new Promise<void>((a,b)=>{resolveRetired=a;rejectRetired=b;});void retired.catch(()=>{});
 
-let watchdogFired=false,presentations=0;const watchdog=setTimeout(()=>{watchdogFired=true;worker?.postMessage({kind:'close'});relay.close();},15000);
+let watchdogFired=false,presentations=0;const watchdog=setTimeout(()=>{watchdogFired=true;worker?.postMessage({kind:'close'});relay.close();},config.case==='auto61'?80000:15000);
 try{
  const wire=await relay.ready,profile={origin:'https://desk.invalid',rpId:'desk.invalid',credentialId,tlsKey:await crypto.subtle.importKey('jwk',phoneJwk,{name:'ECDSA',namedCurve:'P-256'},false,['sign']),grantKey:await crypto.subtle.importKey('jwk',credential.jwk,{name:'ECDSA',namedCurve:'P-256'},false,['sign'])};
  tls=createBrowserTlsSignerBroker(profile,{timeoutMs:7000,setupDeadline:setupEnd});grant=createBrowserGrantBroker(profile,{configuration:{issuerSpki:credential.spki,principal:'04'.repeat(32),scope:config.scope,role:'Controller',budgetMs:7000,peerInstall:{budgetMs:3000,controlLease:'live-v1',...(config.case==='host-pull'?{}:{snapshotPull:'snapshot-pull-v1'})},profile:{origin:profile.origin,rpId:profile.rpId,credentialId,credentialSpki:credential.spki,backupEligible:false,allowBackedUp:false}},present:async()=>{presentations++;}});
@@ -36,6 +39,15 @@ try{
   assert.equal(presentations,0);assert.equal(watchdogFired,false);console.log(JSON.stringify({kind:'snapshot-pull-rejected',reason:config.case,originalRetired:true}));
  }else{
  const descriptor=await app.descriptor;assert.equal(descriptor.role,'Controller');
+ if(config.case==='auto-smoke'||config.case==='auto61'){
+  const requests:string[]=[],renewals:{sequence:string;deadline:string;request:string}[]=[];const original=app;
+  const connection=browserPullConnection({...original,snapshotPull:async(request,budget)=>{requests.push('Snapshot');return original.snapshotPull(request,budget);},exchange:async(bytes,budget)=>{const request=JSON.parse(new TextDecoder().decode(bytes));requests.push(request.message);const response=await original.exchange(bytes,budget);if(request.message==='LeaseRenew'){const reply=decodeReply(response);assert.equal(reply.message,'LeaseRenewed');if(reply.message!=='LeaseRenewed')throw Error('renewal reply');renewals.push({sequence:reply.renewalSequence,deadline:reply.notAfterHostMs,request:reply.request});}return response;}});
+  const terminal=new TerminalClient(descriptor.target,descriptor.binding);terminal.connect(connection);const initial=await terminal.leaseState();await terminal.startAutoRenewal();const before=requests.length,heartbeatBefore=sentHeartbeats,start=performance.now();
+  await new Promise(r=>setTimeout(r,config.waitMs));const elapsed=performance.now()-start;assert.ok(elapsed>=config.waitMs);assert.equal(done,false);assert.ok(requests.slice(before).every(m=>m==='LeaseRenew'));assert.ok(renewals.length>=(config.waitMs===61000?12:2));assert.ok(renewals.length<=Math.ceil(config.waitMs/5000)+1);assert.deepEqual(renewals.map(r=>r.request),renewals.map((_,i)=>String(i+2)));const idleHeartbeats=sentHeartbeats-heartbeatBefore;assert.ok(idleHeartbeats>0&&idleHeartbeats<=Math.ceil(elapsed/500)+2);assert.deepEqual(renewals.map(r=>r.sequence),renewals.map((_,i)=>String(i+1)));assert.equal(new Set(renewals.map(r=>r.request)).size,renewals.length);if(config.waitMs===61000)assert.ok(BigInt(renewals.at(-1)!.deadline)-BigInt(initial.notAfterHostMs)>=51000n);
+  const snapshotStart=performance.now();await terminal.snapshot();const snapshotMs=performance.now()-snapshotStart;assert.equal(terminal.frame?.state.rows,24);assert.equal(terminal.frame?.state.columns,80);assert.equal(terminal.frame?.cells.length,1920);
+  await terminal.window();const receipt=await terminal.submit('42'.repeat(16),'1',new Uint8Array([110]));assert.equal(receipt.message,'InputReceipt');assert.equal(receipt.outcome,'HostWritten');await terminal.settle();const settledPhase=terminal.phase;assert.equal(settledPhase,'Idle');await terminal.stopAutoRenewal();assert.equal(terminal.autoRenewalState,'Stopped');await connection.waitClosed();await retired;await served.waitClosed();await relay.waitClosed();assert.equal(watchdogFired,false);
+  console.log(JSON.stringify({kind:'snapshot-pull-auto',settledPhase,idleHeartbeats,renewalCount:renewals.length,elapsedMs:Math.floor(elapsed),snapshotMs:Math.floor(snapshotMs),initialLeaseDeadline:initial.notAfterHostMs,renewals,maintenanceOnlyLeaseRenew:true,cells:1920,remoteBytes:1,originalRetired:true}));
+ }else{
  const began=performance.now();const snapshot=await app.snapshotPull(1n,1000);
  assert.ok(snapshot.parts.length>1,'real Host returns multiple batches');assert.equal(snapshot.stamp.binding,descriptor.binding);assert.deepEqual(snapshot.stamp.target,descriptor.target);
  const snapshotMs=performance.now()-began,receiver=new ProjectionReceiver(descriptor.target,descriptor.binding);receiver.begin(snapshot.stamp);let through=0;
@@ -44,5 +56,5 @@ try{
  const ack=decodeReply(await app.exchange(projectionAck(snapshot.stamp),1000));assert.equal(ack.message,'ProjectionAcknowledged');
  const state=decodeReply(await app.exchange(leaseState('2'),1000));assert.equal(state.message,'LeaseStateReply');assert.equal(state.request,'2');
  await app.close();await retired;await served.waitClosed();await relay.waitClosed();
- assert.equal(watchdogFired,false);console.log(JSON.stringify({kind:'snapshot-pull',snapshotMs:Math.floor(snapshotMs),cells:through,parts:snapshot.parts.length,rawBytes:snapshot.parts.reduce((n,p)=>n+p.length,0),elapsedMs:Math.floor(performance.now()-began),originalRetired:true}));}}
+ assert.equal(watchdogFired,false);console.log(JSON.stringify({kind:'snapshot-pull',snapshotMs:Math.floor(snapshotMs),cells:through,parts:snapshot.parts.length,rawBytes:snapshot.parts.reduce((n,p)=>n+p.length,0),elapsedMs:Math.floor(performance.now()-began),originalRetired:true}));}}}
 }finally{clearTimeout(watchdog);worker?.postMessage({kind:'close'});tls?.close();grant?.close();relay.close();served?.close();await Promise.allSettled([tls?.waitClosed(),grant?.waitClosed(),relay.waitClosed(),served?.waitClosed(),worker?retired:undefined]);await worker?.terminate();restore();}

@@ -28,15 +28,39 @@ async fn BrowserSnapshotPull_WithoutApplicationRejects_004() {
     }
     browser_case("no-application").await;
 }
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn BrowserSnapshotPull_AutoOwnerRealFiveSeconds_005() {
+    if isolated("snapshot_pull::BrowserSnapshotPull_AutoOwnerRealFiveSeconds_005") {
+        return;
+    }
+    browser_case("auto-smoke").await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn BrowserSnapshotPull_AutoOwnerReal61Seconds_006() {
+    if isolated("snapshot_pull::BrowserSnapshotPull_AutoOwnerReal61Seconds_006") {
+        return;
+    }
+    browser_case("auto61").await;
+}
 async fn browser_case(case: &str) {
+    let automatic = case == "auto-smoke" || case == "auto61";
+    let wait_ms = if case == "auto61" {
+        61000
+    } else if automatic {
+        5200
+    } else {
+        0
+    };
     let (f, mut cleanup) = setup();
-    let mut relay = NetworkRelayFixture::start_with_browser(None, 30000, true).await;
+    let mut relay =
+        NetworkRelayFixture::start_with_browser(None, if automatic { 120000 } else { 30000 }, true)
+            .await;
     let source = admit(&f);
     let scope = source.scope().unwrap();
     let (consent, mut current, policy) = NativeDelegationConsent::test_network(&source, device());
     policy.test_network_origin(&mut current, relay.origin.clone());
     policy.test_budget_progress();
-    policy.test_budget_total(15000);
+    policy.test_budget_total(if automatic { 80000 } else { 15000 });
     let session = Arc::new(
         cleanup
             .host
@@ -44,7 +68,11 @@ async fn browser_case(case: &str) {
             .unwrap(),
     );
     let (accepted, ready) = tokio::sync::oneshot::channel();
-    let builder = renewal_material_duration(&relay, accepted, Duration::from_secs(20));
+    let builder = renewal_material_duration(
+        &relay,
+        accepted,
+        Duration::from_secs(if automatic { 75 } else { 20 }),
+    );
     let builder = if case == "client-pull" {
         builder.test_live_keepalive()
     } else {
@@ -55,7 +83,7 @@ async fn browser_case(case: &str) {
         .unwrap();
     ready.await.unwrap();
     let (_, spki) = network_identities::identity(false, false);
-    let config = serde_json::json!({"case":case,"origin":relay.origin,"scope":scope,"hostSpki":spki.iter().map(|b|format!("{b:02x}")).collect::<String>()}).to_string();
+    let config = serde_json::json!({"case":case,"waitMs":wait_ms,"origin":relay.origin,"scope":scope,"hostSpki":spki.iter().map(|b|format!("{b:02x}")).collect::<String>()}).to_string();
     let child = tokio::task::spawn_blocking(move || {
         let mut process = std::process::Command::new("node")
             .current_dir(
@@ -72,7 +100,7 @@ async fn browser_case(case: &str) {
             .stderr(std::process::Stdio::piped())
             .spawn()
             .unwrap();
-        let end = Instant::now() + Duration::from_secs(20);
+        let end = Instant::now() + Duration::from_secs(if automatic { 80 } else { 20 });
         loop {
             if process.try_wait().unwrap().is_some() {
                 return process.wait_with_output().unwrap();
@@ -88,12 +116,20 @@ async fn browser_case(case: &str) {
     let output = child.await.unwrap();
     socket.request_close();
     let joined = socket.wait_closed().await;
+    if automatic && output.status.success() && admitted.is_ok() && joined.is_ok() {
+        f.service
+            .access(&f.caller, &f.request_run())
+            .unwrap()
+            .write_frame(b"ative")
+            .unwrap();
+        assert_eq!(report(&f)["input"], json!([110, 97, 116, 105, 118, 101]));
+    }
     drop(session);
     let host_closed = cleanup.close();
     let relay_closed = relay.close().await;
     assert!(
         output.status.success()
-            && (admitted.is_ok() == (case == "smoke"))
+            && (admitted.is_ok() == (case == "smoke" || automatic))
             && joined.is_ok()
             && host_closed
             && relay_closed,

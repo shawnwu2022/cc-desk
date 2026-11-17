@@ -503,3 +503,46 @@ post-handshake 残余一般上界仍未证明，默认入口仍关闭。
 保留但不计验收；改 remote-host 后才执行上述测试。日志 browser-pull-relay-*
 及 browser-pull-rpc-wasm-build.log。独立模式/真实链路只读审查无权限旁路。
 后续优先显式高层适配器与原自动续租 owner 的 5.2→61 秒空闲组合验收。
+
+## P2j：原自动续租与空闲心跳组合（2026-11-17）
+
+显式 browserPullConnection 只包装原 nativeConnection，最多128字节的原
+canonical Snapshot 经 counter/command 验证并逐字节重编码比较后，转换为
+port.snapshotPull；其余 exchange、onInvalidate、close 保留原对象调用。
+没有另一套计数、pending、deadline、sink 或 retirement；旧 nativeConnection
+默认不变。选择新 API 不是授予能力，原 Rust P1 fact 仍决定是否准入，
+未协商失败不降级。5项新单测 + 原 native/Bridge/LiveHandoff 共24/24；
+strict TS 通过。独立 .audit 副本把调用故意改回旧 Snapshot 的有效变异
+被“请求未进入pull”和“缺cap仍成功”两断言抓到，原源码未被变异覆盖。
+
+独立真实网络 fixture 通过该高层适配器运行原 TerminalClient.startAutoRenewal。
+空闲期间禁止 Snapshot/ACK/input 等业务请求，只允许原 LeaseRenew；
+续租 request 连续2..n+1、renewalSequence 连续且按原5秒周期检查数量上界。
+原 socket.send 只做转发计数，不额外发送帧、不新增 writer/owner：
+精确24字节零载荷心跳按原500ms周期检查上界。
+
+首次5.2/61秒均通过后，依审查增加 settle 后 phase 必须为 Idle
+（Rejected/NeedsSettlement 不能冒充成功）、续租上界及精确心跳计数，
+最终相同源码再次依次通过：
+- 5.2秒：空闲5200ms，10个实际心跳、2次续租，末次Snapshot221ms。
+- 61秒：空闲61001ms，120个实际心跳、13次续租（request2..14），
+  末次Snapshot224ms；完整80×24/1920cells，随后原window、真实1byte
+  HostWritten、settle=Idle、stopAutoRenewal与原各层退休均成功。
+- Native侧补写剩余本机字节并核对原writer报告，非只看JS成功回复。
+
+只观察原维护通信，未用业务流量、测试私调或频繁重连保活；生产1秒
+请求预算、绝对截止、撤销及固定ring容量未放宽。75/80秒只属于原有长测
+fixture的有界授权安排，不是改变生产授权期限。首次旧路径失败证据
+browser-live-auto-smoke-first.log 保留；新日志 browser-pull-auto-*
+不覆盖旧失败，也不宣称旧默认Snapshot路径或生产UI已自动切换。
+
+这是本机 Node 合成Window/WebAuthn + 实际WASM/Relay/Host验收，不是实体
+浏览器/手机、公网RTT、后台/锁屏恢复、长期无人值守或全链内存上界证明。
+Host Pull选择仍仅cfg(test)材料入口，真实手机尚未由此阶段登记，云服/
+DNS/真实凭据均未操作。后续上线仍需生产显式授权/选择闭环与真实环境门禁。
+
+最终去重计数：JS 24项；真实网络6项分别为原4项短回归 + 5.2秒 + 61秒，
+并非将首次/复跑累计成更多用例。末次4项短回归再次4/4、Host strict Clippy
+及 strict TS 均为0；源码/Native exe/WASM/glue哈希记录在
+browser-pull-auto-final-pins.json。频率上下界是此固定fixture的宽松门禁，
+不是公网速率或通用内存证明。包装器及最终组合独立只读审查均通过。
