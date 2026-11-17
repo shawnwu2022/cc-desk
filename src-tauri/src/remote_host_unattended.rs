@@ -18,6 +18,12 @@ impl StartPermit {
     }
 }
 trait Managed: Send {
+    fn epoch_end(&self) -> Option<std::time::Instant> {
+        None
+    }
+    fn advance_epoch(&mut self, _permit: &StartPermit) -> Result<(), StoreError> {
+        Ok(())
+    }
     fn start(&mut self, _permit: &StartPermit) -> Result<(), StoreError> {
         Ok(())
     }
@@ -38,6 +44,12 @@ where
     B: crate::remote_native_pairing_store::Backend + Send + Sync,
     P: crate::remote_native_pairing_store::Sealer + Send + Sync,
 {
+    fn epoch_end(&self) -> Option<std::time::Instant> {
+        self.epoch_end()
+    }
+    fn advance_epoch(&mut self, permit: &StartPermit) -> Result<(), StoreError> {
+        self.advance_epoch(permit)
+    }
     fn start(&mut self, _permit: &StartPermit) -> Result<(), StoreError> {
         self.start(_permit)
     }
@@ -305,7 +317,26 @@ impl UnattendedCustody {
                 .start(&permit);
             *start_result.lock() = Some(started);
             if started.is_ok() {
-                close.wait_until_closed(end);
+                loop {
+                    let child_end = held
+                        .lock()
+                        .as_ref()
+                        .expect("original controller")
+                        .epoch_end();
+                    close.wait_until_closed(child_end.map_or(end, |child| child.min(end)));
+                    if close.closed() || std::time::Instant::now() >= end {
+                        break;
+                    }
+                    if held
+                        .lock()
+                        .as_mut()
+                        .expect("original controller")
+                        .advance_epoch(&permit)
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
             }
             close.request_close();
             #[cfg(test)]

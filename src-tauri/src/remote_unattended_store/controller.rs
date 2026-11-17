@@ -16,6 +16,9 @@ impl CloseHandle {
     pub(crate) fn request_close(&self) {
         self.control.close();
     }
+    pub(crate) fn closed(&self) -> bool {
+        self.control.closed()
+    }
     #[cfg(test)]
     pub(crate) fn test_closed(&self) -> bool {
         self.control.closed()

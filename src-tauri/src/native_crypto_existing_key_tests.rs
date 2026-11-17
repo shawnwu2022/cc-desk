@@ -721,23 +721,113 @@ fn HostOpen_DeadlineDuringProviderCallRetainsPartial_011() {
 #[path = "native_crypto_host_ready_tests.rs"]
 mod ready;
 
-pub(crate) fn single_run_keys(supplier: crate::native_crypto::host::FrozenHostSupplier, retire_hook: Option<Box<dyn FnOnce()+Send>>) -> crate::native_crypto::SingleRunTestKeys {
+pub(crate) fn single_run_keys(
+    supplier: crate::native_crypto::host::FrozenHostSupplier,
+    retire_hook: Option<Box<dyn FnOnce() + Send>>,
+) -> crate::native_crypto::SingleRunTestKeys {
     use crate::native_crypto::host::{HostKeyCustody, NotifyHooks};
     let binding = supplier.binding().clone();
     let names = supplier.key_references().unwrap().clone();
     let token = NativeRevocation::new();
     let mut first = Api::new(Mode::Good, token.clone());
-    { let a=Arc::get_mut(&mut first).unwrap(); a.name=names[0].clone(); a.public=binding.endpoint_spki; }
+    {
+        let a = Arc::get_mut(&mut first).unwrap();
+        a.name = names[0].clone();
+        a.public = binding.endpoint_spki;
+    }
     let mut second = Api::new(Mode::Good, token.clone());
-    { let a=Arc::get_mut(&mut second).unwrap(); a.name=names[1].clone(); a.public=binding.relay_spki; }
-    *first.free_hook.lock()=retire_hook;
-    let frozen = crate::native_crypto::host_profile::NativeHostProfile::new(binding.clone(), &names[0], &names[1]).unwrap().test_api(first, second).freeze();
-    let custody=HostKeyCustody::reserve_with(token,binding.profile_cap,NotifyHooks::default());
-    let signers=custody.publisher().unwrap().prepare(frozen).unwrap();
-    let end=Instant::now()+Duration::from_secs(3);
+    {
+        let a = Arc::get_mut(&mut second).unwrap();
+        a.name = names[1].clone();
+        a.public = binding.relay_spki;
+    }
+    *first.free_hook.lock() = retire_hook;
+    let frozen = crate::native_crypto::host_profile::NativeHostProfile::new(
+        binding.clone(),
+        &names[0],
+        &names[1],
+    )
+    .unwrap()
+    .test_api(first, second)
+    .freeze();
+    let custody = HostKeyCustody::reserve_with(token, binding.profile_cap, NotifyHooks::default());
+    let signers = custody.publisher().unwrap().prepare(frozen).unwrap();
+    let end = Instant::now() + Duration::from_secs(3);
     loop {
-        if let Ok(Some(ready))=custody.take_ready() { return crate::native_crypto::SingleRunTestKeys {custody,ready,signers}; }
-        assert!(Instant::now()<end,"mock original workers failed readiness");
+        if let Ok(Some(ready)) = custody.take_ready() {
+            return crate::native_crypto::SingleRunTestKeys {
+                custody,
+                ready,
+                signers,
+            };
+        }
+        assert!(
+            Instant::now() < end,
+            "mock original workers failed readiness"
+        );
         std::thread::sleep(Duration::from_millis(2));
     }
+}
+
+pub(crate) fn epoch_supplier(
+    supplier: crate::native_crypto::host::FrozenHostSupplier,
+    token: Arc<NativeRevocation>,
+    generation: u64,
+    trace: &crate::native_crypto::EpochTestTrace,
+) -> crate::native_crypto::host::FrozenHostSupplier {
+    let binding = supplier.binding().clone();
+    let names = supplier.key_references().unwrap().clone();
+    let mut first = Api::new(Mode::Good, token.clone());
+    {
+        let api = Arc::get_mut(&mut first).unwrap();
+        api.name = names[0].clone();
+        api.public = binding.endpoint_spki;
+    }
+    let second_mode = if generation == 2 {
+        match trace.fault {
+            crate::native_crypto::EpochTestFault::WrongSpki => Mode::PublicMismatch,
+            crate::native_crypto::EpochTestFault::SecondOpen => Mode::OpenErr,
+            _ => Mode::Good,
+        }
+    } else {
+        Mode::Good
+    };
+    if generation == 1
+        && matches!(
+            trace.fault,
+            crate::native_crypto::EpochTestFault::FreeUnknown
+        )
+    {
+        Arc::get_mut(&mut first).unwrap().free_fail = 202;
+    }
+    let mut second = Api::new(second_mode, token);
+    {
+        let api = Arc::get_mut(&mut second).unwrap();
+        api.name = names[1].clone();
+        api.public = binding.relay_spki;
+    }
+    if generation == 2 {
+        let action = trace.after_second_verified.clone();
+        let events = trace.events.clone();
+        *second.verified_hook.lock() = Some(Box::new(move || {
+            events.lock().push((generation, "second_verified"));
+            let action = action.lock().take();
+            if let Some(action) = action {
+                action();
+            }
+        }));
+    }
+    for (api, open, free) in [
+        (&first, "endpoint_open", "endpoint_free"),
+        (&second, "relay_open", "relay_free"),
+    ] {
+        let events = trace.events.clone();
+        *api.open_hook.lock() = Some(Box::new(move || events.lock().push((generation, open))));
+        let events = trace.events.clone();
+        *api.free_hook.lock() = Some(Box::new(move || events.lock().push((generation, free))));
+    }
+    crate::native_crypto::host_profile::NativeHostProfile::new(binding, &names[0], &names[1])
+        .unwrap()
+        .test_api(first, second)
+        .freeze()
 }

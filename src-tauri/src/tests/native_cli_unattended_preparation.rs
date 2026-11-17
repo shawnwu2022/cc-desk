@@ -481,13 +481,23 @@ fn final_consent(
     Arc<crate::remote_host_approval::unattended::final_approval::FinalApproval>,
     crate::remote_host_approval::unattended::final_approval::FinalConsent,
 ) {
+    final_consent_until(store, admission, cutoff())
+}
+fn final_consent_until(
+    store: &crate::remote_native_pairing_store::tests::TestStore,
+    admission: &crate::run_supervisor::NativeRunAdmission,
+    deadline: u64,
+) -> (
+    Arc<crate::remote_host_approval::unattended::final_approval::FinalApproval>,
+    crate::remote_host_approval::unattended::final_approval::FinalConsent,
+) {
     use crate::remote_host_approval::unattended::final_approval::FinalApproval;
     let preparation = UnattendedPreparation::new(
         store,
         synthetic_confirmed_candidate(store),
         admission,
         RequestedRole::Control,
-        cutoff(),
+        deadline,
     )
     .unwrap();
     let first = UnattendedApproval::test_pending(preparation);
@@ -2624,4 +2634,351 @@ async fn UnattendedReservation_GlobalCheckoutFailureClosesAdmissionAndActiveOwne
             }
         );
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn UnattendedEpoch_OriginalAppWorkerRetiresBeforeSecondOpen_001() {
+    unattended_epoch_case(0).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn UnattendedEpoch_CancelAfterOriginalJoinNeverReopens_002() {
+    unattended_epoch_case(1).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn UnattendedEpoch_SecondGenerationWrongSpkiNeverReady_003() {
+    unattended_epoch_case(2).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn UnattendedEpoch_SecondGenerationOpenFailureNeverReady_004() {
+    unattended_epoch_case(3).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn UnattendedEpoch_UnknownFreeNeverOpensReplacement_005() {
+    const FLAG: &str = "CC_TEST_EPOCH_FREE_UNKNOWN";
+    if std::env::var_os(FLAG).is_some() {
+        unattended_epoch_case(4).await;
+        return;
+    }
+    use std::os::windows::process::CommandExt;
+    struct Child(Option<std::process::Child>);
+    impl Drop for Child {
+        fn drop(&mut self) {
+            if let Some(child) = self.0.as_mut() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+    }
+    let dir = store_root();
+    let path = std::path::PathBuf::from(dir.path().to_string_lossy().replace('/', "\\"));
+    let child=std::process::Command::new(std::env::current_exe().unwrap()).args(["--exact", "tests::native_cli_run_supervisor::remote_composition::delegated::preparation::UnattendedEpoch_UnknownFreeNeverOpensReplacement_005", "--nocapture", "--test-threads=1"]).env(FLAG,&path).creation_flags(0x08000000).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().unwrap();
+    let mut child = Child(Some(child));
+    let end = Instant::now() + Duration::from_secs(20);
+    while child.0.as_mut().unwrap().try_wait().unwrap().is_none() {
+        assert!(Instant::now() < end, "owned Unknown child timeout");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let output = child.0.take().unwrap().wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{} / {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("TEST_ONLY_EPOCH_UNKNOWN_RETAINED"));
+    let backend =
+        crate::version_history::windows::unattended_store::WindowsUnattendedBackend::open_existing(
+            &path,
+        )
+        .unwrap();
+    assert!(backend.claim_owner_custody().is_ok());
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn UnattendedEpoch_PairingCasChangeAfterJoinRejectsNext_006() {
+    unattended_epoch_case(6).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn UnattendedEpoch_ParentDeadlineAfterJoinRejectsNext_007() {
+    unattended_epoch_case(7).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn UnattendedEpoch_ParentCancelAtSecondLoaderTailNeverPublishes_008() {
+    unattended_epoch_case(8).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn UnattendedEpoch_ParentExpiryAtSecondLoaderTailNeverPublishes_009() {
+    unattended_epoch_case(9).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn UnattendedEpoch_ConsumedOneShotMaterialCannotSelectEpochs_010() {
+    unattended_epoch_case(10).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn UnattendedEpoch_ForeignAcceptedAppPermitCannotClaimSource_011() {
+    unattended_epoch_case(11).await;
+}
+async fn unattended_epoch_case(mode: u8) {
+    use crate::remote_unattended_store::service::pending::PendingStart;
+    let (f, native, _runtime_stop) = unattended_app_run();
+    let admission = admit(&f);
+    let pair_dir = store_root();
+    let pairing = Arc::new(synthetic_file_store(pair_dir.path()).unwrap());
+    let (approval, mut consent) = if mode == 7 || mode == 9 {
+        final_consent_until(&pairing, &admission, cutoff() - 48000)
+    } else {
+        final_consent(&pairing, &admission)
+    };
+    if mode == 10 {
+        drop(consent.take_supplier().unwrap());
+    }
+    let foreign_rejected = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let foreign_pair_dir = store_root();
+    let foreign_pairing = if mode == 11 {
+        Some(Arc::new(
+            synthetic_file_store(foreign_pair_dir.path()).unwrap(),
+        ))
+    } else {
+        None
+    };
+    let foreign = foreign_pairing
+        .as_ref()
+        .map(|store| final_consent(store, &admit(&f)));
+    let close = consent.control();
+    let parent_end = consent.end();
+    let durable_dir = store_root();
+    let path = std::path::PathBuf::from(durable_dir.path().to_string_lossy().replace('/', "\\"));
+    let path = if mode == 4 {
+        std::path::PathBuf::from(std::env::var_os("CC_TEST_EPOCH_FREE_UNKNOWN").unwrap())
+    } else {
+        path
+    };
+    let backend =
+        crate::version_history::windows::unattended_store::WindowsUnattendedBackend::create_new(
+            &path,
+        )
+        .unwrap();
+    let mut pending = PendingStart::new_epochs(
+        backend,
+        SingleRunSealer,
+        consent,
+        admission,
+        pairing.clone(),
+    )
+    .unwrap();
+    let mut extra_approval = None;
+    if let Some((approval, mut other)) = foreign {
+        extra_approval = Some(approval);
+        let result = foreign_rejected.clone();
+        let close = close.clone();
+        let pairing = foreign_pairing.as_ref().unwrap().clone();
+        pending.test_permit_hook(move |permit| {
+            result.store(
+                other.check_runtime(&pairing).is_ok() && other.claim_epochs(permit).is_err(),
+                std::sync::atomic::Ordering::Release,
+            );
+            close.close();
+        });
+    }
+    let trace = crate::native_crypto::EpochTestTrace {
+        fault: match mode {
+            2 => crate::native_crypto::EpochTestFault::WrongSpki,
+            3 => crate::native_crypto::EpochTestFault::SecondOpen,
+            4 => crate::native_crypto::EpochTestFault::FreeUnknown,
+            _ => crate::native_crypto::EpochTestFault::None,
+        },
+        ..Default::default()
+    };
+    if mode == 1 {
+        let control = close.clone();
+        *trace.after_join.lock() = Some(Box::new(move || control.close()));
+    }
+    if mode == 6 {
+        let pairing = pairing.clone();
+        *trace.after_join.lock() = Some(Box::new(move || synthetic_forget(&pairing)));
+    }
+    if mode == 7 {
+        *trace.after_join.lock() = Some(Box::new(move || {
+            while Instant::now() < parent_end {
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        }));
+    }
+    if mode == 8 {
+        let control = close.clone();
+        *trace.after_second_verified.lock() = Some(Box::new(move || control.close()));
+    }
+    if mode == 9 {
+        *trace.after_second_verified.lock() = Some(Box::new(move || {
+            while Instant::now() < parent_end {
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        }));
+    }
+    pending.test_epoch_trace(trace.clone());
+    assert_eq!(pending.end(), parent_end);
+    let host = Arc::new(RemoteHostService::default());
+    host.unattended
+        .reserve_start(pending, native.clone())
+        .unwrap();
+    let limit = Instant::now() + Duration::from_secs(15);
+    loop {
+        if ((mode == 10 || mode == 11) && host.unattended.start_result().is_some())
+            || trace.events.lock().contains(&(2, "ready"))
+            || close.closed()
+            || Instant::now() >= limit
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let events = trace.events.lock().clone();
+    let parent_open = !close.closed() && Instant::now() < parent_end;
+    let started = host.unattended.start_result();
+    let joined_index = events.iter().position(|e| *e == (1, "original_joined"));
+    let second_open = events
+        .iter()
+        .position(|e| e.0 == 2 && e.1.ends_with("_open"));
+    let ordered = matches!((joined_index, second_open), (Some(a), Some(b)) if a < b);
+    let two_ready = events.contains(&(1, "ready")) && events.contains(&(2, "ready"));
+    let opens = events.iter().filter(|e| e.1.ends_with("_open")).count();
+    if mode == 4 {
+        let observation = host.unattended.observe();
+        let keys = trace.observer.lock().as_ref().unwrap().snapshot();
+        let backend=crate::version_history::windows::unattended_store::WindowsUnattendedBackend::open_existing(&path).unwrap();
+        let busy = matches!(
+            backend.claim_owner_custody(),
+            Err(crate::remote_unattended_store::StoreError::Busy)
+        );
+        let retained = keys.unknown
+            && keys.outstanding
+            && keys.keys.iter().flatten().any(|k| k.holds_original_join);
+        let good = close.closed()
+            && opens == 2
+            && !two_ready
+            && retained
+            && busy
+            && observation.outstanding
+            && !observation.watcher_joined;
+        println!("TEST_ONLY_EPOCH_UNKNOWN_RETAINED good={good} parent_closed={} events={events:?} keys={keys:?} app={observation:?} busy={busy}; no App/PTY retirement claim",close.closed());
+        // 原 Unknown key/通知/服务 worker 均保留；进程结束仅为隔离负测清理，不是退休回执。
+        std::process::exit(if good { 0 } else { 42 });
+    }
+    let decision = host.request_exit(53, false);
+    let (tx, mut rx) = tokio::sync::oneshot::channel();
+    host.start_exit(
+        53,
+        native,
+        Arc::new(crate::remote_client_ipc::RemoteClientService::default()),
+        move |code| {
+            let _ = tx.send(code);
+        },
+    );
+    let known = tokio::time::timeout(Duration::from_secs(10), host.unattended.wait())
+        .await
+        .unwrap();
+    let joined = tokio::time::timeout(Duration::from_secs(10), host.test_join_exit_worker())
+        .await
+        .unwrap();
+    let observation = host.unattended.observe();
+    let facts = host.test_original_managed_facts(&f.request_run()).unwrap();
+    drop(approval);
+    drop(extra_approval);
+    eprintln!("TEST_ONLY_EPOCH events={events:?} parent_open={parent_open} started={started:?} known={known} joined={joined} observation={observation:?} facts={facts:?}");
+    assert!(matches!(
+        decision,
+        crate::remote_host::ExitDecision::Wait(53)
+    ));
+    assert!(
+        known == (mode != 4)
+            && joined
+            && observation.watcher_joined
+            && facts.original_resources_retired()
+    );
+    if let Ok(code) = rx.try_recv() {
+        assert_eq!(code, 53);
+    }
+    if mode == 10 || mode == 11 {
+        if mode == 11 {
+            assert!(foreign_rejected.load(std::sync::atomic::Ordering::Acquire));
+        }
+        use crate::remote_unattended_store::Backend as _;
+        let backend=crate::version_history::windows::unattended_store::WindowsUnattendedBackend::open_existing(&path).unwrap();
+        let root = std::path::PathBuf::from(backend.target_label().unwrap());
+        assert_eq!(
+            started,
+            Some(Err(
+                crate::remote_unattended_store::StoreError::Unauthorized
+            ))
+        );
+        assert_eq!(opens, 0);
+        assert!(!root.join("delegation.dpapi").exists());
+        assert_eq!(
+            std::fs::metadata(root.join("commit.journal"))
+                .unwrap()
+                .len(),
+            0
+        );
+        return;
+    }
+    assert_eq!(started, Some(Ok(())));
+    match mode {
+        0 => assert!(ordered && two_ready && opens == 4 && parent_open),
+        1 | 6 | 7 => assert!(joined_index.is_some() && !two_ready && opens == 2 && !parent_open),
+        2 | 3 | 8 | 9 => assert!(ordered && !two_ready && opens == 4 && !parent_open),
+        4 => assert!(
+            joined_index.is_none()
+                && !two_ready
+                && opens == 2
+                && !parent_open
+                && !observation.retired
+        ),
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn UnattendedCost_RejectedEffectStillPaysOriginalObservation_001() {
+    let (f, mut cleanup) = setup();
+    let admission = admit(&f);
+    let pair_dir = store_root();
+    let pairing = synthetic_file_store(pair_dir.path()).unwrap();
+    let (approval, mut consent) = final_consent(&pairing, &admission);
+    let keys = crate::native_crypto::single_run_test_keys(consent.take_supplier().unwrap());
+    let durable_dir = store_root();
+    let mut owner = service(durable_dir.path());
+    owner
+        .start(
+            consent,
+            keys.custody,
+            keys.ready,
+            keys.signers,
+            admission,
+            &pairing,
+        )
+        .unwrap();
+    let before = owner.test_journal_len();
+    let wall = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+    };
+    let sampled = wall();
+    while wall() <= sampled {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let foreign = NativeRunSupervisor::new(Arc::new(TerminalTransports::new()));
+    let rejected = owner.resize(&pairing, &foreign, 31, 91).is_err();
+    let after = owner.test_journal_len();
+    let closed = owner.stop();
+    retire_service(&mut owner);
+    let revoked = owner.test_durable_revoked();
+    let final_bytes = owner.test_journal_len();
+    drop(owner);
+    drop(approval);
+    let retired = cleanup.close();
+    assert!(rejected && closed.is_ok() && revoked && retired);
+    assert_eq!(before, 896);
+    assert_eq!(after - before, 448);
+    assert_eq!(final_bytes - after, 448);
 }

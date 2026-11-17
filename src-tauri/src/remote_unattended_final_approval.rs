@@ -1,10 +1,11 @@
 //! 独立最终批准；A3 的准备回执不等于本模块的持久 Enable 同意。
 use super::*;
+use crate::native_crypto::owner::NativeRevocation;
 use crate::native_crypto::{
     host::{FrozenHostBinding, FrozenHostSupplier, HostKeyProfileIdentity},
     host_profile::NativeHostProfile,
 };
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Publication {
@@ -16,13 +17,13 @@ enum Publication {
 
 // 取消只推进不可复位的位；短门不持有存储、run 或密钥锁。
 pub(crate) struct FinalControl {
-    closed: AtomicBool,
+    closed: Arc<NativeRevocation>,
     publication: Mutex<Publication>,
     closed_notify: parking_lot::Condvar,
 }
 impl FinalControl {
     pub(crate) fn close(&self) {
-        self.closed.store(true, Ordering::Release);
+        self.closed.revoke();
         *self.publication.lock() = Publication::Closed;
         self.closed_notify.notify_all();
     }
@@ -34,7 +35,7 @@ impl FinalControl {
         }
     }
     pub(crate) fn closed(&self) -> bool {
-        self.closed.load(Ordering::Acquire)
+        self.closed.is_revoked()
     }
     pub(crate) fn active(&self) -> bool {
         !self.closed() && *self.publication.lock() == Publication::Active
@@ -49,6 +50,10 @@ struct FinalDescription {
 pub(crate) struct FinalApproval {
     machine: Arc<ApprovalMachine<FinalDescription>>,
     control: Arc<FinalControl>,
+}
+pub(crate) struct EpochSource {
+    control: Arc<FinalControl>,
+    original: FrozenHostSupplier,
 }
 pub(crate) struct FinalConsent {
     description: FinalDescription,
@@ -168,7 +173,7 @@ impl FinalApproval {
                 cap,
             ),
             control: Arc::new(FinalControl {
-                closed: AtomicBool::new(false),
+                closed: NativeRevocation::new(),
                 publication: Mutex::new(Publication::Waiting),
                 closed_notify: parking_lot::Condvar::new(),
             }),
@@ -218,7 +223,7 @@ impl FinalApproval {
         Ok(Self {
             machine: ApprovalMachine::pending(description, Instant::now(), cap),
             control: Arc::new(FinalControl {
-                closed: AtomicBool::new(false),
+                closed: NativeRevocation::new(),
                 publication: Mutex::new(Publication::Waiting),
                 closed_notify: parking_lot::Condvar::new(),
             }),
@@ -257,6 +262,77 @@ impl FinalConsent {
     }
     pub(crate) fn control(&self) -> Arc<FinalControl> {
         self.control.clone()
+    }
+    pub(crate) fn claim_epochs(
+        &mut self,
+        permit: &crate::remote_host::unattended::StartPermit,
+    ) -> Result<EpochSource, SafeError> {
+        self.check_window()?;
+        if !permit.matches(&self.control) {
+            return Err(error("REMOTE_UNATTENDED_STALE"));
+        }
+        let original = self
+            .description
+            .supplier
+            .take()
+            .ok_or_else(|| error("REMOTE_UNATTENDED_STALE"))?;
+        Ok(EpochSource {
+            control: self.control.clone(),
+            original,
+        })
+    }
+    pub(crate) fn check_epoch_source(
+        &self,
+        source: &EpochSource,
+        permit: &crate::remote_host::unattended::StartPermit,
+    ) -> Result<(), SafeError> {
+        self.check_window()?;
+        if !Arc::ptr_eq(&source.control, &self.control) || !permit.matches(&self.control) {
+            return Err(error("REMOTE_UNATTENDED_STALE"));
+        }
+        Ok(())
+    }
+    // 子代只能沿本次真实批准和原 App 槽派生；不反向撤父，不接受外部 key/binding。
+    pub(crate) fn epoch_token(
+        &self,
+        source: &EpochSource,
+        permit: &crate::remote_host::unattended::StartPermit,
+    ) -> Result<Arc<NativeRevocation>, SafeError> {
+        self.check_epoch_source(source, permit)?;
+        let lease = self
+            .machine
+            .lease
+            .native
+            .root_witness()
+            .ok_or_else(|| error("REMOTE_UNATTENDED_STALE"))?;
+        let control = self
+            .control
+            .closed
+            .root_witness()
+            .ok_or_else(|| error("REMOTE_UNATTENDED_STALE"))?;
+        Ok(NativeRevocation::child([lease, control]))
+    }
+    pub(crate) fn epoch_supplier<B: Backend, S: Sealer>(
+        &self,
+        source: &EpochSource,
+        permit: &crate::remote_host::unattended::StartPermit,
+        store: &PairingStore<B, S>,
+    ) -> Result<FrozenHostSupplier, SafeError> {
+        self.check_epoch_source(source, permit)?;
+        self.check_runtime(store)?;
+        let mut binding = source.original.binding().clone();
+        binding.profile_cap = self.end().min(Instant::now() + Duration::from_secs(10));
+        let record = self.candidate().record();
+        let supplier = NativeHostProfile::new(
+            binding,
+            &record.native.endpoint_key_name,
+            &record.native.relay_key_name,
+        )
+        .map_err(|_| error("REMOTE_HOST_CONFIGURATION"))?
+        .freeze();
+        self.check_runtime(store)?;
+        self.check_epoch_source(source, permit)?;
+        Ok(supplier)
     }
     pub(crate) fn key_binding(&self) -> &FrozenHostBinding {
         &self.description.key_binding

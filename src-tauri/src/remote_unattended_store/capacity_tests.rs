@@ -156,3 +156,54 @@ fn UnattendedCapacity_PendingAndTornReadCannotYieldCapacity_010() {
         assert_eq!(tx.remaining_commits(), Err(StoreError::Poisoned));
     }
 }
+
+#[test]
+fn UnattendedCost_RealJournalSameWallAdvanceAndReserve_011() {
+    let d = directory();
+    let store = create(d.path());
+    let length = || {
+        std::fs::metadata(path(&store, "commit.journal"))
+            .unwrap()
+            .len()
+    };
+    let disabled = initialize(&store);
+    let initialized = length();
+    let enabled = enable(&store, &disabled);
+    let enabled_bytes = length();
+    let same = store.observe(&enabled.expected(), 1000).unwrap();
+    let same_bytes = length();
+    let advanced = store.observe(&same.expected(), 1001).unwrap();
+    let advanced_bytes = length();
+    let revoked = store.revoke(&advanced.expected(), 1001).unwrap();
+    let revoked_bytes = length();
+    assert_eq!(
+        (
+            initialized,
+            enabled_bytes,
+            same_bytes,
+            advanced_bytes,
+            revoked_bytes
+        ),
+        (448, 896, 896, 1344, 1792)
+    );
+    assert_eq!(same.0.revision, enabled.0.revision);
+    assert_eq!(advanced.0.observed_wall_ms, 1001);
+    assert_eq!(revoked.0.status, Status::Revoked);
+    let (_near_dir, near, enabled) = near_capacity(true, 2);
+    let before = std::fs::metadata(path(&near, "commit.journal"))
+        .unwrap()
+        .len();
+    let advanced = near.observe(&enabled.expected(), 1100).unwrap();
+    let after = std::fs::metadata(path(&near, "commit.journal"))
+        .unwrap()
+        .len();
+    assert_eq!(after - before, 448);
+    let revoked = near.revoke(&advanced.expected(), 1100).unwrap();
+    assert_eq!(revoked.0.status, Status::Revoked);
+    assert_eq!(
+        std::fs::metadata(path(&near, "commit.journal"))
+            .unwrap()
+            .len(),
+        journal::MAX_JOURNAL as u64
+    );
+}

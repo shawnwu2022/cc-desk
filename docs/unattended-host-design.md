@@ -1448,3 +1448,117 @@ The five isolated tests use the original Node/PTY paths, ExistingKeyLoader with 
 A6e preserved evidence: `unattended-reservation-first.log` ended at compilation after a machine disconnect and is not a result. The four-case interim source passed 121 distinct tests and strict Clippy (`unattended-reservation-final.log`, `unattended-reservation-regression-*.log`, `unattended-reservation-strict-first.log`, 58.86s). The two deliberate mutations produced four failures after cleanup: missing request-exit close yielded `immediate=false`, and missing pending resource transfer yielded `busy=false` inside the original free barrier. `reservation-mutation-source.json` and `unattended-reservation-mutation-restored.log` record exact byte restoration. The later global-checkout RED returned `Ok(())` from reserve after the original checkout had failed; the target assertion failed after cleanup (`unattended-reservation-global-red.log`). These are behavioral failures, not interface/compiler failures.
 
 Final A6e evidence: `unattended-reservation-final2.log` passed 5/5; the eleven `unattended-reservation-final2-regression-*.log` groups passed 117/117. `unattended-reservation-final2-ledger.json` records 122 distinct test names, without counting the earlier source or repeated runs. `unattended-reservation-strict-final2.log` completed strict Clippy in 29.80s. The command session exited 0. `unattended-reservation-final2-source.json` identifies the six tested source files. The product still has no unattended Enable UI or production supplier; long-lived key material, journal write budget and real device enrollment remain separate gates.
+
+
+## A6f: bounded serial key epochs in the original App owner
+
+Internal/default-off only: no Enable UI, network reconnection, or 30-day
+supplier is provided. The actual final approval remains bounded by its original
+parent deadline (at most 60 seconds). A child material window is at most 10
+seconds and never extends that deadline. The App reservation, Runtime identity,
+final approval, captured run, policy and durable Enabled revision are not
+restarted, recaptured or re-enabled to rotate keys.
+
+The accepted App slot lends its non-Clone StartPermit to startup and every
+advance. A private non-Clone EpochSource consumes the original unconsumed
+supplier once under that matching permit. Previously selecting one-shot
+material forbids epoch mode. Child factories check the source's original
+control identity and the same permit; no caller key/binding or approved boolean
+supplies this fact. The production default remains the original empty slot.
+
+The same App worker waits for min(child end, parent end). It revokes only the
+child, drops the original signer set/ready receipt, and requires original key
+and notification custody to report !outstanding, disposal_complete and !unknown
+before replacement. The old known-joined custody remains owned until the next
+custody takes over, including across cancelled final checks. Each new profile
+uses the current exact pairing candidate/CAS and original profile, key names,
+purposes and SPKIs. Ready checks retain the complete child binding including
+its exact cap. Original run, current durable CAS, parent clock and cancellation
+checks surround construction and publication. Pre-capture startup still checks
+the original caller; later generations preserve the established independent
+delegated-run contract rather than reattaching the old WebView.
+
+NativeRevocation has one local monotonic bit and at most two immutable root
+witnesses. Reads have no recursion, callback or lock; child revoke affects only
+its local bit, and a child cannot export that local bit as a complete root
+witness. The sealed factory binds the original approval lease and FinalControl
+roots. Original loader checkpoints, signing fences, ready checks and retained
+signer clones therefore observe parent cancellation without waiting for the
+App worker. No effect/signer is lent out during rotation. This does not prove
+rotation of future external signer leases or established network connections;
+their exact network scopes remain separate gates.
+
+### Unknown remains blocked ownership
+
+The original native-key owner deliberately parks with its key and original
+Join when native free is Unknown. A6f does not clear it, retry free, detach or
+replace it. Observing Unknown closes the parent first while retaining the
+original key, notification and service workers, OS custody and process slot.
+The isolated child-process negative test checks parent closure, no-next-open,
+OS Busy and retained original owners. Child-process termination is only test
+cleanup, NOT an App/PTY/key retirement receipt. This failure can prevent normal
+App exit. No new Captured-resource splitting is introduced. Normal and known
+failure paths separately check the original managed PTY/task retirement facts.
+
+### Real journal cost; checkpoint remains a design gate
+
+The unchanged journal has 8192 records of 224 bytes: 4096 complete commits.
+A successful transaction appends a 448-byte Pending/Clean pair and separately
+publishes a complete sealed blob. Original initialize and Enable each cost one
+pair. Same-wall Store.observe adds no pair; advancing its floor costs one.
+An effect request runs that observation before later admission, so a request
+subsequently rejected for a foreign supervisor still pays the pair. This is
+not a known-outcome claim about failed physical effects: the earlier zero-size
+resize fixture exercised the existing sticky Unknown policy, and its failed
+cleanup log remains evidence rather than being relabelled a successful close.
+
+The actual Store test measures journal lengths 448, 896, 896, 1344 and 1792 for
+initialize, Enable, same-wall observe, advancing observe and revoke. The actual
+service test measures +448 before the foreign-supervisor request is rejected,
+then +448 for revoke. A separate near-full legal-codec history measures the
+advance pair and successful use of the last reserved revocation pair; this is
+not claimed as 4096 real commits. Two startup pairs plus the final revocation
+reserve leave at most 4093 ordinary advances. This does not promise 30-day
+availability. Epoch checks read the current durable CAS but do not add periodic
+Store.observe or reduce the original effect observation frequency.
+
+A future checkpoint must be a distinct verified format/anchor, not a larger
+limit, truncated journal or fresh root. Current backend/lifetime custody pin
+the journal FileIdentity and the codec has no checkpoint record. The minimal
+future design must bind preserved wall floor, store/authority revisions, exact
+target, sealed-blob digest and prior chain anchor under the original exclusive
+transaction/CAS, retain revocation capacity throughout, and prove each
+interrupted publication leaves the old trusted state or Locked/Unknown. Old
+readers must fail closed. This stage changes no journal format, schema, limit,
+publication cadence or restart semantics and claims no new whole-filesystem
+rollback protection.
+
+### Validation scope and final results
+
+All new key-load tests use the original ExistingKeyLoader with isolated
+MockKeyApi system calls, not real user CNG keys or a real phone. The App tests
+use original managed Node/PTY runs and the original App worker, not a fixture
+calling advance to keep the owner alive. The signer-clone negative test uses
+the existing isolated endpoint-stage helper and does not prove Relay Accepted.
+Earlier failures remain in the audit logs: parent propagation RED, consumed
+one-shot mode RED, incorrect Unknown-join expectation, foreign fixture duplicate
+initialization, and the two journal-measurement fixture mistakes.
+
+Final same-source validation passed 178 distinct tests: the 11 original-App
+epoch cases plus 167 targeted regression cases. The ledger is
+`.audit/unattended-epoch-final-ledger.json`; the epoch group completed in 107.94s
+(`unattended-epoch-final.log`). Strict Clippy with `--lib --tests -- -D warnings`
+passed in 26.08s (`unattended-epoch-strict-final.log`). HostOpen's anonymous real
+CNG signing case was explicitly skipped; its remaining 10 cases passed. These
+results do not claim real user CNG validation.
+
+Two independent behavior mutations failed as intended. Removing Unknown's
+parent-close produced `parent_closed=false` while original ownership remained;
+removing the worker's child-deadline wake produced only the first generation's
+two opens and no second ready. Their logs are
+`unattended-epoch-unknown-mutation-red.log` and
+`unattended-epoch-idle-mutation-red.log`. Both files were byte-for-byte restored
+before the final test run, checked against `epoch-mutation-source.json`.
+The final 12-source fingerprint manifest is
+`.audit/unattended-epoch-final-source.json`. No network, cloud, credential or
+production UI was enabled. Independent final review remains the commit gate.

@@ -366,7 +366,46 @@ pub(crate) fn single_run_test_keys(supplier: host::FrozenHostSupplier) -> Single
     tests::existing_key_tests::single_run_keys(supplier, None)
 }
 
-#[cfg(all(test, feature="remote-host"))]
-pub(crate) fn single_run_test_keys_with_hook(supplier: host::FrozenHostSupplier, hook: Box<dyn FnOnce()+Send>) -> SingleRunTestKeys {
+#[cfg(all(test, feature = "remote-host"))]
+pub(crate) fn single_run_test_keys_with_hook(
+    supplier: host::FrozenHostSupplier,
+    hook: Box<dyn FnOnce() + Send>,
+) -> SingleRunTestKeys {
     tests::existing_key_tests::single_run_keys(supplier, Some(hook))
+}
+
+#[cfg(all(test, feature = "remote-host"))]
+#[derive(Clone, Copy, Default)]
+pub(crate) enum EpochTestFault {
+    #[default]
+    None,
+    WrongSpki,
+    SecondOpen,
+    FreeUnknown,
+}
+#[cfg(all(test, feature = "remote-host"))]
+pub(crate) type EpochTestAction =
+    std::sync::Arc<parking_lot::Mutex<Option<Box<dyn FnOnce() + Send>>>>;
+#[cfg(all(test, feature = "remote-host"))]
+pub(crate) type EpochTestEvents = std::sync::Arc<parking_lot::Mutex<Vec<(u64, &'static str)>>>;
+#[cfg(all(test, feature = "remote-host"))]
+pub(crate) type EpochTestObserver =
+    std::sync::Arc<parking_lot::Mutex<Option<std::sync::Arc<host::HostKeyCore>>>>;
+#[cfg(all(test, feature = "remote-host"))]
+#[derive(Clone, Default)]
+pub(crate) struct EpochTestTrace {
+    pub(crate) events: EpochTestEvents,
+    pub(crate) fault: EpochTestFault,
+    pub(crate) after_join: EpochTestAction,
+    pub(crate) observer: EpochTestObserver,
+    pub(crate) after_second_verified: EpochTestAction,
+}
+#[cfg(all(test, feature = "remote-host"))]
+pub(crate) fn epoch_test_supplier(
+    supplier: host::FrozenHostSupplier,
+    token: std::sync::Arc<owner::NativeRevocation>,
+    generation: u64,
+    trace: &EpochTestTrace,
+) -> host::FrozenHostSupplier {
+    tests::existing_key_tests::epoch_supplier(supplier, token, generation, trace)
 }

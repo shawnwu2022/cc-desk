@@ -24,7 +24,19 @@ fn fixture_options(
     FrozenHostBinding,
     [Arc<Api>; 2],
 ) {
-    let token = NativeRevocation::new();
+    fixture_token(mode, duration, wrong_purpose, NativeRevocation::new())
+}
+fn fixture_token(
+    mode: Mode,
+    duration: Duration,
+    wrong_purpose: bool,
+    token: Arc<NativeRevocation>,
+) -> (
+    HostKeyCustody,
+    FrozenHostSupplier,
+    FrozenHostBinding,
+    [Arc<Api>; 2],
+) {
     let end = Instant::now() + duration;
     let endpoint = public();
     let relay: [u8; 91] = crate::remote_native_pairing_store::tests::record()
@@ -302,4 +314,58 @@ fn HostReady_SuccessfulFixtureFactoryIsNotVerifiedLoader_007() {
     drop(set);
     retire(&owner);
     assert!(absent);
+}
+
+#[test]
+fn HostEpoch_ParentCancellationInvalidatesOriginalReadyAndFence_001() {
+    for close_parent in 0..3 {
+        let lease = NativeRevocation::new();
+        let control = NativeRevocation::new();
+        let child = NativeRevocation::child([
+            lease.root_witness().unwrap(),
+            control.root_witness().unwrap(),
+        ]);
+        let not_root = child.root_witness().is_none();
+        let (owner, supplier, binding, apis) =
+            fixture_token(Mode::Good, Duration::from_secs(10), false, child.clone());
+        let mut set = owner.publisher().unwrap().prepare(supplier).unwrap();
+        let receipt = ready(&owner);
+        let before = receipt
+            .as_ref()
+            .is_some_and(|r| r.check(&owner, &binding).is_ok());
+        let fence = SigningFence::new_revocable(binding.profile_cap, child.clone());
+        let attempt = fence
+            .advance(&[], Instant::now() + Duration::from_secs(1))
+            .unwrap();
+        let clone = set.endpoint.clone();
+        let held = clone
+            .choose_scheme(&[rustls::SignatureScheme::ECDSA_NISTP256_SHA256])
+            .unwrap();
+        // 仅隔离签名资格门，不冒称生产 Relay/Accepted 已发生。
+        set.stages
+            .test_endpoint_only(Instant::now() + Duration::from_secs(1))
+            .unwrap();
+        match close_parent {
+            0 => lease.revoke(),
+            1 => control.revoke(),
+            _ => child.revoke(),
+        }
+        let rejected = receipt
+            .as_ref()
+            .is_some_and(|r| r.check(&owner, &binding).is_err())
+            && !attempt.is_current();
+        let isolated = close_parent != 2 || (!lease.is_revoked() && !control.is_revoked());
+        let held_rejected =
+            held.sign(b"TEST_ONLY_STALE_EPOCH").is_err() && set.stages.test_mints() == [0, 0];
+        drop(held);
+        drop(clone);
+        drop(set);
+        retire(&owner);
+        verify_free(&apis[0], &["free_key", "free_provider"]);
+        verify_free(&apis[1], &["free_key", "free_provider"]);
+        assert!(
+            before && rejected && isolated && not_root && held_rejected,
+            "parent={close_parent}, before={before}, rejected={rejected}, isolated={isolated}"
+        );
+    }
 }

@@ -27,6 +27,9 @@ pub(crate) struct SingleRunService<S: Sealer> {
     keys: Option<HostKeyCustody>,
     signers: Option<HostSignerSet>,
     ready: Option<HostKeysReady>,
+    epoch: Option<epoch::KeyEpoch>,
+    #[cfg(test)]
+    epoch_trace: Option<crate::native_crypto::EpochTestTrace>,
     captured: Option<DelegatedRunOwner>,
     policy: Option<Arc<Delegation>>,
     binding: Option<VerifiedBinding>,
@@ -57,6 +60,9 @@ impl<S: Sealer> SingleRunService<S> {
             keys: None,
             signers: None,
             ready: None,
+            epoch: None,
+            #[cfg(test)]
+            epoch_trace: None,
             captured: None,
             policy: None,
             binding: None,
@@ -104,7 +110,7 @@ impl<S: Sealer> SingleRunService<S> {
             .ok_or(StoreError::Unauthorized)?
             .check(
                 self.keys.as_ref().ok_or(StoreError::Unauthorized)?,
-                consent.key_binding(),
+                self.current_key_binding()?,
             )
             .map_err(|_| StoreError::Unauthorized)
     }
@@ -264,7 +270,7 @@ impl<S: Sealer> SingleRunService<S> {
             .ok_or(StoreError::Unauthorized)?
             .check(
                 self.keys.as_ref().ok_or(StoreError::Unauthorized)?,
-                consent.key_binding(),
+                self.current_key_binding()?,
             )
             .map_err(|_| StoreError::Unauthorized)?;
         self.captured
@@ -389,7 +395,7 @@ impl<S: Sealer> SingleRunService<S> {
                 .ok_or(StoreError::Unauthorized)?
                 .check(
                     self.keys.as_ref().ok_or(StoreError::Unauthorized)?,
-                    consent.key_binding(),
+                    self.current_key_binding()?,
                 )
                 .map_err(|_| StoreError::Unauthorized)?;
             self.captured
@@ -493,6 +499,15 @@ impl<S: Sealer> SingleRunService<S> {
     #[cfg(test)]
     pub(crate) fn test_before_publish(&mut self, action: impl FnOnce() + Send + 'static) {
         self.before_publish = Some(Box::new(action));
+    }
+    #[cfg(test)]
+    pub(crate) fn test_journal_len(&self) -> u64 {
+        std::fs::metadata(
+            std::path::Path::new(&self.store.backend.target_label().unwrap())
+                .join("commit.journal"),
+        )
+        .unwrap()
+        .len()
     }
     #[cfg(test)]
     pub(crate) fn test_durable_revoked(&self) -> bool {
@@ -621,6 +636,9 @@ pub(crate) fn test_file_disabled_at<S: Sealer>(
 #[path = "controller.rs"]
 pub(crate) mod controller;
 
+#[path = "epoch.rs"]
+mod epoch;
+
 #[path = "pending.rs"]
 pub(crate) mod pending;
 
@@ -643,7 +661,7 @@ impl<S: Sealer> SingleRunService<S> {
                 None => {
                     return ControllerEnd {
                         durable,
-                        retired: false,
+                        retired: self.captured.is_none() && !self.uncertain,
                     }
                 }
                 _ => std::thread::sleep(std::time::Duration::from_millis(2)),

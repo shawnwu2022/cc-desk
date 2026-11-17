@@ -44,7 +44,12 @@ pub(crate) struct KeyObservation {
 }
 /// 原生共享撤销事实只能置位，不能被替换为可恢复的 Ready 状态。
 #[derive(Default)]
-pub(crate) struct NativeRevocation(AtomicBool);
+pub(crate) struct NativeRevocation {
+    local: Arc<AtomicBool>,
+    parents: Option<[RootRevocationWitness; 2]>,
+}
+// 只能观察原 root 的撤销位，不能清位或把 child 的局部位冒充完整父门。
+pub(crate) struct RootRevocationWitness(Arc<AtomicBool>);
 impl NativeRevocation {
     #[cfg_attr(
         not(test),
@@ -56,11 +61,27 @@ impl NativeRevocation {
     pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self::default())
     }
+    pub(crate) fn root_witness(&self) -> Option<RootRevocationWitness> {
+        self.parents
+            .is_none()
+            .then(|| RootRevocationWitness(self.local.clone()))
+    }
+    pub(crate) fn child(parents: [RootRevocationWitness; 2]) -> Arc<Self> {
+        Arc::new(Self {
+            local: Arc::new(AtomicBool::new(false)),
+            parents: Some(parents),
+        })
+    }
     pub(crate) fn revoke(&self) {
-        self.0.store(true, Ordering::Release);
+        self.local.store(true, Ordering::Release);
     }
     pub(crate) fn is_revoked(&self) -> bool {
-        self.0.load(Ordering::Acquire)
+        self.local.load(Ordering::Acquire)
+            || self.parents.as_ref().is_some_and(|parents| {
+                parents
+                    .iter()
+                    .any(|parent| parent.0.load(Ordering::Acquire))
+            })
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
