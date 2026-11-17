@@ -436,3 +436,19 @@ snapshot-pull-proxy-retirement-{red,green,strict}.log。
 32842只是此固定测试条件，不是任意TLS配置上界。任意post-handshake、旧数据/自动
 控制残余、WebSocket内部事件队列、MessagePort/WASM复制及固定1秒公网RTT仍需门禁。
 无真实凭据、云服操作或生产Browser默认入口变更。
+## P2g：Browser 显式协商配置（2026-11-17）
+
+peerInstall 新增可选 snapshotPull: "snapshot-pull-v1"，仅允许显式 live-v1 +
+Controller；缺省/旧 manual/live 不自动增加能力。JS 严格字段/值检查与 Rust
+String-only Deserialize 双端拒绝未知值及无效组合；Rust 实际 WASM owner 仍要求
+原 application，并经原 bind factory 创建绑定本连接和角色的 P1 fact，不由配置
+直接构造 authority。尚未接 RPC kind5，此阶段不能发起 Browser pull。
+
+有效 RED：JS 新配置先拒绝，Rust 同样拒绝；首 GREEN 的负测发现 derive enum
+会接受对象形式，已改只接收字符串而非放宽测试。最终 JS 3/3、Rust schema 5/5、
+原 bind 22/22，原生 security strict Clippy、真实 wasm32 client strict Clippy
+及 strict TS 均通过。首次 WASM 缺 clang 的环境失败保留，复用既有 LLVM21.1.8
+工具路径后完成，不安装软件、不更改系统 PATH。日志 browser-pull-schema-*。
+独立只读审查通过。非 application / mixed mode 的实际 WASM 动态拒绝仍待后续，
+不得以 schema 和原生 bind 测试冒充 Browser 端到端验证；重复 JSON 原字节键
+并非当前 JSON Value 测试的覆盖项。默认入口和云服均不变。

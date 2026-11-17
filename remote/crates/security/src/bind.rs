@@ -1138,6 +1138,21 @@ pub async fn bind_client_live_snapshot_pull_channel<
     trust: ClientTrust,
 ) -> Result<crate::ManagedChannel<S>, BindError> {
     native_factory()?;
+    live_snapshot_pull_client(pending, trust).await
+}
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+pub(crate) async fn browser_live_snapshot_pull_client<
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+>(
+    pending: Pending<S>,
+    trust: ClientTrust,
+) -> Result<crate::ManagedChannel<S>, BindError> {
+    live_snapshot_pull_client(pending, trust).await
+}
+async fn live_snapshot_pull_client<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
+    pending: Pending<S>,
+    trust: ClientTrust,
+) -> Result<crate::ManagedChannel<S>, BindError> {
     let e = establish_client(
         pending,
         trust,

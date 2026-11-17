@@ -38,6 +38,20 @@ struct PeerInstall {
     budget_ms: u64,
     #[serde(default, deserialize_with = "present")]
     control_lease: Option<ControlLeaseMode>,
+    #[serde(default, deserialize_with = "present")]
+    snapshot_pull: Option<SnapshotPullMode>,
+}
+#[derive(Clone, Copy)]
+pub(super) enum SnapshotPullMode {
+    V1,
+}
+impl<'de> Deserialize<'de> for SnapshotPullMode {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        match String::deserialize(d)?.as_str() {
+            "snapshot-pull-v1" => Ok(Self::V1),
+            _ => Err(serde::de::Error::custom("unsupported snapshot pull mode")),
+        }
+    }
 }
 #[derive(Clone, Copy)]
 pub(super) enum ControlLeaseMode {
@@ -77,6 +91,7 @@ pub(super) struct Configuration {
     pub budget: Duration,
     pub peer_budget: Option<Duration>,
     pub control_lease: Option<ControlLeaseMode>,
+    pub snapshot_pull: Option<SnapshotPullMode>,
 }
 impl Configuration {
     pub fn parse(bytes: &[u8]) -> Result<Self, GrantError> {
@@ -85,6 +100,10 @@ impl Configuration {
         }
         let w: Wire = serde_json::from_slice(bytes).map_err(|_| GrantError::Encoding)?;
         let control_lease = w.peer_install.as_ref().and_then(|p| p.control_lease);
+        let snapshot_pull = w.peer_install.as_ref().and_then(|p| p.snapshot_pull);
+        if snapshot_pull.is_some() && !matches!(control_lease, Some(ControlLeaseMode::Live)) {
+            return Err(GrantError::Policy);
+        }
         if control_lease.is_some() && w.role != cc_desk_remote_record::grant::DataRole::Controller {
             return Err(GrantError::Policy);
         }
@@ -150,6 +169,7 @@ impl Configuration {
             budget: Duration::from_millis(w.budget_ms),
             peer_budget,
             control_lease,
+            snapshot_pull,
         })
     }
 }
@@ -265,6 +285,40 @@ mod tests {
             parse(&value).unwrap().control_lease,
             Some(ControlLeaseMode::Live)
         ));
+        value["role"] = "Observer".into();
+        assert!(parse(&value).is_err());
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn BrowserSnapshotPull_ExplicitLiveOnlyMode_012() {
+        let mut value = exact();
+        value["peerInstall"]["controlLease"] = "live-v1".into();
+        value["peerInstall"]["snapshotPull"] = "snapshot-pull-v1".into();
+        assert!(matches!(
+            parse(&value).unwrap().snapshot_pull,
+            Some(SnapshotPullMode::V1)
+        ));
+        for invalid in [
+            serde_json::Value::Null,
+            serde_json::json!(true),
+            serde_json::json!("snapshot-pull-v2"),
+            serde_json::json!({"snapshot-pull-v1":null}),
+        ] {
+            let mut bad = value.clone();
+            bad["peerInstall"]["snapshotPull"] = invalid;
+            assert!(parse(&bad).is_err());
+        }
+        for mode in [serde_json::Value::Null, serde_json::json!("manual-v1")] {
+            let mut bad = value.clone();
+            bad["peerInstall"]["controlLease"] = mode;
+            assert!(parse(&bad).is_err());
+        }
+        let mut missing = value.clone();
+        missing["peerInstall"]
+            .as_object_mut()
+            .unwrap()
+            .remove("controlLease");
+        assert!(parse(&missing).is_err());
         value["role"] = "Observer".into();
         assert!(parse(&value).is_err());
     }

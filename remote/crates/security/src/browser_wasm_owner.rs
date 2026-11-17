@@ -241,7 +241,9 @@ fn start(
             };
             if let Some(mut config) = grant {
                 let trust = trust.ok_or(-7)?;
-                let channel = if matches!(
+                let channel = if config.snapshot_pull.is_some() {
+                    crate::bind::browser_live_snapshot_pull_client(pending, trust).await
+                } else if matches!(
                     config.control_lease,
                     Some(crate::browser_grant_config::ControlLeaseMode::Live)
                 ) {

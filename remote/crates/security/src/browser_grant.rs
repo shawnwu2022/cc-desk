@@ -30,6 +30,7 @@ pub(super) struct Configuration {
     pub budget: Duration,
     pub peer_budget: Option<Duration>,
     pub control_lease: Option<crate::browser_grant_config::ControlLeaseMode>,
+    pub snapshot_pull: Option<crate::browser_grant_config::SnapshotPullMode>,
 }
 impl Configuration {
     pub fn parse(bytes: &[u8]) -> Result<Self, GrantError> {
@@ -43,6 +44,7 @@ impl Configuration {
             budget: parsed.budget,
             peer_budget: parsed.peer_budget,
             control_lease: parsed.control_lease,
+            snapshot_pull: parsed.snapshot_pull,
         })
     }
 }
