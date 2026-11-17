@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-11-17
+
+### Stable release
+
+- Promote the 0.27 RC12 feature set to the stable channel, including update-channel controls, release/recovery guidance, Codex native archive and eligible permanent deletion, and history/list correctness and performance improvements.
+- Preserve the RC12 direct-delete interaction and all source, activity, eligibility and uncertain-result safeguards. Permanent deletion is irreversible; batches do not roll back completed items.
+- Antigravity and remote/mobile work are reserved for 0.28 and are not included.
+
+### Validation and limits
+
+- Publication requires successful exact protected-main CI, authenticated native coverage and all three same-run platform updater signatures.
+- Live user sessions, installed WebView2 acceptance, original native All, D20 and signed installation/return remain separately unverified. Updater signatures are not Windows Authenticode.
+
 ## [0.27.0-rc.12] - 2026-11-16
 
 ### Improved
