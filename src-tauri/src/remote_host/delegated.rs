@@ -3,7 +3,6 @@
 use super::*;
 use crate::cli::types::SafeError;
 use crate::remote_unattended::capability::network::NetworkClock;
-#[cfg(test)]
 use crate::remote_unattended::capability::VerifiedBinding;
 use crate::run_supervisor::delegated::{DelegatedNetworkAdmission, DelegatedRunOwner};
 use cc_desk_remote_host::native_host::{ChannelRetirementToken, NativeChannel};
@@ -16,6 +15,9 @@ pub(crate) struct DelegatedSession {
     brand: Arc<()>,
     clock: Arc<NetworkClock>,
     owner: DelegatedRunOwner,
+    request_gate: std::sync::OnceLock<
+        Arc<crate::remote_unattended_store::service::request_gate::ServiceRequestGate>,
+    >,
     reservation: ActivationReservation,
     active: Mutex<Option<ActiveAttempt>>,
     transition: Mutex<()>,
@@ -68,6 +70,13 @@ impl RemoteHostService {
         self: &Arc<Self>,
         owner: DelegatedRunOwner,
     ) -> Result<DelegatedSession, SafeError> {
+        self.try_reserve_delegation(owner)
+            .map_err(|(error, _owner)| error)
+    }
+    pub(crate) fn try_reserve_delegation(
+        self: &Arc<Self>,
+        owner: DelegatedRunOwner,
+    ) -> Result<DelegatedSession, (SafeError, DelegatedRunOwner)> {
         let mut state = self.state.lock();
         if state.closing
             || state.retired
@@ -76,7 +85,7 @@ impl RemoteHostService {
             || state.delegation.is_some()
             || !matches!(state.host, HostSlot::Empty)
         {
-            return Err(crate::cli::profiles::error("REMOTE_HOST_LOCKED"));
+            return Err((crate::cli::profiles::error("REMOTE_HOST_LOCKED"), owner));
         }
         let brand = Arc::new(());
         let reservation = ActivationReservation::new();
@@ -87,6 +96,7 @@ impl RemoteHostService {
             brand,
             clock: Arc::new(NetworkClock::new()),
             owner,
+            request_gate: std::sync::OnceLock::new(),
             reservation,
             active: Mutex::new(None),
             transition: Mutex::new(()),
@@ -100,6 +110,17 @@ impl RemoteHostService {
     }
 }
 impl DelegatedSession {
+    pub(crate) fn install_request_gate(
+        &self,
+        gate: crate::remote_unattended_store::service::request_gate::ServiceRequestGate,
+    ) -> Result<(), SafeError> {
+        self.request_gate
+            .set(Arc::new(gate))
+            .map_err(|_| crate::cli::profiles::error("REMOTE_HOST_LOCKED"))
+    }
+    pub(crate) fn captured_owner(&self) -> &DelegatedRunOwner {
+        &self.owner
+    }
     pub(crate) fn adopt(&self, prepared: DelegatedPreparedChannel) -> Result<(), SafeError> {
         let rebind = prepared.retired.is_some();
         let result = self.adopt_inner(prepared);
@@ -176,8 +197,18 @@ impl DelegatedSession {
             let channel = prepared.channel.clone();
             #[cfg(test)]
             let retirement_hook = self.pump_retirement.lock().take();
+            let request_gate = self.request_gate.get().cloned().map(|gate| {
+                (
+                    gate,
+                    DelegatedAttemptIdentity {
+                        session: self.brand.clone(),
+                        operation: self.reservation.operation(),
+                        attempt: admission.brand(),
+                    },
+                )
+            });
             let worker = tauri::async_runtime::spawn(async move {
-                let result = original.pump_peer(channel).await;
+                let result = original.pump_peer_gated(channel, request_gate).await;
                 #[cfg(test)]
                 if let Some((entered, release)) = retirement_hook {
                     let _ = entered.send(());
@@ -344,6 +375,14 @@ pub(crate) struct DelegatedAttemptIdentity {
     attempt: Arc<()>,
 }
 impl DelegatedAttemptIdentity {
+    #[cfg(test)]
+    pub(crate) fn test_foreign_attempt(&self) -> Self {
+        Self {
+            session: self.session.clone(),
+            operation: self.operation.clone(),
+            attempt: Arc::new(()),
+        }
+    }
     pub(crate) fn matches(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.session, &other.session)
             && Arc::ptr_eq(&self.operation, &other.operation)
@@ -358,6 +397,20 @@ pub(crate) struct DelegatedSocketStart {
     clock: Arc<NetworkClock>,
 }
 impl DelegatedSocketStart {
+    pub(crate) fn has_request_gate(&self) -> bool {
+        self.session
+            .upgrade()
+            .and_then(|session| session.request_gate.get().cloned())
+            .is_some_and(|gate| gate.matches_attempt(&self.identity))
+    }
+    pub(crate) fn matches_final_control(
+        &self,
+        control: &Arc<crate::remote_host_approval::unattended::final_approval::FinalControl>,
+    ) -> bool {
+        self.admission
+            .as_ref()
+            .is_some_and(|admission| admission.matches_final_control(control))
+    }
     pub(crate) fn identity(&self) -> DelegatedAttemptIdentity {
         self.identity.clone()
     }
@@ -488,6 +541,33 @@ impl DelegatedSession {
         ),
         SafeError,
     > {
+        self.reserve_socket_inner(current, Some(supervisor))
+    }
+}
+impl DelegatedSession {
+    pub(crate) fn reserve_socket_start(
+        self: &Arc<Self>,
+        current: &VerifiedBinding,
+    ) -> Result<
+        (
+            Arc<crate::remote_host_network::delegated::SocketCustody>,
+            DelegatedSocketStart,
+        ),
+        SafeError,
+    > {
+        self.reserve_socket_inner(current, None)
+    }
+    fn reserve_socket_inner(
+        self: &Arc<Self>,
+        current: &VerifiedBinding,
+        supervisor: Option<&crate::run_supervisor::NativeRunSupervisor>,
+    ) -> Result<
+        (
+            Arc<crate::remote_host_network::delegated::SocketCustody>,
+            DelegatedSocketStart,
+        ),
+        SafeError,
+    > {
         let mut slot = self.socket.lock();
         if slot.is_some() || self.clock.is_closed() || self.reservation.operation().cancelled() {
             return Err(crate::cli::profiles::error("REMOTE_HOST_LOCKED"));
@@ -496,7 +576,10 @@ impl DelegatedSession {
             .service
             .upgrade()
             .ok_or_else(|| crate::cli::profiles::error("REMOTE_HOST_LOCKED"))?;
-        let admission = self.owner.admit_network(current, supervisor)?;
+        let admission = match supervisor {
+            Some(supervisor) => self.owner.admit_network(current, supervisor)?,
+            None => self.owner.admit_owned_network(current)?,
+        };
         admission.clock(&self.clock)?;
         let identity = DelegatedAttemptIdentity {
             session: self.brand.clone(),

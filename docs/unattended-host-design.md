@@ -1562,3 +1562,121 @@ before the final test run, checked against `epoch-mutation-source.json`.
 The final 12-source fingerprint manifest is
 `.audit/unattended-epoch-final-source.json`. No network, cloud, credential or
 production UI was enabled. Independent final review remains the commit gate.
+
+## A6g: explicit short network consent and original App-owned vertical path
+
+This stage is an internal, opt-in short-session backend, not the production
+unattended UI. The original Local final approval remains local-only. A distinct
+private ShortNetwork mode displays the exact enrolled device, record fingerprint,
+run/generation/role and Relay route, and freezes its actual deadline before the
+native confirmation is shown. Its limit is 10 seconds including confirmation and
+setup, not a renewed window after confirmation. The network PendingStart and
+signing-authority factories both reject Local consent. No IPC/UI enable route,
+public server, real phone enrollment or persistent user-key change is installed.
+
+The original App reservation fixes the Runtime/App identity before start. The
+service preserves the original captured owner on a rejected Host reservation,
+instead of treating a consumed owner as never captured. On acceptance the same
+owner moves into one DelegatedSession. Its material is derived only from the
+same final consent, current record/CAS and original ready key workers. The
+original HostSigningStages are present: Relay signing/Accepted precedes endpoint
+signing, TLS, original Installed and activation. A private signing authorization
+binds the exact attempt and original key token/cap; the setup scope is bounded by
+the actual setup deadline, child cap and fixed consent deadline. There is no
+network epoch replacement or automatic reconnect in this stage.
+
+The durable single-run Binding is unchanged. Its device field remains a
+pairing-UUID domain-separated identity, and its origin remains Browser origin.
+Those are not the TLS endpoint ID or Relay origin. After comparing the complete
+VerifiedBinding against the same consent, the policy privately fixes a runtime
+ChannelIdentity using the original P256Spki Client endpoint derivation and strict
+Relay CanonicalOrigin. All attempts share that immutable policy; epochs,
+principal, scope, original channel authority and attempt checks remain required.
+There is no caller setter or production fallback to a mismatching identity.
+
+Each authenticated top-level DataRecord passes the same service refresh before
+original dispatch: current pairing/CAS, durable observation, key/run/control and
+tail checks. A sealed one-use permit owns the exact record, so another payload
+cannot be substituted after authorization. The gate weakly references the
+original service and uses try_lock; failure closes the independent control and
+channel without waiting on a service that may itself be joining the pump.
+This is a current observation, not atomicity with an external process changing
+CAS after the observation. SnapshotNext is consumed inside the original fixed
+one-second snapshot future, not by the top-level pump: it retains original
+channel authority/deadline checks but does not perform a new pairing CAS or
+journal observation per batch. Top-level ACK/control requests can still advance
+the persisted wall floor and consume journal capacity; no checkpoint, cadence,
+capacity or rollback semantics are changed here.
+
+The same original App worker closes the short session at its fixed end; it does
+not close and reopen a parent gate. Terminal cleanup distinguishes a setup that
+never adopted a Host from an installed session. It waits for original socket/
+material work and, where present, the original pump/channel/Host retirement,
+then original keys/effects before overall known retirement. This terminal path
+does not mint a reconnect receipt. Unknown retains the existing quarantine and
+cannot become App-ready merely because one join returned. Physical key free may
+precede network join after cancellation; overall release still requires the
+original owners' evidence. Long-lived materials, long unattended availability,
+background phone behavior and public-network performance remain unverified.
+
+Validation uses original managed Node/PTY, the real local Relay, the existing
+WASM data artifact and the real Rust production material/stage path. Node supplies
+a synthetic Window/WebAuthn ceremony, not a real browser or phone. Only public
+fixture scalars are anonymously imported through the original ExistingKeyLoader
+CNG path; imports have no key name or persistence flag and do not open user keys.
+A confirmed pairing record is isolated historical fixture data, not proof of new
+real enrollment. Test-only changes select loopback trust and observe Accepted;
+they do not remove signing stages or construct a production approval boolean.
+
+The final short-chain group passed 4 distinct cases in 20.67s
+(`unattended-short-network-final4-regression-UnattendedShortNetwork_.log`): one original 1920-cell snapshot and one
+remote input byte followed by full original App/managed-resource cleanup;
+Local consent rejected before socket/Enabled/journal writes; and real pairing
+Forget after snapshot/window followed by rejection of the next actual Input;
+and idle expiry without business keepalive. The expiry case waits for the
+original channel to retire, then verifies durable success, watcher join,
+controller Drop and known retirement before requesting App exit. Its observed
+idle interval was 7686ms after setup/snapshot/window, inside the deadline frozen
+10 seconds before confirmation. No fresh 10-second period was granted at start.
+The pairing-revocation case checks the original PTY report after a six-byte local write, proving
+zero additional remote bytes. Each network case runs in its own original child
+process because the Host registry intentionally permits one admission per
+process. A count of child and parent harness results is not two distinct tests.
+The actual authorization also rejects a different attempt brand and cap +/-1ns
+in read-only checks before it is consumed; this is not a second full foreign
+network session.
+
+Removing only the per-record refresh produced the intended behavior RED:
+`unattended-short-network-gate-red.log` reports `Missing expected rejection` at
+the real post-Forget Input. The original gate was restored before final tests.
+Earlier setup mistakes (SEC1 prefix offset and mismatched public fixture
+scalar/SPKI) and the original UUID/transport-identity mismatch are retained in
+separate logs, not counted as expected test passes. The artifact paths/hashes are
+in `unattended-short-network-artifacts.json`; the existing WASM was reused, not
+claimed to have been rebuilt from this stage.
+
+Final same-source validation covers 169 distinct tests: the four new cases plus
+165 affected regressions. The exact names and 18 group logs are recorded in
+`.audit/unattended-short-network-final-ledger.json`; isolated child harnesses are
+not counted twice. Epoch's 11 cases use `unattended-short-network-final3-epoch.log`,
+and the other groups use `unattended-short-network-final4-regression-*.log`.
+Strict Clippy (`--lib --tests -- -D warnings`) finished in 58.40s in
+`unattended-short-network-strict-final.log`; the strict TypeScript fixture check
+also passed. The 23 source fingerprints are in
+`unattended-short-network-final-source.json`.
+
+One existing epoch test incorrectly required both concurrent generation-two
+loaders to open before either could fail. The actual wrong-SPKI loader can fail
+and revoke its sibling before that sibling opens. The test now records the
+actual corrupt-public export (or actual open-error return), requires original
+generation-one join before that fault, forbids second-generation verified/ready,
+and checks parent closure, matching free events for every observed open, and
+original retirement. It no longer demands unsafe extra work after cancellation.
+This is a test-only race correction, not a relaxed production loader or budget.
+The earlier failure log remains preserved. A separate PowerShell 5 harness
+stderr-handling failure is also retained, not counted as a product test result;
+the final suite ran under the original PowerShell 7 environment.
+
+Independent final review remains the commit gate. The original three dirty
+files are unchanged and excluded; this stage's snapshot fixture and preparation
+tests do not depend on their uncommitted additions.

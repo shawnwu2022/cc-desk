@@ -271,6 +271,20 @@ pub(crate) struct DelegatedNetworkAdmission {
     before_actor: std::sync::Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 impl DelegatedRunOwner {
+    pub(crate) fn admit_owned_network(
+        &self,
+        current: &VerifiedBinding,
+    ) -> Result<DelegatedNetworkAdmission, SafeError> {
+        let supervisor = NativeRunSupervisor {
+            core: self
+                .0
+                .pin
+                .origin
+                .upgrade()
+                .ok_or_else(|| error("FORBIDDEN"))?,
+        };
+        self.admit_network(current, &supervisor)
+    }
     pub(crate) fn admit_network(
         &self,
         current: &VerifiedBinding,
@@ -296,6 +310,12 @@ impl DelegatedRunOwner {
     }
 }
 impl DelegatedNetworkAdmission {
+    pub(crate) fn matches_final_control(
+        &self,
+        control: &Arc<crate::remote_host_approval::unattended::final_approval::FinalControl>,
+    ) -> bool {
+        self.captured.policy.matches_final_control(control)
+    }
     pub(crate) fn original_network_attempt(
         &self,
     ) -> Arc<crate::remote_unattended::capability::network::NetworkAttempt> {

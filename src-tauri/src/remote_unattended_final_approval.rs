@@ -42,7 +42,13 @@ impl FinalControl {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FinalMode {
+    Local,
+    ShortNetwork,
+}
 struct FinalDescription {
+    mode: FinalMode,
     preparation: UnattendedPreparation,
     key_binding: FrozenHostBinding,
     supplier: Option<FrozenHostSupplier>,
@@ -66,12 +72,22 @@ impl FinalDescription {
         approved: ApprovedPreparation,
         store: &PairingStore<B, S>,
         admission: &NativeRunAdmission,
+        mode: FinalMode,
     ) -> Result<Self, SafeError> {
         approved.check(store, admission)?;
+        if mode == FinalMode::ShortNetwork
+            && !matches!(approved.preparation.role, RequestedRole::Control)
+        {
+            return Err(error("REMOTE_UNATTENDED_STALE"));
+        }
         let mut preparation = approved.preparation;
         // 固定短材料窗口，不把等待确认的时间重新加到 cap 上。
         let anchor = Instant::now();
-        let cap = preparation.end.min(anchor + Duration::from_secs(60));
+        let seconds = match mode {
+            FinalMode::Local => 60,
+            FinalMode::ShortNetwork => 10,
+        };
+        let cap = preparation.end.min(anchor + Duration::from_secs(seconds));
         let wall = wall_ms()?;
         let remaining: u64 = cap
             .saturating_duration_since(Instant::now())
@@ -119,6 +135,7 @@ impl FinalDescription {
         .freeze();
         preparation.check(store, admission)?;
         Ok(Self {
+            mode,
             preparation,
             key_binding,
             supplier: Some(supplier),
@@ -132,6 +149,10 @@ impl FinalDescription {
             .iter()
             .map(|v| format!("{v:02x}"))
             .collect::<String>();
+        let mode = match self.mode {
+            FinalMode::Local => "当前批准仅限本机委托，不开启网络。",
+            FinalMode::ShortNetwork => "允许经下列 Relay 为此设备开启一次短网络会话（最多 10 秒，且不超过所示实际截止），可读取该 run 终端快照并输入；不自动重连、不延长授权。",
+        };
         format!(
             "允许为此设备持久保存当前单会话委托？这不是之前的准备步骤。
 设备: {}
@@ -139,7 +160,7 @@ Run: {}
 Generation: {}
 权限: {:?}
 实际截止 (Unix ms): {}
-同意后会持久写入 Enabled，并仅捕获此 run。进程结束后不恢复；当前实现不开启网络。关闭立即禁止本机新准入，持久撤销与资源退休分别确认；写入结果 Unknown 时保持关闭，不能保证记录已撤销。此批准不延长现有密钥材料截止，也不等于 30 天可用。\n完整记录指纹: {fingerprint}\n精确公开设备与 origin/RP/Relay 路由: {}",
+同意后会持久写入 Enabled，并仅捕获此 run。进程结束后不恢复；{mode}关闭立即禁止本机新准入，持久撤销与资源退休分别确认；写入结果 Unknown 时保持关闭，不能保证记录已撤销。此批准不延长现有密钥材料截止，也不等于 30 天可用。\n完整记录指纹: {fingerprint}\n精确公开设备与 origin/RP/Relay 路由: {}",
             public_text(&p.candidate.record().device_id), public_text(&p.scope.run),
             public_text(&p.scope.generation), p.role, p.cutoff, public_text(&record)
         )
@@ -153,7 +174,33 @@ impl FinalApproval {
         app: &tauri::AppHandle<R>,
         window: &tauri::Window<R>,
     ) -> Result<Self, SafeError> {
-        let description = FinalDescription::new(approved, store, admission)?;
+        Self::show_mode(approved, store, admission, app, window, FinalMode::Local)
+    }
+    pub(crate) fn show_network<B: Backend, S: Sealer, R: tauri::Runtime>(
+        approved: ApprovedPreparation,
+        store: &PairingStore<B, S>,
+        admission: &NativeRunAdmission,
+        app: &tauri::AppHandle<R>,
+        window: &tauri::Window<R>,
+    ) -> Result<Self, SafeError> {
+        Self::show_mode(
+            approved,
+            store,
+            admission,
+            app,
+            window,
+            FinalMode::ShortNetwork,
+        )
+    }
+    fn show_mode<B: Backend, S: Sealer, R: tauri::Runtime>(
+        approved: ApprovedPreparation,
+        store: &PairingStore<B, S>,
+        admission: &NativeRunAdmission,
+        app: &tauri::AppHandle<R>,
+        window: &tauri::Window<R>,
+        mode: FinalMode,
+    ) -> Result<Self, SafeError> {
+        let description = FinalDescription::new(approved, store, admission, mode)?;
         let text = description.render();
         description.preparation.check(store, admission)?;
         if DIALOG_ACTIVE
@@ -218,7 +265,24 @@ impl FinalApproval {
         store: &PairingStore<B, S>,
         admission: &NativeRunAdmission,
     ) -> Result<Self, SafeError> {
-        let description = FinalDescription::new(approved, store, admission)?;
+        Self::test_pending_mode(approved, store, admission, FinalMode::Local)
+    }
+    #[cfg(test)]
+    pub(crate) fn test_pending_network<B: Backend, S: Sealer>(
+        approved: ApprovedPreparation,
+        store: &PairingStore<B, S>,
+        admission: &NativeRunAdmission,
+    ) -> Result<Self, SafeError> {
+        Self::test_pending_mode(approved, store, admission, FinalMode::ShortNetwork)
+    }
+    #[cfg(test)]
+    fn test_pending_mode<B: Backend, S: Sealer>(
+        approved: ApprovedPreparation,
+        store: &PairingStore<B, S>,
+        admission: &NativeRunAdmission,
+        mode: FinalMode,
+    ) -> Result<Self, SafeError> {
+        let description = FinalDescription::new(approved, store, admission, mode)?;
         let cap = description.preparation.end;
         Ok(Self {
             machine: ApprovalMachine::pending(description, Instant::now(), cap),
@@ -235,6 +299,9 @@ impl FinalApproval {
     }
 }
 impl FinalConsent {
+    pub(crate) fn permits_network(&self) -> bool {
+        self.description.mode == FinalMode::ShortNetwork
+    }
     pub(crate) fn check_start<B: Backend, S: Sealer>(
         &self,
         store: &PairingStore<B, S>,
@@ -394,5 +461,94 @@ impl FinalConsent {
 impl FinalConsent {
     pub(crate) fn matches_original(&self, admission: &NativeRunAdmission) -> bool {
         self.description.preparation.origin.matches(admission)
+    }
+}
+
+// 本代原 key 事实与同父委托的原 socket attempt 共同构成短签名准入。
+// 没有 caller token、公开构造器或 Clone；不能从历史 Enabled 恢复。
+pub(crate) struct DelegatedSigningAuthorization {
+    record: crate::remote_native_pairing_store::PublicDeviceRecord,
+    scope: NativeSessionScope,
+    key: crate::native_crypto::host::ReadySigningIdentity,
+    attempt: crate::remote_host::delegated::DelegatedAttemptIdentity,
+    budget: crate::remote_unattended::capability::network::NetworkBudget,
+    control: Arc<FinalControl>,
+    end: Instant,
+}
+impl DelegatedSigningAuthorization {
+    #[cfg(test)]
+    pub(crate) fn test_exact_binding(&self) -> bool {
+        self.matches_attempt(&self.attempt)
+            && !self.matches_attempt(&self.attempt.test_foreign_attempt())
+            && self.key.test_authorization_caps(self)
+    }
+    pub(crate) fn record(&self) -> &crate::remote_native_pairing_store::PublicDeviceRecord {
+        &self.record
+    }
+    pub(crate) fn scope(&self) -> &NativeSessionScope {
+        &self.scope
+    }
+    pub(crate) fn matches(&self, token: &Arc<NativeRevocation>, cap: Instant) -> bool {
+        self.control.active()
+            && Instant::now() < self.end
+            && self.budget.check().is_ok()
+            && self.key.matches(token, cap)
+    }
+    pub(crate) fn matches_attempt(
+        &self,
+        attempt: &crate::remote_host::delegated::DelegatedAttemptIdentity,
+    ) -> bool {
+        self.attempt.matches(attempt)
+    }
+    pub(crate) fn end(&self) -> Instant {
+        self.end
+    }
+}
+impl FinalConsent {
+    pub(crate) fn network_signing_authorization(
+        &self,
+        permit: &crate::remote_host::unattended::StartPermit,
+        start: &crate::remote_host::delegated::DelegatedSocketStart,
+        ready: &crate::native_crypto::host::HostKeysReady,
+        keys: &crate::native_crypto::host::HostKeyCustody,
+        binding: &FrozenHostBinding,
+    ) -> Result<DelegatedSigningAuthorization, SafeError> {
+        self.check_window()?;
+        let original = self.key_binding();
+        if !self.permits_network()
+            || !matches!(self.role(), RequestedRole::Control)
+            || !permit.matches(&self.control)
+            || !self.control.active()
+            || !start.matches_final_control(&self.control)
+            || binding.native_profile != original.native_profile
+            || binding.endpoint_spki != original.endpoint_spki
+            || binding.relay_spki != original.relay_spki
+            || binding.origin != original.origin
+            || binding.relay_id != original.relay_id
+            || binding.profile_cap > original.profile_cap
+        {
+            return Err(error("REMOTE_UNATTENDED_STALE"));
+        }
+        let key = ready
+            .signing_identity(keys, binding)
+            .map_err(|_| error("REMOTE_UNATTENDED_STALE"))?;
+        if !key.has_roots(&self.machine.lease.native, &self.control.closed) {
+            return Err(error("REMOTE_UNATTENDED_STALE"));
+        }
+        let budget = start.budget()?;
+        let end = budget.deadline().min(key.cap()).min(self.end());
+        self.check_window()?;
+        if !self.control.active() || Instant::now() >= end {
+            return Err(error("REMOTE_UNATTENDED_STALE"));
+        }
+        Ok(DelegatedSigningAuthorization {
+            record: self.candidate().record().clone(),
+            scope: self.scope().clone(),
+            key,
+            attempt: start.identity(),
+            budget,
+            control: self.control.clone(),
+            end,
+        })
     }
 }

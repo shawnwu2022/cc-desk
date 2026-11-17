@@ -13,7 +13,7 @@ mod stages;
 use cc_desk_remote_record::appbind::CanonicalOrigin;
 use cc_desk_remote_transport::wss::RelayAdmissionIdentity;
 use parking_lot::{Condvar, Mutex};
-pub(crate) use ready::HostKeysReady;
+pub(crate) use ready::{HostKeysReady, ReadySigningIdentity};
 pub(crate) use stages::HostSigningStages;
 use std::{
     collections::VecDeque,

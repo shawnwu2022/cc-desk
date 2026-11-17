@@ -257,3 +257,43 @@ impl DelegatedSession {
         Ok((custody, start))
     }
 }
+
+impl DelegatedSession {
+    // 单次短会话终止，不签发可重连的 Installed 退休收据。
+    pub(crate) async fn close_terminal(self: &Arc<Self>) -> bool {
+        self.revoke();
+        let _observer = self.retirement.observer.lock().await;
+        let socket = self.socket.lock().clone();
+        let Some(socket) = socket else {
+            return false;
+        };
+        if socket.wait_closed().await.is_err() {
+            return false;
+        }
+        let pump = self
+            .active
+            .lock()
+            .as_ref()
+            .map(|active| active.pump.clone());
+        let Some(pump) = pump else {
+            // handoff 之前失败只有网络/材料任务；若已产生部分 Host，不能假定其退休。
+            return self
+                .service
+                .upgrade()
+                .and_then(|service| service.with_host(|host| host.is_none()))
+                == Some(true);
+        };
+        if !pump.join().await {
+            return false;
+        }
+        loop {
+            match self.local_retirement() {
+                ChannelRetirement::Retired => return true,
+                ChannelRetirement::Unknown => return false,
+                ChannelRetirement::Pending => {
+                    tokio::time::sleep(std::time::Duration::from_millis(2)).await
+                }
+            }
+        }
+    }
+}

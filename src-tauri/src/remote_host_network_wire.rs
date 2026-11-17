@@ -8,6 +8,9 @@ enum DelegatedWireMode {
 }
 pub(super) struct WireInputs {
     mode: DelegatedWireMode,
+    delegated_signing: Option<
+        crate::remote_host_approval::unattended::final_approval::DelegatedSigningAuthorization,
+    >,
     #[cfg(test)]
     activation_hook: Option<(bool, Box<dyn FnOnce() + Send>)>,
     #[cfg(windows)]
@@ -28,6 +31,14 @@ pub(super) struct WireInputs {
     outer_accepted: Option<Box<TestAcceptedGate>>,
 }
 impl WireInputs {
+    #[cfg(test)]
+    pub(super) fn test_outer_observer(
+        mut self,
+        accepted: tokio::sync::oneshot::Sender<()>,
+    ) -> Self {
+        self.outer_accepted = Some(Box::new((accepted, None)));
+        self
+    }
     #[cfg(test)]
     pub(super) fn test_activation_hook(
         mut self,
@@ -51,6 +62,7 @@ impl WireInputs {
     pub(super) fn from_test(inputs: super::delegated::TestMaterial) -> Self {
         Self {
             mode: DelegatedWireMode::Manual,
+            delegated_signing: None,
             #[cfg(test)]
             activation_hook: None,
             #[cfg(windows)]
@@ -70,9 +82,89 @@ impl WireInputs {
             outer_accepted: inputs.accepted,
         }
     }
+    pub(super) fn from_delegated(
+        authority: crate::remote_host_approval::unattended::final_approval::DelegatedSigningAuthorization,
+        signers: crate::native_crypto::host::HostSignerSet,
+    ) -> Result<Self, HostNetworkError> {
+        let record = authority.record();
+        let browser = &record.browser;
+        let route = &record.route;
+        let origin = cc_desk_remote_record::appbind::CanonicalOrigin::trusted(&route.origin)
+            .map_err(|_| HostNetworkError::Authority)?;
+        let endpoint =
+            P256Spki::new(&record.native.endpoint_spki).map_err(|_| HostNetworkError::Authority)?;
+        let local = LocalIdentity::new(security::Role::Host, endpoint, signers.endpoint)
+            .map_err(|_| HostNetworkError::Authority)?;
+        let mut activation = [0; 32];
+        activation[..16].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
+        activation[16..].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
+        let incarnation =
+            u64::from_le_bytes(uuid::Uuid::new_v4().as_bytes()[..8].try_into().unwrap()).max(1);
+        let remaining = authority
+            .end()
+            .saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            return Err(HostNetworkError::Closed);
+        }
+        Ok(Self {
+            mode: DelegatedWireMode::LiveSnapshotPull,
+            #[cfg(test)]
+            activation_hook: None,
+            stages: Some(signers.stages),
+            address: route
+                .address
+                .parse()
+                .map_err(|_| HostNetworkError::Authority)?,
+            relay: signers.relay,
+            tunnel: route.tunnel,
+            relay_mode: match route.relay_mode.as_str() {
+                "legacyV1" => transport::wss::RelayMode::Legacy,
+                "rendezvousV1" => transport::wss::RelayMode::RendezvousV1,
+                _ => return Err(HostNetworkError::Authority),
+            },
+            local,
+            phone_pin: PeerPin::new(
+                security::Role::Client,
+                P256Spki::new(&browser.browser_public_key)
+                    .map_err(|_| HostNetworkError::Authority)?,
+            ),
+            binding: HostSnapshot {
+                host_key_epoch: record.epochs.host_key,
+                client_key_epoch: record.epochs.client_key,
+                policy_epoch: record.epochs.policy,
+                issuer_epoch: record.epochs.issuer,
+                activation,
+                incarnation,
+                origin,
+            },
+            browser: BrowserProfile::enrolled(
+                &browser.origin,
+                &browser.rp_id,
+                browser.credential_id.clone(),
+                P256Spki::new(&browser.webauthn_public_key)
+                    .map_err(|_| HostNetworkError::Authority)?,
+                browser.backup_eligible,
+                browser.allow_backed_up,
+            )
+            .map_err(|_| HostNetworkError::Authority)?,
+            issuer: P256Spki::new(&browser.grant_public_key)
+                .map_err(|_| HostNetworkError::Authority)?,
+            principal: record.principal,
+            policy: NativeGrantPolicy {
+                scope: authority.scope().clone(),
+                role: cc_desk_remote_record::grant::DataRole::Controller,
+                duration: remaining,
+            },
+            io_budget: Duration::from_secs(2),
+            #[cfg(test)]
+            outer_accepted: None,
+            delegated_signing: Some(authority),
+        })
+    }
     pub(super) fn from_approved(inputs: ApprovedHostInputs) -> Self {
         Self {
             mode: DelegatedWireMode::Manual,
+            delegated_signing: None,
             #[cfg(test)]
             activation_hook: None,
             #[cfg(windows)]
@@ -210,12 +302,20 @@ impl NetworkWire {
         let budget = remaining(end)?;
         #[cfg(windows)]
         if let Some(stages) = &mut self.signing_stages {
-            let approval = approval_stop.ok_or(HostNetworkError::Authority)?.clone();
+            let scope = match &authorization {
+                WireAuthority::Original(_) => NetworkSigningScope::original(
+                    approval_stop.ok_or(HostNetworkError::Authority)?.clone(),
+                    end.into_std(),
+                ),
+                WireAuthority::Delegated(_) => NetworkSigningScope::delegated(
+                    inputs
+                        .delegated_signing
+                        .ok_or(HostNetworkError::Authority)?,
+                    end.into_std(),
+                ),
+            };
             stages
-                .begin_relay(NetworkSigningScope {
-                    approval,
-                    end: end.into_std(),
-                })
+                .begin_relay(scope)
                 .map_err(|_| HostNetworkError::Authority)?;
         }
         let socket = match connector {

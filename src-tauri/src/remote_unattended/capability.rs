@@ -9,7 +9,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[derive(Clone)]
 pub(crate) struct VerifiedBinding(Binding);
 
+struct ChannelIdentity {
+    client_endpoint: [u8; 32],
+    relay_origin: cc_desk_remote_record::appbind::CanonicalOrigin,
+}
 pub(crate) struct Delegation {
+    channel_identity: Option<ChannelIdentity>,
     final_control:
         Option<Arc<crate::remote_host_approval::unattended::final_approval::FinalControl>>,
 
@@ -84,6 +89,14 @@ impl EffectFence {
     }
 }
 impl Delegation {
+    pub(crate) fn matches_final_control(
+        &self,
+        control: &Arc<crate::remote_host_approval::unattended::final_approval::FinalControl>,
+    ) -> bool {
+        self.final_control
+            .as_ref()
+            .is_some_and(|original| Arc::ptr_eq(original, control))
+    }
     fn is_closed(&self) -> bool {
         self.closed.load(Ordering::Acquire)
             || self.final_control.as_ref().is_some_and(|c| !c.active())
@@ -307,6 +320,7 @@ impl Delegation {
             .unwrap();
         (
             Arc::new(Self {
+                channel_identity: None,
                 final_control: None,
                 owner,
                 closed: Arc::new(AtomicBool::new(false)),

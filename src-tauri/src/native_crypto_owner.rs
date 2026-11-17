@@ -72,6 +72,14 @@ impl NativeRevocation {
             parents: Some(parents),
         })
     }
+    pub(crate) fn has_roots(&self, first: &Self, second: &Self) -> bool {
+        first.parents.is_none()
+            && second.parents.is_none()
+            && self.parents.as_ref().is_some_and(|parents| {
+                Arc::ptr_eq(&parents[0].0, &first.local)
+                    && Arc::ptr_eq(&parents[1].0, &second.local)
+            })
+    }
     pub(crate) fn revoke(&self) {
         self.local.store(true, Ordering::Release);
     }

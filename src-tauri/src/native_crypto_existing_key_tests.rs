@@ -45,6 +45,7 @@ struct Api {
     open_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     free_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     public_signal: Mutex<Option<mpsc::SyncSender<()>>>,
+    fault_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 impl Api {
     fn new(mode: Mode, token: Arc<NativeRevocation>) -> Arc<Self> {
@@ -61,6 +62,7 @@ impl Api {
             open_hook: Mutex::new(None),
             free_hook: Mutex::new(None),
             public_signal: Mutex::new(None),
+            fault_hook: Mutex::new(None),
         })
     }
     fn record(&self, name: &'static str) {
@@ -124,6 +126,9 @@ impl MockKeyApi for Api {
             panic!("TEST_ONLY after provider");
         }
         if self.mode == Mode::OpenErr {
+            if let Some(hook) = self.fault_hook.lock().take() {
+                hook();
+            }
             return Err(CryptoError::Native);
         }
         Ok(202)
@@ -187,6 +192,9 @@ impl MockKeyApi for Api {
         blob.extend(&self.public[SPKI_HEAD.len()..]);
         if self.mode == Mode::PublicMismatch {
             blob[8] ^= 1;
+            if let Some(hook) = self.fault_hook.lock().take() {
+                hook();
+            }
         }
         Ok(blob)
     }
@@ -807,6 +815,16 @@ pub(crate) fn epoch_supplier(
         api.public = binding.relay_spki;
     }
     if generation == 2 {
+        let fault_event = match second_mode {
+            Mode::PublicMismatch => Some("wrong_spki_export"),
+            Mode::OpenErr => Some("open_error"),
+            _ => None,
+        };
+        if let Some(event) = fault_event {
+            let events = trace.events.clone();
+            *second.fault_hook.lock() =
+                Some(Box::new(move || events.lock().push((generation, event))));
+        }
         let action = trace.after_second_verified.clone();
         let events = trace.events.clone();
         *second.verified_hook.lock() = Some(Box::new(move || {

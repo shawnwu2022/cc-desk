@@ -633,6 +633,16 @@ impl RemoteHostService {
         &self,
         channel: Arc<cc_desk_remote_host::native_host::NativeChannel>,
     ) -> Result<(), ()> {
+        self.pump_peer_gated(channel, None).await
+    }
+    async fn pump_peer_gated(
+        &self,
+        channel: Arc<cc_desk_remote_host::native_host::NativeChannel>,
+        gate: Option<(
+            Arc<crate::remote_unattended_store::service::request_gate::ServiceRequestGate>,
+            delegated::DelegatedAttemptIdentity,
+        )>,
+    ) -> Result<(), ()> {
         let mut connection = loop {
             if channel.authority().check().is_err() {
                 break None;
@@ -672,11 +682,18 @@ impl RemoteHostService {
                     }
                     match channel.receive(&scope, fence, Duration::from_secs(1)).await {
                         Ok(record) => {
-                            if connection
-                                .dispatch_received(&record, Duration::from_secs(1))
-                                .await
-                                .is_err()
-                            {
+                            let result = if let Some((gate, attempt)) = &gate {
+                                match gate.authorize(record, &channel, attempt) {
+                                    Ok(record) => record.dispatch(connection).await,
+                                    Err(()) => Err(()),
+                                }
+                            } else {
+                                connection
+                                    .dispatch_received(&record, Duration::from_secs(1))
+                                    .await
+                                    .map_err(|_| ())
+                            };
+                            if result.is_err() {
                                 break;
                             }
                         }

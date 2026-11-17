@@ -102,6 +102,20 @@ impl<S: Sealer> SingleRunService<S> {
         let supplier: FrozenHostSupplier = consent
             .epoch_supplier(source, permit, pairing)
             .map_err(|_| StoreError::Unauthorized)?;
+        #[cfg(test)]
+        let supplier = if let Some(fixture) = &self.epoch_anonymous {
+            let names = supplier.key_references().ok_or(StoreError::Invalid)?;
+            crate::native_crypto::host_profile::NativeHostProfile::new(
+                supplier.binding().clone(),
+                &names[0],
+                &names[1],
+            )
+            .map_err(|_| StoreError::Invalid)?
+            .test_anonymous(fixture.scalars, fixture.opened.clone())
+            .freeze()
+        } else {
+            supplier
+        };
         let binding = supplier.binding().clone();
         let generation = self
             .epoch

@@ -106,7 +106,19 @@ impl Delegation {
             let mut state = owner.lock()?;
             state.end = state.end.map(|end| end.min(consent.end()));
         }
+        let record = consent.candidate().record();
+        let client_endpoint =
+            cc_desk_remote_security::P256Spki::new(&record.browser.browser_public_key)
+                .map_err(|_| Denied::Locked)?
+                .endpoint_id(cc_desk_remote_security::Role::Client);
+        let relay_origin =
+            cc_desk_remote_record::appbind::CanonicalOrigin::trusted(&record.route.origin)
+                .map_err(|_| Denied::Locked)?;
         Ok(Arc::new(Self {
+            channel_identity: Some(ChannelIdentity {
+                client_endpoint,
+                relay_origin,
+            }),
             final_control: Some(consent.control()),
             owner,
             closed: Arc::new(AtomicBool::new(false)),

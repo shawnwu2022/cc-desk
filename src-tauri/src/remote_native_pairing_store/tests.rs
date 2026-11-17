@@ -684,11 +684,18 @@ fn NativePairing_EnrollmentStrictBoundsAndTombstones_024() {
 pub(crate) fn synthetic_confirmed_candidate<B: Backend>(
     store: &PairingStore<B, TestSealer>,
 ) -> InstalledDeviceCandidate {
+    synthetic_confirmed_record_candidate(store, record())
+}
+pub(crate) fn synthetic_confirmed_record_candidate<B: Backend>(
+    store: &PairingStore<B, TestSealer>,
+    record: PublicDeviceRecord,
+) -> InstalledDeviceCandidate {
+    let device_id = record.device_id.clone();
     apply(
         store,
         Mutation::Initialize {
             store_id: uuid::Uuid::new_v4().to_string(),
-            record: record(),
+            record,
         },
     )
     .unwrap();
@@ -702,7 +709,7 @@ pub(crate) fn synthetic_confirmed_candidate<B: Backend>(
         .unwrap();
     drop(tx);
     store
-        .select_installed(&store.load().unwrap().expected, &record().device_id)
+        .select_installed(&store.load().unwrap().expected, &device_id)
         .unwrap()
 }
 pub(crate) fn synthetic_forget(store: &TestStore) {
@@ -721,8 +728,22 @@ pub(crate) fn synthetic_change_record(store: &TestStore) {
     let snapshot = store.load().unwrap();
     let mut changed = snapshot.devices[0].record.clone().unwrap();
     changed.epochs.policy += 1;
-    let forgotten = apply(store, Mutation::Forget { expected: snapshot.expected, device_id: changed.device_id.clone() }).unwrap();
-    apply(store, Mutation::Remember { expected: forgotten.expected, record: changed }).unwrap();
+    let forgotten = apply(
+        store,
+        Mutation::Forget {
+            expected: snapshot.expected,
+            device_id: changed.device_id.clone(),
+        },
+    )
+    .unwrap();
+    apply(
+        store,
+        Mutation::Remember {
+            expected: forgotten.expected,
+            record: changed,
+        },
+    )
+    .unwrap();
 }
 pub(crate) fn synthetic_fail_after_publish(store: &TestStore) {
     store.backend.test_fail_after_publish();

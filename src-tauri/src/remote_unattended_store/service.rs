@@ -21,6 +21,42 @@ fn now_ms() -> Result<u64> {
         .map_err(|_| StoreError::Clock)
 }
 
+enum CapturedOwner {
+    Local(DelegatedRunOwner),
+    Network {
+        session: Arc<crate::remote_host::delegated::DelegatedSession>,
+        retired: bool,
+    },
+}
+impl std::ops::Deref for CapturedOwner {
+    type Target = DelegatedRunOwner;
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Local(owner) => owner,
+            Self::Network { session, .. } => session.captured_owner(),
+        }
+    }
+}
+impl CapturedOwner {
+    fn network_retired(&self) -> bool {
+        match self {
+            Self::Local(_) => true,
+            Self::Network { retired, .. } => *retired,
+        }
+    }
+    fn closed_capture_releasable(&self) -> bool {
+        self.network_retired() && self.deref_owner().closed_capture_releasable()
+    }
+    fn deref_owner(&self) -> &DelegatedRunOwner {
+        self
+    }
+}
+
+#[cfg(test)]
+struct AnonymousKeyFixture {
+    scalars: [[u8; 32]; 2],
+    opened: Arc<[std::sync::atomic::AtomicUsize; 2]>,
+}
 pub(crate) struct SingleRunService<S: Sealer> {
     store: Store<WindowsUnattendedBackend, S>,
     consent: Option<FinalConsent>,
@@ -30,7 +66,9 @@ pub(crate) struct SingleRunService<S: Sealer> {
     epoch: Option<epoch::KeyEpoch>,
     #[cfg(test)]
     epoch_trace: Option<crate::native_crypto::EpochTestTrace>,
-    captured: Option<DelegatedRunOwner>,
+    #[cfg(test)]
+    epoch_anonymous: Option<AnonymousKeyFixture>,
+    captured: Option<CapturedOwner>,
     policy: Option<Arc<Delegation>>,
     binding: Option<VerifiedBinding>,
     snapshot: Option<LockedSnapshot>,
@@ -63,6 +101,8 @@ impl<S: Sealer> SingleRunService<S> {
             epoch: None,
             #[cfg(test)]
             epoch_trace: None,
+            #[cfg(test)]
+            epoch_anonymous: None,
             captured: None,
             policy: None,
             binding: None,
@@ -223,7 +263,7 @@ impl<S: Sealer> SingleRunService<S> {
         }
         let captured = DelegatedRunOwner::capture_single_run(admission, consent, policy)
             .map_err(|_| StoreError::Unauthorized)?;
-        self.captured = Some(captured);
+        self.captured = Some(CapturedOwner::Local(captured));
         self.binding = Some(binding);
         self.check_durable_current()?;
         self.check_before_publication(pairing)?;
@@ -354,7 +394,9 @@ impl<S: Sealer> Drop for SingleRunService<S> {
             .policy
             .as_ref()
             .map_or(CloseObservation::EffectsClosed, |p| p.observe_close());
-        if effects != CloseObservation::EffectsClosed {
+        if effects != CloseObservation::EffectsClosed
+            || self.captured.as_ref().is_some_and(|c| !c.network_retired())
+        {
             if let Some(keys) = &self.keys {
                 let _ = keys.advance();
             }
@@ -545,7 +587,7 @@ struct Quarantine {
     _custody: OwnerCustody,
     _slot: ProcessSlot,
     keys: Option<HostKeyCustody>,
-    _captured: Option<DelegatedRunOwner>,
+    _captured: Option<CapturedOwner>,
     _policy: Option<Arc<Delegation>>,
     _snapshot: Option<LockedSnapshot>,
     _reason: CloseObservation,
@@ -559,7 +601,7 @@ pub(crate) fn advance_quarantine() -> Option<CustodyObservation> {
     // 原 writer 已 join 且委托调用静止后才放资源引用；Unknown 与独占隔离仍保留。
     if q._captured
         .as_ref()
-        .is_some_and(DelegatedRunOwner::closed_capture_releasable)
+        .is_some_and(CapturedOwner::closed_capture_releasable)
     {
         q._captured.take();
     }
@@ -646,6 +688,12 @@ impl<S: Sealer> SingleRunService<S> {
     fn finish_owned(&mut self) -> controller::ControllerEnd {
         use controller::ControllerEnd;
         let durable = self.stop();
+        if let Some(CapturedOwner::Network { session, retired }) = &mut self.captured {
+            *retired = tauri::async_runtime::block_on(session.close_terminal());
+            if !*retired {
+                self.uncertain = true;
+            }
+        }
         loop {
             match self.advance_retirement() {
                 Some((keys, effects))
@@ -655,7 +703,11 @@ impl<S: Sealer> SingleRunService<S> {
                         durable,
                         retired: keys.disposal_complete
                             && !keys.unknown
-                            && effects == CloseObservation::EffectsClosed,
+                            && effects == CloseObservation::EffectsClosed
+                            && self
+                                .captured
+                                .as_ref()
+                                .is_none_or(CapturedOwner::network_retired),
                     };
                 }
                 None => {
@@ -667,5 +719,71 @@ impl<S: Sealer> SingleRunService<S> {
                 _ => std::thread::sleep(std::time::Duration::from_millis(2)),
             }
         }
+    }
+}
+
+#[path = "request_gate.rs"]
+pub(crate) mod request_gate;
+
+struct PreparedNetwork {
+    session: Arc<crate::remote_host::delegated::DelegatedSession>,
+    socket: Arc<crate::remote_host_network::delegated::SocketCustody>,
+    start: crate::remote_host::delegated::DelegatedSocketStart,
+    material: crate::remote_host_network::delegated::MaterialSupply,
+}
+impl<S: Sealer> SingleRunService<S> {
+    fn prepare_network<B: PairingBackend, P: PairingSealer>(
+        &mut self,
+        host: &Arc<crate::remote_host::RemoteHostService>,
+        pairing: &PairingStore<B, P>,
+        permit: &crate::remote_host::unattended::StartPermit,
+    ) -> Result<PreparedNetwork> {
+        if !permit.matches_host(host) {
+            return Err(StoreError::Unauthorized);
+        }
+        self.refresh(pairing)?;
+        if !matches!(self.captured, Some(CapturedOwner::Local(_))) {
+            return Err(StoreError::Unauthorized);
+        }
+        let Some(CapturedOwner::Local(owner)) = self.captured.take() else {
+            unreachable!()
+        };
+        let session = match host.try_reserve_delegation(owner) {
+            Ok(session) => Arc::new(session),
+            Err((_error, owner)) => {
+                self.captured = Some(CapturedOwner::Local(owner));
+                return Err(StoreError::Unauthorized);
+            }
+        };
+        self.captured = Some(CapturedOwner::Network {
+            session: session.clone(),
+            retired: false,
+        });
+        let (socket, start) = session
+            .reserve_socket_start(self.binding.as_ref().ok_or(StoreError::Unauthorized)?)
+            .map_err(|_| StoreError::Unauthorized)?;
+        let authority = self
+            .consent
+            .as_ref()
+            .ok_or(StoreError::Unauthorized)?
+            .network_signing_authorization(
+                permit,
+                &start,
+                self.ready.as_ref().ok_or(StoreError::Unauthorized)?,
+                self.keys.as_ref().ok_or(StoreError::Unauthorized)?,
+                self.current_key_binding()?,
+            )
+            .map_err(|_| StoreError::Unauthorized)?;
+        let signers = self.signers.take().ok_or(StoreError::Unauthorized)?;
+        let material = crate::remote_host_network::delegated::MaterialSupply::delegated(
+            &start, authority, signers,
+        )
+        .map_err(|_| StoreError::Unauthorized)?;
+        Ok(PreparedNetwork {
+            session,
+            socket,
+            start,
+            material,
+        })
     }
 }

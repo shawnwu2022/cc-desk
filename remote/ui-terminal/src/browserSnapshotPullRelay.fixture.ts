@@ -1,6 +1,6 @@
 import {TerminalClient} from './client.ts';import {browserPullConnection} from './browserPullConnection.ts';
 import {leaseState,projectionAck,decodeReply,decodeProjection} from './wire.ts';import {ProjectionReceiver} from './reducer.ts';
-import assert from 'node:assert/strict';import {readFileSync} from 'node:fs';import {pathToFileURL} from 'node:url';import {Worker,MessageChannel} from 'node:worker_threads';import {createECDH,createPrivateKey,createHash,sign} from 'node:crypto';import {createRequire} from 'node:module';
+import assert from 'node:assert/strict';import {readFileSync,writeFileSync,existsSync} from 'node:fs';import {pathToFileURL} from 'node:url';import {Worker,MessageChannel} from 'node:worker_threads';import {createECDH,createPrivateKey,createHash,sign} from 'node:crypto';import {createRequire} from 'node:module';
 // 仅描述此测试使用的 ws 边界；生产 Relay 仍接收 WebSocket 接口。
 const Ws=createRequire(import.meta.url)('ws') as new(url:string,options:{origin:string;ca:Buffer;rejectUnauthorized:true;servername:string;lookup:(host:string,options:unknown,callback:(error:Error|null,addresses:{address:string;family:number}[])=>void)=>void})=>WebSocket&{on(event:'error',callback:(error:Error)=>void):void};
 import {createBrowserDataKeepaliveRelay} from './browserRelay.ts';import {serveBrowserTransport} from './browserTransport.ts';import {createBrowserTlsSignerBroker} from './browserTlsSigner.ts';import {createBrowserGrantBroker} from './browserGrant.ts';import {browserClientPort} from './browserClient.ts';
@@ -39,7 +39,23 @@ try{
   assert.equal(presentations,0);assert.equal(watchdogFired,false);console.log(JSON.stringify({kind:'snapshot-pull-rejected',reason:config.case,originalRetired:true}));
  }else{
  const descriptor=await app.descriptor;assert.equal(descriptor.role,'Controller');
- if(config.case==='auto-smoke'||config.case==='auto61'){
+ if(config.case==='short-input'){
+  const connection=browserPullConnection(app),terminal=new TerminalClient(descriptor.target,descriptor.binding);terminal.connect(connection);
+  await terminal.snapshot();assert.equal(terminal.frame?.cells.length,1920);await terminal.window();
+  const idleStart=performance.now();
+  if(config.expires){
+   await retired;assert.equal(done,true);
+  }else if(config.revocationPath){
+   writeFileSync(config.revocationPath+'.ready','snapshot and window ready');
+   const end=performance.now()+3000;while(!existsSync(config.revocationPath+'.go')){assert.ok(performance.now()<end);await new Promise(r=>setTimeout(r,10));}
+   await assert.rejects(terminal.submit('42'.repeat(16),'1',new Uint8Array([110])));
+  }else{
+   const receipt=await terminal.submit('42'.repeat(16),'1',new Uint8Array([110]));assert.equal(receipt.message,'InputReceipt');assert.equal(receipt.outcome,'HostWritten');
+   await terminal.settle();assert.equal(terminal.phase,'Idle');
+  }
+  await app.close();await retired;await served.waitClosed();await relay.waitClosed();assert.equal(watchdogFired,false);
+  console.log(JSON.stringify({kind:'short-input',remoteBytes:config.revocationPath||config.expires?0:1,pairingRevoked:!!config.revocationPath,fixedDeadlineRetired:!!config.expires,idleMs:Math.floor(performance.now()-idleStart),cells:1920,originalRetired:true}));
+ }else if(config.case==='auto-smoke'||config.case==='auto61'){
   const requests:string[]=[],renewals:{sequence:string;deadline:string;request:string}[]=[];const original=app;
   const connection=browserPullConnection({...original,snapshotPull:async(request,budget)=>{requests.push('Snapshot');return original.snapshotPull(request,budget);},exchange:async(bytes,budget)=>{const request=JSON.parse(new TextDecoder().decode(bytes));requests.push(request.message);const response=await original.exchange(bytes,budget);if(request.message==='LeaseRenew'){const reply=decodeReply(response);assert.equal(reply.message,'LeaseRenewed');if(reply.message!=='LeaseRenewed')throw Error('renewal reply');renewals.push({sequence:reply.renewalSequence,deadline:reply.notAfterHostMs,request:reply.request});}return response;}});
   const terminal=new TerminalClient(descriptor.target,descriptor.binding);terminal.connect(connection);const initial=await terminal.leaseState();await terminal.startAutoRenewal();const before=requests.length,heartbeatBefore=sentHeartbeats,start=performance.now();

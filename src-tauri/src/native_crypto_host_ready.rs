@@ -102,3 +102,63 @@ impl HostKeysReady {
         self.check(owner, expected)
     }
 }
+
+// 只携带原已加载 core 的身份；不授予网络或 arm 权，也不延长原 cap。
+pub(crate) struct ReadySigningIdentity {
+    core: std::sync::Weak<HostKeyCore>,
+    cap: Instant,
+}
+impl ReadySigningIdentity {
+    #[cfg(test)]
+    pub(crate) fn test_authorization_caps(
+        &self,
+        authority: &crate::remote_host_approval::unattended::final_approval::DelegatedSigningAuthorization,
+    ) -> bool {
+        let Some(core) = self.core.upgrade() else {
+            return false;
+        };
+        authority.matches(&core.token, self.cap)
+            && !authority.matches(
+                &core.token,
+                self.cap
+                    .checked_sub(std::time::Duration::from_nanos(1))
+                    .unwrap(),
+            )
+            && !authority.matches(
+                &core.token,
+                self.cap
+                    .checked_add(std::time::Duration::from_nanos(1))
+                    .unwrap(),
+            )
+    }
+    pub(crate) fn matches(&self, token: &Arc<NativeRevocation>, cap: Instant) -> bool {
+        self.core.upgrade().is_some_and(|core| {
+            let state = core.state.lock();
+            Arc::ptr_eq(&core.token, token)
+                && self.cap == cap
+                && state.cap == cap
+                && live(&core, &state).is_ok()
+        })
+    }
+    pub(crate) fn has_roots(&self, first: &NativeRevocation, second: &NativeRevocation) -> bool {
+        self.core
+            .upgrade()
+            .is_some_and(|core| core.token.has_roots(first, second))
+    }
+    pub(crate) fn cap(&self) -> Instant {
+        self.cap
+    }
+}
+impl HostKeysReady {
+    pub(crate) fn signing_identity(
+        &self,
+        owner: &HostKeyCustody,
+        expected: &FrozenHostBinding,
+    ) -> Result<ReadySigningIdentity, SignFailure> {
+        self.check(owner, expected)?;
+        Ok(ReadySigningIdentity {
+            core: self.core.clone(),
+            cap: expected.profile_cap,
+        })
+    }
+}

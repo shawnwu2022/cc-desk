@@ -7,9 +7,13 @@ use parking_lot::Mutex;
 use std::{sync::Arc, thread::JoinHandle};
 
 pub(crate) struct StartPermit {
+    app: Arc<()>,
     close: CloseHandle,
 }
 impl StartPermit {
+    pub(crate) fn matches_host(&self, host: &crate::remote_host::RemoteHostService) -> bool {
+        Arc::ptr_eq(&self.app, &host.unattended.app)
+    }
     pub(crate) fn matches(
         &self,
         control: &Arc<crate::remote_host_approval::unattended::final_approval::FinalControl>,
@@ -40,9 +44,9 @@ impl<S: Sealer + Send> Managed for SingleRunController<S> {
 }
 impl<S, B, P> Managed for crate::remote_unattended_store::service::pending::PendingStart<S, B, P>
 where
-    S: Sealer + Send,
-    B: crate::remote_native_pairing_store::Backend + Send + Sync,
-    P: crate::remote_native_pairing_store::Sealer + Send + Sync,
+    S: Sealer + Send + 'static,
+    B: crate::remote_native_pairing_store::Backend + Send + Sync + 'static,
+    P: crate::remote_native_pairing_store::Sealer + Send + Sync + 'static,
 {
     fn epoch_end(&self) -> Option<std::time::Instant> {
         self.epoch_end()
@@ -197,6 +201,7 @@ struct State {
 }
 #[derive(Default)]
 pub(crate) struct UnattendedCustody {
+    app: Arc<()>,
     state: Mutex<State>,
     rejected_cleanup: std::sync::atomic::AtomicUsize,
     rejected_unknown: std::sync::atomic::AtomicBool,
@@ -306,6 +311,7 @@ impl UnattendedCustody {
         #[cfg(test)]
         let panic_worker = self.panic_worker.load(std::sync::atomic::Ordering::Acquire);
         let permit = StartPermit {
+            app: self.app.clone(),
             close: close.clone(),
         };
         let start_result = owner.started.clone();

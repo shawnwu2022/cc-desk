@@ -81,17 +81,45 @@ pub(crate) struct ApprovedHostSource {
 /// 仅原网络任务在原注册来源和原 setup end 下构造，不持 service/run。
 #[cfg(windows)]
 pub(crate) struct NetworkSigningScope {
-    approval: NativeApprovalStop,
+    authority: SigningAuthority,
     end: std::time::Instant,
 }
 #[cfg(windows)]
+enum SigningAuthority {
+    Original(NativeApprovalStop),
+    Delegated(
+        Box<crate::remote_host_approval::unattended::final_approval::DelegatedSigningAuthorization>,
+    ),
+}
+#[cfg(windows)]
 impl NetworkSigningScope {
+    fn original(approval: NativeApprovalStop, end: std::time::Instant) -> Self {
+        Self {
+            authority: SigningAuthority::Original(approval),
+            end,
+        }
+    }
+    pub(super) fn delegated(
+        authority: crate::remote_host_approval::unattended::final_approval::DelegatedSigningAuthorization,
+        setup_end: std::time::Instant,
+    ) -> Self {
+        let end = authority.end().min(setup_end);
+        Self {
+            authority: SigningAuthority::Delegated(Box::new(authority)),
+            end,
+        }
+    }
     pub(crate) fn matches(
         &self,
         token: &Arc<crate::native_crypto::owner::NativeRevocation>,
         cap: std::time::Instant,
     ) -> bool {
-        self.approval.matches_native(token, cap) && !self.approval.is_invalid()
+        match &self.authority {
+            SigningAuthority::Original(approval) => {
+                approval.matches_native(token, cap) && !approval.is_invalid()
+            }
+            SigningAuthority::Delegated(authority) => authority.matches(token, cap),
+        }
     }
     pub(crate) fn end(&self) -> std::time::Instant {
         self.end
@@ -102,10 +130,7 @@ impl NetworkSigningScope {
         cap: std::time::Instant,
         end: std::time::Instant,
     ) -> Self {
-        Self {
-            approval: NativeApprovalStop::new(token, cap),
-            end,
-        }
+        Self::original(NativeApprovalStop::new(token, cap), end)
     }
 }
 #[cfg(test)]

@@ -64,11 +64,12 @@ impl NetworkAttempt {
     ) -> bool {
         let binding = &self.current.0;
         let context = authority.context();
-        let device: String = binding
-            .device
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
+        // 配对 UUID 与 Browser origin 不是传输身份；生产单 run 固定使用原记录派生值。
+        let (endpoint, relay_origin) = match &self.policy.channel_identity {
+            Some(identity) => (&identity.client_endpoint, identity.relay_origin.as_str()),
+            None => (&binding.device, binding.origin.as_str()),
+        };
+        let device: String = endpoint.iter().map(|byte| format!("{byte:02x}")).collect();
         authority.local_role() == cc_desk_remote_security::Role::Host
             && authority.data_role() == cc_desk_remote_record::grant::DataRole::Controller
             && context.client_endpoint_id == device
@@ -76,13 +77,13 @@ impl NetworkAttempt {
             && context.client_key_epoch == binding.client_epoch.to_string()
             && context.policy_epoch == binding.policy_epoch.to_string()
             && context.issuer_epoch == binding.issuer_epoch.to_string()
-            && context.origin.as_str() == binding.origin
+            && context.origin.as_str() == relay_origin
             && authority.principal_id() == binding.principal
             && self.now_ms().is_ok()
             && authority.check().is_ok()
     }
     fn sample_checked(&self) -> Result<NetworkSample, GrantError> {
-        if self.closed.load(Ordering::Acquire) || self.policy.closed.load(Ordering::Acquire) {
+        if self.closed.load(Ordering::Acquire) || self.policy.is_closed() {
             return Err(GrantError::Closed);
         }
         // 原资源检查在锁外且必须非阻塞；随后重查关闭、期限和原票据。
@@ -99,7 +100,7 @@ impl NetworkAttempt {
             self.policy.request_revoke();
             GrantError::Closed
         })?;
-        if self.closed.load(Ordering::Acquire) || self.policy.closed.load(Ordering::Acquire) {
+        if self.closed.load(Ordering::Acquire) || self.policy.is_closed() {
             return Err(GrantError::Closed);
         }
         let sample = self.policy.sample().map_err(|_| GrantError::Clock)?;
@@ -127,7 +128,7 @@ impl NetworkAttempt {
             }
             return Err(GrantError::Closed);
         }
-        if self.closed.load(Ordering::Acquire) || self.policy.closed.load(Ordering::Acquire) {
+        if self.closed.load(Ordering::Acquire) || self.policy.is_closed() {
             return Err(GrantError::Closed);
         }
         Ok(NetworkSample::Live(sample.wall_ms))
@@ -359,7 +360,7 @@ impl GrantClock for NetworkClock {
             .and_then(std::sync::Weak::upgrade)
             .ok_or(GrantError::Closed)?;
         let sample = attempt.now_ms().inspect_err(|error| {
-            if *error != GrantError::Closed || attempt.policy.closed.load(Ordering::Acquire) {
+            if *error != GrantError::Closed || attempt.policy.is_closed() {
                 self.terminated.store(true, Ordering::Release);
             }
         })?;
@@ -616,9 +617,7 @@ impl NetworkClock {
             sample,
             false,
         )?;
-        if attempt.closed.load(Ordering::Acquire)
-            || attempt.policy.closed.load(Ordering::Acquire)
-            || self.is_closed()
+        if attempt.closed.load(Ordering::Acquire) || attempt.policy.is_closed() || self.is_closed()
         {
             return Err(Denied::Locked);
         }

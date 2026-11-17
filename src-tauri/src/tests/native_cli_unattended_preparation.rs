@@ -2924,7 +2924,34 @@ async fn unattended_epoch_case(mode: u8) {
     match mode {
         0 => assert!(ordered && two_ready && opens == 4 && parent_open),
         1 | 6 | 7 => assert!(joined_index.is_some() && !two_ready && opens == 2 && !parent_open),
-        2 | 3 | 8 | 9 => assert!(ordered && !two_ready && opens == 4 && !parent_open),
+        2 | 3 => {
+            let final_events = trace.events.lock().clone();
+            let fault = if mode == 2 {
+                "wrong_spki_export"
+            } else {
+                "open_error"
+            };
+            let fault_index = final_events.iter().position(|e| *e == (2, fault));
+            assert!(matches!((joined_index, fault_index), (Some(a), Some(b)) if a < b));
+            assert!(ordered && !two_ready && !parent_open);
+            assert!(!final_events.contains(&(2, "second_verified")));
+            assert!(!final_events.contains(&(2, "ready")));
+            for (generation, event) in &final_events {
+                let free = match *event {
+                    "endpoint_open" => "endpoint_free",
+                    "relay_open" => "relay_free",
+                    _ => continue,
+                };
+                assert_eq!(
+                    final_events
+                        .iter()
+                        .filter(|e| *e == &(*generation, free))
+                        .count(),
+                    1
+                );
+            }
+        }
+        8 | 9 => assert!(ordered && !two_ready && opens == 4 && !parent_open),
         4 => assert!(
             joined_index.is_none()
                 && !two_ready
@@ -2981,4 +3008,309 @@ fn UnattendedCost_RejectedEffectStillPaysOriginalObservation_001() {
     assert_eq!(before, 896);
     assert_eq!(after - before, 448);
     assert_eq!(final_bytes - after, 448);
+}
+
+// 公开测试向量匿名 CNG + 原 App reservation/material/stages；不访问命名用户密钥。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn UnattendedShortNetwork_OriginalAppRelayWasmInput_001() {
+    if short_network_isolated("UnattendedShortNetwork_OriginalAppRelayWasmInput_001") {
+        return;
+    }
+    unattended_short_network_case(0).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn UnattendedShortNetwork_PairingChangeRejectsNextInput_003() {
+    if short_network_isolated("UnattendedShortNetwork_PairingChangeRejectsNextInput_003") {
+        return;
+    }
+    unattended_short_network_case(1).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn UnattendedShortNetwork_IdleFixedDeadlineRetiresBeforeAppExit_004() {
+    if short_network_isolated("UnattendedShortNetwork_IdleFixedDeadlineRetiresBeforeAppExit_004") {
+        return;
+    }
+    unattended_short_network_case(2).await;
+}
+async fn unattended_short_network_case(mode: u8) {
+    let revoke = mode == 1;
+    let expires = mode == 2;
+    use crate::remote_host_approval::unattended::final_approval::FinalApproval;
+    use crate::remote_native_pairing_store::tests::{record, synthetic_confirmed_record_candidate};
+    use crate::remote_unattended_store::service::pending::PendingStart;
+    let (f, native, _runtime_stop) = unattended_app_run();
+    let mut record = record();
+    record.native.relay_spki = record.native.endpoint_spki.clone();
+    record.native.endpoint_spki = network_identities::identity(false, false).1;
+    let mut relay = NetworkRelayFixture::start_with_browser(
+        Some(record.native.relay_spki[26..].to_vec()),
+        30000,
+        true,
+    )
+    .await;
+    let admission = admit(&f);
+    let scope = admission.scope().unwrap();
+    record.route.address = relay.address.to_string();
+    record.route.origin = relay.origin.clone();
+    record.route.relay_mode = "legacyV1".into();
+    record.route.tunnel = [3; 16];
+    record.route.relay_id = [1; 16];
+    record.epochs.host_key = 5;
+    record.epochs.client_key = 7;
+    record.epochs.policy = 13;
+    record.epochs.issuer = 17;
+    record.principal = [4; 32];
+    record.browser.webauthn_public_key = record.native.relay_spki.clone();
+    record.browser.grant_public_key = record.native.relay_spki.clone();
+    record.browser.browser_public_key = network_identities::identity(true, false).1;
+    record.browser.relay_public_key = record.browser.browser_public_key.clone();
+    let host_spki = record
+        .native
+        .endpoint_spki
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>();
+    let pair_dir = store_root();
+    let pairing = Arc::new(synthetic_file_store(pair_dir.path()).unwrap());
+    let candidate = synthetic_confirmed_record_candidate(&pairing, record);
+    let preparation = UnattendedPreparation::new(
+        &pairing,
+        candidate,
+        &admission,
+        RequestedRole::Control,
+        cutoff(),
+    )
+    .unwrap();
+    let first = UnattendedApproval::test_pending(preparation);
+    first.test_answer(true, false);
+    let prepared = first.consume(&pairing, &admission).unwrap().unwrap();
+    let approval =
+        Arc::new(FinalApproval::test_pending_network(prepared, &pairing, &admission).unwrap());
+    approval.test_answer(true);
+    let consent = approval.consume(&pairing, &admission).unwrap().unwrap();
+    let fixed_end = consent.end();
+    let control = consent.control();
+    let durable_dir = store_root();
+    let path = std::path::PathBuf::from(durable_dir.path().to_string_lossy().replace('/', "\\"));
+    let backend =
+        crate::version_history::windows::unattended_store::WindowsUnattendedBackend::create_new(
+            &path,
+        )
+        .unwrap();
+    let host = Arc::new(RemoteHostService::default());
+    let mut pending = PendingStart::new_network(
+        backend,
+        SingleRunSealer,
+        consent,
+        admission,
+        pairing.clone(),
+        &host,
+    )
+    .unwrap();
+    let decode = |s: &str| -> [u8; 32] {
+        (0..32)
+            .map(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16).unwrap())
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap()
+    };
+    let mut relay_scalar = [0; 32];
+    relay_scalar[31] = 1;
+    let opened = Arc::new(std::array::from_fn(|_| {
+        std::sync::atomic::AtomicUsize::new(0)
+    }));
+    let (accepted, ready) = tokio::sync::oneshot::channel();
+    pending.test_anonymous_network(
+        [
+            decode("c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721"),
+            relay_scalar,
+        ],
+        opened.clone(),
+        accepted,
+    );
+    host.unattended
+        .reserve_start(pending, native.clone())
+        .unwrap();
+    let accepted = tokio::time::timeout(Duration::from_secs(8), ready).await;
+    let mut output = None;
+    if matches!(accepted, Ok(Ok(()))) {
+        let marker = durable_dir.path().join("network-change");
+        let marker = marker.to_string_lossy().to_string();
+        let config = serde_json::json!({"case":"short-input","origin":relay.origin,"scope":scope,"hostSpki":host_spki,"expires":expires,"revocationPath":if revoke {Some(&marker)} else {None}}).to_string();
+        let pairing = pairing.clone();
+        output = Some(
+            tokio::task::spawn_blocking(move || {
+                let mut child = std::process::Command::new("node")
+                    .current_dir(
+                        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                            .parent()
+                            .unwrap(),
+                    )
+                    .args([
+                        "--experimental-strip-types",
+                        "remote/ui-terminal/src/browserSnapshotPullRelay.fixture.ts",
+                        &config,
+                    ])
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .spawn()
+                    .unwrap();
+                let end = Instant::now() + Duration::from_secs(15);
+                let mut changed = false;
+                while child.try_wait().unwrap().is_none() {
+                    if revoke
+                        && !changed
+                        && std::path::Path::new(&format!("{marker}.ready")).exists()
+                    {
+                        synthetic_forget(&pairing);
+                        changed = true;
+                        std::fs::write(format!("{marker}.go"), b"continue").unwrap();
+                    }
+                    if Instant::now() >= end {
+                        let _ = child.kill();
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                child.wait_with_output().unwrap()
+            })
+            .await
+            .unwrap(),
+        );
+    }
+    let succeeded = output.as_ref().is_some_and(|o| o.status.success());
+    let input_exact = if succeeded {
+        let remainder: &[u8] = if revoke || expires {
+            b"native"
+        } else {
+            b"ative"
+        };
+        f.service
+            .access(&f.caller, &f.request_run())
+            .unwrap()
+            .write_frame(remainder)
+            .unwrap();
+        report(&f)["input"] == json!([110, 97, 116, 105, 118, 101])
+    } else {
+        false
+    };
+    let started = host.unattended.start_result();
+    let before_app_exit = if expires {
+        let known = tokio::time::timeout(Duration::from_secs(2), host.unattended.wait()).await;
+        let observed = host.unattended.observe();
+        eprintln!("TEST_ONLY_SHORT_EXPIRED_BEFORE_APP known={known:?} observation={observed:?}");
+        matches!(known, Ok(true))
+            && control.closed()
+            && Instant::now() >= fixed_end
+            && observed.watcher_joined
+            && observed.retired
+    } else {
+        true
+    };
+    host.request_exit(53, false);
+    host.start_exit(
+        53,
+        native,
+        Arc::new(crate::remote_client_ipc::RemoteClientService::default()),
+        |_| {},
+    );
+    let known = tokio::time::timeout(Duration::from_secs(10), host.unattended.wait()).await;
+    let joined = tokio::time::timeout(Duration::from_secs(10), host.test_join_exit_worker()).await;
+    let facts = host.test_original_managed_facts(&f.request_run());
+    let relay_closed = relay.close().await;
+    eprintln!("TEST_ONLY_SHORT_NETWORK accepted={accepted:?} started={started:?} known={known:?} joined={joined:?} facts={facts:?} opens={:?}",opened.iter().map(|n|n.load(std::sync::atomic::Ordering::Acquire)).collect::<Vec<_>>());
+    if let Some(output) = &output {
+        eprintln!(
+            "stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    assert!(
+        succeeded
+            && before_app_exit
+            && input_exact
+            && matches!(known, Ok(true))
+            && matches!(joined, Ok(true))
+            && relay_closed
+    );
+    assert!(facts.unwrap().original_resources_retired());
+    drop(approval);
+}
+
+#[test]
+fn UnattendedShortNetwork_LocalConsentCannotStartSocket_002() {
+    use crate::remote_unattended_store::service::pending::PendingStart;
+    use crate::remote_unattended_store::{Backend as _, StoreError};
+    let (f, mut cleanup) = setup();
+    let admission = admit(&f);
+    let pair_dir = store_root();
+    let pairing = Arc::new(synthetic_file_store(pair_dir.path()).unwrap());
+    let (approval, consent) = final_consent(&pairing, &admission);
+    let durable_dir = store_root();
+    let path = std::path::PathBuf::from(durable_dir.path().to_string_lossy().replace('/', "\\"));
+    let backend =
+        crate::version_history::windows::unattended_store::WindowsUnattendedBackend::create_new(
+            &path,
+        )
+        .unwrap();
+    let root = std::path::PathBuf::from(backend.target_label().unwrap());
+    let host = Arc::new(RemoteHostService::default());
+    let result =
+        PendingStart::new_network(backend, SingleRunSealer, consent, admission, pairing, &host);
+    let rejected = matches!(result, Err(StoreError::Unauthorized));
+    drop(result);
+    let empty = host.unattended.start_result().is_none()
+        && !root.join("delegation.dpapi").exists()
+        && std::fs::metadata(root.join("commit.journal"))
+            .unwrap()
+            .len()
+            == 0;
+    drop(host);
+    drop(approval);
+    let retired = cleanup.close();
+    assert!(rejected && empty && retired);
+}
+
+// 原 Host owner 是进程一次性准入；每个网络用例独立进程，不重置安全注册表。
+fn short_network_isolated(case: &str) -> bool {
+    const KEY: &str = "CC_TEST_SHORT_NETWORK_CASE";
+    if std::env::var(KEY).ok().as_deref() == Some(case) {
+        return false;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("worker.log");
+    let log = std::fs::File::create(&path).unwrap();
+    let exact = format!(
+        "{}::{case}",
+        module_path!()
+            .strip_prefix("cc_desk::")
+            .unwrap_or(module_path!())
+    );
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", &exact, "--nocapture", "--test-threads=1"])
+        .env(KEY, case)
+        .stdout(std::process::Stdio::from(log.try_clone().unwrap()))
+        .stderr(std::process::Stdio::from(log))
+        .spawn()
+        .unwrap();
+    let end = Instant::now() + Duration::from_secs(40);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() >= end {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!(
+                "isolated short network timeout: {}",
+                std::fs::read_to_string(&path).unwrap()
+            );
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let evidence = std::fs::read_to_string(&path).unwrap();
+    eprintln!("{evidence}");
+    assert!(status.success() && evidence.contains("1 passed; 0 failed"));
+    true
 }

@@ -19,11 +19,45 @@ pub(crate) struct TestMaterial {
     pub(crate) policy: NativeGrantPolicy,
     pub(crate) accepted: Option<Box<TestAcceptedGate>>,
 }
-pub(crate) struct TestMaterialBuilder(
-    Box<dyn FnOnce(cc_desk_remote_record::grant::SessionScope) -> wire::WireInputs + Send>,
-    Connector,
-    #[cfg(test)] TestHooks,
-);
+pub(crate) struct MaterialSupply {
+    build: Box<dyn FnOnce(cc_desk_remote_record::grant::SessionScope) -> wire::WireInputs + Send>,
+    connector: Connector,
+    end: Option<std::time::Instant>,
+    identity: Option<DelegatedAttemptIdentity>,
+    #[cfg(test)]
+    hooks: TestHooks,
+}
+#[cfg(test)]
+pub(crate) type TestMaterialBuilder = MaterialSupply;
+impl MaterialSupply {
+    pub(crate) fn delegated(
+        start: &DelegatedSocketStart,
+        authority: crate::remote_host_approval::unattended::final_approval::DelegatedSigningAuthorization,
+        signers: crate::native_crypto::host::HostSignerSet,
+    ) -> Result<Self, HostNetworkError> {
+        let identity = start.identity();
+        if !authority.matches_attempt(&identity)
+            || *authority.scope() != start.scope().map_err(|_| HostNetworkError::Authority)?
+        {
+            return Err(HostNetworkError::Authority);
+        }
+        #[cfg(test)]
+        assert!(
+            authority.test_exact_binding(),
+            "actual authorization rejects foreign attempt/cap"
+        );
+        let end = authority.end();
+        let wire = wire::WireInputs::from_delegated(authority, signers)?;
+        Ok(Self {
+            build: Box::new(move |_| wire),
+            connector: Connector::WebPki,
+            end: Some(end),
+            identity: Some(identity),
+            #[cfg(test)]
+            hooks: TestHooks::default(),
+        })
+    }
+}
 #[cfg(test)]
 #[derive(Default)]
 struct TestHooks {
@@ -37,31 +71,41 @@ struct TestHooks {
 }
 #[cfg(test)]
 impl TestMaterialBuilder {
+    pub(crate) fn test_loopback_observed(
+        mut self,
+        accepted: tokio::sync::oneshot::Sender<()>,
+    ) -> Self {
+        self.connector = Connector::PublicLoopbackFixture;
+        let previous = self.build;
+        self.build = Box::new(move |scope| previous(scope).test_outer_observer(accepted));
+        self
+    }
     pub(crate) fn test_activation_hook(
         mut self,
         after: bool,
         hook: impl FnOnce() + Send + 'static,
     ) -> Self {
-        let previous = self.0;
-        self.0 = Box::new(move |scope| previous(scope).test_activation_hook(after, Box::new(hook)));
+        let previous = self.build;
+        self.build =
+            Box::new(move |scope| previous(scope).test_activation_hook(after, Box::new(hook)));
         self
     }
     pub(crate) fn test_live_snapshot_pull(mut self) -> Self {
-        let previous = self.0;
-        self.0 = Box::new(move |scope| previous(scope).test_live_snapshot_pull());
+        let previous = self.build;
+        self.build = Box::new(move |scope| previous(scope).test_live_snapshot_pull());
         self
     }
     pub(crate) fn test_live_keepalive(mut self) -> Self {
-        let previous = self.0;
-        self.0 = Box::new(move |scope| previous(scope).test_live());
+        let previous = self.build;
+        self.build = Box::new(move |scope| previous(scope).test_live());
         self
     }
     pub(crate) fn test_after_keepalive(mut self, hook: impl FnOnce() + Send + 'static) -> Self {
-        self.2.after_keepalive = Some(Box::new(hook));
+        self.hooks.after_keepalive = Some(Box::new(hook));
         self
     }
     pub(crate) fn test_before_go(mut self, hook: impl FnOnce() + Send + 'static) -> Self {
-        self.2.before_go = Some(Box::new(hook));
+        self.hooks.before_go = Some(Box::new(hook));
         self
     }
     pub(crate) fn test_hold_retirement(
@@ -69,21 +113,23 @@ impl TestMaterialBuilder {
         entered: tokio::sync::oneshot::Sender<()>,
         release: tokio::sync::oneshot::Receiver<()>,
     ) -> Self {
-        self.2.before_retirement = Some((entered, release));
+        self.hooks.before_retirement = Some((entered, release));
         self
     }
     pub(crate) fn test_fail_spawn(mut self) -> Self {
-        self.2.fail_material_spawn = true;
+        self.hooks.fail_material_spawn = true;
         self
     }
     pub(crate) fn new(
         build: impl FnOnce(cc_desk_remote_record::grant::SessionScope) -> TestMaterial + Send + 'static,
     ) -> Self {
-        Self(
-            Box::new(move |scope| wire::WireInputs::from_test(build(scope))),
-            Connector::PublicLoopbackFixture,
-            TestHooks::default(),
-        )
+        Self {
+            build: Box::new(move |scope| wire::WireInputs::from_test(build(scope))),
+            connector: Connector::PublicLoopbackFixture,
+            identity: None,
+            end: None,
+            hooks: TestHooks::default(),
+        }
     }
 }
 enum Launch {
@@ -163,10 +209,19 @@ impl SocketCustody {
     pub(crate) fn start(
         self: &Arc<Self>,
         mut start: DelegatedSocketStart,
-        build: TestMaterialBuilder,
+        build: MaterialSupply,
     ) -> Result<(), HostNetworkError> {
+        // 真实材料必须同时具备同attempt的逐record service准入门。
+        if build.identity.is_some() && !start.has_request_gate() {
+            return Err(HostNetworkError::Authority);
+        }
         // 最后 Session 析构会关闭本 custody；必须先持 keepalive，再取得任何锁。
-        if !self.identity.matches(&start.identity()) {
+        if !self.identity.matches(&start.identity())
+            || build
+                .identity
+                .as_ref()
+                .is_some_and(|identity| !identity.matches(&start.identity()))
+        {
             return Err(HostNetworkError::Authority);
         }
         let keepalive = start.keepalive().ok_or(HostNetworkError::Closed)?;
@@ -175,7 +230,7 @@ impl SocketCustody {
         #[cfg(test)]
         let mut build = build;
         #[cfg(test)]
-        if let Some(hook) = build.2.after_keepalive.take() {
+        if let Some(hook) = build.hooks.after_keepalive.take() {
             hook();
         }
         let mut launch = self.launch.lock();
@@ -200,9 +255,12 @@ impl SocketCustody {
         }
         *launch = Launch::Started;
         let scope = start.scope().map_err(|_| HostNetworkError::Authority)?;
-        let connector = build.1;
+        let lifetime_end = build
+            .end
+            .map_or(budget.deadline(), |end| end.min(budget.deadline()));
+        let connector = build.connector;
         #[cfg(test)]
-        let hooks = build.2;
+        let hooks = build.hooks;
         #[cfg(test)]
         if hooks.fail_material_spawn {
             self.material.test_fail_spawn();
@@ -220,7 +278,7 @@ impl SocketCustody {
         let task = tauri::async_runtime::spawn(async move {
             let mut wire = wire::NetworkWire::new();
             let mut transferred = false;
-            let lifetime_end = Instant::from_std(budget.deadline());
+            let lifetime_end = Instant::from_std(lifetime_end);
             let end = (Instant::now() + Duration::from_secs(8)).min(lifetime_end);
             let clock = budget.clock();
             let initially_closed = *stopped.borrow();
@@ -229,7 +287,7 @@ impl SocketCustody {
                 if initially_closed || !start.starting_open() {
                     return Err(HostNetworkError::Closed);
                 }
-                original.material.start(move || (build.0)(scope))?;
+                original.material.start(move || (build.build)(scope))?;
                 let material = loop {
                     if let Some(material) = original.material.take_ready()? {
                         break material;
