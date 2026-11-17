@@ -530,6 +530,11 @@ fn NativePairing_ProductProjectionStrictSelection_020() {
     let projection =
         serde_json::to_value(crate::remote_pairing_product::project(Some(loaded.clone()))).unwrap();
     assert_eq!(projection["state"], "Locked");
+    assert_eq!(projection["devices"][0]["installation"], "pending");
+    assert!(matches!(
+        reopened.select_installed(&loaded.expected, &record().device_id),
+        Err(InstalledCandidateError::Pending)
+    ));
     assert_eq!(projection["devices"].as_array().unwrap().len(), 1);
     for invalid in [
         request.replace("\"revision\":\"1\"", "\"revision\":\"01\""),
@@ -622,6 +627,15 @@ fn NativePairing_OldSchema2BytesRemainUnverified_023() {
     let reopened = reopen_synthetic_file_store(dir.path()).unwrap();
     let loaded = reopened.load().unwrap();
     assert!(loaded.devices[0].enrollment.is_none());
+    assert!(matches!(
+        reopened.select_installed(&loaded.expected, &record.device_id),
+        Err(InstalledCandidateError::Unverified)
+    ));
+    assert_eq!(
+        serde_json::to_value(crate::remote_pairing_product::project(Some(loaded.clone()))).unwrap()
+            ["devices"][0]["installation"],
+        "unverified"
+    );
     assert_eq!(std::fs::read(data_path(dir.path())).unwrap(), bytes);
 }
 #[test]

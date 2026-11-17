@@ -814,3 +814,48 @@ final GREEN runs. The old-bytes fixture's first failure was a protected-file ACL
 rejection, corrected by creating its test file through the original backend,
 not by changing ACL policy. Independent implementation review found and closed
 the final-publication race and required the second publication-fence test.
+
+
+## Production A2: installed-device candidates, not permission
+
+InstalledDeviceCandidate is a private-field, non-Clone/non-Deserialize selection
+produced only while the original PairingStore reads and validates its current
+snapshot under the backend lock. It requires exact ExpectedStore CAS, an Active
+device and Confirmed historical installation evidence. Missing, revoked,
+unverified and pending devices have explicit blocked results. Public records or
+caller-provided hashes cannot construct this candidate.
+
+Revalidation requires the same store instance and current exact CAS, then checks
+the record digest and confirmation revision again. An unrelated write invalidates
+the old candidate too. Dropping that store and reopening the file creates another
+instance that cannot revalidate the old candidate. There is no new independent
+Closed notification/state. Unknown publication poisons that instance and prevents
+candidate revalidation. A successful revalidation is only a fact about that
+locked read, not a promise of continued validity; future consent/publication
+still needs its own exact CAS and final owner/trust checks.
+
+The existing authenticated pairing-list response, TypeScript DTO and Host panel
+now distinguish Unverified, Pending and Confirmed installation history, while
+remaining Locked. Pending means completion has not been confirmed locally, not
+that the phone definitely failed to install. Missing/unknown UI status is rendered
+as unverified. Confirmed is explicitly labelled historical and is not unattended
+authorization. The old manual selected/freeze path is unchanged.
+
+This stage neither loads CNG keys nor constructs NativeConsent, creates a network
+owner, selects a live-run target or restores anything across App restart.
+HostKeyProfileIdentity must not be substituted for a CLI launch-profile identity.
+
+A2 verification: missing installation display first failed all three new component
+cases, and the real Windows store-to-product projection failed Null versus
+pending. Final same-source results are 35 native tests (candidate/enrollment 4,
+pairing 16, startup 14, fresh-run product 1), 40 component tests, full npm typecheck,
+four actual legacy registration scenarios and strict remote-host lib/tests
+Clippy. Logs use the unattended-candidate prefix (native-final,
+NativePairing_-final, NativeRegistrationStart_-final, NativePairingProduct_-final,
+ui-final, typecheck, legacy-final and strict-final). The actual successful
+registration oracle selects and revalidates its Confirmed candidate; the
+post-save native installation-approval No returns Pending/blocked instead.
+Tests also cover stale revision, missing/revoked devices, foreign/reopened store
+instances, Unknown publication, old Unverified bytes and conservative unknown
+UI values. Component tests are not a Windows WebView2 visual/IPC acceptance test,
+and the local legacy fixture is not real-phone or production rendezvous coverage.

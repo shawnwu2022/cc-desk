@@ -9,7 +9,7 @@ vi.mock('@/stores/nativeTabs', async original => ({ ...await original<typeof imp
 vi.mock('@/stores/notifications', () => ({ useNotificationsStore: () => ({ pushToast: state.pushToast }) }))
 vi.mock('@/api/tauri', () => Object.fromEntries(['remoteRegistrationRequest', 'remoteRegistrationCurrent', 'remoteRegistrationCancel', 'remoteHostPairingScope', 'remoteHostConfigure', 'remoteHostCurrent', 'remoteHostRequest', 'remoteHostStart', 'remoteHostCancel', 'remoteHostDiscardCandidate', 'remotePairingList', 'remotePairingSelect', 'remotePairingForget', 'remotePairingForgetCancel'].map(name => [name, vi.fn()])))
 vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({ writeText: vi.fn() }))
-const listing = { state: 'Locked' as const, storeId: 'store1', revision: '3', devices: [{ deviceId: 'device1', browserOrigin: 'https://browser.invalid', relayOrigin: 'wss://relay.invalid', profileId: 'profile1' }] }
+const listing = { state: 'Locked' as const, storeId: 'store1', revision: '3', devices: [{ deviceId: 'device1', browserOrigin: 'https://browser.invalid', relayOrigin: 'wss://relay.invalid', profileId: 'profile1', installation: 'unverified' as const }] }
 const run = { runId: 'run1', generation: 1 }
 const selection = { ...run, candidateJson: JSON.stringify({ storeId: 'store1', revision: '3', deviceId: 'device1' }) }
 beforeEach(() => {
@@ -162,4 +162,32 @@ it('PairingForget_SequenceSurvivesRemountAndOldCancelKeepsOriginalSequence_007',
  await click(newPanel, '取消忘记确认')
  expect(api.remotePairingForgetCancel).toHaveBeenNthCalledWith(2, { ...run, candidateJson: JSON.stringify({ requestId: next.requestId, requestSequence: next.requestSequence }) })
  finishNew({ state: 'Declined' }); await flushPromises(); noAuthority(); newPanel.unmount()
+})
+
+it.each([
+ ['unverified', '安装尚未验证'],
+ ['pending', '安装完成尚未确认'],
+ ['confirmed', '历史安装已确认'],
+] as const)('PairingList_InstallationHistoryNeverAuthorizes_%s', async (installation, label) => {
+ const value = structuredClone(listing)
+ Object.assign(value.devices[0], { installation })
+ vi.mocked(api.remotePairingList).mockResolvedValueOnce(value)
+ const w = await panel()
+ await click(w, '刷新已记住设备')
+ expect(w.get('[aria-label="已记住设备"]').text()).toContain(label)
+ expect(w.get('[aria-label="已记住设备"]').text()).toContain('Locked')
+ noAuthority()
+ expect(api.remotePairingSelect).not.toHaveBeenCalled()
+ w.unmount()
+})
+
+it.each([undefined, 'untrusted'])('PairingList_UnknownInstallationStaysUnverified_%s', async installation => {
+ const value = structuredClone(listing)
+ Reflect.set(value.devices[0], 'installation', installation)
+ vi.mocked(api.remotePairingList).mockResolvedValueOnce(value)
+ const w = await panel()
+ await click(w, '刷新已记住设备')
+ expect(w.get('[aria-label="已记住设备"]').text()).toContain('安装尚未验证')
+ noAuthority()
+ w.unmount()
 })

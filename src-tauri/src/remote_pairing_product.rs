@@ -73,6 +73,7 @@ pub(crate) struct DeviceSummary {
     browser_origin: String,
     relay_origin: String,
     profile_id: String,
+    installation: InstallationState,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -99,8 +100,10 @@ pub(crate) fn project(snapshot: Option<LockedSnapshot>) -> PairingList {
                 if e.state != RecordState::Active {
                     return None;
                 }
+                let installation = e.installation_state();
                 e.record.map(|r| DeviceSummary {
                     device_id: r.device_id,
+                    installation,
                     browser_origin: r.browser.origin,
                     relay_origin: r.route.origin,
                     profile_id: hex(&r.native.profile_id),

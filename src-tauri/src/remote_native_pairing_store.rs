@@ -114,6 +114,48 @@ enum EnrollmentState {
     Pending,
     Confirmed,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum InstallationState {
+    Unverified,
+    Pending,
+    Confirmed,
+}
+impl DeviceEntry {
+    pub(crate) fn installation_state(&self) -> InstallationState {
+        match self.enrollment.as_ref().map(|e| e.state) {
+            None => InstallationState::Unverified,
+            Some(EnrollmentState::Pending) => InstallationState::Pending,
+            Some(EnrollmentState::Confirmed) => InstallationState::Confirmed,
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InstalledCandidateError {
+    Store(StoreError),
+    Missing,
+    Revoked,
+    Unverified,
+    Pending,
+}
+// 仅为历史安装的当前选择；没有到许可、密钥供应器或网络 owner 的转换。
+pub(crate) struct InstalledDeviceCandidate {
+    target: StoreTarget,
+    expected: ExpectedStore,
+    record: PublicDeviceRecord,
+    digest: [u8; 32],
+    confirmed_revision: u64,
+}
+impl InstalledDeviceCandidate {
+    pub(crate) fn record(&self) -> &PublicDeviceRecord {
+        &self.record
+    }
+    pub(crate) fn expected(&self) -> &ExpectedStore {
+        &self.expected
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Document {
@@ -319,6 +361,70 @@ impl<B: Backend, S: Sealer> PairingStore<B, S> {
         }
         Ok(snapshot(doc))
     }
+
+    pub(crate) fn select_installed(
+        &self,
+        expected: &ExpectedStore,
+        device: &str,
+    ) -> std::result::Result<InstalledDeviceCandidate, InstalledCandidateError> {
+        self.with_locked_snapshot(|snapshot| {
+            Ok(self.installed_from_snapshot(snapshot, expected, device))
+        })
+        .map_err(InstalledCandidateError::Store)?
+    }
+    fn installed_from_snapshot(
+        &self,
+        snapshot: LockedSnapshot,
+        expected: &ExpectedStore,
+        device: &str,
+    ) -> std::result::Result<InstalledDeviceCandidate, InstalledCandidateError> {
+        use InstalledCandidateError as Blocked;
+        if snapshot.expected != *expected {
+            return Err(Blocked::Store(StoreError::Conflict));
+        }
+        let entry = snapshot
+            .devices
+            .iter()
+            .find(|e| e.device_id == device)
+            .ok_or(Blocked::Missing)?;
+        if entry.state == RecordState::Revoked {
+            return Err(Blocked::Revoked);
+        }
+        match entry.installation_state() {
+            InstallationState::Unverified => return Err(Blocked::Unverified),
+            InstallationState::Pending => return Err(Blocked::Pending),
+            InstallationState::Confirmed => (),
+        }
+        let record = entry
+            .record
+            .as_ref()
+            .ok_or(Blocked::Store(StoreError::Invalid))?;
+        let proof = entry.enrollment.as_ref().ok_or(Blocked::Unverified)?;
+        Ok(InstalledDeviceCandidate {
+            target: self.target(),
+            expected: snapshot.expected.clone(),
+            record: record.clone(),
+            digest: proof.record_digest,
+            confirmed_revision: proof.revision,
+        })
+    }
+    // 成功只说明本次锁内复核通过；后续批准和提交仍须重新检查并使用精确 CAS。
+    pub(crate) fn revalidate_installed(
+        &self,
+        candidate: &InstalledDeviceCandidate,
+    ) -> std::result::Result<(), InstalledCandidateError> {
+        if !self.target.same_target(&candidate.target) {
+            return Err(InstalledCandidateError::Store(StoreError::Unauthorized));
+        }
+        let current = self.select_installed(&candidate.expected, &candidate.record.device_id)?;
+        if current.digest != candidate.digest
+            || current.confirmed_revision != candidate.confirmed_revision
+        {
+            return Err(InstalledCandidateError::Store(StoreError::Conflict));
+        }
+        Ok(())
+    }
+
     pub(crate) fn confirm_installation(
         &self,
         proof: crate::remote_host_controller::startup::completion::CompletedInstallation<'_>,

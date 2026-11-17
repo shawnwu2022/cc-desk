@@ -592,7 +592,8 @@ export async function remoteHostDiscardCandidate(request: RemoteHostRun & { rece
 }
 
 // 已记住的公开设备不是批准；选择只冻结当前 owned run 的新候选。
-export type RemotePairingDevice = { deviceId: string; browserOrigin: string; relayOrigin: string; profileId: string };
+export type RemotePairingInstallation = 'unverified' | 'pending' | 'confirmed';
+export type RemotePairingDevice = { deviceId: string; browserOrigin: string; relayOrigin: string; profileId: string; installation: RemotePairingInstallation };
 export type RemotePairingList = { state: 'Locked'; storeId: string | null; revision: string | null; devices: RemotePairingDevice[] };
 export type RemotePairingSelection = RemoteHostRun & { candidateJson: string };
 export async function remotePairingList(run: RemoteHostRun): Promise<RemotePairingList> {

@@ -17,7 +17,7 @@ import BrowserPairingCandidateEditor from './BrowserPairingCandidateEditor.vue'
 import { captureNativeAttempt, matchesNativeAttempt, useNativeTabsStore, type NativeAttemptIdentity } from '@/stores/nativeTabs'
 import { remoteHostConfigure, remoteHostCurrent, remoteHostRequest, remoteHostStart, remoteHostCancel, remoteHostDiscardCandidate, remoteHostPairingScope } from '@/api/tauri'
 import { useNotificationsStore } from '@/stores/notifications'
-import { remotePairingList, remotePairingSelect, remotePairingForget, remotePairingForgetCancel, type RemotePairingList, remoteRegistrationRequest, remoteRegistrationCurrent, remoteRegistrationCancel } from '@/api/tauri'
+import { remotePairingList, remotePairingSelect, remotePairingForget, remotePairingForgetCancel, type RemotePairingList, type RemotePairingInstallation, remoteRegistrationRequest, remoteRegistrationCurrent, remoteRegistrationCancel } from '@/api/tauri'
 const notifications = useNotificationsStore()
 function cleanupFailed() { notifications.pushToast({ kind: 'warning', messageKey: 'remoteHostCleanupUnconfirmed' }) }
 const props = defineProps<{ tabId: string }>()
@@ -27,6 +27,7 @@ const state = ref('Locked'), message = ref('')
 const pairingScope = ref('')
 const registrationJson = ref(''), registrationState = ref('Locked')
 const pendingForget = shallowRef<ForgetIdentity | null>(null)
+const installationLabel = (value: RemotePairingInstallation) => value === 'confirmed' ? '历史安装已确认' : value === 'pending' ? '安装完成尚未确认' : '安装尚未验证'
 const remember = ref(false), devices = ref<RemotePairingList | null>(null)
 let registrationRequested = false
 let epoch = 0, captured: NativeAttemptIdentity | null = null
@@ -220,12 +221,12 @@ onUnmounted(invalidate)
       <BrowserPairingCandidateEditor :scope-json="pairingScope" :disabled="busy" />
       <section class="remembered-devices" aria-label="已记住设备">
         <strong>本机记住的公开设备</strong>
-        <p>只保存公开配对材料。列表始终 Locked；用于当前会话不恢复旧授权，仍须独立批准。不会自动打开密钥、启动或重连。</p>
+        <p>只保存公开配对材料。安装状态仅为历史记录，不代表无人值守授权。列表始终 Locked；用于当前会话不恢复旧授权，仍须独立批准。不会自动打开密钥、启动或重连。</p>
         <AppButton :disabled="busy" @click="readDevices">刷新已记住设备</AppButton>
         <p v-if="devices && !devices.devices.length">没有已记住的设备。</p>
         <ul v-if="devices?.devices.length">
           <li v-for="device in devices.devices" :key="device.deviceId">
-            <output>{{ device.browserOrigin }} · Locked</output>
+            <output>{{ device.browserOrigin }} · {{ installationLabel(device.installation) }} · Locked</output>
             <output>Relay: {{ device.relayOrigin }}</output>
             <output>Profile: {{ device.profileId }} · Device: {{ device.deviceId }}</output>
             <div class="remote-host-actions">

@@ -67,6 +67,24 @@ fn NativeEnrollment_ExactTargetDigestAndCas_001() {
         )
         .unwrap();
     assert_eq!(confirmed.expected.revision, 2);
+    let candidate = store
+        .select_installed(&confirmed.expected, &record().device_id)
+        .unwrap();
+    store.revalidate_installed(&candidate).unwrap();
+    assert_eq!(candidate.record(), &record());
+    assert_eq!(candidate.expected(), &confirmed.expected);
+    assert!(matches!(
+        other.revalidate_installed(&candidate),
+        Err(
+            crate::remote_native_pairing_store::InstalledCandidateError::Store(
+                StoreError::Unauthorized
+            )
+        )
+    ));
+    assert!(matches!(
+        store.select_installed(&confirmed.expected, &uuid::Uuid::new_v4().to_string()),
+        Err(crate::remote_native_pairing_store::InstalledCandidateError::Missing)
+    ));
     assert_eq!(
         serde_json::to_value(&confirmed.devices[0]).unwrap()["enrollment"]["state"],
         "confirmed"
@@ -97,9 +115,29 @@ fn NativeEnrollment_ExactTargetDigestAndCas_001() {
         2
     );
     assert_eq!(next.expected.revision, 3);
+    assert!(matches!(
+        store.revalidate_installed(&candidate),
+        Err(
+            crate::remote_native_pairing_store::InstalledCandidateError::Store(
+                StoreError::Conflict
+            )
+        )
+    ));
     drop(store);
     let store = reopen_synthetic_file_store(dir.path()).unwrap();
     assert_eq!(store.load().unwrap(), next);
+    assert!(matches!(
+        store.revalidate_installed(&candidate),
+        Err(
+            crate::remote_native_pairing_store::InstalledCandidateError::Store(
+                StoreError::Unauthorized
+            )
+        )
+    ));
+    let current = store
+        .select_installed(&next.expected, &record().device_id)
+        .unwrap();
+    store.revalidate_installed(&current).unwrap();
 
     let m = Mutation::Remember {
         expected: saved.expected,
@@ -121,6 +159,18 @@ fn NativeEnrollment_ExactTargetDigestAndCas_001() {
         .find(|e| e.device_id == record().device_id)
         .unwrap();
     assert_eq!(tombstone.state, RecordState::Revoked);
+    assert!(matches!(
+        store.revalidate_installed(&current),
+        Err(
+            crate::remote_native_pairing_store::InstalledCandidateError::Store(
+                StoreError::Conflict
+            )
+        )
+    ));
+    assert!(matches!(
+        store.select_installed(&revoked.expected, &record().device_id),
+        Err(crate::remote_native_pairing_store::InstalledCandidateError::Revoked)
+    ));
     assert!(serde_json::to_value(tombstone)
         .unwrap()
         .get("enrollment")
@@ -206,4 +256,51 @@ fn NativeEnrollment_CancelAndPublicationFailureStayLocked_003() {
         serde_json::to_value(&loaded.devices[0]).unwrap()["enrollment"]["state"],
         "confirmed"
     );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn NativeEnrollment_CandidateRejectsUncertainInstance_004() {
+    use crate::remote_native_pairing_store::InstalledCandidateError as Blocked;
+    let dir = root();
+    let store = synthetic_file_store(dir.path()).unwrap();
+    let (mutation, saved) = initial(&store);
+    let check = || Ok(());
+    let confirmed = store
+        .confirm_installation(
+            pending(&store, &mutation, &saved)
+                .complete(DeliveryComplete(()), &check)
+                .unwrap(),
+        )
+        .unwrap();
+    let candidate = store
+        .select_installed(&confirmed.expected, &record().device_id)
+        .unwrap();
+    store.revalidate_installed(&candidate).unwrap();
+    crate::remote_native_pairing_store::tests::fail_after_publish(&store);
+    assert_eq!(
+        store.apply(
+            Mutation::Forget {
+                expected: confirmed.expected,
+                device_id: record().device_id,
+            },
+            &mut Allow
+        ),
+        Err(StoreError::Unknown)
+    );
+    assert!(matches!(
+        store.revalidate_installed(&candidate),
+        Err(Blocked::Store(StoreError::Poisoned))
+    ));
+    drop(store);
+    let reopened = reopen_synthetic_file_store(dir.path()).unwrap();
+    let state = reopened.load().unwrap();
+    assert!(matches!(
+        reopened.revalidate_installed(&candidate),
+        Err(Blocked::Store(StoreError::Unauthorized))
+    ));
+    assert!(matches!(
+        reopened.select_installed(&state.expected, &record().device_id),
+        Err(Blocked::Revoked)
+    ));
 }

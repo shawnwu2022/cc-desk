@@ -294,6 +294,29 @@ async fn NativeRegistration_StartOracle_904() {
             );
             assert_eq!(enrollment["enrollment"]["revision"], expected_revision);
             assert_eq!(loaded.expected.revision, expected_revision);
+            let projected =
+                serde_json::to_value(crate::remote_pairing_product::project(Some(loaded.clone())))
+                    .unwrap();
+            assert_eq!(
+                projected["devices"][0]["installation"],
+                if installed { "confirmed" } else { "pending" }
+            );
+            let selected = stored.select_installed(&loaded.expected, &loaded.devices[0].device_id);
+            if installed {
+                let candidate = selected.unwrap();
+                assert_eq!(candidate.expected(), &loaded.expected);
+                assert_eq!(
+                    candidate.record(),
+                    loaded.devices[0].record.as_ref().unwrap()
+                );
+                stored.revalidate_installed(&candidate).unwrap();
+            } else {
+                assert!(matches!(
+                    selected,
+                    Err(crate::remote_native_pairing_store::InstalledCandidateError::Pending)
+                ));
+            }
+
             assert_eq!(
                 loaded.devices[0].state,
                 crate::remote_native_pairing_store::RecordState::Active
