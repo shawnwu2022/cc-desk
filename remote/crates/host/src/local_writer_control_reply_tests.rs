@@ -1006,3 +1006,72 @@ async fn snapshot_pull_next_preserves_original_host_deadline() {
     assert!(c.wait_closed_checked().await.is_ok());
     assert!(h.wait_closed_checked().await.is_ok());
 }
+
+#[tokio::test]
+async fn snapshot_pull_production_maximum_grid_budget() {
+    let (c, h, _gate, _cancel) =
+        support::native_pull_channels(Arc::new(AtomicU64::new(1000))).await;
+    let mut owner =
+        WriterHostOwner::from_registry(&OwnerRegistry::default(), support::host(), 11).unwrap();
+    owner.principal = Some([4; 32]);
+    let target = Target {
+        host: support::host(),
+        session: [2; 16],
+        run: support::scope().run,
+        generation: 3,
+        incarnation: 11,
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let started = owner
+        .start_authorized(
+            Journal::open(&dir.path().join("pull.sqlite")).unwrap(),
+            std::io::sink(),
+            SessionStart {
+                target,
+                device: support::device(),
+                writer_epoch: 9,
+                key: DigestKey::from_backend_bytes([0x5a; 32]),
+                rows: 100,
+                columns: 240,
+            },
+            h.authority(),
+            [8; 16],
+            4,
+        )
+        .unwrap();
+    let mut conn = Connection::new(&started.peer, h.authority(), 4).unwrap();
+    let server = async {
+        let request = h
+            .receive(&support::scope(), 4, Duration::from_secs(1))
+            .await
+            .unwrap();
+        conn.dispatch_wire(&request, &h, Duration::from_secs(1))
+            .await
+    };
+    let (result, sent) = tokio::join!(c.snapshot_pull(1, Duration::from_secs(1)), server);
+    sent.unwrap();
+    let batch = result.unwrap();
+    assert!(batch.parts.len() > 1);
+    let raw_bytes = batch.parts.iter().map(Vec::len).sum::<usize>();
+    assert!(raw_bytes <= 4 * 1024 * 1024);
+    println!(
+        "maximum grid raw bytes={raw_bytes}, parts={}",
+        batch.parts.len()
+    );
+    let mut cells = 0;
+    for raw in &batch.parts {
+        let projection_wire::Content::SnapshotPart(p) =
+            projection_wire::decode(raw, 1).unwrap().content
+        else {
+            panic!()
+        };
+        assert_eq!(usize::from(p.start), cells);
+        cells += p.cells.len();
+    }
+    assert_eq!(cells, 24000);
+    assert_eq!(conn.last, 1);
+    assert_eq!(owner.budget.test_used(), 0);
+    assert!(c.retire().await.is_ok());
+    h.close().await;
+    assert!(h.wait_closed_checked().await.is_ok());
+}

@@ -519,3 +519,6 @@ async fn production_snapshot_pull_two_batches_on_negotiated_original_channel() {
     host.close().await;
     assert!(host.wait_closed_checked().await.is_ok());
 }
+
+#[path = "snapshot_pull_budget_tests.rs"]
+mod snapshot_pull_budget_tests;

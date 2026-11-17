@@ -346,4 +346,45 @@ COW 后能力隔离、同 channel 身份保留已有动态测试。新增一份�
 host-final,client-final,authority-final,strict-final}.log 与
 snapshot-pull-host-{deadline-mutation,restored-final}.log。早先 bind_tests 过滤器
 选中 0 项不计作回归；最终 bind::tests 实际执行 22 项。
-近 4MiB 的双端累计边界尚待专门实测，不以 encoder 的单独累计失败测试代替。
+此阶段近 4MiB 的双端累计边界尚待专门实测，后续 P2d 已部分补验 Client 精确边界；仍不以 encoder 的单独累计失败测试代替真实 Host 边界。
+## P2d：累计边界与分层内存账（仍非 Browser 准入）
+
+真实 NativeClient + 原认证/Installed channel 下，故障注入对端发送 129 个合法
+SnapshotPart，各 part 保持正确 stamp/state/offset，仅补合法 JSON 空白使累计精确
+达到 4MiB 或 4MiB+1，且各 part <=32597。前者保存的原 part 总和恰为 4MiB，
+即使 Batch 明文 payload 总量（raw + 129×57，不含 Data/TLS/WS）超过 4MiB 仍成功；后者返回 Bounds、关闭原 authority，双方
+checked close。对端不是生产 Host encoder。错误把 57 字节头计入累计的有效变异
+使成功边界报 Bounds（exit101），随后原源码还原，Client 全库 25/25。
+
+原生产 Host dispatcher + NativeClient 的最大合法空白网格 100×240 实测：
+188 批、原 part 共 2,013,411 字节、24000 cells 完整，frame credit 回到 0。
+Host pull 回归 6/6，Host/Client strict Clippy 通过。该 fixture 一次本机约 0.75 秒
+不是稳定性能门禁，更不保证公网 1 秒。首次误用 120×200 的准备失败保留；
+RGB 扩大内容尝试被原 canonical 门禁拒绝 Unsupported，未放宽且未计作 pull
+失败/通过。不能声称该合法 Host fixture 自然触达 4MiB；Host encoder 独立累计
+耗尽测试与 Client 精确边界各自限定证据范围。
+
+内存账按所有者分开，以下是逻辑长度/数量界，未完成进程 allocation 峰值证明：
+- Client 留存 raw part 总和 <=4MiB。每批 1..128 cells、state <=100×240，且原
+  pending 强制 start 连续/同 state，所以 parts.len <=24000。Vec<Vec<u8>> 自身
+  capacity、每个 allocation 的容量/对齐/allocator 元数据不能略去；不将 length
+  当 capacity，更不将 raw4MiB 当全部内存。
+- 当前解析一批至多128 cells（bounded visitor 对额外第129项先解析再拒绝），
+  加独立 stamp/state 字符串及 clone。输入先受 MAX_PART 限制，但 JSON decode
+  的临时容量与拒绝前字符串分配仍须计量。Client 保留当前 record 同时复制原 part，
+  非末批在发 Next 前 drop parsed part 和真实 record；末批随 future 返回释放。
+- 原 security read credits 共4份，覆盖 Reading/pending/Inbox/调用者持有的
+  DataRecord，而非各层各4份。原 Data payload 分配 <=32768；剥离114字节前缀
+  用 copy_within+truncate，不缩 capacity，故不能按当前 payload.len 少算此容量。
+  发送侧4份 credits 下的请求 body、当前 Writing 编码副本另计，不能合并成接收预算。
+- Host 同一 view/guard，encoder 每轮最多128原固定结构cells的候选序列化，成功
+  原 part <=32597，包装 Batch <=32654；当前转换会短暂同时持原 part、解析结构、
+  Batch，候选失败的临时序列化不能按最终payload limit声称同峰值。
+- 当前本地锁定 rustls 0.23.46 源码默认 received_plaintext limit16KiB、sendable_tls
+  limit64KiB；这些是库队列阈值，不是整个 TLS 分配上界。record处理、deframer、
+  handshake临时、容量保留及tokio/websocket/socket缓冲仍需独立合算。
+- Browser/WASM/JS 复制、worker消息、WebSocket碎片/4-frame队列尚未接入此协议；
+  未证明端到端 wire/驻留内存上界，原突发失败与61秒组合验收仍未闭合。
+
+证据：snapshot-pull-budget-{exact-second,header-mutation,client-final,host-final,
+strict}.log、snapshot-pull-host-max-grid-measured.log；失败准备日志单独保留。
