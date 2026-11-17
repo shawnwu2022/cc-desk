@@ -85,6 +85,22 @@ async fn managed_channels_mode(
     GrantGate,
     CancelHandle,
 ) {
+    let (c, h) = tokio::io::duplex(65536);
+    managed_channels_io(now, role, lease, pull, c, h).await
+}
+async fn managed_channels_io(
+    now: Arc<AtomicU64>,
+    role: DataRole,
+    lease: bool,
+    pull: bool,
+    c: tokio::io::DuplexStream,
+    h: tokio::io::DuplexStream,
+) -> (
+    ManagedChannel<tokio::io::DuplexStream>,
+    ManagedChannel<tokio::io::DuplexStream>,
+    GrantGate,
+    CancelHandle,
+) {
     let local = |client| {
         let (k, p) = identities::identity(client, false);
         LocalIdentity::new(
@@ -101,7 +117,6 @@ async fn managed_channels_mode(
             P256Spki::new(&p).unwrap(),
         )
     };
-    let (c, h) = tokio::io::duplex(65536);
     let (cancel, token) = cancellation();
     let (c, h) = tokio::join!(
         connect(
@@ -522,3 +537,6 @@ async fn production_snapshot_pull_two_batches_on_negotiated_original_channel() {
 
 #[path = "snapshot_pull_budget_tests.rs"]
 mod snapshot_pull_budget_tests;
+
+#[path = "snapshot_pull_wire_tests.rs"]
+mod snapshot_pull_wire_tests;

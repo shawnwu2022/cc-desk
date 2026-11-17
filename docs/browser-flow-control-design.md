@@ -410,3 +410,29 @@ Transport 生命周期回归与严格局部 TypeScript 检查另有日志。
 时刻当作已证固定峰值。尚不据此启用 Browser pull。后续必须实测每批 Data plaintext
 32768+inner header8 的 TLS ciphertext/记录开销、post-handshake与前批残余、跨
 MessagePort/WASM的副本及固定1秒预算，仍可能因bytecap/RTT正确fail-closed。
+## P2f：真实 TLS 最大 Batch 计量（非全配置上界）
+
+透明测试 proxy 位于原 TLS 下方，每方向固定16KiB临时数组，连接两对各64KiB
+DuplexStream；不解密、不存历史ciphertext，仅累计bytes/records/read次数。
+原P1/grant/Installed后，生产NativeClient消费认证测试对端通过原Data owner发送的
+两个最大合法Batch（raw part合法空白填至32597，Batch32654）。这不是Host encoder
+输出测试。计量位于proxy读取处、write_all之前，不是Client内存释放计数。
+
+当前rustls0.23.46 fixture cipher/config、无额外周期控制/主动key-update插入时，
+短读上限16384和257两种均得每批32842 ciphertext bytes、3条TLS records：
+32768 Data payload + 8 inner header + 3×22。容量按bytes计，不以碎片/记录数代替。
+握手/grant窗口2776或2777字节、Installed窗口375字节另计。第一批窗口结束于
+真实Next，第二批结束于NativeClient返回，证明本fixture对应批已认证消费，
+不证明未来没有延迟post-handshake或自动控制残余。
+
+双方checked close和proxy正常join通过。审查发现原timeout拥有JoinHandle会在超时
+detach：先以已启动任务Drop标记做有效RED，现timeout借用&mut handle，超时abort后
+await再报失败；意外panic/取消由Proxy Drop请求abort，但不宣称该Drop同步完成join。
+两个forward是同一个proxy任务中的try_join futures，不另spawn；其中出错会丢弃另一
+forward。此为测试proxy清理，不冒充生产retirement证明。Client全库27/27、strict
+Clippy通过。证据snapshot-pull-real-wire-{first,client-final,strict}.log及
+snapshot-pull-proxy-retirement-{red,green,strict}.log。
+
+32842只是此固定测试条件，不是任意TLS配置上界。任意post-handshake、旧数据/自动
+控制残余、WebSocket内部事件队列、MessagePort/WASM复制及固定1秒公网RTT仍需门禁。
+无真实凭据、云服操作或生产Browser默认入口变更。
