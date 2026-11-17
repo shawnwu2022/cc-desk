@@ -59,3 +59,28 @@ test('RemoteTrialIdentity_ChildGitCannotSelectForeignRepository_010',t=>{
  assert.equal(Object.keys(child).some(key=>key.toUpperCase().startsWith('GIT_')),false);
  assert.equal(env.GIT_DIR,path.join(foreign.root,'.git'));assert.equal(env.GITHUB_SHA,'spoof');
 });
+
+const generatedPaths=['src-tauri/Cargo.toml','src-tauri/gen/schemas/desktop-schema.json','src-tauri/gen/schemas/windows-schema.json'];
+function generatedFixture(t){
+ const f=fixture(t);f.git('config','core.autocrlf','true');
+ for(const file of generatedPaths){fs.mkdirSync(path.dirname(path.join(f.root,file)),{recursive:true});fs.writeFileSync(path.join(f.root,file),'value = 1\n');}
+ f.git('add','.');f.git('-c','core.hooksPath=/dev/null','commit','-m','generated fixture');return f;
+}
+test('RemoteTrialIdentity_ThreeGeneratedEolEquivalent_011',t=>{
+ const {root}=generatedFixture(t),identity=captureIdentity(root);
+ for(const file of generatedPaths)fs.writeFileSync(path.join(root,file),'value = 1\r\n');
+ verifyIdentity(identity);
+ for(const file of generatedPaths)fs.writeFileSync(path.join(root,file),'value = 1\n');
+ verifyIdentity(identity);
+});
+test('RemoteTrialIdentity_GeneratedContentNeverIgnored_012',t=>{
+ for(const value of ['value = 2\n','value  = 1\n','{"changed":true}\n','value = 1\r']){
+  for(const file of generatedPaths){const {root}=generatedFixture(t);fs.writeFileSync(path.join(root,file),value);assert.throws(()=>captureIdentity(root));}
+ }
+});
+test('RemoteTrialIdentity_OtherSourceEolChangesTail_013',t=>{
+ const {root}=generatedFixture(t),identity=captureIdentity(root);fs.writeFileSync(path.join(root,'source.txt'),'original\r\n');assert.throws(()=>verifyIdentity(identity),/changed/);
+});
+test('RemoteTrialIdentity_StagedChangeRejected_014',t=>{
+ const {root,git}=fixture(t);fs.writeFileSync(path.join(root,'source.txt'),'staged');git('add','source.txt');assert.throws(()=>captureIdentity(root),/clean/);
+});

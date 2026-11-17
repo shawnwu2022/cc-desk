@@ -66,3 +66,9 @@ npm run build:win:remote-trial -- --debug --no-bundle
 身份门首 RED 为缺少 dirty 检查的新增快照实现：tracked/untracked 两项 Missing expected exception（非原产品完整构建反例）；保留 .audit/remote-trial-identity-red.log。最终 fixture 与原策略回归见 .audit/remote-trial-identity-final.log；真实 clean 产物验收待本修复审查提交后执行，不沿用之前手工设置 SHA 的结果。
 
 子构建环境同时剔除所有 GIT_*，避免 Vite 自行 git rev-parse 时被 GIT_DIR/GIT_WORK_TREE/GIT_CONFIG_* 指向另一仓库；父进程环境不变。两个实际临时仓库的反例见 .audit/remote-trial-identity-git-env-red.log，修后同源码 10 项身份门 + 8 项原策略见 .audit/remote-trial-identity-final2.log。
+
+### Tauri 已知重写路径的换行边界
+
+真实 clean 构建首次在尾核失败（.audit/remote-trial-clean-head-build.log）：Tauri 将 Cargo.toml、gen/schemas/desktop-schema.json、gen/schemas/windows-schema.json 写成 LF；文件与 HEAD blob 字节相等，但原 porcelain/stat 报 M。保留该失败，不自动 restore 后当作成功。
+
+身份门现以禁止 external diff/textconv 的 HEAD diff、独立 staged diff 和未忽略 untracked 检查判断 clean。仅 src-tauri 下上述三个精确路径允许 CRLF→LF 归一；归一后的实际字节必须完全等于 HEAD blob，库存使用这些字节。其他文件仍记录原始字节，任何构建期间 EOL 改变也拒绝。没有 JSON/Cargo 解析宽容、忽略空白或全仓换行设置。对应隔离测试覆盖三个路径的 EOL、内容/空白/值变化、其他源码 EOL 及 staged 变动；日志 .audit/remote-trial-identity-eol-final.log。实际 clean 构建仍待本修订审查提交后验证。
