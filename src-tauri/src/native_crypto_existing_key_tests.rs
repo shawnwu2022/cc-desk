@@ -40,6 +40,7 @@ struct Api {
     name: String,
     free_fail: usize,
     free_panic: bool,
+    verified_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     provider_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     open_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     free_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
@@ -55,6 +56,7 @@ impl Api {
             name: "TEST_ONLY_EXISTING".into(),
             free_fail: 0,
             free_panic: false,
+            verified_hook: Mutex::new(None),
             provider_hook: Mutex::new(None),
             open_hook: Mutex::new(None),
             free_hook: Mutex::new(None),
@@ -74,6 +76,12 @@ fn public() -> [u8; 91] {
     [SPKI_HEAD, &p[1..]].concat().try_into().unwrap()
 }
 impl MockKeyApi for Api {
+    fn after_verified(&self) {
+        let hook = self.verified_hook.lock().take();
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
     fn provider(&self, name: windows_core::PCWSTR, flags: u32) -> Result<usize, CryptoError> {
         assert_eq!(
             unsafe { name.to_string().unwrap() },
@@ -709,3 +717,6 @@ fn HostOpen_DeadlineDuringProviderCallRetainsPartial_011() {
     verify_free(&api, &["free_provider"]);
     drop(signal);
 }
+
+#[path = "native_crypto_host_ready_tests.rs"]
+mod ready;

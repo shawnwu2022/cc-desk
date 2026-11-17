@@ -78,6 +78,8 @@ struct Active {
     waker: Option<Waker>,
 }
 struct Control {
+    #[cfg(feature = "remote-host")]
+    host_opened: Option<Instant>,
     closing: bool,
     next: u64,
     active: Option<Active>,
@@ -388,7 +390,64 @@ impl Drop for KeyRequestHandle {
     }
 }
 #[cfg_attr(not(test), allow(dead_code))]
+#[cfg(feature = "remote-host")]
+pub(super) struct HostOpenedKey {
+    shared: std::sync::Weak<Shared>,
+    cap: Instant,
+}
+#[cfg(feature = "remote-host")]
+impl HostOpenedKey {
+    pub(super) fn check(
+        &self,
+        handle: &KeyRequestHandle,
+        purpose: SigningPurpose,
+        spki: &[u8],
+        token: &Arc<NativeRevocation>,
+        cap: Instant,
+    ) -> Result<(), SignFailure> {
+        if !std::sync::Weak::ptr_eq(&self.shared, &Arc::downgrade(&handle.shared)) {
+            return Err(SignFailure::Closed);
+        }
+        let shared = self.shared.upgrade().ok_or(SignFailure::Closed)?;
+        let control = shared.control.lock();
+        if shared.purpose != purpose
+            || shared.spki != spki
+            || self.cap != cap
+            || control.host_opened != Some(self.cap)
+            || control.closing
+            || control.unknown
+            || control.key_freed
+            || shared
+                .revocation
+                .as_ref()
+                .is_none_or(|original| !Arc::ptr_eq(original, token))
+            || token.is_revoked()
+            || Instant::now() >= cap
+        {
+            return Err(SignFailure::Closed);
+        }
+        Ok(())
+    }
+}
+#[cfg_attr(not(test), allow(dead_code))]
 impl KeyRequestHandle {
+    #[cfg(feature = "remote-host")]
+    pub(super) fn host_opened(&self) -> Result<Option<HostOpenedKey>, SignFailure> {
+        let control = self.shared.control.lock();
+        if control.closing || control.unknown || control.key_freed || self.shared.is_revoked() {
+            return Err(SignFailure::Closed);
+        }
+        let Some(cap) = control.host_opened else {
+            return Ok(None);
+        };
+        if Instant::now() >= cap {
+            return Err(SignFailure::Closed);
+        }
+        Ok(Some(HostOpenedKey {
+            shared: Arc::downgrade(&self.shared),
+            cap,
+        }))
+    }
     pub(crate) fn binding(&self) -> (SigningPurpose, &[u8]) {
         (self.shared.purpose, &self.shared.spki)
     }
@@ -942,6 +1001,8 @@ impl KeyCustodian {
             purpose,
             spki: spki.clone(),
             control: Mutex::new(Control {
+                #[cfg(feature = "remote-host")]
+                host_opened: None,
                 closing: false,
                 next: 1,
                 active: None,
@@ -1139,13 +1200,18 @@ fn run_host_key(
     };
     #[cfg(test)]
     let mut fixture = false;
+    let mut existing_verified = false;
     let opened = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if token.is_revoked() || Instant::now() >= cap {
             return Err(CryptoError::Closed);
         }
         let original = opener.lock().take().ok_or(CryptoError::Closed)?;
         match original {
-            super::host::Opener::Existing(loader) => loader.fill(&mut key, token, cap),
+            super::host::Opener::Existing(loader) => {
+                let result = loader.fill(&mut key, token, cap);
+                existing_verified = result.is_ok();
+                result
+            }
             #[cfg(test)]
             super::host::Opener::Fixture(factory) => {
                 fixture = true;
@@ -1168,6 +1234,13 @@ fn run_host_key(
     }
     #[cfg(test)]
     let after_free = hooks.after_free.take();
+    // 只有原 Existing loader 完成公开属性/SPKI 校验才可发布；测试裸 factory 不发行事实。
+    if existing_verified && matches!(&opened, Ok(Ok(()))) {
+        let mut control = shared.control.lock();
+        if !control.closing && !control.unknown && !token.is_revoked() && Instant::now() < cap {
+            control.host_opened = Some(cap);
+        }
+    }
     if matches!(&opened, Ok(Ok(()))) {
         normal = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             run_requests(&mut key, shared, receive, purpose, spki, hooks);

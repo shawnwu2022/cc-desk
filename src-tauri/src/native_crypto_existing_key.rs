@@ -115,6 +115,11 @@ impl ExistingKeyLoader {
         if spki_from_blob(&public)? != self.spki {
             return Err(CryptoError::Key);
         }
+        // TEST_ONLY：真实最后校验与 worker 就绪发布之间的可控屏障。
+        #[cfg(test)]
+        if let Some(api) = &self.api {
+            api.after_verified();
+        }
         Ok(())
     }
     fn provider(&self) -> Result<NCRYPT_PROV_HANDLE, CryptoError> {
@@ -211,6 +216,7 @@ fn checkpoint(
 /// 没有默认方法；每种 fake handle 操作都必须显式拦截。
 #[cfg(test)]
 pub(crate) trait MockKeyApi: Send + Sync {
+    fn after_verified(&self);
     fn provider(&self, name: windows_core::PCWSTR, flags: u32) -> Result<usize, CryptoError>;
     fn open(
         &self,

@@ -6,11 +6,14 @@
 use super::{owner::*, SigningPurpose};
 #[cfg(test)]
 use super::{CryptoError, NativeOwnedSoftwareKey};
+#[path = "native_crypto_host_ready.rs"]
+mod ready;
 #[path = "native_crypto_host_stages.rs"]
 mod stages;
 use cc_desk_remote_record::appbind::CanonicalOrigin;
 use cc_desk_remote_transport::wss::RelayAdmissionIdentity;
 use parking_lot::{Condvar, Mutex};
+pub(crate) use ready::HostKeysReady;
 pub(crate) use stages::HostSigningStages;
 use std::{
     collections::VecDeque,
@@ -122,6 +125,7 @@ impl Drop for LastDrop {
     }
 }
 struct CoreState {
+    ready_issued: bool,
     slots: [Option<Box<Slot>>; 2],
     facts: [Option<KeyObservation>; 2],
     notices: VecDeque<KeyShutdownNotice>,
@@ -288,6 +292,7 @@ impl HostKeyCustody {
         Self {
             core: Arc::new(HostKeyCore {
                 state: Mutex::new(CoreState {
+                    ready_issued: false,
                     slots: Default::default(),
                     facts: [None; 2],
                     notices: VecDeque::new(),

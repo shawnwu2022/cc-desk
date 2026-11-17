@@ -1019,3 +1019,58 @@ Evidence logs are unattended-capacity-red, unattended-capacity-final,
 unattended-capacity-UnattendedStore_-regression,
 unattended-capacity-UnattendedCustody_-regression and
 unattended-capacity-strict-final. The independent review found no stage blocker.
+
+## A6a: original Host key-worker readiness (0.28 development)
+
+HostKeyPublisher already releases each original KeyStart after storing its slot
+and JoinHandle. The worker immediately runs ExistingKeyLoader; Dormant refers to
+the signing stage, not lazy opening at first signature. This phase preserves
+that prepare/signing/retirement behavior.
+
+Only a successful original ExistingKeyLoader fill, including purpose, public
+SPKI and native properties, can publish a private opened fact. Publication checks
+the original control state, revocation token and fixed cap again after fill.
+Failure, panic and the test-only Fixture factory do not publish that fact.
+HostKeyCustody offers a nonwaiting take_ready observation: both original slots
+must be ready before one non-Clone aggregate receipt is issued. No observer task,
+extra signing request, timeout-as-retirement or network activation is introduced.
+
+The receipt keeps weak original core/worker brands, matches each purpose/SPKI,
+the exact cancellation token and cap, and checks the complete original frozen
+Host profile binding on use. It does not export key bytes or a lifetime-extending
+witness. Check/consume revalidate current original worker state; cancellation,
+expiry and retirement invalidate the receipt. This is a current observation, not
+a guarantee of future system key registration, paired-device trust, WebAuthn
+installation, CLI target permission or any grant. HostKeysReady cannot enable
+network access or restore unattended authorization.
+
+The effective behavior RED is unattended-key-ready-behavior-red2: both isolated
+original loaders completed and were safely retired, but the live observation
+could not obtain a receipt before publication was implemented. Earlier compile
+and canonical-origin fixture failures are retained separately and are not RED
+evidence for this behavior. Seven new tests cover live one-time issuance,
+first-key ready with the second blocked or rejected by the actual loader,
+post-validation cancellation/expiry, foreign custody/profile/purpose binding,
+receipt invalidation after retirement, actual loader purpose rejection and
+successful Fixture exclusion. They use fully intercepted MockKeyApi or empty
+handle slots, never real user keys.
+
+The restored 0.28 work remains on its independent branch; no A6a changes were
+included in 0.27. Existing public-vector CNG regressions, when run, import only
+repository-published fixed test parts into unnamed, nonpersistent slots and use
+the original retirement path. Those tests do not validate a user's CNG key,
+phone, production permission, UI or long-term owner. The production service
+combining consent, durable custody/store and exact-run capture remains a
+separate reviewed step; default authorization stays off.
+A6a final same-source verification passes 48 distinct tests: new HostReady 7,
+original HostOpen 11, HostKeys 15, HostStages 12 and CngOwner 3. The initial
+17-test restored run overlaps the final inventory (10 original HostOpen plus
+the same 7 new tests), so it is not added again. Strict remote-host lib/tests
+Clippy passes (58.75 seconds). Logs are unattended-key-ready-final,
+unattended-key-ready-regression, unattended-key-ready-hostopen-final,
+unattended-key-ready-HostKeys_-regression,
+unattended-key-ready-HostStages_-regression,
+unattended-key-ready-CngOwner_-regression and unattended-key-ready-strict.
+This is targeted coverage, not the complete crypto or Rust suite. Project
+lessons L02/L04/L06 were read from 9add5e02 without merging that documentation
+branch, preserving ownership, same-source and historical-fact distinctions.
