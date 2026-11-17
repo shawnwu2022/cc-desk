@@ -4,6 +4,26 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
+## [0.27.0]
+
+Added
+
+- Choose Stable, Test or Preview updates, with bounded cancellation, candidate validation, release history, manual recovery guidance and local redacted diagnostics. Stable remains the default; changing channels does not silently downgrade.
+- Archive eligible Windows Codex conversations through the official metadata API and permanently delete eligible archived roots individually or in batches.
+
+Improved
+
+- Reduce repeated history scans and list sorting, return verified archive feedback sooner, and keep healthy Claude conversations visible when an unrelated transcript is damaged.
+- Handle verified Windows project-path aliases and compressed Codex histories, preserve native Codex paste handling, and display saved Claude names after long metadata prefixes.
+
+Important
+
+- Permanent deletion is irreversible and starts directly from the delete action without an extra confirmation dialog. Eligibility, fresh-source, activity and uncertain-result checks remain in place. Batches are not atomic; cancellation stops only unsent items.
+- Native archive and permanent deletion remain limited to supported Windows Codex sources. Existing Claude recovery records and OpenCode native archives retain restore support; new recovery/archive panels and Claude/OpenCode permanent deletion are not offered. No data is migrated or deleted automatically.
+- Archive success verifies the selected root, not complete descendant or external-writer behavior. Unknown write results are reconciled read-only, never blindly replayed. Back up important data.
+- Live user sessions, installed Windows WebView2 acceptance, original native All, D20 and signed installation/return remain separately unverified. Performance fixtures are not live latency guarantees. Updater signatures are not Windows Authenticode.
+- Antigravity and remote/mobile capabilities are not included in this release.
+
 ## [0.27.0-rc.12]
 
 Improved
