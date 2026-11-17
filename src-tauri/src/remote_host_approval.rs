@@ -10,6 +10,9 @@ use std::{
 };
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogResult};
 
+#[path = "remote_unattended_approval.rs"]
+pub(crate) mod unattended;
+
 static DIALOG_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 const PENDING: Duration = Duration::from_secs(30);
 const APPROVAL: Duration = Duration::from_secs(300);

@@ -859,3 +859,61 @@ Tests also cover stale revision, missing/revoked devices, foreign/reopened store
 instances, Unknown publication, old Unverified bytes and conservative unknown
 UI values. Component tests are not a Windows WebView2 visual/IPC acceptance test,
 and the local legacy fixture is not real-phone or production rendezvous coverage.
+
+## A3: local single-run approval preparation (not network authority)
+
+The native approval child module consumes an A2 installed-device candidate and
+an original NativeRunAdmission. It retains the original network_checks closure
+(including RunAccess/document/caller checks), exact supervisor/state/resource/run
+origin and native scope. A new document for the same textual run cannot substitute
+for that original access. The candidate is revalidated against its original store
+instance and exact current CAS before preparation, before the native prompt and
+when consuming the approval. Preparation holds no producer and does not perform
+delegated capture or sever document access.
+
+The private original ApprovalMachine keeps its 30-second pending and at-most
+300-second single-consumption window. A separate requested absolute cutoff must
+be positive and at most 30 days from native wall sampling; a fixed monotonic
+upper bound is frozen at preparation. This does not lengthen the original
+connection approval. A short private clock lock samples and advances the greatest
+observed wall/monotonic values, latching observed failure or rollback for this
+instance. It does not detect unobserved clock excursions, survive restart, or
+replace the durable unattended journal's clock contract.
+
+The separate native prompt explicitly says this stage neither enables a network
+connection nor persists unattended authority or restart recovery. The returned
+non-cloneable fact retains the original cancellable machine identity and short
+consumption end. A check is only a current observation, not a continuous trust
+lease: store I/O is followed by original run/clock checks and then final approval
+lease/deadline checks. Consumers must revalidate rather than treating this fact
+as a lasting authorization. No IPC command or real device is enabled here.
+
+Tests compose a TEST_ONLY Confirmed record in an isolated Windows store with the
+original Node/PTY native-run fixture. That fixture is not installation proof; the
+separate A2 actual registration oracle proves the registration-to-candidate path.
+The tests do not display a real native approval dialog or touch user credentials.
+The first four native-run cases passed, then a blocking Windows backend wrapper
+exposed three genuine tail-check failures (cancel, short expiry and native run
+shutdown during read). All three failed the final behavior assertion only after
+worker join and original cleanup, and all three passed after tail checks were
+added. The logs are unattended-preparation-first, tail-red and tail-green.
+
+Before any production delegation can be enabled, lifetime-exclusive persistent
+owner custody, reserved durable revocation/journal capacity and observation
+cadence, current native-key/trust verification, and exact restorable CLI/workspace
+target resolution remain separate gates. Host key-profile identity is not a CLI
+launch profile. This preparation cannot bypass those gates or produce
+NativeDelegationConsent/VerifiedBinding/network material.
+
+A3 final verification: 48 distinct native tests pass on the final source: eleven
+UnattendedPreparation cases, eleven HostApproval cases, sixteen NativePairing
+cases, four NativeEnrollment cases and six DelegatedNative cases. Strict
+remote-host lib/tests Clippy also passes (25.33 seconds). The final logs are
+unattended-preparation-final2, unattended-preparation-{HostApproval_,NativePairing_,
+NativeEnrollment_,DelegatedNative_}-regression and unattended-preparation-strict-final.
+The cancellation gate contains no store, run-resource, canonical-scope or clock
+checks; those happen before publication and must happen again at later use. The
+store-read and original-run-lock barriers verify cancellation can return before
+those locks are released in these fixtures, not absolute scheduling guarantees.
+No full native-dialog/WebView acceptance, real phone, public route, persistent
+owner startup, or unattended network connection is claimed by this stage.

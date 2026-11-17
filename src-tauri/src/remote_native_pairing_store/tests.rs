@@ -44,7 +44,10 @@ impl MutationAuthorization for TestAuthorization {
         }
     }
 }
-fn apply(store: &TestStore, mutation: Mutation) -> Result<LockedSnapshot> {
+fn apply<B: Backend>(
+    store: &PairingStore<B, TestSealer>,
+    mutation: Mutation,
+) -> Result<LockedSnapshot> {
     let mut auth = TestAuthorization {
         target: store.target(),
         expected: mutation.clone(),
@@ -675,4 +678,40 @@ fn NativePairing_EnrollmentStrictBoundsAndTombstones_024() {
             Err(StoreError::Invalid)
         );
     }
+}
+
+// TEST_ONLY：为真实 run 组合隔离构造历史记录；不证明注册或交付成功。
+pub(crate) fn synthetic_confirmed_candidate<B: Backend>(
+    store: &PairingStore<B, TestSealer>,
+) -> InstalledDeviceCandidate {
+    apply(
+        store,
+        Mutation::Initialize {
+            store_id: uuid::Uuid::new_v4().to_string(),
+            record: record(),
+        },
+    )
+    .unwrap();
+    let mut tx = store.backend.begin().unwrap();
+    let mut doc = store.decode(&tx.read().unwrap().unwrap()).unwrap();
+    doc.revision += 1;
+    let evidence = doc.devices[0].enrollment.as_mut().unwrap();
+    evidence.state = EnrollmentState::Confirmed;
+    evidence.revision = doc.revision;
+    tx.commit(&store.encode(&doc).unwrap(), true, &mut || Ok(()))
+        .unwrap();
+    drop(tx);
+    store
+        .select_installed(&store.load().unwrap().expected, &record().device_id)
+        .unwrap()
+}
+pub(crate) fn synthetic_forget(store: &TestStore) {
+    apply(
+        store,
+        Mutation::Forget {
+            expected: store.load().unwrap().expected,
+            device_id: record().device_id,
+        },
+    )
+    .unwrap();
 }

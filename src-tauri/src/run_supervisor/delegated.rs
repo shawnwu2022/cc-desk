@@ -543,3 +543,11 @@ impl DelegatedNetworkAdmission {
         .map_err(|_| error("REMOTE_HOST_AUTHORITY"))
     }
 }
+
+// TEST_ONLY：持原资源锁建立屏障，不改资源状态或生产权限。
+#[cfg(test)]
+pub(crate) fn test_hold_admission_resource(admission: &NativeRunAdmission, work: impl FnOnce()) {
+    let state = admission.authority.state.upgrade().unwrap();
+    let _resource = state.resource.lock();
+    work();
+}

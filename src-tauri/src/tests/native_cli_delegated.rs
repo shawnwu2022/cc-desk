@@ -200,3 +200,6 @@ fn DelegatedNative_ForeignResourceConsentCannotCapture_006() {
 
 #[path = "native_cli_delegated_network.rs"]
 mod network;
+
+#[path = "native_cli_unattended_preparation.rs"]
+mod preparation;
