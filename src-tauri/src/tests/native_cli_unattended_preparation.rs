@@ -3053,7 +3053,7 @@ async fn unattended_short_network_case(mode: u8) {
     use crate::remote_native_pairing_store::tests::{record, synthetic_confirmed_record_candidate};
     use crate::remote_unattended_store::service::pending::PendingStart;
     let (f, native, _runtime_stop, document) = unattended_app_run_prepared(|f| {
-        if mode != 3 {
+        if mode != 3 && mode != 4 {
             return None;
         }
         let url: tauri::Url = "http://tauri.localhost/".parse().unwrap();
@@ -3123,7 +3123,7 @@ async fn unattended_short_network_case(mode: u8) {
         relay_scalar,
     ];
     let mut product_keepalive = None;
-    let (approval, fixed_end, control) = if mode == 3 {
+    let (approval, fixed_end, control) = if mode == 3 || mode == 4 {
         let product = crate::remote_host::short_session::ShortSessionService::default();
         let binding = &document.as_ref().unwrap().2;
         let id = product
@@ -3215,7 +3215,7 @@ async fn unattended_short_network_case(mode: u8) {
                     )
                     .args([
                         "--experimental-strip-types",
-                        "remote/ui-terminal/src/browserSnapshotPullRelay.fixture.ts",
+                        if mode == 4 { "remote/ui-terminal/src/browserSourcePullRelay.fixture.ts" } else { "remote/ui-terminal/src/browserSnapshotPullRelay.fixture.ts" },
                         &config,
                     ])
                     .stdout(std::process::Stdio::piped())
@@ -3573,4 +3573,10 @@ async fn UnattendedProduct_CancelAndForeignAdvanceNeverPersist_004() {
         );
         drop(document);
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn UnattendedProduct_ProductionBrowserSourcePull_005() {
+    if short_network_isolated("UnattendedProduct_ProductionBrowserSourcePull_005") { return; }
+    unattended_short_network_case(4).await;
 }

@@ -6,6 +6,7 @@ import {createBrowserTlsSignerBroker} from './browserTlsSigner.ts';
 import {createBrowserGrantBroker} from './browserGrant.ts';
 import {browserClientPort} from './browserClient.ts';
 import {nativeConnection} from './native.ts';
+import {browserPullConnection} from './browserPullConnection.ts';
 export function browserConnectionSource(inputs:ApprovedBrowserInputs|undefined):TerminalConnectionSource{
  const approved=inputs===undefined?undefined:approvedBrowserInputs(inputs);let occupied=false;
  return Object.freeze({async open(signal:AbortSignal,deadline=performance.timeOrigin+performance.now()+10000){
@@ -71,7 +72,8 @@ export function browserConnectionSource(inputs:ApprovedBrowserInputs|undefined):
    port=browserClientPort(application.port1,()=>{void close();},()=>retired,grant.worker.cancel!);
    worker.postMessage({kind:'start',origin:approved.profile.origin,artifacts:approved.artifacts,localSpki:approved.localSpki,hostSpki:approved.hostSpki,trust:approved.trust,tls:tls.worker,grant:grant.worker,transport:io.port2,application:application.port2},[tls.worker.port,grant.worker.port,io.port2,application.port2]);
    const descriptor=await port.descriptor;if(controller.signal.aborted||performance.timeOrigin+performance.now()>=deadline)throw Error('browser entry cancelled');if(setupTimer!==undefined)clearTimeout(setupTimer);setupTimer=undefined;
-   const original=port,connection=nativeConnection({...original,close:async()=>{let error:unknown;try{await original.close();}catch(e){error=e;}try{await close();}catch(e){error??=e;}if(error)throw error;}});
+   const original=port,wrapped={...original,close:async()=>{let error:unknown;try{await original.close();}catch(e){error=e;}try{await close();}catch(e){error??=e;}if(error)throw error;}};
+   const connection=approved.grant.peerInstall?.snapshotPull==='snapshot-pull-v1'?browserPullConnection(wrapped):nativeConnection(wrapped);
    return Object.freeze({connection,target:descriptor.target,binding:descriptor.binding,role:descriptor.role==='Controller'?'Controller' as const:'Viewer' as const});
   }catch{port?.close().catch(()=>{});await close();throw Error('browser entry unavailable');}
  }});

@@ -230,3 +230,13 @@ test('Pairing_ScopeDuplicate_018', () => {
   const text = JSON.stringify(configuration).replace('"run":"PUBLIC_TEST_ONLY"', '"run":"PUBLIC_TEST_ONLY","run":"PUBLIC_TEST_ONLY"')
   expect(() => parseBrowserPairingConfiguration(Buffer.from(text))).toThrow('browser pairing configuration')
 })
+
+test('Pairing_ExplicitPullSurvivesOriginalProviderAssembly_013', async () => {
+  const explicit={...configuration,grant:{...configuration.grant,peerInstall:{budgetMs:1000,controlLease:'live-v1',snapshotPull:'snapshot-pull-v1'}}}
+  const bytes=Buffer.from(JSON.stringify(explicit)),handles={tlsKey,grantKey,relaySign:async()=>new Uint8Array(64),present:async()=>{}}
+  const input=await createApprovedBrowserProfileReader(bytes,{readApproved:async()=>({configuration:bytes,handles})})(new AbortController().signal)
+  expect(input?.grant.peerInstall).toEqual(explicit.grant.peerInstall)
+  const old=Buffer.from(JSON.stringify(configuration))
+  await expect(createApprovedBrowserProfileReader(bytes,{readApproved:async()=>({configuration:old,handles})})(new AbortController().signal)).rejects.toThrow('browser pairing profile unavailable')
+  await expect(createApprovedBrowserProfileReader(old,{readApproved:async()=>({configuration:bytes,handles})})(new AbortController().signal)).rejects.toThrow('browser pairing profile unavailable')
+})

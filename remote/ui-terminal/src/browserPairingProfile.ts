@@ -91,7 +91,7 @@ function assemble(expected:PublicBrowserPairingConfiguration,handles:BrowserProf
   localSpki:decode(expected.localSpki,91,91),hostSpki:decode(expected.hostSpki,91,91),
   trust:{hostKeyEpoch:expected.trust.hostKeyEpoch,clientKeyEpoch:expected.trust.clientKeyEpoch,origin:expected.trust.origin},
   grant:{issuerSpki:decode(g.issuerSpki,91,91),principal:g.principal,
-   scope:{session:g.scope.session,run:g.scope.run,generation:g.scope.generation},role:g.role,budgetMs:g.budgetMs,peerInstall:{budgetMs:g.peerInstall.budgetMs,...(g.peerInstall.controlLease===undefined?{}:{controlLease:g.peerInstall.controlLease})},
+   scope:{session:g.scope.session,run:g.scope.run,generation:g.scope.generation},role:g.role,budgetMs:g.budgetMs,peerInstall:{budgetMs:g.peerInstall.budgetMs,...(g.peerInstall.controlLease===undefined?{}:{controlLease:g.peerInstall.controlLease}),...(g.peerInstall.snapshotPull===undefined?{}:{snapshotPull:g.peerInstall.snapshotPull})},
    profile:{origin:g.profile.origin,rpId:g.profile.rpId,credentialId:decode(g.profile.credentialId,1,1024),credentialSpki:decode(g.profile.credentialSpki,91,91),backupEligible:g.profile.backupEligible,allowBackedUp:g.profile.allowBackedUp}},
   relay:{endpoint:r.endpoint,tunnel:decode(r.tunnel,16,16),identity:{keyId:decode(r.keyId,16,16),sign:handles.relaySign},...(Object.prototype.hasOwnProperty.call(r,'mode')?{mode:r.mode}:{})},
   artifacts:{wasm:expected.artifacts.wasm,glue:expected.artifacts.glue},present:handles.present,...(enrollment?{enrollment}:{}),

@@ -1748,3 +1748,58 @@ Host/pairing cases), with TypeScript build and vue-tsc both successful. The late
 request cleanup rejection after component unmount now emits the existing warning
 toast rather than writing only to an invisible component. Logs are
 `unattended-product-ui-final.log` and `unattended-product-typecheck-final.log`.
+
+## A6i: explicitly configured Browser production pull source
+
+The existing approved-profile assembly now preserves an explicitly present
+`snapshotPull: snapshot-pull-v1` alongside `controlLease: live-v1`; absence remains
+absence. The strict candidate/provider full-field comparison still occurs before
+assembly, so a pull/non-pull mismatch cannot silently upgrade an existing record.
+The production `browserConnectionSource` selects `browserPullConnection` only for
+that approved explicit mode, after the original authenticated descriptor. Both
+branches use the same wrapped original port/source close. Socket, Worker,
+transport, brokers and enrollment-retained retirement remain owned by that source.
+No missing capability/rejection falls back to another protocol, and the fixed
+one-second operation budget is unchanged.
+
+Two actual defects were reproduced: the original reader dropped the explicit
+field (`browser-source-pull-profile-red.log`), and the real production source sent
+legacy `snapshot` despite authenticated pull negotiation. In
+`browser-source-pull-network-red3.log`, observed original MessagePort traffic is
+exactly `[snapshot]`, followed by request rejection; original Host cleanup still
+completed. The corrected source sends `snapshotPull`, installs all 1920 cells,
+writes one byte with HostWritten, settles, and closes the original source.
+`browser-source-pull-network-green2.log` records Worker retirement and termination,
+physical WebSocket closure, enrollment retirement and the original Host's managed
+cleanup facts. The child harness is one test, not an additional distinct pass.
+
+The network test uses the actual production Source and profile reader, real
+loopback Relay/TLS/WASM/Host and the same original two Host approvals. Node adapts
+Window/WebAuthn/WebSocket/Worker interfaces using existing public anonymous test
+vectors. Its Worker bridge invokes the original TLS Worker fixture and filters
+that fixture's telemetry; it does not validate browserEntry.worker.ts artifact
+fetch/import, a real desktop native dialog, actual mobile WebAuthn, or a public
+site. The existing WASM artifact is reused. Initial test-routing, identical-key
+handle and telemetry-adapter failures are retained but are not behavior REDs.
+The first post-fix network run completed application work but incorrectly waited
+on a test enrollment owner without a retire callback. The fixture now supplies
+its original optional retirement contract; production retirement code was not
+changed to hide that failure.
+
+The source-boundary unit tests separately cover the unchanged legacy branch,
+explicit pull branch and pull rejection without fallback, retaining original
+source socket/Worker/broker/enrollment drain. Their mocked lower layers are not
+an authentication claim. No real browser profile, key, registration, Relay policy
+or deployment was created or changed. The example provider remains unavailable;
+actual registered-device/operator configuration and real-device acceptance are
+still required before claiming end-user availability or long unattended use.
+
+Final same-source validation: seven distinct Rust tests (three Product and four
+ShortNetwork, without duplicate child counts), 98 Vitest tests (77 profile,
+18 enrollment, three Source branch/close cases), and 26 existing Node unit tests.
+Root TypeScript/vue-tsc and the new fixture's strict TypeScript check both passed;
+Rust strict Clippy passed in 30.37s. Logs are indexed in
+`.audit/browser-source-pull-final-ledger.json`; seven source fingerprints and the
+eight-file stage list exclude the original three unchanged dirty files. Independent
+final review remains the commit gate. This is production Source wiring under
+explicit approved configuration, not provisioned real-device or public deployment.
