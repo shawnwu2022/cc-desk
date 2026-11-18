@@ -292,7 +292,15 @@ fn Opencode_AuthorizedAncestorSymlinkReadsHistory_26() {
     let aliases = tempfile::tempdir().unwrap();
     let selected = aliases.path().join("authorized-alias");
     std::os::unix::fs::symlink(&f.root, &selected).unwrap();
-    let items = read_history(&Root::open(&selected).unwrap(), &[f.project_ref()]).unwrap();
+    let root = Root::open(&selected).unwrap();
+    // 原始祖先链接仍须拒绝；只有已授权根的身份复核规范路径可交给 SQLite。
+    assert_eq!(
+        super::open_read_only(&selected.join("opencode.db")).unwrap_err(),
+        "SOURCE_UNSUPPORTED"
+    );
+    let canonical = root.sqlite_canonical_directory().unwrap().join("opencode.db");
+    drop(super::open_read_only(&canonical).unwrap());
+    let items = read_history(&root, &[f.project_ref()]).unwrap();
     assert!(
         matches!(&items[..], [ResourceItem::Session { native_session_id, .. }] if native_session_id == "ses_alias")
     );
@@ -1135,7 +1143,16 @@ fn Opencode_PrivateWalReadLeavesOriginalDatabaseBytesUnchanged_28() {
     let wal = f.root.join("opencode.db-wal");
     let before_db = std::fs::read(&db).unwrap();
     let before_wal = std::fs::read(&wal).unwrap();
-    let read_only = super::open_read_only(&db).unwrap();
+    // Unix 与生产入口相同：先复核授权根身份，再消除临时目录祖先链接。
+    #[cfg(unix)]
+    let read_path = Root::open(&f.root)
+        .unwrap()
+        .sqlite_canonical_directory()
+        .unwrap()
+        .join("opencode.db");
+    #[cfg(not(unix))]
+    let read_path = db.clone();
+    let read_only = super::open_read_only(&read_path).unwrap();
     let query_only: i32 = read_only
         .query_row("PRAGMA query_only", [], |row| row.get(0))
         .unwrap();
