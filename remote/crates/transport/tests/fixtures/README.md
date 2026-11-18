@@ -7,7 +7,9 @@ The source crate is pinned/checksummed in remote/Cargo.lock. Upstream licenses a
 preserved here. No certificate/key was generated, enrolled, or installed.
 
 The universally known private test key is not an access credential. Never enroll
-this CA/key anywhere outside a TEST_ONLY in-memory test. Only cfg(test) code imports
-these files; production client uses the pinned Mozilla WebPKI root bundle and cannot
-accept caller-injected roots. Fixtures certify foobar.com; tests resolve it explicitly
+this CA/key anywhere outside a TEST_ONLY in-memory test. The fixture files are used by cfg(test) code and the explicit
+`test-only-loopback` feature, which is enabled by the native integration test
+dev-dependency. This test-only feature is not a production trust configuration.
+The normal production client uses the pinned Mozilla WebPKI root bundle and does
+not expose caller-injected roots. Fixtures certify foobar.com; tests resolve it explicitly
 to owned loopback sockets, never DNS or the public domain.
