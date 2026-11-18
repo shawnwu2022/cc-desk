@@ -1873,3 +1873,7 @@ fn RemoteShutdown_OriginalIoDropRequiresLastResourceRelease_014() {
     }
     assert_eq!(fixture.child_reports(), 1);
 }
+
+#[cfg(all(windows, feature = "remote-host"))]
+#[path = "native_cli_codex_canonical_probe.rs"]
+mod codex_canonical_probe;

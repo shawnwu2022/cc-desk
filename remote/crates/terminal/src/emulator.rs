@@ -9,7 +9,20 @@ use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::Cell;
 use alacritty_terminal::term::{Config, Osc52};
 use alacritty_terminal::vte::Perform;
-use alacritty_terminal::vte::ansi::Processor;
+use alacritty_terminal::vte::ansi::{Processor, Timeout};
+use std::time::{Duration, Instant};
+
+// The actor owns display publication timing; private parsing and queries remain immediate.
+#[derive(Default)]
+struct ImmediatePrivateParsing;
+impl Timeout for ImmediatePrivateParsing {
+    fn set_timeout(&mut self, _: Duration) {}
+    fn clear_timeout(&mut self) {}
+    fn pending_timeout(&self) -> bool {
+        false
+    }
+}
+
 use unicode_width::UnicodeWidthChar;
 
 use crate::{TerminalFault, TerminalParser, TerminalSafeCode};
@@ -41,6 +54,7 @@ pub struct TerminalEpochs {
 pub enum TerminalCoreError {
     Degraded,
     EpochOverflow,
+    SynchronizationPending,
     ZeroRows,
     ZeroColumns,
     ColumnsBelowMinimum { requested: usize, minimum: usize },
@@ -141,7 +155,8 @@ pub struct TerminalCore {
     validator: TerminalParser,
     input_gate: RestrictedInputGate,
     degraded: Option<TerminalSafeCode>,
-    processor: Processor,
+    processor: Processor<ImmediatePrivateParsing>,
+    display_deadline: Option<Instant>,
     term: Term<TerminalEventSink>,
     event_sink: TerminalEventSink,
     epochs: TerminalEpochs,
@@ -173,6 +188,7 @@ impl TerminalCore {
             input_gate: RestrictedInputGate::default(),
             degraded: None,
             processor: Processor::new(),
+            display_deadline: None,
             term,
             event_sink,
             epochs: TerminalEpochs::default(),
@@ -270,6 +286,9 @@ impl TerminalCore {
     ) -> Result<TerminalEpochs, TerminalCoreError> {
         if self.is_degraded() {
             return Err(TerminalCoreError::Degraded);
+        }
+        if self.display_pending() {
+            return Err(TerminalCoreError::SynchronizationPending);
         }
         validate_size(rows, columns)?;
         let mut after = self.epochs;
@@ -521,6 +540,13 @@ impl Perform for RestrictedInputGate {
                     self.query_count += 1;
                     self.mark(MarkKind::Query(kind));
                 }
+                return;
+            }
+            if intermediates == b"?"
+                && matches!(action, 'h' | 'l')
+                && params.iter().eq([&[2026][..]])
+            {
+                self.mark(MarkKind::DisplaySync(action == 'h'));
                 return;
             }
             if Self::conpty_compatibility_control(params, intermediates, action) {

@@ -74,6 +74,7 @@ pub struct SemanticCursor {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProjectionError {
+    SynchronizationPending,
     Degraded,
     UnsupportedState,
 }
@@ -216,6 +217,9 @@ impl TerminalCore {
     fn checked_semantic_snapshot(&self) -> Result<SemanticSnapshot, ProjectionError> {
         if self.is_degraded() {
             return Err(ProjectionError::Degraded);
+        }
+        if self.display_pending() {
+            return Err(ProjectionError::SynchronizationPending);
         }
         let rows = self.term.screen_lines();
         let columns = self.term.columns();

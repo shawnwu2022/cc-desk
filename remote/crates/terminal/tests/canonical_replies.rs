@@ -143,3 +143,71 @@ fn conpty_compatibility_controls_do_not_admit_other_window_or_mode_operations() 
     let mut core = TerminalCore::new(24, 80).unwrap();
     assert!(core.feed(b"\x1b[?9001h").is_err());
 }
+
+#[test]
+fn synchronized_display_keeps_private_query_prefix_and_permanent_view_fence() {
+    let mut core = TerminalCore::new_with_queries(3, 10).unwrap();
+    let old = core.epochs();
+    let mut replies = Vec::new();
+    feed(&mut core, b"\x1b[?2026habc\x1b[6n", &mut replies);
+    assert_eq!(replies, [b"\x1b[1;4R".to_vec()]);
+    assert!(core.semantic_snapshot().is_err());
+    assert_eq!(
+        core.resize_preflight(4, 10),
+        Err(cc_desk_remote_terminal::TerminalCoreError::SynchronizationPending)
+    );
+    feed(&mut core, b"\x1b[?2026l", &mut replies);
+    let completed = core.epochs();
+    feed(&mut core, b"\x1b[?2026l", &mut replies);
+    assert_eq!(core.epochs(), completed);
+    assert_eq!(
+        core.semantic_snapshot().unwrap().cell(0, 0).unwrap().scalar,
+        'a'
+    );
+    assert!(core.epochs().mode_epoch > old.mode_epoch);
+    assert_eq!(core.epochs().structure_epoch, old.structure_epoch);
+}
+
+#[test]
+fn display_sync_absolute_timeout_does_not_wait_for_output_or_restart_on_begin() {
+    use std::time::Duration;
+    let mut core = TerminalCore::new_with_queries(3, 10).unwrap();
+    let mut replies = Vec::new();
+    feed(&mut core, b"\x1b[?2026habc", &mut replies);
+    let end = core.display_deadline().unwrap();
+    feed(&mut core, b"\x1b[?2026h", &mut replies);
+    assert_eq!(core.display_deadline(), Some(end));
+    assert_eq!(core.epochs().mode_epoch, 1);
+    assert!(!core.expire_display_sync(end - Duration::from_nanos(1)));
+    assert!(core.semantic_snapshot().is_err());
+    assert!(core.expire_display_sync(end));
+    assert!(!core.is_degraded());
+    assert_eq!(
+        core.semantic_snapshot().unwrap().cell(0, 0).unwrap().scalar,
+        'a'
+    );
+    assert_eq!(core.epochs().mode_epoch, 1);
+}
+
+#[test]
+fn synchronized_query_and_mode_state_survive_every_byte_split() {
+    let wire = b"\x1b[?2026ha\x1b[?25l\x1b[6n\x1b[?2026l";
+    for split in 0..=wire.len() {
+        let mut core = TerminalCore::new_with_queries(3, 10).unwrap();
+        let mut replies = Vec::new();
+        feed(&mut core, &wire[..split], &mut replies);
+        feed(&mut core, &wire[split..], &mut replies);
+        assert_eq!(replies, [b"\x1b[1;2R".to_vec()]);
+        assert_eq!(core.epochs().mode_epoch, 2);
+        assert!(!core.display_pending());
+    }
+}
+
+#[test]
+fn synchronized_display_is_not_enabled_in_ordinary_profile() {
+    for wire in [b"\x1b[?2026h".as_slice(), b"\x1b[?2026l"] {
+        let mut core = TerminalCore::new(3, 10).unwrap();
+        assert!(core.feed(wire).is_err());
+        assert_eq!(core.epochs().mode_epoch, 0);
+    }
+}

@@ -12,6 +12,7 @@ pub(super) enum Kind {
 pub(super) enum MarkKind {
     Query(Kind),
     Mode(ModeMutation),
+    DisplaySync(bool),
 }
 #[derive(Clone, Copy)]
 pub(super) enum ModeMutation {
@@ -170,6 +171,21 @@ pub enum CanonicalFeedError<E> {
 }
 
 impl TerminalCore {
+    pub fn display_pending(&self) -> bool {
+        self.display_deadline.is_some()
+    }
+    pub fn display_deadline(&self) -> Option<Instant> {
+        self.display_deadline
+    }
+    /// Called by the original owner before dispatch, including idle wakeups.
+    pub fn expire_display_sync(&mut self, now: Instant) -> bool {
+        if self.display_deadline.is_some_and(|end| now >= end) {
+            self.display_deadline = None;
+            true
+        } else {
+            false
+        }
+    }
     /// Explicit experimental profile; ordinary construction remains query-deny.
     pub fn new_with_queries(rows: usize, columns: usize) -> Result<Self, TerminalCoreError> {
         let mut core = Self::new(rows, columns)?;
@@ -216,6 +232,22 @@ impl TerminalCore {
                 .advance(&mut self.term, &bytes[start..mark.offset]);
             start = mark.offset;
             match mark.kind {
+                MarkKind::DisplaySync(begin) => {
+                    if *self.term.mode() != before {
+                        return Err(self.mode_drift());
+                    }
+                    if begin && self.display_deadline.is_none() {
+                        self.display_deadline = Some(
+                            Instant::now()
+                                .checked_add(Duration::from_millis(150))
+                                .ok_or_else(|| self.mode_drift())?,
+                        );
+                        // A publication fence, even when the transaction changes only cells.
+                        self.epochs.mode_epoch += 1;
+                    } else if !begin {
+                        self.display_deadline = None;
+                    }
+                }
                 MarkKind::Mode(mutation) => {
                     let after = *self.term.mode();
                     if after != mutation.predict(before) {
@@ -257,7 +289,14 @@ impl TerminalCore {
         let mut mode = *self.term.mode();
         let mut mode_changes = 0u64;
         let mut structural_changes = 0u64;
+        let mut display_pending = self.display_pending();
         for mark in marks {
+            if let MarkKind::DisplaySync(begin) = mark.kind {
+                if begin && !display_pending {
+                    mode_changes += 1;
+                }
+                display_pending = begin;
+            }
             if let MarkKind::Mode(mutation) = mark.kind {
                 let next = mutation.predict(mode);
                 if mode != next {
@@ -375,6 +414,23 @@ mod version_tests {
                 .mode()
                 .contains(alacritty_terminal::term::TermMode::MOUSE_MOTION)
         );
+    }
+    #[test]
+    fn synchronized_publication_fence_overflow_refuses_whole_batch() {
+        let mut core = TerminalCore::new_with_queries(3, 10).unwrap();
+        core.epochs.mode_epoch = u64::MAX;
+        let mut callbacks = 0;
+        assert!(
+            core.feed_with_queries(b"\x1b[c\x1b[?2026hx\x1b[?2026l", |_| {
+                callbacks += 1;
+                Ok::<(), ()>(())
+            })
+            .is_err()
+        );
+        assert_eq!(callbacks, 0);
+        assert_eq!(core.epochs.mode_epoch, u64::MAX);
+        assert!(!core.display_pending());
+        assert_eq!(core.row_text(0).as_deref(), Some(""));
     }
     #[test]
     fn resize_epoch_overflow_freezes_without_changing_the_grid() {
