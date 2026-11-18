@@ -9,7 +9,20 @@ use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::Cell;
 use alacritty_terminal::term::{Config, Osc52};
 use alacritty_terminal::vte::Perform;
-use alacritty_terminal::vte::ansi::Processor;
+use alacritty_terminal::vte::ansi::{Processor, Timeout};
+use std::time::{Duration, Instant};
+
+// The actor owns display publication timing; private parsing and queries remain immediate.
+#[derive(Default)]
+struct ImmediatePrivateParsing;
+impl Timeout for ImmediatePrivateParsing {
+    fn set_timeout(&mut self, _: Duration) {}
+    fn clear_timeout(&mut self) {}
+    fn pending_timeout(&self) -> bool {
+        false
+    }
+}
+
 use unicode_width::UnicodeWidthChar;
 
 use crate::{TerminalFault, TerminalParser, TerminalSafeCode};
@@ -41,6 +54,7 @@ pub struct TerminalEpochs {
 pub enum TerminalCoreError {
     Degraded,
     EpochOverflow,
+    SynchronizationPending,
     ZeroRows,
     ZeroColumns,
     ColumnsBelowMinimum { requested: usize, minimum: usize },
@@ -141,7 +155,8 @@ pub struct TerminalCore {
     validator: TerminalParser,
     input_gate: RestrictedInputGate,
     degraded: Option<TerminalSafeCode>,
-    processor: Processor,
+    processor: Processor<ImmediatePrivateParsing>,
+    display_deadline: Option<Instant>,
     term: Term<TerminalEventSink>,
     event_sink: TerminalEventSink,
     epochs: TerminalEpochs,
@@ -173,6 +188,7 @@ impl TerminalCore {
             input_gate: RestrictedInputGate::default(),
             degraded: None,
             processor: Processor::new(),
+            display_deadline: None,
             term,
             event_sink,
             epochs: TerminalEpochs::default(),
@@ -270,6 +286,9 @@ impl TerminalCore {
     ) -> Result<TerminalEpochs, TerminalCoreError> {
         if self.is_degraded() {
             return Err(TerminalCoreError::Degraded);
+        }
+        if self.display_pending() {
+            return Err(TerminalCoreError::SynchronizationPending);
         }
         validate_size(rows, columns)?;
         let mut after = self.epochs;
@@ -393,10 +412,47 @@ impl RestrictedInputGate {
         // bounded TermMode flag. Win32-input-mode is explicitly unsupported:
         // Microsoft's ConPTY spec permits terminals to ignore this optional
         // request and retain legacy VT input; do not claim KEY_EVENT fidelity.
-        (intermediates.is_empty() && action == 't' && params.iter().eq([&[1][..]]))
+        canonical::mode_mutation(params, intermediates, action).is_some()
+            || Self::canonical_display_control(params, intermediates, action)
+            || (intermediates.is_empty() && action == 't' && params.iter().eq([&[1][..]]))
             || (intermediates == b"?"
                 && matches!(action, 'h' | 'l')
-                && (params.iter().eq([&[1004][..]]) || params.iter().eq([&[9001][..]])))
+                && (params.iter().eq([&[1004][..]])
+                    || params.iter().eq([&[2004][..]])
+                    || params.iter().eq([&[9001][..]])))
+    }
+    fn canonical_display_control(
+        params: &alacritty_terminal::vte::Params,
+        intermediates: &[u8],
+        action: char,
+    ) -> bool {
+        if !intermediates.is_empty() {
+            return false;
+        }
+        if matches!(action, 'J' | 'K') {
+            return params.iter().count() == 1 && params.iter().all(|p| p.len() == 1 && p[0] <= 2);
+        }
+        if action != 'm' || params.iter().count() > 16 {
+            return false;
+        }
+        let mut values = params.iter();
+        while let Some(p) = values.next() {
+            if p.len() != 1 {
+                return false;
+            }
+            if matches!(p[0], 38 | 48) {
+                if values.next() != Some(&[5][..]) {
+                    return false;
+                }
+                if !values.next().is_some_and(|n| n.len() == 1 && n[0] <= 255) {
+                    return false;
+                }
+            } else if !matches!(p[0], 0..=4 | 7..=9 | 22..=24 | 27..=29 | 30..=37 | 39..=47 | 49 | 90..=97 | 100..=107)
+            {
+                return false;
+            }
+        }
+        true
     }
     fn reject(&mut self, code: TerminalSafeCode) {
         self.rejected.get_or_insert(code);
@@ -484,6 +540,13 @@ impl Perform for RestrictedInputGate {
                     self.query_count += 1;
                     self.mark(MarkKind::Query(kind));
                 }
+                return;
+            }
+            if intermediates == b"?"
+                && matches!(action, 'h' | 'l')
+                && params.iter().eq([&[2026][..]])
+            {
+                self.mark(MarkKind::DisplaySync(action == 'h'));
                 return;
             }
             if Self::conpty_compatibility_control(params, intermediates, action) {

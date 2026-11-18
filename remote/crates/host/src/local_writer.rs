@@ -414,6 +414,9 @@ impl LocalWriter {
                 #[cfg(feature = "experimental-host-owner")]
                 if native_io.is_some() { config.resize=Some(resize::State::native()); }
                 loop {
+                    if replies.as_mut().is_some_and(|state| state.poll_display(std::time::Instant::now()).is_err()) {
+                        sealed.store(true, Ordering::Release);
+                    }
                     #[cfg(feature = "experimental-host-owner")]
                     if let Some(io)=&mut native_io{io.poll(&mut journal,&sealed,replies.as_mut(),config.resize.as_mut());}
                     #[cfg(feature = "experimental-host-owner")]
@@ -441,7 +444,8 @@ impl LocalWriter {
                         }
                         continue;
                     }
-                    let command = match rx.recv_timeout(Duration::from_millis(10)) {
+                    let wait = replies.as_ref().map_or(Duration::from_millis(10), |state| state.receive_wait(std::time::Instant::now()));
+                    let command = match rx.recv_timeout(wait) {
                         Ok(r) => r,
                         Err(mpsc::RecvTimeoutError::Timeout) => continue,
                         Err(_) => {
@@ -450,6 +454,11 @@ impl LocalWriter {
                             break;
                         },
                     };
+                    if replies.as_mut().is_some_and(|state| state.poll_display(std::time::Instant::now()).is_err()) {
+                        sealed.store(true, Ordering::Release);
+                        reject_command(command);
+                        continue;
+                    }
                     #[cfg(feature = "experimental-host-owner")]
                     if native_io.as_ref().is_some_and(|io|io.busy())
                         && !matches!(&command,Command::Output(_)|Command::ControlStatus(_)|Command::NativeWake)

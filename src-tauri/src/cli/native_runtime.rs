@@ -887,12 +887,33 @@ impl NativeRuntime {
     #[cfg(feature = "remote-host")]
     pub(crate) fn begin_host_shutdown(
         self: &Arc<Self>,
+        pins: Vec<crate::run_supervisor::NativeRunPin>,
+    ) -> HostNativeShutdown {
+        self.begin_shutdown_contract(pins, false)
+    }
+
+    #[cfg(feature = "remote-host")]
+    pub(crate) fn begin_local_desktop_shutdown(
+        self: &Arc<Self>,
+        _permit: crate::remote_host::LocalDesktopExit,
+    ) -> HostNativeShutdown {
+        self.begin_shutdown_contract(Vec::new(), true)
+    }
+
+    #[cfg(feature = "remote-host")]
+    fn begin_shutdown_contract(
+        self: &Arc<Self>,
         mut pins: Vec<crate::run_supervisor::NativeRunPin>,
+        local_contract: bool,
     ) -> HostNativeShutdown {
         self.service.begin_shutdown();
         #[cfg(windows)]
         if let Some(supervisor) = &self.supervisor {
-            for pin in supervisor.shutdown_inventory_pins() {
+            for pin in if local_contract {
+                Vec::new()
+            } else {
+                supervisor.shutdown_inventory_pins()
+            } {
                 if !pins.iter().any(|current| current.key() == pin.key()) {
                     pins.push(pin);
                 }
@@ -936,6 +957,7 @@ impl NativeRuntime {
             desktop,
             joined: failed,
             unknown: unknown || failed,
+            local_contract,
         }
     }
 
@@ -970,10 +992,13 @@ pub(crate) enum HostNativeObservation {
     Pending,
     OwnedSessionReleased,
     NoRemoteNativeResources,
+    // Original local direct-root contract only, never full IO/process-tree retirement.
+    LocalDesktopStopped,
     Unknown,
 }
 #[cfg(feature = "remote-host")]
 pub(crate) struct HostNativeShutdown {
+    local_contract: bool,
     commands: Option<Arc<LaunchService>>,
     inventory: Option<Arc<NativeRunSupervisor>>,
     #[cfg(windows)]
@@ -998,6 +1023,7 @@ impl HostNativeShutdown {
     #[cfg(test)]
     pub(crate) fn from_owned_worker_for_test(worker: std::thread::JoinHandle<()>) -> Self {
         Self {
+            local_contract: false,
             commands: None, // This fixture has no command service or child.
             inventory: None,
             #[cfg(windows)]
@@ -1055,6 +1081,20 @@ impl HostNativeShutdown {
             job_start != crate::platform::owned_job_launch::JobLaunchObservation::Empty;
         #[cfg(not(windows))]
         let job_unknown = false;
+        if self.local_contract {
+            return if !self.unknown
+                && commands == Some(super::launch_service::CommandShutdownObservation::Joined)
+                && !job_unknown
+                && self
+                    .inventory
+                    .as_ref()
+                    .is_some_and(|s| s.local_desktop_stopped())
+            {
+                HostNativeObservation::LocalDesktopStopped
+            } else {
+                HostNativeObservation::Unknown
+            };
+        }
         if self.unknown
             || commands == Some(super::launch_service::CommandShutdownObservation::Unknown)
             || job_unknown

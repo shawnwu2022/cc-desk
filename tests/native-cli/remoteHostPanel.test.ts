@@ -281,3 +281,20 @@ it('RemoteHostPanel_StandardPackageRemainsIdleWithoutUserAction_021', async () =
  expect(api.remoteHostStart).not.toHaveBeenCalled()
  expect(api.remoteRegistrationRequest).not.toHaveBeenCalled()
 })
+
+it.each(['REMOTE_HOST_UNAVAILABLE', 'NATIVE_CANONICAL_UNAVAILABLE', 'RUN_NOT_READY', 'FORBIDDEN', 'DOCUMENT_BRIDGE_UNAVAILABLE'])('HostScope_ReportsOnlySafeCode_%s_009', async code => {
+ vi.mocked(api.remoteHostPairingScope).mockRejectedValueOnce({ code, message: 'PRIVATE_SENTINEL' })
+ const w=mount(RemoteHostPanel,{props:{tabId:'t1'}})
+ await click(w,'单次远程连接'); await click(w,'读取公开会话范围')
+ expect(w.text()).toContain(code); expect(w.text()).not.toContain('PRIVATE_SENTINEL')
+ expect(w.text()).toContain('不会自动重试'); expect(api.remoteHostPairingScope).toHaveBeenCalledTimes(1)
+ expectNoAuthorityCalls(); w.unmount()
+})
+it('HostScope_UnknownFailureDoesNotExposePayload_010', async () => {
+ vi.mocked(api.remoteHostPairingScope).mockRejectedValueOnce({code:'PRIVATE_SENTINEL',message:'SECRET_DETAIL'})
+ const w=mount(RemoteHostPanel,{props:{tabId:'t1'}})
+ await click(w,'单次远程连接'); await click(w,'读取公开会话范围')
+ expect(w.text()).toContain('未能读取公开会话范围，不会自动重试。')
+ expect(w.text()).not.toContain('PRIVATE_SENTINEL'); expect(w.text()).not.toContain('SECRET_DETAIL')
+ expect(api.remoteHostPairingScope).toHaveBeenCalledTimes(1); expectNoAuthorityCalls(); w.unmount()
+})

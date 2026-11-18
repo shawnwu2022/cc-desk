@@ -159,7 +159,7 @@ impl NativeHost {
                     return Err(NativeHostError::Authority);
                 }
                 let mut bytes = [0; N];
-                for (i, pair) in s.as_bytes().chunks_exact(2).enumerate() {
+                for (i, pair) in s.as_bytes().as_chunks::<2>().0.iter().enumerate() {
                     bytes[i] = u8::from_str_radix(
                         std::str::from_utf8(pair).map_err(|_| NativeHostError::Authority)?,
                         16,
@@ -231,7 +231,7 @@ impl NativeHost {
             return Err(NativeHostError::Authority);
         }
         let mut host = [0u8; 32];
-        for (index, pair) in bytes.chunks_exact(2).enumerate() {
+        for (index, pair) in bytes.as_chunks::<2>().0.iter().enumerate() {
             let nibble = |b: u8| match b {
                 b'0'..=b'9' => Some(b - b'0'),
                 b'a'..=b'f' => Some(b - b'a' + 10),
@@ -502,12 +502,16 @@ impl NetworkRetirement {
     pub async fn wait(self) {
         let _ = self.wait_checked().await;
     }
-    pub async fn wait_checked(self) -> Result<(), ()> {
+    pub async fn wait_checked(self) -> Result<(), cc_desk_remote_security::DataError> {
         let mut known = true;
         for channel in self.channels {
             known &= channel.wait_closed_checked().await.is_ok();
         }
-        if known { Ok(()) } else { Err(()) }
+        if known {
+            Ok(())
+        } else {
+            Err(cc_desk_remote_security::DataError::Uncertain)
+        }
     }
 }
 #[cfg(test)]

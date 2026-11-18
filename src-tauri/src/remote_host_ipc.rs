@@ -226,6 +226,10 @@ pub(crate) async fn remote_pairing_forget(
     let (binding, caller, admission, text) =
         runtime.admit_host_configuration(&webview, request.headers(), request.body())?;
     let (request_id, sequence, selection) = product::forget_request(&text)?;
+    webview
+        .app_handle()
+        .state::<Arc<RemoteHostController>>()
+        .reserve_external_responsibility()?;
     let operation = product::forget_operation(request_id, sequence, &binding, &caller, &admission)?;
     let store = product::open().map_err(product::store_error)?;
     let snapshot = store.load().map_err(product::store_error)?;

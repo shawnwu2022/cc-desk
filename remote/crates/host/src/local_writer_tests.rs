@@ -306,7 +306,7 @@ fn actual_guarded_owner_pipe_rejects_stale_view_and_disconnected_input() {
                 })
             ));
             effects(&marker, 2); // cell-only output does not require an always-latest grid ACK
-            let modes = b"\x1b[?1004h\x1b[?1004l";
+            let modes = b"\x1b[?1004h\x1b[?1004l\x1b[?2004h\x1b[?2004l";
             assert_eq!(
                 started
                     .output
@@ -334,7 +334,7 @@ fn actual_guarded_owner_pipe_rejects_stale_view_and_disconnected_input() {
                 profile: 1,
                 stamp: frame.issued_stamp().unwrap().clone(),
             };
-            assert_eq!(fresh_ack.stamp.mode_epoch, "2");
+            assert_eq!(fresh_ack.stamp.mode_epoch, "4");
             let _stream = frame
                 .deliver(_stream, Duration::from_secs(1))
                 .await

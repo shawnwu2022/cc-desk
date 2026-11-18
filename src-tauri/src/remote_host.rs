@@ -55,6 +55,8 @@ pub(crate) fn begin_app_shutdown(
     #[cfg(windows)]
     service.unattended.request_close();
     controller.begin_shutdown();
+    let sealed_local = controller.sealed_never_remote();
+    service.state.lock().controller_sealed_local = sealed_local;
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -183,6 +185,11 @@ impl Drop for NativeShutdownCheckout<'_> {
         }
     }
 }
+/// Only this sealed owner aggregate can permit the original desktop exit contract.
+pub(crate) struct LocalDesktopExit {
+    _private: (),
+}
+
 pub(crate) struct ServiceState {
     // Locked/off: no JS registration or production provider factory is exposed.
     host: HostSlot,
@@ -194,6 +201,7 @@ pub(crate) struct ServiceState {
     pins: Vec<NativeRunPin>,
     native: Option<HostNativeShutdown>,
     pub(crate) closing: bool,
+    controller_sealed_local: bool,
     pub(crate) source_slot: crate::remote_host_network::HostSourceSlot,
     #[cfg(test)]
     pub(crate) source_wait_pending: bool,
@@ -246,6 +254,7 @@ impl Default for RemoteHostService {
                 pins: Vec::new(),
                 native: None,
                 closing: false,
+                controller_sealed_local: false,
                 source_slot: Default::default(),
                 #[cfg(test)]
                 source_wait_pending: false,
@@ -269,6 +278,28 @@ impl Default for RemoteHostService {
     }
 }
 impl RemoteHostService {
+    fn local_desktop_exit(&self, client: &RemoteClientService) -> Option<LocalDesktopExit> {
+        // Every domain is already sealed; sticky responsibility is never cleared.
+        if !client.sealed_never_remote() || !self.network.sealed_never_remote() {
+            return None;
+        }
+        #[cfg(windows)]
+        if !self.registration.sealed_never_remote() || !self.unattended.sealed_never_remote() {
+            return None;
+        }
+        let state = self.state.lock();
+        (state.closing
+            && state.controller_sealed_local
+            && !state.one_shot_claimed
+            && state.delegation.is_none()
+            && state.origin.is_none()
+            && state.pins.is_empty()
+            && matches!(state.host, HostSlot::Empty)
+            && state.activation.is_none()
+            && state.peer_pumps.is_empty()
+            && state.source_slot.material_returned() == Some(Ok(())))
+        .then_some(LocalDesktopExit { _private: () })
+    }
     #[allow(dead_code, reason = "native activation supplier is not installed")]
     pub(crate) fn reserve_activation(
         &self,
@@ -866,7 +897,10 @@ impl RemoteHostService {
                 #[cfg(windows)]
                 original.registration.begin_shutdown();
                 client.begin_shutdown();
-                let native = native.begin_host_shutdown(pins);
+                let native = match original.local_desktop_exit(&client) {
+                    Some(permit) if pins.is_empty() => native.begin_local_desktop_shutdown(permit),
+                    _ => native.begin_host_shutdown(pins),
+                };
                 original.state.lock().native = Some(native);
                 networks = original
                     .with_host(|host| host.and_then(|host| host.network_retirement()))
@@ -1001,6 +1035,7 @@ impl RemoteHostService {
                 && matches!(
                     observation,
                     HostNativeObservation::OwnedSessionReleased
+                        | HostNativeObservation::LocalDesktopStopped
                         | HostNativeObservation::NoRemoteNativeResources
                 )
             {

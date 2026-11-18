@@ -74,6 +74,7 @@ pub struct SemanticCursor {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProjectionError {
+    SynchronizationPending,
     Degraded,
     UnsupportedState,
 }
@@ -87,6 +88,7 @@ pub struct SemanticSnapshot {
     cursor: SemanticCursor,
     cells: Vec<SemanticCell>,
     focus_reporting: bool,
+    bracketed_paste: bool,
     epochs: TerminalEpochs,
 }
 impl fmt::Debug for SemanticSnapshot {
@@ -121,6 +123,10 @@ impl SemanticSnapshot {
     }
     pub fn focus_reporting(&self) -> bool {
         self.focus_reporting
+    }
+    /// Local semantic mode only; the wire projection does not advertise paste framing.
+    pub fn bracketed_paste(&self) -> bool {
+        self.bracketed_paste
     }
     pub fn cell(&self, row: usize, column: usize) -> Option<&SemanticCell> {
         if row >= usize::from(self.rows) || column >= usize::from(self.columns) {
@@ -212,11 +218,19 @@ impl TerminalCore {
         if self.is_degraded() {
             return Err(ProjectionError::Degraded);
         }
+        if self.display_pending() {
+            return Err(ProjectionError::SynchronizationPending);
+        }
         let rows = self.term.screen_lines();
         let columns = self.term.columns();
         validate_size(rows, columns).map_err(|_| ProjectionError::UnsupportedState)?;
         let mode = *self.term.mode();
-        let allowed_modes = TermMode::default() | TermMode::ALT_SCREEN | TermMode::FOCUS_IN_OUT;
+        let allowed_modes = TermMode::default()
+            | TermMode::ALT_SCREEN
+            | TermMode::FOCUS_IN_OUT
+            | TermMode::BRACKETED_PASTE
+            | TermMode::MOUSE_MOTION
+            | TermMode::SGR_MOUSE;
         if mode.bits() & !allowed_modes.bits() != 0
             || self.term.grid().display_offset() != 0
             || self.term.grid().history_size() != 0
@@ -291,6 +305,7 @@ impl TerminalCore {
             },
             cells,
             focus_reporting: mode.contains(TermMode::FOCUS_IN_OUT),
+            bracketed_paste: mode.contains(TermMode::BRACKETED_PASTE),
             epochs: self.epochs,
         })
     }

@@ -217,6 +217,7 @@ impl Drop for Owner {
 #[derive(Default)]
 struct State {
     closing: bool,
+    responsibility_started: bool,
     preparing: Option<Arc<PreparingRequest>>,
     owner: Option<Arc<Owner>>,
     runtime: Option<Arc<crate::cli::native_runtime::NativeRuntime>>,
@@ -247,6 +248,7 @@ impl UnattendedCustody {
         if state.closing || state.owner.is_some() || state.preparing.is_some() {
             return Err(StoreError::Conflict);
         }
+        state.responsibility_started = true;
         let request = PreparingRequest::new(admission);
         state.runtime = Some(runtime);
         state.preparing = Some(request.clone());
@@ -261,10 +263,7 @@ impl UnattendedCustody {
         let close = controller.close_handle();
         self.install_managed(Box::new(controller), close, end, None, true, None)
     }
-    #[allow(
-        dead_code,
-        reason = "default-off: production enable supplier is not connected"
-    )]
+    #[cfg(test)] // Production must first reserve this custody via reserve_preparation.
     pub(crate) fn reserve_start<S, B, P>(
         &self,
         pending: crate::remote_unattended_store::service::pending::PendingStart<S, B, P>,
@@ -334,6 +333,7 @@ impl UnattendedCustody {
         valid: bool,
         preparation: Option<&Arc<PreparingRequest>>,
     ) -> Result<(), StoreError> {
+        self.state.lock().responsibility_started = true;
         let held: HeldController = Arc::new(Mutex::new(Some(managed)));
         let owner = Arc::new(Owner {
             close: close.clone(),
@@ -484,6 +484,20 @@ impl UnattendedCustody {
         drop(state);
         self.request_close();
         Ok(())
+    }
+    pub(crate) fn sealed_never_remote(&self) -> bool {
+        let state = self.state.lock();
+        state.closing
+            && !state.responsibility_started
+            && state.owner.is_none()
+            && state.preparing.is_none()
+            && self
+                .rejected_cleanup
+                .load(std::sync::atomic::Ordering::Acquire)
+                == 0
+            && !self
+                .rejected_unknown
+                .load(std::sync::atomic::Ordering::Acquire)
     }
     pub(crate) fn request_close(&self) {
         let mut state = self.state.lock();

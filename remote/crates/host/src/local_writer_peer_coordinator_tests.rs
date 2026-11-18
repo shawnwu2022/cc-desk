@@ -1166,7 +1166,7 @@ async fn assert_exact_snapshot_ack_window_and_input(
     assert_eq!(request, "2");
     assert_eq!(window.len(), 64);
     let mut token = [0; 32];
-    for (i, pair) in window.as_bytes().chunks_exact(2).enumerate() {
+    for (i, pair) in window.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         token[i] = u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap();
     }
     let bytes = input::encode(&input::Input {
@@ -1396,7 +1396,14 @@ async fn native_remote_resize_reserves_on_original_canonical_actor() {
             WriterHostOwner::from_registry(&OwnerRegistry::default(), support::host(), 11).unwrap();
         owner.principal = Some(proof.principal_id());
         let mut session = [0; 16];
-        for (i, pair) in scope.session.as_bytes().chunks_exact(2).enumerate() {
+        for (i, pair) in scope
+            .session
+            .as_bytes()
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .enumerate()
+        {
             session[i] = u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap();
         }
         let target = Target {

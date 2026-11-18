@@ -14,6 +14,52 @@ use tauri::WebviewUrl;
 #[test]
 #[ignore = "manual isolated WebView UI worker; requires official computer-use interaction"]
 fn HostUi_Manual_Worker_099() {
+    run_host_ui(false);
+}
+
+#[test]
+#[ignore = "isolated real WebView scope observation; explicit owned scenario required"]
+fn HostScope_Ipc_Worker_100() {
+    run_host_ui(true);
+}
+
+struct ScopeObservation {
+    enabled: bool,
+    root: PathBuf,
+    received: AtomicBool,
+}
+
+#[tauri::command]
+fn host_scope_observed(
+    app: tauri::AppHandle,
+    state: tauri::State<ScopeObservation>,
+    outcome: String,
+) -> Result<(), String> {
+    const CODES: &[&str] = &[
+        "OK",
+        "REMOTE_HOST_UNAVAILABLE",
+        "NATIVE_CANONICAL_UNAVAILABLE",
+        "RUN_NOT_READY",
+        "FORBIDDEN",
+        "DOCUMENT_BRIDGE_UNAVAILABLE",
+        "INVALID_REQUEST",
+        "UNKNOWN",
+        "START_FAILED",
+        "SCOPE_SHAPE_INVALID",
+    ];
+    if !state.enabled
+        || !CODES.contains(&outcome.as_str())
+        || state.received.swap(true, Ordering::SeqCst)
+    {
+        return Err("INVALID_TEST_RESULT".into());
+    }
+    fs::write(state.root.join("scope-observation.json"), serde_json::to_vec(&json!({"outcome":outcome,"source":"isolated-original-WebView-IPC","userInstanceEvidence":false})).unwrap()).map_err(|_| "RECEIPT_WRITE_FAILED")?;
+    eprintln!("HOST_SCOPE_IPC_OBSERVATION outcome={outcome}");
+    app.exit(0);
+    Ok(())
+}
+
+fn run_host_ui(automatic_scope: bool) {
     let project = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
@@ -32,10 +78,17 @@ fn HostUi_Manual_Worker_099() {
             .unwrap()
             .starts_with(project.join(".audit")));
     }
-    let js = fs::read_to_string(project.join(".audit/host-ui-isolation-20261114/ui/host-ui.js"))
-        .unwrap();
-    let css = fs::read_to_string(project.join(".audit/host-ui-isolation-20261114/ui/cc-desk.css"))
-        .unwrap();
+    let js = if automatic_scope {
+        String::new()
+    } else {
+        fs::read_to_string(project.join(".audit/host-ui-isolation-20261114/ui/host-ui.js")).unwrap()
+    };
+    let css = if automatic_scope {
+        String::new()
+    } else {
+        fs::read_to_string(project.join(".audit/host-ui-isolation-20261114/ui/cc-desk.css"))
+            .unwrap()
+    };
     let transports = Arc::new(TerminalTransports::new());
     let supervisor = Arc::new(NativeRunSupervisor::new(transports.clone()));
     let fixture = Fixture::with_runtime_environment("hold", supervisor, transports, true);
@@ -53,7 +106,7 @@ fn HostUi_Manual_Worker_099() {
             "pid":std::process::id(),"root":root,"fixtureRoot":fixture.root.path(),
             "webviewRoot":root.join("webview"),"temp":std::env::temp_dir(),
             "engineVersion":tauri::webview_version().unwrap(),"productionStartup":false,
-            "startCommandRegistered":false,"nodeEnvironment":"isolated allowlist",
+            "remoteHostStartCommandRegistered":false,"nodeEnvironment":"isolated allowlist",
             "processAdmission":"independent Builder; no product maintenance or singleton path",
         }))
         .unwrap(),
@@ -76,6 +129,7 @@ fn HostUi_Manual_Worker_099() {
     };
     let app = tauri::Builder::default().any_thread()
         .manage(runtime.clone()).manage(controller.clone())
+        .manage(ScopeObservation { enabled: automatic_scope, root: root.clone(), received: AtomicBool::new(false) })
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             crate::cli::commands::cli_start,
@@ -84,31 +138,34 @@ fn HostUi_Manual_Worker_099() {
             crate::commands::remote_host_request,
             crate::commands::remote_host_current,
             crate::commands::remote_host_cancel,
+            crate::commands::remote_host_pairing_scope,
+            host_scope_observed,
         ])
         .setup(move |app| { setup.initialize_main(app, &main)?; Ok(()) })
         .on_page_load(move |webview, payload| {
             if webview.label() == "main" && matches!(payload.event(), PageLoadEvent::Finished)
                 && !loaded.swap(true, Ordering::SeqCst) {
-                let script = format!("const style=document.createElement('style');style.textContent={css};document.head.append(style);{js}\nHostUiFixture.mount({request},{candidate}).catch(()=>{{document.body.textContent='FIXTURE_MOUNT_FAILED';}});");
+                let script = if automatic_scope {
+                    format!("({})({request});", include_str!("fixtures/document/host-scope.js"))
+                } else { format!("const style=document.createElement('style');style.textContent={css};document.head.append(style);{js}\nHostUiFixture.mount({request},{candidate}).catch(()=>{{document.body.textContent='FIXTURE_MOUNT_FAILED';}});") };
                 webview.eval(&script).unwrap();
             }
         })
         .build(tauri::generate_context!("src/tests/fixtures/document/tauri.conf.json"))
         .expect("isolated test application");
     let watchdog = app.handle().clone();
-    let finished = Arc::new(AtomicBool::new(false));
-    let watch_finished = finished.clone();
-    std::thread::spawn(move || {
-        for _ in 0..1800 {
-            if watch_finished.load(Ordering::SeqCst) {
-                return;
-            }
-            std::thread::sleep(Duration::from_secs(1));
+    let (finish_tx, finish_rx) = std::sync::mpsc::channel::<()>();
+    let watchdog = std::thread::spawn(move || {
+        if finish_rx
+            .recv_timeout(Duration::from_secs(if automatic_scope { 60 } else { 1800 }))
+            .is_err()
+        {
+            watchdog.exit(2);
         }
-        watchdog.exit(2);
     });
     let exit = app.run_return(|_, _| {});
-    finished.store(true, Ordering::SeqCst);
+    let _ = finish_tx.send(());
+    watchdog.join().expect("owned watchdog join");
     controller.begin_shutdown();
     let run = fixture.request_run();
     let mut stop = fixture
@@ -133,6 +190,19 @@ fn HostUi_Manual_Worker_099() {
     )
     .unwrap();
     assert_eq!(exit, 0);
+    if automatic_scope {
+        let observation: Value = serde_json::from_slice(
+            &fs::read(root.join("scope-observation.json")).expect("missing actual IPC observation"),
+        )
+        .unwrap();
+        assert!(
+            !matches!(
+                observation["outcome"].as_str(),
+                Some("START_FAILED" | "SCOPE_SHAPE_INVALID" | "UNKNOWN") | None
+            ),
+            "fixture did not observe a valid scope response: {observation}"
+        );
+    }
     assert!(
         local_shutdown_facts_complete(observed),
         "local shutdown facts incomplete: {observed:?}"
@@ -299,4 +369,93 @@ fn HostUi_ShutdownUnknownRetainsPartialFacts_098() {
         assert!(evidence.get("ownedRunPhysicallyRetired").is_none());
         assert!(evidence.get("clean").is_none());
     }
+}
+
+// Regression: a never-remotely-admitted ordinary run must retain the desktop
+// direct-root exit contract; this does not attest process-tree retirement.
+#[tokio::test]
+async fn HostExit_OrdinaryLocalRunProductionGate_101() {
+    let transports = Arc::new(TerminalTransports::new());
+    let supervisor = Arc::new(NativeRunSupervisor::new(transports.clone()));
+    let fixture = Fixture::with_runtime_environment("hold", supervisor, transports, true);
+    let runtime = Arc::new(NativeRuntime::with_owned_components_for_test(
+        fixture.service.clone(),
+        fixture.transports.clone(),
+        fixture.supervisor.clone(),
+    ));
+    let status = fixture.start();
+    let resource = fixture
+        .service
+        .registry()
+        .resource(&fixture.caller, &status.run)
+        .unwrap();
+    assert!(resource.process.managed_job.is_none());
+    drop(resource);
+    let host = Arc::new(crate::remote_host::RemoteHostService::default());
+    crate::remote_host::begin_app_shutdown(&host, &RemoteHostController::default());
+    assert_eq!(
+        host.request_exit(0, false),
+        crate::remote_host::ExitDecision::Wait(0)
+    );
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    host.start_exit(
+        0,
+        runtime.clone(),
+        Arc::new(crate::remote_client_ipc::RemoteClientService::default()),
+        move |code| {
+            let _ = tx.send(code);
+        },
+    );
+    let result = tokio::time::timeout(Duration::from_secs(15), rx).await;
+    // Preserve original owner cleanup even when the regression assertion fails.
+    runtime.shutdown();
+    fixture.wait_registry_retired();
+    assert_eq!(
+        result,
+        Ok(Ok(0)),
+        "production exit gate did not release a local-only desktop run"
+    );
+}
+
+#[tokio::test]
+async fn HostExit_RemoteResponsibilityNeverUsesLocalDesktopContract_102() {
+    let transports = Arc::new(TerminalTransports::new());
+    let supervisor = Arc::new(NativeRunSupervisor::new(transports.clone()));
+    let fixture = Fixture::with_runtime_environment("hold", supervisor, transports, true);
+    let runtime = Arc::new(NativeRuntime::with_owned_components_for_test(
+        fixture.service.clone(),
+        fixture.transports.clone(),
+        fixture.supervisor.clone(),
+    ));
+    fixture.start();
+    let host = Arc::new(crate::remote_host::RemoteHostService::default());
+    let controller = RemoteHostController::default();
+    controller.reserve_external_responsibility().unwrap();
+    crate::remote_host::begin_app_shutdown(&host, &controller);
+    assert!(!controller.sealed_never_remote());
+    assert!(controller.reserve_external_responsibility().is_err());
+    assert_eq!(
+        host.request_exit(0, false),
+        crate::remote_host::ExitDecision::Wait(0)
+    );
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    host.start_exit(
+        0,
+        runtime.clone(),
+        Arc::new(crate::remote_client_ipc::RemoteClientService::default()),
+        move |code| {
+            let _ = tx.send(code);
+        },
+    );
+    let result = tokio::time::timeout(Duration::from_secs(15), rx).await;
+    runtime.shutdown();
+    fixture.wait_registry_retired();
+    assert!(
+        matches!(result, Ok(Err(_))),
+        "remote responsibility must retain Unknown refusal"
+    );
+    assert_eq!(
+        host.request_exit(0, false),
+        crate::remote_host::ExitDecision::Prevent
+    );
 }

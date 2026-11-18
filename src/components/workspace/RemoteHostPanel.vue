@@ -175,8 +175,13 @@ async function readScope() {
   try {
     const scope = await remoteHostPairingScope({ runId: attempt.runId, generation: attempt.generation })
     if (stillCurrent(token, attempt)) pairingScope.value = JSON.stringify({ session: scope.session, run: scope.run, generation: scope.generation })
-  } catch {
-    if (stillCurrent(token, attempt)) message.value = '未能读取公开会话范围，不会自动重试。'
+  } catch (error) {
+    // 只披露固定安全错误码，不显示任意后端消息或异常载荷。
+    const code = typeof error === 'object' && error !== null && 'code' in error ? error.code : undefined
+    const safeCode = typeof code === 'string' && ['REMOTE_HOST_UNAVAILABLE', 'NATIVE_CANONICAL_UNAVAILABLE', 'RUN_NOT_READY', 'FORBIDDEN', 'DOCUMENT_BRIDGE_UNAVAILABLE'].includes(code) ? code : undefined
+    if (stillCurrent(token, attempt)) message.value = safeCode
+      ? `未能读取公开会话范围（${safeCode}），不会自动重试。`
+      : '未能读取公开会话范围，不会自动重试。'
   } finally {
     if (stillCurrent(token, attempt)) busy.value = false
   }

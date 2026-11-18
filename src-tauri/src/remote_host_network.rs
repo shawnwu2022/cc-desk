@@ -431,6 +431,7 @@ struct ClockOrigin {
 #[derive(Default)]
 struct NetworkState {
     closing: bool,
+    responsibility_started: bool,
     unknown: bool,
     clock: Option<ClockOrigin>,
     attempts: Vec<Arc<HostNetworkAttempt>>,
@@ -519,6 +520,14 @@ struct NetworkStart {
     registration: Option<Arc<RegisteredHostSource>>,
 }
 impl HostNetworkCustody {
+    pub(crate) fn sealed_never_remote(&self) -> bool {
+        let state = self.state.lock();
+        state.closing
+            && !state.responsibility_started
+            && !state.unknown
+            && !self.unknown_latched.load(Ordering::Acquire)
+            && state.attempts.is_empty()
+    }
     pub(crate) fn latch_unknown(&self) {
         self.unknown_latched.store(true, Ordering::Release);
     }
@@ -552,6 +561,7 @@ impl HostNetworkCustody {
         if state.closing || busy {
             return Err(HostNetworkError::Closed);
         }
+        state.responsibility_started = true;
         state.attempts.retain(|attempt| !attempt.known_joined());
         Ok(state)
     }

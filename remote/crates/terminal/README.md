@@ -109,3 +109,54 @@ synchronized-update handling, full log/handler privacy review, per-turn byte/CPU
 watchdog, fuzz/allocator evidence, mode/revision snapshots, renderer, and real CLI/
 platform acceptance. `remote_control_eligible` is always false. Do not attach
 untrusted real PTY streams based on this checkpoint.
+
+## Canonical Codex startup display profile (partial, not full CLI qualification)
+
+Only `new_with_queries` additionally models exact DECSET/DECRST 25 (cursor visibility),
+2004 (bracketed-paste state), 1007 (alternate scroll), 1003 (all-motion reporting),
+1006 (SGR mouse), and the observed ordered pair `1003;1006`. These go through the
+locked emulator, with predicted/actual mode comparison and checked mode epochs.
+The pair is one atomic mode mark; repeated no-ops do not advance epochs. Cursor
+visibility is represented by the existing projection; other input-mode state is
+not a new wire capability. In particular, raw-byte browser input is NOT equivalent
+to local mouse, alternate-scroll, or bracketed-paste input, and no automatic input
+wrapping or mouse-event production is enabled.
+
+This canonical profile also admits exact erase-display/line modes 0/1/2 and indexed
+SGR `38;5;n`/`48;5;n` for n<=255 among the existing basic flags, keeping the total
+16 scalar parameter bound. The existing Palette projection represents these colors.
+RGB SGR, colon subparameters, arbitrary mixed private modes and OSC/DCS remain
+rejected. Ordinary construction retains the original narrow admission described
+above. Unknown tails fail whole-batch preflight before mode or query effects.
+
+Terminal unit tests and a stale-view Host input test do not establish full Codex,
+browser, phone, or public Relay usability.
+
+## Synchronized display publication
+
+The canonical profile structurally recognizes exact 2026 h/l. Private mature
+parsing and prefix query replies continue immediately, but snapshots and new
+remote control/resize admission pause until end or the original fixed 150ms
+deadline. The original actor checks that deadline before dispatch and bounds its
+receive wait; repeated begin does not extend it. Timeout publishes already
+validated private state, rather than permanently degrading a healthy terminal.
+
+A new begin advances checked `mode_epoch` as a publication fence even if it only
+changes cells. This field therefore includes synchronized display boundaries,
+not only TermMode bit changes. Old capture/control/native commit guards cannot
+revive at end or timeout; a new full snapshot and ACK are required. Queued native
+guards are invalidated before any output batch privately mutates state. This
+cannot revoke a physical write which already passed its original commit check.
+
+The Processor uses an explicit immediate-private-parsing timeout policy; display
+timing is owned separately, with no new raw transaction buffer. The locked vte
+Processor's existing default 2MiB allocation is not removed or claimed away.
+The fixed feed/parameter/mark limits still apply. Unknown sequences or failed
+commits remain fail-closed. Public static run identity is not a projection or
+control grant and remains readable while healthy private display state is paused.
+
+The optional Windows `CodexCanonical_EmptyHomeOriginalNative_001` test requires an
+explicit reviewed executable path and SHA256 via `CC_DESK_CANONICAL_CODEX_EXE` and
+`CC_DESK_CANONICAL_CODEX_SHA256`. It checks eight seconds of scope availability in
+an empty isolated home with no task input. This is startup coverage, not signed-in
+full-TUI, phone, or full process-tree retirement qualification.

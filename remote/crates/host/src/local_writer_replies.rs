@@ -163,6 +163,41 @@ impl CanonicalStart {
     }
 }
 impl ReplyState {
+    #[cfg(all(test, windows))]
+    pub(super) fn test_feed(&mut self, bytes: &[u8]) -> OutputResult {
+        let (reply, _) = mpsc::sync_channel(1);
+        let request = OutputRequest {
+            context: self.context.clone(),
+            offset: self.next_offset,
+            bytes: bytes.into(),
+            reply,
+            _credit: Arc::new(Credits::default()).reserve().unwrap(),
+        };
+        self.process(&request, &mut Vec::new(), &AtomicBool::new(false))
+    }
+    pub(super) fn poll_display(&mut self, now: Instant) -> Result<(), Reject> {
+        #[cfg(feature = "experimental-canonical-replies")]
+        if let ReplyParser::Canonical(core) = &mut self.parser {
+            core.expire_display_sync(now);
+        }
+        #[cfg(not(feature = "experimental-canonical-replies"))]
+        let _ = now;
+        #[cfg(feature = "experimental-host-owner")]
+        self.publish_native_epochs()?;
+        Ok(())
+    }
+    pub(super) fn receive_wait(&self, now: Instant) -> Duration {
+        let base = Duration::from_millis(10);
+        #[cfg(feature = "experimental-canonical-replies")]
+        if let ReplyParser::Canonical(core) = &self.parser
+            && let Some(end) = core.display_deadline()
+        {
+            return base.min(end.saturating_duration_since(now));
+        }
+        #[cfg(not(feature = "experimental-canonical-replies"))]
+        let _ = now;
+        base
+    }
     #[cfg(feature = "experimental-host-owner")]
     fn publish_native_epochs(&self) -> Result<(), Reject> {
         *self.native_epochs.lock().map_err(|_| Reject::Thread)? = self.epochs();
@@ -179,7 +214,7 @@ impl ReplyState {
         let ReplyParser::Canonical(core) = &self.parser else {
             return Err(Reject::Unsupported);
         };
-        if core.is_degraded() {
+        if core.is_degraded() || core.display_pending() {
             return Err(Reject::Sync);
         }
         let (rows, columns) = core.dimensions();
@@ -194,6 +229,9 @@ impl ReplyState {
         let ReplyParser::Canonical(core) = &self.parser else {
             return Err(Reject::Unsupported);
         };
+        if core.display_pending() {
+            return Err(Reject::Sync);
+        }
         let size = (usize::from(rows), usize::from(columns));
         let after = core.resize_preflight(size.0, size.1).map_err(|e| match e {
             cc_desk_remote_terminal::TerminalCoreError::EpochOverflow => Reject::Epoch,
@@ -213,7 +251,9 @@ impl ReplyState {
     #[cfg(feature = "experimental-host-owner")]
     pub(super) fn epochs(&self) -> Option<cc_desk_remote_terminal::TerminalEpochs> {
         match &self.parser {
-            ReplyParser::Canonical(core) if !core.is_degraded() => Some(core.epochs()),
+            ReplyParser::Canonical(core) if !core.is_degraded() && !core.display_pending() => {
+                Some(core.epochs())
+            }
             _ => None,
         }
     }
@@ -270,6 +310,16 @@ impl ReplyState {
             sealed.store(true, Ordering::Release);
             return OutputResult::Rejected(Reject::Bounds);
         };
+        // Close queued native commit guards before any private state mutation,
+        // including a complete begin/end transaction within this one feed.
+        #[cfg(feature = "experimental-host-owner")]
+        match self.native_epochs.lock() {
+            Ok(mut current) => *current = None,
+            Err(_) => {
+                sealed.store(true, Ordering::Release);
+                return OutputResult::Unknown;
+            }
+        }
         let result = match &mut self.parser {
             ReplyParser::Static(parser) => {
                 process_static(parser, &mut self.rate, request, stdin, sealed)
@@ -310,6 +360,9 @@ impl ReplyState {
         let ReplyParser::Canonical(core) = &mut self.parser else {
             return Err(Reject::Unsupported);
         };
+        if core.display_pending() {
+            return Err(Reject::Sync);
+        }
         let view = core.semantic_snapshot().map_err(|_| {
             sealed.store(true, Ordering::Release);
             Reject::Unsupported

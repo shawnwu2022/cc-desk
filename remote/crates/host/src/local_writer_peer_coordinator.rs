@@ -4,19 +4,15 @@ use cc_desk_remote_security::{DataError, HostInstallRequest};
 use std::{
     future::Future,
     pin::Pin,
-    task::{Context, Poll, Wake, Waker},
+    task::{Context, Poll, Waker},
 };
 use tokio::{task::JoinHandle, time::Instant};
-struct NoWake;
-impl Wake for NoWake {
-    fn wake(self: Arc<Self>) {}
-}
 fn finished<T>(task: &mut JoinHandle<T>) -> Option<Result<T, tokio::task::JoinError>> {
     if !task.is_finished() {
         return None;
     }
-    let waker = Waker::from(Arc::new(NoWake));
-    match Pin::new(task).poll(&mut Context::from_waker(&waker)) {
+    let waker = Waker::noop();
+    match Pin::new(task).poll(&mut Context::from_waker(waker)) {
         Poll::Ready(result) => Some(result),
         Poll::Pending => None,
     }
@@ -120,7 +116,7 @@ impl NativeHost {
             return Err(NativeHostError::Authority);
         }
         let mut device = [0; 32];
-        for (i, pair) in text.chunks_exact(2).enumerate() {
+        for (i, pair) in text.as_chunks::<2>().0.iter().enumerate() {
             device[i] = u8::from_str_radix(
                 std::str::from_utf8(pair).map_err(|_| NativeHostError::Authority)?,
                 16,

@@ -2619,6 +2619,10 @@ impl NativeRunSupervisor {
             .collect()
     }
     #[cfg(feature = "remote-host")]
+    pub(crate) fn local_desktop_stopped(&self) -> bool {
+        self.core.shutting_down.load(Ordering::Acquire) && self.core.active.lock().is_empty()
+    }
+    #[cfg(feature = "remote-host")]
     pub(crate) fn has_unattested_native_inventory(&self) -> bool {
         self.core.unmanaged_history.load(Ordering::Acquire) || !self.core.active.lock().is_empty()
     }

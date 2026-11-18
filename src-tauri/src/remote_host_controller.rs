@@ -89,6 +89,7 @@ struct ApprovalSlot {
 struct ControllerState {
     next_receipt: u64,
     closing: bool,
+    responsibility_started: bool,
     requesting: Option<Arc<PendingRequest>>,
     configuration: Option<NativeConfiguration>,
     slot: Option<Arc<ApprovalSlot>>,
@@ -360,6 +361,7 @@ impl RemoteHostController {
                 cancelled: std::sync::atomic::AtomicBool::new(false),
             });
             let configuration = state.configuration.take().expect("checked under same lock");
+            state.responsibility_started = true;
             state.requesting = Some(pending.clone());
             (configuration, pending)
         };
@@ -689,6 +691,22 @@ impl RemoteHostController {
                 .as_ref()
                 .map(|slot| slot.owner.callback_outstanding()),
         )
+    }
+    pub(crate) fn reserve_external_responsibility(&self) -> Result<(), SafeError> {
+        let mut state = self.state.lock();
+        if state.closing {
+            return Err(error("REMOTE_HOST_CLOSED"));
+        }
+        state.responsibility_started = true;
+        Ok(())
+    }
+    pub(crate) fn sealed_never_remote(&self) -> bool {
+        let state = self.state.lock();
+        state.closing
+            && !state.responsibility_started
+            && state.requesting.is_none()
+            && state.slot.is_none()
+            && state.driver.is_none()
     }
     pub(crate) fn begin_shutdown(&self) {
         let (configuration, slot) = {

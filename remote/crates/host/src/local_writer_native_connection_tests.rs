@@ -150,7 +150,7 @@ async fn native_connection_existing_dispatcher_cancellation_retains_original_pen
     };
     let mut token_bytes = [0u8; 32];
     assert_eq!(window.len(), 64);
-    for (i, part) in window.as_bytes().chunks_exact(2).enumerate() {
+    for (i, part) in window.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         token_bytes[i] = u8::from_str_radix(std::str::from_utf8(part).unwrap(), 16).unwrap();
     }
     let bytes = input::encode(&input::Input {
@@ -228,7 +228,7 @@ mod owned_wire {
             return Err(Reject::Bounds);
         }
         let mut out = [0u8; N];
-        for (i, pair) in text.as_bytes().chunks_exact(2).enumerate() {
+        for (i, pair) in text.as_bytes().as_chunks::<2>().0.iter().enumerate() {
             out[i] = u8::from_str_radix(std::str::from_utf8(pair).map_err(|_| Reject::Bounds)?, 16)
                 .map_err(|_| Reject::Bounds)?;
         }

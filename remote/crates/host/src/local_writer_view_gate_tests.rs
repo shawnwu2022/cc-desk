@@ -41,7 +41,7 @@ async fn ControlWindow_ActualWriter_001() {
     let dir = tempfile::tempdir().unwrap();
     let sink = Sink::default();
     let observed = sink.clone();
-    let (mut native, _output, peer) = LocalWriter::start_control_guarded(
+    let (mut native, mut output, peer) = LocalWriter::start_control_guarded(
         Journal::open(&dir.path().join("journal.sqlite")).unwrap(),
         sink,
         target(),
@@ -105,15 +105,88 @@ async fn ControlWindow_ActualWriter_001() {
             ..
         })
     ));
+    let ReceiptLookup::Known(first_receipt) = peer
+        .pending_receipt(operation(1))
+        .unwrap()
+        .wait(Duration::from_secs(2))
+        .unwrap()
+        .unwrap()
+    else {
+        panic!("first durable receipt");
+    };
+    assert!(
+        peer.settle_receipt(first_receipt.into_proof().unwrap())
+            .unwrap()
+            .wait(Duration::from_secs(2))
+            .unwrap()
+            .is_ok()
+    );
+    assert_eq!(
+        output
+            .feed_at(0, b"\x1b[?2026habc".to_vec())
+            .unwrap()
+            .wait(Duration::from_secs(2))
+            .unwrap(),
+        OutputResult::Processed { replies: 0 }
+    );
+    // No later output is sent: the original actor must end publication pause itself.
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(
+        peer.submit(&window, operation(2), 9, b"old".to_vec())
+            .unwrap()
+            .wait(Duration::from_secs(2))
+            .unwrap(),
+        WriteResult::Rejected(Reject::Sync)
+    );
+    let frame = peer
+        .capture()
+        .unwrap()
+        .wait(Duration::from_secs(2))
+        .unwrap()
+        .unwrap();
+    assert_eq!(frame.view().epochs().mode_epoch, 1);
+    let ack = Ack {
+        profile: 1,
+        stamp: frame.issued_stamp().unwrap().clone(),
+    };
+    let (host, _client2) = tokio::io::duplex(32768);
+    let _stream2 = frame
+        .deliver(RecordWriter::new(host, 1).unwrap(), Duration::from_secs(1))
+        .await
+        .unwrap();
+    let fresh = peer
+        .acknowledge(ack)
+        .unwrap()
+        .wait(Duration::from_secs(2))
+        .unwrap()
+        .unwrap();
+    let window = peer
+        .input_window(&fresh)
+        .unwrap()
+        .wait(Duration::from_secs(2))
+        .unwrap()
+        .unwrap();
+    let fresh_result = peer
+        .submit(&window, operation(2), 9, b"two".to_vec())
+        .unwrap()
+        .wait(Duration::from_secs(2))
+        .unwrap();
+    assert!(matches!(
+        fresh_result,
+        WriteResult::Receipt(ReceiptEnvelope {
+            outcome: Outcome::HostWritten,
+            ..
+        })
+    ));
     now.store(6000, Ordering::Release);
     assert_eq!(
-        peer.submit(&window, operation(2), 9, b"late".to_vec())
+        peer.submit(&window, operation(3), 9, b"late".to_vec())
             .unwrap()
             .wait(Duration::from_secs(2))
             .unwrap(),
         WriteResult::Rejected(Reject::Policy)
     );
-    assert_eq!(&*observed.0.lock().unwrap(), b"one");
+    assert_eq!(&*observed.0.lock().unwrap(), b"onetwo");
     finish(&mut native);
 }
 
@@ -392,6 +465,36 @@ async fn ControlWindow_PostIntentClock_003() {
         Arc::new(()),
         CanonicalStart::new(3, 10, &HostViewBudget::new()).unwrap(),
     );
+    for wire in [b"\x1b[?2026hx\x1b[?2026l".as_slice(), b"\x1b[?2026hx"] {
+        let mut sync_state = ReplyState::canonical(
+            Arc::new(()),
+            CanonicalStart::new(3, 10, &HostViewBudget::new()).unwrap(),
+        );
+        let queued_guard = gate
+            .native_effect_guard(&request, Some(&sync_state))
+            .unwrap();
+        assert_eq!(
+            sync_state.test_feed(wire),
+            OutputResult::Processed { replies: 0 }
+        );
+        if wire == b"\x1b[?2026hx" {
+            assert!(sync_state.epochs().is_none());
+            assert_eq!(sync_state.resize_preflight(4, 10), Err(Reject::Sync));
+            assert!(sync_state.native_epochs.lock().unwrap().is_none());
+        }
+        sync_state
+            .poll_display(std::time::Instant::now() + Duration::from_secs(1))
+            .unwrap();
+        assert!(sync_state.epochs().is_some());
+        assert_eq!(
+            gate.check_request(&request, Some(&sync_state)),
+            Err(Reject::Sync)
+        );
+        assert!(
+            !queued_guard(),
+            "end/timeout cannot resurrect the queued old native commit guard"
+        );
+    }
     let native_effect = gate
         .native_effect_guard(&request, Some(&effect_state))
         .unwrap();
