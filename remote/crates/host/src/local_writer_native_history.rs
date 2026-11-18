@@ -1,17 +1,13 @@
 //! 仅回收已消费退休凭据且有成功后继的旧历史；不改变授权或安全容量。
 use super::*;
 use std::future::Future;
-use std::task::{Context, Poll, Wake, Waker};
-struct HistoryWake;
-impl Wake for HistoryWake {
-    fn wake(self: Arc<Self>) {}
-}
+use std::task::{Context, Poll, Waker};
 pub(super) fn poll_channel_join(channel: &RunningChannel) -> Option<bool> {
     // 原等待持 Tokio 槽锁跨 join；Pending future 析构只放锁，不取原 handle。
     let wait = channel.wait_closed_checked();
     let mut wait = std::pin::pin!(wait);
-    let waker = Waker::from(Arc::new(HistoryWake));
-    match wait.as_mut().poll(&mut Context::from_waker(&waker)) {
+    let waker = Waker::noop();
+    match wait.as_mut().poll(&mut Context::from_waker(waker)) {
         Poll::Pending => None,
         Poll::Ready(result) => Some(
             matches!(result,Ok(reason) if reason!=cc_desk_remote_security::DataError::Uncertain),
