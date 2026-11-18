@@ -72,6 +72,8 @@ jobs:
       - name: Rust lint
         working-directory: src-tauri
         run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Supply verified Windows browser tools
+        uses: ./.github/actions/setup-windows-browser-tools
       - name: Build standalone diagnostic, not an installer or release
         env:
           VITE_CC_DESK_PASTE_TRACE: '1'

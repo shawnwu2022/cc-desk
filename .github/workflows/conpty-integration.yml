@@ -27,6 +27,8 @@ on:
       - src-tauri/conpty/**
       - src-tauri/tauri.windows.conf.json
       - scripts/*conpty*
+      - scripts/test-desktop-webview.ps1
+      - tests/scripts/desktopWebviewSmoke.node.mjs
       - .github/workflows/conpty-integration.yml
   workflow_dispatch:
 permissions:
@@ -110,7 +112,7 @@ jobs:
         run: node scripts/prepare-conpty.mjs
 
       - name: Verify bundled runtime generator contracts
-        run: node --test tests/scripts/conptyBundle.node.cjs
+        run: node --test tests/scripts/conptyBundle.node.cjs tests/scripts/desktopWebviewSmoke.node.mjs
 
       - name: Type check frontend
         run: npm run typecheck
@@ -177,6 +179,8 @@ jobs:
       - name: Prepare verified bundled Windows runtime
         run: node scripts/prepare-conpty.mjs
 
+      - name: Supply verified Windows browser tools
+        uses: ./.github/actions/setup-windows-browser-tools
       - name: Build ordinary Windows installer (test-only, no updater publication)
         shell: pwsh
         run: |
@@ -189,6 +193,15 @@ jobs:
           $installers = @(Get-ChildItem src-tauri/target/release/bundle/nsis/*.exe)
           if ($installers.Count -ne 1) { throw 'Expected one NSIS installer' }
           ./scripts/test-conpty-install.ps1 -Installer $installers[0].FullName
+
+      - name: Preserve ordinary WebView observations
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-webview-smoke-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: desktop-webview-smoke/
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Stage immutable test package and manifest
         shell: pwsh
