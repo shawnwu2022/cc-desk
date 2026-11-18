@@ -177,6 +177,8 @@ jobs:
       - name: Prepare verified bundled Windows runtime
         run: node scripts/prepare-conpty.mjs
 
+      - name: Supply verified Windows browser tools
+        uses: ./.github/actions/setup-windows-browser-tools
       - name: Build ordinary Windows installer (test-only, no updater publication)
         shell: pwsh
         run: |

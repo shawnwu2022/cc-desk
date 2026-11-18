@@ -37,10 +37,10 @@ export function run(executable,args,env){
  if(child.error||child.status!==0)throw Error(`Build step failed: ${path.basename(executable)} (${child.status})`,{cause:child.error});
 }
 const sha=file=>createHash('sha256').update(fs.readFileSync(file)).digest('hex');
-export function validateInputInventory(inputs,registration){
+export function validateInputInventory(inputs,registration,browserTarget=path.join(trialTarget,'browser')){
  const roles=registration?['cc_desk_remote_security','rustls']:['cc_desk_remote_client','cc_desk_remote_security','rustls'];
  if(inputs.length!==roles.length)throw Error('Runtime input inventory mismatch');
- const directory=path.join(trialTarget,'browser','wasm32-unknown-unknown','debug');
+ const directory=path.join(browserTarget,'wasm32-unknown-unknown','debug');
  const main=registration?'cc_desk_remote_security':'cc_desk_remote_client';
  const seen=new Set();
  for(const input of inputs){
@@ -53,7 +53,7 @@ export function validateInputInventory(inputs,registration){
   seen.add(role);
  }
 }
-export function verifyRuntime(directory,dist=undefined){
+export function verifyRuntime(directory,dist=undefined,browserTarget=path.join(trialTarget,'browser')){
  const manifest=JSON.parse(fs.readFileSync(path.join(directory,'manifest.json'),'utf8'));
  const registration=manifest.kind==='OriginalBrowserRegistrationRuntime';
  if(!registration&&manifest.kind!=='OriginalBrowserRuntime')throw Error('Unknown runtime kind');
@@ -66,7 +66,7 @@ export function verifyRuntime(directory,dist=undefined){
   const file=projectPath(root,entry.file);
   if(sha(file)!==entry.sha256)throw Error(`Runtime source/input mismatch: ${entry.file}`);
  }
- validateInputInventory(manifest.inputs,registration);
+ validateInputInventory(manifest.inputs,registration,browserTarget);
  for(const entry of manifest.inputs)if(sha(projectPath(root,entry.file))!==entry.sha256)throw Error('Runtime input hash mismatch');
  if(manifest.cargoArtifacts&&sha(projectPath(root,manifest.cargoArtifacts.file))!==manifest.cargoArtifacts.sha256)throw Error('Cargo artifact evidence mismatch');
  if(JSON.stringify(manifest.files.map(x=>x.name).sort())!==JSON.stringify(['fixture_bg.js','fixture_bg.wasm']))throw Error('Runtime file inventory');

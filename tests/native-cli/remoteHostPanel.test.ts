@@ -271,3 +271,13 @@ it('NativeRegistrationPanel_FailureNeverLeaksOrRetries_003',async()=>{
  const w=mount(RemoteHostPanel,{props:{tabId:'t1'}});await click(w,'单次远程连接');await w.get('[aria-label="首次登记JSON"]').setValue('{}');await click(w,'请求登记密钥使用')
  expect(w.text()).not.toContain('PRIVATE_REGISTRATION_FAILURE');expect(api.remoteRegistrationRequest).toHaveBeenCalledTimes(1);expectNoAuthorityCalls();w.unmount()
 })
+
+it('RemoteHostPanel_StandardPackageRemainsIdleWithoutUserAction_021', async () => {
+ const w=mount(RemoteHostPanel,{props:{tabId:'t1'}})
+ await flushPromises()
+ expect(w.find('textarea').exists()).toBe(false)
+ for(const call of [api.remoteHostConfigure,api.remoteHostRequest,api.remoteHostStart,api.remoteHostCurrent,api.remoteHostPairingScope,api.remoteRegistrationRequest,api.remoteRegistrationCurrent])expect(call).not.toHaveBeenCalled()
+ w.unmount();await flushPromises()
+ expect(api.remoteHostStart).not.toHaveBeenCalled()
+ expect(api.remoteRegistrationRequest).not.toHaveBeenCalled()
+})

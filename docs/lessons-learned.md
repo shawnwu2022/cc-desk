@@ -25,6 +25,8 @@
 | L07 真实 CLI 要分层验证 | 新 CLI 接入、版本与恢复 |
 | L08 文档入口不等于实际加载 | Codex、Claude、项目指引 |
 | L09 版本晋级不只改 manifests | 发布、固定版本/日期断言 |
+| L10 发布门通过不等于版本目标已交付 | 标准打包、用户目标、真实设备验收 |
+
 
 ## L01 原生归档不等于界面隐藏
 
@@ -95,6 +97,14 @@
 - **不再犯**：版本晋级同时检查 package、npm lock、Cargo manifest/lock、Tauri 配置、changelog 和固定版本/日期测试；保留历史不可发布测试版本断言，不做全局字符串替换。提交 PR 前先运行下面的定向检查，再按发布流程跑完整门禁。
 - **最小回归**：`npm test -- tests/config/packageVersion.test.ts`，核对 5 条用例真实执行；定向通过不替代完整 CI、签名与发布后验收。
 - **证据**：`1d6d435f`、[固定版本测试](../tests/config/packageVersion.test.ts)、[发布流程](release-process.md)。此次教训依据已提交差异；历史 CI 失败次数应以对应运行日志为准，不从最终修复提交反推。
+
+
+## L10 发布门通过不等于版本目标已交付
+
+- **已证事实**：0.28.0-rc.1 的标准 Windows 配置仍只执行 SDK 准备与 Vite，未传 remote-host，也未构建浏览器两份 runtime。独立 remote-trial 的通过和文档披露不能证明标准安装包已经交付远程能力。此次把“已知缺口已披露”当成可发布判断，是交付判断失误。
+- **防再犯**：先把用户目标映射到实际标准构建、产物、可见入口和真实操作链。区分编入能力、默认启用、授权、可访问的手机站点与端到端可用；默认关闭不应成为不打包实现的理由。发布审批必须单独检查目标满足情况，不只版本、CI 和签名。
+- **最小回归**：标准 Windows 配置显式编入 Host、两份同源生产 runtime 进入 dist；无登记/缺省授权零连接；非 Windows 明确拒绝不支持的 Host 能力。真实设备登记、可信 HTTPS/COOP/COEP、Relay 可达性、普通安装包 WebView 和 AGY 专用身份认证/恢复仍须各自验收。
+- **证据**：main `9ac38fd` 的 Windows beforeBuild/标准发布命令与独立试用脚本；本轮 `desktopRemotePackage.node.mjs` 在缺少 feature 时的实际 RED。本条不宣称打包修复已经通过真实手机验收，也不将 60 秒试用等同长期无人值守。
 
 ## 维护方式
 

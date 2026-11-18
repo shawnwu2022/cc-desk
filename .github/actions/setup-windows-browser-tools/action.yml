@@ -1,0 +1,25 @@
+name: Supply verified Windows browser build tools
+description: Fixed official tools and locked dependencies for the standard Windows frontend
+runs:
+  using: composite
+  steps:
+    - name: Supply browser target
+      shell: pwsh
+      run: |
+        rustup target add wasm32-unknown-unknown --toolchain 1.98.1
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    - name: Cache verified tool archives
+      uses: actions/cache@v4
+      with:
+        path: |
+          ${{ runner.temp }}/cc-desk-browser-tools-21.1.8-0.2.129/*.tar.xz
+          ${{ runner.temp }}/cc-desk-browser-tools-21.1.8-0.2.129/*.tar.gz
+        key: windows-browser-official-llvm21.1.8-bindgen0.2.129-749d22f5-79e348c1
+    - name: Verify and extract browser tools
+      shell: pwsh
+      run: ./scripts/prepare-windows-browser-tools.ps1
+    - name: Fetch locked browser dependencies
+      shell: pwsh
+      run: |
+        cargo fetch --locked --manifest-path remote/Cargo.toml --target wasm32-unknown-unknown
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

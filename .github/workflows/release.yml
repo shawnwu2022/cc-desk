@@ -129,6 +129,10 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Supply verified Windows browser tools
+        if: matrix.platform == 'windows-2022'
+        uses: ./.github/actions/setup-windows-browser-tools
+
       - name: Setup MSVC developer command prompt
         if: matrix.platform == 'windows-2022'
         uses: ilammy/msvc-dev-cmd@v1
