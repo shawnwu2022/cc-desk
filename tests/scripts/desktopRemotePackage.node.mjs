@@ -29,7 +29,7 @@ test('Windows release supplies verified tools before the unchanged signed candid
  const workflow=fs.readFileSync('.github/workflows/release.yml','utf8');
  assert.ok(workflow.indexOf('Supply verified Windows browser tools')<workflow.indexOf('Build signed candidate'));
  const action=fs.readFileSync('.github/actions/setup-windows-browser-tools/action.yml','utf8');
- assert.match(action,/cargo fetch --locked --manifest-path remote\/Cargo.toml --target wasm32-unknown-unknown/);
+ assert.match(action,/cargo fetch --locked --manifest-path remote\/Cargo.toml/);
  assert.match(action,/rustup target add wasm32-unknown-unknown --toolchain 1.98.1/);
  const supplier=fs.readFileSync('scripts/prepare-windows-browser-tools.ps1','utf8');
  assert.match(supplier,/Get-FileHash -LiteralPath \$file -Algorithm SHA256/);
@@ -51,4 +51,13 @@ test('Standard target inventory stays exact rather than accepting trial or forei
 test('Every Windows standard Tauri build job supplies the same prerequisites',()=>{
  const required=[['ci.yml','roundtrip-release'],['ci.yml','roundtrip-debug'],['conpty-integration.yml','package'],['paste-runtime-trace.yml','diagnostic']];
  for(const [file,job] of required){const text=fs.readFileSync('.github/workflows/'+file,'utf8');const start=text.indexOf('  '+job+':');assert.ok(start>=0);const next=text.slice(start+1).search(/\n  [a-z][a-z0-9-]*:/);const body=next<0?text.slice(start):text.slice(start,start+1+next);const supply=body.indexOf('uses: ./.github/actions/setup-windows-browser-tools');assert.ok(supply>=0&&supply<body.indexOf('npm run tauri'),file+' '+job);}
+});
+
+test('Browser prefetch covers the complete locked resolution graph including host metadata',()=>{
+ const action=fs.readFileSync('.github/actions/setup-windows-browser-tools/action.yml','utf8');
+ const fetch=action.split(/\r?\n/).find(line=>line.trim().startsWith('cargo fetch '));
+ assert.equal(fetch?.trim(),'cargo fetch --locked --manifest-path remote/Cargo.toml');
+ for(const file of ['scripts/build-browser-runtime.mjs','scripts/build-browser-registration-runtime.mjs']){
+  const source=fs.readFileSync(file,'utf8');assert.ok(source.includes("'--offline','--locked'"));assert.ok(source.includes("'--target','wasm32-unknown-unknown'"));
+ }
 });
