@@ -160,6 +160,7 @@ impl Attempt {
 #[derive(Default)]
 struct CustodyState {
     closing: bool,
+    responsibility_started: bool,
     attempts: Vec<Arc<Attempt>>,
 }
 #[derive(Default)]
@@ -195,6 +196,7 @@ impl RegistrationCustody {
         {
             return Err(error("REMOTE_HOST_LOCKED"));
         }
+        state.responsibility_started = true;
         state.attempts.clear();
         let approval = NativeRegistrationKeyApproval::show(&app, &window, frozen)
             .map_err(|_| error("REMOTE_HOST_LOCKED"))?;
@@ -341,6 +343,10 @@ impl RegistrationCustody {
         }
         let reply = a.reply.lock().clone();
         Ok(reply)
+    }
+    pub(crate) fn sealed_never_remote(&self) -> bool {
+        let state = self.state.lock();
+        state.closing && !state.responsibility_started && state.attempts.is_empty()
     }
     pub(crate) fn begin_shutdown(&self) {
         let attempts = {

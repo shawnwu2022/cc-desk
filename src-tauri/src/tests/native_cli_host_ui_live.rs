@@ -370,3 +370,92 @@ fn HostUi_ShutdownUnknownRetainsPartialFacts_098() {
         assert!(evidence.get("clean").is_none());
     }
 }
+
+// Regression: a never-remotely-admitted ordinary run must retain the desktop
+// direct-root exit contract; this does not attest process-tree retirement.
+#[tokio::test]
+async fn HostExit_OrdinaryLocalRunProductionGate_101() {
+    let transports = Arc::new(TerminalTransports::new());
+    let supervisor = Arc::new(NativeRunSupervisor::new(transports.clone()));
+    let fixture = Fixture::with_runtime_environment("hold", supervisor, transports, true);
+    let runtime = Arc::new(NativeRuntime::with_owned_components_for_test(
+        fixture.service.clone(),
+        fixture.transports.clone(),
+        fixture.supervisor.clone(),
+    ));
+    let status = fixture.start();
+    let resource = fixture
+        .service
+        .registry()
+        .resource(&fixture.caller, &status.run)
+        .unwrap();
+    assert!(resource.process.managed_job.is_none());
+    drop(resource);
+    let host = Arc::new(crate::remote_host::RemoteHostService::default());
+    crate::remote_host::begin_app_shutdown(&host, &RemoteHostController::default());
+    assert_eq!(
+        host.request_exit(0, false),
+        crate::remote_host::ExitDecision::Wait(0)
+    );
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    host.start_exit(
+        0,
+        runtime.clone(),
+        Arc::new(crate::remote_client_ipc::RemoteClientService::default()),
+        move |code| {
+            let _ = tx.send(code);
+        },
+    );
+    let result = tokio::time::timeout(Duration::from_secs(15), rx).await;
+    // Preserve original owner cleanup even when the regression assertion fails.
+    runtime.shutdown();
+    fixture.wait_registry_retired();
+    assert_eq!(
+        result,
+        Ok(Ok(0)),
+        "production exit gate did not release a local-only desktop run"
+    );
+}
+
+#[tokio::test]
+async fn HostExit_RemoteResponsibilityNeverUsesLocalDesktopContract_102() {
+    let transports = Arc::new(TerminalTransports::new());
+    let supervisor = Arc::new(NativeRunSupervisor::new(transports.clone()));
+    let fixture = Fixture::with_runtime_environment("hold", supervisor, transports, true);
+    let runtime = Arc::new(NativeRuntime::with_owned_components_for_test(
+        fixture.service.clone(),
+        fixture.transports.clone(),
+        fixture.supervisor.clone(),
+    ));
+    fixture.start();
+    let host = Arc::new(crate::remote_host::RemoteHostService::default());
+    let controller = RemoteHostController::default();
+    controller.reserve_external_responsibility().unwrap();
+    crate::remote_host::begin_app_shutdown(&host, &controller);
+    assert!(!controller.sealed_never_remote());
+    assert!(controller.reserve_external_responsibility().is_err());
+    assert_eq!(
+        host.request_exit(0, false),
+        crate::remote_host::ExitDecision::Wait(0)
+    );
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    host.start_exit(
+        0,
+        runtime.clone(),
+        Arc::new(crate::remote_client_ipc::RemoteClientService::default()),
+        move |code| {
+            let _ = tx.send(code);
+        },
+    );
+    let result = tokio::time::timeout(Duration::from_secs(15), rx).await;
+    runtime.shutdown();
+    fixture.wait_registry_retired();
+    assert!(
+        matches!(result, Ok(Err(_))),
+        "remote responsibility must retain Unknown refusal"
+    );
+    assert_eq!(
+        host.request_exit(0, false),
+        crate::remote_host::ExitDecision::Prevent
+    );
+}

@@ -242,6 +242,7 @@ struct ServiceState {
     next_id: u32,
     creating: bool,
     closing: bool,
+    responsibility_started: bool,
     creation_unknown: bool,
     async_creating: bool,
     creation_stop: Option<watch::Sender<bool>>,
@@ -281,6 +282,7 @@ impl Default for RemoteClientService {
                 next_id: 0,
                 creating: false,
                 closing: false,
+                responsibility_started: false,
                 creation_unknown: false,
                 async_creating: false,
                 creation_stop: None,
@@ -493,6 +495,7 @@ impl RemoteClientService {
         )?;
         {
             let mut state = self.state.lock();
+            state.responsibility_started = true;
             state.async_creating = true;
             if state.closing {
                 stop.send_replace(true);
@@ -947,6 +950,7 @@ impl RemoteClientService {
             .checked_add(1)
             .ok_or_else(|| error("REMOTE_CLIENT_FULL"))?;
         state.next_id = id;
+        state.responsibility_started = true;
         state.creating = true;
         Ok(CreationGuard {
             service: self,
@@ -1049,6 +1053,16 @@ impl RemoteClientService {
     }
     /// Seal native admission atomically with observing any original owner.
     /// Retirement notification runs outside the state lock.
+    pub(crate) fn sealed_never_remote(&self) -> bool {
+        let state = self.state.lock();
+        state.closing
+            && !state.responsibility_started
+            && !state.creating
+            && !state.async_creating
+            && !state.creation_unknown
+            && state.resource.is_none()
+            && !state.has_keys()
+    }
     pub(crate) fn begin_shutdown(&self) -> bool {
         let (waiting, resource, stop) = {
             let mut state = self.state.lock();

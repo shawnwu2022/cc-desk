@@ -3682,6 +3682,7 @@ fn UnattendedPreparing_CloseKeepsInflightAppOwned_001() {
     drop(operation);
     let settled = host.unattended.observe().known();
     assert!(cleanup.close());
+    assert!(!host.unattended.sealed_never_remote());
     assert!(closed && outstanding && refused && settled);
 }
 

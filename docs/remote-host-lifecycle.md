@@ -168,3 +168,27 @@ fresh=None 不能证明材料已经退出。退出的原唯一 waiter 先保管 
 内通知并停止原 owners；采样回调不再同步进入完整停止准备。准备失败不发布退出，
 首个 code、重复调用与晚到 pin/pump 的原保管不变。原 waiter 同时等待材料事实，
 最终与 retired 决定在同一短锁内重验；Pending/Unknown 不因观察超时变成退休。
+
+## Never-remote desktop exit contract
+
+A standard remote-enabled build may return to the original local desktop exit
+contract only after every remote admission domain is sealed and its conservative
+responsibility history proves it never owned remote work. Controller approvals
+(including Forget), registration/key preparation, client construction, unattended
+preparation, source/activation and network responsibility are marked before their
+respective effects under the original admission locks. Failed attempts do not
+clear this history. Read-only scope/current/list operations are not approvals.
+
+The opaque LocalDesktopExit proof is minted only after these seals. It still runs
+the original Native shutdown and requires its join, settled launch/command slots
+and empty active desktop inventory. LocalDesktopStopped does not attest all IO
+threads or descendants and is not OwnedSessionReleased. Any remote responsibility,
+unknown state, failed join or incomplete command remains on the existing strict
+remote shutdown path. This fix cannot repair a previously loaded binary already
+stuck in ExitIntent::Unknown.
+
+Validation includes the real production app-exit service with an ordinary Native
+run (allowed) versus prior controller responsibility (still refused), plus original
+preparation shutdown/cancel ownership tests. This is not exhaustive scheduling
+proof of every concurrent entry point. Unprepared reserve_start is test-only;
+production reserve_prepared remains behind the original same-flow reservation.
