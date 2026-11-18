@@ -321,7 +321,7 @@ impl Drop for CreationGuard<'_> {
     }
 }
 impl RemoteClientService {
-    #[cfg(test)]
+    #[cfg(all(test, feature = "remote-host"))]
     pub(crate) fn test_only_install_original_client(
         &self,
         caller: CallerIdentity,

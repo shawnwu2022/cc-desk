@@ -56,16 +56,29 @@ fn decode(value: &str, maximum: usize) -> Result<Vec<u8>, GrantError> {
 }
 /// 只读登记元数据，不返回凭证原文或签名权限。
 pub struct BrowserProfileDisplay<'a> {
-    pub origin: &'a str, pub rp_id: &'a str,
-    pub credential_fingerprint: [u8;32], pub key_fingerprint: [u8;32],
-    pub backup_eligible: bool, pub allow_backed_up: bool,
+    pub origin: &'a str,
+    pub rp_id: &'a str,
+    pub credential_fingerprint: [u8; 32],
+    pub key_fingerprint: [u8; 32],
+    pub backup_eligible: bool,
+    pub allow_backed_up: bool,
 }
 impl BrowserProfile {
     pub fn display_metadata(&self) -> BrowserProfileDisplay<'_> {
-        BrowserProfileDisplay { origin: &self.origin, rp_id: &self.rp_id,
-            credential_fingerprint: digest::digest(&digest::SHA256, &self.credential).as_ref().try_into().unwrap(),
-            key_fingerprint: digest::digest(&digest::SHA256, &self.key.0).as_ref().try_into().unwrap(),
-            backup_eligible: self.backup_eligible, allow_backed_up: self.allow_backed_up }
+        BrowserProfileDisplay {
+            origin: &self.origin,
+            rp_id: &self.rp_id,
+            credential_fingerprint: digest::digest(&digest::SHA256, &self.credential)
+                .as_ref()
+                .try_into()
+                .unwrap(),
+            key_fingerprint: digest::digest(&digest::SHA256, &self.key.0)
+                .as_ref()
+                .try_into()
+                .unwrap(),
+            backup_eligible: self.backup_eligible,
+            allow_backed_up: self.allow_backed_up,
+        }
     }
 
     /// Values must come from separately approved enrollment, never a wire request.

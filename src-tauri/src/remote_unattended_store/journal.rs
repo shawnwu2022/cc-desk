@@ -87,7 +87,7 @@ impl Chain {
         if !bytes.len().is_multiple_of(RECORD_BYTES) {
             return Err(StoreError::Unknown);
         }
-        for bytes in bytes.chunks_exact(RECORD_BYTES) {
+        for bytes in bytes.as_chunks::<RECORD_BYTES>().0 {
             let r = Record::decode(bytes)?;
             if Some(r.sequence)
                 != state

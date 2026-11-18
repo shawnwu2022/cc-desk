@@ -2,8 +2,8 @@
 #![allow(dead_code, reason = "委托生产 consent 与材料供应尚未接入")]
 use super::*;
 use crate::cli::types::SafeError;
-use crate::remote_unattended::capability::VerifiedBinding;
 use crate::remote_unattended::capability::network::NetworkClock;
+use crate::remote_unattended::capability::VerifiedBinding;
 use crate::run_supervisor::delegated::{DelegatedNetworkAdmission, DelegatedRunOwner};
 use cc_desk_remote_host::native_host::{ChannelRetirementToken, NativeChannel};
 use std::sync::Weak;

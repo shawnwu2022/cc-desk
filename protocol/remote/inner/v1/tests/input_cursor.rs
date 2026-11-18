@@ -1,4 +1,4 @@
-use cc_desk_remote_record::control_io::{Message, Outcome, PendingInput, decode, encode};
+use cc_desk_remote_record::control_io::{decode, encode, Message, Outcome, PendingInput};
 #[test]
 fn public_rust_encoder_cursor_vectors_for_phone_interoperability() {
     let values = [

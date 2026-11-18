@@ -797,7 +797,7 @@ mod custody;
 #[path = "capacity_tests.rs"]
 mod capacity;
 
-#[path = "single_run_tests.rs"]
-mod single_run_tests;
 #[path = "checkpoint_tests.rs"]
 mod checkpoint;
+#[path = "single_run_tests.rs"]
+mod single_run_tests;

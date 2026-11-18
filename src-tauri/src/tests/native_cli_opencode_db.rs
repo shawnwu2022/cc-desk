@@ -298,7 +298,10 @@ fn Opencode_AuthorizedAncestorSymlinkReadsHistory_26() {
         super::open_read_only(&selected.join("opencode.db")).unwrap_err(),
         "SOURCE_UNSUPPORTED"
     );
-    let canonical = root.sqlite_canonical_directory().unwrap().join("opencode.db");
+    let canonical = root
+        .sqlite_canonical_directory()
+        .unwrap()
+        .join("opencode.db");
     drop(super::open_read_only(&canonical).unwrap());
     let items = read_history(&root, &[f.project_ref()]).unwrap();
     assert!(

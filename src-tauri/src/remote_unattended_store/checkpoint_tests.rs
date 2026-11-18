@@ -294,14 +294,8 @@ fn UnattendedCheckpoint_SealUnknownBeforeWriteLocksInstance_006() {
         Err(StoreError::Unknown)
     );
     assert!(store.observe(&old.expected(), 1000).is_err());
-    assert_eq!(
-        std::fs::read(journal_path).unwrap(),
-        before
-    );
-    assert_eq!(
-        std::fs::read(blob_path).unwrap(),
-        blob
-    );
+    assert_eq!(std::fs::read(journal_path).unwrap(), before);
+    assert_eq!(std::fs::read(blob_path).unwrap(), blob);
     drop(custody);
     drop(store);
     probe_reopen(d.path(), true);

@@ -70,7 +70,7 @@ async fn original_input_case(revoke: bool) {
         panic!("window");
     };
     let mut token = [0; 32];
-    for (index, pair) in window.as_bytes().chunks_exact(2).enumerate() {
+    for (index, pair) in window.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         token[index] = u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap();
     }
     let frame = input::encode(&input::Input {
@@ -497,7 +497,7 @@ async fn socket_case(late: bool, drop_owner: bool, receipt_mode: u8) {
             panic!("window");
         };
         let mut token = [0; 32];
-        for (index, pair) in window.as_bytes().chunks_exact(2).enumerate() {
+        for (index, pair) in window.as_bytes().as_chunks::<2>().0.iter().enumerate() {
             token[index] = u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap();
         }
         let frame = input::encode(&input::Input {
@@ -826,7 +826,7 @@ async fn renewal_input_from(
         panic!("window")
     };
     let mut token = [0; 32];
-    for (index, pair) in window.as_bytes().chunks_exact(2).enumerate() {
+    for (index, pair) in window.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         token[index] = u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap();
     }
     let frame = input::encode(&input::Input {
@@ -1578,7 +1578,10 @@ async fn live_host_case(mode: u8) {
         assert!(began.elapsed() >= Duration::from_secs(4));
         assert!(!channel.is_closed());
         assert!(channel.authority().check().is_ok());
-        assert_ne!(f.supervisor.snapshot(&f.request_run()).unwrap().process(), ProcessLifecycle::Exited);
+        assert_ne!(
+            f.supervisor.snapshot(&f.request_run()).unwrap().process(),
+            ProcessLifecycle::Exited
+        );
         tokio::time::timeout(Duration::from_secs(4), socket.wait_closed())
             .await
             .unwrap()
@@ -1600,11 +1603,9 @@ async fn live_host_case(mode: u8) {
         assert_ne!(mode, 0);
     }
     if let Some(channel) = socket.test_original_channel() {
-        assert!(
-            channel
-                .live_keepalive_fact(cc_desk_remote_security::Role::Host)
-                .is_err()
-        );
+        assert!(channel
+            .live_keepalive_fact(cc_desk_remote_security::Role::Host)
+            .is_err());
     }
     f.service
         .access(&f.caller, &f.request_run())
@@ -1616,7 +1617,6 @@ async fn live_host_case(mode: u8) {
     assert!(cleanup.close());
     assert!(relay.close().await);
 }
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn BrowserLiveRelay_OriginalWasmIdleAndFixedCutoff_001() {

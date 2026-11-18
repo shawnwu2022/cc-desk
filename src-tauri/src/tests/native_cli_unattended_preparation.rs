@@ -3080,7 +3080,12 @@ async fn unattended_short_network_case(mode: u8) {
     let scope = admission.scope().unwrap();
     record.route.address = relay.address.to_string();
     record.route.origin = relay.origin.clone();
-    record.route.relay_mode = if mode >= 19 { "rendezvousV1" } else { "legacyV1" }.into();
+    record.route.relay_mode = if mode >= 19 {
+        "rendezvousV1"
+    } else {
+        "legacyV1"
+    }
+    .into();
     record.route.tunnel = [3; 16];
     record.route.relay_id = [1; 16];
     record.epochs.host_key = 5;
@@ -3136,16 +3141,37 @@ async fn unattended_short_network_case(mode: u8) {
     let mut activation_witness = None;
     let mut retirement_probe = None;
     let mut product_keepalive = None;
-    let (approval, fixed_end, control) = if mode == 3 || mode == 4 || mode == 5 || (mode == 24 || mode == 25) {
+    let (approval, fixed_end, control) = if mode == 3
+        || mode == 4
+        || mode == 5
+        || (mode == 24 || mode == 25)
+    {
         let product = crate::remote_host::short_session::ShortSessionService::default();
         let binding = &document.as_ref().unwrap().2;
-        let context=crate::remote_host::short_session::StartContext {runtime:native.clone(),binding:binding.clone(),caller:f.caller.clone(),admission};
-        let id = if mode == 24 || mode == 25 { product.test_request_reconnect(&host,context,&selection,pairing.clone()) } else { product.test_request(&host,context,&selection,pairing.clone()) }.unwrap();
-        let initial=serde_json::to_value(product.current(&host).unwrap()).unwrap();
-        assert_eq!(initial["limitSeconds"], if mode==24 || mode==25 {60} else {10});
+        let context = crate::remote_host::short_session::StartContext {
+            runtime: native.clone(),
+            binding: binding.clone(),
+            caller: f.caller.clone(),
+            admission,
+        };
+        let id = if mode == 24 || mode == 25 {
+            product.test_request_reconnect(&host, context, &selection, pairing.clone())
+        } else {
+            product.test_request(&host, context, &selection, pairing.clone())
+        }
+        .unwrap();
+        let initial = serde_json::to_value(product.current(&host).unwrap()).unwrap();
+        assert_eq!(
+            initial["limitSeconds"],
+            if mode == 24 || mode == 25 { 60 } else { 10 }
+        );
         assert!(initial["deadlineUnixMs"].is_null());
-        let busy=serde_json::to_value(product.test_busy_reply(&host)).unwrap();
-        assert!(busy["mode"].is_null() && busy["limitSeconds"].is_null() && busy["deadlineUnixMs"].is_null());
+        let busy = serde_json::to_value(product.test_busy_reply(&host)).unwrap();
+        assert!(
+            busy["mode"].is_null()
+                && busy["limitSeconds"].is_null()
+                && busy["deadlineUnixMs"].is_null()
+        );
         assert_eq!(
             opened
                 .iter()
@@ -3159,9 +3185,16 @@ async fn unattended_short_network_case(mode: u8) {
                 panic!("preparation must not persist")
             })
             .unwrap();
-        let confirming=serde_json::to_value(product.current(&host).unwrap()).unwrap();
-        assert_eq!(confirming["mode"],if mode==24 || mode==25 {"reconnectTrial"} else {"shortNetwork"});
-        assert!(confirming["deadlineUnixMs"].as_u64().unwrap()<=cutoff());
+        let confirming = serde_json::to_value(product.current(&host).unwrap()).unwrap();
+        assert_eq!(
+            confirming["mode"],
+            if mode == 24 || mode == 25 {
+                "reconnectTrial"
+            } else {
+                "shortNetwork"
+            }
+        );
+        assert!(confirming["deadlineUnixMs"].as_u64().unwrap() <= cutoff());
         product.test_answer(true, true);
         product.test_network(crate::remote_host::short_session::TestNetwork {
             scalars,
@@ -3169,7 +3202,7 @@ async fn unattended_short_network_case(mode: u8) {
             accepted,
         });
         product.test_advance(&host,binding,&f.caller,&id,||Ok((crate::version_history::windows::unattended_store::WindowsUnattendedBackend::create_new(&path).unwrap(),SingleRunSealer))).unwrap();
-        let control=(mode==24 || mode==25).then(||product.test_final_control());
+        let control = (mode == 24 || mode == 25).then(|| product.test_final_control());
         product_keepalive = Some(product);
         (None, None, control)
     } else {
@@ -3210,7 +3243,9 @@ async fn unattended_short_network_case(mode: u8) {
         )
         .unwrap();
         pending.test_anonymous_network(scalars, opened.clone(), accepted);
-        if mode == 23 { pending.test_cancel_after_receipt(); }
+        if mode == 23 {
+            pending.test_cancel_after_receipt();
+        }
         if (13..=18).contains(&mode) {
             if mode == 18 {
                 bad_tls_observer = Some(pending.test_first_terminal_observer());
@@ -3274,16 +3309,26 @@ async fn unattended_short_network_case(mode: u8) {
         (Some(approval), Some(end), Some(control))
     };
     // rendezvous 的 Ready 需要双方 Join；批准并托管后并发启动原 Browser，不能先等待 Host Ready。
-    let autonomous_browser = if (19..=20).contains(&mode) || mode == 22 || (mode == 24 || mode == 25) {
-        let child = real_browser.take().unwrap();
-        let close = control.as_ref().unwrap().clone();
-        Some(tokio::task::spawn_blocking(move || {
-            if mode == 20 { std::thread::sleep(Duration::from_secs(9)); }
-            child.go_and_wait(Some(Box::new(move || { close.close(); close.closed() })), true, true)
-        }))
-    } else {
-        None
-    };
+    let autonomous_browser =
+        if (19..=20).contains(&mode) || mode == 22 || (mode == 24 || mode == 25) {
+            let child = real_browser.take().unwrap();
+            let close = control.as_ref().unwrap().clone();
+            Some(tokio::task::spawn_blocking(move || {
+                if mode == 20 {
+                    std::thread::sleep(Duration::from_secs(9));
+                }
+                child.go_and_wait(
+                    Some(Box::new(move || {
+                        close.close();
+                        close.closed()
+                    })),
+                    true,
+                    true,
+                )
+            }))
+        } else {
+            None
+        };
     let accepted = tokio::time::timeout(Duration::from_secs(8), ready).await;
     let mut output = None;
     if let Some(browser) = autonomous_browser {
@@ -3344,17 +3389,29 @@ async fn unattended_short_network_case(mode: u8) {
     }
     let waiting_exhausted = if mode == 21 || mode == 23 {
         let ended = tokio::time::timeout(Duration::from_secs(28), host.unattended.wait()).await;
-        eprintln!("TEST_ONLY_WAITING_LIMIT ended={ended:?} closed={} opens={:?}", control.as_ref().unwrap().closed(), opened.iter().map(|v|v.load(std::sync::atomic::Ordering::Acquire)).collect::<Vec<_>>());
-        matches!(ended, Ok(true)) && control.as_ref().unwrap().closed() && Instant::now() < fixed_end.unwrap()
-    } else { false };
-    let succeeded = waiting_exhausted || output.as_ref().is_some_and(|o| {
-        if mode == 7 {
-            !o.status.success()
-                && String::from_utf8_lossy(&o.stderr).contains("browser request rejected")
-        } else {
-            o.status.success()
-        }
-    });
+        eprintln!(
+            "TEST_ONLY_WAITING_LIMIT ended={ended:?} closed={} opens={:?}",
+            control.as_ref().unwrap().closed(),
+            opened
+                .iter()
+                .map(|v| v.load(std::sync::atomic::Ordering::Acquire))
+                .collect::<Vec<_>>()
+        );
+        matches!(ended, Ok(true))
+            && control.as_ref().unwrap().closed()
+            && Instant::now() < fixed_end.unwrap()
+    } else {
+        false
+    };
+    let succeeded = waiting_exhausted
+        || output.as_ref().is_some_and(|o| {
+            if mode == 7 {
+                !o.status.success()
+                    && String::from_utf8_lossy(&o.stderr).contains("browser request rejected")
+            } else {
+                o.status.success()
+            }
+        });
     let disconnect_ready = match retirement_probe {
         Some(probe) => probe.await,
         None => true,
@@ -3375,20 +3432,36 @@ async fn unattended_short_network_case(mode: u8) {
         actual == Some(Ok(cc_desk_remote_security::DataError::Codec))
     });
     let browser_retry_opens = mode < 19
-        || opened
-            .iter()
-            .all(|value| value.load(std::sync::atomic::Ordering::Acquire) == if mode == 23 || mode == 25 { 1 } else if mode == 21 { 4 } else if mode == 20 || mode == 22 { 3 } else { 2 });
+        || opened.iter().all(|value| {
+            value.load(std::sync::atomic::Ordering::Acquire)
+                == if mode == 23 || mode == 25 {
+                    1
+                } else if mode == 21 {
+                    4
+                } else if mode == 20 || mode == 22 {
+                    3
+                } else {
+                    2
+                }
+        });
     let input_exact = if succeeded {
-        let remainder: &[u8] =
-            if revoke || expires || mode == 6 || mode == 7 || mode == 9 || mode == 10 || mode == 21 || mode == 23 {
-                b"native"
-            } else if mode == 25 {
-                b"ative"
-            } else if mode == 13 || mode == 16 || mode >= 19 {
-                b"tive"
-            } else {
-                b"ative"
-            };
+        let remainder: &[u8] = if revoke
+            || expires
+            || mode == 6
+            || mode == 7
+            || mode == 9
+            || mode == 10
+            || mode == 21
+            || mode == 23
+        {
+            b"native"
+        } else if mode == 25 {
+            b"ative"
+        } else if mode == 13 || mode == 16 || mode >= 19 {
+            b"tive"
+        } else {
+            b"ative"
+        };
         f.service
             .access(&f.caller, &f.request_run())
             .unwrap()
@@ -3571,9 +3644,11 @@ fn short_network_isolated(case: &str) -> bool {
     let evidence = std::fs::read_to_string(&path).unwrap();
     eprintln!("{evidence}");
     let completed = if case == "UnattendedWaiting_ThreeReplacementsThenClosesBeforeParentEnd_002" {
-        evidence.contains("1 passed; 0 failed") && evidence.contains("TEST_ONLY_WAITING_RETRY_LIMIT_REACHED")
+        evidence.contains("1 passed; 0 failed")
+            && evidence.contains("TEST_ONLY_WAITING_RETRY_LIMIT_REACHED")
     } else if case == "UnattendedWaiting_CancelAfterWaitingReceiptNeverOpensNextKeys_004" {
-        evidence.contains("1 passed; 0 failed") && evidence.contains("TEST_ONLY_CANCEL_AFTER_RECEIPT waiting=true")
+        evidence.contains("1 passed; 0 failed")
+            && evidence.contains("TEST_ONLY_CANCEL_AFTER_RECEIPT waiting=true")
     } else if case == "UnattendedReconnect_FailedNextMaterialRetainsCustody_005" {
         evidence.contains("TEST_ONLY_RECONNECT_FAILED_MATERIAL_QUARANTINED")
     } else {
@@ -3645,8 +3720,8 @@ fn UnattendedPreparing_CloseCompletionCannotPrecedeOriginalCancel_003() {
 async fn UnattendedProduct_CancelAndForeignAdvanceNeverPersist_004() {
     use crate::remote_host::short_session::{ShortSessionService, StartContext};
     for case in 0..11 {
-        let reconnect=case>=5;
-        let mode=case%5;
+        let reconnect = case >= 5;
+        let mode = case % 5;
         let (mut f, native, _guard, (document, mut resources, binding)) =
             unattended_app_run_prepared(|f| {
                 let url: tauri::Url = "http://tauri.localhost/".parse().unwrap();
@@ -3665,96 +3740,113 @@ async fn UnattendedProduct_CancelAndForeignAdvanceNeverPersist_004() {
         let admission = admit(&f);
         let pair_dir = store_root();
         let pairing = Arc::new(synthetic_file_store(pair_dir.path()).unwrap());
-        let mut record=crate::remote_native_pairing_store::tests::record();
-        if reconnect {record.route.relay_mode=if case==10 {"legacyV1"}else{"rendezvousV1"}.into();}
+        let mut record = crate::remote_native_pairing_store::tests::record();
+        if reconnect {
+            record.route.relay_mode = if case == 10 {
+                "legacyV1"
+            } else {
+                "rendezvousV1"
+            }
+            .into();
+        }
         let candidate =
             crate::remote_native_pairing_store::tests::synthetic_confirmed_record_candidate(
-                &pairing,
-                record,
+                &pairing, record,
             );
         let selection=serde_json::json!({"storeId":candidate.expected().store_id,"revision":candidate.expected().revision.to_string(),"deviceId":candidate.record().device_id}).to_string();
         let host = Arc::new(RemoteHostService::default());
         let product = ShortSessionService::default();
-        let context=StartContext {runtime:native.clone(),binding:binding.clone(),caller:f.caller.clone(),admission};
-        let result=if reconnect {product.test_request_reconnect(&host,context,&selection,pairing)} else {product.test_request(&host,context,&selection,pairing)};
-        if case==10 {assert!(result.is_err());}else{
-        let id=result.unwrap();
-        let never = || -> Result<(_, SingleRunSealer), crate::cli::types::SafeError> {
-            panic!("unapproved flow reached persistence")
+        let context = StartContext {
+            runtime: native.clone(),
+            binding: binding.clone(),
+            caller: f.caller.clone(),
+            admission,
         };
-        for _ in 0..3 {
-            let state = serde_json::to_value(
+        let result = if reconnect {
+            product.test_request_reconnect(&host, context, &selection, pairing)
+        } else {
+            product.test_request(&host, context, &selection, pairing)
+        };
+        if case == 10 {
+            assert!(result.is_err());
+        } else {
+            let id = result.unwrap();
+            let never = || -> Result<(_, SingleRunSealer), crate::cli::types::SafeError> {
+                panic!("unapproved flow reached persistence")
+            };
+            for _ in 0..3 {
+                let state = serde_json::to_value(
+                    product
+                        .status_for(&host, &binding, &f.caller, &native)
+                        .unwrap(),
+                )
+                .unwrap();
+                assert_eq!(state["phase"], "preparing");
+            }
+            if mode == 1 {
+                product.test_answer(false, true);
+                product
+                    .test_advance(&host, &binding, &f.caller, &id, never)
+                    .unwrap();
+            }
+            if mode <= 1 {
+                product
+                    .close_for(&host, &binding, &f.caller, &native, &id)
+                    .unwrap();
+                product.test_answer(mode == 1, true);
+                assert!(product
+                    .test_advance(&host, &binding, &f.caller, &id, never)
+                    .is_err());
+            } else if mode == 2 {
+                product.test_answer(false, true);
+                assert!(product
+                    .test_advance(
+                        &host,
+                        &binding,
+                        &f.caller,
+                        "22222222-2222-4222-8222-222222222222",
+                        never
+                    )
+                    .is_err());
+                product
+                    .close_for(&host, &binding, &f.caller, &native, &id)
+                    .unwrap();
+            } else if mode == 4 {
+                f.service
+                    .access(&f.caller, &f.request_run())
+                    .unwrap()
+                    .write_frame(b"native")
+                    .unwrap();
+                assert_eq!(report(&f)["input"], json!([110, 97, 116, 105, 118, 101]));
+                assert!(f.service.access(&f.caller, &f.request_run()).is_err());
                 product
                     .status_for(&host, &binding, &f.caller, &native)
-                    .unwrap(),
-            )
-            .unwrap();
-            assert_eq!(state["phase"], "preparing");
-        }
-        if mode == 1 {
-            product.test_answer(false, true);
-            product
-                .test_advance(&host, &binding, &f.caller, &id, never)
-                .unwrap();
-        }
-        if mode <= 1 {
-            product
-                .close_for(&host, &binding, &f.caller, &native, &id)
-                .unwrap();
-            product.test_answer(mode == 1, true);
-            assert!(product
-                .test_advance(&host, &binding, &f.caller, &id, never)
-                .is_err());
-        } else if mode == 2 {
-            product.test_answer(false, true);
-            assert!(product
-                .test_advance(
-                    &host,
-                    &binding,
-                    &f.caller,
-                    "22222222-2222-4222-8222-222222222222",
-                    never
+                    .unwrap();
+                product
+                    .close_for(&host, &binding, &f.caller, &native, &id)
+                    .unwrap();
+            } else {
+                product.test_answer(false, true);
+                let url: tauri::Url = "http://tauri.localhost/".parse().unwrap();
+                let next = crate::cli::document::DocumentAuthority::new(
+                    f.service.registry().clone(),
+                    url.clone(),
                 )
-                .is_err());
-            product
-                .close_for(&host, &binding, &f.caller, &native, &id)
                 .unwrap();
-        } else if mode == 4 {
-            f.service
-                .access(&f.caller, &f.request_run())
-                .unwrap()
-                .write_frame(b"native")
-                .unwrap();
-            assert_eq!(report(&f)["input"], json!([110, 97, 116, 105, 118, 101]));
-            assert!(f.service.access(&f.caller, &f.request_run()).is_err());
-            product
-                .status_for(&host, &binding, &f.caller, &native)
-                .unwrap();
-            product
-                .close_for(&host, &binding, &f.caller, &native, &id)
-                .unwrap();
-        } else {
-            product.test_answer(false, true);
-            let url: tauri::Url = "http://tauri.localhost/".parse().unwrap();
-            let next = crate::cli::document::DocumentAuthority::new(
-                f.service.registry().clone(),
-                url.clone(),
-            )
-            .unwrap();
-            let next_binding = Arc::new(next.attach(&mut resources).unwrap());
-            next.started(&url);
-            next.finished(&url);
-            f.caller = next.test_caller();
-            assert!(product
-                .test_advance(&host, &next_binding, &f.caller, &id, never)
-                .is_err());
-            product
-                .status_for(&host, &next_binding, &f.caller, &native)
-                .unwrap();
-            product
-                .close_for(&host, &next_binding, &f.caller, &native, &id)
-                .unwrap();
-        }
+                let next_binding = Arc::new(next.attach(&mut resources).unwrap());
+                next.started(&url);
+                next.finished(&url);
+                f.caller = next.test_caller();
+                assert!(product
+                    .test_advance(&host, &next_binding, &f.caller, &id, never)
+                    .is_err());
+                product
+                    .status_for(&host, &next_binding, &f.caller, &native)
+                    .unwrap();
+                product
+                    .close_for(&host, &next_binding, &f.caller, &native, &id)
+                    .unwrap();
+            }
         }
         assert!(host.unattended.start_result().is_none());
         host.request_exit(55, false);
@@ -4052,38 +4144,50 @@ async fn UnattendedBrowserRetry_OriginalTimerReauthenticatesSamePage_001() {
     unattended_short_network_case(19).await;
 }
 
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn UnattendedWaiting_LateClientKeepsOriginalApproval_001() {
-    if short_network_isolated("UnattendedWaiting_LateClientKeepsOriginalApproval_001") { return; }
+    if short_network_isolated("UnattendedWaiting_LateClientKeepsOriginalApproval_001") {
+        return;
+    }
     unattended_short_network_case(20).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn UnattendedWaiting_ThreeReplacementsThenClosesBeforeParentEnd_002() {
-    if short_network_isolated("UnattendedWaiting_ThreeReplacementsThenClosesBeforeParentEnd_002") { return; }
+    if short_network_isolated("UnattendedWaiting_ThreeReplacementsThenClosesBeforeParentEnd_002") {
+        return;
+    }
     unattended_short_network_case(21).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn UnattendedWaiting_InstalledThenAbsentClientRebindsOriginalHost_003() {
-    if short_network_isolated("UnattendedWaiting_InstalledThenAbsentClientRebindsOriginalHost_003") { return; }
+    if short_network_isolated("UnattendedWaiting_InstalledThenAbsentClientRebindsOriginalHost_003")
+    {
+        return;
+    }
     unattended_short_network_case(22).await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn UnattendedWaiting_CancelAfterWaitingReceiptNeverOpensNextKeys_004() {
-    if short_network_isolated("UnattendedWaiting_CancelAfterWaitingReceiptNeverOpensNextKeys_004") { return; }
+    if short_network_isolated("UnattendedWaiting_CancelAfterWaitingReceiptNeverOpensNextKeys_004") {
+        return;
+    }
     unattended_short_network_case(23).await;
 }
 
-#[tokio::test(flavor="multi_thread",worker_threads=2)]
-async fn UnattendedProduct_ExplicitReconnectTrialUsesOriginalApprovals_008(){
- if short_network_isolated("UnattendedProduct_ExplicitReconnectTrialUsesOriginalApprovals_008"){return;}
- unattended_short_network_case(24).await;
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn UnattendedProduct_ExplicitReconnectTrialUsesOriginalApprovals_008() {
+    if short_network_isolated("UnattendedProduct_ExplicitReconnectTrialUsesOriginalApprovals_008") {
+        return;
+    }
+    unattended_short_network_case(24).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn UnattendedProduct_ReconnectTrialIdlePastLease_009(){
- if short_network_isolated("UnattendedProduct_ReconnectTrialIdlePastLease_009"){return;}
- unattended_short_network_case(25).await;
+async fn UnattendedProduct_ReconnectTrialIdlePastLease_009() {
+    if short_network_isolated("UnattendedProduct_ReconnectTrialIdlePastLease_009") {
+        return;
+    }
+    unattended_short_network_case(25).await;
 }

@@ -37,6 +37,7 @@ pub(crate) enum KeyRetirement {
     NoKeyCreated,
     Unknown,
 }
+#[cfg(any(feature = "remote-host", all(test, feature = "remote-client-ipc")))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct KeyObservation {
     pub(crate) retirement: KeyRetirement,
@@ -51,27 +52,24 @@ pub(crate) struct NativeRevocation {
 // 只能观察原 root 的撤销位，不能清位或把 child 的局部位冒充完整父门。
 pub(crate) struct RootRevocationWitness(Arc<AtomicBool>);
 impl NativeRevocation {
-    #[cfg_attr(
-        not(test),
-        allow(
-            dead_code,
-            reason = "Host lease binding is a separate integration slice"
-        )
-    )]
+    #[cfg(any(feature = "remote-host", all(test, feature = "remote-client-ipc")))]
     pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self::default())
     }
+    #[cfg(feature = "remote-host")]
     pub(crate) fn root_witness(&self) -> Option<RootRevocationWitness> {
         self.parents
             .is_none()
             .then(|| RootRevocationWitness(self.local.clone()))
     }
+    #[cfg(feature = "remote-host")]
     pub(crate) fn child(parents: [RootRevocationWitness; 2]) -> Arc<Self> {
         Arc::new(Self {
             local: Arc::new(AtomicBool::new(false)),
             parents: Some(parents),
         })
     }
+    #[cfg(feature = "remote-host")]
     pub(crate) fn has_roots(&self, first: &Self, second: &Self) -> bool {
         first.parents.is_none()
             && second.parents.is_none()
@@ -725,7 +723,7 @@ impl SignTicket {
             }
         }));
     }
-    #[cfg(test)]
+    #[cfg(all(test, feature = "remote-client-ipc"))]
     pub(crate) fn hook_delivery(&mut self, hook: Box<dyn FnOnce() + Send>) {
         self.delivery_hook = Some(hook);
     }
@@ -953,7 +951,7 @@ impl KeyCustodian {
             Some(revocation),
         )
     }
-    #[cfg(test)]
+    #[cfg(all(test, feature = "remote-client-ipc"))]
     pub(crate) fn prepare_revocable_for_test(
         factory: impl FnOnce() -> Result<NativeOwnedSoftwareKey, CryptoError> + Send + 'static,
         purpose: SigningPurpose,
@@ -1066,6 +1064,9 @@ impl KeyCustodian {
                         normal: true,
                     };
                 }
+                #[cfg(not(feature = "remote-host"))]
+                let KeyFactory::Legacy(factory) = factory;
+                #[cfg(feature = "remote-host")]
                 let factory = match factory {
                     KeyFactory::Legacy(factory) => factory,
                     #[cfg(feature = "remote-host")]
@@ -1160,6 +1161,7 @@ impl KeyCustodian {
             self.retirement
         }
     }
+    #[cfg(any(feature = "remote-host", all(test, feature = "remote-client-ipc")))]
     pub(crate) fn observe_complete(&mut self) -> KeyObservation {
         KeyObservation {
             retirement: self.observe(),

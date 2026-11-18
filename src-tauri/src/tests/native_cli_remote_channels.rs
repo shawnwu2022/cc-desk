@@ -1,7 +1,9 @@
 //! Public TEST_ONLY identities and real TLS/AppBind/grant exchange over duplex.
+#[cfg(feature = "remote-host")]
+use cc_desk_remote_record::grant::CanonicalGrant;
 use cc_desk_remote_record::{
     appbind::CanonicalOrigin,
-    grant::{CanonicalGrant, DataRole, SessionScope},
+    grant::{DataRole, SessionScope},
 };
 use cc_desk_remote_security::*;
 use std::{sync::Arc, time::Duration};
@@ -21,9 +23,11 @@ pub(super) mod identities;
     reason = "Existing public TEST_ONLY issuer/scalar; unused fixed scope is intentionally not adopted"
 )]
 mod support;
+#[cfg(feature = "remote-host")]
 pub(super) fn admin() -> P256Spki {
     support::admin()
 }
+#[cfg(feature = "remote-host")]
 pub(super) fn signed(payload: &CanonicalGrant, kid: [u8; 32]) -> Vec<u8> {
     support::signed(payload, kid)
 }

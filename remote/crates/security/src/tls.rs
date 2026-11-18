@@ -53,8 +53,12 @@ pub struct LocalIdentity {
 }
 impl LocalIdentity {
     /// 只读公开身份，不暴露签名器。
-    pub fn endpoint_id(&self) -> [u8;32] { self.public.endpoint_id(self.role) }
-    pub fn role(&self) -> Role { self.role }
+    pub fn endpoint_id(&self) -> [u8; 32] {
+        self.public.endpoint_id(self.role)
+    }
+    pub fn role(&self) -> Role {
+        self.role
+    }
     pub fn new(
         role: Role,
         public: P256Spki,
@@ -88,7 +92,9 @@ pub struct PeerPin {
 }
 impl PeerPin {
     /// 原生确认使用的公开端点身份，不构成授权。
-    pub fn endpoint_id(&self) -> [u8; 32] { self.public.endpoint_id(self.role) }
+    pub fn endpoint_id(&self) -> [u8; 32] {
+        self.public.endpoint_id(self.role)
+    }
     pub fn new(role: Role, public: P256Spki) -> Self {
         Self { role, public }
     }

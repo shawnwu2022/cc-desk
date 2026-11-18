@@ -139,18 +139,30 @@ async fn snapshot_pull_probe_real_channel_pending_and_exact_batches() {
         } else {
             assert_eq!(result.unwrap().len(), 2);
             assert!(native.pending.try_lock().is_ok());
-            let request2=br#"{"message":"Window","profile":1,"request":"2"}"#;
-            let host=async {
-                let record=h.receive(&native.scope,4,BUDGET).await.unwrap();assert_eq!(record.payload(),request2);drop(record);
-                let reply=wire::encode(&wire::Message::WindowGranted{profile:1,request:"2".into(),window:"09".repeat(32),not_after_host_ms:"2000".into()}).unwrap();
-                h.send_projection(&native.scope,4,&reply,BUDGET).await.unwrap();
+            let request2 = br#"{"message":"Window","profile":1,"request":"2"}"#;
+            let host = async {
+                let record = h.receive(&native.scope, 4, BUDGET).await.unwrap();
+                assert_eq!(record.payload(), request2);
+                drop(record);
+                let reply = wire::encode(&wire::Message::WindowGranted {
+                    profile: 1,
+                    request: "2".into(),
+                    window: "09".repeat(32),
+                    not_after_host_ms: "2000".into(),
+                })
+                .unwrap();
+                h.send_projection(&native.scope, 4, &reply, BUDGET)
+                    .await
+                    .unwrap();
             };
-            let(reply,())=tokio::join!(native.exchange(request2,BUDGET),host);reply.unwrap();
-
+            let (reply, ()) = tokio::join!(native.exchange(request2, BUDGET), host);
+            reply.unwrap();
         }
         native.retire().await.expect("original Client owner joined");
         h.close().await;
-        h.wait_closed_checked().await.expect("original Host owner joined");
+        h.wait_closed_checked()
+            .await
+            .expect("original Host owner joined");
     }
 }
 #[tokio::test]
@@ -170,12 +182,18 @@ async fn snapshot_pull_probe_next_does_not_refresh_deadline() {
         h.receive(&native.scope, 4, BUDGET).await.unwrap();
     };
     let (result, ()) = tokio::join!(pull(&native, Duration::from_millis(40)), server);
-    assert!((Duration::from_millis(40)..=Duration::from_millis(42)).contains(&started.elapsed()), "fixed deadline elapsed {:?}", started.elapsed());
+    assert!(
+        (Duration::from_millis(40)..=Duration::from_millis(42)).contains(&started.elapsed()),
+        "fixed deadline elapsed {:?}",
+        started.elapsed()
+    );
     assert_eq!(result.err(), Some(DataError::Deadline));
     assert!(native.channel.authority().check().is_err());
     native.retire().await.expect("original Client owner joined");
     h.close().await;
-        h.wait_closed_checked().await.expect("original Host owner joined");
+    h.wait_closed_checked()
+        .await
+        .expect("original Host owner joined");
 }
 #[test]
 fn snapshot_pull_probe_old_mode_refuses_and_codec_rejects_replay_or_extra_fields() {
@@ -191,12 +209,15 @@ fn snapshot_pull_probe_old_mode_refuses_and_codec_rejects_replay_or_extra_fields
 
 #[tokio::test]
 async fn snapshot_pull_probe_cancel_polled_future_retires_original_owner() {
-    let(c,h,_gate,_cancel)=channels(Arc::new(AtomicU64::new(1000))).await;
-    let native=NativeClient::new(c,4).unwrap();
-    let mut operation=Box::pin(pull(&native,BUDGET));
-    tokio::select!{r=&mut operation=>panic!("unexpected completion {r:?}"),r=h.receive(&native.scope,4,BUDGET)=>{assert_eq!(r.unwrap().payload(),BEGIN);}}
+    let (c, h, _gate, _cancel) = channels(Arc::new(AtomicU64::new(1000))).await;
+    let native = NativeClient::new(c, 4).unwrap();
+    let mut operation = Box::pin(pull(&native, BUDGET));
+    tokio::select! {r=&mut operation=>panic!("unexpected completion {r:?}"),r=h.receive(&native.scope,4,BUDGET)=>{assert_eq!(r.unwrap().payload(),BEGIN);}}
     drop(operation);
     assert!(native.channel.authority().check().is_err());
     native.retire().await.expect("original Client owner joined");
-    h.close().await;h.wait_closed_checked().await.expect("original Host owner joined");
+    h.close().await;
+    h.wait_closed_checked()
+        .await
+        .expect("original Host owner joined");
 }

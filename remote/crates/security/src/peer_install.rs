@@ -100,10 +100,12 @@ impl Shared {
         self.end.is_some()
     }
     // 只读缓存，不消费原安装请求、回复或 client proof。
-    pub(crate) fn cached_live_fence(&self) -> Result<Option<u64>,DataError> {
-        match *self.admission.lock().map_err(|_|DataError::Closed)? {
-            Admission::Pending=>Ok(None),Admission::Ready(f)=>Ok(Some(f)),
-            Admission::Terminal=>Err(DataError::Closed),Admission::Legacy=>Err(DataError::Context),
+    pub(crate) fn cached_live_fence(&self) -> Result<Option<u64>, DataError> {
+        match *self.admission.lock().map_err(|_| DataError::Closed)? {
+            Admission::Pending => Ok(None),
+            Admission::Ready(f) => Ok(Some(f)),
+            Admission::Terminal => Err(DataError::Closed),
+            Admission::Legacy => Err(DataError::Context),
         }
     }
     pub(crate) fn fence(&self) -> Result<u64, DataError> {

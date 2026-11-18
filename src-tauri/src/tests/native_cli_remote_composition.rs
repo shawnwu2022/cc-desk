@@ -206,7 +206,11 @@ impl NetworkRelayFixture {
     async fn start_with_lifetime(host_point: Option<Vec<u8>>, lifetime_ms: u64) -> Self {
         Self::start_with_browser(host_point, lifetime_ms, false).await
     }
-    async fn start_with_browser(host_point: Option<Vec<u8>>, lifetime_ms: u64, browser: bool) -> Self {
+    async fn start_with_browser(
+        host_point: Option<Vec<u8>>,
+        lifetime_ms: u64,
+        browser: bool,
+    ) -> Self {
         assert!((30_000..=120_000).contains(&lifetime_ms));
         let reserve = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = reserve.local_addr().unwrap();

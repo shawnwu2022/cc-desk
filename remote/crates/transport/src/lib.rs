@@ -1,14 +1,14 @@
 //! Bounded opaque transport. This module grants no endpoint or PTY authority.
-mod deadline;
 mod data_keepalive;
+mod deadline;
 pub use data_keepalive::DataKeepaliveActivation;
 #[cfg(test)]
 mod browser_relay_fixture_tests;
 #[cfg(test)]
 mod owned_tests;
+pub mod records;
 #[cfg(test)]
 mod registration_tests;
-pub mod records;
 pub mod wss;
 pub fn websocket_config() -> tokio_tungstenite::tungstenite::protocol::WebSocketConfig {
     tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
@@ -47,7 +47,9 @@ impl TestOnlyTunnelRetirement {
 impl OwnedTunnel {
     /// 原登记 producer EOF，且 EOF 前每个原 WS send receipt 均已完成；不表示对端落库。
     pub fn registration_tail_drained(&self) -> bool {
-        self.registration_tail.as_ref().is_some_and(|tail| tail.load(std::sync::atomic::Ordering::Acquire))
+        self.registration_tail
+            .as_ref()
+            .is_some_and(|tail| tail.load(std::sync::atomic::Ordering::Acquire))
     }
     #[cfg(feature = "test-only-loopback")]
     #[doc(hidden)]
@@ -55,7 +57,9 @@ impl OwnedTunnel {
         TestOnlyTunnelRetirement(self.joined.clone())
     }
     pub fn request_close(&self) {
-        if let Some(policy)=&self.data_keepalive {policy.close();}
+        if let Some(policy) = &self.data_keepalive {
+            policy.close();
+        }
         self.stop.send_replace(true);
     }
     pub async fn wait_closed(&self) -> Result<(), TransportError> {
@@ -107,7 +111,9 @@ pub fn test_only_start_registration_stream<S>(
     original_end: tokio::time::Instant,
     original_cancel: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> Result<(tokio::io::DuplexStream, OwnedTunnel), TransportError>
-where S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static {
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
     start_owned_registration(ws, tunnel, budget, original_end, original_cancel)
 }
 fn start_owned_registration<S>(
@@ -117,28 +123,61 @@ fn start_owned_registration<S>(
     original_end: tokio::time::Instant,
     original_cancel: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> Result<(tokio::io::DuplexStream, OwnedTunnel), TransportError>
-where S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static {
-    let remaining = original_end.checked_duration_since(tokio::time::Instant::now())
-        .filter(|remaining| !remaining.is_zero() && *remaining <= std::time::Duration::from_secs(120))
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    let remaining = original_end
+        .checked_duration_since(tokio::time::Instant::now())
+        .filter(|remaining| {
+            !remaining.is_zero() && *remaining <= std::time::Duration::from_secs(120)
+        })
         .ok_or(TransportError::Limit)?;
     if budget < std::time::Duration::from_millis(30) || remaining.is_zero() {
         return Err(TransportError::Limit);
     }
-    start_owned_policy(ws,tunnel,budget,Some(RegistrationPolicy{end:original_end,interval:budget/3,tunnel}),Some(Box::pin(original_cancel)),None,
-        #[cfg(feature="test-only-loopback")]
+    start_owned_policy(
+        ws,
+        tunnel,
+        budget,
+        Some(RegistrationPolicy {
+            end: original_end,
+            interval: budget / 3,
+            tunnel,
+        }),
+        Some(Box::pin(original_cancel)),
+        None,
+        #[cfg(feature = "test-only-loopback")]
         None,
     )
 }
-#[derive(Clone,Copy)]
-struct RegistrationPolicy { end:tokio::time::Instant,interval:std::time::Duration,tunnel:[u8;16] }
-type OriginalCancellation = std::pin::Pin<Box<dyn std::future::Future<Output=()> + Send>>;
-async fn original_cancelled(cancel:&mut Option<OriginalCancellation>) {
-    match cancel { Some(future)=>future.await, None=>std::future::pending().await }
+#[derive(Clone, Copy)]
+struct RegistrationPolicy {
+    end: tokio::time::Instant,
+    interval: std::time::Duration,
+    tunnel: [u8; 16],
+}
+type OriginalCancellation = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
+async fn original_cancelled(cancel: &mut Option<OriginalCancellation>) {
+    match cancel {
+        Some(future) => future.await,
+        None => std::future::pending().await,
+    }
 }
 #[cfg(feature = "test-only-loopback")]
 #[doc(hidden)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TestOnlyMuxCause { Cancelled, IoBudget, WebSocketClose, WebSocketEof, WebSocketReset, SocketIo, SocketWrite, RouteWorker, Delivery, Wire }
+pub enum TestOnlyMuxCause {
+    Cancelled,
+    IoBudget,
+    WebSocketClose,
+    WebSocketEof,
+    WebSocketReset,
+    SocketIo,
+    SocketWrite,
+    RouteWorker,
+    Delivery,
+    Wire,
+}
 #[cfg(feature = "test-only-loopback")]
 #[doc(hidden)]
 #[derive(Clone, Copy, Debug)]
@@ -149,10 +188,18 @@ pub struct TestOnlyMuxEnd {
 }
 #[cfg(feature = "test-only-loopback")]
 #[doc(hidden)]
-pub type TestOnlyObservedTunnel = (tokio::io::DuplexStream, OwnedTunnel, tokio::sync::oneshot::Receiver<TestOnlyMuxEnd>);
+pub type TestOnlyObservedTunnel = (
+    tokio::io::DuplexStream,
+    OwnedTunnel,
+    tokio::sync::oneshot::Receiver<TestOnlyMuxEnd>,
+);
 #[cfg(feature = "test-only-loopback")]
 #[doc(hidden)]
-pub fn test_only_start_admitted_observed(ws: wss::AdmittedSocket, tunnel: [u8; 16], budget: std::time::Duration) -> Result<TestOnlyObservedTunnel, TransportError> {
+pub fn test_only_start_admitted_observed(
+    ws: wss::AdmittedSocket,
+    tunnel: [u8; 16],
+    budget: std::time::Duration,
+) -> Result<TestOnlyObservedTunnel, TransportError> {
     let (sender, receiver) = tokio::sync::oneshot::channel();
     let (stream, owner) = start_owned_inner(ws, tunnel, budget, Some(sender))?;
     Ok((stream, owner, receiver))
@@ -196,35 +243,57 @@ fn start_owned<S>(
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
-    start_owned_inner(ws, tunnel, budget, #[cfg(feature = "test-only-loopback")] None)
+    start_owned_inner(
+        ws,
+        tunnel,
+        budget,
+        #[cfg(feature = "test-only-loopback")]
+        None,
+    )
 }
 fn start_owned_inner<S>(
     ws: tokio_tungstenite::WebSocketStream<S>,
     tunnel: [u8; 16],
     budget: std::time::Duration,
-    #[cfg(feature = "test-only-loopback")] observer: Option<tokio::sync::oneshot::Sender<TestOnlyMuxEnd>>,
+    #[cfg(feature = "test-only-loopback")] observer: Option<
+        tokio::sync::oneshot::Sender<TestOnlyMuxEnd>,
+    >,
 ) -> Result<(tokio::io::DuplexStream, OwnedTunnel), TransportError>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
-    start_owned_policy(ws,tunnel,budget,None,None,None,
-        #[cfg(feature="test-only-loopback")]
+    start_owned_policy(
+        ws,
+        tunnel,
+        budget,
+        None,
+        None,
+        None,
+        #[cfg(feature = "test-only-loopback")]
         observer,
     )
 }
 fn start_owned_policy<S>(
-    ws:tokio_tungstenite::WebSocketStream<S>, tunnel:[u8;16],budget:std::time::Duration,
-    registration:Option<RegistrationPolicy>,original_cancel:Option<OriginalCancellation>,
-    data_keepalive:Option<std::sync::Arc<data_keepalive::Policy>>,
-    #[cfg(feature="test-only-loopback")] observer:Option<tokio::sync::oneshot::Sender<TestOnlyMuxEnd>>,
-) -> Result<(tokio::io::DuplexStream,OwnedTunnel),TransportError>
-where S:tokio::io::AsyncRead+tokio::io::AsyncWrite+Unpin+Send+'static {
+    ws: tokio_tungstenite::WebSocketStream<S>,
+    tunnel: [u8; 16],
+    budget: std::time::Duration,
+    registration: Option<RegistrationPolicy>,
+    original_cancel: Option<OriginalCancellation>,
+    data_keepalive: Option<std::sync::Arc<data_keepalive::Policy>>,
+    #[cfg(feature = "test-only-loopback")] observer: Option<
+        tokio::sync::oneshot::Sender<TestOnlyMuxEnd>,
+    >,
+) -> Result<(tokio::io::DuplexStream, OwnedTunnel), TransportError>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
     if tunnel == [0; 16] || budget.is_zero() || budget > MAX_IO_BUDGET {
         return Err(TransportError::Limit);
     }
     let (stream, route) = bounded_tunnel();
     let (stop, rx) = tokio::sync::watch::channel(false);
-    let registration_tail = registration.map(|_| std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)));
+    let registration_tail =
+        registration.map(|_| std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)));
     let task = tokio::spawn(drive_policy(
         ws,
         std::collections::HashMap::from([(tunnel, route)]),
@@ -268,35 +337,61 @@ pub async fn drive<S>(
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
-    drive_inner(ws, routes, cancel, budget, #[cfg(feature = "test-only-loopback")] None).await
+    drive_inner(
+        ws,
+        routes,
+        cancel,
+        budget,
+        #[cfg(feature = "test-only-loopback")]
+        None,
+    )
+    .await
 }
 async fn drive_inner<S>(
     ws: tokio_tungstenite::WebSocketStream<S>,
     routes: std::collections::HashMap<[u8; 16], RouteEndpoint>,
     cancel: tokio::sync::watch::Receiver<bool>,
     budget: std::time::Duration,
-    #[cfg(feature = "test-only-loopback")] observer: Option<tokio::sync::oneshot::Sender<TestOnlyMuxEnd>>,
+    #[cfg(feature = "test-only-loopback")] observer: Option<
+        tokio::sync::oneshot::Sender<TestOnlyMuxEnd>,
+    >,
 ) -> Result<(), TransportError>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
-    drive_policy(ws,routes,cancel,budget,None,None,None,None,
-        #[cfg(feature="test-only-loopback")]
+    drive_policy(
+        ws,
+        routes,
+        cancel,
+        budget,
+        None,
+        None,
+        None,
+        None,
+        #[cfg(feature = "test-only-loopback")]
         observer,
-    ).await
+    )
+    .await
 }
 #[allow(clippy::too_many_arguments)]
 async fn drive_policy<S>(
-    mut ws:tokio_tungstenite::WebSocketStream<S>,routes:std::collections::HashMap<[u8;16],RouteEndpoint>,
-    mut cancel:tokio::sync::watch::Receiver<bool>,budget:std::time::Duration,
-    registration:Option<RegistrationPolicy>,mut original_cancel:Option<OriginalCancellation>,
-    registration_tail:Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
-    data_keepalive:Option<std::sync::Arc<data_keepalive::Policy>>,
-    #[cfg(feature="test-only-loopback")] observer:Option<tokio::sync::oneshot::Sender<TestOnlyMuxEnd>>,
-) -> Result<(),TransportError>
-where S:tokio::io::AsyncRead+tokio::io::AsyncWrite+Unpin+Send+'static {
+    mut ws: tokio_tungstenite::WebSocketStream<S>,
+    routes: std::collections::HashMap<[u8; 16], RouteEndpoint>,
+    mut cancel: tokio::sync::watch::Receiver<bool>,
+    budget: std::time::Duration,
+    registration: Option<RegistrationPolicy>,
+    mut original_cancel: Option<OriginalCancellation>,
+    registration_tail: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    data_keepalive: Option<std::sync::Arc<data_keepalive::Policy>>,
+    #[cfg(feature = "test-only-loopback")] observer: Option<
+        tokio::sync::oneshot::Sender<TestOnlyMuxEnd>,
+    >,
+) -> Result<(), TransportError>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
     use cc_desk_remote_protocol::{Subframe, encode_outer};
-    let _close_data=data_keepalive::CloseOnExit(data_keepalive.clone());
+    let _close_data = data_keepalive::CloseOnExit(data_keepalive.clone());
     use futures_util::{SinkExt, StreamExt};
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
@@ -337,7 +432,9 @@ where S:tokio::io::AsyncRead+tokio::io::AsyncWrite+Unpin+Send+'static {
                 loop {
                     let n = read.read(&mut buf).await.map_err(|_| TransportError::Io)?;
                     if n == 0 {
-                        if let Some(tail) = &registration_tail { tail.store(true, std::sync::atomic::Ordering::Release); }
+                        if let Some(tail) = &registration_tail {
+                            tail.store(true, std::sync::atomic::Ordering::Release);
+                        }
                         return Err::<(), _>(TransportError::Closed);
                     }
                     let msg = encode_outer(&[Subframe {
@@ -351,7 +448,9 @@ where S:tokio::io::AsyncRead+tokio::io::AsyncWrite+Unpin+Send+'static {
                     } else {
                         (None, None)
                     };
-                    out.send((msg, flushed)).await.map_err(|_| TransportError::Closed)?;
+                    out.send((msg, flushed))
+                        .await
+                        .map_err(|_| TransportError::Closed)?;
                     // 登记路由必须等原发送完成，不能让 EOF 抢先丢弃队列中的最终 TLS 字节。
                     if let Some(receipt) = receipt {
                         receipt.await.map_err(|_| TransportError::Closed)?;
@@ -374,49 +473,114 @@ where S:tokio::io::AsyncRead+tokio::io::AsyncWrite+Unpin+Send+'static {
     let mut read_deadline = Instant::now()
         .checked_add(budget)
         .ok_or(TransportError::Limit)?;
-    let cap=|end:Instant|{let end=registration.map_or(end,|r|end.min(r.end));data_keepalive.as_ref().map_or(end,|p|end.min(p.end()))};
-    let mut last_read=Instant::now();
-    let mut data_active=false;
-    read_deadline=cap(read_deadline);
-    let mut heartbeat=registration.map_or(read_deadline,|r|cap(Instant::now()+r.interval));
+    let cap = |end: Instant| {
+        let end = registration.map_or(end, |r| end.min(r.end));
+        data_keepalive.as_ref().map_or(end, |p| end.min(p.end()))
+    };
+    let mut last_read = Instant::now();
+    let mut data_active = false;
+    read_deadline = cap(read_deadline);
+    let mut heartbeat = registration.map_or(read_deadline, |r| cap(Instant::now() + r.interval));
     #[cfg(feature = "test-only-loopback")]
     let observed_end;
     macro_rules! finish {
         ($result:expr, $cause:ident) => {{
             let terminal_result = $result;
             #[cfg(feature = "test-only-loopback")]
-            { observed_end = TestOnlyMuxEnd { cause: TestOnlyMuxCause::$cause, selected_at: Instant::now(), result: match &terminal_result { Ok(()) => "Ok", Err(TransportError::Limit) => "Limit", Err(TransportError::Wire) => "Wire", Err(TransportError::UnknownTunnel) => "UnknownTunnel", Err(TransportError::Backpressure) => "Backpressure", Err(TransportError::Io) => "Io", Err(TransportError::Deadline) => "Deadline", Err(TransportError::Closed) => "Closed", Err(TransportError::Cancelled) => "Cancelled" } }; }
+            {
+                observed_end = TestOnlyMuxEnd {
+                    cause: TestOnlyMuxCause::$cause,
+                    selected_at: Instant::now(),
+                    result: match &terminal_result {
+                        Ok(()) => "Ok",
+                        Err(TransportError::Limit) => "Limit",
+                        Err(TransportError::Wire) => "Wire",
+                        Err(TransportError::UnknownTunnel) => "UnknownTunnel",
+                        Err(TransportError::Backpressure) => "Backpressure",
+                        Err(TransportError::Io) => "Io",
+                        Err(TransportError::Deadline) => "Deadline",
+                        Err(TransportError::Closed) => "Closed",
+                        Err(TransportError::Cancelled) => "Cancelled",
+                    },
+                };
+            }
             break terminal_result;
         }};
     }
     let result = loop {
-        if let Some(p)=&data_keepalive {
-            if !data_active && p.active(){data_active=true;read_deadline=cap(last_read+budget);heartbeat=cap(Instant::now()+p.interval());}
-            read_deadline=cap(read_deadline);
+        if let Some(p) = &data_keepalive {
+            if !data_active && p.active() {
+                data_active = true;
+                read_deadline = cap(last_read + budget);
+                heartbeat = cap(Instant::now() + p.interval());
+            }
+            read_deadline = cap(read_deadline);
         }
         if registration.is_some() || data_keepalive.is_some() {
-            if *cancel.borrow() || cancel.has_changed().is_err(){finish!(Err(TransportError::Cancelled),Cancelled);}
-            tokio::select!{biased;_=original_cancelled(&mut original_cancel)=>finish!(Err(TransportError::Cancelled),Cancelled),_=std::future::ready(())=>{}}
+            if *cancel.borrow() || cancel.has_changed().is_err() {
+                finish!(Err(TransportError::Cancelled), Cancelled);
+            }
+            tokio::select! {biased;_=original_cancelled(&mut original_cancel)=>finish!(Err(TransportError::Cancelled),Cancelled),_=std::future::ready(())=>{}}
         }
         if Instant::now() >= read_deadline {
             finish!(Err(TransportError::Deadline), IoBudget);
         }
-        if let Some(policy)=registration.or_else(||data_keepalive.as_ref().filter(|p|p.active()).map(|p|RegistrationPolicy{end:p.end(),interval:p.interval(),tunnel:p.tunnel})).filter(|_|Instant::now()>=heartbeat) {
-            let bytes=encode_outer(&[Subframe{tunnel:policy.tunnel,payload:&[]}]).map_err(|_|TransportError::Wire)?;
-            let sent=socket_operation(&mut cancel,&mut original_cancel,data_keepalive.as_ref(),read_deadline,ws.send(Message::Binary(bytes.into()))).await;
-            if let Err(e)=sent{finish!(Err(e),SocketWrite);}
-            if Instant::now()>=read_deadline{finish!(Err(TransportError::Deadline),IoBudget);}
-            heartbeat=cap(Instant::now()+policy.interval);
+        if let Some(policy) = registration
+            .or_else(|| {
+                data_keepalive
+                    .as_ref()
+                    .filter(|p| p.active())
+                    .map(|p| RegistrationPolicy {
+                        end: p.end(),
+                        interval: p.interval(),
+                        tunnel: p.tunnel,
+                    })
+            })
+            .filter(|_| Instant::now() >= heartbeat)
+        {
+            let bytes = encode_outer(&[Subframe {
+                tunnel: policy.tunnel,
+                payload: &[],
+            }])
+            .map_err(|_| TransportError::Wire)?;
+            let sent = socket_operation(
+                &mut cancel,
+                &mut original_cancel,
+                data_keepalive.as_ref(),
+                read_deadline,
+                ws.send(Message::Binary(bytes.into())),
+            )
+            .await;
+            if let Err(e) = sent {
+                finish!(Err(e), SocketWrite);
+            }
+            if Instant::now() >= read_deadline {
+                finish!(Err(TransportError::Deadline), IoBudget);
+            }
+            heartbeat = cap(Instant::now() + policy.interval);
         }
         // Service at most one ready outbound envelope before the next inbound
         // event. A permanently-ready inbound stream cannot starve outbound.
         if let Ok((bytes, flushed)) = out_rx.try_recv() {
-            let sent=socket_operation(&mut cancel,&mut original_cancel,data_keepalive.as_ref(),read_deadline,ws.send(Message::Binary(bytes.into()))).await;
+            let sent = socket_operation(
+                &mut cancel,
+                &mut original_cancel,
+                data_keepalive.as_ref(),
+                read_deadline,
+                ws.send(Message::Binary(bytes.into())),
+            )
+            .await;
             if let Err(e) = sent {
                 finish!(Err(e), SocketWrite);
             }
-            if (registration.is_some()||data_keepalive.is_some())&&Instant::now()>=read_deadline{finish!(Err(TransportError::Deadline),IoBudget);}
-            if let Some(flushed) = flushed { let _ = flushed.send(()); }
+            if (registration.is_some() || data_keepalive.is_some())
+                && Instant::now() >= read_deadline
+            {
+                finish!(Err(TransportError::Deadline), IoBudget);
+            }
+            if let Some(flushed) = flushed {
+                let _ = flushed.send(());
+            }
         }
         tokio::select! {
             biased;
@@ -467,7 +631,9 @@ where S:tokio::io::AsyncRead+tokio::io::AsyncWrite+Unpin+Send+'static {
     workers.abort_all();
     while workers.join_next().await.is_some() {}
     #[cfg(feature = "test-only-loopback")]
-    if let Some(observer) = observer { let _ = observer.send(observed_end); }
+    if let Some(observer) = observer {
+        let _ = observer.send(observed_end);
+    }
     result
 }
 type Routes = std::collections::HashMap<[u8; 16], tokio::sync::mpsc::Sender<Vec<u8>>>;
@@ -482,7 +648,9 @@ fn deliver(bytes: &[u8], incoming: &Routes) -> Result<(), TransportError> {
         if !ids.insert(frame.tunnel) {
             return Err(TransportError::Wire);
         }
-        if frame.payload.is_empty(){continue;}
+        if frame.payload.is_empty() {
+            continue;
+        }
         reservations.push(
             incoming[&frame.tunnel]
                 .clone()
@@ -490,7 +658,10 @@ fn deliver(bytes: &[u8], incoming: &Routes) -> Result<(), TransportError> {
                 .map_err(|_| TransportError::Backpressure)?,
         );
     }
-    for (permit, frame) in reservations.into_iter().zip(frames.into_iter().filter(|frame|!frame.payload.is_empty())) {
+    for (permit, frame) in reservations
+        .into_iter()
+        .zip(frames.into_iter().filter(|frame| !frame.payload.is_empty()))
+    {
         permit.send(frame.payload.to_vec());
     }
     Ok(())
@@ -525,11 +696,17 @@ mod tests {
     #[test]
     #[allow(non_snake_case)]
     fn DataKeepalive_EmptyDoesNotReserveFullApplicationQueue_001() {
-      let (tx,mut rx)=tokio::sync::mpsc::channel(1);tx.try_send(vec![7]).unwrap();
-      let routes=Routes::from([([1;16],tx)]);
-      let bytes=encode_outer(&[Subframe{tunnel:[1;16],payload:&[]}]).unwrap();
-      assert_eq!(deliver(&bytes,&routes),Ok(()));
-      assert_eq!(rx.try_recv().unwrap(),vec![7]);assert!(rx.try_recv().is_err());
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        tx.try_send(vec![7]).unwrap();
+        let routes = Routes::from([([1; 16], tx)]);
+        let bytes = encode_outer(&[Subframe {
+            tunnel: [1; 16],
+            payload: &[],
+        }])
+        .unwrap();
+        assert_eq!(deliver(&bytes, &routes), Ok(()));
+        assert_eq!(rx.try_recv().unwrap(), vec![7]);
+        assert!(rx.try_recv().is_err());
     }
     #[test]
     fn full_later_queue_cannot_partially_deliver_earlier_frame() {

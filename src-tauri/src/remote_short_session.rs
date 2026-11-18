@@ -4,9 +4,9 @@ use crate::{
         document::DocumentBinding, launch_service::NativeRun, native_runtime::NativeRuntime,
         profiles::error, snapshot::CallerIdentity, types::SafeError,
     },
-    remote_host::{RemoteHostService, unattended::preparing::PreparingRequest},
+    remote_host::{unattended::preparing::PreparingRequest, RemoteHostService},
     remote_host_approval::unattended::{
-        RequestedRole, UnattendedApproval, UnattendedPreparation, final_approval::FinalApproval,
+        final_approval::FinalApproval, RequestedRole, UnattendedApproval, UnattendedPreparation,
     },
     remote_native_pairing_store::{
         Backend as PairingBackend, CurrentUserDpapi as PairingDpapi, ExpectedStore, PairingStore,

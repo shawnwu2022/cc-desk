@@ -1,6 +1,7 @@
 //! 仅真实 TLS 计量；不证明浏览器内存释放。
 #![allow(non_snake_case)]
 use super::*;
+use crate::test_identities as identities;
 use std::{
     io,
     pin::Pin as IoPin,
@@ -8,7 +9,6 @@ use std::{
     task::{Context, Poll},
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream, ReadBuf};
-use crate::test_identities as identities;
 #[derive(Default)]
 struct Meter {
     written: Vec<u8>,

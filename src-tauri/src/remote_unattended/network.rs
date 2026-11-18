@@ -213,11 +213,9 @@ mod tests {
         let (foreign, binding) = Delegation::test_new([8; 32], false);
         let local = foreign.begin(&binding).unwrap();
         let entered = AtomicBool::new(false);
-        assert!(
-            policy
-                .with_effect(&local, &current, |_| entered.store(true, Ordering::Release))
-                .is_err()
-        );
+        assert!(policy
+            .with_effect(&local, &current, |_| entered.store(true, Ordering::Release))
+            .is_err());
         assert!(!entered.load(Ordering::Acquire));
     }
     #[test]
@@ -249,11 +247,9 @@ mod tests {
         let (policy, view) = Delegation::test_new([7; 32], true);
         assert!(policy.begin_network(&view, || true).is_err());
         let (policy, current) = Delegation::test_new([7; 32], false);
-        assert!(
-            policy
-                .begin_network(&current.test_wrong_device(), || true)
-                .is_err()
-        );
+        assert!(policy
+            .begin_network(&current.test_wrong_device(), || true)
+            .is_err());
     }
 }
 
