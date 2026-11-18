@@ -6,6 +6,7 @@ import { clearMocks, mockIPC } from '@tauri-apps/api/mocks'
 import SettingsView from '@/components/settings/SettingsView.vue'
 import { useSidebarStore } from '@/stores/sidebar'
 import { useCliProfilesStore } from '@/stores/cliProfiles'
+import { useCliSupportStore } from '@/stores/cliSupport'
 import { useNewSessionDraftStore } from '@/stores/newSessionDraft'
 import { useAppStore } from '@/stores/app'
 import type { CliProfile, ProfilePatch } from '@/types/profile'
@@ -16,12 +17,14 @@ vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ isMaximize
 const wrappers: VueWrapper[] = []
 let rows: CliProfile[], writes: ProfilePatch[], revision: string
 let readProfiles: () => unknown, profileReads: number
+let commands: string[]
 beforeEach(() => {
   clearMocks(); localStorage.clear(); setActivePinia(createPinia()); revision = '7'; writes = []
-  profileReads = 0; readProfiles = () => ({ revision, profiles: rows })
+  commands = []; profileReads = 0; readProfiles = () => ({ revision, profiles: rows })
   rows = [{ id: 'cc', cli: 'claude', revision: '7', name: 'Claude work', launcher: { kind: 'native' }, programPath: { mode: 'inherit' }, defaultArgs: { mode: 'set', value: ['a b', '', '"quoted"'] }, skipPermissions: { mode: 'set', value: false }, observer: { mode: 'set', value: false }, env: { API_TOKEN: { mode: 'set', value: { kind: 'host-ref', name: 'PRIVATE_REFERENCE' } }, FLAG: { mode: 'set', value: { kind: 'literal', value: 'PRIVATE_VALUE', nonSecret: true } }, REMOVED: { mode: 'unset' }, AMBIENT: { mode: 'inherit' } } },
     { id: 'cx', cli: 'codex', revision: '7', name: 'Codex work', launcher: { kind: 'native' }, programPath: { mode: 'inherit' }, defaultArgs: { mode: 'inherit' }, skipPermissions: { mode: 'inherit' }, observer: { mode: 'set', value: false }, env: {} }]
   mockIPC((command, payload) => {
+    commands.push(command)
     if (command === 'cli_list_profiles') { profileReads++; return readProfiles() }
     if (command === 'cli_patch_profile') {
       const input = payload as { expectedRevision: string; patch: ProfilePatch }; writes.push(input.patch)
@@ -282,4 +285,21 @@ it('LaunchSettings_NewReadOwner_018', async () => {
   reads[0]({ revision: '7', profiles: rows }); await flushPromises()
   expect((document.querySelector('[data-launch-name]') as HTMLInputElement).value).toBe('New Codex draft')
   expect(document.body.textContent).toContain('Codex CLI'); expect(writes).toEqual([])
+})
+
+// 创建并保存配置不代表启用 CLI；只允许原 profile 写入，不启动进程。
+it('Antigravity_SettingsVisibleWithoutImplicitEnableOrLaunch_020', async () => {
+  const support = useCliSupportStore()
+  expect(support.isEnabled('antigravity')).toBe(false)
+  const w = await render()
+  expect(w.get('[data-launch-group="antigravity"]').text()).toContain('Antigravity CLI')
+  await w.get('[data-launch-group="antigravity"] [data-launch-create]').trigger('click')
+  await flushPromises()
+  button('[data-launch-save]').click()
+  await flushPromises()
+  expect(support.isEnabled('antigravity')).toBe(false)
+  expect(writes).toEqual([expect.objectContaining({ op: 'create', profile: expect.objectContaining({ cli: 'antigravity' }) })])
+  expect(localStorage.getItem('cc-desk-cli-support-v1')).toBeNull()
+  expect(commands.length).toBeGreaterThan(0)
+  expect(commands.every(command => ['cli_list_profiles', 'get_app_config', 'cli_patch_profile'].includes(command))).toBe(true)
 })

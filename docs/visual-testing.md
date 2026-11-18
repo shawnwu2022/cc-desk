@@ -752,3 +752,33 @@ The original verification stays RED: 254 passed and one screenshot failure,
 fixture, assertion, mask or tolerance change is adopted. Fresh complete 255-case
 no-update CI with maxDiffPixels: 0 remains required before merge. These synthetic
 Linux pixels do not certify installed Windows WebView2 or real CLI behavior.
+
+
+## PR98 Antigravity configuration baseline acceptance
+
+The parent and independent visual reviewer inspected the original CI actual,
+expected and diff. Only settings-launch-configurations.png changes: the new
+Antigravity configuration group is visible; the other three groups are unchanged.
+Configuration visibility and saving a profile do not enable CLI support or launch
+a process. The component regression explicitly creates and saves an Antigravity
+profile, permits cli_patch_profile, and checks support remains off with no launch
+IPC or persisted support toggle.
+
+The accepted PNG is exactly 76,724 bytes, SHA-256
+41e9e28360eaddef8959deebb4486d913e00cd715b24309b66b90715dd254371.
+Previous baseline SHA-256:
+2582bc458c814cfea00e380357c8c8396ea45a5fd4bff1adc5823b3769786c0c.
+Source head: 3ff3f55a9e31865eae1bee5cd60137e60c2ddfe7; tested merge:
+250931183b9667d254d3105b7ea1309ce417d233. Run 44204066932, artifact
+14383182574, ZIP SHA-256
+afb2cfeb7b53b2aa9155c23e100fe268baacb17059523ddaa6a4457013d9a645.
+Environment: Ubuntu 24.04, Playwright 1.63.0, Chrome 153.0.8010.12.
+The PNG was transferred unchanged through Library, not recaptured locally.
+The manifest retains historical provenance and all twelve other baseline hashes.
+
+The original run remains RED: 254 passed and one snapshot failure with 3,600
+Playwright differing pixels. No fixture, mask, tolerance or assertion is relaxed.
+Fresh complete 255-case no-update CI with maxDiffPixels: 0 remains required.
+The 53 component/CLI-support tests cover configuration behavior, not pixel
+acceptance or actual AGY authentication. This is synthetic Linux browser evidence,
+not installed Windows WebView2 or real CLI certification.
