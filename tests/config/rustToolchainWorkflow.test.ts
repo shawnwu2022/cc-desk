@@ -20,3 +20,10 @@ describe('Validated Rust workflow toolchain', () => {
     }
   })
 })
+
+// 保留三平台覆盖，不把不受支持的 macOS runner 取消误当测试成功。
+it.each(['d14-transport-core.yml', 'd17-input-core.yml'])('CI_CoreSupportedMatrix_002 %s', workflow => {
+  const source = readFileSync(`.github/workflows/${workflow}`, 'utf8')
+  expect(source).toMatch(/os: \[ubuntu-22\.04, windows-2022, macos-15\]/)
+  expect(source).toMatch(/fail-fast: false/)
+})
