@@ -27,3 +27,47 @@
 ## Clean hosted 依赖预取回归
 
 PR #99 的首次 clean Windows 构建在预取 wasm32 成功后，原 client 离线构建仍缺 cpufeatures 0.2.17。新隔离 CARGO_HOME 用同 Rust 1.98.1、原锁文件和命令复现同错，发生在编译前；这不是允许离线构建联网的理由。供应步骤改为完整锁图 fetch，编译目标、offline/locked 和生产源码不变。原 target-filter RED 保留；完整 fetch 后同一新隔离 cache、空 target 的原 client/registration 两 runtime 离线构建均成功，进程退出 0，65/55 源库存与 input/file/export 验证通过，46 项策略回归通过。完整图显示 client 的非 wasm transport → tungstenite → sha1 → cpufeatures，wasm tree 中不存在该包；证明缺的是离线解析所需的完整缓存，不是要把它编入 wasm。日志 browser-fetch-target-red-*、browser-fetch-full-*-green.log、browser-fetch-runtime-verification.log 和 browser-fetch-contract-green.log 保留于 .audit；新 hosted CI 仍须重验，不用此前有缓存的本机绿覆盖其首次失败。
+
+## Hosted ordinary WebView smoke (pending first hosted execution)
+
+The installed-package job now runs `test-desktop-webview.ps1` once after its two
+successful ordinary installer/ConPTY probes and before destructive relocation
+probes. This launches the **ordinary installed executable**, not `--check-conpty`,
+a standalone Wry fixture, a fake IPC page, or a registered test run. Its native
+UI Automation observation is restricted to the exact launched PID's top-level
+window and that window's descendants (WebView descendants may have child PIDs).
+It captures window screenshots and bounded UI trees for General and Terminal,
+requires the AGY enable control to report disabled/Toggle Off, and requires the
+remote terminal Locked status and disabled Disconnect control. It does not click
+AGY enable, Connect, Refresh, registration, approval, or any CLI launch action.
+
+The script refuses a non-hosted/noninteractive/session-zero environment, an
+already running CC Desk, or an existing `.cc-box` directory. It never reads or
+resets an existing user's application data. The installation must be under the
+disposable runner's temporary directory. There is no HOME/cwd isolation claim:
+the whole hosted OS/user is disposable. An inaccessible desktop/UIA selector or
+unexposed toggle state is a blocked/failed gate, not a simulated fallback.
+Normal completion requires WindowPattern.Close, original process exit zero, and
+exit of the observed owned WebView children. Killing only retained original
+process handles is failure cleanup, never evidence of normal retirement.
+The workflow preserves observation artifacts even when the step fails.
+
+This proves only ordinary WebView startup and visible defaults/settings entry.
+The Host panel requires an actual active native CLI run and is **not** covered by
+this empty-workspace smoke. A visible Locked state is not a packet trace, a
+backend-empty proof, or AGY authentication/recovery acceptance. The original
+background updater may check after 30 seconds; neither the updater nor network
+security settings are disabled here. Real phone, trusted HTTPS, registration,
+Host approval, real CLI and long unattended-use gates remain outstanding.
+Local validation is script contracts/PowerShell parsing and an explicit
+non-hosted refusal, without launching the application; actual UI acceptance
+requires the new hosted job's artifacts.
+
+The startup guard also refuses any `WEBVIEW2_*` environment override and an
+existing `%LOCALAPPDATA%/io.github.shawnwu2022.ccdesk` directory. This is the
+actual default selected by locked Tauri 2.11.1 `manager/webview.rs` (LocalData +
+identifier), not an assumed cwd profile. Child handles are retained only after
+CIM creation time/image/session match that exact handle and its verified parent
+lifetime. Unverified children are neither registered nor killed; even failure
+cleanup never uses a PID-tree kill. Observed-child exit is not a claim of exhaustive
+OS process auditing. The disposable hosted OS remains the isolation boundary.

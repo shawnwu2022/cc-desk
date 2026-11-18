@@ -39,6 +39,7 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'Installed runtime differs from pinned files' }
         Run-Probe $installed $true "install-$iteration"
     }
+    & (Join-Path $PSScriptRoot 'test-desktop-webview.ps1') -Exe (Join-Path $installed 'cc-desk.exe')
     $relocated = Join-Path $root '移动后的 CC Desk'
     Copy-Item -LiteralPath $installed -Destination $relocated -Recurse
     Run-Probe $relocated $true 'relocated'
