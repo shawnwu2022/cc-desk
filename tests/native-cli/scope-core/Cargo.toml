@@ -19,7 +19,7 @@ serde_json = "=1.0.149"
 toml = "=0.9.12"
 zstd = { version = "=0.13.3", default-features = false }
 sha2 = "=0.10.9"
-rusqlite = { version = "=0.31.0", features = ["bundled"] }
+rusqlite = { version = "=0.40.2", default-features = false, features = ["bundled"] }
 uuid = { version = "1", features = ["v4"] }
 [target.'cfg(windows)'.dependencies]
 base64 = "=0.22.1"
