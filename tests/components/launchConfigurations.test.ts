@@ -6,6 +6,7 @@ import { clearMocks, mockIPC } from '@tauri-apps/api/mocks'
 import SettingsView from '@/components/settings/SettingsView.vue'
 import { useSidebarStore } from '@/stores/sidebar'
 import { useCliProfilesStore } from '@/stores/cliProfiles'
+import { useCliSupportStore } from '@/stores/cliSupport'
 import { useNewSessionDraftStore } from '@/stores/newSessionDraft'
 import { useAppStore } from '@/stores/app'
 import type { CliProfile, ProfilePatch } from '@/types/profile'
@@ -16,12 +17,14 @@ vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ isMaximize
 const wrappers: VueWrapper[] = []
 let rows: CliProfile[], writes: ProfilePatch[], revision: string
 let readProfiles: () => unknown, profileReads: number
+let commands: string[]
 beforeEach(() => {
   clearMocks(); localStorage.clear(); setActivePinia(createPinia()); revision = '7'; writes = []
-  profileReads = 0; readProfiles = () => ({ revision, profiles: rows })
+  commands = []; profileReads = 0; readProfiles = () => ({ revision, profiles: rows })
   rows = [{ id: 'cc', cli: 'claude', revision: '7', name: 'Claude work', launcher: { kind: 'native' }, programPath: { mode: 'inherit' }, defaultArgs: { mode: 'set', value: ['a b', '', '"quoted"'] }, skipPermissions: { mode: 'set', value: false }, observer: { mode: 'set', value: false }, env: { API_TOKEN: { mode: 'set', value: { kind: 'host-ref', name: 'PRIVATE_REFERENCE' } }, FLAG: { mode: 'set', value: { kind: 'literal', value: 'PRIVATE_VALUE', nonSecret: true } }, REMOVED: { mode: 'unset' }, AMBIENT: { mode: 'inherit' } } },
     { id: 'cx', cli: 'codex', revision: '7', name: 'Codex work', launcher: { kind: 'native' }, programPath: { mode: 'inherit' }, defaultArgs: { mode: 'inherit' }, skipPermissions: { mode: 'inherit' }, observer: { mode: 'set', value: false }, env: {} }]
   mockIPC((command, payload) => {
+    commands.push(command)
     if (command === 'cli_list_profiles') { profileReads++; return readProfiles() }
     if (command === 'cli_patch_profile') {
       const input = payload as { expectedRevision: string; patch: ProfilePatch }; writes.push(input.patch)
@@ -53,11 +56,11 @@ async function edit(w: VueWrapper, id = 'cc') { await w.get(`[data-launch-row="$
 async function menu(w: VueWrapper, id: string, action: string) { await w.get(`[data-launch-row="${id}"] [data-launch-menu]`).trigger('click'); await flushPromises(); button(`[data-item-id="${action}"]`).click(); await flushPromises() }
 async function input(selector: string, value: string) { const el = document.querySelector<HTMLInputElement>(selector); expect(el, selector).not.toBeNull(); el!.value = value; el!.dispatchEvent(new Event('input', { bubbles: true })); await flushPromises() }
 // 新建 Claude 配置默认开启观察，Codex 不开启 Claude 观察；实际保存请求携带对应值。
-it.each(['claude', 'codex', 'opencode'] as const)('LaunchSettings_ObserverDefault_019_%s', async cli => {
+it.each(['claude', 'codex', 'opencode', 'antigravity'] as const)('LaunchSettings_ObserverDefault_019_%s', async cli => {
   const w = await render()
   await w.get(`[data-launch-group="${cli}"] [data-launch-create]`).trigger('click'); await flushPromises()
   button('[data-launch-save]').click(); await flushPromises()
-  expect(writes).toEqual([expect.objectContaining({ op: 'create', profile: expect.objectContaining({ cli, observer: { mode: 'set', value: cli !== 'codex' } }) })])
+  expect(writes).toEqual([expect.objectContaining({ op: 'create', profile: expect.objectContaining({ cli, observer: { mode: 'set', value: cli === 'claude' || cli === 'opencode' } }) })])
 })
 // 编辑和复制已明确关闭的 Claude 观察配置都保留关闭，不把新建默认应用到旧配置。
 it.each(['edit', 'copy'] as const)('LaunchSettings_ObserverSaved_020_%s', async action => {
@@ -71,7 +74,7 @@ it.each(['edit', 'copy'] as const)('LaunchSettings_ObserverSaved_020_%s', async 
 // 真实设置页按工具分组，并使用现有全局默认偏好显示标记。
 it('LaunchSettings_GroupDefault_001', async () => {
   const w = await render()
-  expect(w.findAll('[data-launch-group]').map(group => group.attributes('data-launch-group'))).toEqual(['claude', 'codex', 'opencode'])
+  expect(w.findAll('[data-launch-group]').map(group => group.attributes('data-launch-group'))).toEqual(['claude', 'codex', 'opencode', 'antigravity'])
   expect(w.get('[data-launch-group="opencode"] .cli-app-icon__image').attributes('src')).toBe(opencodeIcon)
   expect(w.get('[data-launch-row="cc"]').text()).toContain('Default')
   expect(w.get('[data-launch-row="cx"]').text()).toContain('Default')
@@ -282,4 +285,21 @@ it('LaunchSettings_NewReadOwner_018', async () => {
   reads[0]({ revision: '7', profiles: rows }); await flushPromises()
   expect((document.querySelector('[data-launch-name]') as HTMLInputElement).value).toBe('New Codex draft')
   expect(document.body.textContent).toContain('Codex CLI'); expect(writes).toEqual([])
+})
+
+// 创建并保存配置不代表启用 CLI；只允许原 profile 写入，不启动进程。
+it('Antigravity_SettingsVisibleWithoutImplicitEnableOrLaunch_020', async () => {
+  const support = useCliSupportStore()
+  expect(support.isEnabled('antigravity')).toBe(false)
+  const w = await render()
+  expect(w.get('[data-launch-group="antigravity"]').text()).toContain('Antigravity CLI')
+  await w.get('[data-launch-group="antigravity"] [data-launch-create]').trigger('click')
+  await flushPromises()
+  button('[data-launch-save]').click()
+  await flushPromises()
+  expect(support.isEnabled('antigravity')).toBe(false)
+  expect(writes).toEqual([expect.objectContaining({ op: 'create', profile: expect.objectContaining({ cli: 'antigravity' }) })])
+  expect(localStorage.getItem('cc-desk-cli-support-v1')).toBeNull()
+  expect(commands.length).toBeGreaterThan(0)
+  expect(commands.every(command => ['cli_list_profiles', 'get_app_config', 'cli_patch_profile'].includes(command))).toBe(true)
 })

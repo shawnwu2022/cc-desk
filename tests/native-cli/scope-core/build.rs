@@ -50,6 +50,8 @@ fn production_impl(root: &Path, source: &str, name: &str) -> String {
 }
 
 fn main() {
+    // 共享生产源码含此门；这里只声明合法 cfg，不启用远程功能。
+    println!("cargo:rustc-check-cfg=cfg(feature, values(\"remote-host\"))");
     let manifest = std::path::PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let root = manifest
         .join("../../../src-tauri/src")

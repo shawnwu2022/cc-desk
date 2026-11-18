@@ -292,7 +292,18 @@ fn Opencode_AuthorizedAncestorSymlinkReadsHistory_26() {
     let aliases = tempfile::tempdir().unwrap();
     let selected = aliases.path().join("authorized-alias");
     std::os::unix::fs::symlink(&f.root, &selected).unwrap();
-    let items = read_history(&Root::open(&selected).unwrap(), &[f.project_ref()]).unwrap();
+    let root = Root::open(&selected).unwrap();
+    // 原始祖先链接仍须拒绝；只有已授权根的身份复核规范路径可交给 SQLite。
+    assert_eq!(
+        super::open_read_only(&selected.join("opencode.db")).unwrap_err(),
+        "SOURCE_UNSUPPORTED"
+    );
+    let canonical = root
+        .sqlite_canonical_directory()
+        .unwrap()
+        .join("opencode.db");
+    drop(super::open_read_only(&canonical).unwrap());
+    let items = read_history(&root, &[f.project_ref()]).unwrap();
     assert!(
         matches!(&items[..], [ResourceItem::Session { native_session_id, .. }] if native_session_id == "ses_alias")
     );
@@ -1082,4 +1093,91 @@ fn OpenCodeArchive_HistoryReadsNativeFlag_007() {
         &out[0],
         ResourceItem::Session { archived: true, .. }
     ));
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn Opencode_BundledSqliteMatchesQualifiedHost_27() {
+    assert_eq!(
+        rusqlite::version_number(),
+        3_053_002,
+        "application and Host must use the same qualified bundled engine"
+    );
+    let conn = Connection::open_in_memory().unwrap();
+    let source: String = conn
+        .query_row("SELECT sqlite_source_id()", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(
+        source,
+        "2026-06-03 19:12:13 d6e03d8c777cfa2d35e3b60d8ec3e0187f3e9f99d8e2ee9cac695fd6fcdf1a24"
+    );
+    for (option, expected) in [
+        ("THREADSAFE=1", 1),
+        ("NO_SYNC", 0),
+        ("OMIT_WAL", 0),
+        ("OMIT_DISKIO", 0),
+        ("OMIT_COMPILEOPTION_DIAGS", 0),
+    ] {
+        let actual: i32 = conn
+            .query_row("SELECT sqlite_compileoption_used(?1)", [option], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(actual, expected, "qualified engine compile option {option}");
+    }
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn Opencode_PrivateWalReadLeavesOriginalDatabaseBytesUnchanged_28() {
+    let f = Fixture::new();
+    let conn = f.conn();
+    f.register_project(&conn, "p1");
+    seed(
+        &conn,
+        "ses_readonly",
+        "p1",
+        &f.project.to_string_lossy(),
+        "kept",
+        100,
+        None,
+    );
+    let db = f.root.join("opencode.db");
+    let wal = f.root.join("opencode.db-wal");
+    let before_db = std::fs::read(&db).unwrap();
+    let before_wal = std::fs::read(&wal).unwrap();
+    // Unix 与生产入口相同：先复核授权根身份，再消除临时目录祖先链接。
+    #[cfg(unix)]
+    let read_path = Root::open(&f.root)
+        .unwrap()
+        .sqlite_canonical_directory()
+        .unwrap()
+        .join("opencode.db");
+    #[cfg(not(unix))]
+    let read_path = db.clone();
+    let read_only = super::open_read_only(&read_path).unwrap();
+    let query_only: i32 = read_only
+        .query_row("PRAGMA query_only", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(query_only, 1);
+    let denied = read_only.execute_batch("DELETE FROM session").unwrap_err();
+    assert!(
+        matches!(denied, rusqlite::Error::SqliteFailure(code, _) if code.code == rusqlite::ErrorCode::ReadOnly)
+    );
+    drop(read_only);
+    assert!(
+        before_wal.len() > 32,
+        "committed rows must actually be present in WAL"
+    );
+    let result = read_history(&Root::open(&f.root).unwrap(), &[f.project_ref()]).unwrap();
+    assert_eq!(result.len(), 1);
+    match &result[0] {
+        ResourceItem::Session {
+            native_session_id, ..
+        } => assert_eq!(native_session_id, "ses_readonly"),
+        _ => panic!("session expected"),
+    }
+    assert_eq!(std::fs::read(db).unwrap(), before_db);
+    assert_eq!(std::fs::read(wal).unwrap(), before_wal);
+    drop(conn);
 }

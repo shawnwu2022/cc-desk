@@ -4098,5 +4098,89 @@
       "status": "pending",
       "required": "Fresh complete 255-case current-source CI with updateSnapshots none and maxDiffPixels 0."
     }
+  },
+  "antigravityConfigurationRc028Revision": {
+    "sourceHead": "3ff3f55a9e31865eae1bee5cd60137e60c2ddfe7",
+    "testedCommit": "250931183b9667d254d3105b7ea1309ce417d233",
+    "workflowRunId": "44204066932",
+    "workflowRunUrl": "https://github.com/shawnwu2022/cc-desk/actions/runs/44204066932",
+    "artifactId": "14383182574",
+    "artifactZipSha256": "afb2cfeb7b53b2aa9155c23e100fe268baacb17059523ddaa6a4457013d9a645",
+    "reviewDate": "2026-11-18",
+    "environment": {
+      "platform": "ubuntu-24.04-linux-chromium",
+      "playwright": "1.63.0",
+      "browser": "Google Chrome for Testing 153.0.8010.12"
+    },
+    "acceptedSnapshot": {
+      "name": "settings-launch-configurations.png",
+      "bytes": 76724,
+      "sha256": "41e9e28360eaddef8959deebb4486d913e00cd715b24309b66b90715dd254371",
+      "previousSha256": "2582bc458c814cfea00e380357c8c8396ea45a5fd4bff1adc5823b3769786c0c",
+      "reviewVerdict": "approve",
+      "acceptedChange": "Antigravity configuration group added; the other three configuration groups are unchanged.",
+      "reviewBasis": "Parent and independent visual reviewer inspected the original CI actual/expected/diff; exact approved PNG transferred through Library."
+    },
+    "unchangedBaselineHashes": [
+      {
+        "name": "archived-sessions.png",
+        "sha256": "64eb9f3791f820a28d8eb5a2d455ea0a07805ebea808f8732dc1e9e652296b39"
+      },
+      {
+        "name": "confirm-stop-and-archive.png",
+        "sha256": "4ec4f484e5385431997da5af394f75e726f9919d5616ee38509cb5b791cc9e57"
+      },
+      {
+        "name": "new-session-dialog.png",
+        "sha256": "e0dcb9f2a75206ea540481db2232cf055ede5b27a83ff2c7cc8b0d8a3ffba26e"
+      },
+      {
+        "name": "projects-150-percent.png",
+        "sha256": "2c74784b725e3d92e05e2adda461822a3c72a7f59e19570ccff9337b8d69537d"
+      },
+      {
+        "name": "settings-terminal-light-gui-dark-terminal.png",
+        "sha256": "7323a878440fa57a38993c6025f4a27a9aaa5d14f86c23a037dac2aa2b98afe4"
+      },
+      {
+        "name": "tooltip-transformed-1024.png",
+        "sha256": "f18cdbf5ec87014c4b704f33de98641cef7597285b25d37f522888712df68122"
+      },
+      {
+        "name": "workspace-dark-gui-light-terminal.png",
+        "sha256": "18621e0a9b34df0929464425efd421f5f04413250f7d1551a8f9fc873ccbca08"
+      },
+      {
+        "name": "workspace-empty-1024-zh.png",
+        "sha256": "7d2b83c160689c77fd60de402beec613d017d5e5ddcbb521f65df029976f42c5"
+      },
+      {
+        "name": "workspace-hover-action-1366-en.png",
+        "sha256": "4709024488dbef642a4f2872e50d0e1306800b24985c6412f0a303c3398648dc"
+      },
+      {
+        "name": "workspace-menu-1024-en.png",
+        "sha256": "54e9c20557e7c3c8b9df5b110cf620898295d5f79ac43485b4dbcc3110e43162"
+      },
+      {
+        "name": "workspace-mixed-1366-zh.png",
+        "sha256": "3ff0a78e7bb5e8da93996f16edff263d5c68a2bfc2c310e0757ccddcb4efb483"
+      },
+      {
+        "name": "workspace-resources-overlay-1024.png",
+        "sha256": "0d69b2dcd21e30f3df138680f565ce6aa0c8113bf24b141e1402213febe3c211"
+      }
+    ],
+    "verificationBeforeBaselineAcceptance": {
+      "total": 255,
+      "passed": 254,
+      "changedSnapshotFailures": 1,
+      "playwrightDifferingPixels": 3600,
+      "status": "failed; retained RED"
+    },
+    "finalNoUpdateVerification": {
+      "status": "pending",
+      "required": "Fresh complete 255-case current-source CI with updateSnapshots none and maxDiffPixels 0."
+    }
   }
 }

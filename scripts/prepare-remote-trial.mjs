@@ -1,0 +1,15 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import {root,trialTarget,trialDist,selectedTools,offlineEnvironment,run,verifyRuntime} from './remote-trial-build-policy.mjs';
+if(process.platform!=='win32'||process.arch!=='x64')throw Error('Remote trial build currently supports Windows x64 only');
+const tools=selectedTools(process.env),env=offlineEnvironment(process.env,tools);
+env.CARGO_TARGET_DIR=path.join(trialTarget,'browser');
+run(process.execPath,['scripts/prepare-conpty.mjs','--verify',path.join(root,'src-tauri/conpty/runtime')],env);
+run(process.execPath,['scripts/prepare-session-sdk.mjs'],env);
+run(process.execPath,['scripts/prepare-opencode-archive-sdk.mjs'],env);
+run(process.execPath,['scripts/build-browser-runtime.mjs'],env);
+run(process.execPath,['scripts/build-browser-registration-runtime.mjs'],env);
+for(const name of ['remote-runtime','remote-registration-runtime'])verifyRuntime(path.join(root,'public',name));
+run(process.execPath,['node_modules/vite/bin/vite.js','build','--outDir',trialDist],env);
+const runtimes=['remote-runtime','remote-registration-runtime'].map(name=>verifyRuntime(path.join(root,'public',name),path.join(trialDist,name)));
+fs.writeFileSync(path.join(trialDist,'remote-trial-build.json'),JSON.stringify({kind:'LocalRemoteTrialNotRelease',version:JSON.parse(fs.readFileSync(path.join(root,'package.json'),'utf8')).version,runtimes},null,2)+'\n');

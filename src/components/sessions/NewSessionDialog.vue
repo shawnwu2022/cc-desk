@@ -22,6 +22,7 @@ const support = useCliSupportStore()
 const toolOptions = computed(() => [
   support.isEnabled('claude') ? { value: 'claude' as const, label: 'Claude Code' } : null,
   support.isEnabled('codex') ? { value: 'codex' as const, label: 'Codex CLI' } : null,
+  support.isEnabled('antigravity') ? { value: 'antigravity' as const, label: 'Antigravity CLI' } : null,
   support.isEnabled('opencode') ? { value: 'opencode' as const, label: 'opencode' } : null,
 ].filter(option => option !== null))
 const error = ref('')
@@ -29,12 +30,12 @@ const formId = `new-session-form-${++nextFormId}`
 const configurations = computed(() => [{ value: '', label: t('newSessionAutomaticConfig') }, ...profiles.byCli[draft.cli].map(profile => ({ value: profile.id, label: profile.name }))])
 const selected = computed(() => draft.launchConfigId ? profiles.profile(draft.launchConfigId) : draft.project ? draft.preferred(draft.project, draft.cli) : null)
 const permissionText = computed(() => draft.rawEnabled && draft.startMode === 'new' ? t('newSessionRawPermissions') : draft.cli === 'codex' ? t('newSessionCodexPermissions')
-  : draft.cli === 'opencode' ? t('newSessionOpencodePermissions')
+  : draft.cli === 'antigravity' ? t('newSessionAntigravityPermissions') : draft.cli === 'opencode' ? t('newSessionOpencodePermissions')
     : selected.value?.skipPermissions.mode === 'set' && selected.value.skipPermissions.value ? t('newSessionSkipPermissions')
     : selected.value?.id === 'legacyClaude' && selected.value.skipPermissions.mode === 'inherit' ? t('newSessionInheritedPermissions') : t('newSessionStandardPermissions'))
 const startModeOptions = computed(() => [
-  { value: 'new', label: t('newSession') }, { value: 'history', label: t('newSessionRestore') },
-  ...(draft.cli === 'opencode' ? [] : [{ value: 'resume-picker', label: t('newSessionNativePicker') }]),
+  { value: 'new', label: t('newSession') }, ...(draft.cli === 'antigravity' ? [] : [{ value: 'history', label: t('newSessionRestore') }]),
+  ...(draft.cli === 'opencode' || draft.cli === 'antigravity' ? [] : [{ value: 'resume-picker', label: t('newSessionNativePicker') }]),
   { value: 'resume-id', label: t('newSessionById') },
 ])
 watch(() => [props.active, draft.visible], ([active]) => { if (!active) draft.visible = false }, { flush: 'sync', immediate: true })
@@ -42,6 +43,7 @@ watch(() => draft.visible, () => { error.value = '' })
 watch(() => draft.cli, cli => {
   draft.launchConfigId = ''
   // opencode 无原生 picker（后端 UNSUPPORTED_ACTION）；切到 opencode 时不得残留该模式。
+  if (cli === 'antigravity' && (draft.startMode === 'history' || draft.startMode === 'resume-picker')) draft.startMode = 'new'
   if (cli === 'opencode' && draft.startMode === 'resume-picker') draft.startMode = 'new'
 })
 function format(value: string) { try { draft.setArgvFormat(value as 'lines' | 'json'); error.value = '' } catch { error.value = 'newSessionArgvFormatError' } }

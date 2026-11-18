@@ -12,6 +12,7 @@ import type {
   OutputAck,
   OutputFrame,
   ProtocolWriteReceipt,
+  ProtocolSource,
   RunKey,
 } from '@/types/terminal'
 
@@ -24,7 +25,7 @@ export interface NativeTerminalBindingOptions extends RunKey {
   currentTarget: () => InputTarget
   isUserInputAllowed?: () => boolean
   writeUser: (frame: NativeInputFrame) => Promise<InputWriteReceipt>
-  writeProtocol: (run: RunKey, bytes: Uint8Array) => Promise<ProtocolWriteReceipt>
+  writeProtocol: (run: RunKey, bytes: Uint8Array, source?: ProtocolSource) => Promise<ProtocolWriteReceipt>
   ackOutput: (ack: OutputAck) => Promise<unknown>
   onDegraded?: (reason: string) => void
   onActivity?: () => void
@@ -41,12 +42,14 @@ export interface NativeTerminalBinding {
 export function createNativeTerminalBinding(
   options: NativeTerminalBindingOptions,
 ): NativeTerminalBinding {
+  let parserSource: ProtocolSource | undefined
   const host = createTerminalHostProtocol({
     runId: options.runId,
     generation: options.generation,
     currentTarget: options.currentTarget,
     writeUser: options.writeUser,
     writeProtocol: options.writeProtocol,
+    currentProtocolSource: () => parserSource,
   })
 
   let disposed = false
@@ -92,15 +95,39 @@ export function createNativeTerminalBinding(
       }
       await operation
     },
-    binary: data => host.handleBinary(data),
+    binary: async data => {
+      if (options.isUserInputAllowed?.() === false) return
+      try { await host.handleBinary(data) }
+      finally { completeUserOperation(data.length > 0) }
+    },
   })
 
+  const parserWrites: Array<{ bytes: Uint8Array; parsed: () => void; source: ProtocolSource }> = []
+  let parserBusy = false
+  const pumpParser = () => {
+    if (disposed || parserBusy) return
+    const next = parserWrites.shift()
+    if (!next) return
+    parserBusy = true
+    parserSource = next.source
+    options.term.write(next.bytes, () => {
+      if (disposed) return
+      parserBusy = false
+      parserSource = undefined
+      next.parsed()
+      pumpParser()
+    })
+    options.onActivity?.()
+  }
   const output = createTerminalOutputTransport({
     runId: options.runId,
     generation: options.generation,
-    write(bytes, parsed) {
-      options.term.write(bytes, parsed)
-      options.onActivity?.()
+    write(bytes, parsed, source) {
+      // The existing bounded native output credit owns these queued bytes.
+      // One active parse binds every synchronous reply to its ORIGINAL frame,
+      // even if user IO delays the later protocol dispatch.
+      parserWrites.push({ bytes, parsed, source })
+      pumpParser()
     },
     ack: options.ackOutput,
     onDegraded: options.onDegraded,
@@ -147,6 +174,8 @@ export function createNativeTerminalBinding(
     dispose() {
       if (disposed) return
       disposed = true
+      parserWrites.length = 0
+      parserSource = undefined
       host.dispose()
       provenance.dispose()
       output.dispose()

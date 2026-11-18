@@ -50,7 +50,7 @@ pub(super) fn read(
     b: &mut Budget,
 ) -> ReadResult<Vec<ResourceItem>> {
     let cache_route = cache::route();
-    if c.cli == CliKind::Shell {
+    if matches!(c.cli, CliKind::Shell | CliKind::Antigravity) {
         return Err("SOURCE_UNSUPPORTED");
     }
     // 用户自己设定的会话名优先于现抽标题；只在历史列表展示中生效。
@@ -68,7 +68,7 @@ pub(super) fn read(
             walk(c, "archived_sessions", 4, o.kind, b, &mut files)?;
         }
         // opencode 的历史不经文件遍历（catalog 分派到 opencode_db）。
-        CliKind::Opencode => return Err("SOURCE_UNSUPPORTED"),
+        CliKind::Opencode | CliKind::Antigravity => return Err("SOURCE_UNSUPPORTED"),
         CliKind::Shell => unreachable!(),
     }
     let mut transcripts: Vec<(Transcript, Option<String>)> = Vec::new();
@@ -1217,7 +1217,7 @@ fn parse_complete(
                 }
                 _ => {}
             },
-            CliKind::Opencode => return Err("SOURCE_UNSUPPORTED"),
+            CliKind::Opencode | CliKind::Antigravity => return Err("SOURCE_UNSUPPORTED"),
             CliKind::Shell => return Err("SOURCE_UNSUPPORTED"),
         }
     }
@@ -1390,7 +1390,7 @@ fn parse_metadata(path: &str, cli: CliKind, input: &str) -> ReadResult<Transcrip
                     None
                 }
             }
-            CliKind::Opencode => return Err("SOURCE_UNSUPPORTED"),
+            CliKind::Opencode | CliKind::Antigravity => return Err("SOURCE_UNSUPPORTED"),
             CliKind::Shell => return Err("SOURCE_UNSUPPORTED"),
         };
         if let Some(observed) = observed_cwd {
@@ -1426,7 +1426,7 @@ fn parse_metadata(path: &str, cli: CliKind, input: &str) -> ReadResult<Transcrip
             .trim_end_matches(".jsonl")
             .to_owned(),
         CliKind::Codex => id.ok_or("SOURCE_UNSUPPORTED")?,
-        CliKind::Opencode => return Err("SOURCE_UNSUPPORTED"),
+        CliKind::Opencode | CliKind::Antigravity => return Err("SOURCE_UNSUPPORTED"),
         CliKind::Shell => return Err("SOURCE_UNSUPPORTED"),
     };
     if id.is_empty() || id.len() > 256 || id.chars().any(char::is_control) {

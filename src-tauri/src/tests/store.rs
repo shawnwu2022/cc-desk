@@ -2474,6 +2474,7 @@ fn ProjectsState_OpencodeLaunchPreferenceThirdKey_005() {
         claude_launch_config_id: None,
         codex_launch_config_id: None,
         opencode_launch_config_id: Some("cfg-1".into()),
+        antigravity_launch_config_id: None,
     };
     assert!(crate::store::validate_project_launch_preference(&value).is_ok());
     let rejected = crate::store::ProjectLaunchPreference {
@@ -2488,6 +2489,7 @@ fn ProjectsState_OpencodeLaunchPreferenceThirdKey_005() {
             claude_launch_config_id: None,
             codex_launch_config_id: None,
             opencode_launch_config_id: Some(invalid),
+            antigravity_launch_config_id: None,
         };
         assert!(crate::store::validate_project_launch_preference(&value).is_err());
     }
@@ -4252,4 +4254,21 @@ fn AppConfig_ShortcutBindings_PreserveExisting_002() {
         assert_eq!(&result[key], value);
     }
     assert_eq!(result["shortcutBindings"], bindings);
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn Antigravity_ProjectPreferenceRoundTrip_001() {
+    let value: crate::store::ProjectLaunchPreference = serde_json::from_value(serde_json::json!({
+        "lastCli": "antigravity", "antigravityLaunchConfigId": "agy-work"
+    }))
+    .unwrap();
+    assert!(crate::store::validate_project_launch_preference(&value).is_ok());
+    assert_eq!(
+        serde_json::to_value(&value).unwrap()["antigravityLaunchConfigId"],
+        "agy-work"
+    );
+    let old: crate::store::ProjectLaunchPreference =
+        serde_json::from_value(serde_json::json!({"lastCli":"codex"})).unwrap();
+    assert!(old.antigravity_launch_config_id.is_none());
 }

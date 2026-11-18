@@ -1,6 +1,6 @@
 {
   "name": "cc-desk",
-  "version": "0.27.0",
+  "version": "0.28.0-rc.1",
   "description": "CC Desk - a multi-project, multi-session desktop workspace for Claude Code, Codex CLI, and OpenCode",
   "license": "MIT",
   "author": {
@@ -29,6 +29,10 @@
   "scripts": {
     "dev": "npm run prepare:session-sdk && npm run prepare:opencode-archive && vite",
     "build": "npm run prepare:session-sdk && npm run prepare:opencode-archive && vite build",
+    "build:browser": "node scripts/build-browser-runtime.mjs && vite build",
+    "build:browser:registration-runtime": "node scripts/build-browser-registration-runtime.mjs",
+    "build:browser:registration-source": "node scripts/build-browser-registration-source.mjs",
+    "build:browser:product": "node scripts/build-browser-runtime.mjs && node scripts/build-browser-registration-runtime.mjs && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
@@ -55,7 +59,8 @@
     "test:terminal-fit": "playwright test --config playwright.terminal-fit.config.ts",
     "test:production": "playwright test --config playwright.production.config.ts",
     "prepare:session-sdk": "node scripts/prepare-session-sdk.mjs",
-    "prepare:opencode-archive": "node scripts/prepare-opencode-archive-sdk.mjs"
+    "prepare:opencode-archive": "node scripts/prepare-opencode-archive-sdk.mjs",
+    "build:win:remote-trial": "node scripts/build-remote-trial.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "2.11.1",

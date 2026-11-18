@@ -21,7 +21,7 @@ const statusLabel = computed(() => {
   }
   return t(sessionVisualLabelKey(props.state, props.activityState, props.archived))
 })
-const CLI_NAMES: Record<UnifiedCliKind, string> = { claude: 'Claude Code', codex: 'Codex CLI', opencode: 'opencode' }
+const CLI_NAMES: Record<UnifiedCliKind, string> = { claude: 'Claude Code', codex: 'Codex CLI', opencode: 'opencode', antigravity: 'Antigravity CLI' }
 const identityLabel = computed(() => {
   if (props.cli !== 'codex' || props.archived || !props.identityAssociation) return ''
   const keys = { 'awaiting-identity': 'sessionIdentityPending', 'awaiting-history': 'sessionIdentityHistoryPending', linked: 'sessionIdentityLinked', unavailable: 'sessionIdentityUnavailable' }

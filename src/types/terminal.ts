@@ -45,7 +45,16 @@ export interface InputWriteReceipt extends RunKey {
   confirmedBytes: U64String
 }
 
-export interface ProtocolWriteReceipt {
+export type ProtocolWriteReceipt = {
   state: InputWriteState
   confirmedBytes: U64String
+} | (RunKey & { state: 'native-owned'; confirmedBytes: '0'; protocolSource?: ProtocolSource })
+
+export interface ProtocolSource {
+  streamEpoch: U64String
+  throughOffset: U64String
+}
+export interface NativeResizeReceipt {
+  state: 'resized'
+  canonicalOutput: 'complete' | 'local-only' | 'unavailable'
 }

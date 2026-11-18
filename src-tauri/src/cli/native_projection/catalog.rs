@@ -101,6 +101,9 @@ pub(crate) fn read(
     budget: &mut Budget,
 ) -> ReadResult<Vec<ResourceItem>> {
     catalog.check()?;
+    if catalog.cli == crate::cli::types::CliKind::Antigravity {
+        return Err("SOURCE_UNSUPPORTED");
+    }
     // 项目文档/技能等资源类别是单项目投影契约；批量观察只服务历史枚举。
     if !matches!(
         options.kind,

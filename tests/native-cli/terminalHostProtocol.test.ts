@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { createTerminalHostProtocol } from '@/terminal/nativeHostProtocol'
 
+function parserReply(host:ReturnType<typeof createTerminalHostProtocol>,data:string){
+  const leave=host.beginParserOutput()
+  try{return host.handleData(data)}finally{leave()}
+}
+
 function receipt(
   runId: string,
   generation: number,
@@ -19,6 +24,33 @@ function receipt(
 }
 
 describe('D19 native terminal host protocol', () => {
+  it('rejects a native-owned acknowledgement for another original parser source', async () => {
+    const host=createTerminalHostProtocol({
+      runId:'run-a',generation:3,currentTarget:()=>({runId:'run-a',generation:3,modeEpoch:'7'}),
+      currentProtocolSource:()=>({streamEpoch:'9',throughOffset:'4'}),
+      writeUser:async frame=>receipt(frame.runId,frame.generation,frame.inputSeq,frame.modeEpoch,frame.bytes.length),
+      writeProtocol:async()=>({state:'native-owned',runId:'run-a',generation:3,confirmedBytes:'0',protocolSource:{streamEpoch:'9',throughOffset:'8'}} as any),
+    })
+    await expect(parserReply(host,'x')).rejects.toThrow('NATIVE_PROTOCOL_OWNERSHIP_MISMATCH')
+    host.dispose()
+  })
+  it.each([
+    ['run-a', 3, '0', true],
+    ['run-b', 3, '0', false],
+    ['run-a', 4, '0', false],
+    ['run-a', 3, '1', false],
+  ])('native protocol ownership is exact and has no written bytes (%s,%i,%s)', async (runId, generation, confirmedBytes, accepted) => {
+    const host = createTerminalHostProtocol({
+      runId: 'run-a', generation: 3,
+      currentTarget: () => ({ runId: 'run-a', generation: 3, modeEpoch: '7' }),
+      writeUser: async frame => receipt(frame.runId, frame.generation, frame.inputSeq, frame.modeEpoch, frame.bytes.length),
+      writeProtocol: async () => ({ state: 'native-owned', runId, generation, confirmedBytes } as any),
+    })
+    const pending = parserReply(host,'x')
+    if (accepted) await expect(pending).resolves.toBeUndefined()
+    else await expect(pending).rejects.toThrow('NATIVE_PROTOCOL_OWNERSHIP_MISMATCH')
+    host.dispose()
+  })
   it('D19_Protocol_ParserOriginatedOnDataUsesProtocolWriterWithoutContentGuessing_001', async () => {
     const events: string[] = []
     const host = createTerminalHostProtocol({
@@ -79,11 +111,8 @@ describe('D19 native terminal host protocol', () => {
       runId: 'run-a',
       generation: 1,
       currentTarget: () => ({ runId: 'run-a', generation: 1, modeEpoch: '1' }),
-      writeUser: async frame => receipt(frame.runId, frame.generation, frame.inputSeq, frame.modeEpoch, frame.bytes.length),
-      writeProtocol: async (_run, bytes) => {
-        seen.push(Array.from(bytes))
-        return { state: 'host-written', confirmedBytes: String(bytes.length) }
-      },
+      writeUser: async frame => {seen.push([...frame.bytes]);return receipt(frame.runId, frame.generation, frame.inputSeq, frame.modeEpoch, frame.bytes.length)},
+      writeProtocol: async () => {throw new Error('human binary must not enter automatic reply lane')},
     })
 
     await host.handleBinary(String.fromCharCode(0, 127, 128, 255))
@@ -239,8 +268,8 @@ it('Native_ProtocolReceiptShape_011', async () => {
       return { state: 'host-written', confirmedBytes: String(bytes.length) }
     },
   })
-  await host.handleBinary(String.fromCharCode(0, 128, 255))
-  expect(protocol).toEqual([[0, 128, 255]])
+  await parserReply(host,'\x1b[0n')
+  expect(protocol).toEqual([[27,91,48,110]])
   expect(host.snapshot().state).toBe('open')
 })
 
@@ -252,5 +281,5 @@ it.each([3, '03', null, '18446744073709551616'])('Native_ProtocolBadBytes_012 %s
     writeUser: async frame => receipt(frame.runId, frame.generation, frame.inputSeq, frame.modeEpoch, frame.bytes.length),
     writeProtocol: async () => ({ state: 'host-written', confirmedBytes } as any),
   })
-  await expect(host.handleBinary('abc')).rejects.toThrow(/^(INVALID_CONFIRMED_BYTES|NATIVE_INPUT_WRITE_INCOMPLETE)$/)
+  await expect(parserReply(host,'abc')).rejects.toThrow(/^(INVALID_CONFIRMED_BYTES|NATIVE_INPUT_WRITE_INCOMPLETE)$/)
 })

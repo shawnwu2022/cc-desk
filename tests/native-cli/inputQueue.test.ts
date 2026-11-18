@@ -415,7 +415,7 @@ describe('D16 terminal host source classification', () => {
 
   it('D16_Host_XtermBinaryPreservesRawByteSemantics_007', () => {
     const event = classifyXtermBinary(String.fromCharCode(0, 127, 128, 255))
-    expect(event.route).toBe('protocol-bypass')
+    expect(event.route).toBe('user-queue')
     expect(event.source).toBe('xterm-binary')
     expect(Array.from(event.bytes)).toEqual([0, 127, 128, 255])
   })

@@ -9,7 +9,7 @@ pub(super) fn read(
     kind: ResourceKind,
     b: &mut Budget,
 ) -> ReadResult<Vec<ResourceItem>> {
-    if c.cli == CliKind::Shell {
+    if matches!(c.cli, CliKind::Shell | CliKind::Antigravity) {
         return Err("SOURCE_UNSUPPORTED");
     }
     let mut out = Vec::new();

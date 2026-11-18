@@ -1,3 +1,4 @@
+import {registrationSourcePlugin} from './build/registrationSource'
 import { execFileSync } from 'node:child_process'
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
@@ -13,7 +14,7 @@ try {
 } catch { /* Source archives have no Git identity; do not invent one. */ }
 // https://vitejs.dev/config/
 export default defineConfig(({ command, mode }) => ({
-  plugins: [visualFixturePlugin(__dirname, command === 'serve' && mode === 'visual' && process.env.CC_DESK_VISUAL_FIXTURE === '1'), vue()],
+  plugins: [registrationSourcePlugin(__dirname), visualFixturePlugin(__dirname, command === 'serve' && mode === 'visual' && process.env.CC_DESK_VISUAL_FIXTURE === '1'), vue()],
   resolve: {
     alias: {
       '@': resolve(__dirname, 'src')
@@ -50,11 +51,16 @@ export default defineConfig(({ command, mode }) => ({
     // Produce sourcemaps for debug builds
     sourcemap: !!process.env.TAURI_DEBUG,
     rollupOptions: {
+      preserveEntrySignatures: 'strict',
       input: {
         main: resolve(__dirname, 'index.html'),
         versionManager: resolve(__dirname, 'version-manager.html'),
+        browserRemote: resolve(__dirname, 'browser-remote.html'),
+        browserRegistration: resolve(__dirname, 'browser-registration.html'),
+        browserProfile: resolve(__dirname, 'remote/ui-terminal/src/browser-profile.ts'),
       },
       output: {
+        entryFileNames: chunk => chunk.name === 'browserProfile' ? 'browser-profile.js' : 'assets/[name]-[hash].js',
         manualChunks: manualChunkName
       }
     }

@@ -544,7 +544,12 @@ fn D09_Raw_LosslessWithoutDeskAdditions_003() {
         "--",
         "-literal",
     ];
-    for cli in [CliKind::Claude, CliKind::Codex, CliKind::Shell] {
+    for cli in [
+        CliKind::Claude,
+        CliKind::Codex,
+        CliKind::Antigravity,
+        CliKind::Shell,
+    ] {
         let mut fixture = Fixture::new(
             cli,
             LaunchAction::Raw {
@@ -580,7 +585,12 @@ fn D09_Raw_LosslessWithoutDeskAdditions_003() {
 
 #[test]
 fn D09_Arguments_ExplicitDefaultsThenExtras_004() {
-    for cli in [CliKind::Claude, CliKind::Codex, CliKind::Shell] {
+    for cli in [
+        CliKind::Claude,
+        CliKind::Codex,
+        CliKind::Antigravity,
+        CliKind::Shell,
+    ] {
         let mut fixture = Fixture::new(cli, LaunchAction::New);
         fixture.profile.default_args = Override::Set(vec!["--model".into(), "chosen".into()]);
         fixture.request.extra_args = vec!["--future".into(), "a b".into(), "".into(), "--".into()];
@@ -870,7 +880,12 @@ fn D09_Raw_EmptyDoesNotBecomeDefaultNewSession_016() {
 
 #[test]
 fn D09_Raw_OptionLikeLocatorsRemainNativeEscapeHatch_017() {
-    for cli in [CliKind::Claude, CliKind::Codex, CliKind::Shell] {
+    for cli in [
+        CliKind::Claude,
+        CliKind::Codex,
+        CliKind::Antigravity,
+        CliKind::Shell,
+    ] {
         let fixture = Fixture::new(
             cli,
             LaunchAction::Raw {
@@ -1417,4 +1432,55 @@ fn codex_cmd_npm_forwards_hooks(version: &str, user_hooks: bool) {
         f.freeze().with_codex_identity(&observer, &hooks).is_err(),
         "do not adapt a user-custom launcher"
     );
+}
+#[test]
+fn Antigravity_ExplicitNativeActions_001() {
+    let cli: CliKind = serde_json::from_str("\"antigravity\"").unwrap();
+    for (action, expected) in [
+        (LaunchAction::New, words(&[])),
+        (resume(LOCATOR), words(&["--conversation", LOCATOR])),
+    ] {
+        let mut fixture = Fixture::new(cli, action);
+        fixture.profile.default_args = Override::Set(vec!["--model".into(), "chosen-model".into()]);
+        fixture.request.extra_args = vec!["two words".into()];
+        let snapshot = fixture.freeze();
+        let invocation = build_invocation(&fixture.request, &snapshot).unwrap();
+        let mut args = expected;
+        args.extend(words(&["--model", "chosen-model", "two words"]));
+        assert_eq!(invocation.args(), args);
+        assert_eq!(snapshot.program(), std::env::current_exe().unwrap());
+    }
+}
+
+#[test]
+fn Antigravity_UnsupportedCapabilitiesStayClosed_002() {
+    let cli: CliKind = serde_json::from_str("\"antigravity\"").unwrap();
+    for action in [
+        picker(ResumeScope::CurrentProject),
+        picker(ResumeScope::All),
+        unarchive(LOCATOR),
+    ] {
+        let fixture = Fixture::new(cli, action);
+        assert_eq!(
+            build_invocation(&fixture.request, &fixture.freeze())
+                .unwrap_err()
+                .code,
+            "UNSUPPORTED_ACTION"
+        );
+    }
+    assert!(crate::cli::native_projection::selection::locations(cli, &EnvMap::new()).is_err());
+}
+
+#[test]
+fn Antigravity_IdentityAndObserverIsolation_003() {
+    let mut fixture = Fixture::new(CliKind::Antigravity, LaunchAction::New);
+    fixture.profile.observer = Override::Set(true);
+    let snapshot = fixture.freeze();
+    assert!(!snapshot.observer_requested());
+    assert_eq!(CliKind::Antigravity.program_name(), "agy");
+    assert_eq!(
+        serde_json::to_string(&CliKind::Antigravity).unwrap(),
+        "\"antigravity\""
+    );
+    assert!(serde_json::from_str::<CliKind>("\"agy\"").is_err());
 }

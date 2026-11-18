@@ -6,7 +6,7 @@ const MAX_U64 = BigInt('18446744073709551615')
 export const INPUT_ACTION_BYTES_MAX = 8 * 1024 * 1024
 export const INPUT_RUN_QUEUE_BYTES_MAX = 16 * 1024 * 1024
 
-export type UserInputSource = 'user-text' | 'user-paste'
+export type UserInputSource = 'user-text' | 'user-paste' | 'user-binary'
 export type InputPauseReason =
   | 'producer-failed'
   | 'mode-changed'
@@ -31,6 +31,7 @@ export interface InputIntent {
 }
 
 export interface ProtocolInput {
+  protocolSource?: import('@/types/terminal').ProtocolSource
   runId: string
   generation: number
   modeEpoch: U64String
@@ -65,7 +66,7 @@ export interface InputIntentQueue {
   flush(): Promise<void>
   enqueueConfirmed(input: { source: UserInputSource; modeEpoch: U64String; bytes: Uint8Array; admission?: InputWriteAdmission }): { inputSeq: U64String; settled: Promise<void> }
   dispose(): void
-  sendProtocol(bytes: Uint8Array): Promise<void>
+  sendProtocol(bytes: Uint8Array, source?: import('@/types/terminal').ProtocolSource): Promise<void>
   recover(inputSeq: U64String, action: InputRecovery): boolean
   snapshot(): InputQueueSnapshot
 }
@@ -420,7 +421,8 @@ export function createInputIntentQueue(options: InputIntentQueueOptions): InputI
 
     flush,
 
-    async sendProtocol(bytes) {
+    async sendProtocol(bytes, source) {
+      const protocolSource = source ? { ...source } : undefined
       const send = options.sendProtocol
       if (!send) throw new Error('PROTOCOL_SENDER_UNAVAILABLE')
       await dispatchExclusive(async () => {
@@ -433,6 +435,7 @@ export function createInputIntentQueue(options: InputIntentQueueOptions): InputI
           generation: options.generation,
           modeEpoch: target.modeEpoch,
           bytes: copyBytes(bytes),
+          ...(protocolSource ? { protocolSource } : {}),
         })
       })
     },

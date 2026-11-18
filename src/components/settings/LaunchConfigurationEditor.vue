@@ -22,9 +22,9 @@ const request = props.request
 const original = request.kind === 'create' ? undefined : profiles.profile(request.profileId)
 const workspaceRevision = profiles.revision
 const source = original ? { id: original.id, revision: original.revision } : undefined
-const cli = request.kind === 'create' ? request.cli : original?.cli === 'codex' ? 'codex' : original?.cli === 'opencode' ? 'opencode' : 'claude'
+const cli = request.kind === 'create' ? request.cli : original?.cli === 'codex' ? 'codex' : original?.cli === 'opencode' ? 'opencode' : original?.cli === 'antigravity' ? 'antigravity' : 'claude'
 const createdId = request.kind === 'create' || request.kind === 'copy' ? createNativeId('configuration') : undefined
-const name = ref(request.kind === 'copy' ? `${original?.name ?? ''} ${t('launchConfigCopySuffix')}` : original?.name ?? (cli === 'claude' ? 'Claude Code' : cli === 'codex' ? 'Codex CLI' : 'opencode'))
+const name = ref(request.kind === 'copy' ? `${original?.name ?? ''} ${t('launchConfigCopySuffix')}` : original?.name ?? (cli === 'claude' ? 'Claude Code' : cli === 'codex' ? 'Codex CLI' : cli === 'antigravity' ? 'Antigravity CLI' : 'opencode'))
 const pathMode = ref(original?.programPath.mode ?? 'inherit')
 const pathText = ref(original?.programPath.mode === 'set' ? original.programPath.value : '')
 const argsMode = ref(original?.defaultArgs.mode ?? 'set')
@@ -34,7 +34,7 @@ const format = ref<'lines' | 'json'>(needsJson(initialArgs) ? 'json' : 'lines')
 const argsText = ref(format.value === 'json' ? JSON.stringify(initialArgs) : initialArgs.join('\n'))
 function booleanChoice(value?: ProfileOverride<boolean>): string { return value?.mode === 'set' ? String(value.value) : value?.mode ?? 'inherit' }
 const permission = ref(booleanChoice(original?.skipPermissions ?? (cli === 'claude' ? { mode: 'set', value: false } : undefined)))
-const observer = ref(booleanChoice(original?.observer ?? { mode: 'set', value: cli !== 'codex' }))
+const observer = ref(booleanChoice(original?.observer ?? { mode: 'set', value: cli === 'claude' || cli === 'opencode' }))
 const launcherKind = ref(original?.launcher.kind ?? 'native')
 const launcherProgram = ref(original?.launcher.kind === 'shell' ? original.launcher.program : original?.launcher.kind === 'shim' ? original.launcher.runner : '')
 const dialect = ref<ShellDialect>(original?.launcher.kind !== 'native' && original ? original.launcher.dialect : 'bash')
@@ -103,13 +103,13 @@ async function save() {
     <div class="launch-editor">
       <AppInput data-launch-name :label="t('launchConfigName')" v-model="name" :disabled="busy || blocked" />
       <template v-if="request.kind !== 'rename'">
-        <p>{{ cli === 'claude' ? 'Claude Code' : cli === 'codex' ? 'Codex CLI' : 'opencode' }}</p>
+        <p>{{ cli === 'claude' ? 'Claude Code' : cli === 'codex' ? 'Codex CLI' : cli === 'antigravity' ? 'Antigravity CLI' : 'opencode' }}</p>
         <details><summary>{{ t('newSessionMoreOptions') }}</summary>
           <AppSelect :label="t('launchConfigProgram')" v-model="pathMode" :options="modes" :disabled="busy || blocked" />
           <AppInput v-if="pathMode === 'set'" data-launch-program :label="t('launchConfigProgramPath')" v-model="pathText" :disabled="busy || blocked" />
           <AppSelect v-if="cli === 'claude'" :label="t('launchConfigPermissions')" v-model="permission" :options="booleans" :disabled="busy || blocked" />
           <p>{{ t('launchConfigPermissionHint') }}</p>
-          <AppSelect :label="t('launchConfigObserver')" v-model="observer" :options="booleans" :disabled="busy || blocked" />
+          <AppSelect v-if="cli !== 'antigravity'" :label="t('launchConfigObserver')" v-model="observer" :options="booleans" :disabled="busy || blocked" />
         </details>
         <details><summary>{{ t('newSessionDeveloperOptions') }}</summary>
           <AppSelect :label="t('launchConfigLauncher')" v-model="launcherKind" :options="[{ value: 'native', label: t('launchConfigDirect') }, { value: 'shell', label: t('launchConfigShell') }, { value: 'shim', label: t('launchConfigShim') }]" :disabled="busy || blocked" />

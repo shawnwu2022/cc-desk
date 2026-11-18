@@ -1,0 +1,2 @@
+import {test} from 'node:test';import assert from 'node:assert/strict';import {Worker} from 'node:worker_threads';import {once} from 'node:events';
+for(const mode of ['poll','event','cancel'])test('BrowserLiveTrap_OriginalKind4_'+mode+'_001',async()=>{const w=new Worker(new URL('./browserLiveTrap.fixture.ts',import.meta.url),{workerData:mode});const exit=once(w,'exit');try{const [result]=await once(w,'message',{signal:AbortSignal.timeout(3000)});assert.equal(result,'ok');const[code]=await exit;assert.equal(code,0);}finally{await w.terminate();}});

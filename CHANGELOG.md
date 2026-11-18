@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+## [0.28.0-rc.1] - 2026-11-17
+
+### Added
+
+- Add opt-in Antigravity CLI profiles with explicit new/conversation/continue argument contracts. Default remains disabled; authentication and real session restore are not certified.
+- Integrate a separate local remote-trial build profile with explicit remote-host and both verified browser runtimes. This is a bounded, cancellable trial of at most 60 seconds, not remote functionality delivered by the standard release installers.
+
+### Validation and limits
+
+- Local integrated tests cover isolated production browser/Panel reconnect and idle lease maintenance, cancellation/identity rejection, and AGY argument/default contracts. Synthetic origins, public virtual credentials and a fixture-CA proxy do not prove real phone enrollment or browser-trusted TLS.
+- No long-term unattended or cross-App recovery claim. Standard build/release defaults remain unchanged; the separate remote-trial profile is not an installer.
+- AGY may consult the OS keyring on launch. Temporary HOME does not isolate credentials; historical smoke isolation is insufficient, not evidence of a credential leak. Real authenticated restore and ordinary desktop acceptance remain unverified.
+- RC promotion requires exact protected-main CI, authenticated coverage and three same-run signed updater platforms. Original native All, real installation/return, D20 and live-user acceptance remain separate. No publication is performed by this preparation.
+
 ## [0.27.0] - 2026-11-17
 
 ### Stable release

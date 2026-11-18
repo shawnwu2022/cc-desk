@@ -42,6 +42,7 @@ impl<'a> LaunchRecipe<'a> {
                 CliKind::Claude => super::claude::action_args(snapshot)?,
                 CliKind::Codex => super::codex::action_args(snapshot)?,
                 CliKind::Opencode => super::opencode::action_args(snapshot)?,
+                CliKind::Antigravity => super::antigravity::action_args(snapshot)?,
                 CliKind::Shell => super::shell::action_args(snapshot)?,
             }
         };
