@@ -393,10 +393,47 @@ impl RestrictedInputGate {
         // bounded TermMode flag. Win32-input-mode is explicitly unsupported:
         // Microsoft's ConPTY spec permits terminals to ignore this optional
         // request and retain legacy VT input; do not claim KEY_EVENT fidelity.
-        (intermediates.is_empty() && action == 't' && params.iter().eq([&[1][..]]))
+        canonical::mode_mutation(params, intermediates, action).is_some()
+            || Self::canonical_display_control(params, intermediates, action)
+            || (intermediates.is_empty() && action == 't' && params.iter().eq([&[1][..]]))
             || (intermediates == b"?"
                 && matches!(action, 'h' | 'l')
-                && (params.iter().eq([&[1004][..]]) || params.iter().eq([&[9001][..]])))
+                && (params.iter().eq([&[1004][..]])
+                    || params.iter().eq([&[2004][..]])
+                    || params.iter().eq([&[9001][..]])))
+    }
+    fn canonical_display_control(
+        params: &alacritty_terminal::vte::Params,
+        intermediates: &[u8],
+        action: char,
+    ) -> bool {
+        if !intermediates.is_empty() {
+            return false;
+        }
+        if matches!(action, 'J' | 'K') {
+            return params.iter().count() == 1 && params.iter().all(|p| p.len() == 1 && p[0] <= 2);
+        }
+        if action != 'm' || params.iter().count() > 16 {
+            return false;
+        }
+        let mut values = params.iter();
+        while let Some(p) = values.next() {
+            if p.len() != 1 {
+                return false;
+            }
+            if matches!(p[0], 38 | 48) {
+                if values.next() != Some(&[5][..]) {
+                    return false;
+                }
+                if !values.next().is_some_and(|n| n.len() == 1 && n[0] <= 255) {
+                    return false;
+                }
+            } else if !matches!(p[0], 0..=4 | 7..=9 | 22..=24 | 27..=29 | 30..=37 | 39..=47 | 49 | 90..=97 | 100..=107)
+            {
+                return false;
+            }
+        }
+        true
     }
     fn reject(&mut self, code: TerminalSafeCode) {
         self.rejected.get_or_insert(code);

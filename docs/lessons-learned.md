@@ -131,3 +131,8 @@ Lxx 标题
 - **防再犯**：先核平台配置、显式覆盖和实际产物来源，再判断最终功能集合。UI 的泛化失败不能推断具体错误码，也不能通过批准、放宽 canonical 或伪造 scope 绕过拒绝。
 - **覆盖边界**：原 HostUI worker 未注册 scope 命令，组件单测 mock API，直接调用 `read_pairing_scope` 的资源测试不经过 WebView IPC。新增隔离原资源 IPC 观测只说明测试进程，不能冒充当前用户实例的根因或真实 Codex 验收。
 - **最小回归**：组件仅展示固定 SafeError 白名单，不展示任意异常消息，不自动重试；真实 WebView 经原 document bridge、正式命令和 NativeRuntime 读取 scope，保留实际结果及有界退出收据。
+## L12 同版 CLI 探针先核当前参数，再区分诊断完成与产品通过
+
+- **已证事实**：Codex 0.169.1 空 home 探针沿用了旧 `--ask-for-approval untrusted`，CLI 早退；测试执行成功不代表 canonical 准入通过。按该精确可执行文件 `--help` 改为 `on-request` 后，真实 Native 链才复现 `NATIVE_CANONICAL_UNAVAILABLE`，控制类别观测定位到未建模的终端模式。
+- **防再犯**：运行前核精确版本、哈希与当前参数；保留早退证据，不能把 fixture 参数错误记作产品 RED。无输入、空账户与 read-only sandbox 也不等于无网络。
+- **最小回归**：分别报告进程存活、scope 实际值、受拒控制类别和回收见证；禁止采任务正文。新增终端模式必须与成熟模拟器状态、epoch、投影和输入隔离一致，不能仅放行序列或用逐项编译掩盖整体能力缺口。

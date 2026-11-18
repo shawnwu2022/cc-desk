@@ -17,6 +17,12 @@ pub(super) enum MarkKind {
 pub(super) enum ModeMutation {
     Focus(bool),
     Alternate(bool),
+    BracketedPaste(bool),
+    Cursor(bool),
+    AlternateScroll(bool),
+    MouseMotion(bool),
+    MouseSgr(bool),
+    MouseMotionSgr(bool),
 }
 impl ModeMutation {
     fn predict(
@@ -27,6 +33,25 @@ impl ModeMutation {
         match self {
             Self::Focus(enabled) => mode.set(TermMode::FOCUS_IN_OUT, enabled),
             Self::Alternate(enabled) => mode.set(TermMode::ALT_SCREEN, enabled),
+            Self::BracketedPaste(enabled) => mode.set(TermMode::BRACKETED_PASTE, enabled),
+            Self::Cursor(enabled) => mode.set(TermMode::SHOW_CURSOR, enabled),
+            Self::AlternateScroll(enabled) => mode.set(TermMode::ALTERNATE_SCROLL, enabled),
+            Self::MouseMotion(enabled) => {
+                if enabled {
+                    mode.remove(TermMode::MOUSE_MODE);
+                }
+                mode.set(TermMode::MOUSE_MOTION, enabled);
+            }
+            Self::MouseSgr(enabled) => {
+                if enabled {
+                    mode.remove(TermMode::UTF8_MOUSE);
+                }
+                mode.set(TermMode::SGR_MOUSE, enabled);
+            }
+            Self::MouseMotionSgr(enabled) => {
+                mode = Self::MouseMotion(enabled).predict(mode);
+                mode = Self::MouseSgr(enabled).predict(mode);
+            }
         }
         mode
     }
@@ -43,12 +68,23 @@ pub(super) fn mode_mutation(
     intermediates: &[u8],
     action: char,
 ) -> Option<ModeMutation> {
+    if intermediates == b"?"
+        && matches!(action, 'h' | 'l')
+        && params.iter().eq([&[1003][..], &[1006][..]])
+    {
+        return Some(ModeMutation::MouseMotionSgr(action == 'h'));
+    }
     if intermediates != b"?" || !matches!(action, 'h' | 'l') || params.iter().count() != 1 {
         return None;
     }
     match params.iter().next()? {
+        [25] => Some(ModeMutation::Cursor(action == 'h')),
+        [1007] => Some(ModeMutation::AlternateScroll(action == 'h')),
+        [1003] => Some(ModeMutation::MouseMotion(action == 'h')),
+        [1006] => Some(ModeMutation::MouseSgr(action == 'h')),
         [1004] => Some(ModeMutation::Focus(action == 'h')),
         [1049] => Some(ModeMutation::Alternate(action == 'h')),
+        [2004] => Some(ModeMutation::BracketedPaste(action == 'h')),
         _ => None,
     }
 }
@@ -295,6 +331,50 @@ mod version_tests {
         assert_eq!(core.epochs.mode_epoch, u64::MAX);
         assert_eq!(core.epochs.structure_epoch, u64::MAX);
         assert!(!core.is_degraded());
+    }
+    #[test]
+    fn bracketed_paste_overflow_rejects_before_query_and_noop_does_not_wrap() {
+        let mut core = TerminalCore::new_with_queries(3, 10).unwrap();
+        core.epochs.mode_epoch = u64::MAX;
+        core.feed(b"\x1b[?2004l").unwrap();
+        let mut callbacks = 0;
+        assert!(
+            core.feed_with_queries(b"\x1b[c\x1b[?2004h", |_| {
+                callbacks += 1;
+                Ok::<(), ()>(())
+            })
+            .is_err()
+        );
+        assert_eq!(callbacks, 0);
+        assert_eq!(core.epochs.mode_epoch, u64::MAX);
+        assert!(
+            !core
+                .term
+                .mode()
+                .contains(alacritty_terminal::term::TermMode::BRACKETED_PASTE)
+        );
+        assert!(core.is_degraded());
+    }
+    #[test]
+    fn combined_mouse_mode_overflow_refuses_before_prior_query() {
+        let mut core = TerminalCore::new_with_queries(3, 10).unwrap();
+        core.epochs.mode_epoch = u64::MAX;
+        let mut callbacks = 0;
+        assert!(
+            core.feed_with_queries(b"\x1b[c\x1b[?1003;1006h", |_| {
+                callbacks += 1;
+                Ok::<(), ()>(())
+            })
+            .is_err()
+        );
+        assert_eq!(callbacks, 0);
+        assert_eq!(core.epochs.mode_epoch, u64::MAX);
+        assert!(
+            !core
+                .term
+                .mode()
+                .contains(alacritty_terminal::term::TermMode::MOUSE_MOTION)
+        );
     }
     #[test]
     fn resize_epoch_overflow_freezes_without_changing_the_grid() {

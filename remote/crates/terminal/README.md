@@ -109,3 +109,26 @@ synchronized-update handling, full log/handler privacy review, per-turn byte/CPU
 watchdog, fuzz/allocator evidence, mode/revision snapshots, renderer, and real CLI/
 platform acceptance. `remote_control_eligible` is always false. Do not attach
 untrusted real PTY streams based on this checkpoint.
+
+## Canonical Codex startup display profile (partial, not full CLI qualification)
+
+Only `new_with_queries` additionally models exact DECSET/DECRST 25 (cursor visibility),
+2004 (bracketed-paste state), 1007 (alternate scroll), 1003 (all-motion reporting),
+1006 (SGR mouse), and the observed ordered pair `1003;1006`. These go through the
+locked emulator, with predicted/actual mode comparison and checked mode epochs.
+The pair is one atomic mode mark; repeated no-ops do not advance epochs. Cursor
+visibility is represented by the existing projection; other input-mode state is
+not a new wire capability. In particular, raw-byte browser input is NOT equivalent
+to local mouse, alternate-scroll, or bracketed-paste input, and no automatic input
+wrapping or mouse-event production is enabled.
+
+This canonical profile also admits exact erase-display/line modes 0/1/2 and indexed
+SGR `38;5;n`/`48;5;n` for n<=255 among the existing basic flags, keeping the total
+16 scalar parameter bound. The existing Palette projection represents these colors.
+RGB SGR, colon subparameters, arbitrary mixed private modes and OSC/DCS remain
+rejected. Ordinary construction retains the original narrow admission described
+above. Unknown tails fail whole-batch preflight before mode or query effects.
+
+The same-version isolated Codex startup still requires synchronized output 2026,
+which is not enabled by this patch. Terminal unit tests and a stale-view Host
+input test do not establish full Codex, browser, phone, or public Relay usability.
