@@ -36,3 +36,11 @@ cargo +1.98.1 test --offline --locked --manifest-path src-tauri/Cargo.toml --fea
 原生窗口操作授权超时，未获批准；本轮没有再次请求授权或进行 UI 操作。首次 `preparedIdentity` 数字字段错误由 DOM 回归复现并修复。旧 `.audit/host-ui-isolation-20261114/scenario-no` 原样保留，其中 `ownedRunPhysicallyRetired: true` 是旧版过度命名，不能证明整体资源退出、callback 完成或 UI 验收成功。进程退出原因未作推断。
 
 修复验证日志及源码/产物哈希见 `.audit/host-ui-isolation-20261114/repair/manifest.json`。实际 WebView、原生批准窗口和新 shutdown 现场行为均仍未验证。
+
+## 自动公开 scope IPC 观测（非当前用户实例诊断）
+
+`HostScope_Ipc_Worker_100 --exact --ignored --nocapture --test-threads=1` 复用此 worker 的隔离 Fixture、原 NativeRuntime / NativeRunSupervisor、原 document bridge 与正式 `remote_host_pairing_scope` 命令。必须使用完整名称 `tests::native_cli_run_supervisor::host_ui::HostScope_Ipc_Worker_100`，并设置新的空 `CC_DESK_HOST_UI_ROOT` 与项目 `.audit` 内的 TEMP/TMP/TMPDIR。此模式不依赖人工 UI bundle，不启动产品入口、真实 CLI、登记、批准或 Relay。
+
+仅输出固定白名单结果到 `scope-observation.json`；`OK` 表示本次隔离链取得匹配 request 的公开 scope，安全错误码只证明此夹具得到该错误。启动失败、畸形返回或未知错误使观测测试失败。任何结果都不能当作正在运行的用户 Codex 会话的根因。原有 canonical / ownership 拒绝不变。
+
+60 秒 watchdog 仅覆盖 WebView 事件循环，且返回后 join。原 runtime shutdown 及退出观察仍保留，**整个 worker 不因此获得 60 秒硬上界**。调用方必须持有本次 worker 进程句柄并施加外层总超时（本次验证 120 秒）；超时仅可用既有 `Stop-OwnedTimedOut` 停止该 owned worker，记录 forced termination / exit confirmation，不能称正常回收或终止同名用户进程。`shutdown.json` 保留原逐项事实与 Unknown，不伪称完整 I/O 子树退出。

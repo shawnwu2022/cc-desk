@@ -124,3 +124,10 @@ Lxx 标题
 最小回归：可观察失败/通过及边界
 证据：提交、测试或文档；仍未验证什么
 ```
+
+## L11 平台合并配置与真实 IPC 覆盖必须先核实
+
+- **已证事实**：排查 `79a9e445` 的公开 scope 读取失败时，仅查 `tauri.conf.json`、Cargo 默认 features 和工作流命令，曾误判标准 Windows 包未启用 Host。`tauri.windows.conf.json` 自动合并的 `build.features=["remote-host"]` 已由 PR #99 接入，原判断已撤回；当前用户实例的具体 IPC 错误仍待取得。
+- **防再犯**：先核平台配置、显式覆盖和实际产物来源，再判断最终功能集合。UI 的泛化失败不能推断具体错误码，也不能通过批准、放宽 canonical 或伪造 scope 绕过拒绝。
+- **覆盖边界**：原 HostUI worker 未注册 scope 命令，组件单测 mock API，直接调用 `read_pairing_scope` 的资源测试不经过 WebView IPC。新增隔离原资源 IPC 观测只说明测试进程，不能冒充当前用户实例的根因或真实 Codex 验收。
+- **最小回归**：组件仅展示固定 SafeError 白名单，不展示任意异常消息，不自动重试；真实 WebView 经原 document bridge、正式命令和 NativeRuntime 读取 scope，保留实际结果及有界退出收据。
