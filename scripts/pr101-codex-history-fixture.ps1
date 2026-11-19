@@ -14,10 +14,10 @@ if (!$image.StartsWith($temp, [StringComparison]::OrdinalIgnoreCase) -or
     throw 'Pinned official Codex image mismatch'
 }
 $root = Join-Path $temp ('pr101-history-' + [Guid]::NewGuid().ToString('N'))
-$home = Join-Path $root 'codex-home'
+$codexHome = Join-Path $root 'codex-home'
 $project = Join-Path $root 'project'
 $now = [DateTime]::UtcNow
-$directory = Join-Path $home ('sessions/' + $now.ToString('yyyy/MM/dd'))
+$directory = Join-Path $codexHome ('sessions/' + $now.ToString('yyyy/MM/dd'))
 New-Item -ItemType Directory -Path $project,$directory -Force | Out-Null
 $id = [Guid]::NewGuid().ToString()
 $archivedId = [Guid]::NewGuid().ToString()
@@ -34,7 +34,7 @@ function Write-FixtureRollout([string]$File, [string]$SessionId, [string]$Canary
 }
 $activeCanary='Pr101ActiveCanary'
 $archivedCanary='Pr101ArchivedCanary'
-$archiveRoot = Join-Path $home 'archived_sessions'
+$archiveRoot = Join-Path $codexHome 'archived_sessions'
 New-Item -ItemType Directory -Path $archiveRoot | Out-Null
 $existingArchived = Join-Path $archiveRoot "rollout-$stamp-$archivedId.jsonl"
 Write-FixtureRollout $rollout $id $activeCanary
@@ -60,7 +60,7 @@ $spec.Environment['APPDATA']=$root
 $spec.Environment['LOCALAPPDATA']=$root
 $spec.Environment['TEMP']=$root
 $spec.Environment['TMP']=$root
-$spec.Environment['CODEX_HOME']=$home
+$spec.Environment['CODEX_HOME']=$codexHome
 
 $process=[Diagnostics.Process]::Start($spec)
 if (!$process) { throw 'Could not start pinned app-server' }
@@ -90,7 +90,7 @@ function Receive([int]$expected) {
 try {
     Send @{ id=1; method='initialize'; params=@{ clientInfo=@{name='cc_desk'; version='0.28.0'}; capabilities=@{explicitGatewayOauth=$true; experimentalApi=$false} } }
     $initial = Receive 1
-    if (!$initial.codexHome -or [IO.Path]::GetFullPath($initial.codexHome).TrimEnd('\') -ine $home) {
+    if (!$initial.codexHome -or [IO.Path]::GetFullPath($initial.codexHome).TrimEnd('\') -ine $codexHome) {
         throw 'Pinned app-server did not bind to fixture CODEX_HOME'
     }
     Send @{ method='initialized' }
@@ -102,7 +102,7 @@ try {
     if ($archived.thread.id -cne $archivedId) { throw 'Pinned app-server did not recognize the separate pre-archived rollout' }
     $process.StandardInput.Close()
     if (!$process.WaitForExit(5000) -or $process.ExitCode -ne 0) { throw 'Pinned app-server did not stop normally' }
-    [pscustomobject]@{ Home=$home; Project=$project; SessionId=$id; Rollout=$rollout; ActiveCanary=$activeCanary; ArchivedId=$archivedId; ArchiveRollout=$existingArchived; ArchivedCanary=$archivedCanary; AppServerReadVerified=$true }
+    [pscustomobject]@{ Home=$codexHome; Project=$project; SessionId=$id; Rollout=$rollout; ActiveCanary=$activeCanary; ArchivedId=$archivedId; ArchiveRollout=$existingArchived; ArchivedCanary=$archivedCanary; AppServerReadVerified=$true }
 } finally {
     if (!$process.HasExited) { $process.Kill(); $null=$process.WaitForExit(5000) }
     $process.Dispose()
