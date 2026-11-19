@@ -33,7 +33,7 @@ function Invoke-ObservedControl([string[]]$Names, $Type = $null) {
     throw 'BLOCKED_UI_ACTION'
 }
 
-function Select-ObservedOption([string[]]$Names, [string[]]$Options) {
+function Select-ObservedOption([string[]]$Names, [string[]]$Options, [switch]$VerifySelected) {
     Reveal-ObservedControl $Names ([System.Windows.Automation.ControlType]::ComboBox)
     $combo = Wait-Observed { Find-Control $Names ([System.Windows.Automation.ControlType]::ComboBox) } ($Names -join '/')
     $expand = $null
@@ -43,6 +43,7 @@ function Select-ObservedOption([string[]]$Names, [string[]]$Options) {
     $select = $null
     if (!$option.TryGetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern, [ref]$select)) { throw 'BLOCKED_UI_SELECTION' }
     ([System.Windows.Automation.SelectionItemPattern]$select).Select()
+    if ($VerifySelected -and !([System.Windows.Automation.SelectionItemPattern]$select).Current.IsSelected) { throw 'Selected program option not confirmed' }
 }
 function Read-ObservedValue([string[]]$Names) {
     $control = Wait-Observed { Find-Control $Names ([System.Windows.Automation.ControlType]::Edit) } ($Names -join '/')
@@ -115,6 +116,7 @@ function Test-PackagedNativeScope {
     $safeArgv = '["--sandbox","read-only","--ask-for-approval","on-request"]'
     Set-ObservedValue @('Raw arguments', '原始参数') $safeArgv
     if ((Read-ObservedValue @('Raw arguments', '原始参数')) -cne $safeArgv) { throw 'GUI safe argument readback mismatch' }
+    $result.rawArguments = [ordered]@{uiInputMatchesFourExpectedArguments=$true; runtimeArguments='not-observed'; persistedProfileContainsRunAction=$false}
     Reveal-ObservedControl @('Create session', '创建会话') ([System.Windows.Automation.ControlType]::Button)
     $result.nativeStage = 'create-actual-run'
     Invoke-Button @('Create session', '创建会话')
@@ -129,10 +131,10 @@ function Test-PackagedNativeScope {
     } 'real program discovery or Native run'
     if ($ready -eq 'discovery') {
         if ($window.Current.ProcessId -ne $app.Id) { throw 'Discovery window owner mismatch' }
-        Select-ObservedOption @('Detected program', '检测到的程序') @($NativeCodex)
+        Select-ObservedOption @('Detected program', '检测到的程序') @($NativeCodex) -VerifySelected
         $visibleSelector = Find-Control @('Detected program', '检测到的程序') ([System.Windows.Automation.ControlType]::ComboBox)
         if (!$visibleSelector) { throw 'Discovered selector not visible after selection' }
-        $result.programDiscovery = [ordered]@{appPid=$app.Id; uniqueSelector=$true; visibleAfterReveal=$true; exactSuppliedOptionInvoked=$true; confirmInvoked=$false}
+        $result.programDiscovery = [ordered]@{appPid=$app.Id; uniqueSelector=$true; visibleAfterReveal=$true; exactSuppliedOptionInvoked=$true; selectedPropertyConfirmed=$true; confirmInvoked=$false}
         Invoke-ObservedControl @('Use and start session', '使用并启动会话') ([System.Windows.Automation.ControlType]::Button)
         $result.programDiscovery.confirmInvoked = $true
     }
@@ -179,6 +181,23 @@ function Test-PackagedNativeScope {
     return $true
     } 'Host default no approval and disabled authority'
     $result.hostLocked = [ordered]@{noApproval=$true; requestDisabled=$true; startDisabled=$true; source='actual Host panel before scope'}
+    if ($CanonicalDiagnostic) {
+        # This home was absent at the hosted guard. Read only the workspace created by this run; never emit its contents.
+        try {
+            if ((Get-Item -LiteralPath $homeRoot).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Profile home evidence redirected' }
+            $profileFile = Join-Path $homeRoot 'cli-workspace.v1.json'
+            $entry = Get-Item -LiteralPath $profileFile
+            if ($entry.Length -gt 8388608 -or ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Profile evidence bound' }
+            $before = (Get-FileHash -LiteralPath $profileFile).Hash
+            $document = [IO.File]::ReadAllText($profileFile) | ConvertFrom-Json
+            if ((Get-FileHash -LiteralPath $profileFile).Hash -cne $before -or $document.schemaVersion -ne 1) { throw 'Profile evidence changed' }
+            $profiles = @($document.profiles.PSObject.Properties.Value | Where-Object { $_.cli -eq 'codex' })
+            if ($profiles.Count -ne 1) { throw 'Profile evidence ambiguous' }
+            $profile = $profiles[0]
+            if ([string]$profile.revision -cnotmatch '^[1-9][0-9]*$' -or [string]$document.revision -cnotmatch '^[1-9][0-9]*$') { throw 'Profile evidence revision invalid' }
+            $result.launchProfile = [ordered]@{source='fresh hosted persisted workspace'; uniqueCodexProfile=$true; programMatchesSupplied=($profile.programPath.mode -ceq 'set' -and $profile.programPath.value -ieq $NativeCodex); launcherNative=($profile.launcher.kind -ceq 'native'); profileRevision=[string]$profile.revision; workspaceRevision=[string]$document.revision; actualChildIdentity='independent'; runtimeArguments='not stored in workspace profile'}
+        } catch { $result.launchProfile = [ordered]@{source='fresh hosted persisted workspace'; observation='unknown'} }
+    }
     $result.nativeStage = 'read-public-scope'
     Invoke-Button @('读取公开会话范围')
     $scope = Wait-Observed {
