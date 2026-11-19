@@ -1,11 +1,11 @@
-name: PR 101 Stage-B real product preview only
+name: PR 101 Stage-B preview static compile and inventory only
 on:
   push:
     branches: [verify/pr101-diagnostics-0727a08c]
 permissions:
   contents: read
 jobs:
-  product-preview-only:
+  preview-compile-only:
     if: github.repository == 'shawnwu2022/cc-desk' && github.ref == 'refs/heads/verify/pr101-diagnostics-0727a08c'
     runs-on: windows-2022
     timeout-minutes: 30
@@ -26,7 +26,7 @@ jobs:
           $git=(Get-Command git.exe -CommandType Application | Select-Object -First 1).Source
           $blob=Start-Process -FilePath $git -ArgumentList @('cat-file','blob','HEAD:scripts/pr101-codex-restore-stage-a.ps1') -RedirectStandardOutput $absolute -WindowStyle Hidden -Wait -PassThru
           if ($blob.ExitCode -ne 0) { throw 'STAGE_A_SOURCE_BLOB_UNAVAILABLE' }
-          if ((Get-FileHash -LiteralPath $absolute).Hash -ine '74cfc98830e5d09e48ed28b7ecccf2c93ff00f300d0e0ccf468eaf8030020a51') { throw 'STAGE_A_SOURCE_PIN_MISMATCH' }
+          if ((Get-FileHash -LiteralPath $absolute).Hash -ine 'e1eaaf0eac42b9233332ad381eb295c506d69d7f98eabfb718fb973134db6150') { throw 'STAGE_A_SOURCE_PIN_MISMATCH' }
           $tokens=$null; $errors=$null
           $ast=[System.Management.Automation.Language.Parser]::ParseFile($absolute,[ref]$tokens,[ref]$errors)
           if ($errors.Count) { throw ('STAGE_A_AST_REJECTED: ' + (($errors | ForEach-Object { $_.ErrorId }) -join ',')) }
@@ -92,7 +92,7 @@ jobs:
 
       - name: Prepare verified Windows runtime
         run: node scripts/prepare-conpty.mjs
-      - name: Compile exact preview-only Rust worker without starting it
+      - name: Compile and list the exact preview-only test without executing it
         shell: pwsh
         working-directory: src-tauri
         run: |
@@ -114,86 +114,8 @@ jobs:
           Copy-Item -LiteralPath $selected[0] -Destination $worker
           $digest=(Get-FileHash -LiteralPath $worker).Hash.ToLowerInvariant()
           if ($digest -cnotmatch '^[a-f0-9]{64}$') { throw 'PREVIEW_WORKER_DIGEST' }
-          Add-Content -LiteralPath $env:GITHUB_ENV -Value "CC_DESK_PREVIEW_WORKER_SHA256=$digest"
-          Write-Host 'PREVIEW_WORKER_COMPILE_ONLY rust=true executed=false'
-      - name: Download pinned official Codex
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $dir = Join-Path $env:RUNNER_TEMP 'official-codex'
-          New-Item -ItemType Directory $dir | Out-Null
-          # A lone EXE is not the complete official runtime supply. Preserve the published vendor layout.
-          $archive = Join-Path $dir 'codex-0.169.1-win32-x64.tgz'
-          Invoke-WebRequest 'https://registry.npmjs.org/@openai/codex/-/codex-0.169.1-win32-x64.tgz' -OutFile $archive
-          $expectedIntegrity = 'fImXWqxwxqHh9+FhJWsRRFiBzgBrSeN1bYTvtGZtUKGTPzHefYAL1agmlf5XScfwY5i5pHsExfdhFekzRBbqIw=='
-          $stream = [IO.File]::OpenRead($archive)
-          $hasher = [Security.Cryptography.SHA512]::Create()
-          try { $actualIntegrity = [Convert]::ToBase64String($hasher.ComputeHash($stream)) } finally { $stream.Dispose(); $hasher.Dispose() }
-          if ($actualIntegrity -cne $expectedIntegrity) { throw 'Official platform package integrity mismatch' }
-          $names = @(& tar -tzf $archive)
-          if ($LASTEXITCODE -ne 0) { throw 'Platform archive listing failed' }
-          $details = @(& tar -tvzf $archive)
-          if ($LASTEXITCODE -ne 0 -or $names.Count -ne 47 -or $details.Count -ne 47) { throw 'Platform archive entries mismatch' }
-          foreach ($name in $names) {
-            if (!$name.StartsWith('package/') -or $name -match '(^/|\\|:|(^|/)\.\.(/|$))') { throw 'Unsafe platform archive path' }
-          }
-          foreach ($entry in $details) { if ($entry[0] -ne '-') { throw 'Platform archive contains nonregular entry' } }
-          $extract = Join-Path $dir 'extracted'
-          New-Item -ItemType Directory $extract | Out-Null
-          & tar -xzf $archive -C $extract
-          if ($LASTEXITCODE -ne 0) { throw 'Platform archive extraction failed' }
-          if (@(Get-ChildItem $extract -Recurse | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }).Count) { throw 'Platform reparse point rejected' }
-          $files = @(Get-ChildItem $extract -Recurse -File)
-          if ($files.Count -ne 47 -or ($files | Measure-Object Length -Sum).Sum -ne 515292799) { throw 'Platform file set mismatch' }
-          $inventory = @($files | ForEach-Object { [ordered]@{path=$_.FullName.Substring($extract.Length+1).Replace('\','/'); bytes=$_.Length; sha256=(Get-FileHash $_.FullName).Hash.ToLowerInvariant()} })
-          [ordered]@{package='@openai/codex'; version='0.169.1-win32-x64'; integrity="sha512-$expectedIntegrity"; archiveSha256=(Get-FileHash $archive).Hash; source='official npm platform package'; files=$inventory} | ConvertTo-Json -Depth 5 | Set-Content codex-supply.json
-          $exe = Join-Path $extract 'package/vendor/x86_64-pc-windows-msvc/bin/codex.exe'
-          if ((Get-Item $exe).Length -ne 382647088 -or (Get-FileHash $exe).Hash -ine 'f76f94d08b0793bfa129ae62c09341ee32ae96d57e69968ae6b8d7c71a20d8c4') { throw 'Official Codex asset digest mismatch' }
-      - name: Run the real preview-only worker once in the same restored fixture
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          if (!$IsWindows -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted') { throw 'STAGE_A_HOSTED_ONLY' }
-          $destination=Join-Path $env:RUNNER_TEMP ('stage-a-restore-run-' + [Guid]::NewGuid().ToString('N'))
-          New-Item -Path $destination -ItemType Directory | Out-Null
-          $absolute=Join-Path $destination 'pr101-codex-restore-stage-a.ps1'
-          # Hash the checkout commit's raw blob (platform CRLF conversion not accepted).
-          $git=(Get-Command git.exe -CommandType Application | Select-Object -First 1).Source
-          $blob=Start-Process -FilePath $git -ArgumentList @('cat-file','blob','HEAD:scripts/pr101-codex-restore-stage-a.ps1') -RedirectStandardOutput $absolute -WindowStyle Hidden -Wait -PassThru
-          if ($blob.ExitCode -ne 0) { throw 'STAGE_A_SOURCE_BLOB_UNAVAILABLE' }
-          if ((Get-FileHash -LiteralPath $absolute).Hash -ine '74cfc98830e5d09e48ed28b7ecccf2c93ff00f300d0e0ccf468eaf8030020a51') { throw 'STAGE_A_SOURCE_PIN_MISMATCH' }
-          $image=Join-Path $env:RUNNER_TEMP 'official-codex/extracted/package/vendor/x86_64-pc-windows-msvc/bin/codex.exe'
-          if ((Get-FileHash -LiteralPath $image).Hash -ine 'f76f94d08b0793bfa129ae62c09341ee32ae96d57e69968ae6b8d7c71a20d8c4') { throw 'STAGE_A_OFFICIAL_IMG_MISMATCH' }
-          Get-ChildItem Env: | Where-Object { $_.Name -cne 'GITHUB_ACTIONS' -and $_.Name -match '^(ACTIONS_|GITHUB_|GH_)|TOKEN|SECRET|API_KEY|PASSWORD|CREDENTIAL' } | ForEach-Object {
-            [Environment]::SetEnvironmentVariable($_.Name, $null, 'Process')
-          }
-          $worker=Join-Path $env:RUNNER_TEMP 'pr101-preview-worker/cc-desk-preview-test.exe'
-          $workerDigest=$env:CC_DESK_PREVIEW_WORKER_SHA256
-          if ($workerDigest -cnotmatch '^[a-f0-9]{64}$' -or (Get-FileHash -LiteralPath $worker).Hash -ine $workerDigest) { throw 'PREVIEW_WORKER_PIN_MISMATCH' }
-          $marker=@{ complete=$false; count=0 }
-          try {
-            & $absolute -Codex $image -SameDatasetReadiness -PreviewWorker $worker -PreviewWorkerSha256 $workerDigest | ForEach-Object {
-              $marker.count++
-              if ($marker.count -ne 1 -or $_ -isnot [string] -or $_.Length -gt 4096) { throw 'STAGE_A_RECEIPT_BOUND' }
-              $receipt=$_ | ConvertFrom-Json -AsHashtable
-              if ($receipt.schema -ne 1 -or
-                  $receipt.deletionExecuted -ne $false -or $receipt.stageBGoGranted -ne $false) { throw 'STAGE_A_RECEIPT_REJECTED' }
-              if ($receipt.state -ceq 'blocked') {
-                if ($receipt.stage -cne 'synthetic-restore-readonly') { throw 'STAGE_A_BLOCKED_RECEIPT_STAGE' }
-                $phase=$receipt.phase
-                if ($phase -cnotin @('preflight-temp-boundary','preflight-image-path','preflight-image-sha','preflight-type-compile','preflight-machine-programdata','preflight-machine-registry','preflight-fresh-temp','baseline-read','snapshot','restore','restored-read','readiness-before-restored-read','readiness-after-restored-read','preview-worker-pin','product-preview-only','product-preview-integrity','product-scope','product-before-list','product-active-preview','product-archived-preview','product-after-list','product-unexpected')) { $phase='other' }
-                [ordered]@{schema=1;stage='synthetic-restore-readonly';state='blocked';phase=$phase;deletionExecuted=$false;stageBGoGranted=$false} |
-                  ConvertTo-Json -Compress | ForEach-Object { Write-Host ('STAGE_A_RECEIPT '+$_) }
-              } else {
-                $passing=@('sameJobRestoredFixture','activeControlBlockedWithoutTicket','archivedTargetPreviewReady','bothRowsUnchanged','restoredBytesAndCheckpointIdsUnchanged','ownerSettled')
-                $limited=@('continuousFileLeaseVerified','confirmHandlerRegistered','confirmInvoked','deletionExecuted','stageBGoGranted','standardPackageUiVerified')
-                $fixed=[ordered]@{schema=1;stage='synthetic-product-preview-only';providerVersion='0.169.1'}
-                if ($receipt.providerVersion -cne '0.169.1' -or $receipt.stage -cne $fixed.stage -or $receipt.Count -ne (3+$passing.Count+$limited.Count)) { throw 'READINESS_RECEIPT_SCHEMA' }
-                foreach($key in $passing){if ($receipt[$key] -isnot [bool] -or $receipt[$key] -ne $true) { throw 'READINESS_REQUIRED_PROOF' }; $fixed[$key]=$true}
-                foreach($key in $limited){if ($receipt[$key] -isnot [bool] -or $receipt[$key] -ne $false) { throw 'READINESS_SCOPE_RECEIPT' }; $fixed[$key]=$false}
-                $fixed | ConvertTo-Json -Compress | ForEach-Object { Write-Host ('STAGE_A_RECEIPT '+$_) }
-                $marker.complete=$true
-              }
-            }
-          } catch { throw 'STAGE_A_RUN_BLOCKED' }
-          if (!$marker.complete -or $marker.count -ne 1) { throw 'STAGE_A_SUCCESS_RECEIPT_MISSING' }
+          $exact='tests::native_cli_projection_live::delete_preview_only::PreviewOnlyOwned_098'
+          $listed=@(& $worker --exact $exact --ignored --list --format pretty)
+          if ($LASTEXITCODE -ne 0 -or @($listed | Where-Object { $_ -ceq "${exact}: test" }).Count -ne 1 -or
+              @($listed | Where-Object { $_ -cmatch ': test$' }).Count -ne 1) { throw 'PREVIEW_EXACT_TEST_INVENTORY' }
+          Write-Host 'PREVIEW_COMPILE_AND_LIST rust=true exactInventory=1 testsExecuted=0 fixtureExecuted=false cliInvoked=false guiStarted=false goExecuted=false'

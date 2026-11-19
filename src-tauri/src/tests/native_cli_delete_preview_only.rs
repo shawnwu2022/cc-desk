@@ -40,6 +40,7 @@ fn preview_fixture_finish(app: AppHandle, webview: tauri::Webview, ok: bool, sta
 #[test]
 #[ignore = "explicit hosted same-job Stage-A fixture; product preview only"]
 fn PreviewOnlyOwned_098() {
+    println!("PREVIEW_WRY_STEP enter");
     assert_eq!(std::env::var("GITHUB_ACTIONS").as_deref(), Ok("true"));
     assert_eq!(
         std::env::var("RUNNER_ENVIRONMENT").as_deref(),
@@ -57,6 +58,7 @@ fn PreviewOnlyOwned_098() {
         raw.ends_with(b"\n") && raw.len() <= 16_384,
         "owned preview input bound"
     );
+    println!("PREVIEW_WRY_STEP descriptor-received");
     let fixture: Input = serde_json::from_slice(&raw).expect("owned preview schema");
     assert_ne!(fixture.active, fixture.archived);
     let runner_temp =
@@ -98,6 +100,7 @@ fn PreviewOnlyOwned_098() {
         Some(fixture.live.join("sqlite").as_os_str())
     );
     // The owned parent holds and hashes the pinned official provider, before passing the private fixture.
+    println!("PREVIEW_WRY_STEP origin-bound");
     let state_dir = root.join("preview-product-state");
     fs::create_dir(&state_dir).expect("fresh preview product state");
     let repo =
@@ -145,6 +148,7 @@ fn PreviewOnlyOwned_098() {
             std::env::var_os(name).expect("Stage-A isolated env"),
         );
     }
+    println!("PREVIEW_WRY_STEP profile-bound");
     let runtime = Arc::new(NativeRuntime::new(Arc::new(LaunchService::new(
         repo,
         Some(inherited),
@@ -171,7 +175,9 @@ fn PreviewOnlyOwned_098() {
             preview_fixture_finish
         ])
         .setup(move |app| {
+            println!("PREVIEW_WRY_STEP main-build-start");
             setup.initialize_main(app, &main)?;
+            println!("PREVIEW_WRY_STEP main-built");
             Ok(())
         })
         .on_page_load(move |view, event| {
@@ -181,6 +187,7 @@ fn PreviewOnlyOwned_098() {
             {
                 return;
             }
+            println!("PREVIEW_WRY_STEP page-finished");
             let script = format!(
                 "{}\nrunOwnedDeletePreview({},{});",
                 include_str!("fixtures/document/codex-delete-preview-only.js"),
@@ -188,10 +195,16 @@ fn PreviewOnlyOwned_098() {
                 ids
             );
             if view.eval(script).is_err() {
+                println!("PREVIEW_WRY_STEP eval-rejected");
                 view.app_handle().exit(1);
+            } else {
+                println!("PREVIEW_WRY_STEP eval-queued");
             }
         })
         .build(context)
         .expect("real preview WebView start");
-    assert_eq!(app.run_return(|_, _| {}), 0);
+    println!("PREVIEW_WRY_STEP loop-enter");
+    let exit = app.run_return(|_, _| {});
+    println!("PREVIEW_WRY_STEP loop-exit");
+    assert_eq!(exit, 0);
 }

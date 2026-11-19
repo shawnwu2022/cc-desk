@@ -9,6 +9,7 @@ if (!$IsWindows -or $env:GITHUB_ACTIONS -cne 'true' -or
 $phase='preflight-temp-boundary'
 $imageLease=$null
 $previewLease=$null
+$previewCheckpoint='none'
 try {
     function Assert-Ordinary([string]$Path) {
         $item=Get-Item -LiteralPath $Path -Force
@@ -399,7 +400,7 @@ requires_openai_auth = false
         if($same.Count -ne 1 -or $same[0].Hash -cne $entry.Hash -or $same[0].Length -ne $entry.Length){throw 'STAGE_A_ROLLOUT_CHANGED'}
     }
     if ($previewLease) {
-        $phase='product-preview-only'
+        $phase='product-preview-inventory'
         [StageAOwned]::RequireNoMachineConfig()
         $beforePreview=@(Inventory $live)
         $beforePreviewIds=@(Observe-RestoredFixtureFileIds)
@@ -416,13 +417,20 @@ requires_openai_auth = false
         $childEnvironment['GITHUB_ACTIONS']='true';$childEnvironment['RUNNER_ENVIRONMENT']='github-hosted'
         $childEnvironment['RUNNER_TEMP']=$temp;$childEnvironment['CC_DESK_PREVIEW_STAGE']='codex-preview-only'
         $childBlock=(($childEnvironment.Keys|Sort-Object|ForEach-Object{$_+'='+$childEnvironment[$_]}) -join "`0")+"`0`0"
+        $phase='product-preview-owner-create'
         $probe=[StageAOwned]::new($previewExe,$project,$childBlock,$true)
         try {
+            $phase='product-preview-descriptor-send'
             $probe.Send(([ordered]@{live=$live;codex=$image;active=$id;archived=$archivedId}|ConvertTo-Json -Compress))
+            $phase='product-preview-event-read'
             $deadline=[DateTime]::UtcNow.AddSeconds(45)
             $seen=$false
             for($i=0;$i -lt 48;$i++){
                 $row=$probe.ReadLine($deadline,20000)
+                if ($row -cmatch 'PREVIEW_WRY_STEP (enter|descriptor-received|origin-bound|profile-bound|main-build-start|main-built|page-finished|eval-rejected|eval-queued|loop-enter|loop-exit)$') {
+                    $previewCheckpoint=$Matches[1]
+                    continue
+                }
                 if ($row -cmatch 'STAGE_B_WRY_PREVIEW_ONLY_PASS$') { $seen=$true; break }
                 if ($row -cmatch 'STAGE_B_WRY_PREVIEW_BLOCKED (scope|before-list|active-preview|archived-preview|after-list|unexpected)$') {
                     $phase='product-'+$Matches[1]
@@ -430,6 +438,7 @@ requires_openai_auth = false
                 }
             }
             if (!$seen) {throw 'PREVIEW_MARKER_MISSING'}
+            $phase='product-preview-owner-finish'
             $probe.Finish()
         } finally { $probe.Dispose() }
         $phase='product-preview-integrity'
@@ -463,6 +472,6 @@ requires_openai_auth = false
         deletionExecuted=$false;stageBGoGranted=$false;standardPackageUiVerified=$false}|ConvertTo-Json -Compress
 } catch {
     # Do not echo exception text: filesystem/process errors can contain raw paths/data.
-    [ordered]@{schema=1;stage='synthetic-restore-readonly';state='blocked';phase=$phase;deletionExecuted=$false;stageBGoGranted=$false}|ConvertTo-Json -Compress
+    [ordered]@{schema=1;stage='synthetic-restore-readonly';state='blocked';phase=$phase;previewCheckpoint=$previewCheckpoint;deletionExecuted=$false;stageBGoGranted=$false}|ConvertTo-Json -Compress
     throw 'STAGE_A_FAILED_CLOSED'
 } finally {if($previewLease){$previewLease.Dispose()};if($imageLease){$imageLease.Dispose()}}
