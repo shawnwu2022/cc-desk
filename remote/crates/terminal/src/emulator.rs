@@ -426,6 +426,11 @@ impl RestrictedInputGate {
         intermediates: &[u8],
         action: char,
     ) -> bool {
+        // DECSCUSR only: the locked emulator handles 0 as its configured default.
+        // Other q intermediates (including protection attributes) remain rejected.
+        if action == 'q' && intermediates == b" " {
+            return params.iter().count() == 1 && params.iter().all(|p| p.len() == 1 && p[0] <= 6);
+        }
         if !intermediates.is_empty() {
             return false;
         }
