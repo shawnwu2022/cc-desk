@@ -21,6 +21,7 @@ pub(crate) fn rejected(code: u8, a: u64, b: u64) {
 pub(crate) fn csi(
     params: &alacritty_terminal::vte::Params,
     prefix: u8,
+    intermediates: &[u8],
     action: char,
     ignore: bool,
 ) {
@@ -29,6 +30,18 @@ pub(crate) fn csi(
         (n < 8).then_some(n + 1)
     }) else {
         return;
+    };
+    let intermediate_count = intermediates.len();
+    let intermediate_known =
+        intermediate_count <= 2 && intermediates.iter().all(|b| (0x20..=0x2f).contains(b));
+    let intermediate_values = if intermediate_known {
+        intermediates
+            .iter()
+            .map(u8::to_string)
+            .collect::<Vec<_>>()
+            .join(",")
+    } else {
+        "unknown".into()
     };
     let count = params.iter().count();
     let mut truncated = count > 16;
@@ -50,7 +63,7 @@ pub(crate) fn csi(
     use std::io::Write;
     let _ = writeln!(
         std::io::stderr().lock(),
-        "CC_CANONICAL_CSI event={event} final={} class={prefix} ignore={} groups={count} truncated={} values={groups}",
+        "CC_CANONICAL_CSI event={event} final={} class={prefix} intermediate_count={intermediate_count} intermediate_known={intermediate_known} intermediate_values={intermediate_values} ignore={} groups={count} truncated={} values={groups}",
         action as u32,
         u8::from(ignore),
         u8::from(truncated)

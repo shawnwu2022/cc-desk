@@ -587,7 +587,7 @@ impl Perform for RestrictedInputGate {
                     b">" => 32,
                     _ => 33,
                 };
-                crate::diagnostic::csi(params, prefix, action, ignore);
+                crate::diagnostic::csi(params, prefix, intermediates, action, ignore);
                 let first = params
                     .iter()
                     .next()
