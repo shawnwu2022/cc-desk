@@ -1,50 +1,153 @@
-name: Canonical RGB targeted regression (verification branch only)
+name: Standard bounded RGB release GUI (verification branch only)
 on:
   push:
     branches: [verify/packaged-native-84855a84]
   workflow_dispatch:
 permissions:
   contents: read
+  actions: read
 jobs:
-  canonical-rgb-regression:
+  packaged-native:
     if: github.ref == 'refs/heads/verify/packaged-native-84855a84'
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-24.04, windows-2022]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    runs-on: windows-2022
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
         with:
           ref: 3f8f5bbc81a3e4aebee34287f4e155d23af19354
           persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24.18.0'
+          cache: npm
       - uses: dtolnay/rust-toolchain@1.98.1
         with:
-          components: rustfmt, clippy
+          components: rustfmt
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: remote
-          key: canonical-rgb-targeted
+          workspaces: src-tauri
+          key: packaged-standard-rgb-release
           cache-on-failure: true
-      - name: Validate bounded RGB and existing terminal contract
-        shell: bash
+      - name: Prepare standard product dependencies
+        shell: pwsh
+        run: |
+          npm ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run prepare:session-sdk
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run prepare:opencode-archive
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: ./.github/actions/setup-windows-browser-tools
+      - name: Build exact standard product release profile
+        shell: pwsh
         env:
           CARGO_BUILD_JOBS: '2'
         run: |
-          set -o pipefail
-          git rev-parse HEAD | tee rgb-source.txt
-          cargo fmt --manifest-path remote/Cargo.toml -p cc-desk-remote-terminal -- --check 2>&1 | tee rgb-fmt.log
-          cargo test --manifest-path remote/Cargo.toml --locked -p cc-desk-remote-terminal --features experimental-emulator -- --test-threads=1 2>&1 | tee rgb-tests.log
-          cargo clippy --manifest-path remote/Cargo.toml --locked -p cc-desk-remote-terminal --features experimental-emulator --all-targets -- -D warnings 2>&1 | tee rgb-clippy.log
+          npm run tauri -- build --bundles nsis --config '{"bundle":{"createUpdaterArtifacts":false}}' -- --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($name in @('conpty.dll','OpenConsole.exe')) {
+            Copy-Item -LiteralPath "src-tauri/conpty/runtime/$name" -Destination "src-tauri/target/release/$name"
+          }
+      - name: Preserve standard package before GUI
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installers = @(Get-ChildItem src-tauri/target/release/bundle/nsis/*.exe)
+          if ($installers.Count -ne 1) { throw 'Expected one standard NSIS installer' }
+          New-Item -ItemType Directory standard-package | Out-Null
+          Copy-Item -LiteralPath $installers[0].FullName -Destination standard-package/standard-setup.exe
+          foreach ($name in @('cc-desk.exe','conpty.dll','OpenConsole.exe')) {
+            Copy-Item -LiteralPath "src-tauri/target/release/$name" -Destination "standard-package/$name"
+            if ((Get-FileHash "src-tauri/target/release/$name").Hash -cne (Get-FileHash "standard-package/$name").Hash) { throw 'Saved runtime digest mismatch' }
+          }
+          [ordered]@{source=(git rev-parse HEAD); sourceTree=(git rev-parse 'HEAD^{tree}'); mode='standard-rgb-product-not-published'; installationVerified=$false; installerSha256=(Get-FileHash standard-package/standard-setup.exe).Hash; looseExeSha256=(Get-FileHash standard-package/cc-desk.exe).Hash} | ConvertTo-Json | Set-Content standard-package/pre-installation.json
+          $dir = Join-Path $env:RUNNER_TEMP 'standard-installed'
+          $setup = Start-Process -FilePath $installers[0].FullName -ArgumentList "/S /D=$dir" -PassThru -WindowStyle Hidden
+          try {
+            if (!$setup.WaitForExit(180000)) { $setup.Kill(); $null=$setup.WaitForExit(10000); throw 'Installer timeout' }
+            if ($setup.ExitCode -ne 0) { throw 'Installer failed' }
+          } finally { $setup.Dispose() }
+          Move-Item standard-package/cc-desk.exe standard-package/loose-cc-desk.exe
+          $env:DIAGNOSTIC_INSTALLED = $dir
+          node -e "const f=require('fs'),p=require('path');let a=f.readFileSync('standard-package/loose-cc-desk.exe'),b=f.readFileSync(p.join(process.env.DIAGNOSTIC_INSTALLED,'cc-desk.exe'));let m=Buffer.from('__TAURI_BUNDLE_TYPE_VAR_UNK'),i=a.indexOf(m);if(i<0||a.indexOf(m,i+1)>=0)throw Error('marker uniqueness');Buffer.from('__TAURI_BUNDLE_TYPE_VAR_NSS').copy(a,i);if(!a.equals(b))throw Error('installed image differs beyond bundle marker');"
+          if ($LASTEXITCODE -ne 0) { throw 'Bundle identity validation failed' }
+          foreach ($name in @('conpty.dll','OpenConsole.exe')) {
+            if ((Get-FileHash (Join-Path $dir $name)).Hash -cne (Get-FileHash "standard-package/$name").Hash) { throw 'Installed runtime identity mismatch' }
+          }
+          Copy-Item (Join-Path $dir 'cc-desk.exe') standard-package/cc-desk.exe
+          $files = @(Get-ChildItem standard-package -File | Sort-Object Name | ForEach-Object { [ordered]@{name=$_.Name; bytes=$_.Length; sha256=(Get-FileHash $_.FullName).Hash.ToLowerInvariant()} })
+          [ordered]@{mode='standard-rgb-nsis-not-original-pr100'; workflowCommit=$env:GITHUB_SHA; source=(git rev-parse HEAD); sourceTree=(git rev-parse 'HEAD^{tree}'); baseline='84855a84ba08ca97c76567d1857d40bda9a4ff9d'; features='remote-host via standard Windows platform config'; diagnosticFeature=$false; harnessSource='3bbc4da07216e3ba069af0de61d26e086a17632d'; productSha256=(Get-FileHash standard-package/cc-desk.exe).Hash.ToLowerInvariant(); officialCodexAsset=760864385; files=$files; published=$false; updaterPublication=$false} | ConvertTo-Json -Depth 5 | Set-Content standard-package/manifest.json
+          Copy-Item standard-package/manifest.json packaged-source.json
+      - name: Upload reusable standard package before GUI
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: standard-rgb-nsis-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: standard-package/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Checkout exact verification harness separately from product
+        uses: actions/checkout@v5
+        with:
+          ref: 3bbc4da07216e3ba069af0de61d26e086a17632d
+          path: verification-harness
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            scripts/test-desktop-webview.ps1
+            scripts/test-packaged-native-scope.ps1
+      - name: Download pinned official Codex
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dir = Join-Path $env:RUNNER_TEMP 'official-codex'
+          New-Item -ItemType Directory $dir | Out-Null
+          # A lone EXE is not the complete official runtime supply. Preserve the published vendor layout.
+          $archive = Join-Path $dir 'codex-0.169.1-win32-x64.tgz'
+          Invoke-WebRequest 'https://registry.npmjs.org/@openai/codex/-/codex-0.169.1-win32-x64.tgz' -OutFile $archive
+          $expectedIntegrity = 'fImXWqxwxqHh9+FhJWsRRFiBzgBrSeN1bYTvtGZtUKGTPzHefYAL1agmlf5XScfwY5i5pHsExfdhFekzRBbqIw=='
+          $stream = [IO.File]::OpenRead($archive)
+          $hasher = [Security.Cryptography.SHA512]::Create()
+          try { $actualIntegrity = [Convert]::ToBase64String($hasher.ComputeHash($stream)) } finally { $stream.Dispose(); $hasher.Dispose() }
+          if ($actualIntegrity -cne $expectedIntegrity) { throw 'Official platform package integrity mismatch' }
+          $names = @(& tar -tzf $archive)
+          if ($LASTEXITCODE -ne 0) { throw 'Platform archive listing failed' }
+          $details = @(& tar -tvzf $archive)
+          if ($LASTEXITCODE -ne 0 -or $names.Count -ne 47 -or $details.Count -ne 47) { throw 'Platform archive entries mismatch' }
+          foreach ($name in $names) {
+            if (!$name.StartsWith('package/') -or $name -match '(^/|\\|:|(^|/)\.\.(/|$))') { throw 'Unsafe platform archive path' }
+          }
+          foreach ($entry in $details) { if ($entry[0] -ne '-') { throw 'Platform archive contains nonregular entry' } }
+          $extract = Join-Path $dir 'extracted'
+          New-Item -ItemType Directory $extract | Out-Null
+          & tar -xzf $archive -C $extract
+          if ($LASTEXITCODE -ne 0) { throw 'Platform archive extraction failed' }
+          if (@(Get-ChildItem $extract -Recurse | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }).Count) { throw 'Platform reparse point rejected' }
+          $files = @(Get-ChildItem $extract -Recurse -File)
+          if ($files.Count -ne 47 -or ($files | Measure-Object Length -Sum).Sum -ne 515292799) { throw 'Platform file set mismatch' }
+          $inventory = @($files | ForEach-Object { [ordered]@{path=$_.FullName.Substring($extract.Length+1).Replace('\','/'); bytes=$_.Length; sha256=(Get-FileHash $_.FullName).Hash.ToLowerInvariant()} })
+          [ordered]@{package='@openai/codex'; version='0.169.1-win32-x64'; integrity="sha512-$expectedIntegrity"; archiveSha256=(Get-FileHash $archive).Hash; source='official npm platform package'; files=$inventory} | ConvertTo-Json -Depth 5 | Set-Content codex-supply.json
+          $exe = Join-Path $extract 'package/vendor/x86_64-pc-windows-msvc/bin/codex.exe'
+          if ((Get-Item $exe).Length -ne 382647088 -or (Get-FileHash $exe).Hash -ine 'f76f94d08b0793bfa129ae62c09341ee32ae96d57e69968ae6b8d7c71a20d8c4') { throw 'Official Codex asset digest mismatch' }
+      - name: Observe real GUI using verified installed standard package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:GH_TOKEN -or $env:GITHUB_TOKEN) { throw 'Credentials must not reach product' }
+          $manifest = Get-Content standard-package/manifest.json -Raw | ConvertFrom-Json
+          $dir = Join-Path $env:RUNNER_TEMP 'standard-installed'
+          foreach ($name in @('cc-desk.exe','conpty.dll','OpenConsole.exe')) {
+            $entry = @($manifest.files | Where-Object name -CEQ $name)
+            if ($entry.Count -ne 1 -or (Get-FileHash (Join-Path $dir $name)).Hash -ine $entry[0].sha256) { throw 'Installed image changed' }
+          }
+          & ./verification-harness/scripts/test-desktop-webview.ps1 -Exe (Join-Path $dir 'cc-desk.exe') -ExpectedSha256 $manifest.productSha256 -CanonicalDiagnostic -NativeCodex (Join-Path $env:RUNNER_TEMP 'official-codex/extracted/package/vendor/x86_64-pc-windows-msvc/bin/codex.exe')
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: canonical-rgb-regression-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: packaged-pr100-native-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            rgb-source.txt
-            rgb-tests.log
-            rgb-fmt.log
-            rgb-clippy.log
+            packaged-source.json
+            codex-supply.json
+            desktop-webview-smoke/
           if-no-files-found: error
           retention-days: 7
