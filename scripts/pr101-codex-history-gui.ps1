@@ -128,57 +128,60 @@ function Test-CodexHistoryGui {
     Configure-CodexFixtureProfile
     $r.stage='refresh-bound-fixture-history'
     $null=Wait-Observed { Invoke-FixtureTarget $window 'Refresh sessions' $fixtureButton } 'refresh formally bound synthetic history'
-    $r.stage='project-expand'
-    $projectLabel=Split-Path $fixture.Project -Leaf
-    $projectNode=Wait-Observed { Find-Control @($projectLabel) ([System.Windows.Automation.ControlType]::TreeItem) } 'synthetic registered project node'
-    $r.projectNodeObserved=$true
-    $r.projectControl=[ordered]@{
-        patterns=@($projectNode.GetSupportedPatterns() | ForEach-Object ProgrammaticName)
-        enabled=$projectNode.Current.IsEnabled
-        offscreen=$projectNode.Current.IsOffscreen
-        disclosureState='not-supported'
-        knownChildren=@($projectNode.FindAll([System.Windows.Automation.TreeScope]::Children,[System.Windows.Automation.Condition]::TrueCondition) |
-            Where-Object { $_.Current.Name -cin @($projectLabel,'Expand','Collapse') } |
-            Select-Object -First 8 | ForEach-Object { [ordered]@{
-                expectedName=if($_.Current.Name -ceq $projectLabel){'fixture-project'}else{$_.Current.Name}
-                type=$_.Current.ControlType.ProgrammaticName
-                patterns=@($_.GetSupportedPatterns() | ForEach-Object ProgrammaticName)
-            } })
-    }
-    $disclosure=$null
-    if ($projectNode.Current.IsEnabled -and
-        $projectNode.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern,[ref]$disclosure)) {
-        $disclosure=[System.Windows.Automation.ExpandCollapsePattern]$disclosure
-        $r.projectControl.disclosureState=$disclosure.Current.ExpandCollapseState.ToString()
-        if ($disclosure.Current.ExpandCollapseState -eq [System.Windows.Automation.ExpandCollapseState]::Collapsed) {
-            $disclosure.Expand()
-            $r.projectExpandInvoked=$true
+    $r.stage='verify-profile-project-cwd'
+    $ownedSettings=Get-Item -LiteralPath $homeRoot
+    if (!$ownedSettings.PSIsContainer -or ($ownedSettings.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Unsafe synthetic workspace settings root' }
+    $statePath=Join-Path $homeRoot 'cli-workspace.v1.json'
+    $stateFile=Get-Item -LiteralPath $statePath
+    if ($stateFile.Length -gt 1048576 -or ($stateFile.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Untrusted synthetic workspace receipt' }
+    $manifest=Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json -AsHashtable
+    $matchingProfile=@($manifest.profiles.Values | Where-Object {
+        $_.name -ceq 'Pr101SyntheticCodexProfile' -and $_.cli -ceq 'codex' -and $_.launcher.kind -ceq 'native' -and
+        $_.programPath.mode -ceq 'set' -and $_.programPath.value -ceq $FixtureCodex -and
+        ($_.defaultArgs.mode -ceq 'inherit' -or ($_.defaultArgs.mode -ceq 'set' -and @($_.defaultArgs.value).Count -eq 0)) -and
+        @($_.env.Keys | Where-Object { $_ -ieq 'CODEX_HOME' }).Count -eq 0
+    })
+    $projects=@($manifest.registeredProjects.Values)
+    $meta=Get-Content -LiteralPath $fixture.Rollout -TotalCount 1 | ConvertFrom-Json -AsHashtable
+    $r.selectedProjectExact=@($projects | Where-Object selectedPath -CEQ $fixture.Project).Count -eq 1
+    $r.recordedCanonicalExact=@($projects | Where-Object canonicalPath -CEQ $fixture.Project).Count -eq 1
+    $r.metaCwdExact=$meta.payload.cwd -ceq $fixture.Project
+    $r.profilePinMatches=$matchingProfile.Count -eq 1
+    if (!$r.selectedProjectExact -or !$r.metaCwdExact -or !$r.profilePinMatches) { throw 'Stored synthetic project or bound profile does not match exact fixture inputs' }
+    $r.stage='active-history-search'
+    Set-FixtureEdit 'Search sessions...' $fixture.ActiveCanary
+    $row=$null
+    try {
+        $row=Wait-Observed { Find-Control @($fixture.ActiveCanary) ([System.Windows.Automation.ControlType]::TreeItem) } 'searched synthetic active history row'
+    } catch {
+        if ($_.Exception.Message -cne 'BLOCKED_UI_OBSERVATION: searched synthetic active history row') { throw }
+        $r.archive='active-canary-not-observed'
+        $visible=@($window.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition) |
+            Where-Object { !$_.Current.IsOffscreen -and $_.Current.ControlType -eq [System.Windows.Automation.ControlType]::TreeItem } |
+            Select-Object -First 33)
+        $r.activeSearch=[ordered]@{
+            visibleTreeItemCountWithinBudget=$visible.Count
+            activeCanaryObserved=@($visible | Where-Object { $_.Current.Name -ceq $fixture.ActiveCanary }).Count -eq 1
+            registeredProjectVisible=@($visible | Where-Object { $_.Current.Name -ceq (Split-Path $fixture.Project -Leaf) }).Count -eq 1
         }
     }
-    $hasCollapse=@($projectNode.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition) | Where-Object {
-        $_.Current.ControlType -eq $fixtureButton -and $_.Current.Name -ceq 'Collapse'
-    }).Count
-    if ($hasCollapse -gt 1) { throw 'Ambiguous synthetic project disclosure' }
-    if ($hasCollapse -eq 0 -and !$r.Contains('projectExpandInvoked') -and $r.projectControl.disclosureState -ne 'Expanded') {
-        if (!(Invoke-FixtureTarget $projectNode 'Expand' $fixtureButton)) { throw 'Synthetic project expand unavailable' }
-        $r.projectExpandInvoked=$true
+    if ($row) {
+        $r.activeRowObserved=$true
+        $basename=Split-Path $fixture.Rollout -Leaf
+        $physicalArchive=Join-Path $fixture.Home ('archived_sessions/' + $basename)
+        if (!(Test-Path -LiteralPath $fixture.Rollout -PathType Leaf) -or (Test-Path -LiteralPath $physicalArchive)) { throw 'Unexpected fixture state before archive' }
+        $r.stage='archive'
+        if (Invoke-FixtureTarget $row 'Native archive (including child sessions)' $fixtureButton) {
+            $r.archive='sent'
+            $null=Wait-Observed {
+                !(Test-Path -LiteralPath $fixture.Rollout) -and (Test-Path -LiteralPath $physicalArchive -PathType Leaf)
+            } 'Codex native archive changed physical fixture path'
+            $r.archive='physical-archive'
+        } else {
+            $r.archive='visible-entry-unavailable'
+        }
     }
-    $r.stage='active-history'
-    $row=Wait-Observed { Find-Control @($fixture.ActiveCanary) ([System.Windows.Automation.ControlType]::TreeItem) } 'synthetic active history row'
-    $r.activeRowObserved=$true
-    $basename=Split-Path $fixture.Rollout -Leaf
-    $physicalArchive=Join-Path $fixture.Home ('archived_sessions/' + $basename)
-    if (!(Test-Path -LiteralPath $fixture.Rollout -PathType Leaf) -or (Test-Path -LiteralPath $physicalArchive)) { throw 'Unexpected fixture state before archive' }
-    $r.stage='archive'
-    if (Invoke-FixtureTarget $row 'Native archive (including child sessions)' $fixtureButton) {
-        $r.archive='sent'
-        $null=Wait-Observed {
-            !(Test-Path -LiteralPath $fixture.Rollout) -and (Test-Path -LiteralPath $physicalArchive -PathType Leaf)
-        } 'Codex native archive changed physical fixture path'
-        $r.archive='physical-archive'
-    } else {
-        $r.archive='visible-entry-unavailable'
-    }
+    Set-FixtureEdit 'Search sessions...' ''
     $r.stage='restore'
     if (!(Invoke-FixtureTarget $window 'Archived sessions' $fixtureButton)) { throw 'Archived sessions entry unavailable' }
     $archivedRow=Wait-Observed { Find-Control @($fixture.ArchivedCanary) ([System.Windows.Automation.ControlType]::TreeItem) } 'separate synthetic archived row'
