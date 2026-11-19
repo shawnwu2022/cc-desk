@@ -1,30 +1,34 @@
-name: Bounded real Native processing probe (verification only)
+name: Standard RGB and cursor-style release GUI (verification branch only)
 on:
   push:
     branches: [verify/packaged-native-84855a84]
   workflow_dispatch:
 permissions:
   contents: read
+  actions: read
 jobs:
-  native-processing:
+  packaged-native:
     if: github.ref == 'refs/heads/verify/packaged-native-84855a84'
     runs-on: windows-2022
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
         with:
+          ref: 1930fe1fd82c44c5a2e7a1ec830b8de31094a555
           persist-credentials: false
       - uses: actions/setup-node@v5
         with:
           node-version: '24.18.0'
           cache: npm
       - uses: dtolnay/rust-toolchain@1.98.1
+        with:
+          components: rustfmt
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-          key: bounded-native-processing-diagnostic
+          key: packaged-standard-rgb-release
           cache-on-failure: true
-      - name: Prepare original Native dependencies
+      - name: Prepare standard product dependencies
         shell: pwsh
         run: |
           npm ci
@@ -33,24 +37,65 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run prepare:opencode-archive
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          node scripts/prepare-conpty.mjs
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Compile one opt-in original Native test binary
+      - uses: ./.github/actions/setup-windows-browser-tools
+      - name: Build exact standard product release profile
         shell: pwsh
         env:
           CARGO_BUILD_JOBS: '2'
         run: |
-          New-Item -ItemType Directory probe-evidence | Out-Null
-          [ordered]@{source=(git rev-parse HEAD); tree=(git rev-parse 'HEAD^{tree}'); productSource='1930fe1fd82c44c5a2e7a1ec830b8de31094a555'; mode='debug-native-api-not-standard-gui'; noGuiAck=$true; noLayoutResize=$true; diagnosticFeature=$true} | ConvertTo-Json | Set-Content probe-evidence/source.json
-          cargo test --manifest-path src-tauri/Cargo.toml --locked --lib --features packaged-canonical-diagnostic --no-run --message-format=json 1> probe-build.jsonl
-          if ($LASTEXITCODE -ne 0) {
-            Get-Content probe-build.jsonl | ForEach-Object { $entry=$_ | ConvertFrom-Json; if ($entry.reason -eq 'compiler-message' -and $entry.message.level -eq 'error') { Write-Output $entry.message.rendered } }
-            throw 'Native test compilation failed before execution'
+          npm run tauri -- build --bundles nsis --config '{"bundle":{"createUpdaterArtifacts":false}}' -- --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($name in @('conpty.dll','OpenConsole.exe')) {
+            Copy-Item -LiteralPath "src-tauri/conpty/runtime/$name" -Destination "src-tauri/target/release/$name"
           }
-          $bins = @(Get-Content probe-build.jsonl | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { $_.reason -eq 'compiler-artifact' -and $_.profile.test -and $_.executable -and $_.target.name -eq 'cc_desk' })
-          if ($bins.Count -ne 1) { throw 'Expected unique native library test binary' }
-          $bins[0].executable | Set-Content probe-binary.txt
-          [ordered]@{sha256=(Get-FileHash $bins[0].executable).Hash; source=(git rev-parse HEAD)} | ConvertTo-Json | Set-Content probe-evidence/binary.json
+      - name: Preserve standard package before GUI
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installers = @(Get-ChildItem src-tauri/target/release/bundle/nsis/*.exe)
+          if ($installers.Count -ne 1) { throw 'Expected one standard NSIS installer' }
+          New-Item -ItemType Directory standard-package | Out-Null
+          Copy-Item -LiteralPath $installers[0].FullName -Destination standard-package/standard-setup.exe
+          foreach ($name in @('cc-desk.exe','conpty.dll','OpenConsole.exe')) {
+            Copy-Item -LiteralPath "src-tauri/target/release/$name" -Destination "standard-package/$name"
+            if ((Get-FileHash "src-tauri/target/release/$name").Hash -cne (Get-FileHash "standard-package/$name").Hash) { throw 'Saved runtime digest mismatch' }
+          }
+          [ordered]@{source=(git rev-parse HEAD); sourceTree=(git rev-parse 'HEAD^{tree}'); mode='standard-rgb-cursor-product-not-published'; installationVerified=$false; installerSha256=(Get-FileHash standard-package/standard-setup.exe).Hash; looseExeSha256=(Get-FileHash standard-package/cc-desk.exe).Hash} | ConvertTo-Json | Set-Content standard-package/pre-installation.json
+          $dir = Join-Path $env:RUNNER_TEMP 'standard-installed'
+          $setup = Start-Process -FilePath $installers[0].FullName -ArgumentList "/S /D=$dir" -PassThru -WindowStyle Hidden
+          try {
+            if (!$setup.WaitForExit(180000)) { $setup.Kill(); $null=$setup.WaitForExit(10000); throw 'Installer timeout' }
+            if ($setup.ExitCode -ne 0) { throw 'Installer failed' }
+          } finally { $setup.Dispose() }
+          Move-Item standard-package/cc-desk.exe standard-package/loose-cc-desk.exe
+          $env:DIAGNOSTIC_INSTALLED = $dir
+          node -e "const f=require('fs'),p=require('path');let a=f.readFileSync('standard-package/loose-cc-desk.exe'),b=f.readFileSync(p.join(process.env.DIAGNOSTIC_INSTALLED,'cc-desk.exe'));let m=Buffer.from('__TAURI_BUNDLE_TYPE_VAR_UNK'),i=a.indexOf(m);if(i<0||a.indexOf(m,i+1)>=0)throw Error('marker uniqueness');Buffer.from('__TAURI_BUNDLE_TYPE_VAR_NSS').copy(a,i);if(!a.equals(b))throw Error('installed image differs beyond bundle marker');"
+          if ($LASTEXITCODE -ne 0) { throw 'Bundle identity validation failed' }
+          foreach ($name in @('conpty.dll','OpenConsole.exe')) {
+            if ((Get-FileHash (Join-Path $dir $name)).Hash -cne (Get-FileHash "standard-package/$name").Hash) { throw 'Installed runtime identity mismatch' }
+          }
+          Copy-Item (Join-Path $dir 'cc-desk.exe') standard-package/cc-desk.exe
+          $files = @(Get-ChildItem standard-package -File | Sort-Object Name | ForEach-Object { [ordered]@{name=$_.Name; bytes=$_.Length; sha256=(Get-FileHash $_.FullName).Hash.ToLowerInvariant()} })
+          [ordered]@{mode='standard-rgb-cursor-nsis-not-original-pr100'; workflowCommit=$env:GITHUB_SHA; source=(git rev-parse HEAD); sourceTree=(git rev-parse 'HEAD^{tree}'); baseline='84855a84ba08ca97c76567d1857d40bda9a4ff9d'; features='remote-host via standard Windows platform config'; diagnosticFeature=$false; harnessSource='3bbc4da07216e3ba069af0de61d26e086a17632d'; productSha256=(Get-FileHash standard-package/cc-desk.exe).Hash.ToLowerInvariant(); officialCodexAsset=760864385; files=$files; published=$false; updaterPublication=$false} | ConvertTo-Json -Depth 5 | Set-Content standard-package/manifest.json
+          Copy-Item standard-package/manifest.json packaged-source.json
+      - name: Upload reusable standard package before GUI
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: standard-rgb-cursor-nsis-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: standard-package/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Checkout exact verification harness separately from product
+        uses: actions/checkout@v5
+        with:
+          ref: 3bbc4da07216e3ba069af0de61d26e086a17632d
+          path: verification-harness
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            scripts/test-desktop-webview.ps1
+            scripts/test-packaged-native-scope.ps1
       - name: Download pinned official Codex
         shell: pwsh
         run: |
@@ -84,43 +129,25 @@ jobs:
           [ordered]@{package='@openai/codex'; version='0.169.1-win32-x64'; integrity="sha512-$expectedIntegrity"; archiveSha256=(Get-FileHash $archive).Hash; source='official npm platform package'; files=$inventory} | ConvertTo-Json -Depth 5 | Set-Content codex-supply.json
           $exe = Join-Path $extract 'package/vendor/x86_64-pc-windows-msvc/bin/codex.exe'
           if ((Get-Item $exe).Length -ne 382647088 -or (Get-FileHash $exe).Hash -ine 'f76f94d08b0793bfa129ae62c09341ee32ae96d57e69968ae6b8d7c71a20d8c4') { throw 'Official Codex asset digest mismatch' }
-      - name: Observe both fresh environments independently
+      - name: Observe real GUI using verified installed standard package
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          if ($env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_OS -cne 'Windows' -or $env:GH_TOKEN -or $env:GITHUB_TOKEN) { throw 'Fresh hosted credential-free guard failed' }
-          foreach ($item in @(Get-ChildItem Env:)) {
-            if ($item.Name -notin @('GITHUB_ACTIONS','RUNNER_OS') -and $item.Name -match '(?i)(TOKEN|SECRET|PASSWORD|API_KEY|^ACTIONS_|^GITHUB_|^GH_)') { [Environment]::SetEnvironmentVariable($item.Name,$null,'Process') }
+          if ($env:GH_TOKEN -or $env:GITHUB_TOKEN) { throw 'Credentials must not reach product' }
+          $manifest = Get-Content standard-package/manifest.json -Raw | ConvertFrom-Json
+          $dir = Join-Path $env:RUNNER_TEMP 'standard-installed'
+          foreach ($name in @('cc-desk.exe','conpty.dll','OpenConsole.exe')) {
+            $entry = @($manifest.files | Where-Object name -CEQ $name)
+            if ($entry.Count -ne 1 -or (Get-FileHash (Join-Path $dir $name)).Hash -ine $entry[0].sha256) { throw 'Installed image changed' }
           }
-          $env:CC_DESK_CANONICAL_CODEX_EXE = Join-Path $env:RUNNER_TEMP 'official-codex/extracted/package/vendor/x86_64-pc-windows-msvc/bin/codex.exe'
-          $env:CC_DESK_CANONICAL_CODEX_SHA256 = 'f76f94d08b0793bfa129ae62c09341ee32ae96d57e69968ae6b8d7c71a20d8c4'
-          $env:CC_DESK_DIAGNOSTIC_EXPECTED_PROGRAM = $env:CC_DESK_CANONICAL_CODEX_EXE
-          $binary = (Get-Content probe-binary.txt -Raw).Trim()
-          $failed = $false
-          foreach ($case in @('minimal','hosted-gui')) {
-            $env:CC_DESK_CANONICAL_ENV_CASE = $case
-            $stdout = Join-Path $env:RUNNER_TEMP "probe-$case.stdout"
-            $stderr = Join-Path $env:RUNNER_TEMP "probe-$case.stderr"
-            $process = Start-Process -FilePath $binary -ArgumentList 'CodexCanonical_EmptyHomeOriginalNative_001 --ignored --nocapture --test-threads=1' -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru -WindowStyle Hidden
-            $timedOut = !$process.WaitForExit(120000)
-            if ($timedOut) { $process.Kill(); $null=$process.WaitForExit(10000) }
-            $code = if ($process.HasExited) { $process.ExitCode } else { $null }
-            $process.Dispose()
-            # Only fixed numeric/enum diagnostics leave this fresh runner. Never upload raw CLI output.
-            $safe = @(Get-Content $stderr | Where-Object { $_ -match '^(CC_CANONICAL_DIAG |CC_CANONICAL_CSI |TEST_CODEX_(ENV|CANONICAL|PROCESSING|ACCOUNTING) )' })
-            $testOutput = Get-Content $stdout -Raw
-            $executed = $testOutput -match 'running 1 test' -and $testOutput -match 'test result: ok[.] 1 passed; 0 failed' -and @($safe | Where-Object { $_ -match '^TEST_CODEX_PROCESSING identity=' }).Count -eq 1
-            $safe | Set-Content "probe-evidence/$case.txt"
-            $safe | ForEach-Object { Write-Output $_ }
-            [ordered]@{case=$case; exitCode=$code; timedOut=$timedOut; exactTestExecutedAndPassed=$executed; registryNotFullProcessTreeProof=$true} | ConvertTo-Json | Set-Content "probe-evidence/$case-result.json"
-            if ($timedOut -or $code -ne 0 -or !$executed) { $failed=$true }
-          }
-          Copy-Item codex-supply.json probe-evidence/codex-supply.json
-          if ($failed) { throw 'At least one Native processing observation failed; see independent receipts' }
+          & ./verification-harness/scripts/test-desktop-webview.ps1 -Exe (Join-Path $dir 'cc-desk.exe') -ExpectedSha256 $manifest.productSha256 -CanonicalDiagnostic -NativeCodex (Join-Path $env:RUNNER_TEMP 'official-codex/extracted/package/vendor/x86_64-pc-windows-msvc/bin/codex.exe')
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: native-processing-${{ github.run_id }}-${{ github.run_attempt }}
-          path: probe-evidence/
+          name: packaged-pr100-native-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            packaged-source.json
+            codex-supply.json
+            desktop-webview-smoke/
           if-no-files-found: error
           retention-days: 7
