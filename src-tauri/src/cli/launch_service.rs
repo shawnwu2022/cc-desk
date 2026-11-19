@@ -313,6 +313,7 @@ impl LaunchService {
         authority: super::native_projection::registry::SessionAuthority,
         active: Arc<std::sync::atomic::AtomicBool>,
         outcome: super::native_delete::OwnerOutcome,
+        trace: Option<super::activity_diagnostics::Trace>,
     ) -> Result<(), SafeError> {
         // 此准备段只冻结和验证输入，尚未创建原生进程，失败不能误报已发送删除。
         let (spec, frozen, mut admission) = (|| -> Result<_, SafeError> {
@@ -409,11 +410,17 @@ impl LaunchService {
                             registry.check_caller(&caller)?;
                             authority.current()
                         };
-                        super::native_delete::process(
-                            &mut child,
-                            &authority,
-                            &current,
-                            &mut delete_write_started,
+                        super::activity_diagnostics::observe(
+                            trace.as_ref(),
+                            super::activity_diagnostics::Stage::Provider,
+                            || {
+                                super::native_delete::process(
+                                    &mut child,
+                                    &authority,
+                                    &current,
+                                    &mut delete_write_started,
+                                )
+                            },
                         )
                     }))
                     .unwrap_or_else(|_| Err(error("DELETE_OUTCOME_UNKNOWN")))
@@ -489,6 +496,7 @@ impl LaunchService {
         caller: &CallerIdentity,
         request: &LaunchRequest,
         authority: super::native_projection::registry::SessionAuthority,
+        trace: Option<super::activity_diagnostics::Trace>,
     ) -> Result<(), SafeError> {
         // 此准备段只冻结和验证输入，尚未创建原生进程，失败不能误报已发送归档。
         let (spec, frozen, mut admission, archive_owners) = (|| -> Result<_, SafeError> {
@@ -590,11 +598,17 @@ impl LaunchService {
                             authority.current()?;
                             archive_owners.current()
                         };
-                        super::native_archive::process(
-                            &mut child,
-                            &authority,
-                            &archive_owners,
-                            &current,
+                        super::activity_diagnostics::observe(
+                            trace.as_ref(),
+                            super::activity_diagnostics::Stage::Provider,
+                            || {
+                                super::native_archive::process(
+                                    &mut child,
+                                    &authority,
+                                    &archive_owners,
+                                    &current,
+                                )
+                            },
                         )
                     }))
                     .unwrap_or_else(|_| Err(error("ARCHIVE_OUTCOME_UNKNOWN")))
@@ -662,12 +676,24 @@ impl LaunchService {
             .recv_timeout(Duration::from_secs(35))
             .map_err(|_| error("ARCHIVE_OUTCOME_UNKNOWN"))?
     }
+    #[cfg(test)]
     pub(crate) fn rename_metadata(
         &self,
         caller: &CallerIdentity,
         request: &LaunchRequest,
         authority: super::native_projection::registry::RenameAuthority,
         title: String,
+    ) -> Result<(), SafeError> {
+        self.rename_metadata_observed(caller, request, authority, title, None)
+    }
+
+    pub(crate) fn rename_metadata_observed(
+        &self,
+        caller: &CallerIdentity,
+        request: &LaunchRequest,
+        authority: super::native_projection::registry::RenameAuthority,
+        title: String,
+        trace: Option<super::activity_diagnostics::Trace>,
     ) -> Result<(), SafeError> {
         self.registry().check_caller(caller)?;
         let profile = self.repository.get_profile(&request.profile_id)?;
@@ -738,8 +764,14 @@ impl LaunchService {
             };
             current()?;
             let (admission, mut owner) = self.admit_owned_command()?;
-            let result = super::opencode_prepare::rename_session(
-                &spec, port, admission, &authority, &title, &current,
+            let result = super::activity_diagnostics::observe(
+                trace.as_ref(),
+                super::activity_diagnostics::Stage::Provider,
+                || {
+                    super::opencode_prepare::rename_session(
+                        &spec, port, admission, &authority, &title, &current,
+                    )
+                },
             );
             owner.settled = true;
             return result;
@@ -810,13 +842,21 @@ impl LaunchService {
                             registry.check_caller(&caller)
                         };
                         let _namespace = &private;
-                        if _namespace.is_some() {
-                            super::native_rename::claude::process(
-                                &mut child, &authority, &title, &current,
-                            )
-                        } else {
-                            super::native_rename::process(&mut child, &authority, &title, &current)
-                        }
+                        super::activity_diagnostics::observe(
+                            trace.as_ref(),
+                            super::activity_diagnostics::Stage::Provider,
+                            || {
+                                if _namespace.is_some() {
+                                    super::native_rename::claude::process(
+                                        &mut child, &authority, &title, &current,
+                                    )
+                                } else {
+                                    super::native_rename::process(
+                                        &mut child, &authority, &title, &current,
+                                    )
+                                }
+                            },
+                        )
                     }))
                     .unwrap_or_else(|_| Err(error("RENAME_OUTCOME_UNKNOWN")));
                     // 结果可先回传；只有精确 child 真正 reap 后才释放 admission。
@@ -1562,10 +1602,20 @@ impl LaunchService {
     /// 这类必须由 CLI 自己执行的会话状态变更——Desk 不得搬动 CLI 的归档文件。
     /// 子进程仍走 PTY 与既有 admission 门禁，因此窗口/维护冻结语义保持一致；
     /// 输出丢弃，仅以退出状态判定成功。
+    #[cfg(test)]
     pub(crate) fn run_command(
         &self,
         caller: &CallerIdentity,
         request: &LaunchRequest,
+    ) -> Result<(), SafeError> {
+        self.run_command_observed(caller, request, None)
+    }
+
+    pub(crate) fn run_command_observed(
+        &self,
+        caller: &CallerIdentity,
+        request: &LaunchRequest,
+        trace: Option<super::activity_diagnostics::Trace>,
     ) -> Result<(), SafeError> {
         self.registry().check_caller(caller)?;
         if *self.shutting_down.read() {
@@ -1606,8 +1656,19 @@ impl LaunchService {
         self.command_owners
             .spawn_admitted(&command_admission, "native-command-owner", move || {
                 let mut response = Some(sender);
-                let mut reply = |result| {
+                let provider_started = std::cell::Cell::new(false);
+                let mut reply = |result: Result<(), SafeError>| {
                     if let Some(sender) = response.take() {
+                        if let Some(trace) = trace.as_ref().filter(|_| provider_started.get()) {
+                            trace.record(
+                                super::activity_diagnostics::Stage::Provider,
+                                if result.is_ok() {
+                                    super::activity_diagnostics::Status::Ok
+                                } else {
+                                    super::activity_diagnostics::Status::Failed
+                                },
+                            );
+                        }
                         let _ = sender.send(result);
                     }
                 };
@@ -1639,6 +1700,13 @@ impl LaunchService {
                     }
                 };
                 // shutdown 的读门禁直到此 worker 已保有 child 才释放。
+                if let Some(trace) = &trace {
+                    provider_started.set(true);
+                    trace.record(
+                        super::activity_diagnostics::Stage::Provider,
+                        super::activity_diagnostics::Status::Started,
+                    );
+                }
                 let reader_failed = Arc::new(std::sync::atomic::AtomicBool::new(false));
                 let reader_state = reader_failed.clone();
                 let drain_owners = command_owners.clone();

@@ -8,6 +8,7 @@ import { useNativeHistoryStore } from '@/stores/nativeHistory'
 import { useNativeSessionRecoveryStore } from '@/stores/nativeSessionRecovery'
 import { useUnifiedSessionsStore } from '@/stores/unifiedSessions'
 import { normalizePath } from '@/utils/path'
+import { activityDiagnostics, type ActivityHandle } from '@/utils/activityDiagnostics'
 import type { UnifiedSession } from '@/types/unifiedSession'
 import type { SourceRef } from '@/types/nativeProjection'
 const props = defineProps<{ sessions: UnifiedSession[]; active: boolean; projectPath?: string }>()
@@ -41,8 +42,9 @@ const pending = computed(() => [...recovery.pending.values()].filter(item => kno
   && (!props.projectPath || normalizePath(props.projectPath) === normalizePath(item.projectPath))))
 const sourceUnavailable = computed(() => retained.value.some(item => !currentSource(item.source)))
 const visible = computed(() => props.active && (retained.value.length || pending.value.length || unavailable.value || error.value))
-async function load() {
+async function load(ownerTrace?: ActivityHandle) {
   if (!props.active || busy.value || !sources.value.length) return
+  const trace = ownerTrace ?? activityDiagnostics.start('recycleList', 'claude')
   const readiness = readySignature.value
   const request = ++epoch, owner = signature.value, selectedSources = [...sources.value]
   const current = () => request === epoch && owner === signature.value && props.active
@@ -50,9 +52,10 @@ async function load() {
   const next: typeof records.value = [...records.value], damaged = new Map(unavailableBySource.value)
   try {
     for (const source of selectedSources) {
-      const result = await createNativeSessionRecycleClient().send({ source, action: 'list', operationId: null, sessionKey: null, acknowledgeRecoverable: false })
-      if (!current()) return
-      if (!currentSource(source)) continue
+      const result = await createNativeSessionRecycleClient().send({ source, action: 'list', operationId: null, sessionKey: null, acknowledgeRecoverable: false }, trace?.traceHeader)
+      if (!current()) { trace?.record('recycle', 'stale'); return }
+      if (!currentSource(source)) { trace?.record('recycle', 'stale'); continue }
+      trace?.record('recycle', result.unavailableCount ? 'partial' : 'returned')
       for (let index = next.length - 1; index >= 0; index--) {
         if (sourceIdentity(next[index]!.source) === sourceIdentity(source)) next.splice(index, 1)
       }
@@ -66,6 +69,7 @@ async function load() {
   } catch (failure) {
     if (current()) {
       const code = recycleErrorCode(failure)
+      trace?.record('recycle', code === 'RECYCLE_UNSUPPORTED' ? 'unsupported' : 'failed')
       if (code !== 'RECYCLE_UNSUPPORTED') error.value = code
     }
   } finally {
@@ -78,14 +82,19 @@ async function load() {
 async function recheck() {
   if (!props.active || busy.value) return
   const owner = signature.value
+  const trace = activityDiagnostics.start('recycleRecheck', 'claude')
   busy.value = true; error.value = ''
   try {
     for (const entry of history.all().filter(entry => entry.source && knownSources.value.some(source => sourceIdentity(source) === sourceIdentity(entry.source!)) && (!entry.loaded || entry.error) && !entry.loading)) {
-      await history.load({ ...entry.context, force: true, retainOnFailure: true })
+      const fresh = await history.load({ ...entry.context, force: true, retainOnFailure: true })
+      trace?.record('history', owner !== signature.value ? 'stale' : fresh.loaded && !fresh.error ? 'returned' : 'failed')
     }
-  } catch (failure) { if (owner === signature.value) error.value = recycleErrorCode(failure) }
+  } catch (failure) {
+    trace?.record('history', owner === signature.value ? 'failed' : 'stale')
+    if (owner === signature.value) error.value = recycleErrorCode(failure)
+  }
   finally { if (owner === signature.value) busy.value = false }
-  if (owner === signature.value && !error.value) await load()
+  if (owner === signature.value && !error.value) await load(trace)
 }
 watch(readySignature, () => { if (props.active && !busy.value) void load() }, { flush: 'sync' })
 let previousView = ''
@@ -100,10 +109,17 @@ watch(signature, () => {
   if (props.active) void load()
 }, { immediate: true, flush: 'sync' })
 onBeforeUnmount(() => { ++epoch })
-async function refresh(source: SourceRef) {
+async function refresh(source: SourceRef, trace?: ActivityHandle) {
   for (const entry of history.all().filter(entry => entry.sourceRootKey === source.sourceRootKey)) {
-    try { await history.load({ ...entry.context, force: true, retainOnFailure: true }) }
-    finally { await useUnifiedSessionsStore().refresh(entry.context.projectPath, { cli: 'claude' }) }
+    try {
+      const fresh = await history.load({ ...entry.context, force: true, retainOnFailure: true })
+      trace?.record('history', fresh.loaded && !fresh.error ? 'returned' : 'failed')
+    } catch (failure) {
+      trace?.record('history', 'failed')
+      throw failure
+    } finally {
+      await useUnifiedSessionsStore().refresh(entry.context.projectPath, { cli: 'claude' }, ...(trace ? [{ handles: [trace], target: 'claude' }] as const : []))
+    }
   }
 }
 async function restore(item: (typeof records.value)[number]) {
@@ -111,17 +127,24 @@ async function restore(item: (typeof records.value)[number]) {
   const source = sources.value.find(value => JSON.stringify(value) === JSON.stringify(item.source))
   if (!source || !records.value.includes(item)) return
   const owner = signature.value, request = ++epoch
+  const trace = activityDiagnostics.start('recycleRestore', 'claude')
   const current = () => props.active && owner === signature.value && request === epoch
   busy.value = true; error.value = ''
   try {
     recovery.beginRestore(source, item.record.operationId)
     try {
-      const result = await createNativeSessionRecycleClient().send({ source, action: 'restore', operationId: item.record.operationId, sessionKey: null, acknowledgeRecoverable: true })
+      const result = await createNativeSessionRecycleClient().send({ source, action: 'restore', operationId: item.record.operationId, sessionKey: null, acknowledgeRecoverable: true }, trace?.traceHeader)
+      const observed = result.records[0]?.state
+      trace?.record('recycle', observed === 'source' ? 'sourceObserved' : observed === 'stored' ? 'storedObserved' : 'unknown')
       recovery.settleRestore(source, item.record.operationId)
       recovery.observe(source, result.records)
+    } catch (failure) {
+      const code = recycleErrorCode(failure)
+      trace?.record('recycle', code === 'RECYCLE_RESTORE_CONFLICT' ? 'conflict' : code === 'RECYCLE_UNSUPPORTED' ? 'unsupported' : 'unknown')
+      throw failure
     } finally { recovery.settleRestore(source, item.record.operationId) }
-    await refresh(source)
-    if (current()) { busy.value = false; await load() }
+    await refresh(source, trace)
+    if (current()) { busy.value = false; await load(trace) }
   } catch (failure) { if (current()) error.value = recycleErrorCode(failure) }
   finally { if (current()) busy.value = false }
 }

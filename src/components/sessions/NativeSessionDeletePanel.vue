@@ -79,7 +79,10 @@ async function refreshAcknowledged(key: string) {
   const record = operations.records.get(key), origin = record?.display?.origin
   if (record?.receipt?.state !== 'acknowledged' || !origin) return
   try { await history.load({ ...origin, force: true, retainOnFailure: true }) }
-  finally { await useUnifiedSessionsStore().refresh(origin.projectPath, { cli: origin.cli }) }
+  finally {
+    const trace = operations.diagnosticsFor(record)
+    await useUnifiedSessionsStore().refresh(origin.projectPath, { cli: origin.cli }, ...(trace ? [{ handles: [trace], target: origin.cli }] as const : []))
+  }
 }
 async function inspect() {
   const key = selectedKey.value, record = operations.records.get(key), previous = record?.receipt?.state

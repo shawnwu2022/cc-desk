@@ -1,3 +1,4 @@
+import { activityDiagnostics, type DiagnosticHeader } from '@/utils/activityDiagnostics'
 import { createOpencodeArchiveClient } from './opencodeArchive'
 import { createSessionRecycleClient } from './nativeSessionRecycle';
 import { createProjectionClient } from './nativeProjection'
@@ -352,7 +353,7 @@ export const onOpenDirectory = (callback: (dir: string) => void): Promise<Unlist
 // to an unguarded invoke when this document has no authenticated bridge.
 interface NativeDocumentBridge {
   readonly instanceId: string;
-  invoke(command: string, payload: unknown, channel?: unknown): Promise<unknown>;
+  invoke(command: string, payload: unknown, channel?: unknown, diagnosticTrace?: string): Promise<unknown>;
 }
 
 function nativeDocumentBridge(): NativeDocumentBridge {
@@ -361,6 +362,10 @@ function nativeDocumentBridge(): NativeDocumentBridge {
     throw { code: 'DOCUMENT_BRIDGE_UNAVAILABLE' };
   }
   return bridge;
+}
+
+export function controlActivityDiagnostics(payload: { action: 'start' | 'stop'; serial: number } | { action: 'snapshot' }) {
+  return nativeDocumentBridge().invoke('cli_diagnostic_capture', payload)
 }
 
 export async function cliStart<E>(
@@ -489,10 +494,21 @@ export function createCliLaunchAttempt<E>(
   }
   // Keep the original bridge as well as the original Channel. A new document
   // or backend cannot silently inherit and restart an uncertain old attempt.
+  let diagnostics: ReturnType<typeof activityDiagnostics.start>;
   return createLaunchAttempt(request, bridge.instanceId, {
-    start: (frozen) => bridge.invoke('cli_start', frozen, channel),
+    start: (frozen) => {
+      diagnostics = activityDiagnostics.start('launch', frozen.cli === 'shell' ? 'unknown' : frozen.cli);
+      const header = diagnostics?.traceHeader();
+      return header ? bridge.invoke('cli_start', frozen, channel, header)
+        : bridge.invoke('cli_start', frozen, channel);
+    },
     status: (requestId) => bridge.invoke('cli_get_launch_status', { requestId }),
     cancel: (frozen) => bridge.invoke('cli_cancel_launch', frozen),
+  }, receipt => {
+    const phase = receipt?.phase;
+    diagnostics?.record('adapter', phase === 'running' || phase === 'exited' || phase === 'failed' || phase === 'cancelled'
+      ? phase : phase === 'reserved' || phase === 'starting' ? 'returned' : 'unknown');
+    diagnostics = undefined;
   });
 }
 
@@ -511,11 +527,11 @@ export async function nativeGetScope(target: import('@/types/nativeProjection').
 export function cliGetObserverStatus(owner: { requestId: string; runId: string; generation: number }) {
   return readObserverInstallation(nativeDocumentBridge(), owner)
 }
-export function nativeArchiveSession(request: import('@/types/nativeProjection').NativeArchiveRequest) {
-  return createNativeProjectionClient().archive(request);
+export function nativeArchiveSession(request: import('@/types/nativeProjection').NativeArchiveRequest, diagnostics?: DiagnosticHeader) {
+  return createNativeProjectionClient().archive(request, diagnostics);
 }
-export function nativeRenameSession(request: import('@/types/nativeProjection').NativeRenameRequest) {
-  return createNativeProjectionClient().rename(request)
+export function nativeRenameSession(request: import('@/types/nativeProjection').NativeRenameRequest, diagnostics?: DiagnosticHeader) {
+  return createNativeProjectionClient().rename(request, diagnostics)
 }
 
 export async function sessionIndexMaintenance(id: string, action: 'begin'|'commit'|'cancel'|'status'): Promise<{ id: string; state: 'staging'|'committed'|'cancelled'|'absent' }> {
@@ -529,8 +545,8 @@ export async function nativeListResources(request: import('@/types/nativeProject
   return createNativeProjectionClient().read(request);
 }
 /** 恢复 CLI 自身归档的会话（当前仅 codex 的 archived_sessions）。 */
-export async function nativeUnarchiveSession(request: import('@/types/nativeProjection').UnarchiveRequest): Promise<void> {
-  return createNativeProjectionClient().unarchive(request);
+export async function nativeUnarchiveSession(request: import('@/types/nativeProjection').UnarchiveRequest, diagnostics?: DiagnosticHeader): Promise<void> {
+  return createNativeProjectionClient().unarchive(request, diagnostics);
 }
 
 export function createNativeHistoryClient(): import('./versionHistory').HistoryClient {

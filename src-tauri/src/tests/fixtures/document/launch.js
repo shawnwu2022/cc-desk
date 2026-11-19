@@ -37,8 +37,23 @@ async function runLaunchProbe(request, mode) {
     if (receipt.instanceId !== bridge.instanceId) throw new Error('instance')
     await bridge.invoke('d11_launch_validate', receipt)
     stage = 'replay-after-delete'
-    await bridge.invoke('cli_start', request, channel)
+    const nonce = '0123456789abcdef0123456789abcdef'
+    let serial = 0; const control = action => bridge.invoke('cli_diagnostic_capture', action === 'snapshot' ? { action } : { action, serial: ++serial })
+    const { grant } = await control('start')
+    const replayStart = await bridge.invoke('cli_start', request, channel, grant + ':' + nonce)
     const replay = await bridge.invoke('cli_get_launch_status', {requestId:request.requestId})
+    const { report } = await control('snapshot')
+    if (replayStart.run.runId !== replay.run.runId
+        || report.events.length !== 1
+        || report.events[0].id !== nonce
+        || report.events[0].stage !== 'backend' || report.events[0].status !== 'returned') {
+      throw new Error('diagnostic replay')
+    }
+    await control('stop')
+    await control('start')
+    await bridge.invoke('cli_start', request, channel, grant + ':' + nonce)
+    if ((await control('snapshot')).report.events.length !== 0) throw new Error('stale diagnostic grant')
+    await control('stop')
     await bridge.invoke('d11_launch_replayed', replay)
     window.finishLaunchProbe = async () => {
       try {

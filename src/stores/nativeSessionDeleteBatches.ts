@@ -1,3 +1,4 @@
+import type { ActivityHandle } from '@/utils/activityDiagnostics'
 import { defineStore } from 'pinia'
 import { reactive } from 'vue'
 import { useNativeSessionDeletesStore, sessionDeleteTargetKey, type SessionDeleteOperation } from './nativeSessionDeletes'
@@ -91,18 +92,24 @@ export const useNativeSessionDeleteBatchesStore = defineStore('native-session-de
     batch.phase = 'confirmation'
   }
   async function refreshAcknowledged(batch: NativeDeleteBatch) {
-    const origins = new Map<string, NativeDeleteBinding['origin']>()
+    const origins = new Map<string, { origin: NativeDeleteBinding['origin']; handles: ActivityHandle[] }>()
+    let diagnosticBudget = 256
     for (const item of batch.items) {
-      if (record(item)?.receipt?.state !== 'acknowledged' || refreshed.has(item.request.operationId)) continue
+      const operation = record(item)
+      if (operation?.receipt?.state !== 'acknowledged' || refreshed.has(item.request.operationId)) continue
       refreshed.add(item.request.operationId)
-      origins.set(nativeHistoryContextKey(item.binding.origin), item.binding.origin)
+      const origin = item.binding.origin, key = nativeHistoryContextKey(origin)
+      const group = origins.get(key) ?? { origin, handles: [] }
+      const trace = diagnosticBudget > 0 ? operations.diagnosticsFor(operation) : undefined
+      if (trace) { group.handles.push(trace); --diagnosticBudget }
+      origins.set(key, group)
     }
     // 同一来源只刷新一次；刷新失败只保留读取错误，不改写删除回执。
-    for (const origin of origins.values()) {
+    for (const { origin, handles } of origins.values()) {
       try { await useNativeHistoryStore().load({ ...origin, force: true, retainOnFailure: true }) }
       catch { /* 来源读取错误留在历史 store。 */ }
       finally {
-        try { await useUnifiedSessionsStore().refresh(origin.projectPath, { cli: origin.cli }) }
+        try { await useUnifiedSessionsStore().refresh(origin.projectPath, { cli: origin.cli }, ...(handles.length ? [{ handles, target: origin.cli }] as const : [])) }
         catch { /* 目录刷新不能使已确认结果变成失败。 */ }
       }
     }

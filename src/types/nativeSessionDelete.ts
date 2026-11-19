@@ -1,3 +1,4 @@
+import type { DiagnosticHeader } from '@/utils/activityDiagnostics'
 import type { SourceRef } from './nativeProjection'
 import type { NativeCliKind } from './cli'
 
@@ -15,7 +16,7 @@ export interface SessionDeleteReceipt {
   rootPresent: boolean | null; descendants: 'unverified'; reason: string | null
 }
 export interface SessionDeleteClient {
-  preview(request: SessionDeletePreviewRequest): Promise<SessionDeletePreview>
-  confirm(request: SessionDeleteConfirmation): Promise<SessionDeleteReceipt>
-  inspect(request: { operationId: string }): Promise<SessionDeleteReceipt>
+  preview(request: SessionDeletePreviewRequest, diagnostics?: DiagnosticHeader): Promise<SessionDeletePreview>
+  confirm(request: SessionDeleteConfirmation, diagnostics?: DiagnosticHeader): Promise<SessionDeleteReceipt>
+  inspect(request: { operationId: string }, diagnostics?: DiagnosticHeader): Promise<SessionDeleteReceipt>
 }

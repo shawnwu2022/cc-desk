@@ -1,3 +1,4 @@
+import type { DiagnosticHeader } from '@/utils/activityDiagnostics'
 import type { SessionDeleteClient, SessionDeletePreview, SessionDeleteReceipt } from '@/types/nativeSessionDelete'
 import type { ProjectionBridge } from './nativeProjection'
 import { validateProjectionSource } from './nativeProjection'
@@ -48,8 +49,12 @@ export function createSessionDeleteClient(bridge: ProjectionBridge, current: () 
     try { valid = bridge.instanceId === instance && current() } catch { /* 文档已失去授权。 */ }
     if (!valid) throw error('BACKEND_INSTANCE_CHANGED')
   }
+  function invoke(command: string, request: unknown, diagnostics?: DiagnosticHeader) {
+    const header = diagnostics?.()
+    return header ? bridge.invoke(command, request, undefined, header) : bridge.invoke(command, request)
+  }
   return {
-    async preview(value) {
+    async preview(value, diagnostics) {
       assertCurrent()
       object(value, ['operationId', 'source', 'sessionKey'])
       const operationId = uuid(value.operationId), source = validateProjectionSource(value.source)
@@ -57,14 +62,14 @@ export function createSessionDeleteClient(bridge: ProjectionBridge, current: () 
       const request = { operationId, source, sessionKey: value.sessionKey }, payload = JSON.stringify(request), old = operations.get(operationId)
       if (old) { if (old.payload !== payload) throw error('DELETE_OPERATION_CONFLICT'); if (old.issued) throw error('DELETE_OUTCOME_UNKNOWN'); return old.preview }
       try {
-        const response = await bridge.invoke('cli_preview_session_delete', request)
+        const response = await invoke('cli_preview_session_delete', request, diagnostics)
         assertCurrent()
         const preview = decodePreview(response, operationId, source.cli)
         operations.set(operationId, { payload, cli: source.cli, preview, issued: false })
         return preview
       } catch (failure) { throw error(sessionDeleteErrorCode(failure)) }
     },
-    async confirm(value) {
+    async confirm(value, diagnostics) {
       assertCurrent()
       object(value, ['operationId', 'previewId', 'acknowledgePermanentDelete', 'acknowledgeNativeSubtree'])
       const operationId = uuid(value.operationId), previewId = uuid(value.previewId), entry = operations.get(operationId)
@@ -76,7 +81,7 @@ export function createSessionDeleteClient(bridge: ProjectionBridge, current: () 
       entry.flight = Promise.resolve().then(async () => {
         try {
           assertCurrent()
-          const response = await bridge.invoke('cli_confirm_session_delete', { operationId, previewId, acknowledgePermanentDelete: true, acknowledgeNativeSubtree: true })
+          const response = await invoke('cli_confirm_session_delete', { operationId, previewId, acknowledgePermanentDelete: true, acknowledgeNativeSubtree: true }, diagnostics)
           assertCurrent()
           const receipt = decodeReceipt(response, operationId, entry.cli)
           entry.receipt = receipt
@@ -86,13 +91,13 @@ export function createSessionDeleteClient(bridge: ProjectionBridge, current: () 
       })
       return entry.flight
     },
-    async inspect(value) {
+    async inspect(value, diagnostics) {
       assertCurrent()
       object(value, ['operationId'])
       const operationId = uuid(value.operationId), entry = operations.get(operationId)
       if (!entry?.issued || entry.flight) throw error('DELETE_PREVIEW_REQUIRED')
       try {
-        const response = await bridge.invoke('cli_inspect_session_delete', { operationId })
+        const response = await invoke('cli_inspect_session_delete', { operationId }, diagnostics)
         assertCurrent()
         const receipt = decodeReceipt(response, operationId, entry.cli)
         entry.receipt = receipt
