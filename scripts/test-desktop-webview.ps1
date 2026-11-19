@@ -221,6 +221,16 @@ try {
         } catch { $result.captureError = $_.Exception.Message }
     }
 
+    if ($NativeCodex -and $window -and $result.Contains('nativeStage') -and $result.nativeStage -eq 'read-public-scope') {
+        # Only the formally labelled Host panel; never enumerate terminal descendants into evidence.
+        try {
+            $panels = @($window.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, '单次远程会话')))
+            if ($panels.Count -ne 1) { throw 'Host panel not unique' }
+            $elements = @($panels[0].FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition))
+            if ($elements.Count -gt 1000) { throw 'Host panel bound exceeded' }
+            @($elements | ForEach-Object { [ordered]@{name=$_.Current.Name; id=$_.Current.AutomationId; type=$_.Current.ControlType.ProgrammaticName; enabled=$_.Current.IsEnabled; offscreen=$_.Current.IsOffscreen; patterns=@($_.GetSupportedPatterns() | ForEach-Object {$_.ProgrammaticName})} }) | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 (Join-Path $out 'host-panel-failure-tree.json')
+        } catch { $result.captureError = $_.Exception.Message }
+    }
     if ($window -and !$NativeCodex) { try { Capture-Evidence 'failure' } catch { $result.captureError = $_.Exception.Message } }
     throw
 } finally {
