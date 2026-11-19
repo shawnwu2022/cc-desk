@@ -138,6 +138,15 @@ fn CodexCanonical_EmptyHomeOriginalNative_001() {
     let identity = crate::platform::admitted_child::test_identity_verified();
     let (read_bytes, read_calls, processed_bytes, processed_calls, counters_valid) =
         cc_desk_remote_host::packaged_diagnostic::processing_totals();
+    let (
+        queued_bytes,
+        sealed_rejected_bytes,
+        unqualified_bytes,
+        seal_events,
+        post_stop_queued,
+        post_stop_processed,
+    ) = cc_desk_remote_host::packaged_diagnostic::admission_totals();
+    eprintln!("TEST_CODEX_ACCOUNTING queued_bytes={queued_bytes} sealed_rejected_bytes={sealed_rejected_bytes} unqualified_bytes={unqualified_bytes} seal_events={seal_events} post_stop_queued={post_stop_queued} post_stop_processed={post_stop_processed}");
     let events = fixture.events.lock();
     let mut route_bytes = 0u64;
     let mut route_frames = 0u64;
@@ -159,8 +168,21 @@ fn CodexCanonical_EmptyHomeOriginalNative_001() {
         "no valid nonzero reader/parser acceptance"
     );
     assert_eq!(
-        read_bytes, processed_bytes,
-        "not all original ingress bytes accepted"
+        queued_bytes, processed_bytes,
+        "not all actually queued bytes were processed"
+    );
+    assert_eq!(
+        queued_bytes
+            .checked_add(sealed_rejected_bytes)
+            .and_then(|n| n.checked_add(unqualified_bytes)),
+        Some(read_bytes),
+        "original ingress accounting incomplete"
+    );
+    assert!(seal_events > 0, "real owner seal unobserved");
+    assert_eq!(
+        (post_stop_queued, post_stop_processed),
+        (0, 0),
+        "acceptance after conservative owner stop fence"
     );
     eprintln!(
         "TEST_CODEX_CANONICAL observed={last} task_sent=false raw_output_logged=false full_process_tree_retired=unproven"

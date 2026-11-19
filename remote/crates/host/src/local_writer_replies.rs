@@ -62,8 +62,12 @@ impl HostOutputHandle {
             return Err(Reject::Bounds);
         }
         if self.sealed.load(Ordering::Acquire) {
+            #[cfg(feature = "packaged-canonical-diagnostic")]
+            crate::packaged_diagnostic::sealed_rejected(bytes.len());
             return Err(Reject::Sealed);
         }
+        #[cfg(feature = "packaged-canonical-diagnostic")]
+        let diagnostic_len = bytes.len();
         let credit = self.credits.reserve()?;
         let bytes = bytes.as_slice().into();
         let (tx, rx) = mpsc::sync_channel(1);
@@ -80,6 +84,8 @@ impl HostOutputHandle {
                 mpsc::TrySendError::Full(_) => Reject::Full,
                 mpsc::TrySendError::Disconnected(_) => Reject::Closed,
             })?;
+        #[cfg(feature = "packaged-canonical-diagnostic")]
+        crate::packaged_diagnostic::queued(diagnostic_len);
         Ok(PendingOutput {
             reply: rx,
             _credit: credit,

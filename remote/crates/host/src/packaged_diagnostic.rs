@@ -54,6 +54,9 @@ pub fn observed_read(bytes: usize) {
     add(&READ_CALLS, 1);
 }
 pub fn processed(bytes: usize) {
+    if STOP_REQUESTED.load(Ordering::SeqCst) {
+        add(&POST_STOP_PROCESSED, bytes as u64);
+    }
     add(&PROCESSED_BYTES, bytes as u64);
     add(&PROCESSED_CALLS, 1);
 }
@@ -65,5 +68,44 @@ pub fn processing_totals() -> (u64, u64, u64, u64, bool) {
         PROCESSED_BYTES.load(Ordering::Relaxed),
         PROCESSED_CALLS.load(Ordering::Relaxed),
         !OVERFLOW.load(Ordering::Relaxed),
+    )
+}
+
+static STOP_REQUESTED: AtomicBool = AtomicBool::new(false);
+static SEAL_EVENTS: AtomicU64 = AtomicU64::new(0);
+static QUEUED_BYTES: AtomicU64 = AtomicU64::new(0);
+static SEALED_REJECTED_BYTES: AtomicU64 = AtomicU64::new(0);
+static UNQUALIFIED_BYTES: AtomicU64 = AtomicU64::new(0);
+static POST_STOP_QUEUED: AtomicU64 = AtomicU64::new(0);
+static POST_STOP_PROCESSED: AtomicU64 = AtomicU64::new(0);
+/// Observation fence before the real stop store; not an admission condition.
+/// It conservatively counts racing in-flight completion as post-request.
+pub fn stop_requested() {
+    STOP_REQUESTED.store(true, Ordering::SeqCst);
+}
+pub fn stop_sealed() {
+    add(&SEAL_EVENTS, 1);
+}
+pub fn queued(bytes: usize) {
+    if STOP_REQUESTED.load(Ordering::SeqCst) {
+        add(&POST_STOP_QUEUED, bytes as u64);
+    }
+    add(&QUEUED_BYTES, bytes as u64);
+}
+pub fn sealed_rejected(bytes: usize) {
+    add(&SEALED_REJECTED_BYTES, bytes as u64);
+}
+pub fn unqualified(bytes: usize) {
+    add(&UNQUALIFIED_BYTES, bytes as u64);
+}
+/// Single-test-process causal accounting only, not proof of all IO retirement.
+pub fn admission_totals() -> (u64, u64, u64, u64, u64, u64) {
+    (
+        QUEUED_BYTES.load(Ordering::Relaxed),
+        SEALED_REJECTED_BYTES.load(Ordering::Relaxed),
+        UNQUALIFIED_BYTES.load(Ordering::Relaxed),
+        SEAL_EVENTS.load(Ordering::Relaxed),
+        POST_STOP_QUEUED.load(Ordering::Relaxed),
+        POST_STOP_PROCESSED.load(Ordering::Relaxed),
     )
 }

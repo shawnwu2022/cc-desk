@@ -661,7 +661,11 @@ impl NativeLocalInput {
         if let Some(a) = self.peer_close.lock().unwrap().as_ref() {
             a.request_close();
         }
+        #[cfg(feature = "packaged-canonical-diagnostic")]
+        crate::packaged_diagnostic::stop_requested();
         self.input.sealed.store(true, Ordering::Release);
+        #[cfg(feature = "packaged-canonical-diagnostic")]
+        crate::packaged_diagnostic::stop_sealed();
         let _ = self.input.tx.try_send(Command::NativeWake);
     }
 }
@@ -693,6 +697,8 @@ impl NativeOutputIngress {
         #[cfg(feature = "packaged-canonical-diagnostic")]
         crate::packaged_diagnostic::observed_read(bytes.len());
         if !self.complete.load(Ordering::Acquire) {
+            #[cfg(feature = "packaged-canonical-diagnostic")]
+            crate::packaged_diagnostic::unqualified(bytes.len());
             self.pending.clear();
             return;
         }

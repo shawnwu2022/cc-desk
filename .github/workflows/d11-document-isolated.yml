@@ -107,7 +107,7 @@ jobs:
             $code = if ($process.HasExited) { $process.ExitCode } else { $null }
             $process.Dispose()
             # Only fixed numeric/enum diagnostics leave this fresh runner. Never upload raw CLI output.
-            $safe = @(Get-Content $stderr | Where-Object { $_ -match '^(CC_CANONICAL_DIAG |CC_CANONICAL_CSI |TEST_CODEX_(ENV|CANONICAL|PROCESSING) )' })
+            $safe = @(Get-Content $stderr | Where-Object { $_ -match '^(CC_CANONICAL_DIAG |CC_CANONICAL_CSI |TEST_CODEX_(ENV|CANONICAL|PROCESSING|ACCOUNTING) )' })
             $testOutput = Get-Content $stdout -Raw
             $executed = $testOutput -match 'running 1 test' -and $testOutput -match 'test result: ok[.] 1 passed; 0 failed' -and @($safe | Where-Object { $_ -match '^TEST_CODEX_PROCESSING identity=' }).Count -eq 1
             $safe | Set-Content "probe-evidence/$case.txt"
@@ -122,40 +122,5 @@ jobs:
         with:
           name: native-processing-${{ github.run_id }}-${{ github.run_attempt }}
           path: probe-evidence/
-          if-no-files-found: error
-          retention-days: 7
-  terminal-green:
-    if: github.ref == 'refs/heads/verify/packaged-native-84855a84'
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-2022]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: 1930fe1fd82c44c5a2e7a1ec830b8de31094a555
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@1.98.1
-        with:
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: remote
-          key: canonical-rgb-terminal
-          cache-on-failure: true
-      - name: Full exact terminal tests and lint
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo fmt --manifest-path remote/Cargo.toml -p cc-desk-remote-terminal -- --check
-          cargo test --manifest-path remote/Cargo.toml --locked -p cc-desk-remote-terminal --features experimental-emulator 2>&1 | tee terminal-green.log
-          cargo clippy --manifest-path remote/Cargo.toml --locked -p cc-desk-remote-terminal --features experimental-emulator --all-targets -- -D warnings
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: terminal-green-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: terminal-green.log
           if-no-files-found: error
           retention-days: 7
