@@ -4,6 +4,11 @@ use std::{
     io::Write,
     sync::atomic::{AtomicBool, Ordering},
 };
+static IDENTITY_VERIFIED: AtomicBool = AtomicBool::new(false);
+#[cfg(test)]
+pub(super) fn identity_verified() -> bool {
+    IDENTITY_VERIFIED.load(Ordering::Acquire)
+}
 fn emit(stage: u8, code: u8, a: u32, b: u32) {
     let _ = writeln!(
         std::io::stderr().lock(),
@@ -70,7 +75,10 @@ pub(super) fn created(handle: *mut c_void) {
         ))
     })();
     match result {
-        Ok((pid, flags)) => emit(9, 0, pid, flags),
+        Ok((pid, flags)) => {
+            IDENTITY_VERIFIED.store(flags == 1, Ordering::Release);
+            emit(9, 0, pid, flags);
+        }
         Err(code) => emit(9, code, 0, 0),
     }
 }

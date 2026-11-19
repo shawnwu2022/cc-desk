@@ -133,3 +133,8 @@ unsafe extern "system" {
 #[cfg(test)]
 #[path = "../tests/version_history_child.rs"]
 mod tests;
+
+#[cfg(all(test, windows, feature = "packaged-canonical-diagnostic"))]
+pub(crate) fn test_identity_verified() -> bool {
+    super::packaged_diagnostic::identity_verified()
+}

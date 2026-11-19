@@ -690,6 +690,8 @@ impl NativeOutputIngress {
         }
     }
     pub fn feed(&mut self, mut offset: u64, mut bytes: &[u8]) {
+        #[cfg(feature = "packaged-canonical-diagnostic")]
+        crate::packaged_diagnostic::observed_read(bytes.len());
         if !self.complete.load(Ordering::Acquire) {
             self.pending.clear();
             return;

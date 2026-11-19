@@ -338,6 +338,10 @@ impl ReplyState {
             sealed.store(true, Ordering::Release);
             return OutputResult::Unknown;
         }
+        #[cfg(feature = "packaged-canonical-diagnostic")]
+        if matches!(result, OutputResult::Processed { .. }) {
+            crate::packaged_diagnostic::processed(request.bytes.len());
+        }
         result
     }
     #[cfg(feature = "experimental-canonical-replies")]

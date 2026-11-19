@@ -34,3 +34,36 @@ pub fn emit(stage: u8, code: u8, a: u64, b: u64) {
         start.elapsed().as_millis()
     );
 }
+
+use std::sync::atomic::{AtomicBool, AtomicU64};
+static READ_BYTES: AtomicU64 = AtomicU64::new(0);
+static READ_CALLS: AtomicU64 = AtomicU64::new(0);
+static PROCESSED_BYTES: AtomicU64 = AtomicU64::new(0);
+static PROCESSED_CALLS: AtomicU64 = AtomicU64::new(0);
+static OVERFLOW: AtomicBool = AtomicBool::new(false);
+fn add(counter: &AtomicU64, n: u64) {
+    if counter
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_add(n))
+        .is_err()
+    {
+        OVERFLOW.store(true, Ordering::Relaxed);
+    }
+}
+pub fn observed_read(bytes: usize) {
+    add(&READ_BYTES, bytes as u64);
+    add(&READ_CALLS, 1);
+}
+pub fn processed(bytes: usize) {
+    add(&PROCESSED_BYTES, bytes as u64);
+    add(&PROCESSED_CALLS, 1);
+}
+/// Original reader ingress and full successful parser batches, not IO/descendant retirement.
+pub fn processing_totals() -> (u64, u64, u64, u64, bool) {
+    (
+        READ_BYTES.load(Ordering::Relaxed),
+        READ_CALLS.load(Ordering::Relaxed),
+        PROCESSED_BYTES.load(Ordering::Relaxed),
+        PROCESSED_CALLS.load(Ordering::Relaxed),
+        !OVERFLOW.load(Ordering::Relaxed),
+    )
+}
