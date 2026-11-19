@@ -29,8 +29,21 @@ function Find-Control([string[]]$Names, $Type) {
 function Invoke-Button([string[]]$Names) {
     $control = Wait-Observed { Find-Control $Names ([System.Windows.Automation.ControlType]::Button) } ($Names -join '/')
     $pattern = $null
-    if (!$control.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) { throw 'BLOCKED_UI_INVOKE' }
+    if (!$control.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) { throw ("BLOCKED_UI_INVOKE: $($Names -join '/')") }
     ([System.Windows.Automation.InvokePattern]$pattern).Invoke()
+}
+function Toggle-DiagnosticsButton([string[]]$Names) {
+    $ctl = Wait-Observed { Find-Control $Names ([System.Windows.Automation.ControlType]::Button) } ($Names -join '/')
+    $pattern = $null
+    $result.activityDiagnostics.controls += [ordered]@{
+        expectedLabel=($Names -join '/')
+        enabled=$ctl.Current.IsEnabled
+        patterns=@($ctl.GetSupportedPatterns() | ForEach-Object ProgrammaticName)
+    }
+    if (!$ctl.Current.IsEnabled -or !$ctl.TryGetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern, [ref]$pattern)) {
+        throw "BLOCKED_UI_TOGGLE: $($Names -join '/')"
+    }
+    ([System.Windows.Automation.TogglePattern]$pattern).Toggle()
 }
 function Reveal-RemoteSection {
     $matches = @($window.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition) | Where-Object {
@@ -145,7 +158,7 @@ try {
     if (Find-Control @('Literal UTF-8 text (maximum 8192 bytes)', '原样 UTF-8 文本（最多 8192 字节）') $null) { throw 'Remote input unexpectedly visible' }
     Capture-Evidence 'terminal'
     if ($ActivityDiagnosticsAcceptance) {
-        $result.activityDiagnostics = [ordered]@{ defaultOff=$false; startAcknowledged=$false; stopAcknowledged=$false; emptyPreviewCopied=$false; restartWithoutAppRestart=$false }
+        $result.activityDiagnostics = [ordered]@{ defaultOff=$false; startAcknowledged=$false; stopAcknowledged=$false; emptyPreviewCopied=$false; restartWithoutAppRestart=$false; controls=@() }
         Invoke-Button @('About')
         $button = [System.Windows.Automation.ControlType]::Button
         $start = @('Start collecting')
@@ -161,7 +174,7 @@ try {
             if ($ctl -and $ctl.TryGetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern, [ref]$pressed) -and
                 ([System.Windows.Automation.TogglePattern]$pressed).Current.ToggleState -eq [System.Windows.Automation.ToggleState]::On) { $ctl }
         }
-        Invoke-Button $start
+        Toggle-DiagnosticsButton $start
         $null = Wait-Observed $isOn 'diagnostics started acknowledgement'
         $result.activityDiagnostics.startAcknowledged = $true
         Invoke-Button $preview
@@ -172,10 +185,10 @@ try {
         $report = $raw | ConvertFrom-Json -AsHashtable
         if ($report.schemaVersion -ne 1 -or $report.events.Count -ne 0 -or !$report.backend.available -or $report.backend.events.Count -ne 0) { throw 'Unexpected initial diagnostic report' }
         $result.activityDiagnostics.emptyPreviewCopied = $true
-        Invoke-Button $stop
+        Toggle-DiagnosticsButton $stop
         $null = Wait-Observed { Find-Control $start $button } 'diagnostics stop confirmed'
         $result.activityDiagnostics.stopAcknowledged = $true
-        Invoke-Button $start
+        Toggle-DiagnosticsButton $start
         $null = Wait-Observed $isOn 'diagnostics second start'
         Invoke-Button $preview
         Invoke-Button $copy
@@ -184,7 +197,7 @@ try {
         if (!$rawAgain -or $rawAgain.Length -gt 131072) { throw 'Second diagnostic export exceeds expected bound or absent' }
         $again = $rawAgain | ConvertFrom-Json -AsHashtable
         if (!$again.backend.available -or $again.events.Count -ne 0) { throw 'Fresh diagnostic capture was not observed' }
-        Invoke-Button $stop
+        Toggle-DiagnosticsButton $stop
         $null = Wait-Observed { Find-Control $start $button } 'second diagnostics stop confirmed'
         $result.activityDiagnostics.restartWithoutAppRestart = $true
     }
