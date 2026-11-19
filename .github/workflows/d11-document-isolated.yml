@@ -1,108 +1,84 @@
-name: PR 101 installed diagnostics acceptance
+name: PR 101 isolated native Claude metadata acceptance
 on:
   push:
     branches: [verify/pr101-diagnostics-0727a08c]
 permissions:
   contents: read
-  actions: read
 jobs:
-  installed-diagnostics:
-    if: github.ref == 'refs/heads/verify/pr101-diagnostics-0727a08c'
-    timeout-minutes: 15
-    runs-on: windows-latest
+  claude-metadata:
+    if: github.repository == 'shawnwu2022/cc-desk' && github.ref == 'refs/heads/verify/pr101-diagnostics-0727a08c'
+    timeout-minutes: 25
+    runs-on: windows-2022
+    env:
+      CC_DESK_BUILD_SHA: ${{ github.sha }}
     steps:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - name: Download pinned verified candidate and smoke receipt
-        shell: pwsh
-        env:
-          ARTIFACT_READER: ${{ github.token }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $headers = @{ Authorization = "Bearer $env:ARTIFACT_READER"; Accept = 'application/vnd.github+json' }
-          $base = 'https://api.github.com/repos/shawnwu2022/cc-desk/actions/artifacts'
-          foreach ($entry in @(
-            @{ Id = 14509138179; Name = 'cc-desk-native-v3-test-971eb19a30218c7295be73d48d73fda5db9379c4'; Folder = 'pr101-package'; Sha = '0d32332221587856f7ceddab3e4018d83e5be3b078c7dd891fd42364fe6e3854' },
-            @{ Id = 14509570953; Name = 'desktop-webview-smoke-971eb19a30218c7295be73d48d73fda5db9379c4-44481773577-1'; Folder = 'pr101-smoke'; Sha = '045198275fad08a2f0c84633e25be917c8e9bfde24d0e420102db0e094774251' }
-          )) {
-            $meta = Invoke-RestMethod "$base/$($entry.Id)" -Headers $headers
-            if ($meta.expired -or $meta.workflow_run.id -ne 44481773577 -or $meta.workflow_run.head_sha -cne '0727a08c9e963b140bbd014aaf17e2275b8e3358' -or $meta.name -cne $entry.Name) { throw 'Pinned artifact identity mismatch' }
-            $file = Join-Path $env:RUNNER_TEMP ($entry.Folder + '.zip')
-            Invoke-WebRequest "$base/$($entry.Id)/zip" -Headers $headers -OutFile $file
-            if ((Get-FileHash -LiteralPath $file).Hash -ine $entry.Sha) { throw 'Pinned artifact digest mismatch' }
-            if ($entry.Id -eq 14509138179) {
-              Add-Type -AssemblyName System.IO.Compression.FileSystem
-              $zip = [IO.Compression.ZipFile]::OpenRead($file)
-              try {
-                if (@($zip.Entries | Where-Object FullName -CEQ 'test-package/test-package-manifest.json').Count -ne 1) {
-                  throw 'Pinned manifest ZIP entry mismatch'
-                }
-                Write-Host 'Pinned ZIP entry verified: test-package/test-package-manifest.json'
-              } finally { $zip.Dispose() }
-            }
-            Expand-Archive -LiteralPath $file -DestinationPath (Join-Path $env:RUNNER_TEMP $entry.Folder)
-          }
-      - name: Download pinned official Codex
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24.18.0'
+      - name: Pin official offline Node Claude and SDK bytes
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $dir = Join-Path $env:RUNNER_TEMP 'official-codex'
+          if (!$IsWindows -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted') { throw 'Not ephemeral hosted Windows' }
+          $dir = Join-Path $env:RUNNER_TEMP 'pr101-official-claude'
+          if (Test-Path -LiteralPath $dir) { throw 'Supply dir already exists' }
           New-Item -ItemType Directory $dir | Out-Null
-          # A lone EXE is not the complete official runtime supply. Preserve the published vendor layout.
-          $archive = Join-Path $dir 'codex-0.169.1-win32-x64.tgz'
-          Invoke-WebRequest 'https://registry.npmjs.org/@openai/codex/-/codex-0.169.1-win32-x64.tgz' -OutFile $archive
-          $expectedIntegrity = 'fImXWqxwxqHh9+FhJWsRRFiBzgBrSeN1bYTvtGZtUKGTPzHefYAL1agmlf5XScfwY5i5pHsExfdhFekzRBbqIw=='
-          $stream = [IO.File]::OpenRead($archive)
-          $hasher = [Security.Cryptography.SHA512]::Create()
-          try { $actualIntegrity = [Convert]::ToBase64String($hasher.ComputeHash($stream)) } finally { $stream.Dispose(); $hasher.Dispose() }
-          if ($actualIntegrity -cne $expectedIntegrity) { throw 'Official platform package integrity mismatch' }
-          $names = @(& tar -tzf $archive)
-          if ($LASTEXITCODE -ne 0) { throw 'Platform archive listing failed' }
-          $details = @(& tar -tvzf $archive)
-          if ($LASTEXITCODE -ne 0 -or $names.Count -ne 47 -or $details.Count -ne 47) { throw 'Platform archive entries mismatch' }
-          foreach ($name in $names) {
-            if (!$name.StartsWith('package/') -or $name -match '(^/|\\|:|(^|/)\.\.(/|$))') { throw 'Unsafe platform archive path' }
+          $node = (Get-Command node.exe -CommandType Application).Source
+          if ((Get-FileHash -LiteralPath $node).Hash -ine '9a4eb5f1c29c6a2e93852ead46b999e284a6a5ca8bab4d4e241d587d025a52de') { throw 'Pinned Node bytes unavailable' }
+          $registry = 'https://registry.npmjs.org'
+          $meta = Invoke-RestMethod "$registry/@anthropic-ai%2fclaude-code-win32-x64/2.1.319"
+          $claudeUrl = "$registry/@anthropic-ai/claude-code-win32-x64/-/claude-code-win32-x64-2.1.319.tgz"
+          if ($meta.name -cne '@anthropic-ai/claude-code-win32-x64' -or $meta.version -cne '2.1.319' -or $meta.dist.tarball -cne $claudeUrl) { throw 'Official Claude provenance mismatch' }
+          function Save-PinnedEntry($url, $integrity, $archive, [string[]]$allowedMembers, $output, $digest) {
+            if ($integrity -cnotmatch '^sha512-[A-Za-z0-9+/]{86}==$') { throw 'Package integrity absent' }
+            Invoke-WebRequest -MaximumRedirection 0 -Uri $url -OutFile $archive
+            $stream = [IO.File]::OpenRead($archive)
+            $hasher = [Security.Cryptography.SHA512]::Create()
+            try { $value = 'sha512-' + [Convert]::ToBase64String($hasher.ComputeHash($stream)) } finally { $stream.Dispose(); $hasher.Dispose() }
+            if ($value -cne $integrity) { throw 'Package integrity mismatch' }
+            $entries = @(& tar -tzf $archive)
+            if ($LASTEXITCODE -ne 0) { throw 'Package member listing failed' }
+            $matchingEntries = @($entries | Where-Object { $allowedMembers -ccontains $_ })
+            if ($matchingEntries.Count -ne 1) { throw 'Pinned package member absent or ambiguous' }
+            $member = $matchingEntries[0]
+            $detail = @(& tar -tvzf $archive -- $member)
+            if ($LASTEXITCODE -ne 0 -or $detail.Count -ne 1 -or !$detail[0].StartsWith('-')) { throw 'Package member is not regular' }
+            # Native stdout redirection preserves executable bytes without PowerShell text conversion.
+            $process = Start-Process -FilePath "$env:SystemRoot\System32\tar.exe" -ArgumentList @('-xOzf', ('"' + $archive + '"'), '--', $member) -RedirectStandardOutput $output -WindowStyle Hidden -Wait -PassThru
+            if ($process.ExitCode -ne 0 -or (Get-FileHash -LiteralPath $output).Hash -ine $digest) { throw 'Pinned member bytes unavailable' }
           }
-          foreach ($entry in $details) { if ($entry[0] -ne '-') { throw 'Platform archive contains nonregular entry' } }
-          $extract = Join-Path $dir 'extracted'
-          New-Item -ItemType Directory $extract | Out-Null
-          & tar -xzf $archive -C $extract
-          if ($LASTEXITCODE -ne 0) { throw 'Platform archive extraction failed' }
-          if (@(Get-ChildItem $extract -Recurse | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }).Count) { throw 'Platform reparse point rejected' }
-          $files = @(Get-ChildItem $extract -Recurse -File)
-          if ($files.Count -ne 47 -or ($files | Measure-Object Length -Sum).Sum -ne 515292799) { throw 'Platform file set mismatch' }
-          $inventory = @($files | ForEach-Object { [ordered]@{path=$_.FullName.Substring($extract.Length+1).Replace('\','/'); bytes=$_.Length; sha256=(Get-FileHash $_.FullName).Hash.ToLowerInvariant()} })
-          [ordered]@{package='@openai/codex'; version='0.169.1-win32-x64'; integrity="sha512-$expectedIntegrity"; archiveSha256=(Get-FileHash $archive).Hash; source='official npm platform package'; files=$inventory} | ConvertTo-Json -Depth 5 | Set-Content codex-supply.json
-          $exe = Join-Path $extract 'package/vendor/x86_64-pc-windows-msvc/bin/codex.exe'
-          if ((Get-Item $exe).Length -ne 382647088 -or (Get-FileHash $exe).Hash -ine 'f76f94d08b0793bfa129ae62c09341ee32ae96d57e69968ae6b8d7c71a20d8c4') { throw 'Official Codex asset digest mismatch' }
-      - name: Verify and launch the exact ordinary NSIS
+          $claude = Join-Path $dir 'claude.exe'
+          $sdk = Join-Path $dir 'sdk.mjs'
+          Save-PinnedEntry $claudeUrl $meta.dist.integrity (Join-Path $dir 'claude.tgz') @('package/claude.exe', 'package/bin/claude.exe') $claude '2e055732c9d03d22700d9046251a8370b673607bfcc9e4d16a1b0e8fb1345cbd'
+          Save-PinnedEntry "$registry/@anthropic-ai/claude-agent-sdk/-/claude-agent-sdk-0.3.301.tgz" 'sha512-mAe4zIFRL9BejcFHQVc+D0gxrMR/7mDt5GgdekfWB2DNWZebHoeGhgP2R3rZ/BcEZnW10nSGV2IwWyywwZw83Q==' (Join-Path $dir 'sdk.tgz') 'package/sdk.mjs' $sdk '6b963b3eb871949a14392bb35ff970a55e91e2edbe218c61cd9eed60e46cbe45'
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value @("CC_DESK_NATIVE_METADATA_NODE=$node", "CC_DESK_NATIVE_METADATA_SDK=$sdk", "CC_DESK_NATIVE_METADATA_HOSTED_CLAUDE=$claude")
+      - uses: dtolnay/rust-toolchain@1.98.1
+      - name: Prepare repository test toolchain
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          if (!$IsWindows -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted') { throw 'Expected ephemeral hosted Windows' }
-          $package = Join-Path $env:RUNNER_TEMP 'pr101-package/test-package'
-          $manifest = Get-Content (Join-Path $package 'test-package-manifest.json') -Raw | ConvertFrom-Json
-          if ($manifest.sourceCommit -cne '971eb19a30218c7295be73d48d73fda5db9379c4' -or $manifest.workflowRunId -cne '44481773577' -or $manifest.workflowRunAttempt -cne '1' -or $manifest.channel -cne 'test-only' -or $manifest.publishable -ne $false -or $manifest.updaterPublication -ne $false -or $manifest.installerFile -cnotmatch '^CC-Desk-[\w.-]+-setup\.exe$') { throw 'Pinned manifest mismatch' }
-          $installer = Join-Path $package $manifest.installerFile
-          if ((Get-FileHash -LiteralPath $installer).Hash -ine $manifest.sha256) { throw 'NSIS digest mismatch' }
-          $smoke = Get-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'pr101-smoke/result.json') -Raw | ConvertFrom-Json
-          if ($smoke.status -cne 'passed' -or !$smoke.normalExit -or $smoke.sha256 -cnotmatch '^[0-9A-Fa-f]{64}$') { throw 'Missing trusted installed image identity' }
-          $target = Join-Path $env:RUNNER_TEMP 'pr101-installed'
-          $install = Start-Process -FilePath $installer -ArgumentList @('/S', "/D=$target") -WindowStyle Hidden -Wait -PassThru
-          if ($install.ExitCode -ne 0) { throw 'NSIS installation failed' }
-          $exe = Join-Path $target 'cc-desk.exe'
-          if ((Get-FileHash -LiteralPath $exe).Hash -ine $smoke.sha256) { throw 'Installed image differs from pinned smoke' }
-          [ordered]@{ packageSource=$manifest.sourceCommit; packageArtifact=14509138179; smokeArtifact=14509570953; installerSha256=$manifest.sha256; exeSha256=$smoke.sha256 } | ConvertTo-Json | Set-Content pr101-identity.json
+          npm ci --ignore-scripts
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          npm run prepare:session-sdk
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          npm run prepare:opencode-archive
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          node scripts/prepare-conpty.mjs
+      - name: Run exact Windows Job owned offline fixture
+        working-directory: src-tauri
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $names = @(& cargo test --locked --lib NativeMetadataLive_InstalledClaude_110 -- --ignored --list)
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $selected = @($names | ForEach-Object { if ("$_" -cmatch '^([A-Za-z0-9_:]+::NativeMetadataLive_InstalledClaude_110): test$') { $Matches[1] } })
+          if ($selected.Count -ne 1) { throw 'Exact native test absent or ambiguous' }
           Get-ChildItem Env: | Where-Object { $_.Name -cne 'GITHUB_ACTIONS' -and $_.Name -match '^(ACTIONS_|GITHUB_|GH_)|TOKEN|SECRET|API_KEY|PASSWORD|CREDENTIAL' } | ForEach-Object {
             [Environment]::SetEnvironmentVariable($_.Name, $null, 'Process')
           }
-          $official = Join-Path $env:RUNNER_TEMP 'official-codex/extracted/package/vendor/x86_64-pc-windows-msvc/bin/codex.exe'
-          & ./scripts/test-desktop-webview.ps1 -Exe $exe -ActivityDiagnosticsAcceptance -FixtureCodex $official -FixtureOperation rename
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: pr101-installed-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            pr101-identity.json
-            desktop-webview-smoke/result.json
+          $env:CC_DESK_NATIVE_METADATA_LIVE_GO = 'isolated-metadata'
+          & cargo test --locked --lib -- $selected[0] --ignored --exact --nocapture
+          exit $LASTEXITCODE

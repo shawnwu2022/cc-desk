@@ -130,9 +130,28 @@ fn execute(cli: &str, binary: &str, expected: &str) {
 #[test]
 #[ignore = "explicit isolated Claude SDK metadata experiment; no GUI or model"]
 fn NativeMetadataLive_InstalledClaude_110() {
+    let approved = std::env::var_os("CC_DESK_NATIVE_METADATA_HOSTED_CLAUDE");
+    let installed = approved.as_ref().map(|value| {
+        assert_eq!(std::env::var("GITHUB_ACTIONS").as_deref(), Ok("true"));
+        assert_eq!(
+            std::env::var("RUNNER_ENVIRONMENT").as_deref(),
+            Ok("github-hosted")
+        );
+        let temp = fs::canonicalize(std::env::var_os("RUNNER_TEMP").expect("hosted temp required"))
+            .unwrap();
+        let expected_root = temp.join("pr101-official-claude");
+        assert_eq!(fs::canonicalize(&expected_root).unwrap(), expected_root);
+        let binary = fs::canonicalize(Path::new(value)).unwrap();
+        assert_eq!(binary.parent().unwrap(), expected_root.as_path());
+        assert_eq!(binary.file_name().unwrap(), "claude.exe");
+        binary
+    });
     execute(
         "claude",
-        r"C:\Users\wusha\.local\bin\claude.exe",
+        installed
+            .as_deref()
+            .map(|path| path.to_str().expect("hosted binary path must be UTF-8"))
+            .unwrap_or(r"C:\Users\wusha\.local\bin\claude.exe"),
         "2e055732c9d03d22700d9046251a8370b673607bfcc9e4d16a1b0e8fb1345cbd",
     );
 }
