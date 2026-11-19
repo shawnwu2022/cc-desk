@@ -64,7 +64,23 @@ function Configure-CodexFixtureProfile {
     if (!$target.Current.IsEnabled -or !$target.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern,[ref]$click)) { throw 'Codex configuration action unavailable' }
     ([System.Windows.Automation.InvokePattern]$click).Invoke()
     Set-FixtureEdit 'Configuration name' $name
-    $details=Wait-Observed { Find-Control @("More options$([char]0x2026)") $null } 'Codex configuration options'
+    $details=Wait-Observed {
+        $label="More options$([char]0x2026)"
+        $same = @($window.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition) |
+            Where-Object { $_.Current.Name -ceq $label })
+        if ($same.Count -gt 8) { throw 'Too many identically labelled profile controls' }
+        $result.codexHistory.optionsControls=@($same | ForEach-Object { [ordered]@{
+            type=$_.Current.ControlType.ProgrammaticName
+            patterns=@($_.GetSupportedPatterns() | ForEach-Object ProgrammaticName)
+        } })
+        $action=@($same | Where-Object {
+            $pattern=$null
+            $_.Current.IsEnabled -and !$_.Current.IsOffscreen -and
+                $_.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern,[ref]$pattern)
+        })
+        if ($action.Count -gt 1) { throw 'Ambiguous actionable disclosure in Codex configuration' }
+        if ($action.Count -eq 1) { return $action[0] }
+    } 'unique actionable Codex configuration options'
     $expand=$null
     if (!$details.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern,[ref]$expand)) { throw 'Missing profile options disclosure' }
     ([System.Windows.Automation.ExpandCollapsePattern]$expand).Expand()
