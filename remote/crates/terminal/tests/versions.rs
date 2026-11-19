@@ -185,7 +185,7 @@ fn observed_profile_rejects_other_mouse_color_and_erase_extensions_atomically() 
         b"\x1b[?1002h".as_slice(),
         b"\x1b[?1003;1006;25h",
         b"\x1b[38;5;256m",
-        b"\x1b[38;2;1;2;3m",
+        b"\x1b[38;2;1;2m",
         b"\x1b[3J",
         b"\x1b[3K",
         b"\x1b[?25l\x1b]52;c;x\x07",
