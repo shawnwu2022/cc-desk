@@ -1,5 +1,5 @@
 # Ordinary installed product, disposable hosted Windows only. Never a fake IPC page.
-param([Parameter(Mandatory=$true)][string]$Exe)
+param([Parameter(Mandatory=$true)][string]$Exe, [switch]$ActivityDiagnosticsAcceptance)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $out = Join-Path (Get-Location) 'desktop-webview-smoke'
@@ -144,6 +144,50 @@ try {
     if ($disconnect.Current.IsEnabled) { throw 'Remote disconnect unexpectedly enabled' }
     if (Find-Control @('Literal UTF-8 text (maximum 8192 bytes)', '原样 UTF-8 文本（最多 8192 字节）') $null) { throw 'Remote input unexpectedly visible' }
     Capture-Evidence 'terminal'
+    if ($ActivityDiagnosticsAcceptance) {
+        $result.activityDiagnostics = [ordered]@{ defaultOff=$false; startAcknowledged=$false; stopAcknowledged=$false; emptyPreviewCopied=$false; restartWithoutAppRestart=$false }
+        Invoke-Button @('About')
+        $button = [System.Windows.Automation.ControlType]::Button
+        $start = @('Start collecting')
+        $stop = @('Stop collecting')
+        $preview = @('Preview activity report')
+        $copy = @('Copy this preview')
+        $null = Wait-Observed { Find-Control $start $button } 'diagnostics default off'
+        if (Find-Control $stop $button) { throw 'Diagnostics appears enabled by default' }
+        $result.activityDiagnostics.defaultOff = $true
+        $isOn = {
+            $ctl = Find-Control $stop $button
+            $pressed = $null
+            if ($ctl -and $ctl.TryGetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern, [ref]$pressed) -and
+                ([System.Windows.Automation.TogglePattern]$pressed).Current.ToggleState -eq [System.Windows.Automation.ToggleState]::On) { $ctl }
+        }
+        Invoke-Button $start
+        $null = Wait-Observed $isOn 'diagnostics started acknowledgement'
+        $result.activityDiagnostics.startAcknowledged = $true
+        Invoke-Button $preview
+        Invoke-Button $copy
+        $null = Wait-Observed { Find-Control @('Diagnostic summary copied') $null } 'explicit diagnostic copy'
+        $raw = Get-Clipboard -Raw
+        if (!$raw -or $raw.Length -gt 131072) { throw 'Diagnostic export exceeds expected bound or absent' }
+        $report = $raw | ConvertFrom-Json -AsHashtable
+        if ($report.schemaVersion -ne 1 -or $report.events.Count -ne 0 -or !$report.backend.available -or $report.backend.events.Count -ne 0) { throw 'Unexpected initial diagnostic report' }
+        $result.activityDiagnostics.emptyPreviewCopied = $true
+        Invoke-Button $stop
+        $null = Wait-Observed { Find-Control $start $button } 'diagnostics stop confirmed'
+        $result.activityDiagnostics.stopAcknowledged = $true
+        Invoke-Button $start
+        $null = Wait-Observed $isOn 'diagnostics second start'
+        Invoke-Button $preview
+        Invoke-Button $copy
+        $null = Wait-Observed { Find-Control @('Diagnostic summary copied') $null } 'second explicit diagnostic copy'
+        $rawAgain = Get-Clipboard -Raw
+        if (!$rawAgain -or $rawAgain.Length -gt 131072) { throw 'Second diagnostic export exceeds expected bound or absent' }
+        $again = $rawAgain | ConvertFrom-Json -AsHashtable
+        if (!$again.backend.available -or $again.events.Count -ne 0) { throw 'Fresh diagnostic capture was not observed' }
+        Invoke-Button $stop
+        $null = Wait-Observed { Find-Control $start $button } 'second diagnostics stop confirmed'
+        $result.activityDiagnostics.restartWithoutAppRestart = $true
+    }
     Observe-Children
     $result.children = @($children.Values | ForEach-Object { [ordered]@{ pid=$_.Id; name=$_.ProcessName } })
     if (@($children.Values | Where-Object ProcessName -eq 'msedgewebview2').Count -eq 0) { throw 'No actual WebView2 child observed' }
