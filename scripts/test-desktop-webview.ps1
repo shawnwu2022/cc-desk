@@ -191,12 +191,19 @@ try {
     if (!$agy.TryGetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern, [ref]$toggle) -or ([System.Windows.Automation.TogglePattern]$toggle).Current.ToggleState -ne [System.Windows.Automation.ToggleState]::Off) { throw 'BLOCKED_UI_OBSERVATION: AGY pressed state unavailable or enabled' }
     Capture-Evidence 'general'
     if ($FixtureCodex) {
-        $providerToggle=@('Codex CLI disabled — click to enable')
-        $provider=Wait-Observed { Find-Control $providerToggle ([System.Windows.Automation.ControlType]::Button) } 'synthetic Codex explicitly disabled'
-        $pattern=$null
-        if (!$provider.Current.IsEnabled -or !$provider.TryGetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern,[ref]$pattern)) { throw 'Codex enable control unavailable' }
-        ([System.Windows.Automation.TogglePattern]$pattern).Toggle()
-        $null=Wait-Observed { Find-Control @('Codex CLI enabled — click to disable') ([System.Windows.Automation.ControlType]::Button) } 'fixture Codex enabled'
+        # Fresh product defaults hide Codex. Enable it through the observed General control.
+        $codexToggle = Wait-Observed { Find-Control @('Codex CLI disabled 路 click to enable') ([System.Windows.Automation.ControlType]::Button) } 'Codex support default off'
+        $pattern = $null
+        if (!$codexToggle.TryGetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern, [ref]$pattern)) { throw 'Codex support toggle unavailable' }
+        $pattern = [System.Windows.Automation.TogglePattern]$pattern
+        if ($pattern.Current.ToggleState -ne [System.Windows.Automation.ToggleState]::Off) { throw 'Codex support was not default off' }
+        $pattern.Toggle()
+        $null = Wait-Observed {
+            $control = Find-Control @('Codex CLI enabled 路 click to disable') ([System.Windows.Automation.ControlType]::Button)
+            $state = $null
+            if ($control -and $control.TryGetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern, [ref]$state) -and ([System.Windows.Automation.TogglePattern]$state).Current.ToggleState -eq [System.Windows.Automation.ToggleState]::On) { return $control }
+            return $null
+        } 'Codex support enabled through GUI'
     }
     Invoke-Button @('Terminal', '终端')
     $null = Wait-Observed { Reveal-RemoteSection } 'remote section native scroll'
