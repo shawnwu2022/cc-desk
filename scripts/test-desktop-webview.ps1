@@ -185,6 +185,27 @@ try {
 } catch {
     if ($app) { $result.status = 'failed' }
     $result.error = $_.Exception.Message
+    if ($NativeCodex -and $window -and $result.Contains('nativeStage') -and $result.nativeStage -eq 'add-empty-project') {
+        # No CLI has been created. Desktop window metadata only; contents stay scoped to this App.
+        try {
+            Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class PackagedWindowOwners { [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr hwnd, uint command); [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid); }'
+            $roots = @([System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Children,[System.Windows.Automation.Condition]::TrueCondition))
+            if ($roots.Count -gt 128) { throw 'Desktop window metadata bound exceeded' }
+            @($roots | ForEach-Object {
+                $handle = [IntPtr]::new($_.Current.NativeWindowHandle)
+                $owner = [PackagedWindowOwners]::GetWindow($handle,4)
+                [uint32]$ownerPid = 0
+                if ($owner -ne [IntPtr]::Zero) { $null = [PackagedWindowOwners]::GetWindowThreadProcessId($owner,[ref]$ownerPid) }
+                $name = $_.Current.Name
+                if ($name.Length -gt 256) { $name = $name.Substring(0,256) }
+                [ordered]@{name=$name; class=$_.Current.ClassName; pid=$_.Current.ProcessId; handle=$_.Current.NativeWindowHandle; owner=$owner.ToInt64(); ownerPid=$ownerPid; type=$_.Current.ControlType.ProgrammaticName; offscreen=$_.Current.IsOffscreen}
+            }) | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 (Join-Path $out 'desktop-project-window-metadata.json')
+            $elements = @($window.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition))
+            if ($elements.Count -gt 10000) { throw 'Empty App UI bound exceeded' }
+            @($elements | ForEach-Object { [ordered]@{name=$_.Current.Name; id=$_.Current.AutomationId; class=$_.Current.ClassName; type=$_.Current.ControlType.ProgrammaticName; pid=$_.Current.ProcessId; handle=$_.Current.NativeWindowHandle; enabled=$_.Current.IsEnabled; offscreen=$_.Current.IsOffscreen; patterns=@($_.GetSupportedPatterns() | ForEach-Object {$_.ProgrammaticName})} }) | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 (Join-Path $out 'empty-project-failure-tree.json')
+        } catch { $result.captureError = $_.Exception.Message }
+    }
+
     if ($window -and !$NativeCodex) { try { Capture-Evidence 'failure' } catch { $result.captureError = $_.Exception.Message } }
     throw
 } finally {
