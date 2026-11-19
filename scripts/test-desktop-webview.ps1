@@ -192,14 +192,16 @@ try {
     Capture-Evidence 'general'
     if ($FixtureCodex) {
         # Fresh product defaults hide Codex. Enable it through the observed General control.
-        $codexToggle = Wait-Observed { Find-Control @('Codex CLI disabled 路 click to enable') ([System.Windows.Automation.ControlType]::Button) } 'Codex support default off'
+        $codexOffLabel = "Codex CLI disabled $([char]0x00B7) click to enable"
+        $codexOnLabel = "Codex CLI enabled $([char]0x00B7) click to disable"
+        $codexToggle = Wait-Observed { Find-Control @($codexOffLabel) ([System.Windows.Automation.ControlType]::Button) } 'Codex support default off'
         $pattern = $null
         if (!$codexToggle.TryGetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern, [ref]$pattern)) { throw 'Codex support toggle unavailable' }
         $pattern = [System.Windows.Automation.TogglePattern]$pattern
         if ($pattern.Current.ToggleState -ne [System.Windows.Automation.ToggleState]::Off) { throw 'Codex support was not default off' }
         $pattern.Toggle()
         $null = Wait-Observed {
-            $control = Find-Control @('Codex CLI enabled 路 click to disable') ([System.Windows.Automation.ControlType]::Button)
+            $control = Find-Control @($codexOnLabel) ([System.Windows.Automation.ControlType]::Button)
             $state = $null
             if ($control -and $control.TryGetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern, [ref]$state) -and ([System.Windows.Automation.TogglePattern]$state).Current.ToggleState -eq [System.Windows.Automation.ToggleState]::On) { return $control }
             return $null
