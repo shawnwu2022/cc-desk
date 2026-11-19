@@ -1,108 +1,44 @@
-name: PR 101 installed diagnostics acceptance
+name: PR 101 Stage-A standalone compile only
 on:
   push:
     branches: [verify/pr101-diagnostics-0727a08c]
 permissions:
   contents: read
-  actions: read
 jobs:
-  installed-diagnostics:
-    if: github.ref == 'refs/heads/verify/pr101-diagnostics-0727a08c'
-    timeout-minutes: 15
-    runs-on: windows-latest
+  stage-a-compile-only:
+    if: github.repository == 'shawnwu2022/cc-desk' && github.ref == 'refs/heads/verify/pr101-diagnostics-0727a08c'
+    runs-on: windows-2022
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - name: Download pinned verified candidate and smoke receipt
-        shell: pwsh
-        env:
-          ARTIFACT_READER: ${{ github.token }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $headers = @{ Authorization = "Bearer $env:ARTIFACT_READER"; Accept = 'application/vnd.github+json' }
-          $base = 'https://api.github.com/repos/shawnwu2022/cc-desk/actions/artifacts'
-          foreach ($entry in @(
-            @{ Id = 14509138179; Name = 'cc-desk-native-v3-test-971eb19a30218c7295be73d48d73fda5db9379c4'; Folder = 'pr101-package'; Sha = '0d32332221587856f7ceddab3e4018d83e5be3b078c7dd891fd42364fe6e3854' },
-            @{ Id = 14509570953; Name = 'desktop-webview-smoke-971eb19a30218c7295be73d48d73fda5db9379c4-44481773577-1'; Folder = 'pr101-smoke'; Sha = '045198275fad08a2f0c84633e25be917c8e9bfde24d0e420102db0e094774251' }
-          )) {
-            $meta = Invoke-RestMethod "$base/$($entry.Id)" -Headers $headers
-            if ($meta.expired -or $meta.workflow_run.id -ne 44481773577 -or $meta.workflow_run.head_sha -cne '0727a08c9e963b140bbd014aaf17e2275b8e3358' -or $meta.name -cne $entry.Name) { throw 'Pinned artifact identity mismatch' }
-            $file = Join-Path $env:RUNNER_TEMP ($entry.Folder + '.zip')
-            Invoke-WebRequest "$base/$($entry.Id)/zip" -Headers $headers -OutFile $file
-            if ((Get-FileHash -LiteralPath $file).Hash -ine $entry.Sha) { throw 'Pinned artifact digest mismatch' }
-            if ($entry.Id -eq 14509138179) {
-              Add-Type -AssemblyName System.IO.Compression.FileSystem
-              $zip = [IO.Compression.ZipFile]::OpenRead($file)
-              try {
-                if (@($zip.Entries | Where-Object FullName -CEQ 'test-package/test-package-manifest.json').Count -ne 1) {
-                  throw 'Pinned manifest ZIP entry mismatch'
-                }
-                Write-Host 'Pinned ZIP entry verified: test-package/test-package-manifest.json'
-              } finally { $zip.Dispose() }
-            }
-            Expand-Archive -LiteralPath $file -DestinationPath (Join-Path $env:RUNNER_TEMP $entry.Folder)
-          }
-      - name: Download pinned official Codex
+          ref: ${{ github.sha }}
+      - name: Parse pinned Stage-A script and compile literal C sharp helper only
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $dir = Join-Path $env:RUNNER_TEMP 'official-codex'
-          New-Item -ItemType Directory $dir | Out-Null
-          # A lone EXE is not the complete official runtime supply. Preserve the published vendor layout.
-          $archive = Join-Path $dir 'codex-0.169.1-win32-x64.tgz'
-          Invoke-WebRequest 'https://registry.npmjs.org/@openai/codex/-/codex-0.169.1-win32-x64.tgz' -OutFile $archive
-          $expectedIntegrity = 'fImXWqxwxqHh9+FhJWsRRFiBzgBrSeN1bYTvtGZtUKGTPzHefYAL1agmlf5XScfwY5i5pHsExfdhFekzRBbqIw=='
-          $stream = [IO.File]::OpenRead($archive)
-          $hasher = [Security.Cryptography.SHA512]::Create()
-          try { $actualIntegrity = [Convert]::ToBase64String($hasher.ComputeHash($stream)) } finally { $stream.Dispose(); $hasher.Dispose() }
-          if ($actualIntegrity -cne $expectedIntegrity) { throw 'Official platform package integrity mismatch' }
-          $names = @(& tar -tzf $archive)
-          if ($LASTEXITCODE -ne 0) { throw 'Platform archive listing failed' }
-          $details = @(& tar -tvzf $archive)
-          if ($LASTEXITCODE -ne 0 -or $names.Count -ne 47 -or $details.Count -ne 47) { throw 'Platform archive entries mismatch' }
-          foreach ($name in $names) {
-            if (!$name.StartsWith('package/') -or $name -match '(^/|\\|:|(^|/)\.\.(/|$))') { throw 'Unsafe platform archive path' }
-          }
-          foreach ($entry in $details) { if ($entry[0] -ne '-') { throw 'Platform archive contains nonregular entry' } }
-          $extract = Join-Path $dir 'extracted'
-          New-Item -ItemType Directory $extract | Out-Null
-          & tar -xzf $archive -C $extract
-          if ($LASTEXITCODE -ne 0) { throw 'Platform archive extraction failed' }
-          if (@(Get-ChildItem $extract -Recurse | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }).Count) { throw 'Platform reparse point rejected' }
-          $files = @(Get-ChildItem $extract -Recurse -File)
-          if ($files.Count -ne 47 -or ($files | Measure-Object Length -Sum).Sum -ne 515292799) { throw 'Platform file set mismatch' }
-          $inventory = @($files | ForEach-Object { [ordered]@{path=$_.FullName.Substring($extract.Length+1).Replace('\','/'); bytes=$_.Length; sha256=(Get-FileHash $_.FullName).Hash.ToLowerInvariant()} })
-          [ordered]@{package='@openai/codex'; version='0.169.1-win32-x64'; integrity="sha512-$expectedIntegrity"; archiveSha256=(Get-FileHash $archive).Hash; source='official npm platform package'; files=$inventory} | ConvertTo-Json -Depth 5 | Set-Content codex-supply.json
-          $exe = Join-Path $extract 'package/vendor/x86_64-pc-windows-msvc/bin/codex.exe'
-          if ((Get-Item $exe).Length -ne 382647088 -or (Get-FileHash $exe).Hash -ine 'f76f94d08b0793bfa129ae62c09341ee32ae96d57e69968ae6b8d7c71a20d8c4') { throw 'Official Codex asset digest mismatch' }
-      - name: Verify and launch the exact ordinary NSIS
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          if (!$IsWindows -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted') { throw 'Expected ephemeral hosted Windows' }
-          $package = Join-Path $env:RUNNER_TEMP 'pr101-package/test-package'
-          $manifest = Get-Content (Join-Path $package 'test-package-manifest.json') -Raw | ConvertFrom-Json
-          if ($manifest.sourceCommit -cne '971eb19a30218c7295be73d48d73fda5db9379c4' -or $manifest.workflowRunId -cne '44481773577' -or $manifest.workflowRunAttempt -cne '1' -or $manifest.channel -cne 'test-only' -or $manifest.publishable -ne $false -or $manifest.updaterPublication -ne $false -or $manifest.installerFile -cnotmatch '^CC-Desk-[\w.-]+-setup\.exe$') { throw 'Pinned manifest mismatch' }
-          $installer = Join-Path $package $manifest.installerFile
-          if ((Get-FileHash -LiteralPath $installer).Hash -ine $manifest.sha256) { throw 'NSIS digest mismatch' }
-          $smoke = Get-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'pr101-smoke/result.json') -Raw | ConvertFrom-Json
-          if ($smoke.status -cne 'passed' -or !$smoke.normalExit -or $smoke.sha256 -cnotmatch '^[0-9A-Fa-f]{64}$') { throw 'Missing trusted installed image identity' }
-          $target = Join-Path $env:RUNNER_TEMP 'pr101-installed'
-          $install = Start-Process -FilePath $installer -ArgumentList @('/S', "/D=$target") -WindowStyle Hidden -Wait -PassThru
-          if ($install.ExitCode -ne 0) { throw 'NSIS installation failed' }
-          $exe = Join-Path $target 'cc-desk.exe'
-          if ((Get-FileHash -LiteralPath $exe).Hash -ine $smoke.sha256) { throw 'Installed image differs from pinned smoke' }
-          [ordered]@{ packageSource=$manifest.sourceCommit; packageArtifact=14509138179; smokeArtifact=14509570953; installerSha256=$manifest.sha256; exeSha256=$smoke.sha256 } | ConvertTo-Json | Set-Content pr101-identity.json
-          Get-ChildItem Env: | Where-Object { $_.Name -cne 'GITHUB_ACTIONS' -and $_.Name -match '^(ACTIONS_|GITHUB_|GH_)|TOKEN|SECRET|API_KEY|PASSWORD|CREDENTIAL' } | ForEach-Object {
-            [Environment]::SetEnvironmentVariable($_.Name, $null, 'Process')
-          }
-          $official = Join-Path $env:RUNNER_TEMP 'official-codex/extracted/package/vendor/x86_64-pc-windows-msvc/bin/codex.exe'
-          & ./scripts/test-desktop-webview.ps1 -Exe $exe -ActivityDiagnosticsAcceptance -FixtureCodex $official -FixtureOperation rename
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: pr101-installed-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            pr101-identity.json
-            desktop-webview-smoke/result.json
+          if (!$IsWindows -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted') { throw 'STAGE_A_HOSTED_ONLY' }
+          $destination=Join-Path $env:RUNNER_TEMP ('stage-a-compile-' + [Guid]::NewGuid().ToString('N'))
+          New-Item -Path $destination -ItemType Directory | Out-Null
+          $absolute=Join-Path $destination 'pr101-codex-restore-stage-a.ps1'
+          # Hash the checkout commit's raw blob (platform CRLF conversion not accepted).
+          $git=(Get-Command git.exe -CommandType Application | Select-Object -First 1).Source
+          $blob=Start-Process -FilePath $git -ArgumentList @('cat-file','blob','HEAD:scripts/pr101-codex-restore-stage-a.ps1') -RedirectStandardOutput $absolute -WindowStyle Hidden -Wait -PassThru
+          if ($blob.ExitCode -ne 0) { throw 'STAGE_A_SOURCE_BLOB_UNAVAILABLE' }
+          if ((Get-FileHash -LiteralPath $absolute).Hash -ine '3cc37926b61246b31f92ad70555c1e7d1773e3cc21be79bdecb4de1d5974bf37') { throw 'STAGE_A_SOURCE_PIN_MISMATCH' }
+          $tokens=$null; $errors=$null
+          $ast=[System.Management.Automation.Language.Parser]::ParseFile($absolute,[ref]$tokens,[ref]$errors)
+          if ($errors.Count) { throw ('STAGE_A_AST_REJECTED: ' + (($errors | ForEach-Object { $_.ErrorId }) -join ',')) }
+          # The fixture and helper are never loaded, dot-sourced or invoked.
+          $definitions=@($ast.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.StringConstantExpressionAst] -and
+              $node.StringConstantType -eq [System.Management.Automation.Language.StringConstantType]::SingleQuotedHereString -and
+              $node.Value -match '(?m)^using System;' -and $node.Value -match 'DllImport'
+          },$true))
+          if ($definitions.Count -ne 1 -or $definitions[0].Value.Length -gt 32768) { throw 'STAGE_A_LITERAL_HELPER_NOT_UNIQUE' }
+          $dll=Join-Path $destination 'StageA.CompileOnly.dll'
+          Add-Type -Language CSharp -TypeDefinition $definitions[0].Value -OutputAssembly $dll -OutputType Library
+          if (!(Test-Path -LiteralPath $dll -PathType Leaf) -or (Get-Item -LiteralPath $dll).Length -lt 1024) { throw 'STAGE_A_HELPER_OUTPUT_MISSING' }
+          Write-Host 'STAGE_A_COMPILE_ONLY sourcePin=true powershellAst=true csharpDll=true fixtureExecuted=false cliInvoked=false goExecuted=false'
