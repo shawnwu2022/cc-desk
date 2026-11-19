@@ -1,4 +1,6 @@
 //! Actual Wry/WebView2 -> formal D12 commands, with disposable roots and no model/CLI accounts.
+#[path = "native_cli_delete_preview_only.rs"]
+mod delete_preview_only;
 use crate::cli::document::DOCUMENT_HEADER;
 use crate::cli::launch_service::LaunchService;
 use crate::cli::native_runtime::{take_main_config, NativeRuntime};

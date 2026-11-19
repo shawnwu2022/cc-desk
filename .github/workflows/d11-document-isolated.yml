@@ -1,14 +1,14 @@
-name: PR 101 same-dataset reader readiness
+name: PR 101 Stage-B real product preview only
 on:
   push:
     branches: [verify/pr101-diagnostics-0727a08c]
 permissions:
   contents: read
 jobs:
-  same-dataset-reader-only:
+  product-preview-only:
     if: github.repository == 'shawnwu2022/cc-desk' && github.ref == 'refs/heads/verify/pr101-diagnostics-0727a08c'
     runs-on: windows-2022
-    timeout-minutes: 12
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
         with:
@@ -26,7 +26,7 @@ jobs:
           $git=(Get-Command git.exe -CommandType Application | Select-Object -First 1).Source
           $blob=Start-Process -FilePath $git -ArgumentList @('cat-file','blob','HEAD:scripts/pr101-codex-restore-stage-a.ps1') -RedirectStandardOutput $absolute -WindowStyle Hidden -Wait -PassThru
           if ($blob.ExitCode -ne 0) { throw 'STAGE_A_SOURCE_BLOB_UNAVAILABLE' }
-          if ((Get-FileHash -LiteralPath $absolute).Hash -ine '3915df481343f1dd9be74b91c1748af57aa8376df7d850f05c7beaa1c76df419') { throw 'STAGE_A_SOURCE_PIN_MISMATCH' }
+          if ((Get-FileHash -LiteralPath $absolute).Hash -ine '74cfc98830e5d09e48ed28b7ecccf2c93ff00f300d0e0ccf468eaf8030020a51') { throw 'STAGE_A_SOURCE_PIN_MISMATCH' }
           $tokens=$null; $errors=$null
           $ast=[System.Management.Automation.Language.Parser]::ParseFile($absolute,[ref]$tokens,[ref]$errors)
           if ($errors.Count) { throw ('STAGE_A_AST_REJECTED: ' + (($errors | ForEach-Object { $_.ErrorId }) -join ',')) }
@@ -37,16 +37,24 @@ jobs:
           }
           $calls=@($ast.FindAll({param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -ceq 'Observe-RestoredFixtureFileIds'},$true))
           $outputs=@($ast.FindAll({param($n) $n -is [System.Management.Automation.Language.StringConstantExpressionAst] -and $n.Value -ceq 'synthetic-dataset-readiness-dry-run'},$true))
-          if ($calls.Count -ne 2 -or $outputs.Count -ne 1) { throw 'READINESS_OPT_IN_ANCHORS' }
+          if ($calls.Count -ne 4 -or $outputs.Count -ne 1) { throw 'READINESS_OPT_IN_ANCHORS' }
           foreach ($node in @($calls)+@($outputs)) {
             $guarded=$false
             for ($parent=$node.Parent; $parent; $parent=$parent.Parent) {
               if ($parent -is [System.Management.Automation.Language.IfStatementAst] -and $parent.Clauses.Count -eq 1 -and
-                  $parent.Clauses[0].Item1.Extent.Text -ceq '$SameDatasetReadiness' -and
+                  $parent.Clauses[0].Item1.Extent.Text -cin @('$SameDatasetReadiness','$previewLease') -and
                   $node.Extent.StartOffset -ge $parent.Clauses[0].Item2.Extent.StartOffset -and
                   $node.Extent.EndOffset -le $parent.Clauses[0].Item2.Extent.EndOffset) { $guarded=$true; break }
             }
             if (!$guarded) { throw 'READINESS_UNGUARDED_AST' }
+          }
+          $rust=Get-Content -LiteralPath 'src-tauri/src/tests/native_cli_delete_preview_only.rs' -Raw
+          $js=Get-Content -LiteralPath 'src-tauri/src/tests/fixtures/document/codex-delete-preview-only.js' -Raw
+          $handlers=[regex]::Match($rust,'(?ms)generate_handler!\[([^\]]+)\]').Groups[1].Value
+          $registered=@($handlers.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+          $expected=@('crate::commands::native_get_scope','crate::commands::native_list_resources','crate::cli::commands::cli_preview_session_delete','preview_fixture_finish')
+          if (($registered -join ',') -cne ($expected -join ',') -or ($rust+$js) -match 'cli_confirm_session_delete|thread/delete|STAGE_B_GO') {
+            throw 'PREVIEW_NON_MUTATION_GUARD'
           }
           # The fixture and helper are never loaded, dot-sourced or invoked.
           $definitions=@($ast.FindAll({
@@ -60,6 +68,54 @@ jobs:
           Add-Type -Language CSharp -TypeDefinition $definitions[0].Value -OutputAssembly $dll -OutputType Library
           if (!(Test-Path -LiteralPath $dll -PathType Leaf) -or (Get-Item -LiteralPath $dll).Length -lt 1024) { throw 'STAGE_A_HELPER_OUTPUT_MISSING' }
           Write-Host 'STAGE_A_COMPILE_ONLY sourcePin=true powershellAst=true csharpDll=true defaultOptInStaticGuard=true fixtureExecuted=false cliInvoked=false goExecuted=false'
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24.18.0'
+      - uses: dtolnay/rust-toolchain@1.98.1
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: windows-debug-runtime
+          cache-workspace-crates: false
+          cache-on-failure: true
+      - name: Prepare pinned session metadata helper
+        working-directory: .
+        run: |
+          npm ci --ignore-scripts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run prepare:session-sdk
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run prepare:opencode-archive
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Prepare verified Windows runtime
+        run: node scripts/prepare-conpty.mjs
+      - name: Compile exact preview-only Rust worker without starting it
+        shell: pwsh
+        working-directory: src-tauri
+        run: |
+          $ErrorActionPreference='Stop'
+          $selected=@(& cargo test --locked --lib --no-run --message-format=json |
+            ForEach-Object {
+              if ($_ -clike '{*') {
+                $record=$_ | ConvertFrom-Json -AsHashtable
+                if ($record.reason -ceq 'compiler-artifact' -and $record.executable -and $record.profile.test -eq $true -and 'lib' -cin $record.target.kind) {
+                  $record.executable
+                }
+                if ($record.reason -ceq 'compiler-message' -and $record.message.level -ceq 'error') { Write-Host ('PREVIEW_COMPILE_CODE ' + $record.message.code.code) }
+              }
+            })
+          if ($LASTEXITCODE -ne 0 -or $selected.Count -ne 1) { throw 'PREVIEW_COMPILE_SELECTION' }
+          $destination=Join-Path $env:RUNNER_TEMP 'pr101-preview-worker'
+          New-Item -Path $destination -ItemType Directory | Out-Null
+          $worker=Join-Path $destination 'cc-desk-preview-test.exe'
+          Copy-Item -LiteralPath $selected[0] -Destination $worker
+          $digest=(Get-FileHash -LiteralPath $worker).Hash.ToLowerInvariant()
+          if ($digest -cnotmatch '^[a-f0-9]{64}$') { throw 'PREVIEW_WORKER_DIGEST' }
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "CC_DESK_PREVIEW_WORKER_SHA256=$digest"
+          Write-Host 'PREVIEW_WORKER_COMPILE_ONLY rust=true executed=false'
       - name: Download pinned official Codex
         shell: pwsh
         run: |
@@ -93,7 +149,7 @@ jobs:
           [ordered]@{package='@openai/codex'; version='0.169.1-win32-x64'; integrity="sha512-$expectedIntegrity"; archiveSha256=(Get-FileHash $archive).Hash; source='official npm platform package'; files=$inventory} | ConvertTo-Json -Depth 5 | Set-Content codex-supply.json
           $exe = Join-Path $extract 'package/vendor/x86_64-pc-windows-msvc/bin/codex.exe'
           if ((Get-Item $exe).Length -ne 382647088 -or (Get-FileHash $exe).Hash -ine 'f76f94d08b0793bfa129ae62c09341ee32ae96d57e69968ae6b8d7c71a20d8c4') { throw 'Official Codex asset digest mismatch' }
-      - name: Run same-dataset read-only readiness once against fresh synthetic data
+      - name: Run the real preview-only worker once in the same restored fixture
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -105,15 +161,18 @@ jobs:
           $git=(Get-Command git.exe -CommandType Application | Select-Object -First 1).Source
           $blob=Start-Process -FilePath $git -ArgumentList @('cat-file','blob','HEAD:scripts/pr101-codex-restore-stage-a.ps1') -RedirectStandardOutput $absolute -WindowStyle Hidden -Wait -PassThru
           if ($blob.ExitCode -ne 0) { throw 'STAGE_A_SOURCE_BLOB_UNAVAILABLE' }
-          if ((Get-FileHash -LiteralPath $absolute).Hash -ine '3915df481343f1dd9be74b91c1748af57aa8376df7d850f05c7beaa1c76df419') { throw 'STAGE_A_SOURCE_PIN_MISMATCH' }
+          if ((Get-FileHash -LiteralPath $absolute).Hash -ine '74cfc98830e5d09e48ed28b7ecccf2c93ff00f300d0e0ccf468eaf8030020a51') { throw 'STAGE_A_SOURCE_PIN_MISMATCH' }
           $image=Join-Path $env:RUNNER_TEMP 'official-codex/extracted/package/vendor/x86_64-pc-windows-msvc/bin/codex.exe'
           if ((Get-FileHash -LiteralPath $image).Hash -ine 'f76f94d08b0793bfa129ae62c09341ee32ae96d57e69968ae6b8d7c71a20d8c4') { throw 'STAGE_A_OFFICIAL_IMG_MISMATCH' }
           Get-ChildItem Env: | Where-Object { $_.Name -cne 'GITHUB_ACTIONS' -and $_.Name -match '^(ACTIONS_|GITHUB_|GH_)|TOKEN|SECRET|API_KEY|PASSWORD|CREDENTIAL' } | ForEach-Object {
             [Environment]::SetEnvironmentVariable($_.Name, $null, 'Process')
           }
+          $worker=Join-Path $env:RUNNER_TEMP 'pr101-preview-worker/cc-desk-preview-test.exe'
+          $workerDigest=$env:CC_DESK_PREVIEW_WORKER_SHA256
+          if ($workerDigest -cnotmatch '^[a-f0-9]{64}$' -or (Get-FileHash -LiteralPath $worker).Hash -ine $workerDigest) { throw 'PREVIEW_WORKER_PIN_MISMATCH' }
           $marker=@{ complete=$false; count=0 }
           try {
-            & $absolute -Codex $image -SameDatasetReadiness | ForEach-Object {
+            & $absolute -Codex $image -SameDatasetReadiness -PreviewWorker $worker -PreviewWorkerSha256 $workerDigest | ForEach-Object {
               $marker.count++
               if ($marker.count -ne 1 -or $_ -isnot [string] -or $_.Length -gt 4096) { throw 'STAGE_A_RECEIPT_BOUND' }
               $receipt=$_ | ConvertFrom-Json -AsHashtable
@@ -122,13 +181,13 @@ jobs:
               if ($receipt.state -ceq 'blocked') {
                 if ($receipt.stage -cne 'synthetic-restore-readonly') { throw 'STAGE_A_BLOCKED_RECEIPT_STAGE' }
                 $phase=$receipt.phase
-                if ($phase -cnotin @('preflight-temp-boundary','preflight-image-path','preflight-image-sha','preflight-type-compile','preflight-machine-programdata','preflight-machine-registry','preflight-fresh-temp','baseline-read','snapshot','restore','restored-read','readiness-before-restored-read','readiness-after-restored-read')) { $phase='other' }
+                if ($phase -cnotin @('preflight-temp-boundary','preflight-image-path','preflight-image-sha','preflight-type-compile','preflight-machine-programdata','preflight-machine-registry','preflight-fresh-temp','baseline-read','snapshot','restore','restored-read','readiness-before-restored-read','readiness-after-restored-read','preview-worker-pin','product-preview-only','product-preview-integrity','product-scope','product-before-list','product-active-preview','product-archived-preview','product-after-list','product-unexpected')) { $phase='other' }
                 [ordered]@{schema=1;stage='synthetic-restore-readonly';state='blocked';phase=$phase;deletionExecuted=$false;stageBGoGranted=$false} |
                   ConvertTo-Json -Compress | ForEach-Object { Write-Host ('STAGE_A_RECEIPT '+$_) }
               } else {
-                $passing=@('sameProcessCustody','sameDatasetActiveArchivedRead','recoveryManifestEquivalentBeforeRead','restoredRootAndRolloutFileIdsStable','preservedCopiesMatch','ownerSettled','readOnlyMayReindex')
-                $limited=@('continuousFileLeaseVerified','sqliteSemanticRowsVerified','deletionExecuted','stageBGoGranted','productDeletePreflightVerified','standardPackageUiVerified')
-                $fixed=[ordered]@{schema=1;stage='synthetic-dataset-readiness-dry-run';providerVersion='0.169.1'}
+                $passing=@('sameJobRestoredFixture','activeControlBlockedWithoutTicket','archivedTargetPreviewReady','bothRowsUnchanged','restoredBytesAndCheckpointIdsUnchanged','ownerSettled')
+                $limited=@('continuousFileLeaseVerified','confirmHandlerRegistered','confirmInvoked','deletionExecuted','stageBGoGranted','standardPackageUiVerified')
+                $fixed=[ordered]@{schema=1;stage='synthetic-product-preview-only';providerVersion='0.169.1'}
                 if ($receipt.providerVersion -cne '0.169.1' -or $receipt.stage -cne $fixed.stage -or $receipt.Count -ne (3+$passing.Count+$limited.Count)) { throw 'READINESS_RECEIPT_SCHEMA' }
                 foreach($key in $passing){if ($receipt[$key] -isnot [bool] -or $receipt[$key] -ne $true) { throw 'READINESS_REQUIRED_PROOF' }; $fixed[$key]=$true}
                 foreach($key in $limited){if ($receipt[$key] -isnot [bool] -or $receipt[$key] -ne $false) { throw 'READINESS_SCOPE_RECEIPT' }; $fixed[$key]=$false}

@@ -1,6 +1,6 @@
 # Stage A ONLY. Fresh synthetic data; never accepts an existing HOME/session.
 # Draft for review. Does not invoke/change any historical Stage-B Go gate.
-param([Parameter(Mandatory=$true)][string]$Codex, [switch]$SameDatasetReadiness)
+param([Parameter(Mandatory=$true)][string]$Codex, [switch]$SameDatasetReadiness, [string]$PreviewWorker, [string]$PreviewWorkerSha256)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 if (!$IsWindows -or $env:GITHUB_ACTIONS -cne 'true' -or
@@ -8,6 +8,7 @@ if (!$IsWindows -or $env:GITHUB_ACTIONS -cne 'true' -or
     $env:COMPUTERNAME -in @('WSK-MSI','SXY')) { throw 'STAGE_A_HOST_REJECTED' }
 $phase='preflight-temp-boundary'
 $imageLease=$null
+$previewLease=$null
 try {
     function Assert-Ordinary([string]$Path) {
         $item=Get-Item -LiteralPath $Path -Force
@@ -118,7 +119,8 @@ public sealed class StageAOwned : IDisposable {
   } finally { Marshal.FreeHGlobal(p); }
  }
  static FileStream Stream(IntPtr h,FileAccess a) { return new FileStream(new SafeFileHandle(h,true),a,4096,false); }
- public StageAOwned(string image,string cwd,string environment) {
+ public StageAOwned(string image,string cwd,string environment) : this(image,cwd,environment,false) {}
+ public StageAOwned(string image,string cwd,string environment,bool previewOnly) {
   IntPtr ir=IntPtr.Zero,iw=IntPtr.Zero,orr=IntPtr.Zero,ow=IntPtr.Zero,er=IntPtr.Zero,ew=IntPtr.Zero,env=IntPtr.Zero;
   PI pi=new PI(); bool assigned=false; IntPtr attributes=IntPtr.Zero,handles=IntPtr.Zero; bool attributesReady=false;
   try {
@@ -139,7 +141,8 @@ public sealed class StageAOwned : IDisposable {
    handles=Marshal.AllocHGlobal(3*IntPtr.Size); Marshal.WriteIntPtr(handles,0,ir); Marshal.WriteIntPtr(handles,IntPtr.Size,ow); Marshal.WriteIntPtr(handles,2*IntPtr.Size,ew);
    if(!UpdateProcThreadAttribute(attributes,0,new IntPtr(0x20002),handles,new IntPtr(3*IntPtr.Size),IntPtr.Zero,IntPtr.Zero)) throw new Exception("STAGE_A_HANDLE_WHITELIST");
    SIEX si=new SIEX{start=new SI{cb=Marshal.SizeOf<SIEX>(),flags=0x100,input=ir,output=ow,error=ew},attributes=attributes};
-   if(!CreateProcessW(image,new StringBuilder("\""+image+"\" app-server --strict-config"),IntPtr.Zero,IntPtr.Zero,true,0x08080404,env,cwd,ref si,out pi)) throw new Exception("STAGE_A_SPAWN");
+   var args=previewOnly?" --exact tests::native_cli_projection_live::delete_preview_only::PreviewOnlyOwned_098 --ignored --nocapture --test-threads=1":" app-server --strict-config";
+   if(!CreateProcessW(image,new StringBuilder("\""+image+"\""+args),IntPtr.Zero,IntPtr.Zero,true,0x08080404,env,cwd,ref si,out pi)) throw new Exception("STAGE_A_SPAWN");
    process=pi.process;
    if(!AssignProcessToJobObject(job,process)) throw new Exception("STAGE_A_JOB_ASSIGN"); assigned=true;
    CloseHandle(ir); ir=IntPtr.Zero; CloseHandle(ow); ow=IntPtr.Zero; CloseHandle(ew); ew=IntPtr.Zero;
@@ -158,9 +161,10 @@ public sealed class StageAOwned : IDisposable {
   }
  }
  public void Send(string text) { if(text.Length>65536) throw new Exception("STAGE_A_INPUT_BOUND"); input.WriteLine(text); }
- public string ReadLine(DateTime deadline) {
+ public string ReadLine(DateTime deadline) { return ReadLine(deadline,5000); }
+ public string ReadLine(DateTime deadline,int stepBudget) {
   var b=new StringBuilder(); var c=new char[1];
-  while(b.Length<=65536) { int ms=(int)Math.Min(5000,(deadline-DateTime.UtcNow).TotalMilliseconds); if(ms<=0) throw new Exception("STAGE_A_DEADLINE");
+  while(b.Length<=65536) { int ms=(int)Math.Min(stepBudget,(deadline-DateTime.UtcNow).TotalMilliseconds); if(ms<=0) throw new Exception("STAGE_A_DEADLINE");
    var pending=output.ReadAsync(c,0,1); if(!pending.Wait(ms)) throw new Exception("STAGE_A_READ_TIMEOUT"); if(pending.Result==0) throw new Exception("STAGE_A_EOF");
    if(c[0]=='\n') return b.ToString(); b.Append(c[0]);
   } throw new Exception("STAGE_A_OUTPUT_BOUND");
@@ -323,6 +327,18 @@ requires_openai_auth = false
         }
         Assert-Same $Manifest (Inventory $Source);Assert-Same $Manifest (Inventory $Destination)
     }
+    if ($PreviewWorker -or $PreviewWorkerSha256) {
+        $phase='preview-worker-pin'
+        if (!$SameDatasetReadiness -or !$PreviewWorker -or $PreviewWorkerSha256 -cnotmatch '^[a-f0-9]{64}$') { throw 'PREVIEW_WORKER_BINDING' }
+        $previewExe=[IO.Path]::GetFullPath($PreviewWorker)
+        if ($previewExe -cne (Join-Path $temp 'pr101-preview-worker/cc-desk-preview-test.exe')) {throw 'PREVIEW_WORKER_LOCATION'}
+        Assert-Ordinary $previewExe
+        $previewLease=[IO.File]::Open($previewExe,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+        [StageAOwned]::RequireSingleLink($previewLease)
+        $hasher=[Security.Cryptography.SHA256]::Create()
+        try { $actualWorkerHash=[Convert]::ToHexString($hasher.ComputeHash($previewLease)).ToLowerInvariant() } finally { $hasher.Dispose() }
+        if ($actualWorkerHash -cne $PreviewWorkerSha256) {throw 'PREVIEW_WORKER_HASH'}
+    }
     $phase='baseline-read';Read-Official
     $phase='snapshot';[StageAOwned]::RequireNoMachineConfig();$baseline=@(Inventory $live)
     foreach($rollout in $rollouts){
@@ -382,6 +398,53 @@ requires_openai_auth = false
         $same=@($after|Where-Object{$_.Path -ceq $entry.Path})
         if($same.Count -ne 1 -or $same[0].Hash -cne $entry.Hash -or $same[0].Length -ne $entry.Length){throw 'STAGE_A_ROLLOUT_CHANGED'}
     }
+    if ($previewLease) {
+        $phase='product-preview-only'
+        [StageAOwned]::RequireNoMachineConfig()
+        $beforePreview=@(Inventory $live)
+        $beforePreviewIds=@(Observe-RestoredFixtureFileIds)
+        $childEnvironment=@{}+$environment
+        # Wry/OS support state is outside the restored dataset. Provider projections
+        # still bind the exact Stage-A CODEX_HOME and CODEX_SQLITE_HOME.
+        $processState=Join-Path $root 'preview-os'
+        foreach($pair in @(@('HOME','home'),@('USERPROFILE','home'),@('APPDATA','roaming'),@('LOCALAPPDATA','local'),@('TEMP','temp'),@('TMP','temp'))){
+            $childEnvironment[$pair[0]]=Join-Path $processState $pair[1]
+            $null=[IO.Directory]::CreateDirectory($childEnvironment[$pair[0]])
+        }
+        $childEnvironment['HOMEDRIVE']=$childEnvironment['HOME'].Substring(0,2)
+        $childEnvironment['HOMEPATH']=$childEnvironment['HOME'].Substring(2)
+        $childEnvironment['GITHUB_ACTIONS']='true';$childEnvironment['RUNNER_ENVIRONMENT']='github-hosted'
+        $childEnvironment['RUNNER_TEMP']=$temp;$childEnvironment['CC_DESK_PREVIEW_STAGE']='codex-preview-only'
+        $childBlock=(($childEnvironment.Keys|Sort-Object|ForEach-Object{$_+'='+$childEnvironment[$_]}) -join "`0")+"`0`0"
+        $probe=[StageAOwned]::new($previewExe,$project,$childBlock,$true)
+        try {
+            $probe.Send(([ordered]@{live=$live;codex=$image;active=$id;archived=$archivedId}|ConvertTo-Json -Compress))
+            $deadline=[DateTime]::UtcNow.AddSeconds(45)
+            $seen=$false
+            for($i=0;$i -lt 48;$i++){
+                $row=$probe.ReadLine($deadline,20000)
+                if ($row -cmatch 'STAGE_B_WRY_PREVIEW_ONLY_PASS$') { $seen=$true; break }
+                if ($row -cmatch 'STAGE_B_WRY_PREVIEW_BLOCKED (scope|before-list|active-preview|archived-preview|after-list|unexpected)$') {
+                    $phase='product-'+$Matches[1]
+                    throw 'PREVIEW_WORKER_REJECTED'
+                }
+            }
+            if (!$seen) {throw 'PREVIEW_MARKER_MISSING'}
+            $probe.Finish()
+        } finally { $probe.Dispose() }
+        $phase='product-preview-integrity'
+        Assert-Same $beforePreview (Inventory $live)
+        Assert-Same $baseline (Inventory $snapshot);Assert-Same $baseline (Inventory $retained)
+        $afterPreviewIds=@(Observe-RestoredFixtureFileIds)
+        for($i=0;$i -lt 3;$i++){if($beforePreviewIds[$i] -cne $afterPreviewIds[$i]){throw 'PREVIEW_FILE_ID_CHANGED'}}
+        [ordered]@{schema=1;stage='synthetic-product-preview-only';providerVersion='0.169.1';sameJobRestoredFixture=$true;
+            activeControlBlockedWithoutTicket=$true;archivedTargetPreviewReady=$true;bothRowsUnchanged=$true;
+            restoredBytesAndCheckpointIdsUnchanged=$true;ownerSettled=$true;continuousFileLeaseVerified=$false;
+            confirmHandlerRegistered=$false;confirmInvoked=$false;deletionExecuted=$false;stageBGoGranted=$false;
+            standardPackageUiVerified=$false}|ConvertTo-Json -Compress
+        return
+    }
+
     # Extra evidence is available only if the caller explicitly selects this verifier mode.
     # The original Stage-A default success schema is unchanged.
     if ($SameDatasetReadiness) {
@@ -402,4 +465,4 @@ requires_openai_auth = false
     # Do not echo exception text: filesystem/process errors can contain raw paths/data.
     [ordered]@{schema=1;stage='synthetic-restore-readonly';state='blocked';phase=$phase;deletionExecuted=$false;stageBGoGranted=$false}|ConvertTo-Json -Compress
     throw 'STAGE_A_FAILED_CLOSED'
-} finally {if($imageLease){$imageLease.Dispose()}}
+} finally {if($previewLease){$previewLease.Dispose()};if($imageLease){$imageLease.Dispose()}}
