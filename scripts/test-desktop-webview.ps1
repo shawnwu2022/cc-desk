@@ -184,7 +184,34 @@ try {
         if ($visible.Count -gt 1) { throw 'Ambiguous original top-level window' }
         if ($visible.Count -eq 1) { return $visible[0] }
     } 'ordinary main window'
-    Invoke-Button @('Settings', '设置')
+    if ($FixtureCodex) {
+        $result.codexHistory.stage='initial-settings-observation'
+        $settingsControl=Wait-Observed {
+            $same=@($window.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition) | Where-Object {
+                $_.Current.Name -ceq 'Settings' -and $_.Current.ControlType -eq [System.Windows.Automation.ControlType]::Button
+            })
+            if ($same.Count -gt 1) { throw 'Ambiguous initial Settings controls' }
+            if (!$same.Count) { return $null }
+            $observed=$same[0]
+            $result.initialSettings=[ordered]@{
+                enabled=$observed.Current.IsEnabled
+                offscreen=$observed.Current.IsOffscreen
+                patterns=@($observed.GetSupportedPatterns() | ForEach-Object ProgrammaticName)
+            }
+            if ($observed.Current.IsOffscreen) {
+                $scroll=$null
+                if (!$observed.TryGetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern,[ref]$scroll)) { throw 'Initial Settings is offscreen without an observed scroll pattern' }
+                ([System.Windows.Automation.ScrollItemPattern]$scroll).ScrollIntoView()
+                return $null
+            }
+            if ($observed.Current.IsEnabled) { return $observed }
+        } 'initial fixed Settings control'
+        $click=$null
+        if (!$settingsControl.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern,[ref]$click)) { throw 'Initial Settings lacks an observed InvokePattern' }
+        ([System.Windows.Automation.InvokePattern]$click).Invoke()
+    } else {
+        Invoke-Button @('Settings', '设置')
+    }
     Invoke-Button @('General', '通用')
     $agy = Wait-Observed { Find-Control @('Antigravity CLI disabled · click to enable', 'Antigravity CLI 已停用 · 点击启用') ([System.Windows.Automation.ControlType]::Button) } 'AGY disabled'
     $toggle = $null
@@ -335,6 +362,15 @@ try {
         $result.status = 'failed'
         throw
     } finally {
+        if ($FixtureCodex -and $result.Contains('codexHistory')) {
+            $checks=$result.codexHistory
+            $facts=[ordered]@{ stage=$checks.stage; result=$result.status; ordinaryExit=$result.normalExit }
+            foreach ($field in @('preflight','profileSaved','profilePinMatches','selectedProjectExact','recordedCanonicalExact','metaCwdExact','activeRowObserved','archive','restore','rename','delete','backendTraceCorrelated','privacyCanariesAbsent','activeSearch')) {
+                if ($checks.Contains($field)) { $facts[$field]=$checks[$field] }
+            }
+            if ($result.Contains('initialSettings')) { $facts.initialSettings=$result.initialSettings }
+            Write-Host ('PR101_FIXTURE_FACTS ' + ($facts | ConvertTo-Json -Depth 5 -Compress))
+        }
         $result | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 (Join-Path $out 'result.json')
         if ($app) { $app.Dispose() }
     }
