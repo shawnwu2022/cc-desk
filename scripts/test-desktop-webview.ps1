@@ -75,14 +75,30 @@ function Capture-Evidence([string]$Name) {
 function Observe-Children {
     $rows = @(Get-CimInstance Win32_Process)
     $owned = @{ ([int]$app.Id) = $app }
+    $unobserved = @{}
     do {
-        $next = @($rows | Where-Object { $owned.ContainsKey([int]$_.ParentProcessId) -and !$owned.ContainsKey([int]$_.ProcessId) })
+        $next = @($rows | Where-Object { $owned.ContainsKey([int]$_.ParentProcessId) -and !$owned.ContainsKey([int]$_.ProcessId) -and !$unobserved.ContainsKey([int]$_.ProcessId) })
         foreach ($row in $next) {
             $id = [int]$row.ProcessId
             $process = $null
             try {
                 $parent = $owned[[int]$row.ParentProcessId]
-                $process = [Diagnostics.Process]::GetProcessById($id)
+                try { $process = [Diagnostics.Process]::GetProcessById($id) }
+                catch {
+                    if (!$CanonicalDiagnostic -or $_.Exception.InnerException -isnot [ArgumentException]) { throw }
+                    # A vanished enumerated PID has no held identity. Never register/kill it,
+                    # or use it as a trusted parent. Diagnostic scope may still be observed,
+                    # but this gap permanently prevents whole-run acceptance.
+                    $unobserved[$id] = $true
+                    $result.childObservationUnknown = 'enumerated-child-exited-before-handle'
+                    $result.lastUnheldChildKind = switch ($row.Name) {
+                        'codex.exe' { 'codex'; break }
+                        'node.exe' { 'node-wrapper'; break }
+                        'msedgewebview2.exe' { 'webview'; break }
+                        default { 'other-or-unknown' }
+                    }
+                    continue
+                }
                 $null = $process.Handle
                 # CIM timestamps have microsecond precision; compare the captured handle,
                 # not a second PID lookup. Any exit/reuse ambiguity blocks acceptance.
@@ -193,14 +209,23 @@ try {
     if (Find-Control @('Literal UTF-8 text (maximum 8192 bytes)', '原样 UTF-8 文本（最多 8192 字节）') $null) { throw 'Remote input unexpectedly visible' }
     Capture-Evidence 'terminal'
     if ($NativeCodex) { Test-PackagedNativeScope }
-    Observe-Children
+    try { Observe-Children } catch {
+        if (!$CanonicalDiagnostic) { throw }
+        $result.childObservationUnknown = 'child-inventory-not-proven'
+    }
     $result.children = @($children.Values | ForEach-Object { [ordered]@{ pid=$_.Id; name=$_.ProcessName } })
-    if (@($children.Values | Where-Object ProcessName -eq 'msedgewebview2').Count -eq 0) { throw 'No actual WebView2 child observed' }
+    if (@($children.Values | Where-Object ProcessName -eq 'msedgewebview2').Count -eq 0) {
+        if (!$CanonicalDiagnostic) { throw 'No actual WebView2 child observed' }
+        $result.childObservationUnknown = 'webview-child-not-proven'
+    }
     $close = $null
     if (!$window.TryGetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern, [ref]$close)) { throw 'BLOCKED_UI_CLOSE' }
     ([System.Windows.Automation.WindowPattern]$close).Close()
     if (!$app.WaitForExit(30000) -or $app.ExitCode -ne 0) { throw 'Ordinary App did not close normally' }
+    $result.normalAppExit = $true
     foreach ($child in $children.Values) { if (!$child.WaitForExit(10000)) { throw 'Observed WebView child did not exit' } }
+    if ($result.Contains('childObservationUnknown')) { throw 'CHILD_OBSERVATION_UNKNOWN' }
+    if ($result.Contains('runningCodexUnknown')) { throw 'RUNNING_CODEX_IDENTITY_UNKNOWN' }
     $result.normalExit = $true
     $result.status = 'passed'
 } catch {
@@ -250,14 +275,16 @@ try {
     if ($CanonicalDiagnostic -and $result.Contains('nativeScopeError') -and $app -and !$app.HasExited) {
         # A failed scope does not skip the independent normal desktop exit observation.
         try {
-            Observe-Children
+            try { Observe-Children } catch {
+                $result.childObservationUnknown = 'child-inventory-not-proven'
+            }
             $close = $null
             if (!$window.TryGetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern, [ref]$close)) { throw 'BLOCKED_UI_CLOSE' }
             ([System.Windows.Automation.WindowPattern]$close).Close()
             if (!$app.WaitForExit(30000) -or $app.ExitCode -ne 0) { throw 'Diagnostic normal exit failed' }
             $result.normalAppExit = $true
             foreach ($child in $children.Values) { if (!$child.WaitForExit(10000)) { throw 'Observed diagnostic child did not exit' } }
-            $result.normalExit = $true
+            $result.normalExit = !$result.Contains('childObservationUnknown') -and !$result.Contains('runningCodexUnknown')
         } catch { $result.normalExitError = $_.Exception.Message }
     }
     if ($window -and !$NativeCodex) { try { Capture-Evidence 'failure' } catch { $result.captureError = $_.Exception.Message } }

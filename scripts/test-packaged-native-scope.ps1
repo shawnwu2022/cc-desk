@@ -130,12 +130,17 @@ function Test-PackagedNativeScope {
         Invoke-Button @('Use and start session', '使用并启动会话')
     }
 
-    Observe-Children
-    $codexChildren = @($children.Values | Where-Object { $_.ProcessName -eq 'codex' })
-    if ($codexChildren.Count -ne 1 -or $codexChildren[0].MainModule.FileName -ine $NativeCodex) { throw 'Exact real Codex child not observed' }
-    if ((Get-FileHash -LiteralPath $codexChildren[0].MainModule.FileName -Algorithm SHA256).Hash -ine $codexSha) { throw 'Running Codex digest differs' }
-
-    $result.runningCodex = [ordered]@{pid=$codexChildren[0].Id; sha256=$codexSha; exactProgramPath=$true}
+    try {
+        Observe-Children
+        $codexChildren = @($children.Values | Where-Object { $_.ProcessName -eq 'codex' })
+        if ($codexChildren.Count -ne 1 -or $codexChildren[0].MainModule.FileName -ine $NativeCodex) { throw 'Exact real Codex child not observed' }
+        if ((Get-FileHash -LiteralPath $codexChildren[0].MainModule.FileName -Algorithm SHA256).Hash -ine $codexSha) { throw 'Running Codex digest differs' }
+        $result.runningCodex = [ordered]@{pid=$codexChildren[0].Id; sha256=$codexSha; exactProgramPath=$true}
+    } catch {
+        if (!$CanonicalDiagnostic) { throw }
+        # Diagnostic observations remain independent, but cannot certify this CLI identity.
+        $result.runningCodexUnknown = $true
+    }
     # Wait for the ordinary Native run; never type a prompt/status/login into its terminal.
     Invoke-Button @('单次远程连接')
     # Read only the Host's fixed public state, even when its status lies below the scroll viewport.
@@ -187,7 +192,7 @@ function Test-PackagedNativeScope {
     $result.nativeStage = 'scope-and-locked-observed'
     $result.native = [ordered]@{
         scope = $scope; hostNoApproval = $true; requestDisabled = $true; startDisabled = $true
-        codexPid = $codexChildren[0].Id; codexSha256 = $codexSha; account = 'fresh empty CODEX_HOME'
+        runningCodex = $(if ($result.Contains('runningCodex')) { $result.runningCodex } else { $null }); account = 'fresh empty CODEX_HOME'
         taskSent = $false; terminalInput = $false; publicRelayTested = $false; allDescendantsRetired = 'not proven'
     }
 }
