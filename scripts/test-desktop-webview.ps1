@@ -1,5 +1,5 @@
 # Ordinary installed product, disposable hosted Windows only. Never a fake IPC page.
-param([Parameter(Mandatory=$true)][string]$Exe)
+param([Parameter(Mandatory=$true)][string]$Exe, [string]$NativeCodex, [string]$ExpectedSha256)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $out = Join-Path (Get-Location) 'desktop-webview-smoke'
@@ -27,7 +27,7 @@ function Find-Control([string[]]$Names, $Type) {
     return $null
 }
 function Invoke-Button([string[]]$Names) {
-    $control = Wait-Observed { Find-Control $Names ([System.Windows.Automation.ControlType]::Button) } ($Names -join '/')
+    $control = Wait-Observed { $c = Find-Control $Names ([System.Windows.Automation.ControlType]::Button); if ($c -and $c.Current.IsEnabled) { return $c }; return $null } ($Names -join '/')
     $pattern = $null
     if (!$control.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) { throw 'BLOCKED_UI_INVOKE' }
     ([System.Windows.Automation.InvokePattern]$pattern).Invoke()
@@ -116,9 +116,36 @@ try {
     $image = (Resolve-Path -LiteralPath $Exe).Path
     $temp = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\') + '\'
     if (!$image.StartsWith($temp, [StringComparison]::OrdinalIgnoreCase)) { throw 'Installed image must be inside RUNNER_TEMP' }
+
+    if ($ExpectedSha256 -and (Get-FileHash -LiteralPath $image -Algorithm SHA256).Hash -ine $ExpectedSha256) { throw 'Pinned product digest mismatch' }
+    if ($NativeCodex) {
+        foreach ($key in @('GITHUB_TOKEN','GH_TOKEN','OPENAI_API_KEY','CODEX_API_KEY','AZURE_OPENAI_API_KEY')) {
+            if ([Environment]::GetEnvironmentVariable($key)) { throw 'Credential environment must not reach product' }
+        }
+        $NativeCodex = (Resolve-Path -LiteralPath $NativeCodex).Path
+        $codexSha = 'f76f94d08b0793bfa129ae62c09341ee32ae96d57e69968ae6b8d7c71a20d8c4'
+        if (!$NativeCodex.StartsWith($temp, [StringComparison]::OrdinalIgnoreCase) -or
+            (Get-FileHash -LiteralPath $NativeCodex -Algorithm SHA256).Hash -ine $codexSha) { throw 'Pinned official Codex required' }
+        $nativeRoot = Join-Path $env:RUNNER_TEMP ('packaged-native-' + [guid]::NewGuid())
+        $nativeProject = Join-Path $nativeRoot 'empty-project'
+        $env:CODEX_HOME = Join-Path $nativeRoot 'empty-codex-home'
+        $env:CODEX_SQLITE_HOME = Join-Path $nativeRoot 'empty-codex-sqlite'
+        New-Item -ItemType Directory -Path $nativeProject,$env:CODEX_HOME,$env:CODEX_SQLITE_HOME | Out-Null
+        $env:PATH = (Split-Path $NativeCodex) + ';' + $env:PATH
+        $env:TERM = 'xterm-256color'
+        $env:COLORTERM = 'truecolor'
+        . (Join-Path $PSScriptRoot 'test-packaged-native-scope.ps1')
+    }
+
     $result.image = $image
     $result.sha256 = (Get-FileHash -LiteralPath $image -Algorithm SHA256).Hash
     Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Drawing
+    if ($NativeCodex) {
+        # Process-local only. Hosted automation tokens must not be inherited by App/Codex.
+        foreach ($variable in @(Get-ChildItem Env: | Where-Object { $_.Name -match '(^ACTIONS_|^GITHUB_|^GH_|TOKEN|SECRET|PASSWORD|API_KEY)' })) {
+            [Environment]::SetEnvironmentVariable($variable.Name, $null, 'Process')
+        }
+    }
     # Visible UI is the explicit purpose of this hosted-only acceptance step.
     $app = Start-Process -FilePath $image -WorkingDirectory (Split-Path $image) -PassThru
     $null = $app.Handle
@@ -144,6 +171,7 @@ try {
     if ($disconnect.Current.IsEnabled) { throw 'Remote disconnect unexpectedly enabled' }
     if (Find-Control @('Literal UTF-8 text (maximum 8192 bytes)', '原样 UTF-8 文本（最多 8192 字节）') $null) { throw 'Remote input unexpectedly visible' }
     Capture-Evidence 'terminal'
+    if ($NativeCodex) { Test-PackagedNativeScope }
     Observe-Children
     $result.children = @($children.Values | ForEach-Object { [ordered]@{ pid=$_.Id; name=$_.ProcessName } })
     if (@($children.Values | Where-Object ProcessName -eq 'msedgewebview2').Count -eq 0) { throw 'No actual WebView2 child observed' }
@@ -157,7 +185,7 @@ try {
 } catch {
     if ($app) { $result.status = 'failed' }
     $result.error = $_.Exception.Message
-    if ($window) { try { Capture-Evidence 'failure' } catch { $result.captureError = $_.Exception.Message } }
+    if ($window -and !$NativeCodex) { try { Capture-Evidence 'failure' } catch { $result.captureError = $_.Exception.Message } }
     throw
 } finally {
     # Failure cleanup is never retirement evidence or a passed UI acceptance.
