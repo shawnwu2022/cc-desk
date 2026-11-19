@@ -65,11 +65,19 @@ function Test-PackagedNativeScope {
         $window = Wait-Observed {
             $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty, $app.Id)
             $all = [System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Children, $condition)
-            $dialogs = @($all | Where-Object { !$_.Current.IsOffscreen -and $_.Current.NativeWindowHandle -ne $mainWindow.Current.NativeWindowHandle })
+            $dialogs = @($all | Where-Object { !$_.Current.IsOffscreen -and $_.Current.NativeWindowHandle -ne $mainWindow.Current.NativeWindowHandle -and $_.Current.Name -ceq 'Select Project Directory' })
             if ($dialogs.Count -gt 1) { throw 'Ambiguous project picker' }
             if ($dialogs.Count -eq 1) { return $dialogs[0] }
             return $null
         } 'owned project directory picker'
+        # This is a fresh disposable directory picker before any CLI exists.
+        # Record only this owned dialog, never the later terminal document.
+        $pickerElements = @($window.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition))
+        if ($pickerElements.Count -gt 1000) { throw 'Picker observation exceeds bound' }
+        @($pickerElements | ForEach-Object {
+            [ordered]@{name=$_.Current.Name; id=$_.Current.AutomationId; type=$_.Current.ControlType.ProgrammaticName; pid=$_.Current.ProcessId; enabled=$_.Current.IsEnabled; offscreen=$_.Current.IsOffscreen; patterns=@($_.GetSupportedPatterns() | ForEach-Object {$_.ProgrammaticName})}
+        }) | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 (Join-Path $out 'project-picker-tree.json')
+
         Set-ObservedValue @('Folder:', '文件夹:') $nativeProject
         Invoke-Button @('Select Folder', 'Select folder', '选择文件夹')
     } finally { $window = $mainWindow }
