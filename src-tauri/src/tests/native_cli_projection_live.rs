@@ -1,4 +1,8 @@
 //! Actual Wry/WebView2 -> formal D12 commands, with disposable roots and no model/CLI accounts.
+#[cfg(target_os = "windows")]
+#[path = "native_cli_codex_rename_narrow.rs"]
+mod codex_rename_narrow;
+
 use crate::cli::document::DOCUMENT_HEADER;
 use crate::cli::launch_service::LaunchService;
 use crate::cli::native_runtime::{take_main_config, NativeRuntime};

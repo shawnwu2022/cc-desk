@@ -1,35 +1,54 @@
-name: Native WebView supervisor resource comparison
+name: PR 101 narrow Codex rename on real WebView
 on:
-  workflow_dispatch:
-
+  push:
+    branches: [test/codex-rename-narrow-20261119]
 permissions:
   contents: read
-
 jobs:
-  document:
-    if: github.repository == 'shawnwu2022/cc-desk'
+  codex-narrow:
+    if: github.repository == 'shawnwu2022/cc-desk' && github.ref == 'refs/heads/test/codex-rename-narrow-20261119'
     runs-on: windows-2022
-    timeout-minutes: 35
+    timeout-minutes: 30
     env:
       CC_DESK_BUILD_SHA: ${{ github.sha }}
     steps:
-      - name: Check out exact diagnostic source
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
-      - name: Verify source and record workflow identity
+      - name: Download pinned official Codex
         shell: pwsh
         run: |
-          $actual = (git rev-parse HEAD).Trim()
-          if ($LASTEXITCODE -ne 0 -or $actual -cne $env:CC_DESK_BUILD_SHA) {
-            throw 'Exact reviewed diagnostic source required'
+          $ErrorActionPreference = 'Stop'
+          $dir = Join-Path $env:RUNNER_TEMP 'official-codex'
+          New-Item -ItemType Directory $dir | Out-Null
+          # A lone EXE is not the complete official runtime supply. Preserve the published vendor layout.
+          $archive = Join-Path $dir 'codex-0.169.1-win32-x64.tgz'
+          Invoke-WebRequest 'https://registry.npmjs.org/@openai/codex/-/codex-0.169.1-win32-x64.tgz' -OutFile $archive
+          $expectedIntegrity = 'fImXWqxwxqHh9+FhJWsRRFiBzgBrSeN1bYTvtGZtUKGTPzHefYAL1agmlf5XScfwY5i5pHsExfdhFekzRBbqIw=='
+          $stream = [IO.File]::OpenRead($archive)
+          $hasher = [Security.Cryptography.SHA512]::Create()
+          try { $actualIntegrity = [Convert]::ToBase64String($hasher.ComputeHash($stream)) } finally { $stream.Dispose(); $hasher.Dispose() }
+          if ($actualIntegrity -cne $expectedIntegrity) { throw 'Official platform package integrity mismatch' }
+          $names = @(& tar -tzf $archive)
+          if ($LASTEXITCODE -ne 0) { throw 'Platform archive listing failed' }
+          $details = @(& tar -tvzf $archive)
+          if ($LASTEXITCODE -ne 0 -or $names.Count -ne 47 -or $details.Count -ne 47) { throw 'Platform archive entries mismatch' }
+          foreach ($name in $names) {
+            if (!$name.StartsWith('package/') -or $name -match '(^/|\\|:|(^|/)\.\.(/|$))') { throw 'Unsafe platform archive path' }
           }
-          $tree = (git rev-parse 'HEAD^{tree}').Trim()
-          if ($LASTEXITCODE -ne 0 -or $tree -cnotmatch '^[a-f0-9]{40}$') {
-            throw 'Exact diagnostic tree required'
-          }
-          "workflowCommit=$env:GITHUB_SHA testedSource=$actual testedTree=$tree"
+          foreach ($entry in $details) { if ($entry[0] -ne '-') { throw 'Platform archive contains nonregular entry' } }
+          $extract = Join-Path $dir 'extracted'
+          New-Item -ItemType Directory $extract | Out-Null
+          & tar -xzf $archive -C $extract
+          if ($LASTEXITCODE -ne 0) { throw 'Platform archive extraction failed' }
+          if (@(Get-ChildItem $extract -Recurse | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }).Count) { throw 'Platform reparse point rejected' }
+          $files = @(Get-ChildItem $extract -Recurse -File)
+          if ($files.Count -ne 47 -or ($files | Measure-Object Length -Sum).Sum -ne 515292799) { throw 'Platform file set mismatch' }
+          $inventory = @($files | ForEach-Object { [ordered]@{path=$_.FullName.Substring($extract.Length+1).Replace('\','/'); bytes=$_.Length; sha256=(Get-FileHash $_.FullName).Hash.ToLowerInvariant()} })
+          [ordered]@{package='@openai/codex'; version='0.169.1-win32-x64'; integrity="sha512-$expectedIntegrity"; archiveSha256=(Get-FileHash $archive).Hash; source='official npm platform package'; files=$inventory} | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path  'codex-supply.json')
+          $exe = Join-Path $extract 'package/vendor/x86_64-pc-windows-msvc/bin/codex.exe'
+          if ((Get-Item $exe).Length -ne 382647088 -or (Get-FileHash $exe).Hash -ine 'f76f94d08b0793bfa129ae62c09341ee32ae96d57e69968ae6b8d7c71a20d8c4') { throw 'Official Codex asset digest mismatch' }
       - uses: actions/setup-node@v5
         with:
           node-version: '24.18.0'
@@ -54,53 +73,19 @@ jobs:
 
       - name: Prepare verified Windows runtime
         run: node scripts/prepare-conpty.mjs
-      - name: Check source formatting
-        working-directory: src-tauri
-        run: cargo fmt --check
-      - name: Run the exact five supervised GUI tests in one harness
+      - name: Execute exact supervised Wry and independent read-only Codex fixture
         working-directory: src-tauri
         shell: pwsh
         run: |
-          $parents = @(
-            'tests::native_cli_channel_live::D11_Channel_Native_011',
-            'tests::native_cli_document_live::D11_Webview_Live_001',
-            'tests::native_cli_launch_live::worker::D11_Launch_Native_001',
-            'tests::native_cli_projection_live::D12_Webview_FormalCommands_001',
-            'tests::version_history_webview::HistoryWebView_Exit_001'
-          )
-          $full = @(& cargo test --locked --lib -- --list --format pretty 2>&1 | Tee-Object -FilePath gui-full-inventory.log)
+          $ErrorActionPreference = 'Stop'
+          if (!$IsWindows -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted') { throw 'Not ephemeral hosted Windows' }
+          $exact = 'tests::native_cli_projection_live::codex_rename_narrow::D12_Codex_Rename_Narrow_097'
+          $names = @(& cargo test --locked --lib -- $exact --exact --ignored --list)
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $fullNames = @($full | ForEach-Object { if ("$_" -cmatch '^(.+): test$') { $Matches[1] } })
-          $selected = @(& cargo test --locked --lib -- @parents --exact --list --format pretty 2>&1 | Tee-Object -FilePath gui-selected-inventory.log)
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $selectedNames = @($selected | ForEach-Object { if ("$_" -cmatch '^(.+): test$') { $Matches[1] } })
-          if ($selectedNames.Count -ne 5 -or @($selectedNames | Sort-Object -Unique).Count -ne 5 -or
-            @($parents | Where-Object { $selectedNames -cnotcontains $_ -or $fullNames -cnotcontains $_ }).Count -ne 0) {
-            throw 'The exact five original GUI parent tests must be selected'
+          if (@($names | Where-Object { $_ -ceq "${exact}: test" }).Count -ne 1) { throw 'Exact hosted test absent or ambiguous' }
+          Get-ChildItem Env: | Where-Object { $_.Name -cne 'GITHUB_ACTIONS' -and $_.Name -match '^(ACTIONS_|GITHUB_|GH_)|TOKEN|SECRET|API_KEY|PASSWORD|CREDENTIAL' } | ForEach-Object {
+            [Environment]::SetEnvironmentVariable($_.Name, $null, 'Process')
           }
-          & cargo test --locked --lib -- @parents --exact --nocapture --test-threads=5 2>&1 | Tee-Object -FilePath gui-supervisor-comparison.log
-          $result = $LASTEXITCODE
-          if ($result -ne 0) { exit $result }
-          if (!(Select-String -Path gui-supervisor-comparison.log -Pattern '^running 5 tests$' -Quiet)) {
-            throw 'All five supervising parent tests must execute'
-          }
-          $summaries = @(Get-Content gui-supervisor-comparison.log | Where-Object { $_ -cmatch '^test result: (?:ok|FAILED)\.' })
-          if ($summaries.Count -eq 0 -or $summaries[-1] -cnotmatch '^test result: ok\. 5 passed; 0 failed; 0 ignored; 0 measured; (\d+) filtered out;') {
-            throw 'All five original parent assertions must pass without ignores'
-          }
-          if ([int]$Matches[1] -ne $fullNames.Count - 5) {
-            throw 'The original library inventory and five-test result must agree'
-          }
-      - name: Preserve actual comparison inventories and execution
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: gui-supervisor-comparison-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: src-tauri/gui-*.log
-          if-no-files-found: error
-          retention-days: 30
-      - name: Record scope
-        if: always()
-        shell: pwsh
-        run: |
-          'Exact five original GUI supervisors in one libtest process, test-threads=5 and a test-only parent resource lease. Original worker modes, deadlines and assertions remain unchanged. This is resource isolation, not a proven cause or real CLI/installer acceptance. Actual failures remain failures; success does not erase an earlier aggregate failure.' >> $env:GITHUB_STEP_SUMMARY
+          $env:CC_DESK_CODEX_RENAME_WRY_GO = 'isolated-codex-rename'
+          & cargo test --locked --lib -- $exact --exact --ignored --nocapture
+          exit $LASTEXITCODE
