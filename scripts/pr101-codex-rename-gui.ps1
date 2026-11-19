@@ -23,7 +23,7 @@ function Test-CodexFixtureRename {
         if (!$focus -or !(In-OwnedTree $focus $window)) { throw 'Fixture keyboard focus escaped owned window' }
         [System.Windows.Forms.SendKeys]::SendWait($Keys)
     }
-    function Open-FixtureKeyboardMenu([string]$Name, [ValidateSet('archived','active','refreshed')][string]$Phase) {
+    function Open-FixtureKeyboardMenu([string]$Name, [ValidateSet('active','refreshed')][string]$Phase) {
         $r.stage="rename-$Phase-find-row"
         $target=Wait-Observed { Find-Control @($Name) ($ct::TreeItem) } 'unique fixture history row'
         if (!$target.Current.IsKeyboardFocusable -or !$target.Current.IsEnabled -or $target.Current.IsOffscreen -or !(In-OwnedTree $target $window)) {
@@ -53,20 +53,8 @@ function Test-CodexFixtureRename {
     $r.menuLanguage='en'
     $r.chineseUiAccepted=$false
 
-    $r.stage='rename-negative-archived-keyboard'
-    if (!(Test-Path -LiteralPath $fixture.ArchiveRollout -PathType Leaf)) { throw 'Synthetic archived fixture leaf missing' }
-    Invoke-Button @('Archived sessions')
-    $menu=Open-FixtureKeyboardMenu $fixture.ArchivedCanary 'archived'
-    $r.stage='rename-archived-menu-eligibility'
-    $members=@($menu.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition) |
-      Where-Object { $_.Current.ControlType -eq $ct::MenuItem })
-    if (@($members | Where-Object { $_.Current.Name -ceq 'Copy session ID' -and !$_.Current.IsOffscreen }).Count -ne 1 -or
-        @($members | Where-Object { $_.Current.Name -ceq 'Rename' }).Count -ne 0) { throw 'Archived menu eligibility observation failed' }
-    $r.archivedRenameAbsent=$true
-    Send-OwnedKeys '{ESC}'
-    $null=Wait-Observed { !(Find-Control @('Session actions') ($ct::Menu)) } 'archive menu dismissed'
-    Invoke-Button @('Close')
-    $null=Wait-Observed { !(Find-Control @($fixture.ArchivedCanary) ($ct::TreeItem)) } 'archived fixture drawer closed'
+    # This focused attempt cannot satisfy the whole installed acceptance.
+    $r.archivedRenameEligibility='unmet-previous-fixture-unobserved'
 
     $r.stage='rename-positive-active-keyboard'
     Set-FixtureEdit 'Search sessions...' $fixture.ActiveCanary

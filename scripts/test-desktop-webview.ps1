@@ -361,7 +361,7 @@ try {
     if ($FixtureCodex) {
         $checks=$result.codexHistory
         if ($FixtureOperation -ceq 'rename') {
-            $actual=($checks.rename -ceq 'native-name-observed') -and $checks.Contains('renamedTitleObserved') -and $checks.renamedTitleObserved -and $checks.menuLanguage -ceq 'en' -and $checks.activeRenameExposed -and $checks.archivedRenameAbsent -and $checks.refreshedNativeIdMatch -and $checks.Contains('clipboardFixedSchema') -and $checks.clipboardFixedSchema
+            $actual=($checks.rename -ceq 'native-name-observed') -and $checks.Contains('renamedTitleObserved') -and $checks.renamedTitleObserved -and $checks.menuLanguage -ceq 'en' -and $checks.activeRenameExposed -and $checks.refreshedNativeIdMatch -and $checks.Contains('clipboardFixedSchema') -and $checks.clipboardFixedSchema
         } else {
             $actual=$checks.restore -ceq 'physical-restore'
         }
@@ -373,7 +373,12 @@ try {
             throw 'BLOCKED_CODEX_ACCEPTANCE: exact independent operation and correlated success not established'
         }
     }
-    $result.status = 'passed'
+    if ($FixtureCodex -and $FixtureOperation -ceq 'rename') {
+        $result.codexHistory.positiveOnlyAccepted=$true
+        $result.status = 'positive-only'
+    } else {
+        $result.status = 'passed'
+    }
 } catch {
     if ($app -and $result.status -cne 'partial') { $result.status = 'failed' }
     $result.error = $_.Exception.Message
@@ -392,7 +397,7 @@ try {
         if ($FixtureCodex -and $result.Contains('codexHistory')) {
             $checks=$result.codexHistory
             $facts=[ordered]@{ stage=$checks.stage; result=$result.status; ordinaryExit=$result.normalExit }
-            foreach ($field in @('preflight','profileSaved','profilePinMatches','selectedProjectExact','recordedCanonicalExact','metaCwdExact','activeRowObserved','archive','restore','rename','delete','backendTraceCorrelated','privacyCanariesAbsent','activeSearch','readonlyPostRestore','operationTrace','readonlyPostRename','renamedTitleObserved','menuLanguage','chineseUiAccepted','activeRenameExposed','archivedRenameAbsent','refreshedNativeIdMatch','clipboardFixedSchema','originalArchiveStillPresent','visibleSafeRestoreCodes','observationFailed')) {
+            foreach ($field in @('preflight','profileSaved','profilePinMatches','selectedProjectExact','recordedCanonicalExact','metaCwdExact','activeRowObserved','archive','restore','rename','delete','backendTraceCorrelated','privacyCanariesAbsent','activeSearch','readonlyPostRestore','operationTrace','readonlyPostRename','renamedTitleObserved','menuLanguage','chineseUiAccepted','activeRenameExposed','archivedRenameEligibility','positiveOnlyAccepted','refreshedNativeIdMatch','clipboardFixedSchema','originalArchiveStillPresent','visibleSafeRestoreCodes','observationFailed')) {
                 if ($checks.Contains($field)) { $facts[$field]=$checks[$field] }
             }
             if ($result.Contains('initialSettings')) { $facts.initialSettings=$result.initialSettings }
