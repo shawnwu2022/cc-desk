@@ -6,35 +6,45 @@ on:
 permissions:
   contents: read
 jobs:
-  canonical-rgb-red:
+  canonical-rgb-regression:
     if: github.ref == 'refs/heads/verify/packaged-native-84855a84'
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: d6575274c789d7c755f4eefebc08c11a6b932e5e
+          ref: 3f8f5bbc81a3e4aebee34287f4e155d23af19354
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@1.98.1
+        with:
+          components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: remote
           key: canonical-rgb-targeted
           cache-on-failure: true
-      - name: Observe RED with unchanged product implementation
+      - name: Validate bounded RGB and existing terminal contract
         shell: bash
         env:
           CARGO_BUILD_JOBS: '2'
         run: |
           set -o pipefail
           git rev-parse HEAD | tee rgb-source.txt
-          cargo test --manifest-path remote/Cargo.toml --locked -p cc-desk-remote-terminal --features experimental-emulator --test canonical_rgb -- --test-threads=1 2>&1 | tee rgb-tests.log
+          cargo fmt --manifest-path remote/Cargo.toml -p cc-desk-remote-terminal -- --check 2>&1 | tee rgb-fmt.log
+          cargo test --manifest-path remote/Cargo.toml --locked -p cc-desk-remote-terminal --features experimental-emulator -- --test-threads=1 2>&1 | tee rgb-tests.log
+          cargo clippy --manifest-path remote/Cargo.toml --locked -p cc-desk-remote-terminal --features experimental-emulator --all-targets -- -D warnings 2>&1 | tee rgb-clippy.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: canonical-rgb-red-${{ github.run_id }}-${{ github.run_attempt }}
+          name: canonical-rgb-regression-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             rgb-source.txt
             rgb-tests.log
+            rgb-fmt.log
+            rgb-clippy.log
           if-no-files-found: error
           retention-days: 7
