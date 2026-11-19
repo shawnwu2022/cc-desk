@@ -1,4 +1,4 @@
-name: Exact canonical cursor style RED (verification only)
+name: Bounded real Native processing probe (verification only)
 on:
   push:
     branches: [verify/packaged-native-84855a84]
@@ -6,30 +6,156 @@ on:
 permissions:
   contents: read
 jobs:
-  cursor-style-red:
+  native-processing:
     if: github.ref == 'refs/heads/verify/packaged-native-84855a84'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    runs-on: windows-2022
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: 64d6b1cc626e694eb483b53d44c39f057f3a7122
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24.18.0'
+          cache: npm
+      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: bounded-native-processing-diagnostic
+          cache-on-failure: true
+      - name: Prepare original Native dependencies
+        shell: pwsh
+        run: |
+          npm ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run prepare:session-sdk
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run prepare:opencode-archive
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/prepare-conpty.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Compile one opt-in original Native test binary
+        shell: pwsh
+        env:
+          CARGO_BUILD_JOBS: '2'
+        run: |
+          New-Item -ItemType Directory probe-evidence | Out-Null
+          [ordered]@{source=(git rev-parse HEAD); tree=(git rev-parse 'HEAD^{tree}'); productSource='1930fe1fd82c44c5a2e7a1ec830b8de31094a555'; mode='debug-native-api-not-standard-gui'; noGuiAck=$true; noLayoutResize=$true; diagnosticFeature=$true} | ConvertTo-Json | Set-Content probe-evidence/source.json
+          cargo test --manifest-path src-tauri/Cargo.toml --locked --lib --features packaged-canonical-diagnostic --no-run --message-format=json 1> probe-build.jsonl
+          if ($LASTEXITCODE -ne 0) {
+            Get-Content probe-build.jsonl | ForEach-Object { $entry=$_ | ConvertFrom-Json; if ($entry.reason -eq 'compiler-message' -and $entry.message.level -eq 'error') { Write-Output $entry.message.rendered } }
+            throw 'Native test compilation failed before execution'
+          }
+          $bins = @(Get-Content probe-build.jsonl | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { $_.reason -eq 'compiler-artifact' -and $_.profile.test -and $_.executable -and $_.target.name -eq 'cc_desk' })
+          if ($bins.Count -ne 1) { throw 'Expected unique native library test binary' }
+          $bins[0].executable | Set-Content probe-binary.txt
+          [ordered]@{sha256=(Get-FileHash $bins[0].executable).Hash; source=(git rev-parse HEAD)} | ConvertTo-Json | Set-Content probe-evidence/binary.json
+      - name: Download pinned official Codex
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dir = Join-Path $env:RUNNER_TEMP 'official-codex'
+          New-Item -ItemType Directory $dir | Out-Null
+          # A lone EXE is not the complete official runtime supply. Preserve the published vendor layout.
+          $archive = Join-Path $dir 'codex-0.169.1-win32-x64.tgz'
+          Invoke-WebRequest 'https://registry.npmjs.org/@openai/codex/-/codex-0.169.1-win32-x64.tgz' -OutFile $archive
+          $expectedIntegrity = 'fImXWqxwxqHh9+FhJWsRRFiBzgBrSeN1bYTvtGZtUKGTPzHefYAL1agmlf5XScfwY5i5pHsExfdhFekzRBbqIw=='
+          $stream = [IO.File]::OpenRead($archive)
+          $hasher = [Security.Cryptography.SHA512]::Create()
+          try { $actualIntegrity = [Convert]::ToBase64String($hasher.ComputeHash($stream)) } finally { $stream.Dispose(); $hasher.Dispose() }
+          if ($actualIntegrity -cne $expectedIntegrity) { throw 'Official platform package integrity mismatch' }
+          $names = @(& tar -tzf $archive)
+          if ($LASTEXITCODE -ne 0) { throw 'Platform archive listing failed' }
+          $details = @(& tar -tvzf $archive)
+          if ($LASTEXITCODE -ne 0 -or $names.Count -ne 47 -or $details.Count -ne 47) { throw 'Platform archive entries mismatch' }
+          foreach ($name in $names) {
+            if (!$name.StartsWith('package/') -or $name -match '(^/|\\|:|(^|/)\.\.(/|$))') { throw 'Unsafe platform archive path' }
+          }
+          foreach ($entry in $details) { if ($entry[0] -ne '-') { throw 'Platform archive contains nonregular entry' } }
+          $extract = Join-Path $dir 'extracted'
+          New-Item -ItemType Directory $extract | Out-Null
+          & tar -xzf $archive -C $extract
+          if ($LASTEXITCODE -ne 0) { throw 'Platform archive extraction failed' }
+          if (@(Get-ChildItem $extract -Recurse | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }).Count) { throw 'Platform reparse point rejected' }
+          $files = @(Get-ChildItem $extract -Recurse -File)
+          if ($files.Count -ne 47 -or ($files | Measure-Object Length -Sum).Sum -ne 515292799) { throw 'Platform file set mismatch' }
+          $inventory = @($files | ForEach-Object { [ordered]@{path=$_.FullName.Substring($extract.Length+1).Replace('\','/'); bytes=$_.Length; sha256=(Get-FileHash $_.FullName).Hash.ToLowerInvariant()} })
+          [ordered]@{package='@openai/codex'; version='0.169.1-win32-x64'; integrity="sha512-$expectedIntegrity"; archiveSha256=(Get-FileHash $archive).Hash; source='official npm platform package'; files=$inventory} | ConvertTo-Json -Depth 5 | Set-Content codex-supply.json
+          $exe = Join-Path $extract 'package/vendor/x86_64-pc-windows-msvc/bin/codex.exe'
+          if ((Get-Item $exe).Length -ne 382647088 -or (Get-FileHash $exe).Hash -ine 'f76f94d08b0793bfa129ae62c09341ee32ae96d57e69968ae6b8d7c71a20d8c4') { throw 'Official Codex asset digest mismatch' }
+      - name: Observe both fresh environments independently
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_OS -cne 'Windows' -or $env:GH_TOKEN -or $env:GITHUB_TOKEN) { throw 'Fresh hosted credential-free guard failed' }
+          foreach ($item in @(Get-ChildItem Env:)) {
+            if ($item.Name -notin @('GITHUB_ACTIONS','RUNNER_OS') -and $item.Name -match '(?i)(TOKEN|SECRET|PASSWORD|API_KEY|^ACTIONS_|^GITHUB_|^GH_)') { [Environment]::SetEnvironmentVariable($item.Name,$null,'Process') }
+          }
+          $env:CC_DESK_CANONICAL_CODEX_EXE = Join-Path $env:RUNNER_TEMP 'official-codex/extracted/package/vendor/x86_64-pc-windows-msvc/bin/codex.exe'
+          $env:CC_DESK_CANONICAL_CODEX_SHA256 = 'f76f94d08b0793bfa129ae62c09341ee32ae96d57e69968ae6b8d7c71a20d8c4'
+          $env:CC_DESK_DIAGNOSTIC_EXPECTED_PROGRAM = $env:CC_DESK_CANONICAL_CODEX_EXE
+          $binary = (Get-Content probe-binary.txt -Raw).Trim()
+          $failed = $false
+          foreach ($case in @('minimal','hosted-gui')) {
+            $env:CC_DESK_CANONICAL_ENV_CASE = $case
+            $stdout = Join-Path $env:RUNNER_TEMP "probe-$case.stdout"
+            $stderr = Join-Path $env:RUNNER_TEMP "probe-$case.stderr"
+            $process = Start-Process -FilePath $binary -ArgumentList 'CodexCanonical_EmptyHomeOriginalNative_001 --ignored --nocapture --test-threads=1' -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru -WindowStyle Hidden
+            $timedOut = !$process.WaitForExit(120000)
+            if ($timedOut) { $process.Kill(); $null=$process.WaitForExit(10000) }
+            $code = if ($process.HasExited) { $process.ExitCode } else { $null }
+            $process.Dispose()
+            # Only fixed numeric/enum diagnostics leave this fresh runner. Never upload raw CLI output.
+            $safe = @(Get-Content $stderr | Where-Object { $_ -match '^(CC_CANONICAL_DIAG |CC_CANONICAL_CSI |TEST_CODEX_(ENV|CANONICAL|PROCESSING) )' })
+            $testOutput = Get-Content $stdout -Raw
+            $executed = $testOutput -match 'running 1 test' -and $testOutput -match 'test result: ok[.] 1 passed; 0 failed' -and @($safe | Where-Object { $_ -match '^TEST_CODEX_PROCESSING identity=' }).Count -eq 1
+            $safe | Set-Content "probe-evidence/$case.txt"
+            $safe | ForEach-Object { Write-Output $_ }
+            [ordered]@{case=$case; exitCode=$code; timedOut=$timedOut; exactTestExecutedAndPassed=$executed; registryNotFullProcessTreeProof=$true} | ConvertTo-Json | Set-Content "probe-evidence/$case-result.json"
+            if ($timedOut -or $code -ne 0 -or !$executed) { $failed=$true }
+          }
+          Copy-Item codex-supply.json probe-evidence/codex-supply.json
+          if ($failed) { throw 'At least one Native processing observation failed; see independent receipts' }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-processing-${{ github.run_id }}-${{ github.run_attempt }}
+          path: probe-evidence/
+          if-no-files-found: error
+          retention-days: 7
+  terminal-green:
+    if: github.ref == 'refs/heads/verify/packaged-native-84855a84'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: 1930fe1fd82c44c5a2e7a1ec830b8de31094a555
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@1.98.1
+        with:
+          components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: remote
           key: canonical-rgb-terminal
           cache-on-failure: true
-      - name: Observe exact cursor style RED assertions
+      - name: Full exact terminal tests and lint
         shell: bash
         run: |
-          set -o pipefail
-          cargo test --manifest-path remote/Cargo.toml --locked -p cc-desk-remote-terminal --features experimental-emulator --test canonical_cursor_style 2>&1 | tee cursor-style-red.log
+          set -euo pipefail
+          cargo fmt --manifest-path remote/Cargo.toml -p cc-desk-remote-terminal -- --check
+          cargo test --manifest-path remote/Cargo.toml --locked -p cc-desk-remote-terminal --features experimental-emulator 2>&1 | tee terminal-green.log
+          cargo clippy --manifest-path remote/Cargo.toml --locked -p cc-desk-remote-terminal --features experimental-emulator --all-targets -- -D warnings
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: cursor-style-red-${{ github.run_id }}-${{ github.run_attempt }}
-          path: cursor-style-red.log
+          name: terminal-green-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: terminal-green.log
           if-no-files-found: error
           retention-days: 7
