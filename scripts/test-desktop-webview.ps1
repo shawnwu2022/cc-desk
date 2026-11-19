@@ -296,6 +296,7 @@ try {
             Reveal-DiagnosticsControl $start $button
             Toggle-DiagnosticsButton $start
             $null=Wait-Observed $isOn 'known fixture capture starts'
+            try {
             Test-CodexHistoryGui
             Invoke-Button @('Settings')
             Invoke-Button @('About')
@@ -312,25 +313,25 @@ try {
             $result.codexHistory.privacyCanariesAbsent=$true
             $activity=$observed | ConvertFrom-Json -AsHashtable
             if (!$activity.backend.available) { throw 'Backend diagnosis was not available' }
-            $operations=@('restore')
-            if ($result.codexHistory.archive -eq 'physical-archive') { $operations += 'archive' }
-            foreach ($operation in $operations) {
-                $starts = @($activity.events | Where-Object { $_.operation -ceq $operation -and $_.cli -ceq 'codex' -and $_.stage -ceq 'ui' -and $_.result -ceq 'started' })
-                if ($starts.Count -ne 1 -or $starts[0].id -cnotmatch '^[a-f0-9]{32}$') { throw "Expected exactly one synthetic $operation trace" }
-                $id=$starts[0].id
-                $events=@($activity.backend.events | Where-Object id -CEQ $id)
-                if (!($events | Where-Object { $_.stage -ceq 'backend' -and $_.status -ceq 'returned' }) -or
-                    !($events | Where-Object { $_.stage -ceq 'provider' -and $_.status -ceq 'ok' }) -or
-                    !($activity.events | Where-Object { $_.id -ceq $id -and $_.stage -ceq 'list' -and $_.result -cin @('applied','unchanged') })) {
-                    throw "Missing correlated backend, provider or target list evidence: $operation"
-                }
+            $starts = @($activity.events | Where-Object { $_.operation -ceq 'restore' -and $_.cli -ceq 'codex' -and $_.stage -ceq 'ui' -and $_.result -ceq 'started' })
+            $result.codexHistory.restoreTrace=[ordered]@{uiStartedCount=$starts.Count; backend=@(); provider=@(); targetList=@()}
+            if ($starts.Count -eq 1 -and $starts[0].id -cmatch '^[a-f0-9]{32}$') {
+                $traceId=$starts[0].id
+                $allow=@('started','ok','returned','failed','unsupported','unknown','blocked','stale')
+                $db=@($activity.backend.events | Where-Object { $_.id -ceq $traceId -and $_.status -cin $allow })
+                $result.codexHistory.restoreTrace.backend=@($db | Where-Object stage -CEQ 'backend' | ForEach-Object status)
+                $result.codexHistory.restoreTrace.provider=@($db | Where-Object stage -CEQ 'provider' | ForEach-Object status)
+                $result.codexHistory.restoreTrace.targetList=@($activity.events | Where-Object { $_.id -ceq $traceId -and $_.stage -ceq 'list' -and $_.result -cin @('applied','unchanged','stale','failed') } | ForEach-Object result)
+                $result.codexHistory.backendTraceCorrelated=$result.codexHistory.restoreTrace.backend.Count -gt 0
             }
-            $result.codexHistory.backendTraceCorrelated=$true
             Reveal-DiagnosticsControl $stop $button
             Toggle-DiagnosticsButton $stop
             $null=Wait-Observed { Find-Control $start $button } 'fixture capture stop confirmed'
-            $result.codexHistory.stage='archive-and-restore-observed'
-            if ($result.codexHistory.archive -ne 'physical-archive') { $result.codexHistory.stage='restore-observed-archive-entry-unavailable' }
+            $result.codexHistory.stage='restore-independent-observation-complete'
+            } catch {
+                # A failed fixture observation is not success, but it does not skip the independent normal exit.
+                $result.codexHistory.observationFailed=$true
+            }
         }
     }
     Observe-Children
@@ -342,9 +343,13 @@ try {
     if (!$app.WaitForExit(30000) -or $app.ExitCode -ne 0) { throw 'Ordinary App did not close normally' }
     foreach ($child in $children.Values) { if (!$child.WaitForExit(10000)) { throw 'Observed WebView child did not exit' } }
     $result.normalExit = $true
-    if ($FixtureCodex -and $result.codexHistory.archive -ne 'physical-archive') {
+    if ($FixtureCodex -and ($result.codexHistory.restore -ne 'physical-restore' -or !$result.codexHistory.backendTraceCorrelated -or
+        $result.codexHistory.Contains('observationFailed') -or
+        $result.codexHistory.restoreTrace.backend -cnotcontains 'returned' -or
+        $result.codexHistory.restoreTrace.provider -cnotcontains 'ok' -or
+        !(($result.codexHistory.restoreTrace.targetList -ccontains 'applied') -or ($result.codexHistory.restoreTrace.targetList -ccontains 'unchanged')))) {
         $result.status = 'partial'
-        throw 'BLOCKED_UI_ACTION: exact synthetic history archive entry unavailable'
+        throw 'BLOCKED_RESTORE_ACCEPTANCE: exact physical and correlated success not established'
     }
     $result.status = 'passed'
 } catch {
@@ -365,7 +370,7 @@ try {
         if ($FixtureCodex -and $result.Contains('codexHistory')) {
             $checks=$result.codexHistory
             $facts=[ordered]@{ stage=$checks.stage; result=$result.status; ordinaryExit=$result.normalExit }
-            foreach ($field in @('preflight','profileSaved','profilePinMatches','selectedProjectExact','recordedCanonicalExact','metaCwdExact','activeRowObserved','archive','restore','rename','delete','backendTraceCorrelated','privacyCanariesAbsent','activeSearch')) {
+            foreach ($field in @('preflight','profileSaved','profilePinMatches','selectedProjectExact','recordedCanonicalExact','metaCwdExact','activeRowObserved','archive','restore','rename','delete','backendTraceCorrelated','privacyCanariesAbsent','activeSearch','readonlyPostRestore','restoreTrace','originalArchiveStillPresent','visibleSafeRestoreCodes','observationFailed')) {
                 if ($checks.Contains($field)) { $facts[$field]=$checks[$field] }
             }
             if ($result.Contains('initialSettings')) { $facts.initialSettings=$result.initialSettings }

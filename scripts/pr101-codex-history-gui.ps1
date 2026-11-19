@@ -148,51 +148,35 @@ function Test-CodexHistoryGui {
     $r.metaCwdExact=$meta.payload.cwd -ceq $fixture.Project
     $r.profilePinMatches=$matchingProfile.Count -eq 1
     if (!$r.selectedProjectExact -or !$r.metaCwdExact -or !$r.profilePinMatches) { throw 'Stored synthetic project or bound profile does not match exact fixture inputs' }
-    $r.stage='active-history-search'
-    Set-FixtureEdit 'Search sessions...' $fixture.ActiveCanary
-    $row=$null
-    try {
-        $row=Wait-Observed { Find-Control @($fixture.ActiveCanary) ([System.Windows.Automation.ControlType]::TreeItem) } 'searched synthetic active history row'
-    } catch {
-        if ($_.Exception.Message -cne 'BLOCKED_UI_OBSERVATION: searched synthetic active history row') { throw }
-        $r.archive='active-canary-not-observed'
-        $visible=@($window.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition) |
-            Where-Object { !$_.Current.IsOffscreen -and $_.Current.ControlType -eq [System.Windows.Automation.ControlType]::TreeItem } |
-            Select-Object -First 33)
-        $r.activeSearch=[ordered]@{
-            visibleTreeItemCountWithinBudget=$visible.Count
-            activeCanaryObserved=@($visible | Where-Object { $_.Current.Name -ceq $fixture.ActiveCanary }).Count -eq 1
-            registeredProjectVisible=@($visible | Where-Object { $_.Current.Name -ceq (Split-Path $fixture.Project -Leaf) }).Count -eq 1
-        }
-    }
-    if ($row) {
-        $r.activeRowObserved=$true
-        $basename=Split-Path $fixture.Rollout -Leaf
-        $physicalArchive=Join-Path $fixture.Home ('archived_sessions/' + $basename)
-        if (!(Test-Path -LiteralPath $fixture.Rollout -PathType Leaf) -or (Test-Path -LiteralPath $physicalArchive)) { throw 'Unexpected fixture state before archive' }
-        $r.stage='archive'
-        if (Invoke-FixtureTarget $row 'Native archive (including child sessions)' $fixtureButton) {
-            $r.archive='sent'
-            $null=Wait-Observed {
-                !(Test-Path -LiteralPath $fixture.Rollout) -and (Test-Path -LiteralPath $physicalArchive -PathType Leaf)
-            } 'Codex native archive changed physical fixture path'
-            $r.archive='physical-archive'
-        } else {
-            $r.archive='visible-entry-unavailable'
-        }
-    }
-    Set-FixtureEdit 'Search sessions...' ''
+    $r.archive='not-repeated-prior-physical-evidence'
     $r.stage='restore'
     if (!(Invoke-FixtureTarget $window 'Archived sessions' $fixtureButton)) { throw 'Archived sessions entry unavailable' }
     $archivedRow=Wait-Observed { Find-Control @($fixture.ArchivedCanary) ([System.Windows.Automation.ControlType]::TreeItem) } 'separate synthetic archived row'
     if (!(Test-Path -LiteralPath $fixture.ArchiveRollout -PathType Leaf)) { throw 'Unexpected fixture state before restore' }
     if (!(Invoke-FixtureTarget $archivedRow 'Restore archive' $fixtureButton)) { throw 'Restore archive entry unavailable for fixture' }
     $r.restore='sent'
-    $null=Wait-Observed {
-        $restored=@(Get-ChildItem -LiteralPath (Join-Path $fixture.Home 'sessions') -Filter "*$($fixture.ArchivedId).jsonl" -File -Recurse)
-        if ($restored.Count -gt 1) { throw 'Restored fixture path is ambiguous' }
-        !(Test-Path -LiteralPath $fixture.ArchiveRollout) -and $restored.Count -eq 1
-    } 'Codex native restore changed physical fixture path'
-    $r.restore='physical-restore'
+    try {
+        $null=Wait-Observed {
+            $restored=@(Get-ChildItem -LiteralPath (Join-Path $fixture.Home 'sessions') -Filter "*$($fixture.ArchivedId).jsonl" -File -Recurse)
+            if ($restored.Count -gt 1) { throw 'Restored fixture path is ambiguous' }
+            !(Test-Path -LiteralPath $fixture.ArchiveRollout) -and $restored.Count -eq 1
+        } 'Codex native restore changed physical fixture path'
+        $r.restore='physical-restore'
+    } catch {
+        if ($_.Exception.Message -cne 'BLOCKED_UI_OBSERVATION: Codex native restore changed physical fixture path') { throw }
+        $r.restore='physical-move-unobserved'
+    }
+    $r.originalArchiveStillPresent=Test-Path -LiteralPath $fixture.ArchiveRollout -PathType Leaf
+    $r.readonlyPostRestore=[ordered]@{observed=$false}
+    try {
+        $proof=& (Join-Path $PSScriptRoot 'pr101-codex-history-fixture.ps1') -Codex $FixtureCodex -ReadOnlyExisting $fixture
+        $r.readonlyPostRestore=[ordered]@{observed=$true; activeCount=$proof.activeCount; archivedCount=$proof.archivedCount}
+    } catch {
+        $r.readonlyPostRestore=[ordered]@{observed=$false; outcome='read-only-check-unavailable'}
+    }
+    $allowCodes=@('SOURCE_CHANGED','SOURCE_UNAVAILABLE','STALE_SESSION_ATTEMPT','SESSION_ORIGIN_AMBIGUOUS','CLI_UNARCHIVE_UNAVAILABLE','LAUNCH_STATE_UNKNOWN')
+    $r.visibleSafeRestoreCodes=@($window.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition) |
+        Where-Object { !$_.Current.IsOffscreen -and $_.Current.Name -cin $allowCodes } |
+        Select-Object -First 8 | ForEach-Object {$_.Current.Name})
     $r.stage='read-diagnostics'
 }

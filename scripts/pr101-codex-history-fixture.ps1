@@ -1,6 +1,6 @@
 # Disposable Windows runner only. The real Codex executable performs a read-only protocol check.
 param(
-    [Parameter(Mandatory=$true)][string]$Codex
+    [Parameter(Mandatory=$true)][string]$Codex, [psobject]$ReadOnlyExisting
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -13,6 +13,20 @@ if (!$image.StartsWith($temp, [StringComparison]::OrdinalIgnoreCase) -or
     (Get-FileHash -LiteralPath $image).Hash -ine 'f76f94d08b0793bfa129ae62c09341ee32ae96d57e69968ae6b8d7c71a20d8c4') {
     throw 'Pinned official Codex image mismatch'
 }
+if ($ReadOnlyExisting) {
+    $codexHome=[IO.Path]::GetFullPath($ReadOnlyExisting.Home)
+    $project=[IO.Path]::GetFullPath($ReadOnlyExisting.Project)
+    $root=Split-Path $codexHome -Parent
+    if (!$root.StartsWith($temp,[StringComparison]::OrdinalIgnoreCase) -or
+        (Split-Path $root -Leaf) -cnotmatch '^pr101-history-[0-9a-f]{32}$' -or
+        $codexHome -cne (Join-Path $root 'codex-home') -or $project -cne (Join-Path $root 'project') -or
+        $ReadOnlyExisting.ArchivedId -cnotmatch '^[a-f0-9-]{36}$') { throw 'Read-only fixture ownership is not pinned' }
+    foreach($currentPath in @($root,$codexHome,$project)){
+        $owned=Get-Item -LiteralPath $currentPath
+        if (!$owned.PSIsContainer -or ($owned.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Untrusted synthetic fixture directory' }
+    }
+    $archivedId=$ReadOnlyExisting.ArchivedId
+} else {
 $root = Join-Path $temp ('pr101-history-' + [Guid]::NewGuid().ToString('N'))
 $codexHome = Join-Path $root 'codex-home'
 $project = Join-Path $root 'project'
@@ -40,6 +54,7 @@ $existingArchived = Join-Path $archiveRoot "rollout-$stamp-$archivedId.jsonl"
 Write-FixtureRollout $rollout $id $activeCanary
 Write-FixtureRollout $existingArchived $archivedId $archivedCanary
 
+}
 $spec=[Diagnostics.ProcessStartInfo]::new($image)
 $spec.WorkingDirectory=$project
 $spec.UseShellExecute=$false
@@ -94,6 +109,17 @@ try {
         throw 'Pinned app-server did not bind to fixture CODEX_HOME'
     }
     Send @{ method='initialized' }
+    if ($ReadOnlyExisting) {
+        Send @{ id=2; method='thread/list'; params=@{ archived=$false; limit=100 } }
+        $active=Receive 2
+        Send @{ id=3; method='thread/list'; params=@{ archived=$true; limit=100 } }
+        $archived=Receive 3
+        $result=@($active.data | Where-Object { $_.id -ceq $archivedId -and $_.cwd -ceq $project }).Count
+        $retained=@($archived.data | Where-Object { $_.id -ceq $archivedId -and $_.cwd -ceq $project }).Count
+        $process.StandardInput.Close()
+        if (!$process.WaitForExit(5000) -or $process.ExitCode -ne 0) { throw 'Pinned read-only post-restore app-server did not stop normally' }
+        return [pscustomobject]@{ activeCount=$result; archivedCount=$retained }
+    }
     Send @{ id=2; method='thread/read'; params=@{ threadId=$id; includeTurns=$false } }
     $observed = Receive 2
     if ($observed.thread.id -cne $id) { throw 'Pinned app-server did not recognize fixture rollout' }
