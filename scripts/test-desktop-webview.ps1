@@ -262,6 +262,29 @@ try {
         } catch { $result.captureError = $_.Exception.Message }
     }
 
+    if ($CanonicalDiagnostic -and $window -and $result.Contains('nativeStage') -and $result.nativeStage -eq 'create-actual-run') {
+        # Fixed public UI labels only. A CLI may have started: never capture the App/terminal tree or arbitrary text.
+        try {
+            $labels = @(
+                'Finding the installed CLI…', '正在自动查找已安装的命令行程序…',
+                'Found the CLI. Confirm this program once; future sessions will use the saved selection.', '已找到命令行程序。首次使用时确认一次，以后新建会话会复用保存的选择。',
+                'No CLI program was found. Check that it is installed, or edit the configuration for a custom location.', '未找到命令行程序。请确认已经安装；自定义安装位置可通过编辑配置指定。',
+                'Automatic CLI detection could not finish. View details or edit the launch configuration.', '自动识别未能完成。请查看详情，或编辑启动配置。',
+                'Detected program', '检测到的程序', 'Use and start session', '使用并启动会话',
+                'Create session', '创建会话', '单次远程连接', 'Toggle details', '切换详情',
+                'PROGRAM_TRUST_REQUIRED', 'PROGRAM_UNAVAILABLE', 'ENV_SOURCE_MISSING', 'PROFILE_NOT_FOUND',
+                'PROFILE_CLI_MISMATCH', 'PROFILE_SELECTION_CHANGED', 'PROJECT_IDENTITY_CHANGED',
+                'REVISION_CONFLICT', 'FORBIDDEN', 'DOCUMENT_BRIDGE_UNAVAILABLE', 'INVALID_REQUEST', 'GENERIC_UNAVAILABLE'
+            )
+            $observations = @($labels | ForEach-Object {
+                $label = $_
+                $matches = @($window.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, $label)))
+                if ($matches.Count -gt 32) { throw 'Fixed launch label match bound exceeded' }
+                [ordered]@{label=$label; count=$matches.Count; controls=@($matches | ForEach-Object { [ordered]@{type=$_.Current.ControlType.ProgrammaticName; enabled=$_.Current.IsEnabled; offscreen=$_.Current.IsOffscreen} })}
+            })
+            $observations | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 (Join-Path $out 'launch-fixed-state.json')
+        } catch { $result.launchStateObservation = 'fixed-label-observation-unavailable' }
+    }
     if ($NativeCodex -and $window -and $result.Contains('nativeStage') -and $result.nativeStage -in @('observe-host-state','read-public-scope')) {
         # Only the formally labelled Host panel; never enumerate terminal descendants into evidence.
         try {
