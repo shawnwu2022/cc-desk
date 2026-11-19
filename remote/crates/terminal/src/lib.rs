@@ -4,6 +4,8 @@
 //! trust boundary required before an emulator can consume untrusted PTY bytes.
 
 mod budget;
+#[cfg(feature = "packaged-canonical-diagnostic")]
+mod diagnostic;
 #[cfg(feature = "experimental-emulator")]
 mod emulator;
 #[cfg(feature = "experimental-emulator")]

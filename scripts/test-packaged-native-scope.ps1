@@ -112,7 +112,8 @@ function Test-PackagedNativeScope {
     $toggle = [System.Windows.Automation.TogglePattern]$toggle
     if ($toggle.Current.ToggleState -ne [System.Windows.Automation.ToggleState]::Off) { throw 'Raw mode was not default off' }
     $toggle.Toggle()
-    Select-ObservedOption @('Argument format', '编辑方式') @('Raw JSON array', '原始 JSON 数组')
+    Select-ObservedOption @('Argument format', '编辑方式') @('Raw JSON array', '原始 JSON 数组') -VerifySelected
+    $result.argumentFormatSelected = $true
     $safeArgv = '["--sandbox","read-only","--ask-for-approval","on-request"]'
     Set-ObservedValue @('Raw arguments', '原始参数') $safeArgv
     if ((Read-ObservedValue @('Raw arguments', '原始参数')) -cne $safeArgv) { throw 'GUI safe argument readback mismatch' }

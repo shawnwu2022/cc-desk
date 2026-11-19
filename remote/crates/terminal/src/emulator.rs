@@ -238,6 +238,8 @@ impl TerminalCore {
         let rejected = if self.validator.take_string_sequence_entered()
             || self.validator.blocked_osc52_count() != blocked_osc52
         {
+            #[cfg(feature = "packaged-canonical-diagnostic")]
+            crate::diagnostic::rejected(9, 0, 0);
             Some(TerminalSafeCode::UnsupportedSequence)
         } else {
             self.input_gate.take_rejection()
@@ -493,12 +495,18 @@ impl Perform for RestrictedInputGate {
         match character.width() {
             Some(0) => self.reject(TerminalSafeCode::CombiningScalar),
             Some(_) => {}
-            None => self.reject(TerminalSafeCode::UnsupportedSequence),
+            None => {
+                #[cfg(feature = "packaged-canonical-diagnostic")]
+                crate::diagnostic::rejected(1, 0, 0);
+                self.reject(TerminalSafeCode::UnsupportedSequence);
+            }
         }
     }
 
     fn execute(&mut self, byte: u8) {
         if !matches!(byte, b'\r' | b'\n') {
+            #[cfg(feature = "packaged-canonical-diagnostic")]
+            crate::diagnostic::rejected(2, u64::from(byte), 0);
             self.reject(TerminalSafeCode::UnsupportedSequence);
         }
     }
@@ -510,18 +518,26 @@ impl Perform for RestrictedInputGate {
         _ignore: bool,
         _action: char,
     ) {
+        #[cfg(feature = "packaged-canonical-diagnostic")]
+        crate::diagnostic::rejected(3, 0, 0);
         self.reject(TerminalSafeCode::UnsupportedSequence);
     }
 
     fn put(&mut self, _byte: u8) {
+        #[cfg(feature = "packaged-canonical-diagnostic")]
+        crate::diagnostic::rejected(4, 0, 0);
         self.reject(TerminalSafeCode::UnsupportedSequence);
     }
 
     fn unhook(&mut self) {
+        #[cfg(feature = "packaged-canonical-diagnostic")]
+        crate::diagnostic::rejected(5, 0, 0);
         self.reject(TerminalSafeCode::UnsupportedSequence);
     }
 
     fn osc_dispatch(&mut self, _params: &[&[u8]], _bell_terminated: bool) {
+        #[cfg(feature = "packaged-canonical-diagnostic")]
+        crate::diagnostic::rejected(6, 0, 0);
         self.reject(TerminalSafeCode::UnsupportedSequence);
     }
 
@@ -557,6 +573,27 @@ impl Perform for RestrictedInputGate {
             }
         }
         if ignore || !Self::allowed_csi(params, intermediates, action) {
+            #[cfg(feature = "packaged-canonical-diagnostic")]
+            {
+                let prefix = match intermediates {
+                    b"" => 30,
+                    b"?" => 31,
+                    b">" => 32,
+                    _ => 33,
+                };
+                let first = params
+                    .iter()
+                    .next()
+                    .and_then(|p| p.first())
+                    .copied()
+                    .unwrap_or(0);
+                let count = params.iter().count().min(32) as u64;
+                crate::diagnostic::rejected(
+                    prefix + u8::from(ignore) * 10,
+                    action as u64,
+                    u64::from(first) | (count << 16),
+                );
+            }
             self.reject(TerminalSafeCode::UnsupportedSequence);
         } else if let Some(mode) = canonical::mode_mutation(params, intermediates, action) {
             self.mark(MarkKind::Mode(mode));
@@ -564,6 +601,8 @@ impl Perform for RestrictedInputGate {
     }
 
     fn esc_dispatch(&mut self, _intermediates: &[u8], _ignore: bool, _byte: u8) {
+        #[cfg(feature = "packaged-canonical-diagnostic")]
+        crate::diagnostic::rejected(8, u64::from(_byte), _intermediates.len().min(2) as u64);
         self.reject(TerminalSafeCode::UnsupportedSequence);
     }
 }

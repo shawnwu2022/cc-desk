@@ -13,6 +13,8 @@ pub(crate) struct AdmittedChild {
 
 impl AdmittedChild {
     pub(crate) fn created(child: Box<dyn Child + Send + Sync>, ticket: StartTicket) -> Self {
+        #[cfg(all(windows, feature = "packaged-canonical-diagnostic"))]
+        super::packaged_diagnostic::created(child.as_raw_handle().unwrap_or(std::ptr::null_mut()));
         Self {
             child,
             ticket: Some(ticket.child_created()),
@@ -28,6 +30,8 @@ impl AdmittedChild {
         command: CommandBuilder,
         ticket: StartTicket,
     ) -> anyhow::Result<Self> {
+        #[cfg(all(windows, feature = "packaged-canonical-diagnostic"))]
+        super::packaged_diagnostic::launch(&command);
         match slave.spawn_command(command) {
             Ok(child) => Ok(Self::created(child, ticket)),
             Err(error) => {

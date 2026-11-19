@@ -6,6 +6,7 @@ publish.workspace = true
 
 [features]
 default = []
+packaged-canonical-diagnostic = ["experimental-emulator"]
 experimental-emulator = ["dep:alacritty_terminal", "dep:unicode-width", "dep:cc-desk-remote-record"]
 
 [dependencies]

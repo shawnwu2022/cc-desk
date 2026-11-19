@@ -466,6 +466,8 @@ impl OwnedJobLaunchSlot {
             reader_worker: OutputReaderJoin::Unstarted,
         });
         let owned = slot.as_mut().unwrap();
+        #[cfg(feature = "packaged-canonical-diagnostic")]
+        super::packaged_diagnostic::launch(&command);
         match owned
             .prepared
             .as_ref()

@@ -8,3 +8,6 @@ pub(crate) mod legacy_control;
 pub(crate) mod owned_job_launch;
 pub(crate) mod owned_pty;
 pub(crate) use legacy::*;
+
+#[cfg(all(windows, feature = "packaged-canonical-diagnostic"))]
+mod packaged_diagnostic;

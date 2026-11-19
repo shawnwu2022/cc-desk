@@ -323,6 +323,8 @@ impl TerminalCore {
         Ok(())
     }
     fn mode_drift<E>(&mut self) -> CanonicalFeedError<E> {
+        #[cfg(feature = "packaged-canonical-diagnostic")]
+        crate::diagnostic::rejected(10, 0, 0);
         self.degraded = Some(TerminalSafeCode::UnsupportedSequence);
         CanonicalFeedError::Terminal(TerminalFault::Degraded(
             TerminalSafeCode::UnsupportedSequence,

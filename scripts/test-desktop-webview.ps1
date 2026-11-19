@@ -169,6 +169,7 @@ try {
         $startArgs.RedirectStandardError = $diagnosticRaw
     }
     if ($NativeCodex) { $result.nativeStage = 'initial-product-ui' }
+    if ($CanonicalDiagnostic -and $NativeCodex) { $env:CC_DESK_DIAGNOSTIC_EXPECTED_PROGRAM = $NativeCodex }
     $app = Start-Process @startArgs
     $null = $app.Handle
     $result.pid = $app.Id
