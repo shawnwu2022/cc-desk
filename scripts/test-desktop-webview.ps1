@@ -152,6 +152,7 @@ try {
         $diagnosticRaw = Join-Path $env:RUNNER_TEMP ('canonical-stderr-' + [guid]::NewGuid() + '.txt')
         $startArgs.RedirectStandardError = $diagnosticRaw
     }
+    if ($NativeCodex) { $result.nativeStage = 'initial-product-ui' }
     $app = Start-Process @startArgs
     $null = $app.Handle
     $result.pid = $app.Id
@@ -205,7 +206,17 @@ try {
 } catch {
     if ($app) { $result.status = 'failed' }
     $result.error = $_.Exception.Message
-    if ($NativeCodex -and $window -and $result.Contains('nativeStage') -and $result.nativeStage -in @('add-empty-project','safe-new-session-dialog')) {
+    if ($NativeCodex -and $app -and $result.Contains('nativeStage') -and $result.nativeStage -eq 'initial-product-ui') {
+        try {
+            $result.initialAppExited = $app.HasExited
+            if ($app.HasExited) { $result.initialAppExitCode = $app.ExitCode }
+            else {
+                Observe-Children
+                @($children.Values | Select-Object -First 128 | ForEach-Object { [ordered]@{pid=$_.Id; imageName=[IO.Path]::GetFileName($_.MainModule.FileName); exited=$_.HasExited} }) | ConvertTo-Json -Depth 3 | Set-Content -Encoding utf8 (Join-Path $out 'initial-child-metadata.json')
+            }
+        } catch { $result.startupCaptureError = 'Startup process observation unavailable' }
+    }
+    if ($NativeCodex -and $window -and $result.Contains('nativeStage') -and $result.nativeStage -in @('initial-product-ui','add-empty-project','safe-new-session-dialog')) {
         # No CLI has been created. Desktop window metadata only; contents stay scoped to this App.
         try {
             Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class PackagedWindowOwners { [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr hwnd, uint command); [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid); }'

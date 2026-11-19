@@ -26,6 +26,7 @@ jobs:
         with:
           workspaces: src-tauri
           key: packaged-canonical-diagnostic-release
+          cache-on-failure: true
       - name: Prepare standard product dependencies
         shell: pwsh
         run: |
@@ -41,11 +42,33 @@ jobs:
         env:
           CARGO_BUILD_JOBS: '2'
         run: |
-          npm run tauri -- build --no-bundle --features packaged-canonical-diagnostic -- --locked
+          npm run tauri -- build --bundles nsis --config '{"bundle":{"createUpdaterArtifacts":false}}' --features packaged-canonical-diagnostic -- --locked
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           foreach ($name in @('conpty.dll','OpenConsole.exe')) {
             Copy-Item -LiteralPath "src-tauri/conpty/runtime/$name" -Destination "src-tauri/target/release/$name"
           }
+      - name: Preserve diagnostic package before GUI
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installers = @(Get-ChildItem src-tauri/target/release/bundle/nsis/*.exe)
+          if ($installers.Count -ne 1) { throw 'Expected one diagnostic NSIS installer' }
+          New-Item -ItemType Directory diagnostic-package | Out-Null
+          Copy-Item -LiteralPath $installers[0].FullName -Destination diagnostic-package/diagnostic-setup.exe
+          foreach ($name in @('cc-desk.exe','conpty.dll','OpenConsole.exe')) {
+            Copy-Item -LiteralPath "src-tauri/target/release/$name" -Destination "diagnostic-package/$name"
+            if ((Get-FileHash "src-tauri/target/release/$name").Hash -cne (Get-FileHash "diagnostic-package/$name").Hash) { throw 'Saved runtime digest mismatch' }
+          }
+          $files = @(Get-ChildItem diagnostic-package -File | Sort-Object Name | ForEach-Object { [ordered]@{name=$_.Name; bytes=$_.Length; sha256=(Get-FileHash $_.FullName).Hash.ToLowerInvariant()} })
+          [ordered]@{mode='diagnostic-nsis-not-original-pr100'; workflowCommit=$env:GITHUB_SHA; source=$env:GITHUB_SHA; sourceTree=(git rev-parse 'HEAD^{tree}'); baseline='84855a84ba08ca97c76567d1857d40bda9a4ff9d'; feature='packaged-canonical-diagnostic'; productSha256=(Get-FileHash diagnostic-package/cc-desk.exe).Hash.ToLowerInvariant(); officialCodexAsset=760864385; files=$files; published=$false; updaterPublication=$false} | ConvertTo-Json -Depth 5 | Set-Content diagnostic-package/manifest.json
+          Copy-Item diagnostic-package/manifest.json packaged-source.json
+      - name: Upload reusable diagnostic package before GUI
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnostic-nsis-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: diagnostic-package/
+          if-no-files-found: error
+          retention-days: 7
       - name: Download pinned official Codex
         shell: pwsh
         run: |
@@ -55,22 +78,29 @@ jobs:
           $exe = Join-Path $dir 'codex.exe'
           Invoke-WebRequest 'https://github.com/openai/codex/releases/download/rust-v0.169.1/codex-x86_64-pc-windows-msvc.exe' -OutFile $exe
           if ((Get-Item $exe).Length -ne 382647088 -or (Get-FileHash $exe).Hash -ine 'f76f94d08b0793bfa129ae62c09341ee32ae96d57e69968ae6b8d7c71a20d8c4') { throw 'Official Codex asset digest mismatch' }
-      - name: Run diagnostic release GUI (not original NSIS acceptance)
+      - name: Install diagnostic NSIS and observe real GUI
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           if ($env:GH_TOKEN -or $env:GITHUB_TOKEN) { throw 'Credentials must not reach product' }
-          $dir = Join-Path $env:RUNNER_TEMP 'diagnostic-release'
-          New-Item -ItemType Directory $dir | Out-Null
+          $manifest = Get-Content diagnostic-package/manifest.json -Raw | ConvertFrom-Json
+          foreach ($file in $manifest.files) {
+            if ((Get-FileHash (Join-Path diagnostic-package $file.name)).Hash -ine $file.sha256) { throw 'Saved package digest mismatch' }
+          }
+          $dir = Join-Path $env:RUNNER_TEMP 'diagnostic-installed'
+          $setup = Start-Process -FilePath (Resolve-Path diagnostic-package/diagnostic-setup.exe).Path -ArgumentList "/S /D=$dir" -PassThru -WindowStyle Hidden
+          try {
+            if (!$setup.WaitForExit(180000)) { $setup.Kill(); $null=$setup.WaitForExit(10000); throw 'Installer timeout' }
+            if ($setup.ExitCode -ne 0) { throw 'Installer failed' }
+          } finally { $setup.Dispose() }
           foreach ($name in @('cc-desk.exe','conpty.dll','OpenConsole.exe')) {
             $source = Join-Path 'src-tauri/target/release' $name
             $target = Join-Path $dir $name
-            Copy-Item -LiteralPath $source -Destination $target
             if ((Get-FileHash $source).Hash -cne (Get-FileHash $target).Hash) { throw 'Diagnostic runtime copy mismatch' }
           }
           $exe = Join-Path $dir 'cc-desk.exe'
           $sha = (Get-FileHash $exe).Hash.ToLowerInvariant()
-          [ordered]@{mode='diagnostic-release-not-original-nsis'; workflowCommit=$env:GITHUB_SHA; source=$env:GITHUB_SHA; sourceTree=(git rev-parse 'HEAD^{tree}'); baseline='84855a84ba08ca97c76567d1857d40bda9a4ff9d'; feature='packaged-canonical-diagnostic'; productSha256=$sha; officialCodexAsset=760864385; published=$false} | ConvertTo-Json | Set-Content packaged-source.json
+          [ordered]@{installerExit=0; runtimeHashesMatch=$true; productSha256=$sha; mode=$manifest.mode} | ConvertTo-Json | Set-Content diagnostic-installation.json
           & ./scripts/test-desktop-webview.ps1 -Exe $exe -ExpectedSha256 $sha -CanonicalDiagnostic -NativeCodex (Join-Path $env:RUNNER_TEMP 'official-codex/codex.exe')
       - uses: actions/upload-artifact@v4
         if: always()
@@ -78,6 +108,7 @@ jobs:
           name: packaged-pr100-native-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             packaged-source.json
+            diagnostic-installation.json
             desktop-webview-smoke/
           if-no-files-found: error
           retention-days: 7
