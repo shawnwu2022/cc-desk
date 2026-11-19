@@ -7,6 +7,11 @@ import en from '@/i18n/locales/en'
 
 const clipboard = vi.hoisted(() => vi.fn(async (_text: string) => {}))
 vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({ writeText: clipboard }))
+vi.mock('@/api/tauri', () => ({
+  controlActivityDiagnostics: async ({ action }: { action: string }) => action === 'start'
+    ? { state: 'started', grant: '0'.repeat(32) }
+    : action === 'stop' ? { state: 'stopped' } : { state: 'snapshot', report: { dropped: 0, events: [] } },
+}))
 
 afterEach(() => activityDiagnostics.disable())
 
@@ -19,8 +24,10 @@ it('ActivityDiagnostics_Settings_004 toggles and copies only displayed snapshot'
     const [toggle, preview] = wrapper.findAll('button')
     expect(toggle.attributes('aria-pressed')).toBe('false')
     await toggle.trigger('click')
+    await flushPromises()
     const operation = activityDiagnostics.start('archive', 'codex')!
     await preview.trigger('click')
+    await flushPromises()
     expect(clipboard).not.toHaveBeenCalled()
     const shown = wrapper.get('pre').element.textContent
     operation.record('adapter', 'ok')
@@ -28,6 +35,7 @@ it('ActivityDiagnostics_Settings_004 toggles and copies only displayed snapshot'
     await flushPromises()
     expect(clipboard).toHaveBeenCalledExactlyOnceWith(shown)
     await toggle.trigger('click')
+    await flushPromises()
     expect(toggle.attributes('aria-pressed')).toBe('false')
     operation.record('list', 'ok')
     expect(activityDiagnostics.snapshot().events.map(e => e.stage)).toEqual(['ui','adapter'])

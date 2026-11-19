@@ -1,3 +1,4 @@
+pub(crate) mod activity_diagnostics;
 mod antigravity;
 pub(crate) mod availability;
 pub(crate) mod claude;

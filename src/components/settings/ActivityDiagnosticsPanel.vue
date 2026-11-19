@@ -1,14 +1,16 @@
 <script setup lang="ts">
-import { onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { writeText } from '@tauri-apps/plugin-clipboard-manager'
 import { useI18n } from 'vue-i18n'
 import AppButton from '@/components/ui/AppButton.vue'
 import InlineNotice from '@/components/ui/InlineNotice.vue'
-import { activityDiagnostics } from '@/utils/activityDiagnostics'
+import { diagnosticsCaptureControl } from '@/utils/diagnosticsCaptureControl'
 
 const props = defineProps<{ active: boolean }>()
 const { t } = useI18n()
-const enabled = ref(activityDiagnostics.isEnabled())
+const capture = diagnosticsCaptureControl.state
+const snapshotPending = diagnosticsCaptureControl.snapshotPending
+const enabled = computed(() => capture.value === 'on')
 const preview = ref('')
 const status = ref<'copied' | 'failed' | null>(null)
 let owner = 0
@@ -18,17 +20,17 @@ onBeforeUnmount(invalidate)
 
 function toggle() {
   if (!props.active) return
-  if (activityDiagnostics.isEnabled()) activityDiagnostics.disable()
-  else activityDiagnostics.enable()
-  enabled.value = activityDiagnostics.isEnabled()
+  if (capture.value === 'off') void diagnosticsCaptureControl.enable()
+  else void diagnosticsCaptureControl.disable()
   invalidate()
 }
 
-function showPreview() {
+async function showPreview() {
   if (!props.active) return
-  ++owner
+  const current = ++owner
   status.value = null
-  preview.value = JSON.stringify(activityDiagnostics.snapshot(), null, 2)
+  const report = await diagnosticsCaptureControl.readReport()
+  if (current === owner && props.active) preview.value = JSON.stringify(report, null, 2)
 }
 
 async function copyPreview() {
@@ -48,8 +50,11 @@ async function copyPreview() {
   <div data-activity-diagnostics>
     <h3>{{ t('activityDiagnosticsTitle') }}</h3>
     <p>{{ t('activityDiagnosticsHint') }}</p>
-    <AppButton :disabled="!active" :aria-pressed="enabled" @click="toggle">{{ t(enabled ? 'activityDiagnosticsStop' : 'activityDiagnosticsStart') }}</AppButton>
-    <AppButton :disabled="!active" variant="ghost" @click="showPreview">{{ t('activityDiagnosticsPreview') }}</AppButton>
+    <AppButton :disabled="!active || capture === 'stopping'" :aria-pressed="enabled" @click="toggle">{{ t(capture !== 'off' ? 'activityDiagnosticsStop' : 'activityDiagnosticsStart') }}</AppButton>
+    <p v-if="capture === 'starting'" role="status">{{ t('activityDiagnosticsStarting') }}</p>
+    <p v-else-if="capture === 'stopping'" role="status">{{ t('activityDiagnosticsStopping') }}</p>
+    <InlineNotice v-else-if="capture === 'unknown'" kind="warning" :message="t('activityDiagnosticsStateUnknown')" />
+    <AppButton :disabled="!active || snapshotPending" variant="ghost" @click="showPreview">{{ t('activityDiagnosticsPreview') }}</AppButton>
     <template v-if="preview">
       <pre class="activity-preview" tabindex="0" :aria-label="t('activityDiagnosticsPreview')">{{ preview }}</pre>
       <AppButton :disabled="!active" @click="copyPreview">{{ t('activityDiagnosticsCopyPreview') }}</AppButton>

@@ -1,7 +1,7 @@
 const operations = ['archive', 'restore', 'rename', 'delete', 'refresh'] as const
 const providers = ['codex', 'claude', 'opencode', 'antigravity', 'unknown'] as const
 const stages = ['ui', 'adapter', 'backend', 'provider', 'list', 'preview', 'confirmation', 'reconcile'] as const
-const results = ['started', 'returned', 'ok', 'acknowledged', 'partial', 'failed', 'unknown', 'unsupported', 'cancelled', 'blocked', 'stale', 'skipped'] as const
+const results = ['started', 'returned', 'applied', 'unchanged', 'ok', 'acknowledged', 'partial', 'failed', 'unknown', 'unsupported', 'cancelled', 'blocked', 'stale', 'skipped'] as const
 
 type Operation = typeof operations[number]
 type Provider = typeof providers[number]
@@ -21,22 +21,25 @@ const limit = 256
 
 export function createActivityDiagnostics() {
   let enabled = false
+  let grant: string | undefined
   let epoch = 0
   let dropped = 0
   let next = 0
   const events: ActivityEvent[] = []
 
-  function enable() {
+  function enable(token?: string) {
     if (enabled) return
     epoch++
     dropped = 0
     next = 0
     events.length = 0
+    grant = token
     enabled = true
   }
 
   function disable() {
     enabled = false
+    grant = undefined
   }
 
   function start(operation: Operation, cli: Provider) {
@@ -70,7 +73,10 @@ export function createActivityDiagnostics() {
         throw error
       }
     }
-    return { record, observe }
+    function traceHeader() {
+      return enabled && ownedEpoch === epoch && grant ? grant + ':' + id : undefined
+    }
+    return { record, observe, traceHeader }
   }
 
   function snapshot() {
@@ -82,3 +88,6 @@ export function createActivityDiagnostics() {
 }
 
 export const activityDiagnostics = createActivityDiagnostics()
+
+export type DiagnosticHeader = () => string | undefined
+export type ActivityHandle = NonNullable<ReturnType<typeof activityDiagnostics.start>>

@@ -137,6 +137,15 @@ pub(crate) async fn cli_session_index_maintenance(
 }
 
 #[tauri::command]
+pub(crate) async fn cli_diagnostic_capture(
+    webview: Webview,
+    request: Request<'_>,
+    runtime: State<'_, Arc<NativeRuntime>>,
+) -> Result<super::activity_diagnostics::ControlReply, SafeError> {
+    runtime.diagnostic_capture(&webview, &request)
+}
+
+#[tauri::command]
 pub(crate) async fn cli_archive_session(
     webview: Webview,
     request: Request<'_>,

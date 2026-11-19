@@ -517,12 +517,12 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
         nativeRename: { rename: nativeRenameSession },
         nativeArchive: { archive: nativeArchiveSession },
         runSource: tab => nativeGetScope({kind:'run',runId:tab.runId,generation:tab.generation}),
-        cliUnarchive: { unarchive: (context, nativeSessionId) => {
+        cliUnarchive: { unarchive: (context, nativeSessionId, diagnostics) => {
           if (app.isProjectAdmissionBlocked(context.projectPath)) throw new Error('PROJECT_REMOVAL_IN_PROGRESS')
           // 只有 codex 有 CLI 侧归档；claude 行不进入此路径。
           if (context.cli !== 'codex') throw new Error('CLI_UNARCHIVE_UNAVAILABLE')
           return nativeUnarchiveSession({ requestId: createNativeId('request'), cli: 'codex', profileId: context.profileId,
-            expectedProfileRevision: context.profileRevision, projectPath: context.projectPath, nativeSessionId })
+            expectedProfileRevision: context.profileRevision, projectPath: context.projectPath, nativeSessionId }, diagnostics)
         } },
         runtime: { createTab: createNativeTab, restartTab: restartNative,
           stopTab: tab => requireHost().stopNative(tab.tabId, captureNativeAttempt(tab)),

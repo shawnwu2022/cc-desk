@@ -24,6 +24,7 @@ use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Manager, State, Webview, WebviewUrl, WebviewWindowBuilder};
 const CASES: &[&str] = &[
     "independent-roots",
+    "diagnostic-header-no-authority",
     "missing-proof",
     "raw-required",
     "forged-path",
@@ -122,7 +123,7 @@ async fn d12_peer(app: AppHandle, state: State<'_, Arc<Probe>>) -> Result<(), St
 #[tauri::command]
 async fn d12_reload(app: AppHandle, state: State<'_, Arc<Probe>>) -> Result<(), String> {
     let caller = state.caller.lock().clone().ok_or("NO_CALLER")?;
-    if state.records.lock().len() != 8 || state.service.registry().check_caller(&caller).is_err() {
+    if state.records.lock().len() != 9 || state.service.registry().check_caller(&caller).is_err() {
         return Err("RELOAD_OUT_OF_ORDER".into());
     }
     let window = app.get_webview_window("main").ok_or("MAIN_MISSING")?;
@@ -281,6 +282,8 @@ fn D12_Webview_Worker_099() {
         .manage(runtime)
         .manage(probe.clone())
         .invoke_handler(tauri::generate_handler![
+            crate::cli::commands::cli_diagnostic_capture,
+            crate::cli::commands::cli_inspect_session_delete,
             crate::commands::native_get_scope,
             crate::commands::native_list_resources,
             d12_record,

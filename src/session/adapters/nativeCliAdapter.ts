@@ -1,3 +1,4 @@
+import type { DiagnosticHeader } from '@/utils/activityDiagnostics'
 import type { InputWriteAdmission } from '@/terminal/inputAdmission'
 import type { LaunchAction } from '@/types/cli'
 import { captureNativeAttempt, matchesNativeAttempt, type NativeAttemptIdentity, type NativeCliTab } from '@/stores/nativeTabs'
@@ -65,7 +66,7 @@ export interface NativeArchivePort {
 /// CLI 自身归档容器（codex archived_sessions）的恢复端口。Desk 不搬动 CLI 文件，
 /// 只请求 CLI 执行它自己的 unarchive。
 export interface NativeCliUnarchivePort {
-  unarchive(session: NativeHistoryContext, nativeSessionId: string): Promise<void>
+  unarchive(session: NativeHistoryContext, nativeSessionId: string, diagnostics?: DiagnosticHeader): Promise<void>
 }
 
 export interface NativeCliAdapterDeps {
@@ -75,8 +76,8 @@ export interface NativeCliAdapterDeps {
   archive: NativeArchivePort
   cliUnarchive?: NativeCliUnarchivePort
   metadata?: SessionMetadataPort
-  nativeArchive?: { archive(request: NativeArchiveRequest): Promise<unknown> }
-  nativeRename?: { rename(request: NativeRenameRequest): Promise<NativeRenameReceipt> }
+  nativeArchive?: { archive(request: NativeArchiveRequest, diagnostics?: DiagnosticHeader): Promise<unknown> }
+  nativeRename?: { rename(request: NativeRenameRequest, diagnostics?: DiagnosticHeader): Promise<NativeRenameReceipt> }
   runSource?: (tab: NativeCliTab) => Promise<import('@/types/nativeProjection').SourceRef>
   /** legacy 固定根（`~/.claude`）的目录身份 key；仅在该根被证明时才接管 legacy 的裸 ID 归档。
    *  每次投影及恢复都重新验证，根替换后不能复用旧的归属证明。 */
@@ -654,7 +655,7 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
       noticeOwner.publish(closedNotice)
     } finally { noticeOwner.release() }
   }
-  async function renameSession(id: string, title: string, canContinue = () => true, onIssued?: () => void, signal?: AbortSignal): Promise<SessionRenameResult> {
+  async function renameSession(id: string, title: string, canContinue = () => true, onIssued?: () => void, signal?: AbortSignal, diagnostics?: DiagnosticHeader): Promise<SessionRenameResult> {
     const value = title.trim()
     if (!value || /[\x00-\x1f\x7f]/.test(value) || [...value].length > 200) throw new Error('SESSION_TITLE_REQUIRED')
     const owns = captureOwnership(id)
@@ -717,7 +718,7 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
     const refreshContext = { ...entry.context, force:true }
     if (!current()) throw new Error('STALE_SESSION_ATTEMPT')
     onIssued?.()
-    const receipt = await deps.nativeRename.rename(request)
+    const receipt = await deps.nativeRename.rename(request, ...(diagnostics ? [diagnostics] as const : []))
     if (receipt.state !== 'renamed' || receipt.operationId !== request.operationId || receipt.sessionKey !== request.sessionKey || receipt.title !== value || JSON.stringify(receipt.source) !== JSON.stringify(request.source)) throw new Error('RENAME_OUTCOME_UNKNOWN')
     if (!current()) throw new Error('STALE_SESSION_ATTEMPT')
     // 仅在原生回读确认后移除旧显示覆盖；同步失败必须保留“原生已改名”的事实。
@@ -801,7 +802,7 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
     if (!refreshed) throw new Error('ARCHIVE_DISPLAY_SYNC_FAILED')
     return refreshed
   }
-  async function archiveCodex(target: ReturnType<typeof findHistory>[number], requireCurrent: () => void, tab?: NativeCliTab): Promise<void> {
+  async function archiveCodex(target: ReturnType<typeof findHistory>[number], requireCurrent: () => void, tab?: NativeCliTab, diagnostics?: DiagnosticHeader): Promise<void> {
     if (!deps.nativeArchive || !deps.history.load) throw new Error('CLI_ARCHIVE_UNAVAILABLE')
     const { context } = target.entry
     const root = target.entry.sourceRootKey
@@ -834,7 +835,7 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
       archiving.add(key)
       try {
         const request = { operationId: createNativeId('archive'), source, sessionKey: matches[0].sessionKey }
-        const result = await deps.nativeArchive.archive(request)
+        const result = await deps.nativeArchive.archive(request, ...(diagnostics ? [diagnostics] as const : []))
         uncertainArchives.add(key)
         if (result !== undefined) {
           let receipt: NativeArchiveReceipt
@@ -864,7 +865,7 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
       || !refreshed.sessions.some(item => item.sessionKey === target.item.sessionKey && item.nativeSessionId === target.item.nativeSessionId && item.archived && !item.readFailure)) throw new Error('ARCHIVE_DISPLAY_SYNC_FAILED')
     uncertainArchives.delete(JSON.stringify([root, target.item.nativeSessionId]))
   }
-  async function archiveSession(id: string, canContinue = () => true): Promise<void> {
+  async function archiveSession(id: string, canContinue = () => true, diagnostics?: DiagnosticHeader): Promise<void> {
     const owns = captureOwnership(id)
     const requireCurrent = () => { if (!canContinue() || !owns()) throw new Error('STALE_SESSION_ATTEMPT') }
     requireCurrent()
@@ -879,7 +880,7 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
       const { entry, item } = candidates[0]
       if (tab.status === 'running' || tab.status === 'starting') await deps.runtime.stopTab(tab)
       if (!matchesNativeAttempt(deps.tabs.tabs.get(tab.tabId), attempt) || !owns() || !canContinue()) throw new Error('STALE_SESSION_ATTEMPT')
-      if (tab.cli === 'codex') await archiveCodex({ entry, item }, requireCurrent, tab)
+      if (tab.cli === 'codex') await archiveCodex({ entry, item }, requireCurrent, tab, diagnostics)
       else await deps.archive.archiveSession(tab.projectPath, historyId(entry, item.sessionKey, item.nativeSessionId), requireCurrent)
       if (!matchesNativeAttempt(deps.tabs.tabs.get(tab.tabId), attempt) || !owns() || !canContinue()) throw new Error('STALE_SESSION_ATTEMPT')
       const noticeOwner = beginClosedNotice(tab)
@@ -893,10 +894,10 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
     const matches = findHistory(id)
     if (matches.length !== 1) throw new Error('SESSION_ORIGIN_AMBIGUOUS')
     if (matches[0].entry.context.cli === 'codex') {
-      await archiveCodex(matches[0], requireCurrent)
+      await archiveCodex(matches[0], requireCurrent, undefined, diagnostics)
     } else await deps.archive.archiveSession(history.projectPath, id, requireCurrent)
   }
-  async function restoreArchivedSession(id: string): Promise<void> {
+  async function restoreArchivedSession(id: string, diagnostics?: DiagnosticHeader): Promise<void> {
     const history = parseHistoryId(id)
     const match = deps.history.all().flatMap(entry => entry.sessions.filter(item => historyId(entry, item.sessionKey, item.nativeSessionId) === id).map(item => ({ entry, item })))[0]
     const keys = deps.archive.getArchivedSessions(history.projectPath)
@@ -971,7 +972,7 @@ export function createNativeCliAdapter(deps: NativeCliAdapterDeps): SessionAdapt
             || !fresh.sessions.some(item => item.sessionKey === match.item.sessionKey && item.nativeSessionId === match.item.nativeSessionId && item.archived && !item.readFailure)) throw new Error(fresh.error || 'SOURCE_CHANGED')
           requireCurrent(id)
         }
-        await unarchive.unarchive(match.entry.context, match.item.nativeSessionId)
+        await unarchive.unarchive(match.entry.context, match.item.nativeSessionId, ...(diagnostics ? [diagnostics] as const : []))
         // unarchive 后端已强制核对旧未知写；只有成功恢复才清当前 adapter 的屏障。
         uncertainArchives.delete(JSON.stringify([sourceRoot, match.item.nativeSessionId]))
         // 归档状态由下一次历史读取按容器位置重投影；all() 仍是旧缓存，必须

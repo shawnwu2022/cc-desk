@@ -1,4 +1,4 @@
-import { activityDiagnostics } from '@/utils/activityDiagnostics'
+import { activityDiagnostics, type ActivityHandle } from '@/utils/activityDiagnostics'
 import { defineStore } from 'pinia'
 import { reactive } from 'vue'
 import type { SessionDeleteClient, SessionDeletePreview, SessionDeletePreviewRequest, SessionDeleteReceipt } from '@/types/nativeSessionDelete'
@@ -20,7 +20,7 @@ export function sessionDeleteTargetKey(input: SessionDeletePreviewRequest): stri
 export const useNativeSessionDeletesStore = defineStore('native-session-deletes', () => {
   const records = reactive(new Map<string, SessionDeleteOperation>())
   const clients = new Map<string, SessionDeleteClient>()
-  const diagnostics = new WeakMap<SessionDeleteOperation, NonNullable<ReturnType<typeof activityDiagnostics.start>>>()
+  const diagnostics = new WeakMap<SessionDeleteOperation, ActivityHandle>()
   const executions = new Map<string, Promise<void>>()
   function unavailable(): never { throw new Error('DELETE_CONFIRMATION_REQUIRED') }
   async function prepare(request: SessionDeletePreviewRequest, display?: SessionDeleteOperation['display']): Promise<void> {
@@ -36,7 +36,7 @@ export const useNativeSessionDeletesStore = defineStore('native-session-deletes'
     try {
       const client = createNativeSessionDeleteClient()
       clients.set(key, client)
-      const preview = await client.preview(frozen)
+      const preview = await client.preview(frozen, ...(trace ? [trace.traceHeader] as const : []))
       if (records.get(key) !== record) return
       trace?.record('preview', preview.state === 'ready' ? 'ok' : preview.state)
       record.preview = preview
@@ -78,7 +78,7 @@ export const useNativeSessionDeletesStore = defineStore('native-session-deletes'
           record.receipt = { operationId: record.request.operationId, cli: record.request.source.cli, state: 'blocked', rootPresent: null, descendants: 'unverified', reason: 'DELETE_PREVIEW_CHANGED' }
           return
         }
-        record.receipt = await client.confirm({ operationId: record.request.operationId, previewId, acknowledgePermanentDelete: true, acknowledgeNativeSubtree: true })
+        record.receipt = await client.confirm({ operationId: record.request.operationId, previewId, acknowledgePermanentDelete: true, acknowledgeNativeSubtree: true }, ...(trace ? [trace.traceHeader] as const : []))
       } catch {
         // 请求已进入发送路径；异常或文档替换均不能证明删除未发生。
         record.receipt = { operationId: record.request.operationId, cli: record.request.source.cli, state: 'unknown', rootPresent: null, descendants: 'unverified', reason: 'DELETE_OUTCOME_UNKNOWN' }
@@ -93,9 +93,10 @@ export const useNativeSessionDeletesStore = defineStore('native-session-deletes'
   async function inspect(key: string): Promise<void> {
     const record = records.get(key), client = clients.get(key)
     if (!record?.receipt || !client || record.phase !== 'result') return
+    const trace = diagnostics.get(record)
     record.phase = 'checking'; record.error = undefined
     try {
-      record.receipt = await client.inspect({ operationId: record.request.operationId }); record.inspected = true
+      record.receipt = await client.inspect({ operationId: record.request.operationId }, ...(trace ? [trace.traceHeader] as const : [])); record.inspected = true
       diagnostics.get(record)?.record('reconcile', record.receipt.state)
     }
     catch (failure) { diagnostics.get(record)?.record('reconcile', 'failed'); record.error = sessionDeleteErrorCode(failure) }
@@ -110,5 +111,6 @@ export const useNativeSessionDeletesStore = defineStore('native-session-deletes'
     if (!canReviewAgain(key)) return unavailable()
     records.delete(key); clients.delete(key)
   }
-  return { records, prepare, beginConfirmation, cancel, execute, inspect, canReviewAgain, restartReview }
+  function diagnosticsFor(record: SessionDeleteOperation): ActivityHandle | undefined { return diagnostics.get(record) }
+  return { records, diagnosticsFor, prepare, beginConfirmation, cancel, execute, inspect, canReviewAgain, restartReview }
 })
