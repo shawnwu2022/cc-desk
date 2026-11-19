@@ -119,15 +119,22 @@ function Test-PackagedNativeScope {
     $result.nativeStage = 'create-actual-run'
     Invoke-Button @('Create session', '创建会话')
     $ready = Wait-Observed {
-        $program = Find-Control @('Detected program', '检测到的程序') ([System.Windows.Automation.ControlType]::ComboBox)
-        if ($program) { return 'discovery' }
+        # Published discovery can be below the fold; Select-ObservedOption still requires supported reveal.
+        $programs = @($window.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition) | Where-Object { $_.Current.Name -cin @('Detected program', '检测到的程序') -and $_.Current.ControlType -eq [System.Windows.Automation.ControlType]::ComboBox })
+        if ($programs.Count -gt 1) { throw 'Ambiguous discovered program selector' }
+        if ($programs.Count -eq 1) { return 'discovery' }
         $hostButton = Find-Control @('单次远程连接') ([System.Windows.Automation.ControlType]::Button)
         if ($hostButton -and $hostButton.Current.IsEnabled) { return 'native' }
         return $null
     } 'real program discovery or Native run'
     if ($ready -eq 'discovery') {
+        if ($window.Current.ProcessId -ne $app.Id) { throw 'Discovery window owner mismatch' }
         Select-ObservedOption @('Detected program', '检测到的程序') @($NativeCodex)
-        Invoke-Button @('Use and start session', '使用并启动会话')
+        $visibleSelector = Find-Control @('Detected program', '检测到的程序') ([System.Windows.Automation.ControlType]::ComboBox)
+        if (!$visibleSelector) { throw 'Discovered selector not visible after selection' }
+        $result.programDiscovery = [ordered]@{appPid=$app.Id; uniqueSelector=$true; visibleAfterReveal=$true; exactSuppliedOptionInvoked=$true; confirmInvoked=$false}
+        Invoke-ObservedControl @('Use and start session', '使用并启动会话') ([System.Windows.Automation.ControlType]::Button)
+        $result.programDiscovery.confirmInvoked = $true
     }
 
     $identityStage = 'inventory'
