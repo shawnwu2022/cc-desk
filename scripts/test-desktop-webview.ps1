@@ -1,5 +1,5 @@
 # Ordinary installed product, disposable hosted Windows only. Never a fake IPC page.
-param([Parameter(Mandatory=$true)][string]$Exe, [string]$NativeCodex, [string]$ExpectedSha256)
+param([Parameter(Mandatory=$true)][string]$Exe, [string]$NativeCodex, [string]$ExpectedSha256, [switch]$CanonicalDiagnostic)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $out = Join-Path (Get-Location) 'desktop-webview-smoke'
@@ -147,7 +147,12 @@ try {
         }
     }
     # Visible UI is the explicit purpose of this hosted-only acceptance step.
-    $app = Start-Process -FilePath $image -WorkingDirectory (Split-Path $image) -PassThru
+    $startArgs = @{FilePath=$image; WorkingDirectory=(Split-Path $image); PassThru=$true}
+    if ($CanonicalDiagnostic) {
+        $diagnosticRaw = Join-Path $env:RUNNER_TEMP ('canonical-stderr-' + [guid]::NewGuid() + '.txt')
+        $startArgs.RedirectStandardError = $diagnosticRaw
+    }
+    $app = Start-Process @startArgs
     $null = $app.Handle
     $result.pid = $app.Id
     if ($app.MainModule.FileName -ine $image) { throw 'Started image identity mismatch' }
@@ -231,6 +236,19 @@ try {
             @($elements | ForEach-Object { [ordered]@{name=$_.Current.Name; id=$_.Current.AutomationId; type=$_.Current.ControlType.ProgrammaticName; enabled=$_.Current.IsEnabled; offscreen=$_.Current.IsOffscreen; patterns=@($_.GetSupportedPatterns() | ForEach-Object {$_.ProgrammaticName})} }) | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 (Join-Path $out 'host-panel-failure-tree.json')
         } catch { $result.captureError = $_.Exception.Message }
     }
+    if ($CanonicalDiagnostic -and $result.Contains('nativeScopeError') -and $app -and !$app.HasExited) {
+        # A failed scope does not skip the independent normal desktop exit observation.
+        try {
+            Observe-Children
+            $close = $null
+            if (!$window.TryGetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern, [ref]$close)) { throw 'BLOCKED_UI_CLOSE' }
+            ([System.Windows.Automation.WindowPattern]$close).Close()
+            if (!$app.WaitForExit(30000) -or $app.ExitCode -ne 0) { throw 'Diagnostic normal exit failed' }
+            $result.normalAppExit = $true
+            foreach ($child in $children.Values) { if (!$child.WaitForExit(10000)) { throw 'Observed diagnostic child did not exit' } }
+            $result.normalExit = $true
+        } catch { $result.normalExitError = $_.Exception.Message }
+    }
     if ($window -and !$NativeCodex) { try { Capture-Evidence 'failure' } catch { $result.captureError = $_.Exception.Message } }
     throw
 } finally {
@@ -243,6 +261,12 @@ try {
         $result.status = 'failed'
         throw
     } finally {
+        if ($CanonicalDiagnostic -and (Get-Variable diagnosticRaw -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath $diagnosticRaw)) {
+            # Raw stderr is never uploaded. Only the fixed numeric grammar is retained.
+            $safe = @(Get-Content -LiteralPath $diagnosticRaw | Where-Object { $_ -cmatch '^CC_CANONICAL_DIAG stage=[0-9]{1,3} code=[0-9]{1,3} a=[0-9]{1,20} b=[0-9]{1,20} elapsed_ms=[0-9]{1,20}$' } | Select-Object -First 64)
+            $safe | Set-Content -Encoding utf8 (Join-Path $out 'canonical-diagnostic.txt')
+            $result.diagnosticEventCount = $safe.Count
+        }
         $result | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 (Join-Path $out 'result.json')
         if ($app) { $app.Dispose() }
     }

@@ -4,6 +4,8 @@
 pub(crate) mod bound_test_support;
 #[cfg(all(test, feature = "experimental-host-owner"))]
 mod browser_data_fixture_tests;
+#[cfg(feature = "packaged-canonical-diagnostic")]
+pub mod packaged_diagnostic;
 pub mod journal;
 pub mod journal_digest;
 mod journal_storage;

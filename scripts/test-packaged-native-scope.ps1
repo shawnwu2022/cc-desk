@@ -130,14 +130,33 @@ function Test-PackagedNativeScope {
         Invoke-Button @('Use and start session', '使用并启动会话')
     }
 
+    Observe-Children
+    $codexChildren = @($children.Values | Where-Object { $_.ProcessName -eq 'codex' })
+    if ($codexChildren.Count -ne 1 -or $codexChildren[0].MainModule.FileName -ine $NativeCodex) { throw 'Exact real Codex child not observed' }
+    if ((Get-FileHash -LiteralPath $codexChildren[0].MainModule.FileName -Algorithm SHA256).Hash -ine $codexSha) { throw 'Running Codex digest differs' }
+
+    $result.runningCodex = [ordered]@{pid=$codexChildren[0].Id; sha256=$codexSha; exactProgramPath=$true}
     # Wait for the ordinary Native run; never type a prompt/status/login into its terminal.
     Invoke-Button @('单次远程连接')
+    # Read only the Host's fixed public state, even when its status lies below the scroll viewport.
+    $panels = @($window.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, '单次远程会话')))
+    if ($panels.Count -ne 1) { throw 'Host panel not unique' }
+    $states = @($panels[0].FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, '尚无批准')))
+    if ($states.Count -ne 1) { throw 'Host default no approval not observed' }
+    foreach ($name in @('请求本机批准', '启动一次')) {
+        $buttons = @($panels[0].FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, $name)))
+        if ($buttons.Count -ne 1 -or $buttons[0].Current.ControlType -ne [System.Windows.Automation.ControlType]::Button -or $buttons[0].Current.IsEnabled) { throw 'Host authority unexpectedly available' }
+    }
+    $result.hostLocked = [ordered]@{noApproval=$true; requestDisabled=$true; startDisabled=$true; source='actual Host panel before scope'}
     $result.nativeStage = 'read-public-scope'
     Invoke-Button @('读取公开会话范围')
     $scope = Wait-Observed {
         foreach ($code in @('REMOTE_HOST_UNAVAILABLE','NATIVE_CANONICAL_UNAVAILABLE','RUN_NOT_READY','FORBIDDEN','DOCUMENT_BRIDGE_UNAVAILABLE')) {
             $fixed = '未能读取公开会话范围（' + $code + '），不会自动重试。'
-            if (Find-Control @($fixed) ([System.Windows.Automation.ControlType]::Text)) {
+            $panels = @($window.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, '单次远程会话')))
+            if ($panels.Count -ne 1) { throw 'Host panel not unique' }
+            $errors = @($panels[0].FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, $fixed)))
+            if ($errors.Count -eq 1 -and $errors[0].Current.ControlType -eq [System.Windows.Automation.ControlType]::Text) {
                 $result.nativeScopeError = $code
                 throw 'PACKAGED_SCOPE_REJECTED'
             }
@@ -165,15 +184,6 @@ function Test-PackagedNativeScope {
         return $candidate
     } 'actual labelled public scope'
 
-    $null = Wait-Observed { Find-Control @('尚无批准') ([System.Windows.Automation.ControlType]::Text) } 'Host no approval'
-    foreach ($name in @('请求本机批准', '启动一次')) {
-        $button = Wait-Observed { Find-Control @($name) ([System.Windows.Automation.ControlType]::Button) } $name
-        if ($button.Current.IsEnabled) { throw 'Host authority unexpectedly available' }
-    }
-    Observe-Children
-    $codexChildren = @($children.Values | Where-Object { $_.ProcessName -eq 'codex' })
-    if ($codexChildren.Count -ne 1 -or $codexChildren[0].MainModule.FileName -ine $NativeCodex) { throw 'Exact real Codex child not observed' }
-    if ((Get-FileHash -LiteralPath $codexChildren[0].MainModule.FileName -Algorithm SHA256).Hash -ine $codexSha) { throw 'Running Codex digest differs' }
     $result.nativeStage = 'scope-and-locked-observed'
     $result.native = [ordered]@{
         scope = $scope; hostNoApproval = $true; requestDisabled = $true; startDisabled = $true

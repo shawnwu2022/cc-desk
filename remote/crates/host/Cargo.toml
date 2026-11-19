@@ -6,6 +6,7 @@ publish.workspace = true
 
 [features]
 default = []
+packaged-canonical-diagnostic = ["experimental-host-owner"]
 experimental-local-writer = ["dep:cc-desk-remote-terminal"]
 experimental-canonical-replies = ["experimental-local-writer", "cc-desk-remote-terminal/experimental-emulator", "dep:cc-desk-remote-record"]
 experimental-host-owner = ["experimental-canonical-replies", "dep:cc-desk-remote-transport", "dep:tokio", "dep:cc-desk-remote-security"]

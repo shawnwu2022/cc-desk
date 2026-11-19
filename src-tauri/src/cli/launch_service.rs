@@ -2102,6 +2102,8 @@ pub(crate) fn prepare_native_canonical(
     let journal = cc_desk_remote_host::journal::Journal::open(&directory.path().join("run.sqlite"))
         .map_err(|_| error("NATIVE_CANONICAL_STORAGE"))?;
     let request = resource.process.snapshot.request();
+    #[cfg(feature = "packaged-canonical-diagnostic")]
+    cc_desk_remote_host::packaged_diagnostic::emit(1, 0, request.rows.into(), request.cols.into());
     let mut producer = cc_desk_remote_host::native_host::NativeRunProducer::start_resource(
         journal,
         OriginalNativeWriter {

@@ -490,7 +490,27 @@ fn process_canonical(
     match result {
         Ok(()) => OutputResult::Processed { replies },
         Err(CanonicalFeedError::Sink(result)) => result,
-        Err(CanonicalFeedError::Terminal(_)) => {
+        Err(CanonicalFeedError::Terminal(error)) => {
+            #[cfg(feature = "packaged-canonical-diagnostic")]
+            {
+                use cc_desk_remote_terminal::{TerminalFault, TerminalSafeCode};
+                let TerminalFault::Degraded(code) = error;
+                crate::packaged_diagnostic::emit(
+                    3,
+                    match code {
+                        TerminalSafeCode::OscOverflow => 1,
+                        TerminalSafeCode::UnsupportedSequence => 2,
+                        TerminalSafeCode::CombiningScalar => 3,
+                        TerminalSafeCode::InputBatchExceeded => 4,
+                        TerminalSafeCode::ReplyQueryBudgetExceeded => 5,
+                        TerminalSafeCode::CanonicalEventBudgetExceeded => 6,
+                        TerminalSafeCode::StateVersionExceeded => 7,
+                    },
+                    request.bytes.len() as u64,
+                    0,
+                );
+            }
+            let _ = error;
             sealed.store(true, Ordering::Release);
             OutputResult::Rejected(Reject::Unsupported)
         }

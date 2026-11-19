@@ -767,7 +767,21 @@ impl RunSupervisor for NativeRunSupervisor {
                 *state.native_canonical.lock() = Some(owned);
                 Some(output)
             }
-            Err(_) => None, // Ordinary local run remains available; no complete-state remote eligibility.
+            Err(error) => {
+                #[cfg(feature = "packaged-canonical-diagnostic")]
+                cc_desk_remote_host::packaged_diagnostic::emit(
+                    2,
+                    match error.code.as_str() {
+                        "NATIVE_CANONICAL_STORAGE" => 1,
+                        "NATIVE_CANONICAL_UNAVAILABLE" => 2,
+                        _ => 99,
+                    },
+                    0,
+                    0,
+                );
+                let _ = error;
+                None // Ordinary local run remains available; no complete-state remote eligibility.
+            }
         };
 
         let progress: Arc<dyn OutputProgress> = state.clone();

@@ -330,6 +330,13 @@ impl NativeIoState {
         }
         let authorize = std::mem::replace(&mut request.authorize, Box::new(|| false));
         let (rows, columns) = (request.rows, request.columns);
+        #[cfg(feature = "packaged-canonical-diagnostic")]
+        crate::packaged_diagnostic::emit(
+            4,
+            u8::from(request.local_only),
+            rows as u64,
+            columns as u64,
+        );
         self.submit(
             Box::new(move |writer| {
                 let actual = writer.resize(
@@ -419,6 +426,19 @@ impl NativeIoState {
                 // No bytes from this collector have reached physical IO. Old
                 // native reply batches stay ordered; this whole source frame
                 // belongs to the existing desktop parser after the cut.
+                #[cfg(feature = "packaged-canonical-diagnostic")]
+                crate::packaged_diagnostic::emit(
+                    5,
+                    match result {
+                        OutputResult::Rejected(Reject::Unsupported) => 1,
+                        OutputResult::Rejected(Reject::Rate) => 2,
+                        OutputResult::Partial => 3,
+                        OutputResult::Unknown => 4,
+                        _ => 99,
+                    },
+                    0,
+                    0,
+                );
                 self.local_only(state, gate);
                 let _ = request.reply.try_send(OutputResult::LocalOnly);
             }
@@ -661,6 +681,8 @@ impl NativeOutputIngress {
         self.after_initial_qualified_load = Some(Box::new(hook));
     }
     fn fail(&self) {
+        #[cfg(feature = "packaged-canonical-diagnostic")]
+        crate::packaged_diagnostic::emit(6, 0, 0, 0);
         self.complete.store(false, Ordering::Release);
         self.output.seal();
         if let Some(a) = self.peer_close.lock().unwrap().as_ref() {
