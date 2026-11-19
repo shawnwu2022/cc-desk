@@ -122,13 +122,23 @@ not a new wire capability. In particular, raw-byte browser input is NOT equivale
 to local mouse, alternate-scroll, or bracketed-paste input, and no automatic input
 wrapping or mouse-event production is enabled.
 
-This canonical profile also admits exact erase-display/line modes 0/1/2 and indexed
-SGR `38;5;n`/`48;5;n` for n<=255 among the existing basic flags, keeping the total
-16 scalar parameter bound. The existing Palette projection represents these colors.
-RGB SGR, colon subparameters, arbitrary mixed private modes and OSC/DCS remain
-rejected. Ordinary construction retains the original narrow admission described
+This canonical profile also admits exact erase-display/line modes 0/1/2, indexed
+SGR `38;5;n`/`48;5;n`, and semicolon RGB `38;2;r;g;b`/`48;2;r;g;b` among the
+existing basic flags. Each color component is a single scalar in 0..=255; the
+whole SGR retains the total 16 scalar parameter bound. The existing Palette/Rgb
+projection and wire colors represent these without a protocol extension.
+Missing or out-of-range components, colon subparameters, other color selectors,
+underline colors (58), arbitrary mixed private modes and OSC/DCS remain rejected.
+Ordinary construction retains the original narrow admission described
 above. Unknown tails fail whole-batch preflight before mode or query effects.
 
+The canonical profile additionally admits exact DECSCUSR `CSI Ps SP q` with one
+scalar in 0..=6. Zero restores the configured emulator default; 1/2 select block,
+3/4 underline, and 5/6 beam (odd values blink). The existing cursor projection
+carries shape/blinking and still respects hidden-cursor mode. Other intermediates,
+multiple groups, colon subparameters and values above 6 remain rejected. This is
+a display update, not a new input mode or wire capability; ordinary construction
+continues to reject it.
 Terminal unit tests and a stale-view Host input test do not establish full Codex,
 browser, phone, or public Relay usability.
 
