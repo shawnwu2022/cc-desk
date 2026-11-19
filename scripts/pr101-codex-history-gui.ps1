@@ -45,6 +45,18 @@ function Test-CodexHistoryGui {
         ([System.Windows.Automation.ValuePattern]$set).SetValue($fixture.Project)
         Invoke-Button @('Select Folder', 'Select folder')
     } finally { $window=$main }
+    $r.stage='project-expand'
+    $projectLabel=Split-Path $fixture.Project -Leaf
+    $projectNode=Wait-Observed { Find-Control @($projectLabel) ([System.Windows.Automation.ControlType]::TreeItem) } 'synthetic registered project node'
+    $r.projectNodeObserved=$true
+    $hasCollapse=@($projectNode.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition) | Where-Object {
+        $_.Current.ControlType -eq $fixtureButton -and $_.Current.Name -ceq 'Collapse'
+    }).Count
+    if ($hasCollapse -gt 1) { throw 'Ambiguous synthetic project disclosure' }
+    if ($hasCollapse -eq 0) {
+        if (!(Invoke-FixtureTarget $projectNode 'Expand' $fixtureButton)) { throw 'Synthetic project expand unavailable' }
+        $r.projectExpandInvoked=$true
+    }
     $r.stage='active-history'
     $row=Wait-Observed { Find-Control @($fixture.ActiveCanary) ([System.Windows.Automation.ControlType]::TreeItem) } 'synthetic active history row'
     $r.activeRowObserved=$true
