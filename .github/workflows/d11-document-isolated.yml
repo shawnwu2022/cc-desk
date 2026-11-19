@@ -1,4 +1,4 @@
-name: Reused standard NSIS inventory diagnosis (verification branch only)
+name: Integrated PR101 standard NSIS acceptance (verification branch only)
 on:
   push:
     branches: [verify/packaged-native-84855a84]
@@ -24,11 +24,11 @@ jobs:
           $out = Join-Path $env:RUNNER_TEMP 'pr100-input'
           New-Item -ItemType Directory $out | Out-Null
           $headers = @{Authorization="Bearer $env:GH_TOKEN"; Accept='application/vnd.github+json'}
-          $metadata = Invoke-RestMethod -Headers $headers https://api.github.com/repos/shawnwu2022/cc-desk/actions/artifacts/14519127824
-          if ($metadata.expired -or $metadata.workflow_run.id -ne 44503411448 -or $metadata.name -cne 'standard-rgb-cursor-nsis-82eaad7f4546146eb6a7c706ce2fa048491179dc-44503411448-1') { throw 'Artifact identity mismatch' }
+          $metadata = Invoke-RestMethod -Headers $headers https://api.github.com/repos/shawnwu2022/cc-desk/actions/artifacts/14529700264
+          if ($metadata.expired -or $metadata.workflow_run.id -ne 44521215663 -or $metadata.name -cne 'cc-desk-native-v3-test-b64723a0e1a5142bb5dc582e40886ae139d1737b') { throw 'Artifact identity mismatch' }
           $zip = Join-Path $out 'artifact.zip'
-          Invoke-WebRequest -Headers $headers https://api.github.com/repos/shawnwu2022/cc-desk/actions/artifacts/14519127824/zip -OutFile $zip
-          if ((Get-FileHash $zip).Hash -ine '949044c9841b872d3201eedc2f30d3141810d16c2c194d88cced3b5c75b5fbbe') { throw 'Artifact ZIP digest mismatch' }
+          Invoke-WebRequest -Headers $headers https://api.github.com/repos/shawnwu2022/cc-desk/actions/artifacts/14529700264/zip -OutFile $zip
+          if ((Get-FileHash $zip).Hash -ine 'b0572674d66260b2e7d4f0ddf4132b23ff6afb9dd17d1047f614570efeb136f2') { throw 'Artifact ZIP digest mismatch' }
           Add-Type -AssemblyName System.IO.Compression.FileSystem
           $archive = [IO.Compression.ZipFile]::OpenRead($zip)
           try {
@@ -38,7 +38,7 @@ jobs:
           } finally { $archive.Dispose() }
           Expand-Archive -LiteralPath $zip -DestinationPath (Join-Path $out 'package')
           $installers = @(Get-ChildItem (Join-Path $out 'package') -Recurse -Filter '*setup.exe')
-          if ($installers.Count -ne 1 -or (Get-FileHash $installers[0].FullName).Hash -ine 'da8c2202053f41c701bfbab1eed5ad0df38d412fcbbe80b052451f16e9ee7267') { throw 'Installer digest mismatch' }
+          if ($installers.Count -ne 1 -or (Get-FileHash $installers[0].FullName).Hash -ine '183ee1b66b7c49538180069d3fc29b7015048690399ea511101422fa333b329d') { throw 'Installer digest mismatch' }
       - name: Download pinned official Codex
         shell: pwsh
         run: |
@@ -86,7 +86,7 @@ jobs:
             if ($setup.ExitCode -ne 0) { throw 'Installer failed' }
           } finally { $setup.Dispose() }
           $exe = Join-Path $installed 'cc-desk.exe'
-          $sha = '4a4dbc05925a8c21e7f3f1237e042237293d99506ff6e0bc4267a5164a18e16f'
+          $sha = '984a4792e8f21726cf694ec6fc62f99f3853d8e724e1bf30053bc569dbfdeb47'
           if ((Get-FileHash $exe).Hash -ine $sha) { throw 'Installed product digest mismatch' }
           $runtime = @{
             'conpty.dll'='39fba2713e2495117b1591ae8c32a3b904bea7aa66069cf7815e2844c76d75d8'
@@ -95,7 +95,7 @@ jobs:
           foreach ($name in $runtime.Keys) {
             if ((Get-FileHash (Join-Path $installed $name)).Hash -ine $runtime[$name]) { throw 'Installed runtime digest mismatch' }
           }
-          [ordered]@{workflowCommit=$env:GITHUB_SHA; artifactId=14519127824; mode='reused-standard-rgb-cursor-nsis'; source='1930fe1fd82c44c5a2e7a1ec830b8de31094a555'; baseline='84855a84ba08ca97c76567d1857d40bda9a4ff9d'; sourceTree='9c5b48f4d5454ef511840e16d17178e5d758e251'; looseExeSha256='596272ccc8fc958b7aca72062c5e0a3ae5be2d057de7182a6029670a61d5088a'; bundleMarker='NSIS uses NSS; loose executable uses UNK'; productSha256=$sha; officialCodexAsset=760864385; diagnosticFeature=$false; published=$false} | ConvertTo-Json | Set-Content packaged-source.json
+          [ordered]@{workflowCommit=$env:GITHUB_SHA; artifactId=14529700264; mode='reused-integrated-pr101-standard-nsis'; source='b64723a0e1a5142bb5dc582e40886ae139d1737b'; baseline='b5ce148e89bfab47d4b3674d73d8fa882b15915e'; sourceTree='45d10fa723785b61b859e7f404b99697c19d97d8'; prHead='d40c867762a16b1bb1e21aabe7eb1792b7fbc8a9'; bundleMarker='NSIS uses NSS; loose executable uses UNK'; productSha256=$sha; officialCodexAsset=760864385; diagnosticFeature=$false; published=$false} | ConvertTo-Json | Set-Content packaged-source.json
           & ./scripts/test-desktop-webview.ps1 -Exe $exe -ExpectedSha256 $sha -CanonicalDiagnostic -NativeCodex (Join-Path $env:RUNNER_TEMP 'official-codex/extracted/package/vendor/x86_64-pc-windows-msvc/bin/codex.exe')
       - uses: actions/upload-artifact@v4
         if: always()
