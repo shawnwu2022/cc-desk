@@ -1,4 +1,4 @@
-name: Canonical diagnostic release GUI (verification branch only)
+name: Reused diagnostic NSIS GUI (verification branch only)
 on:
   push:
     branches: [verify/packaged-native-84855a84]
@@ -10,81 +10,35 @@ jobs:
   packaged-native:
     if: github.ref == 'refs/heads/verify/packaged-native-84855a84'
     runs-on: windows-2022
-    timeout-minutes: 45
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v5
-        with:
-          node-version: '24.18.0'
-          cache: npm
-      - uses: dtolnay/rust-toolchain@1.98.1
-        with:
-          components: rustfmt
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
-          key: packaged-canonical-diagnostic-release
-          cache-on-failure: true
-      - name: Prepare standard product dependencies
-        shell: pwsh
-        run: |
-          npm ci
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          npm run prepare:session-sdk
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          npm run prepare:opencode-archive
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - uses: ./.github/actions/setup-windows-browser-tools
-      - name: Build explicitly diagnostic standard release profile
+      - name: Download exact existing package
         shell: pwsh
         env:
-          CARGO_BUILD_JOBS: '2'
-        run: |
-          npm run tauri -- build --bundles nsis --config '{"bundle":{"createUpdaterArtifacts":false}}' --features packaged-canonical-diagnostic -- --locked
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          foreach ($name in @('conpty.dll','OpenConsole.exe')) {
-            Copy-Item -LiteralPath "src-tauri/conpty/runtime/$name" -Destination "src-tauri/target/release/$name"
-          }
-      - name: Preserve diagnostic package before GUI
-        shell: pwsh
+          GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $installers = @(Get-ChildItem src-tauri/target/release/bundle/nsis/*.exe)
-          if ($installers.Count -ne 1) { throw 'Expected one diagnostic NSIS installer' }
-          New-Item -ItemType Directory diagnostic-package | Out-Null
-          Copy-Item -LiteralPath $installers[0].FullName -Destination diagnostic-package/diagnostic-setup.exe
-          foreach ($name in @('cc-desk.exe','conpty.dll','OpenConsole.exe')) {
-            Copy-Item -LiteralPath "src-tauri/target/release/$name" -Destination "diagnostic-package/$name"
-            if ((Get-FileHash "src-tauri/target/release/$name").Hash -cne (Get-FileHash "diagnostic-package/$name").Hash) { throw 'Saved runtime digest mismatch' }
-          }
-          [ordered]@{source=$env:GITHUB_SHA; sourceTree=(git rev-parse 'HEAD^{tree}'); mode='aggregate-diagnostic-nsis'; installationVerified=$false; installerSha256=(Get-FileHash diagnostic-package/diagnostic-setup.exe).Hash; looseExeSha256=(Get-FileHash diagnostic-package/cc-desk.exe).Hash} | ConvertTo-Json | Set-Content diagnostic-package/pre-installation.json
-          $dir = Join-Path $env:RUNNER_TEMP 'diagnostic-installed'
-          $setup = Start-Process -FilePath $installers[0].FullName -ArgumentList "/S /D=$dir" -PassThru -WindowStyle Hidden
+          $out = Join-Path $env:RUNNER_TEMP 'pr100-input'
+          New-Item -ItemType Directory $out | Out-Null
+          $headers = @{Authorization="Bearer $env:GH_TOKEN"; Accept='application/vnd.github+json'}
+          $metadata = Invoke-RestMethod -Headers $headers https://api.github.com/repos/shawnwu2022/cc-desk/actions/artifacts/14509858775
+          if ($metadata.expired -or $metadata.workflow_run.id -ne 44484823530 -or $metadata.name -cne 'diagnostic-nsis-33407c9b39e00217fb624fe1299139c0f1cbf8f3-44484823530-1') { throw 'Artifact identity mismatch' }
+          $zip = Join-Path $out 'artifact.zip'
+          Invoke-WebRequest -Headers $headers https://api.github.com/repos/shawnwu2022/cc-desk/actions/artifacts/14509858775/zip -OutFile $zip
+          if ((Get-FileHash $zip).Hash -ine '7c7dfc822cc6f7bdd90972f896db283bdbebe4e7a0212b07a261d0a64f85790b') { throw 'Artifact ZIP digest mismatch' }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $archive = [IO.Compression.ZipFile]::OpenRead($zip)
           try {
-            if (!$setup.WaitForExit(180000)) { $setup.Kill(); $null=$setup.WaitForExit(10000); throw 'Installer timeout' }
-            if ($setup.ExitCode -ne 0) { throw 'Installer failed' }
-          } finally { $setup.Dispose() }
-          Move-Item diagnostic-package/cc-desk.exe diagnostic-package/loose-cc-desk.exe
-          $env:DIAGNOSTIC_INSTALLED = $dir
-          node -e "const f=require('fs'),p=require('path');let a=f.readFileSync('diagnostic-package/loose-cc-desk.exe'),b=f.readFileSync(p.join(process.env.DIAGNOSTIC_INSTALLED,'cc-desk.exe'));let m=Buffer.from('__TAURI_BUNDLE_TYPE_VAR_UNK'),i=a.indexOf(m);if(i<0||a.indexOf(m,i+1)>=0)throw Error('marker uniqueness');Buffer.from('__TAURI_BUNDLE_TYPE_VAR_NSS').copy(a,i);if(!a.equals(b))throw Error('installed image differs beyond bundle marker');"
-          if ($LASTEXITCODE -ne 0) { throw 'Bundle identity validation failed' }
-          foreach ($name in @('conpty.dll','OpenConsole.exe')) {
-            if ((Get-FileHash (Join-Path $dir $name)).Hash -cne (Get-FileHash "diagnostic-package/$name").Hash) { throw 'Installed runtime identity mismatch' }
-          }
-          Copy-Item (Join-Path $dir 'cc-desk.exe') diagnostic-package/cc-desk.exe
-          $files = @(Get-ChildItem diagnostic-package -File | Sort-Object Name | ForEach-Object { [ordered]@{name=$_.Name; bytes=$_.Length; sha256=(Get-FileHash $_.FullName).Hash.ToLowerInvariant()} })
-          [ordered]@{mode='diagnostic-nsis-not-original-pr100'; workflowCommit=$env:GITHUB_SHA; source=$env:GITHUB_SHA; sourceTree=(git rev-parse 'HEAD^{tree}'); baseline='84855a84ba08ca97c76567d1857d40bda9a4ff9d'; feature='packaged-canonical-diagnostic'; productSha256=(Get-FileHash diagnostic-package/cc-desk.exe).Hash.ToLowerInvariant(); officialCodexAsset=760864385; files=$files; published=$false; updaterPublication=$false} | ConvertTo-Json -Depth 5 | Set-Content diagnostic-package/manifest.json
-          Copy-Item diagnostic-package/manifest.json packaged-source.json
-      - name: Upload reusable diagnostic package before GUI
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: diagnostic-nsis-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: diagnostic-package/
-          if-no-files-found: error
-          retention-days: 7
+            foreach ($entry in $archive.Entries) {
+              if ($entry.FullName -match '(^[/\\]|(^|[/\\])\.\.([/\\]|$)|:)' -or (($entry.ExternalAttributes -shr 16) -band 0xF000) -eq 0xA000) { throw 'Unsafe ZIP entry' }
+            }
+          } finally { $archive.Dispose() }
+          Expand-Archive -LiteralPath $zip -DestinationPath (Join-Path $out 'package')
+          $installers = @(Get-ChildItem (Join-Path $out 'package') -Recurse -Filter '*setup.exe')
+          if ($installers.Count -ne 1 -or (Get-FileHash $installers[0].FullName).Hash -ine 'cfc4b63cea571c5e70aa798748476ab21e43092fc916b66e558bc8669fda75b3') { throw 'Installer digest mismatch' }
       - name: Download pinned official Codex
         shell: pwsh
         run: |
@@ -118,18 +72,31 @@ jobs:
           [ordered]@{package='@openai/codex'; version='0.169.1-win32-x64'; integrity="sha512-$expectedIntegrity"; archiveSha256=(Get-FileHash $archive).Hash; source='official npm platform package'; files=$inventory} | ConvertTo-Json -Depth 5 | Set-Content codex-supply.json
           $exe = Join-Path $extract 'package/vendor/x86_64-pc-windows-msvc/bin/codex.exe'
           if ((Get-Item $exe).Length -ne 382647088 -or (Get-FileHash $exe).Hash -ine 'f76f94d08b0793bfa129ae62c09341ee32ae96d57e69968ae6b8d7c71a20d8c4') { throw 'Official Codex asset digest mismatch' }
-      - name: Observe real GUI using verified installed diagnostic package
+      - name: Install exact NSIS and run real GUI acceptance
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          if ($env:GH_TOKEN -or $env:GITHUB_TOKEN) { throw 'Credentials must not reach product' }
-          $manifest = Get-Content diagnostic-package/manifest.json -Raw | ConvertFrom-Json
-          $dir = Join-Path $env:RUNNER_TEMP 'diagnostic-installed'
-          foreach ($name in @('cc-desk.exe','conpty.dll','OpenConsole.exe')) {
-            $entry = @($manifest.files | Where-Object name -CEQ $name)
-            if ($entry.Count -ne 1 -or (Get-FileHash (Join-Path $dir $name)).Hash -ine $entry[0].sha256) { throw 'Installed image changed' }
+          if ($env:GH_TOKEN -or $env:GITHUB_TOKEN) { throw 'Download credentials must not reach product' }
+          $installer = @(Get-ChildItem (Join-Path $env:RUNNER_TEMP 'pr100-input/package') -Recurse -Filter '*setup.exe')
+          if ($installer.Count -ne 1) { throw 'Installer not unique' }
+          $installed = Join-Path $env:RUNNER_TEMP 'pr100-installed'
+          $setup = Start-Process -FilePath $installer[0].FullName -ArgumentList "/S /D=$installed" -PassThru -WindowStyle Hidden
+          try {
+            if (!$setup.WaitForExit(180000)) { $setup.Kill(); $null=$setup.WaitForExit(10000); throw 'Installer timeout' }
+            if ($setup.ExitCode -ne 0) { throw 'Installer failed' }
+          } finally { $setup.Dispose() }
+          $exe = Join-Path $installed 'cc-desk.exe'
+          $sha = '05ed080e4dde3b274a0da5a7403bbba967f7e1834e115d3f9e50dd222647bbdc'
+          if ((Get-FileHash $exe).Hash -ine $sha) { throw 'Installed product digest mismatch' }
+          $runtime = @{
+            'conpty.dll'='39fba2713e2495117b1591ae8c32a3b904bea7aa66069cf7815e2844c76d75d8'
+            'OpenConsole.exe'='b7fd936c2668b87b9ecf7b3366dc6568afc1c6f981874cba3e955a1c35cf8160'
           }
-          & ./scripts/test-desktop-webview.ps1 -Exe (Join-Path $dir 'cc-desk.exe') -ExpectedSha256 $manifest.productSha256 -CanonicalDiagnostic -NativeCodex (Join-Path $env:RUNNER_TEMP 'official-codex/extracted/package/vendor/x86_64-pc-windows-msvc/bin/codex.exe')
+          foreach ($name in $runtime.Keys) {
+            if ((Get-FileHash (Join-Path $installed $name)).Hash -ine $runtime[$name]) { throw 'Installed runtime digest mismatch' }
+          }
+          [ordered]@{workflowCommit=$env:GITHUB_SHA; artifactId=14509858775; mode='reused-diagnostic-nsis-not-original-pr100'; source='33407c9b39e00217fb624fe1299139c0f1cbf8f3'; baseline='84855a84ba08ca97c76567d1857d40bda9a4ff9d'; sourceTree='e88da3f23c12b8f24b6f69a782918bcc8c8b2fcc'; looseExeSha256='2ee8426ca7001074faeafac65c7a76b2eede86c1f91c20b067e89d3f0ab08be5'; bundleMarker='NSIS uses NSS; loose executable uses UNK'; productSha256=$sha; officialCodexAsset=760864385; published=$false} | ConvertTo-Json | Set-Content packaged-source.json
+          & ./scripts/test-desktop-webview.ps1 -Exe $exe -ExpectedSha256 $sha -CanonicalDiagnostic -NativeCodex (Join-Path $env:RUNNER_TEMP 'official-codex/extracted/package/vendor/x86_64-pc-windows-msvc/bin/codex.exe')
       - uses: actions/upload-artifact@v4
         if: always()
         with:

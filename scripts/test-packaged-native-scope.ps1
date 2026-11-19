@@ -33,7 +33,7 @@ function Invoke-ObservedControl([string[]]$Names, $Type = $null) {
     throw 'BLOCKED_UI_ACTION'
 }
 
-function Select-ObservedOption([string[]]$Names, [string[]]$Options, [switch]$VerifySelected) {
+function Select-ObservedOption([string[]]$Names, [string[]]$Options, [switch]$VerifySelected, [switch]$InvokeAndVerifyValue) {
     Reveal-ObservedControl $Names ([System.Windows.Automation.ControlType]::ComboBox)
     $combo = Wait-Observed { Find-Control $Names ([System.Windows.Automation.ControlType]::ComboBox) } ($Names -join '/')
     $expand = $null
@@ -42,6 +42,20 @@ function Select-ObservedOption([string[]]$Names, [string[]]$Options, [switch]$Ve
     $option = Wait-Observed { Find-Control $Options ([System.Windows.Automation.ControlType]::ListItem) } ($Options -join '/')
     $select = $null
     if (!$option.TryGetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern, [ref]$select)) { throw 'BLOCKED_UI_SELECTION' }
+    if ($InvokeAndVerifyValue) {
+        $invoke = $null
+        if (!$option.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$invoke)) { throw 'BLOCKED_UI_OPTION_INVOKE' }
+        ([System.Windows.Automation.InvokePattern]$invoke).Invoke()
+        # The popup may close. Read the same unique visible combo, not a stale/offscreen option.
+        $null = Wait-Observed {
+            $current = Find-Control $Names ([System.Windows.Automation.ControlType]::ComboBox)
+            if (!$current) { return $null }
+            $value = $null
+            if (!$current.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$value)) { throw 'BLOCKED_UI_SELECTION_READ' }
+            return ([System.Windows.Automation.ValuePattern]$value).Current.Value -cin $Options
+        } 'argument format selected value'
+        return
+    }
     ([System.Windows.Automation.SelectionItemPattern]$select).Select()
     if ($VerifySelected -and !([System.Windows.Automation.SelectionItemPattern]$select).Current.IsSelected) { throw 'Selected program option not confirmed' }
 }
@@ -112,7 +126,7 @@ function Test-PackagedNativeScope {
     $toggle = [System.Windows.Automation.TogglePattern]$toggle
     if ($toggle.Current.ToggleState -ne [System.Windows.Automation.ToggleState]::Off) { throw 'Raw mode was not default off' }
     $toggle.Toggle()
-    Select-ObservedOption @('Argument format', '编辑方式') @('Raw JSON array', '原始 JSON 数组') -VerifySelected
+    Select-ObservedOption @('Argument format', '编辑方式') @('Raw JSON array', '原始 JSON 数组') -InvokeAndVerifyValue
     $result.argumentFormatSelected = $true
     $safeArgv = '["--sandbox","read-only","--ask-for-approval","on-request"]'
     Set-ObservedValue @('Raw arguments', '原始参数') $safeArgv
