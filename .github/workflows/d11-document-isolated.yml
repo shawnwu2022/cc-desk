@@ -31,6 +31,16 @@ jobs:
             $file = Join-Path $env:RUNNER_TEMP ($entry.Folder + '.zip')
             Invoke-WebRequest "$base/$($entry.Id)/zip" -Headers $headers -OutFile $file
             if ((Get-FileHash -LiteralPath $file).Hash -ine $entry.Sha) { throw 'Pinned artifact digest mismatch' }
+            if ($entry.Id -eq 14509138179) {
+              Add-Type -AssemblyName System.IO.Compression.FileSystem
+              $zip = [IO.Compression.ZipFile]::OpenRead($file)
+              try {
+                if (@($zip.Entries | Where-Object FullName -CEQ 'test-package/test-package-manifest.json').Count -ne 1) {
+                  throw 'Pinned manifest ZIP entry mismatch'
+                }
+                Write-Host 'Pinned ZIP entry verified: test-package/test-package-manifest.json'
+              } finally { $zip.Dispose() }
+            }
             Expand-Archive -LiteralPath $file -DestinationPath (Join-Path $env:RUNNER_TEMP $entry.Folder)
           }
       - name: Verify and launch the exact ordinary NSIS
@@ -38,14 +48,12 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           if (!$IsWindows -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted') { throw 'Expected ephemeral hosted Windows' }
-          $package = Join-Path $env:RUNNER_TEMP 'pr101-package'
+          $package = Join-Path $env:RUNNER_TEMP 'pr101-package/test-package'
           $manifest = Get-Content (Join-Path $package 'test-package-manifest.json') -Raw | ConvertFrom-Json
           if ($manifest.sourceCommit -cne '971eb19a30218c7295be73d48d73fda5db9379c4' -or $manifest.workflowRunId -cne '44481773577' -or $manifest.workflowRunAttempt -cne '1' -or $manifest.channel -cne 'test-only' -or $manifest.publishable -ne $false -or $manifest.updaterPublication -ne $false -or $manifest.installerFile -cnotmatch '^CC-Desk-[\w.-]+-setup\.exe$') { throw 'Pinned manifest mismatch' }
           $installer = Join-Path $package $manifest.installerFile
           if ((Get-FileHash -LiteralPath $installer).Hash -ine $manifest.sha256) { throw 'NSIS digest mismatch' }
-          $prior = @(Get-ChildItem (Join-Path $env:RUNNER_TEMP 'pr101-smoke') -Filter result.json -Recurse -File)
-          if ($prior.Count -ne 1) { throw 'Expected one pinned smoke receipt' }
-          $smoke = Get-Content $prior[0].FullName -Raw | ConvertFrom-Json
+          $smoke = Get-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'pr101-smoke/result.json') -Raw | ConvertFrom-Json
           if ($smoke.status -cne 'passed' -or !$smoke.normalExit -or $smoke.sha256 -cnotmatch '^[0-9A-Fa-f]{64}$') { throw 'Missing trusted installed image identity' }
           $target = Join-Path $env:RUNNER_TEMP 'pr101-installed'
           $install = Start-Process -FilePath $installer -ArgumentList @('/S', "/D=$target") -WindowStyle Hidden -Wait -PassThru
