@@ -441,11 +441,17 @@ impl RestrictedInputGate {
                 return false;
             }
             if matches!(p[0], 38 | 48) {
-                if values.next() != Some(&[5][..]) {
-                    return false;
-                }
-                if !values.next().is_some_and(|n| n.len() == 1 && n[0] <= 255) {
-                    return false;
+                // Only fixed-size semicolon palette/RGB cell colors. Other selectors,
+                // subparameters and unrelated SGR attributes remain unsupported.
+                let components = match values.next() {
+                    Some([5]) => 1,
+                    Some([2]) => 3,
+                    _ => return false,
+                };
+                for _ in 0..components {
+                    if !values.next().is_some_and(|n| n.len() == 1 && n[0] <= 255) {
+                        return false;
+                    }
                 }
             } else if !matches!(p[0], 0..=4 | 7..=9 | 22..=24 | 27..=29 | 30..=37 | 39..=47 | 49 | 90..=97 | 100..=107)
             {
