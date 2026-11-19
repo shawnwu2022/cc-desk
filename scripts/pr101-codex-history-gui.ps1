@@ -22,6 +22,65 @@ function Invoke-FixtureTarget($Root, [string]$Name, $Type, [switch]$WorkspaceHea
     return $true
 }
 
+function Set-FixtureEdit([string]$Name,[string]$Value) {
+    $editType=[System.Windows.Automation.ControlType]::Edit
+    Reveal-DiagnosticsControl @($Name) $editType
+    $ctl=Wait-Observed { Find-Control @($Name) $editType } "synthetic configuration: $Name"
+    $pattern=$null
+    if (!$ctl.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern,[ref]$pattern)) { throw "Synthetic edit not writable: $Name" }
+    $pattern=[System.Windows.Automation.ValuePattern]$pattern
+    $pattern.SetValue($Value)
+    if ($pattern.Current.Value -cne $Value) { throw "Synthetic edit readback mismatch: $Name" }
+}
+
+function Configure-CodexFixtureProfile {
+    $result.codexHistory.stage='create-official-codex-profile'
+    Invoke-Button @('Settings')
+    Invoke-Button @('Launch configurations')
+    $name='Pr101SyntheticCodexProfile'
+    $button=[System.Windows.Automation.ControlType]::Button
+    $target=Wait-Observed {
+        $tools=@($window.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition) | Where-Object {
+            $_.Current.Name -ceq 'New configuration' -and $_.Current.ControlType -eq $button -and
+            $null -ne [System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($_) -and
+            @([System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($_).FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition) | Where-Object {
+                $_.Current.Name -ceq 'Codex CLI' -and $_.Current.ControlType -ne $button
+            }).Count -eq 1
+        })
+        if ($tools.Count -gt 1) { throw 'Ambiguous Codex profile group' }
+        if ($tools.Count -eq 1) { $tools[0] }
+    } 'new configuration in exact Codex CLI group'
+    if ($target.Current.IsOffscreen) {
+        $scroll=$null
+        if (!$target.TryGetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern,[ref]$scroll)) { throw 'Codex configuration group cannot reveal its action' }
+        ([System.Windows.Automation.ScrollItemPattern]$scroll).ScrollIntoView()
+    }
+    $click=$null
+    if (!$target.Current.IsEnabled -or !$target.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern,[ref]$click)) { throw 'Codex configuration action unavailable' }
+    ([System.Windows.Automation.InvokePattern]$click).Invoke()
+    Set-FixtureEdit 'Configuration name' $name
+    $details=Wait-Observed { Find-Control @("More options$([char]0x2026)") $null } 'Codex configuration options'
+    $expand=$null
+    if (!$details.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern,[ref]$expand)) { throw 'Missing profile options disclosure' }
+    ([System.Windows.Automation.ExpandCollapsePattern]$expand).Expand()
+    $combo=Wait-Observed { Find-Control @('CLI program override') ([System.Windows.Automation.ControlType]::ComboBox) } 'Codex executable override'
+    $expand=$null
+    if (!$combo.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern,[ref]$expand)) { throw 'Missing executable override disclosure' }
+    ([System.Windows.Automation.ExpandCollapsePattern]$expand).Expand()
+    $choice=Wait-Observed { Find-Control @('Set') ([System.Windows.Automation.ControlType]::ListItem) } 'exact program override setting'
+    $selection=$null
+    if (!$choice.TryGetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern,[ref]$selection)) { throw 'Missing executable override selection' }
+    ([System.Windows.Automation.SelectionItemPattern]$selection).Select()
+    Set-FixtureEdit 'Program path' $FixtureCodex
+    Reveal-DiagnosticsControl @('Save') $button
+    Invoke-Button @('Save')
+    $null=Wait-Observed {
+        if (Find-Control @('Configuration name') ([System.Windows.Automation.ControlType]::Edit)) { return $null }
+        Find-Control @($name) ([System.Windows.Automation.ControlType]::Text)
+    } 'closed editor and confirmed saved official Codex profile in GUI'
+    $result.codexHistory.profileSaved=$true
+    Invoke-Button @('Workspace')
+}
 function Test-CodexHistoryGui {
     $r = $result.codexHistory
     $fixtureButton=[System.Windows.Automation.ControlType]::Button
@@ -45,6 +104,9 @@ function Test-CodexHistoryGui {
         ([System.Windows.Automation.ValuePattern]$set).SetValue($fixture.Project)
         Invoke-Button @('Select Folder', 'Select folder')
     } finally { $window=$main }
+    Configure-CodexFixtureProfile
+    $r.stage='refresh-bound-fixture-history'
+    $null=Wait-Observed { Invoke-FixtureTarget $window 'Refresh sessions' $fixtureButton } 'refresh formally bound synthetic history'
     $r.stage='project-expand'
     $projectLabel=Split-Path $fixture.Project -Leaf
     $projectNode=Wait-Observed { Find-Control @($projectLabel) ([System.Windows.Automation.ControlType]::TreeItem) } 'synthetic registered project node'
