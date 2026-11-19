@@ -49,11 +49,34 @@ function Test-CodexHistoryGui {
     $projectLabel=Split-Path $fixture.Project -Leaf
     $projectNode=Wait-Observed { Find-Control @($projectLabel) ([System.Windows.Automation.ControlType]::TreeItem) } 'synthetic registered project node'
     $r.projectNodeObserved=$true
+    $r.projectControl=[ordered]@{
+        patterns=@($projectNode.GetSupportedPatterns() | ForEach-Object ProgrammaticName)
+        enabled=$projectNode.Current.IsEnabled
+        offscreen=$projectNode.Current.IsOffscreen
+        disclosureState='not-supported'
+        knownChildren=@($projectNode.FindAll([System.Windows.Automation.TreeScope]::Children,[System.Windows.Automation.Condition]::TrueCondition) |
+            Where-Object { $_.Current.Name -cin @($projectLabel,'Expand','Collapse') } |
+            Select-Object -First 8 | ForEach-Object { [ordered]@{
+                expectedName=if($_.Current.Name -ceq $projectLabel){'fixture-project'}else{$_.Current.Name}
+                type=$_.Current.ControlType.ProgrammaticName
+                patterns=@($_.GetSupportedPatterns() | ForEach-Object ProgrammaticName)
+            } })
+    }
+    $disclosure=$null
+    if ($projectNode.Current.IsEnabled -and
+        $projectNode.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern,[ref]$disclosure)) {
+        $disclosure=[System.Windows.Automation.ExpandCollapsePattern]$disclosure
+        $r.projectControl.disclosureState=$disclosure.Current.ExpandCollapseState.ToString()
+        if ($disclosure.Current.ExpandCollapseState -eq [System.Windows.Automation.ExpandCollapseState]::Collapsed) {
+            $disclosure.Expand()
+            $r.projectExpandInvoked=$true
+        }
+    }
     $hasCollapse=@($projectNode.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition) | Where-Object {
         $_.Current.ControlType -eq $fixtureButton -and $_.Current.Name -ceq 'Collapse'
     }).Count
     if ($hasCollapse -gt 1) { throw 'Ambiguous synthetic project disclosure' }
-    if ($hasCollapse -eq 0) {
+    if ($hasCollapse -eq 0 -and !$r.Contains('projectExpandInvoked') -and $r.projectControl.disclosureState -ne 'Expanded') {
         if (!(Invoke-FixtureTarget $projectNode 'Expand' $fixtureButton)) { throw 'Synthetic project expand unavailable' }
         $r.projectExpandInvoked=$true
     }
