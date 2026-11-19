@@ -1,6 +1,6 @@
 # Stage A ONLY. Fresh synthetic data; never accepts an existing HOME/session.
 # Draft for review. Does not invoke/change any historical Stage-B Go gate.
-param([Parameter(Mandatory=$true)][string]$Codex)
+param([Parameter(Mandatory=$true)][string]$Codex, [switch]$SameDatasetReadiness)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 if (!$IsWindows -or $env:GITHUB_ACTIONS -cne 'true' -or
@@ -65,6 +65,26 @@ public sealed class StageAOwned : IDisposable {
  [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
  [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern bool CreateProcessW(string app,StringBuilder cmd,IntPtr pa,IntPtr ta,bool inherit,uint flags,IntPtr env,string cwd,ref SIEX si,out PI pi);
  [DllImport("kernel32.dll",SetLastError=true)] static extern bool GetFileInformationByHandleEx(IntPtr h,int c,IntPtr p,uint n);
+ [DllImport("kernel32.dll",CharSet=CharSet.Unicode,ExactSpelling=true,SetLastError=true)] static extern SafeFileHandle CreateFileW(string p,uint access,uint share,IntPtr security,uint disposition,uint flags,IntPtr template);
+ public static string ReadFixtureFileId(string path,bool directory) {
+  const uint readAttributes=0x80, shareReadWriteDelete=7, openExisting=3, backupSemantics=0x02000000, openReparsePoint=0x00200000;
+  using(var handle=CreateFileW(path,readAttributes,shareReadWriteDelete,IntPtr.Zero,openExisting,backupSemantics|openReparsePoint,IntPtr.Zero)) {
+   if(handle.IsInvalid) throw new Exception("STAGE_A_FILE_ID_OPEN");
+   var memory=Marshal.AllocHGlobal(24);
+   try {
+    var h=handle.DangerousGetHandle();
+    if(!GetFileInformationByHandleEx(h,9,memory,8)) throw new Exception("STAGE_A_FILE_ID_ATTRIBUTES");
+    var attrs=Marshal.ReadInt32(memory);
+    if((attrs&0x400)!=0 || ((attrs&0x10)!=0)!=directory) throw new Exception("STAGE_A_FILE_ID_WRONG_TYPE");
+    if(!directory && (!GetFileInformationByHandleEx(h,1,memory,24) || Marshal.ReadInt32(memory,16)!=1)) throw new Exception("STAGE_A_FILE_ID_LINKS");
+    if(!GetFileInformationByHandleEx(h,18,memory,24)) throw new Exception("STAGE_A_FILE_ID_QUERY");
+    var id=new byte[24]; Marshal.Copy(memory,id,0,id.Length);
+    bool hasFileId=false; for(int index=8;index<id.Length;index++) if(id[index]!=0) hasFileId=true;
+    if(!hasFileId) throw new Exception("STAGE_A_FILE_ID_EMPTY");
+    return Convert.ToBase64String(id);
+   } finally { Marshal.FreeHGlobal(memory); }
+  }
+ }
  [DllImport("shell32.dll",CharSet=CharSet.Unicode)] static extern int SHGetKnownFolderPath(ref Guid id,uint flags,IntPtr token,out IntPtr path);
  [DllImport("advapi32.dll",CharSet=CharSet.Unicode,ExactSpelling=true)] static extern int RegOpenKeyExW(IntPtr key,string name,uint options,uint access,out IntPtr result);
  [DllImport("advapi32.dll")] static extern int RegCloseKey(IntPtr key);
@@ -321,7 +341,39 @@ requires_openai_auth = false
     if(Test-Path -LiteralPath $retained){throw 'STAGE_A_RETAINED_EXISTS'}
     [IO.Directory]::Move($live,$retained)
     Copy-Exact $snapshot $live $baseline
+    function Observe-RestoredFixtureFileIds {
+        # Private checkpoint values only; no path, id or reusable authority leaves this run.
+        # Handles are opened for attributes and closed at each checkpoint; no continuous lease is claimed.
+        if (!$SameDatasetReadiness -or $rollouts.Count -ne 2 -or $rollouts[0] -ceq $rollouts[1]) {
+            throw 'STAGE_A_READINESS_SCOPE'
+        }
+        $phaseIdSet=@(
+            [StageAOwned]::ReadFixtureFileId($live,$true)
+            foreach($leaf in $rollouts) {
+                if (!$leaf.StartsWith($live+'\',[StringComparison]::OrdinalIgnoreCase)) {throw 'STAGE_A_READINESS_ESCAPE'}
+                Assert-Ordinary $leaf
+                [StageAOwned]::ReadFixtureFileId($leaf,$false)
+            }
+        )
+        if ($phaseIdSet.Count -ne 3 -or @($phaseIdSet|Sort-Object -Unique -CaseSensitive).Count -ne 3) {
+            throw 'STAGE_A_READINESS_FILE_ID_AMBIGUOUS'
+        }
+        $phaseIdSet
+    }
+    if ($SameDatasetReadiness) {
+        $phase='readiness-before-restored-read'
+        Assert-Ordinary $live
+        $beforeFileIds=@(Observe-RestoredFixtureFileIds)
+    }
     $phase='restored-read';Read-Official
+    if ($SameDatasetReadiness) {
+        $phase='readiness-after-restored-read'
+        Assert-Ordinary $live
+        $afterFileIds=@(Observe-RestoredFixtureFileIds)
+        for ($i=0;$i -lt 3;$i++) {
+            if ($beforeFileIds[$i] -cne $afterFileIds[$i]) { throw 'STAGE_A_READINESS_FILE_ID_CHANGED' }
+        }
+    }
     Assert-Same $baseline (Inventory $snapshot);Assert-Same $baseline (Inventory $retained)
     # Read-only protocol can update its own SQLite state/logs; only rollout bytes must
     # remain byte-identical after the reader exits. The restored pre-read tree was exact.
@@ -329,6 +381,16 @@ requires_openai_auth = false
     foreach($entry in @($baseline|Where-Object{!$_.Directory -and $_.Path.EndsWith('.jsonl')})){
         $same=@($after|Where-Object{$_.Path -ceq $entry.Path})
         if($same.Count -ne 1 -or $same[0].Hash -cne $entry.Hash -or $same[0].Length -ne $entry.Length){throw 'STAGE_A_ROLLOUT_CHANGED'}
+    }
+    # Extra evidence is available only if the caller explicitly selects this verifier mode.
+    # The original Stage-A default success schema is unchanged.
+    if ($SameDatasetReadiness) {
+        [ordered]@{schema=1;stage='synthetic-dataset-readiness-dry-run';providerVersion='0.169.1';
+            sameProcessCustody=$true;sameDatasetActiveArchivedRead=$true;recoveryManifestEquivalentBeforeRead=$true;
+            restoredRootAndRolloutFileIdsStable=$true;preservedCopiesMatch=$true;ownerSettled=$true;
+            continuousFileLeaseVerified=$false;sqliteSemanticRowsVerified=$false;readOnlyMayReindex=$true;
+            deletionExecuted=$false;stageBGoGranted=$false;productDeletePreflightVerified=$false;standardPackageUiVerified=$false} | ConvertTo-Json -Compress
+        return
     }
     # No raw paths, UUIDs, contents, stdout/stderr or credentials in the receipt.
     [ordered]@{schema=1;stage='synthetic-restore-readonly';providerVersion='0.169.1';baselineRead=$true;restoredRead=$true;
