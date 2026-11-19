@@ -377,7 +377,7 @@ try {
         if ($FixtureCodex -and $result.Contains('codexHistory')) {
             $checks=$result.codexHistory
             $facts=[ordered]@{ stage=$checks.stage; result=$result.status; ordinaryExit=$result.normalExit }
-            foreach ($field in @('preflight','profileSaved','profilePinMatches','selectedProjectExact','recordedCanonicalExact','metaCwdExact','activeRowObserved','archive','restore','rename','delete','backendTraceCorrelated','privacyCanariesAbsent','activeSearch','readonlyPostRestore','operationTrace','readonlyPostRename','renamedTitleObserved','originalArchiveStillPresent','visibleSafeRestoreCodes','observationFailed')) {
+            foreach ($field in @('preflight','profileSaved','profilePinMatches','selectedProjectExact','recordedCanonicalExact','metaCwdExact','activeRowObserved','archive','restore','rename','delete','backendTraceCorrelated','privacyCanariesAbsent','activeSearch','readonlyPostRestore','operationTrace','readonlyPostRename','renamedTitleObserved','renameActionControl','originalArchiveStillPresent','visibleSafeRestoreCodes','observationFailed')) {
                 if ($checks.Contains($field)) { $facts[$field]=$checks[$field] }
             }
             if ($result.Contains('initialSettings')) { $facts.initialSettings=$result.initialSettings }
