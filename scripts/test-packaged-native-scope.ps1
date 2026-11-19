@@ -1,13 +1,28 @@
 # Verification-branch helper. Called only inside test-desktop-webview.ps1 hosted guard.
 # Uses real UIA controls. No WebView script, IPC injection, terminal input or account.
+function Reveal-ObservedControl([string[]]$Names, $Type) {
+    $null = Wait-Observed {
+        $found = @($window.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition) | Where-Object { $_.Current.Name -cin $Names -and $_.Current.ControlType -eq $Type })
+        if ($found.Count -gt 1) { throw 'Ambiguous scroll target' }
+        if ($found.Count -eq 0) { return $null }
+        $control = $found[0]
+        if (!$control.Current.IsOffscreen) { return $control }
+        $scroll = $null
+        if (!$control.TryGetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern, [ref]$scroll)) { throw 'BLOCKED_UI_SCROLL' }
+        ([System.Windows.Automation.ScrollItemPattern]$scroll).ScrollIntoView()
+        return $null
+    } ($Names -join '/')
+}
 function Set-ObservedValue([string[]]$Names, [string]$Value) {
+    Reveal-ObservedControl $Names ([System.Windows.Automation.ControlType]::Edit)
     $control = Wait-Observed { Find-Control $Names ([System.Windows.Automation.ControlType]::Edit) } ($Names -join '/')
     $pattern = $null
     if (!$control.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) { throw 'BLOCKED_UI_VALUE' }
     ([System.Windows.Automation.ValuePattern]$pattern).SetValue($Value)
 }
-function Invoke-ObservedControl([string[]]$Names) {
-    $control = Wait-Observed { Find-Control $Names $null } ($Names -join '/')
+function Invoke-ObservedControl([string[]]$Names, $Type = $null) {
+    if ($Type) { Reveal-ObservedControl $Names $Type }
+    $control = Wait-Observed { Find-Control $Names $Type } ($Names -join '/')
     $pattern = $null
     if ($control.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) {
         ([System.Windows.Automation.InvokePattern]$pattern).Invoke(); return
@@ -19,6 +34,7 @@ function Invoke-ObservedControl([string[]]$Names) {
 }
 
 function Select-ObservedOption([string[]]$Names, [string[]]$Options) {
+    Reveal-ObservedControl $Names ([System.Windows.Automation.ControlType]::ComboBox)
     $combo = Wait-Observed { Find-Control $Names ([System.Windows.Automation.ControlType]::ComboBox) } ($Names -join '/')
     $expand = $null
     if (!$combo.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern, [ref]$expand)) { throw 'BLOCKED_UI_SELECTOR' }
@@ -87,7 +103,8 @@ function Test-PackagedNativeScope {
     if ((Read-ObservedValue @('Project', '项目')) -ine $nativeProject) { throw 'GUI project path mismatch' }
     Select-ObservedOption @('Tool', '工具') @('Codex CLI')
     Select-ObservedOption @('Start mode', '启动方式') @('New Session', '新会话')
-    Invoke-ObservedControl @('Developer options', '开发者选项')
+    Invoke-ObservedControl @('Developer options', '开发者选项') ([System.Windows.Automation.ControlType]::Button)
+    Reveal-ObservedControl @('Use raw arguments', '使用原始参数') ([System.Windows.Automation.ControlType]::CheckBox)
     $raw = Wait-Observed { Find-Control @('Use raw arguments', '使用原始参数') ([System.Windows.Automation.ControlType]::CheckBox) } 'raw argument opt-in'
     $toggle = $null
     if (!$raw.TryGetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern, [ref]$toggle)) { throw 'BLOCKED_UI_RAW_TOGGLE' }
@@ -98,6 +115,7 @@ function Test-PackagedNativeScope {
     $safeArgv = '["--sandbox","read-only","--ask-for-approval","on-request"]'
     Set-ObservedValue @('Raw arguments', '原始参数') $safeArgv
     if ((Read-ObservedValue @('Raw arguments', '原始参数')) -cne $safeArgv) { throw 'GUI safe argument readback mismatch' }
+    Reveal-ObservedControl @('Create session', '创建会话') ([System.Windows.Automation.ControlType]::Button)
     $result.nativeStage = 'create-actual-run'
     Invoke-Button @('Create session', '创建会话')
     $ready = Wait-Observed {
