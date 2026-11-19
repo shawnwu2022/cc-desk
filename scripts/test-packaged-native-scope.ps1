@@ -130,28 +130,47 @@ function Test-PackagedNativeScope {
         Invoke-Button @('Use and start session', '使用并启动会话')
     }
 
+    $identityStage = 'inventory'
     try {
         Observe-Children
+        $identityStage = 'process-name-observation'
         $codexChildren = @($children.Values | Where-Object { $_.ProcessName -eq 'codex' })
-        if ($codexChildren.Count -ne 1 -or $codexChildren[0].MainModule.FileName -ine $NativeCodex) { throw 'Exact real Codex child not observed' }
-        if ((Get-FileHash -LiteralPath $codexChildren[0].MainModule.FileName -Algorithm SHA256).Hash -ine $codexSha) { throw 'Running Codex digest differs' }
+        $result.ownedCodexCount = $codexChildren.Count
+        $identityStage = 'no-unique-owned-codex'
+        if ($codexChildren.Count -ne 1) { throw 'Exact real Codex child not observed' }
+        $identityStage = 'image-path-observation'
+        $runningPath = $codexChildren[0].MainModule.FileName
+        $identityStage = 'image-path-mismatch'
+        if ($runningPath -ine $NativeCodex) { throw 'Exact real Codex child not observed' }
+        $identityStage = 'image-hash-observation'
+        $runningHash = (Get-FileHash -LiteralPath $runningPath -Algorithm SHA256).Hash
+        $identityStage = 'image-hash-mismatch'
+        if ($runningHash -ine $codexSha) { throw 'Running Codex digest differs' }
         $result.runningCodex = [ordered]@{pid=$codexChildren[0].Id; sha256=$codexSha; exactProgramPath=$true}
     } catch {
         if (!$CanonicalDiagnostic) { throw }
         # Diagnostic observations remain independent, but cannot certify this CLI identity.
         $result.runningCodexUnknown = $true
+        $result.runningCodexUnknownStage = $identityStage
     }
     # Wait for the ordinary Native run; never type a prompt/status/login into its terminal.
+    $result.nativeStage = 'observe-host-state'
     Invoke-Button @('单次远程连接')
     # Read only the Host's fixed public state, even when its status lies below the scroll viewport.
+    $null = Wait-Observed {
     $panels = @($window.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, '单次远程会话')))
-    if ($panels.Count -ne 1) { throw 'Host panel not unique' }
+    if ($panels.Count -gt 1) { throw 'Host panel not unique' }
+    if ($panels.Count -eq 0) { return $null }
     $states = @($panels[0].FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, '尚无批准')))
-    if ($states.Count -ne 1) { throw 'Host default no approval not observed' }
+    if ($states.Count -gt 1) { throw 'Host state ambiguous' }
+    if ($states.Count -eq 0) { return $null }
     foreach ($name in @('请求本机批准', '启动一次')) {
         $buttons = @($panels[0].FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, $name)))
+        if ($buttons.Count -eq 0) { return $null }
         if ($buttons.Count -ne 1 -or $buttons[0].Current.ControlType -ne [System.Windows.Automation.ControlType]::Button -or $buttons[0].Current.IsEnabled) { throw 'Host authority unexpectedly available' }
     }
+    return $true
+    } 'Host default no approval and disabled authority'
     $result.hostLocked = [ordered]@{noApproval=$true; requestDisabled=$true; startDisabled=$true; source='actual Host panel before scope'}
     $result.nativeStage = 'read-public-scope'
     Invoke-Button @('读取公开会话范围')

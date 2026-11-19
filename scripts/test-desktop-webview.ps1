@@ -262,7 +262,7 @@ try {
         } catch { $result.captureError = $_.Exception.Message }
     }
 
-    if ($NativeCodex -and $window -and $result.Contains('nativeStage') -and $result.nativeStage -eq 'read-public-scope') {
+    if ($NativeCodex -and $window -and $result.Contains('nativeStage') -and $result.nativeStage -in @('observe-host-state','read-public-scope')) {
         # Only the formally labelled Host panel; never enumerate terminal descendants into evidence.
         try {
             $panels = @($window.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, '单次远程会话')))
@@ -272,8 +272,8 @@ try {
             @($elements | ForEach-Object { [ordered]@{name=$_.Current.Name; id=$_.Current.AutomationId; type=$_.Current.ControlType.ProgrammaticName; enabled=$_.Current.IsEnabled; offscreen=$_.Current.IsOffscreen; patterns=@($_.GetSupportedPatterns() | ForEach-Object {$_.ProgrammaticName})} }) | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 (Join-Path $out 'host-panel-failure-tree.json')
         } catch { $result.captureError = $_.Exception.Message }
     }
-    if ($CanonicalDiagnostic -and $result.Contains('nativeScopeError') -and $app -and !$app.HasExited) {
-        # A failed scope does not skip the independent normal desktop exit observation.
+    if ($CanonicalDiagnostic -and $window -and $app -and !$app.HasExited) {
+        # Any diagnostic failure keeps its original result and still observes normal App exit.
         try {
             try { Observe-Children } catch {
                 $result.childObservationUnknown = 'child-inventory-not-proven'
