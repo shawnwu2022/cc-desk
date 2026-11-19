@@ -176,6 +176,7 @@ fn D11_Launch_Worker_099() {
         .manage(probe.clone())
         .invoke_handler(tauri::generate_handler![
             crate::cli::commands::cli_start,
+            crate::cli::commands::cli_diagnostic_capture,
             crate::cli::commands::cli_get_launch_status,
             crate::cli::commands::cli_cancel_launch,
             super::d11_launch_cancelled,

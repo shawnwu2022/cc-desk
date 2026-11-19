@@ -34,7 +34,7 @@ export function createCaptureControl(invoke: typeof controlActivityDiagnostics) 
       const events = report.events.flatMap(event => {
         if (!event || typeof event !== 'object' || typeof event.id !== 'string' || !ids.has(event.id) ||
             !['backend', 'provider'].includes(event.stage) ||
-            !['started', 'ok', 'returned', 'failed', 'unsupported', 'unknown', 'blocked', 'stale'].includes(event.status) ||
+            !['started', 'ok', 'returned', 'failed', 'unsupported', 'unknown', 'blocked', 'stale', 'running', 'cancelled', 'exited'].includes(event.status) ||
             typeof event.ms !== 'number' || !Number.isInteger(event.ms) || event.ms < 0 || event.ms > 0xffffffff) return []
         return [{ id: event.id, stage: event.stage as string, status: event.status as string, ms: event.ms as number }]
       })

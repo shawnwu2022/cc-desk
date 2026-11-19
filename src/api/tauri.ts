@@ -1,4 +1,4 @@
-import type { DiagnosticHeader } from '@/utils/activityDiagnostics'
+import { activityDiagnostics, type DiagnosticHeader } from '@/utils/activityDiagnostics'
 import { createOpencodeArchiveClient } from './opencodeArchive'
 import { createSessionRecycleClient } from './nativeSessionRecycle';
 import { createProjectionClient } from './nativeProjection'
@@ -494,10 +494,21 @@ export function createCliLaunchAttempt<E>(
   }
   // Keep the original bridge as well as the original Channel. A new document
   // or backend cannot silently inherit and restart an uncertain old attempt.
+  let diagnostics: ReturnType<typeof activityDiagnostics.start>;
   return createLaunchAttempt(request, bridge.instanceId, {
-    start: (frozen) => bridge.invoke('cli_start', frozen, channel),
+    start: (frozen) => {
+      diagnostics = activityDiagnostics.start('launch', frozen.cli === 'shell' ? 'unknown' : frozen.cli);
+      const header = diagnostics?.traceHeader();
+      return header ? bridge.invoke('cli_start', frozen, channel, header)
+        : bridge.invoke('cli_start', frozen, channel);
+    },
     status: (requestId) => bridge.invoke('cli_get_launch_status', { requestId }),
     cancel: (frozen) => bridge.invoke('cli_cancel_launch', frozen),
+  }, receipt => {
+    const phase = receipt?.phase;
+    diagnostics?.record('adapter', phase === 'running' || phase === 'exited' || phase === 'failed' || phase === 'cancelled'
+      ? phase : phase === 'reserved' || phase === 'starting' ? 'returned' : 'unknown');
+    diagnostics = undefined;
   });
 }
 

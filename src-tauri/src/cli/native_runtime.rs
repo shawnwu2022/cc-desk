@@ -3,7 +3,7 @@ use super::document::{native::build_main, DocumentBinding, DOCUMENT_HEADER};
 use super::launch_service::{LaunchService, NativeRun, RunAccess};
 use super::output_route::{parse_channel, CHANNEL_HEADER};
 use super::profiles::error;
-use super::run_registry::{LaunchStatus, RunKey};
+use super::run_registry::{LaunchPhase, LaunchStatus, RunKey};
 use super::snapshot::CallerIdentity;
 use super::storage::WorkspaceRepository;
 use super::types::SafeError;
@@ -264,10 +264,20 @@ impl NativeRuntime {
         let _ = managed;
         let binding = self.binding()?;
         let (caller, launch) = binding.start_native(&webview, &request)?;
+        use super::activity_diagnostics::{Stage, Status};
+        let trace = binding
+            .diagnostics()
+            .trace_from_headers(&caller, request.headers());
         if let Some(status) = self.service.registry().existing(&caller, &launch)? {
+            if let Some(trace) = trace {
+                trace.record(Stage::Backend, Status::Returned);
+            }
             return Ok(status);
         }
         let admission = self.service.admit_start()?;
+        if let Some(trace) = trace.as_ref() {
+            trace.record(Stage::Backend, Status::Started);
+        }
         let descriptor = parse_channel(request.headers());
         let proof = request.headers()[DOCUMENT_HEADER].clone();
         let service = self.service.clone();
@@ -275,7 +285,7 @@ impl NativeRuntime {
         let managed_slot = self.owned_job_starts.clone();
         // Keep only validated routing metadata, not the raw body or arbitrary
         // request headers. A replay never evaluates the connect closure.
-        tauri::async_runtime::spawn_blocking(move || {
+        let outcome = tauri::async_runtime::spawn_blocking(move || {
             let connect = |_: &LaunchStatus| {
                 let id = descriptor?;
                 let mut headers = HeaderMap::new();
@@ -301,7 +311,28 @@ impl NativeRuntime {
             service.start_admitted(admission, &caller, &launch, connect)
         })
         .await
-        .map_err(|_| error("LAUNCH_STATE_UNKNOWN"))?
+        .unwrap_or_else(|_| Err(error("LAUNCH_STATE_UNKNOWN")));
+        if let Some(trace) = trace {
+            let status = match &outcome {
+                Ok(receipt) => match receipt.phase {
+                    LaunchPhase::Running => Status::Running,
+                    LaunchPhase::Failed => Status::Failed,
+                    LaunchPhase::Cancelled => Status::Cancelled,
+                    LaunchPhase::Indeterminate => Status::Unknown,
+                    LaunchPhase::Exited => Status::Exited,
+                    LaunchPhase::Reserved | LaunchPhase::Starting => Status::Returned,
+                },
+                Err(error) => match error.code.as_str() {
+                    "LAUNCH_STATE_UNKNOWN" => Status::Unknown,
+                    "FORBIDDEN" | "RUN_SUPERVISOR_STOPPING" | "NATIVE_RUNTIME_NOT_READY" => {
+                        Status::Blocked
+                    }
+                    _ => Status::Failed,
+                },
+            };
+            trace.record(Stage::Backend, status);
+        }
+        outcome
     }
     pub(crate) fn status<T: Runtime>(
         &self,

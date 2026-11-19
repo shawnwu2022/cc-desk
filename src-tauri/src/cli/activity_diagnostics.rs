@@ -59,6 +59,9 @@ pub(crate) enum Status {
     Returned,
     Blocked,
     Stale,
+    Running,
+    Cancelled,
+    Exited,
 }
 
 #[derive(Clone, Copy, Serialize)]
