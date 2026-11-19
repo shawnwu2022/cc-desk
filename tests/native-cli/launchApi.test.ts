@@ -190,3 +190,49 @@ it.each([
  delete (window as any)[bridgeKey]
  await expect((api[name] as (request: unknown) => Promise<unknown>)(request)).rejects.toMatchObject({ code: 'DOCUMENT_BRIDGE_UNAVAILABLE' })
 })
+
+it('Launch_Diagnostics_UsesOwnedAttemptWithoutChangingReceiptOrRetries', async () => {
+  const r = request();
+  const channel = new Channel();
+  const receipt = { instanceId: 'backend-api', requestId: r.requestId,
+    run: { runId: r.runId, generation: r.generation }, revision: '2', phase: 'running', failure: null };
+  const invoke = vi.fn(async (..._args: unknown[]) => receipt);
+  bridge(invoke);
+  const { activityDiagnostics } = await import('@/utils/activityDiagnostics');
+  const grant = 'a'.repeat(32);
+  activityDiagnostics.enable(grant);
+  try {
+    const attempt = api.createCliLaunchAttempt(r, channel);
+    const first = attempt.start();
+    expect(attempt.start()).toBe(first);
+    await expect(first).resolves.toEqual(receipt);
+    expect(invoke.mock.calls).toEqual([['cli_start', r, channel, expect.stringMatching(/^[a-f0-9]{32}:[a-f0-9]{32}$/)]]);
+    const id = (invoke.mock.calls[0][3] as string).slice(33);
+    expect(activityDiagnostics.snapshot().events).toEqual([
+      expect.objectContaining({ id, operation: 'launch', stage: 'ui', result: 'started' }),
+      expect.objectContaining({ id, operation: 'launch', stage: 'adapter', result: 'running' }),
+    ]);
+    expect(JSON.stringify(activityDiagnostics.snapshot())).not.toContain(grant);
+  } finally { activityDiagnostics.disable(); }
+});
+
+it('Launch_Diagnostics_DoesNotBackfillAfterStopAndRestart', async () => {
+  const r = request();
+  const receipt = { instanceId: 'backend-api', requestId: r.requestId,
+    run: { runId: r.runId, generation: r.generation }, revision: '2', phase: 'running', failure: null };
+  let finish!: (value: unknown) => void;
+  const invoke = vi.fn((..._args: unknown[]) => new Promise(resolve => { finish = resolve; }));
+  bridge(invoke);
+  const { activityDiagnostics } = await import('@/utils/activityDiagnostics');
+  activityDiagnostics.enable('a'.repeat(32));
+  try {
+    const started = api.createCliLaunchAttempt(r, new Channel()).start();
+    await Promise.resolve();
+    expect(invoke).toHaveBeenCalledTimes(1);
+    activityDiagnostics.disable();
+    activityDiagnostics.enable('b'.repeat(32));
+    finish(receipt);
+    await expect(started).resolves.toEqual(receipt);
+    expect(activityDiagnostics.snapshot().events).toEqual([]);
+  } finally { activityDiagnostics.disable(); }
+});

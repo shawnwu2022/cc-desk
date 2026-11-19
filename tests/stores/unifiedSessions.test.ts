@@ -1596,3 +1596,27 @@ it.each(['catalog', 'adapter'] as const)('Rename_ConfirmedWriteSurvivesDisplayFa
   await store.refresh('/repo')
   expect(native.adapter.renameSession).toHaveBeenCalledTimes(1)
 })
+
+it('ActivityDiagnostics_ListOwnership_009 records stale refresh and real target change independently', async () => {
+  const { activityDiagnostics } = await import('@/utils/activityDiagnostics')
+  const store = useUnifiedSessionsStore()
+  const pending = deferred<UnifiedSession[]>()
+  const row = session({ processState: 'stopped', opened: false })
+  const listSessions = vi.fn()
+    .mockResolvedValueOnce([row])
+    .mockReturnValueOnce(pending.promise)
+    .mockResolvedValueOnce([{ ...row, archived: true }])
+  store.configureAdapters([{ runtime: 'legacy-claude', listSessions } as unknown as SessionAdapter])
+  await store.refresh('/repo')
+  activityDiagnostics.enable()
+  try {
+    const stale = activityDiagnostics.start('archive', 'claude')!
+    const fresh = activityDiagnostics.start('archive', 'claude')!
+    const obsolete = store.refresh('/repo', { cli: 'claude' }, { handles: [stale], target: 'claude' })
+    await store.refresh('/repo', { cli: 'claude' }, { handles: [fresh], target: 'claude' })
+    pending.resolve([row])
+    await obsolete
+    expect(store.sessions[0]?.archived).toBe(true)
+    expect(activityDiagnostics.snapshot().events.filter(event => event.stage === 'list').map(event => event.result)).toEqual(['applied','stale'])
+  } finally { activityDiagnostics.disable() }
+})

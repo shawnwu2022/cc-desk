@@ -2,8 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { useNativeSessionDeletesStore, sessionDeleteTargetKey } from '@/stores/nativeSessionDeletes'
 import type { SessionDeletePreviewRequest } from '@/types/nativeSessionDelete'
-const io = vi.hoisted(() => ({ preview: vi.fn(), confirm: vi.fn(), inspect: vi.fn() }))
-vi.mock('@/api/tauri', () => ({ createNativeSessionDeleteClient: () => io }))
+import { createSessionDeleteClient } from '@/api/nativeSessionDelete'
+import { activityDiagnostics } from '@/utils/activityDiagnostics'
+const io = vi.hoisted(() => ({ preview: vi.fn(), confirm: vi.fn(), inspect: vi.fn(), client: vi.fn() }))
+vi.mock('@/api/tauri', () => ({ createNativeSessionDeleteClient: () => io.client() ?? io }))
 const request = (): SessionDeletePreviewRequest => ({ operationId: '30000000-0000-4000-8000-000000000001', sessionKey: 'key', source: { scopeId: 'scope', instanceId: 'instance', cli: 'codex', sourceRootKey: 'root', identityEpoch: '1', profileId: 'profile', profileRevision: '1', basis: 'configured-profile', target: { kind: 'profile', profileId: 'profile', expectedProfileRevision: '1', projectIds: ['project'] } } })
 const preview = () => ({ operationId: request().operationId, previewId: '30000000-0000-4000-8000-000000000002', nativeSessionId: '30000000-0000-4000-8000-000000000003', cli: 'codex', state: 'ready', rootArchived: true, scope: 'native-subtree', knownDescendantCount: null, reason: null })
 const receipt = () => ({ operationId: request().operationId, cli: 'codex', state: 'acknowledged', rootPresent: false, descendants: 'unverified', reason: null })
@@ -83,5 +85,70 @@ describe('permanent deletion operation ownership', () => {
     await task
     expect(io.confirm).not.toHaveBeenCalled()
     expect(store.records.get(key)?.receipt?.state).toBe('blocked')
+  })
+})
+
+
+describe('permanent deletion diagnostic correlation at the transport boundary', () => {
+  it.each([true, false])('PermanentDeleteStore_OneSafeTraceThroughPreviewConfirmInspect_009: diagnostics %s', async enabled => {
+    const store = useNativeSessionDeletesStore()
+    const first = request()
+    first.sessionKey = 'first-fixture-native-key'
+    first.source.scopeId = 'first-fixture-fresh-scope'
+    const display = { title: 'fixture-private-title', projectPath: '/fixture-private-path' }
+    const second = { ...request(), operationId: '30000000-0000-4000-8000-000000000004',
+      sessionKey: 'second-fixture-native-key', source: { ...first.source, scopeId: 'second-fixture-fresh-scope' } }
+    const invoke = vi.fn(async (command: string, payload: unknown, _channel?: unknown, _trace?: string) => {
+      const { operationId } = payload as { operationId: string }
+      if (command === 'cli_preview_session_delete') return { ...preview(), operationId }
+      if (command === 'cli_confirm_session_delete' || command === 'cli_inspect_session_delete') {
+        return { ...receipt(), operationId, state: 'unknown', rootPresent: null, reason: 'DELETE_OUTCOME_UNKNOWN' }
+      }
+      throw new Error('unexpected command in synthetic transport')
+    })
+    io.client.mockImplementation(() => createSessionDeleteClient({ instanceId: first.source.instanceId, invoke }))
+    const grant = 'de'.repeat(16)
+    if (enabled) activityDiagnostics.enable(grant)
+    try {
+      const key = sessionDeleteTargetKey(first)
+      await store.prepare(first, display)
+      expect(store.records.get(key)?.phase).toBe('review')
+      expect(invoke).toHaveBeenCalledTimes(1)
+      store.beginConfirmation(key)
+      expect(store.records.get(key)?.phase).toBe('confirmation')
+      expect(invoke).toHaveBeenCalledTimes(1)
+      await store.execute(key, true, true, () => true)
+      expect(store.records.get(key)?.receipt?.state).toBe('unknown')
+      await store.inspect(key)
+      expect(store.records.get(key)?.inspected).toBe(true)
+      await store.prepare(second)
+      expect(store.records.get(sessionDeleteTargetKey(second))?.phase).toBe('review')
+
+      const calls = invoke.mock.calls
+      expect(calls.map(([command, payload]) => [command, payload])).toEqual([
+        ['cli_preview_session_delete', first],
+        ['cli_confirm_session_delete', { operationId: first.operationId, previewId: preview().previewId,
+          acknowledgePermanentDelete: true, acknowledgeNativeSubtree: true }],
+        ['cli_inspect_session_delete', { operationId: first.operationId }],
+        ['cli_preview_session_delete', second],
+      ])
+      if (enabled) {
+        const traces = calls.map(call => call[3])
+        expect(calls.map(call => call.length)).toEqual([4, 4, 4, 4])
+        for (const trace of traces) expect(trace).toMatch(new RegExp('^' + grant + ':[a-f0-9]{32}$'))
+        expect(traces.slice(0, 3)).toEqual(Array(3).fill(traces[0]))
+        expect(traces[3]).not.toBe(traces[0])
+        expect(traces[0]?.slice(33)).not.toBe(first.operationId.replaceAll('-', ''))
+        expect(traces[0]?.slice(33)).not.toBe(preview().nativeSessionId.replaceAll('-', ''))
+        const report = activityDiagnostics.snapshot()
+        expect(report.events.filter(event => event.id === traces[0]?.slice(33)).map(event => [event.stage, event.result]))
+          .toEqual([['ui', 'started'], ['preview', 'ok'], ['confirmation', 'started'],
+            ['confirmation', 'unknown'], ['reconcile', 'unknown']])
+        expect(JSON.stringify(report)).not.toMatch(/fixture-private|fixture-native|fixture-fresh|DELETE_OUTCOME_UNKNOWN/)
+        expect(JSON.stringify(report)).not.toContain(grant)
+      } else {
+        expect(calls.map(call => call.length)).toEqual([2, 2, 2, 2])
+      }
+    } finally { activityDiagnostics.disable() }
   })
 })

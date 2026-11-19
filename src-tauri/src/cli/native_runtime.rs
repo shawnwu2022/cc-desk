@@ -3,7 +3,7 @@ use super::document::{native::build_main, DocumentBinding, DOCUMENT_HEADER};
 use super::launch_service::{LaunchService, NativeRun, RunAccess};
 use super::output_route::{parse_channel, CHANNEL_HEADER};
 use super::profiles::error;
-use super::run_registry::{LaunchStatus, RunKey};
+use super::run_registry::{LaunchPhase, LaunchStatus, RunKey};
 use super::snapshot::CallerIdentity;
 use super::storage::WorkspaceRepository;
 use super::types::SafeError;
@@ -178,6 +178,20 @@ impl NativeRuntime {
             .clone()
             .ok_or_else(|| error("FORBIDDEN"))
     }
+    pub(crate) fn diagnostic_capture<T: Runtime>(
+        &self,
+        webview: &Webview<T>,
+        request: &Request<'_>,
+    ) -> Result<super::activity_diagnostics::ControlReply, SafeError> {
+        let binding = self.binding()?;
+        let caller = binding.admit_native(webview, request.headers())?;
+        let query = decode_projection(request.body(), 256)?;
+        binding
+            .diagnostics()
+            .control(&caller, query)
+            .ok_or_else(|| error("DIAGNOSTICS_STATE_UNAVAILABLE"))
+    }
+
     pub(crate) async fn probe_cli_version<T: Runtime>(
         &self,
         webview: &Webview<T>,
@@ -250,10 +264,20 @@ impl NativeRuntime {
         let _ = managed;
         let binding = self.binding()?;
         let (caller, launch) = binding.start_native(&webview, &request)?;
+        use super::activity_diagnostics::{Stage, Status};
+        let trace = binding
+            .diagnostics()
+            .trace_from_headers(&caller, request.headers());
         if let Some(status) = self.service.registry().existing(&caller, &launch)? {
+            if let Some(trace) = trace {
+                trace.record(Stage::Backend, Status::Returned);
+            }
             return Ok(status);
         }
         let admission = self.service.admit_start()?;
+        if let Some(trace) = trace.as_ref() {
+            trace.record(Stage::Backend, Status::Started);
+        }
         let descriptor = parse_channel(request.headers());
         let proof = request.headers()[DOCUMENT_HEADER].clone();
         let service = self.service.clone();
@@ -261,7 +285,7 @@ impl NativeRuntime {
         let managed_slot = self.owned_job_starts.clone();
         // Keep only validated routing metadata, not the raw body or arbitrary
         // request headers. A replay never evaluates the connect closure.
-        tauri::async_runtime::spawn_blocking(move || {
+        let outcome = tauri::async_runtime::spawn_blocking(move || {
             let connect = |_: &LaunchStatus| {
                 let id = descriptor?;
                 let mut headers = HeaderMap::new();
@@ -287,7 +311,28 @@ impl NativeRuntime {
             service.start_admitted(admission, &caller, &launch, connect)
         })
         .await
-        .map_err(|_| error("LAUNCH_STATE_UNKNOWN"))?
+        .unwrap_or_else(|_| Err(error("LAUNCH_STATE_UNKNOWN")));
+        if let Some(trace) = trace {
+            let status = match &outcome {
+                Ok(receipt) => match receipt.phase {
+                    LaunchPhase::Running => Status::Running,
+                    LaunchPhase::Failed => Status::Failed,
+                    LaunchPhase::Cancelled => Status::Cancelled,
+                    LaunchPhase::Indeterminate => Status::Unknown,
+                    LaunchPhase::Exited => Status::Exited,
+                    LaunchPhase::Reserved | LaunchPhase::Starting => Status::Returned,
+                },
+                Err(error) => match error.code.as_str() {
+                    "LAUNCH_STATE_UNKNOWN" => Status::Unknown,
+                    "FORBIDDEN" | "RUN_SUPERVISOR_STOPPING" | "NATIVE_RUNTIME_NOT_READY" => {
+                        Status::Blocked
+                    }
+                    _ => Status::Failed,
+                },
+            };
+            trace.record(Stage::Backend, status);
+        }
+        outcome
     }
     pub(crate) fn status<T: Runtime>(
         &self,
@@ -333,15 +378,24 @@ impl NativeRuntime {
         webview: &Webview<T>,
         request: &Request<'_>,
     ) -> Result<super::native_delete::Preview, SafeError> {
-        let caller = self.binding()?.admit_native(webview, request.headers())?;
+        let binding = self.binding()?;
+        let caller = binding.admit_native(webview, request.headers())?;
+        let trace = binding
+            .diagnostics()
+            .trace_from_headers(&caller, request.headers());
         let query: super::native_delete::PreviewRequest = decode_projection(request.body(), 32768)?;
         query.validate()?;
         let service = self.projections.clone();
         let admitted = caller.clone();
-        let result =
-            tauri::async_runtime::spawn_blocking(move || service.preview_delete(&admitted, query))
-                .await
-                .map_err(|_| error("DELETE_UNAVAILABLE"))??;
+        let result = tauri::async_runtime::spawn_blocking(move || {
+            super::activity_diagnostics::observe(
+                trace.as_ref(),
+                super::activity_diagnostics::Stage::Backend,
+                || service.preview_delete(&admitted, query),
+            )
+        })
+        .await
+        .map_err(|_| error("DELETE_UNAVAILABLE"))??;
         self.service.registry().check_caller(&caller)?;
         Ok(result)
     }
@@ -350,15 +404,24 @@ impl NativeRuntime {
         webview: &Webview<T>,
         request: &Request<'_>,
     ) -> Result<super::native_delete::Receipt, SafeError> {
-        let caller = self.binding()?.admit_native(webview, request.headers())?;
+        let binding = self.binding()?;
+        let caller = binding.admit_native(webview, request.headers())?;
+        let trace = binding
+            .diagnostics()
+            .trace_from_headers(&caller, request.headers());
         let query: super::native_delete::ConfirmRequest = decode_projection(request.body(), 4096)?;
         query.validate()?;
         let service = self.projections.clone();
         let admitted = caller.clone();
-        let result =
-            tauri::async_runtime::spawn_blocking(move || service.confirm_delete(&admitted, query))
-                .await
-                .map_err(|_| error("DELETE_OUTCOME_UNKNOWN"))??;
+        let result = tauri::async_runtime::spawn_blocking(move || {
+            super::activity_diagnostics::observe(
+                trace.as_ref(),
+                super::activity_diagnostics::Stage::Backend,
+                || service.confirm_delete_observed(&admitted, query, trace.as_ref()),
+            )
+        })
+        .await
+        .map_err(|_| error("DELETE_OUTCOME_UNKNOWN"))??;
         self.service.registry().check_caller(&caller)?;
         Ok(result)
     }
@@ -367,14 +430,23 @@ impl NativeRuntime {
         webview: &Webview<T>,
         request: &Request<'_>,
     ) -> Result<super::native_delete::Receipt, SafeError> {
-        let caller = self.binding()?.admit_native(webview, request.headers())?;
+        let binding = self.binding()?;
+        let caller = binding.admit_native(webview, request.headers())?;
+        let trace = binding
+            .diagnostics()
+            .trace_from_headers(&caller, request.headers());
         let query: super::native_delete::InspectRequest = decode_projection(request.body(), 4096)?;
         let service = self.projections.clone();
         let admitted = caller.clone();
-        let result =
-            tauri::async_runtime::spawn_blocking(move || service.inspect_delete(&admitted, query))
-                .await
-                .map_err(|_| error("DELETE_OUTCOME_UNKNOWN"))??;
+        let result = tauri::async_runtime::spawn_blocking(move || {
+            super::activity_diagnostics::observe(
+                trace.as_ref(),
+                super::activity_diagnostics::Stage::Backend,
+                || service.inspect_delete(&admitted, query),
+            )
+        })
+        .await
+        .map_err(|_| error("DELETE_OUTCOME_UNKNOWN"))??;
         self.service.registry().check_caller(&caller)?;
         Ok(result)
     }
@@ -404,16 +476,29 @@ impl NativeRuntime {
         webview: &Webview<T>,
         request: &Request<'_>,
     ) -> Result<super::native_recycle::Response, SafeError> {
-        let caller = self.binding()?.admit_native(webview, request.headers())?;
+        let binding = self.binding()?;
+        let caller = binding.admit_native(webview, request.headers())?;
         let query: super::native_recycle::Request = decode_projection(request.body(), 32768)?;
         query.validate()?;
+        let trace = if matches!(query.action.as_str(), "list" | "restore") {
+            binding
+                .diagnostics()
+                .trace_from_headers(&caller, request.headers())
+        } else {
+            None
+        };
         let mutating = query.action != "list";
         let service = self.projections.clone();
         let admitted = caller.clone();
-        let result =
-            tauri::async_runtime::spawn_blocking(move || service.recycle(&admitted, query))
-                .await
-                .map_err(|_| error("RECYCLE_OUTCOME_UNKNOWN"))??;
+        let result = tauri::async_runtime::spawn_blocking(move || {
+            super::activity_diagnostics::observe(
+                trace.as_ref(),
+                super::activity_diagnostics::Stage::Backend,
+                || service.recycle(&admitted, query),
+            )
+        })
+        .await
+        .map_err(|_| error("RECYCLE_OUTCOME_UNKNOWN"))??;
         self.service
             .registry()
             .check_caller(&caller)
@@ -431,16 +516,25 @@ impl NativeRuntime {
         webview: &Webview<T>,
         request: &Request<'_>,
     ) -> Result<super::native_archive::ArchiveReceipt, SafeError> {
-        let caller = self.binding()?.admit_native(webview, request.headers())?;
+        let binding = self.binding()?;
+        let caller = binding.admit_native(webview, request.headers())?;
+        let trace = binding
+            .diagnostics()
+            .trace_from_headers(&caller, request.headers());
         let query: super::native_archive::ArchiveRequest =
             decode_projection(request.body(), 32768)?;
         query.validate()?;
         let service = self.projections.clone();
         let admitted = caller.clone();
-        let result =
-            tauri::async_runtime::spawn_blocking(move || service.archive(&admitted, query))
-                .await
-                .map_err(|_| error("ARCHIVE_OUTCOME_UNKNOWN"))??;
+        let result = tauri::async_runtime::spawn_blocking(move || {
+            super::activity_diagnostics::observe(
+                trace.as_ref(),
+                super::activity_diagnostics::Stage::Backend,
+                || service.archive_observed(&admitted, query, trace.as_ref()),
+            )
+        })
+        .await
+        .map_err(|_| error("ARCHIVE_OUTCOME_UNKNOWN"))??;
         self.service.registry().check_caller(&caller)?;
         Ok(result)
     }
@@ -449,14 +543,24 @@ impl NativeRuntime {
         webview: &Webview<T>,
         request: &Request<'_>,
     ) -> Result<super::native_rename::RenameReceipt, SafeError> {
-        let caller = self.binding()?.admit_native(webview, request.headers())?;
+        let binding = self.binding()?;
+        let caller = binding.admit_native(webview, request.headers())?;
+        let trace = binding
+            .diagnostics()
+            .trace_from_headers(&caller, request.headers());
         let query: super::native_rename::RenameRequest = decode_projection(request.body(), 32768)?;
         query.validate()?;
         let service = self.projections.clone();
         let admitted = caller.clone();
-        let result = tauri::async_runtime::spawn_blocking(move || service.rename(&admitted, query))
-            .await
-            .map_err(|_| error("RENAME_OUTCOME_UNKNOWN"))??;
+        let result = tauri::async_runtime::spawn_blocking(move || {
+            super::activity_diagnostics::observe(
+                trace.as_ref(),
+                super::activity_diagnostics::Stage::Backend,
+                || service.rename_observed(&admitted, query, trace.as_ref()),
+            )
+        })
+        .await
+        .map_err(|_| error("RENAME_OUTCOME_UNKNOWN"))??;
         self.service.registry().check_caller(&caller)?;
         Ok(result)
     }
@@ -503,7 +607,11 @@ impl NativeRuntime {
         webview: &Webview<T>,
         request: &Request<'_>,
     ) -> Result<(), SafeError> {
-        let caller = self.binding()?.admit_native(webview, request.headers())?;
+        let binding = self.binding()?;
+        let caller = binding.admit_native(webview, request.headers())?;
+        let trace = binding
+            .diagnostics()
+            .trace_from_headers(&caller, request.headers());
         let query: super::types::UnarchiveRequest = decode_projection(request.body(), 4096)?;
         query.validate()?;
         let service = self.service.clone();
@@ -511,8 +619,18 @@ impl NativeRuntime {
         let projections = self.projections.clone();
         tauri::async_runtime::spawn_blocking(move || {
             // 恢复前必须收敛同一物理根的旧归档未知写，不能凭前端普通历史读取放行。
-            projections.reconcile_before_unarchive(&admitted, &query)?;
-            service.run_command(&admitted, &query.to_launch_request())
+            super::activity_diagnostics::observe(
+                trace.as_ref(),
+                super::activity_diagnostics::Stage::Backend,
+                || {
+                    projections.reconcile_before_unarchive(&admitted, &query)?;
+                    service.run_command_observed(
+                        &admitted,
+                        &query.to_launch_request(),
+                        trace.clone(),
+                    )
+                },
+            )
         })
         .await
         .map_err(|_| error("LAUNCH_STATE_UNKNOWN"))??;

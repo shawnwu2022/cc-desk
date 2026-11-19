@@ -121,6 +121,7 @@ export function createLaunchAttempt(
   input: LaunchRequest,
   instanceId: string,
   transport: LaunchAttemptTransport,
+  onStartReceipt?: (status?: LaunchStatus) => void,
 ): LaunchAttempt {
   if (!instanceId || instanceId.length > 128) throw new Error('INVALID_REQUEST:instanceId')
   // Validation creates owned objects/arrays; later UI edits cannot change this attempt.
@@ -161,6 +162,12 @@ export function createLaunchAttempt(
       // Assign before invoking the transport, including synchronous re-entry.
       if (!started) {
         started = Promise.resolve().then(() => transport.start(request)).then(accept, startRejection)
+        if (onStartReceipt) {
+          const notify = (status?: LaunchStatus) => {
+            try { onStartReceipt(status) } catch { /* Diagnostics do not own the launch result. */ }
+          }
+          void started.then(status => notify(status), () => notify())
+        }
       }
       return started
     },

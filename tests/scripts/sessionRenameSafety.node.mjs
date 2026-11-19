@@ -88,10 +88,11 @@ function catalogRenameHarness(owns = () => true) {
   const begin = Function('sessions', 'activeSessionId', 'pendingRenames', 'isPreparingSession', 'renameOwners', 'ownsRename', 'captureRenameOwner', 'canRenameSession',
     'return function(id){' + beginBody + '}')(sessions, { value: 'live' }, pendingRenames, () => false, renameOwners, ownsRename, captureRenameOwner, canRenameSession)
   const adapter = { async renameSession() { throw Error('REVISION_CONFLICT') } }
-  const rename = Function('requireSession', 'adapterForRuntime', 'renameOwners', 'pendingRenames', 'activeSessionId', 'ownsRename', 'sessions', 'captureRenameOwner', 'enqueue', 'refresh', 'cancelRename', 'canRenameSession',
-    'return function(id,title,requireEditor=false){' + renameBody + '}')(
+  const compiled = transpileProductionSource('function extractedCatalogRename(id,title,requireEditor=false){' + renameBody + '}')
+  const rename = Function('requireSession', 'adapterForRuntime', 'renameOwners', 'pendingRenames', 'activeSessionId', 'ownsRename', 'sessions', 'captureRenameOwner', 'enqueue', 'refresh', 'cancelRename', 'canRenameSession', 'activityDiagnostics',
+    compiled + '\nreturn extractedCatalogRename')(
     id => sessions.value.find(row => row.id === id), () => adapter, renameOwners, pendingRenames, { value: 'live' }, ownsRename, sessions, captureRenameOwner,
-    async (_id, operation, publish) => { const result = await operation(); await publish(result); return result }, async () => {}, cancel, canRenameSession)
+    async (_id, operation, publish) => { const result = await operation(); await publish(result); return result }, async () => {}, cancel, canRenameSession, { start: () => undefined })
   return { sessions, begin, rename, renameOwners }
 }
 

@@ -57,6 +57,7 @@ pub(crate) struct DocumentAuthority<R> {
     proof: String,
     state: Mutex<DocumentState>,
     output_routes: OutputRoutes,
+    diagnostics: super::activity_diagnostics::Capture,
 }
 
 /// Non-cloneable owner; dropping it revokes authority but not owned processes.
@@ -209,6 +210,7 @@ impl<R> DocumentAuthority<R> {
             expected_url,
             proof,
             output_routes: OutputRoutes::new(128),
+            diagnostics: Default::default(),
             state: Mutex::new(DocumentState {
                 phase: Phase::Created,
                 attached: false,
@@ -264,6 +266,7 @@ impl<R> DocumentAuthority<R> {
     }
 
     pub(crate) fn revoke(&self) {
+        self.diagnostics.seal();
         #[cfg(feature = "remote-client-ipc")]
         let hook = {
             let mut state = self.state.lock();
@@ -350,6 +353,9 @@ impl<R> DocumentBinding<R> {
             transaction: transaction.into(),
             committed: false,
         })
+    }
+    pub(crate) fn diagnostics(&self) -> &super::activity_diagnostics::Capture {
+        &self.authority.diagnostics
     }
     pub(crate) fn blocks_handoff_exit(&self) -> bool {
         self.authority.state.lock().handoff.is_some()

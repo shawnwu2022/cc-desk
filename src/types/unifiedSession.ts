@@ -1,3 +1,4 @@
+import type { DiagnosticHeader } from '@/utils/activityDiagnostics'
 import type { NativeObservationNoticeState } from './nativeObservationNotice'
 
 export type UnifiedCliKind = 'claude' | 'codex' | 'opencode' | 'antigravity'
@@ -183,9 +184,9 @@ export interface SessionAdapter {
   stopSession(id: string): Promise<void>
   restartSession(id: string, canContinue?: () => boolean): Promise<UnifiedSession>
   closeSession(id: string, canContinue?: () => boolean): Promise<void>
-  renameSession(id: string, title: string, canContinue?: () => boolean, onIssued?: () => void, signal?: AbortSignal): Promise<SessionRenameResult | void>
-  archiveSession(id: string, canContinue?: () => boolean): Promise<void>
-  restoreArchivedSession(id: string): Promise<void>
+  renameSession(id: string, title: string, canContinue?: () => boolean, onIssued?: () => void, signal?: AbortSignal, diagnostics?: DiagnosticHeader): Promise<SessionRenameResult | void>
+  archiveSession(id: string, canContinue?: () => boolean, diagnostics?: DiagnosticHeader): Promise<void>
+  restoreArchivedSession(id: string, diagnostics?: DiagnosticHeader): Promise<void>
   /** 仅显式清除与调用方快照匹配的关闭未读；不得清除活动运行的通知。 */
   clearUnread?(id: string, expected: UnifiedSession): Promise<void> | void
   /** Recheck absence without deleting CLI history files. */

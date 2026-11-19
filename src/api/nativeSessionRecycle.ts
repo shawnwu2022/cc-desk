@@ -1,3 +1,4 @@
+import type { DiagnosticHeader } from '@/utils/activityDiagnostics'
 import type { ProjectionBridge } from './nativeProjection'
 import { validateProjectionSource } from './nativeProjection'
 import type { SourceRef } from '@/types/nativeProjection'
@@ -28,7 +29,7 @@ export function createSessionRecycleClient(bridge: ProjectionBridge, current: ()
   const instance = bridge.instanceId, issued = new Set<string>()
   function check() { if (bridge.instanceId !== instance || !current()) throw failure('BACKEND_INSTANCE_CHANGED') }
   return {
-    async send(value: RecycleRequest): Promise<RecycleResponse> {
+    async send(value: RecycleRequest, diagnostics?: DiagnosticHeader): Promise<RecycleResponse> {
       check()
       const source = validateProjectionSource(value.source)
       if (source.instanceId !== instance || source.cli !== 'claude' || !['list', 'remove', 'restore'].includes(value.action)) throw failure('RECYCLE_INVALID_REQUEST')
@@ -37,7 +38,12 @@ export function createSessionRecycleClient(bridge: ProjectionBridge, current: ()
       const request = { source, action: value.action, operationId: value.operationId, sessionKey: value.sessionKey, acknowledgeRecoverable: value.acknowledgeRecoverable }
       const key = JSON.stringify([source.sourceRootKey, value.action, value.operationId])
       if (value.action !== 'list') { if (issued.has(key)) throw failure('RECYCLE_OUTCOME_UNKNOWN'); issued.add(key) }
-      try { const result = await bridge.invoke('cli_recycle_session', request); check(); return decode(result, request.operationId) }
+      try {
+        const header = request.action === 'remove' ? undefined : diagnostics?.()
+        const result = await (header ? bridge.invoke('cli_recycle_session', request, undefined, header) : bridge.invoke('cli_recycle_session', request))
+        check()
+        return decode(result, request.operationId)
+      }
       catch (error) { throw failure(recycleErrorCode(error)) }
     },
   }

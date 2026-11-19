@@ -218,10 +218,20 @@ impl ProjectionService {
         }
         None
     }
+    #[cfg(test)]
     pub(crate) fn confirm_delete(
         &self,
         caller: &CallerIdentity,
         request: crate::cli::native_delete::ConfirmRequest,
+    ) -> Result<crate::cli::native_delete::Receipt, SafeError> {
+        self.confirm_delete_observed(caller, request, None)
+    }
+
+    pub(crate) fn confirm_delete_observed(
+        &self,
+        caller: &CallerIdentity,
+        request: crate::cli::native_delete::ConfirmRequest,
+        trace: Option<&crate::cli::activity_diagnostics::Trace>,
     ) -> Result<crate::cli::native_delete::Receipt, SafeError> {
         self.launch.registry().check_caller(caller)?;
         request.validate()?;
@@ -282,6 +292,7 @@ impl ProjectionService {
             authority,
             entry.active.clone(),
             entry.outcome.clone(),
+            trace.cloned(),
         );
         let root_present = self.delete_root_present(caller, &entry.request);
         let receipt =
@@ -426,10 +437,20 @@ impl ProjectionService {
         result?;
         released
     }
+    #[cfg(test)]
     pub(crate) fn archive(
         &self,
         caller: &CallerIdentity,
         request: crate::cli::native_archive::ArchiveRequest,
+    ) -> Result<crate::cli::native_archive::ArchiveReceipt, SafeError> {
+        self.archive_observed(caller, request, None)
+    }
+
+    pub(crate) fn archive_observed(
+        &self,
+        caller: &CallerIdentity,
+        request: crate::cli::native_archive::ArchiveRequest,
+        trace: Option<&crate::cli::activity_diagnostics::Trace>,
     ) -> Result<crate::cli::native_archive::ArchiveReceipt, SafeError> {
         self.launch.registry().check_caller(caller)?;
         request.validate()?;
@@ -504,7 +525,8 @@ impl ProjectionService {
                 cols: 80,
                 rows: 24,
             };
-            self.launch.archive_metadata(caller, &launch, authority)
+            self.launch
+                .archive_metadata(caller, &launch, authority, trace.cloned())
         })();
         self.registry
             .retire_archive_hint(&request.source, &request.session_key);
@@ -514,10 +536,20 @@ impl ProjectionService {
         self.launch.registry().check_caller(caller)?;
         Ok(request.receipt())
     }
+    #[cfg(test)]
     pub(crate) fn rename(
         &self,
         caller: &CallerIdentity,
         request: crate::cli::native_rename::RenameRequest,
+    ) -> Result<crate::cli::native_rename::RenameReceipt, SafeError> {
+        self.rename_observed(caller, request, None)
+    }
+
+    pub(crate) fn rename_observed(
+        &self,
+        caller: &CallerIdentity,
+        request: crate::cli::native_rename::RenameRequest,
+        trace: Option<&crate::cli::activity_diagnostics::Trace>,
     ) -> Result<crate::cli::native_rename::RenameReceipt, SafeError> {
         self.launch.registry().check_caller(caller)?;
         request.validate()?;
@@ -549,8 +581,13 @@ impl ProjectionService {
                 cols: 80,
                 rows: 24,
             };
-            self.launch
-                .rename_metadata(caller, &launch, authority, request.title.clone())
+            self.launch.rename_metadata_observed(
+                caller,
+                &launch,
+                authority,
+                request.title.clone(),
+                trace.cloned(),
+            )
         })();
         self.rename_operations
             .finish(caller, &request, result.clone());

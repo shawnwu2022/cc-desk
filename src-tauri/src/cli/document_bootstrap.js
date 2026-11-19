@@ -8,7 +8,7 @@
   const proof = __CC_DESK_DOCUMENT_PROOF__
   const encoder = new TextEncoder()
   const bridge = {
-    async invoke(command, payload, channel) {
+    async invoke(command, payload, channel, diagnosticTrace) {
       let body
       const headers = { 'x-cc-desk-document': proof }
       try {
@@ -25,6 +25,9 @@
       } catch {
         if (command === 'native_get_scope' || command === 'native_list_resources') throw { code: 'INVALID_REQUEST', stage: 'frontend-serialization' }
         throw { code: 'INVALID_REQUEST' }
+      }
+      if (typeof diagnosticTrace === 'string' && /^[0-9a-f]{32}:[0-9a-f]{32}$/.test(diagnosticTrace)) {
+        headers['x-cc-desk-diag-trace'] = diagnosticTrace
       }
       const internals = window.__TAURI_INTERNALS__
       if (!internals || typeof internals.invoke !== 'function') {

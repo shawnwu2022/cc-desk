@@ -14,6 +14,38 @@ async function runProjection(targets) {
     if (left.items[0].title !== 'a' || right.items[0].title !== 'b' || a.sourceRootKey === b.sourceRootKey) throw Error('root isolation')
     await record('independent-roots')
     const proof = await bridge.invoke('d12_save', a), options = { headers: { 'x-cc-desk-document': proof } }
+    const control = payload => bridge.invoke('cli_diagnostic_capture', payload)
+    const inspect = {operationId: 'bafa4942-2000-4444-8000-000000000001'}
+    const readError = promise => promise.then(() => null, error => JSON.stringify(error))
+    const baseline = await readError(bridge.invoke('cli_inspect_session_delete', inspect))
+    if (baseline === null) throw Error('read-only inspection must fail without existing operation')
+    const opened = await control({action:'start', serial:1})
+    const id = 'a'.repeat(32), header = opened.grant + ':' + id
+    const wire = (...values) => n.invoke('cli_inspect_session_delete', bytes(inspect), {headers:[
+      ['x-cc-desk-document', proof], ...values.map(value => ['x-cc-desk-diag-trace', value])
+    ]})
+    if (await readError(wire('malformed')) !== baseline || await readError(wire(header, header)) !== baseline) throw Error('diagnostic changed result')
+    if ((await control({action:'snapshot'})).report.events.length !== 0) throw Error('malformed or repeated diagnostic accepted')
+    if (await readError(bridge.invoke('cli_inspect_session_delete', inspect, undefined, header)) !== baseline) throw Error('diagnostic changed result')
+    const captured = await control({action:'snapshot'})
+    if (captured.report.events.length !== 2 || captured.report.events.some(event => event.id !== id || event.stage !== 'backend')) throw Error('diagnostic receipt missing')
+    if (JSON.stringify(captured).includes(opened.grant)) throw Error('grant leaked')
+    if ((await control({action:'stop', serial:2})).state !== 'stopped') throw Error('stop not acknowledged')
+    if (await readError(wire(header)) !== baseline || (await control({action:'snapshot'})).report.events.length !== 2) throw Error('closed grant accepted')
+    const reopened = await control({action:'start', serial:3})
+    if (reopened.grant === opened.grant || await readError(wire(header)) !== baseline ||
+        (await control({action:'snapshot'})).report.events.length !== 0) throw Error('previous grant replay accepted')
+    const recycleSource = await bridge.invoke('native_get_scope', targets[2])
+    const recycle = {source:recycleSource, action:'list', operationId:null, sessionKey:null, acknowledgeRecoverable:false}
+    const ordinaryList = await bridge.invoke('cli_recycle_session', recycle)
+    const tracedList = await bridge.invoke('cli_recycle_session', recycle, undefined, reopened.grant + ':' + id)
+    if (JSON.stringify(tracedList) !== JSON.stringify(ordinaryList)) throw Error('diagnostics changed read-only recovery listing')
+    const recycleTrace = await control({action:'snapshot'})
+    if (recycleTrace.report.events.length !== 2 || recycleTrace.report.events[1].status !== 'returned' || recycleTrace.report.events.some(event => event.id !== id)) {
+      throw Error('recovery diagnostics did not reach real IPC')
+    }
+    await control({action:'stop', serial:4})
+    await record('diagnostic-header-no-authority')
     await expectDiagnostic(n.invoke('native_get_scope', bytes(targets[0])), 'FORBIDDEN', 'scope-document-admission'); await record('missing-proof')
     await expectDiagnostic(n.invoke('native_get_scope', targets[0], options), 'RAW_BODY_REQUIRED', 'scope-request-decode'); await record('raw-required')
     await expectDiagnostic(bridge.invoke('native_get_scope', { ...targets[0], root: '/outside' }), 'INVALID_REQUEST', 'scope-request-decode'); await record('forged-path')

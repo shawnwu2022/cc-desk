@@ -189,3 +189,5 @@ pub(crate) mod remote_channels;
 
 #[cfg(all(test, windows, feature = "antigravity-acceptance"))]
 mod native_cli_antigravity_acceptance;
+
+mod activity_diagnostics;
