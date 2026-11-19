@@ -101,6 +101,7 @@ export function createNativeHistoryReader() {
   async function loadGrouped(
     group: { cli: NativeCliKind; profileId: string; profileRevision: string; projects: { projectId: string; projectPath: string }[] },
     options: { force?: boolean; retainOnFailure?: boolean } = {},
+    onClaim?: (entry: NativeHistoryEntry) => void,
   ): Promise<Map<string, NativeHistoryEntry>> {
     const profile = {
       cli: group.cli,
@@ -147,6 +148,8 @@ export function createNativeHistoryReader() {
           // 归档判断（bare/legacy 路径）失效一个往返，列表会闪出双行与归档行。
           ...(cached?.sourceRootKey ? { sourceRootKey: cached.sourceRootKey, source: cached.source } : {}),
         })
+        // Capture the exact entry before reactive publication may start a newer read.
+        try { onClaim?.(entry) } catch { /* Diagnostics never alter read ownership. */ }
         entries.set(key, entry)
         return { context, key, entry, cached,
           sessions: new Map<string, NativeHistorySession>(),
@@ -339,12 +342,13 @@ export function createNativeHistoryReader() {
     return result
   }
 
-  async function load(input: NativeHistoryContext): Promise<NativeHistoryEntry> {
+  async function load(input: NativeHistoryContext, onClaim?: (entry: NativeHistoryEntry) => void): Promise<NativeHistoryEntry> {
     const map = await loadGrouped(
       { cli: input.cli, profileId: required(input.profileId, 'PROFILE_ID_REQUIRED'),
         profileRevision: required(input.profileRevision, 'PROFILE_REVISION_REQUIRED'),
         projects: [{ projectId: required(input.projectId, 'PROJECT_ID_REQUIRED'), projectPath: required(input.projectPath, 'PROJECT_PATH_REQUIRED') }] },
       { force: input.force, retainOnFailure: input.retainOnFailure },
+      onClaim,
     )
     const entry = map.get(required(input.projectId, 'PROJECT_ID_REQUIRED'))
     if (!entry) throw projectionFailure({ code: 'SCOPE_REVOKED' }, 'read-capability')

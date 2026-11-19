@@ -21,6 +21,7 @@ import { createLegacyClaudeAdapter } from '@/session/adapters/legacyClaudeAdapte
 import { nativeHistoryRenameReady, createNativeCliAdapter, type NativeRuntimeCreateInput, type NativeRestartContinuation } from '@/session/adapters/nativeCliAdapter'
 import { mapSafeUserError, safeUserErrorCode } from '@/utils/userError'
 import { projectSessionDiagnostics } from '@/utils/sessionDiagnostics'
+import { activityDiagnostics } from '@/utils/activityDiagnostics'
 import { normalizePath, sameProjectPath } from '@/utils/path'
 import { createWorkspaceSourceWarnings, workspaceWarningKey, type WorkspaceHistoryIssue, type WorkspaceSourceConfiguration, type WorkspaceSourceWarning, type WorkspaceWarningSource } from '@/utils/workspaceSourceWarnings'
 import type { OpenTerminalSession, UnifiedTerminalHostPort } from '@/terminal/unifiedTerminalHost'
@@ -253,10 +254,23 @@ export function useUnifiedWorkspaceRuntime(host: Ref<UnifiedTerminalHostPort | n
     historyRecoveryError.value = false
     try {
       // 只重新读取已授权配置/项目，不重放生命周期命令或改写 CLI 原始历史。
-      await history.load({ ...context, force: true, retainOnFailure: true }).catch(() => {})
-      if (disposed || !relevantHistoryEntries.value.some(row => row.key === target.entry.key)) return
+      const trace = activityDiagnostics.start('historyRetry', context.cli)
+      let issued: NativeHistoryEntry | undefined
+      // The read may resolve to a replacement owner; only its original claim
+      // can be attributed to this click.
+      const result = await history.load({ ...context, force: true, retainOnFailure: true },
+        trace ? entry => { issued = entry } : undefined).catch(() => undefined)
+      const current = !disposed && relevantHistoryEntries.value.find(row => row.key === target.entry.key)
+      const ownsRead = issued && issued !== target.entry && issued === current && (!result || result === issued)
+      if (trace) {
+        trace.record('history', !ownsRead ? 'stale' : !result || result.error || !result.loaded ? 'failed'
+          : result.metadataIncomplete || result.readFailures?.length ? 'partial' : 'applied')
+      }
+      if (!current) return
       reconcileHistoryWarningSnapshot()
-      await catalog.refresh(context.projectPath, { cli: context.cli })
+      const refreshOptions = { cli: context.cli }
+      if (trace && ownsRead) await catalog.refresh(context.projectPath, refreshOptions, { handles: [trace], target: context.cli })
+      else await catalog.refresh(context.projectPath, refreshOptions)
     } catch { historyRecoveryError.value = true }
     finally { historyRecoveryOwners.delete(target.entry.key) }
   }

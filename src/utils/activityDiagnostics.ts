@@ -1,4 +1,4 @@
-const operations = ['archive', 'restore', 'rename', 'delete', 'refresh', 'recycleList', 'recycleRecheck', 'recycleRestore', 'launch'] as const
+const operations = ['archive', 'restore', 'rename', 'delete', 'refresh', 'recycleList', 'recycleRecheck', 'recycleRestore', 'launch', 'historyRetry'] as const
 const providers = ['codex', 'claude', 'opencode', 'antigravity', 'unknown'] as const
 const stages = ['ui', 'adapter', 'backend', 'provider', 'list', 'preview', 'confirmation', 'reconcile', 'recycle', 'history'] as const
 const results = ['started', 'returned', 'applied', 'unchanged', 'ok', 'acknowledged', 'partial', 'failed', 'unknown', 'unsupported', 'cancelled', 'blocked', 'stale', 'skipped', 'sourceObserved', 'storedObserved', 'conflict', 'running', 'exited'] as const

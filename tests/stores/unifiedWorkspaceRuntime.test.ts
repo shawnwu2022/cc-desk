@@ -2649,3 +2649,60 @@ it.each(['new', 'resume-id'] as const)('Antigravity_RuntimeNativeOnlyNoHistory_0
   expect(io.ptySpawn).not.toHaveBeenCalled()
   expect(io.ptyInput).not.toHaveBeenCalled()
 })
+
+describe('Explicit history retry diagnostics', () => {
+  it.each(['applied', 'partial', 'failed'] as const)('HistoryRetry_Diagnostics_ClassifiesOwnedResult_095: %s', async (kind) => {
+    const { activityDiagnostics } = await import('@/utils/activityDiagnostics')
+    activityDiagnostics.enable()
+    try {
+      io.read.mockResolvedValue({ state: 'unavailable', reason: 'SOURCE_UNSUPPORTED', items: [], hasMore: false })
+      const { runtime } = render(); await flushPromises()
+      await runtime.refresh()
+      expect(activityDiagnostics.snapshot().events).toEqual([])
+      const issue = runtime.historyIssues.value[0]
+      io.read.mockResolvedValue(kind === 'partial'
+        ? { state: 'ready', items: [], hasMore: false, historyMetadataIncomplete: true, historyReadFailures: ['SOURCE_INVALID'] }
+        : kind === 'failed' ? { state: 'unavailable', reason: 'SOURCE_INVALID', items: [], hasMore: false } : { state: 'ready', items: [], hasMore: false })
+      await runtime.retryHistoryIssue(issue.key)
+      const { events } = activityDiagnostics.snapshot()
+      expect(events).toEqual([
+        expect.objectContaining({ operation: 'historyRetry', cli: 'codex', stage: 'ui', result: 'started' }),
+        expect.objectContaining({ operation: 'historyRetry', cli: 'codex', stage: 'history', result: kind }),
+        expect.objectContaining({ operation: 'historyRetry', cli: 'codex', stage: 'list', result: expect.stringMatching(/^(applied|unchanged)$/) }),
+      ])
+      expect(new Set(events.map(event => event.id)).size).toBe(1)
+      expect(JSON.stringify(events)).not.toMatch(/SOURCE_INVALID|\/repo|history-id|sourceRootKey/)
+    } finally { activityDiagnostics.disable() }
+  })
+
+  it.each([false, true])('HistoryRetry_Diagnostics_RejectsReplacedOrStoppedOwner_096: %s', async (stop) => {
+    const { activityDiagnostics } = await import('@/utils/activityDiagnostics')
+    activityDiagnostics.enable()
+    try {
+      io.read.mockResolvedValue({ state: 'unavailable', reason: 'SOURCE_UNSUPPORTED', items: [], hasMore: false })
+      const { runtime } = render(); await flushPromises()
+      const issue = runtime.historyIssues.value[0]
+      let complete!: (result: unknown) => void
+      let entered!: () => void
+      const reading = new Promise<void>(resolve => { entered = resolve })
+      io.read.mockImplementationOnce(async () => {
+        entered()
+        return new Promise(resolve => { complete = resolve })
+      })
+      const retry = runtime.retryHistoryIssue(issue.key)
+      await reading
+      if (stop) {
+        activityDiagnostics.disable()
+        activityDiagnostics.enable()
+      } else {
+        const store = useNativeHistoryStore()
+        io.read.mockResolvedValue({ state: 'ready', items: [], hasMore: false })
+        await store.load({ ...store.all()[0].context, force: true })
+      }
+      complete({ state: 'ready', items: [], hasMore: false })
+      await retry
+      expect(activityDiagnostics.snapshot().events.map(({ stage, result }) => [stage, result]))
+        .toEqual(stop ? [] : [['ui', 'started'], ['history', 'stale']])
+    } finally { activityDiagnostics.disable() }
+  })
+})
