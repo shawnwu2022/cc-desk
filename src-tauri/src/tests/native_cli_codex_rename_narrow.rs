@@ -21,6 +21,7 @@ fn codex_rename_finish(app: AppHandle, webview: tauri::Webview, status: String, 
         "trace" => "trace",
         "redaction" => "redaction",
         "capture-stop" => "capture-stop",
+        "script-failed" => "script-failed",
         "complete" if good => "complete",
         _ => "unexpected",
     };
@@ -34,6 +35,7 @@ fn codex_rename_finish(app: AppHandle, webview: tauri::Webview, status: String, 
 #[test]
 #[ignore = "verification draft: requires a dedicated pinned hosted supervisor"]
 fn D12_Codex_Rename_Narrow_Worker_098() {
+    eprintln!("CODEX_RENAME_WRY_STEP enter");
     assert_eq!(std::env::var("GITHUB_ACTIONS").as_deref(), Ok("true"));
     assert_eq!(
         std::env::var("RUNNER_ENVIRONMENT").as_deref(),
@@ -65,7 +67,9 @@ fn D12_Codex_Rename_Narrow_Worker_098() {
         codex,
         codex_root.join("extracted/package/vendor/x86_64-pc-windows-msvc/bin/codex.exe")
     );
+    eprintln!("CODEX_RENAME_WRY_STEP source-paths-checked");
     let lease = pin_codex(&codex);
+    eprintln!("CODEX_RENAME_WRY_STEP official-binary-pinned");
 
     let workspace = root.join("project");
     let home = root.join("codex-home");
@@ -86,6 +90,7 @@ fn D12_Codex_Rename_Narrow_Worker_098() {
     )
     .unwrap();
 
+    eprintln!("CODEX_RENAME_WRY_STEP rollout-written");
     let repo = WorkspaceRepository::open(root.join("metadata/workspace.json")).unwrap();
     let project = crate::cli::workspace::register_project(&repo, &workspace).unwrap();
     let mut profile = Profile::new("codex-narrow", CliKind::Codex);
@@ -97,6 +102,7 @@ fn D12_Codex_Rename_Narrow_Worker_098() {
     let target = json!({"kind":"profile","profileId":"codex-narrow","expectedProfileRevision":saved.profiles["codex-narrow"].revision,"projectIds":[project.project_id]});
     let fixture = json!({"id":FIXTURE_ID,"cwd":cwd,"oldTitle":OLD_TITLE,"newTitle":NEW_TITLE});
 
+    eprintln!("CODEX_RENAME_WRY_STEP document-fixture-ready");
     let inherited = isolated_env(&root);
     let runtime = Arc::new(NativeRuntime::new(Arc::new(LaunchService::new(
         repo,
@@ -125,7 +131,9 @@ fn D12_Codex_Rename_Narrow_Worker_098() {
             codex_rename_finish
         ])
         .setup(move |app| {
+            eprintln!("CODEX_RENAME_WRY_STEP main-build-start");
             setup.initialize_main(app, &main)?;
+            eprintln!("CODEX_RENAME_WRY_STEP main-built");
             Ok(())
         })
         .on_page_load(move |webview, payload| {
@@ -135,19 +143,26 @@ fn D12_Codex_Rename_Narrow_Worker_098() {
             {
                 return;
             }
+            eprintln!("CODEX_RENAME_WRY_STEP page-finished");
             let script = format!(
-                "{}\nrunCodexRenameProbe({},{});",
+                "{}\nrunCodexRenameProbe({},{}).catch(() => window.__TAURI_INTERNALS__?.invoke('codex_rename_finish', {{status:'failed', stage:'script-failed'}}));",
                 include_str!("fixtures/document/codex-rename-narrow.js"),
                 target,
                 fixture
             );
             if webview.eval(script).is_err() {
+                eprintln!("CODEX_RENAME_WRY_STEP script-rejected");
                 webview.app_handle().exit(1);
+            } else {
+                eprintln!("CODEX_RENAME_WRY_STEP script-queued");
             }
         })
         .build(context)
         .unwrap();
-    assert_eq!(app.run_return(|_, _| {}), 0);
+    eprintln!("CODEX_RENAME_WRY_STEP loop-enter");
+    let exit = app.run_return(|_, _| {});
+    eprintln!("CODEX_RENAME_WRY_STEP loop-exit");
+    assert_eq!(exit, 0);
     // This is a Wry-side pass only; no final receipt before independent thread/read.
     drop(lease);
 }
@@ -241,6 +256,7 @@ fn D12_Codex_Rename_Narrow_097() {
         "trace",
         "redaction",
         "capture-stop",
+        "script-failed",
         "complete",
         "unexpected",
     ];
@@ -251,9 +267,33 @@ fn D12_Codex_Rename_Narrow_097() {
         .filter(|stage| allowed.contains(stage))
         .take(2)
         .collect();
+    let fixed_steps = [
+        "enter",
+        "source-paths-checked",
+        "official-binary-pinned",
+        "rollout-written",
+        "document-fixture-ready",
+        "main-build-start",
+        "main-built",
+        "page-finished",
+        "script-queued",
+        "script-rejected",
+        "loop-enter",
+        "loop-exit",
+    ];
+    let checkpoints: Vec<_> = log
+        .lines()
+        .filter_map(|line| {
+            line.split_once("CODEX_RENAME_WRY_STEP ")
+                .map(|(_, step)| step)
+        })
+        .filter(|step| fixed_steps.contains(step))
+        .take(16)
+        .collect();
     assert!(
         exited.success() && receipts == ["complete"],
-        "Wry stage: {receipts:?}"
+        "Wry stage: {receipts:?}; checkpoints: {checkpoints:?}; exit: {:?}",
+        exited.code()
     );
     // The observer cannot write metadata. Its only methods are initialize,
     // initialized and thread/read, over a fresh process in the same isolated home.
