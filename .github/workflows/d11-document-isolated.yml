@@ -1,109 +1,40 @@
-name: Reused diagnostic NSIS GUI (verification branch only)
+name: Canonical RGB targeted regression (verification branch only)
 on:
   push:
     branches: [verify/packaged-native-84855a84]
   workflow_dispatch:
 permissions:
   contents: read
-  actions: read
 jobs:
-  packaged-native:
+  canonical-rgb-red:
     if: github.ref == 'refs/heads/verify/packaged-native-84855a84'
-    runs-on: windows-2022
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
         with:
+          ref: d6575274c789d7c755f4eefebc08c11a6b932e5e
           persist-credentials: false
-      - name: Download exact existing package
-        shell: pwsh
+      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: remote
+          key: canonical-rgb-targeted
+          cache-on-failure: true
+      - name: Observe RED with unchanged product implementation
+        shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
+          CARGO_BUILD_JOBS: '2'
         run: |
-          $ErrorActionPreference = 'Stop'
-          $out = Join-Path $env:RUNNER_TEMP 'pr100-input'
-          New-Item -ItemType Directory $out | Out-Null
-          $headers = @{Authorization="Bearer $env:GH_TOKEN"; Accept='application/vnd.github+json'}
-          $metadata = Invoke-RestMethod -Headers $headers https://api.github.com/repos/shawnwu2022/cc-desk/actions/artifacts/14509858775
-          if ($metadata.expired -or $metadata.workflow_run.id -ne 44484823530 -or $metadata.name -cne 'diagnostic-nsis-33407c9b39e00217fb624fe1299139c0f1cbf8f3-44484823530-1') { throw 'Artifact identity mismatch' }
-          $zip = Join-Path $out 'artifact.zip'
-          Invoke-WebRequest -Headers $headers https://api.github.com/repos/shawnwu2022/cc-desk/actions/artifacts/14509858775/zip -OutFile $zip
-          if ((Get-FileHash $zip).Hash -ine '7c7dfc822cc6f7bdd90972f896db283bdbebe4e7a0212b07a261d0a64f85790b') { throw 'Artifact ZIP digest mismatch' }
-          Add-Type -AssemblyName System.IO.Compression.FileSystem
-          $archive = [IO.Compression.ZipFile]::OpenRead($zip)
-          try {
-            foreach ($entry in $archive.Entries) {
-              if ($entry.FullName -match '(^[/\\]|(^|[/\\])\.\.([/\\]|$)|:)' -or (($entry.ExternalAttributes -shr 16) -band 0xF000) -eq 0xA000) { throw 'Unsafe ZIP entry' }
-            }
-          } finally { $archive.Dispose() }
-          Expand-Archive -LiteralPath $zip -DestinationPath (Join-Path $out 'package')
-          $installers = @(Get-ChildItem (Join-Path $out 'package') -Recurse -Filter '*setup.exe')
-          if ($installers.Count -ne 1 -or (Get-FileHash $installers[0].FullName).Hash -ine 'cfc4b63cea571c5e70aa798748476ab21e43092fc916b66e558bc8669fda75b3') { throw 'Installer digest mismatch' }
-      - name: Download pinned official Codex
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $dir = Join-Path $env:RUNNER_TEMP 'official-codex'
-          New-Item -ItemType Directory $dir | Out-Null
-          # A lone EXE is not the complete official runtime supply. Preserve the published vendor layout.
-          $archive = Join-Path $dir 'codex-0.169.1-win32-x64.tgz'
-          Invoke-WebRequest 'https://registry.npmjs.org/@openai/codex/-/codex-0.169.1-win32-x64.tgz' -OutFile $archive
-          $expectedIntegrity = 'fImXWqxwxqHh9+FhJWsRRFiBzgBrSeN1bYTvtGZtUKGTPzHefYAL1agmlf5XScfwY5i5pHsExfdhFekzRBbqIw=='
-          $stream = [IO.File]::OpenRead($archive)
-          $hasher = [Security.Cryptography.SHA512]::Create()
-          try { $actualIntegrity = [Convert]::ToBase64String($hasher.ComputeHash($stream)) } finally { $stream.Dispose(); $hasher.Dispose() }
-          if ($actualIntegrity -cne $expectedIntegrity) { throw 'Official platform package integrity mismatch' }
-          $names = @(& tar -tzf $archive)
-          if ($LASTEXITCODE -ne 0) { throw 'Platform archive listing failed' }
-          $details = @(& tar -tvzf $archive)
-          if ($LASTEXITCODE -ne 0 -or $names.Count -ne 47 -or $details.Count -ne 47) { throw 'Platform archive entries mismatch' }
-          foreach ($name in $names) {
-            if (!$name.StartsWith('package/') -or $name -match '(^/|\\|:|(^|/)\.\.(/|$))') { throw 'Unsafe platform archive path' }
-          }
-          foreach ($entry in $details) { if ($entry[0] -ne '-') { throw 'Platform archive contains nonregular entry' } }
-          $extract = Join-Path $dir 'extracted'
-          New-Item -ItemType Directory $extract | Out-Null
-          & tar -xzf $archive -C $extract
-          if ($LASTEXITCODE -ne 0) { throw 'Platform archive extraction failed' }
-          if (@(Get-ChildItem $extract -Recurse | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }).Count) { throw 'Platform reparse point rejected' }
-          $files = @(Get-ChildItem $extract -Recurse -File)
-          if ($files.Count -ne 47 -or ($files | Measure-Object Length -Sum).Sum -ne 515292799) { throw 'Platform file set mismatch' }
-          $inventory = @($files | ForEach-Object { [ordered]@{path=$_.FullName.Substring($extract.Length+1).Replace('\','/'); bytes=$_.Length; sha256=(Get-FileHash $_.FullName).Hash.ToLowerInvariant()} })
-          [ordered]@{package='@openai/codex'; version='0.169.1-win32-x64'; integrity="sha512-$expectedIntegrity"; archiveSha256=(Get-FileHash $archive).Hash; source='official npm platform package'; files=$inventory} | ConvertTo-Json -Depth 5 | Set-Content codex-supply.json
-          $exe = Join-Path $extract 'package/vendor/x86_64-pc-windows-msvc/bin/codex.exe'
-          if ((Get-Item $exe).Length -ne 382647088 -or (Get-FileHash $exe).Hash -ine 'f76f94d08b0793bfa129ae62c09341ee32ae96d57e69968ae6b8d7c71a20d8c4') { throw 'Official Codex asset digest mismatch' }
-      - name: Install exact NSIS and run real GUI acceptance
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          if ($env:GH_TOKEN -or $env:GITHUB_TOKEN) { throw 'Download credentials must not reach product' }
-          $installer = @(Get-ChildItem (Join-Path $env:RUNNER_TEMP 'pr100-input/package') -Recurse -Filter '*setup.exe')
-          if ($installer.Count -ne 1) { throw 'Installer not unique' }
-          $installed = Join-Path $env:RUNNER_TEMP 'pr100-installed'
-          $setup = Start-Process -FilePath $installer[0].FullName -ArgumentList "/S /D=$installed" -PassThru -WindowStyle Hidden
-          try {
-            if (!$setup.WaitForExit(180000)) { $setup.Kill(); $null=$setup.WaitForExit(10000); throw 'Installer timeout' }
-            if ($setup.ExitCode -ne 0) { throw 'Installer failed' }
-          } finally { $setup.Dispose() }
-          $exe = Join-Path $installed 'cc-desk.exe'
-          $sha = '05ed080e4dde3b274a0da5a7403bbba967f7e1834e115d3f9e50dd222647bbdc'
-          if ((Get-FileHash $exe).Hash -ine $sha) { throw 'Installed product digest mismatch' }
-          $runtime = @{
-            'conpty.dll'='39fba2713e2495117b1591ae8c32a3b904bea7aa66069cf7815e2844c76d75d8'
-            'OpenConsole.exe'='b7fd936c2668b87b9ecf7b3366dc6568afc1c6f981874cba3e955a1c35cf8160'
-          }
-          foreach ($name in $runtime.Keys) {
-            if ((Get-FileHash (Join-Path $installed $name)).Hash -ine $runtime[$name]) { throw 'Installed runtime digest mismatch' }
-          }
-          [ordered]@{workflowCommit=$env:GITHUB_SHA; artifactId=14509858775; mode='reused-diagnostic-nsis-not-original-pr100'; source='33407c9b39e00217fb624fe1299139c0f1cbf8f3'; baseline='84855a84ba08ca97c76567d1857d40bda9a4ff9d'; sourceTree='e88da3f23c12b8f24b6f69a782918bcc8c8b2fcc'; looseExeSha256='2ee8426ca7001074faeafac65c7a76b2eede86c1f91c20b067e89d3f0ab08be5'; bundleMarker='NSIS uses NSS; loose executable uses UNK'; productSha256=$sha; officialCodexAsset=760864385; published=$false} | ConvertTo-Json | Set-Content packaged-source.json
-          & ./scripts/test-desktop-webview.ps1 -Exe $exe -ExpectedSha256 $sha -CanonicalDiagnostic -NativeCodex (Join-Path $env:RUNNER_TEMP 'official-codex/extracted/package/vendor/x86_64-pc-windows-msvc/bin/codex.exe')
+          set -o pipefail
+          git rev-parse HEAD | tee rgb-source.txt
+          cargo test --manifest-path remote/Cargo.toml --locked -p cc-desk-remote-terminal --features experimental-emulator --test canonical_rgb -- --test-threads=1 2>&1 | tee rgb-tests.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: packaged-pr100-native-${{ github.run_id }}-${{ github.run_attempt }}
+          name: canonical-rgb-red-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            packaged-source.json
-            codex-supply.json
-            desktop-webview-smoke/
+            rgb-source.txt
+            rgb-tests.log
           if-no-files-found: error
           retention-days: 7
