@@ -30,7 +30,12 @@ function Set-FixtureEdit([string]$Name,[string]$Value) {
     if (!$ctl.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern,[ref]$pattern)) { throw "Synthetic edit not writable: $Name" }
     $pattern=[System.Windows.Automation.ValuePattern]$pattern
     $pattern.SetValue($Value)
-    if ($pattern.Current.Value -cne $Value) { throw "Synthetic edit readback mismatch: $Name" }
+    $null=Wait-Observed {
+        $observed=Find-Control @($Name) $editType
+        $read=$null
+        if ($observed -and $observed.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern,[ref]$read) -and
+            ([System.Windows.Automation.ValuePattern]$read).Current.Value -ceq $Value) { return $observed }
+    } "exact synthetic edit readback: $Name"
 }
 
 function Configure-CodexFixtureProfile {
