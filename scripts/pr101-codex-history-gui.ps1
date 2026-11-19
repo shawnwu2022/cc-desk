@@ -40,10 +40,13 @@ function Set-FixtureEdit([string]$Name,[string]$Value) {
 
 function Configure-CodexFixtureProfile {
     $result.codexHistory.stage='create-official-codex-profile'
+    $result.codexHistory.stage='settings-open'
     Invoke-Button @('Settings')
+    $result.codexHistory.stage='settings-launch-configurations'
     Invoke-Button @('Launch configurations')
     $name='Pr101SyntheticCodexProfile'
     $button=[System.Windows.Automation.ControlType]::Button
+    $result.codexHistory.stage='codex-config-create-control'
     $target=Wait-Observed {
         $tools=@($window.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition) | Where-Object {
             $_.Current.Name -ceq 'New configuration' -and $_.Current.ControlType -eq $button -and
@@ -63,7 +66,9 @@ function Configure-CodexFixtureProfile {
     $click=$null
     if (!$target.Current.IsEnabled -or !$target.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern,[ref]$click)) { throw 'Codex configuration action unavailable' }
     ([System.Windows.Automation.InvokePattern]$click).Invoke()
+    $result.codexHistory.stage='codex-config-name'
     Set-FixtureEdit 'Configuration name' $name
+    $result.codexHistory.stage='codex-config-options'
     $details=Wait-Observed {
         $label="More options$([char]0x2026)"
         $same = @($window.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition) |
@@ -84,6 +89,7 @@ function Configure-CodexFixtureProfile {
     $expand=$null
     if (!$details.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern,[ref]$expand)) { throw 'Missing profile options disclosure' }
     ([System.Windows.Automation.ExpandCollapsePattern]$expand).Expand()
+    $result.codexHistory.stage='codex-config-program-mode'
     $combo=Wait-Observed { Find-Control @('CLI program override') ([System.Windows.Automation.ControlType]::ComboBox) } 'Codex executable override'
     $expand=$null
     if (!$combo.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern,[ref]$expand)) { throw 'Missing executable override disclosure' }
@@ -92,13 +98,16 @@ function Configure-CodexFixtureProfile {
     $selection=$null
     if (!$choice.TryGetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern,[ref]$selection)) { throw 'Missing executable override selection' }
     ([System.Windows.Automation.SelectionItemPattern]$selection).Select()
+    $result.codexHistory.stage='codex-config-program-readback'
     Set-FixtureEdit 'Program path' $FixtureCodex
+    $result.codexHistory.stage='codex-config-save'
     Reveal-DiagnosticsControl @('Save') $button
     Invoke-Button @('Save')
     $null=Wait-Observed {
         if (Find-Control @('Configuration name') ([System.Windows.Automation.ControlType]::Edit)) { return $null }
         Find-Control @($name) ([System.Windows.Automation.ControlType]::Text)
     } 'closed editor and confirmed saved official Codex profile in GUI'
+    $result.codexHistory.stage='codex-config-saved'
     $result.codexHistory.profileSaved=$true
     Invoke-Button @('Workspace')
 }
