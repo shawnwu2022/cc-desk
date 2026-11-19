@@ -1,25 +1,58 @@
-name: PR 101 Stage-A standalone compile only
+name: PR 101 Stage-A synthetic backup restore only
 on:
   push:
     branches: [verify/pr101-diagnostics-0727a08c]
 permissions:
   contents: read
 jobs:
-  stage-a-compile-only:
+  stage-a-restore-only:
     if: github.repository == 'shawnwu2022/cc-desk' && github.ref == 'refs/heads/verify/pr101-diagnostics-0727a08c'
     runs-on: windows-2022
-    timeout-minutes: 8
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
-      - name: Parse pinned Stage-A script and compile literal C sharp helper only
+      - name: Download pinned official Codex
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dir = Join-Path $env:RUNNER_TEMP 'official-codex'
+          New-Item -ItemType Directory $dir | Out-Null
+          # A lone EXE is not the complete official runtime supply. Preserve the published vendor layout.
+          $archive = Join-Path $dir 'codex-0.169.1-win32-x64.tgz'
+          Invoke-WebRequest 'https://registry.npmjs.org/@openai/codex/-/codex-0.169.1-win32-x64.tgz' -OutFile $archive
+          $expectedIntegrity = 'fImXWqxwxqHh9+FhJWsRRFiBzgBrSeN1bYTvtGZtUKGTPzHefYAL1agmlf5XScfwY5i5pHsExfdhFekzRBbqIw=='
+          $stream = [IO.File]::OpenRead($archive)
+          $hasher = [Security.Cryptography.SHA512]::Create()
+          try { $actualIntegrity = [Convert]::ToBase64String($hasher.ComputeHash($stream)) } finally { $stream.Dispose(); $hasher.Dispose() }
+          if ($actualIntegrity -cne $expectedIntegrity) { throw 'Official platform package integrity mismatch' }
+          $names = @(& tar -tzf $archive)
+          if ($LASTEXITCODE -ne 0) { throw 'Platform archive listing failed' }
+          $details = @(& tar -tvzf $archive)
+          if ($LASTEXITCODE -ne 0 -or $names.Count -ne 47 -or $details.Count -ne 47) { throw 'Platform archive entries mismatch' }
+          foreach ($name in $names) {
+            if (!$name.StartsWith('package/') -or $name -match '(^/|\\|:|(^|/)\.\.(/|$))') { throw 'Unsafe platform archive path' }
+          }
+          foreach ($entry in $details) { if ($entry[0] -ne '-') { throw 'Platform archive contains nonregular entry' } }
+          $extract = Join-Path $dir 'extracted'
+          New-Item -ItemType Directory $extract | Out-Null
+          & tar -xzf $archive -C $extract
+          if ($LASTEXITCODE -ne 0) { throw 'Platform archive extraction failed' }
+          if (@(Get-ChildItem $extract -Recurse | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }).Count) { throw 'Platform reparse point rejected' }
+          $files = @(Get-ChildItem $extract -Recurse -File)
+          if ($files.Count -ne 47 -or ($files | Measure-Object Length -Sum).Sum -ne 515292799) { throw 'Platform file set mismatch' }
+          $inventory = @($files | ForEach-Object { [ordered]@{path=$_.FullName.Substring($extract.Length+1).Replace('\','/'); bytes=$_.Length; sha256=(Get-FileHash $_.FullName).Hash.ToLowerInvariant()} })
+          [ordered]@{package='@openai/codex'; version='0.169.1-win32-x64'; integrity="sha512-$expectedIntegrity"; archiveSha256=(Get-FileHash $archive).Hash; source='official npm platform package'; files=$inventory} | ConvertTo-Json -Depth 5 | Set-Content codex-supply.json
+          $exe = Join-Path $extract 'package/vendor/x86_64-pc-windows-msvc/bin/codex.exe'
+          if ((Get-Item $exe).Length -ne 382647088 -or (Get-FileHash $exe).Hash -ine 'f76f94d08b0793bfa129ae62c09341ee32ae96d57e69968ae6b8d7c71a20d8c4') { throw 'Official Codex asset digest mismatch' }
+      - name: Run reviewed Stage-A copy restore once against fresh synthetic data
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           if (!$IsWindows -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted') { throw 'STAGE_A_HOSTED_ONLY' }
-          $destination=Join-Path $env:RUNNER_TEMP ('stage-a-compile-' + [Guid]::NewGuid().ToString('N'))
+          $destination=Join-Path $env:RUNNER_TEMP ('stage-a-restore-run-' + [Guid]::NewGuid().ToString('N'))
           New-Item -Path $destination -ItemType Directory | Out-Null
           $absolute=Join-Path $destination 'pr101-codex-restore-stage-a.ps1'
           # Hash the checkout commit's raw blob (platform CRLF conversion not accepted).
@@ -27,18 +60,34 @@ jobs:
           $blob=Start-Process -FilePath $git -ArgumentList @('cat-file','blob','HEAD:scripts/pr101-codex-restore-stage-a.ps1') -RedirectStandardOutput $absolute -WindowStyle Hidden -Wait -PassThru
           if ($blob.ExitCode -ne 0) { throw 'STAGE_A_SOURCE_BLOB_UNAVAILABLE' }
           if ((Get-FileHash -LiteralPath $absolute).Hash -ine '3cc37926b61246b31f92ad70555c1e7d1773e3cc21be79bdecb4de1d5974bf37') { throw 'STAGE_A_SOURCE_PIN_MISMATCH' }
-          $tokens=$null; $errors=$null
-          $ast=[System.Management.Automation.Language.Parser]::ParseFile($absolute,[ref]$tokens,[ref]$errors)
-          if ($errors.Count) { throw ('STAGE_A_AST_REJECTED: ' + (($errors | ForEach-Object { $_.ErrorId }) -join ',')) }
-          # The fixture and helper are never loaded, dot-sourced or invoked.
-          $definitions=@($ast.FindAll({
-            param($node)
-            $node -is [System.Management.Automation.Language.StringConstantExpressionAst] -and
-              $node.StringConstantType -eq [System.Management.Automation.Language.StringConstantType]::SingleQuotedHereString -and
-              $node.Value -match '(?m)^using System;' -and $node.Value -match 'DllImport'
-          },$true))
-          if ($definitions.Count -ne 1 -or $definitions[0].Value.Length -gt 32768) { throw 'STAGE_A_LITERAL_HELPER_NOT_UNIQUE' }
-          $dll=Join-Path $destination 'StageA.CompileOnly.dll'
-          Add-Type -Language CSharp -TypeDefinition $definitions[0].Value -OutputAssembly $dll -OutputType Library
-          if (!(Test-Path -LiteralPath $dll -PathType Leaf) -or (Get-Item -LiteralPath $dll).Length -lt 1024) { throw 'STAGE_A_HELPER_OUTPUT_MISSING' }
-          Write-Host 'STAGE_A_COMPILE_ONLY sourcePin=true powershellAst=true csharpDll=true fixtureExecuted=false cliInvoked=false goExecuted=false'
+          $image=Join-Path $env:RUNNER_TEMP 'official-codex/extracted/package/vendor/x86_64-pc-windows-msvc/bin/codex.exe'
+          if ((Get-FileHash -LiteralPath $image).Hash -ine 'f76f94d08b0793bfa129ae62c09341ee32ae96d57e69968ae6b8d7c71a20d8c4') { throw 'STAGE_A_OFFICIAL_IMG_MISMATCH' }
+          Get-ChildItem Env: | Where-Object { $_.Name -cne 'GITHUB_ACTIONS' -and $_.Name -match '^(ACTIONS_|GITHUB_|GH_)|TOKEN|SECRET|API_KEY|PASSWORD|CREDENTIAL' } | ForEach-Object {
+            [Environment]::SetEnvironmentVariable($_.Name, $null, 'Process')
+          }
+          $marker=@{ complete=$false; count=0 }
+          try {
+            & $absolute -Codex $image | ForEach-Object {
+              $marker.count++
+              if ($marker.count -ne 1 -or $_ -isnot [string] -or $_.Length -gt 4096) { throw 'STAGE_A_RECEIPT_BOUND' }
+              $receipt=$_ | ConvertFrom-Json -AsHashtable
+              if ($receipt.schema -ne 1 -or $receipt.stage -cne 'synthetic-restore-readonly' -or
+                  $receipt.deletionExecuted -ne $false -or $receipt.stageBGoGranted -ne $false) { throw 'STAGE_A_RECEIPT_REJECTED' }
+              if ($receipt.state -ceq 'blocked') {
+                $phase=$receipt.phase
+                if ($phase -cnotin @('preflight','baseline-read','snapshot','restore','restored-read')) { $phase='other' }
+                [ordered]@{schema=1;stage='synthetic-restore-readonly';state='blocked';phase=$phase;deletionExecuted=$false;stageBGoGranted=$false} |
+                  ConvertTo-Json -Compress | ForEach-Object { Write-Host ('STAGE_A_RECEIPT '+$_) }
+              } else {
+                $passing=@('baselineRead','restoredRead','readOnlyMayReindex','byteManifestEquivalentBeforeRead','originalRetained','snapshotRetained','sqliteObserved','rolloutBytesRetained','providerCanaryPreviewVerified','activeAndArchivedIdentityVerified','ownerSettled')
+                $fixed=[ordered]@{schema=1;stage='synthetic-restore-readonly';providerVersion='0.169.1'}
+                if ($receipt.providerVersion -cne '0.169.1') { throw 'STAGE_A_PROVIDER_RECEIPT' }
+                foreach($key in $passing){if ($receipt[$key] -ne $true) { throw 'STAGE_A_REQUIRED_PROOF' }; $fixed[$key]=$true}
+                foreach($key in @('sqliteSemanticRowsVerified','deletionExecuted','stageBGoGranted','standardPackageUiVerified')){if ($receipt[$key] -ne $false) { throw 'STAGE_A_SCOPE_RECEIPT' }; $fixed[$key]=$false}
+                foreach($key in @('sqliteFileCount','fileCount','bytes')){ $n=$receipt[$key] -as [long]; if ($n -lt 1 -or $n -gt 134217728) { throw 'STAGE_A_COUNTS' }; $fixed[$key]=$n }
+                $fixed | ConvertTo-Json -Compress | ForEach-Object { Write-Host ('STAGE_A_RECEIPT '+$_) }
+                $marker.complete=$true
+              }
+            }
+          } catch { throw 'STAGE_A_RUN_BLOCKED' }
+          if (!$marker.complete -or $marker.count -ne 1) { throw 'STAGE_A_SUCCESS_RECEIPT_MISSING' }
