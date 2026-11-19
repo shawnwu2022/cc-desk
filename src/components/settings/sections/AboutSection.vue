@@ -14,6 +14,7 @@ import { getUpdaterSettings } from '@/api/tauri'
 import { useCliProfilesStore } from '@/stores/cliProfiles'
 import { useCliSupportStore } from '@/stores/cliSupport'
 import { useCliVersionDiagnostics } from '@/composables/useCliVersionDiagnostics'
+import ActivityDiagnosticsPanel from '../ActivityDiagnosticsPanel.vue'
 import AppButton from '@/components/ui/AppButton.vue'
 import InlineNotice from '@/components/ui/InlineNotice.vue'
 const props = withDefaults(defineProps<{ active?: boolean }>(), { active: true })
@@ -97,6 +98,7 @@ async function copyDiagnostics() {
         <AppButton v-if="loadingProfiles || versions.busy.value" data-cancel-cli-versions variant="ghost" @click="cancelVersions">{{ t('diagnosticsCancelCli') }}</AppButton>
       </div>
     </div>
+    <ActivityDiagnosticsPanel :active="active" />
     <AppButton data-copy-diagnostics :disabled="copying || !active" @click="copyDiagnostics">{{ t('copyDiagnostics') }}</AppButton>
     <InlineNotice v-if="error" kind="warning" :message="t(error)" />
   </section>

@@ -1,3 +1,4 @@
+import { activityDiagnostics } from '@/utils/activityDiagnostics'
 import { computed, nextTick, ref, watch } from 'vue'
 import { defineStore } from 'pinia'
 import { useProjectsStateStore } from '@/stores/projectsState'
@@ -966,6 +967,7 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
       }
       return Promise.reject(new Error('STALE_SESSION_ATTEMPT'))
     }
+    const diagnostics = activityDiagnostics.start('rename', session.cli)
     const owner = current ?? captureRenameOwner(session, 'saving')
     owner.state = 'saving'
     renameOwners.set(id, owner)
@@ -973,10 +975,13 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     sessions.value = sessions.value.map(row => row.id === id ? { ...row, renameState: 'saving' } : row)
     return enqueue(id, () => {
       if (renameOwners.get(id) !== owner || !ownsRename(owner, sessions.value.find(row => row.id === id))) throw new Error('STALE_SESSION_ATTEMPT')
-      return adapter.renameSession(id, title, () => renameOwners.get(id) === owner && ownsRename(owner, sessions.value.find(row => row.id === id)), () => { owner.issued = true }, owner.controller.signal)
+      const run = () => adapter.renameSession(id, title, () => renameOwners.get(id) === owner && ownsRename(owner, sessions.value.find(row => row.id === id)), () => { owner.issued = true }, owner.controller.signal)
+      return diagnostics ? diagnostics.observe('adapter', run) : run()
     }, async result => {
-      try { await refresh(session.projectKey) }
-      catch (failure) {
+      try {
+        const sync = () => refresh(session.projectKey)
+        await (diagnostics ? diagnostics.observe('list', sync) : sync())
+      } catch (failure) {
         // 原生已确认写回，后置读取失败只能提示同步问题，不能重新开放同一次保存。
         if (result === 'native-title-saved') throw new Error('RENAME_DISPLAY_SYNC_FAILED')
         throw failure
@@ -1002,10 +1007,13 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
   function archiveSession(id: string, canContinue = () => true): Promise<void> {
     const session = requireSession(id)
     const adapter = adapterForRuntime(session.runtime)
+    const diagnostics = activityDiagnostics.start('archive', session.cli)
+    const run = () => adapter.archiveSession(id, canContinue)
     ++selectionEpoch
-    return enqueue(id, () => adapter.archiveSession(id, canContinue), async () => {
+    return enqueue(id, () => diagnostics ? diagnostics.observe('adapter', run) : run(), async () => {
       if (activeSessionId.value === id) activeSessionId.value = null
-      await refresh(session.projectKey)
+      const sync = () => refresh(session.projectKey)
+      await (diagnostics ? diagnostics.observe('list', sync) : sync())
     }, 'archive')
   }
 
@@ -1017,7 +1025,11 @@ export const useUnifiedSessionsStore = defineStore('unified-sessions', () => {
     if (existing) return existing
     const adapter = adapterForRuntime(session.runtime)
     pendingArchiveKeys.value = new Set([...pendingArchiveKeys.value, key])
-    const task = enqueue(id, () => adapter.restoreArchivedSession(id), () => refresh(session.projectKey, { cli: session.cli }))
+    const diagnostics = activityDiagnostics.start('restore', session.cli)
+    const run = () => adapter.restoreArchivedSession(id)
+    const sync = () => refresh(session.projectKey, { cli: session.cli })
+    const task = enqueue(id, () => diagnostics ? diagnostics.observe('adapter', run) : run(),
+      () => diagnostics ? diagnostics.observe('list', sync) : sync())
     pendingArchiveRestores.set(key, task)
     void task.finally(() => {
       if (pendingArchiveRestores.get(key) !== task) return

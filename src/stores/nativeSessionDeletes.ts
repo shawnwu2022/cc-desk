@@ -1,3 +1,4 @@
+import { activityDiagnostics } from '@/utils/activityDiagnostics'
 import { defineStore } from 'pinia'
 import { reactive } from 'vue'
 import type { SessionDeleteClient, SessionDeletePreview, SessionDeletePreviewRequest, SessionDeleteReceipt } from '@/types/nativeSessionDelete'
@@ -19,6 +20,7 @@ export function sessionDeleteTargetKey(input: SessionDeletePreviewRequest): stri
 export const useNativeSessionDeletesStore = defineStore('native-session-deletes', () => {
   const records = reactive(new Map<string, SessionDeleteOperation>())
   const clients = new Map<string, SessionDeleteClient>()
+  const diagnostics = new WeakMap<SessionDeleteOperation, NonNullable<ReturnType<typeof activityDiagnostics.start>>>()
   const executions = new Map<string, Promise<void>>()
   function unavailable(): never { throw new Error('DELETE_CONFIRMATION_REQUIRED') }
   async function prepare(request: SessionDeletePreviewRequest, display?: SessionDeleteOperation['display']): Promise<void> {
@@ -28,27 +30,33 @@ export const useNativeSessionDeletesStore = defineStore('native-session-deletes'
     if (old?.phase === 'previewing') return
     const frozen = JSON.parse(JSON.stringify(request)) as SessionDeletePreviewRequest
     const record = reactive<SessionDeleteOperation>({ request: frozen, phase: 'previewing', ...(display ? { display: { ...display, ...(display.origin ? { origin: { ...display.origin } } : {}) } } : {}) })
+    const trace = activityDiagnostics.start('delete', request.source.cli)
+    if (trace) diagnostics.set(record, trace)
     records.set(key, record)
     try {
       const client = createNativeSessionDeleteClient()
       clients.set(key, client)
       const preview = await client.preview(frozen)
       if (records.get(key) !== record) return
+      trace?.record('preview', preview.state === 'ready' ? 'ok' : preview.state)
       record.preview = preview
       record.phase = preview.state === 'ready' ? 'review' : 'result'
     } catch (failure) {
       if (records.get(key) !== record) return
+      trace?.record('preview', 'failed')
       record.error = sessionDeleteErrorCode(failure); record.phase = 'result'
     }
   }
   function beginConfirmation(key: string): void {
     const record = records.get(key)
     if (!record || record.phase !== 'review' || record.preview?.state !== 'ready') return unavailable()
+    diagnostics.get(record)?.record('confirmation', 'started')
     record.phase = 'confirmation'
   }
   function cancel(key: string): void {
     const record = records.get(key)
     if (!record || !['previewing', 'review', 'confirmation'].includes(record.phase)) return
+    diagnostics.get(record)?.record('confirmation', 'cancelled')
     records.delete(key); clients.delete(key)
   }
   async function execute(key: string, permanent: boolean, subtree: boolean, owns: () => boolean): Promise<void> {
@@ -59,6 +67,7 @@ export const useNativeSessionDeletesStore = defineStore('native-session-deletes'
     let current = false
     try { current = owns() } catch { /* 来源已失效。 */ }
     if (!current) { cancel(key); return unavailable() }
+    const trace = diagnostics.get(record)
     record.phase = 'executing'
     const previewId = record.preview.previewId
     const task = Promise.resolve().then(async () => {
@@ -73,7 +82,10 @@ export const useNativeSessionDeletesStore = defineStore('native-session-deletes'
       } catch {
         // 请求已进入发送路径；异常或文档替换均不能证明删除未发生。
         record.receipt = { operationId: record.request.operationId, cli: record.request.source.cli, state: 'unknown', rootPresent: null, descendants: 'unverified', reason: 'DELETE_OUTCOME_UNKNOWN' }
-      } finally { record.phase = 'result'; executions.delete(key) }
+      } finally {
+        trace?.record('confirmation', record.receipt?.state ?? 'unknown')
+        record.phase = 'result'; executions.delete(key)
+      }
     })
     executions.set(key, task)
     return task
@@ -82,8 +94,11 @@ export const useNativeSessionDeletesStore = defineStore('native-session-deletes'
     const record = records.get(key), client = clients.get(key)
     if (!record?.receipt || !client || record.phase !== 'result') return
     record.phase = 'checking'; record.error = undefined
-    try { record.receipt = await client.inspect({ operationId: record.request.operationId }); record.inspected = true }
-    catch (failure) { record.error = sessionDeleteErrorCode(failure) }
+    try {
+      record.receipt = await client.inspect({ operationId: record.request.operationId }); record.inspected = true
+      diagnostics.get(record)?.record('reconcile', record.receipt.state)
+    }
+    catch (failure) { diagnostics.get(record)?.record('reconcile', 'failed'); record.error = sessionDeleteErrorCode(failure) }
     finally { record.phase = 'result' }
   }
   function canReviewAgain(key: string): boolean {
