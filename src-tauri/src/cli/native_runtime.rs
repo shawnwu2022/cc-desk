@@ -445,16 +445,29 @@ impl NativeRuntime {
         webview: &Webview<T>,
         request: &Request<'_>,
     ) -> Result<super::native_recycle::Response, SafeError> {
-        let caller = self.binding()?.admit_native(webview, request.headers())?;
+        let binding = self.binding()?;
+        let caller = binding.admit_native(webview, request.headers())?;
         let query: super::native_recycle::Request = decode_projection(request.body(), 32768)?;
         query.validate()?;
+        let trace = if matches!(query.action.as_str(), "list" | "restore") {
+            binding
+                .diagnostics()
+                .trace_from_headers(&caller, request.headers())
+        } else {
+            None
+        };
         let mutating = query.action != "list";
         let service = self.projections.clone();
         let admitted = caller.clone();
-        let result =
-            tauri::async_runtime::spawn_blocking(move || service.recycle(&admitted, query))
-                .await
-                .map_err(|_| error("RECYCLE_OUTCOME_UNKNOWN"))??;
+        let result = tauri::async_runtime::spawn_blocking(move || {
+            super::activity_diagnostics::observe(
+                trace.as_ref(),
+                super::activity_diagnostics::Stage::Backend,
+                || service.recycle(&admitted, query),
+            )
+        })
+        .await
+        .map_err(|_| error("RECYCLE_OUTCOME_UNKNOWN"))??;
         self.service
             .registry()
             .check_caller(&caller)

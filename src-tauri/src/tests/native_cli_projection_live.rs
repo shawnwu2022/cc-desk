@@ -246,6 +246,12 @@ fn D12_Webview_Worker_099() {
             .unwrap();
         targets.push(json!({"kind":"profile","profileId":id,"expectedProfileRevision":d.profiles[id].revision,"projectIds":[]}));
     }
+    let recycle_project = root.join("recycle-project");
+    fs::create_dir(&recycle_project).unwrap();
+    let project = crate::cli::workspace::register_project(&repo, &recycle_project).unwrap();
+    let mut recycle_target = targets[0].clone();
+    recycle_target["projectIds"] = json!([project.project_id]);
+    targets.push(recycle_target);
     let launch = Arc::new(LaunchService::new(
         repo.clone(),
         Some(Default::default()),
@@ -284,6 +290,7 @@ fn D12_Webview_Worker_099() {
         .invoke_handler(tauri::generate_handler![
             crate::cli::commands::cli_diagnostic_capture,
             crate::cli::commands::cli_inspect_session_delete,
+            crate::cli::commands::cli_recycle_session,
             crate::commands::native_get_scope,
             crate::commands::native_list_resources,
             d12_record,

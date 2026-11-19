@@ -1,7 +1,7 @@
-const operations = ['archive', 'restore', 'rename', 'delete', 'refresh'] as const
+const operations = ['archive', 'restore', 'rename', 'delete', 'refresh', 'recycleList', 'recycleRecheck', 'recycleRestore'] as const
 const providers = ['codex', 'claude', 'opencode', 'antigravity', 'unknown'] as const
-const stages = ['ui', 'adapter', 'backend', 'provider', 'list', 'preview', 'confirmation', 'reconcile'] as const
-const results = ['started', 'returned', 'applied', 'unchanged', 'ok', 'acknowledged', 'partial', 'failed', 'unknown', 'unsupported', 'cancelled', 'blocked', 'stale', 'skipped'] as const
+const stages = ['ui', 'adapter', 'backend', 'provider', 'list', 'preview', 'confirmation', 'reconcile', 'recycle', 'history'] as const
+const results = ['started', 'returned', 'applied', 'unchanged', 'ok', 'acknowledged', 'partial', 'failed', 'unknown', 'unsupported', 'cancelled', 'blocked', 'stale', 'skipped', 'sourceObserved', 'storedObserved', 'conflict'] as const
 
 type Operation = typeof operations[number]
 type Provider = typeof providers[number]

@@ -35,6 +35,15 @@ async function runProjection(targets) {
     const reopened = await control({action:'start', serial:3})
     if (reopened.grant === opened.grant || await readError(wire(header)) !== baseline ||
         (await control({action:'snapshot'})).report.events.length !== 0) throw Error('previous grant replay accepted')
+    const recycleSource = await bridge.invoke('native_get_scope', targets[2])
+    const recycle = {source:recycleSource, action:'list', operationId:null, sessionKey:null, acknowledgeRecoverable:false}
+    const ordinaryList = await bridge.invoke('cli_recycle_session', recycle)
+    const tracedList = await bridge.invoke('cli_recycle_session', recycle, undefined, reopened.grant + ':' + id)
+    if (JSON.stringify(tracedList) !== JSON.stringify(ordinaryList)) throw Error('diagnostics changed read-only recovery listing')
+    const recycleTrace = await control({action:'snapshot'})
+    if (recycleTrace.report.events.length !== 2 || recycleTrace.report.events[1].status !== 'returned' || recycleTrace.report.events.some(event => event.id !== id)) {
+      throw Error('recovery diagnostics did not reach real IPC')
+    }
     await control({action:'stop', serial:4})
     await record('diagnostic-header-no-authority')
     await expectDiagnostic(n.invoke('native_get_scope', bytes(targets[0])), 'FORBIDDEN', 'scope-document-admission'); await record('missing-proof')

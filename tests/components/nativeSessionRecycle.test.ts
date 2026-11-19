@@ -192,3 +192,70 @@ describe('legacy Claude recovery compatibility', () => {
   })
 
 })
+
+it('NativeRecycleUi_DiagnosticsTrackRestoreReceiptWithoutRecordingIdentity_011', async () => {
+  const { activityDiagnostics } = await import('@/utils/activityDiagnostics')
+  activityDiagnostics.enable('a'.repeat(32))
+  try {
+    saved = [retained()]
+    await show([])
+    element('[data-recycle-restore]').click()
+    await flushPromises()
+    const report = activityDiagnostics.snapshot()
+    const restore = report.events.filter(item => item.operation === 'recycleRestore')
+    expect(restore.map(item => [item.stage, item.result])).toContainEqual(['recycle', 'sourceObserved'])
+    expect(new Set(restore.map(item => item.id)).size).toBe(1)
+    const [command, request, channel, trace] = mutations()[0]!
+    expect(command).toBe('cli_recycle_session')
+    expect(channel).toBeUndefined()
+    expect(trace).toBe('a'.repeat(32) + ':' + restore[0]!.id)
+    expect(Object.keys(request).sort()).toEqual(['acknowledgeRecoverable','action','operationId','sessionKey','source'])
+    expect(JSON.stringify(report)).not.toContain(nativeId)
+    expect(JSON.stringify(report)).not.toContain(context.projectPath)
+    expect(mutations()).toHaveLength(1)
+  } finally { activityDiagnostics.disable() }
+})
+
+it('NativeRecycleUi_DiagnosticsKeepRecheckReadOnlyAndCorrelated_012', async () => {
+  const { activityDiagnostics } = await import('@/utils/activityDiagnostics')
+  activityDiagnostics.enable('a'.repeat(32))
+  try {
+    saved = [retained()]
+    await show([])
+    const entry = useNativeHistoryStore().get(context)!
+    entry.error = 'SOURCE_UNAVAILABLE'
+    vi.mocked(useNativeHistoryStore().load).mockImplementation(async () => { entry.error = null; return entry })
+    await flushPromises()
+    element('[data-recycle-refresh]').click()
+    await flushPromises()
+    const report = activityDiagnostics.snapshot().events.filter(item => item.operation === 'recycleRecheck')
+    expect(report.map(item => [item.stage, item.result])).toEqual([['ui','started'], ['history','returned'], ['recycle','returned']])
+    expect(new Set(report.map(item => item.id)).size).toBe(1)
+    expect(io.invoke.mock.calls[io.invoke.mock.calls.length - 1]?.[3]).toBe('a'.repeat(32) + ':' + report[0]!.id)
+    expect(mutations()).toHaveLength(0)
+  } finally { activityDiagnostics.disable() }
+})
+
+it('NativeRecycleUi_DiagnosticsStopWhileRestoreKeepsBusinessReceiptAndDropsLateEvents_013', async () => {
+  const { activityDiagnostics } = await import('@/utils/activityDiagnostics')
+  activityDiagnostics.enable('a'.repeat(32))
+  try {
+    saved = [retained()]
+    await show([])
+    let complete!: () => void
+    const existing = io.invoke.getMockImplementation()!
+    io.invoke.mockImplementation((command, request) => request.action === 'restore'
+      ? new Promise(resolve => { complete = () => { saved = [retained({ state: 'source', originalOccupied: true })]; resolve({ records: saved, unavailableCount: 0 }) } })
+      : existing(command, request))
+    element('[data-recycle-restore]').click()
+    await flushPromises()
+    const before = activityDiagnostics.snapshot()
+    activityDiagnostics.disable()
+    complete()
+    await flushPromises()
+    expect(activityDiagnostics.snapshot()).toEqual(before)
+    expect(element('[data-recycle-legacy]')).toBeNull()
+    expect(mutations()).toHaveLength(1)
+    expect(io.invoke.mock.calls[io.invoke.mock.calls.length - 1]).toHaveLength(2)
+  } finally { activityDiagnostics.disable() }
+})

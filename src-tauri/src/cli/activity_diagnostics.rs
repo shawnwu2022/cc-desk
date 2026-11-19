@@ -251,11 +251,13 @@ pub(crate) fn observe<T>(
             Err(error) => match error.code.as_str() {
                 "NATIVE_ARCHIVE_UNSUPPORTED"
                 | "NATIVE_RENAME_UNSUPPORTED"
-                | "NATIVE_DELETE_UNSUPPORTED" => Status::Unsupported,
+                | "NATIVE_DELETE_UNSUPPORTED"
+                | "RECYCLE_UNSUPPORTED" => Status::Unsupported,
                 "ARCHIVE_OUTCOME_UNKNOWN"
                 | "RENAME_OUTCOME_UNKNOWN"
                 | "DELETE_OUTCOME_UNKNOWN"
-                | "LAUNCH_STATE_UNKNOWN" => Status::Unknown,
+                | "LAUNCH_STATE_UNKNOWN"
+                | "RECYCLE_OUTCOME_UNKNOWN" => Status::Unknown,
                 "FORBIDDEN" | "RUN_SUPERVISOR_STOPPING" | "DELETE_CONFIRMATION_REQUIRED" => {
                     Status::Blocked
                 }
