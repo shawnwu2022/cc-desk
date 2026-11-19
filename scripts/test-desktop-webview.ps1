@@ -32,6 +32,36 @@ function Invoke-Button([string[]]$Names) {
     if (!$control.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) { throw ("BLOCKED_UI_INVOKE: $($Names -join '/')") }
     ([System.Windows.Automation.InvokePattern]$pattern).Invoke()
 }
+function Reveal-DiagnosticsControl([string[]]$Names, $Type) {
+    $seen = @{ reported=$false; revealed=$false }
+    $null = Wait-Observed {
+        $found = @($window.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition) | Where-Object {
+            $_.Current.Name -cin $Names -and (!$Type -or $_.Current.ControlType -eq $Type)
+        })
+        if ($found.Count -gt 1) { throw "Ambiguous diagnostics control: $($Names -join '/')" }
+        if ($found.Count -eq 0) { return $null }
+        $target = $found[0]
+        if (!$seen.reported) {
+            $result.activityDiagnostics.controls += [ordered]@{
+                expectedLabel=($Names -join '/')
+                enabled=$target.Current.IsEnabled
+                offscreen=$target.Current.IsOffscreen
+                patterns=@($target.GetSupportedPatterns() | ForEach-Object ProgrammaticName)
+            }
+            $seen.reported = $true
+        }
+        if (!$target.Current.IsOffscreen) { return $target }
+        if (!$seen.revealed) {
+            $scroll = $null
+            if (!$target.TryGetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern, [ref]$scroll)) {
+                throw "BLOCKED_UI_SCROLL: $($Names -join '/')"
+            }
+            ([System.Windows.Automation.ScrollItemPattern]$scroll).ScrollIntoView()
+            $seen.revealed = $true
+        }
+        return $null
+    } "diagnostics fixed control reveal: $($Names -join '/')"
+}
 function Toggle-DiagnosticsButton([string[]]$Names) {
     $ctl = Wait-Observed { Find-Control $Names ([System.Windows.Automation.ControlType]::Button) } ($Names -join '/')
     $pattern = $null
@@ -177,26 +207,34 @@ try {
         Toggle-DiagnosticsButton $start
         $null = Wait-Observed $isOn 'diagnostics started acknowledgement'
         $result.activityDiagnostics.startAcknowledged = $true
+        Reveal-DiagnosticsControl $preview $button
         Invoke-Button $preview
+        Reveal-DiagnosticsControl $copy $button
         Invoke-Button $copy
+        Reveal-DiagnosticsControl @('Diagnostic summary copied') $null
         $null = Wait-Observed { Find-Control @('Diagnostic summary copied') $null } 'explicit diagnostic copy'
         $raw = Get-Clipboard -Raw
         if (!$raw -or $raw.Length -gt 131072) { throw 'Diagnostic export exceeds expected bound or absent' }
         $report = $raw | ConvertFrom-Json -AsHashtable
         if ($report.schemaVersion -ne 1 -or $report.events.Count -ne 0 -or !$report.backend.available -or $report.backend.events.Count -ne 0) { throw 'Unexpected initial diagnostic report' }
         $result.activityDiagnostics.emptyPreviewCopied = $true
+        Reveal-DiagnosticsControl $stop $button
         Toggle-DiagnosticsButton $stop
         $null = Wait-Observed { Find-Control $start $button } 'diagnostics stop confirmed'
         $result.activityDiagnostics.stopAcknowledged = $true
         Toggle-DiagnosticsButton $start
         $null = Wait-Observed $isOn 'diagnostics second start'
+        Reveal-DiagnosticsControl $preview $button
         Invoke-Button $preview
+        Reveal-DiagnosticsControl $copy $button
         Invoke-Button $copy
+        Reveal-DiagnosticsControl @('Diagnostic summary copied') $null
         $null = Wait-Observed { Find-Control @('Diagnostic summary copied') $null } 'second explicit diagnostic copy'
         $rawAgain = Get-Clipboard -Raw
         if (!$rawAgain -or $rawAgain.Length -gt 131072) { throw 'Second diagnostic export exceeds expected bound or absent' }
         $again = $rawAgain | ConvertFrom-Json -AsHashtable
         if (!$again.backend.available -or $again.events.Count -ne 0) { throw 'Fresh diagnostic capture was not observed' }
+        Reveal-DiagnosticsControl $stop $button
         Toggle-DiagnosticsButton $stop
         $null = Wait-Observed { Find-Control $start $button } 'second diagnostics stop confirmed'
         $result.activityDiagnostics.restartWithoutAppRestart = $true
