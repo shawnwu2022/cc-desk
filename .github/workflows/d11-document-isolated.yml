@@ -26,7 +26,9 @@ jobs:
           $dir = Join-Path $env:RUNNER_TEMP 'pr101-official-claude'
           if (Test-Path -LiteralPath $dir) { throw 'Supply dir already exists' }
           New-Item -ItemType Directory $dir | Out-Null
-          $node = (Get-Command node.exe -CommandType Application).Source
+          # Dedicated official test binary; setup-node remains only for tooling, not the live fixture.
+          $node = Join-Path $dir 'node.exe'
+          Invoke-WebRequest -MaximumRedirection 0 -Uri 'https://nodejs.org/dist/v24.18.0/win-x64/node.exe' -OutFile $node
           if ((Get-FileHash -LiteralPath $node).Hash -ine '9a4eb5f1c29c6a2e93852ead46b999e284a6a5ca8bab4d4e241d587d025a52de') { throw 'Pinned Node bytes unavailable' }
           $registry = 'https://registry.npmjs.org'
           $meta = Invoke-RestMethod "$registry/@anthropic-ai%2fclaude-code-win32-x64/2.1.319"
