@@ -313,6 +313,21 @@ try {
             $result.codexHistory.privacyCanariesAbsent=$true
             $activity=$observed | ConvertFrom-Json -AsHashtable
             if (!$activity.backend.available) { throw 'Backend diagnosis was not available' }
+            if ($FixtureOperation -ceq 'rename') {
+                if ($activity.schemaVersion -ne 1 -or (($activity.Keys | Sort-Object) -join ',') -cne 'backend,dropped,events,schemaVersion' -or
+                    (($activity.backend.Keys | Sort-Object) -join ',') -cne 'available,dropped,events,omitted' -or
+                    $activity.events.Count -gt 256 -or $activity.backend.events.Count -gt 256) { throw 'Fixture clipboard report schema mismatch' }
+                foreach ($event in @($activity.events)) {
+                    if ((($event.Keys | Sort-Object) -join ',') -cne 'cli,id,ms,operation,result,stage' -or
+                        $event.id -cnotmatch '^[a-f0-9]{32}$' -or $event.ms -lt 0 -or $event.ms -gt 4294967295) { throw 'Fixture clipboard frontend event schema mismatch' }
+                }
+                $reportIds=@($activity.events | ForEach-Object id)
+                foreach ($event in @($activity.backend.events)) {
+                    if ((($event.Keys | Sort-Object) -join ',') -cne 'id,ms,stage,status' -or $event.id -cnotin $reportIds -or
+                        $event.stage -cnotin @('backend','provider') -or $event.ms -lt 0 -or $event.ms -gt 4294967295) { throw 'Fixture clipboard backend event schema mismatch' }
+                }
+                $result.codexHistory.clipboardFixedSchema=$true
+            }
             $starts = @($activity.events | Where-Object { $_.operation -ceq $FixtureOperation -and $_.cli -ceq 'codex' -and $_.stage -ceq 'ui' -and $_.result -ceq 'started' })
             $result.codexHistory.operationTrace=[ordered]@{uiStartedCount=$starts.Count; backend=@(); provider=@(); targetList=@()}
             if ($starts.Count -eq 1 -and $starts[0].id -cmatch '^[a-f0-9]{32}$') {
@@ -346,7 +361,7 @@ try {
     if ($FixtureCodex) {
         $checks=$result.codexHistory
         if ($FixtureOperation -ceq 'rename') {
-            $actual=($checks.rename -ceq 'native-name-observed') -and $checks.Contains('renamedTitleObserved') -and $checks.renamedTitleObserved
+            $actual=($checks.rename -ceq 'native-name-observed') -and $checks.Contains('renamedTitleObserved') -and $checks.renamedTitleObserved -and $checks.languageUiZh -and $checks.activeRenameZh -and $checks.archivedRenameAbsent -and $checks.refreshedNativeIdMatch -and $checks.Contains('clipboardFixedSchema') -and $checks.clipboardFixedSchema
         } else {
             $actual=$checks.restore -ceq 'physical-restore'
         }
@@ -377,7 +392,7 @@ try {
         if ($FixtureCodex -and $result.Contains('codexHistory')) {
             $checks=$result.codexHistory
             $facts=[ordered]@{ stage=$checks.stage; result=$result.status; ordinaryExit=$result.normalExit }
-            foreach ($field in @('preflight','profileSaved','profilePinMatches','selectedProjectExact','recordedCanonicalExact','metaCwdExact','activeRowObserved','archive','restore','rename','delete','backendTraceCorrelated','privacyCanariesAbsent','activeSearch','readonlyPostRestore','operationTrace','readonlyPostRename','renamedTitleObserved','renameActionControl','ownedHoverHitVerified','originalArchiveStillPresent','visibleSafeRestoreCodes','observationFailed')) {
+            foreach ($field in @('preflight','profileSaved','profilePinMatches','selectedProjectExact','recordedCanonicalExact','metaCwdExact','activeRowObserved','archive','restore','rename','delete','backendTraceCorrelated','privacyCanariesAbsent','activeSearch','readonlyPostRestore','operationTrace','readonlyPostRename','renamedTitleObserved','languageUiZh','activeRenameZh','archivedRenameAbsent','refreshedNativeIdMatch','clipboardFixedSchema','originalArchiveStillPresent','visibleSafeRestoreCodes','observationFailed')) {
                 if ($checks.Contains($field)) { $facts[$field]=$checks[$field] }
             }
             if ($result.Contains('initialSettings')) { $facts.initialSettings=$result.initialSettings }
