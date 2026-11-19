@@ -156,12 +156,18 @@ function Test-PackagedNativeScope {
 
     $identityStage = 'inventory'
     try {
-        Observe-Children
-        $identityStage = 'process-name-observation'
-        $codexChildren = @($children.Values | Where-Object { $_.ProcessName -eq 'codex' })
-        $result.ownedCodexCount = $codexChildren.Count
-        $identityStage = 'no-unique-owned-codex'
-        if ($codexChildren.Count -ne 1) { throw 'Exact real Codex child not observed' }
+        $codexChild = Wait-Observed {
+            Observe-Children
+            $observed = @($children.Values | Where-Object { $_.ProcessName -eq 'codex' })
+            $result.ownedCodexCount = $observed.Count
+            if ($observed.Count -gt 1) { throw 'Multiple real Codex children observed' }
+            if ($observed.Count -eq 1) {
+                if ($observed[0].HasExited) { throw 'Observed Codex already exited' }
+                return $observed[0]
+            }
+            return $null
+        } 'unique owned Codex creation'
+        $codexChildren = @($codexChild)
         $identityStage = 'image-path-observation'
         $runningPath = $codexChildren[0].MainModule.FileName
         $identityStage = 'image-path-mismatch'

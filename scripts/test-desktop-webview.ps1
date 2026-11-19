@@ -142,6 +142,14 @@ function Observe-Children {
                         'msedgewebview2.exe' { 'webview'; break }
                         default { 'other-or-unknown' }
                     }
+                    if (!$result.Contains('firstUnheldChild')) {
+                        $result.firstUnheldChild = [ordered]@{
+                            pid=$id; parentPid=[int]$row.ParentProcessId
+                            kind=$result.lastUnheldChildKind
+                            phase=$(if($result.Contains('nativeStage')){$result.nativeStage}else{'pre-native'})
+                            mayBeCodex=($row.Name -ieq 'codex.exe' -or $result.lastUnheldChildKind -eq 'other-or-unknown')
+                        }
+                    }
                     continue
                 }
                 $inventoryStage = 'held-handle'
