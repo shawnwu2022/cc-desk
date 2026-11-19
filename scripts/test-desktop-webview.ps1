@@ -72,6 +72,48 @@ function Capture-Evidence([string]$Name) {
         $bitmap.Save((Join-Path $out "$Name.png"), [Drawing.Imaging.ImageFormat]::Png)
     } finally { $bitmap.Dispose() }
 }
+function Test-ExactLocalImageAlias([string]$Left, [string]$Right) {
+    $paths = @($Left, $Right)
+    $extended = @($false, $false)
+    for ($i=0; $i -lt 2; $i++) {
+        if ($paths[$i].StartsWith('\\?\', [StringComparison]::Ordinal)) { $extended[$i]=$true; $paths[$i]=$paths[$i].Substring(4) }
+        if ($paths[$i] -cnotmatch '^[A-Za-z]:\\[^/\x00-\x1f:]+$') { return $false }
+        foreach ($part in $paths[$i].Substring(3).Split('\')) {
+            if (!$part -or $part -in @('.','..') -or $part.EndsWith('.') -or $part.EndsWith(' ')) { return $false }
+        }
+    }
+    return (($extended[0] -ne $extended[1]) -and [StringComparer]::OrdinalIgnoreCase.Equals($paths[0],$paths[1]))
+}
+function Test-ImageFileIdentity([string]$Left, [string]$Right) {
+    if (!(Test-ExactLocalImageAlias $Left $Right)) { return $false }
+    if (!('PackagedImageIdentity' -as [type])) {
+        Add-Type -TypeDefinition @"
+using System;
+using System.IO;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+public static class PackagedImageIdentity {
+  [StructLayout(LayoutKind.Sequential)] struct Info {
+    public uint Attributes, CreationLow, CreationHigh, AccessLow, AccessHigh, WriteLow, WriteHigh;
+    public uint Volume, SizeHigh, SizeLow, Links, IndexHigh, IndexLow;
+  }
+  [DllImport("kernel32.dll", SetLastError=true)] static extern bool GetFileInformationByHandle(SafeFileHandle file, out Info info);
+  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern SafeFileHandle CreateFileW(string path, uint access, uint share, IntPtr security, uint creation, uint flags, IntPtr template);
+  public static bool Same(string a, string b) {
+    using (var x = CreateFileW(a, 0, 7, IntPtr.Zero, 3, 0x00200000, IntPtr.Zero))
+    using (var y = CreateFileW(b, 0, 7, IntPtr.Zero, 3, 0x00200000, IntPtr.Zero)) {
+      if (x.IsInvalid || y.IsInvalid) return false;
+      Info i,j;
+      if (!GetFileInformationByHandle(x,out i) || !GetFileInformationByHandle(y,out j)) return false;
+      if (((i.Attributes | j.Attributes) & 0x410) != 0) return false;
+      return i.Volume == j.Volume && i.IndexHigh == j.IndexHigh && i.IndexLow == j.IndexLow;
+    }
+  }
+}
+"@
+    }
+    return [PackagedImageIdentity]::Same($Left,$Right)
+}
 function Observe-Children {
     $rows = @(Get-CimInstance Win32_Process)
     $owned = @{ ([int]$app.Id) = $app }
@@ -134,7 +176,10 @@ function Observe-Children {
                             heldSysWow64=($heldImage -match '(?i)\\SysWOW64\\')
                         }
                     }
-                    throw 'Unverified child identity or parent lifetime'
+                    $inventoryStage = 'image-alias-file-identity'
+                    if (!$CanonicalDiagnostic -or !(Test-ImageFileIdentity ([string]$row.ExecutablePath) $heldImage)) { throw 'Unverified child identity or parent lifetime' }
+                    if ($process.HasExited -or $parent.HasExited -or $process.StartTime.ToUniversalTime() -ne $started) { throw 'Unverified child identity or parent lifetime' }
+                    $result.imagePrefixAliasFileIdentityMatched = $true
                 }
                 $inventoryStage = 'session-match'
                 if ($process.SessionId -ne $app.SessionId -or [int]$row.SessionId -ne $app.SessionId) { throw 'Unverified child identity or parent lifetime' }
@@ -360,8 +405,8 @@ try {
 } finally {
     # Failure cleanup is never retirement evidence or a passed UI acceptance.
     try {
-        if ($app -and !$app.HasExited) { $app.Kill(); $null = $app.WaitForExit(10000) }
-        foreach ($child in $children.Values) { if (!$child.HasExited) { $child.Kill(); $null = $child.WaitForExit(10000) }; $child.Dispose() }
+        if (!$CanonicalDiagnostic -and $app -and !$app.HasExited) { $app.Kill(); $null = $app.WaitForExit(10000) }
+        foreach ($child in $children.Values) { if (!$CanonicalDiagnostic -and !$child.HasExited) { $child.Kill(); $null = $child.WaitForExit(10000) }; $child.Dispose() }
     } catch {
         $result.cleanupError = $_.Exception.Message
         $result.status = 'failed'
