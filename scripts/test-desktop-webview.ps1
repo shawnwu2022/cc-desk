@@ -95,6 +95,8 @@ function Observe-Children {
                     $result.lastUnheldChildKind = switch ($row.Name) {
                         'codex.exe' { 'codex'; break }
                         'node.exe' { 'node-wrapper'; break }
+                        'conhost.exe' { 'conhost'; break }
+                        'OpenConsole.exe' { 'openconsole'; break }
                         'msedgewebview2.exe' { 'webview'; break }
                         default { 'other-or-unknown' }
                     }
@@ -116,8 +118,24 @@ function Observe-Children {
                 }
                 $inventoryStage = 'image-present'
                 if (!$row.ExecutablePath) { throw 'Unverified child identity or parent lifetime' }
-                $inventoryStage = 'image-match'
-                if ($process.MainModule.FileName -ine $row.ExecutablePath) { throw 'Unverified child identity or parent lifetime' }
+                $inventoryStage = 'image-read-error'
+                $heldImage = $process.MainModule.FileName
+                $inventoryStage = 'image-empty'
+                if (!$heldImage) { throw 'Unverified child identity or parent lifetime' }
+                $inventoryStage = 'image-path-not-equal'
+                if ($heldImage -ine $row.ExecutablePath) {
+                    if ($CanonicalDiagnostic -and !$result.Contains('childInventoryFailure')) {
+                        $result.childImageShape = [ordered]@{
+                            cimExtendedPrefix=([string]$row.ExecutablePath).StartsWith('\\?\')
+                            heldExtendedPrefix=$heldImage.StartsWith('\\?\')
+                            cimSystem32=([string]$row.ExecutablePath -match '(?i)\\System32\\')
+                            heldSystem32=($heldImage -match '(?i)\\System32\\')
+                            cimSysWow64=([string]$row.ExecutablePath -match '(?i)\\SysWOW64\\')
+                            heldSysWow64=($heldImage -match '(?i)\\SysWOW64\\')
+                        }
+                    }
+                    throw 'Unverified child identity or parent lifetime'
+                }
                 $inventoryStage = 'session-match'
                 if ($process.SessionId -ne $app.SessionId -or [int]$row.SessionId -ne $app.SessionId) { throw 'Unverified child identity or parent lifetime' }
                 $inventoryStage = 'parent-before-child'
@@ -130,6 +148,8 @@ function Observe-Children {
                     $kind = switch ($row.Name) {
                         'codex.exe' { 'codex'; break }
                         'node.exe' { 'node-wrapper'; break }
+                        'conhost.exe' { 'conhost'; break }
+                        'OpenConsole.exe' { 'openconsole'; break }
                         'msedgewebview2.exe' { 'webview'; break }
                         default { 'other-or-unknown' }
                     }
