@@ -1,5 +1,5 @@
 # Ordinary installed product, disposable hosted Windows only. Never a fake IPC page.
-param([Parameter(Mandatory=$true)][string]$Exe, [switch]$ActivityDiagnosticsAcceptance)
+param([Parameter(Mandatory=$true)][string]$Exe, [switch]$ActivityDiagnosticsAcceptance, [string]$FixtureCodex)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $out = Join-Path (Get-Location) 'desktop-webview-smoke'
@@ -161,6 +161,16 @@ try {
     if (!$image.StartsWith($temp, [StringComparison]::OrdinalIgnoreCase)) { throw 'Installed image must be inside RUNNER_TEMP' }
     $result.image = $image
     $result.sha256 = (Get-FileHash -LiteralPath $image -Algorithm SHA256).Hash
+    if ($FixtureCodex) {
+        if (!$ActivityDiagnosticsAcceptance) { throw 'Fixture mode requires diagnostics acceptance' }
+        $result.codexHistory=[ordered]@{stage='fixture-read'; cli='0.169.1'; preflight=$false; archive='not-attempted'; restore='not-attempted'; rename='not-attempted'; delete='held'; backendTraceCorrelated=$false; privacyCanariesAbsent=$false}
+        $fixture=& (Join-Path $PSScriptRoot 'pr101-codex-history-fixture.ps1') -Codex $FixtureCodex
+        if (!$fixture.AppServerReadVerified) { throw 'Unverified synthetic history inputs' }
+        $result.codexHistory.preflight=$true
+        $env:CODEX_HOME=$fixture.Home
+        $env:PATH=(Split-Path $FixtureCodex -Parent) + ';' + $env:PATH
+        . (Join-Path $PSScriptRoot 'pr101-codex-history-gui.ps1')
+    }
     Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Drawing
     # Visible UI is the explicit purpose of this hosted-only acceptance step.
     $app = Start-Process -FilePath $image -WorkingDirectory (Split-Path $image) -PassThru
@@ -180,6 +190,14 @@ try {
     $toggle = $null
     if (!$agy.TryGetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern, [ref]$toggle) -or ([System.Windows.Automation.TogglePattern]$toggle).Current.ToggleState -ne [System.Windows.Automation.ToggleState]::Off) { throw 'BLOCKED_UI_OBSERVATION: AGY pressed state unavailable or enabled' }
     Capture-Evidence 'general'
+    if ($FixtureCodex) {
+        $providerToggle=@('Codex CLI disabled — click to enable')
+        $provider=Wait-Observed { Find-Control $providerToggle ([System.Windows.Automation.ControlType]::Button) } 'synthetic Codex explicitly disabled'
+        $pattern=$null
+        if (!$provider.Current.IsEnabled -or !$provider.TryGetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern,[ref]$pattern)) { throw 'Codex enable control unavailable' }
+        ([System.Windows.Automation.TogglePattern]$pattern).Toggle()
+        $null=Wait-Observed { Find-Control @('Codex CLI enabled — click to disable') ([System.Windows.Automation.ControlType]::Button) } 'fixture Codex enabled'
+    }
     Invoke-Button @('Terminal', '终端')
     $null = Wait-Observed { Reveal-RemoteSection } 'remote section native scroll'
     $null = Wait-Observed { Find-Control @('Locked — no native connection is installed.', '已锁定：尚未安装原生连接。') ([System.Windows.Automation.ControlType]::Text) } 'remote locked'
@@ -238,6 +256,46 @@ try {
         Toggle-DiagnosticsButton $stop
         $null = Wait-Observed { Find-Control $start $button } 'second diagnostics stop confirmed'
         $result.activityDiagnostics.restartWithoutAppRestart = $true
+        if ($FixtureCodex) {
+            Reveal-DiagnosticsControl $start $button
+            Toggle-DiagnosticsButton $start
+            $null=Wait-Observed $isOn 'known fixture capture starts'
+            Test-CodexHistoryGui
+            Invoke-Button @('Settings')
+            Invoke-Button @('About')
+            Reveal-DiagnosticsControl $preview $button
+            Invoke-Button $preview
+            Reveal-DiagnosticsControl $copy $button
+            Invoke-Button $copy
+            Reveal-DiagnosticsControl @('Diagnostic summary copied') $null
+            $observed=Get-Clipboard -Raw
+            if (!$observed -or $observed.Length -gt 131072) { throw 'Missing bounded fixture diagnosis' }
+            foreach ($canary in @($fixture.ActiveCanary,$fixture.ArchivedCanary,$fixture.SessionId,$fixture.ArchivedId,$fixture.Home,$fixture.Project)) {
+                if ($observed.Contains($canary) -or $observed.Contains($canary.Replace('\','\\'))) { throw 'Unexpected fixture canary in diagnosis' }
+            }
+            $result.codexHistory.privacyCanariesAbsent=$true
+            $activity=$observed | ConvertFrom-Json -AsHashtable
+            if (!$activity.backend.available) { throw 'Backend diagnosis was not available' }
+            $operations=@('restore')
+            if ($result.codexHistory.archive -eq 'physical-archive') { $operations += 'archive' }
+            foreach ($operation in $operations) {
+                $starts = @($activity.events | Where-Object { $_.operation -ceq $operation -and $_.cli -ceq 'codex' -and $_.stage -ceq 'ui' -and $_.result -ceq 'started' })
+                if ($starts.Count -ne 1 -or $starts[0].id -cnotmatch '^[a-f0-9]{32}$') { throw "Expected exactly one synthetic $operation trace" }
+                $id=$starts[0].id
+                $events=@($activity.backend.events | Where-Object id -CEQ $id)
+                if (!($events | Where-Object { $_.stage -ceq 'backend' -and $_.status -ceq 'returned' }) -or
+                    !($events | Where-Object { $_.stage -ceq 'provider' -and $_.status -ceq 'ok' }) -or
+                    !($activity.events | Where-Object { $_.id -ceq $id -and $_.stage -ceq 'list' -and $_.result -cin @('applied','unchanged') })) {
+                    throw "Missing correlated backend, provider or target list evidence: $operation"
+                }
+            }
+            $result.codexHistory.backendTraceCorrelated=$true
+            Reveal-DiagnosticsControl $stop $button
+            Toggle-DiagnosticsButton $stop
+            $null=Wait-Observed { Find-Control $start $button } 'fixture capture stop confirmed'
+            $result.codexHistory.stage='archive-and-restore-observed'
+            if ($result.codexHistory.archive -ne 'physical-archive') { $result.codexHistory.stage='restore-observed-archive-entry-unavailable' }
+        }
     }
     Observe-Children
     $result.children = @($children.Values | ForEach-Object { [ordered]@{ pid=$_.Id; name=$_.ProcessName } })
@@ -248,9 +306,13 @@ try {
     if (!$app.WaitForExit(30000) -or $app.ExitCode -ne 0) { throw 'Ordinary App did not close normally' }
     foreach ($child in $children.Values) { if (!$child.WaitForExit(10000)) { throw 'Observed WebView child did not exit' } }
     $result.normalExit = $true
+    if ($FixtureCodex -and $result.codexHistory.archive -ne 'physical-archive') {
+        $result.status = 'partial'
+        throw 'BLOCKED_UI_ACTION: exact synthetic history archive entry unavailable'
+    }
     $result.status = 'passed'
 } catch {
-    if ($app) { $result.status = 'failed' }
+    if ($app -and $result.status -cne 'partial') { $result.status = 'failed' }
     $result.error = $_.Exception.Message
     if ($window) { try { Capture-Evidence 'failure' } catch { $result.captureError = $_.Exception.Message } }
     throw
