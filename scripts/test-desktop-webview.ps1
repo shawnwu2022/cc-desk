@@ -83,6 +83,7 @@ function Observe-Children {
             $process = $null
             try {
                 $parent = $owned[[int]$row.ParentProcessId]
+                $inventoryStage = "child-handle"
                 try { $process = [Diagnostics.Process]::GetProcessById($id) }
                 catch {
                     if (!$CanonicalDiagnostic -or $_.Exception.InnerException -isnot [ArgumentException]) { throw }
@@ -99,19 +100,42 @@ function Observe-Children {
                     }
                     continue
                 }
+                $inventoryStage = 'held-handle'
                 $null = $process.Handle
-                # CIM timestamps have microsecond precision; compare the captured handle,
-                # not a second PID lookup. Any exit/reuse ambiguity blocks acceptance.
+                $inventoryStage = 'parent-live'
+                if ($parent.HasExited) { throw 'Unverified child identity or parent lifetime' }
+                $inventoryStage = 'child-live'
+                if ($process.HasExited) { throw 'Unverified child identity or parent lifetime' }
+                $inventoryStage = 'creation-token-read'
                 $created = ([DateTime]$row.CreationDate).ToUniversalTime()
                 $started = $process.StartTime.ToUniversalTime()
-                if ($parent.HasExited -or $process.HasExited -or
-                    ($created.Ticks - ($created.Ticks % 10)) -ne ($started.Ticks - ($started.Ticks % 10)) -or
-                    !$row.ExecutablePath -or $process.MainModule.FileName -ine $row.ExecutablePath -or
-                    $process.SessionId -ne $app.SessionId -or [int]$row.SessionId -ne $app.SessionId -or
-                    $started -lt $parent.StartTime.ToUniversalTime()) { throw 'Unverified child identity or parent lifetime' }
+                $inventoryStage = 'start-time-match'
+                if (($created.Ticks - ($created.Ticks % 10)) -ne ($started.Ticks - ($started.Ticks % 10))) {
+                    if ($CanonicalDiagnostic -and !$result.Contains('childInventoryFailure')) { $result.childCreationPrecision = [ordered]@{absoluteDeltaTicks=[Math]::Abs($created.Ticks-$started.Ticks); cimSubMicrosecondTicks=($created.Ticks%10); handleSubMicrosecondTicks=($started.Ticks%10)} }
+                    throw 'Unverified child identity or parent lifetime'
+                }
+                $inventoryStage = 'image-present'
+                if (!$row.ExecutablePath) { throw 'Unverified child identity or parent lifetime' }
+                $inventoryStage = 'image-match'
+                if ($process.MainModule.FileName -ine $row.ExecutablePath) { throw 'Unverified child identity or parent lifetime' }
+                $inventoryStage = 'session-match'
+                if ($process.SessionId -ne $app.SessionId -or [int]$row.SessionId -ne $app.SessionId) { throw 'Unverified child identity or parent lifetime' }
+                $inventoryStage = 'parent-before-child'
+                if ($started -lt $parent.StartTime.ToUniversalTime()) { throw 'Unverified child identity or parent lifetime' }
                 $children[$id] = $process
                 $owned[$id] = $process
                 $process = $null
+            } catch {
+                if ($CanonicalDiagnostic -and !$result.Contains('childInventoryFailure')) {
+                    $kind = switch ($row.Name) {
+                        'codex.exe' { 'codex'; break }
+                        'node.exe' { 'node-wrapper'; break }
+                        'msedgewebview2.exe' { 'webview'; break }
+                        default { 'other-or-unknown' }
+                    }
+                    $result.childInventoryFailure = [ordered]@{stage=$inventoryStage; pid=$id; parentPid=[int]$row.ParentProcessId; kind=$kind; registered=$false}
+                }
+                throw
             } finally {
                 # Never register or kill a handle whose ancestry/identity was not verified.
                 if ($process) { $process.Dispose() }
