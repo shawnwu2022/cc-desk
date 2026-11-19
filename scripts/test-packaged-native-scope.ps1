@@ -64,8 +64,8 @@ function Test-PackagedNativeScope {
     try {
         $window = Wait-Observed {
             $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty, $app.Id)
-            $all = [System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Children, $condition)
-            $dialogs = @($all | Where-Object { !$_.Current.IsOffscreen -and $_.Current.NativeWindowHandle -ne $mainWindow.Current.NativeWindowHandle -and $_.Current.Name -ceq 'Select Project Directory' })
+            $all = $mainWindow.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condition)
+            $dialogs = @($all | Where-Object { !$_.Current.IsOffscreen -and $_.Current.NativeWindowHandle -ne $mainWindow.Current.NativeWindowHandle -and $_.Current.ControlType -eq [System.Windows.Automation.ControlType]::Window -and $_.Current.Name -ceq 'Select Project Directory' })
             if ($dialogs.Count -gt 1) { throw 'Ambiguous project picker' }
             if ($dialogs.Count -eq 1) { return $dialogs[0] }
             return $null
