@@ -158,6 +158,11 @@ function Test-CodexHistoryGui {
     $r.profilePinMatches=$matchingProfile.Count -eq 1
     if (!$r.selectedProjectExact -or !$r.metaCwdExact -or !$r.profilePinMatches) { throw 'Stored synthetic project or bound profile does not match exact fixture inputs' }
     $r.archive='not-repeated-prior-physical-evidence'
+    if ($FixtureOperation -ceq 'rename') {
+        . (Join-Path $PSScriptRoot 'pr101-codex-rename-gui.ps1')
+        Test-CodexFixtureRename
+        return
+    }
     $r.stage='restore'
     if (!(Invoke-FixtureTarget $window 'Archived sessions' $fixtureButton)) { throw 'Archived sessions entry unavailable' }
     $archivedRow=Wait-Observed { Find-Control @($fixture.ArchivedCanary) ([System.Windows.Automation.ControlType]::TreeItem) } 'separate synthetic archived row'

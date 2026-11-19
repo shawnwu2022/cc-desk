@@ -1,6 +1,6 @@
 # Disposable Windows runner only. The real Codex executable performs a read-only protocol check.
 param(
-    [Parameter(Mandatory=$true)][string]$Codex, [psobject]$ReadOnlyExisting
+    [Parameter(Mandatory=$true)][string]$Codex, [psobject]$ReadOnlyExisting, [switch]$ObserveRename
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -20,6 +20,7 @@ if ($ReadOnlyExisting) {
     if (!$root.StartsWith($temp,[StringComparison]::OrdinalIgnoreCase) -or
         (Split-Path $root -Leaf) -cnotmatch '^pr101-history-[0-9a-f]{32}$' -or
         $codexHome -cne (Join-Path $root 'codex-home') -or $project -cne (Join-Path $root 'project') -or
+        ($ObserveRename -and $ReadOnlyExisting.SessionId -cnotmatch '^[a-f0-9-]{36}$') -or
         $ReadOnlyExisting.ArchivedId -cnotmatch '^[a-f0-9-]{36}$') { throw 'Read-only fixture ownership is not pinned' }
     foreach($currentPath in @($root,$codexHome,$project)){
         $owned=Get-Item -LiteralPath $currentPath
@@ -109,6 +110,17 @@ try {
         throw 'Pinned app-server did not bind to fixture CODEX_HOME'
     }
     Send @{ method='initialized' }
+    if ($ReadOnlyExisting -and $ObserveRename) {
+        Send @{ id=2; method='thread/read'; params=@{ threadId=$ReadOnlyExisting.SessionId; includeTurns=$false } }
+        $renamed=Receive 2
+        $process.StandardInput.Close()
+        if (!$process.WaitForExit(5000) -or $process.ExitCode -ne 0) { throw 'Pinned read-only post-rename app-server did not stop normally' }
+        return [pscustomobject]@{
+            sameId=$renamed.thread.id -ceq $ReadOnlyExisting.SessionId
+            sameCwd=$renamed.thread.cwd -ceq $project
+            expectedName=$renamed.thread.name -ceq 'Pr101RenamedCanary'
+        }
+    }
     if ($ReadOnlyExisting) {
         Send @{ id=2; method='thread/list'; params=@{ archived=$false; limit=100 } }
         $active=Receive 2

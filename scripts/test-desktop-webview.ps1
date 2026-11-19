@@ -1,5 +1,5 @@
 # Ordinary installed product, disposable hosted Windows only. Never a fake IPC page.
-param([Parameter(Mandatory=$true)][string]$Exe, [switch]$ActivityDiagnosticsAcceptance, [string]$FixtureCodex)
+param([Parameter(Mandatory=$true)][string]$Exe, [switch]$ActivityDiagnosticsAcceptance, [string]$FixtureCodex, [ValidateSet('restore','rename')][string]$FixtureOperation = 'restore')
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $out = Join-Path (Get-Location) 'desktop-webview-smoke'
@@ -307,27 +307,27 @@ try {
             Reveal-DiagnosticsControl @('Diagnostic summary copied') $null
             $observed=Get-Clipboard -Raw
             if (!$observed -or $observed.Length -gt 131072) { throw 'Missing bounded fixture diagnosis' }
-            foreach ($canary in @($fixture.ActiveCanary,$fixture.ArchivedCanary,$fixture.SessionId,$fixture.ArchivedId,$fixture.Home,$fixture.Project)) {
+            foreach ($canary in @($fixture.ActiveCanary,$fixture.ArchivedCanary,$fixture.SessionId,$fixture.ArchivedId,$fixture.Home,$fixture.Project,'Pr101RenamedCanary')) {
                 if ($observed.Contains($canary) -or $observed.Contains($canary.Replace('\','\\'))) { throw 'Unexpected fixture canary in diagnosis' }
             }
             $result.codexHistory.privacyCanariesAbsent=$true
             $activity=$observed | ConvertFrom-Json -AsHashtable
             if (!$activity.backend.available) { throw 'Backend diagnosis was not available' }
-            $starts = @($activity.events | Where-Object { $_.operation -ceq 'restore' -and $_.cli -ceq 'codex' -and $_.stage -ceq 'ui' -and $_.result -ceq 'started' })
-            $result.codexHistory.restoreTrace=[ordered]@{uiStartedCount=$starts.Count; backend=@(); provider=@(); targetList=@()}
+            $starts = @($activity.events | Where-Object { $_.operation -ceq $FixtureOperation -and $_.cli -ceq 'codex' -and $_.stage -ceq 'ui' -and $_.result -ceq 'started' })
+            $result.codexHistory.operationTrace=[ordered]@{uiStartedCount=$starts.Count; backend=@(); provider=@(); targetList=@()}
             if ($starts.Count -eq 1 -and $starts[0].id -cmatch '^[a-f0-9]{32}$') {
                 $traceId=$starts[0].id
                 $allow=@('started','ok','returned','failed','unsupported','unknown','blocked','stale')
                 $db=@($activity.backend.events | Where-Object { $_.id -ceq $traceId -and $_.status -cin $allow })
-                $result.codexHistory.restoreTrace.backend=@($db | Where-Object stage -CEQ 'backend' | ForEach-Object status)
-                $result.codexHistory.restoreTrace.provider=@($db | Where-Object stage -CEQ 'provider' | ForEach-Object status)
-                $result.codexHistory.restoreTrace.targetList=@($activity.events | Where-Object { $_.id -ceq $traceId -and $_.stage -ceq 'list' -and $_.result -cin @('applied','unchanged','stale','failed') } | ForEach-Object result)
-                $result.codexHistory.backendTraceCorrelated=$result.codexHistory.restoreTrace.backend.Count -gt 0
+                $result.codexHistory.operationTrace.backend=@($db | Where-Object stage -CEQ 'backend' | ForEach-Object status)
+                $result.codexHistory.operationTrace.provider=@($db | Where-Object stage -CEQ 'provider' | ForEach-Object status)
+                $result.codexHistory.operationTrace.targetList=@($activity.events | Where-Object { $_.id -ceq $traceId -and $_.stage -ceq 'list' -and $_.result -cin @('applied','unchanged','stale','failed') } | ForEach-Object result)
+                $result.codexHistory.backendTraceCorrelated=$result.codexHistory.operationTrace.backend.Count -gt 0
             }
             Reveal-DiagnosticsControl $stop $button
             Toggle-DiagnosticsButton $stop
             $null=Wait-Observed { Find-Control $start $button } 'fixture capture stop confirmed'
-            $result.codexHistory.stage='restore-independent-observation-complete'
+            $result.codexHistory.stage=($FixtureOperation + '-independent-observation-complete')
             } catch {
                 # A failed fixture observation is not success, but it does not skip the independent normal exit.
                 $result.codexHistory.observationFailed=$true
@@ -343,13 +343,20 @@ try {
     if (!$app.WaitForExit(30000) -or $app.ExitCode -ne 0) { throw 'Ordinary App did not close normally' }
     foreach ($child in $children.Values) { if (!$child.WaitForExit(10000)) { throw 'Observed WebView child did not exit' } }
     $result.normalExit = $true
-    if ($FixtureCodex -and ($result.codexHistory.restore -ne 'physical-restore' -or !$result.codexHistory.backendTraceCorrelated -or
-        $result.codexHistory.Contains('observationFailed') -or
-        $result.codexHistory.restoreTrace.backend -cnotcontains 'returned' -or
-        $result.codexHistory.restoreTrace.provider -cnotcontains 'ok' -or
-        !(($result.codexHistory.restoreTrace.targetList -ccontains 'applied') -or ($result.codexHistory.restoreTrace.targetList -ccontains 'unchanged')))) {
-        $result.status = 'partial'
-        throw 'BLOCKED_RESTORE_ACCEPTANCE: exact physical and correlated success not established'
+    if ($FixtureCodex) {
+        $checks=$result.codexHistory
+        if ($FixtureOperation -ceq 'rename') {
+            $actual=($checks.rename -ceq 'native-name-observed') -and $checks.Contains('renamedTitleObserved') -and $checks.renamedTitleObserved
+        } else {
+            $actual=$checks.restore -ceq 'physical-restore'
+        }
+        if (!$actual -or !$checks.backendTraceCorrelated -or $checks.Contains('observationFailed') -or
+            $checks.operationTrace.backend -cnotcontains 'returned' -or
+            $checks.operationTrace.provider -cnotcontains 'ok' -or
+            !(($checks.operationTrace.targetList -ccontains 'applied') -or ($checks.operationTrace.targetList -ccontains 'unchanged'))) {
+            $result.status = 'partial'
+            throw 'BLOCKED_CODEX_ACCEPTANCE: exact independent operation and correlated success not established'
+        }
     }
     $result.status = 'passed'
 } catch {
@@ -370,7 +377,7 @@ try {
         if ($FixtureCodex -and $result.Contains('codexHistory')) {
             $checks=$result.codexHistory
             $facts=[ordered]@{ stage=$checks.stage; result=$result.status; ordinaryExit=$result.normalExit }
-            foreach ($field in @('preflight','profileSaved','profilePinMatches','selectedProjectExact','recordedCanonicalExact','metaCwdExact','activeRowObserved','archive','restore','rename','delete','backendTraceCorrelated','privacyCanariesAbsent','activeSearch','readonlyPostRestore','restoreTrace','originalArchiveStillPresent','visibleSafeRestoreCodes','observationFailed')) {
+            foreach ($field in @('preflight','profileSaved','profilePinMatches','selectedProjectExact','recordedCanonicalExact','metaCwdExact','activeRowObserved','archive','restore','rename','delete','backendTraceCorrelated','privacyCanariesAbsent','activeSearch','readonlyPostRestore','operationTrace','readonlyPostRename','renamedTitleObserved','originalArchiveStillPresent','visibleSafeRestoreCodes','observationFailed')) {
                 if ($checks.Contains($field)) { $facts[$field]=$checks[$field] }
             }
             if ($result.Contains('initialSettings')) { $facts.initialSettings=$result.initialSettings }

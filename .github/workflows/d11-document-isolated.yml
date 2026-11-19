@@ -98,7 +98,7 @@ jobs:
             [Environment]::SetEnvironmentVariable($_.Name, $null, 'Process')
           }
           $official = Join-Path $env:RUNNER_TEMP 'official-codex/extracted/package/vendor/x86_64-pc-windows-msvc/bin/codex.exe'
-          & ./scripts/test-desktop-webview.ps1 -Exe $exe -ActivityDiagnosticsAcceptance -FixtureCodex $official
+          & ./scripts/test-desktop-webview.ps1 -Exe $exe -ActivityDiagnosticsAcceptance -FixtureCodex $official -FixtureOperation rename
       - uses: actions/upload-artifact@v4
         if: always()
         with:
