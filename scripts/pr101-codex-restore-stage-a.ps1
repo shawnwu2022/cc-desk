@@ -6,7 +6,7 @@ $ErrorActionPreference = 'Stop'
 if (!$IsWindows -or $env:GITHUB_ACTIONS -cne 'true' -or
     $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or !$env:RUNNER_TEMP -or
     $env:COMPUTERNAME -in @('WSK-MSI','SXY')) { throw 'STAGE_A_HOST_REJECTED' }
-$phase='preflight'
+$phase='preflight-temp-boundary'
 $imageLease=$null
 try {
     function Assert-Ordinary([string]$Path) {
@@ -18,11 +18,13 @@ try {
     }
     $temp=[IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\')
     Assert-Ordinary $temp
+    $phase='preflight-image-path'
     $image=[IO.Path]::GetFullPath($Codex)
     if (!$image.StartsWith($temp+'\',[StringComparison]::OrdinalIgnoreCase)) { throw 'STAGE_A_IMAGE_LOCATION' }
     Assert-Ordinary $image
     # Same official 0.169.1 image pinned by verifier commit 3c014ac4.
     # The historical Stage-B 0.169.0 path/hash is NOT compatible with this fixture.
+    $phase='preflight-image-sha'
     $imageLease=[IO.File]::Open($image,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
     $sha=[Security.Cryptography.SHA256]::Create()
     try { $imageHash=[Convert]::ToHexString($sha.ComputeHash($imageLease)).ToLowerInvariant() } finally { $sha.Dispose() }
@@ -30,6 +32,7 @@ try {
 
     # Compile only on disposable hosted Windows. CreateProcess is suspended until
     # assigned to a private Job; all descendants must be gone before copying data.
+    $phase='preflight-type-compile'
     Add-Type -TypeDefinition @'
 using System;
 using System.IO;
@@ -63,9 +66,9 @@ public sealed class StageAOwned : IDisposable {
  [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern bool CreateProcessW(string app,StringBuilder cmd,IntPtr pa,IntPtr ta,bool inherit,uint flags,IntPtr env,string cwd,ref SIEX si,out PI pi);
  [DllImport("kernel32.dll",SetLastError=true)] static extern bool GetFileInformationByHandleEx(IntPtr h,int c,IntPtr p,uint n);
  [DllImport("shell32.dll",CharSet=CharSet.Unicode)] static extern int SHGetKnownFolderPath(ref Guid id,uint flags,IntPtr token,out IntPtr path);
- [DllImport("advapi32.dll",CharSet=CharSet.Unicode)] static extern int RegOpenKeyExW(IntPtr key,string name,uint options,uint access,out IntPtr result);
+ [DllImport("advapi32.dll",CharSet=CharSet.Unicode,ExactSpelling=true)] static extern int RegOpenKeyExW(IntPtr key,string name,uint options,uint access,out IntPtr result);
  [DllImport("advapi32.dll")] static extern int RegCloseKey(IntPtr key);
- public static void RequireNoMachineConfig() {
+ public static void RequireNoProgramDataConfig() {
   Guid id=new Guid("62AB5D82-FDC1-4DC3-A9DD-070D1D495D97"); IntPtr p;
   if(SHGetKnownFolderPath(ref id,0,IntPtr.Zero,out p)!=0) throw new Exception("STAGE_A_PROGRAMDATA_UNKNOWN");
   string known; try { known=Marshal.PtrToStringUni(p); } finally { Marshal.FreeCoTaskMem(p); }
@@ -80,10 +83,13 @@ public sealed class StageAOwned : IDisposable {
   try { File.GetAttributes(Path.Combine(parent,"Codex")); }
   catch(FileNotFoundException) { absent=true; } catch(DirectoryNotFoundException) { absent=true; }
   if(!absent) throw new Exception("STAGE_A_PROGRAMDATA_PRESENT");
+ }
+ public static void RequireNoRegistryPolicy() {
   IntPtr key; int status=RegOpenKeyExW(new IntPtr(unchecked((int)0x80000002)),@"SOFTWARE\Policies\OpenAI\Codex",8,0x20119,out key);
   if(status==0){RegCloseKey(key);throw new Exception("STAGE_A_POLICY_PRESENT");}
   if(status!=2) throw new Exception("STAGE_A_POLICY_UNKNOWN");
  }
+ public static void RequireNoMachineConfig() { RequireNoProgramDataConfig(); RequireNoRegistryPolicy(); }
  IntPtr job,process; StreamReader output; StreamWriter input; FileStream error; Task drain;
  bool settled=false; public long ErrorBytes { get; private set; }
  public static void RequireSingleLink(FileStream stream) {
@@ -155,10 +161,14 @@ public sealed class StageAOwned : IDisposable {
  }
 }
 '@
-    [StageAOwned]::RequireNoMachineConfig()
+    $phase='preflight-machine-programdata'
+    [StageAOwned]::RequireNoProgramDataConfig()
+    $phase='preflight-machine-registry'
+    [StageAOwned]::RequireNoRegistryPolicy()
+    $phase='preflight-fresh-temp'
     $root=Join-Path $temp ('pr101-restore-stage-a-'+[Guid]::NewGuid().ToString('N'))
     if (Test-Path -LiteralPath $root) { throw 'STAGE_A_EXISTING_ROOT' }
-    $live=Join-Path $root 'live'; $home=Join-Path $live 'home'; $codexHome=Join-Path $home 'codex'
+    $live=Join-Path $root 'live'; $fixtureHome=Join-Path $live 'home'; $codexHome=Join-Path $fixtureHome 'codex'
     $sqlite=Join-Path $live 'sqlite'; $project=Join-Path $live 'project'
     $snapshot=Join-Path $root 'snapshot'; $retained=Join-Path $root 'retained-original'
     foreach($path in @($project,$sqlite,$codexHome,(Join-Path $live 'temporary'),(Join-Path $live 'logs'),(Join-Path $live 'roaming'),(Join-Path $live 'local'))) {
@@ -211,9 +221,9 @@ requires_openai_auth = false
     foreach($key in @('SystemRoot','WINDIR','SystemDrive','ComSpec')) {
         $value=[Environment]::GetEnvironmentVariable($key);if(!$value){throw 'STAGE_A_SYSTEM_ENV'};$environment[$key]=$value
     }
-    foreach($pair in @(@('HOME',$home),@('USERPROFILE',$home),@('APPDATA',(Join-Path $live 'roaming')),@('LOCALAPPDATA',(Join-Path $live 'local')),
+    foreach($pair in @(@('HOME',$fixtureHome),@('USERPROFILE',$fixtureHome),@('APPDATA',(Join-Path $live 'roaming')),@('LOCALAPPDATA',(Join-Path $live 'local')),
       @('TEMP',(Join-Path $live 'temporary')),@('TMP',(Join-Path $live 'temporary')),@('CODEX_HOME',$codexHome),@('CODEX_SQLITE_HOME',$sqlite),
-      @('HOMEDRIVE',$home.Substring(0,2)),@('HOMEPATH',$home.Substring(2)),@('GIT_CEILING_DIRECTORIES',$live),
+      @('HOMEDRIVE',$fixtureHome.Substring(0,2)),@('HOMEPATH',$fixtureHome.Substring(2)),@('GIT_CEILING_DIRECTORIES',$live),
       @('GIT_CONFIG_NOSYSTEM','1'),@('GIT_CONFIG_GLOBAL',(Join-Path $live 'empty-gitconfig')))){$environment[$pair[0]]=$pair[1]}
     [IO.File]::WriteAllText((Join-Path $live 'empty-gitconfig'),'')
     $environmentBlock=(($environment.Keys|Sort-Object|ForEach-Object{$_+'='+$environment[$_]}) -join "`0")+"`0`0"
