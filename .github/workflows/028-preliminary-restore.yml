@@ -1,0 +1,117 @@
+name: 0.28 preliminary pinned installed restore
+on:
+  push:
+    branches: [verify/028-preliminary-restore-20261120]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  installed-diagnostics:
+    if: github.repository == 'shawnwu2022/cc-desk' && github.ref == 'refs/heads/verify/028-preliminary-restore-20261120'
+    timeout-minutes: 15
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          ref: 71486c471394328b954a291dae200ae70b998cdd
+          path: pinned-harness
+      - name: Download pinned verified candidate and smoke receipt
+        shell: pwsh
+        env:
+          ARTIFACT_READER: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $headers = @{ Authorization = "Bearer $env:ARTIFACT_READER"; Accept = 'application/vnd.github+json' }
+          $base = 'https://api.github.com/repos/shawnwu2022/cc-desk/actions/artifacts'
+          foreach ($entry in @(
+            @{ Id = 14537417451; Name = 'cc-desk-native-v3-test-cbe2aca540d6097a6b0cebe7747f3b3dad8d439f'; Folder = 'pr101-package'; Sha = 'ae31e711fd6b1f55579aeac2de2a1e9fd0a928281c128c0d5da4ee73c2c6a1c2' },
+            @{ Id = 14538565669; Name = 'desktop-webview-smoke-cbe2aca540d6097a6b0cebe7747f3b3dad8d439f-44538325396-1'; Folder = 'pr101-smoke'; Sha = '3c4bef1e28897e26fd7336aaa08691445849cf0b5d756764a2bd2fb76f5f68b3' }
+          )) {
+            $meta = Invoke-RestMethod "$base/$($entry.Id)" -Headers $headers
+            if ($meta.expired -or $meta.workflow_run.id -ne 44538325396 -or $meta.workflow_run.head_sha -cne 'cf847b4dc1993b7b58c192357cc79df7629bf560' -or $meta.name -cne $entry.Name) { throw 'Pinned artifact identity mismatch' }
+            $file = Join-Path $env:RUNNER_TEMP ($entry.Folder + '.zip')
+            Invoke-WebRequest "$base/$($entry.Id)/zip" -Headers $headers -OutFile $file
+            if ((Get-FileHash -LiteralPath $file).Hash -ine $entry.Sha) { throw 'Pinned artifact digest mismatch' }
+            if ($entry.Id -eq 14537417451) {
+              Add-Type -AssemblyName System.IO.Compression.FileSystem
+              $zip = [IO.Compression.ZipFile]::OpenRead($file)
+              try {
+                if (@($zip.Entries | Where-Object FullName -CEQ 'test-package/test-package-manifest.json').Count -ne 1) {
+                  throw 'Pinned manifest ZIP entry mismatch'
+                }
+                Write-Host 'Pinned ZIP entry verified: test-package/test-package-manifest.json'
+              } finally { $zip.Dispose() }
+            }
+            Expand-Archive -LiteralPath $file -DestinationPath (Join-Path $env:RUNNER_TEMP $entry.Folder)
+          }
+      - name: Download pinned official Codex
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dir = Join-Path $env:RUNNER_TEMP 'official-codex'
+          New-Item -ItemType Directory $dir | Out-Null
+          # A lone EXE is not the complete official runtime supply. Preserve the published vendor layout.
+          $archive = Join-Path $dir 'codex-0.169.1-win32-x64.tgz'
+          Invoke-WebRequest 'https://registry.npmjs.org/@openai/codex/-/codex-0.169.1-win32-x64.tgz' -OutFile $archive
+          $expectedIntegrity = 'fImXWqxwxqHh9+FhJWsRRFiBzgBrSeN1bYTvtGZtUKGTPzHefYAL1agmlf5XScfwY5i5pHsExfdhFekzRBbqIw=='
+          $stream = [IO.File]::OpenRead($archive)
+          $hasher = [Security.Cryptography.SHA512]::Create()
+          try { $actualIntegrity = [Convert]::ToBase64String($hasher.ComputeHash($stream)) } finally { $stream.Dispose(); $hasher.Dispose() }
+          if ($actualIntegrity -cne $expectedIntegrity) { throw 'Official platform package integrity mismatch' }
+          $names = @(& tar -tzf $archive)
+          if ($LASTEXITCODE -ne 0) { throw 'Platform archive listing failed' }
+          $details = @(& tar -tvzf $archive)
+          if ($LASTEXITCODE -ne 0 -or $names.Count -ne 47 -or $details.Count -ne 47) { throw 'Platform archive entries mismatch' }
+          foreach ($name in $names) {
+            if (!$name.StartsWith('package/') -or $name -match '(^/|\\|:|(^|/)\.\.(/|$))') { throw 'Unsafe platform archive path' }
+          }
+          foreach ($entry in $details) { if ($entry[0] -ne '-') { throw 'Platform archive contains nonregular entry' } }
+          $extract = Join-Path $dir 'extracted'
+          New-Item -ItemType Directory $extract | Out-Null
+          & tar -xzf $archive -C $extract
+          if ($LASTEXITCODE -ne 0) { throw 'Platform archive extraction failed' }
+          if (@(Get-ChildItem $extract -Recurse | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }).Count) { throw 'Platform reparse point rejected' }
+          $files = @(Get-ChildItem $extract -Recurse -File)
+          if ($files.Count -ne 47 -or ($files | Measure-Object Length -Sum).Sum -ne 515292799) { throw 'Platform file set mismatch' }
+          $inventory = @($files | ForEach-Object { [ordered]@{path=$_.FullName.Substring($extract.Length+1).Replace('\','/'); bytes=$_.Length; sha256=(Get-FileHash $_.FullName).Hash.ToLowerInvariant()} })
+          [ordered]@{package='@openai/codex'; version='0.169.1-win32-x64'; integrity="sha512-$expectedIntegrity"; archiveSha256=(Get-FileHash $archive).Hash; source='official npm platform package'; files=$inventory} | ConvertTo-Json -Depth 5 | Set-Content codex-supply.json
+          $exe = Join-Path $extract 'package/vendor/x86_64-pc-windows-msvc/bin/codex.exe'
+          if ((Get-Item $exe).Length -ne 382647088 -or (Get-FileHash $exe).Hash -ine 'f76f94d08b0793bfa129ae62c09341ee32ae96d57e69968ae6b8d7c71a20d8c4') { throw 'Official Codex asset digest mismatch' }
+      - name: Verify and launch the exact ordinary NSIS
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (!$IsWindows -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted') { throw 'Expected ephemeral hosted Windows' }
+          $package = Join-Path $env:RUNNER_TEMP 'pr101-package/test-package'
+          if ((Get-FileHash -LiteralPath (Join-Path $package 'test-package-manifest.json')).Hash -ine '7d6f765ce7c72b9cbf6b199186c4cd4acf224775299e735430992005e2242e49') { throw 'Manifest bytes differ from reviewed receipt' }
+          $manifest = Get-Content (Join-Path $package 'test-package-manifest.json') -Raw | ConvertFrom-Json
+          if ($manifest.sourceCommit -cne 'cbe2aca540d6097a6b0cebe7747f3b3dad8d439f' -or $manifest.workflowRunId -cne '44538325396' -or $manifest.workflowRunAttempt -cne '1' -or $manifest.channel -cne 'test-only' -or $manifest.publishable -ne $false -or $manifest.updaterPublication -ne $false -or $manifest.installerFile -cnotmatch '^CC-Desk-[\w.-]+-setup\.exe$') { throw 'Pinned manifest mismatch' }
+          $installer = Join-Path $package $manifest.installerFile
+          if ((Get-FileHash -LiteralPath $installer).Hash -ine $manifest.sha256) { throw 'NSIS digest mismatch' }
+          $smoke = Get-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'pr101-smoke/result.json') -Raw | ConvertFrom-Json
+          if ($smoke.sha256 -ine '6b63e56b7f675a5680ae4115d3fe58aed130f1b5f503c515b154f7079efb4b3f' -or $smoke.status -cne 'passed' -or !$smoke.normalExit -or $smoke.sha256 -cnotmatch '^[0-9A-Fa-f]{64}$') { throw 'Missing trusted installed image identity' }
+          $target = Join-Path $env:RUNNER_TEMP 'pr101-installed'
+          $install = Start-Process -FilePath $installer -ArgumentList @('/S', "/D=$target") -WindowStyle Hidden -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw 'NSIS installation failed' }
+          $exe = Join-Path $target 'cc-desk.exe'
+          if ((Get-FileHash -LiteralPath $exe).Hash -ine $smoke.sha256) { throw 'Installed image differs from pinned smoke' }
+          [ordered]@{ mainAnchor='04a2f0cedc8e7acc080e8736723c6e8799127f58'; harnessSource='71486c471394328b954a291dae200ae70b998cdd'; prHead='cf847b4dc1993b7b58c192357cc79df7629bf560'; productSource='cbe2aca540d6097a6b0cebe7747f3b3dad8d439f'; preliminaryOnly=$true; rename='not-attempted'; packageSource=$manifest.sourceCommit; packageArtifact=14537417451; smokeArtifact=14538565669; installerSha256=$manifest.sha256; exeSha256=$smoke.sha256 } | ConvertTo-Json | Set-Content pr101-identity.json
+          Get-ChildItem Env: | Where-Object { $_.Name -cne 'GITHUB_ACTIONS' -and $_.Name -match '^(ACTIONS_|GITHUB_|GH_)|TOKEN|SECRET|API_KEY|PASSWORD|CREDENTIAL' } | ForEach-Object {
+            [Environment]::SetEnvironmentVariable($_.Name, $null, 'Process')
+          }
+          $official = Join-Path $env:RUNNER_TEMP 'official-codex/extracted/package/vendor/x86_64-pc-windows-msvc/bin/codex.exe'
+          & ./pinned-harness/scripts/test-desktop-webview.ps1 -Exe $exe -ActivityDiagnosticsAcceptance -FixtureCodex $official
+          $observed = Get-Content -LiteralPath 'desktop-webview-smoke/result.json' -Raw | ConvertFrom-Json
+          if ($observed.status -cne 'passed' -or !$observed.normalExit -or
+              !$observed.codexHistory.readonlyPostRestore.observed -or
+              $observed.codexHistory.readonlyPostRestore.activeCount -ne 1 -or
+              $observed.codexHistory.readonlyPostRestore.archivedCount -ne 0 -or
+              !$observed.codexHistory.privacyCanariesAbsent) { throw 'Preliminary same-UUID restore or privacy gate incomplete' }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: 028-preliminary-restore-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            pr101-identity.json
+            desktop-webview-smoke/result.json
