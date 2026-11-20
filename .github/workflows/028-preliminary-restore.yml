@@ -287,7 +287,7 @@ jobs:
           
           function Set-FixtureEdit([string]$Name,[string]$Value) {
               $editType=[System.Windows.Automation.ControlType]::Edit
-              Reveal-DiagnosticsControl @($Name) $editType
+              Reveal-FixtureControl @($Name) $editType
               $ctl=Wait-Observed { Find-Control @($Name) $editType } "synthetic configuration: $Name"
               $pattern=$null
               if (!$ctl.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern,[ref]$pattern)) { throw "Synthetic edit not writable: $Name" }
@@ -364,7 +364,7 @@ jobs:
               $result.codexHistory.stage='codex-config-program-readback'
               Set-FixtureEdit 'Program path' $FixtureCodex
               $result.codexHistory.stage='codex-config-save'
-              Reveal-DiagnosticsControl @('Save') $button
+              Reveal-FixtureControl @('Save') $button
               Invoke-Button @('Save')
               $null=Wait-Observed {
                   if (Find-Control @('Configuration name') ([System.Windows.Automation.ControlType]::Edit)) { return $null }
@@ -562,17 +562,17 @@ jobs:
               if (!$control.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) { throw ("BLOCKED_UI_INVOKE: $($Names -join '/')") }
               ([System.Windows.Automation.InvokePattern]$pattern).Invoke()
           }
-          function Reveal-DiagnosticsControl([string[]]$Names, $Type) {
+          function Reveal-FixtureControl([string[]]$Names, $Type) {
               $seen = @{ reported=$false; revealed=$false }
               $null = Wait-Observed {
                   $found = @($window.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition) | Where-Object {
                       $_.Current.Name -cin $Names -and (!$Type -or $_.Current.ControlType -eq $Type)
                   })
-                  if ($found.Count -gt 1) { throw "Ambiguous diagnostics control: $($Names -join '/')" }
+                  if ($found.Count -gt 1) { throw "Ambiguous fixture control: $($Names -join '/')" }
                   if ($found.Count -eq 0) { return $null }
                   $target = $found[0]
                   if (!$seen.reported) {
-                      $result.activityDiagnostics.controls += [ordered]@{
+                      $result.codexHistory.controls += [ordered]@{
                           expectedLabel=($Names -join '/')
                           enabled=$target.Current.IsEnabled
                           offscreen=$target.Current.IsOffscreen
@@ -590,7 +590,7 @@ jobs:
                       $seen.revealed = $true
                   }
                   return $null
-              } "diagnostics fixed control reveal: $($Names -join '/')"
+              } "fixture fixed control reveal: $($Names -join '/')"
           }
           function Observe-Children {
               $rows = @(Get-CimInstance Win32_Process)
@@ -639,7 +639,7 @@ jobs:
               $result.image = $image
               $result.sha256 = (Get-FileHash -LiteralPath $image -Algorithm SHA256).Hash
               if ($FixtureCodex) {
-                  $result.codexHistory=[ordered]@{stage='fixture-read'; cli='0.169.1'; preflight=$false; rename='not-attempted'; archivedMenu='not-tested'; delete='held'}
+                  $result.codexHistory=[ordered]@{stage='fixture-read'; cli='0.169.1'; preflight=$false; rename='not-attempted'; controls=@(); archivedMenu='not-tested'; delete='held'; optionsControls=@(); profileSaved=$false; selectedProjectExact=$false; recordedCanonicalExact=$false; metaCwdExact=$false; profilePinMatches=$false; projectTreeObserved=$false; nativePreflight=$false; activeRowObserved=$false; preRenameUuidMatched=$false; activeRenameExposed=$false; renamedTitleObserved=$false; postRenameUuidMatched=$false; readonlyPostRename=[ordered]@{sameId=$false; sameCwd=$false; expectedName=$false; listsExact=$false}}
                   $fixture=& (Join-Path $PSScriptRoot 'pr101-codex-history-fixture.ps1') -Codex $FixtureCodex
                   if (!$fixture.AppServerReadVerified) { throw 'Unverified synthetic history inputs' }
                   $result.codexHistory.preflight=$true
@@ -737,6 +737,13 @@ jobs:
               }
           }
           '@ | Set-Content -LiteralPath (Join-Path $scriptRoot 'test-installed-rename.ps1') -Encoding utf8
+          foreach ($scriptName in @('pr101-codex-history-fixture.ps1','pr101-codex-history-gui.ps1','test-installed-rename.ps1')) {
+            $tokens=$null
+            $parseErrors=$null
+            $null = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $scriptRoot $scriptName),[ref]$tokens,[ref]$parseErrors)
+            if (@($parseErrors).Count -ne 0) { throw "Staged test script failed PowerShell parser: $scriptName" }
+          }
+          Write-Host 'All three staged scripts passed Windows PowerShell AST validation.'
           $exe = Get-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'verified-image.txt') -TotalCount 1
           if ((Get-FileHash -LiteralPath $exe).Hash -ine '6b63e56b7f675a5680ae4115d3fe58aed130f1b5f503c515b154f7079efb4b3f') { throw 'Installed image changed before launch' }
           $official = Join-Path $env:RUNNER_TEMP 'official-codex/extracted/package/vendor/x86_64-pc-windows-msvc/bin/codex.exe'
