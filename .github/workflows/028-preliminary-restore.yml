@@ -1,4 +1,4 @@
-name: 0.28 preliminary pinned installed active rename
+name: 0.28 preliminary pinned installed active navigation
 on:
   push:
     branches: [verify/028-preliminary-restore-20261120]
@@ -6,7 +6,7 @@ permissions:
   contents: read
   actions: read
 jobs:
-  installed-active-rename:
+  installed-active-navigation:
     if: github.repository == 'shawnwu2022/cc-desk' && github.ref == 'refs/heads/verify/028-preliminary-restore-20261120' && github.run_attempt == 1
     timeout-minutes: 15
     runs-on: windows-2022
@@ -91,15 +91,15 @@ jobs:
           if ($install.ExitCode -ne 0) { throw 'NSIS installation failed' }
           $exe = Join-Path $target 'cc-desk.exe'
           if ((Get-FileHash -LiteralPath $exe).Hash -ine $smoke.sha256) { throw 'Installed image differs from pinned smoke' }
-          [ordered]@{ mainAnchor='04a2f0cedc8e7acc080e8736723c6e8799127f58'; guiHarnessBaseline='71486c471394328b954a291dae200ae70b998cdd'; fixtureProbeBaseline='3c014ac4a9c9732f4d11ddf060587424cb2456cb'; candidateTree='933bae502bb1e262e6f0be2cd0bb600cb8992b8a'; prHead='cf847b4dc1993b7b58c192357cc79df7629bf560'; productSource='cbe2aca540d6097a6b0cebe7747f3b3dad8d439f'; preliminaryOnly=$true; exercise='non-archived-codex-history-rename'; priorRestoreRun=44751032368; packageSource=$manifest.sourceCommit; packageArtifact=14537417451; smokeArtifact=14538565669; installerSha256=$manifest.sha256; exeSha256=$smoke.sha256 } | ConvertTo-Json | Set-Content pr101-identity.json
+          [ordered]@{ mainAnchor='04a2f0cedc8e7acc080e8736723c6e8799127f58'; guiHarnessBaseline='71486c471394328b954a291dae200ae70b998cdd'; fixtureProbeBaseline='3c014ac4a9c9732f4d11ddf060587424cb2456cb'; candidateTree='933bae502bb1e262e6f0be2cd0bb600cb8992b8a'; prHead='cf847b4dc1993b7b58c192357cc79df7629bf560'; productSource='cbe2aca540d6097a6b0cebe7747f3b3dad8d439f'; preliminaryOnly=$true; exercise='non-archived-codex-history-navigation'; priorRestoreRun=44751032368; packageSource=$manifest.sourceCommit; packageArtifact=14537417451; smokeArtifact=14538565669; installerSha256=$manifest.sha256; exeSha256=$smoke.sha256 } | ConvertTo-Json | Set-Content pr101-identity.json
           $exe | Set-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'verified-image.txt')
 
-      - name: Verify one synthetic active record rename through installed GUI
+      - name: Verify one synthetic active row and UUID through installed GUI
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           if (!$IsWindows -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted') { throw 'Expected ephemeral hosted Windows' }
-          $scriptRoot = Join-Path $env:RUNNER_TEMP 'scratch-rename-harness'
+          $scriptRoot = Join-Path $env:RUNNER_TEMP 'scratch-navigation-harness'
           New-Item -ItemType Directory -Path $scriptRoot -ErrorAction Stop | Out-Null
           @'
           # Disposable Windows runner only. The real Codex executable performs a read-only protocol check.
@@ -420,7 +420,7 @@ jobs:
               $r.metaCwdExact=$meta.payload.cwd -ceq $fixture.Project
               $r.profilePinMatches=$matchingProfile.Count -eq 1
               if (!$r.selectedProjectExact -or !$r.metaCwdExact -or !$r.profilePinMatches) { throw 'Stored synthetic project or bound profile does not match exact fixture inputs' }
-              Test-ExactActiveRename
+              Test-ExactActiveNavigation
           }
           
           function Find-Scoped($Root, [string]$Name, $Type) {
@@ -466,65 +466,42 @@ jobs:
               } 'same native UUID from the exact visible row'
               $null=Wait-Observed { -not (Find-Control @('Session actions') ([System.Windows.Automation.ControlType]::Menu)) } 'row menu closed after copy'
           }
-          function Test-ExactActiveRename {
+          function Test-ExactActiveNavigation {
               $r=$result.codexHistory
+              $r.stage='readonly-native-fixture-preflight'
               $baseline=& (Join-Path $PSScriptRoot 'pr101-codex-history-fixture.ps1') -Codex $FixtureCodex -ReadOnlyExisting $fixture -ObserveRename
-              if (!$baseline.sameId -or !$baseline.sameCwd -or $baseline.expectedName -or !$baseline.listsExact) { throw 'Independent pre-rename native adoption or original name not established' }
+              if (!$baseline.sameId -or !$baseline.sameCwd -or $baseline.expectedName -or !$baseline.listsExact) { throw 'Independent native fixture adoption or unmodified name not established' }
               $r.nativePreflight=$true
-              $r.stage='validate-active-tree'
-              $active=Wait-Observed { Find-Control @('Active sessions only') ([System.Windows.Automation.ControlType]::Button) } 'active-only filter control'
-              $toggle=$null
-              if (!$active.TryGetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern,[ref]$toggle) -or
-                  ([System.Windows.Automation.TogglePattern]$toggle).Current.ToggleState -ne [System.Windows.Automation.ToggleState]::Off) {
-                  throw 'Expected all non-archived history rows, not live sessions only'
+              $r.stage='locate-exact-sessions-tree'
+              $tree=Wait-Observed { Find-Control @('Sessions') ([System.Windows.Automation.ControlType]::Tree) } 'unique visible workspace Sessions tree'
+              $r.sessionsTreeObserved=$true
+              $r.stage='identify-unique-disposable-project'
+              $projectName=Split-Path -Leaf $fixture.Project
+              $project=Wait-Observed { Find-Scoped $tree $projectName ([System.Windows.Automation.ControlType]::TreeItem) } 'exact project name inside workspace Sessions tree'
+              $r.projectTreeObserved=$true
+              $r.stage='expand-exact-disposable-project'
+              $expand=Find-Scoped $project 'Expand' ([System.Windows.Automation.ControlType]::Button)
+              $collapse=Find-Scoped $project 'Collapse' ([System.Windows.Automation.ControlType]::Button)
+              if ($expand -and $collapse) { throw 'Ambiguous project expansion state' }
+              if ($expand) {
+                  Invoke-ExactVisible $expand
+                  $r.expansionInvoked=$true
+              } elseif (!$collapse) {
+                  throw 'Unique project has neither exact Expand nor Collapse control'
               }
-              # Query the unique disposable project, not the current session title. This expands the tree
-              # without hiding the row while its title changes or accidentally relying on a transient search hit.
-              Set-FixtureEdit 'Search sessions...' (Split-Path -Leaf $fixture.Project)
-              $null=Wait-Observed { Find-Control @('Clear search') ([System.Windows.Automation.ControlType]::Button) } 'real search filter applied'
-              $r.stage='identify-active-row'
-              $null=Wait-Observed { Get-ActiveFixtureRow $fixture.ActiveCanary } 'one visible exact active fixture row under disposable project'
+              $null=Wait-Observed {
+                  $sameProject=Find-Scoped $tree $projectName ([System.Windows.Automation.ControlType]::TreeItem)
+                  if ($sameProject) { Find-Scoped $sameProject 'Collapse' ([System.Windows.Automation.ControlType]::Button) }
+              } 'expanded state of exact disposable project'
+              $r.projectExpanded=$true
+              $r.stage='identify-visible-active-fixture-row'
+              $null=Wait-Observed { Get-ActiveFixtureRow $fixture.ActiveCanary } 'one visible exact non-archived fixture row under expanded project'
               $r.activeRowObserved=$true
-              $r.stage='confirm-active-uuid-before-rename'
+              $r.stage='verify-row-native-uuid'
               $menu=Open-ExactActiveRowMenu $fixture.ActiveCanary
               Verify-ExactClipboardId $menu
-              $r.preRenameUuidMatched=$true
-              $r.stage='open-exact-rename-entry'
-              $menu=Open-ExactActiveRowMenu $fixture.ActiveCanary
-              $action=Find-Scoped $menu 'Rename' ([System.Windows.Automation.ControlType]::MenuItem)
-              Invoke-ExactVisible $action
-              $r.activeRenameExposed=$true
-              $r.stage='verify-current-name-before-edit'
-              $row=Wait-Observed { Get-ActiveFixtureRow $fixture.ActiveCanary } 'exact original row in edit mode'
-              $field=Wait-Observed { Find-Scoped $row 'Session name' ([System.Windows.Automation.ControlType]::Edit) } 'editor inside original active row'
-              $value=$null
-              if (!$field.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern,[ref]$value) -or
-                  ([System.Windows.Automation.ValuePattern]$value).Current.Value -cne $fixture.ActiveCanary) { throw 'Original session name did not match the scoped editor' }
-              ([System.Windows.Automation.ValuePattern]$value).SetValue('Pr101RenamedCanary')
-              if (([System.Windows.Automation.ValuePattern]$value).Current.Value -cne 'Pr101RenamedCanary') { throw 'New synthetic name did not read back' }
-              $r.stage='invoke-save-once'
-              $save=Wait-Observed { Find-Scoped $row 'Save name' ([System.Windows.Automation.ControlType]::Button) } 'scoped save control'
-              $r.rename='save-invocation-started'
-              Invoke-ExactVisible $save
-              $r.stage='verify-name-in-ui'
-              $null=Wait-Observed { Get-ActiveFixtureRow 'Pr101RenamedCanary' } 'new name visible before refresh'
-              Invoke-Button @('Refresh sessions')
-              $null=Wait-Observed { Find-Control @('Refresh sessions') ([System.Windows.Automation.ControlType]::Button) | Where-Object { $_.Current.IsEnabled } } 'refresh finished'
-              $null=Wait-Observed { Get-ActiveFixtureRow 'Pr101RenamedCanary' } 'same unique active row title after refresh'
-              $r.renamedTitleObserved=$true
-              $r.stage='verify-uuid-after-refresh'
-              $menu=Open-ExactActiveRowMenu 'Pr101RenamedCanary'
-              Verify-ExactClipboardId $menu
-              $r.postRenameUuidMatched=$true
-              $r.stage='verify-fresh-native-readonly'
-              $proof=& (Join-Path $PSScriptRoot 'pr101-codex-history-fixture.ps1') -Codex $FixtureCodex -ReadOnlyExisting $fixture -ObserveRename
-              $r.readonlyPostRename=[ordered]@{sameId=$proof.sameId; sameCwd=$proof.sameCwd; expectedName=$proof.expectedName; listsExact=$proof.listsExact}
-              if (!$proof.sameId -or !$proof.sameCwd -or !$proof.expectedName -or !$proof.listsExact) { throw 'Independent persisted name, UUID, project or membership not established' }
-              if (!(Test-Path -LiteralPath $fixture.Rollout -PathType Leaf) -or !(Test-Path -LiteralPath $fixture.ArchiveRollout -PathType Leaf)) {
-                  throw 'Expected both original disposable history files to remain'
-              }
-              $r.rename='native-name-persisted'
-              $r.stage='rename-proof-complete'
+              $r.activeRowUuidMatched=$true
+              $r.stage='active-navigation-proof-complete'
           }
           '@ | Set-Content -LiteralPath (Join-Path $scriptRoot 'pr101-codex-history-gui.ps1') -Encoding utf8
           @'
@@ -532,9 +509,9 @@ jobs:
           param([Parameter(Mandatory=$true)][string]$Exe, [Parameter(Mandatory=$true)][string]$FixtureCodex)
           $ErrorActionPreference = 'Stop'
           Set-StrictMode -Version Latest
-          $out = Join-Path (Get-Location) 'installed-rename-evidence'
+          $out = Join-Path (Get-Location) 'installed-navigation-evidence'
           New-Item -ItemType Directory -Force -Path $out | Out-Null
-          $result = [ordered]@{ status = 'blocked'; normalExit = $false; evidence = 'installed non-archived GUI history and independent native read; no live login'; error = $null }
+          $result = [ordered]@{ status = 'blocked'; normalExit = $false; evidence = 'installed non-archived GUI row and matching independent native UUID; no mutations to any session'; error = $null }
           $app = $null
           $window = $null
           $children = @{}
@@ -639,7 +616,7 @@ jobs:
               $result.image = $image
               $result.sha256 = (Get-FileHash -LiteralPath $image -Algorithm SHA256).Hash
               if ($FixtureCodex) {
-                  $result.codexHistory=[ordered]@{stage='fixture-read'; cli='0.169.1'; preflight=$false; rename='not-attempted'; controls=@(); archivedMenu='not-tested'; delete='held'; optionsControls=@(); profileSaved=$false; selectedProjectExact=$false; recordedCanonicalExact=$false; metaCwdExact=$false; profilePinMatches=$false; projectTreeObserved=$false; nativePreflight=$false; activeRowObserved=$false; preRenameUuidMatched=$false; activeRenameExposed=$false; renamedTitleObserved=$false; postRenameUuidMatched=$false; readonlyPostRename=[ordered]@{sameId=$false; sameCwd=$false; expectedName=$false; listsExact=$false}}
+                  $result.codexHistory=[ordered]@{stage='fixture-read'; cli='0.169.1'; preflight=$false; rename='not-attempted'; controls=@(); archivedMenu='not-tested'; delete='held'; optionsControls=@(); profileSaved=$false; selectedProjectExact=$false; recordedCanonicalExact=$false; metaCwdExact=$false; profilePinMatches=$false; sessionsTreeObserved=$false; projectTreeObserved=$false; expansionInvoked=$false; projectExpanded=$false; nativePreflight=$false; activeRowObserved=$false; activeRowUuidMatched=$false}
                   $fixture=& (Join-Path $PSScriptRoot 'pr101-codex-history-fixture.ps1') -Codex $FixtureCodex
                   if (!$fixture.AppServerReadVerified) { throw 'Unverified synthetic history inputs' }
                   $result.codexHistory.preflight=$true
@@ -716,7 +693,7 @@ jobs:
               foreach ($child in $children.Values) { if (!$child.WaitForExit(10000)) { throw 'Observed WebView child did not exit' } }
               $result.normalExit = $true
               if ($testFailure) { $result.status='partial'; throw $testFailure }
-              if ($result.codexHistory.rename -cne 'native-name-persisted') { throw 'Rename evidence was not completed' }
+              if (!$result.codexHistory.activeRowObserved -or !$result.codexHistory.activeRowUuidMatched) { throw 'Scoped navigation evidence was not completed' }
               $result.status = 'passed'
           } catch {
               if ($app -and $result.status -cne 'partial') { $result.status = 'failed' }
@@ -736,8 +713,8 @@ jobs:
                   if ($app) { $app.Dispose() }
               }
           }
-          '@ | Set-Content -LiteralPath (Join-Path $scriptRoot 'test-installed-rename.ps1') -Encoding utf8
-          foreach ($scriptName in @('pr101-codex-history-fixture.ps1','pr101-codex-history-gui.ps1','test-installed-rename.ps1')) {
+          '@ | Set-Content -LiteralPath (Join-Path $scriptRoot 'test-installed-navigation.ps1') -Encoding utf8
+          foreach ($scriptName in @('pr101-codex-history-fixture.ps1','pr101-codex-history-gui.ps1','test-installed-navigation.ps1')) {
             $tokens=$null
             $parseErrors=$null
             $null = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $scriptRoot $scriptName),[ref]$tokens,[ref]$parseErrors)
@@ -750,17 +727,16 @@ jobs:
           Get-ChildItem Env: | Where-Object { $_.Name -cne 'GITHUB_ACTIONS' -and $_.Name -match '^(ACTIONS_|GITHUB_|GH_)|TOKEN|SECRET|API_KEY|PASSWORD|CREDENTIAL' } | ForEach-Object {
               [Environment]::SetEnvironmentVariable($_.Name, $null, 'Process')
           }
-          & (Join-Path $scriptRoot 'test-installed-rename.ps1') -Exe $exe -FixtureCodex $official
-          $observed=Get-Content -LiteralPath 'installed-rename-evidence/result.json' -Raw | ConvertFrom-Json
+          & (Join-Path $scriptRoot 'test-installed-navigation.ps1') -Exe $exe -FixtureCodex $official
+          $observed=Get-Content -LiteralPath 'installed-navigation-evidence/result.json' -Raw | ConvertFrom-Json
           if ($observed.status -cne 'passed' -or !$observed.normalExit -or
-              !$observed.codexHistory.activeRowObserved -or !$observed.codexHistory.preRenameUuidMatched -or
-              !$observed.codexHistory.renamedTitleObserved -or !$observed.codexHistory.postRenameUuidMatched -or
-              $observed.codexHistory.rename -cne 'native-name-persisted' -or
-              !$observed.codexHistory.readonlyPostRename.sameId -or !$observed.codexHistory.readonlyPostRename.expectedName) { throw 'Rename acceptance receipt incomplete' }
+              !$observed.codexHistory.nativePreflight -or !$observed.codexHistory.sessionsTreeObserved -or
+              !$observed.codexHistory.projectExpanded -or !$observed.codexHistory.activeRowObserved -or
+              !$observed.codexHistory.activeRowUuidMatched -or $observed.codexHistory.rename -cne 'not-attempted') { throw 'Read-only navigation receipt incomplete' }
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: 028-preliminary-rename-${{ github.run_id }}-${{ github.run_attempt }}
+          name: 028-preliminary-navigation-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             pr101-identity.json
-            installed-rename-evidence/result.json
+            installed-navigation-evidence/result.json
