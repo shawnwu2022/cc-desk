@@ -84,7 +84,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           if (!$IsWindows -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted') { throw 'Expected ephemeral hosted Windows' }
           $package = Join-Path $env:RUNNER_TEMP 'pr101-package/test-package'
-          if ((Get-FileHash -LiteralPath (Join-Path $package 'test-package-manifest.json')).Hash -ine '7d6f765ce7c72b9cbf6b199186c4cd4acf224775299e735430992005e2242e49') { throw 'Manifest bytes differ from reviewed receipt' }
+          if ((Get-FileHash -LiteralPath (Join-Path $package 'test-package-manifest.json')).Hash -ine 'fb879d1cac17723379097ab6bb596dbb6bfb345f020b271a22d3917ce2c1df14') { throw 'Manifest bytes differ from reviewed receipt' }
           $manifest = Get-Content (Join-Path $package 'test-package-manifest.json') -Raw | ConvertFrom-Json
           if ($manifest.sourceCommit -cne 'cbe2aca540d6097a6b0cebe7747f3b3dad8d439f' -or $manifest.workflowRunId -cne '44538325396' -or $manifest.workflowRunAttempt -cne '1' -or $manifest.channel -cne 'test-only' -or $manifest.publishable -ne $false -or $manifest.updaterPublication -ne $false -or $manifest.installerFile -cnotmatch '^CC-Desk-[\w.-]+-setup\.exe$') { throw 'Pinned manifest mismatch' }
           $installer = Join-Path $package $manifest.installerFile
