@@ -1,96 +1,93 @@
-name: CC Desk fixed-byte installed WebView startup comparison
+name: CC Desk cold exact-source Windows startup comparison
 on:
   push:
     branches: [verify/028-preliminary-restore-20261120]
 permissions:
   contents: read
-  actions: read
 jobs:
-  fixed-byte-startup:
+  cold-exact-source-startup:
     if: github.repository == 'shawnwu2022/cc-desk' && github.ref == 'refs/heads/verify/028-preliminary-restore-20261120' && github.run_attempt == 1
-    timeout-minutes: 10
     runs-on: windows-2022
+    timeout-minutes: 45
+    env:
+      CARGO_PROFILE_RELEASE_LTO: 'false'
+      CARGO_INCREMENTAL: '0'
     steps:
       - uses: actions/checkout@v5
         with:
-          persist-credentials: false
           ref: 04a2f0cedc8e7acc080e8736723c6e8799127f58
-          path: pinned-source
-      - name: Download pinned verified candidate and smoke receipt
-        shell: pwsh
-        env:
-          ARTIFACT_READER: ${{ github.token }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $headers = @{ Authorization = "Bearer $env:ARTIFACT_READER"; Accept = 'application/vnd.github+json' }
-          $base = 'https://api.github.com/repos/shawnwu2022/cc-desk/actions/artifacts'
-          foreach ($entry in @(
-            @{ Id = 14537417451; Name = 'cc-desk-native-v3-test-cbe2aca540d6097a6b0cebe7747f3b3dad8d439f'; Folder = 'pr101-package'; Sha = 'ae31e711fd6b1f55579aeac2de2a1e9fd0a928281c128c0d5da4ee73c2c6a1c2' },
-            @{ Id = 14538565669; Name = 'desktop-webview-smoke-cbe2aca540d6097a6b0cebe7747f3b3dad8d439f-44538325396-1'; Folder = 'pr101-smoke'; Sha = '3c4bef1e28897e26fd7336aaa08691445849cf0b5d756764a2bd2fb76f5f68b3' }
-          )) {
-            $meta = Invoke-RestMethod "$base/$($entry.Id)" -Headers $headers
-            if ($meta.expired -or $meta.workflow_run.id -ne 44538325396 -or $meta.workflow_run.head_sha -cne 'cf847b4dc1993b7b58c192357cc79df7629bf560' -or $meta.name -cne $entry.Name) { throw 'Pinned artifact identity mismatch' }
-            $file = Join-Path $env:RUNNER_TEMP ($entry.Folder + '.zip')
-            Invoke-WebRequest "$base/$($entry.Id)/zip" -Headers $headers -OutFile $file
-            if ((Get-FileHash -LiteralPath $file).Hash -ine $entry.Sha) { throw 'Pinned artifact digest mismatch' }
-            if ($entry.Id -eq 14537417451) {
-              Add-Type -AssemblyName System.IO.Compression.FileSystem
-              $zip = [IO.Compression.ZipFile]::OpenRead($file)
-              try {
-                if (@($zip.Entries | Where-Object FullName -CEQ 'test-package/test-package-manifest.json').Count -ne 1) {
-                  throw 'Pinned manifest ZIP entry mismatch'
-                }
-                Write-Host 'Pinned ZIP entry verified: test-package/test-package-manifest.json'
-              } finally { $zip.Dispose() }
-            }
-            Expand-Archive -LiteralPath $file -DestinationPath (Join-Path $env:RUNNER_TEMP $entry.Folder)
-          }
+          persist-credentials: false
       - uses: actions/setup-node@v5
         with:
           node-version: '24.18.0'
-      - name: Exercise original fixed installer and retain only bounded startup observations
+          package-manager-cache: false
+      - uses: dtolnay/rust-toolchain@1.98.1
+        with:
+          components: rustfmt, clippy
+      - uses: actions/cache/restore@v4
+        id: npm-cache
+        with:
+          path: 'C:\npm\cache'
+          key: node-cache-Windows-x64-npm-5c630f0553f13862fb02a2428964971aa08d1c6d3b459e27179ba57f24242d07
+      - uses: actions/cache/restore@v4
+        id: browser-cache
+        with:
+          path: |
+            ${{ runner.temp }}/cc-desk-browser-tools-21.1.8-0.2.129/*.tar.xz
+            ${{ runner.temp }}/cc-desk-browser-tools-21.1.8-0.2.129/*.tar.gz
+          key: windows-browser-official-llvm21.1.8-bindgen0.2.129-749d22f5-79e348c1
+      - name: Supply original pinned build inputs without restoring Rust targets
         shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          function Invoke-Quiet([string]$Tool,[string[]]$Options,[string]$SafeLabel) {
+            & $Tool @Options *> (Join-Path $env:RUNNER_TEMP ($SafeLabel+'.local.log'))
+            if ($LASTEXITCODE -ne 0) { throw "Pinned input step failed: $SafeLabel" }
+            Write-Host "Pinned input step passed: $SafeLabel"
+          }
+          if ((git rev-parse HEAD) -cne '04a2f0cedc8e7acc080e8736723c6e8799127f58' -or
+              @(git status --porcelain).Count -ne 0 -or (Test-Path -LiteralPath 'src-tauri/target') -or
+              (Test-Path -LiteralPath 'dist') -or $env:CARGO_TARGET_DIR -or $env:RUSTC_WRAPPER -or
+              $env:TAURI_DEBUG -or $env:CC_DESK_BUILD_SHA) { throw 'Expected clean exact source and cold native build inputs' }
+          if ((node --version) -cne 'v24.18.0' -or (npm --version) -cne '11.16.0' -or (rustc --version) -cnotmatch '^rustc 1\.98\.1 ') { throw 'Pinned tool versions differ' }
+          Invoke-Quiet npm @('ci') 'locked-npm'
+          Invoke-Quiet npm @('run','prepare:session-sdk') 'session-sdk'
+          Invoke-Quiet npm @('run','prepare:opencode-archive') 'archive-sdk'
+          Invoke-Quiet node @('scripts/prepare-conpty.mjs') 'conpty-runtime'
+          Invoke-Quiet rustup @('target','add','wasm32-unknown-unknown','--toolchain','1.98.1') 'wasm-target'
+          try { ./scripts/prepare-windows-browser-tools.ps1 *> (Join-Path $env:RUNNER_TEMP 'browser-tools.local.log') } catch { throw 'Pinned browser tool preparation failed' }
+          Invoke-Quiet cargo @('fetch','--locked','--manifest-path','remote/Cargo.toml') 'locked-browser-fetch'
+      - name: Build one original NSIS, bind bytes and run ordinary isolated gates
+        shell: pwsh
+        env:
+          NPM_RESTORE_HIT: ${{ steps.npm-cache.outputs.cache-hit }}
+          BROWSER_RESTORE_HIT: ${{ steps.browser-cache.outputs.cache-hit }}
         run: |
           $ErrorActionPreference='Stop'
           Set-StrictMode -Version Latest
           if (!$IsWindows -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or $env:GITHUB_ACTIONS -cne 'true' -or ![Environment]::UserInteractive -or [Diagnostics.Process]::GetCurrentProcess().SessionId -eq 0) { throw 'Disposable interactive hosted Windows only' }
-          if ((Test-Path -LiteralPath (Join-Path ([Environment]::GetFolderPath('UserProfile')) '.cc-box')) -or
-              (Test-Path -LiteralPath (Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'io.github.shawnwu2022.ccdesk')) -or
-              @(Get-Process cc-desk -ErrorAction SilentlyContinue).Count -ne 0 -or
-              @(Get-ChildItem Env: | Where-Object Name -like 'WEBVIEW2_*').Count -ne 0) { throw 'Existing app state or WebView override; refusing before installation' }
-          $sha='04a2f0cedc8e7acc080e8736723c6e8799127f58'
-          $source=Join-Path (Get-Location) 'pinned-source'
-          if ((git -C $source rev-parse HEAD) -cne $sha -or @(git -C $source status --porcelain).Count -ne 0) { throw 'Pinned source checkout unavailable' }
-          $zip=Join-Path $env:RUNNER_TEMP 'pr101-package/test-package'
-          $manifestFile=Join-Path $zip 'test-package-manifest.json'
-          $manifestHash=(Get-FileHash -LiteralPath $manifestFile).Hash.ToLowerInvariant()
-          if ($manifestHash -cne 'fb879d1cac17723379097ab6bb596dbb6bfb345f020b271a22d3917ce2c1df14') { throw 'Pinned manifest hash differs' }
-          $m=Get-Content -LiteralPath $manifestFile -Raw | ConvertFrom-Json
-          if ($m.sourceCommit -cne 'cbe2aca540d6097a6b0cebe7747f3b3dad8d439f' -or
-              $m.workflowRunId -cne '44538325396' -or $m.workflowRunAttempt -cne '1' -or
-              $m.channel -cne 'test-only' -or $m.publishable -ne $false -or $m.updaterPublication -ne $false -or
-              $m.installerFile -cne 'CC-Desk-0.28.0-rc.1-test-cbe2aca540d6-x64-setup.exe') { throw 'Pinned manifest fields differ' }
-          $installer=Join-Path $zip $m.installerFile
-          $installerHash=(Get-FileHash -LiteralPath $installer).Hash.ToLowerInvariant()
-          if ($installerHash -cne $m.sha256 -or $installerHash -cne '7d6f765ce7c72b9cbf6b199186c4cd4acf224775299e735430992005e2242e49') { throw 'Pinned installer digest differs' }
-          $prior=Get-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'pr101-smoke/result.json') -Raw | ConvertFrom-Json
-          if ($prior.status -cne 'passed' -or !$prior.normalExit -or $prior.sha256 -ine '6b63e56b7f675a5680ae4115d3fe58aed130f1b5f503c515b154f7079efb4b3f') {
-              throw 'Independent prior smoke identity differs'
-          }
-          $identity=[ordered]@{
-              sourceAnchor=$sha; productSource=$m.sourceCommit; priorRun=44538325396; priorRunAttempt=1;
-              packageArtifact=14537417451; priorSmokeArtifact=14538565669; installerSha256=$installerHash;
-              manifestSha256=$manifestHash; expectedAppSha256=$prior.sha256.ToLowerInvariant();
-              run=[int64]$env:GITHUB_RUN_ID; attempt=[int]$env:GITHUB_RUN_ATTEMPT; workflowCommit=$env:GITHUB_SHA;
+          $source='04a2f0cedc8e7acc080e8736723c6e8799127f58'
+          $tree='933bae502bb1e262e6f0be2cd0bb600cb8992b8a'
+          $receipt=[ordered]@{
+              testOnly=$true; publishable=$false; updaterPublication=$false; originalInstallAndSmokeGatesRetained=$true;
+              workflowCommit=$env:GITHUB_SHA; workflowRun=[int64]$env:GITHUB_RUN_ID; workflowAttempt=[int]$env:GITHUB_RUN_ATTEMPT;
+              productSource=$source; productTree=$tree; productVersion='0.28.0-rc.1';
               runnerImage=if ($env:ImageVersion -cmatch '^\d{8}\.\d{1,5}\.\d{1,5}$') { $env:ImageVersion } else { 'unavailable' };
-              testOnly=$true; publishable=$false; updaterPublication=$false; originalInstall1=$false; originalInstall2=$false;
-              relocationAndNegativeRuntimeChecks=$false; installerUnchanged=$false; smoke=$null
+              npmCacheRestored=$env:NPM_RESTORE_HIT -ceq 'true'; browserArchiveCacheRestored=$env:BROWSER_RESTORE_HIT -ceq 'true';
+              rustTargetRestored=$false; coldNativeTarget=$false; trackedBuildSourceClean=$false; phase='preflight';
+              distIndexSha256=$null; distStartupChunkSha256=$null; distInventorySha256=$null; distReferencesResolved=$false; frontendIdentityMatches=$false;
+              installerSha256=$null; buildExeSha256=$null; installerUnchanged=$false; buildExeUnchanged=$false;
+              originalInstall1=$false; originalInstall2=$false; relocationAndNegativeRuntimeChecks=$false; smoke=$null;
           }
+          $receiptPath=Join-Path (Get-Location) 'cold-startup-receipt.json'
           $diagnostic=@'
           # Ordinary installed product, disposable hosted Windows only. Never a fake IPC page.
           param([Parameter(Mandatory=$true)][string]$Exe)
           $ErrorActionPreference = 'Stop'
           Set-StrictMode -Version Latest
+          $expectedExe=$env:CCDESK_SCRATCH_EXPECTED_EXE
+          [Environment]::SetEnvironmentVariable('CCDESK_SCRATCH_EXPECTED_EXE',$null,'Process')
+          if ($expectedExe -cnotmatch '^[0-9a-f]{64}$') { throw 'Missing validated expected application digest' }
           $out = Join-Path (Get-Location) 'safe-webview-probe'
           New-Item -ItemType Directory -Force -Path $out | Out-Null
           $result = [ordered]@{ status = 'blocked'; normalExit = $false; stage = 'preflight'; sample = $null; cleanupFailed = $false }
@@ -148,8 +145,31 @@ jobs:
               }
               throw 'BLOCKED_UI_OBSERVATION: native remote section scrolling unavailable'
           }
+          function Read-StartupMilestones {
+              $s=[ordered]@{loggerStarted=$false; ptyManagerInitialized=$false; webviewSettingsApplied=$false; buildIdentityMatches=$false}
+              if (!$app) { return $s }
+              try {
+                  $appHome=Join-Path ([Environment]::GetFolderPath('UserProfile')) '.cc-box'
+                  $logs=Join-Path $appHome 'logs'
+                  foreach ($dir in @($appHome,$logs)) {
+                      $item=Get-Item -LiteralPath $dir -ErrorAction Stop
+                      if (!$item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { return $s }
+                  }
+                  $files=@(Get-ChildItem -LiteralPath $logs -File -Filter '*.log' | Where-Object Name -cmatch '^\d{4}-\d{2}-\d{2}\.log$')
+                  if ($files.Count -ne 1) { return $s }
+                  $log=$files[0]
+                  if ($log.Length -gt 262144 -or ($log.Attributes -band [IO.FileAttributes]::ReparsePoint)) { return $s }
+                  $lines=@(Get-Content -LiteralPath $log.FullName -TotalCount 4096)
+                  $s.loggerStarted=@($lines | Where-Object { $_ -cmatch '\[INFO\] \[cc_desk::logger\] === CC Desk started ===$' }).Count -eq 1
+                  $s.ptyManagerInitialized=@($lines | Where-Object { $_ -cmatch '\[INFO\] \[cc_desk\] PTY manager initialized$' }).Count -eq 1
+                  $s.webviewSettingsApplied=@($lines | Where-Object { $_ -cmatch '\[INFO\] \[cc_desk\] WebView2 browser accelerator keys disabled$' }).Count -eq 1
+                  $s.buildIdentityMatches=@($lines | Where-Object { $_ -cmatch '\[INFO\] \[cc_desk::logger\] Build identity: version=0\.28\.0-rc\.1 sha=04a2f0cedc8e7acc080e8736723c6e8799127f58$' }).Count -eq 1
+              } catch { return $s }
+              return $s
+          }
           function Measure-SafeStartup {
               $snapshot=[ordered]@{rootAlive=$false; shellObserved=$false; uiState='not-observed'; webviewObservation='not-observed'; webviewCount=0; webviewVersions=@(); titleBarCount=0; paneCount=0; workspaceCount=0; settingsCount=0; generalCount=0; terminalCount=0; lockedCount=0}
+              $snapshot.milestones=Read-StartupMilestones
               if (!$app -or $app.HasExited) { return $snapshot }
               $snapshot.rootAlive=$true
               try {
@@ -239,7 +259,7 @@ jobs:
               $temp = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\') + '\'
               if (!$image.StartsWith($temp, [StringComparison]::OrdinalIgnoreCase)) { throw 'Installed image must be inside RUNNER_TEMP' }
               $result.sha256 = (Get-FileHash -LiteralPath $image -Algorithm SHA256).Hash
-              if ($result.sha256 -ine '6b63e56b7f675a5680ae4115d3fe58aed130f1b5f503c515b154f7079efb4b3f') { throw 'Installed image differs from pinned comparison image' }
+              if ($result.sha256 -ine $expectedExe) { throw 'Installed image differs from pinned comparison image' }
               Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
               $result.stage = 'native-shell'
               # Visible UI is the explicit purpose of this hosted-only acceptance step.
@@ -299,50 +319,106 @@ jobs:
               }
           }
           '@
-          # Only the test script is changed in this disposable checkout; the NSIS and all product
-          # runtime configuration are the original bytes, and the normal installer helper is unchanged.
-          $smokeScript=Join-Path $source 'scripts/test-desktop-webview.ps1'
-          $tokens=$null
-          $errors=$null
-          $null=[System.Management.Automation.Language.Parser]::ParseInput($diagnostic,[ref]$tokens,[ref]$errors)
-          if (@($errors).Count -ne 0) { throw 'Diagnostic PowerShell syntax validation failed' }
-          $diagnostic | Set-Content -LiteralPath $smokeScript -Encoding utf8
-          if ((git -C $source diff --name-only) -cne 'scripts/test-desktop-webview.ps1') { throw 'Unexpected test checkout change' }
-          $privateLog=Join-Path $env:RUNNER_TEMP 'ordinary-probe-local.log'
-          $receiptPath=Join-Path (Get-Location) 'fixed-startup-receipt.json'
-          $passed=$false
+          $success=$false
           try {
+              $tokens=$null
+              $errors=$null
+              $null=[System.Management.Automation.Language.Parser]::ParseInput($diagnostic,[ref]$tokens,[ref]$errors)
+              if (@($errors).Count -ne 0) { throw 'Diagnostic PowerShell syntax validation failed' }
+              if ((git rev-parse HEAD) -cne $source -or (git rev-parse 'HEAD^{tree}') -cne $tree -or
+                  @(git status --porcelain | Where-Object { $_ -cnotmatch '^\?\? ' }).Count -ne 0 -or
+                  (Test-Path -LiteralPath 'src-tauri/target/release') -or (Test-Path -LiteralPath 'dist/index.html')) { throw 'Build does not have exact cold source' }
+              if ((Get-Content -LiteralPath 'package.json' -Raw | ConvertFrom-Json).version -cne '0.28.0-rc.1' -or
+                  (Get-Content -LiteralPath 'src-tauri/tauri.conf.json' -Raw | ConvertFrom-Json).version -cne '0.28.0-rc.1') { throw 'Exact manifests disagree' }
+              $receipt.coldNativeTarget=$true
+              $receipt.phase='ordinary-nsis-build'
+              $env:CC_DESK_BUILD_SHA=$source
+              & npm run tauri -- build --bundles nsis --config '{"bundle":{"createUpdaterArtifacts":false}}' *> (Join-Path $env:RUNNER_TEMP 'ordinary-nsis.local.log')
+              if ($LASTEXITCODE -ne 0) { throw 'Original NSIS build failed' }
+              [Environment]::SetEnvironmentVariable('CC_DESK_BUILD_SHA',$null,'Process')
+              git diff --quiet HEAD --
+              if ($LASTEXITCODE -ne 0 -or (git rev-parse HEAD) -cne $source) { throw 'Tracked product source changed during build' }
+              $receipt.trackedBuildSourceClean=$true
+              $receipt.phase='bind-dist-and-nsis'
+              $dist=(Get-Item -LiteralPath 'dist').FullName
+              $index=Join-Path $dist 'index.html'
+              $html=Get-Content -LiteralPath $index -Raw
+              $refs=@([regex]::Matches($html, '(?:href|src)="/assets/([A-Za-z0-9._-]+)"') | ForEach-Object { $_.Groups[1].Value })
+              $startup=@($refs | Where-Object { $_ -cmatch '^index-[A-Za-z0-9_-]+\.js$' })
+              if ($refs.Count -lt 1 -or $refs.Count -gt 40 -or $startup.Count -ne 1) { throw 'Expected one local startup asset' }
+              foreach ($asset in $refs) {
+                  $f=Get-Item -LiteralPath (Join-Path $dist ('assets/'+$asset))
+                  if ($f.PSIsContainer -or ($f.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Unsafe startup asset' }
+              }
+              $receipt.distReferencesResolved=$true
+              $receipt.distIndexSha256=(Get-FileHash -LiteralPath $index).Hash.ToLowerInvariant()
+              $receipt.distStartupChunkSha256=(Get-FileHash -LiteralPath (Join-Path $dist ('assets/'+$startup[0]))).Hash.ToLowerInvariant()
+              $all=@(Get-ChildItem -LiteralPath $dist -File -Recurse | Sort-Object FullName)
+              if ($all.Count -lt 2 -or $all.Count -gt 160) { throw 'Unexpected dist inventory size' }
+              $rows=@(foreach ($f in $all) {
+                  if ($f.Length -gt 20MB -or ($f.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Unsafe dist file' }
+                  $rel=$f.FullName.Substring($dist.Length+1).Replace('\','/')
+                  "$rel $($f.Length) $((Get-FileHash -LiteralPath $f.FullName).Hash.ToLowerInvariant())"
+              })
+              $receipt.distInventorySha256=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes(($rows -join "`n")))).ToLowerInvariant()
+              $settings=@(Get-ChildItem -LiteralPath (Join-Path $dist 'assets') -Filter 'SettingsView-*.js' -File)
+              if ($settings.Count -ne 1 -or $settings[0].Length -gt 2MB) { throw 'Unexpected settings asset' }
+              $receipt.frontendIdentityMatches=(Get-Content -LiteralPath $settings[0].FullName -Raw).Contains($source)
+              if (!$receipt.frontendIdentityMatches) { throw 'Vite product identity missing from settings asset' }
+              $installers=@(Get-ChildItem -LiteralPath 'src-tauri/target/release/bundle/nsis' -Filter '*.exe' -File)
+              $exe=Get-Item -LiteralPath 'src-tauri/target/release/cc-desk.exe'
+              if ($installers.Count -ne 1 -or ($installers[0].Attributes -band [IO.FileAttributes]::ReparsePoint) -or ($exe.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Expected one original NSIS and native image' }
+              $installer=$installers[0].FullName
+              $receipt.installerSha256=(Get-FileHash -LiteralPath $installer).Hash.ToLowerInvariant()
+              $receipt.buildExeSha256=(Get-FileHash -LiteralPath $exe.FullName).Hash.ToLowerInvariant()
+              $receipt.phase='ordinary-installed-probe'
+              if ((Test-Path -LiteralPath (Join-Path ([Environment]::GetFolderPath('UserProfile')) '.cc-box')) -or
+                  (Test-Path -LiteralPath (Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'io.github.shawnwu2022.ccdesk')) -or
+                  @(Get-Process cc-desk -ErrorAction SilentlyContinue).Count -ne 0 -or
+                  @(Get-ChildItem Env: | Where-Object Name -like 'WEBVIEW2_*').Count -ne 0) { throw 'Existing app state or WebView override; refusing before installation' }
+              $diagnostic | Set-Content -LiteralPath 'scripts/test-desktop-webview.ps1' -Encoding utf8
+              if ((git diff --name-only HEAD --) -cne 'scripts/test-desktop-webview.ps1') { throw 'Unexpected local test checkout change' }
+              $env:CCDESK_SCRATCH_EXPECTED_EXE=$receipt.buildExeSha256
               Get-ChildItem Env: | Where-Object { $_.Name -cne 'GITHUB_ACTIONS' -and $_.Name -match '^(ACTIONS_|GITHUB_|GH_)|TOKEN|SECRET|API_KEY|PASSWORD|CREDENTIAL' } | ForEach-Object {
                   [Environment]::SetEnvironmentVariable($_.Name, $null, 'Process')
               }
-              Push-Location $source
+              $privateLog=Join-Path $env:RUNNER_TEMP 'ordinary-startup.local.log'
+              $passed=$false
               try {
                   & ./scripts/test-conpty-install.ps1 -Installer $installer *> $privateLog
                   $passed=$true
-              } finally { Pop-Location }
-          } catch { $passed=$false } finally {
+              } catch { $passed=$false }
               if (Test-Path -LiteralPath $privateLog -PathType Leaf) {
-                  $identity.originalInstall1= [bool](Select-String -LiteralPath $privateLog -Pattern '^PASS install-1$' -Quiet)
-                  $identity.originalInstall2= [bool](Select-String -LiteralPath $privateLog -Pattern '^PASS install-2$' -Quiet)
+                  $receipt.originalInstall1=[bool](Select-String -LiteralPath $privateLog -Pattern '^PASS install-1$' -Quiet)
+                  $receipt.originalInstall2=[bool](Select-String -LiteralPath $privateLog -Pattern '^PASS install-2$' -Quiet)
               }
-              $identity.relocationAndNegativeRuntimeChecks=$passed
-              $identity.installerUnchanged=(Get-FileHash -LiteralPath $installer).Hash -ieq $installerHash
-              $safePath=Join-Path $source 'safe-webview-probe/result.json'
-              if (Test-Path -LiteralPath $safePath -PathType Leaf) {
-                  $safe=Get-Item -LiteralPath $safePath
+              $receipt.relocationAndNegativeRuntimeChecks=$passed
+              $receipt.installerUnchanged=(Get-FileHash -LiteralPath $installer).Hash -ieq $receipt.installerSha256
+              $receipt.buildExeUnchanged=(Get-FileHash -LiteralPath $exe.FullName).Hash -ieq $receipt.buildExeSha256
+              $record='safe-webview-probe/result.json'
+              if (Test-Path -LiteralPath $record -PathType Leaf) {
+                  $safe=Get-Item -LiteralPath $record
                   if ($safe.Length -lt 4096 -and !($safe.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
-                      $identity.smoke=Get-Content -LiteralPath $safePath -Raw | ConvertFrom-Json -AsHashtable
+                      $receipt.smoke=Get-Content -LiteralPath $record -Raw | ConvertFrom-Json -AsHashtable
                   }
               }
-              $identity | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $receiptPath -Encoding utf8
+              if ($passed -and $receipt.originalInstall1 -and $receipt.originalInstall2 -and $receipt.installerUnchanged -and $receipt.buildExeUnchanged -and $receipt.smoke -and
+                  $receipt.smoke.status -ceq 'passed' -and $receipt.smoke.normalExit -and
+                  $receipt.smoke.sha256 -ieq $receipt.buildExeSha256) {
+                  $receipt.phase='complete'
+                  $success=$true
+              }
+          } catch {
+              # Even local build or installation errors never enter the uploaded data.
+              $success=$false
+          } finally {
+              $receipt | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $receiptPath -Encoding utf8
           }
-          if (!$passed -or !$identity.installerUnchanged -or !$identity.smoke -or $identity.smoke.status -cne 'passed' -or !$identity.smoke.normalExit) {
-              throw 'Fixed-byte ordinary installer acceptance did not complete; see sanitized receipt.'
-          }
+          if (!$success) { throw 'Cold exact-source comparison did not pass; see sanitized phase receipt.' }
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: fixed-byte-startup-${{ github.run_id }}-${{ github.run_attempt }}
-          path: fixed-startup-receipt.json
+          name: cold-exact-source-startup-${{ github.run_id }}-${{ github.run_attempt }}
+          path: cold-startup-receipt.json
           if-no-files-found: warn
           retention-days: 14
