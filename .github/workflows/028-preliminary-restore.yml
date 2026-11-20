@@ -13,10 +13,87 @@ jobs:
       CARGO_PROFILE_RELEASE_LTO: 'false'
       CARGO_INCREMENTAL: '0'
     steps:
-      - uses: actions/checkout@v5
+      - name: Check out exact reviewed product source
+        uses: actions/checkout@v5
         with:
+          path: product-source
           ref: 04a2f0cedc8e7acc080e8736723c6e8799127f58
           persist-credentials: false
+      - name: Check out sparse helper subtree from the exact scratch workflow revision
+        uses: actions/checkout@v5
+        with:
+          path: workflow-source
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          sparse-checkout: .github/isolated-tests/cc-desk-startup
+          sparse-checkout-cone-mode: false
+      - name: Admit immutable product source and verified scratch helpers
+        shell: pwsh
+        run: |
+          # Gate every helper before starting any product or helper commands. Read git blob
+          # bytes, not Windows checkout bytes; autocrlf cannot alter what gets executed.
+          $trust=@'
+          import hashlib, os, re, subprocess, tempfile
+          from pathlib import Path
+          pins = {
+              "dist-receipt.cjs": "94ea92bf5da4f6d9004dccf55bb8c7577d875a96ff1d52038354b4679c937f83",
+              "next_gate_binding.py": "b81c4aa4b65db66333183e6454ed89cd8d2cbe2a5bbe416e36a04650f3af1b9a",
+              "run-cold-probe.ps1": "ab96fe111bd5d31aeb138439c7927daf9a657f48c495fd08007c3906eb7967db",
+              "supply-cold-inputs.ps1": "a9a1e61a59b19cc40729df81f0e89cc83c2cd48ccb9c26157860084db7eb9db3",
+              "test-conpty-install-bound.ps1": "434f9f5a343f9067babf6481bb1f25d604f83dbef5039a29aa7963e84709546b",
+              "test-desktop-webview.ps1": "2d65ccef20d926d10b4d15e500532d2fc3c0ab953be42c236eb1010c532e6680",
+              "verify_named_nsis.py": "49b0f703fd2ea25c0b3cd8f3d3795315822e3e60b8b98ef27e26cacbba1aa302",
+          }
+          def check(ok):
+              if not ok:
+                  raise SystemExit("Reviewed source/helper isolation gate failed")
+          def git(repo,*args):
+              p=subprocess.run(["git","-C",str(repo),*args], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+              check(p.returncode == 0)
+              return p.stdout
+          workspace=Path(os.environ["GITHUB_WORKSPACE"]).resolve()
+          product=workspace/"product-source"
+          scratch=workspace/"workflow-source"
+          check(product.resolve()==product and scratch.resolve()==scratch and product!=scratch)
+          source="04a2f0cedc8e7acc080e8736723c6e8799127f58"
+          tree="933bae502bb1e262e6f0be2cd0bb600cb8992b8a"
+          event=os.environ["GITHUB_SHA"]
+          check(re.fullmatch(r"[0-9a-f]{40}",event) and event!=source and
+                os.environ["GITHUB_WORKFLOW_SHA"]==event and
+                os.environ["GITHUB_REF"]=="refs/heads/verify/028-preliminary-restore-20261120")
+          check(git(product,"rev-parse","HEAD").strip()==source.encode())
+          check(git(product,"rev-parse","HEAD^{tree}").strip()==tree.encode())
+          check(not git(product,"status","--porcelain") and not (product/"src-tauri"/"target").exists())
+          check(git(scratch,"rev-parse","HEAD").strip()==event.encode())
+          helper_dir=".github/isolated-tests/cc-desk-startup/"
+          listed=git(scratch,"ls-tree","-z","--full-tree","-r",event,"--",helper_dir)
+          items=listed.split(b"\0")
+          check(items.pop()==b"" and len(items)==len(pins))
+          blobs={}
+          for item in items:
+              field, sep, rawname=item.partition(b"\t")
+              mode, kind, oid=field.split()
+              check(sep==b"\t" and mode==b"100644" and kind==b"blob" and re.fullmatch(rb"[0-9a-f]{40}",oid))
+              rel=rawname.decode("ascii")
+              check(rel.startswith(helper_dir))
+              name=rel[len(helper_dir):]
+              check(name in pins and name not in blobs and "/" not in name)
+              length=int(git(scratch,"cat-file","-s",oid.decode()).strip())
+              check(0 < length <= 64*1024)
+              data=git(scratch,"cat-file","blob",oid.decode())
+              check(len(data)==length and hashlib.sha256(data).hexdigest()==pins[name])
+              blobs[name]=data
+          check(set(blobs)==set(pins))
+          private=Path(tempfile.mkdtemp(prefix="ccdesk-reviewed-helper-",dir=os.environ["RUNNER_TEMP"]))
+          for name,data in blobs.items():
+              with (private/name).open("xb") as stream:
+                  stream.write(data)
+              check(hashlib.sha256((private/name).read_bytes()).hexdigest()==pins[name])
+          with open(os.environ["GITHUB_ENV"],"a",encoding="utf-8") as env:
+              env.write(f"CCDESK_TEST_HELPERS_ROOT={private}\n")
+          '@
+          $trust | & python -
+          if ($LASTEXITCODE -ne 0) { throw 'Reviewed helper/source admission failed' }
       - uses: actions/setup-node@v5
         with:
           node-version: '24.18.0'
@@ -37,474 +114,16 @@ jobs:
             ${{ runner.temp }}/cc-desk-browser-tools-21.1.8-0.2.129/*.tar.gz
           key: windows-browser-official-llvm21.1.8-bindgen0.2.129-749d22f5-79e348c1
       - name: Supply original pinned build inputs without restoring Rust targets
+        working-directory: product-source
         shell: pwsh
-        run: |
-          $ErrorActionPreference='Stop'
-          function Invoke-Quiet([string]$Tool,[string[]]$Options,[string]$SafeLabel) {
-            & $Tool @Options *> (Join-Path $env:RUNNER_TEMP ($SafeLabel+'.local.log'))
-            if ($LASTEXITCODE -ne 0) { throw "Pinned input step failed: $SafeLabel" }
-            Write-Host "Pinned input step passed: $SafeLabel"
-          }
-          if ((git rev-parse HEAD) -cne '04a2f0cedc8e7acc080e8736723c6e8799127f58' -or
-              @(git status --porcelain).Count -ne 0 -or (Test-Path -LiteralPath 'src-tauri/target') -or
-              (Test-Path -LiteralPath 'dist') -or $env:CARGO_TARGET_DIR -or $env:RUSTC_WRAPPER -or
-              $env:TAURI_DEBUG -or $env:CC_DESK_BUILD_SHA) { throw 'Expected clean exact source and cold native build inputs' }
-          if ((node --version) -cne 'v24.18.0' -or (npm --version) -cne '11.16.0' -or (rustc --version) -cnotmatch '^rustc 1\.98\.1 ') { throw 'Pinned tool versions differ' }
-          Invoke-Quiet npm @('ci') 'locked-npm'
-          Invoke-Quiet npm @('run','prepare:session-sdk') 'session-sdk'
-          Invoke-Quiet npm @('run','prepare:opencode-archive') 'archive-sdk'
-          Invoke-Quiet node @('scripts/prepare-conpty.mjs') 'conpty-runtime'
-          Invoke-Quiet rustup @('target','add','wasm32-unknown-unknown','--toolchain','1.98.1') 'wasm-target'
-          try { ./scripts/prepare-windows-browser-tools.ps1 *> (Join-Path $env:RUNNER_TEMP 'browser-tools.local.log') } catch { throw 'Pinned browser tool preparation failed' }
-          Invoke-Quiet cargo @('fetch','--locked','--manifest-path','remote/Cargo.toml') 'locked-browser-fetch'
+        run: '& (Join-Path $env:CCDESK_TEST_HELPERS_ROOT "supply-cold-inputs.ps1")'
       - name: Build one original NSIS, bind bytes and run ordinary isolated gates
+        working-directory: product-source
         shell: pwsh
         env:
           NPM_RESTORE_HIT: ${{ steps.npm-cache.outputs.cache-hit }}
           BROWSER_RESTORE_HIT: ${{ steps.browser-cache.outputs.cache-hit }}
-        run: |
-          $ErrorActionPreference='Stop'
-          Set-StrictMode -Version Latest
-          if (!$IsWindows -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or $env:GITHUB_ACTIONS -cne 'true' -or ![Environment]::UserInteractive -or [Diagnostics.Process]::GetCurrentProcess().SessionId -eq 0) { throw 'Disposable interactive hosted Windows only' }
-          $source='04a2f0cedc8e7acc080e8736723c6e8799127f58'
-          $tree='933bae502bb1e262e6f0be2cd0bb600cb8992b8a'
-          $receipt=[ordered]@{
-              testOnly=$true; publishable=$false; updaterPublication=$false; originalInstallAndSmokeGatesRetained=$true;
-              workflowCommit=$env:GITHUB_SHA; workflowRun=[int64]$env:GITHUB_RUN_ID; workflowAttempt=[int]$env:GITHUB_RUN_ATTEMPT;
-              productSource=$source; productTree=$tree; productVersion='0.28.0-rc.1';
-              runnerImage=if ($env:ImageVersion -cmatch '^\d{8}\.\d{1,5}\.\d{1,5}$') { $env:ImageVersion } else { 'unavailable' };
-              npmCacheRestored=$env:NPM_RESTORE_HIT -ceq 'true'; browserArchiveCacheRestored=$env:BROWSER_RESTORE_HIT -ceq 'true';
-              rustTargetRestored=$false; coldNativeTarget=$false; trackedBuildSourceClean=$false; phase='preflight';
-              distIndexSha256=$null; distModuleGraphSha256=$null; distInventorySha256=$null; distReferencesResolved=$false; frontendIdentityMatches=$false; moduleScripts=0; localReferences=0;
-              installerSha256=$null; buildExeSha256=$null; installerUnchanged=$false; buildExeUnchanged=$false;
-              originalInstall1=$false; originalInstall2=$false; relocationAndNegativeRuntimeChecks=$false; smoke=$null;
-          }
-          $receiptPath=Join-Path (Get-Location) 'cold-startup-receipt.json'
-          $diagnostic=@'
-          # Ordinary installed product, disposable hosted Windows only. Never a fake IPC page.
-          param([Parameter(Mandatory=$true)][string]$Exe)
-          $ErrorActionPreference = 'Stop'
-          Set-StrictMode -Version Latest
-          $expectedExe=$env:CCDESK_SCRATCH_EXPECTED_EXE
-          [Environment]::SetEnvironmentVariable('CCDESK_SCRATCH_EXPECTED_EXE',$null,'Process')
-          if ($expectedExe -cnotmatch '^[0-9a-f]{64}$') { throw 'Missing validated expected application digest' }
-          $out = Join-Path (Get-Location) 'safe-webview-probe'
-          New-Item -ItemType Directory -Force -Path $out | Out-Null
-          $result = [ordered]@{ status = 'blocked'; normalExit = $false; stage = 'preflight'; sample = $null; cleanupFailed = $false }
-          $app = $null
-          $window = $null
-          $children = @{}
-          function Wait-Observed([scriptblock]$Observe, [string]$Label) {
-              $deadline = [DateTime]::UtcNow.AddSeconds(20)
-              do {
-                  if ($app -and $app.HasExited) { throw "App exited before $Label" }
-                  $value = & $Observe
-                  if ($null -ne $value -and $value -ne $false) { return $value }
-                  Start-Sleep -Milliseconds 200
-              } while ([DateTime]::UtcNow -lt $deadline)
-              throw "BLOCKED_UI_OBSERVATION: $Label"
-          }
-          function Find-Control([string[]]$Names, $Type) {
-              $matches = @($window.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition) | Where-Object {
-                  !$_.Current.IsOffscreen -and $_.Current.Name -cin $Names -and (!$Type -or $_.Current.ControlType -eq $Type)
-              })
-              if ($matches.Count -gt 1) { throw "Ambiguous UI selector: $($Names -join ', ')" }
-              if ($matches.Count -eq 1) { return $matches[0] }
-              return $null
-          }
-          function Invoke-Button([string[]]$Names) {
-              $control = Wait-Observed { Find-Control $Names ([System.Windows.Automation.ControlType]::Button) } ($Names -join '/')
-              $pattern = $null
-              if (!$control.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) { throw 'BLOCKED_UI_INVOKE' }
-              ([System.Windows.Automation.InvokePattern]$pattern).Invoke()
-          }
-          function Reveal-RemoteSection {
-              $matches = @($window.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition) | Where-Object {
-                  $_.Current.Name -cin @('Disconnect', '断开连接') -and $_.Current.ControlType -eq [System.Windows.Automation.ControlType]::Button
-              })
-              if ($matches.Count -ne 1) { return $false }
-              $target = $matches[0]
-              if (!$target.Current.IsOffscreen) { return $true }
-              $pattern = $null
-              if ($target.TryGetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern, [ref]$pattern)) {
-                  ([System.Windows.Automation.ScrollItemPattern]$pattern).ScrollIntoView()
-                  return $true
-              }
-              $ancestor = $target
-              for ($depth=0; $depth -lt 16; $depth++) {
-                  $ancestor = [System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($ancestor)
-                  if (!$ancestor -or [System.Windows.Automation.AutomationElement]::Compare($ancestor, $window)) { break }
-                  $pattern = $null
-                  if ($ancestor.TryGetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern, [ref]$pattern)) {
-                      $scroll = [System.Windows.Automation.ScrollPattern]$pattern
-                      if ($scroll.Current.VerticallyScrollable) {
-                          $scroll.SetScrollPercent([System.Windows.Automation.ScrollPattern]::NoScroll, 100)
-                          return $true
-                      }
-                  }
-              }
-              throw 'BLOCKED_UI_OBSERVATION: native remote section scrolling unavailable'
-          }
-          function Read-StartupMilestones {
-              $s=[ordered]@{loggerStarted=$false; ptyManagerInitialized=$false; webviewSettingsApplied=$false; buildIdentityMatches=$false}
-              if (!$app) { return $s }
-              try {
-                  $appHome=Join-Path ([Environment]::GetFolderPath('UserProfile')) '.cc-box'
-                  $logs=Join-Path $appHome 'logs'
-                  foreach ($dir in @($appHome,$logs)) {
-                      $item=Get-Item -LiteralPath $dir -ErrorAction Stop
-                      if (!$item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { return $s }
-                  }
-                  $files=@(Get-ChildItem -LiteralPath $logs -File -Filter '*.log' | Where-Object Name -cmatch '^\d{4}-\d{2}-\d{2}\.log$')
-                  if ($files.Count -ne 1) { return $s }
-                  $log=$files[0]
-                  if ($log.Length -gt 262144 -or ($log.Attributes -band [IO.FileAttributes]::ReparsePoint)) { return $s }
-                  $lines=@(Get-Content -LiteralPath $log.FullName -TotalCount 4096)
-                  $s.loggerStarted=@($lines | Where-Object { $_ -cmatch '\[INFO\] \[cc_desk::logger\] === CC Desk started ===$' }).Count -eq 1
-                  $s.ptyManagerInitialized=@($lines | Where-Object { $_ -cmatch '\[INFO\] \[cc_desk\] PTY manager initialized$' }).Count -eq 1
-                  $s.webviewSettingsApplied=@($lines | Where-Object { $_ -cmatch '\[INFO\] \[cc_desk\] WebView2 browser accelerator keys disabled$' }).Count -eq 1
-                  $s.buildIdentityMatches=@($lines | Where-Object { $_ -cmatch '\[INFO\] \[cc_desk::logger\] Build identity: version=0\.28\.0-rc\.1 sha=04a2f0cedc8e7acc080e8736723c6e8799127f58$' }).Count -eq 1
-              } catch { return $s }
-              return $s
-          }
-          function Measure-SafeStartup {
-              $snapshot=[ordered]@{rootAlive=$false; shellObserved=$false; uiState='not-observed'; webviewObservation='not-observed'; webviewCount=0; webviewVersions=@(); titleBarCount=0; paneCount=0; workspaceCount=0; settingsCount=0; generalCount=0; terminalCount=0; lockedCount=0}
-              $snapshot.milestones=Read-StartupMilestones
-              if (!$app -or $app.HasExited) { return $snapshot }
-              $snapshot.rootAlive=$true
-              try {
-                  # Original owned-process identity capture: handle, parent lifetime, session, image, creation time.
-                  Observe-Children
-                  foreach ($child in $children.Values) {
-                      if ($child.HasExited -or $child.ProcessName -ine 'msedgewebview2') { continue }
-                      $module=$child.MainModule
-                      if ([IO.Path]::GetFileName($module.FileName) -ine 'msedgewebview2.exe') { continue }
-                      $version=$module.FileVersionInfo
-                      if ($child.HasExited -or $child.MainModule.FileName -ine $module.FileName) { throw 'Observed engine identity became unavailable' }
-                      $snapshot.webviewCount++
-                      $actual='{0}.{1}.{2}.{3}' -f $version.FileMajorPart,$version.FileMinorPart,$version.FileBuildPart,$version.FilePrivatePart
-                      if ($actual -ne '0.0.0.0' -and $actual -cmatch '^\d{1,5}(\.\d{1,5}){3}$' -and $actual -cnotin $snapshot.webviewVersions) {
-                          $snapshot.webviewVersions+= $actual
-                      }
-                  }
-                  $snapshot.webviewObservation='complete'
-              } catch { $snapshot.webviewObservation='partial-or-unavailable' }
-              if (!$window) { return $snapshot }
-              try {
-                  if ($window.Current.ProcessId -ne $app.Id -or $window.Current.IsOffscreen -or $app.HasExited) { return $snapshot }
-                  $snapshot.shellObserved=$true
-                  $elements=$window.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)
-                  if ($elements.Count -gt 10000) { $snapshot.uiState='bounded-out'; return $snapshot }
-                  foreach ($e in $elements) {
-                      if ($e.Current.IsOffscreen) { continue }
-                      $type=$e.Current.ControlType
-                      $name=$e.Current.Name
-                      if ($type -eq [System.Windows.Automation.ControlType]::TitleBar) { $snapshot.titleBarCount++ }
-                      if ($type -eq [System.Windows.Automation.ControlType]::Pane) { $snapshot.paneCount++ }
-                      if ($type -eq [System.Windows.Automation.ControlType]::Button) {
-                          if ($name -cin @('Workspace','工作区')) { $snapshot.workspaceCount++ }
-                          if ($name -cin @('Settings','设置')) { $snapshot.settingsCount++ }
-                          if ($name -cin @('General','通用')) { $snapshot.generalCount++ }
-                          if ($name -cin @('Terminal','终端')) { $snapshot.terminalCount++ }
-                      }
-                      if ($type -eq [System.Windows.Automation.ControlType]::Text -and
-                          $name -cin @('Locked — no native connection is installed.','已锁定：尚未安装原生连接。')) { $snapshot.lockedCount++ }
-                  }
-                  $snapshot.uiState='counted'
-              } catch { $snapshot.uiState='partial-or-unavailable' }
-              return $snapshot
-          }
-          function Observe-Children {
-              $rows = @(Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,CreationDate,ExecutablePath,SessionId)
-              $owned = @{ ([int]$app.Id) = $app }
-              do {
-                  $next = @($rows | Where-Object { $owned.ContainsKey([int]$_.ParentProcessId) -and !$owned.ContainsKey([int]$_.ProcessId) })
-                  foreach ($row in $next) {
-                      $id = [int]$row.ProcessId
-                      $process = $null
-                      try {
-                          $parent = $owned[[int]$row.ParentProcessId]
-                          $process = [Diagnostics.Process]::GetProcessById($id)
-                          $null = $process.Handle
-                          # CIM timestamps have microsecond precision; compare the captured handle,
-                          # not a second PID lookup. Any exit/reuse ambiguity blocks acceptance.
-                          $created = ([DateTime]$row.CreationDate).ToUniversalTime()
-                          $started = $process.StartTime.ToUniversalTime()
-                          if ($parent.HasExited -or $process.HasExited -or
-                              ($created.Ticks - ($created.Ticks % 10)) -ne ($started.Ticks - ($started.Ticks % 10)) -or
-                              !$row.ExecutablePath -or $process.MainModule.FileName -ine $row.ExecutablePath -or
-                              $process.SessionId -ne $app.SessionId -or [int]$row.SessionId -ne $app.SessionId -or
-                              $started -lt $parent.StartTime.ToUniversalTime()) { throw 'Unverified child identity or parent lifetime' }
-                          $children[$id] = $process
-                          $owned[$id] = $process
-                          $process = $null
-                      } finally {
-                          # Never register or kill a handle whose ancestry/identity was not verified.
-                          if ($process) { $process.Dispose() }
-                      }
-                  }
-              } while ($next.Count -gt 0)
-          }
-          
-          try {
-              if (!$IsWindows -or $env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or !$env:RUNNER_TEMP -or ![Environment]::UserInteractive -or [Diagnostics.Process]::GetCurrentProcess().SessionId -eq 0) { throw 'BLOCKED_EXTERNAL_TARGET: disposable interactive hosted Windows required' }
-              if (@(Get-ChildItem Env: | Where-Object { $_.Name -like 'WEBVIEW2_*' }).Count -ne 0) { throw 'BLOCKED_EXTERNAL_TARGET: WebView2 environment override' }
-              # Locked Tauri 2.11.1 manager/webview.rs defaults to LocalData/identifier.
-              $webviewRoot = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'io.github.shawnwu2022.ccdesk'
-              if (Test-Path -LiteralPath $webviewRoot) { throw 'BLOCKED_EXTERNAL_TARGET: existing default WebView data; never inspect or reset it' }
-              if (@(Get-Process cc-desk -ErrorAction SilentlyContinue).Count -ne 0) { throw 'BLOCKED_EXTERNAL_TARGET: existing App' }
-              $homeRoot = Join-Path ([Environment]::GetFolderPath('UserProfile')) '.cc-box'
-              if (Test-Path -LiteralPath $homeRoot) { throw 'BLOCKED_EXTERNAL_TARGET: existing application data; never inspect or reset it' }
-              $image = (Resolve-Path -LiteralPath $Exe).Path
-              $temp = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\') + '\'
-              if (!$image.StartsWith($temp, [StringComparison]::OrdinalIgnoreCase)) { throw 'Installed image must be inside RUNNER_TEMP' }
-              $result.sha256 = (Get-FileHash -LiteralPath $image -Algorithm SHA256).Hash
-              if ($result.sha256 -ine $expectedExe) { throw 'Installed image differs from pinned comparison image' }
-              Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
-              $result.stage = 'native-shell'
-              # Visible UI is the explicit purpose of this hosted-only acceptance step.
-              $app = Start-Process -FilePath $image -WorkingDirectory (Split-Path $image) -PassThru
-              $null = $app.Handle
-              if ($app.MainModule.FileName -ine $image) { throw 'Started image identity mismatch' }
-              $window = Wait-Observed {
-                  $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty, $app.Id)
-                  $all = [System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Children, $condition)
-                  $visible = @($all | Where-Object { !$_.Current.IsOffscreen -and $_.Current.ControlType -eq [System.Windows.Automation.ControlType]::Window })
-                  if ($visible.Count -gt 1) { throw 'Ambiguous original top-level window' }
-                  if ($visible.Count -eq 1) { return $visible[0] }
-              } 'ordinary main window'
-              $result.stage = 'settings'
-              Invoke-Button @('Settings', '设置')
-              $result.stage = 'general-defaults'
-              Invoke-Button @('General', '通用')
-              $agy = Wait-Observed { Find-Control @('Antigravity CLI disabled · click to enable', 'Antigravity CLI 已停用 · 点击启用') ([System.Windows.Automation.ControlType]::Button) } 'AGY disabled'
-              $toggle = $null
-              if (!$agy.TryGetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern, [ref]$toggle) -or ([System.Windows.Automation.TogglePattern]$toggle).Current.ToggleState -ne [System.Windows.Automation.ToggleState]::Off) { throw 'BLOCKED_UI_OBSERVATION: AGY pressed state unavailable or enabled' }
-              $result.stage = 'terminal-defaults'
-              Invoke-Button @('Terminal', '终端')
-              $null = Wait-Observed { Reveal-RemoteSection } 'remote section native scroll'
-              $null = Wait-Observed { Find-Control @('Locked — no native connection is installed.', '已锁定：尚未安装原生连接。') ([System.Windows.Automation.ControlType]::Text) } 'remote locked'
-              $disconnect = Wait-Observed { Find-Control @('Disconnect', '断开连接') ([System.Windows.Automation.ControlType]::Button) } 'remote disconnect'
-              if ($disconnect.Current.IsEnabled) { throw 'Remote disconnect unexpectedly enabled' }
-              if (Find-Control @('Literal UTF-8 text (maximum 8192 bytes)', '原样 UTF-8 文本（最多 8192 字节）') $null) { throw 'Remote input unexpectedly visible' }
-              $result.stage = 'process-identity'
-              $result.sample=Measure-SafeStartup
-              if ($result.sample.webviewObservation -cne 'complete') { throw 'Owned WebView observation incomplete' }
-              if (@($children.Values | Where-Object ProcessName -eq 'msedgewebview2').Count -eq 0) { throw 'No actual WebView2 child observed' }
-              $result.stage = 'normal-exit'
-              $close = $null
-              if (!$window.TryGetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern, [ref]$close)) { throw 'BLOCKED_UI_CLOSE' }
-              ([System.Windows.Automation.WindowPattern]$close).Close()
-              if (!$app.WaitForExit(30000) -or $app.ExitCode -ne 0) { throw 'Ordinary App did not close normally' }
-              foreach ($child in $children.Values) { if (!$child.WaitForExit(10000)) { throw 'Observed WebView child did not exit' } }
-              $result.normalExit = $true
-              $result.stage = 'complete'
-              $result.status = 'passed'
-          } catch {
-              if ($app) { $result.status = 'failed' }
-              if ($null -eq $result.sample) { $result.sample=Measure-SafeStartup }
-              throw 'Ordinary installed WebView acceptance blocked; see safe receipt.'
-          } finally {
-              # Failure cleanup is never retirement evidence or a passed UI acceptance.
-              try {
-                  if ($app -and !$app.HasExited) { $app.Kill(); $null = $app.WaitForExit(10000) }
-                  foreach ($child in $children.Values) { if (!$child.HasExited) { $child.Kill(); $null = $child.WaitForExit(10000) }; $child.Dispose() }
-              } catch {
-                  $result.cleanupFailed = $true
-                  $result.status = 'failed'
-                  throw 'Owned startup cleanup failed; see safe receipt.'
-              } finally {
-                  $result | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 (Join-Path $out 'result.json')
-                  if ($app) { $app.Dispose() }
-              }
-          }
-          '@
-          $success=$false
-          try {
-              $tokens=$null
-              $errors=$null
-              $null=[System.Management.Automation.Language.Parser]::ParseInput($diagnostic,[ref]$tokens,[ref]$errors)
-              if (@($errors).Count -ne 0) { throw 'Diagnostic PowerShell syntax validation failed' }
-              if ((git rev-parse HEAD) -cne $source -or (git rev-parse 'HEAD^{tree}') -cne $tree -or
-                  @(git status --porcelain | Where-Object { $_ -cnotmatch '^\?\? ' }).Count -ne 0 -or
-                  (Test-Path -LiteralPath 'src-tauri/target/release') -or (Test-Path -LiteralPath 'dist/index.html')) { throw 'Build does not have exact cold source' }
-              if ((Get-Content -LiteralPath 'package.json' -Raw | ConvertFrom-Json).version -cne '0.28.0-rc.1' -or
-                  (Get-Content -LiteralPath 'src-tauri/tauri.conf.json' -Raw | ConvertFrom-Json).version -cne '0.28.0-rc.1') { throw 'Exact manifests disagree' }
-              $receipt.coldNativeTarget=$true
-              $receipt.phase='ordinary-nsis-build'
-              $env:CC_DESK_BUILD_SHA=$source
-              & npm run tauri -- build --bundles nsis --config '{"bundle":{"createUpdaterArtifacts":false}}' *> (Join-Path $env:RUNNER_TEMP 'ordinary-nsis.local.log')
-              if ($LASTEXITCODE -ne 0) { throw 'Original NSIS build failed' }
-              [Environment]::SetEnvironmentVariable('CC_DESK_BUILD_SHA',$null,'Process')
-              git diff --quiet HEAD --
-              if ($LASTEXITCODE -ne 0 -or (git rev-parse HEAD) -cne $source) { throw 'Tracked product source changed during build' }
-              $receipt.trackedBuildSourceClean=$true
-              $receipt.phase='dist-validation'
-              $assetProbe=Join-Path $env:RUNNER_TEMP 'dist-receipt.cjs'
-              @'
-          'use strict';
-          const fs = require('node:fs');
-          const path = require('node:path');
-          const {createHash} = require('node:crypto');
-          const hash = bytes => createHash('sha256').update(bytes).digest('hex');
-          const root = path.resolve(process.argv[2] || '');
-          const source = process.argv[3] || '';
-          const out = {stage:'dist-html', distIndexSha256:null, distModuleGraphSha256:null, distInventorySha256:null,
-            distReferencesResolved:false, frontendIdentityMatches:false, moduleScripts:0, localReferences:0};
-          function check(ok) { if (!ok) throw new Error('REJECTED'); }
-          function safeDir(dir) {
-            const st = fs.lstatSync(dir);
-            check(st.isDirectory() && !st.isSymbolicLink());
-          }
-          function read(file, max) {
-            const st = fs.lstatSync(file);
-            check(st.isFile() && !st.isSymbolicLink() && st.size > 0 && st.size <= max);
-            const data = fs.readFileSync(file);
-            check(data.length === st.size);
-            return data;
-          }
-          function attr(attrs, name) {
-            const values = [...attrs.matchAll(new RegExp('(?:^|\\s)' + name + '\\s*=\\s*(?:"([^"]*)"|\'([^\']*)\')', 'gi'))];
-            const assignments = [...attrs.matchAll(new RegExp('(?:^|\\s)' + name + '(?=\\s*=|\\s|$)', 'gi'))];
-            check(values.length <= 1 && assignments.length === values.length);
-            return values.length ? values[0][1] ?? values[0][2] : undefined;
-          }
-          function key(ref) {
-            check(typeof ref === 'string' && /^(?:\/|\.\/)?assets\/[A-Za-z0-9][A-Za-z0-9._-]{0,180}$/.test(ref));
-            return ref.replace(/^(?:\/|\.\/)/, '');
-          }
-          try {
-            check(/^[0-9a-f]{40}$/.test(source));
-            safeDir(root);
-            const htmlBytes = read(path.join(root,'index.html'), 256 * 1024);
-            const html = htmlBytes.toString('utf8');
-            out.distIndexSha256 = hash(htmlBytes);
-            out.stage = 'dist-local-references';
-            safeDir(path.join(root,'assets'));
-            const tags = [...html.matchAll(/<(script|link)\b([^<>]*)>/gi)];
-            check(tags.length > 0 && tags.length <= 48);
-            const modules = [];
-            for (const match of tags) {
-              const [,rawTag,attrs] = match;
-              const tag = rawTag.toLowerCase();
-              const file = key(attr(attrs, tag === 'script' ? 'src' : 'href'));
-              const data = read(path.join(root,file), 20 * 1024 * 1024);
-              out.localReferences++;
-              if (tag === 'script') {
-                check(attr(attrs,'type') === 'module' && file.endsWith('.js'));
-                modules.push([file,data.length,hash(data)]);
-              }
-            }
-            check(modules.length > 0 && new Set(modules.map(x => x[0])).size === modules.length);
-            out.moduleScripts = modules.length;
-            out.distModuleGraphSha256 = hash(JSON.stringify(modules));
-            out.distReferencesResolved = true;
-            out.stage = 'dist-inventory';
-            const inventory = [];
-            function visit(dir, depth) {
-              check(depth <= 8);
-              safeDir(dir);
-              for (const name of fs.readdirSync(dir).sort()) {
-                check(/^[A-Za-z0-9][A-Za-z0-9._-]{0,180}$/.test(name));
-                const file = path.join(dir,name);
-                const stat=fs.lstatSync(file);
-                check(!stat.isSymbolicLink());
-                if (stat.isDirectory()) visit(file, depth + 1);
-                else {
-                  const data = read(file,20*1024*1024);
-                  inventory.push([path.relative(root,file).split(path.sep).join('/'),data.length,hash(data)]);
-                }
-                check(inventory.length <= 160);
-              }
-            }
-            visit(root,0);
-            check(inventory.length >= 2);
-            out.distInventorySha256 = hash(JSON.stringify(inventory));
-            out.stage = 'dist-vite-identity';
-            const settings = inventory.map(row => row[0]).filter(file => /^assets\/SettingsView-[A-Za-z0-9_-]+\.js$/.test(file));
-            check(settings.length === 1);
-            out.frontendIdentityMatches = read(path.join(root,settings[0]),2*1024*1024).includes(Buffer.from(source));
-            check(out.frontendIdentityMatches);
-            out.stage = 'dist-complete';
-          } catch {
-            process.exitCode = 1;
-          }
-          process.stdout.write(JSON.stringify(out));
-          '@ | Set-Content -LiteralPath $assetProbe -Encoding utf8
-              & node --check $assetProbe *> (Join-Path $env:RUNNER_TEMP 'dist-syntax.local.log')
-              if ($LASTEXITCODE -ne 0) { throw 'Diagnostic asset verifier syntax rejected' }
-              $distOutput= & node $assetProbe 'dist' $source 2>$null
-              $distExit=$LASTEXITCODE
-              if (!$distOutput -or "$distOutput".Length -gt 4096) { throw 'Missing bounded frontend receipt' }
-              $data=$distOutput | ConvertFrom-Json -AsHashtable
-              if ($data.stage -cnotin @('dist-html','dist-local-references','dist-inventory','dist-vite-identity','dist-complete')) { throw 'Unexpected dist stage' }
-              $receipt.phase=$data.stage
-              foreach ($field in @('distIndexSha256','distModuleGraphSha256','distInventorySha256')) {
-                  $value=$data[$field]
-                  if ($null -ne $value -and $value -cnotmatch '^[0-9a-f]{64}$') { throw 'Invalid dist digest' }
-                  $receipt[$field]=$value
-              }
-              foreach ($field in @('distReferencesResolved','frontendIdentityMatches')) {
-                  if ($data[$field] -isnot [bool]) { throw 'Invalid dist proof flag' }
-                  $receipt[$field]=$data[$field]
-              }
-              foreach ($field in @('moduleScripts','localReferences')) {
-                  if ($data[$field] -isnot [long] -and $data[$field] -isnot [int]) { throw 'Invalid dist count' }
-                  if ($data[$field] -lt 0 -or $data[$field] -gt 48) { throw 'Unbounded dist count' }
-                  $receipt[$field]=$data[$field]
-              }
-              if ($distExit -ne 0 -or $receipt.phase -cne 'dist-complete' -or !$receipt.distReferencesResolved -or !$receipt.frontendIdentityMatches) { throw 'Frontend integrity proof incomplete' }
-              $receipt.phase='bind-nsis'
-              $installers=@(Get-ChildItem -LiteralPath 'src-tauri/target/release/bundle/nsis' -Filter '*.exe' -File)
-              $exe=Get-Item -LiteralPath 'src-tauri/target/release/cc-desk.exe'
-              if ($installers.Count -ne 1 -or ($installers[0].Attributes -band [IO.FileAttributes]::ReparsePoint) -or ($exe.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Expected one original NSIS and native image' }
-              $installer=$installers[0].FullName
-              $receipt.installerSha256=(Get-FileHash -LiteralPath $installer).Hash.ToLowerInvariant()
-              $receipt.buildExeSha256=(Get-FileHash -LiteralPath $exe.FullName).Hash.ToLowerInvariant()
-              $receipt.phase='ordinary-installed-probe'
-              if ((Test-Path -LiteralPath (Join-Path ([Environment]::GetFolderPath('UserProfile')) '.cc-box')) -or
-                  (Test-Path -LiteralPath (Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'io.github.shawnwu2022.ccdesk')) -or
-                  @(Get-Process cc-desk -ErrorAction SilentlyContinue).Count -ne 0 -or
-                  @(Get-ChildItem Env: | Where-Object Name -like 'WEBVIEW2_*').Count -ne 0) { throw 'Existing app state or WebView override; refusing before installation' }
-              $diagnostic | Set-Content -LiteralPath 'scripts/test-desktop-webview.ps1' -Encoding utf8
-              if ((git diff --name-only HEAD --) -cne 'scripts/test-desktop-webview.ps1') { throw 'Unexpected local test checkout change' }
-              $env:CCDESK_SCRATCH_EXPECTED_EXE=$receipt.buildExeSha256
-              Get-ChildItem Env: | Where-Object { $_.Name -cne 'GITHUB_ACTIONS' -and $_.Name -match '^(ACTIONS_|GITHUB_|GH_)|TOKEN|SECRET|API_KEY|PASSWORD|CREDENTIAL' } | ForEach-Object {
-                  [Environment]::SetEnvironmentVariable($_.Name, $null, 'Process')
-              }
-              $privateLog=Join-Path $env:RUNNER_TEMP 'ordinary-startup.local.log'
-              $passed=$false
-              try {
-                  & ./scripts/test-conpty-install.ps1 -Installer $installer *> $privateLog
-                  $passed=$true
-              } catch { $passed=$false }
-              if (Test-Path -LiteralPath $privateLog -PathType Leaf) {
-                  $receipt.originalInstall1=[bool](Select-String -LiteralPath $privateLog -Pattern '^PASS install-1$' -Quiet)
-                  $receipt.originalInstall2=[bool](Select-String -LiteralPath $privateLog -Pattern '^PASS install-2$' -Quiet)
-              }
-              $receipt.relocationAndNegativeRuntimeChecks=$passed
-              $receipt.installerUnchanged=(Get-FileHash -LiteralPath $installer).Hash -ieq $receipt.installerSha256
-              $receipt.buildExeUnchanged=(Get-FileHash -LiteralPath $exe.FullName).Hash -ieq $receipt.buildExeSha256
-              $record='safe-webview-probe/result.json'
-              if (Test-Path -LiteralPath $record -PathType Leaf) {
-                  $safe=Get-Item -LiteralPath $record
-                  if ($safe.Length -lt 4096 -and !($safe.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
-                      $receipt.smoke=Get-Content -LiteralPath $record -Raw | ConvertFrom-Json -AsHashtable
-                  }
-              }
-              if ($passed -and $receipt.originalInstall1 -and $receipt.originalInstall2 -and $receipt.installerUnchanged -and $receipt.buildExeUnchanged -and $receipt.smoke -and
-                  $receipt.smoke.status -ceq 'passed' -and $receipt.smoke.normalExit -and
-                  $receipt.smoke.sha256 -ieq $receipt.buildExeSha256) {
-                  $receipt.phase='complete'
-                  $success=$true
-              }
-          } catch {
-              # Even local build or installation errors never enter the uploaded data.
-              $success=$false
-          } finally {
-              $receipt | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $receiptPath -Encoding utf8
-          }
-          if (!$success) { throw 'Cold exact-source comparison did not pass; see sanitized phase receipt.' }
+        run: '& (Join-Path $env:CCDESK_TEST_HELPERS_ROOT "run-cold-probe.ps1")'
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -512,3 +131,4 @@ jobs:
           path: cold-startup-receipt.json
           if-no-files-found: warn
           retention-days: 14
+
