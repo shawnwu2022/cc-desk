@@ -75,7 +75,7 @@ jobs:
               runnerImage=if ($env:ImageVersion -cmatch '^\d{8}\.\d{1,5}\.\d{1,5}$') { $env:ImageVersion } else { 'unavailable' };
               npmCacheRestored=$env:NPM_RESTORE_HIT -ceq 'true'; browserArchiveCacheRestored=$env:BROWSER_RESTORE_HIT -ceq 'true';
               rustTargetRestored=$false; coldNativeTarget=$false; trackedBuildSourceClean=$false; phase='preflight';
-              distIndexSha256=$null; distStartupChunkSha256=$null; distInventorySha256=$null; distReferencesResolved=$false; frontendIdentityMatches=$false;
+              distIndexSha256=$null; distModuleGraphSha256=$null; distInventorySha256=$null; distReferencesResolved=$false; frontendIdentityMatches=$false; moduleScripts=0; localReferences=0;
               installerSha256=$null; buildExeSha256=$null; installerUnchanged=$false; buildExeUnchanged=$false;
               originalInstall1=$false; originalInstall2=$false; relocationAndNegativeRuntimeChecks=$false; smoke=$null;
           }
@@ -339,32 +339,122 @@ jobs:
               git diff --quiet HEAD --
               if ($LASTEXITCODE -ne 0 -or (git rev-parse HEAD) -cne $source) { throw 'Tracked product source changed during build' }
               $receipt.trackedBuildSourceClean=$true
-              $receipt.phase='bind-dist-and-nsis'
-              $dist=(Get-Item -LiteralPath 'dist').FullName
-              $index=Join-Path $dist 'index.html'
-              $html=Get-Content -LiteralPath $index -Raw
-              $refs=@([regex]::Matches($html, '(?:href|src)="/assets/([A-Za-z0-9._-]+)"') | ForEach-Object { $_.Groups[1].Value })
-              $startup=@($refs | Where-Object { $_ -cmatch '^index-[A-Za-z0-9_-]+\.js$' })
-              if ($refs.Count -lt 1 -or $refs.Count -gt 40 -or $startup.Count -ne 1) { throw 'Expected one local startup asset' }
-              foreach ($asset in $refs) {
-                  $f=Get-Item -LiteralPath (Join-Path $dist ('assets/'+$asset))
-                  if ($f.PSIsContainer -or ($f.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Unsafe startup asset' }
+              $receipt.phase='dist-validation'
+              $assetProbe=Join-Path $env:RUNNER_TEMP 'dist-receipt.cjs'
+              @'
+          'use strict';
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const {createHash} = require('node:crypto');
+          const hash = bytes => createHash('sha256').update(bytes).digest('hex');
+          const root = path.resolve(process.argv[2] || '');
+          const source = process.argv[3] || '';
+          const out = {stage:'dist-html', distIndexSha256:null, distModuleGraphSha256:null, distInventorySha256:null,
+            distReferencesResolved:false, frontendIdentityMatches:false, moduleScripts:0, localReferences:0};
+          function check(ok) { if (!ok) throw new Error('REJECTED'); }
+          function safeDir(dir) {
+            const st = fs.lstatSync(dir);
+            check(st.isDirectory() && !st.isSymbolicLink());
+          }
+          function read(file, max) {
+            const st = fs.lstatSync(file);
+            check(st.isFile() && !st.isSymbolicLink() && st.size > 0 && st.size <= max);
+            const data = fs.readFileSync(file);
+            check(data.length === st.size);
+            return data;
+          }
+          function attr(attrs, name) {
+            const values = [...attrs.matchAll(new RegExp('(?:^|\\s)' + name + '\\s*=\\s*(?:"([^"]*)"|\'([^\']*)\')', 'gi'))];
+            const assignments = [...attrs.matchAll(new RegExp('(?:^|\\s)' + name + '(?=\\s*=|\\s|$)', 'gi'))];
+            check(values.length <= 1 && assignments.length === values.length);
+            return values.length ? values[0][1] ?? values[0][2] : undefined;
+          }
+          function key(ref) {
+            check(typeof ref === 'string' && /^(?:\/|\.\/)?assets\/[A-Za-z0-9][A-Za-z0-9._-]{0,180}$/.test(ref));
+            return ref.replace(/^(?:\/|\.\/)/, '');
+          }
+          try {
+            check(/^[0-9a-f]{40}$/.test(source));
+            safeDir(root);
+            const htmlBytes = read(path.join(root,'index.html'), 256 * 1024);
+            const html = htmlBytes.toString('utf8');
+            out.distIndexSha256 = hash(htmlBytes);
+            out.stage = 'dist-local-references';
+            safeDir(path.join(root,'assets'));
+            const tags = [...html.matchAll(/<(script|link)\b([^<>]*)>/gi)];
+            check(tags.length > 0 && tags.length <= 48);
+            const modules = [];
+            for (const match of tags) {
+              const [,rawTag,attrs] = match;
+              const tag = rawTag.toLowerCase();
+              const file = key(attr(attrs, tag === 'script' ? 'src' : 'href'));
+              const data = read(path.join(root,file), 20 * 1024 * 1024);
+              out.localReferences++;
+              if (tag === 'script') {
+                check(attr(attrs,'type') === 'module' && file.endsWith('.js'));
+                modules.push([file,data.length,hash(data)]);
               }
-              $receipt.distReferencesResolved=$true
-              $receipt.distIndexSha256=(Get-FileHash -LiteralPath $index).Hash.ToLowerInvariant()
-              $receipt.distStartupChunkSha256=(Get-FileHash -LiteralPath (Join-Path $dist ('assets/'+$startup[0]))).Hash.ToLowerInvariant()
-              $all=@(Get-ChildItem -LiteralPath $dist -File -Recurse | Sort-Object FullName)
-              if ($all.Count -lt 2 -or $all.Count -gt 160) { throw 'Unexpected dist inventory size' }
-              $rows=@(foreach ($f in $all) {
-                  if ($f.Length -gt 20MB -or ($f.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Unsafe dist file' }
-                  $rel=$f.FullName.Substring($dist.Length+1).Replace('\','/')
-                  "$rel $($f.Length) $((Get-FileHash -LiteralPath $f.FullName).Hash.ToLowerInvariant())"
-              })
-              $receipt.distInventorySha256=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes(($rows -join "`n")))).ToLowerInvariant()
-              $settings=@(Get-ChildItem -LiteralPath (Join-Path $dist 'assets') -Filter 'SettingsView-*.js' -File)
-              if ($settings.Count -ne 1 -or $settings[0].Length -gt 2MB) { throw 'Unexpected settings asset' }
-              $receipt.frontendIdentityMatches=(Get-Content -LiteralPath $settings[0].FullName -Raw).Contains($source)
-              if (!$receipt.frontendIdentityMatches) { throw 'Vite product identity missing from settings asset' }
+            }
+            check(modules.length > 0 && new Set(modules.map(x => x[0])).size === modules.length);
+            out.moduleScripts = modules.length;
+            out.distModuleGraphSha256 = hash(JSON.stringify(modules));
+            out.distReferencesResolved = true;
+            out.stage = 'dist-inventory';
+            const inventory = [];
+            function visit(dir, depth) {
+              check(depth <= 8);
+              safeDir(dir);
+              for (const name of fs.readdirSync(dir).sort()) {
+                check(/^[A-Za-z0-9][A-Za-z0-9._-]{0,180}$/.test(name));
+                const file = path.join(dir,name);
+                const stat=fs.lstatSync(file);
+                check(!stat.isSymbolicLink());
+                if (stat.isDirectory()) visit(file, depth + 1);
+                else {
+                  const data = read(file,20*1024*1024);
+                  inventory.push([path.relative(root,file).split(path.sep).join('/'),data.length,hash(data)]);
+                }
+                check(inventory.length <= 160);
+              }
+            }
+            visit(root,0);
+            check(inventory.length >= 2);
+            out.distInventorySha256 = hash(JSON.stringify(inventory));
+            out.stage = 'dist-vite-identity';
+            const settings = inventory.map(row => row[0]).filter(file => /^assets\/SettingsView-[A-Za-z0-9_-]+\.js$/.test(file));
+            check(settings.length === 1);
+            out.frontendIdentityMatches = read(path.join(root,settings[0]),2*1024*1024).includes(Buffer.from(source));
+            check(out.frontendIdentityMatches);
+            out.stage = 'dist-complete';
+          } catch {
+            process.exitCode = 1;
+          }
+          process.stdout.write(JSON.stringify(out));
+          '@ | Set-Content -LiteralPath $assetProbe -Encoding utf8
+              & node --check $assetProbe *> (Join-Path $env:RUNNER_TEMP 'dist-syntax.local.log')
+              if ($LASTEXITCODE -ne 0) { throw 'Diagnostic asset verifier syntax rejected' }
+              $distOutput= & node $assetProbe 'dist' $source 2>$null
+              $distExit=$LASTEXITCODE
+              if (!$distOutput -or "$distOutput".Length -gt 4096) { throw 'Missing bounded frontend receipt' }
+              $data=$distOutput | ConvertFrom-Json -AsHashtable
+              if ($data.stage -cnotin @('dist-html','dist-local-references','dist-inventory','dist-vite-identity','dist-complete')) { throw 'Unexpected dist stage' }
+              $receipt.phase=$data.stage
+              foreach ($field in @('distIndexSha256','distModuleGraphSha256','distInventorySha256')) {
+                  $value=$data[$field]
+                  if ($null -ne $value -and $value -cnotmatch '^[0-9a-f]{64}$') { throw 'Invalid dist digest' }
+                  $receipt[$field]=$value
+              }
+              foreach ($field in @('distReferencesResolved','frontendIdentityMatches')) {
+                  if ($data[$field] -isnot [bool]) { throw 'Invalid dist proof flag' }
+                  $receipt[$field]=$data[$field]
+              }
+              foreach ($field in @('moduleScripts','localReferences')) {
+                  if ($data[$field] -isnot [long] -and $data[$field] -isnot [int]) { throw 'Invalid dist count' }
+                  if ($data[$field] -lt 0 -or $data[$field] -gt 48) { throw 'Unbounded dist count' }
+                  $receipt[$field]=$data[$field]
+              }
+              if ($distExit -ne 0 -or $receipt.phase -cne 'dist-complete' -or !$receipt.distReferencesResolved -or !$receipt.frontendIdentityMatches) { throw 'Frontend integrity proof incomplete' }
+              $receipt.phase='bind-nsis'
               $installers=@(Get-ChildItem -LiteralPath 'src-tauri/target/release/bundle/nsis' -Filter '*.exe' -File)
               $exe=Get-Item -LiteralPath 'src-tauri/target/release/cc-desk.exe'
               if ($installers.Count -ne 1 -or ($installers[0].Attributes -band [IO.FileAttributes]::ReparsePoint) -or ($exe.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Expected one original NSIS and native image' }
