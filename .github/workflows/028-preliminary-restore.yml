@@ -1,4 +1,4 @@
-name: 0.28 preliminary pinned installed active navigation
+name: CC Desk fixed-byte installed WebView startup comparison
 on:
   push:
     branches: [verify/028-preliminary-restore-20261120]
@@ -6,11 +6,16 @@ permissions:
   contents: read
   actions: read
 jobs:
-  installed-active-navigation:
+  fixed-byte-startup:
     if: github.repository == 'shawnwu2022/cc-desk' && github.ref == 'refs/heads/verify/028-preliminary-restore-20261120' && github.run_attempt == 1
-    timeout-minutes: 15
+    timeout-minutes: 10
     runs-on: windows-2022
     steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          ref: 04a2f0cedc8e7acc080e8736723c6e8799127f58
+          path: pinned-source
       - name: Download pinned verified candidate and smoke receipt
         shell: pwsh
         env:
@@ -40,478 +45,55 @@ jobs:
             }
             Expand-Archive -LiteralPath $file -DestinationPath (Join-Path $env:RUNNER_TEMP $entry.Folder)
           }
-      - name: Download pinned official Codex
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24.18.0'
+      - name: Exercise original fixed installer and retain only bounded startup observations
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
-          $dir = Join-Path $env:RUNNER_TEMP 'official-codex'
-          New-Item -ItemType Directory $dir | Out-Null
-          # A lone EXE is not the complete official runtime supply. Preserve the published vendor layout.
-          $archive = Join-Path $dir 'codex-0.169.1-win32-x64.tgz'
-          Invoke-WebRequest 'https://registry.npmjs.org/@openai/codex/-/codex-0.169.1-win32-x64.tgz' -OutFile $archive
-          $expectedIntegrity = 'fImXWqxwxqHh9+FhJWsRRFiBzgBrSeN1bYTvtGZtUKGTPzHefYAL1agmlf5XScfwY5i5pHsExfdhFekzRBbqIw=='
-          $stream = [IO.File]::OpenRead($archive)
-          $hasher = [Security.Cryptography.SHA512]::Create()
-          try { $actualIntegrity = [Convert]::ToBase64String($hasher.ComputeHash($stream)) } finally { $stream.Dispose(); $hasher.Dispose() }
-          if ($actualIntegrity -cne $expectedIntegrity) { throw 'Official platform package integrity mismatch' }
-          $names = @(& tar -tzf $archive)
-          if ($LASTEXITCODE -ne 0) { throw 'Platform archive listing failed' }
-          $details = @(& tar -tvzf $archive)
-          if ($LASTEXITCODE -ne 0 -or $names.Count -ne 47 -or $details.Count -ne 47) { throw 'Platform archive entries mismatch' }
-          foreach ($name in $names) {
-            if (!$name.StartsWith('package/') -or $name -match '(^/|\\|:|(^|/)\.\.(/|$))') { throw 'Unsafe platform archive path' }
-          }
-          foreach ($entry in $details) { if ($entry[0] -ne '-') { throw 'Platform archive contains nonregular entry' } }
-          $extract = Join-Path $dir 'extracted'
-          New-Item -ItemType Directory $extract | Out-Null
-          & tar -xzf $archive -C $extract
-          if ($LASTEXITCODE -ne 0) { throw 'Platform archive extraction failed' }
-          if (@(Get-ChildItem $extract -Recurse | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }).Count) { throw 'Platform reparse point rejected' }
-          $files = @(Get-ChildItem $extract -Recurse -File)
-          if ($files.Count -ne 47 -or ($files | Measure-Object Length -Sum).Sum -ne 515292799) { throw 'Platform file set mismatch' }
-          $inventory = @($files | ForEach-Object { [ordered]@{path=$_.FullName.Substring($extract.Length+1).Replace('\','/'); bytes=$_.Length; sha256=(Get-FileHash $_.FullName).Hash.ToLowerInvariant()} })
-          [ordered]@{package='@openai/codex'; version='0.169.1-win32-x64'; integrity="sha512-$expectedIntegrity"; archiveSha256=(Get-FileHash $archive).Hash; source='official npm platform package'; files=$inventory} | ConvertTo-Json -Depth 5 | Set-Content codex-supply.json
-          $exe = Join-Path $extract 'package/vendor/x86_64-pc-windows-msvc/bin/codex.exe'
-          if ((Get-Item $exe).Length -ne 382647088 -or (Get-FileHash $exe).Hash -ine 'f76f94d08b0793bfa129ae62c09341ee32ae96d57e69968ae6b8d7c71a20d8c4') { throw 'Official Codex asset digest mismatch' }
-      - name: Install pinned NSIS and verify launcher identity
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          if (!$IsWindows -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted') { throw 'Expected ephemeral hosted Windows' }
-          $package = Join-Path $env:RUNNER_TEMP 'pr101-package/test-package'
-          if ((Get-FileHash -LiteralPath (Join-Path $package 'test-package-manifest.json')).Hash -ine 'fb879d1cac17723379097ab6bb596dbb6bfb345f020b271a22d3917ce2c1df14') { throw 'Manifest bytes differ from reviewed receipt' }
-          $manifest = Get-Content (Join-Path $package 'test-package-manifest.json') -Raw | ConvertFrom-Json
-          if ($manifest.sourceCommit -cne 'cbe2aca540d6097a6b0cebe7747f3b3dad8d439f' -or $manifest.workflowRunId -cne '44538325396' -or $manifest.workflowRunAttempt -cne '1' -or $manifest.channel -cne 'test-only' -or $manifest.publishable -ne $false -or $manifest.updaterPublication -ne $false -or $manifest.installerFile -cnotmatch '^CC-Desk-[\w.-]+-setup\.exe$') { throw 'Pinned manifest mismatch' }
-          $installer = Join-Path $package $manifest.installerFile
-          if ((Get-FileHash -LiteralPath $installer).Hash -ine $manifest.sha256) { throw 'NSIS digest mismatch' }
-          $smoke = Get-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'pr101-smoke/result.json') -Raw | ConvertFrom-Json
-          if ($smoke.sha256 -ine '6b63e56b7f675a5680ae4115d3fe58aed130f1b5f503c515b154f7079efb4b3f' -or $smoke.status -cne 'passed' -or !$smoke.normalExit -or $smoke.sha256 -cnotmatch '^[0-9A-Fa-f]{64}$') { throw 'Missing trusted installed image identity' }
-          $target = Join-Path $env:RUNNER_TEMP 'pr101-installed'
-          $install = Start-Process -FilePath $installer -ArgumentList @('/S', "/D=$target") -WindowStyle Hidden -Wait -PassThru
-          if ($install.ExitCode -ne 0) { throw 'NSIS installation failed' }
-          $exe = Join-Path $target 'cc-desk.exe'
-          if ((Get-FileHash -LiteralPath $exe).Hash -ine $smoke.sha256) { throw 'Installed image differs from pinned smoke' }
-          [ordered]@{ mainAnchor='04a2f0cedc8e7acc080e8736723c6e8799127f58'; guiHarnessBaseline='71486c471394328b954a291dae200ae70b998cdd'; fixtureProbeBaseline='3c014ac4a9c9732f4d11ddf060587424cb2456cb'; candidateTree='933bae502bb1e262e6f0be2cd0bb600cb8992b8a'; prHead='cf847b4dc1993b7b58c192357cc79df7629bf560'; productSource='cbe2aca540d6097a6b0cebe7747f3b3dad8d439f'; preliminaryOnly=$true; exercise='non-archived-codex-history-navigation'; priorRestoreRun=44751032368; packageSource=$manifest.sourceCommit; packageArtifact=14537417451; smokeArtifact=14538565669; installerSha256=$manifest.sha256; exeSha256=$smoke.sha256 } | ConvertTo-Json | Set-Content pr101-identity.json
-          $exe | Set-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'verified-image.txt')
-
-      - name: Verify one synthetic active row and UUID through installed GUI
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          if (!$IsWindows -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted') { throw 'Expected ephemeral hosted Windows' }
-          $scriptRoot = Join-Path $env:RUNNER_TEMP 'scratch-navigation-harness'
-          New-Item -ItemType Directory -Path $scriptRoot -ErrorAction Stop | Out-Null
-          @'
-          # Disposable Windows runner only. The real Codex executable performs a read-only protocol check.
-          param(
-              [Parameter(Mandatory=$true)][string]$Codex, [psobject]$ReadOnlyExisting, [switch]$ObserveRename
-          )
-          $ErrorActionPreference = 'Stop'
+          $ErrorActionPreference='Stop'
           Set-StrictMode -Version Latest
-          if (!$IsWindows -or $env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or !$env:RUNNER_TEMP) {
-              throw 'BLOCKED_EXTERNAL_TARGET: ephemeral hosted Windows required'
+          if (!$IsWindows -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or $env:GITHUB_ACTIONS -cne 'true' -or ![Environment]::UserInteractive -or [Diagnostics.Process]::GetCurrentProcess().SessionId -eq 0) { throw 'Disposable interactive hosted Windows only' }
+          if ((Test-Path -LiteralPath (Join-Path ([Environment]::GetFolderPath('UserProfile')) '.cc-box')) -or
+              (Test-Path -LiteralPath (Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'io.github.shawnwu2022.ccdesk')) -or
+              @(Get-Process cc-desk -ErrorAction SilentlyContinue).Count -ne 0 -or
+              @(Get-ChildItem Env: | Where-Object Name -like 'WEBVIEW2_*').Count -ne 0) { throw 'Existing app state or WebView override; refusing before installation' }
+          $sha='04a2f0cedc8e7acc080e8736723c6e8799127f58'
+          $source=Join-Path (Get-Location) 'pinned-source'
+          if ((git -C $source rev-parse HEAD) -cne $sha -or @(git -C $source status --porcelain).Count -ne 0) { throw 'Pinned source checkout unavailable' }
+          $zip=Join-Path $env:RUNNER_TEMP 'pr101-package/test-package'
+          $manifestFile=Join-Path $zip 'test-package-manifest.json'
+          $manifestHash=(Get-FileHash -LiteralPath $manifestFile).Hash.ToLowerInvariant()
+          if ($manifestHash -cne 'fb879d1cac17723379097ab6bb596dbb6bfb345f020b271a22d3917ce2c1df14') { throw 'Pinned manifest hash differs' }
+          $m=Get-Content -LiteralPath $manifestFile -Raw | ConvertFrom-Json
+          if ($m.sourceCommit -cne 'cbe2aca540d6097a6b0cebe7747f3b3dad8d439f' -or
+              $m.workflowRunId -cne '44538325396' -or $m.workflowRunAttempt -cne '1' -or
+              $m.channel -cne 'test-only' -or $m.publishable -ne $false -or $m.updaterPublication -ne $false -or
+              $m.installerFile -cne 'CC-Desk-0.28.0-rc.1-test-cbe2aca540d6-x64-setup.exe') { throw 'Pinned manifest fields differ' }
+          $installer=Join-Path $zip $m.installerFile
+          $installerHash=(Get-FileHash -LiteralPath $installer).Hash.ToLowerInvariant()
+          if ($installerHash -cne $m.sha256 -or $installerHash -cne '7d6f765ce7c72b9cbf6b199186c4cd4acf224775299e735430992005e2242e49') { throw 'Pinned installer digest differs' }
+          $prior=Get-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'pr101-smoke/result.json') -Raw | ConvertFrom-Json
+          if ($prior.status -cne 'passed' -or !$prior.normalExit -or $prior.sha256 -ine '6b63e56b7f675a5680ae4115d3fe58aed130f1b5f503c515b154f7079efb4b3f') {
+              throw 'Independent prior smoke identity differs'
           }
-          $temp = (Get-Item -LiteralPath $env:RUNNER_TEMP).FullName.TrimEnd('\') + '\'
-          $image = (Get-Item -LiteralPath $Codex -ErrorAction Stop).FullName
-          if (!$image.StartsWith($temp, [StringComparison]::OrdinalIgnoreCase) -or
-              (Get-FileHash -LiteralPath $image).Hash -ine 'f76f94d08b0793bfa129ae62c09341ee32ae96d57e69968ae6b8d7c71a20d8c4') {
-              throw 'Pinned official Codex image mismatch'
+          $identity=[ordered]@{
+              sourceAnchor=$sha; productSource=$m.sourceCommit; priorRun=44538325396; priorRunAttempt=1;
+              packageArtifact=14537417451; priorSmokeArtifact=14538565669; installerSha256=$installerHash;
+              manifestSha256=$manifestHash; expectedAppSha256=$prior.sha256.ToLowerInvariant();
+              run=[int64]$env:GITHUB_RUN_ID; attempt=[int]$env:GITHUB_RUN_ATTEMPT; workflowCommit=$env:GITHUB_SHA;
+              runnerImage=if ($env:ImageVersion -cmatch '^\d{8}\.\d{1,5}\.\d{1,5}$') { $env:ImageVersion } else { 'unavailable' };
+              testOnly=$true; publishable=$false; updaterPublication=$false; originalInstall1=$false; originalInstall2=$false;
+              relocationAndNegativeRuntimeChecks=$false; installerUnchanged=$false; smoke=$null
           }
-          if ($ReadOnlyExisting) {
-              $codexHome=[IO.Path]::GetFullPath($ReadOnlyExisting.Home)
-              $project=[IO.Path]::GetFullPath($ReadOnlyExisting.Project)
-              $root=Split-Path $codexHome -Parent
-              if (!$root.StartsWith($temp,[StringComparison]::OrdinalIgnoreCase) -or
-                  (Split-Path $root -Leaf) -cnotmatch '^pr101-history-[0-9a-f]{32}$' -or
-                  $codexHome -cne (Join-Path $root 'codex-home') -or $project -cne (Join-Path $root 'project') -or
-                  ($ObserveRename -and $ReadOnlyExisting.SessionId -cnotmatch '^[a-f0-9-]{36}$') -or
-                  $ReadOnlyExisting.ArchivedId -cnotmatch '^[a-f0-9-]{36}$') { throw 'Read-only fixture ownership is not pinned' }
-              foreach($currentPath in @($root,$codexHome,$project)){
-                  $owned=Get-Item -LiteralPath $currentPath
-                  if (!$owned.PSIsContainer -or ($owned.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Untrusted synthetic fixture directory' }
-              }
-              $archivedId=$ReadOnlyExisting.ArchivedId
-          } else {
-          $root = Join-Path $temp ('pr101-history-' + [Guid]::NewGuid().ToString('N'))
-          $codexHome = Join-Path $root 'codex-home'
-          $project = Join-Path $root 'project'
-          $now = [DateTime]::UtcNow
-          $directory = Join-Path $codexHome ('sessions/' + $now.ToString('yyyy/MM/dd'))
-          New-Item -ItemType Directory -Path $project,$directory -Force | Out-Null
-          $id = [Guid]::NewGuid().ToString()
-          $archivedId = [Guid]::NewGuid().ToString()
-          $timestamp = $now.ToString("yyyy-MM-ddTHH:mm:ss.fff'Z'")
-          $stamp = $now.ToString('yyyy-MM-ddTHH-mm-ss')
-          $rollout = Join-Path $directory "rollout-$stamp-$id.jsonl"
-          $meta = [ordered]@{ timestamp=$timestamp; type='session_meta'; payload=[ordered]@{ session_id=$id; id=$id; timestamp=$timestamp; cwd=$project; originator='cc_desk_acceptance'; cli_version='0.169.1'; source='cli' } }
-          function Write-FixtureRollout([string]$File, [string]$SessionId, [string]$Canary) {
-              $meta.payload.id = $SessionId
-              $meta.payload.session_id = $SessionId
-              $message = @{ timestamp=$timestamp; type='event_msg'; payload=@{type='user_message'; message=$Canary; images=@(); local_images=@(); text_elements=@()} }
-              $output = @($meta,$message) | ForEach-Object { ConvertTo-Json -InputObject $_ -Compress -Depth 5 }
-              [IO.File]::WriteAllText($File, ($output -join "`n") + "`n", [Text.UTF8Encoding]::new($false))
-          }
-          $activeCanary='Pr101ActiveCanary'
-          $archivedCanary='Pr101ArchivedCanary'
-          $archiveRoot = Join-Path $codexHome 'archived_sessions'
-          New-Item -ItemType Directory -Path $archiveRoot | Out-Null
-          $existingArchived = Join-Path $archiveRoot "rollout-$stamp-$archivedId.jsonl"
-          Write-FixtureRollout $rollout $id $activeCanary
-          Write-FixtureRollout $existingArchived $archivedId $archivedCanary
-          
-          }
-          $spec=[Diagnostics.ProcessStartInfo]::new($image)
-          $spec.WorkingDirectory=$project
-          $spec.UseShellExecute=$false
-          $spec.CreateNoWindow=$true
-          $spec.RedirectStandardInput=$true
-          $spec.RedirectStandardOutput=$true
-          $spec.RedirectStandardError=$true
-          $spec.ArgumentList.Add('app-server')
-          $spec.ArgumentList.Add('--strict-config')
-          $spec.Environment.Clear()
-          foreach ($key in @('SystemRoot','WINDIR','SystemDrive','ComSpec')) {
-              $value = [Environment]::GetEnvironmentVariable($key)
-              if ($value) { $spec.Environment[$key] = $value }
-          }
-          $spec.Environment['HOME']=$root
-          $spec.Environment['USERPROFILE']=$root
-          $spec.Environment['APPDATA']=$root
-          $spec.Environment['LOCALAPPDATA']=$root
-          $spec.Environment['TEMP']=$root
-          $spec.Environment['TMP']=$root
-          $spec.Environment['CODEX_HOME']=$codexHome
-          
-          $process=[Diagnostics.Process]::Start($spec)
-          if (!$process) { throw 'Could not start pinned app-server' }
-          $stderr=$process.StandardError.BaseStream.CopyToAsync([IO.Stream]::Null)
-          $deadline=[DateTime]::UtcNow.AddSeconds(25)
-          function Send([object]$request) {
-              $process.StandardInput.WriteLine((ConvertTo-Json -InputObject $request -Depth 8 -Compress))
-              $process.StandardInput.Flush()
-          }
-          function Receive([int]$expected) {
-              for ($i=0; $i -lt 48; $i++) {
-                  $remaining=$deadline - [DateTime]::UtcNow
-                  if ($remaining.TotalMilliseconds -le 0) { throw 'Pinned app-server deadline expired' }
-                  $pending=$process.StandardOutput.ReadLineAsync()
-                  if (!$pending.Wait($remaining)) { throw 'Pinned app-server reply timeout' }
-                  $line=$pending.Result
-                  if (!$line -or $line.Length -gt 65536) { throw 'Pinned app-server reply bound failed' }
-                  try { $frame=$line | ConvertFrom-Json -AsHashtable } catch { throw 'Pinned app-server reply format failed' }
-                  if ($frame.Contains('method') -and !$frame.Contains('id')) { continue }
-                  if ($frame.id -ne $expected -or $frame.Contains('error') -or !$frame.Contains('result')) {
-                      throw 'Pinned app-server returned an unexpected reply'
-                  }
-                  return $frame.result
-              }
-              throw 'Pinned app-server frame limit exceeded'
-          }
-          try {
-              Send @{ id=1; method='initialize'; params=@{ clientInfo=@{name='cc_desk'; version='0.28.0'}; capabilities=@{explicitGatewayOauth=$true; experimentalApi=$false} } }
-              $initial = Receive 1
-              if (!$initial.codexHome -or [IO.Path]::GetFullPath($initial.codexHome).TrimEnd('\') -ine $codexHome) {
-                  throw 'Pinned app-server did not bind to fixture CODEX_HOME'
-              }
-              Send @{ method='initialized' }
-              if ($ReadOnlyExisting -and $ObserveRename) {
-                  Send @{ id=2; method='thread/read'; params=@{ threadId=$ReadOnlyExisting.SessionId; includeTurns=$false } }
-                  $renamed=Receive 2
-                  Send @{ id=3; method='thread/list'; params=@{archived=$false;limit=100} }
-                  $open=Receive 3
-                  Send @{ id=4; method='thread/list'; params=@{archived=$true;limit=100} }
-                  $closed=Receive 4
-                  $activeId=@($open.data | Where-Object { $_.id -ceq $ReadOnlyExisting.SessionId -and $_.cwd -ceq $project })
-                  $archiveId=@($closed.data | Where-Object { $_.id -ceq $archivedId -and $_.cwd -ceq $project })
-                  $listsExact=$activeId.Count -eq 1 -and $archiveId.Count -eq 1 -and
-                      @($open.data | Where-Object id -CEQ $archivedId).Count -eq 0 -and
-                      @($closed.data | Where-Object id -CEQ $ReadOnlyExisting.SessionId).Count -eq 0
-                  $process.StandardInput.Close()
-                  if (!$process.WaitForExit(5000) -or $process.ExitCode -ne 0) { throw 'Pinned read-only post-rename app-server did not stop normally' }
-                  return [pscustomobject]@{
-                      sameId=$renamed.thread.id -ceq $ReadOnlyExisting.SessionId
-                      sameCwd=$renamed.thread.cwd -ceq $project
-                      expectedName=$renamed.thread.name -ceq 'Pr101RenamedCanary'
-                      listsExact=$listsExact
-                  }
-              }
-              if ($ReadOnlyExisting) {
-                  Send @{ id=2; method='thread/list'; params=@{ archived=$false; limit=100 } }
-                  $active=Receive 2
-                  Send @{ id=3; method='thread/list'; params=@{ archived=$true; limit=100 } }
-                  $archived=Receive 3
-                  $result=@($active.data | Where-Object { $_.id -ceq $archivedId -and $_.cwd -ceq $project }).Count
-                  $retained=@($archived.data | Where-Object { $_.id -ceq $archivedId -and $_.cwd -ceq $project }).Count
-                  $process.StandardInput.Close()
-                  if (!$process.WaitForExit(5000) -or $process.ExitCode -ne 0) { throw 'Pinned read-only post-restore app-server did not stop normally' }
-                  return [pscustomobject]@{ activeCount=$result; archivedCount=$retained }
-              }
-              Send @{ id=2; method='thread/read'; params=@{ threadId=$id; includeTurns=$false } }
-              $observed = Receive 2
-              if ($observed.thread.id -cne $id) { throw 'Pinned app-server did not recognize fixture rollout' }
-              Send @{ id=3; method='thread/read'; params=@{ threadId=$archivedId; includeTurns=$false } }
-              $archived = Receive 3
-              if ($archived.thread.id -cne $archivedId) { throw 'Pinned app-server did not recognize the separate pre-archived rollout' }
-              $process.StandardInput.Close()
-              if (!$process.WaitForExit(5000) -or $process.ExitCode -ne 0) { throw 'Pinned app-server did not stop normally' }
-              [pscustomobject]@{ Home=$codexHome; Project=$project; SessionId=$id; Rollout=$rollout; ActiveCanary=$activeCanary; ArchivedId=$archivedId; ArchiveRollout=$existingArchived; ArchivedCanary=$archivedCanary; AppServerReadVerified=$true }
-          } finally {
-              if (!$process.HasExited) { $process.Kill(); $null=$process.WaitForExit(5000) }
-              $process.Dispose()
-          }
-          '@ | Set-Content -LiteralPath (Join-Path $scriptRoot 'pr101-codex-history-fixture.ps1') -Encoding utf8
-          @'
-          # Sourced only by installed hosted acceptance with a verified, synthetic fixture.
-          function Invoke-FixtureTarget($Root, [string]$Name, $Type, [switch]$WorkspaceHeader) {
-              $specific = @($Root.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition) | Where-Object {
-                  if ($_.Current.Name -cne $Name -or ($Type -and $_.Current.ControlType -ne $Type)) { return $false }
-                  if (!$WorkspaceHeader) { return $true }
-                  $parent = [System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($_)
-                  if (!$parent) { return $false }
-                  return @($parent.FindAll([System.Windows.Automation.TreeScope]::Children,[System.Windows.Automation.Condition]::TrueCondition) |
-                      Where-Object { $_.Current.Name -ceq 'Collapse sessions panel' }).Count -eq 1
-              })
-              if ($specific.Count -gt 1) { throw 'Ambiguous synthetic fixture control' }
-              if ($specific.Count -eq 0) { return $false }
-              $ctl=$specific[0]
-              if ($ctl.Current.IsOffscreen) {
-                  $scroll=$null
-                  if (!$ctl.TryGetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern,[ref]$scroll)) { return $false }
-                  ([System.Windows.Automation.ScrollItemPattern]$scroll).ScrollIntoView()
-              }
-              $pattern=$null
-              if ($ctl.Current.IsOffscreen -or !$ctl.Current.IsEnabled -or !$ctl.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern,[ref]$pattern)) { return $false }
-              ([System.Windows.Automation.InvokePattern]$pattern).Invoke()
-              return $true
-          }
-          
-          function Set-FixtureEdit([string]$Name,[string]$Value) {
-              $editType=[System.Windows.Automation.ControlType]::Edit
-              Reveal-FixtureControl @($Name) $editType
-              $ctl=Wait-Observed { Find-Control @($Name) $editType } "synthetic configuration: $Name"
-              $pattern=$null
-              if (!$ctl.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern,[ref]$pattern)) { throw "Synthetic edit not writable: $Name" }
-              $pattern=[System.Windows.Automation.ValuePattern]$pattern
-              $pattern.SetValue($Value)
-              $null=Wait-Observed {
-                  $observed=Find-Control @($Name) $editType
-                  $read=$null
-                  if ($observed -and $observed.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern,[ref]$read) -and
-                      ([System.Windows.Automation.ValuePattern]$read).Current.Value -ceq $Value) { return $observed }
-              } "exact synthetic edit readback: $Name"
-          }
-          
-          function Configure-CodexFixtureProfile {
-              $result.codexHistory.stage='create-official-codex-profile'
-              $result.codexHistory.stage='settings-open'
-              Invoke-Button @('Settings')
-              $result.codexHistory.stage='settings-launch-configurations'
-              Invoke-Button @('Launch configurations')
-              $name='Pr101SyntheticCodexProfile'
-              $button=[System.Windows.Automation.ControlType]::Button
-              $result.codexHistory.stage='codex-config-create-control'
-              $target=Wait-Observed {
-                  $tools=@($window.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition) | Where-Object {
-                      $_.Current.Name -ceq 'New configuration' -and $_.Current.ControlType -eq $button -and
-                      $null -ne [System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($_) -and
-                      @([System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($_).FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition) | Where-Object {
-                          $_.Current.Name -ceq 'Codex CLI' -and $_.Current.ControlType -ne $button
-                      }).Count -eq 1
-                  })
-                  if ($tools.Count -gt 1) { throw 'Ambiguous Codex profile group' }
-                  if ($tools.Count -eq 1) { $tools[0] }
-              } 'new configuration in exact Codex CLI group'
-              if ($target.Current.IsOffscreen) {
-                  $scroll=$null
-                  if (!$target.TryGetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern,[ref]$scroll)) { throw 'Codex configuration group cannot reveal its action' }
-                  ([System.Windows.Automation.ScrollItemPattern]$scroll).ScrollIntoView()
-              }
-              $click=$null
-              if (!$target.Current.IsEnabled -or !$target.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern,[ref]$click)) { throw 'Codex configuration action unavailable' }
-              ([System.Windows.Automation.InvokePattern]$click).Invoke()
-              $result.codexHistory.stage='codex-config-name'
-              Set-FixtureEdit 'Configuration name' $name
-              $result.codexHistory.stage='codex-config-options'
-              $details=Wait-Observed {
-                  $label="More options$([char]0x2026)"
-                  $same = @($window.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition) |
-                      Where-Object { $_.Current.Name -ceq $label })
-                  if ($same.Count -gt 8) { throw 'Too many identically labelled profile controls' }
-                  $result.codexHistory.optionsControls=@($same | ForEach-Object { [ordered]@{
-                      type=$_.Current.ControlType.ProgrammaticName
-                      patterns=@($_.GetSupportedPatterns() | ForEach-Object ProgrammaticName)
-                  } })
-                  $action=@($same | Where-Object {
-                      $pattern=$null
-                      $_.Current.IsEnabled -and !$_.Current.IsOffscreen -and
-                          $_.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern,[ref]$pattern)
-                  })
-                  if ($action.Count -gt 1) { throw 'Ambiguous actionable disclosure in Codex configuration' }
-                  if ($action.Count -eq 1) { return $action[0] }
-              } 'unique actionable Codex configuration options'
-              $expand=$null
-              if (!$details.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern,[ref]$expand)) { throw 'Missing profile options disclosure' }
-              ([System.Windows.Automation.ExpandCollapsePattern]$expand).Expand()
-              $result.codexHistory.stage='codex-config-program-mode'
-              $combo=Wait-Observed { Find-Control @('CLI program override') ([System.Windows.Automation.ControlType]::ComboBox) } 'Codex executable override'
-              $expand=$null
-              if (!$combo.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern,[ref]$expand)) { throw 'Missing executable override disclosure' }
-              ([System.Windows.Automation.ExpandCollapsePattern]$expand).Expand()
-              $choice=Wait-Observed { Find-Control @('Set') ([System.Windows.Automation.ControlType]::ListItem) } 'exact program override setting'
-              $selection=$null
-              if (!$choice.TryGetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern,[ref]$selection)) { throw 'Missing executable override selection' }
-              ([System.Windows.Automation.SelectionItemPattern]$selection).Select()
-              $result.codexHistory.stage='codex-config-program-readback'
-              Set-FixtureEdit 'Program path' $FixtureCodex
-              $result.codexHistory.stage='codex-config-save'
-              Reveal-FixtureControl @('Save') $button
-              Invoke-Button @('Save')
-              $null=Wait-Observed {
-                  if (Find-Control @('Configuration name') ([System.Windows.Automation.ControlType]::Edit)) { return $null }
-                  Find-Control @($name) ([System.Windows.Automation.ControlType]::Text)
-              } 'closed editor and confirmed saved official Codex profile in GUI'
-              $result.codexHistory.stage='codex-config-saved'
-              $result.codexHistory.profileSaved=$true
-              Invoke-Button @('Workspace')
-          }
-          function Test-CodexHistoryGui {
-              $r = $result.codexHistory
-              $fixtureButton=[System.Windows.Automation.ControlType]::Button
-              Invoke-Button @('Workspace')
-              $r.stage='project-select'
-              $null=Wait-Observed { Invoke-FixtureTarget $window 'Add Project' $fixtureButton -WorkspaceHeader } 'synthetic project Add Project'
-              $main=$window
-              try {
-                  $window=Wait-Observed {
-                      $condition=[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$app.Id)
-                      $dialogs=@($main.FindAll([System.Windows.Automation.TreeScope]::Descendants,$condition) | Where-Object {
-                          !$_.Current.IsOffscreen -and $_.Current.ControlType -eq [System.Windows.Automation.ControlType]::Window -and
-                          $_.Current.NativeWindowHandle -ne $main.Current.NativeWindowHandle -and $_.Current.Name -ceq 'Select Project Directory'
-                      })
-                      if ($dialogs.Count -gt 1) { throw 'Ambiguous synthetic project picker' }
-                      if ($dialogs.Count -eq 1) { return $dialogs[0] }
-                  } 'synthetic owned project picker'
-                  $folder=Wait-Observed { Find-Control @('Folder:') ([System.Windows.Automation.ControlType]::Edit) } 'synthetic project folder field'
-                  $set=$null
-                  if (!$folder.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern,[ref]$set)) { throw 'Synthetic folder field is read-only' }
-                  ([System.Windows.Automation.ValuePattern]$set).SetValue($fixture.Project)
-                  Invoke-Button @('Select Folder', 'Select folder')
-              } finally { $window=$main }
-              Configure-CodexFixtureProfile
-              $r.stage='refresh-bound-fixture-history'
-              $null=Wait-Observed { Invoke-FixtureTarget $window 'Refresh sessions' $fixtureButton } 'refresh formally bound synthetic history'
-              $r.stage='verify-profile-project-cwd'
-              $ownedSettings=Get-Item -LiteralPath $homeRoot
-              if (!$ownedSettings.PSIsContainer -or ($ownedSettings.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Unsafe synthetic workspace settings root' }
-              $statePath=Join-Path $homeRoot 'cli-workspace.v1.json'
-              $stateFile=Get-Item -LiteralPath $statePath
-              if ($stateFile.Length -gt 1048576 -or ($stateFile.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Untrusted synthetic workspace receipt' }
-              $manifest=Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json -AsHashtable
-              $matchingProfile=@($manifest.profiles.Values | Where-Object {
-                  $_.name -ceq 'Pr101SyntheticCodexProfile' -and $_.cli -ceq 'codex' -and $_.launcher.kind -ceq 'native' -and
-                  $_.programPath.mode -ceq 'set' -and $_.programPath.value -ceq $FixtureCodex -and
-                  ($_.defaultArgs.mode -ceq 'inherit' -or ($_.defaultArgs.mode -ceq 'set' -and @($_.defaultArgs.value).Count -eq 0)) -and
-                  @($_.env.Keys | Where-Object { $_ -ieq 'CODEX_HOME' }).Count -eq 0
-              })
-              $projects=@($manifest.registeredProjects.Values)
-              $meta=Get-Content -LiteralPath $fixture.Rollout -TotalCount 1 | ConvertFrom-Json -AsHashtable
-              $r.selectedProjectExact=@($projects | Where-Object selectedPath -CEQ $fixture.Project).Count -eq 1
-              $r.recordedCanonicalExact=@($projects | Where-Object canonicalPath -CEQ $fixture.Project).Count -eq 1
-              $r.metaCwdExact=$meta.payload.cwd -ceq $fixture.Project
-              $r.profilePinMatches=$matchingProfile.Count -eq 1
-              if (!$r.selectedProjectExact -or !$r.metaCwdExact -or !$r.profilePinMatches) { throw 'Stored synthetic project or bound profile does not match exact fixture inputs' }
-              Test-ExactActiveNavigation
-          }
-          
-          function Find-Scoped($Root, [string]$Name, $Type) {
-              $items=@($Root.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition) |
-                  Where-Object { $_.Current.Name -ceq $Name -and $_.Current.ControlType -eq $Type -and !$_.Current.IsOffscreen })
-              if ($items.Count -gt 1) { throw 'Ambiguous visible scoped control' }
-              if ($items.Count -eq 1) { return $items[0] }
-          }
-          function Invoke-ExactVisible($Control) {
-              $invoke=$null
-              if (!$Control -or $Control.Current.IsOffscreen -or !$Control.Current.IsEnabled -or
-                  !$Control.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern,[ref]$invoke)) { throw 'Unique visible control is not invokable' }
-              ([System.Windows.Automation.InvokePattern]$invoke).Invoke()
-          }
-          function Get-ActiveFixtureRow([string]$Title) {
-              $tree=Find-Control @('Sessions') ([System.Windows.Automation.ControlType]::Tree)
-              if (!$tree) { return }
-              $projectNode=Find-Scoped $tree (Split-Path -Leaf $fixture.Project) ([System.Windows.Automation.ControlType]::TreeItem)
-              if (!$projectNode) { return }
-              $result.codexHistory.projectTreeObserved=$true
-              $row=Find-Scoped $projectNode $Title ([System.Windows.Automation.ControlType]::TreeItem)
-              if ($row -and $row.Current.IsEnabled -and $row.Current.IsKeyboardFocusable) {
-                  $screenName=Find-Control @($Title) ([System.Windows.Automation.ControlType]::TreeItem)
-                  if (!$screenName -or ![System.Windows.Automation.AutomationElement]::Compare($row,$screenName)) { throw 'Title is not globally unique in the owned UI' }
-                  return $row
-              }
-          }
-          function Open-ExactActiveRowMenu([string]$Title) {
-              $row=Wait-Observed { Get-ActiveFixtureRow $Title } 'unique visible non-archived fixture row and exact name'
-              if (Find-Control @('Session actions') ([System.Windows.Automation.ControlType]::Menu)) { throw 'A session menu is already open' }
-              $row.SetFocus() # Reveals the scoped overflow through the real focus-within style. Does not open a CLI session.
-              $more=Wait-Observed { Find-Scoped $row 'Session actions' ([System.Windows.Automation.ControlType]::Button) } 'exact active row overflow action'
-              Invoke-ExactVisible $more
-              Wait-Observed { Find-Control @('Session actions') ([System.Windows.Automation.ControlType]::Menu) } 'exact visible owned row menu'
-          }
-          function Verify-ExactClipboardId($Menu) {
-              $copy=Find-Scoped $Menu 'Copy session ID' ([System.Windows.Automation.ControlType]::MenuItem)
-              Set-Clipboard -Value 'SyntheticClipboardGuard'
-              Invoke-ExactVisible $copy
-              $null=Wait-Observed {
-                  $actual=Get-Clipboard -Raw
-                  $actual -and $actual.Length -le 128 -and $actual.Trim() -ceq $fixture.SessionId
-              } 'same native UUID from the exact visible row'
-              $null=Wait-Observed { -not (Find-Control @('Session actions') ([System.Windows.Automation.ControlType]::Menu)) } 'row menu closed after copy'
-          }
-          function Test-ExactActiveNavigation {
-              $r=$result.codexHistory
-              $r.stage='readonly-native-fixture-preflight'
-              $baseline=& (Join-Path $PSScriptRoot 'pr101-codex-history-fixture.ps1') -Codex $FixtureCodex -ReadOnlyExisting $fixture -ObserveRename
-              if (!$baseline.sameId -or !$baseline.sameCwd -or $baseline.expectedName -or !$baseline.listsExact) { throw 'Independent native fixture adoption or unmodified name not established' }
-              $r.nativePreflight=$true
-              $r.stage='locate-exact-sessions-tree'
-              $tree=Wait-Observed { Find-Control @('Sessions') ([System.Windows.Automation.ControlType]::Tree) } 'unique visible workspace Sessions tree'
-              $r.sessionsTreeObserved=$true
-              $r.stage='identify-unique-disposable-project'
-              $projectName=Split-Path -Leaf $fixture.Project
-              $project=Wait-Observed { Find-Scoped $tree $projectName ([System.Windows.Automation.ControlType]::TreeItem) } 'exact project name inside workspace Sessions tree'
-              $r.projectTreeObserved=$true
-              $r.stage='expand-exact-disposable-project'
-              $expand=Find-Scoped $project 'Expand' ([System.Windows.Automation.ControlType]::Button)
-              $collapse=Find-Scoped $project 'Collapse' ([System.Windows.Automation.ControlType]::Button)
-              if ($expand -and $collapse) { throw 'Ambiguous project expansion state' }
-              if ($expand) {
-                  Invoke-ExactVisible $expand
-                  $r.expansionInvoked=$true
-              } elseif (!$collapse) {
-                  throw 'Unique project has neither exact Expand nor Collapse control'
-              }
-              $null=Wait-Observed {
-                  $sameProject=Find-Scoped $tree $projectName ([System.Windows.Automation.ControlType]::TreeItem)
-                  if ($sameProject) { Find-Scoped $sameProject 'Collapse' ([System.Windows.Automation.ControlType]::Button) }
-              } 'expanded state of exact disposable project'
-              $r.projectExpanded=$true
-              $r.stage='identify-visible-active-fixture-row'
-              $null=Wait-Observed { Get-ActiveFixtureRow $fixture.ActiveCanary } 'one visible exact non-archived fixture row under expanded project'
-              $r.activeRowObserved=$true
-              $r.stage='verify-row-native-uuid'
-              $menu=Open-ExactActiveRowMenu $fixture.ActiveCanary
-              Verify-ExactClipboardId $menu
-              $r.activeRowUuidMatched=$true
-              $r.stage='active-navigation-proof-complete'
-          }
-          '@ | Set-Content -LiteralPath (Join-Path $scriptRoot 'pr101-codex-history-gui.ps1') -Encoding utf8
-          @'
+          $diagnostic=@'
           # Ordinary installed product, disposable hosted Windows only. Never a fake IPC page.
-          param([Parameter(Mandatory=$true)][string]$Exe, [Parameter(Mandatory=$true)][string]$FixtureCodex)
+          param([Parameter(Mandatory=$true)][string]$Exe)
           $ErrorActionPreference = 'Stop'
           Set-StrictMode -Version Latest
-          $out = Join-Path (Get-Location) 'installed-navigation-evidence'
+          $out = Join-Path (Get-Location) 'safe-webview-probe'
           New-Item -ItemType Directory -Force -Path $out | Out-Null
-          $result = [ordered]@{ status = 'blocked'; normalExit = $false; evidence = 'installed non-archived GUI row and matching independent native UUID; no mutations to any session'; error = $null }
+          $result = [ordered]@{ status = 'blocked'; normalExit = $false; stage = 'preflight'; sample = $null; cleanupFailed = $false }
           $app = $null
           $window = $null
           $children = @{}
@@ -536,41 +118,84 @@ jobs:
           function Invoke-Button([string[]]$Names) {
               $control = Wait-Observed { Find-Control $Names ([System.Windows.Automation.ControlType]::Button) } ($Names -join '/')
               $pattern = $null
-              if (!$control.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) { throw ("BLOCKED_UI_INVOKE: $($Names -join '/')") }
+              if (!$control.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) { throw 'BLOCKED_UI_INVOKE' }
               ([System.Windows.Automation.InvokePattern]$pattern).Invoke()
           }
-          function Reveal-FixtureControl([string[]]$Names, $Type) {
-              $seen = @{ reported=$false; revealed=$false }
-              $null = Wait-Observed {
-                  $found = @($window.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition) | Where-Object {
-                      $_.Current.Name -cin $Names -and (!$Type -or $_.Current.ControlType -eq $Type)
-                  })
-                  if ($found.Count -gt 1) { throw "Ambiguous fixture control: $($Names -join '/')" }
-                  if ($found.Count -eq 0) { return $null }
-                  $target = $found[0]
-                  if (!$seen.reported) {
-                      $result.codexHistory.controls += [ordered]@{
-                          expectedLabel=($Names -join '/')
-                          enabled=$target.Current.IsEnabled
-                          offscreen=$target.Current.IsOffscreen
-                          patterns=@($target.GetSupportedPatterns() | ForEach-Object ProgrammaticName)
+          function Reveal-RemoteSection {
+              $matches = @($window.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition) | Where-Object {
+                  $_.Current.Name -cin @('Disconnect', '断开连接') -and $_.Current.ControlType -eq [System.Windows.Automation.ControlType]::Button
+              })
+              if ($matches.Count -ne 1) { return $false }
+              $target = $matches[0]
+              if (!$target.Current.IsOffscreen) { return $true }
+              $pattern = $null
+              if ($target.TryGetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern, [ref]$pattern)) {
+                  ([System.Windows.Automation.ScrollItemPattern]$pattern).ScrollIntoView()
+                  return $true
+              }
+              $ancestor = $target
+              for ($depth=0; $depth -lt 16; $depth++) {
+                  $ancestor = [System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($ancestor)
+                  if (!$ancestor -or [System.Windows.Automation.AutomationElement]::Compare($ancestor, $window)) { break }
+                  $pattern = $null
+                  if ($ancestor.TryGetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern, [ref]$pattern)) {
+                      $scroll = [System.Windows.Automation.ScrollPattern]$pattern
+                      if ($scroll.Current.VerticallyScrollable) {
+                          $scroll.SetScrollPercent([System.Windows.Automation.ScrollPattern]::NoScroll, 100)
+                          return $true
                       }
-                      $seen.reported = $true
                   }
-                  if (!$target.Current.IsOffscreen) { return $target }
-                  if (!$seen.revealed) {
-                      $scroll = $null
-                      if (!$target.TryGetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern, [ref]$scroll)) {
-                          throw "BLOCKED_UI_SCROLL: $($Names -join '/')"
+              }
+              throw 'BLOCKED_UI_OBSERVATION: native remote section scrolling unavailable'
+          }
+          function Measure-SafeStartup {
+              $snapshot=[ordered]@{rootAlive=$false; shellObserved=$false; uiState='not-observed'; webviewObservation='not-observed'; webviewCount=0; webviewVersions=@(); titleBarCount=0; paneCount=0; workspaceCount=0; settingsCount=0; generalCount=0; terminalCount=0; lockedCount=0}
+              if (!$app -or $app.HasExited) { return $snapshot }
+              $snapshot.rootAlive=$true
+              try {
+                  # Original owned-process identity capture: handle, parent lifetime, session, image, creation time.
+                  Observe-Children
+                  foreach ($child in $children.Values) {
+                      if ($child.HasExited -or $child.ProcessName -ine 'msedgewebview2') { continue }
+                      $module=$child.MainModule
+                      if ([IO.Path]::GetFileName($module.FileName) -ine 'msedgewebview2.exe') { continue }
+                      $version=$module.FileVersionInfo
+                      if ($child.HasExited -or $child.MainModule.FileName -ine $module.FileName) { throw 'Observed engine identity became unavailable' }
+                      $snapshot.webviewCount++
+                      $actual='{0}.{1}.{2}.{3}' -f $version.FileMajorPart,$version.FileMinorPart,$version.FileBuildPart,$version.FilePrivatePart
+                      if ($actual -ne '0.0.0.0' -and $actual -cmatch '^\d{1,5}(\.\d{1,5}){3}$' -and $actual -cnotin $snapshot.webviewVersions) {
+                          $snapshot.webviewVersions+= $actual
                       }
-                      ([System.Windows.Automation.ScrollItemPattern]$scroll).ScrollIntoView()
-                      $seen.revealed = $true
                   }
-                  return $null
-              } "fixture fixed control reveal: $($Names -join '/')"
+                  $snapshot.webviewObservation='complete'
+              } catch { $snapshot.webviewObservation='partial-or-unavailable' }
+              if (!$window) { return $snapshot }
+              try {
+                  if ($window.Current.ProcessId -ne $app.Id -or $window.Current.IsOffscreen -or $app.HasExited) { return $snapshot }
+                  $snapshot.shellObserved=$true
+                  $elements=$window.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)
+                  if ($elements.Count -gt 10000) { $snapshot.uiState='bounded-out'; return $snapshot }
+                  foreach ($e in $elements) {
+                      if ($e.Current.IsOffscreen) { continue }
+                      $type=$e.Current.ControlType
+                      $name=$e.Current.Name
+                      if ($type -eq [System.Windows.Automation.ControlType]::TitleBar) { $snapshot.titleBarCount++ }
+                      if ($type -eq [System.Windows.Automation.ControlType]::Pane) { $snapshot.paneCount++ }
+                      if ($type -eq [System.Windows.Automation.ControlType]::Button) {
+                          if ($name -cin @('Workspace','工作区')) { $snapshot.workspaceCount++ }
+                          if ($name -cin @('Settings','设置')) { $snapshot.settingsCount++ }
+                          if ($name -cin @('General','通用')) { $snapshot.generalCount++ }
+                          if ($name -cin @('Terminal','终端')) { $snapshot.terminalCount++ }
+                      }
+                      if ($type -eq [System.Windows.Automation.ControlType]::Text -and
+                          $name -cin @('Locked — no native connection is installed.','已锁定：尚未安装原生连接。')) { $snapshot.lockedCount++ }
+                  }
+                  $snapshot.uiState='counted'
+              } catch { $snapshot.uiState='partial-or-unavailable' }
+              return $snapshot
           }
           function Observe-Children {
-              $rows = @(Get-CimInstance Win32_Process)
+              $rows = @(Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,CreationDate,ExecutablePath,SessionId)
               $owned = @{ ([int]$app.Id) = $app }
               do {
                   $next = @($rows | Where-Object { $owned.ContainsKey([int]$_.ParentProcessId) -and !$owned.ContainsKey([int]$_.ProcessId) })
@@ -613,22 +238,13 @@ jobs:
               $image = (Resolve-Path -LiteralPath $Exe).Path
               $temp = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\') + '\'
               if (!$image.StartsWith($temp, [StringComparison]::OrdinalIgnoreCase)) { throw 'Installed image must be inside RUNNER_TEMP' }
-              $result.image = $image
               $result.sha256 = (Get-FileHash -LiteralPath $image -Algorithm SHA256).Hash
-              if ($FixtureCodex) {
-                  $result.codexHistory=[ordered]@{stage='fixture-read'; cli='0.169.1'; preflight=$false; rename='not-attempted'; controls=@(); archivedMenu='not-tested'; delete='held'; optionsControls=@(); profileSaved=$false; selectedProjectExact=$false; recordedCanonicalExact=$false; metaCwdExact=$false; profilePinMatches=$false; sessionsTreeObserved=$false; projectTreeObserved=$false; expansionInvoked=$false; projectExpanded=$false; nativePreflight=$false; activeRowObserved=$false; activeRowUuidMatched=$false}
-                  $fixture=& (Join-Path $PSScriptRoot 'pr101-codex-history-fixture.ps1') -Codex $FixtureCodex
-                  if (!$fixture.AppServerReadVerified) { throw 'Unverified synthetic history inputs' }
-                  $result.codexHistory.preflight=$true
-                  $env:CODEX_HOME=$fixture.Home
-                  $env:PATH=(Split-Path $FixtureCodex -Parent) + ';' + $env:PATH
-                  . (Join-Path $PSScriptRoot 'pr101-codex-history-gui.ps1')
-              }
-              Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Drawing
+              if ($result.sha256 -ine '6b63e56b7f675a5680ae4115d3fe58aed130f1b5f503c515b154f7079efb4b3f') { throw 'Installed image differs from pinned comparison image' }
+              Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+              $result.stage = 'native-shell'
               # Visible UI is the explicit purpose of this hosted-only acceptance step.
               $app = Start-Process -FilePath $image -WorkingDirectory (Split-Path $image) -PassThru
               $null = $app.Handle
-              $result.pid = $app.Id
               if ($app.MainModule.FileName -ine $image) { throw 'Started image identity mismatch' }
               $window = Wait-Observed {
                   $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty, $app.Id)
@@ -637,106 +253,96 @@ jobs:
                   if ($visible.Count -gt 1) { throw 'Ambiguous original top-level window' }
                   if ($visible.Count -eq 1) { return $visible[0] }
               } 'ordinary main window'
-              if ($FixtureCodex) {
-                  $result.codexHistory.stage='initial-settings-observation'
-                  $settingsControl=Wait-Observed {
-                      $same=@($window.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition) | Where-Object {
-                          $_.Current.Name -ceq 'Settings' -and $_.Current.ControlType -eq [System.Windows.Automation.ControlType]::Button
-                      })
-                      if ($same.Count -gt 1) { throw 'Ambiguous initial Settings controls' }
-                      if (!$same.Count) { return $null }
-                      $observed=$same[0]
-                      $result.initialSettings=[ordered]@{
-                          enabled=$observed.Current.IsEnabled
-                          offscreen=$observed.Current.IsOffscreen
-                          patterns=@($observed.GetSupportedPatterns() | ForEach-Object ProgrammaticName)
-                      }
-                      if ($observed.Current.IsOffscreen) {
-                          $scroll=$null
-                          if (!$observed.TryGetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern,[ref]$scroll)) { throw 'Initial Settings is offscreen without an observed scroll pattern' }
-                          ([System.Windows.Automation.ScrollItemPattern]$scroll).ScrollIntoView()
-                          return $null
-                      }
-                      if ($observed.Current.IsEnabled) { return $observed }
-                  } 'initial fixed Settings control'
-                  $click=$null
-                  if (!$settingsControl.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern,[ref]$click)) { throw 'Initial Settings lacks an observed InvokePattern' }
-                  ([System.Windows.Automation.InvokePattern]$click).Invoke()
-              }
-              Invoke-Button @('General')
-              if ($FixtureCodex) {
-                  # Fresh product defaults hide Codex. Enable it through the observed General control.
-                  $codexOffLabel = "Codex CLI disabled $([char]0x00B7) click to enable"
-                  $codexOnLabel = "Codex CLI enabled $([char]0x00B7) click to disable"
-                  $codexToggle = Wait-Observed { Find-Control @($codexOffLabel) ([System.Windows.Automation.ControlType]::Button) } 'Codex support default off'
-                  $pattern = $null
-                  if (!$codexToggle.TryGetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern, [ref]$pattern)) { throw 'Codex support toggle unavailable' }
-                  $pattern = [System.Windows.Automation.TogglePattern]$pattern
-                  if ($pattern.Current.ToggleState -ne [System.Windows.Automation.ToggleState]::Off) { throw 'Codex support was not default off' }
-                  $pattern.Toggle()
-                  $null = Wait-Observed {
-                      $control = Find-Control @($codexOnLabel) ([System.Windows.Automation.ControlType]::Button)
-                      $state = $null
-                      if ($control -and $control.TryGetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern, [ref]$state) -and ([System.Windows.Automation.TogglePattern]$state).Current.ToggleState -eq [System.Windows.Automation.ToggleState]::On) { return $control }
-                      return $null
-                  } 'Codex support enabled through GUI'
-              }
-              $testFailure=$null
-              try { Test-CodexHistoryGui } catch { $testFailure=$_.Exception.Message }
-              Observe-Children
-              $result.children = @($children.Values | ForEach-Object { [ordered]@{ pid=$_.Id; name=$_.ProcessName } })
+              $result.stage = 'settings'
+              Invoke-Button @('Settings', '设置')
+              $result.stage = 'general-defaults'
+              Invoke-Button @('General', '通用')
+              $agy = Wait-Observed { Find-Control @('Antigravity CLI disabled · click to enable', 'Antigravity CLI 已停用 · 点击启用') ([System.Windows.Automation.ControlType]::Button) } 'AGY disabled'
+              $toggle = $null
+              if (!$agy.TryGetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern, [ref]$toggle) -or ([System.Windows.Automation.TogglePattern]$toggle).Current.ToggleState -ne [System.Windows.Automation.ToggleState]::Off) { throw 'BLOCKED_UI_OBSERVATION: AGY pressed state unavailable or enabled' }
+              $result.stage = 'terminal-defaults'
+              Invoke-Button @('Terminal', '终端')
+              $null = Wait-Observed { Reveal-RemoteSection } 'remote section native scroll'
+              $null = Wait-Observed { Find-Control @('Locked — no native connection is installed.', '已锁定：尚未安装原生连接。') ([System.Windows.Automation.ControlType]::Text) } 'remote locked'
+              $disconnect = Wait-Observed { Find-Control @('Disconnect', '断开连接') ([System.Windows.Automation.ControlType]::Button) } 'remote disconnect'
+              if ($disconnect.Current.IsEnabled) { throw 'Remote disconnect unexpectedly enabled' }
+              if (Find-Control @('Literal UTF-8 text (maximum 8192 bytes)', '原样 UTF-8 文本（最多 8192 字节）') $null) { throw 'Remote input unexpectedly visible' }
+              $result.stage = 'process-identity'
+              $result.sample=Measure-SafeStartup
+              if ($result.sample.webviewObservation -cne 'complete') { throw 'Owned WebView observation incomplete' }
               if (@($children.Values | Where-Object ProcessName -eq 'msedgewebview2').Count -eq 0) { throw 'No actual WebView2 child observed' }
+              $result.stage = 'normal-exit'
               $close = $null
               if (!$window.TryGetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern, [ref]$close)) { throw 'BLOCKED_UI_CLOSE' }
               ([System.Windows.Automation.WindowPattern]$close).Close()
               if (!$app.WaitForExit(30000) -or $app.ExitCode -ne 0) { throw 'Ordinary App did not close normally' }
               foreach ($child in $children.Values) { if (!$child.WaitForExit(10000)) { throw 'Observed WebView child did not exit' } }
               $result.normalExit = $true
-              if ($testFailure) { $result.status='partial'; throw $testFailure }
-              if (!$result.codexHistory.activeRowObserved -or !$result.codexHistory.activeRowUuidMatched) { throw 'Scoped navigation evidence was not completed' }
+              $result.stage = 'complete'
               $result.status = 'passed'
           } catch {
-              if ($app -and $result.status -cne 'partial') { $result.status = 'failed' }
-              $result.error = $_.Exception.Message
-              throw
+              if ($app) { $result.status = 'failed' }
+              if ($null -eq $result.sample) { $result.sample=Measure-SafeStartup }
+              throw 'Ordinary installed WebView acceptance blocked; see safe receipt.'
           } finally {
               # Failure cleanup is never retirement evidence or a passed UI acceptance.
               try {
                   if ($app -and !$app.HasExited) { $app.Kill(); $null = $app.WaitForExit(10000) }
                   foreach ($child in $children.Values) { if (!$child.HasExited) { $child.Kill(); $null = $child.WaitForExit(10000) }; $child.Dispose() }
               } catch {
-                  $result.cleanupError = $_.Exception.Message
+                  $result.cleanupFailed = $true
                   $result.status = 'failed'
-                  throw
+                  throw 'Owned startup cleanup failed; see safe receipt.'
               } finally {
-                  $result | ConvertTo-Json -Depth 7 | Set-Content -Encoding utf8 (Join-Path $out 'result.json')
+                  $result | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 (Join-Path $out 'result.json')
                   if ($app) { $app.Dispose() }
               }
           }
-          '@ | Set-Content -LiteralPath (Join-Path $scriptRoot 'test-installed-navigation.ps1') -Encoding utf8
-          foreach ($scriptName in @('pr101-codex-history-fixture.ps1','pr101-codex-history-gui.ps1','test-installed-navigation.ps1')) {
-            $tokens=$null
-            $parseErrors=$null
-            $null = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $scriptRoot $scriptName),[ref]$tokens,[ref]$parseErrors)
-            if (@($parseErrors).Count -ne 0) { throw "Staged test script failed PowerShell parser: $scriptName" }
+          '@
+          # Only the test script is changed in this disposable checkout; the NSIS and all product
+          # runtime configuration are the original bytes, and the normal installer helper is unchanged.
+          $smokeScript=Join-Path $source 'scripts/test-desktop-webview.ps1'
+          $tokens=$null
+          $errors=$null
+          $null=[System.Management.Automation.Language.Parser]::ParseInput($diagnostic,[ref]$tokens,[ref]$errors)
+          if (@($errors).Count -ne 0) { throw 'Diagnostic PowerShell syntax validation failed' }
+          $diagnostic | Set-Content -LiteralPath $smokeScript -Encoding utf8
+          if ((git -C $source diff --name-only) -cne 'scripts/test-desktop-webview.ps1') { throw 'Unexpected test checkout change' }
+          $privateLog=Join-Path $env:RUNNER_TEMP 'ordinary-probe-local.log'
+          $receiptPath=Join-Path (Get-Location) 'fixed-startup-receipt.json'
+          $passed=$false
+          try {
+              Get-ChildItem Env: | Where-Object { $_.Name -cne 'GITHUB_ACTIONS' -and $_.Name -match '^(ACTIONS_|GITHUB_|GH_)|TOKEN|SECRET|API_KEY|PASSWORD|CREDENTIAL' } | ForEach-Object {
+                  [Environment]::SetEnvironmentVariable($_.Name, $null, 'Process')
+              }
+              Push-Location $source
+              try {
+                  & ./scripts/test-conpty-install.ps1 -Installer $installer *> $privateLog
+                  $passed=$true
+              } finally { Pop-Location }
+          } catch { $passed=$false } finally {
+              if (Test-Path -LiteralPath $privateLog -PathType Leaf) {
+                  $identity.originalInstall1= [bool](Select-String -LiteralPath $privateLog -Pattern '^PASS install-1$' -Quiet)
+                  $identity.originalInstall2= [bool](Select-String -LiteralPath $privateLog -Pattern '^PASS install-2$' -Quiet)
+              }
+              $identity.relocationAndNegativeRuntimeChecks=$passed
+              $identity.installerUnchanged=(Get-FileHash -LiteralPath $installer).Hash -ieq $installerHash
+              $safePath=Join-Path $source 'safe-webview-probe/result.json'
+              if (Test-Path -LiteralPath $safePath -PathType Leaf) {
+                  $safe=Get-Item -LiteralPath $safePath
+                  if ($safe.Length -lt 4096 -and !($safe.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+                      $identity.smoke=Get-Content -LiteralPath $safePath -Raw | ConvertFrom-Json -AsHashtable
+                  }
+              }
+              $identity | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $receiptPath -Encoding utf8
           }
-          Write-Host 'All three staged scripts passed Windows PowerShell AST validation.'
-          $exe = Get-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'verified-image.txt') -TotalCount 1
-          if ((Get-FileHash -LiteralPath $exe).Hash -ine '6b63e56b7f675a5680ae4115d3fe58aed130f1b5f503c515b154f7079efb4b3f') { throw 'Installed image changed before launch' }
-          $official = Join-Path $env:RUNNER_TEMP 'official-codex/extracted/package/vendor/x86_64-pc-windows-msvc/bin/codex.exe'
-          Get-ChildItem Env: | Where-Object { $_.Name -cne 'GITHUB_ACTIONS' -and $_.Name -match '^(ACTIONS_|GITHUB_|GH_)|TOKEN|SECRET|API_KEY|PASSWORD|CREDENTIAL' } | ForEach-Object {
-              [Environment]::SetEnvironmentVariable($_.Name, $null, 'Process')
+          if (!$passed -or !$identity.installerUnchanged -or !$identity.smoke -or $identity.smoke.status -cne 'passed' -or !$identity.smoke.normalExit) {
+              throw 'Fixed-byte ordinary installer acceptance did not complete; see sanitized receipt.'
           }
-          & (Join-Path $scriptRoot 'test-installed-navigation.ps1') -Exe $exe -FixtureCodex $official
-          $observed=Get-Content -LiteralPath 'installed-navigation-evidence/result.json' -Raw | ConvertFrom-Json
-          if ($observed.status -cne 'passed' -or !$observed.normalExit -or
-              !$observed.codexHistory.nativePreflight -or !$observed.codexHistory.sessionsTreeObserved -or
-              !$observed.codexHistory.projectExpanded -or !$observed.codexHistory.activeRowObserved -or
-              !$observed.codexHistory.activeRowUuidMatched -or $observed.codexHistory.rename -cne 'not-attempted') { throw 'Read-only navigation receipt incomplete' }
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: 028-preliminary-navigation-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            pr101-identity.json
-            installed-navigation-evidence/result.json
+          name: fixed-byte-startup-${{ github.run_id }}-${{ github.run_attempt }}
+          path: fixed-startup-receipt.json
+          if-no-files-found: warn
+          retention-days: 14
