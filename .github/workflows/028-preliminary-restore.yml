@@ -1,4 +1,4 @@
-name: 0.28 preliminary pinned installed restore
+name: 0.28 preliminary pinned installed active rename
 on:
   push:
     branches: [verify/028-preliminary-restore-20261120]
@@ -6,16 +6,11 @@ permissions:
   contents: read
   actions: read
 jobs:
-  installed-diagnostics:
-    if: github.repository == 'shawnwu2022/cc-desk' && github.ref == 'refs/heads/verify/028-preliminary-restore-20261120'
+  installed-active-rename:
+    if: github.repository == 'shawnwu2022/cc-desk' && github.ref == 'refs/heads/verify/028-preliminary-restore-20261120' && github.run_attempt == 1
     timeout-minutes: 15
     runs-on: windows-2022
     steps:
-      - uses: actions/checkout@v5
-        with:
-          persist-credentials: false
-          ref: 71486c471394328b954a291dae200ae70b998cdd
-          path: pinned-harness
       - name: Download pinned verified candidate and smoke receipt
         shell: pwsh
         env:
@@ -78,7 +73,7 @@ jobs:
           [ordered]@{package='@openai/codex'; version='0.169.1-win32-x64'; integrity="sha512-$expectedIntegrity"; archiveSha256=(Get-FileHash $archive).Hash; source='official npm platform package'; files=$inventory} | ConvertTo-Json -Depth 5 | Set-Content codex-supply.json
           $exe = Join-Path $extract 'package/vendor/x86_64-pc-windows-msvc/bin/codex.exe'
           if ((Get-Item $exe).Length -ne 382647088 -or (Get-FileHash $exe).Hash -ine 'f76f94d08b0793bfa129ae62c09341ee32ae96d57e69968ae6b8d7c71a20d8c4') { throw 'Official Codex asset digest mismatch' }
-      - name: Verify and launch the exact ordinary NSIS
+      - name: Install pinned NSIS and verify launcher identity
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -96,22 +91,669 @@ jobs:
           if ($install.ExitCode -ne 0) { throw 'NSIS installation failed' }
           $exe = Join-Path $target 'cc-desk.exe'
           if ((Get-FileHash -LiteralPath $exe).Hash -ine $smoke.sha256) { throw 'Installed image differs from pinned smoke' }
-          [ordered]@{ mainAnchor='04a2f0cedc8e7acc080e8736723c6e8799127f58'; harnessSource='71486c471394328b954a291dae200ae70b998cdd'; prHead='cf847b4dc1993b7b58c192357cc79df7629bf560'; productSource='cbe2aca540d6097a6b0cebe7747f3b3dad8d439f'; preliminaryOnly=$true; rename='not-attempted'; packageSource=$manifest.sourceCommit; packageArtifact=14537417451; smokeArtifact=14538565669; installerSha256=$manifest.sha256; exeSha256=$smoke.sha256 } | ConvertTo-Json | Set-Content pr101-identity.json
-          Get-ChildItem Env: | Where-Object { $_.Name -cne 'GITHUB_ACTIONS' -and $_.Name -match '^(ACTIONS_|GITHUB_|GH_)|TOKEN|SECRET|API_KEY|PASSWORD|CREDENTIAL' } | ForEach-Object {
-            [Environment]::SetEnvironmentVariable($_.Name, $null, 'Process')
+          [ordered]@{ mainAnchor='04a2f0cedc8e7acc080e8736723c6e8799127f58'; guiHarnessBaseline='71486c471394328b954a291dae200ae70b998cdd'; fixtureProbeBaseline='3c014ac4a9c9732f4d11ddf060587424cb2456cb'; candidateTree='933bae502bb1e262e6f0be2cd0bb600cb8992b8a'; prHead='cf847b4dc1993b7b58c192357cc79df7629bf560'; productSource='cbe2aca540d6097a6b0cebe7747f3b3dad8d439f'; preliminaryOnly=$true; exercise='non-archived-codex-history-rename'; priorRestoreRun=44751032368; packageSource=$manifest.sourceCommit; packageArtifact=14537417451; smokeArtifact=14538565669; installerSha256=$manifest.sha256; exeSha256=$smoke.sha256 } | ConvertTo-Json | Set-Content pr101-identity.json
+          $exe | Set-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'verified-image.txt')
+
+      - name: Verify one synthetic active record rename through installed GUI
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (!$IsWindows -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted') { throw 'Expected ephemeral hosted Windows' }
+          $scriptRoot = Join-Path $env:RUNNER_TEMP 'scratch-rename-harness'
+          New-Item -ItemType Directory -Path $scriptRoot -ErrorAction Stop | Out-Null
+          @'
+          # Disposable Windows runner only. The real Codex executable performs a read-only protocol check.
+          param(
+              [Parameter(Mandatory=$true)][string]$Codex, [psobject]$ReadOnlyExisting, [switch]$ObserveRename
+          )
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version Latest
+          if (!$IsWindows -or $env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or !$env:RUNNER_TEMP) {
+              throw 'BLOCKED_EXTERNAL_TARGET: ephemeral hosted Windows required'
           }
+          $temp = (Get-Item -LiteralPath $env:RUNNER_TEMP).FullName.TrimEnd('\') + '\'
+          $image = (Get-Item -LiteralPath $Codex -ErrorAction Stop).FullName
+          if (!$image.StartsWith($temp, [StringComparison]::OrdinalIgnoreCase) -or
+              (Get-FileHash -LiteralPath $image).Hash -ine 'f76f94d08b0793bfa129ae62c09341ee32ae96d57e69968ae6b8d7c71a20d8c4') {
+              throw 'Pinned official Codex image mismatch'
+          }
+          if ($ReadOnlyExisting) {
+              $codexHome=[IO.Path]::GetFullPath($ReadOnlyExisting.Home)
+              $project=[IO.Path]::GetFullPath($ReadOnlyExisting.Project)
+              $root=Split-Path $codexHome -Parent
+              if (!$root.StartsWith($temp,[StringComparison]::OrdinalIgnoreCase) -or
+                  (Split-Path $root -Leaf) -cnotmatch '^pr101-history-[0-9a-f]{32}$' -or
+                  $codexHome -cne (Join-Path $root 'codex-home') -or $project -cne (Join-Path $root 'project') -or
+                  ($ObserveRename -and $ReadOnlyExisting.SessionId -cnotmatch '^[a-f0-9-]{36}$') -or
+                  $ReadOnlyExisting.ArchivedId -cnotmatch '^[a-f0-9-]{36}$') { throw 'Read-only fixture ownership is not pinned' }
+              foreach($currentPath in @($root,$codexHome,$project)){
+                  $owned=Get-Item -LiteralPath $currentPath
+                  if (!$owned.PSIsContainer -or ($owned.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Untrusted synthetic fixture directory' }
+              }
+              $archivedId=$ReadOnlyExisting.ArchivedId
+          } else {
+          $root = Join-Path $temp ('pr101-history-' + [Guid]::NewGuid().ToString('N'))
+          $codexHome = Join-Path $root 'codex-home'
+          $project = Join-Path $root 'project'
+          $now = [DateTime]::UtcNow
+          $directory = Join-Path $codexHome ('sessions/' + $now.ToString('yyyy/MM/dd'))
+          New-Item -ItemType Directory -Path $project,$directory -Force | Out-Null
+          $id = [Guid]::NewGuid().ToString()
+          $archivedId = [Guid]::NewGuid().ToString()
+          $timestamp = $now.ToString("yyyy-MM-ddTHH:mm:ss.fff'Z'")
+          $stamp = $now.ToString('yyyy-MM-ddTHH-mm-ss')
+          $rollout = Join-Path $directory "rollout-$stamp-$id.jsonl"
+          $meta = [ordered]@{ timestamp=$timestamp; type='session_meta'; payload=[ordered]@{ session_id=$id; id=$id; timestamp=$timestamp; cwd=$project; originator='cc_desk_acceptance'; cli_version='0.169.1'; source='cli' } }
+          function Write-FixtureRollout([string]$File, [string]$SessionId, [string]$Canary) {
+              $meta.payload.id = $SessionId
+              $meta.payload.session_id = $SessionId
+              $message = @{ timestamp=$timestamp; type='event_msg'; payload=@{type='user_message'; message=$Canary; images=@(); local_images=@(); text_elements=@()} }
+              $output = @($meta,$message) | ForEach-Object { ConvertTo-Json -InputObject $_ -Compress -Depth 5 }
+              [IO.File]::WriteAllText($File, ($output -join "`n") + "`n", [Text.UTF8Encoding]::new($false))
+          }
+          $activeCanary='Pr101ActiveCanary'
+          $archivedCanary='Pr101ArchivedCanary'
+          $archiveRoot = Join-Path $codexHome 'archived_sessions'
+          New-Item -ItemType Directory -Path $archiveRoot | Out-Null
+          $existingArchived = Join-Path $archiveRoot "rollout-$stamp-$archivedId.jsonl"
+          Write-FixtureRollout $rollout $id $activeCanary
+          Write-FixtureRollout $existingArchived $archivedId $archivedCanary
+          
+          }
+          $spec=[Diagnostics.ProcessStartInfo]::new($image)
+          $spec.WorkingDirectory=$project
+          $spec.UseShellExecute=$false
+          $spec.CreateNoWindow=$true
+          $spec.RedirectStandardInput=$true
+          $spec.RedirectStandardOutput=$true
+          $spec.RedirectStandardError=$true
+          $spec.ArgumentList.Add('app-server')
+          $spec.ArgumentList.Add('--strict-config')
+          $spec.Environment.Clear()
+          foreach ($key in @('SystemRoot','WINDIR','SystemDrive','ComSpec')) {
+              $value = [Environment]::GetEnvironmentVariable($key)
+              if ($value) { $spec.Environment[$key] = $value }
+          }
+          $spec.Environment['HOME']=$root
+          $spec.Environment['USERPROFILE']=$root
+          $spec.Environment['APPDATA']=$root
+          $spec.Environment['LOCALAPPDATA']=$root
+          $spec.Environment['TEMP']=$root
+          $spec.Environment['TMP']=$root
+          $spec.Environment['CODEX_HOME']=$codexHome
+          
+          $process=[Diagnostics.Process]::Start($spec)
+          if (!$process) { throw 'Could not start pinned app-server' }
+          $stderr=$process.StandardError.BaseStream.CopyToAsync([IO.Stream]::Null)
+          $deadline=[DateTime]::UtcNow.AddSeconds(25)
+          function Send([object]$request) {
+              $process.StandardInput.WriteLine((ConvertTo-Json -InputObject $request -Depth 8 -Compress))
+              $process.StandardInput.Flush()
+          }
+          function Receive([int]$expected) {
+              for ($i=0; $i -lt 48; $i++) {
+                  $remaining=$deadline - [DateTime]::UtcNow
+                  if ($remaining.TotalMilliseconds -le 0) { throw 'Pinned app-server deadline expired' }
+                  $pending=$process.StandardOutput.ReadLineAsync()
+                  if (!$pending.Wait($remaining)) { throw 'Pinned app-server reply timeout' }
+                  $line=$pending.Result
+                  if (!$line -or $line.Length -gt 65536) { throw 'Pinned app-server reply bound failed' }
+                  try { $frame=$line | ConvertFrom-Json -AsHashtable } catch { throw 'Pinned app-server reply format failed' }
+                  if ($frame.Contains('method') -and !$frame.Contains('id')) { continue }
+                  if ($frame.id -ne $expected -or $frame.Contains('error') -or !$frame.Contains('result')) {
+                      throw 'Pinned app-server returned an unexpected reply'
+                  }
+                  return $frame.result
+              }
+              throw 'Pinned app-server frame limit exceeded'
+          }
+          try {
+              Send @{ id=1; method='initialize'; params=@{ clientInfo=@{name='cc_desk'; version='0.28.0'}; capabilities=@{explicitGatewayOauth=$true; experimentalApi=$false} } }
+              $initial = Receive 1
+              if (!$initial.codexHome -or [IO.Path]::GetFullPath($initial.codexHome).TrimEnd('\') -ine $codexHome) {
+                  throw 'Pinned app-server did not bind to fixture CODEX_HOME'
+              }
+              Send @{ method='initialized' }
+              if ($ReadOnlyExisting -and $ObserveRename) {
+                  Send @{ id=2; method='thread/read'; params=@{ threadId=$ReadOnlyExisting.SessionId; includeTurns=$false } }
+                  $renamed=Receive 2
+                  Send @{ id=3; method='thread/list'; params=@{archived=$false;limit=100} }
+                  $open=Receive 3
+                  Send @{ id=4; method='thread/list'; params=@{archived=$true;limit=100} }
+                  $closed=Receive 4
+                  $activeId=@($open.data | Where-Object { $_.id -ceq $ReadOnlyExisting.SessionId -and $_.cwd -ceq $project })
+                  $archiveId=@($closed.data | Where-Object { $_.id -ceq $archivedId -and $_.cwd -ceq $project })
+                  $listsExact=$activeId.Count -eq 1 -and $archiveId.Count -eq 1 -and
+                      @($open.data | Where-Object id -CEQ $archivedId).Count -eq 0 -and
+                      @($closed.data | Where-Object id -CEQ $ReadOnlyExisting.SessionId).Count -eq 0
+                  $process.StandardInput.Close()
+                  if (!$process.WaitForExit(5000) -or $process.ExitCode -ne 0) { throw 'Pinned read-only post-rename app-server did not stop normally' }
+                  return [pscustomobject]@{
+                      sameId=$renamed.thread.id -ceq $ReadOnlyExisting.SessionId
+                      sameCwd=$renamed.thread.cwd -ceq $project
+                      expectedName=$renamed.thread.name -ceq 'Pr101RenamedCanary'
+                      listsExact=$listsExact
+                  }
+              }
+              if ($ReadOnlyExisting) {
+                  Send @{ id=2; method='thread/list'; params=@{ archived=$false; limit=100 } }
+                  $active=Receive 2
+                  Send @{ id=3; method='thread/list'; params=@{ archived=$true; limit=100 } }
+                  $archived=Receive 3
+                  $result=@($active.data | Where-Object { $_.id -ceq $archivedId -and $_.cwd -ceq $project }).Count
+                  $retained=@($archived.data | Where-Object { $_.id -ceq $archivedId -and $_.cwd -ceq $project }).Count
+                  $process.StandardInput.Close()
+                  if (!$process.WaitForExit(5000) -or $process.ExitCode -ne 0) { throw 'Pinned read-only post-restore app-server did not stop normally' }
+                  return [pscustomobject]@{ activeCount=$result; archivedCount=$retained }
+              }
+              Send @{ id=2; method='thread/read'; params=@{ threadId=$id; includeTurns=$false } }
+              $observed = Receive 2
+              if ($observed.thread.id -cne $id) { throw 'Pinned app-server did not recognize fixture rollout' }
+              Send @{ id=3; method='thread/read'; params=@{ threadId=$archivedId; includeTurns=$false } }
+              $archived = Receive 3
+              if ($archived.thread.id -cne $archivedId) { throw 'Pinned app-server did not recognize the separate pre-archived rollout' }
+              $process.StandardInput.Close()
+              if (!$process.WaitForExit(5000) -or $process.ExitCode -ne 0) { throw 'Pinned app-server did not stop normally' }
+              [pscustomobject]@{ Home=$codexHome; Project=$project; SessionId=$id; Rollout=$rollout; ActiveCanary=$activeCanary; ArchivedId=$archivedId; ArchiveRollout=$existingArchived; ArchivedCanary=$archivedCanary; AppServerReadVerified=$true }
+          } finally {
+              if (!$process.HasExited) { $process.Kill(); $null=$process.WaitForExit(5000) }
+              $process.Dispose()
+          }
+          '@ | Set-Content -LiteralPath (Join-Path $scriptRoot 'pr101-codex-history-fixture.ps1') -Encoding utf8
+          @'
+          # Sourced only by installed hosted acceptance with a verified, synthetic fixture.
+          function Invoke-FixtureTarget($Root, [string]$Name, $Type, [switch]$WorkspaceHeader) {
+              $specific = @($Root.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition) | Where-Object {
+                  if ($_.Current.Name -cne $Name -or ($Type -and $_.Current.ControlType -ne $Type)) { return $false }
+                  if (!$WorkspaceHeader) { return $true }
+                  $parent = [System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($_)
+                  if (!$parent) { return $false }
+                  return @($parent.FindAll([System.Windows.Automation.TreeScope]::Children,[System.Windows.Automation.Condition]::TrueCondition) |
+                      Where-Object { $_.Current.Name -ceq 'Collapse sessions panel' }).Count -eq 1
+              })
+              if ($specific.Count -gt 1) { throw 'Ambiguous synthetic fixture control' }
+              if ($specific.Count -eq 0) { return $false }
+              $ctl=$specific[0]
+              if ($ctl.Current.IsOffscreen) {
+                  $scroll=$null
+                  if (!$ctl.TryGetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern,[ref]$scroll)) { return $false }
+                  ([System.Windows.Automation.ScrollItemPattern]$scroll).ScrollIntoView()
+              }
+              $pattern=$null
+              if ($ctl.Current.IsOffscreen -or !$ctl.Current.IsEnabled -or !$ctl.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern,[ref]$pattern)) { return $false }
+              ([System.Windows.Automation.InvokePattern]$pattern).Invoke()
+              return $true
+          }
+          
+          function Set-FixtureEdit([string]$Name,[string]$Value) {
+              $editType=[System.Windows.Automation.ControlType]::Edit
+              Reveal-DiagnosticsControl @($Name) $editType
+              $ctl=Wait-Observed { Find-Control @($Name) $editType } "synthetic configuration: $Name"
+              $pattern=$null
+              if (!$ctl.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern,[ref]$pattern)) { throw "Synthetic edit not writable: $Name" }
+              $pattern=[System.Windows.Automation.ValuePattern]$pattern
+              $pattern.SetValue($Value)
+              $null=Wait-Observed {
+                  $observed=Find-Control @($Name) $editType
+                  $read=$null
+                  if ($observed -and $observed.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern,[ref]$read) -and
+                      ([System.Windows.Automation.ValuePattern]$read).Current.Value -ceq $Value) { return $observed }
+              } "exact synthetic edit readback: $Name"
+          }
+          
+          function Configure-CodexFixtureProfile {
+              $result.codexHistory.stage='create-official-codex-profile'
+              $result.codexHistory.stage='settings-open'
+              Invoke-Button @('Settings')
+              $result.codexHistory.stage='settings-launch-configurations'
+              Invoke-Button @('Launch configurations')
+              $name='Pr101SyntheticCodexProfile'
+              $button=[System.Windows.Automation.ControlType]::Button
+              $result.codexHistory.stage='codex-config-create-control'
+              $target=Wait-Observed {
+                  $tools=@($window.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition) | Where-Object {
+                      $_.Current.Name -ceq 'New configuration' -and $_.Current.ControlType -eq $button -and
+                      $null -ne [System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($_) -and
+                      @([System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($_).FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition) | Where-Object {
+                          $_.Current.Name -ceq 'Codex CLI' -and $_.Current.ControlType -ne $button
+                      }).Count -eq 1
+                  })
+                  if ($tools.Count -gt 1) { throw 'Ambiguous Codex profile group' }
+                  if ($tools.Count -eq 1) { $tools[0] }
+              } 'new configuration in exact Codex CLI group'
+              if ($target.Current.IsOffscreen) {
+                  $scroll=$null
+                  if (!$target.TryGetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern,[ref]$scroll)) { throw 'Codex configuration group cannot reveal its action' }
+                  ([System.Windows.Automation.ScrollItemPattern]$scroll).ScrollIntoView()
+              }
+              $click=$null
+              if (!$target.Current.IsEnabled -or !$target.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern,[ref]$click)) { throw 'Codex configuration action unavailable' }
+              ([System.Windows.Automation.InvokePattern]$click).Invoke()
+              $result.codexHistory.stage='codex-config-name'
+              Set-FixtureEdit 'Configuration name' $name
+              $result.codexHistory.stage='codex-config-options'
+              $details=Wait-Observed {
+                  $label="More options$([char]0x2026)"
+                  $same = @($window.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition) |
+                      Where-Object { $_.Current.Name -ceq $label })
+                  if ($same.Count -gt 8) { throw 'Too many identically labelled profile controls' }
+                  $result.codexHistory.optionsControls=@($same | ForEach-Object { [ordered]@{
+                      type=$_.Current.ControlType.ProgrammaticName
+                      patterns=@($_.GetSupportedPatterns() | ForEach-Object ProgrammaticName)
+                  } })
+                  $action=@($same | Where-Object {
+                      $pattern=$null
+                      $_.Current.IsEnabled -and !$_.Current.IsOffscreen -and
+                          $_.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern,[ref]$pattern)
+                  })
+                  if ($action.Count -gt 1) { throw 'Ambiguous actionable disclosure in Codex configuration' }
+                  if ($action.Count -eq 1) { return $action[0] }
+              } 'unique actionable Codex configuration options'
+              $expand=$null
+              if (!$details.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern,[ref]$expand)) { throw 'Missing profile options disclosure' }
+              ([System.Windows.Automation.ExpandCollapsePattern]$expand).Expand()
+              $result.codexHistory.stage='codex-config-program-mode'
+              $combo=Wait-Observed { Find-Control @('CLI program override') ([System.Windows.Automation.ControlType]::ComboBox) } 'Codex executable override'
+              $expand=$null
+              if (!$combo.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern,[ref]$expand)) { throw 'Missing executable override disclosure' }
+              ([System.Windows.Automation.ExpandCollapsePattern]$expand).Expand()
+              $choice=Wait-Observed { Find-Control @('Set') ([System.Windows.Automation.ControlType]::ListItem) } 'exact program override setting'
+              $selection=$null
+              if (!$choice.TryGetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern,[ref]$selection)) { throw 'Missing executable override selection' }
+              ([System.Windows.Automation.SelectionItemPattern]$selection).Select()
+              $result.codexHistory.stage='codex-config-program-readback'
+              Set-FixtureEdit 'Program path' $FixtureCodex
+              $result.codexHistory.stage='codex-config-save'
+              Reveal-DiagnosticsControl @('Save') $button
+              Invoke-Button @('Save')
+              $null=Wait-Observed {
+                  if (Find-Control @('Configuration name') ([System.Windows.Automation.ControlType]::Edit)) { return $null }
+                  Find-Control @($name) ([System.Windows.Automation.ControlType]::Text)
+              } 'closed editor and confirmed saved official Codex profile in GUI'
+              $result.codexHistory.stage='codex-config-saved'
+              $result.codexHistory.profileSaved=$true
+              Invoke-Button @('Workspace')
+          }
+          function Test-CodexHistoryGui {
+              $r = $result.codexHistory
+              $fixtureButton=[System.Windows.Automation.ControlType]::Button
+              Invoke-Button @('Workspace')
+              $r.stage='project-select'
+              $null=Wait-Observed { Invoke-FixtureTarget $window 'Add Project' $fixtureButton -WorkspaceHeader } 'synthetic project Add Project'
+              $main=$window
+              try {
+                  $window=Wait-Observed {
+                      $condition=[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$app.Id)
+                      $dialogs=@($main.FindAll([System.Windows.Automation.TreeScope]::Descendants,$condition) | Where-Object {
+                          !$_.Current.IsOffscreen -and $_.Current.ControlType -eq [System.Windows.Automation.ControlType]::Window -and
+                          $_.Current.NativeWindowHandle -ne $main.Current.NativeWindowHandle -and $_.Current.Name -ceq 'Select Project Directory'
+                      })
+                      if ($dialogs.Count -gt 1) { throw 'Ambiguous synthetic project picker' }
+                      if ($dialogs.Count -eq 1) { return $dialogs[0] }
+                  } 'synthetic owned project picker'
+                  $folder=Wait-Observed { Find-Control @('Folder:') ([System.Windows.Automation.ControlType]::Edit) } 'synthetic project folder field'
+                  $set=$null
+                  if (!$folder.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern,[ref]$set)) { throw 'Synthetic folder field is read-only' }
+                  ([System.Windows.Automation.ValuePattern]$set).SetValue($fixture.Project)
+                  Invoke-Button @('Select Folder', 'Select folder')
+              } finally { $window=$main }
+              Configure-CodexFixtureProfile
+              $r.stage='refresh-bound-fixture-history'
+              $null=Wait-Observed { Invoke-FixtureTarget $window 'Refresh sessions' $fixtureButton } 'refresh formally bound synthetic history'
+              $r.stage='verify-profile-project-cwd'
+              $ownedSettings=Get-Item -LiteralPath $homeRoot
+              if (!$ownedSettings.PSIsContainer -or ($ownedSettings.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Unsafe synthetic workspace settings root' }
+              $statePath=Join-Path $homeRoot 'cli-workspace.v1.json'
+              $stateFile=Get-Item -LiteralPath $statePath
+              if ($stateFile.Length -gt 1048576 -or ($stateFile.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Untrusted synthetic workspace receipt' }
+              $manifest=Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json -AsHashtable
+              $matchingProfile=@($manifest.profiles.Values | Where-Object {
+                  $_.name -ceq 'Pr101SyntheticCodexProfile' -and $_.cli -ceq 'codex' -and $_.launcher.kind -ceq 'native' -and
+                  $_.programPath.mode -ceq 'set' -and $_.programPath.value -ceq $FixtureCodex -and
+                  ($_.defaultArgs.mode -ceq 'inherit' -or ($_.defaultArgs.mode -ceq 'set' -and @($_.defaultArgs.value).Count -eq 0)) -and
+                  @($_.env.Keys | Where-Object { $_ -ieq 'CODEX_HOME' }).Count -eq 0
+              })
+              $projects=@($manifest.registeredProjects.Values)
+              $meta=Get-Content -LiteralPath $fixture.Rollout -TotalCount 1 | ConvertFrom-Json -AsHashtable
+              $r.selectedProjectExact=@($projects | Where-Object selectedPath -CEQ $fixture.Project).Count -eq 1
+              $r.recordedCanonicalExact=@($projects | Where-Object canonicalPath -CEQ $fixture.Project).Count -eq 1
+              $r.metaCwdExact=$meta.payload.cwd -ceq $fixture.Project
+              $r.profilePinMatches=$matchingProfile.Count -eq 1
+              if (!$r.selectedProjectExact -or !$r.metaCwdExact -or !$r.profilePinMatches) { throw 'Stored synthetic project or bound profile does not match exact fixture inputs' }
+              Test-ExactActiveRename
+          }
+          
+          function Find-Scoped($Root, [string]$Name, $Type) {
+              $items=@($Root.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition) |
+                  Where-Object { $_.Current.Name -ceq $Name -and $_.Current.ControlType -eq $Type -and !$_.Current.IsOffscreen })
+              if ($items.Count -gt 1) { throw 'Ambiguous visible scoped control' }
+              if ($items.Count -eq 1) { return $items[0] }
+          }
+          function Invoke-ExactVisible($Control) {
+              $invoke=$null
+              if (!$Control -or $Control.Current.IsOffscreen -or !$Control.Current.IsEnabled -or
+                  !$Control.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern,[ref]$invoke)) { throw 'Unique visible control is not invokable' }
+              ([System.Windows.Automation.InvokePattern]$invoke).Invoke()
+          }
+          function Get-ActiveFixtureRow([string]$Title) {
+              $tree=Find-Control @('Sessions') ([System.Windows.Automation.ControlType]::Tree)
+              if (!$tree) { return }
+              $projectNode=Find-Scoped $tree (Split-Path -Leaf $fixture.Project) ([System.Windows.Automation.ControlType]::TreeItem)
+              if (!$projectNode) { return }
+              $result.codexHistory.projectTreeObserved=$true
+              $row=Find-Scoped $projectNode $Title ([System.Windows.Automation.ControlType]::TreeItem)
+              if ($row -and $row.Current.IsEnabled -and $row.Current.IsKeyboardFocusable) {
+                  $screenName=Find-Control @($Title) ([System.Windows.Automation.ControlType]::TreeItem)
+                  if (!$screenName -or ![System.Windows.Automation.AutomationElement]::Compare($row,$screenName)) { throw 'Title is not globally unique in the owned UI' }
+                  return $row
+              }
+          }
+          function Open-ExactActiveRowMenu([string]$Title) {
+              $row=Wait-Observed { Get-ActiveFixtureRow $Title } 'unique visible non-archived fixture row and exact name'
+              if (Find-Control @('Session actions') ([System.Windows.Automation.ControlType]::Menu)) { throw 'A session menu is already open' }
+              $row.SetFocus() # Reveals the scoped overflow through the real focus-within style. Does not open a CLI session.
+              $more=Wait-Observed { Find-Scoped $row 'Session actions' ([System.Windows.Automation.ControlType]::Button) } 'exact active row overflow action'
+              Invoke-ExactVisible $more
+              Wait-Observed { Find-Control @('Session actions') ([System.Windows.Automation.ControlType]::Menu) } 'exact visible owned row menu'
+          }
+          function Verify-ExactClipboardId($Menu) {
+              $copy=Find-Scoped $Menu 'Copy session ID' ([System.Windows.Automation.ControlType]::MenuItem)
+              Set-Clipboard -Value 'SyntheticClipboardGuard'
+              Invoke-ExactVisible $copy
+              $null=Wait-Observed {
+                  $actual=Get-Clipboard -Raw
+                  $actual -and $actual.Length -le 128 -and $actual.Trim() -ceq $fixture.SessionId
+              } 'same native UUID from the exact visible row'
+              $null=Wait-Observed { -not (Find-Control @('Session actions') ([System.Windows.Automation.ControlType]::Menu)) } 'row menu closed after copy'
+          }
+          function Test-ExactActiveRename {
+              $r=$result.codexHistory
+              $baseline=& (Join-Path $PSScriptRoot 'pr101-codex-history-fixture.ps1') -Codex $FixtureCodex -ReadOnlyExisting $fixture -ObserveRename
+              if (!$baseline.sameId -or !$baseline.sameCwd -or $baseline.expectedName -or !$baseline.listsExact) { throw 'Independent pre-rename native adoption or original name not established' }
+              $r.nativePreflight=$true
+              $r.stage='validate-active-tree'
+              $active=Wait-Observed { Find-Control @('Active sessions only') ([System.Windows.Automation.ControlType]::Button) } 'active-only filter control'
+              $toggle=$null
+              if (!$active.TryGetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern,[ref]$toggle) -or
+                  ([System.Windows.Automation.TogglePattern]$toggle).Current.ToggleState -ne [System.Windows.Automation.ToggleState]::Off) {
+                  throw 'Expected all non-archived history rows, not live sessions only'
+              }
+              # Query the unique disposable project, not the current session title. This expands the tree
+              # without hiding the row while its title changes or accidentally relying on a transient search hit.
+              Set-FixtureEdit 'Search sessions...' (Split-Path -Leaf $fixture.Project)
+              $null=Wait-Observed { Find-Control @('Clear search') ([System.Windows.Automation.ControlType]::Button) } 'real search filter applied'
+              $r.stage='identify-active-row'
+              $null=Wait-Observed { Get-ActiveFixtureRow $fixture.ActiveCanary } 'one visible exact active fixture row under disposable project'
+              $r.activeRowObserved=$true
+              $r.stage='confirm-active-uuid-before-rename'
+              $menu=Open-ExactActiveRowMenu $fixture.ActiveCanary
+              Verify-ExactClipboardId $menu
+              $r.preRenameUuidMatched=$true
+              $r.stage='open-exact-rename-entry'
+              $menu=Open-ExactActiveRowMenu $fixture.ActiveCanary
+              $action=Find-Scoped $menu 'Rename' ([System.Windows.Automation.ControlType]::MenuItem)
+              Invoke-ExactVisible $action
+              $r.activeRenameExposed=$true
+              $r.stage='verify-current-name-before-edit'
+              $row=Wait-Observed { Get-ActiveFixtureRow $fixture.ActiveCanary } 'exact original row in edit mode'
+              $field=Wait-Observed { Find-Scoped $row 'Session name' ([System.Windows.Automation.ControlType]::Edit) } 'editor inside original active row'
+              $value=$null
+              if (!$field.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern,[ref]$value) -or
+                  ([System.Windows.Automation.ValuePattern]$value).Current.Value -cne $fixture.ActiveCanary) { throw 'Original session name did not match the scoped editor' }
+              ([System.Windows.Automation.ValuePattern]$value).SetValue('Pr101RenamedCanary')
+              if (([System.Windows.Automation.ValuePattern]$value).Current.Value -cne 'Pr101RenamedCanary') { throw 'New synthetic name did not read back' }
+              $r.stage='invoke-save-once'
+              $save=Wait-Observed { Find-Scoped $row 'Save name' ([System.Windows.Automation.ControlType]::Button) } 'scoped save control'
+              $r.rename='save-invocation-started'
+              Invoke-ExactVisible $save
+              $r.stage='verify-name-in-ui'
+              $null=Wait-Observed { Get-ActiveFixtureRow 'Pr101RenamedCanary' } 'new name visible before refresh'
+              Invoke-Button @('Refresh sessions')
+              $null=Wait-Observed { Find-Control @('Refresh sessions') ([System.Windows.Automation.ControlType]::Button) | Where-Object { $_.Current.IsEnabled } } 'refresh finished'
+              $null=Wait-Observed { Get-ActiveFixtureRow 'Pr101RenamedCanary' } 'same unique active row title after refresh'
+              $r.renamedTitleObserved=$true
+              $r.stage='verify-uuid-after-refresh'
+              $menu=Open-ExactActiveRowMenu 'Pr101RenamedCanary'
+              Verify-ExactClipboardId $menu
+              $r.postRenameUuidMatched=$true
+              $r.stage='verify-fresh-native-readonly'
+              $proof=& (Join-Path $PSScriptRoot 'pr101-codex-history-fixture.ps1') -Codex $FixtureCodex -ReadOnlyExisting $fixture -ObserveRename
+              $r.readonlyPostRename=[ordered]@{sameId=$proof.sameId; sameCwd=$proof.sameCwd; expectedName=$proof.expectedName; listsExact=$proof.listsExact}
+              if (!$proof.sameId -or !$proof.sameCwd -or !$proof.expectedName -or !$proof.listsExact) { throw 'Independent persisted name, UUID, project or membership not established' }
+              if (!(Test-Path -LiteralPath $fixture.Rollout -PathType Leaf) -or !(Test-Path -LiteralPath $fixture.ArchiveRollout -PathType Leaf)) {
+                  throw 'Expected both original disposable history files to remain'
+              }
+              $r.rename='native-name-persisted'
+              $r.stage='rename-proof-complete'
+          }
+          '@ | Set-Content -LiteralPath (Join-Path $scriptRoot 'pr101-codex-history-gui.ps1') -Encoding utf8
+          @'
+          # Ordinary installed product, disposable hosted Windows only. Never a fake IPC page.
+          param([Parameter(Mandatory=$true)][string]$Exe, [Parameter(Mandatory=$true)][string]$FixtureCodex)
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version Latest
+          $out = Join-Path (Get-Location) 'installed-rename-evidence'
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          $result = [ordered]@{ status = 'blocked'; normalExit = $false; evidence = 'installed non-archived GUI history and independent native read; no live login'; error = $null }
+          $app = $null
+          $window = $null
+          $children = @{}
+          function Wait-Observed([scriptblock]$Observe, [string]$Label) {
+              $deadline = [DateTime]::UtcNow.AddSeconds(20)
+              do {
+                  if ($app -and $app.HasExited) { throw "App exited before $Label" }
+                  $value = & $Observe
+                  if ($null -ne $value -and $value -ne $false) { return $value }
+                  Start-Sleep -Milliseconds 200
+              } while ([DateTime]::UtcNow -lt $deadline)
+              throw "BLOCKED_UI_OBSERVATION: $Label"
+          }
+          function Find-Control([string[]]$Names, $Type) {
+              $matches = @($window.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition) | Where-Object {
+                  !$_.Current.IsOffscreen -and $_.Current.Name -cin $Names -and (!$Type -or $_.Current.ControlType -eq $Type)
+              })
+              if ($matches.Count -gt 1) { throw "Ambiguous UI selector: $($Names -join ', ')" }
+              if ($matches.Count -eq 1) { return $matches[0] }
+              return $null
+          }
+          function Invoke-Button([string[]]$Names) {
+              $control = Wait-Observed { Find-Control $Names ([System.Windows.Automation.ControlType]::Button) } ($Names -join '/')
+              $pattern = $null
+              if (!$control.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) { throw ("BLOCKED_UI_INVOKE: $($Names -join '/')") }
+              ([System.Windows.Automation.InvokePattern]$pattern).Invoke()
+          }
+          function Reveal-DiagnosticsControl([string[]]$Names, $Type) {
+              $seen = @{ reported=$false; revealed=$false }
+              $null = Wait-Observed {
+                  $found = @($window.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition) | Where-Object {
+                      $_.Current.Name -cin $Names -and (!$Type -or $_.Current.ControlType -eq $Type)
+                  })
+                  if ($found.Count -gt 1) { throw "Ambiguous diagnostics control: $($Names -join '/')" }
+                  if ($found.Count -eq 0) { return $null }
+                  $target = $found[0]
+                  if (!$seen.reported) {
+                      $result.activityDiagnostics.controls += [ordered]@{
+                          expectedLabel=($Names -join '/')
+                          enabled=$target.Current.IsEnabled
+                          offscreen=$target.Current.IsOffscreen
+                          patterns=@($target.GetSupportedPatterns() | ForEach-Object ProgrammaticName)
+                      }
+                      $seen.reported = $true
+                  }
+                  if (!$target.Current.IsOffscreen) { return $target }
+                  if (!$seen.revealed) {
+                      $scroll = $null
+                      if (!$target.TryGetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern, [ref]$scroll)) {
+                          throw "BLOCKED_UI_SCROLL: $($Names -join '/')"
+                      }
+                      ([System.Windows.Automation.ScrollItemPattern]$scroll).ScrollIntoView()
+                      $seen.revealed = $true
+                  }
+                  return $null
+              } "diagnostics fixed control reveal: $($Names -join '/')"
+          }
+          function Observe-Children {
+              $rows = @(Get-CimInstance Win32_Process)
+              $owned = @{ ([int]$app.Id) = $app }
+              do {
+                  $next = @($rows | Where-Object { $owned.ContainsKey([int]$_.ParentProcessId) -and !$owned.ContainsKey([int]$_.ProcessId) })
+                  foreach ($row in $next) {
+                      $id = [int]$row.ProcessId
+                      $process = $null
+                      try {
+                          $parent = $owned[[int]$row.ParentProcessId]
+                          $process = [Diagnostics.Process]::GetProcessById($id)
+                          $null = $process.Handle
+                          # CIM timestamps have microsecond precision; compare the captured handle,
+                          # not a second PID lookup. Any exit/reuse ambiguity blocks acceptance.
+                          $created = ([DateTime]$row.CreationDate).ToUniversalTime()
+                          $started = $process.StartTime.ToUniversalTime()
+                          if ($parent.HasExited -or $process.HasExited -or
+                              ($created.Ticks - ($created.Ticks % 10)) -ne ($started.Ticks - ($started.Ticks % 10)) -or
+                              !$row.ExecutablePath -or $process.MainModule.FileName -ine $row.ExecutablePath -or
+                              $process.SessionId -ne $app.SessionId -or [int]$row.SessionId -ne $app.SessionId -or
+                              $started -lt $parent.StartTime.ToUniversalTime()) { throw 'Unverified child identity or parent lifetime' }
+                          $children[$id] = $process
+                          $owned[$id] = $process
+                          $process = $null
+                      } finally {
+                          # Never register or kill a handle whose ancestry/identity was not verified.
+                          if ($process) { $process.Dispose() }
+                      }
+                  }
+              } while ($next.Count -gt 0)
+          }
+          
+          try {
+              if (!$IsWindows -or $env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or !$env:RUNNER_TEMP -or ![Environment]::UserInteractive -or [Diagnostics.Process]::GetCurrentProcess().SessionId -eq 0) { throw 'BLOCKED_EXTERNAL_TARGET: disposable interactive hosted Windows required' }
+              if (@(Get-ChildItem Env: | Where-Object { $_.Name -like 'WEBVIEW2_*' }).Count -ne 0) { throw 'BLOCKED_EXTERNAL_TARGET: WebView2 environment override' }
+              # Locked Tauri 2.11.1 manager/webview.rs defaults to LocalData/identifier.
+              $webviewRoot = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'io.github.shawnwu2022.ccdesk'
+              if (Test-Path -LiteralPath $webviewRoot) { throw 'BLOCKED_EXTERNAL_TARGET: existing default WebView data; never inspect or reset it' }
+              if (@(Get-Process cc-desk -ErrorAction SilentlyContinue).Count -ne 0) { throw 'BLOCKED_EXTERNAL_TARGET: existing App' }
+              $homeRoot = Join-Path ([Environment]::GetFolderPath('UserProfile')) '.cc-box'
+              if (Test-Path -LiteralPath $homeRoot) { throw 'BLOCKED_EXTERNAL_TARGET: existing application data; never inspect or reset it' }
+              $image = (Resolve-Path -LiteralPath $Exe).Path
+              $temp = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\') + '\'
+              if (!$image.StartsWith($temp, [StringComparison]::OrdinalIgnoreCase)) { throw 'Installed image must be inside RUNNER_TEMP' }
+              $result.image = $image
+              $result.sha256 = (Get-FileHash -LiteralPath $image -Algorithm SHA256).Hash
+              if ($FixtureCodex) {
+                  $result.codexHistory=[ordered]@{stage='fixture-read'; cli='0.169.1'; preflight=$false; rename='not-attempted'; archivedMenu='not-tested'; delete='held'}
+                  $fixture=& (Join-Path $PSScriptRoot 'pr101-codex-history-fixture.ps1') -Codex $FixtureCodex
+                  if (!$fixture.AppServerReadVerified) { throw 'Unverified synthetic history inputs' }
+                  $result.codexHistory.preflight=$true
+                  $env:CODEX_HOME=$fixture.Home
+                  $env:PATH=(Split-Path $FixtureCodex -Parent) + ';' + $env:PATH
+                  . (Join-Path $PSScriptRoot 'pr101-codex-history-gui.ps1')
+              }
+              Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Drawing
+              # Visible UI is the explicit purpose of this hosted-only acceptance step.
+              $app = Start-Process -FilePath $image -WorkingDirectory (Split-Path $image) -PassThru
+              $null = $app.Handle
+              $result.pid = $app.Id
+              if ($app.MainModule.FileName -ine $image) { throw 'Started image identity mismatch' }
+              $window = Wait-Observed {
+                  $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty, $app.Id)
+                  $all = [System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Children, $condition)
+                  $visible = @($all | Where-Object { !$_.Current.IsOffscreen -and $_.Current.ControlType -eq [System.Windows.Automation.ControlType]::Window })
+                  if ($visible.Count -gt 1) { throw 'Ambiguous original top-level window' }
+                  if ($visible.Count -eq 1) { return $visible[0] }
+              } 'ordinary main window'
+              if ($FixtureCodex) {
+                  $result.codexHistory.stage='initial-settings-observation'
+                  $settingsControl=Wait-Observed {
+                      $same=@($window.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition) | Where-Object {
+                          $_.Current.Name -ceq 'Settings' -and $_.Current.ControlType -eq [System.Windows.Automation.ControlType]::Button
+                      })
+                      if ($same.Count -gt 1) { throw 'Ambiguous initial Settings controls' }
+                      if (!$same.Count) { return $null }
+                      $observed=$same[0]
+                      $result.initialSettings=[ordered]@{
+                          enabled=$observed.Current.IsEnabled
+                          offscreen=$observed.Current.IsOffscreen
+                          patterns=@($observed.GetSupportedPatterns() | ForEach-Object ProgrammaticName)
+                      }
+                      if ($observed.Current.IsOffscreen) {
+                          $scroll=$null
+                          if (!$observed.TryGetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern,[ref]$scroll)) { throw 'Initial Settings is offscreen without an observed scroll pattern' }
+                          ([System.Windows.Automation.ScrollItemPattern]$scroll).ScrollIntoView()
+                          return $null
+                      }
+                      if ($observed.Current.IsEnabled) { return $observed }
+                  } 'initial fixed Settings control'
+                  $click=$null
+                  if (!$settingsControl.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern,[ref]$click)) { throw 'Initial Settings lacks an observed InvokePattern' }
+                  ([System.Windows.Automation.InvokePattern]$click).Invoke()
+              }
+              Invoke-Button @('General')
+              if ($FixtureCodex) {
+                  # Fresh product defaults hide Codex. Enable it through the observed General control.
+                  $codexOffLabel = "Codex CLI disabled $([char]0x00B7) click to enable"
+                  $codexOnLabel = "Codex CLI enabled $([char]0x00B7) click to disable"
+                  $codexToggle = Wait-Observed { Find-Control @($codexOffLabel) ([System.Windows.Automation.ControlType]::Button) } 'Codex support default off'
+                  $pattern = $null
+                  if (!$codexToggle.TryGetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern, [ref]$pattern)) { throw 'Codex support toggle unavailable' }
+                  $pattern = [System.Windows.Automation.TogglePattern]$pattern
+                  if ($pattern.Current.ToggleState -ne [System.Windows.Automation.ToggleState]::Off) { throw 'Codex support was not default off' }
+                  $pattern.Toggle()
+                  $null = Wait-Observed {
+                      $control = Find-Control @($codexOnLabel) ([System.Windows.Automation.ControlType]::Button)
+                      $state = $null
+                      if ($control -and $control.TryGetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern, [ref]$state) -and ([System.Windows.Automation.TogglePattern]$state).Current.ToggleState -eq [System.Windows.Automation.ToggleState]::On) { return $control }
+                      return $null
+                  } 'Codex support enabled through GUI'
+              }
+              $testFailure=$null
+              try { Test-CodexHistoryGui } catch { $testFailure=$_.Exception.Message }
+              Observe-Children
+              $result.children = @($children.Values | ForEach-Object { [ordered]@{ pid=$_.Id; name=$_.ProcessName } })
+              if (@($children.Values | Where-Object ProcessName -eq 'msedgewebview2').Count -eq 0) { throw 'No actual WebView2 child observed' }
+              $close = $null
+              if (!$window.TryGetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern, [ref]$close)) { throw 'BLOCKED_UI_CLOSE' }
+              ([System.Windows.Automation.WindowPattern]$close).Close()
+              if (!$app.WaitForExit(30000) -or $app.ExitCode -ne 0) { throw 'Ordinary App did not close normally' }
+              foreach ($child in $children.Values) { if (!$child.WaitForExit(10000)) { throw 'Observed WebView child did not exit' } }
+              $result.normalExit = $true
+              if ($testFailure) { $result.status='partial'; throw $testFailure }
+              if ($result.codexHistory.rename -cne 'native-name-persisted') { throw 'Rename evidence was not completed' }
+              $result.status = 'passed'
+          } catch {
+              if ($app -and $result.status -cne 'partial') { $result.status = 'failed' }
+              $result.error = $_.Exception.Message
+              throw
+          } finally {
+              # Failure cleanup is never retirement evidence or a passed UI acceptance.
+              try {
+                  if ($app -and !$app.HasExited) { $app.Kill(); $null = $app.WaitForExit(10000) }
+                  foreach ($child in $children.Values) { if (!$child.HasExited) { $child.Kill(); $null = $child.WaitForExit(10000) }; $child.Dispose() }
+              } catch {
+                  $result.cleanupError = $_.Exception.Message
+                  $result.status = 'failed'
+                  throw
+              } finally {
+                  $result | ConvertTo-Json -Depth 7 | Set-Content -Encoding utf8 (Join-Path $out 'result.json')
+                  if ($app) { $app.Dispose() }
+              }
+          }
+          '@ | Set-Content -LiteralPath (Join-Path $scriptRoot 'test-installed-rename.ps1') -Encoding utf8
+          $exe = Get-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'verified-image.txt') -TotalCount 1
+          if ((Get-FileHash -LiteralPath $exe).Hash -ine '6b63e56b7f675a5680ae4115d3fe58aed130f1b5f503c515b154f7079efb4b3f') { throw 'Installed image changed before launch' }
           $official = Join-Path $env:RUNNER_TEMP 'official-codex/extracted/package/vendor/x86_64-pc-windows-msvc/bin/codex.exe'
-          & ./pinned-harness/scripts/test-desktop-webview.ps1 -Exe $exe -ActivityDiagnosticsAcceptance -FixtureCodex $official
-          $observed = Get-Content -LiteralPath 'desktop-webview-smoke/result.json' -Raw | ConvertFrom-Json
+          Get-ChildItem Env: | Where-Object { $_.Name -cne 'GITHUB_ACTIONS' -and $_.Name -match '^(ACTIONS_|GITHUB_|GH_)|TOKEN|SECRET|API_KEY|PASSWORD|CREDENTIAL' } | ForEach-Object {
+              [Environment]::SetEnvironmentVariable($_.Name, $null, 'Process')
+          }
+          & (Join-Path $scriptRoot 'test-installed-rename.ps1') -Exe $exe -FixtureCodex $official
+          $observed=Get-Content -LiteralPath 'installed-rename-evidence/result.json' -Raw | ConvertFrom-Json
           if ($observed.status -cne 'passed' -or !$observed.normalExit -or
-              !$observed.codexHistory.readonlyPostRestore.observed -or
-              $observed.codexHistory.readonlyPostRestore.activeCount -ne 1 -or
-              $observed.codexHistory.readonlyPostRestore.archivedCount -ne 0 -or
-              !$observed.codexHistory.privacyCanariesAbsent) { throw 'Preliminary same-UUID restore or privacy gate incomplete' }
+              !$observed.codexHistory.activeRowObserved -or !$observed.codexHistory.preRenameUuidMatched -or
+              !$observed.codexHistory.renamedTitleObserved -or !$observed.codexHistory.postRenameUuidMatched -or
+              $observed.codexHistory.rename -cne 'native-name-persisted' -or
+              !$observed.codexHistory.readonlyPostRename.sameId -or !$observed.codexHistory.readonlyPostRename.expectedName) { throw 'Rename acceptance receipt incomplete' }
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: 028-preliminary-restore-${{ github.run_id }}-${{ github.run_attempt }}
+          name: 028-preliminary-rename-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             pr101-identity.json
-            desktop-webview-smoke/result.json
+            installed-rename-evidence/result.json
