@@ -92,7 +92,7 @@ jobs:
           stage=apt_index
           apt_do /usr/bin/apt-get update >/dev/null 2>&1 || fail
           stage=apt_download
-          packages=(qemu-system-x86 qemu-system-common qemu-system-data qemu-utils ovmf)
+          packages=(qemu-system-x86 qemu-system-common qemu-system-data qemu-utils ovmf seabios)
           apt_do /usr/bin/apt-get --yes --no-remove --reinstall --no-install-recommends \
             --download-only install "${packages[@]}" >/dev/null 2>&1 || fail
           declare -A authenticated=()
@@ -121,11 +121,23 @@ jobs:
           qimg="$rt/usr/bin/qemu-img"
           qdata="$rt/usr/share/qemu"
           ovmf="$rt/usr/share/OVMF"
+          vgarom="$rt/usr/share/seabios/vgabios-stdvga.bin"
           lib="$rt/usr/lib/x86_64-linux-gnu:$rt/lib/x86_64-linux-gnu"
           for path in "$qemu" "$qimg" "$qdata" "$ovmf" "$ovmf/OVMF_CODE_4M.fd" "$ovmf/OVMF_VARS_4M.fd"; do
             [ -e "$path" ] && [[ "$(/usr/bin/realpath -e -- "$path")" == "$rt/"* ]] || fail
           done
           [ -x "$qemu" ] && [ -x "$qimg" ] || fail
+          stage=vga_rom_input
+          [ -f "$vgarom" ] && [ -s "$vgarom" ] &&
+            [[ "$(/usr/bin/realpath -e -- "$vgarom")" == "$rt/usr/share/seabios/"* ]] || fail
+          stage=ovmf_split_input
+          code_size=$(/usr/bin/stat -Lc '%s' -- "$ovmf/OVMF_CODE_4M.fd") || fail
+          vars_size=$(/usr/bin/stat -Lc '%s' -- "$ovmf/OVMF_VARS_4M.fd") || fail
+          [[ $code_size =~ ^[1-9][0-9]{0,7}$ && $vars_size =~ ^[1-9][0-9]{0,7}$ ]] || fail
+          (( code_size % 4096 == 0 && vars_size % 4096 == 0 &&
+             code_size + vars_size == 4 * 1024 * 1024 )) || fail
+          printf '%s\n' 'PRIVATE_SEABIOS_ROM_PRESENT=true' 'OVMF_SPLIT_4M_ALIGNED=true'
+          stage=package_elf_paths
           # Private direct ELF resolution; no credential or ambient loader env.
           # Same-distro OS already installed libs may be used only from protected
           # system library paths. Actual module/firmware lookup must still pass.
@@ -188,8 +200,8 @@ jobs:
           # QEMU is nonroot (including filesystem IDs), with existing KVM GID
           # only in this process. No app/env tweaks, inherited tokens or shares.
           stage=qemu_readiness
-          frame_ok=$(/usr/bin/timeout --signal=TERM --kill-after=3s 80s \
-              /usr/bin/python3 -I -S - "$uid" "$gid" "$kvm" "$work" 2>/dev/null <<'PY'
+          /usr/bin/timeout --signal=TERM --kill-after=3s 105s \
+              /usr/bin/python3 -I -S - "$uid" "$gid" "$kvm" "$work" 2>/dev/null <<'PY' || fail
           import errno
           import json
           import os
@@ -198,100 +210,150 @@ jobs:
           import struct
           import subprocess
           import sys
+          import threading
           import time
           from pathlib import Path
 
-          uid, gid, kvm = map(int, sys.argv[1:4])
-          work = Path(sys.argv[4])
-          runtime = work/'runtime'
-          ovmf = runtime/'usr/share/OVMF'
-          qemu = runtime/'usr/bin/qemu-system-x86_64'
-          libraries = f"{runtime}/usr/lib/x86_64-linux-gnu:{runtime}/lib/x86_64-linux-gnu"
-          modules = runtime/'usr/lib/x86_64-linux-gnu/qemu'
-          def require(ok):
+          class Blocked(RuntimeError):
+              pass
+
+          phase="launch"
+          def require(ok, code):
               if not ok:
-                  raise RuntimeError
+                  raise Blocked(code)
+
+          def startup_reason(data):
+              # Externally only these constants; never print the private stderr.
+              low=data.lower()
+              if b"permission denied" in low or b"operation not permitted" in low:
+                  return "permission"
+              if b"kvm" in low and (b"failed" in low or b"not available" in low):
+                  return "kvm_setup"
+              if b"vgabios-stdvga.bin" in low or (b"vga" in low and b"romfile" in low):
+                  return "vga_rom"
+              if b"combined size of system firmware exceeds" in low or (b"firmware block device" in low and b"invalid size" in low):
+                  return "ovmf_split_size"
+              if b"pflash" in low or b"ovmf" in low:
+                  return "ovmf_pflash"
+              if b"vga" in low:
+                  return "vga_device"
+              if b"ide.0" in low or b"drive" in low or b"blockdev" in low or b"vhdx" in low:
+                  return "disk_or_controller"
+              if b"pc bios" in low or b"firmware" in low or b"bios" in low:
+                  return "other_firmware"
+              if b"error while loading shared libraries" in low or b"cannot open shared object file" in low:
+                  return "dynamic_library"
+              if b"invalid option" in low or b"unsupported" in low or b"parameter" in low:
+                  return "option_or_parameter"
+              return "early_exit_other"
+
+          def qmp_error_kind(err):
+              if not isinstance(err,dict):
+                  return "qmp_shape"
+              if err.get("class")=="CommandNotFound":
+                  return "qmp_unknown_command"
+              msg=str(err.get("desc","")).lower()
+              if err.get("class") in ("InvalidParameter","InvalidParameterType","InvalidParameterValue") \
+                 or ("parameter" in msg and any(k in msg for k in ("invalid","unexpected","missing"))):
+                  return "qmp_invalid_arguments"
+              return "qmp_command_rejected"
+
+          uid,gid,kvm=map(int,sys.argv[1:4])
+          work=Path(sys.argv[4])
+          runtime=work/"runtime"
+          ovmf=runtime/"usr/share/OVMF"
+          rom=runtime/"usr/share/seabios/vgabios-stdvga.bin"
+          qemu=runtime/"usr/bin/qemu-system-x86_64"
+          lib=f"{runtime}/usr/lib/x86_64-linux-gnu:{runtime}/lib/x86_64-linux-gnu"
+          modules=runtime/"usr/lib/x86_64-linux-gnu/qemu"
+          qmp=work/"qmp.sock"
           def node(**data):
               return json.dumps(data,separators=(",",":"))
-          def no_net(pci, filters, hmp):
-              def walk(bus):
-                  for dev in bus["devices"]:
-                      require(dev["class_info"]["class"]>>8 != 2)
-                      if "pci_bridge" in dev:
-                          walk({"devices":dev["pci_bridge"].get("devices",[])})
-              require(pci and filters == [] and hmp.strip() == "")
-              for bus in pci: walk(bus)
           def valid_frame(path):
-              # Local only, no return or log of pixels, dimensions or file.
+              # No pixels/dimensions printed, no artifact upload; sample only.
               try:
-                  fd = os.open(path, os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC)
-                  with os.fdopen(fd, "rb") as fp:
-                      metadata = os.fstat(fp.fileno())
-                      if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > 7_000_128:
-                          return False
+                  fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC)
+                  with os.fdopen(fd,"rb") as fp:
+                      meta=os.fstat(fp.fileno())
+                      if not stat.S_ISREG(meta.st_mode) or meta.st_size>7_000_128: return False
                       if fp.readline(32)!=b"P6\n": return False
-                      width,height = map(int,fp.readline(32).split())
+                      width,height=map(int,fp.readline(32).split())
                       if not (1<=width<=1920 and 1<=height<=1200): return False
                       if fp.readline(32)!=b"255\n": return False
                       pixels=fp.read(7_000_000)
                       if len(pixels)!=width*height*3: return False
-                      return pixels != pixels[:3]*(width*height)
+                      return pixels!=pixels[:3]*(width*height)
               except (OSError,ValueError):
                   return False
+
           def proc_facts(pid):
-              p = Path("/proc")/str(pid)
-              fields = dict(line.split(":",1) for line in (p/"status").read_text().splitlines() if ":" in line)
-              require(fields["Uid"].split()==[str(uid)]*4 and fields["Gid"].split()==[str(gid)]*4)
-              require(fields["Groups"].split()==[str(kvm)] and fields["NoNewPrivs"].strip()=="1")
-              require(all(int(fields[k].strip(),16)==0 for k in ("CapEff","CapBnd","CapPrm","CapInh","CapAmb")))
-              fds = set()
+              p=Path("/proc")/str(pid)
+              fields=dict(line.split(":",1) for line in (p/"status").read_text().splitlines() if ":" in line)
+              require(fields["Uid"].split()==[str(uid)]*4 and fields["Gid"].split()==[str(gid)]*4,"process_uid_gid")
+              require(fields["Groups"].split()==[str(kvm)] and fields["NoNewPrivs"].strip()=="1","process_groups_nnp")
+              require(all(int(fields[k].strip(),16)==0 for k in ("CapEff","CapBnd","CapPrm","CapInh","CapAmb")),"process_capabilities")
+              fds=set()
               for fd in (p/"fd").iterdir():
-                  try: link = os.readlink(fd)
+                  try: link=os.readlink(fd)
                   except FileNotFoundError: continue
-                  if link.startswith("socket:["):
-                      fds.add(link[8:-1])
+                  if link.startswith("socket:["): fds.add(link[8:-1])
               for kind in ("tcp","tcp6","udp","udp6","raw","raw6"):
-                  table = p/"net"/kind
+                  table=p/"net"/kind
                   if table.exists():
                       for line in table.read_text().splitlines()[1:]:
-                          require(line.split()[9] not in fds)
+                          require(line.split()[9] not in fds,"inet_socket_present")
 
-          require(stat.S_IMODE(work.stat().st_mode)==0o700 and work.stat().st_uid==uid)
-          sock = work/"qmp.sock"
-          argv = [
-            "/usr/bin/sudo","-n","--","/usr/bin/setpriv",
-            f"--reuid={uid}",f"--regid={gid}",f"--groups={kvm}",
-            "--inh-caps=-all","--ambient-caps=-all","--bounding-set=-all","--no-new-privs","--reset-env","--",
-            "/usr/bin/env","-i",f"HOME={work}",f"LD_LIBRARY_PATH={libraries}",f"QEMU_MODULE_DIR={modules}","/usr/bin/timeout","--signal=TERM","--kill-after=2s","45s",
-            "/usr/bin/prlimit","--fsize=2147483648:2147483648","--",
-            str(qemu),"-L",str(runtime/"usr/share/qemu"),"-no-user-config","-nodefaults","-S",
-            "-machine","q35,accel=kvm","-cpu","host","-m","4096","-smp","2",
-            "-display","none","-device","VGA","-nic","none","-monitor","none",
-            "-serial","none","-parallel","none","-no-reboot",
-            "-qmp",f"unix:{sock},server=on,wait=off",
-            "-drive",f"if=pflash,format=raw,readonly=on,file={ovmf}/OVMF_CODE_4M.fd",
-            "-drive","if=pflash,format=raw,file=OVMF_VARS_4M.fd",
-            "-blockdev",node(driver="file",filename="official.vhdx",**{"node-name":"source","read-only":True}),
-            "-blockdev",node(driver="vhdx",file="source",**{"node-name":"base","read-only":True}),
-            "-blockdev",node(driver="file",filename="overlay.qcow2",**{"node-name":"scratch-file"}),
-            "-blockdev",node(driver="qcow2",file="scratch-file",backing="base",**{"node-name":"scratch"}),
-            "-device","ide-hd,drive=scratch,bus=ide.0"]
-          child = subprocess.Popen(argv, cwd=work, stdin=subprocess.DEVNULL,
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-          conn = None
+          child=None
+          conn=None
+          thread=None
+          stderr=bytearray()
+          outcome="ok"
+          frame=False
           try:
-              deadline = time.monotonic()+20
+              require(stat.S_IMODE(work.stat().st_mode)==0o700 and work.stat().st_uid==uid,"private_directory")
+              argv=[
+                "/usr/bin/sudo","-n","--","/usr/bin/setpriv",
+                f"--reuid={uid}",f"--regid={gid}",f"--groups={kvm}",
+                "--inh-caps=-all","--ambient-caps=-all","--bounding-set=-all","--no-new-privs","--reset-env","--",
+                "/usr/bin/env","-i",f"HOME={work}",f"LD_LIBRARY_PATH={lib}",f"QEMU_MODULE_DIR={modules}",
+                "/usr/bin/timeout","--signal=TERM","--kill-after=2s","75s",
+                "/usr/bin/prlimit","--fsize=2147483648:2147483648","--",
+                str(qemu),"-L",str(runtime/"usr/share/qemu"),"-no-user-config","-nodefaults","-S",
+                "-machine","q35,accel=kvm","-cpu","host","-m","4096","-smp","2",
+                "-display","none","-device",f"VGA,romfile={rom}","-nic","none","-monitor","none",
+                "-serial","none","-parallel","none","-no-reboot",
+                "-qmp",f"unix:{qmp},server=on,wait=off",
+                "-drive",f"if=pflash,format=raw,readonly=on,file={ovmf}/OVMF_CODE_4M.fd",
+                "-drive","if=pflash,format=raw,file=OVMF_VARS_4M.fd",
+                "-blockdev",node(driver="file",filename="official.vhdx",**{"node-name":"source","read-only":True}),
+                "-blockdev",node(driver="vhdx",file="source",**{"node-name":"base","read-only":True}),
+                "-blockdev",node(driver="file",filename="overlay.qcow2",**{"node-name":"scratch-file"}),
+                "-blockdev",node(driver="qcow2",file="scratch-file",backing="base",**{"node-name":"scratch"}),
+                "-device","ide-hd,drive=scratch,bus=ide.0"]
+              child=subprocess.Popen(argv,cwd=work,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+              def drain():
+                  while True:
+                      chunk=child.stderr.read(1024)
+                      if not chunk: break
+                      stderr.extend(chunk[:max(0,8192-len(stderr))])
+              thread=threading.Thread(target=drain,daemon=True)
+              thread.start()
+              phase="private_socket"
+              deadline=time.monotonic()+17
               while True:
-                  require(child.poll() is None and time.monotonic()<deadline)
-                  if not sock.exists():
+                  if child.poll() is not None:
+                      thread.join(timeout=1)
+                      phase="early_launch_exit"
+                      raise Blocked(startup_reason(stderr))
+                  require(time.monotonic()<deadline,"socket_deadline")
+                  if not qmp.exists():
                       time.sleep(.1)
                       continue
-                  sock_stat=sock.lstat()
-                  require(stat.S_ISSOCK(sock_stat.st_mode) and sock_stat.st_uid==uid)
-                  attempt = socket.socket(socket.AF_UNIX)
+                  mode=qmp.lstat()
+                  require(stat.S_ISSOCK(mode.st_mode) and mode.st_uid==uid,"socket_type_owner")
+                  attempt=socket.socket(socket.AF_UNIX)
                   attempt.settimeout(3)
-                  try:
-                      attempt.connect(str(sock))
+                  try: attempt.connect(str(qmp))
                   except OSError as e:
                       attempt.close()
                       if e.errno not in (errno.ECONNREFUSED,errno.ENOENT): raise
@@ -299,77 +361,120 @@ jobs:
                       continue
                   conn=attempt
                   break
-              pid, peer_uid, peer_gid = struct.unpack("3i",conn.getsockopt(socket.SOL_SOCKET,socket.SO_PEERCRED,12))
-              require(peer_uid==uid and peer_gid==gid and pid>1)
+              phase="peer_credentials"
+              pid, peer_uid, peer_gid=struct.unpack("3i",conn.getsockopt(socket.SOL_SOCKET,socket.SO_PEERCRED,12))
+              require(pid>1 and peer_uid==uid and peer_gid==gid,"peer_credentials")
+              phase="process_facts"
               proc_facts(pid)
-              reader = conn.makefile("rb")
+              reader=conn.makefile("rb")
               def read():
-                  buf=reader.readline(262144)
-                  require(buf.endswith(b"\n"))
-                  return json.loads(buf)
-              require("QMP" in read())
+                  data=reader.readline(262144)
+                  require(bool(data) and data.endswith(b"\n"),"qmp_eof_or_oversized")
+                  result=json.loads(data)
+                  require(isinstance(result,dict),"qmp_shape")
+                  return result
+              phase="qmp_greeting"
+              require("QMP" in read(),"qmp_shape")
               seq=0
-              class QmpCommandError(RuntimeError):
-                  pass
-              def call(name, args=None):
+              def call(name,args=None):
                   global seq
                   seq+=1
-                  req={"execute":name,"id":seq}
-                  if args is not None: req["arguments"]=args
-                  conn.sendall(json.dumps(req).encode()+b"\n")
+                  command={"execute":name,"id":seq}
+                  if args is not None: command["arguments"]=args
+                  conn.sendall(json.dumps(command).encode()+b"\n")
                   for _ in range(20):
-                      res=read()
-                      if res.get("id") != seq: continue
-                      if "error" in res: raise QmpCommandError
-                      return res["return"]
-                  raise RuntimeError
+                      answer=read()
+                      if answer.get("id")!=seq: continue
+                      if "error" in answer: raise Blocked(qmp_error_kind(answer["error"]))
+                      require("return" in answer,"qmp_shape")
+                      return answer["return"]
+                  raise Blocked("qmp_response_id")
+
+              phase="qmp_capabilities"
               call("qmp_capabilities")
-              require(call("query-kvm")=={"enabled":True,"present":True})
-              require(call("query-status")["status"]=="prelaunch")
-              def inventory():
-                  pci=call("query-pci")
-                  require(any(d["class_info"]["class"]==0x300
-                              for row in pci for d in row["devices"]))
-                  no_net(pci,call("query-rx-filter"),
-                         call("human-monitor-command",{"command-line":"info network"}))
-                  proc_facts(pid)
-              inventory()
-              before=call("query-cpus-fast")
-              require(len(before)==2)
+              phase="kvm_state"
+              require(call("query-kvm")=={"enabled":True,"present":True},"kvm_not_active")
+              phase="prelaunch_state"
+              require(call("query-status")["status"]=="prelaunch","unexpected_pause_state")
+              def pci_check(pci):
+                  def visit(bus):
+                      for d in bus["devices"]:
+                          require(d["class_info"]["class"]>>8!=2,"guest_nic_present")
+                          if "pci_bridge" in d:
+                              visit({"devices":d["pci_bridge"].get("devices",[])})
+                  require(pci,"pci_missing")
+                  for row in pci: visit(row)
+                  require(any(d["class_info"]["class"]==0x300 for row in pci for d in row["devices"]),"vga_missing")
+              def network_observe():
+                  global phase
+                  phase="qmp_pci"
+                  pci_check(call("query-pci"))
+                  phase="qmp_rx_filter"
+                  require(call("query-rx-filter")==[],"guest_rx_filter_present")
+                  phase="qmp_inventory"
+                  require(call("human-monitor-command",{"command-line":"info network"}).strip()=="","guest_network_present")
+              network_observe()
+              phase="vcpu_counter"
+              require(len(call("query-cpus-fast"))==2,"wrong_vcpu_count")
+              phase="continue"
               call("cont")
-              require(call("query-status")["running"] is True)
-              time.sleep(2)
-              require(call("query-status")["running"] is True)
+              require(call("query-status")["running"] is True,"not_running")
+              phase="bounded_observation"
+              time.sleep(34)
+              require(call("query-status")["running"] is True,"not_running")
+              phase="stop"
               call("stop")
-              require(call("query-status")["running"] is False)
-              inventory()
+              require(call("query-status")["running"] is False,"not_stopped")
+              phase="process_facts_after"
+              proc_facts(pid)
+              network_observe()
+              phase="private_frame"
               still=work/"local.ppm"
-              require(not still.exists())
+              require(not still.exists(),"unexpected_frame_path")
               try:
                   call("screendump",{"filename":str(still),"format":"ppm"})
-              except QmpCommandError:
-                  result=False
+              except Blocked as e:
+                  if str(e) not in ("qmp_unknown_command","qmp_invalid_arguments","qmp_command_rejected"): raise
               else:
-                  result=valid_frame(still)
+                  frame=valid_frame(still)
               finally:
                   still.unlink(missing_ok=True)
+              phase="close"
               call("quit")
-              require(child.wait(timeout=10)==0)
-              print("true" if result else "false")
+              require(child.wait(timeout=8)==0,"nonzero_exit")
+              phase="complete"
+          except Blocked as e:
+              outcome=e.args[0]
+          except PermissionError:
+              outcome="permission"
+          except (TimeoutError,subprocess.TimeoutExpired):
+              outcome="deadline"
+          except OSError:
+              outcome="os_error"
+          except (KeyError,IndexError,TypeError,ValueError):
+              outcome="shape_or_data"
           finally:
               if conn is not None: conn.close()
-              if child.poll() is None:
+              if child is not None and child.poll() is None:
                   child.terminate()
                   try: child.wait(timeout=5)
                   except subprocess.TimeoutExpired:
                       child.kill()
-                      child.wait(timeout=5)
+                      try: child.wait(timeout=5)
+                      except subprocess.TimeoutExpired:
+                          phase="close"
+                          outcome="cleanup_deadline"
+          print("QEMU_DIAGNOSTIC_PHASE="+phase)
+          print("QEMU_DIAGNOSTIC_RESULT="+outcome)
+          if outcome=="ok" and phase=="complete":
+              print("VALID_NONUNIFORM_FRAMEBUFFER="+("true" if frame else "false"))
+              print("OBSERVATION_WINDOW_SECONDS=34")
+              sys.exit(0)
+          sys.exit(1)
           PY
-          ) || fail
           stage=image_after_boot
-          [[ $frame_ok = true || $frame_ok = false ]] || fail
           /usr/bin/printf '%s  official.vhdx\n' "$pinned" | /usr/bin/timeout -k 2s 95s /usr/bin/sha256sum -c --status || fail
           printf '%s\n' 'BOOT_PATH_PASS=true' 'KVM_VCPU_STARTED_AND_STOPPED=true' \
             'VIRTUAL_VGA_REALIZED=true' 'PRIVATE_QMP_NO_GUEST_NIC_SNAPSHOTS=true' \
             'EXACT_IMMUTABLE_MEDIA_RECHECK=true' 'WINDOWS_DESKTOP_VERIFIED=false' \
-            "VALID_NONUNIFORM_FRAMEBUFFER=$frame_ok" 'GUEST_INPUT_SENT=false'
+            'GUEST_INPUT_SENT=false' 'WINDOWS_VISIBLE_STATE_CLASSIFIED=false'
