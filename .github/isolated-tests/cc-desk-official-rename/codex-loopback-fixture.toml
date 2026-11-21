@@ -1,0 +1,33 @@
+# Applied only inside the project-owned temporary CODEX_HOME.
+check_for_update_on_startup = false
+cli_auth_credentials_store = "file"
+model_provider = "ccdesk_fixture_local_only"
+chatgpt_base_url = "http://127.0.0.1:1/"
+openai_base_url = "http://127.0.0.1:1/v1"
+web_search = "disabled"
+
+[analytics]
+enabled = false
+
+[feedback]
+enabled = false
+
+[otel]
+exporter = "none"
+trace_exporter = "none"
+metrics_exporter = "none"
+log_user_prompt = false
+
+[features]
+apps = false
+plugins = false
+remote_control = false
+remote_plugin = false
+api_key_model_discovery = false
+system_proxy_fallback = false
+
+[model_providers.ccdesk_fixture_local_only]
+name = "CC Desk isolated read-only history fixture"
+base_url = "http://127.0.0.1:1/v1"
+wire_api = "responses"
+requires_openai_auth = false

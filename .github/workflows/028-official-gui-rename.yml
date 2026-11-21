@@ -1,0 +1,167 @@
+name: CC Desk 0.28 official package isolated GUI rename
+on:
+  push:
+    branches: [verify/028-official-gui-rename-20261121]
+    paths: [.github/workflows/028-official-gui-rename.yml]
+permissions:
+  actions: read
+  contents: read
+jobs:
+  bounded-official-rename:
+    if: >-
+      github.repository == 'shawnwu2022/cc-desk' &&
+      github.ref == 'refs/heads/verify/028-official-gui-rename-20261121' &&
+      github.event.created && !github.event.deleted && !github.event.forced &&
+      github.event.before == '0000000000000000000000000000000000000000' &&
+      github.run_attempt == 1
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - name: Check out immutable scratch source, not product source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: core.autocrlf
+          GIT_CONFIG_VALUE_0: "false"
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+          sparse-checkout: |
+            .github/isolated-tests/cc-desk-official-rename
+            .github/workflows/028-official-gui-rename.yml
+          sparse-checkout-cone-mode: false
+      - name: Pin exact commit and bytes; parse every PowerShell helper without importing it
+        shell: pwsh
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+          WORKFLOW_HEAD: ${{ github.workflow_sha }}
+        run: |
+          $ErrorActionPreference='Stop'
+          $prefix='.github/isolated-tests/cc-desk-official-rename'
+          $pins=[ordered]@{
+            'check-official-inputs.py'='419d8bdbef8fe5268f2d84de1bfb96e34b033b0b3a1e2bb029cf95005a586d8b'
+            'codex-loopback-fixture.toml'='77716d232bafa5ba15aaec3838433b05c540e96b1fa53d81934eab5ab7ce9f94'
+            'next_gate_binding.py'='b81c4aa4b65db66333183e6454ed89cd8d2cbe2a5bbe416e36a04650f3af1b9a'
+            'observe-product-codex.ps1'='f584c2fa4370beaf9276511d23c5f2536b4603114a371ea5076ace39bebaaac4'
+            'pr101-codex-history-fixture.ps1'='1d3ce0636d8cf0d3ea2180e6f7723ef67aca14446a0d5878a051ff5faa1056ba'
+            'pr101-codex-history-gui.ps1'='145821c2540a572c97e7654f2305a1eafaf5e15bd07994c710f742f9135500e1'
+            'prepare-runner-inputs.py'='32921974dcc98ee8a313238da697f27a5a2eada20d64adc9ba92806396c1e164'
+            'scrub-rename-evidence.py'='978305529dd59a3d804534e5fea725871fd3e795a9e5fb5174d3428c6506a50d'
+            'test-fresh-official-rename.ps1'='04ef79508a799f5482173896830efa627da3463bcc4a2a36179de612690846f0'
+            'test-fresh-runner-admission.ps1'='2ab3fe6b76b91e05238f630897d108e516b3fcb43dfd45e502444d1fd5654161'
+            'test-installed-rename.ps1'='908d4d3e9f12c4445657d9b5bb0f93362a22b733e7d94caa94e657d15b8c5f8f'
+            'verify_named_nsis.py'='49b0f703fd2ea25c0b3cd8f3d3795315822e3e60b8b98ef27e26cacbba1aa302'
+          }
+          $head=(git rev-parse HEAD)
+          $chain=(git rev-list --parents -n 1 HEAD)
+          if ($LASTEXITCODE -or $head -cne $env:EXPECTED_HEAD -or $head -cne $env:WORKFLOW_HEAD -or
+              $chain -cne "$head cc2cf32f1862ed834dc92570127947382970ebd4") { throw 'SCRATCH_HEAD_PIN' }
+          $expected=@('.github/workflows/028-official-gui-rename.yml') + @($pins.Keys | ForEach-Object { "$prefix/$_" })
+          $changed=@(git diff-tree --no-commit-id --no-renames --name-status -r HEAD)
+          if ($LASTEXITCODE -or $changed.Count -ne $expected.Count -or
+              @(Compare-Object $changed @($expected | ForEach-Object { 'A'+[char]9+$_ }) -CaseSensitive).Count) { throw 'SCRATCH_DIFF_WHITELIST' }
+          $tmp=[IO.Path]::GetFullPath($env:RUNNER_TEMP)
+          $private=Join-Path $tmp ('ccdesk-official-rename-'+[guid]::NewGuid().ToString('N'))
+          $helper=Join-Path $private 'helper'
+          New-Item -ItemType Directory -Path $helper | Out-Null
+          $python=(Get-Command python.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+          $pythonRoot=[IO.Path]::GetFullPath((Join-Path $env:RUNNER_TOOL_CACHE 'Python')).TrimEnd('\') + '\'
+          if (![IO.Path]::IsPathFullyQualified($python) -or !$python.StartsWith($pythonRoot,[StringComparison]::OrdinalIgnoreCase)) { throw 'HOSTED_PYTHON_IDENTITY' }
+          $shell=Join-Path $PSHOME 'pwsh.exe'
+          if (!(Test-Path -LiteralPath $shell -PathType Leaf)) { throw 'HOSTED_PWSH_IDENTITY' }
+          foreach ($leaf in $pins.Keys) {
+            # checkout uses LF on vetted repo; any byte conversion fails the pin, not silently normalized.
+            $file=Get-Item -LiteralPath "$prefix/$leaf"
+            if ($file.PSIsContainer -or ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+                (Get-FileHash -LiteralPath $file.FullName).Hash -ine $pins[$leaf]) { throw 'SCRATCH_HELPER_DIGEST' }
+            $dst=Join-Path $helper $leaf
+            [IO.File]::Copy($file.FullName,$dst,$false)
+            if ($leaf.EndsWith('.ps1')) {
+              $tokens=$null
+              $errors=$null
+              $null=[System.Management.Automation.Language.Parser]::ParseFile($dst,[ref]$tokens,[ref]$errors)
+              if (@($errors).Count) { throw 'SCRATCH_POWERSHELL_PARSE' }
+            }
+          }
+          @("HARNESS_ROOT=$private","HARNESS_PYTHON=$python","HARNESS_PWSH=$shell") | Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8
+      - name: Fetch exact official GitHub assets and official Codex tarball
+        shell: pwsh
+        env:
+          ARTIFACT_READ_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference='Stop'
+          $curl=Join-Path $env:SystemRoot 'System32\curl.exe'
+          if (!$env:ARTIFACT_READ_TOKEN -or !(Test-Path -LiteralPath $curl -PathType Leaf)) { throw 'READ_ONLY_FETCH_UNAVAILABLE' }
+          $header='header = "Authorization: Bearer '+$env:ARTIFACT_READ_TOKEN+'"'
+          foreach ($asset in @(@{id=14682820278; leaf='package.zip'},@{id=14682071875; leaf='smoke.zip'})) {
+            $url="https://api.github.com/repos/shawnwu2022/cc-desk/actions/artifacts/$($asset.id)/zip"
+            # No --location-trusted: auth is not forwarded across redirect hostnames.
+            $header | & $curl -q --config - --location --max-redirs 2 --proto '=https' --proto-redir '=https' --fail --silent --max-time 90 --max-filesize 67108864 --output (Join-Path $env:HARNESS_ROOT $asset.leaf) $url 2>$null
+            if ($LASTEXITCODE) { throw 'OFFICIAL_ASSET_FETCH_BLOCKED' }
+          }
+          & $curl -q --proto '=https' --fail --silent --max-time 150 --max-filesize 471859200 --output (Join-Path $env:HARNESS_ROOT 'codex.tgz') 'https://registry.npmjs.org/@openai/codex/-/codex-0.169.1-win32-x64.tgz' 2>$null
+          if ($LASTEXITCODE) { throw 'OFFICIAL_CODEX_FETCH_BLOCKED' }
+      - name: Verify immutable assets and extract only the two pinned input members
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          Set-Location -LiteralPath $env:HARNESS_ROOT
+          & $env:HARNESS_PYTHON -I -c "import sys,runpy;sys.path.insert(0,'helper');sys.argv=sys.argv[1:];runpy.run_path(sys.argv[0],run_name='__main__')" helper/prepare-runner-inputs.py package.zip smoke.zip codex.tgz input
+          if ($LASTEXITCODE) { throw 'OFFICIAL_INPUTS_UNVERIFIED' }
+      - name: Run one fresh install and ordinary GUI through an isolated environment
+        id: installed_gate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          if ($env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted') { throw 'REAL_HOSTED_RUNNER_REQUIRED' }
+          # Check parent proxy variable presence only; never copy names/values to output.
+          if (@(Get-ChildItem Env: | Where-Object Name -match 'PROXY|^WEBVIEW2_|^(OPENAI_|CHATGPT_|CODEX_)').Count) { throw 'PARENT_ENVIRONMENT_NOT_CLEAN' }
+          $spec=[Diagnostics.ProcessStartInfo]::new($env:HARNESS_PWSH)
+          $spec.UseShellExecute=$false
+          $spec.WorkingDirectory=$env:HARNESS_ROOT
+          $spec.Environment.Clear()
+          foreach ($key in @('GITHUB_ACTIONS','RUNNER_ENVIRONMENT','RUNNER_TEMP','SystemRoot','WINDIR','SystemDrive','COMSPEC','OS','PATHEXT',
+                             'PROCESSOR_ARCHITECTURE','USERNAME','USERPROFILE','HOMEDRIVE','HOMEPATH','APPDATA','LOCALAPPDATA',
+                             'PROGRAMDATA','PROGRAMFILES','PROGRAMFILES(X86)','TEMP','TMP','PUBLIC')) {
+            $value=[Environment]::GetEnvironmentVariable($key)
+            if ($value) { $spec.Environment[$key]=$value }
+          }
+          $spec.Environment['PATH']=(Join-Path $env:SystemRoot 'System32')+';'+$env:SystemRoot
+          $spec.RedirectStandardOutput=$true
+          $spec.RedirectStandardError=$true
+          $root=$env:HARNESS_ROOT
+          $argsToPass=@('-NoProfile','-NonInteractive','-File',(Join-Path $root 'helper/test-fresh-official-rename.ps1'),
+                         '-Installer',(Join-Path $root 'input/CC-Desk-0.28.0-rc.1-test-04a2f0cedc8e-x64-setup.exe'),
+                         '-FixtureCodex',(Join-Path $root 'input/codex.exe'),'-Python',$env:HARNESS_PYTHON)
+          foreach ($argument in $argsToPass) { $spec.ArgumentList.Add($argument) }
+          $proc=[Diagnostics.Process]::Start($spec)
+          try {
+            $stdout=$proc.StandardOutput.BaseStream.CopyToAsync([IO.Stream]::Null)
+            $stderr=$proc.StandardError.BaseStream.CopyToAsync([IO.Stream]::Null)
+            if (!$proc.WaitForExit(480000) -or $proc.ExitCode -ne 0) { throw 'ISOLATED_GATE_NOT_PASSED' }
+          } finally {
+            if (!$proc.HasExited) { $proc.Kill(); $null=$proc.WaitForExit(5000) }
+            $proc.Dispose()
+          }
+      - name: Construct a minimal allowlisted result, not a raw receipt
+        id: sanitized
+        if: ${{ !cancelled() && (steps.installed_gate.outcome == 'success' || steps.installed_gate.outcome == 'failure') }}
+        shell: pwsh
+        run: |
+          Set-Location -LiteralPath $env:HARNESS_ROOT
+          if (!(Test-Path -LiteralPath official-rename-evidence/invocation.json -PathType Leaf) -and
+              !(Test-Path -LiteralPath official-rename-evidence/result.json -PathType Leaf)) { return }
+          & $env:HARNESS_PYTHON -I helper/scrub-rename-evidence.py official-rename-evidence result-to-share.json
+          if ((Test-Path -LiteralPath result-to-share.json -PathType Leaf) -and (Get-Item -LiteralPath result-to-share.json).Length -lt 4096) {
+            "safe=true" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
+          }
+          if ($LASTEXITCODE) { throw 'RECEIPT_DOES_NOT_PASS' }
+      - name: Upload only scrubbed JSON
+        if: ${{ !cancelled() && steps.sanitized.outputs.safe == 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: cc-desk-official-rename-${{ github.run_id }}-1
+          path: ${{ env.HARNESS_ROOT }}/result-to-share.json
+          if-no-files-found: error
+          retention-days: 3
