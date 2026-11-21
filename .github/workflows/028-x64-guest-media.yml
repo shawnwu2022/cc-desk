@@ -1,0 +1,137 @@
+# Local proposal only; not a live workflow. No guest boot or OS setup.
+name: Windows Server evaluation media preflight
+on:
+  push:
+    branches:
+      - verify/028-x64-guest-media-20261121
+    paths:
+      - .github/workflows/028-x64-guest-media.yml
+permissions: {}
+jobs:
+  official-media:
+    if: github.repository == 'shawnwu2022/cc-desk' && github.ref == 'refs/heads/verify/028-x64-guest-media-20261121' && github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - name: Verify exact Microsoft evaluation image bytes and VHDX metadata
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          blocked() { printf '%s\n' 'MEDIA_PREFLIGHT_PASS=false'; exit 1; }
+          [ "$RUNNER_ENVIRONMENT" = github-hosted ] || blocked
+          [ "$(/usr/bin/uname -m)" = x86_64 ] || blocked
+          for route_var in http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy SSH_AUTH_SOCK; do
+            [[ ! -v "$route_var" ]] || blocked
+          done
+          umask 077
+          work=$(/usr/bin/mktemp -d /tmp/ccdesk-vhdx-XXXXXXXX) || blocked
+          trap '/usr/bin/rm -f -- "$work/official.vhdx"; /usr/bin/rmdir -- "$work"' EXIT
+          free=$(/usr/bin/df -Pk -- "$work" | /usr/bin/awk 'NR==2 {print $4}') || blocked
+          [[ $free =~ ^[0-9]+$ ]] && (( free >= 24 * 1024 * 1024 )) || blocked
+          media="$work/official.vhdx"
+          url='https://software-static.download.prss.microsoft.com/dbazure/888969d5-f34g-4e03-ac9d-1f9786c66749/26100.1742.amd64fre.ge_release_svc_refresh.240906-0331_server_serverdatacentereval_en-us.vhdx'
+          length=11686379520
+          # No .curlrc, proxy, credentials, redirects, or retry. TLS authenticates
+          # only the pinned Microsoft origin; no publisher checksum was found.
+          status=$(/usr/bin/curl -q --proto '=https' --tlsv1.2 \
+            --silent --fail --connect-timeout 15 --max-time 550 \
+            --max-filesize "$length" --output "$media" --write-out '%{http_code}' -- "$url" 2>/dev/null) || blocked
+          [ "$status" = 200 ] || blocked
+          [ "$(/usr/bin/stat -c '%s' -- "$media")" = "$length" ] || blocked
+          /usr/bin/chmod u=r,go= -- "$media" || blocked
+          digest=$(/usr/bin/timeout --signal=TERM --kill-after=2s 95s \
+            /usr/bin/python3 -I -S - "$media" "$length" 2>/dev/null <<'PY'
+          import hashlib
+          import os
+          import stat
+          import struct
+          import sys
+          import uuid
+
+          K64 = 65536
+          M1 = 1048576
+          META = uuid.UUID("8b7ca206-4790-4b9a-b8fe-575f050f886e").bytes_le
+          BAT = uuid.UUID("2dc27766-f623-4200-9d64-115e9bfd4a08").bytes_le
+          PARAM = uuid.UUID("caa16737-fa36-4d43-b3b6-33f0aa44e76b").bytes_le
+          SIZE = uuid.UUID("2fa54224-cd1b-4876-b211-5dbed83bf4b8").bytes_le
+          PARENT = uuid.UUID("a8d35f2d-b30b-454d-abf7-d3d84834ab0c").bytes_le
+          def require(cond):
+              if not cond:
+                  raise ValueError
+          def crc32c(data):
+              crc = 0xFFFFFFFF
+              for b in data:
+                  crc ^= b
+                  for _ in range(8):
+                      crc = (crc >> 1) ^ (0x82F63B78 if crc & 1 else 0)
+              return crc ^ 0xFFFFFFFF
+          def read_at(fp, offset, length):
+              fp.seek(offset)
+              data = fp.read(length)
+              require(len(data) == length)
+              return data
+          def table(fp, loc, total):
+              raw = read_at(fp, loc, K64)
+              magic, checksum, count, reserved = struct.unpack_from("<4sIII", raw)
+              require(magic == b"regi" and 2 <= count <= 2047 and reserved == 0)
+              require(crc32c(raw[:4]+b"\x00"*4+raw[8:]) == checksum)
+              regions = {}
+              spans = []
+              for i in range(count):
+                  guid, start, size, req = struct.unpack_from("<16sQII", raw, 16+i*32)
+                  require(guid not in regions and start >= M1 and start % M1 == 0)
+                  require(size >= M1 and size % M1 == 0 and start+size <= total)
+                  require(req in (0, 1) and (req == 0 or guid in (META, BAT)))
+                  regions[guid] = (start, size, req)
+                  spans.append((start, start+size))
+              spans.sort()
+              require(all(spans[i][1] <= spans[i+1][0] for i in range(len(spans)-1)))
+              require(regions[META][2] == regions[BAT][2] == 1)
+              return regions
+          def metadata_ok(fp, total):
+              require(read_at(fp, 0, 8) == b"vhdxfile")
+              one, two = table(fp, 3*K64, total), table(fp, 4*K64, total)
+              require(one == two)
+              start, extent, _ = one[META]
+              raw = read_at(fp, start, K64)
+              require(raw[:8] == b"metadata" and raw[8:10] == b"\0"*2)
+              count, = struct.unpack_from("<H", raw, 10)
+              require(2 <= count <= 2047 and raw[12:32] == b"\0"*20)
+              metadata = {}
+              spans = []
+              for i in range(count):
+                  guid, off, size, flags, reserved = struct.unpack_from("<16sIIII", raw, 32+i*32)
+                  require(guid not in metadata and guid != PARENT and reserved == 0)
+                  require(off >= K64 and size > 0 and off+size <= extent and (flags & ~7) == 0)
+                  metadata[guid] = (off, size, flags)
+                  spans.append((off,off+size))
+              spans.sort()
+              require(all(spans[i][1] <= spans[i+1][0] for i in range(len(spans)-1)))
+              file_off, file_len, file_flags = metadata[PARAM]
+              disk_off, disk_len, disk_flags = metadata[SIZE]
+              require(file_len == disk_len == 8 and not (file_flags & 1 or disk_flags & 1))
+              block, flags = struct.unpack("<II", read_at(fp, start+file_off, 8))
+              require(M1 <= block <= 256*M1 and block & (block-1) == 0 and flags in (0, 1))
+              disk_size, = struct.unpack("<Q", read_at(fp, start+disk_off, 8))
+              require(32_000_000_000 <= disk_size <= 64*1024**4)
+          def inspect(path, total):
+              fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+              with os.fdopen(fd, "rb") as fp:
+                  before = os.fstat(fp.fileno())
+                  require(stat.S_ISREG(before.st_mode) and before.st_size == total)
+                  require(not (stat.S_IMODE(before.st_mode) & 0o222))
+                  metadata_ok(fp, total)
+                  fp.seek(0)
+                  h = hashlib.file_digest(fp, "sha256").hexdigest()
+                  after = os.fstat(fp.fileno())
+                  require((before.st_mtime_ns,before.st_ctime_ns,before.st_size) ==
+                          (after.st_mtime_ns,after.st_ctime_ns,after.st_size))
+                  return h
+          try:
+              print(inspect(sys.argv[1], int(sys.argv[2])))
+          except (OSError, ValueError, KeyError, struct.error):
+              sys.exit(1)
+          PY
+          ) || blocked
+          [[ $digest =~ ^[0-9a-f]{64}$ ]] || blocked
+          printf '%s\n' 'MEDIA_PREFLIGHT_PASS=true' 'MICROSOFT_HTTPS_AND_PINNED_LENGTH=true' \
+            'VHDX_METADATA_NO_PARENT=true' "LOCAL_IMAGE_SHA256=$digest" 'GUEST_BOOT_ATTEMPTED=false'
