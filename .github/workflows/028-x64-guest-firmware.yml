@@ -9,7 +9,7 @@ jobs:
   firmware:
     if: github.repository == 'shawnwu2022/cc-desk' && github.ref == 'refs/heads/verify/028-x64-guest-firmware-20261121' && github.event_name == 'push'
     runs-on: ubuntu-24.04
-    timeout-minutes: 21
+    timeout-minutes: 27
     steps:
       - name: Evaluate bounded boot path without user interaction
         shell: bash --noprofile --norc -e -o pipefail {0}
@@ -133,6 +133,7 @@ jobs:
             /usr/bin/env -i /lib64/ld-linux-x86-64.so.2 --library-path "$lib" --list "$exe" 2>/dev/null |
               /usr/bin/python3 -I -S -c 'import os,sys; from pathlib import Path; root=Path(sys.argv[1]); system=Path("/usr/lib/x86_64-linux-gnu"); lines=[l.strip() for l in sys.stdin if l.strip()]; assert lines; paths=[]; exec("for line in lines:\n if line.startswith(\"linux-vdso\"): continue\n assert \"not found\" not in line\n value=line.split(\" => \",1)[-1].split()[0]\n p=Path(value).resolve(strict=True)\n assert p.is_file()\n assert p.is_relative_to(root) or (p.is_relative_to(system) and p.stat().st_uid==0 and not p.stat().st_mode & 0o022)\n paths.append(p)"); assert paths' "$rt" >/dev/null 2>&1 || fail
           done
+          printf '%s\n' 'SIGNED_PACKAGE_STAGE_COMPLETE=true'
           qemu_env=(/usr/bin/env -i "HOME=$work" "LD_LIBRARY_PATH=$lib" "QEMU_MODULE_DIR=$rt/usr/lib/x86_64-linux-gnu/qemu")
           cd -- "$work"
           disk=$(/usr/bin/df -Pk -- "$work" | /usr/bin/awk 'NR==2 {print $4}') || fail
@@ -140,9 +141,39 @@ jobs:
           length=11686379520
           url='https://software-static.download.prss.microsoft.com/dbazure/888969d5-f34g-4e03-ac9d-1f9786c66749/26100.1742.amd64fre.ge_release_svc_refresh.240906-0331_server_serverdatacentereval_en-us.vhdx'
           stage=image_download
-          status=$(/usr/bin/curl -q --proto '=https' --tlsv1.2 --silent --fail --connect-timeout 15 \
-            --max-time 550 --max-filesize "$length" --output official.vhdx --write-out '%{http_code}' -- "$url" 2>/dev/null) || fail
-          [ "$status" = 200 ] && [ "$(/usr/bin/stat -c '%s' -- official.vhdx)" = "$length" ] || fail
+          # Exactly one fresh bounded transfer; no automatic or Range retries.
+          if status=$(/usr/bin/curl -q --proto '=https' --tlsv1.2 --silent --fail --connect-timeout 15 \
+            --max-time 850 --max-filesize "$length" --output official.vhdx --write-out '%{http_code}' -- "$url" 2>/dev/null); then
+            curl_rc=0
+          else
+            curl_rc=$?
+          fi
+          media_result() {
+            case "$1" in
+              0) code=ok ;; 6) code=dns ;; 7) code=connect ;; 18) code=partial ;;
+              22) code=http_error ;; 23) code=local_write ;; 28) code=deadline ;;
+              35) code=tls_handshake ;; 51|60) code=tls_verification ;;
+              56) code=receive ;; 63) code=size_cap ;; *) code=other ;;
+            esac
+            case "$2" in
+              000|200|206|301|302|303|307|308|400|401|403|404|408|416|425|429|500|502|503|504) http=$2 ;;
+              *) http=other ;;
+            esac
+            size=unavailable
+            if [[ $3 =~ ^[0-9]{1,12}$ ]] && [[ $4 =~ ^[0-9]{1,12}$ ]]; then
+              if (( 10#$3 == 10#$4 )); then size=match
+              elif (( 10#$3 < 10#$4 )); then size=short
+              else size=over; fi
+            fi
+            printf '%s\n' "OFFICIAL_GET_CURL=$code" "OFFICIAL_GET_HTTP=$http" "OFFICIAL_GET_LENGTH=$size"
+          }
+          bytes=''
+          if [ -f official.vhdx ] && [ ! -L official.vhdx ]; then
+            bytes=$(/usr/bin/stat -c '%s' -- official.vhdx 2>/dev/null) || bytes=''
+          fi
+          media_result "$curl_rc" "$status" "$bytes" "$length"
+          [ "$curl_rc" -eq 0 ] && [ "$status" = 200 ] && [ "$bytes" = "$length" ] || fail
+          stage=image_digest
           /usr/bin/chmod 0400 official.vhdx || fail
           /usr/bin/printf '%s  official.vhdx\n' "$pinned" | /usr/bin/timeout -k 2s 95s /usr/bin/sha256sum -c --status || fail
           # Stage 1's exact digest already attests independent HasParent and
@@ -159,6 +190,7 @@ jobs:
           stage=qemu_readiness
           frame_ok=$(/usr/bin/timeout --signal=TERM --kill-after=3s 80s \
               /usr/bin/python3 -I -S - "$uid" "$gid" "$kvm" "$work" 2>/dev/null <<'PY'
+          import errno
           import json
           import os
           import socket
@@ -246,16 +278,27 @@ jobs:
             "-device","ide-hd,drive=scratch,bus=ide.0"]
           child = subprocess.Popen(argv, cwd=work, stdin=subprocess.DEVNULL,
                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-          conn = socket.socket(socket.AF_UNIX)
-          conn.settimeout(3)
+          conn = None
           try:
               deadline = time.monotonic()+20
               while True:
                   require(child.poll() is None and time.monotonic()<deadline)
-                  if sock.exists(): break
-                  time.sleep(.1)
-              require(stat.S_ISSOCK(sock.lstat().st_mode) and sock.lstat().st_uid==uid)
-              conn.connect(str(sock))
+                  if not sock.exists():
+                      time.sleep(.1)
+                      continue
+                  sock_stat=sock.lstat()
+                  require(stat.S_ISSOCK(sock_stat.st_mode) and sock_stat.st_uid==uid)
+                  attempt = socket.socket(socket.AF_UNIX)
+                  attempt.settimeout(3)
+                  try:
+                      attempt.connect(str(sock))
+                  except OSError as e:
+                      attempt.close()
+                      if e.errno not in (errno.ECONNREFUSED,errno.ENOENT): raise
+                      time.sleep(.1)
+                      continue
+                  conn=attempt
+                  break
               pid, peer_uid, peer_gid = struct.unpack("3i",conn.getsockopt(socket.SOL_SOCKET,socket.SO_PEERCRED,12))
               require(peer_uid==uid and peer_gid==gid and pid>1)
               proc_facts(pid)
@@ -266,6 +309,8 @@ jobs:
                   return json.loads(buf)
               require("QMP" in read())
               seq=0
+              class QmpCommandError(RuntimeError):
+                  pass
               def call(name, args=None):
                   global seq
                   seq+=1
@@ -275,6 +320,7 @@ jobs:
                   for _ in range(20):
                       res=read()
                       if res.get("id") != seq: continue
+                      if "error" in res: raise QmpCommandError
                       return res["return"]
                   raise RuntimeError
               call("qmp_capabilities")
@@ -299,14 +345,19 @@ jobs:
               inventory()
               still=work/"local.ppm"
               require(not still.exists())
-              call("screendump",{"filename":str(still),"format":"ppm"})
-              result=valid_frame(still)
-              still.unlink()
+              try:
+                  call("screendump",{"filename":str(still),"format":"ppm"})
+              except QmpCommandError:
+                  result=False
+              else:
+                  result=valid_frame(still)
+              finally:
+                  still.unlink(missing_ok=True)
               call("quit")
               require(child.wait(timeout=10)==0)
               print("true" if result else "false")
           finally:
-              conn.close()
+              if conn is not None: conn.close()
               if child.poll() is None:
                   child.terminate()
                   try: child.wait(timeout=5)
