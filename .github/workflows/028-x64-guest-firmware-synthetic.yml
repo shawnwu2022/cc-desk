@@ -1,4 +1,4 @@
-# Local review only; entirely synthetic empty media, no global apt/dpkg installation.
+# Local review only; one narrow signed SeaBIOS ROM correction with synthetic media.
 name: Synthetic empty-disk KVM firmware diagnostic
 on:
   push:
@@ -90,7 +90,7 @@ jobs:
           stage=apt_index
           apt_do /usr/bin/apt-get update >/dev/null 2>&1 || fail
           stage=apt_download
-          packages=(qemu-system-x86 qemu-system-common qemu-system-data qemu-utils ovmf)
+          packages=(qemu-system-x86 qemu-system-common qemu-system-data qemu-utils ovmf seabios)
           apt_do /usr/bin/apt-get --yes --no-remove --reinstall --no-install-recommends \
             --download-only install "${packages[@]}" >/dev/null 2>&1 || fail
           declare -A authenticated=()
@@ -119,11 +119,23 @@ jobs:
           qimg="$rt/usr/bin/qemu-img"
           qdata="$rt/usr/share/qemu"
           ovmf="$rt/usr/share/OVMF"
+          vgarom="$rt/usr/share/seabios/vgabios-stdvga.bin"
           lib="$rt/usr/lib/x86_64-linux-gnu:$rt/lib/x86_64-linux-gnu"
           for path in "$qemu" "$qimg" "$qdata" "$ovmf" "$ovmf/OVMF_CODE_4M.fd" "$ovmf/OVMF_VARS_4M.fd"; do
             [ -e "$path" ] && [[ "$(/usr/bin/realpath -e -- "$path")" == "$rt/"* ]] || fail
           done
           [ -x "$qemu" ] && [ -x "$qimg" ] || fail
+          stage=vga_rom_input
+          [ -f "$vgarom" ] && [ -s "$vgarom" ] &&
+            [[ "$(/usr/bin/realpath -e -- "$vgarom")" == "$rt/usr/share/seabios/"* ]] || fail
+          stage=ovmf_split_input
+          code_size=$(/usr/bin/stat -Lc '%s' -- "$ovmf/OVMF_CODE_4M.fd") || fail
+          vars_size=$(/usr/bin/stat -Lc '%s' -- "$ovmf/OVMF_VARS_4M.fd") || fail
+          [[ $code_size =~ ^[1-9][0-9]{0,7}$ && $vars_size =~ ^[1-9][0-9]{0,7}$ ]] || fail
+          (( code_size % 4096 == 0 && vars_size % 4096 == 0 &&
+             code_size + vars_size == 4 * 1024 * 1024 )) || fail
+          printf '%s\n' 'PRIVATE_SEABIOS_ROM_PRESENT=true' 'OVMF_SPLIT_4M_ALIGNED=true'
+          stage=package_elf_paths
           # Private direct ELF resolution; no credential or ambient loader env.
           # Same-distro OS already installed libs may be used only from protected
           # system library paths. Actual module/firmware lookup must still pass.
@@ -173,12 +185,18 @@ jobs:
                   return "permission"
               if b"kvm" in low and (b"failed" in low or b"not available" in low):
                   return "kvm_setup"
-              if b"firmware" in low or b"ovmf" in low or b"bios" in low or b"pflash" in low:
-                  return "firmware_or_pflash"
+              if b"vgabios-stdvga.bin" in low or (b"vga" in low and b"romfile" in low):
+                  return "vga_rom"
+              if b"combined size of system firmware exceeds" in low or (b"firmware block device" in low and b"invalid size" in low):
+                  return "ovmf_split_size"
+              if b"pflash" in low or b"ovmf" in low:
+                  return "ovmf_pflash"
               if b"vga" in low:
                   return "vga_device"
               if b"ide.0" in low or b"drive" in low or b"blockdev" in low or b"vhdx" in low:
                   return "disk_or_controller"
+              if b"pc bios" in low or b"firmware" in low or b"bios" in low:
+                  return "other_firmware"
               if b"error while loading shared libraries" in low or b"cannot open shared object file" in low:
                   return "dynamic_library"
               if b"invalid option" in low or b"unsupported" in low or b"parameter" in low:
@@ -200,6 +218,7 @@ jobs:
           work=Path(sys.argv[4])
           runtime=work/"runtime"
           ovmf=runtime/"usr/share/OVMF"
+          rom=runtime/"usr/share/seabios/vgabios-stdvga.bin"
           qemu=runtime/"usr/bin/qemu-system-x86_64"
           lib=f"{runtime}/usr/lib/x86_64-linux-gnu:{runtime}/lib/x86_64-linux-gnu"
           modules=runtime/"usr/lib/x86_64-linux-gnu/qemu"
@@ -239,7 +258,7 @@ jobs:
                 "/usr/bin/prlimit","--fsize=2147483648:2147483648","--",
                 str(qemu),"-L",str(runtime/"usr/share/qemu"),"-no-user-config","-nodefaults","-S",
                 "-machine","q35,accel=kvm","-cpu","host","-m","4096","-smp","2",
-                "-display","none","-device","VGA","-nic","none","-monitor","none",
+                "-display","none","-device",f"VGA,romfile={rom}","-nic","none","-monitor","none",
                 "-serial","none","-parallel","none","-no-reboot",
                 "-qmp",f"unix:{qmp},server=on,wait=off",
                 "-drive",f"if=pflash,format=raw,readonly=on,file={ovmf}/OVMF_CODE_4M.fd",
