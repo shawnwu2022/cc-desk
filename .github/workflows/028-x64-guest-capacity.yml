@@ -1,0 +1,47 @@
+name: Disposable x64 guest capacity preflight
+
+on:
+  push:
+    branches: [verify/028-x64-guest-capacity-20261121]
+    paths: [.github/workflows/028-x64-guest-capacity.yml]
+
+permissions: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Check existing capacity without changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          [ "$RUNNER_ENVIRONMENT" = github-hosted ]
+          [ "$(uname -m)" = x86_64 ]
+          root="${RUNNER_TEMP:?}"
+          [ -d "$root" ]
+          python3 - "$root" <<'PY'
+          import json
+          import os
+          import shutil
+          import stat
+          import sys
+          from pathlib import Path
+
+          node = Path('/dev/kvm')
+          try:
+              usable_shape = stat.S_ISCHR(node.stat().st_mode)
+          except OSError:
+              usable_shape = False
+          mem_kib = next((int(line.split()[1]) for line in Path('/proc/meminfo').read_text().splitlines()
+                          if line.startswith('MemAvailable:')), 0)
+          result = {
+              'hostedX64Linux': True,
+              'kvmCharacterDevice': usable_shape,
+              'kvmRunnerReadWrite': usable_shape and os.access(node, os.R_OK | os.W_OK),
+              'qemuAlreadyAvailable': bool(shutil.which('qemu-system-x86_64')),
+              'tempFreeAtLeast24GiB': shutil.disk_usage(sys.argv[1]).free >= 24 * 1024**3,
+              'memoryAvailableAtLeast8GiB': mem_kib >= 8 * 1024**2,
+          }
+          print(json.dumps(result, sort_keys=True, separators=(',', ':')))
+          PY
