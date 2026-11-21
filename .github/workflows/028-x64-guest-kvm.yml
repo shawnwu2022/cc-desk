@@ -1,0 +1,97 @@
+# REVIEW COPY ONLY. Not a live workflow and not authorization to run.
+name: One-shot KVM device preflight (review copy)
+on:
+  push:
+    branches:
+      - verify/028-x64-guest-kvm-20261121
+    paths:
+      - .github/workflows/028-x64-guest-kvm.yml
+permissions: {}
+jobs:
+  kvm-device-api:
+    if: github.repository == 'shawnwu2022/cc-desk' && github.ref == 'refs/heads/verify/028-x64-guest-kvm-20261121' && github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    defaults:
+      run:
+        shell: bash --noprofile --norc -e -o pipefail {0}
+    steps:
+      - name: Verify empty KVM descriptor under a temporary unprivileged process
+        run: |
+          # Exit only with a fixed receipt; do not expose runner/device identity or stderr.
+          fail() { printf '%s\n' 'KVM_PREFLIGHT_PASS=false'; exit 1; }
+          [ "${RUNNER_ENVIRONMENT:-}" = github-hosted ] || fail
+          [ "$(/usr/bin/uname -m 2>/dev/null)" = x86_64 ] || fail
+          runner_uid=$(/usr/bin/id -u 2>/dev/null) || fail
+          runner_gid=$(/usr/bin/id -g 2>/dev/null) || fail
+          [[ $runner_uid =~ ^[1-9][0-9]*$ && $runner_gid =~ ^[1-9][0-9]*$ ]] || fail
+          [ -c /dev/kvm ] && [ ! -L /dev/kvm ] || fail
+          kvm_entry=$(/usr/bin/getent group kvm 2>/dev/null) || fail
+          IFS=: read -r group_name _ kvm_gid _ <<<"$kvm_entry"
+          [[ $group_name = kvm && $kvm_gid =~ ^[1-9][0-9]*$ ]] || fail
+          [ "$kvm_gid" != "$runner_gid" ] || fail
+          device_info=$(/usr/bin/stat -c '%g %a' -- /dev/kvm 2>/dev/null) || fail
+          read -r device_gid mode <<<"$device_info"
+          [[ $mode =~ ^[0-7]{3}$ && $device_gid = "$kvm_gid" ]] || fail
+          (( (8#$mode & 060) == 060 )) || fail
+          # No privileged shell. Root-owned system tools only before privilege drop.
+          # The Python code on stdin executes AFTER setpriv drops privileges.
+          if /usr/bin/timeout --signal=TERM --kill-after=1s 19s \
+             /usr/bin/sudo -n -- /usr/bin/setpriv \
+             --reuid="$runner_uid" --regid="$runner_gid" --groups="$kvm_gid" \
+             --inh-caps=-all --ambient-caps=-all --bounding-set=-all \
+             --no-new-privs --reset-env -- \
+             /usr/bin/python3 -I -S - "$runner_uid" "$runner_gid" "$kvm_gid" \
+             >/dev/null 2>&1 <<'PY'
+          import fcntl
+          import os
+          import stat
+          import sys
+
+          def verify():
+              uid, gid, kvm_gid = map(int, sys.argv[1:])
+              if uid <= 0 or gid <= 0 or kvm_gid <= 0 or kvm_gid == gid:
+                  return False
+              if os.getresuid() != (uid,)*3 or os.getresgid() != (gid,)*3:
+                  return False
+              if sorted(os.getgroups()) != [kvm_gid]:
+                  return False
+              with open("/proc/self/status", encoding="ascii") as status:
+                  fields = dict(line.rstrip("\n").split(":", 1)
+                                for line in status if ":" in line)
+              if fields.get("Uid", "").split() != [str(uid)]*4:
+                  return False
+              if fields.get("Gid", "").split() != [str(gid)]*4:
+                  return False
+              if fields.get("NoNewPrivs", "").strip() != "1":
+                  return False
+              for cap in ("CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb"):
+                  if int(fields[cap].strip(), 16) != 0:
+                      return False
+              device = os.open("/dev/kvm", os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW)
+              try:
+                  meta = os.fstat(device)
+                  if (not stat.S_ISCHR(meta.st_mode)
+                      or (os.major(meta.st_rdev), os.minor(meta.st_rdev)) != (10, 232)
+                      or meta.st_gid != kvm_gid
+                      or (stat.S_IMODE(meta.st_mode) & 0o060) != 0o060):
+                      return False
+                  if fcntl.ioctl(device, 0xAE00, 0) != 12:  # KVM_GET_API_VERSION
+                      return False
+                  vm = fcntl.ioctl(device, 0xAE01, 0)      # KVM_CREATE_VM x86 default
+                  os.close(vm)
+                  return True
+              finally:
+                  os.close(device)
+
+          try:
+              ok = verify()
+          except (OSError, ValueError, KeyError):
+              ok = False
+          sys.exit(0 if ok else 1)
+          PY
+          then
+            printf '%s\n' 'KVM_PREFLIGHT_PASS=true'
+          else
+            fail
+          fi
