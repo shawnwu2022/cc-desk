@@ -1,0 +1,203 @@
+# Local offline validated review candidate. Only generated PPM; no guest or sudo.
+name: Private OCR synthetic diagnostic
+on:
+  push:
+    branches: [verify/028-x64-guest-ocr-20261121]
+    paths: [.github/workflows/028-x64-guest-ocr.yml]
+permissions: {}
+jobs:
+  ocr:
+    if: github.repository == 'shawnwu2022/cc-desk' && github.ref == 'refs/heads/verify/028-x64-guest-ocr-20261121' && github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 7
+    steps:
+      - name: Diagnose the exact private OCR runtime on known generated pixels
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          stage=runner_admission
+          fail() { printf '%s\n' 'OCR_SYNTHETIC_PASS=false' "OCR_SYNTHETIC_STOP_STAGE=$stage"; exit 1; }
+          [ "${RUNNER_ENVIRONMENT:-}" = github-hosted ] || fail
+          [ "$(/usr/bin/uname -m)" = x86_64 ] || fail
+          [ "$(/usr/bin/lsb_release -sc)" = noble ] || fail
+          for var in HTTPS_PROXY HTTP_PROXY ALL_PROXY https_proxy http_proxy all_proxy; do
+            [ -z "${!var:-}" ] || fail
+          done
+          umask 077
+          work=$(/usr/bin/mktemp -d /tmp/ccdesk-ocr-XXXXXXXX) || fail
+          trap '/usr/bin/rm -f -- "$work"/{positive.ppm,negative.ppm}' EXIT
+          disk=$(/usr/bin/df -Pk -- "$work" | /usr/bin/awk 'NR==2 {print $4}') || fail
+          [[ $disk =~ ^[0-9]+$ ]] && (( disk >= 2 * 1024 * 1024 )) || fail
+          # Unprivileged private Apt state and authenticated download only.
+          # Snapshot dpkg status for dependency resolution: never alter dpkg,
+          # invoke maintainer scripts/udev hooks or add host system settings.
+          ar="$work/apt"
+          rt="$work/runtime"
+          /usr/bin/mkdir -p -- "$ar"/{empty,lists/partial,archives/partial,preferences.d} "$rt" || fail
+          /usr/bin/cp -- /var/lib/dpkg/status "$ar/status" || fail
+          [ -f /usr/share/keyrings/ubuntu-archive-keyring.gpg ] || fail
+          [ "$(/usr/bin/stat -c '%u' -- /usr/share/keyrings/ubuntu-archive-keyring.gpg)" = 0 ] || fail
+          cat > "$ar/ubuntu.sources" <<'APT'
+          Types: deb
+          URIs: https://archive.ubuntu.com/ubuntu
+          Suites: noble noble-updates
+          Components: main universe
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+
+          Types: deb
+          URIs: https://security.ubuntu.com/ubuntu
+          Suites: noble-security
+          Components: main universe
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+          APT
+          cat > "$ar/config" <<APT
+          Dir::Etc::main "/dev/null";
+          Dir::Etc::parts "$ar/empty";
+          Dir::Etc::sourcelist "$ar/ubuntu.sources";
+          Dir::Etc::sourceparts "$ar/empty";
+          Dir::Etc::preferences "$ar/empty/preferences";
+          Dir::Etc::preferencesparts "$ar/preferences.d";
+          Dir::Etc::netrc "/dev/null";
+          Dir::Etc::netrcparts "$ar/empty";
+          Dir::State "$ar";
+          Dir::State::status "$ar/status";
+          Dir::State::lists "$ar/lists";
+          Dir::Cache "$ar";
+          Dir::Cache::archives "$ar/archives";
+          Dir::Cache::pkgcache "";
+          Dir::Cache::srcpkgcache "";
+          Acquire::Languages "none";
+          Acquire::Retries "0";
+          Acquire::https::AllowRedirect "false";
+          Acquire::AllowInsecureRepositories "false";
+          APT::Get::AllowUnauthenticated "false";
+          Debug::NoLocking "true";
+          APT
+          # Use only the private config from process start; no inherited Apt
+          # settings or host hooks. This never runs with sudo/root.
+          apt_do() {
+            /usr/bin/timeout -k 2s 160s /usr/bin/env -i PATH=/usr/bin:/bin HOME="$work" \
+              APT_CONFIG="$ar/config" "$@"
+          }
+          stage=apt_index
+          apt_do /usr/bin/apt-get update >/dev/null 2>&1 || fail
+          stage=apt_download
+          packages=(tesseract-ocr tesseract-ocr-eng)
+          apt_do /usr/bin/apt-get --yes --no-remove --reinstall --no-install-recommends \
+            --download-only install "${packages[@]}" >/dev/null 2>&1 || fail
+          declare -A authenticated=()
+          have=0
+          stage=apt_extraction
+          for deb in "$ar"/archives/*.deb; do
+            [ -f "$deb" ] && [ ! -L "$deb" ] || fail
+            pkg=$(/usr/bin/dpkg-deb -f "$deb" Package) || fail
+            ver=$(/usr/bin/dpkg-deb -f "$deb" Version) || fail
+            architecture=$(/usr/bin/dpkg-deb -f "$deb" Architecture) || fail
+            [[ $pkg =~ ^[a-z0-9][a-z0-9+.-]+$ && $ver =~ ^[a-zA-Z0-9:.+~_-]+$ &&
+               ($architecture = amd64 || $architecture = all) && -z "${authenticated[$pkg]:-}" ]] || fail
+            expected=$(/usr/bin/sha256sum -- "$deb") || fail
+            # apt already authenticates acquired packages; independently tie
+            # each actual archive to SHA256 from an authenticated index.
+            apt_do /usr/bin/apt-cache show "$pkg=$ver" 2>/dev/null | /usr/bin/awk \
+              -v hash="${expected%% *}" '$1=="SHA256:" && $2==hash {ok=1} END {exit !ok}' || fail
+            /usr/bin/dpkg-deb -x -- "$deb" "$rt" >/dev/null 2>&1 || fail
+            authenticated[$pkg]=1
+            (( have+=1 ))
+            (( have<=100 )) || fail
+          done
+          for pkg in "${packages[@]}"; do [ "${authenticated[$pkg]:-}" = 1 ] || fail; done
+          stage=runtime_abi
+          stage=runtime_abi
+          ocr="$rt/usr/bin/tesseract"
+          tessdata="$rt/usr/share/tesseract-ocr/5/tessdata"
+          lib="$rt/usr/lib/x86_64-linux-gnu:$rt/lib/x86_64-linux-gnu"
+          for path in "$ocr" "$tessdata/eng.traineddata"; do
+            [ -f "$path" ] && [ -s "$path" ] &&
+              [[ "$(/usr/bin/realpath -e -- "$path")" == "$rt/"* ]] || fail
+          done
+          [ -x "$ocr" ] || fail
+            /usr/bin/env -i /lib64/ld-linux-x86-64.so.2 --library-path "$lib" --list "$ocr" 2>/dev/null |
+              /usr/bin/python3 -I -S -c 'import os,sys; from pathlib import Path; root=Path(sys.argv[1]); system=Path("/usr/lib/x86_64-linux-gnu"); lines=[l.strip() for l in sys.stdin if l.strip()]; assert lines; paths=[]; exec("for line in lines:\n if line.startswith(\"linux-vdso\"): continue\n assert \"not found\" not in line\n value=line.split(\" => \",1)[-1].split()[0]\n p=Path(value).resolve(strict=True)\n assert p.is_file()\n assert p.is_relative_to(root) or (p.is_relative_to(system) and p.stat().st_uid==0 and not p.stat().st_mode & 0o022)\n paths.append(p)"); assert paths' "$rt" >/dev/null 2>&1 || fail
+          printf '%s\n' 'SIGNED_PRIVATE_OCR_PACKAGES=true' 'OCR_ELF_PATHS_VERIFIED=true'
+          stage=ocr_fixture
+          /usr/bin/timeout --signal=TERM --kill-after=2s 32s \
+            /usr/bin/python3 -I -S - "$work" "$ocr" "$tessdata" "$lib" 2>/dev/null <<'PY' || fail
+          import os
+          import re
+          import subprocess
+          import sys
+          import tempfile
+          from pathlib import Path
+
+          work, tesseract, tessdata = map(Path,sys.argv[1:4])
+          lib=sys.argv[4]
+          GLYPHS={
+          'A':(14,17,17,31,17,17,17), 'D':(30,17,17,17,17,17,30), 'E':(31,16,16,30,16,16,31),
+          'G':(14,17,16,23,17,17,15), 'I':(31,4,4,4,4,4,31), 'L':(16,16,16,16,16,16,31),
+          'N':(17,25,21,19,17,17,17), 'O':(14,17,17,17,17,17,14), 'P':(30,17,17,30,16,16,16),
+          'S':(15,16,16,14,1,1,30), 'T':(31,4,4,4,4,4,4), 'U':(17,17,17,17,17,17,14),
+          'W':(17,17,17,21,21,27,17), ' ': (0,)*7
+          }
+          def ppm(path, positive):
+              width,height=900,250
+              image=bytearray(b"\xff"*(width*height*3))
+              def dot(x,y,d):
+                  p=(y*width+x)*3
+                  image[p:p+3]=bytes((d,))*3
+              if positive:
+                  scale=5
+                  for row,text in enumerate(("WINDOWS SETUP","LANGUAGE TO INSTALL")):
+                      for column,char in enumerate(text):
+                          for gy,bits in enumerate(GLYPHS[char]):
+                              for gx in range(5):
+                                  if bits & (16>>gx):
+                                      for py in range(scale):
+                                          for px in range(scale):
+                                              dot(50+column*6*scale+gx*scale+px,42+row*75+gy*scale+py,0)
+              else:
+                  for y in range(height):
+                      for x in range(width):
+                          dot(x,y,235 if x<450 else 245)
+              path.write_bytes(f"P6\n{width} {height}\n255\n".encode()+image)
+          def env():
+              return {"HOME":str(work),"LD_LIBRARY_PATH":lib,"TESSDATA_PREFIX":str(tessdata),
+                      "OMP_THREAD_LIMIT":"1","LC_ALL":"C"}
+          def run(args):
+              argv=["/usr/bin/prlimit","--fsize=65536:65536","--",str(tesseract),*args]
+              try:
+                  with tempfile.TemporaryFile(dir=work) as output:
+                      proc=subprocess.run(argv,env=env(),cwd=work,stdin=subprocess.DEVNULL,
+                                          stdout=output,stderr=subprocess.DEVNULL,timeout=8,check=False)
+                      if proc.returncode!=0: return "nonzero",""
+                      output.seek(0)
+                      return "zero",output.read(16384).decode("utf-8","replace")
+              except subprocess.TimeoutExpired:
+                  return "timeout",""
+              except OSError:
+                  return "launch_error",""
+          def match(text):
+              norm=" "+re.sub(r"[^a-z0-9]+"," ",text.lower())+" "
+              return (" windows setup " in norm, " language to install " in norm)
+          def boolean(value):
+              return "true" if value else "false"
+
+          eng_status,langs=run(["--tessdata-dir",str(tessdata),"--list-langs"])
+          eng_listed=eng_status=="zero" and "eng" in [line.strip() for line in langs.splitlines()]
+          print("OCR_LANG_LIST_EXEC="+eng_status)
+          print("OCR_ENG_DATA_LISTED="+boolean(eng_listed))
+          positive=work/"positive.ppm"
+          negative=work/"negative.ppm"
+          ppm(positive,True)
+          ppm(negative,False)
+          results=[]
+          for case,path in (("POS",positive),("NEG",negative)):
+              status,decoded=run([str(path),"stdout","--tessdata-dir",str(tessdata),"-l","eng","--psm","11"])
+              text=bool(decoded.strip())
+              first, second=match(decoded)
+              print("OCR_"+case+"_ENGINE_EXEC="+status)
+              print("OCR_"+case+"_NONEMPTY="+boolean(text))
+              print("OCR_"+case+"_CUE_1="+boolean(first))
+              print("OCR_"+case+"_CUE_2="+boolean(second))
+              results.append((status,first,second))
+          sys.exit(0 if eng_listed and results==[("zero",True,True),("zero",False,False)] else 1)
+          PY
+          printf '%s\n' 'OCR_SYNTHETIC_PASS=true'
