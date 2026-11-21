@@ -1,0 +1,97 @@
+name: CC Desk Windows proxy shape only
+on:
+  push:
+    branches: [verify/028-win-proxy-shape-20261121]
+    paths: [.github/workflows/028-win-proxy-shape.yml]
+permissions:
+  contents: read
+jobs:
+  read-proxy-shape:
+    if: >-
+      github.repository == 'shawnwu2022/cc-desk' &&
+      github.ref == 'refs/heads/verify/028-win-proxy-shape-20261121' &&
+      github.event.created && !github.event.deleted && !github.event.forced &&
+      github.event.before == '0000000000000000000000000000000000000000' &&
+      github.run_attempt == 1
+    runs-on: windows-2022
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        env:
+          GIT_CONFIG_COUNT: '1'
+          GIT_CONFIG_KEY_0: core.autocrlf
+          GIT_CONFIG_VALUE_0: 'false'
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+          sparse-checkout: |
+            .github/isolated-tests/cc-desk-proxy-shape
+            .github/workflows/028-win-proxy-shape.yml
+          sparse-checkout-cone-mode: false
+      - name: Read only the fixed Windows proxy status enums
+        shell: pwsh
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+          WORKFLOW_HEAD: ${{ github.workflow_sha }}
+        run: |
+          $ErrorActionPreference='Stop'
+          $helper='.github/isolated-tests/cc-desk-proxy-shape/read-win-proxy-shape.ps1'
+          $workflow='.github/workflows/028-win-proxy-shape.yml'
+          $head=git rev-parse HEAD
+          $chain=git rev-list --parents -n 1 HEAD
+          if ($LASTEXITCODE -or $head -cne $env:EXPECTED_HEAD -or $head -cne $env:WORKFLOW_HEAD -or
+              $chain -cne "$head abe5d39536065d2cab0bc4611bea7eff2b4f7bb9") { throw 'SCRATCH_HEAD_PIN' }
+          $changed=@(git diff-tree --no-commit-id --no-renames --name-status -r HEAD)
+          $expected=@(('A'+[char]9+$helper),('A'+[char]9+$workflow))
+          if ($LASTEXITCODE -or $changed.Count -ne 2 -or @(Compare-Object $changed $expected -CaseSensitive).Count) { throw 'SCRATCH_DIFF_WHITELIST' }
+          $inputFile=Get-Item -LiteralPath $helper
+          if ($inputFile.PSIsContainer -or ($inputFile.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+              (Get-FileHash -LiteralPath $inputFile.FullName).Hash -ine '7476f8aef4e35535c5647ab620b279960994d90c1f565d9ff82848405ca10378') { throw 'SCRATCH_HELPER_DIGEST' }
+          $tokens=$null
+          $errors=$null
+          $null=[System.Management.Automation.Language.Parser]::ParseFile($inputFile.FullName,[ref]$tokens,[ref]$errors)
+          if (@($errors).Count) { throw 'SCRATCH_POWERSHELL_PARSE' }
+          if ($env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted') { throw 'HOSTED_WINDOWS_REQUIRED' }
+          $spec=[Diagnostics.ProcessStartInfo]::new((Join-Path $PSHOME 'pwsh.exe'))
+          $spec.UseShellExecute=$false
+          $spec.WorkingDirectory=$env:RUNNER_TEMP
+          $spec.Environment.Clear()
+          foreach ($k in @('SystemRoot','WINDIR','SystemDrive','TEMP','TMP')) {
+            $v=[Environment]::GetEnvironmentVariable($k)
+            if ($v) { $spec.Environment[$k]=$v }
+          }
+          $spec.RedirectStandardOutput=$true
+          $spec.RedirectStandardError=$true
+          foreach ($arg in @('-NoProfile','-NonInteractive','-File',$inputFile.FullName)) { $spec.ArgumentList.Add($arg) }
+          $p=[Diagnostics.Process]::Start($spec)
+          try {
+            $raw=$p.StandardOutput.ReadToEndAsync()
+            $null=$p.StandardError.BaseStream.CopyToAsync([IO.Stream]::Null)
+            if (!$p.WaitForExit(30000) -or $p.ExitCode -ne 0) { throw 'PROXY_SHAPE_NOT_OBSERVED' }
+            $text=$raw.GetAwaiter().GetResult()
+          } finally {
+            if (!$p.HasExited) { $p.Kill(); $null=$p.WaitForExit(5000) }
+            $p.Dispose()
+          }
+          if (!$text -or $text.Length -gt 750) { throw 'PROXY_SHAPE_SCHEMA' }
+          try { $shape=$text | ConvertFrom-Json -AsHashtable } catch { throw 'PROXY_SHAPE_SCHEMA' }
+          $safe=[ordered]@{}
+          if ($shape -isnot [System.Collections.IDictionary] -or $shape.Count -ne 8) { throw 'PROXY_SHAPE_SCHEMA' }
+          foreach ($k in @('winHttpDefaultQueryOk','currentUserQueryOk')) {
+            if (!$shape.Contains($k) -or $shape[$k] -isnot [bool]) { throw 'PROXY_SHAPE_SCHEMA' }
+            $safe[$k]=$shape[$k]
+          }
+          $access=@('unknown')
+          if ($safe.winHttpDefaultQueryOk) { $access=@('no-proxy','named-proxy','other') }
+          if ($shape.winHttpDefaultAccessType -isnot [string] -or $shape.winHttpDefaultAccessType -cnotin $access) { throw 'PROXY_SHAPE_SCHEMA' }
+          $safe.winHttpDefaultAccessType=$shape.winHttpDefaultAccessType
+          $current=@('unknown')
+          if ($safe.currentUserQueryOk) { $current=@('absent','present') }
+          foreach ($k in @('currentUserAutoDetect','currentUserManualProxy','currentUserPac','currentUserPolicyKey','machinePolicyKey')) {
+            $allowed=$current
+            if ($k -clike '*PolicyKey') { $allowed=@('unknown','absent','present') }
+            if (!$shape.Contains($k) -or $shape[$k] -isnot [string] -or $shape[$k] -cnotin $allowed) { throw 'PROXY_SHAPE_SCHEMA' }
+            $safe[$k]=$shape[$k]
+          }
+          $safe | ConvertTo-Json -Compress
