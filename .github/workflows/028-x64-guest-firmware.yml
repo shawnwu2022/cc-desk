@@ -1,5 +1,5 @@
-# Local review only; stage-1 receipt pinned. No global apt/dpkg installation.
-name: Windows evaluation media KVM boot path preflight
+# Local review only; two private passive screen samples. No global installation.
+name: Windows evaluation media first-screen observer
 on:
   push:
     branches: [verify/028-x64-guest-firmware-20261121]
@@ -9,7 +9,7 @@ jobs:
   firmware:
     if: github.repository == 'shawnwu2022/cc-desk' && github.ref == 'refs/heads/verify/028-x64-guest-firmware-20261121' && github.event_name == 'push'
     runs-on: ubuntu-24.04
-    timeout-minutes: 27
+    timeout-minutes: 28
     steps:
       - name: Evaluate bounded boot path without user interaction
         shell: bash --noprofile --norc -e -o pipefail {0}
@@ -26,7 +26,7 @@ jobs:
           done
           umask 077
           work=$(/usr/bin/mktemp -d /tmp/ccdesk-firmware-XXXXXXXX) || fail
-          trap '/usr/bin/rm -f -- "$work"/{official.vhdx,overlay.qcow2,OVMF_VARS_4M.fd,qmp.sock,local.ppm}' EXIT
+          trap '/usr/bin/rm -f -- "$work"/{official.vhdx,overlay.qcow2,OVMF_VARS_4M.fd,qmp.sock,frame-a.ppm,frame-b.ppm}' EXIT
           disk=$(/usr/bin/df -Pk -- "$work" | /usr/bin/awk 'NR==2 {print $4}') || fail
           [[ $disk =~ ^[0-9]+$ ]] && (( disk >= 24 * 1024 * 1024 )) || fail
           uid=$(/usr/bin/id -u) || fail
@@ -92,7 +92,7 @@ jobs:
           stage=apt_index
           apt_do /usr/bin/apt-get update >/dev/null 2>&1 || fail
           stage=apt_download
-          packages=(qemu-system-x86 qemu-system-common qemu-system-data qemu-utils ovmf seabios)
+          packages=(qemu-system-x86 qemu-system-common qemu-system-data qemu-utils ovmf seabios tesseract-ocr tesseract-ocr-eng)
           apt_do /usr/bin/apt-get --yes --no-remove --reinstall --no-install-recommends \
             --download-only install "${packages[@]}" >/dev/null 2>&1 || fail
           declare -A authenticated=()
@@ -119,14 +119,16 @@ jobs:
           stage=runtime_abi
           qemu="$rt/usr/bin/qemu-system-x86_64"
           qimg="$rt/usr/bin/qemu-img"
+          ocr="$rt/usr/bin/tesseract"
+          tessdata="$rt/usr/share/tesseract-ocr/5/tessdata"
           qdata="$rt/usr/share/qemu"
           ovmf="$rt/usr/share/OVMF"
           vgarom="$rt/usr/share/seabios/vgabios-stdvga.bin"
           lib="$rt/usr/lib/x86_64-linux-gnu:$rt/lib/x86_64-linux-gnu"
-          for path in "$qemu" "$qimg" "$qdata" "$ovmf" "$ovmf/OVMF_CODE_4M.fd" "$ovmf/OVMF_VARS_4M.fd"; do
+          for path in "$qemu" "$qimg" "$ocr" "$tessdata/eng.traineddata" "$qdata" "$ovmf" "$ovmf/OVMF_CODE_4M.fd" "$ovmf/OVMF_VARS_4M.fd"; do
             [ -e "$path" ] && [[ "$(/usr/bin/realpath -e -- "$path")" == "$rt/"* ]] || fail
           done
-          [ -x "$qemu" ] && [ -x "$qimg" ] || fail
+          [ -x "$qemu" ] && [ -x "$qimg" ] && [ -x "$ocr" ] && [ -s "$tessdata/eng.traineddata" ] || fail
           stage=vga_rom_input
           [ -f "$vgarom" ] && [ -s "$vgarom" ] &&
             [[ "$(/usr/bin/realpath -e -- "$vgarom")" == "$rt/usr/share/seabios/"* ]] || fail
@@ -141,7 +143,7 @@ jobs:
           # Private direct ELF resolution; no credential or ambient loader env.
           # Same-distro OS already installed libs may be used only from protected
           # system library paths. Actual module/firmware lookup must still pass.
-          for exe in "$qemu" "$qimg"; do
+          for exe in "$qemu" "$qimg" "$ocr"; do
             /usr/bin/env -i /lib64/ld-linux-x86-64.so.2 --library-path "$lib" --list "$exe" 2>/dev/null |
               /usr/bin/python3 -I -S -c 'import os,sys; from pathlib import Path; root=Path(sys.argv[1]); system=Path("/usr/lib/x86_64-linux-gnu"); lines=[l.strip() for l in sys.stdin if l.strip()]; assert lines; paths=[]; exec("for line in lines:\n if line.startswith(\"linux-vdso\"): continue\n assert \"not found\" not in line\n value=line.split(\" => \",1)[-1].split()[0]\n p=Path(value).resolve(strict=True)\n assert p.is_file()\n assert p.is_relative_to(root) or (p.is_relative_to(system) and p.stat().st_uid==0 and not p.stat().st_mode & 0o022)\n paths.append(p)"); assert paths' "$rt" >/dev/null 2>&1 || fail
           done
@@ -200,16 +202,18 @@ jobs:
           # QEMU is nonroot (including filesystem IDs), with existing KVM GID
           # only in this process. No app/env tweaks, inherited tokens or shares.
           stage=qemu_readiness
-          /usr/bin/timeout --signal=TERM --kill-after=3s 105s \
+          /usr/bin/timeout --signal=TERM --kill-after=3s 138s \
               /usr/bin/python3 -I -S - "$uid" "$gid" "$kvm" "$work" 2>/dev/null <<'PY' || fail
           import errno
           import json
           import os
+          import re
           import socket
           import stat
           import struct
           import subprocess
           import sys
+          import tempfile
           import threading
           import time
           from pathlib import Path
@@ -264,6 +268,8 @@ jobs:
           ovmf=runtime/"usr/share/OVMF"
           rom=runtime/"usr/share/seabios/vgabios-stdvga.bin"
           qemu=runtime/"usr/bin/qemu-system-x86_64"
+          tesseract=runtime/"usr/bin/tesseract"
+          tessdata=runtime/"usr/share/tesseract-ocr/5/tessdata"
           lib=f"{runtime}/usr/lib/x86_64-linux-gnu:{runtime}/lib/x86_64-linux-gnu"
           modules=runtime/"usr/lib/x86_64-linux-gnu/qemu"
           qmp=work/"qmp.sock"
@@ -286,6 +292,62 @@ jobs:
               except (OSError,ValueError):
                   return False
 
+
+          def score_text(body):
+              # OCR is untrusted data. Never render it or pass any of it to a command.
+              value=re.sub(r"[^a-z0-9]+"," ",body[:16384].lower())
+              value=" "+value+" "
+              def anycue(cues):
+                  return any(" "+cue+" " in value for cue in cues)
+              # A single safety cue blocks automation. Positive classification
+              # requires cues in two independent sets, in both separate frames.
+              if anycue(("license terms","licence terms","licensing terms","software license","license agreement",
+                         "accept the terms","accept license","end user license","eula","privacy statement",
+                         "privacy settings","agree to microsoft","accept decline")):
+                  return "terms_suspected"
+              if anycue(("sign in","signing in","sign in options","password","ctrl alt delete","pin",
+                         "security key","microsoft account","verification code","unlock")):
+                  return "auth_suspected"
+              group_a=("uefi interactive shell","uefi shell","boot manager","no bootable device","boot failed","startup nsh")
+              group_b=("uefi qemu harddisk","no mapping found","map table","shell","boot menu",
+                       "press esc","uefi cd dvd","firmware setup","start pxe")
+              if anycue(group_a) and anycue(group_b):
+                  # Avoid counting 'shell' twice inside the first cue.
+                  residual=value
+                  for cue in group_a: residual=residual.replace(" "+cue+" "," ")
+                  if any(" "+cue+" " in residual for cue in group_b): return "firmware_screen"
+              group_a=("country or region","country and region","right country","keyboard layout",
+                       "input method","choose a language","customize settings","windows setup")
+              group_b=("united states","united kingdom","keyboard or input","time and currency","preferred language",
+                       "choose your region","language to install","is this your")
+              if anycue(group_a) and anycue(group_b):
+                  residual=value
+                  for cue in group_a: residual=residual.replace(" "+cue+" "," ")
+                  if any(" "+cue+" " in residual for cue in group_b): return "windows_setup_prompt"
+              return "unknown"
+
+          def combine(a,b):
+              if "terms_suspected" in (a,b): return "TERMS_SUSPECTED_STOP"
+              if "auth_suspected" in (a,b): return "AUTH_SUSPECTED_STOP"
+              if a==b=="firmware_screen": return "FIRMWARE_SCREEN"
+              if a==b=="windows_setup_prompt": return "WINDOWS_SETUP_PROMPT"
+              return "UNKNOWN_STOP"
+
+          def ocr_local(path):
+              if not valid_frame(path): return "unknown"
+              argv=["/usr/bin/prlimit","--fsize=65536:65536","--",str(tesseract),
+                    str(path),"stdout","--tessdata-dir",str(tessdata),"-l","eng","--psm","11"]
+              scrubbed={"HOME":str(work),"LD_LIBRARY_PATH":lib,"TESSDATA_PREFIX":str(tessdata),
+                        "OMP_THREAD_LIMIT":"1","LC_ALL":"C"}
+              try:
+                  with tempfile.TemporaryFile(dir=work) as text:
+                      p=subprocess.run(argv,env=scrubbed,cwd=work,stdin=subprocess.DEVNULL,
+                                       stdout=text,stderr=subprocess.DEVNULL,timeout=8,check=False)
+                      if p.returncode!=0: return "unknown"
+                      text.seek(0)
+                      return score_text(text.read(16384).decode("utf-8","replace"))
+              except (OSError,subprocess.TimeoutExpired):
+                  return "unknown"
           def proc_facts(pid):
               p=Path("/proc")/str(pid)
               fields=dict(line.split(":",1) for line in (p/"status").read_text().splitlines() if ":" in line)
@@ -308,7 +370,11 @@ jobs:
           thread=None
           stderr=bytearray()
           outcome="ok"
-          frame=False
+          frame_a=work/"frame-a.ppm"
+          frame_b=work/"frame-b.ppm"
+          final_class="UNKNOWN_STOP"
+          sample_a=False
+          sample_b=False
           try:
               require(stat.S_IMODE(work.stat().st_mode)==0o700 and work.stat().st_uid==uid,"private_directory")
               argv=[
@@ -316,7 +382,7 @@ jobs:
                 f"--reuid={uid}",f"--regid={gid}",f"--groups={kvm}",
                 "--inh-caps=-all","--ambient-caps=-all","--bounding-set=-all","--no-new-privs","--reset-env","--",
                 "/usr/bin/env","-i",f"HOME={work}",f"LD_LIBRARY_PATH={lib}",f"QEMU_MODULE_DIR={modules}",
-                "/usr/bin/timeout","--signal=TERM","--kill-after=2s","75s",
+                "/usr/bin/timeout","--signal=TERM","--kill-after=2s","103s",
                 "/usr/bin/prlimit","--fsize=2147483648:2147483648","--",
                 str(qemu),"-L",str(runtime/"usr/share/qemu"),"-no-user-config","-nodefaults","-S",
                 "-machine","q35,accel=kvm","-cpu","host","-m","4096","-smp","2",
@@ -419,29 +485,39 @@ jobs:
               phase="continue"
               call("cont")
               require(call("query-status")["running"] is True,"not_running")
+              def capture(path):
+                  require(not path.exists(),"unexpected_frame_path")
+                  try:
+                      call("screendump",{"filename":str(path),"format":"ppm"})
+                  except Blocked as e:
+                      if str(e) not in ("qmp_unknown_command","qmp_invalid_arguments","qmp_command_rejected"): raise
+                      path.unlink(missing_ok=True)
+                      return False
+                  return valid_frame(path)
+              # Just observe, never even synthesize a key event.
               phase="bounded_observation"
-              time.sleep(34)
+              launched=time.monotonic()
+              time.sleep(max(0,launched+48-time.monotonic()))
               require(call("query-status")["running"] is True,"not_running")
+              phase="private_frame_a"
+              sample_a=capture(frame_a)
+              phase="bounded_observation"
+              time.sleep(max(0,launched+63-time.monotonic()))
+              require(call("query-status")["running"] is True,"not_running")
+              phase="private_frame_b"
+              sample_b=capture(frame_b)
               phase="stop"
               call("stop")
               require(call("query-status")["running"] is False,"not_stopped")
               phase="process_facts_after"
               proc_facts(pid)
               network_observe()
-              phase="private_frame"
-              still=work/"local.ppm"
-              require(not still.exists(),"unexpected_frame_path")
-              try:
-                  call("screendump",{"filename":str(still),"format":"ppm"})
-              except Blocked as e:
-                  if str(e) not in ("qmp_unknown_command","qmp_invalid_arguments","qmp_command_rejected"): raise
-              else:
-                  frame=valid_frame(still)
-              finally:
-                  still.unlink(missing_ok=True)
               phase="close"
               call("quit")
               require(child.wait(timeout=8)==0,"nonzero_exit")
+              phase="private_ocr_after_retirement"
+              final_class=combine(ocr_local(frame_a) if sample_a else "unknown",
+                                  ocr_local(frame_b) if sample_b else "unknown")
               phase="complete"
           except Blocked as e:
               outcome=e.args[0]
@@ -454,6 +530,7 @@ jobs:
           except (KeyError,IndexError,TypeError,ValueError):
               outcome="shape_or_data"
           finally:
+              for image in (frame_a,frame_b): image.unlink(missing_ok=True)
               if conn is not None: conn.close()
               if child is not None and child.poll() is None:
                   child.terminate()
@@ -467,8 +544,9 @@ jobs:
           print("QEMU_DIAGNOSTIC_PHASE="+phase)
           print("QEMU_DIAGNOSTIC_RESULT="+outcome)
           if outcome=="ok" and phase=="complete":
-              print("VALID_NONUNIFORM_FRAMEBUFFER="+("true" if frame else "false"))
-              print("OBSERVATION_WINDOW_SECONDS=34")
+              print("VALID_PRIVATE_FRAME_PAIR="+("true" if sample_a and sample_b else "false"))
+              print("SAFE_SCREEN_CLASS="+final_class)
+              print("OBSERVATION_SAMPLE_OFFSETS=48_63")
               sys.exit(0)
           sys.exit(1)
           PY
@@ -477,4 +555,4 @@ jobs:
           printf '%s\n' 'BOOT_PATH_PASS=true' 'KVM_VCPU_STARTED_AND_STOPPED=true' \
             'VIRTUAL_VGA_REALIZED=true' 'PRIVATE_QMP_NO_GUEST_NIC_SNAPSHOTS=true' \
             'EXACT_IMMUTABLE_MEDIA_RECHECK=true' 'WINDOWS_DESKTOP_VERIFIED=false' \
-            'GUEST_INPUT_SENT=false' 'WINDOWS_VISIBLE_STATE_CLASSIFIED=false'
+            'GUEST_INPUT_SENT=false' 'WINDOWS_DESKTOP_CLASSIFIED=false'
