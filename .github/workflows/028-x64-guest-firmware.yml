@@ -1,0 +1,324 @@
+# Local review only; stage-1 receipt pinned. No global apt/dpkg installation.
+name: Windows evaluation media KVM boot path preflight
+on:
+  push:
+    branches: [verify/028-x64-guest-firmware-20261121]
+    paths: [.github/workflows/028-x64-guest-firmware.yml]
+permissions: {}
+jobs:
+  firmware:
+    if: github.repository == 'shawnwu2022/cc-desk' && github.ref == 'refs/heads/verify/028-x64-guest-firmware-20261121' && github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 21
+    steps:
+      - name: Evaluate bounded boot path without user interaction
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          stage=runner_admission
+          fail() { printf '%s\n' 'BOOT_PATH_PASS=false' "BOOT_PATH_STOP_STAGE=$stage"; exit 1; }
+          [ "${RUNNER_ENVIRONMENT:-}" = github-hosted ] || fail
+          [ "$(/usr/bin/uname -m)" = x86_64 ] || fail
+          [ "$(/usr/bin/lsb_release -sc)" = noble ] || fail
+          pinned='2d175924c8e647969a82e36f931b22397108bd94a030e0e947b7e66e47e0be9a'
+          [[ $pinned =~ ^[0-9a-f]{64}$ ]] || fail
+          for var in HTTPS_PROXY HTTP_PROXY ALL_PROXY https_proxy http_proxy all_proxy; do
+            [ -z "${!var:-}" ] || fail
+          done
+          umask 077
+          work=$(/usr/bin/mktemp -d /tmp/ccdesk-firmware-XXXXXXXX) || fail
+          trap '/usr/bin/rm -f -- "$work"/{official.vhdx,overlay.qcow2,OVMF_VARS_4M.fd,qmp.sock,local.ppm}' EXIT
+          disk=$(/usr/bin/df -Pk -- "$work" | /usr/bin/awk 'NR==2 {print $4}') || fail
+          [[ $disk =~ ^[0-9]+$ ]] && (( disk >= 24 * 1024 * 1024 )) || fail
+          uid=$(/usr/bin/id -u) || fail
+          gid=$(/usr/bin/id -g) || fail
+          kvm_record=$(/usr/bin/getent group kvm) || fail
+          IFS=: read -r group _ kvm _ <<<"$kvm_record"
+          [[ $uid =~ ^[1-9][0-9]*$ && $gid =~ ^[1-9][0-9]*$ && $kvm =~ ^[1-9][0-9]*$ ]] || fail
+          [ "$group" = kvm ] && [ "$kvm" != "$gid" ] && [ -c /dev/kvm ] && [ ! -L /dev/kvm ] || fail
+          read -r dg mode major minor <<<"$(/usr/bin/stat -c '%g %a %t %T' -- /dev/kvm)"
+          [[ $dg = "$kvm" && $mode =~ ^[0-7]{3}$ && $major = a && $minor = e8 ]] || fail
+          (( (8#$mode & 060) == 060 )) || fail
+          # Unprivileged private Apt state and authenticated download only.
+          # Snapshot dpkg status for dependency resolution: never alter dpkg,
+          # invoke maintainer scripts/udev hooks or add host system settings.
+          ar="$work/apt"
+          rt="$work/runtime"
+          /usr/bin/mkdir -p -- "$ar"/{empty,lists/partial,archives/partial,preferences.d} "$rt" || fail
+          /usr/bin/cp -- /var/lib/dpkg/status "$ar/status" || fail
+          [ -f /usr/share/keyrings/ubuntu-archive-keyring.gpg ] || fail
+          [ "$(/usr/bin/stat -c '%u' -- /usr/share/keyrings/ubuntu-archive-keyring.gpg)" = 0 ] || fail
+          cat > "$ar/ubuntu.sources" <<'APT'
+          Types: deb
+          URIs: https://archive.ubuntu.com/ubuntu
+          Suites: noble noble-updates
+          Components: main universe
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+
+          Types: deb
+          URIs: https://security.ubuntu.com/ubuntu
+          Suites: noble-security
+          Components: main universe
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+          APT
+          cat > "$ar/config" <<APT
+          Dir::Etc::main "/dev/null";
+          Dir::Etc::parts "$ar/empty";
+          Dir::Etc::sourcelist "$ar/ubuntu.sources";
+          Dir::Etc::sourceparts "$ar/empty";
+          Dir::Etc::preferences "$ar/empty/preferences";
+          Dir::Etc::preferencesparts "$ar/preferences.d";
+          Dir::Etc::netrc "/dev/null";
+          Dir::Etc::netrcparts "$ar/empty";
+          Dir::State "$ar";
+          Dir::State::status "$ar/status";
+          Dir::State::lists "$ar/lists";
+          Dir::Cache "$ar";
+          Dir::Cache::archives "$ar/archives";
+          Dir::Cache::pkgcache "";
+          Dir::Cache::srcpkgcache "";
+          Acquire::Languages "none";
+          Acquire::Retries "0";
+          Acquire::https::AllowRedirect "false";
+          Acquire::AllowInsecureRepositories "false";
+          APT::Get::AllowUnauthenticated "false";
+          Debug::NoLocking "true";
+          APT
+          # Use only the private config from process start; no inherited Apt
+          # settings or host hooks. This never runs with sudo/root.
+          apt_do() {
+            /usr/bin/timeout -k 2s 160s /usr/bin/env -i PATH=/usr/bin:/bin HOME="$work" \
+              APT_CONFIG="$ar/config" "$@"
+          }
+          stage=apt_index
+          apt_do /usr/bin/apt-get update >/dev/null 2>&1 || fail
+          stage=apt_download
+          packages=(qemu-system-x86 qemu-system-common qemu-system-data qemu-utils ovmf)
+          apt_do /usr/bin/apt-get --yes --no-remove --reinstall --no-install-recommends \
+            --download-only install "${packages[@]}" >/dev/null 2>&1 || fail
+          declare -A authenticated=()
+          have=0
+          stage=apt_extraction
+          for deb in "$ar"/archives/*.deb; do
+            [ -f "$deb" ] && [ ! -L "$deb" ] || fail
+            pkg=$(/usr/bin/dpkg-deb -f "$deb" Package) || fail
+            ver=$(/usr/bin/dpkg-deb -f "$deb" Version) || fail
+            architecture=$(/usr/bin/dpkg-deb -f "$deb" Architecture) || fail
+            [[ $pkg =~ ^[a-z0-9][a-z0-9+.-]+$ && $ver =~ ^[a-zA-Z0-9:.+~_-]+$ &&
+               ($architecture = amd64 || $architecture = all) && -z "${authenticated[$pkg]:-}" ]] || fail
+            expected=$(/usr/bin/sha256sum -- "$deb") || fail
+            # apt already authenticates acquired packages; independently tie
+            # each actual archive to SHA256 from an authenticated index.
+            apt_do /usr/bin/apt-cache show "$pkg=$ver" 2>/dev/null | /usr/bin/awk \
+              -v hash="${expected%% *}" '$1=="SHA256:" && $2==hash {ok=1} END {exit !ok}' || fail
+            /usr/bin/dpkg-deb -x -- "$deb" "$rt" >/dev/null 2>&1 || fail
+            authenticated[$pkg]=1
+            (( have+=1 ))
+            (( have<=100 )) || fail
+          done
+          for pkg in "${packages[@]}"; do [ "${authenticated[$pkg]:-}" = 1 ] || fail; done
+          stage=runtime_abi
+          qemu="$rt/usr/bin/qemu-system-x86_64"
+          qimg="$rt/usr/bin/qemu-img"
+          qdata="$rt/usr/share/qemu"
+          ovmf="$rt/usr/share/OVMF"
+          lib="$rt/usr/lib/x86_64-linux-gnu:$rt/lib/x86_64-linux-gnu"
+          for path in "$qemu" "$qimg" "$qdata" "$ovmf" "$ovmf/OVMF_CODE_4M.fd" "$ovmf/OVMF_VARS_4M.fd"; do
+            [ -e "$path" ] && [[ "$(/usr/bin/realpath -e -- "$path")" == "$rt/"* ]] || fail
+          done
+          [ -x "$qemu" ] && [ -x "$qimg" ] || fail
+          # Private direct ELF resolution; no credential or ambient loader env.
+          # Same-distro OS already installed libs may be used only from protected
+          # system library paths. Actual module/firmware lookup must still pass.
+          for exe in "$qemu" "$qimg"; do
+            /usr/bin/env -i /lib64/ld-linux-x86-64.so.2 --library-path "$lib" --list "$exe" 2>/dev/null |
+              /usr/bin/python3 -I -S -c 'import os,sys; from pathlib import Path; root=Path(sys.argv[1]); system=Path("/usr/lib/x86_64-linux-gnu"); lines=[l.strip() for l in sys.stdin if l.strip()]; assert lines; paths=[]; exec("for line in lines:\n if line.startswith(\"linux-vdso\"): continue\n assert \"not found\" not in line\n value=line.split(\" => \",1)[-1].split()[0]\n p=Path(value).resolve(strict=True)\n assert p.is_file()\n assert p.is_relative_to(root) or (p.is_relative_to(system) and p.stat().st_uid==0 and not p.stat().st_mode & 0o022)\n paths.append(p)"); assert paths' "$rt" >/dev/null 2>&1 || fail
+          done
+          qemu_env=(/usr/bin/env -i "HOME=$work" "LD_LIBRARY_PATH=$lib" "QEMU_MODULE_DIR=$rt/usr/lib/x86_64-linux-gnu/qemu")
+          cd -- "$work"
+          disk=$(/usr/bin/df -Pk -- "$work" | /usr/bin/awk 'NR==2 {print $4}') || fail
+          [[ $disk =~ ^[0-9]+$ ]] && (( disk >= 24 * 1024 * 1024 )) || fail
+          length=11686379520
+          url='https://software-static.download.prss.microsoft.com/dbazure/888969d5-f34g-4e03-ac9d-1f9786c66749/26100.1742.amd64fre.ge_release_svc_refresh.240906-0331_server_serverdatacentereval_en-us.vhdx'
+          stage=image_download
+          status=$(/usr/bin/curl -q --proto '=https' --tlsv1.2 --silent --fail --connect-timeout 15 \
+            --max-time 550 --max-filesize "$length" --output official.vhdx --write-out '%{http_code}' -- "$url" 2>/dev/null) || fail
+          [ "$status" = 200 ] && [ "$(/usr/bin/stat -c '%s' -- official.vhdx)" = "$length" ] || fail
+          /usr/bin/chmod 0400 official.vhdx || fail
+          /usr/bin/printf '%s  official.vhdx\n' "$pinned" | /usr/bin/timeout -k 2s 95s /usr/bin/sha256sum -c --status || fail
+          # Stage 1's exact digest already attests independent HasParent and
+          # Parent Locator absence. The official emulator must agree.
+          stage=image_and_overlay
+          guest_size=$("${qemu_env[@]}" "$qimg" info -f vhdx --output=json official.vhdx 2>/dev/null |
+             /usr/bin/python3 -I -S -c 'import json,sys;x=json.load(sys.stdin); assert x["format"]=="vhdx" and not any("backing" in k for k in x); n=x["virtual-size"]; assert isinstance(n,int) and 32000000000<=n<=64*1024**4;print(n)' 2>/dev/null) || fail
+          "${qemu_env[@]}" "$qimg" create -f qcow2 overlay.qcow2 "$guest_size" >/dev/null 2>&1 || fail
+          /usr/bin/cp -- "$ovmf/OVMF_VARS_4M.fd" OVMF_VARS_4M.fd || fail
+          # 4 GiB RAM belongs only to this disposable VM; retain host headroom.
+          /usr/bin/awk '/^MemAvailable:/ {ok = ($2 >= 5*1024*1024)} END {exit !ok}' /proc/meminfo || fail
+          # QEMU is nonroot (including filesystem IDs), with existing KVM GID
+          # only in this process. No app/env tweaks, inherited tokens or shares.
+          stage=qemu_readiness
+          frame_ok=$(/usr/bin/timeout --signal=TERM --kill-after=3s 80s \
+              /usr/bin/python3 -I -S - "$uid" "$gid" "$kvm" "$work" 2>/dev/null <<'PY'
+          import json
+          import os
+          import socket
+          import stat
+          import struct
+          import subprocess
+          import sys
+          import time
+          from pathlib import Path
+
+          uid, gid, kvm = map(int, sys.argv[1:4])
+          work = Path(sys.argv[4])
+          runtime = work/'runtime'
+          ovmf = runtime/'usr/share/OVMF'
+          qemu = runtime/'usr/bin/qemu-system-x86_64'
+          libraries = f"{runtime}/usr/lib/x86_64-linux-gnu:{runtime}/lib/x86_64-linux-gnu"
+          modules = runtime/'usr/lib/x86_64-linux-gnu/qemu'
+          def require(ok):
+              if not ok:
+                  raise RuntimeError
+          def node(**data):
+              return json.dumps(data,separators=(",",":"))
+          def no_net(pci, filters, hmp):
+              def walk(bus):
+                  for dev in bus["devices"]:
+                      require(dev["class_info"]["class"]>>8 != 2)
+                      if "pci_bridge" in dev:
+                          walk({"devices":dev["pci_bridge"].get("devices",[])})
+              require(pci and filters == [] and hmp.strip() == "")
+              for bus in pci: walk(bus)
+          def valid_frame(path):
+              # Local only, no return or log of pixels, dimensions or file.
+              try:
+                  fd = os.open(path, os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC)
+                  with os.fdopen(fd, "rb") as fp:
+                      metadata = os.fstat(fp.fileno())
+                      if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > 7_000_128:
+                          return False
+                      if fp.readline(32)!=b"P6\n": return False
+                      width,height = map(int,fp.readline(32).split())
+                      if not (1<=width<=1920 and 1<=height<=1200): return False
+                      if fp.readline(32)!=b"255\n": return False
+                      pixels=fp.read(7_000_000)
+                      if len(pixels)!=width*height*3: return False
+                      return pixels != pixels[:3]*(width*height)
+              except (OSError,ValueError):
+                  return False
+          def proc_facts(pid):
+              p = Path("/proc")/str(pid)
+              fields = dict(line.split(":",1) for line in (p/"status").read_text().splitlines() if ":" in line)
+              require(fields["Uid"].split()==[str(uid)]*4 and fields["Gid"].split()==[str(gid)]*4)
+              require(fields["Groups"].split()==[str(kvm)] and fields["NoNewPrivs"].strip()=="1")
+              require(all(int(fields[k].strip(),16)==0 for k in ("CapEff","CapBnd","CapPrm","CapInh","CapAmb")))
+              fds = set()
+              for fd in (p/"fd").iterdir():
+                  try: link = os.readlink(fd)
+                  except FileNotFoundError: continue
+                  if link.startswith("socket:["):
+                      fds.add(link[8:-1])
+              for kind in ("tcp","tcp6","udp","udp6","raw","raw6"):
+                  table = p/"net"/kind
+                  if table.exists():
+                      for line in table.read_text().splitlines()[1:]:
+                          require(line.split()[9] not in fds)
+
+          require(stat.S_IMODE(work.stat().st_mode)==0o700 and work.stat().st_uid==uid)
+          sock = work/"qmp.sock"
+          argv = [
+            "/usr/bin/sudo","-n","--","/usr/bin/setpriv",
+            f"--reuid={uid}",f"--regid={gid}",f"--groups={kvm}",
+            "--inh-caps=-all","--ambient-caps=-all","--bounding-set=-all","--no-new-privs","--reset-env","--",
+            "/usr/bin/env","-i",f"HOME={work}",f"LD_LIBRARY_PATH={libraries}",f"QEMU_MODULE_DIR={modules}","/usr/bin/timeout","--signal=TERM","--kill-after=2s","45s",
+            "/usr/bin/prlimit","--fsize=2147483648:2147483648","--",
+            str(qemu),"-L",str(runtime/"usr/share/qemu"),"-no-user-config","-nodefaults","-S",
+            "-machine","q35,accel=kvm","-cpu","host","-m","4096","-smp","2",
+            "-display","none","-device","VGA","-nic","none","-monitor","none",
+            "-serial","none","-parallel","none","-no-reboot",
+            "-qmp",f"unix:{sock},server=on,wait=off",
+            "-drive",f"if=pflash,format=raw,readonly=on,file={ovmf}/OVMF_CODE_4M.fd",
+            "-drive","if=pflash,format=raw,file=OVMF_VARS_4M.fd",
+            "-blockdev",node(driver="file",filename="official.vhdx",**{"node-name":"source","read-only":True}),
+            "-blockdev",node(driver="vhdx",file="source",**{"node-name":"base","read-only":True}),
+            "-blockdev",node(driver="file",filename="overlay.qcow2",**{"node-name":"scratch-file"}),
+            "-blockdev",node(driver="qcow2",file="scratch-file",backing="base",**{"node-name":"scratch"}),
+            "-device","ide-hd,drive=scratch,bus=ide.0"]
+          child = subprocess.Popen(argv, cwd=work, stdin=subprocess.DEVNULL,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+          conn = socket.socket(socket.AF_UNIX)
+          conn.settimeout(3)
+          try:
+              deadline = time.monotonic()+20
+              while True:
+                  require(child.poll() is None and time.monotonic()<deadline)
+                  if sock.exists(): break
+                  time.sleep(.1)
+              require(stat.S_ISSOCK(sock.lstat().st_mode) and sock.lstat().st_uid==uid)
+              conn.connect(str(sock))
+              pid, peer_uid, peer_gid = struct.unpack("3i",conn.getsockopt(socket.SOL_SOCKET,socket.SO_PEERCRED,12))
+              require(peer_uid==uid and peer_gid==gid and pid>1)
+              proc_facts(pid)
+              reader = conn.makefile("rb")
+              def read():
+                  buf=reader.readline(262144)
+                  require(buf.endswith(b"\n"))
+                  return json.loads(buf)
+              require("QMP" in read())
+              seq=0
+              def call(name, args=None):
+                  global seq
+                  seq+=1
+                  req={"execute":name,"id":seq}
+                  if args is not None: req["arguments"]=args
+                  conn.sendall(json.dumps(req).encode()+b"\n")
+                  for _ in range(20):
+                      res=read()
+                      if res.get("id") != seq: continue
+                      return res["return"]
+                  raise RuntimeError
+              call("qmp_capabilities")
+              require(call("query-kvm")=={"enabled":True,"present":True})
+              require(call("query-status")["status"]=="prelaunch")
+              def inventory():
+                  pci=call("query-pci")
+                  require(any(d["class_info"]["class"]==0x300
+                              for row in pci for d in row["devices"]))
+                  no_net(pci,call("query-rx-filter"),
+                         call("human-monitor-command",{"command-line":"info network"}))
+                  proc_facts(pid)
+              inventory()
+              before=call("query-cpus-fast")
+              require(len(before)==2)
+              call("cont")
+              require(call("query-status")["running"] is True)
+              time.sleep(2)
+              require(call("query-status")["running"] is True)
+              call("stop")
+              require(call("query-status")["running"] is False)
+              inventory()
+              still=work/"local.ppm"
+              require(not still.exists())
+              call("screendump",{"filename":str(still),"format":"ppm"})
+              result=valid_frame(still)
+              still.unlink()
+              call("quit")
+              require(child.wait(timeout=10)==0)
+              print("true" if result else "false")
+          finally:
+              conn.close()
+              if child.poll() is None:
+                  child.terminate()
+                  try: child.wait(timeout=5)
+                  except subprocess.TimeoutExpired:
+                      child.kill()
+                      child.wait(timeout=5)
+          PY
+          ) || fail
+          stage=image_after_boot
+          [[ $frame_ok = true || $frame_ok = false ]] || fail
+          /usr/bin/printf '%s  official.vhdx\n' "$pinned" | /usr/bin/timeout -k 2s 95s /usr/bin/sha256sum -c --status || fail
+          printf '%s\n' 'BOOT_PATH_PASS=true' 'KVM_VCPU_STARTED_AND_STOPPED=true' \
+            'VIRTUAL_VGA_REALIZED=true' 'PRIVATE_QMP_NO_GUEST_NIC_SNAPSHOTS=true' \
+            'EXACT_IMMUTABLE_MEDIA_RECHECK=true' 'WINDOWS_DESKTOP_VERIFIED=false' \
+            "VALID_NONUNIFORM_FRAMEBUFFER=$frame_ok" 'GUEST_INPUT_SENT=false'
