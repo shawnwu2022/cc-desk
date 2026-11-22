@@ -143,14 +143,19 @@ jobs:
         if: matrix.platform == 'windows-2022'
         shell: bash
         run: |
-          LINK_PATH=$(powershell.exe -Command "Get-Command link -CommandType Application | Where-Object { \$_.Source -notlike '*Git*' } | Select-Object -First 1 -ExpandProperty Source")
-          if [ -z "$LINK_PATH" ]; then
-            echo "::error::MSVC link.exe not found"
-            exit 1
-          fi
+          LINK_PATH=$(powershell.exe -NoProfile -Command '
+            $linkPath = Get-Command link -CommandType Application | Where-Object { $_.Source -notlike "*Git*" } | Select-Object -First 1 -ExpandProperty Source
+            if ($linkPath -notmatch "^[A-Za-z]:\\" -or $linkPath -match "[\x00\r\n]") {
+              throw "Invalid or missing absolute MSVC link.exe path"
+            }
+            [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+            [Console]::Write($linkPath)
+          ')
           LINK_PATH_TOML=$(echo "$LINK_PATH" | sed 's|\\|\\\\|g')
           mkdir -p src-tauri/.cargo
           printf '[target.x86_64-pc-windows-msvc]\nlinker = "%s"\n' "$LINK_PATH_TOML" > src-tauri/.cargo/config.toml
+          # Repo-root browser Cargo does not discover the src-tauri-local linker config.
+          printf 'CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=%s\n' "$LINK_PATH" >> "$GITHUB_ENV"
 
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
