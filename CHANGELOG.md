@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+## [0.28.0-rc.2] - 2026-11-23
+
+### Added
+
+- Include the remote Host and both browser runtimes in the standard Windows package. Remote access is Locked by default and requires explicit setup and authorization.
+- Add opt-in, bounded Activity Diagnostics for session and history operations; capture remains off by default.
+
+### Fixed
+
+- Accept bounded RGB values and supported cursor styles in canonical terminal output.
+
+### Validation and limits
+
+- The exact-main test-only Windows installer verified installed startup and normal exit. On WSK-MSI, the ordinary Windows executable verified one rename on a synthetic Codex session, persistence after refresh, and reopening the same session from history after a fresh app launch. A separate official Codex CLI 0.169.1 process read back the same session ID and new name. The isolated Linux run independently verified native synthetic rename and fresh readback.
+- A signed RC2 installer, real historical install/return, full authenticated native-terminal coverage (D20), public Relay, phone enrollment and authenticated Antigravity restore remain separately unverified. Antigravity remains off by default. No claim of production remote or unattended readiness.
+- This version targets the Test channel; stable Latest remains unchanged. Exact protected-main CI, authenticated coverage and same-run updater signatures are required before publication.
+
 ## [0.28.0-rc.1] - 2026-11-17
 
 ### Added

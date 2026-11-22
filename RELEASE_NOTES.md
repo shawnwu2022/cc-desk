@@ -4,6 +4,23 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
+## [0.28.0-rc.2]
+
+Added
+
+- The standard Windows package includes the remote Host and both browser runtimes. Remote access is Locked by default and requires explicit setup and authorization.
+- Activity Diagnostics can be enabled for session and history operations. Capture is off by default.
+
+Fixed
+
+- Recognize supported RGB colors and cursor styles in terminal output.
+
+Important
+
+- Validated a synthetic Codex session in the ordinary Windows desktop executable: one rename persisted after refresh and reopening the same session from history after a fresh app launch. An independent official Codex CLI 0.169.1 process read back the same session ID and new name.
+- This does not validate a signed RC2 installer, public Relay or phone enrollment, or full authenticated native-terminal workflows. Antigravity remains off by default; authenticated restore has not been verified.
+- This is a Test-channel prerelease; Stable Latest remains unchanged.
+
 ## [0.28.0-rc.1]
 
 Added
