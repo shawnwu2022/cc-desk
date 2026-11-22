@@ -144,12 +144,19 @@ jobs:
         shell: bash
         run: |
           LINK_PATH=$(powershell.exe -NoProfile -Command '
-            $linkPath = Get-Command link -CommandType Application | Where-Object { $_.Source -notlike "*Git*" } | Select-Object -First 1 -ExpandProperty Source
-            if ($linkPath -notmatch "^[A-Za-z]:\\" -or $linkPath -match "[\x00\r\n]") {
-              throw "Invalid or missing absolute MSVC link.exe path"
+            $vcTools = $env:VCToolsInstallDir
+            if ($vcTools -notmatch "^[A-Za-z]:\\" -or $vcTools -match "[\x00\r\n]") {
+              throw "Invalid or missing absolute MSVC tools directory"
+            }
+            $linker = Get-Item -LiteralPath (Join-Path $vcTools "bin\Hostx64\x64\link.exe") -ErrorAction Stop
+            if ($linker -isnot [System.IO.FileInfo] -or
+                ($linker.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -or
+                $linker.VersionInfo.CompanyName -ne "Microsoft Corporation" -or
+                $linker.VersionInfo.OriginalFilename -ne "LINK.EXE") {
+              throw "Expected a regular Microsoft MSVC linker"
             }
             [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
-            [Console]::Write($linkPath)
+            [Console]::Write($linker.FullName)
           ')
           LINK_PATH_TOML=$(echo "$LINK_PATH" | sed 's|\\|\\\\|g')
           mkdir -p src-tauri/.cargo
