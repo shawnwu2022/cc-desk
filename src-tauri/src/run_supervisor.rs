@@ -3656,12 +3656,13 @@ impl NativeRunAdmission {
     /// 绑定同一 channel、批准 token 及截止时间，不能传入任意有效批准。
     pub(crate) fn start_observer_once(
         self,
-        channel: Arc<cc_desk_remote_host::native_host::NativeChannel>,
-        approval: crate::remote_host_network::NativeApprovalStop,
-        budget: Duration,
+        handoff: crate::remote_host_network::OriginalObserverHandoff,
     ) -> Result<NativeObserverOwner, SafeError> {
         use cc_desk_remote_record::grant::DataRole;
         use cc_desk_remote_security::Role;
+        let (channel, approval, end) = handoff
+            .into_parts(&self)
+            .map_err(|_| error("REMOTE_HOST_AUTHORITY"))?;
         let authority = channel.authority();
         if authority.local_role() != Role::Host
             || authority.data_role() != DataRole::Observer
@@ -3669,8 +3670,7 @@ impl NativeRunAdmission {
             || !channel.peer_install_enabled()
             || authority.check().is_err()
             || approval.is_invalid()
-            || budget.is_zero()
-            || budget > Duration::from_secs(60)
+            || end <= tokio::time::Instant::now()
         {
             return Err(error("REMOTE_HOST_AUTHORITY"));
         }
@@ -3685,7 +3685,6 @@ impl NativeRunAdmission {
         if *stopped.borrow() || state.observer_active.swap(true, Ordering::AcqRel) {
             return Err(error("REMOTE_OBSERVER_UNAVAILABLE"));
         }
-        let end = tokio::time::Instant::now() + budget;
         let (cancel, cancelled) = tokio::sync::oneshot::channel();
         struct CloseExactObserver(cc_desk_remote_security::BoundDataAuthority);
         impl Drop for CloseExactObserver {

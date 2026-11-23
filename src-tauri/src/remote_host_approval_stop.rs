@@ -10,6 +10,9 @@ pub(crate) struct NativeApprovalStop {
     end: Instant,
 }
 impl NativeApprovalStop {
+    pub(super) fn deadline(&self) -> Instant {
+        self.end
+    }
     #[cfg(windows)]
     pub(crate) fn new(
         token: Arc<crate::native_crypto::owner::NativeRevocation>,

@@ -51,6 +51,13 @@ pub(crate) async fn channels_with_clock(
     scope: SessionScope,
     clock: Arc<dyn GrantClock>,
 ) -> (RunningChannel, RunningChannel, GrantGate, CancelHandle) {
+    channels_with_role(scope, clock, DataRole::Controller).await
+}
+pub(crate) async fn channels_with_role(
+    scope: SessionScope,
+    clock: Arc<dyn GrantClock>,
+    role: DataRole,
+) -> (RunningChannel, RunningChannel, GrantGate, CancelHandle) {
     let local = |client| {
         let (k, p) = identities::identity(client, false);
         LocalIdentity::new(
@@ -111,11 +118,11 @@ pub(crate) async fn channels_with_clock(
         issuer: support::admin(),
         principal: [4; 32],
         scope: scope.clone(),
-        role: DataRole::Controller,
+        role,
     };
     let policy = NativeGrantPolicy {
         scope,
-        role: DataRole::Controller,
+        role,
         duration: Duration::from_secs(10),
     };
     let (c, h) = tokio::join!(
@@ -131,4 +138,9 @@ pub(crate) async fn channels_with_clock(
         gate,
         cancel,
     )
+}
+
+#[cfg(all(windows, feature = "remote-host"))]
+pub(crate) fn public_test_spki(client: bool) -> [u8; 91] {
+    identities::identity(client, false).1.try_into().unwrap()
 }

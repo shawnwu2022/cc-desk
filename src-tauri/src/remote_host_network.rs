@@ -8,6 +8,7 @@ use crate::{
     remote_host::RemoteHostService,
     run_supervisor::{NativeRunAdmission, NativeRunNetworkOrigin},
 };
+use cc_desk_remote_record::grant::DataRole;
 use cc_desk_remote_security::{
     self as security, BrowserProfile, GrantClock, GrantError, GrantGate, HostSnapshot,
     LocalIdentity, NativeGrantPolicy, P256Spki, PeerPin, RunningChannel,
@@ -225,6 +226,23 @@ impl RegisteredHostSource {
     fn is_live(&self) -> bool {
         self.live.load(Ordering::Acquire)
             && self.approval.as_ref().is_none_or(|stop| !stop.is_invalid())
+    }
+}
+/// The original registry entry and the wire-owned grant must move together.
+/// This type is never constructed from frontend input or delegated wire.
+pub(crate) struct OriginalObserverHandoff {
+    registered: Arc<RegisteredHostSource>,
+    grant: wire::OriginalObserverGrant,
+}
+impl OriginalObserverHandoff {
+    pub(crate) fn into_parts(
+        self,
+        admission: &NativeRunAdmission,
+    ) -> Result<(Arc<RunningChannel>, NativeApprovalStop, Instant), HostNetworkError> {
+        if !self.registered.is_live() || !self.registered.origin.matches(admission) {
+            return Err(HostNetworkError::Authority);
+        }
+        Ok(self.grant.into_parts())
     }
 }
 /// 只能由本服务接受原 native 批准能力后取得；不是可序列化授权或 Ready。
@@ -700,6 +718,7 @@ impl HostNetworkCustody {
                     clock,
                     continuity,
                     approval_stop,
+                    registration.as_ref(),
                     &published,
                 )
                 .await
@@ -821,12 +840,14 @@ async fn run_attempt(
     clock: Arc<SourceClock>,
     _continuity: Arc<ContinuityChecks>,
     approval_stop: Option<NativeApprovalStop>,
+    registration: Option<&Arc<RegisteredHostSource>>,
     published: &watch::Sender<Option<Result<(), HostNetworkError>>>,
 ) -> Result<(), HostNetworkError> {
     #[cfg(test)]
     let mut inputs = inputs;
     #[cfg(test)]
     let termination = inputs.termination.take();
+    let observer = inputs.policy.role == DataRole::Observer;
     let source = inputs.source.clone();
     let mut wire = wire::NetworkWire::new();
     let mut source_stop = source.revoked.clone();
@@ -838,6 +859,31 @@ async fn run_attempt(
         if !setup_allowed {
             return Err(HostNetworkError::Closed);
         }
+        let observer_source = if observer {
+            let registered = registration.ok_or(HostNetworkError::Authority)?;
+            let admission = original.as_ref().ok_or(HostNetworkError::Authority)?;
+            if !registered.is_live()
+                || !Arc::ptr_eq(&registered.description.source, &source)
+                || !registered.origin.matches(admission)
+                || registered.description.policy.role != DataRole::Observer
+            {
+                return Err(HostNetworkError::Authority);
+            }
+            #[cfg(windows)]
+            let matched = inputs.stages.as_ref().is_some_and(|stages| {
+                approval_stop
+                    .as_ref()
+                    .is_some_and(|approval| stages.matches_approval(approval))
+            });
+            #[cfg(not(windows))]
+            let matched = false;
+            if !matched {
+                return Err(HostNetworkError::Authority);
+            }
+            Some(registered)
+        } else {
+            None
+        };
         let source_anchor = Instant::now();
         let now = clock.now_ms().map_err(|_| HostNetworkError::Authority)?;
         source_end = Some(
@@ -852,10 +898,32 @@ async fn run_attempt(
                 clock.clone(),
                 end,
                 approval_stop.as_ref(),
+                source.clone(),
             )
             .await?;
         remaining(end)?;
         clock.now_ms().map_err(|_| HostNetworkError::Authority)?;
+        if let Some(registered) = observer_source {
+            if !registered.is_live() {
+                return Err(HostNetworkError::Authority);
+            }
+            let approval = registered
+                .approval
+                .as_ref()
+                .ok_or(HostNetworkError::Authority)?;
+            let grant = wire.mint_original_observer_handoff(
+                &registered.description.source,
+                approval,
+                end.min(source_end.ok_or(HostNetworkError::Bounds)?),
+            )?;
+            // Do not start a worker or publish a working peer until the exact
+            // original installation/retirement receipt is wired into custody.
+            let _handoff = OriginalObserverHandoff {
+                registered: registered.clone(),
+                grant,
+            };
+            return Err(HostNetworkError::Locked);
+        }
         let owned = original.take().expect("original synchronous admission");
         let owner = service.upgrade().ok_or(HostNetworkError::Closed)?;
         if let Err(rejected) = owner.adopt_admitted(owned, channel, &runtime) {

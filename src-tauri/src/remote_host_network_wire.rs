@@ -1,5 +1,19 @@
 //! 两种封闭授权入口共用的原传输机制；本模块不产生批准或回收证明。
 use super::*;
+use cc_desk_remote_record::grant::{DataRole, SessionScope};
+
+/// A single-use handoff from the original wire. Callers cannot substitute a
+/// channel, approval or deadline when passing this to the run owner.
+pub(super) struct OriginalObserverGrant {
+    channel: Arc<RunningChannel>,
+    approval: NativeApprovalStop,
+    deadline: Instant,
+}
+impl OriginalObserverGrant {
+    pub(super) fn into_parts(self) -> (Arc<RunningChannel>, NativeApprovalStop, Instant) {
+        (self.channel, self.approval, self.deadline)
+    }
+}
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum DelegatedWireMode {
     Manual,
@@ -205,6 +219,7 @@ pub(super) struct NetworkWire {
     token: Option<security::CancelToken>,
     mux: Option<transport::OwnedTunnel>,
     pub(super) running: Option<Arc<RunningChannel>>,
+    observer_source: Option<(Arc<ApprovedHostSource>, SessionScope)>,
     gate: Option<GrantGate>,
     #[cfg(windows)]
     signing_stages: Option<crate::native_crypto::host::HostSigningStages>,
@@ -224,6 +239,7 @@ impl NetworkWire {
             token: Some(token),
             mux: None,
             running: None,
+            observer_source: None,
             gate: None,
             #[cfg(windows)]
             signing_stages: None,
@@ -238,16 +254,68 @@ impl NetworkWire {
         clock: Arc<dyn GrantClock>,
         end: Instant,
         approval_stop: Option<&NativeApprovalStop>,
+        original_source: Arc<ApprovedHostSource>,
     ) -> Result<Arc<RunningChannel>, HostNetworkError> {
-        self.setup_inner(
-            inputs,
-            connector,
-            WireAuthority::Original(clock),
-            end,
-            approval_stop,
-            None,
-        )
-        .await
+        let observer_scope =
+            (inputs.policy.role == DataRole::Observer).then(|| inputs.policy.scope.clone());
+        let channel = self
+            .setup_inner(
+                inputs,
+                connector,
+                WireAuthority::Original(clock),
+                end,
+                approval_stop,
+                None,
+            )
+            .await?;
+        self.observer_source = observer_scope.map(|scope| (original_source, scope));
+        Ok(channel)
+    }
+
+    pub(super) fn mint_original_observer_handoff(
+        &mut self,
+        registered: &Arc<ApprovedHostSource>,
+        approval: &NativeApprovalStop,
+        end: Instant,
+    ) -> Result<OriginalObserverGrant, HostNetworkError> {
+        let (source, scope) = self
+            .observer_source
+            .as_ref()
+            .ok_or(HostNetworkError::Locked)?;
+        if !Arc::ptr_eq(source, registered) || *source.revoked.borrow() {
+            return Err(HostNetworkError::Authority);
+        }
+        #[cfg(windows)]
+        let matched = self
+            .signing_stages
+            .as_ref()
+            .is_some_and(|stages| stages.matches_approval(approval));
+        #[cfg(not(windows))]
+        let matched = false;
+        if !matched || approval.is_invalid() {
+            return Err(HostNetworkError::Authority);
+        }
+        let channel = self.running.as_ref().ok_or(HostNetworkError::Locked)?;
+        let authority = channel.authority();
+        if !channel.peer_install_enabled()
+            || authority.local_role() != security::Role::Host
+            || authority.data_role() != DataRole::Observer
+            || authority.scope() != scope
+            || authority.control_lease_renew_enabled()
+            || authority.data_keepalive_negotiated()
+            || authority.check().is_err()
+        {
+            return Err(HostNetworkError::Authority);
+        }
+        let deadline = end.min(Instant::from_std(approval.deadline()));
+        remaining(deadline)?;
+        let handoff = OriginalObserverGrant {
+            channel: channel.clone(),
+            approval: approval.clone(),
+            deadline,
+        };
+        self.observer_source = None;
+        Ok(handoff)
     }
     pub(super) async fn setup_delegated(
         &mut self,
@@ -618,5 +686,132 @@ impl NetworkWire {
             },
         );
         channel_known && mux_known
+    }
+}
+
+#[cfg(all(test, windows))]
+mod observer_handoff_tests {
+    use super::*;
+    use crate::{
+        native_crypto::{
+            epoch_test_supplier,
+            host::{FrozenHostBinding, HostKeyCustody, HostKeyProfileIdentity},
+            host_profile::NativeHostProfile,
+            owner::NativeRevocation,
+            EpochTestTrace,
+        },
+        tests::remote_channels,
+    };
+
+    #[tokio::test]
+    async fn original_observer_handoff_matches_exact_source_approval_and_grant_once() {
+        let scope = SessionScope {
+            session: "42".repeat(16),
+            run: "TEST_ONLY_ORIGINAL".into(),
+            generation: "1".into(),
+        };
+        let clock: Arc<dyn GrantClock> = Arc::new(|| Ok(1000));
+        let (peer, host, _gate, cancel) =
+            remote_channels::channels_with_role(scope.clone(), clock.clone(), DataRole::Observer)
+                .await;
+        let channel = Arc::new(host);
+        let (_stop, revoked) = watch::channel(false);
+        let origin = Arc::new(ApprovedHostSource {
+            clock: clock.clone(),
+            revoked: revoked.clone(),
+            expires_host_ms: 10_000,
+        });
+        // Equal fields do not make an independently allocated source the original.
+        let other = Arc::new(ApprovedHostSource {
+            clock,
+            revoked,
+            expires_host_ms: 10_000,
+        });
+        let cap = std::time::Instant::now() + Duration::from_secs(10);
+        let token = NativeRevocation::new();
+        let key_owner = HostKeyCustody::reserve_with(token.clone(), cap, Default::default());
+        let binding = FrozenHostBinding {
+            native_profile: HostKeyProfileIdentity {
+                id: [0x42; 16],
+                revision: 1,
+            },
+            endpoint_spki: remote_channels::public_test_spki(false),
+            relay_spki: remote_channels::public_test_spki(true),
+            origin: cc_desk_remote_record::appbind::CanonicalOrigin::trusted(
+                "wss://relay.invalid/",
+            )
+            .unwrap(),
+            relay_id: [0x42; 16],
+            profile_cap: cap,
+        };
+        let mock = epoch_test_supplier(
+            NativeHostProfile::new(binding, "TEST_ONLY_OBSERVER_EP", "TEST_ONLY_OBSERVER_RELAY")
+                .unwrap()
+                .freeze(),
+            token.clone(),
+            1,
+            &EpochTestTrace::default(),
+        );
+        let signing = key_owner.publisher().unwrap().prepare(mock).unwrap();
+        let approval = NativeApprovalStop::new(token.clone(), cap);
+        let mut wire = NetworkWire::new();
+        // The real signed duplex grant substitutes only for outer wire setup.
+        wire.running = Some(channel.clone());
+        wire.signing_stages = Some(signing.stages);
+        wire.observer_source = Some((origin.clone(), scope));
+        let end = Instant::now() + Duration::from_millis(500);
+        assert!(matches!(
+            wire.mint_original_observer_handoff(&other, &approval, end),
+            Err(HostNetworkError::Authority)
+        ));
+        for different in [
+            NativeApprovalStop::new(NativeRevocation::new(), cap),
+            NativeApprovalStop::new(token.clone(), cap - Duration::from_secs(1)),
+            NativeApprovalStop::new(token.clone(), std::time::Instant::now()),
+        ] {
+            assert!(matches!(
+                wire.mint_original_observer_handoff(&origin, &different, end),
+                Err(HostNetworkError::Authority)
+            ));
+        }
+        assert!(
+            !token.is_revoked(),
+            "foreign cap touched the original permit"
+        );
+        let granted = wire
+            .mint_original_observer_handoff(&origin, &approval, end)
+            .unwrap();
+        let (bound_channel, bound_approval, bound_end) = granted.into_parts();
+        assert!(Arc::ptr_eq(&bound_channel, &channel));
+        assert!(bound_approval.matches_native(&token, cap));
+        assert_eq!(bound_end, end);
+        assert!(matches!(
+            wire.mint_original_observer_handoff(&origin, &approval, end),
+            Err(HostNetworkError::Locked)
+        ));
+
+        cancel.cancel();
+        assert!(
+            tokio::time::timeout(Duration::from_secs(2), wire.close_and_join())
+                .await
+                .unwrap()
+        );
+        tokio::time::timeout(Duration::from_secs(2), peer.wait_closed_checked())
+            .await
+            .unwrap()
+            .unwrap();
+        key_owner.revoke();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let retired = key_owner.advance();
+                assert!(!retired.unknown);
+                if !retired.outstanding {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
     }
 }
