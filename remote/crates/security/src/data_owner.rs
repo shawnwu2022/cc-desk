@@ -22,6 +22,11 @@ use tokio::{
     sync::{Mutex, OwnedSemaphorePermit, Semaphore, mpsc, oneshot, watch},
     task::JoinHandle,
 };
+#[path = "observer_projection_sender.rs"]
+mod observer_projection;
+pub use observer_projection::ObserverProjectionSender;
+use observer_projection::ObserverWriteCheck;
+
 pub const DATA_QUEUE_SLOTS: usize = 4;
 struct Inbox {
     rx: mpsc::Receiver<DataRecord>,
@@ -31,6 +36,7 @@ struct SendRequest {
     fence: u64,
     admitted_peer_fence: Option<u64>,
     body: Vec<u8>,
+    observer: Option<ObserverWriteCheck>,
     end: Instant,
     reply: oneshot::Sender<Result<(), DataError>>,
     _credit: OwnedSemaphorePermit,
@@ -67,6 +73,7 @@ pub struct RunningChannel {
     out: mpsc::Sender<SendRequest>,
     incoming: Mutex<Inbox>,
     send_credits: Arc<Semaphore>,
+    observer_claimed: AtomicBool,
     stop: watch::Sender<bool>,
     active: Arc<AtomicBool>,
     task: Mutex<ChannelTask>,
@@ -134,10 +141,12 @@ impl RunningChannel {
         bytes: &[u8],
         budget: Duration,
     ) -> Result<(), DataError> {
-        if self.role != Role::Host {
+        if self.role != Role::Host
+            || (self.access.role() == DataRole::Observer && self.peer.enabled())
+        {
             return Err(DataError::Role);
         }
-        self.send(scope, fence, bytes, budget).await
+        self.send(scope, fence, bytes, budget, None).await
     }
     pub async fn send_control(
         &self,
@@ -149,7 +158,7 @@ impl RunningChannel {
         if self.role != Role::Client {
             return Err(DataError::Role);
         }
-        self.send(scope, fence, bytes, budget).await
+        self.send(scope, fence, bytes, budget, None).await
     }
     async fn send(
         &self,
@@ -157,8 +166,13 @@ impl RunningChannel {
         fence: u64,
         bytes: &[u8],
         budget: Duration,
+        observer: Option<ObserverWriteCheck>,
     ) -> Result<(), DataError> {
-        let end = self.check(scope, fence, budget)?;
+        let mut end = self.check(scope, fence, budget)?;
+        if let Some(check) = &observer {
+            check.check(Instant::now())?;
+            end = end.min(check.deadline());
+        }
         let kind = if self.role == Role::Host {
             Kind::Projection
         } else {
@@ -181,6 +195,7 @@ impl RunningChannel {
                 fence,
                 admitted_peer_fence: self.peer.admission_stamp(fence)?,
                 body: bytes.to_vec(),
+                observer,
                 end,
                 reply: tx,
                 _credit: credit,
@@ -303,6 +318,9 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Engine<S> {
         let mut written = false;
         let mut timer_started = false;
         if let Some(w) = &mut self.writing {
+            if let Some(check) = &w.request.observer {
+                check.check(Instant::now())?;
+            }
             if w.offset < w.bytes.len() {
                 match Pin::new(&mut self.io).poll_write(cx, &w.bytes[w.offset..]) {
                     Poll::Ready(Ok(0)) => {
@@ -317,6 +335,9 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Engine<S> {
                 }
             }
             if w.offset == w.bytes.len() {
+                if let Some(check) = &w.request.observer {
+                    check.check(Instant::now())?;
+                }
                 match Pin::new(&mut self.io).poll_flush(cx) {
                     Poll::Ready(Ok(())) => written = true,
                     Poll::Ready(Err(error)) => return Poll::Ready(Err(tls_io_error(error.kind()))),
@@ -605,6 +626,7 @@ pub(crate) fn prepare<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
                             request=requests.recv(),if engine.writing.is_none()=>{
                                 let Some(request)=request else{break DataError::Closed};if Instant::now()>=request.end{let _=request.reply.send(Err(DataError::Deadline));continue}
                                 if let Err(e)=engine.peer.check_queued(request.fence,request.admitted_peer_fence){let _=request.reply.send(Err(e));break e}
+                                if let Some(check)=&request.observer && let Err(e)=check.check(Instant::now()){let _=request.reply.send(Err(e));break e}
                                 let Some(sequence)=engine.sent.checked_add(1)else{break DataError::Replay};
                                 let kind=if role==Role::Host{Kind::Projection}else{Kind::Control};
                                 let header=DataHeader{binding,grant:engine.access.id(),scope:engine.access.scope_digest(),fence:request.fence,sequence,kind};
@@ -619,7 +641,12 @@ pub(crate) fn prepare<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
                                 Err(e)=>break e,
                                 Ok(Event::Progress)=>{},
                                 Ok(Event::Incoming(record))=>{if pending.is_some(){break DataError::Full}pending=Some(record);},
-                                Ok(Event::Written)=>{if let Err(e)=engine.access.check(){break DataError::Grant(e)}let w=engine.writing.take().unwrap();if Instant::now()>=w.request.end{break DataError::Deadline}let _=w.request.reply.send(Ok(()));},
+                                Ok(Event::Written)=>{if let Err(e)=engine.access.check(){break DataError::Grant(e)}let w=engine.writing.take().unwrap();if Instant::now()>=w.request.end{break DataError::Deadline}
+                                    if let Some(check)=&w.request.observer && let Err(e)=check.check(Instant::now()){
+                                        let _=w.request.reply.send(Err(e));
+                                        break e
+                                    }
+                                    let _=w.request.reply.send(Ok(()));},
                             }}
                         }
         };
@@ -645,6 +672,7 @@ pub(crate) fn prepare<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
                 head: None,
             }),
             send_credits: credits,
+            observer_claimed: AtomicBool::new(false),
             stop,
             active,
             task: Mutex::new(ChannelTask {
@@ -806,6 +834,7 @@ mod peer_engine_admission_tests {
                     fence: 7,
                     admitted_peer_fence: None,
                     body: b"MUST_NEVER_WRITE".to_vec(),
+                    observer: None,
                     end: d,
                     reply,
                     _credit: permit
