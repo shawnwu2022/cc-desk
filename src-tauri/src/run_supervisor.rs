@@ -3347,6 +3347,59 @@ mod native_observer_lifetime_tests {
             .is_ok()
         );
     }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn ObserverLifetime_OriginalApprovalRetiresOwnerAndKeepsJoin_003() {
+        use super::{NativeObserverOwner, wait_for_observer_retirement};
+        use crate::{
+            native_crypto::owner::NativeRevocation, remote_host_network::NativeApprovalStop,
+        };
+        use tokio::sync::oneshot;
+
+        let cap = std::time::Instant::now() + Duration::from_secs(10);
+        let original = NativeRevocation::new();
+        let other = NativeRevocation::new();
+        let approval = NativeApprovalStop::new(original.clone(), cap);
+        let (_run, stop) = watch::channel(false);
+        let (_cancel, cancelled) = oneshot::channel();
+        let (stopping, mut stopped) = oneshot::channel();
+        let (release, receipt) = oneshot::channel();
+        let mut owner = NativeObserverOwner {
+            cancel: None,
+            result: None,
+            task: tokio::spawn(async move {
+                wait_for_observer_retirement(stop, cancelled, approval, Instant::from_std(cap))
+                    .await;
+                stopping.send(()).unwrap();
+                receipt.await.unwrap();
+                Ok(())
+            }),
+        };
+
+        other.revoke();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(25), &mut stopped)
+                .await
+                .is_err()
+        );
+        original.revoke();
+        tokio::time::timeout(Duration::from_secs(1), stopped)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(25), owner.retire())
+                .await
+                .is_err()
+        );
+        release.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(1), owner.retire())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(owner.retire().await.is_ok());
+    }
 }
 
 #[cfg(feature = "remote-host")]
@@ -3361,6 +3414,26 @@ async fn wait_for_observer_stop(
         _ = revoke => {}
         _ = tokio::time::sleep_until(deadline) => {}
     }
+}
+
+#[cfg(feature = "remote-host")]
+async fn wait_for_observer_retirement(
+    stopped: tokio::sync::watch::Receiver<bool>,
+    cancelled: tokio::sync::oneshot::Receiver<()>,
+    approval: crate::remote_host_network::NativeApprovalStop,
+    end: tokio::time::Instant,
+) {
+    wait_for_observer_stop(
+        stopped,
+        async {
+            tokio::select! {
+                _ = cancelled => {}
+                _ = crate::remote_host_network::NativeApprovalStop::wait(Some(&approval)) => {}
+            }
+        },
+        end,
+    )
+    .await;
 }
 
 #[cfg(feature = "remote-host")]
@@ -3477,12 +3550,7 @@ impl NativeRunAdmission {
         let close = CloseExactObserver(authority.clone());
         let task = runtime.spawn(async move {
             let _close = close;
-            let stop = wait_for_observer_stop(stopped, async {
-                tokio::select! {
-                    _ = cancelled => {}
-                    _ = crate::remote_host_network::NativeApprovalStop::wait(Some(&approval)) => {}
-                }
-            }, end);
+            let stop = wait_for_observer_retirement(stopped, cancelled, approval, end);
             let work = async {
                 let pending = self.request_observer_capture(authority.clone())?;
                 // 等待在阻塞线程内有硬上限；不持有 supervisor 或 writer 锁。
