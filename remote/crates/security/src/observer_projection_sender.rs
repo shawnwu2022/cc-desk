@@ -45,6 +45,21 @@ impl RunningChannel {
         total_budget: Duration,
         source_current: impl Fn() -> bool + Send + Sync + 'static,
     ) -> Result<ObserverProjectionSender<'_>, DataError> {
+        if total_budget.is_zero() || total_budget > Duration::from_secs(60) {
+            return Err(DataError::Bounds);
+        }
+        let end = Instant::now()
+            .checked_add(total_budget)
+            .ok_or(DataError::Bounds)?;
+        self.observer_projection_sender_until(end, source_current)
+    }
+
+    /// Use the same cutoff already anchored by the native installation owner.
+    pub fn observer_projection_sender_until(
+        &self,
+        end: Instant,
+        source_current: impl Fn() -> bool + Send + Sync + 'static,
+    ) -> Result<ObserverProjectionSender<'_>, DataError> {
         let authority = self.authority();
         authority.check()?;
         if authority.local_role() != Role::Host
@@ -54,14 +69,13 @@ impl RunningChannel {
         {
             return Err(DataError::Role);
         }
-        if total_budget.is_zero() || total_budget > Duration::from_secs(60) {
-            return Err(DataError::Bounds);
-        }
-        // Never use check_data with a caller fence: it also accepts legacy.
         let fence = self.peer.fence()?;
         let now = Instant::now();
+        if end.saturating_duration_since(now) > Duration::from_secs(60) {
+            return Err(DataError::Bounds);
+        }
         let check = ObserverWriteCheck {
-            end: now.checked_add(total_budget).ok_or(DataError::Bounds)?,
+            end,
             source_current: Arc::new(source_current),
         };
         check.check(now)?;

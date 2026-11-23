@@ -11,7 +11,7 @@ pub use crate::local_writer::Reject as NativeIoError;
 pub use producer::{
     NativeCanonicalStatus, NativeFrameResult, NativeLocalInput, NativeOriginalIo,
     NativeOutputIngress, NativeProtocolResult, NativeRunProducer, NativeWriterRetirement,
-    ObserverCapture, PendingObserverCapture,
+    ObserverCapture, ObserverSnapshotSent, ObserverSnapshotTransfer, PendingObserverCapture,
 };
 
 const MAX_ATTEMPTS: usize = 64;

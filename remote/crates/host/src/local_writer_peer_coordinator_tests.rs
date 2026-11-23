@@ -396,6 +396,13 @@ async fn peer_channels_scope(
     clock: Arc<dyn GrantClock>,
     scope: cc_desk_remote_record::grant::SessionScope,
 ) -> (RunningChannel, RunningChannel, GrantGate, CancelHandle) {
+    peer_channels_role(clock, scope, DataRole::Controller).await
+}
+async fn peer_channels_role(
+    clock: Arc<dyn GrantClock>,
+    scope: cc_desk_remote_record::grant::SessionScope,
+    role: DataRole,
+) -> (RunningChannel, RunningChannel, GrantGate, CancelHandle) {
     let local = |client| {
         let (k, p) = identities::identity(client, false);
         LocalIdentity::new(
@@ -456,11 +463,11 @@ async fn peer_channels_scope(
         issuer: support::admin(),
         principal: [4; 32],
         scope: scope.clone(),
-        role: DataRole::Controller,
+        role,
     };
     let policy = NativeGrantPolicy {
         scope,
-        role: DataRole::Controller,
+        role,
         duration: Duration::from_secs(10),
     };
     let (c, h) = tokio::join!(
@@ -1680,4 +1687,94 @@ fn observer_queue_denial_and_credits_do_not_degrade_native_producer() {
     assert!(producer.complete_from_zero());
     producer.stop();
     producer.join(BUDGET).unwrap();
+}
+
+#[tokio::test]
+async fn observer_snapshot_uses_original_install_and_scope() {
+    use cc_desk_remote_record::projection as projection_wire;
+    let dir = tempfile::tempdir().unwrap();
+    let mut producer = NativeRunProducer::start(
+        Journal::open(&dir.path().join("observer-install.sqlite")).unwrap(),
+        std::io::sink(),
+        "TEST_ONLY_OBSERVER_INSTALL".into(),
+        3,
+        3,
+        10,
+    )
+    .unwrap();
+    producer.output(0, b"VIEW".to_vec()).unwrap();
+    let scope = producer.native_scope();
+    let (client, host, _gate, _cancel) =
+        peer_channels_role(Arc::new(|| Ok(1000)), scope.clone(), DataRole::Observer).await;
+    let capture = producer
+        .request_observer_capture(host.authority())
+        .unwrap()
+        .wait(BUDGET)
+        .unwrap();
+    let duplicate = producer
+        .request_observer_capture(host.authority())
+        .unwrap()
+        .wait(BUDGET)
+        .unwrap();
+    let (installed, transfer) = tokio::join!(
+        client.client_installed(),
+        capture.install_snapshot(&host, BUDGET),
+    );
+    let fence = installed.unwrap().consume_for(&client).unwrap();
+    assert_eq!(host.installed_fence().unwrap(), fence);
+    assert!(duplicate.install_snapshot(&host, BUDGET).await.is_err());
+    assert!(host.authority().check().is_ok());
+    let (reader, sender) = tokio::join!(
+        client.receive(&scope, fence, BUDGET),
+        transfer.unwrap().send_snapshot(),
+    );
+    let received = reader.unwrap();
+    let view = projection_wire::decode(received.payload(), 1).unwrap();
+    let projection_wire::Content::SnapshotPart(view) = view.content else {
+        panic!("expected a real Observer view")
+    };
+    assert_eq!(view.stamp.target.session, scope.session);
+    assert_eq!(view.stamp.target.run, scope.run);
+    assert_eq!(view.stamp.target.generation, scope.generation);
+    assert_eq!(view.start, 0);
+    assert_eq!(view.cells[0].scalar, 'V');
+    assert!(sender.unwrap().retire().await.is_ok());
+    client.close().await;
+    assert!(producer.complete_from_zero());
+    producer.stop();
+    producer.join(BUDGET).unwrap();
+}
+
+#[tokio::test]
+async fn observer_snapshot_retiring_source_closes_before_any_output() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut producer = NativeRunProducer::start(
+        Journal::open(&dir.path().join("observer-retire.sqlite")).unwrap(),
+        std::io::sink(),
+        "TEST_ONLY_OBSERVER_RETIRE".into(),
+        3,
+        3,
+        10,
+    )
+    .unwrap();
+    producer.output(0, b"OFFLINE".to_vec()).unwrap();
+    let scope = producer.native_scope();
+    let (client, host, _gate, _cancel) =
+        peer_channels_role(Arc::new(|| Ok(1000)), scope.clone(), DataRole::Observer).await;
+    let capture = producer
+        .request_observer_capture(host.authority())
+        .unwrap()
+        .wait(BUDGET)
+        .unwrap();
+    let (installed, transfer) = tokio::join!(
+        client.client_installed(),
+        capture.install_snapshot(&host, BUDGET)
+    );
+    let fence = installed.unwrap().consume_for(&client).unwrap();
+    producer.stop();
+    producer.join(BUDGET).unwrap();
+    assert!(transfer.unwrap().send_snapshot().await.is_err());
+    assert!(host.wait_closed_checked().await.is_ok());
+    assert!(client.receive(&scope, fence, BUDGET).await.is_err());
+    client.close().await;
 }
