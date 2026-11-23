@@ -3368,6 +3368,7 @@ mod native_observer_lifetime_tests {
         let mut owner = NativeObserverOwner {
             cancel: None,
             result: None,
+            retirement_end: None,
             task: tokio::spawn(async move {
                 wait_for_observer_retirement(stop, cancelled, approval, Instant::from_std(cap))
                     .await;
@@ -3399,6 +3400,106 @@ mod native_observer_lifetime_tests {
             .unwrap()
             .unwrap();
         assert!(owner.retire().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn ObserverLifetime_RetirementDeadlineRetainsOriginalJoin_004() {
+        use super::NativeObserverOwner;
+        use tokio::sync::oneshot;
+
+        let (release, receipt) = oneshot::channel();
+        let mut owner = NativeObserverOwner {
+            cancel: None,
+            result: None,
+            retirement_end: None,
+            task: tokio::spawn(async move {
+                receipt.await.unwrap();
+                Ok(())
+            }),
+        };
+        let error = tokio::time::timeout(Duration::from_secs(3), owner.retire())
+            .await
+            .expect("an unreceipted owner must have a bounded retirement wait")
+            .expect_err("elapsed wait cannot report actual retirement");
+        assert_eq!(error.code, "REMOTE_OBSERVER_RETIREMENT_UNKNOWN");
+        let immediate = tokio::time::timeout(Duration::from_millis(250), owner.retire())
+            .await
+            .expect("retry must not renew the original retirement deadline")
+            .expect_err("pending join is still unknown");
+        assert_eq!(immediate.code, "REMOTE_OBSERVER_RETIREMENT_UNKNOWN");
+
+        release.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !owner.task.is_finished() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(owner.retire().await.is_ok(), "original completion was lost");
+    }
+
+    #[tokio::test]
+    async fn ObserverLifetime_CaptureJoinSurvivesCancelledAwait_005() {
+        use super::{retire_observer_capture, spawn_observer_capture};
+        use tokio::sync::oneshot;
+
+        let (entered, started) = oneshot::channel();
+        let (release, held) = std::sync::mpsc::channel();
+        let mut capture = Some(spawn_observer_capture(
+            std::time::Instant::now() + Duration::from_secs(1),
+            move |budget| {
+                assert!(budget <= Duration::from_secs(1));
+                entered.send(()).unwrap();
+                held.recv_timeout(budget).unwrap();
+            },
+        ));
+        tokio::time::timeout(Duration::from_millis(500), started)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(25), capture.as_mut().unwrap())
+                .await
+                .is_err()
+        );
+        {
+            let mut join = std::pin::pin!(retire_observer_capture(&mut capture));
+            assert!(
+                tokio::time::timeout(Duration::from_millis(25), &mut join)
+                    .await
+                    .is_err()
+            );
+            release.send(()).unwrap();
+            assert!(
+                tokio::time::timeout(Duration::from_millis(500), &mut join)
+                    .await
+                    .unwrap()
+            );
+        }
+        assert!(capture.is_none(), "known join must release the worker slot");
+    }
+
+    #[tokio::test]
+    async fn ObserverLifetime_ExpiredCaptureDoesNotStartAndLateResultIsDiscarded_006() {
+        use super::spawn_observer_capture;
+        let expired = spawn_observer_capture(std::time::Instant::now(), |_| {
+            panic!("expired capture must not borrow the original producer");
+        });
+        assert!(expired.await.unwrap().is_none());
+
+        let (entered, did_run) = tokio::sync::oneshot::channel();
+        let cutoff = std::time::Instant::now() + Duration::from_millis(200);
+        let late = spawn_observer_capture(cutoff, move |_| {
+            entered.send(()).unwrap();
+            std::thread::sleep(cutoff.saturating_duration_since(std::time::Instant::now()));
+            1u8
+        });
+        tokio::time::timeout(Duration::from_millis(500), did_run)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(late.await.unwrap().is_none());
     }
 }
 
@@ -3437,10 +3538,46 @@ async fn wait_for_observer_retirement(
 }
 
 #[cfg(feature = "remote-host")]
+fn spawn_observer_capture<T: Send + 'static>(
+    cutoff: std::time::Instant,
+    capture: impl FnOnce(Duration) -> T + Send + 'static,
+) -> tokio::task::JoinHandle<Option<T>> {
+    tokio::task::spawn_blocking(move || {
+        let budget = cutoff
+            .checked_duration_since(std::time::Instant::now())?
+            .min(Duration::from_secs(1));
+        if budget.is_zero() {
+            return None;
+        }
+        let result = capture(budget);
+        (std::time::Instant::now() < cutoff).then_some(result)
+    })
+}
+
+#[cfg(feature = "remote-host")]
+async fn retire_observer_capture<T>(
+    worker: &mut Option<tokio::task::JoinHandle<Option<T>>>,
+) -> bool {
+    let Some(original) = worker.as_mut() else {
+        return true;
+    };
+    // Abort a queued capture; a running blocking capture still needs its real
+    // join, including after cancellation of the future that originally waited.
+    original.abort();
+    let known = match original.await {
+        Ok(_) => true,
+        Err(error) => error.is_cancelled(),
+    };
+    *worker = None;
+    known
+}
+
+#[cfg(feature = "remote-host")]
 #[allow(dead_code, reason = "未接入产品授权和启动入口")]
 pub(crate) struct NativeObserverOwner {
     cancel: Option<tokio::sync::oneshot::Sender<()>>,
     result: Option<Result<(), SafeError>>,
+    retirement_end: Option<tokio::time::Instant>,
     task: tokio::task::JoinHandle<Result<(), SafeError>>,
 }
 
@@ -3453,9 +3590,19 @@ impl NativeObserverOwner {
         if let Some(result) = &self.result {
             return result.clone();
         }
-        let result = (&mut self.task)
-            .await
-            .unwrap_or_else(|_| Err(error("REMOTE_OBSERVER_RETIREMENT_UNKNOWN")));
+        let end = *self
+            .retirement_end
+            .get_or_insert_with(|| tokio::time::Instant::now() + Duration::from_secs(2));
+        let joined = tokio::select! {
+            biased;
+            joined = &mut self.task => joined,
+            _ = tokio::time::sleep_until(end) => {
+                // No positive receipt on timeout. Preserve the exact task
+                // so a later check can observe completion without renewal.
+                return Err(error("REMOTE_OBSERVER_RETIREMENT_UNKNOWN"));
+            }
+        };
+        let result = joined.unwrap_or_else(|_| Err(error("REMOTE_OBSERVER_RETIREMENT_UNKNOWN")));
         self.result = Some(result.clone());
         result
     }
@@ -3551,12 +3698,29 @@ impl NativeRunAdmission {
         let task = runtime.spawn(async move {
             let _close = close;
             let stop = wait_for_observer_retirement(stopped, cancelled, approval, end);
+            let mut capture_worker = None;
             let work = async {
+                let cutoff = (tokio::time::Instant::now() + Duration::from_secs(1))
+                    .min(end)
+                    .into_std();
+                if std::time::Instant::now() >= cutoff {
+                    return Err(error("REMOTE_OBSERVER_CAPTURE"));
+                }
                 let pending = self.request_observer_capture(authority.clone())?;
                 // 等待在阻塞线程内有硬上限；不持有 supervisor 或 writer 锁。
-                let capture = tokio::task::spawn_blocking(move || pending.wait(Duration::from_secs(1)))
-                    .await.map_err(|_| error("REMOTE_OBSERVER_CAPTURE"))?
+                let completion = capture_worker
+                    .insert(spawn_observer_capture(cutoff, move |budget| {
+                        pending.wait(budget)
+                    }))
+                    .await;
+                capture_worker = None;
+                let capture = completion
+                    .map_err(|_| error("REMOTE_OBSERVER_RETIREMENT_UNKNOWN"))?
+                    .ok_or_else(|| error("REMOTE_OBSERVER_CAPTURE"))?
                     .map_err(|_| error("REMOTE_OBSERVER_CAPTURE"))?;
+                if std::time::Instant::now() >= cutoff {
+                    return Err(error("REMOTE_OBSERVER_CAPTURE"));
+                }
                 self.validate()?;
                 let transfer = capture.install_snapshot_until(&channel, end)
                     .await.map_err(|_| error("REMOTE_OBSERVER_INSTALL"))?;
@@ -3574,8 +3738,18 @@ impl NativeRunAdmission {
             };
             authority.request_close();
             // 未证实退役时保留占用，禁止在同一原 run 上再开启一个观察通道。
-            channel.wait_closed_checked().await
-                .map_err(|_| error("REMOTE_OBSERVER_RETIREMENT_UNKNOWN"))?;
+            let (capture_known, channel_closed) = tokio::join!(
+                retire_observer_capture(&mut capture_worker),
+                channel.wait_closed_checked(),
+            );
+            if !capture_known
+                || channel_closed.is_err()
+                || result
+                    .as_ref()
+                    .is_err_and(|failure| failure.code == "REMOTE_OBSERVER_RETIREMENT_UNKNOWN")
+            {
+                return Err(error("REMOTE_OBSERVER_RETIREMENT_UNKNOWN"));
+            }
             state.observer_active.store(false, Ordering::Release);
             result
         });
@@ -3583,6 +3757,7 @@ impl NativeRunAdmission {
             cancel: Some(cancel),
             task,
             result: None,
+            retirement_end: None,
         })
     }
 }
