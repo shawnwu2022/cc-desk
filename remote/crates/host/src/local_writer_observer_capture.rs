@@ -158,15 +158,30 @@ impl ObserverCapture {
         channel: &RunningChannel,
         budget: Duration,
     ) -> Result<ObserverSnapshotTransfer<'_>, DataError> {
-        let authority = channel.authority();
-        self.view(&authority).map_err(|_| DataError::Context)?;
-
         if budget.is_zero() || budget > Duration::from_secs(60) {
             return Err(DataError::Bounds);
         }
         let end = Instant::now()
             .checked_add(budget)
             .ok_or(DataError::Bounds)?;
+        self.install_snapshot_until(channel, end).await
+    }
+
+    /// 延用原服务 owner 的绝对截止时间，不重新锚定计时。
+    pub async fn install_snapshot_until(
+        self,
+        channel: &RunningChannel,
+        end: Instant,
+    ) -> Result<ObserverSnapshotTransfer<'_>, DataError> {
+        let authority = channel.authority();
+        self.view(&authority).map_err(|_| DataError::Context)?;
+        let remaining = end.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(DataError::Deadline);
+        }
+        if remaining > Duration::from_secs(60) {
+            return Err(DataError::Bounds);
+        }
         let mut nonce = [0; 24];
         ring::rand::SystemRandom::new()
             .fill(&mut nonce)
