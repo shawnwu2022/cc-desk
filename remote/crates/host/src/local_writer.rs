@@ -502,6 +502,7 @@ impl LocalWriter {
                         }
                         #[cfg(feature = "experimental-canonical-replies")]
                         Command::Projection(request) => {
+                            if request.observer.as_ref().is_some_and(|admit| !admit()) { let _ = request.reply.try_send(Err(Reject::Policy)); continue; }
                             #[cfg(feature="experimental-host-owner")]
                             if native_io.as_ref().is_some_and(|io|!io.qualified()){let _=request.reply.try_send(Err(Reject::Unsupported));continue;}
                             #[cfg(feature="experimental-host-owner")]
@@ -521,7 +522,7 @@ impl LocalWriter {
                                 None => Err(Reject::Unsupported),
                             };
                             #[cfg(feature="experimental-host-owner")]
-                            if matches!(result,Err(Reject::Unsupported))&&let(Some(io),Some(state))=(native_io.as_mut(),replies.as_ref()){io.local_only(state,view_gate.as_mut());}
+                            if request.observer.is_none()&&matches!(result,Err(Reject::Unsupported))&&let(Some(io),Some(state))=(native_io.as_mut(),replies.as_ref()){io.local_only(state,view_gate.as_mut());}
                             #[cfg(feature = "experimental-host-owner")]
                             let result = if let Some(peer) = &request.peer {
                                 result.and_then(|frame| {

@@ -1572,3 +1572,112 @@ async fn native_remote_resize_reserves_on_original_canonical_actor() {
 
 #[path = "local_writer_channel_retirement_tests.rs"]
 mod channel_retirement_tests;
+
+#[tokio::test]
+async fn observer_native_capture_is_bound_to_the_original_producer_scope() {
+    use crate::bound_test_support as observer_support;
+    use cc_desk_remote_record::grant::DataRole;
+    use std::sync::atomic::AtomicU64;
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut producer = NativeRunProducer::start(
+        Journal::open(&dir.path().join("observer.sqlite")).unwrap(),
+        std::io::sink(),
+        "TEST_ONLY_OBSERVER_SOURCE".into(),
+        3,
+        3,
+        10,
+    )
+    .unwrap();
+    let other_dir = tempfile::tempdir().unwrap();
+    let mut other = NativeRunProducer::start(
+        Journal::open(&other_dir.path().join("other.sqlite")).unwrap(),
+        std::io::sink(),
+        "TEST_ONLY_OBSERVER_SOURCE".into(),
+        3,
+        3,
+        10,
+    )
+    .unwrap();
+    producer.output(0, b"VIEW".to_vec()).unwrap();
+    let scope = producer.native_scope();
+    let (client, host, _gate, _cancel, _grant) = observer_support::channels_for_scope(
+        Arc::new(AtomicU64::new(1000)),
+        [4; 32],
+        DataRole::Observer,
+        scope.clone(),
+    )
+    .await;
+    let authority = host.authority();
+    assert!(other.request_observer_capture(authority.clone()).is_err());
+    let result = producer
+        .request_observer_capture(authority.clone())
+        .unwrap()
+        .wait(BUDGET)
+        .unwrap();
+    assert_eq!(result.scope(), &scope);
+    assert_eq!(
+        result.view(&authority).unwrap().cell(0, 0).unwrap().scalar,
+        'V'
+    );
+    assert!(result.view(&client.authority()).is_err());
+    let pending = producer
+        .request_observer_capture(authority.clone())
+        .unwrap();
+    authority.request_close();
+    assert!(pending.wait(BUDGET).is_err());
+    assert!(result.view(&authority).is_err());
+    drop(result);
+    other.stop();
+    other.join(BUDGET).unwrap();
+    producer.stop();
+    producer.join(BUDGET).unwrap();
+    host.close().await;
+    client.close().await;
+}
+
+#[test]
+fn observer_queue_denial_and_credits_do_not_degrade_native_producer() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let dir = tempfile::tempdir().unwrap();
+    let mut producer = NativeRunProducer::start(
+        Journal::open(&dir.path().join("observer-queue.sqlite")).unwrap(),
+        std::io::sink(),
+        "TEST_ONLY_OBSERVER_QUEUE".into(),
+        3,
+        3,
+        10,
+    )
+    .unwrap();
+    producer.output(0, b"VIEW".to_vec()).unwrap();
+    let projection = producer
+        .writer
+        .projection
+        .as_ref()
+        .unwrap()
+        .with_test_credits();
+    let examined = Arc::new(AtomicBool::new(false));
+    let seen = examined.clone();
+    let denied = projection
+        .capture_observer(Box::new(move || {
+            seen.store(true, Ordering::Release);
+            false
+        }))
+        .unwrap();
+    assert!(matches!(denied.wait(BUDGET).unwrap(), Err(Reject::Policy)));
+    assert!(examined.load(Ordering::Acquire));
+    drop(denied);
+    let first = projection.capture_observer(Box::new(|| true)).unwrap();
+    let next = projection.capture_observer(Box::new(|| true)).unwrap();
+    assert!(matches!(
+        projection.capture_observer(Box::new(|| true)),
+        Err(Reject::Full)
+    ));
+    assert!(producer.complete_from_zero());
+    drop(first);
+    drop(next);
+    producer.output(4, b" remains".to_vec()).unwrap();
+    assert!(producer.complete_from_zero());
+    producer.stop();
+    producer.join(BUDGET).unwrap();
+}

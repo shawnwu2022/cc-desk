@@ -4,6 +4,10 @@ use super::*;
 use ring::rand::SecureRandom;
 use std::sync::OnceLock;
 
+#[path = "local_writer_observer_capture.rs"]
+mod observer_capture;
+pub use observer_capture::{ObserverCapture, PendingObserverCapture};
+
 static NATIVE_VIEW_BUDGET: OnceLock<HostViewBudget> = OnceLock::new();
 
 /// The native application must supply its already-admitted original writer.

@@ -158,6 +158,21 @@ pub(super) async fn channels_as(
     CancelHandle,
     VerifiedGrant,
 ) {
+    channels_for_scope(now, principal, role, scope()).await
+}
+
+pub(super) async fn channels_for_scope(
+    now: Arc<AtomicU64>,
+    principal: [u8; 32],
+    role: DataRole,
+    actual: SessionScope,
+) -> (
+    RunningChannel,
+    RunningChannel,
+    GrantGate,
+    CancelHandle,
+    VerifiedGrant,
+) {
     let (mut c, mut h, cancel) = pair().await;
     let mut gate = GrantGate::for_binding(
         h.context(),
@@ -167,7 +182,7 @@ pub(super) async fn channels_as(
     )
     .unwrap();
     let p = gate
-        .challenge(scope(), role, Duration::from_secs(10))
+        .challenge(actual, role, Duration::from_secs(10))
         .unwrap();
     let grant = gate.accept(&signed(&p, gate.issuer_kid())).unwrap();
     c.install(&grant).unwrap();
