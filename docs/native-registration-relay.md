@@ -2,6 +2,14 @@
 
 This optional transport policy keeps an admitted registration tunnel alive while the original ceremony is awaiting its owner. It neither authorizes registration nor changes the Relay protocol. Normal enrolled transports retain their existing behavior.
 
+The native first-registration DTO reserves `accessMode: "observerOnce"` for
+an explicit, non-remembered read-only choice. The desktop freezes that choice
+as Observer and rejects it with Remember before issuing any key permit. The
+Observer route remains Locked before the approval dialog or network starts
+until the exact read-only native handoff is integrated. Leaving `accessMode`
+out retains the current Controller behavior, including its existing Remember
+approval. Manual configuration, remembered reselect and Relay are unchanged.
+
 ## Original ownership
 
 - Native `start_admitted_registration` receives the original admitted tunnel, IO budget, total end instant and cancellation future. The future is polled inside the same transport driver. A caller can pass a future waiting on the original `CancelToken::cancelled()`; no replacement cancellation owner is created.

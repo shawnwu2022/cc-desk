@@ -35,9 +35,22 @@ struct BrowserRequest {
     wasm_url: String,
     glue_url: String,
 }
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum RequestedAccess {
+    #[default]
+    Controller,
+    ObserverOnce,
+}
+enum FrozenAccess {
+    Controller { remember: bool },
+    ObserverOnce,
+}
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Candidate {
+    #[serde(default)]
+    access_mode: RequestedAccess,
     #[serde(default)]
     remember: bool,
     version: u8,
@@ -63,6 +76,7 @@ struct Candidate {
 type FixtureKeys = ([[u8; 32]; 2], Arc<[std::sync::atomic::AtomicUsize; 2]>);
 pub(crate) struct FrozenRegistrationStart {
     candidate: Candidate,
+    access: FrozenAccess,
     pub(crate) end: Instant,
     anchor: Instant,
     pub(crate) address: std::net::SocketAddr,
@@ -79,7 +93,18 @@ fn invalid() -> SafeError {
 }
 impl FrozenRegistrationStart {
     pub(crate) fn remember(&self) -> bool {
-        self.candidate.remember
+        matches!(self.access, FrozenAccess::Controller { remember: true })
+    }
+    pub(crate) fn product_role_enabled(&self) -> bool {
+        // Until the exact read-only handoff is installed, never issue a permit or
+        // start registration for this role. It must not fall back to Controller.
+        matches!(self.access, FrozenAccess::Controller { .. })
+    }
+    pub(super) fn data_role(&self) -> DataRole {
+        match self.access {
+            FrozenAccess::Controller { .. } => DataRole::Controller,
+            FrozenAccess::ObserverOnce => DataRole::Observer,
+        }
     }
     pub(crate) fn parse(text: &str) -> Result<Self, SafeError> {
         let anchor = Instant::now();
@@ -90,6 +115,13 @@ impl FrozenRegistrationStart {
         if c.version != 1 {
             return Err(invalid());
         }
+        let access = match c.access_mode {
+            RequestedAccess::Controller => FrozenAccess::Controller {
+                remember: c.remember,
+            },
+            RequestedAccess::ObserverOnce if !c.remember => FrozenAccess::ObserverOnce,
+            RequestedAccess::ObserverOnce => return Err(invalid()),
+        };
         key_name(&c.endpoint.key_name)?;
         key_name(&c.relay.key_name)?;
         let address: std::net::SocketAddr = c.address.parse().map_err(|_| invalid())?;
@@ -179,6 +211,7 @@ impl FrozenRegistrationStart {
         let tunnel = nonzero(&c.tunnel)?;
         let frozen = Self {
             candidate: c,
+            access,
             end,
             anchor,
             address,
@@ -235,7 +268,13 @@ impl FrozenRegistrationStart {
     }
     pub(crate) fn render(&self) -> String {
         let c = &self.candidate;
-        format!("Approve one registration connection and use these EXISTING native keys?\nThis authorizes one Relay signature and one endpoint TLS signature. It does not create keys, authenticate a person, approve browser storage, or grant terminal control. Compare the browser public keys and independent Host pin before agreeing. The original 120-second deadline is not renewed.\nRelay: {} / {} / mode {} / tunnel {}\nNative profile: {} revision {}\nMicrosoft Software KSP / current user / silent open-only\nEndpoint key: {}\nEndpoint SPKI: {}\nRelay key: {}\nRelay SPKI: {}\nBrowser origin: {}\nRP: {}\nRequested user association (not authenticated): {}\nBrowser TLS SPKI: {}\nBrowser grant SPKI: {}\nBrowser relay SPKI: {}",self.origin.as_str(),self.address,c.relay_mode,c.tunnel,c.profile_id,c.profile_revision,c.endpoint.key_name,c.endpoint.spki,c.relay.key_name,c.relay.spki,c.browser.origin,c.browser.rp_id,c.browser.user_handle,c.browser.tls_spki,c.browser.grant_spki,c.browser.relay_spki)
+        let details = format!("Approve one registration connection and use these EXISTING native keys?\nThis authorizes one Relay signature and one endpoint TLS signature. It does not create keys, authenticate a person, approve browser storage, or grant terminal control. Compare the browser public keys and independent Host pin before agreeing. The original 120-second deadline is not renewed.\nRelay: {} / {} / mode {} / tunnel {}\nNative profile: {} revision {}\nMicrosoft Software KSP / current user / silent open-only\nEndpoint key: {}\nEndpoint SPKI: {}\nRelay key: {}\nRelay SPKI: {}\nBrowser origin: {}\nRP: {}\nRequested user association (not authenticated): {}\nBrowser TLS SPKI: {}\nBrowser grant SPKI: {}\nBrowser relay SPKI: {}",self.origin.as_str(),self.address,c.relay_mode,c.tunnel,c.profile_id,c.profile_revision,c.endpoint.key_name,c.endpoint.spki,c.relay.key_name,c.relay.spki,c.browser.origin,c.browser.rp_id,c.browser.user_handle,c.browser.tls_spki,c.browser.grant_spki,c.browser.relay_spki);
+        match self.access {
+            FrozenAccess::Controller { .. } => details,
+            FrozenAccess::ObserverOnce => {
+                format!("Requested role: one-time read-only Observer (not enabled).\n{details}")
+            }
+        }
     }
     pub(crate) fn installation(
         &self,
@@ -275,7 +314,7 @@ impl FrozenRegistrationStart {
             principal: nonzero(&c.principal)?,
             policy: NativeGrantPolicy {
                 scope: admission.scope()?,
-                role: DataRole::Controller,
+                role: self.data_role(),
                 duration: Duration::from_secs(30),
             },
             clock: Arc::new(move || {

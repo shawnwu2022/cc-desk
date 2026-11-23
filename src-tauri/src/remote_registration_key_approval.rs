@@ -45,6 +45,9 @@ impl NativeRegistrationKeyApproval {
         window: &tauri::Window<R>,
         frozen: FrozenRegistrationStart,
     ) -> Result<Arc<Self>, HostNetworkError> {
+        if !frozen.product_role_enabled() {
+            return Err(HostNetworkError::Locked);
+        }
         let text = frozen.render();
         let cap = frozen.end;
         if Instant::now() >= cap {
@@ -75,13 +78,18 @@ impl NativeRegistrationKeyApproval {
     pub(crate) fn take(&self) -> Option<RegistrationKeyPermit> {
         self.machine
             .take()?
-            .consume(|frozen, _| RegistrationKeyPermit {
-                signing: RegistrationSigningScope {
-                    token: self.machine.lease.native.clone(),
-                    cap: frozen.end,
-                },
-                frozen,
+            .consume(|frozen, _| {
+                frozen
+                    .product_role_enabled()
+                    .then(|| RegistrationKeyPermit {
+                        signing: RegistrationSigningScope {
+                            token: self.machine.lease.native.clone(),
+                            cap: frozen.end,
+                        },
+                        frozen,
+                    })
             })
+            .flatten()
     }
     pub(crate) fn cancel(&self) {
         self.machine.cancel();

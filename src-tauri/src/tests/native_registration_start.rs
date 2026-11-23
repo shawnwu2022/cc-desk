@@ -79,6 +79,54 @@ fn NativeRegistrationStart_YesOneShotOriginalTokenAndDeadline_003() {
     gate.cancel();
     assert!(!permit.signing.matches(&permit.signing.token(), end));
 }
+
+#[test]
+#[allow(non_snake_case)]
+fn NativeRegistrationStart_ObserverChoiceCannotIssueKeyPermit_015() {
+    let mut request: serde_json::Value = serde_json::from_str(&configuration::test_json()).unwrap();
+    request["accessMode"] = "observerOnce".into();
+    let frozen = FrozenRegistrationStart::parse(&request.to_string()).unwrap();
+    assert!(!frozen.remember());
+    assert_eq!(
+        frozen.data_role(),
+        cc_desk_remote_record::grant::DataRole::Observer
+    );
+    assert!(frozen.render().contains("one-time read-only Observer"));
+    let gate = NativeRegistrationKeyApproval::test_pending(frozen);
+    gate.test_complete(true);
+    assert!(
+        gate.take().is_none(),
+        "closed Observer role issued key permit"
+    );
+    assert!(
+        gate.take().is_none(),
+        "closed Observer permit could be retried"
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn NativeRegistrationStart_ObserverCannotRemember_016() {
+    let mut request: serde_json::Value = serde_json::from_str(&configuration::test_json()).unwrap();
+    request["accessMode"] = "observerOnce".into();
+    request["remember"] = true.into();
+    assert!(FrozenRegistrationStart::parse(&request.to_string()).is_err());
+    request["accessMode"] = "controller".into();
+    let frozen = FrozenRegistrationStart::parse(&request.to_string()).unwrap();
+    assert!(frozen.remember());
+    assert_eq!(
+        frozen.data_role(),
+        cc_desk_remote_record::grant::DataRole::Controller
+    );
+    let gate = NativeRegistrationKeyApproval::test_pending(frozen);
+    gate.test_complete(true);
+    assert!(
+        gate.take().is_some(),
+        "explicit Controller changed legacy eligibility"
+    );
+    request["accessMode"] = "unknown".into();
+    assert!(FrozenRegistrationStart::parse(&request.to_string()).is_err());
+}
 #[test]
 #[allow(non_snake_case)]
 fn NativeRegistrationStart_IndependentCustodyDoesNotConsumeHostSlot_004() {
