@@ -13,8 +13,9 @@ try {
   if (/^[0-9a-f]{40}$/.test(value)) buildCommit = value
 } catch { /* Source archives have no Git identity; do not invent one. */ }
 // https://vitejs.dev/config/
+const isBrowserProduct = (command: string, mode: string) => command === 'build' && mode === 'browser-product'
 export default defineConfig(({ command, mode }) => ({
-  plugins: [registrationSourcePlugin(__dirname), visualFixturePlugin(__dirname, command === 'serve' && mode === 'visual' && process.env.CC_DESK_VISUAL_FIXTURE === '1'), vue()],
+  plugins: [...(isBrowserProduct(command, mode) ? [registrationSourcePlugin(__dirname)] : []), visualFixturePlugin(__dirname, command === 'serve' && mode === 'visual' && process.env.CC_DESK_VISUAL_FIXTURE === '1'), vue()],
   resolve: {
     alias: {
       '@': resolve(__dirname, 'src')
@@ -44,6 +45,8 @@ export default defineConfig(({ command, mode }) => ({
     }
   },
   build: {
+    // The public directory is reserved for generated browser-product files.
+    copyPublicDir: isBrowserProduct(command, mode),
     // Tauri uses Chromium on Windows and WebKit on macOS and Linux
     target: ['es2021', 'chrome100', 'safari13'],
     // Don't minify for debug builds
@@ -55,9 +58,11 @@ export default defineConfig(({ command, mode }) => ({
       input: {
         main: resolve(__dirname, 'index.html'),
         versionManager: resolve(__dirname, 'version-manager.html'),
-        browserRemote: resolve(__dirname, 'browser-remote.html'),
-        browserRegistration: resolve(__dirname, 'browser-registration.html'),
-        browserProfile: resolve(__dirname, 'remote/ui-terminal/src/browser-profile.ts'),
+        ...(isBrowserProduct(command, mode) ? {
+          browserRemote: resolve(__dirname, 'browser-remote.html'),
+          browserRegistration: resolve(__dirname, 'browser-registration.html'),
+          browserProfile: resolve(__dirname, 'remote/ui-terminal/src/browser-profile.ts'),
+        } : {}),
       },
       output: {
         entryFileNames: chunk => chunk.name === 'browserProfile' ? 'browser-profile.js' : 'assets/[name]-[hash].js',

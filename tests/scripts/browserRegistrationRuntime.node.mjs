@@ -47,8 +47,8 @@ test('RegistrationRuntime_LinkOnlySource_003',async()=>{
  assert.equal(source,forwards,'wrapper must only forward the original registration functions');
  const pkg=JSON.parse(fs.readFileSync(path.join(root,'package.json'),'utf8'));
  assert.equal(pkg.scripts['build:browser:registration-runtime'],'node scripts/build-browser-registration-runtime.mjs');
- assert.equal(pkg.scripts['build:browser'],'node scripts/build-browser-runtime.mjs && vite build');
- assert.equal(pkg.scripts['build:browser:product'],'node scripts/build-browser-runtime.mjs && node scripts/build-browser-registration-runtime.mjs && vite build');
+ assert.equal(pkg.scripts['build:browser'],'node scripts/build-browser-runtime.mjs && vite build --mode browser-product');
+ assert.equal(pkg.scripts['build:browser:product'],'node scripts/build-browser-runtime.mjs && node scripts/build-browser-registration-runtime.mjs && vite build --mode browser-product');
 });
 
 test('RegistrationRuntime_ProjectLocalPaths_004',async()=>{

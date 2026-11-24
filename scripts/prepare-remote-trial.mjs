@@ -10,6 +10,6 @@ run(process.execPath,['scripts/prepare-opencode-archive-sdk.mjs'],env);
 run(process.execPath,['scripts/build-browser-runtime.mjs'],env);
 run(process.execPath,['scripts/build-browser-registration-runtime.mjs'],env);
 for(const name of ['remote-runtime','remote-registration-runtime'])verifyRuntime(path.join(root,'public',name));
-run(process.execPath,['node_modules/vite/bin/vite.js','build','--outDir',trialDist],env);
+run(process.execPath,['node_modules/vite/bin/vite.js','build','--mode','browser-product','--outDir',trialDist],env);
 const runtimes=['remote-runtime','remote-registration-runtime'].map(name=>verifyRuntime(path.join(root,'public',name),path.join(trialDist,name)));
 fs.writeFileSync(path.join(trialDist,'remote-trial-build.json'),JSON.stringify({kind:'LocalRemoteTrialNotRelease',version:JSON.parse(fs.readFileSync(path.join(root,'package.json'),'utf8')).version,runtimes},null,2)+'\n');

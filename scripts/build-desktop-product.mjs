@@ -23,7 +23,7 @@ export function buildDesktopProduct(){
  const env=desktopEnvironment(process.env);env.CARGO_TARGET_DIR=browserTarget;
  for(const script of ['prepare-session-sdk.mjs','prepare-opencode-archive-sdk.mjs','build-browser-runtime.mjs','build-browser-registration-runtime.mjs'])run(process.execPath,['scripts/'+script],env);
  for(const name of ['remote-runtime','remote-registration-runtime'])verifyRuntime(path.join(root,'public',name),undefined,browserTarget);
- run(process.execPath,['node_modules/vite/bin/vite.js','build'],env);
+ run(process.execPath,['node_modules/vite/bin/vite.js','build','--mode','browser-product'],env);
  for(const name of ['remote-runtime','remote-registration-runtime'])verifyRuntime(path.join(root,'public',name),path.join(root,'dist',name),browserTarget);
 }
 if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url))buildDesktopProduct();
