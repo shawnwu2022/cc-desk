@@ -66,6 +66,7 @@ history-roundtrip-acceptance = []
 antigravity-acceptance = []
 remote-client-ipc = ["dep:cc-desk-remote-client", "dep:cc-desk-remote-security", "dep:cc-desk-remote-record", "dep:cc-desk-remote-transport", "dep:rustls", "dep:coset"]
 remote-host = ["remote-client-ipc", "dep:cc-desk-remote-host"]
+remote-observer = ["remote-host"]
 remote-observer-local-acceptance = ["remote-host"]
 
 [dev-dependencies]

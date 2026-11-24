@@ -4,6 +4,10 @@ use super::*;
 pub(crate) struct FrozenHostApproval {
     pub(super) fields: HostApprovalDescription,
     pub(super) origin: NativeRunNetworkOrigin,
+    #[cfg(windows)]
+    pub(super) formal_observer_endpoint: Option<
+        crate::remote_host_controller::startup::configuration::FormalObserverEndpoint,
+    >,
     cap: Instant,
     #[cfg(windows)]
     pub(super) supplier: Option<crate::native_crypto::host::FrozenHostSupplier>,
@@ -30,6 +34,8 @@ impl FrozenHostApproval {
             cap,
             #[cfg(windows)]
             supplier: None,
+            #[cfg(windows)]
+            formal_observer_endpoint: None,
         })
     }
     #[cfg(windows)]
@@ -57,6 +63,23 @@ impl FrozenHostApproval {
         let mut frozen = Self::description(fields, admission, cap)?;
         frozen.supplier = Some(supplier);
         Ok(frozen)
+    }
+    #[cfg(windows)]
+    pub(crate) fn with_formal_observer_endpoint(
+        mut self,
+        endpoint: Option<
+            crate::remote_host_controller::startup::configuration::FormalObserverEndpoint,
+        >,
+    ) -> Result<Self, HostNetworkError> {
+        if endpoint.as_ref().is_some_and(|endpoint| {
+            self.supplier.is_none()
+                || self.fields.policy.role != cc_desk_remote_record::grant::DataRole::Observer
+                || !endpoint.matches(self.fields.address, &self.fields.binding.origin)
+        }) {
+            return Err(HostNetworkError::Authority);
+        }
+        self.formal_observer_endpoint = endpoint;
+        Ok(self)
     }
     pub(crate) fn cap(&self) -> Instant {
         self.cap
@@ -115,6 +138,8 @@ impl FrozenHostApproval {
             cap,
             #[cfg(windows)]
             supplier: None,
+            #[cfg(windows)]
+            formal_observer_endpoint: None,
         }
     }
     #[cfg(test)]

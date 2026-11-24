@@ -42,6 +42,17 @@ enum RequestedAccess {
     Controller,
     ObserverOnce,
 }
+/// Produced only by explicit ObserverOnce configuration, never by Controller
+/// configuration, remembered pairing, or the test connector.
+pub(crate) struct FormalObserverEndpoint {
+    address: std::net::SocketAddr,
+    origin: CanonicalOrigin,
+}
+impl FormalObserverEndpoint {
+    pub(crate) fn matches(&self, address: std::net::SocketAddr, origin: &CanonicalOrigin) -> bool {
+        self.address == address && &self.origin == origin
+    }
+}
 enum FrozenAccess {
     Controller { remember: bool },
     ObserverOnce,
@@ -99,9 +110,19 @@ impl FrozenRegistrationStart {
         match self.access {
             FrozenAccess::Controller { .. } => true,
             FrozenAccess::ObserverOnce => {
-                crate::remote_host_network::local_observer_address(self.address)
+                self.formal_observer_endpoint().is_some()
+                    || crate::remote_host_network::local_observer_address(self.address)
             }
         }
+    }
+    pub(crate) fn formal_observer_endpoint(&self) -> Option<FormalObserverEndpoint> {
+        (cfg!(feature = "remote-observer")
+            && matches!(self.access, FrozenAccess::ObserverOnce)
+            && !self.address.ip().is_loopback())
+            .then(|| FormalObserverEndpoint {
+                address: self.address,
+                origin: self.origin.clone(),
+            })
     }
     pub(super) fn data_role(&self) -> DataRole {
         match self.access {
@@ -341,6 +362,7 @@ impl FrozenRegistrationStart {
             io_budget: Duration::from_secs(2),
         };
         let host = FrozenHostApproval::supplied(fields, admission, self.end, self.supplier()?)
+            .and_then(|host| host.with_formal_observer_endpoint(self.formal_observer_endpoint()))
             .map_err(|_| invalid())?;
         Ok((
             host,

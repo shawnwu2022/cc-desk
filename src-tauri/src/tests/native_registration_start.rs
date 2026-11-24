@@ -81,6 +81,7 @@ fn NativeRegistrationStart_YesOneShotOriginalTokenAndDeadline_003() {
 }
 
 #[test]
+#[cfg(not(feature = "remote-observer"))]
 #[allow(non_snake_case)]
 fn NativeRegistrationStart_ObserverChoiceCannotIssueKeyPermit_015() {
     let mut request: serde_json::Value = serde_json::from_str(&configuration::test_json()).unwrap();
@@ -120,6 +121,22 @@ fn NativeRegistrationStart_ObserverFreezesOneSecuredRelayEndpoint_018() {
     request["address"] = "192.0.2.1:443".into();
     assert!(FrozenRegistrationStart::parse(&request.to_string()).is_err(),
         "Observer must reject a mismatched configured transport endpoint before approval");
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn NativeRegistrationStart_ObserverFormalExplicitChoice_019() {
+    let mut request: serde_json::Value = serde_json::from_str(&configuration::test_json()).unwrap();
+    request["accessMode"] = "observerOnce".into();
+    request["origin"] = "wss://relay.invalid:8443/one".into();
+    request["address"] = "192.0.2.1:8443".into();
+    let frozen = FrozenRegistrationStart::parse(&request.to_string()).unwrap();
+    assert_eq!(frozen.product_role_enabled(), cfg!(feature = "remote-observer"));
+    let owner = NativeRegistrationKeyApproval::test_pending(frozen);
+    assert!(owner.take().is_none(), "no local consent");
+    owner.test_complete(true);
+    assert_eq!(owner.take().is_some(), cfg!(feature = "remote-observer"));
+    assert!(owner.take().is_none(), "single-use approval");
 }
 
 #[cfg(feature = "remote-observer-local-acceptance")]

@@ -3790,7 +3790,10 @@ pub(crate) struct NativeObserverOwner {
 #[cfg(feature = "remote-host")]
 #[allow(dead_code, reason = "未接入产品授权和启动入口")]
 impl NativeObserverOwner {
-    #[cfg(all(windows, feature = "remote-observer-local-acceptance"))]
+    #[cfg(all(
+        windows,
+        any(feature = "remote-observer", all(test, feature = "remote-observer-local-acceptance"))
+    ))]
     pub(crate) async fn wait_install_receipt(&mut self) -> Option<NativeObserverInstallReceipt> {
         let receipt = self.installation.as_mut()?.await.ok();
         self.installation = None;
