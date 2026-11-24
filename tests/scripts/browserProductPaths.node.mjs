@@ -14,7 +14,7 @@ test('browser build references stay inside the preview mount; desktop base stays
  assert.equal((await resolveConfig({},'build','production')).base,'/')
  const outDir=mkdtempSync(join(tmpdir(),'ccdesk-browser-path-check-'))
  try{
-  await build({mode:'browser-product',logLevel:'silent',build:{outDir,emptyOutDir:true}})
+  await build({mode:'browser-product',logLevel:'silent',build:{outDir,emptyOutDir:true,copyPublicDir:false}})
   const content=file=>readFileSync(resolve(outDir,file),'utf8')
   const local=(raw,from,mount)=>{
     const resolved=new URL(raw,new URL(mount+from,origin))
@@ -28,6 +28,11 @@ test('browser build references stay inside the preview mount; desktop base stays
     assert.ok(refs.length>3,entry)
     for(const ref of refs)assert.ok(content(local(ref,entry,mount)).length)
   }
+  const nav=readdirSync(resolve(outDir,'assets')).filter(f=>/^browserRegistration-.*\.js$/.test(f))
+  assert.equal(nav.length,1)
+  const terminalLink=matches(content('assets/'+nav[0]),/href:["']([^"']*browser-remote\.html)["']/g)
+  assert.equal(terminalLink.length,1)
+  for(const mount of mounts)assert.equal(local(terminalLink[0],'browser-registration.html',mount),'browser-remote.html')
   const output=readdirSync(resolve(outDir,'assets')).filter(f=>/^browser(?:Remote|Registration)-.+\.js$/.test(f))
   assert.equal(output.length,2)
   for(const name of output){
