@@ -1704,7 +1704,7 @@ async fn observer_snapshot_uses_original_install_and_scope() {
     .unwrap();
     producer.output(0, b"VIEW".to_vec()).unwrap();
     let scope = producer.native_scope();
-    let (client, host, _gate, _cancel) =
+    let (client, host, mut gate, _cancel) =
         peer_channels_role(Arc::new(|| Ok(1000)), scope.clone(), DataRole::Observer).await;
     let capture = producer
         .request_observer_capture(host.authority())
@@ -1738,7 +1738,17 @@ async fn observer_snapshot_uses_original_install_and_scope() {
     assert_eq!(view.stamp.target.generation, scope.generation);
     assert_eq!(view.start, 0);
     assert_eq!(view.cells[0].scalar, 'V');
-    assert!(sender.unwrap().retire().await.is_ok());
+    let sender = sender.unwrap();
+    gate.revoke();
+    assert!(host.authority().check().is_err());
+    assert!(producer.request_observer_capture(host.authority()).is_err());
+    let (host_closed, next_view) = tokio::join!(
+        tokio::time::timeout(BUDGET, host.wait_closed_checked()),
+        client.receive(&scope, fence, BUDGET),
+    );
+    assert!(host_closed.unwrap().is_ok());
+    assert!(next_view.is_err());
+    assert!(sender.retire().await.is_ok());
     client.close().await;
     assert!(producer.complete_from_zero());
     producer.stop();
