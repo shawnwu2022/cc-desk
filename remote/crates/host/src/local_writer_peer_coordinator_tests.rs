@@ -398,11 +398,11 @@ async fn peer_channels_scope(
 ) -> (RunningChannel, RunningChannel, GrantGate, CancelHandle) {
     peer_channels_role(clock, scope, DataRole::Controller).await
 }
-async fn peer_channels_role(
-    clock: Arc<dyn GrantClock>,
-    scope: cc_desk_remote_record::grant::SessionScope,
-    role: DataRole,
-) -> (RunningChannel, RunningChannel, GrantGate, CancelHandle) {
+async fn bound_peer_channels() -> (
+    cc_desk_remote_security::ManagedChannel<tokio::io::DuplexStream>,
+    cc_desk_remote_security::ManagedChannel<tokio::io::DuplexStream>,
+    CancelHandle,
+) {
     let local = |client| {
         let (k, p) = identities::identity(client, false);
         LocalIdentity::new(
@@ -454,7 +454,15 @@ async fn peer_channels_role(
             }
         )
     );
-    let (c, h) = (c.unwrap(), h.unwrap());
+    (c.unwrap(), h.unwrap(), cancel)
+}
+
+async fn peer_channels_role(
+    clock: Arc<dyn GrantClock>,
+    scope: cc_desk_remote_record::grant::SessionScope,
+    role: DataRole,
+) -> (RunningChannel, RunningChannel, GrantGate, CancelHandle) {
+    let (c, h, cancel) = bound_peer_channels().await;
     let mut gate =
         GrantGate::for_binding(h.context(), support::admin(), [4; 32], clock.clone()).unwrap();
     let mut state = ClientGrantState::new(clock);
@@ -1753,6 +1761,49 @@ async fn observer_snapshot_uses_original_install_and_scope() {
     assert!(producer.complete_from_zero());
     producer.stop();
     producer.join(BUDGET).unwrap();
+}
+
+#[tokio::test]
+async fn observer_revoked_grant_cannot_establish_a_fresh_peer() {
+    let scope = support::scope();
+    let clock: Arc<dyn GrantClock> = Arc::new(|| Ok(1000));
+    let (old_client, old_host, mut old_grant, _old_cancel) =
+        peer_channels_role(clock.clone(), scope.clone(), DataRole::Observer).await;
+    assert!(old_host.authority().check().is_ok());
+    old_grant.revoke();
+    assert!(old_host.authority().check().is_err());
+
+    // The same deterministic device keys and run get a new duplex and AppBind.
+    let (new_client, new_host, _new_cancel) = bound_peer_channels().await;
+    let trust = ClientGrantTrust {
+        issuer: support::admin(),
+        principal: [4; 32],
+        scope: scope.clone(),
+        role: DataRole::Observer,
+    };
+    let policy = NativeGrantPolicy {
+        scope: scope.clone(),
+        role: DataRole::Observer,
+        duration: Duration::from_secs(10),
+    };
+    let mut signer = PublicSigner;
+    let mut client_state = ClientGrantState::new(clock.clone());
+    let (client_result, host_result) = tokio::join!(
+        new_client.grant_client(&trust, &mut signer, &mut client_state, BUDGET),
+        new_host.grant_host(&mut old_grant, policy, BUDGET),
+    );
+    assert!(matches!(
+        host_result,
+        Err(cc_desk_remote_security::GrantError::Revoked)
+    ));
+    assert!(client_result.is_err());
+    let (approved_client, approved_host, _fresh_grant, _approved_cancel) =
+        peer_channels_role(clock, scope, DataRole::Observer).await;
+    assert!(approved_host.authority().check().is_ok());
+    approved_client.close().await;
+    approved_host.close().await;
+    old_client.close().await;
+    old_host.close().await;
 }
 
 #[tokio::test]
