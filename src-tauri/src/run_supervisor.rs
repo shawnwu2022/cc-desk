@@ -3366,6 +3366,7 @@ mod native_observer_lifetime_tests {
         let (stopping, mut stopped) = oneshot::channel();
         let (release, receipt) = oneshot::channel();
         let mut owner = NativeObserverOwner {
+            installation: None,
             cancel: None,
             result: None,
             retirement_end: None,
@@ -3402,6 +3403,63 @@ mod native_observer_lifetime_tests {
         assert!(owner.retire().await.is_ok());
     }
 
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn ObserverLifetime_OnlyInstalledExactPeerCanReportReadiness_007() {
+        use super::{NativeObserverInstallReceipt, NativeObserverOwner};
+        use crate::{
+            native_crypto::owner::NativeRevocation, remote_host_network::NativeApprovalStop,
+            tests::remote_channels::channels_with_role,
+        };
+        use cc_desk_remote_record::grant::{DataRole, SessionScope};
+        use std::sync::Arc;
+        use tokio::sync::oneshot;
+
+        let (peer, host, _gate, _channel_owner) = channels_with_role(
+            SessionScope {
+                session: "42".repeat(16),
+                run: "TEST_ONLY_OBSERVER".into(),
+                generation: "1".into(),
+            },
+            Arc::new(|| Ok(1000)),
+            DataRole::Observer,
+        )
+        .await;
+        let host = Arc::new(host);
+        let end = Instant::now() + Duration::from_secs(5);
+        let original = NativeRevocation::new();
+        let approval = NativeApprovalStop::new(original.clone(), end.into_std());
+        let (install, installation) = oneshot::channel();
+        let mut owner = NativeObserverOwner {
+            installation: Some(installation),
+            cancel: None,
+            result: None,
+            retirement_end: None,
+            task: tokio::spawn(async { Ok(()) }),
+        };
+        assert!(owner.take_install_receipt().is_none());
+        assert!(NativeObserverInstallReceipt::from_installed(&host, &approval, end).is_none());
+        let request = host.host_install_request().await.unwrap();
+        let (peer_receipt, complete) = tokio::join!(
+            peer.client_installed(),
+            host.complete_host_install(request, 7),
+        );
+        complete.unwrap();
+        assert_eq!(peer_receipt.unwrap().consume_for(&peer).unwrap(), 7);
+        let receipt = NativeObserverInstallReceipt::from_installed(&host, &approval, end).unwrap();
+        assert!(Arc::ptr_eq(&receipt.channel, &host));
+        assert!(install.send(receipt).is_ok());
+        let receipt = owner.take_install_receipt().unwrap();
+        assert!(receipt.is_live());
+        assert!(owner.take_install_receipt().is_none());
+        original.revoke();
+        assert!(!receipt.is_live());
+        assert!(NativeObserverInstallReceipt::from_installed(&host, &approval, end).is_none());
+        peer.close().await;
+        host.wait_closed_checked().await.unwrap();
+        owner.retire().await.unwrap();
+    }
+
     #[tokio::test]
     async fn ObserverLifetime_RetirementDeadlineRetainsOriginalJoin_004() {
         use super::NativeObserverOwner;
@@ -3409,6 +3467,7 @@ mod native_observer_lifetime_tests {
 
         let (release, receipt) = oneshot::channel();
         let mut owner = NativeObserverOwner {
+            installation: None,
             cancel: None,
             result: None,
             retirement_end: None,
@@ -3574,7 +3633,53 @@ async fn retire_observer_capture<T>(
 
 #[cfg(feature = "remote-host")]
 #[allow(dead_code, reason = "未接入产品授权和启动入口")]
+#[cfg(feature = "remote-host")]
+#[allow(dead_code, reason = "not connected to the product entry")]
+pub(crate) struct NativeObserverInstallReceipt {
+    channel: Arc<cc_desk_remote_security::RunningChannel>,
+    approval: crate::remote_host_network::NativeApprovalStop,
+    end: tokio::time::Instant,
+    fence: u64,
+}
+
+#[cfg(feature = "remote-host")]
+#[allow(dead_code, reason = "not connected to the product entry")]
+impl NativeObserverInstallReceipt {
+    fn from_installed(
+        channel: &Arc<cc_desk_remote_security::RunningChannel>,
+        approval: &crate::remote_host_network::NativeApprovalStop,
+        end: tokio::time::Instant,
+    ) -> Option<Self> {
+        use cc_desk_remote_record::grant::DataRole;
+        use cc_desk_remote_security::Role;
+
+        let authority = channel.authority();
+        if authority.local_role() != Role::Host || authority.data_role() != DataRole::Observer {
+            return None;
+        }
+        let receipt = Self {
+            channel: channel.clone(),
+            approval: approval.clone(),
+            end,
+            fence: channel.installed_fence().ok()?,
+        };
+        receipt.is_live().then_some(receipt)
+    }
+
+    pub(crate) fn is_live(&self) -> bool {
+        tokio::time::Instant::now() < self.end
+            && !self.approval.is_invalid()
+            && self
+                .channel
+                .installed_fence()
+                .is_ok_and(|fence| fence == self.fence)
+    }
+}
+
+#[cfg(feature = "remote-host")]
+#[allow(dead_code, reason = "not connected to the product entry")]
 pub(crate) struct NativeObserverOwner {
+    installation: Option<tokio::sync::oneshot::Receiver<NativeObserverInstallReceipt>>,
     cancel: Option<tokio::sync::oneshot::Sender<()>>,
     result: Option<Result<(), SafeError>>,
     retirement_end: Option<tokio::time::Instant>,
@@ -3584,6 +3689,21 @@ pub(crate) struct NativeObserverOwner {
 #[cfg(feature = "remote-host")]
 #[allow(dead_code, reason = "未接入产品授权和启动入口")]
 impl NativeObserverOwner {
+    pub(crate) fn take_install_receipt(&mut self) -> Option<NativeObserverInstallReceipt> {
+        use tokio::sync::oneshot::error::TryRecvError;
+        match self.installation.as_mut()?.try_recv() {
+            Ok(receipt) => {
+                self.installation = None;
+                receipt.is_live().then_some(receipt)
+            }
+            Err(TryRecvError::Empty) => None,
+            Err(TryRecvError::Closed) => {
+                self.installation = None;
+                None
+            }
+        }
+    }
+
     pub(crate) async fn retire(&mut self) -> Result<(), SafeError> {
         // 即使上层放弃本次等待，仍持有原任务并继续收口。
         self.cancelled();
@@ -3608,6 +3728,7 @@ impl NativeObserverOwner {
     }
 
     fn cancelled(&mut self) {
+        self.installation = None;
         // 闭合原发送端与显式取消有相同语义。
         if let Some(cancel) = self.cancel.take() {
             let _ = cancel.send(());
@@ -3686,6 +3807,7 @@ impl NativeRunAdmission {
             return Err(error("REMOTE_OBSERVER_UNAVAILABLE"));
         }
         let (cancel, cancelled) = tokio::sync::oneshot::channel();
+        let (install, installation) = tokio::sync::oneshot::channel();
         struct CloseExactObserver(cc_desk_remote_security::BoundDataAuthority);
         impl Drop for CloseExactObserver {
             fn drop(&mut self) {
@@ -3696,7 +3818,7 @@ impl NativeRunAdmission {
         let close = CloseExactObserver(authority.clone());
         let task = runtime.spawn(async move {
             let _close = close;
-            let stop = wait_for_observer_retirement(stopped, cancelled, approval, end);
+            let stop = wait_for_observer_retirement(stopped, cancelled, approval.clone(), end);
             let mut capture_worker = None;
             let work = async {
                 let cutoff = (tokio::time::Instant::now() + Duration::from_secs(1))
@@ -3721,14 +3843,26 @@ impl NativeRunAdmission {
                     return Err(error("REMOTE_OBSERVER_CAPTURE"));
                 }
                 self.validate()?;
-                let transfer = capture.install_snapshot_until(&channel, end)
-                    .await.map_err(|_| error("REMOTE_OBSERVER_INSTALL"))?;
+                let transfer = capture
+                    .install_snapshot_until(&channel, end)
+                    .await
+                    .map_err(|_| error("REMOTE_OBSERVER_INSTALL"))?;
                 self.validate()?;
-                let sent = transfer.send_snapshot().await.map_err(|_| error("REMOTE_OBSERVER_SEND"))?;
+                if let Some(receipt) =
+                    NativeObserverInstallReceipt::from_installed(&channel, &approval, end)
+                {
+                    let _ = install.send(receipt);
+                }
+                let sent = transfer
+                    .send_snapshot()
+                    .await
+                    .map_err(|_| error("REMOTE_OBSERVER_SEND"))?;
                 // 已发送不是已显示，不主动在浏览器消费前回收；原通道关闭或外层取消会收口。
                 let outcome = channel.wait_closed_checked().await;
                 drop(sent);
-                outcome.map(|_| ()).map_err(|_| error("REMOTE_OBSERVER_RETIREMENT_UNKNOWN"))
+                outcome
+                    .map(|_| ())
+                    .map_err(|_| error("REMOTE_OBSERVER_RETIREMENT_UNKNOWN"))
             };
             let result = tokio::select! {
                 biased;
@@ -3753,6 +3887,7 @@ impl NativeRunAdmission {
             result
         });
         Ok(NativeObserverOwner {
+            installation: Some(installation),
             cancel: Some(cancel),
             task,
             result: None,
