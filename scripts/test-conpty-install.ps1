@@ -1,7 +1,16 @@
 # Disposable Windows CI only: runs the actual packaged executable, never Claude.
-param([Parameter(Mandatory=$true)][string]$Installer)
+param(
+    [Parameter(Mandatory=$true)][string]$Installer,
+    [ValidatePattern('^[0-9a-f]{40}$')][string]$ExpectedBuildSha
+)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+$releaseProbe = $PSBoundParameters.ContainsKey('ExpectedBuildSha')
+if ($releaseProbe -and (!$IsWindows -or $env:GITHUB_ACTIONS -cne 'true' -or
+        $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or !$env:RUNNER_TEMP -or
+        $env:GITHUB_SHA -cne $ExpectedBuildSha)) {
+    throw 'Expected disposable hosted Windows runner and matching release source'
+}
 $root = Join-Path $env:RUNNER_TEMP ('cc-conpty-install-' + [guid]::NewGuid())
 $installed = Join-Path $root 'CC Desk 安装'
 $cwd = Join-Path $root 'untrusted cwd'
@@ -13,7 +22,7 @@ $results = [Collections.Generic.List[object]]::new()
 function Run-Probe([string]$directory, [bool]$expected, [string]$label) {
     $report = Join-Path $root ($label + '.json')
     $exe = Join-Path $directory 'cc-desk.exe'
-    $process = Start-Process -FilePath $exe -ArgumentList "--check-conpty `"$report`"" -WorkingDirectory $cwd -PassThru
+    $process = Start-Process -FilePath $exe -ArgumentList "--check-conpty `"$report`"" -WorkingDirectory $cwd -WindowStyle Hidden -PassThru
     if (!$process.WaitForExit(30000)) { $process.Kill(); throw "Probe timed out: $label" }
     $process.Refresh()
     if (!(Test-Path -LiteralPath $report)) { throw "No probe report: $label, exit=$($process.ExitCode)" }
@@ -23,15 +32,18 @@ function Run-Probe([string]$directory, [bool]$expected, [string]$label) {
     }
     if ($expected) {
         if ($data.backend -ne 'bundled' -or !$data.ptyLifecycle -or $data.version -ne '1.24.2607.10001') { throw "Wrong backend: $label" }
+        if ($releaseProbe -and $data.build -cne $ExpectedBuildSha) { throw 'Installed executable does not match the release source' }
         # Canonical paths returned by Windows may carry the extended-length prefix.
         if (($data.dll -replace '^\\\\\?\\','') -ine (Join-Path $directory 'conpty.dll')) { throw "Unexpected loaded DLL: $($data.dll)" }
+        if ($releaseProbe -and ($data.host -replace '^\\\\\?\\','') -ine (Join-Path $directory 'OpenConsole.exe')) { throw 'Unexpected bundled host' }
     }
     $results.Add([ordered]@{case=$label; expectedSuccess=$expected; exitCode=$process.ExitCode; result=$data})
     Write-Output "PASS $label"
 }
 try {
-    for ($iteration=1; $iteration -le 2; $iteration++) {
-        $setup = Start-Process -FilePath (Resolve-Path -LiteralPath $Installer).Path -ArgumentList "/S /D=$installed" -PassThru
+    $installCount = if ($releaseProbe) { 1 } else { 2 }
+    for ($iteration=1; $iteration -le $installCount; $iteration++) {
+        $setup = Start-Process -FilePath (Resolve-Path -LiteralPath $Installer).Path -ArgumentList "/S /D=$installed" -WindowStyle Hidden -PassThru
         if (!$setup.WaitForExit(180000)) { $setup.Kill(); throw 'Installer timed out' }
         $setup.Refresh()
         if ($setup.ExitCode -ne 0) { throw "Installer failed: $($setup.ExitCode)" }
@@ -39,6 +51,7 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'Installed runtime differs from pinned files' }
         Run-Probe $installed $true "install-$iteration"
     }
+    if ($releaseProbe) { return }
     & (Join-Path $PSScriptRoot 'test-desktop-webview.ps1') -Exe (Join-Path $installed 'cc-desk.exe')
     $relocated = Join-Path $root '移动后的 CC Desk'
     Copy-Item -LiteralPath $installed -Destination $relocated -Recurse
@@ -58,7 +71,14 @@ try {
     # The runner is disposable; retain no user's application/configuration.
     $uninstaller = Join-Path $installed 'uninstall.exe'
     if (Test-Path -LiteralPath $uninstaller) {
-        $uninstall = Start-Process -FilePath $uninstaller -ArgumentList '/S' -PassThru
-        if (!$uninstall.WaitForExit(60000)) { $uninstall.Kill() }
+        $uninstall = Start-Process -FilePath $uninstaller -ArgumentList '/S' -WindowStyle Hidden -PassThru
+        if (!$uninstall.WaitForExit(60000)) {
+            $uninstall.Kill()
+            if ($releaseProbe) { throw 'Release smoke uninstaller timed out' }
+        } elseif ($releaseProbe -and $uninstall.ExitCode -ne 0) {
+            throw 'Release smoke uninstaller failed'
+        }
+    } elseif ($releaseProbe -and $results.Count -gt 0) {
+        throw 'Release smoke uninstaller is missing'
     }
 }

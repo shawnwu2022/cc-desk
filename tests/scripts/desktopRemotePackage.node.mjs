@@ -2,12 +2,28 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 const read=p=>JSON.parse(fs.readFileSync(p,'utf8'));
-test('Windows standard package includes remote host without changing Cargo defaults',()=>{
+test('Windows standard package excludes the remote host and browser builds, but keeps ConPTY',()=>{
  const config=read('src-tauri/tauri.windows.conf.json');
- assert.deepEqual(config.build.features,['remote-host']);
- assert.equal(config.build.beforeBuildCommand,'node scripts/prepare-conpty.mjs && node scripts/build-desktop-product.mjs');
+ assert.ok(!config.build.features?.includes('remote-host'));
+ assert.ok(!config.build.features?.includes('remote-client-ipc'));
+ assert.equal(config.build.beforeBuildCommand,'node scripts/prepare-conpty.mjs && npm run build');
  assert.match(fs.readFileSync('src-tauri/Cargo.toml','utf8'),/default = \["sqlite"\]/);
  assert.equal(read('src-tauri/tauri.conf.json').build.features,undefined);
+ assert.equal(read('src-tauri/tauri.remote-trial.conf.json').build.beforeBuildCommand,'node scripts/prepare-remote-trial.mjs');
+});
+
+test('Vite resolves a desktop-only production distribution, even with old public files',async()=>{
+ const {resolveConfig}=await import('vite');
+ const desktop=await resolveConfig({configFile:'vite.config.ts'},'build','production','production');
+ assert.deepEqual(Object.keys(desktop.build.rollupOptions.input),['main','versionManager']);
+ assert.equal(desktop.build.copyPublicDir,false);
+ assert.ok(!desktop.plugins.some(p=>p.name==='registration-source'));
+ const browser=await resolveConfig({configFile:'vite.config.ts',mode:'browser-product'},'build','production','production');
+ assert.deepEqual(Object.keys(browser.build.rollupOptions.input),['main','versionManager','browserRemote','browserRegistration','browserProfile']);
+ assert.equal(browser.build.copyPublicDir,true);
+ assert.ok(browser.plugins.some(p=>p.name==='registration-source'));
+ assert.equal(browser.isProduction,true);
+ assert.equal(browser.build.minify,desktop.build.minify);
 });
 
 import {desktopEnvironment} from '../../scripts/build-desktop-product.mjs';
@@ -25,9 +41,9 @@ test('Standard build freezes tools in a child environment and rejects conflicts'
  assert.throws(()=>desktopEnvironment({},versions()),/Explicit existing/);
  for(let index=0;index<4;index++){let call=0;const good=versions();assert.throws(()=>desktopEnvironment(tools,()=>{const value=good();return call++===index?'wrong':value;}),/required/);}
 });
-test('Windows release supplies verified tools before the unchanged signed candidate',()=>{
+test('Windows release builds the signed desktop candidate without browser tools',()=>{
  const workflow=fs.readFileSync('.github/workflows/release.yml','utf8');
- assert.ok(workflow.indexOf('Supply verified Windows browser tools')<workflow.indexOf('Build signed candidate'));
+ assert.doesNotMatch(workflow,/setup-windows-browser-tools/);
  const action=fs.readFileSync('.github/actions/setup-windows-browser-tools/action.yml','utf8');
  assert.match(action,/cargo fetch --locked --manifest-path remote\/Cargo.toml/);
  assert.match(action,/rustup target add wasm32-unknown-unknown --toolchain 1.98.1/);

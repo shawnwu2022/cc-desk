@@ -1,10 +1,7 @@
 {
   "build": {
-    "beforeBuildCommand": "node scripts/prepare-conpty.mjs && node scripts/build-desktop-product.mjs",
-    "beforeDevCommand": "node scripts/prepare-conpty.mjs && npm run dev",
-    "features": [
-      "remote-host"
-    ]
+    "beforeBuildCommand": "node scripts/prepare-conpty.mjs && npm run build",
+    "beforeDevCommand": "node scripts/prepare-conpty.mjs && npm run dev"
   },
   "bundle": {
     "resources": {

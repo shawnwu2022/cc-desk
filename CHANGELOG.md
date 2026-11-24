@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.28.0-rc.3] - 2026-11-24
+
+### Changed
+
+- Keep standard Windows, macOS and Linux installers desktop-only. Do not include the remote Host or browser runtime assets; the separate experimental build remains opt-in.
+- Require the exact updater-signed Windows NSIS installer to pass verification, installation, bundled ConPTY diagnostics and uninstallation on a disposable hosted runner before the installer and signature can be uploaded.
+
+### Validation and limits
+
+- This is a Test-channel release candidate; Stable Latest remains unchanged. The package check is not Authenticode or certification of real CLI sessions, mobile remote access or authenticated Antigravity restore.
+
 ## [0.28.0-rc.2] - 2026-11-23
 
 ### Added

@@ -4,6 +4,17 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
+## [0.28.0-rc.3]
+
+Changed
+
+- Standard Windows, macOS and Linux packages are desktop-only and exclude the remote Host and browser runtime assets. Experimental remote access remains separate.
+- Release validation installs the exact updater-signed Windows NSIS package on a disposable hosted runner, checks bundled ConPTY, and uninstalls it before upload. Updater signatures are not Windows Authenticode.
+
+Important
+
+- This is a Test-channel prerelease. Stable Latest remains unchanged. This does not certify real CLI sessions, mobile remote access, or authenticated Antigravity restore.
+
 ## [0.28.0-rc.2]
 
 Added

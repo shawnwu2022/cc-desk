@@ -1,6 +1,6 @@
 {
   "name": "cc-desk",
-  "version": "0.28.0-rc.2",
+  "version": "0.28.0-rc.3",
   "description": "CC Desk - a multi-project, multi-session desktop workspace for Claude Code, Codex CLI, and OpenCode",
   "license": "MIT",
   "author": {
@@ -29,10 +29,10 @@
   "scripts": {
     "dev": "npm run prepare:session-sdk && npm run prepare:opencode-archive && vite",
     "build": "npm run prepare:session-sdk && npm run prepare:opencode-archive && vite build",
-    "build:browser": "node scripts/build-browser-runtime.mjs && vite build",
+    "build:browser": "node scripts/build-browser-runtime.mjs && vite build --mode browser-product",
     "build:browser:registration-runtime": "node scripts/build-browser-registration-runtime.mjs",
     "build:browser:registration-source": "node scripts/build-browser-registration-source.mjs",
-    "build:browser:product": "node scripts/build-browser-runtime.mjs && node scripts/build-browser-registration-runtime.mjs && vite build",
+    "build:browser:product": "node scripts/build-browser-runtime.mjs && node scripts/build-browser-registration-runtime.mjs && vite build --mode browser-product",
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",

@@ -31,3 +31,6 @@ src-tauri/icons/source/** -text
 /remote/vendor/portable-pty/** -text
 /remote/vendor/portable-pty-upstream.json -text
 /remote/patches/portable-pty-owned-job.patch -text whitespace=-blank-at-eol
+
+# Keep this operator document out of public source archives.
+/docs/unattended-host-design.md export-ignore
