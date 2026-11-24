@@ -4,6 +4,17 @@
 
 <!-- Generated from docs/release-notes.json by node scripts/release-notes.js docs. -->
 
+## [0.28.0-rc.3]
+
+调整
+
+- Windows、macOS 和 Linux 的标准安装包仅包含桌面功能，不再包含远程 Host 和浏览器运行时。实验性远程功能仍独立提供。
+- 发布流程会在 GitHub 托管的临时 Windows 环境中安装同一份更新签名 NSIS 安装包，验证内置 ConPTY 后卸载，通过才上传。更新签名不是 Windows Authenticode。
+
+重要说明
+
+- 这是测试通道的预发布版本，不变更稳定版。此版不认证真实 CLI 会话、移动端远程或 Antigravity 登录后的会话恢复。
+
 ## [0.28.0-rc.2]
 
 新增

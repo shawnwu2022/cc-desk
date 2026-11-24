@@ -54,6 +54,26 @@ jobs:
           node-version: '22'
       - name: Run release recovery fixtures
         run: node --test tests/scripts/releaseRecovery.node.cjs tests/scripts/nativeReleasePolicy.node.mjs tests/scripts/releaseCoverage.node.mjs tests/scripts/releaseDraftRecovery.node.mjs tests/scripts/releaseBuildAdmission.node.mjs
+      - name: Verify GitHub source archives for the exact release SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          scratch="$(mktemp -d)"
+          trap 'rm -f "$scratch/source.tar.gz" "$scratch/source.zip" "$scratch/tar-index" "$scratch/zip-index"; rmdir "$scratch"' EXIT
+          src="https://codeload.github.com/$GITHUB_REPOSITORY"
+          curl --fail --silent --show-error --location --retry 2 --max-time 60 "$src/tar.gz/$GITHUB_SHA" --output "$scratch/source.tar.gz"
+          curl --fail --silent --show-error --location --retry 2 --max-time 60 "$src/zip/$GITHUB_SHA" --output "$scratch/source.zip"
+          tar -tzf "$scratch/source.tar.gz" > "$scratch/tar-index"
+          unzip -Z1 "$scratch/source.zip" > "$scratch/zip-index"
+          for index in "$scratch/tar-index" "$scratch/zip-index"; do
+            grep -Eq '^[^/]+/package[.]json$' "$index"
+            if grep -Eq '^[^/]+/docs/unattended-host-design[.]md$' "$index"; then
+              echo 'The operator document must not ship in public source archives' >&2
+              exit 1
+            fi
+          done
+
       - name: Wait for this exact main SHA ordinary CI to finish
         env:
           GITHUB_TOKEN: ${{ github.token }}
