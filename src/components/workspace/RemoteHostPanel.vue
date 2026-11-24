@@ -27,9 +27,12 @@ const open = ref(false), candidate = ref(''), busy = ref(false), configured = re
 const state = ref('Locked'), message = ref('')
 const pairingScope = ref('')
 const registrationJson = ref(''), registrationState = ref('Locked')
+const observerAvailable = ref(false), observerOnce = ref(false)
+const observerRelay = ref(''), observerAddress = ref('')
 const pendingForget = shallowRef<ForgetIdentity | null>(null)
 const installationLabel = (value: RemotePairingInstallation) => value === 'confirmed' ? '历史安装已确认' : value === 'pending' ? '安装完成尚未确认' : '安装尚未验证'
 const remember = ref(false), devices = ref<RemotePairingList | null>(null)
+watch(observerOnce, selected => { if (selected) remember.value = false })
 let registrationRequested = false
 let epoch = 0, captured: NativeAttemptIdentity | null = null
 let receipt: string | null = null, requested = false
@@ -42,6 +45,7 @@ function invalidate() {
   const wasRegistering = registrationRequested, forgetIdentity = pendingForget.value
   pendingForget.value = null
   registrationRequested = false; remember.value = false; devices.value = null; registrationJson.value = ''; registrationState.value = 'Locked'
+  observerAvailable.value = false; observerOnce.value = false; observerRelay.value = ''; observerAddress.value = ''
   epoch++; captured = null; receipt = null; requested = false; candidate.value = ''; pairingScope.value = ''; configured.value = false; busy.value = false; state.value = 'Locked'; message.value = ''; open.value = false
   if (previous) {
     const run = { runId: previous.runId, generation: previous.generation }
@@ -51,25 +55,47 @@ function invalidate() {
     else if (previousReceipt) void remoteHostDiscardCandidate({ ...run, receipt: previousReceipt }).catch(cleanupFailed)
   }
 }
-// 先拒绝重复键，再只改顶层 remember；保留其他数字的原始词法，不替候选修复格式。
+// 先拒绝重复键，只改明确选择的顶层登记字段；保留其他数字的原始词法。
 function registrationCandidate() {
   const raw = registrationJson.value.trim()
-  const parsed = parseJson(Uint8Array.from(new TextEncoder().encode(raw)), 16384)
+  const parsed = parseJson(new TextEncoder().encode(raw), 16384)
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('INVALID_REGISTRATION')
-  let candidateJson: string
-  if (Object.prototype.hasOwnProperty.call(parsed, 'remember')) {
-    if (typeof (parsed as { remember: unknown }).remember !== 'boolean') throw new Error('INVALID_REMEMBER')
-    const tokens = [...raw.matchAll(/"(?:\\.|[^"\\])*"|[{}\[\]:,]|[^{}\[\]:,\s]+/g)]
-    let depth = 0, valueToken: RegExpMatchArray | undefined
-    for (let i = 0; i < tokens.length; i++) {
-      const token = tokens[i][0]
-      if (token === '{' || token === '[') depth++
-      else if (token === '}' || token === ']') depth--
-      else if (depth === 1 && token.startsWith('"') && tokens[i + 1]?.[0] === ':' && JSON.parse(token) === 'remember') { valueToken = tokens[i + 2]; break }
+  const fields = parsed as Record<string, unknown>
+  const updates = new Map<string, string | boolean>([['remember', observerOnce.value ? false : remember.value]])
+  if (observerOnce.value) {
+    if (!observerAvailable.value) throw new Error('INVALID_OBSERVER')
+    const origin = observerRelay.value.trim(), address = observerAddress.value.trim()
+    const url = new URL(origin)
+    if (url.href !== origin || url.protocol !== 'wss:' || url.username || url.password || url.search || url.hash
+      || !address || address.length > 64) throw new Error('INVALID_OBSERVER_RELAY')
+    updates.set('accessMode', 'observerOnce')
+    updates.set('origin', origin)
+    updates.set('address', address)
+  } else if (fields.accessMode === 'observerOnce') throw new Error('INVALID_OBSERVER')
+  for (const [key, value] of updates) {
+    if (Object.prototype.hasOwnProperty.call(fields, key) && typeof fields[key] !== typeof value)
+      throw new Error('INVALID_REGISTRATION_FIELD')
+  }
+  const tokens = [...raw.matchAll(/"(?:\\.|[^"\\])*"|[{}\[\]:,]|[^{}\[\]:,\s]+/g)]
+  const edits: { index: number; length: number; value: string }[] = []
+  let depth = 0
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i][0]
+    if (token === '{' || token === '[') depth++
+    else if (token === '}' || token === ']') depth--
+    else if (depth === 1 && token.startsWith('"') && tokens[i + 1]?.[0] === ':') {
+      const key = JSON.parse(token)
+      if (!updates.has(key)) continue
+      const original = tokens[i + 2]
+      if (original?.index === undefined) throw new Error('INVALID_REGISTRATION_FIELD')
+      edits.push({ index: original.index, length: original[0].length, value: JSON.stringify(updates.get(key)) })
+      updates.delete(key)
     }
-    if (!valueToken || valueToken.index === undefined) throw new Error('INVALID_REMEMBER')
-    candidateJson = raw.slice(0, valueToken.index) + String(remember.value) + raw.slice(valueToken.index + valueToken[0].length)
-  } else candidateJson = raw.slice(0, -1) + (Object.keys(parsed).length ? ',' : '') + '"remember":' + String(remember.value) + '}'
+  }
+  let candidateJson = raw
+  for (const edit of edits.reverse()) candidateJson = candidateJson.slice(0, edit.index) + edit.value + candidateJson.slice(edit.index + edit.length)
+  if (updates.size) candidateJson = candidateJson.slice(0, -1) + (Object.keys(fields).length ? ',' : '')
+    + [...updates].map(([key, value]) => JSON.stringify(key) + ':' + JSON.stringify(value)).join(',') + '}'
   if (new TextEncoder().encode(candidateJson).length > 16384) throw new Error('INVALID_REGISTRATION_SIZE')
   return candidateJson
 }
@@ -155,7 +181,7 @@ async function register(kind: 'request' | 'refresh' | 'cancel') {
       message.value = result.state === 'NativeStoreDeclined' ? '本机记住确认已拒绝，登记已停止。不会自动重试。' : result.state === 'NativeStoreUnknown' ? '本机存储结果不确定，登记未确认完成。请只读刷新已记住设备核对，不会自动重试。' : '本机记住失败，登记未确认完成。不会自动重试。'
     } else if ('receipt' in result) {
       receipt = result.receipt; configured.value = true; state.value = 'Locked'; registrationJson.value = ''
-      message.value = result.state === 'InstalledLocked' ? '登记已完成，本次会话候选仍为锁定。Host控制需要下方另一次本机批准和启动。' : '本机会话候选已安装并保持锁定，但浏览器交付未确认。不要重放登记。'
+      message.value = result.state === 'InstalledLocked' ? '登记已完成，本次会话候选仍为锁定。连接需要下方另一次本机批准和启动。' : '本机会话候选已安装并保持锁定，但浏览器交付未确认。不要重放登记。'
       if (result.remembered) message.value += ' 已在本机记住公开设备；恢复始终锁定，不恢复旧授权。'
     }
   } catch (error) {
@@ -172,9 +198,13 @@ async function readScope() {
   const attempt = captured, token = epoch
   if (!attempt || busy.value || !stillCurrent(token, attempt)) return
   busy.value = true; message.value = ''; pairingScope.value = ''
+  observerAvailable.value = false; observerOnce.value = false
   try {
     const scope = await remoteHostPairingScope({ runId: attempt.runId, generation: attempt.generation })
-    if (stillCurrent(token, attempt)) pairingScope.value = JSON.stringify({ session: scope.session, run: scope.run, generation: scope.generation })
+    if (stillCurrent(token, attempt)) {
+      pairingScope.value = JSON.stringify({ session: scope.session, run: scope.run, generation: scope.generation })
+      observerAvailable.value = scope.observerAvailable === true
+    }
   } catch (error) {
     // 只披露固定安全错误码，不显示任意后端消息或异常载荷。
     const code = typeof error === 'object' && error !== null && 'code' in error ? error.code : undefined
@@ -217,7 +247,7 @@ onUnmounted(invalidate)
   <section class="remote-host-panel" aria-label="单次远程会话">
     <AppButton v-if="!open" size="compact" :disabled="!available" @click="show">单次远程连接</AppButton>
     <div v-else class="remote-host-content">
-      <strong>可查看并控制当前会话</strong>
+      <strong>当前会话的远程连接</strong>
       <p>仅本次应用会话；候选冻结后最多60秒，批准不会续期。不会自动启动或重连。</p>
       <AppButton :disabled="busy" @click="readScope">读取公开会话范围</AppButton>
       <p>公开会话范围不是授权，仅用于独立配对配置；不会自动发送到浏览器。更换会话后须重新配置浏览器连接。</p>
@@ -251,7 +281,19 @@ onUnmounted(invalidate)
         <label>首次登记 JSON
           <textarea v-model="registrationJson" aria-label="首次登记JSON" :disabled="busy || registrationRequested" maxlength="16384" spellcheck="false" autocomplete="off" />
         </label>
-        <label class="remember-choice"><input v-model="remember" type="checkbox" aria-label="在本机记住公开设备" :disabled="busy || registrationRequested" />在本机记住公开设备（Remember，可选）</label>
+        <label v-if="observerAvailable">
+          <input v-model="observerOnce" type="checkbox" aria-label="本次仅查看" :disabled="busy || registrationRequested" />本次浏览器登记仅查看（连接仍须在本机单独批准）
+        </label>
+        <template v-if="observerOnce">
+          <label>中继 WSS 地址
+            <input v-model="observerRelay" aria-label="中继 WSS 地址" maxlength="512" spellcheck="false" autocomplete="off" :disabled="busy || registrationRequested" />
+          </label>
+          <label>中继 IP 和端口
+            <input v-model="observerAddress" aria-label="中继 IP 和端口" maxlength="64" spellcheck="false" autocomplete="off" :disabled="busy || registrationRequested" />
+          </label>
+          <p>请填写与 WSS 地址对应的 IP:端口。此角色不会记住设备、自动批准或重连。</p>
+        </template>
+        <label class="remember-choice"><input v-model="remember" type="checkbox" aria-label="在本机记住公开设备" :disabled="observerOnce || busy || registrationRequested" />在本机记住公开设备（Remember，可选）</label>
         <p>默认不保存。勾选后仍需独立本机存储确认；不保存私钥或会话批准。JSON 中的 remember 不能代替此勾选。</p>
         <p>首次本机 Yes 只允许使用现有密钥建立一次登记连接，原始总期限120秒。验证后另有浏览器存储确认；均不授予 Host 控制。</p>
         <div class="remote-host-actions">

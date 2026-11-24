@@ -581,7 +581,7 @@ export async function remoteRegistrationCancel(run: RemoteHostRun): Promise<Remo
   return await nativeDocumentBridge().invoke('remote_registration_cancel', run) as RemoteRegistrationState;
 }
 // 仅是原生目标的公开描述，不是批准、密钥或连接权限。
-export type RemoteHostPairingScope = { session: string; run: string; generation: string };
+export type RemoteHostPairingScope = { session: string; run: string; generation: string; observerAvailable?: boolean };
 export async function remoteHostPairingScope(run: RemoteHostRun): Promise<RemoteHostPairingScope> {
   return await nativeDocumentBridge().invoke('remote_host_pairing_scope', run) as RemoteHostPairingScope;
 }
