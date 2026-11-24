@@ -417,6 +417,7 @@ async fn network_client_live(
         cc_desk_remote_transport::wss::RelayMode::Legacy,
         true,
         true,
+        None,
     )
     .await
 }
@@ -426,7 +427,7 @@ async fn network_client_profile(
     mode: cc_desk_remote_transport::wss::RelayMode,
     control_lease: bool,
 ) -> NetworkClientResult {
-    network_client_profile_inner(relay, scope, mode, control_lease, false).await
+    network_client_profile_inner(relay, scope, mode, control_lease, false, None).await
 }
 async fn network_client_profile_inner(
     relay: &NetworkRelayFixture,
@@ -434,8 +435,11 @@ async fn network_client_profile_inner(
     mode: cc_desk_remote_transport::wss::RelayMode,
     control_lease: bool,
     live_keepalive: bool,
+    observer_host: Option<cc_desk_remote_security::PeerPin>,
 ) -> NetworkClientResult {
     use cc_desk_remote_security::*;
+    use cc_desk_remote_record::grant::DataRole;
+    let granted_role = if observer_host.is_some() { DataRole::Observer } else { DataRole::Controller };
     let budget = Duration::from_secs(8);
     let end = tokio::time::Instant::now() + budget;
     let remaining = || {
@@ -479,7 +483,7 @@ async fn network_client_profile_inner(
         let pending = connect(
             Unbound::new(stream),
             network_local(true),
-            network_pin(false),
+            observer_host.unwrap_or_else(|| network_pin(false)),
             remaining()?,
             token,
         )
@@ -506,7 +510,7 @@ async fn network_client_profile_inner(
             issuer: network_grants::admin(),
             principal: [4; 32],
             scope,
-            role: cc_desk_remote_record::grant::DataRole::Controller,
+            role: granted_role,
         };
         let mut signer = NetworkBrowserSigner;
         let mut state = ClientGrantState::new(Arc::new(|| Ok(1000)));
@@ -666,6 +670,134 @@ fn network_inputs(
         outer_accepted: None,
         termination: None,
     }
+}
+
+#[cfg(all(windows, feature = "remote-observer-local-acceptance"))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(non_snake_case)]
+async fn NativeRemote_ObserverLoopbackOwnerConsentRetires_012() {
+    use crate::remote_host_approval::{FrozenHostApproval, HostApprovalDescription};
+    use crate::remote_host_controller::RemoteHostController;
+    use crate::remote_host_network::ApprovedHostSource;
+    use cc_desk_remote_record::{appbind::CanonicalOrigin, grant::DataRole};
+    use cc_desk_remote_security::{P256Spki, PeerPin, Role};
+    use cc_desk_remote_transport::wss::RelayMode;
+
+    let transports = Arc::new(TerminalTransports::new());
+    let supervisor = Arc::new(NativeRunSupervisor::new(transports.clone()));
+    let mut fixture = Fixture::with_runtime_environment("input", supervisor, transports, true);
+    let url = "http://tauri.localhost/".parse().unwrap();
+    let document = crate::cli::document::DocumentAuthority::new(fixture.service.registry().clone(), url).unwrap();
+    let mut resources = tauri::ResourceTable::default();
+    let binding = Arc::new(document.attach(&mut resources).unwrap());
+    let url = "http://tauri.localhost/".parse().unwrap();
+    document.started(&url);
+    document.finished(&url);
+    fixture.caller = document.test_caller();
+    let status = fixture.start();
+    let host = Arc::new(RemoteHostService::default());
+    let controller = RemoteHostController::default();
+    let runtime = Arc::new(NativeRuntime::with_owned_components_for_test(
+        fixture.service.clone(), fixture.transports.clone(), fixture.supervisor.clone(),
+    ));
+    let mut cleanup = Cleanup {
+        supervisor: fixture.supervisor.clone(), host: host.clone(), run: status.run.clone(),
+        pin: Some(fixture.supervisor.pin_shutdown(&status.run)), stop: None, proofs: Vec::new(),
+    };
+    let cap = Instant::now() + Duration::from_secs(60);
+    let opened: Arc<[std::sync::atomic::AtomicUsize; 2]> = Arc::new(Default::default());
+    let seed = crate::native_crypto::test_existing_host_supplier(
+        CanonicalOrigin::trusted("wss://fixture.invalid/").unwrap(), cap, opened.clone(),
+    );
+    let point = seed.binding().relay_spki[26..].to_vec();
+    let mut relay = NetworkRelayFixture::start_with_host_point(Some(point)).await;
+    let mut peer = None;
+    let outcome: Result<(), &'static str> = async {
+        let ready = Instant::now() + Duration::from_secs(10);
+        while fixture.child_reports() == 0 || fixture.events.lock().is_empty() {
+            if Instant::now() >= ready { return Err("synthetic run not ready"); }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let admit = || {
+            fixture.supervisor.admit_remote_run(
+                fixture.service.access(&fixture.caller, &status.run).map_err(|_| "fixture access")?,
+                &status.run,
+            ).map_err(|_| "fixture admission")
+        };
+        let admission = admit()?;
+        let scope = admission.scope().map_err(|_| "fixture scope")?;
+        let supplier = crate::native_crypto::test_existing_host_supplier(
+            CanonicalOrigin::trusted(&relay.origin).unwrap(), cap, opened,
+        );
+        let endpoint = P256Spki::new(&supplier.binding().endpoint_spki).unwrap();
+        let endpoint_id = endpoint.endpoint_id(Role::Host);
+        let (_source_watch, revoked) = tokio::sync::watch::channel(false);
+        let inputs = network_inputs(&relay, scope.clone(), Arc::new(ApprovedHostSource {
+            clock: Arc::new(|| Ok(1000)), revoked, expires_host_ms: 30_000,
+        }));
+        let mut policy = inputs.policy;
+        policy.role = DataRole::Observer;
+        let fields = HostApprovalDescription {
+            endpoint_id, endpoint_role: Role::Host, relay_binding: inputs.relay.binding(),
+            address: inputs.address, tunnel: inputs.tunnel, relay_mode: inputs.relay_mode,
+            phone_pin: inputs.phone_pin, binding: inputs.binding, browser: inputs.browser,
+            issuer: inputs.issuer, principal: inputs.principal, policy,
+            clock: inputs.source.clock.clone(), expires_host_ms: inputs.source.expires_host_ms,
+            setup_budget: inputs.setup_budget, io_budget: inputs.io_budget,
+        };
+        let frozen = FrozenHostApproval::supplied(fields, &admission, cap, supplier)
+            .map_err(|_| "frozen loopback approval")?;
+        controller.install_frozen_configuration(&binding, fixture.caller.clone(), &admission, frozen)
+            .map_err(|_| "install synthetic configuration")?;
+        if controller.test_start_owned(&binding, &fixture.caller, admit()?, runtime.clone(), host.clone()).is_ok() {
+            return Err("attempt started before local choice");
+        }
+        controller.test_request_frozen(&binding, &fixture.caller, &admission, true)
+            .map_err(|_| "record exact synthetic desktop yes")?;
+        controller.test_start_owned(&binding, &fixture.caller, admission, runtime.clone(), host.clone())
+            .map_err(|_| "start owner via existing loopback fixture")?;
+        let attempt = tokio::time::timeout(Duration::from_secs(8), async {
+            loop {
+                if let Some(attempt) = host.test_original_attempt() { break attempt; }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        }).await.map_err(|_| "original owner did not start")?;
+        let (opened_peer, installed) = tokio::join!(
+            network_client_profile_inner(&relay, scope.clone(), RelayMode::Legacy, false, false,
+                Some(PeerPin::new(Role::Host, endpoint))),
+            tokio::time::timeout(Duration::from_secs(8), attempt.wait_admitted()),
+        );
+        peer = Some(opened_peer?);
+        installed.map_err(|_| "owner installation timed out")?
+            .map_err(|_| "owner installation not reported")?;
+        let client = &peer.as_ref().unwrap().0;
+        let view = client.receive_observer_view(Duration::from_secs(1)).await
+            .map_err(|error| { eprintln!("TEST_ONLY_OBSERVER_VIEW_RECEIVE_ERROR {error:?}"); "readonly view not delivered" })?.into_snapshot().map_err(|_| "view not live")?;
+        if view.stamp.target.run != scope.run || view.parts.is_empty() { return Err("view not for original run"); }
+        use crate::remote_host_controller::HostControlReply;
+        let cancelled = controller.cancel(&binding, &fixture.caller, &admit()?)
+            .map_err(|_| "original consent revoke")?;
+        if cancelled != HostControlReply::Cancelled { return Err("original approval did not cancel"); }
+        tokio::time::timeout(Duration::from_secs(2), attempt.wait_closed()).await
+            .map_err(|_| "original owner did not retire")?.map_err(|_| "original owner retirement unknown")?;
+        let approval_state = controller.current(&binding, &fixture.caller, &admit()?)
+            .map_err(|_| "read retired approval state")?;
+        if approval_state != HostControlReply::Cancelled { return Err("old approval not cancelled"); }
+        tokio::time::timeout(Duration::from_secs(2), peer.as_ref().unwrap().1.wait_closed()).await
+            .map_err(|_| "peer tunnel did not close passively")?.map_err(|_| "peer tunnel retirement unknown")?;
+        if client.descriptor().is_ok() { return Err("peer local authority not retired"); }
+        Ok(())
+    }.await;
+    if let Some((client, mux, cancel)) = peer {
+        client.request_close();
+        cancel.cancel();
+        mux.request_close();
+        let _ = mux.wait_closed().await;
+    }
+    let physical = cleanup.close();
+    let relay_closed = relay.close().await;
+    assert!(physical && relay_closed, "isolated fixture cleanup");
+    assert_eq!(outcome, Ok(()));
 }
 
 #[cfg(windows)]
