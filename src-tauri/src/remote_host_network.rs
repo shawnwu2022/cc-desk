@@ -794,6 +794,31 @@ impl HostNetworkCustody {
         known && !self.unknown_latched.load(Ordering::Acquire) && !self.state.lock().unknown
     }
 }
+pub(crate) struct ObserverPublicationGuard<'a> {
+    registration: &'a Arc<RegisteredHostSource>,
+    receipt: &'a crate::run_supervisor::NativeObserverInstallReceipt,
+}
+impl ObserverPublicationGuard<'_> {
+    // Runs within the application publication locks. Never sample a GrantClock
+    // or call any provider from this guard.
+    pub(crate) fn is_current(&self, slot: &HostSourceSlot) -> bool {
+        slot.registration
+            .as_ref()
+            .is_some_and(|registered| Arc::ptr_eq(registered, self.registration))
+            && self.registration.is_live()
+            && !*self.registration.description.source.revoked.borrow()
+            && matches!(self.registration.description.source.revoked.has_changed(), Ok(false))
+            && self.receipt.is_current_for_publication()
+    }
+}
+
+/// The separate, non-default acceptance build never reaches beyond local loopback.
+pub(crate) fn local_observer_address(address: SocketAddr) -> bool {
+    cfg!(all(windows, feature = "remote-observer-local-acceptance"))
+        && address.port() != 0
+        && address.ip() == std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
+}
+
 fn remaining(end: Instant) -> Result<Duration, HostNetworkError> {
     end.checked_duration_since(Instant::now())
         .filter(|d| !d.is_zero())
@@ -848,6 +873,11 @@ async fn run_attempt(
     #[cfg(test)]
     let termination = inputs.termination.take();
     let observer = inputs.policy.role == DataRole::Observer;
+    if observer && !local_observer_address(inputs.address) {
+        return Err(HostNetworkError::Locked);
+    }
+    #[cfg(all(windows, feature = "remote-observer-local-acceptance"))]
+    let mut observer_owner = None;
     let source = inputs.source.clone();
     let mut wire = wire::NetworkWire::new();
     let mut source_stop = source.revoked.clone();
@@ -916,13 +946,41 @@ async fn run_attempt(
                 approval,
                 end.min(source_end.ok_or(HostNetworkError::Bounds)?),
             )?;
-            // Do not start a worker or publish a working peer until the exact
-            // original installation/retirement receipt is wired into custody.
-            let _handoff = OriginalObserverHandoff {
+            let handoff = OriginalObserverHandoff {
                 registered: registered.clone(),
                 grant,
             };
-            return Err(HostNetworkError::Locked);
+            #[cfg(not(all(windows, feature = "remote-observer-local-acceptance")))]
+            {
+                drop(handoff);
+                return Err(HostNetworkError::Locked);
+            }
+            #[cfg(all(windows, feature = "remote-observer-local-acceptance"))]
+            {
+                let owner = service.upgrade().ok_or(HostNetworkError::Closed)?;
+                let admission = original.take().ok_or(HostNetworkError::Authority)?;
+                observer_owner = Some(
+                    admission
+                        .start_observer_once(handoff)
+                        .map_err(|_| HostNetworkError::Handoff)?,
+                );
+                let receipt = observer_owner
+                    .as_mut()
+                    .ok_or(HostNetworkError::Handoff)?
+                    .wait_install_receipt()
+                    .await
+                    .ok_or(HostNetworkError::Handoff)?;
+                if !registered.is_live() || !receipt.is_live() {
+                    return Err(HostNetworkError::Authority);
+                }
+                clock.now_ms().map_err(|_| HostNetworkError::Authority)?;
+                return owner.commit_network_handoff_checked(
+                    published,
+                    &publication_stop,
+                    end,
+                    Some(ObserverPublicationGuard { registration: &registered, receipt: &receipt }),
+                );
+            }
         }
         let owned = original.take().expect("original synchronous admission");
         let owner = service.upgrade().ok_or(HostNetworkError::Closed)?;
@@ -960,7 +1018,19 @@ async fn run_attempt(
     } else {
         result
     };
+    #[cfg(not(all(windows, feature = "remote-observer-local-acceptance")))]
     let wire_known = wire.close_and_join().await;
+    #[cfg(all(windows, feature = "remote-observer-local-acceptance"))]
+    let wire_known = {
+        let retire_observer = async {
+            match observer_owner.as_mut() {
+                Some(owner) => owner.retire().await.is_ok(),
+                None => true,
+            }
+        };
+        let (wire_closed, observer_closed) = tokio::join!(wire.close_and_join(), retire_observer);
+        wire_closed && observer_closed
+    };
     drop(original);
     #[cfg(test)]
     if let Some(termination) = termination {

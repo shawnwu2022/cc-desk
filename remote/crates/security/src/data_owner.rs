@@ -104,6 +104,14 @@ impl RunningChannel {
         self.authority.check()?;
         self.peer.fence()
     }
+    /// Local status only, never an authority check. Does not call a grant provider.
+    /// Fail closed if the peer installation lock is currently held.
+    pub fn has_current_installed_fence_without_clock(&self, fence: u64) -> bool {
+        self.peer.try_matches_installed_fence(fence)
+            && !self.cancel.is_cancelled()
+            && !self.is_closed()
+            && !*self.stop.borrow()
+    }
     fn check(
         &self,
         scope: &SessionScope,

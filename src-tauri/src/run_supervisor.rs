@@ -3421,13 +3421,18 @@ mod native_observer_lifetime_tests {
         };
         use tokio::sync::oneshot;
 
+        let forbid_clock = Arc::new(AtomicBool::new(false));
+        let clock_check = forbid_clock.clone();
         let (peer, host, _gate, _channel_owner) = channels_with_role(
             SessionScope {
                 session: "42".repeat(16),
                 run: "TEST_ONLY_OBSERVER".into(),
                 generation: "1".into(),
             },
-            Arc::new(|| Ok(1000)),
+            Arc::new(move || {
+                assert!(!clock_check.load(Ordering::Acquire), "publication must not call provider");
+                Ok(1000)
+            }),
             DataRole::Observer,
         )
         .await;
@@ -3488,11 +3493,15 @@ mod native_observer_lifetime_tests {
         .unwrap();
         assert!(Arc::ptr_eq(&receipt.channel, &host));
         assert!(receipt.is_live());
+        forbid_clock.store(true, Ordering::Release);
+        assert!(receipt.is_current_for_publication());
+        forbid_clock.store(false, Ordering::Release);
         assert!(owner.take_install_receipt().is_none());
 
         // Only the original approval is revoked: no manual peer close and no
         // owner.retire() call until the exact owned task already completed.
         original.revoke();
+        assert!(!receipt.is_current_for_publication());
         assert!(!receipt.is_live());
         tokio::time::timeout(Duration::from_secs(1), async {
             while !owner.task.is_finished() {
@@ -3750,6 +3759,14 @@ impl NativeObserverInstallReceipt {
         receipt.is_live().then_some(receipt)
     }
 
+    pub(crate) fn is_current_for_publication(&self) -> bool {
+        tokio::time::Instant::now() < self.end
+            && !self.approval.is_invalid()
+            && self
+                .channel
+                .has_current_installed_fence_without_clock(self.fence)
+    }
+
     pub(crate) fn is_live(&self) -> bool {
         tokio::time::Instant::now() < self.end
             && !self.approval.is_invalid()
@@ -3773,6 +3790,13 @@ pub(crate) struct NativeObserverOwner {
 #[cfg(feature = "remote-host")]
 #[allow(dead_code, reason = "未接入产品授权和启动入口")]
 impl NativeObserverOwner {
+    #[cfg(all(windows, feature = "remote-observer-local-acceptance"))]
+    pub(crate) async fn wait_install_receipt(&mut self) -> Option<NativeObserverInstallReceipt> {
+        let receipt = self.installation.as_mut()?.await.ok();
+        self.installation = None;
+        receipt.filter(NativeObserverInstallReceipt::is_live)
+    }
+
     pub(crate) fn take_install_receipt(&mut self) -> Option<NativeObserverInstallReceipt> {
         use tokio::sync::oneshot::error::TryRecvError;
         match self.installation.as_mut()?.try_recv() {

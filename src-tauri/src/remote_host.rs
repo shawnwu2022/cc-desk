@@ -500,6 +500,17 @@ impl RemoteHostService {
         stopped: &tokio::sync::watch::Receiver<bool>,
         end: tokio::time::Instant,
     ) -> Result<(), crate::remote_host_network::HostNetworkError> {
+        self.commit_network_handoff_checked(published, stopped, end, None)
+    }
+    pub(crate) fn commit_network_handoff_checked(
+        &self,
+        published: &tokio::sync::watch::Sender<
+            Option<Result<(), crate::remote_host_network::HostNetworkError>>,
+        >,
+        stopped: &tokio::sync::watch::Receiver<bool>,
+        end: tokio::time::Instant,
+        observer: Option<crate::remote_host_network::ObserverPublicationGuard<'_>>,
+    ) -> Result<(), crate::remote_host_network::HostNetworkError> {
         use crate::remote_host_network::HostNetworkError;
         let mut outcome = Err(HostNetworkError::Closed);
         // 锁序为 publication 值、service、stop 读锁；此闭包没有外部回调。
@@ -516,6 +527,8 @@ impl RemoteHostService {
                 Err(HostNetworkError::Closed)
             } else if tokio::time::Instant::now() >= end {
                 Err(HostNetworkError::Deadline)
+            } else if observer.as_ref().is_some_and(|guard| !guard.is_current(&state.source_slot)) {
+                Err(HostNetworkError::Authority)
             } else {
                 Ok(())
             };

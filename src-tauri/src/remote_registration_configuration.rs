@@ -96,9 +96,12 @@ impl FrozenRegistrationStart {
         matches!(self.access, FrozenAccess::Controller { remember: true })
     }
     pub(crate) fn product_role_enabled(&self) -> bool {
-        // Until the exact read-only handoff is installed, never issue a permit or
-        // start registration for this role. It must not fall back to Controller.
-        matches!(self.access, FrozenAccess::Controller { .. })
+        match self.access {
+            FrozenAccess::Controller { .. } => true,
+            FrozenAccess::ObserverOnce => {
+                crate::remote_host_network::local_observer_address(self.address)
+            }
+        }
     }
     pub(super) fn data_role(&self) -> DataRole {
         match self.access {
@@ -272,7 +275,11 @@ impl FrozenRegistrationStart {
         match self.access {
             FrozenAccess::Controller { .. } => details,
             FrozenAccess::ObserverOnce => {
-                format!("Requested role: one-time read-only Observer (not enabled).\n{details}")
+                if self.product_role_enabled() {
+                    format!("Requested role: one-time read-only Observer. This is not permission to view a session; that requires a separate desktop approval.\n{details}")
+                } else {
+                    format!("Requested role: one-time read-only Observer (not enabled).\n{details}")
+                }
             }
         }
     }

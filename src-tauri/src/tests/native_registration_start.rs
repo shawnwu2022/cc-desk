@@ -85,6 +85,9 @@ fn NativeRegistrationStart_YesOneShotOriginalTokenAndDeadline_003() {
 fn NativeRegistrationStart_ObserverChoiceCannotIssueKeyPermit_015() {
     let mut request: serde_json::Value = serde_json::from_str(&configuration::test_json()).unwrap();
     request["accessMode"] = "observerOnce".into();
+    if cfg!(feature = "remote-observer-local-acceptance") {
+        request["address"] = "192.0.2.1:39123".into();
+    }
     let frozen = FrozenRegistrationStart::parse(&request.to_string()).unwrap();
     assert!(!frozen.remember());
     assert_eq!(
@@ -102,6 +105,42 @@ fn NativeRegistrationStart_ObserverChoiceCannotIssueKeyPermit_015() {
         gate.take().is_none(),
         "closed Observer permit could be retried"
     );
+}
+
+#[cfg(feature = "remote-observer-local-acceptance")]
+#[test]
+#[allow(non_snake_case)]
+fn NativeRegistrationStart_ObserverLocalExplicitConsent_017() {
+    use cc_desk_remote_record::grant::DataRole;
+
+    let mut request: serde_json::Value = serde_json::from_str(&configuration::test_json()).unwrap();
+    request["accessMode"] = "observerOnce".into();
+    request["address"] = "127.0.0.1:39123".into();
+    for decision in [None, Some(false)] {
+        let frozen = FrozenRegistrationStart::parse(&request.to_string()).unwrap();
+        let gate = NativeRegistrationKeyApproval::test_pending(frozen);
+        if let Some(yes) = decision {
+            gate.test_complete(yes);
+        }
+        assert!(gate.take().is_none(), "no explicit local owner approval");
+    }
+    let frozen = FrozenRegistrationStart::parse(&request.to_string()).unwrap();
+    let end = frozen.end;
+    let gate = NativeRegistrationKeyApproval::test_pending(frozen);
+    gate.test_complete(true);
+    let permit = gate.take().expect("explicit one-time loopback approval");
+    assert_eq!(permit.frozen.data_role(), DataRole::Observer);
+    assert!(!permit.frozen.remember());
+    assert!(permit.signing.matches(&permit.signing.token(), end));
+    assert!(gate.take().is_none(), "consent must be consumed once");
+    gate.cancel();
+    assert!(!permit.signing.matches(&permit.signing.token(), end));
+
+    request["address"] = "192.0.2.1:39123".into();
+    let frozen = FrozenRegistrationStart::parse(&request.to_string()).unwrap();
+    let gate = NativeRegistrationKeyApproval::test_pending(frozen);
+    gate.test_complete(true);
+    assert!(gate.take().is_none(), "non-loopback local trial denied");
 }
 
 #[test]
