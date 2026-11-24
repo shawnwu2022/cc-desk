@@ -202,6 +202,17 @@ jobs:
             npm run tauri build
           fi
 
+      - name: Install and check signed Windows candidate before upload
+        if: matrix.name == 'windows'
+        shell: pwsh
+        run: |
+          $before = node scripts/verify-windows-release-candidate.cjs
+          if ($LASTEXITCODE -ne 0) { throw 'Windows updater signature validation failed before installation' }
+          $candidate = $before | ConvertFrom-Json
+          ./scripts/test-conpty-install.ps1 -Installer $candidate.installer -ExpectedBuildSha $env:GITHUB_SHA
+          $after = node scripts/verify-windows-release-candidate.cjs
+          if ($LASTEXITCODE -ne 0 -or $before -cne $after) { throw 'Installed candidate or updater signature changed before upload' }
+
       - name: Upload candidate artifacts
         uses: actions/upload-artifact@v4
         with:

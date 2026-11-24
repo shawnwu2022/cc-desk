@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { createHash } from 'node:crypto'
 import test from 'node:test'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
@@ -155,4 +158,54 @@ test('Release_NpmEntries_Reject_007', () => {
     assert.match(result.stderr, /promotion is not enabled/i)
     assert.match(result.stderr, /docs\/release-process\.md/)
   }
+})
+
+test('D02_WindowsSignedCandidate_InstallsExactVerifiedPairBeforeUpload', () => {
+  const build = readFileSync(releaseWorkflowPath, 'utf8').split(/^  build:\s*$/m)[1]?.split(/^  release:\s*$/m)[0]
+  const smoke = build.match(/- name: Install and check signed Windows candidate before upload\r?\n([\s\S]*?)(?=\r?\n      - name: )/)?.[1]
+  assert.ok(smoke, 'exact signed Windows package has no pre-upload installation gate')
+  assert.match(smoke, /if: matrix\.name == 'windows'/)
+  assert.match(smoke, /shell: pwsh/)
+  assert.doesNotMatch(smoke, /continue-on-error|secrets\.|always\(\)/)
+  assert.ok(build.indexOf('Build signed candidate') < build.indexOf(smoke))
+  assert.ok(build.indexOf(smoke) < build.indexOf('Upload candidate artifacts'))
+  const before = smoke.indexOf('$before = node scripts/verify-windows-release-candidate.cjs')
+  const install = smoke.indexOf('./scripts/test-conpty-install.ps1 -Installer $candidate.installer -ExpectedBuildSha $env:GITHUB_SHA')
+  const after = smoke.indexOf('$after = node scripts/verify-windows-release-candidate.cjs')
+  assert.ok(before >= 0 && install > before && after > install, 'verify exact signed pair before and after running installer')
+  assert.match(smoke, /\$before -cne \$after/)
+  const installHelper = readFileSync(new URL('../../scripts/test-conpty-install.ps1', import.meta.url), 'utf8')
+  assert.match(installHelper, /\$env:RUNNER_ENVIRONMENT -cne 'github-hosted'/)
+  assert.match(installHelper, /\$env:GITHUB_SHA -cne \$ExpectedBuildSha/)
+  assert.match(installHelper, /\$data\.build -cne \$ExpectedBuildSha/)
+})
+
+test('D02_WindowsSignedCandidate_RejectsMutatedAndAmbiguousArtifacts', async () => {
+  const { inspectWindowsCandidate } = (await import('../../scripts/verify-windows-release-candidate.cjs')).default
+  const read = name => readFileSync(new URL('../../tests/fixtures/version-history-minisign/' + name, import.meta.url))
+  const directory = mkdtempSync(join(tmpdir(), 'signed-nsis-candidate-'))
+  try {
+    const installer = join(directory, 'CC Desk_x64-setup.exe')
+    const signature = installer + '.sig'
+    const data = read('payload.bin')
+    const sig = read('tauri-signature.sig')
+    const key = read('tauri-public-key.txt').toString().trim()
+    const sha = bytes => createHash('sha256').update(bytes).digest('hex')
+    writeFileSync(installer, data)
+    assert.throws(() => inspectWindowsCandidate(directory, key), /exactly one/)
+    writeFileSync(signature, sig)
+    const original = inspectWindowsCandidate(directory, key)
+    assert.deepEqual(original, { installer, sha256: sha(data), signatureSha256: sha(sig) })
+    writeFileSync(installer, Buffer.concat([data, Buffer.of(0)]))
+    assert.throws(() => inspectWindowsCandidate(directory, key), /artifact signature verification failed/)
+    writeFileSync(installer, data)
+    writeFileSync(signature, Buffer.concat([sig, Buffer.from('\n')]))
+    assert.notEqual(inspectWindowsCandidate(directory, key).signatureSha256, original.signatureSha256)
+    const wrong = join(directory, 'other.exe.sig')
+    renameSync(signature, wrong)
+    assert.throws(() => inspectWindowsCandidate(directory, key), /matching signature/)
+    renameSync(wrong, signature)
+    writeFileSync(join(directory, 'other.exe'), data)
+    assert.throws(() => inspectWindowsCandidate(directory, key), /exactly one/)
+  } finally { rmSync(directory, { recursive: true, force: true }) }
 })
