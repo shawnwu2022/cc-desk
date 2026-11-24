@@ -22,7 +22,7 @@ export function controlledBrowserRegistrationSource(){
   const timer=setInterval(watch,100);
   cleanup=()=>{clearInterval(timer);signal.removeEventListener('abort',abort);page.removeEventListener('visibilitychange',watch);page.removeEventListener('freeze',abort);globalThis.removeEventListener('pagehide',abort);globalThis.removeEventListener('freeze',abort);};
   try{
-   const bytes=await readRegistrationArtifact(new URL('/browser-registration.js',origin).href,origin,1048576,controller.signal);check();
+   const bytes=await readRegistrationArtifact(new URL('./browser-registration.js',location.href).href,origin,1048576,controller.signal);check();
    const module=await importRegistrationArtifact(bytes,controller.signal);check();
    if(Object.keys(module).length!==1||typeof module.readApprovedBrowserRegistrationInputs!=='function')throw unavailable();
    const approved:ApprovedBrowserRegistrationInputs|undefined=await module.readApprovedBrowserRegistrationInputs(controller.signal);check();

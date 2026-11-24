@@ -34,3 +34,15 @@ it with a test provider or infer authorization from matching manifest bytes.
 
 Process regressions: `node --test tests/scripts/browserDeploymentPreflight.node.mjs`.
 Fixtures and temporary files stay under `.audit/deployment-preflight-tests`.
+
+The browser-product output uses relative static paths. Keep both entry HTML
+files, the built-in operator modules, the runtime directories, and all assets
+together under the same HTTPS directory. Access the entry HTML by filename.
+If the operator supplies the runtime artifact URLs, their approved values must
+explicitly identify the WASM and glue of that directory; the build does not
+rewrite those URLs. A path prefix is not a browser isolation boundary:
+WebAuthn and browser storage remain origin-scoped. Use a dedicated origin for
+independent enrollment/paired-session testing.
+
+Check Vite-generated preview-path references without a browser or server:
+`node --test tests/scripts/browserProductPaths.node.mjs`.
