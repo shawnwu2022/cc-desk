@@ -135,6 +135,14 @@ impl FrozenRegistrationStart {
         if c.origin.len() > 512 || origin.as_str() != c.origin {
             return Err(invalid());
         }
+        if matches!(access, FrozenAccess::ObserverOnce)
+            && url::Url::parse(origin.as_str())
+                .ok()
+                .and_then(|endpoint| endpoint.port_or_known_default())
+                != Some(address.port())
+        {
+            return Err(invalid());
+        }
         let mode = match c.relay_mode.as_str() {
             "legacyV1" => RelayMode::Legacy,
             "rendezvousV1" => RelayMode::RendezvousV1,

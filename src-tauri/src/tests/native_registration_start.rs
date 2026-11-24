@@ -86,7 +86,7 @@ fn NativeRegistrationStart_ObserverChoiceCannotIssueKeyPermit_015() {
     let mut request: serde_json::Value = serde_json::from_str(&configuration::test_json()).unwrap();
     request["accessMode"] = "observerOnce".into();
     if cfg!(feature = "remote-observer-local-acceptance") {
-        request["address"] = "192.0.2.1:39123".into();
+        request["address"] = "192.0.2.1:443".into();
     }
     let frozen = FrozenRegistrationStart::parse(&request.to_string()).unwrap();
     assert!(!frozen.remember());
@@ -107,6 +107,21 @@ fn NativeRegistrationStart_ObserverChoiceCannotIssueKeyPermit_015() {
     );
 }
 
+#[test]
+#[allow(non_snake_case)]
+fn NativeRegistrationStart_ObserverFreezesOneSecuredRelayEndpoint_018() {
+    let mut request: serde_json::Value = serde_json::from_str(&configuration::test_json()).unwrap();
+    request["accessMode"] = "observerOnce".into();
+    request["origin"] = "wss://relay.invalid:8443/one".into();
+    request["address"] = "192.0.2.1:8443".into();
+    let frozen = FrozenRegistrationStart::parse(&request.to_string()).unwrap();
+    assert_eq!(frozen.origin.as_str(), "wss://relay.invalid:8443/one");
+    assert_eq!(frozen.address.port(), 8443);
+    request["address"] = "192.0.2.1:443".into();
+    assert!(FrozenRegistrationStart::parse(&request.to_string()).is_err(),
+        "Observer must reject a mismatched configured transport endpoint before approval");
+}
+
 #[cfg(feature = "remote-observer-local-acceptance")]
 #[test]
 #[allow(non_snake_case)]
@@ -115,7 +130,7 @@ fn NativeRegistrationStart_ObserverLocalExplicitConsent_017() {
 
     let mut request: serde_json::Value = serde_json::from_str(&configuration::test_json()).unwrap();
     request["accessMode"] = "observerOnce".into();
-    request["address"] = "127.0.0.1:39123".into();
+    request["address"] = "127.0.0.1:443".into();
     for decision in [None, Some(false)] {
         let frozen = FrozenRegistrationStart::parse(&request.to_string()).unwrap();
         let gate = NativeRegistrationKeyApproval::test_pending(frozen);
@@ -136,7 +151,7 @@ fn NativeRegistrationStart_ObserverLocalExplicitConsent_017() {
     gate.cancel();
     assert!(!permit.signing.matches(&permit.signing.token(), end));
 
-    request["address"] = "192.0.2.1:39123".into();
+    request["address"] = "192.0.2.1:443".into();
     let frozen = FrozenRegistrationStart::parse(&request.to_string()).unwrap();
     let gate = NativeRegistrationKeyApproval::test_pending(frozen);
     gate.test_complete(true);
