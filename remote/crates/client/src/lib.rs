@@ -12,7 +12,10 @@ pub use cc_desk_remote_record::{
 pub use cc_desk_remote_security::DataError;
 use cc_desk_remote_security::owner_clock::Instant;
 use cc_desk_remote_security::{BoundDataAuthority, Role, RunningChannel};
-use std::time::Duration;
+use std::{
+    sync::atomic::{AtomicBool, Ordering},
+    time::Duration,
+};
 use tokio::sync::Mutex;
 const MAX_SNAPSHOT_BYTES: usize = 4 * 1024 * 1024;
 pub struct NativeClient {
@@ -20,6 +23,7 @@ pub struct NativeClient {
     scope: SessionScope,
     fence: u64,
     pending: Mutex<()>,
+    observer_view_taken: AtomicBool,
     #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
     mux: Option<cc_desk_remote_transport::OwnedTunnel>,
     lifetime_cancel: Option<cc_desk_remote_security::CancelHandle>,
@@ -35,6 +39,19 @@ pub struct ClientDescriptor {
 pub struct SnapshotBatch {
     pub stamp: projection::Stamp,
     pub parts: Vec<Vec<u8>>,
+}
+/// Local receipt for one complete, authenticated Observer grid. This is not
+/// a wire acknowledgement, renderer installation, or permission to send input.
+/// The browser must still validate semantic cells and invalidate on retirement.
+pub struct ObserverViewReceipt {
+    authority: BoundDataAuthority,
+    batch: SnapshotBatch,
+}
+impl ObserverViewReceipt {
+    pub fn into_snapshot(self) -> Result<SnapshotBatch, DataError> {
+        self.authority.check()?;
+        Ok(self.batch)
+    }
 }
 struct CancelOnDrop(Option<BoundDataAuthority>);
 impl Drop for CancelOnDrop {
@@ -221,6 +238,7 @@ impl NativeClient {
             scope,
             fence,
             pending: Mutex::new(()),
+            observer_view_taken: AtomicBool::new(false),
             #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
             mux: None,
             lifetime_cancel: None,
@@ -337,7 +355,7 @@ impl NativeClient {
         payload: &[u8],
         budget: Duration,
     ) -> Result<SnapshotBatch, DataError> {
-        self.snapshot_inner(payload, budget, None).await
+        self.snapshot_inner(Some(payload), budget, None).await
     }
     /// Explicit opt-in; never falls back to the legacy full-push snapshot.
     pub async fn snapshot_pull(
@@ -354,25 +372,56 @@ impl NativeClient {
         };
         let bytes =
             cc_desk_remote_record::snapshot_pull::encode(&begin).map_err(|_| DataError::Codec)?;
-        self.snapshot_inner(&bytes, budget, Some(request)).await
+        self.snapshot_inner(Some(&bytes), budget, Some(request))
+            .await
     }
+    /// Observer view is one-shot, starts only from an authentic installed
+    /// Client channel and issues no command, ACK or general control message.
+    pub async fn receive_observer_view(
+        &self,
+        budget: Duration,
+    ) -> Result<ObserverViewReceipt, DataError> {
+        let authority = self.channel.authority();
+        authority.check()?;
+        if authority.data_role() != ClientRole::Observer
+            || authority.local_role() != Role::Client
+            || authority.control_lease_renew_enabled()
+            || authority.data_keepalive_negotiated()
+            || authority.snapshot_pull_negotiated()
+        {
+            return Err(DataError::Role);
+        }
+        if !self.channel.peer_install_enabled() || self.channel.installed_fence()? != self.fence {
+            return Err(DataError::Context);
+        }
+        let batch = self.snapshot_inner(None, budget, None).await?;
+        authority.check()?;
+        Ok(ObserverViewReceipt { authority, batch })
+    }
+
     async fn snapshot_inner(
         &self,
-        payload: &[u8],
+        payload: Option<&[u8]>,
         budget: Duration,
         pull_request: Option<u64>,
     ) -> Result<SnapshotBatch, DataError> {
-        if pull_request.is_none()
+        if let Some(payload) = payload
+            && pull_request.is_none()
             && !matches!(command::decode(payload), Ok(command::Command::Snapshot(_)))
         {
             return Err(DataError::Codec);
         }
         let end = deadline(budget)?;
         let _pending = self.pending.try_lock().map_err(|_| DataError::Full)?;
+        if payload.is_none() && self.observer_view_taken.swap(true, Ordering::AcqRel) {
+            return Err(DataError::Full);
+        }
         let mut close = CancelOnDrop(Some(self.channel.authority()));
-        self.channel
-            .send_control(&self.scope, self.fence, payload, remaining(end)?)
-            .await?;
+        if let Some(payload) = payload {
+            self.channel
+                .send_control(&self.scope, self.fence, payload, remaining(end)?)
+                .await?;
+        }
         let authority = self.channel.authority();
         let mut current: Option<(projection::Stamp, projection::State)> = None;
         let mut parts = Vec::new();

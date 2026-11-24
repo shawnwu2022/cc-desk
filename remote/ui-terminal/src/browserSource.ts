@@ -55,6 +55,7 @@ export function browserConnectionSource(inputs:ApprovedBrowserInputs|undefined):
     if(approved.enrollment.signal.aborted)throw Error('browser enrollment revoked');
    }
    // Relay 构造的再次校验可能失败；先独立持有原 socket 的物理退出。
+   if(approved.grant.role==='Observer'&&(approved.grant.peerInstall?.snapshotPull||approved.grant.peerInstall?.controlLease))throw Error('Observer requires output-only mode');
    socket=approved.relay.mode==='rendezvous-v1'?new WebSocket(approved.relay.endpoint,RENDEZVOUS_SUBPROTOCOL):new WebSocket(approved.relay.endpoint);
    socket.addEventListener('close',resolveSocket,{once:true});if(socket.readyState===3)resolveSocket();
    const live=approved.grant.peerInstall?.controlLease==='live-v1';
@@ -71,9 +72,9 @@ export function browserConnectionSource(inputs:ApprovedBrowserInputs|undefined):
    worker.addEventListener('error',()=>{rejectRetired(Error('browser Worker failed'));void close();});worker.addEventListener('messageerror',()=>{rejectRetired(Error('browser Worker message'));void close();});
    port=browserClientPort(application.port1,()=>{void close();},()=>retired,grant.worker.cancel!);
    worker.postMessage({kind:'start',origin:approved.profile.origin,artifacts:approved.artifacts,localSpki:approved.localSpki,hostSpki:approved.hostSpki,trust:approved.trust,tls:tls.worker,grant:grant.worker,transport:io.port2,application:application.port2},[tls.worker.port,grant.worker.port,io.port2,application.port2]);
-   const descriptor=await port.descriptor;if(controller.signal.aborted||performance.timeOrigin+performance.now()>=deadline)throw Error('browser entry cancelled');if(setupTimer!==undefined)clearTimeout(setupTimer);setupTimer=undefined;
+   const descriptor=await port.descriptor;if(descriptor.role!==approved.grant.role)throw Error('browser role mismatch');if(controller.signal.aborted||performance.timeOrigin+performance.now()>=deadline)throw Error('browser entry cancelled');if(setupTimer!==undefined)clearTimeout(setupTimer);setupTimer=undefined;
    const original=port,wrapped={...original,close:async()=>{let error:unknown;try{await original.close();}catch(e){error=e;}try{await close();}catch(e){error??=e;}if(error)throw error;}};
-   const connection=approved.grant.peerInstall?.snapshotPull==='snapshot-pull-v1'?browserPullConnection(wrapped):nativeConnection(wrapped);
+   const connection=descriptor.role==='Observer'?nativeConnection(wrapped,1000,true):approved.grant.peerInstall?.snapshotPull==='snapshot-pull-v1'?browserPullConnection(wrapped):nativeConnection(wrapped);
    return Object.freeze({connection,target:descriptor.target,binding:descriptor.binding,role:descriptor.role==='Controller'?'Controller' as const:'Viewer' as const});
   }catch{port?.close().catch(()=>{});await close();throw Error('browser entry unavailable');}
  }});

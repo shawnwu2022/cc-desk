@@ -5,14 +5,16 @@ import {decodeProjection,decodeReply} from './wire.ts';
  * is dependency injection, not authentication. A shell must admit its original
  * document on every call and revoke/retire its resource on document loss. */
 export interface NativeClientPort {
+  observerSnapshot?(budgetMs:number):Promise<{stamp:Stamp;parts:readonly Uint8Array[]}>;
   onInvalidate?(listener:()=>void):()=>void;
   snapshot(payload:Uint8Array,budgetMs:number):Promise<{stamp:Stamp;parts:readonly Uint8Array[]}>;
   exchange(payload:Uint8Array,budgetMs:number):Promise<Uint8Array>;
   close():Promise<void>;
 }
 export interface RetirableNativeConnection extends NativeConnection {waitClosed():Promise<void>}
-export function nativeConnection(port:NativeClientPort,budgetMs=1000):RetirableNativeConnection {
+export function nativeConnection(port:NativeClientPort,budgetMs=1000,observerOnly=false):RetirableNativeConnection {
   if(!Number.isInteger(budgetMs)||budgetMs<1||budgetMs>1000)throw Error('invalid native budget');
+  if(observerOnly&&typeof port.observerSnapshot!=='function')throw Error('Observer adapter unavailable');
   let closed=false,busy=false,epoch=0,retired:Promise<void>|undefined;
   const listeners=new Set<()=>void>();
   const close=()=>{
@@ -36,14 +38,20 @@ export function nativeConnection(port:NativeClientPort,budgetMs=1000):RetirableN
     finally{busy=false;if(timer!==undefined)clearTimeout(timer);}
   };
   const exchange=(payload:Uint8Array)=>run(async()=>{
+    if(observerOnly)throw Error('Observer control unavailable');
     const reply=await port.exchange(payload.slice(),budgetMs);
     if(!(reply instanceof Uint8Array)||reply.length>16270)throw Error('native reply bounds');
     decodeReply(reply);return reply.slice();
   });
   return {
     onInvalidate(listener){if(closed){listener();return()=>{};}listeners.add(listener);return()=>listeners.delete(listener);},
-    snapshot:(payload,sink)=>run(async check=>{
-      const batch=await port.snapshot(payload.slice(),budgetMs);
+    snapshot:(payload,sink)=>observerOnly?Promise.reject(Error('Observer command unavailable')):pump(()=>port.snapshot(payload.slice(),budgetMs),sink),
+    observerSnapshot:observerOnly?sink=>pump(()=>port.observerSnapshot!(budgetMs),sink):undefined,
+    acknowledge:exchange,window:exchange,input:exchange,query:exchange,settle:exchange,close,
+    waitClosed:()=>retired??Promise.reject(Error('native still open')),
+  };
+  function pump(observe:()=>ReturnType<NativeClientPort['snapshot']>,sink:Parameters<NativeConnection['snapshot']>[1]){return run(async check=>{
+      const batch=await observe();
       if(!batch||!Array.isArray(batch.parts)||batch.parts.length<1||batch.parts.length>24000)throw Error('native snapshot bounds');
       const receiver=new ProjectionReceiver(batch.stamp.target,batch.stamp.binding);receiver.begin(batch.stamp);
       let bytes=0,installed=false;const parts:Uint8Array[]=[];
@@ -56,8 +64,6 @@ export function nativeConnection(port:NativeClientPort,budgetMs=1000):RetirableN
       }
       if(!installed||!receiver.ack())throw Error('incomplete native snapshot');
       check();sink.begin(batch.stamp);for(const part of parts){check();sink.part(part);}
-    }),
-    acknowledge:exchange,window:exchange,input:exchange,query:exchange,settle:exchange,close,
-    waitClosed:()=>retired??Promise.reject(Error('native still open')),
-  };
+    });}
+
 }

@@ -1728,16 +1728,19 @@ async fn observer_snapshot_uses_original_install_and_scope() {
         client.client_installed(),
         capture.install_snapshot(&host, BUDGET),
     );
-    let fence = installed.unwrap().consume_for(&client).unwrap();
-    assert_eq!(host.installed_fence().unwrap(), fence);
-    assert!(duplicate.install_snapshot(&host, BUDGET).await.is_err());
+    let client =
+        cc_desk_remote_client::NativeClient::from_installed(client, installed.unwrap()).unwrap();
     assert!(host.authority().check().is_ok());
+    assert!(duplicate.install_snapshot(&host, BUDGET).await.is_err());
     let (reader, sender) = tokio::join!(
-        client.receive(&scope, fence, BUDGET),
+        client.receive_observer_view(BUDGET),
         transfer.unwrap().send_snapshot(),
     );
-    let received = reader.unwrap();
-    let view = projection_wire::decode(received.payload(), 1).unwrap();
+    let received = reader
+        .expect("authenticated Observer local receipt")
+        .into_snapshot()
+        .unwrap();
+    let view = projection_wire::decode(&received.parts[0], 1).unwrap();
     let projection_wire::Content::SnapshotPart(view) = view.content else {
         panic!("expected a real Observer view")
     };
@@ -1752,7 +1755,7 @@ async fn observer_snapshot_uses_original_install_and_scope() {
     assert!(producer.request_observer_capture(host.authority()).is_err());
     let (host_closed, next_view) = tokio::join!(
         tokio::time::timeout(BUDGET, host.wait_closed_checked()),
-        client.receive(&scope, fence, BUDGET),
+        client.receive_observer_view(BUDGET),
     );
     assert!(host_closed.unwrap().is_ok());
     assert!(next_view.is_err());

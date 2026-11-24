@@ -10,7 +10,7 @@ import type { browserReconnectSession, BrowserRetryState } from '../../../remote
 type RetryOwner = ReturnType<typeof browserReconnectSession>
 const props = defineProps<{ source?: TerminalConnectionSource; reconnectSession?: (signal: AbortSignal) => Promise<RetryOwner | undefined> }>()
 const { t } = useI18n()
-const state = ref<'Locked' | 'Synced' | 'Unavailable' | 'Uncertain'>('Locked')
+const state = ref<'Locked' | 'Synced' | 'ViewOnly' | 'Unavailable' | 'Uncertain'>('Locked')
 const busy = ref(false), output = ref<HTMLElement>()
 const role = ref<'Controller' | 'Viewer'>('Viewer'), draft = ref('')
 const inputStatus = ref<'' | 'HostWritten' | 'Rejected' | 'TooLarge'>('')
@@ -42,6 +42,7 @@ function currentlyConnected(){return owned?.kind !== 'reconnect' || owned.owner.
 let disposed = false, epoch = 0
 let opening: AbortController | undefined
 async function close() {
+  if(state.value==='ViewOnly')output.value?.replaceChildren()
   epoch++; opening?.abort(); stopObserve(); client?.disconnect()
   const value=owned, pending=openingWork
   // 先关闭父门，再等仍在取得或启动的原 owner；迟到结果也由 acquire 原路收口。
@@ -83,10 +84,15 @@ async function acquire(current: number) {
     const value:Owned={kind:'single',connection:found.connection}
     if(disposed || current!==epoch || signal.aborted){await retire(value);return}
     owned=value;role.value=found.role;client=new TerminalClient(found.target,found.binding);client.connect(found.connection)
+    if(found.connection.observerSnapshot)found.connection.onInvalidate?.(()=>{
+      if(disposed||owned!==value)return
+      output.value?.replaceChildren()
+      state.value='Locked'
+    })
   }
 }
 async function refresh() {
-  if (busy.value || cancelling.value || disposed || state.value === 'Uncertain' || (trialAttempted.value && !client)) return
+  if (busy.value || cancelling.value || disposed || state.value === 'Uncertain' || state.value === 'ViewOnly' || (trialAttempted.value && !client)) return
   inputStatus.value = ''
   busy.value = true
   const current = epoch
@@ -101,7 +107,7 @@ async function refresh() {
     await client.snapshot()
     if (disposed || current !== epoch) return
     output.value?.replaceChildren(client.render(document) as HTMLElement)
-    state.value = 'Synced'
+    state.value = client.phase === 'ViewOnly' ? 'ViewOnly' : 'Synced'
   } catch {
     const report = current===epoch
     try { await close() } catch { /* 原 owner 保留未知收口，不重试。 */ }
@@ -153,7 +159,7 @@ onBeforeUnmount(() => { disposed = true; void close().catch(() => { console.warn
     <p v-if="retryOptIn">本地尝试预算最多60秒，安全空闲且原资源退出后最多3次替代；不是Host许可期限，Host可提前截止或撤销。未结算输入不重试、不重放；首次连接失败即结束。关闭、隐藏或离开页面均停止。</p>
     <p v-if="retryOptIn" data-retry-state>{{ retryState }} · 替代 {{ replacements }}/3 · 本地截止 {{ localDeadline ? new Date(localDeadline).toLocaleString() : '尚未开始' }}</p>
     <div class="remote-actions">
-      <AppButton data-remote-refresh :disabled="busy || cancelling || state === 'Uncertain' || (trialAttempted && !client)" @click="refresh">{{ t('remoteTerminalRefresh') }}</AppButton>
+      <AppButton data-remote-refresh :disabled="busy || cancelling || state === 'Uncertain' || state === 'ViewOnly' || (trialAttempted && !client)" @click="refresh">{{ t('remoteTerminalRefresh') }}</AppButton>
       <AppButton data-remote-disconnect :disabled="cancelling || (!busy && !owned && state === 'Locked')" @click="disconnect">{{ t('remoteTerminalDisconnect') }}</AppButton>
     </div>
     <div ref="output" class="remote-output" tabindex="0" :aria-label="t('remoteTerminalOutput')" />
