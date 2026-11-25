@@ -1,4 +1,6 @@
 use super::{ApprovalLease, ApprovalMachine, DIALOG_ACTIVE};
+#[path = "remote_native_observer_enrollment_setup.rs"]
+pub(crate) mod setup;
 #[path = "remote_native_observer_enrollment_store.rs"]
 pub(crate) mod store;
 use crate::{
@@ -212,6 +214,12 @@ fn verify_p256(spki: &[u8; 91], message: &[u8], signature: &[u8]) -> Result<()> 
         .map_err(|_| Error::Invalid)
 }
 
+fn optional_scope_field<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> std::result::Result<Option<String>, D::Error> {
+    String::deserialize(d).map(Some)
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct QrInvite<'a> {
@@ -268,9 +276,24 @@ struct Receipt {
     host_endpoint_spki: String,
     issuer_spki: String,
     principal: String,
-    session: String,
-    run: String,
-    generation: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_scope_field"
+    )]
+    session: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_scope_field"
+    )]
+    run: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_scope_field"
+    )]
+    generation: Option<String>,
     host_key_epoch: String,
     client_key_epoch: String,
     policy_epoch: String,
@@ -287,7 +310,7 @@ pub(crate) struct HostEpochs {
 }
 struct Frozen {
     candidate: VerifiedCandidate,
-    scope: SessionScope,
+    scope: Option<SessionScope>,
     public: [u8; 91],
     epochs: HostEpochs,
 }
@@ -300,22 +323,29 @@ pub(crate) struct SignedObserverReceipt {
     pub(crate) request_id: [u8; 16],
     pub(crate) tunnel: [u8; 16],
     pub(crate) endpoint_binding: [u8; 32],
-    initial_scope: SessionScope,
+    initial_scope: Option<SessionScope>,
     owner: Arc<ApprovalLease>,
     end: Instant,
 }
 
+fn exact_scope(admission: Option<&NativeRunAdmission>) -> Result<Option<SessionScope>> {
+    admission
+        .map(|current| current.scope().map_err(|_| Error::Authority))
+        .transpose()
+}
 impl ObserverApproval {
     pub(crate) fn show<R: tauri::Runtime>(
         app: &tauri::AppHandle<R>,
         window: &tauri::Window<R>,
         candidate: VerifiedCandidate,
-        admission: &NativeRunAdmission,
+        admission: Option<&NativeRunAdmission>,
         public: [u8; 91],
         epochs: HostEpochs,
     ) -> Result<Self> {
-        let scope = admission.scope().map_err(|_| Error::Authority)?;
-        encode_scope(&scope).map_err(|_| Error::Authority)?;
+        let scope = exact_scope(admission)?;
+        if let Some(scope) = &scope {
+            encode_scope(scope).map_err(|_| Error::Authority)?;
+        }
         P256Spki::new(&public).map_err(|_| Error::Authority)?;
         if [
             epochs.host_key,
@@ -334,9 +364,16 @@ impl ObserverApproval {
         if Instant::now() >= end {
             return Err(Error::Expired);
         }
-        let text = format!("Approve this Android device for viewing only?\n\nDevice: {}\nEndpoint: {}\nSession: {}\nRun: {}\nGeneration: {}\nRelay: {}",
-            hex(&candidate.relay.phone_id), hex(&candidate.relay.endpoint_binding),
-            scope.session, scope.run, scope.generation, candidate.origin.as_str());
+        let scope_text = scope
+            .as_ref()
+            .map(|scope| {
+                format!(
+                    "Session: {}\nRun: {}\nGeneration: {}",
+                    scope.session, scope.run, scope.generation
+                )
+            })
+            .unwrap_or_else(|| "No session is shared yet.".into());
+        let text = format!("Approve this Android device for viewing only?\n\nDevice: {}\nEndpoint: {}\n{}\nRelay: {}", hex(&candidate.relay.phone_id), hex(&candidate.relay.endpoint_binding), scope_text, candidate.origin.as_str());
         DIALOG_ACTIVE
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .map_err(|_| Error::Busy)?;
@@ -365,7 +402,7 @@ impl ObserverApproval {
     /// itself nor membership on the Relay constitutes access to a running session.
     pub(crate) async fn sign(
         &self,
-        admission: &NativeRunAdmission,
+        admission: Option<&NativeRunAdmission>,
         key: &KeyRequestHandle,
     ) -> Result<Option<SignedObserverReceipt>> {
         let Some(permit) = self.machine.take() else {
@@ -375,7 +412,7 @@ impl ObserverApproval {
             .consume(|frozen, end| (frozen, end))
             .ok_or(Error::Authority)?;
         let candidate = &frozen.candidate;
-        if admission.scope().map_err(|_| Error::Authority)? != frozen.scope
+        if exact_scope(admission)? != frozen.scope
             || key.binding() != (SigningPurpose::Endpoint, frozen.public.as_slice())
         {
             return Err(Error::Authority);
@@ -396,9 +433,9 @@ impl ObserverApproval {
             host_endpoint_spki: hex(&frozen.public),
             issuer_spki: hex(&candidate.phone_grant),
             principal: hex(&candidate.principal),
-            session: frozen.scope.session.clone(),
-            run: frozen.scope.run.clone(),
-            generation: frozen.scope.generation.clone(),
+            session: frozen.scope.as_ref().map(|scope| scope.session.clone()),
+            run: frozen.scope.as_ref().map(|scope| scope.run.clone()),
+            generation: frozen.scope.as_ref().map(|scope| scope.generation.clone()),
             host_key_epoch: frozen.epochs.host_key.to_string(),
             client_key_epoch: frozen.epochs.client_key.to_string(),
             policy_epoch: frozen.epochs.policy.to_string(),
@@ -423,7 +460,7 @@ impl ObserverApproval {
         if Instant::now() >= end
             || self.machine.lease.is_revoked()
             || candidate.invite.expires_unix_ms <= unix_ms()?
-            || admission.scope().map_err(|_| Error::Authority)? != frozen.scope
+            || exact_scope(admission)? != frozen.scope
         {
             return Err(Error::Authority);
         }
