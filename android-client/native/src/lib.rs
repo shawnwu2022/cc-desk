@@ -4,7 +4,7 @@
 //! from the current durable native enrollment owner and approved session scope.
 use cc_desk_remote_client::{
     ClientRole, ObserverViewReceipt,
-    bootstrap::{BootstrapError, NativeProfile, connect_native},
+    bootstrap::{BootstrapError, NativeProfile, connect_native, connect_native_control_lease},
 };
 use cc_desk_remote_transport::wss::{RelayMode, RelayRole};
 use std::{
@@ -23,6 +23,7 @@ mod jni_bridge;
 #[cfg(target_os = "android")]
 pub mod keystore;
 
+mod controller;
 pub mod enrollment;
 pub mod phone_enrollment;
 pub mod shares;
@@ -50,6 +51,7 @@ pub enum ObserverStatus {
 enum State {
     Connecting,
     Viewing(Option<Box<ObserverViewReceipt>>),
+    Controlling,
     Closed,
     Failed,
 }
@@ -58,7 +60,7 @@ impl State {
     fn status(&self) -> ObserverStatus {
         match self {
             Self::Connecting => ObserverStatus::Connecting,
-            Self::Viewing(_) => ObserverStatus::Authenticated,
+            Self::Viewing(_) | Self::Controlling => ObserverStatus::Authenticated,
             Self::Closed => ObserverStatus::Closed,
             Self::Failed => ObserverStatus::Unavailable,
         }
@@ -67,6 +69,7 @@ impl State {
 
 struct AttemptState {
     phase: Mutex<State>,
+    control: Mutex<Option<Arc<controller::Control>>>,
     stop: watch::Sender<bool>,
 }
 
@@ -173,8 +176,10 @@ pub fn start_android_observer(
 }
 
 fn validate_profile(profile: &NativeProfile) -> bool {
-    matches!(profile.grant.role, ClientRole::Observer)
-        && matches!(profile.relay_mode, RelayMode::RendezvousV1)
+    matches!(
+        profile.grant.role,
+        ClientRole::Observer | ClientRole::Controller
+    ) && matches!(profile.relay_mode, RelayMode::RendezvousV1)
         && matches!(profile.relay.binding(), (key, RelayRole::Phone) if key != [0; 16])
         && profile.tunnel != [0; 16]
         && profile.address.port() != 0
@@ -212,6 +217,7 @@ fn start_attempt(
     let (stop, rx) = watch::channel(false);
     let state = Arc::new(AttemptState {
         phase: Mutex::new(State::Connecting),
+        control: Mutex::new(None),
         stop,
     });
     let owned = state.clone();
@@ -280,6 +286,11 @@ pub fn cancel(token: i64) {
         if let Ok(mut phase) = a.phase.lock() {
             a.stop.send_replace(true);
             *phase = State::Closed;
+            if let Ok(slot) = a.control.lock() {
+                if let Some(c) = slot.as_ref() {
+                    c.finish();
+                }
+            }
         } else {
             a.stop.send_replace(true);
         }
@@ -303,13 +314,42 @@ async fn observe(
     state: Arc<AttemptState>,
     mut rx: watch::Receiver<bool>,
 ) -> bool {
-    let client = match connect_native(profile, rx.clone()).await {
+    let role = profile.grant.role;
+    let connected = if role == ClientRole::Controller {
+        connect_native_control_lease(profile, rx.clone()).await
+    } else {
+        connect_native(profile, rx.clone()).await
+    };
+    let client = match connected {
         Ok(client) => client,
         Err(error) => {
             finish(&state, !matches!(error, BootstrapError::Cancelled));
             return !matches!(error, BootstrapError::RetirementUnknown);
         }
     };
+    if !client.descriptor().is_ok_and(|d| d.role == role) {
+        finish(&state, true);
+        return client.retire().await.is_ok();
+    }
+    if role == ClientRole::Controller {
+        let control = Arc::new(controller::Control::new());
+        let ready = (|| {
+            let mut phase = state.phase.lock().ok()?;
+            if *state.stop.borrow() {
+                return None;
+            }
+            *state.control.lock().ok()? = Some(control.clone());
+            *phase = State::Controlling;
+            Some(())
+        })()
+        .is_some();
+        if ready {
+            let _ = controller::serve(&client, &control, rx).await;
+        }
+        control.finish();
+        finish(&state, true);
+        return client.retire().await.is_ok();
+    }
     let view = tokio::select! { biased;
         _ = rx.changed() => None,
         result = client.receive_observer_view(Duration::from_secs(1)) => result.ok(),
@@ -417,4 +457,24 @@ pub fn observer_text(parts: &[Vec<u8>]) -> Option<String> {
         }
     }
     Some(output)
+}
+
+#[cfg(target_os = "android")]
+fn viewer_role(token: i64) -> i32 {
+    let Some(a) = lookup(token) else { return 0 };
+    let Ok(p) = a.phase.lock() else { return 0 };
+    if *a.stop.borrow() {
+        return 0;
+    }
+    match &*p {
+        State::Viewing(_) => 1,
+        State::Controlling => 2,
+        _ => 0,
+    }
+}
+#[cfg(target_os = "android")]
+fn control_owner(token: i64) -> Option<Arc<controller::Control>> {
+    let a = lookup(token)?;
+    let owner = a.control.lock().ok()?.clone();
+    owner
 }

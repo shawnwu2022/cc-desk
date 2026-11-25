@@ -40,6 +40,7 @@ enum Work {
         id: i64,
         tbs: Vec<u8>,
         scope: [String; 3],
+        controller: bool,
     },
     Cancel(i64),
 }
@@ -197,7 +198,12 @@ fn signer_thread(
                 }
             }
 
-            Work::Prompt { id, tbs, scope } => {
+            Work::Prompt {
+                id,
+                tbs,
+                scope,
+                controller,
+            } => {
                 if retired.load(Ordering::Acquire) || !is_pending(id) {
                     continue;
                 }
@@ -209,13 +215,14 @@ fn signer_thread(
                     env.call_method(
                         target.as_obj(),
                         "requestApproval",
-                        "(J[BLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)V",
+                        "(J[BLjava/lang/String;Ljava/lang/String;Ljava/lang/String;Z)V",
                         &[
                             JValue::Long(id),
                             JValue::Object(&a),
                             JValue::Object(&s),
                             JValue::Object(&r),
                             JValue::Object(&g),
+                            JValue::Bool(u8::from(controller)),
                         ],
                     )?;
                     Ok::<(), jni::errors::Error>(())
@@ -430,6 +437,7 @@ impl NativeGrantSigner for Approval {
             if !self.queue.post(Work::Prompt {
                 id,
                 tbs,
+                controller: grant.payload().role == cc_desk_remote_client::ClientRole::Controller,
                 scope: [
                     scope.session.clone(),
                     scope.run.clone(),

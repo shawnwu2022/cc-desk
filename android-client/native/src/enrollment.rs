@@ -73,6 +73,7 @@ pub struct VerifiedEnrollment {
     verified_unix_ms: u64,
     origin: CanonicalOrigin,
     scope: Option<SessionScope>,
+    role: DataRole,
     metadata: VerifiedMetadata,
 }
 
@@ -330,6 +331,7 @@ pub fn verify_approval(
         verified_unix_ms: now_unix_ms,
         origin: response.relay_origin,
         scope,
+        role: DataRole::Observer,
         metadata: VerifiedMetadata {
             invite_id: attempt.invite_id,
             request_id: attempt.request_id,
@@ -398,7 +400,7 @@ impl VerifiedEnrollment {
                 issuer: self.phone_grant,
                 principal: self.metadata.principal,
                 scope: self.scope.ok_or(InvalidEnrollment)?,
-                role: DataRole::Observer,
+                role: self.role,
             },
             signer: keys.approval,
             state,
@@ -589,7 +591,39 @@ impl RestoredMembership {
             return Err(InvalidEnrollment);
         }
         self.0.scope = Some(grant.scope);
+        self.0.role = grant.role;
         self.0.metadata.expires_unix_ms = grant.expires_unix_ms;
         Ok(DurablyAcceptedEnrollment(self.0))
     }
+}
+
+#[cfg(test)]
+pub(crate) fn test_pinned_membership(spki: [u8; 91]) -> RestoredMembership {
+    let pin = P256Spki::new(&spki).unwrap();
+    RestoredMembership(VerifiedEnrollment {
+        host_endpoint: pin.clone(),
+        host_endpoint_spki: spki,
+        phone_grant: pin,
+        phone_endpoint_spki: spki,
+        code_sha256: [1; 32],
+        phone_outer: String::new(),
+        host_outer: String::new(),
+        verified_unix_ms: 1,
+        origin: CanonicalOrigin::trusted("wss://desktop.invalid/").unwrap(),
+        scope: None,
+        role: DataRole::Observer,
+        metadata: VerifiedMetadata {
+            invite_id: [2; 16],
+            request_id: [3; 16],
+            phone_id: [4; 16],
+            tunnel: [5; 16],
+            endpoint_binding: [6; 32],
+            principal: [7; 32],
+            host_key_epoch: 1,
+            client_key_epoch: 1,
+            policy_epoch: 1,
+            issuer_epoch: 1,
+            expires_unix_ms: 100,
+        },
+    })
 }

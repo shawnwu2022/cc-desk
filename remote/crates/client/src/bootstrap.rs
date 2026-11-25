@@ -52,7 +52,26 @@ fn remaining(end: Instant) -> Result<Duration, BootstrapError> {
 /// implement a caller deadline by dropping this construction/cleanup future.
 pub async fn connect_native(
     profile: NativeProfile,
+    stop: watch::Receiver<bool>,
+) -> Result<NativeClient, BootstrapError> {
+    connect_native_with_mode(profile, stop, false).await
+}
+
+/// Explicit feature lane without fallback. Legacy Observer/native callers stay unchanged.
+pub async fn connect_native_control_lease(
+    profile: NativeProfile,
+    stop: watch::Receiver<bool>,
+) -> Result<NativeClient, BootstrapError> {
+    if profile.grant.role != crate::ClientRole::Controller {
+        return Err(BootstrapError::Bounds);
+    }
+    connect_native_with_mode(profile, stop, true).await
+}
+
+async fn connect_native_with_mode(
+    profile: NativeProfile,
     mut stop: watch::Receiver<bool>,
+    control_lease: bool,
 ) -> Result<NativeClient, BootstrapError> {
     if *stop.borrow() || stop.has_changed().is_err() {
         return Err(BootstrapError::Cancelled);
@@ -85,14 +104,25 @@ pub async fn connect_native(
     }
     let (stream, owner) = transport::start_admitted(socket, profile.tunnel, profile.io_budget)
         .map_err(|_| BootstrapError::Relay)?;
-    finish_channel(profile, stop, end, stream, owner).await
+    finish_bound_channel(profile, stop, end, stream, owner, control_lease).await
 }
+#[cfg(test)]
 async fn finish_channel(
+    profile: NativeProfile,
+    stop: watch::Receiver<bool>,
+    end: Instant,
+    stream: tokio::io::DuplexStream,
+    owner: transport::OwnedTunnel,
+) -> Result<NativeClient, BootstrapError> {
+    finish_bound_channel(profile, stop, end, stream, owner, false).await
+}
+async fn finish_bound_channel(
     mut profile: NativeProfile,
     mut stop: watch::Receiver<bool>,
     end: Instant,
     stream: tokio::io::DuplexStream,
     owner: transport::OwnedTunnel,
+    control_lease: bool,
 ) -> Result<NativeClient, BootstrapError> {
     let (cancel, token) = security::cancellation();
     let mut mux = Some(owner);
@@ -109,9 +139,12 @@ async fn finish_channel(
             )
             .await
             .map_err(|_| BootstrapError::Security)?;
-            let managed = security::bind_client_peer_channel(pending, profile.binding)
-                .await
-                .map_err(|_| BootstrapError::Security)?;
+            let managed = if control_lease {
+                security::bind_client_control_lease_channel(pending, profile.binding).await
+            } else {
+                security::bind_client_peer_channel(pending, profile.binding).await
+            }
+            .map_err(|_| BootstrapError::Security)?;
             let mut managed = managed
                 .grant_client(
                     &profile.grant,

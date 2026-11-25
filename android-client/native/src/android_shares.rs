@@ -31,7 +31,7 @@ pub(crate) struct Inputs {
 
 enum Phase {
     Loading,
-    Offers(Vec<([u8; 16], String)>, u64),
+    Offers(Vec<([u8; 16], String, &'static str)>, u64),
     Waiting,
     Viewing(ObserverHandle),
     Failed,
@@ -133,7 +133,7 @@ pub(crate) fn offers(id: i64) -> Option<String> {
     if now()? >= *expires {
         return None;
     }
-    serde_json::to_string(&items.iter().map(|(offer,label)|serde_json::json!({"id":offer.iter().map(|n|format!("{n:02x}")).collect::<String>(),"label":label})).collect::<Vec<_>>()).ok()
+    serde_json::to_string(&items.iter().map(|(offer,label,role)|serde_json::json!({"id":offer.iter().map(|n|format!("{n:02x}")).collect::<String>(),"label":label,"role":role})).collect::<Vec<_>>()).ok()
 }
 pub(crate) fn choose(id: i64, raw: &str) -> Option<()> {
     let offer = lower_hex::<16>(raw).ok()?;
@@ -142,7 +142,7 @@ pub(crate) fn choose(id: i64, raw: &str) -> Option<()> {
     let Phase::Offers(items, expires) = &*p else {
         return None;
     };
-    if *s.borrow() || now()? >= *expires || !items.iter().any(|(x, _)| *x == offer) {
+    if *s.borrow() || now()? >= *expires || !items.iter().any(|(x, _, _)| *x == offer) {
         return None;
     }
     tx.send(Some(offer)).ok()?;
@@ -279,7 +279,17 @@ fn run(
                     catalog
                         .offers()
                         .iter()
-                        .map(|x| (x.id(), x.label().to_owned()))
+                        .map(|x| {
+                            (
+                                x.id(),
+                                x.label().to_owned(),
+                                if x.role() == cc_desk_remote_client::ClientRole::Controller {
+                                    "controller"
+                                } else {
+                                    "observer"
+                                },
+                            )
+                        })
                         .collect(),
                     catalog.expires_unix_ms(),
                 ),

@@ -259,7 +259,7 @@ pub extern "system" fn Java_cn_ccdesk_android_NativeDesktopBackend_nativeAndroid
     _env: JNIEnv<'_>,
     _class: JClass<'_>,
 ) -> jint {
-    2
+    3
 }
 
 #[unsafe(no_mangle)]
@@ -363,4 +363,98 @@ pub extern "system" fn Java_cn_ccdesk_android_NativeDesktopBackend_nativeCancelS
     id: jlong,
 ) {
     let _ = catch_unwind(|| crate::android_shares::stop(id));
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_cn_ccdesk_android_NativeDesktopBackend_nativeViewerRole(
+    _env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    token: jlong,
+) -> jint {
+    catch_unwind(|| crate::viewer_role(token)).unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_cn_ccdesk_android_NativeDesktopBackend_nativeTakeControllerFrame(
+    env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    token: jlong,
+) -> jni::sys::jstring {
+    catch_unwind(AssertUnwindSafe(|| {
+        if crate::viewer_role(token) != 2 {
+            return None;
+        }
+        let text = crate::control_owner(token)?.take_frame()?;
+        Some(env.new_string(text).ok()?.into_raw())
+    }))
+    .ok()
+    .flatten()
+    .unwrap_or_else(ptr::null_mut)
+}
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_cn_ccdesk_android_NativeDesktopBackend_nativeConfirmControllerFrame(
+    _env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    token: jlong,
+    id: jlong,
+) -> jni::sys::jboolean {
+    u8::from(
+        catch_unwind(|| {
+            crate::viewer_role(token) == 2
+                && crate::control_owner(token).is_some_and(|c| c.confirm(id))
+        })
+        .unwrap_or(false),
+    )
+}
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_cn_ccdesk_android_NativeDesktopBackend_nativeQueueControllerText(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    token: jlong,
+    text: jni::objects::JString<'_>,
+) -> jlong {
+    catch_unwind(AssertUnwindSafe(|| {
+        if crate::viewer_role(token) != 2 || text.is_null() {
+            return None;
+        }
+        if !(1..=2048).contains(
+            &env.call_method(&text, "length", "()I", &[])
+                .ok()?
+                .i()
+                .ok()?,
+        ) {
+            return None;
+        }
+        let string: String = env.get_string(&text).ok()?.into();
+        crate::control_owner(token)?.enqueue(crate::controller::text(string)?)
+    }))
+    .ok()
+    .flatten()
+    .unwrap_or(0)
+}
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_cn_ccdesk_android_NativeDesktopBackend_nativeQueueControllerKey(
+    _env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    token: jlong,
+    key: jint,
+) -> jlong {
+    catch_unwind(|| {
+        if crate::viewer_role(token) != 2 {
+            return None;
+        }
+        crate::control_owner(token)?.enqueue(crate::controller::key(key)?)
+    })
+    .ok()
+    .flatten()
+    .unwrap_or(0)
+}
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_cn_ccdesk_android_NativeDesktopBackend_nativeControllerInputOutcome(
+    _env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    token: jlong,
+    id: jlong,
+) -> jint {
+    catch_unwind(|| crate::control_owner(token).map_or(0, |c| c.outcome(id))).unwrap_or(0)
 }
