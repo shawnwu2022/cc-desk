@@ -282,3 +282,8 @@ pub use enrollment::{
     HostEnrollmentCommand, HostEnrollmentResponse, PhoneEnrollmentCommand, PhoneEnrollmentResponse,
     request_host_enrollment, request_phone_enrollment,
 };
+
+pub use enrollment::{
+    HostShareCommand, HostShareResponse, PhoneShareCommand, PhoneShareResponse, ShareSelectionKey,
+    request_host_shares, request_phone_shares,
+};
