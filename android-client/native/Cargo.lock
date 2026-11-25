@@ -55,6 +55,8 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "url",
+ "zeroize",
 ]
 
 [[package]]
@@ -107,6 +109,8 @@ dependencies = [
  "cc-desk-remote-record",
  "futures-util",
  "rustls",
+ "serde",
+ "serde_json",
  "tokio",
  "tokio-rustls",
  "tokio-tungstenite",

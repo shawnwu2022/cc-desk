@@ -35,6 +35,7 @@ const MAX_TLS_WAIT: Duration = Duration::from_millis(150);
 enum Work {
     Endpoint(Vec<u8>, mpsc::SyncSender<Option<Vec<u8>>>),
     Relay(Vec<u8>, oneshot::Sender<Option<Vec<u8>>>),
+    Enrollment(Vec<u8>, oneshot::Sender<Option<Vec<u8>>>),
     Prompt {
         id: i64,
         tbs: Vec<u8>,
@@ -74,10 +75,43 @@ impl KeystoreOwner {
 
 pub(crate) struct Roles {
     keys: crate::enrollment::NativeKeystoreBindings,
+    queue: Arc<Queue>,
     owner: KeystoreOwner,
 }
 
 impl Roles {
+    /// Proof for one locally constructed Phone enrollment transcript.
+    pub(crate) async fn sign_enrollment(
+        &self,
+        payload: Vec<u8>,
+    ) -> Result<[u8; 64], crate::phone_enrollment::PairingError> {
+        use crate::phone_enrollment::PairingError;
+        if !payload.starts_with(b"cc-desk.native-pairing.phone.v1\0")
+            || payload.len() > MAX_SIGN_INPUT
+        {
+            return Err(PairingError::Invalid);
+        }
+        let (tx, rx) = oneshot::channel();
+        if !self.queue.post(Work::Enrollment(payload, tx)) {
+            return Err(PairingError::Unavailable);
+        }
+        rx.await
+            .ok()
+            .flatten()
+            .and_then(|v| v.try_into().ok())
+            .ok_or(PairingError::Unavailable)
+    }
+    pub(crate) fn relay_for_enrollment(
+        &self,
+        id: [u8; 16],
+    ) -> cc_desk_remote_transport::wss::RelayAdmissionIdentity {
+        cc_desk_remote_transport::wss::RelayAdmissionIdentity::new(
+            id,
+            RelayRole::Phone,
+            self.keys.relay.clone(),
+        )
+    }
+
     pub(crate) fn into_parts(self) -> (crate::enrollment::NativeKeystoreBindings, KeystoreOwner) {
         (self.keys, self.owner)
     }
@@ -122,8 +156,11 @@ pub(crate) fn open_roles(
                 origin,
                 relay_id,
             }),
-            approval: Box::new(Approval { queue }),
+            approval: Box::new(Approval {
+                queue: queue.clone(),
+            }),
         },
+        queue,
         owner: KeystoreOwner { worker, retired },
     })
 }
@@ -153,6 +190,13 @@ fn signer_thread(
                     let _ = reply.send(signature);
                 }
             }
+
+            Work::Enrollment(bytes, reply) => {
+                if !reply.is_closed() && !retired.load(Ordering::Acquire) {
+                    let _ = reply.send(sign(&mut env, &target, "signPhoneEnrollment", &bytes, 64));
+                }
+            }
+
             Work::Prompt { id, tbs, scope } => {
                 if retired.load(Ordering::Acquire) || !is_pending(id) {
                     continue;
