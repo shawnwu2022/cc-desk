@@ -6,7 +6,6 @@ import { useI18n } from 'vue-i18n'
 import AppButton from '@/components/ui/AppButton.vue'
 import AppInput from '@/components/ui/AppInput.vue'
 import AppSelect from '@/components/ui/AppSelect.vue'
-import RemoteTerminalPanel from '@/components/settings/RemoteTerminalPanel.vue'
 import { DESKTOP_PAIRING_PORT, type ApprovedDevice, type DesktopPairingPort, type PairingSnapshot, type PendingPairing, type SetupResult, type VerifiedPairing } from './desktopPairingPort'
 
 const { t } = useI18n()
@@ -296,7 +295,6 @@ function cancel() {
         </ul>
       </template>
     </section>
-    <RemoteTerminalPanel v-if="!port" />
   </section>
 </template>
 <style scoped>

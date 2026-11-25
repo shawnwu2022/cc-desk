@@ -1,6 +1,6 @@
 import {registrationSourcePlugin} from './build/registrationSource'
 import { execFileSync } from 'node:child_process'
-import { defineConfig } from 'vite'
+import { defineConfig, type Plugin } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import { resolve } from 'path'
 import pkg from './package.json'
@@ -12,11 +12,28 @@ try {
   const value = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: __dirname, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
   if (/^[0-9a-f]{40}$/.test(value)) buildCommit = value
 } catch { /* Source archives have no Git identity; do not invent one. */ }
+const releaseUiBoundary: Plugin = {
+  name: 'cc-desk-release-ui-boundary',
+  apply: 'build',
+  generateBundle(_options, bundle) {
+    for (const chunk of Object.values(bundle)) {
+      if (chunk.type !== 'chunk') continue
+      for (const id of chunk.moduleIds) {
+        const path = id.replace(/\\/g, '/').split('?')[0]
+        if (/\/(?:RemoteHostPanel|ShortRemoteSessionPanel)\.vue$/.test(path) ||
+          path.includes('/tests/fixtures/native-host-ui/')) {
+          this.error('Developer-only remote connection UI is not allowed in release builds')
+        }
+      }
+    }
+  },
+}
+
 // https://vitejs.dev/config/
 const isBrowserProduct = (command: string, mode: string) => command === 'build' && mode === 'browser-product'
 export default defineConfig(({ command, mode }) => ({
   base: isBrowserProduct(command, mode) ? './' : '/',
-  plugins: [...(isBrowserProduct(command, mode) ? [registrationSourcePlugin(__dirname)] : []), visualFixturePlugin(__dirname, command === 'serve' && mode === 'visual' && process.env.CC_DESK_VISUAL_FIXTURE === '1'), vue()],
+  plugins: [releaseUiBoundary, ...(isBrowserProduct(command, mode) ? [registrationSourcePlugin(__dirname)] : []), visualFixturePlugin(__dirname, command === 'serve' && mode === 'visual' && process.env.CC_DESK_VISUAL_FIXTURE === '1'), vue()],
   resolve: {
     alias: {
       '@': resolve(__dirname, 'src')
