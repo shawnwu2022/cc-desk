@@ -380,3 +380,292 @@ async fn request<T: for<'de> Deserialize<'de>>(
         })
     })
 }
+
+#[derive(Clone, Copy)]
+pub struct ShareSelectionKey {
+    pub tunnel: [u8; 16],
+    pub catalog_digest: [u8; 32],
+    pub scope_offer_id: [u8; 16],
+    pub selection_id: [u8; 16],
+}
+impl ShareSelectionKey {
+    fn wire(&self, op: &str) -> Value {
+        json!({"op":op,"tunnel":hex(&self.tunnel),"catalog_digest":hex(&self.catalog_digest),
+             "scope_offer_id":hex(&self.scope_offer_id),"selection_id":hex(&self.selection_id)})
+    }
+    fn matches(&self, tunnel: &str, digest: &str, offer: &str, selection: &str) -> bool {
+        tunnel == hex(&self.tunnel)
+            && digest == hex(&self.catalog_digest)
+            && offer == hex(&self.scope_offer_id)
+            && selection == hex(&self.selection_id)
+    }
+}
+
+pub enum HostShareCommand {
+    Publish {
+        tunnel: [u8; 16],
+        ttl_seconds: u16,
+        catalog_envelope: String,
+    },
+    Clear {
+        tunnel: [u8; 16],
+        catalog_digest: [u8; 32],
+    },
+    ReadSelection {
+        tunnel: [u8; 16],
+    },
+    Answer {
+        selection: ShareSelectionKey,
+        ready_envelope: String,
+    },
+}
+pub enum PhoneShareCommand {
+    GetShares { tunnel: [u8; 16] },
+    Choose { selection: ShareSelectionKey },
+    GetSelection { selection: ShareSelectionKey },
+}
+#[derive(Deserialize)]
+#[serde(tag = "status", deny_unknown_fields)]
+pub enum HostShareResponse {
+    #[serde(rename = "shares_published")]
+    Published {
+        tunnel: String,
+        catalog_digest: String,
+        expires_unix_ms: u64,
+    },
+    #[serde(rename = "shares_cleared")]
+    Cleared {
+        tunnel: String,
+        catalog_digest: String,
+    },
+    #[serde(rename = "share_selection")]
+    Selection {
+        tunnel: String,
+        catalog_digest: String,
+        scope_offer_id: String,
+        selection_id: String,
+    },
+    #[serde(rename = "share_selection_empty")]
+    SelectionEmpty { tunnel: String },
+    #[serde(rename = "share_selection_answered")]
+    Answered {
+        tunnel: String,
+        catalog_digest: String,
+        scope_offer_id: String,
+        selection_id: String,
+    },
+    #[serde(rename = "rejected")]
+    Rejected,
+}
+#[derive(Deserialize)]
+#[serde(tag = "status", deny_unknown_fields)]
+pub enum PhoneShareResponse {
+    #[serde(rename = "shares")]
+    Shares {
+        tunnel: String,
+        catalog_digest: String,
+        catalog_envelope: String,
+        expires_unix_ms: u64,
+    },
+    #[serde(rename = "shares_empty")]
+    SharesEmpty { tunnel: String },
+    #[serde(rename = "share_selection")]
+    Selection {
+        tunnel: String,
+        catalog_digest: String,
+        scope_offer_id: String,
+        selection_id: String,
+    },
+    #[serde(rename = "share_selection_empty")]
+    SelectionEmpty { tunnel: String },
+    #[serde(rename = "share_selection_ready")]
+    Ready {
+        tunnel: String,
+        catalog_digest: String,
+        scope_offer_id: String,
+        selection_id: String,
+        ready_envelope: String,
+    },
+    #[serde(rename = "rejected")]
+    Rejected,
+}
+fn digest_envelope(envelope: &str) -> String {
+    hex(ring::digest::digest(&ring::digest::SHA256, envelope.as_bytes()).as_ref())
+}
+
+pub async fn request_host_shares(
+    origin: &str,
+    address: SocketAddr,
+    budget: Duration,
+    identity: &RelayAdmissionIdentity,
+    command: HostShareCommand,
+) -> Result<HostShareResponse, EnrollmentError> {
+    if identity.binding().1 != RelayRole::Host {
+        return Err(EnrollmentError::Invalid);
+    }
+    let wire = match &command {
+        HostShareCommand::Publish {
+            tunnel,
+            ttl_seconds,
+            catalog_envelope,
+        } if (1..=60).contains(ttl_seconds) && valid_evidence(catalog_envelope) => {
+            json!({"op":"publish_shares","tunnel":hex(tunnel),"ttl_seconds":ttl_seconds,"catalog_envelope":catalog_envelope})
+        }
+        HostShareCommand::Clear {
+            tunnel,
+            catalog_digest,
+        } => json!({"op":"clear_shares","tunnel":hex(tunnel),"catalog_digest":hex(catalog_digest)}),
+        HostShareCommand::ReadSelection { tunnel } => {
+            json!({"op":"read_share_selection","tunnel":hex(tunnel)})
+        }
+        HostShareCommand::Answer {
+            selection,
+            ready_envelope,
+        } if valid_evidence(ready_envelope) => {
+            let mut wire = selection.wire("answer_share_selection");
+            wire["ready_envelope"] = json!(ready_envelope);
+            wire
+        }
+        _ => return Err(EnrollmentError::Invalid),
+    };
+    let reply = request(origin, address, budget, identity, None, wire).await?;
+    let valid = match (&reply, &command) {
+        (HostShareResponse::Rejected, _) => return Err(EnrollmentError::Rejected),
+        (
+            HostShareResponse::Published {
+                tunnel,
+                catalog_digest,
+                expires_unix_ms,
+            },
+            HostShareCommand::Publish {
+                tunnel: target,
+                catalog_envelope,
+                ..
+            },
+        ) => {
+            *tunnel == hex(target)
+                && *catalog_digest == digest_envelope(catalog_envelope)
+                && *expires_unix_ms != 0
+        }
+        (
+            HostShareResponse::Cleared {
+                tunnel,
+                catalog_digest,
+            },
+            HostShareCommand::Clear {
+                tunnel: target,
+                catalog_digest: requested,
+            },
+        ) => *tunnel == hex(target) && *catalog_digest == hex(requested),
+        (
+            HostShareResponse::SelectionEmpty { tunnel },
+            HostShareCommand::ReadSelection { tunnel: target },
+        ) => *tunnel == hex(target),
+        (
+            HostShareResponse::Selection {
+                tunnel,
+                catalog_digest,
+                scope_offer_id,
+                selection_id,
+            },
+            HostShareCommand::ReadSelection { tunnel: target },
+        ) => {
+            *tunnel == hex(target)
+                && fixed_hex(catalog_digest, 32)
+                && fixed_hex(scope_offer_id, 16)
+                && fixed_hex(selection_id, 16)
+        }
+        (
+            HostShareResponse::Answered {
+                tunnel,
+                catalog_digest,
+                scope_offer_id,
+                selection_id,
+            },
+            HostShareCommand::Answer { selection, .. },
+        ) => selection.matches(tunnel, catalog_digest, scope_offer_id, selection_id),
+        _ => false,
+    };
+    valid
+        .then_some(reply)
+        .ok_or(EnrollmentError::OutcomeUnknown)
+}
+pub async fn request_phone_shares(
+    origin: &str,
+    address: SocketAddr,
+    budget: Duration,
+    identity: &RelayAdmissionIdentity,
+    public_key_sec1: &[u8; 65],
+    command: PhoneShareCommand,
+) -> Result<PhoneShareResponse, EnrollmentError> {
+    if identity.binding().1 != RelayRole::Phone || public_key_sec1[0] != 4 {
+        return Err(EnrollmentError::Invalid);
+    }
+    let wire = match &command {
+        PhoneShareCommand::GetShares { tunnel } => json!({"op":"get_shares","tunnel":hex(tunnel)}),
+        PhoneShareCommand::Choose { selection } => selection.wire("choose_share"),
+        PhoneShareCommand::GetSelection { selection } => {
+            json!({"op":"get_share_selection","tunnel":hex(&selection.tunnel)})
+        }
+    };
+    let reply = request(
+        origin,
+        address,
+        budget,
+        identity,
+        Some(public_key_sec1),
+        wire,
+    )
+    .await?;
+    let valid = match (&reply, &command) {
+        (PhoneShareResponse::Rejected, _) => return Err(EnrollmentError::Rejected),
+        (
+            PhoneShareResponse::Shares {
+                tunnel,
+                catalog_digest,
+                catalog_envelope,
+                expires_unix_ms,
+            },
+            PhoneShareCommand::GetShares { tunnel: target },
+        ) => {
+            *tunnel == hex(target)
+                && valid_evidence(catalog_envelope)
+                && *catalog_digest == digest_envelope(catalog_envelope)
+                && *expires_unix_ms != 0
+        }
+        (
+            PhoneShareResponse::SharesEmpty { tunnel },
+            PhoneShareCommand::GetShares { tunnel: target },
+        ) => *tunnel == hex(target),
+        (
+            PhoneShareResponse::Selection {
+                tunnel,
+                catalog_digest,
+                scope_offer_id,
+                selection_id,
+            },
+            PhoneShareCommand::Choose { selection } | PhoneShareCommand::GetSelection { selection },
+        ) => selection.matches(tunnel, catalog_digest, scope_offer_id, selection_id),
+        (
+            PhoneShareResponse::SelectionEmpty { tunnel },
+            PhoneShareCommand::GetSelection { selection },
+        ) => *tunnel == hex(&selection.tunnel),
+        (
+            PhoneShareResponse::Ready {
+                tunnel,
+                catalog_digest,
+                scope_offer_id,
+                selection_id,
+                ready_envelope,
+            },
+            PhoneShareCommand::GetSelection { selection },
+        ) => {
+            selection.matches(tunnel, catalog_digest, scope_offer_id, selection_id)
+                && valid_evidence(ready_envelope)
+        }
+        _ => false,
+    };
+    valid
+        .then_some(reply)
+        .ok_or(EnrollmentError::OutcomeUnknown)
+}
