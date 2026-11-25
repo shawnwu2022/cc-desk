@@ -3894,10 +3894,17 @@ impl NativeRunAdmission {
     pub(crate) fn observer_admission_copy(&self) -> Result<Self, SafeError> {
         self.scope()?;
         Ok(Self {
-            pin: NativeRunPin { run: self.pin.run.clone(), origin: self.pin.origin.clone(), state: self.pin.state.clone() },
+            pin: NativeRunPin {
+                run: self.pin.run.clone(),
+                origin: self.pin.origin.clone(),
+                state: self.pin.state.clone(),
+            },
             access: self.access.clone(),
             original: self.original.clone(),
-            authority: NativeRunAuthority { state: self.authority.state.clone(), resource: self.authority.resource.clone() },
+            authority: NativeRunAuthority {
+                state: self.authority.state.clone(),
+                resource: self.authority.resource.clone(),
+            },
         })
     }
     pub(crate) fn start_bound_observer(

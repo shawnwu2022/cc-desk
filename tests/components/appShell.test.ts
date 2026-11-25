@@ -128,14 +128,17 @@ describe('Unified application shell', () => {
   })
 
   // 一级导航只有工作区、项目、设置，资源入口不进入全局导航。
-  it('Shell_ThreePrimaryDestinations_001', async () => {
+  it('Shell_FourPrimaryDestinations_001', async () => {
     const wrapper = render(AppShell)
     const buttons = wrapper.findAll('[data-primary-section]')
     expect(buttons.map(button => button.attributes('data-primary-section'))).toEqual(['workspace', 'projects', 'remote', 'settings'])
-    expect(buttons.map(button => button.attributes('aria-label'))).toEqual(['Workspace', 'Projects', 'Settings'])
+    expect(buttons.map(button => button.attributes('aria-label'))).toEqual(['Workspace', 'Projects', 'Remote Connections', 'Settings'])
     await buttons[1].trigger('click')
     expect(useShellStore().section).toBe('projects')
     expect(buttons[1].attributes('aria-current')).toBe('page')
+    await buttons[2].trigger('click')
+    expect(useShellStore().section).toBe('remote')
+    expect(buttons[2].attributes('aria-current')).toBe('page')
     expect(wrapper.findAll('nav[aria-label="Primary navigation"]')).toHaveLength(1)
   })
   // 支持窗口的逻辑最小尺寸是1024×640，不以CSS最小宽度制造横向溢出。
