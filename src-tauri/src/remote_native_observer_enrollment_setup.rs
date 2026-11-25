@@ -15,6 +15,7 @@ pub(crate) struct TrustedHostProfile {
     relay_spki: [u8; 91],
     relay_id: [u8; 16],
     origin: CanonicalOrigin,
+    epochs: HostEpochs,
 }
 /// Inputs come from an explicit trusted operator import, not a relay response
 /// or a renderer typing an address. Verification separately opens both exact
@@ -28,6 +29,7 @@ pub(crate) struct OperatorHostProfileInput {
     pub(crate) relay_spki: [u8; 91],
     pub(crate) relay_id: [u8; 16],
     pub(crate) origin: CanonicalOrigin,
+    pub(crate) epochs: HostEpochs,
 }
 impl TrustedHostProfile {
     pub(crate) fn from_operator(
@@ -47,13 +49,56 @@ impl TrustedHostProfile {
             relay_spki: input.relay_spki,
             relay_id: input.relay_id,
             origin: selected,
+            epochs: input.epochs,
         };
         // Structural validation only; no I/O, no proof and no authorization.
+        if [
+            profile.epochs.host_key,
+            profile.epochs.client_key,
+            profile.epochs.policy,
+            profile.epochs.issuer,
+        ]
+        .contains(&0)
+        {
+            return Err(Error::Authority);
+        }
         let end = Instant::now() + Duration::from_secs(30);
         drop(profile.prepare_candidate(end)?);
         Ok(profile)
     }
 
+    pub(crate) fn operation(
+        &self,
+        owner: &Arc<crate::native_crypto::owner::NativeRevocation>,
+        cap: Instant,
+    ) -> Result<ApprovedSetup> {
+        use crate::native_crypto::owner::NativeRevocation;
+        if Instant::now() >= cap || owner.is_revoked() {
+            return Err(Error::Authority);
+        }
+        let local = NativeRevocation::new();
+        let roots = [
+            owner.root_witness().ok_or(Error::Authority)?,
+            local.root_witness().ok_or(Error::Authority)?,
+        ];
+        let signing = crate::remote_host_approval::RegistrationSigningScope::from_native_enrollment(
+            NativeRevocation::child(roots),
+            cap,
+        );
+        Ok(ApprovedSetup {
+            keys: self.prepare_candidate(cap)?,
+            signing,
+        })
+    }
+    pub(crate) fn endpoint(&self) -> &CanonicalOrigin {
+        &self.origin
+    }
+    pub(crate) fn epochs(&self) -> HostEpochs {
+        self.epochs
+    }
+    pub(crate) fn endpoint_spki(&self) -> [u8; 91] {
+        self.endpoint_spki
+    }
     fn prepare_candidate(&self, end: Instant) -> Result<FrozenHostSupplier> {
         let binding = FrozenHostBinding {
             native_profile: HostKeyProfileIdentity {

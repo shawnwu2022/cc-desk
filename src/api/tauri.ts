@@ -582,8 +582,8 @@ export async function remoteRegistrationCancel(run: RemoteHostRun): Promise<Remo
 }
 // 仅是原生目标的公开描述，不是批准、密钥或连接权限。
 export type RemoteHostPairingScope = { session: string; run: string; generation: string; observerAvailable?: boolean };
-export function nativeObserverSetup(action: 'available' | 'verify' | 'publicRegistration', endpoint?: string): Promise<unknown> {
-  return nativeDocumentBridge().invoke('remote_native_observer_setup', endpoint === undefined ? { action } : { action, endpoint });
+export function nativeObserverSetup(request: Readonly<Record<string, unknown>>): Promise<unknown> {
+  return nativeDocumentBridge().invoke('remote_native_observer_setup', request);
 }
 
 export async function remoteHostPairingScope(run: RemoteHostRun): Promise<RemoteHostPairingScope> {

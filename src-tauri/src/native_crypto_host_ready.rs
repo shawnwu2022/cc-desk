@@ -19,6 +19,35 @@ fn live(core: &HostKeyCore, state: &CoreState) -> Result<(), SignFailure> {
     Ok(())
 }
 impl HostKeyCustody {
+    /// Backend-only key checkout for native pairing receipts. The receipt
+    /// builder still requires the independent exact candidate dialog and fence.
+    #[cfg(feature = "remote-observer")]
+    pub(crate) fn observer_endpoint_handle(
+        &self,
+        ready: HostKeysReady,
+        expected: &FrozenHostBinding,
+    ) -> Result<crate::native_crypto::owner::KeyRequestHandle, SignFailure> {
+        let state = self.core.state.lock();
+        if !std::sync::Weak::ptr_eq(&ready.core, &Arc::downgrade(&self.core)) {
+            return Err(SignFailure::Closed);
+        }
+        let actual = &state.supplier.as_ref().ok_or(SignFailure::Closed)?.binding;
+        if actual.native_profile != expected.native_profile
+            || actual.endpoint_spki != expected.endpoint_spki
+            || actual.relay_spki != expected.relay_spki
+            || actual.origin != expected.origin
+            || actual.relay_id != expected.relay_id
+            || actual.profile_cap != expected.profile_cap
+        {
+            return Err(SignFailure::Closed);
+        }
+        ready.check_locked(&self.core, &state)?;
+        state.slots[0]
+            .as_ref()
+            .map(|slot| slot.signal.clone())
+            .ok_or(SignFailure::Closed)
+    }
+
     #[cfg(test)]
     pub(crate) fn test_worker_opened(&self, index: usize) -> bool {
         let state = self.core.state.lock();

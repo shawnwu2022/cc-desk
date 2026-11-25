@@ -16,6 +16,7 @@ export interface ApprovedDevice extends PairingIdentity {
   readonly tunnel: string
   /** Only the original live owner may report an active share. */
   readonly sharing: 'none' | 'active'
+  readonly revocationPending?: boolean
 }
 export interface PairingScopeChoice {
   /** Opaque and current only; native owner revalidates the exact original run. */
@@ -50,7 +51,7 @@ export interface VerifiedPairing {
 }
 export type SetupResult =
   | { readonly kind: 'verified'; readonly handle: VerifiedPairing }
-  | { readonly kind: 'profileRequired' | 'setupVerified' | 'declined' }
+  | { readonly kind: 'profileRequired' | 'declined' }
   | { readonly kind: 'relayAuthorizationRequired'; readonly approvePublicRegistration: () => Promise<string | null> }
 
 export interface DesktopPairingPort {

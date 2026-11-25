@@ -161,6 +161,8 @@ fn run_ordinary(initial_dir: Option<String>, #[cfg(windows)] startup: DesktopSta
     let native_shutdown = native_runtime.clone();
     let native_exit_shutdown = native_runtime.clone();
     let builder = tauri::Builder::default();
+    #[cfg(all(feature = "remote-observer", windows))]
+    let builder = builder.manage(remote_host_approval::native_observer_enrollment::owner::OwnerService::default());
     #[cfg(feature = "remote-host")]
     let builder = builder.manage(std::sync::Arc::new(
         remote_host::RemoteHostService::default(),

@@ -23,6 +23,7 @@ use windows::{
 };
 use windows_core::PCWSTR;
 const DIRECTORY: &str = "remote-pairings-v1";
+#[cfg(feature = "remote-observer")]
 const OBSERVER_DIRECTORY: &str = "remote-native-observers-v1";
 const FILE: &str = "devices.dpapi";
 pub(crate) struct WindowsPairingBackend {
@@ -44,9 +45,11 @@ impl WindowsPairingBackend {
         self.fail_after_publish
             .store(true, std::sync::atomic::Ordering::SeqCst);
     }
+    #[cfg(feature = "remote-observer")]
     pub(crate) fn create_observer(parent: &Path) -> Result<Self> {
         Self::open_impl(parent, OBSERVER_DIRECTORY, true)
     }
+    #[cfg(feature = "remote-observer")]
     pub(crate) fn open_observer(parent: &Path) -> Result<Self> {
         Self::open_impl(parent, OBSERVER_DIRECTORY, false)
     }

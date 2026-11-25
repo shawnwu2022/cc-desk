@@ -14,6 +14,7 @@ export default {
   remotePairingNoScope: "Paired. No session shared yet.",
   remotePairingSetupVerified: "Relay verified. This build does not have a complete native pairing connection yet.",
   remotePairingSetupDeclined: "Relay verification was not approved.",
+  remotePairingRevokePending: "Local sharing is blocked. The relay has not confirmed revocation. Retry revoke.",
   remoteConnections: "Remote Connections",
   remotePairingUnavailable: "Native phone pairing is not available in this build.",
   remotePairingTitle: "Pair an Android device",
