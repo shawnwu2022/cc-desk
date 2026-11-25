@@ -149,6 +149,7 @@ public final class MainActivity extends Activity {
         for (DesktopBackend.Session session : backend.observerSessions(desktop)) {
             // 来源始终与行绑定，不按照会话 ID 跨主机合并。
             text(session.title + " · " + source, 16);
+            text("这是获取时的会话内容，不会自动更新。", 14);
             TextView snapshot = text(session.text, 14);
             snapshot.setTypeface(android.graphics.Typeface.MONOSPACE);
         }
@@ -161,7 +162,7 @@ public final class MainActivity extends Activity {
         EditText relay = new EditText(this);
         relay.setSingleLine();
         relay.setSaveEnabled(false);
-        relay.setHint("自建中继 WSS 地址");
+        relay.setHint("中转地址");
         try {
             for (DesktopBackend.Desktop desktop : store.read())
                 if (desktop.localId.equals(selected)) relay.setText(desktop.relay.toString());
@@ -182,7 +183,7 @@ public final class MainActivity extends Activity {
         dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(unused -> {
             final URI locator;
             try { locator = DesktopBackend.Desktop.checkedRelay(relay.getText().toString().trim()); }
-            catch (IllegalArgumentException e) { relay.setError("请输入不含凭据的 WSS 地址"); return; }
+            catch (IllegalArgumentException e) { relay.setError("请输入有效的中转地址，可从电脑版复制"); return; }
             final PairingInvite invite;
             try { invite = PairingInvite.fromPasted(locator, code.getText()); }
             catch (IllegalArgumentException e) { code.setError("请粘贴电脑显示的完整配对码"); return; }
@@ -287,8 +288,8 @@ public final class MainActivity extends Activity {
             case WAITING_FOR_DESKTOP: return "请在电脑上点同意";
             case LOADING_SHARES: return "正在读取共享会话";
             case SHARES_READY: return "共享会话";
-            case AWAITING_OBSERVER: return "请在电脑上点同意，并按手机提示确认";
-            case OBSERVING: return "正在观察";
+            case AWAITING_OBSERVER: return "正在连接会话，请按手机提示确认";
+            case OBSERVING: return "会话快照";
             case DISCONNECTED: return "未连接";
             case REVOKED: return "已撤销";
             default: return "暂不可用，请检查电脑连接";
