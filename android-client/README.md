@@ -1,8 +1,6 @@
 # Native Android client: platform identity boundary
 
-This branch does not contain or build the browser launcher, an APK, a working
-pairing flow, an Android service, or an Observer UI. It supplies only the
-AndroidKeystore identity adapter and tests for its signature wire shape.
+This branch contains a native Android Activity and camera QR reader, per-host metadata and a typed future-client boundary. The disconnected development build has no enrollment transport or live Observer service.
 
 ## Contracts
 
@@ -41,7 +39,7 @@ Observer non-interference. No production publication is possible here.
 
 ## Local checks
 
-    ./android-client/check-platform.ps1 -Sdk <sdk-directory> -Jdk <jdk-directory>
+    ./android-client/check-platform.ps1 -Sdk <sdk-directory> -Jdk <jdk-directory> -ZxingCore <core-3.5.3.jar>
 
 WSK-MSI existing JDK 21.0.8 and SDK 35 compile the platform adapter. Pure Java
 checks cover nine DER cases and 128 real software fixture key roundtrips with
@@ -64,3 +62,23 @@ expiry and replay/late response behavior, and independent per-host revocation.
 Do not put reusable secrets in the QR, auto-trust a Host ID from the QR, or log
 transient invite data. Validate the actual pairing contract and real device
 before connecting any Java signer to native transport.
+
+## Native Activity development build
+
+Run the unsigned integration build with existing tools:
+
+    ./android-client/build-development.ps1 -Sdk <sdk-directory> -Jdk <jdk-directory> -ZxingCore <core-3.5.3.jar>
+
+No installer, credential, test-device change or network dependency is required.
+Outputs are ignored and not for distribution. The launcher Activity is the
+native app entry, not a redirect; no other app is launched from it. Until an
+actual Rust owner is wired, pairing is disabled and no session can be claimed
+as connected. The in-app camera uses the pinned Apache-2.0 ZXing Core 3.5.3 from Maven Central. Obtain the verified upstream jar before offline builds. It does not use Play Services or upload images. Camera permissions are requested only in the scanner. Manual code remains available once the same real backend is connected. Neither path is active in this disconnected build.
+
+App-private, non-backup storage contains only bounded metadata for approved
+desktops: local enrollment UUID, verified host identifier, display label and
+WSS locator. Local metadata cannot stand in for a secure pairing receipt or
+checked identity. No keys, invites, codes or grants are written to the index.
+All Sessions groups by source host and an individual desktop selection never
+retargets another desktop session. Observer data must arrive from that host's
+verified native owner. Revocation remains authoritative at that owner/server.
