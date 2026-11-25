@@ -136,3 +136,9 @@ Lxx 标题
 - **已证事实**：Codex 0.169.1 空 home 探针沿用了旧 `--ask-for-approval untrusted`，CLI 早退；测试执行成功不代表 canonical 准入通过。按该精确可执行文件 `--help` 改为 `on-request` 后，真实 Native 链才复现 `NATIVE_CANONICAL_UNAVAILABLE`，控制类别观测定位到未建模的终端模式。
 - **防再犯**：运行前核精确版本、哈希与当前参数；保留早退证据，不能把 fixture 参数错误记作产品 RED。无输入、空账户与 read-only sandbox 也不等于无网络。
 - **最小回归**：分别报告进程存活、scope 实际值、受拒控制类别和回收见证；禁止采任务正文。新增终端模式必须与成熟模拟器状态、epoch、投影和输入隔离一致，不能仅放行序列或用逐项编译掩盖整体能力缺口。
+
+### L11: Android versionCode 跨可复用工作流按文本传递
+
+- **现象**：RC4 的桌面三端构建和发布预检通过，但 GitHub 未创建 Android 签名任务。运行注释显示调用方在求值可复用工作流输入时拒绝了实际的 28004。此时没有待审记录，也未读取签名材料。
+- **防再犯**：手动 Release 和 Android 的两个入口统一用字符串传递；原发行版号检查仍限制为无前导零的正整数及既有上限。不要因父流程已经把值放入环境变量，就假定可复用工作流输入也已通过。
+- **证据**：[RC4 Release 运行注释](https://github.com/shawnwu2022/cc-desk/actions/runs/45633115193)；本地最小回归为 tests/scripts/releaseCombinedMobile.node.mjs，真正启动签名任务仍由新运行确认。

@@ -12,7 +12,7 @@ on:
       android_version_code:
         description: Monotonically increasing Android versionCode for a combined mobile RC (required for 0.28 RC)
         required: false
-        type: number
+        type: string
 
 permissions:
   contents: read
