@@ -251,7 +251,8 @@ pub fn status(token: i64) -> ObserverStatus {
 
 /// Consume once and check the original authenticated channel authority again.
 /// Nothing here acknowledges, sends, resubscribes, reconnects or grants input.
-pub fn take_authenticated_snapshot(token: i64) -> Option<Vec<Vec<u8>>> {
+#[cfg(target_os = "android")]
+fn take_authenticated_snapshot(token: i64) -> Option<Vec<Vec<u8>>> {
     let a = lookup(token)?;
     let mut phase = a.phase.lock().ok()?;
     if *a.stop.borrow() {
@@ -342,4 +343,75 @@ async fn observe(
     // Remove Java-visible data before waiting for both native transport owners.
     finish(&state, true);
     client.retire().await.is_ok()
+}
+// No control sequences or terminal input. This is an intentionally limited
+// semantic text representation of exactly one complete authenticated grid.
+pub fn observer_text(parts: &[Vec<u8>]) -> Option<String> {
+    use cc_desk_remote_record::projection::{self, Content, Role};
+    let mut original = None;
+    let mut cells = Vec::new();
+    let mut columns = 0usize;
+    let mut rows = 0usize;
+    for raw in parts {
+        let Content::SnapshotPart(part) = projection::decode(raw, 1).ok()?.content else {
+            return None;
+        };
+        if cells.len() != usize::from(part.start) {
+            return None;
+        }
+        let metadata = (&part.stamp, &part.state);
+        if let Some((stamp, state)) = &original {
+            if metadata != (stamp, state) {
+                return None;
+            }
+        } else {
+            columns = usize::from(part.state.columns);
+            rows = usize::from(part.state.rows);
+            if !(2..=240).contains(&columns) || !(1..=100).contains(&rows) {
+                return None;
+            }
+            original = Some((part.stamp, part.state));
+        }
+        if cells.len() + part.cells.len() > rows * columns {
+            return None;
+        }
+        cells.extend(part.cells);
+    }
+    if original.is_none() || cells.len() != rows * columns {
+        return None;
+    }
+    let mut output = String::with_capacity(cells.len() + rows);
+    for (i, cell) in cells.iter().enumerate() {
+        let column = i % columns;
+        if (cell.wrap_end && column != columns - 1)
+            || (cell.role == Role::WideLead
+                && (column == columns - 1
+                    || !cells.get(i + 1).is_some_and(|c| c.role == Role::WideSpacer)))
+            || (cell.role == Role::WideSpacer
+                && (column == 0 || cells[i - 1].role != Role::WideLead))
+            || (cell.role == Role::LeadingWideSpacer && column != columns - 1)
+        {
+            return None;
+        }
+        let hidden = cell.style.hidden;
+        let nonprinting = cell.scalar.is_control()
+            || matches!(cell.scalar,
+            '\u{061c}'|'\u{200b}'..='\u{200f}'|'\u{202a}'..='\u{202e}'|'\u{2060}'..='\u{206f}'|'\u{feff}');
+        if cell.role == Role::LeadingWideSpacer {
+            output.push(' ');
+        } else if cell.role != Role::WideSpacer {
+            if hidden || nonprinting {
+                output.push(' ');
+                if cell.role == Role::WideLead {
+                    output.push(' ');
+                }
+            } else {
+                output.push(cell.scalar);
+            }
+        }
+        if column == columns - 1 && i + 1 < cells.len() {
+            output.push('\n');
+        }
+    }
+    Some(output)
 }

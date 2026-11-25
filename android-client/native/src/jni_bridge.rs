@@ -1,8 +1,8 @@
-use crate::{cancel, status, take_authenticated_snapshot};
+use crate::{cancel, status};
 use jni::{
     JNIEnv,
     objects::JClass,
-    sys::{jint, jlong, jobjectArray},
+    sys::{jint, jlong},
 };
 use std::{
     panic::{AssertUnwindSafe, catch_unwind},
@@ -25,34 +25,6 @@ pub extern "system" fn Java_cn_ccdesk_android_NativeDesktopBackend_nativeCancelO
     token: jlong,
 ) {
     let _ = catch_unwind(|| cancel(token));
-}
-
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_cn_ccdesk_android_NativeDesktopBackend_nativeTakeObserverSnapshot(
-    mut env: JNIEnv<'_>,
-    _class: JClass<'_>,
-    token: jlong,
-) -> jobjectArray {
-    let result = catch_unwind(AssertUnwindSafe(|| -> jni::errors::Result<jobjectArray> {
-        let Some(parts) = take_authenticated_snapshot(token) else {
-            return Ok(ptr::null_mut());
-        };
-        let array =
-            env.new_object_array(parts.len() as i32, "[B", jni::objects::JObject::null())?;
-        for (index, part) in parts.iter().enumerate() {
-            let bytes = env.byte_array_from_slice(part)?;
-            env.set_object_array_element(&array, index as i32, &bytes)?;
-            env.delete_local_ref(bytes)?;
-        }
-        Ok(array.into_raw())
-    }));
-    match result {
-        Ok(Ok(value)) => value,
-        _ => {
-            let _ = catch_unwind(|| cancel(token));
-            ptr::null_mut()
-        }
-    }
 }
 
 #[unsafe(no_mangle)]
@@ -180,4 +152,104 @@ pub extern "system" fn Java_cn_ccdesk_android_NativeDesktopBackend_nativeStartPa
     .ok()
     .flatten()
     .unwrap_or(0)
+}
+
+/// The Java caller runs this on its Keystore/disk worker, never on the main
+/// Activity thread. Only the public reverified desktop identity is returned.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_cn_ccdesk_android_NativeDesktopBackend_nativeReadPairedHostId(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    facade: jni::objects::JObject<'_>,
+    local_id: jni::objects::JByteArray<'_>,
+    origin: jni::objects::JString<'_>,
+    endpoint: jni::objects::JByteArray<'_>,
+    relay: jni::objects::JByteArray<'_>,
+    approval: jni::objects::JByteArray<'_>,
+) -> jni::sys::jstring {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        use cc_desk_remote_record::appbind::CanonicalOrigin;
+        use jni::objects::{JByteArray, JObject, JValue};
+        use std::time::{SystemTime, UNIX_EPOCH};
+        if facade.is_null() || origin.is_null() {
+            return None;
+        }
+        let local = exact_bytes::<16>(&env, &local_id)?;
+        if local == [0; 16] {
+            return None;
+        }
+        let endpoint = exact_bytes(&env, &endpoint)?;
+        let relay = exact_bytes(&env, &relay)?;
+        let approval = exact_bytes(&env, &approval)?;
+        let origin_text: String = env.get_string(&origin).ok()?.into();
+        let origin = CanonicalOrigin::trusted(&origin_text).ok()?;
+        if origin.as_str() != origin_text {
+            return None;
+        }
+        let local_hex: String = local.iter().map(|x| format!("{x:02x}")).collect();
+        let arg = JObject::from(env.new_string(local_hex).ok()?);
+        let raw = env
+            .call_method(
+                &facade,
+                "readPairingRecord",
+                "(Ljava/lang/String;)[B",
+                &[JValue::Object(&arg)],
+            )
+            .ok()?
+            .l()
+            .ok()?;
+        if raw.is_null() {
+            return None;
+        }
+        let raw = JByteArray::from(raw);
+        let n = env.get_array_length(&raw).ok()?;
+        if !(1..=9216).contains(&n) {
+            return None;
+        }
+        let record = zeroize::Zeroizing::new(env.convert_byte_array(raw).ok()?);
+        let now = u64::try_from(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .ok()?
+                .as_millis(),
+        )
+        .ok()?;
+        let host = crate::enrollment::restore_stored_desktop(
+            &record, origin, endpoint, relay, approval, now,
+        )
+        .ok()?;
+        let hex: String = host.iter().map(|x| format!("{x:02x}")).collect();
+        Some(env.new_string(hex).ok()?.into_raw())
+    }))
+    .ok()
+    .flatten();
+    if env.exception_check().unwrap_or(false) {
+        let _ = env.exception_clear();
+    }
+    result.unwrap_or_else(ptr::null_mut)
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_cn_ccdesk_android_NativeDesktopBackend_nativeTakeObserverText(
+    env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    token: jlong,
+) -> jni::sys::jstring {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let parts = crate::take_authenticated_snapshot(token)?;
+        let text = match crate::observer_text(&parts) {
+            Some(text) => text,
+            None => {
+                crate::cancel(token);
+                return None;
+            }
+        };
+        if crate::status(token) != crate::ObserverStatus::Authenticated {
+            return None;
+        }
+        Some(env.new_string(text).ok()?.into_raw())
+    }))
+    .ok()
+    .flatten();
+    result.unwrap_or_else(ptr::null_mut)
 }
