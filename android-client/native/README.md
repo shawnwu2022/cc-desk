@@ -1,11 +1,14 @@
 # Android native Observer transport
 
-This is the native transport owner, not an enrollment implementation or an APK
-runtime. Only the backend's current authenticated enrollment owner may hand
-`start_verified_observer` a `NativeProfile`. Do not assemble it from a QR payload,
-displayed metadata, code redemption, cached labels, or an admission result.
-The Android app must stay unavailable until authenticated durable enrollment,
-the Keystore signer implementations and the Java backend are wired and verified.
+This is the native transport owner and signed approval verifier, not an
+enrollment exchange, a durable store, or an APK runtime. A backend submits its
+current attempt's exact Phone proof and desktop approval to `verify_approval`.
+Use the independent Host commitment from the desktop's QR or full manual
+pairing string, not a pin returned by the Relay. Use only the current local
+Keystore-owned public roles. Commit the verified record transactionally and
+consume its typed receipt at `start_verified_observer`. The Android app must
+stay unavailable until the enrollment exchange, replay-safe durable store,
+Keystore signer implementations and the Java backend are wired and verified.
 
 The authenticated input includes an independently pinned desktop TLS key,
 owner-approved exact Observer session scope, canonical Relay and client/host key

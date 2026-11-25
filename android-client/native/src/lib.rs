@@ -17,6 +17,8 @@ use tokio::sync::watch;
 #[cfg(target_os = "android")]
 mod jni_bridge;
 
+pub mod enrollment;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ObserverHandle(i64);
 
@@ -80,7 +82,20 @@ static SERVICE: Mutex<Service> = Mutex::new(Service {
 /// Backend handoff only. This must never be invoked on a profile assembled from
 /// unchecked app metadata. The signers/host pin must come from the approved
 /// native owner and use the Keystore; no signer or TLS fallback is supplied.
-pub fn start_verified_observer(profile: NativeProfile) -> Result<ObserverHandle, StartError> {
+pub fn start_verified_observer(
+    approval: enrollment::VerifiedEnrollment,
+    address: std::net::SocketAddr,
+    keys: enrollment::NativeKeystoreBindings,
+    state: cc_desk_remote_security::ClientGrantState,
+    now_unix_ms: u64,
+) -> Result<ObserverHandle, StartError> {
+    let profile = approval
+        .into_profile(address, keys, state, now_unix_ms)
+        .map_err(|_| StartError::UnapprovedProfile)?;
+    start_profile(profile)
+}
+
+fn start_profile(profile: NativeProfile) -> Result<ObserverHandle, StartError> {
     if !matches!(profile.grant.role, ClientRole::Observer)
         || !matches!(profile.relay_mode, RelayMode::RendezvousV1)
         || !matches!(profile.relay.binding(), (key, RelayRole::Phone) if key != [0; 16])

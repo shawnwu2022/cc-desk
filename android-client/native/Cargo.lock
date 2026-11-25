@@ -43,9 +43,15 @@ dependencies = [
 name = "cc-desk-android-native"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "cc-desk-remote-client",
+ "cc-desk-remote-record",
+ "cc-desk-remote-security",
  "cc-desk-remote-transport",
  "jni",
+ "ring",
+ "serde",
+ "serde_json",
  "tokio",
 ]
 
