@@ -62,6 +62,21 @@ enum Action {
         ticket: String,
         target: DeviceTarget,
     },
+    StartSharing {
+        ticket: String,
+        target: DeviceTarget,
+        runs: Vec<ShareRun>,
+    },
+    StopSharing {
+        ticket: String,
+    },
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ShareRun {
+    run_id: String,
+    generation: u32,
+    label: String,
 }
 #[derive(Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -235,6 +250,36 @@ pub(crate) async fn remote_native_observer_setup(
                 Operation::Approve(target),
             )
             .await
+        }
+        Action::StartSharing {
+            ticket,
+            target,
+            runs,
+        } => {
+            if runs.is_empty() || runs.len() > 4 {
+                return Err(error("REMOTE_PAIRING_LOCKED"));
+            }
+            let owner = owner_service.get(&ticket, &caller, &binding)?;
+            let targets = runs
+                .into_iter()
+                .map(|r| {
+                    Ok(super::shares::Target {
+                        run: runtime.admit_owner_share_run(&caller, r.run_id, r.generation)?,
+                        label: r.label,
+                    })
+                })
+                .collect::<Result<Vec<_>, SafeError>>()?;
+            return owner
+                .start_sharing(target, targets, app, &window)
+                .await
+                .map(|snapshot| Reply::Snapshot { snapshot });
+        }
+        Action::StopSharing { ticket } => {
+            let owner = owner_service.get(&ticket, &caller, &binding)?;
+            return owner
+                .stop_sharing()
+                .await
+                .map(|snapshot| Reply::Snapshot { snapshot });
         }
         Action::Revoke { ticket, target } => {
             return run_owner(

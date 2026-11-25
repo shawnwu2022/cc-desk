@@ -20,7 +20,7 @@ pub(crate) enum ControlFailure {
     Relay(EnrollmentError),
     RetirementUnknown,
 }
-type Result<T> = std::result::Result<T, ControlFailure>;
+pub(super) type Result<T> = std::result::Result<T, ControlFailure>;
 
 pub(crate) async fn verify_configured_host(
     approval: &SetupApproval,
@@ -83,7 +83,7 @@ pub(crate) async fn sign_membership(
     )
     .await
 }
-async fn on_worker<T: Send + 'static>(
+pub(super) async fn on_worker<T: Send + 'static>(
     approved: ApprovedSetup,
     operation: impl FnOnce(
             &tokio::runtime::Handle,
@@ -152,4 +152,83 @@ impl From<Error> for ControlFailure {
     fn from(_: Error) -> Self {
         Self::Locked
     }
+}
+
+pub(crate) async fn share_request(
+    approved: ApprovedSetup,
+    address: SocketAddr,
+    command: cc_desk_remote_transport::wss::HostShareCommand,
+) -> Result<cc_desk_remote_transport::wss::HostShareResponse> {
+    on_worker(
+        approved,
+        move |exec, custody, mut owners, ready, expected, signing| {
+            ready
+                .consume(custody, expected)
+                .map_err(|_| ControlFailure::Locked)?;
+            let end = signing.end().min(Instant::now() + Duration::from_secs(5));
+            owners
+                .stages
+                .begin_registration(signing, end)
+                .map_err(|_| ControlFailure::Locked)?;
+            exec.block_on(cc_desk_remote_transport::wss::request_host_shares(
+                expected.origin.as_str(),
+                address,
+                end.saturating_duration_since(Instant::now()),
+                &owners.relay,
+                command,
+            ))
+            .map_err(ControlFailure::Relay)
+        },
+    )
+    .await
+}
+pub(crate) async fn sign_catalog(
+    approved: ApprovedSetup,
+    approval: Arc<super::shares::Approval>,
+) -> Result<Option<super::shares::Live>> {
+    on_worker(
+        approved,
+        move |exec, custody, _owners, ready, expected, _scope| {
+            let key = custody
+                .observer_endpoint_handle(ready, expected)
+                .map_err(|_| ControlFailure::Locked)?;
+            exec.block_on(approval.sign(&key))
+                .map_err(ControlFailure::from)
+        },
+    )
+    .await
+}
+pub(crate) async fn sign_ready(
+    approved: ApprovedSetup,
+    catalog: Arc<super::shares::Live>,
+    selected: cc_desk_remote_transport::wss::ShareSelectionKey,
+) -> Result<String> {
+    on_worker(
+        approved,
+        move |exec, custody, _owners, ready, expected, _scope| {
+            let key = custody
+                .observer_endpoint_handle(ready, expected)
+                .map_err(|_| ControlFailure::Locked)?;
+            exec.block_on(catalog.ready(&key, &selected))
+                .map_err(ControlFailure::from)
+        },
+    )
+    .await
+}
+
+pub(crate) async fn resign_catalog(
+    approved: ApprovedSetup,
+    old: Arc<super::shares::Live>,
+) -> Result<super::shares::Live> {
+    on_worker(
+        approved,
+        move |exec, custody, _owners, ready, expected, _scope| {
+            let key = custody
+                .observer_endpoint_handle(ready, expected)
+                .map_err(|_| ControlFailure::Locked)?;
+            exec.block_on(old.rotate(&key))
+                .map_err(ControlFailure::from)
+        },
+    )
+    .await
 }

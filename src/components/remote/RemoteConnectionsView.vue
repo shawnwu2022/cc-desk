@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, inject, onMounted, onUnmounted, ref, shallowRef } from 'vue'
+import { useNativeTabsStore } from '@/stores/nativeTabs'
 import { nativeObserverSetup } from '@/api/tauri'
 import { useI18n } from 'vue-i18n'
 import AppButton from '@/components/ui/AppButton.vue'
@@ -9,6 +10,17 @@ import RemoteTerminalPanel from '@/components/settings/RemoteTerminalPanel.vue'
 import { DESKTOP_PAIRING_PORT, type ApprovedDevice, type DesktopPairingPort, type PairingSnapshot, type PendingPairing, type SetupResult, type VerifiedPairing } from './desktopPairingPort'
 
 const { t } = useI18n()
+const tabs = useNativeTabsStore()
+const selectedShares = ref<string[]>([])
+const shareChoices = computed(() => [...tabs.tabs.values()]
+  .filter(tab => tab.status === 'running' && tab.runId && tab.generation > 0)
+  .map((tab, index) => ({ id: tab.tabId + ':' + tab.generation, title: tab.title, runId: tab.runId, generation: tab.generation,
+    label: ({ codex: 'Codex', claude: 'Claude', opencode: 'OpenCode' } as Record<string, string>)[tab.cli] + ' ' + (index + 1) })))
+function shareWith(device: ApprovedDevice) {
+  const selected = selectedShares.value.map(id => shareChoices.value.find(choice => choice.id === id))
+  if (selected.length === 0 || selected.length > 4 || selected.some(choice => !choice)) return
+  void perform(handle => handle.share!(device, selected.map(choice => ({ runId: choice!.runId, generation: choice!.generation, label: choice!.label }))))
+}
 const injectedPort = inject(DESKTOP_PAIRING_PORT, null)
 const port = shallowRef<DesktopPairingPort | null>(injectedPort)
 async function initializeNativeSetup() {
@@ -37,6 +49,7 @@ function boundNativePairing(ticket: string, origin: string): VerifiedPairing {
     if (reply.kind !== 'snapshot' || !reply.snapshot) throw new Error('NATIVE_OBSERVER_STATE_UNCONFIRMED')
     return reply.snapshot
   }
+  const target = ({ tunnel, phoneId, phoneRelayPublicKeySec1, phoneEndpointSpki, endpointBinding }: ApprovedDevice) => ({ tunnel, phoneId, phoneRelayPublicKeySec1, phoneEndpointSpki, endpointBinding })
   return {
     endpoint: origin,
     current: () => request('current'),
@@ -44,8 +57,9 @@ function boundNativePairing(ticket: string, origin: string): VerifiedPairing {
     cancel: inviteId => request('cancel', { inviteId }),
     approve: (target, scopeChoiceId) => request('approve', { target, scopeChoiceId }),
     reject: target => request('reject', { target }),
-    revoke: ({ tunnel, phoneId, phoneRelayPublicKeySec1, phoneEndpointSpki, endpointBinding }: ApprovedDevice) =>
-      request('revoke', { target: { tunnel, phoneId, phoneRelayPublicKeySec1, phoneEndpointSpki, endpointBinding } }),
+    revoke: device => request('revoke', { target: target(device) }),
+    share: (device, runs) => request('startSharing', { target: target(device), runs }),
+    stopSharing: () => request('stopSharing'),
   }
 }
 const endpoint = ref('')
@@ -249,19 +263,31 @@ function cancel() {
         </ul>
         </template>
         <h3>{{ t('remotePairingDevices') }}</h3>
+        <fieldset v-if="verified?.share && snapshot.devices.some(device => !device.revocationPending)">
+          <legend>{{ t('remotePairingShareChoose') }}</legend>
+          <p v-if="shareChoices.length === 0">{{ t('remotePairingShareNoRuns') }}</p>
+          <label v-for="choice in shareChoices" :key="choice.id" class="share-choice">
+            <input v-model="selectedShares" type="checkbox" :value="choice.id" :disabled="busy || (!selectedShares.includes(choice.id) && selectedShares.length >= 4)" />
+            {{ choice.title }} ({{ choice.label }})
+          </label>
+        </fieldset>
         <p v-if="snapshot.devices.length === 0">{{ t('remotePairingEmpty') }}</p>
         <ul v-else class="devices">
           <li v-for="device in snapshot.devices" :key="device.tunnel">
             <p>{{ t('remotePairingPhone') }} {{ device.phoneId.slice(-6) }}</p>
             <p v-if="device.revocationPending" role="status">{{ t('remotePairingRevokePending') }}</p>
-            <p v-else-if="device.sharing === 'none'">{{ t('remotePairingNoScope') }}</p>
+            <p v-else>{{ t(device.sharing === 'active' ? 'remotePairingShareActive' : device.sharing === 'offered' ? 'remotePairingShareOffered' : device.sharing === 'unknown' ? 'remotePairingShareUnknown' : 'remotePairingNoScope') }}</p>
             <details><summary>{{ t('remotePairingDetails') }}</summary><dl>
               <dt>{{ t('remotePairingPhoneId') }}</dt><dd>{{ device.phoneId }}</dd>
               <dt>{{ t('remotePairingRelayKey') }}</dt><dd><code>{{ device.phoneRelayPublicKeySec1 }}</code></dd>
               <dt>{{ t('remotePairingEndpointKey') }}</dt><dd><code>{{ device.phoneEndpointSpki }}</code></dd>
               <dt>{{ t('remotePairingBinding') }}</dt><dd><code>{{ device.endpointBinding }}</code></dd>
             </dl></details>
-            <AppButton variant="danger" :disabled="busy" @click="perform(handle => handle.revoke(device))">{{ t('remotePairingRevoke') }}</AppButton>
+            <div class="actions">
+              <AppButton v-if="verified?.share && device.sharing === 'none' && !device.revocationPending" :disabled="busy || selectedShares.length === 0" @click="shareWith(device)">{{ t('remotePairingShareStart') }}</AppButton>
+              <AppButton v-if="verified?.stopSharing && device.sharing !== 'none'" :disabled="busy" @click="perform(handle => handle.stopSharing!())">{{ t('remotePairingShareStop') }}</AppButton>
+              <AppButton variant="danger" :disabled="busy" @click="perform(handle => handle.revoke(device))">{{ t('remotePairingRevoke') }}</AppButton>
+            </div>
           </li>
         </ul>
       </template>
@@ -275,6 +301,7 @@ h1, h2, h3, p, dl, dd { margin: 0; }
 h1 { font-size: 20px; color: var(--text-primary); }
 p, dl { overflow-wrap: anywhere; color: var(--text-secondary); }
 .pairing { display: flex; flex-direction: column; gap: 12px; width: min(100%, 720px); }
+.share-choice { display: block; margin: 4px 0; }
 .actions { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
 .pairing-qr { width: min(100%, 240px); aspect-ratio: 1; }
 .devices { display: grid; gap: 12px; margin: 0; padding: 0; list-style: none; }

@@ -38,10 +38,12 @@ impl Document {
         }
     }
 }
+#[derive(Clone)]
 pub(crate) struct DeviceSummary {
     pub(crate) request_id: [u8; 16],
     pub(crate) phone_relay_public_key_sec1: [u8; 65],
     pub(crate) phone_endpoint_spki: [u8; 91],
+    pub(crate) phone_grant_spki: [u8; 91],
     pub(crate) tunnel: [u8; 16],
     pub(crate) phone_id: [u8; 16],
     pub(crate) endpoint_binding: [u8; 32],
@@ -192,6 +194,8 @@ impl Store {
                 phone_relay_public_key_sec1: decode(&receipt.phone_relay_public_key_sec1)
                     .map_err(|_| StoreError::Invalid)?,
                 phone_endpoint_spki: decode(&receipt.phone_endpoint_spki)
+                    .map_err(|_| StoreError::Invalid)?,
+                phone_grant_spki: decode(&receipt.phone_grant_spki)
                     .map_err(|_| StoreError::Invalid)?,
                 tunnel,
                 phone_id: decode(&receipt.phone_id).map_err(|_| StoreError::Invalid)?,

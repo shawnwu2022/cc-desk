@@ -28,9 +28,13 @@ use std::{
 use tauri::{AppHandle, Window};
 use tokio::sync::Mutex;
 
+#[path = "remote_native_observer_enrollment_sharing_owner.rs"]
+mod shares_owner;
+
 #[derive(Default)]
 pub(crate) struct OwnerService {
     active: parking_lot::Mutex<Option<Arc<Owner>>>,
+    install_lock: Mutex<()>,
 }
 pub(crate) struct Owner {
     ticket: String,
@@ -42,6 +46,7 @@ pub(crate) struct Owner {
     deadline: Instant,
     state: Mutex<Cache>,
     store: Arc<Store>,
+    sharing: Mutex<Option<shares_owner::Task>>,
 }
 #[derive(Default)]
 struct Cache {
@@ -136,6 +141,12 @@ impl OwnerService {
         .map_err(|_| locked())?
         .map_err(|_| locked())?;
         binding.check_admitted(&caller)?;
+        let _install = self.install_lock.lock().await;
+        let previous = self.active.lock().clone();
+        if let Some(previous) = previous {
+            previous.stop_share(None).await?;
+        }
+        binding.check_admitted(&caller)?;
         let ticket = uuid::Uuid::new_v4().to_string();
         let endpoint = profile.endpoint().as_str().to_owned();
         let owner = Arc::new(Owner {
@@ -148,6 +159,7 @@ impl OwnerService {
             deadline: Instant::now() + Duration::from_secs(720),
             state: Mutex::new(Cache::default()),
             store: Arc::new(store),
+            sharing: Mutex::new(None),
         });
         if let Some(old) = self.active.lock().replace(owner) {
             old.lifetime.revoke();
@@ -325,6 +337,12 @@ impl Owner {
         if invite.is_none() {
             cache.invite = None;
         }
+        let sharing = self
+            .sharing
+            .lock()
+            .await
+            .as_ref()
+            .map(|t| (t.tunnel, t.phase()));
         let store = self.store.clone();
         let devices = tokio::task::spawn_blocking(move || -> Result<Vec<Device>, SafeError> {
             let devices = store.list_locked().map_err(|_| locked())?;
@@ -346,7 +364,15 @@ impl Owner {
                         .map_err(|_| uncertain())?;
                 }
                 result.push(Device {
-                    sharing: "none",
+                    sharing: match sharing
+                        .filter(|(id, _)| *id == d.tunnel)
+                        .map(|(_, phase)| phase)
+                    {
+                        Some(1) => "offered",
+                        Some(2) => "active",
+                        Some(3) => "unknown",
+                        _ => "none",
+                    },
                     revocation_pending: d.state == DeviceState::Revoked,
                     identity: DeviceTarget {
                         tunnel: hex(&d.tunnel),
@@ -544,6 +570,7 @@ impl Owner {
                         .map_err(|_| uncertain())?
                         .map_err(|_| uncertain())?;
                     if let Some(tunnel) = retired {
+                        self.stop_share(Some(tunnel)).await?;
                         if !matches!(self.wire(Command::Revoke { tunnel }).await?, Response::Revoked { tunnel:id } if id == hex(&tunnel))
                         {
                             return Err(uncertain());
