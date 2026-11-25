@@ -2,7 +2,6 @@ package cn.ccdesk.android;
 
 import android.Manifest;
 import android.app.Activity;
-import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.hardware.Camera;
 import android.os.Bundle;
@@ -20,7 +19,8 @@ import java.util.concurrent.Executors;
 
 @SuppressWarnings("deprecation")
 public final class ScanActivity extends Activity implements SurfaceHolder.Callback {
-    static final String RESULT_INVITE = "cn.ccdesk.android.SCAN_RESULT";
+    static final String SCAN_OWNER = "cn.ccdesk.android.SCAN_OWNER";
+    private java.util.UUID owner;
     private final ExecutorService decoder = Executors.newSingleThreadExecutor();
     private Camera camera;
     private SurfaceHolder surface;
@@ -31,6 +31,8 @@ public final class ScanActivity extends Activity implements SurfaceHolder.Callba
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE | WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        try { owner = java.util.UUID.fromString(getIntent().getStringExtra(SCAN_OWNER)); }
+        catch (IllegalArgumentException | NullPointerException e) { finish(); return; }
         SurfaceView view = new SurfaceView(this);
         view.getHolder().addCallback(this);
         setContentView(view);
@@ -120,23 +122,27 @@ public final class ScanActivity extends Activity implements SurfaceHolder.Callba
             if (bytes == null || bytes.length < width * height) { next(request, width, height); return; }
             byte[] y = java.util.Arrays.copyOf(bytes, width * height);
             decoder.execute(() -> {
-                String value = null;
+                PairingInvite value = null;
                 try {
                     PlanarYUVLuminanceSource luma = new PlanarYUVLuminanceSource(y, width, height,
                         0, 0, width, height, false);
                     String result = new QRCodeReader().decode(new BinaryBitmap(new HybridBinarizer(luma))).getText();
-                    if (result != null && !result.isEmpty() && result.length() <= 2048) value = result;
-                } catch (ReaderException ignored) {
+                    value = PairingInvite.fromQr(result);
+                } catch (ReaderException | IllegalArgumentException ignored) {
                     // 非二维码帧不产生提示或日志。
                 } finally {
                     java.util.Arrays.fill(y, (byte) 0);
                 }
-                final String qr = value;
+                final PairingInvite invite = value;
                 runOnUiThread(() -> {
-                    if (!resumed || request != epoch || isFinishing()) return;
-                    if (qr == null) next(request, width, height);
+                    if (!resumed || request != epoch || isFinishing()) {
+                        if (invite != null) invite.close();
+                        return;
+                    }
+                    if (invite == null) next(request, width, height);
                     else {
-                        setResult(RESULT_OK, new Intent().putExtra(RESULT_INVITE, qr));
+                        if (ScanMailbox.complete(owner, invite)) setResult(RESULT_OK);
+                        else invite.close();
                         stop();
                         finish();
                     }

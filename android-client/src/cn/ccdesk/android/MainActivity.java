@@ -13,7 +13,6 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import java.io.IOException;
 import java.net.URI;
-import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 
@@ -22,6 +21,8 @@ public final class MainActivity extends Activity {
     private DesktopStore store;
     private DesktopBackend backend;
     private UUID selected;
+    private UUID scanOwner;
+    private PairingInvite pendingConfirmation;
     private long enrollmentEpoch;
     private boolean active;
 
@@ -52,6 +53,8 @@ public final class MainActivity extends Activity {
 
     @Override public void onDestroy() {
         active = false;
+        ScanMailbox.clear(scanOwner);
+        if (pendingConfirmation != null) pendingConfirmation.close();
         enrollmentEpoch++;
         if (backend != null) backend.close();
         super.onDestroy();
@@ -91,7 +94,7 @@ public final class MainActivity extends Activity {
             text("本地桌面索引不可用。未建立任何连接。", 16);
             return;
         }
-        Button scan = button("扫码添加电脑", () -> startActivityForResult(new Intent(this, ScanActivity.class), 401));
+        Button scan = button("扫码添加电脑", this::scanPairing);
         scan.setEnabled(backend != null);
         Button manual = button("改用配对码", this::manualPairing);
         manual.setEnabled(backend != null);
@@ -131,7 +134,7 @@ public final class MainActivity extends Activity {
         EditText code = new EditText(this);
         code.setSingleLine();
         code.setSaveEnabled(false);
-        code.setHint("桌面显示的一次性配对码");
+        code.setHint("粘贴电脑显示的完整配对码");
         code.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
         form.addView(relay);
         form.addView(code);
@@ -144,30 +147,59 @@ public final class MainActivity extends Activity {
             final URI locator;
             try { locator = DesktopBackend.Desktop.checkedRelay(relay.getText().toString().trim()); }
             catch (IllegalArgumentException e) { relay.setError("请输入不含凭据的 WSS 地址"); return; }
-            char[] material = canonicalCode(code.getText());
-            if (material == null) { code.setError("请输入桌面显示的 16 位配对码"); return; }
+            final PairingInvite invite;
+            try { invite = PairingInvite.fromPasted(locator, code.getText()); }
+            catch (IllegalArgumentException e) { code.setError("请粘贴电脑显示的完整配对码"); return; }
             dialog.dismiss();
-            redeem(locator, material);
+            confirm(invite);
         });
+    }
+
+    private void scanPairing() {
+        if (backend == null) return;
+        scanOwner = ScanMailbox.start();
+        startActivityForResult(new Intent(this, ScanActivity.class)
+            .putExtra(ScanActivity.SCAN_OWNER, scanOwner.toString()), 401);
     }
 
     @Override protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
-        if (!active || backend == null || request != 401 || result != RESULT_OK || data == null)
-            return;
-        String invite = data.getStringExtra(ScanActivity.RESULT_INVITE);
-        data.removeExtra(ScanActivity.RESULT_INVITE);
-        if (invite == null || invite.isEmpty() || invite.length() > 2048) return;
-        redeem(null, invite.toCharArray());
+        if (request != 401) return;
+        PairingInvite invite = ScanMailbox.take(scanOwner);
+        scanOwner = null;
+        if (invite == null) return;
+        if (!active || backend == null || result != RESULT_OK) { invite.close(); return; }
+        confirm(invite);
     }
 
-    private void redeem(URI locator, char[] material) {
+    private void confirm(PairingInvite invite) {
+        if (pendingConfirmation != null) pendingConfirmation.close();
+        pendingConfirmation = invite;
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("确认添加这台电脑")
+            .setMessage("请核对电脑显示的指纹：" + invite.hostFingerprintPrefix +
+                        "\n中继：" + invite.relay + "\n确认后，还要在电脑上点同意。")
+            .setNegativeButton("取消", null)
+            .setPositiveButton("请求电脑批准", (unused, button) -> redeem(invite)).create();
+        dialog.setOnDismissListener(unused -> {
+            invite.close();
+            if (pendingConfirmation == invite) pendingConfirmation = null;
+        });
+        dialog.setOnCancelListener(unused -> invite.close());
+        dialog.show();
+        dialog.getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+    }
+
+    private void redeem(PairingInvite invite) {
         long epoch = ++enrollmentEpoch;
         DesktopBackend.EnrollmentCallback completion = new DesktopBackend.EnrollmentCallback() {
             @Override public void approved(DesktopBackend.Desktop desktop) {
                 runOnUiThread(() -> {
                     if (!active || epoch != enrollmentEpoch) return;
                     enrollmentEpoch++;
+                    if (!invite.matchesHost(desktop.hostId) || !invite.relay.equals(desktop.relay)) {
+                        text("电脑身份不一致，请重新扫码。", 16);
+                        return;
+                    }
                     try { store.addApproved(desktop); select(desktop.localId); }
                     catch (IOException e) { text("批准结果未保存，未显示为已配对。", 16); }
                 });
@@ -176,34 +208,8 @@ public final class MainActivity extends Activity {
                 runOnUiThread(() -> { if (active && epoch == enrollmentEpoch) text(label(state), 16); });
             }
         };
-        try {
-            if (locator == null) backend.redeemScannedInvite(material, identities, completion);
-            else backend.redeemCode(locator, material, identities, completion);
-        } finally {
-            Arrays.fill(material, (char) 0);
-        }
-    }
-
-    // Relay wire accepts only canonical Crockford symbols; UI permits separators
-    // and ASCII lowercase without mapping lookalike symbols to other codes.
-    private static char[] canonicalCode(CharSequence source) {
-        if (source.length() > 64) return null;
-        final String alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-        char[] code = new char[16];
-        int size = 0;
-        for (int i = 0; i < source.length(); i++) {
-            char c = source.charAt(i);
-            if (c == ' ' || c == '-') continue;
-            if (c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A');
-            if (size == code.length || alphabet.indexOf(c) < 0) {
-                Arrays.fill(code, (char) 0);
-                return null;
-            }
-            code[size++] = c;
-        }
-        if (size == code.length) return code;
-        Arrays.fill(code, (char) 0);
-        return null;
+        try { backend.redeemInvite(invite, identities, completion); }
+        finally { invite.close(); }
     }
 
     private String label(DesktopBackend.State state) {

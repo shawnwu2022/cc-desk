@@ -56,11 +56,10 @@ interface DesktopBackend {
         void approved(Desktop desktop);
         void state(State state);
     }
-    // copy code synchronously; the Activity zeroizes the caller buffer on return.
-    // Both methods must verify Relay WebPKI and bind desktop identity before approval.
-    void redeemCode(URI candidateRelayToVerify, char[] oneTimeCode, IdentityProvider keys,
-                    EnrollmentCallback callback);
-    void redeemScannedInvite(char[] rawInvite, IdentityProvider keys, EnrollmentCallback callback);
+    // Copy only the needed code synchronously; caller zeroizes its invite after return.
+    // Verify WSS/WebPKI, the phone-bound desktop signature and exact expected Host
+    // before persisting a native receipt or reporting approved; never trust UI data.
+    void redeemInvite(PairingInvite invite, IdentityProvider keys, EnrollmentCallback callback);
     State state(Desktop desktop);
     List<Session> observerSessions(Desktop desktop);
     void close();

@@ -82,3 +82,19 @@ checked identity. No keys, invites, codes or grants are written to the index.
 All Sessions groups by source host and an individual desktop selection never
 retargets another desktop session. Observer data must arrive from that host's
 verified native owner. Revocation remains authoritative at that owner/server.
+
+## Shared invitation input
+
+Accept only the agreed shared v1 input: bounded QR JSON with version, relayOrigin,
+code and hostEndpointId, or manual CCDESK1-<16 canonical Crockford symbols>-
+<20 Crockford symbols of the first 100 bits of Host endpoint ID> with a WSS
+locator. QR rejects unknown or repeated fields; manual requires the complete
+paste. WSS parsing does not attest the endpoint. The confirmation screen displays
+only the proposed fingerprint and Relay locator, not the code; desktop approval
+still applies. Android's typed native backend must authenticate the exact signed
+phone/desktop bindings and durable receipt before emitting its approval callback.
+Recheck host and origin before showing approved metadata. No keys, invitation or
+pairing code are stored in preferences, saved Activity state, Activity intents
+or logs. The scanner sends only an opaque request owner ID across Activities;
+the bounded invitation is transferred once through a process-local mailbox,
+closed on cancellation/replacement, and its mutable code array is overwritten.
