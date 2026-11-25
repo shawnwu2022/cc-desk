@@ -54,3 +54,21 @@ pub extern "system" fn Java_cn_ccdesk_android_NativeDesktopBackend_nativeTakeObs
         }
     }
 }
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_cn_ccdesk_android_NativeKeystoreBridge_nativeCompleteApproval(
+    env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    request: jlong,
+    raw: jni::objects::JByteArray<'_>,
+) {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if raw.is_null() || env.get_array_length(&raw).ok() != Some(64) {
+            return None;
+        }
+        env.convert_byte_array(raw).ok()?.try_into().ok()
+    }))
+    .ok()
+    .flatten();
+    let _ = catch_unwind(|| crate::keystore::complete(request, result));
+}

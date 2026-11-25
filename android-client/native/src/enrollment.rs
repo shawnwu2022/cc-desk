@@ -13,7 +13,7 @@ use cc_desk_remote_security::{
 };
 use cc_desk_remote_transport::wss::{RelayAdmissionIdentity, RelayMode, RelayRole, RelaySigner};
 use ring::{digest, signature};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 const HOST_DOMAIN: &[u8] = b"cc-desk.native-pairing.host.v1\0";
@@ -52,6 +52,7 @@ pub struct EnrollmentAttempt {
     pub code_sha256: [u8; 32],
     pub invite_id: [u8; 16],
     pub request_id: [u8; 16],
+    pub relay_tunnel: [u8; 16],
     pub phone_id: [u8; 16],
     pub phone_relay_key: [u8; 65],
     pub phone_endpoint_spki: [u8; 91],
@@ -64,8 +65,13 @@ pub struct EnrollmentAttempt {
 pub struct VerifiedEnrollment {
     host_endpoint: P256Spki,
     phone_grant: P256Spki,
+    phone_endpoint_spki: [u8; 91],
+    code_sha256: [u8; 32],
+    phone_outer: String,
+    host_outer: String,
+    verified_unix_ms: u64,
     origin: CanonicalOrigin,
-    scope: SessionScope,
+    scope: Option<SessionScope>,
     metadata: VerifiedMetadata,
 }
 
@@ -90,8 +96,8 @@ impl VerifiedEnrollment {
     pub fn origin(&self) -> &CanonicalOrigin {
         &self.origin
     }
-    pub fn scope(&self) -> &SessionScope {
-        &self.scope
+    pub fn scope(&self) -> Option<&SessionScope> {
+        self.scope.as_ref()
     }
     pub fn metadata(&self) -> &VerifiedMetadata {
         &self.metadata
@@ -135,14 +141,21 @@ struct Host {
     host_endpoint_spki: String,
     issuer_spki: String,
     principal: String,
-    session: String,
-    run: String,
-    generation: String,
+    #[serde(default, deserialize_with = "present_string")]
+    session: Option<String>,
+    #[serde(default, deserialize_with = "present_string")]
+    run: Option<String>,
+    #[serde(default, deserialize_with = "present_string")]
+    generation: Option<String>,
     host_key_epoch: String,
     client_key_epoch: String,
     policy_epoch: String,
     issuer_epoch: String,
     expires_unix_ms: String,
+}
+
+fn present_string<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    String::deserialize(d).map(Some)
 }
 
 fn nonzero<const N: usize>(value: [u8; N]) -> Result<[u8; N], InvalidEnrollment> {
@@ -272,12 +285,14 @@ pub fn verify_approval(
         &host_sig,
     )?;
     let principal = lower_hex::<32>(&response.principal)?;
+    let tunnel = lower_hex::<16>(&response.tunnel)?;
     let expires_unix_ms = nonzero_decimal(&response.expires_unix_ms)?;
     if response.version != 1
         || response.role != "Observer"
         || response.relay_origin != attempt.origin
         || lower_hex::<16>(&response.invite_id)? != attempt.invite_id
         || lower_hex::<16>(&response.request_id)? != attempt.request_id
+        || tunnel != attempt.relay_tunnel
         || lower_hex::<16>(&response.phone_id)? != attempt.phone_id
         || lower_hex::<65>(&response.phone_relay_public_key_sec1)? != attempt.phone_relay_key
         || lower_hex::<91>(&response.phone_endpoint_spki)? != attempt.phone_endpoint_spki
@@ -290,22 +305,34 @@ pub fn verify_approval(
     {
         return Err(InvalidEnrollment);
     }
-    let scope = SessionScope {
-        session: response.session,
-        run: response.run,
-        generation: response.generation,
+    let scope = match (response.session, response.run, response.generation) {
+        (None, None, None) => None,
+        (Some(session), Some(run), Some(generation)) => {
+            let scope = SessionScope {
+                session,
+                run,
+                generation,
+            };
+            encode_scope(&scope).map_err(|_| InvalidEnrollment)?;
+            Some(scope)
+        }
+        _ => return Err(InvalidEnrollment),
     };
-    encode_scope(&scope).map_err(|_| InvalidEnrollment)?;
     Ok(VerifiedEnrollment {
         host_endpoint,
         phone_grant: grant_key,
+        phone_endpoint_spki: attempt.phone_endpoint_spki,
+        code_sha256: attempt.code_sha256,
+        phone_outer: phone_outer.to_owned(),
+        host_outer: host_outer.to_owned(),
+        verified_unix_ms: now_unix_ms,
         origin: response.relay_origin,
         scope,
         metadata: VerifiedMetadata {
             invite_id: attempt.invite_id,
             request_id: attempt.request_id,
             phone_id: attempt.phone_id,
-            tunnel: lower_hex(&response.tunnel)?,
+            tunnel,
             endpoint_binding,
             principal,
             host_key_epoch: nonzero_decimal(&response.host_key_epoch)?,
@@ -327,10 +354,15 @@ pub struct NativeKeystoreBindings {
 }
 
 impl VerifiedEnrollment {
+    #[cfg(target_os = "android")]
+    pub(crate) fn endpoint_spki(&self) -> [u8; 91] {
+        self.phone_endpoint_spki
+    }
+
     /// Consume a still-current, already verified receipt; no input or wildcard
     /// mode is possible. Caller must first complete its durable transaction.
     /// Address is resolved by the native owner from this receipt's same WSS URL.
-    pub fn into_profile(
+    pub(crate) fn into_profile(
         self,
         address: SocketAddr,
         keys: NativeKeystoreBindings,
@@ -363,7 +395,7 @@ impl VerifiedEnrollment {
             grant: ClientGrantTrust {
                 issuer: self.phone_grant,
                 principal: self.metadata.principal,
-                scope: self.scope,
+                scope: self.scope.ok_or(InvalidEnrollment)?,
                 role: DataRole::Observer,
             },
             signer: keys.approval,
@@ -371,5 +403,79 @@ impl VerifiedEnrollment {
             setup_budget: Duration::from_secs(10),
             io_budget: Duration::from_secs(1),
         })
+    }
+}
+
+/// Storage boundary implemented by the native app owner. Implementations must
+/// use app-private, no-backup storage with an Android Keystore AEAD and an
+/// atomic create-once insert scoped to the local hardware identity. Returning
+/// before the write is durable is a contract violation.
+pub trait DurableNativePairingStore {
+    type Error;
+    fn insert_once(&mut self, local_id: [u8; 16], record: &[u8]) -> Result<(), Self::Error>;
+}
+
+/// The one consumed receipt used to start the original scoped Observer.
+pub struct DurablyAcceptedEnrollment(pub(super) VerifiedEnrollment);
+impl DurablyAcceptedEnrollment {
+    pub fn scope(&self) -> Option<&SessionScope> {
+        self.0.scope()
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DurableRecord<'a> {
+    version: u8,
+    accepted_unix_ms: u64,
+    desktop_endpoint_id: String,
+    relay_origin: &'a str,
+    invite_id: String,
+    request_id: String,
+    phone_id: String,
+    tunnel: String,
+    code_sha256: String,
+    phone_attestation: &'a str,
+    desktop_approval: &'a str,
+}
+
+fn hex_bytes(bytes: &[u8]) -> String {
+    bytes.iter().map(|n| format!("{n:02x}")).collect()
+}
+
+impl VerifiedEnrollment {
+    /// Consume the verified receipt into the storage transaction. No plaintext
+    /// pairing code, raw private key or global authorization is persisted.
+    pub fn persist_once<S: DurableNativePairingStore>(
+        self,
+        local_id: [u8; 16],
+        store: &mut S,
+        now_unix_ms: u64,
+    ) -> Result<DurablyAcceptedEnrollment, InvalidEnrollment> {
+        let id = nonzero(local_id)?;
+        if now_unix_ms < self.verified_unix_ms || now_unix_ms >= self.metadata.expires_unix_ms {
+            return Err(InvalidEnrollment);
+        }
+        let record = DurableRecord {
+            version: 1,
+            accepted_unix_ms: now_unix_ms,
+            desktop_endpoint_id: hex_bytes(&self.host_endpoint.endpoint_id(Role::Host)),
+            relay_origin: self.origin.as_str(),
+            invite_id: hex_bytes(&self.metadata.invite_id),
+            request_id: hex_bytes(&self.metadata.request_id),
+            phone_id: hex_bytes(&self.metadata.phone_id),
+            tunnel: hex_bytes(&self.metadata.tunnel),
+            code_sha256: hex_bytes(&self.code_sha256),
+            phone_attestation: &self.phone_outer,
+            desktop_approval: &self.host_outer,
+        };
+        let bytes = serde_json::to_vec(&record).map_err(|_| InvalidEnrollment)?;
+        if bytes.len() > 2 * MAX_ENVELOPE_BYTES + 1024 {
+            return Err(InvalidEnrollment);
+        }
+        store
+            .insert_once(id, &bytes)
+            .map_err(|_| InvalidEnrollment)?;
+        Ok(DurablyAcceptedEnrollment(self))
     }
 }

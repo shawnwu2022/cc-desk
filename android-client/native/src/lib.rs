@@ -16,6 +16,8 @@ use tokio::sync::watch;
 
 #[cfg(target_os = "android")]
 mod jni_bridge;
+#[cfg(target_os = "android")]
+pub mod keystore;
 
 pub mod enrollment;
 
@@ -25,6 +27,7 @@ pub struct ObserverHandle(i64);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StartError {
     UnapprovedProfile,
+    NoAuthorizedScope,
     Busy,
     OwnerUnavailable,
 }
@@ -82,28 +85,100 @@ static SERVICE: Mutex<Service> = Mutex::new(Service {
 /// Backend handoff only. This must never be invoked on a profile assembled from
 /// unchecked app metadata. The signers/host pin must come from the approved
 /// native owner and use the Keystore; no signer or TLS fallback is supplied.
+#[cfg(not(target_os = "android"))]
 pub fn start_verified_observer(
-    approval: enrollment::VerifiedEnrollment,
+    approval: enrollment::DurablyAcceptedEnrollment,
     address: std::net::SocketAddr,
     keys: enrollment::NativeKeystoreBindings,
     state: cc_desk_remote_security::ClientGrantState,
     now_unix_ms: u64,
 ) -> Result<ObserverHandle, StartError> {
+    if approval.scope().is_none() {
+        return Err(StartError::NoAuthorizedScope);
+    }
     let profile = approval
+        .0
         .into_profile(address, keys, state, now_unix_ms)
         .map_err(|_| StartError::UnapprovedProfile)?;
-    start_profile(profile)
-}
-
-fn start_profile(profile: NativeProfile) -> Result<ObserverHandle, StartError> {
-    if !matches!(profile.grant.role, ClientRole::Observer)
-        || !matches!(profile.relay_mode, RelayMode::RendezvousV1)
-        || !matches!(profile.relay.binding(), (key, RelayRole::Phone) if key != [0; 16])
-        || profile.tunnel == [0; 16]
-        || profile.address.port() == 0
-    {
+    if !validate_profile(&profile) {
         return Err(StartError::UnapprovedProfile);
     }
+    start_attempt(move |runtime, owner, stop| runtime.block_on(observe(profile, owner, stop)))
+}
+
+#[cfg(target_os = "android")]
+pub fn start_android_observer(
+    env: &jni::JNIEnv<'_>,
+    facade: &jni::objects::JObject<'_>,
+    approval: enrollment::DurablyAcceptedEnrollment,
+    address: std::net::SocketAddr,
+    state: cc_desk_remote_security::ClientGrantState,
+) -> Result<ObserverHandle, StartError> {
+    if approval.scope().is_none() {
+        return Err(StartError::NoAuthorizedScope);
+    }
+    let vm = env
+        .get_java_vm()
+        .map_err(|_| StartError::OwnerUnavailable)?;
+    let facade = env
+        .new_global_ref(facade)
+        .map_err(|_| StartError::OwnerUnavailable)?;
+    start_attempt(move |runtime, owner, stop| {
+        let approval = approval.0;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .and_then(|t| u64::try_from(t.as_millis()).ok());
+        let Some(now) = now else {
+            finish(&owner, true);
+            return true;
+        };
+        if now >= approval.metadata().expires_unix_ms || *stop.borrow() {
+            finish(&owner, true);
+            return true;
+        }
+        let (keys, provider) = match keystore::open_roles(
+            vm,
+            facade,
+            approval.endpoint_spki(),
+            approval.origin().clone(),
+            approval.metadata().phone_id,
+        ) {
+            Ok(roles) => roles.into_parts(),
+            Err(_) => {
+                finish(&owner, true);
+                return true;
+            }
+        };
+        let closed = match approval.into_profile(address, keys, state, now) {
+            Ok(profile) if validate_profile(&profile) => {
+                runtime.block_on(observe(profile, owner.clone(), stop))
+            }
+            _ => {
+                finish(&owner, true);
+                true
+            }
+        };
+        // Never detach an in-flight Android Keystore operation. Even if the
+        // UI cancelled/returned, this attempt keeps its exclusive service slot.
+        let provider_closed = provider.retire();
+        closed && provider_closed
+    })
+}
+
+fn validate_profile(profile: &NativeProfile) -> bool {
+    matches!(profile.grant.role, ClientRole::Observer)
+        && matches!(profile.relay_mode, RelayMode::RendezvousV1)
+        && matches!(profile.relay.binding(), (key, RelayRole::Phone) if key != [0; 16])
+        && profile.tunnel != [0; 16]
+        && profile.address.port() != 0
+}
+
+fn start_attempt(
+    work: impl FnOnce(tokio::runtime::Runtime, Arc<AttemptState>, watch::Receiver<bool>) -> bool
+    + Send
+    + 'static,
+) -> Result<ObserverHandle, StartError> {
     let mut service = SERVICE.lock().map_err(|_| StartError::OwnerUnavailable)?;
     if service
         .active
@@ -136,7 +211,7 @@ fn start_profile(profile: NativeProfile) -> Result<ObserverHandle, StartError> {
     let owned = state.clone();
     let worker = thread::Builder::new()
         .name("ccdesk-observer".into())
-        .spawn(move || runtime.block_on(observe(profile, owned, rx)))
+        .spawn(move || work(runtime, owned, rx))
         .map_err(|_| StartError::OwnerUnavailable)?;
     service.next = id.0;
     service.active = Some(Attempt { id, state, worker });
