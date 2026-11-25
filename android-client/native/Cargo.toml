@@ -1,0 +1,16 @@
+[package]
+name = "cc-desk-android-native"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+cc-desk-remote-client = { path = "../../remote/crates/client" }
+cc-desk-remote-transport = { path = "../../remote/crates/transport" }
+tokio = { version = "=1.52.1", features = ["rt", "sync", "time", "macros"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = { version = "=0.21.1", default-features = false }
