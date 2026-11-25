@@ -3,7 +3,6 @@ import { computed, nextTick, onMounted, onUnmounted, provide, ref, toRef, watch 
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import TerminalView from '@/components/TerminalView.vue'
 import NativeCliTerminal from '@/components/NativeCliTerminal.vue'
-import RemoteHostPanel from './RemoteHostPanel.vue'
 import { useShellStore } from '@/stores/shell'
 import { useAppStore } from '@/stores/app'
 import { computeTerminalSurfaceVars, getTerminalTheme } from '@/config/terminalThemes'
@@ -133,7 +132,6 @@ defineExpose({ ...port, fitVisible })
     <NativeCliTerminal v-for="session in nativeSessions" :key="session.id"
       :ref="value => setNative(session.adapterSessionId, value)" :tab-id="session.adapterSessionId"
       :active="visible && activeSessionId === session.id" />
-    <RemoteHostPanel v-if="visible && active?.runtime === 'native-cli'" :key="active.id" :tab-id="active.adapterSessionId" />
     <div v-if="!active" class="unified-terminal-empty" data-unified-terminal-empty><slot /></div>
   </div>
 </template>

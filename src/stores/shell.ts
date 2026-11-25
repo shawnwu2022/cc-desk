@@ -6,7 +6,7 @@ import type {
   SessionTreeConfirmationRequest, NewSessionRequest, CreateUnifiedSessionInput, ResumeDialogRequest,
 } from '@/types/unifiedSession'
 
-export type ShellSection = 'workspace' | 'projects' | 'settings'
+export type ShellSection = 'workspace' | 'projects' | 'remote' | 'settings'
 export type ShellResponsiveMode = 'wide' | 'overlay' | 'compact'
 /** Presentation requests only. Task 11 owns adapter admission and runtime dispatch. */
 export type WorkspaceRequest =

@@ -48,6 +48,7 @@ import { SESSION_HISTORY_WARNING_VISIBLE } from '@/utils/workspaceSourceWarnings
 import { onMenuSettings, onMenuShortcuts, onConfigFontSize, onOpenDirectory, onTerminalRestart } from '@/api/tauri'
 import type { NewSessionRequest, SessionMenuAction, UnifiedProjectIdentity } from '@/types/unifiedSession'
 
+const RemoteConnectionsView = defineAsyncComponent(() => import('@/components/remote/RemoteConnectionsView.vue'))
 const SettingsView = defineAsyncComponent(() => import('@/components/settings/SettingsView.vue'))
 const emit = defineEmits<{ 'workspace-request': [request: WorkspaceRequest] }>()
 const { t } = useI18n()
@@ -123,6 +124,7 @@ async function dismissSourceNotice() {
   }
 }
 const configFailed = ref(false)
+const remoteLoaded = ref(false)
 const settingsLoaded = ref(false)
 const startupNavigation = shell.navigationSequence
 let startupApplied = false
@@ -150,6 +152,7 @@ watch(() => shell.section, section => {
   if (section !== 'workspace') sessions.closeSessionConfirmation()
   if (section !== 'settings') configurations.closeDeleteConfirmation()
   if (section === 'settings') settingsLoaded.value = true
+  if (section === 'remote') remoteLoaded.value = true
 }, { immediate: true, flush: 'sync' })
 watch(() => app.theme, applyThemeToDom, { immediate: true })
 // Compatibility settings intents resolve to the same Settings section.
@@ -378,6 +381,7 @@ onUnmounted(() => {
       @new-session-request="selectProject($event); request({ kind: 'new-session', project: $event })"
       @project-action="request({ kind: 'project-action', request: $event })" />
     <ProjectManagementDialogs />
+    <RemoteConnectionsView v-if="remoteLoaded" v-show="shell.section === 'remote'" />
     <SettingsView v-if="settingsLoaded" v-show="shell.section === 'settings'" :active="shell.section === 'settings'" @close="shell.navigate('workspace')" />
     <template #context>
       <ProjectResourcesDrawer />
