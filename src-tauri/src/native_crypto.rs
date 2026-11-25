@@ -252,7 +252,14 @@ fn property(
     name: windows_core::PCWSTR,
     flags: OBJECT_SECURITY_INFORMATION,
 ) -> Result<Vec<u8>, CryptoError> {
-    let mut output = [0u8; 64];
+    property_bounded::<64>(key, name, flags)
+}
+fn property_bounded<const MAX: usize>(
+    key: NCRYPT_KEY_HANDLE,
+    name: windows_core::PCWSTR,
+    flags: OBJECT_SECURITY_INFORMATION,
+) -> Result<Vec<u8>, CryptoError> {
+    let mut output = [0u8; MAX];
     let mut size = 0;
     unsafe {
         NCryptGetProperty(
@@ -409,3 +416,7 @@ pub(crate) fn epoch_test_supplier(
 ) -> host::FrozenHostSupplier {
     tests::existing_key_tests::epoch_supplier(supplier, token, generation, trace)
 }
+
+#[cfg(feature = "remote-observer")]
+#[path = "native_crypto_provisioning.rs"]
+pub(crate) mod provisioning;

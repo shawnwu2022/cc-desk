@@ -30,6 +30,12 @@ async function initializeNativeSetup() {
   try {
     const result = await nativeObserverSetup({ action: 'available' }) as { kind?: unknown }
     if (!disposed && result.kind === 'available') port.value = {
+      async provision(endpoint) {
+        const result=await nativeObserverSetup({action:'provision',endpoint}) as {kind?:unknown;metadata?:unknown}
+        if(result.kind==='declined')return null
+        if(result.kind!=='publicRegistration')throw new Error('NATIVE_SETUP_UNCONFIRMED')
+        return JSON.stringify(result.metadata,null,2)
+      },
       async verify(endpoint) {
         const reply = await nativeObserverSetup({ action: 'verify', endpoint }) as { kind?: unknown; ticket?: unknown; endpoint?: unknown }
         if (reply.kind === 'profileRequired' || reply.kind === 'declined') return { kind: reply.kind }
@@ -72,6 +78,7 @@ const failure = ref<'verify' | 'operation' | null>(null)
 const verified = shallowRef<VerifiedPairing | null>(null)
 const setup = shallowRef<Exclude<SetupResult, { kind: 'verified' }> | null>(null)
 const publicRegistration = ref('')
+const setupCopied = ref(false)
 const snapshot = shallowRef<PairingSnapshot | null>(null)
 const now = ref(Date.now())
 let disposed = false
@@ -139,6 +146,34 @@ async function verify() {
   } finally {
     if (!disposed) busy.value = false
   }
+}
+async function provisionProfile() {
+  const bridge=port.value
+  if(!bridge?.provision || busy.value)return
+  busy.value=true
+  failure.value=null
+  try{
+    const value=await bridge.provision(endpoint.value.trim())
+    if(!disposed && value)publicRegistration.value=value
+  }catch{if(!disposed)failure.value='verify'}
+  finally{if(!disposed)busy.value=false}
+}
+async function copyRegistration(){
+  if(!publicRegistration.value)return
+  try {await navigator.clipboard.writeText(publicRegistration.value); setupCopied.value=true}
+  catch { setupCopied.value=false }
+}
+async function reopenRegistration(){
+  if(busy.value || !endpoint.value.trim().startsWith('wss://'))return
+  busy.value=true; failure.value=null; setupCopied.value=false
+  try {
+    const value=await nativeObserverSetup({action:'publicRegistration',endpoint:endpoint.value.trim()}) as {kind?:unknown;metadata?:unknown}
+    if(disposed)return
+    if(value.kind==='publicRegistration')publicRegistration.value=JSON.stringify(value.metadata,null,2)
+    else if(value.kind==='profileRequired')setup.value={kind:'profileRequired'}
+    else if(value.kind!=='declined')failure.value='verify'
+  }catch{if(!disposed)failure.value='verify'}
+  finally{if(!disposed)busy.value=false}
 }
 async function showPublicRegistration() {
   const task = setup.value
@@ -213,13 +248,22 @@ function cancel() {
       <p v-if="verified" role="status">{{ t('remotePairingVerified', { endpoint: verified.endpoint }) }}</p>
       <p v-if="failure" role="alert">{{ t(failure === 'verify' ? 'remotePairingVerifyFailed' : 'remotePairingFailed') }}</p>
       <p v-if="setup?.kind === 'declined'" role="status">{{ t('remotePairingSetupDeclined') }}</p>
-      <div v-if="setup?.kind === 'profileRequired'" role="status">{{ t('remotePairingProfileRequired') }}</div>
+      <div v-if="!verified && setup?.kind !== 'relayAuthorizationRequired'" class="actions">
+        <AppButton variant="ghost" :disabled="busy || !endpoint.trim().startsWith('wss://')" @click="reopenRegistration">{{ t('remotePairingPublicRegistration') }}</AppButton>
+      </div>
+      <div v-if="setup?.kind === 'profileRequired'" class="pairing">
+        <p role="status">{{ t(publicRegistration ? 'remotePairingAuthRequired' : 'remotePairingProfileRequired') }}</p>
+        <AppButton v-if="port?.provision && !publicRegistration" :disabled="busy" @click="provisionProfile">{{ t('remotePairingProvision') }}</AppButton>
+      </div>
       <div v-if="setup?.kind === 'relayAuthorizationRequired'" class="pairing" role="status">
         <p>{{ t('remotePairingAuthRequired') }}</p>
         <div class="actions"><AppButton :disabled="busy" @click="showPublicRegistration">{{ t('remotePairingPublicRegistration') }}</AppButton></div>
-        <label v-if="publicRegistration">{{ t('remotePairingCopyPublic') }}
-          <textarea :value="publicRegistration" readonly spellcheck="false" rows="4" />
-        </label>
+
+      </div>
+      <div v-if="publicRegistration && !verified" class="pairing">
+        <p>{{ t('remotePairingSetupHint') }}</p>
+        <label>{{ t('remotePairingCopyPublic') }}<textarea :value="publicRegistration" readonly spellcheck="false" rows="4" /></label>
+        <div class="actions"><AppButton @click="copyRegistration">{{ t(setupCopied ? 'remotePairingCopied' : 'remotePairingCopy') }}</AppButton></div>
       </div>
       <template v-if="snapshot">
         <template v-if="invite">

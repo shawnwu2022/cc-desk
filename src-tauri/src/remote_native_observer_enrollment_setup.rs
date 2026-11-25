@@ -219,6 +219,16 @@ pub(crate) struct PublicRegistrationMetadata {
     relay_id: String,
     relay_public_key_sec1: String,
 }
+impl PublicRegistrationMetadata {
+    pub(crate) fn new_public(relay_id: String, spki: &[u8; 91]) -> Self {
+        Self {
+            version: 1,
+            role: "Host",
+            relay_id,
+            relay_public_key_sec1: hex(&spki[26..]),
+        }
+    }
+}
 impl MetadataApproval {
     pub(crate) fn pending(&self) -> bool {
         self.machine.waiting()

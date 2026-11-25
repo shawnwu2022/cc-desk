@@ -110,6 +110,14 @@ impl ExistingKeyLoader {
         if usage & NCRYPT_ALLOW_SIGNING_FLAG == 0 {
             return Err(CryptoError::Key);
         }
+        #[cfg(feature = "remote-observer")]
+        if self
+            .name
+            .starts_with(&"ccdesk-native-v1-".encode_utf16().collect::<Vec<_>>())
+        {
+            super::provisioning::verify_persisted(slot.key)?;
+            checkpoint(slot, token, cap)?;
+        }
         let public = self.public(slot.key)?;
         checkpoint(slot, token, cap)?;
         if spki_from_blob(&public)? != self.spki {

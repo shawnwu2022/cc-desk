@@ -1,6 +1,8 @@
 //! Verified desktop setup IPC, independently authenticated to the existing
 //! privileged native document. No session selection and no credentials cross
 //! the renderer boundary. A successful setup proof isn't a data capability.
+#[path = "remote_native_observer_enrollment_provisioning.rs"]
+mod provisioning;
 use super::{
     control::{verify_configured_host, ControlFailure},
     decode,
@@ -31,6 +33,9 @@ use tauri::{ipc::Request, Manager, State, Webview};
     deny_unknown_fields
 )]
 enum Action {
+    Provision {
+        endpoint: String,
+    },
     Available,
     Verify {
         endpoint: String,
@@ -97,7 +102,7 @@ pub(crate) enum Reply {
         metadata: PublicRegistrationMetadata,
     },
 }
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct FileProfile {
     version: u8,
@@ -109,7 +114,7 @@ struct FileProfile {
     relay_spki: String,
     relay_id: String,
     relay_origin: CanonicalOrigin,
-    socket_address: SocketAddr,
+    socket_address: Option<SocketAddr>,
     host_key_epoch: u64,
     client_key_epoch: u64,
     policy_epoch: u64,
@@ -119,37 +124,46 @@ struct FileProfile {
 fn configured_profile(
     dir: PathBuf,
     endpoint: &str,
-) -> Result<Option<(Arc<TrustedHostProfile>, SocketAddr)>, SafeError> {
+) -> Result<Option<(Arc<TrustedHostProfile>, Option<SocketAddr>)>, SafeError> {
     let missing = || error("REMOTE_PAIRING_SETUP_REQUIRED");
-    let load = || -> Result<Option<(Arc<TrustedHostProfile>, SocketAddr)>, SafeError> {
+    let load = || -> Result<Option<(Arc<TrustedHostProfile>, Option<SocketAddr>)>, SafeError> {
         const MAX_BYTES: u64 = 4096;
         const REPARSE_POINT: u32 = 0x400;
         let path = dir.join("native-observer-relay-v1.json");
-        let meta = match fs::symlink_metadata(&path) {
-            Ok(meta) => meta,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(_) => return Err(missing()),
+        let stored = provisioning::read_profile(&dir).map_err(|_| missing())?;
+        let bytes = if let Some(stored) = stored {
+            stored
+        } else {
+            let meta = match fs::symlink_metadata(&path) {
+                Ok(meta) => meta,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                Err(_) => return Err(missing()),
+            };
+            if !meta.is_file()
+                || meta.file_attributes() & REPARSE_POINT != 0
+                || meta.len() > MAX_BYTES
+            {
+                return Err(missing());
+            }
+            let mut bytes = Vec::new();
+            let file = File::open(&path).map_err(|_| missing())?;
+            if !file.metadata().map_err(|_| missing())?.is_file() {
+                return Err(missing());
+            }
+            file.take(MAX_BYTES + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|_| missing())?;
+            if bytes.len() > MAX_BYTES as usize {
+                return Err(missing());
+            }
+            bytes
         };
-        if !meta.is_file() || meta.file_attributes() & REPARSE_POINT != 0 || meta.len() > MAX_BYTES
-        {
-            return Err(missing());
-        }
-        let mut bytes = Vec::new();
-        let file = File::open(&path).map_err(|_| missing())?;
-        if !file.metadata().map_err(|_| missing())?.is_file() {
-            return Err(missing());
-        }
-        file.take(MAX_BYTES + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|_| missing())?;
-        if bytes.len() > MAX_BYTES as usize {
-            return Err(missing());
-        }
         let selected: FileProfile = serde_json::from_slice(&bytes).map_err(|_| missing())?;
         let url = url::Url::parse(selected.relay_origin.as_str()).map_err(|_| missing())?;
         if selected.version != 1
-            || selected.socket_address.ip().is_unspecified()
-            || url.port_or_known_default() != Some(selected.socket_address.port())
+            || selected.socket_address.is_some_and(|a| {
+                a.ip().is_unspecified() || url.port_or_known_default() != Some(a.port())
+            })
         {
             return Err(missing());
         }
@@ -298,17 +312,24 @@ pub(crate) async fn remote_native_observer_setup(
             )
             .await
         }
-        action @ (Action::Verify { .. } | Action::PublicRegistration { .. }) => action,
+        action @ (Action::Verify { .. }
+        | Action::PublicRegistration { .. }
+        | Action::Provision { .. }) => action,
         _ => return Err(error("REMOTE_PAIRING_LOCKED")),
     };
     let endpoint = match &action {
-        Action::Verify { endpoint } | Action::PublicRegistration { endpoint } => endpoint.clone(),
+        Action::Verify { endpoint }
+        | Action::PublicRegistration { endpoint }
+        | Action::Provision { endpoint } => endpoint.clone(),
         _ => return Err(error("REMOTE_PAIRING_LOCKED")),
     };
     let dir = app
         .path()
         .app_config_dir()
         .map_err(|_| error("REMOTE_PAIRING_SETUP_REQUIRED"))?;
+    if matches!(action, Action::Provision { .. }) {
+        return provisioning::provision(app, &window, binding, caller, dir, &endpoint).await;
+    }
     let install_dir = dir.clone();
     let selected = tokio::task::spawn_blocking(move || configured_profile(dir, &endpoint))
         .await
@@ -321,6 +342,10 @@ pub(crate) async fn remote_native_observer_setup(
     let wait_end = Instant::now() + Duration::from_secs(30);
     match action {
         Action::Verify { .. } => {
+            let address = match address {
+                Some(a) => a,
+                None => provisioning::resolve(profile.endpoint()).await?,
+            };
             let approval = profile
                 .clone()
                 .show_setup(app, &window)

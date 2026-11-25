@@ -25,6 +25,8 @@ use windows_core::PCWSTR;
 const DIRECTORY: &str = "remote-pairings-v1";
 #[cfg(feature = "remote-observer")]
 const OBSERVER_DIRECTORY: &str = "remote-native-observers-v1";
+#[cfg(feature = "remote-observer")]
+const OBSERVER_SETUP_DIRECTORY: &str = "remote-native-setup-v1";
 const FILE: &str = "devices.dpapi";
 pub(crate) struct WindowsPairingBackend {
     root: Arc<PrivateDirectory>,
@@ -52,6 +54,10 @@ impl WindowsPairingBackend {
     #[cfg(feature = "remote-observer")]
     pub(crate) fn open_observer(parent: &Path) -> Result<Self> {
         Self::open_impl(parent, OBSERVER_DIRECTORY, false)
+    }
+    #[cfg(feature = "remote-observer")]
+    pub(crate) fn open_observer_setup(parent: &Path, create: bool) -> Result<Self> {
+        Self::open_impl(parent, OBSERVER_SETUP_DIRECTORY, create)
     }
     fn open_impl(parent: &Path, directory: &'static str, create: bool) -> Result<Self> {
         let user = CurrentUser::capture().map_err(io_error)?;

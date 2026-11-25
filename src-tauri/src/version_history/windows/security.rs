@@ -256,6 +256,65 @@ impl CurrentUser {
         }
         Ok(PrivateDescriptor(LocalAllocation(descriptor.0)))
     }
+    #[cfg(feature = "remote-observer")]
+    pub(crate) fn native_key_descriptor(&self) -> io::Result<Vec<u8>> {
+        let owned = self.job_descriptor()?;
+        let pointer = PSECURITY_DESCRIPTOR(owned.pointer().cast_mut().cast());
+        let size = unsafe { GetSecurityDescriptorLength(pointer) } as usize;
+        if !(20..=4096).contains(&size) {
+            return Err(blocked("invalid key descriptor length"));
+        }
+        Ok(unsafe { std::slice::from_raw_parts(pointer.0.cast::<u8>(), size) }.to_vec())
+    }
+    #[cfg(feature = "remote-observer")]
+    pub(crate) fn verify_native_key_descriptor(&self, bytes: &[u8]) -> io::Result<()> {
+        let length = unsafe { GetLengthSid(self.sid()) } as usize;
+        let sid = unsafe { std::slice::from_raw_parts(self.sid.as_ptr().cast::<u8>(), length) };
+        let word = |p: usize| {
+            bytes
+                .get(p..p + 2)
+                .and_then(|w| w.try_into().ok())
+                .map(u16::from_le_bytes)
+        };
+        let offset = |p: usize| {
+            bytes
+                .get(p..p + 4)
+                .and_then(|w| w.try_into().ok())
+                .map(u32::from_le_bytes)
+                .map(|n| n as usize)
+        };
+        let valid = (|| {
+            if !(20..=4096).contains(&bytes.len())
+                || bytes[0] != 1
+                || word(2)? & (SE_SELF_RELATIVE.0 | SE_DACL_PROTECTED.0 | SE_DACL_PRESENT.0)
+                    != (SE_SELF_RELATIVE.0 | SE_DACL_PROTECTED.0 | SE_DACL_PRESENT.0)
+            {
+                return Some(false);
+            }
+            let owner = offset(4)?;
+            let acl = offset(16)?;
+            if owner < 20 || acl < 20 || bytes.get(owner..owner.checked_add(length)?)? != sid {
+                return Some(false);
+            }
+            let acl_end = acl.checked_add(word(acl + 2)? as usize)?;
+            if word(acl + 4)? != 1 || acl_end > bytes.len() {
+                return Some(false);
+            }
+            let ace = acl + 8;
+            let ace_len = word(ace + 2)? as usize;
+            Some(
+                ace_len == 8 + length
+                    && ace + ace_len <= acl_end
+                    && bytes.get(ace..ace + 2)? == [0, 0]
+                    && bytes.get(ace + 8..ace + ace_len)? == sid,
+            )
+        })() == Some(true);
+        if valid {
+            Ok(())
+        } else {
+            Err(blocked("key access is not current-user-only"))
+        }
+    }
     pub(crate) fn verify_private_file(&self, file: HANDLE, directory: bool) -> io::Result<()> {
         self.verify_private(
             file,

@@ -58,6 +58,7 @@ export type SetupResult =
   | { readonly kind: 'relayAuthorizationRequired'; readonly approvePublicRegistration: () => Promise<string | null> }
 
 export interface DesktopPairingPort {
+  provision?(endpoint:string):Promise<string | null>
   verify(endpoint: string): Promise<SetupResult>
 }
 export const DESKTOP_PAIRING_PORT: InjectionKey<DesktopPairingPort> = Symbol('verified native pairing')
