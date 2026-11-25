@@ -17,3 +17,12 @@
 - 同一批集中验收采用 artifact 内精确 APK 文件：核对 proof 的签名者、文件 SHA 和 source SHA，安装在受控 ARM64 Android 31+ 设备，另在 Android 15+ 16 KiB 页面设备/模拟器上确认可启动、首次批准后只读数据流、撤销后同设备不能重连。补测已有正式签名包升级（如有）。未跑这些不能宣称生产就绪。后续公开发布只能由既有受授权流程使用同字节候选。
 
 依据：[Android 16 KB](https://developer.android.com/guide/practices/page-sizes)、[apksigner](https://developer.android.com/tools/apksigner)、[Windows 2025 映像](https://github.com/actions/runner-images/blob/main/images/windows/Windows2025-Readme.md)。
+
+
+## 合并发布：一个受保护主干测试版本
+
+0.28 移动端按编号的 RC 流程处理。桌面和带 JNI3 控制接口的 Android 同时进入同一个测试版本，不支持自动推送触发移动发布、0.28 稳定发布、或者桌面缺 APK 时先发布。现有普通非移动发布门禁不变。当前公开版以及此次工作基线均是 0.28.0-rc.3；未修改版本。以后在推进确切版本之前，重新检查公开标签和草稿，选择尚未占用的编号 RC，完成全套版本文件修改并合并受保护 main。
+
+手动从 main 启动 Release，输入与目标签名渠道相适配的 android_version_code；它在同一运行中构建既有桌面平台资产，再调用 Android 生产候选。保护审阅、精确 main、精确普通 CI run/attempt、现有桌面证书、Android 固定签名证书和版本是硬门禁。对 APK 所在同运行不可覆盖 artifact 用 ID 下载，重新核验真实 v2/v3 签名、16 KiB ZIP 对齐和本地包 SHA；APK 证明中还必须有 Android 原生安全测试已运行并通过。运行中重试所需平台时，应从同一新 attempt 重跑完整套件，不能混用旧 attempt 的 Android APK。
+
+发布先创建不可公开的草稿，然后以 GitHub 官方资产的 SHA-256 与大小核查全部 13 个文件，再重新校验当前 main 与精确 CI，最后只切换该草稿为 prerelease 且 make_latest=false。错误停在未发布草稿，不能发桌面替代、不就地复用未知旧草稿。实际签名密钥、GitHub reviewer、托管构建与最终发布均没有在本次开发环节操作。隔离安全测试不是手机/远程生产链路验收。

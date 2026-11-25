@@ -8,6 +8,11 @@ on:
     paths:
       - package.json
   workflow_dispatch:
+    inputs:
+      android_version_code:
+        description: Monotonically increasing Android versionCode for a combined mobile RC (required for 0.28 RC)
+        required: false
+        type: number
 
 permissions:
   contents: read
@@ -38,6 +43,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/release-build-admission.mjs
+      - name: Require explicit combined mobile RC dispatch and versionCode
+        env:
+          CC_DESK_RELEASE_VERSION: ${{ steps.source.outputs.version }}
+          ANDROID_VERSION_CODE: ${{ inputs.android_version_code }}
+        run: node scripts/release-combined-mobile.mjs admit
 
   preflight:
     needs: [admission, build]
@@ -58,7 +68,7 @@ jobs:
         with:
           node-version: '22'
       - name: Run release recovery fixtures
-        run: node --test tests/scripts/releaseRecovery.node.cjs tests/scripts/nativeReleasePolicy.node.mjs tests/scripts/releaseCoverage.node.mjs tests/scripts/releaseDraftRecovery.node.mjs tests/scripts/releaseBuildAdmission.node.mjs tests/scripts/releaseMobileSite.node.mjs
+        run: node --test tests/scripts/releaseRecovery.node.cjs tests/scripts/nativeReleasePolicy.node.mjs tests/scripts/releaseCoverage.node.mjs tests/scripts/releaseDraftRecovery.node.mjs tests/scripts/releaseBuildAdmission.node.mjs tests/scripts/releaseMobileSite.node.mjs tests/scripts/releaseCombinedMobile.node.mjs
       - name: Verify GitHub source archives for the exact release SHA
         shell: bash
         run: |
@@ -279,9 +289,21 @@ jobs:
           # The installer, disk image and updater archives are already compressed.
           compression-level: 0
 
-  release:
+  android:
     needs: [preflight, build]
-    if: github.ref == 'refs/heads/main' && github.ref_protected
+    if: needs.preflight.outputs.mobile_release == 'true' && github.event_name == 'workflow_dispatch'
+    uses: ./.github/workflows/android-production.yml
+    with:
+      version_code: ${{ inputs.android_version_code }}
+
+  release:
+    needs: [preflight, build, android]
+    if: >-
+      !cancelled() && github.ref == 'refs/heads/main' && github.ref_protected &&
+      needs.preflight.result == 'success' && needs.build.result == 'success' &&
+      ((needs.preflight.outputs.mobile_release == 'false' && needs.android.result == 'skipped') ||
+      (needs.preflight.outputs.mobile_release == 'true' && needs.preflight.outputs.channel == 'prerelease' &&
+      github.event_name == 'workflow_dispatch' && needs.android.result == 'success'))
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -316,6 +338,9 @@ jobs:
             --ci-run "${{ steps.coverage.outputs.ci_run }}" --ci-attempt "${{ steps.coverage.outputs.ci_attempt }}" \
             --coverage-artifact-id "${{ steps.coverage.outputs.coverage_artifact_id }}" \
             --coverage-artifact-name "${{ steps.coverage.outputs.coverage_artifact_name }}"
+      - name: Reject legacy recovery for the combined test version
+        if: needs.preflight.outputs.mobile_release == 'true' && steps.promotion.outputs.recovery_draft != ''
+        run: exit 1
       - name: Download this run's three platform artifacts
         uses: actions/download-artifact@v4
         with:
@@ -403,10 +428,11 @@ jobs:
           if [ "$CC_DESK_MOBILE_RELEASE" = "true" ]; then
             candidate="artifacts/cc-desk-candidate-$GITHUB_SHA-windows"
             node scripts/release-mobile-site.mjs verify "$candidate"
+            printf "\n### Mobile test acceptance\nAndroid ARM64 uses the same commit and passed signing, packaging and isolated native security checks. Physical device and production remote-connection acceptance are not claimed.\n" >> release-notes.md
             printf 'archive=%s/cc-desk-mobile-site.zip\nmanifest=%s/cc-desk-mobile-site.manifest.json\n' "$candidate" "$candidate" >> "$GITHUB_OUTPUT"
           fi
       - name: Publish ordinary unused-version GitHub Release
-        if: steps.promotion.outputs.recovery_draft == ''
+        if: steps.promotion.outputs.recovery_draft == '' && needs.preflight.outputs.mobile_release == 'false'
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ needs.preflight.outputs.tag }}
@@ -430,6 +456,71 @@ jobs:
             coverage/windows-native-coverage.json
             ${{ steps.mobile_site.outputs.archive }}
             ${{ steps.mobile_site.outputs.manifest }}
+      - name: Require Android immutable candidate identity
+        if: needs.preflight.outputs.mobile_release == 'true'
+        env:
+          ANDROID_ARTIFACT_ID: ${{ needs.android.outputs.artifact_id }}
+        run: node scripts/release-combined-mobile.mjs artifact-id
+      - name: Download the immutable Android artifact from this run
+        if: needs.preflight.outputs.mobile_release == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.android.outputs.artifact_id }}
+          path: android-candidate
+          merge-multiple: true
+      - name: Verify Android APK certificate, source and exact ordinary CI execution
+        if: needs.preflight.outputs.mobile_release == 'true'
+        env:
+          CC_DESK_RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+          ANDROID_VERSION_CODE: ${{ inputs.android_version_code }}
+          ANDROID_ORDINARY_CI_RUN: ${{ steps.coverage.outputs.ci_run }}
+          ANDROID_ORDINARY_CI_ATTEMPT: ${{ steps.coverage.outputs.ci_attempt }}
+          ANDROID_TRUSTED_SIGNER: ${{ needs.android.outputs.signer_sha256 }}
+        run: node scripts/release-combined-mobile.mjs prepare
+      - name: Stage complete desktop and Android test release as an unpublished draft
+        if: needs.preflight.outputs.mobile_release == 'true'
+        id: combined_draft
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          tag_name: ${{ needs.preflight.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: CC Desk ${{ needs.preflight.outputs.version }}
+          draft: true
+          prerelease: true
+          make_latest: false
+          body_path: release-notes.md
+          fail_on_unmatched_files: true
+          files: |
+            artifacts/**/*.exe
+            artifacts/**/*.exe.sig
+            artifacts/**/*.dmg
+            artifacts/**/*.app.tar.gz
+            artifacts/**/*.app.tar.gz.sig
+            artifacts/**/*.AppImage
+            artifacts/**/*.AppImage.sig
+            latest.json
+            coverage/windows-native-coverage.json
+            ${{ steps.mobile_site.outputs.archive }}
+            ${{ steps.mobile_site.outputs.manifest }}
+            android-candidate/*.apk
+            android-candidate/android-release-build-proof.json
+      - name: Verify all thirteen staged bytes and publish the complete prerelease
+        if: needs.preflight.outputs.mobile_release == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRAFT_ID: ${{ steps.combined_draft.outputs.id }}
+          CI_RUN: ${{ steps.coverage.outputs.ci_run }}
+          CI_ATTEMPT: ${{ steps.coverage.outputs.ci_attempt }}
+        run: |
+          set -euo pipefail
+          [[ "$DRAFT_ID" =~ ^[1-9][0-9]*$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/releases/$DRAFT_ID" > combined-mobile-draft.json
+          node scripts/release-combined-mobile.mjs verify-draft combined-mobile-draft.json
+          gh api "repos/$GITHUB_REPOSITORY/branches/main" | jq -e --arg sha "$GITHUB_SHA" '.protected == true and .commit.sha == $sha' > /dev/null
+          gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&branch=main&event=push&per_page=1" | jq -e --arg run "$CI_RUN" --arg attempt "$CI_ATTEMPT" --arg sha "$GITHUB_SHA" '.workflow_runs[0] | (.id|tostring) == $run and (.run_attempt|tostring) == $attempt and .head_sha == $sha and .event == "push" and .status == "completed" and .conclusion == "success"' > /dev/null
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$DRAFT_ID" -F draft=false -F prerelease=true -f make_latest=false > combined-mobile-published.json
+          node scripts/release-combined-mobile.mjs verify-published combined-mobile-published.json
       - name: Verify published update channel bytes and signatures
         if: needs.preflight.outputs.channel == 'stable'
         run: node scripts/verify-updater-manifest.js "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest.json" "${{ needs.preflight.outputs.version }}"

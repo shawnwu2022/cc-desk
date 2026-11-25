@@ -99,7 +99,7 @@ if ($Phase -ceq 'Build') {
     Require ($javaSource -cmatch 'System\.loadLibrary\(\s*"cc_desk_android_native"\s*\)') 'Java does not load the packaged JNI library'
     $methods = @([regex]::Matches($javaSource, '\bnative\s+[A-Za-z0-9_.]+(?:\[\])?\s+(native[A-Za-z0-9]+)\s*\(') |
         ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
-    $requiredMethods = @('nativeAndroidAbiVersion','nativeBeginPairing','nativePairingState','nativePairingHostId','nativeCancelPairing',
+    $requiredMethods = @('nativeViewerRole','nativeTakeControllerFrame','nativeConfirmControllerFrame','nativeQueueControllerText','nativeQueueControllerKey','nativeControllerInputOutcome','nativeAndroidAbiVersion','nativeBeginPairing','nativePairingState','nativePairingHostId','nativeCancelPairing',
         'nativeReadPairedHostId','nativeObserverState','nativeCancelObserver','nativeTakeObserverText',
         'nativeLoadShares','nativeShareState','nativeShareOffers','nativeChooseShare','nativeShareObserverHandle','nativeCancelShares')
     Require (@($requiredMethods | Where-Object { $_ -cnotin $methods }).Count -eq 0) 'Incomplete integrated Java pairing, share selection or Observer JNI surface'
@@ -210,6 +210,8 @@ $proof.ordinaryCiRunId = $env:ANDROID_ADMITTED_CI_RUN
 $proof.ordinaryCiRunAttempt = $env:ANDROID_ADMITTED_CI_ATTEMPT
 $proof.deviceAcceptance = 'unverified'
 $proof.publication = 'not-published'
+Require ($env:ANDROID_NATIVE_SECURITY_TESTS -ceq 'passed') 'Native security fixture evidence is required for Android production candidates'
+$proof.nativeSecurityFixtures = 'passed'
 New-Item -ItemType Directory -Path $outputDir | Out-Null
 $finalApk = Join-Path $outputDir "cc-desk-$version-android-$abi.apk"
 Copy-Item -LiteralPath $stagedSigned -Destination $finalApk

@@ -50,7 +50,7 @@ test('D02_PackageChange_DoesNotPublish_01', async () => {
 test('D02_ReleaseWorkflow_RequiresProtectedMainAndDisclosedCI_02', () => {
   const workflow = readFileSync(releaseWorkflowPath, 'utf8')
 
-  assert.match(workflow, /needs: \[preflight, build\]/)
+  assert.match(workflow, /^  release:\r?\n    needs: \[preflight, build, android\]$/m)
   assert.match(workflow, /github\.ref == 'refs\/heads\/main' && github\.ref_protected/)
   assert.match(workflow, /node scripts\/release-preflight\.mjs --artifacts/)
   assert.match(workflow, /--coverage coverage\/windows-native-coverage\.json/)

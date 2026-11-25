@@ -8,6 +8,17 @@ on:
         required: true
         type: number
 
+  workflow_call:
+    inputs:
+      version_code:
+        required: true
+        type: number
+    outputs:
+      artifact_id:
+        value: ${{ jobs.android.outputs.artifact_id }}
+      signer_sha256:
+        value: ${{ jobs.android.outputs.signer_sha256 }}
+
 permissions:
   contents: read
   actions: read
@@ -23,6 +34,9 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 40
     environment: android-production
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      signer_sha256: ${{ steps.sign.outputs.signer_sha256 }}
     env:
       VERSION_CODE: ${{ inputs.version_code }}
 
@@ -86,12 +100,20 @@ jobs:
           "ANDROID_ZXING_JAR=$jar" >> $env:GITHUB_ENV
           "ANDROID_BUILD_WORK=$env:RUNNER_TEMP\ccdesk-android-production-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT" >> $env:GITHUB_ENV
 
+      - name: Execute locked Android native security fixtures
+        shell: pwsh
+        run: |
+          cargo +1.100.0 test --locked --manifest-path android-client/native/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { throw 'Android native security fixtures failed' }
+          "ANDROID_NATIVE_SECURITY_TESTS=passed" >> $env:GITHUB_ENV
+
       - name: Build locked native library and release DEX
         shell: pwsh
         run: |
           ./android-client/build-production.ps1 -Phase Build -WorkDirectory $env:ANDROID_BUILD_WORK -SourceSha $env:GITHUB_SHA -VersionCode $env:VERSION_CODE -Sdk $env:ANDROID_SDK_ROOT -Jdk $env:JAVA_HOME_17_X64 -ZxingCore $env:ANDROID_ZXING_JAR
 
       - name: Sign and independently verify the exact APK bytes
+        id: sign
         shell: pwsh
         env:
           ANDROID_RELEASE_KEYSTORE_B64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_B64 }}
@@ -102,6 +124,8 @@ jobs:
         run: |
           $env:JAVA_HOME = $env:JAVA_HOME_17_X64
           ./android-client/build-production.ps1 -Phase Sign -WorkDirectory $env:ANDROID_BUILD_WORK -SourceSha $env:GITHUB_SHA -VersionCode $env:VERSION_CODE -Sdk $env:ANDROID_SDK_ROOT
+          if ($LASTEXITCODE -ne 0) { throw 'APK signing failed' }
+          "signer_sha256=$($env:ANDROID_RELEASE_CERT_SHA256.ToLowerInvariant())" >> $env:GITHUB_OUTPUT
 
       - name: Revalidate current protected main before retaining candidate
         shell: pwsh
@@ -117,6 +141,7 @@ jobs:
           }
 
       - name: Retain immutable signed candidate only
+        id: upload
         uses: actions/upload-artifact@v4
         with:
           name: android-candidate-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}

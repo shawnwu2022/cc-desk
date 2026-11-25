@@ -104,7 +104,7 @@ test('ReleaseRecovery_ArtifactRunBinding_009', async () => {
 })
 test('ReleaseRecovery_WorkflowGateWiring_010', () => {
   const workflow = readFileSync(resolve(__dirname, '../../.github/workflows/release.yml'), 'utf8')
-  assert.match(workflow, /needs: \[preflight, build\]/)
+  assert.match(workflow, /^  release:\r?\n    needs: \[preflight, build, android\]$/m)
   assert.match(workflow, /node scripts\/release-preflight\.mjs/)
   assert.match(workflow, /pattern: cc-desk-candidate-\$\{\{ github\.sha \}\}-\*/)
   assert.match(workflow, /node --test tests\/scripts\/releaseRecovery\.node\.cjs/)
@@ -131,8 +131,11 @@ test('ReleaseRecovery_BuildsRemainIndependentOfPreflight_015', () => {
 })
 test('ReleaseRecovery_PublicationRequiresSuccessfulBuildsAndPreflight_016', () => {
   const release = releaseJob('release')
-  assert.match(release, /^    needs: \[preflight, build\]$/m)
-  assert.match(release, /^    if: github\.ref == 'refs\/heads\/main' && github\.ref_protected$/m)
+  assert.match(release, /^    needs: \[preflight, build, android\]$/m)
+  assert.match(release, /^      !cancelled\(\) && github\.ref == 'refs\/heads\/main' && github\.ref_protected &&$/m)
+  assert.match(release, /needs\.preflight\.result == 'success' && needs\.build\.result == 'success'/)
+  assert.match(release, /mobile_release == 'false' && needs\.android\.result == 'skipped'/)
+  assert.match(release, /mobile_release == 'true' && needs\.preflight\.outputs\.channel == 'prerelease'[\s\S]+?needs\.android\.result == 'success'/)
   for (const name of ['preflight', 'build', 'release']) {
     assert.doesNotMatch(releaseJob(name), /^    (?:continue-on-error:|if:.*(?:always\(|cancelled\(|failure\())/m,
       'failed or cancelled prerequisites must not admit publication')
