@@ -19,7 +19,8 @@ import java.util.UUID;
 public final class MainActivity extends Activity {
     private LinearLayout content;
     private DesktopStore store;
-    private DesktopBackend backend;
+    private NativeDesktopBackend backend;
+    private boolean pairingPending;
     private UUID selected;
     private UUID scanOwner;
     private PairingInvite pendingConfirmation;
@@ -40,14 +41,17 @@ public final class MainActivity extends Activity {
         super.onCreate(state);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
         store = new DesktopStore(this);
-        // 直到正式 Rust owner 安装之前，不创建假 backend 或任何网络/密钥活动。
-        backend = null;
+        backend = NativeDesktopBackend.load(this, this::render);
         String last = getPreferences(MODE_PRIVATE).getString("selected", null);
         if (last != null) {
             try { selected = UUID.fromString(last); }
             catch (IllegalArgumentException ignored) {}
         }
         active = true;
+        if (backend != null) {
+            try { backend.restore(store.read(), identities); }
+            catch (IOException ignored) {}
+        }
         render();
     }
 
@@ -75,6 +79,7 @@ public final class MainActivity extends Activity {
 
         try {
             List<DesktopBackend.Desktop> rows = store.read();
+            rows.removeIf(row -> backend == null || !backend.verified(row));
             if (selected != null && rows.stream().noneMatch(row -> row.localId.equals(selected))) selected = null;
             button("全部会话", () -> select(null));
             if (rows.isEmpty()) text("没有已批准的桌面", 16);
@@ -95,9 +100,15 @@ public final class MainActivity extends Activity {
             return;
         }
         Button scan = button("扫码添加电脑", this::scanPairing);
-        scan.setEnabled(backend != null);
+        scan.setEnabled(backend != null && !pairingPending);
         Button manual = button("改用配对码", this::manualPairing);
-        manual.setEnabled(backend != null);
+        manual.setEnabled(backend != null && !pairingPending);
+        if (pairingPending) {
+            text("请在电脑上点同意", 16);
+            button("取消配对", () -> {
+                enrollmentEpoch++; pairingPending = false; backend.cancelEnrollment(); render();
+            });
+        }
     }
 
     private void select(UUID localId) {
@@ -111,10 +122,16 @@ public final class MainActivity extends Activity {
         DesktopBackend.State state = backend == null ? DesktopBackend.State.UNAVAILABLE : backend.state(desktop);
         String source = desktop.name + " · " + desktop.hostId.substring(0, 8);
         text(source + " · " + label(state), 18);
+        if (backend != null && backend.canObserve(desktop))
+            button("查看已批准的会话", () -> backend.startObserver(desktop));
+        if (state == DesktopBackend.State.OBSERVING || state == DesktopBackend.State.AWAITING_OBSERVER)
+            button("停止查看", () -> backend.disconnectObserver(desktop));
         if (state != DesktopBackend.State.OBSERVING) return;
         for (DesktopBackend.Session session : backend.observerSessions(desktop)) {
             // 来源始终与行绑定，不按照会话 ID 跨主机合并。
             text(session.title + " · " + source, 16);
+            TextView snapshot = text(session.text, 14);
+            snapshot.setTypeface(android.graphics.Typeface.MONOSPACE);
         }
     }
 
@@ -207,21 +224,39 @@ public final class MainActivity extends Activity {
 
     private void redeem(PairingInvite invite) {
         long epoch = ++enrollmentEpoch;
+        pairingPending = true;
+        render();
         DesktopBackend.EnrollmentCallback completion = new DesktopBackend.EnrollmentCallback() {
             @Override public void approved(DesktopBackend.Desktop desktop) {
                 runOnUiThread(() -> {
-                    if (!active || epoch != enrollmentEpoch) return;
+                    if (!active || epoch != enrollmentEpoch) {
+                        backend.discardUnpublished(desktop);
+                        return;
+                    }
                     enrollmentEpoch++;
+                    pairingPending = false;
+                    render();
                     if (!invite.matchesHost(desktop.hostId) || !invite.relay.equals(desktop.relay)) {
+                        backend.discardUnpublished(desktop);
                         text("电脑身份不一致，请重新扫码。", 16);
                         return;
                     }
                     try { store.addApproved(desktop); select(desktop.localId); }
-                    catch (IOException e) { text("批准结果未保存，未显示为已配对。", 16); }
+                    catch (IOException e) {
+                        backend.discardUnpublished(desktop);
+                        text("批准结果未保存，未显示为已配对。", 16);
+                    }
                 });
             }
             @Override public void state(DesktopBackend.State state) {
-                runOnUiThread(() -> { if (active && epoch == enrollmentEpoch) text(label(state), 16); });
+                runOnUiThread(() -> {
+                    if (!active || epoch != enrollmentEpoch) return;
+                    if (state != DesktopBackend.State.WAITING_FOR_DESKTOP) {
+                        pairingPending = false;
+                        render();
+                        text("没有完成配对，请确认电脑在线并重新扫码。", 16);
+                    }
+                });
             }
         };
         try { backend.redeemInvite(invite, identities, completion); }
@@ -231,6 +266,7 @@ public final class MainActivity extends Activity {
     private String label(DesktopBackend.State state) {
         switch (state) {
             case WAITING_FOR_DESKTOP: return "请在电脑上点同意";
+            case AWAITING_OBSERVER: return "正在连接，按提示确认";
             case OBSERVING: return "正在观察";
             case DISCONNECTED: return "未连接";
             case REVOKED: return "已撤销";

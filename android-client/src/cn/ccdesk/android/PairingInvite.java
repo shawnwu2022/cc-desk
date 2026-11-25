@@ -30,6 +30,17 @@ final class PairingInvite implements AutoCloseable {
     }
     @Override public synchronized void close() { closed = true; Arrays.fill(code, (char)0); }
 
+    byte[] hostCommitment() {
+        if (hostEndpointId == null)
+            return hostFingerprintPrefix.getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+        byte[] digest = new byte[32];
+        for (int i = 0; i < digest.length; i++) {
+            digest[i] = (byte)((Character.digit(hostEndpointId.charAt(2*i), 16) << 4) |
+                               Character.digit(hostEndpointId.charAt(2*i+1), 16));
+        }
+        return digest;
+    }
+
     boolean matchesHost(String verifiedId) {
         if (verifiedId == null || !verifiedId.matches("[0-9a-f]{64}")) return false;
         return hostEndpointId != null ? hostEndpointId.equals(verifiedId) :

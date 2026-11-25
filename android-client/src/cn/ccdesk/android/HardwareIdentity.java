@@ -82,6 +82,17 @@ final class HardwareIdentity {
         return sign(Usage.ENDPOINT, verifiedTlsTranscript).sign();
     }
 
+    byte[] signPhoneEnrollment(byte[] transcript) throws GeneralSecurityException {
+        byte[] domain = "cc-desk.native-pairing.phone.v1\0"
+            .getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+        if (transcript.length <= domain.length || transcript.length > 2048)
+            throw new GeneralSecurityException("Phone enrollment transcript rejected");
+        for (int i = 0; i < domain.length; i++)
+            if (transcript[i] != domain[i])
+                throw new GeneralSecurityException("Phone enrollment transcript rejected");
+        return P256Signature.toFixed(sign(Usage.ENDPOINT, transcript).sign());
+    }
+
     byte[] signRelay(byte[] verifiedRelayTranscript) throws GeneralSecurityException {
         return P256Signature.toFixed(sign(Usage.RELAY, verifiedRelayTranscript).sign());
     }

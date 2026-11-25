@@ -43,6 +43,10 @@ final class NativeKeystoreBridge {
         return endpoint.signEndpointTls(input);
     }
 
+    byte[] signPhoneEnrollment(byte[] input) throws GeneralSecurityException {
+        return endpoint.signPhoneEnrollment(input);
+    }
+
     byte[] signRelay(byte[] input) throws GeneralSecurityException {
         return relay.signRelay(input);
     }
