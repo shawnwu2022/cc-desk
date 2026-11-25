@@ -2,6 +2,7 @@ export default {
   remoteHostCleanupUnconfirmed: "远程清理结果未确认，请刷新原会话状态；不会自动重试。",
   remoteTerminalTitle: "远程终端",
   remoteTerminalLocked: "已锁定：尚未安装原生连接。",
+  remoteTerminalViewOnly: '\u53ea\u8bfb\u5feb\u7167',
   remoteTerminalSynced: "快照已验证并确认。",
   remoteTerminalUnavailable: "远程连接不可用；已禁用后续输入。",
   remoteTerminalUncertain: "输入结果不确定，已阻止新输入；不会自动重试。",

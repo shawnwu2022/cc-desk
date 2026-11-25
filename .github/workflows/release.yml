@@ -22,6 +22,9 @@ jobs:
     if: github.ref == 'refs/heads/main' && github.ref_protected
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    outputs:
+      version: ${{ steps.source.outputs.version }}
+      mobile_release: ${{ steps.source.outputs.mobile_release }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -31,6 +34,7 @@ jobs:
         with:
           node-version: '22'
       - name: Admit only the exact current protected main build source
+        id: source
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/release-build-admission.mjs
@@ -44,6 +48,7 @@ jobs:
       version: ${{ steps.gate.outputs.version }}
       tag: ${{ steps.gate.outputs.tag }}
       channel: ${{ steps.gate.outputs.channel }}
+      mobile_release: ${{ needs.admission.outputs.mobile_release }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -53,7 +58,7 @@ jobs:
         with:
           node-version: '22'
       - name: Run release recovery fixtures
-        run: node --test tests/scripts/releaseRecovery.node.cjs tests/scripts/nativeReleasePolicy.node.mjs tests/scripts/releaseCoverage.node.mjs tests/scripts/releaseDraftRecovery.node.mjs tests/scripts/releaseBuildAdmission.node.mjs
+        run: node --test tests/scripts/releaseRecovery.node.cjs tests/scripts/nativeReleasePolicy.node.mjs tests/scripts/releaseCoverage.node.mjs tests/scripts/releaseDraftRecovery.node.mjs tests/scripts/releaseBuildAdmission.node.mjs tests/scripts/releaseMobileSite.node.mjs
       - name: Verify GitHub source archives for the exact release SHA
         shell: bash
         run: |
@@ -210,12 +215,15 @@ jobs:
       - name: Build signed candidate
         shell: bash
         env:
+          CC_DESK_MOBILE_RELEASE: ${{ needs.admission.outputs.mobile_release }}
           CC_DESK_BUILD_SHA: ${{ github.sha }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
+          observer_features=()
+          if [ "$CC_DESK_MOBILE_RELEASE" = "true" ]; then observer_features=(--features remote-observer); fi
           if [ "${{ matrix.name }}" = "windows" ]; then
-            npm run tauri -- build --bundles nsis
+            npm run tauri -- build --bundles nsis "${observer_features[@]}"
           elif [ -n "${{ matrix.target }}" ]; then
             npm run tauri build -- --target "${{ matrix.target }}"
           else
@@ -233,7 +241,36 @@ jobs:
           $after = node scripts/verify-windows-release-candidate.cjs
           if ($LASTEXITCODE -ne 0 -or $before -cne $after) { throw 'Installed candidate or updater signature changed before upload' }
 
+      - name: Supply verified Windows browser tools for the mobile release
+        if: matrix.name == 'windows' && needs.admission.outputs.mobile_release == 'true'
+        uses: ./.github/actions/setup-windows-browser-tools
+      - name: Build and inspect the isolated same-source browser-product stage
+        if: matrix.name == 'windows' && needs.admission.outputs.mobile_release == 'true'
+        shell: pwsh
+        env:
+          CC_DESK_RELEASE_VERSION: ${{ needs.admission.outputs.version }}
+        run: |
+          if ((git rev-parse HEAD) -cne $env:GITHUB_SHA) { throw 'Browser checkout differs from signed build source' }
+          node scripts/build-desktop-product.mjs --release-site
+          if ($LASTEXITCODE -ne 0) { throw 'Browser product build failed' }
+          node scripts/check-browser-deployment.mjs --site .audit/browser-release-site
+          if ($LASTEXITCODE -ne 0) { throw 'Browser artifact local integrity check failed' }
+          node scripts/release-mobile-site.mjs package src-tauri/target/release/bundle/nsis .audit/browser-release-site
+          if ($LASTEXITCODE -ne 0) { throw 'Required browser archive or manifest failed verification' }
+
+      - name: Upload exact Windows candidate and mobile site
+        if: matrix.name == 'windows' && needs.admission.outputs.mobile_release == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: cc-desk-candidate-${{ github.sha }}-windows
+          path: |
+            ${{ matrix.patterns }}
+            src-tauri/target/release/bundle/nsis/cc-desk-mobile-site.zip
+            src-tauri/target/release/bundle/nsis/cc-desk-mobile-site.manifest.json
+          if-no-files-found: error
+          compression-level: 0
       - name: Upload candidate artifacts
+        if: matrix.name != 'windows' || needs.admission.outputs.mobile_release != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: cc-desk-candidate-${{ github.sha }}-${{ matrix.name }}
@@ -354,9 +391,20 @@ jobs:
             --notes release-validation-notes.md
       - name: Compose English release highlights with complete technical disclosure
         if: steps.promotion.outputs.recovery_draft == ''
-        run: >-
-          node scripts/release-notes.js compose --tag "${{ needs.preflight.outputs.tag }}"
-          --technical release-validation-notes.md --output release-notes.md
+        id: mobile_site
+        shell: bash
+        env:
+          CC_DESK_MOBILE_RELEASE: ${{ needs.preflight.outputs.mobile_release }}
+          CC_DESK_RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          node scripts/release-notes.js compose --tag "${{ needs.preflight.outputs.tag }}" \
+            --technical release-validation-notes.md --output release-notes.md
+          if [ "$CC_DESK_MOBILE_RELEASE" = "true" ]; then
+            candidate="artifacts/cc-desk-candidate-$GITHUB_SHA-windows"
+            node scripts/release-mobile-site.mjs verify "$candidate"
+            printf 'archive=%s/cc-desk-mobile-site.zip\nmanifest=%s/cc-desk-mobile-site.manifest.json\n' "$candidate" "$candidate" >> "$GITHUB_OUTPUT"
+          fi
       - name: Publish ordinary unused-version GitHub Release
         if: steps.promotion.outputs.recovery_draft == ''
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
@@ -380,6 +428,8 @@ jobs:
             artifacts/**/*.AppImage.sig
             latest.json
             coverage/windows-native-coverage.json
+            ${{ steps.mobile_site.outputs.archive }}
+            ${{ steps.mobile_site.outputs.manifest }}
       - name: Verify published update channel bytes and signatures
         if: needs.preflight.outputs.channel == 'stable'
         run: node scripts/verify-updater-manifest.js "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest.json" "${{ needs.preflight.outputs.version }}"

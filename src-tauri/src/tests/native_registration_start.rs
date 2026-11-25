@@ -79,6 +79,130 @@ fn NativeRegistrationStart_YesOneShotOriginalTokenAndDeadline_003() {
     gate.cancel();
     assert!(!permit.signing.matches(&permit.signing.token(), end));
 }
+
+#[test]
+#[cfg(not(feature = "remote-observer"))]
+#[allow(non_snake_case)]
+fn NativeRegistrationStart_ObserverChoiceCannotIssueKeyPermit_015() {
+    let mut request: serde_json::Value = serde_json::from_str(&configuration::test_json()).unwrap();
+    request["accessMode"] = "observerOnce".into();
+    if cfg!(feature = "remote-observer-local-acceptance") {
+        request["address"] = "192.0.2.1:443".into();
+    }
+    let frozen = FrozenRegistrationStart::parse(&request.to_string()).unwrap();
+    assert!(!frozen.remember());
+    assert_eq!(
+        frozen.data_role(),
+        cc_desk_remote_record::grant::DataRole::Observer
+    );
+    assert!(frozen.render().contains("one-time read-only Observer"));
+    let gate = NativeRegistrationKeyApproval::test_pending(frozen);
+    gate.test_complete(true);
+    assert!(
+        gate.take().is_none(),
+        "closed Observer role issued key permit"
+    );
+    assert!(
+        gate.take().is_none(),
+        "closed Observer permit could be retried"
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn NativeRegistrationStart_ObserverFreezesOneSecuredRelayEndpoint_018() {
+    let mut request: serde_json::Value = serde_json::from_str(&configuration::test_json()).unwrap();
+    request["accessMode"] = "observerOnce".into();
+    request["origin"] = "wss://relay.invalid:8443/one".into();
+    request["address"] = "192.0.2.1:8443".into();
+    let frozen = FrozenRegistrationStart::parse(&request.to_string()).unwrap();
+    assert_eq!(frozen.origin.as_str(), "wss://relay.invalid:8443/one");
+    assert_eq!(frozen.address.port(), 8443);
+    request["address"] = "192.0.2.1:443".into();
+    assert!(
+        FrozenRegistrationStart::parse(&request.to_string()).is_err(),
+        "Observer must reject a mismatched configured transport endpoint before approval"
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn NativeRegistrationStart_ObserverFormalExplicitChoice_019() {
+    let mut request: serde_json::Value = serde_json::from_str(&configuration::test_json()).unwrap();
+    request["accessMode"] = "observerOnce".into();
+    request["origin"] = "wss://relay.invalid:8443/one".into();
+    request["address"] = "192.0.2.1:8443".into();
+    let frozen = FrozenRegistrationStart::parse(&request.to_string()).unwrap();
+    assert_eq!(
+        frozen.product_role_enabled(),
+        cfg!(feature = "remote-observer")
+    );
+    let owner = NativeRegistrationKeyApproval::test_pending(frozen);
+    assert!(owner.take().is_none(), "no local consent");
+    owner.test_complete(true);
+    assert_eq!(owner.take().is_some(), cfg!(feature = "remote-observer"));
+    assert!(owner.take().is_none(), "single-use approval");
+}
+
+#[cfg(feature = "remote-observer-local-acceptance")]
+#[test]
+#[allow(non_snake_case)]
+fn NativeRegistrationStart_ObserverLocalExplicitConsent_017() {
+    use cc_desk_remote_record::grant::DataRole;
+
+    let mut request: serde_json::Value = serde_json::from_str(&configuration::test_json()).unwrap();
+    request["accessMode"] = "observerOnce".into();
+    request["address"] = "127.0.0.1:443".into();
+    for decision in [None, Some(false)] {
+        let frozen = FrozenRegistrationStart::parse(&request.to_string()).unwrap();
+        let gate = NativeRegistrationKeyApproval::test_pending(frozen);
+        if let Some(yes) = decision {
+            gate.test_complete(yes);
+        }
+        assert!(gate.take().is_none(), "no explicit local owner approval");
+    }
+    let frozen = FrozenRegistrationStart::parse(&request.to_string()).unwrap();
+    let end = frozen.end;
+    let gate = NativeRegistrationKeyApproval::test_pending(frozen);
+    gate.test_complete(true);
+    let permit = gate.take().expect("explicit one-time loopback approval");
+    assert_eq!(permit.frozen.data_role(), DataRole::Observer);
+    assert!(!permit.frozen.remember());
+    assert!(permit.signing.matches(&permit.signing.token(), end));
+    assert!(gate.take().is_none(), "consent must be consumed once");
+    gate.cancel();
+    assert!(!permit.signing.matches(&permit.signing.token(), end));
+
+    request["address"] = "192.0.2.1:443".into();
+    let frozen = FrozenRegistrationStart::parse(&request.to_string()).unwrap();
+    let gate = NativeRegistrationKeyApproval::test_pending(frozen);
+    gate.test_complete(true);
+    assert!(gate.take().is_none(), "non-loopback local trial denied");
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn NativeRegistrationStart_ObserverCannotRemember_016() {
+    let mut request: serde_json::Value = serde_json::from_str(&configuration::test_json()).unwrap();
+    request["accessMode"] = "observerOnce".into();
+    request["remember"] = true.into();
+    assert!(FrozenRegistrationStart::parse(&request.to_string()).is_err());
+    request["accessMode"] = "controller".into();
+    let frozen = FrozenRegistrationStart::parse(&request.to_string()).unwrap();
+    assert!(frozen.remember());
+    assert_eq!(
+        frozen.data_role(),
+        cc_desk_remote_record::grant::DataRole::Controller
+    );
+    let gate = NativeRegistrationKeyApproval::test_pending(frozen);
+    gate.test_complete(true);
+    assert!(
+        gate.take().is_some(),
+        "explicit Controller changed legacy eligibility"
+    );
+    request["accessMode"] = "unknown".into();
+    assert!(FrozenRegistrationStart::parse(&request.to_string()).is_err());
+}
 #[test]
 #[allow(non_snake_case)]
 fn NativeRegistrationStart_IndependentCustodyDoesNotConsumeHostSlot_004() {

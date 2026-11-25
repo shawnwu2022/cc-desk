@@ -11,3 +11,26 @@ import {createBrowserNativeAdapter} from './browserNative.ts';
 function adapter(prepare:(remaining:()=>Promise<number>)=>Promise<void>){const memory=new WebAssembly.Memory({initial:1});let closed=false;const adapter=createBrowserNativeAdapter(()=>memory,()=>closed,()=>{},()=>{closed=true;},async()=>{},()=>10000,()=>20000,{prepare,settled:()=>{}});const descriptor=new TextEncoder().encode(JSON.stringify({target:{session:'s',run:'r',generation:'1',pane:'p',terminal:'t'},binding:'a'.repeat(64),role:'Controller',fence:'1'}));new Uint8Array(memory.buffer).set(descriptor);adapter.imports.cc_desk_browser_client_v1.descriptor(0,descriptor.length);return{adapter,memory,close:()=>{closed=true;adapter.terminal();}};}
 test('BrowserLiveHandoff_OriginalRpcTerminalBreaksRetirementCycle_005',async()=>{let entered!:()=>void;const seen=new Promise<void>(r=>{entered=r;});const f=adapter(async remaining=>{entered();await remaining();});await seen;await turn();assert.equal(f.adapter.publicationPending(),true);const n=f.adapter.imports.cc_desk_browser_client_v1.request(4096,32768);assert.equal(n,20);assert.equal(new DataView(f.memory.buffer).getUint32(4100,true),4);f.adapter.invalidate();assert.equal(f.adapter.publicationPending(),true);f.adapter.imports.cc_desk_browser_client_v1.invalidated();await assert.rejects(f.adapter.descriptor);await turn();assert.equal(f.adapter.publicationPending(),false);});
 test('BrowserLiveHandoff_DescriptorWaitsOriginalAckAndExactRpc_006',async()=>{let ack!:()=>void,read!:(n:number)=>void;const value=new Promise<number>(r=>{read=r;});const f=adapter(async remaining=>{read(await remaining());await new Promise<void>(r=>{ack=r;});});let published=false;void f.adapter.descriptor.then(()=>{published=true;});await turn();await assert.rejects(f.adapter.port.exchange(new Uint8Array([1]),1000));await assert.rejects(f.adapter.port.snapshot(new Uint8Array([1]),1000));const n=f.adapter.imports.cc_desk_browser_client_v1.request(4096,32768);assert.equal(n,20);const seq=new DataView(f.memory.buffer).getUint32(4096,true);assert.equal(seq,1);new DataView(f.memory.buffer).setBigUint64(8192,5000n,true);f.adapter.imports.cc_desk_browser_client_v1.reply(seq,0,8192,8);f.adapter.imports.cc_desk_browser_client_v1.reply(seq,1,0,0);assert.equal(await value,5000);assert.equal(published,false);await assert.rejects(f.adapter.port.exchange(new Uint8Array([1]),1000));await assert.rejects(f.adapter.port.snapshot(new Uint8Array([1]),1000));assert.equal(f.adapter.limitDeadline(10500),false);assert.equal(f.adapter.imports.cc_desk_browser_client_v1.request(4096,32768),-1);ack();await f.adapter.descriptor;assert.equal(published,true);const next=f.adapter.port.exchange(new Uint8Array([1]),1000);assert.equal(f.adapter.imports.cc_desk_browser_client_v1.request(4096,32768),21);assert.equal(new DataView(f.memory.buffer).getUint32(4096,true),2);f.close();await assert.rejects(next);});
+
+test('Observer private browser opcode has no payload and cannot use Controller RPC',async()=>{
+ const {readFileSync}=await import('node:fs');
+ const part=JSON.parse(readFileSync(new URL('../../../protocol/remote/inner/v1/test-vectors/projection-snapshot.json',import.meta.url),'utf8'));
+ for(const role of ['Observer','Controller'] as const){
+  const memory=new WebAssembly.Memory({initial:1});
+  const adapter=createBrowserNativeAdapter(()=>memory,()=>false,()=>{},()=>{},async()=>{},()=>10000,()=>20000);
+  const io=adapter.imports.cc_desk_browser_client_v1;
+  const write=(pointer:number,value:unknown)=>{const bytes=new TextEncoder().encode(JSON.stringify(value));new Uint8Array(memory.buffer).set(bytes,pointer);return bytes.length;};
+  io.descriptor(0,write(0,{target:part.body.stamp.target,binding:part.body.stamp.binding,role,fence:'1'}));
+  assert.equal((await adapter.descriptor).role,role);
+  if(role==='Controller'){await assert.rejects(adapter.port.observerSnapshot!(1000));assert.equal(io.request(4096,32768),-1);continue;}
+  await assert.rejects(adapter.port.exchange(new Uint8Array(),1000));
+  await assert.rejects(adapter.port.snapshot(new Uint8Array(),1000));
+  assert.equal(io.request(4096,32768),-1);
+  const result=adapter.port.observerSnapshot!(1000);
+  assert.equal(io.request(4096,32768),20);
+  const header=new DataView(memory.buffer,4096,20);assert.equal(header.getUint32(4,true),6);
+  io.reply(header.getUint32(0,true),0,8192,write(8192,part));
+  io.reply(header.getUint32(0,true),1,0,0);
+  assert.deepEqual((await result).stamp,part.body.stamp);
+ }
+});

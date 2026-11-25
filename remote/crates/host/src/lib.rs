@@ -34,3 +34,9 @@ mod local_writer;
 mod path_guard;
 #[cfg(feature = "experimental-host-owner")]
 pub use local_writer::native_host;
+
+#[cfg(all(test, feature = "experimental-host-owner"))]
+mod observer_output_tests;
+
+#[cfg(feature = "experimental-host-owner")]
+pub mod observer_output;

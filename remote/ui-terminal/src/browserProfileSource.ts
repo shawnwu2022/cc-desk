@@ -12,7 +12,7 @@ function controlledProfile<T>(build:(inputs:ApprovedBrowserInputs)=>T){
    if(!trusted())return undefined;
    const now=()=>performance.timeOrigin+performance.now();
    if(!Number.isFinite(setupDeadline)||setupDeadline<=now()||setupDeadline>now()+10000)throw Error('browser profile deadline');
-   if(!original){const address=new URL('/browser-profile.js',location.origin).href;
+   if(!original){const address=new URL('./browser-profile.js',location.href).href;
     const controller=new AbortController(),abort=()=>controller.abort();
     const page=document,origin=location.origin,visible=()=>{if(document!==page||page.visibilityState!=='visible')abort();};
     signal.addEventListener('abort',abort,{once:true});

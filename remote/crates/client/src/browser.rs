@@ -65,6 +65,7 @@ fn application(
 }
 async fn run(client: &NativeClient) -> Result<(), DataError> {
     let value = client.descriptor()?;
+    let observer = value.role == crate::ClientRole::Observer;
     let bytes = serde_json::to_vec(&serde_json::json!({"target":value.target,"binding":value.binding,"role":value.role,"fence":client.fence.to_string()})).map_err(|_|DataError::Codec)?;
     if bytes.len() > 4096 {
         return Err(DataError::Bounds);
@@ -111,8 +112,23 @@ async fn run(client: &NativeClient) -> Result<(), DataError> {
             }
             return Ok(());
         }
+        // Private opcode 6 carries no payload. No Observer path reaches the
+        // Controller command dispatcher, including legacy/mixed bridge callers.
+        if observer != (kind == 6) {
+            return Err(DataError::Role);
+        }
         let result = cc_desk_remote_security::owner_clock::timeout_at(end, async {
             match kind {
+                6 => {
+                    if length != 20 {
+                        return Err(DataError::Codec);
+                    }
+                    client
+                        .receive_observer_view(remaining(end)?)
+                        .await?
+                        .into_snapshot()
+                        .map(|batch| batch.parts)
+                }
                 1 => client
                     .snapshot(&buffer[20..], Duration::from_millis(budget as u64))
                     .await

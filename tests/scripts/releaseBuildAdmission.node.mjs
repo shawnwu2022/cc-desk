@@ -101,7 +101,7 @@ for (const [name, fixture, expected] of [
       assert.equal(result.status, expected, result.stderr)
       if (expected === 0) {
         const version = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version
-        assert.equal(readFileSync(output, 'utf8'), `version=${version}\ntag=v${version}\n`)
+        assert.equal(readFileSync(output, 'utf8'), `version=${version}\ntag=v${version}\nmobile_release=${/^0\.28\.(?:0|[1-9]\d*)(?:-rc\.[1-9]\d*)?$/.test(version)}\n`)
         assert.match(result.stdout, /Build source admitted/)
         assert.match(result.stdout, /publication still requires exact CI coverage and signatures/)
       } else {

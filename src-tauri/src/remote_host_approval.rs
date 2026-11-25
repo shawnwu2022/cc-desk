@@ -955,6 +955,8 @@ impl ActivationTicket {
         {
             return Err(ApprovalRegistrationError::Rejected(material));
         }
+        #[cfg(windows)]
+        let formal_observer_endpoint = bound.formal_observer_endpoint;
         let d = bound.fields;
         let mut failure = validation_failure;
         if material.local.endpoint_id() != d.endpoint_id
@@ -1020,7 +1022,14 @@ impl ActivationTicket {
         #[cfg(not(windows))]
         let stop = None;
         let token = service
-            .register_approved_native_source(runtime, admission, inputs, stop)
+            .register_approved_native_source(
+                runtime,
+                admission,
+                inputs,
+                stop,
+                #[cfg(windows)]
+                formal_observer_endpoint,
+            )
             .map_err(ApprovalRegistrationError::Registration)?;
         #[cfg(test)]
         {

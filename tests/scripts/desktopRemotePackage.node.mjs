@@ -26,7 +26,9 @@ test('Vite resolves a desktop-only production distribution, even with old public
  assert.equal(browser.build.minify,desktop.build.minify);
 });
 
-import {desktopEnvironment} from '../../scripts/build-desktop-product.mjs';
+import * as desktopProduct from '../../scripts/build-desktop-product.mjs';
+import os from 'node:os';
+const {desktopEnvironment,excludeReleaseClientBootstrap}=desktopProduct;
 import path from 'node:path';
 const existing=path.resolve('scripts/build-desktop-product.mjs');
 const tools={WASM_BINDGEN:existing,CC_wasm32_unknown_unknown:existing,AR_wasm32_unknown_unknown:existing};
@@ -43,7 +45,7 @@ test('Standard build freezes tools in a child environment and rejects conflicts'
 });
 test('Windows release builds the signed desktop candidate without browser tools',()=>{
  const workflow=fs.readFileSync('.github/workflows/release.yml','utf8');
- assert.doesNotMatch(workflow,/setup-windows-browser-tools/);
+ assert.match(workflow,/Install and check signed Windows candidate before upload[\s\S]+needs\.admission\.outputs\.mobile_release == 'true'\s+uses: \.\/\.github\/actions\/setup-windows-browser-tools/);
  const action=fs.readFileSync('.github/actions/setup-windows-browser-tools/action.yml','utf8');
  assert.match(action,/cargo fetch --locked --manifest-path remote\/Cargo.toml/);
  assert.match(action,/rustup target add wasm32-unknown-unknown --toolchain 1.98.1/);
@@ -76,4 +78,19 @@ test('Browser prefetch covers the complete locked resolution graph including hos
  for(const file of ['scripts/build-browser-runtime.mjs','scripts/build-browser-registration-runtime.mjs']){
   const source=fs.readFileSync(file,'utf8');assert.ok(source.includes("'--offline','--locked'"));assert.ok(source.includes("'--target','wasm32-unknown-unknown'"));
  }
+});
+
+test('release runtime staging excludes only the unused client auto-start bootstrap',()=>{
+ const temp=fs.mkdtempSync(path.join(os.tmpdir(),'cc-desk-release-runtime-'));
+ try{
+  const client=path.join(temp,'remote-runtime'),registration=path.join(temp,'remote-registration-runtime');
+  fs.mkdirSync(client);fs.mkdirSync(registration);
+  for(const dir of [client,registration])for(const name of ['fixture_bg.wasm','fixture_bg.js','manifest.json'])fs.writeFileSync(path.join(dir,name),name);
+  fs.writeFileSync(path.join(client,'fixture.js'),'generated unused bootstrap');
+  fs.writeFileSync(path.join(client,'unexpected.js'),'must still be detectable by archive policy');
+  excludeReleaseClientBootstrap(temp);
+  assert.deepEqual(fs.readdirSync(client).sort(),['fixture_bg.js','fixture_bg.wasm','manifest.json','unexpected.js']);
+  assert.deepEqual(fs.readdirSync(registration).sort(),['fixture_bg.js','fixture_bg.wasm','manifest.json']);
+  assert.doesNotThrow(()=>excludeReleaseClientBootstrap(temp));
+ }finally{fs.rmSync(temp,{recursive:true,force:true});}
 });

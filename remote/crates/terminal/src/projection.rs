@@ -214,6 +214,10 @@ impl TerminalCore {
         }
         result
     }
+    /// Returns a read-only view without degrading the canonical terminal on rejection.
+    pub fn inspect_semantic_snapshot(&self) -> Result<SemanticSnapshot, ProjectionError> {
+        self.checked_semantic_snapshot()
+    }
     fn checked_semantic_snapshot(&self) -> Result<SemanticSnapshot, ProjectionError> {
         if self.is_degraded() {
             return Err(ProjectionError::Degraded);
@@ -334,6 +338,20 @@ mod tests {
             assert!(core.feed(b"later").is_err());
         }
     }
+    #[test]
+    fn unsupported_observer_projection_does_not_degrade_terminal() {
+        let mut core = TerminalCore::new(3, 10).unwrap();
+        core.term.grid_mut()[Line(0)][Column(0)].push_zerowidth('\u{301}');
+        assert_eq!(
+            core.inspect_semantic_snapshot().unwrap_err(),
+            ProjectionError::UnsupportedState
+        );
+        assert!(
+            !core.is_degraded(),
+            "rejecting an Observation must not mutate the canonical terminal"
+        );
+    }
+
     #[test]
     fn malformed_first_column_cursor_spacer_returns_fault_instead_of_panicking() {
         let mut core = TerminalCore::new(3, 10).unwrap();

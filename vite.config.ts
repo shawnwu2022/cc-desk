@@ -15,6 +15,7 @@ try {
 // https://vitejs.dev/config/
 const isBrowserProduct = (command: string, mode: string) => command === 'build' && mode === 'browser-product'
 export default defineConfig(({ command, mode }) => ({
+  base: isBrowserProduct(command, mode) ? './' : '/',
   plugins: [...(isBrowserProduct(command, mode) ? [registrationSourcePlugin(__dirname)] : []), visualFixturePlugin(__dirname, command === 'serve' && mode === 'visual' && process.env.CC_DESK_VISUAL_FIXTURE === '1'), vue()],
   resolve: {
     alias: {

@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
+import {browserRuntimeCompilerEnvironment} from './browser-runtime-remap.mjs';
 import {fileURLToPath} from 'node:url';
 
 export const registrationSymbols=Object.freeze([
@@ -57,7 +58,8 @@ export function buildBrowserRegistrationRuntime(){
   const runDir=fs.mkdtempSync(path.join(audit,'build-'));
   const temp=path.join(runDir,'temp'),stage=path.join(runDir,'generated');
   fs.mkdirSync(temp);fs.mkdirSync(stage);
-  const env={...process.env,TEMP:temp,TMP:temp,TMPDIR:temp,CARGO_TARGET_DIR:target,CARGO_BUILD_JOBS:'2'};
+  const compiler=browserRuntimeCompilerEnvironment(root,target);
+  const env={...compiler.env,TEMP:temp,TMP:temp,TMPDIR:temp,CARGO_TARGET_DIR:target,CARGO_BUILD_JOBS:'2'};
   const commands=[];
   function run(label,exe,args){
     commands.push({exe,args});
@@ -70,7 +72,7 @@ export function buildBrowserRegistrationRuntime(){
   const bindgen=process.env.WASM_BINDGEN??'wasm-bindgen';
   const toolchain={rustc:run('rustc-version','rustc',['-Vv']).trim(),cargo:run('cargo-version','cargo',['-V']).trim(),wasmBindgen:run('wasm-bindgen-version',bindgen,['--version']).trim()};
   const walk=dir=>fs.readdirSync(path.join(root,dir),{withFileTypes:true}).flatMap(entry=>entry.isDirectory()?walk(path.join(dir,entry.name)):entry.name.endsWith('.rs')?[path.join(dir,entry.name)]:[]);
-  const sourceFiles=['remote/browser-registration-runtime.rs','scripts/build-browser-registration-runtime.mjs',
+  const sourceFiles=['remote/browser-registration-runtime.rs','scripts/build-browser-registration-runtime.mjs','scripts/browser-runtime-remap.mjs',
     'remote/Cargo.lock','remote/Cargo.toml','remote/crates/security/Cargo.toml','protocol/remote/inner/v1/Cargo.toml',
     ...walk('remote/crates/security/src'),...walk('protocol/remote/inner/v1/src')].sort();
   const sources=sourceFiles.map(file=>({file:file.replaceAll('\\','/'),sha256:hash(path.join(root,file))}));
@@ -85,7 +87,7 @@ export function buildBrowserRegistrationRuntime(){
     '--extern',`cc_desk_remote_security=${artifacts.security}`,'remote/browser-registration-runtime.rs','-o',raw,
     '-C','link-arg=--no-entry','-C','link-arg=--export-memory'];
   for(const symbol of registrationSymbols)args.push('-C',`link-arg=--export=${symbol}`);
-  run('rustc-link','rustc',args);
+  run('rustc-link','rustc',[...compiler.flags,...args]);
   run('wasm-bindgen',bindgen,['--target','bundler','--keep-lld-exports','--no-typescript','--out-name','fixture','--out-dir',stage,raw]);
   const wasm=path.join(stage,'fixture_bg.wasm'),module=new WebAssembly.Module(fs.readFileSync(wasm));
   const exports=WebAssembly.Module.exports(module);
@@ -96,7 +98,8 @@ export function buildBrowserRegistrationRuntime(){
     ||!imports.some(value=>value.module==='./fixture_bg.js'))throw Error('browser registration runtime import policy');
   if(sources.some(({file,sha256})=>hash(path.join(root,file))!==sha256))throw Error('registration runtime sources changed during build');
   const files=['fixture_bg.wasm','fixture_bg.js'].map(name=>({name,bytes:fs.statSync(path.join(stage,name)).size,sha256:hash(path.join(stage,name))}));
-  const manifest={kind:'OriginalBrowserRegistrationRuntime',toolchain,commands,
+  fs.writeFileSync(path.join(runDir,'commands.json'),JSON.stringify(commands,null,2)+'\n');
+  const manifest={kind:'OriginalBrowserRegistrationRuntime',toolchain,
     inputs:Object.values(artifacts).map(file=>({file:relative(root,file),sha256:hash(file)})),
     cargoArtifacts:{file:relative(root,path.join(runDir,'cargo-artifacts.stdout')),sha256:hash(path.join(runDir,'cargo-artifacts.stdout'))},
     sources,files,exports:exports.map(value=>value.name),imports};

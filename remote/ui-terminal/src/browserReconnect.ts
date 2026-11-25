@@ -17,7 +17,7 @@ export function browserReconnectSession(inputs:ApprovedBrowserInputs,policy:Brow
  const budgetMs=budget&&'value'in budget?budget.value:undefined;
  if(!fields||Reflect.ownKeys(fields).length!==2||!mode?.enumerable||!('value'in mode)||mode.value!=='safe-idle-retry-v1'||!budget?.enumerable||!('value'in budget)||typeof budgetMs!=='number'||!Number.isInteger(budgetMs)||budgetMs<1||budgetMs>60000||!(signal instanceof AbortSignal))throw Error('browser retry policy');
  const approved=approvedBrowserInputs(inputs),enrollment=approved.enrollment;
- if(approved.relay.mode!=='rendezvous-v1'||!enrollment?.retire||enrollment.signal.aborted||signal.aborted||approved.grant.peerInstall?.controlLease!=='live-v1'||approved.grant.peerInstall.snapshotPull!=='snapshot-pull-v1')throw Error('browser retry unavailable');
+ if(approved.grant.role!=='Controller'||approved.relay.mode!=='rendezvous-v1'||!enrollment?.retire||enrollment.signal.aborted||signal.aborted||approved.grant.peerInstall?.controlLease!=='live-v1'||approved.grant.peerInstall.snapshotPull!=='snapshot-pull-v1')throw Error('browser retry unavailable');
  if(typeof Document==='undefined'||!(document instanceof Document))throw Error('browser retry document');
  const page=document,origin=location.origin,controller=new AbortController(),tasks=new Set<Promise<unknown>>();
  let state:BrowserRetryState='New',closed=false,uncertain=false,replacements=0,nextId=0,current:Generation|undefined,client:TerminalClient|undefined,target:Target|undefined,role:TerminalConnection['role']|undefined;

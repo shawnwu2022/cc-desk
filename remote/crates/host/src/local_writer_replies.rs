@@ -363,10 +363,15 @@ impl ReplyState {
         if core.display_pending() {
             return Err(Reject::Sync);
         }
-        let view = core.semantic_snapshot().map_err(|_| {
-            sealed.store(true, Ordering::Release);
-            Reject::Unsupported
-        })?;
+        let view = if request.observer.is_some() {
+            core.inspect_semantic_snapshot()
+                .map_err(|_| Reject::Unsupported)?
+        } else {
+            core.semantic_snapshot().map_err(|_| {
+                sealed.store(true, Ordering::Release);
+                Reject::Unsupported
+            })?
+        };
         Ok(super::projection::CapturedProjection::new(
             request,
             target,

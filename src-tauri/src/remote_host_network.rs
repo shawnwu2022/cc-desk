@@ -8,6 +8,7 @@ use crate::{
     remote_host::RemoteHostService,
     run_supervisor::{NativeRunAdmission, NativeRunNetworkOrigin},
 };
+use cc_desk_remote_record::grant::DataRole;
 use cc_desk_remote_security::{
     self as security, BrowserProfile, GrantClock, GrantError, GrantGate, HostSnapshot,
     LocalIdentity, NativeGrantPolicy, P256Spki, PeerPin, RunningChannel,
@@ -217,6 +218,9 @@ impl HostSourceDescription {
 }
 struct RegisteredHostSource {
     description: HostSourceDescription,
+    #[cfg(windows)]
+    formal_observer_endpoint:
+        Option<crate::remote_host_controller::startup::configuration::FormalObserverEndpoint>,
     origin: NativeRunNetworkOrigin,
     live: AtomicBool,
     approval: Option<NativeApprovalStop>,
@@ -225,6 +229,23 @@ impl RegisteredHostSource {
     fn is_live(&self) -> bool {
         self.live.load(Ordering::Acquire)
             && self.approval.as_ref().is_none_or(|stop| !stop.is_invalid())
+    }
+}
+/// The original registry entry and the wire-owned grant must move together.
+/// This type is never constructed from frontend input or delegated wire.
+pub(crate) struct OriginalObserverHandoff {
+    registered: Arc<RegisteredHostSource>,
+    grant: wire::OriginalObserverGrant,
+}
+impl OriginalObserverHandoff {
+    pub(crate) fn into_parts(
+        self,
+        admission: &NativeRunAdmission,
+    ) -> Result<(Arc<RunningChannel>, NativeApprovalStop, Instant), HostNetworkError> {
+        if !self.registered.is_live() || !self.registered.origin.matches(admission) {
+            return Err(HostNetworkError::Authority);
+        }
+        Ok(self.grant.into_parts())
     }
 }
 /// 只能由本服务接受原 native 批准能力后取得；不是可序列化授权或 Ready。
@@ -700,6 +721,7 @@ impl HostNetworkCustody {
                     clock,
                     continuity,
                     approval_stop,
+                    registration.as_ref(),
                     &published,
                 )
                 .await
@@ -775,6 +797,63 @@ impl HostNetworkCustody {
         known && !self.unknown_latched.load(Ordering::Acquire) && !self.state.lock().unknown
     }
 }
+pub(crate) struct ObserverPublicationGuard<'a> {
+    registration: &'a Arc<RegisteredHostSource>,
+    receipt: &'a crate::run_supervisor::NativeObserverInstallReceipt,
+}
+impl ObserverPublicationGuard<'_> {
+    // Runs within the application publication locks. Never sample a GrantClock
+    // or call any provider from this guard.
+    pub(crate) fn is_current(&self, slot: &HostSourceSlot) -> bool {
+        slot.registration
+            .as_ref()
+            .is_some_and(|registered| Arc::ptr_eq(registered, self.registration))
+            && self.registration.is_live()
+            && !*self.registration.description.source.revoked.borrow()
+            && matches!(
+                self.registration.description.source.revoked.has_changed(),
+                Ok(false)
+            )
+            && self.receipt.is_current_for_publication()
+    }
+}
+
+/// The separate, non-default acceptance build never reaches beyond local loopback.
+pub(crate) fn local_observer_address(address: SocketAddr) -> bool {
+    cfg!(all(
+        test,
+        windows,
+        feature = "remote-observer-local-acceptance"
+    )) && address.port() != 0
+        && address.ip() == std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
+}
+
+fn observer_route_allowed(
+    connector: Connector,
+    address: SocketAddr,
+    origin: &cc_desk_remote_record::appbind::CanonicalOrigin,
+    #[cfg(windows)] endpoint: Option<
+        &crate::remote_host_controller::startup::configuration::FormalObserverEndpoint,
+    >,
+) -> bool {
+    match connector {
+        Connector::WebPki => {
+            #[cfg(windows)]
+            {
+                cfg!(feature = "remote-observer")
+                    && endpoint.is_some_and(|endpoint| endpoint.matches(address, origin))
+            }
+            #[cfg(not(windows))]
+            {
+                let _ = (address, origin);
+                false
+            }
+        }
+        #[cfg(test)]
+        Connector::PublicLoopbackFixture => local_observer_address(address),
+    }
+}
+
 fn remaining(end: Instant) -> Result<Duration, HostNetworkError> {
     end.checked_duration_since(Instant::now())
         .filter(|d| !d.is_zero())
@@ -821,12 +900,33 @@ async fn run_attempt(
     clock: Arc<SourceClock>,
     _continuity: Arc<ContinuityChecks>,
     approval_stop: Option<NativeApprovalStop>,
+    registration: Option<&Arc<RegisteredHostSource>>,
     published: &watch::Sender<Option<Result<(), HostNetworkError>>>,
 ) -> Result<(), HostNetworkError> {
     #[cfg(test)]
     let mut inputs = inputs;
     #[cfg(test)]
     let termination = inputs.termination.take();
+    let observer = inputs.policy.role == DataRole::Observer;
+    if observer
+        && !observer_route_allowed(
+            connector,
+            inputs.address,
+            &inputs.binding.origin,
+            #[cfg(windows)]
+            registration.and_then(|source| source.formal_observer_endpoint.as_ref()),
+        )
+    {
+        return Err(HostNetworkError::Locked);
+    }
+    #[cfg(all(
+        windows,
+        any(
+            feature = "remote-observer",
+            all(test, feature = "remote-observer-local-acceptance")
+        )
+    ))]
+    let mut observer_owner = None;
     let source = inputs.source.clone();
     let mut wire = wire::NetworkWire::new();
     let mut source_stop = source.revoked.clone();
@@ -838,6 +938,31 @@ async fn run_attempt(
         if !setup_allowed {
             return Err(HostNetworkError::Closed);
         }
+        let observer_source = if observer {
+            let registered = registration.ok_or(HostNetworkError::Authority)?;
+            let admission = original.as_ref().ok_or(HostNetworkError::Authority)?;
+            if !registered.is_live()
+                || !Arc::ptr_eq(&registered.description.source, &source)
+                || !registered.origin.matches(admission)
+                || registered.description.policy.role != DataRole::Observer
+            {
+                return Err(HostNetworkError::Authority);
+            }
+            #[cfg(windows)]
+            let matched = inputs.stages.as_ref().is_some_and(|stages| {
+                approval_stop
+                    .as_ref()
+                    .is_some_and(|approval| stages.matches_approval(approval))
+            });
+            #[cfg(not(windows))]
+            let matched = false;
+            if !matched {
+                return Err(HostNetworkError::Authority);
+            }
+            Some(registered)
+        } else {
+            None
+        };
         let source_anchor = Instant::now();
         let now = clock.now_ms().map_err(|_| HostNetworkError::Authority)?;
         source_end = Some(
@@ -852,10 +977,75 @@ async fn run_attempt(
                 clock.clone(),
                 end,
                 approval_stop.as_ref(),
+                source.clone(),
             )
             .await?;
         remaining(end)?;
         clock.now_ms().map_err(|_| HostNetworkError::Authority)?;
+        if let Some(registered) = observer_source {
+            if !registered.is_live() {
+                return Err(HostNetworkError::Authority);
+            }
+            let approval = registered
+                .approval
+                .as_ref()
+                .ok_or(HostNetworkError::Authority)?;
+            let grant = wire.mint_original_observer_handoff(
+                &registered.description.source,
+                approval,
+                end.min(source_end.ok_or(HostNetworkError::Bounds)?),
+            )?;
+            let handoff = OriginalObserverHandoff {
+                registered: registered.clone(),
+                grant,
+            };
+            #[cfg(not(all(
+                windows,
+                any(
+                    feature = "remote-observer",
+                    all(test, feature = "remote-observer-local-acceptance")
+                )
+            )))]
+            {
+                drop(handoff);
+                return Err(HostNetworkError::Locked);
+            }
+            #[cfg(all(
+                windows,
+                any(
+                    feature = "remote-observer",
+                    all(test, feature = "remote-observer-local-acceptance")
+                )
+            ))]
+            {
+                let owner = service.upgrade().ok_or(HostNetworkError::Closed)?;
+                let admission = original.take().ok_or(HostNetworkError::Authority)?;
+                observer_owner = Some(
+                    admission
+                        .start_observer_once(handoff)
+                        .map_err(|_| HostNetworkError::Handoff)?,
+                );
+                let receipt = observer_owner
+                    .as_mut()
+                    .ok_or(HostNetworkError::Handoff)?
+                    .wait_install_receipt()
+                    .await
+                    .ok_or(HostNetworkError::Handoff)?;
+                if !registered.is_live() || !receipt.is_live() {
+                    return Err(HostNetworkError::Authority);
+                }
+                clock.now_ms().map_err(|_| HostNetworkError::Authority)?;
+                return owner.commit_network_handoff_checked(
+                    published,
+                    &publication_stop,
+                    end,
+                    Some(ObserverPublicationGuard {
+                        registration: &registered,
+                        receipt: &receipt,
+                    }),
+                );
+            }
+        }
         let owned = original.take().expect("original synchronous admission");
         let owner = service.upgrade().ok_or(HostNetworkError::Closed)?;
         if let Err(rejected) = owner.adopt_admitted(owned, channel, &runtime) {
@@ -892,7 +1082,31 @@ async fn run_attempt(
     } else {
         result
     };
+    #[cfg(not(all(
+        windows,
+        any(
+            feature = "remote-observer",
+            all(test, feature = "remote-observer-local-acceptance")
+        )
+    )))]
     let wire_known = wire.close_and_join().await;
+    #[cfg(all(
+        windows,
+        any(
+            feature = "remote-observer",
+            all(test, feature = "remote-observer-local-acceptance")
+        )
+    ))]
+    let wire_known = {
+        let retire_observer = async {
+            match observer_owner.as_mut() {
+                Some(owner) => owner.retire().await.is_ok(),
+                None => true,
+            }
+        };
+        let (wire_closed, observer_closed) = tokio::join!(wire.close_and_join(), retire_observer);
+        wire_closed && observer_closed
+    };
     drop(original);
     #[cfg(test)]
     if let Some(termination) = termination {
@@ -920,7 +1134,14 @@ impl RemoteHostService {
         admission: &NativeRunAdmission,
         inputs: ApprovedHostInputs,
     ) -> Result<HostSourceToken, Box<(HostNetworkError, ApprovedHostInputs)>> {
-        self.register_approved_native_source(runtime, admission, inputs, None)
+        self.register_approved_native_source(
+            runtime,
+            admission,
+            inputs,
+            None,
+            #[cfg(windows)]
+            None,
+        )
     }
     pub(crate) fn register_approved_native_source(
         &self,
@@ -928,6 +1149,9 @@ impl RemoteHostService {
         admission: &NativeRunAdmission,
         inputs: ApprovedHostInputs,
         approval: Option<NativeApprovalStop>,
+        #[cfg(windows)] formal_observer_endpoint: Option<
+            crate::remote_host_controller::startup::configuration::FormalObserverEndpoint,
+        >,
     ) -> Result<HostSourceToken, Box<(HostNetworkError, ApprovedHostInputs)>> {
         #[cfg(windows)]
         if inputs.stages.as_ref().is_some_and(|stages| {
@@ -939,6 +1163,14 @@ impl RemoteHostService {
         }
         if self.network.unknown_latched.load(Ordering::Acquire) {
             return Err(Box::new((HostNetworkError::Unknown, inputs)));
+        }
+        #[cfg(windows)]
+        if formal_observer_endpoint.as_ref().is_some_and(|endpoint| {
+            inputs.policy.role != DataRole::Observer
+                || !endpoint.matches(inputs.address, &inputs.binding.origin)
+                || approval.as_ref().is_none_or(NativeApprovalStop::is_invalid)
+        }) {
+            return Err(Box::new((HostNetworkError::Authority, inputs)));
         }
         let checked = (|| {
             if !admission.is_owned_by(runtime)
@@ -990,6 +1222,8 @@ impl RemoteHostService {
             termination,
         } = inputs;
         let registration = Arc::new(RegisteredHostSource {
+            #[cfg(windows)]
+            formal_observer_endpoint,
             description: HostSourceDescription {
                 address,
                 tunnel,
@@ -2285,4 +2519,66 @@ mod reentry_regression {
         let (independent, _other_sender, _other_checks) = clock(Arc::new(|| Ok(1000)));
         assert_eq!(independent.now_ms(), Ok(1000));
     }
+}
+
+#[cfg(all(test, windows))]
+#[test]
+#[allow(non_snake_case)]
+fn ObserverRouting_FormalProofCannotSubstituteFixtureOrEndpoint() {
+    use crate::remote_host_controller::startup::configuration::{
+        test_json, FrozenRegistrationStart,
+    };
+    use cc_desk_remote_record::appbind::CanonicalOrigin;
+
+    let mut request: serde_json::Value = serde_json::from_str(&test_json()).unwrap();
+    request["origin"] = "wss://relay.invalid:8443/one".into();
+    request["address"] = "192.0.2.1:8443".into();
+    let controller = FrozenRegistrationStart::parse(&request.to_string()).unwrap();
+    assert!(controller.formal_observer_endpoint().is_none());
+    request["accessMode"] = "observerOnce".into();
+    let observer = FrozenRegistrationStart::parse(&request.to_string()).unwrap();
+    let check = |connector, address, origin, endpoint| {
+        observer_route_allowed(connector, address, origin, endpoint)
+    };
+    let endpoint = observer.formal_observer_endpoint();
+    let different = CanonicalOrigin::trusted("wss://relay.invalid:8443/other").unwrap();
+    assert!(!check(
+        Connector::WebPki,
+        observer.address,
+        &observer.origin,
+        None
+    ));
+    assert_eq!(
+        check(
+            Connector::WebPki,
+            observer.address,
+            &observer.origin,
+            endpoint.as_ref()
+        ),
+        cfg!(feature = "remote-observer")
+    );
+    assert!(!check(
+        Connector::WebPki,
+        observer.address,
+        &different,
+        endpoint.as_ref()
+    ));
+    assert!(!check(
+        Connector::WebPki,
+        "192.0.2.2:8443".parse().unwrap(),
+        &observer.origin,
+        endpoint.as_ref()
+    ));
+    assert!(!check(
+        Connector::PublicLoopbackFixture,
+        observer.address,
+        &observer.origin,
+        endpoint.as_ref()
+    ));
+    assert!(!check(
+        Connector::WebPki,
+        "127.0.0.1:8443".parse().unwrap(),
+        &observer.origin,
+        None
+    ));
 }

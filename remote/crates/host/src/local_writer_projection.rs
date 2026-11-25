@@ -158,6 +158,7 @@ pub(super) struct ProjectionRequest {
     pub(super) context: Arc<()>,
     pub(super) reply: mpsc::SyncSender<Result<CapturedProjection, Reject>>,
     pub(super) peer: Option<Arc<InputPeerScope>>,
+    pub(super) observer: Option<Box<dyn Fn() -> bool + Send>>,
     credit: Arc<ViewCredit>,
 }
 #[derive(Clone)]
@@ -176,12 +177,35 @@ impl ProjectionHandle {
             credits: budget.0,
         }
     }
+    #[cfg(all(test, feature = "experimental-host-owner"))]
+    pub(super) fn with_test_credits(&self) -> Self {
+        let mut isolated = self.clone();
+        isolated.credits = HostViewBudget::new().0;
+        isolated
+    }
+
     pub(super) fn capture(&self) -> Result<PendingProjection, Reject> {
         self.capture_inner(None)
     }
     pub(super) fn capture_inner(
         &self,
         peer: Option<Arc<InputPeerScope>>,
+    ) -> Result<PendingProjection, Reject> {
+        self.enqueue(peer, None)
+    }
+
+    #[cfg(feature = "experimental-host-owner")]
+    pub(super) fn capture_observer(
+        &self,
+        admit: Box<dyn Fn() -> bool + Send>,
+    ) -> Result<PendingProjection, Reject> {
+        self.enqueue(None, Some(admit))
+    }
+
+    fn enqueue(
+        &self,
+        peer: Option<Arc<InputPeerScope>>,
+        observer: Option<Box<dyn Fn() -> bool + Send>>,
     ) -> Result<PendingProjection, Reject> {
         if self.sealed.load(Ordering::Acquire) {
             return Err(Reject::Sealed);
@@ -193,6 +217,7 @@ impl ProjectionHandle {
                 context: self.context.clone(),
                 reply: tx,
                 peer,
+                observer,
                 credit: credit.clone(),
             }))
             .map_err(|e| match e {

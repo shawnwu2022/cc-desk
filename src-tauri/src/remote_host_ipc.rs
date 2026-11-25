@@ -57,6 +57,7 @@ pub(crate) struct HostPairingScope {
     session: String,
     run: String,
     generation: String,
+    observer_available: bool,
 }
 
 #[cfg(windows)]
@@ -73,6 +74,7 @@ pub(crate) fn read_pairing_scope(
         session: scope.session,
         run: scope.run,
         generation: scope.generation,
+        observer_available: cfg!(feature = "remote-observer"),
     })
 }
 

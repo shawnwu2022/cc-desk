@@ -1012,6 +1012,10 @@ struct SupervisedRun {
     managed_job: Option<Arc<crate::platform::owned_job_launch::ManagedJob>>,
     #[cfg(feature = "remote-host")]
     native_canonical: Mutex<Option<crate::cli::launch_service::NativeCanonicalRun>>,
+    #[cfg(feature = "remote-host")]
+    observer_stopped: tokio::sync::watch::Sender<bool>,
+    #[cfg(feature = "remote-host")]
+    observer_active: AtomicBool,
     core: Weak<SupervisorCore>,
     registry: Arc<RunRegistry<NativeRun>>,
     run: RunKey,
@@ -1072,6 +1076,10 @@ impl SupervisedRun {
             managed_job: resource.process.managed_job.clone(),
             #[cfg(feature = "remote-host")]
             native_canonical: Mutex::new(None),
+            #[cfg(feature = "remote-host")]
+            observer_stopped: tokio::sync::watch::channel(false).0,
+            #[cfg(feature = "remote-host")]
+            observer_active: AtomicBool::new(false),
             core,
             registry,
             run,
@@ -1259,6 +1267,8 @@ impl SupervisedRun {
                 return;
             }
             self.reaped.store(true, Ordering::SeqCst);
+            #[cfg(feature = "remote-host")]
+            self.observer_stopped.send_replace(true);
         }
 
         if let Err(failure) = self.lifecycle.lock().process_exited() {
@@ -1434,6 +1444,8 @@ impl SupervisedRun {
     }
 
     fn request_stop(self: &Arc<Self>) -> Result<(), SafeError> {
+        #[cfg(feature = "remote-host")]
+        self.observer_stopped.send_replace(true);
         #[cfg(feature = "remote-host")]
         {
             let input = self
@@ -2997,6 +3009,10 @@ mod wait_worker_join_tests {
             managed_job: None,
             #[cfg(feature = "remote-host")]
             native_canonical: Mutex::new(None),
+            #[cfg(feature = "remote-host")]
+            observer_stopped: tokio::sync::watch::channel(false).0,
+            #[cfg(feature = "remote-host")]
+            observer_active: AtomicBool::new(false),
             core: Weak::new(),
             registry: Arc::new(RunRegistry::new(1)),
             lifecycle: Mutex::new(LifecycleRecord::new(run.clone())),
@@ -3274,3 +3290,701 @@ mod raw_output_read_tests {
 #[cfg(feature = "remote-host")]
 #[path = "run_supervisor/delegated.rs"]
 pub(crate) mod delegated;
+
+#[cfg(all(test, feature = "remote-host"))]
+#[allow(non_snake_case)]
+mod native_observer_lifetime_tests {
+    use super::wait_for_observer_stop;
+    use tokio::{
+        sync::watch,
+        time::{Duration, Instant},
+    };
+
+    #[tokio::test]
+    async fn ObserverLifetime_OnlyOriginalRunStopsBlockedObserver_001() {
+        let (original, stop) = watch::channel(false);
+        let (other, _) = watch::channel(false);
+        other.send_replace(true);
+        let mut wait = std::pin::pin!(wait_for_observer_stop(
+            stop,
+            std::future::pending(),
+            Instant::now() + Duration::from_secs(1),
+        ));
+        assert!(tokio::time::timeout(Duration::from_millis(10), &mut wait)
+            .await
+            .is_err());
+        original.send_replace(true);
+        assert!(tokio::time::timeout(Duration::from_millis(250), &mut wait)
+            .await
+            .is_ok());
+    }
+
+    #[tokio::test]
+    async fn ObserverLifetime_RevocationAndExpiredDeadlineStopImmediately_002() {
+        let (_run, stop) = watch::channel(false);
+        assert!(tokio::time::timeout(
+            Duration::from_millis(250),
+            wait_for_observer_stop(
+                stop.clone(),
+                std::future::ready(()),
+                Instant::now() + Duration::from_secs(1)
+            )
+        )
+        .await
+        .is_ok());
+        assert!(tokio::time::timeout(
+            Duration::from_millis(250),
+            wait_for_observer_stop(stop, std::future::pending(), Instant::now())
+        )
+        .await
+        .is_ok());
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn ObserverLifetime_OriginalApprovalRetiresOwnerAndKeepsJoin_003() {
+        use super::{wait_for_observer_retirement, NativeObserverOwner};
+        use crate::{
+            native_crypto::owner::NativeRevocation, remote_host_network::NativeApprovalStop,
+        };
+        use tokio::sync::oneshot;
+
+        let cap = std::time::Instant::now() + Duration::from_secs(10);
+        let original = NativeRevocation::new();
+        let other = NativeRevocation::new();
+        let approval = NativeApprovalStop::new(original.clone(), cap);
+        let (_run, stop) = watch::channel(false);
+        let (_cancel, cancelled) = oneshot::channel();
+        let (stopping, mut stopped) = oneshot::channel();
+        let (release, receipt) = oneshot::channel();
+        let mut owner = NativeObserverOwner {
+            installation: None,
+            cancel: None,
+            result: None,
+            retirement_end: None,
+            task: tokio::spawn(async move {
+                wait_for_observer_retirement(stop, cancelled, approval, Instant::from_std(cap))
+                    .await;
+                stopping.send(()).unwrap();
+                receipt.await.unwrap();
+                Ok(())
+            }),
+        };
+
+        other.revoke();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(25), &mut stopped)
+                .await
+                .is_err()
+        );
+        original.revoke();
+        tokio::time::timeout(Duration::from_secs(1), stopped)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(25), owner.retire())
+                .await
+                .is_err()
+        );
+        release.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(1), owner.retire())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(owner.retire().await.is_ok());
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn ObserverLifetime_InstalledExactPeerRetiresWithOriginalApproval_007() {
+        use super::{
+            finish_observer_task, observer_task_result, wait_for_observer_retirement,
+            NativeObserverInstallReceipt, NativeObserverOwner,
+        };
+        use crate::{
+            native_crypto::owner::NativeRevocation, remote_host_network::NativeApprovalStop,
+            tests::remote_channels::channels_with_role,
+        };
+        use cc_desk_remote_record::grant::{DataRole, SessionScope};
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        };
+        use tokio::sync::oneshot;
+
+        let forbid_clock = Arc::new(AtomicBool::new(false));
+        let clock_check = forbid_clock.clone();
+        let (peer, host, _gate, _channel_owner) = channels_with_role(
+            SessionScope {
+                session: "42".repeat(16),
+                run: "TEST_ONLY_OBSERVER".into(),
+                generation: "1".into(),
+            },
+            Arc::new(move || {
+                assert!(
+                    !clock_check.load(Ordering::Acquire),
+                    "publication must not call provider"
+                );
+                Ok(1000)
+            }),
+            DataRole::Observer,
+        )
+        .await;
+        let host = Arc::new(host);
+        let end = Instant::now() + Duration::from_secs(5);
+        let original = NativeRevocation::new();
+        let approval = NativeApprovalStop::new(original.clone(), end.into_std());
+        let (_run, stopped) = watch::channel(false);
+        let (cancel, cancelled) = oneshot::channel();
+        let (install, installation) = oneshot::channel();
+        let active = Arc::new(AtomicBool::new(true));
+        assert!(NativeObserverInstallReceipt::from_installed(&host, &approval, end).is_none());
+
+        let task = {
+            let host = host.clone();
+            let active = active.clone();
+            tokio::spawn(async move {
+                let authority = host.authority();
+                let stop = wait_for_observer_retirement(stopped, cancelled, approval.clone(), end);
+                let work = async {
+                    let request = host.host_install_request().await.unwrap();
+                    host.complete_host_install(request, 7).await.unwrap();
+                    let receipt =
+                        NativeObserverInstallReceipt::from_installed(&host, &approval, end)
+                            .unwrap();
+                    assert!(install.send(receipt).is_ok());
+                    std::future::pending().await
+                };
+                let result = observer_task_result(stop, work).await;
+                finish_observer_task::<()>(&host, &authority, &mut None, result, &active).await
+            })
+        };
+        let mut owner = NativeObserverOwner {
+            installation: Some(installation),
+            cancel: Some(cancel),
+            result: None,
+            retirement_end: None,
+            task,
+        };
+        assert!(owner.take_install_receipt().is_none());
+        assert_eq!(
+            peer.client_installed()
+                .await
+                .unwrap()
+                .consume_for(&peer)
+                .unwrap(),
+            7
+        );
+        let receipt = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if let Some(receipt) = owner.take_install_receipt() {
+                    break receipt;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(Arc::ptr_eq(&receipt.channel, &host));
+        assert!(receipt.is_live());
+        forbid_clock.store(true, Ordering::Release);
+        assert!(receipt.is_current_for_publication());
+        forbid_clock.store(false, Ordering::Release);
+        assert!(owner.take_install_receipt().is_none());
+
+        // Only the original approval is revoked: no manual peer close and no
+        // owner.retire() call until the exact owned task already completed.
+        original.revoke();
+        assert!(!receipt.is_current_for_publication());
+        assert!(!receipt.is_live());
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !owner.task.is_finished() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(!active.load(Ordering::Acquire));
+        tokio::time::timeout(Duration::from_secs(1), peer.wait_closed_checked())
+            .await
+            .unwrap()
+            .unwrap();
+        owner.retire().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn ObserverLifetime_RetirementDeadlineRetainsOriginalJoin_004() {
+        use super::NativeObserverOwner;
+        use tokio::sync::oneshot;
+
+        let (release, receipt) = oneshot::channel();
+        let mut owner = NativeObserverOwner {
+            installation: None,
+            cancel: None,
+            result: None,
+            retirement_end: None,
+            task: tokio::spawn(async move {
+                receipt.await.unwrap();
+                Ok(())
+            }),
+        };
+        let error = tokio::time::timeout(Duration::from_secs(3), owner.retire())
+            .await
+            .expect("an unreceipted owner must have a bounded retirement wait")
+            .expect_err("elapsed wait cannot report actual retirement");
+        assert_eq!(error.code, "REMOTE_OBSERVER_RETIREMENT_UNKNOWN");
+        let immediate = tokio::time::timeout(Duration::from_millis(250), owner.retire())
+            .await
+            .expect("retry must not renew the original retirement deadline")
+            .expect_err("pending join is still unknown");
+        assert_eq!(immediate.code, "REMOTE_OBSERVER_RETIREMENT_UNKNOWN");
+
+        release.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !owner.task.is_finished() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(owner.retire().await.is_ok(), "original completion was lost");
+    }
+
+    #[tokio::test]
+    async fn ObserverLifetime_CaptureJoinSurvivesCancelledAwait_005() {
+        use super::{retire_observer_capture, spawn_observer_capture};
+        use tokio::sync::oneshot;
+
+        let (entered, started) = oneshot::channel();
+        let (release, held) = std::sync::mpsc::channel();
+        let mut capture = Some(spawn_observer_capture(
+            std::time::Instant::now() + Duration::from_secs(1),
+            move |budget| {
+                assert!(budget <= Duration::from_secs(1));
+                entered.send(()).unwrap();
+                held.recv_timeout(budget).unwrap();
+            },
+        ));
+        tokio::time::timeout(Duration::from_millis(500), started)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(25), capture.as_mut().unwrap())
+                .await
+                .is_err()
+        );
+        {
+            let mut join = std::pin::pin!(retire_observer_capture(&mut capture));
+            assert!(tokio::time::timeout(Duration::from_millis(25), &mut join)
+                .await
+                .is_err());
+            release.send(()).unwrap();
+            assert!(tokio::time::timeout(Duration::from_millis(500), &mut join)
+                .await
+                .unwrap());
+        }
+        assert!(capture.is_none(), "known join must release the worker slot");
+    }
+
+    #[tokio::test]
+    async fn ObserverLifetime_ExpiredCaptureDoesNotStartAndLateResultIsDiscarded_006() {
+        use super::spawn_observer_capture;
+        let expired = spawn_observer_capture(std::time::Instant::now(), |_| {
+            panic!("expired capture must not borrow the original producer");
+        });
+        assert!(expired.await.unwrap().is_none());
+
+        let (entered, did_run) = tokio::sync::oneshot::channel();
+        let cutoff = std::time::Instant::now() + Duration::from_millis(200);
+        let late = spawn_observer_capture(cutoff, move |_| {
+            entered.send(()).unwrap();
+            std::thread::sleep(cutoff.saturating_duration_since(std::time::Instant::now()));
+            1u8
+        });
+        tokio::time::timeout(Duration::from_millis(500), did_run)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(late.await.unwrap().is_none());
+    }
+}
+
+#[cfg(feature = "remote-host")]
+async fn wait_for_observer_stop(
+    mut run: tokio::sync::watch::Receiver<bool>,
+    revoke: impl std::future::Future<Output = ()>,
+    deadline: tokio::time::Instant,
+) {
+    tokio::select! {
+        biased;
+        _ = run.wait_for(|closed| *closed) => {}
+        _ = revoke => {}
+        _ = tokio::time::sleep_until(deadline) => {}
+    }
+}
+
+#[cfg(feature = "remote-host")]
+async fn wait_for_observer_retirement(
+    stopped: tokio::sync::watch::Receiver<bool>,
+    cancelled: tokio::sync::oneshot::Receiver<()>,
+    approval: crate::remote_host_network::NativeApprovalStop,
+    end: tokio::time::Instant,
+) {
+    wait_for_observer_stop(
+        stopped,
+        async {
+            tokio::select! {
+                _ = cancelled => {}
+                _ = crate::remote_host_network::NativeApprovalStop::wait(Some(&approval)) => {}
+            }
+        },
+        end,
+    )
+    .await;
+}
+
+#[cfg(feature = "remote-host")]
+fn spawn_observer_capture<T: Send + 'static>(
+    cutoff: std::time::Instant,
+    capture: impl FnOnce(Duration) -> T + Send + 'static,
+) -> tokio::task::JoinHandle<Option<T>> {
+    tokio::task::spawn_blocking(move || {
+        let budget = cutoff
+            .checked_duration_since(std::time::Instant::now())?
+            .min(Duration::from_secs(1));
+        if budget.is_zero() {
+            return None;
+        }
+        let result = capture(budget);
+        (std::time::Instant::now() < cutoff).then_some(result)
+    })
+}
+
+#[cfg(feature = "remote-host")]
+async fn retire_observer_capture<T>(
+    worker: &mut Option<tokio::task::JoinHandle<Option<T>>>,
+) -> bool {
+    let Some(original) = worker.as_mut() else {
+        return true;
+    };
+    // Abort a queued capture; a running blocking capture still needs its real
+    // join, including after cancellation of the future that originally waited.
+    original.abort();
+    let known = match original.await {
+        Ok(_) => true,
+        Err(error) => error.is_cancelled(),
+    };
+    *worker = None;
+    known
+}
+
+#[cfg(feature = "remote-host")]
+async fn observer_task_result(
+    stop: impl std::future::Future<Output = ()>,
+    work: impl std::future::Future<Output = Result<(), SafeError>>,
+) -> Result<(), SafeError> {
+    tokio::select! {
+        biased;
+        _ = stop => Ok(()),
+        result = work => result,
+    }
+}
+
+#[cfg(feature = "remote-host")]
+async fn finish_observer_task<T>(
+    channel: &cc_desk_remote_security::RunningChannel,
+    authority: &cc_desk_remote_security::BoundDataAuthority,
+    capture_worker: &mut Option<tokio::task::JoinHandle<Option<T>>>,
+    result: Result<(), SafeError>,
+    active: &AtomicBool,
+) -> Result<(), SafeError> {
+    authority.request_close();
+    let (capture_known, channel_closed) = tokio::join!(
+        retire_observer_capture(capture_worker),
+        channel.wait_closed_checked(),
+    );
+    if !capture_known
+        || channel_closed.is_err()
+        || result
+            .as_ref()
+            .is_err_and(|failure| failure.code == "REMOTE_OBSERVER_RETIREMENT_UNKNOWN")
+    {
+        return Err(error("REMOTE_OBSERVER_RETIREMENT_UNKNOWN"));
+    }
+    active.store(false, Ordering::Release);
+    result
+}
+
+#[cfg(feature = "remote-host")]
+#[allow(dead_code, reason = "not connected to the product entry")]
+pub(crate) struct NativeObserverInstallReceipt {
+    channel: Arc<cc_desk_remote_security::RunningChannel>,
+    approval: crate::remote_host_network::NativeApprovalStop,
+    end: tokio::time::Instant,
+    fence: u64,
+}
+
+#[cfg(feature = "remote-host")]
+#[allow(dead_code, reason = "not connected to the product entry")]
+impl NativeObserverInstallReceipt {
+    fn from_installed(
+        channel: &Arc<cc_desk_remote_security::RunningChannel>,
+        approval: &crate::remote_host_network::NativeApprovalStop,
+        end: tokio::time::Instant,
+    ) -> Option<Self> {
+        use cc_desk_remote_record::grant::DataRole;
+        use cc_desk_remote_security::Role;
+
+        let authority = channel.authority();
+        if authority.local_role() != Role::Host || authority.data_role() != DataRole::Observer {
+            return None;
+        }
+        let receipt = Self {
+            channel: channel.clone(),
+            approval: approval.clone(),
+            end,
+            fence: channel.installed_fence().ok()?,
+        };
+        receipt.is_live().then_some(receipt)
+    }
+
+    pub(crate) fn is_current_for_publication(&self) -> bool {
+        tokio::time::Instant::now() < self.end
+            && !self.approval.is_invalid()
+            && self
+                .channel
+                .has_current_installed_fence_without_clock(self.fence)
+    }
+
+    pub(crate) fn is_live(&self) -> bool {
+        tokio::time::Instant::now() < self.end
+            && !self.approval.is_invalid()
+            && self
+                .channel
+                .installed_fence()
+                .is_ok_and(|fence| fence == self.fence)
+    }
+}
+
+#[cfg(feature = "remote-host")]
+#[allow(dead_code, reason = "not connected to the product entry")]
+pub(crate) struct NativeObserverOwner {
+    installation: Option<tokio::sync::oneshot::Receiver<NativeObserverInstallReceipt>>,
+    cancel: Option<tokio::sync::oneshot::Sender<()>>,
+    result: Option<Result<(), SafeError>>,
+    retirement_end: Option<tokio::time::Instant>,
+    task: tokio::task::JoinHandle<Result<(), SafeError>>,
+}
+
+#[cfg(feature = "remote-host")]
+#[allow(dead_code, reason = "未接入产品授权和启动入口")]
+impl NativeObserverOwner {
+    #[cfg(all(
+        windows,
+        any(
+            feature = "remote-observer",
+            all(test, feature = "remote-observer-local-acceptance")
+        )
+    ))]
+    pub(crate) async fn wait_install_receipt(&mut self) -> Option<NativeObserverInstallReceipt> {
+        let receipt = self.installation.as_mut()?.await.ok();
+        self.installation = None;
+        receipt.filter(NativeObserverInstallReceipt::is_live)
+    }
+
+    pub(crate) fn take_install_receipt(&mut self) -> Option<NativeObserverInstallReceipt> {
+        use tokio::sync::oneshot::error::TryRecvError;
+        match self.installation.as_mut()?.try_recv() {
+            Ok(receipt) => {
+                self.installation = None;
+                receipt.is_live().then_some(receipt)
+            }
+            Err(TryRecvError::Empty) => None,
+            Err(TryRecvError::Closed) => {
+                self.installation = None;
+                None
+            }
+        }
+    }
+
+    pub(crate) async fn retire(&mut self) -> Result<(), SafeError> {
+        // 即使上层放弃本次等待，仍持有原任务并继续收口。
+        self.cancelled();
+        if let Some(result) = &self.result {
+            return result.clone();
+        }
+        let end = *self
+            .retirement_end
+            .get_or_insert_with(|| tokio::time::Instant::now() + Duration::from_secs(2));
+        let joined = tokio::select! {
+            biased;
+            joined = &mut self.task => joined,
+            _ = tokio::time::sleep_until(end) => {
+                // No positive receipt on timeout. Preserve the exact task
+                // so a later check can observe completion without renewal.
+                return Err(error("REMOTE_OBSERVER_RETIREMENT_UNKNOWN"));
+            }
+        };
+        let result = joined.unwrap_or_else(|_| Err(error("REMOTE_OBSERVER_RETIREMENT_UNKNOWN")));
+        self.result = Some(result.clone());
+        result
+    }
+
+    fn cancelled(&mut self) {
+        self.installation = None;
+        // 闭合原发送端与显式取消有相同语义。
+        if let Some(cancel) = self.cancel.take() {
+            let _ = cancel.send(());
+        }
+    }
+}
+
+#[cfg(feature = "remote-host")]
+impl Drop for NativeObserverOwner {
+    fn drop(&mut self) {
+        self.cancelled();
+    }
+}
+
+#[cfg(feature = "remote-host")]
+#[allow(dead_code, reason = "未接入产品授权和启动入口")]
+impl NativeRunAdmission {
+    /// 只借用原 producer 排队捕获，不取出 writer，也不启动 Controller。
+    fn request_observer_capture(
+        &self,
+        authority: cc_desk_remote_security::BoundDataAuthority,
+    ) -> Result<cc_desk_remote_host::native_host::PendingObserverCapture, SafeError> {
+        use crate::cli::launch_service::NativeProducerSlot;
+        self.scope()?;
+        let state = self
+            .pin
+            .state
+            .as_ref()
+            .ok_or_else(|| error("RUN_NOT_READY"))?;
+        let pending = {
+            let native = state.native_canonical.lock();
+            let Some(NativeProducerSlot::Available(producer)) =
+                native.as_ref().map(|native| &native.producer)
+            else {
+                return Err(error("NATIVE_CANONICAL_UNAVAILABLE"));
+            };
+            producer
+                .request_observer_capture(authority)
+                .map_err(|_| error("REMOTE_HOST_AUTHORITY"))?
+        };
+        self.validate()?;
+        Ok(pending)
+    }
+
+    /// 本阶段仅验证运行生命周期；产品入口须先以原网络 owner 的类型化凭据
+    /// 绑定同一 channel、批准 token 及截止时间，不能传入任意有效批准。
+    pub(crate) fn start_observer_once(
+        self,
+        handoff: crate::remote_host_network::OriginalObserverHandoff,
+    ) -> Result<NativeObserverOwner, SafeError> {
+        use cc_desk_remote_record::grant::DataRole;
+        use cc_desk_remote_security::Role;
+        let (channel, approval, end) = handoff
+            .into_parts(&self)
+            .map_err(|_| error("REMOTE_HOST_AUTHORITY"))?;
+        let authority = channel.authority();
+        if authority.local_role() != Role::Host
+            || authority.data_role() != DataRole::Observer
+            || authority.scope() != &self.scope()?
+            || !channel.peer_install_enabled()
+            || authority.check().is_err()
+            || approval.is_invalid()
+            || end <= tokio::time::Instant::now()
+        {
+            return Err(error("REMOTE_HOST_AUTHORITY"));
+        }
+        let runtime = tokio::runtime::Handle::try_current().map_err(|_| error("RUN_NOT_READY"))?;
+        let state = self
+            .pin
+            .state
+            .as_ref()
+            .ok_or_else(|| error("RUN_NOT_READY"))?
+            .clone();
+        let stopped = state.observer_stopped.subscribe();
+        if *stopped.borrow() || state.observer_active.swap(true, Ordering::AcqRel) {
+            return Err(error("REMOTE_OBSERVER_UNAVAILABLE"));
+        }
+        let (cancel, cancelled) = tokio::sync::oneshot::channel();
+        let (install, installation) = tokio::sync::oneshot::channel();
+        struct CloseExactObserver(cc_desk_remote_security::BoundDataAuthority);
+        impl Drop for CloseExactObserver {
+            fn drop(&mut self) {
+                self.0.request_close();
+            }
+        }
+        // 从接管开始就保证丢弃原任务时封闭准确的传输通道。
+        let close = CloseExactObserver(authority.clone());
+        let task = runtime.spawn(async move {
+            let _close = close;
+            let stop = wait_for_observer_retirement(stopped, cancelled, approval.clone(), end);
+            let mut capture_worker = None;
+            let work = async {
+                let cutoff = (tokio::time::Instant::now() + Duration::from_secs(1))
+                    .min(end)
+                    .into_std();
+                if std::time::Instant::now() >= cutoff {
+                    return Err(error("REMOTE_OBSERVER_CAPTURE"));
+                }
+                let pending = self.request_observer_capture(authority.clone())?;
+                // 等待在阻塞线程内有硬上限；不持有 supervisor 或 writer 锁。
+                let completion = capture_worker
+                    .insert(spawn_observer_capture(cutoff, move |budget| {
+                        pending.wait(budget)
+                    }))
+                    .await;
+                capture_worker = None;
+                let capture = completion
+                    .map_err(|_| error("REMOTE_OBSERVER_RETIREMENT_UNKNOWN"))?
+                    .ok_or_else(|| error("REMOTE_OBSERVER_CAPTURE"))?
+                    .map_err(|_| error("REMOTE_OBSERVER_CAPTURE"))?;
+                if std::time::Instant::now() >= cutoff {
+                    return Err(error("REMOTE_OBSERVER_CAPTURE"));
+                }
+                self.validate()?;
+                let transfer = capture
+                    .install_snapshot_until(&channel, end)
+                    .await
+                    .map_err(|_| error("REMOTE_OBSERVER_INSTALL"))?;
+                self.validate()?;
+                if let Some(receipt) =
+                    NativeObserverInstallReceipt::from_installed(&channel, &approval, end)
+                {
+                    let _ = install.send(receipt);
+                }
+                let sent = transfer
+                    .send_snapshot()
+                    .await
+                    .map_err(|_| error("REMOTE_OBSERVER_SEND"))?;
+                // 已发送不是已显示，不主动在浏览器消费前回收；原通道关闭或外层取消会收口。
+                let outcome = channel.wait_closed_checked().await;
+                drop(sent);
+                outcome
+                    .map(|_| ())
+                    .map_err(|_| error("REMOTE_OBSERVER_RETIREMENT_UNKNOWN"))
+            };
+            let result = observer_task_result(stop, work).await;
+            finish_observer_task(
+                &channel,
+                &authority,
+                &mut capture_worker,
+                result,
+                &state.observer_active,
+            )
+            .await
+        });
+        Ok(NativeObserverOwner {
+            installation: Some(installation),
+            cancel: Some(cancel),
+            task,
+            result: None,
+            retirement_end: None,
+        })
+    }
+}

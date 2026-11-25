@@ -248,3 +248,44 @@ test('Reconnect_ManualCloseAndFailureCannotMintCandidateThroughSynchronousCallba
   assert.equal((client as any).canReconnectFrom(native),false);
  }
 });
+
+test('Observer publishes only a complete local view and never sends ACK or control', async () => {
+  const {client,native,sent,f}=setup();
+  let finish!:()=>void;
+  const wait=new Promise<void>(resolve=>{finish=resolve;});
+  native.observerSnapshot=async sink=>{
+    sink.begin(f.body.stamp);sink.part(utf8.encode(JSON.stringify(f)));
+    await wait;
+  };
+  client.connect(native);
+  const operation=client.snapshot();
+  assert.equal(client.frame,undefined);
+  assert.deepEqual(sent,[]);
+  finish();await operation;
+  assert.equal(client.phase,'ViewOnly');
+  assert.ok(client.frame);
+  await assert.rejects(client.window());
+  await assert.rejects(client.snapshot());
+  assert.deepEqual(sent,[]);
+  client.disconnect();
+  assert.equal(client.frame,undefined);
+});
+
+test('incomplete and cancelled Observer views never become displayable', async () => {
+  for(const interrupted of [false,true]){
+    const {client,native,sent,f}=setup();
+    let release!:()=>void;
+    native.observerSnapshot=async sink=>{
+      sink.begin(f.body.stamp);
+      sink.part(utf8.encode(JSON.stringify(interrupted?f:{...f,body:{...f.body,cells:f.body.cells.slice(0,1)}})));
+      if(interrupted)await new Promise<void>(resolve=>{release=resolve;});
+    };
+    client.connect(native);
+    const result=client.snapshot();
+    if(interrupted){client.disconnect();release();}
+    await assert.rejects(result);
+    assert.equal(client.frame,undefined);
+    assert.equal(client.phase,'NotConnected');
+    assert.deepEqual(sent,[]);
+  }
+});

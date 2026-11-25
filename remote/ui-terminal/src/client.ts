@@ -6,7 +6,9 @@ import {command,input,inputCursor,projectionAck,decodeProjection,decodeReply,rec
  * methods return bounded JSON payloads, never authentication booleans. This
  * interface has no browser WebSocket implementation or plaintext fallback.
  */
+type SnapshotSink={begin(stamp:Stamp):void;part(payload:Uint8Array):void};
 export interface NativeConnection {
+  observerSnapshot?(sink:SnapshotSink):Promise<void>;
   onInvalidate?(listener:()=>void):()=>void;
   snapshot(command:Uint8Array,sink:{begin(stamp:Stamp):void;part(payload:Uint8Array):void}):Promise<void>;
   acknowledge(payload:Uint8Array):Promise<Uint8Array>;
@@ -16,7 +18,7 @@ export interface NativeConnection {
   settle(command:Uint8Array):Promise<Uint8Array>;
   close():void;
 }
-export type Phase='NotConnected'|'Idle'|'Busy'|'Synced'|'Ready'|'NeedsSettlement';
+export type Phase='NotConnected'|'Idle'|'Busy'|'Synced'|'ViewOnly'|'Ready'|'NeedsSettlement';
 export type AutoRenewalState='Disabled'|'Starting'|'Waiting'|'Due'|'Renewing'|'Stopping'|'Stopped'|'Unknown';
 type LogicalOperation={epoch:number;done:Promise<void>;finish:()=>void;raw:Set<Promise<unknown>>};
 type AutoRenewal={epoch:number;native:NativeConnection&{waitClosed():Promise<void>};join:()=>Promise<void>;state:AutoRenewalState;next:number;last:number;timer?:ReturnType<typeof setTimeout>;task?:Promise<void>;retirement?:Promise<void>};
@@ -29,6 +31,8 @@ type Pending={operation:string;sequence:string;receipt?:Receipt};
  */
 export class TerminalClient {
   #receiver:ProjectionReceiver;
+  #observer=false;
+  #target:Target;
   #binding:string;
   #native:NativeConnection|undefined;
   #epoch=0;
@@ -42,7 +46,7 @@ export class TerminalClient {
   #operation:LogicalOperation|undefined;
   #auto:AutoRenewal|undefined;
   #reconnect: {native:NativeConnection;epoch:number}|undefined;
-  constructor(target:Target,binding:string,budgetMs=1000){if(!Number.isInteger(budgetMs)||budgetMs<1||budgetMs>1000)throw Error('invalid deadline');this.#budget=budgetMs;this.#receiver=new ProjectionReceiver(target,binding);this.#binding=binding;}
+  constructor(target:Target,binding:string,budgetMs=1000){if(!Number.isInteger(budgetMs)||budgetMs<1||budgetMs>1000)throw Error('invalid deadline');this.#budget=budgetMs;this.#target=Object.freeze({...target});this.#receiver=new ProjectionReceiver(target,binding);this.#binding=binding;}
   get autoRenewalState():AutoRenewalState{return this.#auto?.state??'Disabled';}
   get phase():Phase{return this.#phase;}
   // 仅观察原闲置失效代；调用方仍必须收齐该代完整 retirement。
@@ -51,19 +55,21 @@ export class TerminalClient {
       !this.#native&&this.#phase==='NotConnected'&&!this.#pending&&!this.#operation&&
       (!this.#auto||this.#auto.state==='Stopped');
   }
-  get frame(){return this.#receiver.frame;}
+  get frame(){return this.#observer&&this.#phase!=='ViewOnly'?undefined:this.#receiver.frame;}
   render(document:Parameters<typeof render>[0],palette?:readonly string[]){const frame=this.frame;if(!frame)throw Error('no installed frame');return render(document,frame,palette);}
   connect(native:NativeConnection,binding=this.#binding):void {
     this.#reconnect=undefined;
     if(this.#native)throw Error('already connected');
     if(this.#auto&&this.#auto.state!=='Stopped')throw Error('automatic owner not retired');
     if(!native||!['snapshot','acknowledge','window','input','query','settle','close'].every(k=>typeof (native as any)[k]==='function'))throw Error('native adapter required');
-    if(binding!==this.#binding){this.#receiver.rebind(binding);this.#binding=binding;}
+    if(this.#observer||typeof native.observerSnapshot==='function')this.#receiver=new ProjectionReceiver(this.#target,binding);
+    else if(binding!==this.#binding)this.#receiver.rebind(binding);
+    this.#binding=binding;this.#observer=typeof native.observerSnapshot==='function';
     this.#auto=undefined;this.#native=native;this.#epoch++;this.#request=0n;this.#phase=this.#pending?'NeedsSettlement':'Idle';
     const epoch=this.#epoch;
     this.#unlisten=native.onInvalidate?.(()=>{
       if(this.#native!==native||this.#epoch!==epoch)return;
-      const safe=['Idle','Synced','Ready'].includes(this.#phase)&&!this.#pending&&!this.#operation&&
+      const safe=!this.#observer&&['Idle','Synced','Ready'].includes(this.#phase)&&!this.#pending&&!this.#operation&&
         (!this.#auto||this.#auto.state==='Waiting'||this.#auto.state==='Stopped');
       this.#reconnect=safe?{native,epoch:epoch+1}:undefined;
       this.#disconnectOwner(true);
@@ -80,9 +86,9 @@ export class TerminalClient {
     this.#epoch++;this.#native=undefined;this.#window=undefined;this.#lease=undefined;this.#receiver.disconnect();this.#phase='NotConnected';
     try{unlisten?.();}finally{native?.close();}
   }
-  #enter(allowed:Phase[],reconcile=false,automatic=false):{native:NativeConnection;epoch:number;operation:LogicalOperation}{
+  #enter(allowed:Phase[],reconcile=false,automatic=false,observerRead=false):{native:NativeConnection;epoch:number;operation:LogicalOperation}{
     if(!automatic){this.#pulse();if(this.#auto&&['Starting','Due','Renewing'].includes(this.#auto.state))throw Error('automatic renewal admission');}
-    if(!this.#native||!allowed.includes(this.#phase)||(!reconcile&&this.#pending))throw Error('client unavailable');
+    if((this.#observer&&!observerRead)||!this.#native||!allowed.includes(this.#phase)||(!reconcile&&this.#pending))throw Error('client unavailable');
     const done=completion(),operation={epoch:this.#epoch,done:done.promise,finish:done.resolve,raw:new Set<Promise<unknown>>()};this.#operation=operation;
     this.#phase='Busy';return {native:this.#native,epoch:this.#epoch,operation};
   }
@@ -186,16 +192,18 @@ export class TerminalClient {
     }catch(error){this.#fail(epoch);throw error;}finally{this.#finish(logical);}
   }
   async snapshot():Promise<void> {
-    const {native,epoch,operation:logical}=this.#enter(['Idle','Synced','Ready']);this.#window=undefined;let begun=false,installed=false,total=0;
+    const {native,epoch,operation:logical}=this.#enter(['Idle','Synced','Ready'],false,false,true);this.#window=undefined;let begun=false,installed=false,total=0;
     try{
-      await this.#wait(native.snapshot(command('Snapshot',this.#next()),{
+      const sink:SnapshotSink={
         begin:stamp=>{this.#check(epoch);if(begun)throw Error('repeated barrier');this.#receiver.begin(stamp);begun=true;},
         part:payload=>{
           this.#check(epoch);if(!begun||installed)throw Error('unsolicited projection');total+=payload.length;if(total>4*1024*1024)throw Error('snapshot budget');
           const result=this.#receiver.accept(decodeProjection(payload));if(result==='Gap'||result==='Delta')throw Error('invalid snapshot part');installed=result==='Installed';
         },
-      }),epoch);
+      };
+      await this.#wait(this.#observer?native.observerSnapshot!(sink):native.snapshot(command('Snapshot',this.#next()),sink),epoch);
       this.#check(epoch);const stamp=this.#receiver.ack();if(!installed||!stamp)throw Error('incomplete snapshot');
+      if(this.#observer){this.#phase='ViewOnly';return;}
       const ack=projectionAck(stamp),reply=decodeReply(await this.#wait(native.acknowledge(ack),epoch));this.#check(epoch);
       if(reply.message!=='ProjectionAcknowledged'||new TextDecoder().decode(projectionAck(reply.stamp))!==new TextDecoder().decode(ack))throw Error('ACK mismatch');this.#phase='Synced';
     }catch(error){this.#fail(epoch);throw error;}finally{this.#finish(logical);}

@@ -64,3 +64,18 @@ test('RegistrationRuntime_ProjectLocalPaths_004',async()=>{
  fs.symlinkSync(outside,path.join(project,'escape'),process.platform==='win32'?'junction':'dir');
  assert.throws(()=>projectPath(project,'escape/new-file'),/symlink/);
 });
+
+test('RegistrationRuntime_CompilerPathMapping_005',async()=>{
+ const {browserRuntimeCompilerEnvironment}=await import('../../scripts/browser-runtime-remap.mjs');
+ const os=await import('node:os'),path=await import('node:path');
+ const root=path.join(os.tmpdir(),'browser-remap-fixture','source'),target=path.join(root,'.audit','target');
+ const cargo=path.join(os.tmpdir(),'browser-remap-fixture','cargo');
+ const input={CARGO_HOME:cargo,RUSTFLAGS:'-C opt-level=0'};
+ const result=browserRuntimeCompilerEnvironment(root,target,input);
+ for(const [from,to] of [[root,'/build/source'],[target,'/build/target'],[cargo,'/build/cargo']]){
+  assert.ok(result.flags.includes(`--remap-path-prefix=${from}=${to}`));
+  assert.ok(result.flags.includes(`--remap-path-prefix=${from.replaceAll('\\','/')}=${to}`));
+ }
+ assert.deepEqual(result.env.CARGO_ENCODED_RUSTFLAGS.split(String.fromCharCode(31)).slice(0,2),['-C','opt-level=0']);
+ assert.equal(input.CARGO_ENCODED_RUSTFLAGS,undefined);
+});

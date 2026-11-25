@@ -33,6 +33,6 @@ if(element)createApp(defineComponent({setup(){
   h('button',{type:'button',disabled:preparing.value,onClick:prepare},'Prepare registration'),
   h('button',{type:'button',disabled:started.value||!prepared.value,onClick:register},'Start registration'),
   h('button',{type:'button',disabled:!busy.value&&!prepared.value,onClick:close},'Cancel'),
-  h('a',{href:'/browser-remote.html'},'Open terminal'),
+  h('a',{href:'./browser-remote.html'},'Open terminal'),
  ])
 }})).mount(element)

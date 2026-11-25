@@ -396,6 +396,13 @@ async fn peer_channels_scope(
     clock: Arc<dyn GrantClock>,
     scope: cc_desk_remote_record::grant::SessionScope,
 ) -> (RunningChannel, RunningChannel, GrantGate, CancelHandle) {
+    peer_channels_role(clock, scope, DataRole::Controller).await
+}
+async fn bound_peer_channels() -> (
+    cc_desk_remote_security::ManagedChannel<tokio::io::DuplexStream>,
+    cc_desk_remote_security::ManagedChannel<tokio::io::DuplexStream>,
+    CancelHandle,
+) {
     let local = |client| {
         let (k, p) = identities::identity(client, false);
         LocalIdentity::new(
@@ -447,7 +454,15 @@ async fn peer_channels_scope(
             }
         )
     );
-    let (c, h) = (c.unwrap(), h.unwrap());
+    (c.unwrap(), h.unwrap(), cancel)
+}
+
+async fn peer_channels_role(
+    clock: Arc<dyn GrantClock>,
+    scope: cc_desk_remote_record::grant::SessionScope,
+    role: DataRole,
+) -> (RunningChannel, RunningChannel, GrantGate, CancelHandle) {
+    let (c, h, cancel) = bound_peer_channels().await;
     let mut gate =
         GrantGate::for_binding(h.context(), support::admin(), [4; 32], clock.clone()).unwrap();
     let mut state = ClientGrantState::new(clock);
@@ -456,11 +471,11 @@ async fn peer_channels_scope(
         issuer: support::admin(),
         principal: [4; 32],
         scope: scope.clone(),
-        role: DataRole::Controller,
+        role,
     };
     let policy = NativeGrantPolicy {
         scope,
-        role: DataRole::Controller,
+        role,
         duration: Duration::from_secs(10),
     };
     let (c, h) = tokio::join!(
@@ -1572,3 +1587,258 @@ async fn native_remote_resize_reserves_on_original_canonical_actor() {
 
 #[path = "local_writer_channel_retirement_tests.rs"]
 mod channel_retirement_tests;
+
+#[tokio::test]
+async fn observer_native_capture_is_bound_to_the_original_producer_scope() {
+    use crate::bound_test_support as observer_support;
+    use cc_desk_remote_record::grant::DataRole;
+    use std::sync::atomic::AtomicU64;
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut producer = NativeRunProducer::start(
+        Journal::open(&dir.path().join("observer.sqlite")).unwrap(),
+        std::io::sink(),
+        "TEST_ONLY_OBSERVER_SOURCE".into(),
+        3,
+        3,
+        10,
+    )
+    .unwrap();
+    let other_dir = tempfile::tempdir().unwrap();
+    let mut other = NativeRunProducer::start(
+        Journal::open(&other_dir.path().join("other.sqlite")).unwrap(),
+        std::io::sink(),
+        "TEST_ONLY_OBSERVER_SOURCE".into(),
+        3,
+        3,
+        10,
+    )
+    .unwrap();
+    producer.output(0, b"VIEW".to_vec()).unwrap();
+    let scope = producer.native_scope();
+    let (client, host, _gate, _cancel, _grant) = observer_support::channels_for_scope(
+        Arc::new(AtomicU64::new(1000)),
+        [4; 32],
+        DataRole::Observer,
+        scope.clone(),
+    )
+    .await;
+    let authority = host.authority();
+    assert!(other.request_observer_capture(authority.clone()).is_err());
+    let result = producer
+        .request_observer_capture(authority.clone())
+        .unwrap()
+        .wait(BUDGET)
+        .unwrap();
+    assert_eq!(result.scope(), &scope);
+    assert_eq!(
+        result.view(&authority).unwrap().cell(0, 0).unwrap().scalar,
+        'V'
+    );
+    assert!(result.view(&client.authority()).is_err());
+    let pending = producer
+        .request_observer_capture(authority.clone())
+        .unwrap();
+    authority.request_close();
+    assert!(pending.wait(BUDGET).is_err());
+    assert!(result.view(&authority).is_err());
+    drop(result);
+    other.stop();
+    other.join(BUDGET).unwrap();
+    producer.stop();
+    producer.join(BUDGET).unwrap();
+    host.close().await;
+    client.close().await;
+}
+
+#[test]
+fn observer_queue_denial_and_credits_do_not_degrade_native_producer() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let dir = tempfile::tempdir().unwrap();
+    let mut producer = NativeRunProducer::start(
+        Journal::open(&dir.path().join("observer-queue.sqlite")).unwrap(),
+        std::io::sink(),
+        "TEST_ONLY_OBSERVER_QUEUE".into(),
+        3,
+        3,
+        10,
+    )
+    .unwrap();
+    producer.output(0, b"VIEW".to_vec()).unwrap();
+    let projection = producer
+        .writer
+        .projection
+        .as_ref()
+        .unwrap()
+        .with_test_credits();
+    let examined = Arc::new(AtomicBool::new(false));
+    let seen = examined.clone();
+    let denied = projection
+        .capture_observer(Box::new(move || {
+            seen.store(true, Ordering::Release);
+            false
+        }))
+        .unwrap();
+    assert!(matches!(denied.wait(BUDGET).unwrap(), Err(Reject::Policy)));
+    assert!(examined.load(Ordering::Acquire));
+    drop(denied);
+    let first = projection.capture_observer(Box::new(|| true)).unwrap();
+    let next = projection.capture_observer(Box::new(|| true)).unwrap();
+    assert!(matches!(
+        projection.capture_observer(Box::new(|| true)),
+        Err(Reject::Full)
+    ));
+    assert!(producer.complete_from_zero());
+    drop(first);
+    drop(next);
+    producer.output(4, b" remains".to_vec()).unwrap();
+    assert!(producer.complete_from_zero());
+    producer.stop();
+    producer.join(BUDGET).unwrap();
+}
+
+#[tokio::test]
+async fn observer_snapshot_uses_original_install_and_scope() {
+    use cc_desk_remote_record::projection as projection_wire;
+    let dir = tempfile::tempdir().unwrap();
+    let mut producer = NativeRunProducer::start(
+        Journal::open(&dir.path().join("observer-install.sqlite")).unwrap(),
+        std::io::sink(),
+        "TEST_ONLY_OBSERVER_INSTALL".into(),
+        3,
+        3,
+        10,
+    )
+    .unwrap();
+    producer.output(0, b"VIEW".to_vec()).unwrap();
+    let scope = producer.native_scope();
+    let (client, host, mut gate, _cancel) =
+        peer_channels_role(Arc::new(|| Ok(1000)), scope.clone(), DataRole::Observer).await;
+    let capture = producer
+        .request_observer_capture(host.authority())
+        .unwrap()
+        .wait(BUDGET)
+        .unwrap();
+    let duplicate = producer
+        .request_observer_capture(host.authority())
+        .unwrap()
+        .wait(BUDGET)
+        .unwrap();
+    let (installed, transfer) = tokio::join!(
+        client.client_installed(),
+        capture.install_snapshot(&host, BUDGET),
+    );
+    let client =
+        cc_desk_remote_client::NativeClient::from_installed(client, installed.unwrap()).unwrap();
+    assert!(host.authority().check().is_ok());
+    assert!(duplicate.install_snapshot(&host, BUDGET).await.is_err());
+    let (reader, sender) = tokio::join!(
+        client.receive_observer_view(BUDGET),
+        transfer.unwrap().send_snapshot(),
+    );
+    let received = reader
+        .expect("authenticated Observer local receipt")
+        .into_snapshot()
+        .unwrap();
+    let view = projection_wire::decode(&received.parts[0], 1).unwrap();
+    let projection_wire::Content::SnapshotPart(view) = view.content else {
+        panic!("expected a real Observer view")
+    };
+    assert_eq!(view.stamp.target.session, scope.session);
+    assert_eq!(view.stamp.target.run, scope.run);
+    assert_eq!(view.stamp.target.generation, scope.generation);
+    assert_eq!(view.start, 0);
+    assert_eq!(view.cells[0].scalar, 'V');
+    let sender = sender.unwrap();
+    gate.revoke();
+    assert!(host.authority().check().is_err());
+    assert!(producer.request_observer_capture(host.authority()).is_err());
+    let (host_closed, next_view) = tokio::join!(
+        tokio::time::timeout(BUDGET, host.wait_closed_checked()),
+        client.receive_observer_view(BUDGET),
+    );
+    assert!(host_closed.unwrap().is_ok());
+    assert!(next_view.is_err());
+    assert!(sender.retire().await.is_ok());
+    client.close().await;
+    assert!(producer.complete_from_zero());
+    producer.stop();
+    producer.join(BUDGET).unwrap();
+}
+
+#[tokio::test]
+async fn observer_revoked_grant_cannot_establish_a_fresh_peer() {
+    let scope = support::scope();
+    let clock: Arc<dyn GrantClock> = Arc::new(|| Ok(1000));
+    let (old_client, old_host, mut old_grant, _old_cancel) =
+        peer_channels_role(clock.clone(), scope.clone(), DataRole::Observer).await;
+    assert!(old_host.authority().check().is_ok());
+    old_grant.revoke();
+    assert!(old_host.authority().check().is_err());
+
+    // The same deterministic device keys and run get a new duplex and AppBind.
+    let (new_client, new_host, _new_cancel) = bound_peer_channels().await;
+    let trust = ClientGrantTrust {
+        issuer: support::admin(),
+        principal: [4; 32],
+        scope: scope.clone(),
+        role: DataRole::Observer,
+    };
+    let policy = NativeGrantPolicy {
+        scope: scope.clone(),
+        role: DataRole::Observer,
+        duration: Duration::from_secs(10),
+    };
+    let mut signer = PublicSigner;
+    let mut client_state = ClientGrantState::new(clock.clone());
+    let (client_result, host_result) = tokio::join!(
+        new_client.grant_client(&trust, &mut signer, &mut client_state, BUDGET),
+        new_host.grant_host(&mut old_grant, policy, BUDGET),
+    );
+    assert!(matches!(
+        host_result,
+        Err(cc_desk_remote_security::GrantError::Revoked)
+    ));
+    assert!(client_result.is_err());
+    let (approved_client, approved_host, _fresh_grant, _approved_cancel) =
+        peer_channels_role(clock, scope, DataRole::Observer).await;
+    assert!(approved_host.authority().check().is_ok());
+    approved_client.close().await;
+    approved_host.close().await;
+    old_client.close().await;
+    old_host.close().await;
+}
+
+#[tokio::test]
+async fn observer_snapshot_retiring_source_closes_before_any_output() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut producer = NativeRunProducer::start(
+        Journal::open(&dir.path().join("observer-retire.sqlite")).unwrap(),
+        std::io::sink(),
+        "TEST_ONLY_OBSERVER_RETIRE".into(),
+        3,
+        3,
+        10,
+    )
+    .unwrap();
+    producer.output(0, b"OFFLINE".to_vec()).unwrap();
+    let scope = producer.native_scope();
+    let (client, host, _gate, _cancel) =
+        peer_channels_role(Arc::new(|| Ok(1000)), scope.clone(), DataRole::Observer).await;
+    let capture = producer
+        .request_observer_capture(host.authority())
+        .unwrap()
+        .wait(BUDGET)
+        .unwrap();
+    let (installed, transfer) = tokio::join!(
+        client.client_installed(),
+        capture.install_snapshot(&host, BUDGET)
+    );
+    let fence = installed.unwrap().consume_for(&client).unwrap();
+    producer.stop();
+    producer.join(BUDGET).unwrap();
+    assert!(transfer.unwrap().send_snapshot().await.is_err());
+    assert!(host.wait_closed_checked().await.is_ok());
+    assert!(client.receive(&scope, fence, BUDGET).await.is_err());
+    client.close().await;
+}

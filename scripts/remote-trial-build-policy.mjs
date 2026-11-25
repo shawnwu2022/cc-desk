@@ -59,7 +59,7 @@ export function verifyRuntime(directory,dist=undefined,browserTarget=path.join(t
  if(!registration&&manifest.kind!=='OriginalBrowserRuntime')throw Error('Unknown runtime kind');
  for(const group of ['sources','inputs','files'])if(!Array.isArray(manifest[group])||!manifest[group].length)throw Error(`Missing ${group}`);
  const walk=dir=>fs.readdirSync(path.join(root,dir),{withFileTypes:true}).flatMap(entry=>entry.isDirectory()?walk(path.posix.join(dir,entry.name)):entry.name.endsWith('.rs')?[path.posix.join(dir,entry.name)]:[]);
- const common=['remote/Cargo.lock','remote/Cargo.toml','remote/crates/security/Cargo.toml',...walk('remote/crates/security/src'),...walk('protocol/remote/inner/v1/src')];
+ const common=['scripts/browser-runtime-remap.mjs','remote/Cargo.lock','remote/Cargo.toml','remote/crates/security/Cargo.toml',...walk('remote/crates/security/src'),...walk('protocol/remote/inner/v1/src')];
  const expected=registration?['remote/browser-registration-runtime.rs','scripts/build-browser-registration-runtime.mjs','protocol/remote/inner/v1/Cargo.toml',...common]:['remote/browser-runtime.rs','scripts/build-browser-runtime.mjs','remote/crates/client/Cargo.toml',...walk('remote/crates/client/src'),...common];
  if(JSON.stringify(manifest.sources.map(x=>x.file).sort())!==JSON.stringify(expected.sort()))throw Error('Runtime source inventory mismatch');
  for(const entry of manifest.sources){

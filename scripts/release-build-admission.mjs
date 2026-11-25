@@ -3,6 +3,7 @@ import { appendFileSync, readFileSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 import { ciWaitState } from './release-wait-for-ci.mjs'
 import { releaseChannel } from './release-version.mjs'
+import { mobileReleaseFamily } from './release-mobile-site.mjs'
 
 // Candidate build admission only. This never establishes CI coverage, verifies
 // release assets, changes a tag/draft, or grants publication authority.
@@ -48,7 +49,7 @@ export async function runBuildAdmission() {
   if (!ciResponse.ok) throw new Error(`build admission CI API failed: HTTP ${ciResponse.status}`)
   const ci = await ciResponse.json()
   ciWaitState({ sha, main: { sha: branch.commit?.sha, protected: branch.protected }, runs: ci.workflow_runs })
-  if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `version=${packageVersion}\ntag=v${packageVersion}\n`)
+  if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `version=${packageVersion}\ntag=v${packageVersion}\nmobile_release=${mobileReleaseFamily(packageVersion)}\n`)
   console.log(`Build source admitted for ${sha}; publication still requires exact CI coverage and signatures`)
 }
 

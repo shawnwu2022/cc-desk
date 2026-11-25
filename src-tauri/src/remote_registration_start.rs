@@ -180,6 +180,9 @@ impl RegistrationCustody {
         window: tauri::Window,
     ) -> Result<RegistrationReply, SafeError> {
         RemoteHostController::authenticate(&binding, &caller, &admission)?;
+        if !frozen.product_role_enabled() {
+            return Err(error("REMOTE_HOST_LOCKED"));
+        }
         self.reap_finished().await;
         RemoteHostController::authenticate(&binding, &caller, &admission)?;
         let identity = OwnerIdentity {
