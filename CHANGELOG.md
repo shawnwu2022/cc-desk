@@ -6,7 +6,7 @@
 
 ### Added
 
-- A dedicated Remote Connections view for Android pairing, sharing and stopping an explicitly selected CC Desk session on Windows.
+- A dedicated Remote Connections view for first-time Windows setup, Android pairing, and sharing or stopping an explicitly selected session. Windows keeps the signing keys local; Relay administrators receive only public registration details.
 - Native Android device pairing by QR or code, a multi-computer shared-session list, and a remote control console with automatically refreshed session output and single-line input plus common terminal keys.
 - Separate read-only and control permissions. Desktop approval grants control only to the selected device and session, ends on expiry or revocation, and never automatically resends input with an uncertain delivery result.
 
