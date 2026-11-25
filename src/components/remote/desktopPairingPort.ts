@@ -19,7 +19,7 @@ export interface PairingSnapshot {
   readonly invite: {
     readonly inviteId: string
     /** Available only when the native bridge retained the exact creation receipt. */
-    readonly code?: string
+    readonly manualCode?: string
     readonly expiresUnixMs: number
     /** Locally generated QR matrix without quiet-zone padding. */
     readonly qrRows?: readonly string[]

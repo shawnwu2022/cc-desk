@@ -23,6 +23,7 @@ use windows::{
 };
 use windows_core::PCWSTR;
 const DIRECTORY: &str = "remote-pairings-v1";
+const OBSERVER_DIRECTORY: &str = "remote-native-observers-v1";
 const FILE: &str = "devices.dpapi";
 pub(crate) struct WindowsPairingBackend {
     root: Arc<PrivateDirectory>,
@@ -33,20 +34,26 @@ pub(crate) struct WindowsPairingBackend {
 impl WindowsPairingBackend {
     /// Explicit setup only. Missing directories are never auto-created by open/load.
     pub(crate) fn create_new(parent: &Path) -> Result<Self> {
-        Self::open_impl(parent, true)
+        Self::open_impl(parent, DIRECTORY, true)
     }
     pub(crate) fn open_existing(parent: &Path) -> Result<Self> {
-        Self::open_impl(parent, false)
+        Self::open_impl(parent, DIRECTORY, false)
     }
     #[cfg(test)]
     pub(crate) fn test_fail_after_publish(&self) {
         self.fail_after_publish
             .store(true, std::sync::atomic::Ordering::SeqCst);
     }
-    fn open_impl(parent: &Path, create: bool) -> Result<Self> {
+    pub(crate) fn create_observer(parent: &Path) -> Result<Self> {
+        Self::open_impl(parent, OBSERVER_DIRECTORY, true)
+    }
+    pub(crate) fn open_observer(parent: &Path) -> Result<Self> {
+        Self::open_impl(parent, OBSERVER_DIRECTORY, false)
+    }
+    fn open_impl(parent: &Path, directory: &'static str, create: bool) -> Result<Self> {
         let user = CurrentUser::capture().map_err(io_error)?;
         let parent = Directory::open_absolute(parent).map_err(io_error)?;
-        let name = ComponentName::new(OsStr::new(DIRECTORY)).map_err(io_error)?;
+        let name = ComponentName::new(OsStr::new(directory)).map_err(io_error)?;
         let root = Arc::new(
             if create {
                 PrivateDirectory::create_new(parent, name, &user)

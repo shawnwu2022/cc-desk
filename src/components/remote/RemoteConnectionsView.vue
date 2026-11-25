@@ -29,8 +29,8 @@ const timeLeft = computed(() => {
   return Math.floor(seconds / 60) + ':' + String(seconds % 60).padStart(2, '0')
 })
 const code = computed(() => {
-  const value = invite.value?.code
-  return value && /^[0-9A-HJKMNP-TV-Z]{16}$/.test(value) ? value.match(/.{4}/g)?.join(' ') : ''
+  const value = invite.value?.manualCode
+  return value && /^CCDESK1-[0-9A-HJKMNP-TV-Z]{16}-[0-9A-HJKMNP-TV-Z]{20}$/.test(value) ? value : ''
 })
 const qr = computed(() => {
   const rows = invite.value?.qrRows
