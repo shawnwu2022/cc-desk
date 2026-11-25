@@ -8,6 +8,8 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+url = "=2.5.8"
+zeroize = "=1.9.1"
 base64 = "=0.22.1"
 cc-desk-remote-record = { path = "../../protocol/remote/inner/v1" }
 cc-desk-remote-security = { path = "../../remote/crates/security", features = ["experimental"] }
