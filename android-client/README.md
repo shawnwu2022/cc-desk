@@ -98,3 +98,18 @@ pairing code are stored in preferences, saved Activity state, Activity intents
 or logs. The scanner sends only an opaque request owner ID across Activities;
 the bounded invitation is transferred once through a process-local mailbox,
 closed on cancellation/replacement, and its mutable code array is overwritten.
+
+## Native platform boundary
+
+The non-exported Java NativeKeystoreBridge ABI supplies endpoint TLS DER signing,
+Relay P-256 fixed signing, bounded async biometric approval and cancellation,
+and insert-once opaque receipt persistence. Approval completion uses the original
+native request ID and crypto object only; Android init and signing run on a
+dedicated worker. Main thread callbacks no longer sign. The hardware receipt key
+is AES-256-GCM in AndroidKeyStore; records have fresh IVs, enrollment-bound AAD
+and version, live in the app no-backup directory, and commit only after a synced
+atomic write and ciphertext readback. No UI metadata grants native authority.
+Readback returns decrypted opaque bytes solely for native re-verification, never
+marks a profile active. Existing observer JNI symbols are declared in Java, but
+loading a library alone does not enable pairing. Native enrollment begin/status/
+cancel and persistence re-verification must exist before activation.
