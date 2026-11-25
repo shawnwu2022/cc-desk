@@ -65,7 +65,11 @@ impl RelayAdmissionIdentity {
         }
     }
 }
-fn endpoint(origin: &str, address: SocketAddr, budget: Duration) -> Result<url::Url, ConnectError> {
+pub(super) fn endpoint(
+    origin: &str,
+    address: SocketAddr,
+    budget: Duration,
+) -> Result<url::Url, ConnectError> {
     if budget.is_zero() || budget > crate::MAX_IO_BUDGET {
         return Err(ConnectError::Limit);
     }
@@ -165,10 +169,20 @@ async fn connect_admitted_inner(
     result
 }
 async fn admit(
+    ws: AdmittedSocket,
+    origin: &str,
+    identity: &RelayAdmissionIdentity,
+    deadline: Instant,
+) -> Result<AdmittedSocket, ConnectError> {
+    admit_with_point(ws, origin, identity, deadline, None).await
+}
+
+pub(super) async fn admit_with_point(
     mut ws: AdmittedSocket,
     origin: &str,
     identity: &RelayAdmissionIdentity,
     deadline: Instant,
+    public_point: Option<&[u8; 65]>,
 ) -> Result<AdmittedSocket, ConnectError> {
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message;
@@ -203,6 +217,9 @@ async fn admit(
     proof.extend_from_slice(&identity.key_id);
     proof.push(identity.role as u8);
     proof.extend_from_slice(&signature);
+    if let Some(point) = public_point {
+        proof.extend_from_slice(point);
+    }
     crate::deadline::bounded(deadline, ws.send(Message::Binary(proof.into())))
         .await
         .map_err(|_| ConnectError::Deadline)?
