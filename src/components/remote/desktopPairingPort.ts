@@ -15,7 +15,7 @@ export interface PendingPairing extends PairingIdentity {
 export interface ApprovedDevice extends PairingIdentity {
   readonly tunnel: string
   /** Only the original live owner may report an active share. */
-  readonly sharing: 'none' | 'offered' | 'active' | 'unknown'
+  readonly sharing: 'none' | 'offered' | 'active' | 'controlling' | 'unknown'
   readonly revocationPending?: boolean
 }
 export interface PairingScopeChoice {
@@ -40,7 +40,7 @@ export interface PairingSnapshot {
 /** Only an authenticated native Host bridge may provide this handle. All
  * mutations recheck its authority, current membership and the exact target;
  * approve/revoke additionally require native local confirmation. */
-export interface ShareTarget { runId: string; generation: number; label: string }
+export interface ShareTarget { runId: string; generation: number; label: string; role?: 'Controller' }
 export interface VerifiedPairing {
   readonly endpoint: string
   current(): Promise<PairingSnapshot>

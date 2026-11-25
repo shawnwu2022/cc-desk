@@ -22,6 +22,8 @@ export default {
   remotePairingShareUnknown: "Could not confirm the share. Stop sharing before trying again.",
   remotePairingShareStart: "Share selected sessions",
   remotePairingShareStop: "Stop sharing",
+  remotePairingAllowControl: "Allow this phone to send input to the selected sessions",
+  remotePairingControlActive: "This phone can send input to the selected session.",
   remoteConnections: "Remote Connections",
   remotePairingUnavailable: "Native phone pairing is not available in this build.",
   remotePairingTitle: "Pair an Android device",

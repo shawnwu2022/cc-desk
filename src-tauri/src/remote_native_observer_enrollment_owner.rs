@@ -47,6 +47,8 @@ pub(crate) struct Owner {
     state: Mutex<Cache>,
     store: Arc<Store>,
     sharing: Mutex<Option<shares_owner::Task>>,
+    runtime: Arc<crate::cli::native_runtime::NativeRuntime>,
+    host_service: Arc<crate::remote_host::RemoteHostService>,
 }
 #[derive(Default)]
 struct Cache {
@@ -113,6 +115,7 @@ pub(crate) enum Operation {
 }
 
 impl OwnerService {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn install(
         &self,
         binding: &Arc<DocumentBinding<NativeRun>>,
@@ -120,6 +123,8 @@ impl OwnerService {
         profile: Arc<TrustedHostProfile>,
         address: SocketAddr,
         parent: PathBuf,
+        runtime: Arc<crate::cli::native_runtime::NativeRuntime>,
+        host_service: Arc<crate::remote_host::RemoteHostService>,
     ) -> Result<(String, String), SafeError> {
         binding.check_admitted(&caller)?;
         let configured = profile.clone();
@@ -160,6 +165,8 @@ impl OwnerService {
             state: Mutex::new(Cache::default()),
             store: Arc::new(store),
             sharing: Mutex::new(None),
+            runtime,
+            host_service,
         });
         if let Some(old) = self.active.lock().replace(owner) {
             old.lifetime.revoke();
@@ -371,6 +378,7 @@ impl Owner {
                         Some(1) => "offered",
                         Some(2) => "active",
                         Some(3) => "unknown",
+                        Some(4) => "controlling",
                         _ => "none",
                     },
                     revocation_pending: d.state == DeviceState::Revoked,

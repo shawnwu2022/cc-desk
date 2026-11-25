@@ -1,4 +1,5 @@
 use super::{store::RelayPair, *};
+use cc_desk_remote_record::grant::DataRole;
 use cc_desk_remote_transport::wss::ShareSelectionKey;
 
 const CATALOG: &[u8] = b"cc-desk.native-pairing.shares.v1\0";
@@ -8,6 +9,7 @@ const TTL: Duration = Duration::from_secs(55);
 pub(crate) struct Target {
     pub(crate) run: NativeRunAdmission,
     pub(crate) label: String,
+    pub(crate) role: DataRole,
 }
 struct Offer {
     target: Target,
@@ -74,12 +76,28 @@ impl Approval {
                 id: *uuid::Uuid::new_v4().as_bytes(),
             });
         }
+        let controller = offers.iter().any(|o| o.target.role == DataRole::Controller);
+        let permission = if controller {
+            "This phone can send input only to sessions marked Control."
+        } else {
+            "This phone can only view snapshots."
+        };
         let text = format!(
-            "Share these sessions with this phone for viewing only?\n\nPhone: {}\n\n{}",
+            "Share the selected CC Desk sessions?\n{}\n\nPhone: {}\n\n{}",
+            permission,
             hex(&pair.phone_id),
             offers
                 .iter()
-                .map(|o| format!("{} · {}", o.target.label, o.scope.run))
+                .map(|o| format!(
+                    "{} ({}) · {}",
+                    o.target.label,
+                    if o.target.role == DataRole::Controller {
+                        "Control"
+                    } else {
+                        "View only"
+                    },
+                    o.scope.run
+                ))
                 .collect::<Vec<_>>()
                 .join("\n")
         );
@@ -132,9 +150,11 @@ async fn make_live(
     let expires = unix_ms()?
         .checked_add(end.saturating_duration_since(Instant::now()).as_millis() as u64)
         .ok_or(Error::Expired)?;
-    let offers=frozen.offers.iter().map(|o|serde_json::json!({
-            "offerId":hex(&o.id),"session":o.scope.session,"run":o.scope.run,"generation":o.scope.generation,"label":o.target.label
-        })).collect::<Vec<_>>();
+    let offers=frozen.offers.iter().map(|o| {
+        let mut value=serde_json::json!({"offerId":hex(&o.id),"session":o.scope.session,"run":o.scope.run,"generation":o.scope.generation,"label":o.target.label});
+        if o.target.role == DataRole::Controller {value["role"]=serde_json::Value::String("Controller".into());}
+        value
+    }).collect::<Vec<_>>();
     let payload=serde_json::to_vec(&serde_json::json!({
             "version":1,"relayOrigin":frozen.origin.as_str(),"tunnel":hex(&frozen.pair.tunnel),
             "endpointBinding":hex(&frozen.pair.endpoint_binding),"catalogId":hex(uuid::Uuid::new_v4().as_bytes()),"offers":offers,"expiresUnixMs":expires
@@ -166,7 +186,10 @@ impl Live {
         }
         self.frozen.check()
     }
-    pub(crate) fn target(&self, selected: &ShareSelectionKey) -> Result<&NativeRunAdmission> {
+    pub(crate) fn target(
+        &self,
+        selected: &ShareSelectionKey,
+    ) -> Result<(&NativeRunAdmission, DataRole)> {
         self.check()?;
         if selected.tunnel != self.tunnel()
             || selected.catalog_digest != self.digest
@@ -178,7 +201,7 @@ impl Live {
             .offers
             .iter()
             .find(|o| o.id == selected.scope_offer_id)
-            .map(|o| &o.target.run)
+            .map(|o| (&o.target.run, o.target.role))
             .ok_or(Error::Authority)
     }
     pub(crate) async fn rotate(&self, key: &KeyRequestHandle) -> Result<Live> {
@@ -195,15 +218,17 @@ impl Live {
         key: &KeyRequestHandle,
         selected: &ShareSelectionKey,
     ) -> Result<String> {
-        let scope = self
-            .target(selected)?
-            .scope()
-            .map_err(|_| Error::Authority)?;
-        let payload=serde_json::to_vec(&serde_json::json!({
+        let (source, role) = self.target(selected)?;
+        let scope = source.scope().map_err(|_| Error::Authority)?;
+        let mut value = serde_json::json!({
             "version":1,"relayOrigin":self.frozen.origin.as_str(),"tunnel":hex(&selected.tunnel),"endpointBinding":hex(&self.frozen.pair.endpoint_binding),
             "catalogDigest":hex(&self.digest),"offerId":hex(&selected.scope_offer_id),"selectionId":hex(&selected.selection_id),
             "session":scope.session,"run":scope.run,"generation":scope.generation,"expiresUnixMs":self.expires
-        })).map_err(|_|Error::Invalid)?;
+        });
+        if role == DataRole::Controller {
+            value["role"] = serde_json::Value::String("Controller".into());
+        }
+        let payload = serde_json::to_vec(&value).map_err(|_| Error::Invalid)?;
         let wire = sign(
             key,
             &self.lease,

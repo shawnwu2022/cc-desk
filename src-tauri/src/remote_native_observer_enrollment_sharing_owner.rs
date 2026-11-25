@@ -217,6 +217,7 @@ impl Owner {
     ) -> Result<(), SafeError> {
         let mut active: Option<data::Active> = None;
         let mut selection_started = false;
+        let mut selection_controls = false;
         let mut published = true;
         let mut stale_selection = false;
         let result=async {
@@ -232,7 +233,7 @@ impl Owner {
                     let renewed=control::resign_catalog(self.control_setup()?,catalog.clone()).await.map_err(|_|uncertain())?;
                     self.checked_publish(&renewed).await?;
                     published = true;
-                    catalog=Arc::new(renewed); selection_started=false; stale_selection=false;
+                    catalog=Arc::new(renewed); selection_started=false; selection_controls=false; stale_selection=false;
                     phase.store(1,Ordering::Release);
                 }
                 if active.is_none() && catalog.check().is_err(){break;}
@@ -241,8 +242,13 @@ impl Owner {
                         let selected=ShareSelectionKey{tunnel:decode(&tunnel).map_err(|_|locked())?,catalog_digest:decode(&catalog_digest).map_err(|_|locked())?,
                             scope_offer_id:decode(&scope_offer_id).map_err(|_|locked())?,selection_id:decode(&selection_id).map_err(|_|locked())?};
                         if catalog.deadline().saturating_duration_since(Instant::now())<Duration::from_secs(10){stale_selection=true;continue;}
-                        let source=catalog.target(&selected).map_err(|_|locked())?.observer_admission_copy()?;
-                        active=Some(data::start(self.profile.clone(),self.address,&self.lifetime,phone.clone(),source,catalog.authority_end,catalog.deadline()).map_err(|_|locked())?);
+                        let (source,role)=catalog.target(&selected).map_err(|_|locked())?;
+                        selection_controls= role == cc_desk_remote_record::grant::DataRole::Controller;
+                        let controller = if selection_controls {
+                            Some(data::Controller { owner: self.host_service.native_controller_host(source)?, runtime: self.runtime.clone() })
+                        } else {None};
+                        let source=source.observer_admission_copy()?;
+                        active=Some(data::start(self.profile.clone(),self.address,&self.lifetime,phone.clone(),source,controller,catalog.authority_end,catalog.deadline()).map_err(|_|locked())?);
                         active.as_mut().ok_or_else(locked)?.arm_receipt(catalog.deadline()).await.map_err(|_|uncertain())?;
                         if *stop.borrow(){break;}
                         let ready=control::sign_ready(self.control_setup()?,catalog.clone(),selected).await.map_err(|_|uncertain())?;
@@ -251,7 +257,7 @@ impl Owner {
                         selection_started=true;
                     }
                 }
-                if active.as_ref().is_some_and(data::Active::installed){phase.store(2,Ordering::Release);}
+                if active.as_ref().is_some_and(data::Active::installed){phase.store(if selection_controls {4}else{2},Ordering::Release);}
                 tokio::select!{_ = stop.changed()=>{}, _=tokio::time::sleep(Duration::from_millis(1200))=>{}}
             }
             Ok(())

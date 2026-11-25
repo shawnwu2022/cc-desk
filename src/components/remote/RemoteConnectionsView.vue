@@ -12,6 +12,7 @@ import { DESKTOP_PAIRING_PORT, type ApprovedDevice, type DesktopPairingPort, typ
 const { t } = useI18n()
 const tabs = useNativeTabsStore()
 const selectedShares = ref<string[]>([])
+const enableControl = ref(false)
 const shareChoices = computed(() => [...tabs.tabs.values()]
   .filter(tab => tab.status === 'running' && tab.runId && tab.generation > 0)
   .map((tab, index) => ({ id: tab.tabId + ':' + tab.generation, title: tab.title, runId: tab.runId, generation: tab.generation,
@@ -19,7 +20,9 @@ const shareChoices = computed(() => [...tabs.tabs.values()]
 function shareWith(device: ApprovedDevice) {
   const selected = selectedShares.value.map(id => shareChoices.value.find(choice => choice.id === id))
   if (selected.length === 0 || selected.length > 4 || selected.some(choice => !choice)) return
-  void perform(handle => handle.share!(device, selected.map(choice => ({ runId: choice!.runId, generation: choice!.generation, label: choice!.label }))))
+  const role = enableControl.value ? 'Controller' as const : undefined
+  enableControl.value = false
+  void perform(handle => handle.share!(device, selected.map(choice => ({ runId: choice!.runId, generation: choice!.generation, label: choice!.label, ...(role ? { role } : {}) }))))
 }
 const injectedPort = inject(DESKTOP_PAIRING_PORT, null)
 const port = shallowRef<DesktopPairingPort | null>(injectedPort)
@@ -266,6 +269,7 @@ function cancel() {
         <fieldset v-if="verified?.share && snapshot.devices.some(device => !device.revocationPending)">
           <legend>{{ t('remotePairingShareChoose') }}</legend>
           <p v-if="shareChoices.length === 0">{{ t('remotePairingShareNoRuns') }}</p>
+          <label v-if="selectedShares.length" class="share-choice"><input v-model="enableControl" type="checkbox" :disabled="busy" /> {{ t('remotePairingAllowControl') }}</label>
           <label v-for="choice in shareChoices" :key="choice.id" class="share-choice">
             <input v-model="selectedShares" type="checkbox" :value="choice.id" :disabled="busy || (!selectedShares.includes(choice.id) && selectedShares.length >= 4)" />
             {{ choice.title }} ({{ choice.label }})
@@ -276,7 +280,7 @@ function cancel() {
           <li v-for="device in snapshot.devices" :key="device.tunnel">
             <p>{{ t('remotePairingPhone') }} {{ device.phoneId.slice(-6) }}</p>
             <p v-if="device.revocationPending" role="status">{{ t('remotePairingRevokePending') }}</p>
-            <p v-else>{{ t(device.sharing === 'active' ? 'remotePairingShareActive' : device.sharing === 'offered' ? 'remotePairingShareOffered' : device.sharing === 'unknown' ? 'remotePairingShareUnknown' : 'remotePairingNoScope') }}</p>
+            <p v-else>{{ t(device.sharing === 'controlling' ? 'remotePairingControlActive' : device.sharing === 'active' ? 'remotePairingShareActive' : device.sharing === 'offered' ? 'remotePairingShareOffered' : device.sharing === 'unknown' ? 'remotePairingShareUnknown' : 'remotePairingNoScope') }}</p>
             <details><summary>{{ t('remotePairingDetails') }}</summary><dl>
               <dt>{{ t('remotePairingPhoneId') }}</dt><dd>{{ device.phoneId }}</dd>
               <dt>{{ t('remotePairingRelayKey') }}</dt><dd><code>{{ device.phoneRelayPublicKeySec1 }}</code></dd>

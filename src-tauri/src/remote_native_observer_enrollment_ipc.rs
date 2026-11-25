@@ -77,6 +77,7 @@ struct ShareRun {
     run_id: String,
     generation: u32,
     label: String,
+    role: Option<cc_desk_remote_record::grant::DataRole>,
 }
 #[derive(Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -180,6 +181,7 @@ pub(crate) async fn remote_native_observer_setup(
     request: Request<'_>,
     runtime: State<'_, Arc<NativeRuntime>>,
     owner_service: State<'_, OwnerService>,
+    host_service: State<'_, Arc<crate::remote_host::RemoteHostService>>,
 ) -> Result<Reply, SafeError> {
     let (binding, caller, action) =
         runtime.admit_host_document::<Action, _>(&webview, request.headers(), request.body())?;
@@ -266,6 +268,9 @@ pub(crate) async fn remote_native_observer_setup(
                     Ok(super::shares::Target {
                         run: runtime.admit_owner_share_run(&caller, r.run_id, r.generation)?,
                         label: r.label,
+                        role: r
+                            .role
+                            .unwrap_or(cc_desk_remote_record::grant::DataRole::Observer),
                     })
                 })
                 .collect::<Result<Vec<_>, SafeError>>()?;
@@ -327,7 +332,15 @@ pub(crate) async fn remote_native_observer_setup(
                     Ok(Some(HostEnrollmentResponse::List { .. })) => {
                         binding.check_admitted(&caller)?;
                         let (ticket, endpoint) = owner_service
-                            .install(&binding, caller, profile, address, install_dir)
+                            .install(
+                                &binding,
+                                caller,
+                                profile,
+                                address,
+                                install_dir,
+                                runtime.inner().clone(),
+                                host_service.inner().clone(),
+                            )
                             .await?;
                         return Ok(Reply::Verified { ticket, endpoint });
                     }

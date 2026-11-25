@@ -22,6 +22,8 @@ export default {
   remotePairingShareUnknown: "无法确认共享状态，请先停止共享再重试。",
   remotePairingShareStart: "共享所选会话",
   remotePairingShareStop: "停止共享",
+  remotePairingAllowControl: "允许这台手机向所选会话发送输入",
+  remotePairingControlActive: "手机已获准向所选会话发送输入。",
   remoteConnections: "远程连接",
   remotePairingUnavailable: "此版本尚不支持原生手机配对。",
   remotePairingTitle: "配对 Android 设备",

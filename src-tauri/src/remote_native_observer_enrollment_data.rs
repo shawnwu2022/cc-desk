@@ -47,12 +47,78 @@ impl Drop for Active {
     }
 }
 
+fn lease_current(lease: &NativeApprovalStop, stop: &security::CancelToken) -> bool {
+    !lease.is_invalid() && !stop.is_cancelled()
+}
+fn controller_allowed(
+    role: DataRole,
+    renewable: bool,
+    lease: &NativeApprovalStop,
+    stop: &security::CancelToken,
+) -> bool {
+    role == DataRole::Controller && renewable && lease_current(lease, stop)
+}
+
+#[cfg(test)]
+#[test]
+#[allow(non_snake_case)]
+fn NativeController_ExactRoleAndOriginalLifetime_001() {
+    use crate::native_crypto::owner::NativeRevocation;
+    let owner = NativeRevocation::new();
+    let live = NativeApprovalStop::new(owner.clone(), Instant::now() + Duration::from_secs(30));
+    let (stop, token) = security::cancellation();
+    assert!(controller_allowed(
+        DataRole::Controller,
+        true,
+        &live,
+        &token
+    ));
+    assert!(!controller_allowed(DataRole::Observer, true, &live, &token));
+    assert!(!controller_allowed(
+        DataRole::Controller,
+        false,
+        &live,
+        &token
+    ));
+    let expired = NativeApprovalStop::new(NativeRevocation::new(), Instant::now());
+    assert!(!controller_allowed(
+        DataRole::Controller,
+        true,
+        &expired,
+        &token
+    ));
+    owner.revoke();
+    assert!(!controller_allowed(
+        DataRole::Controller,
+        true,
+        &live,
+        &token
+    ));
+    let stopped = NativeApprovalStop::new(
+        NativeRevocation::new(),
+        Instant::now() + Duration::from_secs(30),
+    );
+    stop.cancel();
+    assert!(!controller_allowed(
+        DataRole::Controller,
+        true,
+        &stopped,
+        &token
+    ));
+}
+
+pub(crate) struct Controller {
+    pub(crate) owner: Arc<crate::remote_host::RemoteHostService>,
+    pub(crate) runtime: Arc<crate::cli::native_runtime::NativeRuntime>,
+}
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn start(
     profile: Arc<TrustedHostProfile>,
     address: SocketAddr,
     lifecycle: &Arc<crate::native_crypto::owner::NativeRevocation>,
     phone: DeviceSummary,
     original: NativeRunAdmission,
+    controller: Option<Controller>,
     end: Instant,
     rendezvous_end: Instant,
 ) -> Result<Active> {
@@ -60,6 +126,7 @@ pub(crate) fn start(
         return Err(Error::Authority);
     }
     let exact = original.scope().map_err(|_| Error::Authority)?;
+    let (_, run_current) = original.network_checks().map_err(|_| Error::Authority)?;
     encode_scope(&exact).map_err(|_| Error::Authority)?;
     let settings = profile.operation(lifecycle, end)?;
     let (stop, cancel) = security::cancellation();
@@ -112,8 +179,15 @@ pub(crate) fn start(
                 let binding=security::HostSnapshot{host_key_epoch:epochs.host_key,client_key_epoch:epochs.client_key,
                     activation:*Sha256::digest(uuid::Uuid::new_v4().as_bytes()).as_ref(),incarnation:1,
                     policy_epoch:epochs.policy,issuer_epoch:epochs.issuer,origin:expected.origin.clone()};
-                let management=security::bind_host_peer_channel(pending,binding).await.map_err(|_|ControlFailure::Locked)?;
+                let management = if controller.is_some() {
+                    security::bind_host_control_lease_channel(pending,binding).await
+                } else {
+                    security::bind_host_peer_channel(pending,binding).await
+                }.map_err(|_|ControlFailure::Locked)?;
+                let clock_live=live.clone();
+                let clock_cancel=cancelled.clone();
                 let clock=Arc::new(move || -> std::result::Result<u64,security::GrantError> {
+                    if !lease_current(&clock_live,&clock_cancel) || !run_current() { return Err(security::GrantError::Revoked); }
                     now.elapsed().as_millis().try_into().map_err(|_|security::GrantError::Clock)
                 });
                 let mut gate=security::GrantGate::for_binding(management.context(),issuer,principal,clock).map_err(|_|ControlFailure::Locked)?;
@@ -123,9 +197,25 @@ pub(crate) fn start(
                 let duration=end.saturating_duration_since(Instant::now()).min(Duration::from_secs(300));
                 let budget=connect_end.saturating_duration_since(Instant::now()).min(Duration::from_secs(10));
                 let mut managed=management.grant_host(&mut gate,security::NativeGrantPolicy{
-                    scope:exact,role:DataRole::Observer,duration,
+                    scope:exact,role:if controller.is_some() {DataRole::Controller}else{DataRole::Observer},duration,
                 },budget).await.map_err(|_|ControlFailure::Locked)?;
                 let channel=Arc::new(managed.start_peer_pending(TokioInstant::from_std(end)).map_err(|_|ControlFailure::Locked)?);
+                if let Some(controller)=controller {
+                    if !controller_allowed(channel.authority().data_role(),channel.authority().control_lease_renew_enabled(),&live,&cancelled)
+                        || channel.authority().check().is_err() {
+                        channel.authority().request_close(); return Err(ControlFailure::Locked);
+                    }
+                    controller.owner.adopt_admitted(original,channel.clone(),&controller.runtime).map_err(|_|ControlFailure::Locked)?;
+                    while !live.is_invalid() && channel.authority().check().is_ok() {
+                        if channel.installed_fence().is_ok() {install_status.store(true,Ordering::Release); break;}
+                        tokio::select!{_ = cancelled.cancelled()=>break, _=tokio::time::sleep(Duration::from_millis(25))=>{}}
+                    }
+                    tokio::select!{_=cancelled.cancelled()=>{},_=NativeApprovalStop::wait(Some(&live))=>{},_=channel.wait_closed_checked()=>{}}
+                    install_status.store(false,Ordering::Release);
+                    channel.authority().request_close();
+                    let (closed,pump)=tokio::join!(channel.wait_closed_checked(),controller.owner.wait_native_controller_peer());
+                    return if closed.is_ok() && pump {Ok(())} else {Err(ControlFailure::RetirementUnknown)};
+                }
                 let mut observer=original.start_bound_observer(channel.clone(),live.clone(),TokioInstant::from_std(end)).map_err(|_|ControlFailure::Locked)?;
                 tokio::select!{
                     receipt=observer.wait_install_receipt()=>{if receipt.is_some(){install_status.store(true,Ordering::Release);}},
