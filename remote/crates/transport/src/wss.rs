@@ -106,10 +106,19 @@ async fn upgrade(
             protocol.parse().map_err(|_| ConnectError::Origin)?,
         );
     }
-    let (ws, response) =
-        tokio_tungstenite::client_async_with_config(request, tls, Some(crate::websocket_config()))
-            .await
-            .map_err(|_| ConnectError::Transport)?;
+    let mut bounds = crate::websocket_config();
+    if protocol == Some(ENROLLMENT_SUBPROTOCOL) {
+        bounds.max_message_size = Some(enrollment::RESPONSE_CAP);
+        bounds.max_frame_size = Some(enrollment::RESPONSE_CAP);
+    }
+    let (ws, response) = tokio_tungstenite::client_async_with_config(request, tls, Some(bounds))
+        .await
+        .map_err(|_| ConnectError::Transport)?;
+    if protocol == Some(ENROLLMENT_SUBPROTOCOL)
+        && response.headers().contains_key("sec-websocket-extensions")
+    {
+        return Err(ConnectError::Admission);
+    }
     if let Some(protocol) = protocol {
         let mut values = response.headers().get_all("sec-websocket-protocol").iter();
         if values.next().map(|v| v.as_bytes()) != Some(protocol.as_bytes())
@@ -265,3 +274,11 @@ pub use admission::connect_admitted_observed;
 #[cfg(any(test, feature = "test-only-loopback"))]
 pub use admission::test_only_connect_admitted_loopback_observed;
 pub use rendezvous_wait::{ExpiredRendezvousWait, RendezvousWait};
+
+#[path = "wss_enrollment.rs"]
+mod enrollment;
+pub use enrollment::{
+    ENROLLMENT_SUBPROTOCOL, EnrollmentCandidate, EnrollmentError, EnrollmentInvite, EnrollmentPair,
+    HostEnrollmentCommand, HostEnrollmentResponse, PhoneEnrollmentCommand, PhoneEnrollmentResponse,
+    request_host_enrollment, request_phone_enrollment,
+};
