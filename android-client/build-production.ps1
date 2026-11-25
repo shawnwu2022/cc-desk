@@ -99,7 +99,9 @@ if ($Phase -ceq 'Build') {
     Require ($javaSource -cmatch 'System\.loadLibrary\(\s*"cc_desk_android_native"\s*\)') 'Java does not load the packaged JNI library'
     $methods = @([regex]::Matches($javaSource, '\bnative\s+[A-Za-z0-9_.]+(?:\[\])?\s+(native[A-Za-z0-9]+)\s*\(') |
         ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
-    Require ($methods.Count -ge 4 -and 'nativeObserverState' -cin $methods -and 'nativeCancelObserver' -cin $methods -and 'nativeTakeObserverSnapshot' -cin $methods) 'Incomplete integrated Java Observer JNI surface'
+    $requiredMethods = @('nativeAndroidAbiVersion','nativeBeginPairing','nativePairingState','nativePairingHostId','nativeCancelPairing',
+        'nativeStartPairedObserver','nativeReadPairedHostId','nativeObserverState','nativeCancelObserver','nativeTakeObserverText')
+    Require (@($requiredMethods | Where-Object { $_ -cnotin $methods }).Count -eq 0) 'Incomplete integrated Java pairing/Observer JNI surface'
 
     $manifest = [xml](Get-Content -LiteralPath "$root/AndroidManifest.xml" -Raw)
     Require ($manifest.DocumentElement.GetAttribute('package') -ceq $package) 'Android package ID changed'

@@ -274,7 +274,6 @@ final class NativeDesktopBackend implements DesktopBackend {
     static native String nativeReadPairedHostId(NativeKeystoreBridge facade, byte[] localId,
         String canonicalWss, byte[] endpointSpki, byte[] relaySpki, byte[] approvalSpki);
     static native int nativeObserverState(long handle);
-    static native byte[][] nativeTakeObserverSnapshot(long handle);
     static native String nativeTakeObserverText(long handle);
     static native void nativeCancelObserver(long handle);
 }
