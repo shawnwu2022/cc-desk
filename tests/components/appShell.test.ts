@@ -131,7 +131,7 @@ describe('Unified application shell', () => {
   it('Shell_ThreePrimaryDestinations_001', async () => {
     const wrapper = render(AppShell)
     const buttons = wrapper.findAll('[data-primary-section]')
-    expect(buttons.map(button => button.attributes('data-primary-section'))).toEqual(['workspace', 'projects', 'settings'])
+    expect(buttons.map(button => button.attributes('data-primary-section'))).toEqual(['workspace', 'projects', 'remote', 'settings'])
     expect(buttons.map(button => button.attributes('aria-label'))).toEqual(['Workspace', 'Projects', 'Settings'])
     await buttons[1].trigger('click')
     expect(useShellStore().section).toBe('projects')
@@ -327,7 +327,7 @@ describe('Unified application shell', () => {
   it('Shell_LocalizedNavigation_018', async () => {
     const wrapper = render(PrimaryNav)
     ;(i18n.global.locale as any).value = 'zh'; await nextTick()
-    expect(wrapper.findAll('[data-primary-section]').map(button => button.attributes('aria-label'))).toEqual(['工作区', '项目', '设置'])
+    expect(wrapper.findAll('[data-primary-section]').map(button => button.attributes('aria-label'))).toEqual(['工作区', '项目', '远程连接', '设置'])
   })
   // 会话栏隐藏时Escape不会改变其桌面显示偏好。
   it('Shell_HiddenPanelIgnoresEscape_019', async () => {
