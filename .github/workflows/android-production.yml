@@ -6,13 +6,13 @@ on:
       version_code:
         description: Monotonically increasing Android versionCode for this exact release
         required: true
-        type: number
+        type: string
 
   workflow_call:
     inputs:
       version_code:
         required: true
-        type: number
+        type: string
     outputs:
       artifact_id:
         value: ${{ jobs.android.outputs.artifact_id }}
@@ -47,6 +47,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
+          if ($env:VERSION_CODE -cnotmatch '\A[1-9][0-9]{0,9}\z' -or [long]$env:VERSION_CODE -gt 2100000000) {
+            throw 'Android versionCode must be a canonical positive integer no greater than 2100000000'
+          }
           function Request([string]$endpoint) {
             $raw = gh api $endpoint
             if ($LASTEXITCODE -ne 0) { throw 'Android source admission API request failed' }

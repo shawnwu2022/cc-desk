@@ -24,8 +24,8 @@ const draft = {tag_name:'v'+version, target_commitish:sha, draft:true, prereleas
 test('read-only CLI admits manual numbered RC with explicit build code and refuses automatic and stable release', () => {
   const invoke = (v,e,c)=>execFileSync(process.execPath,[cli,'admit'], {stdio:'pipe', env:{...process.env,
     CC_DESK_RELEASE_VERSION:v, GITHUB_EVENT_NAME:e, ANDROID_VERSION_CODE:c}})
-  assert.doesNotThrow(()=>invoke(version,'workflow_dispatch','4'))
-  for (const args of [[version,'push','4'],['0.28.0','workflow_dispatch','4'],[version,'workflow_dispatch',''],['0.28.0-beta.1','workflow_dispatch','4'],[version,'workflow_dispatch','2100000001']]) {
+  assert.doesNotThrow(()=>invoke(version,'workflow_dispatch','28004'))
+  for (const args of [[version,'push','4'],['0.28.0','workflow_dispatch','4'],[version,'workflow_dispatch',''],['0.28.0-beta.1','workflow_dispatch','4'],[version,'workflow_dispatch','2100000001'],[version,'workflow_dispatch','028004'],[version,'workflow_dispatch','2.8e4']]) {
     assert.throws(()=>invoke(...args), /combined mobile release denied/)
   }
 })
@@ -68,4 +68,15 @@ test('release route cannot use the ordinary publication path for a mobile releas
   assert.match(android,/workflow_call:/)
   assert.match(android,/environment: android-production/)
   assert.match(android,/test --locked --manifest-path android-client\/native\/Cargo.toml/)
+})
+
+test('mobile release transports versionCode as text across the manual and reusable workflow boundary', () => {
+  const release = readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8').replace(/\r/g, '')
+  const android = readFileSync(new URL('../../.github/workflows/android-production.yml', import.meta.url), 'utf8').replace(/\r/g, '')
+  assert.match(release, /^  workflow_dispatch:\n    inputs:\n      android_version_code:\n(?:        .*\n)*?        type: string$/m)
+  for (const trigger of ['workflow_dispatch', 'workflow_call']) {
+    const input = android.split('  ' + trigger + ':\n')[1].split(/\n  \w|\npermissions:/)[0]
+    assert.match(input, /^      version_code:\n(?:        .*\n)*?        type: string$/m)
+  }
+  assert.match(release, /^      version_code: \$\{\{ inputs\.android_version_code \}\}$/m)
 })
