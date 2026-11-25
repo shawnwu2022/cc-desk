@@ -6,7 +6,7 @@ import AppButton from '@/components/ui/AppButton.vue'
 import AppInput from '@/components/ui/AppInput.vue'
 import AppSelect from '@/components/ui/AppSelect.vue'
 import RemoteTerminalPanel from '@/components/settings/RemoteTerminalPanel.vue'
-import { DESKTOP_PAIRING_PORT, type DesktopPairingPort, type PairingSnapshot, type PendingPairing, type SetupResult, type VerifiedPairing } from './desktopPairingPort'
+import { DESKTOP_PAIRING_PORT, type ApprovedDevice, type DesktopPairingPort, type PairingSnapshot, type PendingPairing, type SetupResult, type VerifiedPairing } from './desktopPairingPort'
 
 const { t } = useI18n()
 const injectedPort = inject(DESKTOP_PAIRING_PORT, null)
@@ -14,19 +14,39 @@ const port = shallowRef<DesktopPairingPort | null>(injectedPort)
 async function initializeNativeSetup() {
   if (port.value) return
   try {
-    const result = await nativeObserverSetup('available') as { kind?: unknown }
+    const result = await nativeObserverSetup({ action: 'available' }) as { kind?: unknown }
     if (!disposed && result.kind === 'available') port.value = {
       async verify(endpoint) {
-        const reply = await nativeObserverSetup('verify', endpoint) as { kind?: unknown }
-        if (reply.kind === 'profileRequired' || reply.kind === 'setupVerified' || reply.kind === 'declined') return { kind: reply.kind }
+        const reply = await nativeObserverSetup({ action: 'verify', endpoint }) as { kind?: unknown; ticket?: unknown; endpoint?: unknown }
+        if (reply.kind === 'profileRequired' || reply.kind === 'declined') return { kind: reply.kind }
+        if (reply.kind === 'verified' && typeof reply.ticket === 'string' && typeof reply.endpoint === 'string') {
+          return { kind: 'verified', handle: boundNativePairing(reply.ticket, reply.endpoint) }
+        }
         if (reply.kind !== 'relayAuthorizationRequired') throw new Error('NATIVE_OBSERVER_SETUP_UNAVAILABLE')
         return { kind: 'relayAuthorizationRequired', async approvePublicRegistration() {
-          const value = await nativeObserverSetup('publicRegistration', endpoint) as { kind?: unknown; metadata?: unknown }
+          const value = await nativeObserverSetup({ action: 'publicRegistration', endpoint }) as { kind?: unknown; metadata?: unknown }
           return value.kind === 'publicRegistration' ? JSON.stringify(value.metadata, null, 2) : null
         } }
       },
     }
   } catch { /* Unsupported builds have no native capability. */ }
+}
+function boundNativePairing(ticket: string, origin: string): VerifiedPairing {
+  async function request(action: string, args: Record<string, unknown> = {}) {
+    const reply = await nativeObserverSetup({ action, ticket, ...args }) as { kind?: unknown; snapshot?: PairingSnapshot }
+    if (reply.kind !== 'snapshot' || !reply.snapshot) throw new Error('NATIVE_OBSERVER_STATE_UNCONFIRMED')
+    return reply.snapshot
+  }
+  return {
+    endpoint: origin,
+    current: () => request('current'),
+    create: minutes => request('create', { minutes }),
+    cancel: inviteId => request('cancel', { inviteId }),
+    approve: (target, scopeChoiceId) => request('approve', { target, scopeChoiceId }),
+    reject: target => request('reject', { target }),
+    revoke: ({ tunnel, phoneId, phoneRelayPublicKeySec1, phoneEndpointSpki, endpointBinding }: ApprovedDevice) =>
+      request('revoke', { target: { tunnel, phoneId, phoneRelayPublicKeySec1, phoneEndpointSpki, endpointBinding } }),
+  }
 }
 const endpoint = ref('')
 const minutes = ref('5')
@@ -169,11 +189,13 @@ function cancel() {
         autocomplete="off" spellcheck="false" maxlength="2048" @update:model-value="setEndpoint" />
       <div class="actions">
         <AppButton v-if="!verified" variant="primary" :disabled="busy || !endpoint.trim().startsWith('wss://')" @click="verify">{{ t('remotePairingVerify') }}</AppButton>
-        <AppButton v-else variant="ghost" :disabled="busy" @click="perform(handle => handle.current())">{{ t('remotePairingRefresh') }}</AppButton>
+        <template v-else>
+          <AppButton variant="ghost" :disabled="busy" @click="perform(handle => handle.current())">{{ t('remotePairingRefresh') }}</AppButton>
+          <AppButton v-if="failure" variant="ghost" :disabled="busy" @click="verify">{{ t('remotePairingVerify') }}</AppButton>
+        </template>
       </div>
       <p v-if="verified" role="status">{{ t('remotePairingVerified', { endpoint: verified.endpoint }) }}</p>
       <p v-if="failure" role="alert">{{ t(failure === 'verify' ? 'remotePairingVerifyFailed' : 'remotePairingFailed') }}</p>
-      <p v-if="setup?.kind === 'setupVerified'" role="status">{{ t('remotePairingSetupVerified') }}</p>
       <p v-if="setup?.kind === 'declined'" role="status">{{ t('remotePairingSetupDeclined') }}</p>
       <div v-if="setup?.kind === 'profileRequired'" role="status">{{ t('remotePairingProfileRequired') }}</div>
       <div v-if="setup?.kind === 'relayAuthorizationRequired'" class="pairing" role="status">
@@ -231,7 +253,8 @@ function cancel() {
         <ul v-else class="devices">
           <li v-for="device in snapshot.devices" :key="device.tunnel">
             <p>{{ t('remotePairingPhone') }} {{ device.phoneId.slice(-6) }}</p>
-            <p v-if="device.sharing === 'none'">{{ t('remotePairingNoScope') }}</p>
+            <p v-if="device.revocationPending" role="status">{{ t('remotePairingRevokePending') }}</p>
+            <p v-else-if="device.sharing === 'none'">{{ t('remotePairingNoScope') }}</p>
             <details><summary>{{ t('remotePairingDetails') }}</summary><dl>
               <dt>{{ t('remotePairingPhoneId') }}</dt><dd>{{ device.phoneId }}</dd>
               <dt>{{ t('remotePairingRelayKey') }}</dt><dd><code>{{ device.phoneRelayPublicKeySec1 }}</code></dd>

@@ -3,6 +3,8 @@ use super::{ApprovalLease, ApprovalMachine, DIALOG_ACTIVE};
 pub(crate) mod control;
 #[path = "remote_native_observer_enrollment_ipc.rs"]
 pub(crate) mod ipc;
+#[path = "remote_native_observer_enrollment_owner.rs"]
+pub(crate) mod owner;
 #[path = "remote_native_observer_enrollment_setup.rs"]
 pub(crate) mod setup;
 #[path = "remote_native_observer_enrollment_store.rs"]
@@ -338,6 +340,20 @@ fn exact_scope(admission: Option<&NativeRunAdmission>) -> Result<Option<SessionS
         .transpose()
 }
 impl ObserverApproval {
+    pub(crate) fn pending(&self) -> bool {
+        self.machine.waiting()
+    }
+    pub(crate) fn approved(&self) -> bool {
+        let state = self.machine.state.lock();
+        !state.closed
+            && state.description.is_some()
+            && state.approved_end.is_some_and(|end| Instant::now() < end)
+    }
+    pub(crate) fn current(&self, issued: &SignedObserverReceipt) -> bool {
+        Instant::now() < issued.end
+            && Arc::ptr_eq(&issued.owner, &self.machine.lease)
+            && !issued.owner.is_revoked()
+    }
     pub(crate) fn show<R: tauri::Runtime>(
         app: &tauri::AppHandle<R>,
         window: &tauri::Window<R>,

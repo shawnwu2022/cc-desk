@@ -22,6 +22,7 @@ rustls = { version = "=0.23.46", optional = true, default-features = false, feat
 coset = { version = "=0.4.2", optional = true }
 base64 = "=0.22.1"
 ring = { version = "=0.17.14", optional = true }
+qrcode = { version = "=0.14.1", default-features = false, optional = true }
 minisign-verify = "=0.2.5"
 sha2 = "=0.10.9"
 cap-std = "=4.0.3"
@@ -67,7 +68,7 @@ history-roundtrip-acceptance = []
 antigravity-acceptance = []
 remote-client-ipc = ["dep:cc-desk-remote-client", "dep:cc-desk-remote-security", "dep:cc-desk-remote-record", "dep:cc-desk-remote-transport", "dep:rustls", "dep:coset"]
 remote-host = ["remote-client-ipc", "dep:cc-desk-remote-host", "dep:ring"]
-remote-observer = ["remote-host"]
+remote-observer = ["remote-host", "dep:qrcode"]
 remote-observer-local-acceptance = ["remote-host"]
 
 [dev-dependencies]

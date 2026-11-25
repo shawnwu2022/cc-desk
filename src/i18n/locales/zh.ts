@@ -14,6 +14,7 @@ export default {
   remotePairingNoScope: "已连接，暂未共享会话。",
   remotePairingSetupVerified: "中转已验证。此版本还不能完成原生手机配对。",
   remotePairingSetupDeclined: "未批准中转验证。",
+  remotePairingRevokePending: "本机已禁止共享，中转尚未确认撤销。请重试撤销。",
   remoteConnections: "远程连接",
   remotePairingUnavailable: "此版本尚不支持原生手机配对。",
   remotePairingTitle: "配对 Android 设备",

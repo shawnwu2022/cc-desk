@@ -13,7 +13,7 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogResult};
 #[path = "remote_unattended_approval.rs"]
 pub(crate) mod unattended;
 
-#[cfg(windows)]
+#[cfg(all(windows, feature = "remote-observer"))]
 #[path = "remote_native_observer_enrollment.rs"]
 pub(crate) mod native_observer_enrollment;
 
