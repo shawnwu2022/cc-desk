@@ -150,6 +150,18 @@ impl Store {
         {
             return Err(StoreError::Invalid);
         }
+        match (&receipt.session, &receipt.run, &receipt.generation) {
+            (None, None, None) => {}
+            (Some(session), Some(run), Some(generation)) => {
+                encode_scope(&SessionScope {
+                    session: session.clone(),
+                    run: run.clone(),
+                    generation: generation.clone(),
+                })
+                .map_err(|_| StoreError::Invalid)?;
+            }
+            _ => return Err(StoreError::Invalid),
+        }
         Ok(receipt)
     }
     fn decode_document(&self, bytes: Option<&[u8]>) -> Result<(Document, Vec<DeviceSummary>)> {
@@ -187,12 +199,13 @@ impl Store {
     pub(crate) fn remember_pending(
         &self,
         issued: &SignedObserverReceipt,
-        admission: &NativeRunAdmission,
+        admission: Option<&NativeRunAdmission>,
     ) -> Result<()> {
         let check = || {
             if Instant::now() >= issued.end
                 || issued.owner.is_revoked()
-                || admission.scope().map_err(|_| StoreError::Unauthorized)? != issued.initial_scope
+                || exact_scope(admission).map_err(|_| StoreError::Unauthorized)?
+                    != issued.initial_scope
             {
                 return Err(StoreError::Unauthorized);
             }
