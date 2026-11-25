@@ -50,7 +50,7 @@ export interface VerifiedPairing {
 }
 export type SetupResult =
   | { readonly kind: 'verified'; readonly handle: VerifiedPairing }
-  | { readonly kind: 'profileRequired' }
+  | { readonly kind: 'profileRequired' | 'setupVerified' | 'declined' }
   | { readonly kind: 'relayAuthorizationRequired'; readonly approvePublicRegistration: () => Promise<string | null> }
 
 export interface DesktopPairingPort {

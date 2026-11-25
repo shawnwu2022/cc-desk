@@ -317,6 +317,8 @@ fn run_ordinary(initial_dir: Option<String>, #[cfg(windows)] startup: DesktopSta
             commands::remote_short_current,
             commands::remote_short_close,
             commands::remote_host_pairing_scope,
+            #[cfg(all(feature = "remote-observer", windows))]
+            remote_host_approval::native_observer_enrollment::ipc::remote_native_observer_setup,
             commands::remote_host_request,
             commands::remote_host_cancel,
             commands::remote_host_start,

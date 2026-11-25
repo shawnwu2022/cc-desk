@@ -12,6 +12,8 @@ export default {
   remotePairingScope: "Session to share",
   remotePairingScopePlaceholder: "Do not share a session yet",
   remotePairingNoScope: "Paired. No session shared yet.",
+  remotePairingSetupVerified: "Relay verified. This build does not have a complete native pairing connection yet.",
+  remotePairingSetupDeclined: "Relay verification was not approved.",
   remoteConnections: "Remote Connections",
   remotePairingUnavailable: "Native phone pairing is not available in this build.",
   remotePairingTitle: "Pair an Android device",

@@ -1,14 +1,33 @@
 <script setup lang="ts">
 import { computed, inject, onMounted, onUnmounted, ref, shallowRef } from 'vue'
+import { nativeObserverSetup } from '@/api/tauri'
 import { useI18n } from 'vue-i18n'
 import AppButton from '@/components/ui/AppButton.vue'
 import AppInput from '@/components/ui/AppInput.vue'
 import AppSelect from '@/components/ui/AppSelect.vue'
 import RemoteTerminalPanel from '@/components/settings/RemoteTerminalPanel.vue'
-import { DESKTOP_PAIRING_PORT, type PairingSnapshot, type PendingPairing, type SetupResult, type VerifiedPairing } from './desktopPairingPort'
+import { DESKTOP_PAIRING_PORT, type DesktopPairingPort, type PairingSnapshot, type PendingPairing, type SetupResult, type VerifiedPairing } from './desktopPairingPort'
 
 const { t } = useI18n()
-const port = inject(DESKTOP_PAIRING_PORT, null)
+const injectedPort = inject(DESKTOP_PAIRING_PORT, null)
+const port = shallowRef<DesktopPairingPort | null>(injectedPort)
+async function initializeNativeSetup() {
+  if (port.value) return
+  try {
+    const result = await nativeObserverSetup('available') as { kind?: unknown }
+    if (!disposed && result.kind === 'available') port.value = {
+      async verify(endpoint) {
+        const reply = await nativeObserverSetup('verify', endpoint) as { kind?: unknown }
+        if (reply.kind === 'profileRequired' || reply.kind === 'setupVerified' || reply.kind === 'declined') return { kind: reply.kind }
+        if (reply.kind !== 'relayAuthorizationRequired') throw new Error('NATIVE_OBSERVER_SETUP_UNAVAILABLE')
+        return { kind: 'relayAuthorizationRequired', async approvePublicRegistration() {
+          const value = await nativeObserverSetup('publicRegistration', endpoint) as { kind?: unknown; metadata?: unknown }
+          return value.kind === 'publicRegistration' ? JSON.stringify(value.metadata, null, 2) : null
+        } }
+      },
+    }
+  } catch { /* Unsupported builds have no native capability. */ }
+}
 const endpoint = ref('')
 const minutes = ref('5')
 const selectedScope = ref('')
@@ -21,7 +40,10 @@ const snapshot = shallowRef<PairingSnapshot | null>(null)
 const now = ref(Date.now())
 let disposed = false
 let ticker: ReturnType<typeof setInterval> | undefined
-onMounted(() => { if (port) ticker = setInterval(() => { now.value = Date.now() }, 1000) })
+onMounted(() => {
+  ticker = setInterval(() => { if (invite.value) now.value = Date.now() }, 1000)
+  void initializeNativeSetup()
+})
 onUnmounted(() => { disposed = true; if (ticker !== undefined) clearInterval(ticker) })
 
 const ttlOptions = computed(() => [1, 5, 10].map(value => ({ value: String(value), label: t('remotePairingMinutes', { value }) })))
@@ -60,7 +82,8 @@ function setEndpoint(value: string) {
 }
 async function verify() {
   const input = endpoint.value.trim()
-  if (!port || !input.startsWith('wss://') || busy.value) return
+  const bridge = port.value
+  if (!bridge || !input.startsWith('wss://') || busy.value) return
   verified.value = null
   snapshot.value = null
   selectedScope.value = ''
@@ -69,7 +92,7 @@ async function verify() {
   publicRegistration.value = ''
   busy.value = true
   try {
-    const result = await port.verify(input)
+    const result = await bridge.verify(input)
     if (disposed) return
     if (result.kind !== 'verified') { setup.value = result; return }
     const handle = result.handle
@@ -150,6 +173,8 @@ function cancel() {
       </div>
       <p v-if="verified" role="status">{{ t('remotePairingVerified', { endpoint: verified.endpoint }) }}</p>
       <p v-if="failure" role="alert">{{ t(failure === 'verify' ? 'remotePairingVerifyFailed' : 'remotePairingFailed') }}</p>
+      <p v-if="setup?.kind === 'setupVerified'" role="status">{{ t('remotePairingSetupVerified') }}</p>
+      <p v-if="setup?.kind === 'declined'" role="status">{{ t('remotePairingSetupDeclined') }}</p>
       <div v-if="setup?.kind === 'profileRequired'" role="status">{{ t('remotePairingProfileRequired') }}</div>
       <div v-if="setup?.kind === 'relayAuthorizationRequired'" class="pairing" role="status">
         <p>{{ t('remotePairingAuthRequired') }}</p>
