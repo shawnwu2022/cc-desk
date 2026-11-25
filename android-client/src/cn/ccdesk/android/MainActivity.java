@@ -175,9 +175,25 @@ public final class MainActivity extends Activity {
     private void confirm(PairingInvite invite) {
         if (pendingConfirmation != null) pendingConfirmation.close();
         pendingConfirmation = invite;
+        LinearLayout confirmation = new LinearLayout(this);
+        confirmation.setOrientation(LinearLayout.VERTICAL);
+        TextView instructions = new TextView(this);
+        instructions.setText("中继：" + invite.relay.getHost() + "\n请求后，请在电脑上点同意。");
+        confirmation.addView(instructions);
+        Button details = new Button(this);
+        details.setText("查看连接详情");
+        TextView detailText = new TextView(this);
+        detailText.setText("电脑指纹：" + invite.hostFingerprintPrefix + "\n中继地址：" + invite.relay);
+        detailText.setVisibility(android.view.View.GONE);
+        details.setOnClickListener(unused -> {
+            boolean visible = detailText.getVisibility() == android.view.View.VISIBLE;
+            detailText.setVisibility(visible ? android.view.View.GONE : android.view.View.VISIBLE);
+            details.setText(visible ? "查看连接详情" : "收起连接详情");
+        });
+        confirmation.addView(details);
+        confirmation.addView(detailText);
         AlertDialog dialog = new AlertDialog.Builder(this).setTitle("确认添加这台电脑")
-            .setMessage("请核对电脑显示的指纹：" + invite.hostFingerprintPrefix +
-                        "\n中继：" + invite.relay + "\n确认后，还要在电脑上点同意。")
+            .setView(confirmation)
             .setNegativeButton("取消", null)
             .setPositiveButton("请求电脑批准", (unused, button) -> redeem(invite)).create();
         dialog.setOnDismissListener(unused -> {

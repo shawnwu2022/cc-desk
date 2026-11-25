@@ -24,11 +24,13 @@ final class HardwareIdentity {
     private final PrivateKey key;
     private final Certificate[] chain;
     private final Usage usage;
+    private final UUID localId;
 
-    private HardwareIdentity(PrivateKey key, Certificate[] chain, Usage usage) {
+    private HardwareIdentity(PrivateKey key, Certificate[] chain, Usage usage, UUID localId) {
         this.key = key;
         this.chain = chain;
         this.usage = usage;
+        this.localId = localId;
     }
 
     // localId is locally generated; raw QR/intent bytes never select a key alias.
@@ -69,9 +71,10 @@ final class HardwareIdentity {
             info.isUserAuthenticationRequired() != (usage == Usage.APPROVAL) ||
             (usage == Usage.APPROVAL && !info.isUserAuthenticationRequirementEnforcedBySecureHardware()))
             throw new GeneralSecurityException("Hardware key policy unavailable");
-        return new HardwareIdentity((PrivateKey) key, chain, usage);
+        return new HardwareIdentity((PrivateKey) key, chain, usage, localId);
     }
 
+    boolean belongsTo(UUID owner, Usage expected) { return usage == expected && localId.equals(owner); }
     Certificate[] attestationChain() { return chain.clone(); }
     byte[] spki() { return chain[0].getPublicKey().getEncoded().clone(); }
 
@@ -89,28 +92,37 @@ final class HardwareIdentity {
         return new PendingApproval(newSignature(Usage.APPROVAL, verifiedGrantTbs), verifiedGrantTbs);
     }
 
-    static final class PendingApproval {
+    static final class PendingApproval implements AutoCloseable {
         private final Signature signature;
-        private final byte[] tbs;
-        private boolean finished;
+        private final java.util.concurrent.atomic.AtomicReference<byte[]> tbs;
 
         private PendingApproval(Signature signature, byte[] tbs) {
             this.signature = signature;
-            this.tbs = tbs.clone();
+            this.tbs = new java.util.concurrent.atomic.AtomicReference<>(tbs.clone());
         }
 
         android.hardware.biometrics.BiometricPrompt.CryptoObject cryptoObject() {
             return new android.hardware.biometrics.BiometricPrompt.CryptoObject(signature);
         }
 
-        synchronized byte[] finish(android.hardware.biometrics.BiometricPrompt.AuthenticationResult result)
+        byte[] finish(android.hardware.biometrics.BiometricPrompt.AuthenticationResult result)
                 throws GeneralSecurityException {
-            if (finished || result == null || result.getCryptoObject() == null ||
+            if (result == null || result.getCryptoObject() == null ||
                 result.getCryptoObject().getSignature() != signature)
                 throw new GeneralSecurityException("Original biometric operation required");
-            finished = true;
-            signature.update(tbs);
-            return P256Signature.toFixed(signature.sign());
+            byte[] owned = tbs.getAndSet(null);
+            if (owned == null) throw new GeneralSecurityException("Approval already settled");
+            try {
+                signature.update(owned);
+                return P256Signature.toFixed(signature.sign());
+            } finally {
+                java.util.Arrays.fill(owned, (byte)0);
+            }
+        }
+
+        @Override public void close() {
+            byte[] owned = tbs.getAndSet(null);
+            if (owned != null) java.util.Arrays.fill(owned, (byte)0);
         }
     }
 
